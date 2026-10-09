@@ -1,3 +1,6 @@
 *~
 plan/
 plans/
+/target
+.DS_Store
+/.claude/
