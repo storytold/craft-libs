@@ -1,0 +1,11 @@
+craft-libs
+Copyright (c) 2026 ArtCraft Team and the craft-libs contributors.
+Licensed under the MIT License or the Apache License, Version 2.0, at your option
+(LICENSE-MIT, LICENSE-APACHE).
+
+Third-party material
+
+This product bundles third-party material under its own licenses, listed below. The per-file
+list (author, source, license) is in ATTRIBUTION.md.
+
+None: every bundled asset is original to craft-libs.
