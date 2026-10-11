@@ -7,6 +7,10 @@ Shared Rust libraries for the Craft Apps. The shared standards live in
 - **Never crash.** Every crate's `lib.rs` starts with
   `#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]`.
   No `unsafe` (the workspace forbids it).
+- **Shared Crate Contract:** All crates must adhere to the failure semantics, post-failure state guarantees, and platform contracts defined in [docs/shared-crate-contract.md](docs/shared-crate-contract.md).
+- **Architectural RFC:** Review [docs/rfc-shared-capabilities-architecture.md](docs/rfc-shared-capabilities-architecture.md) for shared capability acceptance and progressive release gating.
+- **Consumer Dependencies:** Consult [docs/consumer-dependency-map.json](docs/consumer-dependency-map.json) for the 10 Craft applications, capability tags, and pinned revisions.
+- **Platform Testing:** See [docs/platform-test-inventory.json](docs/platform-test-inventory.json) for environment profiles and hardware verification requirements.
 - **New crates** go in `crates/<name>`, named `craft-<name>`, inherit the workspace package fields
   and lints, and are listed in `[workspace.dependencies]`.
 - **No app code.** A crate here must be useful to more than one app and must not depend on any app.
