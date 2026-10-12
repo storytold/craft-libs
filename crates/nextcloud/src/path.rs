@@ -9,7 +9,6 @@ use crate::Error;
 pub const MAX_SEGMENTS: usize = 64;
 
 const SCHEME: &str = "nextcloud://";
-#[allow(dead_code)] // used by the HTTP client in a later task
 const UNRESERVED: &AsciiSet = &NON_ALPHANUMERIC.remove(b'-').remove(b'.').remove(b'_').remove(b'~');
 
 /// A location on a Nextcloud server: `nextcloud://<user>@<host>[:port]/<seg>/<seg>`.
@@ -49,7 +48,7 @@ pub(crate) fn split_host_port(authority: &str) -> Result<(String, Option<u16>), 
     Ok((host.to_lowercase(), port))
 }
 
-fn check_name(name: &str) -> Result<(), Error> {
+pub(crate) fn check_name(name: &str) -> Result<(), Error> {
     if name.is_empty() || name == "." || name == ".." || name.contains('\\') || name.contains('/') || name.chars().any(char::is_control) {
         return Err(malformed("bad path segment"));
     }
@@ -137,13 +136,11 @@ impl FromStr for RemotePath {
 }
 
 /// Percent-encodes everything except `A-Za-z0-9-._~`.
-#[allow(dead_code)] // used by the HTTP client in a later task
 pub(crate) fn encode_segment(s: &str) -> String {
     utf8_percent_encode(s, UNRESERVED).to_string()
 }
 
 /// `/seg/seg` with each segment encoded; `/` for the root.
-#[allow(dead_code)] // used by the HTTP client in a later task
 pub(crate) fn dav_suffix(p: &RemotePath) -> String {
     if p.segments.is_empty() {
         return "/".to_string();
