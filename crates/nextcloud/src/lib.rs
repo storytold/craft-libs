@@ -7,6 +7,7 @@ mod client;
 mod dav;
 mod error;
 mod http;
+mod memories;
 mod path;
 mod signin;
 #[cfg(feature = "testing")]
@@ -16,6 +17,7 @@ mod tls;
 pub use account::Account;
 pub use client::{Client, Entry};
 pub use error::{Error, Fingerprint};
+pub use memories::{Memories, MemoriesPhoto, RemoteMeta};
 pub use path::{MAX_SEGMENTS, RemotePath};
 /// The rustls this crate is built with; pass a provider of this version's `Arc<rustls::crypto::CryptoProvider>`.
 pub use rustls;

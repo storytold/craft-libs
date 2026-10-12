@@ -46,7 +46,7 @@ pub struct Entry {
 #[derive(Clone)]
 pub struct Client {
     account: Account,
-    http: Http,
+    pub(crate) http: Http,
     // Kept to rebuild `http` in `with_stall_limit`.
     password: String,
     provider: Arc<CryptoProvider>,
