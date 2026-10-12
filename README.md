@@ -11,7 +11,7 @@ If any libraries grow beyond Craft App usage, eg. RAW format support, they may b
 ## Layout
 
 A Cargo workspace (edition 2024, resolver 3). Each library is a crate under `crates/<name>`, named
-`craft-<name>`, with `version`, `edition`, `license` and `repository` inherited from the workspace
+`craft-<name>` (the equaSHion crates keep their own `equashion-*` names), with `version`, `edition`, `license` and `repository` inherited from the workspace
 (`license.workspace = true`, and so on) and `[lints] workspace = true`. Register each crate in
 `[workspace.dependencies]` in the root `Cargo.toml`.
 
@@ -28,6 +28,7 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
 
 - [`craft-ui`](crates/ui/README.md): SVG catalogs, icon buttons, tabs, pane controls, transactional docking and theme helpers for egui frontends;
   assets, themes, localization and command handling stay in each app. Requires Rust 1.95 or later.
+- `equashion-*` ([docs](docs/equashion/README.md)): equaSHion, a pure-Rust equation editor in five crates: `equashion-math` (math tree, OMML/MathML/LaTeX/linear formats, edit model), `equashion-font`, `equashion-layout` (TeX-style layout), `equashion-render` (pixels and SVG) and `equashion-egui` (the editor widget). Used by WordCraft and DeckCraft; assets in `assets/fonts`, test data in `corpus/` and `tests/golden/`.
 - [Shared UI component audit](docs/ui-components-audit.md): source inventory, extraction priorities
   and compatibility boundaries across the Craft suite.
 - [Theme infrastructure](docs/theme-infrastructure.md): eight-app comparison and the small shared

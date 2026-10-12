@@ -13,7 +13,25 @@ repository = "https://github.com/storytold/craft-libs"
 # internal: add each crate here as `craft-<name> = { path = "crates/<name>" }`
 craft-print = { path = "crates/print" }
 craft-ui = { path = "crates/ui" }
+equashion-math = { path = "crates/equashion-math" }
+equashion-font = { path = "crates/equashion-font", default-features = false }
+equashion-layout = { path = "crates/equashion-layout", default-features = false }
+equashion-render = { path = "crates/equashion-render", default-features = false }
+equashion-egui = { path = "crates/equashion-egui" }
 egui = { version = "0.36", default-features = false }
+
+# equaSHion (the equation editor)
+kurbo = { version = "0.13", features = ["serde"] }
+serde = { version = "1", features = ["derive", "rc"] }
+serde_json = { version = "1", features = ["float_roundtrip"] }
+log = "0.4"
+unicode-bidi = "0.3"
+skrifa = "0.47"
+harfrust = "0.13"
+vello_cpu = "0.2"
+quick-xml = "0.38"
+eframe = { version = "0.36", default-features = false }
+egui_kittest = "0.36"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

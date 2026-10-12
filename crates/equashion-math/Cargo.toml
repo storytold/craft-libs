@@ -1,0 +1,25 @@
+[package]
+name = "equashion-math"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "equaSHion equations: math tree, OMML import/export, linear (typed) format, templates, edit model"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+dbg_macro = "warn"
+todo = "warn"
+too_many_arguments = "allow"
+type_complexity = "allow"
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+unimplemented = "deny"
+unreachable = "deny"
+
+[dependencies]
+serde = { workspace = true }
+quick-xml = { workspace = true }
+serde_json = { workspace = true }
