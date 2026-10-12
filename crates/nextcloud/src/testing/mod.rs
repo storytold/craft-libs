@@ -88,6 +88,18 @@ struct Shared {
     poll_endpoint: Mutex<Option<String>>,
     /// Put before every listing href, like a path-rewriting proxy.
     href_prefix: Mutex<String>,
+    memories: AtomicBool,
+    /// Memories metadata by file id.
+    photos: Mutex<BTreeMap<u64, Photo>>,
+}
+
+#[derive(Debug)]
+struct Photo {
+    dayid: i64,
+    w: u32,
+    h: u32,
+    epoch: i64,
+    exif: serde_json::Value,
 }
 
 /// The user's files: absolute path (`/a/b`, root is `""`) to node, plus listing entries added raw.
@@ -189,6 +201,19 @@ impl FakeServer {
     pub fn add_file(&self, path: &str, bytes: Vec<u8>) -> u64 {
         let mut files = self.shared.files.lock().unwrap_or_else(PoisonError::into_inner);
         self.shared.insert(&mut files, &norm(path), bytes, false)
+    }
+
+    /// Turns on the Memories app routes (they 404 until then).
+    pub fn enable_memories(&self) {
+        self.shared.memories.store(true, SeqCst);
+    }
+
+    /// Gives the existing file at `path` Memories metadata; `exif` is served as its EXIF object. No-op for a missing file.
+    pub fn set_photo(&self, path: &str, dayid: i64, w: u32, h: u32, epoch: i64, exif: serde_json::Value) {
+        let id = self.shared.files.lock().unwrap_or_else(PoisonError::into_inner).nodes.get(&norm(path)).map(|n| n.id);
+        if let Some(id) = id {
+            self.shared.photos.lock().unwrap_or_else(PoisonError::into_inner).insert(id, Photo { dayid, w, h, epoch, exif });
+        }
     }
 
     /// Sets the image the preview endpoint returns for `path` (same form as in [`FakeServer::add_file`]).
@@ -339,9 +364,59 @@ fn respond(shared: &Shared, req: &Request) -> Response {
         ("POST", "/index.php/login/v2/poll") => login_poll(shared, req),
         ("GET", "/status.php") => Response::json(r#"{"installed":true,"version":"35.0.0"}"#),
         ("GET", "/index.php/core/preview.png") => preview(shared, req),
+        ("GET", _) if path.starts_with(MEMORIES_API) => memories(shared, path.strip_prefix(MEMORIES_API).unwrap_or_default()),
         ("GET", _) => path.strip_prefix(DAV_ROOT).map_or_else(|| Response::empty(404), |rest| get_file(shared, rest)),
         ("PROPFIND", _) => path.strip_prefix(DAV_ROOT).map_or_else(|| Response::empty(404), |rest| propfind(shared, req, rest)),
         _ => Response::empty(404),
+    }
+}
+
+const MEMORIES_API: &str = "/index.php/apps/memories/api/";
+
+/// `describe`, `days`, `days/<ids>` and `image/info/<fileid>`. `epoch` and `etag` are strings, as on PostgreSQL.
+fn memories(shared: &Shared, route: &str) -> Response {
+    if !shared.memories.load(SeqCst) {
+        return Response::empty(404);
+    }
+    let photos = shared.photos.lock().unwrap_or_else(PoisonError::into_inner);
+    let files = shared.files.lock().unwrap_or_else(PoisonError::into_inner);
+    let by_day = || {
+        let mut all: Vec<_> = photos.iter().collect();
+        all.sort_by_key(|(id, p)| (p.dayid, **id));
+        all
+    };
+    if route == "describe" {
+        return Response::json(r#"{"version":"7.0.0","uid":"alice"}"#);
+    }
+    if route == "days" {
+        let mut days = BTreeMap::<i64, usize>::new();
+        for (_, p) in by_day() {
+            *days.entry(p.dayid).or_default() += 1;
+        }
+        let days: Vec<_> = days.iter().map(|(dayid, count)| serde_json::json!({"dayid": dayid, "count": count})).collect();
+        return Response::json(&serde_json::Value::from(days).to_string());
+    }
+    if let Some(ids) = route.strip_prefix("days/") {
+        let ids: Vec<i64> = ids.split(',').filter_map(|i| i.parse().ok()).collect();
+        let rows: Vec<_> = by_day()
+            .into_iter()
+            .filter(|(_, p)| ids.contains(&p.dayid))
+            .filter_map(|(id, p)| {
+                let (path, node) = files.nodes.iter().find(|(_, n)| n.id == *id)?;
+                Some(serde_json::json!({
+                    "fileid": id, "dayid": p.dayid, "w": p.w, "h": p.h, "etag": format!("{:x}", node.etag),
+                    "basename": path.rsplit('/').next(), "size": node.size, "epoch": p.epoch.to_string(),
+                }))
+            })
+            .collect();
+        return Response::json(&serde_json::Value::from(rows).to_string());
+    }
+    let photo = route.strip_prefix("image/info/").and_then(|id| id.parse::<u64>().ok()).and_then(|id| Some((id, photos.get(&id)?)));
+    match photo {
+        Some((id, p)) => {
+            Response::json(&serde_json::json!({"fileid": id, "dayid": p.dayid, "w": p.w, "h": p.h, "datetaken": p.epoch, "exif": p.exif}).to_string())
+        }
+        None => Response::empty(404),
     }
 }
 
