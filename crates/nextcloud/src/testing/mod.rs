@@ -77,10 +77,15 @@ struct Shared {
     connections: AtomicUsize,
     requests: AtomicUsize,
     downloads: AtomicUsize,
+    user_agent: Mutex<Option<String>>,
     stopped: AtomicBool,
     files: Mutex<Files>,
     /// Source of file ids and etags.
     counter: AtomicU64,
+    /// `http(s)://127.0.0.1:<port>`, for URLs in login responses.
+    base: Mutex<String>,
+    approved: AtomicBool,
+    poll_endpoint: Mutex<Option<String>>,
     /// Put before every listing href, like a path-rewriting proxy.
     href_prefix: Mutex<String>,
 }
@@ -133,7 +138,9 @@ impl FakeServer {
                 let _ = thread::Builder::new().name("fake-nextcloud".into()).spawn(move || accept(&listener, &shared, tls));
             }
         }
-        FakeServer { addr, fingerprint, shared }
+        let server = FakeServer { addr, fingerprint, shared };
+        *server.shared.base.lock().unwrap_or_else(PoisonError::into_inner) = server.url();
+        server
     }
 
     /// `http://127.0.0.1:<port>`, or `https://…` for a TLS server.
@@ -150,6 +157,16 @@ impl FakeServer {
     /// The account of [`FakeServer::USER`] on this server, trusting no certificate.
     pub fn account(&self) -> Account {
         Account { server: self.url(), user: FakeServer::USER.into(), trust: None }
+    }
+
+    /// Makes the next login poll succeed with [`FakeServer::USER`] and [`FakeServer::PASSWORD`].
+    pub fn approve_login(&self) {
+        self.shared.approved.store(true, SeqCst);
+    }
+
+    /// Makes the login flow start answer with this poll endpoint instead of the server's own.
+    pub fn set_poll_endpoint(&self, url: &str) {
+        *self.shared.poll_endpoint.lock().unwrap_or_else(PoisonError::into_inner) = Some(url.to_string());
     }
 
     /// Puts `prefix` (e.g. `/nextcloud`) before every href in listings, like a reverse proxy that rewrites paths.
@@ -209,6 +226,11 @@ impl FakeServer {
     pub fn downloads(&self) -> usize {
         self.shared.downloads.load(SeqCst)
     }
+
+    /// The `User-Agent` of the last request, if it had one.
+    pub fn last_user_agent(&self) -> Option<String> {
+        self.shared.user_agent.lock().unwrap_or_else(PoisonError::into_inner).clone()
+    }
 }
 
 impl Drop for FakeServer {
@@ -258,6 +280,7 @@ fn serve(shared: &Shared, stream: TcpStream, tls: Option<Arc<ServerConfig>>) {
         if req.method == "GET" && req.header("range").is_none() && req.path().strip_prefix(DAV_ROOT).is_some_and(|rest| rest.starts_with('/')) {
             shared.downloads.fetch_add(1, SeqCst);
         }
+        *shared.user_agent.lock().unwrap_or_else(PoisonError::into_inner) = req.header("user-agent").map(str::to_string);
         let fault = shared.faults.lock().unwrap_or_else(PoisonError::into_inner).pop_front();
         let res = respond(shared, &req);
         if !matches!(send(shared, conn.as_mut(), &req, res, fault), Ok(true)) {
@@ -266,13 +289,14 @@ fn serve(shared: &Shared, stream: TcpStream, tls: Option<Arc<ServerConfig>>) {
     }
 }
 
-/// A parsed request. Its body is read and dropped: no route needs one yet.
+/// A parsed request.
 struct Request {
     method: String,
     /// Path and query, still percent-encoded.
     target: String,
     /// Names are lowercase.
     headers: Vec<(String, String)>,
+    body: Vec<u8>,
 }
 
 impl Request {
@@ -311,12 +335,32 @@ fn respond(shared: &Shared, req: &Request) -> Response {
         return Response::empty(401);
     }
     match (req.method.as_str(), path) {
+        ("POST", "/index.php/login/v2") => login_start(shared),
+        ("POST", "/index.php/login/v2/poll") => login_poll(shared, req),
         ("GET", "/status.php") => Response::json(r#"{"installed":true,"version":"35.0.0"}"#),
         ("GET", "/index.php/core/preview.png") => preview(shared, req),
         ("GET", _) => path.strip_prefix(DAV_ROOT).map_or_else(|| Response::empty(404), |rest| get_file(shared, rest)),
         ("PROPFIND", _) => path.strip_prefix(DAV_ROOT).map_or_else(|| Response::empty(404), |rest| propfind(shared, req, rest)),
         _ => Response::empty(404),
     }
+}
+
+const LOGIN_TOKEN: &str = "login-token-123";
+
+fn login_start(shared: &Shared) -> Response {
+    let base = shared.base.lock().unwrap_or_else(PoisonError::into_inner).clone();
+    let endpoint =
+        shared.poll_endpoint.lock().unwrap_or_else(PoisonError::into_inner).clone().unwrap_or_else(|| format!("{base}/index.php/login/v2/poll"));
+    Response::json(&format!(r#"{{"poll":{{"token":"{LOGIN_TOKEN}","endpoint":"{endpoint}"}},"login":"{base}/login/v2/flow/{LOGIN_TOKEN}"}}"#))
+}
+
+/// 404 until [`FakeServer::approve_login`], and for any other token.
+fn login_poll(shared: &Shared, req: &Request) -> Response {
+    if req.body != format!("token={LOGIN_TOKEN}").as_bytes() || !shared.approved.load(SeqCst) {
+        return Response::empty(404);
+    }
+    let base = shared.base.lock().unwrap_or_else(PoisonError::into_inner).clone();
+    Response::json(&format!(r#"{{"server":"{base}","loginName":"{}","appPassword":"{}"}}"#, FakeServer::USER, FakeServer::PASSWORD))
 }
 
 const DAV_ROOT: &str = "/remote.php/dav/files/alice";
@@ -522,7 +566,7 @@ fn read_request(shared: &Shared, conn: &mut dyn Conn, buf: &mut Vec<u8>) -> Opti
     let mut start = lines.next()?.split(' ');
     let (method, target) = (start.next()?.to_string(), start.next()?.to_string());
     let headers = lines.map(|l| l.split_once(':').map(|(n, v)| (n.trim().to_ascii_lowercase(), v.trim().to_string()))).collect::<Option<_>>()?;
-    let req = Request { method, target, headers };
+    let mut req = Request { method, target, headers, body: Vec::new() };
     if req.header("transfer-encoding").is_some() {
         return None;
     }
@@ -531,7 +575,7 @@ fn read_request(shared: &Shared, conn: &mut dyn Conn, buf: &mut Vec<u8>) -> Opti
     while buf.len() < length {
         fill(shared, conn, buf)?;
     }
-    buf.drain(..length);
+    req.body = buf.drain(..length).collect();
     Some(req)
 }
 

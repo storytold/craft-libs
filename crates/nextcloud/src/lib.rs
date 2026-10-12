@@ -8,6 +8,7 @@ mod dav;
 mod error;
 mod http;
 mod path;
+mod signin;
 #[cfg(feature = "testing")]
 pub mod testing;
 mod tls;
@@ -18,3 +19,4 @@ pub use error::{Error, Fingerprint};
 pub use path::{MAX_SEGMENTS, RemotePath};
 /// The rustls this crate is built with; pass a provider of this version's `Arc<rustls::crypto::CryptoProvider>`.
 pub use rustls;
+pub use signin::{SIGN_IN_TIMEOUT, SignIn, SignInState};
