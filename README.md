@@ -40,6 +40,10 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
 - [Panel docking](docs/ui-docking.md): validated panel moves, floating groups, workspace adapters
   and an optional egui docking surface.
 
+## Contributing
+
+Guidelines for proposing shared capabilities, crate layout conventions, the "Never Crash" standard, and cross-application verification are documented in [CONTRIBUTING.md](CONTRIBUTING.md). Operational agent instructions live in [AGENTS.md](AGENTS.md).
+
 ## License and credits
 
 craft-libs is dual-licensed under [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your option.
