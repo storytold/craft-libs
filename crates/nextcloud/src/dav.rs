@@ -124,7 +124,7 @@ pub(crate) fn parse_multistatus(xml: &[u8], base_path: &str) -> Result<Vec<(Stri
                 if current.is_some() {
                     match r.resolve_char_ref() {
                         Ok(Some(c)) => text.push(c),
-                        _ => match r.as_ref() {
+                        _ => match <_ as AsRef<[u8]>>::as_ref(&*r) {
                             b"amp" => text.push('&'),
                             b"lt" => text.push('<'),
                             b"gt" => text.push('>'),

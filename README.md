@@ -71,6 +71,8 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   (app menu, Window, Help, system-key clashes), a platform backend trait, and key equivalents
   fed back to egui as the input egui-winit would have made. Commands and their enabled state
   stay in each app.
+- [`craft-nextcloud`](crates/nextcloud/README.md): Nextcloud sign-in with trust on first use, WebDAV listing,
+  server previews, Range reads, an originals cache and Memories metadata. Where files appear stays in each app.
 - [`craft-print`](crates/print/README.md): PDF submission to CUPS and Windows, printer discovery,
   duplex/copies/colour and driver preferences. PDF generation stays in each app.
 

@@ -13,10 +13,13 @@ workspace = true
 [features]
 # `FakeServer`, a scripted in-process Nextcloud for integration tests.
 testing = []
+# App passwords in the OS keyring (Keychain, Credential Manager, Secret Service).
+keyring = ["dep:keyring"]
 
 [dependencies]
 base64 = "0.23"
 craft-atomic = { workspace = true }
+keyring = { version = "4.2", default-features = false, features = ["v1"], optional = true }
 percent-encoding = "2.3"
 quick-xml = "0.41"
 rustls = { version = "0.23", default-features = false, features = ["std", "tls12"] }
