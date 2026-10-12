@@ -1,0 +1,29 @@
+[package]
+name = "equashion-layout"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "equaSHion layout: TeX-style equation layout into a backend-neutral scene, caret geometry"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+dbg_macro = "warn"
+todo = "warn"
+too_many_arguments = "allow"
+type_complexity = "allow"
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+unimplemented = "deny"
+unreachable = "deny"
+
+[features]
+default = ["extra-fonts"]
+extra-fonts = ["equashion-font/extra-fonts"]
+
+[dependencies]
+equashion-math = { workspace = true }
+equashion-font = { workspace = true }
+kurbo = { workspace = true }

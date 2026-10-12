@@ -1,0 +1,33 @@
+[package]
+name = "equashion-font"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "equaSHion fonts: font database (bundled OFL + optional system fonts), metrics, glyph outlines, shaping"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+dbg_macro = "warn"
+todo = "warn"
+too_many_arguments = "allow"
+type_complexity = "allow"
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+unimplemented = "deny"
+unreachable = "deny"
+
+[features]
+default = ["extra-fonts"]
+# Source Serif 4 Bold and Bold Italic, Inter and STIX Two Math. Without it only Source Serif 4
+# Regular and Italic are compiled in (a UI that loads the rest at run time with `add_font`).
+extra-fonts = []
+
+[dependencies]
+kurbo = { workspace = true }
+skrifa = { workspace = true }
+harfrust = { workspace = true }
+unicode-bidi = { workspace = true }
+log = { workspace = true }
