@@ -1,7 +1,7 @@
 # Nextcloud
 
-**Status:** design, not implemented yet (2026-10-12). The first consumer is LightCraft. Its integration spec lives on
-LightCraft's `feat/nextcloud-source` branch.
+**Status:** implemented in `crates/nextcloud` (2026-10-13). The first consumer is LightCraft. Its integration spec lives on
+LightCraft's `feat/nextcloud-source` branch and is unchanged.
 
 `craft-nextcloud` lets a Craft app treat files on a Nextcloud server as documents it can list, preview and open,
 without mounting the server and without downloading files the user only browses.
@@ -41,20 +41,25 @@ Not in scope:
   `craft-launcher`, `filmcraft` and `pdfcraft` already use.
 - **Crypto provider:** passed in by the application. LightCraft passes `rustls-rustcrypto` (pure Rust); an app that
   accepts `ring` may pass that instead.
-- **Certificates:** the OS verifies them. Nothing bundles webpki-roots or webpki-root-certs (CDLA-licensed).
-- **Connections:** one `ureq::Agent` per account gives connection reuse. `allow_non_standard_methods` is on for
-  `PROPFIND`.
+- **Certificates:** the OS verifies them. Nothing bundles webpki-roots or webpki-root-certs (CDLA-licensed). The OS
+  verifier is built only for unpinned https accounts; with no CA store the user gets the trust prompt.
+- **Connections:** one `ureq::Agent` per account gives connection reuse. It keeps up to 16 idle connections (ureq's
+  default is 3 per host), so an app's worker threads keep theirs. `allow_non_standard_methods` is on for `PROPFIND`.
 - **Timeouts** are set per request kind: short for previews and listings, generous for downloads, which have no
-  overall limit but a stall limit.
+  overall limit but a stall limit (default 30 s, `Client::with_stall_limit` adjusts it for tests).
+- **Credentials stay on the server:** the app password goes only to URLs under the account's server URL. `http://` is
+  accepted only for loopback hosts.
+- **Redirects** are disabled; a 3xx is `Malformed`.
+- **No proxy support:** an environment proxy is ignored.
 
-**Trust on first use.** When verification fails because the issuer is unknown, the error carries the presented leaf
-certificate's SHA-256 fingerprint. After the user confirms it, `Account::trust` pins that certificate.
-- The first implementation attempt is `RootCerts::Specific([pinned leaf])`.
-- If rustls-webpki rejects a self-signed leaf as its own anchor, the fallback is a custom connector on ureq's
-  `unversioned::transport::Connector`, with the ureq minor version pinned.
-- Either way, handshake signatures are verified as usual.
+**Trust on first use.** When the OS rejects the certificate (unknown issuer, expiry or name), the error carries the
+presented leaf certificate's SHA-256 fingerprint. After the user confirms it, `Account::trust` pins that certificate.
+- A custom connector chain on `ureq::unversioned::transport` (TCP, then our rustls TLS, then a stall guard), with the
+  ureq minor pinned (`~3.4`). ureq has no verifier hook and its rustls error drops the leaf, so capturing the
+  fingerprint needs our own `ServerCertVerifier`. `RootCerts::Specific` is not used.
+- A pin matches the leaf's SHA-256 exactly and skips name and expiry checks. Handshake signatures are verified with the
+  provider's algorithms.
 - A changed certificate is a hard error, never a silent re-pin.
-- This is the first thing prototyped.
 
 ## Remote paths
 
@@ -78,51 +83,74 @@ That stays in the app.
 ## Accounts and sign-in
 
 `Account { server, user, trust: Option<Fingerprint> }` holds no secret. The app persists it with its other settings.
+`user` is the Login Flow `loginName`, used for Basic auth and the DAV path. A login name that differs from the user id
+(email or LDAP logins) is a known limitation.
 
 `SignIn` is a state machine with no UI:
 
 ```text
-SignIn::start(server, provider)
+SignIn::start(server, client_name, provider)
   -> NeedsTrust { fingerprint }   // unknown issuer; app asks, then confirm_trust(true/false)
   -> Waiting { login_url }        // app opens login_url in the browser, then calls poll() every ~2 s
   -> Done { account, app_password }
   -> Failed(Error)                // also after a 20-minute timeout or cancel
 ```
 
+The API is `SignIn::start`, `SignIn::start_for`, `state()`, `confirm_trust(bool)`, `poll()` and `cancel()`.
+- `SignIn::start_for(&account, client_name, provider)` signs in again (e.g. after `Unauthorized`) to the account's
+  server, keeping its pinned certificate: a different certificate ends as `Failed(CertificateChanged)`, with no trust
+  prompt.
+- `client_name` (e.g. "LightCraft (Linux)") is every sign-in request's User-Agent, which Nextcloud shows as the app
+  password's name on the grant page and in Devices & sessions. An empty name or one with control characters becomes
+  "Craft". `Client` keeps ureq's default User-Agent.
+- A server address that can't be used ends as `Failed(InvalidAddress)`.
+- Transient poll errors (unreachable, rate limited) keep `Waiting`.
+- The 20-minute timeout and a declined certificate end as `Failed(Cancelled)`.
+- The poll endpoint must be on the same origin as the server.
+
 The app owns the dialog, the browser launch, the polling timer and any progress row. CLI and agent front ends print
 `login_url` instead.
 
 ## Client
 
-`Client::new(account, app_password, provider)`. The password is kept only inside the `Client`; it is never logged,
-`Debug`-printed or put in an error message.
+`Client::new(account, app_password, provider)`. The password is kept only inside the `Client`; this crate never logs
+it, `Debug`-prints it or puts it in an error message. `ureq` and `ureq_proto` do log raw HTTP bytes at TRACE, including
+the `Authorization` header and the sign-in poll's `appPassword`: an app must cap those two log targets below TRACE in
+its logger.
 
 | Call | Request | Returns |
 |---|---|---|
-| `list(dir)` | `PROPFIND`, `Depth: 1`; Nextcloud forbids `infinity` by default | `Vec<Entry { name, is_dir, size, etag, fileid, mtime, content_type, has_preview }>` |
+| `list(dir)` | `PROPFIND`, `Depth: 1`; Nextcloud forbids `infinity` by default | `Vec<Entry { name, is_dir, size, etag, fileid, mtime, content_type, has_preview }>`; `Malformed` when no href is `dir` itself (a proxy rewriting paths) |
 | `stat(path)` | `PROPFIND`, `Depth: 0` | one `Entry`, used for freshness checks |
-| `preview(path, max_edge)` | `GET /index.php/core/preview.png?file=<path>&x=&y=&a=1` | JPEG bytes, or `None` on 404 |
-| `read_range(path, range)` | `GET` with `Range` | Bytes. Requires `206` with a matching `Content-Range`; on `200` it reads only the needed prefix and drops the response |
-| `download_to(path, writer, cancel, progress)` | `GET` | Size. Streams and checks `Content-Length` |
+| `preview(path, max_edge)` | `GET /index.php/core/preview.png?file=<path>&x=&y=&a=1` | The server's image bytes (JPEG or PNG), or `None` on 404 |
+| `read_range(path, range)` | `GET` with `Range` | Bytes. Requires `206` with a matching `Content-Range`; on `200` it reads only the needed prefix and drops the response (only when the range starts within 64 MiB, else `Malformed`); `416` returns empty |
+| `download_to(path, writer, cancel: &AtomicBool, progress: &mut dyn FnMut(done, Option<total>))` | `GET` | Size. Streams and checks `Content-Length` |
 | `memories()` | `GET /apps/memories/api/…` with `OCS-APIRequest: true` | `Option<Memories>`: `None` when the app isn't installed |
 
-`Memories::days()` returns the timeline (`fileid`, `dayid`, `w`, `h`, `etag`, `basename`, `size`, `epoch`,
-`mimetype` per photo). `Memories::info(fileid)` returns EXIF mapped to a neutral `RemoteMeta`.
+`memories()` detects the app with `GET /index.php/apps/memories/api/describe`; a 404 or a non-JSON 200 means "not
+installed". `Memories::days()` returns the user's configured timeline (`fileid`, `dayid`, `w`, `h`, `etag`, `basename`,
+`size`, `epoch`, `mimetype` per photo): it fetches `/api/days`, then `/api/days/<id,id,…>` with 100 day ids per request.
+`Memories::info(fileid)` maps `exif.{Make, Model, LensModel, ExposureTime, FNumber, ISO, FocalLength, Orientation}`
+plus `datetaken`, `w` and `h` into a neutral `RemoteMeta`; numbers may be strings or fractions.
 
 The Memories API is not documented as stable. It is detected at run time, and callers must work without it.
 
 **Errors** are one `Error` enum: `Unreachable`, `Unauthorized`, `NotFound`, `CertificateChanged`,
-`UnknownCertificate { fingerprint }`, `RateLimited`, `TooLarge`, `Malformed`, `Cancelled`, `Io`. Each has a `Display`
-the user can act on, e.g. "Nextcloud rejected the app password; sign in again". `429` and `503` are retried with
-backoff, at most 3 times.
+`UnknownCertificate { fingerprint }`, `RateLimited`, `TooLarge`, `Malformed`, `InvalidAddress`, `Cancelled`, `Io`.
+`Unreachable(String)`, `Malformed(String)` and `InvalidAddress(String)` carry a short detail; `Io(io::Error)`.
+`InvalidAddress` is a server address that can't be used (e.g. `http://` for a host other than localhost), from
+`SignIn::start` or `Client::new`. Each has a `Display` the user can act on, e.g. "Nextcloud rejected the app password;
+sign in again". `429` and `503` are retried with backoff, at most 3 times. Nextcloud's maintenance mode (`503` with
+`X-Nextcloud-Maintenance-Mode: 1`) is `RateLimited` at once, without retries.
 
 ## Originals cache
 
 `OriginalsCache::open(dir, budget)` keeps downloaded originals on local disk for apps that need a real file (a raw
 decoder, a video demuxer).
 
-- **Layout:** `<dir>/<account_key>/<sha256(path)>-<etag>.<ext>`. Names are hex only and the extension is allow-listed,
-  so a hostile remote name can't escape `dir`.
+- **Layout:** `<dir>/<hex16(sha256(account_key))>/<hex64(sha256(path))>-<hex16(sha256(etag))>.<ext>`. `ext` is the
+  lowercased remote extension if it matches `[a-z0-9]{1,8}`, else `bin`. Names are hex only, so a hostile remote name
+  can't escape `dir`.
 - **`cached(path, etag)`** → `Option<PathBuf>`, with no network.
 - **`fetch(client, path, cancel, progress)`:**
   - `stat` for the current etag;
@@ -131,22 +159,34 @@ decoder, a video demuxer).
     a partial file under the final name;
   - a stale etag deletes the old copy.
 
-  If the server is unreachable, it returns the newest cached copy with `stale: true`.
+  If the server is unreachable or busy (`Unreachable`, `RateLimited`) or its certificate isn't trusted
+  (`CertificateChanged`, `UnknownCertificate`), it returns the newest cached copy with `stale: true`: none of these
+  mean the file is gone. Other errors, and these with no local copy, are returned as they are.
 - **Eviction:**
   - least recently used above `budget`;
   - entries the app marks with `pin(path)` (offline copies) or `hold(path)` (in use right now, released on drop) are
     never evicted;
-  - pinned bytes are reported separately.
-- **Size, last use and pins** live in a small index file, also written with `craft-atomic`. A missing or corrupt index
-  is rebuilt from the directory listing, never fatal.
+  - pinned bytes are reported separately;
+  - `set_budget` changes the budget.
+- **Size, last use and pins** live in a small index file, also written with `craft-atomic`. `open` rebuilds entries from
+  the files on disk (the index keeps last use and pins), deletes leftover `*.craft_tmp` stage files, and never fails on
+  index problems. Hits update last use in memory; it is saved with the next miss, pin, unpin or budget change.
+- **Holds:** take `hold` before `fetch` or `cached`. A newer fetch of the same path still replaces older-etag copies
+  while held.
+- **One open per directory:** open one `OriginalsCache` per directory per machine and clone it to share it. A second
+  `open` of the same directory (another process, or a second call in the same process) sweeps the first one's stage
+  files and races its index. There is no lock file.
+- **Known ceiling:** concurrent fetches of one path download twice.
 
 The cache never decides when to download: an app that must not download during background work simply doesn't call
 `fetch` there.
 
 ## Credentials
 
-The `keyring` feature stores and loads app passwords: `store_password(account)`, `load_password(account)`,
-`delete_password(account)`. It uses `keyring` 4.2 with `default-features = false` and native stores only:
+The `keyring` feature stores and loads app passwords: `store_password(app, account, password)`,
+`load_password(app, account) -> Option`, `delete_password(app, account)`. The keyring service is the app's name and the
+entry user is `Account::key()`, so two apps signed in to one account keep separate passwords. It uses `keyring` 4.2
+with `default-features = false` and native stores only:
 - Apple Keychain;
 - Windows Credential Manager;
 - `zbus-secret-service-keyring-store` with `crypto-rust`, so no OpenSSL.
@@ -168,10 +208,18 @@ clippy::unreachable)]`.
 
 ## Testing
 
-- **`testing` feature:** exports `FakeServer`, an in-process, plain-HTTP, scripted Nextcloud on `std::net::TcpListener`.
+- **`testing` feature:** exports `FakeServer`, an in-process scripted Nextcloud on `std::net::TcpListener`: plain HTTP
+  with `start()`, TLS with `start_tls(provider)` (a self-signed `CA:TRUE` P-256 fixture).
   - It serves the login flow, `PROPFIND`, previews, Range, downloads and Memories.
-  - Failure injection: 401, 429, truncation, a stalled body, a dropped connection, a server that ignores Range,
-    oversized or malformed XML/JSON, hostile names (`..`, NUL, `%2F`).
+  - Failure injection: 401, 429, maintenance mode, truncation, a stalled body, a dropped connection, a server that
+    ignores Range, a hostile `Content-Range`, oversized or malformed XML/JSON, hostile names (`..`, NUL, `%2F`).
+  - Failures are queued with
+    `fail_next(Fault::{Status, Drop, Stall, Truncate, IgnoreRange, Oversize, Garbage, ContentRange, Maintenance})`.
+  - Content and state: `add_file`, `add_dir`, `remove`, `add_raw_entry`, `set_preview`, `set_href_prefix`,
+    `approve_login`, `enable_memories`, `set_photo`.
+  - What the client did: `connections()`, `requests()`, `last_user_agent()`, and `downloads()`, the whole-file `GET`s
+    below the user's WebDAV files root (not `PROPFIND`s on the same paths, previews or Range reads), for tests that
+    assert a path never downloads.
   - Apps use it for their own integration tests.
 - **Unit tests:**
   - `RemotePath` round-trips and rejections;

@@ -27,6 +27,8 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
 - [`craft-cms`](crates/cms/README.md): pure-Rust ICC v2/v4 colour management: profile parsing
   and writing, transforms, rendering intents, black point compensation, soft proofing, gamut
   checks, 3D LUTs and built-in profiles (sRGB, Display P3, synthetic coated CMYK and others).
+- [`craft-nextcloud`](crates/nextcloud/README.md): Nextcloud sign-in with trust on first use, WebDAV listing,
+  server previews, Range reads, an originals cache and Memories metadata. Where files appear stays in each app.
 - [`craft-print`](crates/print/README.md): PDF submission to CUPS and Windows, printer discovery,
   duplex/copies/colour and driver preferences. PDF generation stays in each app.
 
