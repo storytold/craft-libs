@@ -4,8 +4,16 @@
 
 mod account;
 mod error;
+#[allow(dead_code)] // the client (next task) is the first caller outside tests
+mod http;
 mod path;
+#[cfg(feature = "testing")]
+pub mod testing;
+#[allow(dead_code)] // used through `http`
+mod tls;
 
 pub use account::Account;
 pub use error::{Error, Fingerprint};
 pub use path::{MAX_SEGMENTS, RemotePath};
+/// The rustls this crate is built with; pass a provider of this version's `Arc<rustls::crypto::CryptoProvider>`.
+pub use rustls;
