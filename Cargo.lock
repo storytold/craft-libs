@@ -612,6 +612,7 @@ dependencies = [
  "base64 0.23.1",
  "craft-nextcloud",
  "percent-encoding",
+ "quick-xml",
  "rustls",
  "rustls-platform-verifier",
  "rustls-rustcrypto",

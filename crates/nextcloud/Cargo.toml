@@ -17,6 +17,7 @@ testing = []
 [dependencies]
 base64 = "0.23"
 percent-encoding = "2.3"
+quick-xml = "0.41"
 rustls = { version = "0.23", default-features = false, features = ["std", "tls12"] }
 rustls-platform-verifier = "0.7"
 serde = { version = "1", features = ["derive"] }

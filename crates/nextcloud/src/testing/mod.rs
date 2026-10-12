@@ -3,21 +3,23 @@
 //! Plain HTTP or TLS with a built-in self-signed certificate; HTTP/1.1 keep-alive, `Content-Length` bodies, one
 //! thread per connection. [`FakeServer::fail_next`] queues [`Fault`]s; each request consumes one.
 
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 use std::fmt::Write as _;
 use std::io::{self, Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering::SeqCst};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering::SeqCst};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::thread;
 use std::time::Duration;
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
+use percent_encoding::percent_decode_str;
 use rustls::crypto::CryptoProvider;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use rustls::{ServerConfig, ServerConnection, StreamOwned};
 
+use crate::path::encode_segment;
 use crate::{Account, Fingerprint};
 
 /// Self-signed P-256 certificate for `127.0.0.1` and `localhost`, `CA:TRUE` like many self-made server certificates.
@@ -75,6 +77,26 @@ struct Shared {
     connections: AtomicUsize,
     requests: AtomicUsize,
     stopped: AtomicBool,
+    files: Mutex<Files>,
+    /// Source of file ids and etags.
+    counter: AtomicU64,
+    /// Put before every listing href, like a path-rewriting proxy.
+    href_prefix: Mutex<String>,
+}
+
+/// The user's files: absolute path (`/a/b`, root is `""`) to node, plus listing entries added raw.
+#[derive(Debug, Default)]
+struct Files {
+    nodes: BTreeMap<String, Node>,
+    raw: Vec<(String, String)>,
+}
+
+#[derive(Debug, Clone)]
+struct Node {
+    dir: bool,
+    size: usize,
+    id: u64,
+    etag: u64,
 }
 
 impl FakeServer {
@@ -126,9 +148,40 @@ impl FakeServer {
         Account { server: self.url(), user: FakeServer::USER.into(), trust: None }
     }
 
+    /// Puts `prefix` (e.g. `/nextcloud`) before every href in listings, like a reverse proxy that rewrites paths.
+    pub fn set_href_prefix(&self, prefix: &str) {
+        *self.shared.href_prefix.lock().unwrap_or_else(PoisonError::into_inner) = prefix.to_string();
+    }
+
     /// Queues `fault` for the next request without one.
     pub fn fail_next(&self, fault: Fault) {
         self.shared.faults.lock().unwrap_or_else(PoisonError::into_inner).push_back(fault);
+    }
+
+    /// Adds a directory and its parents. `path` is `/`-separated under the user's files root, e.g. `/Photos`.
+    pub fn add_dir(&self, path: &str) {
+        let mut files = self.shared.files.lock().unwrap_or_else(PoisonError::into_inner);
+        self.shared.insert(&mut files, &norm(path), 0, true);
+    }
+
+    /// Adds or replaces a file (creating parents) and returns its file id. Its etag changes on every write.
+    pub fn add_file(&self, path: &str, bytes: Vec<u8>) -> u64 {
+        let mut files = self.shared.files.lock().unwrap_or_else(PoisonError::into_inner);
+        self.shared.insert(&mut files, &norm(path), bytes.len(), false)
+    }
+
+    /// Removes `path` and everything below it.
+    pub fn remove(&self, path: &str) {
+        let path = norm(path);
+        let below = format!("{path}/");
+        let mut files = self.shared.files.lock().unwrap_or_else(PoisonError::into_inner);
+        files.nodes.retain(|p, _| *p != path && !p.starts_with(&below));
+    }
+
+    /// Adds a listing entry to `dir` whose href ends in `encoded_name` as given (no encoding applied), however
+    /// hostile. It is not a real node.
+    pub fn add_raw_entry(&self, dir: &str, encoded_name: &str) {
+        self.shared.files.lock().unwrap_or_else(PoisonError::into_inner).raw.push((norm(dir), encoded_name.to_string()));
     }
 
     /// Connections accepted so far.
@@ -187,7 +240,7 @@ fn serve(shared: &Shared, stream: TcpStream, tls: Option<Arc<ServerConfig>>) {
     while let Some(req) = read_request(shared, conn.as_mut(), &mut buf) {
         shared.requests.fetch_add(1, SeqCst);
         let fault = shared.faults.lock().unwrap_or_else(PoisonError::into_inner).pop_front();
-        let res = respond(&req);
+        let res = respond(shared, &req);
         if !matches!(send(shared, conn.as_mut(), &req, res, fault), Ok(true)) {
             return;
         }
@@ -231,7 +284,7 @@ impl Response {
 }
 
 /// Basic auth on everything but `status.php` and the login flow, then the routes.
-fn respond(req: &Request) -> Response {
+fn respond(shared: &Shared, req: &Request) -> Response {
     let path = req.path();
     let public = path == "/status.php" || path.starts_with("/index.php/login/v2");
     let auth = format!("Basic {}", STANDARD.encode(format!("{}:{}", FakeServer::USER, FakeServer::PASSWORD)));
@@ -240,8 +293,92 @@ fn respond(req: &Request) -> Response {
     }
     match (req.method.as_str(), path) {
         ("GET", "/status.php") => Response::json(r#"{"installed":true,"version":"35.0.0"}"#),
+        ("PROPFIND", _) => path.strip_prefix(DAV_ROOT).map_or_else(|| Response::empty(404), |rest| propfind(shared, req, rest)),
         _ => Response::empty(404),
     }
+}
+
+const DAV_ROOT: &str = "/remote.php/dav/files/alice";
+const MTIME: &str = "Sun, 06 Nov 1994 08:49:37 GMT";
+
+/// `/a/b` for `a/b/`, `//a`, etc.; the root is `""`.
+fn norm(path: &str) -> String {
+    path.split('/').filter(|s| !s.is_empty()).fold(String::new(), |acc, s| acc + "/" + s)
+}
+
+impl Shared {
+    /// Inserts `path` with its parents; a new etag and, for a new path, a new id.
+    fn insert(&self, files: &mut Files, path: &str, size: usize, dir: bool) -> u64 {
+        for (i, _) in path.match_indices('/').skip(1) {
+            let parent = path.get(..i).unwrap_or_default();
+            if !files.nodes.contains_key(parent) {
+                let id = self.counter.fetch_add(1, SeqCst);
+                let etag = self.counter.fetch_add(1, SeqCst);
+                files.nodes.insert(parent.to_string(), Node { dir: true, size: 0, id, etag });
+            }
+        }
+        let id = files.nodes.get(path).map_or_else(|| self.counter.fetch_add(1, SeqCst), |n| n.id);
+        let etag = self.counter.fetch_add(1, SeqCst);
+        files.nodes.insert(path.to_string(), Node { dir, size, id, etag });
+        id
+    }
+}
+
+/// `PROPFIND` at `Depth` 0 or 1; the full property set whatever the body asks for.
+fn propfind(shared: &Shared, req: &Request, rest: &str) -> Response {
+    let depth = req.header("depth").unwrap_or("infinity");
+    if !matches!(depth, "0" | "1") {
+        return Response::empty(403);
+    }
+    let Ok(path) = percent_decode_str(rest).decode_utf8().map(|p| norm(&p)) else { return Response::empty(400) };
+    let dav_root = format!("{}{DAV_ROOT}", shared.href_prefix.lock().unwrap_or_else(PoisonError::into_inner));
+    let files = shared.files.lock().unwrap_or_else(PoisonError::into_inner);
+    let root = Node { dir: true, size: 0, id: 0, etag: 0 };
+    let Some(node) = (if path.is_empty() { Some(&root) } else { files.nodes.get(&path) }) else { return Response::empty(404) };
+    let mut body =
+        String::from(r#"<?xml version="1.0"?><d:multistatus xmlns:d="DAV:" xmlns:oc="http://owncloud.org/ns" xmlns:nc="http://nextcloud.org/ns">"#);
+    entry_xml(&mut body, &dav_root, &path, node);
+    if depth == "1" && node.dir {
+        let prefix = format!("{path}/");
+        for (p, n) in files.nodes.range(prefix.clone()..).take_while(|(p, _)| p.starts_with(&prefix)) {
+            if !p.get(prefix.len()..).is_some_and(|name| name.contains('/')) {
+                entry_xml(&mut body, &dav_root, p, n);
+            }
+        }
+        for (_, name) in files.raw.iter().filter(|(dir, _)| *dir == path) {
+            let _ = write!(
+                body,
+                "<d:response><d:href>{dav_root}{path}/{name}</d:href><d:propstat><d:prop><d:resourcetype/><d:getcontentlength>0</d:getcontentlength><d:getetag>\"raw\"</d:getetag></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response>"
+            );
+        }
+    }
+    body.push_str("</d:multistatus>");
+    Response { status: 207, headers: vec![("Content-Type", "application/xml; charset=utf-8".into())], body: body.into() }
+}
+
+fn entry_xml(body: &mut String, dav_root: &str, path: &str, n: &Node) {
+    let href: String = path.split('/').filter(|s| !s.is_empty()).map(|s| format!("/{}", encode_segment(s))).collect();
+    let slash = if n.dir { "/" } else { "" };
+    let _ = write!(body, "<d:response><d:href>{dav_root}{href}{}</d:href><d:propstat><d:prop>", if href.is_empty() { "/" } else { slash });
+    let _ =
+        write!(body, "<d:getlastmodified>{MTIME}</d:getlastmodified><d:getetag>&quot;{:x}&quot;</d:getetag><oc:fileid>{}</oc:fileid>", n.etag, n.id);
+    if n.dir {
+        let _ = write!(
+            body,
+            "<d:resourcetype><d:collection/></d:resourcetype><oc:size>{}</oc:size></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat>",
+            n.size
+        );
+        body.push_str(
+            "<d:propstat><d:prop><d:getcontentlength/><d:getcontenttype/></d:prop><d:status>HTTP/1.1 404 Not Found</d:status></d:propstat>",
+        );
+    } else {
+        let _ = write!(
+            body,
+            "<d:resourcetype/><d:getcontentlength>{}</d:getcontentlength><d:getcontenttype>application/octet-stream</d:getcontenttype><nc:has-preview>true</nc:has-preview></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat>",
+            n.size
+        );
+    }
+    body.push_str("</d:response>");
 }
 
 /// Writes `res` as `fault` alters it; `Ok(false)` when the connection must close.

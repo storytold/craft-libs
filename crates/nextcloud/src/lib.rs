@@ -3,16 +3,17 @@
 //! Nextcloud support for the Craft suite: remote paths, accounts and errors.
 
 mod account;
+mod client;
+mod dav;
 mod error;
-#[allow(dead_code)] // the client (next task) is the first caller outside tests
 mod http;
 mod path;
 #[cfg(feature = "testing")]
 pub mod testing;
-#[allow(dead_code)] // used through `http`
 mod tls;
 
 pub use account::Account;
+pub use client::{Client, Entry};
 pub use error::{Error, Fingerprint};
 pub use path::{MAX_SEGMENTS, RemotePath};
 /// The rustls this crate is built with; pass a provider of this version's `Arc<rustls::crypto::CryptoProvider>`.

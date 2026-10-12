@@ -26,6 +26,7 @@ const MAX_RETRY_AFTER_SECS: u64 = 10;
 
 /// What a request is for, which sets its overall time limit.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[allow(dead_code)] // `Range` and `Download` get their first callers in the next tasks
 pub(crate) enum Kind {
     /// Listings, previews, small JSON: 30 s.
     Quick,
