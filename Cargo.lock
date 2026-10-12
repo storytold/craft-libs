@@ -989,6 +989,7 @@ name = "craft-nextcloud"
 version = "0.1.0"
 dependencies = [
  "base64 0.23.1",
+ "craft-atomic",
  "craft-nextcloud",
  "percent-encoding",
  "quick-xml",
@@ -998,6 +999,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "tempfile",
  "ureq",
 ]
 

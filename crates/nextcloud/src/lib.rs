@@ -3,6 +3,7 @@
 //! Nextcloud support for the Craft suite: remote paths, accounts and errors.
 
 mod account;
+mod cache;
 mod client;
 mod dav;
 mod error;
@@ -15,6 +16,7 @@ pub mod testing;
 mod tls;
 
 pub use account::Account;
+pub use cache::{Fetched, Hold, OriginalsCache, Usage};
 pub use client::{Client, Entry};
 pub use error::{Error, Fingerprint};
 pub use memories::{Memories, MemoriesPhoto, RemoteMeta};
