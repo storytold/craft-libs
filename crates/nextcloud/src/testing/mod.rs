@@ -660,6 +660,8 @@ fn fill(shared: &Shared, conn: &mut dyn Conn, buf: &mut Vec<u8>) -> Option<()> {
     while !shared.stopped.load(SeqCst) {
         match conn.read(&mut chunk) {
             Ok(0) => return None,
+            // Sent after the drop, during the read timeout: hang up rather than answer.
+            Ok(_) if shared.stopped.load(SeqCst) => return None,
             Ok(n) => {
                 buf.extend_from_slice(chunk.get(..n)?);
                 return Some(());
