@@ -76,6 +76,7 @@ struct Shared {
     faults: Mutex<VecDeque<Fault>>,
     connections: AtomicUsize,
     requests: AtomicUsize,
+    downloads: AtomicUsize,
     stopped: AtomicBool,
     files: Mutex<Files>,
     /// Source of file ids and etags.
@@ -88,6 +89,8 @@ struct Shared {
 #[derive(Debug, Default)]
 struct Files {
     nodes: BTreeMap<String, Node>,
+    /// Preview images by absolute path.
+    previews: BTreeMap<String, Vec<u8>>,
     raw: Vec<(String, String)>,
 }
 
@@ -95,6 +98,7 @@ struct Files {
 struct Node {
     dir: bool,
     size: usize,
+    data: Vec<u8>,
     id: u64,
     etag: u64,
 }
@@ -161,13 +165,18 @@ impl FakeServer {
     /// Adds a directory and its parents. `path` is `/`-separated under the user's files root, e.g. `/Photos`.
     pub fn add_dir(&self, path: &str) {
         let mut files = self.shared.files.lock().unwrap_or_else(PoisonError::into_inner);
-        self.shared.insert(&mut files, &norm(path), 0, true);
+        self.shared.insert(&mut files, &norm(path), Vec::new(), true);
     }
 
     /// Adds or replaces a file (creating parents) and returns its file id. Its etag changes on every write.
     pub fn add_file(&self, path: &str, bytes: Vec<u8>) -> u64 {
         let mut files = self.shared.files.lock().unwrap_or_else(PoisonError::into_inner);
-        self.shared.insert(&mut files, &norm(path), bytes.len(), false)
+        self.shared.insert(&mut files, &norm(path), bytes, false)
+    }
+
+    /// Sets the image the preview endpoint returns for `path` (same form as in [`FakeServer::add_file`]).
+    pub fn set_preview(&self, path: &str, bytes: Vec<u8>) {
+        self.shared.files.lock().unwrap_or_else(PoisonError::into_inner).previews.insert(norm(path), bytes);
     }
 
     /// Removes `path` and everything below it.
@@ -192,6 +201,13 @@ impl FakeServer {
     /// Requests received so far, including those a fault answered.
     pub fn requests(&self) -> usize {
         self.shared.requests.load(SeqCst)
+    }
+
+    /// Whole-file downloads so far: `GET`s below the user's WebDAV files root without a `Range` header
+    /// ([`Client::download_to`](crate::Client::download_to) and [`OriginalsCache::fetch`](crate::OriginalsCache::fetch)
+    /// misses). Listings and `stat` (`PROPFIND` on the same paths), previews and `read_range` don't count.
+    pub fn downloads(&self) -> usize {
+        self.shared.downloads.load(SeqCst)
     }
 }
 
@@ -239,6 +255,9 @@ fn serve(shared: &Shared, stream: TcpStream, tls: Option<Arc<ServerConfig>>) {
     let mut buf = Vec::new();
     while let Some(req) = read_request(shared, conn.as_mut(), &mut buf) {
         shared.requests.fetch_add(1, SeqCst);
+        if req.method == "GET" && req.header("range").is_none() && req.path().strip_prefix(DAV_ROOT).is_some_and(|rest| rest.starts_with('/')) {
+            shared.downloads.fetch_add(1, SeqCst);
+        }
         let fault = shared.faults.lock().unwrap_or_else(PoisonError::into_inner).pop_front();
         let res = respond(shared, &req);
         if !matches!(send(shared, conn.as_mut(), &req, res, fault), Ok(true)) {
@@ -293,6 +312,8 @@ fn respond(shared: &Shared, req: &Request) -> Response {
     }
     match (req.method.as_str(), path) {
         ("GET", "/status.php") => Response::json(r#"{"installed":true,"version":"35.0.0"}"#),
+        ("GET", "/index.php/core/preview.png") => preview(shared, req),
+        ("GET", _) => path.strip_prefix(DAV_ROOT).map_or_else(|| Response::empty(404), |rest| get_file(shared, rest)),
         ("PROPFIND", _) => path.strip_prefix(DAV_ROOT).map_or_else(|| Response::empty(404), |rest| propfind(shared, req, rest)),
         _ => Response::empty(404),
     }
@@ -308,20 +329,42 @@ fn norm(path: &str) -> String {
 
 impl Shared {
     /// Inserts `path` with its parents; a new etag and, for a new path, a new id.
-    fn insert(&self, files: &mut Files, path: &str, size: usize, dir: bool) -> u64 {
+    fn insert(&self, files: &mut Files, path: &str, data: Vec<u8>, dir: bool) -> u64 {
         for (i, _) in path.match_indices('/').skip(1) {
             let parent = path.get(..i).unwrap_or_default();
             if !files.nodes.contains_key(parent) {
                 let id = self.counter.fetch_add(1, SeqCst);
                 let etag = self.counter.fetch_add(1, SeqCst);
-                files.nodes.insert(parent.to_string(), Node { dir: true, size: 0, id, etag });
+                files.nodes.insert(parent.to_string(), Node { dir: true, size: 0, data: Vec::new(), id, etag });
             }
         }
         let id = files.nodes.get(path).map_or_else(|| self.counter.fetch_add(1, SeqCst), |n| n.id);
         let etag = self.counter.fetch_add(1, SeqCst);
-        files.nodes.insert(path.to_string(), Node { dir, size, id, etag });
+        files.nodes.insert(path.to_string(), Node { dir, size: data.len(), data, id, etag });
         id
     }
+}
+
+/// `GET` of a file's bytes (`Range` is applied later, to every `200`).
+fn get_file(shared: &Shared, rest: &str) -> Response {
+    let Ok(path) = percent_decode_str(rest).decode_utf8().map(|p| norm(&p)) else { return Response::empty(400) };
+    let files = shared.files.lock().unwrap_or_else(PoisonError::into_inner);
+    match files.nodes.get(&path) {
+        Some(node) if !node.dir => Response { status: 200, headers: Vec::new(), body: node.data.clone() },
+        _ => Response::empty(404),
+    }
+}
+
+/// The preview of `file=<path>`; 404 unless [`FakeServer::set_preview`] was called for it.
+fn preview(shared: &Shared, req: &Request) -> Response {
+    let query = req.target.split_once('?').map_or("", |(_, q)| q);
+    let file = query.split('&').find_map(|kv| kv.strip_prefix("file="));
+    let Some(Ok(file)) = file.map(|f| percent_decode_str(f).decode_utf8()) else { return Response::empty(404) };
+    let files = shared.files.lock().unwrap_or_else(PoisonError::into_inner);
+    files.previews.get(&norm(&file)).map_or_else(
+        || Response::empty(404),
+        |bytes| Response { status: 200, headers: vec![("Content-Type", "image/png".into())], body: bytes.clone() },
+    )
 }
 
 /// `PROPFIND` at `Depth` 0 or 1; the full property set whatever the body asks for.
@@ -333,7 +376,7 @@ fn propfind(shared: &Shared, req: &Request, rest: &str) -> Response {
     let Ok(path) = percent_decode_str(rest).decode_utf8().map(|p| norm(&p)) else { return Response::empty(400) };
     let dav_root = format!("{}{DAV_ROOT}", shared.href_prefix.lock().unwrap_or_else(PoisonError::into_inner));
     let files = shared.files.lock().unwrap_or_else(PoisonError::into_inner);
-    let root = Node { dir: true, size: 0, id: 0, etag: 0 };
+    let root = Node { dir: true, size: 0, data: Vec::new(), id: 0, etag: 0 };
     let Some(node) = (if path.is_empty() { Some(&root) } else { files.nodes.get(&path) }) else { return Response::empty(404) };
     let mut body =
         String::from(r#"<?xml version="1.0"?><d:multistatus xmlns:d="DAV:" xmlns:oc="http://owncloud.org/ns" xmlns:nc="http://nextcloud.org/ns">"#);

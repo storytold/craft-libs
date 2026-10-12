@@ -1,7 +1,10 @@
 //! The Nextcloud client: listing and metadata over WebDAV.
 
 use std::fmt;
+use std::io::{self, Read, Write};
+use std::ops::Range;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use percent_encoding::percent_decode_str;
@@ -15,6 +18,9 @@ use crate::{Account, Error, RemotePath};
 /// No bytes from the server for this long and a download is `Unreachable`.
 const DEFAULT_STALL: Duration = Duration::from_secs(30);
 const MAX_LISTING: u64 = 64 << 20;
+const MAX_PREVIEW: u64 = 32 << 20;
+const MAX_RANGE: u64 = 64 << 20;
+const CHUNK: usize = 64 << 10;
 
 /// A file or directory on the server.
 #[derive(Clone, Debug, PartialEq)]
@@ -96,6 +102,98 @@ impl Client {
         Ok(entry)
     }
 
+    /// The server's thumbnail of `path`, at most `max_edge` pixels on a side; `None` if it has none.
+    pub fn preview(&self, path: &RemotePath, max_edge: u32) -> Result<Option<Vec<u8>>, Error> {
+        let file = dav_suffix(path);
+        self.dav_url(path)?; // account check
+        let url = format!("{}/index.php/core/preview.png?file={file}&x={max_edge}&y={max_edge}&a=1", self.http.base());
+        let res = match self.http.request("GET", &url, &[], None, Kind::Quick) {
+            Err(Error::NotFound) => return Ok(None),
+            res => res?,
+        };
+        match res.status().as_u16() {
+            200 => read_capped(res.into_body(), MAX_PREVIEW).map(Some),
+            status => Err(Error::Malformed(format!("unexpected status {status}"))),
+        }
+    }
+
+    /// The bytes of `path` in `range`, at most 64 MiB; shorter (or empty) when the file ends first.
+    pub fn read_range(&self, path: &RemotePath, range: Range<u64>) -> Result<Vec<u8>, Error> {
+        let Range { start, end } = range;
+        let Some(len) = end.checked_sub(start).filter(|len| *len > 0) else { return Ok(Vec::new()) };
+        if len > MAX_RANGE {
+            return Err(Error::TooLarge);
+        }
+        let url = self.dav_url(path)?;
+        let header = format!("bytes={start}-{}", end - 1);
+        let res = self.http.request("GET", &url, &[("Range", &header)], None, Kind::Range)?;
+        match res.status().as_u16() {
+            206 => {
+                let declared = res.headers().get("content-range").and_then(|v| v.to_str().ok()).and_then(parse_content_range);
+                let (a, b, total) = declared.ok_or_else(|| Error::Malformed("bad Content-Range".into()))?;
+                let want = b.checked_sub(a).and_then(|n| n.checked_add(1)).filter(|_| a == start && total.min(end).checked_sub(1) == Some(b));
+                let Some(want) = want else { return Err(Error::Malformed("Content-Range doesn't match the request".into())) };
+                let mut out = Vec::new();
+                // Never read past what the header declared, whatever the body holds.
+                io::copy(&mut res.into_body().into_reader().take(want), &mut out).map_err(body_error)?;
+                if out.len() as u64 != want {
+                    return Err(Error::Unreachable("body ended early".into()));
+                }
+                Ok(out)
+            }
+            200 => {
+                // The server ignored Range. Skipping a start beyond 64 MiB would mean downloading it all: give up.
+                if start > MAX_RANGE {
+                    return Err(Error::Malformed("server ignored Range".into()));
+                }
+                let mut body = res.into_body().into_reader().take(end);
+                io::copy(&mut (&mut body).take(start), &mut io::sink()).map_err(body_error)?;
+                let mut out = Vec::new();
+                body.read_to_end(&mut out).map_err(body_error)?;
+                Ok(out)
+            }
+            416 => Ok(Vec::new()),
+            status => Err(Error::Malformed(format!("unexpected status {status}"))),
+        }
+    }
+
+    /// Streams `path` into `writer` and returns the bytes written. `progress` gets (done, total if known) after
+    /// every chunk; `cancel` is checked before each.
+    pub fn download_to(
+        &self,
+        path: &RemotePath,
+        writer: &mut dyn Write,
+        cancel: &AtomicBool,
+        progress: &mut dyn FnMut(u64, Option<u64>),
+    ) -> Result<u64, Error> {
+        let url = self.dav_url(path)?;
+        let res = self.http.request("GET", &url, &[], None, Kind::Download)?;
+        if res.status().as_u16() != 200 {
+            return Err(Error::Malformed(format!("unexpected status {}", res.status().as_u16())));
+        }
+        let mut body = res.into_body();
+        let total = body.content_length();
+        let mut reader = body.as_reader();
+        let mut buf = vec![0u8; CHUNK];
+        let mut done = 0u64;
+        loop {
+            if cancel.load(Ordering::Relaxed) {
+                return Err(Error::Cancelled);
+            }
+            let n = reader.read(&mut buf).map_err(body_error)?;
+            if n == 0 {
+                break;
+            }
+            writer.write_all(buf.get(..n).unwrap_or_default()).map_err(Error::Io)?;
+            done = done.saturating_add(n as u64);
+            progress(done, total);
+        }
+        if total.is_some_and(|total| total != done) {
+            return Err(Error::Unreachable("download ended early".into()));
+        }
+        Ok(done)
+    }
+
     fn dav_url(&self, path: &RemotePath) -> Result<String, Error> {
         if path.account_key() != self.account.key() {
             return Err(Error::Malformed("path belongs to another account".into()));
@@ -113,6 +211,18 @@ impl Client {
         let xml = read_capped(res.into_body(), MAX_LISTING)?;
         parse_multistatus(&xml, &base_path(url))
     }
+}
+
+/// `bytes a-b/total` as (a, b, total).
+fn parse_content_range(v: &str) -> Option<(u64, u64, u64)> {
+    let (range, total) = v.trim().strip_prefix("bytes ")?.split_once('/')?;
+    let (a, b) = range.split_once('-')?;
+    Some((a.parse().ok()?, b.parse().ok()?, total.parse().ok()?))
+}
+
+/// A failure reading a response body is the network's.
+fn body_error(e: io::Error) -> Error {
+    Error::Unreachable(e.to_string())
 }
 
 /// The decoded path part of `url`, without a trailing `/`.
