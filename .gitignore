@@ -1,7 +1,10 @@
 *~
 plan/
 plans/
-/target
+target/
+target-*/
 .DS_Store
 /.claude/
 .idea/
+.metadata_never_index
+.noindex
