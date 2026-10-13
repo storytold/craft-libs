@@ -8,6 +8,20 @@ localization and product policy stay with the application.
 
 Shared UI or functionality required across multiple Craft applications must land in craft-libs first before being adopted downstream. Downstream consumer pull requests should remain draft pull requests pinned to branch heads until the shared library PR merges into main.
 
+### Upstream-First UI Pre-Check
+
+Before authoring new UI widgets, shell chrome, persistence, or platform integration in an application:
+1. Check `storytold/craft-libs`:
+   - Shell widgets & chrome: `craft-ui` (`ZoomBar`, `FontBox`, `RibbonGroup`, `DockLayout`, `StatusBar`)
+   - Platform menus & lifecycle: `craft-menu`, `craft-quit`
+   - Persistence & preferences: `craft-atomic`, `craft-settings`
+   - Printing: `craft-print`
+2. If the component exists upstream, consume it via `Cargo.toml`. Do not implement local variants.
+3. If the component does not exist in `craft-libs` but applies to two or more Craft applications:
+   - Propose the component in `storytold/craft-libs/issues` before building in-tree app code.
+   - Implement it in `craft-libs` first under `#![forbid(unsafe_code)]` and zero-panic invariants.
+   - Adopt it downstream in a subsequent pin update.
+
 For a new extraction, inspect two actual consumers at known revisions. Compare their callers,
 behavior and workloads. Distinguish defects from intentional app differences and retain
 unresolved policy in the app. Describe shared errors, post-failure state and platform limits
