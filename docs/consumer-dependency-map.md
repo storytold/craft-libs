@@ -19,4 +19,5 @@ Application upgrades are independent. A new library release does not update thei
 Validate affected internal dependents and actual consumers for a change, then propose
 consumer pin changes separately when needed. Keep all craft-libs dependencies within one
 consumer graph on the same revision. See the
-[release policy proposal](https://github.com/storytold/craft-libs/pull/41), pending merge.
+[initial release policy](https://github.com/storytold/craft-libs/pull/41); use the versioning
+document included in the selected release.
