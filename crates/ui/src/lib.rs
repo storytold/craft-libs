@@ -11,6 +11,8 @@ pub mod buttons;
 pub mod docking;
 pub mod icons;
 pub mod layout;
+pub mod menu;
+pub mod presence;
 pub mod printing;
 #[cfg(feature = "share")]
 pub mod share;

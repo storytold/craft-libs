@@ -8,9 +8,8 @@
 //! Three things shape the implementation.
 //!
 //! Nothing here opens a socket. Every call goes through [`ShareBackend`], and
-//! the only backend that reaches the network is [`CollabCraft`], which talks to
-//! the CollabCraft service. No app holds a provider credential and no app
-//! speaks a provider protocol, so swapping the provider changes nothing in
+//! nothing here reaches the network. A host writes the backend, and this
+//! module never learns what it talks to.
 //! this file.
 //!
 //! Nothing here blocks. Answers arrive on a channel and are read once per
@@ -390,6 +389,17 @@ impl ShareDialog {
     /// False until the service says the provider supports it and an account is
     /// linked. An application draws no Share control while this is false: a
     /// hidden feature is better than a button that fails on use.
+    /// Ask the provider again what it can do.
+    ///
+    /// The answer is kept once it arrives, so a host that signs somebody
+    /// in after the first answer has to say so. Without this the dialog
+    /// keeps the answer it got while nobody was signed in, and Share
+    /// stays unavailable for the rest of the run.
+    pub fn refresh(&mut self) {
+        self.provider = None;
+        self.asked = None;
+    }
+
     pub fn available(&self) -> bool {
         self.provider.is_some_and(|p| p.sharing)
     }

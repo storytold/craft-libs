@@ -22,6 +22,7 @@ use std::sync::{Arc, Mutex};
 
 use craft_cloud::{Capability, Contact, Permission, Share, ShareTarget};
 use craft_ui::account::{Account, AccountMenu};
+use craft_ui::presence::{Peer, PresenceBar};
 use craft_ui::share::{Answer, Failure, Replier, Request, ShareBackend, ShareDialog};
 use egui::{Context, Event, FullOutput, PointerButton, Pos2, RawInput, Rect, Theme, Visuals, accesskit, pos2, vec2};
 use egui_kittest::{TestRenderer, wgpu::WgpuTestRenderer};
@@ -222,19 +223,47 @@ fn renders_of_every_state_in_both_themes() {
             let mut shot = Shot::new(theme, [320.0, 300.0]);
             let mut draw = {
                 let mut menu = AccountMenu::new();
-                menu.set(Some(Account {
-                    display: "Will Dunn".into(),
-                    email: Some("will@example.com".into()),
-                    service: "collabcraft.example.com".into(),
-                    linked,
-                }));
+                menu.set(vec![
+                    Account {
+                        id: "work".into(),
+                        display: "Will Dunn".into(),
+                        email: Some("will@example.com".into()),
+                        service: "collabcraft.example.com".into(),
+                        linked,
+                    },
+                    Account {
+                        id: "personal".into(),
+                        display: "Will at home".into(),
+                        email: Some("will@example.net".into()),
+                        service: "cloud.example.net".into(),
+                        linked: true,
+                    },
+                ]);
                 move |ui: &mut egui::Ui| menu.show(ui)
             };
             // The menu is behind the badge, so it takes a press to show.
-            shot.click("W", &mut draw);
+            shot.click("Account, Will Dunn", &mut draw);
             let output = shot.frame(Vec::new(), &mut draw);
             shot.save(&into, name, theme, &output);
         }
+
+        // ---- who else is here ----------------------------------------------
+        let mut shot = Shot::new(theme, [420.0, 80.0]);
+        let mut bar = PresenceBar::new();
+        bar.set(vec![
+            Peer::new("s1", "Ann Reed").at("editing B4"),
+            Peer::new("s2", "Bob Vine").at("editing D12"),
+            Peer::new("s3", "Cal Nye"),
+            Peer::new("s4", "Dee Shaw"),
+            Peer::new("s5", "Eve Marsh"),
+            Peer::new("s6", "Fay Orr"),
+        ]);
+        let mut draw = move |ui: &mut egui::Ui| {
+            ui.add_space(24.0);
+            bar.show(ui);
+        };
+        let output = shot.frame(Vec::new(), &mut draw);
+        shot.save(&into, "presence", theme, &output);
 
         // ---- the share dialog ----------------------------------------------
         let cases: Vec<(&str, Vec<Capability>, Vec<Share>, &str)> = vec![
