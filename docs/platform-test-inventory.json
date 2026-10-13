@@ -1,0 +1,51 @@
+{
+  "format_version": 1,
+  "status": "verification_plan",
+  "environments": [
+    {
+      "id": "macos-touchbar",
+      "status": "unverified",
+      "scope": "Native close/menu, save cancellation and Touch Bar teardown on relevant hardware",
+      "os_version": null,
+      "hardware": null,
+      "candidate_revision": null,
+      "evidence": []
+    },
+    {
+      "id": "macos-native",
+      "status": "unverified",
+      "scope": "Native quit, printing and filesystem behavior on a recorded macOS environment",
+      "os_version": null,
+      "hardware": null,
+      "candidate_revision": null,
+      "evidence": []
+    },
+    {
+      "id": "linux-native",
+      "status": "unverified",
+      "scope": "Filesystem errors, UI tests and CUPS integration where available",
+      "os_version": null,
+      "hardware": null,
+      "candidate_revision": null,
+      "evidence": []
+    },
+    {
+      "id": "windows-native",
+      "status": "unverified",
+      "scope": "Filesystem sharing violations and Windows spooler integration",
+      "os_version": null,
+      "hardware": null,
+      "candidate_revision": null,
+      "evidence": []
+    },
+    {
+      "id": "wasm32",
+      "status": "unverified",
+      "scope": "craft-ui compilation and craft-settings trait/document helpers only",
+      "os_version": null,
+      "hardware": null,
+      "candidate_revision": null,
+      "evidence": []
+    }
+  ]
+}

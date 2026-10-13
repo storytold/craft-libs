@@ -28,3 +28,9 @@ these public instructions and the checked-out source remain usable.
 Service boundaries are in [shared services](docs/shared-services-architecture.md); API design
 and style guidance are in [type contracts](docs/type-system-contracts.md) and
 [code style](docs/code-style-and-lints.md). Proposed crates and tooling are not prerequisites.
+
+Read the [shared contracts](docs/shared-crate-contract.md) and
+[extraction RFC](docs/rfc-shared-capabilities-architecture.md). The
+[consumer inventory](docs/consumer-dependency-map.md) and
+[platform plan](docs/platform-test-inventory.md) require evidence before claiming adoption
+or completed verification.
