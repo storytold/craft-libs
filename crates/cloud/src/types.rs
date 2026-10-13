@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 
 /// What a provider can do.
 ///
-/// Reported rather than assumed, so CollabCraft hides a share button on a
+/// Reported rather than assumed, so a caller hides a share button on a
 /// server without sharing instead of offering a feature that fails on use.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -36,6 +36,13 @@ pub enum Capability {
     /// mail. A provider commonly has this and not that: it will notify the
     /// person a share names without offering any way to send mail in general.
     ShareNotify,
+    /// A conversation about a document, such as a call or a chat room.
+    ///
+    /// Every provider that has this calls it something else, so the name
+    /// comes from [`crate::Conversations::conversation_name`]. Reported
+    /// separately from that name: a provider knows what it would call the
+    /// feature whether or not an administrator installed it.
+    Conversation,
 }
 
 /// A file or folder.
@@ -144,6 +151,16 @@ pub struct ShareOptions {
     pub password: Option<String>,
     /// `YYYY-MM-DD`. After this the share stops working.
     pub expires: Option<String>,
+}
+
+/// Where to go to work together on a document.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Conversation {
+    /// Where to join. Handed to a browser, or to the provider's own app.
+    pub url: String,
+    /// What the provider calls the feature, for the control's wording. A
+    /// menu item reading "Work together in Talk" is built from this.
+    pub name: String,
 }
 
 /// A share that exists.

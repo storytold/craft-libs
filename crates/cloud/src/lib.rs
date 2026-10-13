@@ -31,7 +31,9 @@ mod error;
 mod types;
 
 pub use error::{Error, Result};
-pub use types::{Capability, Contact, Entry, EntryKind, Identity, MailMessage, Notification, Permission, Share, ShareOptions, ShareTarget};
+pub use types::{
+    Capability, Contact, Conversation, Entry, EntryKind, Identity, MailMessage, Notification, Permission, Share, ShareOptions, ShareTarget,
+};
 
 /// Reading and writing documents.
 ///
@@ -70,7 +72,7 @@ pub trait Files {
 /// Giving other people access to a document.
 ///
 /// Persisting a share through the provider matters more than it looks. A share
-/// recorded only by CollabCraft would be invisible in the provider's own file
+/// recorded only by the caller would be invisible in the provider's own file
 /// manager, so the two would disagree about who can open what. The provider
 /// stays the authority.
 pub trait Sharing {
@@ -121,12 +123,43 @@ pub trait Accounts {
     fn me(&self) -> Result<Identity>;
 }
 
+/// Working together on a document, through whatever the provider calls it.
+///
+/// Defaulted throughout. A provider without the feature writes an empty
+/// `impl` and reports [`Capability::Conversation`] as absent. The caller
+/// then draws no control at all.
+pub trait Conversations {
+    /// What this provider calls the feature. `None` where it has none.
+    ///
+    /// Separate from the capability on purpose. The name is a property of
+    /// the provider. Whether it is available is a property of the
+    /// instance, and an administrator decides that one.
+    fn conversation_name(&self) -> Option<String> {
+        None
+    }
+
+    /// Start a conversation about a document, or join the one already there.
+    ///
+    /// Two people pressing the same control have to arrive in the same
+    /// place, so this is expected to be idempotent for a given document.
+    ///
+    /// `id` is the provider's own handle and means nothing outside the
+    /// account it came from. A conversation is therefore keyed on the
+    /// provider, the account and the document together, and `self` carries
+    /// the first two. A document copied into another account is a different
+    /// document to its provider, so it gets a conversation of its own.
+    /// Nothing here can attach one account's thread to another's.
+    fn conversation(&self, _id: &str, _title: &str) -> Result<Conversation> {
+        Err(Error::Unsupported("conversations"))
+    }
+}
+
 /// Everything one provider can do.
 ///
 /// A provider implements the capabilities it has and reports the rest as
-/// absent, so CollabCraft can hide a share button on a server with no sharing
+/// absent, so a caller can hide a share button on a server with no sharing
 /// rather than offering a feature that will fail.
-pub trait Provider: Files + Sharing + Contacts + Notifications + Mail + Accounts {
+pub trait Provider: Files + Sharing + Contacts + Notifications + Mail + Accounts + Conversations {
     /// A stable identifier, such as `nextcloud`. Used in configuration and
     /// logs, never shown to a user.
     fn id(&self) -> &str;
