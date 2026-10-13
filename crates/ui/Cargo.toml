@@ -22,8 +22,6 @@ skrifa = { version = "0.44", default-features = false, features = ["std"] }
 # The vendor-neutral vocabulary the share dialog speaks. No IO and no
 # vendor, so this stays buildable for the web.
 craft-cloud = { workspace = true, optional = true }
-# The CollabCraft backend lives under [target.] below. It is blocking, so
-# it has no meaning on wasm32.
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # Screenshot and input tests of an app's screens (the screen-testing feature).
@@ -31,11 +29,6 @@ egui_kittest = { version = "0.37", features = ["snapshot", "wgpu"], optional = t
 # The versions egui_system_font_provider 0.37 uses.
 fontique = { version = "0.11.1", default-features = false, features = ["system", "fontconfig-dlopen"], optional = true }
 unicode-script = { version = "0.5.8", optional = true }
-# The backend half, which is the only part that opens a socket. Native
-# only, because a blocking client cannot run on the web. craft-ui must
-# still build for wasm32 under --all-features, so the dependency is
-# gated on the target and not only on the feature.
-craft-cloud-client = { workspace = true, optional = true }
 
 # Fetching served fonts (`fonts::UiFonts::served_faces`); already in every eframe web build.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
@@ -66,8 +59,6 @@ testing = []
 screen-testing = ["dep:egui_kittest"]
 # The share dialog and the backend contract it states its work through.
 share = ["dep:craft-cloud"]
-# A share backend that reaches the CollabCraft service on a worker thread.
-collabcraft = ["share", "dep:craft-cloud-client"]
 
 [dev-dependencies]
 # serde: the IME tests read events that only the suite's egui fork has from JSON.

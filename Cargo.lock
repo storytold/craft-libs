@@ -1140,7 +1140,6 @@ name = "craft-ui"
 version = "0.1.0"
 dependencies = [
  "craft-cloud",
- "craft-cloud-client",
  "craft-fonts-build",
  "craft-i18n",
  "eframe",
