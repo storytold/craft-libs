@@ -1,0 +1,35 @@
+name: Print spooler
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['crates/print/**', 'Cargo.toml', 'Cargo.lock', '.github/workflows/print.yml']
+  pull_request:
+    paths: ['crates/print/**', 'Cargo.toml', 'Cargo.lock', '.github/workflows/print.yml']
+permissions:
+  contents: read
+jobs:
+  print:
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - run: cargo fmt --check
+      - run: cargo clippy -p craft-print --all-targets -- -D warnings
+      - name: Prepare the Windows test driver
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          Start-Service Spooler
+          Add-PrinterDriver -Name 'Generic / Text Only'
+      - run: cargo test -p craft-print --locked -- --nocapture
+        timeout-minutes: 10
+        env:
+          CRAFT_PRINT_REQUIRE_QUEUE: ${{ runner.os == 'Windows' && '1' || '0' }}
