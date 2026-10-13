@@ -1,63 +1,26 @@
-# Type System Contracts & Domain Invariants
+# Types, errors and state
 
-This document outlines the numerical representations, type invariants, and error contracts enforced across `craft-libs`.
+Use explicit `Result` or `Option` for failures callers need to handle. Prefer typed errors
+when callers must distinguish causes; `thiserror` is an available design choice, not a
+workspace mandate. Existing APIs include `io::Result`, boxed errors and
+[`Result<T, String>` printing helpers](../crates/ui/src/printing.rs). Changing a public error
+type is an API compatibility decision, not a lint cleanup.
 
----
+Document invalid input, unsupported operations, mutation ordering and post-failure state.
+An empty success value must not conceal an error. Fallbacks and saturation need explicit
+semantics; they are not substitutes for checked arithmetic when losing information is unsafe.
+Do not add `todo!`, `unimplemented!`, unwrap or panic paths to shipped code.
 
-## 1. Non-Panicking Return Types
+Validate input-derived indices and UTF-8 boundaries; use `.get()` for fallible access.
+Check lengths, offsets, division and numeric conversions. Bound allocations and recursion
+from untrusted data. Reject non-finite values when the operation requires finite inputs.
+Choose limits and tests based on actual callers and workloads.
 
-Shared crates eliminate implicit panics by representing fallibility exclusively through explicit return types:
+Keep logical identities stable across label changes, localization and reordering. Preserve
+app-owned state and intentional product differences when extracting a shared mechanism.
+For future domain types, establish the contract with real consumers first. This revision
+contains no `craft-time` crate and imposes no speculative `Tick` or SMPTE API on contributors.
 
-- **Explicit `Result<T, E>` & `Option<T>`**:
-  All operations that can encounter missing data, malformed inputs, full disks, or unsupported formats must return an explicit `Result` or `Option`.
-- **Domain-Specific Error Enums**:
-  Crates define strongly typed domain error hierarchies using `thiserror`. Never use generic string errors (`Result<T, String>`) in public crate surfaces.
-- **Unsupported Feature Representation**:
-  Unimplemented capabilities return explicit `Err(Error::Unsupported(...))` variants rather than calling `todo!()` or `unimplemented!()`.
-- **Zero Panics in Shipped Code**:
-  Prohibit `.unwrap()`, `.expect()`, and `panic!()`. Use `ok_or(..)?`, `let ... else { return Err(...); }`, or `unwrap_or_default()` / `unwrap_or_else()` where non-corrupting fallbacks are logically sound.
-
----
-
-## 2. Signed Media Time (`craft-time`)
-
-Time in media-oriented creative applications (video NLE, motion graphics, digital audio) is fundamentally signed:
-
-- **The `Tick` Representation**:
-  - Exact media timestamps are represented by the signed 64-bit integer newtype `Tick(i64)`.
-  - The arithmetic contract covers the complete signed domain `[Tick::MIN, Tick::MAX]`.
-  - Negative timestamps are valid domain constructs: audio lead-in / preroll buffers, lead-in pickup bars in music composition, and negative trim offsets.
-- **Boundary Clamping**:
-  - Shared library crates must **never** universally clamp timestamps to non-negative `[0, MAX]`.
-  - Non-negative clamping is restricted to application-level playback transport and timeline scrubber boundaries.
-- **Monotonic Division & Timebases**:
-  - Timebase division must be checked for zero.
-  - SMPTE timecode conversions (`HH:MM:SS:FF`) must handle drop-frame vs non-drop-frame calculations with exact integer arithmetic.
-
----
-
-## 3. Hostile Numerical Inputs & Safe Arithmetic
-
-Input data from external files, IPC channels, and foreign protocols must be treated as untrusted:
-
-- **Safe Slicing & Indexing**:
-  - Direct indexing (`v[i]`, `s[a..b]`) is forbidden on input-derived numbers.
-  - Use `.get(index)` or `.get(range)` and handle `None`.
-  - UTF-8 strings must be sliced only at valid character boundaries (`is_char_boundary`).
-- **Checked & Saturating Arithmetic**:
-  - Array lengths, offsets, tile coordinates, and media ticks must use `checked_*` or `saturating_*` arithmetic to prevent integer overflow.
-  - Modular arithmetic and scaling ratios must guard against division by zero.
-- **Finite Float Verification**:
-  - Float values for dimensions, strokes, and zoom scales must be verified as finite (`f.is_finite()`).
-  - Reject or clamp `NaN`, `+inf`, and `-inf` before converting floats to integers.
-
----
-
-## 4. Logical Identity vs. Localized Presentation
-
-User interface components, panels, and document entities must decouple internal identity from user-facing text:
-
-- **Stable Logical IDs**:
-  Tabs, panels, accordion headers, commands, and document layers use immutable IDs (`TabId`, `PanelId`, `LayerId`). Identifiers must never be derived from human-readable labels, which change across localizations and user renames.
-- **Localization Resilience**:
-  UI text and accessibility labels must be updateable without altering widget identity, focus paths, or saved layout state.
+Use [shared services](shared-services-architecture.md) for persistence and quit boundaries,
+and the [release policy proposal](https://github.com/storytold/craft-libs/pull/41) for the
+intended compatibility rules pending its merge.

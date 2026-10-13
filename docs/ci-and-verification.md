@@ -1,91 +1,51 @@
-# Continuous Integration & Quality Gates Protocol
+# CI and verification
 
-This document defines the quality gates, verification commands, and cross-application compatibility protocols for `craft-libs`.
+Run these workspace gates for code changes and before merging the combined source:
 
----
-
-## 1. Quality Gate Sequence
-
-Every pull request and candidate revision in `craft-libs` must pass all local and automated gates with zero errors and zero warnings:
-
-```bash
-# 1. Format verification
+```sh
 cargo fmt --check
-
-# 2. Strict clippy compiler lints
-cargo clippy --workspace --all-targets -- -D warnings
-
-# 3. Complete workspace test suite
-cargo test --workspace
-
-# 4. WebAssembly compilation check
-cargo check --target wasm32-unknown-unknown
-
-# 5. Standard xtask CI runner (executes gates 1-3)
-cargo xtask ci
+cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo test --workspace --locked
+cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+cargo test --workspace --all-features --locked
 ```
 
----
+The workspace uses Rust 1.95 or newer. Follow host-specific allocation/build instructions
+when running these commands. For docs-only edits, validate links, commands and source claims;
+state that scope rather than quoting old test counts as validation of the new revision.
 
-## 2. WebAssembly Target Verification
+## Targeted platform checks
 
-Shared crates in `craft-libs` are designed to compile for WebAssembly (`wasm32-unknown-unknown`) to support browser-based Craft applications (e.g. PhotoCraft Web):
+With the WASM target installed, the supported check surface is:
 
-```bash
-cargo check --target wasm32-unknown-unknown
+```sh
+cargo check -p craft-ui --all-features --locked --target wasm32-unknown-unknown
+cargo check -p craft-settings --locked --target wasm32-unknown-unknown
 ```
 
-### Invariants
+The settings check covers its trait, document helpers and errors, not persistent storage.
+Native printing and shutdown have separate platform contracts. Do not advertise all workspace
+crates or every architecture as browser-compatible from these commands.
 
-- Operating system file I/O, native thread management, and platform event loops must be guarded behind `#[cfg(not(target_arch = "wasm32"))]`.
-- Provide graceful, non-panicking unsupported fallback behavior on WASM targets.
+Inspect [Shared UI](../.github/workflows/ui.yml) and
+[Print spooler](../.github/workflows/print.yml) for current job matrices and path filters.
+They cover selected native Linux/macOS/Windows jobs and UI WASM; a docs-only PR may not trigger
+them. The [release policy proposal](https://github.com/storytold/craft-libs/pull/41) adds workspace
+release validation; until merged, its jobs are proposed rather than existing checks here.
+Report actual candidate check results before release, including all required final-source jobs.
 
----
+## Consumer comparisons
 
-## 3. Cross-Application Compatibility Protocol (`cargo xtask compat`)
+No `cargo xtask ci`, `cargo xtask compat` or `compat-check` command is required or available
+in this revision. Inspect the affected consumer's manifest and instructions and run its real
+commands in isolated worktrees. Record its SHA, baseline resolved craft-libs pin, candidate
+SHA/patch, features, commands, executed test counts, result and environment. Preserve the
+consumer's normal checkout and real user data. Zero tests or zero comparisons is unverified.
+Baseline failures must be distinguished from candidate regressions; an unresolved baseline
+failure is not evidence that the candidate works.
 
-Internal workspace tests (`cargo test --workspace`) verify only that `craft-libs` is self-consistent; they do not exercise consuming applications. Consumer CI pipelines pin immutable Git revisions and never build against unmerged branches.
-
-`cargo xtask compat` bridges this gap:
-
-```bash
-# Validate candidate revision against default consumer pair (PhotoCraft & VectorCraft)
-cargo xtask compat
-
-# Validate candidate revision against specific consumers
-cargo xtask compat --revision <SHA> --consumers photocraft,vectorcraft,filmcraft --consumers-dir ..
-
-# Fast validation mode (targets primary UI crates)
-cargo xtask compat --quick
-```
-
-### Invariants
-
-1. **Immutable Consumer Repositories**: Never modify committed `Cargo.toml` dependency pins or `Cargo.lock` files in consumer trees.
-2. **Worktree Isolation**: Candidate compilations execute in isolated temporary Git worktrees (`target/compat/worktrees/`) that clean up automatically on exit or interruption.
-3. **Dirty-Tree Snapshotting**: Uncommitted changes are staged via an isolated temporary Git index (`GIT_INDEX_FILE`), capturing staged, unstaged, and untracked source files while respecting `.gitignore`.
-4. **Regression Separation**: Pre-existing failures on the consumer's baseline pin (`BASELINE_FAILURE`) are reported but do not block candidate validation. Any failure introduced by the candidate (`CANDIDATE_REGRESSION`) causes a non-zero exit.
-5. **Non-Vacuous Verification**: Runs where 0 tests executed or comparisons were skipped cannot produce a passing status.
-
----
-
-## 4. Multi-Platform Targets & Matrix
-
-`craft-libs` crates support the diverse platform deployments of the Craft suite:
-
-- **macOS** (`aarch64-apple-darwin`, `x86_64-apple-darwin`): Metal rendering, AppKit menu integration, Touch Bar termination handling.
-- **Linux** (`x86_64-unknown-linux-gnu`): Wayland/X11 rendering, GTK3 dialogs.
-- **Windows** (`x86_64-pc-windows-msvc`, `aarch64-pc-windows-msvc`): Win32 native windowing and MSVC ABI.
-- **WebAssembly** (`wasm32-unknown-unknown`): WebGPU/WebGL web app runtimes.
-- **FreeBSD**: Packaging lint and build compatibility.
-
----
-
-## 5. Epistemic Claim Taxonomy
-
-All PRs, CI logs, and commit messages must observe the **Four-Tier Claim Taxonomy**:
-
-$$\text{Documented} \neq \text{Implemented} \neq \text{Tested} \neq \text{Empirically Validated}$$
-
-- Stating a feature is *tested* requires active execution of assertions that prove capability to fail on defects.
-- Stating *durability* requires distinguishing unit-tested syscall ordering (`sync_file < rename < sync_dir`) from unbuffered physical drive power-loss survival.
+For changes in native behavior, exercise the app workflow on the relevant OS/device. Mocked
+filesystem failures test error handling; compilation checks an API surface; interactive save,
+cancel, close and reopen checks app behavior. Physical Touch Bar or printer claims need the
+corresponding hardware evidence. None of these alone establishes physical power-loss survival.
+Keep limitations and evidence links with the PR so the result can be reviewed at its exact SHA.
