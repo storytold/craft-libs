@@ -42,6 +42,9 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   widget-state styling boundary.
 - [Panel docking](docs/ui-docking.md): validated panel moves, floating groups, workspace adapters
   and an optional egui docking surface.
+- [Engineering methodology](docs/engineering-methodology.md): testing architecture, autonomous agent
+  interaction harnesses, compatibility gates, and fallback resilience across shared crates.
+- [Testing and evaluation specification](docs/testing-and-evaluation.md): five-tier verification hierarchy, synthetic stream construction, property-based fuzzing, and hostile boundary evaluations.
 
 ## License and credits
 
