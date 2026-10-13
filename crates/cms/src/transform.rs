@@ -1,7 +1,7 @@
 //! Colour transforms between profiles through the PCS, with rendering intents, black point
 //! compensation, soft-proofing chains, and fast lookup-table evaluation of pixel buffers.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use crate::clut::{Clut, MAX_CHANNELS};
@@ -21,9 +21,11 @@ pub enum SampleKind {
 
 /// Options for building a [`Transform`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(default, rename_all = "kebab-case"))]
 pub struct TransformOptions {
     pub intent: Intent,
-    /// Adobe-style black point compensation (ignored for absolute colorimetric).
+    /// Standard black point compensation (ISO 18619, ignored for absolute colorimetric).
     pub bpc: bool,
     /// `true`: float buffers go through the exact pipeline (default). `false`: float buffers use
     /// the same lookup tables as integer buffers (faster, for previews).
@@ -120,7 +122,7 @@ impl Transform {
         Ok(t)
     }
 
-    /// Soft-proof transform `src → proof → dst` (Photoshop View › Proof Setup): `intent`/`bpc`
+    /// Soft-proof transform `src → proof → dst` (soft-proof preview setup): `intent`/`bpc`
     /// apply to the document → proof step; the proof → display step is relative colorimetric
     /// with BPC, or absolute colorimetric without BPC when `simulate_paper` is set (paper
     /// colour and black ink simulated). Without paper simulation, and unless `intent` is
@@ -269,6 +271,39 @@ impl Transform {
     }
     pub fn outputs(&self) -> usize {
         self.outputs
+    }
+    /// Returns the approximate memory footprint in bytes of the precomputed lookup tables and grids.
+    pub fn table_bytes(&self) -> usize {
+        let mut bytes = 0;
+        match &self.core {
+            Core::Shaper { curves8, curves, matrix } => {
+                bytes += curves8.len() * 256 * std::mem::size_of::<f32>();
+                for c in curves {
+                    bytes += c.len() * std::mem::size_of::<f32>();
+                }
+                if let Some((_, _, m, b)) = matrix {
+                    bytes += (m.len() + b.len()) * std::mem::size_of::<f32>();
+                }
+            }
+            Core::Grid(clut) => {
+                bytes += clut.data.len() * std::mem::size_of::<f32>();
+                bytes += clut.grid.len() * std::mem::size_of::<usize>();
+            }
+            Core::Exact => {}
+        }
+        if let Some(post) = &self.post {
+            for t in &post.tables {
+                bytes += t.len() * std::mem::size_of::<f32>();
+            }
+        }
+        bytes += self.grid8.len() * 256 * std::mem::size_of::<(u32, f32)>();
+        if let Some(white) = &self.white {
+            bytes += (white.src.len() + white.dst.len()) * std::mem::size_of::<f32>();
+            if let Some(src8) = &white.src8 {
+                bytes += src8.len();
+            }
+        }
+        bytes
     }
     pub fn options(&self) -> TransformOptions {
         self.opts
@@ -734,7 +769,7 @@ fn connection(src: &Profile, dst: &Profile, intent: Intent, bpc: bool) -> Result
     if (bs - bd).abs() < 1e-6 {
         return Ok(None);
     }
-    // Neutral black points (luminance only, as in Adobe's BPC), mapped linearly in XYZ so that
+    // Neutral black points (luminance only, as in ISO 18619 BPC), mapped linearly in XYZ so that
     // the source black lands on the destination black and the white stays fixed.
     let w = math::D50;
     let mut scale = [1.0; 3];
@@ -750,7 +785,7 @@ fn connection(src: &Profile, dst: &Profile, intent: Intent, bpc: bool) -> Result
 
 /// Luminance (Y, D50-relative) of the profile's black point for `intent`.
 ///
-/// Follows the structure of Adobe's published BPC algorithm: matrix/TRC profiles use device
+/// Follows the structure of the ISO 18619 BPC algorithm: matrix/TRC profiles use device
 /// zero; v4 LUT profiles in perceptual/saturation use the perceptual reference black; other LUT
 /// profiles use the darkest colour the device reaches (Lab 0 round-tripped through BToA/AToB,
 /// or device black for additive spaces). The destination-side curve fitting of the paper is
@@ -802,22 +837,148 @@ pub fn black_point(p: &Profile, intent: Intent, _input: bool) -> Result<f64, Cms
 
 // ------------------------------------------------------------ cache
 
+/// Limits for the process-wide transform cache.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CacheLimits {
+    /// Maximum number of transform entries in the cache.
+    pub max_entries: usize,
+    /// Maximum total lookup table bytes allowed across all cached transforms.
+    pub max_bytes: usize,
+}
+
+impl Default for CacheLimits {
+    fn default() -> Self {
+        Self { max_entries: 64, max_bytes: 64 * 1024 * 1024 }
+    }
+}
+
+/// Statistics for the process-wide transform cache.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub struct CacheStats {
+    /// Current number of transform entries in the cache.
+    pub entries: usize,
+    /// Current total lookup table memory in bytes across all cached transforms.
+    pub total_bytes: usize,
+}
+
 type Key = (u64, u64, TransformOptions);
 
+struct CacheEntry {
+    transform: Arc<Transform>,
+    bytes: usize,
+}
+
+struct CacheState {
+    entries: HashMap<Key, CacheEntry>,
+    order: VecDeque<Key>,
+    total_bytes: usize,
+    limits: CacheLimits,
+}
+
+impl CacheState {
+    fn new() -> Self {
+        Self { entries: HashMap::new(), order: VecDeque::new(), total_bytes: 0, limits: CacheLimits::default() }
+    }
+
+    fn touch(&mut self, key: &Key) {
+        if let Some(pos) = self.order.iter().position(|k| k == key) {
+            self.order.remove(pos);
+            self.order.push_back(*key);
+        }
+    }
+
+    fn insert(&mut self, key: Key, transform: Arc<Transform>) {
+        let bytes = transform.table_bytes();
+        if let Some(old) = self.entries.insert(key, CacheEntry { transform, bytes }) {
+            self.total_bytes = self.total_bytes.saturating_sub(old.bytes);
+            if let Some(pos) = self.order.iter().position(|k| k == &key) {
+                self.order.remove(pos);
+            }
+        }
+        self.total_bytes = self.total_bytes.saturating_add(bytes);
+        self.order.push_back(key);
+        self.evict();
+    }
+
+    fn evict(&mut self) {
+        while self.entries.len() > self.limits.max_entries || (self.total_bytes > self.limits.max_bytes && !self.entries.is_empty()) {
+            if let Some(oldest) = self.order.pop_front() {
+                if let Some(removed) = self.entries.remove(&oldest) {
+                    self.total_bytes = self.total_bytes.saturating_sub(removed.bytes);
+                }
+            } else {
+                break;
+            }
+        }
+    }
+
+    fn set_limits(&mut self, limits: CacheLimits) {
+        self.limits = limits;
+        self.evict();
+    }
+
+    fn clear(&mut self) {
+        self.entries.clear();
+        self.order.clear();
+        self.total_bytes = 0;
+    }
+
+    fn stats(&self) -> CacheStats {
+        CacheStats { entries: self.entries.len(), total_bytes: self.total_bytes }
+    }
+}
+
+static CACHE: OnceLock<Mutex<CacheState>> = OnceLock::new();
+
+fn get_cache() -> &'static Mutex<CacheState> {
+    CACHE.get_or_init(|| Mutex::new(CacheState::new()))
+}
+
+/// Sets the limits for the process-wide transform cache and evicts least recently used entries if needed.
+pub fn set_cache_limits(limits: CacheLimits) {
+    let mut state = get_cache().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    state.set_limits(limits);
+}
+
+/// Returns the current limits of the process-wide transform cache.
+pub fn cache_limits() -> CacheLimits {
+    let state = get_cache().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    state.limits
+}
+
+/// Returns current statistics of the process-wide transform cache.
+pub fn cache_stats() -> CacheStats {
+    let state = get_cache().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    state.stats()
+}
+
+/// Clears all entries from the process-wide transform cache.
+pub fn clear_cache() {
+    let mut state = get_cache().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    state.clear();
+}
+
 /// Process-wide cache of transforms keyed by profile content and options.
+///
+/// Retrieves an existing transform or precomputes and caches a new one, evicting
+/// least recently used entries when limits are exceeded.
 pub fn cached(src: &Profile, dst: &Profile, opts: TransformOptions) -> Result<Arc<Transform>, CmsError> {
-    static CACHE: OnceLock<Mutex<HashMap<Key, Arc<Transform>>>> = OnceLock::new();
     let key = (src.content_hash(), dst.content_hash(), opts);
-    let cache = CACHE.get_or_init(Default::default);
-    if let Some(t) = cache.lock().unwrap_or_else(|e| e.into_inner()).get(&key) {
-        return Ok(t.clone());
+    let cache = get_cache();
+    {
+        let mut state = cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(t) = state.entries.get(&key).map(|e| e.transform.clone()) {
+            state.touch(&key);
+            return Ok(t);
+        }
     }
     let t = Arc::new(Transform::with_options(src, dst, opts)?);
-    let mut c = cache.lock().unwrap_or_else(|e| e.into_inner());
-    if c.len() > 64 {
-        c.clear();
+    let mut state = cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some(t) = state.entries.get(&key).map(|e| e.transform.clone()) {
+        state.touch(&key);
+        return Ok(t);
     }
-    c.insert(key, t.clone());
+    state.insert(key, t.clone());
     Ok(t)
 }
 

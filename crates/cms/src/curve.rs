@@ -26,6 +26,37 @@ pub fn srgb_trc() -> Curve {
 }
 
 impl Curve {
+    /// Creates a gamma curve `y = x^g`. Returns `Identity` if `g == 1.0`.
+    pub fn gamma(g: f64) -> Result<Self, crate::CmsError> {
+        if !g.is_finite() || g <= 0.0 {
+            return Err(crate::CmsError::InvalidArgument("gamma must be positive and finite".into()));
+        }
+        if (g - 1.0).abs() < 1e-9 { Ok(Curve::Identity) } else { Ok(Curve::Gamma(g)) }
+    }
+
+    /// Creates an ICC parametric curve (types 0 to 4).
+    pub fn parametric(kind: u16, p: [f64; 7]) -> Result<Self, crate::CmsError> {
+        if kind > 4 {
+            return Err(crate::CmsError::InvalidArgument(format!("parametric curve kind {kind} must be <= 4")));
+        }
+        let count = Self::param_count(kind);
+        if !p.iter().take(count).all(|v| v.is_finite()) {
+            return Err(crate::CmsError::InvalidArgument("parametric curve parameters must be finite".into()));
+        }
+        Ok(Curve::Parametric { kind, p })
+    }
+
+    /// Creates a sampled lookup table curve over evenly spaced inputs in `[0, 1]`.
+    pub fn from_table(samples: Vec<f32>) -> Result<Self, crate::CmsError> {
+        if samples.len() < 2 {
+            return Err(crate::CmsError::InvalidArgument("sampled curve must contain at least 2 entries".into()));
+        }
+        if !samples.iter().all(|s| s.is_finite()) {
+            return Err(crate::CmsError::InvalidArgument("sampled curve values must be finite".into()));
+        }
+        Ok(Curve::Table(samples))
+    }
+
     /// Number of parameters stored for a parametric function type.
     pub fn param_count(kind: u16) -> usize {
         match kind {
