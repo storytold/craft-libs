@@ -59,6 +59,8 @@ The workspace provides automation commands through `cargo xtask`:
 
 - `cargo xtask ci`: runs formatting (`cargo fmt --check`), strict Clippy (`cargo clippy --workspace --all-targets -- -D warnings`), and workspace tests.
 - `cargo xtask compat`: tests proposed library revisions against consuming applications (`photocraft`, `vectorcraft`, etc.) using isolated Git worktrees and Cargo dependency overrides.
+- `cargo xtask adoption`: audits shared crate adoption revisions and resolved lockfile SHAs across the Craft application suite.
+- `cargo xtask lifecycle`: validates macOS application lifecycle contracts and regression fixtures.
 
 ## License and credits
 
