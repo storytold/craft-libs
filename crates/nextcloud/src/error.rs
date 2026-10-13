@@ -95,7 +95,7 @@ impl fmt::Display for Error {
             Error::RateLimited => f.write_str("The Nextcloud server is busy; try again in a minute"),
             Error::TooLarge => f.write_str("The Nextcloud server sent more data than expected"),
             Error::Malformed(d) => write!(f, "The Nextcloud server sent a response that couldn't be read ({d})"),
-            Error::InvalidAddress(d) => write!(f, "That isn't a Nextcloud address Craft can use ({d}); check what you typed"),
+            Error::InvalidAddress(d) => write!(f, "That isn't a usable Nextcloud address ({d}); check what you typed"),
             Error::Cancelled => f.write_str("Cancelled"),
             Error::Io(e) => write!(f, "Local file error: {e}"),
         }
@@ -126,10 +126,7 @@ mod tests {
         assert_eq!(Error::Unauthorized.to_string(), "Nextcloud rejected the app password; sign in again");
         let e = Error::UnknownCertificate { fingerprint: Fingerprint([0; 32]) };
         assert!(e.to_string().contains("(SHA-256 00:00:"));
-        assert_eq!(
-            Error::InvalidAddress("bad port".into()).to_string(),
-            "That isn't a Nextcloud address Craft can use (bad port); check what you typed"
-        );
+        assert_eq!(Error::InvalidAddress("bad port".into()).to_string(), "That isn't a usable Nextcloud address (bad port); check what you typed");
     }
 
     #[test]
