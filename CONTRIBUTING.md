@@ -6,6 +6,8 @@ localization and product policy stay with the application.
 
 ## Propose and implement a focused change
 
+Shared UI or functionality required across multiple Craft applications must land in craft-libs first before being adopted downstream. Downstream consumer pull requests should remain draft pull requests pinned to branch heads until the shared library PR merges into main.
+
 For a new extraction, inspect two actual consumers at known revisions. Compare their callers,
 behavior and workloads. Distinguish defects from intentional app differences and retain
 unresolved policy in the app. Describe shared errors, post-failure state and platform limits
