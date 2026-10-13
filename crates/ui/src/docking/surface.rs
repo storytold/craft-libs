@@ -829,8 +829,12 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
 
     fn finish_drag(&mut self, ctx: &Context) {
         let Some(drag) = ctx.data(|d| d.get_temp::<Drag<P>>(self.id.with("drag"))) else { return };
-        let (pointer, down, released, focused) =
-            ctx.input(|i| (i.pointer.interact_pos(), i.pointer.primary_down(), i.pointer.primary_released(), i.focused));
+        let (pointer, down, released, focused, gone) =
+            ctx.input(|i| (i.pointer.interact_pos(), i.pointer.primary_down(), i.pointer.primary_released(), i.focused, !i.pointer.has_pointer()));
+        // Leaving the window is the drop: on X11 and Windows the release outside never reaches
+        // egui, so the drag would otherwise stay on the pointer. `interact_pos` still holds the
+        // last position this frame, and the panel floats there rather than docking at the edge.
+        let released = released || gone;
         let escape = ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::Escape));
         if escape || !focused || !self.layout.contains(&drag.panel) || (!down && !released) {
             cancel_drag::<P>(ctx, self.id);
@@ -854,10 +858,10 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
             if pointer.distance(drag.origin) < 2.0 {
                 return;
             }
-            let action = if let Some(proposal) = proposal {
+            let action = if let Some(proposal) = proposal.filter(|_| !gone) {
                 Some(Action::Move { panel: drag.panel.clone(), anchor: proposal.anchor, placement: proposal.placement })
             } else if (self.permissions)(&drag.panel).floatable
-                && (!drag.source.contains(pointer) || self.layout.floating.iter().any(|g| g.panels.contains(&drag.panel)))
+                && (gone || !drag.source.contains(pointer) || self.layout.floating.iter().any(|g| g.panels.contains(&drag.panel)))
             {
                 let rect = clamp_float(Rect::from_min_size(pointer - drag.grab, drag.source.size()), ctx.content_rect());
                 Some(Action::Float { panel: drag.panel.clone(), rect: [rect.left(), rect.top(), rect.width(), rect.height()] })
