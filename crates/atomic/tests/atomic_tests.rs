@@ -1,4 +1,6 @@
-use craft_atomic::{atomic_write, atomic_write_with, or_plain_fsync, write_new, write_new_with};
+#[cfg(unix)]
+use craft_atomic::{atomic_write, write_new};
+use craft_atomic::{atomic_write_with, or_plain_fsync, write_new_with};
 use std::cell::Cell;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};

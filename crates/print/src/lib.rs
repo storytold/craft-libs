@@ -1,15 +1,23 @@
 //! The system print spooler. On macOS and Linux this is CUPS: printers come from `lpstat` — its
 //! queues, and the driverless destinations it can print to without one — and jobs are piped to
 //! `lp` with the job options (copies, collation, duplex, colour). On Windows the printers come
-//! from `Win32_Printer` and jobs are rendered with the in-box `Windows.Data.Pdf` and spooled
-//! with the driver's own settings — both through `powershell`, so no Win32 API is called here.
-//! Other platforms report that printing isn't available yet; the print-ready PDF can still be
-//! saved.
+//! from the spooler and jobs are drawn by the in-box `Windows.Data.Pdf` into the XPS print API
+//! with the options as a PrintTicket, all in this process (`windows.rs`): no PowerShell or other
+//! program is started, so printing works where scripts are locked down. Other platforms report
+//! that printing isn't available yet; the print-ready PDF can still be saved.
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+#[cfg(any(test, windows))]
+mod progress;
+#[cfg(any(test, windows))]
+mod sheets;
 #[cfg(test)]
 mod tests;
+#[cfg(any(test, windows))]
+mod ticket;
+#[cfg(windows)]
+mod windows;
 
 /// A system spooler failure. Document permissions belong to the caller.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -48,6 +56,7 @@ pub enum Scaling {
     Exact,
     /// Use matching driver paper or its default and shrink oversized sheets to fit.
     /// Smaller sheets retain their size; the printable area centers the result.
+    /// On Windows every sheet of the job goes on that one paper.
     ShrinkToFit,
 }
 
@@ -359,14 +368,7 @@ pub fn printers() -> Vec<Printer> {
     }
     #[cfg(windows)]
     {
-        // Win32_Printer through CIM: `wmic` was removed from Windows 11 (24H2) and
-        // `Get-CimInstance` is on every desktop install. A machine whose PowerShell is locked
-        // down lists no printers and the dialog offers only Save as PDF, as with CUPS that
-        // isn't running.
-        match powershell_command(POWERSHELL_PRINTERS).output() {
-            Ok(o) if o.status.success() => parse_windows_printers(&String::from_utf8_lossy(&o.stdout)),
-            _ => Vec::new(),
-        }
+        windows::printers()
     }
     #[cfg(not(any(windows, all(unix, not(target_arch = "wasm32")))))]
     {
@@ -392,29 +394,21 @@ pub fn printers_parsed(queues: &str, available: Option<&str>) -> Vec<Printer> {
     printers
 }
 
-/// The `powershell` command that runs a script. `-NoProfile` keeps a user's profile from
-/// writing banners into what is parsed, `-NonInteractive` from waiting for input.
-/// The full system path avoids running a powershell.exe beside a portable app.
-#[cfg(windows)]
-fn powershell_command(script: &str) -> std::process::Command {
-    let root = std::env::var_os("SystemRoot").unwrap_or_else(|| "C:\\Windows".into());
-    let exe = std::path::Path::new(&root).join("System32").join("WindowsPowerShell").join("v1.0").join("powershell.exe");
-    let mut c = std::process::Command::new(exe);
-    use std::os::windows::process::CommandExt as _;
-    c.args(["-NoProfile", "-NonInteractive", "-Command", script]).creation_flags(0x0800_0000);
-    c.env_remove("CRAFT_PRINT_DRYRUN").env_remove("CRAFT_PRINT_TEST_SETTINGS");
-    c
+/// The Print dialog's printers from the Windows spooler's queues (name, and whether the driver
+/// takes two-sided settings when that is known): sorted by name, each once, the default marked
+/// when it is one of them.
+#[cfg(any(test, windows))]
+pub(crate) fn printer_list(queues: impl IntoIterator<Item = (String, Option<bool>)>, default: Option<&str>) -> Vec<Printer> {
+    let mut queues: Vec<(String, Option<bool>)> = queues.into_iter().filter(|(n, _)| !n.trim().is_empty()).collect();
+    queues.sort_by(|a, b| a.0.cmp(&b.0));
+    queues.dedup_by(|a, b| a.0 == b.0);
+    queues.into_iter().map(|(name, two_sided)| Printer { default: default == Some(name.as_str()), name, two_sided }).collect()
 }
 
-/// The Windows printer list: one line per printer, `*` on the system default. UTF-8, through
-/// the output encoding the script sets first. Only the properties the list needs are
-/// pulled, so a machine with many printers doesn't wait for the rest of each record.
-#[cfg(windows)]
-const POWERSHELL_PRINTERS: &str = "[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false); Get-CimInstance Win32_Printer -Property Name, Default, Capabilities | ForEach-Object { $sides = if (@($_.Capabilities) -contains 3) { '2' } else { '1' }; if ($_.Default) { '*' + $_.Name + [char]9 + $sides } else { $_.Name + [char]9 + $sides } }";
-
-/// The Print dialog's printers from the Windows printer list: one per line, `*` before the
-/// system default, followed by a tab and 2/1 for duplex support. The first `*` wins when a broken
-/// spooler marks more than one, so the dialog still has a single default to preselect.
+/// A printer list in the text form craft-print's former PowerShell backend printed: one per line,
+/// `*` before the system default, followed by a tab and 2/1 for duplex support. The first `*`
+/// wins when a broken spooler marks more than one. [`printers`] no longer uses it; it stays for
+/// callers that parse lists in this form.
 pub fn parse_windows_printers(out: &str) -> Vec<Printer> {
     let mut printers: Vec<Printer> = out
         .lines()
@@ -442,98 +436,36 @@ pub fn parse_windows_printers(out: &str) -> Vec<Printer> {
     printers
 }
 
-/// Send a print-ready PDF to the spooler. Returns the spooler's message: CUPS includes a job id; Windows confirms submission only.
+/// Send a print-ready PDF to the spooler. Returns the spooler's message: CUPS includes a job id;
+/// Windows confirms submission only ("spooled 3 sheet(s)").
 pub fn submit(pdf: &[u8], job: &Job) -> Result<String, Error> {
+    submit_with_progress(pdf, job, &mut |_, _| {})
+}
+
+/// [`submit`] with Windows sheet-processing progress: `(processed, sheets)` before the first
+/// sheet and after each sheet is successfully added to the native print job. Counts refer to
+/// source PDF sheets, regardless of copies or duplex. CUPS reports no progress.
+///
+/// The callback runs synchronously on the thread calling this function, need not be `Send`,
+/// and should return promptly. It is never retained. All sheets processed is not terminal
+/// success: only the returned result confirms submission, and a later failure may follow the
+/// last progress event. This does not report physical printing or provide cancellation.
+pub fn submit_with_progress(pdf: &[u8], job: &Job, progress: &mut dyn FnMut(usize, usize)) -> Result<String, Error> {
     #[cfg(all(unix, not(target_arch = "wasm32")))]
     {
+        let _ = progress;
         submit_via(std::process::Command::new("lp"), pdf, job)
     }
     #[cfg(windows)]
     {
-        windows_submit(pdf, job, &[])
+        windows::submit_with_progress(pdf, job, progress)
     }
     #[cfg(not(any(windows, all(unix, not(target_arch = "wasm32")))))]
     {
-        let _ = (pdf, job);
+        let _ = (pdf, job, progress);
         Err(Error::Spool("printing to a printer isn't available on this platform yet; save the print-ready PDF instead".into()))
     }
 }
-
-/// [`submit`] on Windows: the print-ready PDF goes to a job file of its own (WinRT reads from
-/// a path), the embedded [`WINDOWS_PRINT_SCRIPT`] spools it, and the file is gone again however
-/// the job ended. `extra_envs` reaches the script too — the tests use it for
-/// `CRAFT_PRINT_DRYRUN`, which renders without a printer.
-#[cfg(windows)]
-pub(crate) fn windows_submit(pdf: &[u8], job: &Job, extra_envs: &[(&str, &str)]) -> Result<String, Error> {
-    let path = windows_job_file(pdf)?;
-    let mut ps = powershell_command(WINDOWS_PRINT_SCRIPT);
-    for (key, value) in windows_env_vars(&path, job).into_iter().chain(extra_envs.iter().map(|(k, v)| (k.to_string(), v.to_string()))) {
-        ps.env(key, value);
-    }
-    let out = ps.output();
-    // Remove the job file before reporting: a spooler that refused the job must not leave the
-    // document behind.
-    drop(path);
-    let out = out.map_err(|e| Error::Spool(format!("the print spooler is not available: {e}")))?;
-    if !out.status.success() {
-        let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
-        let err = if err.is_empty() { String::from_utf8_lossy(&out.stdout).trim().to_string() } else { err };
-        return Err(Error::Spool(if err.is_empty() { "the print job was refused".into() } else { err }));
-    }
-    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
-}
-
-/// The job file [`windows_submit`] hands to `powershell`, in this user's own temporary folder:
-/// a randomly named, exclusively created file, removed on drop (including partial-write errors). WinRT reads a path, so unlike
-/// the job piped to `lp` this one touches disk for the seconds the spooler reads it.
-#[cfg(windows)]
-fn windows_job_file(pdf: &[u8]) -> Result<tempfile::TempPath, Error> {
-    use std::io::Write as _;
-    let written = |e: std::io::Error| Error::Spool(format!("the print job could not be written: {e}"));
-    let mut file = tempfile::Builder::new().prefix("craft-print-").suffix(".pdf").tempfile().map_err(written)?;
-    file.write_all(pdf).map_err(written)?;
-    file.flush().map_err(written)?;
-    // Close the handle before WinRT opens it, retaining automatic path removal.
-    Ok(file.into_temp_path())
-}
-
-/// The print script's environment: no arguments, so a printer name with quotes or spaces
-/// survives the command line and the document's path is not visible in the process list while
-/// it prints. The driver options in [`Job::options`] are CUPS' PPD keywords; on Windows the
-/// driver's own per-printer preferences apply (Print ▸ Properties…), so they are not sent.
-#[cfg_attr(not(windows), allow(dead_code))]
-pub(crate) fn windows_env_vars(path: &std::path::Path, job: &Job) -> Vec<(String, String)> {
-    vec![
-        ("CRAFT_PRINT_FILE".into(), path.to_string_lossy().into_owned()),
-        ("CRAFT_PRINT_PRINTER".into(), job.printer.clone().unwrap_or_default()),
-        ("CRAFT_PRINT_COPIES".into(), job.copies.to_string()),
-        ("CRAFT_PRINT_COLLATE".into(), if job.collate { "1" } else { "0" }.into()),
-        (
-            "CRAFT_PRINT_DUPLEX".into(),
-            match job.duplex {
-                None => "",
-                Some(Duplex::Off) => "off",
-                Some(Duplex::LongEdge) => "long-edge",
-                Some(Duplex::ShortEdge) => "short-edge",
-            }
-            .into(),
-        ),
-        (
-            "CRAFT_PRINT_SCALING".into(),
-            match job.scaling {
-                Scaling::Exact => "exact",
-                Scaling::ShrinkToFit => "shrink-to-fit",
-            }
-            .into(),
-        ),
-        ("CRAFT_PRINT_GRAYSCALE".into(), if job.grayscale { "1" } else { "0" }.into()),
-        ("CRAFT_PRINT_TITLE".into(), job.title.clone()),
-    ]
-}
-
-/// The embedded print script (see [`windows_submit`]).
-#[cfg(windows)]
-pub(crate) const WINDOWS_PRINT_SCRIPT: &str = include_str!("windows_print.ps1");
 
 /// [`submit`] with the spooler command given, so tests can stand in for `lp`.
 ///
@@ -596,6 +528,33 @@ pub(crate) fn job_message(stdout: &[u8]) -> String {
     s.strip_suffix("(0 file(s))").map_or(s, str::trim_end).to_string()
 }
 
+/// [`command_preview`] for the Windows backend.
+fn windows_preview(job: &Job) -> Vec<String> {
+    vec![
+        "xps-print".into(),
+        format!("printer={}", job.printer.as_deref().unwrap_or("(default)")),
+        format!("copies={}", job.copies.clamp(1, 999)),
+        format!("collate={}", job.collate),
+        format!(
+            "duplex={}",
+            match job.duplex {
+                None => "(queue default)",
+                Some(Duplex::Off) => "one-sided",
+                Some(Duplex::LongEdge) => "two-sided-long-edge",
+                Some(Duplex::ShortEdge) => "two-sided-short-edge",
+            }
+        ),
+        format!(
+            "scaling={}",
+            match job.scaling {
+                Scaling::Exact => "exact",
+                Scaling::ShrinkToFit => "shrink-to-fit",
+            }
+        ),
+        format!("color={}", if job.grayscale { "monochrome" } else { "color" }),
+    ]
+}
+
 /// The platform backend. No backend is available in the browser.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Backend {
@@ -614,14 +573,13 @@ pub const fn backend() -> Option<Backend> {
 }
 
 /// A diagnostic command preview; creates no job file and starts no process.
-/// On Windows the last element describes the embedded script. Submit with [`submit`],
+/// On Windows, where no program is started, it describes the in-process job instead: `xps-print`,
+/// then the printer and the PrintTicket's options as `key=value`. Submit with [`submit`],
 /// rather than executing this preview. PDF bytes are supplied separately.
 pub fn command_preview(job: &Job) -> Result<Vec<String>, Error> {
     match backend() {
         Some(Backend::Cups) => Ok(std::iter::once("lp".to_string()).chain(lp_args(job)).collect()),
-        Some(Backend::WindowsPdf) => {
-            Ok(["powershell", "-NoProfile", "-NonInteractive", "-Command", "<embedded craft-print PDF spooler>"].map(str::to_string).to_vec())
-        }
+        Some(Backend::WindowsPdf) => Ok(windows_preview(job)),
         None => Err(Error::Spool("printing to a printer isn't available on this platform yet; save the print-ready PDF instead".into())),
     }
 }
