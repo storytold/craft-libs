@@ -34,8 +34,6 @@ mod backend;
 #[cfg(test)]
 mod tests;
 
-#[cfg(all(feature = "collabcraft", not(target_arch = "wasm32")))]
-pub use backend::CollabCraft;
 pub use backend::{Answer, Destination, Failure, Grant, Replier, Request, ShareBackend};
 
 /// How long after the last keystroke the dialog asks for matches.

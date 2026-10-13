@@ -241,7 +241,7 @@ dialog. An application's own part comes to three lines.
 
 ```rust
 // Once, at startup. The host supplies the half that reaches the service.
-app.share.connect(craft_ui::share::CollabCraft::from_fn(my_client_factory));
+app.share.connect(my_backend);
 
 // Every frame, open or shut. This is also where answers are collected.
 app.share.show(ctx);
@@ -254,10 +254,9 @@ if app.share.available() && share_button.clicked() {
 
 The dialog opens no socket, names no provider and holds no credential. It states each piece of
 work as a `share::Request` and hands it to a `share::ShareBackend`. That backend answers through a
-`share::Replier` whenever it is ready. `share::CollabCraft` is the one backend that does open a
-socket. It sits behind the `collabcraft` feature. What it reaches is the CollabCraft service. That
-service is the single place a provider is configured. The interface half therefore builds for the
-web. Every flow is testable with no server running.
+`share::Replier` whenever it is ready. Nothing in this crate implements that trait. A host writes
+the half that opens a socket, and this crate never learns what it reaches. The interface half
+therefore builds for the web, and every flow is testable with no server running.
 
 Autocomplete waits `share::DEBOUNCE` after the last keystroke before it asks anything. An answer
 to a query the user has already typed past is dropped before it reaches the list. A list that
@@ -279,10 +278,9 @@ A contact's `avatar` is a URL. The dialog asks for the bytes through the same ba
 that needs the picture is painted and only while that row is on screen. A search answering with
 ten people costs no pictures until somebody looks at them. Each URL is asked about once. A refusal
 is remembered, with initials painted in its place. The host decides whether a picture may be
-fetched at all. `CollabCraft` refuses `share::Request::Avatar`. A contact's avatar URL belongs to
-the provider. An app reaching it is what this whole arrangement exists to prevent. A host that has
-decided otherwise wraps the backend and answers that one request. A service that relays pictures
-does the same. Nothing else changes.
+fetched at all. A backend that refuses `share::Request::Avatar` gets initials painted instead, and
+a host that would rather not have an application reach a provider's avatar URL directly can say
+so by refusing it. A host that relays pictures answers it. Nothing else changes.
 
 ### The account
 
