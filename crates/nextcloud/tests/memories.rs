@@ -98,3 +98,18 @@ fn non_json_describe_is_none() {
     server.fail_next(Fault::Garbage);
     assert!(client(&server).memories().unwrap().is_none());
 }
+
+#[test]
+fn datetaken_is_served_separately_from_epoch() {
+    let server = FakeServer::start();
+    server.enable_memories();
+    let id = server.add_file("/a.jpg", vec![1]);
+    server.set_photo("/a.jpg", 19000, 10, 20, 1_719_571_872, json!({}));
+    let client = client(&server);
+    let memories = client.memories().unwrap().unwrap();
+    assert_eq!(memories.info(id).unwrap().captured, Some(1_719_571_872));
+
+    server.set_datetaken("/a.jpg", 1_719_579_072);
+    assert_eq!(memories.days().unwrap()[0].epoch, Some(1_719_571_872));
+    assert_eq!(memories.info(id).unwrap().captured, Some(1_719_579_072));
+}

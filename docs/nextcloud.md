@@ -133,6 +133,11 @@ installed". `Memories::days()` returns the user's configured timeline (`fileid`,
 `Memories::info(fileid)` maps `exif.{Make, Model, LensModel, ExposureTime, FNumber, ISO, FocalLength, Orientation}`
 plus `datetaken`, `w` and `h` into a neutral `RemoteMeta`; numbers may be strings or fractions.
 
+Time and size semantics (confirmed against Nextcloud 35 with Memories): a timeline row's `epoch` is the capture
+instant in UTC (Unix seconds). `info`'s `datetaken` (`RemoteMeta::captured`) is the local wall-clock time of capture
+written as if it were UTC (Unix seconds, no zone), so the two differ by the camera's UTC offset. `w` and `h` (and
+`RemoteMeta::{width, height}`) are the upright, full-sensor dimensions.
+
 The Memories API is not documented as stable. It is detected at run time, and callers must work without it.
 
 **Errors** are one `Error` enum: `Unreachable`, `Unauthorized`, `NotFound`, `CertificateChanged`,
@@ -221,7 +226,8 @@ clippy::unreachable)]`.
   - Failures are queued with
     `fail_next(Fault::{Status, Drop, Stall, Truncate, IgnoreRange, Oversize, Garbage, ContentRange, Maintenance})`.
   - Content and state: `add_file`, `add_dir`, `remove`, `add_raw_entry`, `set_preview`, `set_href_prefix`,
-    `approve_login`, `enable_memories`, `set_photo`.
+    `approve_login`, `enable_memories`, `set_photo`, `set_datetaken` (serves a `datetaken` different from the
+    photo's `epoch`, as the real server does).
   - What the client did: `connections()`, `requests()`, `last_user_agent()`, and `downloads()`, the whole-file `GET`s
     below the user's WebDAV files root (not `PROPFIND`s on the same paths, previews or Range reads), for tests that
     assert a path never downloads.
