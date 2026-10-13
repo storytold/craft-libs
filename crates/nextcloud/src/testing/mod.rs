@@ -99,6 +99,8 @@ struct Photo {
     w: u32,
     h: u32,
     epoch: i64,
+    /// Served as `datetaken`; `epoch` when unset.
+    datetaken: Option<i64>,
     exif: serde_json::Value,
 }
 
@@ -212,7 +214,17 @@ impl FakeServer {
     pub fn set_photo(&self, path: &str, dayid: i64, w: u32, h: u32, epoch: i64, exif: serde_json::Value) {
         let id = self.shared.files.lock().unwrap_or_else(PoisonError::into_inner).nodes.get(&norm(path)).map(|n| n.id);
         if let Some(id) = id {
-            self.shared.photos.lock().unwrap_or_else(PoisonError::into_inner).insert(id, Photo { dayid, w, h, epoch, exif });
+            self.shared.photos.lock().unwrap_or_else(PoisonError::into_inner).insert(id, Photo { dayid, w, h, epoch, datetaken: None, exif });
+        }
+    }
+
+    /// Overrides the `datetaken` that `image/info` serves for `path` (default: the `epoch` of
+    /// [`set_photo`](Self::set_photo)), as Memories has it: the local wall-clock capture time written as if it were UTC. No-op without `set_photo` first.
+    pub fn set_datetaken(&self, path: &str, datetaken: i64) {
+        let id = self.shared.files.lock().unwrap_or_else(PoisonError::into_inner).nodes.get(&norm(path)).map(|n| n.id);
+        let mut photos = self.shared.photos.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(photo) = id.and_then(|id| photos.get_mut(&id)) {
+            photo.datetaken = Some(datetaken);
         }
     }
 
@@ -413,9 +425,10 @@ fn memories(shared: &Shared, route: &str) -> Response {
     }
     let photo = route.strip_prefix("image/info/").and_then(|id| id.parse::<u64>().ok()).and_then(|id| Some((id, photos.get(&id)?)));
     match photo {
-        Some((id, p)) => {
-            Response::json(&serde_json::json!({"fileid": id, "dayid": p.dayid, "w": p.w, "h": p.h, "datetaken": p.epoch, "exif": p.exif}).to_string())
-        }
+        Some((id, p)) => Response::json(
+            &serde_json::json!({"fileid": id, "dayid": p.dayid, "w": p.w, "h": p.h, "datetaken": p.datetaken.unwrap_or(p.epoch), "exif": p.exif})
+                .to_string(),
+        ),
         None => Response::empty(404),
     }
 }

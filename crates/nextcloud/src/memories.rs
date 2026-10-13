@@ -17,12 +17,14 @@ const EXACT: f64 = 9_007_199_254_740_992.0;
 pub struct MemoriesPhoto {
     pub fileid: u64,
     pub dayid: i64,
+    /// Upright, full-sensor width in pixels (already swapped for a rotated photo).
     pub w: u32,
+    /// Upright, full-sensor height in pixels.
     pub h: u32,
     pub etag: String,
     pub basename: String,
     pub size: u64,
-    /// Unix seconds.
+    /// The capture instant in UTC, Unix seconds. Unlike [`RemoteMeta::captured`], this is a real instant.
     pub epoch: Option<i64>,
     pub mimetype: Option<String>,
 }
@@ -40,9 +42,13 @@ pub struct RemoteMeta {
     /// Millimetres.
     pub focal_length: Option<f64>,
     pub orientation: Option<u16>,
-    /// `datetaken`, Unix seconds.
+    /// `datetaken`: the local wall-clock time of capture written as if it were UTC (Unix seconds, no zone), so it
+    /// differs from [`MemoriesPhoto::epoch`] by the camera's UTC offset. Read it with a UTC calendar to get the
+    /// wall-clock fields.
     pub captured: Option<i64>,
+    /// Upright, full-sensor width in pixels (already swapped for a rotated photo).
     pub width: Option<u32>,
+    /// Upright, full-sensor height in pixels.
     pub height: Option<u32>,
 }
 
