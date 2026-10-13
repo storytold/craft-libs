@@ -1,0 +1,42 @@
+name: Self-hosted updates
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['crates/update/**', 'crates/atomic/**', 'Cargo.toml', 'Cargo.lock', '.github/workflows/update.yml']
+  pull_request:
+    paths: ['crates/update/**', 'crates/atomic/**', 'Cargo.toml', 'Cargo.lock', '.github/workflows/update.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  native:
+    name: Update (${{ matrix.os }})
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - run: cargo fmt --check
+      - run: cargo clippy -p craft-update --all-targets --locked -- -D warnings
+      - run: cargo clippy -p craft-update --all-targets --all-features --locked -- -D warnings
+      - run: cargo test -p craft-update --locked
+      - run: cargo test -p craft-update --all-features --locked
+  wasm:
+    name: Update WASM
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+          components: clippy
+      - run: cargo clippy -p craft-update --features egui,web --locked --target wasm32-unknown-unknown -- -D warnings

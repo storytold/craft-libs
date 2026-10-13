@@ -34,6 +34,10 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   app menu. Unsaved-document decisions and save prompts stay in each app.
 
 - [`craft-settings`](crates/settings/README.md): `config.toml` settings storage for every app: platform folders, portable mode and overrides, atomic saves while running, backup, damaged-file recovery and schema migrations. Policy in [docs/settings-storage.md](docs/settings-storage.md).
+- [`craft-update`](crates/update/README.md): opt-in update notices and administrator-triggered
+  updates for self-hosted web deployments: GitHub release checks, SMTP notices, a hashed
+  administrator password, an egui notice and `craft-updated`, a loopback-only companion process
+  that builds and swaps the release. Off unless an app's web build enables it; not for desktop builds.
 - [`craft-ui`](crates/ui/README.md): SVG catalogs, icon buttons, tabs, pane controls, transactional docking, print settings and theme helpers for egui frontends;
   assets, themes, localization and command handling stay in each app. Requires Rust 1.95 or later.
 - [Shared UI component audit](docs/ui-components-audit.md): source inventory, extraction priorities

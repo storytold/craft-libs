@@ -1,0 +1,75 @@
+[package]
+name = "craft-update"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Opt-in update notices and admin-triggered updates for self-hosted web deployments of the Craft apps"
+
+[lints]
+workspace = true
+
+# Everything beyond the shared logic (versions, GitHub release parsing, the wire protocol,
+# password hashes, notification texts) is opt-in. Desktop builds of the apps never enable this
+# crate at all; web builds only with their own `self-hosted-update` feature.
+[features]
+# `ui::UpdateBanner`: the banner every visitor sees and the administrator sign-in, for egui.
+egui = ["dep:egui"]
+# `web::Client`: the browser side, talking to `craft-updated` with `fetch` (wasm32 only).
+web = ["dep:wasm-bindgen", "dep:wasm-bindgen-futures", "dep:js-sys", "dep:web-sys"]
+# `server` and the `craft-updated` binary: the companion process that checks GitHub, sends
+# email and performs the update. Native only; never part of an app build.
+server = ["dep:craft-atomic", "dep:getrandom", "dep:lettre", "dep:rpassword", "dep:toml_edit", "dep:ureq"]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# The password hash (iterated, salted SHA-512); the same crate and version the apps already use.
+sha2 = { version = "0.11", default-features = false }
+egui = { workspace = true, optional = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+craft-atomic = { workspace = true, optional = true }
+getrandom = { version = "0.4", optional = true }
+# SMTP with STARTTLS or implicit TLS through rustls (ring, Mozilla's roots): no OpenSSL.
+lettre = { version = "0.11", optional = true, default-features = false, features = ["smtp-transport", "builder", "hostname", "rustls-tls"] }
+# The administrator password prompt of `craft-updated setup`, without echo.
+rpassword = { version = "7", optional = true }
+toml_edit = { version = "0.25", optional = true, features = ["serde"] }
+# The GitHub releases API over HTTPS (rustls, ring, Mozilla's roots, as lettre).
+ureq = { version = "3", optional = true, default-features = false, features = ["rustls"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = { version = "0.2", optional = true }
+wasm-bindgen-futures = { version = "0.4", optional = true }
+js-sys = { version = "0.3", optional = true }
+web-sys = { version = "0.3", optional = true, features = [
+    "Headers",
+    "Location",
+    "Request",
+    "RequestCache",
+    "RequestCredentials",
+    "RequestInit",
+    "Response",
+    "console",
+    "Window",
+] }
+
+[dev-dependencies]
+egui = { workspace = true, features = ["default_fonts"] }
+egui_kittest = { version = "0.36" }
+tempfile = "3"
+
+[[bin]]
+name = "craft-updated"
+path = "src/bin/craft-updated.rs"
+required-features = ["server"]
+
+[[test]]
+name = "daemon"
+required-features = ["server"]
+
+[[test]]
+name = "banner"
+required-features = ["egui"]
