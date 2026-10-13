@@ -1,23 +1,23 @@
 //! Synthetic CMYK output profiles.
 //!
-//! Adobe's CMYK profiles (U.S. Web Coated SWOP, Coated FOGRA39 …) are proprietary, and the
-//! freely downloadable characterisation-based profiles come with redistribution conditions, so
+//! Many proprietary CMYK profiles (U.S. Web Coated SWOP, Coated FOGRA39 ...) have restricted licensing, and
+//! freely downloadable characterisation-based profiles often come with redistribution conditions, so
 //! this crate ships a CMYK profile it generates itself from a documented printer model:
 //!
-//! * **Forward model** (CMYK → XYZ): Yule–Nielsen modified Neugebauer (n = 2) over the 16
+//! * **Forward model** (CMYK -> XYZ): Yule-Nielsen modified Neugebauer (n = 2) over the 16
 //!   ink overprints, with Demichel coverage weights and a parabolic tone value increase (dot
 //!   gain) per ink. The eight K-free primaries use the published ISO 12647-2 coated-paper Lab
 //!   aim values (paper, C, M, Y, the three two-colour overprints) and an estimated three-colour
 //!   black; overprints with black are derived multiplicatively with a first-surface reflection
 //!   floor.
 //! * **AToB** (all intents): 11⁴ `lut16` table of the forward model, relative colorimetric
-//!   (paper → L* 100).
+//!   (paper -> L* 100).
 //! * **BToA1** (colorimetric): for every Lab node, black generation (GCR) from the gray
 //!   component of the K-free solution, then a bounded least-squares solve for C, M, Y with the
 //!   total ink limit; out-of-gamut colours land on the closest reachable colour (clipping).
-//! * **BToA0/BToA2** (perceptual/saturation): the target is first compressed into the gamut —
+//! * **BToA0/BToA2** (perceptual/saturation): the target is first compressed into the gamut:
 //!   L* is scaled onto the device black, chroma is softly compressed against a gamut boundary
-//!   descriptor sampled from the forward model — then solved as above.
+//!   descriptor sampled from the forward model, and then solved as above.
 //!
 //! The model is plausible for coated offset, not a measured characterisation: use a real
 //! profile from your print provider for production print.

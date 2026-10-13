@@ -754,7 +754,7 @@ fn gray_profile_with_reversed_lut_type_reencodes() {
     let _ = Profile::parse(&odd.with_encoded_bytes().to_bytes()).unwrap();
 }
 
-/// sRGB the way Photoshop embeds it: a v2 profile whose TRCs are 1024-entry 16-bit tables.
+/// Standard sRGB v2 profile encoding whose TRCs are 1024-entry 16-bit tables.
 fn srgb_as_v2_tables() -> Profile {
     let mut p = srgb().clone();
     let table = |c: &craft_cms::Curve| {
@@ -794,7 +794,7 @@ fn same_colors_tells_different_spaces_apart() {
     assert!(!moved.with_encoded_bytes().same_colors(srgb()));
 }
 
-/// The sRGB IEC61966-2.1 profile Windows ships (the one Photoshop embeds), when present.
+/// The sRGB IEC61966-2.1 profile Windows ships, when present.
 #[test]
 fn windows_srgb_is_the_builtin_srgb() {
     let Ok(bytes) = std::fs::read("C:/Windows/System32/spool/drivers/color/sRGB Color Space Profile.icm") else { return };

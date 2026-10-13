@@ -132,7 +132,7 @@ impl Builtin {
     ///
     /// * A built-in's own description gives that built-in ([`Builtin::from_profile_name`]).
     /// * Profiles built on the FOGRA39 characterisation data give [`Builtin::CoatedFogra39`]
-    ///   (330 % total ink, as ISO Coated v2): Adobe's "Coated FOGRA39 (ISO 12647-2:2004)" (also
+    ///   (330 % total ink, as ISO Coated v2): "Coated FOGRA39 (ISO 12647-2:2004)" (also
     ///   seen as "Coated FOGRA39") and ECI's "ISO Coated v2 (ECI)", which is made from
     ///   FOGRA39L, the same data.
     /// * "ISO Coated v2 300% (ECI)" and every other name give `None`: the built-in would

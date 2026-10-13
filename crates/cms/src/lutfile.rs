@@ -1,10 +1,10 @@
-//! Creative 3D LUT files for Image › Adjustments › Color Lookup: `.cube` (Adobe/Resolve), `.3dl`
-//! (Autodesk Lustre / Flame) and `.look` (SpeedGrade XML), plus a few generated (CC0) looks.
+//! Creative 3D LUT files for Image › Adjustments › Color Lookup: `.cube`, `.3dl`
+//! and `.look` XML, plus a few generated (CC0) looks.
 //!
 //! Every table is normalised to [`LutFile`]: `size`³ RGB triplets in 0..=1, **red varying
-//! fastest** (`((b·size + g)·size + r)·3`). Formats follow their public descriptions: the Adobe
+//! fastest** (`((b·size + g)·size + r)·3`). Formats follow their public descriptions: the
 //! "Cube LUT Specification 1.0", the Lustre 3DL layout as documented by OpenColorIO, and the
-//! SpeedGrade `.look` XML (hex-encoded little-endian float32 RGB triplets).
+//! `.look` XML (hex-encoded little-endian float32 RGB triplets).
 
 /// A parsed 3D LUT.
 #[derive(Clone, Debug, PartialEq)]
@@ -21,7 +21,7 @@ pub struct LutFile {
     pub domain_max: [f32; 3],
 }
 
-/// Largest edge length accepted (64³ is Photoshop's practical maximum; 129 leaves headroom while
+/// Largest edge length accepted (64³ is standard practical maximum; 129 leaves headroom while
 /// keeping the GPU table within texture limits).
 pub const MAX_SIZE: usize = 129;
 
@@ -71,7 +71,7 @@ impl LutFile {
         Ok(LutFile { title: title.to_string(), size, data, domain_min: [0.0; 3], domain_max: [1.0; 3] })
     }
 
-    /// Whether the table expects plain 0..1 inputs (the common case; Photoshop's default).
+    /// Whether the table expects plain 0..1 inputs (the common normalized case).
     pub fn domain_is_default(&self) -> bool {
         self.domain_min == [0.0, 0.0, 0.0] && self.domain_max == [1.0, 1.0, 1.0]
     }
@@ -101,7 +101,7 @@ pub fn parse(file_name: &str, bytes: &[u8]) -> Result<LutFile, LutError> {
     }
 }
 
-/// Adobe / Resolve `.cube`. 1D LUTs (`LUT_1D_SIZE`) are expanded to a 33³ table.
+/// 3D and 1D `.cube` LUT parser. 1D LUTs (`LUT_1D_SIZE`) are expanded to a 33³ table.
 pub fn parse_cube(text: &str) -> Result<LutFile, LutError> {
     let mut title = String::new();
     let (mut size3, mut size1) = (0usize, 0usize);
@@ -139,7 +139,7 @@ pub fn parse_cube(text: &str) -> Result<LutFile, LutError> {
                 }
                 rows.extend(v);
             }
-            // Unknown keywords (e.g. Resolve's LUT_IN_VIDEO_RANGE) are ignored, as the spec allows.
+            // Unknown keywords (e.g. LUT_IN_VIDEO_RANGE) are ignored, as the spec allows.
             _ => {}
         }
     }
@@ -224,7 +224,7 @@ pub fn parse_look(text: &str) -> Result<LutFile, LutError> {
     LutFile { title: tag("title").unwrap_or_default(), size, data, domain_min: [0.0; 3], domain_max: [1.0; 3] }.check()
 }
 
-/// Writes a `.cube` file (what Photoshop embeds in a Color Lookup layer).
+/// Writes a `.cube` file (used in Color Lookup adjustment layers).
 pub fn write_cube(l: &LutFile) -> String {
     let mut s = String::new();
     if !l.title.is_empty() {

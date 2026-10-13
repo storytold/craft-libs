@@ -23,7 +23,7 @@ pub enum SampleKind {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct TransformOptions {
     pub intent: Intent,
-    /// Adobe-style black point compensation (ignored for absolute colorimetric).
+    /// ISO 18619 / ICC black point compensation (ignored for absolute colorimetric).
     pub bpc: bool,
     /// `true`: float buffers go through the exact pipeline (default). `false`: float buffers use
     /// the same lookup tables as integer buffers (faster, for previews).
@@ -120,7 +120,7 @@ impl Transform {
         Ok(t)
     }
 
-    /// Soft-proof transform `src → proof → dst` (Photoshop View › Proof Setup): `intent`/`bpc`
+    /// Soft-proof transform `src → proof → dst` (PhotoCraft View › Proof Setup): `intent`/`bpc`
     /// apply to the document → proof step; the proof → display step is relative colorimetric
     /// with BPC, or absolute colorimetric without BPC when `simulate_paper` is set (paper
     /// colour and black ink simulated). Without paper simulation, and unless `intent` is
@@ -734,7 +734,7 @@ fn connection(src: &Profile, dst: &Profile, intent: Intent, bpc: bool) -> Result
     if (bs - bd).abs() < 1e-6 {
         return Ok(None);
     }
-    // Neutral black points (luminance only, as in Adobe's BPC), mapped linearly in XYZ so that
+    // Neutral black points (luminance only, as in ISO 18619 BPC), mapped linearly in XYZ so that
     // the source black lands on the destination black and the white stays fixed.
     let w = math::D50;
     let mut scale = [1.0; 3];
@@ -750,7 +750,7 @@ fn connection(src: &Profile, dst: &Profile, intent: Intent, bpc: bool) -> Result
 
 /// Luminance (Y, D50-relative) of the profile's black point for `intent`.
 ///
-/// Follows the structure of Adobe's published BPC algorithm: matrix/TRC profiles use device
+/// Follows the structure of the ISO 18619 published BPC algorithm: matrix/TRC profiles use device
 /// zero; v4 LUT profiles in perceptual/saturation use the perceptual reference black; other LUT
 /// profiles use the darkest colour the device reaches (Lab 0 round-tripped through BToA/AToB,
 /// or device black for additive spaces). The destination-side curve fitting of the paper is

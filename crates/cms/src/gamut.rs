@@ -1,4 +1,4 @@
-//! Gamut checks against a proof (output) profile: Photoshop's View › Gamut Warning.
+//! Gamut checks against a proof (output) profile: PhotoCraft View › Gamut Warning.
 
 use crate::clut::Clut;
 use crate::pipeline::{Pipeline, Stage};

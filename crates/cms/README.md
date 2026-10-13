@@ -4,7 +4,7 @@
 and writing, transforms between profiles, rendering intents, black point compensation, soft
 proofing, gamut checks, 3D LUTs and a set of built-in profiles. No C, no `unsafe`, and no
 dependency on other craft-libs crates. Implemented from the public ICC.1:2010 (v4.3) and
-ICC.1:2001-04 (v2) specifications, CIE 15, and Adobe's published black point compensation paper.
+ICC.1:2001-04 (v2) specifications, CIE 15, and the ISO 18619 black point compensation specification.
 
 Extracted from PhotoCraft's `crates/cms` at
 [`b3222ee`](https://github.com/storytold/photocraft/tree/b3222ee8e7e6bcb4799c37f904c595f20f9baf5e/crates/cms)
@@ -39,7 +39,7 @@ Buffers are checked once per call, before any pixel is written.
   `Builtin::stand_in_for(desc)`: the built-in that approximates a profile a document names
   when its ICC bytes are not available (see [Selecting by profile name](#selecting-by-profile-name)).
 * `Profile::same_colors(&other)`: the same colour space whatever the encoding (every sample of
-  a device grid within ΔE 0.5 through both), e.g. Photoshop's sRGB IEC61966-2.1 and the built-in
+  a device grid within ΔE 0.5 through both), e.g. the standard v2 sRGB IEC61966-2.1 and the built-in
   sRGB. `content_hash()` compares bytes and suits cache keys only.
 
 ### Evaluation
@@ -83,7 +83,7 @@ published with, so profiles embedded in existing files still match byte for byte
 
 ### The CMYK profiles
 
-Adobe's CMYK profiles (U.S. Web Coated SWOP, Coated FOGRA39) are proprietary, and the freely
+Many proprietary CMYK profiles (U.S. Web Coated SWOP, Coated FOGRA39) have restricted licensing, and the freely
 downloadable characterisation-based profiles (ECI/FOGRA, colord, Ghostscript) carry
 redistribution conditions or unclear licences, so this crate generates its own. Both share the
 separation code in `src/synth.rs`: GCR black generation (starts at 20 % gray component, K max
@@ -91,7 +91,7 @@ separation code in `src/synth.rs`: GCR black generation (starts at 20 % gray com
 L* black-point scaling and soft chroma compression against a sampled gamut boundary.
 
 **`coated-cmyk`** (`profiles/photocraft-coated-cmyk.icc`, 237 KB, AToB 11⁴ lut16, BToA 21³
-lut16) comes from a Yule–Nielsen modified Neugebauer model (n = 2) over the 16 overprints with
+lut16) comes from a Yule-Nielsen modified Neugebauer model (n = 2) over the 16 overprints with
 ISO 12647-2 coated-paper Lab aims for paper/C/M/Y/RGB overprints, parabolic dot gain (14 % CMY,
 17 % K at 50 %) and a 300 % ink limit. It is a plausible coated-offset profile, not a measured
 characterisation: its midtones are darker than FOGRA39 (mean ΔE00 6.7 against the FOGRA39
@@ -101,7 +101,7 @@ patches, oranges such as 0/50/100/0 about 5 ΔE00 off).
 lut16, 330 % ink limit) reproduces the colours of documents set up for Coated FOGRA39 or ISO
 Coated v2. It is fitted to Fogra's FOGRA39 characterisation data (`tests/data/FOGRA39.txt`,
 1617 IT8.7/4 patches, CMYK with D50 XYZ and Lab; ISO 12647-2:2004 Amd 1 offset on paper type
-1/2): a Yule–Nielsen modified Neugebauer model with free overprints, per-ink tone curves and a
+1/2): a Yule-Nielsen modified Neugebauer model with free overprints, per-ink tone curves and a
 fitted n (1.45) is solved by least squares against all patches (mean ΔE00 1.1 on its own), then
 a Gaussian-kernel ridge regression of the remaining Lab errors over CMYK (σ = 0.2, λ = 0.01)
 corrects it before the AToB table is sampled, with no ink mapped to exactly L* 100,
@@ -152,11 +152,10 @@ case and whitespace:
 | anything else | `None` | `None` |
 
 The stand-ins are made from the same characterisation data as the named profiles: ECI's ISO
-Coated v2 is made from FOGRA39L, the data of Adobe's Coated FOGRA39. They describe the same
-printed colours. The built-in separates to at most 330 % total ink, the limit of ISO Coated v2
-(Adobe doesn't publish Coated FOGRA39's). Black generation and ink distribution differ, so
-separations through a stand-in are not the named profile's. ISO Coated v2 300% (ECI) has no
-stand-in: the built-in separates to up to 330 % total ink.
+Coated v2 is made from FOGRA39L, the underlying data for Coated FOGRA39 profiles. They describe the same
+printed colours. The built-in separates to at most 330 % total ink, the limit of ISO Coated v2.
+Black generation and ink distribution differ, so separations through a stand-in are not the named profile's.
+ISO Coated v2 300% (ECI) has no stand-in: the built-in separates to up to 330 % total ink.
 
 ### Display transforms
 
@@ -186,7 +185,7 @@ let t = Transform::new(cmyk, Builtin::Srgb.profile(), Intent::RelativeColorimetr
 
 * v4.4 `mpet` (multiProcessElements, D2Bx/B2Dx) tags, named colour, device link and abstract
   profiles as transform endpoints, `chad`-based adaptation of v2 absolute colorimetry.
-* BPC destination black uses the BToA/AToB round trip directly (Adobe's curve fit for
+* BPC destination black uses the BToA/AToB round trip directly (curve fitting for
   ill-behaved LUT profiles is not implemented); v2/v4 perceptual reference black mixing is not
   modelled beyond the PRMG black for v4 LUT profiles.
 * Profile ID (MD5) is not computed when writing (left zero, which the spec allows).
