@@ -5,3 +5,8 @@ plans/
 .DS_Store
 /.claude/
 .idea/
+
+# Prevent developer global core.excludesFile from masking agent contracts
+!AGENTS.md
+!.agents/
+!**/.agents/
