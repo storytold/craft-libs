@@ -1,223 +1,87 @@
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "version": "1.0.0",
-  "generated_at": "2026-10-11T13:42:00Z",
-  "ecosystem": "storytold-craft",
+  "format_version": 1,
+  "status": "unverified_inventory",
   "shared_library_repository": "storytold/craft-libs",
-  "current_ui_suite_pin": "5c874d51eeb3de70e735c8ce87a59a7dedd47675",
   "applications": [
     {
-      "id": "photocraft",
-      "name": "PhotoCraft",
       "repository": "storytold/photocraft",
-      "role": "Pixel editing, color science, image rasterization, layer compositing",
-      "analog": "Adobe Photoshop",
-      "capabilities": ["ui", "theme", "color", "raster"],
-      "dependencies": {
-        "craft-ui": {
-          "status": "adopted",
-          "pinned_rev": "5c874d51eeb3de70e735c8ce87a59a7dedd47675",
-          "pr": "#3097",
-          "cargo_test_target": "cargo test -p photocraft-ui-egui"
-        },
-        "craft-atomic": {
-          "status": "candidate",
-          "planned_usage": "Asset cache and document export replacement"
-        },
-        "craft-settings": {
-          "status": "candidate",
-          "planned_usage": "Application and workspace preferences"
-        }
-      }
+      "status": "unverified",
+      "consumer_revision": null,
+      "dependencies": [],
+      "verified_commands": [],
+      "evidence": []
     },
     {
-      "id": "vectorcraft",
-      "name": "VectorCraft",
       "repository": "storytold/vectorcraft",
-      "role": "Vector illustration, path geometry, bezier curves, typography layout",
-      "analog": "Adobe Illustrator",
-      "capabilities": ["ui", "docking", "geometry", "vector"],
-      "dependencies": {
-        "craft-ui": {
-          "status": "adopted",
-          "pinned_rev": "5c874d51eeb3de70e735c8ce87a59a7dedd47675",
-          "pr": "#1090",
-          "cargo_test_target": "cargo test -p vectorcraft-ui-egui"
-        },
-        "craft-settings": {
-          "status": "candidate",
-          "planned_usage": "Tool palettes and persistent vector presets"
-        }
-      }
+      "status": "unverified",
+      "consumer_revision": null,
+      "dependencies": [],
+      "verified_commands": [],
+      "evidence": []
     },
     {
-      "id": "designcraft",
-      "name": "DesignCraft",
       "repository": "storytold/designcraft",
-      "role": "Multi-page publication, layout geometry, font shaping, print output",
-      "analog": "Adobe InDesign",
-      "capabilities": ["ui", "docking", "layout", "typography"],
-      "dependencies": {
-        "craft-ui": {
-          "status": "adopted",
-          "pinned_rev": "5c874d51eeb3de70e735c8ce87a59a7dedd47675",
-          "cargo_test_target": "cargo test -p designcraft-ui-egui"
-        },
-        "craft-quit": {
-          "status": "candidate",
-          "planned_usage": "Unsaved document closure and clean AppKit teardown"
-        }
-      }
+      "status": "unverified",
+      "consumer_revision": null,
+      "dependencies": [],
+      "verified_commands": [],
+      "evidence": []
     },
     {
-      "id": "pdfcraft",
-      "name": "PdfCraft",
       "repository": "storytold/pdfcraft",
-      "role": "PDF document inspection, form manipulation, linearization, redaction",
-      "analog": "Adobe Acrobat",
-      "capabilities": ["ui", "document"],
-      "dependencies": {
-        "craft-ui": {
-          "status": "adopted",
-          "pinned_rev": "5c874d51eeb3de70e735c8ce87a59a7dedd47675",
-          "cargo_test_target": "cargo test -p pdfcraft-ui-egui"
-        }
-      }
+      "status": "unverified",
+      "consumer_revision": null,
+      "dependencies": [],
+      "verified_commands": [],
+      "evidence": []
     },
     {
-      "id": "lightcraft",
-      "name": "LightCraft",
       "repository": "storytold/lightcraft",
-      "role": "Non-destructive RAW photo development, tone curves, cataloguing",
-      "analog": "Adobe Lightroom",
-      "capabilities": ["ui", "color", "raw"],
-      "dependencies": {
-        "craft-ui": {
-          "status": "adopted",
-          "pinned_rev": "5c874d51eeb3de70e735c8ce87a59a7dedd47675",
-          "cargo_test_target": "cargo test -p lightcraft-ui-egui"
-        },
-        "craft-settings": {
-          "status": "candidate",
-          "planned_usage": "Library metadata and catalog settings store"
-        }
-      }
+      "status": "unverified",
+      "consumer_revision": null,
+      "dependencies": [],
+      "verified_commands": [],
+      "evidence": []
     },
     {
-      "id": "filmcraft",
-      "name": "FilmCraft",
       "repository": "storytold/filmcraft",
-      "role": "Non-linear video editing, multi-track timeline, SMPTE timecode sync",
-      "analog": "Adobe Premiere Pro",
-      "capabilities": ["ui", "time", "timeline", "media", "lifecycle"],
-      "dependencies": {
-        "craft-ui": {
-          "status": "adopted",
-          "pinned_rev": "5c874d51eeb3de70e735c8ce87a59a7dedd47675",
-          "cargo_test_target": "cargo test -p filmcraft-ui-egui"
-        },
-        "craft-time": {
-          "status": "candidate",
-          "candidate_pr": "#15",
-          "cargo_test_target": "cargo test -p filmcraft-time"
-        },
-        "craft-quit": {
-          "status": "candidate",
-          "candidate_pr": "#5",
-          "planned_usage": "Hardware Touch Bar quit crash mitigation"
-        }
-      }
+      "status": "unverified",
+      "consumer_revision": null,
+      "dependencies": [],
+      "verified_commands": [],
+      "evidence": []
     },
     {
-      "id": "effectcraft",
-      "name": "EffectCraft",
       "repository": "storytold/effectcraft",
-      "role": "Motion graphics compositing, node graphs, keyframing, timeline animation",
-      "analog": "Adobe After Effects",
-      "capabilities": ["ui", "time", "keyframes", "compositing", "lifecycle"],
-      "dependencies": {
-        "craft-ui": {
-          "status": "adopted",
-          "pinned_rev": "5c874d51eeb3de70e735c8ce87a59a7dedd47675",
-          "cargo_test_target": "cargo test -p effectcraft-ui-egui"
-        },
-        "craft-time": {
-          "status": "candidate",
-          "candidate_pr": "#15",
-          "cargo_test_target": "cargo test -p effectcraft-time"
-        },
-        "craft-quit": {
-          "status": "candidate",
-          "candidate_pr": "#5",
-          "planned_usage": "Safe window close and Cmd+Q handling"
-        }
-      }
+      "status": "unverified",
+      "consumer_revision": null,
+      "dependencies": [],
+      "verified_commands": [],
+      "evidence": []
     },
     {
-      "id": "cadcraft",
-      "name": "CADCraft",
       "repository": "storytold/cadcraft",
-      "role": "2D/3D precision CAD drafting, parametric modeling, architectural schemas",
-      "analog": "AutoCAD",
-      "capabilities": ["ui", "docking", "precision", "lifecycle"],
-      "dependencies": {
-        "craft-ui": {
-          "status": "adopted",
-          "pinned_rev": "5c874d51eeb3de70e735c8ce87a59a7dedd47675",
-          "cargo_test_target": "cargo test -p cadcraft-ui-egui"
-        },
-        "craft-quit": {
-          "status": "candidate",
-          "candidate_pr": "#5",
-          "planned_usage": "Touch Bar Mac shutdown crash prevention"
-        }
-      }
+      "status": "unverified",
+      "consumer_revision": null,
+      "dependencies": [],
+      "verified_commands": [],
+      "evidence": []
     },
     {
-      "id": "soundcraft",
-      "name": "SoundCraft",
       "repository": "storytold/soundcraft",
-      "role": "Digital audio workstation, sample-accurate alignment, audio DSP routing",
-      "analog": "Avid Pro Tools",
-      "capabilities": ["ui", "time", "audio", "samples", "lifecycle"],
-      "dependencies": {
-        "craft-ui": {
-          "status": "adopted",
-          "pinned_rev": "5c874d51eeb3de70e735c8ce87a59a7dedd47675",
-          "cargo_test_target": "cargo test -p soundcraft-ui-egui"
-        },
-        "craft-time": {
-          "status": "candidate",
-          "candidate_pr": "#15",
-          "cargo_test_target": "cargo test -p soundcraft-engine"
-        },
-        "craft-quit": {
-          "status": "candidate",
-          "candidate_pr": "#5",
-          "planned_usage": "Hardware quit crash mitigation"
-        }
-      }
+      "status": "unverified",
+      "consumer_revision": null,
+      "dependencies": [],
+      "verified_commands": [],
+      "evidence": []
     },
     {
-      "id": "wordcraft",
-      "name": "WordCraft",
       "repository": "storytold/wordcraft",
-      "role": "Rich text word processing, document outlining, typography styling",
-      "analog": "Microsoft Word",
-      "capabilities": ["text", "lifecycle", "document"],
-      "dependencies": {
-        "craft-quit": {
-          "status": "candidate",
-          "candidate_pr": "#21",
-          "reference_pr": "storytold/wordcraft#539",
-          "planned_usage": "Mac app menu and Cmd+Q unsaved changes confirmation"
-        },
-        "craft-settings": {
-          "status": "candidate",
-          "candidate_pr": "#22",
-          "planned_usage": "Preferences and document template storage"
-        }
-      }
+      "status": "unverified",
+      "consumer_revision": null,
+      "dependencies": [],
+      "verified_commands": [],
+      "evidence": []
     }
   ]
 }

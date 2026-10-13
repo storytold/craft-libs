@@ -1,108 +1,51 @@
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "version": "1.0.0",
-  "inventory_date": "2026-10-11T13:42:00Z",
+  "format_version": 1,
+  "status": "verification_plan",
   "environments": [
     {
-      "id": "macos-touchbar-m1",
-      "model_identifier": "MacBookPro17,1",
-      "architecture": "aarch64-apple-darwin",
-      "os_version": "macOS 27.0.1",
-      "hardware_features": ["apple_silicon", "touch_bar", "retina"],
-      "tested_by": ["Bomret", "jmacek"],
-      "reproducible_behaviors": [
-        "craft-quit Issue #3 Touch Bar crash (-[_NSTouchBarFinderObservation invalidate])",
-        "Window close vs Cmd+Q interception (PR #21)",
-        "Unsaved-changes modal veto during close",
-        "APFS atomic directory rename and F_FULLFSYNC durability"
-      ],
-      "supported_test_suites": [
-        "cargo test -p craft-quit --features egui,menu",
-        "native app smoke tests (CADCraft, FilmCraft, SoundCraft, WordCraft)"
-      ]
+      "id": "macos-touchbar",
+      "status": "unverified",
+      "scope": "Native close/menu, save cancellation and Touch Bar teardown on relevant hardware",
+      "os_version": null,
+      "hardware": null,
+      "candidate_revision": null,
+      "evidence": []
     },
     {
-      "id": "macos-m1pro-notouchbar",
-      "model_identifier": "MacBookPro18,1",
-      "architecture": "aarch64-apple-darwin",
-      "os_version": "macOS 27.0",
-      "hardware_features": ["apple_silicon", "physical_function_keys", "liquid_retina_xdr"],
-      "tested_by": ["Zach Shallbetter"],
-      "reproducible_behaviors": [
-        "AppKit clean terminate_later() shutdown verification",
-        "App::on_exit persistence execution via applicationWillTerminate:",
-        "APFS volume boundary mount checks (EXDEV handling)"
-      ],
-      "supported_test_suites": [
-        "cargo test --workspace",
-        "cargo xtask compat-check --candidate HEAD"
-      ]
+      "id": "macos-native",
+      "status": "unverified",
+      "scope": "Native quit, printing and filesystem behavior on a recorded macOS environment",
+      "os_version": null,
+      "hardware": null,
+      "candidate_revision": null,
+      "evidence": []
     },
     {
-      "id": "macos-macmini-m4",
-      "model_identifier": "Mac16,10",
-      "architecture": "aarch64-apple-darwin",
-      "os_version": "macOS 26.6.2",
-      "hardware_features": ["apple_silicon_m4", "desktop_no_display_integrated"],
-      "tested_by": ["mjohnson7cd"],
-      "reproducible_behaviors": [
-        "Standard macOS compilation and unit testing",
-        "Non-Touch Bar clean exit baseline",
-        "Note: Does NOT reproduce Issue #3 Touch Bar defect"
-      ],
-      "supported_test_suites": [
-        "cargo fmt --check",
-        "cargo clippy --workspace --all-targets -- -D warnings",
-        "cargo test --workspace"
-      ]
+      "id": "linux-native",
+      "status": "unverified",
+      "scope": "Filesystem errors, UI tests and CUPS integration where available",
+      "os_version": null,
+      "hardware": null,
+      "candidate_revision": null,
+      "evidence": []
     },
     {
-      "id": "linux-x86_64-ci",
-      "architecture": "x86_64-unknown-linux-gnu",
-      "os_version": "Ubuntu 24.04 LTS (Kernel 6.8+)",
-      "hardware_features": ["standard_headless_vm"],
-      "tested_by": ["CI Runner"],
-      "reproducible_behaviors": [
-        "POSIX rename atomicity on ext4/btrfs",
-        "sync_file_range vs fsync durability semantics",
-        "EXDEV cross-device link errors across distinct mountpoints (/tmp vs /home)",
-        "Zero-panic and clippy enforcement"
-      ],
-      "supported_test_suites": [
-        "cargo check --workspace",
-        "cargo test --workspace"
-      ]
+      "id": "windows-native",
+      "status": "unverified",
+      "scope": "Filesystem sharing violations and Windows spooler integration",
+      "os_version": null,
+      "hardware": null,
+      "candidate_revision": null,
+      "evidence": []
     },
     {
-      "id": "windows-x86_64-ntfs",
-      "architecture": "x86_64-pc-windows-msvc",
-      "os_version": "Windows 11 23H2 / Windows Server 2022",
-      "hardware_features": ["standard_headless_vm", "ntfs"],
-      "tested_by": ["CI Runner"],
-      "reproducible_behaviors": [
-        "MoveFileExW MOVEFILE_REPLACE_EXISTING semantics",
-        "Windows mandatory file sharing locks (ERROR_SHARING_VIOLATION)",
-        "Case-insensitivity path canonicalization",
-        "Backslash separator path normalization"
-      ],
-      "supported_test_suites": [
-        "cargo check --workspace",
-        "cargo test --workspace"
-      ]
-    },
-    {
-      "id": "wasm32-headless",
-      "architecture": "wasm32-unknown-unknown",
-      "os_version": "Browser / Node wasm runtime",
-      "hardware_features": ["sandboxed_no_fs"],
-      "tested_by": ["CI Runner"],
-      "reproducible_behaviors": [
-        "Zero I/O compilation verification",
-        "craft-settings trait and document helpers without filesystem access"
-      ],
-      "supported_test_suites": [
-        "cargo check --target wasm32-unknown-unknown -p craft-settings"
-      ]
+      "id": "wasm32",
+      "status": "unverified",
+      "scope": "craft-ui compilation and craft-settings trait/document helpers only",
+      "os_version": null,
+      "hardware": null,
+      "candidate_revision": null,
+      "evidence": []
     }
   ]
 }
