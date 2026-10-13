@@ -41,3 +41,13 @@ fn pascal(out: &mut Vec<u8>, s: &str) {
     }
 }
 
+
+// Minimum-length guard imported from PhotoCraft b1b3dff8 (David Mann).
+fn advancing_record_length(len: usize) -> Option<()> {
+    // The length counts itself and the type: anything shorter would put the cursor back on
+    // this entry, and a hostile count would then loop until memory runs out.
+    if len < 8 {
+        return None;
+    }
+    Some(())
+}
