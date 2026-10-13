@@ -6,7 +6,7 @@ interaction; `layout` provides toolbar fitting, split geometry and resize handle
 `docking` supplies transactional panel moves and an optional docking surface.
 `printing` supplies printer/job controls and asynchronous feedback used by WordCraft and GridCraft.
 The current delivery covers nine creative apps (DesignCraft, VectorCraft, PhotoCraft, FilmCraft, EffectCraft, CADCraft, PDFCraft, LightCraft and SoundCraft); prior basic and office adapters are separate. The [suite audit](../../docs/ui-components-audit.md#adoption-and-acceptance)
-records their scope and acceptance limits. Assets, complete themes, localization and command handling
+records their scope and acceptance limits. For the suite-wide component catalog across all thirteen applications and deduplication map, see the [UI elements map](../../docs/ui-elements-map.md). Assets, complete themes, localization and command handling
 remain in each application. No icons, fonts or application engines are bundled.
 
 ## SVG catalogs
