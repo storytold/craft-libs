@@ -13,9 +13,25 @@ workspace = true
 [dependencies]
 egui = { workspace = true }
 serde = { version = "1", features = ["derive"], optional = true }
+# The vendor-neutral vocabulary the share dialog speaks. No IO and no
+# vendor, so this stays buildable for the web.
+craft-cloud = { workspace = true, optional = true }
+# The CollabCraft backend lives under [target.] below. It is blocking, so
+# it has no meaning on wasm32.
+
+# The backend half, which is the only part that opens a socket. Native
+# only, because a blocking client cannot run on the web. craft-ui must
+# still build for wasm32 under --all-features, so the dependency is
+# gated on the target and not only on the feature.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+craft-cloud-client = { workspace = true, optional = true }
 
 [features]
 serde = ["dep:serde"]
+# The share dialog and the backend contract it states its work through.
+share = ["dep:craft-cloud"]
+# A share backend that reaches the CollabCraft service on a worker thread.
+collabcraft = ["share", "dep:craft-cloud-client"]
 
 [dev-dependencies]
 egui = { workspace = true, features = ["default_fonts"] }
