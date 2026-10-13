@@ -128,6 +128,13 @@ impl OriginalsCache {
         self.lock().use_entry(&entry_key(path, etag))
     }
 
+    /// The newest local copy of `path` (most recent last use, any etag); no network. `None` when no copy is on disk.
+    /// Counts as a use. For offline lookups when the app has no etag (e.g. the server is unreachable). Take a
+    /// [`hold`](Self::hold) first, as with [`fetch`](Self::fetch) and [`cached`](Self::cached).
+    pub fn newest(&self, path: &RemotePath) -> Option<PathBuf> {
+        self.lock().use_newest(&owner(path))
+    }
+
     /// A local copy of `path`'s current version, downloading it on a miss (see [`Client::download_to`] for `cancel`
     /// and `progress`). A server that is unreachable, busy (`RateLimited`, e.g. in maintenance mode) or whose
     /// certificate isn't trusted (`CertificateChanged`, `UnknownCertificate`) returns the newest local copy marked
@@ -145,10 +152,7 @@ impl OriginalsCache {
             Ok(entry) => entry.etag,
             // None of these mean the file is gone, and the local bytes don't depend on trusting the server.
             Err(e @ (Error::Unreachable(_) | Error::RateLimited | Error::CertificateChanged | Error::UnknownCertificate { .. })) => {
-                let mut inner = self.lock();
-                let newest = inner.newest(&owner(path));
-                let local = newest.and_then(|key| inner.use_entry(&key));
-                return local.map(|path| Fetched { path, stale: true }).ok_or(e);
+                return self.newest(path).map(|path| Fetched { path, stale: true }).ok_or(e);
             }
             Err(e) => return Err(e),
         };
@@ -268,10 +272,16 @@ impl Inner {
         Some(file)
     }
 
-    /// The most recently used entry of `owner`, any etag.
-    fn newest(&self, owner: &str) -> Option<String> {
-        let mine = self.index.entries.iter().filter(|(k, _)| owner_of(k) == owner);
-        mine.max_by_key(|(k, i)| (i.last_use, *k)).map(|(k, _)| k.clone())
+    /// The most recently used entry of `owner`, any etag, that is still on disk (see [`Inner::use_entry`]).
+    fn use_newest(&mut self, owner: &str) -> Option<PathBuf> {
+        loop {
+            let mine = self.index.entries.iter().filter(|(k, _)| owner_of(k) == owner);
+            let key = mine.max_by_key(|(k, i)| (i.last_use, *k)).map(|(k, _)| k.clone())?;
+            // A gone file drops its entry, so the next pass sees the runner-up.
+            if let Some(file) = self.use_entry(&key) {
+                return Some(file);
+            }
+        }
     }
 
     /// Owners of pinned entries.

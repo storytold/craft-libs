@@ -256,3 +256,25 @@ fn open_survives_unwritable_index_and_unreadable_account_dir() {
     }
     assert_eq!(opened.unwrap().usage(), Usage { total: 0, pinned: 0 });
 }
+
+#[test]
+fn newest_returns_current_copy_without_a_request() {
+    let server = FakeServer::start();
+    server.add_file("/a.ARW", b"old".to_vec());
+    let dir = tempfile::tempdir().unwrap();
+    let cache = OriginalsCache::open(dir.path(), 1 << 20).unwrap();
+    let client = client(&server);
+    let p = path(&client, "a.ARW");
+
+    assert_eq!(cache.newest(&p), None);
+    fetch(&cache, &client, &p).unwrap();
+    server.add_file("/a.ARW", b"new".to_vec());
+    let current = fetch(&cache, &client, &p).unwrap();
+
+    let requests = server.requests();
+    assert_eq!(cache.newest(&p), Some(current.path.clone()));
+    assert_eq!(server.requests(), requests);
+
+    fs::remove_file(&current.path).unwrap();
+    assert_eq!(cache.newest(&p), None);
+}
