@@ -152,6 +152,8 @@ decoder, a video demuxer).
   lowercased remote extension if it matches `[a-z0-9]{1,8}`, else `bin`. Names are hex only, so a hostile remote name
   can't escape `dir`.
 - **`cached(path, etag)`** → `Option<PathBuf>`, with no network.
+- **`newest(path)`** → `Option<PathBuf>`: the newest local copy, any etag, with no network; `None` when none is on disk.
+  For offline lookups when the app has no etag. Counts as a use.
 - **`fetch(client, path, cancel, progress)`:**
   - `stat` for the current etag;
   - a cache hit returns the local path;
@@ -171,7 +173,7 @@ decoder, a video demuxer).
 - **Size, last use and pins** live in a small index file, also written with `craft-atomic`. `open` rebuilds entries from
   the files on disk (the index keeps last use and pins), deletes leftover `*.craft_tmp` stage files, and never fails on
   index problems. Hits update last use in memory; it is saved with the next miss, pin, unpin or budget change.
-- **Holds:** take `hold` before `fetch` or `cached`. A newer fetch of the same path still replaces older-etag copies
+- **Holds:** take `hold` before `fetch`, `cached` or `newest`. A newer fetch of the same path still replaces older-etag copies
   while held.
 - **One open per directory:** open one `OriginalsCache` per directory per machine and clone it to share it. A second
   `open` of the same directory (another process, or a second call in the same process) sweeps the first one's stage
