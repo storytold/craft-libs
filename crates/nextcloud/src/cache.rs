@@ -19,6 +19,7 @@ use sha2::{Digest, Sha256};
 use crate::{Client, Error, RemotePath};
 
 const INDEX: &str = "index.json";
+const LOCK: &str = ".lock";
 const STAGE_SUFFIX: &str = ".craft_tmp";
 
 /// Local copies of remote files, evicted least recently used first above a byte budget. Clones share one cache.
@@ -60,6 +61,8 @@ struct Inner {
     index: Index,
     /// Hold counts by owner (`<account hash>/<path hash>`); in memory only.
     holds: HashMap<String, usize>,
+    /// The exclusive lock on `<dir>/.lock` (`None` where it can't be taken), released when the last clone is dropped.
+    _lock: Option<fs::File>,
 }
 
 /// `index.json`.
@@ -79,14 +82,28 @@ struct Item {
 }
 
 impl OriginalsCache {
-    /// Opens (creating) the cache in `dir`: loads or rebuilds the index, deletes stage files a crash left behind and
-    /// evicts down to `budget` bytes. Fails only if `dir` can't be created or read.
+    /// Opens (creating) the cache in `dir`: locks it, loads or rebuilds the index, deletes stage files a crash left
+    /// behind and evicts down to `budget` bytes. Fails if `dir` can't be created or read, or is already open.
     ///
-    /// Open one cache per directory per machine and clone it to share it. A second `open` of the same directory, from
-    /// another process or this one, sweeps the first one's in-flight stage files and races its index.
-    // ponytail: one open per cache dir, clones share it; add a lock file if apps ever need two opens.
+    /// Holds an exclusive lock on `<dir>/.lock` for as long as any clone of the cache (or a [`Hold`] taken from it)
+    /// lives. A second `open` of the directory meanwhile, from another process or this one, fails with an
+    /// [`Error::Io`] of kind [`io::ErrorKind::WouldBlock`]; clone the open cache to share it. The lock is best-effort:
+    /// where `.lock` can't be opened (even read-only) or the filesystem can't lock, `open` goes on without it, so a
+    /// read-only cache stays usable.
     pub fn open(dir: &Path, budget: u64) -> Result<OriginalsCache, Error> {
         fs::create_dir_all(dir)?;
+        // Before the sweep and the index rebuild, so a second opener never deletes the first one's stage files.
+        let path = dir.join(LOCK);
+        let lock = fs::OpenOptions::new().read(true).write(true).create(true).truncate(false).open(&path).or_else(|_| fs::File::open(&path)).ok();
+        if let Some(Err(fs::TryLockError::WouldBlock)) = lock.as_ref().map(fs::File::try_lock) {
+            return Err(Error::Io(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                format!(
+                    "The originals cache at {} is already open (another process, or a second OriginalsCache in this one); clone the open cache to share it",
+                    dir.display()
+                ),
+            )));
+        }
         let old = fs::read(dir.join(INDEX)).ok().and_then(|b| serde_json::from_slice::<Index>(&b).ok()).unwrap_or_default();
         let mut entries = BTreeMap::new();
         for acct in fs::read_dir(dir)?.flatten() {
@@ -115,7 +132,7 @@ impl OriginalsCache {
                 entries.insert(key, Item { size: meta.len(), last_use });
             }
         }
-        let mut inner = Inner { dir: dir.to_path_buf(), budget, index: Index { entries, pins: old.pins }, holds: HashMap::new() };
+        let mut inner = Inner { dir: dir.to_path_buf(), budget, index: Index { entries, pins: old.pins }, holds: HashMap::new(), _lock: lock };
         inner.evict(None);
         // A full disk or read-only folder must not cut the app off from its offline copies.
         let _ = inner.save();

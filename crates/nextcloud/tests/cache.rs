@@ -156,7 +156,7 @@ fn cancel_leaves_no_file() {
 
     let res = cache.fetch(&client, &path(&client, "a.ARW"), &cancel, &mut |_, _| cancel.store(true, Relaxed));
     assert!(matches!(res, Err(Error::Cancelled)), "{res:?}");
-    assert_eq!(files(dir.path()), ["index.json"]);
+    assert_eq!(files(dir.path()), [".lock", "index.json"]);
     assert_eq!(cache.usage(), Usage { total: 0, pinned: 0 });
 }
 
@@ -170,7 +170,7 @@ fn open_sweeps_orphan_stage_files() {
     fs::write(dir.path().join(".index.json.123-1.craft_tmp"), b"{").unwrap();
 
     let cache = OriginalsCache::open(dir.path(), 1 << 20).unwrap();
-    assert_eq!(files(dir.path()), ["index.json", "notes.txt"]);
+    assert_eq!(files(dir.path()), [".lock", "index.json", "notes.txt"]);
     assert_eq!(cache.usage(), Usage { total: 0, pinned: 0 });
 }
 
@@ -277,4 +277,43 @@ fn newest_returns_current_copy_without_a_request() {
 
     fs::remove_file(&current.path).unwrap();
     assert_eq!(cache.newest(&p), None);
+}
+
+#[test]
+fn second_open_of_a_directory_is_refused_until_the_first_is_gone() {
+    let dir = tempfile::tempdir().unwrap();
+    let first = OriginalsCache::open(dir.path(), 1 << 20).unwrap();
+    let clone = first.clone();
+    let Err(Error::Io(e)) = OriginalsCache::open(dir.path(), 1 << 20) else { panic!("second open succeeded") };
+    assert!(e.to_string().contains("already open"), "{e}");
+    assert_eq!(e.kind(), std::io::ErrorKind::WouldBlock);
+    drop(first);
+    assert!(OriginalsCache::open(dir.path(), 1 << 20).is_err(), "a clone still holds the lock");
+    drop(clone);
+    assert!(OriginalsCache::open(dir.path(), 1 << 20).is_ok());
+}
+
+#[cfg(unix)]
+#[test]
+fn read_only_cache_dir_still_opens() {
+    use std::os::unix::fs::PermissionsExt;
+    let server = FakeServer::start();
+    server.add_file("/a.ARW", b"raw".to_vec());
+    let dir = tempfile::tempdir().unwrap();
+    let client = client(&server);
+    let p = path(&client, "a.ARW");
+    let cache = OriginalsCache::open(dir.path(), 1 << 20).unwrap();
+    let fetched = fetch(&cache, &client, &p).unwrap();
+    drop(cache);
+    fs::remove_file(dir.path().join(".lock")).unwrap();
+
+    fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o555)).unwrap();
+    let writable = fs::write(dir.path().join("probe"), b"").is_ok(); // root ignores the mode
+    let opened = OriginalsCache::open(dir.path(), 1 << 20);
+    fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o755)).unwrap();
+    if writable {
+        return;
+    }
+    let cache = opened.unwrap();
+    assert_eq!(cache.newest(&p), Some(fetched.path));
 }

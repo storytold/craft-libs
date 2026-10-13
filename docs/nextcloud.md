@@ -175,9 +175,12 @@ decoder, a video demuxer).
   index problems. Hits update last use in memory; it is saved with the next miss, pin, unpin or budget change.
 - **Holds:** take `hold` before `fetch`, `cached` or `newest`. A newer fetch of the same path still replaces older-etag copies
   while held.
-- **One open per directory:** open one `OriginalsCache` per directory per machine and clone it to share it. A second
-  `open` of the same directory (another process, or a second call in the same process) sweeps the first one's stage
-  files and races its index. There is no lock file.
+- **One open per directory:** `open` takes an exclusive lock on `<dir>/.lock` and keeps it until the last clone of the
+  cache (and any `Hold`) is dropped. Opening the same directory meanwhile, from another process or the same one, fails
+  with an `Error::Io` of kind `WouldBlock`; clone the open cache to share it. The lock is taken before the stage-file
+  sweep, so a refused opener never deletes the first one's in-flight files. The lock is best-effort: where `.lock`
+  can't be opened (even read-only) or the filesystem can't lock, `open` goes on without it, so a read-only cache stays
+  usable.
 - **Known ceiling:** concurrent fetches of one path download twice.
 
 The cache never decides when to download: an app that must not download during background work simply doesn't call
