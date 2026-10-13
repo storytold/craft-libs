@@ -56,9 +56,9 @@ maintainers choose the merge method. No repository-wide squash requirement is es
 
 ## Releases and consumer upgrades
 
-The [release policy proposal](https://github.com/storytold/craft-libs/pull/41) defines
-coordinated, immutable workspace tags and independent consumer upgrades. It is pending until
-merged; use the versioning document included in the release you adopt. The intended 0.1.x
+The [initial release policy](https://github.com/storytold/craft-libs/pull/41) defines
+coordinated, immutable workspace tags and independent consumer upgrades. Use the versioning
+document included in the release you adopt. Its 0.1.x
 line permits compatible fixes and additions; changes requiring consumer action belong in
 0.2.0. A release does not require every application to update its pin.
 

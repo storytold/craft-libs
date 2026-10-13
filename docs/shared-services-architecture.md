@@ -27,11 +27,11 @@ rename retry handles transient locks with bounded backoff.
 Existing Unix destination mode bits are restored after the writer callback. Replacement
 creates a new inode; ownership, extended attributes, ACLs and hard-link identity are not
 preserved. New-file permissions are version-specific: consult the selected revision's
-[atomic API](../crates/atomic/src/lib.rs). The pending
-[permission policy change](https://github.com/storytold/craft-libs/pull/43) introduces normal
+[atomic API](../crates/atomic/src/lib.rs). The
+[permission policy change](https://github.com/storytold/craft-libs/pull/43) defines normal
 creation permissions for documents/exports (`0666` subject to umask/default ACL), explicit
-private creation for settings (`0600`), and private replacement staging. Do not assume that
-policy is available before the change lands, or use a generic default as a privacy guarantee.
+private creation for settings (`0600`), and private replacement staging. Check that the
+selected API includes this policy; do not use a generic default as a privacy guarantee.
 
 ## Settings
 

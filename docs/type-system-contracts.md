@@ -22,5 +22,5 @@ For future domain types, establish the contract with real consumers first. This 
 contains no `craft-time` crate and imposes no speculative `Tick` or SMPTE API on contributors.
 
 Use [shared services](shared-services-architecture.md) for persistence and quit boundaries,
-and the [release policy proposal](https://github.com/storytold/craft-libs/pull/41) for the
-intended compatibility rules pending its merge.
+and the [initial release policy](https://github.com/storytold/craft-libs/pull/41) for
+compatibility rules; use the versioning document included in the selected release.

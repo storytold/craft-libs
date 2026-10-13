@@ -30,9 +30,10 @@ crates or every architecture as browser-compatible from these commands.
 Inspect [Shared UI](../.github/workflows/ui.yml) and
 [Print spooler](../.github/workflows/print.yml) for current job matrices and path filters.
 They cover selected native Linux/macOS/Windows jobs and UI WASM; a docs-only PR may not trigger
-them. The [release policy proposal](https://github.com/storytold/craft-libs/pull/41) adds workspace
-release validation; until merged, its jobs are proposed rather than existing checks here.
-Report actual candidate check results before release, including all required final-source jobs.
+them. Workspace release validation is introduced by the
+[release policy change](https://github.com/storytold/craft-libs/pull/41); inspect the workflows
+present at the selected revision. Report actual candidate check results before release,
+including all required final-source jobs.
 
 ## Consumer comparisons
 
