@@ -62,3 +62,14 @@ PrintTicket and its driver-paper preference):
   https://github.com/storytold/pdfcraft
   Copyright (c) 2026 ArtCraft Team and the PdfCraft contributors.
   Licensed MIT OR Apache-2.0.
+
+The vendored egui-winit adapter (vendor/egui-winit) is from egui-winit 0.36.2,
+upstream egui revision 49682f8baa058bf49e011035cfbd6e825f88a5ef.
+https://github.com/emilk/egui
+Copyright (c) 2018-2021 Emil Ernerfeldt; the upstream notices are preserved verbatim.
+Licensed MIT OR Apache-2.0; the upstream license files and provenance are retained in that directory.
+The suite's adapter changes add clipboard, FileTransfer portal reception and contact cancellation.
+
+The focused-client clipboard seat pattern in crates/clipboard draws on smithay-clipboard 0.7.3.
+https://github.com/smithay/smithay-clipboard
+Licensed MIT; crates/clipboard/LICENSE-smithay-clipboard preserves the upstream notice.

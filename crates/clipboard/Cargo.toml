@@ -1,0 +1,20 @@
+[package]
+name = "craft-clipboard"
+description = "Bounded focused-client clipboard transfers for native Wayland apps"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+winit = { version = "=0.30.13", default-features = false, features = ["wayland", "x11"] }
+sctk = { package = "smithay-client-toolkit", version = "0.20", default-features = false, features = ["calloop"] }
+rustix = { version = "1", features = ["fs", "pipe"] }
+
+async-io = "2"
+futures-lite = "2"
+zbus = { version = "5", default-features = false, features = ["async-io", "blocking-api"] }

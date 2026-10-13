@@ -1,0 +1,31 @@
+[package]
+name = "craft-input"
+description = "Session-aware display backend selection for the Craft suite"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[features]
+default = []
+native = ["dep:winit"]
+# Select the renderer the consuming app already uses.
+wgpu = ["native", "dep:eframe", "eframe/wgpu_no_default_features"]
+glow = ["native", "dep:eframe", "eframe/glow"]
+serde = ["dep:serde"]
+
+[dependencies]
+serde = { version = "1", features = ["derive"], optional = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+eframe = { version = "0.36", default-features = false, optional = true }
+
+[target.'cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))'.dependencies]
+winit = { version = "=0.30.13", default-features = false, features = ["wayland", "x11"], optional = true }
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+eframe = { version = "0.36", default-features = false, features = ["glow", "wayland", "x11"] }

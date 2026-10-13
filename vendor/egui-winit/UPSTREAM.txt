@@ -1,0 +1,5 @@
+egui-winit 0.36.2, imported from the crates.io package.
+Upstream egui revision: 49682f8baa058bf49e011035cfbd6e825f88a5ef
+https://github.com/emilk/egui/tree/49682f8baa058bf49e011035cfbd6e825f88a5ef/crates/egui-winit
+License: MIT OR Apache-2.0; upstream license files retained alongside this file.
+Suite changes: native clipboard binding, bounded asynchronous Documents FileTransfer drops, and canceled contact pointer release.

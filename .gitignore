@@ -5,3 +5,5 @@ plans/
 .DS_Store
 /.claude/
 .idea/
+
+/vendor/egui-winit/Cargo.lock

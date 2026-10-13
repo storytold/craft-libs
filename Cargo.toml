@@ -1,6 +1,7 @@
 [workspace]
 resolver = "3"
 members = ["crates/*"]
+exclude = ["vendor/egui-winit"]
 
 [workspace.package]
 version = "0.1.0"
@@ -16,6 +17,8 @@ craft-print = { path = "crates/print" }
 craft-quit = { path = "crates/quit" }
 craft-settings = { path = "crates/settings" }
 craft-ui = { path = "crates/ui" }
+craft-input = { path = "crates/input" }
+craft-clipboard = { path = "crates/clipboard" }
 egui = { version = "0.36", default-features = false }
 
 [workspace.lints.rust]
@@ -24,3 +27,7 @@ unsafe_code = "forbid"
 [workspace.lints.clippy]
 dbg_macro = "warn"
 todo = "warn"
+
+[patch.crates-io]
+winit = { git = "https://github.com/skylartaylor/winit", rev = "2732964c88457e3e4b796ac6b15ef7fb332a6aad" }
+egui-winit = { path = "vendor/egui-winit" }

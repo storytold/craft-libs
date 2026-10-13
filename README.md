@@ -21,7 +21,16 @@ Apps depend on a crate by git:
 craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit>" }
 ```
 
+The native input and clipboard crates require the suite's pinned winit fork and egui-winit
+adapter. `vendor/egui-winit` preserves upstream 0.36.2 and its licenses in one location; it is
+excluded from this workspace because it retains its upstream crate settings. Consumer roots
+must patch both windowing crates to the documented revisions; dependency-local patches do not
+propagate to applications.
+
 ## Libraries
+
+- [`craft-input`](crates/input/README.md): session-aware display choices and per-window native pen samples.
+- [`craft-clipboard`](crates/clipboard/README.md): focused-client Wayland clipboard MIME transfers, with bounded pipes and no data-control requirement.
 
 - [`craft-atomic`](crates/atomic/README.md): Crash-safe atomic file writing and replacement with same-directory staging, directory fsync, Apple `F_FULLFSYNC` fallback, transient lock backoff, and fault injection for the Craft suite.
 - [`craft-print`](crates/print/README.md): PDF submission to CUPS and Windows, printer discovery,
