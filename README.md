@@ -42,6 +42,24 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   widget-state styling boundary.
 - [Panel docking](docs/ui-docking.md): validated panel moves, floating groups, workspace adapters
   and an optional egui docking surface.
+- [Ecosystem architecture blueprint](docs/ecosystem-architecture.md): 13-application architecture breakdown,
+  universal four-tier topology, engine mechanics, and three-tier promotion model.
+- [Shared infrastructure specification](docs/shared-infrastructure.md): 18-crate shared architecture specification,
+  dependency topology, and concrete interface contracts.
+- [Creative document compatibility reference](docs/document-compatibility.md): cross-application creative
+  document compatibility, structural preservation, and placement boundaries across 13 applications.
+- [Shared media infrastructure specification](docs/media-infrastructure.md): bitstream models, audio DSP
+  filter cascades, and ISOBMFF faststart progressive container layout.
+- [Crate inventory audit](docs/crate-audit.md): comprehensive 100+ crate audit across all 13 applications
+  and extraction candidate catalog.
+- [Migration roadmap](docs/migration-plan.md): step-by-step phased crate promotion and ecosystem dependency
+  alignment schedule.
+- [Downstream consumer adoption guide](docs/downstream-adoption.md): integration playbooks, media export,
+  vector metafile sharing, and v0.1.0 release pin migration.
+- [Engineering methodology](docs/engineering-methodology.md): clean-room reconstruction lifecycle, headless
+  command introspection, and platform fallbacks.
+- [Testing and evaluation specification](docs/testing-and-evaluation.md): three-level quality gate hierarchy,
+  hostile fuzzing, and empirical verification.
 
 ## License and credits
 
