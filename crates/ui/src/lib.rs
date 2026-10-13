@@ -18,7 +18,9 @@ pub mod icons;
 pub mod ime;
 pub mod layout;
 pub mod localized;
+pub mod menu;
 pub mod panes;
+pub mod presence;
 pub mod printing;
 #[cfg(feature = "share")]
 pub mod share;
