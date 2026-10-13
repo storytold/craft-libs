@@ -5,6 +5,8 @@
 //! Applications own their assets, themes, layouts, commands and document semantics. Components
 //! accept focused style values and return egui responses; no application engine is required.
 
+#[cfg(feature = "share")]
+pub mod account;
 pub mod buttons;
 pub mod capture;
 pub mod combo;
@@ -18,6 +20,8 @@ pub mod layout;
 pub mod localized;
 pub mod panes;
 pub mod printing;
+#[cfg(feature = "share")]
+pub mod share;
 pub mod tabs;
 #[cfg(all(feature = "screen-testing", not(target_arch = "wasm32")))]
 pub mod testing;

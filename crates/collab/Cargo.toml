@@ -1,0 +1,34 @@
+[package]
+name = "craft-collab"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Shared editing for the Craft apps: the relay protocol, a client session that orders and applies remote commands, and scope locks, over a caller-supplied hub"
+
+[lints]
+workspace = true
+
+[features]
+# Opt in, because rust_socketio pulls native-tls unconditionally and so cannot
+# build for wasm32. The browser build uses the JS socket.io-client instead.
+native-hub = ["dep:rust_socketio", "dep:tokio"]
+
+[dependencies]
+log = { workspace = true }
+rust_socketio = { version = "0.6", features = ["async"], optional = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { version = "1", features = ["sync", "rt"], optional = true }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
+
+# The example drives a live relay, so it needs the native transport. Declaring
+# required-features keeps a default-feature `cargo test` from trying to build
+# it and failing on an absent rust_socketio.
+[[example]]
+name = "join"
+required-features = ["native-hub"]
