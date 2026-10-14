@@ -9,6 +9,8 @@
 pub mod account;
 pub mod buttons;
 pub mod capture;
+#[cfg(feature = "cloud")]
+pub mod cloud;
 pub mod combo;
 pub mod direction;
 pub mod docking;
