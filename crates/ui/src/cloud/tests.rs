@@ -468,3 +468,86 @@ fn a_destination_reads_its_own_extension() {
     assert_eq!(Destination::new("exported").extension(), "");
     assert_eq!(Destination::new("trailing.").extension(), "");
 }
+
+// ---- somebody who followed a shared link ----------------------------------
+
+/// One frame of the title bar's right-hand end, as the accessibility tree
+/// reported it.
+///
+/// Read off the tree rather than out of the state, because the question is
+/// what a recipient can reach. A field saying "no menu" proves nothing about
+/// what was drawn.
+fn title_bar(app: &mut Notebook) -> Vec<(egui::accesskit::Role, String)> {
+    let ctx = egui::Context::default();
+    ctx.enable_accesskit();
+    let raw = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 48.0))), ..Default::default() };
+    let mut output = ctx.run_ui(raw, |ui| who(app, ui));
+    output.textures_delta.clear();
+    let Some(tree) = output.platform_output.accesskit_update.as_ref() else { return Vec::new() };
+    tree.nodes
+        .iter()
+        .filter_map(|(_, node)| {
+            // egui puts a plain label's text in the accessibility value and a
+            // control's text in the label, so both are text on screen.
+            node.label().or_else(|| node.value()).map(|text| (node.role(), text.to_owned()))
+        })
+        .collect()
+}
+
+fn pressable(seen: &[(egui::accesskit::Role, String)]) -> Vec<String> {
+    seen.iter().filter(|(role, _)| *role == egui::accesskit::Role::Button).map(|(_, text)| text.clone()).collect()
+}
+
+fn reads(seen: &[(egui::accesskit::Role, String)], fragment: &str) -> bool {
+    seen.iter().any(|(_, text)| text.contains(fragment))
+}
+
+#[test]
+fn a_recipient_is_named_and_offered_nothing() {
+    let mut app = Notebook::new();
+    app.cloud.as_guest("outsider@example.org", false);
+    let seen = title_bar(&mut app);
+    assert!(reads(&seen, "outsider@example.org"), "a recipient has no account, so their own address is the identity to show: {seen:?}");
+    // The whole point. Every item an account menu holds is a sign-out, a
+    // switch or a storage connection, and a recipient has none of those.
+    assert_eq!(pressable(&seen), Vec::<String>::new(), "nothing here may be pressed: {seen:?}");
+    for offer in ["Sign in", "Sign out", "Account", "Connect storage", "Add an account"] {
+        assert!(!reads(&seen, offer), "a recipient was offered {offer}");
+    }
+}
+
+#[test]
+fn a_read_only_share_says_so_before_anybody_tries_to_save() {
+    let mut app = Notebook::new();
+    app.cloud.as_guest("outsider@example.org", true);
+    assert!(reads(&title_bar(&mut app), "Reading only"), "finding out at the moment of saving means doing the work twice");
+
+    app.cloud.as_guest("outsider@example.org", false);
+    assert!(!reads(&title_bar(&mut app), "Reading only"), "a share that allows an edit must not say otherwise");
+}
+
+#[test]
+fn an_address_of_only_spaces_leaves_no_badge() {
+    let mut app = Notebook::new();
+    app.cloud.as_guest("   ", false);
+    assert!(app.cloud.guest().is_none(), "a badge with nothing on it reads as a fault");
+    assert_eq!(title_bar(&mut app), Vec::new());
+}
+
+#[test]
+fn a_signed_in_window_still_gets_its_account_badge() {
+    let (mut app, _jobs, ctx) = wired();
+    start(&mut app);
+    pumped(&mut app, &ctx);
+    let seen = title_bar(&mut app);
+    assert!(!pressable(&seen).is_empty(), "somebody with an account still has a menu to reach: {seen:?}");
+    assert!(reads(&seen, "Ada Lovelace"));
+}
+
+#[test]
+fn the_report_says_who_this_window_is_for() {
+    let mut app = Notebook::new();
+    assert_eq!(report(&app)["guest"], serde_json::Value::Null, "most windows belong to nobody in particular yet");
+    app.cloud.as_guest("outsider@example.org", true);
+    assert_eq!(report(&app)["guest"], serde_json::json!({"recipient": "outsider@example.org", "readOnly": true}));
+}

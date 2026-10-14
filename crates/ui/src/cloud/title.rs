@@ -4,15 +4,17 @@
 //! these three in the same corner, in that order. A person coming from one of
 //! them looks there first.
 
-use egui::Ui;
+use egui::{RichText, Ui};
 
-use super::{CloudApp, CopyFormat, available, link, origin, sign_in, sign_out, work_together};
+use super::{CloudApp, CopyFormat, Guest, available, fill, link, origin, sign_in, sign_out, work_together};
 
-/// Who is signed in. Who else is in the document, beside them.
+/// Who this window is for. Who else is in the document, beside them.
 ///
-/// Drawn only where a service is configured. A build with no service offers
-/// nothing cloud-shaped at all, and a badge that cannot sign anybody in would
-/// be a control that fails on use.
+/// Three cases, each a different person. Somebody signed in gets the account
+/// badge and its menu. Somebody who followed a shared link gets their own
+/// address and no menu, having no account to manage. A build with no service
+/// configured gets neither. A badge that cannot sign anybody in would be a
+/// control that fails on use.
 ///
 /// Nothing is asked for here. Drawing a badge must not begin a sign-in: a
 /// worker signs in before any job it is given, and it then blocks polling the
@@ -20,6 +22,40 @@ use super::{CloudApp, CopyFormat, available, link, origin, sign_in, sign_out, wo
 /// launch and leaves every later job queued behind it. Signing in is a gesture,
 /// so it waits for a press.
 pub fn who<A: CloudApp>(app: &mut A, ui: &mut Ui) {
+    match app.cloud().guest().cloned() {
+        Some(guest) => shared_with(app, ui, &guest),
+        None => account(app, ui),
+    }
+    // Who else is here, beside whoever this window belongs to. Nothing is
+    // drawn while a person is working alone, which keeps a solitary document
+    // looking like one.
+    if app.presence().shared() {
+        ui.add_space(6.0);
+        app.presence().show(ui);
+    }
+}
+
+/// Who a shared link was sent to, for somebody with no account anywhere.
+///
+/// A label and not a button. Every item an account menu holds is a sign-out, a
+/// switch or a storage connection, and a recipient has none of those. A
+/// control that opens a menu of failures is worse than no control.
+fn shared_with<A: CloudApp>(app: &mut A, ui: &mut Ui, guest: &Guest) {
+    let explained = fill(app, "This document was shared with {}", &guest.recipient);
+    let reading = app.tr("Reading only");
+    let dim = ui.visuals().weak_text_color();
+    if guest.read_only {
+        // Said where the account would be. Both answer what this window may
+        // do with the document in it. A recipient who finds out at the moment
+        // of saving has already done the work twice.
+        ui.label(RichText::new(reading).small().color(dim));
+        ui.add_space(6.0);
+    }
+    ui.label(RichText::new(guest.recipient.as_str()).small().color(dim)).on_hover_text(explained);
+}
+
+/// The account badge and its menu, for somebody signed in.
+fn account<A: CloudApp>(app: &mut A, ui: &mut Ui) {
     if !available(app) {
         return;
     }
@@ -57,13 +93,6 @@ pub fn who<A: CloudApp>(app: &mut A, ui: &mut Ui) {
                 }
             }
         }
-    }
-
-    // Who else is here, beside the account. Nothing is drawn while a person is
-    // working alone, which keeps a solitary document looking like one.
-    if app.presence().shared() {
-        ui.add_space(6.0);
-        app.presence().show(ui);
     }
 }
 
