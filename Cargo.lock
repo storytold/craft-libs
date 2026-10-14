@@ -530,6 +530,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-history"
+version = "0.1.0"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "craft-print"
 version = "0.1.0"
 dependencies = [

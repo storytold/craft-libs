@@ -79,3 +79,9 @@ The colour management module in crates/cms is extracted from:
   Copyright (c) 2026 ArtCraft Team and the PhotoCraft contributors.
   Licensed MIT OR Apache-2.0. Its generated ICC profile is dedicated to the public domain
   (CC0-1.0); see ATTRIBUTION.md.
+
+The branching history engine in crates/history is extracted and generalized from:
+- PhotoCraft, crates/ops/src/lib.rs, revision 0e3f37be652cf50883487d59bba3a3aa6ecc6c14.
+  https://github.com/TheSeanLavery/photocraft
+  Copyright (c) 2026 ArtCraft Team and the PhotoCraft contributors.
+  Licensed MIT OR Apache-2.0.
