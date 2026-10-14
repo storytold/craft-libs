@@ -530,6 +530,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-menu"
+version = "0.1.0"
+dependencies = [
+ "craft-quit",
+ "egui",
+ "muda",
+ "objc2 0.6.5",
+ "objc2-app-kit 0.3.2",
+]
+
+[[package]]
 name = "craft-print"
 version = "0.1.0"
 dependencies = [
