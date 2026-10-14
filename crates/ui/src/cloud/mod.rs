@@ -8,9 +8,9 @@
 //!
 //! Three things shape the implementation.
 //!
-//! Nothing here opens a socket. Every call goes through [`CloudBackend`], which
-//! a host writes, and this module never learns what it reaches. That keeps it
-//! buildable for the web and testable with no service running.
+//! Nothing here opens a socket. Every call goes through [`CloudBackend`]. A
+//! host writes that half. This module never learns what it reaches. That keeps
+//! it buildable for the web and testable with no service running.
 //!
 //! Nothing here blocks. A job goes to a worker, the answer arrives on a
 //! channel, and [`pump`] drains it on a later frame. A blocking read of a
@@ -18,11 +18,11 @@
 //!
 //! Nothing here is assumed about the provider. Every side of the Open page is
 //! drawn only where the service reported the capability behind it. An empty
-//! list under a heading reads to a user as a broken window, so a feature the
-//! provider does not have is absent rather than empty.
+//! list under a heading reads to a user as a broken window. A feature the
+//! provider does not have is therefore absent, heading and all.
 //!
-//! The application supplies [`CloudApp`], which is what it alone can answer:
-//! what its documents are, how bytes become one and back, and the words it
+//! The application supplies [`CloudApp`]. That is what it alone can answer.
+//! What its documents are, how bytes become one and back, and the words it
 //! shows them in.
 
 use std::collections::HashMap;
@@ -151,14 +151,15 @@ pub enum Source {
 
 /// Everything these pages keep about cloud storage.
 ///
-/// One per window. The application declares a field of this type, hands it back
-/// through [`CloudApp::cloud_mut`], and connects a backend once one exists.
+/// One per window. The application declares a field of this type, hands it
+/// back through [`CloudApp::cloud_mut`], and connects a backend once one
+/// exists.
 pub struct CloudFiles {
     backend: Option<Box<dyn CloudBackend>>,
     events: (Sender<Event>, Receiver<Event>),
-    /// The badge and its menu. Held here rather than by the application,
-    /// because signing in is the only way into any of this and the badge is
-    /// the only control that offers it.
+    /// The badge and its menu. Signing in is the only way into any of this.
+    /// The badge is the only control that offers it. It lives here. An
+    /// application declares no field for it.
     accounts: crate::account::AccountMenu,
     /// Frame time, in seconds, as of the last [`pump`]. Kept because a link
     /// poll is scheduled from an answer that arrives with no frame in hand.
@@ -217,7 +218,7 @@ impl CloudFiles {
 
     /// Attach the thing that does the waiting.
     ///
-    /// Until this is called nothing cloud-shaped is offered anywhere, which is
+    /// Until this is called nothing cloud-shaped is offered anywhere. That is
     /// what a build with no service configured wants.
     pub fn connect(&mut self, backend: impl CloudBackend + 'static) {
         self.backend = Some(Box::new(backend));
@@ -418,9 +419,9 @@ pub fn document_name(typed: &str, kind: DocumentKind) -> String {
 
 /// One sentence with a value in it, translated whole.
 ///
-/// The template reaches [`CloudApp::tr`] with its `{}` intact, so a translator
+/// The template reaches [`CloudApp::tr`] with its `{}` intact. A translator
 /// sees the whole sentence and can put the value where their own language
-/// wants it. Assembling a sentence from translated fragments cannot be made to
+/// wants it. A sentence assembled from translated fragments cannot be made to
 /// read correctly in a language that orders them differently.
 fn fill<A: CloudApp>(app: &A, template: &str, value: &str) -> String {
     app.tr(template).replacen("{}", value, 1)
@@ -528,9 +529,9 @@ pub fn pump<A: CloudApp>(app: &mut A, ctx: &egui::Context) {
         return;
     }
     app.cloud_mut().clock = ctx.input(|i| i.time);
-    // Taken in one pass rather than drained as they are applied. An answer
-    // that arrives because of a job this frame sent belongs to the next frame,
-    // which is what a worker on its own thread would have done anyway.
+    // Taken in one pass, then applied. An answer that arrives because of a job
+    // this frame sent belongs to the next frame. A worker on its own thread
+    // would have delivered it that way anyway.
     let mut arrived = Vec::new();
     while let Ok(event) = app.cloud().events.1.try_recv() {
         arrived.push(event);
@@ -650,8 +651,8 @@ fn apply<A: CloudApp>(app: &mut A, event: Event) {
     }
 }
 
-/// Bytes arrived. The application opens them, and the document remembers where
-/// they came from.
+/// Bytes arrived. The application opens them. The document then remembers
+/// where they came from.
 fn opened<A: CloudApp>(app: &mut A, entry: Entry, into: Option<u64>, bytes: Vec<u8>) {
     let name = entry.name.clone();
     match app.open_bytes(&name, bytes) {
