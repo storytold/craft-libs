@@ -204,8 +204,8 @@ impl Policy for Slides {
         false
     }
     fn remap_id(_document: &mut Arc<String>, _id: ()) {}
-    fn document_bytes(document: &String, _seen: &mut HashSet<usize>) -> usize {
-        document.capacity()
+    fn document_bytes(document: &String, seen: &mut HashSet<usize>) -> usize {
+        if seen.insert(document.as_ptr() as usize) { document.capacity() } else { 0 }
     }
 }
 #[test]
@@ -286,4 +286,13 @@ fn pruning_one_alternate_path_preserves_other_branch_and_root() {
     history.prune_descendants(2);
     assert_eq!(history.timeline().iter().map(|entry| entry.identity.id).collect::<Vec<_>>(), vec![0, 1, 4]);
     assert_eq!(history.current_id(), 4);
+}
+
+#[test]
+fn text_adapter_deduplicates_current_payload_shared_with_history() {
+    let current = Arc::new("Title".to_owned());
+    let mut history = History::<Slides>::default();
+    history.record("Shared payload", current.clone(), (0, 0));
+    assert_eq!(history.pixel_bytes(&current), current.capacity());
+    assert_eq!(history.unique_bytes(&current), 0);
 }

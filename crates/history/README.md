@@ -29,7 +29,9 @@ impl Policy for TextApp {
     type Id = ();
     fn has_selection(_: &String) -> bool { false }
     fn remap_id(_: &mut Arc<String>, _: ()) {}
-    fn document_bytes(text: &String, _: &mut HashSet<usize>) -> usize { text.capacity() }
+    fn document_bytes(text: &String, seen: &mut HashSet<usize>) -> usize {
+        if seen.insert(text.as_ptr() as usize) { text.capacity() } else { 0 }
+    }
 }
 let mut history = History::<TextApp>::default();
 history.record("Typing", Arc::new("Before".to_owned()), (0, 5));
