@@ -40,7 +40,7 @@ mod pages;
 mod tests;
 mod title;
 
-pub use app::{CloudApp, CloudStyle, CopyFormat, DocumentKind};
+pub use app::{CloudApp, CloudStyle, CopyFormat, Destination, DocumentKind};
 pub use backend::{Account, CloudBackend, Event, Fault, Job, Post};
 pub use pages::{conflict_modal, open_page, progress, save_page};
 pub use title::{destination_name, prefers_cloud, share_button, shares, who};
@@ -489,7 +489,7 @@ pub fn save<A: CloudApp>(app: &mut A) -> Result<Json, String> {
     if app.cloud().busy.is_some() {
         return Err("a cloud transfer is already running".to_owned());
     }
-    let bytes = app.encode(uid)?;
+    let bytes = app.encode(uid, Destination { name: &origin.entry.name, mime: origin.entry.mime.as_deref() })?;
     let size = bytes.len();
     let cloud = app.cloud_mut();
     cloud.status = None;
@@ -510,7 +510,9 @@ pub fn save_as<A: CloudApp>(app: &mut A, folder: &str, name: &str) -> Result<Jso
     if app.cloud().busy.is_some() {
         return Err("a cloud transfer is already running".to_owned());
     }
-    let bytes = app.encode(uid)?;
+    // A document that does not exist yet has no content type to read. The
+    // name a person just typed is the whole of what was asked for.
+    let bytes = app.encode(uid, Destination::new(&name))?;
     let size = bytes.len();
     let cloud = app.cloud_mut();
     cloud.status = None;

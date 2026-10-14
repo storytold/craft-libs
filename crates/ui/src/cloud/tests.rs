@@ -16,6 +16,10 @@ struct Did {
     opened: Vec<String>,
     closed: Vec<u64>,
     encoded: Vec<u64>,
+    /// The name each encode was asked for, which is where the bytes go.
+    encoded_as: Vec<String>,
+    /// The content type beside it, where the provider gave one.
+    encoded_mime: Vec<Option<String>>,
     marked_saved: Vec<u64>,
     dropped: Vec<u64>,
     said: Vec<String>,
@@ -81,8 +85,10 @@ impl CloudApp for Notebook {
         self.opens_as.clone()
     }
 
-    fn encode(&mut self, uid: u64) -> Result<Vec<u8>, String> {
+    fn encode(&mut self, uid: u64, into: Destination<'_>) -> Result<Vec<u8>, String> {
         self.did().encoded.push(uid);
+        self.did().encoded_as.push(into.name.to_owned());
+        self.did().encoded_mime.push(into.mime.map(str::to_owned));
         Ok(b"a note".to_vec())
     }
 
@@ -298,6 +304,7 @@ fn a_save_goes_out_under_the_version_the_document_was_read_at() {
     pumped(&mut app, &ctx);
     save(&mut app).unwrap();
     assert_eq!(app.did().encoded, vec![1], "the application alone turns a document into bytes");
+    assert_eq!(app.did().encoded_as, vec!["Minutes.note".to_owned()], "the bytes are asked for under the name they are going to");
     let condition = jobs.lock().unwrap().iter().find_map(|j| match j {
         Job::Write { entry, .. } => Some(entry.etag.clone()),
         _ => None,
@@ -424,4 +431,40 @@ fn the_contracts_own_conflict_is_the_one_a_save_must_not_retry() {
     assert_eq!(Fault::from(craft_cloud::Error::Conflict("Minutes.note".to_owned())), Fault::Conflict);
     assert_eq!(Fault::from(craft_cloud::Error::Unauthenticated), Fault::Unauthenticated);
     assert!(matches!(Fault::from(craft_cloud::Error::Unsupported("sharing")), Fault::Refused(_)));
+}
+
+#[test]
+fn a_save_asks_for_the_bytes_under_the_name_they_are_going_to() {
+    // A document opened as one format and saved in the application's own would
+    // hand the user a file no other application reads, under a name that says
+    // it is readable. The application cannot avoid that without being told
+    // where the bytes are going.
+    let (mut app, _jobs, ctx) = wired();
+    let mut sheet = file("/figures.csv");
+    sheet.mime = Some("text/csv".to_owned());
+    open_entry(&mut app, sheet, None);
+    pumped(&mut app, &ctx);
+    save(&mut app).unwrap();
+    assert_eq!(app.did().encoded_as, vec!["figures.csv".to_owned()]);
+    assert_eq!(app.did().encoded_mime, vec![Some("text/csv".to_owned())], "the provider's own word for it comes too");
+
+    // And Save As, where the name is the one just typed rather than the one
+    // the document arrived under.
+    let (mut app, _jobs, ctx) = wired();
+    open_entry(&mut app, file("/figures.csv"), None);
+    pumped(&mut app, &ctx);
+    save_as(&mut app, "", "a copy.note").unwrap();
+    assert_eq!(app.did().encoded_as, vec!["a copy.note".to_owned()]);
+    assert_eq!(app.did().encoded_mime, vec![None], "nothing is there yet, so nothing says what it is");
+}
+
+#[test]
+fn a_destination_reads_its_own_extension() {
+    assert_eq!(Destination::new("figures.csv").extension(), "csv");
+    assert_eq!(Destination::new("FIGURES.CSV").extension(), "csv", "a shouted name is the same name");
+    assert_eq!(Destination::new("report.2026.xlsx").extension(), "xlsx", "the last one wins");
+    // A bare name, which is what a web application's export commonly has.
+    // Everything an application can learn is in the content type instead.
+    assert_eq!(Destination::new("exported").extension(), "");
+    assert_eq!(Destination::new("trailing.").extension(), "");
 }
