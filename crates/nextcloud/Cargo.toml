@@ -1,0 +1,36 @@
+[package]
+name = "craft-nextcloud"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+description = "Nextcloud remote paths, accounts and WebDAV access for the Craft suite"
+
+[lints]
+workspace = true
+
+[features]
+# `FakeServer`, a scripted in-process Nextcloud for integration tests.
+testing = []
+# App passwords in the OS keyring (Keychain, Credential Manager, Secret Service).
+keyring = ["dep:keyring"]
+
+[dependencies]
+base64 = "0.23"
+craft-atomic = { workspace = true }
+keyring = { version = "4.2", default-features = false, features = ["v1"], optional = true }
+percent-encoding = "2.3"
+quick-xml = "0.41"
+rustls = { version = "0.23", default-features = false, features = ["std", "tls12"] }
+rustls-platform-verifier = "0.7"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = { version = "0.10", default-features = false, features = ["std"] }
+# Minor pinned: the TLS connector uses `ureq::unversioned::transport`.
+ureq = { version = "~3.4", default-features = false, features = ["rustls-no-provider", "platform-verifier"] }
+
+[dev-dependencies]
+craft-nextcloud = { path = ".", features = ["testing"] }
+rustls-rustcrypto = "0.0.2-alpha"
+tempfile = "3"
