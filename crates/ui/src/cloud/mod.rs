@@ -149,6 +149,24 @@ pub enum Source {
     Shared,
 }
 
+/// Who a document was shared with, when nobody is signed in.
+///
+/// Somebody who followed a keyed link has no account at the service and none
+/// at the provider behind it. So there is nothing to sign out of, no second
+/// account to switch to and no storage to connect. An account menu offered to
+/// them would be a menu whose every item fails.
+///
+/// This is what a title bar says instead. It names the address the link was
+/// sent to, because that is the only identity a recipient has here, and it
+/// offers nothing.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Guest {
+    /// The address the link was sent to.
+    pub recipient: String,
+    /// Whether the share opens the document for reading only.
+    pub read_only: bool,
+}
+
 /// Everything these pages keep about cloud storage.
 ///
 /// One per window. The application declares a field of this type, hands it
@@ -185,6 +203,9 @@ pub struct CloudFiles {
     /// Whether the transfer in flight was started by the share dialog, which
     /// is waiting to be told how it went.
     pub sharing_save: bool,
+    /// Set when this window belongs to somebody who followed a shared link
+    /// rather than to somebody signed in.
+    guest: Option<Guest>,
 }
 
 impl Default for CloudFiles {
@@ -213,6 +234,7 @@ impl CloudFiles {
             origins: HashMap::new(),
             status: None,
             sharing_save: false,
+            guest: None,
         }
     }
 
@@ -227,6 +249,25 @@ impl CloudFiles {
     /// Whether a service is wired at all.
     pub fn available(&self) -> bool {
         self.backend.is_some()
+    }
+
+    /// Say that this window belongs to somebody who followed a shared link.
+    ///
+    /// Called once, before anything is drawn, by whatever landed them here.
+    /// It changes what the title bar says and nothing else: a recipient has no
+    /// file list and no account, so none of the pages here were ever offered
+    /// to them.
+    ///
+    /// An address of only spaces leaves no guest. A badge with nothing on it
+    /// reads as a fault, and saying nothing is better than that.
+    pub fn as_guest(&mut self, recipient: impl Into<String>, read_only: bool) {
+        let recipient = recipient.into().trim().to_owned();
+        self.guest = if recipient.is_empty() { None } else { Some(Guest { recipient, read_only }) };
+    }
+
+    /// Who this window's document was shared with, when nobody is signed in.
+    pub fn guest(&self) -> Option<&Guest> {
+        self.guest.as_ref()
     }
 
     /// The account badge's own strings, for a localized application that
@@ -739,6 +780,7 @@ pub fn report<A: CloudApp>(app: &A) -> Json {
         "conflict": cloud.conflict.as_ref().map(|c| json!({"name": c.entry.name})),
         "origin": came_from,
         "status": cloud.status,
+        "guest": cloud.guest.as_ref().map(|g| json!({"recipient": g.recipient, "readOnly": g.read_only})),
     })
 }
 
