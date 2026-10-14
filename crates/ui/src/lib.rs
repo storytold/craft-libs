@@ -8,6 +8,8 @@
 #[cfg(feature = "share")]
 pub mod account;
 pub mod buttons;
+#[cfg(feature = "cloud")]
+pub mod cloud;
 pub mod docking;
 pub mod icons;
 pub mod layout;
