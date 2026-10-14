@@ -202,20 +202,22 @@ impl OriginalsCache {
         if let Err(e) = written {
             return Err(failure.unwrap_or(Error::Io(e)));
         }
-
-        let mut inner = self.lock();
-        let owner = owner(path);
-        let others: Vec<String> = inner.index.entries.keys().filter(|k| owner_of(k) == owner && **k != key).cloned().collect();
-        for other in others {
-            if remove(&inner.dir.join(&other)) {
-                inner.index.entries.remove(&other);
-            }
-        }
-        inner.index.entries.insert(key.clone(), Item { size, last_use: now() });
-        inner.evict(Some(&key));
-        // The download is in place; a failed index write loses only last use times.
-        let _ = inner.save();
+        self.lock().added(path, key, size);
         Ok(Fetched { path: file, stale: false })
+    }
+
+    /// Keeps `bytes` as the local copy of `path` at `etag`: a version the app has itself, such as a file it just
+    /// uploaded with [`Client::create`] (its etag from [`Client::stat`]), so opening it needs no download. Older
+    /// copies of `path` go, as after a [`fetch`](Self::fetch). Returns the copy's path.
+    pub fn insert(&self, path: &RemotePath, etag: &str, bytes: &[u8]) -> Result<PathBuf, Error> {
+        let key = entry_key(path, etag);
+        let file = self.lock().dir.join(&key);
+        if let Some(parent) = file.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        craft_atomic::atomic_write(&file, bytes)?;
+        self.lock().added(path, key, bytes.len() as u64);
+        Ok(file)
     }
 
     /// Keeps every copy of `path` from eviction, across restarts ("Make Available Offline").
@@ -287,6 +289,22 @@ impl Inner {
         // In memory only: the next index write (a download, pin, unpin or budget change) persists it.
         self.index.entries.get_mut(key)?.last_use = now();
         Some(file)
+    }
+
+    /// Records the new copy `key` of `path` (`size` bytes, already on disk): older copies of `path` go, then eviction
+    /// down to the budget, sparing it.
+    fn added(&mut self, path: &RemotePath, key: String, size: u64) {
+        let owner = owner(path);
+        let others: Vec<String> = self.index.entries.keys().filter(|k| owner_of(k) == owner && **k != key).cloned().collect();
+        for other in others {
+            if remove(&self.dir.join(&other)) {
+                self.index.entries.remove(&other);
+            }
+        }
+        self.index.entries.insert(key.clone(), Item { size, last_use: now() });
+        self.evict(Some(&key));
+        // The copy is in place; a failed index write loses only last use times.
+        let _ = self.save();
     }
 
     /// The most recently used entry of `owner`, any etag, that is still on disk (see [`Inner::use_entry`]).

@@ -10,7 +10,7 @@ without mounting the server and without downloading files the user only browses.
 - signing in (Login Flow v2) and trusting a self-signed certificate;
 - storing the app password in the OS keyring;
 - the remote-path format;
-- WebDAV listing, server previews, Range reads and downloads;
+- WebDAV listing, server previews, Range reads, downloads and uploads of new files;
 - the local download cache of originals;
 - optional metadata from the Memories app.
 
@@ -24,13 +24,13 @@ without mounting the server and without downloading files the user only browses.
 
 A blocking, native-only Rust API: the browser build would also need CORS on the server. It stays useful to more than
 one app:
-- **LightCraft:** browse a raw archive, develop selected shots.
+- **LightCraft:** browse a raw archive, develop selected shots, save a merged photo (HDR, panorama) beside its sources.
 - **PhotoCraft and DesignCraft:** open a PSD or layout file.
 - **PdfCraft:** open a PDF.
 - **FilmCraft:** pick a clip.
 
 Not in scope:
-- writing back (PUT, XMP sidecars);
+- changing files on the server: replacing or deleting a file, XMP sidecars (`create` only adds new files);
 - sync or conflict resolution;
 - push notifications;
 - other WebDAV servers without Nextcloud's preview endpoint.
@@ -125,6 +125,7 @@ its logger.
 | `preview(path, max_edge)` | `GET /index.php/core/preview.png?file=<path>&x=&y=&a=1` | The server's image bytes (JPEG or PNG), or `None` on 404 |
 | `read_range(path, range)` | `GET` with `Range` | Bytes. Requires `206` with a matching `Content-Range`; on `200` it reads only the needed prefix and drops the response (only when the range starts within 64 MiB, else `Malformed`); `416` returns empty |
 | `download_to(path, writer, cancel: &AtomicBool, progress: &mut dyn FnMut(done, Option<total>))` | `GET` | Size. Streams and checks `Content-Length` |
+| `create(path, bytes)` | `PUT` with `If-None-Match: *` | `true` when stored; `false` when `path` is taken (never replaced). A missing folder (`409`) is `NotFound`; `403`, `413` and `507` are `Refused` with the reason. No overall time limit, only the stall limit |
 | `memories()` | `GET /apps/memories/api/…` with `OCS-APIRequest: true` | `Option<Memories>`: `None` when the app isn't installed |
 
 `memories()` detects the app with `GET /index.php/apps/memories/api/describe`; a 404 or a non-JSON 200 means "not
@@ -157,6 +158,9 @@ decoder, a video demuxer).
   lowercased remote extension if it matches `[a-z0-9]{1,8}`, else `bin`. Names are hex only, so a hostile remote name
   can't escape `dir`.
 - **`cached(path, etag)`** → `Option<PathBuf>`, with no network.
+- **`insert(path, etag, bytes)`** → `PathBuf`: keeps a version the app has itself (a file it just uploaded with
+  `create`, its etag from `stat`) as a local copy, so opening it needs no download. Written atomically; older copies of
+  the path go, as after a `fetch`.
 - **`newest(path)`** → `Option<PathBuf>`: the newest local copy, any etag, with no network; `None` when none is on disk.
   For offline lookups when the app has no etag. Counts as a use.
 - **`fetch(client, path, cancel, progress)`:**
