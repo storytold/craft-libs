@@ -545,8 +545,13 @@ fn stand_in_separations_respect_the_ink_limit() {
             let t = Transform::new(Builtin::Srgb.profile(), cmyk, intent, true).unwrap();
             let mut out = vec![0.0f32; N * N * N * 4];
             t.convert_f32(&grid, 3, &mut out, 4, false).unwrap();
-            let (i, max) =
-                out.chunks_exact(4).map(|c| c.iter().sum::<f32>()).enumerate().fold((0, 0.0f32), |m, (i, s)| if s > m.1 { (i, s) } else { m });
+            let (i, max) = out
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|c| c.iter().sum::<f32>())
+                .enumerate()
+                .fold((0, 0.0f32), |m, (i, s)| if s > m.1 { (i, s) } else { m });
             eprintln!("{name}, {intent:?}: max total ink {:.2} % at sRGB {:?}", max * 100.0, &grid[i * 3..i * 3 + 3]);
             assert!(max <= LIMIT, "{name}, {intent:?}: total ink {max} at sRGB {:?}", &grid[i * 3..i * 3 + 3]);
 
