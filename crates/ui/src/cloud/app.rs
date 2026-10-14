@@ -94,6 +94,36 @@ impl CopyFormat {
 }
 
 /// An application that opens and saves documents in cloud storage.
+/// Where a save is going.
+///
+/// Carried as a pair because neither half is reliable alone. A provider hands
+/// back `application/octet-stream` for a perfectly good document, and a file
+/// exported by a web application often has a correct content type and no
+/// extension at all. The same reasoning as [`DocumentKind`], which reads both
+/// when deciding whether a document opens.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Destination<'a> {
+    /// The file name the bytes are going to.
+    pub name: &'a str,
+    /// What the provider says is already there, where it says anything. Absent
+    /// for a document that does not exist yet.
+    pub mime: Option<&'a str>,
+}
+
+impl<'a> Destination<'a> {
+    pub fn new(name: &'a str) -> Destination<'a> {
+        Destination { name, mime: None }
+    }
+
+    /// The extension the name carries, lower cased, when it carries one.
+    ///
+    /// Empty for a bare name. A caller that gets nothing here has the content
+    /// type left to read.
+    pub fn extension(&self) -> String {
+        self.name.rsplit_once('.').map(|(_, ext)| ext.to_ascii_lowercase()).filter(|ext| !ext.is_empty()).unwrap_or_default()
+    }
+}
+
 pub trait CloudApp {
     // ---- the state these pages keep -------------------------------------
 
@@ -117,14 +147,28 @@ pub trait CloudApp {
     /// to the user.
     fn open_bytes(&mut self, name: &str, bytes: Vec<u8>) -> Result<Option<u64>, String>;
 
-    /// Turn one open document into the bytes to save.
+    /// Turn one open document into the bytes to save, for `into`.
+    ///
+    /// [`Destination`] is where the bytes are going. A document opened from
+    /// the cloud as `figures.csv` has to go back as a CSV. Encoding it in the
+    /// application's own format under that name hands the user a file no other
+    /// application can read, and nothing tells them it happened.
+    ///
+    /// The name is the first answer. A provider that issued no extension at
+    /// all still says what the thing is, so the content type is the second.
+    /// Both appear often: a file exported by a web application commonly has a
+    /// correct content type and a bare name.
+    ///
+    /// An application that cannot write what the destination asks for should
+    /// refuse and say which formats it can write. A refusal a person can act
+    /// on beats a file that silently is not what it claims.
     ///
     /// Takes `&mut self` so the application can record which version of the
     /// document these bytes were. A save that lands clears the dirty flag for
     /// exactly that version. An edit made while the bytes were on the wire
     /// stays unsaved. [`CloudApp::mark_saved`] and [`CloudApp::drop_pending`]
     /// say which happened.
-    fn encode(&mut self, uid: u64) -> Result<Vec<u8>, String>;
+    fn encode(&mut self, uid: u64, into: Destination<'_>) -> Result<Vec<u8>, String>;
 
     /// Close a document a reload replaced. Called only once the replacement is
     /// open. A read that failed leaves the user's work where it was.
