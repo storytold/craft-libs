@@ -255,7 +255,7 @@ fn group(id: &str, name: &str) -> Contact {
 }
 
 fn existing(id: &str, target: ShareTarget, permission: Permission) -> Share {
-    Share { id: id.into(), target, permission, url: None, note: None, created: None }
+    Share { id: id.into(), target, display: None, permission, url: None, note: None, created: None }
 }
 
 fn lookup(found: Vec<Contact>) -> Answer {

@@ -168,6 +168,12 @@ pub struct Conversation {
 pub struct Share {
     pub id: String,
     pub target: ShareTarget,
+    /// What to call the recipient, where the provider says.
+    ///
+    /// A share carries the handle the server wants back, which for a user is
+    /// an account id. People are not known to each other by account id. A
+    /// provider that knows the difference says so here.
+    pub display: Option<String>,
     pub permission: Permission,
     /// Present for a link share, absent otherwise.
     pub url: Option<String>,

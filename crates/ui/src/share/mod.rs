@@ -1127,7 +1127,7 @@ fn outcome(ui: &mut Ui, sheet: &Sheet, labels: &ShareLabels, danger: Color32) {
         ui.colored_label(danger, error.as_str());
     }
     if !sheet.shared.is_empty() {
-        let who: Vec<String> = sheet.shared.iter().map(|s| target_label(&s.target, labels)).collect();
+        let who: Vec<String> = sheet.shared.iter().map(|s| share_label(s, labels)).collect();
         ui.label(format!("{}: {}", labels.shared_with, who.join(", ")));
     }
     // One line each. Five recipients with one bad address shares with four and
@@ -1156,7 +1156,7 @@ fn access(ui: &mut Ui, sheet: &Sheet, labels: &ShareLabels, weak: Color32, acts:
     egui::ScrollArea::vertical().max_height(160.0).id_salt("craft-ui/share/access").show(ui, |ui| {
         for share in list {
             ui.horizontal(|ui| {
-                ui.label(target_label(&share.target, labels));
+                ui.label(share_label(share, labels));
                 let permission = match share.permission {
                     Permission::View => labels.can_view.as_str(),
                     Permission::Edit => labels.can_edit.as_str(),
@@ -1335,6 +1335,21 @@ fn address(typed: &str) -> Option<String> {
         return None;
     }
     Some(typed.to_owned())
+}
+
+/// What to call the person or group a share is with.
+///
+/// The handle is the fallback. Showing an account id to somebody who knows
+/// that person by name tells them nothing, and two colleagues with similar
+/// ids are indistinguishable.
+fn share_label(share: &Share, labels: &ShareLabels) -> String {
+    match share.display.as_deref().filter(|name| !name.trim().is_empty()) {
+        Some(name) => match share.target {
+            ShareTarget::Group(_) => format!("{name} ({})", labels.group),
+            _ => name.to_owned(),
+        },
+        None => target_label(&share.target, labels),
+    }
 }
 
 fn target_label(target: &ShareTarget, labels: &ShareLabels) -> String {
