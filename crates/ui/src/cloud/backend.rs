@@ -1,13 +1,13 @@
-//! Where Open and Save do their waiting, which is never on the frame.
+//! Where Open and Save do their waiting. It is never on the frame.
 //!
-//! Every call a cloud provider needs is blocking, and a blocking read of a
-//! twenty megabyte document inside `update()` freezes the window for seconds.
-//! So this module states a [`Job`] and reads an [`Event`], and something behind
+//! Every call a cloud provider needs is blocking. A blocking read of a twenty
+//! megabyte document inside `update()` freezes the window for seconds. So this
+//! module states a [`Job`] and reads an [`Event`]. Something behind
 //! [`CloudBackend`] does the waiting.
 //!
-//! Nothing here opens a socket, which keeps the pages buildable for the web
-//! and testable with no service running. A host supplies the half that does,
-//! and this crate never learns what it reaches.
+//! Nothing here opens a socket. That keeps the pages buildable for the web and
+//! testable with no service running. A host supplies the half that does. This
+//! crate never learns what it reaches.
 
 use std::sync::mpsc::Sender;
 
@@ -69,9 +69,9 @@ pub enum Event {
 /// Where a worker's answers go.
 ///
 /// Handed to [`CloudBackend::submit`] with the job it belongs to. A worker is
-/// free to keep it and send later, or to send several times, which is how a
+/// free to keep it and send later, or to send several times. That is how a
 /// sign-in reports the URL it wants a browser pointed at and then reports that
-/// the user finished there. Sending after the window closed is not a failure.
+/// the user finished there. A send after the window closed is not a failure.
 pub struct Post {
     tx: Sender<Event>,
 }
@@ -101,7 +101,7 @@ impl std::fmt::Debug for Post {
 /// Somewhere a [`Job`] can run without blocking a frame.
 ///
 /// `submit` must return immediately. Answers arrive through `post` whenever
-/// they are ready, or never, which the pages survive.
+/// they are ready, or never. The pages survive either.
 pub trait CloudBackend {
     fn submit(&self, job: Job, post: Post);
 }
@@ -127,10 +127,10 @@ impl Account {
 
 /// A call that did not succeed, in the shapes the pages act on differently.
 ///
-/// A provider reports a refused conditional write as
-/// `craft_cloud::Error::Refused { code: "conflict", .. }`, which [`Fault`]
-/// gives its own shape. That one distinction is the point of this type. A
-/// conflict must never be retried and must never be forced.
+/// One case is worth telling apart from every other refusal. A conditional
+/// write the server refused means somebody else's work is in the stored copy.
+/// That one must never be retried and must never be forced. That is why
+/// [`Fault::Conflict`] has a shape of its own.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Fault {
     /// No cloud account is linked yet. This is a state with an obvious next
@@ -177,8 +177,8 @@ impl Fault {
 /// instead, since only it knows which code that service answers a refused
 /// conditional write with.
 ///
-/// [`craft_cloud::Error::Conflict`] is the one case worth distinguishing. It
-/// means somebody else's work is in the stored copy, so the save must never be
+/// [`craft_cloud::Error::Conflict`] is the one case worth telling apart. It
+/// means somebody else's work is in the stored copy. The save must never be
 /// retried and never be forced.
 impl From<craft_cloud::Error> for Fault {
     fn from(error: craft_cloud::Error) -> Fault {

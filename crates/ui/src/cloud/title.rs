@@ -1,14 +1,14 @@
-//! The right-hand end of a title bar, and the Save As destination.
+//! The right-hand end of a title bar, plus the Save As destination.
 //!
 //! Who is signed in, who else is here, and Share. Every office suite puts
-//! these three in the same corner, in that order, and a person coming from one
-//! of them looks there first.
+//! these three in the same corner, in that order. A person coming from one of
+//! them looks there first.
 
 use egui::Ui;
 
 use super::{CloudApp, CopyFormat, available, link, origin, sign_in, sign_out, work_together};
 
-/// Who is signed in, and who else is in the document.
+/// Who is signed in. Who else is in the document, beside them.
 ///
 /// Drawn only where a service is configured. A build with no service offers
 /// nothing cloud-shaped at all, and a badge that cannot sign anybody in would
@@ -70,7 +70,8 @@ pub fn who<A: CloudApp>(app: &mut A, ui: &mut Ui) {
 /// Whether the Share split button can be drawn.
 ///
 /// False until the service says the provider supports sharing. An application
-/// draws whatever it offered before rather than a button that fails on use.
+/// draws whatever it offered before. A button that fails on use is worse than
+/// no button at all.
 pub fn shares<A: CloudApp>(app: &mut A) -> bool {
     app.sharing().available()
 }
@@ -79,7 +80,7 @@ pub fn shares<A: CloudApp>(app: &mut A) -> bool {
 ///
 /// Pressing the label shares, which is what somebody wants most of the time.
 /// The chevron carries the variations, and working together is one of them.
-/// `copies` are the application's own Save a Copy formats, which have nothing
+/// `copies` are the application's own Save a Copy formats. Those have nothing
 /// in common between one application and the next.
 ///
 /// Answers with the identifier of a copy format, when that is what was chosen.
@@ -121,9 +122,9 @@ pub fn share_button<A: CloudApp>(app: &mut A, ui: &mut Ui, copies: &[CopyFormat]
 
 /// What to call the cloud destination on a Save As page.
 ///
-/// The account's own name, so the destination reads as the user's own storage
-/// and not as a generic place. Somebody with an account on two deployments
-/// needs to know which one a document is about to land in.
+/// The account's own name. The destination then reads as the user's own
+/// storage. Somebody with an account on two deployments needs to know which
+/// one a document is about to land in.
 pub fn destination_name<A: CloudApp>(app: &A) -> String {
     app.cloud().account.as_ref().map(|a| a.display.clone()).filter(|display| !display.is_empty()).unwrap_or_else(|| app.tr("Cloud storage"))
 }

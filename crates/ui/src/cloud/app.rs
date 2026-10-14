@@ -1,12 +1,11 @@
 //! What this module needs from the application around it.
 //!
-//! Two operations here belong to the application alone: turning bytes into an
-//! open document, and turning an open document into bytes. Both need the
-//! application's own mutable state, and that state is what holds the
+//! Two operations here belong to the application alone. One turns bytes into an
+//! open document. The other turns an open document into bytes. Both need the
+//! application's own mutable state. That state is what holds the
 //! [`CloudFiles`](crate::cloud::CloudFiles) this module keeps its own state in.
-//! So the pages are free functions over this trait rather than methods on a
-//! control, and an application reaches its cloud state back through
-//! [`CloudApp::cloud_mut`].
+//! The pages are therefore free functions over this trait. An application
+//! reaches its cloud state back through [`CloudApp::cloud_mut`].
 //!
 //! Every method here is something only the application can answer. The ones
 //! with a body are the ones a plain application can leave alone.
@@ -17,18 +16,18 @@ use craft_cloud::EntryKind;
 
 /// What one of the application's documents is, as a file list needs to know.
 ///
-/// Four pieces of static data, usually one `const` in the application. This is
-/// the whole of what an application has to say about its own documents, and it
-/// is data rather than four trait methods because every one of them would have
-/// been a pure function of nothing.
+/// Four pieces of static data, usually one `const` in the application. These
+/// four are the whole of what an application has to say about its own
+/// documents. They are data because every one of them as a trait method would
+/// have been a pure function of nothing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DocumentKind {
     /// Extensions this application opens, lower case and without a dot. The
     /// same set its desktop file picker offers.
     pub extensions: &'static [&'static str],
     /// Content types it opens, matched against the start of what the provider
-    /// said. A prefix rather than an equality, because a provider commonly
-    /// appends a profile to a type it is otherwise right about.
+    /// said. The match is a prefix. A provider commonly appends a profile to a
+    /// type it is otherwise right about.
     pub mimes: &'static [&'static str],
     /// What one is called in a sentence a user reads. "workbook", "document",
     /// "drawing".
@@ -40,9 +39,9 @@ pub struct DocumentKind {
 /// The colours and faces these pages draw in.
 ///
 /// The Open and Save pages sit inside the application's own Backstage view and
-/// have to match the surface around them, which `ui.visuals()` alone cannot
-/// say. An application with a palette of its own passes it in. One without
-/// takes [`CloudStyle::from_visuals`] and writes nothing.
+/// have to match the surface around them. `ui.visuals()` alone cannot say what
+/// that surface is. An application with a palette of its own passes it in. One
+/// without takes [`CloudStyle::from_visuals`] and writes nothing.
 #[derive(Clone, Debug)]
 pub struct CloudStyle {
     /// Behind a bordered column.
@@ -53,8 +52,8 @@ pub struct CloudStyle {
     pub dim: Color32,
     /// Behind a file row the pointer is over.
     pub hover: Color32,
-    /// Behind the panel that offers to link an account. Tinted, never alarming:
-    /// no account yet is a state with an obvious next step.
+    /// Behind the panel that offers to link an account. Tinted and never
+    /// alarming. No account yet is a state with an obvious next step.
     pub soft: Color32,
     pub family: FontFamily,
     pub bold: FontFamily,
@@ -79,7 +78,7 @@ impl CloudStyle {
 /// One of the application's own Save a Copy formats, for the second half of
 /// the Share menu.
 ///
-/// Its own, because what a spreadsheet exports and what a page layout
+/// The application's own. What a spreadsheet exports and what a page layout
 /// application exports have nothing in common.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CopyFormat {
@@ -114,21 +113,21 @@ pub trait CloudApp {
     /// Turn bytes into an open document, answering with the one it opened as.
     ///
     /// `Ok(None)` when the application took the bytes somewhere else, such as
-    /// a prompt for a password, and nothing should be said about them yet.
-    /// `Err` is put to the user.
+    /// a prompt for a password. Nothing is said about them yet. `Err` is put
+    /// to the user.
     fn open_bytes(&mut self, name: &str, bytes: Vec<u8>) -> Result<Option<u64>, String>;
 
     /// Turn one open document into the bytes to save.
     ///
     /// Takes `&mut self` so the application can record which version of the
     /// document these bytes were. A save that lands clears the dirty flag for
-    /// exactly that version, so an edit made while the bytes were on the wire
+    /// exactly that version. An edit made while the bytes were on the wire
     /// stays unsaved. [`CloudApp::mark_saved`] and [`CloudApp::drop_pending`]
     /// say which happened.
     fn encode(&mut self, uid: u64) -> Result<Vec<u8>, String>;
 
     /// Close a document a reload replaced. Called only once the replacement is
-    /// open, so a read that failed leaves the user's work where it was.
+    /// open. A read that failed leaves the user's work where it was.
     fn close(&mut self, uid: u64);
 
     /// The bytes [`CloudApp::encode`] made reached the service.
@@ -145,7 +144,7 @@ pub trait CloudApp {
     // ---- the window around them ------------------------------------------
 
     /// The share dialog this window holds. Opened from a document's overflow
-    /// menu and from the Share button, and refreshed when who is signed in
+    /// menu and from the Share button. Refreshed when who is signed in
     /// changes.
     fn sharing(&mut self) -> &mut crate::share::ShareDialog;
 
@@ -153,11 +152,11 @@ pub trait CloudApp {
     fn presence(&mut self) -> &mut crate::presence::PresenceBar;
 
     /// Paint the icon for one row of a file list. Every application already
-    /// owns an icon set, and none of them agree on how it is reached.
+    /// owns an icon set. None of them agree on how it is reached.
     fn paint_icon(&self, painter: &Painter, rect: Rect, kind: EntryKind, colour: Color32);
 
-    /// Open a URL in the user's browser. Launching one is the application's
-    /// business, and this crate opens nothing.
+    /// Open a URL in the user's browser. A browser is the application's
+    /// business. This crate opens nothing.
     fn open_url(&self, url: &str);
 
     /// Say something that needs the user's attention, in the application's own
@@ -177,7 +176,7 @@ pub trait CloudApp {
     /// What the application is called, for the one sentence that names it.
     fn app_name(&self) -> &str;
 
-    /// Translate one English string. The default leaves it alone, so an
+    /// Translate one English string. The default leaves it alone. An
     /// application with no translation table writes nothing.
     fn tr(&self, text: &str) -> String {
         text.to_owned()
