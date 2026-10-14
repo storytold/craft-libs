@@ -11,9 +11,27 @@ repository = "https://github.com/storytold/craft-libs"
 
 [workspace.dependencies]
 # internal: add each crate here as `craft-<name> = { path = "crates/<name>" }`
+craft-collab = { path = "crates/collab" }
+craft-gpu = { path = "crates/gpu" }
+craft-gpu-null = { path = "crates/gpu-null" }
+craft-gpu-providers = { path = "crates/gpu-providers" }
+craft-gpu-wgpu = { path = "crates/gpu-wgpu" }
+craft-nextcloud = { path = "crates/nextcloud" }
 craft-print = { path = "crates/print" }
+craft-runtime = { path = "crates/runtime" }
+craft-tier-store = { path = "crates/tier-store" }
 craft-ui = { path = "crates/ui" }
+craft-worker-host = { path = "crates/worker-host" }
 egui = { version = "0.36", default-features = false }
+
+# foundation. Versions match the ones the app repos already pin.
+log = "0.4"
+quick-xml = "0.41"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+pollster = "0.4"
+wgpu = { version = "30", default-features = false, features = ["std", "wgsl"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
