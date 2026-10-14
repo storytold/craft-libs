@@ -223,3 +223,35 @@ fn downloads_count_only_whole_file_gets() {
     download(&client, &p).unwrap();
     assert_eq!((server.downloads(), server.requests()), (1, 5));
 }
+
+#[test]
+fn create_uploads_a_new_file_and_never_replaces_one() {
+    let server = FakeServer::start();
+    server.add_dir("/Photos");
+    server.add_file("/Photos/taken.dng", vec![1]);
+    let client = client(&server);
+    let root = client.account().root();
+    let new = root.join("Photos").unwrap().join("a b-HDR.dng").unwrap();
+    assert!(client.create(&new, &thousand()).unwrap());
+    assert_eq!(server.file("/Photos/a b-HDR.dng"), Some(thousand()));
+    assert_eq!(client.stat(&new).unwrap().size, 1000);
+    assert!(!client.create(&new, b"other").unwrap(), "taken now");
+    assert!(!client.create(&root.join("Photos").unwrap().join("taken.dng").unwrap(), b"other").unwrap());
+    assert_eq!(server.file("/Photos/a b-HDR.dng"), Some(thousand()));
+    assert_eq!(server.file("/Photos/taken.dng"), Some(vec![1]));
+}
+
+#[test]
+fn create_errors() {
+    let server = FakeServer::start();
+    let client = client(&server);
+    let root = client.account().root();
+    assert!(matches!(client.create(&root.join("gone").unwrap().join("x.dng").unwrap(), b"x"), Err(Error::NotFound)));
+    for (status, why) in [(403, "no permission"), (413, "larger than the server accepts"), (507, "out of space")] {
+        server.fail_next(Fault::Status(status));
+        match client.create(&path(&client, "x.dng"), b"x") {
+            Err(e @ Error::Refused(_)) => assert!(e.to_string().contains(why), "{status}: {e}"),
+            other => panic!("{status}: {other:?}"),
+        }
+    }
+}

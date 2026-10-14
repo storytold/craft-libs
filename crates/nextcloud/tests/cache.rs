@@ -317,3 +317,27 @@ fn read_only_cache_dir_still_opens() {
     let cache = opened.unwrap();
     assert_eq!(cache.newest(&p), Some(fetched.path));
 }
+
+#[test]
+fn insert_keeps_an_uploaded_file_without_a_download() {
+    let server = FakeServer::start();
+    server.add_file("/a-HDR.dng", b"old".to_vec());
+    let dir = tempfile::tempdir().unwrap();
+    let cache = OriginalsCache::open(dir.path(), 1 << 20).unwrap();
+    let client = client(&server);
+    let p = path(&client, "a-HDR.dng");
+    let old = fetch(&cache, &client, &p).unwrap().path;
+    server.remove("/a-HDR.dng");
+    assert!(client.create(&p, b"merged").unwrap());
+    let etag = client.stat(&p).unwrap().etag;
+    let requests = server.requests();
+
+    let copy = cache.insert(&p, &etag, b"merged").unwrap();
+    assert_eq!(fs::read(&copy).unwrap(), b"merged");
+    assert!(!old.exists(), "the older copy goes");
+    assert_eq!(cache.cached(&p, &etag), Some(copy.clone()));
+    assert_eq!(fetch(&cache, &client, &p).unwrap().path, copy);
+    assert_eq!(server.downloads(), 1, "only the first fetch downloaded");
+    assert_eq!(server.requests(), requests + 1, "the fetch only asked for the etag");
+    assert_eq!(cache.usage().total, 6);
+}

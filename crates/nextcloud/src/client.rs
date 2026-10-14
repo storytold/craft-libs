@@ -1,4 +1,4 @@
-//! The Nextcloud client: listing and metadata over WebDAV.
+//! The Nextcloud client: listing, metadata, reads and new files over WebDAV.
 
 use std::fmt;
 use std::io::{self, Read, Write};
@@ -192,6 +192,24 @@ impl Client {
             return Err(Error::Unreachable("download ended early".into()));
         }
         Ok(done)
+    }
+
+    /// Uploads `bytes` as a new file at `path`, in a folder that exists (`PUT` with `If-None-Match: *`). Never replaces
+    /// a file: `Ok(false)` when `path` is taken. A missing folder is `NotFound`; a server that won't store the file (no
+    /// permission, too large, out of space) is `Refused`.
+    pub fn create(&self, path: &RemotePath, bytes: &[u8]) -> Result<bool, Error> {
+        let url = self.dav_url(path)?;
+        let headers = [("If-None-Match", "*"), ("Content-Type", "application/octet-stream")];
+        let res = self.http.request("PUT", &url, &headers, Some(bytes), Kind::Download)?;
+        match res.status().as_u16() {
+            200..=299 => Ok(true),
+            412 => Ok(false),
+            409 => Err(Error::NotFound),
+            403 => Err(Error::Refused("no permission to write there".into())),
+            413 => Err(Error::Refused("the file is larger than the server accepts".into())),
+            507 => Err(Error::Refused("the account is out of space".into())),
+            status => Err(Error::Malformed(format!("unexpected status {status}"))),
+        }
     }
 
     fn dav_url(&self, path: &RemotePath) -> Result<String, Error> {

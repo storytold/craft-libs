@@ -4,7 +4,7 @@ Treat files on a Nextcloud server as documents an app can list, preview and open
 Blocking, native-only. First used by LightCraft. Requires Rust 1.95. The design is in `docs/nextcloud.md`.
 
 **This crate owns:** Login Flow v2 sign-in and trusting a self-signed certificate, the `nextcloud://` path format,
-WebDAV listing, server previews, Range reads and downloads, the local cache of originals, optional Memories metadata
+WebDAV listing, server previews, Range reads, downloads and new files (never replacing one), the local cache of originals, optional Memories metadata
 and (feature `keyring`) app passwords in the OS keyring.
 
 **The app owns:** where remote files appear, when a download is allowed, what it renders from a preview, its dialogs

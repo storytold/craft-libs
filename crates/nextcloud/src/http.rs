@@ -31,7 +31,7 @@ pub(crate) enum Kind {
     Quick,
     /// `read_range`: 60 s.
     Range,
-    /// Downloads: no overall limit, only the stall limit.
+    /// Downloads and uploads: no overall limit, only the stall limit.
     Download,
 }
 

@@ -205,6 +205,12 @@ impl FakeServer {
         self.shared.insert(&mut files, &norm(path), bytes, false)
     }
 
+    /// The bytes of the file at `path` (e.g. one a client uploaded); `None` for a folder or nothing.
+    pub fn file(&self, path: &str) -> Option<Vec<u8>> {
+        let files = self.shared.files.lock().unwrap_or_else(PoisonError::into_inner);
+        files.nodes.get(&norm(path)).filter(|n| !n.dir).map(|n| n.data.clone())
+    }
+
     /// Turns on the Memories app routes (they 404 until then).
     pub fn enable_memories(&self) {
         self.shared.memories.store(true, SeqCst);
@@ -379,6 +385,7 @@ fn respond(shared: &Shared, req: &Request) -> Response {
         ("GET", _) if path.starts_with(MEMORIES_API) => memories(shared, path.strip_prefix(MEMORIES_API).unwrap_or_default()),
         ("GET", _) => path.strip_prefix(DAV_ROOT).map_or_else(|| Response::empty(404), |rest| get_file(shared, rest)),
         ("PROPFIND", _) => path.strip_prefix(DAV_ROOT).map_or_else(|| Response::empty(404), |rest| propfind(shared, req, rest)),
+        ("PUT", _) => path.strip_prefix(DAV_ROOT).map_or_else(|| Response::empty(404), |rest| put_file(shared, req, rest)),
         _ => Response::empty(404),
     }
 }
@@ -485,6 +492,23 @@ fn get_file(shared: &Shared, rest: &str) -> Response {
         Some(node) if !node.dir => Response { status: 200, headers: Vec::new(), body: node.data.clone() },
         _ => Response::empty(404),
     }
+}
+
+/// `PUT` of a file into an existing folder (`409` otherwise): `201` with its `ETag`, or `412` when `If-None-Match: *`
+/// and the path is taken.
+fn put_file(shared: &Shared, req: &Request, rest: &str) -> Response {
+    let Ok(path) = percent_decode_str(rest).decode_utf8().map(|p| norm(&p)) else { return Response::empty(400) };
+    let mut files = shared.files.lock().unwrap_or_else(PoisonError::into_inner);
+    let parent = path.rsplit_once('/').map_or("", |(parent, _)| parent);
+    if path.is_empty() || !(parent.is_empty() || files.nodes.get(parent).is_some_and(|n| n.dir)) {
+        return Response::empty(409);
+    }
+    if req.header("if-none-match") == Some("*") && files.nodes.contains_key(&path) {
+        return Response::empty(412);
+    }
+    shared.insert(&mut files, &path, req.body.clone(), false);
+    let etag = files.nodes.get(&path).map_or(0, |n| n.etag);
+    Response { status: 201, headers: vec![("ETag", format!("\"{etag:x}\""))], body: Vec::new() }
 }
 
 /// The preview of `file=<path>`; 404 unless [`FakeServer::set_preview`] was called for it.
