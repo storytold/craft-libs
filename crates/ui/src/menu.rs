@@ -122,19 +122,38 @@ pub fn split(ui: &mut Ui, primary: &str, items: &[MenuItem], labels: &MenuLabels
         // notches at the seam, which reads as two buttons that happen to abut.
         ui.spacing_mut().item_spacing.x = 0.0;
         let radius = ui.visuals().widgets.inactive.corner_radius;
-        let left = egui::CornerRadius { ne: 0, se: 0, ..radius };
-        let right = egui::CornerRadius { nw: 0, sw: 0, ..radius };
-        if ui.add(egui::Button::new(primary).corner_radius(left)).clicked() {
-            hit = Some(SplitHit::Primary);
-        }
-        // Room for the triangle, which is painted rather than typed.
-        let more = ui.add(egui::Button::new("    ").corner_radius(right));
-        crate::buttons::chevron(ui, more.rect, ui.visuals().text_color());
-        let name = labels.more_for.replace("{action}", &primary.to_lowercase());
-        more.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, name.as_str()));
-        let more = more.on_hover_text(name.as_str());
-        if let Some(id) = items_of(&more, items) {
-            hit = Some(SplitHit::Item(id));
+        // A toolbar that fills from its right edge hands this control a
+        // right-to-left layout, and whatever is added first lands furthest
+        // right. The label still belongs before the chevron, so the halves are
+        // added in the order that puts them there.
+        let backwards = ui.layout().main_dir() == egui::Direction::RightToLeft;
+        let (outer, inner) = if backwards {
+            (egui::CornerRadius { nw: 0, sw: 0, ..radius }, egui::CornerRadius { ne: 0, se: 0, ..radius })
+        } else {
+            (egui::CornerRadius { ne: 0, se: 0, ..radius }, egui::CornerRadius { nw: 0, sw: 0, ..radius })
+        };
+        let label = |ui: &mut Ui, hit: &mut Option<SplitHit>| {
+            if ui.add(egui::Button::new(primary).corner_radius(if backwards { inner } else { outer })).clicked() {
+                *hit = Some(SplitHit::Primary);
+            }
+        };
+        let chevron = |ui: &mut Ui, hit: &mut Option<SplitHit>| {
+            // Room for the triangle, which is painted rather than typed.
+            let more = ui.add(egui::Button::new("    ").corner_radius(if backwards { outer } else { inner }));
+            crate::buttons::chevron(ui, more.rect, ui.visuals().text_color());
+            let name = labels.more_for.replace("{action}", &primary.to_lowercase());
+            more.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, name.as_str()));
+            let more = more.on_hover_text(name.as_str());
+            if let Some(id) = items_of(&more, items) {
+                *hit = Some(SplitHit::Item(id));
+            }
+        };
+        if backwards {
+            chevron(ui, &mut hit);
+            label(ui, &mut hit);
+        } else {
+            label(ui, &mut hit);
+            chevron(ui, &mut hit);
         }
     });
     hit

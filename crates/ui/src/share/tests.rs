@@ -61,7 +61,26 @@ fn person(id: &str, name: &str) -> Contact {
 }
 
 fn share(id: &str, target: ShareTarget) -> Share {
-    Share { id: id.into(), target, permission: Permission::View, url: None, note: None, created: None }
+    Share { id: id.into(), target, display: None, permission: Permission::View, url: None, note: None, created: None }
+}
+
+#[test]
+fn a_share_is_labelled_with_the_name_the_provider_gave() {
+    let labels = ShareLabels::default();
+    let mut one = share("s1", ShareTarget::User("adunn".to_owned()));
+    assert_eq!(super::share_label(&one, &labels), "adunn", "the handle is all there is");
+    one.display = Some("Ada Lovelace".to_owned());
+    assert_eq!(super::share_label(&one, &labels), "Ada Lovelace");
+    // A provider that answers with an empty string has said nothing.
+    one.display = Some("   ".to_owned());
+    assert_eq!(super::share_label(&one, &labels), "adunn");
+
+    let mut team = share("s2", ShareTarget::Group("eng".to_owned()));
+    team.display = Some("Engineering".to_owned());
+    assert_eq!(super::share_label(&team, &labels), format!("Engineering ({})", labels.group));
+
+    // A link is not a person and never carries one.
+    assert_eq!(super::share_label(&share("s3", ShareTarget::Link), &labels), labels.anyone_with_link);
 }
 
 #[test]
