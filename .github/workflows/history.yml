@@ -1,0 +1,50 @@
+name: Shared History
+
+on:
+  push:
+    branches: [main]
+    paths: ["crates/history/**", "Cargo.toml", "Cargo.lock", ".github/workflows/history.yml"]
+  pull_request:
+    paths: ["crates/history/**", "Cargo.toml", "Cargo.lock", ".github/workflows/history.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: shared-history-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native:
+    name: History (${{ matrix.os }})
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: craft-history
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy -p craft-history --all-targets --locked -- -D warnings
+      - run: cargo test -p craft-history --locked
+  wasm:
+    name: History WASM
+    timeout-minutes: 15
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: craft-history-wasm
+      - run: cargo check -p craft-history --locked --target wasm32-unknown-unknown
