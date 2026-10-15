@@ -20,6 +20,7 @@ hayro-interpret = { version = "=0.7.0", default-features = false, features = ["e
 hayro-syntax = { version = "=0.7.2", default-features = false, features = ["std"] }
 bytemuck = "1"
 thiserror = "2"
+craft-devices = { path = "crates/devices" }
 craft-atomic = { path = "crates/atomic" }
 craft-cms = { path = "crates/cms" }
 craft-docpath = { path = "crates/docpath" }
