@@ -200,18 +200,9 @@ impl Runtime {
             HostMessage::StorageFlush => {
                 let pending = self.mirror.take_pending();
                 let export = self.flush_sink.is_none();
-                let count = if let Some(sink) = self.flush_sink.as_mut() {
-                    sink.write_all(&pending)
-                } else {
-                    pending.len()
-                };
+                let count = if let Some(sink) = self.flush_sink.as_mut() { sink.write_all(&pending) } else { pending.len() };
                 let pending_msg = if export {
-                    Some(
-                        pending
-                            .into_iter()
-                            .map(|write| PendingFlushEntry { key: write.key.0, bytes: write.bytes })
-                            .collect(),
-                    )
+                    Some(pending.into_iter().map(|write| PendingFlushEntry { key: write.key.0, bytes: write.bytes }).collect())
                 } else {
                     None
                 };

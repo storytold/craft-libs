@@ -1,6 +1,6 @@
 use craft_gpu::{GpuContext, GpuFault, GpuJob, GpuJobOutcome, GpuProvider};
 
-/// Placeholder until readback/composite WGSL moves here from app gpu crates.
+/// No-op dispatch for wiring tests; shared readback/composite providers live in sibling modules.
 pub struct NoopProvider;
 
 impl GpuProvider for NoopProvider {

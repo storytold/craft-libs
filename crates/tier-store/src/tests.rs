@@ -1,8 +1,6 @@
 #![allow(clippy::expect_used)]
 
-use crate::{
-    DefaultTierCoordinator, DefaultTierPolicy, ExternalVolume, MirrorStore, StoreKey, TierCoordinator, VersionedMirror,
-};
+use crate::{DefaultTierCoordinator, DefaultTierPolicy, ExternalVolume, MirrorStore, StoreKey, TierCoordinator, VersionedMirror};
 
 #[test]
 fn mirror_round_trip_and_pending_flush() {
@@ -69,10 +67,7 @@ fn default_coordinator_warm_and_cold_paths() {
     let vol = ExternalVolume::new("cold-root-7");
     assert!(coord.cold_relative_path(&vol, &key).is_none());
     let media = StoreKey::new("files/clip.mp4");
-    assert_eq!(
-        coord.cold_relative_path(&vol, &media),
-        Some("volumes/cold-root-7/files/clip.mp4".into())
-    );
+    assert_eq!(coord.cold_relative_path(&vol, &media), Some("volumes/cold-root-7/files/clip.mp4".into()));
 }
 
 #[test]

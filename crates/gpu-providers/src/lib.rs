@@ -22,13 +22,7 @@ pub use readback::ReadbackProvider;
 
 /// Default shared providers for worker/runtime init (`craft.*` ids only).
 pub fn register_all() -> Vec<Box<dyn GpuProvider>> {
-    vec![
-        Box::new(NoopProvider),
-        Box::new(EchoProvider),
-        Box::new(MaskProvider),
-        Box::new(PremulCompositeProvider),
-        Box::new(ReadbackProvider),
-    ]
+    vec![Box::new(NoopProvider), Box::new(EchoProvider), Box::new(MaskProvider), Box::new(PremulCompositeProvider), Box::new(ReadbackProvider)]
 }
 
 /// Register [`register_all`] providers into an existing registry.

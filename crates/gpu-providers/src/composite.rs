@@ -18,9 +18,7 @@ impl GpuProvider for PremulCompositeProvider {
             [a, b] => (a, b),
             [a] => (a, a),
             _ => {
-                return Err(GpuFault::InvalidJob(
-                    "craft.composite.premul expects one or two RGBA8 inputs (backdrop, layer)".into(),
-                ));
+                return Err(GpuFault::InvalidJob("craft.composite.premul expects one or two RGBA8 inputs (backdrop, layer)".into()));
             }
         };
         let dst_bytes = ctx.read_buffer(*dst_h)?;
@@ -31,18 +29,8 @@ impl GpuProvider for PremulCompositeProvider {
         let mut out = vec![0u8; len];
         for px in 0..width.saturating_mul(height) {
             let i = px * 4;
-            let mut dst = straight_to_premul([
-                dst_bytes[i],
-                dst_bytes[i + 1],
-                dst_bytes[i + 2],
-                dst_bytes[i + 3],
-            ]);
-            let src = straight_to_premul([
-                src_bytes[i],
-                src_bytes[i + 1],
-                src_bytes[i + 2],
-                src_bytes[i + 3],
-            ]);
+            let mut dst = straight_to_premul([dst_bytes[i], dst_bytes[i + 1], dst_bytes[i + 2], dst_bytes[i + 3]]);
+            let src = straight_to_premul([src_bytes[i], src_bytes[i + 1], src_bytes[i + 2], src_bytes[i + 3]]);
             premul_over(&mut dst, src);
             let straight = premul_to_straight(dst);
             out[i..i + 4].copy_from_slice(&straight);

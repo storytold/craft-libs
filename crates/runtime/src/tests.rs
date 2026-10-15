@@ -83,10 +83,7 @@ fn storage_flush_uses_flush_sink() {
     let mut runtime = Runtime::builder().null_context().flush_sink(Box::new(Capture(cap))).build();
     runtime.handle_host_message(HostMessage::StoragePut { key: "config/a".into(), bytes: b"1".to_vec() });
     let flushed = runtime.handle_host_message(HostMessage::StorageFlush);
-    assert!(matches!(
-        flushed.as_slice(),
-        [WorkerMessage::StorageFlushed { pending_count: 1, pending: None }]
-    ));
+    assert!(matches!(flushed.as_slice(), [WorkerMessage::StorageFlushed { pending_count: 1, pending: None }]));
     let writes = captured.lock().expect("test lock");
     assert_eq!(writes.len(), 1);
     assert_eq!(writes[0].key.0, "config/a");
