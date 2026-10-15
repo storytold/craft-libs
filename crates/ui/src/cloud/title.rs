@@ -118,8 +118,8 @@ pub fn share_button<A: CloudApp>(app: &mut A, ui: &mut Ui, copies: &[CopyFormat]
     let noun = app.kind().noun;
     let mut items = Vec::new();
     if app.cloud().can_converse() {
-        let detail = app.tr(&format!("Open a conversation about this {noun}"));
-        items.push(crate::menu::MenuItem::new("talk", app.tr("Work together")).detail(detail));
+        let detail = app.tr(&format!("Open a chat about this {noun}"));
+        items.push(crate::menu::MenuItem::new("talk", app.tr("Open chat")).detail(detail));
     }
     for (at, copy) in copies.iter().enumerate() {
         let item = crate::menu::MenuItem::new(copy.id.clone(), copy.label.clone());

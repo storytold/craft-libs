@@ -25,6 +25,7 @@ struct Did {
     said: Vec<String>,
     toasted: Vec<String>,
     urls: Vec<String>,
+    conversations: Vec<String>,
     went_to_save_as: usize,
 }
 
@@ -116,6 +117,10 @@ impl CloudApp for Notebook {
 
     fn open_url(&self, url: &str) {
         self.did.lock().unwrap().urls.push(url.to_owned());
+    }
+
+    fn open_conversation(&self, url: &str) {
+        self.did.lock().unwrap().conversations.push(url.to_owned());
     }
 
     fn say(&mut self, text: String) {
@@ -393,6 +398,21 @@ fn working_together_needs_somewhere_for_the_room_to_be_keyed_on() {
     work_together(&mut app);
     let asked = jobs.lock().unwrap().iter().any(|j| matches!(j, Job::Conversation(id) if id == "/Minutes.note"));
     assert!(asked, "the provider is asked about the handle it issued");
+}
+
+#[test]
+fn a_conversation_uses_the_hosts_chat_opener() {
+    let (mut app, _, ctx) = wired();
+    app.cloud
+        .events
+        .0
+        .send(Event::Conversation(Ok(craft_cloud::Conversation { url: "https://cloud.example.net/call/room".to_owned(), name: "Talk".to_owned() })))
+        .unwrap();
+
+    pumped(&mut app, &ctx);
+
+    assert_eq!(app.did().conversations, ["https://cloud.example.net/call/room"]);
+    assert!(app.did().urls.is_empty(), "ordinary browser links and conversations remain separate host decisions");
 }
 
 #[test]

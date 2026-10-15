@@ -203,6 +203,15 @@ pub trait CloudApp {
     /// business. This crate opens nothing.
     fn open_url(&self, url: &str);
 
+    /// Open the provider's conversation for this document.
+    ///
+    /// Desktop hosts may hand this to the operating system so a registered
+    /// chat application can claim it. Browser hosts may navigate the current
+    /// tab, which remains reliable after an asynchronous provider lookup.
+    fn open_conversation(&self, url: &str) {
+        self.open_url(url);
+    }
+
     /// Say something that needs the user's attention, in the application's own
     /// message box.
     fn say(&mut self, text: String);
