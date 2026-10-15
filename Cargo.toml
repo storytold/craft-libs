@@ -14,6 +14,7 @@ repository = "https://github.com/storytold/craft-libs"
 # internal: add each crate here as `craft-<name> = { path = "crates/<name>" }`
 craft-platform = { path = "crates/platform" }
 craft-ai-core = { path = "crates/ai-core" }
+craft-suite-account = { path = "crates/suite-account" }
 craft-pdf = { path = "crates/pdf", version = "=0.1.0" }
 craft-plate-test = { path = "crates/plate-test" }
 krilla = { version = "=0.8.2", default-features = false, features = ["raster-images"] }
