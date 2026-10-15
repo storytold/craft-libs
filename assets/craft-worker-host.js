@@ -27,6 +27,15 @@ self.onconnect = (event) => {
     typeof handleHostMessage === 'function'
       ? handleHostMessage
       : globalThis.craftWorkerHostHandleMessage;
-  port.onmessage = (ev) => route(port, ev.data);
+  port.onmessage = (ev) => {
+    if (typeof route !== 'function') {
+      port.postMessage({
+        type: 'error',
+        message: 'craft-worker-host: routing not loaded; message dropped',
+      });
+      return;
+    }
+    route(port, ev.data);
+  };
   port.start();
 };

@@ -96,6 +96,19 @@ function handleHostMessage(port, data) {
 
   switch (data.type) {
     case 'init':
+      // If the caller transferred a compiled WebAssembly.Module (structured-cloned),
+      // forward it to craftRuntimeReceiveWasmModule so the runtime can instantiate
+      // without re-fetching or re-compiling. Works for both SharedWorker (shared
+      // across tabs) and DedicatedWorker (per-tab module clone).
+      if (
+        typeof WebAssembly !== 'undefined' &&
+        data.wasm_module instanceof WebAssembly.Module
+      ) {
+        const wasmHook = globalThis.craftRuntimeReceiveWasmModule;
+        if (typeof wasmHook === 'function') {
+          wasmHook(data.wasm_module);
+        }
+      }
       port.postMessage({ type: 'ready', caps: STUB_CAPS });
       return;
     case 'storage_put':
