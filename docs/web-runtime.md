@@ -24,7 +24,16 @@ This is **our** deployment, not a hard-coded limit of the libraries:
 
 **Repin order:** craft-libs → collab-craft (when API/contracts change) → application `-web` crates.
 
-Static host on CollabCraft ships app bundles plus `assets/craft-worker-host.js` (+ brotli). Worker `init` gets a cloud base URL: same-origin when the app is served from CollabCraft, or `craft-cloud-url` / tab-provided base when static is elsewhere.
+Static host on CollabCraft ships app bundles plus runtime JS at the **web root** (not a subdirectory named like an app):
+
+| Lab URL | Notes |
+| --- | --- |
+| `https://craft.quasarke.net/craft-worker-host.js` | SharedWorker bootstrap (+ `.br` / `.gz` siblings) |
+| Same origin for `craft-worker-host-routing.js`, `craft-dedicated-worker.js`, `opfs-flush.js` | Published via `homelab-compose` `collabcraft-stack/deploy-runtime-assets.sh` → `/mnt/data/craft-web/` |
+
+**Do not** publish under `/runtime/` on CollabCraft: every directory under the web root is treated as a hosted app, so static worker scripts would redirect to sign-in.
+
+Worker `init` uses same-origin `/api/v1` when the app is served from CollabCraft, or `craft-cloud-url` / tab-provided base when static is elsewhere.
 
 ## SharedWorker vs dedicated worker
 
@@ -76,4 +85,6 @@ node tests/worker-host-protocol.mjs
 
 ## Verify (deploy)
 
-Deploy **collab-craft** and static assets to **craft.quasarke.net**, then smoke SharedWorker `init`, authenticated file routes, and one app storage/GPU path. That deployment is the integration oracle.
+**CollabCraft** on **192.168.1.88:9451** (edge **craft.quasarke.net**): `GET /healthz` → `ok`; unauthenticated `GET /api/v1/me` → `unauthenticated`; ranged tier API on **`collabcraft:bfa5d73`** (`tier-store-range`). Static worker: `curl -H 'Accept-Encoding: br' https://craft.quasarke.net/craft-worker-host.js` → **200** + `content-encoding: br`.
+
+After each image or asset change: recreate the container (`docker compose up -d --force-recreate`) and re-run `deploy-runtime-assets.sh` on `.88`.
