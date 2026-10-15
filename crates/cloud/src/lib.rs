@@ -54,6 +54,23 @@ pub trait Files {
     /// One document's bytes.
     fn read(&self, id: &str) -> Result<Vec<u8>>;
 
+    /// A byte slice of one document.
+    ///
+    /// Default reads the whole object and slices in memory. Providers with
+    /// native range support should override to avoid buffering large files.
+    fn read_range(&self, id: &str, offset: u64, length: u64) -> Result<Vec<u8>> {
+        if length == 0 {
+            return Err(Error::Invalid { what: "range", detail: "length must be greater than zero".to_owned() });
+        }
+        let all = Self::read(self, id)?;
+        let start = offset.min(all.len() as u64) as usize;
+        let end = offset.saturating_add(length).min(all.len() as u64) as usize;
+        if start >= end {
+            return Ok(Vec::new());
+        }
+        Ok(all[start..end].to_vec())
+    }
+
     /// Replace one document's bytes.
     ///
     /// `if_match` carries the etag the caller last saw. A provider that
