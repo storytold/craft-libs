@@ -2,9 +2,10 @@ use craft_gpu::{GpuContext, GpuFault, ProviderRegistry, WorkerKind};
 use craft_gpu_null::NullContext;
 use craft_gpu_providers::register_all_into;
 use craft_tier_store::{DefaultTierPolicy, MirrorStore, StoreKey};
-use craft_worker_host::{HostMessage, WorkerMessage};
+use craft_worker_host::{HostMessage, PendingFlushEntry, WorkerMessage};
 
 use crate::dispatch_gpu_jobs;
+use crate::flush::FlushSink;
 
 /// Which [`GpuContext`] implementation the runtime uses.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -26,6 +27,7 @@ pub struct RuntimeBuilder {
     worker_kind: WorkerKind,
     default_providers: bool,
     mirror_budget: usize,
+    flush_sink: Option<Box<dyn FlushSink>>,
 }
 
 impl Default for RuntimeBuilder {
@@ -42,7 +44,13 @@ impl RuntimeBuilder {
             worker_kind: default_worker_kind(),
             default_providers: false,
             mirror_budget: 64 * 1024 * 1024,
+            flush_sink: None,
         }
+    }
+
+    pub fn flush_sink(mut self, sink: Box<dyn FlushSink>) -> Self {
+        self.flush_sink = Some(sink);
+        self
     }
 
     pub fn mirror_byte_budget(mut self, bytes: usize) -> Self {
@@ -90,7 +98,13 @@ impl RuntimeBuilder {
             #[cfg(feature = "web")]
             ContextBackend::Wgpu => RuntimeContext::Wgpu(craft_gpu_wgpu::WgpuContext::new(self.worker_kind)),
         };
-        Runtime { registry: self.registry, ctx, mirror: MirrorStore::new(DefaultTierPolicy, self.mirror_budget), app_id: None }
+        Runtime {
+            registry: self.registry,
+            ctx,
+            mirror: MirrorStore::new(DefaultTierPolicy, self.mirror_budget),
+            app_id: None,
+            flush_sink: self.flush_sink,
+        }
     }
 }
 
@@ -148,6 +162,7 @@ pub struct Runtime {
     ctx: RuntimeContext,
     mirror: MirrorStore<DefaultTierPolicy>,
     app_id: Option<String>,
+    flush_sink: Option<Box<dyn FlushSink>>,
 }
 
 impl Runtime {
@@ -184,9 +199,23 @@ impl Runtime {
             }
             HostMessage::StorageFlush => {
                 let pending = self.mirror.take_pending();
-                let count = pending.len();
-                // Warm-tier OPFS write would run here in wasm glue; native tests only ack count.
-                vec![WorkerMessage::StorageFlushed { pending_count: count }]
+                let export = self.flush_sink.is_none();
+                let count = if let Some(sink) = self.flush_sink.as_mut() {
+                    sink.write_all(&pending)
+                } else {
+                    pending.len()
+                };
+                let pending_msg = if export {
+                    Some(
+                        pending
+                            .into_iter()
+                            .map(|write| PendingFlushEntry { key: write.key.0, bytes: write.bytes })
+                            .collect(),
+                    )
+                } else {
+                    None
+                };
+                vec![WorkerMessage::StorageFlushed { pending_count: count, pending: pending_msg }]
             }
             HostMessage::GpuJobs { batch_id, jobs } => match dispatch_gpu_jobs(&self.registry, &mut self.ctx, &jobs) {
                 Ok(outcomes) => vec![WorkerMessage::GpuBatchDone { batch_id, outcomes }],

@@ -2,7 +2,7 @@
 
 Design for [wdunn001/collab-craft#14](https://github.com/wdunn001/collab-craft/issues/14). Tracks [storytold/craft-libs#132](https://github.com/storytold/craft-libs/issues/132).
 
-**Status:** design only (not implemented). **Repin order:** craft-libs → collab-craft → `-web` apps ([web-runtime.md](./web-runtime.md)).
+**Status:** v1 implemented (ranged `GET /files/content`, `GET /files/meta`, `craft-cloud::Files::read_range`, `craft-cloud-client::read_range` / `stat`). Multipart upload remains design-only. **Repin order:** craft-libs → collab-craft → `-web` apps ([web-runtime.md](./web-runtime.md)).
 
 ---
 
@@ -12,7 +12,7 @@ Browser Craft runtimes ([craft-tier-store](../crates/tier-store/), [craft-runtim
 
 - **Read** byte ranges (warm OPFS / slice cache via `StoreKey::slice_cache`).
 - **Write** large payloads without a single giant `PUT` body when optional multipart is available.
-- Reuse **CollabCraft** as the only HTTP surface (no provider credentials or WebDAV in craft-libs).
+- Reuse a **`craft-cloud` HTTP gateway** (in our lab: **collab-craft**). No provider credentials or WebDAV in craft-libs or in the tab.
 
 Document Open/Save in [DesignCraft#878](https://github.com/storytold/designcraft/issues/878) already uses full-file `GET`/`PUT` with **etag preconditions**. Tier-store streaming extends the same routes and conflict semantics; it does not introduce a second save story.
 
@@ -24,7 +24,7 @@ Document Open/Save in [DesignCraft#878](https://github.com/storytold/designcraft
 | --- | --- | --- |
 | Portable identity | `craft-libs` → `craft-tier-store` | `CloudBlobRef`, `StoreKey`, mirror policy. **No IO, no HTTP, no `craft-nextcloud`.** |
 | Contracts | `craft-libs` → `craft-cloud` (pinned by collab-craft) | Vendor-neutral `Entry`, `Files::read` / `write` / `stat`, `Error::Conflict`. |
-| HTTP + provider | `collab-craft` | Axum handlers, session, `craft-nextcloud` WebDAV (Range, PUT, etags). |
+| HTTP + provider | **Gateway service** (lab: **collab-craft**) | Axum (or equivalent), session, `craft_cloud::Provider` adapter (Range on content GET, PUT, etags). **Not in craft-libs.** |
 | Browser transport | `collab-craft` → `craft-cloud-client` | `req.rs` route builders, `web.rs` `fetch` (`credentials: include`). |
 | Orchestration | `craft-libs` → `craft-worker-host` / `craft-runtime` | SharedWorker RPC; wasm glue maps cloud bytes ↔ OPFS. |
 
@@ -100,7 +100,7 @@ Extend the existing content route where possible so `craft_ui` cloud tests and t
 | **Success with Range** | `206 Partial Content`, body = slice, **`Content-Range: bytes {first}-{last}/{total}`**, same `ETag` for the **whole** object (not the slice). |
 | **Errors** | `401` unauthenticated; `428` provider_not_linked; `403` forbidden; `404` not_found; **`416`** range_not_satisfiable (malformed or beyond EOF); `502` unreachable / malformed provider response. |
 
-**Server (collab-craft only):** resolve session → provider → `craft-nextcloud` DAV `GET` with forwarded `Range`. Map WebDAV/HTTP statuses into `craft_cloud::Error` and existing JSON error envelope.
+**Server (collab-craft only):** resolve session → `craft_cloud::Provider` → ranged content GET with forwarded `Range`. Map statuses into `craft_cloud::Error` and the existing JSON error envelope.
 
 **Client (`craft-cloud-client`):** add `read_range(id, offset, length) -> Call<Vec<u8>>` building `Range: bytes=…` and decoding via existing raw byte decoder (206 and 200 both success).
 

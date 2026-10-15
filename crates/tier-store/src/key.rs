@@ -13,6 +13,7 @@ impl StoreKey {
     ///
     /// Layout mirrors Legion `shardCache` expert keys: stable content id + byte range.
     /// Always classified as [`KeyClass::Cache`](crate::KeyClass::Cache) via the `cache/` prefix.
+    /// Warm OPFS path: see [`DefaultTierCoordinator`](crate::DefaultTierCoordinator).
     pub fn slice_cache(content_hash: &[u8], offset: u64, length: u64) -> Self {
         Self(format!("cache/slice/{}/{}+{}", hex_lower(content_hash), offset, length))
     }

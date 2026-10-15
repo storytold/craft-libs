@@ -1,7 +1,9 @@
 # craft-worker-host
 
-Rust protocol types (`HostMessage`, `WorkerMessage`) and the browser bootstrap script
-[`assets/craft-worker-host.js`](../../assets/craft-worker-host.js) for Craft `-web` apps.
+Rust protocol types (`HostMessage`, `WorkerMessage`) and browser bootstrap scripts
+[`assets/craft-worker-host.js`](../../assets/craft-worker-host.js) (SharedWorker) and
+[`assets/craft-dedicated-worker.js`](../../assets/craft-dedicated-worker.js) (fallback) for Craft `-web` apps.
+Shared routing lives in [`assets/craft-worker-host-routing.js`](../../assets/craft-worker-host-routing.js).
 
 ## Message tags
 
@@ -9,22 +11,28 @@ Serde uses internally tagged JSON with `"type"` in **snake_case**:
 
 | Direction | `type` values |
 |-----------|----------------|
-| Tab → worker | `init`, `storage_flush`, `gpu_jobs`, `cancel` |
-| Worker → tab | `ready`, `gpu_batch_done`, `error` |
+| Tab → worker | `init`, `storage_put`, `storage_flush`, `gpu_jobs`, `cancel` |
+| Worker → tab | `ready`, `gpu_batch_done`, `storage_flushed`, `error` |
 
 Unit variants (`storage_flush`, `cancel`) are objects with only `"type"`.
 
-## WASM hook
+## WASM hooks
 
-Before or after loading WASM, assign:
+Before or after loading WASM, assign on the worker global:
 
 ```js
 globalThis.craftRuntimeHandleGpuBatch = async ({ batch_id, jobs }) => {
   // return GpuJobOutcome[] aligned with `jobs`
 };
+
+globalThis.craftRuntimeFlushPending = async (data) => {
+  // return { pending_count: number }
+};
 ```
 
-If unset, the stub completes `gpu_jobs` with empty outcomes.
+If `craftRuntimeHandleGpuBatch` is unset, the stub completes `gpu_jobs` with empty outcomes.
+If `craftRuntimeFlushPending` is unset, `storage_flush` replies with `pending_count: 0`.
+Loading `opfs-flush.js` from the worker bootstrap installs a default flush hook.
 
 ## craft.quasarke.net (CollabCraft static host)
 

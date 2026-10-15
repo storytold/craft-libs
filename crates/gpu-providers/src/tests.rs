@@ -3,7 +3,7 @@
 use craft_gpu::{GpuContext, GpuJob, GpuJobParams, ProviderRegistry, WorkerKind};
 use craft_gpu_null::NullContext;
 
-use crate::{EchoProvider, NoopProvider, register_all, register_all_into};
+use crate::{EchoProvider, MaskProvider, NoopProvider, register_all, register_all_into};
 
 #[test]
 fn noop_provider_registered_by_id() {
@@ -29,7 +29,23 @@ fn echo_provider_concatenates_params_and_first_input() {
 #[test]
 fn register_all_lists_shared_providers() {
     let ids: Vec<_> = register_all().iter().map(|p| p.id()).collect();
-    assert_eq!(ids, vec!["craft.noop", "craft.test.echo"]);
+    assert_eq!(ids, vec!["craft.noop", "craft.test.echo", "craft.mask"]);
+}
+
+#[test]
+fn mask_provider_multiplies_rgba_by_mask_on_cpu() {
+    let mut registry = ProviderRegistry::new();
+    registry.register(Box::new(MaskProvider));
+    let mut ctx = NullContext::new(WorkerKind::Main);
+    let base = ctx.upload_buffer("base", &[255u8, 0, 0, 255, 100, 100, 100, 255]).expect("upload base");
+    let mask = ctx.upload_buffer("mask", &[128u8, 255, 255, 255, 0, 255, 255, 255]).expect("upload mask");
+    let job =
+        craft_gpu::GpuJob { provider_id: "craft.mask".into(), params: GpuJobParams(b"w:1,h:2".to_vec()), inputs: vec![base, mask], outputs: vec![] };
+    let out = registry.dispatch(&mut ctx, &job).expect("mask dispatch");
+    let handle = out.outputs[0];
+    let bytes = ctx.read_buffer(handle).expect("read mask out");
+    assert_eq!(bytes[0], 128);
+    assert_eq!(bytes[4], 0);
 }
 
 #[test]

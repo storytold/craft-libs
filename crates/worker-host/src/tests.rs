@@ -37,16 +37,38 @@ fn host_gpu_jobs_roundtrip_json() {
 }
 
 #[test]
+fn host_cancel_json_shape() {
+    let msg = HostMessage::Cancel { batch_id: 99 };
+    let json = serde_json::to_string(&msg).expect("serialize Cancel");
+    assert_eq!(json, r#"{"type":"cancel","batch_id":99}"#);
+    let back: HostMessage = serde_json::from_str(&json).expect("deserialize Cancel");
+    assert_eq!(msg, back);
+}
+
+#[test]
 fn host_storage_put_and_flush_json_shape() {
     let put = HostMessage::StoragePut { key: "config/prefs.json".into(), bytes: vec![1, 2] };
     let json = serde_json::to_string(&put).expect("serialize StoragePut");
     assert!(json.contains(r#""type":"storage_put""#));
     let flush = HostMessage::StorageFlush;
-    let flushed = WorkerMessage::StorageFlushed { pending_count: 2 };
+    let flushed = WorkerMessage::StorageFlushed { pending_count: 2, pending: None };
     let fj = serde_json::to_string(&flush).expect("serialize flush");
     assert_eq!(fj, r#"{"type":"storage_flush"}"#);
     let wj = serde_json::to_string(&flushed).expect("serialize flushed");
     assert!(wj.contains(r#""pending_count":2"#));
+}
+
+#[test]
+fn storage_flushed_pending_export_json() {
+    let msg = WorkerMessage::StorageFlushed {
+        pending_count: 1,
+        pending: Some(vec![crate::PendingFlushEntry { key: "config/a".into(), bytes: vec![1, 2] }]),
+    };
+    let json = serde_json::to_string(&msg).expect("serialize");
+    assert!(json.contains(r#""pending_count":1"#));
+    assert!(json.contains(r#""key":"config/a""#));
+    let back: WorkerMessage = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(msg, back);
 }
 
 #[test]

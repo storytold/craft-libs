@@ -1,6 +1,8 @@
 #![allow(clippy::expect_used)]
 
-use crate::{DefaultTierPolicy, ExternalVolume, MirrorStore, StoreKey};
+use crate::{
+    DefaultTierCoordinator, DefaultTierPolicy, ExternalVolume, MirrorStore, StoreKey, TierCoordinator, VersionedMirror,
+};
 
 #[test]
 fn mirror_round_trip_and_pending_flush() {
@@ -60,9 +62,34 @@ fn slice_cache_key_format() {
 }
 
 #[test]
+fn default_coordinator_warm_and_cold_paths() {
+    let coord = DefaultTierCoordinator::default();
+    let key = StoreKey::new("config/prefs.json");
+    assert_eq!(coord.warm_opfs_relative_path(&key), "effectcraft-store/v1/config/prefs.json");
+    let vol = ExternalVolume::new("cold-root-7");
+    assert!(coord.cold_relative_path(&vol, &key).is_none());
+    let media = StoreKey::new("files/clip.mp4");
+    assert_eq!(
+        coord.cold_relative_path(&vol, &media),
+        Some("volumes/cold-root-7/files/clip.mp4".into())
+    );
+}
+
+#[test]
 fn external_volume_serde_roundtrip() {
     let vol = ExternalVolume::new("cold-root-7").with_label("Exports");
     let json = serde_json::to_string(&vol).expect("serialize");
     let back: ExternalVolume = serde_json::from_str(&json).expect("deserialize");
     assert_eq!(back, vol);
+}
+
+#[test]
+fn versioned_mirror_bumps_per_key_version() {
+    let mut store = VersionedMirror::new(DefaultTierPolicy, 4096);
+    let key = StoreKey::new("files/clip.mp4");
+    assert_eq!(store.version(&key), 0);
+    assert_eq!(store.put(key.clone(), b"v1".to_vec()), 1);
+    assert_eq!(store.put(key.clone(), b"v2".to_vec()), 2);
+    assert_eq!(store.get(&key), Some(b"v2".as_slice()));
+    assert_eq!(store.version(&key), 2);
 }

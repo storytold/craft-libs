@@ -24,12 +24,30 @@ pub enum HostMessage {
     },
 }
 
+/// One coalesced mirror write exported to JS warm-tier flush (OPFS).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PendingFlushEntry {
+    pub key: String,
+    pub bytes: Vec<u8>,
+}
+
 /// Worker → tab.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum WorkerMessage {
-    Ready { caps: DeviceCaps },
-    GpuBatchDone { batch_id: u64, outcomes: Vec<GpuJobOutcome> },
-    StorageFlushed { pending_count: usize },
-    Error { message: String },
+    Ready {
+        caps: DeviceCaps,
+    },
+    GpuBatchDone {
+        batch_id: u64,
+        outcomes: Vec<GpuJobOutcome>,
+    },
+    StorageFlushed {
+        pending_count: usize,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pending: Option<Vec<PendingFlushEntry>>,
+    },
+    Error {
+        message: String,
+    },
 }
