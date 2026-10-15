@@ -14,6 +14,12 @@ try {
   // Optional warm-tier flush hook; tests may assign craftRuntimeFlushPending manually.
 }
 
+try {
+  importScripts('fs-access-host.js');
+} catch {
+  // Optional cold-tier FS Access host; browser-only.
+}
+
 self.onconnect = (event) => {
   const port = event.ports[0];
   connections.add(port);
@@ -21,6 +27,15 @@ self.onconnect = (event) => {
     typeof handleHostMessage === 'function'
       ? handleHostMessage
       : globalThis.craftWorkerHostHandleMessage;
-  port.onmessage = (ev) => route(port, ev.data);
+  port.onmessage = (ev) => {
+    if (typeof route !== 'function') {
+      port.postMessage({
+        type: 'error',
+        message: 'craft-worker-host: routing not loaded; message dropped',
+      });
+      return;
+    }
+    route(port, ev.data);
+  };
   port.start();
 };
