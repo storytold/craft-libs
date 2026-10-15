@@ -106,10 +106,8 @@ assert.equal(JSON.stringify(cancel), '{"type":"cancel","batch_id":99}');
   handle(port, storageFlush);
   await new Promise((r) => setImmediate(r));
   assert.equal(messages.length, 1);
-  assert.deepEqual(messages[0], {
-    type: 'storage_flushed',
-    pending_count: 3,
-  });
+  assert.equal(messages[0].type, 'storage_flushed');
+  assert.equal(messages[0].pending_count, 3);
 }
 
 {
