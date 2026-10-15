@@ -1,9 +1,7 @@
 #![allow(clippy::expect_used)]
 
-use craft_gpu::{GpuContext, GpuJob, GpuJobParams, ProviderRegistry, WorkerKind};
+use craft_gpu::{GpuContext, GpuJob, GpuJobParams, ProviderRegistry, WorkerKind, f16_to_f32, f16_to_f32_fast};
 use craft_gpu_null::NullContext;
-
-use craft_gpu::{f16_to_f32, f16_to_f32_fast};
 
 use crate::{EchoProvider, MaskProvider, NoopProvider, PremulCompositeProvider, ReadbackProvider, register_all, register_all_into};
 

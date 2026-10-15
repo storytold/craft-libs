@@ -43,7 +43,6 @@ fn unknown_provider_is_fault() {
 }
 
 #[test]
-#[test]
 fn f16_to_f32_matches_fast_for_one() {
     let h = 0x3c00u16;
     assert!((f16_to_f32(h) - 1.0).abs() < 1e-6);
