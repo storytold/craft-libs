@@ -621,7 +621,7 @@ fn apply<A: CloudApp>(app: &mut A, event: Event) {
         Event::Conversation(Ok(conversation)) => {
             let said = fill(app, "Opened in {}", &conversation.name);
             app.cloud_mut().status = Some(said);
-            app.open_url(&conversation.url);
+            app.open_conversation(&conversation.url);
         }
         Event::Conversation(Err(fault)) => {
             let text = fault.text(noun);
