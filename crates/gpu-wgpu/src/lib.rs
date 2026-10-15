@@ -38,7 +38,7 @@ pub fn probe_caps() -> DeviceCaps {
 
     #[cfg(all(not(target_arch = "wasm32"), not(feature = "adapter-probe")))]
     {
-        return probe_fallback("wgpu", "probe-not-run");
+        probe_fallback("wgpu", "probe-not-run")
     }
 
     #[cfg(target_arch = "wasm32")]

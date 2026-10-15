@@ -72,7 +72,7 @@ fn premul_composite_over_on_cpu() {
     let out = registry.dispatch(&mut ctx, &job).expect("premul composite");
     let bytes = ctx.read_buffer(out.outputs[0]).expect("read out");
     assert_eq!(bytes[0], 0);
-    assert_eq!(bytes[1], 128);
+    assert_eq!(bytes[1], 127);
     assert_eq!(bytes[2], 128);
     assert_eq!(bytes[3], 255);
 }

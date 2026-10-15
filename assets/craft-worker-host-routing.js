@@ -14,6 +14,10 @@
 //     // Default implementation is installed by opfs-flush.js when importScripts succeeds.
 //   };
 
+// In-worker pending buffer: key -> latest bytes (warm-tier coalescing mirrors MirrorStore).
+// storage_put accumulates entries; storage_flush drains them into craftRuntimeFlushPending.
+const pendingBuffer = new Map();
+
 const STUB_CAPS = {
   backend_name: 'worker-host-stub',
   device_name: 'pending-wasm',
@@ -57,12 +61,19 @@ async function dispatchGpuJobs(port, data) {
   }
 }
 
-async function dispatchStorageFlush(port, data) {
+async function dispatchStorageFlush(port, _data) {
+  // Drain buffered storage_put entries (latest bytes per key) into the flush payload.
+  const pending = [];
+  for (const [key, bytes] of pendingBuffer) {
+    pending.push({ key, bytes });
+  }
+  pendingBuffer.clear();
+
   const hook = globalThis.craftRuntimeFlushPending;
   let pendingCount = 0;
   if (typeof hook === 'function') {
     try {
-      const result = await hook(data);
+      const result = await hook({ pending });
       pendingCount =
         result && typeof result.pending_count === 'number'
           ? result.pending_count
@@ -71,6 +82,8 @@ async function dispatchStorageFlush(port, data) {
       postError(port, err);
       return;
     }
+  } else {
+    pendingCount = pending.length;
   }
   port.postMessage({ type: 'storage_flushed', pending_count: pendingCount });
 }
@@ -99,6 +112,9 @@ function handleHostMessage(port, data) {
       port.postMessage({ type: 'ready', caps: STUB_CAPS });
       return;
     case 'storage_put':
+      if (data.key) {
+        pendingBuffer.set(String(data.key), data.bytes);
+      }
       return;
     case 'storage_flush':
       void dispatchStorageFlush(port, data);
