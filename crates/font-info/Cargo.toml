@@ -1,0 +1,17 @@
+[package]
+name = "craft-font-info"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+description = "What a font face offers for fine typography: variation axes, named instances and OpenType features with the font's own names"
+
+[lints]
+workspace = true
+
+[dependencies]
+skrifa = "0.44"
+
+[dev-dependencies]
+write-fonts = "0.54"
