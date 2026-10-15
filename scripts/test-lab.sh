@@ -16,10 +16,12 @@ PACKAGES=(
   craft-runtime
 )
 
-cargo fmt -p "${PACKAGES[@]}"
 cargo fmt --check
-cargo test -p "${PACKAGES[@]}"
+for pkg in "${PACKAGES[@]}"; do
+  cargo test -p "$pkg"
+done
 cargo test -p craft-runtime --features web,shared-worker
 node tests/worker-host-protocol.mjs
 node tests/opfs-flush.mjs
+node tests/fs-access-host.mjs
 echo "craft-libs runtime tests OK"
