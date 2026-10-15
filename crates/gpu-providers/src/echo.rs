@@ -13,9 +13,6 @@ impl GpuProvider for EchoProvider {
         if let Some(&h) = job.inputs.first() {
             data.extend_from_slice(&ctx.read_buffer(h)?);
         }
-        Ok(GpuJobOutcome {
-            outputs: job.outputs.clone(),
-            data: Some(data),
-        })
+        Ok(GpuJobOutcome { outputs: job.outputs.clone(), data: Some(data) })
     }
 }

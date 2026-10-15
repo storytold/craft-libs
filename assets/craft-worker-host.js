@@ -57,7 +57,10 @@ function handleHostMessage(port, data) {
     case 'init':
       port.postMessage({ type: 'ready', caps: STUB_CAPS });
       return;
+    case 'storage_put':
+      return;
     case 'storage_flush':
+      port.postMessage({ type: 'storage_flushed', pending_count: 0 });
       return;
     case 'gpu_jobs':
       void dispatchGpuJobs(port, data);

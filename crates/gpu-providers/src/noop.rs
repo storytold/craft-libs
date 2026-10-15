@@ -8,14 +8,7 @@ impl GpuProvider for NoopProvider {
         "craft.noop"
     }
 
-    fn run(
-        &self,
-        _ctx: &mut dyn GpuContext,
-        job: &GpuJob,
-    ) -> Result<GpuJobOutcome, GpuFault> {
-        Ok(GpuJobOutcome {
-            outputs: job.outputs.clone(),
-            data: None,
-        })
+    fn run(&self, _ctx: &mut dyn GpuContext, job: &GpuJob) -> Result<GpuJobOutcome, GpuFault> {
+        Ok(GpuJobOutcome { outputs: job.outputs.clone(), data: None })
     }
 }

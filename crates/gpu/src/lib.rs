@@ -3,14 +3,7 @@
 //! Application crates register [`GpuProvider`] implementations; generic hosts dispatch
 //! [`GpuJob`] values by [`ProviderId`] without importing app project types.
 
-#![deny(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::panic,
-    clippy::unimplemented,
-    clippy::todo,
-    clippy::unreachable
-)]
+#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 mod caps;
 mod chunk;

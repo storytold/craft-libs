@@ -15,3 +15,19 @@ lab tasks wdunn001/craft-libs#4–#10.
 ## Static assets
 
 Ship `assets/craft-worker-host.js` (+ brotli sibling) from CollabCraft static host.
+
+## Local test (Windows without MSVC)
+
+```powershell
+node tests/worker-host-protocol.mjs
+.\scripts\test-local.ps1
+```
+
+Podman runs `cargo fmt --check` and all runtime crate tests inside `rust:bookworm`.
+
+## Worker message flow
+
+1. `init` → `ready` (caps)
+2. `storage_put` → (no reply); read via mirror on worker
+3. `storage_flush` → `storage_flushed { pending_count }`
+4. `gpu_jobs` → `gpu_batch_done` or `error`

@@ -1,6 +1,7 @@
 use craft_gpu::{GpuContext, GpuFault, ProviderRegistry, WorkerKind};
 use craft_gpu_null::NullContext;
 use craft_gpu_providers::register_all_into;
+use craft_tier_store::{DefaultTierPolicy, MirrorStore, StoreKey};
 use craft_worker_host::{HostMessage, WorkerMessage};
 
 use crate::dispatch_gpu_jobs;
@@ -15,11 +16,7 @@ pub enum ContextBackend {
 }
 
 fn default_worker_kind() -> WorkerKind {
-    if cfg!(feature = "shared-worker") {
-        WorkerKind::SharedWorker
-    } else {
-        WorkerKind::Main
-    }
+    if cfg!(feature = "shared-worker") { WorkerKind::SharedWorker } else { WorkerKind::Main }
 }
 
 /// Configures registry + GPU context before [`Runtime::build`].
@@ -28,6 +25,7 @@ pub struct RuntimeBuilder {
     backend: ContextBackend,
     worker_kind: WorkerKind,
     default_providers: bool,
+    mirror_budget: usize,
 }
 
 impl Default for RuntimeBuilder {
@@ -43,7 +41,13 @@ impl RuntimeBuilder {
             backend: ContextBackend::Null,
             worker_kind: default_worker_kind(),
             default_providers: false,
+            mirror_budget: 64 * 1024 * 1024,
         }
+    }
+
+    pub fn mirror_byte_budget(mut self, bytes: usize) -> Self {
+        self.mirror_budget = bytes;
+        self
     }
 
     pub fn with_worker_kind(mut self, kind: WorkerKind) -> Self {
@@ -84,15 +88,9 @@ impl RuntimeBuilder {
         let ctx = match self.backend {
             ContextBackend::Null => RuntimeContext::Null(NullContext::new(self.worker_kind)),
             #[cfg(feature = "web")]
-            ContextBackend::Wgpu => {
-                RuntimeContext::Wgpu(craft_gpu_wgpu::WgpuContext::new(self.worker_kind))
-            }
+            ContextBackend::Wgpu => RuntimeContext::Wgpu(craft_gpu_wgpu::WgpuContext::new(self.worker_kind)),
         };
-        Runtime {
-            registry: self.registry,
-            ctx,
-            app_id: None,
-        }
+        Runtime { registry: self.registry, ctx, mirror: MirrorStore::new(DefaultTierPolicy, self.mirror_budget), app_id: None }
     }
 }
 
@@ -119,11 +117,7 @@ impl GpuContext for RuntimeContext {
         }
     }
 
-    fn upload_buffer(
-        &mut self,
-        label: &str,
-        bytes: &[u8],
-    ) -> Result<craft_gpu::HandleId, GpuFault> {
+    fn upload_buffer(&mut self, label: &str, bytes: &[u8]) -> Result<craft_gpu::HandleId, GpuFault> {
         match self {
             Self::Null(c) => c.upload_buffer(label, bytes),
             #[cfg(feature = "web")]
@@ -152,6 +146,7 @@ impl GpuContext for RuntimeContext {
 pub struct Runtime {
     registry: ProviderRegistry,
     ctx: RuntimeContext,
+    mirror: MirrorStore<DefaultTierPolicy>,
     app_id: Option<String>,
 }
 
@@ -168,30 +163,36 @@ impl Runtime {
         self.ctx.caps()
     }
 
+    pub fn store_get(&mut self, key: &StoreKey) -> Option<Vec<u8>> {
+        self.mirror.get(key).map(|s| s.to_vec())
+    }
+
+    pub fn upload_buffer(&mut self, label: &str, bytes: &[u8]) -> Result<craft_gpu::HandleId, GpuFault> {
+        self.ctx.upload_buffer(label, bytes)
+    }
+
     /// Handle a single host → worker message; may produce zero or more replies.
     pub fn handle_host_message(&mut self, msg: HostMessage) -> Vec<WorkerMessage> {
         match msg {
-            HostMessage::Init {
-                app_id,
-                capabilities: _,
-            } => {
+            HostMessage::Init { app_id, capabilities: _ } => {
                 self.app_id = Some(app_id);
-                vec![WorkerMessage::Ready {
-                    caps: self.ctx.caps(),
-                }]
+                vec![WorkerMessage::Ready { caps: self.ctx.caps() }]
             }
-            HostMessage::GpuJobs { batch_id, jobs } => {
-                match dispatch_gpu_jobs(&self.registry, &mut self.ctx, &jobs) {
-                    Ok(outcomes) => vec![WorkerMessage::GpuBatchDone {
-                        batch_id,
-                        outcomes,
-                    }],
-                    Err(fault) => vec![WorkerMessage::Error {
-                        message: fault.to_string(),
-                    }],
-                }
+            HostMessage::StoragePut { key, bytes } => {
+                self.mirror.put(StoreKey::new(key), bytes);
+                Vec::new()
             }
-            HostMessage::StorageFlush | HostMessage::Cancel { .. } => Vec::new(),
+            HostMessage::StorageFlush => {
+                let pending = self.mirror.take_pending();
+                let count = pending.len();
+                // Warm-tier OPFS write would run here in wasm glue; native tests only ack count.
+                vec![WorkerMessage::StorageFlushed { pending_count: count }]
+            }
+            HostMessage::GpuJobs { batch_id, jobs } => match dispatch_gpu_jobs(&self.registry, &mut self.ctx, &jobs) {
+                Ok(outcomes) => vec![WorkerMessage::GpuBatchDone { batch_id, outcomes }],
+                Err(fault) => vec![WorkerMessage::Error { message: fault.to_string() }],
+            },
+            HostMessage::Cancel { .. } => Vec::new(),
         }
     }
 }
