@@ -123,7 +123,17 @@ Autosave policy (`recovery_policy`, revision/dirty/clean) remains in `filmcraft-
 - [ ] Replace direct `opfs::write*` calls in `recovery.rs` with `MirrorStore` puts keyed as above.
 - [ ] Wire `HostMessage::StorageFlush` (or runtime equivalent) to drain pending writes to OPFS on idle / visibility hidden.
 - [ ] Keep `keep_media` / `restore_media` semantics: blob store under `media/`, register into virtual `fs` table.
-- [ ] Preserve query flags: `?fresh`, `?norecover` (behavior documented in `lib.rs` startup).
+- [ ] Preserve query flags (behavior documented in `lib.rs` startup):
+
+  | Flag | Effect |
+  | --- | --- |
+  | `?fresh` | Skips recovery; starts from a blank project. |
+  | `?norecover` | Suppresses the recovery dialog even when a dirty autosave exists. |
+  | `?craftRuntime` | Enables the craft-runtime code path (feature flag on). Off by default until storage + worker smoke tests pass. |
+  | `?webgl` | Forces WebGL2 backend; bypasses WebGPU adapter selection. Use in CI or on hardware without WebGPU. `gpu_jobs` requiring compute shaders are nooped or return an error outcome. |
+  | `?nogpuworkers` | Disables GPU dispatch to the SharedWorker / DedicatedWorker. Jobs run on the main thread (or are nooped). Useful for exercising the storage layer in isolation. |
+
+  Flags may be combined: `?craftRuntime&nogpuworkers` exercises storage + flush with no GPU overhead.
 - [ ] Expose `opfs` availability via `set_info("opfs", …)` using runtime probe.
 
 ### C. Worker / GPU (#5, #6, #7, #8)
@@ -144,6 +154,7 @@ Autosave policy (`recovery_policy`, revision/dirty/clean) remains in `filmcraft-
 - [ ] Manual: dirty autosave → reload → recovery dialog; media restored from OPFS.
 - [ ] GPU: mask/LUT CPU vs GPU parity (existing `filmcraft-gpu` tests) against new provider ids.
 - [ ] SharedWorker: tab refresh leaves worker alive; second tab shares wasm module per #5.
+- [ ] DedicatedWorker smoke: block `craft-worker-host.js` (DevTools → Network → Block URL pattern) or point the worker URL at `craft-dedicated-worker.js`; confirm `WorkerKind::DedicatedWorker` in `Ready` caps and the same `GpuBatchDone` outcomes as the SharedWorker path. See [web-runtime.md § SharedWorker vs dedicated worker](./web-runtime.md) for the broker-only pattern when WebGPU is unavailable inside a SharedWorker.
 
 ---
 
@@ -161,3 +172,15 @@ Autosave policy (`recovery_policy`, revision/dirty/clean) remains in `filmcraft-
 - [web-runtime.md](./web-runtime.md) — repin order and static assets  
 - [gpu-backends.md](./gpu-backends.md) — `craft-gpu-wgpu` / null  
 - [gpu-providers.md](./gpu-providers.md) — provider id namespaces and dependency lint  
+
+---
+
+## Known console noise
+
+These messages appear on a clean load and are **not actionable** unless the text or frequency changes:
+
+| Message prefix | Source | Why it appears | Action |
+| --- | --- | --- | --- |
+| `Permissions-Policy: unrecognized-feature "…"` | Browser | The HTTP response from CollabCraft (or your static host) includes Permissions-Policy directives that the current browser version does not recognize. | None. File a task only if a new directive was intentionally added and the browser should support it. |
+| `powerPreference: "high-performance" is not honored` (or similar) | Browser / WebGPU | Some browsers log this when the WebGPU adapter request specifies `powerPreference` but the platform has only one discrete GPU or the hint is otherwise ignored. GPU init proceeds normally. | None. |
+| `[egui] Setting theme to Dark` / `[egui] Setting theme to Light` | egui | egui reads the OS color scheme on first paint and logs the resolved theme. Expected on every cold start; eframe's `WebApp` receives a `SetTheme` event before the first frame. | None. |

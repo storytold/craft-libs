@@ -304,7 +304,31 @@ Reference implementation pieces in craft-libs:
 | Disk cache | Enable cache; scrub timeline; reload — hits increment; corrupt file evicted |
 | Storage UI | `storage.info` / Settings ▸ Disk — counts match |
 | SharedWorker | Init → `Ready { caps }`; noop `craft.noop` job batch returns outcomes |
+| DedicatedWorker smoke | Force fallback (see §8.2); same `GpuBatchDone` outcomes, different worker kind in caps |
 | Compat runner | `cargo xtask compat` against `effectcraft-web` when xtask knows wasm consumers (future) |
+
+### 8.1 Dev query flags
+
+Append these when loading the app to toggle the craft-runtime code path or GPU constraints during testing:
+
+| Flag | Effect |
+| --- | --- |
+| `?craftRuntime` | Enables the craft-runtime code path (equivalent to turning the feature flag on at runtime). Off by default until Phase C CI is green. |
+| `?webgl` | Forces WebGL2 backend; skips WebGPU adapter selection. Use on hardware without WebGPU support, or in headless CI where a real GPU device is unavailable. `gpu_jobs` that require compute shaders are nooped or return an error outcome. |
+| `?nogpuworkers` | Disables GPU dispatch to the SharedWorker / DedicatedWorker. Batches run on the main thread (or are nooped). Useful for isolating storage-layer changes without GPU interference. |
+
+Flags may be combined: `?craftRuntime&nogpuworkers` exercises the storage + flush path with no GPU overhead.
+
+### 8.2 DedicatedWorker smoke vs SharedWorker
+
+Load the app under both worker modes and confirm both complete a noop `craft.noop` batch before moving to Phase D:
+
+| Mode | How to trigger | Expected console |
+| --- | --- | --- |
+| SharedWorker (default) | No extra flags; app loads `craft-worker-host.js` from CollabCraft or your static host | `[craft-worker] ready` with `WorkerKind::SharedWorker` in caps |
+| DedicatedWorker fallback | Block `craft-worker-host.js` in DevTools → Network → Block URL pattern, or point the worker URL at `craft-dedicated-worker.js` explicitly | `[craft-worker] ready` with `WorkerKind::DedicatedWorker` in caps |
+
+Both paths must return `WorkerMessage::GpuBatchDone` with all-success outcomes. Message tags (`init`, `gpu_jobs`, `storage_flush`) are identical between modes — only the `worker_kind` field in `Ready` differs. See [web-runtime.md § SharedWorker vs dedicated worker](./web-runtime.md) for the broker-only SharedWorker pattern when WebGPU is unavailable inside a SharedWorker context.
 
 ---
 
@@ -342,3 +366,15 @@ Plan explicitly for these so key preservation is not accidentally broken:
 5. **PR5:** Browse / cold tier metadata with `ExternalVolume` (optional, after #4 UI).
 
 Each PR should cite [wdunn001/craft-libs#9](https://github.com/wdunn001/craft-libs/issues/9) and confirm §2 key tables unchanged.
+
+---
+
+## Known console noise
+
+These messages appear on a clean load and are **not actionable** unless the text or frequency changes:
+
+| Message prefix | Source | Why it appears | Action |
+| --- | --- | --- | --- |
+| `Permissions-Policy: unrecognized-feature "…"` | Browser | The HTTP response from CollabCraft (or your static host) includes Permissions-Policy directives that the current browser version does not recognize. | None. File a task only if a new directive was intentionally added and the browser should support it. |
+| `powerPreference: "high-performance" is not honored` (or similar) | Browser / WebGPU | Some browsers log this when the WebGPU adapter request specifies `powerPreference` but the platform has only one discrete GPU or the hint is otherwise ignored. GPU init proceeds normally. | None. |
+| `[egui] Setting theme to Dark` / `[egui] Setting theme to Light` | egui | egui reads the OS color scheme on first paint and logs the resolved theme. Expected on every cold start before the app has its own saved preference. | None. |
