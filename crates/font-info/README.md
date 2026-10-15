@@ -8,7 +8,9 @@ font controls, OpenType feature toggles and their previews:
 - **Named instances**: name ("Bold Condensed") and coordinates.
 - **OpenType layout features** (`GSUB` and `GPOS`): every tag once, sorted; the font's UI name for
   stylistic sets (`ss01`–`ss20`) and character variants (`cv01`–`cv99`); and the characters each
-  substitution changes, for a preview that shows exactly those.
+  substitution changes, for a preview that shows exactly those: how many in all, and a sample of
+  up to 24 taking a few of each kind in turn (`012ABCabc345…`), so even a short preview shows
+  that a set changes letters as well as figures.
 
 Extracted from PhotoCraft (`photocraft-text`, storytold/photocraft#218).
 

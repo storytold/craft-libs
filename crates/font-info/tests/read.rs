@@ -98,6 +98,7 @@ fn reads_axes_instances_and_named_features() {
     assert_eq!((ss01.name.as_deref(), ss01.sample.as_str()), (Some("Open digits"), "1"));
     let cv11 = d.feature("cv11").unwrap();
     assert_eq!((cv11.name.as_deref(), cv11.sample.as_str()), (Some("Single-story a"), "a"));
+    assert_eq!((ss01.changed, cv11.changed, d.feature("kern").map(|f| f.changed)), (1, 1, Some(0)));
     assert_eq!(d.feature("kern").map(|f| (f.name.clone(), f.sample.clone())), Some((None, String::new())), "positioning has no sample");
     assert!(d.has_feature("kern") && !d.has_feature("liga") && d.feature("zzzz").is_none());
 }

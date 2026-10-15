@@ -30,6 +30,8 @@ use skrifa::{FontRef, MetadataProvider, string::StringId};
 
 /// Most characters kept as a feature's sample.
 const SAMPLE_CHARS: usize = 24;
+/// A sample takes this many characters of one kind before moving to the next kind.
+const RUN: usize = 3;
 /// Most features read from one table, most lookups followed per feature, and most glyphs read
 /// from one coverage table: fonts are input, and a malformed one can claim anything.
 const MAX_FEATURES: usize = 512;
@@ -66,9 +68,13 @@ pub struct FeatureDetail {
     /// The font's UI name for a stylistic set or character variant (`ss01`–`ss20`,
     /// `cv01`–`cv99` feature parameters), if it gives one.
     pub name: Option<String>,
-    /// Characters the feature substitutes, in a readable order (letters and figures first); empty
-    /// for positioning features and for substitutions only reachable through context.
+    /// Up to 24 of the characters the feature substitutes, a few of each kind in turn (figures,
+    /// capitals, lower case, other letters, the rest: `012ABCabc345DEF…`), so any prefix of it
+    /// shows every kind the feature changes. Empty for positioning features and for substitutions
+    /// only reachable through context.
     pub sample: String,
+    /// How many characters the feature substitutes in all (the sample shows at most 24).
+    pub changed: usize,
 }
 
 /// Everything [`read`] reads from one face.
@@ -150,7 +156,7 @@ fn read_face(font: &FontRef) -> FaceDetails {
     {
         for record in list.feature_records().iter().take(MAX_FEATURES) {
             let tag = record.feature_tag().to_string();
-            features.entry(tag.clone()).or_insert(FeatureDetail { tag, name: None, sample: String::new() });
+            features.entry(tag.clone()).or_insert(FeatureDetail { tag, name: None, sample: String::new(), changed: 0 });
         }
     }
     FaceDetails { axes, instances, features: features.into_values().collect() }
@@ -171,7 +177,7 @@ fn gsub_features(
     let mut glyphs: BTreeMap<String, BTreeSet<u16>> = BTreeMap::new();
     for record in list.feature_records().iter().take(MAX_FEATURES) {
         let tag = record.feature_tag().to_string();
-        let entry = out.entry(tag.clone()).or_insert(FeatureDetail { tag: tag.clone(), name: None, sample: String::new() });
+        let entry = out.entry(tag.clone()).or_insert(FeatureDetail { tag: tag.clone(), name: None, sample: String::new(), changed: 0 });
         let Ok(feature) = record.feature(data) else { continue };
         if entry.name.is_none() {
             entry.name = match feature.feature_params() {
@@ -190,7 +196,9 @@ fn gsub_features(
     }
     for (tag, set) in glyphs {
         if let Some(entry) = out.get_mut(&tag) {
-            entry.sample = sample(set.iter().filter_map(|g| reverse.get(g).copied()));
+            let chars: BTreeSet<char> = set.iter().filter_map(|g| reverse.get(g).copied()).collect();
+            entry.changed = chars.len();
+            entry.sample = sample(chars);
         }
     }
     Ok(())
@@ -228,23 +236,38 @@ fn reverse_cmap(font: &FontRef) -> BTreeMap<u16, char> {
     out
 }
 
-/// A readable sample from substituted characters: ASCII letters and figures first, then other
-/// letters and figures, then the rest, at most [`SAMPLE_CHARS`].
-fn sample(chars: impl Iterator<Item = char>) -> String {
-    let mut chars: Vec<char> = chars.collect::<BTreeSet<char>>().into_iter().collect();
-    chars.sort_by_key(|c| {
-        (
-            if c.is_ascii_alphanumeric() {
-                0
-            } else if c.is_alphanumeric() {
-                1
-            } else {
-                2
-            },
-            *c,
-        )
-    });
-    chars.into_iter().take(SAMPLE_CHARS).collect()
+/// A readable sample from substituted characters: runs of [`RUN`] of each kind in turn (ASCII
+/// figures, ASCII capitals, ASCII lower case, other letters and figures, the rest), each kind in
+/// code point order, at most [`SAMPLE_CHARS`]. Taking kinds in turn rather than one after the
+/// other keeps a set of circled figures *and* letters from reading as figures only when a
+/// preview shows just the start.
+fn sample(chars: BTreeSet<char>) -> String {
+    let kind = |c: char| match c {
+        '0'..='9' => 0,
+        'A'..='Z' => 1,
+        'a'..='z' => 2,
+        c if c.is_alphanumeric() => 3,
+        _ => 4,
+    };
+    let mut kinds: [Vec<char>; 5] = Default::default();
+    for c in chars {
+        if let Some(k) = kinds.get_mut(kind(c)) {
+            k.push(c);
+        }
+    }
+    let mut queues: Vec<std::vec::IntoIter<char>> = kinds.into_iter().filter(|k| !k.is_empty()).map(Vec::into_iter).collect();
+    let mut out = String::new();
+    let mut n = 0;
+    while n < SAMPLE_CHARS && !queues.is_empty() {
+        queues.retain_mut(|q| {
+            for c in q.by_ref().take(RUN.min(SAMPLE_CHARS - n)) {
+                out.push(c);
+                n += 1;
+            }
+            q.len() > 0
+        });
+    }
+    out
 }
 
 #[cfg(test)]
@@ -252,9 +275,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn sample_puts_ascii_letters_and_figures_first() {
-        assert_eq!(sample("é!a1Z".chars()), "1Zaé!");
-        assert_eq!(sample("x".repeat(100).chars()), "x");
-        assert_eq!(sample(('a'..='z').chain('A'..='Z')).chars().count(), SAMPLE_CHARS);
+    fn sample_takes_each_kind_in_turn() {
+        let set = |s: &str| s.chars().collect::<BTreeSet<char>>();
+        assert_eq!(sample(set("é!a1Z")), "1Zaé!");
+        assert_eq!(sample(set(&"x".repeat(100))), "x");
+        // Squared figures and capitals: a short prefix already has both.
+        let squared = sample(('0'..='9').chain('A'..='Z').collect());
+        assert_eq!(squared, "012ABC345DEF678GHI9JKLMN");
+        assert_eq!(squared.chars().count(), SAMPLE_CHARS);
+        // One kind only keeps code point order.
+        assert_eq!(sample(('a'..='z').collect()), "abcdefghijklmnopqrstuvwx");
+        assert_eq!(sample(BTreeSet::new()), "");
     }
 }
