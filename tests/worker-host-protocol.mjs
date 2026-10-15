@@ -129,4 +129,78 @@ assert.equal(JSON.stringify(cancel), '{"type":"cancel","batch_id":99}');
   assert.equal(messages.length, 0);
 }
 
+// -- storage_put buffering + flush drains buffer --
+{
+  const flushed = [];
+  const { handle, port, messages } = loadRouting({
+    craftRuntimeFlushPending: async ({ pending }) => {
+      flushed.push(...pending);
+      return { pending_count: pending.length };
+    },
+  });
+  handle(port, storagePut);
+  handle(port, { type: 'storage_put', key: 'files/vid.mp4', bytes: [9, 8, 7] });
+  // Before flush: no storage_flushed messages yet.
+  assert.equal(messages.length, 0);
+
+  handle(port, storageFlush);
+  await new Promise((r) => setImmediate(r));
+
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].type, 'storage_flushed');
+  assert.equal(messages[0].pending_count, 2);
+  assert.equal(flushed.length, 2);
+  assert.equal(flushed[0].key, 'config/prefs.json');
+  assert.equal(flushed[1].key, 'files/vid.mp4');
+}
+
+// -- Duplicate storage_put coalesces (latest bytes win) --
+{
+  const flushed = [];
+  const { handle, port, messages } = loadRouting({
+    craftRuntimeFlushPending: async ({ pending }) => {
+      flushed.push(...pending);
+      return { pending_count: pending.length };
+    },
+  });
+  handle(port, { type: 'storage_put', key: 'config/prefs.json', bytes: [1] });
+  handle(port, { type: 'storage_put', key: 'config/prefs.json', bytes: [2, 2] });
+  handle(port, storageFlush);
+  await new Promise((r) => setImmediate(r));
+
+  assert.equal(flushed.length, 1, 'coalesced to one entry');
+  assert.deepEqual(Array.from(flushed[0].bytes), [2, 2], 'latest bytes kept');
+  assert.equal(messages[0].pending_count, 1);
+}
+
+// -- Second flush after buffer drained is empty --
+{
+  const callLog = [];
+  const { handle, port, messages } = loadRouting({
+    craftRuntimeFlushPending: async ({ pending }) => {
+      callLog.push(pending.length);
+      return { pending_count: pending.length };
+    },
+  });
+  handle(port, storagePut);
+  handle(port, storageFlush);
+  await new Promise((r) => setImmediate(r));
+  handle(port, storageFlush);
+  await new Promise((r) => setImmediate(r));
+
+  assert.equal(callLog[0], 1, 'first flush: 1 entry');
+  assert.equal(callLog[1], 0, 'second flush: buffer empty');
+}
+
+// -- storage_flush with no hook still posts storage_flushed --
+{
+  const { handle, port, messages } = loadRouting();
+  handle(port, storagePut);
+  handle(port, storageFlush);
+  await new Promise((r) => setImmediate(r));
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].type, 'storage_flushed');
+  assert.equal(messages[0].pending_count, 1);
+}
+
 console.log('worker-host-protocol.mjs OK');

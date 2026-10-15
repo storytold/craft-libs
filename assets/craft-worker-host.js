@@ -14,6 +14,12 @@ try {
   // Optional warm-tier flush hook; tests may assign craftRuntimeFlushPending manually.
 }
 
+try {
+  importScripts('fs-access-host.js');
+} catch {
+  // Optional cold-tier FS Access host; browser-only.
+}
+
 self.onconnect = (event) => {
   const port = event.ports[0];
   connections.add(port);
