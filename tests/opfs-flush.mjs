@@ -3,14 +3,14 @@
  */
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dirname, join } from 'node:path';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const flushPath = join(root, 'assets/opfs-flush.js');
 
 readFileSync(flushPath, 'utf8');
-await import(flushPath);
+await import(pathToFileURL(flushPath).href);
 
 const hook = globalThis.craftRuntimeFlushPending;
 assert.equal(typeof hook, 'function');

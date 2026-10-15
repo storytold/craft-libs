@@ -1,4 +1,6 @@
-use craft_gpu::{GpuContext, GpuFault, GpuJob, GpuJobOutcome, GpuJobParams, GpuProvider};
+use craft_gpu::{GpuContext, GpuFault, GpuJob, GpuJobOutcome, GpuProvider};
+
+use crate::params::parse_u32;
 
 /// CPU stand-in for FilmCraft mask composite until WGSL runs on wgpu.
 pub struct MaskProvider;
@@ -30,12 +32,4 @@ impl GpuProvider for MaskProvider {
         let handle = ctx.upload_buffer("craft.mask.out", &out)?;
         Ok(GpuJobOutcome { outputs: vec![handle], data: None })
     }
-}
-
-fn parse_u32(params: &GpuJobParams, prefix: &[u8]) -> Option<u32> {
-    let bytes = params.0.as_slice();
-    let start = bytes.windows(prefix.len()).position(|w| w == prefix)? + prefix.len();
-    let rest = &bytes[start..];
-    let end = rest.iter().position(|&b| b == b',' || b == b';').unwrap_or(rest.len());
-    std::str::from_utf8(&rest[..end]).ok()?.parse().ok()
 }
