@@ -52,3 +52,13 @@ The PDF spooler in crates/print is extracted from:
 
 The Windows printer duplex-capability query and parser additionally draw on PdfCraft,
 crates/print/src/spool.rs, revision fb97ce958dfe92b6762ce40615c7836551710139 (PR #1154), under the same licenses above.
+
+The native Windows backend (crates/print/src/windows.rs, ticket.rs and the printer-list and
+Windows spooler tests) is ported from PdfCraft's native printing work, which carries the
+approach of PdfCraft PR #599 (Win32 printer list, Windows.Data.Pdf into the XPS print API, the
+PrintTicket and its driver-paper preference):
+- PdfCraft, crates/print/src/spool/windows.rs, spool.rs and tests.rs, branch
+  claude/native-windows-print-826c99 of PR #1132, revision a435117 (jcl-bit/printcraft).
+  https://github.com/storytold/pdfcraft
+  Copyright (c) 2026 ArtCraft Team and the PdfCraft contributors.
+  Licensed MIT OR Apache-2.0.

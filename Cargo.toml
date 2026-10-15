@@ -11,13 +11,16 @@ repository = "https://github.com/storytold/craft-libs"
 
 [workspace.dependencies]
 # internal: add each crate here as `craft-<name> = { path = "crates/<name>" }`
+craft-atomic = { path = "crates/atomic" }
 craft-cloud = { path = "crates/cloud" }
 craft-gpu = { path = "crates/gpu" }
 craft-gpu-null = { path = "crates/gpu-null" }
 craft-gpu-providers = { path = "crates/gpu-providers" }
 craft-gpu-wgpu = { path = "crates/gpu-wgpu" }
 craft-print = { path = "crates/print" }
+craft-quit = { path = "crates/quit" }
 craft-runtime = { path = "crates/runtime" }
+craft-settings = { path = "crates/settings" }
 craft-tier-store = { path = "crates/tier-store" }
 craft-ui = { path = "crates/ui" }
 craft-worker-host = { path = "crates/worker-host" }

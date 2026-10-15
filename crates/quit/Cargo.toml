@@ -1,0 +1,27 @@
+[package]
+name = "craft-quit"
+description = "Quit a Craft app the platform's own way: on macOS through `-[NSApplication terminate:]`."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[features]
+# `on_close_request`: route an egui/eframe window close through the platform quit.
+egui = ["dep:egui"]
+# `install_app_menu`: a macOS app menu whose Quit (⌘Q) asks the app first, like the close button.
+menu = ["egui", "dep:muda"]
+
+[dependencies]
+egui = { workspace = true, optional = true }
+
+# Already in the apps' Cargo.lock: objc2 and objc2-app-kit through eframe, dispatch2 through its other dependencies.
+[target.'cfg(target_os = "macos")'.dependencies]
+dispatch2 = { version = "0.3.1", default-features = false, features = ["std"] }
+objc2 = { version = "0.6.4", default-features = false, features = ["std"] }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSApplication", "NSResponder"] }
+muda = { version = "0.21.2", default-features = false, optional = true }
+
+[lints]
+workspace = true

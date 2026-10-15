@@ -4,6 +4,7 @@
 embedded SVG catalogs; `buttons` paints accessible icon buttons; `tabs` handles tab fitting and
 interaction; `layout` provides toolbar fitting, split geometry and resize handles; `theme` shares widget-state styling.
 `docking` supplies transactional panel moves and an optional docking surface.
+`printing` supplies printer/job controls and asynchronous feedback used by WordCraft and GridCraft.
 The current delivery covers nine creative apps (DesignCraft, VectorCraft, PhotoCraft, FilmCraft, EffectCraft, CADCraft, PDFCraft, LightCraft and SoundCraft); prior basic and office adapters are separate. The [suite audit](../../docs/ui-components-audit.md#adoption-and-acceptance)
 records their scope and acceptance limits. Assets, complete themes, localization and command handling
 remain in each application. No icons, fonts or application engines are bundled.
@@ -210,6 +211,26 @@ This is a mechanism for coloring widgets, not a shared theme schema. Fonts, comp
 selection colors, shadows, spacing, context storage and preference serialization remain in each
 application. See the [eight-app comparison](../../docs/theme-infrastructure.md) for the exact
 common operation and the differences preserved by the adapters.
+
+## Print settings and feedback
+
+`printing::State` holds the transient printer selection, copies, duplex and grayscale settings,
+plus discovery and submission receivers. Hosts supply `Discover` and `Submit` workers; neither
+the state nor the controls invokes an OS spooler or generates PDF content. Apps map `Settings`
+to `craft-print::Job` and own the Print action, page selection, preview and export behavior.
+
+`State::show` takes a stable `egui::Id` and app-localized `Labels`. It draws the settings only;
+apps render typed `Feedback` using their own translations. `poll` requests occasional repaints
+while work is pending. Refresh disables submission until the new printer list arrives, preserves
+a still-present selection, and otherwise chooses the system default or first available printer.
+An empty or failed discovery cannot leave a stale printer ready to submit.
+
+`ready` is false while a job is pending. `begin` refuses replacing an active job receiver;
+dropping a receiver does not cancel a native job. Apps must test readiness before invoking the
+host submit callback and keep active work alive when closing a window. Queue-default duplex is
+represented by `None`, independently of explicit one-sided, long-edge or short-edge choices.
+Receipts and backend errors remain unmodified data for the app to display. These controls work
+on WASM too; browser PDF printing remains an app-owned service.
 
 ## Compatibility and checks
 
