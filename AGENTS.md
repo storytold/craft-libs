@@ -10,5 +10,8 @@ Shared Rust libraries for the Craft Apps. The shared standards live in
 - **New crates** go in `crates/<name>`, named `craft-<name>`, inherit the workspace package fields
   and lints, and are listed in `[workspace.dependencies]`.
 - **No app code.** A crate here must be useful to more than one app and must not depend on any app.
+- **Upstream-first UI:** Before building in-tree presentation widgets in application repos, inspect
+  [docs/ui-elements-map.md](docs/ui-elements-map.md). Reusable controls belong in `craft-ui` to avoid
+  duplication (see issue 67).
 - **Before merging:** `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`,
   `cargo test --workspace`.

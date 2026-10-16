@@ -44,6 +44,8 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   widget-state styling boundary.
 - [Panel docking](docs/ui-docking.md): validated panel moves, floating groups, workspace adapters
   and an optional egui docking surface.
+- [Master UI elements map](docs/ui-elements-map.md): complete catalog across all 13 Craft applications,
+  5 desktop shells, and duplicate widget mapping for issue 67.
 
 ## License and credits
 

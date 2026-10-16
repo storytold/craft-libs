@@ -4,7 +4,7 @@ The best first extraction is the embedded SVG icon catalog used by PhotoCraft, V
 
 The broader opportunity is a collection of reusable UI components. All twelve Rust Craft apps use egui 0.36, but their themes, document models, numeric fields and docking behavior have evolved differently. Shared components should accept small style values and return interactions; each app should continue to choose its layout, command, localization and document semantics.
 
-This covers item 3 of [craft-libs issue 2](https://github.com/storytold/craft-libs/issues/2). The [earlier four-app comparison](https://github.com/storytold/vectorcraft/issues/647) is useful background, but the findings below come from the pinned source revisions listed at the end. This is a source audit, not a claim that every application has passed interactive or cross-platform acceptance.
+This covers item 3 of [craft-libs issue 2](https://github.com/storytold/craft-libs/issues/2). The [earlier four-app comparison](https://github.com/storytold/vectorcraft/issues/647) is useful background, but the findings below come from the pinned source revisions listed at the end. This is a source audit, not a claim that every application has passed interactive or cross-platform acceptance. For the comprehensive thirteen-application catalog across all 1,290 UI implementation files and the 12 overlapping component families from [issue 67](https://github.com/storytold/craft-libs/issues/67), see the [UI elements map](ui-elements-map.md).
 
 ## Scope and current libraries
 
