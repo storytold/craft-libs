@@ -371,6 +371,7 @@ See the [release notes](CHANGELOG.md) for included functionality and known limit
   nearest and bilinear sampling that repeats or clamps, resizing and display conversion. Sizes are
   bounded by `Limits`. From MaterialCraft.
 - [`craft-ui`](crates/ui/README.md): SVG catalogs, icon buttons, tabs, pane controls, transactional docking, print settings and theme helpers for egui frontends;
+- [`craft-ai`](crates/ai/README.md) *(spec)*: AI provider abstraction — BYO API keys (OpenAI-compatible) and one-click curated local models with capability probing, resumable checksummed downloads, and document segmentation that protects markup while translating prose;
   assets, themes, localization and command handling stay in each app. Requires Rust 1.95 or later.
 - [`craft-vcard`](crates/vcard/README.md): vCard contacts, from MailCraft: vCard 2.1, 3.0 and 4.0 read
   (legacy character sets, quoted-printable, labels and Apple label groups, `KEY` certificates and
