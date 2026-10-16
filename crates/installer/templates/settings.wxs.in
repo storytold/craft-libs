@@ -1,0 +1,34 @@
+  <Fragment>
+    <!-- Keep MSI registration for repair, upgrades and managed removal, but let Settings
+         invoke our explicit UI command instead of Windows Installer's basic-UI ARP path. -->
+    <Property Id="ARPSYSTEMCOMPONENT" Value="1" />
+    <?if $(sys.BUILDARCH) = x86 ?>
+      <?define CraftMsiSystemFolder = SystemFolder ?>
+    <?else ?>
+      <?define CraftMsiSystemFolder = System64Folder ?>
+    <?endif ?>
+    <ComponentGroup Id="CraftInstallerSettings" Directory="INSTALLFOLDER">
+      <Component Id="CraftInstallerSettingsEntry" Guid="*">
+        <RegistryKey Root="@@REGISTRY_ROOT@@" Key="Software\Microsoft\Windows\CurrentVersion\Uninstall\Craft.@@APP@@" ForceDeleteOnUninstall="yes">
+          <!-- Legacy Launchers match the canonical MSI name exactly; keep this alias distinct. -->
+          <RegistryValue Name="DisplayName" Type="string" Value="[ProductName] (Craft Apps)" KeyPath="yes" />
+          <RegistryValue Name="DisplayVersion" Type="string" Value="[ProductVersion]" />
+          <RegistryValue Name="Publisher" Type="string" Value="[Manufacturer]" />
+          <RegistryValue Name="DisplayIcon" Type="string" Value="&quot;[INSTALLFOLDER]@@EXE@@&quot;,0" />
+          <RegistryValue Name="InstallLocation" Type="string" Value="[INSTALLFOLDER]" />
+          <RegistryValue Name="URLInfoAbout" Type="string" Value="[ARPURLINFOABOUT]" />
+          <RegistryValue Name="URLUpdateInfo" Type="string" Value="[ARPURLUPDATEINFO]" />
+          <RegistryValue Name="HelpLink" Type="string" Value="[ARPHELPLINK]" />
+          <!-- Deliberately omit WindowsInstaller: Settings must honor UninstallString. -->
+          <RegistryValue Name="UninstallString" Type="string" Value="&quot;[$(var.CraftMsiSystemFolder)]msiexec.exe&quot; /x [ProductCode] /qf /norestart" />
+          <RegistryValue Name="QuietUninstallString" Type="string" Value="&quot;[$(var.CraftMsiSystemFolder)]msiexec.exe&quot; /x [ProductCode] /qn /norestart" />
+          <RegistryValue Name="ModifyPath" Type="string" Value="&quot;[$(var.CraftMsiSystemFolder)]msiexec.exe&quot; /i [ProductCode] /qf /norestart" />
+        </RegistryKey>
+      </Component>
+      <!-- Preserve the app-owned ARPNOMODIFY policy instead of inventing a new default. -->
+      <Component Id="CraftInstallerSettingsNoModify" Guid="*" Condition="ARPNOMODIFY = &quot;1&quot;">
+        <RegistryValue Root="@@REGISTRY_ROOT@@" Key="Software\Microsoft\Windows\CurrentVersion\Uninstall\Craft.@@APP@@"
+            Name="NoModify" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+  </Fragment>

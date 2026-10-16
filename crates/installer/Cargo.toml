@@ -1,0 +1,15 @@
+[package]
+name = "craft-installer"
+description = "Shared native installer UI sources for the Craft App Suite"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+roxmltree = "0.20"

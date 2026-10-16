@@ -598,6 +598,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-installer"
+version = "0.1.0"
+dependencies = [
+ "roxmltree",
+]
+
+
+[[package]]
 name = "craft-pdf"
 version = "0.1.0"
 dependencies = [

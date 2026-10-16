@@ -1,0 +1,5 @@
+        <Control Id="Install" Type="PushButton" X="195" Y="235" Width="75" Height="23" Default="yes" ElevationShield="@@SHIELD@@" Text="&amp;Install">
+          <Publish Event="SetTargetPath" Value="INSTALLFOLDER" Order="1" />
+@@INSTALL_VALIDATION@@
+          <Publish Event="EndDialog" Value="Return" Order="99" Condition="@@PATH_VALID@@" />
+        </Control>

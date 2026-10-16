@@ -24,6 +24,19 @@ The optional PDF writer bundles four CC0 ICC profiles by Clinton Ingram. See ATT
 
 Source provenance
 
+The native Windows Installer UI in crates/installer is adapted from:
+- PdfCraft, packaging/windows/installer-ui.wxs, revision a6bc63a.
+  https://github.com/storytold/pdfcraft
+  Copyright (c) 2026 ArtCraft Team and the PdfCraft contributors.
+- GridCraft, packaging/windows/gridcraft.wxs, revision 5b15827.
+  https://github.com/storytold/gridcraft
+  Copyright (c) 2026 ArtCraft Team and the GridCraft contributors.
+- EffectCraft, packaging/windows/installer-ui.wxs, revision 1b4d47f.
+  https://github.com/storytold/effectcraft
+  Copyright (c) 2026 ArtCraft Team and the EffectCraft contributors.
+These sources are licensed MIT OR Apache-2.0. Their copyright notices are also retained
+in the generated fragment distributed by consumers.
+
 The SVG icon preparation in crates/ui is adapted from:
 - PhotoCraft, crates/ui-egui/src/icons.rs, revision e7a83ca342cdff568254f85f442b9cc8afb08066.
   https://github.com/storytold/photocraft

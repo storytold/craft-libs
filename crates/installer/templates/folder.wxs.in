@@ -1,0 +1,48 @@
+      <Property Id="_BrowseProperty" Value="INSTALLFOLDER" />
+      <Property Id="WIXUI_INSTALLDIR" Value="INSTALLFOLDER" />
+      <Dialog Id="InstallFolder" Width="370" Height="270" Title="[ProductName] Setup">
+        <Control Id="Title" Type="Text" X="20" Y="20" Width="330" Height="25" Text="{\CraftInstallerTitle}Choose the destination folder" />
+        <Control Id="Description" Type="Text" X="20" Y="55" Width="330" Height="40" Text="[ProductName] will be installed in this folder. Click Install to continue." />
+@@INSTALL_BEFORE_FOLDER@@        <Control Id="FolderLabel" Type="Text" X="20" Y="105" Width="330" Height="15" Text="&amp;Destination folder:" />
+        <Control Id="Folder" Type="PathEdit" X="20" Y="125" Width="250" Height="20" Property="_BrowseProperty" Indirect="yes" @@FOLDER_LOCK@@ />
+        <Control Id="ChangeFolder" Type="PushButton" X="280" Y="124" Width="70" Height="23" Text="&amp;Browse..." @@FOLDER_LOCK@@>
+          <Publish Event="SpawnDialog" Value="CraftBrowseDlg" />
+        </Control>
+@@UPGRADE_NOTE@@
+@@INSTALL_AFTER_FOLDER@@
+        <Control Id="Cancel" Type="PushButton" X="280" Y="235" Width="70" Height="23" Cancel="yes" Text="Cancel">
+          <Publish Event="SpawnDialog" Value="ConfirmCancel" />
+        </Control>
+      </Dialog>
+      <Dialog Id="CraftBrowseDlg" Width="370" Height="270" Title="[ProductName] Setup">
+        <Control Id="Title" Type="Text" X="20" Y="15" Width="330" Height="20" Transparent="yes" NoPrefix="yes" Text="{\CraftInstallerTitle}Browse for a folder" />
+        <Control Id="LookInLabel" Type="Text" X="20" Y="47" Width="44" Height="12" Text="&amp;Look in:" />
+        <Control Id="LookIn" Type="DirectoryCombo" X="66" Y="45" Width="220" Height="80" Property="_BrowseProperty" Indirect="yes" Fixed="yes" Remote="yes">
+          <Subscribe Event="IgnoreChange" Attribute="IgnoreChange" />
+        </Control>
+        <Control Id="Up" Type="PushButton" X="292" Y="44" Width="28" Height="18" Text="&amp;Up" ToolTip="Up one level">
+          <Publish Event="DirectoryListUp" Value="0" />
+        </Control>
+        <Control Id="NewFolder" Type="PushButton" X="322" Y="44" Width="28" Height="18" Text="Ne&amp;w" ToolTip="Create a new folder">
+          <Publish Event="DirectoryListNew" Value="0" />
+        </Control>
+        <Control Id="Folders" Type="DirectoryList" X="20" Y="68" Width="330" Height="120" Property="_BrowseProperty" Indirect="yes" Sunken="yes" TabSkip="no" />
+        <Control Id="PathLabel" Type="Text" X="20" Y="196" Width="330" Height="12" Text="&amp;Folder name:" />
+        <Control Id="Path" Type="PathEdit" X="20" Y="210" Width="330" Height="18" Property="_BrowseProperty" Indirect="yes" />
+        <Control Id="OK" Type="PushButton" X="236" Y="243" Width="56" Height="17" Default="yes" Text="OK">
+          <Publish Event="SetTargetPath" Value="[_BrowseProperty]" Order="1" />
+          @@BROWSE_VALIDATION@@
+          <Publish Event="EndDialog" Value="Return" Order="99" Condition="@@PATH_VALID@@" />
+        </Control>
+        <Control Id="Cancel" Type="PushButton" X="304" Y="243" Width="56" Height="17" Cancel="yes" Text="Cancel">
+          <Publish Event="Reset" Value="0" Order="1" />
+          <Publish Event="EndDialog" Value="Return" Order="2" />
+        </Control>
+      </Dialog>
+
+      <Dialog Id="CraftInvalidFolder" Width="300" Height="120" Title="[ProductName] Setup">
+        <Control Id="Description" Type="Text" X="20" Y="20" Width="260" Height="50" Text="This destination folder cannot be used. Choose a valid local folder and try again." />
+        <Control Id="OK" Type="PushButton" X="210" Y="85" Width="70" Height="23" Default="yes" Cancel="yes" Text="OK">
+          <Publish Event="EndDialog" Value="Return" />
+        </Control>
+      </Dialog>

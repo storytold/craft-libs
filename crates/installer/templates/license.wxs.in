@@ -1,0 +1,13 @@
+      <Dialog Id="InstallLicense" Width="370" Height="270" Title="[ProductName] Setup">
+        <Control Id="Title" Type="Text" X="20" Y="20" Width="330" Height="25" Text="{\CraftInstallerTitle}License" />
+        <Control Id="License" Type="ScrollableText" X="20" Y="55" Width="330" Height="130" Sunken="yes" TabSkip="no">
+          <Text SourceFile="$(var.LicenseRtf)" />
+        </Control>
+        <Control Id="Accept" Type="CheckBox" X="20" Y="195" Width="330" Height="20" Property="CraftLicenseAccepted" CheckBoxValue="1" Text="I &amp;accept the license terms" />
+        <Control Id="Install" Type="PushButton" X="195" Y="235" Width="75" Height="23" Default="yes" ElevationShield="yes" Text="&amp;Install" Disabled="yes" EnableCondition="CraftLicenseAccepted = &quot;1&quot;" DisableCondition="NOT CraftLicenseAccepted">
+          <Publish Event="EndDialog" Value="Return" Condition="CraftLicenseAccepted = &quot;1&quot;" />
+        </Control>
+        <Control Id="Cancel" Type="PushButton" X="280" Y="235" Width="70" Height="23" Cancel="yes" Text="Cancel">
+          <Publish Event="SpawnDialog" Value="ConfirmCancel" />
+        </Control>
+      </Dialog>
