@@ -126,6 +126,53 @@ impl I18n {
         fmt(text, &[("n", &n.to_string())])
     }
 
+    /// The languages to offer: English first, then the embedded locales by code. Never the
+    /// pseudo locale.
+    pub fn languages(&self) -> Vec<Lang> {
+        let mut embedded: Vec<usize> = (2..self.locales.len()).collect();
+        embedded.sort_by_key(|&i| self.locales.get(i).map(|l| l.code.as_str()));
+        std::iter::once(Lang::EN).chain(embedded.into_iter().map(Lang)).collect()
+    }
+
+    /// The language's name in itself, for a language picker: its shared catalog's
+    /// `@id language.name` row, or the code when there is none.
+    pub fn name(&self, lang: Lang) -> &str {
+        if lang == Lang::EN {
+            return "English";
+        }
+        self.locale(lang).and_then(|l| l.rows.get("@id")?.get("language.name")).map_or_else(|| self.code(lang), String::as_str)
+    }
+
+    /// Whether the language is written right to left. Putting text into display order is the
+    /// app's job.
+    pub fn rtl(&self, lang: Lang) -> bool {
+        let code = self.code(lang);
+        let language = code.split('-').next().unwrap_or(code);
+        matches!(language, "ar" | "fa" | "he" | "ur")
+    }
+
+    /// The language for a system locale tag (`fr_CA.UTF-8`, `zh-Hant-MO`); `C` and `POSIX` are
+    /// English. `None` when no embedded language fits.
+    pub fn match_tag(&self, tag: &str) -> Option<Lang> {
+        let candidates = candidates(tag);
+        if matches!(candidates.first().map(String::as_str), Some("c" | "posix")) {
+            return Some(Lang::EN);
+        }
+        candidates.iter().filter(|c| *c != "pseudo").find_map(|c| self.from_code(c))
+    }
+
+    /// The first of `tags` (most preferred first) that [`I18n::match_tag`] knows; English if none.
+    pub fn match_tags<'t>(&self, tags: impl IntoIterator<Item = &'t str>) -> Lang {
+        tags.into_iter().find_map(|t| self.match_tag(t)).unwrap_or(Lang::EN)
+    }
+
+    /// The language the system asks for (`LANG` and friends, the macOS and Windows preferred
+    /// languages, the browser's on the web); English if none fits.
+    pub fn system_lang(&self) -> Lang {
+        let tags: Vec<String> = sys_locale::get_locales().collect();
+        self.match_tags(tags.iter().map(String::as_str))
+    }
+
     fn locale(&self, lang: Lang) -> Option<&Locale> {
         self.locales.get(lang.0)
     }
@@ -160,6 +207,25 @@ pub fn fmt(template: &str, args: &[(&str, &str)]) -> String {
         rest = after_close;
     }
     out.push_str(rest);
+    out
+}
+
+/// Codes to try for a locale tag, most specific first: `zh_TW.UTF-8` → `zh-tw`, `zh-hant`, `zh`.
+/// Chinese without a script picks one by region; Portuguese regions without a catalog use `pt-br`.
+fn candidates(tag: &str) -> Vec<String> {
+    let base = tag.trim().split(['.', '@']).next().unwrap_or("").replace('_', "-").to_ascii_lowercase();
+    let parts: Vec<&str> = base.split('-').filter(|p| !p.is_empty()).collect();
+    let Some(&primary) = parts.first() else {
+        return Vec::new();
+    };
+    let mut out: Vec<String> = (1..=parts.len()).rev().map(|n| parts.get(..n).unwrap_or_default().join("-")).collect();
+    if primary == "zh" && !parts.iter().any(|p| matches!(*p, "hans" | "hant")) {
+        let script = if parts.iter().any(|p| matches!(*p, "tw" | "hk" | "mo")) { "zh-hant" } else { "zh-hans" };
+        out.insert(out.len().saturating_sub(1), script.to_owned());
+    }
+    if primary == "pt" && !out.iter().any(|c| c == "pt-br") {
+        out.insert(out.len().saturating_sub(1), "pt-br".to_owned());
+    }
     out
 }
 
@@ -321,5 +387,62 @@ mod tests {
     fn beyond_sweep() {
         let i = I18n::new(P).0;
         assert_eq!(i.trn(lang(&i, "fr"), 1_000_000, "{n} page", "{n} pages"), "1000000 pages");
+    }
+
+    static L: &Embedded =
+        &[("fr", "@id\tlanguage.name\tFrançais\n", ""), ("pt-br", "", ""), ("zh-hans", "", ""), ("zh-hant", "", ""), ("ar", "", "")];
+
+    #[test]
+    fn languages_order() {
+        let i = I18n::new(L).0;
+        let codes: Vec<&str> = i.languages().into_iter().map(|l| i.code(l)).collect();
+        assert_eq!(codes, ["en", "ar", "fr", "pt-br", "zh-hans", "zh-hant"]);
+    }
+
+    #[test]
+    fn names() {
+        let i = I18n::new(L).0;
+        assert_eq!(i.name(Lang::EN), "English");
+        assert_eq!(i.name(lang(&i, "fr")), "Français");
+        assert_eq!(i.name(lang(&i, "ar")), "ar");
+    }
+
+    #[test]
+    fn rtl() {
+        let i = I18n::new(L).0;
+        assert!(i.rtl(lang(&i, "ar")));
+        assert!(!i.rtl(lang(&i, "fr")));
+        assert!(!i.rtl(Lang::EN));
+    }
+
+    #[test]
+    fn tags() {
+        let i = I18n::new(L).0;
+        for (tag, want) in [
+            ("fr_CA.UTF-8", Some("fr")),
+            ("pt-PT", Some("pt-br")),
+            ("pt_BR", Some("pt-br")),
+            ("zh_TW.UTF-8", Some("zh-hant")),
+            ("zh-HK", Some("zh-hant")),
+            ("zh", Some("zh-hans")),
+            ("zh-Hant-MO", Some("zh-hant")),
+            ("zh_CN", Some("zh-hans")),
+            ("C", Some("en")),
+            ("POSIX", Some("en")),
+            ("en_US", Some("en")),
+            ("ja_JP", None),
+            ("", None),
+            ("@@", None),
+        ] {
+            assert_eq!(i.match_tag(tag).map(|l| i.code(l)), want, "{tag}");
+        }
+    }
+
+    #[test]
+    fn match_tags_takes_first_match() {
+        let i = I18n::new(L).0;
+        assert_eq!(i.match_tags(["ja_JP", "fr_FR"]), lang(&i, "fr"));
+        assert_eq!(i.match_tags(["ja"]), Lang::EN);
+        assert_eq!(i.match_tags([]), Lang::EN);
     }
 }

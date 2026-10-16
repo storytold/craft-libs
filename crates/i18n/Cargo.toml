@@ -10,6 +10,10 @@ repository.workspace = true
 [dependencies]
 intl_pluralrules = "7"
 unic-langid = "0.9"
+sys-locale = "0.3"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+sys-locale = { version = "0.3", features = ["js"] }
 
 [lints]
 workspace = true
