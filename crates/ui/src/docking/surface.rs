@@ -705,12 +705,12 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
                     ui.close();
                 }
             }
-            if policy.movable {
+            if policy.movable && !self.layout.move_targets(panel, self.permissions).is_empty() {
                 let text = self.content.action_label(ui, &self.style.move_label, &self.style.font, self.style.text);
                 let response = ui.menu_button(text, |ui| {
                     egui::ScrollArea::vertical().max_height(360.0).show(ui, |ui| {
-                        for target in self.layout.panels() {
-                            if target != panel && (self.permissions)(target).accepts_tabs && self.menu_label(ui, target).clicked() {
+                        for target in self.layout.move_targets(panel, self.permissions) {
+                            if self.menu_label(ui, target).clicked() {
                                 self.output.actions.push(Action::Move {
                                     panel: panel.clone(),
                                     anchor: target.clone(),
