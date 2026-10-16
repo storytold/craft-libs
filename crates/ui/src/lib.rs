@@ -11,6 +11,8 @@ pub mod buttons;
 #[cfg(feature = "cloud")]
 pub mod cloud;
 pub mod docking;
+#[cfg(feature = "esign")]
+pub mod esign;
 pub mod icons;
 pub mod layout;
 pub mod menu;

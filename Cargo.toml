@@ -23,6 +23,7 @@ thiserror = "2"
 craft-atomic = { path = "crates/atomic" }
 craft-cms = { path = "crates/cms" }
 craft-cloud = { path = "crates/cloud" }
+craft-esign = { path = "crates/esign" }
 craft-gpu = { path = "crates/gpu" }
 craft-gpu-null = { path = "crates/gpu-null" }
 craft-gpu-providers = { path = "crates/gpu-providers" }

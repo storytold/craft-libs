@@ -831,6 +831,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-esign"
+version = "0.1.0"
+dependencies = [
+ "craft-cloud",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-gpu"
 version = "0.1.0"
 dependencies = [
@@ -954,6 +964,7 @@ name = "craft-ui"
 version = "0.1.0"
 dependencies = [
  "craft-cloud",
+ "craft-esign",
  "egui",
  "egui_extras",
  "egui_kittest",
