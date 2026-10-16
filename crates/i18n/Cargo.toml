@@ -1,0 +1,15 @@
+[package]
+name = "craft-i18n"
+description = "Translations for the Craft apps: the embedded craft-i18n catalogs, lookup with fallback, plurals, language names and the system locale."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[dependencies]
+intl_pluralrules = "7"
+unic-langid = "0.9"
+
+[lints]
+workspace = true
