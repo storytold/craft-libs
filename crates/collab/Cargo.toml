@@ -1,0 +1,20 @@
+[package]
+name = "craft-collab"
+description = "The shared collaboration core for the Crafting Apps family: the object/property model, fractional indexing, server-ordered LWW, per-user undo, join codes and the convergence simulator — extracted from figcraft-collab and generalized behind DocSchema/HubAdapter (the CraftHub specification §2.15/§3.4; the one sanctioned exception to 'repos don't share code')."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+serde = { version = "1", features = ["derive", "rc"] }
+serde_json = { version = "1", features = ["float_roundtrip"] }
+thiserror = "2"
+postcard = { version = "1", default-features = false, features = ["alloc"] }
+
+[dev-dependencies]
+proptest = "1"
+
+[lints]
+workspace = true
