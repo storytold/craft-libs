@@ -8,6 +8,7 @@
 mod catalog;
 
 use std::collections::HashMap;
+use std::sync::{Mutex, PoisonError};
 
 use intl_pluralrules::{PluralCategory, PluralRuleType, PluralRules};
 use unic_langid::LanguageIdentifier;
@@ -41,6 +42,8 @@ struct Locale {
 /// The embedded catalogs, ready for lookups. Build it once, at start-up.
 pub struct I18n {
     locales: Vec<Locale>,
+    /// Marked strings for the pseudo locale, leaked so lookups can hand out `&str`. Test-only.
+    pseudo: Mutex<HashMap<String, &'static str>>,
 }
 
 impl I18n {
@@ -78,7 +81,7 @@ impl I18n {
                 l.chain = chain;
             }
         }
-        (I18n { locales }, problems)
+        (I18n { locales, pseudo: Mutex::default() }, problems)
     }
 
     /// The language with this code (any case): `en`, `pseudo`, or an embedded locale.
@@ -93,16 +96,25 @@ impl I18n {
 
     /// `source` in `lang`, or `source` itself.
     pub fn t<'a>(&'a self, lang: Lang, source: &'a str) -> &'a str {
+        if lang == Lang::PSEUDO {
+            return self.mark(source);
+        }
         self.find(lang, "", source).unwrap_or(source)
     }
 
     /// `source` with a disambiguating `context` (`menu`, `@msg`); falls back to [`I18n::t`].
     pub fn tc<'a>(&'a self, lang: Lang, context: &str, source: &'a str) -> &'a str {
+        if lang == Lang::PSEUDO {
+            return self.mark(source);
+        }
         self.find(lang, context, source).unwrap_or_else(|| self.t(lang, source))
     }
 
     /// A command's label by its `id` (`@id` rows); falls back to [`I18n::t`] of the English `label`.
     pub fn tid<'a>(&'a self, lang: Lang, id: &str, label: &'a str) -> &'a str {
+        if lang == Lang::PSEUDO {
+            return self.mark(label);
+        }
         self.find(lang, "@id", id).unwrap_or_else(|| self.t(lang, label))
     }
 
@@ -123,7 +135,11 @@ impl I18n {
                 forms.split('|').nth(index)
             })
             .unwrap_or(if n == 1 { one } else { other });
-        fmt(text, &[("n", &n.to_string())])
+        let text = fmt(text, &[("n", &n.to_string())]);
+        if lang == Lang::PSEUDO {
+            return marked(&text);
+        }
+        text
     }
 
     /// The languages to offer: English first, then the embedded locales by code. Never the
@@ -171,6 +187,12 @@ impl I18n {
     pub fn system_lang(&self) -> Lang {
         let tags: Vec<String> = sys_locale::get_locales().collect();
         self.match_tags(tags.iter().map(String::as_str))
+    }
+
+    /// `source` marked for the pseudo locale, made once per string.
+    fn mark(&self, source: &str) -> &'static str {
+        let mut cache = self.pseudo.lock().unwrap_or_else(PoisonError::into_inner);
+        cache.entry(source.to_owned()).or_insert_with(|| Box::leak(marked(source).into_boxed_str()))
     }
 
     fn locale(&self, lang: Lang) -> Option<&Locale> {
@@ -227,6 +249,11 @@ fn candidates(tag: &str) -> Vec<String> {
         out.insert(out.len().saturating_sub(1), "pt-br".to_owned());
     }
     out
+}
+
+/// `⟦text⟧`, each line marked on its own, since multi-line labels are often drawn a line at a time.
+fn marked(text: &str) -> String {
+    format!("⟦{}⟧", text.replace('\n', "⟧\n⟦"))
 }
 
 /// A locale with no catalogs (English, the pseudo locale).
@@ -444,5 +471,17 @@ mod tests {
         assert_eq!(i.match_tags(["ja_JP", "fr_FR"]), lang(&i, "fr"));
         assert_eq!(i.match_tags(["ja"]), Lang::EN);
         assert_eq!(i.match_tags([]), Lang::EN);
+    }
+
+    #[test]
+    fn pseudo_marks_every_lookup() {
+        let i = i18n();
+        assert_eq!(i.t(Lang::PSEUDO, "Save"), "⟦Save⟧");
+        assert_eq!(i.t(Lang::PSEUDO, "A\nB"), "⟦A⟧\n⟦B⟧");
+        assert_eq!(i.tc(Lang::PSEUDO, "menu", "Open"), "⟦Open⟧");
+        assert_eq!(i.tid(Lang::PSEUDO, "file.save", "Save"), "⟦Save⟧");
+        assert_eq!(i.trn(Lang::PSEUDO, 2, "{n} x", "{n} xs"), "⟦2 xs⟧");
+        assert!(!i.languages().contains(&Lang::PSEUDO));
+        assert_eq!(i.from_code("pseudo"), Some(Lang::PSEUDO));
     }
 }
