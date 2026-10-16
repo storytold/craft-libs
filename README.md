@@ -44,6 +44,19 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   widget-state styling boundary.
 - [Panel docking](docs/ui-docking.md): validated panel moves, floating groups, workspace adapters
   and an optional egui docking surface.
+- [Ecosystem inventory](docs/ecosystem-inventory.md): dependency map, contribution standards, CI
+  baselines and failure model across the Craft application suite.
+- [Cross-application compatibility](docs/compatibility-contract.md): validation runner (`cargo xtask compat`)
+  testing proposed shared-library changes against consuming Craft applications.
+
+## Tooling
+
+The workspace provides automation commands through `cargo xtask`:
+
+- `cargo xtask ci`: runs formatting (`cargo fmt --check`), strict Clippy (`cargo clippy --workspace --all-targets -- -D warnings`), and workspace tests.
+- `cargo xtask compat`: tests proposed library revisions against consuming applications (`photocraft`, `vectorcraft`, etc.) using isolated Git worktrees and Cargo dependency overrides.
+- `cargo xtask adoption`: audits shared crate adoption revisions and resolved lockfile SHAs across the Craft application suite.
+- `cargo xtask lifecycle`: validates macOS application lifecycle contracts and regression fixtures.
 
 ## License and credits
 
