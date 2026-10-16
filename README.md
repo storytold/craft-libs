@@ -45,6 +45,13 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
 - [Panel docking](docs/ui-docking.md): validated panel moves, floating groups, workspace adapters
   and an optional egui docking surface.
 
+## Architecture & Standards
+
+- [Shared capability extraction RFC](docs/rfc-shared-capabilities-architecture.md): The intended role of `craft-libs`, capability acceptance protocol, differential testing, and evidence standards.
+- [Shared crate contracts](docs/shared-crate-contract.md): Mandatory invariants, failure semantics, post-failure state guarantees, and cross-platform behavior specifications.
+- [Consumer Dependency Map](docs/consumer-dependency-map.md) ([JSON](docs/consumer-dependency-map.json)): Unverified consumer inventory and instructions for recording actual pins and comparisons.
+- [Platform Test Inventory](docs/platform-test-inventory.md) ([JSON](docs/platform-test-inventory.json)): Planned verification scopes and evidence requirements; no completed platform qualifications.
+
 ## License and credits
 
 craft-libs is dual-licensed under [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your option.
