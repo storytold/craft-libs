@@ -35,10 +35,12 @@ The app keeps its `tl!` macro, its language setting (`"auto"` → `I18N.system_l
 ## Behaviour
 
 - **Fallback:** `pt-br` app rows → `pt-br` shared rows → `pt` → the English source text. App rows
-  override shared ones in their own locale. A missing translation never errors.
+  override shared ones in their own locale. Only a region falls back (`sr-latn` never falls back to
+  Cyrillic `sr`). A missing translation never errors.
 - **Lookups:** `t` (plain), `tc` (with a context such as `menu` or `@msg`, falling back to plain),
   `tid` (an `@id` command id, falling back to the English label), `trn` (a count, `@plural` rows,
-  `{n}` filled), and `fmt` for `{name}` placeholders, filled in one pass.
+  `{n}` filled), `get` (one context, no fallback: a key cap's name under `key`, or "is there a
+  translation?"), and `fmt` for `{name}` placeholders, filled in one pass.
 - **Bad rows** (malformed, an unknown `@` context, a wrong plural form count) are skipped and
   returned by `I18n::new` for the app to log; craft-i18n's CI rejects them before they ship.
 - **Plurals:** forms are listed in CLDR order (zero, one, two, few, many, other) for the categories

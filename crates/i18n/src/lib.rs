@@ -71,7 +71,13 @@ impl I18n {
         }
         for i in 2..locales.len() {
             let mut chain = vec![i];
-            let base = locales.get(i).and_then(|l| l.code.split('-').next()).unwrap_or_default();
+            // Only a region falls back to its language (`pt-br` → `pt`); a script doesn't, since
+            // `sr-latn` → `sr` would show Cyrillic.
+            let code = locales.get(i).map_or("", |l| l.code.as_str());
+            let base = match code.split_once('-') {
+                Some((language, region)) if is_region(region) => language,
+                _ => "",
+            };
             if let Some(b) = locales.iter().skip(2).position(|l| l.code == base)
                 && b + 2 != i
             {
@@ -108,6 +114,13 @@ impl I18n {
             return self.mark(source);
         }
         self.find(lang, context, source).unwrap_or_else(|| self.t(lang, source))
+    }
+
+    /// The translation of (`context`, `source`) along `lang`'s chain, with no fallback to the plain
+    /// row or the English: for strings that must not borrow another meaning's wording (a key cap's
+    /// name under context `key`), or to ask whether a translation exists.
+    pub fn get(&self, lang: Lang, context: &str, source: &str) -> Option<&str> {
+        self.find(lang, context, source)
     }
 
     /// A command's label by its `id` (`@id` rows); falls back to [`I18n::t`] of the English `label`.
@@ -233,7 +246,8 @@ pub fn fmt(template: &str, args: &[(&str, &str)]) -> String {
 }
 
 /// Codes to try for a locale tag, most specific first: `zh_TW.UTF-8` → `zh-tw`, `zh-hant`, `zh`.
-/// Chinese without a script picks one by region; Portuguese regions without a catalog use `pt-br`.
+/// Chinese without a script picks one by region; Portuguese falls back to `pt-br` last, when
+/// there is no `pt`.
 fn candidates(tag: &str) -> Vec<String> {
     let base = tag.trim().split(['.', '@']).next().unwrap_or("").replace('_', "-").to_ascii_lowercase();
     let parts: Vec<&str> = base.split('-').filter(|p| !p.is_empty()).collect();
@@ -246,7 +260,7 @@ fn candidates(tag: &str) -> Vec<String> {
         out.insert(out.len().saturating_sub(1), script.to_owned());
     }
     if primary == "pt" && !out.iter().any(|c| c == "pt-br") {
-        out.insert(out.len().saturating_sub(1), "pt-br".to_owned());
+        out.push("pt-br".to_owned());
     }
     out
 }
@@ -254,6 +268,11 @@ fn candidates(tag: &str) -> Vec<String> {
 /// `⟦text⟧`, each line marked on its own, since multi-line labels are often drawn a line at a time.
 fn marked(text: &str) -> String {
     format!("⟦{}⟧", text.replace('\n', "⟧\n⟦"))
+}
+
+/// A BCP 47 region subtag: two letters or three digits.
+fn is_region(subtag: &str) -> bool {
+    (subtag.len() == 2 && subtag.bytes().all(|b| b.is_ascii_alphabetic())) || (subtag.len() == 3 && subtag.bytes().all(|b| b.is_ascii_digit()))
 }
 
 /// A locale with no catalogs (English, the pseudo locale).
@@ -483,5 +502,38 @@ mod tests {
         assert_eq!(i.trn(Lang::PSEUDO, 2, "{n} x", "{n} xs"), "⟦2 xs⟧");
         assert!(!i.languages().contains(&Lang::PSEUDO));
         assert_eq!(i.from_code("pseudo"), Some(Lang::PSEUDO));
+    }
+
+    static F: &Embedded = &[
+        ("pt", "", ""),
+        ("pt-br", "", ""),
+        ("sr", "\tSave\tСачувај\n", ""),
+        ("sr-latn", "", ""),
+        ("fr", "\tDelete\tSupprimer\nkey\tEsc\tÉchap\n", ""),
+    ];
+
+    #[test]
+    fn european_portuguese_prefers_pt() {
+        let i = I18n::new(F).0;
+        for tag in ["pt", "pt-PT", "pt_PT.UTF-8"] {
+            assert_eq!(i.match_tag(tag).map(|l| i.code(l)), Some("pt"), "{tag}");
+        }
+        assert_eq!(i.match_tag("pt_BR").map(|l| i.code(l)), Some("pt-br"));
+    }
+
+    #[test]
+    fn script_locale_does_not_fall_back_across_scripts() {
+        let i = I18n::new(F).0;
+        assert_eq!(i.t(lang(&i, "sr-latn"), "Save"), "Save");
+    }
+
+    #[test]
+    fn get_has_no_plain_fallback() {
+        let i = I18n::new(F).0;
+        let fr = lang(&i, "fr");
+        assert_eq!(i.get(fr, "key", "Esc"), Some("Échap"));
+        assert_eq!(i.get(fr, "key", "Delete"), None);
+        assert_eq!(i.get(fr, "", "Delete"), Some("Supprimer"));
+        assert_eq!(i.get(Lang::EN, "", "Delete"), None);
     }
 }
