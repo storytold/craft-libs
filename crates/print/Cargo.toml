@@ -31,6 +31,13 @@ roxmltree = "0.20"
 # Inflating the print-ready PDF's cross-reference and object streams (src/sheets.rs).
 miniz_oxide = "0.8"
 
+[target.'cfg(all(unix, not(target_arch = "wasm32")))'.dependencies]
+# The XDG print portal on the session bus, for installs with no CUPS server to talk IPP to
+# (MIT OR Apache-2.0); pinned to its major version, review before bumping.
+zbus = "5"
+# The job's private file, handed to the portal as a file descriptor.
+tempfile = "3"
+
 [dev-dependencies]
 tempfile = "3"
 roxmltree = "0.20"

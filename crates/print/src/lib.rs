@@ -1,12 +1,26 @@
 //! The system print spooler. On macOS and Linux this is CUPS: printers come from `lpstat` — its
 //! queues, and the driverless destinations it can print to without one — and jobs are piped to
-//! `lp` with the job options (copies, collation, duplex, colour). On Windows the printers come
+//! `lp` with the job options (copies, collation, duplex, colour). When those commands are
+//! missing (a sandboxed install, storytold/photocraft#6081) or answer nothing, the server is
+//! asked directly over IPP ([`ipp`]) and jobs go to it as Print-Job; when no CUPS server is
+//! reachable, the job is handed to the desktop's print portal ([`portal`]), whose own dialog
+//! restores the printer selection (storytold/pdfcraft#1905). On Windows the printers come
 //! from the spooler and jobs are drawn by the in-box `Windows.Data.Pdf` into the XPS print API
 //! with the options as a PrintTicket, all in this process (`windows.rs`): no PowerShell or other
 //! program is started, so printing works where scripts are locked down. Other platforms report
 //! that printing isn't available yet; the print-ready PDF can still be saved.
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
+
+/// IPP/1.1 straight to the local CUPS server (discovery and Print-Job): the transport the print
+/// path falls back to when `lpstat`/`lp` are missing (a sandboxed install), exposed for callers
+/// that need the server directly.
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+pub mod ipp;
+
+/// The XDG desktop portal's print dialog: the print path when no CUPS server is reachable.
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+pub mod portal;
 
 #[cfg(any(test, windows))]
 mod progress;
@@ -361,17 +375,45 @@ fn lpstat_e_command() -> std::process::Command {
     lpstat_with(&["-e"])
 }
 
+/// Whether `name` can be started: an executable `name` on `PATH`, the way a `Command` resolves
+/// one. Gated like its unix callers.
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+fn spawnable(name: &str) -> bool {
+    std::env::var_os("PATH").is_some_and(|path| spawnable_in(&path, name))
+}
+
+/// [`spawnable`] under a given search path, so tests can stand in for the environment.
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+fn spawnable_in(path: &std::ffi::OsStr, name: &str) -> bool {
+    std::env::split_paths(path).any(|dir| {
+        std::fs::metadata(dir.join(name)).is_ok_and(|m| {
+            use std::os::unix::fs::PermissionsExt;
+            m.is_file() && m.permissions().mode() & 0o111 != 0
+        })
+    })
+}
+
 /// The printers the system knows (empty when there are none or no spooler): its queues, then the
-/// driverless destinations CUPS can print to without one.
+/// driverless destinations CUPS can print to without one — from `lpstat` when it answers, else
+/// over IPP ([`ipp::printers`]).
 pub fn printers() -> Vec<Printer> {
     #[cfg(all(unix, not(target_arch = "wasm32")))]
     {
-        let Some(queues) = lpstat_command().output().ok().map(|o| String::from_utf8_lossy(&o.stdout).into_owned()) else {
-            return Vec::new();
-        };
-        // A spooler without `-e`, or one whose discovery times out, only loses the driverless names.
-        let available = lpstat_e_command().output().ok().map(|o| String::from_utf8_lossy(&o.stdout).into_owned());
-        printers_parsed(&queues, available.as_deref())
+        if let Some(queues) = lpstat_command().output().ok().map(|o| String::from_utf8_lossy(&o.stdout).into_owned()) {
+            // A spooler without `-e`, or one whose discovery times out, only loses the driverless names.
+            let available = lpstat_e_command().output().ok().map(|o| String::from_utf8_lossy(&o.stdout).into_owned());
+            let parsed = printers_parsed(&queues, available.as_deref());
+            if !parsed.is_empty() {
+                return parsed;
+            }
+        }
+        // `lpstat` missing (a sandboxed install) or answering nothing (a stopped scheduler) is
+        // not "no printers" when the server itself is there: ask it directly. A server that
+        // cannot be reached, or whose answer cannot be parsed, leaves the list empty as before.
+        if ipp::cups_reachable() {
+            return ipp::printers().unwrap_or_default();
+        }
+        Vec::new()
     }
     #[cfg(windows)]
     {
@@ -449,6 +491,10 @@ pub fn submit(pdf: &[u8], job: &Job) -> Result<String, Error> {
     submit_with_progress(pdf, job, &mut |_, _| {})
 }
 
+/// The message when no transport can take the job at all: no spooler command, no CUPS server,
+/// no print portal.
+const PRINTING_UNAVAILABLE: &str = "printing to a printer isn't available on this platform yet; save the print-ready PDF instead";
+
 /// [`submit`] with Windows sheet-processing progress: `(processed, sheets)` before the first
 /// sheet and after each sheet is successfully added to the native print job. Counts refer to
 /// source PDF sheets, regardless of copies or duplex. CUPS reports no progress.
@@ -461,7 +507,18 @@ pub fn submit_with_progress(pdf: &[u8], job: &Job, progress: &mut dyn FnMut(usiz
     #[cfg(all(unix, not(target_arch = "wasm32")))]
     {
         let _ = progress;
-        submit_via(std::process::Command::new("lp"), pdf, job)
+        if spawnable("lp") {
+            return submit_via(std::process::Command::new("lp"), pdf, job);
+        }
+        // No `lp`: the server itself takes the job as Print-Job (the driver's PPD options are
+        // not sent on this path), else the portal's dialog asks the user for a printer.
+        if ipp::cups_reachable() {
+            return ipp::print_job(pdf, job);
+        }
+        if portal::print_dialog_available() {
+            return portal::print(pdf, job);
+        }
+        Err(Error::Spool(PRINTING_UNAVAILABLE.into()))
     }
     #[cfg(windows)]
     {
@@ -470,7 +527,7 @@ pub fn submit_with_progress(pdf: &[u8], job: &Job, progress: &mut dyn FnMut(usiz
     #[cfg(not(any(windows, all(unix, not(target_arch = "wasm32")))))]
     {
         let _ = (pdf, job, progress);
-        Err(Error::Spool("printing to a printer isn't available on this platform yet; save the print-ready PDF instead".into()))
+        Err(Error::Spool(PRINTING_UNAVAILABLE.into()))
     }
 }
 
@@ -535,10 +592,10 @@ pub(crate) fn job_message(stdout: &[u8]) -> String {
     s.strip_suffix("(0 file(s))").map_or(s, str::trim_end).to_string()
 }
 
-/// [`command_preview`] for the Windows backend.
-fn windows_preview(job: &Job) -> Vec<String> {
+/// The job's dialog options as `key=value`: the lines both in-process previews print after the
+/// transport name.
+fn job_options(job: &Job) -> Vec<String> {
     vec![
-        "xps-print".into(),
         format!("printer={}", job.printer.as_deref().unwrap_or("(default)")),
         format!("copies={}", job.copies.clamp(1, 999)),
         format!("collate={}", job.collate),
@@ -562,6 +619,47 @@ fn windows_preview(job: &Job) -> Vec<String> {
     ]
 }
 
+/// [`command_preview`] for the Windows backend.
+fn windows_preview(job: &Job) -> Vec<String> {
+    std::iter::once("xps-print".to_string()).chain(job_options(job)).collect()
+}
+
+/// [`command_preview`] for the IPP transport: the Print-Job's attributes. The driver's PPD
+/// options have no equivalent on this path, so they are not listed.
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+fn ipp_preview(job: &Job) -> Vec<String> {
+    std::iter::once("ipp".to_string()).chain(job_options(job)).collect()
+}
+
+/// [`command_preview`] for the print portal: the printer and the options are the user's to
+/// choose in the portal's own dialog.
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+fn portal_preview() -> Vec<String> {
+    vec!["portal".into(), "printer=(dialog)".into()]
+}
+
+/// [`command_preview`] for the CUPS backend: the transport that would run — `lp` when the
+/// spooler's command is there, else IPP to the reachable server, else the portal's dialog.
+fn cups_preview(job: &Job) -> Result<Vec<String>, Error> {
+    #[cfg(all(unix, not(target_arch = "wasm32")))]
+    {
+        if spawnable("lp") {
+            return Ok(std::iter::once("lp".to_string()).chain(lp_args(job)).collect());
+        }
+        if ipp::cups_reachable() {
+            return Ok(ipp_preview(job));
+        }
+        if portal::print_dialog_available() {
+            return Ok(portal_preview());
+        }
+    }
+    #[cfg(not(all(unix, not(target_arch = "wasm32"))))]
+    {
+        let _ = job;
+    }
+    Err(Error::Spool(PRINTING_UNAVAILABLE.into()))
+}
+
 /// The platform backend. No backend is available in the browser.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Backend {
@@ -579,14 +677,15 @@ pub const fn backend() -> Option<Backend> {
     }
 }
 
-/// A diagnostic command preview; creates no job file and starts no process.
-/// On Windows, where no program is started, it describes the in-process job instead: `xps-print`,
-/// then the printer and the PrintTicket's options as `key=value`. Submit with [`submit`],
+/// A diagnostic command preview; creates no job file and starts no process. It names the
+/// transport that would run: on CUPS `lp`, else IPP to the reachable server, else the portal's
+/// dialog; on Windows, where no program is started, the in-process job instead (`xps-print`,
+/// then the printer and the PrintTicket's options as `key=value`). Submit with [`submit`],
 /// rather than executing this preview. PDF bytes are supplied separately.
 pub fn command_preview(job: &Job) -> Result<Vec<String>, Error> {
     match backend() {
-        Some(Backend::Cups) => Ok(std::iter::once("lp".to_string()).chain(lp_args(job)).collect()),
+        Some(Backend::Cups) => cups_preview(job),
         Some(Backend::WindowsPdf) => Ok(windows_preview(job)),
-        None => Err(Error::Spool("printing to a printer isn't available on this platform yet; save the print-ready PDF instead".into())),
+        None => Err(Error::Spool(PRINTING_UNAVAILABLE.into())),
     }
 }
