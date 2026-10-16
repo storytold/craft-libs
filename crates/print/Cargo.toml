@@ -7,6 +7,10 @@ repository.workspace = true
 rust-version.workspace = true
 description = "System PDF print spooler for the Craft apps: CUPS and Windows"
 
+[dependencies]
+# Safe API; Win32 calls are isolated in this maintained MIT OR Apache-2.0 dependency.
+craft-winprint-gdi = { git = "https://github.com/storytold/winprint.rs", rev = "417ac3c4d14d3da5485a99c7d5ce8f05664ec312" }
+
 [lints]
 workspace = true
 

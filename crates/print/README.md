@@ -69,6 +69,23 @@ a driver paper-size mismatch. On Windows `command_preview` describes the in-proc
 (`xps-print`, then the printer and options as `key=value`) instead of a command line. The crate
 does not provide PostScript output, separations, trapping or colour-managed device rendering.
 
+Windows shrink-to-fit refuses pages with annotations when their geometry needs fitting.
+Callers must flatten annotation appearances into page content first. Exact-size printing and
+rotation retain the annotations. This avoids losing printed comments, forms or other marks.
+The Windows renderer uses viewer visibility. Native submission therefore accepts only plain
+visible printable annotation flags (`F=4`); annotations without Print, with NoView, or with
+other visibility/rotation flags require caller flattening. This prevents printing comments
+that were marked nonprinting or omitting print-only marks. A visible Square appearance with
+`F=4` was rendered in the Windows qualification fixture; other appearance types still need
+their own fidelity checks.
+
+Native Windows PDF submission checks the driver's validated copy count and explicit
+simplex/duplex and grayscale requests before sending. Collation must be retained when both
+the page count and copy count exceed one. A driver that drops or changes these options is
+refused; select supported options or flatten grayscale into the print-ready page content.
+Without an explicit duplex request, the queue default applies. Normal color output retains
+the driver's color policy. Single-page or single-copy jobs have no collating order to check.
+
 `cargo test -p craft-print` tests CUPS transport (including pipe-sized jobs and refusal),
 printer parsing, PPD options and argument mapping, and on every platform the Windows pieces that
 need no printer: the PrintTicket, the checks on the driver's validated ticket and capabilities,
@@ -90,8 +107,8 @@ code changes, and supports manual runs. The Windows job executes the spooler reg
 physical printer fidelity still requires hardware verification.
 
 Windows discovery reports driver duplex support in `Printer::two_sided` (a two-sided option in
-the driver's PrintCapabilities); CUPS leaves it unknown. Callers can warn when a Windows driver
-ignores the job’s duplex choice.
+the driver's PrintCapabilities); CUPS leaves it unknown. Explicit simplex/duplex choices that the driver
+drops are refused before submission.
 
 Windows dependencies: the maintained [`winprint` fork](https://github.com/storytold/winprint.rs)
 (BSD-3-Clause, pinned to an immutable Git revision, its PDFium-downloading `pdfium` feature off) and `winsafe` (MIT) hold every Win32 and WinRT call, so the crate keeps `unsafe` forbidden;
@@ -101,3 +118,13 @@ reqwest (with rustls) and sigstore crates as non-optional build-dependencies, us
 running `cargo deny` need a licence exception for `webpki-root-certs` (CDLA-Permissive-2.0, CA
 list data reqwest brings) and an advisory ignore for RUSTSEC-2024-0370 (`proc-macro-error`
 unmaintained, a compile-time proc macro of winprint's `fmt-derive`).
+
+`craft_print::rgb` exposes the safe `craft-winprint-gdi` API for native driver settings,
+printable geometry, RGB pages and caller-composed vector strokes. Applications retain ICC
+conversion, document layout, labels and print-mark composition. The shared transport validates
+single-copy DEVMODE settings before emitting manual copies and checks GDI errors. Color policy
+is explicit: application-managed/unmanaged RGB disables DC and old-style halftone correction
+with `ICM_DONE_OUTSIDEDC`, reapplied after `StartPage`; driver-managed RGB uses `ICM_OFF`.
+Vendor driver automatic color correction remains a driver setting and requires qualification.
+Other platforms return `rgb::PrintError::Unsupported`. The Windows PDF backend and its existing
+completion dependency pin are independent of this additional MIT OR Apache-2.0 API.

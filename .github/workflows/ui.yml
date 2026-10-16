@@ -17,6 +17,7 @@ concurrency:
 
 jobs:
   native:
+    timeout-minutes: 30
     name: UI (${{ matrix.os }})
     strategy:
       fail-fast: false
@@ -43,6 +44,7 @@ jobs:
       - run: cargo test -p craft-ui --locked
       - run: cargo test -p craft-ui --all-features --locked
   wasm:
+    timeout-minutes: 15
     name: UI WASM
     runs-on: ubuntu-latest
     steps:

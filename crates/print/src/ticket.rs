@@ -171,6 +171,41 @@ pub(crate) fn verify_ticket(xml: &str, paper: Option<(u32, u32)>, landscape: boo
     Ok(size)
 }
 
+/// Confirm explicit job options survived driver validation. Collation only changes output
+/// when both the document and copy count exceed one. Without a duplex request the queue's
+/// default applies; without forced grayscale the driver's normal color policy applies.
+pub(crate) fn verify_job_options(xml: &str, job: &Job, pages: usize) -> Result<(), Error> {
+    let document = roxmltree::Document::parse(xml).map_err(spool_error)?;
+    let root = document.root_element();
+    let option = |name: &str| {
+        root.children()
+            .find(|n| n.has_tag_name((NS_PSF, "Feature")) && named(*n, name))
+            .and_then(|f| f.children().find(|n| n.has_tag_name((NS_PSF, "Option"))))
+    };
+    let refused = |field: &str| spool_error(format!("the printer's driver did not retain the requested {field}; nothing was sent"));
+    let copies = job.copies.clamp(1, 999);
+    if integer(root, "ParameterInit", "JobCopiesAllDocuments") != Some(copies) {
+        return Err(refused("copy count"));
+    }
+    if copies > 1 && pages > 1 && !option("DocumentCollate").is_some_and(|n| named(n, if job.collate { "Collated" } else { "Uncollated" })) {
+        return Err(refused("collation"));
+    }
+    if let Some(duplex) = job.duplex {
+        let wanted = match duplex {
+            Duplex::Off => "OneSided",
+            Duplex::LongEdge => "TwoSidedLongEdge",
+            Duplex::ShortEdge => "TwoSidedShortEdge",
+        };
+        if !option("JobDuplexAllDocumentsContiguously").is_some_and(|n| named(n, wanted)) {
+            return Err(refused("simplex/duplex setting"));
+        }
+    }
+    if job.grayscale && !option("PageOutputColor").is_some_and(|n| named(n, "Monochrome") || named(n, "Grayscale")) {
+        return Err(refused("grayscale"));
+    }
+    Ok(())
+}
+
 /// The widest unprintable margin of the paper, in micrometres, from PrintCapabilities computed
 /// for the job's ticket (`PageImageableSize`). The largest of the four, so content centred inside
 /// it is clear of every edge whichever way the driver measures. `None` when the driver doesn't say.
@@ -260,6 +295,37 @@ mod tests {
         assert!(verify_ticket(&validated(letter, "Portrait", None), Some(letter), false).is_ok(), "a driver without scaling");
         assert!(verify_ticket(&validated((0, 279_400), "Portrait", None), None, false).is_err(), "a roll has no length");
         assert!(verify_ticket("<not xml", Some(letter), false).is_err());
+    }
+
+    #[test]
+    fn a_driver_that_drops_explicit_job_options_is_refused() {
+        let job = Job { copies: 2, duplex: Some(Duplex::LongEdge), grayscale: true, ..Job::default() };
+        let xml = ticket_xml(&job, false);
+        assert!(verify_job_options(&xml, &job, 3).is_ok());
+        for (from, to) in
+            [(">2<", ">1<"), ("psk:Collated", "psk:Uncollated"), ("psk:TwoSidedLongEdge", "psk:OneSided"), ("psk:Monochrome", "psk:Color")]
+        {
+            assert!(verify_job_options(&xml.replace(from, to), &job, 3).is_err(), "{from}");
+        }
+        assert!(verify_job_options(&xml.replace("psk:Collated", "vendor:Collated"), &job, 3).is_err(), "namespace matters");
+        assert!(verify_job_options(&xml.replace("psk:Monochrome", "psk:Grayscale"), &job, 3).is_ok());
+        for feature in ["DocumentCollate", "JobDuplexAllDocumentsContiguously", "PageOutputColor"] {
+            let start = xml.find(&format!("<psf:Feature name=\"psk:{feature}\"")).unwrap();
+            let end = start + xml[start..].find("</psf:Feature>").unwrap() + "</psf:Feature>".len();
+            let mut dropped = xml.clone();
+            dropped.replace_range(start..end, "");
+            assert!(verify_job_options(&dropped, &job, 3).is_err(), "{feature}");
+            if feature == "DocumentCollate" {
+                assert!(verify_job_options(&dropped, &job, 1).is_ok(), "one page has no collating order");
+            }
+        }
+        let default = Job::default();
+        let xml = ticket_xml(&default, false);
+        assert!(verify_job_options(&xml, &default, 3).is_ok());
+        let simplex = Job { duplex: Some(Duplex::Off), ..Job::default() };
+        assert!(verify_job_options(&ticket_xml(&simplex, false), &simplex, 3).is_ok());
+        assert!(verify_job_options(&xml, &simplex, 3).is_err(), "explicit simplex must be confirmed");
+        assert!(verify_job_options("<not xml", &default, 1).is_err());
     }
 
     #[test]

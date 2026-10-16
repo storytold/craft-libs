@@ -49,6 +49,10 @@ const TABLOID: TestPage = TestPage { media: Some([0.0, 0.0, 792.0, 1224.0]), cro
 /// cross-reference stream, as modern writers save. The root page node sets a Letter MediaBox
 /// for pages that inherit it.
 fn test_pdf(pages: &[TestPage], compressed: bool) -> Vec<u8> {
+    test_pdf_with_annotations(pages, compressed, None)
+}
+
+fn test_pdf_with_annotations(pages: &[TestPage], compressed: bool, annotations: Option<&str>) -> Vec<u8> {
     let n = pages.len();
     // 1 catalog, 2 page tree, 3 content, then the pages.
     let kids: Vec<String> = (0..n).map(|i| format!("{} 0 R", 4 + i)).collect();
@@ -68,6 +72,9 @@ fn test_pdf(pages: &[TestPage], compressed: bool) -> Vec<u8> {
         }
         if let Some(r) = p.rotate {
             page += &format!(" /Rotate {r}");
+        }
+        if let Some(annotations) = annotations {
+            page += &format!(" /Annots {annotations}");
         }
         objects.push(page + " >>");
     }
@@ -265,6 +272,43 @@ fn shrink_to_fit_reframes_sheets_on_the_paper() {
 }
 
 #[test]
+fn shrink_to_fit_refuses_to_drop_annotation_appearances() {
+    use crate::sheets::{Fit, plan, read};
+    for annotations in ["[<< /Subtype /Text /Rect [36 36 72 72] /F 4 >>]", "42 0 R"] {
+        let pdf = test_pdf_with_annotations(&[LETTER, LETTER_LANDSCAPE], false, Some(annotations));
+        let sheets = read(&pdf).unwrap();
+        let fit = plan(&sheets.sheets, (612.0, 792.0), Fit::Shrink { margin: 18.0 }).unwrap();
+        assert!(matches!(sheets.update(&fit), Err(Error::Spool(ref m)) if m.contains("flatten page annotations")));
+        let exact = plan(&sheets.sheets, (612.0, 792.0), Fit::Exact).unwrap();
+        let rotated = sheets.update(&exact).unwrap();
+        assert!(rotated.starts_with(&pdf));
+        assert!(String::from_utf8_lossy(&rotated[pdf.len()..]).contains("/Annots"), "rotation retains annotations on the updated page");
+    }
+    for annotations in ["[]", "null"] {
+        let pdf = test_pdf_with_annotations(&[LETTER, LETTER_LANDSCAPE], false, Some(annotations));
+        let sheets = read(&pdf).unwrap();
+        let fit = plan(&sheets.sheets, (612.0, 792.0), Fit::Shrink { margin: 18.0 }).unwrap();
+        assert!(sheets.update(&fit).is_ok());
+    }
+}
+
+#[test]
+fn annotation_print_visibility_is_checked_before_native_submission() {
+    for flags in [0, 4, 6, 36, 20] {
+        let annotations = format!("[<< /Subtype /Square /Rect [36 36 72 72] /F {flags} >>]");
+        let pdf = test_pdf_with_annotations(&[LETTER], false, Some(&annotations));
+        let sheets = crate::sheets::read(&pdf).unwrap();
+        assert_eq!(sheets.check_print_annotations().is_ok(), flags == 4, "flags={flags}");
+    }
+    for annotations in ["[]", "null"] {
+        let pdf = test_pdf_with_annotations(&[LETTER], false, Some(annotations));
+        assert!(crate::sheets::read(&pdf).unwrap().check_print_annotations().is_ok());
+    }
+    let pdf = test_pdf(&[LETTER], false);
+    assert!(crate::sheets::read(&pdf).unwrap().check_print_annotations().is_ok());
+}
+
+#[test]
 fn an_encrypted_file_is_turned_but_not_reframed() {
     // An /Encrypt entry is all it takes: new content streams would have to be encrypted too.
     let pdf = test_pdf(&[LETTER, LETTER_LANDSCAPE], false);
@@ -367,16 +411,24 @@ fn windows_jobs_reach_the_spooler() {
     }
     let listed = spool::printers().into_iter().find(|p| p.name == name);
     let mixed = test_pdf(&[LETTER, LETTER_LANDSCAPE, LETTER], true);
-    let job = Job { printer: Some(name.into()), copies: 2, duplex: Some(Duplex::LongEdge), title: "mixed.pdf".into(), ..Job::default() };
+    let job = Job { printer: Some(name.into()), title: "mixed.pdf".into(), ..Job::default() };
     let caller = std::thread::current().id();
     // Rc proves callers are not required to make their callback Send just because native
-    // printing uses a COM worker. Counts describe PDF sheets, despite copies and duplex.
+    // printing uses a COM worker. Counts describe accepted PDF sheets.
     let processed = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
     let observed = std::rc::Rc::clone(&processed);
     let sent = spool::submit_with_progress(&mixed, &job, &mut move |done, total| {
         assert_eq!(std::thread::current().id(), caller);
         observed.borrow_mut().push((done, total));
     });
+    let mut duplex_progress = Vec::new();
+    let duplex_refused = if listed.as_ref().is_some_and(|p| p.two_sided == Some(false)) {
+        Some(spool::submit_with_progress(&mixed, &Job { duplex: Some(Duplex::LongEdge), ..job.clone() }, &mut |done, total| {
+            duplex_progress.push((done, total));
+        }))
+    } else {
+        None
+    };
     let tabloid = test_pdf(&[TABLOID, LETTER], false);
     let shrink = Job { printer: Some(name.into()), scaling: Scaling::ShrinkToFit, title: "shrink".into(), ..Job::default() };
     let shrunk = spool::submit(&tabloid, &shrink);
@@ -396,7 +448,11 @@ fn windows_jobs_reach_the_spooler() {
     );
     assert!(listed.as_ref().is_some_and(|p| p.two_sided.is_some()), "the new printer is listed, its duplex support known: {listed:?}");
     assert_eq!(sent.as_deref(), Ok("spooled 3 sheet(s)"), "{sent:?}");
+    if let Some(refused) = duplex_refused {
+        assert!(matches!(refused, Err(Error::Spool(ref m)) if m.contains("simplex/duplex") && m.contains("nothing was sent")), "{refused:?}");
+    }
     assert_eq!(*processed.borrow(), [(0, 3), (1, 3), (2, 3), (3, 3)]);
+    assert!(duplex_progress.is_empty(), "driver refusal before submission has no progress");
     assert_eq!(shrunk.as_deref(), Ok("spooled 2 sheet(s)"), "{shrunk:?}");
     assert!(matches!(exact_refused, Err(Error::Spool(ref m)) if m.contains("one paper size")), "{exact_refused:?}");
     assert!(refused_progress.is_empty(), "rejection before a job starts has no progress: {refused_progress:?}");

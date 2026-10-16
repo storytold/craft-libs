@@ -1,0 +1,74 @@
+{
+  "crate": "hayro",
+  "source_repository": "https://github.com/storytold/pdfcraft",
+  "source_revision": "7437bde378f43856eada40af25b983812e615e8a",
+  "source_directory": "vendor/hayro",
+  "files": [
+    {
+      "path": ".cargo-ok",
+      "source_sha256": "afbf9d0f3560b0fd7795e81c42a0a79ee6b6fc67e064f77826aee642cad28d91",
+      "source_git_blob": "5f8b795830acbab5961c1a28c76a7916c9631493",
+      "sha256": "afbf9d0f3560b0fd7795e81c42a0a79ee6b6fc67e064f77826aee642cad28d91"
+    },
+    {
+      "path": ".cargo_vcs_info.json",
+      "source_sha256": "92782bf02a2f42784dd2bf7cc6037780fff2974d6d66a32539a405b5ff527b4f",
+      "source_git_blob": "4ea4f2df77e6ab7bdde54de34409d32cd3cd2073",
+      "sha256": "92782bf02a2f42784dd2bf7cc6037780fff2974d6d66a32539a405b5ff527b4f"
+    },
+    {
+      "path": "Cargo.lock",
+      "source_sha256": "e74d97562bd37a010ecc49af9aa5fde2a22c8c9ae551f83a446c68def200bf6c",
+      "source_git_blob": "de7668d7ebf73711e739828309e67be62fddee19",
+      "sha256": "e74d97562bd37a010ecc49af9aa5fde2a22c8c9ae551f83a446c68def200bf6c"
+    },
+    {
+      "path": "Cargo.toml",
+      "source_sha256": "efe75cedc81cae62b7a74af2a718b40b0605807874a0f9be37c7b508109decc2",
+      "source_git_blob": "87ab46a239665a340310707f03bf0e16f0e80e31",
+      "sha256": "efe75cedc81cae62b7a74af2a718b40b0605807874a0f9be37c7b508109decc2"
+    },
+    {
+      "path": "Cargo.toml.orig",
+      "source_sha256": "74943bfca81911b4abe23333370ff1031dd73da4b85739941939c022a7937595",
+      "source_git_blob": "36bdd8bb07d694cd96bb0575a5caea09aa2594a8",
+      "sha256": "74943bfca81911b4abe23333370ff1031dd73da4b85739941939c022a7937595"
+    },
+    {
+      "path": "LICENSE-APACHE",
+      "source_sha256": "0cec06e0e55fbc3dc5cee4fca9b607f66cb8f4e4dbcf3b3c013594dd156732e9",
+      "source_git_blob": "4947287f7b5ccb5d1e8b7b2d3aa5d89f322c160d",
+      "sha256": "0cec06e0e55fbc3dc5cee4fca9b607f66cb8f4e4dbcf3b3c013594dd156732e9"
+    },
+    {
+      "path": "LICENSE-MIT",
+      "source_sha256": "51b50e6120c344dcc146bbd6375ca1c78e079d97c8bea76e67a53d6ff0efebac",
+      "source_git_blob": "ae3742de4e9ccb463cb46f05fe3ca0ec23fbb0d2",
+      "sha256": "51b50e6120c344dcc146bbd6375ca1c78e079d97c8bea76e67a53d6ff0efebac"
+    },
+    {
+      "path": "README.md",
+      "source_sha256": "3c9a96f92225ed01e5135ccddfeeb9084eb45678932105f03e8145c8487c12d4",
+      "source_git_blob": "e09af3594decc3fd60df78fdc434ec7d340cc1aa",
+      "sha256": "3c9a96f92225ed01e5135ccddfeeb9084eb45678932105f03e8145c8487c12d4"
+    },
+    {
+      "path": "examples/render.rs",
+      "source_sha256": "0b512c65652e56267bb1928548ab49f8ae997107a55fb4db50debe5f94ace910",
+      "source_git_blob": "1e6ae24f072b34f125d35d22a7612ce546b1fddf",
+      "sha256": "0b512c65652e56267bb1928548ab49f8ae997107a55fb4db50debe5f94ace910"
+    },
+    {
+      "path": "src/lib.rs",
+      "source_sha256": "1ce3e02072acb639c33476618446af80fca29b960a3ca764168c1c2d348d5e5d",
+      "source_git_blob": "def102b4291b1fe99f2c8975477e5d294c4f955f",
+      "sha256": "1ce3e02072acb639c33476618446af80fca29b960a3ca764168c1c2d348d5e5d"
+    },
+    {
+      "path": "src/renderer.rs",
+      "source_sha256": "b74b630b73e86b69b26ef433ee6aabbb684def133e4ae46f0cbf8f9f1fbd4484",
+      "source_git_blob": "23fc2e36cae7368e1a508bb246f3a1a15bb60a67",
+      "sha256": "b74b630b73e86b69b26ef433ee6aabbb684def133e4ae46f0cbf8f9f1fbd4484"
+    }
+  ]
+}

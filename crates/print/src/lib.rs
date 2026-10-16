@@ -19,6 +19,13 @@ mod ticket;
 #[cfg(windows)]
 mod windows;
 
+/// Native Windows driver settings, printable geometry and explicit RGB/GDI transport.
+/// Callers perform ICC conversion and compose page pixels/vector strokes. Other platforms
+/// return `rgb::PrintError::Unsupported`; the PDF spooler remains independent of this API.
+pub mod rgb {
+    pub use craft_winprint_gdi::*;
+}
+
 /// A system spooler failure. Document permissions belong to the caller.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Error {

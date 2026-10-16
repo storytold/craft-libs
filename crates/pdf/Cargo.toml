@@ -1,0 +1,38 @@
+[package]
+name = "craft-pdf"
+description = "Shared PDF reading, rendering and optional writing for Craft apps"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+default = []
+read = ["dep:hayro-syntax", "dep:thiserror"]
+interpret = ["read", "dep:hayro-interpret"]
+raster = ["interpret", "dep:hayro", "dep:bytemuck"]
+write = ["dep:krilla", "dep:thiserror"]
+write-pdf = ["write", "krilla/pdf"]
+write-simple-text = ["write", "krilla/simple-text"]
+
+[dependencies]
+hayro-syntax = { workspace = true, optional = true }
+hayro-interpret = { workspace = true, optional = true }
+hayro = { workspace = true, optional = true }
+bytemuck = { workspace = true, optional = true }
+krilla = { workspace = true, optional = true }
+thiserror = { workspace = true, optional = true }
+
+[dev-dependencies]
+hayro-syntax = "=0.7.2"
+hayro-interpret = { version = "=0.7.0", default-features = false }
+hayro-cmap = "=0.1.0"
+kurbo = "0.13"
+ttf-parser = "=0.25.1"
+
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+wasm-bindgen-test = "0.3"

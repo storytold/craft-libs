@@ -1,6 +1,7 @@
 [workspace]
 resolver = "3"
 members = ["crates/*"]
+exclude = ["vendor/krilla", "vendor/hayro", "vendor/hayro-interpret", "vendor/hayro-syntax", "vendor/hayro-jbig2"]
 
 [workspace.package]
 version = "0.1.0"
@@ -11,6 +12,13 @@ repository = "https://github.com/storytold/craft-libs"
 
 [workspace.dependencies]
 # internal: add each crate here as `craft-<name> = { path = "crates/<name>" }`
+craft-pdf = { path = "crates/pdf", version = "=0.1.0" }
+krilla = { version = "=0.8.2", default-features = false, features = ["raster-images"] }
+hayro = { version = "=0.7.1", default-features = false }
+hayro-interpret = { version = "=0.7.0", default-features = false, features = ["embed-fonts", "embed-cmaps"] }
+hayro-syntax = { version = "=0.7.2", default-features = false, features = ["std"] }
+bytemuck = "1"
+thiserror = "2"
 craft-atomic = { path = "crates/atomic" }
 craft-cms = { path = "crates/cms" }
 craft-cloud = { path = "crates/cloud" }
@@ -32,13 +40,21 @@ rayon = "1"
 log = "0.4"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-thiserror = "2"
 pollster = "0.4"
 wgpu = { version = "30", default-features = false, features = ["std", "wgsl"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(craft_pdf_unicode_fixtures)"] }
 
 [workspace.lints.clippy]
 dbg_macro = "warn"
 todo = "warn"
+
+[patch.crates-io]
+krilla = { path = "vendor/krilla" }
+
+hayro = { path = "vendor/hayro" }
+hayro-interpret = { path = "vendor/hayro-interpret" }
+hayro-syntax = { path = "vendor/hayro-syntax" }
+hayro-jbig2 = { path = "vendor/hayro-jbig2" }
