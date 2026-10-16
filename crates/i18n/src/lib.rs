@@ -35,7 +35,6 @@ struct Locale {
     /// and the pseudo locale.
     chain: Vec<usize>,
     /// Plural rules and the categories `@plural` forms list, in order.
-    #[expect(dead_code, reason = "read by plural lookups")]
     plural: Option<(PluralRules, Vec<PluralCategory>)>,
 }
 
@@ -107,6 +106,26 @@ impl I18n {
         self.find(lang, "@id", id).unwrap_or_else(|| self.t(lang, label))
     }
 
+    /// A count's wording in `lang`, `{n}` filled in. `one` and `other` are the English forms;
+    /// they are also the key of the `@plural` row, and the fallback.
+    pub fn trn(&self, lang: Lang, n: u64, one: &str, other: &str) -> String {
+        let key = format!("{one}|{other}");
+        let chain = self.locale(lang).map_or(&[][..], |l| l.chain.as_slice());
+        let text = chain
+            .iter()
+            .find_map(|&i| {
+                let locale = self.locales.get(i)?;
+                let forms = locale.rows.get("@plural")?.get(&key)?;
+                let (rules, categories) = locale.plural.as_ref()?;
+                let category = rules.select(n).ok()?;
+                // A category whole numbers up to 1000 never reach (French `many`) takes the last form.
+                let index = categories.iter().position(|c| *c == category).unwrap_or(categories.len().saturating_sub(1));
+                forms.split('|').nth(index)
+            })
+            .unwrap_or(if n == 1 { one } else { other });
+        fmt(text, &[("n", &n.to_string())])
+    }
+
     fn locale(&self, lang: Lang) -> Option<&Locale> {
         self.locales.get(lang.0)
     }
@@ -116,6 +135,32 @@ impl I18n {
         let chain = self.locale(lang).map(|l| l.chain.as_slice())?;
         chain.iter().find_map(|&i| self.locales.get(i)?.rows.get(context)?.get(source).map(String::as_str))
     }
+}
+
+/// Fill `{name}` placeholders from `args` in one pass. Unknown placeholders stay as written, and
+/// inserted values are never read as templates, so a file name containing `{n}` stays intact.
+pub fn fmt(template: &str, args: &[(&str, &str)]) -> String {
+    let mut out = String::with_capacity(template.len());
+    let mut rest = template;
+    while let Some((before, after_open)) = rest.split_once('{') {
+        out.push_str(before);
+        let Some((name, after_close)) = after_open.split_once('}') else {
+            out.push('{');
+            rest = after_open;
+            break;
+        };
+        match args.iter().find(|(k, _)| *k == name) {
+            Some((_, value)) => out.push_str(value),
+            None => {
+                out.push('{');
+                out.push_str(name);
+                out.push('}');
+            }
+        }
+        rest = after_close;
+    }
+    out.push_str(rest);
+    out
 }
 
 /// A locale with no catalogs (English, the pseudo locale).
@@ -227,5 +272,54 @@ mod tests {
         assert_eq!(i.from_code("xx"), None);
         assert_eq!(i.from_code("en"), Some(Lang::EN));
         assert_eq!(i.code(Lang::EN), "en");
+    }
+
+    static P: &Embedded = &[
+        ("fr", "@plural\t{n} page|{n} pages\t{n} page|{n} pages\n", ""),
+        ("ru", "@plural\t{n} file|{n} files\t{n} файл|{n} файла|{n} файлов\n", ""),
+        ("ja", "@plural\t{n} file|{n} files\t{n} 個\n", ""),
+    ];
+
+    #[test]
+    fn fmt_fills_once() {
+        assert_eq!(fmt("{a} to {b}", &[("a", "x"), ("b", "{a}")]), "x to {a}");
+        assert_eq!(fmt("{z} {", &[]), "{z} {");
+    }
+
+    #[test]
+    fn one_other() {
+        let (i, problems) = I18n::new(P);
+        assert!(problems.is_empty(), "{problems:?}");
+        let fr = lang(&i, "fr");
+        assert_eq!(i.trn(fr, 0, "{n} page", "{n} pages"), "0 page");
+        assert_eq!(i.trn(fr, 2, "{n} page", "{n} pages"), "2 pages");
+    }
+
+    #[test]
+    fn three_forms_ru() {
+        let i = I18n::new(P).0;
+        let ru = lang(&i, "ru");
+        for (n, want) in [(1, "1 файл"), (3, "3 файла"), (5, "5 файлов"), (11, "11 файлов"), (21, "21 файл")] {
+            assert_eq!(i.trn(ru, n, "{n} file", "{n} files"), want);
+        }
+    }
+
+    #[test]
+    fn one_form_ja() {
+        let i = I18n::new(P).0;
+        assert_eq!(i.trn(lang(&i, "ja"), 7, "{n} file", "{n} files"), "7 個");
+    }
+
+    #[test]
+    fn english_fallback() {
+        let i = I18n::new(P).0;
+        assert_eq!(i.trn(Lang::EN, 1, "{n} file", "{n} files"), "1 file");
+        assert_eq!(i.trn(lang(&i, "fr"), 2, "{n} x", "{n} xs"), "2 xs");
+    }
+
+    #[test]
+    fn beyond_sweep() {
+        let i = I18n::new(P).0;
+        assert_eq!(i.trn(lang(&i, "fr"), 1_000_000, "{n} page", "{n} pages"), "1000000 pages");
     }
 }
