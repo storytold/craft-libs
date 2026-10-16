@@ -178,3 +178,22 @@ fn outside_file_with_failing_migration_is_not_overwritten() {
     assert_eq!(read_config(tmp.path()), external, "the outside file is left untouched");
     assert!(matches!(store.tick(std::time::Instant::now()).status, craft_settings::SaveStatus::Idle), "no retries once read-only");
 }
+
+#[test]
+fn an_emptied_file_is_not_adopted_over_the_loaded_document() {
+    let tmp = tempfile::tempdir().unwrap();
+    write_config(tmp.path(), "schema_version = 2\n\n# my note\n[plugins]\nenabled = true\n\n[general]\nlanguage = \"de\"\n");
+    let (mut store, _) = open_in(tmp.path());
+    store.update(|p| p.general.language = "fr".into());
+    store.flush().unwrap();
+
+    // Emptied while the app runs: an editor crash, a sync tool, a hand `truncate`.
+    write_config(tmp.path(), "");
+    store.update(|p| p.general.language = "es".into());
+    store.flush().unwrap();
+
+    let text = read_config(tmp.path());
+    assert!(text.contains("# my note"), "{text}");
+    assert!(text.contains("[plugins]"), "{text}");
+    assert!(text.contains("language = \"es\""), "{text}");
+}
