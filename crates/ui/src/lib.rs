@@ -14,6 +14,8 @@ pub mod cloud;
 pub mod combo;
 pub mod direction;
 pub mod docking;
+#[cfg(feature = "esign")]
+pub mod esign;
 mod focus;
 pub mod fonts;
 pub mod icons;

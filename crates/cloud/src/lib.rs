@@ -54,6 +54,22 @@ pub trait Files {
     /// One document's bytes.
     fn read(&self, id: &str) -> Result<Vec<u8>>;
 
+    /// A byte range of one document.
+    ///
+    /// Defaulted to a full [`read`] and a slice, so providers that have no
+    /// ranged GET still satisfy the trait. A provider with real range support
+    /// overrides this.
+    fn read_range(&self, id: &str, offset: u64, length: u64) -> Result<Vec<u8>> {
+        let bytes = self.read(id)?;
+        let start = usize::try_from(offset).unwrap_or(usize::MAX);
+        if start >= bytes.len() {
+            return Ok(Vec::new());
+        }
+        let take = usize::try_from(length).unwrap_or(usize::MAX);
+        let end = start.saturating_add(take).min(bytes.len());
+        Ok(bytes[start..end].to_vec())
+    }
+
     /// Replace one document's bytes.
     ///
     /// `if_match` carries the etag the caller last saw. A provider that
