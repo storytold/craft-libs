@@ -20,7 +20,15 @@ pub enum SampleKind {
 }
 
 /// Options for building a [`Transform`].
+///
+/// When compiled with the `serde` feature, this struct implements [`Serialize`](serde::Serialize)
+/// and [`Deserialize`](serde::Deserialize) with kebab-case field naming and defaults for omitted fields.
+/// This format is intended for transient configuration interchange (such as IPC payloads, command-line
+/// options, and temporary rendering preferences). Deserialization is backward-compatible with omitted
+/// fields via `#[serde(default)]`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(default, rename_all = "kebab-case"))]
 pub struct TransformOptions {
     pub intent: Intent,
     /// Adobe-style black point compensation (ignored for absolute colorimetric).
