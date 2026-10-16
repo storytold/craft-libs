@@ -13,6 +13,7 @@ use write_fonts::tables::layout::{
     ScriptRecord, StylisticSetParams,
 };
 use write_fonts::tables::name::{Name, NameRecord};
+use write_fonts::tables::stat::{AxisRecord, AxisValue, AxisValueTableFlags, Stat};
 use write_fonts::types::{Fixed, GlyphId, GlyphId16, NameId, Tag};
 
 fn name(id: u16, s: &str) -> NameRecord {
@@ -33,6 +34,9 @@ fn font() -> Vec<u8> {
         name(259, "Open digits"),
         name(260, "Single-story a"),
         name(261, "   "),
+        name(262, "TestVF-Heavy"),
+        name(263, "Roman"),
+        name(25, "TestVF"),
     ];
     names.sort_by_key(|r| r.name_id);
     let axes = vec![
@@ -44,14 +48,15 @@ fn font() -> Vec<u8> {
             subfamily_name_id: NameId::new(258),
             flags: 0,
             coordinates: vec![Fixed::from_f64(800.0), Fixed::from_f64(96.0)],
-            post_script_name_id: None,
+            post_script_name_id: Some(NameId::new(262)),
         },
         // A blank name is no instance.
         InstanceRecord {
             subfamily_name_id: NameId::new(261),
             flags: 0,
             coordinates: vec![Fixed::from_f64(100.0), Fixed::from_f64(96.0)],
-            post_script_name_id: None,
+            // 0xFFFF: the instance has no PostScript name.
+            post_script_name_id: Some(NameId::new(0xFFFF)),
         },
     ];
     let fvar = Fvar::new(AxisInstanceArrays::new(axes, instances));
@@ -75,8 +80,20 @@ fn font() -> Vec<u8> {
         FeatureList::new(vec![FeatureRecord::new(Tag::new(b"kern"), Feature::new(None, vec![]))]),
         PositionLookupList::new(vec![]),
     );
+    // STAT: wght, and an `ital` fvar lacks with this face's value 0 ("Roman"); a second value record
+    // for it doesn't override the first.
+    let stat = Stat {
+        design_axes: vec![AxisRecord::new(Tag::new(b"wght"), NameId::new(256), 0), AxisRecord::new(Tag::new(b"ital"), NameId::new(263), 1)].into(),
+        offset_to_axis_values: Some(vec![
+            AxisValue::format_3(1, AxisValueTableFlags::ELIDABLE_AXIS_VALUE_NAME, NameId::new(263), Fixed::from_f64(0.0), Fixed::from_f64(1.0))
+                .into(),
+            AxisValue::format_1(1, AxisValueTableFlags::empty(), NameId::new(263), Fixed::from_f64(1.0)).into(),
+        ])
+        .into(),
+        elided_fallback_name_id: Some(NameId::new(2)),
+    };
     let mut b = FontBuilder::new();
-    b.add_table(&cmap).unwrap().add_table(&Name::new(names)).unwrap().add_table(&fvar).unwrap();
+    b.add_table(&cmap).unwrap().add_table(&Name::new(names)).unwrap().add_table(&fvar).unwrap().add_table(&stat).unwrap();
     b.add_table(&gsub).unwrap().add_table(&gpos).unwrap();
     b.build()
 }
@@ -91,6 +108,10 @@ fn reads_axes_instances_and_named_features() {
     assert_eq!(d.instances.len(), 1, "{:?}", d.instances);
     assert_eq!(d.instances[0].name, "Heavy");
     assert_eq!(d.instances[0].coords, vec![("wght".to_string(), 800.0), ("XOPQ".to_string(), 96.0)]);
+    assert_eq!(d.instances[0].postscript_name.as_deref(), Some("TestVF-Heavy"));
+    assert_eq!(d.variations_prefix.as_deref(), Some("TestVF"));
+    let stat: Vec<(&str, Option<f32>)> = d.stat_axes.iter().map(|a| (a.tag.as_str(), a.value)).collect();
+    assert_eq!(stat, [("wght", None), ("ital", Some(0.0))]);
 
     let tags: Vec<&str> = d.features.iter().map(|f| f.tag.as_str()).collect();
     assert_eq!(tags, ["cv11", "kern", "ss01"], "sorted, each tag once");
@@ -125,4 +146,24 @@ fn damaged_fonts_never_panic() {
             let _ = craft_font_info::read(&g, 0);
         }
     }
+}
+
+#[test]
+fn registered_feature_names() {
+    assert_eq!(craft_font_info::feature_name("tnum"), Some("Tabular figures"));
+    assert_eq!(craft_font_info::feature_name("salt"), Some("Stylistic alternates"));
+    // Numbered sets and variants are named by the font; unknown tags have no name.
+    for tag in ["ss01", "cv11", "zzzz", ""] {
+        assert_eq!(craft_font_info::feature_name(tag), None, "{tag}");
+    }
+}
+
+#[test]
+fn feature_names_are_one_per_tag() {
+    let mut tags: Vec<&str> = craft_font_info::FEATURE_NAMES.iter().map(|(t, _)| *t).collect();
+    let n = tags.len();
+    tags.sort_unstable();
+    tags.dedup();
+    assert_eq!(tags.len(), n, "a tag listed twice");
+    assert!(tags.iter().all(|t| t.len() == 4 && t.is_ascii()));
 }

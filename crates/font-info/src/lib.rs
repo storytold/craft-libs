@@ -3,7 +3,9 @@
 //! What one font face offers for fine typography: its variation axes with the font's own names,
 //! its named instances, and its OpenType layout features with the names the font gives them
 //! (`ss01` "Open digits", `cv11` "Single-story a") and the characters each feature changes, so a
-//! preview can show exactly those.
+//! preview can show exactly those. Also what naming its variable instances takes (Adobe Tech Note
+//! #5902): the Variations PostScript Name Prefix, each named instance's PostScript name and the
+//! `STAT` design axes; and [`FEATURE_NAMES`], the registered names of feature tags.
 //!
 //! [`read`] takes the font file's bytes and the face's index in it (0 for a single font; the
 //! face in a `.ttc` collection). Fonts are untrusted input: a malformed table is left out, never a
@@ -37,6 +39,8 @@ const RUN: usize = 3;
 const MAX_FEATURES: usize = 512;
 const MAX_LOOKUPS: usize = 64;
 const MAX_COVERAGE: usize = 4096;
+/// Most `STAT` design axes and axis value records read.
+const MAX_STAT: usize = 256;
 
 /// A variation axis of the face, from its `fvar` table.
 #[derive(Clone, Debug, PartialEq)]
@@ -57,6 +61,8 @@ pub struct AxisDetail {
 #[derive(Clone, Debug, PartialEq)]
 pub struct InstanceDetail {
     pub name: String,
+    /// The instance's own PostScript name (`InterVariable-Bold`), if the font gives one.
+    pub postscript_name: Option<String>,
     /// User-space coordinates, one per axis in [`FaceDetails::axes`] order: (tag, value).
     pub coords: Vec<(String, f32)>,
 }
@@ -77,11 +83,24 @@ pub struct FeatureDetail {
     pub changed: usize,
 }
 
+/// A design axis of the face's style attributes (`STAT`), which may be one `fvar` lacks (Inter
+/// Variable's `ital`: its upright and italic are two files).
+#[derive(Clone, Debug, PartialEq)]
+pub struct StatAxisDetail {
+    pub tag: String,
+    /// This face's value on the axis: its first single-axis value record (formats 1–3), if any.
+    pub value: Option<f32>,
+}
+
 /// Everything [`read`] reads from one face.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct FaceDetails {
     pub axes: Vec<AxisDetail>,
     pub instances: Vec<InstanceDetail>,
+    /// Variations PostScript Name Prefix (name ID 25), if the font has one.
+    pub variations_prefix: Option<String>,
+    /// `STAT` design axes, in the table's order.
+    pub stat_axes: Vec<StatAxisDetail>,
     /// Sorted by tag, each tag once.
     pub features: Vec<FeatureDetail>,
 }
@@ -144,7 +163,7 @@ fn read_face(font: &FontRef) -> FaceDetails {
         .iter()
         .filter_map(|inst| {
             let coords: Vec<(String, f32)> = all_axes.iter().cloned().zip(inst.user_coords()).filter(|(_, v)| v.is_finite()).collect();
-            Some(InstanceDetail { name: name(inst.subfamily_name_id())?, coords })
+            Some(InstanceDetail { name: name(inst.subfamily_name_id())?, postscript_name: inst.postscript_name_id().and_then(name), coords })
         })
         .collect();
     let mut features: BTreeMap<String, FeatureDetail> = BTreeMap::new();
@@ -159,7 +178,105 @@ fn read_face(font: &FontRef) -> FaceDetails {
             features.entry(tag.clone()).or_insert(FeatureDetail { tag, name: None, sample: String::new(), changed: 0 });
         }
     }
-    FaceDetails { axes, instances, features: features.into_values().collect() }
+    FaceDetails {
+        axes,
+        instances,
+        variations_prefix: name(StringId::VARIATIONS_POSTSCRIPT_NAME_PREFIX),
+        stat_axes: stat_axes(font),
+        features: features.into_values().collect(),
+    }
+}
+
+/// The `STAT` design axes with this face's value on each.
+fn stat_axes(font: &FontRef) -> Vec<StatAxisDetail> {
+    use skrifa::raw::tables::stat::AxisValue;
+    let Ok(stat) = font.stat() else { return Vec::new() };
+    let Ok(design) = stat.design_axes() else { return Vec::new() };
+    let mut values: BTreeMap<u16, f32> = BTreeMap::new();
+    if let Some(Ok(list)) = stat.offset_to_axis_values() {
+        for v in list.axis_values().iter().take(MAX_STAT).filter_map(Result::ok) {
+            let (axis, value) = match v {
+                AxisValue::Format1(v) => (v.axis_index(), v.value()),
+                AxisValue::Format2(v) => (v.axis_index(), v.nominal_value()),
+                AxisValue::Format3(v) => (v.axis_index(), v.value()),
+                AxisValue::Format4(_) => continue,
+            };
+            values.entry(axis).or_insert(value.to_f32());
+        }
+    }
+    design
+        .iter()
+        .take(MAX_STAT)
+        .enumerate()
+        .map(|(i, a)| StatAxisDetail {
+            tag: a.axis_tag().to_string(),
+            value: u16::try_from(i).ok().and_then(|i| values.get(&i)).copied().filter(|v| v.is_finite()),
+        })
+        .collect()
+}
+
+/// Registered OpenType layout features with their English names from the OpenType feature
+/// registry (`tnum` "Tabular figures", `salt` "Stylistic alternates"), for an interface to show
+/// and translate. The numbered `ssNN` and `cvNN` aren't here: [`FeatureDetail::name`] names them
+/// from the font itself.
+pub const FEATURE_NAMES: &[(&str, &str)] = &[
+    ("liga", "Standard ligatures"),
+    ("dlig", "Discretionary ligatures"),
+    ("calt", "Contextual alternates"),
+    ("swsh", "Swash"),
+    ("salt", "Stylistic alternates"),
+    ("titl", "Titling alternates"),
+    ("ordn", "Ordinals"),
+    ("frac", "Fractions"),
+    ("case", "Case-sensitive forms"),
+    ("cpsp", "Capital spacing"),
+    ("kern", "Kerning pairs"),
+    ("zero", "Slashed zero"),
+    ("subs", "Subscript"),
+    ("sups", "Superscript"),
+    ("sinf", "Scientific inferiors"),
+    ("smcp", "Small capitals"),
+    ("c2sc", "Capitals to small capitals"),
+    ("pcap", "Petite capitals"),
+    ("c2pc", "Capitals to petite capitals"),
+    ("unic", "Unicase"),
+    ("dnom", "Denominators"),
+    ("numr", "Numerators"),
+    ("hist", "Historical forms"),
+    ("hlig", "Historical ligatures"),
+    ("ornm", "Ornaments"),
+    ("nalt", "Alternate annotation forms"),
+    ("mgrk", "Mathematical Greek"),
+    ("lnum", "Lining figures"),
+    ("onum", "Oldstyle figures"),
+    ("pnum", "Proportional figures"),
+    ("tnum", "Tabular figures"),
+    ("afrc", "Alternative fractions"),
+    ("cswh", "Contextual swash"),
+    ("jalt", "Justification alternates"),
+    ("ital", "Italics"),
+    ("rtbd", "Right bounds"),
+    ("lfbd", "Left bounds"),
+    ("opbd", "Optical bounds"),
+    ("palt", "Proportional alternate widths"),
+    ("halt", "Proportional alternate widths"),
+    ("pwid", "Proportional widths"),
+    ("fwid", "Full widths"),
+    ("hwid", "Half widths"),
+    ("ruby", "Ruby notation forms"),
+    ("expt", "Expert forms"),
+    ("jp78", "Alternate CJK forms"),
+    ("jp83", "Alternate CJK forms"),
+    ("jp90", "Alternate CJK forms"),
+    ("jp04", "Alternate CJK forms"),
+    ("smpl", "Alternate CJK forms"),
+    ("trad", "Alternate CJK forms"),
+    ("tnam", "Alternate CJK forms"),
+];
+
+/// The English name of the registered feature `tag` ([`FEATURE_NAMES`]), if it has one.
+pub fn feature_name(tag: &str) -> Option<&'static str> {
+    FEATURE_NAMES.iter().find(|(t, _)| *t == tag).map(|(_, name)| *name)
 }
 
 /// Adds the `GSUB` features, their UI names and their substituted characters to `out`.
