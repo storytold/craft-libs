@@ -395,6 +395,30 @@ fn actual_pointer_drag_docks_a_floating_panel_into_the_main_tab_strip() {
     assert_eq!(panels.get(*active), Some(&5));
 }
 
+/// On X11 and Windows a release outside the window never reaches egui (egui-winit drops a
+/// button event once the pointer has left), so a tab dragged out of the window used to stay on
+/// the pointer for good. Leaving the window detaches the panel where it left, even over a dock
+/// target, and ends the drag.
+#[test]
+fn tab_dragged_out_of_the_window_floats_where_it_left() {
+    let ctx = Context::default();
+    let mut layout = sample();
+    for _ in 0..3 {
+        step(&ctx, &mut layout, Vec::new());
+    }
+    let tab = ctx.read_response(Id::new("test-area").with(("tab", &3u32))).unwrap().rect.center();
+    let exit = pos2(4.0, 300.0);
+    step(&ctx, &mut layout, vec![Event::PointerMoved(tab), pointer_button(tab, true)]);
+    step(&ctx, &mut layout, vec![Event::PointerMoved(tab + vec2(-8.0, 0.0))]);
+    step(&ctx, &mut layout, vec![Event::PointerMoved(exit)]);
+    let actions = step(&ctx, &mut layout, vec![Event::PointerGone]);
+    assert!(actions.iter().any(|a| matches!(a, Action::Float { panel: 3, .. })), "{actions:?}");
+    assert!(layout.floating.iter().any(|g| g.panels == [3]), "{layout:?}");
+    let back = pos2(400.0, 300.0);
+    assert!(step(&ctx, &mut layout, vec![Event::PointerMoved(back)]).is_empty());
+    assert!(step(&ctx, &mut layout, vec![pointer_button(back, false)]).is_empty(), "the drag ended when the pointer left");
+}
+
 #[test]
 fn panel_size_limits_clamp_geometry_without_overwriting_preferred_widths() {
     let layout = Layout {
