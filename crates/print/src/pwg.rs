@@ -85,11 +85,12 @@ impl RasterType {
         }
     }
 
-    /// The type a printer's keyword names (case does not matter); `None` for one this writer does
-    /// not make.
+    /// The type a printer's keyword names; `None` for one this writer does not make. Case and hyphens do not
+    /// matter: printers send `adobe-rgb_8`, while the PWG schema spells the value `AdobeRgb_8`.
     pub fn from_keyword(keyword: &str) -> Option<Self> {
-        let keyword = keyword.trim();
-        Self::ALL.into_iter().find(|t| t.keyword().eq_ignore_ascii_case(keyword))
+        let plain = |s: &str| s.chars().filter(|c| *c != '-').map(|c| c.to_ascii_lowercase()).collect::<String>();
+        let keyword = plain(keyword.trim());
+        Self::ALL.into_iter().find(|t| plain(t.keyword()) == keyword)
     }
 
     /// One channel (grey) or three (RGB).
@@ -525,7 +526,10 @@ mod tests {
             assert_eq!(RasterType::from_keyword(kind.keyword()), Some(kind));
             assert_eq!(RasterType::from_keyword(&kind.keyword().to_ascii_uppercase()), Some(kind));
         }
-        for other in ["cmyk_8", "rgb_8", "black_1", "device1_8", "adobe-rgb", ""] {
+        // the schema's spelling is the same type
+        assert_eq!(RasterType::from_keyword("AdobeRgb_16"), Some(RasterType::AdobeRgb16));
+        assert_eq!(RasterType::from_keyword(" Sgray_8 "), Some(RasterType::Sgray8));
+        for other in ["cmyk_8", "rgb_8", "black_1", "device1_8", "adobe-rgb", "adobe-rgb_12", ""] {
             assert_eq!(RasterType::from_keyword(other), None, "{other}");
         }
         assert!(RasterType::BASELINE.contains(&RasterType::Srgb8) && RasterType::BASELINE.contains(&RasterType::Sgray8));

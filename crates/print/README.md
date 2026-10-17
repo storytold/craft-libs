@@ -75,6 +75,17 @@ This crate has no renderer, so the app that owns one says how to make a format a
 * **`craft_print::pwg`** is the neutral PWG raster **encoder** for pages the converter has already
   rendered (`RasterPage`, `PwgOptions`, `encode`). It needs no feature and builds for wasm32;
   `craft_print::wsd::pwg` re-exports it.
+* **Raster pixel formats.** `pwg::RasterType` is a colour space and a depth: sGray, sRGB or Adobe RGB, at 8 or 16 bits
+  (`sgray_8`, `srgb_16`, `adobe-rgb_16`...; header colour spaces 18, 19 and 20 of PWG 5102.4, 16-bit samples
+  most significant byte first), written by `pwg::encode_typed` (`TypedPage`); `encode` is the 8-bit sGray/sRGB case.
+  An IPP printer lists what it takes in `pwg-raster-document-type-supported`, which is read into
+  `PrinterDetails::raster_types` (the types this crate can write, either spelling, no duplicates; empty when not
+  published, taken as `RasterType::BASELINE`: sRGB and sGray at 8 bits). A converter lists the types it can make, best
+  first, in `DocumentConverter::raster_types` (default: the baseline), and the registry gives it the first the printer
+  lists in `ConvertContext::raster` (grey for a monochrome job, else colour; the baseline when nothing is in common;
+  `choose_raster_type`), reporting it in `Conversion::raster`. WS-Print does not publish raster types, so it gets the
+  baseline. CMYK, device colour and one-bit types are not written, and a printer's ICC profile
+  (`printer-icc-profiles`) is not read yet.
 * **The registry decides.** A document in a format the printer accepts is sent as it is and the
   converter is not asked. Otherwise the best target the converter makes and the printer lists is
   chosen (`ConversionPolicy::preference`, default `DocumentFormat::DEFAULT_PREFERENCE`), the
