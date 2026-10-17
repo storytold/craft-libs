@@ -1,7 +1,7 @@
 //! craft-ai — AI provider abstraction for the Craft suite.
 //!
-//! Spec-first scaffold: see `README.md` for the design (BYO API provider +
-//! one-click local models with capability detection).
+//! See `README.md` for the design: BYO API provider (OpenAI-compatible) +
+//! one-click local models with capability detection.
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
