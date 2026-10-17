@@ -148,4 +148,121 @@ grips. It excludes panel content and custom header/menu widgets and rejects inva
 layouts. Hosts can permit global commands from chrome while reserving Enter, Space,
 Tab, Escape and arrow keys for activation, traversal, cancellation and resizing.
 Content widgets retain their usual keyboard ownership. The renderer owns the IDs;
-hosts do not need to reconstruct them.
+hosts do not need to reconstruct them. Configure the querying `DockArea` with the same
+`surface(...)` value used for rendering; split-divider focus belongs to that surface,
+while tab, accordion and floating-control identities retain their shared session IDs.
+
+## Host-resolved drops and measurement
+
+`DockContent::resolve_drag` optionally owns a tab or floating-group gesture. Its `DropRequest` supplies visible targets, pointer/release state, viewport bounds and the default floating rectangle. Returning `Some(DropFeedback)` consumes the gesture, including explicit no-ops; the host stages/commits its validated transaction on release, and the shared renderer draws only the supplied preview and insertion marker. Returning `None` retains the default resolver.
+
+`measure_layout` returns full group rectangles using the same split constraints, headers, protected-canvas rules and floating clamps as rendering. `DockContent::group_rect` reports actual rendered bounds for host inspection and regression checks. Tab proposals expose `noop`; same-group tab-strip destinations retain a bounded insertion marker, including unchanged slots. Markers stay inside the visible strip and group bounds; unchanged releases emit no move/float.
+
+Floating groups move from their grip, empty header space or top border. Individual tabs retain their own drag behavior. Left, right and bottom edges and both bottom corners resize the group, respecting panel limits and viewport bounds; the top border remains a move target. Workspace permissions apply to movement and resizing.
+
+## Transient UI dragging across host surfaces
+
+Hosts can opt into `DockContent::live_drag`: the renderer leaves source bodies blank and
+renders the moving content once, disabled, above the workspace. `drag_members` identifies
+whole-group gestures started by custom headers. `floating_size` supplies independent
+preferred dimensions for both drag tear-off and the shared float menu. `drop_targets`
+publishes measured targets for applications coordinating several surfaces; use
+`DockArea::surface(id)` for separate divider identities while retaining the common drag ID.
+Only one surface should return true from `render_drag_ui`. Cross-surface transactions must
+commit after every surface renders the source snapshot, avoiding duplicate widget IDs on
+different egui layers within a frame. Live floating movement is transient until host release;
+cancellation does not write clamped geometry back. The floating top-border move target keeps
+the default cursor, while grips and resize handles retain their usual feedback.
+
+`DockContent::drag_opacity` controls only the transient moving UI, using the same drag request
+and measured targets as destination resolution. It defaults to opaque; finite values clamp
+to 0..=1 and non-finite values fall back to opaque. Insertion and destination feedback retain
+their own opacity. The moving UI remains disabled at every opacity.
+
+`DockContent::drag_opacity_duration` optionally smooths moving-UI opacity changes over the
+returned duration in seconds (default zero). The transition starts at the current opacity,
+requests repaint while active, and is cleared on drag completion or cancellation. Destination
+feedback remains independent of this animation.
+
+## Display-only docking candidates
+
+`DockContent::preview_layout` can provide a validated temporary layout before bodies render.
+It receives the pending drag request against the authoritative surface's cached targets, or
+None when no gesture is active. A host coordinating surfaces should prepare one transaction
+and return its corresponding projection for each surface. The saved model remains the layout
+passed to DockArea; preview controls are disabled and render-time structural actions are discarded.
+Targets are frozen during live dragging, so displaying a split cannot change the target beneath
+the pointer. `preview_targets` reports measured display targets separately, allowing insertion
+feedback to follow the visible strip via `tab_insertion_marker` without changing drop resolution.
+`paint_preview` paints additional host feedback after the moving UI, independently of its opacity.
+A host must discard candidates on cancellation and commit only through resolve_drag on release.
+
+`preview_geometry_duration` opts into smooth, display-only group bounds (seconds, default zero).
+Bounds are measured with `measure_layout`, keyed by panel identity and interpolated with
+smoothstep easing. Retargeting starts from the current interpolation without resetting an
+unchanged target each frame. Joined tabs share the receiver's transition; new reserved slots
+remain at their measured destination. Return and post-release transitions finish independently
+of the gesture, with controls disabled and authoritative targets retained until settling.
+Normal resize actions remain immediate. `preview_geometry` reports animated group bounds and
+their destination for attached feedback; `preview_targets` reports the animated tab strips.
+Hosts may seed previously external content bounds through `preview_geometry_origin` and
+invalidate history on workspace replacement through `preview_geometry_generation`.
+`geometry_transition_active` lets a host retain its temporary shell while returning to its
+original layout. Animation state is transient and requests repaint only while bounds move.
+
+`DockContent::preview_tab_strip` optionally returns an authoritative `DropTarget` snapshot
+for a receiving group. Its anchor must remain in the receiver, independently of the dragged
+members. The renderer keeps the snapshot's header position, width, original tab order and
+visible/overflow slots while rendering the candidate body at its animated bounds. Headers
+paint once in a disabled foreground overlay with an opaque theme background; moving content
+and destination feedback retain their own layers. Hosts resolve strip hits against the same
+authoritative snapshot and should give these visible slots priority over coincident edges.
+Incoming tabs appear only after commit. The header settles to the committed group over the
+geometry transition duration; cancellation preserves the original strip while bodies return.
+History is surface-local, generation-scoped and transient. Consumers returning None retain
+their existing header rendering. `geometry_transition_active` includes pending header settling
+so hosts can retain their temporary presentation shell until the complete transition finishes.
+
+Floating areas paint their complete background beneath the tab strip and disable automatic Area
+appearance fading. Transparent theme tab-strip colors therefore reveal the panel background,
+not the canvas. The host's intentional moving-UI opacity continues to apply during dragging.
+
+## Shared-divider insertion
+
+`measure_layout_with_boundaries` returns group rectangles and actual split dividers from the
+same constrained traversal used by `measure_layout`. Each SplitBoundary includes orientation,
+parent/child bounds and stable panel members on each side; floating windows are not seams.
+
+`insert_between` accepts a BetweenRequest with moving members, selected member and ordered
+before/after neighbor identities. It removes sources in a staged clone, finds the surviving
+boundary and inserts a new group between its children. New space starts at one third after
+the two dividers; neighbors retain their measured proportion with min/max constraints. Invalid
+identities, permissions, geometry, insufficient space and final depth limits leave the original
+layout untouched. Hosts choose the hit band and apply the same operation for commands and
+pointer gestures. PhotoCraft uses an 8-point band and preserves both receiving headers.
+
+Host-resolved and default tab-drop feedback explicitly raise the foreground destination layer
+when painting, so fully opaque insertion lines stay above stationary header and moving UI layers.
+
+Pointer resizing releases divider/corner focus when its drag stops, so the focused accent
+highlight does not remain after release and pointer exit. Ordinary hover and drag feedback
+remain, and keyboard focus through traversal still supports arrow-key resizing.
+
+
+## Docked headers and anchored resizing
+
+Hosts opt into docked empty-header and top-4-point whole-group dragging with
+`DockContent::drag_docked_headers`. Group gestures retain every member and the selected
+panel, use host-owned atomic drop resolution, and keep the normal top-border pointer.
+Header menu and overflow controls keep their own hit areas. The default remains disabled.
+
+Source-center drops, including singleton and floating groups, resolve as explicit no-ops.
+PhotoCraft highlights the source content area while retaining a clear tab strip and its
+fully opaque insertion line; real reorder slots and unchanged slots share this feedback.
+
+`AnchoredResize` captures the displayed rectangle, fixed opposite edges and pointer grab
+offset. Pointer movement sets the dragged edges absolutely, bounded by panel limits and
+the viewport before constructing the rectangle. Overshoot never translates the opposite
+edge or creates immediate growth on reversal outside the valid range. Impossible minimums
+suspend resizing. Pointer anchors clear on release, focus loss, Escape and host cancellation;
+keyboard resizing continues in fixed steps. Hosts can reuse the helper for document windows.

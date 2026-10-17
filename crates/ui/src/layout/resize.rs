@@ -82,6 +82,11 @@ impl<'a> ResizeHandle<'a> {
         let mut response = ui.interact(if valid { hit } else { inert }, self.id, if valid { Sense::drag() } else { Sense::hover() });
         let enabled = valid && response.enabled();
         let mut delta = 0.0;
+        // Pointer resizing borrows focus only for the gesture. Keyboard focus acquired
+        // through traversal remains intact until the user chooses another control.
+        if response.drag_stopped() {
+            response.surrender_focus();
+        }
         if enabled {
             if response.drag_started() {
                 response.request_focus();
