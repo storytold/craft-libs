@@ -643,6 +643,108 @@ fn floating_group_grip_moves_every_member_while_tab_drag_detaches_one() {
     assert_eq!(layout.floating[0].panels, vec![6]);
 }
 
+#[test]
+fn floating_group_drag_ends_on_release_or_pointer_exit() {
+    for (released, leaves) in [(false, true), (true, true), (true, false)] {
+        let ctx = Context::default();
+        let mut layout = sample();
+        for _ in 0..2 {
+            step(&ctx, &mut layout, vec![]);
+        }
+        let start = pos2(86.0, 82.0);
+        step(&ctx, &mut layout, vec![Event::PointerMoved(start), pointer_button(start, true)]);
+        let moved = start + vec2(50.0, 40.0);
+        let actions = step(&ctx, &mut layout, vec![Event::PointerMoved(moved)]);
+        assert!(actions.iter().any(|action| matches!(action, Action::MoveFloating { .. })));
+        let last = layout.clone();
+        let mut events = vec![];
+        if released {
+            events.push(pointer_button(moved, false));
+        }
+        if leaves {
+            events.push(Event::PointerGone);
+        }
+        let (out, _) = frame(&ctx, &layout, events, true);
+        assert_eq!(out.group_drop, if leaves { None } else { Some((5, moved)) });
+        for action in out.actions {
+            layout.apply(action).unwrap();
+        }
+        assert_eq!(layout, last);
+        for pointer in [moved + vec2(20.0, 20.0), moved + vec2(30.0, 30.0)] {
+            let (out, _) = frame(&ctx, &layout, vec![Event::PointerMoved(pointer)], true);
+            assert!(out.actions.is_empty(), "{out:?}");
+            assert!(out.group_drag.is_none() && out.group_drop.is_none());
+        }
+        assert!(out.group_drag.is_none());
+        assert_eq!(ctx.dragged_id(), None);
+    }
+}
+
+#[test]
+fn floating_group_touch_release_reports_drop_after_pointer_gone() {
+    for web_order in [false, true] {
+        let ctx = Context::default();
+        let mut layout = sample();
+        for _ in 0..2 {
+            step(&ctx, &mut layout, vec![]);
+        }
+        let touch = |phase, pos| Event::Touch { device_id: egui::TouchDeviceId(0), id: egui::TouchId(1), phase, pos, force: None };
+        let start = pos2(86.0, 82.0);
+        let press = pointer_button(start, true);
+        let events = if web_order {
+            vec![press, touch(egui::TouchPhase::Start, start)]
+        } else {
+            vec![touch(egui::TouchPhase::Start, start), Event::PointerMoved(start), press]
+        };
+        step(&ctx, &mut layout, events);
+        let moved = start + vec2(50.0, 40.0);
+        let events = if web_order {
+            vec![Event::PointerMoved(moved), touch(egui::TouchPhase::Move, moved)]
+        } else {
+            vec![touch(egui::TouchPhase::Move, moved), Event::PointerMoved(moved)]
+        };
+        assert!(step(&ctx, &mut layout, events).iter().any(|action| matches!(action, Action::MoveFloating { .. })));
+        // egui-winit emits Touch before release/gone; eframe web emits it afterwards.
+        let events = if web_order {
+            vec![pointer_button(moved, false), Event::PointerGone, touch(egui::TouchPhase::End, moved)]
+        } else {
+            vec![touch(egui::TouchPhase::End, moved), pointer_button(moved, false), Event::PointerGone]
+        };
+        let (out, _) = frame(&ctx, &layout, events, true);
+        assert!(!ctx.input(|i| i.pointer.has_pointer()));
+        assert_eq!(out.group_drop, Some((5, moved)));
+        assert!(out.group_drag.is_none());
+        assert_eq!(ctx.dragged_id(), None);
+        assert!(step(&ctx, &mut layout, vec![Event::PointerMoved(moved + vec2(30.0, 30.0))]).is_empty());
+    }
+}
+
+#[test]
+fn floating_group_exit_with_escape_or_focus_loss_restores_original_geometry() {
+    for escape in [false, true] {
+        let ctx = Context::default();
+        let mut layout = sample();
+        let original = layout.clone();
+        for _ in 0..2 {
+            step(&ctx, &mut layout, vec![]);
+        }
+        let start = pos2(86.0, 82.0);
+        step(&ctx, &mut layout, vec![Event::PointerMoved(start), pointer_button(start, true)]);
+        step(&ctx, &mut layout, vec![Event::PointerMoved(start + vec2(50.0, 40.0))]);
+        assert_ne!(layout.floating[0].rect, original.floating[0].rect);
+        let mut events = vec![Event::PointerGone];
+        if escape {
+            events.push(Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE });
+        }
+        let (out, _) = frame(&ctx, &layout, events, escape);
+        assert!(out.group_drag.is_none() && out.group_drop.is_none());
+        for action in out.actions {
+            layout.apply(action).unwrap();
+        }
+        assert_eq!(layout.floating[0].rect, original.floating[0].rect);
+    }
+}
+
 struct CustomContent {
     labels: Vec<String>,
     headers: usize,

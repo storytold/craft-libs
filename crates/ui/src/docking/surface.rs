@@ -812,11 +812,16 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
         }
         let (escape, focused, down, released, pointer) =
             ctx.input(|i| (i.key_pressed(Key::Escape), i.focused, i.pointer.primary_down(), i.pointer.primary_released(), i.pointer.interact_pos()));
-        if escape || !focused || !down {
-            ctx.data_mut(|d| d.remove::<GroupDrag<P>>(self.id.with("group-drag")));
+        // A button release outside the window may never reach egui.
+        let has_pointer = ctx.input(|i| i.pointer.has_pointer());
+        // Touch-up also removes the pointer, but still completes a drop.
+        let touch_ended = ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Touch { phase: egui::TouchPhase::End, .. })));
+        if escape || !focused || !down || !has_pointer {
+            cancel_drag::<P>(ctx, self.id);
             if escape || !focused {
                 self.output.actions.push(Action::MoveFloating { panel: drag.panel, rect: drag.original });
             } else if released
+                && (has_pointer || touch_ended)
                 && let Some(pointer) = pointer.filter(|p| p.is_finite())
                 && !self.blockers.iter().any(|r| r.contains(pointer))
             {
