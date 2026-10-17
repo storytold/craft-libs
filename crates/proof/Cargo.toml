@@ -1,0 +1,17 @@
+[package]
+name = "craft-proof"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Spelling for the Craft apps: Hunspell affix dictionaries, installed-dictionary discovery and language tags"
+
+[lints]
+workspace = true
+
+[dependencies]
+miniz_oxide = "0.8"
+
+[dev-dependencies]
+proptest = "1"
