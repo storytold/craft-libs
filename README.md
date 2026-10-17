@@ -30,6 +30,10 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
 - [`craft-cms`](crates/cms/README.md): pure-Rust ICC v2/v4 colour management: profile parsing
   and writing, transforms, rendering intents, black point compensation, soft proofing, gamut
   checks, 3D LUTs and built-in profiles (sRGB, Display P3, synthetic coated CMYK and others).
+- [`craft-keymap`](crates/keymap/README.md): keyboard bindings: chords and their text forms,
+  scopes, conflicts, user overrides stored through craft-settings, named sets, import of other
+  applications' shortcut sets and an editor model. Command catalogues, file readers and the
+  shortcut editor UI stay in each app.
 - [`craft-print`](crates/print/README.md): PDF submission to CUPS and Windows, printer discovery,
   duplex/copies/colour and driver preferences. PDF generation stays in each app.
 
