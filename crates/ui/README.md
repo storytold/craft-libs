@@ -5,6 +5,9 @@ embedded SVG catalogs; `buttons` paints accessible icon buttons; `tabs` handles 
 interaction; `layout` provides toolbar fitting, split geometry and resize handles; `theme` shares widget-state styling.
 `docking` supplies transactional panel moves and an optional docking surface.
 `printing` supplies printer/job controls and asynchronous feedback used by WordCraft and GridCraft.
+`slider` is a slider with a visible filled track and an optional value field, plus the status bar `ZoomBar`;
+`font_box`, `ribbon` and `status_bar` are the font name/size control, the ribbon body and groups, and the status bar, so
+the Office-style and Adobe-style apps share one look for them (see [Shared chrome](#shared-chrome)).
 The current delivery covers nine creative apps (DesignCraft, VectorCraft, PhotoCraft, FilmCraft, EffectCraft, CADCraft, PDFCraft, LightCraft and SoundCraft); prior basic and office adapters are separate. The [suite audit](../../docs/ui-components-audit.md#adoption-and-acceptance)
 records their scope and acceptance limits. Assets, complete themes, localization and command handling
 remain in each application. No icons, fonts or application engines are bundled.
@@ -231,6 +234,47 @@ host submit callback and keep active work alive when closing a window. Queue-def
 represented by `None`, independently of explicit one-sided, long-edge or short-edge choices.
 Receipts and backend errors remain unmodified data for the app to display. These controls work
 on WASM too; browser PDF printing remains an app-owned service.
+
+## Shared chrome
+
+These components fix geometry and states, not content: the app supplies commands, icons, labels in the
+interface language, its accent and what each change does. Preview them in every app's accent with
+`cargo run -p craft-ui --example chrome_preview -- OUT_DIR` (set `CRAFT_PREVIEW_FONTS` to a folder
+with `Inter-Regular.ttf` to render in Inter).
+
+```rust
+use craft_ui::font_box::{FontBox, FontBoxLabels, FontBoxStyle};
+use craft_ui::ribbon::{Ribbon, RibbonGroup, RibbonStyle};
+use craft_ui::status_bar::{self, StatusBar, StatusBarStyle};
+
+fn chrome(ui: &mut egui::Ui, family: &mut String, size: &mut Option<f32>, families: &[String], has_text: bool) {
+    let v = ui.visuals().clone();
+    let (rs, fs) = (RibbonStyle::from_visuals(&v), FontBoxStyle::from_visuals(&v));
+    let labels = FontBoxLabels { font: "Font", size: "Font Size", grow: "Increase Font Size", shrink: "Decrease Font Size", clear: "Clear Formatting" };
+    Ribbon::new(&rs).show(ui, |ui| {
+        RibbonGroup::new("Font", &rs).launcher("Font Settings").show(ui, |ui| {
+            // Nothing to format: dimmed, showing the theme font, instead of empty boxes.
+            FontBox::new(family, size, families, &fs, labels).enabled(has_text).hint("Inter", 11.0).clear(true).show(ui);
+        });
+    });
+    let ss = StatusBarStyle::from_visuals(&v);
+    StatusBar::new(&ss).show(ui, |ui| { status_bar::item(ui, &ss, "Page 1 of 2"); }, |_ui| {});
+}
+```
+
+- **Ribbon.** `RibbonFrame::platform_default()` is what Microsoft 365 does: flat on macOS, a card
+  inset 6 pt with radius 8 elsewhere. Group captions default to on except on macOS
+  (`ribbon::captions_default`). Groups are contiguous, at least as wide as their caption, with an
+  optional dialog launcher.
+- **Font box.** Two rounded fields with the chevron inside; both accept typing, and the list
+  narrows while typing. Grow/shrink walk the size presets, then whole points (Word's behaviour).
+  An empty family or `None` size is a mixed selection (blank, still editable); `.enabled(false)`
+  with `.hint(..)` is "no text to format".
+- **Status bar.** One height and text size; context items on the left, view switches and the
+  `ZoomBar` on the right. It fills the rect it is given: across the window in the Office-style
+  apps, under the document area (panels full height) in the Adobe-style ones.
+- **Accent.** The app's accent marks state and navigation (selected toggle, focus, slider fill),
+  never icon glyphs: the font box's grow/shrink and clear marks use the text colour.
 
 ## Compatibility and checks
 

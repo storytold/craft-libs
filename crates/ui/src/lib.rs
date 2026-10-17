@@ -7,8 +7,12 @@
 
 pub mod buttons;
 pub mod docking;
+pub mod font_box;
 pub mod icons;
 pub mod layout;
 pub mod printing;
+pub mod ribbon;
+pub mod slider;
+pub mod status_bar;
 pub mod tabs;
 pub mod theme;
