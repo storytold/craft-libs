@@ -30,6 +30,7 @@
 
 use crate::backend::{Document, DocumentFormat, PrintError};
 use crate::options::{ColourMode, Orientation, Resolution};
+use crate::pwg::RasterType;
 use crate::{CancelToken, Duplex};
 
 /// A document that owns its bytes: what a [`DocumentConverter`] returns.
@@ -71,6 +72,10 @@ pub struct ConvertContext {
     pub duplex: Option<Duplex>,
     /// How many pages the caller says the document has, when it said.
     pub expected_pages: Option<u32>,
+    /// The pixel format to write when the target is PWG raster: the first of the converter's own list
+    /// ([`DocumentConverter::raster_types`]) that the printer lists (or [`RasterType::BASELINE`] when it lists none),
+    /// grey for a monochrome job and colour otherwise. A converter may ignore it for other targets.
+    pub raster: RasterType,
     /// The request's cancellation token: a long conversion should check it between pages.
     pub cancel: CancelToken,
 }
@@ -78,7 +83,18 @@ pub struct ConvertContext {
 impl ConvertContext {
     /// A context for `resolution` and colour, with nothing else set.
     pub fn new(resolution: Resolution, colour: bool) -> Self {
-        Self { printer: None, resolution, colour, media: None, orientation: None, duplex: None, expected_pages: None, cancel: CancelToken::new() }
+        let raster = if colour { RasterType::Srgb8 } else { RasterType::Sgray8 };
+        Self {
+            printer: None,
+            resolution,
+            colour,
+            media: None,
+            orientation: None,
+            duplex: None,
+            expected_pages: None,
+            raster,
+            cancel: CancelToken::new(),
+        }
     }
 }
 
@@ -92,6 +108,13 @@ pub trait DocumentConverter: Send + Sync {
     /// The formats this converter can make from a document in `from`, best first. Empty when it
     /// cannot convert that format at all.
     fn targets(&self, from: DocumentFormat) -> Vec<DocumentFormat>;
+
+    /// The PWG raster pixel formats this converter can write, best first (for a printer that lists
+    /// `pwg-raster-document-type-supported`: the first one the printer lists is used, see [`ConvertContext::raster`]).
+    /// A converter that writes more than 8-bit sRGB and grey says so here. Default: 8-bit sRGB and grey.
+    fn raster_types(&self) -> Vec<RasterType> {
+        RasterType::BASELINE.to_vec()
+    }
 
     /// Make `target` (one of [`Self::targets`] for the document's format) from `document`. The
     /// result's format must be `target`. An error is reported as a failure before anything was
@@ -125,8 +148,26 @@ pub struct Conversion {
     pub to: DocumentFormat,
     /// The resolution the converter was asked to render at.
     pub resolution: Resolution,
+    /// The pixel format a PWG raster result was asked to be in; `None` for another target.
+    pub raster: Option<RasterType>,
     /// The size of the converted document.
     pub bytes: usize,
+}
+
+/// The raster type to ask a converter for: the first of `offered` (the converter's own order, best first) of the right
+/// kind (grey for a monochrome job, colour otherwise) that `listed` (the printer's list; empty = not published, taken
+/// as [`RasterType::BASELINE`]) contains. When none is in common, a monochrome job takes a colour type the printer
+/// lists (the converter writes neutral colour), and failing that the baseline type: every PWG raster printer takes it.
+pub fn choose_raster_type(offered: &[RasterType], listed: &[RasterType], colour: bool) -> RasterType {
+    let listed = if listed.is_empty() { &RasterType::BASELINE[..] } else { listed };
+    let wanted = |t: &&RasterType| t.is_gray() != colour;
+    offered
+        .iter()
+        .filter(wanted)
+        .find(|t| listed.contains(t))
+        .or_else(|| offered.iter().filter(|t| !colour && !t.is_gray()).find(|t| listed.contains(t)))
+        .copied()
+        .unwrap_or(if colour { RasterType::Srgb8 } else { RasterType::Sgray8 })
 }
 
 /// The listed resolution nearest `target_dpi`. Distance is the sum of the differences on both axes
@@ -199,5 +240,38 @@ mod tests {
         let owned = OwnedDocument::new(Png, vec![1, 2, 3]);
         let borrowed = owned.as_document();
         assert_eq!((borrowed.format, borrowed.bytes), (Png, &[1u8, 2, 3][..]));
+    }
+
+    #[test]
+    fn the_raster_type_is_the_converters_first_choice_that_the_printer_lists() {
+        use RasterType::*;
+        let offered = [AdobeRgb16, Srgb16, AdobeRgb8, Srgb8, Sgray16, Sgray8];
+        // a printer that lists everything gets the converter's best
+        assert_eq!(choose_raster_type(&offered, &RasterType::ALL, true), AdobeRgb16);
+        // a printer that lists only some gets the first the converter prefers among them
+        assert_eq!(choose_raster_type(&offered, &[Srgb8, Srgb16, Sgray8], true), Srgb16);
+        assert_eq!(choose_raster_type(&offered, &[Srgb8, Sgray8, AdobeRgb8], true), AdobeRgb8);
+        // a monochrome job takes a grey type, the deepest the converter offers first
+        assert_eq!(choose_raster_type(&offered, &[Srgb8, Sgray8, Sgray16], false), Sgray16);
+        // a printer that lists no grey type gets a colour one for a monochrome job
+        assert_eq!(choose_raster_type(&offered, &[Srgb16, Srgb8], false), Srgb16);
+        // a printer that publishes nothing is taken to accept the baseline
+        assert_eq!(choose_raster_type(&offered, &[], true), Srgb8);
+        assert_eq!(choose_raster_type(&offered, &[], false), Sgray8);
+        // nothing in common: the baseline type every PWG raster printer takes
+        assert_eq!(choose_raster_type(&[AdobeRgb16], &[Srgb8], true), Srgb8);
+        assert_eq!(choose_raster_type(&[], &RasterType::ALL, false), Sgray8);
+        // the default converter offers the baseline
+        struct Plain;
+        impl DocumentConverter for Plain {
+            fn targets(&self, _: DocumentFormat) -> Vec<DocumentFormat> {
+                Vec::new()
+            }
+            fn convert(&self, _: Document<'_>, _: DocumentFormat, _: &ConvertContext) -> Result<OwnedDocument, PrintError> {
+                Err(PrintError::new(crate::ErrorKind::Failed, "unused"))
+            }
+        }
+        assert_eq!(Plain.raster_types(), RasterType::BASELINE.to_vec());
+        assert_eq!(ConvertContext::new(Resolution::new(300, 300), false).raster, Sgray8);
     }
 }

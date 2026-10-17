@@ -1,4 +1,4 @@
-//! PWG raster (`image/pwg-raster`) writer for 8-bit grey and RGB pages. Always available (no cargo
+//! PWG raster (`image/pwg-raster`) writer for grey, sRGB and Adobe RGB pages, 8 or 16 bits a colour ([`RasterType`]). Always available (no cargo
 //! feature, no dependency, builds for `wasm32`): an app's [`DocumentConverter`](crate::DocumentConverter)
 //! that has already rendered pages to pixels calls [`encode`] to get a document a printer accepts.
 //! (`craft_print::wsd::pwg` re-exports this module.)
@@ -50,6 +50,90 @@ pub const MAX_STREAM_BYTES: usize = 1 << 30;
 const SYNC: &[u8; 4] = b"RaS2";
 const HEADER: usize = 1796;
 
+/// The pixel formats of a PWG raster page: a colour space and a depth (what a printer lists in
+/// `pwg-raster-document-type-supported`: `sgray_8`, `srgb_16`, `adobe-rgb_8`...). The raster header
+/// names the colour space (18 sGray, 19 sRGB, 20 Adobe RGB) and the bits per colour; 16-bit samples
+/// are written most significant byte first. Types a printer may also list (CMYK, device colour, one
+/// bit) are not written here and [`Self::from_keyword`] does not know them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum RasterType {
+    Sgray8,
+    Sgray16,
+    Srgb8,
+    Srgb16,
+    AdobeRgb8,
+    AdobeRgb16,
+}
+
+impl RasterType {
+    /// Every type, in no particular order.
+    pub const ALL: [RasterType; 6] = [Self::Sgray8, Self::Sgray16, Self::Srgb8, Self::Srgb16, Self::AdobeRgb8, Self::AdobeRgb16];
+
+    /// What a printer is taken to accept when it does not list its types: the two every PWG raster
+    /// printer is required to take.
+    pub const BASELINE: [RasterType; 2] = [Self::Srgb8, Self::Sgray8];
+
+    /// The IPP keyword (`pwg-raster-document-type-supported`).
+    pub const fn keyword(self) -> &'static str {
+        match self {
+            Self::Sgray8 => "sgray_8",
+            Self::Sgray16 => "sgray_16",
+            Self::Srgb8 => "srgb_8",
+            Self::Srgb16 => "srgb_16",
+            Self::AdobeRgb8 => "adobe-rgb_8",
+            Self::AdobeRgb16 => "adobe-rgb_16",
+        }
+    }
+
+    /// The type a printer's keyword names (case does not matter); `None` for one this writer does
+    /// not make.
+    pub fn from_keyword(keyword: &str) -> Option<Self> {
+        let keyword = keyword.trim();
+        Self::ALL.into_iter().find(|t| t.keyword().eq_ignore_ascii_case(keyword))
+    }
+
+    /// One channel (grey) or three (RGB).
+    pub const fn channels(self) -> usize {
+        if self.is_gray() { 1 } else { 3 }
+    }
+
+    pub const fn is_gray(self) -> bool {
+        matches!(self, Self::Sgray8 | Self::Sgray16)
+    }
+
+    /// Bits in one colour sample: 8 or 16.
+    pub const fn bits(self) -> u32 {
+        match self {
+            Self::Sgray8 | Self::Srgb8 | Self::AdobeRgb8 => 8,
+            _ => 16,
+        }
+    }
+
+    /// Bytes in one pixel.
+    pub const fn bytes_per_pixel(self) -> usize {
+        self.channels() * (self.bits() as usize / 8)
+    }
+
+    /// The header's colour space code: 18 sGray, 19 sRGB, 20 Adobe RGB.
+    pub const fn colour_space(self) -> u32 {
+        match self {
+            Self::Sgray8 | Self::Sgray16 => 18,
+            Self::Srgb8 | Self::Srgb16 => 19,
+            Self::AdobeRgb8 | Self::AdobeRgb16 => 20,
+        }
+    }
+}
+
+/// One page of pixels in a [`RasterType`], top row first, rows tightly packed, 16-bit samples most
+/// significant byte first.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TypedPage {
+    pub width: u32,
+    pub height: u32,
+    pub kind: RasterType,
+    pub data: Vec<u8>,
+}
+
 /// One page of 8-bit pixels, top row first, rows tightly packed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RasterPage {
@@ -60,9 +144,23 @@ pub struct RasterPage {
     pub pixels: Vec<u8>,
 }
 
-impl RasterPage {
-    fn bytes_per_pixel(&self) -> usize {
-        if self.gray { 1 } else { 3 }
+/// A page as the writer reads it, whichever public type it came from.
+struct View<'a> {
+    width: u32,
+    height: u32,
+    kind: RasterType,
+    data: &'a [u8],
+}
+
+impl<'a> From<&'a RasterPage> for View<'a> {
+    fn from(p: &'a RasterPage) -> Self {
+        View { width: p.width, height: p.height, kind: if p.gray { RasterType::Sgray8 } else { RasterType::Srgb8 }, data: &p.pixels }
+    }
+}
+
+impl<'a> From<&'a TypedPage> for View<'a> {
+    fn from(p: &'a TypedPage) -> Self {
+        View { width: p.width, height: p.height, kind: p.kind, data: &p.data }
     }
 }
 
@@ -96,9 +194,9 @@ fn set_str(header: &mut [u8], at: usize, s: &str) {
     }
 }
 
-fn page_header(page: &RasterPage, total: u32, opts: &PwgOptions) -> Vec<u8> {
+fn page_header(page: &View<'_>, total: u32, opts: &PwgOptions) -> Vec<u8> {
     let mut h = vec![0u8; HEADER];
-    let bpp = page.bytes_per_pixel() as u32;
+    let bpp = page.kind.bytes_per_pixel() as u32;
     set_str(&mut h, 0, "PwgRaster");
     let (dx, dy) = (opts.dpi.0.max(1), opts.dpi.1.max(1));
     let points = |px: u32, dpi: u32| ((u64::from(px) * 72 + u64::from(dpi) / 2) / u64::from(dpi)) as u32;
@@ -111,12 +209,12 @@ fn page_header(page: &RasterPage, total: u32, opts: &PwgOptions) -> Vec<u8> {
     set_u32(&mut h, 368, u32::from(opts.duplex == Duplex::ShortEdge)); // Tumble
     set_u32(&mut h, 372, page.width);
     set_u32(&mut h, 376, page.height);
-    set_u32(&mut h, 384, 8); // bits per colour
+    set_u32(&mut h, 384, page.kind.bits()); // bits per colour
     set_u32(&mut h, 388, 8 * bpp); // bits per pixel
     set_u32(&mut h, 392, page.width.saturating_mul(bpp)); // bytes per line
     set_u32(&mut h, 396, 0); // chunky
-    set_u32(&mut h, 400, if page.gray { 18 } else { 19 }); // sGray / sRGB
-    set_u32(&mut h, 420, bpp); // colours
+    set_u32(&mut h, 400, page.kind.colour_space()); // sGray / sRGB / Adobe RGB
+    set_u32(&mut h, 420, page.kind.channels() as u32); // colours
     set_u32(&mut h, 452, total); // TotalPageCount
     set_u32(&mut h, 456, 1); // CrossFeedTransform
     set_u32(&mut h, 460, 1); // FeedTransform
@@ -127,6 +225,15 @@ fn page_header(page: &RasterPage, total: u32, opts: &PwgOptions) -> Vec<u8> {
 
 /// Pack `pages` into a PWG raster stream.
 pub fn encode(pages: &[RasterPage], opts: &PwgOptions) -> Result<Vec<u8>> {
+    encode_views(&pages.iter().map(View::from).collect::<Vec<_>>(), opts)
+}
+
+/// [`encode`] for pages of any [`RasterType`] (all pages of a stream may differ).
+pub fn encode_typed(pages: &[TypedPage], opts: &PwgOptions) -> Result<Vec<u8>> {
+    encode_views(&pages.iter().map(View::from).collect::<Vec<_>>(), opts)
+}
+
+fn encode_views(pages: &[View<'_>], opts: &PwgOptions) -> Result<Vec<u8>> {
     if pages.is_empty() {
         return invalid("there are no pages");
     }
@@ -138,8 +245,9 @@ pub fn encode(pages: &[RasterPage], opts: &PwgOptions) -> Result<Vec<u8>> {
     for page in pages {
         check_page(page)?;
         out.extend_from_slice(&page_header(page, pages.len() as u32, opts));
-        let stride = page.width as usize * page.bytes_per_pixel();
-        let mut rows = page.pixels.chunks_exact(stride.max(1)).peekable();
+        let bpp = page.kind.bytes_per_pixel();
+        let stride = page.width as usize * bpp;
+        let mut rows = page.data.chunks_exact(stride.max(1)).peekable();
         while let Some(row) = rows.next() {
             let mut repeats = 0u8;
             while repeats < 255 && rows.peek().is_some_and(|next| *next == row) {
@@ -147,7 +255,7 @@ pub fn encode(pages: &[RasterPage], opts: &PwgOptions) -> Result<Vec<u8>> {
                 repeats += 1;
             }
             out.push(repeats);
-            pack_row(row, page.bytes_per_pixel(), &mut out);
+            pack_row(row, bpp, &mut out);
         }
         if out.len() > MAX_STREAM_BYTES {
             return Err(PwgError::TooLarge("the raster stream", MAX_STREAM_BYTES));
@@ -156,13 +264,13 @@ pub fn encode(pages: &[RasterPage], opts: &PwgOptions) -> Result<Vec<u8>> {
     Ok(out)
 }
 
-fn check_page(p: &RasterPage) -> Result<()> {
+fn check_page(p: &View<'_>) -> Result<()> {
     if p.width == 0 || p.height == 0 || p.width > MAX_SIDE || p.height > MAX_SIDE {
         return invalid(format!("page size {}x{} is outside 1 to {MAX_SIDE} pixels", p.width, p.height));
     }
-    let need = (p.width as usize).checked_mul(p.height as usize).and_then(|n| n.checked_mul(p.bytes_per_pixel()));
+    let need = (p.width as usize).checked_mul(p.height as usize).and_then(|n| n.checked_mul(p.kind.bytes_per_pixel()));
     match need {
-        Some(n) if n <= MAX_PAGE_BYTES && n == p.pixels.len() => Ok(()),
+        Some(n) if n <= MAX_PAGE_BYTES && n == p.data.len() => Ok(()),
         Some(n) if n > MAX_PAGE_BYTES => Err(PwgError::TooLarge("a raster page", MAX_PAGE_BYTES)),
         _ => invalid("the pixel buffer does not match the page size"),
     }
@@ -205,7 +313,7 @@ fn pack_row(row: &[u8], bpp: usize, out: &mut Vec<u8>) {
 
 /// A reader for tests: the pages of a stream as (width, height, gray, pixels).
 #[cfg(test)]
-pub(crate) fn decode_for_tests(data: &[u8]) -> Result<Vec<RasterPage>> {
+pub(crate) fn decode_typed_for_tests(data: &[u8]) -> Result<Vec<TypedPage>> {
     let be = |d: &[u8], at: usize| -> Result<u32> {
         d.get(at..at + 4).map(|b| u32::from_be_bytes([b[0], b[1], b[2], b[3]])).ok_or_else(|| PwgError::Invalid("short header".into()))
     };
@@ -252,9 +360,30 @@ pub(crate) fn decode_for_tests(data: &[u8]) -> Result<Vec<RasterPage>> {
             }
             rows_done += repeat;
         }
-        pages.push(RasterPage { width: w as u32, height: ht as u32, gray: bpp == 1, pixels });
+        let kind = match (be(h, 400)?, be(h, 384)?) {
+            (18, 8) => RasterType::Sgray8,
+            (18, 16) => RasterType::Sgray16,
+            (19, 8) => RasterType::Srgb8,
+            (19, 16) => RasterType::Srgb16,
+            (20, 8) => RasterType::AdobeRgb8,
+            (20, 16) => RasterType::AdobeRgb16,
+            other => return invalid(format!("unknown colour space and depth {other:?}")),
+        };
+        pages.push(TypedPage { width: w as u32, height: ht as u32, kind, data: pixels });
     }
     Ok(pages)
+}
+
+/// The 8-bit pages of a stream, for the older tests.
+#[cfg(test)]
+pub(crate) fn decode_for_tests(data: &[u8]) -> Result<Vec<RasterPage>> {
+    decode_typed_for_tests(data)?
+        .into_iter()
+        .map(|p| match p.kind {
+            RasterType::Sgray8 | RasterType::Srgb8 => Ok(RasterPage { width: p.width, height: p.height, gray: p.kind.is_gray(), pixels: p.data }),
+            other => invalid(format!("a {} page is not 8-bit gray or sRGB", other.keyword())),
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -342,5 +471,70 @@ mod tests {
         let mut bytes = encode(&[page(4, 4, true, |_, _| 3)], &opts()).unwrap();
         bytes.truncate(bytes.len() - 1);
         assert!(decode_for_tests(&bytes).is_err());
+    }
+
+    fn typed(w: u32, h: u32, kind: RasterType, f: impl Fn(u32, u32, usize) -> u8) -> TypedPage {
+        let per_sample = kind.bits() as usize / 8;
+        let mut data = Vec::new();
+        for y in 0..h {
+            for x in 0..w {
+                for c in 0..kind.channels() {
+                    for k in 0..per_sample {
+                        data.push(f(x, y, c * per_sample + k));
+                    }
+                }
+            }
+        }
+        TypedPage { width: w, height: h, kind, data }
+    }
+
+    #[test]
+    fn every_type_round_trips_and_names_itself_in_the_header() {
+        let pages: Vec<TypedPage> = RasterType::ALL.iter().map(|&k| typed(7, 5, k, |x, y, c| (x * 31 + y * 17 + c as u32 * 5) as u8)).collect();
+        let bytes = encode_typed(&pages, &opts()).unwrap();
+        assert_eq!(decode_typed_for_tests(&bytes).unwrap(), pages);
+        // the header of each kind: colour space, bits per colour, bits per pixel, colours
+        for (i, kind) in RasterType::ALL.into_iter().enumerate() {
+            let one = encode_typed(std::slice::from_ref(&pages[i]), &opts()).unwrap();
+            let h = &one[4..4 + HEADER];
+            let be = |at: usize| u32::from_be_bytes([h[at], h[at + 1], h[at + 2], h[at + 3]]);
+            let want_cs = if kind.is_gray() {
+                18
+            } else if matches!(kind, RasterType::Srgb8 | RasterType::Srgb16) {
+                19
+            } else {
+                20
+            };
+            let channels = kind.channels() as u32;
+            assert_eq!((be(400), be(384), be(388), be(420)), (want_cs, kind.bits(), kind.bits() * channels, channels), "{kind:?}");
+            assert_eq!(be(392) as usize, 7 * kind.bytes_per_pixel(), "bytes per line, {kind:?}");
+        }
+    }
+
+    #[test]
+    fn a_16_bit_page_keeps_both_bytes_of_a_sample() {
+        let mut p = typed(2, 1, RasterType::Srgb16, |_, _, _| 0);
+        p.data = vec![0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC, 0xFF, 0xEE, 0xDD, 0xCC, 0xBB, 0xAA];
+        let bytes = encode_typed(std::slice::from_ref(&p), &opts()).unwrap();
+        assert_eq!(decode_typed_for_tests(&bytes).unwrap(), [p]);
+    }
+
+    #[test]
+    fn the_keywords_round_trip_and_unknown_ones_are_ignored() {
+        for kind in RasterType::ALL {
+            assert_eq!(RasterType::from_keyword(kind.keyword()), Some(kind));
+            assert_eq!(RasterType::from_keyword(&kind.keyword().to_ascii_uppercase()), Some(kind));
+        }
+        for other in ["cmyk_8", "rgb_8", "black_1", "device1_8", "adobe-rgb", ""] {
+            assert_eq!(RasterType::from_keyword(other), None, "{other}");
+        }
+        assert!(RasterType::BASELINE.contains(&RasterType::Srgb8) && RasterType::BASELINE.contains(&RasterType::Sgray8));
+    }
+
+    #[test]
+    fn a_typed_page_with_the_wrong_buffer_is_an_error() {
+        let mut p = typed(3, 3, RasterType::AdobeRgb16, |_, _, _| 1);
+        p.data.pop();
+        assert!(encode_typed(&[p], &opts()).is_err());
     }
 }

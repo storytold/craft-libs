@@ -437,6 +437,11 @@ fn details_of(entry: &Entry, attrs: &PrinterAttrs) -> PrinterDetails {
             details.formats.push(format);
         }
     }
+    for kind in attrs.raster_types.iter().flatten().filter_map(|k| crate::pwg::RasterType::from_keyword(k)) {
+        if !details.raster_types.contains(&kind) {
+            details.raster_types.push(kind);
+        }
+    }
     details.two_sided = attrs.sides.as_ref().map(|s| s.iter().any(|k| k.starts_with("two-sided")));
     details.colour = match (&attrs.color_modes, attrs.color_supported) {
         (Some(modes), _) if modes.iter().any(|m| m == "color") => Some(true),

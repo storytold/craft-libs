@@ -56,6 +56,9 @@ pub struct PrinterAttrs {
     pub operations: Option<Vec<i32>>,
     /// `document-format-supported`, as listed.
     pub formats: Vec<String>,
+    /// `pwg-raster-document-type-supported`, as listed (`srgb_8`, `adobe-rgb_16`...); `None` when the printer does not
+    /// publish it.
+    pub raster_types: Option<Vec<String>>,
     pub sides: Option<Vec<String>>,
     pub color_modes: Option<Vec<String>>,
     pub color_supported: Option<bool>,
@@ -138,6 +141,7 @@ impl PrinterAttrs {
             accepting_jobs: group.first_bool("printer-is-accepting-jobs"),
             operations: integers("operations-supported"),
             formats: strings(group, "document-format-supported").unwrap_or_default(),
+            raster_types: strings(group, "pwg-raster-document-type-supported"),
             sides: strings(group, "sides-supported"),
             color_modes: strings(group, "print-color-mode-supported"),
             color_supported: group.first_bool("color-supported"),

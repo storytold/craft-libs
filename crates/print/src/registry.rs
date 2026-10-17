@@ -16,7 +16,9 @@ use std::time::Duration;
 use craft_job::{BackendName, ExpectedTotals, Fingerprint, JobId, Progress, RetrySafety, TagSupport, namespaced_id, split_id};
 
 use crate::backend::{Backend, BackendClass, DocumentFormat, ErrorKind, PrintError, PrinterDetails, PrinterRef, Receipt, SubmitRequest};
-use crate::convert::{Conversion, ConversionPolicy, ConvertContext, DocumentConverter, OwnedDocument, choose_resolution, pick_target, wants_colour};
+use crate::convert::{
+    Conversion, ConversionPolicy, ConvertContext, DocumentConverter, OwnedDocument, choose_raster_type, choose_resolution, pick_target, wants_colour,
+};
 use crate::job::{ExpectedTotalsExt as _, JobStatus, Submitted, WatchSupport};
 use crate::remote::{JobFilter, JobQueryCaps, Reconciled, RemoteJob};
 use crate::retry::Phase;
@@ -373,6 +375,7 @@ impl Registry {
         context.orientation = request.options.orientation;
         context.duplex = request.job.duplex;
         context.expected_pages = request.options.expected_pages;
+        context.raster = choose_raster_type(&converter.raster_types(), details.as_ref().map_or(&[][..], |d| d.raster_types.as_slice()), colour);
         context.cancel = request.cancel.clone();
         let before_sending = |error: PrintError| {
             let error = if error.phase().is_none() { error.with_phase(Phase::Prepare) } else { error };
@@ -393,7 +396,8 @@ impl Registry {
             // The raster is made at this resolution; say so in the job as well.
             request.options.resolution = Some(resolution);
         }
-        let conversion = Conversion { from: format, to: target, resolution, bytes: owned.bytes.len() };
+        let raster = (target == DocumentFormat::PwgRaster).then_some(context.raster);
+        let conversion = Conversion { from: format, to: target, resolution, raster, bytes: owned.bytes.len() };
         Ok(Some((owned, conversion)))
     }
 

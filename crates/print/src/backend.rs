@@ -622,6 +622,9 @@ pub struct PrinterDetails {
     pub default: bool,
     /// The formats this printer takes; empty when the backend publishes only its own list.
     pub formats: Vec<DocumentFormat>,
+    /// The pixel formats the printer lists for PWG raster (colour space and depth), as far as this crate can write
+    /// them; empty when it did not publish a list (it is then taken to accept [`crate::pwg::RasterType::BASELINE`]).
+    pub raster_types: Vec<crate::pwg::RasterType>,
     /// Driver job options (CUPS: the PPD's). Empty when none or unknown.
     pub options: Vec<PrinterOption>,
     pub two_sided: Option<bool>,

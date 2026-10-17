@@ -622,6 +622,77 @@ fn a_document_the_printer_cannot_take_is_converted_to_a_format_it_lists() {
     assert_eq!(e.kind(), ErrorKind::UnsupportedFormat);
 }
 
+// ---- raster types ------------------------------------------------------------------------------------------
+
+fn pwg_raster_printer(types: Option<&[&str]>) -> Group {
+    let mut g = printer_group();
+    g.attributes.retain(|a| a.name != "document-format-supported");
+    let g = g.with(Attribute::set("document-format-supported", vec![Value::MimeMediaType("image/pwg-raster".into())]));
+    match types {
+        Some(types) => g.with(Attribute::keywords("pwg-raster-document-type-supported", types)),
+        None => g,
+    }
+}
+
+/// A converter that makes PWG raster, prefers 16-bit Adobe RGB, and says what it was asked for.
+struct Raster(std::sync::Mutex<Vec<crate::RasterType>>);
+
+impl DocumentConverter for Raster {
+    fn targets(&self, from: DocumentFormat) -> Vec<DocumentFormat> {
+        if from == DocumentFormat::Pdf { vec![DocumentFormat::PwgRaster] } else { Vec::new() }
+    }
+
+    fn raster_types(&self) -> Vec<crate::RasterType> {
+        use crate::RasterType::*;
+        vec![AdobeRgb16, Srgb16, AdobeRgb8, Srgb8, Sgray16, Sgray8]
+    }
+
+    fn convert(&self, _: Document<'_>, target: DocumentFormat, context: &ConvertContext) -> Result<OwnedDocument, PrintError> {
+        self.0.lock().unwrap().push(context.raster);
+        Ok(OwnedDocument::new(target, b"raster".to_vec()))
+    }
+}
+
+#[test]
+fn the_printers_listed_raster_types_decide_the_pixel_format_the_converter_is_asked_for() {
+    use crate::RasterType::*;
+    let ask = |types: Option<&[&str]>| {
+        let script = Script::new();
+        let b = backend(&script);
+        let r = registry(&b);
+        let converter = Arc::new(Raster(Default::default()));
+        r.set_converter(converter.clone());
+        script.ok(vec![pwg_raster_printer(types)]).ok(vec![pwg_raster_printer(types)]).ok(accepted(3));
+        let submitted = r.submit_job(request(job())).unwrap();
+        let asked = converter.0.lock().unwrap().clone();
+        (asked, submitted.conversion.unwrap().raster)
+    };
+    // listed: the converter's best that the printer lists (cmyk is ignored: this crate cannot write it)
+    let (asked, reported) = ask(Some(&["sgray_8", "srgb_8", "adobe-rgb_16", "cmyk_8"]));
+    assert_eq!((asked, reported), (vec![AdobeRgb16], Some(AdobeRgb16)));
+    let (asked, reported) = ask(Some(&["srgb_8", "srgb_16", "sgray_8"]));
+    assert_eq!((asked, reported), (vec![Srgb16], Some(Srgb16)));
+    // not published: the baseline every PWG raster printer takes
+    let (asked, reported) = ask(None);
+    assert_eq!((asked, reported), (vec![Srgb8], Some(Srgb8)));
+    // listed but nothing this crate writes: still the baseline, not a refusal
+    let (asked, _) = ask(Some(&["cmyk_8", "rgb_8"]));
+    assert_eq!(asked, vec![Srgb8]);
+}
+
+#[test]
+fn a_printer_that_lists_raster_types_has_them_in_its_details() {
+    let script = Script::new();
+    let b = backend(&script);
+    let r = registry(&b);
+    script.ok(vec![pwg_raster_printer(Some(&["sgray_8", "srgb_8", "srgb_16", "adobe-rgb_8", "adobe-rgb_16", "cmyk_8", "SRGB_8"]))]);
+    let details = r.printer_details(&id()).unwrap();
+    use crate::RasterType::*;
+    assert_eq!(details.raster_types, vec![Sgray8, Srgb8, Srgb16, AdobeRgb8, AdobeRgb16], "ours only, no duplicates, any case");
+    script.ok(vec![pwg_raster_printer(None)]);
+    assert!(r.printer_details(&id()).unwrap().raster_types.is_empty(), "not published is empty");
+}
+
 // ---- job status and cancel -----------------------------------------------------------------------------
 
 fn status_of(group: Group) -> Result<crate::JobStatus, PrintError> {

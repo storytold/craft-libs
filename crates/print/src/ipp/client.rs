@@ -81,6 +81,7 @@ pub const PRINTER_ATTRIBUTES: &[&str] = &[
     "printer-is-accepting-jobs",
     "operations-supported",
     "document-format-supported",
+    "pwg-raster-document-type-supported",
     "sides-supported",
     "print-color-mode-supported",
     "color-supported",
