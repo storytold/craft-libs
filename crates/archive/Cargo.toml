@@ -1,0 +1,13 @@
+[package]
+name = "craft-archive"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Dependency-free parsing budgets for the Craft apps: ZIP end-record and central-directory preflight, bounded entry reads, and XML nesting and DTD checks before parsing"
+
+[lints]
+workspace = true
+
+[dependencies]
