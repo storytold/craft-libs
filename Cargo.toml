@@ -14,6 +14,13 @@ repository = "https://github.com/storytold/craft-libs"
 # internal: add each crate here as `craft-<name> = { path = "crates/<name>" }`
 craft-ai-core = { path = "crates/ai-core" }
 craft-pdf = { path = "crates/pdf", version = "=0.1.0" }
+craft-ps = { path = "crates/ps", version = "=0.1.0" }
+# craft-ps reading (the versions krilla and hayro already lock)
+pdf-writer = "0.15"
+miniz_oxide = "0.8"
+weezl = "0.1"
+skrifa = "0.47"
+kurbo = "0.13"
 krilla = { version = "=0.8.2", default-features = false, features = ["raster-images"] }
 hayro = { version = "=0.7.1", default-features = false }
 hayro-interpret = { version = "=0.7.0", default-features = false, features = ["embed-fonts", "embed-cmaps"] }

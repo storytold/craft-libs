@@ -1,0 +1,26 @@
+[package]
+name = "craft-ps"
+description = "PostScript and EPS for Craft apps: an EPS interpreter that paints into PDF"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+default = []
+read = ["dep:pdf-writer", "dep:miniz_oxide", "dep:weezl", "dep:skrifa", "dep:kurbo"]
+
+[dependencies]
+pdf-writer = { workspace = true, optional = true }
+miniz_oxide = { workspace = true, optional = true }
+weezl = { workspace = true, optional = true }
+skrifa = { workspace = true, optional = true }
+kurbo = { workspace = true, optional = true }
+
+[[example]]
+name = "eps2pdf"
+required-features = ["read"]

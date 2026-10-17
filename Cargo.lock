@@ -634,6 +634,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-ps"
+version = "0.1.0"
+dependencies = [
+ "kurbo 0.13.1",
+ "miniz_oxide 0.8.9",
+ "pdf-writer",
+ "skrifa 0.47.0",
+ "weezl",
+]
+
+[[package]]
 name = "craft-quit"
 version = "0.1.0"
 dependencies = [

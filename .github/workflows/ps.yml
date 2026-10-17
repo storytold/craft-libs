@@ -1,0 +1,52 @@
+name: Shared PostScript
+
+on:
+  push:
+    branches: [main]
+    paths: ["crates/ps/**", "Cargo.toml", "Cargo.lock", ".github/workflows/ps.yml"]
+  pull_request:
+    paths: ["crates/ps/**", "Cargo.toml", "Cargo.lock", ".github/workflows/ps.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: shared-ps-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native:
+    timeout-minutes: 30
+    name: PostScript (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: craft-ps-${{ matrix.os }}
+      - run: cargo fmt --check
+      - run: cargo clippy -p craft-ps --all-targets --locked -- -D warnings
+      - run: cargo clippy -p craft-ps --all-targets --all-features --locked -- -D warnings
+      - run: cargo test -p craft-ps --all-features --locked
+
+  wasm:
+    timeout-minutes: 20
+    name: PostScript WASM
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: craft-ps-wasm
+      - run: cargo check -p craft-ps --all-features --locked --target wasm32-unknown-unknown
