@@ -2,7 +2,8 @@
 
 `craft-ui` provides small egui components with application-supplied styles. `icons` prepares
 embedded SVG catalogs; `buttons` paints accessible icon buttons; `tabs` handles tab fitting and
-interaction; `layout` provides toolbar fitting, split geometry and resize handles; `theme` shares widget-state styling.
+interaction; `layout` provides toolbar fitting, split geometry and resize handles; `theme` shares
+widget-state styling and optional layered shadow rendering.
 `docking` supplies transactional panel moves and an optional docking surface.
 `printing` supplies printer/job controls and asynchronous feedback used by WordCraft and GridCraft.
 The current delivery covers nine creative apps (DesignCraft, VectorCraft, PhotoCraft, FilmCraft, EffectCraft, CADCraft, PDFCraft, LightCraft and SoundCraft); prior basic and office adapters are separate. The [suite audit](../../docs/ui-components-audit.md#adoption-and-acceptance)
@@ -208,9 +209,15 @@ fn style_widgets(visuals: &mut egui::Visuals, palette: WidgetPalette, text: Colo
 ```
 
 This is a mechanism for coloring widgets, not a shared theme schema. Fonts, complete palettes,
-selection colors, shadows, spacing, context storage and preference serialization remain in each
+selection colors, shadow recipes, spacing, context storage and preference serialization remain in each
 application. See the [eight-app comparison](../../docs/theme-infrastructure.md) for the exact
 common operation and the differences preserved by the adapters.
+
+`theme::shadow` paints explicit shadow layers, supplies optional PhotoCraft and floating-toolbar
+recipes, and offers an owned frame helper. Hosts can opt into a constrained egui 0.36 frame
+adapter for built-in menus, ComboBoxes and windows. See [shadow integration and manual
+acceptance](../../docs/shadows.md) for contracts, supported consumers, fallback cases and the
+comparison-gallery command. Canvas shadows and document effects remain application-owned.
 
 ## Print settings and feedback
 

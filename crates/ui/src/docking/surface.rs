@@ -213,14 +213,14 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> DockArea<P> {
         while let Some((node, path)) = nodes.pop() {
             match node {
                 Node::Tabs { panels, .. } if group(panels) => return true,
-                Node::Stack { entries } => {
+                Node::Stack { entries }
                     if entries.iter().any(|entry| {
                         matches(self.id.with(("tab", &entry.panel)))
                             || matches(self.id.with(("collapse", &entry.panel)))
                             || matches(self.id.with(("stack-resize", &entry.panel)))
-                    }) {
-                        return true;
-                    }
+                    }) =>
+                {
+                    return true;
                 }
                 Node::Split { first, second, .. } => {
                     if matches(self.id.with(("split", &path))) {
