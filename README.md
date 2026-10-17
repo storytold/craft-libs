@@ -30,6 +30,10 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
 - [`craft-cms`](crates/cms/README.md): pure-Rust ICC v2/v4 colour management: profile parsing
   and writing, transforms, rendering intents, black point compensation, soft proofing, gamut
   checks, 3D LUTs and built-in profiles (sRGB, Display P3, synthetic coated CMYK and others).
+- [`craft-i18n`](crates/i18n/README.md): translations over the embedded craft-i18n catalogs:
+  lookup with fallback (`pt-br` → `pt` → English), plurals, language names, the system locale and
+  a pseudo locale. The catalogs stay a fully optional build input; apps keep `tl!` and their
+  language setting.
 - [`craft-print`](crates/print/README.md): PDF submission to CUPS and Windows, printer discovery,
   duplex/copies/colour and driver preferences. PDF generation stays in each app.
 
