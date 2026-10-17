@@ -539,7 +539,11 @@ pub fn temp_name(file: &str) -> String {
     static COUNTER: AtomicU64 = AtomicU64::new(0);
     let n = COUNTER.fetch_add(1, Ordering::Relaxed);
     let stem: String = file.chars().take(64).collect();
-    format!(".{stem}.{}-{n}.craft_tmp", std::process::id())
+    #[cfg(not(target_arch = "wasm32"))]
+    let pid = std::process::id();
+    #[cfg(target_arch = "wasm32")]
+    let pid = 0;
+    format!(".{stem}.{pid}-{n}.craft_tmp")
 }
 
 /// The end of an error message: whether an original file was left as it was.
@@ -602,7 +606,11 @@ mod tests {
     impl TempDir {
         fn new(tag: &str) -> Self {
             static N: AtomicU64 = AtomicU64::new(0);
-            let d = std::env::temp_dir().join(format!("craft-atomic-{tag}-{}-{}", std::process::id(), N.fetch_add(1, Ordering::Relaxed)));
+            #[cfg(not(target_arch = "wasm32"))]
+            let pid = std::process::id();
+            #[cfg(target_arch = "wasm32")]
+            let pid = 0;
+            let d = std::env::temp_dir().join(format!("craft-atomic-{tag}-{pid}-{}", N.fetch_add(1, Ordering::Relaxed)));
             let _ = std::fs::remove_dir_all(&d);
             std::fs::create_dir_all(&d).ok();
             Self(d)
@@ -1139,5 +1147,19 @@ mod tests {
         assert!(atomic_write_custom(&fs, NO_RETRY, &p, b"best effort data").is_ok());
         assert_eq!(std::fs::read(&p).ok(), Some(b"best effort data".to_vec()));
         assert_no_temp(&d.0);
+    }
+
+    #[test]
+    fn temp_name_format_is_valid() {
+        let name = temp_name("document.craft");
+        assert!(name.starts_with(".document.craft."));
+        assert!(name.ends_with(".craft_tmp"));
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    #[test]
+    fn wasm_atomic_write_returns_unsupported() {
+        let err = atomic_write(Path::new("dummy.craft"), b"data").unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::Unsupported);
     }
 }
