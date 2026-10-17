@@ -1,6 +1,8 @@
 //! Printer selection and asynchronous job feedback, independent of any spooler or document.
 //! Hosts provide workers; applications own PDF generation, commands and translated wording.
 
+pub mod network;
+
 use std::sync::mpsc::{Receiver, TryRecvError};
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
