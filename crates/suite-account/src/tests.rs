@@ -55,7 +55,13 @@ impl Service for Canned {
     }
 
     fn identity(&self, _base: &str, _token: &Secret) -> Result<Option<Identity>, String> {
-        Ok(Some(Identity { user: USER.to_owned(), display: "Ada Lovelace".to_owned(), email: None, linked: true }))
+        Ok(Some(Identity {
+            user: USER.to_owned(),
+            display: "Ada Lovelace".to_owned(),
+            email: None,
+            linked: true,
+            conversation: None,
+        }))
     }
 
     fn revoke(&self, base: &str, _token: &Secret) -> Result<(), String> {

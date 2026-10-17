@@ -16,6 +16,14 @@
 
 use crate::secret::Secret;
 
+/// Where to open the provider's conversation app with no document in hand.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ConversationHome {
+    /// What the provider calls it (Talk, …).
+    pub name: String,
+    pub url: String,
+}
+
 /// Who a token belongs to, as the deployment reports it.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Identity {
@@ -26,6 +34,9 @@ pub struct Identity {
     /// Whether cloud storage is linked. Without it Open and Save have nowhere to go. Saying so
     /// here is kinder than a failure at the moment of saving.
     pub linked: bool,
+    /// The provider's conversation lobby, when the deployment has one. Absent where chat is
+    /// unsupported, so a launcher draws no button rather than a dead one.
+    pub conversation: Option<ConversationHome>,
 }
 
 /// A sign-in the user has to finish in a browser.
