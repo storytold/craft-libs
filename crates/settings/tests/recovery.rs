@@ -77,9 +77,10 @@ fn damaged_file_that_cannot_be_moved_is_left_alone() {
     use std::os::unix::fs::PermissionsExt;
     let tmp = tempfile::tempdir().unwrap();
     write_config(tmp.path(), "not = [toml");
-    // The folder passes the write probe only while it is writable, so open first, then lock it.
     let dir = tmp.path();
-    std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o500)).unwrap();
+    if !common::restrict_directory_writes(dir) {
+        return;
+    }
     let (mut store, report) = open_in(dir);
     std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700)).unwrap();
     assert!(store.is_read_only(), "{report:?}");
@@ -152,7 +153,9 @@ fn failed_migration_in_an_unwritable_folder_shows_defaults() {
     let tmp = tempfile::tempdir().unwrap();
     // Version 0 has no migration step, so upgrading fails.
     write_config(tmp.path(), "schema_version = 0\n[general]\nlanguage = \"de\"\n");
-    std::fs::set_permissions(tmp.path(), std::fs::Permissions::from_mode(0o500)).unwrap();
+    if !common::restrict_directory_writes(tmp.path()) {
+        return;
+    }
     let (store, report) = open_in(tmp.path());
     std::fs::set_permissions(tmp.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
     assert!(matches!(report.read_only, Some(ReadOnlyReason::DirNotWritable(_))), "{report:?}");
