@@ -7,8 +7,10 @@
 
 pub mod buttons;
 pub mod docking;
+pub mod file_nav;
 pub mod icons;
 pub mod layout;
+pub mod places;
 pub mod printing;
 pub mod tabs;
 pub mod theme;

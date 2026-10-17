@@ -5,6 +5,8 @@ embedded SVG catalogs; `buttons` paints accessible icon buttons; `tabs` handles 
 interaction; `layout` provides toolbar fitting, split geometry and resize handles; `theme` shares widget-state styling.
 `docking` supplies transactional panel moves and an optional docking surface.
 `printing` supplies printer/job controls and asynchronous feedback used by WordCraft and GridCraft.
+`file_nav` is the navigation column of the Office-style apps' File page.
+`places` is the panel an app opens documents from and saves them to, with or without remote storage.
 The current delivery covers nine creative apps (DesignCraft, VectorCraft, PhotoCraft, FilmCraft, EffectCraft, CADCraft, PDFCraft, LightCraft and SoundCraft); prior basic and office adapters are separate. The [suite audit](../../docs/ui-components-audit.md#adoption-and-acceptance)
 records their scope and acceptance limits. Assets, complete themes, localization and command handling
 remain in each application. No icons, fonts or application engines are bundled.
@@ -231,6 +233,150 @@ host submit callback and keep active work alive when closing a window. Queue-def
 represented by `None`, independently of explicit one-sided, long-edge or short-edge choices.
 Receipts and backend errors remain unmodified data for the app to display. These controls work
 on WASM too; browser PDF printing remains an app-owned service.
+
+## File page navigation
+
+`file_nav::FileNav` is the column down the left of the File page in the Office-style apps: a
+labelled Back, the pages in groups with a rule between them, and a foot for Options and About.
+WordCraft, GridCraft and DeckCraft show the same column, each in its own colour. The `office`
+renders of `places_preview` show it beside the places panel.
+
+```rust
+use craft_ui::file_nav::{FileNav, FileNavAction, FileNavItem, FileNavStyle};
+
+fn column(ui: &mut egui::Ui, showing: &'static str, accent: egui::Color32, title_bar: f32) {
+    let style = FileNavStyle::on_accent(accent);
+    let item = |key, label| FileNavItem { key, label };
+    let top = [item("home", "Home"), item("new", "New"), item("open", "Open")];
+    let rest = [item("info", "Info"), item("save", "Save"), item("print", "Print"), item("export", "Export")];
+    let foot = [item("options", "Options"), item("about", "About")];
+    let icons = |_key: Option<&str>, _painter: &egui::Painter, _rect: egui::Rect, _colour: egui::Color32| { /* the app's own icon; `None` is Back */ };
+    match FileNav::new("Back", &[&top, &rest], Some(showing), &style, &icons).foot(&foot).title_band(title_bar).show(ui).action {
+        Some(FileNavAction::Back) => { /* leave the File page */ }
+        Some(FileNavAction::Choose(page)) => { /* show that page, or run Save */ }
+        Some(FileNavAction::DragWindow) => ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag),
+        None => {}
+    }
+}
+```
+
+- **Back is a row.** It has a label and an icon like every other entry, and it comes first.
+- **The title band.** Where the File page covers the title bar (macOS), `title_band` leaves a band
+  of that height above Back for the window buttons. It holds nothing else and reports
+  `FileNavAction::DragWindow`. Elsewhere pass 0 and the column starts with Back.
+- **Keyboard.** Tab reaches every entry, Up and Down walk them and wrap at the ends, Home and
+  End reach the ends, and Enter or Space chooses the entry in focus. The title band is not a stop.
+- **Keys.** `K` is whatever the app names its pages with (`&str`, an enum); it comes back in
+  `FileNavAction::Choose`. The page that is showing is marked, and announced as chosen.
+- **Disabled entries.** `.disabled(&keys)` marks the entries that cannot be chosen now (Info,
+  Save, Print and Close with no document open). They keep their place and are drawn in
+  `FileNavStyle::disabled` with no hover, are announced as unavailable, never come back in
+  `FileNavAction::Choose`, and Tab and the arrow keys pass over them.
+- **Too little room.** A label longer than the column ends in an ellipsis and is whole in its
+  tip. A column too short for its entries puts the foot after the pages and scrolls.
+- **Colour.** `FileNavStyle::on_accent` fills the column with the app's colour;
+  `FileNavStyle::from_visuals` is a neutral column with the accent only on the chosen page.
+  Fonts are `FontId`s in the style, so the app's own faces apply.
+
+## Places panel
+
+`places::PlacesPanel` is where an app opens a document from and saves it to: places on the left
+(Recent, one per connected account, This computer), the chosen place's files and folders on the
+right. One panel serves three hosts: the File › Open and Save As pages of the Office-style apps,
+the home screen of the graphics apps, and, through `places::menu`, the "Open from" items of a
+classic File menu. Preview all of them with
+`cargo run -p craft-ui --example places_preview -- OUT_DIR` (set `CRAFT_PREVIEW_FONTS` to a folder
+with `Inter-Regular.ttf` to render in Inter).
+
+```rust
+use craft_ui::places::{Place, PlaceEntry, PlacesAction, PlacesContent, PlacesLabels, PlacesPanel, PlacesStyle};
+
+fn open_page(ui: &mut egui::Ui, places: &[Place<'_>], selected: usize, entries: &[PlaceEntry<'_>], crumbs: &[&str], remote: bool) {
+    let style = PlacesStyle::from_visuals(ui.visuals());
+    let labels = PlacesLabels { places: "Places", add_place: "Add a place", browse: "Browse…", loading: "Loading…" };
+    let panel = PlacesPanel::new(places, Some(selected), PlacesContent::Entries(entries), &style, labels).crumbs(crumbs).add_place(remote);
+    match panel.show(ui).action {
+        Some(PlacesAction::Select(place)) => { /* list that place */ }
+        Some(PlacesAction::Activate(entry)) => { /* open the file, or list the folder */ }
+        Some(PlacesAction::Crumb(step)) => { /* go back up to that folder */ }
+        Some(PlacesAction::AddPlace) => { /* start a sign-in */ }
+        Some(PlacesAction::Browse) => { /* show the system's own file dialog */ }
+        None => {}
+    }
+}
+```
+
+- **No IO.** The panel opens no file and no socket and knows no storage provider. The app passes
+  the places and entries it has and acts on the `PlacesAction` it gets back; indices point into
+  the slices passed that frame. `PlacesContent::Loading` and `PlacesContent::Message` stand in
+  while the app is still asking, or has nothing to list.
+- **Nothing to list.** `PlacesContent::Notice` says why properly: an icon, a short title, a
+  sentence or two and, where the user can act, a button that reports `PlacesAction::Notice`. Use
+  it for an empty folder, a folder that is gone, or one the system will not let the app read.
+  Running text keeps to a readable width however wide the page is.
+- **With or without remote storage.** An app without it passes no account places and leaves
+  `add_place` off, and nothing else changes. "Add a place" is off by default: a control that
+  cannot work is worse than none.
+- **The system dialog stays.** Browse reports `PlacesAction::Browse` and the app shows the native
+  dialog, which already knows the system's own cloud folders and network drives. A host with its
+  own Open button above the places turns Browse off.
+- **Hosts.** The panel fills the rect it is given. `header` puts the host's own controls above
+  the places (a home screen's New and Open buttons); `view(PlacesView::Thumbnails)` with
+  `thumbnails` suits pictures, the default list suits documents.
+- **Text.** A long name is cut with an ellipsis and never pushes the detail beside it ("Anna is
+  editing", "shared by Tom · view only") out of sight. The app supplies every string, and its own
+  glyphs through `icons` when the built-in line icons do not match its set.
+- **Accent.** The app's accent marks state only: the chosen place, the focus ring and the hovered
+  thumbnail. Icons keep one colour, the same in every app. `PlacesStyle::from_visuals` takes the
+  accent from `selection.bg_fill`.
+
+### This computer
+
+`places::local::LocalFolder` is what an app adds when its "This computer" place should list
+folders in the page instead of sending the user to the system's dialog. It reads a folder once
+per move, never per frame, and only lists names.
+
+```rust
+use craft_ui::places::local::{LocalFolder, LocalLabels, LocalOutcome};
+use craft_ui::places::{Place, PlacesLabels, PlacesPanel, PlacesStyle};
+
+fn this_computer(ui: &mut egui::Ui, folder: &mut LocalFolder, places: &[Place<'_>], style: &PlacesStyle, labels: PlacesLabels<'_>, words: LocalLabels<'_>) {
+    let entries = folder.entries();
+    let crumbs = folder.crumbs("This computer");
+    let crumbs: Vec<&str> = crumbs.iter().map(String::as_str).collect();
+    let action = PlacesPanel::new(places, Some(1), folder.content(&entries, words), style, labels).crumbs(&crumbs).show(ui).action;
+    match action.map(|action| folder.act(action)) {
+        Some(LocalOutcome::Open(path)) => { /* open the document at `path` */ }
+        Some(LocalOutcome::Browse) => { /* show the system's own file dialog */ }
+        Some(LocalOutcome::Stay) | None => {}
+    }
+}
+```
+
+- **Opening.** `LocalFolder::open(dir, &["docx", "rtf"])` lists the subfolders and the files of
+  those kinds (`*` for every file), folders first, each by name; hidden entries are left out and a
+  folder of more than `local::MAX_LISTED` entries is cut. `LocalFolder::home()` is where the place
+  usually starts.
+- **Moving.** `act` moves the listing when a subfolder or a breadcrumb step is chosen, and returns
+  the file to open or the request for the system's dialog. Choosing another place is the app's.
+- **Nothing to show.** `content` turns an empty folder, a folder that is gone and a folder closed
+  to the app into the right `PlacesNotice`, with the app's words from `LocalLabels`. The closed
+  folder gets a Browse button: a document picked in the system's dialog still opens.
+- **macOS.** The system asks the user once before an app reads Documents, Desktop or Downloads,
+  and refuses silently after a No. Give its question a reason in the bundle's `Info.plist`:
+
+  ```xml
+  <key>NSDocumentsFolderUsageDescription</key>
+  <string>WordCraft lists the documents in your Documents folder on its Open page and opens the ones you choose.</string>
+  <key>NSDesktopFolderUsageDescription</key>
+  <string>WordCraft lists the documents on your Desktop on its Open page and opens the ones you choose.</string>
+  <key>NSDownloadsFolderUsageDescription</key>
+  <string>WordCraft lists the documents in your Downloads folder on its Open page and opens the ones you choose.</string>
+  ```
+
+  A build started from a terminal has no identity of its own, so the system answers for the
+  terminal instead and may refuse without asking.
+- **The web** has no folders to list: offer no such place there.
 
 ## Compatibility and checks
 
