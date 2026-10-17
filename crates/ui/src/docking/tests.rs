@@ -1090,3 +1090,52 @@ fn popup_action_labels_use_custom_visual_text_and_logical_accessibility() {
         );
     }
 }
+
+#[test]
+fn tab_labels_that_do_not_fit_are_truncated_inside_their_tab_and_named_in_a_tooltip() {
+    let ctx = Context::default();
+    ctx.all_styles_mut(|style| style.interaction.tooltip_delay = 0.0);
+    let layout = Layout { root: Some(tabs(&[1, 2, 3], 0)), floating: vec![] };
+    let label = |p: &u32| format!("Eigenschaften und Anpassungen {p}");
+    let run = |events: Vec<Event>| {
+        let input = RawInput { screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(240.0, 200.0))), events, ..Default::default() };
+        let mut output = ctx.run_ui(input, |ui| {
+            DockArea::new(Id::new("truncate")).show(
+                ui,
+                &layout,
+                &DockStyle::from_ui(ui),
+                label,
+                |_| Permissions::default(),
+                |ui, _| {
+                    ui.label("Body");
+                },
+            );
+        });
+        output.textures_delta.clear();
+        output.shapes
+    };
+    run(vec![]);
+    let shapes = run(vec![]);
+    let tab = |p: u32| ctx.read_response(Id::new("truncate").with(("tab", &p))).unwrap().rect;
+    for p in 1..=3 {
+        let tab = tab(p);
+        // The clip rect would hide an overflowing label; what is laid out must itself fit.
+        let painted: Vec<Rect> = shapes
+            .iter()
+            .filter(|shape| matches!(&shape.shape, egui::Shape::Text(_)))
+            .map(|shape| shape.shape.visual_bounding_rect())
+            .filter(|r| tab.contains(r.center()))
+            .collect();
+        assert_eq!(painted.len(), 1, "tab {p}: {painted:?}");
+        assert!(tab.contains_rect(painted[0]), "tab {p}: label {:?} overflows {tab:?}", painted[0]);
+    }
+    let at = tab(2).center();
+    run(vec![Event::PointerMoved(at)]);
+    let shapes = run(vec![]);
+    let full = label(&2);
+    // An elided galley still reports its whole text, so the cut tab label alone would match.
+    assert!(
+        shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == full && !text.galley.elided)),
+        "a truncated tab names its panel in full on hover"
+    );
+}

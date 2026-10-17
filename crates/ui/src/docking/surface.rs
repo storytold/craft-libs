@@ -9,6 +9,9 @@ use crate::{
 
 use super::{Action, DockError, DropTarget, Layout, Node, Permissions, Placement, resolve_drop};
 
+/// Horizontal room around a tab's label, both when measuring its natural width and when cutting it.
+const TAB_PADDING: f32 = 24.0;
+
 /// Application-supplied chrome. Body renderers retain their own UI style and contents.
 #[derive(Clone, Debug)]
 pub struct DockStyle {
@@ -609,7 +612,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
                     .into_galley(ui, Some(egui::TextWrapMode::Extend), f32::INFINITY, self.style.font.clone())
                     .size()
                     .x
-                    + 24.0
+                    + TAB_PADDING
             })
             .collect();
         let fit = tabs::fit(&widths, active, (strip.width() - header_width).max(0.0), 40.0, 22.0);
@@ -671,12 +674,15 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
         let policy = (self.permissions)(panel);
         let label = (self.label)(panel);
         let color = if active { self.style.text } else { self.style.inactive_text };
+        // A tab squeezed below its natural width cuts its label with '…' inside the padding its
+        // natural width was measured with, instead of letting it run under its neighbours.
         let galley = self.content.label(ui, panel, &label, &self.style.font, color).into_galley(
             ui,
-            Some(egui::TextWrapMode::Extend),
-            f32::INFINITY,
+            Some(egui::TextWrapMode::Truncate),
+            (rect.width() - TAB_PADDING).max(0.0),
             self.style.font.clone(),
         );
+        let elided = galley.elided;
         let response = tabs::Tab::new(self.id.with(("tab", panel)), &label, active)
             .sense(if policy.movable { Sense::click_and_drag() } else { Sense::click() })
             .focus_stroke(Stroke::new(1.0, self.style.accent))
@@ -685,6 +691,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
                 painter.rect_filled(rect, 0.0, if active || response.hovered() { self.style.active_background } else { self.style.tab_background });
                 painter.galley(rect.center() - galley.size() * 0.5, galley.clone(), color);
             });
+        let response = if elided { response.on_hover_text(&label) } else { response };
         self.register_interaction(ui.ctx(), response.id);
         if response.clicked() {
             self.output.actions.push(Action::Activate { panel: panel.clone() });
