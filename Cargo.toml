@@ -23,6 +23,7 @@ thiserror = "2"
 craft-atomic = { path = "crates/atomic" }
 craft-cms = { path = "crates/cms" }
 craft-docpath = { path = "crates/docpath" }
+craft-job = { path = "crates/job" }
 craft-print = { path = "crates/print" }
 craft-quit = { path = "crates/quit" }
 craft-settings = { path = "crates/settings" }

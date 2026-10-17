@@ -1,0 +1,48 @@
+name: Job vocabulary
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['crates/job/**', 'Cargo.toml', 'Cargo.lock', '.github/workflows/job.yml']
+  pull_request:
+    paths: ['crates/job/**', 'Cargo.toml', 'Cargo.lock', '.github/workflows/job.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  job:
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - run: cargo fmt --check
+      - run: cargo clippy -p craft-job --all-targets --locked -- -D warnings
+      - run: cargo test -p craft-job --locked
+      - run: cargo clippy -p craft-job --all-targets --features serde --locked -- -D warnings
+      - run: cargo test -p craft-job --features serde --locked
+      - run: cargo doc -p craft-job --no-deps --locked
+        env:
+          RUSTDOCFLAGS: -D warnings
+      - run: cargo doc -p craft-job --no-deps --features serde --locked
+        env:
+          RUSTDOCFLAGS: -D warnings
+
+  wasm:
+    timeout-minutes: 15
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - run: cargo check -p craft-job --target wasm32-unknown-unknown --locked
+      - run: cargo check -p craft-job --target wasm32-unknown-unknown --features serde --locked
