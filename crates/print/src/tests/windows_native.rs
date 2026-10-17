@@ -462,3 +462,15 @@ fn windows_jobs_reach_the_spooler() {
     let missing = spool::submit(&mixed, &Job { printer: Some(name.into()), ..Job::default() });
     assert!(matches!(missing, Err(Error::Spool(ref m)) if m.contains(name)), "{missing:?}");
 }
+
+#[test]
+fn shrink_to_fit_refuses_a_sheet_the_output_cannot_represent() {
+    use crate::sheets::{Fit, plan, read};
+    // A runaway-zoom export: 16 000 000 pt wide. Written with four decimals the scale would be
+    // "0" -- a singular matrix, a blank page, reported back as a spooled job.
+    let huge = TestPage { media: Some([0.0, 0.0, 16_000_000.0, 792.0]), ..LETTER };
+    let pdf = test_pdf(&[huge], false);
+    let sheets = read(&pdf).unwrap();
+    let refused = plan(&sheets.sheets, (612.0, 792.0), Fit::Shrink { margin: 18.0 });
+    assert!(matches!(refused, Err(Error::Spool(ref m)) if m.contains("shrink")), "{refused:?}");
+}

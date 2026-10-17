@@ -1038,6 +1038,21 @@ pub(crate) fn plan(sheets: &[Sheet], paper: (f64, f64), fit: Fit) -> Result<Vec<
                 if scale >= 1.0 && close((w, h), paper) {
                     None
                 } else {
+                    // The matrix is written with at most four decimals and a PDF real has no
+                    // exponent, so a scale that rounds away prints nothing at all and one that
+                    // rounds up prints the wrong size. Refuse both, the way a nondefault
+                    // UserUnit is refused: an error, never a job that spools a blank page.
+                    let written = number(scale).parse::<f64>().unwrap_or(0.0);
+                    if written <= 0.0 || (written - scale).abs() > scale * 0.01 {
+                        return Err(Error::Spool(format!(
+                            "shrink to fit cannot place sheet {} ({:.2} x {:.2} in) on the {:.2} x {:.2} in paper; nothing was sent",
+                            i + 1,
+                            w / 72.0,
+                            h / 72.0,
+                            pw / 72.0,
+                            ph / 72.0
+                        )));
+                    }
                     let [x0, y0, x1, y1] = sheet.bounds;
                     let (cw, ch) = (x1 - x0, y1 - y0);
                     // The paper in the page's unrotated space.
