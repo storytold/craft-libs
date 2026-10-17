@@ -1,0 +1,29 @@
+name: Document paths
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['crates/docpath/**', 'Cargo.toml', 'Cargo.lock', '.github/workflows/docpath.yml']
+  pull_request:
+    paths: ['crates/docpath/**', 'Cargo.toml', 'Cargo.lock', '.github/workflows/docpath.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  docpath:
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - run: cargo fmt --check
+      - run: cargo clippy -p craft-docpath --all-targets --locked -- -D warnings
+      - run: cargo test -p craft-docpath --locked -- --nocapture

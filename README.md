@@ -31,6 +31,9 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   and writing, transforms, rendering intents, black point compensation, soft proofing, gamut
   checks, 3D LUTs and built-in profiles (sRGB, Display P3, synthetic coated CMYK and others).
 - [`craft-job`](crates/job/README.md): the small vocabulary printing and scanning share: `NativeCode`, `<backend>:<native>` job and device ids, and retry safety with one retry-advice function. No lifecycle, tracking or I/O.
+- [`craft-docpath`](crates/docpath/src/lib.rs): decides whether a path or `file:` URL stored in a
+  document may be opened. Paths stored in documents are followed only when they are local or on the
+  document's own network share; other network paths, device paths and non-file URLs are refused.
 - [`craft-print`](crates/print/README.md): PDF submission to CUPS and Windows, printer discovery,
   duplex/copies/colour and driver preferences. PDF generation stays in each app.
   A registry of print backends, with a WS-Print network backend (cargo feature `wsd`, on by default;
