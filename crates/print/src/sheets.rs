@@ -806,8 +806,51 @@ pub(crate) struct Sheet {
     pub(crate) bounds: [f64; 4],
     /// `/Rotate`, 0, 90, 180 or 270.
     pub(crate) rotate: u32,
-    /// Annotation flags match the renderer's visible printing behavior.
-    print_annotations_safe: bool,
+    /// What the page's annotations print, and whether Windows would print them alike.
+    annots: Annots,
+}
+
+/// Annotation flag bits (ISO 32000-1, table 165) that decide what prints.
+const ANNOT_HIDDEN: i64 = 1 << 1;
+const ANNOT_PRINT: i64 = 1 << 2;
+const ANNOT_NO_ZOOM: i64 = 1 << 3;
+const ANNOT_NO_ROTATE: i64 = 1 << 4;
+const ANNOT_NO_VIEW: i64 = 1 << 5;
+
+/// What a page's annotations do on paper.
+///
+/// An annotation is *silent* when the file says it prints nothing: a Link or Popup (they have no
+/// content of their own), one flagged Hidden, or one without the Print flag. Everything else is
+/// *printable*.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct Annots {
+    /// The subtype of the first printable annotation (`unreadable` when the array can't be read).
+    printable: Option<Vec<u8>>,
+    /// Windows.Data.Pdf shows what a viewer shows (not Hidden, not NoView) whatever the Print
+    /// flag says, so it would print some annotation the file says to omit, or omit one the file
+    /// says to print.
+    windows_differs: bool,
+}
+
+impl Annots {
+    fn unreadable() -> Self {
+        Self { printable: Some(b"unreadable".to_vec()), windows_differs: true }
+    }
+
+    fn note(&mut self, subtype: &[u8], flags: i64) {
+        let inert = matches!(subtype, b"Link" | b"Popup");
+        let hidden = flags & ANNOT_HIDDEN != 0;
+        let prints = !inert && !hidden && flags & ANNOT_PRINT != 0;
+        let shown = !inert && !hidden && flags & ANNOT_NO_VIEW == 0;
+        if prints && self.printable.is_none() {
+            self.printable = Some(subtype.to_vec());
+        }
+        // A printable annotation that scales or turns with the page isn't one Windows places as
+        // the file says either.
+        if prints != shown || (prints && flags & (ANNOT_NO_ZOOM | ANNOT_NO_ROTATE) != 0) {
+            self.windows_differs = true;
+        }
+    }
 }
 
 impl Sheet {
@@ -941,22 +984,28 @@ pub(crate) fn read(data: &[u8]) -> Result<Sheets<'_>, Error> {
         let rotate = here.rotate.as_ref().and_then(|r| reader.resolve(r)).and_then(|r| r.int()).unwrap_or(0).rem_euclid(360);
         // Not a multiple of 90 is invalid; such a page is shown unrotated.
         let rotate = if rotate % 90 == 0 { u32::try_from(rotate).unwrap_or(0) } else { 0 };
-        // Windows renders viewer visibility, not annotation print visibility. Only a plain
-        // visible printable annotation is safe; flatten other flags before native submission.
-        let print_annotations_safe = match get(&dict, b"Annots") {
-            None | Some(Obj::Null) => true,
+        // Windows renders viewer visibility, not annotation print visibility.
+        let annots = match get(&dict, b"Annots") {
+            None | Some(Obj::Null) => Annots::default(),
             Some(annotations) => match reader.resolve(annotations) {
-                Some(Obj::Null) => true,
-                Some(Obj::Array(items)) => items.iter().all(|item| {
-                    reader
-                        .resolve(item)
-                        .and_then(|a| a.dict().cloned())
-                        .is_some_and(|annotation| get(&annotation, b"F").and_then(|f| reader.resolve(f)).and_then(|f| f.int()) == Some(4))
-                }),
-                _ => false,
+                Some(Obj::Null) => Annots::default(),
+                Some(Obj::Array(items)) => {
+                    let mut annots = Annots::default();
+                    for item in &items {
+                        let Some(annotation) = reader.resolve(item).and_then(|a| a.dict().cloned()) else {
+                            annots = Annots::unreadable();
+                            break;
+                        };
+                        let subtype = get(&annotation, b"Subtype").and_then(|s| reader.resolve(s)).and_then(|s| s.name().map(<[u8]>::to_vec));
+                        let flags = get(&annotation, b"F").and_then(|f| reader.resolve(f)).and_then(|f| f.int()).unwrap_or(0);
+                        annots.note(subtype.as_deref().unwrap_or(b"unknown"), flags);
+                    }
+                    annots
+                }
+                _ => Annots::unreadable(),
             },
         };
-        sheets.push(Sheet { obj, dict, bounds, rotate, print_annotations_safe });
+        sheets.push(Sheet { obj, dict, bounds, rotate, annots });
     }
     if reader.budget.exhausted {
         return Err(unreadable("the parser memory budget was exceeded"));
@@ -1059,9 +1108,10 @@ pub(crate) fn plan(sheets: &[Sheet], paper: (f64, f64), fit: Fit) -> Result<Vec<
 const OLD_GEOMETRY: [&[u8]; 6] = [b"MediaBox", b"CropBox", b"BleedBox", b"TrimBox", b"ArtBox", b"Rotate"];
 
 impl Sheets<'_> {
-    /// Refuse annotation print/view visibility the Windows renderer cannot preserve.
+    /// Refuse annotation print/view visibility the Windows renderer cannot preserve. Silent
+    /// annotations (Link, Popup, Hidden, NoView without Print) and plain printable ones pass.
     pub(crate) fn check_print_annotations(&self) -> Result<(), Error> {
-        if self.sheets.iter().all(|s| s.print_annotations_safe) {
+        if self.sheets.iter().all(|s| !s.annots.windows_differs) {
             Ok(())
         } else {
             Err(Error::Spool("flatten annotation print visibility into page content before native Windows printing; nothing was sent".into()))
@@ -1094,14 +1144,17 @@ impl Sheets<'_> {
                 if get(&self.trailer, b"Encrypt").is_some() {
                     return Err(refuse("it is encrypted"));
                 }
-                // Annotation appearances live outside /Contents. Transforming only content
-                // would leave them at the old coordinates; deleting them loses printed marks.
-                // Require callers to flatten before fitting until appearances can be reframed.
-                if let Some(annotations) = get(&dict, b"Annots")
-                    && !matches!(annotations, Obj::Null)
-                    && !matches!(annotations, Obj::Array(items) if items.is_empty())
-                {
-                    return Err(refuse("flatten page annotations before using shrink-to-fit"));
+                // Annotation appearances live outside /Contents, so reframing the content would
+                // leave a printable annotation at its old coordinates. Silent annotations print
+                // nothing, so /Annots is dropped below. Moving a printable one means flattening
+                // its appearance into the content with the right resources; until that exists
+                // it is refused, naming it.
+                if let Some(subtype) = &sheet.annots.printable {
+                    return Err(refuse(&format!(
+                        "page {} has a printable {} annotation; flatten it into the page content before using shrink-to-fit",
+                        edit.sheet + 1,
+                        String::from_utf8_lossy(subtype)
+                    )));
                 }
                 let [a, b, c, d, e, f] = frame.matrix;
                 let [x, y, w, h] = frame.clip;

@@ -272,37 +272,73 @@ fn shrink_to_fit_reframes_sheets_on_the_paper() {
 }
 
 #[test]
-fn shrink_to_fit_refuses_to_drop_annotation_appearances() {
+fn shrink_to_fit_refuses_only_printable_annotations() {
     use crate::sheets::{Fit, plan, read};
-    for annotations in ["[<< /Subtype /Text /Rect [36 36 72 72] /F 4 >>]", "42 0 R"] {
+    // A printable annotation can't be moved with the content: refused, naming it.
+    for (annotations, subtype) in [
+        ("[<< /Subtype /Text /Rect [36 36 72 72] /F 4 >>]", "Text"),
+        ("[<< /Subtype /Square /Rect [36 36 72 72] /F 4 >>]", "Square"),
+        ("[<< /Subtype /Link /Rect [0 0 9 9] /F 4 >> << /Subtype /Square /Rect [36 36 72 72] /F 4 >>]", "Square"),
+        ("42 0 R", "unreadable"),
+    ] {
         let pdf = test_pdf_with_annotations(&[LETTER, LETTER_LANDSCAPE], false, Some(annotations));
         let sheets = read(&pdf).unwrap();
         let fit = plan(&sheets.sheets, (612.0, 792.0), Fit::Shrink { margin: 18.0 }).unwrap();
-        assert!(matches!(sheets.update(&fit), Err(Error::Spool(ref m)) if m.contains("flatten page annotations")));
+        assert!(
+            matches!(sheets.update(&fit), Err(Error::Spool(ref m)) if m.contains("printable") && m.contains(subtype) && m.contains("annotation")),
+            "{annotations}"
+        );
         let exact = plan(&sheets.sheets, (612.0, 792.0), Fit::Exact).unwrap();
         let rotated = sheets.update(&exact).unwrap();
         assert!(rotated.starts_with(&pdf));
         assert!(String::from_utf8_lossy(&rotated[pdf.len()..]).contains("/Annots"), "rotation retains annotations on the updated page");
     }
-    for annotations in ["[]", "null"] {
+    // Silent annotations print nothing: the page fits and the annotations are dropped.
+    for annotations in [
+        "[]",
+        "null",
+        "[<< /Subtype /Link /Rect [36 36 72 72] /Border [0 0 0] /A << /S /URI /URI (https://example.com/) >> >>]",
+        "[<< /Subtype /Link /Rect [36 36 72 72] /F 4 >> << /Subtype /Popup /Rect [0 0 9 9] /F 28 >>]",
+        "[<< /Subtype /Square /Rect [36 36 72 72] /F 6 >>]",
+        "[<< /Subtype /Square /Rect [36 36 72 72] /F 32 >>]",
+        "[<< /Subtype /Stamp /Rect [36 36 72 72] >>]",
+    ] {
         let pdf = test_pdf_with_annotations(&[LETTER, LETTER_LANDSCAPE], false, Some(annotations));
         let sheets = read(&pdf).unwrap();
         let fit = plan(&sheets.sheets, (612.0, 792.0), Fit::Shrink { margin: 18.0 }).unwrap();
-        assert!(sheets.update(&fit).is_ok());
+        let updated = sheets.update(&fit).unwrap_or_else(|e| panic!("{annotations}: {e}"));
+        assert!(!String::from_utf8_lossy(&updated[pdf.len()..]).contains("/Annots"), "{annotations}");
+        assert_eq!(shapes(&updated), [((612, 792), 0), ((612, 792), 270)]);
     }
 }
 
 #[test]
 fn annotation_print_visibility_is_checked_before_native_submission() {
-    for flags in [0, 4, 6, 36, 20] {
+    // Printable and shown alike (4), silent alike (Hidden 2/6, NoView without Print 32) pass.
+    // Without Print (0, 8) Windows shows what the file omits; NoView with Print (36) it omits
+    // what the file prints; NoRotate/NoZoom (20, 12) it doesn't place as the file says.
+    for (flags, ok) in [(0, false), (4, true), (2, true), (6, true), (36, false), (20, false), (12, false), (32, true), (34, true), (8, false)] {
         let annotations = format!("[<< /Subtype /Square /Rect [36 36 72 72] /F {flags} >>]");
         let pdf = test_pdf_with_annotations(&[LETTER], false, Some(&annotations));
         let sheets = crate::sheets::read(&pdf).unwrap();
-        assert_eq!(sheets.check_print_annotations().is_ok(), flags == 4, "flags={flags}");
+        assert_eq!(sheets.check_print_annotations().is_ok(), ok, "flags={flags}");
     }
-    for annotations in ["[]", "null"] {
+    // Links and popups print nothing and Windows draws neither, whatever their flags.
+    for annotations in [
+        "[<< /Subtype /Link /Rect [36 36 72 72] >>]",
+        "[<< /Subtype /Link /Rect [36 36 72 72] /F 4 >>]",
+        "[<< /Subtype /Link /Rect [36 36 72 72] /F 0 >> << /Subtype /Popup /Rect [0 0 9 9] /F 28 >>]",
+        "[<< /Subtype /Square /Rect [36 36 72 72] /F 2 >> << /Subtype /Link /Rect [0 0 9 9] >>]",
+        "[]",
+        "null",
+    ] {
         let pdf = test_pdf_with_annotations(&[LETTER], false, Some(annotations));
-        assert!(crate::sheets::read(&pdf).unwrap().check_print_annotations().is_ok());
+        assert!(crate::sheets::read(&pdf).unwrap().check_print_annotations().is_ok(), "{annotations}");
+    }
+    // One mismatch anywhere refuses, and so does an unreadable array.
+    for annotations in ["[<< /Subtype /Link /Rect [0 0 9 9] >> << /Subtype /Square /Rect [36 36 72 72] /F 0 >>]", "42 0 R", "[7]"] {
+        let pdf = test_pdf_with_annotations(&[LETTER], false, Some(annotations));
+        assert!(crate::sheets::read(&pdf).unwrap().check_print_annotations().is_err(), "{annotations}");
     }
     let pdf = test_pdf(&[LETTER], false);
     assert!(crate::sheets::read(&pdf).unwrap().check_print_annotations().is_ok());

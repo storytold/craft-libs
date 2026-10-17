@@ -23,6 +23,7 @@ jobs:
           components: rustfmt, clippy
       - run: cargo fmt --check
       - run: cargo clippy -p craft-print --all-targets -- -D warnings
+      - run: cargo clippy -p craft-print --no-default-features --all-targets -- -D warnings
       - name: Prepare the Windows test driver
         if: runner.os == 'Windows'
         shell: powershell

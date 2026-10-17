@@ -5,23 +5,45 @@
 //! The printers come from `EnumPrinters` (local queues and the user's connections, such as
 //! `\\server\queue`), the default from `GetDefaultPrinter`, and whether each driver takes
 //! two-sided settings from its PrintCapabilities. A job is drawn by the in-box
-//! `Windows.Data.Pdf` with Direct2D into the XPS print API, as vectors, and its options (copies,
+//! `Windows.Data.Pdf` with Direct2D into the XPS print API, and its options (copies,
 //! collation, two-sided, colour, paper, orientation, no driver scaling) travel as a PrintTicket
 //! that the driver validates before anything is sent. `winprint` and `winsafe` wrap the Win32
 //! and WinRT calls, so there is no `unsafe` here.
+//!
+//! Vector content (paths, text) stays vector in the job. `Windows.Data.Pdf` draws the images of a
+//! page at the page's destination size, by default 96 dpi whatever the images in the PDF are.
+//! The pages are drawn with a destination at the printer's own resolution instead (no ceiling; a page
+//! whose bitmap would be too large is drawn in bands at the same resolution); the
+//! job's resolution and quality hints choose the figure ([`crate::spool_render`]). The renderer
+//! hands over an image at the smaller of its own size and about 4 million pixels (measured: an
+//! A4 page's image arrives at about 211 dpi however large the source and the destination are);
+//! tiling the page does not get past that, since every tile gets the whole image at that size.
 
 use std::io::Write as _;
 
-use winprint::printer::{PrinterDevice, WinPdfPrinter};
+use winprint::printer::{PdfRenderOptions, PrinterDevice, WinPdfPrinter};
 use winprint::ticket::document::{NS_PSK, OwnedName, PrintFeature, PrintTicketDocument, reader::ParsableXmlDocument as _};
 use winprint::ticket::{FeatureOptionPack as _, PageMediaSize, PrintCapabilities, PrintTicket, PrintTicketBuilder};
 
 use crate::sheets::{self, Fit, SAME};
+use crate::spool_render::{self, RenderChoice};
 use crate::ticket::{self, Paper};
+use crate::trace::JobTrace;
 use crate::{Error, Job, Printer, Scaling};
 
 fn spool_error(e: impl std::fmt::Display) -> Error {
     Error::Spool(e.to_string())
+}
+
+/// An error with its whole chain of causes: "Render error: The parameter is incorrect. (0x80070057)".
+fn chain(e: &(dyn std::error::Error + 'static)) -> String {
+    let mut message = e.to_string();
+    let mut cause = e.source();
+    while let Some(source) = cause {
+        message.push_str(&format!(": {source}"));
+        cause = source.source();
+    }
+    message
 }
 
 /// The user's default printer; `None` when there is none.
@@ -125,6 +147,22 @@ fn imageable_margin(device: &PrinterDevice, ticket: &PrintTicket) -> f64 {
 /// it, and the folder is removed however the job ended. Windows answers once the job is in the
 /// queue: a paused queue or an offline printer keeps the job there, as with any program.
 pub(crate) fn submit_with_progress(pdf: &[u8], job: &Job, progress: &mut dyn FnMut(usize, usize)) -> Result<String, Error> {
+    submit_with_render(pdf, job, &RenderChoice::default(), progress).map(|spooled| spooled.message)
+}
+
+/// What the spooler accepted: the message for people and what was changed on the way.
+pub(crate) struct Spooled {
+    pub(crate) message: String,
+    pub(crate) warnings: Vec<String>,
+}
+
+/// [`submit_with_progress`] with the render resolution chosen by `choice`; its notes and any
+/// difference between the resolution asked for and the one used come back as warnings.
+pub(crate) fn submit_with_render(pdf: &[u8], job: &Job, choice: &RenderChoice, progress: &mut dyn FnMut(usize, usize)) -> Result<Spooled, Error> {
+    let trace = JobTrace::begin();
+    trace.line(|| format!("submit: {} bytes, printer {:?}, scaling {:?}, copies {}", pdf.len(), job.printer, job.scaling, job.copies));
+    let trace = JobTrace::begin();
+    trace.line(|| format!("submit: {} bytes, printer {:?}, scaling {:?}, copies {}", pdf.len(), job.printer, job.scaling, job.copies));
     let read = sheets::read(pdf)?;
     read.check_print_annotations()?;
     let count = read.sheets.len();
@@ -140,9 +178,11 @@ pub(crate) fn submit_with_progress(pdf: &[u8], job: &Job, progress: &mut dyn FnM
     let dir = tempfile::Builder::new().prefix("craft-print-").tempdir().map_err(written)?;
     let path = dir.path().join(ticket::job_filename(&job.title));
     let read = &read;
+    let trace = &trace;
     // The worker is joined before `dir` is dropped: the spooler reads the file.
     let result = crate::progress::run(progress, move |sender| {
         let (ticket, paper) = driver_ticket(&device, job, first, landscape)?;
+        trace.line(|| format!("ticket accepted by {}: paper {}x{} um, landscape {landscape}", device.name(), paper.0, paper.1));
         let xml = std::str::from_utf8(ticket.get_xml()).map_err(spool_error)?;
         ticket::verify_job_options(xml, job, count)?;
         let (fit, paper) = match job.scaling {
@@ -157,25 +197,36 @@ pub(crate) fn submit_with_progress(pdf: &[u8], job: &Job, progress: &mut dyn FnM
         let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(&path).map_err(written)?;
         file.write_all(updated.as_deref().unwrap_or(pdf)).map_err(written)?;
         drop(file);
-        WinPdfPrinter::new(device)
-            .print_with_progress(&path, ticket, |processed, total| {
+        trace.line(|| {
+            format!("job file written ({count} sheet(s) read); starting the spool job (StartDoc equivalent: the document package target is created)")
+        });
+        let default_render = PdfRenderOptions::default();
+        let render = PdfRenderOptions { dpi: choice.dpi, limit_to_device: choice.limit_to_device, ..default_render };
+        let printed = WinPdfPrinter::new(device)
+            .print_with_render_options(&path, ticket, &render, |processed, total| {
+                trace.line(|| format!("page {processed}/{total} accepted by Direct2D (the source PDF has {count} sheet(s))"));
                 // Page acceptance is distinct from terminal job success. The callback
                 // drains on the submitter's thread, so it can retain non-Send UI state.
                 let _ = sender.send((processed as usize, total as usize));
             })
-            .map_err(|e| {
-                let mut message = e.to_string();
-                let mut cause = std::error::Error::source(&e);
-                while let Some(source) = cause {
-                    message.push_str(&format!(": {source}"));
-                    cause = source.source();
-                }
-                spool_error(message)
-            })
+            .map_err(|e| spool_error(chain(&e)));
+        match &printed {
+            Ok(_) => trace
+                .line(|| "the spooler reported the package complete (EndDoc equivalent: the job is in the queue, not necessarily printed)".into()),
+            Err(e) => trace.line(|| format!("the job failed and was cancelled by winprint (AbortDoc equivalent): {e}")),
+        }
+        printed
     });
     drop(dir);
-    result?;
-    Ok(format!("spooled {count} sheet(s)"))
+    if let Err(e) = &result {
+        trace.line(|| format!("submit failed: {e}"));
+    }
+    let report = result?;
+    trace.line(|| "submit finished".into());
+    let mut warnings = choice.notes.clone();
+    let rendered: Vec<u32> = report.pages.iter().map(|p| p.dpi).collect();
+    warnings.extend(spool_render::resolution_note(choice.dpi, &rendered, choice.limit_to_device, report.device_dpi));
+    Ok(Spooled { message: format!("spooled {count} sheet(s)"), warnings })
 }
 
 #[cfg(test)]
@@ -223,13 +274,86 @@ mod tests {
         }
     }
 
+    #[test]
+    fn an_error_is_reported_with_its_whole_chain_of_causes() {
+        #[derive(Debug)]
+        struct Inner;
+        impl std::fmt::Display for Inner {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("the parameter is incorrect")
+            }
+        }
+        impl std::error::Error for Inner {}
+        #[derive(Debug)]
+        struct Outer(Inner);
+        impl std::fmt::Display for Outer {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("Render error")
+            }
+        }
+        impl std::error::Error for Outer {
+            fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+                Some(&self.0)
+            }
+        }
+        assert_eq!(chain(&Outer(Inner)), "Render error: the parameter is incorrect");
+        assert_eq!(chain(&Inner), "the parameter is incorrect");
+    }
+
+    /// Run a PowerShell one-liner that only reads the spooler (test helper).
+    fn read_spooler(script: &str) -> String {
+        let out = std::process::Command::new("powershell").args(["-NoProfile", "-NonInteractive", "-Command", script]).output().unwrap();
+        String::from_utf8_lossy(&out.stdout).trim().to_owned()
+    }
+
+    /// Whether `queue` is one of the fakeprint fakes: a known fake name, its WSD port's printer
+    /// UUID in the fakes' namespace. Nothing else is ever printed to by these tests.
+    fn is_provably_fake(queue: &str) -> bool {
+        if !["fakeprint mono1", "fakeprint inkjet1", "Fake WSD printer"].contains(&queue) {
+            return false;
+        }
+        let port = read_spooler(&format!("(Get-Printer -Name '{queue}').PortName"));
+        let uuid =
+            read_spooler(&format!("(Get-ItemProperty 'HKLM:/SYSTEM/CurrentControlSet/Control/Print/Monitors/WSD Port/Ports/{port}').'Printer UUID'"));
+        uuid.starts_with("00000000-0000-4000-8000-")
+    }
+
+    /// The Gridcraft-style job (shrink to fit and exact size) on a fake queue: it must finish, and
+    /// the spooler must not keep it as an unfinished job. `CRAFT_TEST_FAKE_QUEUE` names the fake
+    /// (checked first), `CRAFT_TEST_FAKE_PDF` the print-ready PDF. Prints only to fakes.
+    #[test]
+    #[ignore = "prints to a fakeprint queue: needs CRAFT_TEST_FAKE_QUEUE and CRAFT_TEST_FAKE_PDF"]
+    fn a_job_to_a_fake_queue_finishes_and_leaves_nothing_unfinished() {
+        let queue = std::env::var("CRAFT_TEST_FAKE_QUEUE").unwrap();
+        assert!(is_provably_fake(&queue), "{queue} is not a provable fakeprint queue; refusing to print");
+        let pdf = std::fs::read(std::env::var("CRAFT_TEST_FAKE_PDF").unwrap()).unwrap();
+        for scaling in [Scaling::ShrinkToFit, Scaling::Exact] {
+            let title = format!("craft-print spool test {scaling:?}");
+            let job = Job { printer: Some(queue.clone()), scaling, title: title.clone(), ..Job::default() };
+            let began = std::time::Instant::now();
+            let sent = crate::submit(&pdf, &job);
+            eprintln!("{scaling:?}: {sent:?} in {:?}", began.elapsed());
+            assert!(sent.is_ok(), "{sent:?}");
+            assert!(began.elapsed() < std::time::Duration::from_secs(30));
+            std::thread::sleep(std::time::Duration::from_secs(5));
+            let left = read_spooler(&format!(
+                "Get-PrintJob -PrinterName '{queue}' | Where-Object {{ $_.DocumentName -like '{title}*' -and $_.JobStatus -notmatch 'Complete|Deleted|Printed' }} | ForEach-Object {{ \"$($_.Id) $($_.JobStatus)\" }}"
+            ));
+            assert!(left.is_empty(), "unfinished jobs left on the fake queue: {left}");
+        }
+    }
+
     /// A real job, for checking a printer by hand (paper, or a paused queue's spool file):
     /// `CRAFT_PRINT_TEST_FILE` printed on `CRAFT_PRINT_TEST_PRINTER`, shrink-to-fit when
     /// `CRAFT_PRINT_TEST_SCALING=shrink`, two-sided on the long edge when
-    /// `CRAFT_PRINT_TEST_DUPLEX=long`.
+    /// `CRAFT_PRINT_TEST_DUPLEX=long`. `CRAFT_PRINT_TEST_DPI` asks for a resolution and
+    /// `CRAFT_PRINT_TEST_QUALITY` (`draft`, `normal`, `high`, `photo`) for a quality, as the
+    /// registry's job hints do; the warnings the backend answers are printed. Print to a
+    /// fake queue only: the page arrives at the device's resolution unless the hints say otherwise.
     #[test]
     #[ignore = "sends a real job: needs CRAFT_PRINT_TEST_PRINTER and CRAFT_PRINT_TEST_FILE"]
     fn an_installed_printer_prints_a_file() {
+        use crate::backends::Backend as _;
         let pdf = std::fs::read(std::env::var("CRAFT_PRINT_TEST_FILE").unwrap()).unwrap();
         let job = Job {
             printer: Some(std::env::var("CRAFT_PRINT_TEST_PRINTER").unwrap()),
@@ -238,7 +362,15 @@ mod tests {
             title: "craft-print test".into(),
             ..Job::default()
         };
-        let sent = crate::submit(&pdf, &job);
+        let mut options = crate::JobOptions::new();
+        if let Some(dpi) = std::env::var("CRAFT_PRINT_TEST_DPI").ok().and_then(|v| v.parse().ok()) {
+            options = options.with_resolution(crate::Resolution::square(dpi));
+        }
+        if let Some(quality) = std::env::var("CRAFT_PRINT_TEST_QUALITY").ok().and_then(|v| crate::Quality::from_name(&v)) {
+            options = options.with_quality(quality);
+        }
+        let request = crate::SubmitRequest::new(crate::Document::pdf(&pdf), job).with_options(options);
+        let sent = crate::SystemSpooler.submit(request);
         eprintln!("{sent:?}");
         assert!(sent.is_ok());
     }
