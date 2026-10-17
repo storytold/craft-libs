@@ -1,0 +1,16 @@
+[package]
+name = "craft-gpu-providers"
+description = "Shared GpuProvider implementations (composite, readback, …) — no app deps"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+craft-gpu = { workspace = true }
+
+[dev-dependencies]
+craft-gpu-null = { workspace = true }

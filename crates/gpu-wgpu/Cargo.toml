@@ -1,0 +1,31 @@
+[package]
+name = "craft-gpu-wgpu"
+description = "craft-gpu backend using wgpu (WebGPU on wasm32, native APIs on desktop)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+craft-gpu = { workspace = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wgpu = { workspace = true, features = ["webgpu"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+pollster = { workspace = true, optional = true }
+wgpu = { workspace = true }
+
+[features]
+default = []
+adapter-probe = ["dep:pollster"]
+native-vulkan = ["wgpu/vulkan"]
+native-dx12 = ["wgpu/dx12"]
+native-metal = ["wgpu/metal"]
+native-gles = ["wgpu/gles"]
+
+[dev-dependencies]
+pollster = { workspace = true }
