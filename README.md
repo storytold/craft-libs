@@ -39,6 +39,9 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
 - [`craft-settings`](crates/settings/README.md): `config.toml` settings storage for every app: platform folders, portable mode and overrides, atomic saves while running, backup, damaged-file recovery and schema migrations. Policy in [docs/settings-storage.md](docs/settings-storage.md).
 - [`craft-ui`](crates/ui/README.md): SVG catalogs, icon buttons, tabs, pane controls, transactional docking, print settings and theme helpers for egui frontends;
   assets, themes, localization and command handling stay in each app. Requires Rust 1.95 or later.
+- [`craft-wsd`](crates/wsd/README.md): Web Services for Devices core for network printers and scanners: bounded XML, SOAP 1.2 and
+  WS-Addressing, MTOM, faults, a local-network-only address policy, WS-Transfer, WS-Eventing and WS-Discovery messages, and a
+  blocking HTTP transport (on by default; never built for wasm32). Service clients (print, scan) are built on it in each app.
 - [Shared UI component audit](docs/ui-components-audit.md): source inventory, extraction priorities
   and compatibility boundaries across the Craft suite.
 - [Theme infrastructure](docs/theme-infrastructure.md): eight-app comparison and the small shared
