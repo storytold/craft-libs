@@ -46,9 +46,20 @@ pub struct ReadReport {
     pub warnings: Vec<String>,
 }
 
+/// Imports a borrowed buffer. Call [`read_owned`] when the input is already owned to avoid a copy.
 pub fn read(bytes: &[u8]) -> Result<(Workbook, ReadReport)> {
     let footer_start = limits::footer(bytes)?;
-    let reader = SerializedFileReader::new(Bytes::copy_from_slice(bytes))?;
+    read_buffer(Bytes::copy_from_slice(bytes), footer_start)
+}
+
+/// Imports an owned buffer, transferring its allocation to the decoder without copying its payload.
+pub fn read_owned(bytes: Vec<u8>) -> Result<(Workbook, ReadReport)> {
+    let footer_start = limits::footer(&bytes)?;
+    read_buffer(Bytes::from(bytes), footer_start)
+}
+
+fn read_buffer(bytes: Bytes, footer_start: usize) -> Result<(Workbook, ReadReport)> {
+    let reader = SerializedFileReader::new(bytes.clone())?;
     let metadata = reader.metadata();
     let info = metadata.file_metadata();
     let fields = info.schema().get_fields();
@@ -86,7 +97,7 @@ pub fn read(bytes: &[u8]) -> Result<(Workbook, ReadReport)> {
         }
     }
     // Check every advertised page allocation before the decoder sees it.
-    limits::pages(bytes, metadata, footer_start)?;
+    limits::pages(&bytes, metadata, footer_start)?;
     let mut wb = Workbook::new();
     let mut sheet = Sheet::new("Sheet1");
     for (col, field) in fields.iter().enumerate() {

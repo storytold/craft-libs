@@ -1,7 +1,11 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 use super::*;
 fn read(bytes: &[u8]) -> Result<Workbook> {
-    super::read(bytes).map(|(wb, _)| wb)
+    let (wb, report) = super::read(bytes)?;
+    let (owned, owned_report) = super::read_owned(bytes.to_vec())?;
+    assert_eq!(wb, owned);
+    assert_eq!(report.warnings, owned_report.warnings);
+    Ok(wb)
 }
 use parquet::{data_type::Int64Type, file::properties::WriterProperties, schema::parser::parse_message_type};
 
@@ -125,6 +129,7 @@ fn truncated_and_random_bytes_never_panic() {
     let bytes = integers(ConvertedType::INT_64, &[1, 2], parquet::basic::Compression::SNAPPY);
     for end in 0..bytes.len() {
         assert!(read(&bytes[..end]).is_err());
+        assert!(super::read_owned(bytes[..end].to_vec()).is_err());
     }
     let mut seed = 1u64;
     for len in 0..256 {
@@ -161,6 +166,8 @@ fn mutated_real_envelopes_do_not_panic() {
         bytes[at] ^= 0x80;
         let result = std::panic::catch_unwind(|| read(&bytes));
         assert!(result.is_ok(), "panic at mutated byte {at}");
+        let owned = std::panic::catch_unwind(|| super::read_owned(bytes));
+        assert!(owned.is_ok(), "owned panic at mutated byte {at}");
     }
 }
 
