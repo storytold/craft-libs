@@ -15,11 +15,40 @@ A Cargo workspace (edition 2024, resolver 3). Each library is a crate under `cra
 (`license.workspace = true`, and so on) and `[lints] workspace = true`. Register each crate in
 `[workspace.dependencies]` in the root `Cargo.toml`.
 
-Apps depend on a crate by git:
+## Use a released version
+
+The first coordinated release is **[v0.1.0](https://github.com/storytold/craft-libs/releases/tag/v0.1.0)**.
+It gives consumers a fixed baseline while development continues on `main`. All five crates
+share this version. They require Rust 1.95 or later; the UI integrations use egui 0.36.
+
+Add only the crates you need, using the same tag for every craft-libs dependency:
 
 ```toml
-craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit>" }
+[dependencies]
+craft-ui = { git = "https://github.com/storytold/craft-libs", tag = "v0.1.0" }
+craft-settings = { git = "https://github.com/storytold/craft-libs", tag = "v0.1.0" }
+# Optional, for egui close handling and the macOS application menu:
+craft-quit = { git = "https://github.com/storytold/craft-libs", tag = "v0.1.0", features = ["menu"] }
 ```
+
+`craft-atomic` and `craft-print` use the same dependency syntax. Enable `craft-ui`'s
+`serde` feature if you need to serialize its docking layout. These are Git releases;
+crates.io publication is deferred.
+
+Release tags are never moved or reused. For a commit pin, resolve the tag with
+`git ls-remote https://github.com/storytold/craft-libs 'refs/tags/v0.1.0^{}'` and replace
+`tag = "v0.1.0"` with `rev = "<full commit SHA>"` on every craft-libs dependency.
+Use either `tag` or `rev`, not both. An existing commit pin keeps working; switching to this
+release may require adapting to changes since that commit.
+
+Commit your application's `Cargo.lock` and build with `cargo build --locked` for reproducible
+Rust dependency resolution. A Git pin fixes craft-libs source, not every transitive dependency.
+A library's own lockfile does not constrain its downstream consumers. Upgrade deliberately:
+read the release notes, update all craft-libs pins together, refresh the lockfile with
+`cargo check`, and run your application's tests and affected workflows before committing.
+
+See the [release notes](CHANGELOG.md) for included functionality and known limits, and the
+[versioning policy](docs/versioning.md) for compatibility guarantees and release checks.
 
 ## Libraries
 
