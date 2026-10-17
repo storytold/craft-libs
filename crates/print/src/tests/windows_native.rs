@@ -429,6 +429,9 @@ fn windows_jobs_reach_the_spooler() {
     } else {
         None
     };
+    // The Print dialog's default, an explicit one-sided request, on a queue with no duplex unit.
+    let simplex_only = listed.as_ref().is_some_and(|p| p.two_sided == Some(false));
+    let one_sided = simplex_only.then(|| spool::submit(&mixed, &Job { duplex: Some(Duplex::Off), title: "simplex".into(), ..job.clone() }));
     let tabloid = test_pdf(&[TABLOID, LETTER], false);
     let shrink = Job { printer: Some(name.into()), scaling: Scaling::ShrinkToFit, title: "shrink".into(), ..Job::default() };
     let shrunk = spool::submit(&tabloid, &shrink);
@@ -451,12 +454,16 @@ fn windows_jobs_reach_the_spooler() {
     if let Some(refused) = duplex_refused {
         assert!(matches!(refused, Err(Error::Spool(ref m)) if m.contains("simplex/duplex") && m.contains("nothing was sent")), "{refused:?}");
     }
+    if let Some(one_sided) = one_sided {
+        assert_eq!(one_sided.as_deref(), Ok("spooled 3 sheet(s)"), "one-sided is what a simplex-only queue does: {one_sided:?}");
+    }
     assert_eq!(*processed.borrow(), [(0, 3), (1, 3), (2, 3), (3, 3)]);
     assert!(duplex_progress.is_empty(), "driver refusal before submission has no progress");
     assert_eq!(shrunk.as_deref(), Ok("spooled 2 sheet(s)"), "{shrunk:?}");
     assert!(matches!(exact_refused, Err(Error::Spool(ref m)) if m.contains("one paper size")), "{exact_refused:?}");
     assert!(refused_progress.is_empty(), "rejection before a job starts has no progress: {refused_progress:?}");
-    assert_eq!(queued.as_deref().map(str::trim), Ok("mixed.pdf 3|shrink.pdf 2"), "one job each, all sheets, in the paused queue: {queued:?}");
+    let expected = if simplex_only { "mixed.pdf 3|simplex.pdf 3|shrink.pdf 2" } else { "mixed.pdf 3|shrink.pdf 2" };
+    assert_eq!(queued.as_deref().map(str::trim), Ok(expected), "one job each, all sheets, in the paused queue: {queued:?}");
     assert!(cleaned.is_ok(), "the test printer is removed again: {cleaned:?}");
     // Asking for a printer that isn't there is an error, never a job on another one.
     let missing = spool::submit(&mixed, &Job { printer: Some(name.into()), ..Job::default() });

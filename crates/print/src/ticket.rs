@@ -174,7 +174,13 @@ pub(crate) fn verify_ticket(xml: &str, paper: Option<(u32, u32)>, landscape: boo
 /// Confirm explicit job options survived driver validation. Collation only changes output
 /// when both the document and copy count exceed one. Without a duplex request the queue's
 /// default applies; without forced grayscale the driver's normal color policy applies.
-pub(crate) fn verify_job_options(xml: &str, job: &Job, pages: usize) -> Result<(), Error> {
+///
+/// `duplex_offered` is what the driver's PrintCapabilities say about the duplex feature
+/// ([`offers_duplex`]). A one-sided request to a driver that offers no duplex feature at all is
+/// satisfied by construction (the queue can only print one side, so nothing was dropped), but a
+/// two-sided request is not, and neither is a one-sided one to a driver that offers the feature
+/// and returned a ticket without it. `None` (capabilities unreadable) stays strict.
+pub(crate) fn verify_job_options(xml: &str, job: &Job, pages: usize, duplex_offered: Option<bool>) -> Result<(), Error> {
     let document = roxmltree::Document::parse(xml).map_err(spool_error)?;
     let root = document.root_element();
     let option = |name: &str| {
@@ -196,7 +202,8 @@ pub(crate) fn verify_job_options(xml: &str, job: &Job, pages: usize) -> Result<(
             Duplex::LongEdge => "TwoSidedLongEdge",
             Duplex::ShortEdge => "TwoSidedShortEdge",
         };
-        if !option("JobDuplexAllDocumentsContiguously").is_some_and(|n| named(n, wanted)) {
+        let one_sided_only = duplex == Duplex::Off && duplex_offered == Some(false);
+        if !one_sided_only && !option("JobDuplexAllDocumentsContiguously").is_some_and(|n| named(n, wanted)) {
             return Err(refused("simplex/duplex setting"));
         }
     }
@@ -204,6 +211,21 @@ pub(crate) fn verify_job_options(xml: &str, job: &Job, pages: usize) -> Result<(
         return Err(refused("grayscale"));
     }
     Ok(())
+}
+
+/// Whether PrintCapabilities offer any option for the duplex feature. `None` when the document
+/// cannot be read as capabilities, so callers treat the answer as unknown.
+pub(crate) fn offers_duplex(capabilities_xml: &str) -> Option<bool> {
+    let document = roxmltree::Document::parse(capabilities_xml).ok()?;
+    let root = document.root_element();
+    if !root.has_tag_name((NS_PSF, "PrintCapabilities")) {
+        return None;
+    }
+    Some(
+        root.children()
+            .filter(|n| n.has_tag_name((NS_PSF, "Feature")) && named(*n, "JobDuplexAllDocumentsContiguously"))
+            .any(|f| f.children().any(|n| n.has_tag_name((NS_PSF, "Option")))),
+    )
 }
 
 /// The widest unprintable margin of the paper, in micrometres, from PrintCapabilities computed
@@ -301,31 +323,80 @@ mod tests {
     fn a_driver_that_drops_explicit_job_options_is_refused() {
         let job = Job { copies: 2, duplex: Some(Duplex::LongEdge), grayscale: true, ..Job::default() };
         let xml = ticket_xml(&job, false);
-        assert!(verify_job_options(&xml, &job, 3).is_ok());
+        assert!(verify_job_options(&xml, &job, 3, None).is_ok());
         for (from, to) in
             [(">2<", ">1<"), ("psk:Collated", "psk:Uncollated"), ("psk:TwoSidedLongEdge", "psk:OneSided"), ("psk:Monochrome", "psk:Color")]
         {
-            assert!(verify_job_options(&xml.replace(from, to), &job, 3).is_err(), "{from}");
+            assert!(verify_job_options(&xml.replace(from, to), &job, 3, None).is_err(), "{from}");
         }
-        assert!(verify_job_options(&xml.replace("psk:Collated", "vendor:Collated"), &job, 3).is_err(), "namespace matters");
-        assert!(verify_job_options(&xml.replace("psk:Monochrome", "psk:Grayscale"), &job, 3).is_ok());
+        assert!(verify_job_options(&xml.replace("psk:Collated", "vendor:Collated"), &job, 3, None).is_err(), "namespace matters");
+        assert!(verify_job_options(&xml.replace("psk:Monochrome", "psk:Grayscale"), &job, 3, None).is_ok());
         for feature in ["DocumentCollate", "JobDuplexAllDocumentsContiguously", "PageOutputColor"] {
             let start = xml.find(&format!("<psf:Feature name=\"psk:{feature}\"")).unwrap();
             let end = start + xml[start..].find("</psf:Feature>").unwrap() + "</psf:Feature>".len();
             let mut dropped = xml.clone();
             dropped.replace_range(start..end, "");
-            assert!(verify_job_options(&dropped, &job, 3).is_err(), "{feature}");
+            assert!(verify_job_options(&dropped, &job, 3, None).is_err(), "{feature}");
             if feature == "DocumentCollate" {
-                assert!(verify_job_options(&dropped, &job, 1).is_ok(), "one page has no collating order");
+                assert!(verify_job_options(&dropped, &job, 1, None).is_ok(), "one page has no collating order");
             }
         }
         let default = Job::default();
         let xml = ticket_xml(&default, false);
-        assert!(verify_job_options(&xml, &default, 3).is_ok());
+        assert!(verify_job_options(&xml, &default, 3, None).is_ok());
         let simplex = Job { duplex: Some(Duplex::Off), ..Job::default() };
-        assert!(verify_job_options(&ticket_xml(&simplex, false), &simplex, 3).is_ok());
-        assert!(verify_job_options(&xml, &simplex, 3).is_err(), "explicit simplex must be confirmed");
-        assert!(verify_job_options("<not xml", &default, 1).is_err());
+        assert!(verify_job_options(&ticket_xml(&simplex, false), &simplex, 3, None).is_ok());
+        assert!(verify_job_options(&xml, &simplex, 3, None).is_err(), "explicit simplex must be confirmed");
+        assert!(verify_job_options("<not xml", &default, 1, None).is_err());
+    }
+
+    /// PrintCapabilities as a driver might write them: with or without a duplex feature.
+    fn capabilities_xml(duplex: bool) -> String {
+        let feature = if duplex {
+            r#"<psf:Feature name="psk:JobDuplexAllDocumentsContiguously"><psf:Option name="psk:OneSided"/><psf:Option name="psk:TwoSidedLongEdge"/></psf:Feature>"#
+        } else {
+            ""
+        };
+        format!(
+            r#"<psf:PrintCapabilities version="1" xmlns:psf="{NS_PSF}" xmlns:psk="{NS_PSK}">
+<psf:Feature name="psk:DocumentCollate"><psf:Option name="psk:Collated"/></psf:Feature>{feature}
+</psf:PrintCapabilities>"#
+        )
+    }
+
+    #[test]
+    fn a_driver_without_a_duplex_feature_prints_one_side_and_is_not_refused_for_it() {
+        let offered = |duplex| offers_duplex(&capabilities_xml(duplex));
+        assert_eq!(offered(true), Some(true));
+        assert_eq!(offered(false), Some(false));
+        assert_eq!(offers_duplex("<psf:PrintCapabilities xmlns:psf=\"x\"/>"), None, "another namespace is not capabilities");
+        assert_eq!(offers_duplex("<not xml"), None);
+        let empty = format!(
+            r#"<psf:PrintCapabilities xmlns:psf="{NS_PSF}"><psf:Feature name="psk:JobDuplexAllDocumentsContiguously"/></psf:PrintCapabilities>"#
+        );
+        assert_eq!(offers_duplex(&empty), Some(false), "a feature with no option offers nothing");
+
+        let one_sided = Job { duplex: Some(Duplex::Off), ..Job::default() };
+        let two_sided = Job { duplex: Some(Duplex::LongEdge), ..Job::default() };
+        let kept = ticket_xml(&one_sided, false);
+        // The ticket a driver with no duplex feature returns: the setting is gone.
+        let none_kept = ticket_xml(&Job::default(), false);
+
+        // The Print dialog's defaults (duplex Off) on a simplex-only queue.
+        assert!(verify_job_options(&none_kept, &one_sided, 3, offered(false)).is_ok());
+        // Offered and kept.
+        assert!(verify_job_options(&kept, &one_sided, 3, offered(true)).is_ok());
+        // Offered but the ticket lost it: the driver dropped the choice.
+        assert!(verify_job_options(&none_kept, &one_sided, 3, offered(true)).is_err());
+        // Two-sided never rests on the missing feature.
+        assert!(verify_job_options(&none_kept, &two_sided, 3, offered(false)).is_err());
+        // Unknown capabilities stay strict.
+        assert!(verify_job_options(&none_kept, &one_sided, 3, None).is_err());
+        // The other options are still checked on a simplex-only queue.
+        let copies = Job { copies: 2, duplex: Some(Duplex::Off), ..Job::default() };
+        assert!(verify_job_options(&none_kept, &copies, 3, offered(false)).is_err(), "copy count");
+        let gray = Job { grayscale: true, duplex: Some(Duplex::Off), ..Job::default() };
+        assert!(verify_job_options(&none_kept, &gray, 3, offered(false)).is_err(), "grayscale");
     }
 
     #[test]

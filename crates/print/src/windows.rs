@@ -45,6 +45,12 @@ fn two_sided(device: &PrinterDevice) -> Option<bool> {
     Some(capabilities.options_for_feature(duplex).any(|o| o.name.as_ref().is_some_and(|n| n.local_name.starts_with("TwoSided"))))
 }
 
+/// What the driver's PrintCapabilities say about the duplex feature; `None` when they can't be read.
+fn offered_duplex(device: &PrinterDevice) -> Option<bool> {
+    let xml = PrintCapabilities::fetch_xml_for_ticket(device, None).ok()?;
+    ticket::offers_duplex(std::str::from_utf8(&xml).ok()?)
+}
+
 /// The queue the job goes to: the one asked for, else the default. Never another one: a job
 /// for a queue that has gone must not come out of a different printer.
 fn select_device(devices: Vec<PrinterDevice>, requested: Option<&str>, default: Option<&str>) -> Result<PrinterDevice, Error> {
@@ -144,7 +150,10 @@ pub(crate) fn submit_with_progress(pdf: &[u8], job: &Job, progress: &mut dyn FnM
     let result = crate::progress::run(progress, move |sender| {
         let (ticket, paper) = driver_ticket(&device, job, first, landscape)?;
         let xml = std::str::from_utf8(ticket.get_xml()).map_err(spool_error)?;
-        ticket::verify_job_options(xml, job, count)?;
+        // Only a one-sided request can be satisfied by a driver with no duplex feature, so the
+        // capabilities are read for that case alone; unreadable stays unknown (strict).
+        let duplex_offered = if job.duplex == Some(crate::Duplex::Off) { offered_duplex(&device) } else { None };
+        ticket::verify_job_options(xml, job, count, duplex_offered)?;
         let (fit, paper) = match job.scaling {
             Scaling::Exact => (Fit::Exact, first),
             Scaling::ShrinkToFit => {
@@ -199,7 +208,7 @@ mod tests {
         let device = select_device(PrinterDevice::all().unwrap(), Some(&name), None).unwrap();
         let job = Job { copies: 2, ..Job::default() };
         let (ticket, paper) = driver_ticket(&device, &job, (612.0, 792.0), false).unwrap();
-        ticket::verify_job_options(std::str::from_utf8(ticket.get_xml()).unwrap(), &job, 1).unwrap();
+        ticket::verify_job_options(std::str::from_utf8(ticket.get_xml()).unwrap(), &job, 1, None).unwrap();
         assert_eq!(paper, (215_900, 279_400));
         eprintln!("unprintable margin: {} pt", imageable_margin(&device, &ticket));
         if let Ok(path) = std::env::var("CRAFT_PRINT_TEST_TICKET_OUTPUT") {
@@ -212,7 +221,7 @@ mod tests {
             ("DocumentCollate", "Collated", Job { copies: 2, ..Job::default() }),
         ] {
             let (ticket, _) = driver_ticket(&device, &requested, (612.0, 792.0), false).unwrap();
-            let retained = ticket::verify_job_options(std::str::from_utf8(ticket.get_xml()).unwrap(), &requested, 3);
+            let retained = ticket::verify_job_options(std::str::from_utf8(ticket.get_xml()).unwrap(), &requested, 3, None);
             eprintln!("{feature}={wanted}: {retained:?}");
             let offered = capabilities
                 .options_for_feature(OwnedName::qualified(feature, NS_PSK, Some("psk")))
