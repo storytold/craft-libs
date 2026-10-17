@@ -242,4 +242,30 @@ mod tests {
         eprintln!("{sent:?}");
         assert!(sent.is_ok());
     }
+
+    /// A colour chosen in the driver's own preferences (Properties…) reaches the job when the job
+    /// doesn't ask for grayscale: the validated ticket has the colour of the user's preferences,
+    /// whatever they are (storytold/pdfcraft#2422; it was always Color before). Set the queue to
+    /// black and white in its preferences to see the case that failed. Sends no job.
+    #[test]
+    #[ignore = "needs CRAFT_PRINT_TEST_PRINTER naming an installed printer; sends no job"]
+    fn the_preferences_colour_reaches_a_job_without_grayscale() {
+        fn colour(ticket: &PrintTicket) -> Option<String> {
+            let xml = std::str::from_utf8(ticket.get_xml()).ok()?;
+            let document = roxmltree::Document::parse(xml).ok()?;
+            let feature = document
+                .root_element()
+                .children()
+                .find(|n| n.has_tag_name((ticket::NS_PSF, "Feature")) && n.attribute("name").is_some_and(|a| a.ends_with(":PageOutputColor")))?;
+            feature.children().find(|n| n.has_tag_name((ticket::NS_PSF, "Option")))?.attribute("name").map(str::to_owned)
+        }
+        let name = std::env::var("CRAFT_PRINT_TEST_PRINTER").unwrap();
+        let device = select_device(PrinterDevice::all().unwrap(), Some(&name), None).unwrap();
+        let mut builder = PrintTicketBuilder::new(&device).unwrap();
+        builder.merge(PrintTicket::from_xml(winprint::ticket::DEFAULT_PRINT_TICKET_XML.as_bytes().to_vec())).unwrap();
+        let preferences = colour(&builder.build().unwrap());
+        eprintln!("the preferences' colour: {preferences:?}");
+        let (ticket, _) = driver_ticket(&device, &Job::default(), (595.28, 841.89), false).unwrap();
+        assert_eq!(colour(&ticket), preferences, "a job without grayscale keeps the preferences' colour");
+    }
 }
