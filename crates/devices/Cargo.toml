@@ -1,0 +1,16 @@
+[package]
+name = "craft-devices"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Device tools shared by the Craft apps: the scan job journal and its read-only views, with no UI and no platform code"
+
+[lints]
+workspace = true
+
+[dependencies]
+craft-scan = { workspace = true, features = ["serde"] }
+craft-job = { workspace = true, features = ["serde"] }
+serde_json = "1"

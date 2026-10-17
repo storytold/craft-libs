@@ -33,11 +33,18 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
 - [`craft-docpath`](crates/docpath/src/lib.rs): decides whether a path or `file:` URL stored in a
   document may be opened. Paths stored in documents are followed only when they are local or on the
   document's own network share; other network paths, device paths and non-file URLs are refused.
+- [`craft-job`](crates/job/README.md): the small vocabulary printing and scanning share: `NativeCode`, `<backend>:<native>` job and device ids, and retry safety with one retry-advice function. No lifecycle, tracking or I/O.
 - [`craft-print`](crates/print/README.md): PDF submission to CUPS and Windows, printer discovery,
   duplex/copies/colour and driver preferences. PDF generation stays in each app.
 
 - [`craft-quit`](crates/quit/src/lib.rs): native macOS quit, egui close handling and an optional
   app menu. Unsaved-document decisions and save prompts stay in each app.
+
+- [`craft-scan`](crates/scan/README.md): scanner settings, a neutral error contract, feeder status
+  (possibly unknown), the BMP parser and 1-bit conversion and the acquire
+  contract, with a `Backend` trait and a registry the app plugs several backends into (WIA, SANE,
+  eSCL, ...), and a `ScanJob` that records one scan across its attempts (pages kept, continue or
+  start over, `craft-job` views). No platform code, no unsafe, no network.
 
 - [`craft-settings`](crates/settings/README.md): `config.toml` settings storage for every app: platform folders, portable mode and overrides, atomic saves while running, backup, damaged-file recovery and schema migrations. Policy in [docs/settings-storage.md](docs/settings-storage.md).
 - [`craft-ui`](crates/ui/README.md): SVG catalogs, icon buttons, tabs, pane controls, transactional docking, print settings and theme helpers for egui frontends;

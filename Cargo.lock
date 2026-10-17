@@ -606,8 +606,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-devices"
+version = "0.1.0"
+dependencies = [
+ "craft-job",
+ "craft-scan",
+ "serde_json",
+]
+
+[[package]]
 name = "craft-docpath"
 version = "0.1.0"
+
+[[package]]
+name = "craft-job"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "craft-pdf"
@@ -646,6 +663,18 @@ dependencies = [
  "muda",
  "objc2 0.6.5",
  "objc2-app-kit 0.3.2",
+]
+
+[[package]]
+name = "craft-scan"
+version = "0.1.0"
+dependencies = [
+ "craft-job",
+ "image",
+ "log",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -1900,6 +1929,8 @@ dependencies = [
  "num-traits",
  "png 0.18.1",
  "tiff",
+ "zune-core",
+ "zune-jpeg",
 ]
 
 [[package]]
