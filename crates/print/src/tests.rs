@@ -1,6 +1,15 @@
 use super::*;
 use crate as spool;
 
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+mod ipp;
+
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+mod portal;
+
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+mod route;
+
 mod windows_native;
 
 #[test]
@@ -250,11 +259,20 @@ fn printer_option_defaults_and_job_arguments() {
 #[test]
 fn command_previews_do_not_require_pdf_files() {
     let job = Job { printer: Some("Office (east)".into()), copies: 2, ..Job::default() };
-    let preview = command_preview(&job).unwrap();
     if backend() == Some(Backend::Cups) {
+        // Without `lp` this host answers from the fallback transports, or refuses with none at
+        // all; tests::route covers those forms under a controlled PATH.
+        #[cfg(all(unix, not(target_arch = "wasm32")))]
+        {
+            if !spool::spawnable("lp") {
+                return;
+            }
+        }
+        let preview = command_preview(&job).unwrap();
         assert_eq!(preview[0], "lp");
         assert_eq!(preview[1..], lp_args(&job));
     } else {
+        let preview = command_preview(&job).unwrap();
         assert_eq!(
             preview,
             ["xps-print", "printer=Office (east)", "copies=2", "collate=true", "duplex=(queue default)", "scaling=exact", "color=color"]
