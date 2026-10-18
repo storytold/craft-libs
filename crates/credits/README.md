@@ -22,18 +22,23 @@ craft-credits = { git = "https://github.com/storytold/craft-libs", rev = "<commi
 `build.rs`:
 
 ```rust,ignore
-let manifest = std::path::PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").unwrap_or_default());
-craft_credits::build::write_credits(&manifest.join("../../contributors"));
+fn main() {
+    let manifest = std::path::PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").unwrap_or_default());
+    craft_credits::build::write_credits(&manifest.join("../../contributors"));
+}
 ```
 
 The app's `credits.rs`:
 
 ```rust,ignore
-pub use craft_credits::{Contributor, Model, NameMode, SortKey};
+use craft_credits::{Contributor, NameMode, SortKey};
 
 include!(concat!(env!("OUT_DIR"), "/credits.rs")); // TOTAL_COMMITS, CONTRIBUTORS, MODELS
 
-let list = craft_credits::sorted(CONTRIBUTORS, NameMode::Username, SortKey::FirstCommit, true);
+/// The contributors in the order the About window shows them.
+pub fn in_order(names: NameMode, key: SortKey, ascending: bool) -> Vec<&'static Contributor> {
+    craft_credits::sorted(CONTRIBUTORS, names, key, ascending)
+}
 ```
 
 - `Contributor::name`, `summary` / `summary_in` (a translated `SUMMARY` template), `lines_delta`.

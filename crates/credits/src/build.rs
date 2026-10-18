@@ -55,7 +55,8 @@ pub struct Credits {
     pub total_commits: u64,
     pub contributors: Vec<Person>,
     pub models: Vec<ModelRow>,
-    /// One line per file that could not be read or parsed, with what that means for the window.
+    /// One line (no line breaks) per file that could not be read or parsed, with what that means for
+    /// the window.
     pub warnings: Vec<String>,
 }
 
@@ -104,9 +105,15 @@ pub fn write_credits(dir: &Path) {
 fn read<T>(path: &Path, fallback: &str, warnings: &mut Vec<String>, parse: impl Fn(&str) -> Result<T, String>) -> Option<T> {
     let r = std::fs::read_to_string(path).map_err(|e| e.to_string()).and_then(|t| parse(&t));
     if let Err(e) = &r {
-        warnings.push(format!("{}: {e}; {fallback}", path.display()));
+        warnings.push(format!("{}: {}; {fallback}", path.display(), one_line(e)));
     }
     r.ok()
+}
+
+/// `text` on one line: cargo reads only the first line of a `cargo::warning`, and a toml error
+/// spans several (a source snippet and a caret line).
+fn one_line(text: &str) -> String {
+    text.lines().map(str::trim).filter(|l| !l.is_empty()).collect::<Vec<_>>().join(" ")
 }
 
 fn s(v: &Value, k: &str) -> String {

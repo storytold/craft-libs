@@ -257,23 +257,28 @@ fn compare(a: &Contributor, b: &Contributor, mode: NameMode, key: SortKey) -> Or
         SortKey::LinesDelta => a.lines_delta().cmp(&b.lines_delta()),
         SortKey::BinaryAdded => a.binary_added.cmp(&b.binary_added),
         SortKey::BinaryDeleted => a.binary_deleted.cmp(&b.binary_deleted),
-        // A PR-only contributor (no commit date) sorts after everyone with a date.
-        SortKey::FirstCommit => dated(a.first_commit).cmp(&dated(b.first_commit)),
-        SortKey::LastCommit => dated(a.last_commit).cmp(&dated(b.last_commit)),
+        SortKey::FirstCommit => a.first_commit.cmp(b.first_commit),
+        SortKey::LastCommit => a.last_commit.cmp(b.last_commit),
     }
 }
 
-fn dated(d: &str) -> (bool, &str) {
-    (d.is_empty(), d)
+/// Whether `c` has no date for `key` (someone credited only through a merged PR).
+fn undated(c: &Contributor, key: SortKey) -> bool {
+    match key {
+        SortKey::FirstCommit => c.first_commit.is_empty(),
+        SortKey::LastCommit => c.last_commit.is_empty(),
+        _ => false,
+    }
 }
 
-/// Contributors in display order. Ties fall back to the name (A–Z) so the order is stable.
+/// Contributors in display order. Ties fall back to the name (A–Z) so the order is stable. In a
+/// date sort, contributors without that date come after everyone with one, in both directions.
 pub fn sorted(list: &[Contributor], mode: NameMode, key: SortKey, ascending: bool) -> Vec<&Contributor> {
     let mut v: Vec<&Contributor> = list.iter().collect();
     v.sort_by(|a, b| {
         let o = compare(a, b, mode, key);
         let o = if ascending { o } else { o.reverse() };
-        o.then_with(|| compare(a, b, mode, SortKey::Name)).then_with(|| a.login.cmp(b.login))
+        undated(a, key).cmp(&undated(b, key)).then(o).then_with(|| compare(a, b, mode, SortKey::Name)).then_with(|| a.login.cmp(b.login))
     });
     v
 }
@@ -400,6 +405,11 @@ mod tests {
         assert_eq!(logins(&v), ["Bob", "alice", "carol", "zed"]);
         let v = sorted(&all, NameMode::Username, SortKey::FirstCommit, true);
         assert_eq!(logins(&v), ["Bob", "zed", "carol", "alice"]); // undated last
+        // Newest first: the undated one is still last, not first.
+        let v = sorted(&all, NameMode::Username, SortKey::FirstCommit, false);
+        assert_eq!(logins(&v), ["carol", "zed", "Bob", "alice"]);
+        let v = sorted(&all, NameMode::Username, SortKey::LastCommit, false);
+        assert_eq!(logins(&v), ["carol", "zed", "Bob", "alice"]);
     }
 
     #[test]

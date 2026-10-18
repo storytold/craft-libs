@@ -63,6 +63,8 @@ fn broken_or_missing_files_give_empty_tables_and_warnings() {
         let c = build::load(&dir);
         assert_eq!((c.total_commits, c.contributors.len(), c.models.len()), (0, 0, 0), "{}", dir.display());
         assert_eq!(c.warnings.len(), 2, "{:?}", c.warnings);
+        // Cargo shows only the first line of a warning, so each is one line, fallback included.
+        assert!(c.warnings.iter().all(|w| !w.contains(['\n', '\r'])), "{:?}", c.warnings);
         assert!(c.warnings[0].contains("contributors.json") && c.warnings[0].ends_with("the About window shows no contributors"));
         assert!(c.warnings[1].contains("people.toml") && c.warnings[1].ends_with("contributors are shown by username only"));
         // Still valid Rust.
