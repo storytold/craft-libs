@@ -1,0 +1,17 @@
+{
+  "schema": 1,
+  "repo": "storytold/example",
+  "commits": 120,
+  "contributors": [
+    { "login": "ada", "people_entry": true, "github_name": "Ada L.", "prs": 4, "commits": 40, "lines_added": 1500, "lines_deleted": 20, "binary_added": 2, "binary_deleted": 1, "first_commit": "2026-10-01T09:00:00Z", "last_commit": "2026-10-09T10:00:00Z" },
+    { "login": "unverified", "people_entry": false, "github_name": "Someone", "prs": 1, "commits": 2, "lines_added": 5, "lines_deleted": 0, "binary_added": 0, "binary_deleted": 0, "first_commit": "2026-10-02T00:00:00Z", "last_commit": "2026-10-02T00:00:00Z" },
+    { "login": "synced", "people_entry": true, "github_name": "Synced Name", "prs": 0, "commits": 1, "lines_added": 1, "lines_deleted": 1, "binary_added": 0, "binary_deleted": 0, "first_commit": "2026-10-03T00:00:00Z", "last_commit": "2026-10-03T00:00:00Z" },
+    { "login": "blank", "people_entry": true, "github_name": null, "prs": 0, "commits": 1, "lines_added": 0, "lines_deleted": 0, "binary_added": 0, "binary_deleted": 0, "first_commit": "2026-10-04T00:00:00Z", "last_commit": "2026-10-04T00:00:00Z" },
+    { "login": "pr-only", "people_entry": false, "github_name": null, "prs": 1, "commits": 0, "lines_added": 0, "lines_deleted": 0, "binary_added": 0, "binary_deleted": 0, "first_commit": "", "last_commit": "" },
+    { "login": "", "people_entry": true, "prs": 9, "commits": 9 },
+    { "people_entry": true, "prs": 9, "commits": 9 }
+  ],
+  "models": [
+    { "id": "anthropic/claude-opus/5.5", "company": "Anthropic", "model": "Claude Opus", "version": "5.5", "commits": 58, "lines_added": 8311, "lines_deleted": 499 }
+  ]
+}

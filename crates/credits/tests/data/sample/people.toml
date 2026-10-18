@@ -1,0 +1,18 @@
+# Test fixture.
+
+[people.ada]
+real_name = "Ada Lovelace"
+display_name = "  Ada  "
+sync_github_name = true
+
+[people.unverified]
+real_name = "Not Shown"
+display_name = "Not Shown"
+
+[people.synced]
+sync_github_name = true
+
+[people.blank]
+real_name = "   "
+display_name = ""
+sync_github_name = true

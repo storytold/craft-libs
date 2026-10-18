@@ -22,6 +22,7 @@ bytemuck = "1"
 thiserror = "2"
 craft-atomic = { path = "crates/atomic" }
 craft-cms = { path = "crates/cms" }
+craft-credits = { path = "crates/credits" }
 craft-docpath = { path = "crates/docpath" }
 craft-print = { path = "crates/print" }
 craft-quit = { path = "crates/quit" }

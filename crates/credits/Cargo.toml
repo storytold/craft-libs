@@ -1,0 +1,20 @@
+[package]
+name = "craft-credits"
+description = "Contributor and AI-model credits for a Craft app's About window, baked into the binary at build time."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[features]
+# `build::write_credits` for an app's build.rs: reads contributors/contributors.json and
+# contributors/people.toml and writes the tables as Rust. Use it as a build-dependency only.
+build = ["dep:serde_json", "dep:toml"]
+
+[dependencies]
+serde_json = { workspace = true, optional = true }
+toml = { version = "1", optional = true }
+
+[lints]
+workspace = true

@@ -1,0 +1,29 @@
+name: Credits
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['crates/credits/**', 'Cargo.toml', 'Cargo.lock', '.github/workflows/credits.yml']
+  pull_request:
+    paths: ['crates/credits/**', 'Cargo.toml', 'Cargo.lock', '.github/workflows/credits.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  credits:
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - run: cargo fmt --check
+      - run: cargo clippy -p craft-credits --all-targets --all-features --locked -- -D warnings
+      - run: cargo test -p craft-credits --all-features --locked -- --nocapture
