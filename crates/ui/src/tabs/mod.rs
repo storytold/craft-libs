@@ -139,7 +139,7 @@ impl<'a> Tab<'a> {
         let valid = rect.is_finite() && size.x > 0.0 && size.y > 0.0 && size.x <= MAX_EXTENT && size.y <= MAX_EXTENT;
         let safe_rect = if valid { rect } else { Rect::from_min_size(egui::Pos2::ZERO, Vec2::ZERO) };
         let response = ui.interact(safe_rect, self.id, if valid { self.sense } else { Sense::hover() });
-        response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, valid && ui.is_enabled(), self.selected, self.label));
+        response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, valid && ui.is_enabled(), self.selected, self.label));
         ui.ctx().accesskit_node_builder(self.id, |node| {
             node.set_role(egui::accesskit::Role::Tab);
             node.clear_toggled();

@@ -213,14 +213,14 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> DockArea<P> {
         while let Some((node, path)) = nodes.pop() {
             match node {
                 Node::Tabs { panels, .. } if group(panels) => return true,
-                Node::Stack { entries } => {
+                Node::Stack { entries }
                     if entries.iter().any(|entry| {
                         matches(self.id.with(("tab", &entry.panel)))
                             || matches(self.id.with(("collapse", &entry.panel)))
                             || matches(self.id.with(("stack-resize", &entry.panel)))
-                    }) {
-                        return true;
-                    }
+                    }) =>
+                {
+                    return true;
                 }
                 Node::Split { first, second, .. } => {
                     if matches(self.id.with(("split", &path))) {
@@ -416,9 +416,8 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
                     self.tab(ui, &entry.panel, title_rect, entry.open, panel_rect);
                     let collapse = Rect::from_min_max(pos2((title_rect.right() - 18.0).max(title_rect.left()), title_rect.top()), title_rect.max);
                     let response = ui.interact(collapse, self.id.with(("collapse", &entry.panel)), Sense::click());
-                    response.widget_info(|| {
-                        egui::WidgetInfo::selected(egui::WidgetType::Checkbox, ui.is_enabled(), entry.open, (self.label)(&entry.panel))
-                    });
+                    response
+                        .widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, ui.is_enabled(), entry.open, (self.label)(&entry.panel)));
                     ui.painter().with_clip_rect(collapse).text(
                         collapse.center(),
                         egui::Align2::CENTER_CENTER,
@@ -536,7 +535,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
         }
         ui.painter().rect_filled(rect, 0.0, self.style.background);
         let mut child =
-            ui.new_child(UiBuilder::new().id(self.id.with(("body", panel))).max_rect(rect).layout(egui::Layout::top_down(egui::Align::Min)));
+            ui.new_child(UiBuilder::new().scope_id(self.id.with(("body", panel))).max_rect(rect).layout(egui::Layout::top_down(egui::Align::Min)));
         child.set_clip_rect(rect.intersect(ui.clip_rect()));
         self.content.body(&mut child, panel);
         if child.rect_contains_pointer(rect) && child.input(|i| i.pointer.primary_pressed()) {
@@ -566,7 +565,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
             let grip = Rect::from_min_max(strip.min, pos2((strip.left() + 12.0).min(strip.right()), strip.bottom()));
             let response = ui.interact(grip, self.id.with(("move-group", panels.first())), Sense::drag()).on_hover_cursor(egui::CursorIcon::Grab);
             self.register_interaction(ui.ctx(), response.id);
-            response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), &self.style.move_label));
+            response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), &self.style.move_label));
             if panels.iter().all(|p| (self.permissions)(p).movable)
                 && response.drag_started()
                 && let Some(first) = panels.first()
@@ -597,7 +596,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
         let header_width = if requested.is_finite() { requested.clamp(0.0, strip.width()) } else { 0.0 };
         if header_width > 0.0 {
             let header = Rect::from_min_max(pos2(strip.right() - header_width, strip.top()), strip.max);
-            let mut child = ui.new_child(UiBuilder::new().id(self.id.with(("header", selected))).max_rect(header));
+            let mut child = ui.new_child(UiBuilder::new().scope_id(self.id.with(("header", selected))).max_rect(header));
             child.set_clip_rect(header.intersect(ui.clip_rect()));
             self.content.group_header(&mut child, panels, selected, floating);
         }
@@ -625,7 +624,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
         if !fit.overflow.is_empty() && fit.overflow_width > 0.0 {
             let overflow = Rect::from_min_size(pos2(x, strip.top()), vec2(fit.overflow_width, strip.height()));
             let response = ui.interact(overflow, self.id.with(("overflow", selected)), Sense::click());
-            response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), &self.style.panels_label));
+            response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), &self.style.panels_label));
             ui.painter().with_clip_rect(overflow).text(overflow.center(), egui::Align2::CENTER_CENTER, "…", self.style.font.clone(), self.style.text);
             egui::Popup::menu(&response).show(|ui| {
                 egui::ScrollArea::vertical().max_height(360.0).show(ui, |ui| {
@@ -663,7 +662,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
         let logical = (self.label)(panel);
         let text = self.content.label(ui, panel, &logical, &self.style.font, self.style.text);
         let response = ui.button(text);
-        response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), &logical));
+        response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), &logical));
         response
     }
 
@@ -698,7 +697,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
             if policy.movable && policy.floatable {
                 let text = self.content.action_label(ui, &self.style.float_label, &self.style.font, self.style.text);
                 let response = ui.button(text);
-                response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), &self.style.float_label));
+                response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), &self.style.float_label));
                 if response.clicked() {
                     let rect = clamp_float(group.translate(vec2(24.0, 24.0)), ui.ctx().content_rect());
                     self.output.actions.push(Action::Float { panel: panel.clone(), rect: [rect.left(), rect.top(), rect.width(), rect.height()] });
@@ -721,12 +720,12 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
                         }
                     });
                 });
-                response.response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), &self.style.move_label));
+                response.response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), &self.style.move_label));
             }
             if policy.closable {
                 let text = self.content.action_label(ui, &self.style.close_label, &self.style.font, self.style.text);
                 let response = ui.button(text);
-                response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), &self.style.close_label));
+                response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), &self.style.close_label));
                 if response.clicked() {
                     self.output.actions.push(Action::Close { panel: panel.clone() });
                     ui.close();
@@ -766,7 +765,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
                 let corner = Rect::from_min_max((rect.max - vec2(12.0, 12.0)).max(rect.min), rect.max);
                 let response = ui.interact(corner, id.with("resize"), Sense::drag()).on_hover_cursor(egui::CursorIcon::ResizeNwSe);
                 self.register_interaction(ui.ctx(), response.id);
-                response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), &self.style.resize_window_label));
+                response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), &self.style.resize_window_label));
                 if response.drag_started() {
                     response.request_focus();
                 }
