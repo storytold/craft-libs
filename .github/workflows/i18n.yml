@@ -1,0 +1,29 @@
+name: Translations
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['crates/i18n/**', 'Cargo.toml', 'Cargo.lock', '.github/workflows/i18n.yml']
+  pull_request:
+    paths: ['crates/i18n/**', 'Cargo.toml', 'Cargo.lock', '.github/workflows/i18n.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  i18n:
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - run: cargo fmt --check
+      - run: cargo clippy -p craft-i18n --all-targets --locked -- -D warnings
+      - run: cargo test -p craft-i18n --locked -- --nocapture

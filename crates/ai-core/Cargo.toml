@@ -1,0 +1,15 @@
+[package]
+name = "craft-ai-core"
+description = "Shared data model for AI connections, roles, requests and jobs across the Craft apps"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

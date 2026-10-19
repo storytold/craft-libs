@@ -23,12 +23,20 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
 
 ## Libraries
 
+- [`craft-ai-core`](crates/ai-core/README.md): the data model and contract for AI in the Craft Apps (connections, models, tools, requests, jobs, consent, history, route spec). Pure, no I/O, wasm-safe. Contract in [docs/ai-shared-layer.md](docs/ai-shared-layer.md).
 - [`craft-pdf`](crates/pdf/README.md): independently optional PDF parsing, interpretation, rasterization and guarded authoring. Apps retain layout, fonts, editing and export policy; writer-only consumers do not enable the shared reader.
 
 - [`craft-atomic`](crates/atomic/README.md): Crash-safe atomic file writing and replacement with same-directory staging, directory fsync, Apple `F_FULLFSYNC` fallback, transient lock backoff, and fault injection for the Craft suite.
 - [`craft-cms`](crates/cms/README.md): pure-Rust ICC v2/v4 colour management: profile parsing
   and writing, transforms, rendering intents, black point compensation, soft proofing, gamut
   checks, 3D LUTs and built-in profiles (sRGB, Display P3, synthetic coated CMYK and others).
+- [`craft-docpath`](crates/docpath/src/lib.rs): decides whether a path or `file:` URL stored in a
+  document may be opened. Paths stored in documents are followed only when they are local or on the
+  document's own network share; other network paths, device paths and non-file URLs are refused.
+- [`craft-i18n`](crates/i18n/README.md): translations over the embedded craft-i18n catalogs:
+  lookup with fallback (`pt-br` → `pt` → English), plurals, language names, the system locale and
+  a pseudo locale. The catalogs stay a fully optional build input; apps keep `tl!` and their
+  language setting.
 - [`craft-print`](crates/print/README.md): PDF submission to CUPS and Windows, printer discovery,
   duplex/copies/colour and driver preferences. PDF generation stays in each app.
 

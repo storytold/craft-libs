@@ -12,6 +12,7 @@ repository = "https://github.com/storytold/craft-libs"
 
 [workspace.dependencies]
 # internal: add each crate here as `craft-<name> = { path = "crates/<name>" }`
+craft-ai-core = { path = "crates/ai-core" }
 craft-suite-account = { path = "crates/suite-account" }
 craft-pdf = { path = "crates/pdf", version = "=0.1.0" }
 krilla = { version = "=0.8.2", default-features = false, features = ["raster-images"] }
@@ -23,11 +24,13 @@ thiserror = "2"
 craft-atomic = { path = "crates/atomic" }
 craft-cms = { path = "crates/cms" }
 craft-cloud = { path = "crates/cloud" }
+craft-docpath = { path = "crates/docpath" }
 craft-esign = { path = "crates/esign" }
 craft-gpu = { path = "crates/gpu" }
 craft-gpu-null = { path = "crates/gpu-null" }
 craft-gpu-providers = { path = "crates/gpu-providers" }
 craft-gpu-wgpu = { path = "crates/gpu-wgpu" }
+craft-i18n = { path = "crates/i18n" }
 craft-print = { path = "crates/print" }
 craft-quit = { path = "crates/quit" }
 craft-runtime = { path = "crates/runtime" }

@@ -1,0 +1,32 @@
+name: AI model
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['crates/ai-core/**', 'Cargo.toml', 'Cargo.lock', '.github/workflows/ai-core.yml']
+  pull_request:
+    paths: ['crates/ai-core/**', 'Cargo.toml', 'Cargo.lock', '.github/workflows/ai-core.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  ai-core:
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+          targets: wasm32-unknown-unknown
+      - run: cargo fmt --check
+      - run: cargo clippy -p craft-ai-core --all-targets --locked -- -D warnings
+      - run: cargo test -p craft-ai-core --locked
+      # The model promises to compile for the web.
+      - run: cargo check -p craft-ai-core --target wasm32-unknown-unknown --locked
