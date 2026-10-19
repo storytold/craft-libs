@@ -17,6 +17,8 @@ use craft_cloud::{Capability, Conversation, Entry};
 pub enum Job {
     /// Who is signed in, and what the provider behind the service can do.
     Account,
+    /// Begin signing in to the service through the browser or device flow.
+    SignIn,
     /// Begin linking a cloud account. The answer carries a URL to open.
     LinkStart,
     /// Whether the user has finished in the browser yet.

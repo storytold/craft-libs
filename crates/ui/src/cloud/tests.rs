@@ -147,7 +147,7 @@ struct Service(Arc<Mutex<Vec<Job>>>);
 impl CloudBackend for Service {
     fn submit(&self, job: Job, post: Post) {
         let answer = match &job {
-            Job::Account => Some(Event::Account(Ok(Account {
+            Job::Account | Job::SignIn => Some(Event::Account(Ok(Account {
                 display: "Ada Lovelace".to_owned(),
                 capabilities: vec![Capability::Files, Capability::Etags],
                 provider_linked: true,
