@@ -338,6 +338,13 @@ pub struct ShareDialog {
     avatars: HashMap<String, Avatar>,
     /// A save the application has not picked up yet.
     wants_save: Option<SaveRequest>,
+    /// Bumped on every [`ShareDialog::open`] and [`ShareDialog::close`]. A save
+    /// completion from an earlier open is ignored when this no longer matches
+    /// [`ShareDialog::pending_save_generation`].
+    sheet_generation: u64,
+    /// Generation of the open sheet when [`ShareDialog::take_save_request`]
+    /// last handed a save to the application.
+    pending_save_generation: Option<u64>,
     labels: ShareLabels,
 }
 
@@ -360,6 +367,8 @@ impl ShareDialog {
             open: None,
             avatars: HashMap::new(),
             wants_save: None,
+            sheet_generation: 0,
+            pending_save_generation: None,
             labels: ShareLabels::default(),
         }
     }
@@ -418,6 +427,8 @@ impl ShareDialog {
         if !self.available() {
             return;
         }
+        self.sheet_generation = self.sheet_generation.wrapping_add(1);
+        self.wants_save = None;
         let id = id.into();
         self.open = Some(Sheet::new(id.clone(), title.into()));
         if id.is_empty() {
@@ -442,11 +453,75 @@ impl ShareDialog {
     /// Taken, so it is handled once. Call [`ShareDialog::saved`] or
     /// [`ShareDialog::save_failed`] when it is done, or the dialog waits.
     pub fn take_save_request(&mut self) -> Option<SaveRequest> {
-        self.wants_save.take()
+        let request = self.wants_save.take()?;
+        self.pending_save_generation = Some(self.sheet_generation);
+        Some(request)
     }
 
     /// The document was saved, and this is the handle the provider issued.
+    ///
+    /// Ignored when the dialog has closed, reopened on another document, or
+    /// taken a newer save since [`ShareDialog::take_save_request`].
     pub fn saved(&mut self, id: impl Into<String>, name: impl Into<String>) {
+        if !self.save_completion_applies() {
+            return;
+        }
+        self.pending_save_generation = None;
+        self.finish_saved(id, name);
+    }
+
+    /// Like [`ShareDialog::saved`], but applies only when `generation` matches
+    /// the open sheet's generation.
+    pub fn saved_if(&mut self, generation: u64, id: impl Into<String>, name: impl Into<String>) {
+        if self.open.is_none() || self.sheet_generation != generation {
+            return;
+        }
+        self.pending_save_generation = None;
+        self.finish_saved(id, name);
+    }
+
+    /// The save did not happen, and this is why.
+    ///
+    /// Ignored under the same conditions as [`ShareDialog::saved`].
+    pub fn save_failed(&mut self, reason: impl Into<String>) {
+        if !self.save_completion_applies() {
+            return;
+        }
+        self.pending_save_generation = None;
+        if let Some(sheet) = &mut self.open {
+            sheet.saving = None;
+            sheet.save_error = Some(reason.into());
+        }
+    }
+
+    /// Like [`ShareDialog::save_failed`], but applies only when `generation`
+    /// matches the open sheet's generation.
+    pub fn save_failed_if(&mut self, generation: u64, reason: impl Into<String>) {
+        if self.open.is_none() || self.sheet_generation != generation {
+            return;
+        }
+        self.pending_save_generation = None;
+        if let Some(sheet) = &mut self.open {
+            sheet.saving = None;
+            sheet.save_error = Some(reason.into());
+        }
+    }
+
+    /// Generation of the sheet currently open, for callers that track their
+    /// own save epoch. Zero when the dialog is closed.
+    pub fn sheet_generation(&self) -> u64 {
+        if self.open.is_some() {
+            self.sheet_generation
+        } else {
+            0
+        }
+    }
+
+    fn save_completion_applies(&self) -> bool {
+        self.pending_save_generation.is_some_and(|g| g == self.sheet_generation)
+    }
+
+    fn finish_saved(&mut self, id: impl Into<String>, name: impl Into<String>) {
         let id = id.into();
         if let Some(sheet) = &mut self.open {
             sheet.saving = None;
@@ -462,20 +537,14 @@ impl ShareDialog {
         }
     }
 
-    /// The save did not happen, and this is why.
-    pub fn save_failed(&mut self, reason: impl Into<String>) {
-        if let Some(sheet) = &mut self.open {
-            sheet.saving = None;
-            sheet.save_error = Some(reason.into());
-        }
-    }
-
     pub fn is_open(&self) -> bool {
         self.open.is_some()
     }
 
     pub fn close(&mut self) {
         self.open = None;
+        self.sheet_generation = self.sheet_generation.wrapping_add(1);
+        self.wants_save = None;
     }
 
     /// Who the last share reached, and who it did not.
