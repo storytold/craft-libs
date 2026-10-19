@@ -51,6 +51,18 @@ fn restore_pending_prepends_before_newer_puts() {
 }
 
 #[test]
+fn seed_does_not_flush_and_delete_is_a_tombstone() {
+    let mut store = MirrorStore::new(DefaultTierPolicy, 1024);
+    let key = StoreKey::new("config/session.ecproj");
+    store.seed(key.clone(), b"old".to_vec());
+    assert!(!store.has_pending());
+    store.delete(key.clone());
+    let pending = store.take_pending();
+    assert_eq!(pending.len(), 1);
+    assert!(pending[0].deleted);
+    assert!(store.get(&key).is_none());
+}
+
 fn take_pending_coalesces_per_key() {
     let mut store = MirrorStore::new(DefaultTierPolicy, 1024);
     let k1 = StoreKey::new("files/one");
