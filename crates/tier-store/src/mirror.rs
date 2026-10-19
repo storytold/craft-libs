@@ -2,11 +2,14 @@ use std::collections::{HashMap, VecDeque};
 
 use crate::{KeyClass, StoreKey, TierPolicy};
 
-/// Coalesced async flush (newest bytes win per key).
+/// Coalesced async flush (newest write wins per key).
+///
+/// `deleted` is a tombstone: the warm tier should remove the key. Bytes are empty then.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PendingWrite {
     pub key: StoreKey,
     pub bytes: Vec<u8>,
+    pub deleted: bool,
 }
 
 /// In-memory hot tier with optional LRU byte cap on cache-class keys.
@@ -38,17 +41,48 @@ impl<P: TierPolicy> MirrorStore<P> {
         self.pending.splice(0..0, writes);
     }
 
+    /// Resident bytes from a warm-tier load. Nothing is queued to flush.
+    pub fn seed(&mut self, key: StoreKey, bytes: Vec<u8>) {
+        self.insert_resident(key, bytes);
+    }
+
     pub fn put(&mut self, key: StoreKey, bytes: Vec<u8>) {
+        self.insert_resident(key.clone(), bytes.clone());
+        self.pending.push(PendingWrite { key, bytes, deleted: false });
+    }
+
+    /// Drop the key and queue a warm-tier delete.
+    pub fn delete(&mut self, key: StoreKey) {
+        if let Some(old) = self.data.remove(&key) {
+            self.bytes_used = self.bytes_used.saturating_sub(old.len());
+        }
+        self.cache_lru.retain(|k| k != &key);
+        self.pending.push(PendingWrite { key, bytes: Vec::new(), deleted: true });
+    }
+
+    /// Queue the key again after a failed flush. Latest resident bytes, or a tombstone if gone.
+    pub fn requeue(&mut self, key: &StoreKey) {
+        if let Some(bytes) = self.data.get(key).cloned() {
+            self.pending.push(PendingWrite { key: key.clone(), bytes, deleted: false });
+        } else {
+            self.pending.push(PendingWrite { key: key.clone(), bytes: Vec::new(), deleted: true });
+        }
+    }
+
+    pub fn has_pending(&self) -> bool {
+        !self.pending.is_empty()
+    }
+
+    fn insert_resident(&mut self, key: StoreKey, bytes: Vec<u8>) {
         let class = self.policy.classify(&key);
         if let Some(old) = self.data.insert(key.clone(), bytes.clone()) {
             self.bytes_used = self.bytes_used.saturating_sub(old.len());
         }
         self.bytes_used = self.bytes_used.saturating_add(bytes.len());
         if class == KeyClass::Cache {
-            self.lru_touch(key.clone());
+            self.lru_touch(key);
         }
         self.enforce_budget();
-        self.pending.push(PendingWrite { key, bytes });
     }
 
     /// Drain pending writes, keeping only the latest payload per key (insertion order of first touch).
@@ -59,6 +93,7 @@ impl<P: TierPolicy> MirrorStore<P> {
         for write in pending {
             if let Some(&idx) = index_by_key.get(&write.key) {
                 coalesced[idx].bytes = write.bytes;
+                coalesced[idx].deleted = write.deleted;
             } else {
                 index_by_key.insert(write.key.clone(), coalesced.len());
                 coalesced.push(write);
