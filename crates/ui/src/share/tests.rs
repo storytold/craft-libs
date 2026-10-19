@@ -411,6 +411,69 @@ fn two_contacts_never_share_one_picture_cache_entry() {
     assert!(one.starts_with("bytes://"), "egui's own loaders have to recognize it");
 }
 
+fn ready_unsaved() -> (Context, ShareDialog, Silent) {
+    let ctx = Context::default();
+    let backend = Silent::default();
+    let mut dialog = ShareDialog::new();
+    dialog.connect(backend.clone());
+    dialog.collect(&ctx);
+    dialog.receive(&ctx, 1, Ok(everything()));
+    dialog.open("", "Book1");
+    (ctx, dialog, backend)
+}
+
+fn start_save(dialog: &mut ShareDialog, ctx: &Context, destination: &str, name: &str) {
+    dialog.apply(ctx, vec![Act::SaveAs { destination: destination.into(), name: name.into() }]);
+    assert!(dialog.take_save_request().is_some(), "save was handed to the application");
+}
+
+#[test]
+fn a_stale_save_completion_after_close_does_nothing() {
+    let (ctx, mut dialog, backend) = ready_unsaved();
+    start_save(&mut dialog, &ctx, "cloud", "Budget");
+    dialog.close();
+    assert!(!dialog.is_open());
+
+    dialog.saved("files/wrong.xlsx", "Wrong");
+    assert!(!dialog.is_open());
+    assert!(
+        !backend.seen().iter().any(|r| matches!(r, Request::Access { id } if id == "files/wrong.xlsx")),
+        "a completion after close must not ask about the saved handle"
+    );
+}
+
+#[test]
+fn a_stale_save_completion_after_reopening_another_document_does_nothing() {
+    let (ctx, mut dialog, backend) = ready_unsaved();
+    start_save(&mut dialog, &ctx, "cloud", "Budget");
+    dialog.close();
+    dialog.open("files/other.xlsx", "Other");
+    assert_eq!(dialog.open.as_ref().map(|s| s.id.as_str()), Some("files/other.xlsx"));
+
+    dialog.saved("files/budget.xlsx", "Budget");
+    let sheet = dialog.open.as_ref().expect("still open on the other document");
+    assert_eq!(sheet.id, "files/other.xlsx");
+    assert_eq!(sheet.title, "Other");
+    assert!(sheet.saving.is_none());
+    assert!(
+        !backend.seen().iter().any(|r| matches!(r, Request::Access { id } if id == "files/budget.xlsx")),
+        "the first document's completion must not rebind the second"
+    );
+}
+
+#[test]
+fn a_save_completion_on_the_same_open_updates_the_sheet() {
+    let (ctx, mut dialog, backend) = ready_unsaved();
+    start_save(&mut dialog, &ctx, "cloud", "Budget");
+
+    dialog.saved("files/budget.xlsx", "Budget");
+    let sheet = dialog.open.as_ref().expect("open");
+    assert_eq!(sheet.id, "files/budget.xlsx");
+    assert_eq!(sheet.title, "Budget");
+    assert!(sheet.saving.is_none());
+    assert!(backend.seen().iter().any(|r| matches!(r, Request::Access { id } if id == "files/budget.xlsx")));
+}
+
 #[test]
 fn a_closed_dialog_still_collects_and_reports_nothing() {
     let (ctx, mut dialog, _) = ready();
