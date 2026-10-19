@@ -1,8 +1,9 @@
 //! Cross-application compatibility validation runner and report generator.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::fs;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
@@ -85,6 +86,7 @@ pub struct TestSummary {
     pub passed: usize,
     pub failed: usize,
     pub ignored: usize,
+    pub failed_tests: BTreeSet<String>,
 }
 
 pub struct WorktreeGuard {
@@ -181,22 +183,29 @@ pub fn resolve_commit(repo_dir: &Path, commit_ish: &str) -> Result<String, Strin
 }
 
 pub fn discover_candidate_crates(candidate_root: &Path) -> Result<BTreeMap<String, PathBuf>, String> {
-    let crates_dir = candidate_root.join("crates");
-    if !crates_dir.is_dir() {
-        return Err(format!("crates/ directory not found in {}", candidate_root.display()));
-    }
-
     let mut map = BTreeMap::new();
-    let entries = fs::read_dir(&crates_dir).map_err(|e| format!("read crates dir: {e}"))?;
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let cargo_toml = path.join("Cargo.toml");
-        if cargo_toml.is_file()
-            && let Some(name) = fs::read_to_string(&cargo_toml).ok().and_then(|c| extract_package_name(&c))
+
+    for sub in ["crates", "vendor"] {
+        let dir = candidate_root.join(sub);
+        if dir.is_dir()
+            && let Ok(entries) = fs::read_dir(&dir)
         {
-            map.insert(name, path);
+            for entry in entries.flatten() {
+                let path = entry.path();
+                let cargo_toml = path.join("Cargo.toml");
+                if cargo_toml.is_file()
+                    && let Some(name) = fs::read_to_string(&cargo_toml).ok().and_then(|c| extract_package_name(&c))
+                {
+                    map.insert(name, path);
+                }
+            }
         }
     }
+
+    if map.is_empty() {
+        return Err(format!("no candidate crates found in {}/crates or vendor", candidate_root.display()));
+    }
+
     Ok(map)
 }
 
@@ -259,13 +268,18 @@ pub fn parse_pinned_craft_crates(lock_content: &str) -> Vec<String> {
 
 pub fn generate_patch_config(pinned_crates: &[String], candidate_crates: &BTreeMap<String, PathBuf>) -> Result<String, Vec<String>> {
     let mut missing = Vec::new();
-    let mut patch_entries = Vec::new();
+    let mut git_patch_entries = Vec::new();
+    let mut vendor_patch_entries = Vec::new();
 
     for pinned in pinned_crates {
         if let Some(crate_path) = candidate_crates.get(pinned) {
             // Forward slashes prevent Windows path escaping issues
             let path_str = crate_path.to_string_lossy().replace('\\', "/");
-            patch_entries.push(format!("{pinned} = {{ path = \"{path_str}\" }}"));
+            let entry = format!("{pinned} = {{ path = \"{path_str}\" }}");
+            git_patch_entries.push(entry.clone());
+            if path_str.contains("/vendor/") || path_str.starts_with("vendor/") {
+                vendor_patch_entries.push(entry);
+            }
         } else {
             missing.push(pinned.clone());
         }
@@ -276,17 +290,26 @@ pub fn generate_patch_config(pinned_crates: &[String], candidate_crates: &BTreeM
     }
 
     let mut toml = String::from("[patch.\"https://github.com/storytold/craft-libs\"]\n");
-    for entry in patch_entries {
+    for entry in git_patch_entries {
         toml.push_str(&entry);
         toml.push('\n');
     }
+
+    if !vendor_patch_entries.is_empty() {
+        toml.push_str("\n[patch.crates-io]\n");
+        for entry in vendor_patch_entries {
+            toml.push_str(&entry);
+            toml.push('\n');
+        }
+    }
+
     Ok(toml)
 }
 
-pub fn verify_candidate_provenance(worktree_dir: &Path, target_pkg: &str, checked_crate: &str, candidate_path_snippet: &str) -> Result<(), String> {
+pub fn verify_candidate_provenance(worktree_dir: &Path, checked_crate: &str, candidate_path_snippet: &str) -> Result<(), String> {
     let mut cmd = Command::new("cargo");
     cmd.current_dir(worktree_dir);
-    cmd.args(["tree", "--offline", "-p", target_pkg, "-i", checked_crate]);
+    cmd.args(["tree", "--offline", "-i", checked_crate]);
 
     let out = cmd.output().map_err(|e| format!("cargo tree failed to spawn: {e}"))?;
     if !out.status.success() {
@@ -308,28 +331,54 @@ pub fn parse_test_summary(output: &[u8]) -> TestSummary {
     let text = String::from_utf8_lossy(output);
     let mut summary = TestSummary::default();
 
-    for line in text.lines().rev() {
+    // Parse individual failed test lines: "test tests::my_test ... FAILED"
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("test ") && trimmed.ends_with(" ... FAILED") {
+            let name = trimmed.trim_start_matches("test ").trim_end_matches(" ... FAILED").trim();
+            summary.failed_tests.insert(name.to_string());
+        }
+    }
+
+    // Also parse failures list section if present:
+    // failures:
+    //     tests::my_test
+    let mut in_failures_block = false;
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed == "failures:" {
+            in_failures_block = true;
+            continue;
+        }
+        if in_failures_block {
+            if trimmed.starts_with("test result:") {
+                in_failures_block = false;
+            } else if !trimmed.is_empty() && !trimmed.starts_with("----") && !trimmed.contains(' ') {
+                summary.failed_tests.insert(trimmed.to_string());
+            }
+        }
+    }
+
+    for line in text.lines() {
         let trimmed = line.trim();
         if trimmed.starts_with("test result:") {
             // Format: "test result: ok. 1822 passed; 0 failed; 10 ignored; 0 measured; 0 filtered out; finished in 12.34s"
             for part in trimmed.split(';') {
                 let part = part.trim();
-                if part.contains("passed") {
-                    if let Some(num_str) = part.split_whitespace().find(|w| w.chars().all(|c| c.is_ascii_digit())) {
-                        summary.passed = num_str.parse().unwrap_or(0);
-                    }
-                } else if part.contains("failed") {
-                    if let Some(num_str) = part.split_whitespace().find(|w| w.chars().all(|c| c.is_ascii_digit())) {
-                        summary.failed = num_str.parse().unwrap_or(0);
-                    }
-                } else if part.contains("ignored") {
-                    let num_str = part.split_whitespace().find(|w| w.chars().all(|c| c.is_ascii_digit()));
-                    if let Some(num_str) = num_str {
-                        summary.ignored = num_str.parse().unwrap_or(0);
-                    }
+                if part.contains("passed")
+                    && let Some(num_str) = part.split_whitespace().find(|w| w.chars().all(|c| c.is_ascii_digit()))
+                {
+                    summary.passed += num_str.parse::<usize>().unwrap_or(0);
+                } else if part.contains("failed")
+                    && let Some(num_str) = part.split_whitespace().find(|w| w.chars().all(|c| c.is_ascii_digit()))
+                {
+                    summary.failed += num_str.parse::<usize>().unwrap_or(0);
+                } else if part.contains("ignored")
+                    && let Some(num_str) = part.split_whitespace().find(|w| w.chars().all(|c| c.is_ascii_digit()))
+                {
+                    summary.ignored += num_str.parse::<usize>().unwrap_or(0);
                 }
             }
-            break;
         }
     }
     summary
@@ -352,12 +401,23 @@ pub fn classify_outcome(baseline: Option<&TestSummary>, candidate: &TestSummary)
                 CompatStatus::CandidateRegression
             } else if base.failed > 0 && candidate.failed == 0 {
                 CompatStatus::FixedInCandidate
-            } else if candidate.failed > base.failed {
-                // Fails more tests than baseline
-                CompatStatus::CandidateRegression
             } else {
-                // Exact same failures present in baseline
-                CompatStatus::BaselineFailure
+                // Both baseline and candidate have failures.
+                if candidate.failed > base.failed {
+                    return CompatStatus::CandidateRegression;
+                }
+
+                // If either baseline or candidate has failures but failing test identities could not be parsed,
+                // evidence is insufficient to verify whether failures are identical.
+                // Never report a clean/benign BaselineFailure when evidence is insufficient.
+                if base.failed_tests.is_empty() || candidate.failed_tests.is_empty() {
+                    return CompatStatus::CandidateRegression;
+                }
+
+                // Check if candidate failed any test that was not already failing in baseline.
+                // Even with equal failure counts, a different failing test identity is a candidate regression.
+                let has_new_failures = candidate.failed_tests.iter().any(|t| !base.failed_tests.contains(t));
+                if has_new_failures { CompatStatus::CandidateRegression } else { CompatStatus::BaselineFailure }
             }
         }
         None => {
@@ -536,6 +596,7 @@ pub fn run_compat(root_dir: &Path, config: CompatConfig) -> Result<bool, String>
 
         if !config.skip_baseline {
             print!("  Running baseline tests: ");
+            io::stdout().flush().ok();
             let out = Command::new("cargo")
                 .current_dir(&consumer_worktree)
                 .args(["test", "--locked", "-p", &target_package])
@@ -576,8 +637,8 @@ pub fn run_compat(root_dir: &Path, config: CompatConfig) -> Result<bool, String>
         let mut provenance_failed = false;
         for pinned in &pinned_crates {
             if let Some(crate_path) = candidate_crates.get(pinned) {
-                let snippet = crate_path.file_name().unwrap_or_default().to_string_lossy();
-                if let Err(e) = verify_candidate_provenance(&consumer_worktree, &target_package, pinned, &snippet) {
+                let snippet = crate_path.to_string_lossy().replace('\\', "/");
+                if let Err(e) = verify_candidate_provenance(&consumer_worktree, pinned, &snippet) {
                     println!("  [ERROR] Provenance check failed for {pinned}: {e}");
                     provenance_failed = true;
                     break;
@@ -612,6 +673,7 @@ pub fn run_compat(root_dir: &Path, config: CompatConfig) -> Result<bool, String>
 
         // 4. Run Candidate Tests
         print!("  Running candidate tests: ");
+        io::stdout().flush().ok();
         let cand_out = Command::new("cargo")
             .current_dir(&consumer_worktree)
             .args(["test", "-p", &target_package])
@@ -767,45 +829,130 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
     }
 
     #[test]
+    fn test_generate_patch_config_includes_crates_io_for_vendor() {
+        let pinned = vec!["craft-ui".to_string(), "krilla".to_string()];
+        let mut candidate_crates = BTreeMap::new();
+        candidate_crates.insert("craft-ui".to_string(), PathBuf::from("/path/to/crates/ui"));
+        candidate_crates.insert("krilla".to_string(), PathBuf::from("/path/to/vendor/krilla"));
+
+        let toml = generate_patch_config(&pinned, &candidate_crates).expect("patch config");
+        assert!(toml.contains("[patch.\"https://github.com/storytold/craft-libs\"]"));
+        assert!(toml.contains("[patch.crates-io]"));
+        assert!(toml.contains("krilla = { path = \"/path/to/vendor/krilla\" }"));
+    }
+
+    #[test]
+    fn test_parse_test_summary_extracts_failure_names() {
+        let output = b"
+test tests::test_alpha ... ok
+test tests::test_beta ... FAILED
+test tests::test_gamma ... ok
+
+failures:
+    tests::test_beta
+
+test result: FAILED. 2 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out
+";
+        let summary = parse_test_summary(output);
+        assert_eq!(summary.passed, 2);
+        assert_eq!(summary.failed, 1);
+        let mut expected = BTreeSet::new();
+        expected.insert("tests::test_beta".to_string());
+        assert_eq!(summary.failed_tests, expected);
+    }
+
+    #[test]
+    fn test_parse_test_summary_multiple_suites() {
+        let output = b"
+running 2 tests
+test test_a ... ok
+test test_b ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+   Doc-tests my_crate
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+";
+        let summary = parse_test_summary(output);
+        assert_eq!(summary.passed, 2);
+        assert_eq!(summary.failed, 0);
+    }
+
+    #[test]
     fn test_classification_passing_baseline_and_candidate() {
-        let base = TestSummary { passed: 100, failed: 0, ignored: 0 };
-        let cand = TestSummary { passed: 100, failed: 0, ignored: 0 };
+        let base = TestSummary { passed: 100, failed: 0, ignored: 0, ..Default::default() };
+        let cand = TestSummary { passed: 100, failed: 0, ignored: 0, ..Default::default() };
         assert_eq!(classify_outcome(Some(&base), &cand), CompatStatus::Compatible);
     }
 
     #[test]
     fn test_classification_candidate_regression() {
-        let base = TestSummary { passed: 100, failed: 0, ignored: 0 };
-        let cand = TestSummary { passed: 98, failed: 2, ignored: 0 };
+        let base = TestSummary { passed: 100, failed: 0, ignored: 0, ..Default::default() };
+        let cand = TestSummary { passed: 98, failed: 2, ignored: 0, failed_tests: BTreeSet::from(["tests::t1".into(), "tests::t2".into()]) };
         assert_eq!(classify_outcome(Some(&base), &cand), CompatStatus::CandidateRegression);
     }
 
     #[test]
     fn test_classification_failing_baseline_same_failures() {
-        let base = TestSummary { passed: 98, failed: 2, ignored: 0 };
-        let cand = TestSummary { passed: 98, failed: 2, ignored: 0 };
+        let mut failed = BTreeSet::new();
+        failed.insert("tests::test_foo".to_string());
+        failed.insert("tests::test_bar".to_string());
+
+        let base = TestSummary { passed: 98, failed: 2, ignored: 0, failed_tests: failed.clone() };
+        let cand = TestSummary { passed: 98, failed: 2, ignored: 0, failed_tests: failed };
         assert_eq!(classify_outcome(Some(&base), &cand), CompatStatus::BaselineFailure);
+    }
+
+    #[test]
+    fn test_classification_failing_baseline_equal_count_different_identities() {
+        // Regression test: equal failure count (1 == 1) but different failing test names.
+        // Must be classified as CandidateRegression, not BaselineFailure.
+        let base = TestSummary { passed: 99, failed: 1, ignored: 0, failed_tests: BTreeSet::from(["tests::test_baseline_only".to_string()]) };
+        let cand = TestSummary { passed: 99, failed: 1, ignored: 0, failed_tests: BTreeSet::from(["tests::test_candidate_only".to_string()]) };
+        assert_eq!(classify_outcome(Some(&base), &cand), CompatStatus::CandidateRegression);
+    }
+
+    #[test]
+    fn test_classification_failing_baseline_insufficient_evidence() {
+        // When failures occurred but test names could not be identified,
+        // do not report a clean BaselineFailure result. Reject as CandidateRegression.
+        let base = TestSummary { passed: 98, failed: 2, ignored: 0, failed_tests: BTreeSet::new() };
+        let cand = TestSummary { passed: 98, failed: 2, ignored: 0, failed_tests: BTreeSet::new() };
+        assert_eq!(classify_outcome(Some(&base), &cand), CompatStatus::CandidateRegression);
     }
 
     #[test]
     fn test_classification_failing_baseline_with_candidate_regression() {
         // Base had 1 failure; candidate introduced 3 failures (fails on top)
-        let base = TestSummary { passed: 99, failed: 1, ignored: 0 };
-        let cand = TestSummary { passed: 97, failed: 3, ignored: 0 };
+        let base = TestSummary { passed: 99, failed: 1, ignored: 0, failed_tests: BTreeSet::from(["tests::t1".into()]) };
+        let cand = TestSummary {
+            passed: 97,
+            failed: 3,
+            ignored: 0,
+            failed_tests: BTreeSet::from(["tests::t1".into(), "tests::t2".into(), "tests::t3".into()]),
+        };
         assert_eq!(classify_outcome(Some(&base), &cand), CompatStatus::CandidateRegression);
     }
 
     #[test]
     fn test_classification_fixed_in_candidate() {
-        let base = TestSummary { passed: 95, failed: 5, ignored: 0 };
-        let cand = TestSummary { passed: 100, failed: 0, ignored: 0 };
+        let base = TestSummary {
+            passed: 95,
+            failed: 5,
+            ignored: 0,
+            failed_tests: BTreeSet::from(["t1".into(), "t2".into(), "t3".into(), "t4".into(), "t5".into()]),
+        };
+        let cand = TestSummary { passed: 100, failed: 0, ignored: 0, ..Default::default() };
         assert_eq!(classify_outcome(Some(&base), &cand), CompatStatus::FixedInCandidate);
     }
 
     #[test]
     fn test_classification_vacuous_rejected() {
-        let base = TestSummary { passed: 0, failed: 0, ignored: 0 };
-        let cand = TestSummary { passed: 0, failed: 0, ignored: 0 };
+        let base = TestSummary { passed: 0, failed: 0, ignored: 0, ..Default::default() };
+        let cand = TestSummary { passed: 0, failed: 0, ignored: 0, ..Default::default() };
         assert_eq!(classify_outcome(Some(&base), &cand), CompatStatus::VacuousExecutionRejected);
     }
 
