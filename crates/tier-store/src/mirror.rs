@@ -35,7 +35,7 @@ impl<P: TierPolicy> MirrorStore<P> {
 
     /// Put flushed writes back when a sink accepted only part of a batch.
     pub fn restore_pending(&mut self, writes: impl IntoIterator<Item = PendingWrite>) {
-        self.pending.extend(writes);
+        self.pending.splice(0..0, writes);
     }
 
     pub fn put(&mut self, key: StoreKey, bytes: Vec<u8>) {

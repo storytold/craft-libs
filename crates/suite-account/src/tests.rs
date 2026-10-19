@@ -347,6 +347,33 @@ fn a_per_application_session_moves_into_the_suite_store_and_the_file_goes() {
 }
 
 #[test]
+fn migration_repairs_an_orphan_keychain_token_with_the_legacy_file() {
+    const LEGACY: &str = "legacy-session-token";
+    let suite = tempfile::tempdir().unwrap();
+    let app = tempfile::tempdir().unwrap();
+    let keychain = Memory::new();
+    let store = Store::at(Some(suite.path().to_path_buf()), keychain.clone());
+    let id = accounts::handle(SERVICE, USER);
+    keychain.put(&id, &Secret::new("orphan-token")).unwrap();
+    let path = legacy_file(app.path());
+    std::fs::write(
+        &path,
+        format!(r#"{{"service":"{SERVICE}","token":"{LEGACY}","user":"{USER}","display":"Ada Lovelace"}}"#).as_bytes(),
+    )
+    .unwrap();
+
+    match crate::migrate::adopt(&store, &path, NOW).unwrap() {
+        Adopted::Taken(account) => assert_eq!(account.id, id),
+        other => panic!("expected the legacy session to be taken over, got {other:?}"),
+    }
+    assert!(!path.exists());
+    match store.shared() {
+        Shared::Session { token, .. } => assert_eq!(token, Secret::new(LEGACY)),
+        other => panic!("expected a session, got {other:?}"),
+    }
+}
+
+#[test]
 fn a_second_migration_finds_nothing_to_do() {
     let suite = tempfile::tempdir().unwrap();
     let app = tempfile::tempdir().unwrap();

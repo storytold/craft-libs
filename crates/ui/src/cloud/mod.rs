@@ -705,7 +705,9 @@ fn opened<A: CloudApp>(app: &mut A, entry: Entry, into: Option<u64>, bytes: Vec<
             }
             // A reload closes the document it replaced only once the new one is
             // open. A read that fails leaves the user's work where it was.
-            if let Some(old) = into.filter(|old| Some(*old) != now) {
+            if let (Some(old), Some(new)) = (into, now)
+                && old != new
+            {
                 let cloud = app.cloud_mut();
                 cloud.origins.remove(&old);
                 app.drop_pending(old);

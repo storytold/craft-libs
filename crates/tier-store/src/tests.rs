@@ -37,6 +37,20 @@ fn cache_lru_evicts_least_recently_used() {
 }
 
 #[test]
+fn restore_pending_prepends_before_newer_puts() {
+    let mut store = MirrorStore::new(DefaultTierPolicy, 1024);
+    let key = StoreKey::new("files/one");
+    store.put(key.clone(), vec![1]);
+    let batch = store.take_pending();
+    assert_eq!(batch.len(), 1);
+    store.put(key.clone(), vec![9]);
+    store.restore_pending(batch);
+    let pending = store.take_pending();
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].bytes, vec![9]);
+}
+
+#[test]
 fn take_pending_coalesces_per_key() {
     let mut store = MirrorStore::new(DefaultTierPolicy, 1024);
     let k1 = StoreKey::new("files/one");

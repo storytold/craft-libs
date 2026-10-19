@@ -76,6 +76,6 @@ Against a running CollabCraft (or compatible) gateway:
 
 - `GET /healthz` → `ok`
 - Unauthenticated `GET /api/v1/me` → `unauthenticated`
-- Static worker: `curl -H 'Accept-Encoding: br' https://<your-host>/craft-worker-host.js` → **200** with brotli when precompressed assets are published
+- Static worker: `curl -sS -D - -o /dev/null -H 'Accept-Encoding: br' https://<your-host>/craft-worker-host.js` → **200** with brotli when precompressed assets are published (headers show status and `Content-Encoding`)
 
 After each image or asset change, recreate the service containers and republish the static worker scripts to the web root.
