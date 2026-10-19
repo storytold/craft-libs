@@ -84,7 +84,10 @@ fn account<A: CloudApp>(app: &mut A, ui: &mut Ui) {
             // job already triggers when there is no token. Asking who the
             // account is therefore starts it. Linking storage comes after, and
             // needs that session to exist first.
-            Act::SignIn | Act::AddAccount => sign_in(app),
+            Act::SignIn | Act::AddAccount => {
+                app.cloud_mut().sign_in_from_menu = true;
+                sign_in(app);
+            }
             Act::Link(_) => link(app),
             Act::SignOut(_) => sign_out(app),
             // One account, so there is nothing to switch to yet.

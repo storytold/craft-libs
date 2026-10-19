@@ -206,6 +206,10 @@ pub struct CloudFiles {
     /// Set when this window belongs to somebody who followed a shared link
     /// rather than to somebody signed in.
     guest: Option<Guest>,
+    /// Set when the account menu starts sign-in. Browser builds open a login
+    /// popup from this gesture instead of inferring it from `status`, which can
+    /// stay set after a failed sign-in.
+    sign_in_from_menu: bool,
 }
 
 impl Default for CloudFiles {
@@ -235,7 +239,14 @@ impl CloudFiles {
             status: None,
             sharing_save: false,
             guest: None,
+            sign_in_from_menu: false,
         }
+    }
+
+    /// Whether the account menu just asked to sign in. Consumed by browser hosts
+    /// that need a user-gesture signal to open a login popup.
+    pub fn take_sign_in_from_menu(&mut self) -> bool {
+        std::mem::take(&mut self.sign_in_from_menu)
     }
 
     /// Attach the thing that does the waiting.
