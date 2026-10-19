@@ -300,13 +300,19 @@ enum Act {
 ///
 /// Taken once. The application serialises the open document, puts it where
 /// `destination` says, and reports back with [`ShareDialog::saved`] or
-/// [`ShareDialog::save_failed`].
+/// [`ShareDialog::save_failed`]. Prefer [`ShareDialog::saved_if`] /
+/// [`ShareDialog::save_failed_if`] with [`SaveRequest::generation`] when the
+/// save is asynchronous, so a completion for a closed or replaced sheet is
+/// dropped without the application inventing its own epoch.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SaveRequest {
     /// Which destination, as the dialog was told by [`Destination::id`].
     pub destination: String,
     /// What the user called it.
     pub name: String,
+    /// Open-sheet generation when this request was taken. Pass to
+    /// [`ShareDialog::saved_if`] / [`ShareDialog::save_failed_if`].
+    pub generation: u64,
 }
 
 /// What the dialog may offer this frame.
@@ -450,11 +456,15 @@ impl ShareDialog {
 
     /// A save the application should perform, if one was asked for.
     ///
-    /// Taken, so it is handled once. Call [`ShareDialog::saved`] or
-    /// [`ShareDialog::save_failed`] when it is done, or the dialog waits.
+    /// Taken, so it is handled once. Stamps [`SaveRequest::generation`] with
+    /// the open sheet's generation. Call [`ShareDialog::saved`] /
+    /// [`ShareDialog::save_failed`] (dialog-side pending guard) or
+    /// [`ShareDialog::saved_if`] / [`ShareDialog::save_failed_if`] with that
+    /// generation when the work finishes; otherwise the dialog waits.
     pub fn take_save_request(&mut self) -> Option<SaveRequest> {
-        let request = self.wants_save.take()?;
-        self.pending_save_generation = Some(self.sheet_generation);
+        let mut request = self.wants_save.take()?;
+        request.generation = self.sheet_generation;
+        self.pending_save_generation = Some(request.generation);
         Some(request)
     }
 
@@ -794,7 +804,12 @@ impl ShareDialog {
                     // Handed to the application rather than the backend. Only
                     // it can turn the open document into bytes, and a share
                     // transport is the wrong place to pass a workbook through.
-                    self.wants_save = Some(SaveRequest { destination, name });
+                    // `generation` is filled when taken; zero here is a placeholder.
+                    self.wants_save = Some(SaveRequest {
+                        destination,
+                        name,
+                        generation: 0,
+                    });
                     if let Some(sheet) = &mut self.open {
                         sheet.saving = Some(0);
                         sheet.save_error = None;
