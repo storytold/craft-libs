@@ -6,7 +6,7 @@ mod compat;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use compat::{CompatConfig, run_compat};
+use compat::{CompatConfig, ConsumerTarget, KNOWN_CONSUMERS, run_compat};
 
 const USAGE: &str = "\
 usage: cargo xtask <command>
@@ -18,15 +18,12 @@ commands:
 options for `compat`:
   --revision <REV>      Target craft-libs revision to validate (commit, branch, or HEAD; default: HEAD)
   --consumers <LIST>    Comma-separated list of consumers to test, or 'all' (default: photocraft,vectorcraft)
-  --all-consumers       Test all known consumers across the Craft suite
+  --consumer <PATH>     Direct path to a specific consumer repository directory
+  --target-pkg <PKG>    Explicit target package to test (default: looked up from known consumers)
   --consumers-dir <DIR> Directory containing consumer checkouts (default: ..)
   --skip-baseline       Skip running baseline checks, only test candidate revision
-  --dry-run             Verify worktree creation and dependency resolution without running test suite
-  --all-targets         Test all targets including doc-tests and integration tests (default: unit/lib only)
-  --clean-head-only     Validate committed HEAD without snapshotting local uncommitted changes
-  --quick               Override dev profile optimization (opt-level = 0) for fast dependency compilation
   --json                Emit machine-readable JSON report to stdout
-  --output <FILE>       File path to write JSON report (default: target/compat/report.json)
+  --output <FILE>       File path to write JSON report
 ";
 
 fn main() -> ExitCode {
@@ -43,13 +40,11 @@ fn main() -> ExitCode {
         },
         Some("compat") => {
             let mut revision = "HEAD".to_string();
-            let mut consumers = vec!["photocraft".to_string(), "vectorcraft".to_string()];
+            let mut consumer_names: Vec<String> = vec!["photocraft".to_string(), "vectorcraft".to_string()];
             let mut consumers_dir = root.parent().unwrap_or(&root).to_path_buf();
+            let mut direct_consumer_path: Option<PathBuf> = None;
+            let mut explicit_target_pkg: Option<String> = None;
             let mut skip_baseline = false;
-            let mut dry_run = false;
-            let mut all_targets = false;
-            let mut quick = false;
-            let mut clean_head_only = false;
             let mut json_output = false;
             let mut output_file = None;
 
@@ -62,16 +57,25 @@ fn main() -> ExitCode {
                             i += 1;
                         }
                     }
-                    "--all-consumers" => {
-                        consumers = compat::KNOWN_CONSUMERS.iter().map(|c| c.name.to_string()).collect();
+                    "--consumer" => {
+                        if i + 1 < args.len() {
+                            direct_consumer_path = Some(PathBuf::from(&args[i + 1]));
+                            i += 1;
+                        }
+                    }
+                    "--target-pkg" => {
+                        if i + 1 < args.len() {
+                            explicit_target_pkg = Some(args[i + 1].clone());
+                            i += 1;
+                        }
                     }
                     "--consumers" => {
                         if i + 1 < args.len() {
                             let val = &args[i + 1];
                             if val == "all" {
-                                consumers = compat::KNOWN_CONSUMERS.iter().map(|c| c.name.to_string()).collect();
+                                consumer_names = KNOWN_CONSUMERS.iter().map(|c| c.name.to_string()).collect();
                             } else {
-                                consumers = val.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
+                                consumer_names = val.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
                             }
                             i += 1;
                         }
@@ -83,10 +87,6 @@ fn main() -> ExitCode {
                         }
                     }
                     "--skip-baseline" => skip_baseline = true,
-                    "--dry-run" => dry_run = true,
-                    "--all-targets" => all_targets = true,
-                    "--quick" => quick = true,
-                    "--clean-head-only" => clean_head_only = true,
                     "--json" => json_output = true,
                     "--output" => {
                         if i + 1 < args.len() {
@@ -106,23 +106,28 @@ fn main() -> ExitCode {
                 i += 1;
             }
 
-            let config = CompatConfig {
-                candidate_revision: revision,
-                consumers,
-                consumers_dir,
-                skip_baseline,
-                dry_run,
-                all_targets,
-                quick,
-                clean_head_only,
-                json_output,
-                output_file,
+            let consumers = if let Some(direct_path) = direct_consumer_path {
+                let name = direct_path.file_name().unwrap_or_default().to_string_lossy().to_string();
+                vec![ConsumerTarget { name, repo_dir: direct_path, target_package: explicit_target_pkg }]
+            } else {
+                consumer_names
+                    .into_iter()
+                    .map(|name| {
+                        let known = KNOWN_CONSUMERS.iter().find(|k| k.name == name);
+                        let dir_name = known.map(|k| k.dir_name).unwrap_or(&name);
+                        let repo_dir = consumers_dir.join(dir_name);
+                        let target_package = explicit_target_pkg.clone().or_else(|| known.map(|k| k.default_target_pkg.to_string()));
+                        ConsumerTarget { name, repo_dir, target_package }
+                    })
+                    .collect()
             };
+
+            let config = CompatConfig { candidate_revision: revision, consumers, skip_baseline, json_output, output_file };
 
             match run_compat(&root, config) {
                 Ok(true) => ExitCode::SUCCESS,
                 Ok(false) => {
-                    eprintln!("\nCompatibility validation detected one or more regressions.");
+                    eprintln!("\nCompatibility verification detected regressions or unverified runs.");
                     ExitCode::FAILURE
                 }
                 Err(e) => {

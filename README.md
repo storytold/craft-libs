@@ -48,9 +48,7 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   widget-state styling boundary.
 - [Panel docking](docs/ui-docking.md): validated panel moves, floating groups, workspace adapters
   and an optional egui docking surface.
-- [Ecosystem inventory](docs/ecosystem-inventory.md): dependency map, contribution standards, CI
-  baselines and failure model across the Craft application suite.
-- [Cross-application compatibility](docs/compatibility-contract.md): validation runner (`cargo xtask compat`)
+- [Cross-application compatibility](docs/compatibility-recipe.md): validation recipe and runner (`cargo xtask compat`)
   testing proposed shared-library changes against consuming Craft applications.
 
 ## Tooling
