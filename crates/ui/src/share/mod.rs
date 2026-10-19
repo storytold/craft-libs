@@ -532,6 +532,9 @@ impl ShareDialog {
     }
 
     fn finish_saved(&mut self, id: impl Into<String>, name: impl Into<String>) {
+        if self.open.is_none() {
+            return;
+        }
         let id = id.into();
         if let Some(sheet) = &mut self.open {
             sheet.saving = None;
@@ -656,7 +659,7 @@ impl ShareDialog {
                 // A provider that cannot share must not leave a dialog up that
                 // was opened while the answer was still outstanding.
                 if !self.available() {
-                    self.open = None;
+                    self.close();
                 }
             }
             Answer::Lookup(found) => {
