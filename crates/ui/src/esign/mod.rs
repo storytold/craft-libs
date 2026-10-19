@@ -96,7 +96,7 @@ pub struct EsignDialog {
     capabilities: Option<Vec<EsignCapability>>,
     responsible: Option<String>,
     linked: bool,
-    asked_caps_at: f64,
+    asked_caps_at: Option<f64>,
     caps_seq: Option<u64>,
     draft_idempotency_key: Option<String>,
     seq: u64,
@@ -134,7 +134,7 @@ impl Default for EsignDialog {
             capabilities: None,
             responsible: None,
             linked: false,
-            asked_caps_at: 0.0,
+            asked_caps_at: None,
             caps_seq: None,
             draft_idempotency_key: None,
             seq: 0,
@@ -177,7 +177,7 @@ impl EsignDialog {
     pub fn set_backend(&mut self, backend: impl EsignBackend + 'static) {
         self.backend = Some(Box::new(backend));
         self.capabilities = None;
-        self.asked_caps_at = 0.0;
+        self.asked_caps_at = None;
         self.caps_seq = None;
     }
 
@@ -264,6 +264,9 @@ impl EsignDialog {
 
     fn pump(&mut self, now: f64) {
         while let Ok((seq, result)) = self.rx.try_recv() {
+            if self.caps_seq == Some(seq) {
+                self.caps_seq = None;
+            }
             if seq < self.newest && !matches!(result, Ok(Answer::Capabilities { .. })) {
                 // Stale lookup or status; keep capabilities even if older.
                 if !matches!(&result, Ok(Answer::Lookup(_))) {
@@ -278,7 +281,6 @@ impl EsignDialog {
                     self.capabilities = Some(capabilities);
                     self.responsible = Some(responsible_party);
                     self.linked = linked;
-                    self.caps_seq = None;
                 }
                 Ok(Answer::Lookup(contacts)) if seq == self.lookup_seq => {
                     self.matches = contacts;
@@ -306,9 +308,6 @@ impl EsignDialog {
                 Err(reason) => {
                     self.busy = false;
                     self.looking = false;
-                    if self.caps_seq == Some(seq) {
-                        self.caps_seq = None;
-                    }
                     self.error = Some(reason);
                 }
                 _ => {}
@@ -316,20 +315,13 @@ impl EsignDialog {
         }
 
         if self.backend.is_some() && self.caps_seq.is_none() {
-            let due = self.capabilities.is_none() || (!self.available() && now - self.asked_caps_at >= RETRY);
-            if due {
-                self.asked_caps_at = now;
+            let first = self.capabilities.is_none() && self.asked_caps_at.is_none();
+            let retry = self
+                .asked_caps_at
+                .is_some_and(|asked| !self.available() && now - asked >= RETRY);
+            if first || retry {
+                self.asked_caps_at = Some(now);
                 self.caps_seq = Some(self.submit(Request::Capabilities));
-                // A synchronous test backend answers before submit returns; drain once more.
-                while let Ok((seq, result)) = self.rx.try_recv() {
-                    if let Ok(Answer::Capabilities { capabilities, responsible_party, linked }) = result {
-                        let _ = seq;
-                        self.capabilities = Some(capabilities);
-                        self.responsible = Some(responsible_party);
-                        self.linked = linked;
-                        self.caps_seq = None;
-                    }
-                }
             }
         }
     }
@@ -356,6 +348,7 @@ impl EsignDialog {
         }
         let role = format!("Signer {}", self.recipients.len() + 1);
         self.recipients.push(Recipient { id: contact.id, name: contact.name, email, role, required: true, status: RecipientStatus::Pending });
+        self.draft_idempotency_key = None;
         self.query.clear();
         self.matches.clear();
     }
@@ -370,6 +363,7 @@ impl EsignDialog {
         }
         let role = format!("Signer {}", self.recipients.len() + 1);
         self.recipients.push(Recipient { id: email.clone(), name: email.clone(), email, role, required: true, status: RecipientStatus::Pending });
+        self.draft_idempotency_key = None;
         self.query.clear();
         self.matches.clear();
     }
@@ -493,11 +487,15 @@ impl EsignDialog {
         }
         if let Some(i) = remove {
             self.recipients.remove(i);
+            self.draft_idempotency_key = None;
         }
 
         ui.add_space(6.0);
         ui.label(&self.labels.message);
-        ui.add(egui::TextEdit::multiline(&mut self.message).desired_rows(3));
+        let message = ui.add(egui::TextEdit::multiline(&mut self.message).desired_rows(3));
+        if message.changed() {
+            self.draft_idempotency_key = None;
+        }
 
         ui.add_space(8.0);
         ui.horizontal(|ui| {

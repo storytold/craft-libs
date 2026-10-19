@@ -134,17 +134,44 @@ pub fn write(path: &Path, accounts: &Accounts) -> Result<(), Error> {
     let dir = path.parent().ok_or_else(|| Error::Io(format!("{} has no parent folder", path.display())))?;
     std::fs::create_dir_all(dir).map_err(|e| Error::Io(format!("couldn't create {} ({e})", dir.display())))?;
     let json = serde_json::to_vec_pretty(accounts).map_err(|e| Error::Malformed(e.to_string()))?;
+    use std::io::Write;
+
     let stamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
+    let pid = std::process::id();
     let tmp = dir.join(format!(
-        ".{}.{}.tmp",
+        ".{}.{}.{}.tmp",
         path.file_name().and_then(|n| n.to_str()).unwrap_or("accounts"),
-        stamp
+        stamp,
+        pid
     ));
-    std::fs::write(&tmp, &json).map_err(|e| Error::Io(format!("couldn't write {} ({e})", tmp.display())))?;
-    restrict(&tmp)?;
+    #[cfg(unix)]
+    {
+        use std::fs::OpenOptions;
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&tmp)
+            .map_err(|e| Error::Io(format!("couldn't create {} ({e})", tmp.display())))?;
+        file.write_all(&json)
+            .map_err(|e| Error::Io(format!("couldn't write {} ({e})", tmp.display())))?;
+    }
+    #[cfg(not(unix))]
+    {
+        use std::fs::OpenOptions;
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&tmp)
+            .map_err(|e| Error::Io(format!("couldn't create {} ({e})", tmp.display())))?;
+        file.write_all(&json)
+            .map_err(|e| Error::Io(format!("couldn't write {} ({e})", tmp.display())))?;
+        restrict(&tmp)?;
+    }
     std::fs::rename(&tmp, path).map_err(|e| Error::Io(format!("couldn't replace {} ({e})", path.display())))
 }
 

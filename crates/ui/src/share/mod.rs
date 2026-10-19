@@ -693,10 +693,11 @@ impl ShareDialog {
             sheet.error = Some(reason);
         } else if sheet.destinations_seq == Some(seq) {
             sheet.destinations_seq = None;
-            sheet.error = Some(reason);
+            sheet.destinations = Some(Vec::new());
+            sheet.save_error = Some(reason);
         } else if sheet.link_seq == Some(seq) {
             sheet.link_seq = None;
-            sheet.error = Some(reason);
+            sheet.save_error = Some(reason);
         }
     }
 
@@ -953,16 +954,16 @@ fn save_first(ui: &mut Ui, sheet: &mut Sheet, labels: &ShareLabels, acts: &mut V
         ui.add_space(4.0);
     }
 
+    if let Some(problem) = &sheet.save_error {
+        ui.add_space(4.0);
+        ui.label(RichText::new(problem).color(ui.visuals().error_fg_color));
+    }
+
     let Some(into) = sheet.destination.clone() else { return };
 
     ui.add_space(8.0);
     let saving = sheet.saving.is_some();
     ui.add_enabled(!saving, egui::TextEdit::singleline(&mut sheet.save_as).hint_text(labels.name_hint.as_str()).desired_width(f32::INFINITY));
-
-    if let Some(problem) = &sheet.save_error {
-        ui.add_space(4.0);
-        ui.label(RichText::new(problem).color(ui.visuals().error_fg_color));
-    }
 
     ui.add_space(8.0);
     ui.horizontal(|ui| {
