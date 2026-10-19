@@ -11,9 +11,8 @@ the Forgejo mirror, and storytold/craft-libs.
 ## 1. Fork vs Upstream Divergence
 
 The wdunn001 fork's `main` is significantly ahead of the storytold upstream. Every crate
-introduced by this epic landed via PR #11 on the fork and has been merged to the Forgejo
-mirror (`origin = devops.quasarke.net/storytold-ref/craft-libs`). None of it has been
-submitted or merged to `storytold/craft-libs`.
+introduced by this epic landed via PR #11 on the fork. None of it has been submitted or
+merged to `storytold/craft-libs` outside this track's upstream PRs.
 
 | Crate | In wdunn001 fork | In storytold upstream |
 |---|---|---|
@@ -148,6 +147,6 @@ are the common dependency everything else imports.
 ---
 
 *Drafted from `gh issue view` output for storytold/craft-libs#48, #52, #123, #132 and
-storytold/designcraft#878, plus local `git log` on the wdunn001 fork and Forgejo mirror
-at `C:\Users\willi\source\craft-libs`. All status claims are verified against the GitHub
-API or the local object store; nothing in this document is inferred.*
+storytold/designcraft#878, plus local `git log` on a local checkout of the wdunn001 fork.
+All status claims are verified against the GitHub API or the local object store; nothing
+in this document is inferred.*

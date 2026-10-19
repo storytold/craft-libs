@@ -79,6 +79,11 @@ async function dispatchStorageFlush(port, _data) {
           ? result.pending_count
           : 0;
     } catch (err) {
+      for (const { key, bytes } of pending) {
+        if (!pendingBuffer.has(key)) {
+          pendingBuffer.set(key, bytes);
+        }
+      }
       postError(port, err);
       return;
     }

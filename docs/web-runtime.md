@@ -7,29 +7,29 @@ Portable browser runtime for Craft WASM apps: tier storage, SharedWorker RPC, an
 | Layer | Typical crate / repo | Role |
 | --- | --- | --- |
 | Contracts | **craft-libs → `craft-cloud`** | `Files`, `Entry`, errors — no IO, no vendor |
-| HTTP gateway | **Your service** (see lab stack below) | Session, `/api/v1`-style routes, provider held server-side |
+| HTTP gateway | **Your service** | Session, `/api/v1`-style routes, provider held server-side |
 | Browser transport | **`craft-cloud-client`** (today lives in collab-craft) | Route builders + `fetch`; any gateway that speaks the same JSON and routes can be used |
 | Tab + worker | **craft-libs → `craft-runtime`**, `craft-worker-host`, `craft-tier-store`, `craft-gpu-*` | Mirror/OPFS glue, worker protocol, GPU registry |
 
 Apps never embed provider credentials or WebDAV. They call the gateway; the gateway implements `craft_cloud::Provider`.
 
-## Lab stack (what we run)
+## Reference stack
 
-This is **our** deployment, not a hard-coded limit of the libraries:
+One deployment shape that exercises these libraries (not a hard-coded limit):
 
-1. **`craft-cloud`** — contracts in craft-libs  
-2. **collab-craft** — HTTP service + session + provider wiring ([craft.quasarke.net](https://craft.quasarke.net))  
-3. **`craft-cloud-client`** — wasm/desktop client for those routes (collab-craft repo)  
+1. **`craft-cloud`** — contracts in craft-libs
+2. **collab-craft** — HTTP service + session + provider wiring
+3. **`craft-cloud-client`** — wasm/desktop client for those routes (collab-craft repo)
 4. **`-web` apps** — EffectCraft, FilmCraft, … on SharedWorker + `craft-runtime`
 
 **Repin order:** craft-libs → collab-craft (when API/contracts change) → application `-web` crates.
 
-Static host on CollabCraft ships app bundles plus runtime JS at the **web root** (not a subdirectory named like an app):
+Serve app bundles plus runtime JS from the **web root** of the CollabCraft (or equivalent) static host — not a subdirectory named like an app:
 
-| Lab URL | Notes |
+| Asset | Notes |
 | --- | --- |
-| `https://craft.quasarke.net/craft-worker-host.js` | SharedWorker bootstrap (+ `.br` / `.gz` siblings) |
-| Same origin for `craft-worker-host-routing.js`, `craft-dedicated-worker.js`, `opfs-flush.js` | Published via `homelab-compose` `collabcraft-stack/deploy-runtime-assets.sh` → `/mnt/data/craft-web/` |
+| `craft-worker-host.js` | SharedWorker bootstrap (+ `.br` / `.gz` siblings when the host negotiates compression) |
+| Same origin for `craft-worker-host-routing.js`, `craft-dedicated-worker.js`, `opfs-flush.js` | Publish beside the app shell |
 
 **Do not** publish under `/runtime/` on CollabCraft: every directory under the web root is treated as a hosted app, so static worker scripts would redirect to sign-in.
 
@@ -60,31 +60,22 @@ Ship `craft-dedicated-worker.js` (+ brotli) beside `craft-worker-host.js` on the
 Tier key layout and OPFS paths: [tier-store.md](./tier-store.md).
 4. `gpu_jobs` → `gpu_batch_done` or `error`
 
-Cloud hydration/flush over HTTP is **`craft-cloud-client` from the worker**, not provider code in craft-libs. See [collabcraft-range-api.md](./collabcraft-range-api.md) for range streaming on the gateway we ship.
+Cloud hydration/flush over HTTP is **`craft-cloud-client` from the worker**, not provider code in craft-libs. See [collabcraft-range-api.md](./collabcraft-range-api.md) for range streaming on the gateway.
 
-## Build and test (lab hosts — not the laptop)
+## Build and test
 
-Rust `fmt` / `test` for this workspace run on **Linux builders in the lab**:
-
-| Host | Role |
-| --- | --- |
-| **192.168.1.88** (vin ez) | Primary build box |
-| **192.168.1.57** (ai-node-02) | Secondary builder |
-
-On the host, with a checkout of craft-libs (and collab-craft when touching the gateway):
+Rust `fmt` / `test` for this workspace need a Linux host with `cargo` (and Node if you run the protocol smokes locally):
 
 ```bash
 ./scripts/test-lab.sh
 ```
 
-Optional on any machine with Node only (protocol JSON smoke, no `cargo`):
-
-```bash
-node tests/worker-host-protocol.mjs
-```
-
 ## Verify (deploy)
 
-**CollabCraft** on **192.168.1.88:9451** (edge **craft.quasarke.net**): `GET /healthz` → `ok`; unauthenticated `GET /api/v1/me` → `unauthenticated`; ranged tier API on **`collabcraft:bfa5d73`** (`tier-store-range`). Static worker: `curl -H 'Accept-Encoding: br' https://craft.quasarke.net/craft-worker-host.js` → **200** + `content-encoding: br`.
+Against a running CollabCraft (or compatible) gateway:
 
-After each image or asset change: recreate the container (`docker compose up -d --force-recreate`) and re-run `deploy-runtime-assets.sh` on `.88`.
+- `GET /healthz` → `ok`
+- Unauthenticated `GET /api/v1/me` → `unauthenticated`
+- Static worker: `curl -H 'Accept-Encoding: br' https://<your-host>/craft-worker-host.js` → **200** with brotli when precompressed assets are published
+
+After each image or asset change, recreate the service containers and republish the static worker scripts to the web root.

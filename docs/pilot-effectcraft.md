@@ -325,10 +325,10 @@ Load the app under both worker modes and confirm both complete a noop `craft.noo
 
 | Mode | How to trigger | Expected console |
 | --- | --- | --- |
-| SharedWorker (default) | No extra flags; app loads `craft-worker-host.js` from CollabCraft or your static host | `[craft-worker] ready` with `WorkerKind::SharedWorker` in caps |
-| DedicatedWorker fallback | Block `craft-worker-host.js` in DevTools → Network → Block URL pattern, or point the worker URL at `craft-dedicated-worker.js` explicitly | `[craft-worker] ready` with `WorkerKind::DedicatedWorker` in caps |
+| SharedWorker (default) | No extra flags; app loads `craft-worker-host.js` from CollabCraft or your static host | `ready` with `type: "ready"` and device caps (no worker kind in the payload) |
+| DedicatedWorker fallback | Block `craft-worker-host.js` in DevTools → Network → Block URL pattern, or point the worker URL at `craft-dedicated-worker.js` explicitly | Same `ready` shape as SharedWorker |
 
-Both paths must return `WorkerMessage::GpuBatchDone` with all-success outcomes. Message tags (`init`, `gpu_jobs`, `storage_flush`) are identical between modes — only the `worker_kind` field in `Ready` differs. See [web-runtime.md § SharedWorker vs dedicated worker](./web-runtime.md) for the broker-only SharedWorker pattern when WebGPU is unavailable inside a SharedWorker context.
+Both paths must return `WorkerMessage::GpuBatchDone` with all-success outcomes. Message tags (`init`, `gpu_jobs`, `storage_flush`) are identical between modes; worker URL selection is host-side (`WorkerKind` in Rust), not a field on `Ready.caps`. See [web-runtime.md § SharedWorker vs dedicated worker](./web-runtime.md) for the broker-only SharedWorker pattern when WebGPU is unavailable inside a SharedWorker context.
 
 ---
 

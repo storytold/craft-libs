@@ -69,8 +69,11 @@ fn account<A: CloudApp>(app: &mut A, ui: &mut Ui) {
         service,
         linked: a.provider_linked,
     });
+    let new_accounts: Vec<_> = known.into_iter().collect();
     let cloud = app.cloud_mut();
-    cloud.accounts.set(known.into_iter().collect());
+    if cloud.accounts.accounts() != new_accounts.as_slice() {
+        cloud.accounts.set(new_accounts);
+    }
     cloud.accounts.show(ui);
 
     while let Some(action) = app.cloud_mut().accounts.take_action() {

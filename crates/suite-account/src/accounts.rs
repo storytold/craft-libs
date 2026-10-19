@@ -134,7 +134,15 @@ pub fn write(path: &Path, accounts: &Accounts) -> Result<(), Error> {
     let dir = path.parent().ok_or_else(|| Error::Io(format!("{} has no parent folder", path.display())))?;
     std::fs::create_dir_all(dir).map_err(|e| Error::Io(format!("couldn't create {} ({e})", dir.display())))?;
     let json = serde_json::to_vec_pretty(accounts).map_err(|e| Error::Malformed(e.to_string()))?;
-    let tmp = path.with_extension("tmp");
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let tmp = dir.join(format!(
+        ".{}.{}.tmp",
+        path.file_name().and_then(|n| n.to_str()).unwrap_or("accounts"),
+        stamp
+    ));
     std::fs::write(&tmp, &json).map_err(|e| Error::Io(format!("couldn't write {} ({e})", tmp.display())))?;
     restrict(&tmp)?;
     std::fs::rename(&tmp, path).map_err(|e| Error::Io(format!("couldn't replace {} ({e})", path.display())))

@@ -131,6 +131,20 @@ pub fn adopt<S: TokenStore>(store: &Store<S>, path: &Path, now: i64) -> Result<A
     if let Err(why) = store.usable() {
         return Ok(Adopted::Kept { why: why.to_string() });
     }
+    let service = accounts::normalise(&legacy.service);
+    let id = accounts::handle(&service, &legacy.user);
+    if store.has_token(&id)? {
+        match std::fs::remove_file(path) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(Error::Io(format!("the suite already holds this session. {} is still there ({e})", path.display()))),
+        }
+        let list = store.accounts()?;
+        let Some(account) = list.get(&id).cloned() else {
+            return Ok(Adopted::Kept { why: format!("a token exists for {id} but the account list has no row") });
+        };
+        return Ok(Adopted::Taken(account));
+    }
     let new = NewAccount { service: legacy.service, user: legacy.user, display: legacy.display, email: legacy.email, linked: false };
     let account = store.sign_in(&new, &legacy.token, now)?;
     // Only now, with the session held somewhere better, does the file go.

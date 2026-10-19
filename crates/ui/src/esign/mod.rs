@@ -97,6 +97,8 @@ pub struct EsignDialog {
     responsible: Option<String>,
     linked: bool,
     asked_caps_at: f64,
+    caps_seq: Option<u64>,
+    draft_idempotency_key: Option<String>,
     seq: u64,
     tx: Sender<Inbox>,
     rx: Receiver<Inbox>,
@@ -133,6 +135,8 @@ impl Default for EsignDialog {
             responsible: None,
             linked: false,
             asked_caps_at: 0.0,
+            caps_seq: None,
+            draft_idempotency_key: None,
             seq: 0,
             tx,
             rx,
@@ -174,6 +178,7 @@ impl EsignDialog {
         self.backend = Some(Box::new(backend));
         self.capabilities = None;
         self.asked_caps_at = 0.0;
+        self.caps_seq = None;
     }
 
     /// False until the service reports [`EsignCapability::Envelopes`].
@@ -188,12 +193,15 @@ impl EsignDialog {
     /// Open for a document. `sender` is the active account identity.
     pub fn open(&mut self, document_id: String, document_title: String, document_etag: Option<String>, sender: Identity) {
         let fingerprint = format!("{}@{}", sender.id, sender.email.as_deref().unwrap_or(""));
-        if self.account_fingerprint.as_deref() != Some(fingerprint.as_str()) {
+        let account_changed = self.account_fingerprint.as_deref() != Some(fingerprint.as_str());
+        let document_changed = self.document_id != document_id;
+        if account_changed || document_changed {
             self.recipients.clear();
             self.message.clear();
             self.envelope = None;
             self.completed_bytes = None;
             self.error = None;
+            self.draft_idempotency_key = None;
         }
         self.account_fingerprint = Some(fingerprint);
         self.document_id = document_id;
@@ -270,6 +278,7 @@ impl EsignDialog {
                     self.capabilities = Some(capabilities);
                     self.responsible = Some(responsible_party);
                     self.linked = linked;
+                    self.caps_seq = None;
                 }
                 Ok(Answer::Lookup(contacts)) if seq == self.lookup_seq => {
                     self.matches = contacts;
@@ -297,22 +306,29 @@ impl EsignDialog {
                 Err(reason) => {
                     self.busy = false;
                     self.looking = false;
+                    if self.caps_seq == Some(seq) {
+                        self.caps_seq = None;
+                    }
                     self.error = Some(reason);
                 }
                 _ => {}
             }
         }
 
-        if self.backend.is_some() && (self.capabilities.is_none() || (now - self.asked_caps_at) > RETRY && !self.available()) {
-            self.asked_caps_at = now;
-            let _ = self.submit(Request::Capabilities);
-            // A synchronous test backend answers before submit returns; drain once more.
-            while let Ok((seq, result)) = self.rx.try_recv() {
-                if let Ok(Answer::Capabilities { capabilities, responsible_party, linked }) = result {
-                    let _ = seq;
-                    self.capabilities = Some(capabilities);
-                    self.responsible = Some(responsible_party);
-                    self.linked = linked;
+        if self.backend.is_some() && self.caps_seq.is_none() {
+            let due = self.capabilities.is_none() || (!self.available() && now - self.asked_caps_at >= RETRY);
+            if due {
+                self.asked_caps_at = now;
+                self.caps_seq = Some(self.submit(Request::Capabilities));
+                // A synchronous test backend answers before submit returns; drain once more.
+                while let Ok((seq, result)) = self.rx.try_recv() {
+                    if let Ok(Answer::Capabilities { capabilities, responsible_party, linked }) = result {
+                        let _ = seq;
+                        self.capabilities = Some(capabilities);
+                        self.responsible = Some(responsible_party);
+                        self.linked = linked;
+                        self.caps_seq = None;
+                    }
                 }
             }
         }
@@ -381,7 +397,10 @@ impl EsignDialog {
             placements: self.placements.clone(),
             expires: None,
         };
-        let idempotency_key = format!("esign-{}-{}", self.document_id, self.seq.saturating_add(1));
+        if self.draft_idempotency_key.is_none() {
+            self.draft_idempotency_key = Some(format!("esign-{}-{}", self.document_id, self.seq.saturating_add(1)));
+        }
+        let idempotency_key = self.draft_idempotency_key.clone().unwrap_or_default();
         self.busy = true;
         self.error = None;
         self.send_out = Some(SendRequest { draft, idempotency_key });

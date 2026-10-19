@@ -102,8 +102,8 @@ Today [`opfs.rs`](https://github.com/storytold/filmcraft/blob/main/apps/filmcraf
 
 | OPFS path (today) | `StoreKey` suggestion | `KeyClass` ([policy](../crates/tier-store/src/policy.rs)) |
 |-------------------|----------------------|-----------------------------------------------------------|
-| `recovery/snapshot.fcproj` | `config/recovery/snapshot.fcproj` or `recovery/snapshot.fcproj` | Config |
-| `recovery/meta.json` | `recovery/meta.json` | Config |
+| `recovery/snapshot.fcproj` | `config/recovery/snapshot.fcproj` | Config |
+| `recovery/meta.json` | `config/recovery/meta.json` | Config |
 | `media/<name>` | `media/<name>` | Media |
 
 Autosave policy (`recovery_policy`, revision/dirty/clean) remains in `filmcraft-web`; only persistence I/O moves behind `craft-runtime` + tier-store coordinator.
