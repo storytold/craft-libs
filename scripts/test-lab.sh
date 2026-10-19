@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Linux builder script for runtime crate tests. Usage: ./scripts/test-lab.sh [repo-root]
+# Runtime crate fmt/tests. Needs cargo on a Linux host.
+# Usage: ./scripts/test-lab.sh [repo-root]
 set -euo pipefail
 ROOT="${1:-$(cd "$(dirname "$0")/.." && pwd)}"
 cd "$ROOT"

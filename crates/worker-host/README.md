@@ -72,28 +72,28 @@ same origin, so the module is compiled exactly once per browser session regardle
 many tabs open. DedicatedWorker spawns a new worker per tab; each tab's worker receives its
 own structured-clone of the module (no recompile, but separate instantiation per tab).
 
-## craft.quasarke.net (CollabCraft static host)
+## CollabCraft static host
 
-Serve `craft-worker-host.js` from the same origin as the Craft app (or a dedicated
-static path on `https://craft.quasarke.net`). Tabs construct the worker with that URL.
+Serve `craft-worker-host.js` from the same origin as the Craft app (or another dedicated
+static origin your CSP allows). Tabs construct the worker with that URL.
 
 **Content-Security-Policy** must allow the SharedWorker script and worker execution:
 
-- `script-src` must include the origin that serves `craft-worker-host.js` (typically
-  `'self'` on `craft.quasarke.net`).
+- `script-src` must include the origin that serves `craft-worker-host.js` (typically `'self'`).
 - `worker-src` must include the same origin (and `'self'`). Without `worker-src`,
   browsers fall back to `script-src`; keep them consistent so SharedWorker load is not
   blocked after deploy.
 - Avoid `worker-src 'none'` on pages that use Craft runtime.
 
-Example baseline for app HTML on `craft.quasarke.net`:
+Example baseline for app HTML:
 
 ```
 Content-Security-Policy: default-src 'self'; script-src 'self'; worker-src 'self'; connect-src 'self' wss: https:;
 ```
 
-Adjust `connect-src` for API, WebSocket, and Nextcloud endpoints your app uses. Precompress
-with brotli (`craft-worker-host.js.br`) when the static host supports content negotiation.
+Adjust `connect-src` for API, WebSocket, and storage-provider endpoints your app uses.
+Precompress with brotli (`craft-worker-host.js.br`) when the static host supports content
+negotiation.
 
 ## Tests
 
