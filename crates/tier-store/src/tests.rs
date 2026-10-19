@@ -51,6 +51,37 @@ fn restore_pending_prepends_before_newer_puts() {
 }
 
 #[test]
+fn a_late_seed_does_not_overwrite_a_put_or_delete() {
+    let mut store = MirrorStore::new(DefaultTierPolicy, 1024);
+    let key = StoreKey::new("config/session.ecproj");
+    store.put(key.clone(), b"new".to_vec());
+    store.seed(key.clone(), b"stale".to_vec());
+    assert_eq!(store.get(&key), Some(b"new".as_slice()));
+    let pending = store.take_pending();
+    assert_eq!(pending[0].bytes, b"new");
+    store.seed(key.clone(), b"stale".to_vec());
+    assert_eq!(store.get(&key), Some(b"new".as_slice()), "an in-flight flush still owns the key");
+
+    store.delete(key.clone());
+    store.seed(key.clone(), b"stale".to_vec());
+    assert!(store.get(&key).is_none());
+    let pending = store.take_pending();
+    assert!(pending[0].deleted);
+}
+
+fn requeue_of_an_evicted_cache_entry_keeps_its_bytes() {
+    let mut store = MirrorStore::new(DefaultTierPolicy, 4);
+    let key = StoreKey::new("cache/slice");
+    store.put(key.clone(), vec![1, 2, 3, 4, 5]);
+    assert!(store.get(&key).is_none(), "over budget, so the resident copy is gone");
+    let pending = store.take_pending();
+    assert_eq!(pending[0].bytes, vec![1, 2, 3, 4, 5]);
+    assert!(!pending[0].deleted);
+    store.requeue(&key);
+    let again = store.take_pending();
+    assert_eq!(again, pending);
+}
+
 fn seed_does_not_flush_and_delete_is_a_tombstone() {
     let mut store = MirrorStore::new(DefaultTierPolicy, 1024);
     let key = StoreKey::new("config/session.ecproj");

@@ -50,7 +50,7 @@ async function craftRuntimeFlushPending(data) {
     return { pending_count: 0 };
   }
   if (!hasOpfs()) {
-    return { pending_count: pending.length };
+    throw new Error('OPFS is unavailable');
   }
   const root = await navigator.storage.getDirectory();
   for (const entry of pending) {
