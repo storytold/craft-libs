@@ -324,10 +324,10 @@ pub fn start<A: CloudApp>(app: &mut A) {
 
 /// Begins signing in to the service.
 ///
-/// A worker signs in before any job it is given, so asking who the account is
-/// starts the browser flow. The badge says it is working, because the worker
-/// then blocks until the user finishes in the browser and a button that looks
-/// idle for a minute reads as broken.
+/// [`Job::SignIn`] is its own job so [`Job::Account`] can stay read-only on
+/// cold start. The badge says it is working, because the worker then blocks
+/// until the user finishes in the browser and a button that looks idle for a
+/// minute reads as broken.
 pub fn sign_in<A: CloudApp>(app: &mut A) {
     if !available(app) {
         return;
@@ -342,7 +342,7 @@ pub fn sign_in<A: CloudApp>(app: &mut A) {
     cloud.asked_account = true;
     cloud.link = None;
     cloud.status = Some(working);
-    submit(app, Job::Account);
+    submit(app, Job::SignIn);
 }
 
 /// Ends the session, here and at the service.
