@@ -69,22 +69,10 @@ SharedWorker bootstrap: [`craft-worker-host.js`](../assets/craft-worker-host.js)
 
 ## Build and test
 
-Full Rust workspace tests run on **lab Linux builders only** (not the Windows laptop):
-
-| Host | IP |
-| --- | --- |
-| vinez | 192.168.1.88 |
-| ai-node-02 | 192.168.1.57 |
+Rust workspace tests for the runtime crates need a Linux host with `cargo`:
 
 ```bash
 ./scripts/test-lab.sh
-```
-
-Local smoke without Podman/cargo (protocol + OPFS flush module):
-
-```bash
-node tests/worker-host-protocol.mjs
-node tests/opfs-flush.mjs
 ```
 
 ## Related docs

@@ -31,7 +31,7 @@ globalThis.craftRuntimeFlushPending = async (data) => {
 ```
 
 If `craftRuntimeHandleGpuBatch` is unset, the stub completes `gpu_jobs` with empty outcomes.
-If `craftRuntimeFlushPending` is unset, `storage_flush` replies with `pending_count: 0`.
+If `craftRuntimeFlushPending` is unset, `storage_flush` replies with `pending_count` equal to the drained pending batch length.
 Loading `opfs-flush.js` from the worker bootstrap installs a default flush hook.
 
 ## WebAssembly.Module sharing

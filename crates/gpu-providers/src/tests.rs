@@ -37,9 +37,10 @@ fn gpu_providers_cargo_has_no_app_deps() {
     let manifest = include_str!("../Cargo.toml");
     for line in manifest.lines() {
         let t = line.trim();
-        if t.starts_with("effectcraft") || t.starts_with("filmcraft") || t.contains("effectcraft-") || t.contains("filmcraft-") {
-            panic!("forbidden app dependency line: {t}");
-        }
+        assert!(
+            !(t.starts_with("effectcraft") || t.starts_with("filmcraft") || t.contains("effectcraft-") || t.contains("filmcraft-")),
+            "forbidden app dependency line: {t}"
+        );
     }
 }
 

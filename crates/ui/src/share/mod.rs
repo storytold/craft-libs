@@ -225,6 +225,8 @@ struct Sheet {
     granting: Option<u64>,
     /// Where it could be saved. `None` until the answer arrives.
     destinations: Option<Vec<Destination>>,
+    destinations_seq: Option<u64>,
+    link_seq: Option<u64>,
     /// Which one is selected, by id.
     destination: Option<String>,
     /// The name typed while the document still has nowhere to live.
@@ -245,6 +247,8 @@ impl Sheet {
     fn new(id: String, title: String) -> Sheet {
         Sheet {
             destinations: None,
+            destinations_seq: None,
+            link_seq: None,
             destination: None,
             save_as: title.clone(),
             saving: None,
@@ -420,7 +424,10 @@ impl ShareDialog {
             // Nothing to share yet, so the dialog opens on the places it could
             // go. Asked for here rather than on the first frame, so the list is
             // usually there by the time anybody looks.
-            self.issue(Request::Destinations);
+            let seq = self.issue(Request::Destinations);
+            if let Some(sheet) = &mut self.open {
+                sheet.destinations_seq = Some(seq);
+            }
         }
         if !id.is_empty() {
             let seq = self.issue(Request::Access { id });
@@ -612,7 +619,9 @@ impl ShareDialog {
                 }
             }
             Answer::Destinations(list) => {
-                if let Some(sheet) = &mut self.open {
+                if let Some(sheet) = &mut self.open
+                    && sheet.destinations_seq == Some(seq)
+                {
                     // One destination and nothing to choose between: pick it,
                     // so the only linked account is not a click somebody has
                     // to make for no reason.
@@ -623,6 +632,7 @@ impl ShareDialog {
                         sheet.destination = Some(only.id.clone());
                     }
                     sheet.destinations = Some(list);
+                    sheet.destinations_seq = None;
                 }
             }
             Answer::Linked => {
@@ -630,7 +640,10 @@ impl ShareDialog {
                 if let Some(sheet) = &mut self.open {
                     sheet.destinations = None;
                 }
-                self.issue(Request::Destinations);
+                let seq = self.issue(Request::Destinations);
+                if let Some(sheet) = &mut self.open {
+                    sheet.destinations_seq = Some(seq);
+                }
             }
             Answer::Withdrawn { share_id } => {
                 if let Some(sheet) = &mut self.open {
@@ -678,6 +691,12 @@ impl ShareDialog {
         } else if sheet.withdrawing.iter().any(|(s, _)| *s == seq) {
             sheet.withdrawing.retain(|(s, _)| *s != seq);
             sheet.error = Some(reason);
+        } else if sheet.destinations_seq == Some(seq) {
+            sheet.destinations_seq = None;
+            sheet.error = Some(reason);
+        } else if sheet.link_seq == Some(seq) {
+            sheet.link_seq = None;
+            sheet.error = Some(reason);
         }
     }
 
@@ -715,7 +734,11 @@ impl ShareDialog {
                     // The answer to this is usually a refusal carrying the URL
                     // to open, because launching a browser is the host
                     // application's business and not this crate's.
-                    self.issue(Request::Link { destination });
+                    let seq = self.issue(Request::Link { destination });
+                    if let Some(sheet) = &mut self.open {
+                        sheet.link_seq = Some(seq);
+                        sheet.error = None;
+                    }
                 }
                 Act::Withdraw(share_id) => {
                     let seq = self.issue(Request::Withdraw { share_id: share_id.clone() });

@@ -140,6 +140,11 @@ impl<S: TokenStore> Store<S> {
         self.tokens.available().map_err(Error::Keychain)
     }
 
+    /// Whether a readable token is stored for this account handle.
+    pub fn has_token(&self, id: &str) -> Result<bool, Error> {
+        Ok(self.tokens.get(id).map_err(Error::Keychain)?.is_some())
+    }
+
     /// Every account on file. An isolated store has none.
     pub fn accounts(&self) -> Result<Accounts, Error> {
         match self.path() {

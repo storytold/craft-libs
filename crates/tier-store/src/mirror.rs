@@ -26,10 +26,16 @@ impl<P: TierPolicy> MirrorStore<P> {
     }
 
     pub fn get(&mut self, key: &StoreKey) -> Option<&[u8]> {
-        if self.policy.classify(key) == KeyClass::Cache {
+        let hit = self.data.get(key).is_some();
+        if hit && self.policy.classify(key) == KeyClass::Cache {
             self.lru_touch(key.clone());
         }
         self.data.get(key).map(|v| v.as_slice())
+    }
+
+    /// Put flushed writes back when a sink accepted only part of a batch.
+    pub fn restore_pending(&mut self, writes: impl IntoIterator<Item = PendingWrite>) {
+        self.pending.extend(writes);
     }
 
     pub fn put(&mut self, key: StoreKey, bytes: Vec<u8>) {
