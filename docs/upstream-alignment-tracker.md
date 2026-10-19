@@ -1,8 +1,8 @@
 # Upstream Alignment Tracker — craft-libs#132 Epic
 
 **Scope:** craft-runtime / tier-store / worker-host / craft-gpu provider stack (web perf),
-and every pending upstream handoff that blocks a clean story between the wdunn001 fork,
-the Forgejo mirror, and storytold/craft-libs.
+and every pending upstream handoff that blocks a clean story between the wdunn001 fork
+and storytold/craft-libs.
 
 **As of:** 2026-10-15 · fork HEAD `1d4ffc1` · storytold upstream HEAD `8f5a283`
 
@@ -118,15 +118,14 @@ Until step 1 completes, `designcraft#878` cannot be merged without violating the
 - CI runtime limits: #136
 - Docking, UI, and test-portability fixes: #107–#110
 
-**Lab-only (wdunn001 fork + Forgejo mirror; not on storytold upstream):**
+**On the wdunn001 fork only (not yet on storytold upstream outside this track):**
 - All of craft-libs#132's crates: `craft-cloud`, `craft-tier-store`, `craft-worker-host`,
   `craft-runtime`, `craft-gpu`, `craft-gpu-wgpu`, `craft-gpu-null`, `craft-gpu-providers`
 - Cloud and presence UI from #48 / #52
 - `collab-craft` (pending transfer, §2)
 - `designcraft#878` CloudApp / etag pattern (pinned to fork, §4)
 
-The fork is at least 30 commits ahead of the upstream on the runtime/cloud axis. The
-Forgejo mirror tracks the fork. The storytold upstream has never seen these crates.
+The fork is at least 30 commits ahead of the upstream on the runtime/cloud axis.
 
 ---
 
