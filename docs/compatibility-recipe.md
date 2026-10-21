@@ -17,7 +17,7 @@ cd /tmp/compat-wt-consumer
 Run the consumer's test suite against its committed dependencies to establish baseline status:
 
 ```sh
-cargo test --locked -p <target-package>
+cargo test --locked --no-fail-fast -p <target-package>
 ```
 
 Record whether all tests pass or if existing failures are present on the committed branch.
@@ -38,16 +38,16 @@ Ensure file paths use forward slashes (`/`) across all platforms to prevent path
 Verify that Cargo actually resolves the candidate paths rather than remote Git pins:
 
 ```sh
-cargo tree --offline -p <target-package> -i craft-ui
+cargo tree --offline --workspace -i craft-ui
 ```
 
-Confirm that the output references the local candidate path (`/path/to/craft-libs/crates/ui`).
+Confirm that the root package source exactly matches the full local candidate path (`/path/to/craft-libs/crates/ui`).
 
 ### 5. Candidate Test Run & Teardown
 Execute the test suite against the candidate revision:
 
 ```sh
-cargo test -p <target-package>
+cargo test --no-fail-fast -p <target-package>
 ```
 
 Compare candidate test outcomes against baseline:
@@ -81,4 +81,31 @@ cargo xtask compat --consumer ../designcraft --target-pkg designcraft-ui-egui
 cargo xtask compat --revision HEAD --consumers vectorcraft
 ```
 
-The runner creates isolated worktrees, checks patch completeness across all pinned crates, validates candidate provenance via `cargo tree`, compares baseline and candidate test counts, and cleans up temporary worktrees on exit.
+The runner reads the lockfile from the recorded consumer commit and creates detached worktrees in an exclusively reserved per-run directory under the system temporary directory (`craft-compat-worktrees/`). Worktrees outside the candidate workspace prevent standalone consumers from inheriting its workspace membership or Cargo configuration. Baseline tests use committed pins with `--locked`; candidate tests use complete patches for pinned crates, including vendor crates under `[patch.crates-io]`. Existing consumer Cargo settings are retained. Conflicting patch tables fail closed and require manual reconciliation. Empty dependency coverage is rejected.
+
+Both phases use `--no-fail-fast` to run all Cargo test executables, including integration tests and doctests for the selected package. Counts are aggregated across harnesses. Failure identities include the harness ordinal so identically named tests in different executables do not alias. Missing baseline test identities, fewer completed harnesses, interrupted harnesses, or incomplete failure-name extraction reject verification. Harness reordering or renaming can conservatively reject a comparison; the runner does not infer equivalence. Custom harness output that does not follow libtest conventions is unsupported.
+
+Provenance queries use `cargo tree --offline --workspace -i <crate>` and require an exact full candidate path in the root package source, after slash and Windows verbatim-prefix normalization. A path containing `github.com/storytold` is a valid local path. Remote URLs, matching directory basenames, path prefixes, and matches in dependent lines cannot verify provenance. Required dependencies must already be cached for this offline query; missing cache entries report an infrastructure failure.
+
+`HEAD` tests the current working tree and reports whether it is dirty. Any explicit revision other than the literal `HEAD` gets its own detached candidate worktree, even when it resolves to the same commit. Each run owns separate candidate and consumer paths; it refuses to replace existing worktrees.
+
+### Reports and exit status
+
+```sh
+cargo xtask compat --consumer ../vectorcraft --target-pkg vectorcraft-ui-egui --json > report.json
+cargo xtask compat --consumer ../vectorcraft --target-pkg vectorcraft-ui-egui --output report.json
+```
+
+`--json` writes one raw JSON document to stdout; progress and diagnostics go to stderr. `--output` writes the same report to a file. Missing, empty, or option-shaped values for value-taking CLI options are rejected before execution.
+
+`INFRASTRUCTURE_FAILURE`, `INCOMPLETE_PATCH_COVERAGE`, and `VACUOUS_EXECUTION_REJECTED` are unverified results. A baseline build failure takes precedence over attributing a failure to the candidate. Named new candidate test failures remain regressions even if total failure counts are unchanged. A candidate-only build failure after a viable baseline fails as a candidate regression; compiler, dependency, and environment causes may still require diagnosis.
+
+A missing requested consumer makes the invocation fail even if other consumers pass. With `--skip-baseline`, a passing candidate is `SKIPPED`, not a completed compatibility comparison, and cannot yield success. Zero completed comparisons always fail. The selected target package is the test scope, not the entire consumer workspace; choose additional packages in separate invocations when needed.
+
+### Cleanup and interruption
+
+Normal completion explicitly removes only worktrees registered by this run and records removal failures in the JSON `cleanup_errors` array, making the result fail. RAII cleanup also runs on ordinary Rust error returns. Worktrees are never recursively deleted as a fallback when Git removal fails.
+
+There is no SIGINT/SIGTERM handler; abrupt termination can leave directories and registrations behind. After confirming a run has stopped, inspect `git worktree list` in both repositories, remove that run's worktrees with `git worktree remove --force <path>`, then prune stale registrations with `git worktree prune`. Git pruning removes stale registrations, not active worktree directories. Never remove paths belonging to another active run.
+
+The runner executes code from trusted consumer and candidate repositories with the invoking user's permissions; Git worktrees provide checkout isolation, not a sandbox. No automatic compatibility CI workflow is added by this PR.

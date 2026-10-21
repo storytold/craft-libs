@@ -39,6 +39,10 @@ fn main() -> ExitCode {
             }
         },
         Some("compat") => {
+            if let Err(error) = validate_compat_args(&args[1..]) {
+                eprintln!("error: {error}");
+                return ExitCode::FAILURE;
+            }
             let mut revision = "HEAD".to_string();
             let mut consumer_names: Vec<String> = vec!["photocraft".to_string(), "vectorcraft".to_string()];
             let mut consumers_dir = root.parent().unwrap_or(&root).to_path_buf();
@@ -147,6 +151,40 @@ fn main() -> ExitCode {
     }
 }
 
+/// Validate value-taking arguments before resolving revisions or creating worktrees.
+fn validate_compat_args(args: &[String]) -> Result<(), String> {
+    let mut i = 0;
+    while i < args.len() {
+        if matches!(args[i].as_str(), "--revision" | "--consumer" | "--target-pkg" | "--consumers" | "--consumers-dir" | "--output") {
+            let value =
+                args.get(i + 1).filter(|v| !v.trim().is_empty() && !v.starts_with('-')).ok_or_else(|| format!("{} requires a value", args[i]))?;
+            if args[i] == "--consumers" && value.split(',').any(|name| name.trim().is_empty()) {
+                return Err("--consumers requires a nonempty list".into());
+            }
+            i += 1;
+        }
+        i += 1;
+    }
+    Ok(())
+}
+
 fn root_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).parent().expect("xtask has parent workspace root").to_path_buf()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn missing_or_option_shaped_values_are_rejected() {
+        for option in ["--revision", "--consumer", "--target-pkg", "--consumers", "--consumers-dir", "--output"] {
+            for tail in [vec![], vec!["--json".into()], vec!["".into()]] {
+                let mut args = vec![option.into()];
+                args.extend(tail);
+                assert!(validate_compat_args(&args).is_err(), "{args:?}");
+            }
+            assert!(validate_compat_args(&[option.into(), "valid".into()]).is_ok());
+        }
+        assert!(validate_compat_args(&["--consumers".into(), ",,".into()]).is_err());
+    }
 }
