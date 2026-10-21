@@ -1,0 +1,17 @@
+[package]
+name = "craft-time"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+description = "Exact media time, frame rate rational math, and SMPTE timecode for the Craft suite"
+
+[lints]
+workspace = true
+
+[dependencies]
+serde = { workspace = true }
+
+[dev-dependencies]
+proptest = "1.4"
