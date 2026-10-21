@@ -148,6 +148,42 @@ fn damaged_fonts_never_panic() {
     }
 }
 
+/// A font with three `fvar` axes, the middle one malformed (`min > max`), and one instance.
+fn font_with_a_bad_axis() -> Vec<u8> {
+    let cmap = Cmap::from_mappings([('a', GlyphId::new(1))]).unwrap();
+    let axes = vec![
+        VariationAxisRecord::new(Tag::new(b"wght"), Fixed::from_f64(100.0), Fixed::from_f64(400.0), Fixed::from_f64(900.0), 0, NameId::new(256)),
+        VariationAxisRecord::new(Tag::new(b"XXXX"), Fixed::from_f64(900.0), Fixed::from_f64(400.0), Fixed::from_f64(100.0), 0, NameId::new(256)),
+        VariationAxisRecord::new(Tag::new(b"wdth"), Fixed::from_f64(50.0), Fixed::from_f64(100.0), Fixed::from_f64(200.0), 0, NameId::new(256)),
+    ];
+    let instances = vec![InstanceRecord {
+        subfamily_name_id: NameId::new(258),
+        flags: 0,
+        coordinates: vec![Fixed::from_f64(800.0), Fixed::from_f64(50.0), Fixed::from_f64(75.0)],
+        post_script_name_id: None,
+    }];
+    let fvar = Fvar::new(AxisInstanceArrays::new(axes, instances));
+    let names = Name::new(vec![name(256, "Weight"), name(258, "Heavy")]);
+    let mut b = FontBuilder::new();
+    b.add_table(&cmap).unwrap().add_table(&names).unwrap().add_table(&fvar).unwrap();
+    b.build()
+}
+
+/// A malformed axis is left out of `axes`, so its coordinate must be left out of every instance
+/// too: `coords` promises one entry per axis, in `axes` order, and a consumer pairs them by index.
+#[test]
+fn instance_coordinates_pair_with_the_axes_kept() {
+    let d = craft_font_info::read(&font_with_a_bad_axis(), 0).unwrap();
+    let tags: Vec<&str> = d.axes.iter().map(|a| a.tag.as_str()).collect();
+    assert_eq!(tags, ["wght", "wdth"], "the malformed axis is left out");
+    let coords = &d.instances[0].coords;
+    assert_eq!(coords, &[("wght".to_string(), 800.0), ("wdth".to_string(), 75.0)]);
+    for (axis, (tag, value)) in d.axes.iter().zip(coords) {
+        assert_eq!(&axis.tag, tag, "coordinate and axis line up");
+        assert!((axis.min..=axis.max).contains(value), "{tag} {value} is outside its axis");
+    }
+}
+
 #[test]
 fn registered_feature_names() {
     assert_eq!(craft_font_info::feature_name("tnum"), Some("Tabular Figures"));

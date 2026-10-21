@@ -29,7 +29,7 @@ use skrifa::raw::tables::gsub::{SingleSubst, SubstitutionSubtables};
 use skrifa::raw::tables::layout::{CoverageTable, FeatureParams};
 use skrifa::raw::{ReadError, TableProvider};
 use skrifa::string::{LocalizedString, StringId};
-use skrifa::{FontRef, MetadataProvider};
+use skrifa::{Axis, FontRef, MetadataProvider};
 
 /// Most characters kept as a feature's sample.
 const SAMPLE_CHARS: usize = 24;
@@ -178,28 +178,41 @@ fn read_names(font: &FontRef) -> BTreeMap<u16, String> {
     out.into_iter().map(|(id, (_, string))| (id, string)).collect()
 }
 
+/// Whether an `fvar` axis has a range worth reporting: a malformed one is left out rather than
+/// shown with nonsensical bounds.
+fn has_usable_range(a: &Axis) -> bool {
+    a.min_value().is_finite() && a.default_value().is_finite() && a.max_value().is_finite() && a.min_value() <= a.max_value()
+}
+
 fn read_face(font: &FontRef) -> FaceDetails {
     let names = read_names(font);
     let name = |id: StringId| names.get(&id.to_u16()).filter(|s| !s.trim().is_empty()).cloned();
-    let axes: Vec<AxisDetail> = font
-        .axes()
+    // The axes that are kept, and where each sits in an instance's coordinates.
+    let fvar: Vec<Axis> = font.axes().iter().collect();
+    let kept: Vec<usize> = fvar.iter().enumerate().filter(|(_, a)| has_usable_range(a)).map(|(i, _)| i).collect();
+    let axes: Vec<AxisDetail> = kept
         .iter()
-        .filter(|a| a.min_value().is_finite() && a.default_value().is_finite() && a.max_value().is_finite() && a.min_value() <= a.max_value())
-        .map(|a| AxisDetail {
-            tag: a.tag().to_string(),
-            name: name(a.name_id()),
-            min: a.min_value(),
-            default: a.default_value().clamp(a.min_value(), a.max_value()),
-            max: a.max_value(),
-            hidden: a.is_hidden(),
+        .map(|&i| {
+            let a = &fvar[i];
+            AxisDetail {
+                tag: a.tag().to_string(),
+                name: name(a.name_id()),
+                min: a.min_value(),
+                default: a.default_value().clamp(a.min_value(), a.max_value()),
+                max: a.max_value(),
+                hidden: a.is_hidden(),
+            }
         })
         .collect();
-    let all_axes: Vec<String> = font.axes().iter().map(|a| a.tag().to_string()).collect();
     let instances = font
         .named_instances()
         .iter()
         .filter_map(|inst| {
-            let coords: Vec<(String, f32)> = all_axes.iter().cloned().zip(inst.user_coords()).filter(|(_, v)| v.is_finite()).collect();
+            // One coordinate per kept axis, in `axes` order: a malformed axis left out above is
+            // left out here too, so pairing the two lists by index stays right. (`fvar` stores
+            // coordinates as `Fixed`, so none of them can be non-finite.)
+            let user: Vec<f32> = inst.user_coords().collect();
+            let coords: Vec<(String, f32)> = axes.iter().zip(&kept).filter_map(|(axis, &i)| user.get(i).map(|v| (axis.tag.clone(), *v))).collect();
             Some(InstanceDetail { name: name(inst.subfamily_name_id())?, postscript_name: inst.postscript_name_id().and_then(name), coords })
         })
         .collect();
