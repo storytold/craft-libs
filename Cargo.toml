@@ -21,6 +21,7 @@ hayro-syntax = { version = "=0.7.2", default-features = false, features = ["std"
 bytemuck = "1"
 thiserror = "2"
 craft-atomic = { path = "crates/atomic" }
+craft-blitter = { path = "crates/blitter" }
 craft-cms = { path = "crates/cms" }
 craft-docpath = { path = "crates/docpath" }
 craft-i18n = { path = "crates/i18n" }
