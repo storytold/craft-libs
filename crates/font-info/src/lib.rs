@@ -27,7 +27,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use skrifa::raw::tables::gsub::{SingleSubst, SubstitutionSubtables};
 use skrifa::raw::tables::layout::{CoverageTable, FeatureParams};
-use skrifa::raw::{ReadError, TableProvider, types::GlyphId16};
+use skrifa::raw::{ReadError, TableProvider};
 use skrifa::{FontRef, MetadataProvider, string::StringId};
 
 /// Most characters kept as a feature's sample.
@@ -39,6 +39,11 @@ const RUN: usize = 3;
 const MAX_FEATURES: usize = 512;
 const MAX_LOOKUPS: usize = 64;
 const MAX_COVERAGE: usize = 4096;
+/// Most subtables entered and coverage glyphs read for one face's features, all together. The caps
+/// above multiply: a font can name the same lookup from every feature, and that one lookup can
+/// hold thousands of subtables, so per-list limits alone don't bound the work a font can ask for.
+const MAX_SUBTABLES: usize = 8192;
+const MAX_GLYPHS: usize = 1 << 20;
 /// Most `STAT` design axes and axis value records read.
 const MAX_STAT: usize = 256;
 
@@ -295,6 +300,10 @@ fn gsub_features(
     let data = list.offset_data();
     // Glyphs per tag; one tag can have several records (one per script/language).
     let mut glyphs: BTreeMap<String, BTreeSet<u16>> = BTreeMap::new();
+    // Lookups already read for a tag: records repeat a tag across scripts and languages, and
+    // re-reading a lookup would only spend the read's budget twice on the same glyphs.
+    let mut seen: BTreeMap<String, BTreeSet<u16>> = BTreeMap::new();
+    let mut budget = Budget { subtables: MAX_SUBTABLES, glyphs: MAX_GLYPHS };
     for record in list.feature_records().iter().take(MAX_FEATURES) {
         let tag = record.feature_tag().to_string();
         let entry = out.entry(tag.clone()).or_insert(FeatureDetail { tag: tag.clone(), name: None, sample: String::new(), changed: 0 });
@@ -307,11 +316,15 @@ fn gsub_features(
             };
         }
         let Some(lookups) = &lookups else { continue };
-        let set = glyphs.entry(tag).or_default();
+        let set = glyphs.entry(tag.clone()).or_default();
+        let seen = seen.entry(tag).or_default();
         for index in feature.lookup_list_indices().iter().take(MAX_LOOKUPS) {
+            if !seen.insert(index.get()) {
+                continue;
+            }
             let Ok(lookup) = lookups.lookups().get(usize::from(index.get())) else { continue };
             let Ok(subtables) = lookup.subtables() else { continue };
-            collect_coverage(&subtables, set);
+            collect_coverage(&subtables, set, &mut budget);
         }
     }
     for (tag, set) in glyphs {
@@ -324,23 +337,69 @@ fn gsub_features(
     Ok(())
 }
 
-/// The first glyphs each directly substituting subtable acts on. Contextual subtables are skipped:
-/// what they change depends on the surrounding text, so their coverage would mislead.
-fn collect_coverage(subtables: &SubstitutionSubtables, set: &mut BTreeSet<u16>) {
-    let mut add = |c: Result<CoverageTable, ReadError>| {
-        if let Ok(c) = c {
-            set.extend(c.iter().take(MAX_COVERAGE).map(|g: GlyphId16| g.to_u16()));
+/// What one read may still spend on `GSUB`: subtables entered and coverage glyphs read, over the
+/// whole face. Caps on each list don't bound the total, since any number of features can name the
+/// same lookup, and that lookup can hold many subtables.
+struct Budget {
+    subtables: usize,
+    glyphs: usize,
+}
+
+impl Budget {
+    /// Takes one subtable from the budget; false once it's spent.
+    fn subtable(&mut self) -> bool {
+        if self.subtables == 0 {
+            return false;
         }
-    };
+        self.subtables -= 1;
+        true
+    }
+
+    /// Takes one glyph from the budget; false once it's spent.
+    fn glyph(&mut self) -> bool {
+        if self.glyphs == 0 {
+            return false;
+        }
+        self.glyphs -= 1;
+        true
+    }
+}
+
+/// The glyphs each directly substituting subtable acts on. Contextual subtables are skipped: what
+/// they change depends on the surrounding text, so their coverage would mislead. Stops when the
+/// read's budget runs out, leaving what it has read.
+fn collect_coverage(subtables: &SubstitutionSubtables, set: &mut BTreeSet<u16>, budget: &mut Budget) {
     match subtables {
-        SubstitutionSubtables::Single(s) => s.iter().flatten().for_each(|t| match t {
-            SingleSubst::Format1(t) => add(t.coverage()),
-            SingleSubst::Format2(t) => add(t.coverage()),
-        }),
-        SubstitutionSubtables::Multiple(s) => s.iter().flatten().for_each(|t| add(t.coverage())),
-        SubstitutionSubtables::Alternate(s) => s.iter().flatten().for_each(|t| add(t.coverage())),
-        SubstitutionSubtables::Ligature(s) => s.iter().flatten().for_each(|t| add(t.coverage())),
+        SubstitutionSubtables::Single(s) => {
+            let coverage = |t| match t {
+                SingleSubst::Format1(t) => t.coverage(),
+                SingleSubst::Format2(t) => t.coverage(),
+            };
+            add_coverage(s.iter().flatten(), coverage, set, budget);
+        }
+        SubstitutionSubtables::Multiple(s) => add_coverage(s.iter().flatten(), |t| t.coverage(), set, budget),
+        SubstitutionSubtables::Alternate(s) => add_coverage(s.iter().flatten(), |t| t.coverage(), set, budget),
+        SubstitutionSubtables::Ligature(s) => add_coverage(s.iter().flatten(), |t| t.coverage(), set, budget),
         _ => {}
+    }
+}
+
+/// Adds the coverage of each subtable to `set` until the read's budget runs out.
+fn add_coverage<'a, T, F>(subtables: impl Iterator<Item = T>, coverage: F, set: &mut BTreeSet<u16>, budget: &mut Budget)
+where
+    F: Fn(T) -> Result<CoverageTable<'a>, ReadError>,
+{
+    for subtable in subtables {
+        if !budget.subtable() {
+            return;
+        }
+        let Ok(table) = coverage(subtable) else { continue };
+        for glyph in table.iter().take(MAX_COVERAGE) {
+            if !budget.glyph() {
+                return;
+            }
+            set.insert(glyph.to_u16());
+        }
     }
 }
 

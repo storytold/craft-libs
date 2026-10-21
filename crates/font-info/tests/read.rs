@@ -188,3 +188,125 @@ fn feature_names_are_capitalised_as_the_registry_writes_them() {
     names.dedup();
     assert_eq!(names.len(), n, "two tags share a label");
 }
+
+/// A `GSUB` shaped like an attack, which no font tool would build and `write-fonts` refuses to:
+/// one lookup holding `subtables` offsets that all point at the same 12-byte substitution, listed
+/// `indices` times in the lookup list, and named by `records` feature records with distinct tags.
+fn hostile_gsub(subtables: usize, indices: usize, records: usize) -> Vec<u8> {
+    let mut script = Vec::new();
+    script.extend(1u16.to_be_bytes()); // ScriptList: one script,
+    script.extend(b"DFLT");
+    script.extend(8u16.to_be_bytes()); // after the count and this record
+    script.extend(4u16.to_be_bytes()); // Script: a default LangSys, no others
+    script.extend(0u16.to_be_bytes());
+    script.extend([0u16.to_be_bytes(), u16::MAX.to_be_bytes(), 0u16.to_be_bytes()].concat()); // no features
+
+    let mut features = Vec::new();
+    features.extend((records as u16).to_be_bytes());
+    let tables = 2 + 6 * records;
+    for i in 0..records {
+        features.extend(format!("{:04x}", i).as_bytes());
+        features.extend(((tables + i * (4 + 2 * indices)) as u16).to_be_bytes());
+    }
+    for _ in 0..records {
+        features.extend(0u16.to_be_bytes()); // no feature params
+        features.extend((indices as u16).to_be_bytes());
+        for index in 0..indices as u16 {
+            features.extend(index.to_be_bytes());
+        }
+    }
+
+    let mut lookups = Vec::new();
+    lookups.extend((indices as u16).to_be_bytes());
+    for _ in 0..indices {
+        // Every index names the one lookup, which follows the offsets.
+        lookups.extend(((2 + 2 * indices) as u16).to_be_bytes());
+    }
+    lookups.extend([1u16.to_be_bytes(), 0u16.to_be_bytes(), (subtables as u16).to_be_bytes()].concat());
+    for _ in 0..subtables {
+        lookups.extend(((6 + 2 * subtables) as u16).to_be_bytes()); // after type, flag and count
+    }
+    lookups.extend([1u16.to_be_bytes(), 6u16.to_be_bytes(), 1i16.to_be_bytes()].concat()); // single: 3 → 4
+    lookups.extend([1u16.to_be_bytes(), 1u16.to_be_bytes(), 3u16.to_be_bytes()].concat()); // coverage: glyph 3
+
+    let mut gsub = vec![0, 1, 0, 0];
+    for offset in [10, 10 + script.len(), 10 + script.len() + features.len()] {
+        gsub.extend((offset as u16).to_be_bytes());
+    }
+    gsub.extend(script);
+    gsub.extend(features);
+    gsub.extend(lookups);
+    gsub
+}
+
+/// `font` with its `GSUB` replaced (or added), recomputing the table directory.
+fn with_gsub(font: &[u8], gsub: &[u8]) -> Vec<u8> {
+    let count = usize::from(u16::from_be_bytes([font[4], font[5]]));
+    let mut tables: Vec<([u8; 4], &[u8])> = Vec::new();
+    for i in 0..count {
+        let record = 12 + i * 16;
+        let tag: [u8; 4] = font[record..record + 4].try_into().unwrap();
+        let offset = u32::from_be_bytes(font[record + 8..record + 12].try_into().unwrap()) as usize;
+        let length = u32::from_be_bytes(font[record + 12..record + 16].try_into().unwrap()) as usize;
+        if &tag != b"GSUB" {
+            tables.push((tag, &font[offset..offset + length]));
+        }
+    }
+    tables.push((*b"GSUB", gsub));
+    tables.sort_by_key(|(tag, _)| *tag);
+    let n = tables.len() as u16;
+    let log: u16 = (tables.len() as f32).log2().floor() as u16;
+    let range: u16 = 16 << log;
+    let mut out = Vec::new();
+    out.extend(0x0001_0000u32.to_be_bytes());
+    out.extend([n.to_be_bytes(), range.to_be_bytes(), log.to_be_bytes(), (n * 16 - range).to_be_bytes()].concat());
+    let mut offset = 12 + 16 * tables.len();
+    for (tag, table) in &tables {
+        out.extend(*tag);
+        out.extend(0u32.to_be_bytes()); // checksum: skrifa doesn't check it
+        out.extend((offset as u32).to_be_bytes());
+        out.extend((table.len() as u32).to_be_bytes());
+        offset += table.len() + (4 - table.len() % 4) % 4;
+    }
+    for (_, table) in &tables {
+        out.extend(*table);
+        out.resize(out.len() + (4 - table.len() % 4) % 4, 0);
+    }
+    out
+}
+
+/// A font with one glyph, `1`, for the hostile `GSUB` to substitute.
+fn one_glyph_font() -> Vec<u8> {
+    let cmap = Cmap::from_mappings([('a', GlyphId::new(1)), ('1', GlyphId::new(3))]).unwrap();
+    let mut b = FontBuilder::new();
+    b.add_table(&cmap).unwrap();
+    b.build()
+}
+
+/// The per-list caps multiply: 512 records × 48 lookups each × every subtable of those lookups is
+/// 805 million coverage visits, which unbudgeted takes ~17 s optimized and minutes in a test
+/// build, from a font of under 200 KB. No per-list cap sees that, so the read has a budget.
+#[test]
+fn repeated_lookup_references_stay_within_budget() {
+    let bytes = with_gsub(&one_glyph_font(), &hostile_gsub(32_759, 48, 512));
+    let started = std::time::Instant::now();
+    let d = craft_font_info::read(&bytes, 0).unwrap();
+    let took = started.elapsed();
+    assert!(took < std::time::Duration::from_secs(2), "{took:?} for {} bytes", bytes.len());
+    // What the budget reads is still the right answer.
+    let first = d.feature("0000").unwrap();
+    assert_eq!((first.sample.as_str(), first.changed), ("1", 1));
+}
+
+/// Skipping a lookup the face has already read is per tag: two tags naming one lookup both see
+/// what it changes.
+#[test]
+fn a_lookup_shared_by_two_tags_still_counts_for_both() {
+    let d = craft_font_info::read(&with_gsub(&one_glyph_font(), &hostile_gsub(1, 1, 2)), 0).unwrap();
+    let tags: Vec<&str> = d.features.iter().map(|f| f.tag.as_str()).collect();
+    assert_eq!(tags, ["0000", "0001"]);
+    for tag in tags {
+        let feature = d.feature(tag).unwrap();
+        assert_eq!((feature.sample.as_str(), feature.changed), ("1", 1), "{tag}");
+    }
+}
