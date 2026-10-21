@@ -306,6 +306,40 @@ pub fn generate_patch_config(pinned_crates: &[String], candidate_crates: &BTreeM
     Ok(toml)
 }
 
+pub fn check_provenance_in_tree_output(tree_stdout: &str, checked_crate: &str, candidate_path_snippet: &str) -> Result<(), String> {
+    let normalized_snippet = candidate_path_snippet.replace('\\', "/").trim_end_matches('/').to_string();
+    let normalized_stdout = tree_stdout.replace('\\', "/");
+
+    let mut found_valid_candidate_source = false;
+    for line in normalized_stdout.lines() {
+        let trimmed = line.trim();
+        if let Some(pos) = trimmed.find(checked_crate) {
+            let after = &trimmed[pos + checked_crate.len()..];
+            if (after.starts_with(' ') || after.starts_with(" v"))
+                && let (Some(open), Some(close)) = (after.find('('), after.rfind(')'))
+            {
+                let source = after[open + 1..close].trim();
+                if source.contains("github.com/storytold") || source.starts_with("git+") || source.starts_with("registry+") {
+                    return Err(format!(
+                        "candidate provenance mismatch for {checked_crate}: resolved to remote source `{source}`, expected candidate path `{normalized_snippet}`"
+                    ));
+                }
+                if source.contains(&normalized_snippet) {
+                    found_valid_candidate_source = true;
+                }
+            }
+        }
+    }
+
+    if !found_valid_candidate_source {
+        return Err(format!(
+            "candidate provenance mismatch: {checked_crate} does not resolve to `{normalized_snippet}` in cargo tree output:\n{tree_stdout}"
+        ));
+    }
+
+    Ok(())
+}
+
 pub fn verify_candidate_provenance(worktree_dir: &Path, checked_crate: &str, candidate_path_snippet: &str) -> Result<(), String> {
     let mut cmd = Command::new("cargo");
     cmd.current_dir(worktree_dir);
@@ -317,14 +351,7 @@ pub fn verify_candidate_provenance(worktree_dir: &Path, checked_crate: &str, can
     }
 
     let stdout = String::from_utf8_lossy(&out.stdout);
-    let normalized_snippet = candidate_path_snippet.replace('\\', "/");
-    let normalized_stdout = stdout.replace('\\', "/");
-
-    if !normalized_stdout.contains(&normalized_snippet) {
-        return Err(format!("candidate provenance mismatch: expected `{}` in cargo tree output:\n{}", normalized_snippet, stdout));
-    }
-
-    Ok(())
+    check_provenance_in_tree_output(&stdout, checked_crate, candidate_path_snippet)
 }
 
 pub fn parse_test_summary(output: &[u8]) -> TestSummary {
@@ -332,30 +359,12 @@ pub fn parse_test_summary(output: &[u8]) -> TestSummary {
     let mut summary = TestSummary::default();
 
     // Parse individual failed test lines: "test tests::my_test ... FAILED"
+    // Libtest consistently formats failed test executions with this exact prefix and suffix.
     for line in text.lines() {
         let trimmed = line.trim();
         if trimmed.starts_with("test ") && trimmed.ends_with(" ... FAILED") {
             let name = trimmed.trim_start_matches("test ").trim_end_matches(" ... FAILED").trim();
             summary.failed_tests.insert(name.to_string());
-        }
-    }
-
-    // Also parse failures list section if present:
-    // failures:
-    //     tests::my_test
-    let mut in_failures_block = false;
-    for line in text.lines() {
-        let trimmed = line.trim();
-        if trimmed == "failures:" {
-            in_failures_block = true;
-            continue;
-        }
-        if in_failures_block {
-            if trimmed.starts_with("test result:") {
-                in_failures_block = false;
-            } else if !trimmed.is_empty() && !trimmed.starts_with("----") && !trimmed.contains(' ') {
-                summary.failed_tests.insert(trimmed.to_string());
-            }
         }
     }
 
@@ -382,6 +391,21 @@ pub fn parse_test_summary(output: &[u8]) -> TestSummary {
         }
     }
     summary
+}
+
+pub fn classify_outcome_with_status(
+    baseline: Option<&TestSummary>,
+    baseline_exit_ok: bool,
+    candidate: &TestSummary,
+    candidate_exit_ok: bool,
+) -> CompatStatus {
+    if !candidate_exit_ok && candidate.failed == 0 {
+        return CompatStatus::CandidateRegression;
+    }
+    if !baseline_exit_ok && baseline.as_ref().map(|s| s.failed).unwrap_or(0) == 0 {
+        return CompatStatus::InfrastructureFailure;
+    }
+    classify_outcome(baseline, candidate)
 }
 
 pub fn classify_outcome(baseline: Option<&TestSummary>, candidate: &TestSummary) -> CompatStatus {
@@ -435,18 +459,28 @@ pub fn run_compat(root_dir: &Path, config: CompatConfig) -> Result<bool, String>
     println!("=======================================================\n");
 
     let candidate_sha = resolve_commit(root_dir, &config.candidate_revision)?;
-    let candidate_is_dirty = check_git_dirty(root_dir);
-
-    println!("Target shared library: craft-libs ({candidate_sha})");
-    println!("Working tree status:   {}", if candidate_is_dirty { "DIRTY" } else { "CLEAN" });
-
-    let candidate_crates = discover_candidate_crates(root_dir)?;
-    println!("Candidate crates:      {}\n", candidate_crates.keys().cloned().collect::<Vec<_>>().join(", "));
-
     let mut guard = WorktreeGuard::new();
     let compat_root = root_dir.join("target").join("compat");
     let worktrees_dir = compat_root.join("worktrees");
     fs::create_dir_all(&worktrees_dir).map_err(|e| format!("create worktrees dir: {e}"))?;
+
+    // If a specific candidate revision was requested (not HEAD), create an ephemeral candidate worktree
+    // so tests validate that exact revision rather than the active working tree.
+    let (candidate_dir, candidate_is_dirty) = if config.candidate_revision != "HEAD" {
+        let short_sha = &candidate_sha[..12.min(candidate_sha.len())];
+        let cand_wt = worktrees_dir.join(format!("compat-candidate-{short_sha}"));
+        println!("Creating candidate worktree: {}", cand_wt.display());
+        guard.create(root_dir, &cand_wt, &candidate_sha)?;
+        (cand_wt, false)
+    } else {
+        (root_dir.to_path_buf(), check_git_dirty(root_dir))
+    };
+
+    println!("Target shared library: craft-libs ({candidate_sha})");
+    println!("Working tree status:   {}", if candidate_is_dirty { "DIRTY" } else { "CLEAN" });
+
+    let candidate_crates = discover_candidate_crates(&candidate_dir)?;
+    println!("Candidate crates:      {}\n", candidate_crates.keys().cloned().collect::<Vec<_>>().join(", "));
 
     let mut reports = BTreeMap::new();
     let mut any_regression = false;
@@ -483,7 +517,8 @@ pub fn run_compat(root_dir: &Path, config: CompatConfig) -> Result<bool, String>
         let consumer_commit = match resolve_commit(&target.repo_dir, "HEAD") {
             Ok(c) => c,
             Err(e) => {
-                println!("  [ERROR] Failed to resolve HEAD in {}: {e}", target.repo_dir.display());
+                let err_msg = format!("resolve HEAD failed: {e}");
+                println!("  [ERROR] {err_msg}");
                 reports.insert(
                     target.name.clone(),
                     ConsumerReport {
@@ -499,9 +534,10 @@ pub fn run_compat(root_dir: &Path, config: CompatConfig) -> Result<bool, String>
                         candidate_failed: 0,
                         status: CompatStatus::InfrastructureFailure.to_string(),
                         duration_seconds: start.elapsed().as_secs_f64(),
-                        notes: Some(format!("resolve HEAD failed: {e}")),
+                        notes: Some(err_msg),
                     },
                 );
+                any_regression = true;
                 continue;
             }
         };
@@ -512,7 +548,27 @@ pub fn run_compat(root_dir: &Path, config: CompatConfig) -> Result<bool, String>
             None => match KNOWN_CONSUMERS.iter().find(|c| c.name == target.name) {
                 Some(k) => k.default_target_pkg.to_string(),
                 None => {
-                    println!("  [ERROR] No target package specified for {}", target.name);
+                    let err_msg = format!("no target package specified for {}", target.name);
+                    println!("  [ERROR] {err_msg}");
+                    reports.insert(
+                        target.name.clone(),
+                        ConsumerReport {
+                            repository: target.repo_dir.to_string_lossy().to_string(),
+                            target_package: "unknown".into(),
+                            consumer_commit: consumer_commit.clone(),
+                            pinned_craft_crates: Vec::new(),
+                            baseline_result: "INFRASTRUCTURE_FAILURE".into(),
+                            baseline_passed: 0,
+                            baseline_failed: 0,
+                            candidate_result: "INFRASTRUCTURE_FAILURE".into(),
+                            candidate_passed: 0,
+                            candidate_failed: 0,
+                            status: CompatStatus::InfrastructureFailure.to_string(),
+                            duration_seconds: start.elapsed().as_secs_f64(),
+                            notes: Some(err_msg),
+                        },
+                    );
+                    any_regression = true;
                     continue;
                 }
             },
@@ -523,7 +579,27 @@ pub fn run_compat(root_dir: &Path, config: CompatConfig) -> Result<bool, String>
         let lock_content = match fs::read_to_string(&lock_path) {
             Ok(c) => c,
             Err(e) => {
-                println!("  [ERROR] Failed to read Cargo.lock: {e}");
+                let err_msg = format!("failed to read Cargo.lock: {e}");
+                println!("  [ERROR] {err_msg}");
+                reports.insert(
+                    target.name.clone(),
+                    ConsumerReport {
+                        repository: target.repo_dir.to_string_lossy().to_string(),
+                        target_package: target_package.clone(),
+                        consumer_commit: consumer_commit.clone(),
+                        pinned_craft_crates: Vec::new(),
+                        baseline_result: "INFRASTRUCTURE_FAILURE".into(),
+                        baseline_passed: 0,
+                        baseline_failed: 0,
+                        candidate_result: "INFRASTRUCTURE_FAILURE".into(),
+                        candidate_passed: 0,
+                        candidate_failed: 0,
+                        status: CompatStatus::InfrastructureFailure.to_string(),
+                        duration_seconds: start.elapsed().as_secs_f64(),
+                        notes: Some(err_msg),
+                    },
+                );
+                any_regression = true;
                 continue;
             }
         };
@@ -564,7 +640,8 @@ pub fn run_compat(root_dir: &Path, config: CompatConfig) -> Result<bool, String>
 
         println!("  Creating worktree:     {}", consumer_worktree.display());
         if let Err(e) = guard.create(&target.repo_dir, &consumer_worktree, "HEAD") {
-            println!("  [ERROR] Worktree creation failed: {e}");
+            let err_msg = format!("worktree create failed: {e}");
+            println!("  [ERROR] {err_msg}");
             reports.insert(
                 target.name.clone(),
                 ConsumerReport {
@@ -580,7 +657,7 @@ pub fn run_compat(root_dir: &Path, config: CompatConfig) -> Result<bool, String>
                     candidate_failed: 0,
                     status: CompatStatus::InfrastructureFailure.to_string(),
                     duration_seconds: start.elapsed().as_secs_f64(),
-                    notes: Some(format!("worktree create failed: {e}")),
+                    notes: Some(err_msg),
                 },
             );
             any_regression = true;
@@ -593,6 +670,7 @@ pub fn run_compat(root_dir: &Path, config: CompatConfig) -> Result<bool, String>
         // 1. Run Baseline Tests (if not skipped)
         let mut baseline_summary = None;
         let mut baseline_status_str = "SKIPPED".to_string();
+        let mut baseline_exit_ok = true;
 
         if !config.skip_baseline {
             print!("  Running baseline tests: ");
@@ -608,7 +686,8 @@ pub fn run_compat(root_dir: &Path, config: CompatConfig) -> Result<bool, String>
                     let mut combined = o.stdout;
                     combined.extend_from_slice(&o.stderr);
                     let sum = parse_test_summary(&combined);
-                    if o.status.success() {
+                    baseline_exit_ok = o.status.success();
+                    if baseline_exit_ok {
                         println!("PASS ({} passed, {} failed)", sum.passed, sum.failed);
                         baseline_status_str = "PASS".into();
                     } else {
@@ -620,26 +699,73 @@ pub fn run_compat(root_dir: &Path, config: CompatConfig) -> Result<bool, String>
                 Err(e) => {
                     println!("INFRASTRUCTURE_FAILURE ({e})");
                     baseline_status_str = "INFRASTRUCTURE_FAILURE".into();
+                    baseline_exit_ok = false;
                 }
             }
         }
 
         // 2. Apply Complete Patch Configuration to worktree
         let cargo_config_dir = consumer_worktree.join(".cargo");
-        fs::create_dir_all(&cargo_config_dir).ok();
+        if let Err(e) = fs::create_dir_all(&cargo_config_dir) {
+            let err_msg = format!("failed to create .cargo directory: {e}");
+            println!("  [ERROR] {err_msg}");
+            reports.insert(
+                target.name.clone(),
+                ConsumerReport {
+                    repository: target.repo_dir.to_string_lossy().to_string(),
+                    target_package: target_package.clone(),
+                    consumer_commit: consumer_commit.clone(),
+                    pinned_craft_crates: pinned_crates.clone(),
+                    baseline_result: baseline_status_str,
+                    baseline_passed: baseline_summary.as_ref().map(|s| s.passed).unwrap_or(0),
+                    baseline_failed: baseline_summary.as_ref().map(|s| s.failed).unwrap_or(0),
+                    candidate_result: "INFRASTRUCTURE_FAILURE".into(),
+                    candidate_passed: 0,
+                    candidate_failed: 0,
+                    status: CompatStatus::InfrastructureFailure.to_string(),
+                    duration_seconds: start.elapsed().as_secs_f64(),
+                    notes: Some(err_msg),
+                },
+            );
+            any_regression = true;
+            continue;
+        }
+
         let cargo_config_file = cargo_config_dir.join("config.toml");
         if let Err(e) = fs::write(&cargo_config_file, &patch_toml) {
-            println!("  [ERROR] Failed to write .cargo/config.toml: {e}");
+            let err_msg = format!("failed to write .cargo/config.toml: {e}");
+            println!("  [ERROR] {err_msg}");
+            reports.insert(
+                target.name.clone(),
+                ConsumerReport {
+                    repository: target.repo_dir.to_string_lossy().to_string(),
+                    target_package: target_package.clone(),
+                    consumer_commit: consumer_commit.clone(),
+                    pinned_craft_crates: pinned_crates.clone(),
+                    baseline_result: baseline_status_str,
+                    baseline_passed: baseline_summary.as_ref().map(|s| s.passed).unwrap_or(0),
+                    baseline_failed: baseline_summary.as_ref().map(|s| s.failed).unwrap_or(0),
+                    candidate_result: "INFRASTRUCTURE_FAILURE".into(),
+                    candidate_passed: 0,
+                    candidate_failed: 0,
+                    status: CompatStatus::InfrastructureFailure.to_string(),
+                    duration_seconds: start.elapsed().as_secs_f64(),
+                    notes: Some(err_msg),
+                },
+            );
+            any_regression = true;
             continue;
         }
 
         // 3. Verify Candidate Provenance via cargo tree
         let mut provenance_failed = false;
+        let mut provenance_err = String::new();
         for pinned in &pinned_crates {
             if let Some(crate_path) = candidate_crates.get(pinned) {
                 let snippet = crate_path.to_string_lossy().replace('\\', "/");
                 if let Err(e) = verify_candidate_provenance(&consumer_worktree, pinned, &snippet) {
                     println!("  [ERROR] Provenance check failed for {pinned}: {e}");
+                    provenance_err = e;
                     provenance_failed = true;
                     break;
                 }
@@ -662,7 +788,7 @@ pub fn run_compat(root_dir: &Path, config: CompatConfig) -> Result<bool, String>
                     candidate_failed: 0,
                     status: CompatStatus::InfrastructureFailure.to_string(),
                     duration_seconds: start.elapsed().as_secs_f64(),
-                    notes: Some("provenance verification failed".into()),
+                    notes: Some(format!("provenance verification failed: {provenance_err}")),
                 },
             );
             any_regression = true;
@@ -680,30 +806,37 @@ pub fn run_compat(root_dir: &Path, config: CompatConfig) -> Result<bool, String>
             .env("CARGO_TARGET_DIR", &shared_target)
             .output();
 
-        let (candidate_status_str, candidate_summary) = match cand_out {
+        let (candidate_exit_ok, candidate_status_str, candidate_summary) = match cand_out {
             Ok(o) => {
                 let mut combined = o.stdout;
                 combined.extend_from_slice(&o.stderr);
                 let sum = parse_test_summary(&combined);
-                if o.status.success() {
+                let exit_ok = o.status.success();
+                if exit_ok {
                     println!("PASS ({} passed, {} failed)", sum.passed, sum.failed);
-                    ("PASS".to_string(), sum)
+                    (true, "PASS".to_string(), sum)
                 } else {
                     println!("FAIL ({} passed, {} failed)", sum.passed, sum.failed);
-                    ("FAIL".to_string(), sum)
+                    (false, "FAIL".to_string(), sum)
                 }
             }
             Err(e) => {
                 println!("INFRASTRUCTURE_FAILURE ({e})");
-                ("INFRASTRUCTURE_FAILURE".to_string(), TestSummary::default())
+                (false, "INFRASTRUCTURE_FAILURE".to_string(), TestSummary::default())
             }
         };
 
         // 5. Classify Outcome
-        let outcome = classify_outcome(baseline_summary.as_ref(), &candidate_summary);
+        let outcome = classify_outcome_with_status(baseline_summary.as_ref(), baseline_exit_ok, &candidate_summary, candidate_exit_ok);
         println!("  Outcome:               {outcome}\n");
 
-        if matches!(outcome, CompatStatus::CandidateRegression | CompatStatus::VacuousExecutionRejected | CompatStatus::InfrastructureFailure) {
+        if matches!(
+            outcome,
+            CompatStatus::CandidateRegression
+                | CompatStatus::VacuousExecutionRejected
+                | CompatStatus::InfrastructureFailure
+                | CompatStatus::IncompletePatchCoverage
+        ) {
             any_regression = true;
         }
 
@@ -954,6 +1087,84 @@ test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
         let base = TestSummary { passed: 0, failed: 0, ignored: 0, ..Default::default() };
         let cand = TestSummary { passed: 0, failed: 0, ignored: 0, ..Default::default() };
         assert_eq!(classify_outcome(Some(&base), &cand), CompatStatus::VacuousExecutionRejected);
+    }
+
+    #[test]
+    fn test_parse_test_summary_does_not_mistake_panic_payload_for_test_name() {
+        let output = b"
+test tests::test_one ... FAILED
+test tests::test_two ... ok
+
+failures:
+
+---- tests::test_one stdout ----
+thread 'tests::test_one' panicked at src/lib.rs:42:5:
+single_word_panic_payload
+stack_symbol_without_spaces
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+failures:
+    tests::test_one
+
+test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+";
+        let summary = parse_test_summary(output);
+        assert_eq!(summary.passed, 1);
+        assert_eq!(summary.failed, 1);
+        let mut expected = BTreeSet::new();
+        expected.insert("tests::test_one".to_string());
+        assert_eq!(summary.failed_tests, expected);
+    }
+
+    #[test]
+    fn test_check_provenance_rejects_remote_git_source() {
+        let stdout = "\
+craft-ui v0.1.0 (https://github.com/storytold/craft-libs.git?rev=5c874d51#5c874d51)
+└── photocraft-ui-egui v0.1.0 (/path/to/photocraft/crates/photocraft-ui-egui)
+";
+        let res = check_provenance_in_tree_output(stdout, "craft-ui", "/path/to/candidate/crates/ui");
+        assert!(res.is_err());
+        assert!(res.unwrap_err().contains("resolved to remote source"));
+    }
+
+    #[test]
+    fn test_check_provenance_rejects_remote_even_if_path_snippet_appears_in_another_line() {
+        // Even if candidate path snippet happens to be in consumer checkout path,
+        // if checked_crate itself points to remote git, it must fail.
+        let stdout = "\
+craft-ui v0.1.0 (git+https://github.com/storytold/craft-libs.git?rev=5c874d51)
+└── photocraft-ui-egui v0.1.0 (/var/compat-candidate/crates/ui/mock_consumer)
+";
+        let res = check_provenance_in_tree_output(stdout, "craft-ui", "/var/compat-candidate/crates/ui");
+        assert!(res.is_err());
+        assert!(res.unwrap_err().contains("resolved to remote source"));
+    }
+
+    #[test]
+    fn test_check_provenance_accepts_valid_candidate_path() {
+        let stdout = "\
+craft-ui v0.1.0 (/path/to/candidate/crates/ui)
+└── photocraft-ui-egui v0.1.0 (/path/to/photocraft/crates/photocraft-ui-egui)
+";
+        let res = check_provenance_in_tree_output(stdout, "craft-ui", "/path/to/candidate/crates/ui");
+        assert!(res.is_ok());
+    }
+
+    #[test]
+    fn test_classification_candidate_build_failure_exit_nonzero() {
+        let base = TestSummary { passed: 100, failed: 0, ignored: 0, ..Default::default() };
+        // Process returned exit code 101, but 0 tests failed because compilation failed
+        let cand = TestSummary { passed: 0, failed: 0, ignored: 0, ..Default::default() };
+        let status = classify_outcome_with_status(Some(&base), true, &cand, false);
+        assert_eq!(status, CompatStatus::CandidateRegression);
+    }
+
+    #[test]
+    fn test_classification_baseline_build_failure_exit_nonzero() {
+        let base = TestSummary { passed: 0, failed: 0, ignored: 0, ..Default::default() };
+        let cand = TestSummary { passed: 100, failed: 0, ignored: 0, ..Default::default() };
+        let status = classify_outcome_with_status(Some(&base), false, &cand, true);
+        assert_eq!(status, CompatStatus::InfrastructureFailure);
     }
 
     #[test]
