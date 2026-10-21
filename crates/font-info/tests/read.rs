@@ -150,8 +150,8 @@ fn damaged_fonts_never_panic() {
 
 #[test]
 fn registered_feature_names() {
-    assert_eq!(craft_font_info::feature_name("tnum"), Some("Tabular figures"));
-    assert_eq!(craft_font_info::feature_name("salt"), Some("Stylistic alternates"));
+    assert_eq!(craft_font_info::feature_name("tnum"), Some("Tabular Figures"));
+    assert_eq!(craft_font_info::feature_name("salt"), Some("Stylistic Alternates"));
     // Numbered sets and variants are named by the font; unknown tags have no name.
     for tag in ["ss01", "cv11", "zzzz", ""] {
         assert_eq!(craft_font_info::feature_name(tag), None, "{tag}");
@@ -166,4 +166,25 @@ fn feature_names_are_one_per_tag() {
     tags.dedup();
     assert_eq!(tags.len(), n, "a tag listed twice");
     assert!(tags.iter().all(|t| t.len() == 4 && t.is_ascii()));
+}
+
+/// The names are the registry's, so they follow how it capitalises: every word, small ones
+/// included, starts with a capital ("Small Capitals From Capitals", "JIS78 Forms"), and none is
+/// padding. Whether a name is the *right* word for its tag can't be checked without a second copy
+/// of the registry, so that stays a review question; what a test can hold is that no name drifts
+/// into house style, repeats another's, or goes missing.
+#[test]
+fn feature_names_are_capitalised_as_the_registry_writes_them() {
+    for (tag, name) in craft_font_info::FEATURE_NAMES {
+        assert!(!name.is_empty() && *name == name.trim() && name.is_ascii(), "{tag}: {name:?}");
+        for word in name.split(' ') {
+            assert!(word.starts_with(|c: char| c.is_ascii_uppercase()), "{tag}: {name:?} has {word:?}");
+        }
+    }
+    // Seven CJK tags once shared one label, so a UI showed seven identical toggles.
+    let mut names: Vec<&str> = craft_font_info::FEATURE_NAMES.iter().map(|(_, n)| *n).collect();
+    let n = names.len();
+    names.sort_unstable();
+    names.dedup();
+    assert_eq!(names.len(), n, "two tags share a label");
 }
