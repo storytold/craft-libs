@@ -28,7 +28,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use skrifa::raw::tables::gsub::{SingleSubst, SubstitutionSubtables};
 use skrifa::raw::tables::layout::{CoverageTable, FeatureParams};
 use skrifa::raw::{ReadError, TableProvider};
-use skrifa::{FontRef, MetadataProvider, string::StringId};
+use skrifa::string::{LocalizedString, StringId};
+use skrifa::{FontRef, MetadataProvider};
 
 /// Most characters kept as a feature's sample.
 const SAMPLE_CHARS: usize = 24;
@@ -147,8 +148,39 @@ pub fn read(data: &[u8], index: u32) -> Result<FaceDetails, NotAFont> {
     Ok(read_face(&font))
 }
 
+/// Every name the face gives, by ID, chosen as `skrifa`'s `english_or_first` chooses it.
+///
+/// Asking skrifa for a name by ID scans the whole `name` table, and a face asks for one per axis,
+/// per instance and per feature: a font with many of each, and a long `name` table, multiplies
+/// that into seconds. One pass over the table answers all of them.
+fn read_names(font: &FontRef) -> BTreeMap<u16, String> {
+    let Ok(table) = font.name() else { return BTreeMap::new() };
+    // The ranking of `english_or_first` (skrifa 0.44, `string.rs`), kept in step with it: en-US,
+    // then en, then a string with no language, then whatever comes first.
+    let mut out: BTreeMap<u16, (u8, String)> = BTreeMap::new();
+    for record in table.name_record() {
+        let string = LocalizedString::new(&table, record);
+        let rank = match string.language() {
+            Some("en-US") => 3,
+            Some("en") => 2,
+            None => 1,
+            _ => 0,
+        };
+        let id = record.name_id().to_u16();
+        match out.get_mut(&id) {
+            Some(best) if rank > best.0 => *best = (rank, string.to_string()),
+            Some(_) => {}
+            None => {
+                out.insert(id, (rank, string.to_string()));
+            }
+        }
+    }
+    out.into_iter().map(|(id, (_, string))| (id, string)).collect()
+}
+
 fn read_face(font: &FontRef) -> FaceDetails {
-    let name = |id: StringId| font.localized_strings(id).english_or_first().map(|s| s.to_string()).filter(|s| !s.trim().is_empty());
+    let names = read_names(font);
+    let name = |id: StringId| names.get(&id.to_u16()).filter(|s| !s.trim().is_empty()).cloned();
     let axes: Vec<AxisDetail> = font
         .axes()
         .iter()

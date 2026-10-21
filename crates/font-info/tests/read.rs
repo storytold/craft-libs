@@ -239,20 +239,65 @@ fn hostile_gsub(subtables: usize, indices: usize, records: usize) -> Vec<u8> {
     gsub
 }
 
-/// `font` with its `GSUB` replaced (or added), recomputing the table directory.
-fn with_gsub(font: &[u8], gsub: &[u8]) -> Vec<u8> {
+/// A `name` table with `count` UTF-16 records, the last of them carrying ID 30000; one `x` each.
+/// `stringOffset` is a `uint16`, so about 5,460 records is as long as a valid table gets.
+fn long_name_table(count: usize) -> Vec<u8> {
+    let mut out = Vec::new();
+    out.extend(0u16.to_be_bytes());
+    out.extend((count as u16).to_be_bytes());
+    out.extend(((6 + 12 * count) as u16).to_be_bytes());
+    for i in 0..count {
+        let id: u16 = if i + 1 == count { 30_000 } else { 1 };
+        out.extend(
+            [3u16.to_be_bytes(), 1u16.to_be_bytes(), 0x409u16.to_be_bytes(), id.to_be_bytes(), 2u16.to_be_bytes(), (2 * i as u16).to_be_bytes()]
+                .concat(),
+        );
+    }
+    for _ in 0..count {
+        out.extend([0u8, b'x']); // UTF-16BE "x"
+    }
+    out
+}
+
+/// A font whose `instances` named instances all take their name from ID 30000.
+fn many_instances(instances: u16) -> Vec<u8> {
+    let cmap = Cmap::from_mappings([('a', GlyphId::new(1))]).unwrap();
+    let axes = vec![VariationAxisRecord::new(
+        Tag::new(b"wght"),
+        Fixed::from_f64(100.0),
+        Fixed::from_f64(400.0),
+        Fixed::from_f64(900.0),
+        0,
+        NameId::new(30000),
+    )];
+    let inst: Vec<InstanceRecord> = (0..instances)
+        .map(|_| InstanceRecord {
+            subfamily_name_id: NameId::new(30000),
+            flags: 0,
+            coordinates: vec![Fixed::from_f64(400.0)],
+            post_script_name_id: None,
+        })
+        .collect();
+    let fvar = Fvar::new(AxisInstanceArrays::new(axes, inst));
+    let mut b = FontBuilder::new();
+    b.add_table(&cmap).unwrap().add_table(&Name::new(vec![name(30000, "Heavy")])).unwrap().add_table(&fvar).unwrap();
+    b.build()
+}
+
+/// `font` with `tag`'s table replaced (or added), recomputing the table directory.
+fn with_table(font: &[u8], tag: &[u8; 4], table: &[u8]) -> Vec<u8> {
     let count = usize::from(u16::from_be_bytes([font[4], font[5]]));
     let mut tables: Vec<([u8; 4], &[u8])> = Vec::new();
     for i in 0..count {
         let record = 12 + i * 16;
-        let tag: [u8; 4] = font[record..record + 4].try_into().unwrap();
+        let existing: [u8; 4] = font[record..record + 4].try_into().unwrap();
         let offset = u32::from_be_bytes(font[record + 8..record + 12].try_into().unwrap()) as usize;
         let length = u32::from_be_bytes(font[record + 12..record + 16].try_into().unwrap()) as usize;
-        if &tag != b"GSUB" {
-            tables.push((tag, &font[offset..offset + length]));
+        if &existing != tag {
+            tables.push((existing, &font[offset..offset + length]));
         }
     }
-    tables.push((*b"GSUB", gsub));
+    tables.push((*tag, table));
     tables.sort_by_key(|(tag, _)| *tag);
     let n = tables.len() as u16;
     let log: u16 = (tables.len() as f32).log2().floor() as u16;
@@ -284,11 +329,11 @@ fn one_glyph_font() -> Vec<u8> {
 }
 
 /// The per-list caps multiply: 512 records × 48 lookups each × every subtable of those lookups is
-/// 805 million coverage visits, which unbudgeted takes ~17 s optimized and minutes in a test
-/// build, from a font of under 200 KB. No per-list cap sees that, so the read has a budget.
+/// 805 million coverage visits, which unbudgeted takes ~37 s optimized and minutes in a test
+/// build, from a font of 120 KB. No per-list cap sees that, so the read has a budget.
 #[test]
 fn repeated_lookup_references_stay_within_budget() {
-    let bytes = with_gsub(&one_glyph_font(), &hostile_gsub(32_759, 48, 512));
+    let bytes = with_table(&one_glyph_font(), b"GSUB", &hostile_gsub(32_759, 48, 512));
     let started = std::time::Instant::now();
     let d = craft_font_info::read(&bytes, 0).unwrap();
     let took = started.elapsed();
@@ -302,11 +347,31 @@ fn repeated_lookup_references_stay_within_budget() {
 /// what it changes.
 #[test]
 fn a_lookup_shared_by_two_tags_still_counts_for_both() {
-    let d = craft_font_info::read(&with_gsub(&one_glyph_font(), &hostile_gsub(1, 1, 2)), 0).unwrap();
+    let d = craft_font_info::read(&with_table(&one_glyph_font(), b"GSUB", &hostile_gsub(1, 1, 2)), 0).unwrap();
     let tags: Vec<&str> = d.features.iter().map(|f| f.tag.as_str()).collect();
     assert_eq!(tags, ["0000", "0001"]);
     for tag in tags {
         let feature = d.feature(tag).unwrap();
         assert_eq!((feature.sample.as_str(), feature.changed), ("1", 1), "{tag}");
     }
+}
+
+/// Asking for a name by ID scans the whole `name` table, so a face that names 60 000 instances
+/// from a long table spends a scan per instance. Naming the same instances must not get slower
+/// when the table it reads them from gets 54 times longer.
+#[test]
+fn a_long_name_table_does_not_slow_every_instance() {
+    let base = many_instances(60_000);
+    let short = with_table(&base, b"name", &long_name_table(100));
+    let long = with_table(&base, b"name", &long_name_table(5_400));
+    let time = |bytes: &[u8]| {
+        let started = std::time::Instant::now();
+        let d = craft_font_info::read(bytes, 0).unwrap();
+        assert_eq!(d.instances.len(), 60_000, "every instance keeps its name");
+        assert_eq!(d.instances[0].name, "x");
+        started.elapsed().as_secs_f64()
+    };
+    time(&short); // warm the allocator up before comparing
+    let ratio = time(&long) / time(&short);
+    assert!(ratio < 5.0, "a 54× longer name table took {ratio:.1}× as long");
 }
