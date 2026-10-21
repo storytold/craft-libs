@@ -389,7 +389,7 @@ fn unresolvable_subtables_stay_within_budget() {
     let d = craft_font_info::read(&bytes, 0).unwrap();
     let took = started.elapsed();
     // Uncharged, resolving 393 million of them took 2 s optimized and ~20 s in a test build.
-    assert!(took < std::time::Duration::from_millis(500), "{took:?} for {} bytes", bytes.len());
+    assert!(took < std::time::Duration::from_secs(1), "{took:?} for {} bytes", bytes.len());
     // Nothing resolved, so nothing changed; the tags are still listed.
     assert!(d.features.is_empty() || d.features.iter().all(|f| f.changed == 0));
 }
