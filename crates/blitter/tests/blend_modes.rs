@@ -128,4 +128,10 @@ fn test_paint_net_modes() {
 
     assert_eq!(paint_net_color_burn(1.0, 0.0), 0.0);
     assert_eq!(paint_net_color_dodge(0.0, 1.0), 1.0);
+
+    // Verify integer kernels match float behavior at boundary extremes
+    assert_eq!(craft_blitter::fixed::blend_channel_u8(BlendMode::PaintNetColorBurn, 255, 0), 0);
+    assert_eq!(craft_blitter::fixed::blend_channel_u8(BlendMode::PaintNetColorDodge, 0, 255), 255);
+    assert_eq!(craft_blitter::fixed::blend_channel_u16(BlendMode::PaintNetColorBurn, 65535, 0), 0);
+    assert_eq!(craft_blitter::fixed::blend_channel_u16(BlendMode::PaintNetColorDodge, 0, 65535), 65535);
 }

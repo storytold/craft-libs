@@ -99,8 +99,10 @@ pub fn composite_gamma_f32(mode: BlendMode, backdrop: [f32; 4], source: [f32; 4]
 
 /// General compositing with separate opacity, fill, text gamma, and HDR modes.
 pub fn composite_fill_f32(mode: BlendMode, backdrop: [f32; 4], source: [f32; 4], opacity: f32, fill: f32, gamma: f32, hdr: bool) -> [f32; 4] {
+    let opacity = if opacity.is_nan() { 0.0 } else { opacity.clamp(0.0, 1.0) };
+    let fill = if fill.is_nan() { 1.0 } else { fill.clamp(0.0, 1.0) };
     if fill >= 1.0 || !special::fill_is_special(mode) {
-        return composite_gamma_f32(mode, backdrop, source, opacity * fill.clamp(0.0, 1.0), gamma, hdr);
+        return composite_gamma_f32(mode, backdrop, source, opacity * fill, gamma, hdr);
     }
     special::composite_special_eight_f32(mode, backdrop, source, opacity, fill, gamma, hdr)
 }
@@ -134,14 +136,37 @@ pub fn blit_rgba32f_inner(
     alpha_mode: AlphaMode,
     clipping: bool,
 ) {
-    if opacity <= 0.0 || dst.is_empty() || src.is_empty() {
+    if opacity.is_nan() || opacity <= 0.0 || dst.is_empty() || src.is_empty() {
         return;
     }
+    let opacity = opacity.min(1.0);
+    let fill = if fill.is_nan() { 1.0 } else { fill.clamp(0.0, 1.0) };
     let n = dst.len().min(src.len());
     let dst = &mut dst[..n];
     let src = &src[..n];
 
-    if alpha_mode == AlphaMode::Premultiplied && mode == BlendMode::Normal {
+    if alpha_mode == AlphaMode::Premultiplied {
+        if mode == BlendMode::Normal && !special::fill_is_special(mode) {
+            let eff_op = opacity * fill;
+            for (d, s) in dst.iter_mut().zip(src) {
+                if s[3] <= 0.0 {
+                    continue;
+                }
+                let orig_alpha = d[3];
+                if clipping && orig_alpha <= 0.0 {
+                    continue;
+                }
+                let res = composite_premultiplied_f32(*d, *s, eff_op);
+                *d = res;
+                if clipping {
+                    d[3] = orig_alpha;
+                }
+            }
+            return;
+        }
+
+        // For non-Normal or special fill modes with premultiplied input:
+        // Convert to straight alpha, composite, and re-premultiply.
         for (d, s) in dst.iter_mut().zip(src) {
             if s[3] <= 0.0 {
                 continue;
@@ -150,11 +175,25 @@ pub fn blit_rgba32f_inner(
             if clipping && orig_alpha <= 0.0 {
                 continue;
             }
-            let res = composite_premultiplied_f32(*d, *s, opacity);
-            *d = res;
-            if clipping {
-                d[3] = orig_alpha;
-            }
+            let inv_sa = 1.0 / s[3];
+            let s_straight = [s[0] * inv_sa, s[1] * inv_sa, s[2] * inv_sa, s[3]];
+            let d_straight = if d[3] > 0.0 {
+                let inv_da = 1.0 / d[3];
+                [d[0] * inv_da, d[1] * inv_da, d[2] * inv_da, d[3]]
+            } else {
+                [0.0, 0.0, 0.0, 0.0]
+            };
+
+            let res = if clipping {
+                let base_opaque = [d_straight[0], d_straight[1], d_straight[2], 1.0];
+                let comp = composite_fill_f32(mode, base_opaque, s_straight, opacity, fill, gamma, hdr);
+                [comp[0], comp[1], comp[2], orig_alpha]
+            } else {
+                composite_fill_f32(mode, d_straight, s_straight, opacity, fill, gamma, hdr)
+            };
+
+            let target_alpha = if clipping { orig_alpha } else { res[3] };
+            *d = [res[0] * target_alpha, res[1] * target_alpha, res[2] * target_alpha, target_alpha];
         }
         return;
     }

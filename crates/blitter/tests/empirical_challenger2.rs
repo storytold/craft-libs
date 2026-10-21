@@ -204,7 +204,7 @@ fn test_empirical_exclusion_single_pass_precision() {
     println!("Exclusion u8 exact matches: {exact_pct:.4}% ({exact_count}/65536), max_diff: {max_diff}");
 
     assert!(exact_pct >= 99.9, "Exclusion precision {exact_pct:.2}% is below required 99.9% threshold");
-    assert_eq!(max_diff, 1, "Exclusion max_diff must be <= 1");
+    assert!(max_diff <= 1, "Exclusion max_diff must be <= 1");
     println!("[PASS] Defect 3 (Single-pass Exclusion rounding precision) 100% resolved ({exact_pct:.2}% exact).");
 }
 

@@ -2,7 +2,7 @@ use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::Path;
 
-use craft_blitter::{AlphaMode, BlendMode, blit_rgba8, blit_rgba8_opts};
+use craft_blitter::{AlphaMode, BlendMode, blit_rgba8};
 
 // Standard IEEE 802.3 CRC32
 fn crc32(data: &[u8]) -> u32 {
@@ -141,12 +141,13 @@ fn create_source_overlay(w: u32, h: u32) -> Vec<u8> {
                 // Soft anti-aliased edge
                 let edge_alpha = ((radius - dist) / 10.0).clamp(0.0, 1.0);
                 let angle = dy.atan2(dx);
-                let hue_val = (angle / std::f32::consts::PI * 0.5 + 0.5);
+                let hue_val = angle / std::f32::consts::PI * 0.5 + 0.5;
+                let tau = std::f32::consts::TAU;
 
                 // Vibrant multi-color gradient circle
-                let r = ((0.5 + 0.5 * (hue_val * 6.28).cos()) * 255.0) as u8;
-                let g = ((0.5 + 0.5 * (hue_val * 6.28 + 2.09).cos()) * 255.0) as u8;
-                let b = ((0.5 + 0.5 * (hue_val * 6.28 + 4.18).cos()) * 255.0) as u8;
+                let r = ((0.5 + 0.5 * (hue_val * tau).cos()) * 255.0) as u8;
+                let g = ((0.5 + 0.5 * (hue_val * tau + tau / 3.0).cos()) * 255.0) as u8;
+                let b = ((0.5 + 0.5 * (hue_val * tau + 2.0 * tau / 3.0).cos()) * 255.0) as u8;
                 let a = (220.0 * edge_alpha) as u8;
 
                 buf[idx] = r;
@@ -160,7 +161,8 @@ fn create_source_overlay(w: u32, h: u32) -> Vec<u8> {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let out_dir = Path::new(r"C:\Users\spuri\.gemini\antigravity\brain\2fc2e2e9-53e7-421f-adda-1818c398259b");
+    let out_dir = std::env::args_os().nth(1).map(std::path::PathBuf::from).unwrap_or_else(|| std::env::temp_dir().join("craft-blitter-visual"));
+    std::fs::create_dir_all(&out_dir)?;
     let (w, h) = (512, 384);
 
     let backdrop = create_backdrop(w, h);
@@ -223,12 +225,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 12. Bit-Exact Diff Verification Map (Scalar Reference vs craft-blitter SIMD)
     // Both produce identical bytes: diff is completely zero (black image)
+    let mut scalar_ref = backdrop.clone();
+    craft_blitter::fixed::blit_rgba8_fixed(&mut scalar_ref, &source, BlendMode::Normal, 1.0, 1.0, AlphaMode::Straight, false);
     let mut diff_map = vec![0u8; w as usize * h as usize * 4];
-    for (d, s) in diff_map.chunks_exact_mut(4).zip(normal_100.chunks_exact(4)) {
-        // Delta between scalar reference and SIMD blitter
-        d[0] = 0; // 0 diff
-        d[1] = 0; // 0 diff
-        d[2] = 0; // 0 diff
+    let (d_chunks, _) = diff_map.as_chunks_mut::<4>();
+    let (a_chunks, _) = normal_100.as_chunks::<4>();
+    let (b_chunks, _) = scalar_ref.as_chunks::<4>();
+    for ((d, a), b) in d_chunks.iter_mut().zip(a_chunks).zip(b_chunks) {
+        for c in 0..3 {
+            d[c] = a[c].abs_diff(b[c]);
+        }
         d[3] = 255;
     }
     write_png(&out_dir.join("13_bit_exact_diff_map_zero_error.png"), w, h, &diff_map)?;

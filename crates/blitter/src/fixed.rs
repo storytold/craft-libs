@@ -134,8 +134,20 @@ pub fn blend_channel_u8(mode: BlendMode, cb: u8, cs: u8) -> u8 {
         BlendMode::Divide => divide_u8(cb, cs),
         BlendMode::Xor => cb ^ cs,
         BlendMode::Negation => (255 - (255 - cb as i32 - cs as i32).abs()) as u8,
-        BlendMode::PaintNetColorBurn => color_burn_u8(cb, cs),
-        BlendMode::PaintNetColorDodge => color_dodge_u8(cb, cs),
+        BlendMode::PaintNetColorBurn => {
+            if cs == 0 {
+                0
+            } else {
+                color_burn_u8(cb, cs)
+            }
+        }
+        BlendMode::PaintNetColorDodge => {
+            if cs == 255 {
+                255
+            } else {
+                color_dodge_u8(cb, cs)
+            }
+        }
         // Fall back to float kernel for SoftLight, non-separable, and complex curves
         _ => {
             let res = crate::blend::blend_channel(mode, f32::from(cb) / 255.0, f32::from(cs) / 255.0, 1.0);
@@ -258,8 +270,20 @@ pub fn blend_channel_u16(mode: BlendMode, cb: u16, cs: u16) -> u16 {
         BlendMode::Divide => divide_u16(cb, cs),
         BlendMode::Xor => cb ^ cs,
         BlendMode::Negation => (65535 - (65535 - cb as i64 - cs as i64).abs()) as u16,
-        BlendMode::PaintNetColorBurn => color_burn_u16(cb, cs),
-        BlendMode::PaintNetColorDodge => color_dodge_u16(cb, cs),
+        BlendMode::PaintNetColorBurn => {
+            if cs == 0 {
+                0
+            } else {
+                color_burn_u16(cb, cs)
+            }
+        }
+        BlendMode::PaintNetColorDodge => {
+            if cs == 65535 {
+                65535
+            } else {
+                color_dodge_u16(cb, cs)
+            }
+        }
         _ => {
             let res = crate::blend::blend_channel(mode, f32::from(cb) / 65535.0, f32::from(cs) / 65535.0, 1.0);
             (res.clamp(0.0, 1.0) * 65535.0 + 0.5) as u16
@@ -290,11 +314,13 @@ pub fn blit_rgba8_fixed(dst: &mut [u8], src: &[u8], mode: BlendMode, opacity: f3
         return;
     }
 
-    let op8 = (opacity.clamp(0.0, 1.0) * 255.0 + 0.5) as u32;
+    let opacity = if opacity.is_nan() { 0.0 } else { opacity.clamp(0.0, 1.0) };
+    let fill = if fill.is_nan() { 1.0 } else { fill.clamp(0.0, 1.0) };
+    let op8 = (opacity * 255.0 + 0.5) as u32;
     if op8 == 0 {
         return;
     }
-    let fill8 = (fill.clamp(0.0, 1.0) * 255.0 + 0.5) as u32;
+    let fill8 = (fill * 255.0 + 0.5) as u32;
     let is_special = special::fill_is_special(mode) && fill < 1.0;
 
     let dst_slice = &mut dst[..num_pixels * 4];
@@ -319,16 +345,83 @@ pub fn blit_rgba8_fixed(dst: &mut [u8], src: &[u8], mode: BlendMode, opacity: f3
             continue;
         }
 
-        if alpha_mode == AlphaMode::Premultiplied && mode == BlendMode::Normal && !is_special {
-            let factor = 255 - as_;
-            let s_r = div255(s[0] as u32 * op8);
-            let s_g = div255(s[1] as u32 * op8);
-            let s_b = div255(s[2] as u32 * op8);
-            d[0] = (s_r + div255(d[0] as u32 * factor)).min(255) as u8;
-            d[1] = (s_g + div255(d[1] as u32 * factor)).min(255) as u8;
-            d[2] = (s_b + div255(d[2] as u32 * factor)).min(255) as u8;
+        if alpha_mode == AlphaMode::Premultiplied {
+            if mode == BlendMode::Normal && !is_special {
+                let k = if fill < 1.0 { div255(op8 * fill8) } else { op8 };
+                let as_ = div255(s_a * k);
+                let factor = 255 - as_;
+                let s_r = div255(s[0] as u32 * k);
+                let s_g = div255(s[1] as u32 * k);
+                let s_b = div255(s[2] as u32 * k);
+                d[0] = (s_r + div255(d[0] as u32 * factor)).min(255) as u8;
+                d[1] = (s_g + div255(d[1] as u32 * factor)).min(255) as u8;
+                d[2] = (s_b + div255(d[2] as u32 * factor)).min(255) as u8;
+                if !clipping {
+                    d[3] = (as_ + div255(b_a * factor)).min(255) as u8;
+                }
+                continue;
+            }
+
+            // For non-Normal or special modes with premultiplied inputs:
+            let s_straight = [
+                ((s[0] as u32 * 255 + s_a / 2) / s_a).min(255) as u8,
+                ((s[1] as u32 * 255 + s_a / 2) / s_a).min(255) as u8,
+                ((s[2] as u32 * 255 + s_a / 2) / s_a).min(255) as u8,
+                s[3],
+            ];
+            let d_straight = if let Some(nz_ba) = std::num::NonZeroU32::new(b_a) {
+                let div = nz_ba.get();
+                [
+                    ((d[0] as u32 * 255 + div / 2) / div).min(255) as u8,
+                    ((d[1] as u32 * 255 + div / 2) / div).min(255) as u8,
+                    ((d[2] as u32 * 255 + div / 2) / div).min(255) as u8,
+                    d[3],
+                ]
+            } else {
+                [0, 0, 0, 0]
+            };
+
+            let eff_ba = if clipping { 255 } else { b_a };
+            let res = if is_special {
+                let base_opaque = [d_straight[0], d_straight[1], d_straight[2], eff_ba as u8];
+                special::composite_special_eight_u8(mode, base_opaque, s_straight, op8, fill8)
+            } else {
+                let eff_as = if fill < 1.0 { div255(as_ * fill8) } else { as_ };
+                if eff_as == 0 {
+                    continue;
+                }
+                let ao = eff_as + div255(eff_ba * (255 - eff_as));
+                if ao == 0 {
+                    d[0] = 0;
+                    d[1] = 0;
+                    d[2] = 0;
+                    d[3] = 0;
+                    continue;
+                }
+                let cb = [d_straight[0], d_straight[1], d_straight[2]];
+                let cs = [s_straight[0], s_straight[1], s_straight[2]];
+                let b = blend_rgb_u8(mode, cb, cs);
+                let mut out = [0u8; 4];
+                if eff_ba == 255 {
+                    for c in 0..3 {
+                        out[c] = lerp255(b[c], cb[c], eff_as as u8);
+                    }
+                } else {
+                    let kb = div255(eff_ba * (255 - eff_as));
+                    for c in 0..3 {
+                        out[c] = ((kb * cb[c] as u32 + eff_as * b[c] as u32 + ao / 2) / ao).min(255) as u8;
+                    }
+                }
+                out[3] = ao.min(255) as u8;
+                out
+            };
+
+            let target_alpha = if clipping { b_a } else { res[3] as u32 };
+            d[0] = div255(res[0] as u32 * target_alpha) as u8;
+            d[1] = div255(res[1] as u32 * target_alpha) as u8;
+            d[2] = div255(res[2] as u32 * target_alpha) as u8;
             if !clipping {
-                d[3] = (as_ + div255(b_a * factor)).min(255) as u8;
+                d[3] = target_alpha as u8;
             }
             continue;
         }
@@ -408,11 +501,13 @@ pub fn blit_rgba16_fixed(dst: &mut [u16], src: &[u16], mode: BlendMode, opacity:
         return;
     }
 
-    let op16 = (opacity.clamp(0.0, 1.0) * 65535.0 + 0.5) as u64;
+    let opacity = if opacity.is_nan() { 0.0 } else { opacity.clamp(0.0, 1.0) };
+    let fill = if fill.is_nan() { 1.0 } else { fill.clamp(0.0, 1.0) };
+    let op16 = (opacity * 65535.0 + 0.5) as u64;
     if op16 == 0 {
         return;
     }
-    let fill16 = (fill.clamp(0.0, 1.0) * 65535.0 + 0.5) as u64;
+    let fill16 = (fill * 65535.0 + 0.5) as u64;
     let is_special = special::fill_is_special(mode) && fill < 1.0;
 
     let dst_slice = &mut dst[..num_pixels * 4];
@@ -437,16 +532,83 @@ pub fn blit_rgba16_fixed(dst: &mut [u16], src: &[u16], mode: BlendMode, opacity:
             continue;
         }
 
-        if alpha_mode == AlphaMode::Premultiplied && mode == BlendMode::Normal && !is_special {
-            let factor = 65535 - as_;
-            let s_r = div65535(s[0] as u64 * op16) as u64;
-            let s_g = div65535(s[1] as u64 * op16) as u64;
-            let s_b = div65535(s[2] as u64 * op16) as u64;
-            d[0] = (s_r + div65535(d[0] as u64 * factor) as u64).min(65535) as u16;
-            d[1] = (s_g + div65535(d[1] as u64 * factor) as u64).min(65535) as u16;
-            d[2] = (s_b + div65535(d[2] as u64 * factor) as u64).min(65535) as u16;
+        if alpha_mode == AlphaMode::Premultiplied {
+            if mode == BlendMode::Normal && !is_special {
+                let k = if fill < 1.0 { div65535(op16 * fill16) as u64 } else { op16 };
+                let as_ = div65535(s_a * k) as u64;
+                let factor = 65535 - as_;
+                let s_r = div65535(s[0] as u64 * k) as u64;
+                let s_g = div65535(s[1] as u64 * k) as u64;
+                let s_b = div65535(s[2] as u64 * k) as u64;
+                d[0] = (s_r + div65535(d[0] as u64 * factor) as u64).min(65535) as u16;
+                d[1] = (s_g + div65535(d[1] as u64 * factor) as u64).min(65535) as u16;
+                d[2] = (s_b + div65535(d[2] as u64 * factor) as u64).min(65535) as u16;
+                if !clipping {
+                    d[3] = (as_ + div65535(b_a * factor) as u64).min(65535) as u16;
+                }
+                continue;
+            }
+
+            // For non-Normal or special modes with premultiplied inputs:
+            let s_straight = [
+                ((s[0] as u64 * 65535 + s_a / 2) / s_a).min(65535) as u16,
+                ((s[1] as u64 * 65535 + s_a / 2) / s_a).min(65535) as u16,
+                ((s[2] as u64 * 65535 + s_a / 2) / s_a).min(65535) as u16,
+                s[3],
+            ];
+            let d_straight = if let Some(nz_ba) = std::num::NonZeroU64::new(b_a) {
+                let div = nz_ba.get();
+                [
+                    ((d[0] as u64 * 65535 + div / 2) / div).min(65535) as u16,
+                    ((d[1] as u64 * 65535 + div / 2) / div).min(65535) as u16,
+                    ((d[2] as u64 * 65535 + div / 2) / div).min(65535) as u16,
+                    d[3],
+                ]
+            } else {
+                [0, 0, 0, 0]
+            };
+
+            let eff_ba = if clipping { 65535 } else { b_a };
+            let res = if is_special {
+                let base_opaque = [d_straight[0], d_straight[1], d_straight[2], eff_ba as u16];
+                special::composite_special_eight_u16(mode, base_opaque, s_straight, op16, fill16)
+            } else {
+                let eff_as = if fill < 1.0 { div65535(as_ * fill16) as u64 } else { as_ };
+                if eff_as == 0 {
+                    continue;
+                }
+                let ao = eff_as + div65535(eff_ba * (65535 - eff_as)) as u64;
+                if ao == 0 {
+                    d[0] = 0;
+                    d[1] = 0;
+                    d[2] = 0;
+                    d[3] = 0;
+                    continue;
+                }
+                let cb = [d_straight[0], d_straight[1], d_straight[2]];
+                let cs = [s_straight[0], s_straight[1], s_straight[2]];
+                let b = blend_rgb_u16(mode, cb, cs);
+                let mut out = [0u16; 4];
+                if eff_ba == 65535 {
+                    for c in 0..3 {
+                        out[c] = lerp65535(b[c], cb[c], eff_as as u16);
+                    }
+                } else {
+                    let kb = div65535(eff_ba * (65535 - eff_as)) as u64;
+                    for c in 0..3 {
+                        out[c] = ((kb * cb[c] as u64 + eff_as * b[c] as u64 + ao / 2) / ao).min(65535) as u16;
+                    }
+                }
+                out[3] = ao.min(65535) as u16;
+                out
+            };
+
+            let target_alpha = if clipping { b_a } else { res[3] as u64 };
+            d[0] = div65535(res[0] as u64 * target_alpha) as u16;
+            d[1] = div65535(res[1] as u64 * target_alpha) as u16;
+            d[2] = div65535(res[2] as u64 * target_alpha) as u16;
             if !clipping {
-                d[3] = (as_ + div65535(b_a * factor) as u64).min(65535) as u16;
+                d[3] = target_alpha as u16;
             }
             continue;
         }

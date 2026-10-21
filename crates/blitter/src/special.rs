@@ -65,9 +65,11 @@ pub fn composite_special_eight_f32(
     gamma: f32,
     hdr: bool,
 ) -> [f32; 4] {
+    let opacity = if opacity.is_nan() { 0.0 } else { opacity.clamp(0.0, 1.0) };
+    let fill = if fill.is_nan() { 1.0 } else { fill.clamp(0.0, 1.0) };
     let ab = backdrop[3];
     let over = source[3] * opacity;
-    let alone = over * fill.clamp(0.0, 1.0);
+    let alone = over * fill;
     if over <= 0.0 {
         return backdrop;
     }
@@ -98,6 +100,8 @@ pub fn composite_special_eight_f32(
 
 /// Fixed-point Special Eight composite for RGBA8.
 pub fn composite_special_eight_u8(mode: BlendMode, backdrop: [u8; 4], source: [u8; 4], op8: u32, fill8: u32) -> [u8; 4] {
+    let op8 = op8.min(255);
+    let fill8 = fill8.min(255);
     let s_a = source[3] as u32;
     let over = div255(s_a * op8);
     if over == 0 {
@@ -165,6 +169,8 @@ pub fn composite_special_eight_u8(mode: BlendMode, backdrop: [u8; 4], source: [u
 
 /// Fixed-point Special Eight composite for RGBA16.
 pub fn composite_special_eight_u16(mode: BlendMode, backdrop: [u16; 4], source: [u16; 4], op16: u64, fill16: u64) -> [u16; 4] {
+    let op16 = op16.min(65535);
+    let fill16 = fill16.min(65535);
     let s_a = source[3] as u64;
     let over = div65535(s_a * op16) as u64;
     if over == 0 {

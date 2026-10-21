@@ -128,3 +128,74 @@ fn test_rgba32f_gamma_text_blit() {
     assert!((dst[0][1] * 255.0 - 80.0).abs() < 1.0);
     assert!((dst[0][2] * 255.0 - 146.0).abs() < 1.0);
 }
+
+#[test]
+fn test_premultiplied_non_normal_and_fill_modes() {
+    use craft_blitter::{AlphaMode, blit_rgba8_opts, blit_rgba16_opts, blit_rgba32f_opts};
+
+    // 1. Premultiplied Multiply (RGBA8)
+    let mut dst8 = [128u8, 128, 128, 128]; // straight color: [255, 255, 255]
+    let src8 = [64u8, 64, 64, 128]; // straight color: [128, 128, 128]
+    blit_rgba8_opts(&mut dst8, &src8, BlendMode::Multiply, 1.0, 1.0, AlphaMode::Premultiplied, false);
+    // Multiply of 255 and 128 is 128. Output alpha = 128 + 128*(1 - 0.5) = 192.
+    // Premultiplied RGB channel should be <= Alpha channel
+    assert!(dst8[0] <= dst8[3]);
+    assert!(dst8[1] <= dst8[3]);
+    assert!(dst8[2] <= dst8[3]);
+    assert_eq!(dst8[3], 192);
+
+    // 2. Premultiplied Normal with partial fill (RGBA8)
+    let mut dst_norm = [0u8, 0, 0, 0];
+    let src_norm = [200u8, 200, 200, 200];
+    blit_rgba8_opts(&mut dst_norm, &src_norm, BlendMode::Normal, 1.0, 0.5, AlphaMode::Premultiplied, false);
+    assert_eq!(dst_norm[3], 100);
+    assert_eq!(dst_norm[0], 100);
+
+    // 3. Premultiplied non-normal (RGBA16)
+    let mut dst16 = [32768u16, 32768, 32768, 32768];
+    let src16 = [16384u16, 16384, 16384, 32768];
+    blit_rgba16_opts(&mut dst16, &src16, BlendMode::Multiply, 1.0, 1.0, AlphaMode::Premultiplied, false);
+    assert!(dst16[0] <= dst16[3]);
+    assert!(dst16[1] <= dst16[3]);
+    assert!(dst16[2] <= dst16[3]);
+
+    // 4. Premultiplied non-normal (RGBA32F)
+    let mut dst32 = [[0.5f32, 0.5, 0.5, 0.5]];
+    let src32 = [[0.25f32, 0.25, 0.25, 0.5]];
+    blit_rgba32f_opts(&mut dst32, &src32, BlendMode::Multiply, 1.0, 1.0, 1.0, false, AlphaMode::Premultiplied, false);
+    assert!(dst32[0][0] <= dst32[0][3]);
+    assert!((dst32[0][3] - 0.75).abs() < 1e-5);
+}
+
+#[test]
+fn test_special_eight_clamping_robustness() {
+    use craft_blitter::special::{composite_special_eight_u8, composite_special_eight_u16};
+
+    // op8 / fill8 larger than 255 should not panic with overflow
+    let bg8 = [100u8, 150, 200, 255];
+    let src8 = [50u8, 120, 180, 255];
+    let res8 = composite_special_eight_u8(BlendMode::VividLight, bg8, src8, 999, 888);
+    assert_eq!(res8[3], 255);
+
+    // op16 / fill16 larger than 65535 should not panic with overflow
+    let bg16 = [25000u16, 35000, 45000, 65535];
+    let src16 = [15000u16, 25000, 35000, 65535];
+    let res16 = composite_special_eight_u16(BlendMode::VividLight, bg16, src16, 999_999, 888_888);
+    assert_eq!(res16[3], 65535);
+}
+
+#[test]
+fn test_nan_opacity_and_fill_sanitization() {
+    use craft_blitter::{AlphaMode, blit_rgba32f_opts};
+
+    let mut dst = [[0.5f32, 0.5, 0.5, 1.0]];
+    let src = [[0.8f32, 0.8, 0.8, 1.0]];
+
+    // NaN opacity should be treated as 0 (no-op)
+    blit_rgba32f_opts(&mut dst, &src, BlendMode::Normal, f32::NAN, 1.0, 1.0, false, AlphaMode::Straight, false);
+    assert_eq!(dst[0], [0.5, 0.5, 0.5, 1.0]);
+
+    // NaN fill should be treated as 1.0
+    blit_rgba32f_opts(&mut dst, &src, BlendMode::Normal, 1.0, f32::NAN, 1.0, false, AlphaMode::Straight, false);
+    assert_eq!(dst[0], [0.8, 0.8, 0.8, 1.0]);
+}
