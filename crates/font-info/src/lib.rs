@@ -369,9 +369,9 @@ fn gsub_features(
     Ok(())
 }
 
-/// What one read may still spend on `GSUB`: subtables entered and coverage glyphs read, over the
-/// whole face. Caps on each list don't bound the total, since any number of features can name the
-/// same lookup, and that lookup can hold many subtables.
+/// What one read may still spend on `GSUB`: subtable offsets resolved and coverage glyphs read,
+/// over the whole face. Caps on each list don't bound the total, since any number of features can
+/// name the same lookup, and that lookup can hold many subtables.
 struct Budget {
     subtables: usize,
     glyphs: usize,
@@ -407,17 +407,19 @@ fn collect_coverage(subtables: &SubstitutionSubtables, set: &mut BTreeSet<u16>, 
                 SingleSubst::Format1(t) => t.coverage(),
                 SingleSubst::Format2(t) => t.coverage(),
             };
-            add_coverage(s.iter().flatten(), coverage, set, budget);
+            add_coverage(s.iter(), coverage, set, budget);
         }
-        SubstitutionSubtables::Multiple(s) => add_coverage(s.iter().flatten(), |t| t.coverage(), set, budget),
-        SubstitutionSubtables::Alternate(s) => add_coverage(s.iter().flatten(), |t| t.coverage(), set, budget),
-        SubstitutionSubtables::Ligature(s) => add_coverage(s.iter().flatten(), |t| t.coverage(), set, budget),
+        SubstitutionSubtables::Multiple(s) => add_coverage(s.iter(), |t| t.coverage(), set, budget),
+        SubstitutionSubtables::Alternate(s) => add_coverage(s.iter(), |t| t.coverage(), set, budget),
+        SubstitutionSubtables::Ligature(s) => add_coverage(s.iter(), |t| t.coverage(), set, budget),
         _ => {}
     }
 }
 
-/// Adds the coverage of each subtable to `set` until the read's budget runs out.
-fn add_coverage<'a, T, F>(subtables: impl Iterator<Item = T>, coverage: F, set: &mut BTreeSet<u16>, budget: &mut Budget)
+/// Adds the coverage of each subtable to `set` until the read's budget runs out. An offset that
+/// fails to resolve costs the budget too: a malformed table can hold thousands of them, and
+/// dropping them before the budget is charged would make resolving them free.
+fn add_coverage<'a, T, F>(subtables: impl Iterator<Item = Result<T, ReadError>>, coverage: F, set: &mut BTreeSet<u16>, budget: &mut Budget)
 where
     F: Fn(T) -> Result<CoverageTable<'a>, ReadError>,
 {
@@ -425,6 +427,7 @@ where
         if !budget.subtable() {
             return;
         }
+        let Ok(subtable) = subtable else { continue };
         let Ok(table) = coverage(subtable) else { continue };
         for glyph in table.iter().take(MAX_COVERAGE) {
             if !budget.glyph() {

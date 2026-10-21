@@ -192,7 +192,7 @@ fn feature_names_are_capitalised_as_the_registry_writes_them() {
 /// A `GSUB` shaped like an attack, which no font tool would build and `write-fonts` refuses to:
 /// one lookup holding `subtables` offsets that all point at the same 12-byte substitution, listed
 /// `indices` times in the lookup list, and named by `records` feature records with distinct tags.
-fn hostile_gsub(subtables: usize, indices: usize, records: usize) -> Vec<u8> {
+fn hostile_gsub(subtables: usize, indices: usize, records: usize, resolvable: bool) -> Vec<u8> {
     let mut script = Vec::new();
     script.extend(1u16.to_be_bytes()); // ScriptList: one script,
     script.extend(b"DFLT");
@@ -224,10 +224,14 @@ fn hostile_gsub(subtables: usize, indices: usize, records: usize) -> Vec<u8> {
     }
     lookups.extend([1u16.to_be_bytes(), 0u16.to_be_bytes(), (subtables as u16).to_be_bytes()].concat());
     for _ in 0..subtables {
-        lookups.extend(((6 + 2 * subtables) as u16).to_be_bytes()); // after type, flag and count
+        // Just past what the table holds, so every one of them fails to resolve.
+        let offset = if resolvable { (6 + 2 * subtables) as u16 } else { 0xFFFE };
+        lookups.extend(offset.to_be_bytes());
     }
-    lookups.extend([1u16.to_be_bytes(), 6u16.to_be_bytes(), 1i16.to_be_bytes()].concat()); // single: 3 → 4
-    lookups.extend([1u16.to_be_bytes(), 1u16.to_be_bytes(), 3u16.to_be_bytes()].concat()); // coverage: glyph 3
+    if resolvable {
+        lookups.extend([1u16.to_be_bytes(), 6u16.to_be_bytes(), 1i16.to_be_bytes()].concat()); // single: 3 → 4
+        lookups.extend([1u16.to_be_bytes(), 1u16.to_be_bytes(), 3u16.to_be_bytes()].concat()); // coverage: glyph 3
+    }
 
     let mut gsub = vec![0, 1, 0, 0];
     for offset in [10, 10 + script.len(), 10 + script.len() + features.len()] {
@@ -333,7 +337,7 @@ fn one_glyph_font() -> Vec<u8> {
 /// build, from a font of 120 KB. No per-list cap sees that, so the read has a budget.
 #[test]
 fn repeated_lookup_references_stay_within_budget() {
-    let bytes = with_table(&one_glyph_font(), b"GSUB", &hostile_gsub(32_759, 48, 512));
+    let bytes = with_table(&one_glyph_font(), b"GSUB", &hostile_gsub(32_759, 48, 512, true));
     let started = std::time::Instant::now();
     let d = craft_font_info::read(&bytes, 0).unwrap();
     let took = started.elapsed();
@@ -347,7 +351,7 @@ fn repeated_lookup_references_stay_within_budget() {
 /// what it changes.
 #[test]
 fn a_lookup_shared_by_two_tags_still_counts_for_both() {
-    let d = craft_font_info::read(&with_table(&one_glyph_font(), b"GSUB", &hostile_gsub(1, 1, 2)), 0).unwrap();
+    let d = craft_font_info::read(&with_table(&one_glyph_font(), b"GSUB", &hostile_gsub(1, 1, 2, true)), 0).unwrap();
     let tags: Vec<&str> = d.features.iter().map(|f| f.tag.as_str()).collect();
     assert_eq!(tags, ["0000", "0001"]);
     for tag in tags {
@@ -374,4 +378,18 @@ fn a_long_name_table_does_not_slow_every_instance() {
     time(&short); // warm the allocator up before comparing
     let ratio = time(&long) / time(&short);
     assert!(ratio < 5.0, "a 54× longer name table took {ratio:.1}× as long");
+}
+
+/// A malformed table whose subtable offsets all fail to resolve must not walk them for free: the
+/// budget pays for each offset it resolves, successful or not.
+#[test]
+fn unresolvable_subtables_stay_within_budget() {
+    let bytes = with_table(&one_glyph_font(), b"GSUB", &hostile_gsub(16_000, 48, 512, false));
+    let started = std::time::Instant::now();
+    let d = craft_font_info::read(&bytes, 0).unwrap();
+    let took = started.elapsed();
+    // Uncharged, resolving 393 million of them took 2 s optimized and ~20 s in a test build.
+    assert!(took < std::time::Duration::from_millis(500), "{took:?} for {} bytes", bytes.len());
+    // Nothing resolved, so nothing changed; the tags are still listed.
+    assert!(d.features.is_empty() || d.features.iter().all(|f| f.changed == 0));
 }
