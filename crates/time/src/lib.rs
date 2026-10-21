@@ -119,12 +119,12 @@ impl Tick {
         self.0.checked_mul(rhs).map(Tick)
     }
 
-    /// Checked division. Returns `None` if `rhs == 0` or if overflow occurred (`Tick::MIN / -1`).
+    /// Checked division. Returns `None` if `rhs == 0` or if overflow occurred (`Tick(i64::MIN) / -1`).
     pub fn checked_div(self, rhs: i64) -> Option<Tick> {
         self.0.checked_div(rhs).map(Tick)
     }
 
-    /// Checked remainder. Returns `None` if `rhs.0 == 0` or if overflow occurred (`Tick::MIN % Tick(-1)`).
+    /// Checked remainder. Returns `None` if `rhs.0 == 0` or if overflow occurred (`Tick(i64::MIN) % Tick(-1)`).
     pub fn checked_rem(self, rhs: Tick) -> Option<Tick> {
         self.0.checked_rem(rhs.0).map(Tick)
     }
@@ -144,7 +144,7 @@ impl Tick {
         Tick(self.0.saturating_mul(rhs))
     }
 
-    /// Saturating division. Returns `None` if `rhs == 0`, and saturates on overflow (`Tick::MIN / -1 -> Tick(i64::MAX)`).
+    /// Saturating division. Returns `None` if `rhs == 0`, and saturates on overflow (`Tick(i64::MIN) / -1 -> Tick(i64::MAX)`).
     pub fn saturating_div(self, rhs: i64) -> Option<Tick> {
         if rhs == 0 { None } else { Some(Tick(self.0.saturating_div(rhs))) }
     }
@@ -193,7 +193,7 @@ impl Mul<i64> for Tick {
 impl Div<i64> for Tick {
     type Output = Tick;
     fn div(self, rhs: i64) -> Tick {
-        // Operator division policy: Div saturates on overflow (e.g. Tick::MIN / -1 -> Tick(i64::MAX))
+        // Operator division policy: Div saturates on overflow (e.g. Tick(i64::MIN) / -1 -> Tick(i64::MAX))
         // using self.0.saturating_div(rhs) to preserve monotonicity across the full range.
         // Division by zero yields Tick::ZERO. For fallible division that detects zero divisors,
         // use Tick::checked_div().
@@ -205,7 +205,7 @@ impl Rem<Tick> for Tick {
     type Output = Tick;
     fn rem(self, rhs: Tick) -> Tick {
         // Operator remainder policy: Rem produces exact remainder where defined,
-        // and Tick::ZERO for zero divisor or Tick::MIN % Tick(-1) (which is mathematically 0).
+        // and Tick::ZERO for zero divisor or Tick(i64::MIN) % Tick(-1) (which is mathematically 0).
         // For fallible remainder, use Tick::checked_rem().
         if rhs.0 == 0 || (self.0 == i64::MIN && rhs.0 == -1) { Tick::ZERO } else { Tick(self.0 % rhs.0) }
     }
@@ -512,9 +512,15 @@ pub fn format_time(t: Tick, rate: FrameRate, drop_frame: bool, display: TimeDisp
             format!("{}{}+{:02}", if neg { "-" } else { "" }, a / per_ft, a % per_ft)
         }
         TimeDisplay::AudioSamples => {
-            let secs = t.0.div_euclid(TICKS_PER_SECOND);
-            let rem = Tick(t.0.rem_euclid(TICKS_PER_SECOND)).to_units_floor(sample_rate);
-            format!("{:02}:{:02}:{:02}:{rem:05}", secs / 3600, (secs / 60) % 60, secs % 60)
+            let neg = t.0 < 0;
+            let abs_ticks = t.0.unsigned_abs();
+            let total_secs = abs_ticks / (TICKS_PER_SECOND as u64);
+            let rem_ticks = abs_ticks % (TICKS_PER_SECOND as u64);
+            let rem_samples = (rem_ticks as u128 * sample_rate as u128) / (TICKS_PER_SECOND as u128);
+            let h = total_secs / 3600;
+            let m = (total_secs / 60) % 60;
+            let s = total_secs % 60;
+            format!("{}{:02}:{:02}:{:02}:{:05}", if neg { "-" } else { "" }, h, m, s, rem_samples)
         }
         TimeDisplay::Seconds => format!("{:.3}", t.seconds()),
     }
@@ -555,9 +561,9 @@ pub fn parse_timecode(input: &str, rate: FrameRate, drop_frame: bool, current: i
     if s.is_empty() {
         return Err(ParseError("empty timecode".into()));
     }
-    let (rel, body) = match s.as_bytes()[0] {
-        b'+' => (Some(1), &s[1..]),
-        b'-' => (Some(-1), &s[1..]),
+    let (sign_char, body) = match s.as_bytes()[0] {
+        b'+' => (Some('+'), &s[1..]),
+        b'-' => (Some('-'), &s[1..]),
         _ => (None, s),
     };
     let parts: Vec<&str> = body.split([':', ';', '.', ',']).collect();
@@ -566,7 +572,7 @@ pub fn parse_timecode(input: &str, rate: FrameRate, drop_frame: bool, current: i
         if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
             return Err(ParseError(format!("not a timecode: `{input}`")));
         }
-        if rel.is_some() {
+        if sign_char.is_some() {
             vec![digits.parse().map_err(|_| ParseError("number too large".into()))?]
         } else {
             let mut v = Vec::new();
@@ -583,7 +589,16 @@ pub fn parse_timecode(input: &str, rate: FrameRate, drop_frame: bool, current: i
     } else {
         parts
             .iter()
-            .map(|p| if p.is_empty() { Ok(0) } else { p.parse::<i64>().map_err(|_| ParseError(format!("bad field `{p}`"))) })
+            .map(|p| {
+                if p.is_empty() {
+                    Ok(0)
+                } else {
+                    if !p.bytes().all(|b| b.is_ascii_digit()) {
+                        return Err(ParseError(format!("bad field `{p}`")));
+                    }
+                    p.parse::<i64>().map_err(|_| ParseError(format!("bad field `{p}`")))
+                }
+            })
             .collect::<Result<_, _>>()?
     };
     if nums.len() > 4 {
@@ -594,17 +609,23 @@ pub fn parse_timecode(input: &str, rate: FrameRate, drop_frame: bool, current: i
     f4[off..].copy_from_slice(&nums);
     let [h, m, sec, fr] = f4;
     let base = rate.timecode_base();
-    let frames = if nums.len() == 1 && rel.is_some() {
+    let frames = if nums.len() == 1 && sign_char.is_some() {
         fr
     } else if drop_frame && rate.supports_drop_frame() && m < 60 && sec < 60 && fr < base {
         fields_to_frames(h, m, sec, fr, rate, true)
     } else {
         h.saturating_mul(3600).saturating_add(m.saturating_mul(60)).saturating_add(sec).saturating_mul(base).saturating_add(fr)
     };
-    Ok(match rel {
-        Some(sign) => current.saturating_add(frames.saturating_mul(sign)),
-        None => frames,
-    })
+
+    match sign_char {
+        Some('+') => Ok(current.saturating_add(frames)),
+        Some('-') => {
+            // A full 4-field timecode with leading '-' represents an absolute negative timecode (e.g. preroll).
+            // Single-number or partial relative offsets (e.g. -15 or -1.00) offset from current.
+            if nums.len() == 4 { Ok(-frames) } else { Ok(current.saturating_sub(frames)) }
+        }
+        None | Some(_) => Ok(frames),
+    }
 }
 
 /// Parse a Feet + Frames field into a frame count.
@@ -695,6 +716,45 @@ mod tests {
                 assert_eq!(parsed, Ok(f), "rate: {}, frame: {}, tc: {}", r, f, tc);
             }
         }
+    }
+
+    #[test]
+    fn test_audio_samples_formatting_negative_ticks() {
+        let r = FrameRate::FPS_24;
+        let neg_1s = Tick(-TICKS_PER_SECOND);
+        assert_eq!(format_time(neg_1s, r, false, TimeDisplay::AudioSamples, 48_000), "-00:00:01:00000");
+
+        let pos_1s = Tick(TICKS_PER_SECOND);
+        assert_eq!(format_time(pos_1s, r, false, TimeDisplay::AudioSamples, 48_000), "00:00:01:00000");
+
+        let neg_complex = Tick(-3661 * TICKS_PER_SECOND);
+        assert_eq!(format_time(neg_complex, r, false, TimeDisplay::AudioSamples, 48_000), "-01:01:01:00000");
+
+        let zero = Tick::ZERO;
+        assert_eq!(format_time(zero, r, false, TimeDisplay::AudioSamples, 48_000), "00:00:00:00000");
+    }
+
+    #[test]
+    fn test_parse_timecode_negative_absolute_independent_of_current() {
+        let r = FrameRate::FPS_29_97;
+        // Negative full 4-field timecode must parse as absolute negative frames, not offset from current
+        assert_eq!(parse_timecode("-00;01;00;02", r, true, 5000), Ok(-1800));
+        assert_eq!(parse_timecode("-00;01;00;02", r, true, 0), Ok(-1800));
+
+        let r24 = FrameRate::FPS_24;
+        assert_eq!(parse_timecode("-01:00:00:00", r24, false, 9999), Ok(-86400));
+
+        // Single-number relative entries must offset from current
+        assert_eq!(parse_timecode("-15", r24, false, 5000), Ok(4985));
+        assert_eq!(parse_timecode("+15", r24, false, 5000), Ok(5015));
+    }
+
+    #[test]
+    fn test_parse_timecode_rejects_signed_inner_fields() {
+        let r = FrameRate::FPS_24;
+        assert!(parse_timecode("00:-30:00:00", r, false, 0).is_err());
+        assert!(parse_timecode("01:+5:00:00", r, false, 0).is_err());
+        assert!(parse_timecode("00:00:-01:00", r, false, 0).is_err());
     }
 
     #[test]
