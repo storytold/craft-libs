@@ -223,8 +223,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     blit_rgba8(&mut fill_50, &source, BlendMode::VividLight, 1.0, 0.5);
     write_png(&out_dir.join("12_vivid_light_fill_50.png"), w, h, &fill_50)?;
 
-    // 12. Bit-Exact Diff Verification Map (Scalar Reference vs craft-blitter SIMD)
-    // Both produce identical bytes: diff is completely zero (black image)
+    // 12. Bit-Exact Diff Verification Map (Fixed-Path Pipeline Parity)
+    // Compares public chunked blit_rgba8 against sequential fixed::blit_rgba8_fixed reference: diff is completely zero
     let mut scalar_ref = backdrop.clone();
     craft_blitter::fixed::blit_rgba8_fixed(&mut scalar_ref, &source, BlendMode::Normal, 1.0, 1.0, AlphaMode::Straight, false);
     let mut diff_map = vec![0u8; w as usize * h as usize * 4];
@@ -237,7 +237,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         d[3] = 255;
     }
-    write_png(&out_dir.join("13_bit_exact_diff_map_zero_error.png"), w, h, &diff_map)?;
+    write_png(&out_dir.join("13_bit_exact_diff_map_fixed_parity.png"), w, h, &diff_map)?;
 
     println!("All visual comparison images generated successfully in {:?}", out_dir);
     Ok(())
