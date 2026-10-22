@@ -26,6 +26,7 @@ craft-docpath = { path = "crates/docpath" }
 craft-i18n = { path = "crates/i18n" }
 craft-media = { path = "crates/media" }
 craft-print = { path = "crates/print" }
+craft-proof = { path = "crates/proof" }
 craft-quit = { path = "crates/quit" }
 craft-settings = { path = "crates/settings" }
 craft-ui = { path = "crates/ui" }
