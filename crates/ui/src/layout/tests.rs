@@ -171,6 +171,14 @@ fn resize_handle_preserves_pointer_drag_lifecycle_and_reports_per_frame_delta() 
     let (response, _) = h.frame(vec![pointer(center + vec2(16.0, 0.0), false)]);
     assert!(response.response.drag_stopped());
     assert_eq!(response.delta, 0.0);
+    assert!(!response.response.has_focus(), "pointer release must not leave a sticky focus highlight");
+    let (_, output) = h.frame(vec![Event::PointerMoved(pos2(300.0, 180.0))]);
+    assert!(
+        !output
+            .shapes
+            .iter()
+            .any(|shape| { matches!(&shape.shape, egui::epaint::Shape::Rect(rect) if rect.rect == h.rect && rect.fill == Color32::BLUE) })
+    );
     assert_eq!(h.value, 100.0, "the component never owns pane state");
 }
 

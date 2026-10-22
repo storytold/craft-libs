@@ -535,6 +535,10 @@ impl<P: Clone + Eq + Hash> Layout<P> {
         removed
     }
 
+    pub(super) fn take_for_transfer(&mut self, panel: &P) -> Result<(), DockError> {
+        self.take(panel).map(|_| ()).ok_or(DockError::MissingPanel)
+    }
+
     fn insert(&mut self, entry: StackEntry<P>, anchor: &P, placement: Placement<P>) -> Result<(), DockError> {
         if let Some(group) = self.floating.iter_mut().find(|g| g.panels.contains(anchor)) {
             let index = match placement {
