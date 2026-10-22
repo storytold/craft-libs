@@ -1,0 +1,517 @@
+#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
+
+//! What one font face offers for fine typography: its variation axes with the font's own names,
+//! its named instances, and its OpenType layout features with the names the font gives them
+//! (`ss01` "Open digits", `cv11` "Single-story a") and the characters each feature changes, so a
+//! preview can show exactly those. Also what naming its variable instances takes (Adobe Tech Note
+//! #5902): the Variations PostScript Name Prefix, each named instance's PostScript name and the
+//! `STAT` design axes; and [`FEATURE_NAMES`], the registered names of feature tags.
+//!
+//! [`read`] takes the font file's bytes and the face's index in it (0 for a single font; the
+//! face in a `.ttc` collection). Fonts are untrusted input: a malformed table is left out, never a
+//! panic, and every list read from the file is capped.
+//!
+//! ```no_run
+//! let bytes = std::fs::read("Inter.ttf")?;
+//! let details = craft_font_info::read(&bytes, 0)?;
+//! for axis in &details.axes {
+//!     println!("{} {:?} {}..{}", axis.tag, axis.name, axis.min, axis.max);
+//! }
+//! if let Some(ss01) = details.feature("ss01") {
+//!     println!("ss01 is {:?} and changes {}", ss01.name, ss01.sample);
+//! }
+//! # Ok::<(), Box<dyn std::error::Error>>(())
+//! ```
+
+use std::collections::{BTreeMap, BTreeSet};
+
+use skrifa::raw::tables::gsub::{SingleSubst, SubstitutionSubtables};
+use skrifa::raw::tables::layout::{CoverageTable, FeatureParams};
+use skrifa::raw::{ReadError, TableProvider};
+use skrifa::string::{LocalizedString, StringId};
+use skrifa::{Axis, FontRef, MetadataProvider};
+
+/// Most characters kept as a feature's sample.
+const SAMPLE_CHARS: usize = 24;
+/// A sample takes this many characters of one kind before moving to the next kind.
+const RUN: usize = 3;
+/// Most features read from one table, most lookups followed per feature, and most glyphs read
+/// from one coverage table: fonts are input, and a malformed one can claim anything.
+const MAX_FEATURES: usize = 512;
+const MAX_LOOKUPS: usize = 64;
+const MAX_COVERAGE: usize = 4096;
+/// Most subtables entered and coverage glyphs read for one face's features, all together. The caps
+/// above multiply: a font can name the same lookup from every feature, and that one lookup can
+/// hold thousands of subtables, so per-list limits alone don't bound the work a font can ask for.
+const MAX_SUBTABLES: usize = 8192;
+const MAX_GLYPHS: usize = 1 << 20;
+/// Most `STAT` design axes and axis value records read.
+const MAX_STAT: usize = 256;
+
+/// A variation axis of the face, from its `fvar` table.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AxisDetail {
+    /// Four-character tag (`wght`, `GRAD`).
+    pub tag: String,
+    /// The font's own (English, else first) name for the axis ("Parametric Thick Stroke"), if it
+    /// has one.
+    pub name: Option<String>,
+    pub min: f32,
+    pub default: f32,
+    pub max: f32,
+    /// The font asks for the axis to stay out of user interfaces (`fvar` flag 0x0001).
+    pub hidden: bool,
+}
+
+/// A named instance ("Bold Condensed"): a full set of axis coordinates.
+#[derive(Clone, Debug, PartialEq)]
+pub struct InstanceDetail {
+    pub name: String,
+    /// The instance's own PostScript name (`InterVariable-Bold`), if the font gives one.
+    pub postscript_name: Option<String>,
+    /// User-space coordinates, one per axis in [`FaceDetails::axes`] order: (tag, value).
+    pub coords: Vec<(String, f32)>,
+}
+
+/// An OpenType layout feature the face has (in `GSUB` or `GPOS`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct FeatureDetail {
+    pub tag: String,
+    /// The font's UI name for a stylistic set or character variant (`ss01`–`ss20`,
+    /// `cv01`–`cv99` feature parameters), if it gives one.
+    pub name: Option<String>,
+    /// Up to 24 of the characters the feature substitutes, a few of each kind in turn (figures,
+    /// capitals, lower case, other letters, the rest: `012ABCabc345DEF…`), so any prefix of it
+    /// shows every kind the feature changes. Empty for positioning features and for substitutions
+    /// only reachable through context.
+    pub sample: String,
+    /// How many characters the feature substitutes in all (the sample shows at most 24).
+    pub changed: usize,
+}
+
+/// A design axis of the face's style attributes (`STAT`), which may be one `fvar` lacks (Inter
+/// Variable's `ital`: its upright and italic are two files).
+#[derive(Clone, Debug, PartialEq)]
+pub struct StatAxisDetail {
+    pub tag: String,
+    /// This face's value on the axis: its first single-axis value record (formats 1–3), if any.
+    pub value: Option<f32>,
+}
+
+/// Everything [`read`] reads from one face.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct FaceDetails {
+    pub axes: Vec<AxisDetail>,
+    pub instances: Vec<InstanceDetail>,
+    /// Variations PostScript Name Prefix (name ID 25), if the font has one.
+    pub variations_prefix: Option<String>,
+    /// `STAT` design axes, in the table's order.
+    pub stat_axes: Vec<StatAxisDetail>,
+    /// Sorted by tag, each tag once.
+    pub features: Vec<FeatureDetail>,
+}
+
+impl FaceDetails {
+    /// Whether the face has the layout feature `tag`.
+    pub fn has_feature(&self, tag: &str) -> bool {
+        self.features.binary_search_by(|f| f.tag.as_str().cmp(tag)).is_ok()
+    }
+
+    /// The face's feature `tag`, if it has it.
+    pub fn feature(&self, tag: &str) -> Option<&FeatureDetail> {
+        self.features.binary_search_by(|f| f.tag.as_str().cmp(tag)).ok().and_then(|i| self.features.get(i))
+    }
+
+    /// The face's axis `tag`, if it has it.
+    pub fn axis(&self, tag: &str) -> Option<&AxisDetail> {
+        self.axes.iter().find(|a| a.tag == tag)
+    }
+}
+
+/// The data isn't a font, or has no face at the index asked for.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NotAFont(String);
+
+impl std::fmt::Display for NotAFont {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "not a readable font: {}", self.0)
+    }
+}
+
+impl std::error::Error for NotAFont {}
+
+/// Reads [`FaceDetails`] from a font file's bytes: face `index` of a collection (`.ttc`), or 0.
+/// Only data that isn't a font is an error; unreadable tables are left out (a font with a broken
+/// `GSUB` still has its axes).
+pub fn read(data: &[u8], index: u32) -> Result<FaceDetails, NotAFont> {
+    let font = FontRef::from_index(data, index).map_err(|e| NotAFont(e.to_string()))?;
+    Ok(read_face(&font))
+}
+
+/// Every name the face gives, by ID, chosen as `skrifa`'s `english_or_first` chooses it.
+///
+/// Asking skrifa for a name by ID scans the whole `name` table, and a face asks for one per axis,
+/// per instance and per feature: a font with many of each, and a long `name` table, multiplies
+/// that into seconds. One pass over the table answers all of them.
+fn read_names(font: &FontRef) -> BTreeMap<u16, String> {
+    let Ok(table) = font.name() else { return BTreeMap::new() };
+    // The ranking of `english_or_first` (skrifa 0.44, `string.rs`), kept in step with it: en-US,
+    // then en, then a string with no language, then whatever comes first.
+    let mut out: BTreeMap<u16, (u8, String)> = BTreeMap::new();
+    for record in table.name_record() {
+        let string = LocalizedString::new(&table, record);
+        let rank = match string.language() {
+            Some("en-US") => 3,
+            Some("en") => 2,
+            None => 1,
+            _ => 0,
+        };
+        let id = record.name_id().to_u16();
+        match out.get_mut(&id) {
+            Some(best) if rank > best.0 => *best = (rank, string.to_string()),
+            Some(_) => {}
+            None => {
+                out.insert(id, (rank, string.to_string()));
+            }
+        }
+    }
+    out.into_iter().map(|(id, (_, string))| (id, string)).collect()
+}
+
+/// Whether an `fvar` axis has a range worth reporting: a malformed one is left out rather than
+/// shown with nonsensical bounds.
+fn has_usable_range(a: &Axis) -> bool {
+    a.min_value().is_finite() && a.default_value().is_finite() && a.max_value().is_finite() && a.min_value() <= a.max_value()
+}
+
+fn read_face(font: &FontRef) -> FaceDetails {
+    let names = read_names(font);
+    let name = |id: StringId| names.get(&id.to_u16()).filter(|s| !s.trim().is_empty()).cloned();
+    // The axes that are kept, and where each sits in an instance's coordinates.
+    let fvar: Vec<Axis> = font.axes().iter().collect();
+    let kept: Vec<usize> = fvar.iter().enumerate().filter(|(_, a)| has_usable_range(a)).map(|(i, _)| i).collect();
+    let axes: Vec<AxisDetail> = kept
+        .iter()
+        .map(|&i| {
+            let a = &fvar[i];
+            AxisDetail {
+                tag: a.tag().to_string(),
+                name: name(a.name_id()),
+                min: a.min_value(),
+                default: a.default_value().clamp(a.min_value(), a.max_value()),
+                max: a.max_value(),
+                hidden: a.is_hidden(),
+            }
+        })
+        .collect();
+    let instances = font
+        .named_instances()
+        .iter()
+        .filter_map(|inst| {
+            // One coordinate per kept axis, in `axes` order: a malformed axis left out above is
+            // left out here too, so pairing the two lists by index stays right. (`fvar` stores
+            // coordinates as `Fixed`, so none of them can be non-finite.)
+            let user: Vec<f32> = inst.user_coords().collect();
+            let coords: Vec<(String, f32)> = axes.iter().zip(&kept).filter_map(|(axis, &i)| user.get(i).map(|v| (axis.tag.clone(), *v))).collect();
+            Some(InstanceDetail { name: name(inst.subfamily_name_id())?, postscript_name: inst.postscript_name_id().and_then(name), coords })
+        })
+        .collect();
+    let mut features: BTreeMap<String, FeatureDetail> = BTreeMap::new();
+    if let Ok(gsub) = font.gsub() {
+        let _ = gsub_features(font, &gsub, &name, &mut features);
+    }
+    if let Ok(gpos) = font.gpos()
+        && let Ok(list) = gpos.feature_list()
+    {
+        for record in list.feature_records().iter().take(MAX_FEATURES) {
+            let tag = record.feature_tag().to_string();
+            features.entry(tag.clone()).or_insert(FeatureDetail { tag, name: None, sample: String::new(), changed: 0 });
+        }
+    }
+    FaceDetails {
+        axes,
+        instances,
+        variations_prefix: name(StringId::VARIATIONS_POSTSCRIPT_NAME_PREFIX),
+        stat_axes: stat_axes(font),
+        features: features.into_values().collect(),
+    }
+}
+
+/// The `STAT` design axes with this face's value on each.
+fn stat_axes(font: &FontRef) -> Vec<StatAxisDetail> {
+    use skrifa::raw::tables::stat::AxisValue;
+    let Ok(stat) = font.stat() else { return Vec::new() };
+    let Ok(design) = stat.design_axes() else { return Vec::new() };
+    let mut values: BTreeMap<u16, f32> = BTreeMap::new();
+    if let Some(Ok(list)) = stat.offset_to_axis_values() {
+        for v in list.axis_values().iter().take(MAX_STAT).filter_map(Result::ok) {
+            let (axis, value) = match v {
+                AxisValue::Format1(v) => (v.axis_index(), v.value()),
+                AxisValue::Format2(v) => (v.axis_index(), v.nominal_value()),
+                AxisValue::Format3(v) => (v.axis_index(), v.value()),
+                AxisValue::Format4(_) => continue,
+            };
+            values.entry(axis).or_insert(value.to_f32());
+        }
+    }
+    design
+        .iter()
+        .take(MAX_STAT)
+        .enumerate()
+        .map(|(i, a)| StatAxisDetail {
+            tag: a.axis_tag().to_string(),
+            value: u16::try_from(i).ok().and_then(|i| values.get(&i)).copied().filter(|v| v.is_finite()),
+        })
+        .collect()
+}
+
+/// Registered OpenType layout features with their English names from the OpenType feature
+/// registry (`tnum` "Tabular Figures", `salt` "Stylistic Alternates"), for an interface to show
+/// and translate. Tags and names are copied from the registry
+/// (<https://learn.microsoft.com/en-us/typography/opentype/spec/featurelist>, OpenType 1.9.1)
+/// as it writes them, capitalisation included; an app that translates them keeps its own words.
+/// The numbered `ssNN` and `cvNN` aren't here: [`FeatureDetail::name`] names them from the font
+/// itself.
+pub const FEATURE_NAMES: &[(&str, &str)] = &[
+    ("liga", "Standard Ligatures"),
+    ("dlig", "Discretionary Ligatures"),
+    ("calt", "Contextual Alternates"),
+    ("swsh", "Swash"),
+    ("salt", "Stylistic Alternates"),
+    ("titl", "Titling"),
+    ("ordn", "Ordinals"),
+    ("frac", "Fractions"),
+    ("case", "Case-sensitive Forms"),
+    ("cpsp", "Capital Spacing"),
+    ("kern", "Kerning"),
+    ("zero", "Slashed Zero"),
+    ("subs", "Subscript"),
+    ("sups", "Superscript"),
+    ("sinf", "Scientific Inferiors"),
+    ("smcp", "Small Capitals"),
+    ("c2sc", "Small Capitals From Capitals"),
+    ("pcap", "Petite Capitals"),
+    ("c2pc", "Petite Capitals From Capitals"),
+    ("unic", "Unicase"),
+    ("dnom", "Denominators"),
+    ("numr", "Numerators"),
+    ("hist", "Historical Forms"),
+    ("hlig", "Historical Ligatures"),
+    ("ornm", "Ornaments"),
+    ("nalt", "Alternate Annotation Forms"),
+    ("mgrk", "Mathematical Greek"),
+    ("lnum", "Lining Figures"),
+    ("onum", "Oldstyle Figures"),
+    ("pnum", "Proportional Figures"),
+    ("tnum", "Tabular Figures"),
+    ("afrc", "Alternative Fractions"),
+    ("cswh", "Contextual Swash"),
+    ("jalt", "Justification Alternates"),
+    ("ital", "Italics"),
+    ("rtbd", "Right Bounds"),
+    ("lfbd", "Left Bounds"),
+    ("opbd", "Optical Bounds"),
+    ("palt", "Proportional Alternate Widths"),
+    ("halt", "Alternate Half Widths"),
+    ("pwid", "Proportional Widths"),
+    ("fwid", "Full Widths"),
+    ("hwid", "Half Widths"),
+    ("ruby", "Ruby Notation Forms"),
+    ("expt", "Expert Forms"),
+    ("jp78", "JIS78 Forms"),
+    ("jp83", "JIS83 Forms"),
+    ("jp90", "JIS90 Forms"),
+    ("jp04", "JIS2004 Forms"),
+    ("smpl", "Simplified Forms"),
+    ("trad", "Traditional Forms"),
+    ("tnam", "Traditional Name Forms"),
+];
+
+/// The English name of the registered feature `tag` ([`FEATURE_NAMES`]), if it has one.
+pub fn feature_name(tag: &str) -> Option<&'static str> {
+    FEATURE_NAMES.iter().find(|(t, _)| *t == tag).map(|(_, name)| *name)
+}
+
+/// Adds the `GSUB` features, their UI names and their substituted characters to `out`.
+fn gsub_features(
+    font: &FontRef,
+    gsub: &skrifa::raw::tables::gsub::Gsub,
+    name: &dyn Fn(StringId) -> Option<String>,
+    out: &mut BTreeMap<String, FeatureDetail>,
+) -> Result<(), ReadError> {
+    let list = gsub.feature_list()?;
+    let lookups = gsub.lookup_list().ok();
+    let reverse = reverse_cmap(font);
+    let data = list.offset_data();
+    // Glyphs per tag; one tag can have several records (one per script/language).
+    let mut glyphs: BTreeMap<String, BTreeSet<u16>> = BTreeMap::new();
+    // Lookups already read for a tag: records repeat a tag across scripts and languages, and
+    // re-reading a lookup would only spend the read's budget twice on the same glyphs.
+    let mut seen: BTreeMap<String, BTreeSet<u16>> = BTreeMap::new();
+    let mut budget = Budget { subtables: MAX_SUBTABLES, glyphs: MAX_GLYPHS };
+    for record in list.feature_records().iter().take(MAX_FEATURES) {
+        let tag = record.feature_tag().to_string();
+        let entry = out.entry(tag.clone()).or_insert(FeatureDetail { tag: tag.clone(), name: None, sample: String::new(), changed: 0 });
+        let Ok(feature) = record.feature(data) else { continue };
+        if entry.name.is_none() {
+            entry.name = match feature.feature_params() {
+                Some(Ok(FeatureParams::StylisticSet(p))) => name(p.ui_name_id()),
+                Some(Ok(FeatureParams::CharacterVariant(p))) => name(p.feat_ui_label_name_id()),
+                _ => None,
+            };
+        }
+        let Some(lookups) = &lookups else { continue };
+        let set = glyphs.entry(tag.clone()).or_default();
+        let seen = seen.entry(tag).or_default();
+        for index in feature.lookup_list_indices().iter().take(MAX_LOOKUPS) {
+            if !seen.insert(index.get()) {
+                continue;
+            }
+            let Ok(lookup) = lookups.lookups().get(usize::from(index.get())) else { continue };
+            let Ok(subtables) = lookup.subtables() else { continue };
+            collect_coverage(&subtables, set, &mut budget);
+        }
+    }
+    for (tag, set) in glyphs {
+        if let Some(entry) = out.get_mut(&tag) {
+            let chars: BTreeSet<char> = set.iter().filter_map(|g| reverse.get(g).copied()).collect();
+            entry.changed = chars.len();
+            entry.sample = sample(chars);
+        }
+    }
+    Ok(())
+}
+
+/// What one read may still spend on `GSUB`: subtable offsets resolved and coverage glyphs read,
+/// over the whole face. Caps on each list don't bound the total, since any number of features can
+/// name the same lookup, and that lookup can hold many subtables.
+struct Budget {
+    subtables: usize,
+    glyphs: usize,
+}
+
+impl Budget {
+    /// Takes one subtable from the budget; false once it's spent.
+    fn subtable(&mut self) -> bool {
+        if self.subtables == 0 {
+            return false;
+        }
+        self.subtables -= 1;
+        true
+    }
+
+    /// Takes one glyph from the budget; false once it's spent.
+    fn glyph(&mut self) -> bool {
+        if self.glyphs == 0 {
+            return false;
+        }
+        self.glyphs -= 1;
+        true
+    }
+}
+
+/// The glyphs each directly substituting subtable acts on. Contextual subtables are skipped: what
+/// they change depends on the surrounding text, so their coverage would mislead. Stops when the
+/// read's budget runs out, leaving what it has read.
+fn collect_coverage(subtables: &SubstitutionSubtables, set: &mut BTreeSet<u16>, budget: &mut Budget) {
+    match subtables {
+        SubstitutionSubtables::Single(s) => {
+            let coverage = |t| match t {
+                SingleSubst::Format1(t) => t.coverage(),
+                SingleSubst::Format2(t) => t.coverage(),
+            };
+            add_coverage(s.iter(), coverage, set, budget);
+        }
+        SubstitutionSubtables::Multiple(s) => add_coverage(s.iter(), |t| t.coverage(), set, budget),
+        SubstitutionSubtables::Alternate(s) => add_coverage(s.iter(), |t| t.coverage(), set, budget),
+        SubstitutionSubtables::Ligature(s) => add_coverage(s.iter(), |t| t.coverage(), set, budget),
+        _ => {}
+    }
+}
+
+/// Adds the coverage of each subtable to `set` until the read's budget runs out. An offset that
+/// fails to resolve costs the budget too: a malformed table can hold thousands of them, and
+/// dropping them before the budget is charged would make resolving them free.
+fn add_coverage<'a, T, F>(subtables: impl Iterator<Item = Result<T, ReadError>>, coverage: F, set: &mut BTreeSet<u16>, budget: &mut Budget)
+where
+    F: Fn(T) -> Result<CoverageTable<'a>, ReadError>,
+{
+    for subtable in subtables {
+        if !budget.subtable() {
+            return;
+        }
+        let Ok(subtable) = subtable else { continue };
+        let Ok(table) = coverage(subtable) else { continue };
+        for glyph in table.iter().take(MAX_COVERAGE) {
+            if !budget.glyph() {
+                return;
+            }
+            set.insert(glyph.to_u16());
+        }
+    }
+}
+
+/// Nominal glyph → its lowest character, for the Basic Multilingual Plane (enough for samples).
+fn reverse_cmap(font: &FontRef) -> BTreeMap<u16, char> {
+    let mut out = BTreeMap::new();
+    for (cp, gid) in font.charmap().mappings().take(1 << 17) {
+        let (Some(c), Ok(g)) = (char::from_u32(cp), u16::try_from(gid.to_u32())) else { continue };
+        if !c.is_control() && !c.is_whitespace() {
+            out.entry(g).or_insert(c);
+        }
+    }
+    out
+}
+
+/// A readable sample from substituted characters: runs of [`RUN`] of each kind in turn (ASCII
+/// figures, ASCII capitals, ASCII lower case, other letters and figures, the rest), each kind in
+/// code point order, at most [`SAMPLE_CHARS`]. Taking kinds in turn rather than one after the
+/// other keeps a set of circled figures *and* letters from reading as figures only when a
+/// preview shows just the start.
+fn sample(chars: BTreeSet<char>) -> String {
+    let kind = |c: char| match c {
+        '0'..='9' => 0,
+        'A'..='Z' => 1,
+        'a'..='z' => 2,
+        c if c.is_alphanumeric() => 3,
+        _ => 4,
+    };
+    let mut kinds: [Vec<char>; 5] = Default::default();
+    for c in chars {
+        if let Some(k) = kinds.get_mut(kind(c)) {
+            k.push(c);
+        }
+    }
+    let mut queues: Vec<std::vec::IntoIter<char>> = kinds.into_iter().filter(|k| !k.is_empty()).map(Vec::into_iter).collect();
+    let mut out = String::new();
+    let mut n = 0;
+    while n < SAMPLE_CHARS && !queues.is_empty() {
+        queues.retain_mut(|q| {
+            for c in q.by_ref().take(RUN.min(SAMPLE_CHARS - n)) {
+                out.push(c);
+                n += 1;
+            }
+            q.len() > 0
+        });
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sample_takes_each_kind_in_turn() {
+        let set = |s: &str| s.chars().collect::<BTreeSet<char>>();
+        assert_eq!(sample(set("é!a1Z")), "1Zaé!");
+        assert_eq!(sample(set(&"x".repeat(100))), "x");
+        // Squared figures and capitals: a short prefix already has both.
+        let squared = sample(('0'..='9').chain('A'..='Z').collect());
+        assert_eq!(squared, "012ABC345DEF678GHI9JKLMN");
+        assert_eq!(squared.chars().count(), SAMPLE_CHARS);
+        // One kind only keeps code point order.
+        assert_eq!(sample(('a'..='z').collect()), "abcdefghijklmnopqrstuvwx");
+        assert_eq!(sample(BTreeSet::new()), "");
+    }
+}

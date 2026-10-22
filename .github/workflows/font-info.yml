@@ -1,0 +1,31 @@
+name: Font info
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['crates/font-info/**', 'Cargo.toml', 'Cargo.lock', '.github/workflows/font-info.yml']
+  pull_request:
+    paths: ['crates/font-info/**', 'Cargo.toml', 'Cargo.lock', '.github/workflows/font-info.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  font-info:
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - run: cargo fmt --check
+      - run: cargo clippy -p craft-font-info --all-targets --locked -- -D warnings
+      - run: cargo test -p craft-font-info --locked
+      - if: runner.os == 'Linux'
+        run: rustup target add wasm32-unknown-unknown && cargo check -p craft-font-info --target wasm32-unknown-unknown --locked
