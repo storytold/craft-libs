@@ -1,0 +1,1403 @@
+//! Cross-application compatibility validation runner and report generator.
+
+use std::collections::{BTreeMap, BTreeSet};
+use std::fmt;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompatConfig {
+    pub candidate_revision: String,
+    pub consumers: Vec<ConsumerTarget>,
+    pub skip_baseline: bool,
+    pub json_output: bool,
+    pub output_file: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConsumerTarget {
+    pub name: String,
+    pub repo_dir: PathBuf,
+    pub target_package: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompatibilityReport {
+    pub version: String,
+    pub candidate_revision: String,
+    pub candidate_is_dirty: bool,
+    pub comparisons_completed: usize,
+    pub timestamp: String,
+    pub overall_status: String,
+    pub consumers: BTreeMap<String, ConsumerReport>,
+    pub cleanup_errors: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConsumerReport {
+    pub repository: String,
+    pub target_package: String,
+    pub consumer_commit: String,
+    pub pinned_craft_crates: Vec<String>,
+    pub baseline_result: String,
+    pub baseline_passed: usize,
+    pub baseline_failed: usize,
+    pub candidate_result: String,
+    pub candidate_passed: usize,
+    pub candidate_failed: usize,
+    pub status: String,
+    pub duration_seconds: f64,
+    pub notes: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CompatStatus {
+    Compatible,
+    CandidateRegression,
+    BaselineFailure,
+    FixedInCandidate,
+    VacuousExecutionRejected,
+    InfrastructureFailure,
+    IncompletePatchCoverage,
+    Skipped,
+}
+
+impl fmt::Display for CompatStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            CompatStatus::Compatible => write!(f, "COMPATIBLE"),
+            CompatStatus::CandidateRegression => write!(f, "CANDIDATE_REGRESSION"),
+            CompatStatus::BaselineFailure => write!(f, "BASELINE_FAILURE"),
+            CompatStatus::FixedInCandidate => write!(f, "FIXED_IN_CANDIDATE"),
+            CompatStatus::VacuousExecutionRejected => write!(f, "VACUOUS_EXECUTION_REJECTED"),
+            CompatStatus::InfrastructureFailure => write!(f, "INFRASTRUCTURE_FAILURE"),
+            CompatStatus::IncompletePatchCoverage => write!(f, "INCOMPLETE_PATCH_COVERAGE"),
+            CompatStatus::Skipped => write!(f, "SKIPPED"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct TestSummary {
+    pub passed: usize,
+    pub failed: usize,
+    pub ignored: usize,
+    pub failed_tests: BTreeSet<String>,
+    pub executed_tests: BTreeSet<String>,
+    pub harnesses_started: usize,
+    pub harnesses_completed: usize,
+    pub build_failed: bool,
+}
+
+pub struct WorktreeGuard {
+    worktrees: Vec<(PathBuf, PathBuf)>, // (repo_dir, worktree_path)
+}
+
+impl WorktreeGuard {
+    pub fn new() -> Self {
+        Self { worktrees: Vec::new() }
+    }
+
+    pub fn prune_compat_worktrees(repo_dir: &Path) {
+        let _ = Command::new("git").current_dir(repo_dir).args(["worktree", "prune"]).output();
+    }
+
+    pub fn create(&mut self, repo_dir: &Path, worktree_path: &Path, commit_ish: &str) -> Result<(), String> {
+        Self::prune_compat_worktrees(repo_dir);
+
+        if worktree_path.exists() {
+            return Err(format!("refusing to replace existing worktree path: {}", worktree_path.display()));
+        }
+
+        let output = Command::new("git")
+            .current_dir(repo_dir)
+            .args(["worktree", "add", "--detach", &worktree_path.to_string_lossy(), commit_ish])
+            .output()
+            .map_err(|e| format!("failed to spawn git worktree add: {e}"))?;
+
+        if !output.status.success() {
+            return Err(format!("git worktree add failed in {}: {}", repo_dir.display(), String::from_utf8_lossy(&output.stderr).trim()));
+        }
+
+        self.worktrees.push((repo_dir.to_path_buf(), worktree_path.to_path_buf()));
+        Ok(())
+    }
+
+    pub fn remove(repo_dir: &Path, worktree_path: &Path) -> Result<(), String> {
+        let out = Command::new("git")
+            .current_dir(repo_dir)
+            .args(["worktree", "remove", "--force", &worktree_path.to_string_lossy()])
+            .output()
+            .map_err(|e| format!("git worktree remove: {e}"))?;
+        if !out.status.success() {
+            return Err(format!("cleanup {}: {}", worktree_path.display(), String::from_utf8_lossy(&out.stderr).trim()));
+        }
+        Self::prune_compat_worktrees(repo_dir);
+        Ok(())
+    }
+
+    /// Remove only worktrees successfully registered by this guard, reporting failures.
+    pub fn cleanup(&mut self) -> Vec<String> {
+        let mut errors = Vec::new();
+        for (repo, path) in self.worktrees.drain(..).rev() {
+            if let Err(e) = Self::remove(&repo, &path) {
+                errors.push(e);
+            }
+        }
+        errors
+    }
+}
+
+impl Drop for WorktreeGuard {
+    fn drop(&mut self) {
+        for error in self.cleanup() {
+            eprintln!("{error}");
+        }
+    }
+}
+
+/// Reserve a per-run directory atomically; never reuse or delete another run's state.
+fn reserve_run_dir(parent: &Path) -> Result<PathBuf, String> {
+    static SEQUENCE: AtomicU64 = AtomicU64::new(0);
+    let nanos = SystemTime::now().duration_since(UNIX_EPOCH).map_err(|e| e.to_string())?.as_nanos();
+    loop {
+        let sequence = SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let path = parent.join(format!("run-{}-{nanos}-{sequence}", std::process::id()));
+        match fs::create_dir(&path) {
+            Ok(()) => return Ok(path),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(format!("reserve run directory: {e}")),
+        }
+    }
+}
+
+pub struct KnownConsumer {
+    pub name: &'static str,
+    pub dir_name: &'static str,
+    pub default_target_pkg: &'static str,
+}
+
+pub const KNOWN_CONSUMERS: &[KnownConsumer] = &[
+    KnownConsumer { name: "photocraft", dir_name: "photocraft", default_target_pkg: "photocraft-ui-egui" },
+    KnownConsumer { name: "vectorcraft", dir_name: "vectorcraft", default_target_pkg: "vectorcraft-ui-egui" },
+    KnownConsumer { name: "designcraft", dir_name: "designcraft", default_target_pkg: "designcraft-ui-egui" },
+    KnownConsumer { name: "pdfcraft", dir_name: "pdfcraft", default_target_pkg: "pdfcraft-ui-egui" },
+    KnownConsumer { name: "lightcraft", dir_name: "lightcraft", default_target_pkg: "lightcraft-ui-egui" },
+    KnownConsumer { name: "filmcraft", dir_name: "filmcraft", default_target_pkg: "filmcraft-ui-egui" },
+    KnownConsumer { name: "effectcraft", dir_name: "effectcraft", default_target_pkg: "effectcraft-ui-egui" },
+    KnownConsumer { name: "cadcraft", dir_name: "cadcraft", default_target_pkg: "cadcraft-ui-egui" },
+    KnownConsumer { name: "soundcraft", dir_name: "soundcraft", default_target_pkg: "soundcraft-ui-egui" },
+];
+
+pub fn check_git_dirty(dir: &Path) -> bool {
+    Command::new("git").current_dir(dir).args(["status", "--porcelain"]).output().map(|o| !o.stdout.is_empty()).unwrap_or(false)
+}
+
+pub fn resolve_commit(repo_dir: &Path, commit_ish: &str) -> Result<String, String> {
+    let out = Command::new("git")
+        .current_dir(repo_dir)
+        .args(["rev-parse", "--verify", &format!("{commit_ish}^{{commit}}")])
+        .output()
+        .map_err(|e| format!("git rev-parse failed: {e}"))?;
+
+    if !out.status.success() {
+        return Err(format!(
+            "commit `{commit_ish}` could not be resolved in {}: {}",
+            repo_dir.display(),
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
+    }
+
+    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
+
+pub fn discover_candidate_crates(candidate_root: &Path) -> Result<BTreeMap<String, PathBuf>, String> {
+    let mut map = BTreeMap::new();
+
+    for sub in ["crates", "vendor"] {
+        let dir = candidate_root.join(sub);
+        if dir.is_dir()
+            && let Ok(entries) = fs::read_dir(&dir)
+        {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                let cargo_toml = path.join("Cargo.toml");
+                if cargo_toml.is_file()
+                    && let Some(name) = fs::read_to_string(&cargo_toml).ok().and_then(|c| extract_package_name(&c))
+                {
+                    map.insert(name, path);
+                }
+            }
+        }
+    }
+
+    if map.is_empty() {
+        return Err(format!("no candidate crates found in {}/crates or vendor", candidate_root.display()));
+    }
+
+    Ok(map)
+}
+
+fn extract_package_name(cargo_toml_content: &str) -> Option<String> {
+    let mut in_package = false;
+    for line in cargo_toml_content.lines() {
+        let trimmed = line.trim();
+        if trimmed == "[package]" {
+            in_package = true;
+            continue;
+        }
+        if in_package && trimmed.starts_with('[') {
+            break;
+        }
+        if in_package
+            && trimmed.starts_with("name")
+            && let Some((_, val)) = trimmed.split_once('=')
+        {
+            let name = val.trim().trim_matches('"').trim_matches('\'').trim();
+            return Some(name.to_string());
+        }
+    }
+    None
+}
+
+pub fn parse_pinned_craft_crates(lock_content: &str) -> Vec<String> {
+    let mut pinned = Vec::new();
+    let mut current_name: Option<String> = None;
+    let mut current_source: Option<String> = None;
+
+    for line in lock_content.lines() {
+        let trimmed = line.trim();
+        if trimmed == "[[package]]" {
+            if let (Some(name), Some(source)) = (current_name.take(), current_source.take()) {
+                let is_craft = source.contains("storytold/craft-libs") || (name.starts_with("craft-") && source.contains("git+"));
+                if is_craft {
+                    pinned.push(name);
+                }
+            }
+            continue;
+        }
+        if let Some((_, val)) = trimmed.split_once("name =") {
+            let name = val.trim().trim_matches('"');
+            current_name = Some(name.to_string());
+        } else if let Some((_, val)) = trimmed.split_once("source =") {
+            let source = val.trim().trim_matches('"');
+            current_source = Some(source.to_string());
+        }
+    }
+    if let (Some(name), Some(source)) = (current_name, current_source) {
+        let is_craft = source.contains("storytold/craft-libs") || (name.starts_with("craft-") && source.contains("git+"));
+        if is_craft {
+            pinned.push(name);
+        }
+    }
+    pinned.sort();
+    pinned.dedup();
+    pinned
+}
+
+pub fn generate_patch_config(pinned_crates: &[String], candidate_crates: &BTreeMap<String, PathBuf>) -> Result<String, Vec<String>> {
+    if pinned_crates.is_empty() {
+        return Err(vec!["no pinned craft-libs crates found".into()]);
+    }
+    let mut missing = Vec::new();
+    let mut git_patch_entries = Vec::new();
+    let mut vendor_patch_entries = Vec::new();
+
+    for pinned in pinned_crates {
+        if let Some(crate_path) = candidate_crates.get(pinned) {
+            // Forward slashes prevent Windows path escaping issues
+            let path_str = crate_path.to_string_lossy().replace('\\', "/");
+            let quoted_path = serde_json::to_string(&path_str).map_err(|_| vec![pinned.clone()])?;
+            let entry = format!("{pinned} = {{ path = {quoted_path} }}");
+            git_patch_entries.push(entry.clone());
+            if path_str.contains("/vendor/") || path_str.starts_with("vendor/") {
+                vendor_patch_entries.push(entry);
+            }
+        } else {
+            missing.push(pinned.clone());
+        }
+    }
+
+    if !missing.is_empty() {
+        return Err(missing);
+    }
+
+    let mut toml = String::from("[patch.\"https://github.com/storytold/craft-libs\"]\n");
+    for entry in git_patch_entries {
+        toml.push_str(&entry);
+        toml.push('\n');
+    }
+
+    if !vendor_patch_entries.is_empty() {
+        toml.push_str("\n[patch.crates-io]\n");
+        for entry in vendor_patch_entries {
+            toml.push_str(&entry);
+            toml.push('\n');
+        }
+    }
+
+    Ok(toml)
+}
+
+pub fn check_provenance_in_tree_output(tree_stdout: &str, checked_crate: &str, candidate_path_snippet: &str) -> Result<(), String> {
+    let normalize = |path: &str| {
+        let slashes = path.replace('\\', "/");
+        let normalized = if let Some(unc) = slashes.strip_prefix("//?/UNC/") {
+            format!("//{unc}")
+        } else {
+            slashes.strip_prefix("//?/").unwrap_or(&slashes).to_string()
+        };
+        normalized.trim_end_matches('/').to_string()
+    };
+    let expected = normalize(candidate_path_snippet);
+    let first = tree_stdout.lines().next().unwrap_or_default().trim();
+    let prefix = format!("{checked_crate} v");
+    let source =
+        first.strip_prefix(&prefix).and_then(|rest| rest.split_once(" (").map(|(_, source)| source)).and_then(|source| source.strip_suffix(')'));
+    if let Some(source) = source {
+        if source.contains("://") || source.starts_with("git+") || source.starts_with("registry+") {
+            return Err(format!("candidate provenance mismatch for {checked_crate}: resolved to remote source `{source}`"));
+        }
+        if Path::new(candidate_path_snippet).is_absolute() && normalize(source) == expected {
+            return Ok(());
+        }
+        // Accept Windows absolute paths when parsing recorded output on a non-Windows host.
+        if expected.as_bytes().get(1) == Some(&b':') && expected.as_bytes().get(2) == Some(&b'/') && normalize(source) == expected {
+            return Ok(());
+        }
+    }
+    Err(format!("candidate provenance mismatch: {checked_crate} does not resolve to `{expected}` in cargo tree output:\n{tree_stdout}"))
+}
+
+pub fn verify_candidate_provenance(worktree_dir: &Path, checked_crate: &str, candidate_path_snippet: &str) -> Result<(), String> {
+    let mut cmd = Command::new("cargo");
+    cmd.current_dir(worktree_dir);
+    cmd.args(["tree", "--offline", "--workspace", "-i", checked_crate]);
+    cmd.env("CARGO_TERM_COLOR", "never");
+
+    let out = cmd.output().map_err(|e| format!("cargo tree failed to spawn: {e}"))?;
+    if !out.status.success() {
+        return Err(format!("cargo tree check failed for {checked_crate}: {}", String::from_utf8_lossy(&out.stderr).trim()));
+    }
+
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    check_provenance_in_tree_output(&stdout, checked_crate, candidate_path_snippet)
+}
+
+pub fn parse_test_summary(output: &[u8]) -> TestSummary {
+    let text = String::from_utf8_lossy(output);
+    let mut summary = TestSummary { build_failed: text.lines().any(|line| line.starts_with("error: could not compile ")), ..Default::default() };
+
+    // Parse individual failed test lines: "test tests::my_test ... FAILED"
+    // Libtest consistently formats failed test executions with this exact prefix and suffix.
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("running ") && (trimmed.ends_with(" tests") || trimmed.ends_with(" test")) {
+            summary.harnesses_started += 1;
+        }
+        if let Some(rest) = trimmed.strip_prefix("test ")
+            && let Some((name, result)) = rest.rsplit_once(" ... ")
+            && matches!(result, "ok" | "FAILED" | "ignored")
+        {
+            let identity = if summary.harnesses_started == 0 { name.to_string() } else { format!("{}:{name}", summary.harnesses_started) };
+            summary.executed_tests.insert(identity.clone());
+            if result == "FAILED" {
+                summary.failed_tests.insert(identity);
+            }
+        }
+        if trimmed.starts_with("test result:") {
+            summary.harnesses_completed += 1;
+        }
+    }
+
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("test result:") {
+            // Format: "test result: ok. 1822 passed; 0 failed; 10 ignored; 0 measured; 0 filtered out; finished in 12.34s"
+            for part in trimmed.split(';') {
+                let part = part.trim();
+                if part.contains("passed")
+                    && let Some(num_str) = part.split_whitespace().find(|w| w.chars().all(|c| c.is_ascii_digit()))
+                {
+                    summary.passed += num_str.parse::<usize>().unwrap_or(0);
+                } else if part.contains("failed")
+                    && let Some(num_str) = part.split_whitespace().find(|w| w.chars().all(|c| c.is_ascii_digit()))
+                {
+                    summary.failed += num_str.parse::<usize>().unwrap_or(0);
+                } else if part.contains("ignored")
+                    && let Some(num_str) = part.split_whitespace().find(|w| w.chars().all(|c| c.is_ascii_digit()))
+                {
+                    summary.ignored += num_str.parse::<usize>().unwrap_or(0);
+                }
+            }
+        }
+    }
+    summary
+}
+
+pub fn classify_outcome_with_status(
+    baseline: Option<&TestSummary>,
+    baseline_exit_ok: bool,
+    candidate: &TestSummary,
+    candidate_exit_ok: bool,
+) -> CompatStatus {
+    // A broken baseline cannot establish which failures a candidate introduced.
+    if !baseline_exit_ok && baseline.map(|s| s.failed == 0 || !complete_summary(s)).unwrap_or(true) {
+        return CompatStatus::InfrastructureFailure;
+    }
+    if !candidate_exit_ok && candidate.failed == 0 {
+        return CompatStatus::CandidateRegression;
+    }
+    if !complete_summary(candidate) || baseline.is_some_and(|s| !complete_summary(s)) {
+        return CompatStatus::InfrastructureFailure;
+    }
+    if let Some(base) = baseline
+        && (candidate.harnesses_completed < base.harnesses_completed || !base.executed_tests.is_subset(&candidate.executed_tests))
+    {
+        return CompatStatus::InfrastructureFailure;
+    }
+    classify_outcome(baseline, candidate)
+}
+
+/// Reject aborted harnesses and partial failure-identity extraction.
+fn complete_summary(summary: &TestSummary) -> bool {
+    !summary.build_failed && summary.harnesses_started == summary.harnesses_completed && summary.failed_tests.len() == summary.failed
+}
+
+pub fn classify_outcome(baseline: Option<&TestSummary>, candidate: &TestSummary) -> CompatStatus {
+    if candidate.passed == 0 && candidate.failed == 0 {
+        return CompatStatus::VacuousExecutionRejected;
+    }
+
+    match baseline {
+        Some(base) => {
+            if base.passed == 0 && base.failed == 0 {
+                return CompatStatus::VacuousExecutionRejected;
+            }
+
+            if base.failed == 0 && candidate.failed == 0 {
+                CompatStatus::Compatible
+            } else if base.failed == 0 && candidate.failed > 0 {
+                CompatStatus::CandidateRegression
+            } else if base.failed > 0 && candidate.failed == 0 {
+                CompatStatus::FixedInCandidate
+            } else {
+                // Both baseline and candidate have failures.
+                if candidate.failed > base.failed {
+                    return CompatStatus::CandidateRegression;
+                }
+
+                // If either baseline or candidate has failures but failing test identities could not be parsed,
+                // evidence is insufficient to verify whether failures are identical.
+                // Never report a clean/benign BaselineFailure when evidence is insufficient.
+                if base.failed_tests.is_empty() || candidate.failed_tests.is_empty() {
+                    return CompatStatus::CandidateRegression;
+                }
+
+                // Check if candidate failed any test that was not already failing in baseline.
+                // Even with equal failure counts, a different failing test identity is a candidate regression.
+                let has_new_failures = candidate.failed_tests.iter().any(|t| !base.failed_tests.contains(t));
+                if has_new_failures { CompatStatus::CandidateRegression } else { CompatStatus::BaselineFailure }
+            }
+        }
+        None => {
+            if candidate.failed == 0 {
+                CompatStatus::Skipped
+            } else {
+                CompatStatus::CandidateRegression
+            }
+        }
+    }
+}
+
+/// Keep failure reports actionable without copying unbounded compiler logs into JSON.
+fn diagnostic_tail(output: &[u8]) -> String {
+    let text = String::from_utf8_lossy(output);
+    text.lines().rev().take(20).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join("\n")
+}
+
+/// Run the same complete set of Cargo executables for baseline and candidate.
+fn run_consumer_tests(worktree: &Path, package: &str, target_dir: &Path, locked: bool) -> std::io::Result<std::process::Output> {
+    let mut command = Command::new("cargo");
+    command
+        .current_dir(worktree)
+        .args(["test", "--no-fail-fast", "-p", package])
+        .env("CARGO_TARGET_DIR", target_dir)
+        .env("CARGO_TERM_COLOR", "never");
+    if locked {
+        command.arg("--locked");
+    }
+    command.output()
+}
+
+pub fn run_compat(root_dir: &Path, config: CompatConfig) -> Result<bool, String> {
+    eprintln!("Craft Suite Compatibility Verification");
+    eprintln!("=======================================================\n");
+
+    let candidate_sha = resolve_commit(root_dir, &config.candidate_revision)?;
+    let mut guard = WorktreeGuard::new();
+    // Outside any candidate workspace: standalone consumers must not inherit its workspace/config.
+    let worktrees_parent = std::env::temp_dir().join("craft-compat-worktrees");
+    fs::create_dir_all(&worktrees_parent).map_err(|e| format!("create worktrees dir: {e}"))?;
+    let worktrees_dir = reserve_run_dir(&worktrees_parent)?;
+
+    // If a specific candidate revision was requested (not HEAD), create an ephemeral candidate worktree
+    // so tests validate that exact revision rather than the active working tree.
+    let (candidate_dir, candidate_is_dirty) = if config.candidate_revision != "HEAD" {
+        let short_sha = &candidate_sha[..12.min(candidate_sha.len())];
+        let cand_wt = worktrees_dir.join(format!("compat-candidate-{short_sha}"));
+        eprintln!("Creating candidate worktree: {}", cand_wt.display());
+        guard.create(root_dir, &cand_wt, &candidate_sha)?;
+        (cand_wt, false)
+    } else {
+        (root_dir.to_path_buf(), check_git_dirty(root_dir))
+    };
+
+    eprintln!("Target shared library: craft-libs ({candidate_sha})");
+    eprintln!("Working tree status:   {}", if candidate_is_dirty { "DIRTY" } else { "CLEAN" });
+
+    let candidate_crates = discover_candidate_crates(&candidate_dir)?;
+    eprintln!("Candidate crates:      {}\n", candidate_crates.keys().cloned().collect::<Vec<_>>().join(", "));
+
+    let mut reports = BTreeMap::new();
+    let mut any_regression = false;
+
+    for target in &config.consumers {
+        let start = Instant::now();
+        eprintln!("-------------------------------------------------------");
+        eprintln!("Validating consumer: {}", target.name);
+        eprintln!("-------------------------------------------------------");
+
+        if !target.repo_dir.exists() {
+            eprintln!("  [SKIP] Consumer checkout not found at {}", target.repo_dir.display());
+            reports.insert(
+                target.name.clone(),
+                ConsumerReport {
+                    repository: target.repo_dir.to_string_lossy().to_string(),
+                    target_package: target.target_package.clone().unwrap_or_else(|| "unknown".into()),
+                    consumer_commit: "missing".into(),
+                    pinned_craft_crates: Vec::new(),
+                    baseline_result: "SKIP".into(),
+                    baseline_passed: 0,
+                    baseline_failed: 0,
+                    candidate_result: "SKIP".into(),
+                    candidate_passed: 0,
+                    candidate_failed: 0,
+                    status: CompatStatus::Skipped.to_string(),
+                    duration_seconds: 0.0,
+                    notes: Some("Repository directory not found".into()),
+                },
+            );
+            any_regression = true;
+            continue;
+        }
+
+        let consumer_commit = match resolve_commit(&target.repo_dir, "HEAD") {
+            Ok(c) => c,
+            Err(e) => {
+                let err_msg = format!("resolve HEAD failed: {e}");
+                eprintln!("  [ERROR] {err_msg}");
+                reports.insert(
+                    target.name.clone(),
+                    ConsumerReport {
+                        repository: target.repo_dir.to_string_lossy().to_string(),
+                        target_package: target.target_package.clone().unwrap_or_else(|| "unknown".into()),
+                        consumer_commit: "unknown".into(),
+                        pinned_craft_crates: Vec::new(),
+                        baseline_result: "INFRASTRUCTURE_FAILURE".into(),
+                        baseline_passed: 0,
+                        baseline_failed: 0,
+                        candidate_result: "INFRASTRUCTURE_FAILURE".into(),
+                        candidate_passed: 0,
+                        candidate_failed: 0,
+                        status: CompatStatus::InfrastructureFailure.to_string(),
+                        duration_seconds: start.elapsed().as_secs_f64(),
+                        notes: Some(err_msg),
+                    },
+                );
+                any_regression = true;
+                continue;
+            }
+        };
+
+        // Determine target package
+        let target_package = match &target.target_package {
+            Some(pkg) => pkg.clone(),
+            None => match KNOWN_CONSUMERS.iter().find(|c| c.name == target.name) {
+                Some(k) => k.default_target_pkg.to_string(),
+                None => {
+                    let err_msg = format!("no target package specified for {}", target.name);
+                    eprintln!("  [ERROR] {err_msg}");
+                    reports.insert(
+                        target.name.clone(),
+                        ConsumerReport {
+                            repository: target.repo_dir.to_string_lossy().to_string(),
+                            target_package: "unknown".into(),
+                            consumer_commit: consumer_commit.clone(),
+                            pinned_craft_crates: Vec::new(),
+                            baseline_result: "INFRASTRUCTURE_FAILURE".into(),
+                            baseline_passed: 0,
+                            baseline_failed: 0,
+                            candidate_result: "INFRASTRUCTURE_FAILURE".into(),
+                            candidate_passed: 0,
+                            candidate_failed: 0,
+                            status: CompatStatus::InfrastructureFailure.to_string(),
+                            duration_seconds: start.elapsed().as_secs_f64(),
+                            notes: Some(err_msg),
+                        },
+                    );
+                    any_regression = true;
+                    continue;
+                }
+            },
+        };
+
+        // Inspect consumer Cargo.lock for all pinned craft-libs crates
+        let lock_content = match Command::new("git")
+            .current_dir(&target.repo_dir)
+            .args(["show", &format!("{consumer_commit}:Cargo.lock")])
+            .output()
+            .map_err(|e| e.to_string())
+            .and_then(|o| {
+                if o.status.success() {
+                    String::from_utf8(o.stdout).map_err(|e| e.to_string())
+                } else {
+                    Err(String::from_utf8_lossy(&o.stderr).to_string())
+                }
+            }) {
+            Ok(c) => c,
+            Err(e) => {
+                let err_msg = format!("failed to read Cargo.lock: {e}");
+                eprintln!("  [ERROR] {err_msg}");
+                reports.insert(
+                    target.name.clone(),
+                    ConsumerReport {
+                        repository: target.repo_dir.to_string_lossy().to_string(),
+                        target_package: target_package.clone(),
+                        consumer_commit: consumer_commit.clone(),
+                        pinned_craft_crates: Vec::new(),
+                        baseline_result: "INFRASTRUCTURE_FAILURE".into(),
+                        baseline_passed: 0,
+                        baseline_failed: 0,
+                        candidate_result: "INFRASTRUCTURE_FAILURE".into(),
+                        candidate_passed: 0,
+                        candidate_failed: 0,
+                        status: CompatStatus::InfrastructureFailure.to_string(),
+                        duration_seconds: start.elapsed().as_secs_f64(),
+                        notes: Some(err_msg),
+                    },
+                );
+                any_regression = true;
+                continue;
+            }
+        };
+        let pinned_crates = parse_pinned_craft_crates(&lock_content);
+        eprintln!("  Pinned craft crates:   {}", pinned_crates.join(", "));
+
+        // Verify complete patch coverage
+        let patch_toml = match generate_patch_config(&pinned_crates, &candidate_crates) {
+            Ok(p) => p,
+            Err(missing) => {
+                let err_msg = format!("candidate is missing pinned crates: {}", missing.join(", "));
+                eprintln!("  [ERROR] Incomplete patch coverage: {err_msg}");
+                reports.insert(
+                    target.name.clone(),
+                    ConsumerReport {
+                        repository: target.repo_dir.to_string_lossy().to_string(),
+                        target_package: target_package.clone(),
+                        consumer_commit: consumer_commit.clone(),
+                        pinned_craft_crates: pinned_crates.clone(),
+                        baseline_result: "SKIP".into(),
+                        baseline_passed: 0,
+                        baseline_failed: 0,
+                        candidate_result: "INCOMPLETE_PATCH_COVERAGE".into(),
+                        candidate_passed: 0,
+                        candidate_failed: 0,
+                        status: CompatStatus::IncompletePatchCoverage.to_string(),
+                        duration_seconds: start.elapsed().as_secs_f64(),
+                        notes: Some(err_msg),
+                    },
+                );
+                any_regression = true;
+                continue;
+            }
+        };
+
+        let run_id = guard.worktrees.len();
+        let consumer_worktree = worktrees_dir.join(format!("compat-wt-{run_id}"));
+
+        eprintln!("  Creating worktree:     {}", consumer_worktree.display());
+        if let Err(e) = guard.create(&target.repo_dir, &consumer_worktree, "HEAD") {
+            let err_msg = format!("worktree create failed: {e}");
+            eprintln!("  [ERROR] {err_msg}");
+            reports.insert(
+                target.name.clone(),
+                ConsumerReport {
+                    repository: target.repo_dir.to_string_lossy().to_string(),
+                    target_package: target_package.clone(),
+                    consumer_commit: consumer_commit.clone(),
+                    pinned_craft_crates: pinned_crates.clone(),
+                    baseline_result: "INFRASTRUCTURE_FAILURE".into(),
+                    baseline_passed: 0,
+                    baseline_failed: 0,
+                    candidate_result: "INFRASTRUCTURE_FAILURE".into(),
+                    candidate_passed: 0,
+                    candidate_failed: 0,
+                    status: CompatStatus::InfrastructureFailure.to_string(),
+                    duration_seconds: start.elapsed().as_secs_f64(),
+                    notes: Some(err_msg),
+                },
+            );
+            any_regression = true;
+            continue;
+        }
+
+        // Shared target directory avoids rebuilding external dependencies from scratch
+        let shared_target = fs::canonicalize(&target.repo_dir).map_err(|e| format!("canonicalize consumer: {e}"))?.join("target");
+
+        // 1. Run Baseline Tests (if not skipped)
+        let mut diagnostics = Vec::new();
+        let mut baseline_summary = None;
+        let mut baseline_status_str = "SKIPPED".to_string();
+        let mut baseline_exit_ok = true;
+
+        if !config.skip_baseline {
+            eprint!("  Running baseline tests: ");
+            let out = run_consumer_tests(&consumer_worktree, &target_package, &shared_target, true);
+
+            match out {
+                Ok(o) => {
+                    let mut combined = o.stdout;
+                    combined.extend_from_slice(&o.stderr);
+                    let sum = parse_test_summary(&combined);
+                    baseline_exit_ok = o.status.success();
+                    if !baseline_exit_ok {
+                        diagnostics.push(format!("baseline: {}", diagnostic_tail(&combined)));
+                    }
+                    if baseline_exit_ok {
+                        eprintln!("PASS ({} passed, {} failed)", sum.passed, sum.failed);
+                        baseline_status_str = "PASS".into();
+                    } else {
+                        eprintln!("FAIL ({} passed, {} failed)", sum.passed, sum.failed);
+                        baseline_status_str = "FAIL".into();
+                    }
+                    baseline_summary = Some(sum);
+                }
+                Err(e) => {
+                    eprintln!("INFRASTRUCTURE_FAILURE ({e})");
+                    baseline_status_str = "INFRASTRUCTURE_FAILURE".into();
+                    baseline_exit_ok = false;
+                    diagnostics.push(format!("baseline spawn failed: {e}"));
+                }
+            }
+        }
+
+        // 2. Apply Complete Patch Configuration to worktree
+        let cargo_config_dir = consumer_worktree.join(".cargo");
+        if let Err(e) = fs::create_dir_all(&cargo_config_dir) {
+            let err_msg = format!("failed to create .cargo directory: {e}");
+            eprintln!("  [ERROR] {err_msg}");
+            reports.insert(
+                target.name.clone(),
+                ConsumerReport {
+                    repository: target.repo_dir.to_string_lossy().to_string(),
+                    target_package: target_package.clone(),
+                    consumer_commit: consumer_commit.clone(),
+                    pinned_craft_crates: pinned_crates.clone(),
+                    baseline_result: baseline_status_str,
+                    baseline_passed: baseline_summary.as_ref().map(|s| s.passed).unwrap_or(0),
+                    baseline_failed: baseline_summary.as_ref().map(|s| s.failed).unwrap_or(0),
+                    candidate_result: "INFRASTRUCTURE_FAILURE".into(),
+                    candidate_passed: 0,
+                    candidate_failed: 0,
+                    status: CompatStatus::InfrastructureFailure.to_string(),
+                    duration_seconds: start.elapsed().as_secs_f64(),
+                    notes: Some(err_msg),
+                },
+            );
+            any_regression = true;
+            continue;
+        }
+
+        let cargo_config_file = cargo_config_dir.join("config.toml");
+        // Retain consumer settings; duplicate patch tables fail closed rather than silently replacing them.
+        let write_config = match fs::read_to_string(&cargo_config_file) {
+            Ok(existing) => fs::write(&cargo_config_file, format!("{existing}\n{patch_toml}")),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => fs::write(&cargo_config_file, &patch_toml),
+            Err(e) => Err(e),
+        };
+        if let Err(e) = write_config {
+            let err_msg = format!("failed to write .cargo/config.toml: {e}");
+            eprintln!("  [ERROR] {err_msg}");
+            reports.insert(
+                target.name.clone(),
+                ConsumerReport {
+                    repository: target.repo_dir.to_string_lossy().to_string(),
+                    target_package: target_package.clone(),
+                    consumer_commit: consumer_commit.clone(),
+                    pinned_craft_crates: pinned_crates.clone(),
+                    baseline_result: baseline_status_str,
+                    baseline_passed: baseline_summary.as_ref().map(|s| s.passed).unwrap_or(0),
+                    baseline_failed: baseline_summary.as_ref().map(|s| s.failed).unwrap_or(0),
+                    candidate_result: "INFRASTRUCTURE_FAILURE".into(),
+                    candidate_passed: 0,
+                    candidate_failed: 0,
+                    status: CompatStatus::InfrastructureFailure.to_string(),
+                    duration_seconds: start.elapsed().as_secs_f64(),
+                    notes: Some(err_msg),
+                },
+            );
+            any_regression = true;
+            continue;
+        }
+
+        // 3. Verify Candidate Provenance via cargo tree
+        let mut provenance_failed = false;
+        let mut provenance_err = String::new();
+        for pinned in &pinned_crates {
+            if let Some(crate_path) = candidate_crates.get(pinned) {
+                let full_path = fs::canonicalize(crate_path).map_err(|e| format!("canonicalize candidate path: {e}"))?;
+                let snippet = full_path.to_string_lossy().replace('\\', "/");
+                if let Err(e) = verify_candidate_provenance(&consumer_worktree, pinned, &snippet) {
+                    eprintln!("  [ERROR] Provenance check failed for {pinned}: {e}");
+                    provenance_err = e;
+                    provenance_failed = true;
+                    break;
+                }
+            }
+        }
+
+        if provenance_failed {
+            reports.insert(
+                target.name.clone(),
+                ConsumerReport {
+                    repository: target.repo_dir.to_string_lossy().to_string(),
+                    target_package: target_package.clone(),
+                    consumer_commit: consumer_commit.clone(),
+                    pinned_craft_crates: pinned_crates.clone(),
+                    baseline_result: baseline_status_str,
+                    baseline_passed: baseline_summary.as_ref().map(|s| s.passed).unwrap_or(0),
+                    baseline_failed: baseline_summary.as_ref().map(|s| s.failed).unwrap_or(0),
+                    candidate_result: "INFRASTRUCTURE_FAILURE".into(),
+                    candidate_passed: 0,
+                    candidate_failed: 0,
+                    status: CompatStatus::InfrastructureFailure.to_string(),
+                    duration_seconds: start.elapsed().as_secs_f64(),
+                    notes: Some(format!("provenance verification failed: {provenance_err}")),
+                },
+            );
+            any_regression = true;
+            continue;
+        }
+
+        eprintln!("  Provenance verified:   all pinned crates resolve to candidate paths");
+
+        // 4. Run Candidate Tests
+        eprint!("  Running candidate tests: ");
+        let cand_out = run_consumer_tests(&consumer_worktree, &target_package, &shared_target, false);
+
+        let (candidate_exit_ok, candidate_status_str, candidate_summary) = match cand_out {
+            Ok(o) => {
+                let mut combined = o.stdout;
+                combined.extend_from_slice(&o.stderr);
+                let sum = parse_test_summary(&combined);
+                let exit_ok = o.status.success();
+                if !exit_ok {
+                    diagnostics.push(format!("candidate: {}", diagnostic_tail(&combined)));
+                }
+                if exit_ok {
+                    eprintln!("PASS ({} passed, {} failed)", sum.passed, sum.failed);
+                    (true, "PASS".to_string(), sum)
+                } else {
+                    eprintln!("FAIL ({} passed, {} failed)", sum.passed, sum.failed);
+                    (false, "FAIL".to_string(), sum)
+                }
+            }
+            Err(e) => {
+                eprintln!("INFRASTRUCTURE_FAILURE ({e})");
+                diagnostics.push(format!("candidate spawn failed: {e}"));
+                (false, "INFRASTRUCTURE_FAILURE".to_string(), TestSummary::default())
+            }
+        };
+
+        // 5. Classify Outcome
+        let outcome = if candidate_status_str == "INFRASTRUCTURE_FAILURE" {
+            CompatStatus::InfrastructureFailure
+        } else {
+            classify_outcome_with_status(baseline_summary.as_ref(), baseline_exit_ok, &candidate_summary, candidate_exit_ok)
+        };
+        eprintln!("  Outcome:               {outcome}\n");
+
+        if matches!(
+            outcome,
+            CompatStatus::CandidateRegression
+                | CompatStatus::VacuousExecutionRejected
+                | CompatStatus::InfrastructureFailure
+                | CompatStatus::IncompletePatchCoverage
+        ) {
+            any_regression = true;
+        }
+
+        reports.insert(
+            target.name.clone(),
+            ConsumerReport {
+                repository: target.repo_dir.to_string_lossy().to_string(),
+                target_package,
+                consumer_commit,
+                pinned_craft_crates: pinned_crates,
+                baseline_result: baseline_status_str,
+                baseline_passed: baseline_summary.as_ref().map(|s| s.passed).unwrap_or(0),
+                baseline_failed: baseline_summary.as_ref().map(|s| s.failed).unwrap_or(0),
+                candidate_result: candidate_status_str,
+                candidate_passed: candidate_summary.passed,
+                candidate_failed: candidate_summary.failed,
+                status: outcome.to_string(),
+                duration_seconds: start.elapsed().as_secs_f64(),
+                notes: if diagnostics.is_empty() { None } else { Some(diagnostics.join("\n")) },
+            },
+        );
+    }
+
+    let timestamp = match SystemTime::now().duration_since(UNIX_EPOCH) {
+        Ok(d) => format!("{}", d.as_secs()),
+        Err(_) => "0".into(),
+    };
+
+    let comparisons_completed = reports
+        .values()
+        .filter(|r| {
+            r.baseline_result != "SKIPPED"
+                && matches!(r.status.as_str(), "COMPATIBLE" | "CANDIDATE_REGRESSION" | "BASELINE_FAILURE" | "FIXED_IN_CANDIDATE")
+        })
+        .count();
+
+    let mut cleanup_errors = guard.cleanup();
+    if let Err(e) = fs::remove_dir(&worktrees_dir) {
+        cleanup_errors.push(format!("remove run directory {}: {e}", worktrees_dir.display()));
+    }
+    any_regression |= !cleanup_errors.is_empty();
+    let overall_status = if any_regression {
+        "FAIL_REGRESSION"
+    } else if comparisons_completed == 0 {
+        "VACUOUS_SUCCESS_REJECTED"
+    } else {
+        "PASS"
+    };
+
+    let report = CompatibilityReport {
+        version: "2.0".into(),
+        candidate_revision: candidate_sha,
+        candidate_is_dirty,
+        comparisons_completed,
+        timestamp,
+        overall_status: overall_status.into(),
+        consumers: reports,
+        cleanup_errors,
+    };
+
+    eprintln!("=======================================================");
+    eprintln!("Compatibility Summary");
+    eprintln!("=======================================================");
+    eprintln!("{:<14} {:<10} {:<10} {:<24}", "Consumer", "Baseline", "Candidate", "Status");
+    eprintln!("{:-<14} {:-<10} {:-<10} {:-<24}", "", "", "", "");
+    for (name, r) in &report.consumers {
+        eprintln!("{:<14} {:<10} {:<10} {:<24}", name, r.baseline_result, r.candidate_result, r.status);
+    }
+
+    let report_json = serde_json::to_string_pretty(&report).map_err(|e| format!("serialize report: {e}"))?;
+    if let Some(path) = config.output_file {
+        fs::write(&path, &report_json).map_err(|e| format!("write report: {e}"))?;
+        eprintln!("\nReport written to: {}", path.display());
+    }
+
+    if config.json_output {
+        println!("{report_json}");
+    }
+
+    Ok(!any_regression && comparisons_completed > 0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_pinned_craft_crates_multi() {
+        let sample_lock = r#"
+version = 4
+
+[[package]]
+name = "craft-ui"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs.git?rev=5c874d51eeb3de70e735c8ce87a59a7dedd47675#5c874d51eeb3de70e735c8ce87a59a7dedd47675"
+
+[[package]]
+name = "craft-atomic"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs.git?rev=5c874d51eeb3de70e735c8ce87a59a7dedd47675#5c874d51eeb3de70e735c8ce87a59a7dedd47675"
+
+[[package]]
+name = "egui"
+version = "0.31.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+"#;
+        let pinned = parse_pinned_craft_crates(sample_lock);
+        assert_eq!(pinned, vec!["craft-atomic", "craft-ui"]);
+    }
+
+    #[test]
+    fn test_incomplete_patch_coverage_detection() {
+        let pinned = vec!["craft-ui".to_string(), "craft-settings".to_string(), "craft-atomic".to_string()];
+        let mut candidate_crates = BTreeMap::new();
+        candidate_crates.insert("craft-ui".to_string(), PathBuf::from("/path/to/craft-ui"));
+        candidate_crates.insert("craft-atomic".to_string(), PathBuf::from("/path/to/craft-atomic"));
+        // missing craft-settings
+
+        let err = generate_patch_config(&pinned, &candidate_crates).unwrap_err();
+        assert_eq!(err, vec!["craft-settings".to_string()]);
+    }
+
+    #[test]
+    fn test_generate_patch_config_windows_path_normalization() {
+        let pinned = vec!["craft-ui".to_string()];
+        let mut candidate_crates = BTreeMap::new();
+        candidate_crates.insert("craft-ui".to_string(), PathBuf::from(r"C:\Users\builder\crates\ui"));
+
+        let toml = generate_patch_config(&pinned, &candidate_crates).expect("patch config");
+        assert!(toml.contains("craft-ui = { path = \"C:/Users/builder/crates/ui\" }"));
+        assert!(!toml.contains(r"C:\Users\builder"));
+    }
+
+    #[test]
+    fn test_generate_patch_config_includes_crates_io_for_vendor() {
+        let pinned = vec!["craft-ui".to_string(), "krilla".to_string()];
+        let mut candidate_crates = BTreeMap::new();
+        candidate_crates.insert("craft-ui".to_string(), PathBuf::from("/path/to/crates/ui"));
+        candidate_crates.insert("krilla".to_string(), PathBuf::from("/path/to/vendor/krilla"));
+
+        let toml = generate_patch_config(&pinned, &candidate_crates).expect("patch config");
+        assert!(toml.contains("[patch.\"https://github.com/storytold/craft-libs\"]"));
+        assert!(toml.contains("[patch.crates-io]"));
+        assert!(toml.contains("krilla = { path = \"/path/to/vendor/krilla\" }"));
+    }
+
+    #[test]
+    fn test_parse_test_summary_extracts_failure_names() {
+        let output = b"
+test tests::test_alpha ... ok
+test tests::test_beta ... FAILED
+test tests::test_gamma ... ok
+
+failures:
+    tests::test_beta
+
+test result: FAILED. 2 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out
+";
+        let summary = parse_test_summary(output);
+        assert_eq!(summary.passed, 2);
+        assert_eq!(summary.failed, 1);
+        let mut expected = BTreeSet::new();
+        expected.insert("tests::test_beta".to_string());
+        assert_eq!(summary.failed_tests, expected);
+    }
+
+    #[test]
+    fn test_parse_test_summary_multiple_suites() {
+        let output = b"
+running 2 tests
+test test_a ... ok
+test test_b ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+   Doc-tests my_crate
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+";
+        let summary = parse_test_summary(output);
+        assert_eq!(summary.passed, 2);
+        assert_eq!(summary.failed, 0);
+    }
+
+    #[test]
+    fn test_classification_passing_baseline_and_candidate() {
+        let base = TestSummary { passed: 100, failed: 0, ignored: 0, ..Default::default() };
+        let cand = TestSummary { passed: 100, failed: 0, ignored: 0, ..Default::default() };
+        assert_eq!(classify_outcome(Some(&base), &cand), CompatStatus::Compatible);
+    }
+
+    #[test]
+    fn test_classification_candidate_regression() {
+        let base = TestSummary { passed: 100, failed: 0, ignored: 0, ..Default::default() };
+        let cand = TestSummary {
+            passed: 98,
+            failed: 2,
+            ignored: 0,
+            failed_tests: BTreeSet::from(["tests::t1".into(), "tests::t2".into()]),
+            ..Default::default()
+        };
+        assert_eq!(classify_outcome(Some(&base), &cand), CompatStatus::CandidateRegression);
+    }
+
+    #[test]
+    fn test_classification_failing_baseline_same_failures() {
+        let mut failed = BTreeSet::new();
+        failed.insert("tests::test_foo".to_string());
+        failed.insert("tests::test_bar".to_string());
+
+        let base = TestSummary { passed: 98, failed: 2, ignored: 0, failed_tests: failed.clone(), ..Default::default() };
+        let cand = TestSummary { passed: 98, failed: 2, ignored: 0, failed_tests: failed, ..Default::default() };
+        assert_eq!(classify_outcome(Some(&base), &cand), CompatStatus::BaselineFailure);
+    }
+
+    #[test]
+    fn test_classification_failing_baseline_equal_count_different_identities() {
+        // Regression test: equal failure count (1 == 1) but different failing test names.
+        // Must be classified as CandidateRegression, not BaselineFailure.
+        let base = TestSummary {
+            passed: 99,
+            failed: 1,
+            ignored: 0,
+            failed_tests: BTreeSet::from(["tests::test_baseline_only".to_string()]),
+            ..Default::default()
+        };
+        let cand = TestSummary {
+            passed: 99,
+            failed: 1,
+            ignored: 0,
+            failed_tests: BTreeSet::from(["tests::test_candidate_only".to_string()]),
+            ..Default::default()
+        };
+        assert_eq!(classify_outcome(Some(&base), &cand), CompatStatus::CandidateRegression);
+    }
+
+    #[test]
+    fn test_classification_failing_baseline_insufficient_evidence() {
+        // When failures occurred but test names could not be identified,
+        // do not report a clean BaselineFailure result. Reject as CandidateRegression.
+        let base = TestSummary { passed: 98, failed: 2, ignored: 0, failed_tests: BTreeSet::new(), ..Default::default() };
+        let cand = TestSummary { passed: 98, failed: 2, ignored: 0, failed_tests: BTreeSet::new(), ..Default::default() };
+        assert_eq!(classify_outcome(Some(&base), &cand), CompatStatus::CandidateRegression);
+    }
+
+    #[test]
+    fn test_classification_failing_baseline_with_candidate_regression() {
+        // Base had 1 failure; candidate introduced 3 failures (fails on top)
+        let base = TestSummary { passed: 99, failed: 1, ignored: 0, failed_tests: BTreeSet::from(["tests::t1".into()]), ..Default::default() };
+        let cand = TestSummary {
+            passed: 97,
+            failed: 3,
+            ignored: 0,
+            failed_tests: BTreeSet::from(["tests::t1".into(), "tests::t2".into(), "tests::t3".into()]),
+            ..Default::default()
+        };
+        assert_eq!(classify_outcome(Some(&base), &cand), CompatStatus::CandidateRegression);
+    }
+
+    #[test]
+    fn test_classification_fixed_in_candidate() {
+        let base = TestSummary {
+            passed: 95,
+            failed: 5,
+            ignored: 0,
+            failed_tests: BTreeSet::from(["t1".into(), "t2".into(), "t3".into(), "t4".into(), "t5".into()]),
+            ..Default::default()
+        };
+        let cand = TestSummary { passed: 100, failed: 0, ignored: 0, ..Default::default() };
+        assert_eq!(classify_outcome(Some(&base), &cand), CompatStatus::FixedInCandidate);
+    }
+
+    #[test]
+    fn test_classification_vacuous_rejected() {
+        let base = TestSummary { passed: 0, failed: 0, ignored: 0, ..Default::default() };
+        let cand = TestSummary { passed: 0, failed: 0, ignored: 0, ..Default::default() };
+        assert_eq!(classify_outcome(Some(&base), &cand), CompatStatus::VacuousExecutionRejected);
+    }
+
+    #[test]
+    fn test_parse_test_summary_does_not_mistake_panic_payload_for_test_name() {
+        let output = b"
+test tests::test_one ... FAILED
+test tests::test_two ... ok
+
+failures:
+
+---- tests::test_one stdout ----
+thread 'tests::test_one' panicked at src/lib.rs:42:5:
+single_word_panic_payload
+stack_symbol_without_spaces
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+failures:
+    tests::test_one
+
+test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+";
+        let summary = parse_test_summary(output);
+        assert_eq!(summary.passed, 1);
+        assert_eq!(summary.failed, 1);
+        let mut expected = BTreeSet::new();
+        expected.insert("tests::test_one".to_string());
+        assert_eq!(summary.failed_tests, expected);
+    }
+
+    #[test]
+    fn test_check_provenance_rejects_remote_git_source() {
+        let stdout = "\
+craft-ui v0.1.0 (https://github.com/storytold/craft-libs.git?rev=5c874d51#5c874d51)
+└── photocraft-ui-egui v0.1.0 (/path/to/photocraft/crates/photocraft-ui-egui)
+";
+        let res = check_provenance_in_tree_output(stdout, "craft-ui", "/path/to/candidate/crates/ui");
+        assert!(res.is_err());
+        assert!(res.unwrap_err().contains("resolved to remote source"));
+    }
+
+    #[test]
+    fn test_check_provenance_rejects_remote_even_if_path_snippet_appears_in_another_line() {
+        // Even if candidate path snippet happens to be in consumer checkout path,
+        // if checked_crate itself points to remote git, it must fail.
+        let stdout = "\
+craft-ui v0.1.0 (git+https://github.com/storytold/craft-libs.git?rev=5c874d51)
+└── photocraft-ui-egui v0.1.0 (/var/compat-candidate/crates/ui/mock_consumer)
+";
+        let res = check_provenance_in_tree_output(stdout, "craft-ui", "/var/compat-candidate/crates/ui");
+        assert!(res.is_err());
+        assert!(res.unwrap_err().contains("resolved to remote source"));
+    }
+
+    #[test]
+    fn test_check_provenance_accepts_valid_candidate_path() {
+        let stdout = "\
+craft-ui v0.1.0 (/path/to/candidate/crates/ui)
+└── photocraft-ui-egui v0.1.0 (/path/to/photocraft/crates/photocraft-ui-egui)
+";
+        let res = check_provenance_in_tree_output(stdout, "craft-ui", "/path/to/candidate/crates/ui");
+        assert!(res.is_ok());
+    }
+
+    #[test]
+    fn test_classification_candidate_build_failure_exit_nonzero() {
+        let base = TestSummary { passed: 100, failed: 0, ignored: 0, ..Default::default() };
+        // Process returned exit code 101, but 0 tests failed because compilation failed
+        let cand = TestSummary { passed: 0, failed: 0, ignored: 0, ..Default::default() };
+        let status = classify_outcome_with_status(Some(&base), true, &cand, false);
+        assert_eq!(status, CompatStatus::CandidateRegression);
+    }
+
+    #[test]
+    fn test_classification_baseline_build_failure_exit_nonzero() {
+        let base = TestSummary { passed: 0, failed: 0, ignored: 0, ..Default::default() };
+        let cand = TestSummary { passed: 100, failed: 0, ignored: 0, ..Default::default() };
+        let status = classify_outcome_with_status(Some(&base), false, &cand, true);
+        assert_eq!(status, CompatStatus::InfrastructureFailure);
+    }
+
+    #[test]
+    fn worktree_guards_do_not_replace_or_remove_other_runs() {
+        let parent = std::env::temp_dir().join(format!("compat-guard-{}", std::process::id()));
+        fs::create_dir_all(&parent).unwrap();
+        let repo = reserve_run_dir(&parent).unwrap();
+        for args in
+            [vec!["init"], vec!["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "--allow-empty", "-m", "fixture"]]
+        {
+            assert!(Command::new("git").current_dir(&repo).args(args).output().unwrap().status.success());
+        }
+        let barrier = std::sync::Barrier::new(2);
+        let ((path_one, mut first), (path_two, mut second)) = std::thread::scope(|scope| {
+            let make_worktree = || {
+                let run = reserve_run_dir(&parent).unwrap();
+                let path = run.join("compat-candidate-same-sha");
+                let mut guard = WorktreeGuard::new();
+                barrier.wait();
+                guard.create(&repo, &path, "HEAD").unwrap();
+                (path, guard)
+            };
+            let first = scope.spawn(make_worktree);
+            let second = scope.spawn(make_worktree);
+            (first.join().unwrap(), second.join().unwrap())
+        });
+        assert_ne!(path_one, path_two);
+        assert!(second.create(&repo, &path_one, "HEAD").is_err());
+        drop(second);
+        assert!(path_one.join(".git").exists());
+        assert!(!path_two.exists());
+        assert!(first.cleanup().is_empty());
+        assert!(!path_one.exists());
+        assert!(WorktreeGuard::remove(&repo, &repo).is_err());
+        assert!(repo.exists());
+        fs::remove_dir_all(&parent).unwrap();
+    }
+
+    #[test]
+    fn provenance_requires_exact_root_source_and_accepts_host_named_local_paths() {
+        let expected = "/home/user/ghq/github.com/storytold/craft-libs/crates/ui";
+        assert!(check_provenance_in_tree_output(&format!("craft-ui v0.1.0 ({expected})"), "craft-ui", expected).is_ok());
+        for source in [format!("{expected}-other"), format!("{expected}/nested"), "/other/crates/ui".into()] {
+            assert!(check_provenance_in_tree_output(&format!("craft-ui v0.1.0 ({source})"), "craft-ui", expected).is_err());
+        }
+        assert!(check_provenance_in_tree_output("craft-ui v0.1.0 (/wrong)\n└── craft-ui v0.1.0 (/expected)", "craft-ui", "/expected").is_err());
+        assert!(check_provenance_in_tree_output("not-craft-ui v0.1.0 (/expected)", "craft-ui", "/expected").is_err());
+        assert!(check_provenance_in_tree_output(r"craft-ui v0.1.0 (C:\src\crates\ui)", "craft-ui", "C:/src/crates/ui").is_ok());
+        assert!(check_provenance_in_tree_output(r"craft-ui v0.1.0 (C:\src\crates\ui)", "craft-ui", "ui").is_err());
+        assert!(check_provenance_in_tree_output(r"craft-ui v0.1.0 (C:\src\crates\ui)", "craft-ui", r"\\?\C:\src\crates\ui").is_ok());
+        assert!(check_provenance_in_tree_output(r"craft-ui v0.1.0 (\\server\share\crates\ui)", "craft-ui", "//?/UNC/server/share/crates/ui").is_ok());
+    }
+
+    #[test]
+    fn incomplete_comparisons_never_pass() {
+        let base = parse_test_summary(b"running 2 tests\ntest a ... ok\ntest b ... ok\ntest result: ok. 2 passed; 0 failed; 0 ignored");
+        let partial = parse_test_summary(b"running 1 test\ntest a ... ok\ntest result: ok. 1 passed; 0 failed; 0 ignored");
+        assert_eq!(classify_outcome_with_status(Some(&base), true, &partial, true), CompatStatus::InfrastructureFailure);
+        let aborted = parse_test_summary(b"running 2 tests\ntest a ... ok");
+        assert_eq!(classify_outcome_with_status(Some(&base), true, &aborted, false), CompatStatus::CandidateRegression);
+        let empty = TestSummary::default();
+        assert_eq!(classify_outcome_with_status(Some(&empty), false, &empty, false), CompatStatus::InfrastructureFailure);
+        let partial_failure = parse_test_summary(b"running 2 tests\ntest a ... FAILED\ntest result: FAILED. 0 passed; 2 failed; 0 ignored");
+        assert_eq!(classify_outcome_with_status(Some(&partial_failure), false, &partial_failure, false), CompatStatus::InfrastructureFailure);
+        assert_eq!(classify_outcome_with_status(None, true, &base, true), CompatStatus::Skipped);
+    }
+
+    #[test]
+    fn real_cargo_runs_later_executables_after_a_failure() {
+        let parent = std::env::temp_dir().join("craft-compat-cargo-fixtures");
+        fs::create_dir_all(&parent).unwrap();
+        let fixture = reserve_run_dir(&parent).unwrap();
+        fs::create_dir_all(fixture.join("src")).unwrap();
+        fs::create_dir_all(fixture.join("tests")).unwrap();
+        fs::write(fixture.join("Cargo.toml"), "[workspace]\n[package]\nname = \"compat-fixture\"\nversion = \"0.1.0\"\nedition = \"2024\"\n")
+            .unwrap();
+        fs::write(fixture.join("src/lib.rs"), "pub fn fixture() {}\n").unwrap();
+        fs::write(fixture.join("tests/a.rs"), "#[test] fn same() { assert_eq!(1, 2); }\n").unwrap();
+        fs::write(fixture.join("tests/b.rs"), "#[test] fn same() {}\n").unwrap();
+        assert!(Command::new("cargo").current_dir(&fixture).args(["generate-lockfile", "--offline"]).output().unwrap().status.success());
+        for locked in [true, false] {
+            let out = run_consumer_tests(&fixture, "compat-fixture", &fixture.join("target"), locked).unwrap();
+            assert!(!out.status.success());
+            let mut output = out.stdout;
+            output.extend_from_slice(&out.stderr);
+            let summary = parse_test_summary(&output);
+            assert_eq!((summary.passed, summary.failed), (1, 1));
+            assert_eq!((summary.harnesses_started, summary.harnesses_completed), (4, 4));
+            assert_eq!(summary.failed_tests, BTreeSet::from(["2:same".into()]));
+            assert_eq!(classify_outcome_with_status(Some(&summary), false, &summary, false), CompatStatus::BaselineFailure);
+        }
+        fs::remove_dir_all(&fixture).unwrap();
+    }
+
+    #[test]
+    fn failures_in_different_executables_do_not_alias() {
+        let baseline = parse_test_summary(b"running 1 test\ntest same ... FAILED\ntest result: FAILED. 0 passed; 1 failed; 0 ignored\nrunning 1 test\ntest same ... ok\ntest result: ok. 1 passed; 0 failed; 0 ignored");
+        let candidate = parse_test_summary(b"running 1 test\ntest same ... ok\ntest result: ok. 1 passed; 0 failed; 0 ignored\nrunning 1 test\ntest same ... FAILED\ntest result: FAILED. 0 passed; 1 failed; 0 ignored");
+        assert_eq!(baseline.passed, 1);
+        assert_eq!(baseline.failed, 1);
+        assert_eq!(baseline.harnesses_completed, 2);
+        assert_eq!(classify_outcome_with_status(Some(&baseline), false, &candidate, false), CompatStatus::CandidateRegression);
+    }
+}
