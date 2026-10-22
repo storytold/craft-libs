@@ -594,6 +594,10 @@ impl<'a> Surface<'a> {
                 r.stops.iter().any(|s| s.opacity != NormalizedF32::ONE)
             }
             InnerPaint::SweepGradient(r) => r.stops.iter().any(|s| s.opacity != NormalizedF32::ONE),
+            InnerPaint::MeshGradient(m) => m
+                .patches
+                .iter()
+                .any(|p| p.opacities.iter().any(|o| *o != NormalizedF32::ONE)),
             InnerPaint::Pattern(_) => false,
         };
 

@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use bumpalo::Bump;
 use pdf_writer::types::{FunctionShadingType, PostScriptOp};
+use pdf_writer::writers::StreamShadingType;
 use pdf_writer::{Chunk, Finish, Ref};
 use tiny_skia_path::Point;
 
@@ -12,7 +13,7 @@ use crate::configure::ValidationError;
 use crate::geom::{Rect, Transform};
 use crate::graphics::color::luma;
 use crate::graphics::color::{Color, ColorSpace};
-use crate::graphics::paint::{LinearGradient, RadialGradient, SweepGradient};
+use crate::graphics::paint::{LinearGradient, MeshGradient, RadialGradient, SweepGradient};
 use crate::graphics::paint::{SpreadMethod, Stop};
 use crate::num::NormalizedF32;
 use crate::resource;
@@ -82,6 +83,7 @@ impl Hash for PostScriptGradient {
 pub(crate) enum GradientProperties {
     RadialAxialGradient(RadialAxialGradient),
     PostScriptGradient(PostScriptGradient),
+    MeshGradient(Arc<MeshGradient>),
 }
 
 impl GradientProperties {
@@ -98,6 +100,7 @@ impl GradientProperties {
                     return Some((&psg.stops[0].color, psg.stops[0].opacity));
                 }
             }
+            GradientProperties::MeshGradient(_) => {}
         }
 
         None
@@ -265,6 +268,23 @@ impl Cacheable for ShadingFunction {
                     registered_cs,
                 )
             }
+            GradientProperties::MeshGradient(mg) => {
+                // No patches paints nothing; the shading is still written, as it is referenced.
+                let first = mg
+                    .patches
+                    .first()
+                    .map_or_else(|| luma::Color::black().into(), |p| p.colors[0].clone());
+                let shading_cs = shading_color_space(sc, first, self.0.use_opacities);
+                let registered_cs = sc.register_colorspace(chunk_container, shading_cs);
+                serialize_mesh_shading(
+                    sc,
+                    &mut stream_chunk,
+                    root_ref,
+                    mg,
+                    self.0.use_opacities,
+                    registered_cs,
+                );
+            }
         }
 
         // Note: The stream chunk might be empty.
@@ -282,6 +302,83 @@ fn shading_color_space(sc: &mut SerializeContext, color: Color, use_opacities: b
     } else {
         color.color_space(sc)
     }
+}
+
+/// A mesh gradient as a Type 6 (Coons patch mesh) shading: per patch an 8-bit edge flag (0, no
+/// shared edge), the twelve points as 32-bit coordinates over the mesh's bounds (`Decode`), and
+/// the four corner colours (with `use_opacities`, the opacities as gray) at 8 bits a component,
+/// Flate-compressed. 32-bit coordinates keep the patches where they are to well under a printer
+/// dot, as Illustrator writes its meshes.
+fn serialize_mesh_shading(
+    sc: &mut SerializeContext,
+    chunk: &mut Chunk,
+    root_ref: Ref,
+    mesh: &MeshGradient,
+    use_opacities: bool,
+    cs: MaybeDeviceColorSpace,
+) {
+    let (mut x0, mut y0, mut x1, mut y1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
+    for (x, y) in mesh.patches.iter().flat_map(|p| p.points.iter()) {
+        (x0, y0, x1, y1) = (x0.min(*x), y0.min(*y), x1.max(*x), y1.max(*y));
+    }
+    if !(x0.is_finite() && y0.is_finite() && x1.is_finite() && y1.is_finite()) {
+        (x0, y0, x1, y1) = (0.0, 0.0, 1.0, 1.0);
+    }
+    // A zero-size range would divide by zero: widen it by a point either way.
+    if x1 - x0 < f32::EPSILON {
+        (x0, x1) = (x0 - 1.0, x1 + 1.0);
+    }
+    if y1 - y0 < f32::EPSILON {
+        (y0, y1) = (y0 - 1.0, y1 + 1.0);
+    }
+    let components = if use_opacities {
+        1
+    } else {
+        mesh.patches
+            .first()
+            .map_or(1, |p| p.colors[0].to_pdf_color().len())
+    };
+    let coord = |v: f32, lo: f32, hi: f32| {
+        (((f64::from(v) - f64::from(lo)) / (f64::from(hi) - f64::from(lo))).clamp(0.0, 1.0)
+            * f64::from(u32::MAX))
+        .round() as u32
+    };
+    let byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+    let mut data = Vec::with_capacity(mesh.patches.len() * (1 + 12 * 8 + 4 * components));
+    for patch in &mesh.patches {
+        data.push(0u8);
+        for (x, y) in &patch.points {
+            data.extend(coord(*x, x0, x1).to_be_bytes());
+            data.extend(coord(*y, y0, y1).to_be_bytes());
+        }
+        for (color, opacity) in patch.colors.iter().zip(patch.opacities.iter()) {
+            if use_opacities {
+                data.push(byte(opacity.get()));
+            } else {
+                let values = color.to_pdf_color();
+                // A colour from another space can't be written in this one: never misread bytes.
+                for i in 0..components {
+                    data.push(byte(values.get(i).copied().unwrap_or(0.0)));
+                }
+            }
+        }
+    }
+    let filter_stream =
+        FilterStreamBuilder::new_from_binary_data(&data).finish(&sc.serialize_settings());
+    let mut shading = chunk.stream_shading(root_ref, filter_stream.encoded_data());
+    filter_stream.write_filters(shading.deref_mut().deref_mut());
+    shading.shading_type(StreamShadingType::CoonsPatch);
+    set_colorspace(cs, shading.deref_mut().deref_mut());
+    shading.bits_per_coordinate(32);
+    shading.bits_per_component(8);
+    shading.bits_per_flag(8);
+    let mut decode = vec![x0, x1, y0, y1];
+    for _ in 0..components {
+        decode.extend([0.0, 1.0]);
+    }
+    shading.decode(decode);
+    shading.anti_alias(mesh.anti_alias);
+    shading.finish();
 }
 
 fn serialize_postscript_shading(

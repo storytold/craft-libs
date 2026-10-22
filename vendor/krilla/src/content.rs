@@ -1114,6 +1114,16 @@ impl ContentBuilder {
                 let (gradient_props, transform) = sg.clone().gradient_properties(bounds);
                 write_gradient(gradient_props, sc, chunk_container, transform, self);
             }
+            InnerPaint::MeshGradient(mg) => {
+                let transform = mg.transform;
+                write_gradient(
+                    GradientProperties::MeshGradient(mg.clone()),
+                    sc,
+                    chunk_container,
+                    transform,
+                    self,
+                );
+            }
             InnerPaint::Pattern(pat) => {
                 let mut pat = Arc::unwrap_or_clone(pat.clone());
                 pat.transform = pattern_transform(pat.transform);

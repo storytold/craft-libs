@@ -60,6 +60,15 @@ impl Mask {
                     return None;
                 }
             }
+            GradientProperties::MeshGradient(mg) => {
+                if mg
+                    .patches
+                    .iter()
+                    .all(|p| p.opacities.iter().all(|o| o.get() == 1.0))
+                {
+                    return None;
+                }
+            }
         }
 
         let shading_function = ShadingFunction::new(gradient_properties, true);

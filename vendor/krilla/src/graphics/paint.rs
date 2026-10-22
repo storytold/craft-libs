@@ -49,6 +49,57 @@ impl Hash for LinearGradient {
     }
 }
 
+/// One Coons patch of a [`MeshGradient`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct MeshPatch {
+    /// The twelve boundary control points, in the order a PDF Type 6 shading lists them
+    /// (ISO 32000-1, 8.7.4.5.7): starting at a corner, three cubic Bézier edges' worth of points
+    /// going one way round the patch, so the corners are `points[0]`, `[3]`, `[6]` and `[9]`.
+    pub points: [(f32, f32); 12],
+    /// The colours at the corners `points[0]`, `[3]`, `[6]` and `[9]`. Every patch of a mesh
+    /// gradient needs its colours in the same colour space.
+    pub colors: [Color; 4],
+    /// The opacities at the same corners.
+    pub opacities: [NormalizedF32; 4],
+}
+
+impl Eq for MeshPatch {}
+
+impl Hash for MeshPatch {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        for (x, y) in &self.points {
+            x.to_bits().hash(state);
+            y.to_bits().hash(state);
+        }
+        self.colors.hash(state);
+        self.opacities.hash(state);
+    }
+}
+
+/// A mesh gradient: Coons patches, each blending its four corner colours across its curved
+/// shape, written as one PDF Type 6 shading so the viewer or RIP blends them smoothly at its
+/// own resolution. Corner opacities below 1 add a soft mask, as for the other gradients.
+/// Patches paint in order (a later one over an earlier one); a fill paints only where they lie.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MeshGradient {
+    /// The patches.
+    pub patches: Vec<MeshPatch>,
+    /// A transform that should be applied to the mesh gradient.
+    pub transform: Transform,
+    /// Whether the gradient should be anti-aliased.
+    pub anti_alias: bool,
+}
+
+impl Eq for MeshGradient {}
+
+impl Hash for MeshGradient {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.patches.hash(state);
+        self.transform.hash(state);
+        self.anti_alias.hash(state);
+    }
+}
+
 /// A radial gradient.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RadialGradient {
@@ -169,6 +220,7 @@ pub(crate) enum InnerPaint {
     LinearGradient(LinearGradient),
     RadialGradient(RadialGradient),
     SweepGradient(SweepGradient),
+    MeshGradient(Arc<MeshGradient>),
     Pattern(Arc<Pattern>),
 }
 
@@ -207,6 +259,12 @@ impl From<luma::Color> for Paint {
 impl From<cmyk::Color> for Paint {
     fn from(value: cmyk::Color) -> Self {
         Paint(InnerPaint::Color(value.into()))
+    }
+}
+
+impl From<MeshGradient> for Paint {
+    fn from(value: MeshGradient) -> Self {
+        Paint(InnerPaint::MeshGradient(Arc::new(value)))
     }
 }
 

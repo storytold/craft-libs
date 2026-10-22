@@ -26,3 +26,20 @@ The shared writer's native subprocess regression covers the previously aborting
 cleanup and a successful fresh export afterward. Native and WASM export tests
 cover the unchanged successful path. WASM aborts, aborting panic configurations
 and process-wide allocation failures remain outside unwind recovery.
+
+## Mesh gradients
+
+Krilla 0.8.2 paints only flat colour, linear, radial and sweep gradients and tiling patterns, so
+an app writing a gradient mesh had to cut each patch into flat-colour pieces: a VectorCraft
+document holding an Illustrator file's 22,850 mesh patches became a 197 MB PDF with stepped
+blends. The patch adds `paint::MeshGradient` (and `MeshPatch`): Coons patches with a colour and
+an opacity at each corner, written as one PDF Type 6 shading (ISO 32000-1, 8.7.4.5.7) through
+pdf-writer's `StreamShading`, so the viewer or RIP blends them at its own resolution. Each patch
+is an 8-bit flag (no shared edge), its twelve points as 32-bit coordinates over the mesh's
+bounds (`Decode`) and its four corner colours at 8 bits a component, Flate-compressed. It goes
+through the same path as the other gradients (`GradientProperties::MeshGradient`): a shading
+pattern for the fill, and for corner opacities below 1 a luminosity soft mask holding the same
+mesh in gray (`use_opacities`), as cairo and Illustrator write transparent meshes. Every patch's
+colours must share one colour space, as gradient stops must. Changed files: `src/content.rs`,
+`src/surface.rs`, `src/graphics/mask.rs`, `src/graphics/paint.rs`,
+`src/graphics/shading_function.rs`.
