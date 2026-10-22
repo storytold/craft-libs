@@ -91,7 +91,7 @@ The optional writer embeds Compact ICC Profiles by Clinton Ingram
 See licenses/pdf-writer/LICENSE-ICC.txt and ATTRIBUTION.md for sources and hashes.
 The writer adds no font files. Its four existing ICC profiles are retained under vendor/krilla/icc.
 
-Krilla is vendored with a native unwind-cleanup patch; see vendor/krilla/README.craft.md
+Krilla is vendored with a native unwind-cleanup patch and an upstream COLR backport; see vendor/krilla/README.craft.md
 and vendor/krilla/SOURCE.json. Its upstream MIT/Apache-2.0 licences and CC0 profiles are unchanged.
 
 Optional PDF reader

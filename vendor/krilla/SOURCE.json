@@ -337,7 +337,7 @@
     {
       "path": "src/text/glyph/colr.rs",
       "upstream_sha256": "cde9bb33f7b87fe026aa9abe24dc375d8fbdce01a5d9aa6764f93fe6febef676",
-      "sha256": "cde9bb33f7b87fe026aa9abe24dc375d8fbdce01a5d9aa6764f93fe6febef676"
+      "sha256": "892351f0ad075306779a6bb239e1985c2931af367bdf826fff48aa4e58cc338c"
     },
     {
       "path": "src/text/glyph/mod.rs",

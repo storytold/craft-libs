@@ -103,7 +103,7 @@ that supply shaped glyphs do not need that shaper. Adapters that call `draw_text
 DeckCraft, also need `write-simple-text` when adopting this revision. `write-pdf` adds
 embedded-PDF support independently of text shaping.
 
-The writer pins Krilla 0.8.2, with a local unwind-cleanup patch documented in
+The writer pins Krilla 0.8.2, with a local unwind-cleanup patch and an upstream COLR backport documented in
 [`vendor/krilla/README.craft.md`](../../vendor/krilla/README.craft.md). Successful
 serialization uses the same backend version as before extraction. It provides:
 
