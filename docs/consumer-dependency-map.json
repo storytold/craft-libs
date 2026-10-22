@@ -1,0 +1,87 @@
+{
+  "format_version": 1,
+  "status": "unverified_inventory",
+  "shared_library_repository": "storytold/craft-libs",
+  "applications": [
+    {
+      "repository": "storytold/photocraft",
+      "status": "unverified",
+      "consumer_revision": null,
+      "dependencies": [],
+      "verified_commands": [],
+      "evidence": []
+    },
+    {
+      "repository": "storytold/vectorcraft",
+      "status": "unverified",
+      "consumer_revision": null,
+      "dependencies": [],
+      "verified_commands": [],
+      "evidence": []
+    },
+    {
+      "repository": "storytold/designcraft",
+      "status": "unverified",
+      "consumer_revision": null,
+      "dependencies": [],
+      "verified_commands": [],
+      "evidence": []
+    },
+    {
+      "repository": "storytold/pdfcraft",
+      "status": "unverified",
+      "consumer_revision": null,
+      "dependencies": [],
+      "verified_commands": [],
+      "evidence": []
+    },
+    {
+      "repository": "storytold/lightcraft",
+      "status": "unverified",
+      "consumer_revision": null,
+      "dependencies": [],
+      "verified_commands": [],
+      "evidence": []
+    },
+    {
+      "repository": "storytold/filmcraft",
+      "status": "unverified",
+      "consumer_revision": null,
+      "dependencies": [],
+      "verified_commands": [],
+      "evidence": []
+    },
+    {
+      "repository": "storytold/effectcraft",
+      "status": "unverified",
+      "consumer_revision": null,
+      "dependencies": [],
+      "verified_commands": [],
+      "evidence": []
+    },
+    {
+      "repository": "storytold/cadcraft",
+      "status": "unverified",
+      "consumer_revision": null,
+      "dependencies": [],
+      "verified_commands": [],
+      "evidence": []
+    },
+    {
+      "repository": "storytold/soundcraft",
+      "status": "unverified",
+      "consumer_revision": null,
+      "dependencies": [],
+      "verified_commands": [],
+      "evidence": []
+    },
+    {
+      "repository": "storytold/wordcraft",
+      "status": "unverified",
+      "consumer_revision": null,
+      "dependencies": [],
+      "verified_commands": [],
+      "evidence": []
+    }
+  ]
+}

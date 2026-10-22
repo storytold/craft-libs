@@ -1,5 +1,5 @@
 Craft App Libraries
-===================
+============
 
 <a href="https://sonarcloud.io/project/overview?id=storytold_craft-libs"><img alt="Scanned by SonarCloud" src="https://img.shields.io/badge/Scanned_by-SonarCloud-4b9fd5?style=flat-square&logo=sonarqubecloud&logoColor=white"></a>
 
@@ -59,6 +59,17 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   widget-state styling boundary.
 - [Panel docking](docs/ui-docking.md): validated panel moves, floating groups, workspace adapters
   and an optional egui docking surface.
+
+## Contributing
+
+Guidelines for proposing shared capabilities, crate layout conventions, the "Never Crash" standard, and cross-application verification are documented in [CONTRIBUTING.md](CONTRIBUTING.md). Operational agent instructions live in [AGENTS.md](AGENTS.md).
+
+## Architecture & Standards
+
+- [Shared capability extraction RFC](docs/rfc-shared-capabilities-architecture.md): The intended role of `craft-libs`, capability acceptance protocol, differential testing, and evidence standards.
+- [Shared crate contracts](docs/shared-crate-contract.md): Mandatory invariants, failure semantics, post-failure state guarantees, and cross-platform behavior specifications.
+- [Consumer Dependency Map](docs/consumer-dependency-map.md) ([JSON](docs/consumer-dependency-map.json)): Unverified consumer inventory and instructions for recording actual pins and comparisons.
+- [Platform Test Inventory](docs/platform-test-inventory.md) ([JSON](docs/platform-test-inventory.json)): Planned verification scopes and evidence requirements; no completed platform qualifications.
 
 ## License and credits
 
