@@ -250,3 +250,58 @@ fn floating_brushes_merge_detach_and_redock_through_real_pointer_input() {
         }
     }
 }
+
+/// Exercise every border while preserving content across themes, sizes and pixel scales.
+#[test]
+fn floating_borders_resize_content_at_multiple_themes_sizes_and_scales() {
+    let output = std::env::var_os("CRAFT_UI_DOCK_VISUAL_DIR").map(PathBuf::from);
+    for dark in [true, false] {
+        for width in [640.0, 1000.0] {
+            for scale in [1.0, 2.0] {
+                let name = format!("{}-{}-{}x", if dark { "dark" } else { "light" }, width as u32, scale as u32);
+                let directory = output.as_ref().map(|p| p.join(&name));
+                let mut h = Harness::new(dark, width, scale);
+                let body_id = h.body_ids[&BRUSHES];
+                let original_values = h.values.clone();
+                for (hx, hy) in [(-1_i8, 0_i8), (1, 0), (0, -1), (0, 1), (-1, -1), (1, -1), (-1, 1), (1, 1)] {
+                    h.layout.floating[0].rect = [100.0, 100.0, 210.0, 250.0];
+                    h.settle();
+                    let from = pos2(
+                        100.0
+                            + if hx < 0 {
+                                2.0
+                            } else if hx > 0 {
+                                208.0
+                            } else {
+                                105.0
+                            },
+                        100.0
+                            + if hy < 0 {
+                                2.0
+                            } else if hy > 0 {
+                                248.0
+                            } else {
+                                125.0
+                            },
+                    );
+                    h.drag(from, from + vec2(f32::from(hx) * 24.0, f32::from(hy) * 24.0));
+                    assert_eq!(
+                        h.layout.floating[0].rect,
+                        [
+                            100.0 - if hx < 0 { 24.0 } else { 0.0 },
+                            100.0 - if hy < 0 { 24.0 } else { 0.0 },
+                            210.0 + if hx != 0 { 24.0 } else { 0.0 },
+                            250.0 + if hy != 0 { 24.0 } else { 0.0 },
+                        ],
+                        "{name}: ({hx}, {hy})"
+                    );
+                    assert_eq!(h.body_ids[&BRUSHES], body_id);
+                    assert_eq!(h.values, original_values);
+                    h.capture(&directory, &format!("resize-{hx}-{hy}"));
+                    h.drag(from + vec2(f32::from(hx) * 24.0, f32::from(hy) * 24.0), from);
+                    assert_eq!(h.layout.floating[0].rect, [100.0, 100.0, 210.0, 250.0], "{name}: shrink ({hx}, {hy})");
+                }
+            }
+        }
+    }
+}

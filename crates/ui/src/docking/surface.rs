@@ -346,10 +346,12 @@ struct Renderer<'a, P> {
 }
 
 impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
+    /// Retain renderer-owned controls so workspace replacement can stop their drags.
     fn register_interaction(&mut self, ctx: &Context, id: Id) {
-        // A validated tree has at most 2*MAX_PANELS nodes. Tabs, stack dividers,
-        // floating grips/corners and splits fit comfortably inside this fixed bound.
-        const CAP: usize = 8 * super::MAX_PANELS;
+        // At most 12 controls per panel cover tabs, splits, stack dividers, a move
+        // grip and eight floating resize handles. Allow both previous and current
+        // frame identities during rendering, including a complete workspace change.
+        const CAP: usize = 32 * super::MAX_PANELS;
         if self.owned_interactions.len() < CAP && !self.owned_interactions.contains(&id) {
             self.owned_interactions.push(id);
         }
@@ -544,12 +546,19 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
         }
     }
 
+    /// Render tabs and body inside the reserved border while moving the outer frame.
     fn group(&mut self, ui: &mut Ui, panels: &[P], active: usize, rect: Rect, floating: bool) {
         let Some(selected) = panels.get(active) else { return };
         let policy = (self.permissions)(selected);
+        // Reserve the complete corner depth, not just the thinner edge bands, so
+        // no resize region overlaps tabs, group controls or body scrollbars.
+        let inner = if floating { float_content_rect(rect) } else { rect };
+        if floating {
+            ui.painter().rect_filled(rect, 0.0, self.style.background);
+        }
         let bare = panels.len() == 1 && policy == Permissions::PROTECTED;
         if bare {
-            self.contents(ui, selected, rect);
+            self.contents(ui, selected, inner);
             self.targets.push(DropTarget {
                 anchor: selected.clone(),
                 rect,
@@ -560,7 +569,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
             });
             return;
         }
-        let mut strip = Rect::from_min_max(rect.min, pos2(rect.right(), (rect.top() + self.style.tab_height).min(rect.bottom())));
+        let mut strip = Rect::from_min_max(inner.min, pos2(inner.right(), (inner.top() + self.style.tab_height).min(inner.bottom())));
         ui.painter().rect_filled(strip, 0.0, self.style.tab_background);
         if floating {
             let grip = Rect::from_min_max(strip.min, pos2((strip.left() + 12.0).min(strip.right()), strip.bottom()));
@@ -655,7 +664,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
             allow_splits: !floating,
             accepts_tabs: policy.accepts_tabs,
         });
-        self.contents(ui, selected, Rect::from_min_max(pos2(rect.left(), strip.bottom()), rect.max));
+        self.contents(ui, selected, Rect::from_min_max(pos2(inner.left(), strip.bottom()), inner.max));
         ui.painter().rect_stroke(rect, 0.0, self.style.border, StrokeKind::Inside);
     }
 
@@ -735,6 +744,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
         });
     }
 
+    /// Render floating groups and register their move and resize interactions.
     fn floating(&mut self, ctx: &Context) {
         let screen = ctx.content_rect();
         if !super::targets::usable(screen) {
@@ -763,42 +773,51 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
                 let rect = Rect::from_min_size(ui.min_rect().min, rect.size());
                 ui.allocate_rect(rect, Sense::hover());
                 self.group(ui, &group.panels, group.active, rect, true);
-                let corner = Rect::from_min_max((rect.max - vec2(12.0, 12.0)).max(rect.min), rect.max);
-                let response = ui.interact(corner, id.with("resize"), Sense::drag()).on_hover_cursor(egui::CursorIcon::ResizeNwSe);
-                self.register_interaction(ui.ctx(), response.id);
-                response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), &self.style.resize_window_label));
-                if response.drag_started() {
-                    response.request_focus();
-                }
-                let mut delta = if response.dragged() { ui.input(|i| i.pointer.delta()) } else { Vec2::ZERO };
-                if response.has_focus() {
-                    ui.memory_mut(|memory| {
-                        memory.set_focus_lock_filter(
-                            response.id,
-                            egui::EventFilter { horizontal_arrows: true, vertical_arrows: true, ..Default::default() },
-                        )
-                    });
-                    ui.input_mut(|input| {
-                        if input.consume_key(egui::Modifiers::NONE, Key::ArrowLeft) {
-                            delta.x -= 8.0;
-                        }
-                        if input.consume_key(egui::Modifiers::NONE, Key::ArrowRight) {
-                            delta.x += 8.0;
-                        }
-                        if input.consume_key(egui::Modifiers::NONE, Key::ArrowUp) {
-                            delta.y -= 8.0;
-                        }
-                        if input.consume_key(egui::Modifiers::NONE, Key::ArrowDown) {
-                            delta.y += 8.0;
-                        }
-                    });
-                }
-                if response.enabled() && delta != Vec2::ZERO {
-                    let size = (rect.size() + delta).max(limits.min.max(vec2(40.0, self.style.tab_height + 20.0))).min(limits.max).min(screen.size());
-                    self.output.actions.push(Action::MoveFloating { panel: first.clone(), rect: [rect.left(), rect.top(), size.x, size.y] });
-                }
-                if response.hovered() || response.dragged() || response.has_focus() {
-                    ui.painter().line_segment([corner.left_bottom(), corner.right_top()], Stroke::new(2.0, self.style.accent));
+                for (hx, hy, hit, cursor) in float_resize_handles(rect) {
+                    // Keep the original lower-right grip ID for keyboard focus and automation.
+                    let handle_id = if (hx, hy) == (1, 1) { id.with("resize") } else { id.with(("resize", hx, hy)) };
+                    let response = ui.interact(hit, handle_id, Sense::drag()).on_hover_and_drag_cursor(cursor);
+                    self.register_interaction(ui.ctx(), response.id);
+                    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), &self.style.resize_window_label));
+                    if response.drag_started() {
+                        response.request_focus();
+                    }
+                    // A press can arrive with a hover move from a different handle in the same
+                    // frame. Only motion after the press belongs to this resize gesture.
+                    let mut delta =
+                        if response.dragged() && !ui.input(|i| i.pointer.primary_pressed()) { ui.input(|i| i.pointer.delta()) } else { Vec2::ZERO };
+                    if response.has_focus() {
+                        ui.memory_mut(|memory| {
+                            memory.set_focus_lock_filter(
+                                response.id,
+                                egui::EventFilter { horizontal_arrows: true, vertical_arrows: true, ..Default::default() },
+                            )
+                        });
+                        ui.input_mut(|input| {
+                            if input.consume_key(egui::Modifiers::NONE, Key::ArrowLeft) {
+                                delta.x -= 8.0;
+                            }
+                            if input.consume_key(egui::Modifiers::NONE, Key::ArrowRight) {
+                                delta.x += 8.0;
+                            }
+                            if input.consume_key(egui::Modifiers::NONE, Key::ArrowUp) {
+                                delta.y -= 8.0;
+                            }
+                            if input.consume_key(egui::Modifiers::NONE, Key::ArrowDown) {
+                                delta.y += 8.0;
+                            }
+                        });
+                    }
+                    if response.enabled() && delta != Vec2::ZERO {
+                        let resized = resize_float(rect, hx, hy, delta, limits, screen, self.style.tab_height);
+                        self.output.actions.push(Action::MoveFloating {
+                            panel: first.clone(),
+                            rect: [resized.left(), resized.top(), resized.width(), resized.height()],
+                        });
+                    }
+                    if (hx, hy) == (1, 1) && (response.hovered() || response.dragged() || response.has_focus()) {
+                        ui.painter().line_segment([hit.left_bottom(), hit.right_top()], Stroke::new(2.0, self.style.accent));
+                    }
                 }
             });
         }
@@ -914,4 +933,135 @@ fn split_bounds(available: f32, axis: SplitAxis, first: PanelLimits, second: Pan
     let constrained_lo = lo.max(available - b_max);
     let constrained_hi = hi.min(a_max);
     if constrained_lo <= constrained_hi { (constrained_lo, constrained_hi) } else { (lo, hi) }
+}
+
+/// Space reserved for floating resize corners; shared with content layout.
+fn float_border(rect: Rect) -> f32 {
+    10.0_f32.min(rect.width() / 2.0).min(rect.height() / 2.0)
+}
+
+/// Keep application chrome and body widgets strictly inside the resize border.
+fn float_content_rect(rect: Rect) -> Rect {
+    rect.shrink(float_border(rect))
+}
+
+/// Non-overlapping hit regions occupy only the reserved border, inside the window.
+fn float_resize_handles(rect: Rect) -> [(i8, i8, Rect, egui::CursorIcon); 8] {
+    use egui::CursorIcon::{ResizeHorizontal, ResizeNeSw, ResizeNwSe, ResizeVertical};
+    let corner = float_border(rect);
+    let edge = 5.0_f32.min(corner);
+    let (l, r, t, b) = (rect.left(), rect.right(), rect.top(), rect.bottom());
+    [
+        (-1, -1, Rect::from_min_max(pos2(l, t), pos2(l + corner, t + corner)), ResizeNwSe),
+        (1, -1, Rect::from_min_max(pos2(r - corner, t), pos2(r, t + corner)), ResizeNeSw),
+        (-1, 1, Rect::from_min_max(pos2(l, b - corner), pos2(l + corner, b)), ResizeNeSw),
+        (1, 1, Rect::from_min_max(pos2(r - corner, b - corner), pos2(r, b)), ResizeNwSe),
+        (-1, 0, Rect::from_min_max(pos2(l, t + corner), pos2(l + edge, b - corner)), ResizeHorizontal),
+        (1, 0, Rect::from_min_max(pos2(r - edge, t + corner), pos2(r, b - corner)), ResizeHorizontal),
+        (0, -1, Rect::from_min_max(pos2(l + corner, t), pos2(r - corner, t + edge)), ResizeVertical),
+        (0, 1, Rect::from_min_max(pos2(l + corner, b - edge), pos2(r - corner, b)), ResizeVertical),
+    ]
+}
+
+/// Move selected edges within panel and screen limits while preserving opposite edges.
+fn resize_float(rect: Rect, hx: i8, hy: i8, delta: Vec2, limits: PanelLimits, screen: Rect, tab_height: f32) -> Rect {
+    let min = limits.min.max(vec2(40.0, tab_height + 20.0)).min(limits.max).min(screen.size());
+    let mut result = rect;
+    // Clamp each moving edge while anchoring the opposite edge, including at the screen bounds.
+    if hx != 0 {
+        let available = if hx < 0 { rect.right() - screen.left() } else { screen.right() - rect.left() };
+        let max = limits.max.x.min(available);
+        let width = (rect.width() + f32::from(hx) * delta.x).clamp(min.x.min(max), max);
+        if hx < 0 {
+            result.min.x = rect.right() - width;
+        } else {
+            result.max.x = rect.left() + width;
+        }
+    }
+    if hy != 0 {
+        let available = if hy < 0 { rect.bottom() - screen.top() } else { screen.bottom() - rect.top() };
+        let max = limits.max.y.min(available);
+        let height = (rect.height() + f32::from(hy) * delta.y).clamp(min.y.min(max), max);
+        if hy < 0 {
+            result.min.y = rect.bottom() - height;
+        } else {
+            result.max.y = rect.top() + height;
+        }
+    }
+    result
+}
+
+#[cfg(test)]
+mod float_resize_tests {
+    use super::*;
+
+    /// Body scrollbars and all tab/header controls share the reserved inner rectangle.
+    #[test]
+    fn resize_regions_do_not_overlap_content_or_chrome() {
+        for size in [vec2(300.0, 220.0), vec2(40.0, 46.0), vec2(800.0, 600.0)] {
+            let frame = Rect::from_min_size(pos2(80.0, 70.0), size);
+            let content = float_content_rect(frame);
+            assert!(content.is_positive());
+            for (_, _, hit, _) in float_resize_handles(frame) {
+                let overlap = content.intersect(hit);
+                assert!(overlap.width() <= 0.0 || overlap.height() <= 0.0);
+            }
+        }
+    }
+
+    /// A late handle beyond the old capacity must remain cancellable in both ID lists.
+    #[test]
+    fn late_floating_handle_is_registered_and_cancelled() {
+        let ctx = Context::default();
+        ctx.run_ui(egui::RawInput::default(), |ui| {
+            let area = Id::new("capacity-test");
+            let handle = area.with("last-floating-handle");
+            let previous: Vec<_> = (0..8 * super::super::MAX_PANELS).map(|n| area.with(n)).collect();
+            ctx.data_mut(|d| d.insert_temp(area.with("owned-interactions"), previous.clone()));
+            let style = DockStyle::from_ui(ui);
+            let layout = Layout::<u32>::default();
+            let mut content = BodyContent(|_: &mut Ui, _: &u32| {});
+            let mut renderer = Renderer {
+                id: area,
+                style: &style,
+                label: &|_: &u32| String::new(),
+                permissions: &|_: &u32| Permissions::default(),
+                limits: &|_: &u32| PanelLimits::default(),
+                content: &mut content,
+                activation: None,
+                blockers: Vec::new(),
+                layout: &layout,
+                targets: Vec::new(),
+                owned_interactions: previous,
+                output: DockOutput::default(),
+            };
+            renderer.register_interaction(&ctx, handle);
+            assert!(renderer.owned_interactions.contains(&handle));
+            ctx.set_dragged_id(handle);
+            cancel_drag::<u32>(&ctx, area);
+            assert_eq!(ctx.dragged_id(), None);
+        })
+        .textures_delta
+        .clear();
+    }
+
+    /// Exercise growth and shrink limits without moving the anchored edges.
+    #[test]
+    fn moving_edges_respect_limits_and_screen_without_shifting_the_anchor() {
+        let rect = Rect::from_min_size(pos2(100.0, 100.0), vec2(300.0, 200.0));
+        let screen = Rect::from_min_size(Pos2::ZERO, vec2(800.0, 600.0));
+        let limits = PanelLimits { min: vec2(100.0, 80.0), max: vec2(450.0, 350.0) };
+        for (hx, hy) in [(-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (1, -1), (-1, 1), (1, 1)] {
+            let grown = resize_float(rect, hx, hy, vec2(f32::from(hx) * 1000.0, f32::from(hy) * 1000.0), limits, screen, 26.0);
+            assert!(screen.contains_rect(grown));
+            assert!(grown.width() <= limits.max.x && grown.height() <= limits.max.y);
+            let shrunk = resize_float(rect, hx, hy, vec2(f32::from(hx) * -1000.0, f32::from(hy) * -1000.0), limits, screen, 26.0);
+            assert_eq!(shrunk.width(), if hx == 0 { rect.width() } else { limits.min.x });
+            assert_eq!(shrunk.height(), if hy == 0 { rect.height() } else { limits.min.y });
+            for result in [grown, shrunk] {
+                assert_eq!(if hx < 0 { result.right() } else { result.left() }, if hx < 0 { rect.right() } else { rect.left() });
+                assert_eq!(if hy < 0 { result.bottom() } else { result.top() }, if hy < 0 { rect.bottom() } else { rect.top() });
+            }
+        }
+    }
 }
