@@ -54,6 +54,8 @@ Hostile-input bounds (CodeRabbit findings):
   ignored, so globals cannot recurse through further globals.
 - At most 4096 graphics states, holding at most 64 MiB together, are saved; a `q` past
   either limit is counted but not copied, and its `Q` still removes the clips added since.
+- An xref-stream `/W` type field wider than one byte is read at its full width (big-endian)
+  instead of only its first byte, and `/W[0]` over 8 bytes is refused like `/W[1]`.
   A dash array over 256 entries strokes solid.
 
 This remains the patched 0.7 backend. It retains the existing Bradford Lab conversion,

@@ -1276,23 +1276,39 @@ mod tests {
     #[test]
     fn xref_stream_type_field_uses_the_full_w0_width() {
         // /W [2 1 1]: two-byte type 0x0001 (normal), offset 7, gen 0.
-        let entry = [0u8, 1, 7, 0];
-        for (w0, bytes, ok) in [(2u8, &entry[..], true), (9, &entry[..], false)] {
+        let mut map = XrefMap::default();
+        let mut reader = Reader::new(&[0u8, 1, 7, 0]);
+        assert!(xref_stream_subsection(&mut reader, 5, 1, 2, 1, 1, &mut map).is_some());
+        assert!(matches!(
+            map.get(&ObjectIdentifier::new(5, 0)),
+            Some(EntryType::Normal(7))
+        ));
+    }
+
+    #[test]
+    fn xref_stream_loader_rejects_oversized_w0() {
+        // Same one-entry stream; only /W[0] differs, so the 9 must be what is refused.
+        let load = |w: &str| {
+            let data = format!(
+                "1 0 obj\n<< /Type /XRef /Size 6 /Index [5 1] /W [{w}] /Length 4 >>\nstream\n"
+            )
+            .into_bytes()
+            .into_iter()
+            .chain([0u8, 1, 7, 0])
+            .chain(*b"\nendstream\nendobj\n")
+            .collect::<Vec<u8>>();
             let mut map = XrefMap::default();
-            let mut reader = Reader::new(bytes);
-            let got = if w0 > 8 {
-                None
-            } else {
-                xref_stream_subsection(&mut reader, 5, 1, w0, 1, 1, &mut map)
-            };
-            assert_eq!(got.is_some(), ok);
-            if ok {
-                assert!(matches!(
-                    map.get(&ObjectIdentifier::new(5, 0)),
-                    Some(EntryType::Normal(7))
-                ));
-            }
-        }
+            let got = populate_from_xref_stream(
+                &data,
+                &mut Reader::new(&data),
+                &mut map,
+                &mut BTreeSet::new(),
+                DecodeLimits::default(),
+            );
+            got.is_some()
+        };
+        assert!(load("2 1 1"));
+        assert!(!load("9 1 1"));
     }
 
     #[cfg(feature = "std")]
