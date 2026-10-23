@@ -420,6 +420,16 @@ fn cjk_uis_keep_the_rows_and_widgets_of_a_latin_ui() {
 }
 
 #[test]
+fn cjk_row_samples_are_in_every_cut_face() {
+    use skrifa::{FontRef, MetadataProvider as _};
+    let kept = |c: char| craft_fonts_build::KEPT_IN_EVERY_CUT.iter().any(|&(start, end)| (start..=end).contains(&c));
+    assert!(fit::ROW_SAMPLES.chars().all(kept), "{}", fit::ROW_SAMPLES);
+    // The test face has every sample, so the row tests above measure all of them.
+    let charmap = FontRef::new(CJK).expect("CJK test face").charmap();
+    assert!(fit::ROW_SAMPLES.chars().all(|c| charmap.map(c).is_some()), "{}", fit::ROW_SAMPLES);
+}
+
+#[test]
 fn cjk_glyphs_sit_on_the_latin_baseline() {
     let stack = test_stack("ja");
     let face = stack.definitions.font_data.get("Noto Sans CJK SC Regular").expect("CJK face");

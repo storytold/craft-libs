@@ -95,8 +95,8 @@ impl Embed {
     ///
     /// The cut keeps the catalogs' characters from U+2E80 up (CJK and later blocks, without emoji,
     /// variation selectors and tags), plus CJK punctuation (U+3000–303F), kana (U+3040–30FF,
-    /// U+31F0–31FF) and full-width forms (U+FF00–FFEF), with every layout feature. The same inputs
-    /// give the same bytes. A face with CFF outlines is an [`Error::NotTrueType`].
+    /// U+31F0–31FF) and full-width forms (U+FF00–FFEF) ([`KEPT_IN_EVERY_CUT`]), with every layout
+    /// feature. The same inputs give the same bytes. A face with CFF outlines is an [`Error::NotTrueType`].
     ///
     /// The catalogs are also checked as by [`Embed::check_text`]. Relative paths are under the
     /// package directory; an unreadable catalog is a `cargo::warning`.
@@ -283,7 +283,7 @@ impl Embed {
         for text in catalogs.iter().filter_map(|path| std::fs::read_to_string(path).ok()) {
             chars.extend(text.chars().filter(|&c| needs_glyph(c)));
         }
-        for (start, end) in UI_RANGES {
+        for (start, end) in KEPT_IN_EVERY_CUT {
             chars.extend(start..=end);
         }
         let dir = out_dir.join("craft-fonts-ui");
@@ -407,9 +407,10 @@ fn needs_glyph(c: char) -> bool {
     c >= '\u{2E80}' && !matches!(c, '\u{FE00}'..='\u{FE0F}' | '\u{FEFF}' | '\u{1F000}'..='\u{1FFFF}' | '\u{E0000}'..)
 }
 
-/// Kept in every cut, whatever the catalogs use: CJK punctuation, kana and full-width forms.
-#[cfg(feature = "subset")]
-const UI_RANGES: [(char, char); 4] = [('\u{3000}', '\u{303F}'), ('\u{3040}', '\u{30FF}'), ('\u{31F0}', '\u{31FF}'), ('\u{FF00}', '\u{FFEF}')];
+/// The characters every cut of an interface face keeps when its source has them, whatever the
+/// catalogs use: CJK punctuation, kana and full-width forms, as inclusive ranges.
+pub const KEPT_IN_EVERY_CUT: [(char, char); 4] =
+    [('\u{3000}', '\u{303F}'), ('\u{3040}', '\u{30FF}'), ('\u{31F0}', '\u{31FF}'), ('\u{FF00}', '\u{FFEF}')];
 
 /// The environment a build script sees, separated out for tests.
 pub(crate) struct Env {

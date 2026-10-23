@@ -139,7 +139,8 @@ the five cuts take about 3 MB together.
   every layout feature, so vertical forms (`vert`) still work. Every face gets the characters of
   every catalog, so a Japanese label in a Chinese catalog still draws. The cuts are written to
   `OUT_DIR/craft-fonts-ui/` and embedded from there; the same inputs give the same bytes, for
-  reproducible releases. Cutting all five faces takes well under a second.
+  reproducible releases. Cutting all five faces takes well under a second. `KEPT_IN_EVERY_CUT`
+  lists the ranges every cut keeps, for code that must rely only on characters every cut has.
 - Without `subset_to`, or with an empty catalog list, `for_ui()` leaves the interface faces out
   with a `cargo::warning`: a full CJK face is never embedded for the interface by accident. A
   checkout whose manifest has no interface face is a `cargo::warning` too. With `CRAFT_FONTS_REQUIRED=1` that
