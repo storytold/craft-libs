@@ -114,8 +114,8 @@ pub enum FlattenError {
 }
 
 /// `list` with its transparency flattened. Items that neither involve transparency nor overlap
-/// an item that does come back unchanged, and so do opaque items painted above all the
-/// transparency they overlap.
+/// an item that does come back unchanged, and so do opaque items with no transparency painted
+/// above them where they paint.
 pub fn flatten(list: &DisplayList, opts: &FlattenOptions) -> Result<Flattened, FlattenError> {
     let nan = Rect::new(f64::NAN, f64::NAN, f64::NAN, f64::NAN);
     let bounds: Vec<Rect> = list.items.iter().map(|i| bounds(i).unwrap_or(nan)).collect();
@@ -150,14 +150,21 @@ pub fn flatten(list: &DisplayList, opts: &FlattenOptions) -> Result<Flattened, F
                 out.report.kept += 1;
             }
             Plan::Drop => {}
-            Plan::Emit(g) => flatten_group(list, &members[g], &bounds, opts, &mut out)?,
+            Plan::Emit(g) => flatten_group(list, &members[g], &bounds, &transparent, opts, &mut out)?,
         }
     }
     out.report.complex_regions = out.complex.len();
     Ok(out)
 }
 
-fn flatten_group(list: &DisplayList, members: &[usize], bounds: &[Rect], opts: &FlattenOptions, out: &mut Flattened) -> Result<(), FlattenError> {
+fn flatten_group(
+    list: &DisplayList,
+    members: &[usize],
+    bounds: &[Rect],
+    transparent: &[bool],
+    opts: &FlattenOptions,
+    out: &mut Flattened,
+) -> Result<(), FlattenError> {
     let mut b = Builder::new(&list.inks);
     let mut nodes = Vec::new();
     for &i in members {
@@ -166,7 +173,6 @@ fn flatten_group(list: &DisplayList, members: &[usize], bounds: &[Rect], opts: &
             nodes.push(n);
         }
     }
-    out.report.flattened += members.len();
     let whole = |out: &mut Flattened, path: BezPath, reason| {
         out.complex.push(ComplexRegion { path, items: members.to_vec(), at: out.items.len(), whole: Some(reason) });
         out.report.complex_groups.push(ComplexGroup { items: members.to_vec(), reason });
@@ -182,6 +188,7 @@ fn flatten_group(list: &DisplayList, members: &[usize], bounds: &[Rect], opts: &
                 }
             }
             whole(out, path, ComplexReason::Degenerate);
+            out.report.flattened += members.len();
             return Ok(());
         }
         Err(e) => return Err(e.into()),
@@ -193,8 +200,15 @@ fn flatten_group(list: &DisplayList, members: &[usize], bounds: &[Rect], opts: &
             path.extend(r.path.iter());
         }
         whole(out, path, ComplexReason::TooManyRegions(regions.len()));
+        out.report.flattened += members.len();
         return Ok(());
     }
+
+    // Members drawn as they are, over the region fills of the others: opaque, with only kept
+    // members above them wherever they paint. Painting them in order over the composite of what
+    // is under them gives the same page, and text among them stays live text.
+    let kept = kept_members(members, transparent, &b.owners, &regions);
+    let is_kept = |s: usize| kept.binary_search(&b.owners[s]).is_ok();
 
     // A region's look depends only on its visible sources: the last one that covers what is
     // under it ([`Builder::covers`]) and those above it. Regions with the same visible sources
@@ -203,8 +217,16 @@ fn flatten_group(list: &DisplayList, members: &[usize], bounds: &[Rect], opts: &
     let mut by_visible: HashMap<Vec<usize>, BezPath> = HashMap::new();
     let mut order = Vec::new();
     for r in regions {
-        let from = r.sources.iter().rposition(|&s| b.covers[s]).unwrap_or(0);
-        let visible = r.sources[from..].to_vec();
+        // Kept members come last in a region's sources. The fill is the look of what is under
+        // them, also where one covers it: the region then joins its neighbors of that look
+        // instead of leaving a hole whose edge anti-aliasing viewers show.
+        let below = r.sources.iter().position(|&s| is_kept(s)).unwrap_or(r.sources.len());
+        if below == 0 {
+            continue;
+        }
+        let sources = &r.sources[..below];
+        let from = sources.iter().rposition(|&s| b.covers[s]).unwrap_or(0);
+        let visible = sources[from..].to_vec();
         let path = oriented(r.path);
         match by_visible.get_mut(&visible) {
             Some(p) => p.extend(path),
@@ -265,7 +287,45 @@ fn flatten_group(list: &DisplayList, members: &[usize], bounds: &[Rect], opts: &
     }
     let at = out.items.len();
     out.complex.extend(merge_touching(complex).into_iter().map(|c| ComplexRegion { at, ..c }));
+    for &i in &kept {
+        out.items.push(without_groups(&list.items[i]));
+    }
+    out.report.kept += kept.len();
+    out.report.flattened += members.len() - kept.len();
     Ok(())
+}
+
+/// The members of a group that can be drawn as they are ([`flatten_group`]), ascending: not
+/// transparent, and in every region a member's shapes are in, only kept members are above it.
+fn kept_members(members: &[usize], transparent: &[bool], owners: &[usize], regions: &[geom::Region]) -> Vec<usize> {
+    let mut regions_of: HashMap<usize, Vec<usize>> = HashMap::new();
+    for (r, region) in regions.iter().enumerate() {
+        let mut last = None;
+        for &s in &region.sources {
+            let o = owners[s];
+            if last != Some(o) {
+                regions_of.entry(o).or_default().push(r);
+                last = Some(o);
+            }
+        }
+    }
+    // From the top down, so that a member's decision sees every member above it decided.
+    // `clear[r]`: every member decided so far that is in region `r` is kept.
+    let mut clear = vec![true; regions.len()];
+    let mut kept = Vec::new();
+    for &m in members.iter().rev() {
+        let rs = regions_of.get(&m).map_or(&[][..], Vec::as_slice);
+        let keep = !transparent[m] && rs.iter().all(|&r| clear[r]);
+        if keep {
+            kept.push(m);
+        } else {
+            for &r in rs {
+                clear[r] = false;
+            }
+        }
+    }
+    kept.reverse();
+    kept
 }
 
 /// `path` with its subpaths reversed when its signed area is negative. Faces of one look are
@@ -819,12 +879,6 @@ mod tests {
         DisplayList { page: Rect::new(0.0, 0.0, 600.0, 800.0), inks, items }
     }
 
-    /// A 50% yellow corner over (0, 90)–(10, 100), which makes a group with the first rectangle
-    /// transparent.
-    fn veil() -> Item {
-        Item::Group(group(0.5, BlendMode::Normal, vec![solid(Rect::new(0.0, 90.0, 10.0, 100.0), &[(Y, 1.0)])]))
-    }
-
     fn flat(list: &DisplayList) -> Flattened {
         flatten(list, &FlattenOptions::default()).unwrap()
     }
@@ -885,6 +939,8 @@ mod tests {
         let op = Overprint { fill: true, ..Overprint::default() };
         let opm = Overprint { nonzero: true, ..op };
         let cyan = || solid(Rect::new(0.0, 0.0, 100.0, 100.0), &[(C, 1.0)]);
+        // A 50% yellow strip over both, so that neither is kept as it is.
+        let veil = || Item::Group(group(0.5, BlendMode::Normal, vec![solid(Rect::new(0.0, 90.0, 150.0, 100.0), &[(Y, 1.0)])]));
         let top = |tints: &[(InkId, f32)], o| list(InkSet::new(), vec![cyan(), fill(Rect::new(50.0, 0.0, 150.0, 100.0), tints, o), veil()]);
 
         let f = flat(&top(&[(K, 1.0)], op));
@@ -968,6 +1024,33 @@ mod tests {
         let Some(Item::Text(t)) = f.items.last() else { panic!() };
         assert!(Arc::ptr_eq(t.font.as_ref().unwrap(), &font));
         assert_eq!((f.report.kept, f.report.flattened, f.report.fills), (3, 2, 3));
+    }
+
+    #[test]
+    fn opaque_members_with_no_transparency_above_them_stay_as_they_are() {
+        // A background frame, body text on it, and a transparent object over the frame only: the
+        // boxes put all three in one group, but only the frame is under transparency.
+        let text = solid(Rect::new(10.0, 10.0, 50.0, 20.0), &[(K, 1.0)]);
+        let veiled = |items: Vec<Item>| {
+            let mut items = items;
+            items.push(Item::Group(group(0.5, BlendMode::Normal, vec![solid(Rect::new(100.0, 100.0, 150.0, 150.0), &[(M, 1.0)])])));
+            list(InkSet::new(), items)
+        };
+        let f = flat(&veiled(vec![solid(Rect::new(0.0, 0.0, 200.0, 200.0), &[(C, 0.2)]), text.clone()]));
+        assert_eq!((f.report.kept, f.report.flattened), (1, 2));
+        assert_eq!(f.items.last(), Some(&text), "the text is drawn as it is, over the fills");
+        assert_eq!(at(&f, 125.0, 125.0, &[C, M]).1, [0.1, 0.5]);
+        assert_eq!(at(&f, 5.0, 5.0, &[C, K]).1, [0.2, 0.0]);
+        // Under the text, the frame's fill goes on.
+        let fills = Flattened { items: f.items[..f.items.len() - 1].to_vec(), ..f.clone() };
+        assert_eq!(at(&fills, 30.0, 15.0, &[C, K]).1, [0.2, 0.0]);
+
+        // Under an opaque rectangle that is itself under the transparency, the text is flattened.
+        let over = solid(Rect::new(40.0, 0.0, 120.0, 120.0), &[(Y, 1.0)]);
+        let f = flat(&veiled(vec![text.clone(), over]));
+        assert_eq!((f.report.kept, f.report.flattened), (0, 3));
+        assert_eq!(at(&f, 20.0, 15.0, &[Y, K]).1, [0.0, 1.0]);
+        assert_eq!(at(&f, 45.0, 15.0, &[Y, K]).1, [1.0, 0.0]);
     }
 
     #[test]
