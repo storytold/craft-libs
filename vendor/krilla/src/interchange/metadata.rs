@@ -24,6 +24,7 @@ pub struct Metadata {
     pub(crate) document_id: Option<String>,
     pub(crate) language: Option<String>,
     pub(crate) creation_date: Option<DateTime>,
+    pub(crate) modification_date: Option<DateTime>,
     pub(crate) text_direction: Option<TextDirection>,
     pub(crate) page_layout: Option<PageLayout>,
 }
@@ -101,6 +102,18 @@ impl Metadata {
         self
     }
 
+    /// The date the document was last modified. Without it, the creation date is
+    /// written as the modification date.
+    pub fn modification_date(mut self, modification_date: DateTime) -> Self {
+        self.modification_date = Some(modification_date);
+        self
+    }
+
+    /// The date written as the modification date: the one given, else the creation date.
+    fn modified(&self) -> Option<DateTime> {
+        self.modification_date.or(self.creation_date)
+    }
+
     /// A document ID.
     ///
     /// This attribute will be used as an identifier for identifying
@@ -129,6 +142,7 @@ impl Metadata {
             || self.authors.is_some()
             || self.creator.is_some()
             || self.creation_date.is_some()
+            || self.modification_date.is_some()
             || self.description.is_some()
     }
 
@@ -195,8 +209,11 @@ impl Metadata {
             xmp.language([LangId(lang)]);
         }
 
-        if let Some(date) = self.creation_date.map(xmp_date) {
+        if let Some(date) = self.modified().map(xmp_date) {
             xmp.modify_date(date);
+        }
+
+        if let Some(date) = self.creation_date.map(xmp_date) {
             xmp.create_date(date);
 
             if sc
@@ -289,8 +306,11 @@ impl Metadata {
                 }
             }
 
-            if let Some(date_time) = self.creation_date {
+            if let Some(date_time) = self.modified() {
                 document_info.modified_date(pdf_date(date_time));
+            }
+
+            if let Some(date_time) = self.creation_date {
                 document_info.creation_date(pdf_date(date_time));
             }
 

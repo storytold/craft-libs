@@ -16,6 +16,7 @@ fn document(compress: bool) -> Vec<u8> {
         description: Some("Original synthetic artwork".into()),
         keywords: vec!["craft".into(), "pdf".into()],
         created: Some(backend::metadata::DateTime::new(2026).month(10).day(9)),
+        modified: Some(backend::metadata::DateTime::new(2026).month(10).day(12)),
     };
     let settings = backend::SerializeSettings {
         compress_content_streams: compress,
@@ -49,7 +50,23 @@ fn writes_pages_metadata_and_selected_version_without_a_renderer() {
         let pdf = hayro_syntax::Pdf::new(std::sync::Arc::new(bytes.clone())).unwrap();
         let sizes: Vec<_> = pdf.pages().iter().map(|page| page.render_dimensions()).collect();
         assert_eq!(sizes, vec![(80.0, 40.0), (30.0, 60.0)]);
+        let day = |d: &Option<hayro_syntax::object::DateTime>| d.as_ref().map(|d| (d.year, d.month, d.day));
+        assert_eq!(day(&pdf.metadata().creation_date), Some((2026, 10, 9)));
+        assert_eq!(day(&pdf.metadata().modification_date), Some((2026, 10, 12)));
+        assert!(text.contains("<xmp:CreateDate>2026-10-09") && text.contains("<xmp:ModifyDate>2026-10-12"), "XMP dates");
     }
+}
+
+/// Without a modification date, the creation date is written as both.
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn the_creation_date_is_the_modification_date_when_none_is_given() {
+    let created = Some(backend::metadata::DateTime::new(2026).month(10).day(9));
+    let mut writer = Writer::new(Default::default(), Metadata { created, ..Default::default() });
+    writer.document_mut().start_page_with(PageSettings::from_wh(40.0, 20.0).unwrap()).finish();
+    let pdf = hayro_syntax::Pdf::new(std::sync::Arc::new(writer.finish().unwrap())).unwrap();
+    let day = |d: &Option<hayro_syntax::object::DateTime>| d.as_ref().map(|d| (d.year, d.month, d.day));
+    assert_eq!(day(&pdf.metadata().modification_date), Some((2026, 10, 9)));
 }
 
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]

@@ -7,7 +7,8 @@
 //!   one written are listed in [`FlattenDocumentReport::other_intents`].
 //! - Page boxes: the page is the source's visible area (CropBox within MediaBox, rotated), written
 //!   as the MediaBox. TrimBox, BleedBox and ArtBox carry over, mapped onto it and clipped to it.
-//! - Metadata: title, author and creation date carry over; the producer is the caller's.
+//! - Metadata: title, author, creation date and modification date carry over; the producer is
+//!   the caller's.
 //! - Version: [`FlattenDocumentOptions::version`], [`FlattenDocumentOptions::pdfx_version`]
 //!   and [`FlattenDocumentOptions::pdfx_conformance`] set the header, `pdf:PDFVersion` and the
 //!   PDF/X version and conformance keys. krilla has no PDF/X validator, so a caller claiming
@@ -246,7 +247,7 @@ fn page_settings(p: &Page<'_>, bbox: Rect) -> Option<PageSettings> {
     Some(size.with_trim_box(mapped(TRIM_BOX)).with_bleed_box(mapped(BLEED_BOX)).with_art_box(mapped(ART_BOX)))
 }
 
-/// The source's title, author and creation date, and `producer`.
+/// The source's title, author, creation and modification dates, and `producer`.
 fn metadata(doc: &Pdf, producer: &str) -> Metadata {
     let info = doc.metadata();
     let text = |bytes: &Option<Vec<u8>>| bytes.as_deref().map(|b| pdf_text(b).trim().to_string()).filter(|s| !s.is_empty());
@@ -255,6 +256,7 @@ fn metadata(doc: &Pdf, producer: &str) -> Metadata {
         title: text(&info.title),
         authors: text(&info.author).into_iter().collect(),
         created: info.creation_date.as_ref().map(date),
+        modified: info.modification_date.as_ref().map(date),
         ..Metadata::default()
     }
 }

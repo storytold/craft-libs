@@ -83,6 +83,8 @@ pub struct Metadata {
     pub description: Option<String>,
     pub keywords: Vec<String>,
     pub created: Option<backend::metadata::DateTime>,
+    /// Written as the modification date; `created` is written there when this is `None`.
+    pub modified: Option<backend::metadata::DateTime>,
 }
 
 impl Metadata {
@@ -97,6 +99,9 @@ impl Metadata {
         }
         if let Some(created) = self.created {
             metadata = metadata.creation_date(created);
+        }
+        if let Some(modified) = self.modified {
+            metadata = metadata.modification_date(modified);
         }
         metadata
     }

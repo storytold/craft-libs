@@ -22,6 +22,7 @@ itself omits those texts. Its examples and four CC0 ICC profiles are retained wi
 | `patches/10-mesh-gradients.patch` | Mesh gradients | `content.rs`, `error.rs`, `graphics/{mask,paint,shading_function}.rs`, `serialize.rs`, `surface.rs` |
 | `patches/11-devicen-pdf-version.patch` | DeviceN attributes by PDF version | `graphics/device_n.rs` |
 | `patches/12-pdfx-conformance.patch` | PDF/X conformance key | `serialize.rs` |
+| `patches/13-modification-date.patch` | Modification date | `interchange/metadata.rs` |
 
 Each patch applies with `patch -p1` from this directory, in numeric order, to the pristine
 crate. `SOURCE.json` records, for every retained file, the upstream hash (`upstream_sha256`)
@@ -315,3 +316,18 @@ and on) have no conformance key.
 
 Tests: `crates/pdf/tests/print_color.rs` (`trapped_and_pdfx_version_are_written_to_info_and_xmp`)
 and `crates/prepress/tests/flatten_document.rs` (`pdf_x1a_output_is_pdf_14_without_nchannel`).
+
+## 13: modification date
+
+Upstream has only a creation date and writes it as the modification date too (`/ModDate` and
+`xmp:ModifyDate`), so a document rewritten from another, such as a flattened copy, can't keep
+its source's modification date.
+
+- `Metadata::modification_date(DateTime)` sets the date written as `/ModDate` and
+  `xmp:ModifyDate`. Without it, the creation date is written there, as upstream does.
+- The XMP history events keep the creation date.
+
+Tests: `crates/pdf/tests/writing.rs` (`writes_pages_metadata_and_selected_version_without_a_renderer`,
+`the_creation_date_is_the_modification_date_when_none_is_given`) and
+`crates/prepress/tests/flatten_document.rs`
+(`a_document_flattens_page_by_page_and_keeps_boxes_metadata_and_shared_fonts`).

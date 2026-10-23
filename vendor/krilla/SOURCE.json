@@ -247,7 +247,7 @@
     {
       "path": "src/interchange/metadata.rs",
       "upstream_sha256": "14fab986f2436a4275e7cca13e065763b14b938ae180632294455ad0199380ec",
-      "sha256": "95d5441904b7aef4b0e8812ea536c56e22744886d1c485d9bcc3b08c7ae2b3a7"
+      "sha256": "7c8a66d89eba13a150295837ef5042d1909cc2901be1433b776597c557345d1f"
     },
     {
       "path": "src/interchange/mod.rs",

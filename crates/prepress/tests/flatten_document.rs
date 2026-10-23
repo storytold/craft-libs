@@ -84,6 +84,7 @@ fn three_pages(font_bytes: &[u8]) -> Vec<u8> {
         title: Some("Flatten test".into()),
         authors: vec!["A. Writer".into()],
         created: Some(DateTime::new(2026).month(10).day(20).hour(9).minute(30).second(0).utc_offset_hour(2)),
+        modified: Some(DateTime::new(2026).month(10).day(21).hour(16).minute(5).second(0).utc_offset_hour(2)),
         ..Metadata::default()
     };
     // DeviceCMYK blending and no output intent: parsing a profile takes half a second in a debug build.
@@ -200,6 +201,8 @@ fn a_document_flattens_page_by_page_and_keeps_boxes_metadata_and_shared_fonts() 
     assert_eq!(info.author.as_deref(), Some(b"A. Writer".as_slice()));
     let created = info.creation_date.unwrap();
     assert_eq!((created.year, created.month, created.day, created.hour, created.minute), (2026, 10, 20, 9, 30));
+    let modified = info.modification_date.unwrap();
+    assert_eq!((modified.year, modified.month, modified.day, modified.hour, modified.minute), (2026, 10, 21, 16, 5));
 
     let points: [&[(f32, f32)]; 3] = [
         &[(40.0, 40.0), (100.0, 80.0), (150.0, 120.0), (190.0, 15.0)],
