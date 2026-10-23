@@ -105,6 +105,8 @@ fn required_fails_without_a_usable_checkout() {
     assert!(matches!(run(Embed::new(), Some(missing), Some("1")).result, Err(Error::Read { .. })));
     let r = run(Embed::new(), Some(missing), None);
     assert!(r.result.unwrap().is_empty());
+    // Watching a missing manifest would rerun the build script on every build.
+    assert!(!r.cargo.iter().any(|l| l.starts_with("cargo::rerun-if-changed")), "{:?}", r.cargo);
     assert!(r.cargo.iter().any(|l| l.starts_with("cargo::warning=building without craft-fonts")), "{:?}", r.cargo);
 
     let scratch = Scratch::new("missing-file");
@@ -113,6 +115,20 @@ fn required_fails_without_a_usable_checkout() {
     assert!(matches!(run(Embed::new(), Some(&scratch.0), Some("1")).result, Err(Error::Read { .. })));
     std::fs::write(scratch.0.join("fonts/manifest.txt"), "# no faces\n").unwrap();
     assert!(matches!(run(Embed::new(), Some(&scratch.0), Some("1")).result, Err(Error::NoFaces { .. })));
+}
+
+#[cfg(unix)]
+#[test]
+fn rejects_a_checkout_under_a_non_utf8_path() {
+    use std::os::unix::ffi::OsStrExt;
+    let scratch = Scratch::new("non-utf8");
+    let dir = scratch.0.join(std::ffi::OsStr::from_bytes(b"craft-fonts-\xff"));
+    std::fs::create_dir_all(dir.join("fonts")).unwrap();
+    std::fs::copy(fixture().join("fonts/sans-arabic/SansArabic.ttf"), dir.join("fonts/a.ttf")).unwrap();
+    std::fs::write(dir.join("fonts/manifest.txt"), "A | Regular | fonts/a.ttf | Arab | OFL-1.1 | OFL.txt | 00 | src\n").unwrap();
+    let r = run(Embed::new(), Some(&dir), Some("1"));
+    assert!(matches!(r.result, Err(Error::NonUtf8Path { .. })), "{:?}", r.result);
+    assert_eq!(r.table.trim(), "&[]");
 }
 
 #[test]
@@ -333,6 +349,29 @@ fn cmap_reads_formats_4_and_12_and_collections() {
     assert!(Cmap::read(&font[..40], 0).is_none());
 }
 
+#[test]
+fn cmap_reads_each_subtable_within_its_declared_length() {
+    // 'A' takes its glyph from an empty glyph array, so the read lands on the format 12 subtable
+    // that follows the format 4 one.
+    let font = tiny_font(&[(0x41, 0x41, Some(&[]))], &[(0x2_0000, 0x2_0000)]);
+    let cmap = Cmap::read(&font, 0).unwrap();
+    assert!(!cmap.covers('A') && cmap.covers('\u{20000}'));
+
+    // A format 4 length past the end of the table is clamped rather than rejected. The format 4
+    // subtable starts after the 28-byte font header, the 4-byte cmap header and two 8-byte encoding
+    // records.
+    let mut font = tiny_font(&[(0x41, 0x5A, None)], &[(0x2_0000, 0x2_0000)]);
+    let format4 = 28 + 4 + 2 * 8;
+    let format12 = format4 + usize::from(u16::from_be_bytes(font[format4 + 2..format4 + 4].try_into().unwrap()));
+    font[format4 + 2..format4 + 4].copy_from_slice(&u16::MAX.to_be_bytes());
+    assert!(Cmap::read(&font, 0).unwrap().covers('A'));
+
+    // A format 12 group past the declared length doesn't count.
+    font[format12 + 4..format12 + 8].copy_from_slice(&16u32.to_be_bytes());
+    let cmap = Cmap::read(&font, 0).unwrap();
+    assert!(cmap.covers('A') && !cmap.covers('\u{20000}'));
+}
+
 /// A craft-fonts checkout in `scratch` with these `(family, scripts, role, font)` faces, all
 /// Regular.
 fn checkout(scratch: &Scratch, faces: &[(&str, &str, &str, Vec<u8>)]) -> PathBuf {
@@ -371,6 +410,12 @@ fn for_ui_embeds_cjk_faces_only_as_cut_interface_faces() {
     assert_eq!(w.len(), 1, "{w:#?}");
     assert!(w[0].contains("not embedding the interface faces Noto Sans TC UI Regular, Noto Sans HK UI Regular"), "{}", w[0]);
     assert!(w[0].contains("Embed::subset_to"), "{}", w[0]);
+    // A manifest without interface faces loses every CJK face, which is worth a warning.
+    let r = run(Embed::new().for_ui(), Some(&fixture()), None);
+    assert!(r.cargo.contains(&format!("cargo::rerun-if-changed={}", fixture().join("fonts/manifest.txt").display())), "{:?}", r.cargo);
+    let w = warnings(&r);
+    assert_eq!(w.len(), 1, "{w:#?}");
+    assert!(w[0].contains("not embedding any CJK face for the interface") && w[0].contains("role `ui`"), "{}", w[0]);
     let r = run(Embed::new().for_ui().scripts(&["Hant", "Arab"]), Some(&dir), Some("1"));
     let Err(Error::MissingScripts { scripts, .. }) = r.result else { panic!("{:?}", r.result) };
     assert_eq!(scripts, ["Hant"]);
@@ -527,6 +572,13 @@ mod subset {
         let r = run(Embed::new().subset_to([&tw, &ko]).check_text([scratch.0.join("zh-TW.tsv")]), Some(&dir), None);
         assert_eq!(mapped(&std::fs::read(cut_file(&r, "Noto Sans TC UI")).unwrap()), [0x3001, 0x300C, 0x3042, 0x4E00, 0x4E01, 0xFF01]);
         assert_eq!(warnings(&r).len(), 1, "{:#?}", warnings(&r));
+
+        // No catalogs (an app whose CRAFT_I18N_DIR is unset) leaves the faces out, not cut to kana.
+        let r = run(Embed::new().subset_to(Vec::<PathBuf>::new()), Some(&dir), None);
+        assert_eq!(r.result.as_ref().unwrap(), &["Noto Sans Arabic Regular"]);
+        let w = warnings(&r);
+        assert_eq!(w.len(), 1, "{w:#?}");
+        assert!(w[0].contains("Noto Sans TC UI Regular") && w[0].contains("given no translation catalogs"), "{}", w[0]);
     }
 
     #[test]

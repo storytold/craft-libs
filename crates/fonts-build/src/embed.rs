@@ -89,6 +89,7 @@ impl Embed {
     /// the manifest), cut to the characters of the catalogs given to `Embed::subset_to`. Other
     /// CJK faces are dropped and the rest are kept. Without catalogs the interface faces are left
     /// out too, with a `cargo::warning`, so a full CJK face is never embedded for the interface.
+    /// A manifest with no interface face is also a `cargo::warning` when that drops a CJK face.
     /// Combines with [`Embed::scripts`], [`Embed::filter`] and [`Embed::serve`]; with
     /// `CRAFT_FONTS_REQUIRED=1`, an interface face satisfies its script tags.
     pub fn for_ui(mut self) -> Self {
@@ -97,7 +98,8 @@ impl Embed {
     }
 
     /// Cut the interface faces to the characters these translation catalogs use, and embed the
-    /// cut faces, written to `OUT_DIR`. Implies [`Embed::for_ui`].
+    /// cut faces, written to `OUT_DIR`. Implies [`Embed::for_ui`]. An empty list counts as no
+    /// catalogs: the interface faces are left out, with a `cargo::warning`.
     ///
     /// The cut keeps the catalogs' characters from U+2E80 up (CJK and later blocks, without emoji,
     /// variation selectors and tags), plus CJK punctuation (U+3000–303F), kana (U+3040–30FF,
@@ -213,7 +215,7 @@ impl Embed {
                     return Err(e);
                 }
             },
-            (selected, ..) => selected.map(|faces| (table(&faces), faces)),
+            (selected, ..) => selected.and_then(|faces| Ok((table(&faces)?, faces))),
         };
         let (table, faces) = match selected {
             Ok((table, faces)) => (table, faces.into_iter().map(|face| face.entry).collect()),
@@ -234,8 +236,9 @@ impl Embed {
     /// The wanted manifest entries with their canonical file paths.
     fn select(&self, dir: &Path, cargo: &mut Vec<String>) -> Result<Vec<Face>, Error> {
         let manifest = dir.join("fonts/manifest.txt");
-        cargo.push(format!("cargo::rerun-if-changed={}", manifest.display()));
         let text = std::fs::read_to_string(&manifest).map_err(|source| Error::Read { path: manifest.clone(), source })?;
+        // Cargo treats a missing watched file as changed, which would rerun the build every time.
+        cargo.push(format!("cargo::rerun-if-changed={}", manifest.display()));
         let entries = parse_manifest(&text).map_err(|error| Error::Parse { manifest: manifest.clone(), error })?;
         if let Some(families) = &self.families {
             let unknown: Vec<String> = families.iter().filter(|f| !entries.iter().any(|e| &e.family == *f)).cloned().collect();
@@ -249,8 +252,11 @@ impl Embed {
                 return Err(Error::UnknownFamilies { manifest, families: unknown, known });
             }
         }
+        let has_ui = entries.iter().any(ManifestEntry::is_ui);
+        let no_catalogs = self.catalogs.as_ref().is_none_or(Vec::is_empty);
         let mut faces = Vec::new();
         let mut uncut = Vec::new();
+        let mut dropped_cjk = false;
         for entry in entries {
             // Interface faces are the sources of the cuts: embedded whole only when named.
             let named = match &self.families {
@@ -263,10 +269,12 @@ impl Embed {
             let wanted = self.scripts.as_ref().is_none_or(|tags| tags.iter().any(|t| entry.has_script(t)));
             let ui_dropped = self.ui && entry.is_cjk() && !entry.is_ui();
             if !wanted || ui_dropped || self.filter.as_ref().is_some_and(|keep| !keep(&entry)) {
+                dropped_cjk |= wanted && ui_dropped;
                 continue;
             }
             let cut = self.ui && entry.is_ui();
-            if cut && self.catalogs.is_none() {
+            // An empty list would cut the faces to kana and punctuation, so it counts as none.
+            if cut && no_catalogs {
                 uncut.push(format!("{} {}", entry.family, entry.style));
                 continue;
             }
@@ -278,10 +286,18 @@ impl Embed {
             faces.push(Face { entry, path, index, cut, sha256 });
         }
         if !uncut.is_empty() {
+            let why = if self.catalogs.is_some() { "Embed::subset_to was given no translation catalogs" } else { "no translation catalogs" };
             cargo.push(format!(
-                "cargo::warning=craft-fonts: not embedding the interface faces {}: pass the translation catalogs to \
+                "cargo::warning=craft-fonts: not embedding the interface faces {}: {why}; pass the catalogs to \
                  Embed::subset_to (feature `subset`) to embed them cut to the catalogs' characters",
                 uncut.join(", ")
+            ));
+        }
+        if dropped_cjk && !has_ui {
+            cargo.push(format!(
+                "cargo::warning=craft-fonts: not embedding any CJK face for the interface: {} has no interface face \
+                 (role `ui`); use a craft-fonts checkout that has them",
+                manifest.display()
             ));
         }
         Ok(faces)
@@ -291,6 +307,7 @@ impl Embed {
     #[cfg(feature = "subset")]
     fn cut(&self, faces: &mut [Face], out_dir: &Path) -> Result<(), Error> {
         let Some(catalogs) = &self.catalogs else { return Ok(()) };
+        // `select` leaves the faces to cut out when there are no catalogs.
         if !faces.iter().any(|face| face.cut) {
             return Ok(());
         }
@@ -435,9 +452,12 @@ pub(crate) struct Env {
     pub out_dir: Option<OsString>,
 }
 
-fn table(faces: &[Face]) -> String {
+/// The generated source; `include_bytes!` takes a string, so a face under a path that isn't UTF-8
+/// is an error rather than a lossy path the consumer's build can't find.
+fn table(faces: &[Face]) -> Result<String, Error> {
     let mut src = String::from("// Generated by craft-fonts-build. Do not edit.\n&[\n");
     for Face { entry, path, index, .. } in faces {
+        let file = path.to_str().ok_or_else(|| Error::NonUtf8Path { path: path.clone() })?;
         let scripts: Vec<String> = entry.scripts.iter().map(|s| format!("{s:?}")).collect();
         let _ = writeln!(
             src,
@@ -446,11 +466,11 @@ fn table(faces: &[Face]) -> String {
             entry.style,
             scripts.join(", "),
             index,
-            path.display().to_string(),
+            file,
         );
     }
     src.push_str("]\n");
-    src
+    Ok(src)
 }
 
 impl Serve {
@@ -599,6 +619,8 @@ pub enum Error {
     Subset { path: PathBuf, reason: String },
     /// [`Embed::documents`] names families the manifest lacks; `known` lists the manifest's.
     UnknownFamilies { manifest: PathBuf, families: Vec<String>, known: Vec<String> },
+    /// A face to embed has a path that isn't UTF-8, which `include_bytes!` can't name.
+    NonUtf8Path { path: PathBuf },
 }
 
 impl fmt::Display for Error {
@@ -630,6 +652,7 @@ impl fmt::Display for Error {
                 families.join(", "),
                 known.join(", ")
             ),
+            Self::NonUtf8Path { path } => write!(f, "cannot embed {}: include_bytes! needs a UTF-8 path", path.display()),
         }
     }
 }

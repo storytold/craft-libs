@@ -269,6 +269,7 @@ impl Subtags {
         let mut script = match tag.split_once('@').map(|(_, m)| m) {
             Some("latin") => Some("latn".to_owned()),
             Some("cyrillic") => Some("cyrl".to_owned()),
+            Some("devanagari") => Some("deva".to_owned()),
             _ => None,
         };
         let mut region = None;
@@ -396,6 +397,8 @@ mod tests {
         for (tag, want) in [
             ("sr-Latn-RS", &[Latn][..]),
             ("sr_RS@latin", &[Latn]),
+            ("ks_IN@devanagari", &[Deva]),
+            ("ks_IN.UTF-8@devanagari", &[Deva]),
             ("sr-Cyrl", &[Cyrl]),
             ("sr_RS.UTF-8", &[Cyrl]),
             ("az-Cyrl", &[Cyrl]),
@@ -409,6 +412,7 @@ mod tests {
         }
         assert_eq!(direction("pa-Arab"), Direction::Rtl);
         assert_eq!(direction("sd-Deva"), Direction::Ltr);
+        assert_eq!(direction("ks_IN@devanagari"), Direction::Ltr);
         assert_eq!(direction("he_IL.UTF-8"), Direction::Rtl);
     }
 
