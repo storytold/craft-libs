@@ -112,7 +112,7 @@ impl TabTest {
         let mut output = ctx.run_ui(raw, |ui| {
             ui.add_enabled_ui(self.enabled, |ui| {
                 for (i, label) in self.labels.iter().enumerate() {
-                    let r = Tab::new(ui.id().with(("tab", i)), label, self.selected == i)
+                    let r = Tab::new(ui.scope_id().with(("tab", i)), label, self.selected == i)
                         .sense(self.sense)
                         .focus_stroke(Stroke::new(1.0, Color32::LIGHT_BLUE))
                         .show_at(ui, self.rect.translate(vec2(i as f32 * 100.0, 0.0)), |ui, response| {

@@ -11,15 +11,47 @@ description = "Reusable egui controls and icon catalogs for Craft frontends"
 workspace = true
 
 [dependencies]
+craft-fonts-build = { workspace = true }
+craft-i18n = { workspace = true }
 egui = { workspace = true }
+epaint = { version = "0.37", default-features = false }
 serde = { version = "1", features = ["derive"], optional = true }
+# Same version as epaint's, for reading a face's character map.
+skrifa = { version = "0.44", default-features = false, features = ["std"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# The versions egui_system_font_provider 0.37 uses.
+fontique = { version = "0.11.1", default-features = false, features = ["system", "fontconfig-dlopen"], optional = true }
+unicode-script = { version = "0.5.8", optional = true }
+
+# Fetching served fonts (`fonts::UiFonts::served_faces`); already in every eframe web build.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+js-sys = "0.3"
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+web-sys = { version = "0.3", features = ["Window", "RequestInit", "Response", "console"] }
 
 [features]
+default = []
 serde = ["dep:serde"]
+# Draw colour glyphs (COLR, sbix, CBDT), e.g. colour emoji.
+color_fonts = ["epaint/color_fonts"]
+# Find installed fonts for characters the app's faces lack (desktop only).
+system_fonts = ["dep:fontique", "dep:unicode-script"]
 
 [dev-dependencies]
 egui = { workspace = true, features = ["default_fonts"] }
 serde_json = "1"
-egui_extras = { version = "0.36", default-features = false, features = ["svg"] }
-egui_kittest = { version = "0.36", features = ["wgpu"] }
+egui_extras = { version = "0.37", default-features = false, features = ["svg"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+egui_kittest = { version = "0.37", features = ["wgpu"] }
+
+# The browser test (tests/web_fonts.rs).
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+js-sys = "0.3"
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+wasm-bindgen-test = "0.3"
+web-sys = { version = "0.3", features = ["Window", "Response"] }
