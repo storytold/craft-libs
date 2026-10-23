@@ -8,11 +8,38 @@ rust-version.workspace = true
 description = "System PDF print spooler for the Craft apps: CUPS and Windows"
 
 [dependencies]
+craft-job.workspace = true
 # Safe API; Win32 calls are isolated in this maintained MIT OR Apache-2.0 dependency.
 craft-winprint-gdi = { git = "https://github.com/storytold/winprint.rs", rev = "417ac3c4d14d3da5485a99c7d5ce8f05664ec312" }
 
+[features]
+default = ["wsd", "ipp"]
+# A WS-Print backend (`craft_print::wsd::WsdBackend`) for the registry. Its extra dependencies are
+# `craft-wsd` (and through it `thiserror` and `ureq`, a plain-http client with no TLS) and
+# `roxmltree`; nothing else, and none of them is built without the feature (or on wasm32).
+# Nothing in it discovers or connects until an app adds a printer; every job needs consent.
+# Without it the crate is CUPS and Windows printing only.
+wsd = ["dep:craft-wsd", "dep:roxmltree"]
+# An IPP print backend (`craft_print::ipp::IppBackend`) for the registry: RFC 8010/8011 over the
+# plain-HTTP transport and URL policy of `craft-wsd` (the only extra dependency, shared with `wsd`;
+# the IPP codec is this crate's own). No TLS (`ipps` is refused), no discovery; every job needs
+# consent. Not built on wasm32. Without it the crate is whole.
+ipp = ["dep:craft-wsd"]
+# Test doubles for apps that print through this crate: `craft_print::testing` (registry-level fake
+# backends), with `wsd`, `craft_print::wsd::testing` (an in-memory WS-Print printer) and with `ipp`,
+# `craft_print::ipp::testing` (an in-memory IPP printer), both built on craft-wsd's `testing` feature. Off by default; enabling it adds no dependency to a build
+# without `wsd`, and none beyond craft-wsd's own `testing` feature with it. Never enable it in a
+# shipped binary.
+testing = ["craft-wsd?/testing"]
+
 [lints]
 workspace = true
+
+# Not built for wasm32: there is no native HTTP client there, and the backend is cfg'd out.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+craft-wsd = { workspace = true, optional = true }
+# Reading the printer's replies (the same crate and version the Windows code uses).
+roxmltree = { version = "0.20", optional = true }
 
 [target.'cfg(windows)'.dependencies]
 # Printing without starting anything (storytold/pdfcraft#1107): the printer list (EnumPrinters)
@@ -20,8 +47,10 @@ workspace = true
 # PrintTicket) are safe wrappers over Win32 and WinRT (BSD-3-Clause). Its default `pdfium`
 # feature downloads PDFium at build time and is off. The maintained BSD-3-Clause fork
 # preserves terminal failures/cancellation and bounds the completion notification wait.
-# Pinned to an immutable revision; review before bumping.
-winprint = { git = "https://github.com/storytold/winprint.rs", rev = "5f80b9baf6b58937c401656634e42d33f00ddf49", default-features = false }
+# Pinned to an immutable revision; review before bumping. This is the head of storytold/winprint.rs#7, which has the
+# page drawing at the ticket's resolution (`DxgiPrintContext::dpi`) and the cancel guard; move the pin to the merge
+# commit once #7 has merged.
+winprint = { git = "https://github.com/storytold/winprint.rs", rev = "f6231139b1af7a78635c7971cdf4f2aba4170b87", default-features = false }
 # GetDefaultPrinter (MIT).
 winsafe = { version = "0.0.29", default-features = false, features = ["winspool"] }
 # The job file's private folder.
@@ -32,6 +61,10 @@ roxmltree = "0.20"
 miniz_oxide = "0.8"
 
 [dev-dependencies]
+# The crate's own tests use the exported test doubles (`craft_print::testing`, `wsd::testing`).
+craft-print = { path = ".", default-features = false, features = ["testing"] }
+# The loopback `Server` for the WS-Print tests (needs the `wsd` feature; those tests are cfg-gated).
+craft-wsd = { workspace = true, features = ["testing"] }
 tempfile = "3"
 roxmltree = "0.20"
 miniz_oxide = "0.8"

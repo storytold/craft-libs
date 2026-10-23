@@ -123,3 +123,12 @@ https://github.com/storytold/craft-launcher, https://github.com/storytold/photoc
 https://github.com/storytold/filmcraft, https://github.com/storytold/effectcraft.
 Copyright (c) 2026 ArtCraft Team and the respective application and craft-libs contributors.
 All adapted source is licensed MIT OR Apache-2.0.
+
+Windows printing
+
+craft-print drives the Windows print system through winprint
+(https://github.com/ArcticLampyrid/winprint.rs; storytold's fork https://github.com/storytold/winprint.rs
+carries it unchanged in licence), BSD-3-Clause, Copyright (c) 2021 - 2024, alampy.com. The licence text
+is retained in licenses/print/winprint/LICENSE-BSD-3-Clause.txt: redistributions in source or binary
+form must reproduce that notice, the conditions and the disclaimer, and the names of the copyright
+holder and contributors may not be used to endorse products derived from it without written permission.
