@@ -8,9 +8,10 @@
 //! - Page boxes: the page is the source's visible area (CropBox within MediaBox, rotated), written
 //!   as the MediaBox. TrimBox, BleedBox and ArtBox carry over, mapped onto it and clipped to it.
 //! - Metadata: title, author and creation date carry over; the producer is the caller's.
-//! - Version: [`FlattenDocumentOptions::version`] and [`FlattenDocumentOptions::pdfx_version`]
-//!   set the header, `pdf:PDFVersion` and the PDF/X version key. krilla has no PDF/X
-//!   validator, so a caller claiming PDF/X runs its own conformance checks.
+//! - Version: [`FlattenDocumentOptions::version`], [`FlattenDocumentOptions::pdfx_version`]
+//!   and [`FlattenDocumentOptions::pdfx_conformance`] set the header, `pdf:PDFVersion` and the
+//!   PDF/X version and conformance keys. krilla has no PDF/X validator, so a caller claiming
+//!   PDF/X runs its own conformance checks.
 //! - Fonts: prepared per page ([`FontCache`](super::font::FontCache)); pages share a krilla font
 //!   only when the font bytes are equal ([`FontMap`]).
 //! - The source is opened once, and each output intent and printing condition parsed once.
@@ -57,9 +58,12 @@ pub struct FlattenDocumentOptions {
     /// The output's PDF version. Below 1.6, DeviceN spaces get no NChannel attributes; at 1.4,
     /// krilla also enforces the 1.4 implementation limits (reals, array and dictionary sizes).
     pub version: PdfVersion,
-    /// The PDF/X version claimed, such as `PDF/X-1a:2003`: `/GTS_PDFXVersion` in the
-    /// information dictionary and `pdfxid:GTS_PDFXVersion` in XMP. Not checked.
+    /// The PDF/X version claimed: `/GTS_PDFXVersion` in the information dictionary and
+    /// `pdfxid:GTS_PDFXVersion` in XMP. For PDF/X-1a:2003 it is `PDF/X-1:2003`. Not checked.
     pub pdfx_version: Option<String>,
+    /// The PDF/X conformance level claimed, `/GTS_PDFXConformance` in the information
+    /// dictionary: `PDF/X-1a:2003` for PDF/X-1a:2003. Not checked.
+    pub pdfx_conformance: Option<String>,
 }
 
 /// What [`flatten_document`] does with a page the PDF interpreter fails on.
@@ -148,6 +152,7 @@ pub fn flatten_document_with_progress(
         let settings = SerializeSettings {
             configuration: pdf_write::configuration(opts.version, None)?,
             pdfx_version: opts.pdfx_version.clone(),
+            pdfx_conformance: opts.pdfx_conformance.clone(),
             ..first.settings.clone()
         };
         let mut writer = Writer::new(settings, metadata(&doc, &opts.producer));

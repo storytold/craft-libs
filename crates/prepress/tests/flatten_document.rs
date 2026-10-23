@@ -303,13 +303,19 @@ fn pdf_x1a_output_is_pdf_14_without_nchannel() {
     let source = writer.finish().unwrap();
     assert!(count(&source, b"/NChannel") > 0);
 
-    let opts = FlattenDocumentOptions { version: PdfVersion::Pdf14, pdfx_version: Some("PDF/X-1a:2003".to_owned()), ..opts() };
+    let opts = FlattenDocumentOptions {
+        version: PdfVersion::Pdf14,
+        pdfx_version: Some("PDF/X-1:2003".to_owned()),
+        pdfx_conformance: Some("PDF/X-1a:2003".to_owned()),
+        ..opts()
+    };
     let (out, _) = flatten_document(&source, &opts).unwrap();
     assert_opaque(&out);
     assert!(out.starts_with(b"%PDF-1.4"));
     assert_eq!(count(&out, b"NChannel"), 0);
-    assert_eq!(count(&out, b"/GTS_PDFXVersion(PDF/X-1a:2003)"), 1);
-    assert_eq!(count(&out, b"<pdfxid:GTS_PDFXVersion>PDF/X-1a:2003</pdfxid:GTS_PDFXVersion>"), 1);
+    assert_eq!(count(&out, b"/GTS_PDFXVersion(PDF/X-1:2003)"), 1);
+    assert_eq!(count(&out, b"/GTS_PDFXConformance(PDF/X-1a:2003)"), 1);
+    assert_eq!(count(&out, b"<pdfxid:GTS_PDFXVersion>PDF/X-1:2003</pdfxid:GTS_PDFXVersion>"), 1);
     assert_eq!(count(&out, b"<pdf:PDFVersion>1.4</pdf:PDFVersion>"), 1);
     let gold_plate = separate(&out, 0);
     assert!(tint(&gold_plate, "Gold", 20.0, 20.0) > 100);

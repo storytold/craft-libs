@@ -1035,17 +1035,24 @@ fn print_settings_reject_a_profile_that_is_not_cmyk() {
     assert!(matches!(print::settings(PrintColor::fogra39(b"not a profile")), Err(WriteError::InvalidProfile)));
 }
 
-/// `/Trapped` and `GTS_PDFXVersion` go to the information dictionary and to XMP; without
-/// settings neither appears.
+/// `/Trapped` and `GTS_PDFXVersion` go to the information dictionary and to XMP,
+/// `GTS_PDFXConformance` to the dictionary only; without settings none appears.
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 #[cfg_attr(not(target_arch = "wasm32"), test)]
 fn trapped_and_pdfx_version_are_written_to_info_and_xmp() {
-    let settings = SerializeSettings { trapped: Some(Trapped::True), pdfx_version: Some("PDF/X-4".to_owned()), ..Default::default() };
+    let settings = SerializeSettings {
+        trapped: Some(Trapped::True),
+        pdfx_version: Some("PDF/X-1:2003".to_owned()),
+        pdfx_conformance: Some("PDF/X-1a:2003".to_owned()),
+        ..Default::default()
+    };
     let marked = String::from_utf8_lossy(&sample(settings, None).unwrap()).into_owned();
     assert!(marked.contains("/Trapped/True"), "Info /Trapped");
-    assert!(marked.contains("/GTS_PDFXVersion(PDF/X-4)"), "Info /GTS_PDFXVersion");
+    assert!(marked.contains("/GTS_PDFXVersion(PDF/X-1:2003)"), "Info /GTS_PDFXVersion");
+    assert!(marked.contains("/GTS_PDFXConformance(PDF/X-1a:2003)"), "Info /GTS_PDFXConformance");
+    assert!(!marked.contains("pdfxid:GTS_PDFXConformance"), "no XMP conformance property");
     assert!(marked.contains("<pdf:Trapped>True</pdf:Trapped>"), "XMP pdf:Trapped");
-    assert!(marked.contains("<pdfxid:GTS_PDFXVersion>PDF/X-4</pdfxid:GTS_PDFXVersion>"), "XMP GTS_PDFXVersion");
+    assert!(marked.contains("<pdfxid:GTS_PDFXVersion>PDF/X-1:2003</pdfxid:GTS_PDFXVersion>"), "XMP GTS_PDFXVersion");
 
     let plain = String::from_utf8_lossy(&sample(SerializeSettings::default(), None).unwrap()).into_owned();
     assert!(!plain.contains("Trapped") && !plain.contains("GTS_PDFX"));

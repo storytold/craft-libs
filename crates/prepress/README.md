@@ -28,7 +28,7 @@ Prepress for the Craft apps: separations, ink limits and the ink manager.
   its edges. `flatten_document` flattens every page of a PDF, or a range of pages, into one
   PDF with the source's output intent, page boxes, title, author and creation date; a font
   used on several pages is embedded once. The caller sets the PDF version and the PDF/X version
-  key (for PDF/X-1a, 1.4 and `PDF/X-1a:2003`); krilla has no PDF/X validator, so the app keeps
+  and conformance keys (for PDF/X-1a:2003, 1.4, `PDF/X-1:2003` and `PDF/X-1a:2003`); krilla has no PDF/X validator, so the app keeps
   its own PDF/X checks. `flatten_page` is its one-page case.
 
 ## Plates from an exported PDF

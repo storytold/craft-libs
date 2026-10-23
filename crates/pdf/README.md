@@ -140,7 +140,8 @@ let writer = Writer::new(SerializeSettings { configuration, ..settings }, metada
 
 For another profile, fill `PrintColor` with its condition identifier (`Custom` when it is
 not registered) and `info`. The settings claim no PDF/X version and are not checked against
-PDF/X; apps that claim conformance set `pdfx_version` and keep their own checks. Writing these
+PDF/X; apps that claim conformance set `pdfx_version` (and `pdfx_conformance` for PDF/X-1a
+and X-3) and keep their own checks. Writing these
 settings needs the patched Krilla (`CRAFT_PRINT_COLOR`, see
 [`vendor/krilla/README.craft.md`](../../vendor/krilla/README.craft.md)).
 

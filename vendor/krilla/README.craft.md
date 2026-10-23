@@ -21,6 +21,7 @@ itself omits those texts. Its examples and four CC0 ICC profiles are retained wi
 | `patches/09-rendition-class.patch` | Master rendition in XMP | `chunk_container.rs` |
 | `patches/10-mesh-gradients.patch` | Mesh gradients | `content.rs`, `error.rs`, `graphics/{mask,paint,shading_function}.rs`, `serialize.rs`, `surface.rs` |
 | `patches/11-devicen-pdf-version.patch` | DeviceN attributes by PDF version | `graphics/device_n.rs` |
+| `patches/12-pdfx-conformance.patch` | PDF/X conformance key | `serialize.rs` |
 
 Each patch applies with `patch -p1` from this directory, in numeric order, to the pristine
 crate. `SOURCE.json` records, for every retained file, the upstream hash (`upstream_sha256`)
@@ -299,3 +300,18 @@ against the text.
 
 Tests: `crates/pdf/tests/print_color.rs` (`device_n_attributes_follow_the_pdf_version`) and
 `crates/prepress/tests/flatten_document.rs` (`pdf_x1a_output_is_pdf_14_without_nchannel`).
+
+## 12: PDF/X conformance key
+
+Patch 08 writes only `GTS_PDFXVersion`. PDF/X-1a and X-3 also need `GTS_PDFXConformance` in
+the document information dictionary: a PDF/X-1a:2003 file carries `GTS_PDFXVersion
+(PDF/X-1:2003)` and `GTS_PDFXConformance (PDF/X-1a:2003)` (ISO 15930-4). Later parts (X-4
+and on) have no conformance key.
+
+- `SerializeSettings::pdfx_conformance: Option<String>` writes `/GTS_PDFXConformance` to the
+  dictionary, under the same PDF 2.0 rule as patch 08's entries. It defaults to `None`.
+- There is no XMP property for it: the `pdfxid` schema (ISO 15930-7) defines only
+  `GTS_PDFXVersion`. A PDF 2.0 file therefore omits the key.
+
+Tests: `crates/pdf/tests/print_color.rs` (`trapped_and_pdfx_version_are_written_to_info_and_xmp`)
+and `crates/prepress/tests/flatten_document.rs` (`pdf_x1a_output_is_pdf_14_without_nchannel`).
