@@ -1,0 +1,24 @@
+[package]
+name = "craft-runtime"
+description = "Facade: tier-store, worker-host, gpu registry dispatch"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+craft-gpu = { workspace = true }
+craft-gpu-null = { workspace = true }
+craft-gpu-providers = { workspace = true }
+craft-gpu-wgpu = { workspace = true, optional = true }
+craft-tier-store = { workspace = true }
+craft-worker-host = { workspace = true }
+
+[features]
+default = []
+web = ["dep:craft-gpu-wgpu"]
+shared-worker = []
+cloud-delegate = []

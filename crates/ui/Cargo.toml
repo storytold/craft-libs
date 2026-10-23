@@ -13,9 +13,22 @@ workspace = true
 [dependencies]
 egui = { workspace = true }
 serde = { version = "1", features = ["derive"], optional = true }
-
+# The vendor-neutral vocabulary the share dialog speaks. No IO and no
+# vendor, so this stays buildable for the web.
+craft-cloud = { workspace = true, optional = true }
+craft-esign = { workspace = true, optional = true }
+# The control channel's report of the cloud state. One serialiser here
+# rather than one per application. No IO and no vendor.
+serde_json = { workspace = true, optional = true }
 [features]
 serde = ["dep:serde"]
+# The share dialog and the backend contract it states its work through.
+share = ["dep:craft-cloud"]
+# Open and Save against cloud storage. Needs the share dialog, which a
+# document's overflow menu and the Share split button both open.
+cloud = ["share", "dep:serde_json"]
+# Request-signatures dialog. Beside share/cloud; does not extend either.
+esign = ["dep:craft-cloud", "dep:craft-esign"]
 
 [dev-dependencies]
 egui = { workspace = true, features = ["default_fonts"] }

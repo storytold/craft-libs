@@ -1,0 +1,19 @@
+[package]
+name = "craft-esign"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "What an e-sign service offers the Craft apps: envelopes, recipients and events as contracts, with no vendor and no IO"
+
+[lints]
+workspace = true
+
+[dependencies]
+craft-cloud = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
