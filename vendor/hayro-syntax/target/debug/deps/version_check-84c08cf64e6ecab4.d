@@ -1,0 +1,10 @@
+/tmp/claude-1000/-home-dylan/b92c4257-b913-4b10-bf4f-83cfbb39d03c/scratchpad/xt/vendor/hayro-syntax/target/debug/deps/version_check-84c08cf64e6ecab4.d: /home/dylan/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/version_check-0.9.5/src/lib.rs /home/dylan/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/version_check-0.9.5/src/version.rs /home/dylan/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/version_check-0.9.5/src/channel.rs /home/dylan/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/version_check-0.9.5/src/date.rs
+
+/tmp/claude-1000/-home-dylan/b92c4257-b913-4b10-bf4f-83cfbb39d03c/scratchpad/xt/vendor/hayro-syntax/target/debug/deps/libversion_check-84c08cf64e6ecab4.rlib: /home/dylan/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/version_check-0.9.5/src/lib.rs /home/dylan/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/version_check-0.9.5/src/version.rs /home/dylan/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/version_check-0.9.5/src/channel.rs /home/dylan/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/version_check-0.9.5/src/date.rs
+
+/tmp/claude-1000/-home-dylan/b92c4257-b913-4b10-bf4f-83cfbb39d03c/scratchpad/xt/vendor/hayro-syntax/target/debug/deps/libversion_check-84c08cf64e6ecab4.rmeta: /home/dylan/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/version_check-0.9.5/src/lib.rs /home/dylan/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/version_check-0.9.5/src/version.rs /home/dylan/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/version_check-0.9.5/src/channel.rs /home/dylan/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/version_check-0.9.5/src/date.rs
+
+/home/dylan/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/version_check-0.9.5/src/lib.rs:
+/home/dylan/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/version_check-0.9.5/src/version.rs:
+/home/dylan/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/version_check-0.9.5/src/channel.rs:
+/home/dylan/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/version_check-0.9.5/src/date.rs:

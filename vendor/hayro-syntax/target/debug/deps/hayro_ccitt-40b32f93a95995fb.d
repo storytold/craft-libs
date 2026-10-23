@@ -1,0 +1,10 @@
+/tmp/claude-1000/-home-dylan/b92c4257-b913-4b10-bf4f-83cfbb39d03c/scratchpad/xt/vendor/hayro-syntax/target/debug/deps/hayro_ccitt-40b32f93a95995fb.d: /home/dylan/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hayro-ccitt-0.3.0/src/lib.rs /home/dylan/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hayro-ccitt-0.3.0/src/bit_reader.rs /home/dylan/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hayro-ccitt-0.3.0/src/decode.rs /home/dylan/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hayro-ccitt-0.3.0/src/state_machine.rs
+
+/tmp/claude-1000/-home-dylan/b92c4257-b913-4b10-bf4f-83cfbb39d03c/scratchpad/xt/vendor/hayro-syntax/target/debug/deps/libhayro_ccitt-40b32f93a95995fb.rlib: /home/dylan/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hayro-ccitt-0.3.0/src/lib.rs /home/dylan/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hayro-ccitt-0.3.0/src/bit_reader.rs /home/dylan/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hayro-ccitt-0.3.0/src/decode.rs /home/dylan/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hayro-ccitt-0.3.0/src/state_machine.rs
+
+/tmp/claude-1000/-home-dylan/b92c4257-b913-4b10-bf4f-83cfbb39d03c/scratchpad/xt/vendor/hayro-syntax/target/debug/deps/libhayro_ccitt-40b32f93a95995fb.rmeta: /home/dylan/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hayro-ccitt-0.3.0/src/lib.rs /home/dylan/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hayro-ccitt-0.3.0/src/bit_reader.rs /home/dylan/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hayro-ccitt-0.3.0/src/decode.rs /home/dylan/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hayro-ccitt-0.3.0/src/state_machine.rs
+
+/home/dylan/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hayro-ccitt-0.3.0/src/lib.rs:
+/home/dylan/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hayro-ccitt-0.3.0/src/bit_reader.rs:
+/home/dylan/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hayro-ccitt-0.3.0/src/decode.rs:
+/home/dylan/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hayro-ccitt-0.3.0/src/state_machine.rs:

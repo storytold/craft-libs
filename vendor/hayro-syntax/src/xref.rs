@@ -887,15 +887,11 @@ fn populate_from_xref_stream<'a>(
 
     let [f1_len, f2_len, f3_len] = stream.dict().get::<[u8; 3]>(W)?;
 
-    if f2_len > size_of::<u64>() as u8 {
-        error!("xref offset length is larger than the allowed limit");
+    // PdfCraft patch: the type field may be wider than one byte (upstream behaviour); bound it.
+    if f1_len > size_of::<u64>() as u8 || f2_len > size_of::<u64>() as u8 {
+        error!("xref field length is larger than the allowed limit");
 
         return None;
-    }
-
-    // Do such files exist?
-    if f1_len != 1 {
-        warn!("first field in xref stream was longer than 1");
     }
 
     let xref_data = stream.decoded().ok()?;
@@ -980,11 +976,12 @@ fn xref_stream_subsection<'a>(
     }
 
     for i in 0..num_elements {
+        // A zero-width type field defaults to 1 (PDF 32000-1, 7.5.8.2).
         let f_type = if f1_len == 0 {
             1
         } else {
-            // We assume a length of 1.
-            xref_reader.read_bytes(1)?[0]
+            let bytes = xref_reader.read_bytes(f1_len as usize)?;
+            bytes.iter().fold(0u64, |acc, b| (acc << 8) | *b as u64)
         };
 
         let obj_number = start + i;
@@ -1274,6 +1271,28 @@ mod tests {
         object(&mut out, &mut offsets, 11, &stream);
         out.extend_from_slice(format!("startxref\n{xref}\n%%EOF\n").as_bytes());
         out
+    }
+
+    #[test]
+    fn xref_stream_type_field_uses_the_full_w0_width() {
+        // /W [2 1 1]: two-byte type 0x0001 (normal), offset 7, gen 0.
+        let entry = [0u8, 1, 7, 0];
+        for (w0, bytes, ok) in [(2u8, &entry[..], true), (9, &entry[..], false)] {
+            let mut map = XrefMap::default();
+            let mut reader = Reader::new(bytes);
+            let got = if w0 > 8 {
+                None
+            } else {
+                xref_stream_subsection(&mut reader, 5, 1, w0, 1, 1, &mut map)
+            };
+            assert_eq!(got.is_some(), ok);
+            if ok {
+                assert!(matches!(
+                    map.get(&ObjectIdentifier::new(5, 0)),
+                    Some(EntryType::Normal(7))
+                ));
+            }
+        }
     }
 
     #[cfg(feature = "std")]
