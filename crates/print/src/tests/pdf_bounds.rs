@@ -254,3 +254,32 @@ fn an_inflate_limit_stops_later_stream_and_object_work() {
     assert_eq!(reader.budget.nodes, 0);
     assert_eq!(reader.budget.tokens, 0);
 }
+
+#[test]
+fn an_oversized_inherited_media_box_is_not_copied_for_every_page() {
+    // One inline MediaBox far longer than four numbers, inherited by many small pages.
+    let pages = 4_000;
+    let media = vec!["0"; 25_000].join(" ");
+    let kids: Vec<String> = (0..pages).map(|i| format!("{} 0 R", i + 3)).collect();
+    let mut objects = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+        format!("<< /Type /Pages /Kids [{}] /Count {pages} /MediaBox [{media}] >>", kids.join(" ")),
+    ];
+    objects.extend((0..pages).map(|_| "<< /Type /Page /Parent 2 0 R >>".to_string()));
+    let mut pdf = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, object) in objects.iter().enumerate() {
+        offsets.push(pdf.len());
+        pdf.extend_from_slice(format!("{} 0 obj\n{object}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = pdf.len();
+    pdf.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f\r\n", objects.len() + 1).as_bytes());
+    for offset in offsets {
+        pdf.extend_from_slice(format!("{offset:010} 00000 n\r\n").as_bytes());
+    }
+    pdf.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objects.len() + 1).as_bytes());
+    let started = std::time::Instant::now();
+    let sheets = read(&pdf).unwrap();
+    assert!(started.elapsed() < std::time::Duration::from_secs(10), "{:?}", started.elapsed());
+    assert_eq!(sheets.sheets.len(), pages);
+}

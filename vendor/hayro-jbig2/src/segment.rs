@@ -8,6 +8,14 @@ use alloc::vec::Vec;
 use crate::error::{ParseError, Result, SegmentError, bail, err};
 use crate::reader::Reader;
 
+/// PdfCraft patch: the most segments one segment may refer to. A crafted long-form
+/// header can claim a 29-bit count, which `Vec::with_capacity` below would turn into
+/// a multi-gigabyte reservation before a single referred-to number is read — an
+/// allocation failure then aborts the process in a way `catch_unwind` cannot contain.
+/// Real files refer to a handful of segments, so `u16::MAX` is far beyond any
+/// legitimate need.
+pub(crate) const MAX_REFERRED_TO_SEGMENTS: u32 = u16::MAX as u32;
+
 /// "The segment type is a number between 0 and 63, inclusive. Not all values
 /// are allowed." (7.3)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -182,6 +190,12 @@ pub(crate) fn parse_segment_header(reader: &mut Reader<'_>) -> Result<SegmentHea
         let rest = reader.read_bytes(3).ok_or(ParseError::UnexpectedEof)?;
         u32::from_be_bytes([count_and_retention & 0x1F, rest[0], rest[1], rest[2]])
     };
+
+    // Reject an absurd count before reserving memory for it, and before
+    // skipping the retention-flag bytes it claims to own.
+    if referred_to_count > MAX_REFERRED_TO_SEGMENTS {
+        bail!(SegmentError::InvalidReferredCount);
+    }
 
     // Skip retention flag bytes in long form.
     // "The first one-byte field following the initial four-byte field is formatted
@@ -415,5 +429,28 @@ mod tests {
         assert_eq!(header._page_association, 1025);
 
         assert_eq!(header.data_length, Some(32));
+    }
+
+    #[test]
+    fn test_referred_to_count_is_capped() {
+        use crate::error::DecodeError;
+
+        // A long-form header claiming the 29-bit maximum of 536,870,911
+        // referred-to segments would otherwise make `Vec::with_capacity`
+        // reserve ~2 GiB before a single referred-to number is read.
+        // The first byte is 0xFF: long form, count bits 0x1F; the count is
+        // 0x1FFFFFFF.
+        let data = [
+            0x00, 0x01, 0x00, 0x00, // Segment number = 65536
+            0x86, // Flags: type 6, page assoc 1 byte, deferred non-retain
+            0xFF, 0xFF, 0xFF, 0xFF, // Long form, count = 536,870,911
+        ];
+
+        let mut reader = Reader::new(&data);
+        let error = parse_segment_header(&mut reader).unwrap_err();
+        assert!(matches!(
+            error,
+            DecodeError::Segment(SegmentError::InvalidReferredCount)
+        ));
     }
 }

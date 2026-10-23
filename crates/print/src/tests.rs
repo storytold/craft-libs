@@ -257,6 +257,29 @@ fn printer_options_come_from_the_ppd() {
 }
 
 #[test]
+fn ppd_labels_are_capped_before_every_option_copies_its_group() {
+    let long = "G".repeat(100_000);
+    let mut ppd = format!("*OpenGroup: Big/{long}\n");
+    for i in 0..300 {
+        ppd += &format!("*OpenUI *Opt{i}/{long}: PickOne\n*Opt{i} A/{long}: \"\"\n*CloseUI: *Opt{i}\n");
+    }
+    let options = spool::parse_ppd(&ppd);
+    assert_eq!(options.len(), 300);
+    assert!(options.iter().all(|o| o.group.len() <= 256 && o.label.len() <= 256 && o.choices[0].1.len() <= 256));
+    assert_eq!(options[0].group, "G".repeat(256));
+}
+
+#[test]
+fn many_driverless_destinations_merge_in_linear_time() {
+    let names: String = (0..200_000).map(|i| format!("dest_{i}\n")).collect();
+    let started = std::time::Instant::now();
+    let printers = spool::printers_parsed("printer Office is idle.\n", Some(&format!("Office\n{names}dest_7\n")));
+    assert!(started.elapsed() < std::time::Duration::from_secs(10), "{:?}", started.elapsed());
+    assert_eq!(printers.len(), 200_001, "each destination once, queues first");
+    assert_eq!(printers[0].name, "Office");
+}
+
+#[test]
 fn printer_option_defaults_and_job_arguments() {
     let current =
         spool::parse_lpoptions("InputSlot/Paper tray: AutoSelect *Tray2 ManualFeed\nEFRaster/Print queue action: *False Hold\nbroken line\n");

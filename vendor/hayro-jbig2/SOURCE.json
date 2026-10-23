@@ -176,7 +176,7 @@
       "path": "src/segment.rs",
       "source_sha256": "58d9fd05a15358b4ca945ffa3b8c1872f4ea57f8bbe50e8db3c6fce5bcac2914",
       "source_git_blob": "35c17c38af62b1fece4e280cda923cdcb23a8661",
-      "sha256": "58d9fd05a15358b4ca945ffa3b8c1872f4ea57f8bbe50e8db3c6fce5bcac2914"
+      "sha256": "c64e2845dbdd26e33b5461acde399ba4820f9942e9090a32782f44ff0fd5e61f"
     },
     {
       "path": "src/simd.rs",

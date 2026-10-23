@@ -130,6 +130,21 @@ fn protected_canvas_remains_present_and_cannot_be_grouped_with_panels() {
 }
 
 #[test]
+fn moving_a_floating_group_needs_every_member_movable() {
+    // sample() floats 5 and 6 together; 6 may not move, so naming 5 cannot move it either.
+    let permissions = |panel: &u32| Permissions { movable: *panel != 6, ..Permissions::default() };
+    let layout = sample();
+    let mut next = layout.clone();
+    assert_eq!(
+        next.apply_with_permissions(Action::MoveFloating { panel: 5, rect: [0.0, 0.0, 300.0, 220.0] }, permissions),
+        Err(DockError::NotAllowed)
+    );
+    assert_eq!(next, layout);
+    next.apply_with_permissions(Action::MoveFloating { panel: 5, rect: [0.0, 0.0, 300.0, 220.0] }, |_: &u32| Permissions::default()).unwrap();
+    assert_eq!(next.floating[0].rect, [0.0, 0.0, 300.0, 220.0]);
+}
+
+#[test]
 fn close_and_restore_preserve_fixed_side_and_floating_geometry() {
     let mut layout = Layout {
         root: Some(Node::Split {
@@ -850,6 +865,48 @@ fn protected_group_member_blocks_whole_group_gesture_and_host_drop() {
         assert!(out.group_drag.is_none() && out.group_drop.is_none());
         assert!(!out.actions.iter().any(|a| matches!(a, Action::MoveFloating { .. })));
     }
+}
+
+/// Drags the floating group's resize grip in `sample()` and returns every action emitted.
+fn resize_floating_group(permissions: impl Fn(&u32) -> Permissions + Copy) -> Vec<Action<u32>> {
+    let ctx = Context::default();
+    let layout = sample();
+    // sample() floats 5 and 6 at [80, 70, 300, 220]; the grip is its bottom-right corner.
+    let (start, end) = (pos2(374.0, 284.0), pos2(398.0, 308.0));
+    let mut actions = Vec::new();
+    for events in [
+        vec![],
+        vec![],
+        vec![Event::PointerMoved(start), pointer_button(start, true)],
+        vec![Event::PointerMoved(end)],
+        vec![pointer_button(end, false)],
+    ] {
+        let mut out = DockOutput::default();
+        ctx.run_ui(RawInput { screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(800.0, 600.0))), events, ..Default::default() }, |ui| {
+            let style = DockStyle::from_ui(ui);
+            out = DockArea::new(Id::new("resize-area")).show(
+                ui,
+                &layout,
+                &style,
+                |p| format!("Panel {p}"),
+                permissions,
+                |ui, _| {
+                    ui.label("Body");
+                },
+            );
+        })
+        .textures_delta
+        .clear();
+        actions.extend(out.actions);
+    }
+    actions
+}
+
+#[test]
+fn protected_group_member_blocks_floating_group_resize() {
+    let moved = |actions: &[Action<u32>]| actions.iter().any(|a| matches!(a, Action::MoveFloating { .. }));
+    assert!(moved(&resize_floating_group(|_| Permissions::default())), "the grip resizes a movable group");
+    assert!(!moved(&resize_floating_group(|p| if *p == 6 { Permissions::PROTECTED } else { Permissions::default() })));
 }
 
 #[test]

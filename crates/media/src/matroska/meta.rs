@@ -8,6 +8,11 @@ use crate::matroska::track::{AudioInfo, Color, ContentEncoding, MasteringMetadat
 
 // A malformed Matroska file may contain arbitrarily deep ChapterAtom and SimpleTag chains.
 const MAX_META_DEPTH: usize = 64;
+/// Longest header-stripping prefix accepted. It is copied in front of every frame, laced
+/// zero-length frames included, so its length multiplies what a small file can make a reader
+/// produce. Real files strip a few bytes of codec header; a longer one is treated as an
+/// unsupported compression and its frames are not reconstructed.
+const MAX_STRIPPED_HEADER: usize = 256;
 /// Largest accepted `TimestampScale` (about 4.3 s per tick). It keeps tick to nanosecond
 /// arithmetic on 64-bit timestamps within `i128`.
 const MAX_TIMESTAMP_SCALE: u64 = 1 << 32;
@@ -466,7 +471,7 @@ fn parse_encodings(d: &[u8]) -> Vec<ContentEncoding> {
             ContentEncoding::Encryption { scope }
         } else {
             let (algo, settings) = comp.unwrap_or((0, Vec::new()));
-            if algo == 3 {
+            if algo == 3 && settings.len() <= MAX_STRIPPED_HEADER {
                 ContentEncoding::HeaderStripping { bytes: settings, scope }
             } else {
                 ContentEncoding::Compression { algo, settings, scope }
@@ -560,6 +565,26 @@ pub(crate) fn parse_tracks(d: &[u8], timestamp_scale: u64) -> Vec<Track> {
 #[cfg(test)]
 mod metadata_depth_tests {
     use super::*;
+    use crate::matroska::mux::{el, el_uint};
+
+    fn header_stripping(bytes: &[u8]) -> Vec<ContentEncoding> {
+        let mut comp = Vec::new();
+        el_uint(&mut comp, CONTENT_COMP_ALGO, 3);
+        el(&mut comp, CONTENT_COMP_SETTINGS, bytes);
+        let mut enc = Vec::new();
+        el(&mut enc, CONTENT_COMPRESSION, &comp);
+        let mut encs = Vec::new();
+        el(&mut encs, CONTENT_ENCODING, &enc);
+        parse_encodings(&encs)
+    }
+
+    #[test]
+    fn a_long_stripped_header_is_not_put_in_front_of_frames() {
+        let kept = header_stripping(&[7; MAX_STRIPPED_HEADER]);
+        assert!(matches!(&kept[..], [ContentEncoding::HeaderStripping { bytes, .. }] if bytes.len() == MAX_STRIPPED_HEADER));
+        let refused = header_stripping(&[7; MAX_STRIPPED_HEADER + 1]);
+        assert!(matches!(&refused[..], [ContentEncoding::Compression { algo: 3, .. }]), "{refused:?}");
+    }
 
     #[test]
     fn deeply_nested_chapters_stop_at_depth_limit() {
