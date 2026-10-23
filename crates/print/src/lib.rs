@@ -195,6 +195,13 @@ pub const HANDLED_OPTIONS: &[&str] = &["PageSize", "PageRegion", "Duplex", "Coll
 /// Caps on what a PPD may make the dialog hold (PPDs are text files from the printer vendor).
 const MAX_OPTIONS: usize = 400;
 const MAX_CHOICES: usize = 400;
+/// Longest group, option or choice label kept, in characters; every option copies its group's.
+const MAX_PPD_LABEL: usize = 256;
+
+/// `label`, cut to [`MAX_PPD_LABEL`] characters.
+fn ppd_label(label: &str) -> String {
+    label.chars().take(MAX_PPD_LABEL).collect()
+}
 
 /// A PPD keyword: printable ASCII without spaces, `/`, `:` or `=`.
 fn is_ppd_keyword(s: &str) -> bool {
@@ -220,7 +227,7 @@ pub fn parse_ppd(ppd: &str) -> Vec<PrinterOption> {
         let line = line.trim_end_matches('\r');
         if let Some(rest) = line.strip_prefix("*OpenGroup:") {
             let (k, l) = name_label(rest);
-            (group_key, group) = (k.to_string(), l.to_string());
+            (group_key, group) = (k.to_string(), ppd_label(l));
         } else if line.starts_with("*CloseGroup") {
             (group_key, group) = (String::new(), String::new());
         } else if let Some(rest) = line.strip_prefix("*OpenUI") {
@@ -228,7 +235,7 @@ pub fn parse_ppd(ppd: &str) -> Vec<PrinterOption> {
             let (key, label) = name_label(head.trim().trim_start_matches('*'));
             open = is_ppd_keyword(key).then(|| PrinterOption {
                 key: key.to_string(),
-                label: label.to_string(),
+                label: ppd_label(label),
                 group: group.clone(),
                 choices: Vec::new(),
                 default: String::new(),
@@ -251,7 +258,7 @@ pub fn parse_ppd(ppd: &str) -> Vec<PrinterOption> {
                 let head = rest.split_once(':').map_or(rest, |(h, _)| h);
                 let (choice, label) = name_label(head);
                 if is_ppd_keyword(choice) && o.choices.len() < MAX_CHOICES && o.choices.iter().all(|(c, _)| c != choice) {
-                    o.choices.push((choice.to_string(), label.to_string()));
+                    o.choices.push((choice.to_string(), ppd_label(label)));
                 }
             }
         }
@@ -413,8 +420,9 @@ pub fn printers_parsed(queues: &str, available: Option<&str>) -> Vec<Printer> {
     let mut printers = parse_lpstat(queues);
     let default = default_destination(queues);
     if let Some(names) = available {
+        let mut seen: std::collections::HashSet<String> = printers.iter().map(|p| p.name.clone()).collect();
         for name in parse_lpstat_e(names) {
-            if !printers.iter().any(|p| p.name == name) {
+            if seen.insert(name.clone()) {
                 printers.push(Printer { default: default == Some(name.as_str()), name, description: String::new(), two_sided: None });
             }
         }

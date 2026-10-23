@@ -85,6 +85,20 @@ impl Curve {
         }
     }
 
+    /// [`eval_inverse64`](Self::eval_inverse64) for many values. A table's flat ends are found
+    /// once here instead of on every call, so building an output table from a long, flat table
+    /// costs one scan of it, not one per entry.
+    pub fn inverse64_many(&self) -> impl Fn(f64) -> f64 + '_ {
+        let edges = match self {
+            Curve::Table(t) if t.len() >= 2 => Some((edge_index(t, true), edge_index(t, false))),
+            _ => None,
+        };
+        move |y| match (self, edges) {
+            (Curve::Table(t), Some((first, last))) => table_inverse_with(t, y as f32, |start| if start { first } else { last }) as f64,
+            _ => self.eval_inverse64(y),
+        }
+    }
+
     #[inline]
     pub fn eval_inverse(&self, y: f32) -> f32 {
         match self {
@@ -240,6 +254,11 @@ fn table(t: &[f32], x: f32) -> f32 {
 
 /// Exact inverse of a piecewise-linear table (binary search), for increasing or decreasing tables.
 fn table_inverse(t: &[f32], y: f32) -> f32 {
+    table_inverse_with(t, y, |start| edge_index(t, start))
+}
+
+/// [`table_inverse`] with the flat-run ends from `edge` (see [`edge_index`]).
+fn table_inverse_with(t: &[f32], y: f32, edge: impl Fn(bool) -> f32) -> f32 {
     let n = t.len();
     if n < 2 {
         return y;
@@ -248,10 +267,10 @@ fn table_inverse(t: &[f32], y: f32) -> f32 {
     let (lo_v, hi_v) = if increasing { (t[0], t[n - 1]) } else { (t[n - 1], t[0]) };
     if y <= lo_v {
         // Flat start: choose the last index still at the lowest value.
-        return if increasing { edge_index(t, true) } else { edge_index(t, false) };
+        return edge(increasing);
     }
     if y >= hi_v {
-        return if increasing { edge_index(t, false) } else { edge_index(t, true) };
+        return edge(!increasing);
     }
     let (mut lo, mut hi) = (0usize, n - 1);
     while hi - lo > 1 {
@@ -327,6 +346,23 @@ mod tests {
         }
         let dec = Curve::Table(vec![1.0, 0.5, 0.0]);
         assert!((dec.eval_inverse(0.25) - 0.75).abs() < 1e-6);
+    }
+
+    #[test]
+    fn batch_inverse_matches_single_inverse() {
+        let mut flat = vec![0.25f32; 300];
+        flat.extend((0..300).map(|i| 0.25 + i as f32 / 600.0));
+        flat.extend([0.75f32; 300]);
+        for t in [flat.clone(), flat.iter().rev().copied().collect(), vec![0.5; 1000], Curve::Gamma(2.2).sample(256)] {
+            let c = Curve::Table(t);
+            let many = c.inverse64_many();
+            for i in 0..=200 {
+                let y = i as f64 / 200.0;
+                assert_eq!(many(y), c.eval_inverse64(y), "{y}");
+            }
+        }
+        let g = Curve::Gamma(2.2);
+        assert_eq!(g.inverse64_many()(0.3), g.eval_inverse64(0.3));
     }
 
     #[test]

@@ -389,7 +389,13 @@ impl<P: Clone + Eq + Hash> Layout<P> {
             }
             Action::Float { panel, .. } if !permissions(panel).floatable || !permissions(panel).movable => return Err(DockError::NotAllowed),
             Action::Close { panel } if !permissions(panel).closable => return Err(DockError::NotAllowed),
-            Action::MoveFloating { panel, .. } if !permissions(panel).movable => return Err(DockError::NotAllowed),
+            // The rectangle belongs to the whole floating group, so every member must allow it.
+            Action::MoveFloating { panel, .. }
+                if !permissions(panel).movable
+                    || self.floating.iter().find(|g| g.panels.contains(panel)).is_some_and(|g| g.panels.iter().any(|p| !permissions(p).movable)) =>
+            {
+                return Err(DockError::NotAllowed);
+            }
             Action::Open { anchor: Some(anchor), .. } if !permissions(anchor).accepts_tabs => return Err(DockError::NotAllowed),
             _ => {}
         }

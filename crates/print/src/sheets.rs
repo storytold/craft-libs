@@ -11,6 +11,7 @@
 //! Every length, count and depth is bounded, and anything unreadable is an [`Error`], never a
 //! panic: the caller's PDF is input like any other.
 
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -781,15 +782,26 @@ impl Reader<'_> {
         None
     }
 
-    fn rect(&mut self, obj: Option<&Obj>) -> Option<[f64; 4]> {
-        let obj = self.resolve(obj?)?;
-        let items = obj.array()?;
-        let mut v = [0.0; 4];
-        for (slot, item) in v.iter_mut().zip(items) {
-            *slot = self.resolve(item)?.num()?;
+    /// Like [`resolve`](Self::resolve), but a direct object is borrowed, not copied. Inherited
+    /// page attributes are read once per page, so copying a large inline value would repeat that
+    /// work for every page outside the budget.
+    fn resolve_borrowed<'o>(&mut self, obj: &'o Obj) -> Option<Cow<'o, Obj>> {
+        match obj {
+            Obj::Ref(..) => self.resolve(obj).map(Cow::Owned),
+            direct => Some(Cow::Borrowed(direct)),
         }
+    }
+
+    fn rect(&mut self, obj: Option<&Obj>) -> Option<[f64; 4]> {
+        let obj = self.resolve_borrowed(obj?)?;
+        let items = obj.array()?;
+        // The shape is checked before reading any element.
         if items.len() != 4 {
             return None;
+        }
+        let mut v = [0.0; 4];
+        for (slot, item) in v.iter_mut().zip(items) {
+            *slot = self.resolve_borrowed(item)?.num()?;
         }
         let [x0, y0, x1, y1] = v;
         Some([x0.min(x1), y0.min(y1), x0.max(x1), y0.max(y1)])
@@ -938,7 +950,7 @@ pub(crate) fn read(data: &[u8]) -> Result<Sheets<'_>, Error> {
             .map(|c| [c[0].max(media[0]), c[1].max(media[1]), c[2].min(media[2]), c[3].min(media[3])])
             .filter(|c| c[2] > c[0] && c[3] > c[1])
             .unwrap_or(media);
-        let rotate = here.rotate.as_ref().and_then(|r| reader.resolve(r)).and_then(|r| r.int()).unwrap_or(0).rem_euclid(360);
+        let rotate = here.rotate.as_ref().and_then(|r| reader.resolve_borrowed(r).and_then(|r| r.int())).unwrap_or(0).rem_euclid(360);
         // Not a multiple of 90 is invalid; such a page is shown unrotated.
         let rotate = if rotate % 90 == 0 { u32::try_from(rotate).unwrap_or(0) } else { 0 };
         // Windows renders viewer visibility, not annotation print visibility. Only a plain

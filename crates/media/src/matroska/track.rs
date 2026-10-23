@@ -265,10 +265,16 @@ impl Track {
         p
     }
 
+    /// Length of [`frame_prefix`](Self::frame_prefix), without building it.
+    pub fn frame_prefix_len(&self) -> u64 {
+        let stripped = self.stripped_header().map_or(0, <[u8]>::len) as u64;
+        if matches!(self.codec, Codec::ProRes { .. }) { stripped + 8 } else { stripped }
+    }
+
     /// Frame size of sample `i` as returned by `read_sample` / packets (stored size plus prefix).
     pub fn sample_size(&self, i: usize) -> Option<u64> {
         let s = self.samples.get(i)?;
-        Some(s.size as u64 + self.frame_prefix(s.size as u64).len() as u64)
+        Some(s.size as u64 + self.frame_prefix_len())
     }
 
     /// Indices of keyframe samples, ascending by file order.

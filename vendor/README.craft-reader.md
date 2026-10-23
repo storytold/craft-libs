@@ -36,6 +36,12 @@ Byte transfer-function samples use rounded 8-bit values; failed or non-finite ev
 leave the sample unchanged. Historical source hashes remain in each `SOURCE.json`,
 alongside local hashes and the compatibility reference.
 
+The JBIG2 segment parser caps the long-form referred-to-segment count at `u16::MAX`
+and rejects a larger claim as an invalid count before any retention-flag or
+referred-to-number bytes are consumed, so a crafted header cannot turn
+`Vec::with_capacity` into a multi-gigabyte reservation that aborts on allocation
+failure.
+
 This remains the patched 0.7 backend. It retains the existing Bradford Lab conversion,
 floating component precision and codec versions, rather than claiming full 0.8
 equivalence. The independent color oracles, backend tests and facade contracts cover

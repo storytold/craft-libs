@@ -1,6 +1,7 @@
 //! Printer selection and asynchronous job feedback, independent of any spooler or document.
 //! Hosts provide workers; applications own PDF generation, commands and translated wording.
 
+use std::collections::HashMap;
 use std::sync::mpsc::{Receiver, TryRecvError};
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -19,26 +20,41 @@ pub struct Printer {
 /// printers show their names, which the spooler keeps distinct.
 pub fn shown_names(printers: &[Printer]) -> Vec<String> {
     let base: Vec<&str> = printers.iter().map(|p| if p.label.trim().is_empty() { p.name.as_str() } else { p.label.as_str() }).collect();
+    let mut base_count: HashMap<&str, usize> = HashMap::with_capacity(base.len());
+    for text in &base {
+        *base_count.entry(text).or_default() += 1;
+    }
     let mut shown: Vec<String> = printers
         .iter()
         .zip(&base)
         .map(|(printer, text)| {
-            let shared = base.iter().filter(|other| *other == text).count() > 1;
+            let shared = base_count.get(text).is_some_and(|n| *n > 1);
             if shared && *text != printer.name { format!("{text} ({})", printer.name) } else { (*text).to_owned() }
         })
         .collect();
-    // Each pass turns at least one shared text into its name, or stops: at most one per printer.
-    for _ in 0..printers.len() {
-        let shared: Vec<bool> = shown.iter().map(|text| shown.iter().filter(|other| *other == text).count() > 1).collect();
-        let mut changed = false;
-        for ((text, printer), shared) in shown.iter_mut().zip(printers).zip(shared) {
-            if shared && *text != printer.name {
-                text.clone_from(&printer.name);
-                changed = true;
-            }
+    // Which printers show each text. A shared text turns every printer showing it into its name;
+    // a printer that shows its name never changes again, so each moves at most once and the
+    // whole cascade stays linear in the number of printers.
+    let mut by_text: HashMap<String, Vec<usize>> = HashMap::with_capacity(shown.len());
+    for (i, text) in shown.iter().enumerate() {
+        by_text.entry(text.clone()).or_default().push(i);
+    }
+    let mut pending: Vec<String> = by_text.iter().filter(|(_, ids)| ids.len() > 1).map(|(text, _)| text.clone()).collect();
+    while let Some(text) = pending.pop() {
+        let Some(ids) = by_text.get_mut(&text) else { continue };
+        if ids.len() < 2 {
+            continue;
         }
-        if !changed {
-            break;
+        let (stay, moving): (Vec<usize>, Vec<usize>) = ids.iter().partition(|&&i| printers.get(i).is_some_and(|p| p.name == text));
+        *ids = stay;
+        for i in moving {
+            let (Some(printer), Some(slot)) = (printers.get(i), shown.get_mut(i)) else { continue };
+            slot.clone_from(&printer.name);
+            let ids = by_text.entry(printer.name.clone()).or_default();
+            ids.push(i);
+            if ids.len() == 2 {
+                pending.push(printer.name.clone());
+            }
         }
     }
     shown
