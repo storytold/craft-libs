@@ -1,12 +1,63 @@
 //! Printer selection and asynchronous job feedback, independent of any spooler or document.
 //! Hosts provide workers; applications own PDF generation, commands and translated wording.
 
+use std::collections::HashMap;
 use std::sync::mpsc::{Receiver, TryRecvError};
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Printer {
+    /// The spooler's destination: what [`Settings::printer`] and jobs name.
     pub name: String,
+    /// What the dialog shows; empty shows `name`. CUPS, for one, describes the queue
+    /// `_192_0_2_15` as `192.0.2.15`, the name the user gave the printer.
+    pub label: String,
     pub default: bool,
+}
+
+/// The text the dialog shows for each of `printers`, in order: its label, or its name when it has
+/// none. Text two printers would share is followed by the name in brackets, so neither hides the
+/// other; when even that text is shared (another printer's label is `Office (Office_1)`), those
+/// printers show their names, which the spooler keeps distinct.
+pub fn shown_names(printers: &[Printer]) -> Vec<String> {
+    let base: Vec<&str> = printers.iter().map(|p| if p.label.trim().is_empty() { p.name.as_str() } else { p.label.as_str() }).collect();
+    let mut base_count: HashMap<&str, usize> = HashMap::with_capacity(base.len());
+    for text in &base {
+        *base_count.entry(text).or_default() += 1;
+    }
+    let mut shown: Vec<String> = printers
+        .iter()
+        .zip(&base)
+        .map(|(printer, text)| {
+            let shared = base_count.get(text).is_some_and(|n| *n > 1);
+            if shared && *text != printer.name { format!("{text} ({})", printer.name) } else { (*text).to_owned() }
+        })
+        .collect();
+    // Which printers show each text. A shared text turns every printer showing it into its name;
+    // a printer that shows its name never changes again, so each moves at most once and the
+    // whole cascade stays linear in the number of printers.
+    let mut by_text: HashMap<String, Vec<usize>> = HashMap::with_capacity(shown.len());
+    for (i, text) in shown.iter().enumerate() {
+        by_text.entry(text.clone()).or_default().push(i);
+    }
+    let mut pending: Vec<String> = by_text.iter().filter(|(_, ids)| ids.len() > 1).map(|(text, _)| text.clone()).collect();
+    while let Some(text) = pending.pop() {
+        let Some(ids) = by_text.get_mut(&text) else { continue };
+        if ids.len() < 2 {
+            continue;
+        }
+        let (stay, moving): (Vec<usize>, Vec<usize>) = ids.iter().partition(|&&i| printers.get(i).is_some_and(|p| p.name == text));
+        *ids = stay;
+        for i in moving {
+            let (Some(printer), Some(slot)) = (printers.get(i), shown.get_mut(i)) else { continue };
+            slot.clone_from(&printer.name);
+            let ids = by_text.entry(printer.name.clone()).or_default();
+            ids.push(i);
+            if ids.len() == 2 {
+                pending.push(printer.name.clone());
+            }
+        }
+    }
+    shown
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -160,13 +211,15 @@ impl State {
             ui.add_enabled_ui(!self.busy(), |ui| {
                 let width = ui.available_width().clamp(32.0, 230.0);
                 let printer_label = ui.label(labels.printer);
+                let shown = shown_names(&self.printers);
+                let selected = self.printers.iter().zip(&shown).find(|(p, _)| p.name == self.settings.printer).map(|(_, text)| text.as_str());
                 egui::ComboBox::from_id_salt("printer")
                     .width(width)
                     .wrap_mode(egui::TextWrapMode::Truncate)
-                    .selected_text(if self.settings.printer.is_empty() { labels.select_printer } else { &self.settings.printer })
+                    .selected_text(if self.settings.printer.is_empty() { labels.select_printer } else { selected.unwrap_or(&self.settings.printer) })
                     .show_ui(ui, |ui| {
-                        for printer in &self.printers {
-                            ui.selectable_value(&mut self.settings.printer, printer.name.clone(), &printer.name);
+                        for (printer, text) in self.printers.iter().zip(&shown) {
+                            ui.selectable_value(&mut self.settings.printer, printer.name.clone(), text);
                         }
                     })
                     .response

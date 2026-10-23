@@ -114,3 +114,20 @@ Compact ICC Profiles by Clinton Ingram (CC0-1.0), and dependency CMaps (BSD-3-Cl
 Their licences and per-file hashes are retained in vendor/hayro-interpret/assets,
 licenses/pdf-backend and ATTRIBUTION.md. These are existing reader dependency assets;
 applications retain their own document-font selection and licensing policy.
+
+Platform lifecycle source provenance
+
+The optional crates/platform services adapt the preserved local platform candidate
+9b135779a1e7136438a217c18afe1693ea23f1ab (dialog outcomes and browser resource ownership),
+and current application implementations:
+- PdfCraft crates/platform/src/desktop_theme.rs, a8cd797a917b1007544575c7280c9a0ce6a17e8f.
+- CADCraft apps/cadcraft/src/desktop_theme.rs, 0cc66ad3066e71f2c3d4cacb7de905e79ba1c95b.
+- ArtCraft Launcher apps/artcraft-launcher/src/system_theme.rs, f1676dfb41c226b5be490721f486ee6427419d80.
+- Earlier PhotoCraft, FilmCraft and EffectCraft appearance services at revisions
+  0c72d95425dece90ef9a1cceb49e3315c96e22d5, 794a25fc9ed2e3f6fab51a254625bc9b99a88015
+  and 1b4d47f34f2b1c1b4a89f4b7348889def8fd648b respectively.
+Sources: https://github.com/storytold/pdfcraft, https://github.com/storytold/cadcraft,
+https://github.com/storytold/craft-launcher, https://github.com/storytold/photocraft,
+https://github.com/storytold/filmcraft, https://github.com/storytold/effectcraft.
+Copyright (c) 2026 ArtCraft Team and the respective application and craft-libs contributors.
+All adapted source is licensed MIT OR Apache-2.0.
