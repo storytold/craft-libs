@@ -818,6 +818,7 @@ dependencies = [
  "thiserror 2.0.21",
  "ttf-parser",
  "wasm-bindgen-test",
+ "write-fonts",
 ]
 
 [[package]]

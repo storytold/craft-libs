@@ -8,8 +8,7 @@ use crate::text::GlyphId;
 pub(crate) fn has_svg_data(font: &Font, glyph: GlyphId) -> bool {
     font.font_ref()
         .svg()
-        .map(|svg_table| svg_table.glyph_data(glyph.to_skrifa()).is_ok())
-        .is_ok()
+        .is_ok_and(|svg_table| svg_table.glyph_data(glyph.to_skrifa()).is_ok_and(|data| data.is_some()))
 }
 
 /// Draw an SVG-based glyph on a surface.

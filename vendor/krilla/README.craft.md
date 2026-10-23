@@ -32,3 +32,7 @@ A PNG whose header implies more than 1 GiB of decoded output is refused by
 fallibly, so a small file (or a bitmap glyph in a font) cannot request an allocation that
 ends the process. The colour and alpha buffers that PNG, GIF and WebP decoding split an
 image into are reserved fallibly too, and a failure there is an image error.
+
+A glyph counts as an SVG glyph only when the font's SVG table has a document for it.
+Upstream's check asked only whether the font has the table, so every glyph of such a font
+went into a Type 3 font instead of the embedded font.
