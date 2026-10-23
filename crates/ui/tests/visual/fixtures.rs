@@ -221,7 +221,7 @@ pub fn actual(ui: &mut Ui, case: Case, mutation: Mutation) -> Vec<Response> {
         let response = ui
             .add_enabled_ui(case.state.enabled(), |ui| {
                 ResizeHandle::new(
-                    Id::new("visual-divider"),
+                    Id::unique("visual-divider"),
                     axis,
                     split.divider,
                     "Resize panes",
@@ -252,7 +252,7 @@ pub fn actual(ui: &mut Ui, case: Case, mutation: Mutation) -> Vec<Response> {
                     let selected = index == 0 && case.state.selected();
                     let response = if matches!(case.component, Component::Tab) {
                         let rect = Rect::from_min_size(pos2(12.0 + index as f32 * (case.size().x + spacing), 12.0), case.size());
-                        Tab::new(Id::new(("visual-tab", index)), "Tab", selected)
+                        Tab::new(Id::unique(("visual-tab", index)), "Tab", selected)
                             .focus_stroke(style.focus_stroke)
                             .show_at(ui, rect, |ui, r| tab_body(ui, r, selected, p, case.compact))
                     } else {

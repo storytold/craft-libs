@@ -5,9 +5,10 @@ embedded SVG catalogs; `buttons` paints accessible icon buttons; `tabs` handles 
 interaction; `layout` provides toolbar fitting, split geometry and resize handles; `theme` shares widget-state styling.
 `docking` supplies transactional panel moves and an optional docking surface.
 `printing` supplies printer/job controls and asynchronous feedback used by WordCraft and GridCraft.
+`fonts` installs the UI font stack, the same fallback order in every app.
 The current delivery covers nine creative apps (DesignCraft, VectorCraft, PhotoCraft, FilmCraft, EffectCraft, CADCraft, PDFCraft, LightCraft and SoundCraft); prior basic and office adapters are separate. The [suite audit](../../docs/ui-components-audit.md#adoption-and-acceptance)
-records their scope and acceptance limits. Assets, complete themes, localization and command handling
-remain in each application. No icons, fonts or application engines are bundled.
+records their scope and acceptance limits. Assets (font files included), complete themes, localization
+and command handling remain in each application. No icons, fonts or application engines are bundled.
 
 ## SVG catalogs
 
@@ -207,10 +208,120 @@ fn style_widgets(visuals: &mut egui::Visuals, palette: WidgetPalette, text: Colo
 }
 ```
 
-This is a mechanism for coloring widgets, not a shared theme schema. Fonts, complete palettes,
+This is a mechanism for coloring widgets, not a shared theme schema. Complete palettes,
 selection colors, shadows, spacing, context storage and preference serialization remain in each
-application. See the [eight-app comparison](../../docs/theme-infrastructure.md) for the exact
-common operation and the differences preserved by the adapters.
+application; fonts are installed by `fonts`, below. See the
+[eight-app comparison](../../docs/theme-infrastructure.md) for the exact common operation and the
+differences preserved by the adapters.
+
+## UI fonts
+
+egui draws a character only if one of its installed faces has it, so an app's labels, layer names
+and file names show boxes for any script its faces miss. `fonts::UiFonts` builds every app's UI
+font stack in the same order:
+
+1. the app's own faces for the family (UI face, semibold, mono), or egui's default faces for a
+   family the app has none for;
+2. craft-fonts faces for the UI language;
+3. craft-fonts faces for every other script the app ships, so a Japanese interface still draws
+   Arabic file names;
+4. installed system fonts (see below), set to regular weight so variable fonts don't draw Thin;
+5. emoji faces (system emoji first, then the colour, web and monochrome faces the app embeds) and,
+   behind the app's own faces, egui's default faces.
+
+When the faces of step 1 don't cover the UI language's main script (Arabic, Thai, Georgian), that
+script's face goes first. egui takes a row's height from a family's first face, so the language's
+own face sets the row height and its marks aren't clipped. Han, kana and Hangul sit inside the em
+square and fit a Latin row, so Chinese, Japanese and Korean UIs keep the Latin face first: Latin
+text draws in the app's face in every language, and CJK characters fall back to the language's
+face. Rows and widgets keep the same height in every one of these languages as in a Latin UI:
+CJK faces sit on the first face's baseline inside its row, scaled down only if a glyph would
+otherwise leave the row (Noto Sans CJK and BIZ UDPGothic at the same size don't need it), with
+crates.io egui and the suite's patched egui alike. `UiFonts::cjk_rows(CjkRows::Grow)` opts into
+the CJK face's taller line instead. The app's theme sets the minimum widget height for rows of its
+own face; when the UI language's script face leads the stack and has taller rows, `install` adds
+the difference to the theme's height, and takes it off again when a later install needs less. The
+theme's height and padding stay the app's: a theme applied after `install` is fitted at the start
+of the next pass, so the result doesn't depend on which comes first. On the suite's patched egui
+(`FontTweak::set_baseline_fallback`, which the other craft faces and installed text faces turn
+on), other fallback glyphs sit on the row's baseline and rows grow to fit them by themselves; emoji
+and symbol faces (colour glyphs, or "Emoji" or "Symbol" in the name) stay centred. With crates.io
+egui those fallbacks are centred. Monospace keeps the app's or egui's mono face first. Han characters take the regional face the language needs: `zh-TW` gets the
+Traditional (TC) face, then Hong Kong, then Simplified; `zh-HK` the Hong Kong face first; `ja` the
+Japanese face; `ko` the Korean one.
+
+The app keeps its font files: its `build.rs` embeds the craft-fonts faces it wants from
+`fonts/manifest.txt` with `craft-fonts-build`, and craft-ui never depends on craft-fonts. A crate
+below the UI (an app's engine or font crate, without egui) holds the table as
+`craft_fonts_build::EmbeddedFace` values (storytold/craft-libs#213), and the UI converts each into
+a `fonts::CraftFace` with `From`. Apps embed with `Embed::subset_to(catalogs)`, which takes the
+CJK faces as craft-fonts' interface faces (`Noto Sans TC UI`, BIZ UDPGothic Regular) and cuts them
+at build time to the characters the translation catalogs use (about 3 MB for all five with
+FilmCraft's catalogs). A character a cut face lacks, such as one in a file name, comes from
+another region's interface face that has it, then from the installed system fonts; the build
+warns when a catalog has characters no embedded face covers. Preferences name the full family
+(`Noto Sans TC`) and also apply to its interface face (`Noto Sans TC UI`).
+
+The app configures its own faces, a preferred face per script, extra named families (a semibold
+family, a family led by Arabic for the runs it shapes itself), emoji faces, and whether system
+fonts come before or after the craft faces for other scripts. `UiFonts::stack` returns a `Stack`
+whose chains the app can still edit (`insert`, `replace`, `remove`) before `Stack::install`.
+`Stack::after_system` (a `FaceList`) holds the faces asked after the system fonts, readable with
+`get` and `faces`; `Stack::flat_definitions` appends them to each chain, for a context that takes
+its fonts only through `set_fonts`.
+
+`fonts::I18nScripts` reads each language's scripts and Han forms from craft-i18n; an app with its
+own table implements `fonts::LanguageScripts` instead.
+
+```rust
+use craft_fonts_build::EmbeddedFace;
+use craft_ui::fonts::{CraftFace, Family, I18nScripts, UiFonts};
+use egui::{FontData, FontFamily};
+
+pub static CRAFT_FONTS: &[EmbeddedFace] = include!(concat!(env!("OUT_DIR"), "/craft_fonts.rs"));
+
+fn install_fonts(ctx: &egui::Context, ui_language: &str) {
+    let craft_faces: Vec<CraftFace> = CRAFT_FONTS.iter().copied().map(CraftFace::from).collect();
+    UiFonts::new(&I18nScripts)
+        .app_face("ui", FontData::from_static(UI_FONT), &[FontFamily::Proportional])
+        .app_face("ui-semibold", FontData::from_static(UI_SEMIBOLD), &[FontFamily::Name("semibold".into())])
+        .app_face("mono", FontData::from_static(MONO_FONT), &[FontFamily::Monospace])
+        .family(Family::named("semibold").weight(600))
+        .craft_faces(&craft_faces)
+        .languages(OFFERED_LANGUAGES)
+        .ui_language(ui_language)
+        .install(ctx);
+}
+```
+
+Call `install` again when the UI language changes.
+
+Two features, both off by default, change what every craft-ui user draws, so the app turns them on:
+
+- `system_fonts` (desktop): the stack asks the installed fonts, at regular weight, and `install`
+  replaces the context's font providers, including the one eframe adds. One index of the
+  installed fonts serves every UI language, so a language switch doesn't scan them again.
+  `install` starts building it on a background thread; until it is ready, text draws with the
+  stack's own faces, and the context repaints when it arrives. Without it,
+  `install` keeps the providers the context has (eframe's `system_fonts`, for one) and asks the
+  stack's own faces after them. `UiFonts::system_provider` supplies a provider either way, and
+  `SystemFonts::Off` drops system fonts.
+- `color_fonts`: colour glyphs (COLR, sbix, CBDT), for colour emoji.
+
+egui 0.37's default faces have only a few monochrome emoji and lack symbols such as ⊞ ☰ 🔍. On
+the web there are no system fonts, so emoji draw as boxes unless the app sets an `Emoji` face.
+`UiFonts::egui_face` puts one of egui's own faces into a family, e.g. Hack in the proportional
+family for ⇧ and ▸.
+
+Each app tests its coverage with `fonts::assert_covers`: it checks every shipped translation and a
+sample of content scripts against the stack without system fonts, and fails naming the language,
+message key and character that has no glyph. Build the stack with `.system_fonts(SystemFonts::Off)`
+in that test, and run it with `CRAFT_FONTS_DIR` set so it sees the faces a release embeds. For
+languages the app leaves to installed fonts, `fonts::assert_covers_with_system` asks the stack's
+system provider too; `fonts::system_font_provider(locale)` gives egui's provider (with
+`system_fonts`), shared per locale, for `UiFonts::system_provider` or such a check. At run time,
+`Stack::covers_language(language, with_system)` says whether the stack draws a language's scripts,
+for leaving a language out of the app's menu on a machine that can't show it.
 
 ## Print settings and feedback
 
@@ -234,8 +345,9 @@ on WASM too; browser PDF printing remains an app-owned service.
 
 ## Compatibility and checks
 
-The crate uses egui 0.36 and Rust 1.95 or later. Its production dependency disables egui's default
-features so fonts and rendering features remain the application's choice. See the
+The crate uses egui 0.37 and Rust 1.95 or later. Its production dependency disables egui's default
+features, so egui's bundled fonts remain the application's choice. It has no default features; see
+[UI fonts](#ui-fonts) for `color_fonts` and `system_fonts`. See the
 [suite audit](../../docs/ui-components-audit.md) for candidates, policies and adoption order.
 
 Validation:
