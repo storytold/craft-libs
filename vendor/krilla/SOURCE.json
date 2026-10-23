@@ -72,7 +72,7 @@
     {
       "path": "src/chunk_container.rs",
       "upstream_sha256": "7317162f659d7c756ee170146d360e2c757cef953dc5a2a62f32daea90fc0c3f",
-      "sha256": "7317162f659d7c756ee170146d360e2c757cef953dc5a2a62f32daea90fc0c3f"
+      "sha256": "8124bb00454b7ed3f8bd9689ca3f11136750fdb31c4ed27a70ad0c63c46993d1"
     },
     {
       "path": "src/configure/PDF_A1.md",

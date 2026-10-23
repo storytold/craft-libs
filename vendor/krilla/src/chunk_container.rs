@@ -192,7 +192,12 @@ impl ChunkContainer {
             instance_id.as_bytes().to_vec(),
         ));
 
-        xmp.rendition_class(RenditionClass::Proof);
+        // PdfCraft patch: a document written here is the master rendition, not a proof copy.
+        // `xmpMM:RenditionClass` says which rendition a file is (XMP Part 2, Media Management):
+        // `default` is the master, `proof` a proof copy. Writing `proof` on every file told a
+        // prepress system that a print deliverable was a proof, and PDF/X output carries it
+        // (storytold/designcraft#1207).
+        xmp.rendition_class(RenditionClass::Default);
         sc.serialize_settings().pdf_version().write_xmp(&mut xmp);
 
         let named_destinations = sc.global_objects.named_destinations.take();

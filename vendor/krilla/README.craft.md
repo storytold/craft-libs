@@ -18,6 +18,13 @@ explicit surface finalization, even if a caller retains the writer after a narro
 catch. A caller must still discard other captured app state after a panic. Normal
 finalization, including checks for unbalanced state, remains unchanged.
 
+A second patch changes one XMP property in `chunk_container.rs`: `xmpMM:RenditionClass`
+is written as `default` rather than `proof`. A document krilla writes is the master
+rendition; `proof` designates a pre-flight or proofing copy in a prepress RIP workflow
+(XMP Media Management, ISO 16684-1 / XMP Part 2), so every exported PDF declared itself
+a proof. Nothing in `crates` or `vendor` reads or asserts the rendition class, so no
+consumer depends on the old value.
+
 Public marker constants, `CRAFT_UNWIND_SAFE_DROP` and `CRAFT_UNWIND_POISONING`, let craft-pdf reject an accidentally
 unpatched dependency at compile time. Consumers must copy the Krilla root patch
 from the craft-pdf README because Cargo ignores dependency workspaces' patches.
