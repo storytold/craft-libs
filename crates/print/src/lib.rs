@@ -321,16 +321,17 @@ pub fn apply_queue_defaults(options: &mut [PrinterOption], current: &[(String, S
 
 /// [`apply_queue_defaults`] for Apple's CUPS or another, so tests cover both on any platform.
 fn apply_queue_defaults_for(options: &mut [PrinterOption], current: &[(String, String)], apple: bool) {
-    let driver_tray = options.iter().find(|o| o.key == TRAY).map(|o| o.default.clone());
+    // CUPS matches option and choice names without regard to case; the PPD's spelling is kept.
+    let driver_tray = options.iter().find(|o| o.key.eq_ignore_ascii_case(TRAY)).map(|o| o.default.clone());
     for (key, value) in current {
-        if let Some(o) = options.iter_mut().find(|o| o.key == *key)
-            && o.choices.iter().any(|(c, _)| c == value)
+        if let Some(o) = options.iter_mut().find(|o| o.key.eq_ignore_ascii_case(key))
+            && let Some(choice) = o.choices.iter().find(|(c, _)| c.eq_ignore_ascii_case(value)).map(|(c, _)| c.clone())
         {
-            o.default = value.clone();
+            o.default = choice;
         }
     }
     if apple
-        && let Some(tray) = options.iter_mut().find(|o| o.key == TRAY)
+        && let Some(tray) = options.iter_mut().find(|o| o.key.eq_ignore_ascii_case(TRAY))
         && driver_tray.as_ref() == Some(&tray.default)
     {
         tray.choices.insert(0, (AUTO_SELECT.to_string(), "Auto Select".to_string()));

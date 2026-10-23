@@ -335,6 +335,10 @@ fn macos_offers_auto_select_where_the_driver_would_pick_its_default_tray() {
     assert_eq!(o[2].default, "Hold", "the other options take the queue's defaults as before");
     // A current choice the driver doesn't offer is skipped, so the driver's default stands.
     assert_eq!(applied("InputSlot/Paper tray: *Tray9\n", true)[0].default, AUTO_SELECT);
+    // CUPS reads option and choice names without regard to case: a user default spelled otherwise
+    // is still Tray 2, kept in the driver's spelling, and still beats Auto Select.
+    let o = applied("inputslot/Paper tray: AutoSelect *tray2\nefraster/Print queue action: *HOLD\n", true);
+    assert_eq!((o[0].default.as_str(), o[0].choices.contains(&auto), o[2].default.as_str()), ("Tray2", false, "Hold"));
     // Other platforms: the queue's defaults, nothing more.
     assert_eq!(applied("", false)[0], options()[0]);
     assert_eq!(applied("InputSlot/Paper tray: AutoSelect *Tray2\n", false)[0].default, "Tray2");
