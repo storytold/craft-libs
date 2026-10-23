@@ -55,7 +55,7 @@ mod subset;
 #[cfg(test)]
 mod tests;
 
-pub use embed::{Embed, Error, target_is_wasm};
+pub use embed::{Embed, Error, KEPT_IN_EVERY_CUT, target_is_wasm};
 pub use manifest::{CJK_SCRIPTS, ManifestEntry, ParseError, UI_ROLE, parse_manifest};
 
 /// A craft-fonts face embedded by [`Embed`]: one line of `fonts/manifest.txt`.

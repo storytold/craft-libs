@@ -523,6 +523,14 @@ mod subset {
         assert_eq!(mapped(&std::fs::read(cut_file(&r, "Noto Sans TC UI")).unwrap()), [0x3001, 0x300C, 0x3042, 0x4E00, 0x4E01, 0xFF01]);
         assert_eq!(warnings(&r).len(), 1, "{:#?}", warnings(&r));
 
+        // The smallest cut, for catalogs without CJK, keeps what the source has of KEPT_IN_EVERY_CUT.
+        let en = scratch.0.join("en.tsv");
+        std::fs::write(&en, "Open\tOpen\n").unwrap();
+        let r = run(Embed::new().subset_to([&en]), Some(&dir), None);
+        let always = |&c: &u32| char::from_u32(c).is_some_and(|c| crate::KEPT_IN_EVERY_CUT.iter().any(|&(s, e)| (s..=e).contains(&c)));
+        let source: Vec<u32> = mapped(&tiny("Tiny-glyf.ttf")).into_iter().filter(always).collect();
+        assert_eq!(mapped(&std::fs::read(cut_file(&r, "Noto Sans TC UI")).unwrap()), source);
+
         // No catalogs (an app whose CRAFT_I18N_DIR is unset) leaves the faces out, not cut to kana.
         let r = run(Embed::new().subset_to(Vec::<PathBuf>::new()), Some(&dir), None);
         assert_eq!(r.result.as_ref().unwrap(), &["Noto Sans Arabic Regular"]);
