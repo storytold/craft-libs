@@ -301,15 +301,16 @@ fn abutting_complex_regions_leave_no_paper_at_their_edge() {
 }
 
 #[test]
-fn a_degenerate_group_masks_the_pixels_it_doesnt_paint() {
-    // The region's path is a box larger than the half-black disc in it; cyan is under the box's
-    // corners and must show there.
+fn a_degenerate_group_is_an_opaque_image_over_paper() {
+    // The region's path is a box larger than the half-black disc in it, with cyan beside it.
+    // Nothing else is under the box, so its image needs no soft mask: paper where the disc
+    // doesn't paint, the disc's own color where it does.
     let disc = kurbo_circle(Point::new(50.0, 50.0), 20.0);
     let list = DisplayList {
         page: Rect::new(0.0, 0.0, 100.0, 100.0),
         inks: InkSet::new(),
         items: vec![
-            solid(Rect::new(0.0, 0.0, 100.0, 100.0), &[(C, 1.0)]),
+            solid(Rect::new(0.0, 0.0, 20.0, 100.0), &[(C, 1.0)]),
             group(
                 0.5,
                 BlendMode::Normal,
@@ -333,11 +334,14 @@ fn a_degenerate_group_masks_the_pixels_it_doesnt_paint() {
         report: Default::default(),
     };
     let out = write(&list, &flat, 72.0);
+    assert_opaque(&out);
     let p = separate(&out, 72.0);
-    // A corner of the box, outside the disc: cyan, untouched.
-    assert!(tint(&p, "Cyan", 28.0, 28.0) >= 250 && tint(&p, "Black", 28.0, 28.0) <= 3);
-    // The disc itself, rendered alone: K 50%, knocking out the cyan.
+    // A corner of the box, outside the disc: paper.
+    assert!(tint(&p, "Cyan", 28.0, 28.0) <= 3 && tint(&p, "Black", 28.0, 28.0) <= 3);
+    // The disc: K 50%.
     assert!(tint(&p, "Black", 50.0, 50.0).abs_diff(128) <= 3 && tint(&p, "Cyan", 50.0, 50.0) <= 3);
+    // The cyan beside the box, untouched.
+    assert!(tint(&p, "Cyan", 10.0, 50.0) >= 250);
 }
 
 fn kurbo_circle(c: Point, r: f64) -> BezPath {

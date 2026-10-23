@@ -25,17 +25,16 @@
 //! - Regions larger than a plate render in tiles that abut on the device grid and are joined
 //!   into one image before it is written.
 //!
-//! Whole groups the region sweep failed on ([`ComplexReason::Degenerate`]) are clipped to their
-//! members' boxes, which hold pixels nothing paints. Their image gets a soft mask: the coverage
-//! of the items drawn opaque in black, and the ink values divided by it, so edge pixels print
-//! their color at their coverage.
+//! Whole groups the region sweep failed on
+//! ([`ComplexReason::Degenerate`](super::ComplexReason::Degenerate)) are clipped to their
+//! members' boxes, which hold pixels nothing paints. Their image is opaque like any other: the
+//! boxes are clear of every other group's items, so the paper is the only backdrop there, and
+//! the plates of the items over paper print the same as the items would. A soft mask would leave
+//! transparency on the page, which PDF/X-1a forbids.
 //!
 //! Ported from VectorCraft (MIT OR Apache-2.0) at commit c2b15982: `render_raster` in
-//! `crates/engine/src/cmd/flatten.rs` (the image reaching a pixel past its area, the coverage of
-//! the art drawn opaque taken as alpha with the white taken out of its edge pixels). VectorCraft
+//! `crates/engine/src/cmd/flatten.rs` (the image reaching a pixel past its area). VectorCraft
 //! renders RGB over white; here the plates give each ink's tint directly.
-
-use std::sync::Arc;
 
 use craft_pdf::OpenError;
 use craft_pdf::interpret::color::CmykConversion;
@@ -46,8 +45,8 @@ use super::document::{FlattenDocumentError, FlattenDocumentOptions, flatten_docu
 use super::pdf::{ReadError, ReadOptions, ReadReport};
 use super::write::{WriteError, page_pdf};
 use super::{
-    BlendMode, ComplexReason, ComplexRegion, DisplayList, FillItem, FillRule, FlattenError, FlattenOptions, FlattenReport, GroupItem, ImageItem,
-    ImageSpace, Item, Mask, MaskKind, Paint, TextItem,
+    BlendMode, ComplexRegion, DisplayList, FillItem, FillRule, FlattenError, FlattenOptions, FlattenReport, GroupItem, ImageItem, ImageSpace, Item,
+    Mask, MaskKind, Paint,
 };
 use crate::ink::{InkColor, InkId, Overprint, Process};
 use crate::plates::{Fallback, Options, plates};
@@ -65,8 +64,6 @@ const TILE: i64 = 1536;
 pub struct RasterReport {
     /// Images returned.
     pub images: usize,
-    /// Images with a soft mask ([`ComplexReason::Degenerate`] groups).
-    pub masked: usize,
     /// Device pixels of all images.
     pub pixels: u64,
     /// The lowest resolution used, when a region past [`MAX_RASTER_PIXELS`] needed less than
@@ -121,20 +118,7 @@ impl<'a> Rasterizer<'a> {
 
         let items: Vec<Item> =
             region.items.iter().filter_map(|&i| self.list.items.get(i)).map(|i| self.alpha_masks(i, &grid)).collect::<Result<_, _>>()?;
-        let mut planes = self.separate(&items, &grid, true)?;
-        let smask = match region.whole {
-            Some(ComplexReason::Degenerate) => {
-                let cover: Vec<Item> = items.iter().map(opaque).collect();
-                let black = InkId::process(Process::Black).index();
-                let alpha = self.separate(&cover, &grid, false)?.into_iter().nth(black).flatten();
-                let alpha = alpha.unwrap_or_else(|| vec![0; grid.len()]);
-                for plane in planes.iter_mut().flatten() {
-                    unpremultiply(plane, &alpha);
-                }
-                Some(alpha)
-            }
-            _ => None,
-        };
+        let planes = self.separate(&items, &grid, true)?;
 
         let mut ids = Vec::new();
         let mut used = Vec::new();
@@ -153,7 +137,6 @@ impl<'a> Rasterizer<'a> {
             samples.extend(used.iter().map(|p| p[px]));
         }
         self.report.images += 1;
-        self.report.masked += usize::from(smask.is_some());
         self.report.pixels += n as u64;
         let r = grid.rect();
         Ok(Some(ImageItem {
@@ -161,7 +144,7 @@ impl<'a> Rasterizer<'a> {
             size: (grid.width() as u32, grid.height() as u32),
             samples: samples.into(),
             transform: Affine::new([r.width(), 0.0, 0.0, r.height(), r.x0, r.y0]),
-            smask: smask.map(Arc::from),
+            smask: None,
             overprint: Overprint::default(),
         }))
     }
@@ -349,40 +332,6 @@ impl Grid {
         let (x0, y0) = self.point(self.x0, self.y0);
         let (x1, y1) = self.point(self.x1, self.y1);
         Rect::new(x0, y0, x1, y1)
-    }
-}
-
-/// `item` drawn opaque in 100% black: its coverage.
-fn opaque(item: &Item) -> Item {
-    let black = || Paint::Solid(InkColor::Tints(vec![(InkId::process(Process::Black), 1.0)]));
-    match item {
-        Item::Fill(f) => Item::Fill(FillItem { paint: black(), overprint: Overprint::default(), ..f.clone() }),
-        Item::Text(t) => Item::Text(TextItem { paint: black(), overprint: Overprint::default(), ..t.clone() }),
-        Item::Image(im) => Item::Fill(FillItem {
-            path: im.transform * Rect::new(0.0, 0.0, 1.0, 1.0).to_path(0.1),
-            rule: FillRule::NonZero,
-            paint: black(),
-            overprint: Overprint::default(),
-        }),
-        Item::Group(g) => Item::Group(GroupItem {
-            opacity: 1.0,
-            blend: BlendMode::Normal,
-            isolated: false,
-            knockout: false,
-            clip: g.clip.clone(),
-            mask: None,
-            actual_text: None,
-            children: g.children.iter().map(opaque).collect(),
-        }),
-    }
-}
-
-/// Tints rendered over paper at partial coverage, divided by the coverage.
-fn unpremultiply(plane: &mut [u8], alpha: &[u8]) {
-    for (v, a) in plane.iter_mut().zip(alpha) {
-        if *a > 0 && *a < 255 {
-            *v = (u32::from(*v) * 255 / u32::from(*a)).min(255) as u8;
-        }
     }
 }
 
