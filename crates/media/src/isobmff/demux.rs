@@ -10,6 +10,11 @@ use std::collections::HashMap;
 const MAX_SAMPLES: usize = 1 << 26;
 /// Hard cap on the size of an in-memory `moov`/`moof` box.
 const MAX_HEADER_BOX: u64 = 1 << 30;
+/// Most text all metadata entries may hold together; entries past it are dropped. One `keys`
+/// name can be named by many `ilst` items, each a copy, so the file's size does not bound this.
+const MAX_METADATA_BYTES: usize = 4 << 20;
+/// What an entry costs beyond its text, so that empty entries are bounded too.
+const METADATA_ENTRY_COST: usize = 64;
 
 /// What is left of the file-wide limits while tracks and fragments are parsed.
 struct SampleBudget {
@@ -305,6 +310,7 @@ pub fn open<S: ByteSource>(src: S) -> Result<Mp4File> {
     }
     let mut trex: HashMap<u32, Trex> = HashMap::new();
     let mut trak_payloads = Vec::new();
+    let mut meta_left = MAX_METADATA_BYTES;
     for b in boxes(&moov) {
         let b = b?;
         match &b.kind.0 {
@@ -334,8 +340,8 @@ pub fn open<S: ByteSource>(src: S) -> Result<Mp4File> {
                     }
                 }
             }
-            b"udta" => parse_udta(b.payload, &mut file.metadata),
-            b"meta" => parse_meta(b.payload, &mut file.metadata),
+            b"udta" => parse_udta(b.payload, &mut file.metadata, &mut meta_left),
+            b"meta" => parse_meta(b.payload, &mut file.metadata, &mut meta_left),
             _ => {}
         }
     }
@@ -764,7 +770,20 @@ fn parse_stbl(stbl: &[u8], t: &mut Track, is_qt: bool, file_len: u64, budget: &m
         if sample_count > budget.samples {
             return Err(Error::TooLarge("sample count"));
         }
-        samples.reserve(sample_count);
+        // Reserve only what the chunk map can place. A declared count far past it would keep
+        // capacity the budget below never charges, track after track.
+        let mut mapped = 0usize;
+        let mut map_i = 0usize;
+        for ci in 0..chunks.len() {
+            while map_i + 1 < stsc.len() && stsc[map_i + 1].0 as usize <= ci + 1 {
+                map_i += 1;
+            }
+            mapped = mapped.saturating_add(stsc.get(map_i).map_or(0, |e| e.1 as usize));
+            if mapped >= sample_count {
+                break;
+            }
+        }
+        samples.try_reserve(sample_count.min(mapped)).map_err(|_| Error::TooLarge("sample count"))?;
         let mut stss_i = 0usize;
         'chunks: for (ci, &off) in chunks.iter().enumerate() {
             while stsc_i + 1 < stsc.len() && stsc[stsc_i + 1].0 as usize <= ci + 1 {
@@ -903,20 +922,42 @@ fn parse_moof(
     Ok(())
 }
 
-fn parse_udta(p: &[u8], md: &mut Metadata) {
+/// Takes an entry of `key_len` and `value_len` bytes from `left`; false once it would not fit.
+fn charge_metadata(left: &mut usize, key_len: usize, value_len: usize) -> bool {
+    let cost = key_len.saturating_add(value_len).saturating_add(METADATA_ENTRY_COST);
+    match left.checked_sub(cost) {
+        Some(rest) => {
+            *left = rest;
+            true
+        }
+        None => false,
+    }
+}
+
+/// Length of `String::from_utf8_lossy(bytes)` without building it: each invalid sequence
+/// becomes one three-byte U+FFFD.
+fn lossy_len(bytes: &[u8]) -> usize {
+    bytes.utf8_chunks().map(|c| c.valid().len() + if c.invalid().is_empty() { 0 } else { 3 }).sum()
+}
+
+fn parse_udta(p: &[u8], md: &mut Metadata, left: &mut usize) {
     for b in boxes(p).map_while(|b| b.ok()) {
         if b.kind == b"meta" {
-            parse_meta(b.payload, md);
+            parse_meta(b.payload, md, left);
         } else if b.kind.0[0] == 0xA9 && b.payload.len() >= 4 {
             let n = u16::from_be_bytes([b.payload[0], b.payload[1]]) as usize;
-            if let Some(s) = b.payload.get(4..4 + n) {
-                md.entries.push((b.kind.to_string_lossy(), String::from_utf8_lossy(s).into_owned()));
+            // Charged at the stored text's length, before the value is converted.
+            let key = b.kind.to_string_lossy();
+            if let Some(s) = b.payload.get(4..4 + n)
+                && charge_metadata(left, key.len(), lossy_len(s))
+            {
+                md.entries.push((key, String::from_utf8_lossy(s).into_owned()));
             }
         }
     }
 }
 
-fn parse_meta(p: &[u8], md: &mut Metadata) {
+fn parse_meta(p: &[u8], md: &mut Metadata, left: &mut usize) {
     // QuickTime `meta` is a plain box; ISO `meta` is a full box.
     let body = if p.len() >= 8 && &p[4..8] == b"hdlr" { p } else { p.get(4..).unwrap_or(&[]) };
     let mut keys: Vec<String> = Vec::new();
@@ -936,13 +977,20 @@ fn parse_meta(p: &[u8], md: &mut Metadata) {
     let Some(ilst) = find(body, b"ilst") else { return };
     for item in boxes(ilst).map_while(|b| b.ok()) {
         let idx = item.kind.as_u32() as usize;
-        let key = if !keys.is_empty() && idx >= 1 && idx <= keys.len() { keys[idx - 1].clone() } else { item.kind.to_string_lossy() };
+        let named = if idx >= 1 { keys.get(idx - 1) } else { None };
         if let Some(d) = find(item.payload, b"data")
             && d.len() >= 8
         {
             let ty = u32::from_be_bytes([d[0], d[1], d[2], d[3]]) & 0xFF_FFFF;
+            // Charged before the key is copied (every item naming one long key is another copy)
+            // and before the value is converted, at the lengths they will be stored at.
             if ty == 1 || ty == 0 {
-                md.entries.push((key, String::from_utf8_lossy(&d[8..]).into_owned()));
+                let fallback = if named.is_none() { Some(item.kind.to_string_lossy()) } else { None };
+                let key_len = named.or(fallback.as_ref()).map_or(0, String::len);
+                if charge_metadata(left, key_len, lossy_len(&d[8..])) {
+                    let key = named.cloned().or(fallback).unwrap_or_default();
+                    md.entries.push((key, String::from_utf8_lossy(&d[8..]).into_owned()));
+                }
             }
         }
     }
@@ -1002,7 +1050,7 @@ mod tests {
         b.end(il);
         b.end(meta);
         let mut md = Metadata::default();
-        parse_udta(&b.buf, &mut md);
+        parse_udta(&b.buf, &mut md, &mut { MAX_METADATA_BYTES });
         assert_eq!(md.title(), Some("hi"));
         assert_eq!(md.get("©ART"), Some("me"));
     }
@@ -1217,6 +1265,66 @@ mod tests {
         d.extend_from_slice(&u64::MAX.to_be_bytes());
         d.extend_from_slice(&[0; 16]);
         assert_eq!(open(d.as_slice()).unwrap().tracks[0].samples.len(), 4);
+    }
+
+    #[test]
+    fn one_long_key_named_by_many_items_stays_within_the_metadata_budget() {
+        let key = vec![b'k'; 64 * 1024];
+        let mut b = BoxBuf::new();
+        b.leaf(b"hdlr", &[0; 24]);
+        let keys = b.start_full(b"keys", 0, 0);
+        b.u32(1);
+        b.u32(8 + key.len() as u32);
+        b.bytes(b"mdta");
+        b.bytes(&key);
+        b.end(keys);
+        let il = b.start(b"ilst");
+        for _ in 0..1000 {
+            let it = b.start(&1u32.to_be_bytes());
+            let d = b.start(b"data");
+            b.u32(1);
+            b.u32(0);
+            b.bytes(b"v");
+            b.end(d);
+            b.end(it);
+        }
+        b.end(il);
+        let mut payload = vec![0; 4];
+        payload.extend_from_slice(&b.buf);
+        let mut md = Metadata::default();
+        parse_meta(&payload, &mut md, &mut { MAX_METADATA_BYTES });
+        assert!(!md.entries.is_empty() && md.entries.len() < 1000, "{}", md.entries.len());
+        assert!(md.entries.iter().map(|(k, v)| k.len() + v.len()).sum::<usize>() <= MAX_METADATA_BYTES);
+        assert_eq!(md.entries[0].0.len(), key.len());
+    }
+
+    #[test]
+    fn metadata_is_charged_at_its_stored_length() {
+        assert_eq!(lossy_len(b"plain"), 5);
+        for bytes in [&b"a\xFFb"[..], b"\xFF\xFE\xFD", b"\xE2\x82", "\u{a9}nam".as_bytes()] {
+            assert_eq!(lossy_len(bytes), String::from_utf8_lossy(bytes).len(), "{bytes:?}");
+        }
+        // Invalid UTF-8 triples in size when converted; the budget sees the converted size.
+        let mut b = BoxBuf::new();
+        let m = b.start(&[0xA9, b'n', b'a', b'm']);
+        b.u16(1000);
+        b.u16(0);
+        b.bytes(&[0xFF; 1000]);
+        b.end(m);
+        let mut md = Metadata::default();
+        let mut left = 3000 + METADATA_ENTRY_COST + 5;
+        parse_udta(&b.buf, &mut md, &mut left);
+        assert_eq!(md.entries.len(), 1);
+        assert_eq!(md.entries[0].0.len() + md.entries[0].1.len(), 3000 + 5 - left);
+    }
+
+    #[test]
+    fn a_declared_sample_count_past_the_chunk_map_reserves_only_what_it_maps() {
+        // stsz claims u32::MAX samples; the two chunks place four.
+        let d = handmade(Some((1, u32::MAX)));
+        let f = open(d.as_slice()).unwrap();
+        assert_eq!(f.tracks[0].samples.len(), 4);
+        assert!(f.tracks[0].samples.capacity() < 64, "{}", f.tracks[0].samples.capacity());
     }
 
     #[test]

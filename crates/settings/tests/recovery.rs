@@ -48,6 +48,23 @@ fn bad_value_only_resets_its_section() {
 }
 
 #[test]
+fn many_unknown_keys_load_in_linear_time() {
+    // Each key was once tried against every key accepted before it.
+    let tmp = tempfile::tempdir().unwrap();
+    let mut text = String::from("schema_version = 2\n");
+    for i in 0..20_000 {
+        text.push_str(&format!("unknown_{i} = \"{}\"\n", "x".repeat(64)));
+    }
+    text.push_str("[general]\nlanguage = \"de\"\n");
+    write_config(tmp.path(), &text);
+    let started = std::time::Instant::now();
+    let (store, report) = open_in(tmp.path());
+    assert!(report.section_errors.is_empty(), "{report:?}");
+    assert_eq!(store.get().general.language, "de");
+    assert!(started.elapsed() < std::time::Duration::from_secs(20), "{:?}", started.elapsed());
+}
+
+#[test]
 fn newer_schema_opens_read_only_and_never_overwrites() {
     let tmp = tempfile::tempdir().unwrap();
     let original = "schema_version = 9\n[general]\nlanguage = \"de\"\n";
