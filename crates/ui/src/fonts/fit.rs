@@ -49,9 +49,11 @@ fn text_sizes(style: &Style) -> Vec<f32> {
     [TextStyle::Body, TextStyle::Button].iter().filter_map(|s| style.text_styles.get(s)).map(|font| font.size).collect()
 }
 
-/// Tall and deep ideographs, Hangul, kana, bopomofo and corner brackets: the characters a CJK face
-/// fitted into a Latin row keeps inside it.
-const ROW_SAMPLES: &str = "漢中國體鬱한뷁あぎアギㄅ「」";
+/// Kana and full-width brackets: the characters a CJK face fitted into a Latin row keeps inside it.
+/// The brackets reach as high and as deep as the face's ideographs and Hangul. Only characters
+/// every cut face keeps ([`craft_fonts_build::KEPT_IN_EVERY_CUT`]), so the fit doesn't depend on
+/// what an app's catalogs use.
+pub(super) const ROW_SAMPLES: &str = "あぎアギ「」『』（）【】";
 
 /// Fit `face`, a CJK fallback after `primary`, into `primary`'s rows: its glyphs sit on
 /// `primary`'s baseline and the row keeps `primary`'s height. The face is scaled down only as far
