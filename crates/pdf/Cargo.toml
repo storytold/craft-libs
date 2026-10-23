@@ -33,6 +33,7 @@ hayro-interpret = { version = "=0.7.0", default-features = false }
 hayro-cmap = "=0.1.0"
 kurbo = "0.13"
 ttf-parser = "=0.25.1"
+write-fonts = "=0.48.1"
 
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
 wasm-bindgen-test = "0.3"

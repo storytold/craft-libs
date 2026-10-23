@@ -352,7 +352,7 @@
     {
       "path": "src/text/glyph/svg.rs",
       "upstream_sha256": "67d0bc7e67db7685de44810fb4a0b6eca73b45a2d0a1b3aed88630bab3787894",
-      "sha256": "67d0bc7e67db7685de44810fb4a0b6eca73b45a2d0a1b3aed88630bab3787894"
+      "sha256": "d1a712bb36500c04393c428d73532bc79dc784a9aea9ec1729f9a5ab920edbe0"
     },
     {
       "path": "src/text/group.rs",
