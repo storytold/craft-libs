@@ -122,11 +122,13 @@ serialization uses the same backend version as before extraction. It provides:
 
 ### Print color
 
-`write::print::cmyk_blending(profile)` returns `SerializeSettings` for a plain CMYK print
-PDF: DeviceCMYK color and transparency blending in CMYK (`GroupColorSpace::Cmyk`), with no
-output intent. `write::print::settings` adds the document's CMYK profile as a `GTS_PDFX`
-output intent and `/Trapped /False`, for PDF/X. The profile is the document's working space. craft-pdf takes the profile bytes and does not depend on
-craft-cms. Its CC0 `builtin::COATED_FOGRA39_ICC` is the default working space, described by
+`write::print::cmyk_blending(profile)` returns `Result<SerializeSettings, WriteError>`
+with the settings for a plain CMYK print PDF: DeviceCMYK color and transparency blending in
+CMYK (`GroupColorSpace::Cmyk`), with no output intent. `write::print::settings` adds the
+document's CMYK profile as a `GTS_PDFX` output intent and `/Trapped /False`, for PDF/X. Both
+fail with `WriteError::InvalidProfile` when the profile is not a readable CMYK ICC profile.
+The profile is the document's working space. craft-pdf takes the profile bytes and does not
+depend on craft-cms. Its CC0 `builtin::COATED_FOGRA39_ICC` is the default working space, described by
 `PrintColor::fogra39`:
 
 ```rust

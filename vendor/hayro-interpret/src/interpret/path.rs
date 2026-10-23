@@ -233,7 +233,11 @@ fn plate_paint<'a>(
     };
     match &mut pattern {
         Pattern::Shading(s) => {
-            match s.shading.color_space.ink_use(&plate.ink) {
+            match s
+                .shading
+                .color_space
+                .ink_use(&plate.ink, plate.spots_as_process)
+            {
                 InkUse::Nothing => return untouched(),
                 InkUse::Unspecified if plate.overprint && overprint => return untouched(),
                 InkUse::Paints | InkUse::Unspecified => {}

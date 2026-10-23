@@ -1967,9 +1967,10 @@ fn render_shading_texture(
     )
 }
 
-fn draw_soft_mask(mask: &SoftMask<'_>, settings: RenderSettings, width: u16, height: u16, preview: bool) -> Mask {
-    let mut renderer = Renderer {
-        ctx: RenderContext::new_with(width, height, derive_settings(&settings)),
+/// A renderer for a soft mask's contents, `width` × `height` device pixels.
+fn soft_mask_renderer(settings: &RenderSettings, width: u16, height: u16, preview: bool) -> Renderer {
+    Renderer {
+        ctx: RenderContext::new_with(width, height, derive_settings(settings)),
         // PdfCraft patch: a soft mask must keep its original luminance values, so its
         // content is never remapped by the reading-colours setting.
         color_replacement: None,
@@ -1985,35 +1986,42 @@ fn draw_soft_mask(mask: &SoftMask<'_>, settings: RenderSettings, width: u16, hei
         scaler: Scaler::new(ResamplingFunction::CatmullRom),
         preview,
         image_transparency_stack: Vec::new(),
-    };
-
-    let bg_color = mask.background_color().to_rgba();
-    let apply_bg = bg_color.to_rgba8() != BLACK.to_rgba8().to_u8_array();
-
-    if apply_bg {
-        renderer
-            .ctx
-            .set_paint(AlphaColor::<Srgb>::new(bg_color.components()));
-        renderer
-            .ctx
-            .fill_rect(&Rect::new(0.0, 0.0, width as f64, height as f64));
-        renderer.ctx.push_layer(None, None, None, None, None);
     }
+}
 
-    mask.interpret(&mut renderer);
+fn draw_soft_mask(mask: &SoftMask<'_>, settings: RenderSettings, width: u16, height: u16, preview: bool) -> Mask {
+    let mut rendered_mask = if mask.mask_type() == MaskType::Luminosity && mask.is_device_cmyk() {
+        cmyk_luminosity(mask, &settings, width, height, preview)
+    } else {
+        let mut renderer = soft_mask_renderer(&settings, width, height, preview);
+        let bg_color = mask.background_color().to_rgba();
+        let apply_bg = bg_color.to_rgba8() != BLACK.to_rgba8().to_u8_array();
 
-    if apply_bg {
-        renderer.ctx.pop_layer();
-    }
+        if apply_bg {
+            renderer
+                .ctx
+                .set_paint(AlphaColor::<Srgb>::new(bg_color.components()));
+            renderer
+                .ctx
+                .fill_rect(&Rect::new(0.0, 0.0, width as f64, height as f64));
+            renderer.ctx.push_layer(None, None, None, None, None);
+        }
 
-    let mut pix = Pixmap::new(width, height);
-    renderer.ctx.flush();
-    let mut resources = vello_cpu::Resources::default();
-    renderer.ctx.render_to_pixmap(&mut resources, &mut pix);
+        mask.interpret(&mut renderer);
 
-    let mut rendered_mask = match mask.mask_type() {
-        MaskType::Luminosity => Mask::new_luminance(&pix),
-        MaskType::Alpha => Mask::new_alpha(&pix),
+        if apply_bg {
+            renderer.ctx.pop_layer();
+        }
+
+        let mut pix = Pixmap::new(width, height);
+        renderer.ctx.flush();
+        let mut resources = vello_cpu::Resources::default();
+        renderer.ctx.render_to_pixmap(&mut resources, &mut pix);
+
+        match mask.mask_type() {
+            MaskType::Luminosity => Mask::new_luminance(&pix),
+            MaskType::Alpha => Mask::new_alpha(&pix),
+        }
     };
 
     if let Some(transfer_function) = mask.transfer_function() {
@@ -2032,6 +2040,43 @@ fn draw_soft_mask(mask: &SoftMask<'_>, settings: RenderSettings, width: u16, hei
     }
 
     rendered_mask
+}
+
+/// Craft patch (CMYK masks): a luminosity mask whose group is DeviceCMYK. ISO 32000-2 §11.6.5.2
+/// takes the luminosity of the group's CMYK result, which §10.4.2.2 defines as `1 - min(1, 0.3c
+/// + 0.59m + 0.11y + k)`. Taken from the colors as drawn, through the CMYK profile, K 100%
+/// would leave about a tenth of the masked object visible. So each process ink's plate of the
+/// group is drawn over the backdrop's film, and the formula is applied to the four tints.
+fn cmyk_luminosity(mask: &SoftMask<'_>, settings: &RenderSettings, width: u16, height: u16, preview: bool) -> Mask {
+    let backdrop = mask.background_color();
+    let pixels = usize::from(width) * usize::from(height);
+    let mut ink = vec![0.0_f32; pixels];
+    for (plate_ink, weight) in hayro_interpret::color::Ink::PROCESS.into_iter().zip([0.3, 0.59, 0.11, 1.0]) {
+        let plate = mask.plate(plate_ink);
+        let film = 1.0 - plate.tint(&backdrop);
+        let mut renderer = soft_mask_renderer(settings, width, height, preview);
+        renderer.ctx.set_paint(AlphaColor::<Srgb>::new([film, film, film, 1.0]));
+        renderer
+            .ctx
+            .fill_rect(&Rect::new(0.0, 0.0, width as f64, height as f64));
+        renderer.ctx.push_layer(None, None, None, None, None);
+        mask.interpret_plate(&mut renderer, plate);
+        renderer.ctx.pop_layer();
+
+        let mut pix = Pixmap::new(width, height);
+        renderer.ctx.flush();
+        let mut resources = vello_cpu::Resources::default();
+        renderer.ctx.render_to_pixmap(&mut resources, &mut pix);
+        // The backdrop is opaque, so every pixel is too: red is the film.
+        for (sum, px) in ink.iter_mut().zip(pix.data()) {
+            *sum += weight * (1.0 - f32::from(px.r) / 255.0);
+        }
+    }
+    let values = ink
+        .into_iter()
+        .map(|sum| ((1.0 - sum.min(1.0)) * 255.0 + 0.5) as u8)
+        .collect();
+    Mask::from_parts(values, width, height)
 }
 
 pub(crate) fn max_factor(transform: &Affine) -> f32 {

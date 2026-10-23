@@ -182,7 +182,7 @@
       "path": "src/color.rs",
       "source_sha256": "799ce29bb5e59c8fc94db202873e48c2047dd35962e6f26efd215156c47158c1",
       "source_git_blob": "56bb04f24c04ba33ab6bf99c02a24735670959ad",
-      "sha256": "1875b4646c01e757d80a80fb7451cd4e5eeb29f7a2500a465d82fa3d6f5919fb"
+      "sha256": "44e393db70ee1cfa7a5325c368bf3190d76774ae25bce373ccd9e0d72d298455"
     },
     {
       "path": "src/context.rs",
@@ -362,13 +362,13 @@
       "path": "src/interpret/mod.rs",
       "source_sha256": "2b002323055bc19aa497e92c81ad8e06dc60ee03686cad89366df4ac7c7a06b2",
       "source_git_blob": "fe08fc284ba7c914d1414b68a5a346674a6f910f",
-      "sha256": "ec4b84a7fd53ad1cdbf4e8a009138c3e486134bc6fcb49d764ed8af748ebf570"
+      "sha256": "a961e5bfe16209a088501e5ba894053ec870783754dcf57bbc9d465925b0fef6"
     },
     {
       "path": "src/interpret/path.rs",
       "source_sha256": "a5defbc4b883b262662f7e7474a00ec1f97dbef8c03b8669859f624f5d02344b",
       "source_git_blob": "838ea099f11d918d6e333e32503368be864689f8",
-      "sha256": "468747ad6dfb01d42787ef186831f6bdbd46d52a687c9625da8b4ef74be30af8"
+      "sha256": "2669eb82e45ce9f7c97ef27fd90adf825bb4ab895e4d3e572ba9c65a1ade24a3"
     },
     {
       "path": "src/interpret/state.rs",
@@ -410,13 +410,13 @@
       "path": "src/shading.rs",
       "source_sha256": "5d541a2d52f69c88e87a40580bf28afa4b8a6a2d62a3385009087264384ead32",
       "source_git_blob": "2e619e47f2800d7fc7cbdae77c66c58f012c84c2",
-      "sha256": "6e80c039ab7ca38ede2b1778709f1b4258d8cf219d044d3298f4a5f6dd2c8f9a"
+      "sha256": "c6008d05330877ebc2b3b5eccc269aedc0242c1f81b1e522c42ecd4ba897349d"
     },
     {
       "path": "src/soft_mask.rs",
       "source_sha256": "6cd9c59c0cff580879c1f06ff40f3537c04b719bdb3ea59008fa1ab7559db5dd",
       "source_git_blob": "4d97d565b53c820fa927fbba8c3dda6acead7f34",
-      "sha256": "0e3871896575006f194fb46242fcaa6e1026f459c6144c38da438f82ace95e50"
+      "sha256": "fe3da157602bf5b16a452ecbe1d8d554af992a5b9dfaa771dd23c2e2e66d730b"
     },
     {
       "path": "src/types.rs",
@@ -434,7 +434,7 @@
       "path": "src/x_object.rs",
       "source_sha256": "e1c51e96a335c32c122011b2d05c5020c36a33c2c73342ba173c28a3e2fe0219",
       "source_git_blob": "21b134ce8cd9604399cd0776febf923d69c02673",
-      "sha256": "20a2c7d7e6dbf7aa662182625f7df2f6787a12059ea3e41261693bb3fdc2be7b"
+      "sha256": "7861f1617558041426f5504196789664a0a84fbcbbbb4211f81765eb7e494fa4"
     }
   ],
   "compatibility_reference": {

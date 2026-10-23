@@ -282,7 +282,7 @@ pub(crate) fn draw_image_xobject<'a, 'b>(
         && !x_object.is_mask
     {
         let ink_use = match raster_cs {
-            Some(cs) => cs.ink_use(&plate.ink),
+            Some(cs) => cs.ink_use(&plate.ink, plate.spots_as_process),
             None if plate.ink.process_index().is_some() => InkUse::Paints,
             None => InkUse::Unspecified,
         };
@@ -693,7 +693,7 @@ fn decode_context<'a>(
         .unwrap_or(ColorSpace::device_gray());
     // PdfCraft patch (35): on a plate, every sample converts to the ink's film.
     let color_space = match &obj.plate {
-        Some(plate) => color_space.plate(plate.ink.clone(), plate.simulation.clone()),
+        Some(plate) => color_space.plate(plate),
         None => color_space,
     };
 

@@ -190,7 +190,7 @@ pub fn plates(pdf: &[u8], page: usize, dpi: f32, opts: &Options) -> Result<Plate
     let mut size = None;
     let mut planes = Vec::with_capacity(separated.len());
     for ink in separated {
-        let plate = Plate { ink, overprint: opts.overprint, simulation: simulation.clone() };
+        let plate = Plate { ink, overprint: opts.overprint, simulation: simulation.clone(), spots_as_process: false };
         let settings = InterpreterSettings { plate: Some(plate), ..Default::default() };
         let film = render(p, &cache, &settings, scale)?;
         size = Some((film.width, film.height));

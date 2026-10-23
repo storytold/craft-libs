@@ -142,11 +142,14 @@ impl Shading {
     /// PdfCraft patch (35): the shading drawn as `plate`'s plate, through its simulation
     /// (patch 36).
     pub(crate) fn for_plate(&mut self, plate: &crate::color::Plate) {
-        self.color_space = self
-            .color_space
-            .plate(plate.ink.clone(), plate.simulation.clone());
+        self.color_space = self.color_space.plate(plate);
         let simulation = plate.simulation.as_ref().map(|s| s.digest());
-        self.cache_key = crate::util::hash128(&(self.cache_key, &plate.ink, simulation));
+        self.cache_key = crate::util::hash128(&(
+            self.cache_key,
+            &plate.ink,
+            simulation,
+            plate.spots_as_process,
+        ));
     }
 
     pub(crate) fn new(dict: &Dict<'_>, stream: Option<&Stream<'_>>, cache: &Cache) -> Option<Self> {

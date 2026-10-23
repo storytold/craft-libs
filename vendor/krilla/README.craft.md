@@ -61,7 +61,8 @@ transparency over CMYK content blends in RGB and comes back with all four proces
 (K50 over C100 separates as roughly C84 M34 Y33 K37 instead of C50 K50).
 
 `SerializeSettings::group_color_space` chooses the blending space. `GroupColorSpace::Rgb`,
-the default, keeps upstream's output byte for byte. With `GroupColorSpace::Cmyk`:
+the default, writes the same groups and page dictionaries as upstream. With
+`GroupColorSpace::Cmyk`:
 
 - Content groups (`draw_masked`, `draw_opacified`, `draw_isolated`, `Graphic`) write no `/CS`
   and inherit the page group.
@@ -248,7 +249,8 @@ Tests: `crates/pdf/tests/print_color.rs` and the plate-test print preset over ev
 From storytold/craft-libs#183 by Hamza (@Hamza0101). Upstream writes
 `xmpMM:RenditionClass` as `proof` on every document, which tells a prepress system that a
 print deliverable is a proof copy. XMP Part 2 (Media Management) defines `default` as the
-master rendition, so the patch writes `default`.
+master rendition, so the patch writes `default`. Every document's XMP differs from
+upstream's output in this value, whatever the other settings.
 
 ## 10: mesh gradients
 

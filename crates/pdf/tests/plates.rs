@@ -80,7 +80,10 @@ impl Plates {
 fn plates(pdf: &[u8], inks: &[Ink], overprint: bool, simulation: Option<&CmykSimulation>) -> Plates {
     let settings: Vec<InterpreterSettings> = inks
         .iter()
-        .map(|ink| InterpreterSettings { plate: Some(Plate { ink: ink.clone(), overprint, simulation: simulation.cloned() }), ..Default::default() })
+        .map(|ink| InterpreterSettings {
+            plate: Some(Plate { ink: ink.clone(), overprint, simulation: simulation.cloned(), spots_as_process: false }),
+            ..Default::default()
+        })
         .collect();
     Plates(render_each(pdf, &settings))
 }
@@ -241,6 +244,31 @@ fn soft_masks_keep_the_luminosity_of_their_own_colors() {
     let s = plates(&page_pdf("/SM gs 0 0 0 1 k 0 0 40 40 re f", resources, &[group]), &[Ink::Black], true, None);
     let black = s.at(20, 20)[0];
     assert!((1..30).contains(&black), "black through a blue luminosity mask: {black}%");
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+fn a_device_cmyk_luminosity_mask_reads_its_inks_by_the_device_formula() {
+    // Black ink through a mask whose DeviceCMYK group paints the left half, at (10, 20), and
+    // leaves the backdrop on the right, at (30, 20). Luminosity is 1 - min(1, 0.3c + 0.59m +
+    // 0.11y + k) (ISO 32000-2 §10.4.2.2); Gold's alternate is C0 M30 Y100 K0.
+    let masked = |paint: &str, backdrop: &str| {
+        let group = stream(
+            &format!(
+                "/Type /XObject /Subtype /Form /BBox [0 0 40 40] /Group << /S /Transparency /CS /DeviceCMYK >> /Resources << {} >>",
+                gold_resource()
+            ),
+            format!("{paint} 0 0 20 40 re f").as_bytes(),
+        );
+        let resources = format!("/ExtGState << /SM << /SMask << /S /Luminosity /G 5 0 R {backdrop} >> >> >>");
+        let s = plates(&page_pdf("/SM gs 0 0 0 1 k 0 0 40 40 re f", &resources, &[group]), &[Ink::Black], true, None);
+        [s.at(10, 20)[0], s.at(30, 20)[0]]
+    };
+    assert_eq!(masked("0 0 0 1 k", ""), [0, 0], "K 100% and the default black backdrop hide all of it");
+    assert_eq!(masked("0 0 0 0 k", "/BC [0 0 0 0]"), [100, 100], "paper shows all of it");
+    assert_eq!(masked("0.5 0 0 0 k", "/BC [0 0 0 0.25]"), [85, 75]);
+    assert_eq!(masked("/CS0 cs 1 scn", ""), [71, 0], "a spot ink reads as its alternate CMYK");
+    assert_eq!(masked("1 0 0 rg", ""), [30, 0], "RGB red is C0 M100 Y100 K0 by the device formulas");
 }
 
 #[cfg_attr(not(target_arch = "wasm32"), test)]
@@ -410,7 +438,7 @@ fn mutated_profiles_simulate_or_are_refused_without_panicking() {
         let mut bent = whole.clone();
         bent[at_byte] = [0x00, 0x7F, 0xFF][n % 3];
         if let Ok(simulation) = CmykSimulation::new(&bent) {
-            let plate = Plate { ink: Ink::Cyan, overprint: true, simulation: Some(simulation) };
+            let plate = Plate { ink: Ink::Cyan, overprint: true, simulation: Some(simulation), spots_as_process: false };
             render(&pdf, &InterpreterSettings { plate: Some(plate), ..Default::default() });
         }
     }

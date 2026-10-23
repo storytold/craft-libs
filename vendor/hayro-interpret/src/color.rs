@@ -1271,7 +1271,7 @@ impl Color {
     pub(crate) fn for_plate(&self, plate: &Plate, overprint: bool, overprint_mode: u8) -> Self {
         let overprint = plate.overprint && overprint;
         let untouched = Self::film(0.0, 0.0);
-        match self.color_space.ink_use(&plate.ink) {
+        match self.color_space.ink_use(&plate.ink, plate.spots_as_process) {
             InkUse::Nothing => untouched,
             InkUse::Unspecified if overprint => untouched,
             InkUse::Unspecified => Self::film(0.0, self.opacity),
@@ -1281,6 +1281,7 @@ impl Color {
                     &plate.ink,
                     plate.simulation.as_ref(),
                     false,
+                    plate.spots_as_process,
                 );
                 // Nonzero overprint mode: a DeviceCMYK component of 0 leaves its plate as it
                 // is. It applies to colours set in DeviceCMYK itself, not to images, shadings
@@ -1384,6 +1385,28 @@ pub struct Plate {
     /// PdfCraft patch (36): the printing condition process colour converts to, from the
     /// document's output intent. `None` converts by the ISO 32000-2 §10.4.2 device formulas.
     pub simulation: Option<CmykSimulation>,
+    /// Craft patch (CMYK masks): spot colorants paint the process plates through their
+    /// alternate space and tint transform, as a composite CMYK device converts them, so no spot
+    /// ink has a plate of its own. A DeviceCMYK soft mask's luminosity is separated this way;
+    /// separations leave it `false`.
+    pub spots_as_process: bool,
+}
+
+impl Plate {
+    /// Craft patch (CMYK masks): the tint, `0.0` (no ink) to `1.0` (solid), that `color` puts
+    /// on this plate, ignoring overprint and opacity.
+    pub fn tint(&self, color: &Color) -> f32 {
+        match color.color_space.ink_use(&self.ink, self.spots_as_process) {
+            InkUse::Paints => color.color_space.ink_tint(
+                &color.components,
+                &self.ink,
+                self.simulation.as_ref(),
+                false,
+                self.spots_as_process,
+            ),
+            InkUse::Unspecified | InkUse::Nothing => 0.0,
+        }
+    }
 }
 
 /// PdfCraft patch (35): told about each spot ink a paint uses, with the ink's appearance: the
@@ -1765,14 +1788,15 @@ impl Hub {
 static HUB: LazyLock<Hub> = LazyLock::new(Hub::new);
 
 impl ColorSpace {
-    /// PdfCraft patch (35): this space drawn as `ink`'s plate (for images and shadings, whose
-    /// colours are converted sample by sample), converting process colour through
+    /// PdfCraft patch (35): this space drawn as `plate` (for images and shadings, whose
+    /// colours are converted sample by sample), converting process colour through its
     /// `simulation` (patch 36).
-    pub(crate) fn plate(&self, ink: Ink, simulation: Option<CmykSimulation>) -> Self {
+    pub(crate) fn plate(&self, plate: &Plate) -> Self {
         Self(Arc::new(ColorSpaceType::Plate(PlateSpace {
             inner: self.clone(),
-            ink,
-            simulation,
+            ink: plate.ink.clone(),
+            simulation: plate.simulation.clone(),
+            spots_as_process: plate.spots_as_process,
         })))
     }
 
@@ -1865,9 +1889,42 @@ impl ColorSpace {
         }
     }
 
+    /// Craft patch (CMYK masks): the alternate space of a `Separation` or `DeviceN` space that
+    /// names a spot ink; `None` for other spaces, and for colorants that are all process inks,
+    /// `All` or `None`.
+    fn spot_alternate_space(&self) -> Option<&ColorSpace> {
+        let is_spot = |c: &Colorant| matches!(c, Colorant::Ink(Ink::Spot(_)));
+        match self.0.as_ref() {
+            ColorSpaceType::Separation(s) if is_spot(&s.colorant) => Some(&s.alternate_space),
+            ColorSpaceType::DeviceN(d) if !d.is_none && d.colorants.iter().any(is_spot) => {
+                Some(&d.alternate_space)
+            }
+            _ => None,
+        }
+    }
+
+    /// Craft patch (CMYK masks): a `Separation` or `DeviceN` color in its alternate space,
+    /// through the tint transform; the components unchanged for other spaces.
+    fn tint_transform(&self, components: &[f32]) -> ColorComponents {
+        let (function, alternate) = match self.0.as_ref() {
+            ColorSpaceType::Separation(s) => (&s.tint_transform, &s.alternate_space),
+            ColorSpaceType::DeviceN(d) => (&d.tint_transform, &d.alternate_space),
+            _ => return components.iter().copied().collect(),
+        };
+        count_tint_transform_runs(1);
+        function
+            .eval(components.iter().copied().collect())
+            .unwrap_or(alternate.initial_color())
+    }
+
     /// PdfCraft patch (35): how the space paints `ink`'s plate. Gray, RGB, CIE-based and ICC
-    /// spaces are process colour: they specify the four process inks and no spot ink.
-    pub(crate) fn ink_use(&self, ink: &Ink) -> InkUse {
+    /// spaces are process colour: they specify the four process inks and no spot ink. With
+    /// `spots_as_process` (Craft patch, CMYK masks), a space naming a spot ink paints as its
+    /// alternate space.
+    pub(crate) fn ink_use(&self, ink: &Ink, spots_as_process: bool) -> InkUse {
+        if spots_as_process && let Some(alternate) = self.spot_alternate_space() {
+            return alternate.ink_use(ink, false);
+        }
         match self.0.as_ref() {
             ColorSpaceType::DeviceCmyk
             | ColorSpaceType::DeviceGray
@@ -1882,7 +1939,7 @@ impl ColorSpace {
                     InkUse::Unspecified
                 }
             }
-            ColorSpaceType::Indexed(i) => i.base.ink_use(ink),
+            ColorSpaceType::Indexed(i) => i.base.ink_use(ink, spots_as_process),
             ColorSpaceType::Separation(s) => match &s.colorant {
                 Colorant::None => InkUse::Nothing,
                 Colorant::All => InkUse::Paints,
@@ -1904,7 +1961,7 @@ impl ColorSpace {
             }
             // A pattern is separated through what it paints.
             ColorSpaceType::Pattern(_) => InkUse::Unspecified,
-            ColorSpaceType::Plate(p) => p.inner.ink_use(ink),
+            ColorSpaceType::Plate(p) => p.inner.ink_use(ink, spots_as_process),
         }
     }
 
@@ -1912,14 +1969,19 @@ impl ColorSpace {
     /// `components` puts on `ink`'s plate; `0.0` when the space doesn't specify the ink.
     /// Process colour converts through `simulation` when there is one (patch 36).
     /// `manual_scale` as for [`ToRgb::convert_f32`] (components normalised to `0.0..=1.0`, as
-    /// an Indexed palette gives them).
+    /// an Indexed palette gives them). `spots_as_process` as for [`Self::ink_use`].
     pub(crate) fn ink_tint(
         &self,
         components: &[f32],
         ink: &Ink,
         simulation: Option<&CmykSimulation>,
         manual_scale: bool,
+        spots_as_process: bool,
     ) -> f32 {
+        if spots_as_process && let Some(alternate) = self.spot_alternate_space() {
+            let alternate_components = self.tint_transform(components);
+            return alternate.ink_tint(&alternate_components, ink, simulation, false, false);
+        }
         let tint = match self.0.as_ref() {
             ColorSpaceType::Separation(s) => match &s.colorant {
                 Colorant::All => components.first().copied().unwrap_or(0.0),
@@ -1937,12 +1999,18 @@ impl ColorSpace {
                 let index = components.first().copied().unwrap_or(0.0);
                 let index = (clamp_component(index, 0.0, f32::from(i.hival)) + 0.5) as usize;
                 match i.values.get(index) {
-                    Some(values) => i.base.ink_tint(values, ink, simulation, true),
+                    Some(values) => {
+                        i.base
+                            .ink_tint(values, ink, simulation, true, spots_as_process)
+                    }
                     None => 0.0,
                 }
             }
             ColorSpaceType::Pattern(_) => 0.0,
-            ColorSpaceType::Plate(p) => p.inner.ink_tint(components, ink, simulation, manual_scale),
+            ColorSpaceType::Plate(p) => {
+                p.inner
+                    .ink_tint(components, ink, simulation, manual_scale, spots_as_process)
+            }
             _ => match (
                 self.process_cmyk(components, simulation, manual_scale),
                 ink.process_index(),
@@ -2043,6 +2111,8 @@ pub(crate) struct PlateSpace {
     ink: Ink,
     /// Patch 36: the printing condition process colour converts to, if any.
     simulation: Option<CmykSimulation>,
+    /// Craft patch (CMYK masks): see [`Plate::spots_as_process`].
+    spots_as_process: bool,
 }
 
 impl PlateSpace {
@@ -2054,7 +2124,13 @@ impl PlateSpace {
     fn film(&self, sample: &[f32], manual_scale: bool) -> u8 {
         let tint = self
             .inner
-            .ink_tint(sample, &self.ink, self.simulation.as_ref(), manual_scale);
+            .ink_tint(
+                sample,
+                &self.ink,
+                self.simulation.as_ref(),
+                manual_scale,
+                self.spots_as_process,
+            );
         f32_to_u8(1.0 - tint)
     }
 

@@ -48,6 +48,16 @@ test in `crates/pdf/tests/plates.rs` checks that a knockout group separates with
 object where two objects overlap. The erase pass resolves the group's resources with
 `Resources::from_scope`, as the group's own draw does in this tree.
 
+A craft-libs patch, labeled `Craft patch (CMYK masks)` in code comments,
+takes a luminosity soft mask whose group is DeviceCMYK from the group's inks: ISO 32000-2
+§11.6.5.2 and §10.4.2.2 give `1 - min(1, 0.3c + 0.59m + 0.11y + k)`, where the colors as
+drawn through the CMYK profile leave K 100% at about a tenth. hayro's `renderer.rs` draws
+the group's four process plates over the backdrop's film (`SoftMask::plate`,
+`SoftMask::interpret_plate`, `Plate::tint`) and applies the formula. On those plates spot
+colorants paint through their alternate space (`Plate::spots_as_process`) and nothing
+overprints. Masks in other color spaces are unchanged. A test in
+`crates/pdf/tests/plates.rs` checks process, spot, RGB and backdrop colors.
+
 The output-intent conversion of patch 36 goes through a `color::CmykConversion` trait, so
 that callers can convert with their own color management. `CmykSimulation::new` keeps
 #2770's moxcms conversion as the default, and `CmykSimulation::with_conversion` takes a
