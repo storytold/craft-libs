@@ -884,7 +884,7 @@ fn resize_floating_group(permissions: impl Fn(&u32) -> Permissions + Copy) -> Ve
         let mut out = DockOutput::default();
         ctx.run_ui(RawInput { screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(800.0, 600.0))), events, ..Default::default() }, |ui| {
             let style = DockStyle::from_ui(ui);
-            out = DockArea::new(Id::new("resize-area")).show(
+            out = DockArea::new(Id::unique("resize-area")).show(
                 ui,
                 &layout,
                 &style,
