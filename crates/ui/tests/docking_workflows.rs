@@ -90,14 +90,14 @@ impl Harness {
         let mut actions = Vec::new();
         self.output = self.ctx.run_ui(input, |ui| {
             let style = DockStyle::from_ui(ui);
-            let out = DockArea::new(Id::new("workflow")).show(
+            let out = DockArea::new(Id::unique("workflow")).show(
                 ui,
                 &self.layout,
                 &style,
                 label,
                 |panel| if *panel == CANVAS { Permissions::PROTECTED } else { Permissions::default() },
                 |ui, panel| {
-                    self.body_ids.insert(*panel, ui.id());
+                    self.body_ids.insert(*panel, ui.scope_id());
                     if *panel == CANVAS {
                         let rect = ui.available_rect_before_wrap();
                         ui.painter().rect_filled(rect, 0.0, Color32::from_rgb(44, 53, 66));
@@ -181,7 +181,7 @@ impl Harness {
     }
 
     fn tab(&self, panel: u32) -> Rect {
-        self.ctx.read_response(Id::new("workflow").with(("tab", &panel))).unwrap().rect
+        self.ctx.read_response(Id::unique("workflow").with(("tab", &panel))).unwrap().rect
     }
 
     fn drag(&mut self, from: Pos2, to: Pos2) {

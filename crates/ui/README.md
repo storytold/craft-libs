@@ -5,6 +5,7 @@ embedded SVG catalogs; `buttons` paints accessible icon buttons; `tabs` handles 
 interaction; `layout` provides toolbar fitting, split geometry and resize handles; `theme` shares widget-state styling.
 `docking` supplies transactional panel moves and an optional docking surface.
 `printing` supplies printer/job controls and asynchronous feedback used by WordCraft and GridCraft.
+`localized` supplies number fields that write and read the user's region's numbers.
 The current delivery covers nine creative apps (DesignCraft, VectorCraft, PhotoCraft, FilmCraft, EffectCraft, CADCraft, PDFCraft, LightCraft and SoundCraft); prior basic and office adapters are separate. The [suite audit](../../docs/ui-components-audit.md#adoption-and-acceptance)
 records their scope and acceptance limits. Assets, complete themes, localization and command handling
 remain in each application. No icons, fonts or application engines are bundled.
@@ -232,9 +233,37 @@ represented by `None`, independently of explicit one-sided, long-edge or short-e
 Receipts and backend errors remain unmodified data for the app to display. These controls work
 on WASM too; browser PDF printing remains an app-owned service.
 
+## Localized numbers
+
+`localized::LocaleNumbers` writes numbers in the region's digits, decimal mark and grouping and
+reads back any digits. Build it from the app's `I18n` with `.with_catalog(&i18n, lang)`, so the
+error tooltips come from the catalog rows keyed by `localized::MESSAGES` (English where a row is
+missing). `LocalizedDragValue` puts it on an `egui::DragValue`.
+
+`NumberField` is the panel and dialog field. It reads text on commit and keeps text it can't
+read, outlined, with the reason in a tooltip.
+
+```rust
+let label = ui.label(i18n.t(lang, "Width"));
+let frame = Recessed { fill: t.input, stroke: Stroke::new(1.0, t.input_border), ..Recessed::from_style(ui.style()) };
+let r = ui.add(NumberField::new(&mut width, &numbers).range(0.0..=1e4).step(1.0).unit(Unit::translated(&i18n, lang, "{n} px"))
+    .recessed(frame).scrub_label(&label).mixed(widths_differ));
+```
+
+- `.recessed(Recessed)` draws the sunken box: fill, border, focus border, radius, height, margin.
+- `.scrub_label(&label)` names the field and scrubs it when the label is dragged: a step every two
+  points. A click on the label focuses the field, and Escape puts the value back. The response
+  carries the label's drag flags, so the app can make the drag one undo step.
+- Arrow keys, the wheel over the focused field and scrubbing step to the next multiple of `step`
+  (5.1 up to 6, down to 5); Shift steps ten, Ctrl/Cmd a tenth where the decimals show it.
+- `.mixed(true)` with `.placeholder(text)` shows a blank field for values that differ between
+  objects. The value stays until the user enters a number, which is `changed()` even when equal.
+- `localized::focus_first_field(ctx, true)` when a dialog opens: the first enabled field drawn
+  takes the focus with its text selected.
+
 ## Compatibility and checks
 
-The crate uses egui 0.36 and Rust 1.95 or later. Its production dependency disables egui's default
+The crate uses egui 0.37 and Rust 1.95 or later. Its production dependency disables egui's default
 features so fonts and rendering features remain the application's choice. See the
 [suite audit](../../docs/ui-components-audit.md) for candidates, policies and adoption order.
 

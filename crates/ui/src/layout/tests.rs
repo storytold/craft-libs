@@ -127,7 +127,7 @@ impl HandleTest {
             ctx.run_ui(RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(400.0, 200.0))), events, ..Default::default() }, |ui| {
                 result = Some(
                     ui.add_enabled_ui(self.enabled, |ui| {
-                        ResizeHandle::new(Id::new("divider"), self.axis, self.rect, &self.label, handle_style())
+                        ResizeHandle::new(Id::unique("divider"), self.axis, self.rect, &self.label, handle_style())
                             .value(self.value, 0.0..=300.0)
                             .show(ui)
                     })
