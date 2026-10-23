@@ -44,6 +44,10 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
 - [`craft-media`](crates/media/README.md): bit-level I/O (`bitstream`), clean-room MP4/MOV
   (`isobmff`) and Matroska/WebM (`matroska`) demuxers and muxers, from FilmCraft, and an ISO BMFF
   box reader. Containers only; codecs stay in each app.
+- [`craft-menu`](crates/menu/README.md): an app's menus as a macOS menu bar: the Mac layout
+  (app menu, Window, Help, system-key clashes), a platform backend trait, and key equivalents
+  fed back to egui as the input egui-winit would have made. Commands and their enabled state
+  stay in each app.
 - [`craft-print`](crates/print/README.md): PDF submission to CUPS and Windows, printer discovery,
   duplex/copies/colour and driver preferences. PDF generation stays in each app.
 

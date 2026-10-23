@@ -65,6 +65,8 @@ pub use close::{QUIT_MENU_ID, on_close_request, on_menu_event};
 /// For apps without an app menu of their own. It replaces the whole menu and sets muda's
 /// process-wide menu-event handler, so an app that builds its own muda menu should not call it:
 /// give that menu's Quit item [`QUIT_MENU_ID`] and pass its events to [`on_menu_event`] instead.
+/// muda keeps the first handler set, so this and `craft_menu::mac::install` are alternatives: an
+/// app calls one of them.
 ///
 /// On error winit's menu stays: the app still runs, but ⌘Q quits without asking. The app decides
 /// whether that is fatal; `?` passes it out of the eframe app creator.
