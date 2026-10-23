@@ -1,0 +1,22 @@
+[package]
+name = "craft-window"
+description = "Decide who draws the window frame on Linux (the compositor or the app) and apply it, so every Craft app gets the same native titlebar and borders per desktop."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[features]
+# `apply`/`decorations`: decide decorations and set them on an `egui::ViewportBuilder`.
+egui = ["dep:egui"]
+
+[dependencies]
+egui = { workspace = true, optional = true }
+
+# Only Linux and the BSDs probe a Wayland compositor; everywhere else the frame is the OS's.
+[target.'cfg(any(target_os = "linux", target_os = "freebsd", target_os = "openbsd", target_os = "netbsd"))'.dependencies]
+wayland-client = "0.31"
+
+[lints]
+workspace = true

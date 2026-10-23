@@ -792,7 +792,9 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
                         }
                     });
                 }
-                if response.enabled() && delta != Vec2::ZERO {
+                // Resizing changes the group's shared rectangle, which the model allows only when
+                // every member is movable.
+                if response.enabled() && delta != Vec2::ZERO && group.panels.iter().all(|p| (self.permissions)(p).movable) {
                     let size = (rect.size() + delta).max(limits.min.max(vec2(40.0, self.style.tab_height + 20.0))).min(limits.max).min(screen.size());
                     self.output.actions.push(Action::MoveFloating { panel: first.clone(), rect: [rect.left(), rect.top(), size.x, size.y] });
                 }
