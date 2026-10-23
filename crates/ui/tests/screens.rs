@@ -1,6 +1,4 @@
 //! A rename dialog in the six test languages: the example of `craft_ui::testing` for app tests.
-//!
-//! The snapshots are in `tests/snapshots/rename-*.png`; `UPDATE_SNAPSHOTS=1` rewrites them.
 
 use craft_ui::fonts::CraftFace;
 use craft_ui::testing::{JAPANESE, KOREAN, Locale, Screens, compose};
@@ -81,8 +79,8 @@ fn screens() -> Screens {
 }
 
 #[test]
-fn testing_rename_dialog_snapshots() {
-    screens().snapshots(|ui, locale| Dialog::new(locale).ui(ui, locale));
+fn testing_rename_dialog_fits_in_every_language() {
+    screens().check(|ui, locale| Dialog::new(locale).ui(ui, locale));
 }
 
 #[test]

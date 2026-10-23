@@ -1,11 +1,13 @@
-//! Screenshot and input smoke tests of an app's screens in the suite's test languages
-//! (`testing` feature).
+//! Layout and input smoke tests of an app's screens in the suite's test languages (`testing`
+//! feature).
 //!
-//! [`Screens`] renders a UI closure with egui_kittest once per language in [`LANGUAGES`]: Arabic,
+//! [`Screens`] lays out a UI closure with egui_kittest once per language in [`LANGUAGES`]: Arabic,
 //! Japanese, Traditional Chinese (Taiwan), Korean, Thai and Vietnamese. Each run installs the
-//! app's font stack for that UI language with no system fonts, so a snapshot looks the same on
-//! every machine and a character no face draws fails the test (kittest panics on a missing glyph).
-//! A right-to-left language lays the screen out from the right. [`compose`] types through an IME
+//! app's font stack for that UI language with no system fonts, so a character no face draws fails
+//! the test on every machine (kittest panics on a missing glyph). [`Screens::check`] also fails
+//! when a widget reaches past the screen, as a long translation does in a row that can't wrap. It
+//! compares no images, so the app's live translations can change without failing its tests. A
+//! right-to-left language lays the screen out from the right. [`compose`] types through an IME
 //! composition, as a Korean, Japanese or Chinese input method sends it.
 //!
 //! The app's closure gets the [`Locale`] and picks its strings and settings from it; the
@@ -17,8 +19,8 @@
 //!
 //! # const FACES: &[craft_ui::fonts::CraftFace] = &[];
 //! let screens = Screens::new("rename").size([320.0, 160.0]).fonts(|fonts| fonts.craft_faces(FACES));
-//! // Compares tests/snapshots/rename-ar.png, rename-ja.png, … (UPDATE_SNAPSHOTS=1 writes them).
-//! screens.snapshots(|ui, locale| {
+//! // Every language lays out with no missing glyph and no widget past the screen.
+//! screens.check(|ui, locale| {
 //!     ui.label(locale.language);
 //! });
 //!
@@ -62,8 +64,9 @@ mod tests;
 use std::rc::Rc;
 
 use craft_i18n::Direction;
-use egui::{Align, Context, Event, ImeEvent, Layout, Ui, Vec2};
-use egui_kittest::{Harness, SnapshotResults};
+use egui::{Align, Context, Event, ImeEvent, Layout, Pos2, Rect, Ui, Vec2};
+use egui_kittest::Harness;
+use egui_kittest::kittest::{NodeT as _, Queryable as _, by};
 
 use crate::fonts::{I18nScripts, SystemFonts, UiFonts};
 
@@ -89,32 +92,25 @@ impl Locale {
 type Fonts = Rc<dyn Fn(UiFonts<'static>) -> UiFonts<'static>>;
 type Setup = Rc<dyn Fn(&Context, &Locale)>;
 
-/// One screen's tests across [`LANGUAGES`]. Build it, then take a [`Self::harness`] per language
-/// or compare [`Self::snapshots`].
+/// One screen's tests across [`LANGUAGES`]. Build it, then [`Self::check`] it or take a
+/// [`Self::harness`] per language. A screen is tested in every one of the languages, or in none.
 #[derive(Clone)]
 pub struct Screens {
     name: String,
     size: Vec2,
-    languages: Vec<&'static str>,
     fonts: Fonts,
     setup: Option<Setup>,
 }
 
 impl Screens {
-    /// `name` prefixes the snapshot files: `{name}-{language}.png`.
+    /// `name` identifies the screen in failure messages.
     pub fn new(name: &str) -> Self {
-        Self { name: name.to_owned(), size: Vec2::new(400.0, 300.0), languages: LANGUAGES.to_vec(), fonts: Rc::new(|fonts| fonts), setup: None }
+        Self { name: name.to_owned(), size: Vec2::new(400.0, 300.0), fonts: Rc::new(|fonts| fonts), setup: None }
     }
 
     /// The harness size in points (default 400 × 300).
     pub fn size(mut self, size: impl Into<Vec2>) -> Self {
         self.size = size.into();
-        self
-    }
-
-    /// Languages to test instead of [`LANGUAGES`].
-    pub fn languages(mut self, languages: &[&'static str]) -> Self {
-        self.languages = languages.to_vec();
         self
     }
 
@@ -171,18 +167,33 @@ impl Screens {
             )
     }
 
-    /// Draw `app` in each language and compare it with `tests/snapshots/{name}-{language}.png`
-    /// (kittest's snapshot options and `kittest.toml` apply). Run with `UPDATE_SNAPSHOTS=1` to
-    /// write new snapshots; review them before committing. The returned results panic on drop if
-    /// any language differs, after every language has been compared.
-    pub fn snapshots(&self, mut app: impl FnMut(&mut Ui, &Locale)) -> SnapshotResults {
-        let mut results = SnapshotResults::new();
-        for language in self.languages.clone() {
+    /// Lay out `app` in each language and panic, naming the screen, the language and the widget,
+    /// if any widget reaches past the screen. A character no face draws panics as it is laid out.
+    /// Size the screen as the app shows it, so a scroll area's content fits or scrolls inside it.
+    pub fn check(&self, app: impl FnMut(&mut Ui, &Locale)) {
+        let overflow = self.overflow(app);
+        assert!(overflow.is_empty(), "screen {:?}:\n{}", self.name, overflow.join("\n"));
+    }
+
+    /// The widgets that reach past the screen, as `{language}: {role} {label} at {rect}`.
+    fn overflow(&self, mut app: impl FnMut(&mut Ui, &Locale)) -> Vec<String> {
+        let screen = Rect::from_min_size(Pos2::ZERO, self.size);
+        let mut overflow = Vec::new();
+        for language in LANGUAGES {
             let mut harness = self.harness(language, &mut app);
             harness.run();
-            results.add(harness.try_snapshot(format!("{}-{language}", self.name)));
+            let ppp = harness.ctx.pixels_per_point();
+            for node in harness.query_all(by().include_labels()) {
+                let node = node.accesskit_node();
+                let Some(b) = node.bounding_box() else { continue };
+                let rect = Rect::from_min_max(Pos2::new(b.x0 as f32, b.y0 as f32) / ppp, Pos2::new(b.x1 as f32, b.y1 as f32) / ppp);
+                // Half a point for rounding at the edges.
+                if !screen.expand(0.5).contains_rect(rect) {
+                    overflow.push(format!("{language}: {:?} {:?} at {rect:?}", node.role(), node.label().unwrap_or_default()));
+                }
+            }
         }
-        results
+        overflow
     }
 }
 

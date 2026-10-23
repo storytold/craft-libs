@@ -325,19 +325,22 @@ for leaving a language out of the app's menu on a machine that can't show it.
 
 ## Testing screens in each language
 
-The `testing` feature adds `testing::Screens`, for an app's screenshot tests of its key screens in
-Arabic, Japanese, Traditional Chinese (Taiwan), Korean, Thai and Vietnamese (`testing::LANGUAGES`).
-Each language gets an egui_kittest harness with the app's font stack installed for that UI language
-and system fonts off, so snapshots match on every machine and a character no face draws fails the
-test. Right-to-left languages lay the screen out from the right. The app's UI closure receives the
-`Locale` (language tag and direction) and picks its strings from it.
+The `testing` feature adds `testing::Screens`, for an app's tests of its key screens in Arabic,
+Japanese, Traditional Chinese (Taiwan), Korean, Thai and Vietnamese (`testing::LANGUAGES`). A
+screen is tested in all six languages or in none. Each language gets an egui_kittest harness with
+the app's font stack installed for that UI language and system fonts off, so a character no face
+draws fails the test on every machine. `Screens::check` also fails when a widget reaches past the
+screen, as a long translation does in a row that can't wrap. It compares no images, so the app
+can test its live translations, and a changed translation fails only if it no longer fits or has
+a character no face draws. Right-to-left languages lay the screen out from the right. The app's UI
+closure receives the `Locale` (language tag and direction) and picks its strings from it.
 
 ```rust,ignore
 use craft_ui::testing::{KOREAN, Screens, compose};
 
 let screens = Screens::new("rename").size([320.0, 150.0]).fonts(|fonts| fonts.craft_faces(FACES));
-// Compares tests/snapshots/rename-ar.png, rename-ja.png, …; UPDATE_SNAPSHOTS=1 writes them.
-screens.snapshots(|ui, locale| rename_dialog(ui, locale));
+// Every language lays out with no missing glyph and no widget past the screen.
+screens.check(|ui, locale| rename_dialog(ui, locale));
 
 // IME smoke test: a scripted 2-Set Korean composition into the focused field.
 let mut harness = screens.harness_state("ko", |ui, locale, state: &mut Dialog| state.ui(ui, locale), Dialog::default());
@@ -350,8 +353,8 @@ assert_eq!(harness.state().name, "한");
 `PINYIN`, `TELEX`), which egui's `TextEdit` and canvases reading `Event::Ime` both take. The module
 documentation has the recipe for a shortcut smoke test on a non-Latin layout through craft-keymap.
 `tests/screens.rs` is a complete example. egui's default proportional face has no Vietnamese
-letters such as ổ, so an app relying on it fails the `vi` screens until its own face covers them. The per-release manual checks are in
-[language-testing.md](../../docs/language-testing.md).
+letters such as ổ, so an app relying on it fails the `vi` screens until its own face covers them.
+The per-release manual checks are in [language-testing.md](../../docs/language-testing.md).
 
 ## Print settings and feedback
 

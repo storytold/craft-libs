@@ -58,3 +58,17 @@ fn right_to_left_screens_start_at_the_right() {
         assert_eq!(label.min.x < 50.0, !at_right, "{language}: {label:?}");
     }
 }
+
+#[test]
+fn check_reports_widgets_past_the_screen() {
+    let fits = screens().overflow(|ui, _| _ = ui.label("ملف"));
+    assert_eq!(fits, Vec::<String>::new());
+    let overflow = screens().overflow(|ui, _| {
+        ui.horizontal(|ui| {
+            _ = ui.button("Name");
+            _ = ui.button("A label far too long for a three hundred point row");
+        });
+    });
+    assert_eq!(overflow.len(), super::LANGUAGES.len(), "{overflow:#?}");
+    assert!(overflow.iter().all(|line| line.contains("A label far too long")), "{overflow:#?}");
+}
