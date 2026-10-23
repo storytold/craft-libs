@@ -50,7 +50,8 @@ Hostile-input bounds (CodeRabbit findings):
 - Each object stream's `/N` header pairs are parsed once per document and cached beside its
   decoded data, instead of on every compressed-object lookup.
 - An embedded JBIG2 page over 2^28 pixels is refused before the output buffer is allocated,
-  and that buffer is reserved fallibly. A `JBIG2Globals` stream with an image filter is
+  and that buffer is reserved fallibly (`Bitmap::reinitialize` allocates before touching the
+  existing bitmap, so a failed reservation leaves it intact). A `JBIG2Globals` stream with an image filter is
   ignored, so globals cannot recurse through further globals.
 - At most 4096 graphics states, holding at most 64 MiB together, are saved; a `q` past
   either limit is counted but not copied, and its `Q` still removes the clips added since.

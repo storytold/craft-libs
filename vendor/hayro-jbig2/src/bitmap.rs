@@ -112,17 +112,15 @@ impl Bitmap {
 
         let stride = width.div_ceil(WORD_BITS);
         let default_word: Word = if default_pixel { !0 } else { 0 };
+        // Allocate first so a failed reservation leaves the bitmap untouched.
+        let mut data = Vec::new();
+        fill_words(&mut data, stride as usize * height as usize, default_word)?;
         self.width = width;
         self.height = height;
         self.stride = stride;
         self.x_location = 0;
         self.y_location = 0;
-        self.data.clear();
-        fill_words(
-            &mut self.data,
-            stride as usize * height as usize,
-            default_word,
-        )?;
+        self.data = data;
 
         Ok(())
     }
