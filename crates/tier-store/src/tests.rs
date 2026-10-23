@@ -69,6 +69,7 @@ fn a_late_seed_does_not_overwrite_a_put_or_delete() {
     assert!(pending[0].deleted);
 }
 
+#[test]
 fn requeue_of_an_evicted_cache_entry_keeps_its_bytes() {
     let mut store = MirrorStore::new(DefaultTierPolicy, 4);
     let key = StoreKey::new("cache/slice");
@@ -82,6 +83,7 @@ fn requeue_of_an_evicted_cache_entry_keeps_its_bytes() {
     assert_eq!(again, pending);
 }
 
+#[test]
 fn seed_does_not_flush_and_delete_is_a_tombstone() {
     let mut store = MirrorStore::new(DefaultTierPolicy, 1024);
     let key = StoreKey::new("config/session.ecproj");
@@ -94,6 +96,7 @@ fn seed_does_not_flush_and_delete_is_a_tombstone() {
     assert!(store.get(&key).is_none());
 }
 
+#[test]
 fn take_pending_coalesces_per_key() {
     let mut store = MirrorStore::new(DefaultTierPolicy, 1024);
     let k1 = StoreKey::new("files/one");
