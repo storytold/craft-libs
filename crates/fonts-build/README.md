@@ -140,8 +140,9 @@ the five cuts take about 3 MB together.
   every catalog, so a Japanese label in a Chinese catalog still draws. The cuts are written to
   `OUT_DIR/craft-fonts-ui/` and embedded from there; the same inputs give the same bytes, for
   reproducible releases. Cutting all five faces takes well under a second.
-- Without `subset_to`, `for_ui()` leaves the interface faces out with a `cargo::warning`: a full
-  CJK face is never embedded for the interface by accident. With `CRAFT_FONTS_REQUIRED=1` that
+- Without `subset_to`, or with an empty catalog list, `for_ui()` leaves the interface faces out
+  with a `cargo::warning`: a full CJK face is never embedded for the interface by accident. A
+  checkout whose manifest has no interface face is a `cargo::warning` too. With `CRAFT_FONTS_REQUIRED=1` that
   makes `scripts(&["Hant"])` an error; with catalogs, an interface face satisfies it.
 - An interface face with CFF outlines is an error (`Error::NotTrueType`), even when not required:
   the subsetter cuts TrueType (`glyf`) faces correctly, but not CFF ones.

@@ -29,8 +29,16 @@ impl<'a> Cmap<'a> {
                 continue;
             }
             let start = usize::try_from(u32_at(cmap, 8 + 8 * i)?).ok()?;
-            let subtable = cmap.get(start..)?;
-            if matches!(u16_at(subtable, 0), Some(4 | 12)) {
+            let rest = cmap.get(start..)?;
+            // Bound each subtable by its own length so that reads can't stray into the next one.
+            // Some large CJK fonts declare a format 4 length past the end of the table, so that
+            // one is clamped; a format 12 length that doesn't fit is skipped.
+            let len = match u16_at(rest, 0) {
+                Some(4) => u16_at(rest, 2).map(|len| usize::from(len).min(rest.len())),
+                Some(12) => u32_at(rest, 4).and_then(|len| usize::try_from(len).ok()),
+                _ => None,
+            };
+            if let Some(subtable) = len.and_then(|len| rest.get(..len)) {
                 subtables.push(subtable);
             }
         }
