@@ -594,7 +594,15 @@ impl<'a> Canvas<'a> {
             .collect();
         let opaque = self.alpha.iter().all(|a| *a >= 1.0 - 1e-4);
         let smask = (!opaque).then(|| self.alpha.iter().map(|a| (a.clamp(0.0, 1.0) * 255.0).round() as u8).collect());
-        ImageItem { space: ImageSpace::Inks(ids), size: (self.w as u32, self.h as u32), samples: samples.into(), transform, smask, overprint }
+        ImageItem {
+            space: ImageSpace::Inks(ids),
+            size: (self.w as u32, self.h as u32),
+            samples: samples.into(),
+            transform,
+            smask,
+            overprint,
+            jpeg: None,
+        }
     }
 
     /// The canvas sample nearest page point `p`: premultiplied values and alpha.

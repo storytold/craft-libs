@@ -15,21 +15,23 @@ Prepress for the Craft apps: separations, ink limits and the ink manager.
 - `cms`: process color conversion into a CMYK printing condition through craft-cms.
 
 - `flatten` (feature `flatten`): the display list a transparency flattener reads and writes:
-  fills, text runs, images and transparency groups in page space, with ink colors and
-  overprint per item. Text runs keep their font (bytes, face index, a dedup key), glyph ids and
-  positions, and Unicode text, so text without transparency stays live text; outlines are kept
-  as the fallback for fonts that can't be embedded again. `flatten` turns the transparent
-  parts into opaque region fills, compositing one value per ink (process and spot) with blend
-  modes, group opacity, isolated and knockout groups, and overprint per plate. Items without
-  transparency come back unchanged; regions a gradient, image or soft mask reaches are listed
+  fills, text runs, images and transparency groups in page space, with ink colors and overprint
+  per item. Text runs keep their font (bytes, face index, a dedup key), glyph ids and positions,
+  and Unicode text, so text without transparency stays live text; outlines are kept as the
+  fallback for fonts that can't be embedded again. `flatten` turns the transparent parts into
+  opaque region fills, compositing one value per ink (process and spot) with blend modes, group
+  opacity, isolated and knockout groups, and overprint per plate. Items without transparency
+  come back unchanged (JPEG images in DeviceGray or DeviceCMYK keep their DCT data; other images
+  are written as 8-bit Flate samples); regions a gradient, image or soft mask reaches are listed
   for rasterizing. `flatten::raster` rasterizes them: each region's items are written alone,
-  separated with `plates` and written back as a DeviceN image of the page's inks, clipped to
-  the region, snapped to the device grid and a pixel larger than the clip so no paper shows at
-  its edges. `flatten_document` flattens every page of a PDF, or a range of pages, into one
-  PDF with the source's output intent, page boxes, title, author, creation date and modification date; a font
-  used on several pages is embedded once. The caller sets the PDF version and the PDF/X version
-  and conformance keys (for PDF/X-1a:2003, 1.4, `PDF/X-1:2003` and `PDF/X-1a:2003`); krilla has no PDF/X validator, so the app keeps
-  its own PDF/X checks. `flatten_page` is its one-page case.
+  separated with `plates` and written back as a DeviceN image of the page's inks, clipped to the
+  region, snapped to the device grid and a pixel larger than the clip so no paper shows at its
+  edges. `flatten_document` flattens every page of a PDF, or a range of pages, into one PDF with
+  the source's output intent, page boxes, title, author, creation date and modification date; a
+  font used on several pages is embedded once. The caller sets the PDF version and the PDF/X
+  version and conformance keys (for PDF/X-1a:2003, 1.4, `PDF/X-1:2003` and `PDF/X-1a:2003`);
+  krilla has no PDF/X validator, so the app keeps its own PDF/X checks. `flatten_page` is its
+  one-page case.
 
 ## Plates from an exported PDF
 

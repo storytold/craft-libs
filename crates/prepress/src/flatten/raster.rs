@@ -146,6 +146,7 @@ impl<'a> Rasterizer<'a> {
             transform: Affine::new([r.width(), 0.0, 0.0, r.height(), r.x0, r.y0]),
             smask: None,
             overprint: Overprint::default(),
+            jpeg: None,
         }))
     }
 
@@ -224,6 +225,7 @@ impl<'a> Rasterizer<'a> {
             transform: Affine::new([r.width(), 0.0, 0.0, r.height(), r.x0, r.y0]),
             smask: Some(alpha.into()),
             overprint: Overprint::default(),
+            jpeg: None,
         };
         let group = GroupItem {
             opacity: 1.0,

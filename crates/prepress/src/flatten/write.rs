@@ -290,6 +290,18 @@ impl<'a> Painter<'a, '_> {
         if pixels == 0 {
             return Ok(());
         }
+        let draw = |s: &mut Surface<'_>, image: Image| {
+            let Some(unit) = Size::from_wh(1.0, 1.0) else { return };
+            with_overprint(s, im.overprint, |s| {
+                s.push_transform(&to_transform(im.transform));
+                s.draw_image(image, unit);
+                s.pop();
+            });
+        };
+        if let Some(image) = passthrough(im) {
+            draw(s, image);
+            return Ok(());
+        }
         let (space, samples) = match &im.space {
             ImageSpace::Gray => (ImageColorspace::Luma, im.samples.clone()),
             ImageSpace::Rgb => (ImageColorspace::Rgb, im.samples.clone()),
@@ -316,12 +328,7 @@ impl<'a> Painter<'a, '_> {
         }
         let image = Image::from_custom(Samples { samples, alpha: im.smask.clone(), size: im.size, space }, false)
             .map_err(|_| WriteError::Image("krilla rejected it"))?;
-        let Some(unit) = Size::from_wh(1.0, 1.0) else { return Ok(()) };
-        with_overprint(s, im.overprint, |s| {
-            s.push_transform(&to_transform(im.transform));
-            s.draw_image(image, unit);
-            s.pop();
-        });
+        draw(s, image);
         Ok(())
     }
 
@@ -710,4 +717,15 @@ impl CustomImage for Samples {
     fn color_space(&self) -> ImageColorspace {
         self.space.clone()
     }
+}
+
+/// `im`'s JPEG data as a krilla image, written as it is (DCTDecode), when it has one that
+/// decodes to its size. The embedded ICC profile is left out, as the samples path leaves it.
+fn passthrough(im: &ImageItem) -> Option<Image> {
+    if im.smask.is_some() || !matches!(im.space, ImageSpace::Gray | ImageSpace::Cmyk) {
+        return None;
+    }
+    let data: Arc<dyn AsRef<[u8]> + Send + Sync> = Arc::new(im.jpeg.clone()?);
+    let image = Image::from_jpeg_with_icc(Data::from(data), None, false).ok()?;
+    (image.size() == im.size).then_some(image)
 }

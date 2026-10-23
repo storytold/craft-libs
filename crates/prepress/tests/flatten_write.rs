@@ -424,6 +424,7 @@ fn ink_images_print_through_the_ink_manager() {
         transform: Affine::new([100.0, 0.0, 0.0, 100.0, 0.0, 0.0]),
         smask: None,
         overprint: Overprint::default(),
+        jpeg: None,
     });
     let p = separate(&pdf(&page(inks, vec![image])));
     // Two half tints on one plate overlap as halftones: 1 − 0.5 × 0.5.
@@ -453,6 +454,7 @@ fn complex_regions_are_drawn_where_the_flattened_items_put_them() {
             transform: Affine::new([b.width(), 0.0, 0.0, b.height(), b.x0, b.y0]),
             smask: None,
             overprint: Overprint::default(),
+            jpeg: None,
         }))
     };
     let settings = print::settings(PrintColor::fogra39(craft_cms::builtin::COATED_FOGRA39_ICC)).unwrap();

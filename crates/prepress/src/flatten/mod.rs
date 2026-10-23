@@ -134,6 +134,9 @@ pub struct ImageItem {
     /// Alpha, one byte per sample, at `size`.
     pub smask: Option<Arc<[u8]>>,
     pub overprint: Overprint,
+    /// The source's JPEG (DCTDecode) data, when `samples` are its decoding and the writer can
+    /// write it as it is: [`ImageSpace::Gray`] or [`ImageSpace::Cmyk`], no `smask`.
+    pub jpeg: Option<Arc<[u8]>>,
 }
 
 /// The components of an [`ImageItem`]'s samples.

@@ -323,3 +323,57 @@ fn pdf_x1a_output_is_pdf_14_without_nchannel() {
     let gold_plate = separate(&out, 0);
     assert!(tint(&gold_plate, "Gold", 20.0, 20.0) > 100);
 }
+
+/// A 16 × 16 Adobe CMYK JPEG of C 100%, and a 16 × 16 gray JPEG of 25% gray (ImageMagick).
+const CYAN_JPEG: &[u8] = include_bytes!("fixtures/cyan-cmyk.jpg");
+const GRAY_JPEG: &[u8] = include_bytes!("fixtures/gray-25.jpg");
+
+#[test]
+fn untouched_jpeg_images_are_written_as_they_are() {
+    let image = |cs: &str, decode: &str, data: &[u8]| {
+        let mut obj = format!(
+            "<< /Type /XObject /Subtype /Image /Width 16 /Height 16 /ColorSpace /{cs} {decode} /BitsPerComponent 8 \
+             /Filter /DCTDecode /Length {} >> stream\n",
+            data.len()
+        )
+        .into_bytes();
+        obj.extend_from_slice(data);
+        obj.extend_from_slice(b"\nendstream");
+        obj
+    };
+    // The images, and a half-transparent black square away from them.
+    let content = "q 50 0 0 50 10 10 cm /Im1 Do Q q 50 0 0 50 70 10 cm /Im2 Do Q \
+        q /GS1 gs 0 0 0 1 k 140 10 50 50 re f Q";
+    let objects =
+        [image("DeviceCMYK", "/Decode [1 0 1 0 1 0 1 0]", CYAN_JPEG), image("DeviceGray", "", GRAY_JPEG), b"<< /Type /ExtGState /ca 0.5 >>".to_vec()];
+    let mut pdf = b"%PDF-1.7\n".to_vec();
+    pdf.extend_from_slice(b"1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n");
+    pdf.extend_from_slice(b"2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n");
+    pdf.extend_from_slice(
+        b"3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 70] /Contents 4 0 R \
+          /Resources << /XObject << /Im1 5 0 R /Im2 6 0 R >> /ExtGState << /GS1 7 0 R >> >> >> endobj\n",
+    );
+    pdf.extend_from_slice(format!("4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n", content.len()).as_bytes());
+    for (i, body) in objects.iter().enumerate() {
+        pdf.extend_from_slice(format!("{} 0 obj ", i + 5).as_bytes());
+        pdf.extend_from_slice(body);
+        pdf.extend_from_slice(b" endobj\n");
+    }
+    pdf.extend_from_slice(b"trailer << /Root 1 0 R >>\n%%EOF");
+
+    let (out, report) = flatten_document(&pdf, &opts()).unwrap();
+    assert_eq!(report.totals.images, 2);
+    assert!(report.totals.flattened > 0);
+    assert_opaque(&out);
+    assert_eq!(count(&out, CYAN_JPEG), 1, "the CMYK JPEG is written as it is");
+    assert_eq!(count(&out, GRAY_JPEG), 1, "the gray JPEG is written as it is");
+    assert_eq!(count(&out, b"/DCTDecode"), 2);
+    let (a, b) = (separate(&pdf, 0), separate(&out, 0));
+    for (x, y) in [(35.0, 35.0), (95.0, 35.0), (165.0, 35.0)] {
+        for ink in ["Cyan", "Magenta", "Yellow", "Black"] {
+            let (want, got) = (tint(&a, ink, x, y), tint(&b, ink, x, y));
+            assert!(want.abs_diff(got) <= 3, "{ink} at ({x}, {y}): {got}, the source has {want}");
+        }
+    }
+    assert!(tint(&b, "Cyan", 35.0, 35.0) > 240 && tint(&b, "Black", 95.0, 35.0) > 150);
+}

@@ -34,9 +34,10 @@ use craft_pdf::interpret::{
     BlendMode as PdfBlend, CacheKey, ClipPath, Context, Device, FillRule as PdfFillRule, GlyphDrawMode, Image, InterpreterCache, InterpreterSettings,
     MaskType, Paint as PdfPaint, PathDrawMode, RasterImage, SoftMask, StencilImage, StrokeProps, TransformExt, interpret_page,
 };
+use craft_pdf::syntax::Filter;
 use craft_pdf::syntax::Pdf;
-use craft_pdf::syntax::object::dict::keys::{ANNOTS, AP, F, N};
-use craft_pdf::syntax::object::{Array, Dict};
+use craft_pdf::syntax::object::dict::keys::{ANNOTS, AP, BITS_PER_COMPONENT, COLORSPACE, DECODE, DECODE_PARMS, F, HEIGHT, N, WIDTH};
+use craft_pdf::syntax::object::{Array, Dict, Name, Stream};
 use craft_pdf::syntax::page::Page;
 use craft_pdf::{OpenError, open_slice};
 use kurbo::{Affine, BezPath, PathEl, Point, Rect, Shape, Stroke, StrokeOpts};
@@ -654,6 +655,7 @@ impl<'s, 'a> Reader<'s, 'a> {
             transform: shade::area_transform(area, scale, (w, h)),
             smask,
             overprint,
+            jpeg: None,
         })
     }
 
@@ -753,6 +755,8 @@ impl<'s, 'a> Reader<'s, 'a> {
         let (op, _, mode) = self.overprint;
         let overprint = Overprint { fill: op, stroke: op, nonzero: mode == 1 && im.color_space.is_device_cmyk() };
         self.flush();
+        let device = matches!(im.space, InkSpace::Gray | InkSpace::Cmyk { converted: false });
+        let jpeg = if device && smask.is_none() { dct_passthrough(image.stream(), im.width, im.height) } else { None };
         self.add(Item::Image(ImageItem {
             space: inks.image_space(),
             size: (im.width, im.height),
@@ -760,6 +764,7 @@ impl<'s, 'a> Reader<'s, 'a> {
             transform,
             smask,
             overprint,
+            jpeg,
         }));
     }
 
@@ -801,7 +806,15 @@ impl<'s, 'a> Reader<'s, 'a> {
                 let samples: Vec<u8> = value.iter().copied().cycle().take(value.len() * w * h).collect();
                 self.flush();
                 self.push(
-                    Item::Image(ImageItem { space, size, samples: samples.into(), transform: unit, smask: Some(luma.data.into()), overprint }),
+                    Item::Image(ImageItem {
+                        space,
+                        size,
+                        samples: samples.into(),
+                        transform: unit,
+                        smask: Some(luma.data.into()),
+                        overprint,
+                        jpeg: None,
+                    }),
                     &look,
                 );
             }
@@ -814,6 +827,7 @@ impl<'s, 'a> Reader<'s, 'a> {
                     transform: unit,
                     smask: Some(luma.data.into()),
                     overprint: Overprint::default(),
+                    jpeg: None,
                 };
                 let group = GroupItem { isolated: true, children: vec![Item::Image(shape)], ..plain_group(None) };
                 let mask = Mask { kind: MaskKind::Alpha, group, backdrop: None, transfer: None };
@@ -1039,6 +1053,26 @@ impl Channels {
             Self::Keep(keep) => values.iter().zip(keep).filter(|(_, k)| **k).map(|(v, _)| *v).collect(),
         }
     }
+}
+
+/// The JPEG data of a `width` × `height` image that krilla's JPEG passthrough writes with the
+/// same meaning: DCTDecode alone without parameters, 8 bits, DeviceGray with the default
+/// `/Decode`, or DeviceCMYK with the inverted `/Decode` of Adobe CMYK JPEGs, which krilla
+/// always writes for CMYK.
+fn dct_passthrough(stream: &Stream<'_>, width: u32, height: u32) -> Option<Arc<[u8]>> {
+    let dict = stream.dict();
+    let only_dct = stream.filters().as_slice() == [Filter::DctDecode] && !dict.contains_key(DECODE_PARMS);
+    let size = dict.get::<u32>(WIDTH) == Some(width) && dict.get::<u32>(HEIGHT) == Some(height);
+    if !(only_dct && size && dict.get::<u8>(BITS_PER_COMPONENT) == Some(8)) {
+        return None;
+    }
+    let decode: Option<Vec<f32>> = dict.get::<Array<'_>>(DECODE).map(|a| a.iter::<f32>().collect());
+    let ok = match dict.get::<Name<'_>>(COLORSPACE)?.as_ref() {
+        b"DeviceGray" => decode.is_none_or(|d| d == [0.0, 1.0]),
+        b"DeviceCMYK" => decode.is_some_and(|d| d == [1.0, 0.0].repeat(4)),
+        _ => false,
+    };
+    ok.then(|| Arc::from(stream.raw_data().as_ref()))
 }
 
 /// The cell indices `k` whose span `[c0, c1] + k * step` meets `[lo, hi]`.
