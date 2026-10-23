@@ -5,7 +5,7 @@ use std::collections::BTreeSet;
 use std::collections::HashSet;
 use std::ffi::OsString;
 use std::fmt::{self, Write as _};
-use std::io;
+use std::io::{self, Write as _};
 use std::path::{Path, PathBuf};
 
 use crate::cmap::Cmap;
@@ -149,14 +149,16 @@ impl Embed {
     /// Copy the selected faces into `dir` instead of embedding them, for a web build that serves
     /// them beside its wasm, and write a table of [`ServedFace`](crate::ServedFace)s.
     ///
-    /// Each font file and its licence file keep their path under the checkout's `fonts/`
-    /// directory (`noto-sans-arabic/NotoSansArabic.ttf`), and a face's `url` is `url_prefix`
-    /// followed by that path, so `serve("web/fonts", "fonts/")` suits a page that serves
-    /// `web/fonts` as `fonts/`. An interface face cut by `Embed::subset_to` is served from its cut,
-    /// with the start of the cut's SHA-256 in the file name (`ui/NotoSansTCUI-Regular.<hash>.ttf`)
-    /// and the cut's own integrity value. A relative `dir` is under the package directory, where
-    /// Cargo runs build scripts. Files already there with the right size are left as they are;
-    /// files of faces no longer selected, and earlier cuts, are not removed.
+    /// Each font file keeps its path under the checkout's `fonts/` directory, with the start of
+    /// its manifest SHA-256 before the extension (`noto-sans-arabic/NotoSansArabic.<hash>.ttf`),
+    /// so an updated face gets a new URL; its licence file keeps its path as it is. A face's `url`
+    /// is `url_prefix` followed by that path, so `serve("web/fonts", "fonts/")` suits a page that
+    /// serves `web/fonts` as `fonts/`. An interface face cut by `Embed::subset_to` is served from
+    /// its cut, with the start of the cut's SHA-256 in the file name
+    /// (`ui/NotoSansTCUI-Regular.<hash>.ttf`) and the cut's own integrity value. A relative `dir` is
+    /// under the package directory, where Cargo runs build scripts. Files already there with the
+    /// same contents are left as they are; files of faces no longer selected, and earlier versions,
+    /// are not removed.
     pub fn serve(mut self, dir: impl Into<PathBuf>, url_prefix: &str) -> Self {
         self.serve = Some(Serve { dir: dir.into(), url_prefix: url_prefix.to_owned() });
         self
@@ -343,7 +345,8 @@ impl Embed {
 
     /// Without the subsetter there are no catalogs, so [`Embed::select`] left out every face to cut.
     #[cfg(not(feature = "subset"))]
-    fn cut(&self, _faces: &mut [Face], _out_dir: &Path) -> Result<(), Error> {
+    fn cut(&self, faces: &mut [Face], _out_dir: &Path) -> Result<(), Error> {
+        debug_assert!(!faces.iter().any(|face| face.cut));
         Ok(())
     }
 
@@ -534,16 +537,16 @@ fn byte_string(bytes: &[u8]) -> String {
     out
 }
 
-/// Where a face's file is served, under the served directory: its checkout path under `fonts/`.
-/// A cut adds the start of its SHA-256 before the extension (`ui/A.1234abcd5678ef90.ttf`), so a
-/// cut from changed catalogs gets a new URL instead of meeting a cached copy that fails its
-/// integrity check.
+/// Where a face's file is served, under the served directory: its checkout path under `fonts/`
+/// with the start of its SHA-256 before the extension (`a/A.1234abcd5678ef90.ttf`), so an updated
+/// face or a cut from changed catalogs gets a new URL instead of meeting a cached copy that fails
+/// its integrity check.
 fn served_file(face: &Face) -> String {
     let file = served_path(&face.entry.file);
-    if !face.cut {
+    let hash = face.sha256.get(..16).unwrap_or(&face.sha256);
+    if hash.is_empty() {
         return file.to_owned();
     }
-    let hash = face.sha256.get(..16).unwrap_or(&face.sha256);
     match file.rsplit_once('.') {
         Some((stem, extension)) if !extension.contains('/') => format!("{stem}.{hash}.{extension}"),
         _ => format!("{file}.{hash}"),
@@ -555,22 +558,29 @@ fn served_path(file: &str) -> &str {
     file.strip_prefix("fonts/").unwrap_or(file)
 }
 
-/// Copy `from` unless `to` already has its size. The copy keeps `from`'s modification time and is
-/// watched, so the build copies it again once it is deleted, without running every build.
+/// Copy `from` unless `to` already has its contents. The copy keeps `from`'s modification time
+/// and is watched, so the build copies it again once it is deleted, without running every build.
+/// It doesn't take `from`'s permissions, so a read-only checkout (such as the Nix store) gives
+/// served files the build can replace.
 fn copy_file(from: &Path, to: &Path, cargo: &mut Vec<String>) -> Result<(), Error> {
     cargo.push(format!("cargo::rerun-if-changed={}", to.display()));
+    let read_error = |source| Error::Read { path: from.to_path_buf(), source };
     let write_error = |source| Error::Write { path: to.to_path_buf(), source };
-    let size = |path: &Path| std::fs::metadata(path).ok().map(|m| m.len());
-    if size(to).is_some() && size(to) == size(from) {
+    let bytes = std::fs::read(from).map_err(read_error)?;
+    if std::fs::read(to).is_ok_and(|served| served == bytes) {
         return Ok(());
     }
     if let Some(parent) = to.parent() {
         std::fs::create_dir_all(parent).map_err(write_error)?;
     }
-    std::fs::copy(from, to).map_err(write_error)?;
+    // A read-only copy from an earlier build can't be opened for writing, but can be replaced.
+    if std::fs::metadata(to).is_ok_and(|m| m.permissions().readonly()) {
+        std::fs::remove_file(to).map_err(write_error)?;
+    }
     // Cargo reruns a build script whose watched files are newer than its last run.
-    let modified = std::fs::metadata(from).and_then(|m| m.modified()).map_err(|source| Error::Read { path: from.to_path_buf(), source })?;
-    std::fs::File::options().write(true).open(to).and_then(|f| f.set_modified(modified)).map_err(write_error)
+    let modified = std::fs::metadata(from).and_then(|m| m.modified()).map_err(read_error)?;
+    let mut file = std::fs::File::create(to).map_err(write_error)?;
+    file.write_all(&bytes).and_then(|()| file.set_modified(modified)).map_err(write_error)
 }
 
 /// The Subresource Integrity value (`sha256-<base64>`) of a hex SHA-256, or `""` for a value that

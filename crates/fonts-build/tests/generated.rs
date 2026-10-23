@@ -22,9 +22,9 @@ fn served_table_names_urls_instead_of_bytes() {
     assert_eq!(
         faces,
         [
-            ("Sans JP Regular".to_owned(), "fonts/sans-jp/SansJP-Regular.ttf", 24),
-            ("Sans CJK TC Regular".to_owned(), "fonts/sans-cjk/SansCJK.ttc", 28),
-            ("Sans CJK HK Regular".to_owned(), "fonts/sans-cjk/SansCJK.ttc", 28),
+            ("Sans JP Regular".to_owned(), "fonts/sans-jp/SansJP-Regular.c9d08ef1fc69f15e.ttf", 24),
+            ("Sans CJK TC Regular".to_owned(), "fonts/sans-cjk/SansCJK.2fecde232d5dcda2.ttc", 28),
+            ("Sans CJK HK Regular".to_owned(), "fonts/sans-cjk/SansCJK.2fecde232d5dcda2.ttc", 28),
         ]
     );
     assert_eq!(CRAFT_FONTS_SERVED[2].index, 3);

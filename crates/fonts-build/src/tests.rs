@@ -203,26 +203,29 @@ fn serve_copies_the_selected_faces_and_writes_urls() {
     assert_eq!(names, ["Sans JP Regular", "Sans CJK TC Regular", "Sans CJK HK Regular"]);
 
     let read = |path: &str| std::fs::read(served.join(path)).unwrap();
-    assert_eq!(read("sans-jp/SansJP-Regular.ttf"), std::fs::read(fixture().join("fonts/sans-jp/SansJP-Regular.ttf")).unwrap());
-    assert_eq!(read("sans-cjk/SansCJK.ttc").len(), 28);
+    assert_eq!(read("sans-jp/SansJP-Regular.c9d08ef1fc69f15e.ttf"), std::fs::read(fixture().join("fonts/sans-jp/SansJP-Regular.ttf")).unwrap());
+    assert_eq!(read("sans-cjk/SansCJK.2fecde232d5dcda2.ttc").len(), 28);
     assert_eq!(read("sans-jp/OFL.txt"), b"Fixture licence text.\n");
     assert!(!served.join("sans-jp/SansJP-Bold.ttf").exists() && !served.join("sans-arabic").exists());
     // Cargo copies a deleted file again, and doesn't rerun for files it just copied.
-    assert!(cargo.contains(&format!("cargo::rerun-if-changed={}", served.join("sans-jp/SansJP-Regular.ttf").display())), "{cargo:?}");
+    assert!(
+        cargo.contains(&format!("cargo::rerun-if-changed={}", served.join("sans-jp/SansJP-Regular.c9d08ef1fc69f15e.ttf").display())),
+        "{cargo:?}"
+    );
     assert!(cargo.contains(&format!("cargo::rerun-if-changed={}", served.join("sans-jp/OFL.txt").display())), "{cargo:?}");
     let modified = |path: &Path| std::fs::metadata(path).unwrap().modified().unwrap();
-    assert_eq!(modified(&served.join("sans-jp/SansJP-Regular.ttf")), modified(&fixture().join("fonts/sans-jp/SansJP-Regular.ttf")));
+    assert_eq!(modified(&served.join("sans-jp/SansJP-Regular.c9d08ef1fc69f15e.ttf")), modified(&fixture().join("fonts/sans-jp/SansJP-Regular.ttf")));
 
     let table = std::fs::read_to_string(scratch.0.join("craft_fonts.rs")).unwrap();
     assert!(!table.contains("include_bytes!"), "{table}");
     assert!(
         table.contains(
-            "ServedFace { family: \"Sans JP\", style: \"Regular\", scripts: &[\"Jpan\", \"Latn\"], index: 0, url: \"fonts/sans-jp/SansJP-Regular.ttf\", size: 24, integrity: \"sha256-ydCO8fxp8V6HzlK9qKnCRxTkEl2vflCkDtsaor4Q3/E=\", coverage: b\"\" }"
+            "ServedFace { family: \"Sans JP\", style: \"Regular\", scripts: &[\"Jpan\", \"Latn\"], index: 0, url: \"fonts/sans-jp/SansJP-Regular.c9d08ef1fc69f15e.ttf\", size: 24, integrity: \"sha256-ydCO8fxp8V6HzlK9qKnCRxTkEl2vflCkDtsaor4Q3/E=\", coverage: b\"\" }"
         ),
         "{table}"
     );
     // Both faces of the collection name the one served file.
-    assert_eq!(table.matches("url: \"fonts/sans-cjk/SansCJK.ttc\"").count(), 2, "{table}");
+    assert_eq!(table.matches("url: \"fonts/sans-cjk/SansCJK.2fecde232d5dcda2.ttc\"").count(), 2, "{table}");
 
     // Without a checkout the table is empty and nothing is copied.
     let env = Env { dir: None, required: None, out_dir: Some(scratch.0.clone().into()) };
@@ -230,6 +233,36 @@ fn serve_copies_the_selected_faces_and_writes_urls() {
     assert!(Embed::new().serve(&empty, "fonts/").run(&env, Path::new("craft_fonts.rs"), &mut cargo).unwrap().is_empty());
     assert_eq!(std::fs::read_to_string(scratch.0.join("craft_fonts.rs")).unwrap().trim(), "&[]");
     assert!(!empty.exists());
+}
+
+#[test]
+fn serve_replaces_changed_files_from_a_read_only_checkout() {
+    let scratch = Scratch::new("serve-read-only");
+    let dir = checkout(&scratch, &[("Sans", "Latn", "", b"font".to_vec())]);
+    let (font, licence) = (dir.join("fonts/0.ttf"), dir.join("fonts/OFL.txt"));
+    let set_read_only = |path: &Path, read_only: bool| {
+        let mut permissions = std::fs::metadata(path).unwrap().permissions();
+        permissions.set_readonly(read_only);
+        std::fs::set_permissions(path, permissions).unwrap();
+    };
+    std::fs::write(&licence, "licence one").unwrap();
+    set_read_only(&font, true);
+    set_read_only(&licence, true);
+    let served = scratch.0.join("served");
+    let r = run(Embed::new().serve(&served, "fonts/"), Some(&dir), None);
+    assert_eq!(r.result.unwrap(), ["Sans Regular"]);
+    assert_eq!(std::fs::read(served.join("0.00.ttf")).unwrap(), b"font");
+    assert_eq!(std::fs::read_to_string(served.join("OFL.txt")).unwrap(), "licence one");
+
+    // A change of the same size is copied too.
+    set_read_only(&licence, false);
+    std::fs::write(&licence, "licence two").unwrap();
+    set_read_only(&licence, true);
+    let r = run(Embed::new().serve(&served, "fonts/"), Some(&dir), None);
+    assert!(r.result.is_ok(), "{:?}", r.result);
+    assert_eq!(std::fs::read_to_string(served.join("OFL.txt")).unwrap(), "licence two");
+    set_read_only(&font, false);
+    set_read_only(&licence, false);
 }
 
 #[test]
@@ -608,7 +641,7 @@ mod subset {
         let sha256 = crate::sha256::hex(&cut);
         let file = format!("{}.{}.ttf", 0, &sha256[..16]);
         assert_eq!(std::fs::read(served.join(&file)).unwrap(), cut);
-        assert!(!served.join("0.ttf").exists());
+        assert!(!served.join("0.00.ttf").exists());
         let line = format!("url: \"fonts/{file}\", size: {}, integrity: {:?}, coverage: ", cut.len(), crate::embed::integrity(&sha256));
         assert!(r.table.contains(&line), "{}\n{line}", r.table);
     }
@@ -655,8 +688,8 @@ fn for_ui_serves_no_whole_cjk_face() {
     let served = scratch.0.join("served");
     let r = run(Embed::new().for_ui().serve(&served, "fonts/"), Some(&dir), None);
     assert_eq!(r.result.unwrap(), ["Noto Sans Arabic Regular"]);
-    assert_eq!(std::fs::read(served.join("2.ttf")).unwrap(), b"arabic");
-    assert!(!served.join("0.ttf").exists() && !served.join("1.ttf").exists());
+    assert_eq!(std::fs::read(served.join("2.00.ttf")).unwrap(), b"arabic");
+    assert!(!served.join("0.00.ttf").exists() && !served.join("1.00.ttf").exists());
 }
 
 #[test]
