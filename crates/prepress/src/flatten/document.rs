@@ -107,6 +107,7 @@ pub struct FlattenTotals {
     pub images: usize,
     pub unreadable_images: usize,
     pub dropped_inks: usize,
+    pub dropped_annotations: usize,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -287,6 +288,7 @@ fn totals(pages: &[(usize, FlattenPageReport)]) -> FlattenTotals {
         t.images += r.read.images;
         t.unreadable_images += r.read.unreadable_images;
         t.dropped_inks += r.read.dropped_inks;
+        t.dropped_annotations += r.read.dropped_annotations;
     }
     t
 }

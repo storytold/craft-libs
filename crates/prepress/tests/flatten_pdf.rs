@@ -542,3 +542,20 @@ fn opaque_items_separate_as_the_source() {
         }
     }
 }
+
+#[test]
+fn print_flagged_annotations_left_out_are_counted() {
+    let ap = stream("/Type /XObject /Subtype /Form /BBox [0 0 10 10]", "0 0 0 1 k 0 0 10 10 re f");
+    let annot = |flags: u32| format!("<< /Type /Annot /Subtype /Stamp /Rect [10 10 20 20] /F {flags} /AP << /N 5 0 R >> >>");
+    // Print; Print and Hidden; no flags (screen only); Print without an appearance.
+    let objects = [ap, annot(4), annot(4 | 2), annot(0), "<< /Type /Annot /Subtype /Text /Rect [0 0 5 5] /F 4 >>".to_string()];
+    // `raw_pdf` puts its argument inside the page's /Resources; this closes that dictionary to
+    // add /Annots to the page.
+    let pdf = raw_pdf("", ">> /Annots [6 0 R 7 0 R 8 0 R 9 0 R] /PieceInfo <<", &objects);
+    let (list, report) = read_page(&pdf, 0, &ReadOptions::default()).unwrap();
+    assert!(list.items.is_empty());
+    assert_eq!(report.dropped_annotations, 1);
+    let (list, report) = read_page(&pdf, 0, &ReadOptions { annotations: true, ..ReadOptions::default() }).unwrap();
+    assert!(!list.items.is_empty());
+    assert_eq!(report.dropped_annotations, 0);
+}

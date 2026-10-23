@@ -35,6 +35,9 @@ use craft_pdf::interpret::{
     MaskType, Paint as PdfPaint, PathDrawMode, RasterImage, SoftMask, StencilImage, StrokeProps, TransformExt, interpret_page,
 };
 use craft_pdf::syntax::Pdf;
+use craft_pdf::syntax::object::dict::keys::{ANNOTS, AP, F, N};
+use craft_pdf::syntax::object::{Array, Dict};
+use craft_pdf::syntax::page::Page;
 use craft_pdf::{OpenError, open_slice};
 use kurbo::{Affine, BezPath, PathEl, Point, Rect, Shape, Stroke, StrokeOpts};
 
@@ -76,7 +79,8 @@ pub struct ReadOptions {
     /// The printing condition RGB, Lab and ICC colors convert into when the page has no output
     /// intent with a usable CMYK profile.
     pub fallback: Fallback,
-    /// Read the page's annotation appearances too.
+    /// Read the page's annotation appearances too. When `false`, the print-flagged ones with an
+    /// appearance are left out and counted ([`ReadReport::dropped_annotations`]).
     pub annotations: bool,
     /// The resolution, in pixels per inch, of images read from function-based and mesh
     /// shadings and from tiling patterns past [`MAX_TILING_CELLS`].
@@ -117,6 +121,9 @@ pub struct ReadReport {
     pub invisible_glyphs: usize,
     /// Spot inks past the ink set's capacity, whose tints were dropped.
     pub dropped_inks: usize,
+    /// Annotations that would print (Print flag set, not Hidden, with a normal appearance), left
+    /// out because [`ReadOptions::annotations`] is `false`.
+    pub dropped_annotations: usize,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -173,6 +180,7 @@ pub(crate) fn read_page_in(doc: &Pdf, page: usize, opts: &ReadOptions, color: Re
         rasterized_tilings: 0,
         invisible_glyphs: 0,
         dropped_inks: 0,
+        dropped_annotations: if opts.annotations { 0 } else { catch_unwind(AssertUnwindSafe(|| printing_annotations(p))).unwrap_or(0) },
     };
     let dpi = if opts.raster_dpi.is_finite() && opts.raster_dpi > 0.0 { opts.raster_dpi } else { 300.0 };
     let mut shared = Shared {
@@ -200,6 +208,16 @@ pub(crate) fn read_page_in(doc: &Pdf, page: usize, opts: &ReadOptions, color: Re
     let mut items = items;
     set_fonts(&mut items, &fonts);
     Ok((DisplayList { page: bbox, inks, items }, report))
+}
+
+/// The annotations of `page` a printer would paint: Print flag (bit 3) set, Hidden (bit 2)
+/// clear, with a normal appearance (`/AP /N`).
+fn printing_annotations(page: &Page<'_>) -> usize {
+    let Some(annots) = page.raw().get::<Array<'_>>(ANNOTS) else { return 0 };
+    annots
+        .iter::<Dict<'_>>()
+        .filter(|a| a.get::<u32>(F).unwrap_or(0) & (4 | 2) == 4 && a.get::<Dict<'_>>(AP).is_some_and(|ap| ap.contains_key(N)))
+        .count()
 }
 
 /// State shared by the page's reader and the readers of its soft masks and Type 3 glyphs.
