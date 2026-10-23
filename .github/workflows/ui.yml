@@ -3,9 +3,9 @@ name: Shared UI
 on:
   push:
     branches: [main]
-    paths: ["crates/ui/**", "Cargo.toml", "Cargo.lock", ".github/workflows/ui.yml"]
+    paths: ["crates/ui/**", "crates/i18n/**", "Cargo.toml", "Cargo.lock", ".github/workflows/ui.yml"]
   pull_request:
-    paths: ["crates/ui/**", "Cargo.toml", "Cargo.lock", ".github/workflows/ui.yml"]
+    paths: ["crates/ui/**", "crates/i18n/**", "Cargo.toml", "Cargo.lock", ".github/workflows/ui.yml"]
   workflow_dispatch:
 
 permissions:

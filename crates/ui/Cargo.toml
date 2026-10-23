@@ -11,6 +11,7 @@ description = "Reusable egui controls and icon catalogs for Craft frontends"
 workspace = true
 
 [dependencies]
+craft-i18n = { workspace = true }
 egui = { workspace = true }
 serde = { version = "1", features = ["derive"], optional = true }
 
@@ -20,6 +21,6 @@ serde = ["dep:serde"]
 [dev-dependencies]
 egui = { workspace = true, features = ["default_fonts"] }
 serde_json = "1"
-egui_extras = { version = "0.36", default-features = false, features = ["svg"] }
-egui_kittest = { version = "0.36", features = ["wgpu"] }
+egui_extras = { version = "0.37", default-features = false, features = ["svg"] }
+egui_kittest = { version = "0.37", features = ["wgpu"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
