@@ -362,7 +362,7 @@
       "path": "src/interpret/mod.rs",
       "source_sha256": "2b286df0c34b8194e1bdd1b63c1e08354d24f8389958fd782f42e2cabf364673",
       "source_git_blob": "931b3388cef188cee0a5a1d495b69a6ff04f5e51",
-      "sha256": "6ae30906c8e6d0e869e0fac8ece4d97e0ac08d8abd7042c0242a069d4e609351"
+      "sha256": "ca9e244a8997863cce8e0ff1a0f47b529c50509c0697f99c9dae75b523cf43d8"
     },
     {
       "path": "src/interpret/path.rs",
@@ -380,7 +380,7 @@
       "path": "src/interpret/text.rs",
       "source_sha256": "35eafa80147aea635bdef127c33ace20e1695e11e87c7bfe1e035c886806ff30",
       "source_git_blob": "ddec0400ea7a639c14769ac9ee7e137d000b3efd",
-      "sha256": "239ca1ac3ad2a34bfce3d70935ea3483dbb5c5a689c44cd7c5a22693dab51b75"
+      "sha256": "4967724e19a1d2c073db40339e473385a66cb4bd26a40bc4ee836d562cffb067"
     },
     {
       "path": "src/lib.rs",
@@ -464,5 +464,9 @@
   },
   "local_test_updates": [
     "Adjust direct stitching-function fixtures to the 32/33-function boundary imposed by the 64-container syntax cap and independently test unchanged 64/65-function construction limits with indirect references."
+  ],
+  "local_work_checkpoints": [
+    "Add a sticky shared caller cancellation checkpoint without clocks or app scheduling policy.",
+    "Poll operator, stream-window, annotation, text-array and glyph boundaries; preserve the atomic flag and absent-hook default."
   ]
 }

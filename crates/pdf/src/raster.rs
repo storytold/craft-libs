@@ -69,6 +69,10 @@ pub enum Error {
     BackendPanic,
 }
 
+fn cancellation_requested(settings: &InterpreterSettings) -> Result<bool, Error> {
+    catch_unwind(AssertUnwindSafe(|| settings.is_cancelled())).map_err(|_| Error::BackendPanic)
+}
+
 /// Validate geometry before converting sizes or allocating. A zero-size output is rejected.
 pub fn dimensions(page: &Page<'_>, options: &Options) -> Result<[u32; 2], Error> {
     let (w, h) = page.render_dimensions();
@@ -108,8 +112,7 @@ pub fn render_into<'a>(
     if u64::try_from(buffer.len()).ok() != Some(expected) {
         return Err(Error::BufferLength);
     }
-    let cancelled = || settings.cancelled.as_ref().is_some_and(|c| c.load(Ordering::Relaxed));
-    if cancelled() {
+    if cancellation_requested(settings)? {
         return Err(Error::Cancelled);
     }
     let warnings = Arc::new(AtomicU8::new(0));
@@ -143,7 +146,7 @@ pub fn render_into<'a>(
         ),
     };
     catch_unwind(AssertUnwindSafe(|| hayro::render_into(page, cache, &settings, &rs, buffer))).map_err(|_| Error::BackendPanic)?;
-    if cancelled() {
+    if cancellation_requested(&settings)? {
         return Err(Error::Cancelled);
     }
     let bits = warnings.load(Ordering::Relaxed);
@@ -169,6 +172,9 @@ impl Raster {
 
 pub fn render<'a>(page: &'a Page<'a>, cache: &RenderCache<'a>, settings: &InterpreterSettings, options: &Options) -> Result<Raster, Error> {
     let [width, height] = dimensions(page, options)?;
+    if cancellation_requested(settings)? {
+        return Err(Error::Cancelled);
+    }
     let count = usize::try_from(u64::from(width) * u64::from(height)).map_err(|_| Error::OutputLimit)?;
     let mut words = Vec::new();
     words.try_reserve_exact(count).map_err(|_| Error::Allocation)?;

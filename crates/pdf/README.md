@@ -53,6 +53,15 @@ Native unwinding panics become errors; discard partial devices, buffers, parsers
 after backend failure. WASM aborts and process-wide allocation failure cannot be caught.
 Cancellation is polled between operators, so a decoder may finish before noticing it.
 
+`InterpreterSettings::cancellation_check` optionally accepts a `CancellationCheck`, a synchronous
+caller-owned checkpoint for cancellation or work budgets. Clones share a sticky cancellation latch,
+so one run can keep its budget across pages without clocks or threads, including on WebAssembly.
+Checks also occur within long text strings and arrays, between stream windows and annotations,
+and around rasterization. A stopped raster returns `Cancelled`; callers must discard partial
+Device or buffer output. The default remains flag-only behavior. A checkpoint cannot preempt an
+individual codec or graphics operation already in progress. Callback panics become guarded native
+errors at facade entry points; WebAssembly retains its existing abort limitation.
+
 ## Backend provenance and consumer pins
 
 The shared reader vendors the current patched Hayro trees from PdfCraft revision
