@@ -1,0 +1,61 @@
+name: Shared media
+
+on:
+  push:
+    branches: [main]
+    paths: ["crates/media/**", "Cargo.toml", "Cargo.lock", ".github/workflows/media.yml"]
+  pull_request:
+    paths: ["crates/media/**", "Cargo.toml", "Cargo.lock", ".github/workflows/media.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: shared-media-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    timeout-minutes: 10
+    name: Media lint, feature sets, WASM
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          components: rustfmt, clippy
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: craft-media-lint
+      - run: cargo fmt -p craft-media --check
+      - run: cargo clippy -p craft-media --all-targets --locked --no-default-features -- -D warnings
+      - run: cargo clippy -p craft-media --all-targets --locked --no-default-features --features bitstream -- -D warnings
+      - run: cargo clippy -p craft-media --all-targets --locked -- -D warnings
+      - run: cargo clippy -p craft-media --all-targets --locked --no-default-features --features matroska -- -D warnings
+      - run: cargo clippy -p craft-media --all-targets --locked --all-features -- -D warnings
+      - run: cargo check -p craft-media --all-features --locked --target wasm32-unknown-unknown
+  test:
+    timeout-minutes: 15
+    name: Media tests with ffmpeg oracles
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: craft-media-test
+      - name: Build tests while installing ffmpeg
+        run: |
+          # The man-db index rebuild after dpkg is slow on hosted runners.
+          sudo rm -f /var/lib/man-db/auto-update
+          (sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends ffmpeg) > "$RUNNER_TEMP/apt.log" 2>&1 &
+          apt=$!
+          cargo test -p craft-media --all-features --locked --no-run
+          wait "$apt" || { cat "$RUNNER_TEMP/apt.log"; exit 1; }
+          ffmpeg -hide_banner -version | sed -n 1p
+      - run: cargo test -p craft-media --all-features --locked
+        env:
+          CRAFT_MEDIA_REQUIRE_ORACLES: "1"
+          CRAFT_MEDIA_FIXTURES_DIR: ${{ runner.temp }}/media-fixtures

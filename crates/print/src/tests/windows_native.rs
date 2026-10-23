@@ -21,10 +21,10 @@ fn windows_printers_are_sorted_once_with_their_default() {
     assert_eq!(
         printers,
         [
-            Printer { name: "HP LaserJet 400 (Copy 2)".into(), default: false, two_sided: Some(true) },
-            Printer { name: "Zebra Label".into(), default: false, two_sided: Some(false) },
-            Printer { name: r"\\print01\Office, 2nd floor".into(), default: true, two_sided: Some(true) },
-            Printer { name: "Копир Canon iR".into(), default: false, two_sided: None },
+            Printer { name: "HP LaserJet 400 (Copy 2)".into(), description: String::new(), default: false, two_sided: Some(true) },
+            Printer { name: "Zebra Label".into(), description: String::new(), default: false, two_sided: Some(false) },
+            Printer { name: r"\\print01\Office, 2nd floor".into(), description: String::new(), default: true, two_sided: Some(true) },
+            Printer { name: "Копир Canon iR".into(), description: String::new(), default: false, two_sided: None },
         ]
     );
     assert!(spool::printer_list([("Office".to_string(), None)], Some("Office 2")).iter().all(|p| !p.default));

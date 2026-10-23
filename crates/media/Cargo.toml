@@ -1,0 +1,48 @@
+[package]
+name = "craft-media"
+description = "Bit-level I/O and clean-room ISO BMFF (MP4), QuickTime (MOV) and Matroska (MKV, WebM) demuxers and muxers."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+default = ["isobmff"]
+bitstream = []
+isobmff = ["bitstream", "dep:thiserror"]
+matroska = []
+
+[dependencies]
+thiserror = { workspace = true, optional = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
+serde_json = { workspace = true }
+
+[[test]]
+name = "fuzz"
+required-features = ["isobmff"]
+
+[[test]]
+name = "fuzz_matroska"
+required-features = ["matroska"]
+
+[[test]]
+name = "oracle_demux"
+required-features = ["isobmff"]
+
+[[test]]
+name = "oracle_matroska"
+required-features = ["matroska"]
+
+[[test]]
+name = "oracle_mux"
+required-features = ["isobmff"]
+
+[[test]]
+name = "roundtrip"
+required-features = ["isobmff"]
