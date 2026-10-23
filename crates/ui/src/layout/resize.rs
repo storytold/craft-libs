@@ -151,7 +151,7 @@ impl<'a> ResizeHandle<'a> {
             {
                 egui::WidgetInfo::slider(enabled, f64::from(*value), self.label)
             } else {
-                egui::WidgetInfo::labeled(egui::WidgetType::Other, enabled, self.label)
+                egui::WidgetInfo::labeled(egui::Role::Unknown, enabled, self.label)
             }
         });
         ui.ctx().accesskit_node_builder(response.id, |node| {

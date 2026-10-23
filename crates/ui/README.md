@@ -234,7 +234,7 @@ on WASM too; browser PDF printing remains an app-owned service.
 
 ## Compatibility and checks
 
-The crate uses egui 0.36 and Rust 1.95 or later. Its production dependency disables egui's default
+The crate uses egui 0.37 and Rust 1.95 or later. Its production dependency disables egui's default
 features so fonts and rendering features remain the application's choice. See the
 [suite audit](../../docs/ui-components-audit.md) for candidates, policies and adoption order.
 

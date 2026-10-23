@@ -8,6 +8,7 @@
 pub mod buttons;
 pub mod docking;
 pub mod icons;
+pub mod ime;
 pub mod layout;
 pub mod printing;
 pub mod tabs;
