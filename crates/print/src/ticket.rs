@@ -81,6 +81,35 @@ const NAMED_PAPERS: &[((f64, f64), &[&str])] = &[
     ((2448.0, 3168.0), &["ANSI E"]),
 ];
 
+/// `xml`, a ticket the driver validated, with each namespace prefix that the driver's own
+/// `reference` ticket spells differently for the same namespace renamed to the driver's prefix.
+///
+/// Prefixes don't matter in XML, but some drivers compare them as text: a Brother MFC-T910DW
+/// fails the job at `ID2D1PrintControl::Close` (0x80040003) when its own keywords arrive as
+/// `ns0000:PageCustomHalftone`, the name Windows gives its namespace in PrintCapabilities,
+/// instead of `brpsk:PageCustomHalftone`. A ticket that doesn't parse, and a prefix the ticket
+/// already uses for another namespace, are left as they are.
+pub(crate) fn driver_prefixes(xml: &str, reference: &str) -> String {
+    let declared = |text: &str| -> Option<Vec<(String, String)>> {
+        let doc = roxmltree::Document::parse(text).ok()?;
+        Some(doc.root_element().namespaces().filter_map(|n| Some((n.name()?.to_owned(), n.uri().to_owned()))).collect())
+    };
+    let (Some(ours), Some(theirs)) = (declared(xml), declared(reference)) else { return xml.to_owned() };
+    let mut out = xml.to_owned();
+    for (prefix, uri) in &ours {
+        let Some((wanted, _)) = theirs.iter().find(|(p, u)| u == uri && p != prefix) else { continue };
+        if ours.iter().any(|(p, u)| p == wanted && u != uri) {
+            continue;
+        }
+        // The declaration, names in attributes (`name="ns0000:…"`) and QName values (`>ns0000:…`).
+        out = out.replace(&format!("xmlns:{prefix}="), &format!("xmlns:{wanted}="));
+        for lead in ['"', '>'] {
+            out = out.replace(&format!("{lead}{prefix}:"), &format!("{lead}{wanted}:"));
+        }
+    }
+    out
+}
+
 /// The usual names of a paper of this size (either way round, to half a point).
 pub(crate) fn paper_names(width: f64, height: f64) -> &'static [&'static str] {
     let (w, h) = (width.min(height), width.max(height));
@@ -245,6 +274,34 @@ pub(crate) fn job_filename(title: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const BROTHER: &str = "http://schemas.brother.info/mfc/printing/2006/11/printschemakeywords";
+
+    fn ticket(prefix: &str) -> String {
+        format!(
+            r#"<psf:PrintTicket xmlns:psf="{NS_PSF}" xmlns:psk="{NS_PSK}" xmlns:{prefix}="{BROTHER}" version="1"><psf:Feature name="{prefix}:PageCustomHalftone"><psf:Option name="{prefix}:Dither"/></psf:Feature><psf:Feature name="psk:PageMediaType"><psf:Option name="psk:Plain"/></psf:Feature></psf:PrintTicket>"#
+        )
+    }
+
+    #[test]
+    fn a_renamed_driver_namespace_gets_the_drivers_prefix_back() {
+        assert_eq!(driver_prefixes(&ticket("ns0000"), &ticket("brpsk")), ticket("brpsk"));
+    }
+
+    #[test]
+    fn prefixes_the_driver_shares_are_left_alone() {
+        assert_eq!(driver_prefixes(&ticket("brpsk"), &ticket("brpsk")), ticket("brpsk"));
+        // No reference to go by, or a ticket that doesn't parse: unchanged.
+        assert_eq!(driver_prefixes(&ticket("ns0000"), "not xml"), ticket("ns0000"));
+        assert_eq!(driver_prefixes("not xml", &ticket("brpsk")), "not xml");
+    }
+
+    #[test]
+    fn a_prefix_taken_by_another_namespace_is_not_reused() {
+        // The ticket already uses `psk` for the keywords: the driver's `psk` for its own
+        // namespace must not take it over.
+        assert_eq!(driver_prefixes(&ticket("ns0000"), &ticket("psk").replace(&format!("xmlns:psk=\"{NS_PSK}\" "), "")), ticket("ns0000"));
+    }
 
     #[test]
     fn the_ticket_carries_the_job_options() {
