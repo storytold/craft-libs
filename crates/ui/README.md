@@ -112,7 +112,7 @@ The work is linear in tab count with at most 32 fitting passes; the caller caps 
 
 ```rust
 fn tab(ui: &mut egui::Ui, rect: egui::Rect, selected: bool) -> egui::Response {
-    craft_ui::tabs::Tab::new(ui.id().with("layers-tab"), "Layers", selected)
+    craft_ui::tabs::Tab::new(ui.scope_id().with("layers-tab"), "Layers", selected)
         .sense(egui::Sense::click_and_drag())
         .show_at(ui, rect, |ui, response| {
             let fill = if response.hovered() { egui::Color32::GRAY } else { egui::Color32::DARK_GRAY };
@@ -232,9 +232,88 @@ represented by `None`, independently of explicit one-sided, long-edge or short-e
 Receipts and backend errors remain unmodified data for the app to display. These controls work
 on WASM too; browser PDF printing remains an app-owned service.
 
+## Screenshot completion
+
+`capture::CaptureSlot` is a one-result slot for egui 0.37's one-shot screenshot callback. It is not a
+capture scheduler: request IDs, output paths, deadlines, settling frames, geometry epochs and the
+aggregate admission reservation stay in the application. The slot owns strong `Context` and
+`ViewportId` handles only in the live request; the callback holds a weak reference, so closing the
+request cannot leave a callback-owned context cycle. Keep the slot in the application's request
+record, outside egui-owned storage: a slot stored in `egui::Memory::data` or a registered plugin
+would form a `Context` → slot → `Context` cycle.
+
+```rust
+use craft_ui::capture::{CaptureError, CaptureSlot};
+use egui::{Context, ViewportCommand, ViewportId};
+
+fn issue_capture(ctx: &Context, viewport: ViewportId) -> CaptureSlot {
+    // A per-image bound, not the application's aggregate admission budget.
+    let (slot, callback) = CaptureSlot::new(ctx, viewport, 128 * 1024 * 1024);
+    // A pending screenshot command requests the paint that hidden windows need.
+    ctx.send_viewport_cmd_to(viewport, ViewportCommand::Screenshot(callback));
+    slot
+}
+
+fn report_capture(slot: &CaptureSlot) {
+    if let Some(result) = slot.take() {
+        match result {
+            Ok(image) => {
+                // Validate the app-owned request/geometry epoch, then encode and reply.
+                let _ = image;
+            }
+            Err(error) => {
+                // Report the completion error through the app's request record.
+                let _: CaptureError = error;
+            }
+        }
+    }
+}
+```
+
+`take` returns the image or completion error at most once; `None` means pending, cancelled, already
+taken or dropped at that moment. The slot cannot distinguish those closed states, so the
+application's request record owns the pending/closed distinction and the associated timeout or
+error reply.
+
+Completion checks a non-zero width and height, `width * height * size_of::<Color32>()` with checked
+arithmetic, a pixel buffer that matches the reported dimensions, and the per-image byte bound. A
+zero width or height is `MalformedImage`; an overflowing pixel or byte count is
+`DimensionsOverflow`. `CaptureError` is `#[non_exhaustive]`, so match the known variants with a
+wildcard arm. The slot releases its mutex before requesting a repaint, and `cancel`/`Drop` replace
+the state and drop any retained image only after unlocking, so a large image is not freed while
+another thread is completing.
+Both accepted images and rejection errors wake the owning viewport so the application can take
+the result and reply promptly.
+
+Every retry needs a fresh `CaptureSlot` and a fresh callback from `CaptureSlot::new`. A callback is
+one-shot and a slot never accepts a second completion, even after `take` removed the first result.
+Issue an explicit screenshot command only once per slot, after the application has settled the
+frame it wants. The first delivered frame wins; later frames delivered to the same callback are
+discarded. A completion is published before the wake: a completion racing `cancel` or `Drop`
+may already have published its result, so it can still deliver one harmless extra repaint after
+cancellation. If the cancellation won, the image is released and a later `take` returns `None`; if
+`take` won first, the caller already owns the result. A completion that observes the cancelled or
+taken state stores no image and does not wake. Cancellation and wakeup are therefore not one atomic
+step, and the helper never blocks a completing thread under its lock.
+
+`complete` calls `Context::request_repaint_of`, which takes egui's context lock. Completing from an
+ordinary `Ui` closure, an egui 0.37 plugin hook or a renderer/worker thread is fine: these run outside
+the context lock. Repaint observers and request-repaint callbacks run under that lock, so completing
+there would deadlock. An observer can take or cancel a slot because those operations only use the
+slot lock, but further `Context` access must happen outside the observer.
+
+Correlation is based on callback ownership. The helper cannot detect a callback sent to the wrong
+viewport if the returned image otherwise fits its bound. The application must route each callback
+to its recorded viewport and validate its request and geometry; native multi-window tests must
+verify the actual pixels as well as callback routing.
+
+## Text reading areas
+
+`text::align_galley_rows` positions already shaped rows inside a fixed-width reading area without changing glyphs or logical text. Supply a per-row alignment, for example the paragraph direction from the application shaper. The helper uses stock egui APIs and keeps cached glyph meshes shared. Its logical rectangle is the requested width; ink may overflow, so clip the painter when drawing cards. Use it for read-only painting, keeping the original galley for editable hit testing.
+
 ## Compatibility and checks
 
-The crate uses egui 0.36 and Rust 1.95 or later. Its production dependency disables egui's default
+The crate uses egui 0.37 and Rust 1.95 or later. Its production dependency disables egui's default
 features so fonts and rendering features remain the application's choice. See the
 [suite audit](../../docs/ui-components-audit.md) for candidates, policies and adoption order.
 

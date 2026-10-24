@@ -206,7 +206,7 @@ impl Draw<'_, '_> {
                             }
                         });
                         let resp = combo.response.on_hover_text(self.vis(&label));
-                        resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, true, &label));
+                        resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, true, &label));
                         self.tag(|| format!("shortcuts.import.suggestion.{si}"), resp.rect, &label);
                     });
                 }

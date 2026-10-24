@@ -81,7 +81,7 @@ impl<'a> IconButton<'a> {
         let valid = self.size.is_finite() && self.size.x > 0.0 && self.size.y > 0.0 && self.size.x <= 4096.0 && self.size.y <= 4096.0;
         let (rect, response) =
             ui.allocate_exact_size(if valid { self.size } else { Vec2::ZERO }, if valid { Sense::click() } else { Sense::hover() });
-        response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, valid && ui.is_enabled(), self.selected, self.label));
+        response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, valid && ui.is_enabled(), self.selected, self.label));
         if !valid {
             return response;
         }

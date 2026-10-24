@@ -7,8 +7,7 @@ use std::sync::Arc;
 
 use egui::text::{LayoutJob, TextFormat, TextWrapping};
 use egui::{
-    Align, Button, Color32, CornerRadius, FontId, Layout, Rect, RichText, ScrollArea, Sense, Stroke, StrokeKind, Ui, WidgetInfo, WidgetType, pos2,
-    vec2,
+    Align, Button, Color32, CornerRadius, FontId, Layout, Rect, RichText, Role, ScrollArea, Sense, Stroke, StrokeKind, Ui, WidgetInfo, pos2, vec2,
 };
 
 use super::{Draw, fill};
@@ -560,7 +559,7 @@ impl Draw<'_, '_> {
         let a11y = if names.is_empty() { spoken } else { fill(self.ui("{chord}: {label}"), &[("chord", &spoken), ("label", &names.join(", "))]) };
         let selected = self.state.keyboard.key == Some(key);
         let resp = ui.interact(r, self.base.with(("key", key.name())), Sense::click());
-        resp.widget_info(|| WidgetInfo::selected(WidgetType::Button, true, selected, &a11y));
+        resp.widget_info(|| WidgetInfo::selected(Role::Button, true, selected, &a11y));
         let description = match class(holders) {
             Class::Free => self.ui("Not assigned"),
             Class::App => self.ui("Application"),

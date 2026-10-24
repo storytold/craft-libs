@@ -233,7 +233,7 @@ impl<'a> ShortcutsDialog<'a> {
             let mut open = true;
             let mut out = None;
             egui::Window::new(title)
-                .id(egui::Id::new("craft_keymap.shortcuts"))
+                .id(egui::Id::unique("craft_keymap.shortcuts"))
                 .collapsible(false)
                 .resizable(true)
                 .open(&mut open)

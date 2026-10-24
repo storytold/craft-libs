@@ -35,7 +35,7 @@ craft-quit = { path = "crates/quit" }
 craft-settings = { path = "crates/settings" }
 craft-ui = { path = "crates/ui" }
 craft-window = { path = "crates/window" }
-egui = { version = "0.36", default-features = false }
+egui = { version = "0.37", default-features = false }
 rayon = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -60,3 +60,18 @@ hayro-syntax = { path = "vendor/hayro-syntax" }
 hayro-jbig2 = { path = "vendor/hayro-jbig2" }
 hayro-cmap = { path = "vendor/hayro-cmap" }
 hayro-postscript = { path = "vendor/hayro-postscript" }
+ecolor = { git = "https://github.com/storytold/egui.git", rev = "173cc7375d35dc5fbc5b5d0994fdf787f547c5d1" }
+emath = { git = "https://github.com/storytold/egui.git", rev = "173cc7375d35dc5fbc5b5d0994fdf787f547c5d1" }
+epaint = { git = "https://github.com/storytold/egui.git", rev = "173cc7375d35dc5fbc5b5d0994fdf787f547c5d1" }
+epaint_default_fonts = { git = "https://github.com/storytold/egui.git", rev = "173cc7375d35dc5fbc5b5d0994fdf787f547c5d1" }
+egui = { git = "https://github.com/storytold/egui.git", rev = "173cc7375d35dc5fbc5b5d0994fdf787f547c5d1" }
+egui-winit = { git = "https://github.com/storytold/egui.git", rev = "173cc7375d35dc5fbc5b5d0994fdf787f547c5d1" }
+egui-wgpu = { git = "https://github.com/storytold/egui.git", rev = "173cc7375d35dc5fbc5b5d0994fdf787f547c5d1" }
+egui_glow = { git = "https://github.com/storytold/egui.git", rev = "173cc7375d35dc5fbc5b5d0994fdf787f547c5d1" }
+egui_extras = { git = "https://github.com/storytold/egui.git", rev = "173cc7375d35dc5fbc5b5d0994fdf787f547c5d1" }
+egui_kittest = { git = "https://github.com/storytold/egui.git", rev = "173cc7375d35dc5fbc5b5d0994fdf787f547c5d1" }
+egui_system_font_provider = { git = "https://github.com/storytold/egui.git", rev = "173cc7375d35dc5fbc5b5d0994fdf787f547c5d1" }
+eframe = { git = "https://github.com/storytold/egui.git", rev = "173cc7375d35dc5fbc5b5d0994fdf787f547c5d1" }
+egui_demo_lib = { git = "https://github.com/storytold/egui.git", rev = "173cc7375d35dc5fbc5b5d0994fdf787f547c5d1" }
+egui_inspection = { git = "https://github.com/storytold/egui.git", rev = "173cc7375d35dc5fbc5b5d0994fdf787f547c5d1" }
+winit = { git = "https://github.com/storytold/winit.git", rev = "ae48c756a3b81125eb796c0cc6dccf60990d1181" }
