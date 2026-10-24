@@ -482,6 +482,19 @@ fn tiling_cells_past_the_item_budget_rasterize() {
 }
 
 #[test]
+fn deeply_overlapping_tiling_cells_paint_nothing() {
+    // Every point lies in 6 × 10^14 cells.
+    let objects = [stream(
+        "/PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 100000 100000] /XStep 0.004 /YStep 0.004 /Resources << >>",
+        "1 0 0 0 k 0 0 1 1 re f",
+    )];
+    let pdf = raw_pdf("/Pattern cs /P1 scn 0 0 90 30 re f", "/Pattern << /P1 5 0 R >>", &objects);
+    let (list, report) = read(&pdf);
+    assert_eq!((report.tiling_cells, report.rasterized_tilings), (0, 0));
+    assert!(images(&list).is_empty());
+}
+
+#[test]
 fn dashes_past_the_budget_stroke_solid() {
     // A billion dashes.
     let pdf = raw_pdf("[0.000001] 0 d 0 0 m 1000 0 l S", "", &[]);

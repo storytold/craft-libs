@@ -342,7 +342,8 @@ impl<'a> Canvas<'a> {
         let (w, h) = pixel_size(area, scale)?;
         let n = inks.len();
         let to_px = Affine::scale(scale) * Affine::translate(-area.origin().to_vec2());
-        Some(Self { w, h, inks, n, to_px, values: vec![0.0; w * h * n], alpha: vec![0.0; w * h] })
+        let pixels = w.checked_mul(h)?;
+        Some(Self { w, h, inks, n, to_px, values: vec![0.0; pixels.checked_mul(n)?], alpha: vec![0.0; pixels] })
     }
 
     pub fn size(&self) -> (usize, usize) {

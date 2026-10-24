@@ -81,6 +81,16 @@ const CELL_OVERSAMPLE: f64 = 4.0;
 /// Pixels the drawing of one tiling cell may hold.
 const MAX_CELL_PIXELS: f64 = 4_194_304.0;
 
+/// Cell samples one image read from a tiling pattern may take; a pattern whose cells overlap is
+/// sampled at a lower resolution. Four per pixel at [`MAX_RASTER_PIXELS`], because a cell no
+/// larger than its step meets three others at its corners.
+const MAX_TILING_SAMPLES: f64 = 4.0 * MAX_RASTER_PIXELS;
+
+/// Inks a tiling pattern's canvases hold at their full pixel limits. Each pixel holds a value
+/// per ink of the page, so a page with more inks is sampled at a lower resolution, keeping the
+/// canvases (and their sampling) at the memory and work of CMYK ones.
+const CANVAS_INKS: f64 = 4.0;
+
 /// How [`read_page`] reads.
 #[derive(Clone, Debug)]
 pub struct ReadOptions {
@@ -373,9 +383,7 @@ impl<'s, 'a> Reader<'s, 'a> {
 
     /// Raster pixels per point for an image over `area`, within [`MAX_RASTER_PIXELS`].
     fn raster_scale(&self, area: Rect) -> f64 {
-        let s = self.shared.scale;
-        let pixels = area.area() * s * s;
-        if pixels > MAX_RASTER_PIXELS { s * (MAX_RASTER_PIXELS / pixels).sqrt() } else { s }
+        limit_scale(self.shared.scale, area, MAX_RASTER_PIXELS)
     }
 
     /// Closes the innermost frame of `kind`, and the frames opened inside it.
@@ -704,11 +712,16 @@ impl<'s, 'a> Reader<'s, 'a> {
             self.shared.report.tiling_cells += count as usize;
             children
         } else {
-            let scale = self.raster_scale(area);
-            let cell_box = m.transform_rect_bbox(b);
-            let cell_pixels = cell_box.area() * (scale * CELL_OVERSAMPLE).powi(2);
-            let cell_scale = scale * CELL_OVERSAMPLE * if cell_pixels > MAX_CELL_PIXELS { (MAX_CELL_PIXELS / cell_pixels).sqrt() } else { 1.0 };
+            // Every pixel samples each cell over it: one, or more where cells are larger than
+            // their step and overlap. Cells stacked deeper than MAX_TILING_CELLS paint nothing,
+            // like fills past the range of `cells`.
+            let per_pixel = ((b.width().abs() / xs.abs()).floor() + 1.0) * ((b.height().abs() / ys.abs()).floor() + 1.0);
+            if !per_pixel.is_finite() || per_pixel > MAX_TILING_CELLS as f64 {
+                return;
+            }
             let inks = &self.shared.inks;
+            let cell_box = m.transform_rect_bbox(b);
+            let (scale, cell_scale) = tiling_scales(self.shared.scale, area, cell_box, per_pixel, inks.len());
             let (Some(mut drawn), Some(mut canvas)) = (Canvas::new(cell_box, cell_scale, inks), Canvas::new(area, scale, inks)) else { return };
             drawn.draw(&cell);
             let (w, h) = canvas.size();
@@ -1086,6 +1099,21 @@ fn dct_passthrough(stream: &Stream<'_>, width: u32, height: u32) -> Option<Arc<[
     ok.then(|| Arc::from(stream.raw_data().as_ref()))
 }
 
+/// Pixels per point of the image a tiling pattern over `area` is read as, from `scale`, and of
+/// the drawing of its cell over `cell_box`, for `per_pixel` cells over each pixel and `inks`
+/// values per pixel.
+fn tiling_scales(scale: f64, area: Rect, cell_box: Rect, per_pixel: f64, inks: usize) -> (f64, f64) {
+    let ink_share = (CANVAS_INKS / inks.max(1) as f64).min(1.0);
+    let scale = limit_scale(scale, area, MAX_RASTER_PIXELS.min(MAX_TILING_SAMPLES / per_pixel) * ink_share);
+    (scale, limit_scale(scale * CELL_OVERSAMPLE, cell_box, MAX_CELL_PIXELS * ink_share))
+}
+
+/// `scale` (pixels per point), lowered so that `area` holds at most `pixels` pixels.
+fn limit_scale(scale: f64, area: Rect, pixels: f64) -> f64 {
+    let have = area.area() * scale * scale;
+    if have > pixels { scale * (pixels / have).sqrt() } else { scale }
+}
+
 /// `items` and every item inside their groups and masks.
 fn item_count(items: &[Item]) -> usize {
     items.iter().fold(0, |sum, item| {
@@ -1272,4 +1300,25 @@ fn closed(path: &BezPath) -> BezPath {
         out.close_path();
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tiling_canvases_hold_cmyk_memory_with_many_inks() {
+        let (page, cell) = (Rect::new(0.0, 0.0, 600.0, 800.0), Rect::new(0.0, 0.0, 300.0, 300.0));
+        let dpi = 300.0 / 72.0;
+        let values = |area: Rect, scale: f64, inks: usize| {
+            let (w, h) = shade::pixel_size(area, scale).unwrap();
+            (w * h * inks) as f64
+        };
+        // With 1,000 inks the page canvas would hold 8 billion values.
+        let (scale, cell_scale) = tiling_scales(dpi, page, cell, 1.0, 1000);
+        assert!(values(page, scale, 1000) <= MAX_RASTER_PIXELS * CANVAS_INKS * 1.01);
+        assert!(values(cell, cell_scale, 1000) <= MAX_CELL_PIXELS * CANVAS_INKS * 1.01);
+        // A CMYK page keeps its resolution.
+        assert_eq!(tiling_scales(dpi, page, cell, 1.0, 4).0, dpi);
+    }
 }
