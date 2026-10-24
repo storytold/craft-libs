@@ -787,6 +787,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-blitter"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "rayon",
+]
+
+[[package]]
 name = "craft-cms"
 version = "0.1.0"
 dependencies = [
