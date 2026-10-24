@@ -440,4 +440,9 @@ mod tests {
         assert!(matches!(res[0], Object::String(_)));
         assert!(matches!(res[1], Object::Name(_)));
     }
+
+    #[test]
+    fn array_with_unreadable_item() {
+        let _ = array_ref_impl(b"[true /#zz false]");
+    }
 }
