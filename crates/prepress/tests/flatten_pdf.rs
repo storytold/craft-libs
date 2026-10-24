@@ -472,7 +472,10 @@ fn tiling_cells_past_the_item_budget_rasterize() {
             "/PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 1 1] /XStep 1 /YStep 1 /Resources << /Pattern << /P2 6 0 R >> >>",
             "/Pattern cs /P2 scn 0 0 1 1 re f",
         ),
-        stream("/PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 0.02 0.02] /XStep 0.07 /YStep 0.07 /Resources << >>", "1 0 0 0 k 0 0 0.02 0.02 re f"),
+        stream(
+            "/PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 0.02 0.02] /XStep 0.07 /YStep 0.07 /Resources << >>",
+            "1 0 0 0 k 0 0 0.02 0.02 re f",
+        ),
     ];
     let pdf = raw_pdf("/Pattern cs /P1 scn 0.5 0.5 98 98 re f", "/Pattern << /P1 5 0 R >>", &objects);
     let (list, report) = read(&pdf);
