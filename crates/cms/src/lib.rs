@@ -35,7 +35,10 @@ pub use curve::Curve;
 pub use gamut::GamutCheck;
 pub use lut3d::Lut3d;
 pub use profile::{ColorSpace, Pcs, Profile, ProfileClass};
-pub use transform::{SampleKind, Transform, TransformOptions, black_point, cached};
+pub use transform::{
+    DEFAULT_CACHE_BUDGET, MAX_CACHED, SampleKind, Transform, TransformOptions, black_point, cache_budget, cache_usage, cached, clear_cache,
+    set_cache_budget,
+};
 
 /// ICC rendering intent.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]

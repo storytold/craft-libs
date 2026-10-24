@@ -176,7 +176,25 @@ pub struct Pipeline {
     stages: Vec<Stage>,
 }
 
+impl Stage {
+    /// Heap bytes this stage holds: curve samples, matrix coefficients and table nodes.
+    pub fn table_bytes(&self) -> usize {
+        let curves = |cs: &Vec<Curve>| cs.capacity() * std::mem::size_of::<Curve>() + cs.iter().map(Curve::table_bytes).sum::<usize>();
+        match self {
+            Stage::Curves(cs) | Stage::InvCurves(cs) => curves(cs),
+            Stage::Matrix { m, offset, .. } => (m.capacity() + offset.capacity()) * std::mem::size_of::<f64>(),
+            Stage::Clut(c) => c.table_bytes(),
+            _ => 0,
+        }
+    }
+}
+
 impl Pipeline {
+    /// Heap bytes the stages hold ([`Stage::table_bytes`]).
+    pub fn table_bytes(&self) -> usize {
+        self.stages.capacity() * std::mem::size_of::<Stage>() + self.stages.iter().map(Stage::table_bytes).sum::<usize>()
+    }
+
     /// A pipeline over `inputs` channels (1 to [`MAX`]). Refuses stages that cannot run on the
     /// channels reaching them with [`CmsError::InvalidArgument`].
     pub fn new(inputs: usize, stages: Vec<Stage>) -> Result<Self, CmsError> {
