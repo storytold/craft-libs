@@ -590,7 +590,7 @@ fn windows_preview(job: &Job) -> Vec<String> {
                 Scaling::ShrinkToFit => "shrink-to-fit",
             }
         ),
-        format!("color={}", if job.grayscale { "monochrome" } else { "color" }),
+        format!("color={}", if job.grayscale { "monochrome" } else { "(driver default)" }),
     ]
 }
 

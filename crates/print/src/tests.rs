@@ -309,7 +309,7 @@ fn command_previews_do_not_require_pdf_files() {
     } else {
         assert_eq!(
             preview,
-            ["xps-print", "printer=Office (east)", "copies=2", "collate=true", "duplex=(queue default)", "scaling=exact", "color=color"]
+            ["xps-print", "printer=Office (east)", "copies=2", "collate=true", "duplex=(queue default)", "scaling=exact", "color=(driver default)"]
         );
     }
 }

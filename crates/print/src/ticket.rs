@@ -43,14 +43,15 @@ pub(crate) fn ticket_xml(job: &Job, landscape: bool) -> String {
         }
     };
     let collate = if job.collate { "Collated" } else { "Uncollated" };
-    let color = if job.grayscale { "Monochrome" } else { "Color" };
+    // Only grayscale is asked for. Without it the ticket says nothing about colour, so a black and
+    // white chosen in the driver's own preferences (Properties…) still applies (storytold/pdfcraft#2422).
+    let color = if job.grayscale { "\n <psf:Feature name=\"psk:PageOutputColor\"><psf:Option name=\"psk:Monochrome\"/></psf:Feature>" } else { "" };
     let copies = job.copies.clamp(1, 999);
     format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <psf:PrintTicket version="1" xmlns:psf="{NS_PSF}" xmlns:psk="{NS_PSK}" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
  <psf:ParameterInit name="psk:JobCopiesAllDocuments"><psf:Value xsi:type="xsd:integer">{copies}</psf:Value></psf:ParameterInit>
- <psf:Feature name="psk:DocumentCollate"><psf:Option name="psk:{collate}"/></psf:Feature>{duplex}
- <psf:Feature name="psk:PageOutputColor"><psf:Option name="psk:{color}"/></psf:Feature>
+ <psf:Feature name="psk:DocumentCollate"><psf:Option name="psk:{collate}"/></psf:Feature>{duplex}{color}
  <psf:Feature name="psk:PageScaling"><psf:Option name="psk:None"/></psf:Feature>
  <psf:Feature name="psk:PageOrientation"><psf:Option name="psk:{orientation}"/></psf:Feature>
 </psf:PrintTicket>"#
@@ -256,10 +257,11 @@ mod tests {
         assert!(!xml.contains("<&>"), "the title never enters the XML");
         assert!(roxmltree::Document::parse(&xml).is_ok());
         let xml = ticket_xml(&Job { copies: 5000, ..Job::default() }, false);
-        for value in [">999<", "psk:Collated", "psk:Color", "psk:Portrait"] {
+        for value in [">999<", "psk:Collated", "psk:Portrait"] {
             assert!(xml.contains(value), "missing {value}");
         }
         assert!(!xml.contains("JobDuplex"), "no duplex asked: the queue's default applies");
+        assert!(!xml.contains("PageOutputColor"), "no grayscale asked: the driver's own colour setting applies");
         assert!(ticket_xml(&Job { duplex: Some(Duplex::Off), ..Job::default() }, false).contains("psk:OneSided"));
         assert!(ticket_xml(&Job { duplex: Some(Duplex::LongEdge), ..Job::default() }, false).contains("psk:TwoSidedLongEdge"));
         assert!(!ticket_xml(&Job { printer: Some("Office \"east\" <1>".into()), ..Job::default() }, false).contains("east"));
