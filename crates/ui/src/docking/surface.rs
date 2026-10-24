@@ -501,6 +501,20 @@ impl DockHeights {
     }
 }
 
+/// How a floating window in its own OS window behaves (feature `native-windows`), see
+/// [`DockContent::window_kind`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum WindowKind {
+    /// A tool palette: it stays above other windows and hides while none of the app's windows
+    /// has focus.
+    #[default]
+    Palette,
+    /// A window of its own, such as a viewer on a second display: normal window level, and it
+    /// stays shown while the app is in the background.
+    Normal,
+}
+
 #[derive(Clone)]
 pub(super) struct Drag<P> {
     pub(super) panel: P,
@@ -629,6 +643,11 @@ pub trait DockContent<P> {
     fn allow_native(&self, _panel: &P) -> bool {
         true
     }
+    /// How the panel's native floating window behaves (feature `native-windows`). A window
+    /// holding any [`WindowKind::Normal`] panel is a normal window; the rest are palettes.
+    fn window_kind(&self, _panel: &P) -> WindowKind {
+        WindowKind::Palette
+    }
     /// Host-owned drop resolution for targets the renderer cannot know about. Returning
     /// feedback consumes the gesture, including no-op targets; the renderer then emits no move.
     fn resolve_drag(&mut self, _ctx: &Context, _style: &DockStyle, _request: &DropRequest<'_, P>) -> Option<DropFeedback> {
@@ -713,6 +732,9 @@ impl<P, C: DockContent<P> + ?Sized> DockContent<P> for Overrides<'_, P, C> {
     }
     fn allow_native(&self, panel: &P) -> bool {
         self.inner.allow_native(panel)
+    }
+    fn window_kind(&self, panel: &P) -> WindowKind {
+        self.inner.window_kind(panel)
     }
     fn resolve_drag(&mut self, ctx: &Context, style: &DockStyle, request: &DropRequest<'_, P>) -> Option<DropFeedback> {
         self.inner.resolve_drag(ctx, style, request)

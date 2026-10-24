@@ -380,6 +380,8 @@ pub struct HostWindow {
     /// `InnerSize`.
     pub rect: Rect,
     pub visible: bool,
+    /// The window level its builder asked for on its last frame.
+    pub level: Option<egui::WindowLevel>,
     /// Frames it drew.
     pub frames: usize,
     /// Events for its next frame, in its own coordinates.
@@ -434,11 +436,21 @@ impl NativeHost {
             let builder = &viewport.builder;
             let rect = Rect::from_min_size(builder.position.unwrap_or_default() + host.frame, builder.inner_size.unwrap_or(vec2(300.0, 200.0)));
             let visible = builder.visible.unwrap_or(true);
-            host.windows.entry(id).or_insert_with(|| HostWindow { rect, visible, frames: 0, events: Vec::new(), close: false, shapes: Vec::new() });
+            let level = builder.window_level;
+            host.windows.entry(id).or_insert_with(|| HostWindow {
+                rect,
+                visible,
+                level,
+                frames: 0,
+                events: Vec::new(),
+                close: false,
+                shapes: Vec::new(),
+            });
             let mut viewports = host.infos();
             let (time, focused, modifiers) = (host.time, host.focus == Some(id), host.modifiers);
             let Some(window) = host.windows.get_mut(&id) else { return };
             window.frames += 1;
+            window.level = level;
             if std::mem::take(&mut window.close)
                 && let Some(info) = viewports.get_mut(&id)
             {

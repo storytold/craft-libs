@@ -5,7 +5,7 @@ use egui::{Color32, Event, Key, Modifiers, PointerButton, Pos2, Rect, ViewportCo
 
 use super::render::{APPKIT_CORNER, DragPointer, MACOS_CLOSE, WindowDrag, appkit_resize_areas, close_rects, floats_shown, resize_bands};
 use super::testing::DockDriver;
-use super::{Action, DockContent, Floating, Hit, Layout, Monitor, Node, Permissions, Placement, Target, Workspace};
+use super::{Action, DockContent, Floating, Hit, Layout, Monitor, Node, Permissions, Placement, Target, WindowKind, Workspace};
 use crate::layout::{SplitAxis, SplitSize};
 
 /// Desktop position of the main window's content.
@@ -17,6 +17,8 @@ struct Content {
     fixed: Vec<u32>,
     /// Panels that stay in-window.
     in_window: Vec<u32>,
+    /// Viewer panels: their windows are normal windows.
+    normal: Vec<u32>,
     /// The panel with a text field, what it holds, and whether it takes focus next frame.
     text: Option<u32>,
     typed: String,
@@ -49,6 +51,10 @@ impl DockContent<u32> for Content {
 
     fn allow_native(&self, panel: &u32) -> bool {
         !self.in_window.contains(panel)
+    }
+
+    fn window_kind(&self, panel: &u32) -> WindowKind {
+        if self.normal.contains(panel) { WindowKind::Normal } else { WindowKind::Palette }
     }
 }
 
@@ -346,6 +352,37 @@ fn floating_windows_hide_while_the_app_is_inactive() {
     d.host().focus = Some(egui::ViewportId::ROOT);
     d.step(vec![]);
     assert!(d.host().windows[&viewport].visible);
+}
+
+#[test]
+fn viewer_windows_stay_shown_at_normal_level() {
+    let mut layout = layout(false);
+    layout.floating = vec![
+        Floating::single(vec![5], 0, [300.0, 80.0, 240.0, 300.0]),
+        Floating::single(vec![6], 0, [560.0, 80.0, 240.0, 300.0]),
+        // A palette in front of a viewer's tab: the viewer makes the window normal.
+        Floating::single(vec![7, 8], 0, [820.0, 80.0, 240.0, 300.0]),
+    ];
+    let mut d = driver(layout);
+    d.content.normal = vec![5, 8];
+    d.step(vec![]);
+    let [viewer, palette, mixed] = [5, 6, 7].map(|p| d.viewport(window(&d, p).id));
+    let level = |d: &DockDriver<u32, Content>, v| d.host().windows[&v].level;
+    assert_eq!(level(&d, viewer), Some(egui::WindowLevel::Normal));
+    assert_eq!(level(&d, palette), Some(egui::WindowLevel::AlwaysOnTop));
+    assert_eq!(level(&d, mixed), Some(egui::WindowLevel::Normal));
+    // Another application: only the palette hides, and the others get no visibility command.
+    d.host().focus = None;
+    for _ in 0..20 {
+        d.step(vec![]);
+    }
+    let shown = |d: &DockDriver<u32, Content>| [viewer, palette, mixed].map(|v| d.host().windows[&v].visible);
+    assert_eq!(shown(&d), [true, false, true]);
+    let told = |d: &DockDriver<u32, Content>, v| d.host().commands.iter().any(|(w, c)| *w == v && matches!(c, ViewportCommand::Visible(_)));
+    assert!(!told(&d, viewer) && !told(&d, mixed));
+    d.host().focus = Some(egui::ViewportId::ROOT);
+    d.step(vec![]);
+    assert_eq!(shown(&d), [true, true, true]);
 }
 
 #[test]

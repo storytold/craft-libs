@@ -85,6 +85,8 @@ pub(in crate::docking) struct Cross<P> {
     pub main: Option<Rect>,
     /// Shown native windows' desktop rects, front first.
     pub windows: Vec<(u64, Rect)>,
+    /// How many of `windows` lie in front of the main window.
+    pub front: usize,
     /// Targets of the native windows drawn this frame.
     pub surfaces: Vec<Surface<P>>,
     /// The drag's pointer, as its owner wrote it this frame.
@@ -106,6 +108,7 @@ impl<P> Default for Cross<P> {
             focus_lost: false,
             main: None,
             windows: Vec::new(),
+            front: 0,
             surfaces: Vec::new(),
             pointer: None,
             release: None,
@@ -152,7 +155,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
     /// known, and a point outside it is on the desktop. `current` is a window drawing now.
     fn destination(&self, pointer: &DragPointer, current: Option<&Surface<P>>) -> Option<Dest> {
         if let (Some(point), Some(main)) = (pointer.desktop(), self.cross.main) {
-            return Some(match window_at(point, &self.cross.windows, Some(main), pointer.window) {
+            return Some(match window_at(point, &self.cross.windows, self.cross.front, Some(main), pointer.window) {
                 Over::Main(local) => Dest::Main(local),
                 Over::Window(id, local) => Dest::Window(id, local),
                 Over::Desktop => Dest::Desktop(Some(point)),

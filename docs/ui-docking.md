@@ -354,10 +354,18 @@ that is not floatable, stays in-window. Floating windows get no taskbar or Alt-T
   `Floating::with_id` sets one; a layout
   loads with unique ids; a window that merges into another takes the receiver's id, and a whole
   window that moves (floated again, or its only group dragged) keeps its own.
-- **Level.** The windows stay above other windows (`WindowLevel::AlwaysOnTop`), so clicking the
-  document does not bury them. While none of the app's windows has focus they hide
-  (`ViewportCommand::Visible(false)`), and they come back when one has it again. The hide waits
-  250 ms, so focus moving between the app's own windows does not flicker.
+- **Kind and level.** `DockContent::window_kind` sorts panels into palettes
+  (`WindowKind::Palette`, the default) and viewers (`WindowKind::Normal`), such as a video
+  monitor on a second display. A window holding any `Normal` panel is a normal window, whichever
+  of its tabs shows; the rest are palettes.
+  - Palettes stay above other windows (`WindowLevel::AlwaysOnTop`), so clicking the document
+    does not bury them. While none of the app's windows has focus they hide
+    (`ViewportCommand::Visible(false)`), and they come back when one has it again. The hide
+    waits 250 ms, so focus moving between the app's own windows does not flicker.
+  - Normal windows have `WindowLevel::Normal` and stay shown while the app is in the
+    background. They stack with the main window by focus, below every palette; a drag over a
+    normal window that lies behind the main window targets the main window where the two
+    overlap, and the normal window outside the main window.
 - **Bar.** Each window has a bar at the top, 18 points high, in the floating title bar's style:
   the title (the shown panel of its first group) and ×. Dragging the bar moves the window. On
   Wayland, where a window cannot be placed, the bar hands the move to the compositor. On
@@ -431,8 +439,9 @@ that is not floatable, stays in-window. Floating windows get no taskbar or Alt-T
   - *Hit-testing.* The owner adds its desktop origin to the pointer: a native window's reported
     `inner_rect.min`, or while it moves by its bar, the place it was last put less the pointer's
     offset from the pressed point. The window under that
-    desktop point is a floating native window first, most recently focused first, then the main
-    window. A window moving by its bar is never its own target. A point in no window is on the
+    desktop point is a floating native window in front of the main window first (palettes, then
+    normal windows, most recently focused first), then the main window, then a normal window
+    behind it. A window moving by its bar is never its own target. A point in no window is on the
     desktop.
   - *Targets and previews.* Each window draws its drop targets in its own coordinates, and the
     window under the pointer draws the drop preview (zone, dock line, ghost) in its own frame.
