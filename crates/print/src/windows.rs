@@ -13,7 +13,7 @@
 use std::io::Write as _;
 
 use winprint::printer::{PrinterDevice, WinPdfPrinter};
-use winprint::ticket::document::{NS_PSK, OwnedName, PrintFeature, PrintTicketDocument, reader::ParsableXmlDocument as _};
+use winprint::ticket::document::{NS_PSK, OwnedName, PrintFeature, PrintTicketDocument, PropertyValue, reader::ParsableXmlDocument as _};
 use winprint::ticket::{FeatureOptionPack as _, PageMediaSize, PrintCapabilities, PrintTicket, PrintTicketBuilder};
 
 use crate::sheets::{self, Fit, SAME};
@@ -64,6 +64,9 @@ fn select_device(devices: Vec<PrinterDevice>, requested: Option<&str>, default: 
 /// job at the wrong size.
 fn driver_ticket(device: &PrinterDevice, job: &Job, sheet: (f64, f64), landscape: bool) -> Result<(PrintTicket, (u32, u32)), Error> {
     let capabilities = PrintCapabilities::fetch(device).map_err(spool_error)?;
+    let capabilities_xml = PrintCapabilities::fetch_xml(device).map_err(spool_error)?;
+    let capabilities_xml = std::str::from_utf8(&capabilities_xml).map_err(spool_error)?;
+    let custom = ticket::custom_media(capabilities_xml);
     let medias: Vec<PageMediaSize> = capabilities.page_media_sizes().collect();
     let papers: Vec<Paper<'_>> = medias
         .iter()
@@ -75,22 +78,56 @@ fn driver_ticket(device: &PrinterDevice, job: &Job, sheet: (f64, f64), landscape
         })
         .collect();
     let media = ticket::matching_paper(&papers, sheet.0, sheet.1).and_then(|i| medias.get(i));
+    let mut custom_size = None;
     let wanted = match (media, job.scaling) {
         (Some(m), _) => Some((m.size().width_in_micron(), m.size().height_in_micron())),
         (None, Scaling::ShrinkToFit) => None,
         (None, Scaling::Exact) => {
-            return Err(spool_error(format!(
-                "{} has no {:.2} × {:.2} inch paper; choose a paper size it has, or add this one in its driver",
-                device.name(),
-                sheet.0 / 72.0,
-                sheet.1 / 72.0
-            )));
+            let width = ticket::micrometres(sheet.0).ok_or_else(|| spool_error("the PDF sheet size is not usable"))?;
+            let height = ticket::micrometres(sheet.1).ok_or_else(|| spool_error("the PDF sheet size is not usable"))?;
+            let Some((width, height)) = custom.and_then(|range| range.fit(width, height)) else {
+                return Err(spool_error(format!(
+                    "{} has no {:.2} x {:.2} inch paper and no matching custom media size; choose a paper size it has, or add this one in its driver",
+                    device.name(),
+                    sheet.0 / 72.0,
+                    sheet.1 / 72.0
+                )));
+            };
+            // A wide custom sheet takes Landscape, as a wide sheet on a named portrait paper
+            // does; the driver normalises the custom form to its own portrait dimensions.
+            custom_size = Some((width, height));
+            Some((width, height))
         }
     };
     let requested = PrintTicket::from_xml(ticket::ticket_xml(job, landscape));
     let mut document = PrintTicketDocument::parse_from_bytes(requested.get_xml()).map_err(spool_error)?;
     if let Some(media) = media {
         let media_ticket: PrintTicket = media.clone().into();
+        let media_document = PrintTicketDocument::parse_from_bytes(media_ticket.get_xml()).map_err(spool_error)?;
+        document.features.extend(media_document.features);
+        document.parameter_inits.extend(media_document.parameter_inits);
+    } else if let Some((width, height)) = custom_size {
+        let Some(mut custom) = medias
+            .iter()
+            .find(|m| m.option().name.as_ref().is_some_and(|n| n.namespace_ref() == Some(NS_PSK) && n.local_name == "CustomMediaSize"))
+            .cloned()
+        else {
+            return Err(spool_error("the printer offers a custom media size but does not list it; nothing was sent"));
+        };
+        let (mut width_set, mut height_set) = (false, false);
+        for parameter in custom.parameters_mut() {
+            if parameter.name.namespace_ref() == Some(NS_PSK) && parameter.name.local_name == "PageMediaSizeMediaSizeWidth" {
+                parameter.value = PropertyValue::Integer(width as i32);
+                width_set = true;
+            } else if parameter.name.namespace_ref() == Some(NS_PSK) && parameter.name.local_name == "PageMediaSizeMediaSizeHeight" {
+                parameter.value = PropertyValue::Integer(height as i32);
+                height_set = true;
+            }
+        }
+        if !(width_set && height_set) {
+            return Err(spool_error("the printer does not report the custom size parameters; nothing was sent"));
+        }
+        let media_ticket: PrintTicket = custom.into();
         let media_document = PrintTicketDocument::parse_from_bytes(media_ticket.get_xml()).map_err(spool_error)?;
         document.features.extend(media_document.features);
         document.parameter_inits.extend(media_document.parameter_inits);
@@ -220,6 +257,27 @@ mod tests {
             if !offered {
                 assert!(retained.is_err(), "unsupported explicit option must not be silently dropped");
             }
+        }
+    }
+
+    /// A real driver's custom media: a 1067 x 480 mm sheet, no named paper of that size. The
+    /// driver must accept the custom PrintTicket and keep the requested paper; sends no job.
+    /// `CRAFT_PRINT_TEST_PRINTER` names the queue; `CRAFT_PRINT_TEST_TICKET_OUTPUT` keeps the
+    /// validated ticket.
+    #[test]
+    #[ignore = "needs CRAFT_PRINT_TEST_PRINTER naming an installed printer; sends no job"]
+    fn an_installed_driver_validates_a_custom_media_ticket() {
+        let name = std::env::var("CRAFT_PRINT_TEST_PRINTER").unwrap();
+        let device = select_device(PrinterDevice::all().unwrap(), Some(&name), None).unwrap();
+        let sheet = (3024.566929133858, 1360.6299212598426);
+        let (ticket, paper) = match driver_ticket(&device, &Job::default(), sheet, true) {
+            Ok(value) => value,
+            Err(e) => panic!("{e}"),
+        };
+        let expected = (1_067_000, 480_000);
+        assert!(paper == expected || paper == (expected.1, expected.0), "driver paper {paper:?}");
+        if let Ok(path) = std::env::var("CRAFT_PRINT_TEST_TICKET_OUTPUT") {
+            std::fs::write(path, ticket.get_xml()).unwrap();
         }
     }
 

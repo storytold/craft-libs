@@ -146,11 +146,10 @@ fn integer(node: roxmltree::Node<'_, '_>, tag: &str, name: &str) -> Option<u32> 
 /// some drivers return empty vendor parameters that a stricter parser would refuse.
 pub(crate) fn verify_ticket(xml: &str, paper: Option<(u32, u32)>, landscape: bool) -> Result<(u32, u32), Error> {
     let document = roxmltree::Document::parse(xml).map_err(spool_error)?;
-    let feature = |name: &str| document.root_element().children().find(|n| n.has_tag_name((NS_PSF, "Feature")) && named(*n, name));
+    let root = document.root_element();
+    let feature = |name: &str| root.children().find(|n| n.has_tag_name((NS_PSF, "Feature")) && named(*n, name));
     let media = feature("PageMediaSize").ok_or_else(|| spool_error("the printer's driver did not confirm the paper size; nothing was sent"))?;
-    let size = integer(media, "ScoredProperty", "MediaSizeWidth")
-        .zip(integer(media, "ScoredProperty", "MediaSizeHeight"))
-        .filter(|(w, h)| *w > 0 && *h > 0)
+    let size = resolved_media_size(root, media)
         .ok_or_else(|| spool_error("the printer's driver gave a paper without a size (a roll?); nothing was sent"))?;
     if let Some((w, h)) = paper {
         let same = |a: (u32, u32), b: (u32, u32)| a.0.abs_diff(b.0) <= PAPER_TOLERANCE && a.1.abs_diff(b.1) <= PAPER_TOLERANCE;
@@ -263,6 +262,59 @@ mod tests {
         assert!(ticket_xml(&Job { duplex: Some(Duplex::Off), ..Job::default() }, false).contains("psk:OneSided"));
         assert!(ticket_xml(&Job { duplex: Some(Duplex::LongEdge), ..Job::default() }, false).contains("psk:TwoSidedLongEdge"));
         assert!(!ticket_xml(&Job { printer: Some("Office \"east\" <1>".into()), ..Job::default() }, false).contains("east"));
+    }
+
+    /// A validated ticket for a driver custom media size, as the driver returns it: the option's
+    /// dimensions are parameter references, resolved from the parameter initializers.
+    fn custom_validated(paper: (u32, u32), orientation: &str) -> String {
+        format!(
+            r#"<psf:PrintTicket version="1" xmlns:psf="{NS_PSF}" xmlns:psk="{NS_PSK}" xmlns:media="{NS_PSK}" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+<psf:ParameterInit name="media:PageMediaSizeMediaSizeWidth"><psf:Value xsi:type="xsd:integer">{}</psf:Value></psf:ParameterInit>
+<psf:ParameterInit name="media:PageMediaSizeMediaSizeHeight"><psf:Value xsi:type="xsd:integer">{}</psf:Value></psf:ParameterInit>
+<psf:Feature name="psk:PageMediaSize"><psf:Option name="psk:CustomMediaSize">
+<psf:ScoredProperty name="psk:MediaSizeWidth"><psf:ParameterRef name="psk:PageMediaSizeMediaSizeWidth"/></psf:ScoredProperty>
+<psf:ScoredProperty name="psk:MediaSizeHeight"><psf:ParameterRef name="psk:PageMediaSizeMediaSizeHeight"/></psf:ScoredProperty>
+</psf:Option></psf:Feature>
+<psf:Feature name="psk:PageOrientation"><psf:Option name="psk:{orientation}"/></psf:Feature>
+</psf:PrintTicket>"#,
+            paper.0, paper.1
+        )
+    }
+
+    #[test]
+    fn a_custom_media_ticket_resolves_its_parameters() {
+        let custom = (1_067_000, 480_000);
+        let xml = custom_validated(custom, "Portrait");
+        assert_eq!(verify_ticket(&xml, Some(custom), false), Ok(custom));
+        assert_eq!(verify_ticket(&xml, Some((custom.1, custom.0)), false), Ok(custom), "either way round");
+        assert!(verify_ticket(&xml, Some((1_000_000, 480_000)), false).is_err(), "another size");
+        assert!(verify_ticket(&xml, Some(custom), true).is_err(), "orientation");
+    }
+
+    #[test]
+    fn custom_media_ranges_come_from_the_capabilities() {
+        let caps = format!(
+            r#"<psf:PrintCapabilities version="1" xmlns:psf="{NS_PSF}" xmlns:psk="{NS_PSK}" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+<psf:Feature name="psk:PageMediaSize"><psf:Option name="psk:CustomMediaSize">
+<psf:ScoredProperty name="psk:MediaSizeWidth"><psf:ParameterRef name="psk:PageMediaSizeMediaSizeWidth"/></psf:ScoredProperty>
+<psf:ScoredProperty name="psk:MediaSizeHeight"><psf:ParameterRef name="psk:PageMediaSizeMediaSizeHeight"/></psf:ScoredProperty>
+</psf:Option></psf:Feature>
+<psf:ParameterDef name="psk:PageMediaSizeMediaSizeWidth"><psf:Property name="psf:MinValue"><psf:Value xsi:type="xsd:integer">78994</psf:Value></psf:Property><psf:Property name="psf:MaxValue"><psf:Value xsi:type="xsd:integer">1123950</psf:Value></psf:Property></psf:ParameterDef>
+<psf:ParameterDef name="psk:PageMediaSizeMediaSizeHeight"><psf:Property name="psf:MinValue"><psf:Value xsi:type="xsd:integer">139996</psf:Value></psf:Property><psf:Property name="psf:MaxValue"><psf:Value xsi:type="xsd:integer">91000008</psf:Value></psf:Property></psf:ParameterDef>
+</psf:PrintCapabilities>"#
+        );
+        let custom = custom_media(&caps).expect("custom media");
+        assert_eq!(custom, CustomMedia { min_width: 78_994, max_width: 1_123_950, min_height: 139_996, max_height: 91_000_008 });
+        assert!(custom.allows(1_067_000, 480_000));
+        assert!(!custom.allows(1_200_000, 480_000));
+        assert!(!custom.allows(1_067_000, 100));
+        assert_eq!(custom.fit(1_067_000, 480_000), Some((1_067_000, 480_000)));
+        assert_eq!(custom.fit(1_200_000, 480_000), Some((480_000, 1_200_000)), "the other way round fits");
+        assert_eq!(custom.fit(2_000_000, 2_000_000), None);
+        assert!(
+            custom_media("<psf:PrintCapabilities xmlns:psf=\"http://schemas.microsoft.com/windows/2003/08/printing/printschemaframework\"/>")
+                .is_none()
+        );
     }
 
     /// A validated ticket as a driver returns it.
@@ -404,4 +456,87 @@ mod tests {
         assert_eq!(job_filename(""), "Print.pdf");
         assert_eq!(job_filename("Отчёт"), "Отчёт.pdf");
     }
+}
+/// The driver's custom-media support and the bounds its `psk:CustomMediaSize` width and height
+/// parameters take, in micrometres. Only a driver that offers the option with both bounds can
+/// take a size no named paper covers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct CustomMedia {
+    pub min_width: u32,
+    pub max_width: u32,
+    pub min_height: u32,
+    pub max_height: u32,
+}
+
+impl CustomMedia {
+    /// Whether a sheet of `width` � `height` micrometres is inside the driver's custom-media range.
+    pub(crate) fn allows(self, width: u32, height: u32) -> bool {
+        (self.min_width..=self.max_width).contains(&width) && (self.min_height..=self.max_height).contains(&height)
+    }
+
+    /// The sheet's dimensions in the order this driver can take, either way round; `None` when
+    /// neither order is inside its ranges.
+    pub(crate) fn fit(self, width: u32, height: u32) -> Option<(u32, u32)> {
+        [(width, height), (height, width)].into_iter().find(|&(w, h)| self.allows(w, h))
+    }
+}
+
+/// The driver's `psk:CustomMediaSize` option and the ranges of its width and height parameters,
+/// from its PrintCapabilities XML. `None` when the driver offers no custom media, or gives no
+/// bounds for a side.
+pub(crate) fn custom_media(xml: &str) -> Option<CustomMedia> {
+    let document = roxmltree::Document::parse(xml).ok()?;
+    let root = document.root_element();
+    let feature = root.children().find(|n| n.has_tag_name((NS_PSF, "Feature")) && named(*n, "PageMediaSize"))?;
+    feature.children().find(|n| n.has_tag_name((NS_PSF, "Option")) && named(*n, "CustomMediaSize"))?;
+    let range = |name: &str| {
+        let def = root.descendants().find(|n| n.has_tag_name((NS_PSF, "ParameterDef")) && named_ns(*n, name, NS_PSK))?;
+        let bound = |property: &str| {
+            def.descendants()
+                .find(|n| n.has_tag_name((NS_PSF, "Property")) && named_ns(*n, property, NS_PSF))
+                .and_then(|n| n.descendants().find(|v| v.has_tag_name((NS_PSF, "Value"))))
+                .and_then(|v| v.text())
+                .and_then(|v| v.trim().parse::<u32>().ok())
+        };
+        Some((bound("MinValue")?, bound("MaxValue")?))
+    };
+    let (min_width, max_width) = range("PageMediaSizeMediaSizeWidth")?;
+    let (min_height, max_height) = range("PageMediaSizeMediaSizeHeight")?;
+    (min_width <= max_width && min_height <= max_height).then_some(CustomMedia { min_width, max_width, min_height, max_height })
+}
+
+fn named_ns(node: roxmltree::Node<'_, '_>, local: &str, namespace: &str) -> bool {
+    node.attribute("name")
+        .and_then(|v| v.split_once(':'))
+        .is_some_and(|(prefix, name)| name == local && node.lookup_namespace_uri(Some(prefix)) == Some(namespace))
+}
+
+/// A `name` attribute's local part and the namespace URI its prefix resolves to in this node.
+/// Prefixes are only XML spelling; the same namespace under two prefixes names the same thing.
+fn qualified_name(node: roxmltree::Node<'_, '_>, attribute: &str) -> Option<(String, String)> {
+    let value = node.attribute(attribute)?;
+    let (prefix, local) = value.split_once(':').map_or((None, value), |(prefix, local)| (Some(prefix), local));
+    let namespace = node.lookup_namespace_uri(prefix)?;
+    Some((local.to_owned(), namespace.to_owned()))
+}
+
+/// The integer a scored property carries, directly or through its parameter initializer.
+fn scored_integer(root: roxmltree::Node<'_, '_>, media: roxmltree::Node<'_, '_>, name: &str) -> Option<u32> {
+    let scored = media.descendants().find(|n| n.has_tag_name((NS_PSF, "ScoredProperty")) && named(*n, name))?;
+    if let Some(value) =
+        scored.children().find(|n| n.has_tag_name((NS_PSF, "Value"))).and_then(|n| n.text()).and_then(|v| v.trim().parse::<u32>().ok())
+    {
+        return Some(value);
+    }
+    let reference = qualified_name(scored.children().find(|n| n.has_tag_name((NS_PSF, "ParameterRef")))?, "name")?;
+    let init = root.descendants().find(|n| {
+        n.has_tag_name((NS_PSF, "ParameterInit")) && qualified_name(*n, "name").is_some_and(|name| name.0 == reference.0 && name.1 == reference.1)
+    })?;
+    init.children().find(|n| n.has_tag_name((NS_PSF, "Value"))).and_then(|n| n.text()).and_then(|v| v.trim().parse::<u32>().ok())
+}
+
+fn resolved_media_size(root: roxmltree::Node<'_, '_>, media: roxmltree::Node<'_, '_>) -> Option<(u32, u32)> {
+    let width = scored_integer(root, media, "MediaSizeWidth")?;
+    let height = scored_integer(root, media, "MediaSizeHeight")?;
+    (width > 0 && height > 0).then_some((width, height))
 }

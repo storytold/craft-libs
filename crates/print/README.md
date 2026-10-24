@@ -27,7 +27,10 @@ opens Windows printer preferences and submits jobs with copies, collation, duple
   from storytold/pdfcraft#599 and #1132.
   A job has one ticket, so one paper and orientation. Sheets of the other orientation are
   turned back with `/Rotate`, so portrait and landscape sheets still print as one job. Exact
-  size refuses sheets of different sizes and paper the driver lacks. Shrink-to-fit uses the
+  size refuses sheets of different sizes and paper the driver lacks; when no named paper matches,
+  it uses the driver's `psk:CustomMediaSize` option with the sheet's actual dimensions (for
+  example a 1067 x 480 mm plotter sheet), refusing a size outside the driver's limits instead of
+  cropping it. Shrink-to-fit uses the
   driver's matching paper, else its default paper, and puts every sheet on it: a sheet that
   doesn't fit inside the paper's widest hardware margin is shrunk, a smaller one keeps its
   size, and both are centred. Both are done by appending an incremental update to the PDF
