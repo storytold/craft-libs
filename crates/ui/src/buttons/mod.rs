@@ -51,15 +51,26 @@ pub struct IconButton<'a> {
     selected: bool,
     style: &'a IconButtonStyle,
     single_shape_frame: bool,
+    animated_hover: bool,
 }
 
 impl<'a> IconButton<'a> {
     pub fn new(label: &'a str, size: Vec2, style: &'a IconButtonStyle) -> Self {
-        Self { label, size, selected: false, style, single_shape_frame: false }
+        Self { label, size, selected: false, style, single_shape_frame: false, animated_hover: false }
     }
 
     pub fn selected(mut self, selected: bool) -> Self {
         self.selected = selected;
+        self
+    }
+
+    /// Opt into smooth transitions between the normal and hovered visuals. The default is
+    /// instantaneous, preserving existing consumers. Duration comes from egui's global
+    /// `Style::animation_time`; set it to zero for the application's motion-off preference.
+    /// Selected/pressed visuals and disabled-state changes remain immediate. This affects
+    /// painting only: the hit rectangle, focus outline and click response never animate.
+    pub fn animated_hover(mut self, enabled: bool) -> Self {
+        self.animated_hover = enabled;
         self
     }
 
@@ -86,7 +97,23 @@ impl<'a> IconButton<'a> {
             return response;
         }
 
-        let visuals = self.style.visuals(self.selected, response.hovered(), response.is_pointer_button_down_on());
+        let visuals = if self.animated_hover {
+            let duration = ui.ctx().global_style().animation_time;
+            let duration = if ui.is_enabled() && duration.is_finite() { duration.clamp(0.0, 10.0) } else { 0.0 };
+            let hover = ui.ctx().animate_bool_with_time_and_easing(
+                response.id.with("craft_icon_button_hover"),
+                response.hovered(),
+                duration,
+                egui::emath::easing::cubic_out,
+            );
+            if self.selected || (response.is_pointer_button_down_on() && self.style.pressed.is_some()) {
+                self.style.visuals(self.selected, response.hovered(), response.is_pointer_button_down_on())
+            } else {
+                blend(self.style.normal, self.style.hovered, hover)
+            }
+        } else {
+            self.style.visuals(self.selected, response.hovered(), response.is_pointer_button_down_on())
+        };
         let stroke = bounded_stroke(visuals.stroke, rect);
         if self.single_shape_frame {
             ui.painter().rect(rect, self.style.corner_radius, visuals.fill, stroke, StrokeKind::Inside);
@@ -107,6 +134,19 @@ impl<'a> IconButton<'a> {
             }
         }
         response
+    }
+}
+
+fn blend(from: ButtonVisuals, to: ButtonVisuals, progress: f32) -> ButtonVisuals {
+    // Sanitize before interpolation: NaN * zero is still NaN at an animation endpoint.
+    let width = |value: f32| if value.is_finite() { value.clamp(0.0, 4096.0) } else { 0.0 };
+    ButtonVisuals {
+        fill: from.fill.lerp_to_gamma(to.fill, progress),
+        icon: from.icon.lerp_to_gamma(to.icon, progress),
+        stroke: Stroke::new(
+            egui::lerp(width(from.stroke.width)..=width(to.stroke.width), progress),
+            from.stroke.color.lerp_to_gamma(to.stroke.color, progress),
+        ),
     }
 }
 

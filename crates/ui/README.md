@@ -55,6 +55,8 @@ remain the responsibility of the existing loader.
 
 ## Icon buttons
 
+Buttons can opt into [hover fades](docs/hover-fades.md) without changing existing styles or interaction.
+
 `buttons::IconButton` accepts a label, size and `IconButtonStyle`, and returns `egui::Response`.
 `ButtonVisuals` describes fill, border and icon tint for normal, hovered, pressed and selected
 states. Selection wins over press and hover. `pressed: None` keeps ordinary hover/normal styling;
