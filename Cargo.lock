@@ -938,6 +938,7 @@ dependencies = [
  "miniz_oxide 0.8.9",
  "roxmltree",
  "tempfile",
+ "windows-result",
  "winprint",
  "winsafe",
 ]
@@ -6401,7 +6402,7 @@ dependencies = [
 [[package]]
 name = "winprint"
 version = "0.2.1"
-source = "git+https://github.com/storytold/winprint.rs?rev=5f80b9baf6b58937c401656634e42d33f00ddf49#5f80b9baf6b58937c401656634e42d33f00ddf49"
+source = "git+https://github.com/storytold/winprint.rs?rev=refs%2Fpull%2F6%2Fhead#0244f03628f5ae21a304e6a9f59ab137e501e059"
 dependencies = [
  "flate2",
  "fmt-derive",

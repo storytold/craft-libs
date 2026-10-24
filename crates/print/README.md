@@ -25,6 +25,37 @@ opens Windows printer preferences and submits jobs with copies, collation, duple
   sent. Paper is the driver's own option for the sheet's size (to 0.25 mm), preferring the one
   named like the standard size ("ARCH D" over a custom 24 × 36 in entry). This backend comes
   from storytold/pdfcraft#599 and #1132.
+  When the print system refuses that XPS job early, the same file and ticket go through GDI
+  instead (winprint's `GdiPdfPrinter`), as one GDI document whose DEVMODE comes from the
+  ticket, so the ticket's copies, collation and duplex reach the driver (not yet checked on a
+  real driver): each sheet is rendered by
+  `Windows.Data.Pdf` to an image at the printer's resolution, at most 300 dpi and 12
+  megapixels, and stretched over the whole sheet in bands of at most 4 MiB. The receipt then
+  says "through GDI", and progress starts again from the first sheet. Two failures are retried
+  this way, both once winprint's print context exists, so that dropping it has asked the
+  spooler to cancel the unfinished XPS job (best effort) before the GDI job starts:
+  - A PrintTicket the print system rejects while the XPS package is written:
+    `E_PRINTTICKET_FORMAT` (0x80040003; localized Windows reported it with an "interface not
+    supported" text, "Interfaccia non supportata.", "Schnittstelle nicht unterstützt"). Seen at
+    `ID2D1PrintControl::Close` of a one-sheet job with the Brother MFC-L3760CDW series driver,
+    which then printed it through GDI, and reported for a one-sheet job with the Brother
+    MFC-L2710DN series driver (storytold/pdfcraft#3032). The likely cause is the one upstream
+    ArcticLampyrid/winprint.rs#3 reports for a Brother driver with the same code, a duplicate
+    `JobPrintSpeed` (the driver's own next to the one Windows adds); the same ticket still
+    becomes a DEVMODE for GDI. This one is retried with at most one sheet accepted: the
+    rejected ticket is the job's, the same on every sheet, so it is expected at the first
+    hand-over to the package (seen at `Close` of one sheet; inferred, not seen, at `AddPage` of
+    sheet 2). With two or more sheets accepted, earlier sheets may already be spooling, so it is
+    reported rather than risk printing them twice.
+  - `E_NOINTERFACE` before any sheet was accepted: the driver took nothing through XPS. Not
+    seen with this code on a real driver yet (the Brother report first read as `E_NOINTERFACE`
+    was the code above); after a sheet was accepted it is reported as it is.
+
+  Never retried: a failure while winprint is still creating the XPS job (nothing would cancel
+  it), a failure the spooler reports after the package was closed (the whole job written), a
+  ticket that cannot become a DEVMODE, and any other failure. When GDI fails too, both errors
+  are reported.
+
   A job has one ticket, so one paper and orientation. Sheets of the other orientation are
   turned back with `/Rotate`, so portrait and landscape sheets still print as one job. Exact
   size refuses sheets of different sizes and paper the driver lacks. Shrink-to-fit uses the
@@ -52,7 +83,7 @@ package statuses are errors, including failures received after every sheet was p
 A missing completion notification times out after two minutes after the native print control
 is closed and requests cancellation. Calls into a driver and interactive output-file dialogs
 are not covered by this notification timeout. Windows answers when the job is in
-the queue ("spooled 3 sheet(s)"): a paused queue or an offline printer keeps it there. CUPS jobs
+the queue ("spooled 3 sheet(s)", "… through GDI" after a GDI retry): a paused queue or an offline printer keeps it there. CUPS jobs
 never use a PDF temporary file. Printing is synchronous; UI callers should submit on a worker.
 `submit_with_progress` reports `(processed, sheets)` before the first Windows sheet and after
 each sheet is successfully added to the native print job. These are source PDF sheets, excluding
@@ -89,9 +120,10 @@ the driver's color policy. Single-page or single-copy jobs have no collating ord
 `cargo test -p craft-print` tests CUPS transport (including pipe-sized jobs and refusal),
 printer parsing, PPD options and argument mapping, and on every platform the Windows pieces that
 need no printer: the PrintTicket, the checks on the driver's validated ticket and capabilities,
-paper matching, job file names, and the PDF sheet reader and its update (classic and compressed
-cross-references, turning, reframing, refusal, and thousands of truncated and corrupted files
-that must fail without a panic). On Windows it also submits a mixed-orientation exact-size job
+paper matching, job file names, when a failed XPS job may go through GDI, and the PDF sheet
+reader and its update (classic and compressed cross-references, turning, reframing, refusal,
+and thousands of truncated and corrupted files that must fail without a panic).
+On Windows it also submits a mixed-orientation exact-size job
 and a shrink-to-fit job to a temporary paused queue (inbox "Generic / Text Only" driver on
 `LPT1:`) and checks each arrives as one job with all its sheets. The queue portion explicitly
 skips if the driver or administrative rights are absent. Windows CI installs the inbox test
@@ -112,6 +144,8 @@ drops are refused before submission.
 
 Windows dependencies: the maintained [`winprint` fork](https://github.com/storytold/winprint.rs)
 (BSD-3-Clause, pinned to an immutable Git revision, its PDFium-downloading `pdfium` feature off) and `winsafe` (MIT) hold every Win32 and WinRT call, so the crate keeps `unsafe` forbidden;
+`windows-result` (MIT OR Apache-2.0, already in the build through winprint's `windows`) reads
+the HRESULT in its errors;
 `roxmltree` reads PrintTickets and `miniz_oxide` inflates PDF streams. `winprint` 0.2.1 lists
 reqwest (with rustls) and sigstore crates as non-optional build-dependencies, used only by its
 `pdfium` feature: they compile into its build script on Windows but not into the library. Apps

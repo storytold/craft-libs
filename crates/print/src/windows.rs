@@ -7,12 +7,19 @@
 //! two-sided settings from its PrintCapabilities. A job is drawn by the in-box
 //! `Windows.Data.Pdf` with Direct2D into the XPS print API, as vectors, and its options (copies,
 //! collation, two-sided, colour, paper, orientation, no driver scaling) travel as a PrintTicket
-//! that the driver validates before anything is sent. `winprint` and `winsafe` wrap the Win32
-//! and WinRT calls, so there is no `unsafe` here.
+//! that the driver validates before anything is sent. When the print system refuses that XPS
+//! job early, the same file and ticket go through winprint's `GdiPdfPrinter` instead
+//! ([`crate::fallback`]): each page rendered by `Windows.Data.Pdf` to an image at up to 300 dpi,
+//! in one GDI document whose DEVMODE comes from the ticket. That is a PrintTicket rejected with
+//! at most one page accepted (`E_PRINTTICKET_FORMAT`, seen with Brother drivers; likely a
+//! duplicate `JobPrintSpeed`, ArcticLampyrid/winprint.rs#3) or `E_NOINTERFACE` before any page
+//! was accepted, and only once winprint's print context existed: dropping it has asked the
+//! spooler to cancel the XPS job. A job the spooler had in full is never retried. `winprint`
+//! and `winsafe` wrap the Win32 and WinRT calls, so there is no `unsafe` here.
 
 use std::io::Write as _;
 
-use winprint::printer::{PrinterDevice, WinPdfPrinter};
+use winprint::printer::{DxgiPrintContextError, GdiPdfPrinter, PrinterDevice, WinPdfPrinter};
 use winprint::ticket::document::{NS_PSK, OwnedName, PrintFeature, PrintTicketDocument, reader::ParsableXmlDocument as _};
 use winprint::ticket::{FeatureOptionPack as _, PageMediaSize, PrintCapabilities, PrintTicket, PrintTicketBuilder};
 
@@ -22,6 +29,48 @@ use crate::{Error, Job, Printer, Scaling};
 
 fn spool_error(e: impl std::fmt::Display) -> Error {
     Error::Spool(e.to_string())
+}
+
+/// An error and its sources, outermost first: "Render error: No such interface supported.".
+fn with_sources(e: &(dyn std::error::Error + 'static)) -> String {
+    let mut message = e.to_string();
+    let mut cause = e.source();
+    while let Some(source) = cause {
+        message.push_str(&format!(": {source}"));
+        cause = source.source();
+    }
+    message
+}
+
+/// The HRESULT of the first Windows error in `e`'s source chain (winprint wraps it in one or
+/// more of its own errors). `None` without one, and for any failure while winprint was creating
+/// its print context (every `DxgiPrintContextError` but the two from closing the package): the
+/// spooler may already have queued the XPS job (from `CreateDocumentPackageTargetForPrintJob` on),
+/// and only that context's `Drop` cancels it, so
+/// GDI never gets the job then. That includes a PrintTicket that couldn't become a DEVMODE,
+/// which GDI would need too.
+fn hresult(e: &(dyn std::error::Error + 'static)) -> Option<u32> {
+    let mut cause = Some(e);
+    while let Some(error) = cause {
+        if let Some(context) = error.downcast_ref::<DxgiPrintContextError>()
+            && !matches!(context, DxgiPrintContextError::FailedToClosePrintControl(_) | DxgiPrintContextError::CompletionFailed(_))
+        {
+            return None;
+        }
+        if let Some(windows) = error.downcast_ref::<windows_result::Error>() {
+            // The HRESULT's bits, as Windows writes it (0x80004002).
+            return Some(windows.code().0 as u32);
+        }
+        cause = error.source();
+    }
+    None
+}
+
+/// Whether `e` is the spooler's report on an XPS job whose package was closed (written in
+/// full): the job was the spooler's, and some of it may have printed.
+fn package_closed(e: &(dyn std::error::Error + 'static)) -> bool {
+    std::iter::successors(Some(e), |e| e.source())
+        .any(|e| matches!(e.downcast_ref::<DxgiPrintContextError>(), Some(DxgiPrintContextError::CompletionFailed(_))))
 }
 
 /// The user's default printer; `None` when there is none.
@@ -123,7 +172,11 @@ fn imageable_margin(device: &PrinterDevice, ticket: &PrintTicket) -> f64 {
 /// whoever calls. Windows.Data.Pdf reads from a path, so the job goes to a file in a private
 /// temporary folder (an unpredictable name, only this user's) for as long as the spooler takes
 /// it, and the folder is removed however the job ended. Windows answers once the job is in the
-/// queue: a paused queue or an offline printer keeps the job there, as with any program.
+/// queue: a paused queue or an offline printer keeps the job there, as with any program. When
+/// the print system refuses the XPS job early ([`crate::fallback::falls_back_to_gdi`]), the same
+/// file and ticket go through GDI. `WinPdfPrinter::print_with_progress` has returned by then,
+/// and its print context, dropped on the way out, has asked the spooler to cancel the
+/// unfinished XPS job (best effort).
 pub(crate) fn submit_with_progress(pdf: &[u8], job: &Job, progress: &mut dyn FnMut(usize, usize)) -> Result<String, Error> {
     let read = sheets::read(pdf)?;
     read.check_print_annotations()?;
@@ -157,25 +210,34 @@ pub(crate) fn submit_with_progress(pdf: &[u8], job: &Job, progress: &mut dyn FnM
         let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(&path).map_err(written)?;
         file.write_all(updated.as_deref().unwrap_or(pdf)).map_err(written)?;
         drop(file);
-        WinPdfPrinter::new(device)
-            .print_with_progress(&path, ticket, |processed, total| {
-                // Page acceptance is distinct from terminal job success. The callback
-                // drains on the submitter's thread, so it can retain non-Send UI state.
-                let _ = sender.send((processed as usize, total as usize));
-            })
-            .map_err(|e| {
-                let mut message = e.to_string();
-                let mut cause = std::error::Error::source(&e);
-                while let Some(source) = cause {
-                    message.push_str(&format!(": {source}"));
-                    cause = source.source();
-                }
-                spool_error(message)
-            })
+        // Page acceptance is distinct from terminal job success. The callback drains on the
+        // submitter's thread, so it can retain non-Send UI state.
+        let report = |processed: u32, total: u32| {
+            let _ = sender.send((processed as usize, total as usize));
+        };
+        let mut accepted = 0;
+        let xps = WinPdfPrinter::new(device.clone()).print_with_progress(&path, ticket.clone(), |processed, total| {
+            accepted = processed;
+            report(processed, total);
+        });
+        match xps {
+            Ok(()) => Ok(false),
+            Err(e) if hresult(&e).is_some_and(|h| crate::fallback::falls_back_to_gdi(h, accepted, package_closed(&e))) => {
+                // The XPS context was dropped inside print_with_progress, cancelling its job.
+                GdiPdfPrinter::new(device).print_with_progress(&path, ticket, report).map(|()| true).map_err(|gdi| {
+                    spool_error(format!(
+                        "{}; the XPS print path was refused, and printing through GDI failed too: {}",
+                        with_sources(&e),
+                        with_sources(&gdi)
+                    ))
+                })
+            }
+            Err(e) => Err(spool_error(with_sources(&e))),
+        }
     });
     drop(dir);
-    result?;
-    Ok(format!("spooled {count} sheet(s)"))
+    let through_gdi = result?;
+    Ok(if through_gdi { format!("spooled {count} sheet(s) through GDI") } else { format!("spooled {count} sheet(s)") })
 }
 
 #[cfg(test)]
@@ -186,6 +248,34 @@ mod tests {
     fn a_missing_printer_never_falls_back_to_another_queue() {
         assert!(select_device(Vec::new(), Some("missing"), Some("default")).is_err());
         assert!(select_device(Vec::new(), None, None).is_err());
+    }
+
+    #[test]
+    fn the_hresult_is_found_through_winprints_errors_but_never_before_its_print_context() {
+        use winprint::printer::WinPdfPrinterError;
+        use winprint::ticket::ToDevModeError;
+        let windows = |code: u32| windows_result::Error::from_hresult(windows_result::HRESULT(code as i32));
+        let context = |e: DxgiPrintContextError| WinPdfPrinterError::DxgiPrintContextError(e);
+        // AddPage refused: one layer.
+        assert_eq!(hresult(&WinPdfPrinterError::RenderError(windows(0x8000_4002))), Some(0x8000_4002));
+        // Close refused (the Brother driver's rejected ticket), two layers, versus the spooler's
+        // own report on a closed package.
+        let close = context(DxgiPrintContextError::FailedToClosePrintControl(windows(0x8004_0003)));
+        assert_eq!((hresult(&close), package_closed(&close)), (Some(0x8004_0003), false));
+        let completion = context(DxgiPrintContextError::CompletionFailed(windows(0x8004_0003)));
+        assert_eq!((hresult(&completion), package_closed(&completion)), (Some(0x8004_0003), true));
+        // While the print context was being created (job, print control, status events, the
+        // ticket's DEVMODE): nothing would cancel an XPS job the spooler may already have.
+        let start = context(DxgiPrintContextError::FailedToStartJob(windows(0x8004_0003)));
+        let events = context(DxgiPrintContextError::FailedToCreateEvent(windows(0x8000_4002)));
+        let ticket =
+            context(DxgiPrintContextError::PrintTicketError(ToDevModeError::ConvertPrintTicketToDevModeFailed(String::new(), windows(0x8000_4002))));
+        for early in [&start, &events, &ticket] {
+            assert_eq!(hresult(early), None, "{}", with_sources(early));
+        }
+        assert_eq!(hresult(&WinPdfPrinterError::InvalidPath(std::io::Error::other("gone"))), None);
+        assert!(with_sources(&start).ends_with(&format!(": {}", windows(0x8004_0003))), "{}", with_sources(&start));
+        assert!(!package_closed(&close) && !package_closed(&start));
     }
 
     /// What a real driver makes of a job's ticket: Letter, portrait, two copies. Checks explicit

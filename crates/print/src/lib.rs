@@ -3,11 +3,15 @@
 //! `lp` with the job options (copies, collation, duplex, colour). On Windows the printers come
 //! from the spooler and jobs are drawn by the in-box `Windows.Data.Pdf` into the XPS print API
 //! with the options as a PrintTicket, all in this process (`windows.rs`): no PowerShell or other
-//! program is started, so printing works where scripts are locked down. Other platforms report
-//! that printing isn't available yet; the print-ready PDF can still be saved.
+//! program is started, so printing works where scripts are locked down. A driver that refuses
+//! the XPS path before taking a page, or a PrintTicket the print system rejects while the XPS
+//! package is written, gets the job as page images through GDI instead (`fallback.rs`). Other
+//! platforms report that printing isn't available yet; the print-ready PDF can still be saved.
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+#[cfg(any(test, windows))]
+mod fallback;
 #[cfg(any(test, windows))]
 mod progress;
 #[cfg(any(test, windows))]
@@ -476,14 +480,15 @@ pub fn parse_windows_printers(out: &str) -> Vec<Printer> {
 }
 
 /// Send a print-ready PDF to the spooler. Returns the spooler's message: CUPS includes a job id;
-/// Windows confirms submission only ("spooled 3 sheet(s)").
+/// Windows confirms submission only ("spooled 3 sheet(s)", or "… through GDI" after a GDI retry).
 pub fn submit(pdf: &[u8], job: &Job) -> Result<String, Error> {
     submit_with_progress(pdf, job, &mut |_, _| {})
 }
 
 /// [`submit`] with Windows sheet-processing progress: `(processed, sheets)` before the first
 /// sheet and after each sheet is successfully added to the native print job. Counts refer to
-/// source PDF sheets, regardless of copies or duplex. CUPS reports no progress.
+/// source PDF sheets, regardless of copies or duplex. A Windows job retried through GDI after
+/// its XPS job was refused starts again from `(0, sheets)`. CUPS reports no progress.
 ///
 /// The callback runs synchronously on the thread calling this function, need not be `Send`,
 /// and should return promptly. It is never retained. All sheets processed is not terminal

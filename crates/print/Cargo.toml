@@ -21,7 +21,13 @@ workspace = true
 # feature downloads PDFium at build time and is off. The maintained BSD-3-Clause fork
 # preserves terminal failures/cancellation and bounds the completion notification wait.
 # Pinned to an immutable revision; review before bumping.
-winprint = { git = "https://github.com/storytold/winprint.rs", rev = "5f80b9baf6b58937c401656634e42d33f00ddf49", default-features = false }
+# Temporarily not immutable: until storytold/winprint.rs#6 (`GdiPdfPrinter`, for src/fallback.rs)
+# merges, pinned to its PR ref, which moves with the PR: replace it with the merged revision
+# (`rev = "<sha>"`, then `cargo update -p winprint`) before merging this.
+winprint = { git = "https://github.com/storytold/winprint.rs", rev = "refs/pull/6/head", default-features = false }
+# The HRESULT inside winprint's errors (MIT OR Apache-2.0), to tell a print system refusing the
+# XPS job from other failures (src/fallback.rs). The version winprint's `windows` 0.62 uses.
+windows-result = "0.4"
 # GetDefaultPrinter (MIT).
 winsafe = { version = "0.0.29", default-features = false, features = ["winspool"] }
 # The job file's private folder.
