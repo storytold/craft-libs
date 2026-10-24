@@ -268,9 +268,9 @@ mod tests {
     /// dimensions are parameter references, resolved from the parameter initializers.
     fn custom_validated(paper: (u32, u32), orientation: &str) -> String {
         format!(
-            r#"<psf:PrintTicket version="1" xmlns:psf="{NS_PSF}" xmlns:psk="{NS_PSK}" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
-<psf:ParameterInit name="psk:PageMediaSizeMediaSizeWidth"><psf:Value xsi:type="xsd:integer">{}</psf:Value></psf:ParameterInit>
-<psf:ParameterInit name="psk:PageMediaSizeMediaSizeHeight"><psf:Value xsi:type="xsd:integer">{}</psf:Value></psf:ParameterInit>
+            r#"<psf:PrintTicket version="1" xmlns:psf="{NS_PSF}" xmlns:psk="{NS_PSK}" xmlns:media="{NS_PSK}" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+<psf:ParameterInit name="media:PageMediaSizeMediaSizeWidth"><psf:Value xsi:type="xsd:integer">{}</psf:Value></psf:ParameterInit>
+<psf:ParameterInit name="media:PageMediaSizeMediaSizeHeight"><psf:Value xsi:type="xsd:integer">{}</psf:Value></psf:ParameterInit>
 <psf:Feature name="psk:PageMediaSize"><psf:Option name="psk:CustomMediaSize">
 <psf:ScoredProperty name="psk:MediaSizeWidth"><psf:ParameterRef name="psk:PageMediaSizeMediaSizeWidth"/></psf:ScoredProperty>
 <psf:ScoredProperty name="psk:MediaSizeHeight"><psf:ParameterRef name="psk:PageMediaSizeMediaSizeHeight"/></psf:ScoredProperty>
@@ -308,6 +308,9 @@ mod tests {
         assert!(custom.allows(1_067_000, 480_000));
         assert!(!custom.allows(1_200_000, 480_000));
         assert!(!custom.allows(1_067_000, 100));
+        assert_eq!(custom.fit(1_067_000, 480_000), Some((1_067_000, 480_000)));
+        assert_eq!(custom.fit(1_200_000, 480_000), Some((480_000, 1_200_000)), "the other way round fits");
+        assert_eq!(custom.fit(2_000_000, 2_000_000), None);
         assert!(
             custom_media("<psf:PrintCapabilities xmlns:psf=\"http://schemas.microsoft.com/windows/2003/08/printing/printschemaframework\"/>")
                 .is_none()
@@ -470,6 +473,12 @@ impl CustomMedia {
     pub(crate) fn allows(self, width: u32, height: u32) -> bool {
         (self.min_width..=self.max_width).contains(&width) && (self.min_height..=self.max_height).contains(&height)
     }
+
+    /// The sheet's dimensions in the order this driver can take, either way round; `None` when
+    /// neither order is inside its ranges.
+    pub(crate) fn fit(self, width: u32, height: u32) -> Option<(u32, u32)> {
+        [(width, height), (height, width)].into_iter().find(|&(w, h)| self.allows(w, h))
+    }
 }
 
 /// The driver's `psk:CustomMediaSize` option and the ranges of its width and height parameters,
@@ -502,6 +511,15 @@ fn named_ns(node: roxmltree::Node<'_, '_>, local: &str, namespace: &str) -> bool
         .is_some_and(|(prefix, name)| name == local && node.lookup_namespace_uri(Some(prefix)) == Some(namespace))
 }
 
+/// A `name` attribute's local part and the namespace URI its prefix resolves to in this node.
+/// Prefixes are only XML spelling; the same namespace under two prefixes names the same thing.
+fn qualified_name(node: roxmltree::Node<'_, '_>, attribute: &str) -> Option<(String, String)> {
+    let value = node.attribute(attribute)?;
+    let (prefix, local) = value.split_once(':').map_or((None, value), |(prefix, local)| (Some(prefix), local));
+    let namespace = node.lookup_namespace_uri(prefix)?;
+    Some((local.to_owned(), namespace.to_owned()))
+}
+
 /// The integer a scored property carries, directly or through its parameter initializer.
 fn scored_integer(root: roxmltree::Node<'_, '_>, media: roxmltree::Node<'_, '_>, name: &str) -> Option<u32> {
     let scored = media.descendants().find(|n| n.has_tag_name((NS_PSF, "ScoredProperty")) && named(*n, name))?;
@@ -510,8 +528,10 @@ fn scored_integer(root: roxmltree::Node<'_, '_>, media: roxmltree::Node<'_, '_>,
     {
         return Some(value);
     }
-    let reference = scored.children().find(|n| n.has_tag_name((NS_PSF, "ParameterRef")))?.attribute("name")?;
-    let init = root.descendants().find(|n| n.has_tag_name((NS_PSF, "ParameterInit")) && n.attribute("name") == Some(reference))?;
+    let reference = qualified_name(scored.children().find(|n| n.has_tag_name((NS_PSF, "ParameterRef")))?, "name")?;
+    let init = root.descendants().find(|n| {
+        n.has_tag_name((NS_PSF, "ParameterInit")) && qualified_name(*n, "name").is_some_and(|name| name.0 == reference.0 && name.1 == reference.1)
+    })?;
     init.children().find(|n| n.has_tag_name((NS_PSF, "Value"))).and_then(|n| n.text()).and_then(|v| v.trim().parse::<u32>().ok())
 }
 

@@ -85,14 +85,14 @@ fn driver_ticket(device: &PrinterDevice, job: &Job, sheet: (f64, f64), landscape
         (None, Scaling::Exact) => {
             let width = ticket::micrometres(sheet.0).ok_or_else(|| spool_error("the PDF sheet size is not usable"))?;
             let height = ticket::micrometres(sheet.1).ok_or_else(|| spool_error("the PDF sheet size is not usable"))?;
-            if !custom.is_some_and(|range| range.allows(width, height)) {
+            let Some((width, height)) = custom.and_then(|range| range.fit(width, height)) else {
                 return Err(spool_error(format!(
                     "{} has no {:.2} x {:.2} inch paper and no matching custom media size; choose a paper size it has, or add this one in its driver",
                     device.name(),
                     sheet.0 / 72.0,
                     sheet.1 / 72.0
                 )));
-            }
+            };
             // A wide custom sheet takes Landscape, as a wide sheet on a named portrait paper
             // does; the driver normalises the custom form to its own portrait dimensions.
             custom_size = Some((width, height));
