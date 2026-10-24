@@ -144,6 +144,14 @@ impl Writer {
     }
 }
 
+/// The link target that opens `url`, or `None` when [`safe_url`](crate::safe_url) refuses it.
+/// Build URI links with this instead of `backend::action::LinkAction` so a refused target
+/// writes no link annotation; the page content stays as drawn. The URI is written trimmed.
+pub fn uri_target(url: &str) -> Option<backend::annotation::Target> {
+    let url = url.trim();
+    crate::safe_url(url).then(|| backend::annotation::Target::Action(backend::action::LinkAction::new(url.to_owned()).into()))
+}
+
 fn check_font_input(size: usize, variations: Option<&[([u8; 4], f32)]>) -> Result<(), WriteError> {
     if size > MAX_FONT_BYTES {
         return Err(WriteError::FontLimit);

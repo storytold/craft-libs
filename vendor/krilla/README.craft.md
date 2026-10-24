@@ -22,9 +22,10 @@ itself omits those texts. Its examples and four CC0 ICC profiles are retained wi
 | `patches/10-mesh-gradients.patch` | Mesh gradients | `content.rs`, `error.rs`, `graphics/{mask,paint,shading_function}.rs`, `serialize.rs`, `surface.rs` |
 | `patches/11-png-decode-cap.patch` | PNG decode cap | `graphics/image.rs` |
 | `patches/12-optional-content.patch` | Optional content | `chunk_container.rs`, `configure/{PDF_A1,PDF_A2,PDF_A4,PDF_UA1}.md`, `configure/validate.rs`, `content.rs`, `error.rs`, `graphics/{mod,optional_content}.rs`, `lib.rs`, `resource.rs`, `serialize.rs`, `surface.rs` |
-| `patches/13-devicen-pdf-version.patch` | DeviceN attributes by PDF version | `graphics/device_n.rs` |
-| `patches/14-pdfx-conformance.patch` | PDF/X conformance key | `serialize.rs` |
-| `patches/15-modification-date.patch` | Modification date | `interchange/metadata.rs` |
+| `patches/13-annotation-bounds.patch` | Annotation and destination bounds | `error.rs`, `interactive/{annotation,destination}.rs`, `page.rs`, `serialize.rs` |
+| `patches/14-devicen-pdf-version.patch` | DeviceN attributes by PDF version | `graphics/device_n.rs` |
+| `patches/15-pdfx-conformance.patch` | PDF/X conformance key | `serialize.rs` |
+| `patches/16-modification-date.patch` | Modification date | `interchange/metadata.rs` |
 
 Each patch applies with `patch -p1` from this directory, in numeric order, to the pristine
 crate. `SOURCE.json` records, for every retained file, the upstream hash (`upstream_sha256`)
@@ -183,7 +184,7 @@ written as CMYK, which knocks out or replaces the other plates.
 - From PDF 1.6, a space with spots gets an attributes dictionary whose `/Colorants` maps
   each spot to its Separation space. When spots and process inks mix, it is
   `/Subtype /NChannel` with `/Process << /ColorSpace alternate /Components [/Cyan /Magenta
-  /Yellow /Black] >>`. Patch 13 changes which of these each PDF version gets.
+  /Yellow /Black] >>`. Patch 14 changes which of these each PDF version gets.
 - Validation: a spot's CMYK alternate counts as its Separation fallback, so one colorant
   name keeps one alternate across Separation and DeviceN spaces
   (`ValidationError::InconsistentSeparationFallback`). `/All` and `/None` are Separation-only
@@ -340,7 +341,26 @@ get small hooks.
 
 Tests: `crates/pdf/tests/optional_content.rs`.
 
-## 13: DeviceN attributes by PDF version
+## 13: annotation and destination bounds
+
+Upstream panics on link geometry that has no finite place on the page, which aborts a WASM
+app. `Document::finish` returns an error instead and writes nothing for the object:
+
+| Input | Upstream | Error |
+|---|---|---|
+| `LinkAnnotation::new_with_quad_points` with no quads, a non-finite point, or a bounding box whose width or height overflows | `assert!` or `unwrap` | `InvalidAnnotationGeometry(location)` |
+| A link rect or quad bounding box that overflows when flipped into PDF coordinates (`page_height - y`) | `unwrap` | `InvalidAnnotationGeometry(location)` |
+| A media, crop, bleed, trim or art box that overflows the same way | `unwrap` | `InvalidPageBox(page_index)` |
+| An `XyzDestination` page index past the last page | `panic!` | `InvalidDestination(page_index)` |
+| An `XyzDestination` point that maps to a non-finite coordinate | writes `inf` or `NaN` | `InvalidDestination(page_index)` |
+
+The constructors keep their signatures: `LinkAnnotation` holds an `Option<Rect>` and the check
+runs at serialization, before the annotation object starts. Refusing a single annotation
+instead of skipping it keeps the indices of tagged annotations in the structure tree valid.
+
+Tests: `crates/pdf/tests/link_annotations.rs`.
+
+## 14: DeviceN attributes by PDF version
 
 Patch 06 writes the DeviceN attributes dictionary only from PDF 1.6. A PDF/X-1a file is PDF
 1.3 or 1.4, so its spots then had no `/Colorants`, and a file written at 1.6 or later and
@@ -361,7 +381,7 @@ against the text.
 Tests: `crates/pdf/tests/print_color.rs` (`device_n_attributes_follow_the_pdf_version`) and
 `crates/prepress/tests/flatten_document.rs` (`pdf_x1a_output_is_pdf_14_without_nchannel`).
 
-## 14: PDF/X conformance key
+## 15: PDF/X conformance key
 
 Patch 08 writes only `GTS_PDFXVersion`. PDF/X-1a and X-3 also need `GTS_PDFXConformance` in
 the document information dictionary: a PDF/X-1a:2003 file carries `GTS_PDFXVersion
@@ -376,7 +396,7 @@ and on) have no conformance key.
 Tests: `crates/pdf/tests/print_color.rs` (`trapped_and_pdfx_version_are_written_to_info_and_xmp`)
 and `crates/prepress/tests/flatten_document.rs` (`pdf_x1a_output_is_pdf_14_without_nchannel`).
 
-## 15: modification date
+## 16: modification date
 
 Upstream has only a creation date and writes it as the modification date too (`/ModDate` and
 `xmp:ModifyDate`), so a document rewritten from another, such as a flattened copy, can't keep

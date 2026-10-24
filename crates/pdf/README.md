@@ -119,6 +119,12 @@ serialization uses the same backend version as before extraction. It provides:
   postprocessing. App errors pass through; serialization errors retain backend diagnostics.
   Caught panic messages retain up to 1024 Unicode scalar values; the installed panic hook
   remains responsible for logging source locations and full diagnostics.
+- `write::uri_target`: the Krilla link target for a URI link, or `None` when `safe_url`
+  refuses it. Apps build URI links with it instead of `backend::action::LinkAction`, so a
+  link target from someone else's document becomes a PDF link only when it is an `http`/`https`
+  URL with a host or a `mailto` address. A refused target writes no link annotation.
+- `safe_url` (crate root, any feature): the same rule, for apps that open links themselves,
+  such as a slide show.
 
 ### Print color
 

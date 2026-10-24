@@ -1031,7 +1031,7 @@ impl SerializeContext {
     ) -> KrillaResult<()> {
         let xyz_destinations = self.global_objects.xyz_destinations.take();
         for (ref_, dest) in &xyz_destinations {
-            dest.serialize(self, chunk_container, *ref_);
+            dest.serialize(self, chunk_container, *ref_)?;
         }
 
         Ok(())
