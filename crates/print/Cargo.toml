@@ -9,7 +9,7 @@ description = "System PDF print spooler for the Craft apps: CUPS and Windows"
 
 [dependencies]
 # Safe API; Win32 calls are isolated in this maintained MIT OR Apache-2.0 dependency.
-craft-winprint-gdi = { git = "https://github.com/storytold/winprint.rs", rev = "417ac3c4d14d3da5485a99c7d5ce8f05664ec312" }
+craft-winprint-gdi = { git = "https://github.com/MaxFairwinds/winprint.rs", rev = "3fc968789cf6a7e43c546d8113ef3850bc82dd7a" }
 
 [lints]
 workspace = true
@@ -21,7 +21,9 @@ workspace = true
 # feature downloads PDFium at build time and is off. The maintained BSD-3-Clause fork
 # preserves terminal failures/cancellation and bounds the completion notification wait.
 # Pinned to an immutable revision; review before bumping.
-winprint = { git = "https://github.com/storytold/winprint.rs", rev = "5f80b9baf6b58937c401656634e42d33f00ddf49", default-features = false }
+# storytold/winprint.rs main plus PrintTicket::user_default and PrintCapabilities::fetch_for_ticket
+# (MaxFairwinds/winprint.rs feat/user-default-ticket; to move to storytold/winprint.rs once merged).
+winprint = { git = "https://github.com/MaxFairwinds/winprint.rs", rev = "3fc968789cf6a7e43c546d8113ef3850bc82dd7a", default-features = false }
 # GetDefaultPrinter (MIT).
 winsafe = { version = "0.0.29", default-features = false, features = ["winspool"] }
 # The job file's private folder.

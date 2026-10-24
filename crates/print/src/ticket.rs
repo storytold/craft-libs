@@ -144,7 +144,9 @@ fn integer(node: roxmltree::Node<'_, '_>, tag: &str, name: &str) -> Option<u32> 
 /// paper (when `paper` is given, that one, to a quarter of a millimetre). Returns the paper's
 /// width and height in micrometres as the driver lists it. Only those schema fields are read:
 /// some drivers return empty vendor parameters that a stricter parser would refuse.
-pub(crate) fn verify_ticket(xml: &str, paper: Option<(u32, u32)>, landscape: bool) -> Result<(u32, u32), Error> {
+/// `scaling_offered`: whether the driver's capabilities have a PageScaling feature; only then is its
+/// answer about scaling checked.
+pub(crate) fn verify_ticket(xml: &str, paper: Option<(u32, u32)>, landscape: bool, scaling_offered: bool) -> Result<(u32, u32), Error> {
     let document = roxmltree::Document::parse(xml).map_err(spool_error)?;
     let feature = |name: &str| document.root_element().children().find(|n| n.has_tag_name((NS_PSF, "Feature")) && named(*n, name));
     let media = feature("PageMediaSize").ok_or_else(|| spool_error("the printer's driver did not confirm the paper size; nothing was sent"))?;
@@ -162,7 +164,9 @@ pub(crate) fn verify_ticket(xml: &str, paper: Option<(u32, u32)>, landscape: boo
     if !orientation.is_some_and(|n| named(n, if landscape { "Landscape" } else { "Portrait" })) {
         return Err(spool_error("the printer's driver changed the orientation; nothing was sent"));
     }
-    if let Some(scaling) = feature("PageScaling") {
+    // Only a driver that offers PageScaling can scale by it; one that doesn't (Zebra's ZDesigner)
+    // was not asked, and whatever the merge put there is not a choice of its own.
+    if let Some(scaling) = feature("PageScaling").filter(|_| scaling_offered) {
         // Microsoft's IPP class driver names its "None" in a namespace of its own.
         if !scaling.children().any(|n| n.has_tag_name((NS_PSF, "Option")) && n.attribute("name").and_then(|v| v.rsplit(':').next()) == Some("None")) {
             return Err(spool_error("the printer's driver would scale the sheets; nothing was sent"));
@@ -173,8 +177,11 @@ pub(crate) fn verify_ticket(xml: &str, paper: Option<(u32, u32)>, landscape: boo
 
 /// Confirm explicit job options survived driver validation. Collation only changes output
 /// when both the document and copy count exceed one. Without a duplex request the queue's
-/// default applies; without forced grayscale the driver's normal color policy applies.
-pub(crate) fn verify_job_options(xml: &str, job: &Job, pages: usize) -> Result<(), Error> {
+/// default applies; without forced grayscale the driver's normal color policy applies. A
+/// driver that offers no two-sided feature at all (`duplex_offered` false: a label printer)
+/// can only print one side, so one-sided asked of it has nothing to confirm; two-sided asked
+/// of it is refused as any dropped option is.
+pub(crate) fn verify_job_options(xml: &str, job: &Job, pages: usize, duplex_offered: bool) -> Result<(), Error> {
     let document = roxmltree::Document::parse(xml).map_err(spool_error)?;
     let root = document.root_element();
     let option = |name: &str| {
@@ -196,7 +203,8 @@ pub(crate) fn verify_job_options(xml: &str, job: &Job, pages: usize) -> Result<(
             Duplex::LongEdge => "TwoSidedLongEdge",
             Duplex::ShortEdge => "TwoSidedShortEdge",
         };
-        if !option("JobDuplexAllDocumentsContiguously").is_some_and(|n| named(n, wanted)) {
+        let confirmed = option("JobDuplexAllDocumentsContiguously").is_some_and(|n| named(n, wanted));
+        if !confirmed && !(duplex == Duplex::Off && !duplex_offered) {
             return Err(refused("simplex/duplex setting"));
         }
     }
@@ -204,6 +212,69 @@ pub(crate) fn verify_job_options(xml: &str, job: &Job, pages: usize) -> Result<(
         return Err(refused("grayscale"));
     }
     Ok(())
+}
+
+/// Whether a sheet is turned on the paper: `sheet_landscape` says the sheet is wider than tall,
+/// `paper` is the driver's paper in micrometres as the driver feeds it. An upright paper (office
+/// sizes) turns a wide sheet; a paper that is itself wider than tall (a label stock defined across
+/// the feed) takes a wide sheet as it is and turns an upright one. Without a known paper the
+/// sheet's own shape decides, as for upright paper.
+pub(crate) fn turned(sheet_landscape: bool, paper: Option<(u32, u32)>) -> bool {
+    match paper {
+        Some((w, h)) if w > h => !sheet_landscape,
+        _ => sheet_landscape,
+    }
+}
+
+/// The paper a DEVMODE prints on, in micrometres, and whether it is landscape: what the driver
+/// settled on when the ticket was converted for printing (winprint's `PrintTicket::to_dev_mode`:
+/// the user's own settings as the base, then the driver's validation). `None` when the DEVMODE
+/// names no paper size (a roll, a driver that leaves the fields unset).
+pub(crate) fn devmode_paper(dev_mode: &[u8]) -> Option<((u32, u32), bool)> {
+    const DM_ORIENTATION: u32 = 0x1;
+    const DM_PAPERLENGTH: u32 = 0x4;
+    const DM_PAPERWIDTH: u32 = 0x8;
+    const DMORIENT_LANDSCAPE: i16 = 2;
+    let i16_at = |at: usize| dev_mode.get(at..at + 2).and_then(|b| <[u8; 2]>::try_from(b).ok()).map(i16::from_le_bytes);
+    let fields = dev_mode.get(72..76).and_then(|b| <[u8; 4]>::try_from(b).ok()).map(u32::from_le_bytes)?;
+    if fields & (DM_PAPERWIDTH | DM_PAPERLENGTH) != DM_PAPERWIDTH | DM_PAPERLENGTH {
+        return None;
+    }
+    let (width, length) = (i16_at(82)?, i16_at(80)?);
+    if width <= 0 || length <= 0 {
+        return None;
+    }
+    let landscape = fields & DM_ORIENTATION != 0 && i16_at(76)? == DMORIENT_LANDSCAPE;
+    // Tenths of a millimetre, as DEVMODE has them, to micrometres.
+    Some(((u32::from(width.unsigned_abs()) * 100, u32::from(length.unsigned_abs()) * 100), landscape))
+}
+
+/// The longest short side of a label printer's paper, in micrometres (4.5 in).
+pub(crate) const LABEL_MAX_SHORT_SIDE: u32 = 114_300;
+
+/// Whether a driver offering `colours` (PageOutputColor option keywords) on `paper` (micrometres)
+/// is a thermal label printer: monochrome only, label-sized paper. A monochrome office printer
+/// or a fax has Letter or A4; a label printer that also offers colour is left to its driver.
+pub(crate) fn label_shaped(colours: &[&str], paper: Option<(u32, u32)>) -> bool {
+    !colours.is_empty()
+        && colours.iter().all(|c| *c == "Monochrome")
+        && paper.is_some_and(|(w, h)| w > 0 && h > 0 && w.min(h) <= LABEL_MAX_SHORT_SIDE)
+}
+
+/// A ticket's PageMediaSize, in micrometres; `None` without one or for a roll.
+pub(crate) fn media_size(xml: &str) -> Option<(u32, u32)> {
+    let document = roxmltree::Document::parse(xml).ok()?;
+    let media = document.root_element().children().find(|n| n.has_tag_name((NS_PSF, "Feature")) && named(*n, "PageMediaSize"))?;
+    integer(media, "ScoredProperty", "MediaSizeWidth").zip(integer(media, "ScoredProperty", "MediaSizeHeight")).filter(|(w, h)| *w > 0 && *h > 0)
+}
+
+/// The keyword of a ticket's PageMediaSize option, without its namespace prefix
+/// (`NorthAmericaLetter`, a vendor's `User0000000256`): what [`crate::PrinterPaper::key`] holds.
+pub(crate) fn media_keyword(xml: &str) -> Option<String> {
+    let document = roxmltree::Document::parse(xml).ok()?;
+    let media = document.root_element().children().find(|n| n.has_tag_name((NS_PSF, "Feature")) && named(*n, "PageMediaSize"))?;
+    let option = media.children().find(|n| n.has_tag_name((NS_PSF, "Option")))?;
+    option.attribute("name").and_then(|v| v.rsplit(':').next()).filter(|k| !k.is_empty()).map(str::to_string)
 }
 
 /// The widest unprintable margin of the paper, in micrometres, from PrintCapabilities computed
@@ -265,6 +336,16 @@ mod tests {
         assert!(!ticket_xml(&Job { printer: Some("Office \"east\" <1>".into()), ..Job::default() }, false).contains("east"));
     }
 
+    #[test]
+    fn the_media_keyword_is_the_tickets_page_media_size_option() {
+        assert_eq!(media_keyword(&validated((215_900, 279_400), "psk:Portrait", None)).as_deref(), Some("NorthAmericaLetter"));
+        assert_eq!(
+            media_keyword(r#"<psf:PrintTicket version="1" xmlns:psf="http://schemas.microsoft.com/windows/2003/08/printing/printschemaframework"/>"#),
+            None
+        );
+        assert_eq!(media_keyword("not xml"), None);
+    }
+
     /// A validated ticket as a driver returns it.
     fn validated(paper: (u32, u32), orientation: &str, scaling: Option<&str>) -> String {
         let scaling = scaling.map_or(String::new(), |s| format!(r#"<psf:Feature name="psk:PageScaling"><psf:Option name="{s}"/></psf:Feature>"#));
@@ -285,47 +366,113 @@ mod tests {
     fn a_driver_that_changes_the_sheet_is_refused() {
         let letter = (215_900, 279_400);
         let ticket = validated(letter, "Portrait", Some("psk:None"));
-        assert_eq!(verify_ticket(&ticket, Some(letter), false), Ok(letter));
-        assert_eq!(verify_ticket(&ticket, Some((279_400, 215_900)), false), Ok(letter), "either way round");
-        assert_eq!(verify_ticket(&ticket, None, false), Ok(letter), "shrink-to-fit takes the driver's paper");
-        assert!(verify_ticket(&ticket, Some((210_000, 297_000)), false).is_err(), "A4 asked, Letter returned");
-        assert!(verify_ticket(&ticket, Some(letter), true).is_err(), "landscape asked, portrait returned");
-        assert!(verify_ticket(&validated(letter, "Portrait", Some("psk:FitApplicationBleedSizeToPageImageableSize")), Some(letter), false).is_err());
-        assert!(verify_ticket(&validated(letter, "Portrait", Some("ns0000:None")), Some(letter), false).is_ok(), "the IPP class driver's None");
-        assert!(verify_ticket(&validated(letter, "Portrait", None), Some(letter), false).is_ok(), "a driver without scaling");
-        assert!(verify_ticket(&validated((0, 279_400), "Portrait", None), None, false).is_err(), "a roll has no length");
-        assert!(verify_ticket("<not xml", Some(letter), false).is_err());
+        assert_eq!(verify_ticket(&ticket, Some(letter), false, true), Ok(letter));
+        assert_eq!(verify_ticket(&ticket, Some((279_400, 215_900)), false, true), Ok(letter), "either way round");
+        assert_eq!(verify_ticket(&ticket, None, false, true), Ok(letter), "shrink-to-fit takes the driver's paper");
+        assert!(verify_ticket(&ticket, Some((210_000, 297_000)), false, true).is_err(), "A4 asked, Letter returned");
+        assert!(verify_ticket(&ticket, Some(letter), true, true).is_err(), "landscape asked, portrait returned");
+        assert!(
+            verify_ticket(&validated(letter, "Portrait", Some("psk:FitApplicationBleedSizeToPageImageableSize")), Some(letter), false, true).is_err()
+        );
+        assert!(verify_ticket(&validated(letter, "Portrait", Some("ns0000:None")), Some(letter), false, true).is_ok(), "the IPP class driver's None");
+        assert!(verify_ticket(&validated(letter, "Portrait", None), Some(letter), false, true).is_ok(), "a driver without scaling");
+        // A driver with no PageScaling feature (Zebra's ZDesigner) answers CustomSquare when asked
+        // for None: not asked, its answer is not checked; a driver that offers the feature is held to it.
+        let custom = validated(letter, "Portrait", Some("psk:CustomSquare"));
+        assert_eq!(verify_ticket(&custom, Some(letter), false, false), Ok(letter), "not offered: not refused");
+        assert!(verify_ticket(&custom, Some(letter), false, true).is_err(), "offered: it would scale");
+        assert!(verify_ticket(&validated((0, 279_400), "Portrait", None), None, false, true).is_err(), "a roll has no length");
+        assert!(verify_ticket("<not xml", Some(letter), false, true).is_err());
     }
 
     #[test]
     fn a_driver_that_drops_explicit_job_options_is_refused() {
         let job = Job { copies: 2, duplex: Some(Duplex::LongEdge), grayscale: true, ..Job::default() };
         let xml = ticket_xml(&job, false);
-        assert!(verify_job_options(&xml, &job, 3).is_ok());
+        assert!(verify_job_options(&xml, &job, 3, true).is_ok());
         for (from, to) in
             [(">2<", ">1<"), ("psk:Collated", "psk:Uncollated"), ("psk:TwoSidedLongEdge", "psk:OneSided"), ("psk:Monochrome", "psk:Color")]
         {
-            assert!(verify_job_options(&xml.replace(from, to), &job, 3).is_err(), "{from}");
+            assert!(verify_job_options(&xml.replace(from, to), &job, 3, true).is_err(), "{from}");
         }
-        assert!(verify_job_options(&xml.replace("psk:Collated", "vendor:Collated"), &job, 3).is_err(), "namespace matters");
-        assert!(verify_job_options(&xml.replace("psk:Monochrome", "psk:Grayscale"), &job, 3).is_ok());
+        assert!(verify_job_options(&xml.replace("psk:Collated", "vendor:Collated"), &job, 3, true).is_err(), "namespace matters");
+        assert!(verify_job_options(&xml.replace("psk:Monochrome", "psk:Grayscale"), &job, 3, true).is_ok());
         for feature in ["DocumentCollate", "JobDuplexAllDocumentsContiguously", "PageOutputColor"] {
             let start = xml.find(&format!("<psf:Feature name=\"psk:{feature}\"")).unwrap();
             let end = start + xml[start..].find("</psf:Feature>").unwrap() + "</psf:Feature>".len();
             let mut dropped = xml.clone();
             dropped.replace_range(start..end, "");
-            assert!(verify_job_options(&dropped, &job, 3).is_err(), "{feature}");
+            assert!(verify_job_options(&dropped, &job, 3, true).is_err(), "{feature}");
             if feature == "DocumentCollate" {
-                assert!(verify_job_options(&dropped, &job, 1).is_ok(), "one page has no collating order");
+                assert!(verify_job_options(&dropped, &job, 1, true).is_ok(), "one page has no collating order");
+            }
+            if feature == "JobDuplexAllDocumentsContiguously" {
+                assert!(verify_job_options(&dropped, &job, 3, false).is_err(), "two-sided asked of a printer without it");
             }
         }
         let default = Job::default();
         let xml = ticket_xml(&default, false);
-        assert!(verify_job_options(&xml, &default, 3).is_ok());
+        assert!(verify_job_options(&xml, &default, 3, true).is_ok());
         let simplex = Job { duplex: Some(Duplex::Off), ..Job::default() };
-        assert!(verify_job_options(&ticket_xml(&simplex, false), &simplex, 3).is_ok());
-        assert!(verify_job_options(&xml, &simplex, 3).is_err(), "explicit simplex must be confirmed");
-        assert!(verify_job_options("<not xml", &default, 1).is_err());
+        assert!(verify_job_options(&ticket_xml(&simplex, false), &simplex, 3, true).is_ok());
+        assert!(verify_job_options(&xml, &simplex, 3, true).is_err(), "explicit simplex must be confirmed");
+        // A driver with no two-sided feature (Zebra's label drivers) drops the one-sided request:
+        // it can only print one side, so nothing is lost and nothing is refused.
+        assert!(verify_job_options(&xml, &simplex, 3, false).is_ok(), "one-sided on a printer without two-sided");
+        assert!(verify_job_options("<not xml", &default, 1, true).is_err());
+    }
+
+    #[test]
+    fn a_sheet_is_turned_only_when_its_shape_differs_from_the_papers() {
+        let letter = Some((215_900, 279_400));
+        let label = Some((69_850, 31_750)); // 2.75 × 1.25 in, wider than tall as the printer feeds it
+        assert!(turned(true, letter), "a wide sheet on upright paper is turned");
+        assert!(!turned(false, letter));
+        assert!(!turned(true, label), "a wide sheet on a wide label stock lies as it is");
+        assert!(turned(false, label), "an upright sheet on a wide label stock is turned");
+        assert!(turned(true, None) && !turned(false, None), "no paper known: the sheet's shape, as on upright paper");
+        assert!(!turned(false, Some((100_000, 100_000))) && turned(true, Some((100_000, 100_000))), "a square paper is upright");
+        // A MUNBYN ITPP941's native 60 × 40 mm form (storytold/pdfcraft#2673): a wide sheet is not
+        // turned a second time, and its upright 102.1 × 152.15 mm form turns a wide sheet as usual.
+        let munbyn = Some((60_000, 40_000));
+        assert!(!turned(true, munbyn) && turned(false, munbyn));
+        let upright_label = Some((102_100, 152_150));
+        assert!(turned(true, upright_label) && !turned(false, upright_label));
+    }
+
+    #[test]
+    fn a_label_printer_is_monochrome_only_on_label_sized_paper() {
+        let label = Some((38_100, 25_400)); // 1.5 × 1 in
+        let four_by_six = Some((101_600, 152_400));
+        let letter = Some((215_900, 279_400));
+        assert!(label_shaped(&["Monochrome"], label) && label_shaped(&["Monochrome"], four_by_six));
+        assert!(!label_shaped(&["Monochrome"], letter), "a fax or a monochrome laser");
+        assert!(!label_shaped(&["Monochrome", "Color"], label), "a colour label printer keeps its driver's way");
+        assert!(!label_shaped(&[], label) && !label_shaped(&["Monochrome"], None) && !label_shaped(&["Monochrome"], Some((0, 25_400))));
+        assert_eq!(media_size(&validated((38_100, 25_400), "psk:Portrait", None)), Some((38_100, 25_400)));
+        assert_eq!(media_size("not xml"), None);
+    }
+
+    #[test]
+    fn the_paper_a_devmode_prints_on_is_read_from_its_public_fields() {
+        // A DEVMODEW: dmFields at 72, dmOrientation at 76, dmPaperSize 78, dmPaperLength 80, dmPaperWidth 82 (tenths of mm).
+        let mut dm = vec![0u8; 220];
+        let put16 = |dm: &mut Vec<u8>, at: usize, v: i16| dm[at..at + 2].copy_from_slice(&v.to_le_bytes());
+        dm[72..76].copy_from_slice(&(0x1u32 | 0x2 | 0x4 | 0x8).to_le_bytes());
+        put16(&mut dm, 76, 1);
+        put16(&mut dm, 78, 256);
+        put16(&mut dm, 80, 318); // 1.25 in
+        put16(&mut dm, 82, 699); // 2.75 in
+        assert_eq!(devmode_paper(&dm), Some(((69_900, 31_800), false)));
+        put16(&mut dm, 76, 2);
+        assert_eq!(devmode_paper(&dm), Some(((69_900, 31_800), true)), "landscape");
+        dm[72..76].copy_from_slice(&(0x2u32).to_le_bytes());
+        assert_eq!(devmode_paper(&dm), None, "no width and length fields set");
+        dm[72..76].copy_from_slice(&(0x4u32 | 0x8).to_le_bytes());
+        put16(&mut dm, 80, 0);
+        assert_eq!(devmode_paper(&dm), None, "a roll has no length");
+        assert_eq!(devmode_paper(&dm[..60]), None, "too short");
+        assert_eq!(devmode_paper(&[]), None);
     }
 
     #[test]
