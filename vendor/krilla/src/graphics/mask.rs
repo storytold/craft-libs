@@ -56,9 +56,9 @@ impl Mask {
     /// The default is black, so the masked object is hidden outside the mask content.
     ///
     /// The color is written in the mask group's color space: RGB under
-    /// [`GroupColorSpace::Rgb`], the CMYK space under [`GroupColorSpace::Cmyk`]. A color from
-    /// another space is converted with the device formulas; luma maps to equal RGB components
-    /// or to black ink only.
+    /// [`GroupColorSpace::Rgb`]; under [`GroupColorSpace::Cmyk`], DeviceCMYK, or sGrey when
+    /// `no_device_cs` is set. A color from another space is converted with the device
+    /// formulas; luma maps to equal RGB components or to black ink only.
     ///
     /// Only luminosity masks have a backdrop color. On an alpha mask this returns the mask
     /// unchanged.
@@ -184,9 +184,13 @@ impl Cacheable for Mask {
         let backdrop = self
             .backdrop
             .filter(|_| self.mask_type == MaskType::Luminosity)
-            .map(|color| match sc.serialize_settings().group_color_space {
-                GroupColorSpace::Rgb => backdrop_rgb(color).to_vec(),
-                GroupColorSpace::Cmyk => backdrop_cmyk(color).to_vec(),
+            .map(|color| {
+                let settings = sc.serialize_settings();
+                match settings.group_color_space {
+                    GroupColorSpace::Rgb => backdrop_rgb(color).to_vec(),
+                    GroupColorSpace::Cmyk if settings.no_device_cs => vec![backdrop_gray(color)],
+                    GroupColorSpace::Cmyk => backdrop_cmyk(color).to_vec(),
+                }
             });
 
         let transfer = match &self.transfer {
@@ -233,6 +237,21 @@ fn backdrop_rgb(color: RegularColor) -> [f32; 3] {
                 (1.0 - m) * (1.0 - k),
                 (1.0 - y) * (1.0 - k),
             ]
+        }
+    }
+}
+
+/// A backdrop color in a gray mask group.
+fn backdrop_gray(color: RegularColor) -> f32 {
+    match color {
+        RegularColor::Luma(luma) => luma.to_pdf_color(),
+        RegularColor::Rgb(rgb) => {
+            let [r, g, b] = rgb.to_pdf_color();
+            0.3 * r + 0.59 * g + 0.11 * b
+        }
+        RegularColor::Cmyk(cmyk) => {
+            let [c, m, y, k] = cmyk.to_pdf_color();
+            1.0 - (0.3 * c + 0.59 * m + 0.11 * y + k).min(1.0)
         }
     }
 }

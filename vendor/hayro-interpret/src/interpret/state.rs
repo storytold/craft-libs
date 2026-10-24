@@ -411,11 +411,9 @@ pub(crate) fn handle_gs_single<'a>(
             let dash_phase = iter.next()?.into_number()?.as_f32();
 
             context.get_mut().graphics_state.stroke_props.dash_offset = dash_phase;
-            context.get_mut().graphics_state.stroke_props.dash_array = dash_array
-                .iter::<f32>()
-                // kurbo apparently cannot properly deal with offsets that are exactly 0.
-                .map(|n| if n == 0.0 { 0.01 } else { n })
-                .collect();
+            // PdfCraft patch: bounded, see `types::dash_array`.
+            context.get_mut().graphics_state.stroke_props.dash_array =
+                crate::types::dash_array(dash_array.iter::<f32>());
         }
         // PdfCraft patch (35): `OP` sets stroking overprint, and non-stroking overprint too when
         // the dictionary has no `op` of its own; `OPM` is 0 or 1 (§8.6.7).

@@ -96,10 +96,13 @@ and vendor/krilla/SOURCE.json. Its upstream MIT/Apache-2.0 licences and CC0 prof
 
 Optional PDF reader
 
-Hayro 0.7.1, hayro-interpret 0.7.0, hayro-syntax 0.7.2 and hayro-jbig2 0.3.0
-(https://github.com/LaurenzV/hayro), MIT OR Apache-2.0, retain their upstream licence files.
-These patched sources are transferred from PdfCraft revision
-ec0a965074f376a5bf610435948e4e5184bf3299 (https://github.com/storytold/pdfcraft).
+Hayro 0.7.1, hayro-interpret 0.7.0, hayro-syntax 0.7.2, hayro-jbig2 0.3.0, hayro-cmap 0.1.0
+and hayro-postscript 0.1.0 (https://github.com/LaurenzV/hayro), MIT OR Apache-2.0, retain their
+upstream licence files. The first five are patched sources transferred from PdfCraft
+(https://github.com/storytold/pdfcraft): hayro-cmap from revision
+a2ec27b4775f53c40cad3456936d9406611e3a8d, the others from revision
+ec0a965074f376a5bf610435948e4e5184bf3299. hayro-postscript is the crates.io 0.1.0 package
+(upstream revision a2354aebaf86f5ab13e5fd6b6b0521306488bf9d) with one local patch.
 See vendor/README.craft-reader.md and each crate's SOURCE.json for provenance and local changes.
 The hayro-interpret plate mode (separations, overprint and output-intent simulation) is ported
 from PdfCraft pull request #2770 by Guillem Hermida, commit
@@ -112,7 +115,7 @@ crates/pdf/tests/knockout.rs adapts its test.
 The reader retains the existing Foxit/PDFium standard-14 font assets (BSD-3-Clause),
 Compact ICC Profiles by Clinton Ingram (CC0-1.0), and dependency CMaps (BSD-3-Clause).
 Their licences and per-file hashes are retained in vendor/hayro-interpret/assets,
-licenses/pdf-backend and ATTRIBUTION.md. These are existing reader dependency assets;
+vendor/hayro-cmap/assets, licenses/pdf-backend and ATTRIBUTION.md. These are existing reader dependency assets;
 applications retain their own document-font selection and licensing policy.
 
 Platform lifecycle source provenance

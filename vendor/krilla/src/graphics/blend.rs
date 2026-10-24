@@ -59,6 +59,14 @@ pub struct Overprint {
     /// Nonzero overprint mode (`/OPM 1`): a DeviceCMYK component of 0 leaves that
     /// colorant of the backdrop unchanged. With `false` (`/OPM 0`), every DeviceCMYK
     /// component paints, zero included.
+    ///
+    /// ISO 32000-1 (8.6.7) applies the mode to DeviceCMYK only. With
+    /// [`SerializeSettings::no_device_cs`] all CMYK is ICCBased, so a PDF 1.7 reader paints
+    /// zero components as with `false`, and PDF/A-2 and later reject the combination
+    /// ([`ValidationError::OverprintModeIccCmyk`]).
+    ///
+    /// [`SerializeSettings::no_device_cs`]: crate::SerializeSettings::no_device_cs
+    /// [`ValidationError::OverprintModeIccCmyk`]: crate::configure::ValidationError::OverprintModeIccCmyk
     pub nonzero: bool,
 }
 

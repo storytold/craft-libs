@@ -188,7 +188,7 @@
       "path": "src/context.rs",
       "source_sha256": "dc2be553958ee3f5e5e644a77a0301723bae9ca027a352c13b9caaf549cc0e56",
       "source_git_blob": "d6772baa15ebb95d3ba2d1f54ce5c250ad1e8137",
-      "sha256": "d2dc5a6e8e4c066667a92892470315e7447b216048125d67b7674d25a6f3a265"
+      "sha256": "c2c2206bed7fb375c60beaa838ad364fb7bd92323488d6841c0afc285b889e82"
     },
     {
       "path": "src/convert.rs",
@@ -218,7 +218,7 @@
       "path": "src/font/cid.rs",
       "source_sha256": "c1dbe7fe5b7f7092d97b84063008df54aebf87db4ba1fdb3a179fab9fe6674b8",
       "source_git_blob": "b99dcbc116ca1169df3a229eafd05ee5b9204626",
-      "sha256": "9b7507da469e13adf711c0f94ff9c7a7e248dd4b28d2eca5bdb77d3efd505e0c"
+      "sha256": "6c9927c47893edacab4a3258d4ec72b4d3cc2dd25c518e308884321110847ab6"
     },
     {
       "path": "src/font/generated/glyph_names.rs",
@@ -290,7 +290,7 @@
       "path": "src/font/mod.rs",
       "source_sha256": "7e6411927d91205ca76c6b59f9d737cd1104d066f8cfcc0a87f481016ef30313",
       "source_git_blob": "7c8c8d086d59139df791cdb6952506473ec4b5a7",
-      "sha256": "8a5d1af8bd8b34c49db4d9c567413788b7a50d169ad43c2c9b0d12432436eb6b"
+      "sha256": "c0c903cb8a33ab863412c407ad10181adec0d22b81c899fc5225de14d8878091"
     },
     {
       "path": "src/font/outline.rs",
@@ -302,19 +302,19 @@
       "path": "src/font/standard_font.rs",
       "source_sha256": "af3c51592c086671cb127745d4351d1380ef1212aee325099f1e933607995d7d",
       "source_git_blob": "139454a0b21eb992e9e52bf73c85e965c0f86cda",
-      "sha256": "af3c51592c086671cb127745d4351d1380ef1212aee325099f1e933607995d7d"
+      "sha256": "01241c51fe85d94fa1bc3963e16a45be7c292104b204c37704e636ba2c0b0c5d"
     },
     {
       "path": "src/font/true_type.rs",
       "source_sha256": "278fed0cddcc43cc7d616200dcefb45720db9d560f54e41a82c281c3163b411d",
       "source_git_blob": "b36266985942b4d7e2970f9edf7329c4edbcfa11",
-      "sha256": "278fed0cddcc43cc7d616200dcefb45720db9d560f54e41a82c281c3163b411d"
+      "sha256": "a1262fd7efcf358b85b7863c97733a40e5df4295a9d1b54f66b1bada5898f600"
     },
     {
       "path": "src/font/type1.rs",
       "source_sha256": "431b1fe86ca51bd993e81084a64c3e8ed8b90a67385a30eb4ffedfdd98c6f96b",
       "source_git_blob": "02f76bfb8095041e3d54df014190047de46be4c5",
-      "sha256": "ef85c3fdf9d642e536a3ca9e23ec61e06877d2827ff8d1854e31d3d25ec93423"
+      "sha256": "af73de5038ee590bb062ee1e610a60e5e4f51d109ae765922ce9669b4e36ce95"
     },
     {
       "path": "src/font/type3.rs",
@@ -332,7 +332,7 @@
       "path": "src/function/type0.rs",
       "source_sha256": "a10a3a8c2154c19c5c637d5ff70b87b4d28a8bb857d82f2b06de68414ef93be7",
       "source_git_blob": "9a82c5978657170c44a2e2b771f2610ade5fb292",
-      "sha256": "a10a3a8c2154c19c5c637d5ff70b87b4d28a8bb857d82f2b06de68414ef93be7"
+      "sha256": "4a9a1f3d6da0c13bc359a8eb5fcbb2591e21d0944ba676d48ac58b6b565366fa"
     },
     {
       "path": "src/function/type2.rs",
@@ -362,7 +362,7 @@
       "path": "src/interpret/mod.rs",
       "source_sha256": "2b002323055bc19aa497e92c81ad8e06dc60ee03686cad89366df4ac7c7a06b2",
       "source_git_blob": "fe08fc284ba7c914d1414b68a5a346674a6f910f",
-      "sha256": "a961e5bfe16209a088501e5ba894053ec870783754dcf57bbc9d465925b0fef6"
+      "sha256": "5c39e98fe80b35f2b8e094ccad6488ca2bf1876477216e6ab951b023a883c4fb"
     },
     {
       "path": "src/interpret/path.rs",
@@ -374,7 +374,7 @@
       "path": "src/interpret/state.rs",
       "source_sha256": "dce778291b13f6df83c8c13aee22f60edd033ec9f7d89309ef148d46d3ba9814",
       "source_git_blob": "95b773fb5cc434ab8db362d00e4e5180a8b740c9",
-      "sha256": "393371ec56dccdc3c2fc20d61da39d87e3e8393bf69ddbd249417490f8f9923b"
+      "sha256": "bc5e73c3b29cdfe9d5f5036ea82beb2cf5a12ccd8a8c93277c15670b5f81ec08"
     },
     {
       "path": "src/interpret/text.rs",
@@ -422,7 +422,7 @@
       "path": "src/types.rs",
       "source_sha256": "0e66569b8a7dc243b0a384cf1d3615ca62bf660b5324236f2594609bdfddfd46",
       "source_git_blob": "64d2b849bdd3fdcd4ebfd76845edcef77b625fbd",
-      "sha256": "f4d2e980889a28bad49da83ccb858ce4b2d5276298e282929d0ddc92d0c9f644"
+      "sha256": "66773ae466a8c0705a54863509311ebbc128384488c59f25ef68774781f14ddb"
     },
     {
       "path": "src/util.rs",

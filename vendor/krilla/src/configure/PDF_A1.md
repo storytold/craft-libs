@@ -185,7 +185,9 @@ when a PostScript function is used. 🟢
 6.7.7: krilla writes a minimal `xmpMM:History` entry when a creation date is
 provided. 🟢
 
-6.7.8: krilla writes the extension schemas. 🟢
+6.7.8: krilla writes the extension schemas. `SerializeSettings::pdfx_version` would need one
+for `pdfxid:GTS_PDFXVersion`, which krilla does not write, so it is a validation error
+(`ValidationError::PdfxVersionWithoutExtensionSchema`). 🟢
 
 6.7.9: `xmp-writer` always produces valid XMP packets. 🟢
 

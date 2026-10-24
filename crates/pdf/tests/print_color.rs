@@ -202,7 +202,7 @@ fn cmyk_groups_use_the_cmyk_profile_without_device_spaces() {
     let icc = Some(Some("ICCBased(N=4)".to_owned()));
     assert_eq!(groups.pages, vec![icc.clone(), None, icc], "{groups:?}");
     assert_eq!(groups.forms, vec![None; FORMS], "{groups:?}");
-    assert_eq!(groups.masks, vec![Some("ICCBased(N=4)".to_owned()); MASKS], "{groups:?}");
+    assert_eq!(groups.masks, vec![Some("ICCBased(N=1)".to_owned()); MASKS], "{groups:?}");
     assert!(!String::from_utf8_lossy(&bytes).contains("DeviceRGB"));
 }
 
@@ -431,8 +431,8 @@ fn soft_masks(bytes: &[u8]) -> Vec<(String, Option<Vec<f32>>, Option<String>)> {
     out
 }
 
-/// `/BC` has the components of the mask group's color space (RGB, or CMYK under
-/// `GroupColorSpace::Cmyk`); an alpha mask gets no `/BC`; `/TR` is a Type 0 function or
+/// `/BC` has the components of the mask group's color space (RGB; under
+/// `GroupColorSpace::Cmyk`, CMYK, or gray with `no_device_cs`); an alpha mask gets no `/BC`; `/TR` is a Type 0 function or
 /// `/Identity`.
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 #[cfg_attr(not(target_arch = "wasm32"), test)]
@@ -442,7 +442,7 @@ fn soft_masks_write_backdrop_in_the_group_space_and_transfer() {
         (SerializeSettings::default(), vec![1.0, 1.0, 1.0]),
         (SerializeSettings { no_device_cs: true, ..Default::default() }, vec![1.0, 1.0, 1.0]),
         (cmyk_settings(), vec![0.0, 0.0, 0.0, 0.0]),
-        (SerializeSettings { no_device_cs: true, cmyk_profile: profile(), ..cmyk_settings() }, vec![0.0, 0.0, 0.0, 0.0]),
+        (SerializeSettings { no_device_cs: true, cmyk_profile: profile(), ..cmyk_settings() }, vec![1.0]),
     ];
     for (settings, white) in cases {
         let masks = soft_masks(&masked(settings));
@@ -450,6 +450,57 @@ fn soft_masks_write_backdrop_in_the_group_space_and_transfer() {
             masks,
             vec![("Alpha".to_owned(), None, Some("Identity".to_owned())), ("Luminosity".to_owned(), Some(white), Some("Type0 Size=3".to_owned())),]
         );
+    }
+}
+
+/// With an ICC CMYK page group, a luminosity mask hides the masked object wherever its content
+/// paints nothing: without `/BC`, and with a black `/BC` given as gray or as K 100%. Through a
+/// CMYK profile K 100% is not black, so a mask group in that space would leave the object
+/// showing there.
+#[cfg(feature = "raster")]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn icc_cmyk_luminosity_masks_hide_the_object_outside_their_content() {
+    use craft_pdf::interpret::InterpreterSettings;
+    use craft_pdf::raster::{self, Options, RenderCache};
+
+    let settings =
+        SerializeSettings { no_device_cs: true, cmyk_profile: Some(backend::icc::ICCProfile::<4>::new(CMYK_PROFILE).unwrap()), ..cmyk_settings() };
+    let mut writer = Writer::new(settings, Metadata::default());
+    let mut page = writer.document_mut().start_page_with(PageSettings::new(Size::from_wh(200.0, 60.0).unwrap()));
+    let mut surface = page.surface();
+    let backdrops: [Option<backend::color::RegularColor>; 3] = [None, Some(luma::Color::black().into()), Some(k(255).into())];
+    for (i, backdrop) in backdrops.into_iter().enumerate() {
+        let x = 60.0 * i as f32;
+        let mut builder = surface.stream_builder();
+        let mut mask_surface = builder.surface();
+        let mut path = PathBuilder::new();
+        path.push_rect(Rect::from_xywh(x + 10.0, 10.0, 20.0, 40.0).unwrap());
+        mask_surface.set_fill(Some(Fill { paint: luma::Color::white().into(), ..Default::default() }));
+        mask_surface.draw_path(&path.finish().unwrap());
+        mask_surface.finish();
+        let mut mask = Mask::new(builder.finish(), MaskType::Luminosity);
+        if let Some(backdrop) = backdrop {
+            mask = mask.with_backdrop(backdrop);
+        }
+        surface.push_mask(mask);
+        rect(&mut surface, x, k(255), 1.0);
+        surface.pop();
+    }
+    surface.finish();
+    page.finish();
+    let bytes = writer.finish().unwrap();
+
+    let doc = craft_pdf::open_slice(&bytes, None).unwrap();
+    let options = Options { background: [255; 4], ..Default::default() };
+    let raster = raster::render(&doc.pages()[0], &RenderCache::new(), &InterpreterSettings::default(), &options).unwrap();
+    assert_eq!((raster.width, raster.height), (200, 60));
+    let page = raster.bytes();
+    let red = |x: usize, y: usize| page[(y * 200 + x) * 4];
+    for i in 0..3 {
+        let x = 60 * i;
+        assert!(red(x + 20, 30) < 128, "mask {i}: the object shows inside the mask content");
+        assert_eq!((red(x + 5, 30), red(x + 35, 30)), (255, 255), "mask {i}: the object shows outside the mask content");
     }
 }
 
@@ -653,6 +704,7 @@ struct Samples {
     data: Vec<u8>,
     size: (u32, u32),
     space: ImageColorspace,
+    device_n: Option<DeviceNSpace>,
 }
 
 impl CustomImage for Samples {
@@ -672,7 +724,10 @@ impl CustomImage for Samples {
         None
     }
     fn color_space(&self) -> ImageColorspace {
-        self.space.clone()
+        self.space
+    }
+    fn device_n_space(&self) -> Option<DeviceNSpace> {
+        self.device_n.clone()
     }
 }
 
@@ -706,7 +761,8 @@ fn colorant_names(cs: &Object<'_>) -> (String, Vec<String>) {
 fn device_n_image_writes_one_sample_per_colorant() {
     let space = DeviceNSpace::new([Colorant::Process(Process::Black), spot("Gold", gold())]).unwrap();
     let data = vec![0, 0, 128, 64, 255, 153];
-    let image = Image::from_custom(Samples { data: data.clone(), size: (3, 1), space: ImageColorspace::DeviceN(space) }, false).unwrap();
+    let image =
+        Image::from_custom(Samples { data: data.clone(), size: (3, 1), space: ImageColorspace::DeviceN, device_n: Some(space) }, false).unwrap();
     let bytes = page_with(|surface| surface.draw_image(image, Size::from_wh(30.0, 10.0).unwrap()));
     let pdf = hayro_syntax::Pdf::new(Arc::new(bytes)).unwrap();
     let page = pdf.pages().iter().next().unwrap();
@@ -724,6 +780,25 @@ fn device_n_image_writes_one_sample_per_colorant() {
         assert_eq!(image.decoded().unwrap().as_ref(), data.as_slice());
     }
     assert_eq!(found, 1);
+}
+
+/// `Image::from_custom` refuses channel data that doesn't match the dimensions, and dimensions
+/// whose channel length overflows, instead of panicking when the page is written.
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn custom_image_with_mismatched_or_huge_dimensions_is_refused() {
+    let cmyk = |data: Vec<u8>, size| Samples { data, size, space: ImageColorspace::Cmyk, device_n: None };
+    assert!(Image::from_custom(cmyk(vec![0; 3], (1, 1)), false).is_err());
+    assert!(Image::from_custom(cmyk(vec![0; 4], (u32::MAX, u32::MAX)), false).is_err());
+    assert!(Image::from_custom(cmyk(vec![0; 4], (1, 1)), false).is_ok());
+}
+
+/// A DeviceN image needs its space from `CustomImage::device_n_space`.
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn device_n_image_without_a_space_is_refused() {
+    let image = Samples { data: vec![0; 6], size: (3, 1), space: ImageColorspace::DeviceN, device_n: None };
+    assert!(Image::from_custom(image, false).is_err());
 }
 
 /// A shading's color space family and colorant names, function `/Range` length and
@@ -1035,8 +1110,8 @@ fn print_settings_reject_a_profile_that_is_not_cmyk() {
     assert!(matches!(print::settings(PrintColor::fogra39(b"not a profile")), Err(WriteError::InvalidProfile)));
 }
 
-/// `/Trapped` and `GTS_PDFXVersion` go to the information dictionary and to XMP,
-/// `GTS_PDFXConformance` to the dictionary only; without settings none appears.
+/// `/Trapped` (`Unknown` included) and `GTS_PDFXVersion` go to the information dictionary and
+/// to XMP, `GTS_PDFXConformance` to the dictionary only; without settings none appears.
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 #[cfg_attr(not(target_arch = "wasm32"), test)]
 fn trapped_and_pdfx_version_are_written_to_info_and_xmp() {
@@ -1054,17 +1129,20 @@ fn trapped_and_pdfx_version_are_written_to_info_and_xmp() {
     assert!(marked.contains("<pdf:Trapped>True</pdf:Trapped>"), "XMP pdf:Trapped");
     assert!(marked.contains("<pdfxid:GTS_PDFXVersion>PDF/X-1:2003</pdfxid:GTS_PDFXVersion>"), "XMP GTS_PDFXVersion");
 
+    let unknown = SerializeSettings { trapped: Some(Trapped::Unknown), ..Default::default() };
+    let unknown = String::from_utf8_lossy(&sample(unknown, None).unwrap()).into_owned();
+    assert!(unknown.contains("/Trapped/Unknown") && unknown.contains("<pdf:Trapped>Unknown</pdf:Trapped>"));
+
     let plain = String::from_utf8_lossy(&sample(SerializeSettings::default(), None).unwrap()).into_owned();
     assert!(!plain.contains("Trapped") && !plain.contains("GTS_PDFX"));
 }
 
-/// Under PDF/A the archival intent names the same profile object as the print intent.
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
-#[cfg_attr(not(target_arch = "wasm32"), test)]
-fn pdfa_and_print_intents_share_the_profile() {
+/// A one-page PDF/A document with FOGRA39 print settings and the given PDF/X version.
+fn pdfa_print(version: PdfVersion, archival: Archival, pdfx_version: Option<&str>) -> Result<Vec<u8>, WriteError> {
     let settings = SerializeSettings {
         no_device_cs: true,
-        configuration: craft_pdf::write::configuration(PdfVersion::Pdf17, Some(Archival::A2_B)).unwrap(),
+        configuration: craft_pdf::write::configuration(version, Some(archival)).unwrap(),
+        pdfx_version: pdfx_version.map(str::to_owned),
         ..print::settings(PrintColor::fogra39(FOGRA39)).unwrap()
     };
     let created = Some(backend::metadata::DateTime::new(2026));
@@ -1077,9 +1155,32 @@ fn pdfa_and_print_intents_share_the_profile() {
         surface.finish();
         page.finish();
     }
-    let intents = output_intents(&writer.finish().unwrap());
+    writer.finish()
+}
+
+/// Under PDF/A the archival intent names the same profile object as the print intent.
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn pdfa_and_print_intents_share_the_profile() {
+    let intents = output_intents(&pdfa_print(PdfVersion::Pdf17, Archival::A2_B, None).unwrap());
     let subtypes: Vec<_> = intents.iter().map(|i| i.subtype.as_str()).collect();
     assert_eq!(subtypes, ["GTS_PDFA1", "GTS_PDFX"]);
     assert_eq!(intents[0].profile_object, intents[1].profile_object);
     assert!(intents[0].profile == FOGRA39);
+}
+
+/// `pdfxid:GTS_PDFXVersion` needs an XMP extension schema under PDF/A-1 to 3, which krilla
+/// doesn't write, so a PDF/X version fails validation there; PDF/A-4 needs none.
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn pdfx_version_is_a_pdf_a_1_to_3_error() {
+    for (version, archival) in [(PdfVersion::Pdf14, Archival::A1_B), (PdfVersion::Pdf17, Archival::A2_B), (PdfVersion::Pdf17, Archival::A3_B)] {
+        let Err(WriteError::Serialization(error)) = pdfa_print(version, archival, Some("PDF/X-4")) else {
+            panic!("{archival:?}: expected a validation error")
+        };
+        let backend::error::KrillaError::Validation(errors) = *error else { panic!("{archival:?}: expected validation errors") };
+        assert!(errors.iter().any(|(error, _)| *error == ValidationError::PdfxVersionWithoutExtensionSchema), "{archival:?}: {errors:?}");
+    }
+    let bytes = pdfa_print(PdfVersion::Pdf20, Archival::A4, Some("PDF/X-4")).unwrap();
+    assert!(String::from_utf8_lossy(&bytes).contains("<pdfxid:GTS_PDFXVersion>PDF/X-4</pdfxid:GTS_PDFXVersion>"));
 }

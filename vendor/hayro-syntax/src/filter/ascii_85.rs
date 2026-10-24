@@ -4,8 +4,8 @@ use crate::reader::Reader;
 use crate::trivia::is_white_space_character;
 use alloc::vec::Vec;
 
-/// PdfCraft patch: `limit` is the most bytes produced (see `filter::decode_limit`); each `z`
-/// expands one input byte to four.
+/// PdfCraft patch: `limit` is the most bytes produced (see `filter::decode_limit`); each `z` costs
+/// one input byte and yields four, so a Flate stream of them would outgrow the budget.
 pub(crate) fn decode(data: &[u8], limit: usize) -> Option<Vec<u8>> {
     const POW_85: [u32; 5] = [52200625, 614125, 7225, 85, 1];
 
@@ -52,24 +52,26 @@ pub(crate) fn decode(data: &[u8], limit: usize) -> Option<Vec<u8>> {
             .checked_add(digits[3].checked_mul(POW_85[3])?)?
             .checked_add(digits[4])?;
 
-        let left = limit.saturating_sub(decoded.len());
-        decoded.extend_from_slice(&value.to_be_bytes()[..output_len.min(left)]);
+        decoded.extend_from_slice(&value.to_be_bytes()[..output_len]);
         group.clear();
         Some(())
     };
 
-    let mut decoded = Vec::with_capacity((data.len() / 5 * 4).min(limit));
+    let mut decoded = Vec::with_capacity((data.len() * 4 / 5).min(limit));
     let mut group = Vec::with_capacity(5);
 
     loop {
-        // PdfCraft patch: output cut at the limit is reported, never dropped silently.
         if decoded.len() >= limit {
-            warn!("ASCII85 stream stopped at its decode limit of {limit} bytes");
+            decoded.truncate(limit);
+            warn!("ascii85 stream stopped at its decode limit of {limit} bytes");
+
             return Some(decoded);
         }
+
         let Some(b) = read_byte() else {
             // Be lenient and accept what we have (see PDFBOX-5910).
             flush_group(&mut group, &mut decoded)?;
+            decoded.truncate(limit);
 
             return Some(decoded);
         };
@@ -84,17 +86,30 @@ pub(crate) fn decode(data: &[u8], limit: usize) -> Option<Vec<u8>> {
             }
             b'z' => {
                 flush_group(&mut group, &mut decoded)?;
-                let left = limit.saturating_sub(decoded.len());
-                decoded.extend(core::iter::repeat_n(0, left.min(4)));
+                decoded.extend_from_slice(&[0, 0, 0, 0]);
             }
             b'~' => {
                 // Technically requires a '>', but there is a PDF where it isn't
                 // appended and decodes fine in other viewers.
                 flush_group(&mut group, &mut decoded)?;
+                decoded.truncate(limit);
 
                 return Some(decoded);
             }
             _ => return None, // Invalid character.
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::decode;
+
+    #[test]
+    fn output_stops_at_the_limit() {
+        assert_eq!(decode(&[b'z'; 100], 10).unwrap().len(), 10);
+        assert_eq!(decode(b"zz~>", 100).unwrap(), [0; 8]);
+        assert_eq!(decode(b"!!!!~>", 2).unwrap().len(), 2);
+        assert_eq!(decode(b"!!!!", 2).unwrap().len(), 2);
     }
 }

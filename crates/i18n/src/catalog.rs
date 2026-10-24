@@ -37,7 +37,7 @@ pub(crate) fn parse(text: &str, forms: usize) -> (Vec<Entry>, Vec<String>) {
     (rows, problems)
 }
 
-fn parse_row(text: &str, forms: usize) -> Result<Entry, String> {
+pub(crate) fn parse_row(text: &str, forms: usize) -> Result<Entry, String> {
     let columns: Vec<&str> = text.split('\t').collect();
     let [context, source, translation] = columns.as_slice() else {
         return Err(format!("{} columns; expected 3", columns.len()));

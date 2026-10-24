@@ -25,9 +25,15 @@ pub(crate) fn decode(
         .filter(|&rows| rows != 0)
         .map_or(image_params.height, |rows| rows.max(image_params.height));
     let end_of_block = params.get::<bool>(END_OF_BLOCK).unwrap_or(true);
+    // A `/Columns` past `u32::MAX` is refused: truncated, it would wrap to a small width that
+    // passes `ccitt_size_ok` and decode the image at the wrong width.
+    let columns = match params.get::<usize>(COLUMNS) {
+        Some(columns) => u32::try_from(columns).ok()?,
+        None => 1728,
+    };
 
     let settings = DecodeSettings {
-        columns: params.get::<usize>(COLUMNS).unwrap_or(1728) as u32,
+        columns,
         rows,
         end_of_block,
         end_of_line: params.get::<bool>(END_OF_LINE).unwrap_or(false),
@@ -161,4 +167,23 @@ pub(crate) fn decode(
             height: image_params.height,
         }),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::decode;
+    use crate::object::stream::ImageDecodeParams;
+    use crate::object::{Dict, FromBytes};
+
+    // An 8 x 4 all-black Group 4 stream: one horizontal-mode row, three V0 rows, then EOFB.
+    const ALL_BLACK_8X4: [u8; 6] = [0x26, 0xa2, 0xfe, 0x00, 0x20, 0x02];
+
+    #[test]
+    fn columns_past_u32_max_are_refused_not_wrapped() {
+        let params = ImageDecodeParams { width: 8, height: 4, ..Default::default() };
+        let decoded = |dict: &[u8]| decode(&ALL_BLACK_8X4, &Dict::from_bytes(dict).unwrap(), &params);
+        assert!(decoded(b"<< /K -1 /Columns 8 >>").is_some());
+        // 2^32 + 8 would wrap to 8 columns.
+        assert!(decoded(b"<< /K -1 /Columns 4294967304 >>").is_none());
+    }
 }

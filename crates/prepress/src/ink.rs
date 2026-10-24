@@ -147,22 +147,31 @@ impl InkSet {
             Ink::Spot(spot) => spot,
         };
         let name = normalize_name(&spot.name).into_owned();
-        if name == "All" || name == "None" {
+        self.add_decoded(Spot { name, ..spot })
+    }
+
+    /// [`add`](Self::add) for a spot whose name is already decoded, as a PDF reader hands it
+    /// over: `#` in the name is a literal character.
+    pub(crate) fn add_decoded(&mut self, spot: Spot) -> Option<InkId> {
+        if spot.name == "All" || spot.name == "None" {
             return None;
         }
-        if let Some(id) = self.lookup(&name) {
+        if let Some(id) = self.lookup_decoded(&spot.name) {
             return Some(id);
         }
         let id = InkId(u16::try_from(self.inks.len()).ok()?);
-        self.inks.push(Ink::Spot(Spot { name, ..spot }));
+        self.inks.push(Ink::Spot(spot));
         Some(id)
     }
 
     /// The ink named `name`, compared after [`normalize_name`]: `"/Gold#20Foil"` finds
     /// `Gold Foil`.
     pub fn lookup(&self, name: &str) -> Option<InkId> {
-        let name = normalize_name(name);
-        if let Some(p) = Process::from_name(&name) {
+        self.lookup_decoded(&normalize_name(name))
+    }
+
+    fn lookup_decoded(&self, name: &str) -> Option<InkId> {
+        if let Some(p) = Process::from_name(name) {
             return Some(InkId::process(p));
         }
         let at = self.inks.iter().skip(4).position(|ink| ink.name() == name)?;
@@ -350,6 +359,7 @@ impl InkSet {
 
 /// A color as ink tints.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub enum InkColor {
     /// Tints `0.0..=1.0` of the listed inks; other inks are unspecified (they keep what is
     /// under the paint when it overprints, and are knocked out otherwise). One entry is a
@@ -388,12 +398,15 @@ impl InkColor {
 ///
 /// Spot alternates are [`InkSet::spot_cmyk`]: a CMYK alternate as given, a Lab one through
 /// `cms` into the printing condition. A tint listed twice combines as overlapping halftones,
-/// as in `resolve`. `None` when a tint's ink is not in `inks`, a spot's Lab alternate can't be
-/// converted, a spot name is empty, or a `DeviceN` space would have more than 32 colorants.
+/// as in `resolve`. `None` when `Tints` lists no ink (there is nothing to paint; use
+/// [`InkColor::None`] to mark no plate), a tint's ink is not in `inks`, a spot's Lab alternate
+/// can't be converted, a spot name is empty, or a `DeviceN` space would have more than 32
+/// colorants.
 pub fn to_pdf_color(color: &InkColor, inks: &InkSet, cms: &dyn CmykConversion) -> Option<PdfColor> {
     let tints = match color {
         InkColor::All(tint) => return Some(separation(SeparationColorant::AllColorants, *tint, cmyk::Color::new(255, 255, 255, 255))),
         InkColor::None => return Some(separation(SeparationColorant::NoColorant, 0.0, cmyk::Color::new(0, 0, 0, 0))),
+        InkColor::Tints(tints) if tints.is_empty() => return None,
         InkColor::Tints(tints) => tints,
     };
     // Sorted by id: process inks first, in plate order, then spots in set order.

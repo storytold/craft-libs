@@ -47,7 +47,7 @@ index 1807ac3..4c582ae 100644
              KrillaError::Validation(errors) => {
                  let count = errors.len();
 diff --git a/src/graphics/mask.rs b/src/graphics/mask.rs
-index 38b9ad0..2654b25 100644
+index 2763a27..b526db9 100644
 --- a/src/graphics/mask.rs
 +++ b/src/graphics/mask.rs
 @@ -99,6 +99,15 @@ impl Mask {
@@ -349,10 +349,10 @@ index ad0e783..74c56f3 100644
      sc: &mut SerializeContext,
      chunk: &mut Chunk,
 diff --git a/src/serialize.rs b/src/serialize.rs
-index 378d6ec..0093a25 100644
+index 9b22240..587e2c6 100644
 --- a/src/serialize.rs
 +++ b/src/serialize.rs
-@@ -341,6 +341,9 @@ pub(crate) enum MaybeDeviceColorSpace {
+@@ -353,6 +353,9 @@ pub(crate) enum MaybeDeviceColorSpace {
  pub(crate) struct SerializeContext {
      /// An unfinished or failed page/surface must never serialize as a complete document.
      pub(crate) poisoned: bool,
@@ -362,7 +362,7 @@ index 378d6ec..0093a25 100644
      /// The ref of the page tree.
      page_tree_ref: Ref,
      /// PDF 2.0 namespaces.
-@@ -401,6 +404,7 @@ impl SerializeContext {
+@@ -413,6 +416,7 @@ impl SerializeContext {
  
          Self {
              poisoned: false,
@@ -370,9 +370,9 @@ index 378d6ec..0093a25 100644
              cached_mappings: HashMap::new(),
              pdf2_ns,
              global_objects: GlobalObjects::default(),
-@@ -594,6 +598,9 @@ impl SerializeContext {
-         {
-             return Err(KrillaError::MissingGroupCmykProfile);
+@@ -624,6 +628,9 @@ impl SerializeContext {
+         if self.serialize_settings.pdfx_version.is_some() {
+             self.register_validation_error(ValidationError::PdfxVersionWithoutExtensionSchema);
          }
 +        if let Some(location) = self.mixed_mesh_colors {
 +            return Err(KrillaError::MixedMeshColorSpaces(location));

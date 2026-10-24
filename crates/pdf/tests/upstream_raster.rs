@@ -1,4 +1,5 @@
-//! Portable regressions adapted from PdfCraft 7437bde378f43856eada40af25b983812e615e8a (MIT OR Apache-2.0).
+//! Portable regressions adapted from PdfCraft 7437bde378f43856eada40af25b983812e615e8a and
+//! a2ec27b4775f53c40cad3456936d9406611e3a8d (MIT OR Apache-2.0).
 #![cfg(feature = "raster")]
 use craft_pdf::{
     open_slice,
@@ -268,4 +269,162 @@ fn tiff_predictor_packed_rgb_image_renders_every_row() {
     let pixel = |y: usize| &page.rgba[((y * 40 + 20) * 4)..][..4];
     assert_eq!(pixel(10), &[255, 0, 0, 255]);
     assert_eq!(pixel(30), &[0, 255, 0, 255]);
+}
+
+// An 8 x 4 all-black Group 4 stream, hand-encoded from ITU-T T.6: one horizontal-mode row
+// (white 0, black 8), three V0 rows, then EOFB.
+const ALL_BLACK_8X4: [u8; 6] = [0x26, 0xa2, 0xfe, 0x00, 0x20, 0x02];
+
+fn fax_page(space: &str, params: &str) -> Pixels {
+    let content = "q 20 0 0 20 5 5 cm /Im1 Do Q";
+    let mut pdf = format!(
+        "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 40 40] /Contents 4 0 R /Resources << /XObject << /Im1 5 0 R >> >> >> endobj
+4 0 obj << /Length {} >> stream
+{content}
+endstream endobj
+5 0 obj << /Type /XObject /Subtype /Image /Width 8 /Height 4 /ColorSpace {space} /BitsPerComponent 1 /Filter /CCITTFaxDecode /DecodeParms << /K -1 /Columns 8 {params} >> /Length {} >> stream\n",
+        content.len(),
+        ALL_BLACK_8X4.len()
+    )
+    .into_bytes();
+    pdf.extend_from_slice(&ALL_BLACK_8X4);
+    pdf.extend_from_slice(b"\nendstream endobj\ntrailer << /Root 1 0 R >>\n%%EOF");
+    render(&pdf)
+}
+
+fn pixel(page: &Pixels, x: u32, y: u32) -> &[u8] {
+    let i = ((y * page.width + x) * 4) as usize;
+    &page.rgba[i..i + 4]
+}
+
+/// Scanners and fax services write Group 4 pages with `/Rows 0`, which ISO 32000-2 Table 11
+/// defines as "height not predetermined" (the default), not as zero rows.
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+fn group4_fax_with_rows_zero_decodes_to_the_image_height() {
+    for rows in ["", "/Rows 4", "/Rows 0"] {
+        let page = fax_page("/DeviceGray", rows);
+        assert_eq!(pixel(&page, 15, 24), &[0, 0, 0, 255], "{rows:?}: the fax image paints black");
+        assert_eq!(pixel(&page, 1, 38), &[255, 255, 255, 255], "{rows:?}: outside the image stays white");
+    }
+}
+
+/// PdfCraft #3308: a fax image whose `/Rows` is below its `/Height` is decoded to its height.
+/// `/BlackIs1` turns the fixture white, so rows left undecoded show as black. Also through an
+/// `/Indexed` color space, the filter's other output path.
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+fn group4_fax_with_rows_below_its_height_decodes_to_the_image_height() {
+    for (space, rows) in [("/DeviceGray", "/Rows 2"), ("[/Indexed /DeviceRGB 1 <000000FFFFFF>]", "/Rows 2"), ("/DeviceGray", "/Rows 4")] {
+        let page = fax_page(space, &format!("{rows} /BlackIs1 true"));
+        for y in [17, 22, 27, 32] {
+            assert_eq!(pixel(&page, 15, y), &[255, 255, 255, 255], "{space} {rows}: image row at y {y} is decoded");
+        }
+    }
+}
+
+/// PdfCraft ledger hayro-interpret P2 (#3178): a shaded Type 3 glyph clips to its `/FontBBox` in
+/// device space at every position, not to the glyph-space box.
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+fn shaded_type3_glyph_draws_at_multiple_positions() {
+    let content = "BT /F 30 Tf 1 0 0 1 50 70 Tm (A) Tj 1 0 0 1 220 70 Tm (A) Tj ET";
+    let glyph = "100 0 d0 0 0 100 100 re W n /S sh";
+    let pdf = format!(
+        "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 150] /Resources << /Font << /F 5 0 R >> >> /Contents 4 0 R >> endobj
+4 0 obj << /Length {} >> stream
+{content}
+endstream endobj
+5 0 obj << /Type /Font /Subtype /Type3 /FontBBox [0 0 100 100] /FontMatrix [0.01 0 0 0.01 0 0] /CharProcs << /A 6 0 R >> /Encoding << /Differences [65 /A] >> /FirstChar 65 /LastChar 65 /Widths [100] /Resources << /Shading << /S 7 0 R >> >> >> endobj
+6 0 obj << /Length {} >> stream
+{glyph}
+endstream endobj
+7 0 obj << /ShadingType 2 /ColorSpace /DeviceRGB /Coords [0 0 100 0] /Function << /FunctionType 2 /Domain [0 1] /C0 [1 0 0] /C1 [0 0 1] /N 1 >> /Extend [true true] >> endobj
+trailer << /Root 1 0 R >>
+%%EOF",
+        content.len(),
+        glyph.len()
+    );
+    let page = render(pdf.as_bytes());
+    for x in [65, 235] {
+        let px = pixel(&page, x, 65);
+        assert!(px[0] < 240 && px[2] < 240 && px[1] < 10, "glyph at {x}: {px:?}");
+    }
+}
+
+/// PdfCraft ledger hayro-interpret (26) extension: comma-below letters in non-embedded standard
+/// fonts are the letter with the font's comma under it, apart from the letter and inside the
+/// descender, whichever name the font gives them (`/scommaaccent`, `/Kcedilla`, `/uni0219`).
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+fn comma_below_letters_in_standard_fonts_draw_a_comma_under_the_letter() {
+    let pairs = [
+        ("s", "uni0219"),
+        ("t", "uni021B"),
+        ("T", "uni021A"),
+        ("K", "uni0136"),
+        ("k", "kcedilla"),
+        ("G", "uni0122"),
+        ("G", "Gcedilla"),
+        ("R", "uni0156"),
+        ("s", "scommaaccent"),
+        ("S", "Scommaaccent"),
+        ("t", "tcommaaccent"),
+        ("T", "Tcommaaccent"),
+        ("k", "kcommaaccent"),
+        ("K", "Kcommaaccent"),
+        ("l", "lcommaaccent"),
+        ("L", "Lcommaaccent"),
+        ("n", "ncommaaccent"),
+        ("N", "Ncommaaccent"),
+        ("r", "rcommaaccent"),
+        ("R", "Rcommaaccent"),
+        ("G", "Gcommaaccent"),
+    ];
+    let letters: Vec<&str> = pairs.iter().flat_map(|(base, accented)| [*base, *accented]).collect();
+    let (size, baseline) = (40u32, 60u32);
+    for font in ["Helvetica", "Times-Roman", "Courier", "Helvetica-BoldOblique"] {
+        let mut content = String::new();
+        for i in 0..letters.len() {
+            content.push_str(&format!("BT /F1 {size} Tf {} {} Td <{:02X}> Tj ET\n", 10 + 40 * i, 80 - baseline, 1 + i));
+        }
+        let differences = letters.iter().map(|n| format!("/{n}")).collect::<Vec<_>>().join(" ");
+        let pdf = format!(
+            "%PDF-1.4
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 {} 80] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >> endobj
+4 0 obj << /Length {} >> stream
+{content}endstream endobj
+5 0 obj << /Type /Font /Subtype /Type1 /BaseFont /{font}
+  /Encoding << /Type /Encoding /BaseEncoding /WinAnsiEncoding /Differences [1 {differences}] >> >> endobj
+trailer << /Root 1 0 R >>
+%%EOF",
+            20 + 40 * letters.len(),
+            content.len()
+        );
+        let p = render(pdf.as_bytes());
+        // The rows (y down) of the i-th letter that have dark pixels.
+        let ink_rows = |i: u32| -> Vec<u32> {
+            (0..p.height).filter(|&y| ((8 + 40 * i)..(48 + 40 * i).min(p.width)).any(|x| pixel(&p, x, y)[0] < 128)).collect()
+        };
+        for (pair, (_, name)) in pairs.iter().enumerate() {
+            let (base, accented) = (ink_rows(2 * pair as u32), ink_rows(2 * pair as u32 + 1));
+            let (Some(&base_bottom), Some(&bottom)) = (base.last(), accented.last()) else {
+                panic!("{font} {name}: draws nothing ({} rows of its base letter)", base.len());
+            };
+            assert!(bottom > base_bottom + 2, "{font} {name}: a mark hangs below the letter ({bottom} vs {base_bottom})");
+            assert!(
+                (base_bottom + 1..bottom).any(|y| !accented.contains(&y)),
+                "{font} {name}: the mark is apart from the letter, a comma and not a cedilla"
+            );
+            assert!(bottom < baseline + size * 3 / 10, "{font} {name}: the comma stays within the descender ({bottom})");
+        }
+    }
 }

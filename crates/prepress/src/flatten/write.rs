@@ -302,23 +302,17 @@ impl<'a> Painter<'a, '_> {
             draw(s, image);
             return Ok(());
         }
-        let (space, samples) = match &im.space {
-            ImageSpace::Gray => (ImageColorspace::Luma, im.samples.clone()),
-            ImageSpace::Rgb => (ImageColorspace::Rgb, im.samples.clone()),
-            ImageSpace::Cmyk => (ImageColorspace::Cmyk, im.samples.clone()),
+        let (space, components, device_n, samples) = match &im.space {
+            ImageSpace::Gray => (ImageColorspace::Luma, 1, None, im.samples.clone()),
+            ImageSpace::Rgb => (ImageColorspace::Rgb, 3, None, im.samples.clone()),
+            ImageSpace::Cmyk => (ImageColorspace::Cmyk, 4, None, im.samples.clone()),
             ImageSpace::Inks(ids) => {
                 if im.samples.len() != pixels.saturating_mul(ids.len()) {
                     return Err(WriteError::Image("sample count doesn't match the size and inks"));
                 }
                 let (space, samples) = self.ink_samples(ids, &im.samples)?;
-                (ImageColorspace::DeviceN(space), samples)
+                (ImageColorspace::DeviceN, space.colorants().len(), Some(space), samples)
             }
-        };
-        let components = match &space {
-            ImageColorspace::Luma => 1,
-            ImageColorspace::Rgb => 3,
-            ImageColorspace::Cmyk => 4,
-            ImageColorspace::DeviceN(space) => space.colorants().len(),
         };
         if samples.len() != pixels.saturating_mul(components) {
             return Err(WriteError::Image("sample count doesn't match the size and space"));
@@ -326,7 +320,7 @@ impl<'a> Painter<'a, '_> {
         if im.smask.as_ref().is_some_and(|a| a.len() != pixels) {
             return Err(WriteError::Image("smask size doesn't match the image"));
         }
-        let image = Image::from_custom(Samples { samples, alpha: im.smask.clone(), size: im.size, space }, false)
+        let image = Image::from_custom(Samples { samples, alpha: im.smask.clone(), size: im.size, space, device_n }, false)
             .map_err(|_| WriteError::Image("krilla rejected it"))?;
         draw(s, image);
         Ok(())
@@ -687,6 +681,7 @@ struct Samples {
     alpha: Option<Arc<[u8]>>,
     size: (u32, u32),
     space: ImageColorspace,
+    device_n: Option<DeviceNSpace>,
 }
 
 impl Hash for Samples {
@@ -695,6 +690,7 @@ impl Hash for Samples {
         self.alpha.hash(state);
         self.size.hash(state);
         self.space.hash(state);
+        self.device_n.hash(state);
     }
 }
 
@@ -715,7 +711,10 @@ impl CustomImage for Samples {
         None
     }
     fn color_space(&self) -> ImageColorspace {
-        self.space.clone()
+        self.space
+    }
+    fn device_n_space(&self) -> Option<DeviceNSpace> {
+        self.device_n.clone()
     }
 }
 

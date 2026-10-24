@@ -91,11 +91,20 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           components: clippy
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: craft-plate-test
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Provision licensed PDF test fonts
+        shell: bash
+        run: |
+          python scripts/test-fetch-pdf-test-fonts.py
+          python scripts/fetch-pdf-test-fonts.py "$RUNNER_TEMP/craft-pdf-test-fonts"
+          echo "CRAFT_PDF_TEST_FONT_DIR=$RUNNER_TEMP/craft-pdf-test-fonts" >> "$GITHUB_ENV"
       - run: cargo clippy -p craft-plate-test -p craft-prepress --all-targets --all-features --locked -- -D warnings
       - run: cargo test -p craft-plate-test -p craft-prepress --all-features --locked

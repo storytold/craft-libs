@@ -197,7 +197,9 @@ always required. 🟢
 
 6.6.2.2: -
 
-6.6.2.3.1: krilla doesn't use any non-standard properties. 🟢
+6.6.2.3.1: krilla doesn't use any non-standard properties. `SerializeSettings::pdfx_version`
+would write `pdfxid:GTS_PDFXVersion`, which needs an extension schema that krilla does not
+write, so it is a validation error (`ValidationError::PdfxVersionWithoutExtensionSchema`). 🟢
 
 6.6.2.3.2: krilla writes the extension schemas. 🟢
 

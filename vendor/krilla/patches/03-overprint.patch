@@ -1,7 +1,8 @@
-diff -ruN a/src/configure/PDF_A2.md b/src/configure/PDF_A2.md
+diff --git a/src/configure/PDF_A2.md b/src/configure/PDF_A2.md
+index a4e4377..9609ea2 100644
 --- a/src/configure/PDF_A2.md
 +++ b/src/configure/PDF_A2.md
-@@ -67,7 +67,8 @@
+@@ -67,7 +67,8 @@ in case CMYK is used but no profile was provided, export fails.
  
  6.2.4.2: 
  - sRGB/sGrey ICC profiles conform to ICC v4 specification. 🟢
@@ -11,10 +12,11 @@ diff -ruN a/src/configure/PDF_A2.md b/src/configure/PDF_A2.md
  
  6.2.4.3: 
  - krilla always uses sRGB for RGB, and in addition also embeds an sRGB output intent. 🟢
-diff -ruN a/src/configure/PDF_A4.md b/src/configure/PDF_A4.md
+diff --git a/src/configure/PDF_A4.md b/src/configure/PDF_A4.md
+index 44a294f..d5e4374 100644
 --- a/src/configure/PDF_A4.md
 +++ b/src/configure/PDF_A4.md
-@@ -66,7 +66,8 @@
+@@ -66,7 +66,8 @@ See `README.md` for the meaning of each color.
  ### 6.2.4 Colour spaces
  - krilla only uses device-independent colors in this export mode. 🟢 
  - krilla uses compatible ICC profiles. 🟢
@@ -24,10 +26,11 @@ diff -ruN a/src/configure/PDF_A4.md b/src/configure/PDF_A4.md
  - krilla never uses CMYK profiles as the destination profile. 🟢
  - krilla does not use device color spaces in this mode. 🟢
  - krilla ensures the Alternate space in Separation color spaces obeys the restrictions
-diff -ruN a/src/configure/validate.rs b/src/configure/validate.rs
+diff --git a/src/configure/validate.rs b/src/configure/validate.rs
+index e92da05..91996ee 100644
 --- a/src/configure/validate.rs
 +++ b/src/configure/validate.rs
-@@ -131,6 +131,16 @@
+@@ -131,6 +131,16 @@ pub enum ValidationError {
      Transparency(Option<Location>),
      /// The PDF contains an image with `interpolate` set to `true`.
      ImageInterpolation(Option<Location>),
@@ -44,7 +47,7 @@ diff -ruN a/src/configure/validate.rs b/src/configure/validate.rs
      /// The PDF contains an embedded file.
      EmbeddedFile(EmbedError, Option<Location>),
      /// The PDF contains no tagging.
-@@ -554,6 +564,7 @@
+@@ -554,6 +564,7 @@ impl Archival {
              (
                  Self::A1_A | Self::A1_B,
                  ValidationError::InconsistentSeparationFallback(_)
@@ -52,7 +55,7 @@ diff -ruN a/src/configure/validate.rs b/src/configure/validate.rs
                  | ValidationError::InvalidCodepointMapping(_, _, _, _)
                  | ValidationError::UnicodePrivateArea(_, _, _, _)
                  | ValidationError::NoDocumentTitle
-@@ -592,6 +603,7 @@
+@@ -592,6 +603,7 @@ impl Archival {
                  | ValidationError::RestrictedLicense(_)
                  | ValidationError::MissingDocumentDate
                  | ValidationError::ImageInterpolation(_)
@@ -60,7 +63,7 @@ diff -ruN a/src/configure/validate.rs b/src/configure/validate.rs
                  | ValidationError::EmbeddedPDF(_),
              ) => true,
              // Allowed under all PDF/A-2 and PDF/A-3 profiles.
-@@ -656,6 +668,7 @@
+@@ -656,6 +668,7 @@ impl Archival {
                  | ValidationError::RestrictedLicense(_)
                  | ValidationError::MissingDocumentDate
                  | ValidationError::ImageInterpolation(_)
@@ -68,7 +71,7 @@ diff -ruN a/src/configure/validate.rs b/src/configure/validate.rs
                  | ValidationError::EmbeddedPDF(_),
              ) => true,
              // Allowed under all PDF/A-4 profiles.
-@@ -1130,6 +1143,7 @@
+@@ -1130,6 +1143,7 @@ impl Accessibility {
                  | ValidationError::NoDocumentLanguage
                  | ValidationError::Transparency(_)
                  | ValidationError::ImageInterpolation(_)
@@ -76,10 +79,11 @@ diff -ruN a/src/configure/validate.rs b/src/configure/validate.rs
                  | ValidationError::EmbeddedFile(
                      EmbedError::Existence | EmbedError::MissingDate | EmbedError::MissingMimeType,
                      _,
-diff -ruN a/src/content.rs b/src/content.rs
+diff --git a/src/content.rs b/src/content.rs
+index dd5b1cb..751cb2f 100644
 --- a/src/content.rs
 +++ b/src/content.rs
-@@ -16,6 +16,7 @@
+@@ -16,6 +16,7 @@ use crate::configure::ValidationError;
  #[cfg(feature = "raster-images")]
  use crate::geom::Size;
  use crate::geom::{Point, Rect, Transform};
@@ -87,7 +91,7 @@ diff -ruN a/src/content.rs b/src/content.rs
  use crate::graphics::color::{Color, ColorSpace};
  use crate::graphics::graphics_state::{ExtGState, GraphicsStates};
  #[cfg(feature = "raster-images")]
-@@ -183,6 +184,12 @@
+@@ -183,6 +184,12 @@ impl ContentBuilder {
          }
      }
  
@@ -100,7 +104,8 @@ diff -ruN a/src/content.rs b/src/content.rs
      pub(crate) fn expand_bbox(&mut self, new_bbox: Rect) {
          let new_bbox = self.graphics_states.transform_bbox(new_bbox);
          if let Some(bbox) = &mut self.bbox {
-diff -ruN a/src/graphics/blend.rs b/src/graphics/blend.rs
+diff --git a/src/graphics/blend.rs b/src/graphics/blend.rs
+index 9d0e98d..8d7c5c7 100644
 --- a/src/graphics/blend.rs
 +++ b/src/graphics/blend.rs
 @@ -1,4 +1,4 @@
@@ -109,7 +114,7 @@ diff -ruN a/src/graphics/blend.rs b/src/graphics/blend.rs
  
  /// How to blend source and backdrop.
  #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
-@@ -44,3 +44,30 @@
+@@ -44,3 +44,38 @@ impl BlendMode {
          }
      }
  }
@@ -128,6 +133,14 @@ diff -ruN a/src/graphics/blend.rs b/src/graphics/blend.rs
 +    /// Nonzero overprint mode (`/OPM 1`): a DeviceCMYK component of 0 leaves that
 +    /// colorant of the backdrop unchanged. With `false` (`/OPM 0`), every DeviceCMYK
 +    /// component paints, zero included.
++    ///
++    /// ISO 32000-1 (8.6.7) applies the mode to DeviceCMYK only. With
++    /// [`SerializeSettings::no_device_cs`] all CMYK is ICCBased, so a PDF 1.7 reader paints
++    /// zero components as with `false`, and PDF/A-2 and later reject the combination
++    /// ([`ValidationError::OverprintModeIccCmyk`]).
++    ///
++    /// [`SerializeSettings::no_device_cs`]: crate::SerializeSettings::no_device_cs
++    /// [`ValidationError::OverprintModeIccCmyk`]: crate::configure::ValidationError::OverprintModeIccCmyk
 +    pub nonzero: bool,
 +}
 +
@@ -140,7 +153,8 @@ diff -ruN a/src/graphics/blend.rs b/src/graphics/blend.rs
 +        }
 +    }
 +}
-diff -ruN a/src/graphics/graphics_state.rs b/src/graphics/graphics_state.rs
+diff --git a/src/graphics/graphics_state.rs b/src/graphics/graphics_state.rs
+index 9fc913c..93f3e25 100644
 --- a/src/graphics/graphics_state.rs
 +++ b/src/graphics/graphics_state.rs
 @@ -1,7 +1,7 @@
@@ -152,7 +166,7 @@ diff -ruN a/src/graphics/graphics_state.rs b/src/graphics/graphics_state.rs
  use pdf_writer::{Finish, Name, Ref};
  
  use crate::chunk_container::ChunkContainer;
-@@ -24,6 +24,12 @@
+@@ -24,6 +24,12 @@ struct Repr {
      blend_mode: Option<BlendMode>,
      /// An active mask.
      mask: Option<Ref>,
@@ -165,7 +179,7 @@ diff -ruN a/src/graphics/graphics_state.rs b/src/graphics/graphics_state.rs
  }
  
  /// A graphics state containing information about
-@@ -31,6 +37,7 @@
+@@ -31,6 +37,7 @@ struct Repr {
  /// - The current non-stroking alpha.
  /// - The current blend mode.
  /// - The current mask.
@@ -173,7 +187,7 @@ diff -ruN a/src/graphics/graphics_state.rs b/src/graphics/graphics_state.rs
  ///
  /// This struct provides exposes a builder pattern for setting the various properties
  /// individually.
-@@ -66,6 +73,16 @@
+@@ -66,6 +73,16 @@ impl ExtGState {
          self
      }
  
@@ -190,7 +204,7 @@ diff -ruN a/src/graphics/graphics_state.rs b/src/graphics/graphics_state.rs
      /// Create a new graphics state with a mask.
      #[must_use]
      pub(crate) fn mask(
-@@ -85,6 +102,9 @@
+@@ -85,6 +102,9 @@ impl ExtGState {
              && self.0.stroking_alpha.is_none()
              && self.0.non_stroking_alpha.is_none()
              && self.0.blend_mode.is_none()
@@ -200,7 +214,7 @@ diff -ruN a/src/graphics/graphics_state.rs b/src/graphics/graphics_state.rs
      }
  
      /// Integrate another graphics state into the current one. This is done by replacing
-@@ -106,6 +126,18 @@
+@@ -106,6 +126,18 @@ impl ExtGState {
          if let Some(mask) = other.0.mask {
              Arc::make_mut(&mut self.0).mask = Some(mask);
          }
@@ -219,7 +233,7 @@ diff -ruN a/src/graphics/graphics_state.rs b/src/graphics/graphics_state.rs
      }
  }
  
-@@ -153,6 +185,30 @@
+@@ -153,6 +185,30 @@ impl Cacheable for ExtGState {
              ext_st.pair(Name(b"SMask"), mask_ref);
          }
  
@@ -250,10 +264,11 @@ diff -ruN a/src/graphics/graphics_state.rs b/src/graphics/graphics_state.rs
          ext_st.finish();
      }
  }
-diff -ruN a/src/surface.rs b/src/surface.rs
+diff --git a/src/surface.rs b/src/surface.rs
+index 990527f..09b1b40 100644
 --- a/src/surface.rs
 +++ b/src/surface.rs
-@@ -16,7 +16,7 @@
+@@ -16,7 +16,7 @@ use crate::geom::Path;
  use crate::geom::Size;
  use crate::geom::{Point, Transform};
  use crate::graphic::Graphic;
@@ -262,7 +277,7 @@ diff -ruN a/src/surface.rs b/src/surface.rs
  use crate::graphics::graphics_state::ExtGState;
  #[cfg(feature = "raster-images")]
  use crate::graphics::image::Image;
-@@ -422,6 +422,16 @@
+@@ -422,6 +422,16 @@ impl<'a> Surface<'a> {
          self.bd.get_mut().set_blend_mode(blend_mode.to_pdf());
      }
  
@@ -279,7 +294,7 @@ diff -ruN a/src/surface.rs b/src/surface.rs
      /// Push a new clip path.
      pub fn push_clip_path(&mut self, path: &Path, clip_rule: &FillRule) {
          self.push_instructions.push(PushInstruction::ClipPath);
-@@ -509,6 +519,7 @@
+@@ -509,6 +519,7 @@ impl<'a> Surface<'a> {
              }
              PushInstruction::ClipPath => self.bd.get_mut().pop_clip_path(),
              PushInstruction::BlendMode => self.bd.get_mut().restore_graphics_state(),
@@ -287,7 +302,7 @@ diff -ruN a/src/surface.rs b/src/surface.rs
              PushInstruction::Mask(mask) => {
                  let stream = self.bd.sub_builders.pop().unwrap().finish(self.sc);
                  self.bd
-@@ -670,6 +681,7 @@
+@@ -670,6 +681,7 @@ pub(crate) enum PushInstruction {
      Opacity(NormalizedF32),
      ClipPath,
      BlendMode,

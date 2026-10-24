@@ -56,7 +56,7 @@ index 91727cb..7cd5df3 100644
    the same color space 🟢
  
 diff --git a/src/configure/validate.rs b/src/configure/validate.rs
-index 175a011..a0b1136 100644
+index 91996ee..273f292 100644
 --- a/src/configure/validate.rs
 +++ b/src/configure/validate.rs
 @@ -83,7 +83,8 @@ pub enum ValidationError {
@@ -614,18 +614,18 @@ index cd4413c..d964ac0 100644
              _ => None,
          }
 diff --git a/src/serialize.rs b/src/serialize.rs
-index 1ec33ba..29844cb 100644
+index 58c0090..d16261c 100644
 --- a/src/serialize.rs
 +++ b/src/serialize.rs
 @@ -17,6 +17,7 @@ use crate::configure::{Configuration, PdfVersion, ValidationError, Validators};
  use crate::error::{KrillaError, KrillaResult, LimitError};
  use crate::geom::Size;
- use crate::graphics::color::{cmyk, rgb, ColorSpace};
+ use crate::graphics::color::{cmyk, luma, rgb, ColorSpace};
 +use crate::graphics::device_n::DeviceNColorSpace;
  use crate::graphics::icc::{ICCBasedColorSpace, ICCProfile};
  #[cfg(feature = "raster-images")]
  use crate::graphics::image::Image;
-@@ -750,6 +751,11 @@ impl SerializeContext {
+@@ -766,6 +767,11 @@ impl SerializeContext {
                      self.register_resourceable(chunk_container, SeparationColorSpace::new(s)),
                  )
              }

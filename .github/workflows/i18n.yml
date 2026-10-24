@@ -25,5 +25,5 @@ jobs:
         with:
           components: rustfmt, clippy
       - run: cargo fmt --check
-      - run: cargo clippy -p craft-i18n --all-targets --locked -- -D warnings
-      - run: cargo test -p craft-i18n --locked -- --nocapture
+      - run: cargo clippy -p craft-i18n --all-targets --features collate --locked -- -D warnings
+      - run: cargo test -p craft-i18n --features collate --locked -- --nocapture

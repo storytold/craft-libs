@@ -1,10 +1,10 @@
 diff --git a/src/serialize.rs b/src/serialize.rs
-index 0093a25..71e4967 100644
+index 587e2c6..33b3e1e 100644
 --- a/src/serialize.rs
 +++ b/src/serialize.rs
-@@ -134,6 +134,11 @@ pub struct SerializeSettings {
-     /// krilla does not check PDF/X conformance; the caller does. Under PDF/A, the XMP
-     /// property needs an extension schema that krilla does not write.
+@@ -135,6 +135,11 @@ pub struct SerializeSettings {
+     /// extension schema for the XMP property, which krilla does not write, so export under
+     /// them fails with [`ValidationError::PdfxVersionWithoutExtensionSchema`].
      pub pdfx_version: Option<String>,
 +    /// The PDF/X conformance level the caller claims, such as `PDF/X-1a:2003`:
 +    /// `/GTS_PDFXConformance` in the document information dictionary. PDF/X-1a and X-3
@@ -14,7 +14,7 @@ index 0093a25..71e4967 100644
  }
  
  /// A CMYK printing condition, written as an `/OutputIntents` entry with `/S /GTS_PDFX`.
-@@ -199,7 +204,10 @@ impl SerializeSettings {
+@@ -200,7 +205,10 @@ impl SerializeSettings {
      /// Whether the document information dictionary carries print markers. Like the rest of
      /// the dictionary, they are deprecated in PDF 2.0 and only written to XMP there.
      pub(crate) fn has_print_info(&self, version: PdfVersion) -> bool {
@@ -26,7 +26,7 @@ index 0093a25..71e4967 100644
      }
  
      pub(crate) fn write_print_info(&self, info: &mut DocumentInfo<'_>) {
-@@ -213,6 +221,9 @@ impl SerializeSettings {
+@@ -214,6 +222,9 @@ impl SerializeSettings {
          if let Some(version) = &self.pdfx_version {
              info.pair(Name(b"GTS_PDFXVersion"), TextStr(version));
          }
@@ -36,7 +36,7 @@ index 0093a25..71e4967 100644
      }
  
      pub(crate) fn write_print_xmp(&self, xmp: &mut XmpWriter) {
-@@ -247,6 +258,7 @@ impl Default for SerializeSettings {
+@@ -259,6 +270,7 @@ impl Default for SerializeSettings {
              output_intent: None,
              trapped: None,
              pdfx_version: None,

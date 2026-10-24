@@ -1,0 +1,74 @@
+name: Keymap
+
+on:
+  push:
+    branches: [main]
+    paths: ["crates/keymap/**", "crates/settings/**", "crates/ui/**", "crates/i18n/**", "Cargo.toml", "Cargo.lock", ".github/workflows/keymap.yml"]
+  pull_request:
+    paths: ["crates/keymap/**", "crates/settings/**", "crates/ui/**", "crates/i18n/**", "Cargo.toml", "Cargo.lock", ".github/workflows/keymap.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: keymap-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux:
+    timeout-minutes: 15
+    name: Keymap (Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: craft-keymap-linux
+      - run: cargo fmt -p craft-keymap --check
+      - run: cargo clippy -p craft-keymap --all-targets --no-default-features --locked -- -D warnings
+      # `snapshot` covers `ui` and `egui` and compiles the dialog screenshots, which need a GPU
+      # to run, so the test steps leave them out.
+      - run: cargo clippy -p craft-keymap --all-targets --features snapshot --locked -- -D warnings
+      # Doctests run once, in the `ui` step.
+      - name: Test core
+        run: cargo test -p craft-keymap --no-default-features --lib --tests --locked
+      - name: Test egui dispatch and the shortcuts dialog
+        run: cargo test -p craft-keymap --features ui --locked
+  native:
+    timeout-minutes: 15
+    name: Keymap (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: craft-keymap-${{ matrix.os }}
+      - run: cargo test -p craft-keymap --features ui --locked
+  wasm:
+    timeout-minutes: 10
+    name: Keymap WASM
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: craft-keymap-wasm
+      - run: cargo check -p craft-keymap --features ui --locked --target wasm32-unknown-unknown

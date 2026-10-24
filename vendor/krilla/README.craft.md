@@ -17,12 +17,13 @@ itself omits those texts. Its examples and four CC0 ICC profiles are retained wi
 | `patches/05-soft-mask-backdrop.patch` | Soft-mask backdrop and transfer function | `configure/{PDF_A2,PDF_A4}.md`, `graphics/mask.rs` |
 | `patches/06-device-n.patch` | DeviceN colors | `configure/{PDF_A1.md,PDF_A2.md,PDF_A4.md,validate.rs}`, `graphics/{color,device_n,mod,paint}.rs`, `serialize.rs` |
 | `patches/07-device-n-images-shadings.patch` | DeviceN images and shadings | `graphics/{image,paint,shading_function}.rs` |
-| `patches/08-print-output-intent.patch` | Print output intent and PDF/X markers | `chunk_container.rs`, `configure/{PDF_A1,PDF_A2,PDF_A4}.md`, `interchange/metadata.rs`, `lib.rs`, `serialize.rs` |
+| `patches/08-print-output-intent.patch` | Print output intent and PDF/X markers | `chunk_container.rs`, `configure/{PDF_A1.md,PDF_A2.md,PDF_A4.md,validate.rs}`, `interchange/metadata.rs`, `lib.rs`, `serialize.rs` |
 | `patches/09-rendition-class.patch` | Master rendition in XMP | `chunk_container.rs` |
 | `patches/10-mesh-gradients.patch` | Mesh gradients | `content.rs`, `error.rs`, `graphics/{mask,paint,shading_function}.rs`, `serialize.rs`, `surface.rs` |
-| `patches/11-devicen-pdf-version.patch` | DeviceN attributes by PDF version | `graphics/device_n.rs` |
-| `patches/12-pdfx-conformance.patch` | PDF/X conformance key | `serialize.rs` |
-| `patches/13-modification-date.patch` | Modification date | `interchange/metadata.rs` |
+| `patches/11-png-decode-cap.patch` | PNG decode cap | `graphics/image.rs` |
+| `patches/12-devicen-pdf-version.patch` | DeviceN attributes by PDF version | `graphics/device_n.rs` |
+| `patches/13-pdfx-conformance.patch` | PDF/X conformance key | `serialize.rs` |
+| `patches/14-modification-date.patch` | Modification date | `interchange/metadata.rs` |
 
 Each patch applies with `patch -p1` from this directory, in numeric order, to the pristine
 crate. `SOURCE.json` records, for every retained file, the upstream hash (`upstream_sha256`)
@@ -71,8 +72,11 @@ the default, writes the same groups and page dictionaries as upstream. With
 - A page that uses transparency gets `/Group <</S/Transparency/CS …>>`: DeviceCMYK, or the
   `cmyk_profile` ICC space when `no_device_cs` is set. Opaque pages get no page group, so
   they stay valid for PDF/X-1a and X-3.
-- Soft-mask source groups have no parent, so they name the same CMYK space. The XObject
-  `Repr` carries a `GroupRole` (content or mask source) for this.
+- Soft-mask source groups have no parent, so they name their own space: DeviceCMYK, or
+  sGrey when `no_device_cs` is set. Through a CMYK profile K 100% is not black, so an ICC
+  CMYK mask group would give the default black backdrop a luminosity above 0, and the masked
+  object would show where the mask content paints nothing. The XObject `Repr` carries a
+  `GroupRole` (content or mask source) for this.
 - Pages placed as XObjects (`draw_pdf_page`) get an isolated group without `/CS`; the RGB
   color space is not registered. The source page's own group is dropped, as before;
   krilla #410 (unreleased, needs hayro-write 0.8) keeps it.
@@ -109,7 +113,9 @@ Validation: ISO 19005-2 and 19005-4 (6.2.4.2) forbid OPM 1 when an ICCBased CMYK
 space is used for a side that overprints. Validated PDF/A export writes all CMYK as
 ICCBased, and the graphics state doesn't know the colors painted under it, so OPM 1 with
 `/op` or `/OP` true under `no_device_cs` registers `ValidationError::OverprintModeIccCmyk`,
-which PDF/A-2, A-3 and A-4 prohibit. PDF/A-1 and PDF/UA allow it.
+which PDF/A-2, A-3 and A-4 prohibit. PDF/A-1 and PDF/UA allow it. ISO 32000-1 (8.6.7)
+applies OPM 1 to DeviceCMYK only, so under `no_device_cs` it has no effect in a PDF 1.7
+reader; `Overprint::nonzero` says so.
 
 Tests: `crates/pdf/tests/print_color.rs`, and the plate-test scenes S01, S03, S04, S12,
 S16, D06 and D10.
@@ -137,8 +143,8 @@ black backdrop, so the masked object is hidden wherever the mask content paints 
 there is no transfer curve.
 
 - `Mask::with_backdrop(color)` writes `/BC` on luminosity masks, in the mask group's color
-  space: RGB under `GroupColorSpace::Rgb` (DeviceRGB or sRGB), four components under
-  `GroupColorSpace::Cmyk` (DeviceCMYK or the `cmyk_profile` ICC). Colors from another space
+  space: RGB under `GroupColorSpace::Rgb` (DeviceRGB or sRGB); under `GroupColorSpace::Cmyk`,
+  four components (DeviceCMYK), or one (sGrey) with `no_device_cs`. Colors from another space
   are converted with the device formulas; luma becomes equal RGB components or black ink only.
   On an alpha mask, where `/BC` has no meaning, the call returns the mask unchanged.
 - `Mask::with_transfer(TransferFunction)` writes `/TR`: `/Identity`, or a Type 0 sampled
@@ -176,7 +182,7 @@ written as CMYK, which knocks out or replaces the other plates.
 - From PDF 1.6, a space with spots gets an attributes dictionary whose `/Colorants` maps
   each spot to its Separation space. When spots and process inks mix, it is
   `/Subtype /NChannel` with `/Process << /ColorSpace alternate /Components [/Cyan /Magenta
-  /Yellow /Black] >>`. Patch 11 changes which of these each PDF version gets.
+  /Yellow /Black] >>`. Patch 12 changes which of these each PDF version gets.
 - Validation: a spot's CMYK alternate counts as its Separation fallback, so one colorant
   name keeps one alternate across Separation and DeviceN spaces
   (`ValidationError::InconsistentSeparationFallback`). `/All` and `/None` are Separation-only
@@ -196,9 +202,12 @@ inks. Gradient stops must share one color space: a stop that mixes a spot with p
 inks, or two spots, has no space to go in, and stops from different spaces fail an
 assertion while writing.
 
-- `ImageColorspace::DeviceN(DeviceNSpace)` for `CustomImage`: one sample per colorant, in
-  the space's colorant order, 0 = no ink. The image's `/ColorSpace` is the cached DeviceN
-  space from patch 06; an ICC profile is ignored. `ImageColorspace` is no longer `Copy`.
+- `ImageColorspace::DeviceN` for `CustomImage`, with the space from the new
+  `CustomImage::device_n_space` (default `None`): one sample per colorant, in the space's
+  colorant order, 0 = no ink. `Image::from_custom` refuses a DeviceN image without a space.
+  The image's `/ColorSpace` is the cached DeviceN space from patch 06; an ICC profile is
+  ignored. `ImageColorspace` stays `Copy`, so the new variant breaks only exhaustive
+  matches.
 - Gradient stops (linear, radial, sweep) in different ink-based spaces are rewritten into
   one space when the shading function is created. Ink-based: CMYK, gray (as black), a
   Separation with a named colorant, DeviceN. A process colorant takes part when a stop has
@@ -230,11 +239,13 @@ version. DesignCraft and VectorCraft added these by rewriting the serialized byt
   `GTS_PDFA1` entry names the same profile object and condition instead of sRGB, because
   PDF/A requires every output intent to share one destination profile.
 - `SerializeSettings::trapped: Option<Trapped>` writes `/Trapped` to the document
-  information dictionary and `pdf:Trapped` to XMP. XMP has no `Unknown`, so
-  `Trapped::Unknown` goes only to the dictionary.
+  information dictionary and `pdf:Trapped` to XMP, `Unknown` included (the Adobe PDF schema
+  allows it, and PDF/A-1 requires the two to match).
 - `SerializeSettings::pdfx_version: Option<String>` writes `/GTS_PDFXVersion` to the
-  dictionary and `pdfxid:GTS_PDFXVersion` to XMP. Under PDF/A the XMP property needs an
-  extension schema, which this patch does not write.
+  dictionary and `pdfxid:GTS_PDFXVersion` to XMP. PDF/A-1, -2 and -3 require an extension
+  schema for the XMP property, which this patch does not write, so the setting registers
+  `ValidationError::PdfxVersionWithoutExtensionSchema`, which they prohibit. PDF/A-4 has no
+  extension schema requirement and allows it.
 - The dictionary entries follow the dictionary's PDF 2.0 deprecation: from PDF 2.0 only XMP
   carries them. The dictionary is written without `Metadata` when it has print markers.
 - All three default to `None`, which keeps upstream's output.
@@ -281,7 +292,19 @@ instead. The soft mask is written in gray from the opacities and is unaffected.
 
 Tests: `crates/pdf/tests/print_color.rs` (`mesh_*`, `rgb_mesh_*`) and the plate-test scene S17.
 
-## 11: DeviceN attributes by PDF version
+## 11: PNG decode cap
+
+A PNG whose header implies more than 1 GiB of decoded output is refused by
+`Image::from_png` and by the deferred decoder, and the decoded buffer is reserved
+fallibly, so a small file (or a bitmap glyph in a font) cannot request an allocation that
+ends the process. The color and alpha buffers that PNG, GIF and WebP decoding split an
+image into are reserved fallibly too, and a failure there is an image error.
+`Image::from_custom` computes the expected channel lengths with checked `usize` arithmetic and
+returns an error when they overflow or don't match the data, where upstream multiplied in
+`u32` and asserted while writing (32 DeviceN components at 16 bits overflow at about 67
+megapixels).
+
+## 12: DeviceN attributes by PDF version
 
 Patch 06 writes the DeviceN attributes dictionary only from PDF 1.6. A PDF/X-1a file is PDF
 1.3 or 1.4, so its spots then had no `/Colorants`, and a file written at 1.6 or later and
@@ -302,7 +325,7 @@ against the text.
 Tests: `crates/pdf/tests/print_color.rs` (`device_n_attributes_follow_the_pdf_version`) and
 `crates/prepress/tests/flatten_document.rs` (`pdf_x1a_output_is_pdf_14_without_nchannel`).
 
-## 12: PDF/X conformance key
+## 13: PDF/X conformance key
 
 Patch 08 writes only `GTS_PDFXVersion`. PDF/X-1a and X-3 also need `GTS_PDFXConformance` in
 the document information dictionary: a PDF/X-1a:2003 file carries `GTS_PDFXVersion
@@ -317,7 +340,7 @@ and on) have no conformance key.
 Tests: `crates/pdf/tests/print_color.rs` (`trapped_and_pdfx_version_are_written_to_info_and_xmp`)
 and `crates/prepress/tests/flatten_document.rs` (`pdf_x1a_output_is_pdf_14_without_nchannel`).
 
-## 13: modification date
+## 14: modification date
 
 Upstream has only a creation date and writes it as the modification date too (`/ModDate` and
 `xmp:ModifyDate`), so a document rewritten from another, such as a flattened copy, can't keep

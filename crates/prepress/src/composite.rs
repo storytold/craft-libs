@@ -7,6 +7,7 @@
 use craft_pdf::interpret::color::{CmykConversion, cmyk_to_srgb8};
 
 use crate::cms::lab_to_srgb8;
+use crate::coverage::filled;
 use crate::{Alternate, InkId, Plates, Process};
 
 /// Pixels converted per call into the CMYK profile, to bound the scratch buffers.
@@ -60,10 +61,11 @@ impl Plates {
     /// colorimetric with black point compensation, or through the bundled CMYK profile when
     /// `cms` can't. Each spot plate is then multiplied over them by the spot's appearance at
     /// its tint, from its alternate. Spots whose Lab alternate craft-cms can't convert are
-    /// left out.
+    /// left out. Empty when `width × height × 3` overflows or can't be allocated.
     pub fn composite(&self, enabled: &[bool], cms: &dyn CmykConversion) -> Vec<u8> {
-        let n = (self.width as usize).saturating_mul(self.height as usize);
-        let mut rgb = vec![255_u8; n.saturating_mul(3)];
+        let Some(mut rgb) = self.pixels().and_then(|n| n.checked_mul(3)).and_then(|len| filled(len, 255_u8)) else {
+            return Vec::new();
+        };
         let process: Vec<Option<&[u8]>> = Process::ALL
             .iter()
             .map(|p| {
@@ -139,5 +141,15 @@ mod tests {
         assert!(near(&no_black[6..9], GOLD, 2));
         let no_gold = p.composite(&[true, true, true, true, false], &cms);
         assert_eq!(&no_gold[6..9], black);
+    }
+
+    #[test]
+    fn plates_too_large_to_hold_give_empty_results() {
+        let p = crate::Plates { width: u32::MAX, height: u32::MAX, ..synthetic(0, 0, [50.0, 0.0, 0.0], Default::default()) };
+        assert!(p.composite(&[], &CmsConversion::fogra39()).is_empty());
+        assert!(p.tac(&[]).is_empty());
+        assert_eq!(p.stats(&[]).max_total_at, None);
+        assert!(p.above(10.0, &[]).regions().is_empty());
+        assert_eq!(p.tint(crate::InkId::process(crate::Process::Black), u32::MAX - 1, u32::MAX - 1), None);
     }
 }

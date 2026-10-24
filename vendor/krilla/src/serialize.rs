@@ -9,7 +9,7 @@ use indexmap::IndexMap;
 use pdf_writer::types::{OutputIntentSubtype, StructRole, StructRole2, TrappingStatus};
 use pdf_writer::writers::{DocumentInfo, OutputIntent as OutputIntentWriter, StructTreeRoot};
 use pdf_writer::{Chunk, Content, Finish, Limits, Name, Pdf, Ref, Settings, Str, TextStr};
-use xmp_writer::XmpWriter;
+use xmp_writer::{Namespace, XmpWriter};
 
 use crate::chunk_container::ChunkContainer;
 use crate::color::{CieBasedColorSpace, DeviceColorSpace, SpecialColorSpace};
@@ -17,7 +17,7 @@ use crate::configure::validate::ValidationStore;
 use crate::configure::{Configuration, PdfVersion, ValidationError, Validators};
 use crate::error::{KrillaError, KrillaResult, LimitError};
 use crate::geom::Size;
-use crate::graphics::color::{cmyk, rgb, ColorSpace};
+use crate::graphics::color::{cmyk, luma, rgb, ColorSpace};
 use crate::graphics::device_n::DeviceNColorSpace;
 use crate::graphics::icc::{ICCBasedColorSpace, ICCProfile};
 #[cfg(feature = "raster-images")]
@@ -131,8 +131,9 @@ pub struct SerializeSettings {
     /// The PDF/X version the caller claims, such as `PDF/X-4`: `/GTS_PDFXVersion` in the
     /// document information dictionary and `pdfxid:GTS_PDFXVersion` in the XMP metadata.
     ///
-    /// krilla does not check PDF/X conformance; the caller does. Under PDF/A, the XMP
-    /// property needs an extension schema that krilla does not write.
+    /// krilla does not check PDF/X conformance; the caller does. PDF/A-1, -2 and -3 need an
+    /// extension schema for the XMP property, which krilla does not write, so export under
+    /// them fails with [`ValidationError::PdfxVersionWithoutExtensionSchema`].
     pub pdfx_version: Option<String>,
     /// The PDF/X conformance level the caller claims, such as `PDF/X-1a:2003`:
     /// `/GTS_PDFXConformance` in the document information dictionary. PDF/X-1a and X-3
@@ -166,8 +167,7 @@ pub enum Trapped {
     True,
     /// The document has not been trapped.
     False,
-    /// The document is partly trapped or the state is unknown. XMP has no value for this,
-    /// so only the information dictionary records it.
+    /// The document is partly trapped or the state is unknown.
     Unknown,
 }
 
@@ -180,8 +180,9 @@ pub enum GroupColorSpace {
     Rgb,
     /// Pages that use transparency get a page group with a CMYK `/CS`: DeviceCMYK, or the
     /// [`SerializeSettings::cmyk_profile`] when `no_device_cs` is set. Content groups and
-    /// embedded PDF pages write no `/CS` and inherit it; soft-mask groups, which have no
-    /// parent, name the same CMYK space. Pages without transparency get no page group.
+    /// embedded PDF pages write no `/CS` and inherit it. Soft-mask groups, which have no
+    /// parent, name DeviceCMYK, or sGrey when `no_device_cs` is set. Pages without
+    /// transparency get no page group.
     ///
     /// With `no_device_cs` and no `cmyk_profile`, [`Document::finish`] fails with
     /// [`KrillaError::MissingGroupCmykProfile`].
@@ -227,8 +228,19 @@ impl SerializeSettings {
     }
 
     pub(crate) fn write_print_xmp(&self, xmp: &mut XmpWriter) {
-        if let Some(trapped @ (Trapped::True | Trapped::False)) = self.trapped {
-            xmp.trapped(trapped == Trapped::True);
+        match self.trapped {
+            Some(Trapped::True) => {
+                xmp.trapped(true);
+            }
+            Some(Trapped::False) => {
+                xmp.trapped(false);
+            }
+            // The Adobe PDF schema allows `Unknown`, which `XmpWriter::trapped` can't write.
+            // PDF/A-1 requires it to match the information dictionary.
+            Some(Trapped::Unknown) => {
+                xmp.element("Trapped", Namespace::AdobePdf).value("Unknown");
+            }
+            None => {}
         }
         if let Some(version) = &self.pdfx_version {
             xmp.pdfx_version(version);
@@ -449,8 +461,7 @@ impl SerializeContext {
             .any(|r| self.transparent_refs.contains(&r))
     }
 
-    /// The CMYK blending color space for page and soft-mask groups under
-    /// [`GroupColorSpace::Cmyk`]. Falls back to DeviceCMYK when `no_device_cs` is set
+    /// The CMYK blending color space for page groups under [`GroupColorSpace::Cmyk`]. Falls back to DeviceCMYK when `no_device_cs` is set
     /// without a CMYK profile; `finish` rejects that configuration.
     pub(crate) fn cmyk_group_color_space(
         &mut self,
@@ -459,6 +470,22 @@ impl SerializeContext {
         let cs = cmyk::color_space(&self.serialize_settings)
             .unwrap_or_else(|| DeviceColorSpace::Cmyk.into());
         self.register_colorspace(chunk_container, cs.into())
+    }
+
+    /// The blending color space of soft-mask groups under [`GroupColorSpace::Cmyk`]:
+    /// DeviceCMYK, or sGrey when `no_device_cs` is set. A mask group has no parent, so it
+    /// need not match the page group. An ICC CMYK mask group would give the default black
+    /// backdrop a luminosity above 0, because 100% black through a CMYK profile is not black,
+    /// and the masked object would show where the mask content paints nothing.
+    pub(crate) fn mask_group_color_space(
+        &mut self,
+        chunk_container: &mut ChunkContainer,
+    ) -> MaybeDeviceColorSpace {
+        if self.serialize_settings.no_device_cs {
+            self.register_colorspace(chunk_container, luma::color_space(true).into())
+        } else {
+            self.cmyk_group_color_space(chunk_container)
+        }
     }
 
     pub(crate) fn page_infos(&self) -> &[PageInfo] {
@@ -609,6 +636,9 @@ impl SerializeContext {
             && settings.cmyk_profile.is_none()
         {
             return Err(KrillaError::MissingGroupCmykProfile);
+        }
+        if self.serialize_settings.pdfx_version.is_some() {
+            self.register_validation_error(ValidationError::PdfxVersionWithoutExtensionSchema);
         }
         if let Some(location) = self.mixed_mesh_colors {
             return Err(KrillaError::MixedMeshColorSpaces(location));

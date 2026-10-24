@@ -172,6 +172,23 @@ pub struct Context<'a> {
     pub(crate) xref: &'a XRef,
     pub(crate) ocg_state: OcgState,
     nesting_depth: u32,
+    /// PdfCraft patch: estimated bytes held by saved states, and for each `q` not saved because
+    /// a limit was reached, the clip count to return to at its `Q`.
+    saved_bytes: usize,
+    skipped_saves: Vec<usize>,
+}
+
+/// PdfCraft patch: most graphics states saved at once. Every `q` copies the current state, dash
+/// array and clip list included, so without a limit short operators multiply one large state.
+const MAX_SAVED_STATES: usize = 4096;
+/// PdfCraft patch: most bytes all saved states may hold together.
+const MAX_SAVED_STATE_BYTES: usize = 64 << 20;
+
+/// Roughly what a saved copy of `state` holds.
+fn state_bytes(state: &State<'_>) -> usize {
+    size_of::<State<'_>>()
+        + state.graphics_state.stroke_props.dash_array.len() * size_of::<f32>()
+        + state.clips.len() * size_of::<ClipType>()
 }
 
 impl<'a> Context<'a> {
@@ -226,15 +243,33 @@ impl<'a> Context<'a> {
             interpreter_cache: cache.clone(),
             ocg_state,
             nesting_depth,
+            saved_bytes: 0,
+            skipped_saves: Vec::new(),
         }
     }
 
     pub(crate) fn save_state(&mut self) {
-        let Some(cur) = self.states.last().cloned() else {
+        let Some(cur) = self.states.last() else {
             warn!("attempted to save state without existing state");
             return;
         };
 
+        // PdfCraft patch: past either limit the `q` is recorded but nothing is copied. Its `Q`
+        // still removes the clips added since; other changes made in between are kept.
+        let bytes = state_bytes(cur);
+        if !self.skipped_saves.is_empty()
+            || self.states.len() >= MAX_SAVED_STATES
+            || self.saved_bytes.saturating_add(bytes) > MAX_SAVED_STATE_BYTES
+        {
+            if self.skipped_saves.is_empty() {
+                warn!("too many saved graphics states; further saves are not kept");
+            }
+            self.skipped_saves.push(cur.clips.len());
+            return;
+        }
+
+        let cur = cur.clone();
+        self.saved_bytes += bytes;
         self.states.push(cur);
     }
 
@@ -311,6 +346,14 @@ impl<'a> Context<'a> {
     }
 
     pub(crate) fn restore_state(&mut self, device: &mut impl Device<'a>) {
+        // PdfCraft patch: a save that was not kept is the most recent one.
+        if let Some(target_clips) = self.skipped_saves.pop() {
+            while self.get().clips.len() > target_clips {
+                self.pop_clip_path(device);
+            }
+            return;
+        }
+
         let Some(target_clips) = self
             .states
             .get(self.states.len().saturating_sub(2))
@@ -327,6 +370,10 @@ impl<'a> Context<'a> {
         // The first state should never be popped.
         if self.states.len() > 1 {
             self.states.pop();
+            // PdfCraft patch: the state now on top is the copy that was charged when saved.
+            if let Some(top) = self.states.last() {
+                self.saved_bytes = self.saved_bytes.saturating_sub(state_bytes(top));
+            }
         }
 
         device.set_soft_mask(
@@ -398,7 +445,8 @@ impl<'a> Context<'a> {
     }
 
     pub(crate) fn num_states(&self) -> usize {
-        self.states.len()
+        // PdfCraft patch: saves not kept still count, so callers restore back past them.
+        self.states.len() + self.skipped_saves.len()
     }
 
     pub(crate) fn nesting_depth(&self) -> u32 {
@@ -488,5 +536,70 @@ pub(crate) fn path_as_rect(path: &BezPath) -> Option<Rect> {
         Some(bbox)
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod saved_state_tests {
+    use super::*;
+    use crate::device::DummyDevice;
+    use hayro_syntax::Pdf;
+
+    fn pdf() -> Pdf {
+        let objects = ["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Count 0 /Kids [] >>"];
+        let mut out = b"%PDF-1.7\n".to_vec();
+        let mut offsets = Vec::new();
+        for (i, body) in objects.iter().enumerate() {
+            offsets.push(out.len());
+            out.extend_from_slice(format!("{} 0 obj\n{body}\nendobj\n", i + 1).as_bytes());
+        }
+        let xref = out.len();
+        out.extend_from_slice(b"xref\n0 3\n0000000000 65535 f \n");
+        for offset in offsets {
+            out.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+        }
+        out.extend_from_slice(format!("trailer\n<< /Size 3 /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n").as_bytes());
+        Pdf::new(out).expect("synthetic pdf")
+    }
+
+    #[test]
+    fn repeated_saves_of_a_large_state_stay_bounded_and_balanced() {
+        let pdf = pdf();
+        let cache = InterpreterCache::new();
+        let mut ctx = Context::new(Affine::IDENTITY, Rect::new(0.0, 0.0, 100.0, 100.0), &cache, pdf.xref(), InterpreterSettings::default());
+        ctx.get_mut().graphics_state.stroke_props.dash_array = crate::types::dash_array((0..crate::types::MAX_DASH_ENTRIES).map(|i| i as f32 + 1.0));
+        for _ in 0..20_000 {
+            ctx.save_state();
+        }
+        assert!(ctx.states.len() <= MAX_SAVED_STATES);
+        assert!(ctx.saved_bytes <= MAX_SAVED_STATE_BYTES);
+        assert_eq!(ctx.num_states(), 20_001, "every q still counts");
+
+        // A clip added after a save that was not kept is removed by its Q.
+        let mut device = DummyDevice;
+        let mut triangle = BezPath::new();
+        triangle.move_to((10.0, 10.0));
+        triangle.line_to((90.0, 10.0));
+        triangle.line_to((50.0, 90.0));
+        triangle.close_path();
+        let clips = ctx.get().clips.len();
+        ctx.push_clip_path(triangle, FillRule::NonZero, &mut device);
+        assert_eq!(ctx.get().clips.len(), clips + 1);
+        ctx.restore_state(&mut device);
+        assert_eq!(ctx.get().clips.len(), clips);
+
+        while ctx.num_states() > 1 {
+            ctx.restore_state(&mut device);
+        }
+        assert_eq!(ctx.states.len(), 1);
+        assert_eq!(ctx.saved_bytes, 0);
+    }
+
+    #[test]
+    fn an_overlong_dash_array_strokes_solid() {
+        let max = crate::types::MAX_DASH_ENTRIES;
+        assert_eq!(crate::types::dash_array((0..max).map(|_| 2.0)).len(), max);
+        assert!(crate::types::dash_array((0..max + 1).map(|_| 2.0)).is_empty());
+        assert_eq!(crate::types::dash_array([0.0, 3.0].into_iter()).as_slice(), &[0.01, 3.0]);
     }
 }

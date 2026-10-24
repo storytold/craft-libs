@@ -1,7 +1,8 @@
-diff -ruN a/src/content.rs b/src/content.rs
+diff --git a/src/content.rs b/src/content.rs
+index 751cb2f..f723f20 100644
 --- a/src/content.rs
 +++ b/src/content.rs
-@@ -16,7 +16,7 @@
+@@ -16,7 +16,7 @@ use crate::configure::ValidationError;
  #[cfg(feature = "raster-images")]
  use crate::geom::Size;
  use crate::geom::{Point, Rect, Transform};
@@ -10,7 +11,7 @@ diff -ruN a/src/content.rs b/src/content.rs
  use crate::graphics::color::{Color, ColorSpace};
  use crate::graphics::graphics_state::{ExtGState, GraphicsStates};
  #[cfg(feature = "raster-images")]
-@@ -933,14 +933,15 @@
+@@ -933,14 +933,15 @@ impl ContentBuilder {
          self.draw_xobject(sc, chunk_container, x_object, &state);
      }
  
@@ -28,10 +29,11 @@ diff -ruN a/src/content.rs b/src/content.rs
          self.draw_xobject(sc, chunk_container, x_object, &state);
      }
  
-diff -ruN a/src/graphics/blend.rs b/src/graphics/blend.rs
+diff --git a/src/graphics/blend.rs b/src/graphics/blend.rs
+index 8d7c5c7..7f01733 100644
 --- a/src/graphics/blend.rs
 +++ b/src/graphics/blend.rs
-@@ -71,3 +71,21 @@
+@@ -79,3 +79,21 @@ impl Overprint {
          }
      }
  }
@@ -53,10 +55,11 @@ diff -ruN a/src/graphics/blend.rs b/src/graphics/blend.rs
 +    /// the topmost shows.
 +    pub knockout: bool,
 +}
-diff -ruN a/src/graphics/xobject.rs b/src/graphics/xobject.rs
+diff --git a/src/graphics/xobject.rs b/src/graphics/xobject.rs
+index 6c56b0e..a8c9568 100644
 --- a/src/graphics/xobject.rs
 +++ b/src/graphics/xobject.rs
-@@ -7,6 +7,7 @@
+@@ -7,6 +7,7 @@ use pdf_writer::{Finish, Name, Ref};
  use crate::chunk_container::ChunkContainer;
  use crate::configure::ValidationError;
  use crate::geom::Rect;
@@ -64,7 +67,7 @@ diff -ruN a/src/graphics/xobject.rs b/src/graphics/xobject.rs
  use crate::graphics::color::{rgb, DEVICE_CMYK, DEVICE_RGB};
  use crate::resource;
  use crate::resource::{Resource, Resourceable};
-@@ -28,6 +29,7 @@
+@@ -28,6 +29,7 @@ pub(crate) enum GroupRole {
  struct Repr {
      stream: Stream,
      isolated: bool,
@@ -72,7 +75,7 @@ diff -ruN a/src/graphics/xobject.rs b/src/graphics/xobject.rs
      transparency_group_color_space: bool,
      custom_bbox: Option<Rect>,
      role: GroupRole,
-@@ -52,9 +54,39 @@
+@@ -52,9 +54,39 @@ impl XObject {
          )
      }
  
@@ -112,7 +115,7 @@ diff -ruN a/src/graphics/xobject.rs b/src/graphics/xobject.rs
          mut transparency_group_color_space: bool,
          custom_bbox: Option<Rect>,
          role: GroupRole,
-@@ -74,6 +106,7 @@
+@@ -74,6 +106,7 @@ impl XObject {
          Self(Arc::new(Prehashed::new(Repr {
              stream,
              isolated,
@@ -120,7 +123,7 @@ diff -ruN a/src/graphics/xobject.rs b/src/graphics/xobject.rs
              transparency_group_color_space,
              custom_bbox,
              role,
-@@ -102,7 +135,8 @@
+@@ -102,7 +135,8 @@ impl Cacheable for XObject {
              sc.register_validation_error(validation_error.clone());
          }
  
@@ -130,7 +133,7 @@ diff -ruN a/src/graphics/xobject.rs b/src/graphics/xobject.rs
  
          if use_transparency_group {
              sc.register_validation_error(ValidationError::Transparency(sc.location));
-@@ -166,6 +200,10 @@
+@@ -166,6 +200,10 @@ impl Cacheable for XObject {
                  transparency.isolated(self.0.isolated);
              }
  
@@ -141,10 +144,11 @@ diff -ruN a/src/graphics/xobject.rs b/src/graphics/xobject.rs
              if let Some(transparency_group_cs) = transparency_group_cs {
                  write_group_color_space(transparency, transparency_group_cs);
              }
-diff -ruN a/src/surface.rs b/src/surface.rs
+diff --git a/src/surface.rs b/src/surface.rs
+index 09b1b40..0cbbc4b 100644
 --- a/src/surface.rs
 +++ b/src/surface.rs
-@@ -16,7 +16,7 @@
+@@ -16,7 +16,7 @@ use crate::geom::Path;
  use crate::geom::Size;
  use crate::geom::{Point, Transform};
  use crate::graphic::Graphic;
@@ -153,7 +157,7 @@ diff -ruN a/src/surface.rs b/src/surface.rs
  use crate::graphics::graphics_state::ExtGState;
  #[cfg(feature = "raster-images")]
  use crate::graphics::image::Image;
-@@ -494,9 +494,19 @@
+@@ -494,9 +494,19 @@ impl<'a> Surface<'a> {
          }
      }
  
@@ -175,7 +179,7 @@ diff -ruN a/src/surface.rs b/src/surface.rs
          self.bd
              .sub_builders
              .push(ContentBuilder::new(Transform::identity(), true, self.sc));
-@@ -526,11 +536,11 @@
+@@ -526,11 +536,11 @@ impl<'a> Surface<'a> {
                      .get_mut()
                      .draw_masked(self.sc, self.chunk_container, *mask, stream)
              }
@@ -189,7 +193,7 @@ diff -ruN a/src/surface.rs b/src/surface.rs
              }
          }
      }
-@@ -683,5 +693,5 @@
+@@ -683,5 +693,5 @@ pub(crate) enum PushInstruction {
      BlendMode,
      Overprint,
      Mask(Box<Mask>),

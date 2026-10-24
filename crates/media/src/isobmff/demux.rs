@@ -8,6 +8,13 @@ use std::collections::HashMap;
 
 /// Hard cap on the sample count of the whole file, all tracks and fragments (after PCM chunk merging).
 const MAX_SAMPLES: usize = 1 << 26;
+/// Bytes of file each sample needs beyond the first `MIN_SAMPLE_ALLOWANCE` samples. A [`Sample`]
+/// takes 40 bytes of memory and a constant-size `stsz` or a `trun` without per-sample fields
+/// describes one in a byte or none, so without this a file could make the sample tables about
+/// 40 times its own size. A table-backed sample has a 4-byte `stsz` or `trun` entry.
+const FILE_BYTES_PER_SAMPLE: u64 = 4;
+/// Samples any file may hold, however short: 40 MiB of sample tables.
+const MIN_SAMPLE_ALLOWANCE: usize = 1 << 20;
 /// Hard cap on the size of an in-memory `moov`/`moof` box.
 const MAX_HEADER_BOX: u64 = 1 << 30;
 /// Most text all metadata entries may hold together; entries past it are dropped. One `keys`
@@ -16,9 +23,18 @@ const MAX_METADATA_BYTES: usize = 4 << 20;
 /// What an entry costs beyond its text, so that empty entries are bounded too.
 const METADATA_ENTRY_COST: usize = 64;
 
+/// Largest sample built from a PCM chunk; larger chunks are split. Writers that put a whole
+/// recording in one chunk would otherwise give samples past `u32::MAX` bytes.
+const PCM_MAX_SAMPLE_BYTES: u64 = 1 << 24;
+
+/// Frames in one piece of a split PCM chunk: whole units, at most `PCM_MAX_SAMPLE_BYTES`.
+fn pcm_piece_frames(unit: u64, unit_bytes: u64) -> u64 {
+    (PCM_MAX_SAMPLE_BYTES / unit_bytes.max(1)).max(1) * unit
+}
+
 /// What is left of the file-wide limits while tracks and fragments are parsed.
 struct SampleBudget {
-    /// Samples (`MAX_SAMPLES` minus those already built).
+    /// Samples (what the file's length allows, at most `MAX_SAMPLES`, minus those already built).
     samples: usize,
     /// Bytes of file for samples whose count no table entry backs (constant-size `stsz`, `trun`
     /// without per-sample fields). Each such sample claims at least one byte, so a file can't
@@ -27,6 +43,11 @@ struct SampleBudget {
 }
 
 impl SampleBudget {
+    fn new(file_len: u64) -> Self {
+        let by_len = usize::try_from(file_len / FILE_BYTES_PER_SAMPLE).unwrap_or(usize::MAX);
+        Self { samples: by_len.clamp(MIN_SAMPLE_ALLOWANCE, MAX_SAMPLES), implied_bytes: file_len }
+    }
+
     fn take(&mut self, n: usize) -> Result<()> {
         self.samples = self.samples.checked_sub(n).ok_or(Error::TooLarge("sample count"))?;
         Ok(())
@@ -345,7 +366,7 @@ pub fn open<S: ByteSource>(src: S) -> Result<Mp4File> {
             _ => {}
         }
     }
-    let mut budget = SampleBudget { samples: MAX_SAMPLES, implied_bytes: len };
+    let mut budget = SampleBudget::new(len);
     for p in trak_payloads {
         let t = parse_trak(p, &file, len, &mut budget)?;
         file.tracks.push(t);
@@ -353,8 +374,13 @@ pub fn open<S: ByteSource>(src: S) -> Result<Mp4File> {
     // Movie fragments.
     let mut next_dts: Vec<i64> =
         file.tracks.iter().map(|t| t.samples.last().map(|s| s.dts.saturating_add(i64::from(s.duration))).unwrap_or(0)).collect();
+    // A duplicate track ID resolves to its first track.
+    let mut track_index = HashMap::new();
+    for (i, t) in file.tracks.iter().enumerate() {
+        track_index.entry(t.id).or_insert(i);
+    }
     for (moof_off, moof) in &moofs {
-        parse_moof(*moof_off, moof, &mut file.tracks, &trex, &mut next_dts, &mut budget)?;
+        parse_moof(*moof_off, moof, &mut file.tracks, &track_index, &trex, &mut next_dts, &mut budget)?;
     }
     for t in &mut file.tracks {
         if file.fragmented && !moofs.is_empty() {
@@ -725,15 +751,16 @@ fn parse_stbl(stbl: &[u8], t: &mut Track, is_qt: bool, file_len: u64, budget: &m
     if let Some(p) = pcm {
         t.pcm_chunked = true;
         let a = t.audio().cloned().unwrap_or_default();
-        let frame_bytes = |frames: u64| -> u64 {
-            if a.qt_version == 1 && a.bytes_per_frame > 0 && a.samples_per_packet > 0 {
-                frames / a.samples_per_packet as u64 * a.bytes_per_frame as u64
-            } else if const_size > 1 {
-                frames * const_size as u64
-            } else {
-                frames * p.bytes_per_frame() as u64
-            }
+        // Frames come in units of `unit` frames and `unit_bytes` bytes (QuickTime v1 packets).
+        let (unit, unit_bytes) = if a.qt_version == 1 && a.bytes_per_frame > 0 && a.samples_per_packet > 0 {
+            (u64::from(a.samples_per_packet), u64::from(a.bytes_per_frame))
+        } else if const_size > 1 {
+            (1, u64::from(const_size))
+        } else {
+            (1, u64::from(p.bytes_per_frame()))
         };
+        let frame_bytes = |frames: u64| -> u64 { (frames / unit).saturating_mul(unit_bytes) };
+        let piece_frames = pcm_piece_frames(unit, unit_bytes);
         if chunks.len() > budget.samples {
             return Err(Error::TooLarge("chunk count"));
         }
@@ -746,18 +773,35 @@ fn parse_stbl(stbl: &[u8], t: &mut Track, is_qt: bool, file_len: u64, budget: &m
             if spc == 0 {
                 continue;
             }
-            let dur = stts_c.take(spc as u64);
-            let size = frame_bytes(spc as u64).min(u32::MAX as u64) as u32;
-            samples.push(Sample {
-                offset: off,
-                size,
-                dts,
-                pts: dts,
-                duration: dur.min(u32::MAX as u64) as u32,
-                is_sync: true,
-                description_index: stsc[stsc_i].2,
-            });
-            dts = dts.saturating_add(dur.min(i64::MAX as u64) as i64);
+            // A chunk past PCM_MAX_SAMPLE_BYTES becomes several samples.
+            let mut left = spc as u64;
+            let mut pos = off;
+            while left > 0 {
+                if samples.len() >= budget.samples {
+                    return Err(Error::TooLarge("sample count"));
+                }
+                let split = frame_bytes(left) > PCM_MAX_SAMPLE_BYTES;
+                let frames = if split { piece_frames } else { left };
+                let dur = stts_c.take(frames);
+                let size = frame_bytes(frames);
+                if split {
+                    // Each piece is at least half of PCM_MAX_SAMPLE_BYTES, so the file's size
+                    // bounds how many a hostile chunk size can make.
+                    budget.implied_bytes = budget.implied_bytes.checked_sub(size).ok_or(Error::TooLarge("PCM chunk size"))?;
+                }
+                samples.push(Sample {
+                    offset: pos,
+                    size: size.min(u32::MAX as u64) as u32,
+                    dts,
+                    pts: dts,
+                    duration: dur.min(u32::MAX as u64) as u32,
+                    is_sync: true,
+                    description_index: stsc[stsc_i].2,
+                });
+                dts = dts.saturating_add(dur.min(i64::MAX as u64) as i64);
+                pos = pos.saturating_add(size);
+                left -= frames;
+            }
             sidx += spc;
             if sidx >= sample_count {
                 break;
@@ -826,6 +870,7 @@ fn parse_moof(
     moof_off: u64,
     moof: &[u8],
     tracks: &mut [Track],
+    track_index: &HashMap<u32, usize>,
     trex: &HashMap<u32, Trex>,
     next_dts: &mut [i64],
     budget: &mut SampleBudget,
@@ -853,7 +898,7 @@ fn parse_moof(
         let mut c = Cur::labeled(tfhd, "tfhd");
         let (_, fl) = c.full_header()?;
         let id = c.u32()?;
-        let Some(ti) = tracks.iter().position(|t| t.id == id) else { continue };
+        let Some(&ti) = track_index.get(&id) else { continue };
         let d = trex.get(&id).copied().unwrap_or_default();
         let base = if fl & 1 != 0 {
             c.u64()?
@@ -1343,5 +1388,58 @@ mod tests {
         let p = d.windows(4).position(|w| w == b"stsc").unwrap();
         d[p - 4..p].copy_from_slice(&0x7FFF_FFFFu32.to_be_bytes());
         assert!(open(d.as_slice()).is_err());
+    }
+    /// `data` followed by zeros up to `len` bytes.
+    struct Padded(Vec<u8>, u64);
+
+    impl ByteSource for Padded {
+        fn len(&self) -> u64 {
+            self.1
+        }
+        fn read_at(&self, offset: u64, buf: &mut [u8]) -> std::io::Result<()> {
+            buf.fill(0);
+            let start = (offset as usize).min(self.0.len());
+            let end = (start + buf.len()).min(self.0.len());
+            buf[..end - start].copy_from_slice(&self.0[start..end]);
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn samples_scale_with_the_file_length() {
+        assert_eq!(SampleBudget::new(1000).samples, MIN_SAMPLE_ALLOWANCE);
+        assert_eq!(SampleBudget::new(64 << 20).samples, 16 << 20);
+        assert_eq!(SampleBudget::new(u64::MAX).samples, MAX_SAMPLES);
+        // A constant-size stsz of one-byte samples claims as many as a 64 MiB file has bytes.
+        let d = handmade(Some((1, u32::MAX)));
+        assert!(matches!(open(Padded(d, 64 << 20)), Err(Error::TooLarge(_))));
+    }
+
+    #[test]
+    fn a_pcm_chunk_past_4_gib_reads_as_bounded_samples() {
+        use crate::isobmff::{Brand, Mp4Writer, PcmConfig, TrackConfig, WriteSample, WriterOptions};
+        let pcm = PcmConfig { bits: 8, float: false, big_endian: false, signed: false, channels: 1, sample_rate: 48000.0 };
+        let mut w = Mp4Writer::new(std::io::Cursor::new(Vec::new()), WriterOptions::new(Brand::Mov)).unwrap();
+        let t = w.add_track(TrackConfig::new(SampleEntry::pcm(pcm), 48000)).unwrap();
+        w.write_sample(t, WriteSample { data: &[0; 4], duration: 0, composition_offset: 0, is_sync: true }).unwrap();
+        let mut d = w.finish_faststart().unwrap().into_inner();
+        // One chunk of u32::MAX one-byte frames, as a writer without chunk limits makes for a
+        // 4 GiB recording.
+        let frames = u32::MAX.to_be_bytes();
+        for (kind, at) in [(b"stts", 12), (b"stsz", 12), (b"stsc", 16)] {
+            let p = d.windows(4).position(|w| w == kind).unwrap();
+            d[p + at..p + at + 4].copy_from_slice(&frames);
+        }
+        // In a file too small for it, the claim is clamped to the file.
+        let f = open(d.as_slice()).unwrap();
+        assert!(f.tracks[0].samples.iter().map(|s| u64::from(s.size)).sum::<u64>() <= d.len() as u64);
+        let len = d.len() as u64 + u64::from(u32::MAX);
+        let f = open(Padded(d, len)).unwrap();
+        let s = &f.tracks[0].samples;
+        assert_eq!(s.len(), 256);
+        assert!(s.iter().all(|s| u64::from(s.size) <= PCM_MAX_SAMPLE_BYTES));
+        assert_eq!(s.iter().map(|s| u64::from(s.size)).sum::<u64>(), u64::from(u32::MAX));
+        assert_eq!(s.iter().map(|s| u64::from(s.duration)).sum::<u64>(), u64::from(u32::MAX));
+        assert!(s.windows(2).all(|w| w[1].offset == w[0].offset + u64::from(w[0].size) && w[1].dts == w[0].dts + i64::from(w[0].duration)));
     }
 }

@@ -145,6 +145,30 @@ fn spot_inks_past_the_cap_are_listed_not_separated_and_bad_input_is_refused() {
 }
 
 #[test]
+fn escaped_spot_names_are_decoded_once_and_each_gets_its_own_plate() {
+    // `/A#2341` is the spot `A#41`, not `AA`; `/Spot#20#2312` is `Spot #12`.
+    let names = ["/A#2341", "/AA", "/Spot#20#2312"];
+    let spaces: String = names
+        .iter()
+        .enumerate()
+        .map(|(i, name)| format!("/S{i} [/Separation {name} /DeviceGray << /FunctionType 2 /Domain [0 1] /C0 [1] /C1 [0] /N 1 >>] "))
+        .collect();
+    let content: String = (0..names.len()).map(|i| format!("/S{i} cs 1 scn {} 0 10 10 re f ", i * 10)).collect();
+    let pdf = page_pdf(&content, &format!("/ColorSpace << {spaces} >>"), "", &[]);
+    let p = plates(&pdf, 0, 72.0, &Options::default()).unwrap();
+    let spots: Vec<&str> = p.inks.spots().map(|(_, s)| s.name.as_str()).collect();
+    assert_eq!(spots, ["A#41", "AA", "Spot #12"]);
+    assert!(p.unseparated.is_empty());
+    assert_eq!(p.planes.len(), 7);
+    for (i, (id, _)) in p.inks.spots().enumerate() {
+        for x in [5u32, 15, 25] {
+            let expected = if (x / 10) as usize == i { 255 } else { 0 };
+            assert_eq!(p.tint(id, x, 35), Some(expected), "spot {i} at x = {x}");
+        }
+    }
+}
+
+#[test]
 fn lab_colors_convert_through_the_profile_and_lab_white_is_paper() {
     let resources = "/ColorSpace << /D50 [/Lab << /WhitePoint [0.9642 1 0.8249] >>] /D65 [/Lab << /WhitePoint [0.9505 1 1.089] >>] >>";
     let pdf = page_pdf("/D50 cs 50 20 -10 scn 0 0 20 40 re f /D65 cs 100 0 0 scn 20 0 20 40 re f", resources, "", &[]);
@@ -243,6 +267,7 @@ fn ink_colors_write_as_cmyk_separation_or_device_n_and_separate_onto_their_plate
 
     let unknown = InkSet::new();
     assert_eq!(to_pdf_color(&colors[1], &unknown, &cms), None, "an ink not in the set");
+    assert_eq!(to_pdf_color(&InkColor::Tints(vec![]), &inks, &cms), None, "no ink: nothing to paint");
     let mut many = InkSet::new();
     let tints: Vec<(InkId, f32)> = (0..33)
         .map(|i| (many.add(Ink::Spot(Spot { name: format!("S{i}"), alternate: Alternate::Cmyk([0.0; 4]), solidity: None })).unwrap(), 1.0))

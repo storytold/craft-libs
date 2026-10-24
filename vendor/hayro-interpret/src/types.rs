@@ -338,6 +338,24 @@ pub struct StrokeProps {
     pub dash_offset: f32,
 }
 
+/// PdfCraft patch: longest dash array kept. A longer one strokes solid; it is copied by every
+/// saved graphics state, and real dash patterns have a handful of entries.
+pub(crate) const MAX_DASH_ENTRIES: usize = 256;
+
+/// PdfCraft patch: the dash array a `d` operator or `/D` entry sets, from its numbers.
+pub(crate) fn dash_array(values: impl Iterator<Item = f32>) -> SmallVec<[f32; 4]> {
+    // kurbo apparently cannot properly deal with offsets that are exactly 0.
+    let dashes: SmallVec<[f32; 4]> = values
+        .take(MAX_DASH_ENTRIES + 1)
+        .map(|n| if n == 0.0 { 0.01 } else { n })
+        .collect();
+    if dashes.len() > MAX_DASH_ENTRIES {
+        warn!("dash array is too long; stroking solid");
+        return smallvec![];
+    }
+    dashes
+}
+
 impl Default for StrokeProps {
     fn default() -> Self {
         Self {

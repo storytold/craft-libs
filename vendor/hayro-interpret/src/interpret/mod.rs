@@ -570,11 +570,9 @@ fn interpret_window<'a>(
             }
             TypedInstruction::DashPattern(p) => {
                 context.get_mut().graphics_state.stroke_props.dash_offset = p.1.as_f32();
-                // kurbo apparently cannot properly deal with offsets that are exactly 0.
+                // PdfCraft patch: bounded, see `types::dash_array`.
                 context.get_mut().graphics_state.stroke_props.dash_array =
-                    p.0.iter::<f32>()
-                        .map(|n| if n == 0.0 { 0.01 } else { n })
-                        .collect();
+                    crate::types::dash_array(p.0.iter::<f32>());
             }
             TypedInstruction::RenderingIntent(_) => {
                 // Ignore for now.

@@ -8,6 +8,16 @@ fn scenes() -> Vec<Scene> {
     scene::load_dir(&scene::scenes_dir()).unwrap()
 }
 
+/// On CI (`CI` set) the workflow provisions the font, so a scene that left text out fails.
+/// Local runs without the font skip text and only note it.
+fn text_must_be_written() -> bool {
+    std::env::var_os("CI").is_some_and(|v| !v.is_empty() && v != "false")
+}
+
+fn missing_font(scene: &Scene) -> String {
+    format!("{}: text skipped; {} must name a directory with {} on CI", scene.id, reference::FONT_DIR_ENV, reference::FONT_FILE)
+}
+
 #[test]
 fn every_scene_parses_and_is_consistent() {
     let scenes = scenes();
@@ -21,7 +31,7 @@ fn every_scene_parses_and_is_consistent() {
 }
 
 /// Non-pending scenes are written and match their `structure` block (with text left out for
-/// lack of fonts, a mismatch is only a note). Pending scenes must
+/// lack of fonts, a mismatch is only a note, except on CI). Pending scenes must
 /// either write or stop at a feature the writer lacks, so their other fields stay valid.
 #[test]
 fn written_scenes_match_their_structure() {
@@ -55,7 +65,9 @@ fn written_scenes_match_their_structure() {
         let problems = scene.structure.check(&summary);
         // A scene whose overprint or other states sit only on text can't match without fonts.
         let text_skipped = output.notes.iter().any(|note| note.contains(reference::FONT_DIR_ENV));
-        if !problems.is_empty() && text_skipped {
+        if text_skipped && text_must_be_written() {
+            failures.push(missing_font(scene));
+        } else if !problems.is_empty() && text_skipped {
             println!("note: {}: structure not checked with text skipped: {}", scene.id, problems.join("; "));
         } else if !problems.is_empty() {
             let json = serde_json::to_string_pretty(&summary).unwrap();
@@ -84,7 +96,9 @@ fn print_preset_adds_one_gts_pdfx_intent() {
         want.output_intents = Some(vec!["GTS_PDFX".to_owned()]);
         let problems = want.check(&summary);
         let text_skipped = output.notes.iter().any(|note| note.contains(reference::FONT_DIR_ENV));
-        if !problems.is_empty() && text_skipped {
+        if text_skipped && text_must_be_written() {
+            failures.push(missing_font(scene));
+        } else if !problems.is_empty() && text_skipped {
             assert!(summary.output_intents.iter().filter(|i| *i == "GTS_PDFX").count() == 1, "{}: {summary:?}", scene.id);
         } else if !problems.is_empty() {
             failures.push(format!("{}: {}", scene.id, problems.join("; ")));

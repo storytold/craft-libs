@@ -19,6 +19,7 @@ pub struct CmsConversion {
 
 /// Why a profile can't be a printing condition.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
 pub enum ProfileError {
     #[error("the profile could not be read: {0}")]
     Unreadable(String),

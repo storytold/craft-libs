@@ -24,7 +24,7 @@ use craft_pdf::syntax::object::{Array, Dict, Name, Stream, String as PdfText};
 use craft_pdf::{OpenError, open_slice};
 
 use crate::cms::{CmsConversion, ProfileError, srgb8_to_lab};
-use crate::ink::{Alternate, Ink, InkId, InkSet, Spot};
+use crate::ink::{Alternate, InkId, InkSet, Spot};
 
 /// Spot inks separated per page, after the four process inks. More than any press runs: a
 /// `DeviceN` space has at most 32 colorants, and every plate costs a render and a byte per
@@ -53,6 +53,7 @@ const MAX_CONDITION: usize = 160;
 /// The printing condition process color converts to when the page has no usable output
 /// intent.
 #[derive(Clone, Debug, Default)]
+#[non_exhaustive]
 pub enum Fallback {
     /// craft-cms's Coated FOGRA39 profile.
     #[default]
@@ -82,6 +83,7 @@ impl Default for Options {
 
 /// How process color that isn't CMYK already became CMYK.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub enum Conversion {
     /// Through the CMYK profile of the page's or document's output intent (ISO 32000-2
     /// §14.11.5).
@@ -123,14 +125,12 @@ impl Plates {
 
     /// Ink `id`'s tint at pixel (`x`, `y`), 0–255.
     pub fn tint(&self, id: InkId, x: u32, y: u32) -> Option<u8> {
-        if x >= self.width || y >= self.height {
-            return None;
-        }
-        self.plane(id)?.get(y as usize * self.width as usize + x as usize).copied()
+        self.plane(id)?.get(self.index_of(x, y)?).copied()
     }
 }
 
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum Error {
     #[error(transparent)]
     Open(#[from] OpenError),
@@ -178,10 +178,10 @@ pub fn plates(pdf: &[u8], page: usize, dpi: f32, opts: &Options) -> Result<Plate
             continue;
         }
         let alternate = Alternate::Lab(srgb8_to_lab(swatch).unwrap_or([0.0; 3]));
-        let spot = Ink::Spot(Spot { name: ink.name().to_string(), alternate, solidity: None });
-        // A name that normalizes to one already listed (`A#2341` and `AA`) has no plate of its
-        // own.
-        match inks.add(spot) {
+        let spot = Spot { name: ink.name().to_string(), alternate, solidity: None };
+        // hayro hands over names with their `#xx` escapes decoded, so `#` here is a literal
+        // character. Two names that read the same after lossy UTF-8 decoding share one plate.
+        match inks.add_decoded(spot) {
             Some(id) if id.index() == separated.len() => separated.push(ink),
             _ => unseparated.push(ink.name().to_string()),
         }

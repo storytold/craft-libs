@@ -1,7 +1,8 @@
-diff -ruN a/src/error.rs b/src/error.rs
+diff --git a/src/error.rs b/src/error.rs
+index 26cd767..1807ac3 100644
 --- a/src/error.rs
 +++ b/src/error.rs
-@@ -24,6 +24,11 @@
+@@ -24,6 +24,11 @@ pub type KrillaResult<T> = Result<T, KrillaError>;
  pub enum KrillaError {
      /// A page or surface failed during cleanup; discard the complete document.
      Poisoned,
@@ -13,7 +14,7 @@ diff -ruN a/src/error.rs b/src/error.rs
      /// An error while attempting to embed a font.
      Font(Font, String),
      /// A list of validation errors. Can only occur if you set the `validator` in
-@@ -62,6 +67,9 @@
+@@ -62,6 +67,9 @@ impl Display for KrillaError {
      fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
          match self {
              KrillaError::Poisoned => f.write_str("document contains a failed page or surface"),
@@ -23,10 +24,11 @@ diff -ruN a/src/error.rs b/src/error.rs
              KrillaError::Font(_, message) => write!(f, "failed to embed font: {message}"),
              KrillaError::Validation(errors) => {
                  let count = errors.len();
-diff -ruN a/src/graphics/graphics_state.rs b/src/graphics/graphics_state.rs
+diff --git a/src/graphics/graphics_state.rs b/src/graphics/graphics_state.rs
+index 918f059..9fc913c 100644
 --- a/src/graphics/graphics_state.rs
 +++ b/src/graphics/graphics_state.rs
-@@ -122,6 +122,7 @@
+@@ -122,6 +122,7 @@ impl Cacheable for ExtGState {
          if let Some(nsa) = self.0.non_stroking_alpha {
              if nsa != NormalizedF32::ONE {
                  sc.register_validation_error(ValidationError::Transparency(sc.location));
@@ -34,7 +36,7 @@ diff -ruN a/src/graphics/graphics_state.rs b/src/graphics/graphics_state.rs
              }
  
              ext_st.non_stroking_alpha(nsa.get());
-@@ -130,6 +131,7 @@
+@@ -130,6 +131,7 @@ impl Cacheable for ExtGState {
          if let Some(sa) = self.0.stroking_alpha {
              if sa != NormalizedF32::ONE {
                  sc.register_validation_error(ValidationError::Transparency(sc.location));
@@ -42,7 +44,7 @@ diff -ruN a/src/graphics/graphics_state.rs b/src/graphics/graphics_state.rs
              }
  
              ext_st.stroking_alpha(sa.get());
-@@ -138,6 +140,7 @@
+@@ -138,6 +140,7 @@ impl Cacheable for ExtGState {
          if let Some(bm) = self.0.blend_mode {
              if bm != BlendMode::Normal {
                  sc.register_validation_error(ValidationError::Transparency(sc.location));
@@ -50,7 +52,7 @@ diff -ruN a/src/graphics/graphics_state.rs b/src/graphics/graphics_state.rs
              }
  
              ext_st.blend_mode(bm);
-@@ -145,6 +148,7 @@
+@@ -145,6 +148,7 @@ impl Cacheable for ExtGState {
  
          if let Some(mask_ref) = self.0.mask {
              sc.register_validation_error(ValidationError::Transparency(sc.location));
@@ -58,10 +60,11 @@ diff -ruN a/src/graphics/graphics_state.rs b/src/graphics/graphics_state.rs
  
              ext_st.pair(Name(b"SMask"), mask_ref);
          }
-diff -ruN a/src/graphics/image.rs b/src/graphics/image.rs
+diff --git a/src/graphics/image.rs b/src/graphics/image.rs
+index 22a68ca..c911f06 100644
 --- a/src/graphics/image.rs
 +++ b/src/graphics/image.rs
-@@ -365,6 +365,7 @@
+@@ -365,6 +365,7 @@ impl Image {
      ) {
          let soft_mask_id = self.0.metadata.has_alpha.then(|| {
              sc.register_validation_error(ValidationError::Transparency(sc.location));
@@ -69,10 +72,11 @@ diff -ruN a/src/graphics/image.rs b/src/graphics/image.rs
              sc.new_ref()
          });
  
-diff -ruN a/src/graphics/mask.rs b/src/graphics/mask.rs
+diff --git a/src/graphics/mask.rs b/src/graphics/mask.rs
+index ffbb3de..9fc958e 100644
 --- a/src/graphics/mask.rs
 +++ b/src/graphics/mask.rs
-@@ -5,10 +5,10 @@
+@@ -5,10 +5,10 @@ use pdf_writer::{Finish, Name, Ref};
  use crate::chunk_container::ChunkContainer;
  use crate::geom::{Rect, Transform};
  use crate::graphics::shading_function::{GradientProperties, ShadingFunction};
@@ -85,7 +89,7 @@ diff -ruN a/src/graphics/mask.rs b/src/graphics/mask.rs
  use crate::stream::Stream;
  use crate::stream::StreamBuilder;
  
-@@ -108,9 +108,15 @@
+@@ -108,9 +108,15 @@ impl Cacheable for Mask {
          chunk_container: &mut ChunkContainer,
          root_ref: Ref,
      ) {
@@ -102,10 +106,11 @@ diff -ruN a/src/graphics/mask.rs b/src/graphics/mask.rs
          );
  
          let chunk = &mut chunk_container.non_stream.masks;
-diff -ruN a/src/graphics/tiling_pattern.rs b/src/graphics/tiling_pattern.rs
+diff --git a/src/graphics/tiling_pattern.rs b/src/graphics/tiling_pattern.rs
+index e26f1d8..94e640e 100644
 --- a/src/graphics/tiling_pattern.rs
 +++ b/src/graphics/tiling_pattern.rs
-@@ -85,6 +85,10 @@
+@@ -85,6 +85,10 @@ impl Cacheable for TilingPattern {
              sc.register_validation_error(validation_error);
          }
  
@@ -116,7 +121,8 @@ diff -ruN a/src/graphics/tiling_pattern.rs b/src/graphics/tiling_pattern.rs
          let pattern_stream = FilterStreamBuilder::new_from_content_stream(
              &self.stream.content,
              &sc.serialize_settings(),
-diff -ruN a/src/graphics/xobject.rs b/src/graphics/xobject.rs
+diff --git a/src/graphics/xobject.rs b/src/graphics/xobject.rs
+index 28d6f38..6c56b0e 100644
 --- a/src/graphics/xobject.rs
 +++ b/src/graphics/xobject.rs
 @@ -1,24 +1,36 @@
@@ -158,10 +164,12 @@ diff -ruN a/src/graphics/xobject.rs b/src/graphics/xobject.rs
  }
  
  #[derive(Debug, Hash, Clone, Eq, PartialEq)]
-@@ -28,8 +40,24 @@
+@@ -26,10 +38,26 @@ pub(crate) struct XObject(Arc<Prehashed<Repr>>);
+ 
+ impl XObject {
      pub(crate) fn new(
-         stream: Stream,
-         isolated: bool,
++        stream: Stream,
++        isolated: bool,
 +        transparency_group_color_space: bool,
 +        custom_bbox: Option<Rect>,
 +    ) -> Self {
@@ -175,15 +183,15 @@ diff -ruN a/src/graphics/xobject.rs b/src/graphics/xobject.rs
 +    }
 +
 +    pub(crate) fn with_role(
-+        stream: Stream,
-+        isolated: bool,
+         stream: Stream,
+         isolated: bool,
          mut transparency_group_color_space: bool,
          custom_bbox: Option<Rect>,
 +        role: GroupRole,
      ) -> Self {
          // In case a mask was invoked in the content stream, we _always_ create
          // a new transparency group. Please see <https://github.com/typst/typst/issues/5509>.
-@@ -48,6 +76,7 @@
+@@ -48,6 +76,7 @@ impl XObject {
              isolated,
              transparency_group_color_space,
              custom_bbox,
@@ -191,7 +199,7 @@ diff -ruN a/src/graphics/xobject.rs b/src/graphics/xobject.rs
          })))
      }
  
-@@ -79,6 +108,10 @@
+@@ -79,6 +108,10 @@ impl Cacheable for XObject {
              sc.register_validation_error(ValidationError::Transparency(sc.location));
          }
  
@@ -202,7 +210,7 @@ diff -ruN a/src/graphics/xobject.rs b/src/graphics/xobject.rs
          let serialize_settings = sc.serialize_settings();
  
          // "Ordinarily, the CS entry may be present only for isolated transparency groups (those
-@@ -88,13 +121,21 @@
+@@ -88,13 +121,21 @@ impl Cacheable for XObject {
          //
          // So while we don't technically always need to write it, let's just play it save
          // and always add a group color space in case we have a transparency group.
@@ -224,13 +232,13 @@ diff -ruN a/src/graphics/xobject.rs b/src/graphics/xobject.rs
 +                )),
 +                (GroupColorSpace::Cmyk, GroupRole::Content) => None,
 +                (GroupColorSpace::Cmyk, GroupRole::MaskSource) => {
-+                    Some(sc.cmyk_group_color_space(chunk_container))
++                    Some(sc.mask_group_color_space(chunk_container))
 +                }
 +            }
          };
  
          let x_object_stream = FilterStreamBuilder::new_from_content_stream(
-@@ -126,14 +167,7 @@
+@@ -126,14 +167,7 @@ impl Cacheable for XObject {
              }
  
              if let Some(transparency_group_cs) = transparency_group_cs {
@@ -246,7 +254,7 @@ diff -ruN a/src/graphics/xobject.rs b/src/graphics/xobject.rs
              }
  
              transparency.finish();
-@@ -145,6 +179,18 @@
+@@ -145,6 +179,18 @@ impl Cacheable for XObject {
      }
  }
  
@@ -265,10 +273,11 @@ diff -ruN a/src/graphics/xobject.rs b/src/graphics/xobject.rs
  impl Resourceable for XObject {
      type Resource = resource::XObject;
  }
-diff -ruN a/src/lib.rs b/src/lib.rs
+diff --git a/src/lib.rs b/src/lib.rs
+index efbe6f8..b331053 100644
 --- a/src/lib.rs
 +++ b/src/lib.rs
-@@ -176,7 +176,7 @@
+@@ -176,7 +176,7 @@ pub use document::*;
  pub use graphics::*;
  pub use interactive::*;
  pub use interchange::*;
@@ -277,10 +286,11 @@ diff -ruN a/src/lib.rs b/src/lib.rs
  
  /// Identifies the local patch that discards unfinished page/surface state during unwind.
  pub const CRAFT_UNWIND_SAFE_DROP: bool = true;
-diff -ruN a/src/page.rs b/src/page.rs
+diff --git a/src/page.rs b/src/page.rs
+index ed6b1e2..3b3227b 100644
 --- a/src/page.rs
 +++ b/src/page.rs
-@@ -14,10 +14,11 @@
+@@ -14,10 +14,11 @@ use crate::configure::ValidationError;
  use crate::content::ContentBuilder;
  use crate::error::KrillaResult;
  use crate::geom::{Rect, Size, Transform};
@@ -293,7 +303,7 @@ diff -ruN a/src/page.rs b/src/page.rs
  use crate::stream::{FilterStreamBuilder, Stream};
  use crate::surface::Surface;
  use crate::tagging::AnnotationIdentifier;
-@@ -412,8 +413,20 @@
+@@ -412,8 +413,20 @@ impl InternalPage {
              }
          }
  
@@ -314,10 +324,11 @@ diff -ruN a/src/page.rs b/src/page.rs
          self.stream_resources.to_pdf_resources(
              &mut page,
              sc,
-diff -ruN a/src/pdf.rs b/src/pdf.rs
+diff --git a/src/pdf.rs b/src/pdf.rs
+index bbdae8e..b2666a7 100644
 --- a/src/pdf.rs
 +++ b/src/pdf.rs
-@@ -18,7 +18,7 @@
+@@ -18,7 +18,7 @@ use crate::configure::{PdfVersion, ValidationError};
  use crate::error::{KrillaError, KrillaResult};
  use crate::graphics::color::rgb;
  use crate::resource::Resource;
@@ -326,7 +337,7 @@ diff -ruN a/src/pdf.rs b/src/pdf.rs
  use crate::surface::Location;
  use crate::util::{Deferred, Prehashed};
  
-@@ -179,10 +179,16 @@
+@@ -179,10 +179,16 @@ impl PdfSerializerContext {
              // but we just always allocate it if we have at least one PDF,
              // regardless of how the files are embedded. We can change this in the
              // future, but it keeps the code simpler.
@@ -347,7 +358,7 @@ diff -ruN a/src/pdf.rs b/src/pdf.rs
              let chunk_settings = sc.chunk_settings();
  
              let deferred_chunk = Deferred::new(move || {
-@@ -197,11 +203,11 @@
+@@ -197,11 +203,11 @@ impl PdfSerializerContext {
                  // krilla PDF, we replace `local_ref` with `cs_ref` such that it
                  // actually points to the colorspace that is embedded in the full PDF.
                  let (assigned_cs_ref, should_cs_ref) = match &xobject_group_color_space {
@@ -362,7 +373,7 @@ diff -ruN a/src/pdf.rs b/src/pdf.rs
                          unreachable!()
                      }
                  };
-@@ -224,7 +230,9 @@
+@@ -224,7 +230,9 @@ impl PdfSerializerContext {
                      Box::new(|| new_ref.bump()),
                      chunk_settings,
                      |group| {
@@ -373,10 +384,11 @@ diff -ruN a/src/pdf.rs b/src/pdf.rs
                              group
                                  .insert(Name(b"CS"))
                                  .primitive(local_group_color_space_ref);
-diff -ruN a/src/resource.rs b/src/resource.rs
+diff --git a/src/resource.rs b/src/resource.rs
+index 5ad0585..56b8488 100644
 --- a/src/resource.rs
 +++ b/src/resource.rs
-@@ -326,6 +326,10 @@
+@@ -326,6 +326,10 @@ where
          format!("{}{}", T::get_prefix(), num)
      }
  
@@ -387,19 +399,20 @@ diff -ruN a/src/resource.rs b/src/resource.rs
      pub(crate) fn get_entries(&self) -> impl Iterator<Item = (String, Ref)> + '_ {
          self.entries
              .iter()
-diff -ruN a/src/serialize.rs b/src/serialize.rs
+diff --git a/src/serialize.rs b/src/serialize.rs
+index d79ce28..58c0090 100644
 --- a/src/serialize.rs
 +++ b/src/serialize.rs
-@@ -16,7 +16,7 @@
+@@ -16,7 +16,7 @@ use crate::configure::validate::ValidationStore;
  use crate::configure::{Configuration, PdfVersion, ValidationError, Validators};
  use crate::error::{KrillaError, KrillaResult, LimitError};
  use crate::geom::Size;
 -use crate::graphics::color::{rgb, ColorSpace};
-+use crate::graphics::color::{cmyk, rgb, ColorSpace};
++use crate::graphics::color::{cmyk, luma, rgb, ColorSpace};
  use crate::graphics::icc::{ICCBasedColorSpace, ICCProfile};
  #[cfg(feature = "raster-images")]
  use crate::graphics::image::Image;
-@@ -29,7 +29,7 @@
+@@ -29,7 +29,7 @@ use crate::page::{InternalPage, PageLabel, PageLabelContainer};
  #[cfg(feature = "pdf")]
  use crate::pdf::{PdfDocument, PdfSerializerContext};
  use crate::resource;
@@ -408,7 +421,7 @@ diff -ruN a/src/serialize.rs b/src/serialize.rs
  use crate::surface::{Location, Surface};
  use crate::text::GlyphId;
  use crate::text::{Font, FontContainer, FontIdentifier};
-@@ -116,6 +116,29 @@
+@@ -116,6 +116,30 @@ pub struct SerializeSettings {
      /// just use the default function which doesn't render them at all. If you do want this, it
      /// is recommended that you use the function provided by the `krilla-svg` crate.
      pub render_svg_glyph_fn: RenderSvgGlyphFn,
@@ -427,8 +440,9 @@ diff -ruN a/src/serialize.rs b/src/serialize.rs
 +    Rgb,
 +    /// Pages that use transparency get a page group with a CMYK `/CS`: DeviceCMYK, or the
 +    /// [`SerializeSettings::cmyk_profile`] when `no_device_cs` is set. Content groups and
-+    /// embedded PDF pages write no `/CS` and inherit it; soft-mask groups, which have no
-+    /// parent, name the same CMYK space. Pages without transparency get no page group.
++    /// embedded PDF pages write no `/CS` and inherit it. Soft-mask groups, which have no
++    /// parent, name DeviceCMYK, or sGrey when `no_device_cs` is set. Pages without
++    /// transparency get no page group.
 +    ///
 +    /// With `no_device_cs` and no `cmyk_profile`, [`Document::finish`] fails with
 +    /// [`KrillaError::MissingGroupCmykProfile`].
@@ -438,7 +452,7 @@ diff -ruN a/src/serialize.rs b/src/serialize.rs
  }
  
  pub type RenderSvgGlyphFn = fn(&[u8], rgb::Color, GlyphId, (f32, f32), &mut Surface) -> Option<()>;
-@@ -148,6 +171,7 @@
+@@ -148,6 +172,7 @@ impl Default for SerializeSettings {
              configuration: Configuration::default(),
              enable_tagging: true,
              render_svg_glyph_fn: |_, _, _, _, _| None,
@@ -446,7 +460,7 @@ diff -ruN a/src/serialize.rs b/src/serialize.rs
          }
      }
  }
-@@ -275,6 +299,11 @@
+@@ -275,6 +300,11 @@ pub(crate) struct SerializeContext {
      validation_store: ValidationStore,
      /// The current location, if set.
      pub(crate) location: Option<Location>,
@@ -458,14 +472,14 @@ diff -ruN a/src/serialize.rs b/src/serialize.rs
  }
  
  impl SerializeContext {
-@@ -309,9 +338,38 @@
+@@ -309,6 +339,50 @@ impl SerializeContext {
              chunk_settings,
              limits: Limits::new(),
              validation_store: ValidationStore::new(),
 +            transparent_refs: HashSet::new(),
-         }
-     }
- 
++        }
++    }
++
 +    /// Record that drawing `object` involves transparency.
 +    pub(crate) fn mark_transparent(&mut self, object: Ref) {
 +        self.transparent_refs.insert(object);
@@ -482,8 +496,7 @@ diff -ruN a/src/serialize.rs b/src/serialize.rs
 +            .any(|r| self.transparent_refs.contains(&r))
 +    }
 +
-+    /// The CMYK blending color space for page and soft-mask groups under
-+    /// [`GroupColorSpace::Cmyk`]. Falls back to DeviceCMYK when `no_device_cs` is set
++    /// The CMYK blending color space for page groups under [`GroupColorSpace::Cmyk`]. Falls back to DeviceCMYK when `no_device_cs` is set
 +    /// without a CMYK profile; `finish` rejects that configuration.
 +    pub(crate) fn cmyk_group_color_space(
 +        &mut self,
@@ -494,10 +507,23 @@ diff -ruN a/src/serialize.rs b/src/serialize.rs
 +        self.register_colorspace(chunk_container, cs.into())
 +    }
 +
-     pub(crate) fn page_infos(&self) -> &[PageInfo] {
-         &self.page_infos
++    /// The blending color space of soft-mask groups under [`GroupColorSpace::Cmyk`]:
++    /// DeviceCMYK, or sGrey when `no_device_cs` is set. A mask group has no parent, so it
++    /// need not match the page group. An ICC CMYK mask group would give the default black
++    /// backdrop a luminosity above 0, because 100% black through a CMYK profile is not black,
++    /// and the masked object would show where the mask content paints nothing.
++    pub(crate) fn mask_group_color_space(
++        &mut self,
++        chunk_container: &mut ChunkContainer,
++    ) -> MaybeDeviceColorSpace {
++        if self.serialize_settings.no_device_cs {
++            self.register_colorspace(chunk_container, luma::color_space(true).into())
++        } else {
++            self.cmyk_group_color_space(chunk_container)
+         }
      }
-@@ -428,9 +486,13 @@
+ 
+@@ -428,9 +502,13 @@ impl SerializeContext {
          let xobj_ref = self.new_ref();
  
          // Note that `add_xobject` might return a different ref than the one we created.
@@ -514,7 +540,7 @@ diff -ruN a/src/serialize.rs b/src/serialize.rs
      }
  
      pub(crate) fn page_tree_ref(&mut self) -> Ref {
-@@ -450,6 +512,14 @@
+@@ -450,6 +528,14 @@ impl SerializeContext {
      }
  
      pub(crate) fn finish(mut self, mut chunk_container: ChunkContainer) -> KrillaResult<Pdf> {
@@ -529,10 +555,11 @@ diff -ruN a/src/serialize.rs b/src/serialize.rs
          // We need to be careful here that we serialize the objects in the right order,
          // as in some cases we use MaybeTake::take to remove an object, which means that
          // no object that is serialized afterwards must depend on it.
-diff -ruN a/src/text/type3.rs b/src/text/type3.rs
+diff --git a/src/text/type3.rs b/src/text/type3.rs
+index 1ba149c..9d43bd6 100644
 --- a/src/text/type3.rs
 +++ b/src/text/type3.rs
-@@ -212,6 +212,9 @@
+@@ -212,6 +212,9 @@ impl Type3Font {
              .collect::<Vec<Ref>>();
  
          let resource_dictionary = rd_builder.finish();

@@ -167,7 +167,7 @@ impl Cacheable for XObject {
                 )),
                 (GroupColorSpace::Cmyk, GroupRole::Content) => None,
                 (GroupColorSpace::Cmyk, GroupRole::MaskSource) => {
-                    Some(sc.cmyk_group_color_space(chunk_container))
+                    Some(sc.mask_group_color_space(chunk_container))
                 }
             }
         };

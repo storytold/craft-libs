@@ -28,7 +28,7 @@ index d5e4374..91727cb 100644
  - krilla does not use the `FL`, `BG`, `BG2`, `UCR` or `URC2` functions. 🟢
  
 diff --git a/src/graphics/mask.rs b/src/graphics/mask.rs
-index 9fc958e..7e8b84c 100644
+index 9fc958e..2763a27 100644
 --- a/src/graphics/mask.rs
 +++ b/src/graphics/mask.rs
 @@ -1,16 +1,20 @@
@@ -64,30 +64,30 @@ index 9fc958e..7e8b84c 100644
  }
  
  impl Mask {
-@@ -38,7 +46,38 @@ impl Mask {
+@@ -38,9 +46,40 @@ impl Mask {
              stream,
              mask_type,
              custom_bbox: None,
 +            backdrop: None,
 +            transfer: None,
-+        }
-+    }
-+
+         }
+     }
+ 
 +    /// Set the backdrop color (`/BC`) of a luminosity mask: the color the mask group is
 +    /// composited over, which gives the mask value wherever the mask content paints nothing.
 +    /// The default is black, so the masked object is hidden outside the mask content.
 +    ///
 +    /// The color is written in the mask group's color space: RGB under
-+    /// [`GroupColorSpace::Rgb`], the CMYK space under [`GroupColorSpace::Cmyk`]. A color from
-+    /// another space is converted with the device formulas; luma maps to equal RGB components
-+    /// or to black ink only.
++    /// [`GroupColorSpace::Rgb`]; under [`GroupColorSpace::Cmyk`], DeviceCMYK, or sGrey when
++    /// `no_device_cs` is set. A color from another space is converted with the device
++    /// formulas; luma maps to equal RGB components or to black ink only.
 +    ///
 +    /// Only luminosity masks have a backdrop color. On an alpha mask this returns the mask
 +    /// unchanged.
 +    pub fn with_backdrop(mut self, color: impl Into<RegularColor>) -> Self {
 +        if self.mask_type == MaskType::Luminosity {
 +            self.backdrop = Some(color.into());
-         }
++        }
 +        self
 +    }
 +
@@ -100,9 +100,11 @@ index 9fc958e..7e8b84c 100644
 +    pub fn with_transfer(mut self, transfer: TransferFunction) -> Self {
 +        self.transfer = Some(transfer);
 +        self
-     }
- 
++    }
++
      /// Create a new mask for a shading to encode the opacity channels.
+     pub(crate) fn new_from_shading(
+         gradient_properties: GradientProperties,
 @@ -78,6 +117,8 @@ impl Mask {
              stream: shading_stream,
              mask_type: MaskType::Luminosity,
@@ -131,16 +133,20 @@ index 9fc958e..7e8b84c 100644
  impl Cacheable for Mask {
      fn serialize(
          self,
-@@ -119,16 +172,112 @@ impl Cacheable for Mask {
+@@ -119,16 +172,131 @@ impl Cacheable for Mask {
              XObject::with_role(self.stream, false, true, self.custom_bbox, role),
          );
  
 +        let backdrop = self
 +            .backdrop
 +            .filter(|_| self.mask_type == MaskType::Luminosity)
-+            .map(|color| match sc.serialize_settings().group_color_space {
-+                GroupColorSpace::Rgb => backdrop_rgb(color).to_vec(),
-+                GroupColorSpace::Cmyk => backdrop_cmyk(color).to_vec(),
++            .map(|color| {
++                let settings = sc.serialize_settings();
++                match settings.group_color_space {
++                    GroupColorSpace::Rgb => backdrop_rgb(color).to_vec(),
++                    GroupColorSpace::Cmyk if settings.no_device_cs => vec![backdrop_gray(color)],
++                    GroupColorSpace::Cmyk => backdrop_cmyk(color).to_vec(),
++                }
 +            });
 +
 +        let transfer = match &self.transfer {
@@ -187,6 +193,21 @@ index 9fc958e..7e8b84c 100644
 +                (1.0 - m) * (1.0 - k),
 +                (1.0 - y) * (1.0 - k),
 +            ]
++        }
++    }
++}
++
++/// A backdrop color in a gray mask group.
++fn backdrop_gray(color: RegularColor) -> f32 {
++    match color {
++        RegularColor::Luma(luma) => luma.to_pdf_color(),
++        RegularColor::Rgb(rgb) => {
++            let [r, g, b] = rgb.to_pdf_color();
++            0.3 * r + 0.59 * g + 0.11 * b
++        }
++        RegularColor::Cmyk(cmyk) => {
++            let [c, m, y, k] = cmyk.to_pdf_color();
++            1.0 - (0.3 * c + 0.59 * m + 0.11 * y + k).min(1.0)
 +        }
 +    }
 +}

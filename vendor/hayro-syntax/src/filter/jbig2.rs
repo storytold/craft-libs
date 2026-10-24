@@ -1,12 +1,18 @@
 use crate::bit_reader::BitWriter;
+use crate::filter::Filter;
 use crate::object::Dict;
 use crate::object::Stream;
 use crate::object::dict::keys::JBIG2_GLOBALS;
 use crate::object::stream::{FilterResult, ImageColorSpace, ImageData, ImageDecodeParams};
 use alloc::borrow::Cow;
-use alloc::vec;
 use alloc::vec::Vec;
 use core::iter;
+
+/// PdfCraft patch: most pixels an embedded JBIG2 page may decode to, matching the renderer's
+/// `MAX_IMAGE_PIXELS` and `hayro_jbig2`'s region limit. The page header's own dimensions are
+/// checked here, before any output is allocated: the image dictionary's smaller ones say nothing
+/// about them.
+const MAX_PIXELS: u64 = 1 << 28;
 
 /// Decode JBIG2 data from a PDF stream.
 ///
@@ -17,11 +23,27 @@ pub(crate) fn decode(
     params: &Dict<'_>,
     image_params: &ImageDecodeParams,
 ) -> Option<FilterResult<'static>> {
+    // PdfCraft patch: globals are plain segment data. A globals stream filtered as an image
+    // could name further globals of its own, recursing once per stream in the chain.
     let globals = params
         .get::<Stream<'_>>(JBIG2_GLOBALS)
+        .filter(|g| {
+            !g.filters().iter().any(|f| {
+                matches!(
+                    f,
+                    Filter::Jbig2Decode | Filter::DctDecode | Filter::JpxDecode | Filter::CcittFaxDecode
+                )
+            })
+        })
         .and_then(|g| g.decoded().ok());
 
     let image = hayro_jbig2::Image::new_embedded(data, globals.as_deref()).ok()?;
+
+    if u64::from(image.width()) * u64::from(image.height()) > MAX_PIXELS {
+        warn!("embedded JBIG2 page is too large");
+
+        return None;
+    }
 
     // Whenever possible (if we don't have an indexed color space), we convert
     // the data as 8-bit instead of 1-bit, so that it can be easier converted
@@ -31,7 +53,11 @@ pub(crate) fn decode(
     // white = 0, but PDF uses the opposite.
     let (decoded, bpc) = if image_params.is_indexed {
         let row_bytes = (image.width() as usize).div_ceil(8);
-        let mut packed = vec![0_u8; row_bytes * image.height() as usize];
+        // PdfCraft patch: checked and fallible, so a failed allocation is a decode error.
+        let len = row_bytes.checked_mul(image.height() as usize)?;
+        let mut packed = Vec::new();
+        packed.try_reserve_exact(len).ok()?;
+        packed.resize(len, 0_u8);
 
         struct BitWriterDecoder<'a> {
             writer: BitWriter<'a>,
@@ -77,7 +103,11 @@ pub(crate) fn decode(
             fn next_line(&mut self) {}
         }
 
-        let mut decoder = Luma8Decoder { output: Vec::new() };
+        let mut output = Vec::new();
+        output
+            .try_reserve_exact((image.width() as usize).checked_mul(image.height() as usize)?)
+            .ok()?;
+        let mut decoder = Luma8Decoder { output };
         image.decode(&mut decoder).ok()?;
 
         (decoder.output, 8)
@@ -93,4 +123,34 @@ pub(crate) fn decode(
             height: image.height(),
         }),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A page information segment declaring `width` x `height`, and nothing else.
+    fn page_information(width: u32, height: u32) -> Vec<u8> {
+        let mut out = Vec::new();
+        out.extend_from_slice(&0u32.to_be_bytes()); // segment number
+        out.push(48); // page information
+        out.push(0); // no referred-to segments
+        out.push(1); // page 1
+        out.extend_from_slice(&19u32.to_be_bytes());
+        out.extend_from_slice(&width.to_be_bytes());
+        out.extend_from_slice(&height.to_be_bytes());
+        out.extend_from_slice(&[0; 8]); // resolution
+        out.push(0); // flags
+        out.extend_from_slice(&[0; 2]); // striping
+        out
+    }
+
+    #[test]
+    fn an_oversized_embedded_page_is_refused_before_allocating() {
+        let data = page_information(65_535, 65_535);
+        for is_indexed in [false, true] {
+            let params = ImageDecodeParams { is_indexed, bpc: Some(1), num_components: Some(1), target_dimension: None, width: 1, height: 1 };
+            assert!(decode(&data, &Dict::empty(), &params).is_none());
+        }
+    }
 }

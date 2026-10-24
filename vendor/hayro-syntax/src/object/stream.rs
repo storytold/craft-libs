@@ -470,4 +470,21 @@ mod tests {
         let mut r = Reader::new(data);
         assert!(r.read_with_context::<Stream<'_>>(&ReaderContext::dummy()).is_none());
     }
+
+    /// PdfCraft patch (20): spaces or tabs between `stream` and its line break are skipped.
+    #[test]
+    fn stream_keyword_may_be_followed_by_spaces_before_the_line_break() {
+        for data in [
+            &b"<< /Length 10 >> stream \r\nabcdefghij\nendstream"[..],
+            &b"<< /Length 10 >> stream\t \nabcdefghij\nendstream"[..],
+            &b"<< /Length 999 >> stream \r\nabcdefghij\nendstream"[..],
+        ] {
+            let mut r = Reader::new(data);
+            let stream = r
+                .read_with_context::<Stream<'_>>(&ReaderContext::dummy())
+                .unwrap();
+
+            assert_eq!(stream.data, b"abcdefghij");
+        }
+    }
 }

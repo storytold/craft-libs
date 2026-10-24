@@ -66,6 +66,14 @@ pub struct Region {
     pub pixels: u32,
 }
 
+/// `len` copies of `value`; `None` when the memory can't be had.
+pub(crate) fn filled<T: Clone>(len: usize, value: T) -> Option<Vec<T>> {
+    let mut v = Vec::new();
+    v.try_reserve_exact(len).ok()?;
+    v.resize(len, value);
+    Some(v)
+}
+
 fn on(enabled: &[bool], index: usize) -> bool {
     enabled.get(index).copied().unwrap_or(true)
 }
@@ -75,12 +83,16 @@ fn percent(tint: u64) -> f32 {
 }
 
 impl Plates {
-    fn pixels(&self) -> usize {
-        (self.width as usize).saturating_mul(self.height as usize)
+    /// `width × height`; `None` when it overflows `usize`, as it can for hand-made plates.
+    pub(crate) fn pixels(&self) -> Option<usize> {
+        usize::try_from(self.width).ok()?.checked_mul(usize::try_from(self.height).ok()?)
     }
 
-    fn index_of(&self, x: u32, y: u32) -> Option<usize> {
-        (x < self.width && y < self.height).then(|| y as usize * self.width as usize + x as usize)
+    pub(crate) fn index_of(&self, x: u32, y: u32) -> Option<usize> {
+        if x >= self.width || y >= self.height {
+            return None;
+        }
+        usize::try_from(y).ok()?.checked_mul(usize::try_from(self.width).ok()?)?.checked_add(usize::try_from(x).ok()?)
     }
 
     fn enabled_planes<'a>(&'a self, enabled: &'a [bool]) -> impl Iterator<Item = &'a Vec<u8>> + 'a {
@@ -112,9 +124,9 @@ impl Plates {
     }
 
     /// The TAC of the enabled inks at every pixel, row-major, as a sum of tint bytes (255 per
-    /// ink at 100%).
+    /// ink at 100%). Empty when `width × height` overflows or can't be allocated.
     fn totals(&self, enabled: &[bool]) -> Vec<u32> {
-        let mut totals = vec![0_u32; self.pixels()];
+        let Some(mut totals) = self.pixels().and_then(|n| filled(n, 0_u32)) else { return Vec::new() };
         for plane in self.enabled_planes(enabled) {
             for (sum, tint) in totals.iter_mut().zip(plane) {
                 *sum = sum.saturating_add(u32::from(*tint));
@@ -130,7 +142,7 @@ impl Plates {
 
     /// Each ink's figures over the page, and the TAC of the enabled inks.
     pub fn stats(&self, enabled: &[bool]) -> Stats {
-        let n = self.pixels();
+        let n = self.pixels().unwrap_or(0);
         let mean = |sum: u64| if n == 0 { 0.0 } else { percent(sum) / n as f32 };
         let inks = self
             .planes

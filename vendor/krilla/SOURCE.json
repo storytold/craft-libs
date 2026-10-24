@@ -77,12 +77,12 @@
     {
       "path": "src/configure/PDF_A1.md",
       "upstream_sha256": "e6ea127125ec0984f3fcd57f9886fc960aa90c9f751dd59cd61fe9cbc2cdb903",
-      "sha256": "422807bc786591d1b1599d7abb38874478fb34afab583f885011f200d239fa27"
+      "sha256": "f647baeb6bd3152c688cefb71462ba05e969e0a9572c3f95779b2b18bf384220"
     },
     {
       "path": "src/configure/PDF_A2.md",
       "upstream_sha256": "47c87d3b29aff6e87703ba6f6021a2cfa88b4faf7f2c35101719b8b9f1bb9705",
-      "sha256": "cc6cc2184d21165fc36fbd635681a8c0c8d3abb76f0f7e5adbb7131fb3921f37"
+      "sha256": "af366de5b86fa3995bf08b1f71d9d901acbf2130560fcdb537cac75b1c65b599"
     },
     {
       "path": "src/configure/PDF_A3.md",
@@ -112,7 +112,7 @@
     {
       "path": "src/configure/validate.rs",
       "upstream_sha256": "7e2a0ac6d7ecaac1ed2158cdc9e94411c2499c98e541ffb471f2bb06d5069c33",
-      "sha256": "521290c6dda727233d4629b4c9175d28bd212bd956437a180ace3b3a529354aa"
+      "sha256": "65de778c777253d369917f002809672deac4f5f579200d8194778fc6c94d9ea9"
     },
     {
       "path": "src/configure/version.rs",
@@ -147,7 +147,7 @@
     {
       "path": "src/graphics/blend.rs",
       "upstream_sha256": "f2629743d9e2ea1440763231f3d4cc914224ca238d88fa0630b7c7e9628b58dd",
-      "sha256": "a6b85f891dd879f2159e0cf8d0e33e54a9153bcca22eb145b58f5a9fb2750cc6"
+      "sha256": "a3a014d76a379d378dd6893b3e41688ba2ebd358c1295ed0532a443a143fb5ab"
     },
     {
       "path": "src/graphics/color.rs",
@@ -177,12 +177,12 @@
     {
       "path": "src/graphics/image.rs",
       "upstream_sha256": "61324d6426ac79aa5322d0d33a95532934cd1e41797a9dad6302210a2b799d5d",
-      "sha256": "c72c9624744aff9c75ff9f08a85c533e9e10f84faeddff70642cab9e01d08cec"
+      "sha256": "d4f857d6fbf46bcc71ff392a5f6919380d57625128f751eabb8860d4ad3053ed"
     },
     {
       "path": "src/graphics/mask.rs",
       "upstream_sha256": "d1dbc7d4d28388ee43c43294bfcbeec79136a65ac2816bdaf19eac4b88669661",
-      "sha256": "12eac7d29154e441db1115de8e01147eef40d595351224ac552e252829afa161"
+      "sha256": "e8cbcd90dea39129a01ab136219b5d169906aecaa232333852f540e75233b29c"
     },
     {
       "path": "src/graphics/mod.rs",
@@ -217,7 +217,7 @@
     {
       "path": "src/graphics/xobject.rs",
       "upstream_sha256": "4f6db246a626d39367660e1b089bc83a828fe97ba6e69d5527bbede876ae4a66",
-      "sha256": "1c53b4fc2615308dcb18bcbe77a6cb5f2b446dd15805ee181d9971495988273b"
+      "sha256": "854386d221196f0361b07ef09b9cbbdc0749550a67b96a9711463f7988631ba2"
     },
     {
       "path": "src/interactive/action.rs",
@@ -312,7 +312,7 @@
     {
       "path": "src/serialize.rs",
       "upstream_sha256": "4f2c439dbd20006eea112e056b2f1a5ba98a1ede9227a45f66a6df46fb1a07e8",
-      "sha256": "7eef493011143f6b70f10e734e1269b2c27c3f24e69fd1b7804bdf5ee6ca3b50"
+      "sha256": "8e3c5bd288fa37df7ef1541db6b9793fd3a3d6d1bfd0dc617f5558b033e1be3e"
     },
     {
       "path": "src/stream.rs",

@@ -32,6 +32,25 @@ re-sync brings these PdfCraft changes:
 PdfCraft's vendored `vello_common` patch (clip-intersection performance) is not part of this
 reader snapshot.
 
+`hayro-cmap` 0.1.0 is transferred from [PdfCraft revision a2ec27b4775f53c40cad3456936d9406611e3a8d](https://github.com/storytold/pdfcraft/tree/a2ec27b4775f53c40cad3456936d9406611e3a8d/vendor/hayro-cmap)
+with its malformed-CMap patch (PdfCraft #3177): bad `bfchar` or `bfrange` entries, an
+unresolvable `usecmap` and an unparseable tail are skipped instead of discarding the whole
+CMap. Its tests `tests::bad_bfchar_entry_is_skipped` and `tests::unresolvable_usecmap_is_skipped`
+come with it. One local patch: a binary `usecmap` counts against the 16-level nesting limit
+as a text one does, so a self-referencing binary CMap stops instead of overflowing the stack.
+Consuming workspaces need a `hayro-cmap` patch entry beside the other Hayro entries.
+
+`hayro-postscript` 0.1.0 is the crates.io package (upstream revision
+a2354aebaf86f5ab13e5fd6b6b0521306488bf9d), the PostScript token scanner `hayro-cmap` uses
+to parse the CMap streams PDFs embed. One local patch: the scanner, which does not parse
+dictionaries yet, skips runs of `<<` and `>>` in a loop and returns the next object, instead
+of recursing once per delimiter, so a long run of `<` or `>` bytes no longer overflows the
+stack. Tests: `object::tests::long_open_dict_run_does_not_overflow`,
+`object::tests::long_close_dict_run_does_not_overflow`, `object::tests::dict_delimiters_are_skipped`
+and `object::tests::nested_dict_delimiters_are_skipped`. Its `SOURCE.json` records the
+registry hashes. Consuming workspaces need a `hayro-postscript` patch entry beside the other
+Hayro entries.
+
 Changes ported from PdfCraft pull requests that were open when they were ported, under the
 same MIT OR Apache-2.0 license. Code comments keep the pull request's patch numbers, except
 where noted below.
@@ -101,6 +120,61 @@ and rejects a larger claim as an invalid count before any retention-flag or
 referred-to-number bytes are consumed, so a crafted header cannot turn
 `Vec::with_capacity` into a multi-gigabyte reservation that aborts on allocation
 failure.
+
+Hostile-input bounds (CodeRabbit findings):
+
+- An xref-stream subsection must be backed by its decoded bytes: all-zero `/W` widths
+  are refused, and a declared count longer than the data is refused before any entry is
+  inserted, so a tiny stream cannot declare billions of entries.
+- Each object stream's `/N` header pairs are parsed once per document and cached beside its
+  decoded data, instead of on every compressed-object lookup.
+- An embedded JBIG2 page over 2^28 pixels is refused before the output buffer is allocated,
+  and that buffer is reserved fallibly (`Bitmap::reinitialize` allocates before touching the
+  existing bitmap, so a failed reservation leaves it intact). A `JBIG2Globals` stream with an image filter is
+  ignored, so globals cannot recurse through further globals.
+- At most 4096 graphics states, holding at most 64 MiB together, are saved; a `q` past
+  either limit is counted but not copied, and its `Q` still removes the clips added since.
+- An xref-stream `/W` type field wider than one byte is read at its full width (big-endian)
+  instead of only its first byte, and `/W[0]` over 8 bytes is refused like `/W[1]`.
+  A dash array over 256 entries strokes solid.
+- An xref-stream subsection running past object number `i32::MAX` is refused instead of
+  overflowing or turning negative.
+- A CID font's `/W2` run that starts past CID 65535 is skipped as in `/W`, instead of
+  overflowing and discarding the whole table.
+- CCITT images: `ccitt_size_ok` (inherited PdfCraft ledger item 2) allows at most 2^20
+  columns and 2^28 pixels (columns × rows) before the decoder allocates. A `/Columns` past
+  `u32::MAX` is refused rather than wrapped to a small width. `/Rows` follows PdfCraft (17)
+  and (19): `/Rows 0` or a value below `/Height` decodes to the image height, and decoding
+  still stops where the data ends.
+
+Reader limits from the [PdfCraft revision a2ec27b4775f53c40cad3456936d9406611e3a8d ledger](https://github.com/storytold/pdfcraft/blob/a2ec27b4775f53c40cad3456936d9406611e3a8d/vendor/README.md),
+by its item ids: hayro-interpret (31) comes with the ec0a965 re-sync (patches 31–33 above):
+its flat sample array computes the largest 32-bit Type 0 sample in 64 bits instead of
+overflowing `2_u32.pow(32)`. hayro-syntax (7), (22) and (25) are covered by the local bounds
+above: ASCII85 output stops at the decode limit, object-stream indexes are parsed once with
+checked offsets, and direct objects nest at most 64 levels, stricter than PdfCraft's 128. Test:
+`function::type0::tests::thirty_two_bit_samples_do_not_overflow`.
+
+Fixes from the same [PdfCraft revision a2ec27b4775f53c40cad3456936d9406611e3a8d ledger](https://github.com/storytold/pdfcraft/blob/a2ec27b4775f53c40cad3456936d9406611e3a8d/vendor/README.md),
+by its item ids, each marked `PdfCraft patch` in the source. The ec0a965 re-sync brings
+hayro-syntax (17) and (19), CCITT `/Rows 0` or fewer `/Rows` than `/Height` decode to the
+image height; (20), spaces or tabs between `stream` and its line break; the `base_dimensions`
+one-point floor after `/UserUnit`; and in hayro-interpret (30), the Annex D.2 alias codes
+(WinAnsi 0xA0 and 0xAD, MacRoman 0xCA) read as an ordinary space and hyphen unless
+`/Differences` names them, and (P2), a Type 3 glyph's `/FontBBox` is taken to device space
+before it bounds the glyph's clip and shadings. Ported from the ledger on top of it: in
+hayro-syntax, the `EI` extension of (4), `EI` followed by a delimiter ends an inline image;
+(23), bytes above 0x7F after an `EI` candidate don't reject it; the unledgered #3565 fix, a
+doubled sign (`--280`) is one number in both read and skip, beside the local zero-tolerance
+sign tokens; in hayro-interpret, (44), a `/ToUnicode /Identity-H` or `/Identity-V` name reads
+two-byte codes as Unicode; (P6), glyph names outside the Adobe Glyph List (`f_i`,
+`hyphen.case`, `uniXXXXXXXX`) read by the glyph list specification's full mapping; (P8), a
+substitute without a spacing character draws its ordinary space; and the extension of (26),
+comma-below letters (ș ț ķ ļ ņ ŗ Ģ) in the standard-font stand-ins are built from the font's
+comma. The unit tests of all these items come with them; the CCITT, Type 3 and comma-below
+raster tests are adapted in `tests/upstream_raster.rs` and the text contracts in
+`tests/upstream_text.rs`. (P8)'s PdfCraft test needs a Japanese substitute font and is not
+ported.
 
 This remains the patched 0.7 backend. It retains the existing Bradford Lab conversion,
 floating component precision and codec versions, rather than claiming full 0.8

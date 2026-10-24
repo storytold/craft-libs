@@ -13,6 +13,8 @@ pub enum BitError {
     Eof,
     /// An Exp-Golomb code longer than 32 leading zeros.
     InvalidExpGolomb,
+    /// An AVCC/HVCC NAL length prefix width outside 1 to 4 bytes.
+    InvalidNalLengthSize,
 }
 
 impl fmt::Display for BitError {
@@ -20,6 +22,7 @@ impl fmt::Display for BitError {
         match self {
             BitError::Eof => f.write_str("unexpected end of bitstream"),
             BitError::InvalidExpGolomb => f.write_str("invalid Exp-Golomb code"),
+            BitError::InvalidNalLengthSize => f.write_str("NAL length prefix must be 1 to 4 bytes"),
         }
     }
 }
@@ -33,11 +36,15 @@ pub struct BitReader<'a> {
     data: &'a [u8],
     /// Position in bits.
     pos: usize,
+    /// Bit position of the last set bit (the `rbsp_stop_one_bit`), found once so that
+    /// [`Self::more_rbsp_data`] does not rescan a long zero suffix on every call.
+    rbsp_stop: Option<usize>,
 }
 
 impl<'a> BitReader<'a> {
     pub fn new(data: &'a [u8]) -> Self {
-        Self { data, pos: 0 }
+        let rbsp_stop = data.iter().rposition(|&b| b != 0).map(|i| i.saturating_mul(8).saturating_add(7 - data[i].trailing_zeros() as usize));
+        Self { data, pos: 0, rbsp_stop }
     }
     pub fn data(&self) -> &'a [u8] {
         self.data
@@ -167,22 +174,7 @@ impl<'a> BitReader<'a> {
 
     /// H.264/HEVC `more_rbsp_data()`: true if there is data before the rbsp trailing bits.
     pub fn more_rbsp_data(&self) -> bool {
-        let total = self.data.len().saturating_mul(8);
-        if self.pos >= total {
-            return false;
-        }
-        // find last set bit (the rbsp_stop_one_bit)
-        let mut last = None;
-        for (i, &b) in self.data.iter().enumerate().rev() {
-            if b != 0 {
-                last = Some(i.saturating_mul(8).saturating_add(7 - b.trailing_zeros() as usize));
-                break;
-            }
-        }
-        match last {
-            Some(stop) => self.pos < stop,
-            None => false,
-        }
+        self.rbsp_stop.is_some_and(|stop| self.pos < stop)
     }
 }
 
@@ -335,15 +327,16 @@ pub fn annexb_nals(data: &[u8]) -> Vec<&[u8]> {
     out
 }
 
-/// Split a length-prefixed sample (AVCC/HVCC, `length_size` 1/2/4 bytes) into NAL units.
-/// A zero `length_size` cannot split non-empty data and returns [`BitError::Eof`].
+/// Split a length-prefixed sample (AVCC/HVCC, `length_size` 1 to 4 bytes) into NAL units.
+/// Any other `length_size` returns [`BitError::InvalidNalLengthSize`], even for empty data.
 pub fn length_prefixed_nals(data: &[u8], length_size: usize) -> Result<Vec<&[u8]>> {
+    if !(1..=4).contains(&length_size) {
+        return Err(BitError::InvalidNalLengthSize);
+    }
     let mut out = Vec::new();
     let mut i = 0;
     while i < data.len() {
-        // Compare against the remaining length so a hostile prefix cannot overflow `usize`
-        // (32-bit on wasm).
-        if length_size == 0 || length_size > data.len() - i {
+        if length_size > data.len() - i {
             return Err(BitError::Eof);
         }
         let mut len = 0usize;
@@ -473,6 +466,19 @@ mod tests {
     }
 
     #[test]
+    fn more_rbsp_data_finds_the_stop_bit_before_a_zero_suffix() {
+        let mut d = vec![0b1010_0000];
+        d.resize(1 << 16, 0);
+        let mut r = BitReader::new(&d);
+        assert_eq!(r.rbsp_stop, Some(2));
+        assert!(r.more_rbsp_data());
+        r.skip(2).unwrap();
+        assert!(!r.more_rbsp_data());
+        assert_eq!(BitReader::new(&[0; 4]).rbsp_stop, None);
+        assert!(!BitReader::new(&[0; 4]).more_rbsp_data());
+    }
+
+    #[test]
     fn crc() {
         assert_eq!(crc32(b"123456789"), 0xCBF4_3926);
     }
@@ -490,13 +496,15 @@ mod tests {
     }
 
     #[test]
-    fn length_prefixed_rejects_zero_width_and_oversized_length() {
-        assert_eq!(length_prefixed_nals(&[], 0).unwrap(), Vec::<&[u8]>::new());
-        assert_eq!(length_prefixed_nals(&[1, 2, 3], 0), Err(BitError::Eof));
+    fn length_prefixed_rejects_invalid_width_and_oversized_length() {
+        for size in [0, 5, 8, usize::MAX] {
+            assert_eq!(length_prefixed_nals(&[], size), Err(BitError::InvalidNalLengthSize), "size {size}");
+            assert_eq!(length_prefixed_nals(&[0; 16], size), Err(BitError::InvalidNalLengthSize), "size {size}");
+        }
+        // `(lengthSizeMinusOne & 3) + 1` can be 3; such samples still split.
         assert_eq!(length_prefixed_nals(&[0, 0, 1, 7], 3).unwrap(), vec![&[7u8][..]]);
         assert_eq!(length_prefixed_nals(&[0xFF, 0xFF, 0xFF, 0xFF, 1], 4), Err(BitError::Eof));
         assert_eq!(length_prefixed_nals(&[0, 0, 0, 1, 9], 4).unwrap(), vec![&[9u8][..]]);
-        assert_eq!(length_prefixed_nals(&[0, 1], usize::MAX), Err(BitError::Eof));
     }
 
     #[test]
