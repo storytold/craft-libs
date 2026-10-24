@@ -113,6 +113,7 @@ impl Default for ReadOptions {
 
 /// What [`read_page`] read, converted or left out.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct ReadReport {
     /// How process color that isn't CMYK became CMYK.
     pub conversion: Conversion,
@@ -146,6 +147,7 @@ pub struct ReadReport {
 }
 
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum ReadError {
     #[error(transparent)]
     Open(#[from] OpenError),
