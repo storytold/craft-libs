@@ -11,11 +11,15 @@
 //! and WinRT calls, so there is no `unsafe` here.
 
 use std::io::Write as _;
+use std::os::windows::process::CommandExt as _;
+use std::path::{Path, PathBuf};
+use std::sync::mpsc::SyncSender;
 
 use winprint::printer::{PrinterDevice, WinPdfPrinter};
 use winprint::ticket::document::{NS_PSK, OwnedName, PrintFeature, PrintTicketDocument, reader::ParsableXmlDocument as _};
 use winprint::ticket::{FeatureOptionPack as _, PageMediaSize, PrintCapabilities, PrintTicket, PrintTicketBuilder};
 
+use crate::postscript;
 use crate::sheets::{self, Fit, SAME};
 use crate::ticket::{self, Paper};
 use crate::{Error, Job, Printer, Scaling};
@@ -118,6 +122,58 @@ fn imageable_margin(device: &PrinterDevice, ticket: &PrintTicket) -> f64 {
         .map_or(0.0, ticket::points)
 }
 
+/// Ghostscript's console program: `CRAFT_PRINT_GHOSTSCRIPT`, else the newest under
+/// `%ProgramFiles%\gs`, where its installer puts it.
+fn ghostscript() -> Option<PathBuf> {
+    if let Some(program) = std::env::var_os("CRAFT_PRINT_GHOSTSCRIPT") {
+        return Some(program.into());
+    }
+    let root = std::env::var_os("ProgramFiles")?;
+    let folders = std::fs::read_dir(Path::new(&root).join("gs")).ok()?.filter_map(|e| e.ok().map(|e| e.path()));
+    postscript::newest_ghostscript(folders).filter(|p| p.is_file())
+}
+
+/// The PostScript route ([`postscript`]) for the job file at `pdf`, every sheet `sheet` points
+/// as printed: `None` when it doesn't apply — no Ghostscript, a driver that doesn't take
+/// PostScript, settings that don't convert, or Ghostscript failing — and the job goes to XPS.
+/// The driver gets the validated ticket's settings as its DEVMODE and makes the copies.
+fn postscript_job(
+    device: &PrinterDevice,
+    ticket: &PrintTicket,
+    job: &Job,
+    pdf: &Path,
+    sheet: (f64, f64),
+    count: usize,
+    sender: &SyncSender<(usize, usize)>,
+) -> Option<Result<(), Error>> {
+    use crate::rgb::{DevMode, PostScriptJob, PostScriptSheet, page, postscript_passthrough, print_postscript};
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let program = ghostscript()?;
+    let settings = DevMode::from_bytes(postscript::devmode(ticket.to_dev_mode(device).ok()?)).ok()?;
+    if !postscript_passthrough(device.name(), Some(&settings)).ok()? {
+        return None;
+    }
+    let dir = pdf.parent()?;
+    let converted = std::process::Command::new(&program)
+        .args(postscript::ghostscript_args(pdf, &dir.join("sheet-%d.eps"), job.grayscale))
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+        .ok()?;
+    if !converted.status.success() {
+        return None;
+    }
+    let eps: Vec<Vec<u8>> = (1..=count).map(|i| std::fs::read(dir.join(format!("sheet-{i}.eps")))).collect::<Result<_, _>>().ok()?;
+    let rect = postscript::sheet_box(page(device.name(), Some(&settings)).ok()?.paper, sheet);
+    let sheets: Vec<PostScriptSheet<'_>> = eps.iter().map(|eps| PostScriptSheet { eps, size: sheet, rect }).collect();
+    let target = PostScriptJob { printer: device.name(), settings: Some(&settings), title: &job.title, output_file: None };
+    Some(
+        print_postscript(&target, &sheets, &mut |done| {
+            let _ = sender.send((done, count));
+        })
+        .map_err(spool_error),
+    )
+}
+
 /// Spool a print-ready PDF. The sheets are read first ([`sheets::read`]); everything that talks
 /// to the driver runs on a thread of its own, so WinRT and COM get an apartment of their own
 /// whoever calls. Windows.Data.Pdf reads from a path, so the job goes to a file in a private
@@ -157,6 +213,9 @@ pub(crate) fn submit_with_progress(pdf: &[u8], job: &Job, progress: &mut dyn FnM
         let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(&path).map_err(written)?;
         file.write_all(updated.as_deref().unwrap_or(pdf)).map_err(written)?;
         drop(file);
+        if let Some(printed) = postscript_job(&device, &ticket, job, &path, paper, count, &sender) {
+            return printed;
+        }
         WinPdfPrinter::new(device)
             .print_with_progress(&path, ticket, |processed, total| {
                 // Page acceptance is distinct from terminal job success. The callback

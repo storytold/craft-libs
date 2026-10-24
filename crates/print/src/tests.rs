@@ -324,3 +324,47 @@ fn queue_duplex_defaults_and_explicit_scaling_reach_the_spooler() {
     assert!(shrink.iter().any(|a| a == "print-scaling=auto-fit"));
     assert!(!shrink.iter().any(|a| a.starts_with("fit-to-page=")));
 }
+
+#[test]
+fn the_newest_ghostscript_is_chosen_by_version() {
+    use std::path::PathBuf;
+    let root = PathBuf::from("C:/Program Files/gs");
+    let found = crate::postscript::newest_ghostscript(["gs9.56.1", "gs10.01.2", "gs10.4.0", "fonts", "gsview"].map(|n| root.join(n)));
+    assert_eq!(found, Some(root.join("gs10.4.0").join("bin").join("gswin64c.exe")));
+    assert_eq!(crate::postscript::newest_ghostscript([root.join("fonts")]), None);
+}
+
+#[test]
+fn ghostscript_writes_one_eps_per_sheet_in_the_documents_colours() {
+    use std::path::Path;
+    let colour = crate::postscript::ghostscript_args(Path::new("job.pdf"), Path::new("dir/sheet-%d.eps"), false);
+    let colour: Vec<_> = colour.iter().map(|a| a.to_string_lossy().into_owned()).collect();
+    assert!(colour.contains(&"-sDEVICE=eps2write".to_string()), "{colour:?}");
+    assert!(colour.contains(&"-dSAFER".to_string()), "{colour:?}");
+    assert!(!colour.iter().any(|a| a.contains("ColorConversionStrategy")), "colours stay as in the document: {colour:?}");
+    assert_eq!(colour[colour.len() - 2..], ["-sOutputFile=dir/sheet-%d.eps".to_string(), "job.pdf".to_string()]);
+    let grey = crate::postscript::ghostscript_args(Path::new("job.pdf"), Path::new("dir/sheet-%d.eps"), true);
+    assert!(grey.iter().any(|a| a == "-sColorConversionStrategy=Gray"), "{grey:?}");
+}
+
+#[test]
+fn a_postscript_sheet_is_centred_at_full_size_and_shrunk_only_for_smaller_paper() {
+    let a4 = (595.0, 842.0);
+    assert_eq!(crate::postscript::sheet_box(a4, a4), (0.0, 0.0, 595.0, 842.0));
+    // The driver's A4 a fraction of a point larger: the sheet stays at 100%, centred.
+    let (x, y, w, h) = crate::postscript::sheet_box((595.3, 842.4), a4);
+    assert!((x - 0.15).abs() < 1e-9 && (y - 0.2).abs() < 1e-9 && (w, h) == a4, "{x} {y} {w} {h}");
+    // A5 paper for an A4 sheet: shrunk to fit, centred.
+    let (x, y, w, h) = crate::postscript::sheet_box((420.0, 595.0), a4);
+    assert!((w - 420.0).abs() < 1e-9 && (h - 842.0 * 420.0 / 595.0).abs() < 1e-9 && x == 0.0 && y > 0.0);
+}
+
+#[test]
+fn a_converted_devmode_is_cut_to_its_own_length() {
+    // dmSize 220 and dmDriverExtra 1200 in the header; the conversion's buffer is longer.
+    let mut bytes = vec![0u8; 33_424];
+    bytes[68..70].copy_from_slice(&220u16.to_le_bytes());
+    bytes[70..72].copy_from_slice(&1200u16.to_le_bytes());
+    assert_eq!(crate::postscript::devmode(bytes).len(), 1420);
+    assert_eq!(crate::postscript::devmode(vec![0u8; 10]).len(), 10, "too short to read: left for the DEVMODE check to refuse");
+}

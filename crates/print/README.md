@@ -25,6 +25,14 @@ opens Windows printer preferences and submits jobs with copies, collation, duple
   sent. Paper is the driver's own option for the sheet's size (to 0.25 mm), preferring the one
   named like the standard size ("ARCH D" over a custom 24 × 36 in entry). This backend comes
   from storytold/pdfcraft#599 and #1132.
+  A Direct2D/XPS page is RGB, so a PostScript driver turns a document's CMYK into RGB and back
+  and it prints paler than from programs that send PostScript (Acrobat). When Ghostscript is
+  installed (`%ProgramFiles%\gs`, or `CRAFT_PRINT_GHOSTSCRIPT`) and the driver takes
+  `POSTSCRIPT_PASSTHROUGH`, each sheet is converted to EPS (`eps2write`: CMYK, spot colours and
+  overprint as in the document; grey for a greyscale job) and passed through the driver with
+  the validated ticket's settings as its DEVMODE (`craft-winprint-gdi`). That is the only
+  program started; without Ghostscript, with another driver, or if it fails, the job takes the
+  XPS route.
   A job has one ticket, so one paper and orientation. Sheets of the other orientation are
   turned back with `/Rotate`, so portrait and landscape sheets still print as one job. Exact
   size refuses sheets of different sizes and paper the driver lacks. Shrink-to-fit uses the

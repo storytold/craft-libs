@@ -3,11 +3,15 @@
 //! `lp` with the job options (copies, collation, duplex, colour). On Windows the printers come
 //! from the spooler and jobs are drawn by the in-box `Windows.Data.Pdf` into the XPS print API
 //! with the options as a PrintTicket, all in this process (`windows.rs`): no PowerShell or other
-//! program is started, so printing works where scripts are locked down. Other platforms report
+//! program is started, so printing works where scripts are locked down — except an installed
+//! Ghostscript, which turns the sheets into PostScript for a PostScript driver so their colours
+//! print as they are (`postscript.rs`). Other platforms report
 //! that printing isn't available yet; the print-ready PDF can still be saved.
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+#[cfg(any(test, windows))]
+mod postscript;
 #[cfg(any(test, windows))]
 mod progress;
 #[cfg(any(test, windows))]
