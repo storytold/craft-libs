@@ -41,6 +41,7 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   lookup with fallback (`pt-br` → `pt` → English), plurals, language names, the system locale and
   a pseudo locale. The catalogs stay a fully optional build input; apps keep `tl!` and their
   language setting.
+- [`craft-job`](crates/job/README.md): the small vocabulary printing and scanning share: `NativeCode`, `<backend>:<native>` job and device ids, and retry safety with one retry-advice function. No lifecycle, tracking or I/O.
 - [`craft-media`](crates/media/README.md): bit-level I/O (`bitstream`), clean-room MP4/MOV
   (`isobmff`) and Matroska/WebM (`matroska`) demuxers and muxers, from FilmCraft, and an ISO BMFF
   box reader. Containers only; codecs stay in each app.
@@ -49,6 +50,15 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
 
 - [`craft-quit`](crates/quit/src/lib.rs): native macOS quit, egui close handling and an optional
   app menu. Unsaved-document decisions and save prompts stay in each app.
+
+- [`craft-scan`](crates/scan/README.md): scanner settings, a neutral error contract, feeder status
+  (possibly unknown), the BMP parser and 1-bit conversion and the acquire
+  contract, with a `Backend` trait and a registry the app plugs several backends into (WIA, SANE,
+  eSCL, ...), and a `ScanJob` that records one scan across its attempts (pages kept, continue or
+  start over, `craft-job` views). No platform code, no unsafe, no network.
+- [`craft-devices`](crates/devices/README.md): device tools the apps mount instead of copying: the scan job journal
+  beside the pages and its views, with piles larger than the feeder and manual duplex as one job. No UI, no
+  platform code.
 
 - [`craft-settings`](crates/settings/README.md): `config.toml` settings storage for every app: platform folders, portable mode and overrides, atomic saves while running, backup, damaged-file recovery and schema migrations. Policy in [docs/settings-storage.md](docs/settings-storage.md).
 - [`craft-ui`](crates/ui/README.md): SVG catalogs, icon buttons, tabs, pane controls, transactional docking, print settings and theme helpers for egui frontends;
