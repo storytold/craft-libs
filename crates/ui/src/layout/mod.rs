@@ -5,10 +5,12 @@
 //! that application state.
 
 mod geometry;
+mod inset;
 mod resize;
 mod toolbar;
 
 pub use geometry::{SplitAxis, SplitLayout, SplitSize, split_rect};
+pub use inset::ContentInset;
 pub(crate) use resize::drag_focus;
 pub use resize::{ResizeHandle, ResizeHandleStyle, ResizeResponse};
 pub use toolbar::{ToolbarFit, fit_toolbar};
