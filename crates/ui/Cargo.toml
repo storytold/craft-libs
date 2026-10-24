@@ -31,9 +31,9 @@ testing = []
 [dev-dependencies]
 egui = { workspace = true, features = ["default_fonts"] }
 serde_json = "1"
-egui_extras = { version = "0.36", default-features = false, features = ["svg"] }
-egui_kittest = { version = "0.36", features = ["wgpu"] }
-eframe = { version = "0.36", default-features = false, features = ["wgpu", "x11", "default_fonts"] }
+egui_extras = { version = "0.37", default-features = false, features = ["svg"] }
+egui_kittest = { version = "0.37", features = ["wgpu"] }
+eframe = { version = "0.37", default-features = false, features = ["wgpu", "x11", "default_fonts"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
 
 [[example]]
