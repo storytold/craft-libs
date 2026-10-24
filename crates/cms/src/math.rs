@@ -234,10 +234,19 @@ mod tests {
 
     #[test]
     fn delta_e2000_matches_sharma_reference_pairs() {
-        // Sharma, Wu & Dalal (2005), test data pairs 1, 7, 17, 25 and 34.
+        // Sharma, Wu & Dalal (2005), pairs 1, 7, 9–17, 25 and 29, including hue-wrap boundaries.
+        // https://hajim.rochester.edu/ece/sites/gsharma/ciede2000/dataNprograms/ciede2000testdata.txt
         let pairs = [
             ([50.0, 2.6772, -79.7751], [50.0, 0.0, -82.7485], 2.0425),
             ([50.0, 0.0, 0.0], [50.0, -1.0, 2.0], 2.3669),
+            ([50.0, 2.49, -0.001], [50.0, -2.49, 0.0009], 7.1792),
+            ([50.0, 2.49, -0.001], [50.0, -2.49, 0.001], 7.1792),
+            ([50.0, 2.49, -0.001], [50.0, -2.49, 0.0011], 7.2195),
+            ([50.0, 2.49, -0.001], [50.0, -2.49, 0.0012], 7.2195),
+            ([50.0, -0.001, 2.49], [50.0, 0.0009, -2.49], 4.8045),
+            ([50.0, -0.001, 2.49], [50.0, 0.001, -2.49], 4.8045),
+            ([50.0, -0.001, 2.49], [50.0, 0.0011, -2.49], 4.7461),
+            ([50.0, 2.5, 0.0], [50.0, 0.0, -2.5], 4.3065),
             ([50.0, 2.5, 0.0], [73.0, 25.0, -18.0], 27.1492),
             ([60.2574, -34.0099, 36.2677], [60.4626, -34.1751, 39.4387], 1.2644),
             ([22.7233, 20.0904, -46.6940], [23.0331, 14.9730, -42.5619], 2.0373),
@@ -245,6 +254,26 @@ mod tests {
         for (a, b, want) in pairs {
             assert!((delta_e2000(a, b) - want).abs() < 1e-4, "{a:?} {b:?}: {}", delta_e2000(a, b));
             assert!((delta_e2000(b, a) - want).abs() < 1e-4);
+        }
+    }
+
+    #[test]
+    fn delta_e2000_is_finite_symmetric_and_zero_for_identical_lab() {
+        let mut colours = Vec::new();
+        for l in [0.0, 50.0, 100.0] {
+            for a in [-128.0, 0.0, 127.0] {
+                for b in [-128.0, 0.0, 127.0] {
+                    colours.push([l, a, b]);
+                }
+            }
+        }
+        for &a in &colours {
+            assert_eq!(delta_e2000(a, a), 0.0);
+            for &b in &colours {
+                let d = delta_e2000(a, b);
+                assert!(d.is_finite() && d >= 0.0, "{a:?} {b:?}: {d}");
+                assert!((d - delta_e2000(b, a)).abs() < 1e-12);
+            }
         }
     }
 
