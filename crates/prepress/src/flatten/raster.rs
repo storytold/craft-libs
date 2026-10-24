@@ -246,31 +246,35 @@ impl<'a> Rasterizer<'a> {
         let (w, h) = (grid.width() as usize, grid.height() as usize);
         let mut planes: Vec<Option<Vec<u8>>> = vec![None; self.list.inks.len()];
         let dpi = (grid.scale * 72.0) as f32;
+        // The renderer makes a page at least 1 pt on a side: thinner tiles are rendered at that
+        // size and cropped.
+        let min = grid.scale.ceil() as i64;
         let mut ty = 0;
         while ty < grid.height() {
             let th = TILE.min(grid.height() - ty);
             let mut tx = 0;
             while tx < grid.width() {
                 let tw = TILE.min(grid.width() - tx);
+                let (rw, rh) = (tw.max(min), th.max(min));
                 // A quarter pixel more than the tile: the renderer floors the page size.
                 let (x0, y0) = grid.point(grid.x0 + tx, grid.y0 + ty);
                 let extra = 0.25 / grid.scale;
-                let tile = Rect::new(x0, y0, x0 + tw as f64 / grid.scale + extra, y0 + th as f64 / grid.scale + extra);
+                let tile = Rect::new(x0, y0, x0 + rw as f64 / grid.scale + extra, y0 + rh as f64 / grid.scale + extra);
                 let sub = DisplayList { page: tile, inks: self.list.inks.clone(), items: items.to_vec() };
                 let pdf = page_pdf(&sub, self.settings.clone(), self.cms)?;
                 let p = plates(&pdf, 0, dpi, &Options { overprint, fallback: self.printing.clone() })
                     .map_err(|e| WriteError::Region(format!("separating a complex region: {e}")))?;
-                if (p.width as i64, p.height as i64) != (tw, th) {
-                    return Err(WriteError::Region(format!("a tile of {tw} × {th} px separated at {} × {} px", p.width, p.height)));
+                if (p.width as i64, p.height as i64) != (rw, rh) {
+                    return Err(WriteError::Region(format!("a tile of {rw} × {rh} px separated at {} × {} px", p.width, p.height)));
                 }
                 for (pid, ink) in p.inks.iter() {
                     let Some(film) = p.plane(pid).filter(|f| f.iter().any(|v| *v > 0)) else { continue };
                     let id = self.list.inks.lookup(ink.name()).ok_or_else(|| WriteError::Region(format!("ink {} is not in the list", ink.name())))?;
                     let Some(plane) = planes.get_mut(id.index()) else { continue };
                     let plane = plane.get_or_insert_with(|| vec![0; w * h]);
-                    for (row, src) in film.chunks_exact(tw as usize).enumerate() {
+                    for (row, src) in film.chunks_exact(rw as usize).take(th as usize).enumerate() {
                         let at = (ty as usize + row) * w + tx as usize;
-                        if let Some(dst) = plane.get_mut(at..at + tw as usize) {
+                        if let (Some(dst), Some(src)) = (plane.get_mut(at..at + tw as usize), src.get(..tw as usize)) {
                             dst.copy_from_slice(src);
                         }
                     }

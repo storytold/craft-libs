@@ -347,3 +347,23 @@ fn a_degenerate_group_is_an_opaque_image_over_paper() {
 fn kurbo_circle(c: Point, r: f64) -> BezPath {
     craft_prepress::flatten::kurbo::Circle::new(c, r).to_path(0.01)
 }
+
+#[test]
+fn regions_thinner_than_a_point_rasterize() {
+    // At 300 dpi the hairline region is a tile of 3 px, 0.72 pt; the strip's last tile is 3 px
+    // wide.
+    let list = DisplayList {
+        page: Rect::new(0.0, 0.0, 400.0, 40.0),
+        inks: InkSet::new(),
+        items: vec![group(0.5, BlendMode::Normal, vec![solid(Rect::new(10.0, 10.0, 390.0, 30.0), &[(K, 1.0)])])],
+    };
+    let region = |r: Rect| ComplexRegion { path: r.to_path(0.1), items: vec![0], at: 0, whole: None };
+    let flat = Flattened {
+        items: Vec::new(),
+        complex: vec![region(Rect::new(20.0, 20.0, 20.1, 25.0)), region(Rect::new(10.0, 10.0, 378.71, 15.0))],
+        report: Default::default(),
+    };
+    let p = separate(&write(&list, &flat, 300.0), 300.0);
+    assert!(tint(&p, "Black", 20.05, 22.0) > 0, "the hairline prints");
+    assert!(tint(&p, "Black", 378.4, 12.0).abs_diff(128) <= 3, "the last tile prints");
+}
