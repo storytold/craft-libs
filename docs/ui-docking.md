@@ -408,6 +408,20 @@ that is not floatable, stays in-window. Floating windows get no taskbar or Alt-T
   `Paste` without the key). The app feeds them to the shortcut handling it runs on the main
   window. A window where any widget has keyboard focus forwards nothing, and an Escape that
   cancels a drag is not forwarded.
+- **Input hook.** eframe runs `App::raw_input_hook` for the main window only. An app that
+  rewrites input there (say, Ctrl+click to a secondary click on macOS, or blocking input
+  during automation) passes the same rewrite to `DockArea::native_input_hook` every frame, and
+  the dock area runs it on each native window's `RawInput` (`viewport_id` names the window; see
+  `DockArea::window_viewport`). It runs as an egui `Plugin::input_hook`, before egui reads the
+  input, so widgets see rewritten pointer and key events as if the window system had sent them.
+  It runs once per pass, so a frame that egui runs twice calls it a second time with the
+  events already taken. The hook must be `Send + 'static`, as egui plugins are.
+- **Dropped files.** Files dragged over or dropped on a native window come back in
+  `DockOutput::window_files`, one `WindowFiles` per window that had any this frame: the
+  window's id and viewport, the panel whose body is under the pointer (else the window's
+  shown panel, since the window system may send no pointer moves during a file drag), the
+  pointer's last position in the window, and the window's `hovered_files` and
+  `dropped_files`. Files on the main window stay in its own `RawInput`.
 - **Drags.** Tabs, groups and whole windows drag between the app's OS windows.
   - *Ownership.* The window where the button went down owns the drag: the window system sends it
     the pointer's moves and the release while the button is held, inside the window or not. So
@@ -451,8 +465,8 @@ that is not floatable, stays in-window. Floating windows get no taskbar or Alt-T
     compositor, which never docks it.
 
 On the web and wherever egui embeds viewports, nothing changes: floating windows stay in the
-page at their in-window rect, `native` and the monitor fields are kept but unused, and
-`forwarded_events` stays empty. Without the feature, the fields exist and are never set by the
+page at their in-window rect, `native` and the monitor fields are kept but unused, the input
+hook never runs, and `forwarded_events` and `window_files` stay empty. Without the feature, the fields exist and are never set by the
 renderer.
 
 ## Labels
@@ -499,7 +513,9 @@ OS windows: the main window's content sits at `origin` on the desktop, and each 
 runs its own frame with its own input and desktop rect (`host()`, `window_step`,
 `window_click`). `NativeHost` can report a monitor size (`monitor_size`), give windows a frame
 between their outer position and content (`frame`), land `OuterPosition` a frame late (`lag`),
-and report no positions (`no_position`, as on Wayland).
+and report no positions (`no_position`, as on Wayland). A `HostWindow` takes files dragged
+over it (`hovered_files`) or dropped on it (`dropped_files`), and `with_native_input_hook`
+passes a hook to `DockArea::native_input_hook` every frame.
 
 `crates/ui/examples/docking_native.rs` (`cargo run -p craft-ui --example docking_native
 --features native-windows`) shows a dock with two native floating windows and prints every

@@ -23,6 +23,8 @@ struct Content {
     focus_text: bool,
     /// The panel with a button that takes focus.
     focused_button: Option<u32>,
+    /// Pointer buttons pressed in each panel's body.
+    pressed: Vec<(u32, PointerButton)>,
 }
 
 impl DockContent<u32> for Content {
@@ -36,6 +38,10 @@ impl DockContent<u32> for Content {
         }
         if self.focused_button == Some(*panel) {
             ui.button("OK").request_focus();
+        }
+        if ui.rect_contains_pointer(ui.max_rect()) {
+            let pressed = [PointerButton::Primary, PointerButton::Secondary].into_iter().filter(|b| ui.input(|i| i.pointer.button_pressed(*b)));
+            self.pressed.extend(pressed.map(|b| (*panel, b)));
         }
     }
 
@@ -989,6 +995,64 @@ fn a_native_window_forwards_no_keys_while_one_of_its_widgets_has_focus() {
     let enter = Event::Key { key: Key::Enter, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE };
     let out = d.window_step(id_of(&d), vec![enter]);
     assert!(out.forwarded_events.is_empty(), "{:?}", out.forwarded_events);
+}
+
+#[test]
+fn the_input_hook_rewrites_each_native_windows_input_before_its_widgets_see_it() {
+    // As an app maps Ctrl+click to a secondary click on macOS.
+    let mut d = driver(layout(true)).with_native_input_hook(|_, input| {
+        for event in &mut input.events {
+            if let Event::PointerButton { button, .. } = event {
+                *button = PointerButton::Secondary;
+            }
+        }
+    });
+    let id = id_of(&d);
+    d.window_click(id, pos2(60.0, 150.0));
+    assert_eq!(d.content.pressed, vec![(5, PointerButton::Secondary)]);
+
+    // The main window's input is the app's own `raw_input_hook`'s.
+    d.content.pressed.clear();
+    d.click(pos2(100.0, 300.0));
+    assert_eq!(d.content.pressed, vec![(1, PointerButton::Primary)]);
+}
+
+#[derive(Debug)]
+struct File(std::path::PathBuf);
+
+impl egui::DroppedFile for File {
+    fn path(&self) -> &std::path::Path {
+        &self.0
+    }
+
+    fn bytes(&self) -> Result<Vec<u8>, String> {
+        Ok(Vec::new())
+    }
+}
+
+#[test]
+fn files_dragged_onto_a_native_window_are_reported_with_its_panel() {
+    let mut d = driver(layout(true));
+    let (id, viewport) = (id_of(&d), d.viewport(id_of(&d)));
+    let hovered = egui::HoveredFile { path: Some("a.png".into()), mime: String::new() };
+    d.host().windows.get_mut(&viewport).unwrap().hovered_files = vec![hovered.clone()];
+    let out = d.window_step(id, vec![Event::PointerMoved(pos2(60.0, 150.0))]);
+    let [files] = out.window_files.as_slice() else { panic!("{:?}", out.window_files) };
+    assert_eq!((files.window, files.viewport, files.panel, files.pos), (id, viewport, 5, Some(pos2(60.0, 150.0))));
+    assert_eq!(files.hovered, vec![hovered]);
+    assert!(files.dropped.is_empty());
+
+    {
+        let mut host = d.host();
+        let window = host.windows.get_mut(&viewport).unwrap();
+        window.hovered_files.clear();
+        window.dropped_files = vec![std::sync::Arc::new(File("a.png".into()))];
+    }
+    let out = d.window_step(id, Vec::new());
+    let [files] = out.window_files.as_slice() else { panic!("{:?}", out.window_files) };
+    assert_eq!(files.panel, 5);
+    assert_eq!(files.dropped.iter().map(|f| f.path().to_path_buf()).collect::<Vec<_>>(), vec![std::path::PathBuf::from("a.png")]);
+    assert!(d.step(Vec::new()).window_files.is_empty());
 }
 
 #[test]

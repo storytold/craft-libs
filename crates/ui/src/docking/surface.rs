@@ -253,6 +253,28 @@ pub struct DockOutput<P> {
     /// forwarded any. egui-winit turns Cmd/Ctrl+C, X and V into `Copy`, `Cut` and `Paste`
     /// without the key, so these tell them from the keyboard's own Copy, Cut and Paste keys.
     pub forwarded_modifiers: Option<egui::Modifiers>,
+    /// Files dragged over or dropped on floating windows in their own OS windows this frame,
+    /// one entry per window (feature `native-windows`). egui hands each OS window only its own
+    /// input, so the main window's `RawInput` never holds them.
+    pub window_files: Vec<WindowFiles<P>>,
+}
+
+/// Files dragged over or dropped on a native floating window in one frame.
+#[derive(Clone, Debug)]
+pub struct WindowFiles<P> {
+    /// [`super::Floating::id`] of the window.
+    pub window: u64,
+    /// The window's egui viewport.
+    pub viewport: egui::ViewportId,
+    /// The panel whose body is under the pointer, else the window's shown panel: the window
+    /// system may send no pointer moves while files are dragged in.
+    pub panel: P,
+    /// The pointer's last position in the window's coordinates, where egui has one.
+    pub pos: Option<Pos2>,
+    /// The window's `RawInput::hovered_files`.
+    pub hovered: Vec<egui::HoveredFile>,
+    /// The window's `RawInput::dropped_files`.
+    pub dropped: Vec<egui::DroppedFileHandle>,
 }
 
 impl<P> Default for DockOutput<P> {
@@ -266,6 +288,7 @@ impl<P> Default for DockOutput<P> {
             events: Vec::new(),
             forwarded_events: Vec::new(),
             forwarded_modifiers: None,
+            window_files: Vec::new(),
         }
     }
 }
@@ -695,6 +718,8 @@ pub struct DockArea<'a, P = ()> {
     auto_collapse: bool,
     float_bounds: Option<Rect>,
     monitors: Vec<Monitor>,
+    #[cfg(feature = "native-windows")]
+    input_hook: Option<super::render::InputHook>,
 }
 
 impl<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> DockArea<'a, P> {
@@ -709,6 +734,8 @@ impl<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> DockArea<'a, P> {
             auto_collapse: true,
             float_bounds: None,
             monitors: Vec::new(),
+            #[cfg(feature = "native-windows")]
+            input_hook: None,
         }
     }
 
@@ -726,6 +753,17 @@ impl<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> DockArea<'a, P> {
     #[cfg(feature = "native-windows")]
     pub fn window_viewport(id: Id, window: u64) -> egui::ViewportId {
         super::render::native_viewport(id, window)
+    }
+
+    /// Rewrite the input of each native window of this area before egui reads it (feature
+    /// `native-windows`), as `eframe::App::raw_input_hook` does for the main window only. Pass
+    /// it every frame; a frame without it runs none. The hook runs for every pass of each
+    /// window's frame, before any widget sees the input, so rewritten pointer events count as
+    /// sent. `RawInput::viewport_id` names the window (see [`Self::window_viewport`]).
+    #[cfg(feature = "native-windows")]
+    pub fn native_input_hook(mut self, hook: impl FnMut(&Context, &mut egui::RawInput) + Send + 'static) -> Self {
+        self.input_hook = Some(Box::new(hook));
+        self
     }
 
     /// [D] Auto-Collapse Iconic Panels (default on): a flyout closes on Escape or a press
@@ -843,6 +881,8 @@ impl<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> DockArea<'a, P> {
 
     /// Render with every label, policy and size from `content`.
     pub fn show_content(self, ui: &mut Ui, layout: &Layout<P>, style: &DockStyle, content: &mut dyn DockContent<P>) -> DockOutput<P> {
+        #[cfg(feature = "native-windows")]
+        super::render::set_input_hook(ui.ctx(), self.id, self.input_hook);
         let rect = ui.available_rect_before_wrap();
         if let Err(error) = layout.validate() {
             cancel_drag::<P>(ui.ctx(), self.id);

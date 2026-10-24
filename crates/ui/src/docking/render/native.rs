@@ -8,8 +8,8 @@
 use std::{fmt::Debug, hash::Hash};
 
 use egui::{
-    Context, CursorIcon, Event, Id, Key, Modifiers, Pos2, Rect, ResizeDirection, Sense, Ui, Vec2, ViewportBuilder, ViewportClass, ViewportCommand,
-    ViewportId, ViewportInfo, WindowLevel, pos2, vec2,
+    Context, CursorIcon, Event, Id, Key, Modifiers, Pos2, RawInput, Rect, ResizeDirection, Sense, Ui, Vec2, ViewportBuilder, ViewportClass,
+    ViewportCommand, ViewportId, ViewportInfo, WindowLevel, pos2, vec2,
 };
 
 use super::Renderer;
@@ -17,7 +17,7 @@ use super::cross::{DragPointer, Surface};
 use crate::docking::chrome::{ChromeStyle, TitleBar};
 pub(in crate::docking) use crate::docking::placement::BAR_HEIGHT;
 use crate::docking::placement::{kept_reachable, monitor_of, restore, sanitized};
-use crate::docking::{Action, Drag, Floating, GroupDrag, GroupGesture, Node};
+use crate::docking::{Action, Drag, Floating, GroupDrag, GroupGesture, Node, WindowFiles};
 
 /// Smallest native window.
 const MIN_SIZE: [f32; 2] = [160.0, 100.0];
@@ -396,11 +396,13 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
             ctx.send_viewport_cmd_to(viewport, ViewportCommand::Focus);
         }
         let (targets, docks, windows) = (self.targets.len(), self.dock_targets.len(), self.frame.windows.len());
+        ctx.with_plugin(|input: &mut NativeInput| input.windows.insert(viewport, self.id));
         let report = ctx.show_viewport_immediate(viewport, builder, |ui, class| {
             let full = ui.max_rect();
             ui.painter().rect_filled(full, 0.0, self.style.floating_background);
             let buttons = self.native_bar(ui, window);
             let body = Rect::from_min_max(pos2(full.left(), (full.top() + BAR_HEIGHT).min(full.bottom())), full.max);
+            self.cross.pointed = None;
             self.floating_body(ui, window, body, full);
             if debug_close() {
                 debug_outlines(ui, full, &buttons);
@@ -428,6 +430,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
             surface.origin = self.window_gestures(ui, window);
             self.paint_cross(ui, &mut surface);
             self.forward_events(ui);
+            self.report_files(ui, window, viewport);
             ui.input(|i| Report {
                 closed: i.viewport().close_requested(),
                 placed: placed(i.viewport()),
@@ -635,6 +638,17 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
         self.cross.release = Some((drag, pointer));
     }
 
+    /// Files dragged over or dropped on the window this frame, with the panel under the pointer.
+    fn report_files(&mut self, ui: &Ui, window: &Floating<P>, viewport: ViewportId) {
+        let (hovered, dropped, pos) = ui.input(|i| (i.raw.hovered_files.clone(), i.raw.dropped_files.clone(), i.pointer.latest_pos()));
+        if hovered.is_empty() && dropped.is_empty() {
+            return;
+        }
+        // The window system may send no pointer moves while files are dragged in.
+        let Some(panel) = self.cross.pointed.clone().or_else(|| crate::docking::dock_model::first_active(&window.root).cloned()) else { return };
+        self.output.window_files.push(WindowFiles { window: window.id, viewport, panel, pos, hovered, dropped });
+    }
+
     /// Keys, text and clipboard events the window's widgets left over, for the application's
     /// shortcuts. Nothing while a widget of the window has keyboard focus: its keys are its own.
     fn forward_events(&mut self, ui: &Ui) {
@@ -653,6 +667,44 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
             self.output.forwarded_events.extend(events);
         }
     }
+}
+
+/// Input hooks of dock areas for their native windows, run by egui before it reads each
+/// window's input. eframe runs `App::raw_input_hook` for the main window only.
+#[derive(Default)]
+struct NativeInput {
+    hooks: std::collections::HashMap<Id, egui::mutex::Mutex<InputHook>>,
+    /// The dock area of each native window shown this frame.
+    windows: std::collections::HashMap<ViewportId, Id>,
+}
+
+pub(in crate::docking) type InputHook = Box<dyn FnMut(&Context, &mut RawInput) + Send>;
+
+impl egui::Plugin for NativeInput {
+    fn debug_name(&self) -> &'static str {
+        "craft-ui docking native input"
+    }
+
+    fn input_hook(&mut self, ctx: &Context, input: &mut RawInput) {
+        if let Some(hook) = self.windows.get(&input.viewport_id).and_then(|area| self.hooks.get(area)) {
+            (hook.lock())(ctx, input);
+        }
+    }
+}
+
+/// Set or clear the input hook of the dock area `area` for this frame, and forget its native
+/// windows until they show again.
+pub(in crate::docking) fn set_input_hook(ctx: &Context, area: Id, hook: Option<InputHook>) {
+    if hook.is_some() && ctx.plugin_opt::<NativeInput>().is_none() {
+        ctx.add_plugin(NativeInput::default());
+    }
+    ctx.with_plugin(|input: &mut NativeInput| {
+        input.windows.retain(|_, a| *a != area);
+        match hook {
+            Some(hook) => input.hooks.insert(area, egui::mutex::Mutex::new(hook)),
+            None => input.hooks.remove(&area),
+        }
+    });
 }
 
 /// Frames running whose native windows are all new, with the last frame's panels, before

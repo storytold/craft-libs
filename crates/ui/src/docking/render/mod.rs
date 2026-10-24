@@ -20,6 +20,9 @@ pub(in crate::docking) use {
     native::{APPKIT_CORNER, MACOS_CLOSE, WindowDrag, appkit_resize_areas, close_rects, floats_shown, resize_bands},
 };
 
+#[cfg(feature = "native-windows")]
+pub(in crate::docking) use native::{InputHook, set_input_hook};
+
 /// The viewport of the native window `window` of the dock area `area`.
 #[cfg(feature = "native-windows")]
 pub(in crate::docking) fn native_viewport(area: Id, window: u64) -> egui::ViewportId {
@@ -360,6 +363,10 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
         // Any button: a canvas pans with the middle button and opens menus with the secondary.
         if child.rect_contains_pointer(rect) && child.input(|i| i.pointer.any_pressed()) {
             self.output.focused = Some(panel.clone());
+        }
+        #[cfg(feature = "native-windows")]
+        if child.rect_contains_pointer(rect) {
+            self.cross.pointed = Some(panel.clone());
         }
     }
 }
