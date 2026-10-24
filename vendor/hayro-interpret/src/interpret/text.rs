@@ -191,6 +191,16 @@ fn show_glyph<'a>(
         }
         TextRenderingMode::Clip => {
             clip_glyph(ctx, glyph, glyph_transform);
+            // PdfCraft patch (#3116): report clipping text separately from invisible OCR text.
+            // Extraction filters must retain text that is filled through its
+            // clipping path without rendering devices drawing it directly.
+            device.draw_glyph(
+                glyph,
+                ctx.get().ctm,
+                glyph_transform,
+                &get_paint(ctx, false),
+                &GlyphDrawMode::Clip,
+            );
         }
         TextRenderingMode::FillAndClip => {
             clip_glyph(ctx, glyph, glyph_transform);

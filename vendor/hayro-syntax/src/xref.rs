@@ -759,6 +759,34 @@ fn populate_xref_impl<'a>(data: &'a [u8], pos: usize, xref_map: &mut XrefMap, li
     populate_xref_impl_inner(data, pos, xref_map, &mut visited, limits)
 }
 
+/// The offset of the previous xref section (`Prev`).
+// PdfCraft patch: (PdfCraft #2400) some writers give `Prev` as a reference `N G R`. When this
+// section's own entries (`own`) place that object and it holds an offset (iText's
+// `indirectPrev.pdf`), that is the offset; otherwise its object number is (tiff2pdf, in JHOVE's
+// PDF-HUL-157 files), as other readers take it.
+fn prev_offset(data: &[u8], trailer: &Dict<'_>, own: &XrefMap) -> Option<usize> {
+    if let Some(prev) = trailer.get::<i32>(PREV) {
+        return usize::try_from(prev).ok();
+    }
+
+    let r = trailer.get_ref(PREV)?;
+    let id = ObjectIdentifier::new(r.obj_number, r.gen_number);
+    let held = match own.get(&id) {
+        Some(EntryType::Normal(at)) => {
+            let mut reader = Reader::new(data);
+            reader.jump(*at);
+            reader
+                .read_with_context::<IndirectObject<i32>>(&ReaderContext::dummy())
+                .filter(|o| o.id() == &id)
+                .map(|o| o.get())
+                .filter(|p| *p >= 0)
+        }
+        _ => None,
+    };
+
+    usize::try_from(held.unwrap_or(r.obj_number)).ok()
+}
+
 /// Maximum number of allowed xref `Prev` pointers before we abort.
 const MAX_XREF_CHAIN_DEPTH: usize = 256;
 
@@ -832,17 +860,8 @@ fn populate_from_xref_table<'a>(
     reader.skip_white_spaces();
 
     let mut max_obj = 0;
-
-    if let Some(prev) = trailer.get::<i32>(PREV) {
-        // First insert the entries from any previous xref tables.
-        populate_xref_impl_inner(data, prev as usize, insert_map, visited, limits)?;
-    }
-
-    // In hybrid files, entries in `XRefStm` should have higher priority, therefore we insert them
-    // after looking at `PREV`.
-    if let Some(xref_stm) = trailer.get::<i32>(XREF_STM) {
-        populate_xref_impl_inner(data, xref_stm as usize, insert_map, visited, limits)?;
-    }
+    // PdfCraft patch: (PdfCraft #2400) this section's entries are read first, for `prev_offset`.
+    let mut own = XrefMap::default();
 
     while let Some(header) = reader.read_without_context::<SubsectionHeader>() {
         reader.skip_white_spaces();
@@ -858,13 +877,26 @@ fn populate_from_xref_table<'a>(
             // Specification says we should ignore any object number > SIZE, but probably
             // not important?
             if entry.used {
-                insert_map.insert(
+                own.insert(
                     ObjectIdentifier::new(obj_number as i32, entry.gen_number),
                     EntryType::Normal(entry.offset),
                 );
             }
         }
     }
+
+    if let Some(prev) = prev_offset(data, &trailer, &own) {
+        // First insert the entries from any previous xref tables.
+        populate_xref_impl_inner(data, prev, insert_map, visited, limits)?;
+    }
+
+    // In hybrid files, entries in `XRefStm` should have higher priority, therefore we insert them
+    // after looking at `PREV`.
+    if let Some(xref_stm) = trailer.get::<i32>(XREF_STM) {
+        populate_xref_impl_inner(data, xref_stm as usize, insert_map, visited, limits)?;
+    }
+
+    insert_map.extend(own);
 
     Some(trailer.data())
 }
@@ -878,11 +910,6 @@ fn populate_from_xref_stream<'a>(
 ) -> Option<&'a [u8]> {
     let stream = reader.read_with_context::<IndirectObject<Stream<'_>>>(&ReaderContext::dummy_with_limits(limits))?.get();
 
-    if let Some(prev) = stream.dict().get::<i32>(PREV) {
-        // First insert the entries from any previous xref tables.
-        let _ = populate_xref_impl_inner(data, prev as usize, insert_map, visited, limits)?;
-    }
-
     let size = stream.dict().get::<u32>(SIZE)?;
 
     let [f1_len, f2_len, f3_len] = stream.dict().get::<[u8; 3]>(W)?;
@@ -895,6 +922,8 @@ fn populate_from_xref_stream<'a>(
     }
 
     let xref_data = stream.decoded().ok()?;
+    // PdfCraft patch: (PdfCraft #2400) this section's entries are read first, for `prev_offset`.
+    let mut own = XrefMap::default();
     let mut xref_reader = Reader::new(xref_data.as_ref());
 
     if let Some(arr) = stream.dict().get::<Array<'_>>(INDEX) {
@@ -908,20 +937,19 @@ fn populate_from_xref_stream<'a>(
                 f1_len,
                 f2_len,
                 f3_len,
-                insert_map,
+                &mut own,
             )?;
         }
     } else {
-        xref_stream_subsection(
-            &mut xref_reader,
-            0,
-            size,
-            f1_len,
-            f2_len,
-            f3_len,
-            insert_map,
-        )?;
+        xref_stream_subsection(&mut xref_reader, 0, size, f1_len, f2_len, f3_len, &mut own)?;
     }
+
+    if let Some(prev) = prev_offset(data, stream.dict(), &own) {
+        // First insert the entries from any previous xref tables.
+        let _ = populate_xref_impl_inner(data, prev, insert_map, visited, limits)?;
+    }
+
+    insert_map.extend(own);
 
     Some(stream.dict().data())
 }
@@ -1448,6 +1476,90 @@ mod tests {
         let mut xref_map = FxHashMap::default();
         let xref_pos = find_last_xref_pos(pdf.as_ref()).unwrap();
         let _result = populate_xref_impl(pdf.as_ref(), xref_pos, &mut xref_map, DecodeLimits::default());
+    }
+
+    #[test]
+    fn prev_as_reference_reaches_the_earlier_section() {
+        let mut pdf = b"%PDF-1.0\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n".to_vec();
+        let first_xref_pos = pdf.len();
+        pdf.extend_from_slice(
+            format!(
+                "xref\n\
+                 0 2\n\
+                 0000000000 65535 f \n\
+                 0000000009 00000 n \n\
+                 trailer\n<< /Size 2 /Root 1 0 R >>\n\
+                 startxref\n{first_xref_pos}\n%%EOF\n"
+            )
+            .as_bytes(),
+        );
+        let second_xref_pos = pdf.len();
+        pdf.extend_from_slice(
+            format!(
+                "xref\n\
+                 0 1\n\
+                 0000000000 65535 f \n\
+                 trailer\n<< /Size 2 /Root 1 0 R /Prev {first_xref_pos} 0 R >>\n\
+                 startxref\n{second_xref_pos}\n%%EOF"
+            )
+            .as_bytes(),
+        );
+
+        let mut xref_map = FxHashMap::default();
+        let xref_pos = find_last_xref_pos(pdf.as_ref()).unwrap();
+        assert_eq!(xref_pos, second_xref_pos);
+        populate_xref_impl(
+            pdf.as_ref(),
+            xref_pos,
+            &mut xref_map,
+            DecodeLimits::default(),
+        )
+        .unwrap();
+        assert!(xref_map.contains_key(&ObjectIdentifier::new(1, 0)));
+    }
+
+    #[test]
+    fn prev_as_reference_to_an_object_holding_the_offset_reads_that_offset() {
+        let mut pdf = b"%PDF-1.0\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n".to_vec();
+        let first_xref_pos = pdf.len();
+        pdf.extend_from_slice(
+            format!(
+                "xref\n\
+                 0 2\n\
+                 0000000000 65535 f \n\
+                 0000000009 00000 n \n\
+                 trailer\n<< /Size 2 /Root 1 0 R >>\n\
+                 startxref\n{first_xref_pos}\n%%EOF\n"
+            )
+            .as_bytes(),
+        );
+        // Object 3 holds the offset; read as offset 3, `Prev` would point inside the header.
+        let held_pos = pdf.len();
+        pdf.extend_from_slice(format!("3 0 obj\n{first_xref_pos}\nendobj\n").as_bytes());
+        let second_xref_pos = pdf.len();
+        pdf.extend_from_slice(
+            format!(
+                "xref\n\
+                 3 1\n\
+                 {held_pos:010} 00000 n \n\
+                 trailer\n<< /Size 4 /Root 1 0 R /Prev 3 0 R >>\n\
+                 startxref\n{second_xref_pos}\n%%EOF"
+            )
+            .as_bytes(),
+        );
+
+        let mut xref_map = FxHashMap::default();
+        let xref_pos = find_last_xref_pos(pdf.as_ref()).unwrap();
+        assert_eq!(xref_pos, second_xref_pos);
+        populate_xref_impl(
+            pdf.as_ref(),
+            xref_pos,
+            &mut xref_map,
+            DecodeLimits::default(),
+        )
+        .unwrap();
+        assert!(xref_map.contains_key(&ObjectIdentifier::new(1, 0)));
+        assert!(xref_map.contains_key(&ObjectIdentifier::new(3, 0)));
     }
 
     #[test]

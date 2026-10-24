@@ -68,7 +68,7 @@
       "path": "src/content/mod.rs",
       "source_sha256": "b0f36badb2688c90691c27a4e5dcdfec7639858081553242744dd7bc39ffc0d0",
       "source_git_blob": "8e47324d0b0bd90ed15efe5ff1e9de0cb46e75d9",
-      "sha256": "aa0883ba92dd05655bfd8d54195584bab2c0b28111d76ec73c5381a0f23b6181"
+      "sha256": "ae0b0596d2304adc4109294cc7af681698071060d9e8cd6d44f0bb46baffec6b"
     },
     {
       "path": "src/content/ops.rs",
@@ -146,7 +146,7 @@
       "path": "src/filter/ccitt.rs",
       "source_sha256": "45d7eb89934d28cff97a00c7b264010bccfd14f3d511e1307ad50a9fef3b53c8",
       "source_git_blob": "685d680d2fbadce608a9bd3ca925c2ccc6c5d641",
-      "sha256": "b0fef2271417c3009a1de569c9573b05dd464ff76c1a5f7220f634bb5feb44e2"
+      "sha256": "67d17a339639eb0fef4cc6c745b579c6ba9ae3f2f67fd3bacb1bf1389aa5ffab"
     },
     {
       "path": "src/filter/dct.rs",
@@ -162,9 +162,9 @@
     },
     {
       "path": "src/filter/jpx.rs",
-      "source_sha256": "f0a2b01c692c086d30a26562d7548f9e837af166be737d2c543de7c886a45f82",
+      "source_sha256": "c9f068629c9cbe79af6793c3c125df4631ca1455691cb1335b44ff43cb1b4056",
       "source_git_blob": "74efd8b31e2b2935ff2bbceda2c1ffd36ea9c20d",
-      "sha256": "f0a2b01c692c086d30a26562d7548f9e837af166be737d2c543de7c886a45f82"
+      "sha256": "dc3742454cfde9a994ce48984e8fcb7b18851efb36ce2d62e31629efea063a1b"
     },
     {
       "path": "src/filter/lzw_flate.rs",
@@ -176,7 +176,7 @@
       "path": "src/filter/mod.rs",
       "source_sha256": "0af7145ab16b15b7a60c4b57efecb9bd5fd0cfdc9bb5f9388abb695386e63e49",
       "source_git_blob": "06bda29487d62c25dc39c1ee109091cb17e3867f",
-      "sha256": "e33e74ee55dcc850db9eb64811c56b4ffe1932908ab9684dfba07f4277b1eea9"
+      "sha256": "e43d7d309a4993f4a1f698208997122431b4a8b0db838bb07d4358ccbc00f02f"
     },
     {
       "path": "src/filter/run_length.rs",
@@ -338,7 +338,7 @@
       "path": "src/xref.rs",
       "source_sha256": "51ffeeb7d4ac035bae2cd5ba9288c180088ae06cdcefe2b29dfeda560a793aa0",
       "source_git_blob": "20e33a410489d42e438a3f2b87d70c7bb8d66eae",
-      "sha256": "fa8d24280df15ffe5628057fdcfa2a3d2a9f42539b6f9096b2feb836ac54ac30"
+      "sha256": "98fb56eb5c2da8b0c40202ed30b2f464874c1143436e72eda4e49f2333dd7c7f"
     },
     {
       "path": "src/decode_limits_tests.rs",

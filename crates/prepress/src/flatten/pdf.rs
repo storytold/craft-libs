@@ -978,6 +978,8 @@ impl<'a> Device<'a> for Reader<'_, 'a> {
     fn draw_glyph(&mut self, glyph: &Glyph<'a>, transform: Affine, glyph_transform: Affine, paint: &PdfPaint<'a>, draw_mode: &GlyphDrawMode) {
         match (glyph, draw_mode) {
             (_, GlyphDrawMode::Invisible) => self.shared.report.invisible_glyphs += 1,
+            // Clip-only text: the interpreter installs its clip, and the glyph paints nothing.
+            (_, GlyphDrawMode::Clip) => {}
             (Glyph::Outline(o), GlyphDrawMode::Fill) => self.outline_glyph(o, transform * glyph_transform, paint),
             (Glyph::Outline(o), GlyphDrawMode::Stroke(props)) => {
                 self.fill(outline_stroke(&(glyph_transform * o.outline()), transform, props), FillRule::NonZero, paint, true);

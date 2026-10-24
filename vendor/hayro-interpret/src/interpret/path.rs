@@ -192,6 +192,9 @@ pub(crate) fn get_paint<'a>(context: &Context<'a>, is_stroke: bool) -> Paint<'a>
                 pattern.set_transfer_function(tf.clone());
             }
 
+            // PdfCraft patch (#3246): `CA`/`ca` can be set by a `gs` after `scn`/`SCN`, so the
+            // pattern takes the alpha current at paint time.
+            pattern.set_alpha(data.alpha);
             pattern.pre_concat_transform(context.root_transform());
 
             Paint::Pattern(Box::new(pattern))
@@ -246,6 +249,8 @@ fn plate_paint<'a>(
         }
         Pattern::Tiling(t) => t.for_plate(plate, overprint, overprint_mode),
     }
+    // PdfCraft patch (#3246): the alpha current at paint time, as in `get_paint`.
+    pattern.set_alpha(data.alpha);
     pattern.pre_concat_transform(context.root_transform());
     Paint::Pattern(Box::new(pattern))
 }
