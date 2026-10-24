@@ -58,6 +58,9 @@ const STROKE_TOLERANCE: f64 = 0.01;
 /// The width of a `0 w` stroke, the thinnest line a device can draw, in points.
 const HAIRLINE: f64 = 0.1;
 
+/// Dashes one stroke may be cut into; past this it is stroked solid, as hayro draws it.
+const MAX_DASHES_PER_STROKE: f64 = 250_000.0;
+
 /// Tiling cells one pattern fill expands into; past this the fill is read as an image.
 pub const MAX_TILING_CELLS: usize = 10_000;
 
@@ -1177,12 +1180,56 @@ fn outline_stroke(path: &BezPath, transform: Affine, props: &StrokeProps) -> Bez
         _ => HAIRLINE / scale,
     };
     let mut style = Stroke::new(width).with_caps(props.line_cap).with_join(props.line_join).with_miter_limit(f64::from(props.miter_limit));
-    let dashes: Vec<f64> = props.dash_array.iter().map(|d| f64::from(*d)).collect();
-    if dashes.iter().all(|d| d.is_finite() && *d >= 0.0) && dashes.iter().sum::<f64>() > 0.0 {
+    if let Some(dashes) = dash_pattern(path, &props.dash_array) {
         style = style.with_dashes(f64::from(props.dash_offset), dashes);
     }
     let outline = kurbo::stroke(path.iter(), &style, &StrokeOpts::default(), STROKE_TOLERANCE / scale);
     transform * outline
+}
+
+/// The dash pattern to outline `path` with; `None` (solid) when the pattern is invalid or could
+/// cut the path into more than [`MAX_DASHES_PER_STROKE`] pieces. The same estimate as hayro's.
+fn dash_pattern(path: &BezPath, dashes: &[f32]) -> Option<Vec<f64>> {
+    if dashes.iter().any(|d| !d.is_finite() || *d < 0.0) {
+        return None;
+    }
+    let sum: f64 = dashes.iter().map(|d| f64::from(*d)).sum();
+    // kurbo repeats an odd-length pattern once, so a period covers it twice.
+    let (period, per_period) = if dashes.len() % 2 == 1 { (2.0 * sum, dashes.len().saturating_mul(2)) } else { (sum, dashes.len()) };
+    if !(period.is_finite() && period > 0.0) {
+        return None;
+    }
+    // A curve is no longer than its control polygon. kurbo restarts the pattern at every
+    // subpath and close, so each restart can begin a whole period however short its segment.
+    let (mut length, mut restarts) = (0.0, 0usize);
+    let (mut start, mut last) = (Point::ORIGIN, Point::ORIGIN);
+    for el in path.elements() {
+        match *el {
+            PathEl::MoveTo(p) => {
+                (start, last) = (p, p);
+                restarts = restarts.saturating_add(1);
+            }
+            PathEl::LineTo(p) => {
+                length += last.distance(p);
+                last = p;
+            }
+            PathEl::QuadTo(c, p) => {
+                length += last.distance(c) + c.distance(p);
+                last = p;
+            }
+            PathEl::CurveTo(c1, c2, p) => {
+                length += last.distance(c1) + c1.distance(c2) + c2.distance(p);
+                last = p;
+            }
+            PathEl::ClosePath => {
+                length += last.distance(start);
+                last = start;
+                restarts = restarts.saturating_add(1);
+            }
+        }
+    }
+    let pieces = (length / period + restarts as f64) * per_period as f64;
+    (pieces.is_finite() && pieces <= MAX_DASHES_PER_STROKE).then(|| dashes.iter().map(|d| f64::from(*d)).collect())
 }
 
 /// `path` filled by `rule`, as a path filled nonzero. An even-odd path is rebuilt from its

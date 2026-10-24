@@ -482,6 +482,16 @@ fn tiling_cells_past_the_item_budget_rasterize() {
 }
 
 #[test]
+fn dashes_past_the_budget_stroke_solid() {
+    // A billion dashes.
+    let pdf = raw_pdf("[0.000001] 0 d 0 0 m 1000 0 l S", "", &[]);
+    let (list, _) = read(&pdf);
+    let fills = fill_items(&list);
+    assert_eq!(fills.len(), 1);
+    assert!(fills[0].1.path.elements().len() < 20, "{:?}", fills[0].1.path);
+}
+
+#[test]
 fn plate_test_gradients_and_meshes_read() {
     let (list, report) = read(&scene_pdf("S14"));
     let gold = list.inks.lookup("Gold").unwrap();
