@@ -27,11 +27,11 @@ winsafe = { version = "0.0.29", default-features = false, features = ["winspool"
 # The job file's private folder.
 tempfile = "3"
 # Reading the PrintTicket and PrintCapabilities the driver hands back.
-roxmltree = "0.20"
+roxmltree = "0.21"
 # Inflating the print-ready PDF's cross-reference and object streams (src/sheets.rs).
-miniz_oxide = "0.8"
+miniz_oxide = "0.9"
 
 [dev-dependencies]
 tempfile = "3"
-roxmltree = "0.20"
-miniz_oxide = "0.8"
+roxmltree = "0.21"
+miniz_oxide = "0.9"

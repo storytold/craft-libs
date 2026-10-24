@@ -16,4 +16,4 @@ workspace = true
 rayon = { workspace = true }
 
 [dev-dependencies]
-moxcms = "0.8"
+moxcms = "0.9"
