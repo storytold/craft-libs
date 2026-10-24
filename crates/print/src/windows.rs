@@ -13,7 +13,9 @@
 use std::io::Write as _;
 
 use winprint::printer::{PrinterDevice, WinPdfPrinter};
-use winprint::ticket::document::{NS_PSK, OwnedName, PrintFeature, PrintTicketDocument, reader::ParsableXmlDocument as _};
+use winprint::ticket::document::{
+    NS_PSF, NS_PSK, OwnedName, ParameterInit, PrintFeature, PrintTicketDocument, PropertyValue, WithProperties as _, reader::ParsableXmlDocument as _,
+};
 use winprint::ticket::{FeatureOptionPack as _, PageMediaSize, PrintCapabilities, PrintTicket, PrintTicketBuilder};
 
 use crate::sheets::{self, Fit, SAME};
@@ -55,16 +57,65 @@ fn select_device(devices: Vec<PrinterDevice>, requested: Option<&str>, default: 
         .ok_or_else(|| spool_error(format!("the printer is not available: {name} (reopen Print to refresh the list)")))
 }
 
+/// The custom paper options of the Print Schema, each with its width and height parameters: the
+/// standard one, and the one PostScript drivers offer instead.
+const CUSTOM_PAPERS: [(&str, &str, &str); 2] = [
+    ("CustomMediaSize", "PageMediaSizeMediaSizeWidth", "PageMediaSizeMediaSizeHeight"),
+    ("PSCustomMediaSize", "PageMediaSizePSWidth", "PageMediaSizePSHeight"),
+];
+
+fn is_custom_paper(media: &PageMediaSize) -> bool {
+    media.option().name.as_ref().is_some_and(|n| n.namespace_ref() == Some(NS_PSK) && CUSTOM_PAPERS.iter().any(|(o, _, _)| n.local_name == *o))
+}
+
+/// A custom paper the driver offers, or the range it takes, in micrometres.
+enum CustomPaper {
+    Sized(PageMediaSize),
+    OutOfRange { min: (u32, u32), max: (u32, u32) },
+}
+
+/// The driver's custom paper option for a sheet of `width` × `height` micrometres (portrait)
+/// that it doesn't list, with the width and height parameters set to the sheet's. `None` when it
+/// offers no custom paper with the limits it takes.
+fn custom_paper(capabilities: &PrintCapabilities, width: u32, height: u32) -> Option<CustomPaper> {
+    let limit = |def: &winprint::ticket::document::ParameterDef, name: &str| {
+        def.get_property(name, Some(NS_PSF)).and_then(|p| p.value.as_ref()).and_then(PropertyValue::integer).and_then(|v| u32::try_from(v).ok())
+    };
+    let range = |name: &str| {
+        let def = capabilities.document.parameter_defs.iter().find(|d| d.name.local_name == name && d.name.namespace_ref() == Some(NS_PSK))?;
+        Some((limit(def, "MinValue")?, limit(def, "MaxValue")?))
+    };
+    CUSTOM_PAPERS.iter().find_map(|&(option, width_name, height_name)| {
+        let mut media = capabilities
+            .page_media_sizes()
+            .find(|m| m.option().name.as_ref().is_some_and(|n| n.local_name == option && n.namespace_ref() == Some(NS_PSK)))?;
+        let (widths, heights) = (range(width_name)?, range(height_name)?);
+        if !(widths.0..=widths.1).contains(&width) || !(heights.0..=heights.1).contains(&height) {
+            return Some(CustomPaper::OutOfRange { min: (widths.0, heights.0), max: (widths.1, heights.1) });
+        }
+        for (name, value) in [(width_name, width), (height_name, height)] {
+            let value = PropertyValue::Integer(i32::try_from(value).ok()?);
+            let parameters = media.parameters_mut();
+            match parameters.iter_mut().find(|p| p.name.local_name == name && p.name.namespace_ref() == Some(NS_PSK)) {
+                Some(p) => p.value = value,
+                None => parameters.push(ParameterInit { name: OwnedName::qualified(name, NS_PSK, Some("psk")), value }),
+            }
+        }
+        Some(CustomPaper::Sized(media))
+    })
+}
+
 /// The ticket the driver accepted: [`ticket::ticket_xml`] with the driver's own paper option for
 /// `sheet` (its exact option, so a vendor's sizes survive; a ticket with dimensions only can come
 /// back as Letter) and its own "no scaling" option, merged and validated against the printer's
-/// capabilities. For exact size the driver must have that paper; for shrink-to-fit without one,
-/// its default paper is used. Returns the ticket and its paper in micrometres. Refused when the
+/// capabilities. For exact size the driver must have that paper, or take it as a custom paper;
+/// for shrink-to-fit without one, its default paper is used. Returns the ticket and its paper in micrometres. Refused when the
 /// driver changed the paper, the orientation or the scaling: then nothing is sent, rather than a
 /// job at the wrong size.
 fn driver_ticket(device: &PrinterDevice, job: &Job, sheet: (f64, f64), landscape: bool) -> Result<(PrintTicket, (u32, u32)), Error> {
     let capabilities = PrintCapabilities::fetch(device).map_err(spool_error)?;
-    let medias: Vec<PageMediaSize> = capabilities.page_media_sizes().collect();
+    // Custom papers carry a placeholder size until one is set, so they never match a sheet.
+    let medias: Vec<PageMediaSize> = capabilities.page_media_sizes().filter(|m| !is_custom_paper(m)).collect();
     let papers: Vec<Paper<'_>> = medias
         .iter()
         .map(|m| Paper {
@@ -74,17 +125,37 @@ fn driver_ticket(device: &PrinterDevice, job: &Job, sheet: (f64, f64), landscape
             keyword: m.option().name.as_ref().is_some_and(|n| n.namespace_ref() == Some(NS_PSK)),
         })
         .collect();
-    let media = ticket::matching_paper(&papers, sheet.0, sheet.1).and_then(|i| medias.get(i));
-    let wanted = match (media, job.scaling) {
-        (Some(m), _) => Some((m.size().width_in_micron(), m.size().height_in_micron())),
-        (None, Scaling::ShrinkToFit) => None,
+    let listed = ticket::matching_paper(&papers, sheet.0, sheet.1).and_then(|i| medias.get(i));
+    let (media, wanted) = match (listed, job.scaling) {
+        (Some(m), _) => (Some(m.clone()), Some((m.size().width_in_micron(), m.size().height_in_micron()))),
+        (None, Scaling::ShrinkToFit) => (None, None),
         (None, Scaling::Exact) => {
-            return Err(spool_error(format!(
-                "{} has no {:.2} × {:.2} inch paper; choose a paper size it has, or add this one in its driver",
-                device.name(),
-                sheet.0 / 72.0,
-                sheet.1 / 72.0
-            )));
+            let (short, long) = (sheet.0.min(sheet.1), sheet.0.max(sheet.1));
+            let size = ticket::micrometres(short).zip(ticket::micrometres(long));
+            match size.and_then(|(w, h)| custom_paper(&capabilities, w, h).map(|c| (c, (w, h)))) {
+                Some((CustomPaper::Sized(m), size)) => (Some(m), Some(size)),
+                Some((CustomPaper::OutOfRange { min, max }, _)) => {
+                    let mm = |v: u32| f64::from(v) / 1000.0;
+                    return Err(spool_error(format!(
+                        "{} takes custom paper from {:.0} × {:.0} mm to {:.0} × {:.0} mm, not {:.0} × {:.0} mm; choose a paper size it has",
+                        device.name(),
+                        mm(min.0),
+                        mm(min.1),
+                        mm(max.0),
+                        mm(max.1),
+                        short * 25.4 / 72.0,
+                        long * 25.4 / 72.0
+                    )));
+                }
+                None => {
+                    return Err(spool_error(format!(
+                        "{} has no {:.2} × {:.2} inch paper; choose a paper size it has, or add this one in its driver",
+                        device.name(),
+                        sheet.0 / 72.0,
+                        sheet.1 / 72.0
+                    )));
+                }
+            }
         }
     };
     let requested = PrintTicket::from_xml(ticket::ticket_xml(job, landscape));

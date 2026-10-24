@@ -140,6 +140,17 @@ fn integer(node: roxmltree::Node<'_, '_>, tag: &str, name: &str) -> Option<u32> 
         .and_then(|v| v.trim().parse::<u32>().ok())
 }
 
+/// A paper's width or height, the first of `names` it has: its value, or for a custom paper the
+/// value of the parameter it refers to.
+fn dimension(root: roxmltree::Node<'_, '_>, media: roxmltree::Node<'_, '_>, names: &[&str]) -> Option<u32> {
+    let property = media.descendants().find(|n| n.has_tag_name((NS_PSF, "ScoredProperty")) && names.iter().any(|name| named(*n, name)))?;
+    let parameter = property.children().find(|n| n.has_tag_name((NS_PSF, "ParameterRef")));
+    match parameter.and_then(|p| p.attribute("name")).and_then(|v| v.split_once(':')) {
+        Some((_, name)) => integer(root, "ParameterInit", name),
+        None => property.children().find(|v| v.has_tag_name((NS_PSF, "Value"))).and_then(|n| n.text()).and_then(|v| v.trim().parse::<u32>().ok()),
+    }
+}
+
 /// Check the driver's validated ticket: it kept the orientation, added no scaling and has a
 /// paper (when `paper` is given, that one, to a quarter of a millimetre). Returns the paper's
 /// width and height in micrometres as the driver lists it. Only those schema fields are read:
@@ -148,8 +159,9 @@ pub(crate) fn verify_ticket(xml: &str, paper: Option<(u32, u32)>, landscape: boo
     let document = roxmltree::Document::parse(xml).map_err(spool_error)?;
     let feature = |name: &str| document.root_element().children().find(|n| n.has_tag_name((NS_PSF, "Feature")) && named(*n, name));
     let media = feature("PageMediaSize").ok_or_else(|| spool_error("the printer's driver did not confirm the paper size; nothing was sent"))?;
-    let size = integer(media, "ScoredProperty", "MediaSizeWidth")
-        .zip(integer(media, "ScoredProperty", "MediaSizeHeight"))
+    let root = document.root_element();
+    let size = dimension(root, media, &["MediaSizeWidth", "PSWidth"])
+        .zip(dimension(root, media, &["MediaSizeHeight", "PSHeight"]))
         .filter(|(w, h)| *w > 0 && *h > 0)
         .ok_or_else(|| spool_error("the printer's driver gave a paper without a size (a roll?); nothing was sent"))?;
     if let Some((w, h)) = paper {
@@ -279,6 +291,32 @@ mod tests {
 </psf:PrintTicket>"#,
             paper.0, paper.1
         )
+    }
+
+    /// A validated ticket with a custom paper whose size is in parameters: the Print Schema's
+    /// own (`MediaSize…`) or a PostScript driver's (`PS…`).
+    fn custom(option: &str, prefix: &str, paper: (u32, u32)) -> String {
+        format!(
+            r#"<psf:PrintTicket version="1" xmlns:psf="{NS_PSF}" xmlns:psk="{NS_PSK}" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+<psf:Feature name="psk:PageMediaSize"><psf:Option name="psk:{option}">
+<psf:ScoredProperty name="psk:{prefix}Width"><psf:ParameterRef name="psk:PageMediaSize{prefix}Width"/></psf:ScoredProperty>
+<psf:ScoredProperty name="psk:{prefix}Height"><psf:ParameterRef name="psk:PageMediaSize{prefix}Height"/></psf:ScoredProperty>
+</psf:Option></psf:Feature>
+<psf:Feature name="psk:PageOrientation"><psf:Option name="psk:Portrait"/></psf:Feature>
+<psf:ParameterInit name="psk:PageMediaSize{prefix}Width"><psf:Value xsi:type="xsd:integer">{}</psf:Value></psf:ParameterInit>
+<psf:ParameterInit name="psk:PageMediaSize{prefix}Height"><psf:Value xsi:type="xsd:integer">{}</psf:Value></psf:ParameterInit>
+</psf:PrintTicket>"#,
+            paper.0, paper.1
+        )
+    }
+
+    #[test]
+    fn a_custom_paper_is_read_from_its_parameters() {
+        let card = (100_000, 150_000);
+        assert_eq!(verify_ticket(&custom("CustomMediaSize", "MediaSize", card), Some(card), false), Ok(card));
+        assert_eq!(verify_ticket(&custom("PSCustomMediaSize", "PS", card), Some(card), false), Ok(card));
+        assert!(verify_ticket(&custom("PSCustomMediaSize", "PS", (210_000, 297_000)), Some(card), false).is_err(), "the driver changed it");
+        assert!(verify_ticket(&custom("PSCustomMediaSize", "PS", (0, 150_000)), None, false).is_err());
     }
 
     #[test]
