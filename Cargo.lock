@@ -798,6 +798,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-job"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "craft-media"
 version = "0.1.0"
 dependencies = [
@@ -860,6 +868,20 @@ dependencies = [
  "muda",
  "objc2 0.6.5",
  "objc2-app-kit 0.3.2",
+]
+
+[[package]]
+name = "craft-scan"
+version = "0.1.0"
+dependencies = [
+ "craft-job",
+ "image",
+ "log",
+ "png 0.18.1",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tiff",
 ]
 
 [[package]]
@@ -2182,6 +2204,8 @@ dependencies = [
  "num-traits",
  "png 0.18.1",
  "tiff",
+ "zune-core",
+ "zune-jpeg",
 ]
 
 [[package]]

@@ -1,0 +1,34 @@
+name: Scan core
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['crates/scan/**', 'crates/job/**', 'Cargo.toml', 'Cargo.lock', '.github/workflows/scan.yml']
+  pull_request:
+    paths: ['crates/scan/**', 'crates/job/**', 'Cargo.toml', 'Cargo.lock', '.github/workflows/scan.yml']
+permissions:
+  contents: read
+jobs:
+  scan:
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --check
+      - run: cargo clippy -p craft-scan --all-targets --locked -- -D warnings
+      - run: cargo test -p craft-scan --locked
+      - run: cargo clippy -p craft-scan --all-targets --features serde --locked -- -D warnings
+      - run: cargo test -p craft-scan --features serde --locked
+      - run: cargo check --target wasm32-unknown-unknown -p craft-scan --locked
+      - run: cargo check --target wasm32-unknown-unknown -p craft-scan --features serde --locked

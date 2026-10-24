@@ -82,6 +82,13 @@ The colour management module in crates/cms is extracted from:
   Licensed MIT OR Apache-2.0. Its generated ICC profile is dedicated to the public domain
   (CC0-1.0); see ATTRIBUTION.md.
 
+The scan core in crates/scan is extracted from:
+- PdfCraft, crates/scan, branch pdfcraft-scan-cli, revision 5f8922ac.
+  https://github.com/storytold/pdfcraft
+  Copyright (c) 2026 ArtCraft Team and the PdfCraft contributors.
+  Licensed MIT OR Apache-2.0. The Windows WIA backend (unsafe COM code) and application code are
+  not copied; the app registers its own backend through craft_scan::Backend.
+
 Optional PDF writer
 
 Krilla 0.8.2 (https://github.com/LaurenzV/krilla), MIT OR Apache-2.0.

@@ -25,9 +25,11 @@ craft-atomic = { path = "crates/atomic" }
 craft-cms = { path = "crates/cms" }
 craft-docpath = { path = "crates/docpath" }
 craft-i18n = { path = "crates/i18n" }
+craft-job = { path = "crates/job" }
 craft-media = { path = "crates/media" }
 craft-print = { path = "crates/print" }
 craft-quit = { path = "crates/quit" }
+craft-scan = { path = "crates/scan" }
 craft-settings = { path = "crates/settings" }
 craft-ui = { path = "crates/ui" }
 craft-window = { path = "crates/window" }
