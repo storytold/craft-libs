@@ -52,6 +52,22 @@ fn detach_redock_merge_and_collapse_empty_source_containers() {
 }
 
 #[test]
+fn move_targets_skip_the_panel_itself_and_protected_anchors() {
+    let layout = sample();
+    let all = |_: &u32| Permissions::default();
+    let targets = layout.move_targets(&1, all);
+    assert_eq!(targets.len(), 5);
+    assert!(!targets.contains(&&1));
+    let guarded = |p: &u32| if *p == 3 { Permissions::PROTECTED } else { Permissions::default() };
+    assert!(!layout.move_targets(&1, guarded).contains(&&3));
+
+    // A lone panel has nowhere to go — its "Move to group" menu hides
+    // (storytold/lightcraft#1768).
+    let single = Layout { root: Some(tabs(&[1], 0)), floating: Vec::new() };
+    assert!(single.move_targets(&1, all).is_empty());
+}
+
+#[test]
 fn invalid_moves_are_atomic_including_after_a_source_would_have_been_removed() {
     let layout = sample();
     for action in [

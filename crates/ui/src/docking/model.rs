@@ -287,6 +287,12 @@ impl<P: Clone + Eq + Hash> Layout<P> {
         self.panels().contains(&panel)
     }
 
+    /// The panels `panel` can join as a tab: every other panel whose permissions accept tabs.
+    /// A "Move to group" menu with an empty answer has nothing to offer and stays hidden.
+    pub fn move_targets(&self, panel: &P, permissions: impl Fn(&P) -> Permissions) -> Vec<&P> {
+        self.panels().into_iter().filter(|target| *target != panel && permissions(target).accepts_tabs).collect()
+    }
+
     /// Capture a panel's nearest surviving group/split neighbor before hiding it.
     pub fn location(&self, panel: &P) -> Result<Location<P>, DockError> {
         self.validate()?;
