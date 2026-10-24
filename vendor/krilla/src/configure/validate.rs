@@ -159,6 +159,12 @@ pub enum ValidationError {
     EmbeddedPDF(Option<Location>),
     /// A feature only available in a later PDF version was required.
     RequiresNewerPdfVersion(VersionedFeature, Option<Location>),
+    /// The PDF contains optional content groups, which PDF/A-1 forbids.
+    ///
+    /// Occurs if [`Document::add_optional_content_group`] was called.
+    ///
+    /// [`Document::add_optional_content_group`]: crate::Document::add_optional_content_group
+    OptionalContent(Option<Location>),
 }
 
 /// Features that may require a later PDF version than the current one.
@@ -170,6 +176,8 @@ pub enum VersionedFeature {
     HeaderFooterArtifactSubtypes,
     /// Scope attribute for table header cells.
     TableHeaderScope,
+    /// Optional content groups (layers).
+    OptionalContent,
 }
 
 impl VersionedFeature {
@@ -179,6 +187,7 @@ impl VersionedFeature {
             VersionedFeature::StructureOrderTabbing => PdfVersion::Pdf15,
             VersionedFeature::HeaderFooterArtifactSubtypes => PdfVersion::Pdf17,
             VersionedFeature::TableHeaderScope => PdfVersion::Pdf15,
+            VersionedFeature::OptionalContent => PdfVersion::Pdf15,
         }
     }
 }
@@ -566,7 +575,8 @@ impl Archival {
                 | ValidationError::ImageInterpolation(_)
                 | ValidationError::PdfxVersionWithoutExtensionSchema
                 | ValidationError::EmbeddedFile(EmbedError::Existence, _)
-                | ValidationError::EmbeddedPDF(_),
+                | ValidationError::EmbeddedPDF(_)
+                | ValidationError::OptionalContent(_),
             ) => true,
             // Allowed under all PDF/A-1 profiles.
             (
@@ -582,7 +592,8 @@ impl Archival {
                 | ValidationError::RequiresNewerPdfVersion(
                     VersionedFeature::HeaderFooterArtifactSubtypes
                     | VersionedFeature::StructureOrderTabbing
-                    | VersionedFeature::TableHeaderScope,
+                    | VersionedFeature::TableHeaderScope
+                    | VersionedFeature::OptionalContent,
                     _,
                 ),
             ) => false,
@@ -628,9 +639,11 @@ impl Archival {
                 | ValidationError::RequiresNewerPdfVersion(
                     VersionedFeature::HeaderFooterArtifactSubtypes
                     | VersionedFeature::StructureOrderTabbing
-                    | VersionedFeature::TableHeaderScope,
+                    | VersionedFeature::TableHeaderScope
+                    | VersionedFeature::OptionalContent,
                     _,
-                ),
+                )
+                | ValidationError::OptionalContent(_),
             ) => false,
             // Forbidden under PDF/A-2 but allowed under PDF/A-3.
             (
@@ -707,9 +720,11 @@ impl Archival {
                 | ValidationError::RequiresNewerPdfVersion(
                     VersionedFeature::HeaderFooterArtifactSubtypes
                     | VersionedFeature::StructureOrderTabbing
-                    | VersionedFeature::TableHeaderScope,
+                    | VersionedFeature::TableHeaderScope
+                    | VersionedFeature::OptionalContent,
                     _,
-                ),
+                )
+                | ValidationError::OptionalContent(_),
             ) => false,
             // Forbidden under PDF/A-4 but allowed under other PDF/A-4 profiles.
             (
@@ -1133,7 +1148,8 @@ impl Accessibility {
                 | ValidationError::RequiresNewerPdfVersion(
                     VersionedFeature::HeaderFooterArtifactSubtypes
                     | VersionedFeature::StructureOrderTabbing
-                    | VersionedFeature::TableHeaderScope,
+                    | VersionedFeature::TableHeaderScope
+                    | VersionedFeature::OptionalContent,
                     _,
                 ),
             ) => true,
@@ -1159,7 +1175,8 @@ impl Accessibility {
                     EmbedError::Existence | EmbedError::MissingDate | EmbedError::MissingMimeType,
                     _,
                 )
-                | ValidationError::MissingDocumentDate,
+                | ValidationError::MissingDocumentDate
+                | ValidationError::OptionalContent(_),
             ) => false,
         }
     }

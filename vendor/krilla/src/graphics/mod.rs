@@ -6,6 +6,7 @@ pub mod icc;
 #[cfg(feature = "raster-images")]
 pub mod image;
 pub mod mask;
+pub mod optional_content;
 pub mod paint;
 pub(crate) mod device_n;
 pub(crate) mod separation;

@@ -103,7 +103,7 @@ that supply shaped glyphs do not need that shaper. Adapters that call `draw_text
 DeckCraft, also need `write-simple-text` when adopting this revision. `write-pdf` adds
 embedded-PDF support independently of text shaping.
 
-The writer pins Krilla 0.8.2, with local unwind-cleanup and print color patches documented in
+The writer pins Krilla 0.8.2, with local unwind-cleanup, print color and optional content patches documented in
 [`vendor/krilla/README.craft.md`](../../vendor/krilla/README.craft.md). Successful
 serialization uses the same backend version as before extraction. It provides:
 
@@ -144,6 +144,18 @@ PDF/X; apps that claim conformance set `pdfx_version` (and `pdfx_conformance` fo
 and X-3) and keep their own checks. Writing these
 settings needs the patched Krilla (`CRAFT_PRINT_COLOR`, see
 [`vendor/krilla/README.craft.md`](../../vendor/krilla/README.craft.md)).
+
+### Optional content
+
+Drawing layers are written as optional content groups. `Document::add_optional_content_group(name,
+visible)` returns an `OcgId`; `Surface::start_optional_content(id)` and
+`Surface::end_optional_content()` mark the content between them, and nest independently of
+tagged sections. Both return `KrillaError` on misuse instead of panicking, and a mark left open
+when its stream finishes fails `Writer::finish`. The catalog lists every group in
+`/OCProperties`, hidden ones in `/OFF`; `Document::set_optional_content_page_mode(true)` adds
+`/PageMode /UseOC`. Optional content needs PDF 1.5 and fails PDF/A-1 validation (patch 12 in
+[`vendor/krilla/README.craft.md`](../../vendor/krilla/README.craft.md), marker
+`CRAFT_OPTIONAL_CONTENT`).
 
 `Writer::document_mut` and `write::backend` deliberately expose Krilla's page, resource and
 painting APIs. The apps keep their document walks, pagination, font selection/licensing,

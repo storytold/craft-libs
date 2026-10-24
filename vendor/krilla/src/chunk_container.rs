@@ -55,6 +55,7 @@ pub(crate) struct NonStreamChunks {
     pub(crate) patterns: Chunk,
     pub(crate) pages: Chunk,
     pub(crate) embedded_files: Chunk,
+    pub(crate) optional_content: Chunk,
 }
 
 impl ChunkContainer {
@@ -93,6 +94,7 @@ impl ChunkContainer {
                 patterns: sc.new_chunk(),
                 pages: sc.new_chunk(),
                 embedded_files: sc.new_chunk(),
+                optional_content: sc.new_chunk(),
             },
         }
     }
@@ -345,6 +347,9 @@ impl ChunkContainer {
                 }
             }
 
+            sc.optional_content
+                .write_catalog_entries(&mut catalog, &remapper);
+
             catalog.finish();
         }
 
@@ -441,6 +446,7 @@ impl Visit for NonStreamChunks {
         self.patterns.visit(sc, f)?;
         self.pages.visit(sc, f)?;
         self.embedded_files.visit(sc, f)?;
+        self.optional_content.visit(sc, f)?;
 
         Ok(())
     }

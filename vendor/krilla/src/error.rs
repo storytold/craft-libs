@@ -34,6 +34,15 @@ pub enum KrillaError {
     ///
     /// [`MeshGradient`]: crate::paint::MeshGradient
     MixedMeshColorSpaces(Option<Location>),
+    /// [`Surface::start_optional_content`] was given an [`OcgId`] that this document did
+    /// not create.
+    ///
+    /// [`Surface::start_optional_content`]: crate::surface::Surface::start_optional_content
+    /// [`OcgId`]: crate::optional_content::OcgId
+    UnknownOptionalContentGroup(Option<Location>),
+    /// Optional content marks were not balanced: an end without a start, a mark still open
+    /// when its stream finished, or a mark overlapping a tagged section.
+    UnbalancedOptionalContent(Option<Location>),
     /// An error while attempting to embed a font.
     Font(Font, String),
     /// A list of validation errors. Can only occur if you set the `validator` in
@@ -77,6 +86,14 @@ impl Display for KrillaError {
             }
             KrillaError::MixedMeshColorSpaces(location) => {
                 f.write_str("a mesh gradient mixes color spaces that can't be written as one")?;
+                write_location(f, *location)
+            }
+            KrillaError::UnknownOptionalContentGroup(location) => {
+                f.write_str("an optional content group from another document was used")?;
+                write_location(f, *location)
+            }
+            KrillaError::UnbalancedOptionalContent(location) => {
+                f.write_str("optional content marks are not balanced")?;
                 write_location(f, *location)
             }
             KrillaError::Font(_, message) => write!(f, "failed to embed font: {message}"),

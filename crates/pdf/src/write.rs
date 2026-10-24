@@ -8,10 +8,11 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 
 pub use krilla as backend;
 
-// Require the root workspace patch; an unpatched backend can abort during unwind, and
-// writes RGB blending groups and no print output intent.
+// Require the root workspace patch; an unpatched backend can abort during unwind, writes
+// RGB blending groups and no print output intent, and has no optional content.
 const _: bool = backend::CRAFT_UNWIND_POISONING;
 const _: bool = backend::CRAFT_PRINT_COLOR;
+const _: bool = backend::CRAFT_OPTIONAL_CONTENT;
 
 pub mod print;
 

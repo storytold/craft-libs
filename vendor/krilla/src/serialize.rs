@@ -22,6 +22,7 @@ use crate::graphics::device_n::DeviceNColorSpace;
 use crate::graphics::icc::{ICCBasedColorSpace, ICCProfile};
 #[cfg(feature = "raster-images")]
 use crate::graphics::image::Image;
+use crate::graphics::optional_content::OptionalContent;
 use crate::graphics::separation::SeparationColorSpace;
 use crate::interactive::destination::{NamedDestination, XyzDestination};
 use crate::interchange::embed::EmbeddedFile;
@@ -368,6 +369,8 @@ pub(crate) struct SerializeContext {
     /// Where the first mesh gradient whose corner colors share no color space was drawn;
     /// [`SerializeContext::finish`] fails with [`KrillaError::MixedMeshColorSpaces`].
     pub(crate) mixed_mesh_colors: Option<Option<Location>>,
+    /// The document's optional content groups.
+    pub(crate) optional_content: OptionalContent,
     /// The ref of the page tree.
     page_tree_ref: Ref,
     /// PDF 2.0 namespaces.
@@ -429,6 +432,7 @@ impl SerializeContext {
         Self {
             poisoned: false,
             mixed_mesh_colors: None,
+            optional_content: OptionalContent::default(),
             cached_mappings: HashMap::new(),
             pdf2_ns,
             global_objects: GlobalObjects::default(),
@@ -642,6 +646,9 @@ impl SerializeContext {
         }
         if let Some(location) = self.mixed_mesh_colors {
             return Err(KrillaError::MixedMeshColorSpaces(location));
+        }
+        if let Some(location) = self.optional_content.misuse {
+            return Err(KrillaError::UnbalancedOptionalContent(location));
         }
 
         // We need to be careful here that we serialize the objects in the right order,

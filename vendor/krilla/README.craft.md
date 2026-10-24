@@ -21,9 +21,10 @@ itself omits those texts. Its examples and four CC0 ICC profiles are retained wi
 | `patches/09-rendition-class.patch` | Master rendition in XMP | `chunk_container.rs` |
 | `patches/10-mesh-gradients.patch` | Mesh gradients | `content.rs`, `error.rs`, `graphics/{mask,paint,shading_function}.rs`, `serialize.rs`, `surface.rs` |
 | `patches/11-png-decode-cap.patch` | PNG decode cap | `graphics/image.rs` |
-| `patches/12-devicen-pdf-version.patch` | DeviceN attributes by PDF version | `graphics/device_n.rs` |
-| `patches/13-pdfx-conformance.patch` | PDF/X conformance key | `serialize.rs` |
-| `patches/14-modification-date.patch` | Modification date | `interchange/metadata.rs` |
+| `patches/12-optional-content.patch` | Optional content | `chunk_container.rs`, `configure/{PDF_A1,PDF_A2,PDF_A4,PDF_UA1}.md`, `configure/validate.rs`, `content.rs`, `error.rs`, `graphics/{mod,optional_content}.rs`, `lib.rs`, `resource.rs`, `serialize.rs`, `surface.rs` |
+| `patches/13-devicen-pdf-version.patch` | DeviceN attributes by PDF version | `graphics/device_n.rs` |
+| `patches/14-pdfx-conformance.patch` | PDF/X conformance key | `serialize.rs` |
+| `patches/15-modification-date.patch` | Modification date | `interchange/metadata.rs` |
 
 Each patch applies with `patch -p1` from this directory, in numeric order, to the pristine
 crate. `SOURCE.json` records, for every retained file, the upstream hash (`upstream_sha256`)
@@ -182,7 +183,7 @@ written as CMYK, which knocks out or replaces the other plates.
 - From PDF 1.6, a space with spots gets an attributes dictionary whose `/Colorants` maps
   each spot to its Separation space. When spots and process inks mix, it is
   `/Subtype /NChannel` with `/Process << /ColorSpace alternate /Components [/Cyan /Magenta
-  /Yellow /Black] >>`. Patch 12 changes which of these each PDF version gets.
+  /Yellow /Black] >>`. Patch 13 changes which of these each PDF version gets.
 - Validation: a spot's CMYK alternate counts as its Separation fallback, so one colorant
   name keeps one alternate across Separation and DeviceN spaces
   (`ValidationError::InconsistentSeparationFallback`). `/All` and `/None` are Separation-only
@@ -304,7 +305,42 @@ returns an error when they overflow or don't match the data, where upstream mult
 `u32` and asserted while writing (32 DeviceN components at 16 bits overflow at about 67
 megapixels).
 
-## 12: DeviceN attributes by PDF version
+## 12: optional content
+
+Krilla 0.8.2 can't write optional content groups (layers), and it has no hook for raw content
+operators or extra catalog and resource entries, so CADCraft's drawing layers can't be added
+from outside. The new module `graphics/optional_content.rs` holds the feature; the other files
+get small hooks.
+
+- `Document::add_optional_content_group(name, visible) -> OcgId` writes
+  `<< /Type /OCG /Name (…) >>` once (a text string, so any Unicode name works).
+- `Surface::start_optional_content(OcgId)` and `Surface::end_optional_content()`, both
+  returning `KrillaResult<()>`, write `/OC /ocN BDC` … `EMC`, with `/ocN` in the current
+  stream's `/Properties` resources (a new resource kind beside `/ExtGState`). Inside a group,
+  opacity or mask, the entry goes in that form's resources.
+- Marks nest, and nest independently of tagging, whose single marked-content level is
+  unchanged. An end with nothing open, or one that would close a tagged section started inside
+  the mark, returns `KrillaError::UnbalancedOptionalContent` and writes nothing. An `OcgId` index
+  the document doesn't have returns `KrillaError::UnknownOptionalContentGroup`. Marks still open
+  when their stream finishes (surface finish, or a pop of a group, opacity or mask), and a
+  tagged section ended while a mark started inside it is open, are closed with `EMC` and make
+  `Document::finish` fail with `KrillaError::UnbalancedOptionalContent`. Nothing panics.
+- When any group exists, the catalog gets `/OCProperties << /OCGs [all] /D << /Name (Layers)
+  /Order [all] /OFF [hidden] >> >>`, listing groups that no page uses too; `/OFF` is omitted
+  when every group is shown. `Document::set_optional_content_page_mode(true)` adds
+  `/PageMode /UseOC`, written only when groups exist.
+- Validation: adding a group registers `ValidationError::OptionalContent`, which PDF/A-1
+  prohibits (6.1.13), and below PDF 1.5 also
+  `ValidationError::RequiresNewerPdfVersion(VersionedFeature::OptionalContent)`, which PDF/UA-1
+  prohibits. Without a validator a PDF 1.4 document still gets the groups, as with krilla's
+  other versioned features. The PDF/A-2, A-4 and UA-1 ledgers record that the one
+  configuration has a `Name`, an `Order` listing every group and no `AS`.
+
+`CRAFT_OPTIONAL_CONTENT` marks the patch; craft-pdf requires it at compile time.
+
+Tests: `crates/pdf/tests/optional_content.rs`.
+
+## 13: DeviceN attributes by PDF version
 
 Patch 06 writes the DeviceN attributes dictionary only from PDF 1.6. A PDF/X-1a file is PDF
 1.3 or 1.4, so its spots then had no `/Colorants`, and a file written at 1.6 or later and
@@ -325,7 +361,7 @@ against the text.
 Tests: `crates/pdf/tests/print_color.rs` (`device_n_attributes_follow_the_pdf_version`) and
 `crates/prepress/tests/flatten_document.rs` (`pdf_x1a_output_is_pdf_14_without_nchannel`).
 
-## 13: PDF/X conformance key
+## 14: PDF/X conformance key
 
 Patch 08 writes only `GTS_PDFXVersion`. PDF/X-1a and X-3 also need `GTS_PDFXConformance` in
 the document information dictionary: a PDF/X-1a:2003 file carries `GTS_PDFXVersion
@@ -340,7 +376,7 @@ and on) have no conformance key.
 Tests: `crates/pdf/tests/print_color.rs` (`trapped_and_pdfx_version_are_written_to_info_and_xmp`)
 and `crates/prepress/tests/flatten_document.rs` (`pdf_x1a_output_is_pdf_14_without_nchannel`).
 
-## 14: modification date
+## 15: modification date
 
 Upstream has only a creation date and writes it as the modification date too (`/ModDate` and
 `xmp:ModifyDate`), so a document rewritten from another, such as a flattened copy, can't keep

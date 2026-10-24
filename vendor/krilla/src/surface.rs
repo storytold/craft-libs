@@ -100,6 +100,11 @@ impl<'a> Surface<'a> {
         }
     }
 
+    /// The content stream being drawn and the serialization context, borrowed together.
+    pub(crate) fn content_and_context(&mut self) -> (&mut ContentBuilder, &mut SerializeContext) {
+        (self.bd.get_mut(), self.sc)
+    }
+
     /// Return a `StreamBuilder` to allow drawing on a sub-context.
     pub fn stream_builder(&mut self) -> StreamBuilder<'_> {
         StreamBuilder::new(self.sc, self.chunk_container)

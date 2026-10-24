@@ -222,7 +222,9 @@ krilla prohibits embedding files in this export mode. 🟢
 
 # 6.9 Optional content
 
-krilla does not support optional content. 🔵
+- krilla writes every optional content group with a `Name`. 🟢
+- krilla writes one optional content configuration, `D`, with the `Name` `Layers`, an `Order`
+  array that lists every group, and no `AS` key. 🟢
 
 # 6.10 Use of alternate presentations and transitions
 

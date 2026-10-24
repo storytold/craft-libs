@@ -191,7 +191,9 @@ See `README.md` for the meaning of each color.
 - krilla straight out forbids embedding files in this export mode. 🟢
 
 ## 6.10 Optional content
-- krilla does not support optional content. 🟢
+- krilla writes every optional content group with a `Name`. 🟢
+- krilla writes one optional content configuration, `D`, with the `Name` `Layers`, an `Order`
+  array that lists every group, and no `AS` key. 🟢
 
 ## 6.11 Use of alternate presentations and transitions
 - krilla does not use the `AlternatePresentations` entry. 🟢

@@ -58,7 +58,8 @@ with an even number of characters and without whitespaces. 🟢
   DeviceN colorants is never reached. 🟢
 - krilla only uses u16 for CIDs. 🟢
 
-6.1.13: krilla does not support optional content. 🔵
+6.1.13: krilla fails export if an optional content group is added
+(`ValidationError::OptionalContent`), so the catalog never has `OCProperties`. 🟢
 
 ## 6.2 Graphics
 

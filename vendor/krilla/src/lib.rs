@@ -187,3 +187,6 @@ pub const CRAFT_UNWIND_POISONING: bool = true;
 /// Identifies the print color patches: CMYK blending groups, print output intent and
 /// PDF/X markers.
 pub const CRAFT_PRINT_COLOR: bool = true;
+
+/// Identifies the optional content patch: layers written as optional content groups.
+pub const CRAFT_OPTIONAL_CONTENT: bool = true;

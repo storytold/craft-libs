@@ -72,17 +72,17 @@
     {
       "path": "src/chunk_container.rs",
       "upstream_sha256": "7317162f659d7c756ee170146d360e2c757cef953dc5a2a62f32daea90fc0c3f",
-      "sha256": "51903c82a6e81d806b9a17d08a3be758ec0682010c4c0d22db9f8429a10e8536"
+      "sha256": "b6ddeb3cb612feedb9b4b869a421bb3f9a56a8407f3294c3401485df65357af6"
     },
     {
       "path": "src/configure/PDF_A1.md",
       "upstream_sha256": "e6ea127125ec0984f3fcd57f9886fc960aa90c9f751dd59cd61fe9cbc2cdb903",
-      "sha256": "f647baeb6bd3152c688cefb71462ba05e969e0a9572c3f95779b2b18bf384220"
+      "sha256": "ce55787bf6f984552492f771d2dc500cb730038f9ba19355bb466c680384b54b"
     },
     {
       "path": "src/configure/PDF_A2.md",
       "upstream_sha256": "47c87d3b29aff6e87703ba6f6021a2cfa88b4faf7f2c35101719b8b9f1bb9705",
-      "sha256": "af366de5b86fa3995bf08b1f71d9d901acbf2130560fcdb537cac75b1c65b599"
+      "sha256": "90799a209489944266918690a59c7053f8b14c880e9caf23069ed601c539855f"
     },
     {
       "path": "src/configure/PDF_A3.md",
@@ -92,12 +92,12 @@
     {
       "path": "src/configure/PDF_A4.md",
       "upstream_sha256": "27710cf95e6ef83714cfa372e09796c9ec0d5455ceb31c101a7dccfdd8ee1b5b",
-      "sha256": "f3a6ed247033124a8ad583e665e532e736841f2997974425688ced2c156fc6c6"
+      "sha256": "2e68d89bfc0f3f020ee96da85a3b9c59f643d3fc3119e35798e5eaf90ea5254e"
     },
     {
       "path": "src/configure/PDF_UA1.md",
       "upstream_sha256": "f3932749a56db38eb302e05b59b6a18312b9eda2e473b2b6e99645a29d3dc670",
-      "sha256": "f3932749a56db38eb302e05b59b6a18312b9eda2e473b2b6e99645a29d3dc670"
+      "sha256": "64d0c64fd15e30c0d3b786d4ebd2928d219a529114e39d6c26e5680cdc8a1ea3"
     },
     {
       "path": "src/configure/README.md",
@@ -112,7 +112,7 @@
     {
       "path": "src/configure/validate.rs",
       "upstream_sha256": "7e2a0ac6d7ecaac1ed2158cdc9e94411c2499c98e541ffb471f2bb06d5069c33",
-      "sha256": "65de778c777253d369917f002809672deac4f5f579200d8194778fc6c94d9ea9"
+      "sha256": "3c281fc219faea71de989bdeb571c676596dd1050ec64113c10cf9a357ff0100"
     },
     {
       "path": "src/configure/version.rs",
@@ -122,7 +122,7 @@
     {
       "path": "src/content.rs",
       "upstream_sha256": "9e59b2c77b73b36caedacfe80894d1cce7fd6fe6f7438ea24fda2019391a980c",
-      "sha256": "ba6dfad6d5ef4bae7f960ab2d3fe2673fa40394edde261005271a24c3b1c41df"
+      "sha256": "e477e77d7209bc837b045f448b502fcce81047d91b8b27ab49e26a9410e74322"
     },
     {
       "path": "src/data.rs",
@@ -137,7 +137,7 @@
     {
       "path": "src/error.rs",
       "upstream_sha256": "656b260bd99d250535099f17f2db8e6e6135e72c74fb6dff304371db9f646be5",
-      "sha256": "fdc6eaecce55bfd689f5034b57e9afaa3a3a21ea0444b95c409ac41190b61a4c"
+      "sha256": "fadd496a1d3e782ef8dfc40a59bc0c070406846d8a24b8b21eaa6130d4c58f5a"
     },
     {
       "path": "src/geom.rs",
@@ -187,7 +187,12 @@
     {
       "path": "src/graphics/mod.rs",
       "upstream_sha256": "9f82d56c24f2fd51736e68b9c182cae90617816d00e814102f45996705b13224",
-      "sha256": "b6dcb248a344f818f63b669f4fa87930147c5c204c7351866c806a36aab94c3c"
+      "sha256": "19fc4fc3476ef3882b9ff9d654f12ee5313d4d6a5fddeeb6ceccdc176a15f6db"
+    },
+    {
+      "path": "src/graphics/optional_content.rs",
+      "upstream_sha256": null,
+      "sha256": "6ac9d9276434a8e6189dc8947a557303feea15353588b86ee09b4e97cadeddc5"
     },
     {
       "path": "src/graphics/paint.rs",
@@ -287,7 +292,7 @@
     {
       "path": "src/lib.rs",
       "upstream_sha256": "7533b14f1cef6749c961a7c1ba95d3274d6584e60febfccc03b9d63b4dc2abeb",
-      "sha256": "bdeede1bb2e548e702aa1b4007d5b8cde22c63d78179270c7e4c12ec7ac0ff57"
+      "sha256": "7263cddc8304d24b018e9552f5764358ad642198d4e79d75df568ceee213a9be"
     },
     {
       "path": "src/num.rs",
@@ -307,12 +312,12 @@
     {
       "path": "src/resource.rs",
       "upstream_sha256": "56a062eb37e5da88a78a129c6391103caddf7a2c7ca9fcfdb577319412c97107",
-      "sha256": "f451ced9b9cbdc4d15d1c1aa909c1aa0f1e8fc75d31ace86bb01815ec9166a95"
+      "sha256": "6062e553b90733b66207d27f98383f7458cc72048596590dc5fbde487c3a9099"
     },
     {
       "path": "src/serialize.rs",
       "upstream_sha256": "4f2c439dbd20006eea112e056b2f1a5ba98a1ede9227a45f66a6df46fb1a07e8",
-      "sha256": "8e3c5bd288fa37df7ef1541db6b9793fd3a3d6d1bfd0dc617f5558b033e1be3e"
+      "sha256": "8934429ca71d2b62dea236c78624d249184ffe7c67f4d46d585c5a2ed41f5031"
     },
     {
       "path": "src/stream.rs",
@@ -322,7 +327,7 @@
     {
       "path": "src/surface.rs",
       "upstream_sha256": "94de0a0384fc69c9785c6595b3f2c7ed8319635c901b8dc12894e252ab3ef8da",
-      "sha256": "b566fdb63806112da32854eccd37c4cf2b9de5ae04009addeb27e981a1bc23c4"
+      "sha256": "67e0f7db850084692132271364259fc42597f4a0f699ffad5d74c59834976040"
     },
     {
       "path": "src/text/cid.rs",
