@@ -310,6 +310,14 @@ fn cmyk_image_keeps_its_samples() {
 }
 
 #[test]
+fn cmyk_image_overprints_without_nonzero_mode() {
+    let objects = [hex_image("/Width 2 /Height 1 /ColorSpace /DeviceCMYK /BitsPerComponent 8", "FF000000 00804020")];
+    let pdf = raw_pdf("/GS1 gs q 100 0 0 50 10 10 cm /Im1 Do Q", "/XObject << /Im1 5 0 R >> /ExtGState << /GS1 << /op true /OPM 1 >> >>", &objects);
+    let (list, _) = read(&pdf);
+    assert_eq!(images(&list)[0].1.overprint, op(true, false), "nonzero overprint mode is not for images");
+}
+
+#[test]
 fn separation_image_is_its_ink_with_decode_applied() {
     let objects = [hex_image(&format!("/Width 2 /Height 1 /ColorSpace {GOLD} /BitsPerComponent 8 /Decode [1 0]"), "FF40")];
     let pdf = raw_pdf("/GS1 gs q 100 0 0 50 10 10 cm /Im1 Do Q", "/XObject << /Im1 5 0 R >> /ExtGState << /GS1 << /op true /OPM 1 >> >>", &objects);
@@ -493,7 +501,7 @@ fn deeply_overlapping_tiling_cells_paint_nothing() {
     )];
     let pdf = raw_pdf("/Pattern cs /P1 scn 0 0 90 30 re f", "/Pattern << /P1 5 0 R >>", &objects);
     let (list, report) = read(&pdf);
-    assert_eq!((report.tiling_cells, report.rasterized_tilings), (0, 0));
+    assert_eq!((report.tiling_cells, report.rasterized_tilings, report.dropped_tilings), (0, 0, 1));
     assert!(images(&list).is_empty());
 }
 

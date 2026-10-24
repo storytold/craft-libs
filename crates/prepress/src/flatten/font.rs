@@ -129,7 +129,7 @@ pub(crate) fn wrap_cff(cff: &[u8], advances: &BTreeMap<u32, f32>) -> Option<Vec<
 
     let mut hhea = Vec::new();
     be32(&mut hhea, 0x0001_0000);
-    be16(&mut hhea, upem * 4 / 5);
+    be16(&mut hhea, (u32::from(upem) * 4 / 5) as u16);
     be16(&mut hhea, (-(i32::from(upem) / 5)) as i16 as u16);
     be16(&mut hhea, 0);
     be16(&mut hhea, max_advance);

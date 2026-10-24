@@ -137,6 +137,8 @@ pub struct ReadReport {
     /// Tiling pattern fills past [`MAX_TILING_CELLS`] cells or [`MAX_TILING_ITEMS`] items, read
     /// as images.
     pub rasterized_tilings: usize,
+    /// Tiling pattern fills left out: cells stacked too deep to sample, or canvases too large.
+    pub dropped_tilings: usize,
     /// Glyphs in text rendering mode 3, dropped.
     pub invisible_glyphs: usize,
     /// Spot inks past the ink set's capacity, whose tints were dropped.
@@ -199,6 +201,7 @@ pub(crate) fn read_page_in(doc: &Pdf, page: usize, opts: &ReadOptions, color: Re
         rasterized_shadings: 0,
         tiling_cells: 0,
         rasterized_tilings: 0,
+        dropped_tilings: 0,
         invisible_glyphs: 0,
         dropped_inks: 0,
         dropped_annotations: if opts.annotations { 0 } else { catch_unwind(AssertUnwindSafe(|| printing_annotations(p))).unwrap_or(0) },
@@ -599,18 +602,20 @@ impl<'s, 'a> Reader<'s, 'a> {
         let PdfPaint::Pattern(pattern) = paint else { return };
         self.flush();
         let clip = nonzero(&path, rule);
-        let (op, big_op, mode) = self.overprint;
+        let (op, big_op, _) = self.overprint;
         let flag = if stroke { big_op } else { op };
         match pattern.as_ref() {
-            Pattern::Shading(sp) => self.shading_area(clip, sp, flag, mode),
+            Pattern::Shading(sp) => self.shading_area(clip, sp, flag),
             Pattern::Tiling(t) => self.tiling_area(clip, t, flag, stroke),
         }
     }
 
-    fn shading_area(&mut self, clip: BezPath, sp: &ShadingPattern, flag: bool, mode: u8) {
+    fn shading_area(&mut self, clip: BezPath, sp: &ShadingPattern, flag: bool) {
         let look = self.look(sp.opacity);
         let cs = &sp.shading.color_space;
-        let overprint = Overprint { fill: flag, stroke: flag, nonzero: mode == 1 && cs.is_device_cmyk() };
+        // Nonzero overprint mode is for colors set in DeviceCMYK, not shadings or images
+        // (ISO 32000-2 §8.6.7).
+        let overprint = Overprint { fill: flag, stroke: flag, nonzero: false };
         let simulation = self.shared.simulation.clone();
         let mut children = Vec::new();
         if let Some(bg) = &sp.shading.background {
@@ -719,12 +724,16 @@ impl<'s, 'a> Reader<'s, 'a> {
             // like fills past the range of `cells`.
             let per_pixel = ((b.width().abs() / xs.abs()).floor() + 1.0) * ((b.height().abs() / ys.abs()).floor() + 1.0);
             if !per_pixel.is_finite() || per_pixel > MAX_TILING_CELLS as f64 {
+                self.shared.report.dropped_tilings += 1;
                 return;
             }
             let inks = &self.shared.inks;
             let cell_box = m.transform_rect_bbox(b);
             let (scale, cell_scale) = tiling_scales(self.shared.scale, area, cell_box, per_pixel, inks.len());
-            let (Some(mut drawn), Some(mut canvas)) = (Canvas::new(cell_box, cell_scale, inks), Canvas::new(area, scale, inks)) else { return };
+            let (Some(mut drawn), Some(mut canvas)) = (Canvas::new(cell_box, cell_scale, inks), Canvas::new(area, scale, inks)) else {
+                self.shared.report.dropped_tilings += 1;
+                return;
+            };
             drawn.draw(&cell);
             let (w, h) = canvas.size();
             for y in 0..h {
@@ -776,8 +785,8 @@ impl<'s, 'a> Reader<'s, 'a> {
         let smask = smask.filter(|a| !a.iter().all(|v| *v == 255)).map(Arc::from);
         let (sx, sy) = im.scale_factors;
         let transform = transform * Affine::scale_non_uniform(w as f64 * f64::from(sx), h as f64 * f64::from(sy));
-        let (op, _, mode) = self.overprint;
-        let overprint = Overprint { fill: op, stroke: op, nonzero: mode == 1 && im.color_space.is_device_cmyk() };
+        let (op, _, _) = self.overprint;
+        let overprint = Overprint { fill: op, stroke: op, nonzero: false };
         self.flush();
         let device = matches!(im.space, InkSpace::Gray | InkSpace::Cmyk { converted: false });
         let jpeg = if device && smask.is_none() { dct_passthrough(image.stream(), im.width, im.height) } else { None };
