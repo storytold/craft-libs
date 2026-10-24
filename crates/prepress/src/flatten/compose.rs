@@ -517,6 +517,8 @@ struct Builder<'a> {
     covers: Vec<bool>,
     /// Every open group composites at full opacity with Normal blending.
     plain_path: bool,
+    /// Some open group is a knockout group.
+    knockout_path: bool,
 }
 
 impl<'a> Builder<'a> {
@@ -534,6 +536,7 @@ impl<'a> Builder<'a> {
             tag: None,
             covers: Vec::new(),
             plain_path: true,
+            knockout_path: false,
         }
     }
 
@@ -542,9 +545,10 @@ impl<'a> Builder<'a> {
             return None;
         }
         self.shapes.push(Shape::new(path, rule).clipped(self.clip_stack.iter().copied()));
-        // An opaque paint without overprint in groups that composite it unchanged (a knockout or
-        // isolated group too: the paint replaces its backdrop either way).
-        self.covers.push(self.plain_path && paint.as_ref().is_some_and(|p| p.named.is_none()));
+        // An opaque paint without overprint in groups that composite it unchanged (an isolated
+        // group too: the paint replaces its backdrop either way). Not in a knockout group: a later
+        // element there composites over the group's backdrop, so what is under the paint shows.
+        self.covers.push(self.plain_path && !self.knockout_path && paint.as_ref().is_some_and(|p| p.named.is_none()));
         self.paints.push(paint);
         self.owners.push(self.top);
         self.tags.push(self.tag);
@@ -590,8 +594,9 @@ impl<'a> Builder<'a> {
                     self.clips.push(ClipPath { path: clip.clone(), rule: FillRule::NonZero });
                 }
                 let masked = masked || g.mask.is_some();
-                let plain_path = self.plain_path;
+                let (plain_path, knockout_path) = (self.plain_path, self.knockout_path);
                 self.plain_path &= g.opacity >= 1.0 && g.blend == BlendMode::Normal;
+                self.knockout_path |= g.knockout;
                 let mut children = Vec::with_capacity(g.children.len());
                 for c in &g.children {
                     match self.node(c, masked)? {
@@ -605,7 +610,7 @@ impl<'a> Builder<'a> {
                 if g.clip.is_some() {
                     self.clip_stack.pop();
                 }
-                self.plain_path = plain_path;
+                (self.plain_path, self.knockout_path) = (plain_path, knockout_path);
                 self.tag = outer;
                 Ok((!children.is_empty()).then(|| {
                     Node::Group(GroupNode {
@@ -966,6 +971,15 @@ mod tests {
         };
         assert_eq!(at(&flat(&scene(true)), 75.0, 50.0, &[C, M]).1, [0.0, 0.5]);
         assert_eq!(at(&flat(&scene(false)), 75.0, 50.0, &[C, M]).1, [0.5, 0.5]);
+    }
+
+    #[test]
+    fn knockout_group_shows_its_backdrop_under_a_later_element() {
+        let half_yellow = Item::Group(group(0.5, BlendMode::Normal, vec![solid(Rect::new(0.0, 0.0, 100.0, 100.0), &[(Y, 1.0)])]));
+        let g =
+            GroupItem { knockout: true, ..group(1.0, BlendMode::Normal, vec![solid(Rect::new(0.0, 0.0, 100.0, 100.0), &[(M, 1.0)]), half_yellow]) };
+        let l = list(InkSet::new(), vec![solid(Rect::new(0.0, 0.0, 100.0, 100.0), &[(C, 1.0)]), Item::Group(g)]);
+        assert_eq!(at(&flat(&l), 50.0, 50.0, &[C, M, Y]).1, [0.5, 0.0, 0.5]);
     }
 
     #[test]
