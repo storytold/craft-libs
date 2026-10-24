@@ -65,6 +65,81 @@ mod device {
         execute(&mut fresh).unwrap();
         assert_eq!(fresh.paths, 1);
     }
+
+    /// Records the clips the interpreter applies, alongside the paths painted under them.
+    #[derive(Default)]
+    struct ClipDevice {
+        clips: Vec<BezPath>,
+        paths: usize,
+    }
+
+    impl Device<'_> for ClipDevice {
+        fn set_soft_mask(&mut self, _: Option<SoftMask<'_>>) {}
+        fn set_blend_mode(&mut self, _: BlendMode) {}
+        fn draw_path(&mut self, _: &BezPath, _: Affine, _: &Paint<'_>, _: &PathDrawMode) {
+            self.paths += 1;
+        }
+        fn push_clip_path(&mut self, clip_path: &ClipPath) {
+            self.clips.push(clip_path.path.clone());
+        }
+        fn push_transparency_group(&mut self, _: f32, _: Option<SoftMask<'_>>, _: BlendMode) {}
+        fn draw_glyph(&mut self, _: &Glyph<'_>, _: Affine, _: Affine, _: &Paint<'_>, _: &GlyphDrawMode) {}
+        fn draw_image(&mut self, _: Image<'_, '_>, _: Affine) {}
+        fn pop_clip_path(&mut self) {}
+        fn pop_transparency_group(&mut self) {}
+    }
+
+    fn clips_of(content: &str) -> ClipDevice {
+        let bytes = format!(
+            "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 40 20] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >> endobj\n4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n5 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >> endobj\ntrailer << /Root 1 0 R >>\n%%EOF",
+            content.len()
+        );
+        let pdf = craft_pdf::open_slice(bytes.as_bytes(), None).unwrap();
+        let page = &pdf.pages()[0];
+        let cache = InterpreterCache::new();
+        let mut context = Context::new(
+            page.initial_transform(true).to_kurbo(),
+            Rect::new(0.0, 0.0, 40.0, 20.0),
+            &cache,
+            page.xref(),
+            InterpreterSettings::default(),
+        );
+        let mut device = ClipDevice::default();
+        craft_pdf::interpret_page(page, &mut context, &mut device).unwrap();
+        device
+    }
+
+    /// A glyph shown in a clipping render mode adds its outline to the clipping path, and that
+    /// clip applies to everything painted after `ET`. When the glyphs shown have no outline -- a
+    /// space, say -- the clip is empty and nothing paints through it. The interpreter applied a
+    /// clip only once a glyph had contributed an outline, so such a text object clipped nothing
+    /// and what followed painted unmasked.
+    ///
+    /// A text object that shows no glyph at all is a different case: there the clipping path is
+    /// unchanged, as readers leave it.
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
+    fn a_glyph_shown_in_a_clipping_mode_clips_even_with_no_outline() {
+        // `7 Tr` is clip-only, and the glyph shown has no outline: the clip is empty.
+        let empty = clips_of("q BT 7 Tr /F1 12 Tf 4 4 Td ( ) Tj ET 1 0 0 rg 0 0 40 20 re f Q");
+        assert_eq!(empty.clips.len(), 1, "the empty clip is applied");
+        assert!(empty.clips[0].is_empty(), "and it clips everything away: {:?}", empty.clips[0]);
+
+        // A clipping mode with no glyph shown at all leaves the clipping path alone.
+        let none = clips_of("q BT 7 Tr /F1 12 Tf 4 4 Td ET 1 0 0 rg 0 0 40 20 re f Q");
+        assert!(none.clips.is_empty(), "nothing was shown, so nothing clips");
+        assert_eq!(none.paths, 1);
+
+        // No text object: the fill is unclipped, as it always was.
+        let plain = clips_of("q 1 0 0 rg 0 0 40 20 re f Q");
+        assert!(plain.clips.is_empty(), "nothing clips the fill");
+        assert_eq!(plain.paths, 1);
+
+        // A painting mode never clips, outline or not.
+        let painting = clips_of("q BT 0 Tr /F1 12 Tf 4 4 Td ( ) Tj ET 1 0 0 rg 0 0 40 20 re f Q");
+        assert!(painting.clips.is_empty(), "a painting text mode never clips");
+        assert_eq!(painting.paths, 1);
+    }
 }
 
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]

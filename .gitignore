@@ -2,6 +2,9 @@
 plan/
 plans/
 /target
+# Also a sub-crate's own build directory: `crates/pdf/read-only-contract/target/` is not covered
+# by the anchored `/target` above, and 803 of its files reached a commit once (#185 review).
+target/
 .DS_Store
 /.claude/
 .idea/
