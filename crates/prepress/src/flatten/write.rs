@@ -18,6 +18,7 @@ use craft_pdf::interpret::color::CmykConversion;
 use craft_pdf::write::backend::blend::{self as kblend, GroupOptions};
 use craft_pdf::write::backend::color::device_n::{self, Colorant, DeviceNSpace};
 use craft_pdf::write::backend::color::{Color as PdfColor, RegularColor, cmyk};
+use craft_pdf::write::backend::configure::PdfVersion;
 use craft_pdf::write::backend::geom::{Path, PathBuilder, Point as KPoint, Size, Transform};
 use craft_pdf::write::backend::image::{BitsPerComponent, CustomImage, Image, ImageColorspace};
 use craft_pdf::write::backend::mask::{Mask as KMask, MaskType, TransferFunction};
@@ -42,10 +43,17 @@ use crate::ink::{Ink, InkColor, InkId, InkSet, Overprint, Process, to_pdf_color}
 pub enum WriteError {
     #[error(transparent)]
     Pdf(#[from] pdf_write::WriteError),
-    /// An ink isn't in the set, a spot's Lab alternate can't be converted, or a DeviceN space
-    /// would have more than 32 colorants.
+    /// An ink isn't in the set or a spot's Lab alternate can't be converted.
     #[error("color {0:?} can't be written")]
     Color(InkColor),
+    /// A DeviceN space would have more colorants than the output's PDF version takes
+    /// ([`max_colorants`]).
+    #[error("a DeviceN space of {colorants} colorants; this output takes at most {max}")]
+    Colorants { colorants: usize, max: usize },
+    /// A complex region paints more spot inks than [`plates`](crate::plates::plates) separates;
+    /// `unseparated` are the ones past the limit.
+    #[error("a complex region paints {inks} spot inks; at most {max} are separated, not {}", some_names(.unseparated))]
+    SpotInks { inks: usize, max: usize, unseparated: Vec<String> },
     #[error("the page box is empty or not finite")]
     Page,
     #[error("image: {0}")]
@@ -58,26 +66,45 @@ pub enum WriteError {
     Region(String),
 }
 
-/// Draws `items` on `surface` in page space, with colors of `inks`. `cms` converts spot
-/// inks' Lab alternates into the printing condition. On error, the items before the failing
-/// one are drawn and the surface is left balanced.
-pub fn draw(surface: &mut Surface<'_>, inks: &InkSet, items: &[Item], cms: &dyn CmykConversion) -> Result<(), WriteError> {
-    let mut painter = Painter::new(inks, cms);
+/// The most colorants a DeviceN space takes at `version`: 8 up to PDF 1.4 (implementation
+/// limits, PDF 1.4 reference Appendix C), 32 from PDF 1.5.
+pub fn max_colorants(version: PdfVersion) -> usize {
+    match version {
+        PdfVersion::Pdf14 => 8,
+        _ => DeviceNSpace::MAX_COLORANTS,
+    }
+}
+
+fn some_names(names: &[String]) -> String {
+    let mut listed = names.iter().take(3).map(String::as_str).collect::<Vec<_>>().join(", ");
+    if names.len() > 3 {
+        listed.push_str(", …");
+    }
+    listed
+}
+
+/// Draws `items` on `surface` in page space, with colors of `inks`, for an output of PDF
+/// `version`. `cms` converts spot inks' Lab alternates into the printing condition. On error,
+/// the items before the failing one are drawn and the surface is left balanced.
+pub fn draw(surface: &mut Surface<'_>, inks: &InkSet, items: &[Item], cms: &dyn CmykConversion, version: PdfVersion) -> Result<(), WriteError> {
+    let mut painter = Painter::new(inks, cms, version);
     items.iter().try_for_each(|item| painter.item(surface, item))
 }
 
 /// Draws `flat.items` in order and, before item `at` of each complex region, the image
 /// `raster` returns for it, clipped to the region's path and without overprint. `raster`
 /// returns an [`ImageItem`] whose space is [`ImageSpace::Inks`] of `list.inks` and which
-/// covers the region, or `None` to leave the region empty.
+/// covers the region, or `None` to leave the region empty. `version` is the output's PDF
+/// version.
 pub fn write_flattened(
     surface: &mut Surface<'_>,
     list: &DisplayList,
     flat: &Flattened,
     cms: &dyn CmykConversion,
+    version: PdfVersion,
     raster: &mut dyn FnMut(&ComplexRegion) -> Result<Option<ImageItem>, WriteError>,
 ) -> Result<(), WriteError> {
-    Painter::new(&list.inks, cms).flattened(surface, flat, raster)
+    Painter::new(&list.inks, cms, version).flattened(surface, flat, raster)
 }
 
 /// [`write_flattened`] for one page of a document whose pages share `fonts`.
@@ -86,10 +113,11 @@ pub fn write_flattened_with_fonts(
     list: &DisplayList,
     flat: &Flattened,
     cms: &dyn CmykConversion,
+    version: PdfVersion,
     fonts: &mut FontMap,
     raster: &mut dyn FnMut(&ComplexRegion) -> Result<Option<ImageItem>, WriteError>,
 ) -> Result<(), WriteError> {
-    let mut painter = Painter::new(&list.inks, cms);
+    let mut painter = Painter::new(&list.inks, cms, version);
     painter.shared = Some(fonts);
     painter.flattened(surface, flat, raster)
 }
@@ -163,6 +191,7 @@ impl Painter<'_, '_> {
 pub fn page_pdf(list: &DisplayList, settings: SerializeSettings, cms: &dyn CmykConversion) -> Result<Vec<u8>, WriteError> {
     let page = list.page;
     let size = PageSettings::from_wh(page.width() as f32, page.height() as f32).filter(|_| page.is_finite()).ok_or(WriteError::Page)?;
+    let version = settings.configuration.version();
     pdf_write::guard(|| {
         let mut writer = Writer::new(settings, Metadata::default());
         let mut page_builder = writer.document_mut().start_page_with(size);
@@ -171,7 +200,7 @@ pub fn page_pdf(list: &DisplayList, settings: SerializeSettings, cms: &dyn CmykC
         if shifted {
             surface.push_transform(&Transform::from_translate(-page.x0 as f32, -page.y0 as f32));
         }
-        let drawn = draw(&mut surface, &list.inks, &list.items, cms);
+        let drawn = draw(&mut surface, &list.inks, &list.items, cms, version);
         if shifted {
             surface.pop();
         }
@@ -185,6 +214,8 @@ pub fn page_pdf(list: &DisplayList, settings: SerializeSettings, cms: &dyn CmykC
 struct Painter<'a, 'f> {
     inks: &'a InkSet,
     cms: &'a dyn CmykConversion,
+    /// [`max_colorants`] of the output.
+    max_colorants: usize,
     /// The document's fonts, consulted on a miss in `fonts`.
     shared: Option<&'f mut FontMap>,
     /// `None` for fonts krilla can't read; their runs are written as outlines. Keyed by
@@ -196,8 +227,16 @@ struct Painter<'a, 'f> {
 }
 
 impl<'a> Painter<'a, '_> {
-    fn new(inks: &'a InkSet, cms: &'a dyn CmykConversion) -> Self {
-        Self { inks, cms, shared: None, fonts: HashMap::new(), tagged: false }
+    fn new(inks: &'a InkSet, cms: &'a dyn CmykConversion, version: PdfVersion) -> Self {
+        Self { inks, cms, max_colorants: max_colorants(version), shared: None, fonts: HashMap::new(), tagged: false }
+    }
+
+    /// An error when a DeviceN space of `colorants` is more than the output takes.
+    fn fits(&self, colorants: usize) -> Result<(), WriteError> {
+        if colorants > self.max_colorants {
+            return Err(WriteError::Colorants { colorants, max: self.max_colorants });
+        }
+        Ok(())
     }
 
     fn item(&mut self, s: &mut Surface<'_>, item: &Item) -> Result<(), WriteError> {
@@ -340,11 +379,12 @@ impl<'a> Painter<'a, '_> {
             }
         }
         let out: Vec<InkId> = weights.iter().flatten().map(|(id, _)| *id).collect::<BTreeSet<_>>().into_iter().collect();
+        self.fits(out.len())?;
         let colorants = out
             .iter()
             .map(|&id| self.colorant(id).ok_or_else(|| WriteError::Color(InkColor::Tints(vec![(id, 1.0)]))))
             .collect::<Result<Vec<_>, _>>()?;
-        let space = DeviceNSpace::new(colorants).ok_or(WriteError::Image("more inks than a DeviceN space takes"))?;
+        let space = DeviceNSpace::new(colorants).ok_or(WriteError::Image("krilla rejected its DeviceN space"))?;
         let renames = weights.iter().all(|w| matches!(w[..], [(_, t)] if t == 1.0)) && out.len() == ids.len();
         if renames && weights.iter().zip(&out).all(|(w, o)| w.first().is_some_and(|(id, _)| id == o)) {
             return Ok((space, samples.clone()));
@@ -505,6 +545,11 @@ impl<'a> Painter<'a, '_> {
                 return Ok((self.process_device_n(&named, cmyk).ok_or_else(|| WriteError::Color(color.clone()))?, overprint));
             }
         }
+        if let InkColor::Tints(tints) = &resolved {
+            // More inks than the output's limit include a spot, so `to_pdf_color` makes a
+            // DeviceN space of them.
+            self.fits(tints.iter().map(|(id, _)| *id).collect::<BTreeSet<_>>().len())?;
+        }
         let pdf = to_pdf_color(&resolved, self.inks, self.cms).ok_or_else(|| WriteError::Color(color.clone()))?;
         Ok((pdf, overprint))
     }
@@ -532,6 +577,7 @@ impl<'a> Painter<'a, '_> {
             resolved.push((*offset, merged));
         }
         let all: BTreeSet<InkId> = resolved.iter().flat_map(|(_, m)| m.keys().copied()).collect();
+        self.fits(all.len())?;
         let partial_process = overprint.fill && all.len() < 4 && all.iter().all(|id| id.index() < 4);
         let mut krilla_stops = Vec::with_capacity(resolved.len());
         for ((offset, merged), (_, original)) in resolved.iter().zip(stops) {

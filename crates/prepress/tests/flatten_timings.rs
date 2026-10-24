@@ -70,11 +70,12 @@ fn written(list: &DisplayList, st: &mut Stages) -> Vec<u8> {
     let start = Instant::now();
     let mut raster = Rasterizer::new(list, settings.clone(), Fallback::Fogra39, &cms, DPI);
     let mut raster_time = Duration::ZERO;
+    let version = settings.configuration.version();
     let mut writer = Writer::new(settings, Metadata::default());
     let size = PageSettings::from_wh(list.page.width() as f32, list.page.height() as f32).unwrap();
     let mut page_builder = writer.document_mut().start_page_with(size);
     let mut surface = page_builder.surface();
-    write_flattened(&mut surface, list, &flat, &cms, &mut |r| {
+    write_flattened(&mut surface, list, &flat, &cms, version, &mut |r| {
         let t = Instant::now();
         let image = raster.region(r);
         raster_time += t.elapsed();

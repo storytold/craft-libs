@@ -17,6 +17,7 @@ use craft_pdf::interpret::{
 };
 use craft_pdf::syntax::object::{Dict, Name, Stream};
 use craft_pdf::write::backend::SerializeSettings;
+use craft_pdf::write::backend::configure::PdfVersion;
 use craft_pdf::write::backend::page::PageSettings;
 use craft_pdf::write::print::{self, PrintColor};
 use craft_pdf::write::{Metadata, Writer};
@@ -461,7 +462,7 @@ fn complex_regions_are_drawn_where_the_flattened_items_put_them() {
     let mut writer = Writer::new(settings, Metadata::default());
     let mut page_builder = writer.document_mut().start_page_with(PageSettings::from_wh(100.0, 100.0).unwrap());
     let mut surface = page_builder.surface();
-    write_flattened(&mut surface, &list, &flat, &CmsConversion::fogra39(), &mut raster).unwrap();
+    write_flattened(&mut surface, &list, &flat, &CmsConversion::fogra39(), PdfVersion::default(), &mut raster).unwrap();
     surface.finish();
     page_builder.finish();
     let p = separate(&writer.finish().unwrap());

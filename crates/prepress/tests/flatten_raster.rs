@@ -12,14 +12,15 @@ use std::sync::{Arc, OnceLock};
 use std::time::Instant;
 
 use craft_pdf::write::backend::SerializeSettings;
+use craft_pdf::write::backend::configure::PdfVersion;
 use craft_pdf::write::backend::page::PageSettings;
 use craft_pdf::write::print::{self, PrintColor};
-use craft_pdf::write::{Metadata, Writer};
+use craft_pdf::write::{Metadata, Writer, configuration};
 use craft_plate_test::reference::{self, Context};
 use craft_plate_test::{scene, structure};
 use craft_prepress::flatten::kurbo::{Affine, BezPath, Point, Rect, Shape};
 use craft_prepress::flatten::raster::Rasterizer;
-use craft_prepress::flatten::write::{page_pdf, write_flattened};
+use craft_prepress::flatten::write::{WriteError, page_pdf, write_flattened};
 use craft_prepress::flatten::{
     BlendMode, ComplexReason, ComplexRegion, DisplayList, FillItem, FillRule, FlattenOptions, FlattenPageOptions, Flattened, GradientGeometry,
     GroupItem, Item, Paint, flatten, flatten_page,
@@ -225,16 +226,62 @@ fn ramp(r: Rect, from: InkColor, to: InkColor) -> Item {
 
 /// `flat` written with complex regions rasterized at `dpi`.
 fn write(list: &DisplayList, flat: &Flattened, dpi: f32) -> Vec<u8> {
+    write_at(list, flat, dpi, PdfVersion::default()).unwrap()
+}
+
+/// [`write`] for an output of PDF `version`.
+fn write_at(list: &DisplayList, flat: &Flattened, dpi: f32, version: PdfVersion) -> Result<Vec<u8>, WriteError> {
     let cms = CmsConversion::fogra39();
     let mut raster = Rasterizer::new(list, settings(), Fallback::Fogra39, &cms, dpi);
-    let mut writer = Writer::new(settings(), Metadata::default());
+    let output = SerializeSettings { configuration: configuration(version, None).unwrap(), ..settings() };
+    let mut writer = Writer::new(output, Metadata::default());
     let size = PageSettings::from_wh(list.page.width() as f32, list.page.height() as f32).unwrap();
     let mut page_builder = writer.document_mut().start_page_with(size);
     let mut surface = page_builder.surface();
-    write_flattened(&mut surface, list, flat, &cms, &mut |r| raster.region(r)).unwrap();
+    let drawn = write_flattened(&mut surface, list, flat, &cms, version, &mut |r| raster.region(r));
     surface.finish();
     page_builder.finish();
-    writer.finish().unwrap()
+    drawn?;
+    Ok(writer.finish().unwrap())
+}
+
+/// A page of 2 pt stripes, one of `process` tints and one of each of `count` spot inks, under a
+/// half-transparent ramp: a complex region that paints them all.
+fn many_inks(count: usize, process: &[(InkId, f32)]) -> (DisplayList, Flattened) {
+    let mut inks = InkSet::new();
+    let stripe = |i: usize| Rect::new(2.0 * i as f64, 0.0, 2.0 * (i + 1) as f64, 10.0);
+    let mut items = vec![solid(stripe(0), process)];
+    for i in 0..count {
+        let spot = Spot { name: format!("Spot {i}"), alternate: Alternate::Cmyk([0.0, 0.0, 0.0, 0.1]), solidity: None };
+        items.push(solid(stripe(i + 1), &[(inks.add(Ink::Spot(spot)).unwrap(), 0.5)]));
+    }
+    let width = 2.0 * (count + 1) as f64;
+    let ramp = ramp(Rect::new(0.0, 0.0, width, 10.0), InkColor::Tints(vec![(K, 0.0)]), InkColor::Tints(vec![(K, 1.0)]));
+    items.push(group(0.5, BlendMode::Multiply, vec![ramp]));
+    let list = DisplayList { page: Rect::new(0.0, 0.0, width, 10.0), inks, items };
+    let flat = flatten(&list, &FlattenOptions::default()).unwrap();
+    assert!(!flat.complex.is_empty());
+    (list, flat)
+}
+
+#[test]
+fn a_region_of_more_spot_inks_than_plates_separates_is_an_error() {
+    let (list, flat) = many_inks(33, &[(K, 0.5)]);
+    match write_at(&list, &flat, 72.0, PdfVersion::default()) {
+        Err(WriteError::SpotInks { inks: 33, max: 32, unseparated }) => assert_eq!(unseparated.len(), 1),
+        other => panic!("{:?}", other.map(|_| ())),
+    }
+}
+
+#[test]
+fn a_raster_region_of_nine_inks_needs_pdf_1_5() {
+    let (list, flat) = many_inks(5, &[(C, 0.5), (InkId::process(Process::Magenta), 0.5), (InkId::process(Process::Yellow), 0.5), (K, 0.5)]);
+    match write_at(&list, &flat, 72.0, PdfVersion::Pdf14) {
+        Err(WriteError::Colorants { colorants: 9, max: 8 }) => {}
+        other => panic!("{:?}", other.map(|_| ())),
+    }
+    let p = separate(&write_at(&list, &flat, 72.0, PdfVersion::Pdf17).unwrap(), 72.0);
+    assert!(tint(&p, "Spot 4", 11.0, 5.0) > 0);
 }
 
 #[test]

@@ -48,8 +48,8 @@ use super::{
     BlendMode, ComplexRegion, DisplayList, FillItem, FillRule, FlattenError, FlattenOptions, FlattenReport, GroupItem, ImageItem, ImageSpace, Item,
     Mask, MaskKind, Paint,
 };
-use crate::ink::{InkColor, InkId, Overprint, Process};
-use crate::plates::{Fallback, Options, plates};
+use crate::ink::{Ink, InkColor, InkId, Overprint, Process};
+use crate::plates::{Fallback, MAX_SPOT_INKS, Options, plates};
 
 /// Pixels per complex region's image. A larger region rasterizes at a lower resolution;
 /// [`RasterReport::lowest_dpi`] says how low.
@@ -265,6 +265,10 @@ impl<'a> Rasterizer<'a> {
                 let pdf = page_pdf(&sub, self.settings.clone(), self.cms)?;
                 let p = plates(&pdf, 0, dpi, &Options { overprint, fallback: self.printing.clone() })
                     .map_err(|e| WriteError::Region(format!("separating a complex region: {e}")))?;
+                if !p.unseparated.is_empty() {
+                    let spots = p.inks.iter().filter(|(_, ink)| matches!(ink, Ink::Spot(_))).count();
+                    return Err(WriteError::SpotInks { inks: spots + p.unseparated.len(), max: MAX_SPOT_INKS, unseparated: p.unseparated });
+                }
                 if (p.width as i64, p.height as i64) != (rw, rh) {
                     return Err(WriteError::Region(format!("a tile of {rw} × {rh} px separated at {} × {} px", p.width, p.height)));
                 }

@@ -57,7 +57,8 @@ pub struct FlattenDocumentOptions {
     pub producer: String,
     pub unreadable: Unreadable,
     /// The output's PDF version. Below 1.6, DeviceN spaces get no NChannel attributes; at 1.4,
-    /// krilla also enforces the 1.4 implementation limits (reals, array and dictionary sizes).
+    /// krilla also enforces the 1.4 implementation limits (reals, array and dictionary sizes),
+    /// and a DeviceN space of more than 8 colorants is a [`WriteError::Colorants`].
     pub version: PdfVersion,
     /// The PDF/X version claimed: `/GTS_PDFXVersion` in the information dictionary and
     /// `pdfxid:GTS_PDFXVersion` in XMP. For PDF/X-1a:2003 it is `PDF/X-1:2003`. Not checked.
@@ -180,7 +181,7 @@ pub fn flatten_document_with_progress(
                     let at = |source| FlattenDocumentError::Write { page, source };
                     let settings = page_settings(p, list.page).ok_or(at(WriteError::Page))?;
                     write_page(&mut writer, settings, &list, |surface| {
-                        write_flattened_with_fonts(surface, &list, &flat, &color.cms, &mut fonts, &mut |r| raster.region(r))
+                        write_flattened_with_fonts(surface, &list, &flat, &color.cms, opts.version, &mut fonts, &mut |r| raster.region(r))
                     })
                     .map_err(at)?;
                     report.pages.push((page, FlattenPageReport { read, flatten: flat.report, raster: raster.report().clone() }));
