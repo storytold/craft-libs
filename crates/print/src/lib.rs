@@ -139,8 +139,32 @@ pub fn parse_lpstat_e(out: &str) -> Vec<String> {
     out.lines().map(str::trim).filter(|l| !l.is_empty()).map(str::to_string).collect()
 }
 
+/// The paper tray's PPD keyword.
+const TRAY: &str = "InputSlot";
+
+/// Apple's CUPS option for the macOS Print dialog's Paper Feed. Sent empty (Auto Select), it
+/// drops the PPD's default tray from a job that names none, so the printer feeds from a tray
+/// holding the job's paper.
+const APPLE_TRAY: &str = "AP_D_InputSlot";
+
+/// The paper tray choice that names no tray: the printer picks one holding the job's paper
+/// (macOS: Auto Select). It is empty, which is not a PPD keyword, so [`lp_args`] never sends it
+/// as an `InputSlot`. See [`apply_queue_defaults`].
+pub const AUTO_SELECT: &str = "";
+
 /// The `lp` arguments for a job. There is no file argument: `lp` reads the job from stdin.
+///
+/// On macOS a job that names no paper tray asks for Auto Select (`AP_D_InputSlot=`), as the
+/// system Print dialog does. Without it CUPS takes the tray from the PPD's default, and a printer
+/// whose default tray is empty or holds other paper keeps the job waiting while CUPS reports it
+/// completed (storytold/pdfcraft#3752). A tray the job does name wins: given both, CUPS uses the
+/// `InputSlot`.
 pub fn lp_args(job: &Job) -> Vec<String> {
+    lp_args_for(job, cfg!(target_os = "macos"))
+}
+
+/// [`lp_args`] for Apple's CUPS or another, so tests cover both on any platform.
+fn lp_args_for(job: &Job, apple: bool) -> Vec<String> {
     let mut a = Vec::new();
     if let Some(p) = &job.printer {
         a.extend(["-d".to_string(), p.clone()]);
@@ -164,11 +188,17 @@ pub fn lp_args(job: &Job) -> Vec<String> {
         // PWG 5100.13 §6.2.5: auto-fit fits oversized pages and leaves smaller pages unscaled.
         Scaling::ShrinkToFit => "print-scaling=auto-fit",
     });
+    let mut tray_named = false;
     for (key, value) in &job.options {
         // Driver options are PPD keywords; anything else is not something lp can be given.
         if is_ppd_keyword(key) && is_ppd_keyword(value) && !HANDLED_OPTIONS.contains(&key.as_str()) {
+            // CUPS matches option names without regard to case.
+            tray_named |= key.eq_ignore_ascii_case(TRAY) || key.eq_ignore_ascii_case(APPLE_TRAY);
             a.extend(["-o".to_string(), format!("{key}={value}")]);
         }
+    }
+    if apple && !tray_named {
+        a.extend(["-o".to_string(), format!("{APPLE_TRAY}=")]);
     }
     a
 }
@@ -284,6 +314,38 @@ pub fn parse_lpoptions(out: &str) -> Vec<(String, String)> {
         .collect()
 }
 
+/// Make each option's default the queue's current choice (`current`, from [`parse_lpoptions`]:
+/// the queue's defaults with the user's own), skipping choices the driver doesn't offer.
+///
+/// On macOS the paper tray then starts with [`AUTO_SELECT`], as its default, which is what
+/// [`lp_args`] sends for a job that names no tray. That is left out when the user's own defaults
+/// name a different tray than the driver's default: `lp` adds that tray to every job, and it wins
+/// over Auto Select. A user default naming the driver's own default tray can't be told apart from
+/// no user default, so it shows as Auto Select although the job still goes to that tray.
+pub fn apply_queue_defaults(options: &mut [PrinterOption], current: &[(String, String)]) {
+    apply_queue_defaults_for(options, current, cfg!(target_os = "macos"));
+}
+
+/// [`apply_queue_defaults`] for Apple's CUPS or another, so tests cover both on any platform.
+fn apply_queue_defaults_for(options: &mut [PrinterOption], current: &[(String, String)], apple: bool) {
+    // CUPS matches option and choice names without regard to case; the PPD's spelling is kept.
+    let driver_tray = options.iter().find(|o| o.key.eq_ignore_ascii_case(TRAY)).map(|o| o.default.clone());
+    for (key, value) in current {
+        if let Some(o) = options.iter_mut().find(|o| o.key.eq_ignore_ascii_case(key))
+            && let Some(choice) = o.choices.iter().find(|(c, _)| c.eq_ignore_ascii_case(value)).map(|(c, _)| c.clone())
+        {
+            o.default = choice;
+        }
+    }
+    if apple
+        && let Some(tray) = options.iter_mut().find(|o| o.key.eq_ignore_ascii_case(TRAY))
+        && driver_tray.as_ref() == Some(&tray.default)
+    {
+        tray.choices.insert(0, (AUTO_SELECT.to_string(), "Auto Select".to_string()));
+        tray.default = AUTO_SELECT.to_string();
+    }
+}
+
 /// A PPD's text: UTF-8, or ISO Latin-1 (the PPD default) when it isn't valid UTF-8.
 pub fn ppd_text(bytes: &[u8]) -> String {
     match std::str::from_utf8(bytes) {
@@ -314,13 +376,7 @@ pub fn printer_options(printer: &str) -> Vec<PrinterOption> {
             .output()
             .map(|o| parse_lpoptions(&String::from_utf8_lossy(&o.stdout)))
             .unwrap_or_default();
-        for (key, value) in current {
-            if let Some(o) = options.iter_mut().find(|o| o.key == key)
-                && o.choices.iter().any(|(c, _)| *c == value)
-            {
-                o.default = value;
-            }
-        }
+        apply_queue_defaults(&mut options, &current);
         options
     }
     #[cfg(not(all(unix, not(target_arch = "wasm32"))))]
