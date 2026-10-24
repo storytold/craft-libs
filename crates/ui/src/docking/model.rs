@@ -779,7 +779,8 @@ impl<P: Clone + Eq + Hash> Layout<P> {
 
     /// Restore an absent panel at a captured location. Missing anchors are reported without
     /// changes, allowing the app to choose an explicit default; a floating panel whose
-    /// window is gone floats at its last rect instead. Unrelated tabs retain selection.
+    /// window is gone floats at its last rect instead. A tab whose next tab is not in the
+    /// anchor's group goes last. Unrelated tabs retain selection.
     pub fn restore(&mut self, panel: P, location: &Location<P>) -> Result<(), DockError> {
         self.validate()?;
         if self.contains(&panel) {
@@ -851,7 +852,12 @@ impl<P: Clone + Eq + Hash> Layout<P> {
             }
             // A subtree that changed since (a migrated or reconciled layout) splits the anchor.
             if !around {
-                proposed.apply_inner(Action::OpenAt { panel: panel.clone(), anchor: anchor.clone(), placement: location.placement.clone() })?;
+                // The tab that followed may have closed or moved since; the panel then goes last.
+                let placement = match &location.placement {
+                    Placement::Tab { before: Some(before) } if !proposed.same_group(before, anchor) => Placement::Tab { before: None },
+                    placement => placement.clone(),
+                };
+                proposed.apply_inner(Action::OpenAt { panel: panel.clone(), anchor: anchor.clone(), placement })?;
                 if let Some(size) = location.size {
                     proposed.trees_mut().any(|root| restore_parent_size(root, &panel, size));
                 }

@@ -206,6 +206,55 @@ fn close_group_and_close_window_record_a_restorable_location_per_member() {
 }
 
 #[test]
+fn panels_closed_one_by_one_reopen_into_one_group() {
+    let allow = |_: &u32| Permissions::default();
+    let rect = [100.0, 100.0, 300.0, 400.0];
+    let cycle = |workspace: &mut Workspace<u32>, close: &[u32], reopen: &[u32]| {
+        for &panel in close {
+            workspace.set_visible(panel, false, None, allow).unwrap();
+        }
+        for &panel in reopen {
+            workspace.set_visible(panel, true, None, allow).unwrap_or_else(|e| panic!("{close:?} {reopen:?} {panel}: {e}"));
+        }
+        assert!(workspace.hidden.is_empty());
+    };
+    let orders2 = [[2, 3], [3, 2]];
+    for close in orders2 {
+        for reopen in orders2 {
+            let mut workspace = Workspace::new(docked());
+            cycle(&mut workspace, &close, &reopen);
+            let columns = dock(&workspace.layout, Side::End);
+            assert_eq!(
+                columns.iter().map(|c| panels_of(&c.groups)).collect::<Vec<_>>(),
+                [vec![vec![2, 3], vec![4]], vec![vec![5]]],
+                "{close:?} {reopen:?}"
+            );
+        }
+    }
+    let orders2 = [[10, 20], [20, 10]];
+    for close in orders2 {
+        for reopen in orders2 {
+            let mut workspace = Workspace::new(Layout { root: Some(tabs(&[1], 0)), floating: vec![Floating::single(vec![10, 20], 0, rect)] });
+            cycle(&mut workspace, &close, &reopen);
+            let [window] = &workspace.layout.floating[..] else { panic!("{close:?} {reopen:?}: {:?}", workspace.layout.floating) };
+            assert_eq!((window.panels().copied().collect::<Vec<_>>(), window.rect), (vec![10, 20], rect), "{close:?} {reopen:?}");
+        }
+    }
+    // Three tabs: the locations do not always record the order, only the window.
+    let orders3 = [[10, 20, 30], [10, 30, 20], [20, 10, 30], [20, 30, 10], [30, 10, 20], [30, 20, 10]];
+    for close in orders3 {
+        for reopen in orders3 {
+            let mut workspace = Workspace::new(Layout { root: Some(tabs(&[1], 0)), floating: vec![Floating::single(vec![10, 20, 30], 0, rect)] });
+            cycle(&mut workspace, &close, &reopen);
+            let [window] = &workspace.layout.floating[..] else { panic!("{close:?} {reopen:?}: {:?}", workspace.layout.floating) };
+            let mut panels: Vec<u32> = window.panels().copied().collect();
+            panels.sort_unstable();
+            assert_eq!(panels, [10, 20, 30], "{close:?} {reopen:?}");
+        }
+    }
+}
+
+#[test]
 fn restore_into_a_column_group_seam_and_new_column_round_trips() {
     let column_a = Column::new(vec![g(&[2, 3], 1), Group { minimized: true, height: Some(150.0), ..g(&[4], 0) }, g(&[9], 0)], 180.0);
     let column_b = Column { iconic: true, iconic_width: Some(48.0), ..Column::new(vec![g(&[5], 0)], 120.0) };
