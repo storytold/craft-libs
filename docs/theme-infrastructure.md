@@ -2,8 +2,10 @@
 
 The first shared mechanism is `craft-ui::theme::WidgetPalette`: it applies colors to egui's five
 widget states, with a supplied foreground stroke and corner radius. VectorCraft, DesignCraft and
-LightCraft use the same operation. Their complete palettes, theme choices, fonts and preferences
-remain in their frontends.
+LightCraft use the same operation. Theme choices, fonts, preferences and application-specific palettes remain in their frontends.
+The additive `SuitePalette::ARTCRAFT_DARK` now supplies canonical standard-dark interface roles;
+it does not alter the existing widget operation. This revises the original boundary: basic
+interface role colors may be shared, while complete app themes and their extra tokens remain local.
 
 This follows the reusable-UI workstream of [craft-libs issue 2](https://github.com/storytold/craft-libs/issues/2).
 The [cross-app architecture discussion](https://github.com/storytold/vectorcraft/issues/647) and
@@ -78,13 +80,48 @@ stay untouched. Apps apply their state-specific exceptions afterward. `nonintera
 egui's state, not a new disabled-control policy.
 
 A separate `craft-theme` crate adds no useful boundary: this mechanism already depends on egui
-and belongs beside the controls it styles. A universal token structure, theme enum, application
-identifier or global context key is unnecessary. Constructing another large visual-options
+and belongs beside the controls it styles. Shared role colors live in `SuitePalette`, because one
+palette keeps the apps consistent; a theme enum, application identifier or global context key is
+unnecessary. Constructing another large visual-options
 object would mostly rename `egui::Visuals` fields without simplifying their use. Context lookup
 and storage are already small and retain different fallback themes.
 
 The identical packed-RGB helper in VectorCraft and DesignCraft is only a few casts; it remains
 local in this extraction. A contrast API also needs a second runtime consumer before extraction.
+
+## Canonical ArtCraft standard dark roles
+
+`craft_ui::theme::SuitePalette::ARTCRAFT_DARK` is the shared source of truth for the 21 role
+colors in the [ArtCraft dark theme contract (14 October 2026)](artcraft-dark-theme-contract.md). Its public `Color32`
+fields use the contract's names: `window`, `chrome`, `panel`, `raised`, `input`, `hover`,
+`pressed`, `border`, `border_strong`, `text`, `text_strong`, `text_secondary`, `text_disabled`,
+`accent`, `accent_hover`, `focus`, `on_accent`, `selection`, `selection_text`, `primary` and
+`on_primary`. Each scheme is a constant of the same type, so light or app-group schemes can be added without
+changing the role API. An app can define its own scheme or override individual roles with
+`SuitePalette { accent, ..SuitePalette::ARTCRAFT_DARK }`. The palette is immutable data and has
+no application or global-visuals method.
+
+Applications adapt these roles to their existing local tokens in their standard dark path.
+They retain preference IDs and defaults, system-theme resolution, custom highlight/contrast
+settings, light and alternate brightness presets, High Contrast, fonts, metrics and radii.
+Apply the canonical roles after choosing the standard dark preset so alternatives inheriting
+its old base are not silently recolored. This API adds no app dependency and requires no
+preference migration. Consumer dependency upgrades and releases remain separate decisions.
+
+Use `on_accent` on blue filled controls and `selection_text` on `selection` interface rows;
+`primary` and `on_primary` describe inverted white primary buttons. Preserve semantic warning,
+error, success, record and meter colors, and editing/document pixels, swatches, guides, canvas
+preferences and meaningful selection overlays. Do not replace literal colors mechanically.
+`WidgetPalette` continues to accept caller-provided colors and changes exactly its existing
+four properties; apps decide how role colors feed widget states and apply local exceptions.
+
+Tests lock all 21 exact opaque values and check normal text on interface surfaces (secondary
+labels through hover; pressed controls use normal/strong text), selected
+rows, filled controls, focus edges and strong borders using sRGB relative luminance. Disabled
+text and subtle borders intentionally have no normal-body-text contrast guarantee. Shared
+palette tests cannot certify whole-app accessibility: each adapter still needs role/style tests,
+light/alternate/High Contrast preservation checks and source-based UI renders. No installed or
+released application outcome follows from this library-only addition.
 
 ## Fonts and styling outside theme modules
 
