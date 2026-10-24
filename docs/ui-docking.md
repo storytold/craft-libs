@@ -349,6 +349,13 @@ viewport's `inner_rect.min` plus its rect). A window with a panel whose
 that is not floatable, stays in-window. Floating windows get no taskbar or Alt-Tab entry
 (`with_taskbar(false)`).
 
+On Wayland floating windows stay in-window: the compositor reports no window positions, so a
+native window could not dock again by drag or reopen where it was. Their `native` rects are
+kept, and the same layout opens native windows on X11, macOS and Windows. The dock area takes
+Wayland to be the backend when `WAYLAND_DISPLAY` or `WAYLAND_SOCKET` is set (winit's rule) and
+the main window has never reported its `outer_rect`; an app that forces X11 in code gets native
+windows from the first frame. `DockArea::native_windows(bool)` overrides the choice either way.
+
 - **Identity.** `Floating::id` names the OS window, so a window keeps it when its panels change,
   including when its first panel moves out. `Floating::new` and loading draw fresh ids, and
   `Floating::with_id` sets one; a layout
@@ -459,9 +466,10 @@ that is not floatable, stays in-window. Floating windows get no taskbar or Alt-T
     the desktop, or with Ctrl/Cmd held, it stays where it was moved, and the layout takes its
     place once, at the release. Escape puts it back. An
     in-window floating window's title bar still splits only groups of other floating windows.
-  - *Wayland.* Where `outer_rect` is `None`, desktop positions are unknown, so drops across
-    windows cannot be resolved. A drag works inside its own window, and a release outside it
-    floats a new window that the compositor places. Moving a window hands the move to the
+  - *Wayland.* With `DockArea::native_windows(true)` on Wayland, or wherever `outer_rect` is
+    `None`, desktop positions are unknown, so drops across windows cannot be resolved. A drag
+    works inside its own window, and a release outside it floats a new window that the
+    compositor places. Moving a window hands the move to the
     compositor, which never docks it.
 
 On the web and wherever egui embeds viewports, nothing changes: floating windows stay in the

@@ -48,6 +48,8 @@ pub struct DockDriver<P, C> {
     pub monitors: Vec<Monitor>,
     /// Passed to [`DockArea::locked`].
     pub locked: bool,
+    /// Passed to [`DockArea::native_windows`]: on by default, whatever the test's desktop.
+    pub native_windows: bool,
     /// The stand-in for OS windows, in use after [`Self::with_native_host`].
     #[cfg(feature = "native-windows")]
     host: Option<std::rc::Rc<std::cell::RefCell<NativeHost>>>,
@@ -77,6 +79,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static, C: DockContent<P>> Do
             float_bounds: None,
             monitors: Vec::new(),
             locked: false,
+            native_windows: true,
             #[cfg(feature = "native-windows")]
             host: None,
             #[cfg(feature = "native-windows")]
@@ -125,15 +128,20 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static, C: DockContent<P>> Do
         }
         let (layout, content, area, id) = (&self.layout, &mut self.content, self.area, self.id);
         let monitors = self.monitors.clone();
-        let (style_fn, maximized, raise, auto, bounds, locked) =
-            (&self.style, self.maximized.clone(), self.raise.take(), self.auto_collapse, self.float_bounds, self.locked);
+        let (style_fn, maximized, raise, auto, bounds, locked, native) =
+            (&self.style, self.maximized.clone(), self.raise.take(), self.auto_collapse, self.float_bounds, self.locked, self.native_windows);
         let mut full = self.ctx.run_ui(input, |ui| {
             let mut style = DockStyle::from_ui(ui);
             if let Some(adjust) = style_fn {
                 adjust(&mut style);
             }
             ui.scope_builder(UiBuilder::new().max_rect(area), |ui| {
-                let mut dock = DockArea::new(id).maximized(maximized.clone()).auto_collapse_iconic(auto).monitors(monitors.clone()).locked(locked);
+                let mut dock = DockArea::new(id)
+                    .maximized(maximized.clone())
+                    .auto_collapse_iconic(auto)
+                    .monitors(monitors.clone())
+                    .locked(locked)
+                    .native_windows(native);
                 if let Some(panel) = raise.clone() {
                     dock = dock.raise_panel(panel);
                 }
@@ -418,6 +426,7 @@ impl NativeHost {
                 .then(|| if id == egui::ViewportId::ROOT { rect } else { Rect::from_min_max(rect.min - self.frame, rect.max) }),
             focused: Some(self.focus == Some(id)),
             monitor_size: self.monitor_size,
+            native_pixels_per_point: Some(1.0),
             ..Default::default()
         };
         let main = Rect::from_min_size(self.origin, self.screen.size());

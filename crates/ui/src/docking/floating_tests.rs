@@ -149,7 +149,8 @@ impl Driver {
                 Hide::All => HidePanels::All,
                 Hide::Keep => HidePanels::Except(&keep),
             };
-            output = DockArea::new(Id::new(AREA)).maximized(maximized).hide_panels(hide).show_content(ui, layout, &style, content);
+            output =
+                DockArea::new(Id::new(AREA)).native_windows(true).maximized(maximized).hide_panels(hide).show_content(ui, layout, &style, content);
         });
         let mut full = full;
         full.textures_delta.clear();
@@ -421,7 +422,7 @@ fn close_other_panels_keeps_only_the_chosen_tab() {
         |ui, (content, actions, events): &mut State| {
             let mut style = DockStyle::from_ui(ui);
             frame_style(&mut style);
-            let out = DockArea::new(Id::new(AREA)).show_content(ui, &frames(), &style, content);
+            let out = DockArea::new(Id::new(AREA)).native_windows(true).show_content(ui, &frames(), &style, content);
             actions.extend(out.actions);
             events.extend(out.events);
         },
@@ -684,7 +685,7 @@ fn undock_panel_group_floats_one_group_of_a_floating_window() {
         |ui, (content, layout, actions): &mut State| {
             let mut style = DockStyle::from_ui(ui);
             frame_style(&mut style);
-            let out = DockArea::new(Id::new(AREA)).show_content(ui, layout, &style, content);
+            let out = DockArea::new(Id::new(AREA)).native_windows(true).show_content(ui, layout, &style, content);
             actions.extend(out.actions);
         },
         (Content::default(), stacked(), Vec::new()),

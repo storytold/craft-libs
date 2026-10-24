@@ -3,7 +3,7 @@
 
 use egui::{Color32, Event, Key, Modifiers, PointerButton, Pos2, Rect, ViewportCommand, epaint::ClippedShape, pos2, vec2};
 
-use super::render::{APPKIT_CORNER, DragPointer, MACOS_CLOSE, WindowDrag, appkit_resize_areas, close_rects, floats_shown, resize_bands};
+use super::render::{APPKIT_CORNER, DragPointer, MACOS_CLOSE, WindowDrag, appkit_resize_areas, close_rects, floats_shown, resize_bands, wayland};
 use super::testing::DockDriver;
 use super::{Action, DockContent, Floating, Hit, Layout, Monitor, Node, Permissions, Placement, Target, Workspace};
 use crate::layout::{SplitAxis, SplitSize};
@@ -1302,4 +1302,69 @@ fn a_layout_built_each_frame_without_ids_is_warned_about() {
         d.step(vec![]);
     }
     assert!(!warned(&d));
+}
+
+/// [`layout`] with window `[5, 6]` saved as a native window at `NATIVE`.
+fn saved_native() -> Layout<u32> {
+    let mut layout = layout(true);
+    layout.floating[0].native = Some(NATIVE);
+    layout
+}
+
+const NATIVE: [f32; 4] = [700.0, 400.0, 240.0, 300.0];
+
+#[test]
+fn with_native_windows_off_a_float_stays_in_the_app_window_and_keeps_its_native_rect() {
+    let mut d = DockDriver::new(saved_native(), Content::default());
+    d.native_windows = false;
+    let mut d = d.with_native_host(ORIGIN);
+    assert!(d.host().windows.is_empty() && d.host().commands.is_empty());
+    assert!(d.hit(&Hit::Title(5)).is_some(), "drawn in the main window");
+    assert_eq!(window(&d, 5).native, Some(NATIVE));
+
+    // Its tab docks again by drag, in the main window.
+    let tab = d.hit(&Hit::Tab(5)).unwrap().center();
+    let out = d.drag(tab, pos2(600.0, 300.0));
+    assert!(matches!(out.actions.as_slice(), [Action::Move { panel: 5, anchor: 3 | 4, .. }]), "{:?}", out.actions);
+    assert!(in_root(&d, 5));
+    assert_eq!(window(&d, 6).native, Some(NATIVE));
+    assert!(d.host().windows.is_empty() && d.host().commands.is_empty());
+
+    // The same workspace opens as a native window where native windows are on.
+    let mut d = driver(saved_native());
+    d.settle();
+    assert_eq!(os_window(&d, 5).map(|(rect, _)| rect), Some(Rect::from_min_size(pos2(700.0, 400.0), vec2(240.0, 300.0))));
+}
+
+#[test]
+fn wayland_is_a_main_window_that_never_reported_a_position() {
+    use super::render::Session;
+    let mut d = driver(layout(false));
+    d.host().no_position = true;
+    d.step(vec![]);
+    assert!(wayland(&d.ctx, Session::Wayland));
+    assert!(wayland(&d.ctx, Session::Unknown), "a real window without a Wayland variable");
+    assert!(!wayland(&d.ctx, Session::Other), "X11");
+    // X11 (forced under a Wayland session) reports it; minimized, it reports none again.
+    d.host().no_position = false;
+    d.step(vec![]);
+    assert!(!wayland(&d.ctx, Session::Wayland));
+    d.host().no_position = true;
+    d.step(vec![]);
+    assert!(!wayland(&d.ctx, Session::Wayland));
+    // A context with no real window (a headless test) and no display variables at all.
+    let ctx = egui::Context::default();
+    ctx.run_ui(egui::RawInput::default(), |_| {}).textures_delta.clear();
+    assert!(!wayland(&ctx, Session::Unknown));
+}
+
+#[test]
+fn the_session_follows_winits_environment_rule() {
+    use super::render::{Session, session};
+    let with = |vars: &'static [&'static str]| move |name: &str| vars.contains(&name);
+    assert_eq!(session(true, with(&["WAYLAND_DISPLAY", "DISPLAY"])), Session::Wayland);
+    assert_eq!(session(true, with(&["WAYLAND_SOCKET"])), Session::Wayland);
+    assert_eq!(session(true, with(&["DISPLAY"])), Session::Other);
+    assert_eq!(session(true, with(&[])), Session::Unknown);
+    assert_eq!(session(false, with(&["WAYLAND_DISPLAY"])), Session::Other);
 }

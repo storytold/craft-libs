@@ -17,7 +17,7 @@ mod native;
 #[cfg(all(test, feature = "native-windows"))]
 pub(in crate::docking) use {
     cross::DragPointer,
-    native::{APPKIT_CORNER, MACOS_CLOSE, WindowDrag, appkit_resize_areas, close_rects, floats_shown, resize_bands},
+    native::{APPKIT_CORNER, MACOS_CLOSE, Session, WindowDrag, appkit_resize_areas, close_rects, floats_shown, resize_bands, session, wayland},
 };
 
 /// The viewport of the native window `window` of the dock area `area`.
@@ -76,6 +76,9 @@ pub(super) struct Renderer<'a, P> {
     /// [`crate::docking::DockArea::monitors`].
     #[cfg_attr(not(feature = "native-windows"), allow(dead_code))]
     pub(super) monitors: Vec<crate::docking::Monitor>,
+    /// [`crate::docking::DockArea::native_windows`].
+    #[cfg_attr(not(feature = "native-windows"), allow(dead_code))]
+    pub(super) native_windows: Option<bool>,
     /// The other OS windows a drag may cross into.
     #[cfg(feature = "native-windows")]
     pub(super) cross: cross::Cross<P>,

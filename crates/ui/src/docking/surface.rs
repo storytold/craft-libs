@@ -746,6 +746,7 @@ pub struct DockArea<'a, P = ()> {
     auto_collapse: bool,
     float_bounds: Option<Rect>,
     monitors: Vec<Monitor>,
+    native_windows: Option<bool>,
 }
 
 impl<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> DockArea<'a, P> {
@@ -760,6 +761,7 @@ impl<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> DockArea<'a, P> {
             auto_collapse: true,
             float_bounds: None,
             monitors: Vec::new(),
+            native_windows: None,
         }
     }
 
@@ -769,6 +771,16 @@ impl<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> DockArea<'a, P> {
     /// windows store the monitor size egui reports and restore onto the main window's monitor.
     pub fn monitors(mut self, monitors: Vec<Monitor>) -> Self {
         self.monitors = monitors;
+        self
+    }
+
+    /// Whether floating windows open in their own OS windows (feature `native-windows`), where
+    /// the backend has viewports. Off, they stay in the app window, and their native rects are
+    /// kept for a later run with it on. By default it is on, except on Wayland: the compositor
+    /// reports no window positions, so a native window could not dock again by drag or open
+    /// where it was.
+    pub fn native_windows(mut self, on: bool) -> Self {
+        self.native_windows = Some(on);
         self
     }
 
@@ -933,6 +945,7 @@ impl<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> DockArea<'a, P> {
             dividers: Vec::new(),
             tree: None,
             monitors: self.monitors,
+            native_windows: self.native_windows,
             #[cfg(feature = "native-windows")]
             cross: Default::default(),
         };
