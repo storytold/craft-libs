@@ -792,6 +792,8 @@ version = "0.1.0"
 dependencies = [
  "moxcms",
  "rayon",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
