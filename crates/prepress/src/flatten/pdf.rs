@@ -18,8 +18,8 @@
 //!   as colors do. `/Decode` and `/Matte` are applied; transfer functions are not, as on a plate.
 //! - Stencil masks become fills traced from the mask, or images when the mask is too detailed.
 //! - Axial and radial shadings become [`Paint::Gradient`]s with stops sampled in ink space.
-//!   Function-based and mesh shadings, and tiling patterns past [`MAX_TILING_CELLS`] cells,
-//!   become images at [`ReadOptions::raster_dpi`]; other tiling patterns expand into their cells.
+//!   Function-based and mesh shadings, and tiling patterns past [`MAX_TILING_CELLS`] cells or
+//!   [`MAX_TILING_ITEMS`] items, become images at [`ReadOptions::raster_dpi`]; other tiling patterns expand into their cells.
 
 use std::collections::HashMap;
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -61,6 +61,10 @@ const HAIRLINE: f64 = 0.1;
 /// Tiling cells one pattern fill expands into; past this the fill is read as an image.
 pub const MAX_TILING_CELLS: usize = 10_000;
 
+/// Items one pattern fill expands into, counting those inside groups and nested pattern fills;
+/// past this the fill is read as an image. A hundred per cell at [`MAX_TILING_CELLS`].
+pub const MAX_TILING_ITEMS: usize = 1_000_000;
+
 /// Rectangles a stencil mask may trace into; past this it is read as an image.
 const MAX_STENCIL_RECTS: usize = 4_096;
 
@@ -84,7 +88,7 @@ pub struct ReadOptions {
     /// appearance are left out and counted ([`ReadReport::dropped_annotations`]).
     pub annotations: bool,
     /// The resolution, in pixels per inch, of images read from function-based and mesh
-    /// shadings and from tiling patterns past [`MAX_TILING_CELLS`].
+    /// shadings and from tiling patterns past [`MAX_TILING_CELLS`] or [`MAX_TILING_ITEMS`].
     pub raster_dpi: f32,
 }
 
@@ -116,7 +120,8 @@ pub struct ReadReport {
     pub rasterized_shadings: usize,
     /// Tiling pattern cells expanded.
     pub tiling_cells: usize,
-    /// Tiling pattern fills past [`MAX_TILING_CELLS`] cells, read as images.
+    /// Tiling pattern fills past [`MAX_TILING_CELLS`] cells or [`MAX_TILING_ITEMS`] items, read
+    /// as images.
     pub rasterized_tilings: usize,
     /// Glyphs in text rendering mode 3, dropped.
     pub invisible_glyphs: usize,
@@ -660,7 +665,7 @@ impl<'s, 'a> Reader<'s, 'a> {
     }
 
     /// A tiling pattern over `clip`: its cells, each read like page content, or an image past
-    /// [`MAX_TILING_CELLS`].
+    /// [`MAX_TILING_CELLS`] or [`MAX_TILING_ITEMS`].
     fn tiling_area(&mut self, clip: BezPath, t: &TilingPattern<'a>, flag: bool, stroke: bool) {
         let area = clip.bounding_box().intersect(self.clip_bounds());
         if !(area.width() > 0.0 && area.height() > 0.0) {
@@ -683,7 +688,8 @@ impl<'s, 'a> Reader<'s, 'a> {
         }
         let look = self.look(1.0);
         let offset = |i: i64, j: i64| m * Point::new(i as f64 * xs, j as f64 * ys) - m * Point::ORIGIN;
-        let child = if count <= MAX_TILING_CELLS as u128 {
+        let items = count.saturating_mul(item_count(&cell) as u128);
+        let child = if count <= MAX_TILING_CELLS as u128 && items <= MAX_TILING_ITEMS as u128 {
             let mut children = Vec::with_capacity(count as usize * cell.len());
             for j in js.0..=js.1 {
                 for i in is.0..=is.1 {
@@ -1075,6 +1081,17 @@ fn dct_passthrough(stream: &Stream<'_>, width: u32, height: u32) -> Option<Arc<[
         _ => false,
     };
     ok.then(|| Arc::from(stream.raw_data().as_ref()))
+}
+
+/// `items` and every item inside their groups and masks.
+fn item_count(items: &[Item]) -> usize {
+    items.iter().fold(0, |sum, item| {
+        let inner = match item {
+            Item::Group(g) => item_count(&g.children).saturating_add(g.mask.as_ref().map_or(0, |m| item_count(&m.group.children))),
+            Item::Fill(_) | Item::Text(_) | Item::Image(_) => 0,
+        };
+        sum.saturating_add(1).saturating_add(inner)
+    })
 }
 
 /// The cell indices `k` whose span `[c0, c1] + k * step` meets `[lo, hi]`.
