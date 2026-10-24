@@ -1,0 +1,13 @@
+[package]
+name = "craft-testkit"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+description = "Source-level platform regression guards and verification utilities for the Craft application suite"
+
+[dependencies]
+
+[lints]
+workspace = true
