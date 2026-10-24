@@ -1303,3 +1303,42 @@ fn a_layout_built_each_frame_without_ids_is_warned_about() {
     }
     assert!(!warned(&d));
 }
+
+#[test]
+fn replacing_the_layout_or_cancel_drag_ends_a_bar_drag() {
+    let moving = |d: &DockDriver<u32, Content>| d.ctx.data(|data| data.get_temp::<WindowDrag>(d.id.with("window-drag")));
+    for replace in [false, true] {
+        let mut d = driver(layout(true));
+        let id = id_of(&d);
+        d.window_step(id, vec![Event::PointerMoved(pos2(40.0, 9.0)), button(pos2(40.0, 9.0), true)]);
+        d.window_step(id, vec![Event::PointerMoved(pos2(60.0, 19.0))]);
+        assert!(moving(&d).is_some());
+        d.step(vec![]);
+        if replace {
+            // The same window where the OS has it, beside swapped frames.
+            let mut replacement = layout(true);
+            replacement.root = Some(Node::Split {
+                axis: SplitAxis::Horizontal,
+                size: SplitSize::Ratio(0.5),
+                first: Box::new(tabs(&[3, 4])),
+                second: Box::new(tabs(&[1, 2])),
+            });
+            replacement.floating[0] = Floating { native: window(&d, 5).native, ..replacement.floating[0].clone().with_id(id) };
+            d.layout = replacement;
+        } else {
+            super::cancel_drag::<u32>(&d.ctx, d.id);
+        }
+        d.settle();
+        assert_eq!(moving(&d), None);
+        // The OS window goes where the layout has it.
+        let before = os_window(&d, 5).unwrap().0;
+        let native = window(&d, 5).native.unwrap();
+        assert_eq!(before.min, pos2(native[0], native[1]));
+        d.window_step(id, vec![Event::PointerMoved(pos2(90.0, 39.0))]);
+        d.window_step(id, vec![Event::PointerMoved(pos2(120.0, 59.0))]);
+        assert_eq!(moving(&d), None);
+        assert_eq!(os_window(&d, 5).unwrap().0, before);
+        let out = d.window_step(id, vec![button(pos2(120.0, 59.0), false)]);
+        assert!(!out.actions.iter().any(|a| matches!(a, Action::Move { .. } | Action::MoveWindow { .. })), "{:?}", out.actions);
+    }
+}

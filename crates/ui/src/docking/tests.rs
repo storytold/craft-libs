@@ -1774,3 +1774,74 @@ fn overflowing_strip_paints_a_single_ellipsis_symbol() {
     h.run_steps(2);
     assert!(h.output().shapes.iter().any(|shape| paints(&shape.shape, "\u{2026}")));
 }
+
+struct Plain;
+
+impl DockContent<u32> for Plain {
+    fn body(&mut self, _: &mut egui::Ui, _: &u32) {}
+}
+
+/// `sample` with its docked frames swapped: every panel stays, in other places.
+fn swapped() -> Layout<u32> {
+    let mut layout = sample();
+    layout.root = Some(Node::Split {
+        axis: SplitAxis::Horizontal,
+        size: SplitSize::FixedFirst(240.0),
+        first: Box::new(tabs(&[2, 3, 4], 1)),
+        second: Box::new(tabs(&[1], 0)),
+    });
+    layout
+}
+
+#[test]
+fn replacing_the_layout_ends_a_drag_in_progress() {
+    use super::testing::DockDriver;
+    let area = Id::new("replaced");
+    let driver = || {
+        let mut d = DockDriver::new(sample(), Plain);
+        d.id = area;
+        d.settle();
+        d
+    };
+    // Over frame [1], clear of the floating window.
+    let over = pos2(500.0, 450.0);
+    for replace in [false, true] {
+        let mut d = driver();
+        let tab = d.hit(&Hit::Tab(2)).unwrap().center();
+        d.hold(tab, over);
+        assert!(is_dragging::<u32>(&d.ctx, area));
+        if replace {
+            d.layout = swapped();
+        }
+        d.move_to(over + vec2(4.0, 0.0));
+        assert_eq!(is_dragging::<u32>(&d.ctx, area), !replace);
+        let out = d.release(over);
+        if replace {
+            assert!(out.actions.is_empty(), "{:?}", out.actions);
+            assert_eq!(d.layout, swapped());
+        } else {
+            assert!(matches!(out.actions.as_slice(), [Action::Move { panel: 2, anchor: 1, .. }]), "{:?}", out.actions);
+        }
+    }
+
+    // A window follows its bar through its own moves, and through an app that adjusts the
+    // moved rectangle or a split's size, and stops when the app switches workspaces.
+    let mut d = driver();
+    let bar = d.hit(&Hit::Title(5)).unwrap().center();
+    d.hold(bar, bar + vec2(60.0, 40.0));
+    d.move_to(bar + vec2(90.0, 60.0));
+    assert!(is_dragging::<u32>(&d.ctx, area));
+    assert_ne!(d.layout.floating[0].rect, sample().floating[0].rect);
+    d.layout.floating[0].rect[0] += 3.0;
+    if let Some(Node::Split { size, .. }) = &mut d.layout.root {
+        *size = SplitSize::FixedSecond(260.0);
+    }
+    d.move_to(bar + vec2(100.0, 70.0));
+    assert!(is_dragging::<u32>(&d.ctx, area));
+    d.layout = swapped();
+    let out = d.move_to(bar + vec2(120.0, 80.0));
+    assert!(!is_dragging::<u32>(&d.ctx, area));
+    assert!(out.actions.is_empty(), "{:?}", out.actions);
+    d.release(bar + vec2(120.0, 80.0));
+    assert_eq!(d.layout, swapped());
+}

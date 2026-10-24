@@ -379,6 +379,96 @@ fn tab_focus_key(area: Id) -> Id {
     area.with("tab-focus")
 }
 
+/// The layout an area drew while one of its drags was in progress, and the actions it returned.
+#[derive(Clone)]
+struct DragFrame<P> {
+    layout: Layout<P>,
+    actions: Vec<Action<P>>,
+}
+
+fn drag_frame_key(area: Id) -> Id {
+    area.with("drag-frame")
+}
+
+/// A drag ends when its layout changes other than by the area's own actions: a workspace
+/// switch, Reset or an app command. The app applies all of them or none; an action that
+/// fails on its own is skipped, as it is for an app that applies them one at a time. Sizes
+/// and rectangles are not compared, so an app that clamps a moved window or adjusts a resized
+/// split keeps the drag going.
+fn cancel_drag_if_replaced<P: Clone + Eq + Hash + Debug + Send + Sync + 'static>(ctx: &Context, area: Id, layout: &Layout<P>) {
+    let Some(last) = ctx.data_mut(|d| {
+        let last = d.get_temp::<DragFrame<P>>(drag_frame_key(area));
+        d.remove::<DragFrame<P>>(drag_frame_key(area));
+        last
+    }) else {
+        return;
+    };
+    let now = shape(layout);
+    if now == shape(&last.layout) {
+        return;
+    }
+    let mut applied = last.layout;
+    for action in last.actions {
+        let _ = applied.apply(action);
+    }
+    if now != shape(&applied) {
+        cancel_drag::<P>(ctx, area);
+    }
+}
+
+/// `layout` without its sizes and rectangles: which panels are where, and their state.
+fn shape<P: Clone>(layout: &Layout<P>) -> Layout<P> {
+    use super::{Column, Floating, Group, Node, StackEntry};
+    use crate::layout::SplitSize;
+    fn node<P: Clone>(n: &Node<P>) -> Node<P> {
+        match n {
+            Node::Split { axis, first, second, .. } => {
+                Node::Split { axis: *axis, size: SplitSize::Ratio(0.5), first: Box::new(node(first)), second: Box::new(node(second)) }
+            }
+            Node::Tabs { panels, active } => Node::Tabs { panels: panels.clone(), active: *active },
+            Node::Stack { entries } => Node::Stack { entries: entries.iter().map(|e| StackEntry { height: None, ..e.clone() }).collect() },
+            Node::Dock { side, columns } => Node::Dock {
+                side: *side,
+                columns: columns
+                    .iter()
+                    .map(|c| Column {
+                        groups: c.groups.iter().map(|g| Group { height: None, ..g.clone() }).collect(),
+                        width: 0.0,
+                        iconic: c.iconic,
+                        iconic_width: None,
+                    })
+                    .collect(),
+            },
+        }
+    }
+    Layout {
+        root: layout.root.as_ref().map(node),
+        floating: layout
+            .floating
+            .iter()
+            .map(|w| Floating { root: node(&w.root), rect: [0.0; 4], native: None, monitor: None, monitor_size: None, ..w.clone() })
+            .collect(),
+    }
+}
+
+/// Keep what [`cancel_drag_if_replaced`] compares the next frame against, while a drag of this
+/// area goes on.
+fn record_drag_frame<P: Clone + Eq + Hash + Debug + Send + Sync + 'static>(
+    ctx: &Context,
+    area: Id,
+    layout: &Layout<P>,
+    owned: &[Id],
+    actions: &[Action<P>],
+) {
+    let held = ctx.dragged_id().is_some_and(|id| owned.contains(&id));
+    #[cfg(feature = "native-windows")]
+    let held = held || ctx.data(|d| d.get_temp::<super::render::WindowDrag>(area.with("window-drag")).is_some());
+    if held || is_dragging::<P>(ctx, area) {
+        let frame = DragFrame { layout: layout.clone(), actions: actions.to_vec() };
+        ctx.data_mut(|d| d.insert_temp(drag_frame_key(area), frame));
+    }
+}
+
 /// Keyboard focus stays on a tab only while its panel stays where the user put it: a panel
 /// hidden, closed or moved by the host (a command or a workspace reset) gives focus up.
 fn release_moved_tab_focus<P: Clone + Eq + Hash + Debug + Send + Sync + 'static>(ctx: &Context, area: Id, layout: &Layout<P>) {
@@ -552,16 +642,22 @@ pub fn is_dragging<P: Clone + Send + Sync + 'static>(ctx: &Context, area_id: Id)
     ctx.data(|data| data.get_temp::<Drag<P>>(area_id.with("drag")).is_some() || data.get_temp::<GroupDrag<P>>(area_id.with("group-drag")).is_some())
 }
 
-/// Discard pending tab/group gestures and an actively dragged renderer-owned control before
-/// replacing a workspace. Body/custom-header/menu gestures and other areas are untouched.
+/// Discard pending tab/group gestures, a native window's bar drag and an actively dragged
+/// renderer-owned control. Body/custom-header/menu gestures and other areas are untouched.
 /// Ownership is recorded as controls render; before an initial render or drag threshold there
-/// may be no active egui drag to cancel. Keyboard focus is unchanged. The host owns the
-/// replacement snapshot, so this does not restore a group's previous rectangle.
+/// may be no active egui drag to cancel. Keyboard focus is unchanged. Nothing is restored from
+/// before the drag: floating and native windows go where the next layout drawn has them.
+///
+/// An area cancels its drags itself when the layout it is given is not the one it drew last
+/// frame with its own actions applied (see [`DockArea::show`]), so replacing the workspace
+/// needs no call.
 pub fn cancel_drag<P: Clone + Send + Sync + 'static>(ctx: &Context, area_id: Id) {
     let dragged = ctx.dragged_id();
     let owned = ctx.data_mut(|d| {
         d.remove::<Drag<P>>(area_id.with("drag"));
         d.remove::<GroupDrag<P>>(area_id.with("group-drag"));
+        #[cfg(feature = "native-windows")]
+        d.remove::<super::render::WindowDrag>(area_id.with("window-drag"));
         let ids = d.remove_temp::<Vec<Id>>(area_id.with("owned-interactions"));
         let resize = d.get_temp::<Id>(area_id.with("pointer-resize"));
         d.remove::<Id>(area_id.with("pointer-resize"));
@@ -846,6 +942,9 @@ impl<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> DockArea<'a, P> {
 
     /// Render a validated snapshot and return requested actions for the app's command handler.
     /// No action is applied here. Panel contents get a global stable egui ID across moves.
+    /// A drag in progress (tab, group, column, window bar, divider) ends when `layout` is not
+    /// the one drawn last frame, with or without the returned actions applied, apart from sizes
+    /// and rectangles: a workspace switch, Reset or a command changed it.
     /// Floating windows are egui areas inside this viewport; with feature `native-windows`, each
     /// gets its own OS window where the backend has viewports (see docs/ui-docking.md).
     pub fn show(
@@ -903,6 +1002,7 @@ impl<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> DockArea<'a, P> {
             cancel_drag::<P>(ui.ctx(), self.id);
             return DockOutput { error: Some(DockError::InvalidGeometry), ..Default::default() };
         }
+        cancel_drag_if_replaced(ui.ctx(), self.id, layout);
         release_moved_tab_focus(ui.ctx(), self.id, layout);
         let (view, frame) = super::render::view(layout, self.maximized.as_ref(), self.hide, &*content);
         let places = layout.places();
@@ -951,6 +1051,7 @@ impl<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> DockArea<'a, P> {
         renderer.report_flyout(ui.ctx());
         super::hits::record(ui.ctx(), self.id, layout, &renderer.owned_interactions);
         record_tab_focus(ui.ctx(), self.id, layout, !renderer.output.actions.is_empty());
+        record_drag_frame(ui.ctx(), self.id, layout, &renderer.owned_interactions, &renderer.output.actions);
         ui.ctx().data_mut(|d| d.insert_temp(float_space_key(self.id), renderer.float_space));
         ui.ctx().data_mut(|d| d.insert_temp(self.id.with("owned-interactions"), renderer.owned_interactions));
         renderer.output

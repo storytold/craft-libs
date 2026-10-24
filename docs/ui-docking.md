@@ -257,6 +257,13 @@ A flyout fits its content the same way, without the title bar.
   group does not take, by its permissions or because a split leaves no room, are not drawn; nor is
   the center of the group a tab comes from. Escape or losing window focus cancels
   a drag.
+- A drag in progress (a tab, group, column, window bar, native window bar or divider, in any of
+  the app's windows) also ends when the layout passed to the area is not the one it drew last
+  frame, with or without its returned actions applied: the app switched workspaces, ran Reset
+  or changed the layout by command. Sizes and rectangles are not compared, so an app may clamp
+  a moved window or adjust a split during the drag. Nothing is restored from before the drag;
+  windows go where the new layout has them. `cancel_drag` ends the area's drags at any other
+  time.
 - With `float_on_empty_drop`, a release over no target floats what moves at the pointer, such
   as a panel dropped on a protected canvas. Without it, that release cancels the drag and
   nothing moves: the gap between two groups, a menu bar or a status bar is no target. A release
