@@ -69,6 +69,7 @@ pub struct FlattenDocumentOptions {
 
 /// What [`flatten_document`] does with a page the PDF interpreter fails on.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Unreadable {
     /// Fail with [`FlattenDocumentError::Read`].
     #[default]
@@ -80,6 +81,7 @@ pub enum Unreadable {
 
 /// What [`flatten_document`] did.
 #[derive(Clone, Debug, Default, PartialEq)]
+#[non_exhaustive]
 pub struct FlattenDocumentReport {
     /// Each flattened page (from 0) and its report.
     pub pages: Vec<(usize, FlattenPageReport)>,
@@ -92,6 +94,7 @@ pub struct FlattenDocumentReport {
 
 /// [`FlattenDocumentReport::pages`] summed.
 #[derive(Clone, Debug, Default, PartialEq)]
+#[non_exhaustive]
 pub struct FlattenTotals {
     /// Top-level items cut into regions.
     pub flattened: usize,
@@ -111,6 +114,7 @@ pub struct FlattenTotals {
 }
 
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum FlattenDocumentError {
     #[error(transparent)]
     Open(#[from] OpenError),

@@ -38,6 +38,7 @@ use super::{
 use crate::ink::{Ink, InkColor, InkId, InkSet, Overprint, Process, to_pdf_color};
 
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum WriteError {
     #[error(transparent)]
     Pdf(#[from] pdf_write::WriteError),

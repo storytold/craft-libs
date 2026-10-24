@@ -74,6 +74,7 @@ pub struct ComplexRegion {
 
 /// What [`flatten`] did.
 #[derive(Clone, Debug, Default, PartialEq)]
+#[non_exhaustive]
 pub struct FlattenReport {
     /// Top-level items returned unchanged.
     pub kept: usize,
@@ -98,6 +99,7 @@ pub struct ComplexGroup {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ComplexReason {
     /// The region sweep failed ([`GeomError::Degenerate`]).
     Degenerate,
@@ -106,6 +108,7 @@ pub enum ComplexReason {
 }
 
 #[derive(Clone, Debug, PartialEq, thiserror::Error)]
+#[non_exhaustive]
 pub enum FlattenError {
     #[error("a color names ink {0:?}, which is not in the list's ink set")]
     UnknownInk(InkId),

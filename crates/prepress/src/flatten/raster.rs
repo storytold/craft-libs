@@ -61,6 +61,7 @@ const TILE: i64 = 1536;
 
 /// What [`Rasterizer`] made.
 #[derive(Clone, Debug, Default, PartialEq)]
+#[non_exhaustive]
 pub struct RasterReport {
     /// Images returned.
     pub images: usize,
@@ -350,6 +351,7 @@ pub struct FlattenPageOptions {
 
 /// What [`flatten_page`] did.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct FlattenPageReport {
     pub read: ReadReport,
     pub flatten: FlattenReport,
@@ -357,6 +359,7 @@ pub struct FlattenPageReport {
 }
 
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum FlattenPageError {
     #[error(transparent)]
     Open(#[from] OpenError),
