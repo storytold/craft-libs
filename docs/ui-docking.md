@@ -170,13 +170,20 @@ docking and `craft_ui::panes` both draw) for apps that draw their own windows.
 
 ## Tab strips
 
-Every shown tab carries its panel's full name. Tabs that do not fit go to the "…" button at the
-end of the strip, whose menu lists the hidden panels; choosing one makes it active. The active tab
-is always shown, in its logical place: when it lies past the tabs that fit, it takes the place of
-the last of them. Only an active tab wider than the room beside the "…" button, or a lone tab
-wider than the strip, is cut with "…", and its tooltip names it in full. The drag bar always keeps
-its reserved width: tabs go to the overflow menu before it narrows, and only a strip narrower than
-the bar itself shrinks it. A tab dropped on the "…" button goes to the end of the group.
+Tabs start at their natural width, wide enough for the panel's name. When the strip is too
+narrow, the widest tabs shrink first, to a common width; tabs whose names fit that width keep
+their natural width. A tab narrower than its name cuts the name with "…" and shows it in full as a
+tooltip. Shrunk tabs keep their hit areas, drag and keyboard behaviour, and accessibility labels
+with the full names.
+
+No tab shrinks below `DockStyle::min_tab_width`: by default about three characters and the "…"
+plus the tab's padding, 54 pt at the 12 pt font. Only when the tabs at that width do not all fit
+do the rest go to the "…" button at the end of the strip, whose menu lists the hidden panels;
+choosing one makes it active. The active tab is always shown, in its logical place, and the
+others take the remaining room in their order. An active tab with less room than its minimum
+width, or a lone tab wider than the strip, is cut the same way. The drag bar always keeps its
+reserved width: tabs shrink, then overflow, before it narrows, and only a strip narrower than the
+group header plus the bar shrinks it. A tab dropped on the "…" button goes to the end of the group.
 
 ## Floating size
 

@@ -1401,16 +1401,9 @@ fn popup_action_labels_use_custom_visual_text_and_logical_accessibility() {
 }
 
 #[test]
-fn a_narrow_strip_shows_whole_tabs_and_lists_the_others_in_the_overflow_menu() {
+fn a_strip_too_narrow_for_its_tabs_at_their_minimum_width_lists_the_others_in_the_overflow_menu() {
     use egui::accesskit::Role;
     use egui_kittest::{Harness, kittest::Queryable};
-    fn elided(shape: &egui::Shape) -> bool {
-        match shape {
-            egui::Shape::Text(text) => text.galley.elided,
-            egui::Shape::Vec(shapes) => shapes.iter().any(elided),
-            _ => false,
-        }
-    }
     let area = Id::new("whole-tabs");
     let layout = Layout { root: Some(tabs(&[1, 2, 3, 4, 5, 6], 5)), floating: vec![] };
     let mut h = Harness::builder().with_size(vec2(260.0, 240.0)).build_ui(move |ui| {
@@ -1430,7 +1423,10 @@ fn a_narrow_strip_shows_whole_tabs_and_lists_the_others_in_the_overflow_menu() {
     let mut expected: Vec<u32> = (1..shown.len() as u32).collect();
     expected.push(6);
     assert_eq!(shown, expected);
-    assert!(h.output().shapes.iter().all(|shape| !elided(&shape.shape)), "every shown tab keeps its full name");
+    // As many tabs show as fit at the minimum width beside the drag bar and the "…" button.
+    let style = DockStyle::default();
+    let room = 260.0 - style.drag_bar_width - 22.0;
+    assert!(shown.len() as f32 * style.min_tab_width <= room && (shown.len() + 1) as f32 * style.min_tab_width > room, "{shown:?}");
     h.get_by_role_and_label(Role::Button, "Panels").click();
     h.run_steps(2);
     let listed: Vec<u32> = (1..=6).filter(|p| h.query_by_role_and_label(Role::Button, &format!("Panel {p}")).is_some()).collect();
@@ -1439,13 +1435,13 @@ fn a_narrow_strip_shows_whole_tabs_and_lists_the_others_in_the_overflow_menu() {
 }
 
 #[test]
-fn only_an_active_tab_wider_than_the_strip_is_truncated_and_named_in_a_tooltip() {
+fn tab_labels_that_do_not_fit_are_truncated_inside_their_tab_and_named_in_a_tooltip() {
     let ctx = Context::default();
     ctx.all_styles_mut(|style| style.interaction.tooltip_delay = 0.0);
     let layout = Layout { root: Some(tabs(&[1, 2, 3], 0)), floating: vec![] };
     let label = |p: &u32| format!("Eigenschaften und Anpassungen {p}");
     let run = |events: Vec<Event>| {
-        let input = RawInput { screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(150.0, 200.0))), events, ..Default::default() };
+        let input = RawInput { screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(240.0, 200.0))), events, ..Default::default() };
         let mut output = ctx.run_ui(input, |ui| {
             DockArea::new(Id::new("truncate")).show(
                 ui,
@@ -1463,23 +1459,24 @@ fn only_an_active_tab_wider_than_the_strip_is_truncated_and_named_in_a_tooltip()
     };
     run(vec![]);
     let shapes = run(vec![]);
-    let tab = |p: u32| ctx.read_response(Id::new("truncate").with(("tab", &p))).map(|response| response.rect);
-    assert!(tab(2).is_none() && tab(3).is_none(), "the other tabs overflow instead of shrinking");
-    let active = tab(1).unwrap();
-    // The clip rect would hide an overflowing label; what is laid out must itself fit.
-    let painted: Vec<&egui::epaint::TextShape> = shapes
-        .iter()
-        .filter_map(|shape| match &shape.shape {
-            egui::Shape::Text(text) if active.contains(text.visual_bounding_rect().center()) => Some(text),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(painted.len(), 1, "{painted:?}");
-    assert!(painted[0].galley.elided);
-    assert!(active.contains_rect(painted[0].visual_bounding_rect()), "label {:?} overflows {active:?}", painted[0].visual_bounding_rect());
-    run(vec![Event::PointerMoved(active.center())]);
+    let tab = |p: u32| ctx.read_response(Id::new("truncate").with(("tab", &p))).expect("every tab shrinks to fit").rect;
+    for p in 1..=3 {
+        let tab = tab(p);
+        // The clip rect would hide an overflowing label; what is laid out must itself fit.
+        let painted: Vec<&egui::epaint::TextShape> = shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if tab.contains(text.visual_bounding_rect().center()) => Some(text),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(painted.len(), 1, "tab {p}: {painted:?}");
+        assert!(painted[0].galley.elided, "tab {p}");
+        assert!(tab.contains_rect(painted[0].visual_bounding_rect()), "tab {p}: label {:?} overflows {tab:?}", painted[0].visual_bounding_rect());
+    }
+    run(vec![Event::PointerMoved(tab(2).center())]);
     let shapes = run(vec![]);
-    let full = label(&1);
+    let full = label(&2);
     // An elided galley still reports its whole text, so the cut tab label alone would match.
     assert!(
         shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == full && !text.galley.elided)),

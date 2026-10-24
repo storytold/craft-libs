@@ -38,9 +38,14 @@ pub struct DockStyle {
     pub float_group_label: String,
     /// Group menu item that moves the whole group into another group (submenu of targets).
     pub move_group_to_label: String,
-    /// Minimum width of the drag bar left of the group header. Tabs overflow before the bar
-    /// narrows.
+    /// Minimum width of the drag bar left of the group header. Tabs shrink, then overflow,
+    /// before the bar narrows; a strip narrower than the header plus this width narrows it.
     pub drag_bar_width: f32,
+    /// Narrowest a tab gets before the tabs that do not fit go to the overflow menu: about
+    /// three characters and the "…" at [`Self::font`]'s size, plus the tab's 24 pt padding
+    /// (54 pt at the default 12 pt font). Tabs whose names are shorter keep their natural
+    /// width. Set it again after changing the font.
+    pub min_tab_width: f32,
     /// Painted under every floating window, so it stays opaque when the panel colors are not.
     pub floating_background: Color32,
     pub floating_stroke: Stroke,
@@ -135,6 +140,7 @@ impl DockStyle {
     }
 
     pub fn from_visuals(visuals: &egui::Visuals) -> Self {
+        let font = FontId::proportional(12.0);
         Self {
             tab_height: 26.0,
             gap: 4.0,
@@ -146,7 +152,8 @@ impl DockStyle {
             inactive_text: visuals.weak_text_color(),
             border: visuals.widgets.noninteractive.bg_stroke,
             accent: visuals.selection.stroke.color,
-            font: FontId::proportional(12.0),
+            min_tab_width: font.size * 2.5 + TAB_PADDING,
+            font,
             float_label: "Float Panel".into(),
             close_label: "Close Panel".into(),
             move_panel_to_label: "Move Panel to Group".into(),
@@ -208,6 +215,7 @@ impl DockStyle {
             self.border.width,
             self.font.size,
             self.drag_bar_width,
+            self.min_tab_width,
             self.floating_stroke.width,
             self.title_height,
             self.edge_band,

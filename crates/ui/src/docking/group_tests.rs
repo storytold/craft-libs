@@ -263,10 +263,64 @@ fn drag_bar_survives_a_strip_full_of_tabs() {
     assert!(bar.width() >= 40.0, "{bar:?}");
     assert_eq!(bar.right(), 300.0 - 24.0, "the bar ends at the header");
     assert_eq!(d.content.strip_width.get(), 300.0, "the header is sized for the whole strip");
-    assert!(d.ctx.read_response(Id::new(AREA).with(("overflow", &1u32))).is_some(), "tabs overflow before the bar narrows");
+    assert!(d.ctx.read_response(Id::new(AREA).with(("overflow", &1u32))).is_some(), "tabs shrink, then overflow, before the bar narrows");
     let out = d.drag(bar.center(), pos2(500.0, 300.0));
     assert!(matches!(moved_group(&out.actions), Some(Target::Float { .. })), "{:?}", out.actions);
     assert_eq!(d.layout.floating[0].groups()[0].panels.len(), 8);
+}
+
+/// Panels with ordinary names.
+struct Named;
+
+impl DockContent<u32> for Named {
+    fn body(&mut self, ui: &mut egui::Ui, _: &u32) {
+        ui.label("Body");
+    }
+    fn logical_label(&self, panel: &u32) -> String {
+        if *panel == 1 { "Properties" } else { "Layers" }.into()
+    }
+}
+
+#[test]
+fn narrow_frames_shrink_their_tabs_before_the_rest_overflow() {
+    let texts = |d: &testing::DockDriver<u32, Named>| {
+        let mut out = Vec::new();
+        fn walk(shape: &egui::Shape, out: &mut Vec<egui::epaint::TextShape>) {
+            match shape {
+                egui::Shape::Vec(shapes) => shapes.iter().for_each(|s| walk(s, out)),
+                egui::Shape::Text(text) => out.push(text.clone()),
+                _ => {}
+            }
+        }
+        d.shapes().iter().for_each(|clipped| walk(&clipped.shape, &mut out));
+        out
+    };
+    let layout = Layout { root: Some(tabs(&[1, 2], 0)), floating: Vec::new() };
+    let area = |width: f32| Rect::from_min_size(pos2(0.0, 0.0), vec2(width, 300.0));
+
+    // Both tabs show, cut to fit, with their labels inside them.
+    let d = testing::DockDriver::new(layout.clone(), Named).with_area(area(168.0));
+    assert!(d.hit(&Hit::Overflow(1)).is_none(), "no overflow while the tabs fit at their minimum width");
+    let min = DockStyle::default().min_tab_width;
+    for (panel, name) in [(1, "Properties"), (2, "Layers")] {
+        let tab = d.hit(&Hit::Tab(panel)).unwrap_or_else(|| panic!("{name} is hidden"));
+        assert!(tab.width() >= min - 0.5, "{name}: {tab:?}");
+        let label = texts(&d).into_iter().find(|t| t.galley.text() == name && tab.contains(t.pos)).unwrap_or_else(|| panic!("no {name} label"));
+        assert!(tab.contains_rect(label.visual_bounding_rect()), "{name}: {:?} outside {tab:?}", label.visual_bounding_rect());
+    }
+    let properties = texts(&d).into_iter().find(|t| t.galley.text() == "Properties").unwrap();
+    assert!(properties.galley.elided, "the wider tab shrinks to make room");
+
+    // Too narrow for both at their minimum width: the active tab stays, the other is listed.
+    let mut d = testing::DockDriver::new(layout, Named).with_area(area(120.0));
+    assert!(d.hit(&Hit::Tab(1)).is_some() && d.hit(&Hit::Tab(2)).is_none());
+    let overflow = d.hit(&Hit::Overflow(1)).expect("an overflow button");
+    d.click(overflow.center());
+    d.settle();
+    let listed = texts(&d).into_iter().find(|t| t.galley.text() == "Layers").expect("the menu lists Layers");
+    assert!(listed.pos.y >= overflow.bottom(), "{listed:?}");
+    let out = d.click(listed.visual_bounding_rect().center());
+    assert!(out.actions.contains(&Action::Activate { panel: 2 }), "{:?}", out.actions);
 }
 
 #[test]

@@ -107,12 +107,13 @@ indices and widths, overflow indices, and the actual reserved overflow width. It
 tabs before hiding them, keeps input order and retains the selected tab. Tiny strips may reduce
 its width to zero. Negative/non-finite dimensions become zero and large dimensions are bounded.
 The work is linear in tab count with at most 32 fitting passes; the caller caps its own tab count.
+Docking tab strips use this policy, with `DockStyle::min_tab_width` as the minimum.
 
 `tabs::fit_whole(natural_widths, selected, available, overflow_width)` keeps every shown tab at its
 natural width and sends the rest to overflow. Tabs are shown in order up to the first that does not
 fit; the selected tab is always shown in its logical place, taking the place of the last tabs that
 fit when it lies past them. Only a selected tab wider than the strip minus the overflow button is
-narrowed. Docking tab strips use this policy.
+narrowed.
 
 `tabs::Tab` registers a tab at a supplied rectangle and invokes the application's painter:
 

@@ -79,7 +79,7 @@ impl DockContent<u32> for GalleyLabels {
 }
 
 #[test]
-fn galley_labels_stay_whole_and_only_an_over_wide_active_tab_ends_with_an_ellipsis_inside_it() {
+fn galley_labels_in_shrunk_tabs_end_with_an_ellipsis_inside_the_tab_active_or_not() {
     let panels = [1, 2, 3, 4, 5, 6];
     let layout = Layout { root: Some(tabs(&panels, 3)), floating: Vec::new() };
     for width in [320.0, 90.0] {
@@ -111,8 +111,7 @@ fn galley_labels_stay_whole_and_only_an_over_wide_active_tab_ends_with_an_ellips
             let Some((clip, text)) = texts.iter().find(|(_, t)| t.galley.text().ends_with(&format!(" {panel}")) && tab.contains(t.pos)) else {
                 panic!("no label in tab {panel}")
             };
-            let cut = width < 100.0;
-            assert_eq!(last_char(&text.galley), if cut { Some('…') } else { char::from_digit(panel, 10) }, "{width}: tab {panel}");
+            assert_eq!(last_char(&text.galley), Some('…'), "{width}: tab {panel}");
             let drawn = Rect::from_min_size(text.pos, text.galley.size());
             assert!(drawn.right() <= tab.right() + 0.5 && drawn.left() >= tab.left(), "tab {panel}: {drawn:?} in {tab:?}");
             assert!(tab.contains_rect(clip.intersect(drawn)), "tab {panel}");

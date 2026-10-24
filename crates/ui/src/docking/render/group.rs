@@ -80,7 +80,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
                 self.output.focused = Some(selected.clone());
             }
         }
-        // The drag bar keeps its reserved width: tabs overflow before it narrows.
+        // The drag bar keeps its reserved width: tabs shrink, then overflow, before it narrows.
         let bar_width = self.style.drag_bar_width.clamp(0.0, (strip.width() - header_width).max(0.0));
         let tabs_width = (strip.width() - header_width - bar_width).max(0.0);
         let widths: Vec<f32> = panels
@@ -94,9 +94,10 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
                     + TAB_PADDING
             })
             .collect();
-        // Tabs keep their full names; the rest go to the overflow menu. Only an active tab wider
-        // than the strip is cut, with its name in a tooltip.
-        let fit = tabs::fit_whole(&widths, active, tabs_width, OVERFLOW_WIDTH);
+        // The widest tabs shrink first, to a common width no narrower than `min_tab_width`; only
+        // when every tab at that width cannot fit do the rest go to the overflow menu. A tab
+        // narrower than its name cuts it with "…" and names it in a tooltip.
+        let fit = tabs::fit(&widths, active, tabs_width, self.style.min_tab_width, OVERFLOW_WIDTH);
         let owner = TabGroup { panels, selected, minimized, kind, rect };
         let mut x = strip.left();
         let mut shown = Vec::new();
