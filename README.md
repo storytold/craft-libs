@@ -63,6 +63,9 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
 - [`craft-settings`](crates/settings/README.md): `config.toml` settings storage for every app: platform folders, portable mode and overrides, atomic saves while running, backup, damaged-file recovery and schema migrations. Policy in [docs/settings-storage.md](docs/settings-storage.md).
 - [`craft-ui`](crates/ui/README.md): SVG catalogs, icon buttons, tabs, pane controls, transactional docking, print settings and theme helpers for egui frontends;
   assets, themes, localization and command handling stay in each app. Requires Rust 1.95 or later.
+- [`craft-units`](crates/units/README.md): exact integer length units for the office apps — EMU,
+  points, twips, inches, centimetres, millimetres and CSS pixels — with half-away-from-zero
+  rounding, saturation instead of overflow and zero for non-finite input. Layout stays in each app.
 - [Shared UI component audit](docs/ui-components-audit.md): source inventory, extraction priorities
   and compatibility boundaries across the Craft suite.
 - [Theme infrastructure](docs/theme-infrastructure.md): eight-app comparison and the small shared

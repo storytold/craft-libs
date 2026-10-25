@@ -1,0 +1,29 @@
+name: Units
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['crates/units/**', 'Cargo.toml', 'Cargo.lock', '.github/workflows/units.yml']
+  pull_request:
+    paths: ['crates/units/**', 'Cargo.toml', 'Cargo.lock', '.github/workflows/units.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  units:
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          components: rustfmt, clippy
+      - run: cargo fmt --check
+      - run: cargo clippy -p craft-units --all-targets --locked -- -D warnings
+      - run: cargo test -p craft-units --locked -- --nocapture

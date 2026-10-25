@@ -1,0 +1,14 @@
+[package]
+name = "craft-units"
+description = "Exact integer length units shared by the Craft office apps: EMU, points, twips, inches, centimetres and CSS pixels"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
