@@ -25,6 +25,7 @@ kurbo = "0.13"
 thiserror = "2"
 craft-atomic = { path = "crates/atomic" }
 craft-cms = { path = "crates/cms" }
+craft-crdt = { path = "crates/crdt" }
 craft-docpath = { path = "crates/docpath" }
 craft-font-catalog = { path = "crates/font-catalog" }
 craft-font-manager = { path = "crates/font-manager" }
