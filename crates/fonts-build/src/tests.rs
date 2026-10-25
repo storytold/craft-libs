@@ -257,6 +257,27 @@ fn integrity_is_base64_of_the_hex_hash() {
     }
 }
 
+/// Opt-in Hebrew and Latin manifests embed their selected faces independently of the default manifest.
+#[test]
+fn embeds_from_opt_in_hebrew_and_latin_manifests() {
+    let scratch = Scratch::new("hebrew-manifest");
+    let dir = scratch.0.join("craft-fonts");
+    std::fs::create_dir_all(dir.join("fonts")).unwrap();
+    std::fs::copy(fixture().join("fonts/sans-arabic/SansArabic.ttf"), dir.join("fonts/heebo.ttf")).unwrap();
+    std::fs::copy(fixture().join("fonts/sans-arabic/SansArabic.ttf"), dir.join("fonts/david.ttf")).unwrap();
+    std::fs::write(
+        dir.join("fonts/hebrew-manifest.txt"),
+        "Heebo | Variable | fonts/heebo.ttf | Hebr,Latn | OFL-1.1 | fonts/OFL.txt | 00 | src\n\
+         David Libre | Regular | fonts/david.ttf | Hebr,Latn | OFL-1.1 | fonts/OFL.txt | 00 | src\n",
+    )
+    .unwrap();
+    let r = run(Embed::hebrew(), Some(&dir), Some("1"));
+    assert_eq!(r.result.unwrap(), ["Heebo Variable", "David Libre Regular"]);
+    let r = run(Embed::hebrew_documents(&["David Libre"]), Some(&dir), Some("1"));
+    assert_eq!(r.result.unwrap(), ["David Libre Regular"]);
+    assert!(matches!(run(Embed::latin(), Some(&dir), Some("1")).result, Err(Error::Read { .. })));
+}
+
 /// A font with only a `cmap` table: a Windows format 4 subtable with `bmp` segments `(first,
 /// last, glyphs)`, mapped to glyphs 1.. when `glyphs` is `None` and through the glyph array
 /// otherwise, and a format 12 subtable with `groups` `(first, last)` when there are any.
