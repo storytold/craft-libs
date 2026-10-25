@@ -87,10 +87,18 @@ pub fn hard_light(cb: f32, cs: f32) -> f32 {
     }
 }
 
-/// Photoshop Soft Light (differs from W3C in the upper half).
+/// Photoshop's Soft Light: the W3C/PDF curve. In the upper half (`cs > 0.5`) the backdrop moves
+/// towards `D(cb)`, which is `sqrt(cb)` above a quarter and the cubic `((16·cb − 12)·cb + 4)·cb`
+/// below it; with `sqrt` throughout, dark backdrops came out up to 20 levels too light.
 #[inline]
 pub fn soft_light_ps(cb: f32, cs: f32) -> f32 {
-    if cs <= 0.5 { 2.0 * cb * cs + cb * cb * (1.0 - 2.0 * cs) } else { 2.0 * cb * (1.0 - cs) + cb.max(0.0).sqrt() * (2.0 * cs - 1.0) }
+    if cs <= 0.5 {
+        2.0 * cb * cs + cb * cb * (1.0 - 2.0 * cs)
+    } else {
+        let b = cb.max(0.0);
+        let d = if b <= 0.25 { ((16.0 * b - 12.0) * b + 4.0) * b } else { b.sqrt() };
+        2.0 * cb * (1.0 - cs) + d * (2.0 * cs - 1.0)
+    }
 }
 
 /// Pin Light kernel.
