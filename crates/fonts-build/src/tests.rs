@@ -123,9 +123,9 @@ fn rejects_a_checkout_under_a_non_utf8_path() {
     use std::os::unix::ffi::OsStrExt;
     let scratch = Scratch::new("non-utf8");
     let dir = scratch.0.join(std::ffi::OsStr::from_bytes(b"craft-fonts-\xff"));
-    // macOS refuses a name that is not UTF-8 (EILSEQ, 92), so no such checkout can exist there.
+    // macOS APFS and other filesystems reject non-UTF-8 paths at creation time (EILSEQ 92 / 84).
     if let Err(e) = std::fs::create_dir_all(dir.join("fonts")) {
-        assert!(cfg!(target_os = "macos") && e.raw_os_error() == Some(92), "{e}");
+        assert!(matches!(e.raw_os_error(), Some(84 | 92)) || e.kind() == std::io::ErrorKind::InvalidInput, "{e}");
         return;
     }
     std::fs::copy(fixture().join("fonts/sans-arabic/SansArabic.ttf"), dir.join("fonts/a.ttf")).unwrap();
