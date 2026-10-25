@@ -615,6 +615,7 @@ fn candidates_unchecked(tag: &str) -> Vec<String> {
     let Some(first) = parts.first_mut() else {
         return Vec::new();
     };
+    let original = *first;
     *first = canonical_language(first);
     let primary = *first;
     let modifier = match tag.split_once('@').map(|(_, m)| m) {
@@ -649,6 +650,17 @@ fn candidates_unchecked(tag: &str) -> Vec<String> {
     }
     if primary == "pt" && !out.iter().any(|c| c == "pt-br") {
         out.push("pt-br".to_owned());
+    }
+    if original != primary {
+        let mut raw = parts;
+        if let Some(first) = raw.first_mut() {
+            *first = original;
+        }
+        for c in (1..=raw.len()).rev().map(|n| raw.get(..n).unwrap_or_default().join("-")) {
+            if !out.contains(&c) {
+                out.push(c);
+            }
+        }
     }
     out
 }
