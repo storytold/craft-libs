@@ -127,6 +127,20 @@ fn driver_ticket(device: &PrinterDevice, job: &Job, sheet: (f64, f64), landscape
         if !(width_set && height_set) {
             return Err(spool_error("the printer does not report the custom size parameters; nothing was sent"));
         }
+        // The HP PCL3 driver reads the custom media dimensions from the option's direct scored
+        // properties; with the capability's parameter references it emits PAPERLENGTH=width
+        // (a square page). Put the two integers in the option itself.
+        for property in &mut custom.option_mut().scored_properties {
+            let Some(name) = property.name.as_ref() else { continue };
+            let value = match name.local_name.as_str() {
+                "MediaSizeWidth" => width,
+                "MediaSizeHeight" => height,
+                _ => continue,
+            };
+            property.parameter_ref = None;
+            property.value = Some(PropertyValue::Integer(value as i32));
+        }
+        custom.parameters_mut().clear();
         let media_ticket: PrintTicket = custom.into();
         let media_document = PrintTicketDocument::parse_from_bytes(media_ticket.get_xml()).map_err(spool_error)?;
         document.features.extend(media_document.features);
