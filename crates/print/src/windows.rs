@@ -138,6 +138,21 @@ fn driver_ticket(device: &PrinterDevice, job: &Job, sheet: (f64, f64), landscape
         document.features.retain(|f| !(f.name.local_name == "PageScaling" && f.name.namespace_ref() == Some(NS_PSK)));
         document.features.push(PrintFeature { name: scaling_name, properties: Vec::new(), options: vec![no_scaling.clone()], features: Vec::new() });
     }
+    // The HP PCL driver inherits PageAutorotate from the queue, so with a user's fixed
+    // "rotate 0" setting it emits a square paper length (PJL PAPERLENGTH = PAPERWIDTH) and the
+    // printer cuts the page at its width. A named paper or the driver's PrintTicket preview
+    // still looks right. Let the printer manage the roll orientation, as Affinity does.
+    if let Some(autorotate) = capabilities.document.features.iter().find(|f| f.name.local_name == "PageAutorotate")
+        && let Some(option) = autorotate.options.iter().find(|o| o.name.as_ref().is_some_and(|n| n.local_name == "Printer" || n.local_name == "On"))
+    {
+        document.features.retain(|f| f.name.local_name != "PageAutorotate");
+        document.features.push(PrintFeature {
+            name: autorotate.name.clone(),
+            properties: Vec::new(),
+            options: vec![option.clone()],
+            features: Vec::new(),
+        });
+    }
     let mut builder = PrintTicketBuilder::new(device).map_err(spool_error)?;
     builder.merge(PrintTicket::from(document)).map_err(spool_error)?;
     let validated = builder.build().map_err(spool_error)?;
@@ -274,6 +289,9 @@ mod tests {
             Ok(value) => value,
             Err(e) => panic!("{e}"),
         };
+        let ticket_xml = std::str::from_utf8(ticket.get_xml()).unwrap();
+        assert!(ticket_xml.contains("PageAutorotate"), "missing PageAutorotate: {ticket_xml}");
+        assert!(ticket_xml.contains("Printer"), "missing Printer autorotate: {ticket_xml}");
         let expected = (1_067_000, 480_000);
         assert!(paper == expected || paper == (expected.1, expected.0), "driver paper {paper:?}");
         if let Ok(path) = std::env::var("CRAFT_PRINT_TEST_TICKET_OUTPUT") {
