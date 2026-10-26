@@ -359,10 +359,12 @@ fn fill(a: Option<&str>, b: Option<&str>, n: usize, out: &mut Vec<String>, depth
 /// reached the [`KEY_RESPACE_LEN`] threshold, keeping short keys in place (spec §5.2 — respace
 /// is rare, under 0.1% of changes, and is synced as one ordinary batch of position writes).
 ///
-/// `keys` must be the parent's children in `(key, id)` order. Returns the `(old, new)` pairs.
+/// `keys` must be the parent's children in `(key, id)` order. Returns `(owner id, new key)`
+/// for each child that moved. The owner id is required because two siblings can share a key
+/// (tie-break is `(key, id)`); looking the child up by old key would move the wrong one.
 /// Fresh keys are generated *between the neighboring kept keys*, so they cannot collide with
 /// a short key that stayed in place.
-pub fn respace(keys: &[(String, NodeKeyOwner)]) -> Result<Vec<(String, String)>, KeyError> {
+pub fn respace(keys: &[(String, NodeKeyOwner)]) -> Result<Vec<(NodeKeyOwner, String)>, KeyError> {
     if !keys.iter().any(|(k, _)| k.len() >= KEY_RESPACE_LEN) {
         return Ok(Vec::new());
     }
@@ -400,11 +402,11 @@ pub fn respace(keys: &[(String, NodeKeyOwner)]) -> Result<Vec<(String, String)>,
     }
     let mut out = Vec::new();
     let mut final_seq: Vec<&str> = Vec::with_capacity(n);
-    for (i, (old, _)) in keys.iter().enumerate() {
+    for (i, (old, owner)) in keys.iter().enumerate() {
         let new = effective[i].as_deref().ok_or(KeyError::Exhausted)?;
         final_seq.push(new);
         if new != old.as_str() {
-            out.push((old.clone(), new.to_owned()));
+            out.push((*owner, new.to_owned()));
         }
     }
     let strictly_increasing = final_seq.windows(2).all(|w| w[0] < w[1]);

@@ -96,3 +96,55 @@ fn both_sides_moving_to_different_parents_conflict() {
     let plan = three_way(&base, &branch_changes, &main, 0);
     assert!(plan.conflicts.iter().any(|c| c.prop.as_deref() == Some("parent")));
 }
+
+fn apply_auto(main: &Replica, plan: &craft_crdt::merge::MergePlan) -> Replica {
+    let mut r = main.clone();
+    r.apply(&Batch { id: 0, base_seq: r.seq(), changes: plan.auto.clone() }, ApplyMode::Strict).expect("strict apply of plan.auto");
+    r
+}
+
+#[test]
+fn a_move_into_a_new_group_creates_the_group_first() {
+    let mut base = Replica::new();
+    apply(&mut base, vec![create(2, 0, "a0")]);
+    let main = base.clone();
+    let branch_changes = vec![
+        create(5, 0, "a1"),
+        Change::Set {
+            id: NodeId(2),
+            prop: Arc::from("parent"),
+            value: Value::Json(serde_json::Value::Number(5.into())),
+        },
+    ];
+    let plan = three_way(&base, &branch_changes, &main, 0);
+    assert!(plan.conflicts.is_empty(), "{plan:?}");
+    let create_at = plan.auto.iter().position(|c| matches!(c, Change::Create { id: NodeId(5), .. }));
+    let move_at = plan.auto.iter().position(|c| matches!(c, Change::Set { id: NodeId(2), prop, .. } if prop.as_ref() == "parent"));
+    assert!(create_at.expect("create group") < move_at.expect("move into group"), "got {:?}", plan.auto);
+    let r = apply_auto(&main, &plan);
+    assert_eq!(r.node(NodeId(2)).expect("moved").parent, NodeId(5));
+    assert!(r.node(NodeId(5)).is_some());
+}
+
+#[test]
+fn a_move_out_lands_before_the_old_parent_is_deleted() {
+    let mut base = Replica::new();
+    apply(&mut base, vec![create(1, 0, "a0"), create(2, 1, "a0")]);
+    let main = base.clone();
+    let branch_changes = vec![
+        Change::Set {
+            id: NodeId(2),
+            prop: Arc::from("parent"),
+            value: Value::Json(serde_json::Value::Number(0.into())),
+        },
+        Change::Delete { id: NodeId(1) },
+    ];
+    let plan = three_way(&base, &branch_changes, &main, 0);
+    assert!(plan.conflicts.is_empty(), "{plan:?}");
+    let move_at = plan.auto.iter().position(|c| matches!(c, Change::Set { id: NodeId(2), prop, .. } if prop.as_ref() == "parent"));
+    let delete_at = plan.auto.iter().position(|c| matches!(c, Change::Delete { id: NodeId(1) }));
+    assert!(move_at.expect("move out") < delete_at.expect("delete parent"), "got {:?}", plan.auto);
+    let r = apply_auto(&main, &plan);
+    assert!(r.node(NodeId(1)).is_none(), "parent gone");
+    assert_eq!(r.node(NodeId(2)).expect("child survived").parent, NodeId(0));
+}
