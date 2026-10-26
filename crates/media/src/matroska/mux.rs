@@ -64,7 +64,8 @@ pub struct MuxOptions {
     /// Start a new cluster at the next video keyframe (or any frame without video) after this long.
     pub cluster_duration_ns: u64,
     pub lacing: LacingMode,
-    /// Maximum frames per laced block.
+    /// Maximum frames per laced block. Matroska allows 1 to 256; [`MkvWriter::new`] clamps
+    /// other values into that range.
     pub max_lace_frames: usize,
     pub title: Option<String>,
     pub writing_app: String,
@@ -145,10 +146,12 @@ pub struct MkvWriter<W: Write + Seek> {
 }
 
 impl<W: Write + Seek> MkvWriter<W> {
-    pub fn new(mut w: W, tracks: Vec<TrackSpec>, opts: MuxOptions) -> Result<Self> {
+    pub fn new(mut w: W, tracks: Vec<TrackSpec>, mut opts: MuxOptions) -> Result<Self> {
         if tracks.is_empty() || opts.timestamp_scale == 0 {
             return Err(Error::Invalid("muxer needs at least one track and a non-zero timestamp scale".into()));
         }
+        // A block stores its frame count minus one in a byte.
+        opts.max_lace_frames = opts.max_lace_frames.clamp(1, 256);
         let mut out = Vec::new();
         let mut h = Vec::new();
         el_uint(&mut h, EBML_VERSION, 1);
@@ -333,7 +336,7 @@ impl<W: Write + Seek> MkvWriter<W> {
             block.extend_from_slice(data);
             let mut g = Vec::new();
             el(&mut g, BLOCK, &block);
-            el_uint(&mut g, BLOCK_DURATION, (d as i64 / scale) as u64);
+            el_uint(&mut g, BLOCK_DURATION, ((u128::from(d) + scale as u128 / 2) / scale as u128) as u64);
             if !keyframe {
                 el(&mut g, REFERENCE_BLOCK, &[0xFF]);
             }
@@ -571,6 +574,36 @@ mod tests {
         let bytes = m.finish().unwrap().into_inner();
         let got: Vec<_> = Demuxer::from_slice(&bytes).unwrap().map(|p| p.unwrap()).map(|p| (p.track, p.pts, p.lace)).collect();
         assert_eq!(got, [(0, 0, 0), (0, 100, 0), (0, 110, 1), (0, 120, 2), (0, 200, 0), (1, 300, 0), (1, 310, 0)]);
+    }
+
+    #[test]
+    fn lace_size_is_clamped_to_256_frames() {
+        let mut a = TrackSpec::new(TrackKind::Audio, "A_PCM/INT/LIT");
+        a.audio = Some((48000.0, 1, Some(16)));
+        a.default_duration_ns = Some(1_000_000);
+        for lacing in [LacingMode::Xiph, LacingMode::Ebml, LacingMode::FixedOrEbml] {
+            let opts = MuxOptions { lacing, max_lace_frames: 300, ..Default::default() };
+            let mut m = MkvWriter::new(Cursor::new(Vec::new()), vec![a.clone()], opts).unwrap();
+            for i in 0..300i64 {
+                m.write_frame(0, i * 1_000_000, true, &[i as u8; 4], None).unwrap();
+            }
+            let bytes = m.finish().unwrap().into_inner();
+            let d = Demuxer::from_slice(&bytes).unwrap();
+            assert!(d.file().warnings.is_empty(), "{:?}", d.file().warnings);
+            let got: Vec<_> = d.map(|p| p.unwrap()).map(|p| (p.pts, p.lace, p.data)).collect();
+            let want: Vec<_> = (0..300i64).map(|i| (i, (i % 256) as u16, vec![i as u8; 4])).collect();
+            assert_eq!(got, want);
+        }
+    }
+
+    #[test]
+    fn block_duration_rounds_to_the_nearest_tick() {
+        let mut v = TrackSpec::new(TrackKind::Video, "V_MJPEG");
+        v.video_size = Some((16, 16));
+        let mut m = MkvWriter::new(Cursor::new(Vec::new()), vec![v], MuxOptions::default()).unwrap();
+        m.write_frame(0, 0, true, &[0; 4], Some(41_700_000)).unwrap();
+        let bytes = m.finish().unwrap().into_inner();
+        assert_eq!(Demuxer::from_slice(&bytes).unwrap().next_packet().unwrap().unwrap().duration, 42);
     }
 
     #[test]

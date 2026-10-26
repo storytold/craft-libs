@@ -1,0 +1,113 @@
+# Arabic (ar) catalog for Craft Font Manager's panel.
+# Format: context<TAB>source<TAB>translation; @plural rows list the locale's plural forms.
+# Style and weight names (Regular, Bold, Italic), licence names and product names stay in English.
+	All categories	كل الفئات
+	All fonts	كل الخطوط
+	All sources	كل المصادر
+	Allow downloads	السماح بالتنزيل
+	Alphabet	الأبجدية
+	Any language	أي لغة
+	Any script	أي نظام كتابة
+	Browse	تصفّح
+	Cancel	إلغاء
+	Category	الفئة
+	Clear filters	مسح عوامل التصفية
+	Clear search and filters	مسح البحث وعوامل التصفية
+	Close	إغلاق
+	Couldn't download	تعذّر التنزيل
+	Couldn't install	تعذّر التثبيت
+	Couldn't remove	تعذّرت الإزالة
+	Designer	المصمم
+	Display	عرض
+	Download from Google Fonts?	هل تريد التنزيل من Google Fonts؟
+	Download size	حجم التنزيل
+	Download	تنزيل
+	Downloading	جارٍ التنزيل
+	Downloads are off	التنزيل متوقف
+	Downloads stay allowed until you turn them off.	يبقى التنزيل مسموحًا حتى توقفه.
+	Downloads	التنزيلات
+	Every Craft app uses the fonts in the font store. System fonts are added and removed with your system's own font tools.	تستخدم كل تطبيقات Craft الخطوط الموجودة في متجر الخطوط. تُضاف خطوط النظام وتُزال بأدوات الخطوط في نظامك.
+	Files	الملفات
+	Find a language	ابحث عن لغة
+	Font store	متجر الخطوط
+	Fonts that aren't installed show a sample once you preview them. Nothing is downloaded until you allow it.	تظهر عينة الخط غير المثبّت بعد معاينته. لا يُنزَّل شيء حتى تسمح بذلك.
+	Fonts you install from Browse go here, for every Craft app.	تظهر هنا الخطوط التي تثبّتها من «تصفّح»، لكل تطبيقات Craft.
+	From Google Fonts' GitHub repository, only when you install or preview a font.	من مستودع Google Fonts على GitHub، فقط عند تثبيت خط أو معاينته.
+	Handwriting	خط اليد
+	Hide this note	إخفاء هذه الملاحظة
+	Install all	تثبيت الكل
+	Install	تثبيت
+	Installed on this system	مثبّت على هذا النظام
+	Installed	مثبّت
+	Installing	جارٍ التثبيت
+	Language	اللغة
+	Looking for installed fonts…	جارٍ البحث عن الخطوط المثبّتة…
+	Monospace	أحادي المسافة
+	Name in English or in the language	الاسم بالإنجليزية أو باللغة نفسها
+	No fonts match	لا توجد خطوط مطابقة
+	No installed fonts match	لا توجد خطوط مثبّتة مطابقة
+	Not installed	غير مثبّت
+	Numerals	الأرقام والرموز
+	Preview	معاينة
+	Remove all	إزالة الكل
+	Remove	إزالة
+	Removed with your system's font tools	يُزال بأدوات الخطوط في نظامك
+	Removing	جارٍ الإزالة
+	Retry	إعادة المحاولة
+	Sample text	نص العينة
+	Sample	العينة
+	Sans serif	بلا زوائد
+	Script	نظام الكتابة
+	Scripts	أنظمة الكتابة
+	Search fonts by name	ابحث في الخطوط بالاسم
+	Search installed fonts	ابحث في الخطوط المثبّتة
+	Search	بحث
+	Sentence	جملة
+	Serif	بزوائد
+	Show	إظهار
+	Size	الحجم
+	Source	المصدر
+	Styles	الأنماط
+	System fonts are removed with your system's own font tools.	تُزال خطوط النظام بأدوات الخطوط في نظامك.
+	System	النظام
+	Try another name, or fewer filters.	جرّب اسمًا آخر أو عوامل تصفية أقل.
+	Try another name.	جرّب اسمًا آخر.
+	Designed by {designer}	تصميم {designer}
+	Install {family}	تثبيت {family}
+	Install {style}	تثبيت {style}
+	Languages · {n}	اللغات · {n}
+	Preview downloads this font ({size}) for this session without installing it.	تنزّل المعاينة هذا الخط ({size}) لهذه الجلسة فقط دون تثبيته.
+	Preview {family}	معاينة {family}
+	Remove {family}	إزالة {family}
+	Remove {style}	إزالة {style}
+	The Google Fonts index can't be read: {error}	تتعذّر قراءة فهرس Google Fonts: {error}
+	The download setting couldn't be saved: {error}	تعذّر حفظ إعداد التنزيل: {error}
+	{list} and {n} more	{list} و{n} غيرها
+	{percent} %	{percent}٪
+	{size} download	تنزيل {size}
+	{size} px	{size} بكسل
+	Craft Font Manager downloads {family} ({size}) from Google Fonts' GitHub repository through jsDelivr, and checks every file before using it.	ينزّل Craft Font Manager الخط {family} ({size}) من مستودع Google Fonts على GitHub عبر jsDelivr، ويتحقق من كل ملف قبل استخدامه.
+@plural	{n} style|{n} styles	{n} نمط|{n} نمط|{n} نمط|{n} أنماط|{n} نمطًا|{n} نمط
+@plural	{n} style installed|{n} styles installed	{n} نمط مثبّت|{n} نمط مثبّت|{n} نمط مثبّت|{n} أنماط مثبّتة|{n} نمطًا مثبّتًا|{n} نمط مثبّت
+@plural	{n} family|{n} families	{n} عائلة|{n} عائلة|{n} عائلة|{n} عائلات|{n} عائلة|{n} عائلة
+	Licence	الترخيص
+	Try again	إعادة المحاولة
+	Not curated	غير مراجَع
+	This family comes from a source you added. Craft doesn't review it.	تأتي هذه العائلة من مصدر أضفته. لا يراجعها Craft.
+	The font indexes can't be read: {error}	تتعذّر قراءة فهارس الخطوط: {error}
+	{source}: {error}	{source}: {error}
+	This family comes from a source you added ({url}). Craft doesn't review its fonts or their licences.	تأتي هذه العائلة من مصدر أضفته ({url}). لا يراجع Craft خطوطه ولا تراخيصها.
+	Changed since added	تغيّر منذ إضافته
+	The index at this address isn't the one first downloaded from it. Check the source before installing from it.	الفهرس على هذا العنوان ليس الذي نُزِّل منه أول مرة. تحقّق من المصدر قبل التثبيت منه.
+	Add a source	إضافة مصدر
+	Add	إضافة
+	Index address	عنوان الفهرس
+	A source you add isn't reviewed: add only indexes you trust. Every font is still checked against its index before it is used.	المصدر الذي تضيفه لا يُراجَع: أضف فقط الفهارس التي تثق بها. يُتحقَّق من كل خط مقابل فهرسه قبل استخدامه.
+	Downloading the sources…	جارٍ تنزيل المصادر…
+	Update sources	تحديث المصادر
+	Allow downloads to update	اسمح بالتنزيل للتحديث
+	Added. It downloads once downloads are allowed.	أُضيف. يُنزَّل عند السماح بالتنزيل.
+	Remove {source}	إزالة {source}
+	The source couldn't be added: {error}	تعذّرت إضافة المصدر: {error}
+	The source couldn't be removed: {error}	تعذّرت إزالة المصدر: {error}
+@plural	{n} font source couldn't be loaded|{n} font sources couldn't be loaded	تعذّر تحميل {n} مصدر خطوط|تعذّر تحميل {n} مصدر خطوط|تعذّر تحميل {n} مصدر خطوط|تعذّر تحميل {n} مصادر خطوط|تعذّر تحميل {n} مصدرًا للخطوط|تعذّر تحميل {n} مصدر خطوط

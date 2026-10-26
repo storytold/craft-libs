@@ -2,7 +2,8 @@ use crate::font::blob::{CffFontBlob, Type1FontBlob};
 use crate::font::standard_font::{StandardFont, StandardKind, select_standard_font};
 use crate::font::true_type::{Width, read_encoding, read_widths};
 use crate::font::{
-    Encoding, FallbackFontQuery, glyph_name_to_unicode, normalized_glyph_name, read_to_unicode,
+    Encoding, FallbackFontQuery, glyph_name_to_text, glyph_name_to_unicode, normalized_glyph_name,
+    read_to_unicode,
 };
 use crate::{CMapResolverFn, CacheKey, FontResolverFn};
 use hayro_cmap::{BfString, CMap};
@@ -104,6 +105,15 @@ impl Type1Font {
         }
     }
 
+    /// Craft patch (flatten): the bare CFF bytes of a `FontFile3/Type1C` font, which the glyph
+    /// ids index. Type 1 and standard fonts have none.
+    pub(crate) fn font_data(&self) -> Option<crate::font::FontData> {
+        match &self.1 {
+            Kind::Cff(c) => Some(c.font.font_data()),
+            Kind::Standard(_) | Kind::Type1(_) => None,
+        }
+    }
+
     pub(crate) fn char_code_to_unicode(&self, char_code: u32) -> Option<BfString> {
         if let Some(to_unicode) = &self.2
             && let Some(c) = to_unicode.lookup_bf_string(char_code)
@@ -117,11 +127,25 @@ impl Type1Font {
         }
 
         let code = char_code as u8;
-        match &self.1 {
-            Kind::Standard(s) => s.char_code_to_unicode(code).map(BfString::Char),
-            Kind::Cff(c) => c.char_code_to_unicode(code).map(BfString::Char),
-            Kind::Type1(t) => t.char_code_to_unicode(code).map(BfString::Char),
+        let found = match &self.1 {
+            Kind::Standard(s) => s.char_code_to_unicode(code),
+            Kind::Cff(c) => c.char_code_to_unicode(code),
+            Kind::Type1(t) => t.char_code_to_unicode(code),
+        };
+        if let Some(c) = found {
+            return Some(BfString::Char(c));
         }
+        // PdfCraft patch (#3169, #3170): a name outside the glyph list still reads by the
+        // glyph list specification's full mapping (`f_i`, `hyphen.case`). A name that only
+        // numbers the glyph (`C39`, `c251`) says nothing about the character and reads as
+        // nothing: the code's StandardEncoding character would be a guess, wrong wherever the
+        // font's /Encoding puts the glyph elsewhere (review on #3239).
+        let name = match &self.1 {
+            Kind::Standard(s) => s.code_to_ps_name(code),
+            Kind::Cff(c) => c.code_to_ps_name(code),
+            Kind::Type1(t) => t.code_to_ps_name(code),
+        }?;
+        glyph_name_to_text(name)
     }
 }
 
@@ -239,6 +263,14 @@ impl Type1Kind {
     }
 
     fn char_code_to_unicode(&self, code: u8) -> Option<char> {
+        // PdfCraft patch: an Annex D.2 alias code reads as the ordinary character; see
+        // `Encoding::text_alias`. `code_to_ps_name` is shared with glyph lookup and stays as it
+        // is, so the alias is applied here, after `/Differences` has had its say.
+        if !self.encodings.contains_key(&code)
+            && let Some(name) = self.encoding.text_alias(code)
+        {
+            return glyph_name_to_unicode(name);
+        }
         self.code_to_ps_name(code).and_then(glyph_name_to_unicode)
     }
 }
@@ -336,6 +368,14 @@ impl CffKind {
     }
 
     fn char_code_to_unicode(&self, code: u8) -> Option<char> {
+        // PdfCraft patch: an Annex D.2 alias code reads as the ordinary character; see
+        // `Encoding::text_alias`. `code_to_ps_name` is shared with glyph lookup and stays as it
+        // is, so the alias is applied here, after `/Differences` has had its say.
+        if !self.encodings.contains_key(&code)
+            && let Some(name) = self.encoding.text_alias(code)
+        {
+            return glyph_name_to_unicode(name);
+        }
         self.code_to_ps_name(code).and_then(glyph_name_to_unicode)
     }
 }

@@ -3,9 +3,9 @@ name: Shared PDF
 on:
   push:
     branches: [main]
-    paths: ["crates/pdf/**", "vendor/hayro*/**", "vendor/krilla/**", "scripts/test-pdf-backends.sh", "scripts/*fetch-pdf-test-fonts.py", "Cargo.toml", "Cargo.lock", ".github/workflows/pdf.yml"]
+    paths: ["crates/pdf/**", "crates/plate-test/**", "crates/prepress/**", "crates/cms/**", "vendor/hayro*/**", "vendor/krilla/**", "scripts/test-pdf-backends.sh", "scripts/*fetch-pdf-test-fonts.py", "Cargo.toml", "Cargo.lock", ".github/workflows/pdf.yml"]
   pull_request:
-    paths: ["crates/pdf/**", "vendor/hayro*/**", "vendor/krilla/**", "scripts/test-pdf-backends.sh", "scripts/*fetch-pdf-test-fonts.py", "Cargo.toml", "Cargo.lock", ".github/workflows/pdf.yml"]
+    paths: ["crates/pdf/**", "crates/plate-test/**", "crates/prepress/**", "crates/cms/**", "vendor/hayro*/**", "vendor/krilla/**", "scripts/test-pdf-backends.sh", "scripts/*fetch-pdf-test-fonts.py", "Cargo.toml", "Cargo.lock", ".github/workflows/pdf.yml"]
   workflow_dispatch:
 
 permissions:
@@ -26,14 +26,14 @@ jobs:
     env:
       RUSTFLAGS: --cfg craft_pdf_unicode_fixtures
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: craft-pdf
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - name: Provision licensed PDF test fonts
@@ -50,7 +50,7 @@ jobs:
     name: PDF vendored contracts
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
@@ -63,14 +63,14 @@ jobs:
       RUSTFLAGS: --cfg craft_pdf_unicode_fixtures
       CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER: wasm-bindgen-test-runner
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: craft-pdf-wasm
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - name: Provision licensed PDF test fonts
@@ -86,3 +86,25 @@ jobs:
           cargo install wasm-bindgen-cli --version "$runner_version" --locked
       - run: cargo test -p craft-pdf --all-features --locked --target wasm32-unknown-unknown
       - run: cargo test --manifest-path crates/pdf/read-only-contract/Cargo.toml --locked --target wasm32-unknown-unknown
+  plate-test:
+    name: Plate tests and craft-prepress
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: craft-plate-test
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Provision licensed PDF test fonts
+        shell: bash
+        run: |
+          python scripts/test-fetch-pdf-test-fonts.py
+          python scripts/fetch-pdf-test-fonts.py "$RUNNER_TEMP/craft-pdf-test-fonts"
+          echo "CRAFT_PDF_TEST_FONT_DIR=$RUNNER_TEMP/craft-pdf-test-fonts" >> "$GITHUB_ENV"
+      - run: cargo clippy -p craft-plate-test -p craft-prepress --all-targets --all-features --locked -- -D warnings
+      - run: cargo test -p craft-plate-test -p craft-prepress --all-features --locked

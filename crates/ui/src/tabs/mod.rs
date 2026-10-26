@@ -1,8 +1,9 @@
 //! Tab fitting and accessible tab interactions without owning a dock or document model.
 //!
 //! The caller owns identity, localization, selection, painting, overflow menus and drag actions.
-//! [`fit`] only assigns widths; [`Tab`] returns the complete egui response, including double-click
-//! and drag phases, so a panel strip can collapse, reorder or tear off according to its app.
+//! [`fit`] (tabs shrink before they overflow) and [`fit_whole`] (tabs keep their full width) only
+//! assign widths; [`Tab`] returns the complete egui response, including double-click and drag
+//! phases, so a panel strip can collapse, reorder or tear off according to its app.
 
 use egui::{Id, Rect, Response, Sense, Stroke, StrokeKind, Ui, Vec2};
 
@@ -67,6 +68,48 @@ pub fn fit(natural: &[f32], selected: usize, available: f32, minimum_width: f32,
     }
     let (shown, overflow): (Vec<usize>, Vec<usize>) = all.into_iter().partition(|&i| keep.get(i).copied().unwrap_or(false));
     let shown = squeeze(&natural, &shown, budget, minimum_width);
+    TabFit { shown, overflow, overflow_width }
+}
+
+/// Fit tabs at their natural widths; the tabs that do not fit go to an overflow menu.
+///
+/// Tabs are shown in input order up to the first one that does not fit beside the selected tab
+/// and an overflow button of `overflow_width`. The selected tab (or the final tab if `selected`
+/// is out of bounds) is always shown, in its logical place: when it lies past that run, it takes
+/// the place of the last tabs that fit. Only a selected tab wider than the strip minus the button
+/// gets less than its natural width; its painter elides the label. A lone tab never reserves a
+/// button.
+///
+/// Dimensions are sanitized as in [`fit`], and the shown widths plus `overflow_width` never
+/// exceed the sanitized available width. Work and storage are linear in the input count.
+pub fn fit_whole(natural: &[f32], selected: usize, available: f32, overflow_width: f32) -> TabFit {
+    let available = extent(available);
+    let natural: Vec<f32> = natural.iter().map(|&w| extent(w)).collect();
+    if natural.iter().map(|&w| f64::from(w)).sum::<f64>() <= f64::from(available) {
+        return TabFit { shown: natural.into_iter().enumerate().collect(), ..Default::default() };
+    }
+    if let [width] = natural[..] {
+        return TabFit { shown: vec![(0, width.min(available))], ..Default::default() };
+    }
+    let overflow_width = extent(overflow_width).min(available);
+    let budget = available - overflow_width;
+    let selected = selected.min(natural.len().saturating_sub(1));
+    let active = natural.get(selected).copied().unwrap_or(0.0).min(budget);
+    let mut room = f64::from(budget - active);
+    let mut shown = Vec::new();
+    let mut overflow = Vec::new();
+    let mut full = false;
+    for (i, &width) in natural.iter().enumerate() {
+        if i == selected {
+            shown.push((i, active));
+        } else if !full && f64::from(width) <= room {
+            room -= f64::from(width);
+            shown.push((i, width));
+        } else {
+            full = true;
+            overflow.push(i);
+        }
+    }
     TabFit { shown, overflow, overflow_width }
 }
 
@@ -139,7 +182,7 @@ impl<'a> Tab<'a> {
         let valid = rect.is_finite() && size.x > 0.0 && size.y > 0.0 && size.x <= MAX_EXTENT && size.y <= MAX_EXTENT;
         let safe_rect = if valid { rect } else { Rect::from_min_size(egui::Pos2::ZERO, Vec2::ZERO) };
         let response = ui.interact(safe_rect, self.id, if valid { self.sense } else { Sense::hover() });
-        response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, valid && ui.is_enabled(), self.selected, self.label));
+        response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, valid && ui.is_enabled(), self.selected, self.label));
         ui.ctx().accesskit_node_builder(self.id, |node| {
             node.set_role(egui::accesskit::Role::Tab);
             node.clear_toggled();

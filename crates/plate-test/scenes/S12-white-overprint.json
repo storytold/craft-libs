@@ -1,0 +1,46 @@
+{
+  "id": "S12",
+  "title": "White (C0 M0 Y0 K0) fill overprint over C100, OPM 1 (left) and OPM 0 (right)",
+  "source": "research S12 (GWG 4.x/12.0 idea)",
+  "page": [360, 216],
+  "objects": [
+    {"type": "rect", "rect": [20, 20, 320, 176], "fill": {"cmyk": [100, 0, 0, 0]}},
+    {
+      "type": "rect",
+      "rect": [60, 60, 100, 96],
+      "fill": {"cmyk": [0, 0, 0, 0]},
+      "overprint": {"fill": true, "mode": 1}
+    },
+    {
+      "type": "rect",
+      "rect": [200, 60, 100, 96],
+      "fill": {"cmyk": [0, 0, 0, 0]},
+      "overprint": {"fill": true, "mode": 0}
+    }
+  ],
+  "expect": {
+    "plates": ["Cyan", "Magenta", "Yellow", "Black"],
+    "points": [
+      {
+        "at": [110, 108],
+        "inks": {"Cyan": 100},
+        "tol": 2,
+        "note": "OPM 1: an all-zero overprinting white leaves the backdrop"
+      },
+      {"at": [250, 108], "inks": {}, "tol": 2, "note": "OPM 0: white knocks out"},
+      {"at": [40, 108], "inks": {"Cyan": 100}, "tol": 2, "note": "cyan only"}
+    ]
+  },
+  "structure": {
+    "page_group": "none",
+    "group_cs": [],
+    "overprint": true,
+    "smask": false,
+    "blend_modes": [],
+    "color_spaces": ["DeviceCMYK"],
+    "ext_g_states": [{"op": true, "OPM": 1}, {"op": true, "OPM": 0}],
+    "device_rgb": false,
+    "output_intents": []
+  },
+  "note": "The app warns about white overprint in preflight; the writer keeps the attribute exactly."
+}

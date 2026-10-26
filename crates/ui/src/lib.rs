@@ -8,17 +8,27 @@
 #[cfg(feature = "share")]
 pub mod account;
 pub mod buttons;
+pub mod capture;
 #[cfg(feature = "cloud")]
 pub mod cloud;
+pub mod direction;
 pub mod docking;
 #[cfg(feature = "esign")]
 pub mod esign;
+mod focus;
+pub mod fonts;
 pub mod icons;
+pub mod ime;
 pub mod layout;
+pub mod localized;
 pub mod menu;
+pub mod panes;
 pub mod presence;
 pub mod printing;
 #[cfg(feature = "share")]
 pub mod share;
 pub mod tabs;
+#[cfg(all(feature = "screen-testing", not(target_arch = "wasm32")))]
+pub mod testing;
+pub mod text;
 pub mod theme;

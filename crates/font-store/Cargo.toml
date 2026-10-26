@@ -1,0 +1,35 @@
+[package]
+name = "craft-font-store"
+description = "The Craft apps' font store: the font indexes (Google Fonts, Noto, sources the user adds), exact font lookup, and verified installs into the suite's font folder."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[features]
+default = []
+# The pinned built-in indexes compiled in (`Index::bundled`), about 620 KB gzipped, so an app can
+# look fonts up with no request at all.
+bundled-index = []
+
+[dependencies]
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = "0.10"
+skrifa = { version = "0.47", default-features = false, features = ["std"] }
+thiserror = { workspace = true }
+
+# The store and the network are native only; the web keeps fonts elsewhere.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+craft-atomic = { workspace = true }
+craft-font-catalog = { workspace = true }
+# Blocking HTTPS with rustls and webpki roots: no async runtime, no OpenSSL.
+ureq = { version = "3", default-features = false, features = ["rustls", "gzip"] }
+
+[dev-dependencies]
+write-fonts = "0.54"
+
+[lints]
+workspace = true

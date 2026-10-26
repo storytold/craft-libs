@@ -43,14 +43,15 @@ pub(crate) fn ticket_xml(job: &Job, landscape: bool) -> String {
         }
     };
     let collate = if job.collate { "Collated" } else { "Uncollated" };
-    let color = if job.grayscale { "Monochrome" } else { "Color" };
+    // Only grayscale is asked for. Without it the ticket says nothing about colour, so a black and
+    // white chosen in the driver's own preferences (Properties…) still applies (storytold/pdfcraft#2422).
+    let color = if job.grayscale { "\n <psf:Feature name=\"psk:PageOutputColor\"><psf:Option name=\"psk:Monochrome\"/></psf:Feature>" } else { "" };
     let copies = job.copies.clamp(1, 999);
     format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <psf:PrintTicket version="1" xmlns:psf="{NS_PSF}" xmlns:psk="{NS_PSK}" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
  <psf:ParameterInit name="psk:JobCopiesAllDocuments"><psf:Value xsi:type="xsd:integer">{copies}</psf:Value></psf:ParameterInit>
- <psf:Feature name="psk:DocumentCollate"><psf:Option name="psk:{collate}"/></psf:Feature>{duplex}
- <psf:Feature name="psk:PageOutputColor"><psf:Option name="psk:{color}"/></psf:Feature>
+ <psf:Feature name="psk:DocumentCollate"><psf:Option name="psk:{collate}"/></psf:Feature>{duplex}{color}
  <psf:Feature name="psk:PageScaling"><psf:Option name="psk:None"/></psf:Feature>
  <psf:Feature name="psk:PageOrientation"><psf:Option name="psk:{orientation}"/></psf:Feature>
 </psf:PrintTicket>"#
@@ -171,10 +172,97 @@ pub(crate) fn verify_ticket(xml: &str, paper: Option<(u32, u32)>, landscape: boo
     Ok(size)
 }
 
+/// What a driver's PrintCapabilities offer for the options [`verify_job_options`] checks. A
+/// field is `None` when the capabilities couldn't be read; that option is then checked strictly.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Offered {
+    /// The two-sided feature (`JobDuplexAllDocumentsContiguously`) has any option.
+    pub duplex: Option<bool>,
+    /// The colour feature (`PageOutputColor`) has an option other than Monochrome and Grayscale.
+    pub color: Option<bool>,
+    /// The collation feature (`DocumentCollate`) has a Collated option.
+    pub collate: Option<bool>,
+}
+
+/// What these PrintCapabilities offer ([`Offered`]); all unknown when the document is not
+/// PrintCapabilities.
+pub(crate) fn offered(capabilities_xml: &str) -> Offered {
+    let Ok(document) = roxmltree::Document::parse(capabilities_xml) else { return Offered::default() };
+    let root = document.root_element();
+    if !root.has_tag_name((NS_PSF, "PrintCapabilities")) {
+        return Offered::default();
+    }
+    let options = |name: &'static str| {
+        root.children()
+            .filter(move |n| n.has_tag_name((NS_PSF, "Feature")) && named(*n, name))
+            .flat_map(|f| f.children().filter(|n| n.has_tag_name((NS_PSF, "Option"))))
+    };
+    Offered {
+        // The schema's two duplex features are alternatives; a driver offers one or the other.
+        duplex: Some(options("JobDuplexAllDocumentsContiguously").chain(options("DocumentDuplex")).next().is_some()),
+        // A vendor's own option might be colour, so only the two schema keywords count as not.
+        color: Some(options("PageOutputColor").any(|n| !named(n, "Monochrome") && !named(n, "Grayscale"))),
+        collate: Some(options("DocumentCollate").any(|n| named(n, "Collated"))),
+    }
+}
+
+/// Whether a `pages`-page job asks for collated copies.
+pub(crate) fn collated_copies(job: &Job, pages: usize) -> bool {
+    job.collate && job.copies.clamp(1, 999) > 1 && pages > 1
+}
+
+/// Whether collated copies are made by repeating the document in one job with one copy on the
+/// ticket: the job asks for them and the driver can't collate.
+pub(crate) fn repeats_collated(job: &Job, pages: usize, offered: Offered) -> bool {
+    collated_copies(job, pages) && offered.collate == Some(false)
+}
+
+/// Whether a repeated job's validated one-copy ticket ([`crate::sheets::Repeat`]) prints on
+/// both sides; `None` when the copies can't share one job and are printed as a job each: a
+/// duplex option other than the schema's (the blank backs would be guessed), several pages per
+/// sheet, binding (booklets and offset stacking included) or stapling, which would treat every
+/// copy as one document.
+pub(crate) fn one_job_sides(xml: &str) -> Option<bool> {
+    let document = roxmltree::Document::parse(xml).ok()?;
+    let features = |names: &'static [&'static str]| {
+        document.root_element().children().filter(move |n| n.has_tag_name((NS_PSF, "Feature")) && names.iter().any(|name| named(*n, name)))
+    };
+    fn option<'a, 'i>(feature: roxmltree::Node<'a, 'i>) -> Option<roxmltree::Node<'a, 'i>> {
+        feature.children().find(|n| n.has_tag_name((NS_PSF, "Option")))
+    }
+    let mut two_sided = false;
+    for feature in features(&["JobDuplexAllDocumentsContiguously", "DocumentDuplex"]) {
+        match option(feature) {
+            Some(o) if named(o, "OneSided") => {}
+            Some(o) if named(o, "TwoSidedLongEdge") || named(o, "TwoSidedShortEdge") => two_sided = true,
+            _ => return None,
+        }
+    }
+    if features(&["JobNUpAllDocumentsContiguously", "DocumentNUp"]).any(|f| integer(f, "ScoredProperty", "PagesPerSheet").is_some_and(|n| n > 1)) {
+        return None;
+    }
+    if features(&["JobBindAllDocuments", "DocumentBinding", "JobStapleAllDocuments", "DocumentStaple"])
+        .any(|f| !option(f).is_some_and(|o| named(o, "None")))
+    {
+        return None;
+    }
+    Some(two_sided)
+}
+
 /// Confirm explicit job options survived driver validation. Collation only changes output
 /// when both the document and copy count exceed one. Without a duplex request the queue's
-/// default applies; without forced grayscale the driver's normal color policy applies.
-pub(crate) fn verify_job_options(xml: &str, job: &Job, pages: usize) -> Result<(), Error> {
+/// default applies; without a grayscale request the driver's own colour setting applies.
+///
+/// A driver that offers an option ([`Offered`]) and returned a ticket without the requested
+/// value dropped it, and the job is refused. A driver without the feature is accepted where it
+/// can only do what was asked: one-sided on a driver with no two-sided feature, grayscale on one
+/// with no colour option, uncollated copies on one that can't collate. Two-sided on a simplex
+/// driver is refused, and so are collated copies on a driver that can't collate: Windows doesn't
+/// document collating for such a driver (the standard XPS filters make the copies, and leave
+/// collated copies to the device only when its GPD or PPD has a Collate command). The job then
+/// asks for one copy and repeats the document instead ([`repeats_collated`]), in one job or a
+/// job per copy ([`one_job_sides`]). An unknown offer (`None`) is checked strictly.
+pub(crate) fn verify_job_options(xml: &str, job: &Job, pages: usize, offered: Offered) -> Result<(), Error> {
     let document = roxmltree::Document::parse(xml).map_err(spool_error)?;
     let root = document.root_element();
     let option = |name: &str| {
@@ -188,7 +276,15 @@ pub(crate) fn verify_job_options(xml: &str, job: &Job, pages: usize) -> Result<(
         return Err(refused("copy count"));
     }
     if copies > 1 && pages > 1 && !option("DocumentCollate").is_some_and(|n| named(n, if job.collate { "Collated" } else { "Uncollated" })) {
-        return Err(refused("collation"));
+        match (job.collate, offered.collate) {
+            (false, Some(false)) => {}
+            (true, Some(false)) => {
+                return Err(spool_error(
+                    "the printer's driver can't collate copies; nothing was sent (turn collation off, or print one copy at a time)",
+                ));
+            }
+            _ => return Err(refused("collation")),
+        }
     }
     if let Some(duplex) = job.duplex {
         let wanted = match duplex {
@@ -196,11 +292,13 @@ pub(crate) fn verify_job_options(xml: &str, job: &Job, pages: usize) -> Result<(
             Duplex::LongEdge => "TwoSidedLongEdge",
             Duplex::ShortEdge => "TwoSidedShortEdge",
         };
-        if !option("JobDuplexAllDocumentsContiguously").is_some_and(|n| named(n, wanted)) {
+        let one_sided_only = duplex == Duplex::Off && offered.duplex == Some(false);
+        if !one_sided_only && !option("JobDuplexAllDocumentsContiguously").is_some_and(|n| named(n, wanted)) {
             return Err(refused("simplex/duplex setting"));
         }
     }
-    if job.grayscale && !option("PageOutputColor").is_some_and(|n| named(n, "Monochrome") || named(n, "Grayscale")) {
+    let monochrome_only = offered.color == Some(false);
+    if job.grayscale && !monochrome_only && !option("PageOutputColor").is_some_and(|n| named(n, "Monochrome") || named(n, "Grayscale")) {
         return Err(refused("grayscale"));
     }
     Ok(())
@@ -256,10 +354,11 @@ mod tests {
         assert!(!xml.contains("<&>"), "the title never enters the XML");
         assert!(roxmltree::Document::parse(&xml).is_ok());
         let xml = ticket_xml(&Job { copies: 5000, ..Job::default() }, false);
-        for value in [">999<", "psk:Collated", "psk:Color", "psk:Portrait"] {
+        for value in [">999<", "psk:Collated", "psk:Portrait"] {
             assert!(xml.contains(value), "missing {value}");
         }
         assert!(!xml.contains("JobDuplex"), "no duplex asked: the queue's default applies");
+        assert!(!xml.contains("PageOutputColor"), "no grayscale asked: the driver's own colour setting applies");
         assert!(ticket_xml(&Job { duplex: Some(Duplex::Off), ..Job::default() }, false).contains("psk:OneSided"));
         assert!(ticket_xml(&Job { duplex: Some(Duplex::LongEdge), ..Job::default() }, false).contains("psk:TwoSidedLongEdge"));
         assert!(!ticket_xml(&Job { printer: Some("Office \"east\" <1>".into()), ..Job::default() }, false).contains("east"));
@@ -301,31 +400,159 @@ mod tests {
     fn a_driver_that_drops_explicit_job_options_is_refused() {
         let job = Job { copies: 2, duplex: Some(Duplex::LongEdge), grayscale: true, ..Job::default() };
         let xml = ticket_xml(&job, false);
-        assert!(verify_job_options(&xml, &job, 3).is_ok());
+        assert!(verify_job_options(&xml, &job, 3, Offered::default()).is_ok());
         for (from, to) in
             [(">2<", ">1<"), ("psk:Collated", "psk:Uncollated"), ("psk:TwoSidedLongEdge", "psk:OneSided"), ("psk:Monochrome", "psk:Color")]
         {
-            assert!(verify_job_options(&xml.replace(from, to), &job, 3).is_err(), "{from}");
+            assert!(verify_job_options(&xml.replace(from, to), &job, 3, Offered::default()).is_err(), "{from}");
         }
-        assert!(verify_job_options(&xml.replace("psk:Collated", "vendor:Collated"), &job, 3).is_err(), "namespace matters");
-        assert!(verify_job_options(&xml.replace("psk:Monochrome", "psk:Grayscale"), &job, 3).is_ok());
+        assert!(verify_job_options(&xml.replace("psk:Collated", "vendor:Collated"), &job, 3, Offered::default()).is_err(), "namespace matters");
+        assert!(verify_job_options(&xml.replace("psk:Monochrome", "psk:Grayscale"), &job, 3, Offered::default()).is_ok());
         for feature in ["DocumentCollate", "JobDuplexAllDocumentsContiguously", "PageOutputColor"] {
             let start = xml.find(&format!("<psf:Feature name=\"psk:{feature}\"")).unwrap();
             let end = start + xml[start..].find("</psf:Feature>").unwrap() + "</psf:Feature>".len();
             let mut dropped = xml.clone();
             dropped.replace_range(start..end, "");
-            assert!(verify_job_options(&dropped, &job, 3).is_err(), "{feature}");
+            assert!(verify_job_options(&dropped, &job, 3, Offered::default()).is_err(), "{feature}");
             if feature == "DocumentCollate" {
-                assert!(verify_job_options(&dropped, &job, 1).is_ok(), "one page has no collating order");
+                assert!(verify_job_options(&dropped, &job, 1, Offered::default()).is_ok(), "one page has no collating order");
             }
         }
         let default = Job::default();
         let xml = ticket_xml(&default, false);
-        assert!(verify_job_options(&xml, &default, 3).is_ok());
+        assert!(verify_job_options(&xml, &default, 3, Offered::default()).is_ok());
         let simplex = Job { duplex: Some(Duplex::Off), ..Job::default() };
-        assert!(verify_job_options(&ticket_xml(&simplex, false), &simplex, 3).is_ok());
-        assert!(verify_job_options(&xml, &simplex, 3).is_err(), "explicit simplex must be confirmed");
-        assert!(verify_job_options("<not xml", &default, 1).is_err());
+        assert!(verify_job_options(&ticket_xml(&simplex, false), &simplex, 3, Offered::default()).is_ok());
+        assert!(verify_job_options(&xml, &simplex, 3, Offered::default()).is_err(), "explicit simplex must be confirmed");
+        assert!(verify_job_options("<not xml", &default, 1, Offered::default()).is_err());
+    }
+
+    /// PrintCapabilities as a driver might write them: with or without a duplex feature, and the
+    /// colour and collation options given (none: no such feature).
+    fn capabilities_xml(duplex: bool, colors: &[&str], collations: &[&str]) -> String {
+        let feature = |name: &str, options: &[&str]| {
+            if options.is_empty() {
+                return String::new();
+            }
+            let options: String = options.iter().map(|o| format!(r#"<psf:Option name="{o}"/>"#)).collect();
+            format!(r#"<psf:Feature name="psk:{name}">{options}</psf:Feature>"#)
+        };
+        let duplex = feature("JobDuplexAllDocumentsContiguously", if duplex { &["psk:OneSided", "psk:TwoSidedLongEdge"] } else { &[] });
+        format!(
+            r#"<psf:PrintCapabilities version="1" xmlns:psf="{NS_PSF}" xmlns:psk="{NS_PSK}" xmlns:ns0000="http://example.com/vendor">
+{}{duplex}{}
+</psf:PrintCapabilities>"#,
+            feature("DocumentCollate", collations),
+            feature("PageOutputColor", colors)
+        )
+    }
+
+    const COLOR: &[&str] = &["psk:Color", "psk:Monochrome"];
+    const COLLATE: &[&str] = &["psk:Collated", "psk:Uncollated"];
+
+    /// The ticket without one of its features, as a driver that doesn't know it returns it.
+    fn without(xml: &str, feature: &str) -> String {
+        let start = xml.find(&format!("<psf:Feature name=\"psk:{feature}\"")).unwrap();
+        let end = start + xml[start..].find("</psf:Feature>").unwrap() + "</psf:Feature>".len();
+        let mut dropped = xml.to_owned();
+        dropped.replace_range(start..end, "");
+        dropped
+    }
+
+    #[test]
+    fn a_driver_without_a_duplex_feature_prints_one_side_and_is_not_refused_for_it() {
+        let offered = |duplex| offered(&capabilities_xml(duplex, COLOR, COLLATE));
+        assert_eq!(offered(true), Offered { duplex: Some(true), color: Some(true), collate: Some(true) });
+        assert_eq!(offered(false).duplex, Some(false));
+        assert_eq!(super::offered("<psf:PrintCapabilities xmlns:psf=\"x\"/>"), Offered::default(), "another namespace is not capabilities");
+        assert_eq!(super::offered("<not xml"), Offered::default());
+        let empty = format!(
+            r#"<psf:PrintCapabilities xmlns:psf="{NS_PSF}"><psf:Feature name="psk:JobDuplexAllDocumentsContiguously"/></psf:PrintCapabilities>"#
+        );
+        assert_eq!(super::offered(&empty).duplex, Some(false), "a feature with no option offers nothing");
+        let document_duplex = format!(
+            r#"<psf:PrintCapabilities xmlns:psf="{NS_PSF}" xmlns:psk="{NS_PSK}"><psf:Feature name="psk:DocumentDuplex"><psf:Option name="psk:OneSided"/><psf:Option name="psk:TwoSidedLongEdge"/></psf:Feature></psf:PrintCapabilities>"#
+        );
+        assert_eq!(super::offered(&document_duplex).duplex, Some(true), "DocumentDuplex is a duplex feature too");
+
+        let one_sided = Job { duplex: Some(Duplex::Off), ..Job::default() };
+        let two_sided = Job { duplex: Some(Duplex::LongEdge), ..Job::default() };
+        let kept = ticket_xml(&one_sided, false);
+        // The ticket a driver with no duplex feature returns: the setting is gone.
+        let none_kept = ticket_xml(&Job::default(), false);
+
+        // The Print dialog's defaults (duplex Off) on a simplex-only queue.
+        assert!(verify_job_options(&none_kept, &one_sided, 3, offered(false)).is_ok());
+        // Offered and kept.
+        assert!(verify_job_options(&kept, &one_sided, 3, offered(true)).is_ok());
+        // Offered but the ticket lost it: the driver dropped the choice.
+        assert!(verify_job_options(&none_kept, &one_sided, 3, offered(true)).is_err());
+        // Two-sided never rests on the missing feature.
+        assert!(verify_job_options(&none_kept, &two_sided, 3, offered(false)).is_err());
+        // Unknown capabilities stay strict.
+        assert!(verify_job_options(&none_kept, &one_sided, 3, Offered::default()).is_err());
+        // The other options are still checked on a simplex-only queue.
+        let copies = Job { copies: 2, duplex: Some(Duplex::Off), ..Job::default() };
+        assert!(verify_job_options(&none_kept, &copies, 3, offered(false)).is_err(), "copy count");
+        let gray = Job { grayscale: true, duplex: Some(Duplex::Off), ..Job::default() };
+        assert!(verify_job_options(&none_kept, &gray, 3, offered(false)).is_err(), "grayscale");
+    }
+
+    #[test]
+    fn a_driver_without_colour_prints_grayscale_and_is_not_refused_for_it() {
+        let colors = |colors: &[&str]| offered(&capabilities_xml(true, colors, COLLATE)).color;
+        assert_eq!(colors(COLOR), Some(true));
+        assert_eq!(colors(&["psk:Monochrome"]), Some(false), "monochrome-only");
+        assert_eq!(colors(&["psk:Grayscale", "psk:Monochrome"]), Some(false));
+        assert_eq!(colors(&[]), Some(false), "no colour feature");
+        assert_eq!(colors(&["psk:Monochrome", "ns0000:Vivid"]), Some(true), "a vendor's option may be colour");
+
+        let gray = Job { grayscale: true, ..Job::default() };
+        let kept = ticket_xml(&gray, false);
+        // A driver without the feature returns a ticket without it.
+        let dropped = without(&kept, "PageOutputColor");
+        let color = kept.replace("psk:Monochrome", "psk:Color");
+        let caps = |colors: &[&str]| offered(&capabilities_xml(true, colors, COLLATE));
+
+        assert!(verify_job_options(&dropped, &gray, 3, caps(&["psk:Monochrome"])).is_ok());
+        assert!(verify_job_options(&dropped, &gray, 3, caps(&[])).is_ok());
+        assert!(verify_job_options(&kept, &gray, 3, caps(COLOR)).is_ok());
+        // A colour driver that dropped or changed the request.
+        assert!(verify_job_options(&color, &gray, 3, caps(COLOR)).is_err());
+        assert!(verify_job_options(&dropped, &gray, 3, caps(COLOR)).is_err());
+        assert!(verify_job_options(&dropped, &gray, 3, Offered::default()).is_err(), "unknown stays strict");
+    }
+
+    #[test]
+    fn copies_on_a_driver_that_cannot_collate_are_accepted_only_uncollated() {
+        let caps = |collations: &[&str]| offered(&capabilities_xml(true, COLOR, collations));
+        assert_eq!(caps(COLLATE).collate, Some(true));
+        assert_eq!(caps(&["psk:Uncollated"]).collate, Some(false));
+        assert_eq!(caps(&[]).collate, Some(false));
+
+        let collated = Job { copies: 2, collate: true, ..Job::default() };
+        let uncollated = Job { copies: 2, collate: false, ..Job::default() };
+        let dropped = |job: &Job| without(&ticket_xml(job, false), "DocumentCollate");
+
+        // Uncollated copies are what a driver without collation prints.
+        assert!(verify_job_options(&dropped(&uncollated), &uncollated, 3, caps(&[])).is_ok());
+        assert!(verify_job_options(&ticket_xml(&uncollated, false), &uncollated, 3, caps(&["psk:Uncollated"])).is_ok());
+        // Collated copies are refused, saying why.
+        let refused = verify_job_options(&dropped(&collated), &collated, 3, caps(&[])).unwrap_err();
+        assert!(refused.to_string().contains("can't collate"), "{refused}");
+        // A driver that collates and dropped or changed the request.
+        assert!(verify_job_options(&dropped(&collated), &collated, 3, caps(COLLATE)).is_err());
+        assert!(verify_job_options(&dropped(&uncollated), &uncollated, 3, caps(COLLATE)).is_err());
+        let changed = ticket_xml(&collated, false).replace("psk:Collated", "psk:Uncollated");
+        assert!(verify_job_options(&changed, &collated, 3, caps(COLLATE)).is_err());
+        assert!(verify_job_options(&dropped(&uncollated), &uncollated, 3, Offered::default()).is_err(), "unknown stays strict");
+        // The job repeats the document instead of asking for collated copies.
+        assert!(repeats_collated(&collated, 3, caps(&[])));
+        assert!(!repeats_collated(&collated, 3, caps(COLLATE)) && !repeats_collated(&collated, 3, Offered::default()));
+        assert!(!repeats_collated(&uncollated, 3, caps(&[])) && !repeats_collated(&collated, 1, caps(&[])));
+        assert!(!repeats_collated(&Job { copies: 1, ..collated.clone() }, 3, caps(&[])));
+        // One page or one copy has no collating order.
+        assert!(verify_job_options(&dropped(&collated), &collated, 1, caps(&[])).is_ok());
     }
 
     #[test]
@@ -403,5 +630,28 @@ mod tests {
         assert_eq!(job_filename("..."), "Print.pdf");
         assert_eq!(job_filename(""), "Print.pdf");
         assert_eq!(job_filename("Отчёт"), "Отчёт.pdf");
+    }
+
+    #[test]
+    fn a_repeated_job_reads_its_sides_and_leaves_layouts_that_mix_copies_to_separate_jobs() {
+        let xml = ticket_xml(&Job { duplex: Some(Duplex::LongEdge), ..Job::default() }, false);
+        assert_eq!(one_job_sides(&xml), Some(true));
+        assert_eq!(one_job_sides(&xml.replace("JobDuplexAllDocumentsContiguously", "DocumentDuplex")), Some(true));
+        assert_eq!(one_job_sides(&ticket_xml(&Job { duplex: Some(Duplex::Off), ..Job::default() }, false)), Some(false));
+        assert_eq!(one_job_sides(&ticket_xml(&Job::default(), false)), Some(false), "no duplex feature");
+        assert_eq!(one_job_sides(&xml.replace("psk:TwoSidedLongEdge", "vendor:Duplex")), None, "an option it can't read");
+        let with = |feature: &str| xml.replace("</psf:PrintTicket>", &format!("{feature}</psf:PrintTicket>"));
+        let n_up = |n: u32| {
+            with(&format!(
+                r#"<psf:Feature name="psk:JobNUpAllDocumentsContiguously"><psf:Option><psf:ScoredProperty name="psk:PagesPerSheet"><psf:Value xsi:type="xsd:integer">{n}</psf:Value></psf:ScoredProperty></psf:Option></psf:Feature>"#
+            ))
+        };
+        assert_eq!(one_job_sides(&n_up(1)), Some(true));
+        assert_eq!(one_job_sides(&n_up(2)), None);
+        for feature in ["JobBindAllDocuments", "JobStapleAllDocuments", "DocumentStaple"] {
+            let finishing = |option: &str| with(&format!(r#"<psf:Feature name="psk:{feature}"><psf:Option name="psk:{option}"/></psf:Feature>"#));
+            assert_eq!(one_job_sides(&finishing("None")), Some(true), "{feature}");
+            assert_eq!(one_job_sides(&finishing("StapleTopLeft")), None, "{feature}");
+        }
     }
 }

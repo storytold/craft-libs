@@ -93,6 +93,7 @@ fn stream_packets(path: &Path) -> Option<Vec<Vec<Value>>> {
 /// Compare ffprobe's view of two files (per-stream packets: pts, dts, size, key flag).
 fn assert_same_packets(a: &Path, b: &Path) {
     let (Some(pa), Some(pb)) = (stream_packets(a), stream_packets(b)) else { return };
+    assert_eq!(pa.len(), pb.len(), "stream count {} vs {}", a.display(), b.display());
     for (i, (x, y)) in pa.iter().zip(&pb).enumerate() {
         let key = |p: &Value| (int(&p["pts"]), int(&p["dts"]), int(&p["size"]), p["flags"].as_str().map(|f| f.starts_with('K')));
         let kx: Vec<_> = x.iter().map(key).collect();
@@ -106,10 +107,11 @@ fn assert_same_packets(a: &Path, b: &Path) {
 
 fn assert_same_streams(a: &Path, b: &Path) {
     let (Some(sa), Some(sb)) = (streams(a), streams(b)) else { return };
+    // Timecode (data) streams are compared by the tests that add them.
+    let media = |s: Vec<Value>| s.into_iter().filter(|x| x["codec_type"] != "data").collect::<Vec<_>>();
+    let (sa, sb) = (media(sa), media(sb));
+    assert_eq!(sa.len(), sb.len(), "stream count {} vs {}", a.display(), b.display());
     for (x, y) in sa.iter().zip(&sb) {
-        if x["codec_type"] == "data" {
-            continue;
-        }
         for k in ["codec_name", "width", "height", "sample_rate", "channels", "nb_frames", "duration_ts", "time_base", "profile", "pix_fmt"] {
             assert_eq!(x[k], y[k], "stream field {k}");
         }

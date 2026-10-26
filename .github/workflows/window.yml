@@ -20,7 +20,7 @@ jobs:
         os: [ubuntu-latest, windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # The token isn't needed after checkout; cargo runs build scripts and proc macros from
           # dependencies, so don't leave it in .git/config for that third-party code to read.

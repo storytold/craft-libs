@@ -81,10 +81,21 @@ their own fidelity checks.
 
 Native Windows PDF submission checks the driver's validated copy count and explicit
 simplex/duplex and grayscale requests before sending. Collation must be retained when both
-the page count and copy count exceed one. A driver that drops or changes these options is
-refused; select supported options or flatten grayscale into the print-ready page content.
-Without an explicit duplex request, the queue default applies. Normal color output retains
-the driver's color policy. Single-page or single-copy jobs have no collating order to check.
+the page count and copy count exceed one. A driver that offers one of these options and drops
+or changes it is refused; select supported options or flatten grayscale into the print-ready
+page content. A driver without the feature, per its PrintCapabilities, is accepted when it can
+only do what was asked: one-sided on a queue with no two-sided feature, grayscale on one with no
+colour option, uncollated copies on one that can't collate. Two-sided on such a queue is
+refused. Windows doesn't document collating for a driver that can't collate, so collated copies
+on one are a single job of one copy that holds the document's pages once per copy; on two-sided
+paper an odd page count gets a blank page after each copy but the last, so every copy starts on
+a sheet of its own. Where one job would print the copies wrongly or can't hold them (pages with
+annotations, an encrypted PDF, a very large job, a queue set to several pages per sheet, binding,
+stapling or a two-sided option outside the Print Schema's), each copy is a job of its own.
+Without an explicit duplex request, the queue default applies. Without a grayscale request the
+ticket names no colour, so the colour in the user's printing preferences (Properties…, or
+Windows Settings) applies, black and white included. Single-page or single-copy jobs have no
+collating order to check.
 
 `cargo test -p craft-print` tests CUPS transport (including pipe-sized jobs and refusal),
 printer parsing, PPD options and argument mapping, and on every platform the Windows pieces that

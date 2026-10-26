@@ -1,4 +1,4 @@
-use crate::color::{Color, ColorComponents, ColorSpace};
+use crate::color::{CmykSimulation, Color, ColorComponents, ColorSpace, Ink, Plate};
 use crate::context::{Context, InterpreterCache};
 use crate::device::Device;
 use crate::function::Function;
@@ -76,6 +76,10 @@ struct Repr<'a> {
     background: Color,
     xref: &'a XRef,
     nesting_depth: u32,
+    /// Craft patch (CMYK masks): the group's `/CS` is DeviceCMYK.
+    device_cmyk: bool,
+    /// Craft patch (CMYK masks): the page plate's printing condition, for [`SoftMask::plate`].
+    simulation: Option<CmykSimulation>,
 }
 
 impl Hash for Repr<'_> {
@@ -128,6 +132,7 @@ impl<'a> SoftMask<'a> {
             .and_then(|g| g.get::<Object<'_>>(CS))
             .and_then(|o| ColorSpace::new(o, &context.interpreter_cache.object_cache))
             .unwrap_or_else(ColorSpace::device_rgb);
+        let device_cmyk = cs.is_device_cmyk();
         let transfer_function = dict
             .get::<Object<'_>>(TR)
             .and_then(|o| Function::new(&o))
@@ -152,7 +157,13 @@ impl<'a> SoftMask<'a> {
         let root_transform = context.get().ctm;
         let bbox = context.bbox();
         let resources_key = resources_cache_key(&parent_resources);
+        let simulation = context
+            .settings
+            .plate
+            .as_ref()
+            .and_then(|p| p.simulation.clone());
         let cache_key = hash128(&(
+            simulation.as_ref().map(|s| s.digest()),
             dict.cache_key(),
             root_transform.cache_key(),
             [bbox.x0.to_bits(), bbox.y0.to_bits(), bbox.x1.to_bits(), bbox.y1.to_bits()],
@@ -169,12 +180,60 @@ impl<'a> SoftMask<'a> {
             transfer_function,
             bbox: context.bbox(),
             interpreter_cache: context.interpreter_cache.clone(),
-            settings: context.settings.clone(),
+            // PdfCraft patch (35): a mask's luminosity comes from its group's colours, never
+            // from the page's plate, and the inks it uses are never printed.
+            settings: InterpreterSettings {
+                plate: None,
+                ink_sink: None,
+                ..context.settings.clone()
+            },
             xref: context.xref,
             background,
             parent_resources,
             nesting_depth,
+            device_cmyk,
+            simulation,
         })))
+    }
+
+    /// Craft patch (CMYK masks): whether the mask group's color space is DeviceCMYK. A
+    /// luminosity mask then takes its values from the group's CMYK by the ISO 32000-2 §10.4.2.2
+    /// formula, `1 - min(1, 0.3c + 0.59m + 0.11y + k)`, rather than from its colors as drawn:
+    /// drawn through a CMYK profile, K 100% is not black.
+    pub fn is_device_cmyk(&self) -> bool {
+        self.0.device_cmyk
+    }
+
+    /// Craft patch (CMYK masks): the plate of process `ink` that the mask group composites on a
+    /// CMYK device, for [`Self::interpret_plate`] and [`Plate::tint`] of the backdrop. Spot
+    /// colorants paint through their alternate space, and nothing overprints.
+    pub fn plate(&self, ink: Ink) -> Plate {
+        Plate {
+            ink,
+            overprint: false,
+            simulation: self.0.simulation.clone(),
+            spots_as_process: true,
+        }
+    }
+
+    /// Craft patch (CMYK masks): interpret the mask's contents as the film of `plate`'s ink
+    /// (see [`Self::plate`]).
+    pub fn interpret_plate(&self, device: &mut impl Device<'a>, plate: Plate) {
+        let state = State::new(self.0.root_transform);
+        let settings = InterpreterSettings {
+            plate: Some(plate),
+            ..self.0.settings.clone()
+        };
+        let mut ctx = Context::new_with(
+            self.0.root_transform,
+            self.0.bbox,
+            &self.0.interpreter_cache,
+            self.0.xref,
+            settings,
+            state,
+            self.0.nesting_depth,
+        );
+        draw_form_xobject(&self.0.parent_resources, &self.0.group, &mut ctx, device);
     }
 
     /// Interpret the contents of the mask into the given device.

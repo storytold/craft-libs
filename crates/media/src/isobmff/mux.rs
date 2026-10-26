@@ -85,6 +85,18 @@ fn handler_of(e: &SampleEntry) -> Handler {
     }
 }
 
+/// The `CodecConfig` variant, and the fourcc of variants that cover several codecs.
+fn same_codec(a: &CodecConfig, b: &CodecConfig) -> bool {
+    use CodecConfig::*;
+    match (a, b) {
+        (ProRes { fourcc: x }, ProRes { fourcc: y })
+        | (Jpeg { fourcc: x }, Jpeg { fourcc: y })
+        | (Dnx { fourcc: x }, Dnx { fourcc: y })
+        | (Unknown { fourcc: x, .. }, Unknown { fourcc: y, .. }) => x == y,
+        _ => std::mem::discriminant(a) == std::mem::discriminant(b),
+    }
+}
+
 /// Accumulated sample tables for one track.
 #[derive(Clone, Debug, Default)]
 struct Tables {
@@ -109,16 +121,51 @@ impl Tables {
     fn new() -> Self {
         Tables { all_sync: true, ..Default::default() }
     }
-    fn push_run<T: PartialEq + Copy>(runs: &mut Vec<(u32, T)>, count: u32, v: T) {
+    fn push_run<T: PartialEq + Copy>(runs: &mut Vec<(u32, T)>, mut count: u64, v: T) {
         if let Some(last) = runs.last_mut()
             && last.1 == v
-            && last.0.checked_add(count).is_some()
         {
-            last.0 += count;
-            return;
+            let n = count.min(u64::from(u32::MAX - last.0));
+            last.0 += n as u32;
+            count -= n;
         }
-        runs.push((count, v));
+        while count > 0 {
+            let n = count.min(u64::from(u32::MAX));
+            runs.push((n as u32, v));
+            count -= n;
+        }
     }
+
+    /// Records `count` samples written at `offset`, `sample_bytes` each, extending the last
+    /// chunk when the write follows it. A chunk holds at most `max` samples.
+    fn push_chunks(&mut self, mut offset: u64, mut count: u64, sample_bytes: u64, contiguous: bool, max: u32) {
+        if contiguous && let Some(c) = self.chunks.last_mut() {
+            let n = count.min(u64::from(max.saturating_sub(c.1)));
+            c.1 += n as u32;
+            count -= n;
+            offset += n * sample_bytes;
+        }
+        while count > 0 {
+            let n = count.min(u64::from(max));
+            self.chunks.push((offset, n as u32));
+            count -= n;
+            offset += n * sample_bytes;
+        }
+    }
+}
+
+/// `stsz` counts samples (PCM: frames) in 32 bits.
+fn too_many_samples() -> Error {
+    Error::Mux("more than 2^32 - 1 samples in one track".into())
+}
+
+/// PCM chunk size limit, ffmpeg's: readers that take each PCM chunk as one sample (this crate's
+/// demuxer among them) get samples of bounded size.
+const PCM_CHUNK_BYTES: u64 = 1 << 20;
+
+/// Frames per PCM chunk: at most [`PCM_CHUNK_BYTES`], at least one frame.
+fn pcm_chunk_frames(frame_bytes: u32) -> u32 {
+    (PCM_CHUNK_BYTES / u64::from(frame_bytes.max(1))).max(1) as u32
 }
 
 struct WTrack {
@@ -420,11 +467,12 @@ fn write_trak(b: &mut BoxBuf, t: &WTrack, movie_ts: u32, qt: bool, shift: u64, f
         b.u32(1);
     }
     b.end(m);
+    let sample_count = u32::try_from(tb.sample_count).map_err(|_| too_many_samples())?;
     let m = b.start_full(b"stsz", 0, 0);
     match tb.const_size {
         Some(s) => {
             b.u32(s);
-            b.u32(tb.sample_count.min(u32::MAX as u64) as u32);
+            b.u32(sample_count);
         }
         None => {
             let first = tb.sizes.first().copied().unwrap_or(0);
@@ -432,10 +480,10 @@ fn write_trak(b: &mut BoxBuf, t: &WTrack, movie_ts: u32, qt: bool, shift: u64, f
             // all-empty samples must still be written as a table.
             if first != 0 && !tb.sizes.is_empty() && tb.sizes.iter().all(|&s| s == first) {
                 b.u32(first);
-                b.u32(tb.sizes.len() as u32);
+                b.u32(sample_count);
             } else {
                 b.u32(0);
-                b.u32(tb.sizes.len() as u32);
+                b.u32(sample_count);
                 for &s in &tb.sizes {
                     b.u32(s);
                 }
@@ -543,11 +591,14 @@ impl<W: Write + Seek> Mp4Writer<W> {
 
     /// Replace a track's sample entry before the file is finished (the `moov` is written last), for
     /// codecs whose configuration is only complete at the end, like the FLAC STREAMINFO in `dfLa`.
-    /// The new entry must keep the media type and, for PCM, the frame size.
+    /// The new entry must keep the codec and, for PCM, the frame size.
     pub fn set_sample_entry(&mut self, track: usize, entry: SampleEntry) -> Result<()> {
         let t = self.tracks.get_mut(track).ok_or(Error::NoSuchTrack(track))?;
-        if handler_of(&entry) != t.handler || validate_track(&entry, t.cfg.timescale)? != t.pcm_frame_bytes {
-            return Err(Error::Mux("replacement sample entry changes the track's media type or PCM layout".into()));
+        if handler_of(&entry) != t.handler
+            || !same_codec(&entry.codec, &t.cfg.entry.codec)
+            || validate_track(&entry, t.cfg.timescale)? != t.pcm_frame_bytes
+        {
+            return Err(Error::Mux("replacement sample entry changes the track's codec or PCM layout".into()));
         }
         t.cfg.entry = entry;
         Ok(())
@@ -589,7 +640,7 @@ impl<W: Write + Seek> Mp4Writer<W> {
                 if !s.data.len().is_multiple_of(fb as usize) {
                     return Err(Error::Mux("PCM data is not a whole number of frames".into()));
                 }
-                ((s.data.len() / fb as usize) as u32, 1u32)
+                (s.data.len() as u64 / u64::from(fb), 1u32)
             }
             None => {
                 if s.data.len() > u32::MAX as usize {
@@ -600,6 +651,9 @@ impl<W: Write + Seek> Mp4Writer<W> {
         };
         if count == 0 {
             return Ok(());
+        }
+        if tr.t.sample_count + count > u64::from(u32::MAX) {
+            return Err(too_many_samples());
         }
         self.w.write_all(s.data)?;
         let offset = self.pos;
@@ -618,13 +672,13 @@ impl<W: Write + Seek> Mp4Writer<W> {
                 t.all_sync = false;
             }
         }
-        t.sample_count += count as u64;
+        t.sample_count += count;
         let ct = if tr.pcm_frame_bytes.is_some() { 0 } else { s.composition_offset as i64 };
         t.comp_end = t.comp_end.max((t.media_duration as i64 + ct + count as i64 * dur as i64).max(0) as u64);
-        t.media_duration += count as u64 * dur as u64;
-        match t.chunks.last_mut() {
-            Some(c) if contiguous => c.1 += count,
-            _ => t.chunks.push((offset, count)),
+        t.media_duration += count * dur as u64;
+        match tr.pcm_frame_bytes {
+            Some(fb) => t.push_chunks(offset, count, u64::from(fb), contiguous, pcm_chunk_frames(fb)),
+            None => t.push_chunks(offset, count, s.data.len() as u64, contiguous, u32::MAX),
         }
         Ok(())
     }
@@ -960,6 +1014,9 @@ mod tests {
         assert!(w.set_sample_entry(a, SampleEntry::pcm(PcmConfig { big_endian: true, ..pcm })).is_ok());
         assert!(w.set_sample_entry(a, SampleEntry::pcm(PcmConfig { bits: 24, ..pcm })).is_err());
         assert!(w.set_sample_entry(a, avc_entry()).is_err());
+        let v = w.add_track(TrackConfig::new(avc_entry(), 90_000)).unwrap();
+        assert!(w.set_sample_entry(v, avc_entry()).is_ok());
+        assert!(w.set_sample_entry(v, SampleEntry::jpeg(64, 64)).is_err());
         assert!(w.set_sample_entry(f, SampleEntry::flac(&[1; 34])).is_ok());
         assert!(w.set_sample_entry(f, SampleEntry::pcm(pcm)).is_err());
         assert!(matches!(w.set_sample_entry(5, avc_entry()), Err(Error::NoSuchTrack(5))));

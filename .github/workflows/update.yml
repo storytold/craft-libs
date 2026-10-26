@@ -1,0 +1,36 @@
+name: App updates
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['crates/update/**', 'Cargo.toml', 'Cargo.lock', 'rustfmt.toml', 'clippy.toml', '.github/workflows/update.yml']
+  pull_request:
+    paths: ['crates/update/**', 'Cargo.toml', 'Cargo.lock', 'rustfmt.toml', 'clippy.toml', '.github/workflows/update.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  update:
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The token isn't needed after checkout; cargo runs build scripts and proc macros from
+          # dependencies, so don't leave it in .git/config for that third-party code to read.
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          components: rustfmt, clippy
+      - run: cargo fmt --check
+      # Default (no egui) and the egui feature both build and lint cleanly.
+      - run: cargo clippy -p craft-update --all-targets --locked -- -D warnings
+      - run: cargo clippy -p craft-update --all-targets --locked --features egui -- -D warnings
+      - run: cargo test -p craft-update --locked -- --nocapture
+      - run: cargo test -p craft-update --locked --features egui -- --nocapture

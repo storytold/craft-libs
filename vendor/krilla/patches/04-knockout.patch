@@ -1,0 +1,202 @@
+diff --git a/src/content.rs b/src/content.rs
+index 751cb2f..f723f20 100644
+--- a/src/content.rs
++++ b/src/content.rs
+@@ -16,7 +16,7 @@ use crate::configure::ValidationError;
+ #[cfg(feature = "raster-images")]
+ use crate::geom::Size;
+ use crate::geom::{Point, Rect, Transform};
+-use crate::graphics::blend::Overprint;
++use crate::graphics::blend::{GroupOptions, Overprint};
+ use crate::graphics::color::{Color, ColorSpace};
+ use crate::graphics::graphics_state::{ExtGState, GraphicsStates};
+ #[cfg(feature = "raster-images")]
+@@ -933,14 +933,15 @@ impl ContentBuilder {
+         self.draw_xobject(sc, chunk_container, x_object, &state);
+     }
+ 
+-    pub(crate) fn draw_isolated(
++    pub(crate) fn draw_group(
+         &mut self,
+         sc: &mut SerializeContext,
+         chunk_container: &mut ChunkContainer,
++        options: GroupOptions,
+         stream: Stream,
+     ) {
+         let state = ExtGState::new();
+-        let x_object = XObject::new(stream, true, false, None);
++        let x_object = XObject::group(stream, options);
+         self.draw_xobject(sc, chunk_container, x_object, &state);
+     }
+ 
+diff --git a/src/graphics/blend.rs b/src/graphics/blend.rs
+index 8d7c5c7..7f01733 100644
+--- a/src/graphics/blend.rs
++++ b/src/graphics/blend.rs
+@@ -79,3 +79,21 @@ impl Overprint {
+         }
+     }
+ }
++
++/// Attributes of a transparency group pushed with [`Surface::push_group`].
++///
++/// A group with neither attribute set is drawn as a plain form XObject: composited with
++/// the Normal blend mode at full opacity, it looks the same as its contents drawn directly.
++///
++/// [`Surface::push_group`]: crate::surface::Surface::push_group
++#[derive(Debug, Copy, Clone, Default, Eq, PartialEq, Hash)]
++pub struct GroupOptions {
++    /// Isolated group (`/I true`): its contents composite onto a fully transparent
++    /// backdrop instead of the group's backdrop, so blend modes inside it don't reach
++    /// what lies beneath.
++    pub isolated: bool,
++    /// Knockout group (`/K true`): each object inside composites with the group's
++    /// initial backdrop instead of the objects before it, so where objects overlap only
++    /// the topmost shows.
++    pub knockout: bool,
++}
+diff --git a/src/graphics/xobject.rs b/src/graphics/xobject.rs
+index 6c56b0e..a8c9568 100644
+--- a/src/graphics/xobject.rs
++++ b/src/graphics/xobject.rs
+@@ -7,6 +7,7 @@ use pdf_writer::{Finish, Name, Ref};
+ use crate::chunk_container::ChunkContainer;
+ use crate::configure::ValidationError;
+ use crate::geom::Rect;
++use crate::graphics::blend::GroupOptions;
+ use crate::graphics::color::{rgb, DEVICE_CMYK, DEVICE_RGB};
+ use crate::resource;
+ use crate::resource::{Resource, Resourceable};
+@@ -28,6 +29,7 @@ pub(crate) enum GroupRole {
+ struct Repr {
+     stream: Stream,
+     isolated: bool,
++    knockout: bool,
+     transparency_group_color_space: bool,
+     custom_bbox: Option<Rect>,
+     role: GroupRole,
+@@ -52,9 +54,39 @@ impl XObject {
+         )
+     }
+ 
++    /// A content group with the given group attributes.
++    pub(crate) fn group(stream: Stream, options: GroupOptions) -> Self {
++        Self::build(
++            stream,
++            options.isolated,
++            options.knockout,
++            false,
++            None,
++            GroupRole::Content,
++        )
++    }
++
+     pub(crate) fn with_role(
+         stream: Stream,
+         isolated: bool,
++        transparency_group_color_space: bool,
++        custom_bbox: Option<Rect>,
++        role: GroupRole,
++    ) -> Self {
++        Self::build(
++            stream,
++            isolated,
++            false,
++            transparency_group_color_space,
++            custom_bbox,
++            role,
++        )
++    }
++
++    fn build(
++        stream: Stream,
++        isolated: bool,
++        knockout: bool,
+         mut transparency_group_color_space: bool,
+         custom_bbox: Option<Rect>,
+         role: GroupRole,
+@@ -74,6 +106,7 @@ impl XObject {
+         Self(Arc::new(Prehashed::new(Repr {
+             stream,
+             isolated,
++            knockout,
+             transparency_group_color_space,
+             custom_bbox,
+             role,
+@@ -102,7 +135,8 @@ impl Cacheable for XObject {
+             sc.register_validation_error(validation_error.clone());
+         }
+ 
+-        let use_transparency_group = self.0.isolated || self.0.transparency_group_color_space;
++        let use_transparency_group =
++            self.0.isolated || self.0.knockout || self.0.transparency_group_color_space;
+ 
+         if use_transparency_group {
+             sc.register_validation_error(ValidationError::Transparency(sc.location));
+@@ -166,6 +200,10 @@ impl Cacheable for XObject {
+                 transparency.isolated(self.0.isolated);
+             }
+ 
++            if self.0.knockout {
++                transparency.knockout(true);
++            }
++
+             if let Some(transparency_group_cs) = transparency_group_cs {
+                 write_group_color_space(transparency, transparency_group_cs);
+             }
+diff --git a/src/surface.rs b/src/surface.rs
+index 09b1b40..0cbbc4b 100644
+--- a/src/surface.rs
++++ b/src/surface.rs
+@@ -16,7 +16,7 @@ use crate::geom::Path;
+ use crate::geom::Size;
+ use crate::geom::{Point, Transform};
+ use crate::graphic::Graphic;
+-use crate::graphics::blend::{BlendMode, Overprint};
++use crate::graphics::blend::{BlendMode, GroupOptions, Overprint};
+ use crate::graphics::graphics_state::ExtGState;
+ #[cfg(feature = "raster-images")]
+ use crate::graphics::image::Image;
+@@ -494,9 +494,19 @@ impl<'a> Surface<'a> {
+         }
+     }
+ 
+-    /// Push a new isolated layer.
++    /// Push a new isolated layer. Shorthand for [`Surface::push_group`] with only
++    /// `isolated` set.
+     pub fn push_isolated(&mut self) {
+-        self.push_instructions.push(PushInstruction::Isolated);
++        self.push_group(GroupOptions {
++            isolated: true,
++            knockout: false,
++        });
++    }
++
++    /// Push a new transparency group with the given attributes. Everything drawn until
++    /// the matching [`Surface::pop`] goes into the group.
++    pub fn push_group(&mut self, options: GroupOptions) {
++        self.push_instructions.push(PushInstruction::Group(options));
+         self.bd
+             .sub_builders
+             .push(ContentBuilder::new(Transform::identity(), true, self.sc));
+@@ -526,11 +536,11 @@ impl<'a> Surface<'a> {
+                     .get_mut()
+                     .draw_masked(self.sc, self.chunk_container, *mask, stream)
+             }
+-            PushInstruction::Isolated => {
++            PushInstruction::Group(options) => {
+                 let stream = self.bd.sub_builders.pop().unwrap().finish(self.sc);
+                 self.bd
+                     .get_mut()
+-                    .draw_isolated(self.sc, self.chunk_container, stream);
++                    .draw_group(self.sc, self.chunk_container, options, stream);
+             }
+         }
+     }
+@@ -683,5 +693,5 @@ pub(crate) enum PushInstruction {
+     BlendMode,
+     Overprint,
+     Mask(Box<Mask>),
+-    Isolated,
++    Group(GroupOptions),
+ }

@@ -2,11 +2,13 @@
 //! header stripping, BlockGroups, Colour + mastering metadata, Chapters, Tags, Attachments, CRC-32.
 
 use crate::matroska::codec::Codec;
+use crate::matroska::demux::MAX_TRACKS;
 use crate::matroska::ebml::{self, write_id, write_unknown_size};
+use crate::matroska::error::Error;
 use crate::matroska::ids::*;
 use crate::matroska::mux::{el, el_float, el_str, el_uint};
 use crate::matroska::track::ContentEncoding;
-use crate::matroska::{Demuxer, OpenOptions, Packet, open_with};
+use crate::matroska::{ByteSource, Demuxer, OpenOptions, Packet, open_with};
 
 fn block(track: u8, rel: i16, flags: u8, data: &[u8]) -> Vec<u8> {
     let mut b = vec![0x80 | track];
@@ -64,7 +66,7 @@ fn synthetic() -> Vec<u8> {
     el_uint(&mut vid, PIXEL_HEIGHT, 1080);
     el_uint(&mut vid, DISPLAY_WIDTH, 1920);
     el_uint(&mut vid, DISPLAY_HEIGHT, 1080);
-    el(&mut vid, COLOR, &col);
+    el(&mut vid, COLOUR, &col);
     // rectangular, a quarter turn clockwise (portrait phone video)
     let mut proj = Vec::new();
     el_uint(&mut proj, PROJECTION_TYPE, 0);
@@ -348,4 +350,96 @@ fn duration_of_a_block_at_the_largest_timestamp_saturates() {
         let f = open_with(&one_cluster(i64::MAX as u64, &c)[..], &OpenOptions::default()).unwrap();
         assert_eq!(f.duration_ns(), Some(u64::MAX));
     }
+}
+
+#[test]
+fn empty_laced_frames_exhaust_the_frame_budget() {
+    // Each 7-byte SimpleBlock is a fixed-size lace of 256 empty frames.
+    let mut c = Vec::new();
+    for _ in 0..100 {
+        el(&mut c, SIMPLE_BLOCK, &block(1, 0, 0x04, &[0xFF]));
+    }
+    let r = open_with(&one_cluster(0, &c)[..], &OpenOptions::default());
+    assert!(matches!(r, Err(Error::TooLarge(_))), "{r:?}");
+    // Laces of one-byte frames are paid for by their bytes.
+    let mut c = Vec::new();
+    for _ in 0..4 {
+        let mut data = vec![0xFF];
+        data.extend_from_slice(&[0; 256]);
+        el(&mut c, SIMPLE_BLOCK, &block(1, 0, 0x04, &data));
+    }
+    let f = open_with(&one_cluster(0, &c)[..], &OpenOptions::default()).unwrap();
+    assert_eq!(f.tracks[0].samples.len(), 1024);
+}
+
+#[test]
+fn track_entries_past_the_cap_are_rejected() {
+    let file = |entries: usize| {
+        let mut f = Vec::new();
+        let mut h = Vec::new();
+        el_str(&mut h, DOC_TYPE, "matroska");
+        el(&mut f, EBML, &h);
+        write_id(&mut f, SEGMENT);
+        write_unknown_size(&mut f, 8);
+        let mut tr = Vec::new();
+        for _ in 0..entries {
+            el(&mut tr, TRACK_ENTRY, &[0xD7, 0x81, 0x02]);
+        }
+        el(&mut f, TRACKS, &tr);
+        f
+    };
+    assert_eq!(open_with(&file(3)[..], &OpenOptions::default()).unwrap().tracks.len(), 3);
+    let r = open_with(&file(MAX_TRACKS + 1)[..], &OpenOptions::default());
+    assert!(matches!(r, Err(Error::TooLarge(_))), "{r:?}");
+}
+
+/// Counts the bytes read from `data`.
+struct Counting<'a>(&'a [u8], std::cell::Cell<u64>);
+
+impl ByteSource for Counting<'_> {
+    fn len(&self) -> u64 {
+        self.0.len() as u64
+    }
+    fn read_at(&self, offset: u64, buf: &mut [u8]) -> std::io::Result<()> {
+        self.1.set(self.1.get() + buf.len() as u64);
+        self.0.read_at(offset, buf)
+    }
+}
+
+#[test]
+fn overlapping_seek_head_targets_are_read_once() {
+    // SeekHead entries point at nested Tags headers, each running to the end of the file.
+    let (n, pad) = (64u64, 128usize << 10);
+    let entry = |pos: u64| {
+        let mut s = Vec::new();
+        el(&mut s, SEEK_ID, &TAGS.to_be_bytes());
+        el(&mut s, SEEK_POSITION, &pos.to_be_bytes());
+        let mut o = Vec::new();
+        el(&mut o, SEEK, &s);
+        o
+    };
+    let seek_head = |first: u64| {
+        let entries: Vec<u8> = (0..n).flat_map(|i| entry(first + i * 12)).collect();
+        let mut o = Vec::new();
+        el(&mut o, SEEK_HEAD, &entries);
+        o
+    };
+    let mut f = Vec::new();
+    let mut h = Vec::new();
+    el_str(&mut h, DOC_TYPE, "matroska");
+    el(&mut f, EBML, &h);
+    write_id(&mut f, SEGMENT);
+    write_unknown_size(&mut f, 8);
+    let first = seek_head(0).len() as u64;
+    f.extend_from_slice(&seek_head(first));
+    let total = n * 12 + pad as u64;
+    for i in 0..n {
+        write_id(&mut f, TAGS);
+        ebml::write_size(&mut f, total - (i + 1) * 12, 8);
+    }
+    f.resize(f.len() + pad, 0xEC);
+    let src = Counting(&f, std::cell::Cell::new(0));
+    let file = open_with(&src, &OpenOptions { index: false, verify_crc: false }).unwrap();
+    assert_eq!(file.seek_head.len(), n as usize);
+    assert!(src.1.get() <= 4 * f.len() as u64, "read {} bytes of a {}-byte file", src.1.get(), f.len());
 }

@@ -72,6 +72,48 @@ fn many_tabs_keep_the_last_selected_without_quadratic_membership_scans() {
     assert!(total(&f) <= 240.001);
 }
 
+#[test]
+fn whole_tabs_keep_their_width_and_the_selected_tab_replaces_the_last_that_fits() {
+    let natural = [60.0, 70.0, 80.0, 50.0, 90.0, 40.0];
+    // 200 points: 22 for the button leaves 178.
+    let f = fit_whole(&natural, 0, 200.0, 22.0);
+    assert_eq!(f.shown, [(0, 60.0), (1, 70.0)]);
+    assert_eq!(f.overflow, [2, 3, 4, 5]);
+    assert_eq!(f.overflow_width, 22.0);
+    // The last tab, selected, takes the place of tab 1 and keeps its order.
+    let f = fit_whole(&natural, 5, 200.0, 22.0);
+    assert_eq!(f.shown, [(0, 60.0), (1, 70.0), (5, 40.0)]);
+    assert_eq!(f.overflow, [2, 3, 4]);
+    let f = fit_whole(&natural, 4, 200.0, 22.0);
+    assert_eq!(f.shown, [(0, 60.0), (4, 90.0)]);
+    assert_eq!(f.overflow, [1, 2, 3, 5]);
+    // Everything fits: no button.
+    let f = fit_whole(&natural, 4, 390.0, 22.0);
+    assert_eq!(f.shown.len(), 6);
+    assert!(f.overflow.is_empty() && f.overflow_width == 0.0);
+}
+
+#[test]
+fn only_a_selected_tab_wider_than_the_strip_is_narrowed() {
+    let f = fit_whole(&[60.0, 300.0, 70.0], 1, 200.0, 22.0);
+    assert_eq!(f.shown, [(1, 178.0)]);
+    assert_eq!(f.overflow, [0, 2]);
+    for selected in [0, 1, 2, usize::MAX] {
+        for available in [0.0, 1.0, 21.0, 22.0, 100.0, 200.0, 500.0] {
+            let natural = [60.0, 300.0, 70.0];
+            let f = fit_whole(&natural, selected, available, 22.0);
+            let selected = selected.min(2);
+            assert!(f.shown.iter().all(|&(i, w)| i == selected || w == natural[i]), "{selected} at {available}: {f:?}");
+            assert!(f.shown.iter().any(|&(i, _)| i == selected));
+            assert_eq!(f.shown.len() + f.overflow.len(), 3);
+            assert!(total(&f) <= available + 0.001, "{available}: {f:?}");
+        }
+    }
+    assert_eq!(fit_whole(&[80.0], 0, 10.0, 22.0).shown, [(0, 10.0)]);
+    let f = fit_whole(&[f32::NAN, f32::INFINITY, -5.0, 30.0], usize::MAX, f32::NAN, f32::MAX);
+    assert!(f.shown.iter().all(|&(_, w)| w.is_finite() && w >= 0.0) && total(&f) == 0.0);
+}
+
 struct TabTest {
     ctx: Context,
     labels: [String; 2],
@@ -85,6 +127,8 @@ struct TabTest {
 }
 
 impl TabTest {
+    /// Create a two-tab test with duplicate `Layers` labels, the first selected and
+    /// enabled, click sense, a 90×26 pt rect and zero counters.
     fn new() -> Self {
         let ctx = Context::default();
         ctx.enable_accesskit();
@@ -102,6 +146,8 @@ impl TabTest {
         }
     }
 
+    /// Render the two tabs at fixed 90×26 rects with injected events. Clears texture deltas, counts
+    /// body paints, and updates the clicked/selected fixtures before returning the responses.
     fn frame(&mut self, events: Vec<Event>) -> (Vec<Response>, FullOutput) {
         self.time += 0.05;
         let ctx = self.ctx.clone();
@@ -112,7 +158,7 @@ impl TabTest {
         let mut output = ctx.run_ui(raw, |ui| {
             ui.add_enabled_ui(self.enabled, |ui| {
                 for (i, label) in self.labels.iter().enumerate() {
-                    let r = Tab::new(ui.id().with(("tab", i)), label, self.selected == i)
+                    let r = Tab::new(ui.scope_id().with(("tab", i)), label, self.selected == i)
                         .sense(self.sense)
                         .focus_stroke(Stroke::new(1.0, Color32::LIGHT_BLUE))
                         .show_at(ui, self.rect.translate(vec2(i as f32 * 100.0, 0.0)), |ui, response| {

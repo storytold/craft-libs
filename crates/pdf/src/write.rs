@@ -8,8 +8,13 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 
 pub use krilla as backend;
 
-// Require the root workspace patch; an unpatched backend can abort during unwind.
+// Require the root workspace patch; an unpatched backend can abort during unwind, writes
+// RGB blending groups and no print output intent, and has no optional content.
 const _: bool = backend::CRAFT_UNWIND_POISONING;
+const _: bool = backend::CRAFT_PRINT_COLOR;
+const _: bool = backend::CRAFT_OPTIONAL_CONTENT;
+
+pub mod print;
 
 use backend::configure::{Archival, Configuration, ConfigurationBuilder, ConfigurationError, PdfVersion};
 use backend::text::{Font, Tag};
@@ -36,6 +41,8 @@ pub enum WriteError {
     Allocation,
     #[error("font could not be read for embedding")]
     InvalidFont,
+    #[error("the print profile is not a readable CMYK ICC profile")]
+    InvalidProfile,
 }
 
 /// Run an entire app export, including drawing and postprocessing, behind a native
@@ -77,6 +84,8 @@ pub struct Metadata {
     pub description: Option<String>,
     pub keywords: Vec<String>,
     pub created: Option<backend::metadata::DateTime>,
+    /// Written as the modification date; `created` is written there when this is `None`.
+    pub modified: Option<backend::metadata::DateTime>,
 }
 
 impl Metadata {
@@ -91,6 +100,9 @@ impl Metadata {
         }
         if let Some(created) = self.created {
             metadata = metadata.creation_date(created);
+        }
+        if let Some(modified) = self.modified {
+            metadata = metadata.modification_date(modified);
         }
         metadata
     }
@@ -130,6 +142,14 @@ impl Writer {
     pub fn finish(self) -> Result<Vec<u8>, WriteError> {
         guard(|| self.document.finish().map_err(|error| WriteError::Serialization(Box::new(error))))
     }
+}
+
+/// The link target that opens `url`, or `None` when [`safe_url`](crate::safe_url) refuses it.
+/// Build URI links with this instead of `backend::action::LinkAction` so a refused target
+/// writes no link annotation; the page content stays as drawn. The URI is written trimmed.
+pub fn uri_target(url: &str) -> Option<backend::annotation::Target> {
+    let url = url.trim();
+    crate::safe_url(url).then(|| backend::annotation::Target::Action(backend::action::LinkAction::new(url.to_owned()).into()))
 }
 
 fn check_font_input(size: usize, variations: Option<&[([u8; 4], f32)]>) -> Result<(), WriteError> {

@@ -1,0 +1,27 @@
+[package]
+name = "craft-menu"
+description = "A Craft app's menus: layouts for macOS, Windows, Linux and the web, shortcuts from craft-keymap, a macOS backend, and key equivalents fed back to egui."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[dependencies]
+craft-keymap = { workspace = true, default-features = false, features = ["egui"] }
+craft-quit = { workspace = true, features = ["egui"] }
+egui = { workspace = true }
+
+# Already in the apps' Cargo.lock: muda through craft-quit's `menu` feature, objc2 and objc2-app-kit
+# through eframe.
+[target.'cfg(target_os = "macos")'.dependencies]
+muda = { version = "0.21.2", default-features = false }
+objc2 = { version = "0.6.4", default-features = false, features = ["std"] }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSApplication", "NSEvent", "NSMenu", "NSMenuItem", "NSResponder"] }
+
+[dev-dependencies]
+# `default_fonts` so that the bar's tests lay out text.
+egui = { workspace = true, features = ["default_fonts"] }
+
+[lints]
+workspace = true

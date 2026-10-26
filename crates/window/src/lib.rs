@@ -2,7 +2,7 @@
 #![forbid(unsafe_code)]
 
 //! Decide who draws the window frame, so every Craft app shows the same titlebar and borders on a
-//! given desktop.
+//! given desktop, and make an app-drawn strip act as the title bar.
 //!
 //! egui apps either let the desktop draw the window frame (the title bar, borders and window
 //! buttons) or turn it off and draw their own. Across the suite this decision had drifted: some
@@ -45,6 +45,102 @@
 //!
 //! The probe opens a short-lived Wayland connection and reads the global registry once; it never
 //! touches the connection winit inherits. Call it once at startup.
+//!
+//! # The app's own title bar
+//!
+//! An app that draws over the title bar (a hidden macOS title bar with a full-size content view,
+//! or [`Frame::App`]) makes its top strip act as one with [`title_bar`]: the strip's empty part
+//! moves the window and follows the system's double-click setting, while the strip's controls and
+//! in-window panels lying over it keep their own clicks and drags. On macOS,
+//! `title_bar::sync_movable` sets AppKit's `movable` flag each frame so a drag that starts on
+//! one of those does not move the window.
+//!
+//! ```ignore
+//! egui::Panel::top("app_bar").show(ui, |ui| {
+//!     craft_window::title_bar::empty_area(ui, ui.max_rect());
+//!     // ... the bar's controls ...
+//! });
+//! // After the UI, once per frame (macOS); `applied` lives in the app state, starting at `None`.
+//! #[cfg(target_os = "macos")]
+//! craft_window::title_bar::sync_movable(ui.ctx(), &mut self.applied);
+//! ```
+//!
+//! # One window per document
+//!
+//! The rest of the crate keeps the bookkeeping for apps that open each document in its own
+//! top-level window. The core has no egui dependency:
+//!
+//! - [`WindowList`]: open windows with the app's per-window data, a [`WindowId`] for each (never
+//!   reused while the process runs), the active window and most-recent order. Menu commands go to
+//!   [`WindowList::active`]; when the active window closes, [`Closed::focus`] names the next one.
+//! - [`cascade`]: where a new window goes, one title bar down and right of the last one, wrapped
+//!   back inside the screen.
+//! - [`WindowMenu`]: the Window menu (macOS) or View › Switch Windows list. Windows on the same
+//!   document are titled "Name:1", "Name:2".
+//!
+//! The `egui` feature adds `Viewports`, which shows each window as an immediate viewport, applies
+//! `decorate` and the cascade to new windows, and reports `WindowEvent`s. Close and quit policy
+//! stay with the app: the driver reports a close request, and a window closes when the app removes
+//! it from the list.
+//!
+//! ```ignore
+//! use craft_window::{Choice, Document, Prefix, Viewports, WindowEvent, WindowList, WindowMenu};
+//!
+//! // At startup: the first document's window is drawn in the root viewport.
+//! let mut windows = WindowList::new();
+//! let mut viewports = Viewports::new(Choice::probe(Prefix::new("GRIDCRAFT")).into_frame());
+//! let first = windows.open(WindowUi::new(doc_id));
+//! viewports.set_root(Some(first));
+//!
+//! // Each frame, in eframe's `App::ui`:
+//! let menu = WindowMenu::new(&windows, |_, w| Document {
+//!     key: w.doc_id,
+//!     name: engine.name(w.doc_id),
+//!     dirty: engine.is_dirty(w.doc_id),
+//! });
+//! let base = egui::ViewportBuilder::default().with_inner_size([1000.0, 700.0]);
+//! let events = viewports.show(
+//!     ui,
+//!     &mut windows,
+//!     |id, _| base.clone().with_title(menu.title(id).unwrap_or_default()),
+//!     |ui, id, window| draw_window(ui, id, window, &mut engine),
+//! );
+//! for event in events {
+//!     match event {
+//!         WindowEvent::Focused(_) => {} // `windows.active()` already follows focus
+//!         WindowEvent::CloseRequested(id) => {
+//!             let in_root = viewports.root() == Some(id);
+//!             if in_root {
+//!                 // Otherwise eframe closes the app with the root window.
+//!                 ui.ctx().send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::CancelClose);
+//!             }
+//!             // Prompt if this is the document's last window and it is dirty; then:
+//!             if let Some(closed) = windows.close(id) {
+//!                 let next = closed.focus.or_else(|| windows.active());
+//!                 match next {
+//!                     Some(next) if in_root => viewports.adopt(ui.ctx(), &windows, next),
+//!                     Some(next) => viewports.focus(ui.ctx(), next),
+//!                     None => { /* last window: the platform default (quit, or stay on macOS) */ }
+//!                 }
+//!             }
+//!         }
+//!     }
+//! }
+//! ```
+
+mod list;
+mod menu;
+mod place;
+#[cfg(feature = "egui")]
+pub mod title_bar;
+#[cfg(feature = "egui")]
+mod viewports;
+
+pub use list::{Closed, WindowId, WindowList};
+pub use menu::{Document, MenuEntry, WindowMenu};
+pub use place::{CASCADE_STEP, Rect, cascade};
+#[cfg(feature = "egui")]
+pub use viewports::{Viewports, WindowEvent, child_viewport_id};
 
 /// The environment-variable prefix an app overrides the frame with: `<PREFIX>_TITLEBAR`.
 ///

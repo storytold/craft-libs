@@ -1,7 +1,7 @@
 [workspace]
 resolver = "3"
 members = ["crates/*"]
-exclude = ["vendor/krilla", "vendor/hayro", "vendor/hayro-interpret", "vendor/hayro-syntax", "vendor/hayro-jbig2"]
+exclude = ["vendor/krilla", "vendor/hayro", "vendor/hayro-interpret", "vendor/hayro-syntax", "vendor/hayro-jbig2", "vendor/hayro-cmap", "vendor/hayro-postscript"]
 
 [workspace.package]
 version = "0.1.0"
@@ -16,32 +16,44 @@ craft-platform = { path = "crates/platform" }
 craft-ai-core = { path = "crates/ai-core" }
 craft-suite-account = { path = "crates/suite-account" }
 craft-pdf = { path = "crates/pdf", version = "=0.1.0" }
+craft-plate-test = { path = "crates/plate-test" }
 krilla = { version = "=0.8.2", default-features = false, features = ["raster-images"] }
 hayro = { version = "=0.7.1", default-features = false }
 hayro-interpret = { version = "=0.7.0", default-features = false, features = ["embed-fonts", "embed-cmaps"] }
 hayro-syntax = { version = "=0.7.2", default-features = false, features = ["std"] }
 bytemuck = "1"
+kurbo = "0.13"
 thiserror = "2"
 craft-atomic = { path = "crates/atomic" }
 craft-cms = { path = "crates/cms" }
 craft-cloud = { path = "crates/cloud" }
 craft-docpath = { path = "crates/docpath" }
 craft-esign = { path = "crates/esign" }
+craft-font-catalog = { path = "crates/font-catalog" }
+craft-font-manager = { path = "crates/font-manager" }
+craft-font-store = { path = "crates/font-store" }
+craft-fonts-build = { path = "crates/fonts-build" }
 craft-gpu = { path = "crates/gpu" }
 craft-gpu-null = { path = "crates/gpu-null" }
 craft-gpu-providers = { path = "crates/gpu-providers" }
 craft-gpu-wgpu = { path = "crates/gpu-wgpu" }
 craft-i18n = { path = "crates/i18n" }
+craft-jpeg = { path = "crates/jpeg" }
+craft-keymap = { path = "crates/keymap" }
 craft-media = { path = "crates/media" }
+craft-menu = { path = "crates/menu" }
+craft-prepress = { path = "crates/prepress" }
 craft-print = { path = "crates/print" }
 craft-quit = { path = "crates/quit" }
 craft-runtime = { path = "crates/runtime" }
 craft-settings = { path = "crates/settings" }
+craft-text = { path = "crates/text" }
 craft-tier-store = { path = "crates/tier-store" }
 craft-ui = { path = "crates/ui" }
+craft-update = { path = "crates/update" }
 craft-worker-host = { path = "crates/worker-host" }
 craft-window = { path = "crates/window" }
-egui = { version = "0.36", default-features = false }
+egui = { version = "0.37", default-features = false }
 rayon = "1"
 
 # Foundation crates. The versions match the ones the app repos already pin.
@@ -51,6 +63,8 @@ serde_json = "1"
 pollster = "0.4"
 wgpu = { version = "30", default-features = false, features = ["std", "wgsl"] }
 proptest = "1"
+# All date/time conversion goes through chrono (no hand-rolled calendar code beyond the 400-year range extension; AGENTS.md).
+chrono = { version = "0.4.45", default-features = false, features = ["std"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
@@ -67,3 +81,20 @@ hayro = { path = "vendor/hayro" }
 hayro-interpret = { path = "vendor/hayro-interpret" }
 hayro-syntax = { path = "vendor/hayro-syntax" }
 hayro-jbig2 = { path = "vendor/hayro-jbig2" }
+hayro-cmap = { path = "vendor/hayro-cmap" }
+hayro-postscript = { path = "vendor/hayro-postscript" }
+ecolor = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+emath = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+epaint = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+epaint_default_fonts = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+egui = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+egui-winit = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+egui-wgpu = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+egui_glow = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+egui_extras = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+egui_kittest = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+egui_system_font_provider = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+eframe = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+egui_demo_lib = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+egui_inspection = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+winit = { git = "https://github.com/storytold/winit.git", rev = "a517b3846ee8457d84ee4975110bfda6797c44dc" }

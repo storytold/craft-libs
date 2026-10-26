@@ -212,6 +212,9 @@ impl Type3Font {
             .collect::<Vec<Ref>>();
 
         let resource_dictionary = rd_builder.finish();
+        if sc.uses_transparency(&resource_dictionary) {
+            sc.mark_transparent(root_ref);
+        }
         let chunk = &mut chunk_container.non_stream.fonts;
 
         let descriptor_ref = if sc.serialize_settings().pdf_version() >= PdfVersion::Pdf15 {

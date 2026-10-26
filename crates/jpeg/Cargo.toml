@@ -1,0 +1,19 @@
+[package]
+name = "craft-jpeg"
+description = "Clean-room decoder for 12-bit and arithmetic-coded JPEG (ITU-T T.81)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+thiserror = { workspace = true }
+
+[dev-dependencies]
+# Reference encoder and baseline decoder for the comparison tests.
+jpeg-encoder = "0.6"
+zune-jpeg = "0.5"
