@@ -637,7 +637,20 @@ fn candidates_unchecked(tag: &str) -> Vec<String> {
         out.extend(candidates_unchecked(&parts.join("-")));
         return out;
     }
-    let mut out: Vec<String> = (1..=parts.len()).rev().map(|n| parts.get(..n).unwrap_or_default().join("-")).collect();
+    let mut out = Vec::new();
+    for n in (1..=parts.len()).rev() {
+        out.push(parts.get(..n).unwrap_or_default().join("-"));
+        if original != primary {
+            let mut raw = parts.get(..n).unwrap_or_default().to_vec();
+            if let Some(first) = raw.first_mut() {
+                *first = original;
+            }
+            let raw = raw.join("-");
+            if !out.contains(&raw) {
+                out.push(raw);
+            }
+        }
+    }
     if let Some(s) = script
         && usual_script(primary).is_some_and(|usual| usual != s)
     {
@@ -650,17 +663,6 @@ fn candidates_unchecked(tag: &str) -> Vec<String> {
     }
     if primary == "pt" && !out.iter().any(|c| c == "pt-br") {
         out.push("pt-br".to_owned());
-    }
-    if original != primary {
-        let mut raw = parts;
-        if let Some(first) = raw.first_mut() {
-            *first = original;
-        }
-        for c in (1..=raw.len()).rev().map(|n| raw.get(..n).unwrap_or_default().join("-")) {
-            if !out.contains(&c) {
-                out.push(c);
-            }
-        }
     }
     out
 }
@@ -1290,6 +1292,7 @@ mod tests {
         assert_eq!(i.match_tag("he_IL.UTF-8"), Some(he));
         assert_eq!(i.match_tag("iw_IL.UTF-8"), Some(he));
         assert_eq!(i.match_tag("iw-IL"), Some(he));
+        assert_eq!(candidates("iw-IL"), ["he-il", "iw-il", "he", "iw"]);
         assert_eq!(i.trn(he, 1, "{n} page", "{n} pages"), "עמוד \u{2066}1\u{2069}");
         assert_eq!(i.trn(he, 2, "{n} page", "{n} pages"), "\u{2066}2\u{2069} עמודים");
         assert_eq!(i.trn(he, 10, "{n} page", "{n} pages"), "\u{2066}10\u{2069} עמודים");

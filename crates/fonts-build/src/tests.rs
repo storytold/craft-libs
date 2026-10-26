@@ -271,11 +271,13 @@ fn embeds_from_opt_in_hebrew_and_latin_manifests() {
          David Libre | Regular | fonts/david.ttf | Hebr,Latn | OFL-1.1 | fonts/OFL.txt | 00 | src\n",
     )
     .unwrap();
+    std::fs::write(dir.join("fonts/latin-manifest.txt"), "Latin Face | Regular | fonts/david.ttf | Latn | OFL-1.1 | fonts/OFL.txt | 00 | src\n")
+        .unwrap();
     let r = run(Embed::hebrew(), Some(&dir), Some("1"));
     assert_eq!(r.result.unwrap(), ["Heebo Variable", "David Libre Regular"]);
     let r = run(Embed::hebrew_documents(&["David Libre"]), Some(&dir), Some("1"));
     assert_eq!(r.result.unwrap(), ["David Libre Regular"]);
-    assert!(matches!(run(Embed::latin(), Some(&dir), Some("1")).result, Err(Error::Read { .. })));
+    assert_eq!(run(Embed::latin(), Some(&dir), Some("1")).result.unwrap(), ["Latin Face Regular"]);
 }
 
 /// A font with only a `cmap` table: a Windows format 4 subtable with `bmp` segments `(first,
