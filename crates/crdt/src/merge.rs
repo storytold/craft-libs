@@ -82,6 +82,8 @@ pub fn three_way(base: &Replica, branch_changes: &[Change], main: &Replica, base
     let mut node_ids: BTreeSet<NodeId> = BTreeSet::new();
     node_ids.extend(branch.nodes().map(|(id, _)| *id));
     node_ids.extend(base.nodes().map(|(id, _)| *id));
+    let mut creates: Vec<(usize, NodeId, Change)> = Vec::new();
+    let mut deletes: Vec<Change> = Vec::new();
     for id in node_ids {
         let b = branch.node(id);
         let base_n = base.node(id);
@@ -105,20 +107,30 @@ pub fn three_way(base: &Replica, branch_changes: &[Change], main: &Replica, base
                 three_way_position(&mut plan, id, &bn0.position, &bn.position, &mn.position);
             }
             (Some(bn), None, _) => {
-                plan.auto.push(Change::Create {
+                creates.push((
+                    depth_in(&branch, id),
                     id,
-                    kind: bn.kind.clone(),
-                    parent: bn.parent,
-                    position: bn.position.clone(),
-                    props: bn.props.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
-                });
+                    Change::Create {
+                        id,
+                        kind: bn.kind.clone(),
+                        parent: bn.parent,
+                        position: bn.position.clone(),
+                        props: bn.props.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
+                    },
+                ));
             }
             (None, Some(_), Some(_)) => {
-                plan.auto.push(Change::Delete { id });
+                deletes.push(Change::Delete { id });
             }
             _ => {}
         }
     }
+    // Creates (parent-first by branch depth) before Sets; Deletes last. NodeId order is
+    // not a dependency order: a move into a new group would otherwise Set parent before
+    // Create, and a lower-id parent Delete would take its children with it.
+    creates.sort_by_key(|(depth, id, _)| (*depth, *id));
+    let sets = std::mem::take(&mut plan.auto);
+    plan.auto = creates.into_iter().map(|(_, _, c)| c).chain(sets).chain(deletes).collect();
 
     let mut entry_ids: BTreeSet<EntryId> = BTreeSet::new();
     entry_ids.extend(branch.entries().map(|(e, _)| e.clone()));
@@ -157,6 +169,22 @@ pub fn three_way(base: &Replica, branch_changes: &[Change], main: &Replica, base
         }
     }
     plan
+}
+
+fn depth_in(r: &Replica, mut id: NodeId) -> usize {
+    let mut d = 0usize;
+    loop {
+        if id == NodeId(0) {
+            return d;
+        }
+        match r.node(id) {
+            Some(n) => {
+                id = n.parent;
+                d = d.saturating_add(1);
+            }
+            None => return d,
+        }
+    }
 }
 
 fn three_way_parent(plan: &mut MergePlan, id: NodeId, base: NodeId, branch: NodeId, main: NodeId) {
