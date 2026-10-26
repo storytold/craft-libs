@@ -139,9 +139,15 @@ impl Server {
     }
 
     /// Whether the log still holds every batch after `seq` (else the welcome is a Snapshot).
+    ///
+    /// An empty log covers only a client already at the current seq (nothing to replay).
+    /// After compaction, the first remaining seq must be no later than `seq + 1`.
     #[must_use]
     pub fn log_covers(&self, seq: Seq) -> bool {
-        self.log.first().is_none_or(|(s, _, _)| *s > seq)
+        match self.log.first() {
+            None => self.state.seq() <= seq,
+            Some((first, _, _)) => *first <= seq.saturating_add(1),
+        }
     }
 
     /// Join a client: grant a fresh id above every used space (spec §5.1).

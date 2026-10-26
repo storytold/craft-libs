@@ -13,7 +13,7 @@ use crate::frac;
 use crate::ids::NodeId;
 use crate::value::Value;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 /// One synchronized object.
@@ -44,13 +44,14 @@ pub struct Replica {
     /// The nodes, by id.
     nodes: BTreeMap<NodeId, Node>,
     /// Children per parent, kept ordered by `(position, id)`.
-    children: BTreeMap<NodeId, std::collections::BTreeSet<(Position, NodeId)>>,
+    children: BTreeMap<NodeId, BTreeSet<(Position, NodeId)>>,
     /// Document-level entries (styles, variables, comments, versions...).
     entries: BTreeMap<EntryId, Value>,
     /// Document-level properties.
     doc: BTreeMap<Arc<str>, Value>,
     /// Ids removed during this session's lifetime (accepted back by re-Create with same id).
-    removed: std::collections::HashSet<NodeId>,
+    /// A set, not a hash table: postcard must round-trip byte-for-byte in [`crate::SessionState::decode`].
+    removed: BTreeSet<NodeId>,
     /// The highest server seq this replica has applied.
     seq: Seq,
 }
@@ -153,7 +154,7 @@ impl Replica {
                     return Err(Error::Invalid("parent must be a u64 id".into()));
                 };
                 let new_parent = NodeId(raw);
-                if !self.nodes.contains_key(&new_parent) {
+                if new_parent != NodeId(0) && !self.nodes.contains_key(&new_parent) {
                     return Err(Error::Invalid(format!("parent {new_parent:?} does not exist")));
                 }
                 if self.would_cycle(id, new_parent) {
@@ -259,8 +260,7 @@ impl Replica {
             }
             Change::Set { id, prop, value } => match self.set(*id, prop, value.clone()) {
                 Ok(()) => Ok(true),
-                Err(Error::Unknown(_n)) if mode == ApplyMode::Lenient => Ok(false),
-                Err(e) => Err(e),
+                Err(e) => strict(e).map(|_| false),
             },
             Change::Delete { id } => {
                 self.delete(*id);

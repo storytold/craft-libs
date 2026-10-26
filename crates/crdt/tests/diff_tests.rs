@@ -86,3 +86,32 @@ fn deletes_collapse_per_subtree() {
     assert_eq!(deletes, 1, "one Delete per subtree root, got {deletes}");
     assert!(matches!(changes.changes[0], Change::Delete { id: NodeId(1) }));
 }
+
+/// A move into a newly created parent must emit the Create first (spec §5.3 order).
+#[test]
+fn a_move_into_a_new_parent_creates_first() {
+    let mut before = Replica::new();
+    apply_changes(
+        &mut before,
+        &[Change::Create { id: NodeId(1), kind: Arc::from("r"), parent: NodeId(0), position: "a0".into(), props: vec![] }],
+    );
+    let mut after = before.clone();
+    apply_changes(
+        &mut after,
+        &[
+            Change::Create { id: NodeId(2), kind: Arc::from("g"), parent: NodeId(0), position: "a1".into(), props: vec![] },
+            Change::Set {
+                id: NodeId(1),
+                prop: Arc::from("parent"),
+                value: craft_crdt::value::Value::Json(serde_json::Value::Number(2.into())),
+            },
+        ],
+    );
+    let batch = craft_crdt::diff::diff(&before, &after, 0, 1, before.seq());
+    let create_at = batch.changes.iter().position(|c| matches!(c, Change::Create { id: NodeId(2), .. }));
+    let move_at = batch.changes.iter().position(|c| matches!(c, Change::Set { id: NodeId(1), prop, .. } if prop.as_ref() == "parent"));
+    assert!(create_at.expect("create G") < move_at.expect("move N into G"), "got {:?}", batch.changes);
+    let mut reconstructed = before.clone();
+    reconstructed.apply(&batch, ApplyMode::Strict).expect("strict apply of ordered diff");
+    assert!(craft_crdt::sim::replicas_equal(&reconstructed, &after));
+}

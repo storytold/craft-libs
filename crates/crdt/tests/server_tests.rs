@@ -118,3 +118,18 @@ fn state_roundtrips_through_serde() {
     assert_eq!(restored.state().seq(), s.state().seq());
     assert_eq!(restored.state().node_count(), s.state().node_count());
 }
+
+#[test]
+fn an_empty_log_after_restore_does_not_cover_seq_zero() {
+    let mut s = Server::new(1);
+    let a = s.join_as(Access::Edit);
+    match s.submit(a, &batch(1, 0, vec![create(NodeId::compose(a.0, 1).0, "x")])) {
+        Outcome::Accepted { .. } => {}
+        o => panic!("accept, got {o:?}"),
+    }
+    assert!(s.log_covers(0), "uncompacted log starting at 1 covers a client at 0");
+    assert!(s.log_covers(1), "the same log covers a client already at seq 1");
+    let restored = Server::restore(s.state_out());
+    assert!(!restored.log_covers(0), "empty log after restore must snapshot, not send an empty delta");
+    assert!(restored.log_covers(restored.state().seq()), "a client at the current seq needs no replay");
+}

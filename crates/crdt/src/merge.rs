@@ -10,8 +10,11 @@
 //! and element-wise conflicts resolve by index with the branch's or main's value flagged.
 
 use crate::change::{Change, EntryId, Seq};
+use crate::ids::NodeId;
 use crate::replica::Replica;
+use crate::value::Value;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 /// One merge decision over a conflicted target.
@@ -74,43 +77,34 @@ pub fn three_way(base: &Replica, branch_changes: &[Change], main: &Replica, base
 
     let mut plan = MergePlan { auto: Vec::new(), conflicts: Vec::new(), base_seq };
 
-    // Node-level: walk every node the branch knows.
-    let mut branch_nodes: Vec<crate::ids::NodeId> = branch.nodes().map(|(id, _)| *id).collect();
-    branch_nodes.sort();
-    for id in branch_nodes {
+    // Union of base and branch ids so a branch deletion is visible (branch.nodes() alone
+    // never matches the `(None, Some, _)` arm).
+    let mut node_ids: BTreeSet<NodeId> = BTreeSet::new();
+    node_ids.extend(branch.nodes().map(|(id, _)| *id));
+    node_ids.extend(base.nodes().map(|(id, _)| *id));
+    for id in node_ids {
         let b = branch.node(id);
         let base_n = base.node(id);
         let m = main.node(id);
         match (b, base_n, m) {
             (Some(bn), Some(bn0), Some(mn)) => {
-                // The branch changed/knows the node: compare each property against base and main.
                 for (k, v) in &bn.props {
                     let base_v = bn0.props.get(k);
                     if base_v == Some(v) {
-                        continue; // The branch did not change this property.
+                        continue;
                     }
                     let main_v = mn.props.get(k);
                     if main_v.is_none_or(|x| Some(x) == base_v) {
-                        // Main untouched (or agrees with base): take the branch.
                         plan.auto.push(Change::Set { id, prop: k.clone(), value: v.clone() });
                     } else if main_v != Some(v) {
-                        // Both wrote, differently: a conflict spot for the owner.
-                        let mv = main_v.cloned().unwrap_or(crate::value::Value::Json(serde_json::Value::Null));
+                        let mv = main_v.cloned().unwrap_or(Value::Json(serde_json::Value::Null));
                         plan.conflicts.push(Conflict { target: Target::Node(id), prop: Some(k.clone()), main: mv, branch: v.clone() });
                     }
                 }
-                if bn.parent != bn0.parent && mn.parent != bn0.parent && bn.parent != mn.parent {
-                    plan.conflicts.push(Conflict {
-                        target: Target::Node(id),
-                        prop: Some(Arc::from("parent")),
-                        main: crate::value::Value::Json(serde_json::Value::Number((mn.parent.0).into())),
-                        branch: crate::value::Value::Json(serde_json::Value::Number((bn.parent.0).into())),
-                    });
-                }
+                three_way_parent(&mut plan, id, bn0.parent, bn.parent, mn.parent);
+                three_way_position(&mut plan, id, &bn0.position, &bn.position, &mn.position);
             }
             (Some(bn), None, _) => {
-                // The branch created the node (base didn't know it): create it on main —
-                // whether main still holds a stale copy or never saw it, the create wins.
                 plan.auto.push(Change::Create {
                     id,
                     kind: bn.kind.clone(),
@@ -119,28 +113,34 @@ pub fn three_way(base: &Replica, branch_changes: &[Change], main: &Replica, base
                     props: bn.props.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
                 });
             }
-            (None, Some(_), _) => {
-                // The branch deleted the node (main agreed, never knew it, or holds a stale
-                // copy): the branch's deletion is the intent, and property conflicts surface
-                // through the property walk above.
+            (None, Some(_), Some(_)) => {
                 plan.auto.push(Change::Delete { id });
             }
             _ => {}
         }
     }
 
-    // Document-level entries and properties ride the same rules.
-    for (entry, bv) in branch.entries() {
-        let base_v = base.entry(entry);
-        if base_v == Some(bv) {
-            continue;
-        }
-        let main_v = main.entry(entry);
-        if main_v.is_none_or(|x| Some(x) == base_v) {
-            plan.auto.push(Change::Put { entry: entry.clone(), value: bv.clone() });
-        } else if main_v != Some(bv) {
-            let mv = main_v.cloned().unwrap_or(crate::value::Value::Json(serde_json::Value::Null));
-            plan.conflicts.push(Conflict { target: Target::Entry(entry.clone()), prop: None, main: mv, branch: bv.clone() });
+    let mut entry_ids: BTreeSet<EntryId> = BTreeSet::new();
+    entry_ids.extend(branch.entries().map(|(e, _)| e.clone()));
+    entry_ids.extend(base.entries().map(|(e, _)| e.clone()));
+    for entry in entry_ids {
+        let bv = branch.entry(&entry);
+        let base_v = base.entry(&entry);
+        let main_v = main.entry(&entry);
+        match (bv, base_v, main_v) {
+            (None, Some(_), Some(_)) => plan.auto.push(Change::Remove { entry }),
+            (None, _, _) => {}
+            (Some(bv), _, _) => {
+                if base_v == Some(bv) {
+                    continue;
+                }
+                if main_v.is_none_or(|x| Some(x) == base_v) {
+                    plan.auto.push(Change::Put { entry, value: bv.clone() });
+                } else if main_v != Some(bv) {
+                    let mv = main_v.cloned().unwrap_or(Value::Json(serde_json::Value::Null));
+                    plan.conflicts.push(Conflict { target: Target::Entry(entry), prop: None, main: mv, branch: bv.clone() });
+                }
+            }
         }
     }
     for (k, bv) in branch.doc_props() {
@@ -157,6 +157,46 @@ pub fn three_way(base: &Replica, branch_changes: &[Change], main: &Replica, base
         }
     }
     plan
+}
+
+fn three_way_parent(plan: &mut MergePlan, id: NodeId, base: NodeId, branch: NodeId, main: NodeId) {
+    if branch == base {
+        return;
+    }
+    if main == base {
+        plan.auto.push(Change::Set {
+            id,
+            prop: Arc::from("parent"),
+            value: Value::Json(serde_json::Value::Number(branch.0.into())),
+        });
+    } else if main != branch {
+        plan.conflicts.push(Conflict {
+            target: Target::Node(id),
+            prop: Some(Arc::from("parent")),
+            main: Value::Json(serde_json::Value::Number(main.0.into())),
+            branch: Value::Json(serde_json::Value::Number(branch.0.into())),
+        });
+    }
+}
+
+fn three_way_position(plan: &mut MergePlan, id: NodeId, base: &str, branch: &str, main: &str) {
+    if branch == base {
+        return;
+    }
+    if main == base {
+        plan.auto.push(Change::Set {
+            id,
+            prop: Arc::from("position"),
+            value: Value::Json(serde_json::Value::String(branch.to_owned())),
+        });
+    } else if main != branch {
+        plan.conflicts.push(Conflict {
+            target: Target::Node(id),
+            prop: Some(Arc::from("position")),
+            main: Value::Json(serde_json::Value::String(main.to_owned())),
+            branch: Value::Json(serde_json::Value::String(branch.to_owned())),
+        });
+    }
 }
 
 /// The merge strategy for a list-valued property (the extendable matrix, docs/merge-matrix.md).
