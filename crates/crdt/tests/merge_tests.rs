@@ -148,3 +148,30 @@ fn a_move_out_lands_before_the_old_parent_is_deleted() {
     assert!(r.node(NodeId(1)).is_none(), "parent gone");
     assert_eq!(r.node(NodeId(2)).expect("child survived").parent, NodeId(0));
 }
+
+#[test]
+fn parent_moves_that_would_cycle_in_id_order_are_unblocked() {
+    let mut base = Replica::new();
+    apply(&mut base, vec![create(1, 0, "a0"), create(2, 1, "a0")]);
+    let main = base.clone();
+    let branch_changes = vec![
+        Change::Set {
+            id: NodeId(2),
+            prop: Arc::from("parent"),
+            value: Value::Json(serde_json::Value::Number(0.into())),
+        },
+        Change::Set {
+            id: NodeId(1),
+            prop: Arc::from("parent"),
+            value: Value::Json(serde_json::Value::Number(2.into())),
+        },
+    ];
+    let plan = three_way(&base, &branch_changes, &main, 0);
+    assert!(plan.conflicts.is_empty(), "{plan:?}");
+    let move2 = plan.auto.iter().position(|c| matches!(c, Change::Set { id: NodeId(2), prop, .. } if prop.as_ref() == "parent"));
+    let move1 = plan.auto.iter().position(|c| matches!(c, Change::Set { id: NodeId(1), prop, .. } if prop.as_ref() == "parent"));
+    assert!(move2.expect("move 2 to root") < move1.expect("move 1 under 2"), "got {:?}", plan.auto);
+    let r = apply_auto(&main, &plan);
+    assert_eq!(r.node(NodeId(2)).expect("2").parent, NodeId(0));
+    assert_eq!(r.node(NodeId(1)).expect("1").parent, NodeId(2));
+}

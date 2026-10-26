@@ -130,7 +130,14 @@ pub fn three_way(base: &Replica, branch_changes: &[Change], main: &Replica, base
     // Create, and a lower-id parent Delete would take its children with it.
     creates.sort_by_key(|(depth, id, _)| (*depth, *id));
     let sets = std::mem::take(&mut plan.auto);
-    plan.auto = creates.into_iter().map(|(_, _, c)| c).chain(sets).chain(deletes).collect();
+    let (parent_sets, other_sets): (Vec<Change>, Vec<Change>) = sets.into_iter().partition(is_parent_set);
+    let mut after_creates = main.clone();
+    for (_, _, c) in &creates {
+        let replay = crate::change::Batch { id: 0, base_seq: after_creates.seq(), changes: vec![c.clone()] };
+        let _ = after_creates.apply(&replay, crate::replica::ApplyMode::Lenient);
+    }
+    let parent_sets = order_parent_moves(&after_creates, parent_sets);
+    plan.auto = creates.into_iter().map(|(_, _, c)| c).chain(other_sets).chain(parent_sets).chain(deletes).collect();
 
     let mut entry_ids: BTreeSet<EntryId> = BTreeSet::new();
     entry_ids.extend(branch.entries().map(|(e, _)| e.clone()));
@@ -169,6 +176,45 @@ pub fn three_way(base: &Replica, branch_changes: &[Change], main: &Replica, base
         }
     }
     plan
+}
+
+fn is_parent_set(c: &Change) -> bool {
+    matches!(c, Change::Set { prop, .. } if prop.as_ref() == "parent")
+}
+
+/// Greedy order so each parent write is legal on the tree produced so far. A two-node
+/// swap (child to root, then old parent under that child) is a cycle if the lower id
+/// moves first.
+fn order_parent_moves(start: &Replica, mut remaining: Vec<Change>) -> Vec<Change> {
+    let mut working = start.clone();
+    let mut ordered = Vec::with_capacity(remaining.len());
+    while !remaining.is_empty() {
+        let mut next = None;
+        for (i, c) in remaining.iter().enumerate() {
+            let Change::Set { id, value, .. } = c else {
+                continue;
+            };
+            let mut trial = working.clone();
+            if trial.set(*id, "parent", value.clone()).is_ok() {
+                next = Some(i);
+                break;
+            }
+        }
+        match next {
+            Some(i) => {
+                let c = remaining.remove(i);
+                if let Change::Set { id, value, .. } = &c {
+                    let _ = working.set(*id, "parent", value.clone());
+                }
+                ordered.push(c);
+            }
+            None => {
+                ordered.extend(remaining);
+                break;
+            }
+        }
+    }
+    ordered
 }
 
 fn depth_in(r: &Replica, mut id: NodeId) -> usize {
