@@ -93,17 +93,17 @@ fn respace_keeps_order_monotone() {
     let keys = vec![(frac::FIRST_KEY.to_string(), 1u64), (long_key, 2u64), ("a3".to_string(), 3u64)];
     let pairs = frac::respace(&keys).expect("respace");
     assert_eq!(pairs.len(), 1, "only the long key moves");
-    // The untouched keys stay; the sequence remains sorted.
-    let mut seq: Vec<String> = keys.iter().map(|(k, _)| k.clone()).collect();
-    for (old, new) in &pairs {
-        if let Some(p) = seq.iter_mut().find(|k| *k == old) {
-            *p = new.clone();
+    assert_eq!(pairs[0].0, 2u64, "the long key's owner moves, not a neighbor");
+    let mut seq: Vec<(String, u64)> = keys.clone();
+    for (owner, new) in &pairs {
+        if let Some((k, _)) = seq.iter_mut().find(|(_, id)| *id == *owner) {
+            *k = new.clone();
         }
     }
-    assert!(seq.is_sorted(), "order must survive respace: {seq:?}");
+    assert!(seq.windows(2).all(|w| w[0] <= w[1]), "order must survive respace: {seq:?}");
     // Short keys alone trigger nothing.
     let short = vec![("a0".to_string(), 1u64), ("a1".to_string(), 2u64)];
-    assert_eq!(frac::respace(&short).expect("respace"), [] as [(std::string::String, std::string::String); 0]);
+    assert_eq!(frac::respace(&short).expect("respace"), [] as [(u64, std::string::String); 0]);
 }
 
 /// Fresh keys sit between the kept neighbors. Indexing into a global `n_between(None, None, n)`
@@ -114,9 +114,29 @@ fn respace_does_not_collide_with_a_kept_neighbor() {
     let keys = vec![("a1".to_string(), 5u64), (long_key.clone(), 2u64), ("a2".to_string(), 3u64)];
     let pairs = frac::respace(&keys).expect("respace");
     assert_eq!(pairs.len(), 1);
-    assert_eq!(pairs[0].0, long_key);
+    assert_eq!(pairs[0].0, 2u64);
     assert!(pairs[0].1.as_str() > "a1", "fresh {} must sit after a1", pairs[0].1);
     assert!(pairs[0].1.as_str() < "a2", "fresh {} must sit before a2", pairs[0].1);
     assert_ne!(pairs[0].1, "a1");
     assert_ne!(pairs[0].1, "a2");
+}
+
+/// Two siblings can share a key (order is `(key, id)`). Returning `(old_key, new)` would
+/// make `respace_children` move the first child with that key and flip the pair.
+#[test]
+fn respace_duplicate_keys_move_the_owner_not_the_first_match() {
+    let long_key = format!("a1{}", "V".repeat(60));
+    let keys = vec![("a1".to_string(), 1u64), ("a1".to_string(), 2u64), (long_key, 3u64)];
+    let pairs = frac::respace(&keys).expect("respace");
+    assert!(pairs.iter().any(|(id, _)| *id == 2), "the duplicate-key sibling must move: {pairs:?}");
+    assert!(!pairs.iter().any(|(id, _)| *id == 1), "the first a1 stays put: {pairs:?}");
+    let mut seq: Vec<(String, u64)> = keys.clone();
+    for (owner, new) in &pairs {
+        if let Some((k, _)) = seq.iter_mut().find(|(_, id)| *id == *owner) {
+            *k = new.clone();
+        }
+    }
+    let ids: Vec<u64> = seq.iter().map(|(_, id)| *id).collect();
+    assert_eq!(ids, vec![1, 2, 3], "sibling id order must survive: {seq:?}");
+    assert!(seq.windows(2).all(|w| w[0].0 < w[1].0), "keys must be unique after respace: {seq:?}");
 }

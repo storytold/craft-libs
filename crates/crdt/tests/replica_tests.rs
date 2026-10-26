@@ -81,3 +81,16 @@ fn snapshot_roundtrips_with_two_removed_ids() {
     let back = craft_crdt::SessionState::decode(&bytes).expect("decode must be byte-stable with two removed ids");
     assert_eq!(back.encode().expect("re-encode"), bytes);
 }
+
+#[test]
+fn respace_children_keeps_duplicate_key_order() {
+    let mut r = Replica::new();
+    let long = format!("a1{}", "V".repeat(60));
+    apply(&mut r, vec![create(1, 0, "a1"), create(2, 0, "a1"), create(3, 0, &long)]);
+    let before: Vec<NodeId> = r.children(NodeId(0)).collect();
+    assert_eq!(before, vec![NodeId(1), NodeId(2), NodeId(3)]);
+    let batch = r.respace_children(NodeId(0), 0, 1, r.seq()).expect("respace fires");
+    r.apply(&batch, ApplyMode::Strict).expect("apply respace");
+    let after: Vec<NodeId> = r.children(NodeId(0)).collect();
+    assert_eq!(after, vec![NodeId(1), NodeId(2), NodeId(3)]);
+}
