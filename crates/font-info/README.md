@@ -13,7 +13,8 @@ font controls, OpenType feature toggles and their previews:
   stylistic sets (`ss01`–`ss20`) and character variants (`cv01`–`cv99`); and the characters each
   substitution changes, for a preview that shows exactly those: how many in all, and a sample of
   up to 24 taking a few of each kind in turn (`012ABCabc345…`), so even a short preview shows
-  that a set changes letters as well as figures.
+  that a set changes letters as well as figures. The read is bounded, so a feature too large to
+  read whole is marked `partial`: its count is then a lower bound.
 
 Extracted from PhotoCraft (`photocraft-text`, storytold/photocraft#218).
 

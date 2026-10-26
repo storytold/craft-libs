@@ -85,8 +85,12 @@ pub struct FeatureDetail {
     /// shows every kind the feature changes. Empty for positioning features and for substitutions
     /// only reachable through context.
     pub sample: String,
-    /// How many characters the feature substitutes in all (the sample shows at most 24).
+    /// How many characters the feature substitutes in all (the sample shows at most 24), or at
+    /// least, when [`partial`](Self::partial).
     pub changed: usize,
+    /// The read stopped before the end of the feature's substitutions (a cap on lookups or
+    /// coverage, or the face's budget, ran out), so `changed` and `sample` cover only what it read.
+    pub partial: bool,
 }
 
 /// A design axis of the face's style attributes (`STAT`), which may be one `fvar` lacks (Inter
@@ -225,7 +229,7 @@ fn read_face(font: &FontRef) -> FaceDetails {
     {
         for record in list.feature_records().iter().take(MAX_FEATURES) {
             let tag = record.feature_tag().to_string();
-            features.entry(tag.clone()).or_insert(FeatureDetail { tag, name: None, sample: String::new(), changed: 0 });
+            features.entry(tag.clone()).or_insert(FeatureDetail { tag, name: None, sample: String::new(), changed: 0, partial: false });
         }
     }
     FaceDetails {
@@ -351,7 +355,8 @@ fn gsub_features(
     let mut budget = Budget { subtables: MAX_SUBTABLES, glyphs: MAX_GLYPHS };
     for record in list.feature_records().iter().take(MAX_FEATURES) {
         let tag = record.feature_tag().to_string();
-        let entry = out.entry(tag.clone()).or_insert(FeatureDetail { tag: tag.clone(), name: None, sample: String::new(), changed: 0 });
+        let entry =
+            out.entry(tag.clone()).or_insert(FeatureDetail { tag: tag.clone(), name: None, sample: String::new(), changed: 0, partial: false });
         let Ok(feature) = record.feature(data) else { continue };
         if entry.name.is_none() {
             entry.name = match feature.feature_params() {
@@ -363,13 +368,19 @@ fn gsub_features(
         let Some(lookups) = &lookups else { continue };
         let set = glyphs.entry(tag.clone()).or_default();
         let seen = seen.entry(tag).or_default();
-        for index in feature.lookup_list_indices().iter().take(MAX_LOOKUPS) {
+        let indices = feature.lookup_list_indices();
+        if indices.len() > MAX_LOOKUPS {
+            entry.partial = true;
+        }
+        for index in indices.iter().take(MAX_LOOKUPS) {
             if !seen.insert(index.get()) {
                 continue;
             }
             let Ok(lookup) = lookups.lookups().get(usize::from(index.get())) else { continue };
             let Ok(subtables) = lookup.subtables() else { continue };
-            collect_coverage(&subtables, set, &mut budget);
+            if !collect_coverage(&subtables, set, &mut budget) {
+                entry.partial = true;
+            }
         }
     }
     for (tag, set) in glyphs {
@@ -412,43 +423,50 @@ impl Budget {
 
 /// The glyphs each directly substituting subtable acts on. Contextual subtables are skipped: what
 /// they change depends on the surrounding text, so their coverage would mislead. Stops when the
-/// read's budget runs out, leaving what it has read.
-fn collect_coverage(subtables: &SubstitutionSubtables, set: &mut BTreeSet<u16>, budget: &mut Budget) {
+/// read's budget runs out, leaving what it has read; false if it stopped short.
+fn collect_coverage(subtables: &SubstitutionSubtables, set: &mut BTreeSet<u16>, budget: &mut Budget) -> bool {
     match subtables {
         SubstitutionSubtables::Single(s) => {
             let coverage = |t| match t {
                 SingleSubst::Format1(t) => t.coverage(),
                 SingleSubst::Format2(t) => t.coverage(),
             };
-            add_coverage(s.iter(), coverage, set, budget);
+            add_coverage(s.iter(), coverage, set, budget)
         }
         SubstitutionSubtables::Multiple(s) => add_coverage(s.iter(), |t| t.coverage(), set, budget),
         SubstitutionSubtables::Alternate(s) => add_coverage(s.iter(), |t| t.coverage(), set, budget),
         SubstitutionSubtables::Ligature(s) => add_coverage(s.iter(), |t| t.coverage(), set, budget),
-        _ => {}
+        _ => true,
     }
 }
 
 /// Adds the coverage of each subtable to `set` until the read's budget runs out. An offset that
 /// fails to resolve costs the budget too: a malformed table can hold thousands of them, and
-/// dropping them before the budget is charged would make resolving them free.
-fn add_coverage<'a, T, F>(subtables: impl Iterator<Item = Result<T, ReadError>>, coverage: F, set: &mut BTreeSet<u16>, budget: &mut Budget)
+/// dropping them before the budget is charged would make resolving them free. False if the budget
+/// or [`MAX_COVERAGE`] cut it short, so the glyphs in `set` may not be all of them.
+fn add_coverage<'a, T, F>(subtables: impl Iterator<Item = Result<T, ReadError>>, coverage: F, set: &mut BTreeSet<u16>, budget: &mut Budget) -> bool
 where
     F: Fn(T) -> Result<CoverageTable<'a>, ReadError>,
 {
+    let mut complete = true;
     for subtable in subtables {
         if !budget.subtable() {
-            return;
+            return false;
         }
         let Ok(subtable) = subtable else { continue };
         let Ok(table) = coverage(subtable) else { continue };
-        for glyph in table.iter().take(MAX_COVERAGE) {
+        let mut glyphs = table.iter();
+        for glyph in glyphs.by_ref().take(MAX_COVERAGE) {
             if !budget.glyph() {
-                return;
+                return false;
             }
             set.insert(glyph.to_u16());
         }
+        if glyphs.next().is_some() {
+            complete = false;
+        }
     }
+    complete
 }
 
 /// Nominal glyph → its lowest character, for the Basic Multilingual Plane (enough for samples).

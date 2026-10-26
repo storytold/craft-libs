@@ -120,6 +120,7 @@ fn reads_axes_instances_and_named_features() {
     let cv11 = d.feature("cv11").unwrap();
     assert_eq!((cv11.name.as_deref(), cv11.sample.as_str()), (Some("Single-story a"), "a"));
     assert_eq!((ss01.changed, cv11.changed, d.feature("kern").map(|f| f.changed)), (1, 1, Some(0)));
+    assert!(d.features.iter().all(|f| !f.partial), "everything was read");
     assert_eq!(d.feature("kern").map(|f| (f.name.clone(), f.sample.clone())), Some((None, String::new())), "positioning has no sample");
     assert!(d.has_feature("kern") && !d.has_feature("liga") && d.feature("zzzz").is_none());
 }
@@ -378,9 +379,9 @@ fn repeated_lookup_references_stay_within_budget() {
     let d = craft_font_info::read(&bytes, 0).unwrap();
     let took = started.elapsed();
     assert!(took < std::time::Duration::from_secs(2), "{took:?} for {} bytes", bytes.len());
-    // What the budget reads is still the right answer.
+    // What the budget reads is still the right answer, but the read can't know it saw it all.
     let first = d.feature("0000").unwrap();
-    assert_eq!((first.sample.as_str(), first.changed), ("1", 1));
+    assert_eq!((first.sample.as_str(), first.changed, first.partial), ("1", 1, true));
 }
 
 /// Skipping a lookup the face has already read is per tag: two tags naming one lookup both see
@@ -392,8 +393,26 @@ fn a_lookup_shared_by_two_tags_still_counts_for_both() {
     assert_eq!(tags, ["0000", "0001"]);
     for tag in tags {
         let feature = d.feature(tag).unwrap();
-        assert_eq!((feature.sample.as_str(), feature.changed), ("1", 1), "{tag}");
+        assert_eq!((feature.sample.as_str(), feature.changed, feature.partial), ("1", 1, false), "{tag}");
     }
+}
+
+/// A coverage table longer than the read takes from one is cut short, and the count says so
+/// rather than passing the glyphs it read off as all the feature changes.
+#[test]
+fn a_cut_coverage_table_marks_the_count_partial() {
+    let glyphs = 5_000u16;
+    let cmap = Cmap::from_mappings((1..=glyphs).map(|g| (char::from_u32(0x4E00 + u32::from(g)).unwrap(), GlyphId::new(u32::from(g))))).unwrap();
+    let coverage: CoverageTable = (1..=glyphs).map(GlyphId16::new).collect();
+    let lookups = SubstitutionLookupList::new(vec![Lookup::new(LookupFlag::empty(), vec![SingleSubst::format_1(coverage, 1)]).into()]);
+    let features = FeatureList::new(vec![FeatureRecord::new(Tag::new(b"salt"), Feature::new(None, vec![0]))]);
+    let scripts = ScriptList::new(vec![ScriptRecord::new(Tag::new(b"DFLT"), Script::new(Some(LangSys::new(vec![0])), vec![]))]);
+    let mut b = FontBuilder::new();
+    b.add_table(&cmap).unwrap().add_table(&Gsub::new(scripts, features, lookups)).unwrap();
+    let d = craft_font_info::read(&b.build(), 0).unwrap();
+    let salt = d.feature("salt").unwrap();
+    assert!(salt.partial);
+    assert!(salt.changed > 0 && salt.changed < usize::from(glyphs), "{}", salt.changed);
 }
 
 /// Asking for a name by ID scans the whole `name` table, so a face that names 60 000 instances
