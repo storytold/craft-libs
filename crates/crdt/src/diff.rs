@@ -22,6 +22,7 @@ use std::sync::Arc;
 pub fn diff(before: &Replica, after: &Replica, author: u32, batch_id: BatchId, base_seq: Seq) -> Batch {
     let mut creates: Vec<Change> = Vec::new();
     let mut writes: Vec<Change> = Vec::new();
+    let mut moves: Vec<Change> = Vec::new();
     let mut deletes: Vec<Change> = Vec::new();
     let mut doc_level: Vec<Change> = Vec::new();
 
@@ -41,14 +42,14 @@ pub fn diff(before: &Replica, after: &Replica, author: u32, batch_id: BatchId, b
             }
             Some(old_node) => {
                 if old_node.parent != new_node.parent {
-                    writes.push(Change::Set {
+                    moves.push(Change::Set {
                         id: *id,
                         prop: Arc::from("parent"),
                         value: Value::Json(serde_json::Value::Number((new_node.parent.0).into())),
                     });
                 }
                 if old_node.position != new_node.position {
-                    writes.push(Change::Set {
+                    moves.push(Change::Set {
                         id: *id,
                         prop: Arc::from("position"),
                         value: Value::Json(serde_json::Value::String(new_node.position.clone())),
@@ -108,15 +109,16 @@ pub fn diff(before: &Replica, after: &Replica, author: u32, batch_id: BatchId, b
         }
     }
 
-    // Order: field writes → creates (parents first) → deletes → doc-level (spec §5.3 `order`).
+    // Order: field writes → creates (parents first) → moves → deletes → doc-level (spec §5.3).
     creates.sort_by_key(|c| match c {
         Change::Create { parent, .. } => depth_of(after, *parent),
         _ => 0,
     });
 
-    let mut changes = Vec::with_capacity(writes.len() + creates.len() + deletes.len() + doc_level.len());
+    let mut changes = Vec::with_capacity(writes.len() + creates.len() + moves.len() + deletes.len() + doc_level.len());
     changes.append(&mut writes);
     changes.append(&mut creates);
+    changes.append(&mut moves);
     changes.append(&mut deletes);
     changes.append(&mut doc_level);
     let _ = author; // ids were allocated by the caller; the diff never invents ids.

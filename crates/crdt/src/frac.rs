@@ -360,38 +360,55 @@ fn fill(a: Option<&str>, b: Option<&str>, n: usize, out: &mut Vec<String>, depth
 /// is rare, under 0.1% of changes, and is synced as one ordinary batch of position writes).
 ///
 /// `keys` must be the parent's children in `(key, id)` order. Returns the `(old, new)` pairs.
+/// Fresh keys are generated *between the neighboring kept keys*, so they cannot collide with
+/// a short key that stayed in place.
 pub fn respace(keys: &[(String, NodeKeyOwner)]) -> Result<Vec<(String, String)>, KeyError> {
     if !keys.iter().any(|(k, _)| k.len() >= KEY_RESPACE_LEN) {
         return Ok(Vec::new());
     }
-    // Fresh evenly-spread keys, one per child, then shift only the long ones onto them.
-    let bounds = n_between(None, None, keys.len())?;
-    let mut out = Vec::with_capacity(keys.len());
-    let mut last: Option<&str> = None;
-    let mut bi = 0usize;
-    for (k, _) in keys {
-        let short = k.len() < KEY_RESPACE_LEN;
-        let increasing = last.is_none_or(|p| p < k.as_str());
-        if short && increasing {
-            last = Some(k.as_str());
-        } else {
-            let fresh = bounds.get(bi).cloned().ok_or(KeyError::Exhausted)?;
-            last = Some(k.as_str());
-            out.push((k.clone(), fresh));
+    let n = keys.len();
+    let mut keep: Vec<bool> = keys.iter().map(|(k, _)| k.len() < KEY_RESPACE_LEN).collect();
+    let mut last_kept: Option<&str> = None;
+    for (i, slot) in keep.iter_mut().enumerate() {
+        if !*slot {
+            continue;
         }
-        bi = bi.saturating_add(1);
+        let k = keys[i].0.as_str();
+        if last_kept.is_some_and(|p| k <= p) {
+            *slot = false;
+        } else {
+            last_kept = Some(k);
+        }
     }
-    // The pairs must not collide with keys we kept: re-check monotonicity of the final sequence.
-    let mut final_seq: Vec<&str> = Vec::with_capacity(keys.len());
-    let mut map = std::collections::HashMap::new();
-    for (old, new) in &out {
-        map.insert(old.as_str(), new.as_str());
+    let mut effective: Vec<Option<String>> = keep.iter().enumerate().map(|(i, keep_i)| if *keep_i { Some(keys[i].0.clone()) } else { None }).collect();
+    let mut i = 0usize;
+    while i < n {
+        if effective[i].is_some() {
+            i += 1;
+            continue;
+        }
+        let start = i;
+        while i < n && effective[i].is_none() {
+            i += 1;
+        }
+        let left = start.checked_sub(1).and_then(|j| effective[j].as_deref());
+        let right = effective.get(i).and_then(|k| k.as_deref());
+        let filled = n_between(left, right, i.saturating_sub(start))?;
+        for (offset, fresh) in filled.into_iter().enumerate() {
+            effective[start + offset] = Some(fresh);
+        }
     }
-    for (k, _) in keys {
-        let effective = map.get(k.as_str()).copied().unwrap_or(k.as_str());
-        final_seq.push(effective);
+    let mut out = Vec::new();
+    let mut final_seq: Vec<&str> = Vec::with_capacity(n);
+    for (i, (old, _)) in keys.iter().enumerate() {
+        let new = effective[i].as_deref().ok_or(KeyError::Exhausted)?;
+        final_seq.push(new);
+        if new != old.as_str() {
+            out.push((old.clone(), new.to_owned()));
+        }
     }
-    if !final_seq.is_sorted() || !final_seq.iter().all(|k| validate(k).is_ok()) {
+    let strictly_increasing = final_seq.windows(2).all(|w| w[0] < w[1]);
+    if !strictly_increasing || !final_seq.iter().all(|k| validate(k).is_ok()) {
         return Err(KeyError::Exhausted);
     }
     Ok(out)

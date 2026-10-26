@@ -105,3 +105,18 @@ fn respace_keeps_order_monotone() {
     let short = vec![("a0".to_string(), 1u64), ("a1".to_string(), 2u64)];
     assert_eq!(frac::respace(&short).expect("respace"), [] as [(std::string::String, std::string::String); 0]);
 }
+
+/// Fresh keys sit between the kept neighbors. Indexing into a global `n_between(None, None, n)`
+/// can collide with a kept short key and reorder `(key, id)` siblings.
+#[test]
+fn respace_does_not_collide_with_a_kept_neighbor() {
+    let long_key = format!("a1{}", "V".repeat(60));
+    let keys = vec![("a1".to_string(), 5u64), (long_key.clone(), 2u64), ("a2".to_string(), 3u64)];
+    let pairs = frac::respace(&keys).expect("respace");
+    assert_eq!(pairs.len(), 1);
+    assert_eq!(pairs[0].0, long_key);
+    assert!(pairs[0].1.as_str() > "a1", "fresh {} must sit after a1", pairs[0].1);
+    assert!(pairs[0].1.as_str() < "a2", "fresh {} must sit before a2", pairs[0].1);
+    assert_ne!(pairs[0].1, "a1");
+    assert_ne!(pairs[0].1, "a2");
+}
