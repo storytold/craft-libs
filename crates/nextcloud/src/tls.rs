@@ -1,7 +1,7 @@
 //! TLS with trust on first use: the OS verifies certificates unless the account pins one.
 //!
 //! ureq has no hook for a custom verifier, and its rustls error drops the leaf certificate that trust on first
-//! use must show, so this is a connector of its own. [`TofuTls`] and [`TlsTransport`] follow ureq 3.4.2's
+//! use must show, so this is a connector of its own. [`TofuTls`] and [`TlsTransport`] follow ureq 3.5.0's
 //! `src/tls/rustls.rs` (MIT OR Apache-2.0, Copyright (c) 2019 Martin Algesten; see NOTICE).
 
 use std::fmt;
@@ -136,7 +136,7 @@ impl<In: Transport> Connector<In> for TofuTls {
         let host = details.uri.host().unwrap_or_default().trim_start_matches('[').trim_end_matches(']');
         let name = ServerName::try_from(host.to_string()).map_err(|_| ureq::Error::Tls("invalid TLS server name"))?;
         let mut conn = ClientConnection::new(self.0.clone(), name)?;
-        let mut sock = TransportAdapter::new(Box::new(transport) as Box<dyn Transport>);
+        let mut sock = TransportAdapter::new(Box::new(transport) as Box<dyn Transport>, details.current_time.clone());
         sock.set_timeout(details.timeout);
         conn.complete_io(&mut sock)?;
         let buffers = LazyBuffers::new(details.config.input_buffer_size(), details.config.output_buffer_size());

@@ -55,7 +55,7 @@ Not in scope:
 **Trust on first use.** When the OS rejects the certificate (unknown issuer, expiry or name), the error carries the
 presented leaf certificate's SHA-256 fingerprint. After the user confirms it, `Account::trust` pins that certificate.
 - A custom connector chain on `ureq::unversioned::transport` (TCP, then our rustls TLS, then a stall guard), with the
-  ureq minor pinned (`~3.4`). ureq has no verifier hook and its rustls error drops the leaf, so capturing the
+  ureq minor pinned (`~3.5`). ureq has no verifier hook and its rustls error drops the leaf, so capturing the
   fingerprint needs our own `ServerCertVerifier`. `RootCerts::Specific` is not used.
 - A pin matches the leaf's SHA-256 exactly and skips name and expiry checks. Handshake signatures are verified with the
   provider's algorithms.

@@ -149,7 +149,7 @@ The colour management module in crates/cms is extracted from:
   (CC0-1.0); see ATTRIBUTION.md.
 
 The TLS connector and transport in crates/nextcloud/src/tls.rs are adapted from:
-- ureq, src/tls/rustls.rs, version 3.4.2.
+- ureq, src/tls/rustls.rs, version 3.5.0.
   https://github.com/algesten/ureq
   Copyright (c) 2019 Martin Algesten.
   Licensed MIT OR Apache-2.0. The trust-on-first-use verifier is original to craft-libs.
