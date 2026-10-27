@@ -158,6 +158,109 @@ mod tests {
         }
     }
 
+    fn fractional_ink_fixture() -> (Arc<Galley>, f32, Rect, Galley) {
+        let shift = f32::from_bits(0x3f2a_aaab);
+        let mut original = layout_text(" \nI", 1.5, Align::Min);
+        let fixture = Arc::make_mut(&mut original);
+        assert_eq!(fixture.rows.len(), 2);
+        fixture.rect = Rect::from_min_size(Pos2::ZERO, vec2(1.0, 64.0));
+        fixture.rows[0].pos = Pos2::ZERO;
+        let empty = Arc::make_mut(&mut fixture.rows[0].row);
+        empty.size.x = 0.5; // Max at width 0 snaps to -one pixel, not -two pixels.
+        empty.visuals = Default::default();
+        fixture.rows[1].pos = pos2(0.0, shift);
+        let ink = Arc::make_mut(&mut fixture.rows[1].row);
+        ink.size.x = 1.0;
+        let mut mesh = egui::epaint::Mesh::default();
+        mesh.add_rect_with_uv(
+            Rect::from_min_max(pos2(-2.0, -2.0), pos2(f32::from_bits(0x4055_5555), shift)),
+            Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)),
+            Color32::BLACK,
+        );
+        ink.visuals = egui::epaint::text::RowVisuals {
+            mesh_bounds: mesh.calc_bounds(),
+            glyph_index_start: 0,
+            glyph_vertex_range: 0..mesh.vertices.len(),
+            mesh,
+        };
+        let local = ink.visuals.mesh_bounds;
+        assert!(ink.visuals.mesh.is_valid());
+        assert_eq!(ink.visuals.mesh.vertices.len(), 4);
+        assert_eq!(ink.visuals.mesh.indices.len(), 6);
+        for vertex in &ink.visuals.mesh.vertices {
+            assert!(local.contains(vertex.pos));
+        }
+        fixture.mesh_bounds = Rect::from_min_max(local.min + vec2(0.0, shift), local.max + vec2(0.0, shift));
+        fixture.num_vertices = 4;
+        fixture.num_indices = 6;
+        let snapshot = (*original).clone();
+        assert!(snapshot.rows[0].visuals.mesh.vertices.is_empty());
+        assert!(snapshot.rows[0].visuals.mesh.indices.is_empty());
+        assert_eq!(snapshot.rows[0].visuals.mesh_bounds, Rect::NOTHING);
+        assert_eq!(snapshot.rows.iter().filter(|row| !row.visuals.mesh.vertices.is_empty()).count(), 1);
+        (original, shift, local, snapshot)
+    }
+
+    fn align_fixture(galley: Arc<Galley>) -> AlignedGalley {
+        let mut index = 0;
+        let aligned = align_galley_rows(galley, 0.0, |_| {
+            index += 1;
+            if index == 1 { Align::Max } else { Align::Min }
+        });
+        assert_eq!(index, 2);
+        aligned
+    }
+
+    fn assert_shared_rows_and_bounds(aligned: &Galley, snapshot: &Galley, offset: Vec2, shift: f32) {
+        assert_eq!(aligned.num_vertices, snapshot.num_vertices);
+        assert_eq!(aligned.num_indices, snapshot.num_indices);
+        for (index, (row, old)) in aligned.rows.iter().zip(&snapshot.rows).enumerate() {
+            assert!(Arc::ptr_eq(&row.row, &old.row), "cached glyphs and meshes stay shared");
+            assert_eq!(row.pos.y, old.pos.y);
+            let reading_position = if index == 0 { pos2(-shift, 0.0) } else { old.pos };
+            assert_eq!(row.pos + offset, reading_position);
+            assert!(aligned.rect.contains_rect(row.rect()));
+        }
+        assert_eq!(aligned.rows[0].visuals.mesh_bounds, Rect::NOTHING);
+    }
+
+    fn assert_translated_ink_is_contained(aligned: &Galley, local: Rect) {
+        let row = &aligned.rows[1];
+        let legacy = local.translate(row.pos.to_vec2());
+        let endpoints = Rect::from_min_max(local.min + row.pos.to_vec2(), local.max + row.pos.to_vec2());
+        assert_eq!(legacy.max.x.to_bits(), 0x407f_ffff, "the legacy X maximum rounds inward");
+        assert_eq!(endpoints.max.x.to_bits(), 0x4080_0000);
+        assert_eq!(legacy.max.y.to_bits(), 0x3faa_aaac, "the legacy Y maximum rounds outward");
+        assert_eq!(endpoints.max.y.to_bits(), 0x3faa_aaab);
+        assert!(endpoints.max.x > legacy.max.x && endpoints.max.y < legacy.max.y);
+        assert!(aligned.mesh_bounds.is_finite());
+        assert!(aligned.mesh_bounds.contains_rect(legacy), "retain the complete public translated row rectangle");
+        for (index, vertex) in row.visuals.mesh.vertices.iter().enumerate() {
+            let position = row.pos + vertex.pos.to_vec2();
+            assert!(
+                aligned.mesh_bounds.contains(position),
+                "actual translated vertex {index} must be contained: position={:?} bits={:x?}, bounds_max={:?} bits={:x?}",
+                [position.x, position.y],
+                [position.x.to_bits(), position.y.to_bits()],
+                [aligned.mesh_bounds.max.x, aligned.mesh_bounds.max.y],
+                [aligned.mesh_bounds.max.x.to_bits(), aligned.mesh_bounds.max.y.to_bits()]
+            );
+        }
+        assert_eq!(aligned.mesh_bounds, legacy.union(endpoints));
+    }
+
+    fn assert_empty_ink_stays_empty(original: &Galley) {
+        let mut all_empty = original.clone();
+        for row in &mut all_empty.rows {
+            Arc::make_mut(&mut row.row).visuals = Default::default();
+        }
+        all_empty.mesh_bounds = Rect::NOTHING;
+        all_empty.num_vertices = 0;
+        all_empty.num_indices = 0;
+        let all_empty = align_fixture(Arc::new(all_empty));
+        assert_eq!(parts(&all_empty).0.mesh_bounds, Rect::NOTHING);
+    }
+
     /// Compare two rects componentwise within `epsilon`.
     fn close_rect(actual: Rect, expected: Rect, epsilon: f32) {
         assert!((actual.min - expected.min).length() <= epsilon, "{actual:?} != {expected:?}");
@@ -377,57 +480,7 @@ mod tests {
     /// and the complete legacy rect, equals the union of both rounding directions, survives repetition,
     /// and remains `Rect::NOTHING` when all ink is empty.
     fn fractional_ink_bounds_contain_translated_rectangles_and_vertices() {
-        // A synthetic cached quad isolates the two directions of binary32 rounding. The
-        // whitespace row supplies the normalization offset without contributing any ink.
-        let shift = f32::from_bits(0x3f2a_aaab);
-        let mut original = layout_text(" \nI", 1.5, Align::Min);
-        let fixture = Arc::make_mut(&mut original);
-        assert_eq!(fixture.rows.len(), 2);
-        fixture.rect = Rect::from_min_size(Pos2::ZERO, vec2(1.0, 64.0));
-        fixture.rows[0].pos = Pos2::ZERO;
-        let empty = Arc::make_mut(&mut fixture.rows[0].row);
-        empty.size.x = 0.5; // Max at width 0 snaps to -one pixel, not -two pixels.
-        empty.visuals = Default::default();
-        fixture.rows[1].pos = pos2(0.0, shift);
-        let ink = Arc::make_mut(&mut fixture.rows[1].row);
-        ink.size.x = 1.0;
-        let mut mesh = egui::epaint::Mesh::default();
-        mesh.add_rect_with_uv(
-            Rect::from_min_max(pos2(-2.0, -2.0), pos2(f32::from_bits(0x4055_5555), shift)),
-            Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)),
-            Color32::BLACK,
-        );
-        ink.visuals = egui::epaint::text::RowVisuals {
-            mesh_bounds: mesh.calc_bounds(),
-            glyph_index_start: 0,
-            glyph_vertex_range: 0..mesh.vertices.len(),
-            mesh,
-        };
-        let local = ink.visuals.mesh_bounds;
-        assert!(ink.visuals.mesh.is_valid());
-        assert_eq!(ink.visuals.mesh.vertices.len(), 4);
-        assert_eq!(ink.visuals.mesh.indices.len(), 6);
-        for vertex in &ink.visuals.mesh.vertices {
-            assert!(local.contains(vertex.pos));
-        }
-        fixture.mesh_bounds = Rect::from_min_max(local.min + vec2(0.0, shift), local.max + vec2(0.0, shift));
-        fixture.num_vertices = 4;
-        fixture.num_indices = 6;
-        let snapshot = (*original).clone();
-        assert!(snapshot.rows[0].visuals.mesh.vertices.is_empty());
-        assert!(snapshot.rows[0].visuals.mesh.indices.is_empty());
-        assert_eq!(snapshot.rows[0].visuals.mesh_bounds, Rect::NOTHING);
-        assert_eq!(snapshot.rows.iter().filter(|row| !row.visuals.mesh.vertices.is_empty()).count(), 1);
-
-        let align_fixture = |galley| {
-            let mut index = 0;
-            let aligned = align_galley_rows(galley, 0.0, |_| {
-                index += 1;
-                if index == 1 { Align::Max } else { Align::Min }
-            });
-            assert_eq!(index, 2);
-            aligned
-        };
+        let (original, shift, local, snapshot) = fractional_ink_fixture();
         let result = align_fixture(original.clone());
         let (aligned, offset, reading) = parts(&result);
         assert_eq!(offset, vec2(-shift, 0.0));
@@ -438,54 +491,15 @@ mod tests {
         assert_eq!(reading, Rect::from_min_size(Pos2::ZERO, vec2(0.0, 64.0)));
         assert!(aligned.rect.contains_rect(reading.translate(-offset)));
         assert_eq!(*original, snapshot, "alignment must leave the complete source unchanged");
-        assert_eq!(aligned.num_vertices, snapshot.num_vertices);
-        assert_eq!(aligned.num_indices, snapshot.num_indices);
-        for (index, (row, old)) in aligned.rows.iter().zip(&snapshot.rows).enumerate() {
-            assert!(Arc::ptr_eq(&row.row, &old.row), "cached glyphs and meshes stay shared");
-            assert_eq!(row.pos.y, old.pos.y);
-            let reading_position = if index == 0 { pos2(-shift, 0.0) } else { old.pos };
-            assert_eq!(row.pos + offset, reading_position);
-            assert!(aligned.rect.contains_rect(row.rect()));
-        }
-        assert_eq!(aligned.rows[0].visuals.mesh_bounds, Rect::NOTHING);
+        assert_shared_rows_and_bounds(aligned, &snapshot, offset, shift);
         let repeated = align_fixture(aligned.clone());
         let (again, again_offset, again_reading) = parts(&repeated);
         assert_eq!(again_offset, offset);
         assert_eq!(again_reading, reading);
         assert_eq!(**again, **aligned, "repeated alignment is exact, including cached ink bounds");
 
-        let mut all_empty = (*original).clone();
-        for row in &mut all_empty.rows {
-            Arc::make_mut(&mut row.row).visuals = Default::default();
-        }
-        all_empty.mesh_bounds = Rect::NOTHING;
-        all_empty.num_vertices = 0;
-        all_empty.num_indices = 0;
-        let all_empty = align_fixture(Arc::new(all_empty));
-        assert_eq!(parts(&all_empty).0.mesh_bounds, Rect::NOTHING);
-
-        let row = &aligned.rows[1];
-        let legacy = local.translate(row.pos.to_vec2());
-        let endpoints = Rect::from_min_max(local.min + row.pos.to_vec2(), local.max + row.pos.to_vec2());
-        assert_eq!(legacy.max.x.to_bits(), 0x407f_ffff, "the legacy X maximum rounds inward");
-        assert_eq!(endpoints.max.x.to_bits(), 0x4080_0000);
-        assert_eq!(legacy.max.y.to_bits(), 0x3faa_aaac, "the legacy Y maximum rounds outward");
-        assert_eq!(endpoints.max.y.to_bits(), 0x3faa_aaab);
-        assert!(endpoints.max.x > legacy.max.x && endpoints.max.y < legacy.max.y);
-        assert!(aligned.mesh_bounds.is_finite());
-        assert!(aligned.mesh_bounds.contains_rect(legacy), "retain the complete public translated row rectangle");
-        for (index, vertex) in row.visuals.mesh.vertices.iter().enumerate() {
-            let position = row.pos + vertex.pos.to_vec2();
-            assert!(
-                aligned.mesh_bounds.contains(position),
-                "actual translated vertex {index} must be contained: position={:?} bits={:x?}, bounds_max={:?} bits={:x?}",
-                [position.x, position.y],
-                [position.x.to_bits(), position.y.to_bits()],
-                [aligned.mesh_bounds.max.x, aligned.mesh_bounds.max.y],
-                [aligned.mesh_bounds.max.x.to_bits(), aligned.mesh_bounds.max.y.to_bits()]
-            );
-        }
-        assert_eq!(aligned.mesh_bounds, legacy.union(endpoints));
+        assert_empty_ink_stays_empty(&original);
+        assert_translated_ink_is_contained(aligned, local);
     }
 
     #[test]
