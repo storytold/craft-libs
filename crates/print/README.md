@@ -139,8 +139,9 @@ It runs formatting, Clippy and this crate's own tests on Windows, Linux and macO
 code changes, and supports manual runs. The Windows job executes the spooler regression above;
 physical printer fidelity still requires hardware verification.
 
-Windows discovery reports driver duplex support in `Printer::two_sided` (a two-sided option in
-the driver's PrintCapabilities); CUPS leaves it unknown. Explicit simplex/duplex choices that the driver
+Discovery leaves `Printer::two_sided` unknown, so listing printers never waits on a driver.
+On Windows, `two_sided(printer)` reads one printer's driver duplex support (a two-sided option in
+its PrintCapabilities); elsewhere it returns `None`. Explicit simplex/duplex choices that the driver
 drops are refused before submission.
 
 Windows dependencies: the maintained [`winprint` fork](https://github.com/storytold/winprint.rs)
