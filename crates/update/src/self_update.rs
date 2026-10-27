@@ -2122,6 +2122,28 @@ mod tests {
         assert!(result.unwrap_err().contains("isn't the one its release publishes"));
     }
 
+    /// A launcher release whose tag has a `+` (semver build metadata) has `%2B` in its links.
+    /// The self-update accepts them and gets as far as the download, which the cancelled stop ends
+    /// before anything is fetched.
+    #[test]
+    fn update_accepts_a_plus_release_up_to_the_download() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::under(dir.path());
+        let http = Http::new(crate::TEST_AGENT).unwrap();
+        let mut phase = |_| ();
+        let last = || Ok(());
+        let stop = Stop::default();
+        stop.cancel();
+        let app = &crate::suite::LAUNCHER;
+        let name = "artcraft-launcher-0.3.0+build.1-linux-x86_64.AppImage";
+        let release = crate::release::release_from_sums(app.repo, "v0.3.0+build.1", &[("a".repeat(64), name.to_string())]);
+        let install = Install::AppImage(dir.path().join("launcher.AppImage"));
+        use crate::{Arch, Os};
+        let platform = Platform { os: Os::Linux, arch: Arch::X64 };
+        let result = update(app, &install, &release, platform, &http, &paths, &stop, &mut phase, &last, Some("0.2.0"));
+        assert_eq!(result.unwrap_err(), crate::protocol::CANCELLED);
+    }
+
     #[cfg(target_os = "linux")]
     #[test]
     fn parses_flatpak_metadata_for_restart() {
