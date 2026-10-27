@@ -90,6 +90,7 @@ pub fn install_at(
         return Err(format!("Cannot update {} to {}: installed version {} is newer", app.name, release.version_label(), inst_v));
     }
     log::info!("{}: starting {} to {} ({})", app.name, if existing.is_some() { "update" } else { "install" }, release.version_label(), kind.label());
+    check_download_link(app, release, asset)?;
     let file = download(release, asset, job)?;
     log::info!("{}: download ready ({}), running installer...", app.name, file.display());
     // Past this point the install can't be interrupted halfway.
@@ -171,7 +172,7 @@ pub(crate) fn bind_artifact_version(app: &App, release: &Release, asset: &Asset)
     }
 
     // The release tag and filename embedded in a release download URL (`.../releases/download/<tag>/<name>`).
-    if let Some(rest) = asset.url.split("/releases/download/").nth(1) {
+    if let Some((_, rest)) = asset.url.split_once("/releases/download/") {
         let mut parts = rest.split('/');
         let tag = parts.next().unwrap_or("");
         let url_filename = parts.next().unwrap_or("");
@@ -186,6 +187,19 @@ pub(crate) fn bind_artifact_version(app: &App, release: &Release, asset: &Asset)
         }
     }
     Ok(())
+}
+
+/// The last check before any bytes are fetched (storytold/craft-launcher#764): the link must be
+/// exactly the app's own GitHub download for this release's tag and this asset's name, whichever
+/// converter (API, feed or `SHA256SUMS.txt`) built the asset. A `local-mirror` build also accepts
+/// the developer's loopback mirror, whose links the feed parser has already confined; so do this
+/// crate's tests, whose downloads come from a server on 127.0.0.1.
+pub(crate) fn check_download_link(app: &App, release: &Release, asset: &Asset) -> Result<(), String> {
+    let mirrored = (cfg!(feature = "local-mirror") || cfg!(test)) && crate::http::is_loopback(&asset.url);
+    if mirrored || release::expected_download_url(app.repo, &release.tag, &asset.name).as_deref() == Some(asset.url.as_str()) {
+        return Ok(());
+    }
+    Err(format!("{}'s download link isn't the one its release publishes ({}), so it wasn't downloaded.", app.name, asset.name))
 }
 
 /// What a new install would write over: something already at its destination that the launcher
@@ -2982,6 +2996,19 @@ esac
             ..Asset::default()
         };
         assert!(bind_artifact_version(app, &release, &bad_tag).is_err());
+
+        // storytold/craft-launcher#764: another app's release with the right tag and name passes
+        // the bind (it reads only the path after `/releases/download/`), but the check before the
+        // download refuses it.
+        let other_repo = Asset {
+            name: "photocraft-99.0.0-linux-x86_64.AppImage".into(),
+            url: "https://github.com/storytold/vectorcraft/releases/download/v99.0.0/photocraft-99.0.0-linux-x86_64.AppImage".into(),
+            ..Asset::default()
+        };
+        assert!(bind_artifact_version(app, &release, &other_repo).is_ok());
+        let err = install_at(app, &release, &other_repo, PackageKind::AppImage, None, None, &mut job, None).unwrap_err();
+        assert!(err.contains("isn't the one its release publishes"), "{err}");
+        assert!(check_download_link(app, &release, &good).is_ok());
     }
 
     #[cfg(target_os = "linux")]
