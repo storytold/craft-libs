@@ -191,12 +191,16 @@ pub(crate) fn bind_artifact_version(app: &App, release: &Release, asset: &Asset)
 
 /// The last check before any bytes are fetched (storytold/craft-launcher#764): the link must be
 /// exactly the app's own GitHub download for this release's tag and this asset's name, whichever
-/// converter (API, feed or `SHA256SUMS.txt`) built the asset. A `local-mirror` build also accepts
-/// the developer's loopback mirror, whose links the feed parser has already confined; so do this
-/// crate's tests, whose downloads come from a server on 127.0.0.1.
+/// converter (API, feed or `SHA256SUMS.txt`) built the asset, and so must the link of the
+/// release's `SHA256SUMS.txt` that the download is checked against. A `local-mirror` build also
+/// accepts the developer's loopback mirror, whose links the feed parser has already confined; so
+/// do this crate's tests, whose downloads come from a server on 127.0.0.1.
 pub(crate) fn check_download_link(app: &App, release: &Release, asset: &Asset) -> Result<(), String> {
-    let mirrored = (cfg!(feature = "local-mirror") || cfg!(test)) && crate::http::is_loopback(&asset.url);
-    if mirrored || release::expected_download_url(app.repo, &release.tag, &asset.name).as_deref() == Some(asset.url.as_str()) {
+    let own = |a: &Asset| {
+        ((cfg!(feature = "local-mirror") || cfg!(test)) && crate::http::is_loopback(&a.url))
+            || release::expected_download_url(app.repo, &release.tag, &a.name).as_deref() == Some(a.url.as_str())
+    };
+    if own(asset) && release.sums_asset().is_none_or(own) {
         return Ok(());
     }
     Err(format!("{}'s download link isn't the one its release publishes ({}), so it wasn't downloaded.", app.name, asset.name))
@@ -3009,6 +3013,15 @@ esac
         let err = install_at(app, &release, &other_repo, PackageKind::AppImage, None, None, &mut job, None).unwrap_err();
         assert!(err.contains("isn't the one its release publishes"), "{err}");
         assert!(check_download_link(app, &release, &good).is_ok());
+
+        // The checksums the download is verified against must come from the release too.
+        let mut foreign_sums = release.clone();
+        foreign_sums.assets.push(Asset {
+            name: "SHA256SUMS.txt".into(),
+            url: "https://github.com/storytold/vectorcraft/releases/download/v99.0.0/SHA256SUMS.txt".into(),
+            ..Asset::default()
+        });
+        assert!(check_download_link(app, &foreign_sums, &good).is_err());
     }
 
     #[cfg(target_os = "linux")]
