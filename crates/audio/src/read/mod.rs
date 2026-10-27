@@ -279,6 +279,17 @@ impl<'a> Decoder<'a> {
 
 /// Read a file's container, codec, sample rate, channel layout, length and BWF metadata, without
 /// decoding the audio where the headers say enough.
+///
+/// ```
+/// # #[cfg(feature = "encode")] {
+/// use craft_audio::{AudioBuffer, ChannelLayout, CodecId, Container, EncodeOptions, encode, probe};
+///
+/// let wav = encode(&AudioBuffer::new(48_000, 2, 4800), &EncodeOptions::default()).unwrap();
+/// let info = probe(&wav, Some("wav")).unwrap();
+/// assert_eq!((info.container, info.codec, info.layout), (Container::Wav, CodecId::Pcm, ChannelLayout::STEREO));
+/// assert_eq!((info.sample_rate, info.frames), (48_000, 4800));
+/// # }
+/// ```
 pub fn probe(bytes: &[u8], ext_hint: Option<&str>) -> Result<AudioInfo> {
     probe_with(bytes, ext_hint, &DecodeOptions::default())
 }
@@ -303,7 +314,19 @@ pub fn probe_with(bytes: &[u8], ext_hint: Option<&str>, opts: &DecodeOptions) ->
 }
 
 /// Decode the first audio track of a file to planar `f32`, trimmed to its presentation length, in
-/// WAV channel order when [`AudioInfo::layout`] is ordered.
+/// WAV channel order when [`AudioInfo::layout`] is ordered. Use [`Decoder`] to stream a long
+/// file instead, and [`decode_with`] for another track or size limit.
+///
+/// ```
+/// # #[cfg(feature = "encode")] {
+/// use craft_audio::{AudioBuffer, EncodeFormat, EncodeOptions, decode, encode};
+///
+/// let tone: Vec<f32> = (0..4800).map(|i| (i as f32 * 0.05).sin() * 0.5).collect();
+/// let flac = encode(&AudioBuffer { sample_rate: 48_000, channels: vec![tone] }, &EncodeOptions { format: EncodeFormat::Flac, ..Default::default() }).unwrap();
+/// let (info, buf) = decode(&flac, None).unwrap();
+/// assert_eq!((info.channels, buf.frames()), (1, 4800));
+/// # }
+/// ```
 pub fn decode(bytes: &[u8], ext_hint: Option<&str>) -> Result<(AudioInfo, AudioBuffer)> {
     decode_with(bytes, ext_hint, &DecodeOptions::default())
 }

@@ -772,6 +772,7 @@ name = "craft-audio"
 version = "0.1.0"
 dependencies = [
  "craft-media",
+ "craft-media-testkit",
  "log",
  "proptest",
  "rayon",

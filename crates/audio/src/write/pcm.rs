@@ -58,10 +58,10 @@ pub(crate) fn sample_format(depth: BitDepth) -> (u16, bool) {
 
 /// Interleaves `frames` frames of planar audio (missing samples are silence) as `bits`-bit
 /// samples and writes them to `out`, a few thousand frames at a time through `scratch`.
-pub(crate) fn write_interleaved(
+pub(crate) fn write_interleaved<C: AsRef<[f32]>>(
     out: &mut impl Write,
     scratch: &mut Vec<u8>,
-    block: &[Vec<f32>],
+    block: &[C],
     frames: usize,
     quantizers: &mut [Quantizer],
     (bits, is_float): (u16, bool),
@@ -74,7 +74,7 @@ pub(crate) fn write_interleaved(
         scratch.clear();
         for f in start..end {
             for (c, q) in quantizers.iter_mut().enumerate() {
-                let s = block.get(c).and_then(|ch| ch.get(f)).copied().unwrap_or(0.0);
+                let s = block.get(c).and_then(|ch| ch.as_ref().get(f)).copied().unwrap_or(0.0);
                 match (is_float, big_endian) {
                     (true, false) => scratch.extend_from_slice(&sanitize_float(s).to_le_bytes()),
                     (true, true) => scratch.extend_from_slice(&sanitize_float(s).to_be_bytes()),

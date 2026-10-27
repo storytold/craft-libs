@@ -4,6 +4,8 @@
 pub const SAMPLE_RATES: [u32; 13] = [96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050, 16000, 12000, 11025, 8000, 7350];
 
 /// Map an arbitrary sample rate to its `samplingFrequencyIndex`, if it is one of the standard rates.
+// Public for FilmCraft's re-export only.
+#[doc(hidden)]
 pub fn sample_rate_index(rate: u32) -> Option<u8> {
     SAMPLE_RATES.iter().position(|&r| r == rate).map(|i| i as u8)
 }

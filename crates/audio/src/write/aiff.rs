@@ -79,7 +79,7 @@ impl<W: Write + Seek> Writer<W> {
 
     /// Appends `frames` frames of planar audio (missing samples are silence), unless they don't
     /// fit (see [`Writer::check_room`]).
-    pub(crate) fn write(&mut self, block: &[Vec<f32>], frames: usize) -> Result<()> {
+    pub(crate) fn write<C: AsRef<[f32]>>(&mut self, block: &[C], frames: usize) -> Result<()> {
         if self.failed {
             return Err(super::failed_write_error());
         }

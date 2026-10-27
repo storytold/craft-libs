@@ -10,20 +10,7 @@ pub enum Mode {
     CeltOnly,
 }
 
-/// Audio bandwidth.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub enum Bandwidth {
-    /// 4 kHz.
-    Narrowband,
-    /// 6 kHz.
-    Mediumband,
-    /// 8 kHz.
-    Wideband,
-    /// 12 kHz.
-    SuperWideband,
-    /// 20 kHz.
-    Fullband,
-}
+pub use crate::opus::Bandwidth;
 
 impl Bandwidth {
     /// Number of CELT bands coded for this bandwidth.

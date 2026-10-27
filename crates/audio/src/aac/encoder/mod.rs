@@ -42,7 +42,8 @@ pub struct EncoderConfig {
     /// One of the 13 AAC sampling rates (8–96 kHz).
     pub sample_rate: u32,
     /// 1–8. Channel order is the AAC element order: C; L R; C L R; C L R Cs; C L R Ls Rs;
-    /// C L R Ls Rs LFE; (7) C L R Ls Rs Cs LFE; (8) C Lc Rc L R Ls Rs LFE.
+    /// C L R Ls Rs LFE; (7) C L R Ls Rs Cs LFE; (8) C Lc Rc L R Ls Rs LFE. Audio in WAV order is
+    /// reordered with [`crate::aac::aac_order`].
     pub channels: usize,
     pub mode: BitrateMode,
     /// Audio bandwidth in Hz (`None` = chosen from the bitrate / quality).

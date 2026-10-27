@@ -8,7 +8,17 @@ mod wav;
 use crate::{AudioBuffer, AudioError, ChannelLayout, EncodeFormat, EncodeOptions, Result};
 use std::io::{Seek, Write};
 
-/// Encode `buf` as WAV/BWF, AIFF/AIFF-C or FLAC. Samples are clamped to [-1, 1].
+/// Encode `buf` as WAV/BWF, AIFF/AIFF-C or FLAC. Integer depths clamp samples to [-1, 1]; float
+/// keeps values above full scale.
+///
+/// ```
+/// use craft_audio::{AudioBuffer, BitDepth, EncodeFormat, EncodeOptions, encode};
+///
+/// let buf = AudioBuffer::new(48_000, 2, 48_000); // one second of stereo silence
+/// let opts = EncodeOptions { format: EncodeFormat::Wav, bit_depth: BitDepth::Int24, dither: true, bwf: None };
+/// let wav: Vec<u8> = encode(&buf, &opts).unwrap();
+/// assert_eq!(&wav[..4], b"RIFF");
+/// ```
 pub fn encode(buf: &AudioBuffer, opts: &EncodeOptions) -> Result<Vec<u8>> {
     match opts.format {
         EncodeFormat::Wav => wav::encode(buf, opts.bit_depth, opts.dither, opts.bwf.as_ref(), false, None),
@@ -64,7 +74,22 @@ fn failed_write_error() -> AudioError {
 }
 
 /// Writes WAV/BWF (RF64 above 4 GiB), AIFF / AIFF-C `fl32` or FLAC block by block, producing
-/// the same bytes [`encode_with_layout`] would for the whole buffer.
+/// the same bytes [`encode_with_layout`] would for the whole buffer: a file of any length never
+/// has to fit in memory.
+///
+/// ```
+/// use craft_audio::{EncodeFormat, EncodeOptions, FileEncoder};
+/// use std::io::Cursor;
+///
+/// let opts = EncodeOptions { format: EncodeFormat::Flac, ..Default::default() };
+/// let mut enc = FileEncoder::new(Cursor::new(Vec::new()), &opts, 2, 48_000, None).unwrap();
+/// let block = [vec![0.25f32; 4096], vec![-0.25f32; 4096]]; // one Vec (or slice) per channel
+/// for _ in 0..10 {
+///     enc.write(&block, 4096).unwrap();
+/// }
+/// let flac = enc.finish().unwrap().into_inner();
+/// assert_eq!(&flac[..4], b"fLaC");
+/// ```
 pub struct FileEncoder<W: Write + Seek>(Writer<W>);
 
 enum Writer<W> {
@@ -105,11 +130,12 @@ impl<W: Write + Seek> FileEncoder<W> {
         .map(drop)
     }
 
-    /// Appends the first `frames` frames of `block`, one `Vec` per channel (missing samples are
-    /// silence), unless they don't fit (see [`FileEncoder::check_room`]). Once a write has
-    /// failed, the encoder is unusable: the sink may hold a prefix of the failed block, so
-    /// every later `write` and `finish` fails instead of completing an inconsistent file.
-    pub fn write(&mut self, block: &[Vec<f32>], frames: usize) -> Result<()> {
+    /// Appends the first `frames` frames of `block`, one slice per channel (`&[Vec<f32>]`,
+    /// `&[&[f32]]`, …; missing samples are silence), unless they don't fit (see
+    /// [`FileEncoder::check_room`]). Once a write has failed, the encoder is unusable: the sink
+    /// may hold a prefix of the failed block, so every later `write` and `finish` fails instead of
+    /// completing an inconsistent file.
+    pub fn write<C: AsRef<[f32]>>(&mut self, block: &[C], frames: usize) -> Result<()> {
         match &mut self.0 {
             Writer::Wav(w) => w.write(block, frames),
             Writer::Aiff(w) => w.write(block, frames),

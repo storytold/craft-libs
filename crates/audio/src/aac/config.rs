@@ -41,6 +41,8 @@ pub struct ProgramConfig {
 }
 
 impl ProgramConfig {
+    // Public for FilmCraft's re-export only; it takes craft-media's bit reader.
+    #[doc(hidden)]
     pub fn parse(br: &mut BitReader) -> Result<ProgramConfig> {
         let mut p = ProgramConfig {
             element_instance_tag: br.read_bits(4)? as u8,
@@ -138,6 +140,8 @@ impl ProgramConfig {
 
 /// Element layout of `channelConfiguration` 1..=7, 11 and 12 (tags as conventionally assigned; 11 and
 /// 12 from ISO/IEC 14496-3 Amd 4: 6.1 with a back centre, 7.1 with back surrounds).
+// Public for FilmCraft's re-export only.
+#[doc(hidden)]
 pub fn config_layout(channel_config: u8) -> Option<Vec<(ElementType, u8)>> {
     use ElementType::*;
     Some(match channel_config {

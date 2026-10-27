@@ -102,6 +102,28 @@ pub fn wav_order(channel_config: u8) -> Option<&'static [usize]> {
     })
 }
 
+/// The order the [`Encoder`] takes its input in, from WAV order: for each encoder input channel
+/// (AAC element order, see [`EncoderConfig::channels`]), the WAV-order channel to feed it. The
+/// inverse of [`wav_order`] for 3 to 7 channels; `None` for mono and stereo (already in order) and
+/// for 8 channels, whose AAC layout (configuration 7) has no WAV equivalent.
+///
+/// ```
+/// let wav: Vec<Vec<f32>> = vec![vec![0.0; 1024]; 6]; // L R C LFE Ls Rs
+/// let order = craft_audio::aac::aac_order(6).unwrap();
+/// let input: Vec<&[f32]> = order.iter().map(|&c| wav[c].as_slice()).collect(); // C L R Ls Rs LFE
+/// assert_eq!(order, &[2, 0, 1, 4, 5, 3]);
+/// ```
+pub fn aac_order(channels: usize) -> Option<&'static [usize]> {
+    Some(match channels {
+        3 => &[2, 0, 1],
+        4 => &[2, 0, 1, 3],
+        5 => &[2, 0, 1, 3, 4],
+        6 => &[2, 0, 1, 4, 5, 3],
+        7 => &[2, 0, 1, 5, 6, 4, 3],
+        _ => return None,
+    })
+}
+
 /// The output rate of an AAC stream: twice the core rate for HE-AAC (ISO/IEC 14496-3 §1.6.5).
 /// Explicit signalling names the rate in the `AudioSpecificConfig`; with implicit signalling (an
 /// AAC-LC config at 24 kHz or less) SBR is only visible as fill-element data in the access units,
@@ -192,5 +214,24 @@ impl Upsample2x {
                 out
             })
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod order_tests {
+    use super::*;
+
+    /// `aac_order` undoes `wav_order` for each channel count the encoder maps to a configuration
+    /// (3–6 channels: configurations 3–6; 7: configuration 11).
+    #[test]
+    fn aac_order_inverts_wav_order() {
+        for (channels, config) in [(3, 3), (4, 4), (5, 5), (6, 6), (7, 11)] {
+            let (to_wav, to_aac) = (wav_order(config).unwrap(), aac_order(channels).unwrap());
+            for (wav_channel, &aac_channel) in to_wav.iter().enumerate() {
+                assert_eq!(to_aac[aac_channel], wav_channel, "{channels} channels");
+            }
+        }
+        assert_eq!(aac_order(2), None);
+        assert_eq!(aac_order(8), None);
     }
 }

@@ -16,7 +16,8 @@ fn streamed(buf: &AudioBuffer, opts: &EncodeOptions, layout: Option<ChannelLayou
             break;
         }
         let len = len.min(buf.frames() - start);
-        let block: Vec<Vec<f32>> = buf.channels.iter().map(|c| c[start..start + len].to_vec()).collect();
+        // Borrowed slices, as a caller with its own buffers passes them.
+        let block: Vec<&[f32]> = buf.channels.iter().map(|c| &c[start..start + len]).collect();
         enc.write(&block, len).unwrap();
         start += len;
     }
@@ -105,7 +106,7 @@ fn blocks_past_a_format_limit_are_refused_before_anything_is_written() {
         assert!(enc.check_room(limit / 2).is_ok(), "{format:?}");
         assert!(matches!(enc.check_room(limit), Err(AudioError::TooLarge(_))), "{format:?}");
         if let Ok(frames) = usize::try_from(limit) {
-            assert!(matches!(enc.write(&[], frames), Err(AudioError::TooLarge(_))), "{format:?}");
+            assert!(matches!(enc.write::<Vec<f32>>(&[], frames), Err(AudioError::TooLarge(_))), "{format:?}");
         }
         assert_eq!(enc.finish().unwrap().into_inner(), encode(&buf, &opts).unwrap());
     }

@@ -3,8 +3,7 @@
 // Index loops follow the specifications, as in FilmCraft (which allows this lint workspace-wide).
 #![allow(clippy::needless_range_loop)]
 
-#[path = "../common/mod.rs"]
-mod common;
+use craft_media_testkit as common;
 #[macro_use]
 mod testkit;
 

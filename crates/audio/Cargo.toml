@@ -45,6 +45,7 @@ rayon = { workspace = true, optional = true }
 symphonia = { version = "0.6.1", optional = true, default-features = false, features = ["mp3", "flac", "vorbis", "ogg", "wav", "pcm", "aiff", "isomp4", "aac", "alac", "adpcm", "caf", "mkv"] }
 
 [dev-dependencies]
+craft-media-testkit = { workspace = true }
 proptest = { workspace = true }
 serde_json = { workspace = true }
 
@@ -55,3 +56,19 @@ required-features = ["decode", "encode", "peaks"]
 [[test]]
 name = "codecs"
 required-features = ["decode", "encode", "aac-encode", "opus-encode"]
+
+[[example]]
+name = "info"
+required-features = ["decode"]
+
+[[example]]
+name = "stream"
+required-features = ["decode"]
+
+[[example]]
+name = "packets"
+required-features = ["decode"]
+
+[[example]]
+name = "encode"
+required-features = ["encode", "aac-encode"]

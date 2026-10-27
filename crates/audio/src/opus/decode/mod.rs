@@ -14,7 +14,7 @@ pub(crate) mod silk;
 pub use decoder::{SAMPLE_RATES, StreamDecoder};
 pub use header::OpusHead;
 pub use multistream::Decoder;
-pub use packet::{Bandwidth, Mode, Packet, Toc};
+pub use packet::{Mode, Packet, Toc};
 
 /// Errors from header parsing and decoding.
 #[non_exhaustive]

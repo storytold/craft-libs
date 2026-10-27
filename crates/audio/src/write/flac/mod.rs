@@ -8,8 +8,7 @@ mod md5;
 mod predict;
 
 #[cfg(test)]
-#[path = "../../../tests/common/mod.rs"]
-mod common;
+use craft_media_testkit as common;
 #[cfg(test)]
 mod oracle_tests;
 
@@ -84,13 +83,13 @@ impl<W: Write + Seek> Writer<W> {
 
     /// Appends `frames` frames of planar audio (missing samples are silence), unless they don't
     /// fit (see [`Writer::check_room`]).
-    pub(crate) fn write(&mut self, block: &[Vec<f32>], frames: usize) -> Result<()> {
+    pub(crate) fn write<C: AsRef<[f32]>>(&mut self, block: &[C], frames: usize) -> Result<()> {
         if self.failed {
             return Err(super::failed_write_error());
         }
         let total = self.check_room(frames as u64)?;
         for (c, (p, q)) in self.planar.iter_mut().zip(self.quantizers.iter_mut()).enumerate() {
-            let src = block.get(c).map(Vec::as_slice).unwrap_or_default();
+            let src = block.get(c).map(AsRef::as_ref).unwrap_or_default();
             p.clear();
             p.extend((0..frames).map(|i| q.quantize(src.get(i).copied().unwrap_or(0.0))));
         }

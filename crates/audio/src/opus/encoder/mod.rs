@@ -101,20 +101,7 @@ pub enum Mode {
     Hybrid,
 }
 
-/// Coded audio bandwidth (RFC 6716 §2, Table 1).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum Bandwidth {
-    /// 4 kHz (8 kHz sampling).
-    Narrowband,
-    /// 6 kHz (12 kHz sampling).
-    Mediumband,
-    /// 8 kHz (16 kHz sampling).
-    Wideband,
-    /// 12 kHz (24 kHz sampling).
-    SuperWideband,
-    /// 20 kHz (48 kHz sampling).
-    Fullband,
-}
+pub use crate::opus::Bandwidth;
 
 /// Mode and bandwidth for a per-channel bitrate (bits per second per channel).
 fn choose_mode(app: Application, per_channel: u32) -> (Mode, Bandwidth) {
