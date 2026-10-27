@@ -1,4 +1,4 @@
-use craft_audio::{AudioBuffer, AudioError, BitDepth, BwfInfo, ChannelLayout, EncodeFormat, EncodeOptions, FileEncoder, encode, encode_with_layout};
+use craft_audio::{AudioBuffer, AudioError, BitDepth, BwfInfo, ChannelLayout, EncodeFormat, EncodeOptions, FileEncoder, encode};
 use std::io::{Cursor, Seek, SeekFrom, Write};
 
 fn tone(channels: usize, frames: usize) -> AudioBuffer {
@@ -6,10 +6,10 @@ fn tone(channels: usize, frames: usize) -> AudioBuffer {
     AudioBuffer { sample_rate: 44_100, channels }
 }
 
-fn streamed(buf: &AudioBuffer, opts: &EncodeOptions, layout: Option<ChannelLayout>) -> Vec<u8> {
+fn streamed(buf: &AudioBuffer, opts: &EncodeOptions) -> Vec<u8> {
     let mut out = Cursor::new(b"pre".to_vec());
     out.set_position(3);
-    let mut enc = FileEncoder::new(out, opts, buf.channels.len(), buf.sample_rate, layout).unwrap();
+    let mut enc = FileEncoder::new(out, opts, buf.channels.len() as u16, buf.sample_rate).unwrap();
     let mut start = 0;
     for len in [1, 7, 4095, 4097, 333].into_iter().cycle() {
         if start >= buf.frames() {
@@ -26,7 +26,7 @@ fn streamed(buf: &AudioBuffer, opts: &EncodeOptions, layout: Option<ChannelLayou
 
 #[test]
 fn streamed_files_match_whole_buffer_encodes() {
-    let bwf = BwfInfo { description: "take".into(), time_reference: 123_456, ..Default::default() };
+    let bwf = BwfInfo::default().with_description("take").with_time_reference(123_456);
     let cases = [
         (EncodeFormat::Wav, BitDepth::Int24, true, None, None),
         (EncodeFormat::Wav, BitDepth::Float32, false, None, None),
@@ -37,17 +37,20 @@ fn streamed_files_match_whole_buffer_encodes() {
         (EncodeFormat::Flac, BitDepth::Int24, false, None, None),
     ];
     for (format, bit_depth, dither, bwf, layout) in cases {
-        let opts = EncodeOptions { format, bit_depth, dither, bwf };
+        let base = EncodeOptions::new(format).with_bit_depth(bit_depth).with_dither(dither);
+        let base = match bwf {
+            Some(b) => base.with_bwf(b),
+            None => base,
+        };
         for channels in [1, 6] {
             let buf = tone(channels, 20_001);
             // A layout applies to the buffer with as many channels.
-            let layout = layout.filter(|l| l.channels() == channels);
-            let whole = match layout {
-                Some(l) => encode_with_layout(&buf, &opts, l),
-                None => encode(&buf, &opts),
-            }
-            .unwrap();
-            assert_eq!(streamed(&buf, &opts, layout), [b"pre".as_slice(), &whole].concat(), "{opts:?}, {channels} channels");
+            let opts = match layout.filter(|l: &ChannelLayout| l.channels() == channels) {
+                Some(l) => base.clone().with_layout(l),
+                None => base.clone(),
+            };
+            let whole = encode(&buf, &opts).unwrap();
+            assert_eq!(streamed(&buf, &opts), [b"pre".as_slice(), &whole].concat(), "{opts:?}, {channels} channels");
         }
     }
 }
@@ -84,9 +87,9 @@ impl Seek for FailAfter {
 fn a_failed_write_poisons_the_encoder() {
     let buf = tone(2, 20_001);
     for format in [EncodeFormat::Wav, EncodeFormat::Aiff, EncodeFormat::Flac] {
-        let opts = EncodeOptions { format, bit_depth: BitDepth::Int16, dither: false, bwf: None };
+        let opts = EncodeOptions::new(format).with_bit_depth(BitDepth::Int16).with_dither(false);
         let sink = FailAfter { inner: Cursor::new(Vec::new()), budget: 256 };
-        let mut enc = FileEncoder::new(sink, &opts, 2, buf.sample_rate, None).unwrap();
+        let mut enc = FileEncoder::new(sink, &opts, 2, buf.sample_rate).unwrap();
         // The sink accepts a prefix of the first block, then fails.
         assert!(enc.write(&buf.channels, buf.frames()).is_err(), "{format:?}");
         // Later calls must not claim success: the bytes on the sink no longer match the
@@ -100,8 +103,8 @@ fn a_failed_write_poisons_the_encoder() {
 fn blocks_past_a_format_limit_are_refused_before_anything_is_written() {
     let buf = tone(2, 100);
     for (format, limit) in [(EncodeFormat::Aiff, 1u64 << 30), (EncodeFormat::Flac, 1u64 << 36)] {
-        let opts = EncodeOptions { format, bit_depth: BitDepth::Int16, dither: false, bwf: None };
-        let mut enc = FileEncoder::new(Cursor::new(Vec::new()), &opts, 2, buf.sample_rate, None).unwrap();
+        let opts = EncodeOptions::new(format).with_bit_depth(BitDepth::Int16).with_dither(false);
+        let mut enc = FileEncoder::new(Cursor::new(Vec::new()), &opts, 2, buf.sample_rate).unwrap();
         enc.write(&buf.channels, 100).unwrap();
         assert!(enc.check_room(limit / 2).is_ok(), "{format:?}");
         assert!(matches!(enc.check_room(limit), Err(AudioError::TooLarge(_))), "{format:?}");
@@ -110,4 +113,49 @@ fn blocks_past_a_format_limit_are_refused_before_anything_is_written() {
         }
         assert_eq!(enc.finish().unwrap().into_inner(), encode(&buf, &opts).unwrap());
     }
+}
+
+// A source that stops serving reads past `fail_from`, as a network-backed file might.
+struct FlakySource {
+    bytes: Vec<u8>,
+    fail_from: u64,
+}
+
+use craft_media::ByteSource;
+
+impl ByteSource for FlakySource {
+    fn len(&self) -> u64 {
+        self.bytes.len() as u64
+    }
+    fn read_at(&self, offset: u64, buf: &mut [u8]) -> std::io::Result<()> {
+        if offset + buf.len() as u64 > self.fail_from {
+            return Err(std::io::Error::other("connection reset"));
+        }
+        self.bytes.as_slice().read_at(offset, buf)
+    }
+}
+
+#[test]
+fn decoder_reads_any_read_seek_source_and_reports_source_failures() {
+    use craft_audio::{DecodeOptions, Decoder};
+    use craft_media::ReadSeekSource;
+    let wav = encode(&tone(2, 48_000), &EncodeOptions::new(EncodeFormat::Wav)).unwrap();
+
+    // `ReadSeekSource` (any `Read + Seek`) is accepted, so a `BufReader<File>` works the same way.
+    let source = ReadSeekSource::new(Cursor::new(wav.clone())).unwrap();
+    let info = Decoder::open(source, Some("wav"), &DecodeOptions::default()).unwrap().probe().unwrap();
+    assert_eq!((info.frames, info.damaged), (48_000, 0));
+
+    // A source failing half way through gives an I/O error, not concealed silence.
+    let half = wav.len() as u64 / 2;
+    let mut dec = Decoder::open(FlakySource { bytes: wav, fail_from: half }, Some("wav"), &DecodeOptions::default()).unwrap();
+    let err = loop {
+        match dec.next_block() {
+            Ok(Some(_)) => continue,
+            Ok(None) => panic!("the source failure was not reported"),
+            Err(e) => break e,
+        }
+    };
+    assert!(matches!(err, AudioError::Io(_)), "{err}");
+    assert_eq!(dec.info().damaged, 0);
 }

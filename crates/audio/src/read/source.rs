@@ -1,6 +1,5 @@
 //! What the decoders read from: borrowed bytes or a shared [`ByteSource`], with small typed reads.
 
-#[cfg(feature = "symphonia")]
 use crate::{AudioError, Result};
 use craft_media::ByteSource;
 #[cfg(feature = "symphonia")]
@@ -49,6 +48,21 @@ impl Src<'_> {
         Some(v)
     }
 
+    /// `n` bytes at `pos` for decoding: missing bytes are [`AudioError::Malformed`], any other
+    /// failure of the source is [`AudioError::Io`].
+    pub(crate) fn read(&self, pos: u64, n: usize) -> Result<Vec<u8>> {
+        let mut v = vec![0; n];
+        self.read_at(pos, &mut v).map_err(io_error)?;
+        Ok(v)
+    }
+
+    /// Up to `n` bytes at `pos` for decoding, fewer near the end of the source; errors as
+    /// [`Src::read`].
+    pub(crate) fn read_upto(&self, pos: u64, n: usize) -> Result<Vec<u8>> {
+        let n = n.min(usize::try_from(self.size().saturating_sub(pos)).unwrap_or(usize::MAX));
+        self.read(pos, n)
+    }
+
     /// Up to `n` bytes at `pos`: fewer near the end of the source.
     pub(crate) fn bytes_upto(&self, pos: u64, n: usize) -> Vec<u8> {
         let n = n.min(usize::try_from(self.size().saturating_sub(pos)).unwrap_or(usize::MAX));
@@ -88,9 +102,15 @@ impl Src<'_> {
                 let mut v = Vec::new();
                 v.try_reserve_exact(n).map_err(|_| AudioError::TooLarge("the source does not fit in memory".into()))?;
                 v.resize(n, 0);
-                s.read_at(0, &mut v)?;
+                s.read_at(0, &mut v).map_err(io_error)?;
                 Ok(Cow::Owned(v))
             }
         }
     }
+}
+
+/// A read failure as an [`AudioError`]: bytes past the end are a truncated or lying file
+/// ([`AudioError::Malformed`]); anything else is the source failing ([`AudioError::Io`]).
+pub(crate) fn io_error(e: io::Error) -> AudioError {
+    if e.kind() == io::ErrorKind::UnexpectedEof { AudioError::Malformed(e.to_string()) } else { AudioError::Io(e) }
 }

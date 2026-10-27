@@ -3,6 +3,7 @@
 use crate::opus::decode::{Error, Result};
 
 /// Decoder configuration: channel layout, multistream mapping, pre-skip and output gain.
+#[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OpusHead {
     /// Output channel count (1..=255).

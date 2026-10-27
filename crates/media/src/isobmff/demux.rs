@@ -149,10 +149,16 @@ impl Track {
     }
 
     /// What a decoder needs for this track, in the container-neutral form the codec crates take;
-    /// `None` without a sample entry.
-    pub fn codec_params(&self) -> Option<crate::CodecParams> {
-        let codec = self.codec()?;
-        let mut p = crate::CodecParams::new(codec.codec_id()).with_extradata(codec.extradata());
+    /// [`crate::CodecId::Unknown`] without a sample entry.
+    pub fn codec_params(&self) -> crate::CodecParams {
+        let Some(entry) = self.entries.first() else {
+            return crate::CodecParams::new(crate::CodecId::Unknown);
+        };
+        let codec = &entry.codec;
+        let mut p = crate::CodecParams::new(codec.codec_id()).with_extradata(codec.extradata()).with_tag(entry.format.0);
+        if let Some(v) = &entry.video {
+            p = p.with_size(u32::from(v.width), u32::from(v.height));
+        }
         if let Some(a) = self.audio() {
             p = p.with_sample_rate(a.sample_rate.round() as u32).with_channels(u16::try_from(a.channels).unwrap_or(0));
         }
@@ -164,7 +170,7 @@ impl Track {
             CodecConfig::Opus(o) => p = p.with_sample_rate(48_000).with_channels(u16::from(o.output_channels)),
             _ => {}
         }
-        Some(p)
+        p
     }
     pub fn video(&self) -> Option<&crate::isobmff::codec::VideoParams> {
         self.entries.first().and_then(|e| e.video.as_ref())

@@ -15,13 +15,13 @@
 //!
 //! ```
 //! # #[cfg(feature = "opus-encode")] {
-//! use craft_audio::opus::encoder::{Application, Mode, OpusEncoder};
-//! let mut enc = OpusEncoder::new(2, 128_000).unwrap();
-//! let pcm = vec![0.0f32; OpusEncoder::FRAME_SIZE * 2];
+//! use craft_audio::opus::encoder::{Application, Mode, Encoder};
+//! let mut enc = Encoder::new(2, 128_000).unwrap();
+//! let pcm = vec![0.0f32; Encoder::FRAME_SIZE * 2];
 //! let packet = enc.encode_float(&pcm).unwrap();
 //! assert_eq!(packet[0] >> 3, 31); // CELT-only, fullband, 20 ms
 //! assert_eq!(enc.opus_head().len(), 19);
-//! let voip = OpusEncoder::with_application(1, 16_000, Application::Voip).unwrap();
+//! let voip = Encoder::with_application(1, 16_000, Application::Voip).unwrap();
 //! assert_eq!(voip.mode(), Mode::Silk);
 //! # }
 //! ```
@@ -137,8 +137,12 @@ struct SilkPath {
     reservoir: f64,
 }
 
+/// The name EffectCraft's `effectcraft-opusenc` used, kept so it can re-export this module.
+#[doc(hidden)]
+pub type OpusEncoder = Encoder;
+
 /// Opus encoder for one mono or stereo stream at 48 kHz.
-pub struct OpusEncoder {
+pub struct Encoder {
     channels: usize,
     application: Application,
     mode: Mode,
@@ -160,7 +164,7 @@ pub struct OpusEncoder {
     silk: Option<SilkPath>,
 }
 
-impl OpusEncoder {
+impl Encoder {
     /// Samples per channel per packet (20 ms at 48 kHz).
     pub const FRAME_SIZE: usize = N;
 
@@ -229,7 +233,7 @@ impl OpusEncoder {
                 })
             }
         };
-        Ok(OpusEncoder {
+        Ok(Encoder {
             channels: c,
             application,
             mode,
@@ -546,7 +550,7 @@ mod tests {
 
     #[test]
     fn opus_head_layout() {
-        let e = OpusEncoder::new(2, 96_000).unwrap();
+        let e = Encoder::new(2, 96_000).unwrap();
         let h = e.opus_head();
         assert_eq!(&h[..8], b"OpusHead");
         assert_eq!(h[8], 1);
@@ -559,7 +563,7 @@ mod tests {
     #[test]
     fn packet_sizes_follow_bitrate() {
         for (ch, rate) in [(1u8, 64_000u32), (2, 128_000), (2, 256_000)] {
-            let mut e = OpusEncoder::new(ch, rate).unwrap();
+            let mut e = Encoder::new(ch, rate).unwrap();
             let pcm: Vec<f32> = (0..N * ch as usize).map(|i| (i as f32 * 0.05).sin() * 0.5).collect();
             let p = e.encode_float(&pcm).unwrap();
             assert_eq!(p.len(), rate as usize / 400);
@@ -570,14 +574,14 @@ mod tests {
 
     #[test]
     fn silence_is_a_tiny_packet() {
-        let mut e = OpusEncoder::new(1, 64_000).unwrap();
+        let mut e = Encoder::new(1, 64_000).unwrap();
         let p = e.encode_float(&vec![0.0; N]).unwrap();
         assert_eq!(p.len(), 3);
     }
 
     #[test]
     fn wrong_frame_length_is_an_error() {
-        let mut e = OpusEncoder::new(2, 128_000).unwrap();
+        let mut e = Encoder::new(2, 128_000).unwrap();
         assert_eq!(e.encode_float(&vec![0.0; N]), Err(Error::FrameLength { expected: 2 * N, got: N }));
         assert_eq!(e.encode_float(&[]), Err(Error::FrameLength { expected: 2 * N, got: 0 }));
         assert!(e.encode_float(&vec![0.0; 2 * N]).is_ok());

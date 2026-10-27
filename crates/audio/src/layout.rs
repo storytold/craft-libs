@@ -108,11 +108,40 @@ const KNOWN_BITS: u32 = (1 << 18) - 1;
 
 /// How the channels of a buffer map to speakers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize), serde(try_from = "RawLayout", into = "RawLayout"))]
 pub struct ChannelLayout {
     channels: u16,
     /// 0 when unordered; otherwise exactly `channels` bits.
     mask: u32,
+}
+
+/// The serialized form of a [`ChannelLayout`], checked on the way in.
+#[cfg(feature = "serde")]
+#[derive(serde::Serialize, serde::Deserialize)]
+struct RawLayout {
+    channels: u16,
+    mask: u32,
+}
+
+#[cfg(feature = "serde")]
+impl From<ChannelLayout> for RawLayout {
+    fn from(l: ChannelLayout) -> Self {
+        RawLayout { channels: l.channels, mask: l.mask }
+    }
+}
+
+#[cfg(feature = "serde")]
+impl TryFrom<RawLayout> for ChannelLayout {
+    type Error = String;
+
+    fn try_from(r: RawLayout) -> Result<Self, String> {
+        let ordered = r.mask & !KNOWN_BITS == 0 && r.mask.count_ones() == u32::from(r.channels);
+        if r.mask == 0 || ordered {
+            Ok(ChannelLayout { channels: r.channels, mask: r.mask })
+        } else {
+            Err(format!("speaker mask {:#x} does not describe {} channels", r.mask, r.channels))
+        }
+    }
 }
 
 impl ChannelLayout {

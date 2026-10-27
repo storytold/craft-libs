@@ -1,6 +1,6 @@
 use craft_audio::{
-    AudioBuffer, BitDepth, BwfInfo, ChannelLayout, EncodeFormat, EncodeOptions, SampleFormat, decode, detect_container, encode, encode_wav_rf64,
-    probe, wav_float_header,
+    AudioBuffer, BitDepth, BwfInfo, ChannelLayout, EncodeFormat, EncodeOptions, SampleFormat, decode, detect_container, encode, probe,
+    wav_float_header,
 };
 
 fn sine(sr: u32, channels: usize, frames: usize) -> AudioBuffer {
@@ -50,7 +50,7 @@ fn wav_and_aiff_roundtrip_all_depths_and_layouts() {
             for channels in [1, 2, 6] {
                 for dither in [false, true] {
                     let src = sine(48_000, channels, 4801);
-                    let opts = EncodeOptions { format, bit_depth: depth, dither, bwf: None };
+                    let opts = EncodeOptions::new(format).with_bit_depth(depth).with_dither(dither);
                     let bytes = encode(&src, &opts).unwrap();
                     assert_eq!(detect_container(&bytes, None), Some(format.container()));
                     let info = probe(&bytes, None).unwrap();
@@ -76,8 +76,8 @@ fn flac_roundtrip_is_lossless_vs_wav() {
         for channels in [1, 2, 6] {
             // Spans several blocks plus a short final block.
             let src = sine(44_100, channels, 4096 * 2 + 17);
-            let wav = encode(&src, &EncodeOptions { format: EncodeFormat::Wav, bit_depth: depth, dither: false, bwf: None }).unwrap();
-            let flac = encode(&src, &EncodeOptions { format: EncodeFormat::Flac, bit_depth: depth, dither: false, bwf: None }).unwrap();
+            let wav = encode(&src, &EncodeOptions::new(EncodeFormat::Wav).with_bit_depth(depth).with_dither(false)).unwrap();
+            let flac = encode(&src, &EncodeOptions::new(EncodeFormat::Flac).with_bit_depth(depth).with_dither(false)).unwrap();
             assert_eq!(detect_container(&flac, None), Some(craft_audio::Container::Flac));
             let info = probe(&flac, None).unwrap();
             assert_eq!((info.container, info.codec), (craft_audio::Container::Flac, craft_audio::CodecId::Flac));
@@ -106,11 +106,11 @@ fn flac_handles_silence_noise_full_scale_and_odd_rates() {
     }
     for depth in [BitDepth::Int16, BitDepth::Int24, BitDepth::Int32] {
         for dither in [false, true] {
-            let opts = EncodeOptions { format: EncodeFormat::Flac, bit_depth: depth, dither, bwf: None };
+            let opts = EncodeOptions::new(EncodeFormat::Flac).with_bit_depth(depth).with_dither(dither);
             let flac = encode(&b, &opts).unwrap();
             let (info, out) = decode(&flac, None).unwrap();
             assert_eq!(info.sample_rate, 37_123);
-            let wav = encode(&b, &EncodeOptions { format: EncodeFormat::Wav, ..opts }).unwrap();
+            let wav = encode(&b, &opts.clone().with_format(EncodeFormat::Wav)).unwrap();
             let (_, expect) = decode(&wav, None).unwrap();
             assert_eq!(out, expect, "{depth:?} dither={dither}");
         }
@@ -119,9 +119,9 @@ fn flac_handles_silence_noise_full_scale_and_odd_rates() {
 
 #[test]
 fn flac_rejects_unsupported_layouts() {
-    let opts = EncodeOptions { format: EncodeFormat::Flac, bit_depth: BitDepth::Float32, dither: false, bwf: None };
+    let opts = EncodeOptions::new(EncodeFormat::Flac).with_bit_depth(BitDepth::Float32).with_dither(false);
     assert!(encode(&sine(48_000, 2, 10), &opts).is_err());
-    let opts = EncodeOptions { bit_depth: BitDepth::Int16, ..opts };
+    let opts = opts.clone().with_bit_depth(BitDepth::Int16);
     assert!(encode(&sine(48_000, 9, 10), &opts).is_err());
     assert!(encode(&sine(700_000, 1, 10), &opts).is_err());
     // Tiny buffers still encode and decode.
@@ -132,24 +132,25 @@ fn flac_rejects_unsupported_layouts() {
 
 #[test]
 fn bwf_roundtrip() {
-    let bwf = BwfInfo {
-        description: "Scene 12 take 3".into(),
-        originator: "SoundCraft".into(),
-        originator_reference: "SC-0001".into(),
-        origination_date: "2026-10-06".into(),
-        origination_time: "12:34:56".into(),
-        time_reference: 0x1_2345_6789, // > 32 bits
-    };
+    let bwf = BwfInfo::default()
+        .with_description("Scene 12 take 3")
+        .with_originator("SoundCraft")
+        .with_originator_reference("SC-0001")
+        .with_origination("2026-10-06", "12:34:56")
+        .with_time_reference(0x1_2345_6789); // > 32 bits
     let src = sine(96_000, 2, 1000);
+    // RF64 is a WAV layout: other formats ignore it.
+    let flac = encode(&src, &EncodeOptions::new(EncodeFormat::Flac).with_force_rf64(true)).unwrap();
+    assert_eq!(&flac[..4], b"fLaC");
     for depth in DEPTHS {
-        let opts = EncodeOptions { format: EncodeFormat::Wav, bit_depth: depth, dither: false, bwf: Some(bwf.clone()) };
+        let opts = EncodeOptions::new(EncodeFormat::Wav).with_bit_depth(depth).with_dither(false).with_bwf(bwf.clone());
         let bytes = encode(&src, &opts).unwrap();
         let info = probe(&bytes, None).unwrap();
         assert_eq!(info.bwf.as_ref(), Some(&bwf));
         let (dinfo, _) = decode(&bytes, None).unwrap();
         assert_eq!(dinfo.bwf, Some(bwf.clone()));
         // RF64 layout reads back identically.
-        let rf64 = encode_wav_rf64(&src, &opts).unwrap();
+        let rf64 = encode(&src, &opts.clone().with_force_rf64(true)).unwrap();
         assert_eq!(&rf64[..4], b"RF64");
         let (rinfo, rbuf) = decode(&rf64, None).unwrap();
         assert_eq!(rinfo.bwf, Some(bwf.clone()));
@@ -157,14 +158,14 @@ fn bwf_roundtrip() {
         assert_eq!(rbuf, decode(&bytes, None).unwrap().1);
     }
     // Overlong strings are truncated to the field width, not an error.
-    let long = BwfInfo { description: "x".repeat(400), ..BwfInfo::default() };
-    let bytes = encode(&src, &EncodeOptions { bwf: Some(long), ..EncodeOptions::default() }).unwrap();
+    let long = BwfInfo::default().with_description("x".repeat(400));
+    let bytes = encode(&src, &EncodeOptions::default().with_bwf(long)).unwrap();
     assert_eq!(probe(&bytes, None).unwrap().bwf.unwrap().description.len(), 256);
 }
 
 #[test]
 fn wav_header_layout() {
-    let b = encode(&sine(44_100, 2, 10), &EncodeOptions { bit_depth: BitDepth::Int16, ..EncodeOptions::default() }).unwrap();
+    let b = encode(&sine(44_100, 2, 10), &EncodeOptions::default().with_bit_depth(BitDepth::Int16)).unwrap();
     // Plain PCM for 16-bit stereo; extensible otherwise.
     let fmt = b.windows(4).position(|w| w == b"fmt ").unwrap();
     assert_eq!(u16::from_le_bytes([b[fmt + 8], b[fmt + 9]]), 1);
@@ -181,11 +182,10 @@ fn wav_header_layout() {
 
 #[test]
 fn aiff_float_is_aifc() {
-    let b = encode(&sine(44_100, 2, 10), &EncodeOptions { format: EncodeFormat::Aiff, bit_depth: BitDepth::Float32, ..EncodeOptions::default() })
-        .unwrap();
+    let b = encode(&sine(44_100, 2, 10), &EncodeOptions::new(EncodeFormat::Aiff).with_bit_depth(BitDepth::Float32)).unwrap();
     assert_eq!(&b[8..12], b"AIFC");
     assert!(b.windows(4).any(|w| w == b"fl32"));
-    let b = encode(&sine(44_100, 2, 10), &EncodeOptions { format: EncodeFormat::Aiff, ..EncodeOptions::default() }).unwrap();
+    let b = encode(&sine(44_100, 2, 10), &EncodeOptions::new(EncodeFormat::Aiff)).unwrap();
     assert_eq!(&b[8..12], b"AIFF");
     let form = u32::from_be_bytes([b[4], b[5], b[6], b[7]]) as usize;
     assert_eq!(form + 8, b.len());
@@ -195,7 +195,7 @@ fn aiff_float_is_aifc() {
 fn unusual_sample_rates_roundtrip() {
     for sr in [1, 8_000, 11_025, 22_050, 44_100, 88_200, 176_400, 192_000, 352_800, 384_000, 768_000] {
         for format in [EncodeFormat::Wav, EncodeFormat::Aiff] {
-            let bytes = encode(&sine(sr, 1, 8), &EncodeOptions { format, ..EncodeOptions::default() }).unwrap();
+            let bytes = encode(&sine(sr, 1, 8), &EncodeOptions::new(format)).unwrap();
             assert_eq!(probe(&bytes, None).unwrap().sample_rate, sr, "{format:?}");
         }
     }
@@ -214,7 +214,7 @@ fn encode_rejects_bad_buffers_and_formats() {
             if format == EncodeFormat::Flac && depth == BitDepth::Float32 {
                 continue;
             }
-            let bytes = encode(&b, &EncodeOptions { format, bit_depth: depth, ..EncodeOptions::default() }).unwrap();
+            let bytes = encode(&b, &EncodeOptions::new(format).with_bit_depth(depth)).unwrap();
             let (_, out) = decode(&bytes, None).unwrap();
             assert_eq!(out.channels[0][0], 0.0);
             assert!(out.channels[0][1] > 0.99 && out.channels[0][1] <= 1.0);
@@ -243,40 +243,46 @@ fn audio_buffer_helpers() {
 #[cfg(feature = "serde")]
 #[test]
 fn serde_types_roundtrip() {
-    let opts = EncodeOptions { bwf: Some(BwfInfo { time_reference: 42, ..BwfInfo::default() }), ..EncodeOptions::default() };
+    let opts = EncodeOptions::default().with_bwf(BwfInfo::default().with_time_reference(42));
     let s = serde_json::to_string(&opts).unwrap();
     assert_eq!(serde_json::from_str::<EncodeOptions>(&s).unwrap(), opts);
     let info = probe(&encode(&sine(48_000, 1, 4), &opts).unwrap(), None).unwrap();
     let s = serde_json::to_string(&info).unwrap();
     assert_eq!(serde_json::from_str::<craft_audio::AudioInfo>(&s).unwrap(), info);
+    // A layout reads back only when its mask describes its channel count.
+    let l = ChannelLayout::SURROUND_5_1;
+    assert_eq!(serde_json::from_str::<ChannelLayout>(&serde_json::to_string(&l).unwrap()).unwrap(), l);
+    assert_eq!(serde_json::from_str::<ChannelLayout>(r#"{"channels":4,"mask":0}"#).unwrap(), ChannelLayout::unordered(4));
+    assert!(serde_json::from_str::<ChannelLayout>(r#"{"channels":2,"mask":63}"#).is_err());
+    assert!(serde_json::from_str::<ChannelLayout>(r#"{"channels":1,"mask":2147483648}"#).is_err());
 }
 
 #[test]
 fn multichannel_wav_speaker_masks() {
     let buf = |n: usize| AudioBuffer { sample_rate: 48_000, channels: (0..n).map(|c| vec![0.01 * c as f32; 64]).collect() };
-    let opts = EncodeOptions { format: EncodeFormat::Wav, bit_depth: BitDepth::Int24, dither: false, bwf: None };
+    let opts = EncodeOptions::new(EncodeFormat::Wav).with_bit_depth(BitDepth::Int24).with_dither(false);
     for (n, mask) in [(6usize, 0x3Fu32), (8, 0x63F), (12, 0x2_D63F)] {
         let bytes = craft_audio::encode(&buf(n), &opts).unwrap();
         assert_eq!(probe(&bytes, None).unwrap().layout, ChannelLayout::from_mask(mask), "{n} channels");
         assert_eq!(craft_audio::decode(&bytes, Some("wav")).unwrap().1.channels.len(), n);
     }
     // Explicit masks: 7.0 (sides + rears, no LFE) and Ambisonics (no positions).
-    let bytes = craft_audio::encode_with_layout(&buf(7), &opts, ChannelLayout::from_mask(0x637)).unwrap();
+    let bytes = craft_audio::encode(&buf(7), &opts.clone().with_layout(ChannelLayout::from_mask(0x637))).unwrap();
     assert_eq!(probe(&bytes, None).unwrap().layout, ChannelLayout::from_mask(0x637));
-    let bytes = craft_audio::encode_with_layout(&buf(4), &opts, ChannelLayout::unordered(4)).unwrap();
+    let bytes = craft_audio::encode(&buf(4), &opts.clone().with_layout(ChannelLayout::unordered(4))).unwrap();
     assert_eq!(probe(&bytes, None).unwrap().layout, ChannelLayout::unordered(4));
     // Plain 16-bit stereo stays a plain PCM header (format tag 1), read back as stereo.
-    let o16 = EncodeOptions { bit_depth: BitDepth::Int16, ..opts };
-    let bytes = craft_audio::encode_with_layout(&buf(2), &o16, ChannelLayout::STEREO).unwrap();
+    let o16 = opts.clone().with_bit_depth(BitDepth::Int16);
+    let bytes = craft_audio::encode(&buf(2), &o16.clone().with_layout(ChannelLayout::STEREO)).unwrap();
     let fmt = bytes.windows(4).position(|w| w == b"fmt ").unwrap();
     assert_eq!(bytes.get(fmt + 8..fmt + 10), Some(&[1u8, 0][..]));
     assert_eq!(probe(&bytes, None).unwrap().layout, ChannelLayout::STEREO);
     // FLAC (decoded by symphonia) reports its channel assignment: six channels are 5.1.
-    let flac = EncodeOptions { format: EncodeFormat::Flac, ..o16.clone() };
+    let flac = o16.clone().with_format(EncodeFormat::Flac);
     let info = probe(&craft_audio::encode(&buf(6), &flac).unwrap(), None).unwrap();
     assert_eq!((info.container, info.codec, info.layout), (craft_audio::Container::Flac, craft_audio::CodecId::Flac, ChannelLayout::SURROUND_5_1));
     // A layout for another channel count is refused.
-    assert!(craft_audio::encode_with_layout(&buf(2), &o16, ChannelLayout::SURROUND_5_1).is_err());
+    assert!(craft_audio::encode(&buf(2), &o16.clone().with_layout(ChannelLayout::SURROUND_5_1)).is_err());
 }
 
 #[test]
@@ -289,7 +295,7 @@ fn float_wav_header_is_rewritten_in_place_as_the_file_grows() {
     file[..len].copy_from_slice(&wav_float_header(2, 48_000, 600).unwrap());
     assert_eq!(decode(&file, None).unwrap().1.frames(), 600);
     file[..len].copy_from_slice(&wav_float_header(2, 48_000, 1_000).unwrap());
-    assert_eq!(file, encode(&take, &EncodeOptions { bit_depth: BitDepth::Float32, ..EncodeOptions::default() }).unwrap());
+    assert_eq!(file, encode(&take, &EncodeOptions::default().with_bit_depth(BitDepth::Float32)).unwrap());
     let big = wav_float_header(2, 48_000, 600_000_000).unwrap();
     assert_eq!((&big[..4], big.len()), (&b"RF64"[..], len));
     assert!(wav_float_header(0, 48_000, 0).is_err());
@@ -300,7 +306,7 @@ fn zero_frame_flac_round_trips_like_wav_and_aiff() {
     for format in [EncodeFormat::Wav, EncodeFormat::Aiff, EncodeFormat::Flac] {
         for depth in [BitDepth::Int16, BitDepth::Int24] {
             for channels in [1, 2] {
-                let opts = EncodeOptions { format, bit_depth: depth, ..EncodeOptions::default() };
+                let opts = EncodeOptions::new(format).with_bit_depth(depth);
                 let bytes = encode(&AudioBuffer::new(48_000, channels, 0), &opts).unwrap();
                 let info = probe(&bytes, None).unwrap();
                 assert_eq!((info.container, info.sample_format, info.sample_rate, info.frames), (format.container(), expected_sf(depth), 48_000, 0));
@@ -314,7 +320,7 @@ fn zero_frame_flac_round_trips_like_wav_and_aiff() {
 
 #[test]
 fn flac_claiming_frames_but_holding_none_still_errors() {
-    let opts = EncodeOptions { format: EncodeFormat::Flac, bit_depth: BitDepth::Int16, ..EncodeOptions::default() };
+    let opts = EncodeOptions::new(EncodeFormat::Flac).with_bit_depth(BitDepth::Int16);
     let mut bytes = encode(&AudioBuffer::new(48_000, 2, 0), &opts).unwrap();
     bytes[25] = 1; // STREAMINFO total samples (low byte of the 36-bit field) = 1
     assert!(decode(&bytes, None).is_err());

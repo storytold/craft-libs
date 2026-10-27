@@ -9,7 +9,7 @@ use craft_audio::{AudioError, decode};
 fn adts_stream() -> (Vec<u8>, Vec<(usize, usize)>) {
     let rate = 48_000;
     let tone: Vec<f32> = (0..rate).map(|i| (i as f32 * 440.0 * std::f32::consts::TAU / rate as f32).sin() * 0.5).collect();
-    let mut enc = Encoder::new(EncoderConfig { adts: true, ..EncoderConfig::cbr(rate as u32, 2, 128_000) }).unwrap();
+    let mut enc = Encoder::new(EncoderConfig::cbr(rate as u32, 2, 128_000).with_adts(true)).unwrap();
     let mut units = enc.encode(&[&tone, &tone]);
     units.extend(enc.flush());
     let mut frames = Vec::new();

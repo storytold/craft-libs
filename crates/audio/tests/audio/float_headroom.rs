@@ -5,7 +5,7 @@ fn encoded(audio: &AudioBuffer, options: &EncodeOptions, streaming: bool) -> Vec
     if !streaming {
         return encode(audio, options).unwrap();
     }
-    let mut writer = FileEncoder::new(Cursor::new(Vec::new()), options, audio.num_channels(), audio.sample_rate, None).unwrap();
+    let mut writer = FileEncoder::new(Cursor::new(Vec::new()), options, audio.num_channels() as u16, audio.sample_rate).unwrap();
     // Cross the writer's 4096-frame scratch boundary, then write a short final block.
     for start in (0..audio.frames()).step_by(4097) {
         let end = (start + 4097).min(audio.frames());
@@ -41,7 +41,7 @@ fn assert_float_headroom(streaming: bool) {
                     sample_rate: 48_000,
                     channels: (0..channels).map(|c| samples.iter().copied().cycle().skip(c).take(4103).collect()).collect(),
                 };
-                let options = EncodeOptions { format, bit_depth: BitDepth::Float32, dither, bwf: None };
+                let options = EncodeOptions::new(format).with_bit_depth(BitDepth::Float32).with_dither(dither);
                 let bytes = encoded(&audio, &options, streaming);
                 let pcm: Vec<u8> =
                     audio.interleaved().iter().flat_map(|v| if format == EncodeFormat::Wav { v.to_le_bytes() } else { v.to_be_bytes() }).collect();
@@ -75,7 +75,7 @@ fn float32_keeps_non_finite_sample_handling() {
     let expected = [0.0_f32, -1.0, 1.0];
     for format in [EncodeFormat::Wav, EncodeFormat::Aiff] {
         for streaming in [false, true] {
-            let options = EncodeOptions { format, bit_depth: BitDepth::Float32, dither: false, bwf: None };
+            let options = EncodeOptions::new(format).with_bit_depth(BitDepth::Float32).with_dither(false);
             let bytes = encoded(&audio, &options, streaming);
             // Inspect stored samples too: the decoder itself replaces non-finite values.
             let pcm: Vec<u8> = expected.iter().flat_map(|v| if format == EncodeFormat::Wav { v.to_le_bytes() } else { v.to_be_bytes() }).collect();
@@ -91,7 +91,7 @@ fn integer_pcm_still_clips_at_full_scale() {
     for (depth, max) in [(BitDepth::Int16, 32767.0 / 32768.0), (BitDepth::Int24, 8_388_607.0 / 8_388_608.0), (BitDepth::Int32, 1.0)] {
         for format in [EncodeFormat::Wav, EncodeFormat::Aiff, EncodeFormat::Flac] {
             for streaming in [false, true] {
-                let options = EncodeOptions { format, bit_depth: depth, dither: false, bwf: None };
+                let options = EncodeOptions::new(format).with_bit_depth(depth).with_dither(false);
                 let bytes = encoded(&audio, &options, streaming);
                 let (_, decoded) = decode(&bytes, None).unwrap();
                 assert_eq!(decoded.channels[0], [-1.0, -1.0, -1.0, -0.5, 0.0, 0.5, max, max, max], "{format:?} {depth:?}, streaming={streaming}");

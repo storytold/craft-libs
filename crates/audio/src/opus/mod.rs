@@ -3,7 +3,7 @@
 //! - Decoding (feature `opus-decode`): [`Decoder`] (multistream, surround), [`StreamDecoder`] (one
 //!   elementary stream), [`OpusHead`] and the packet parser [`packet`]. From FilmCraft's
 //!   `filmcraft-opus` (storytold/filmcraft@8fda2f2).
-//! - Encoding (feature `opus-encode`): [`encoder::OpusEncoder`] (SILK, hybrid and CELT modes, 48 kHz,
+//! - Encoding (feature `opus-encode`): [`Encoder`] (in [`encoder`]) (SILK, hybrid and CELT modes, 48 kHz,
 //!   20 ms, mono or stereo). From EffectCraft's `effectcraft-opusenc` (storytold/effectcraft@c618429).
 //!
 //! Public items keep their names, so FilmCraft and EffectCraft can re-export this module. The two
@@ -22,6 +22,8 @@ pub mod encoder;
 
 #[cfg(feature = "opus-decode")]
 pub use decode::{Decoder, Error, Mode, OpusHead, Packet, Result, SAMPLE_RATES, StreamDecoder, Toc, packet};
+#[cfg(feature = "opus-encode")]
+pub use encoder::Encoder;
 
 /// Coded audio bandwidth (RFC 6716 §2, Table 1), for the decoder and the encoder alike.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]

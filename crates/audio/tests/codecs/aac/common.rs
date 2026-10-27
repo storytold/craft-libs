@@ -129,7 +129,7 @@ pub struct Encoded {
 }
 
 pub fn encode(cfg: EncoderConfig, planar: &[Vec<f32>]) -> Encoded {
-    let mut enc = Encoder::new(EncoderConfig { adts: true, ..cfg }).unwrap();
+    let mut enc = Encoder::new(cfg.with_adts(true)).unwrap();
     let mut adts = Vec::new();
     // feed in uneven chunks
     let n = planar[0].len();

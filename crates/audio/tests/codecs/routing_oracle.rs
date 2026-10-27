@@ -445,7 +445,7 @@ fn track_decoder_on_demuxed_packets_matches_decode() {
         let file = isobmff::open(bytes.as_slice()).unwrap();
         let track = file.track_of_kind(isobmff::TrackKind::Audio).unwrap();
         let t = &file.tracks[track];
-        let params = t.codec_params().unwrap();
+        let params = t.codec_params();
         let packets: Vec<Vec<u8>> = (0..t.samples.len()).map(|i| file.read_sample(bytes.as_slice(), track, i).unwrap()).collect();
         let lookahead: Vec<&[u8]> = packets.iter().take(8).map(Vec::as_slice).collect();
         let mut dec = TrackDecoder::new(&params, &lookahead).unwrap();
@@ -501,8 +501,8 @@ fn track_choice_and_the_sample_limit() {
         let bytes = std::fs::read(&path).unwrap();
         let list = tracks(&bytes, None).unwrap();
         assert_eq!(list.len(), 2, "{ext}");
-        assert_eq!((list[0].codec, list[0].sample_rate, list[0].channels), (CodecId::Aac, 48_000, 1), "{ext}");
-        assert_eq!((list[1].sample_rate, list[1].channels), (44_100, 2), "{ext}");
+        assert_eq!((list[0].codec, list[0].sample_rate, list[0].channels), (CodecId::Aac, Some(48_000), Some(1)), "{ext}");
+        assert_eq!((list[1].sample_rate, list[1].channels), (Some(44_100), Some(2)), "{ext}");
         let (first, _) = decode_with(&bytes, None, &DecodeOptions::default()).unwrap();
         let (second, buf) = decode_with(&bytes, None, &DecodeOptions::default().with_track(1)).unwrap();
         assert_eq!((first.channels, first.sample_rate), (1, 48_000), "{ext}");

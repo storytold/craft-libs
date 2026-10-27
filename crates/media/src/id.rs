@@ -92,6 +92,8 @@ pub enum CodecId {
     Opus,
     /// Vorbis.
     Vorbis,
+    /// Speex.
+    Speex,
     /// H.264 / AVC.
     H264,
     /// H.265 / HEVC.
@@ -110,6 +112,12 @@ pub enum CodecId {
     Mpeg2Video,
     /// MPEG-4 Part 2 video.
     Mpeg4Video,
+    /// Theora.
+    Theora,
+    /// Avid DNxHD / DNxHR.
+    Dnxhd,
+    /// APV (Advanced Professional Video).
+    Apv,
     /// A codec this crate has no identifier for.
     Unknown,
 }
@@ -133,6 +141,7 @@ impl CodecId {
             CodecId::Eac3 => "E-AC-3",
             CodecId::Opus => "Opus",
             CodecId::Vorbis => "Vorbis",
+            CodecId::Speex => "Speex",
             CodecId::H264 => "H.264",
             CodecId::Hevc => "HEVC",
             CodecId::Av1 => "AV1",
@@ -142,6 +151,9 @@ impl CodecId {
             CodecId::Mjpeg => "Motion JPEG",
             CodecId::Mpeg2Video => "MPEG-2",
             CodecId::Mpeg4Video => "MPEG-4",
+            CodecId::Theora => "Theora",
+            CodecId::Dnxhd => "DNxHD",
+            CodecId::Apv => "APV",
             CodecId::Unknown => "unknown",
         }
     }
@@ -165,6 +177,7 @@ impl CodecId {
                 | CodecId::Eac3
                 | CodecId::Opus
                 | CodecId::Vorbis
+                | CodecId::Speex
         )
     }
 
@@ -209,25 +222,52 @@ impl PcmFormat {
 /// | MP1/MP2/MP3, PCM | empty |
 /// | H.264 / HEVC / AV1 | the `avcC` / `hvcC` / `av1C` record |
 /// | VP9 | the MP4 `vpcC` payload, or Matroska's codec feature metadata |
+/// | APV | the `apvC` record |
 ///
 /// `sample_rate` and `channels` are what the container declares (for HE-AAC with implicit
-/// signalling, usually the core rate).
+/// signalling, usually the core rate); `width` and `height` are the coded picture size of a video
+/// track. `tag` is the container's four-character code for the codec when it has one (the MP4
+/// sample entry format, Matroska's ProRes or VfW FourCC), which is how a ProRes profile (`apcn`,
+/// `ap4h`, …) or a DNx variant is told apart.
 ///
 /// `#[non_exhaustive]`: build it with [`CodecParams::new`] and the `with_*` methods.
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct CodecParams {
+    /// The codec.
     pub codec: CodecId,
+    /// The codec configuration (see the table above).
     pub extradata: Vec<u8>,
+    /// The container's four-character code for the codec, if it has one.
+    pub tag: Option<[u8; 4]>,
+    /// Audio: samples per second.
     pub sample_rate: Option<u32>,
+    /// Audio: channel count.
     pub channels: Option<u16>,
+    /// Audio: the sample layout of uncompressed PCM.
     pub pcm: Option<PcmFormat>,
+    /// Video: coded picture width in pixels.
+    pub width: Option<u32>,
+    /// Video: coded picture height in pixels.
+    pub height: Option<u32>,
 }
 
 impl CodecParams {
     /// Parameters for `codec`, with nothing else known yet.
     pub fn new(codec: CodecId) -> CodecParams {
-        CodecParams { codec, extradata: Vec::new(), sample_rate: None, channels: None, pcm: None }
+        CodecParams { codec, extradata: Vec::new(), tag: None, sample_rate: None, channels: None, pcm: None, width: None, height: None }
+    }
+
+    pub fn with_tag(mut self, tag: [u8; 4]) -> CodecParams {
+        self.tag = Some(tag);
+        self
+    }
+
+    /// The coded picture size; a zero dimension leaves both unknown.
+    pub fn with_size(mut self, width: u32, height: u32) -> CodecParams {
+        (self.width, self.height) = if width > 0 && height > 0 { (Some(width), Some(height)) } else { (None, None) };
+        self
     }
 
     pub fn with_extradata(mut self, extradata: impl Into<Vec<u8>>) -> CodecParams {
@@ -252,9 +292,10 @@ impl CodecParams {
 }
 
 /// Xiph lacing of `packets` (Matroska `CodecPrivate` for Vorbis): the count less one, each
-/// length but the last as a run of 255s and a remainder, then the packets.
-pub fn xiph_lace(packets: &[Vec<u8>]) -> Vec<u8> {
-    let mut out = vec![u8::try_from(packets.len().saturating_sub(1)).unwrap_or(u8::MAX)];
+/// length but the last as a run of 255s and a remainder, then the packets. `None` for no packets
+/// or more than 256, which the one-byte count cannot hold.
+pub fn xiph_lace(packets: &[Vec<u8>]) -> Option<Vec<u8>> {
+    let mut out = vec![u8::try_from(packets.len().checked_sub(1)?).ok()?];
     for p in packets.iter().take(packets.len().saturating_sub(1)) {
         let mut n = p.len();
         while n >= 255 {
@@ -266,7 +307,7 @@ pub fn xiph_lace(packets: &[Vec<u8>]) -> Vec<u8> {
     for p in packets {
         out.extend_from_slice(p);
     }
-    out
+    Some(out)
 }
 
 #[cfg(test)]
@@ -275,10 +316,10 @@ mod tests {
 
     #[test]
     fn audio_and_video_are_disjoint() {
-        for c in [CodecId::Aac, CodecId::Opus, CodecId::Pcm, CodecId::Eac3] {
+        for c in [CodecId::Aac, CodecId::Opus, CodecId::Pcm, CodecId::Eac3, CodecId::Speex] {
             assert!(c.is_audio() && !c.is_video(), "{c:?}");
         }
-        for c in [CodecId::H264, CodecId::Av1, CodecId::ProRes] {
+        for c in [CodecId::H264, CodecId::Av1, CodecId::ProRes, CodecId::Theora, CodecId::Dnxhd, CodecId::Apv] {
             assert!(c.is_video() && !c.is_audio(), "{c:?}");
         }
         assert!(!CodecId::Unknown.is_audio() && !CodecId::Unknown.is_video());
@@ -288,12 +329,18 @@ mod tests {
     fn params_builder() {
         let p = CodecParams::new(CodecId::Aac).with_extradata([0x12, 0x10]).with_sample_rate(48_000).with_channels(2).with_sample_rate(0);
         assert_eq!((p.codec, p.extradata.as_slice(), p.sample_rate, p.channels), (CodecId::Aac, &[0x12, 0x10][..], None, Some(2)));
+        let v = CodecParams::new(CodecId::ProRes).with_tag(*b"apcn").with_size(1920, 1080);
+        assert_eq!((v.tag, v.width, v.height), (Some(*b"apcn"), Some(1920), Some(1080)));
+        assert_eq!(v.with_size(0, 1080).width, None);
     }
 
     #[test]
     fn xiph_lacing() {
-        let laced = xiph_lace(&[vec![1; 30], vec![2; 300], vec![3; 5]]);
+        let laced = xiph_lace(&[vec![1; 30], vec![2; 300], vec![3; 5]]).unwrap();
         assert_eq!(&laced[..4], &[2, 30, 255, 45]);
         assert_eq!(laced.len(), 4 + 335);
+        assert_eq!(xiph_lace(&[]), None);
+        assert_eq!(xiph_lace(&vec![vec![0]; 257]), None);
+        assert!(xiph_lace(&vec![vec![0]; 256]).is_some());
     }
 }

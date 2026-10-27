@@ -227,7 +227,9 @@ impl CodecConfig {
             CodecConfig::Flac(_) => CodecId::Flac,
             CodecConfig::Ac3 { .. } => CodecId::Ac3,
             CodecConfig::Eac3 { .. } => CodecId::Eac3,
-            CodecConfig::Dnx { .. } | CodecConfig::Apv(_) | CodecConfig::Timecode(_) | CodecConfig::Unknown { .. } => CodecId::Unknown,
+            CodecConfig::Dnx { .. } => CodecId::Dnxhd,
+            CodecConfig::Apv(_) => CodecId::Apv,
+            CodecConfig::Timecode(_) | CodecConfig::Unknown { .. } => CodecId::Unknown,
         }
     }
 
@@ -240,6 +242,7 @@ impl CodecConfig {
             CodecConfig::Hevc(c) => c.to_bytes(),
             CodecConfig::Av1(c) => c.to_bytes(),
             CodecConfig::Vp9(c) => c.to_bytes(),
+            CodecConfig::Apv(c) => c.to_bytes(),
             CodecConfig::Aac(a) => a.asc.clone(),
             CodecConfig::Alac { cookie } => cookie.clone(),
             CodecConfig::Opus(o) => o.opus_head(),

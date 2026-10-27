@@ -188,3 +188,26 @@ fn opus_toc_durations() {
     assert_eq!(opus_packet_samples([0xF8 | 3, 7], 10), None); // 140 ms: invalid
     assert_eq!(opus_packet_samples([0xF8, 0], 0), None);
 }
+
+#[test]
+fn flac_codec_params_carry_rate_and_channels() {
+    // 0x7F "FLAC" 1.0, one more header, then `fLaC`, a STREAMINFO block header and STREAMINFO:
+    // 44.1 kHz (0x0AC44), 6 channels (5 = channels less one), 24-bit.
+    let mut first = vec![0x7F, b'F', b'L', b'A', b'C', 1, 0, 0, 1];
+    first.extend_from_slice(b"fLaC");
+    first.extend_from_slice(&[0, 0, 0, 34]);
+    let mut info = vec![0x10, 0x00, 0x10, 0x00, 0, 0, 0, 0, 0, 0];
+    let packed: u64 = (0x0AC44 << 44) | (5 << 41) | (23 << 36);
+    info.extend_from_slice(&packed.to_be_bytes());
+    info.extend_from_slice(&[0; 16]);
+    first.extend_from_slice(&info);
+    let (lacing, body) = lace(&[&first], false);
+    let mut file = Vec::new();
+    page(&mut file, 2, 0, 9, 0, &lacing, &body);
+    let (lacing, body) = lace(&[&[0x84, 0, 0, 0][..]], false);
+    page(&mut file, 4, 0, 9, 1, &lacing, &body);
+    let ogg = open(&file[..]).unwrap();
+    let p = ogg.streams[0].codec_params();
+    assert_eq!((p.codec, p.sample_rate, p.channels), (crate::CodecId::Flac, Some(44_100), Some(6)));
+    assert_eq!(&p.extradata[..4], b"fLaC");
+}

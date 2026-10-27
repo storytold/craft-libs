@@ -50,10 +50,10 @@ pub use read::{
     DEFAULT_MAX_SAMPLES, DecodeOptions, Decoder, LOOKAHEAD_PACKETS, TrackDecoder, TrackInfo, decode, decode_with, detect_container, probe,
     probe_with, tracks, tracks_of,
 };
-#[cfg(any(feature = "pcm-encode", feature = "flac-encode"))]
-pub use write::{ENCODE_EXTENSIONS, FileEncoder, encode, encode_format_for, encode_with_layout};
 #[cfg(feature = "pcm-encode")]
-pub use write::{encode_wav_rf64, wav_float_header};
+pub use write::wav_float_header;
+#[cfg(any(feature = "pcm-encode", feature = "flac-encode"))]
+pub use write::{ENCODE_EXTENSIONS, FileEncoder, encode, encode_format_for};
 
 /// Errors from probing, decoding and encoding.
 #[non_exhaustive]
@@ -71,8 +71,9 @@ pub enum AudioError {
     /// Encoding failed (e.g. an empty buffer).
     #[error("audio encode failed: {0}")]
     Encode(String),
-    /// Writing the output failed.
-    #[error("audio write failed: {0}")]
+    /// Reading the input or writing the output failed (a source that stopped serving reads, a
+    /// full disk). Bytes missing because the input is truncated are [`AudioError::Malformed`].
+    #[error("audio I/O failed: {0}")]
     Io(#[from] std::io::Error),
 }
 
@@ -88,6 +89,7 @@ impl From<aac::Error> for AudioError {
     fn from(e: aac::Error) -> Self {
         match e {
             aac::Error::Unsupported(_) => AudioError::Unsupported(e.to_string()),
+            aac::Error::InvalidSettings(_) => AudioError::Encode(e.to_string()),
             _ => AudioError::Malformed(e.to_string()),
         }
     }
@@ -177,6 +179,9 @@ pub enum SampleFormat {
 }
 
 /// Broadcast Wave (`bext`) metadata.
+///
+/// `#[non_exhaustive]`: build it with `BwfInfo::default()` and the `with_*` methods.
+#[non_exhaustive]
 #[derive(Debug, Clone, Default, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct BwfInfo {
@@ -192,6 +197,38 @@ pub struct BwfInfo {
     pub origination_time: String,
     /// Sample count since midnight of the first sample (the timestamp Pro Tools spots to).
     pub time_reference: u64,
+}
+
+impl BwfInfo {
+    /// Sets `description`.
+    pub fn with_description(mut self, description: impl Into<String>) -> Self {
+        self.description = description.into();
+        self
+    }
+
+    /// Sets `originator`.
+    pub fn with_originator(mut self, originator: impl Into<String>) -> Self {
+        self.originator = originator.into();
+        self
+    }
+
+    /// Sets `originator_reference`.
+    pub fn with_originator_reference(mut self, reference: impl Into<String>) -> Self {
+        self.originator_reference = reference.into();
+        self
+    }
+
+    /// `date` as `yyyy-mm-dd`, `time` as `hh:mm:ss`.
+    pub fn with_origination(mut self, date: impl Into<String>, time: impl Into<String>) -> Self {
+        (self.origination_date, self.origination_time) = (date.into(), time.into());
+        self
+    }
+
+    /// Sets `time_reference`.
+    pub fn with_time_reference(mut self, time_reference: u64) -> Self {
+        self.time_reference = time_reference;
+        self
+    }
 }
 
 /// What `probe` learns about a file without decoding all of it.
@@ -218,6 +255,10 @@ pub struct AudioInfo {
     pub frames: u64,
     /// Broadcast Wave metadata from a WAV `bext` chunk.
     pub bwf: Option<BwfInfo>,
+    /// Packets that were damaged or failed to decode and were replaced by concealment (silence of
+    /// their length), counted as audio is decoded: by [`decode`] for the whole file, and so far by
+    /// a [`Decoder`]. 0 from [`probe`] when it read only headers.
+    pub damaged: u64,
 }
 
 impl AudioInfo {
@@ -232,7 +273,7 @@ impl AudioInfo {
         frames: u64,
     ) -> AudioInfo {
         let channels = u16::try_from(layout.channels()).unwrap_or(u16::MAX);
-        AudioInfo { container, codec, sample_format, sample_rate, channels, layout, frames, bwf: None }
+        AudioInfo { container, codec, sample_format, sample_rate, channels, layout, frames, bwf: None, damaged: 0 }
     }
 
     /// Duration in seconds.
@@ -256,7 +297,17 @@ pub enum BitDepth {
     Float32,
 }
 
-/// Options for `encode`.
+/// Options for `encode` and `FileEncoder`.
+///
+/// `#[non_exhaustive]`: build it with [`EncodeOptions::new`] and the `with_*` methods.
+///
+/// ```
+/// use craft_audio::{BitDepth, EncodeFormat, EncodeOptions};
+///
+/// let opts = EncodeOptions::new(EncodeFormat::Flac).with_bit_depth(BitDepth::Int16).with_dither(true);
+/// assert_eq!(opts.format, EncodeFormat::Flac);
+/// ```
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct EncodeOptions {
@@ -268,10 +319,76 @@ pub struct EncodeOptions {
     pub dither: bool,
     /// Write a BWF `bext` chunk (WAV only; ignored for other formats).
     pub bwf: Option<BwfInfo>,
+    /// The speaker layout to record, for layouts a channel count alone cannot identify (5.1 with
+    /// side vs back surrounds, 7.0 vs 6.1, Ambisonics as [`ChannelLayout::unordered`]). `None` is
+    /// the usual layout for the channel count. WAV stores it as `dwChannelMask`; AIFF and FLAC
+    /// have fixed channel orders and ignore it. It must have as many channels as the audio.
+    pub layout: Option<ChannelLayout>,
+    /// Write WAV in the RF64 layout even below 4 GiB (WAV only; ignored for other formats).
+    pub force_rf64: bool,
+}
+
+impl EncodeOptions {
+    /// Options for `format`: 24-bit, no dither, no BWF chunk, the usual layout.
+    pub fn new(format: EncodeFormat) -> Self {
+        Self { format, bit_depth: BitDepth::Int24, dither: false, bwf: None, layout: None, force_rf64: false }
+    }
+
+    /// Sets `format`.
+    pub fn with_format(mut self, format: EncodeFormat) -> Self {
+        self.format = format;
+        self
+    }
+
+    /// Sets `bit_depth`.
+    pub fn with_bit_depth(mut self, bit_depth: BitDepth) -> Self {
+        self.bit_depth = bit_depth;
+        self
+    }
+
+    /// Sets `dither`.
+    pub fn with_dither(mut self, dither: bool) -> Self {
+        self.dither = dither;
+        self
+    }
+
+    /// Sets `bwf`.
+    pub fn with_bwf(mut self, bwf: BwfInfo) -> Self {
+        self.bwf = Some(bwf);
+        self
+    }
+
+    /// Sets `layout`.
+    pub fn with_layout(mut self, layout: ChannelLayout) -> Self {
+        self.layout = Some(layout);
+        self
+    }
+
+    /// Sets `force_rf64`.
+    pub fn with_force_rf64(mut self, force_rf64: bool) -> Self {
+        self.force_rf64 = force_rf64;
+        self
+    }
 }
 
 impl Default for EncodeOptions {
+    /// 24-bit WAV.
     fn default() -> Self {
-        Self { format: EncodeFormat::Wav, bit_depth: BitDepth::Int24, dither: false, bwf: None }
+        Self::new(EncodeFormat::Wav)
+    }
+}
+
+// An encoder refusing its settings is an encode error, not damaged input.
+#[cfg(all(test, feature = "aac-encode"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn aac_encoder_settings_are_encode_errors() {
+        let e = match aac::Encoder::new(aac::EncoderConfig::cbr(44_000, 2, 128_000)) {
+            Err(e) => AudioError::from(e),
+            Ok(_) => panic!("44 kHz is not an AAC rate"),
+        };
+        assert!(matches!(e, AudioError::Encode(_)), "{e}");
     }
 }

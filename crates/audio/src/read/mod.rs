@@ -1,5 +1,10 @@
 //! Format detection, probing and decoding. The native path (craft-media's demuxers, the WAV and
 //! AIFF readers, and [`TrackDecoder`]) comes first; symphonia decodes the rest.
+//!
+//! `native.rs` opens a file natively or returns `None`, and `symph.rs` is the fallback, so a new
+//! native decoder takes its formats over without an API change. Removing symphonia means deleting
+//! `symph.rs` and its size checks, the `symphonia` feature and the workspace's
+//! `symphonia-bundle-flac` profile override.
 
 mod aiff;
 #[cfg(feature = "symphonia")]
@@ -156,10 +161,10 @@ pub struct TrackInfo {
     pub index: usize,
     /// The codec the container names (an AAC track that turns out to be HE-AAC is `Aac` here).
     pub codec: CodecId,
-    /// The sample rate the container declares (0 when it does not say).
-    pub sample_rate: u32,
-    /// The channel count the container declares (0 when it does not say).
-    pub channels: u16,
+    /// The sample rate the container declares, if it does.
+    pub sample_rate: Option<u32>,
+    /// The channel count the container declares, if it does.
+    pub channels: Option<u16>,
 }
 
 /// The decoder behind a [`Decoder`].
@@ -192,6 +197,12 @@ enum Inner<'a> {
 /// ```
 pub struct Decoder<'a> {
     inner: Inner<'a>,
+}
+
+impl std::fmt::Debug for Decoder<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Decoder").field("info", self.info()).field("length_known", &self.length_known()).finish_non_exhaustive()
+    }
 }
 
 impl Decoder<'static> {
@@ -258,8 +269,36 @@ impl<'a> Decoder<'a> {
         }
     }
 
+    /// What [`probe`] reports, for a decoder opened on any source: the info from the headers, or,
+    /// when they give no length, the info after decoding the rest of the track to count it.
+    ///
+    /// ```no_run
+    /// # fn demo() -> craft_audio::Result<()> {
+    /// use craft_audio::{DecodeOptions, Decoder};
+    ///
+    /// let info = Decoder::open(std::fs::File::open("take.mp3")?, Some("mp3"), &DecodeOptions::default())?.probe()?;
+    /// println!("{:.1} s", info.duration_secs());
+    /// # Ok(()) }
+    /// ```
+    pub fn probe(mut self) -> Result<AudioInfo> {
+        if self.length_known() {
+            return Ok(self.info().clone());
+        }
+        let (mut frames, mut channels) = (0u64, None);
+        while let Some(b) = self.next_block()? {
+            frames = frames.saturating_add(b.frames() as u64);
+            channels.get_or_insert(b.channels.len());
+        }
+        let mut info = self.info().clone();
+        info.frames = frames;
+        fit_channels(&mut info, channels);
+        Ok(info)
+    }
+
     /// The next block of decoded audio (planar `f32`, WAV channel order when the layout is
     /// ordered), or `None` at the end. Blocks follow the codec's packets, so their length varies.
+    /// A damaged packet is concealed and counted in [`AudioInfo::damaged`]; a source that fails a read gives
+    /// [`AudioError::Io`] and that packet is skipped, so call [`Decoder::seek`] to retry it.
     pub fn next_block(&mut self) -> Result<Option<AudioBuffer>> {
         match &mut self.inner {
             Inner::Native(n) => n.next_block(),
@@ -279,8 +318,9 @@ impl<'a> Decoder<'a> {
     }
 }
 
-/// Read a file's container, codec, sample rate, channel layout, length and BWF metadata, without
-/// decoding the audio where the headers say enough.
+/// Read a file's container, codec, sample rate, channel layout, length and BWF metadata from its
+/// headers. When the headers give no length (an MP3 without a Xing frame, PCM in Matroska), the
+/// file is decoded to count it. For a file on disk, use [`Decoder::probe`].
 ///
 /// ```
 /// # #[cfg(feature = "pcm-encode")] {
@@ -298,21 +338,7 @@ pub fn probe(bytes: &[u8], ext_hint: Option<&str>) -> Result<AudioInfo> {
 
 /// [`probe`] for the track `opts` names.
 pub fn probe_with(bytes: &[u8], ext_hint: Option<&str>, opts: &DecodeOptions) -> Result<AudioInfo> {
-    let mut d = Decoder::from_bytes(bytes, ext_hint, opts)?;
-    if d.length_known() {
-        return Ok(d.info().clone());
-    }
-    // The length is not in the headers: count it by decoding.
-    let mut frames = 0u64;
-    let mut channels = None;
-    while let Some(b) = d.next_block()? {
-        frames = frames.saturating_add(b.frames() as u64);
-        channels.get_or_insert(b.channels.len());
-    }
-    let mut info = d.info().clone();
-    info.frames = frames;
-    fit_channels(&mut info, channels);
-    Ok(info)
+    Decoder::from_bytes(bytes, ext_hint, opts)?.probe()
 }
 
 /// Decode the first audio track of a file to planar `f32`, trimmed to its presentation length, in
@@ -324,7 +350,7 @@ pub fn probe_with(bytes: &[u8], ext_hint: Option<&str>, opts: &DecodeOptions) ->
 /// use craft_audio::{AudioBuffer, EncodeFormat, EncodeOptions, decode, encode};
 ///
 /// let tone: Vec<f32> = (0..4800).map(|i| (i as f32 * 0.05).sin() * 0.5).collect();
-/// let flac = encode(&AudioBuffer { sample_rate: 48_000, channels: vec![tone] }, &EncodeOptions { format: EncodeFormat::Flac, ..Default::default() }).unwrap();
+/// let flac = encode(&AudioBuffer { sample_rate: 48_000, channels: vec![tone] }, &EncodeOptions::new(EncodeFormat::Flac)).unwrap();
 /// let (info, buf) = decode(&flac, None).unwrap();
 /// assert_eq!((info.channels, buf.frames()), (1, 4800));
 /// # }
@@ -341,14 +367,19 @@ pub fn decode_with(bytes: &[u8], ext_hint: Option<&str>, opts: &DecodeOptions) -
         return Err(AudioError::TooLarge(format!("{declared} samples exceeds the decode limit")));
     }
     let mut planar: Vec<Vec<f32>> = Vec::new();
-    let mut frames = 0u64;
+    let (mut frames, mut damaged) = (0u64, 0u64);
     while let Some(block) = d.next_block()? {
         if planar.is_empty() {
             planar = vec![Vec::new(); block.channels.len()];
         }
-        if block.channels.len() != planar.len() {
-            continue;
-        }
+        // A block with another channel count cannot join the buffer: it is concealed like a
+        // damaged packet, so the audio after it keeps its timing.
+        let block = if block.channels.len() == planar.len() {
+            block
+        } else {
+            damaged += 1;
+            AudioBuffer { sample_rate: block.sample_rate, channels: vec![vec![0.0; block.frames()]; planar.len()] }
+        };
         frames = frames.saturating_add(block.frames() as u64);
         if frames.saturating_mul(planar.len() as u64) > opts.max_samples {
             return Err(AudioError::TooLarge("decoded audio exceeds the decode limit".into()));
@@ -359,6 +390,7 @@ pub fn decode_with(bytes: &[u8], ext_hint: Option<&str>, opts: &DecodeOptions) -
         }
     }
     let mut info = d.info().clone();
+    info.damaged += damaged;
     let channels = (!planar.is_empty()).then_some(planar.len());
     fit_channels(&mut info, channels);
     if planar.is_empty() {
@@ -391,21 +423,23 @@ pub fn tracks_of(source: impl ByteSource + Send + Sync + 'static, ext_hint: Opti
 
 fn tracks_in(src: &Src<'_>, ext_hint: Option<&str>) -> Result<Vec<TrackInfo>> {
     let container = detect_container(&src.head(), ext_hint);
-    let list = |v: Vec<(CodecId, u32, u16)>| -> Vec<TrackInfo> {
+    let list = |v: Vec<(CodecId, Option<u32>, Option<u16>)>| -> Vec<TrackInfo> {
         v.into_iter().enumerate().map(|(index, (codec, sample_rate, channels))| TrackInfo { index, codec, sample_rate, channels }).collect()
     };
     if let Some(params) = native::tracks(src, container) {
-        return Ok(list(params.into_iter().map(|p| (p.codec, p.sample_rate.unwrap_or(0), p.channels.unwrap_or(0))).collect()));
+        return Ok(list(params.into_iter().map(|p| (p.codec, p.sample_rate, p.channels)).collect()));
     }
     match Native::open(src, container, None) {
         // Single-track formats: WAV, AIFF, raw streams.
         Some(n) => {
             let n = n?;
             let i = n.info();
-            Ok(list(vec![(i.codec, i.sample_rate, i.channels)]))
+            Ok(list(vec![(i.codec, (i.sample_rate > 0).then_some(i.sample_rate), (i.channels > 0).then_some(i.channels))]))
         }
         #[cfg(feature = "symphonia")]
-        None => Ok(list(symph::tracks(src.whole()?, container)?)),
+        None => {
+            Ok(list(symph::tracks(src.whole()?, container)?.into_iter().map(|(c, r, n)| (c, (r > 0).then_some(r), (n > 0).then_some(n))).collect()))
+        }
         #[cfg(not(feature = "symphonia"))]
         None => Ok(Vec::new()),
     }

@@ -37,6 +37,7 @@ pub enum BitrateMode {
 }
 
 /// Encoder settings.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
 pub struct EncoderConfig {
     /// One of the 13 AAC sampling rates (8–96 kHz).
@@ -78,9 +79,40 @@ impl EncoderConfig {
     pub fn vbr(sample_rate: u32, channels: usize, quality: f32) -> EncoderConfig {
         EncoderConfig { mode: BitrateMode::Vbr(quality), ..Self::cbr(sample_rate, channels, 0) }
     }
+
+    /// Sets `bandwidth` (`None` = chosen from the bitrate or quality).
+    pub fn with_bandwidth(mut self, bandwidth: Option<u32>) -> EncoderConfig {
+        self.bandwidth = bandwidth;
+        self
+    }
+
+    /// Sets `tns`.
+    pub fn with_tns(mut self, tns: bool) -> EncoderConfig {
+        self.tns = tns;
+        self
+    }
+
+    /// Sets `ms_stereo`.
+    pub fn with_ms_stereo(mut self, ms_stereo: bool) -> EncoderConfig {
+        self.ms_stereo = ms_stereo;
+        self
+    }
+
+    /// Sets `window_shape`.
+    pub fn with_window_shape(mut self, window_shape: WindowShape) -> EncoderConfig {
+        self.window_shape = window_shape;
+        self
+    }
+
+    /// Sets `adts`: prefix every access unit with an ADTS header.
+    pub fn with_adts(mut self, adts: bool) -> EncoderConfig {
+        self.adts = adts;
+        self
+    }
 }
 
 /// Running statistics.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct EncoderStats {
     /// Access units produced.
@@ -154,9 +186,9 @@ impl Encoder {
     /// 1..=8, or the CBR bitrate is out of range for the channel count and rate.
     pub fn new(cfg: EncoderConfig) -> Result<Encoder> {
         let sf_index =
-            sample_rate_index(cfg.sample_rate).ok_or(Error::InvalidConfig("sample rate must be one of the 13 AAC rates (7350–96000 Hz)"))?;
+            sample_rate_index(cfg.sample_rate).ok_or(Error::InvalidSettings("sample rate must be one of the 13 AAC rates (7350–96000 Hz)"))?;
         if !(1..=8).contains(&cfg.channels) {
-            return Err(Error::InvalidConfig("channels must be 1..=8"));
+            return Err(Error::InvalidSettings("channels must be 1..=8"));
         }
         use ElementType::*;
         let (channel_config, layout) = match cfg.channels {
@@ -220,7 +252,7 @@ impl Encoder {
         if let BitrateMode::Cbr(b) = cfg.mode
             && (b < 1000 * cfg.channels as u32 || mean > max_frame_bits)
         {
-            return Err(Error::InvalidConfig("bitrate out of range for the channel count and sample rate"));
+            return Err(Error::InvalidSettings("bitrate out of range for the channel count and sample rate"));
         }
         let res_max = (max_frame_bits - mean).max(0);
         let hist = vec![vec![0f32; HISTORY]; cfg.channels];

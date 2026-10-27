@@ -168,6 +168,7 @@ pub fn config_layout(channel_config: u8) -> Option<Vec<(ElementType, u8)>> {
 }
 
 /// Parsed `AudioSpecificConfig`.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AudioSpecificConfig {
     /// Audio object type of the core (2 = AAC LC).
@@ -299,6 +300,7 @@ impl AudioSpecificConfig {
 }
 
 /// A parsed ADTS header.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AdtsHeader {
     /// Audio object type (`profile + 1`).

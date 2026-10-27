@@ -10,7 +10,7 @@
 
 use super::aiff::{self, AiffParse};
 use super::id3v2_len;
-use super::source::Src;
+use super::source::{Src, io_error};
 use super::track::TrackDecoder;
 use super::wav::{self, WavParse};
 use crate::{AudioBuffer, AudioError, AudioInfo, CodecId, CodecParams, Container, PcmFormat, Result, aac, ac3, mpa};
@@ -76,26 +76,25 @@ impl Packets<'_> {
     /// The next packet of the track, or `None` at its end.
     fn next(&mut self) -> Option<Result<Packet>> {
         let whole = |data: Vec<u8>| Packet { data, trim_end: 0 };
-        let malformed = |e: &dyn std::fmt::Display| AudioError::Malformed(e.to_string());
         match self {
             Packets::Mp4 { file, src, track, next, .. } => {
                 let i = *next;
                 (i < file.tracks.get(*track).map_or(0, |t| t.samples.len())).then(|| {
                     *next += 1;
-                    file.read_sample(src, *track, i).map(whole).map_err(|e| malformed(&e))
+                    file.read_sample(src, *track, i).map(whole).map_err(mp4_error)
                 })
             }
             Packets::Ogg { file, src, stream, next, .. } => {
                 let i = *next;
                 (i < file.streams.get(*stream).map_or(0, |s| s.packets.len())).then(|| {
                     *next += 1;
-                    file.read_packet(src, *stream, i).map(whole).map_err(|e| malformed(&e))
+                    file.read_packet(src, *stream, i).map(whole).map_err(ogg_error)
                 })
             }
             Packets::Raw { frames, src, next } => {
                 let &(at, len, _) = frames.get(*next)?;
                 *next += 1;
-                Some(src.bytes(at, len as usize).map(whole).ok_or_else(|| AudioError::Malformed("frame out of range".into())))
+                Some(src.read(at, len as usize).map(whole))
             }
             Packets::Pcm { src, start, frames, frame_bytes, next_frame } => {
                 let n = (*frames - *next_frame).min(PCM_PACKET_FRAMES);
@@ -105,7 +104,7 @@ impl Packets<'_> {
                 let at = *start + *next_frame * *frame_bytes;
                 *next_frame += n;
                 // A truncated file holds fewer bytes than its header says: decode what is there.
-                Some(Ok(whole(src.bytes_upto(at, usize::try_from(n * *frame_bytes).unwrap_or(0)))))
+                Some(src.read_upto(at, usize::try_from(n * *frame_bytes).unwrap_or(0)).map(whole))
             }
             Packets::Mkv { demux, track, rate, pending, .. } => match pending.take() {
                 Some(p) => Some(Ok(p)),
@@ -161,7 +160,7 @@ impl Packets<'_> {
             }
             Packets::Mkv { demux, track, rate, first_ns, frames, pending, src } => {
                 let ns = i64::try_from(rescale(frame, u64::from(*rate), 1_000_000_000)).unwrap_or(i64::MAX).saturating_add(*first_ns);
-                let point = demux.seek(*track, ns).map_err(|e| AudioError::Malformed(e.to_string()))?;
+                let point = demux.seek(*track, ns).map_err(mkv_error)?;
                 match mkv_next(demux, *track, *rate) {
                     Some(Ok((p, pts_ns))) => {
                         *pending = Some(p);
@@ -230,8 +229,31 @@ fn mkv_next(demux: &mut matroska::Demuxer<Src<'_>>, track: usize, rate: u32) -> 
             }
             Ok(Some(_)) => continue,
             Ok(None) => return None,
-            Err(e) => return Some(Err(AudioError::Malformed(e.to_string()))),
+            Err(e) => return Some(Err(mkv_error(e))),
         }
+    }
+}
+
+/// Container read errors: the source failing is [`AudioError::Io`], anything else in the file is
+/// [`AudioError::Malformed`].
+fn mp4_error(e: isobmff::Error) -> AudioError {
+    match e {
+        isobmff::Error::Io(e) => io_error(e),
+        e => AudioError::Malformed(e.to_string()),
+    }
+}
+
+fn mkv_error(e: matroska::Error) -> AudioError {
+    match e {
+        matroska::Error::Io(e) => io_error(e),
+        e => AudioError::Malformed(e.to_string()),
+    }
+}
+
+fn ogg_error(e: ogg::Error) -> AudioError {
+    match e {
+        ogg::Error::Io(e) => io_error(e),
+        e => AudioError::Malformed(e.to_string()),
     }
 }
 
@@ -288,9 +310,10 @@ impl<'a> Native<'a> {
         self.frames_known
     }
 
-    /// The next block of presented audio, or `None` at the end. A packet that cannot be read or
-    /// decoded is replaced by the decoder's concealment (silence of its length), so the audio after
-    /// it keeps its timing; a stream where nothing decodes is an error.
+    /// The next block of presented audio, or `None` at the end. A packet that is damaged or cannot
+    /// be decoded is replaced by the decoder's concealment (silence of its length), so the audio
+    /// after it keeps its timing; a stream where nothing decodes is an error. A failing source is
+    /// returned as [`AudioError::Io`] and skips that packet.
     pub(crate) fn next_block(&mut self) -> Result<Option<AudioBuffer>> {
         loop {
             if self.limit.is_some_and(|l| self.pos >= l.saturating_add(self.skip)) {
@@ -318,6 +341,8 @@ impl<'a> Native<'a> {
                         (self.dec.conceal(Some(&p.data)), p.trim_end)
                     }
                 },
+                // The source failing is not damage in the file: the caller decides whether to retry.
+                Err(e @ AudioError::Io(_)) => return Err(e),
                 Err(e) => {
                     self.error(e)?;
                     (self.dec.conceal(None), 0)
@@ -357,6 +382,7 @@ impl<'a> Native<'a> {
     /// error: unsupported when a packet said so, else malformed.
     fn error(&mut self, e: AudioError) -> Result<()> {
         self.errors += 1;
+        self.info.damaged += 1;
         log::debug!("concealing a packet that failed: {e}");
         let msg = e.to_string();
         if matches!(e, AudioError::Unsupported(_)) && self.unsupported.is_none() {
@@ -628,7 +654,7 @@ fn open_mp4<'a>(src: &Src<'a>, container: Container, track: Option<usize>) -> Op
     if t.samples.iter().any(|s| s.offset.checked_add(u64::from(s.size)).is_none_or(|end| end > src.size())) {
         return Some(Err(AudioError::Malformed("MP4 sample is larger than the file".into())));
     }
-    let params = t.codec_params()?;
+    let params = t.codec_params();
     let lookahead: Vec<Vec<u8>> =
         (0..t.samples.len().min(super::track::LOOKAHEAD_PACKETS)).filter_map(|i| file.read_sample(src, track, i).ok()).collect();
     let timescale = t.timescale;
@@ -720,7 +746,7 @@ pub(crate) fn tracks(src: &Src<'_>, detected: Option<Container>) -> Option<Vec<C
     match super::detect_container(&head, None).or(detected) {
         Some(Container::Mp4 | Container::QuickTime) => {
             let file = isobmff::open(src).ok()?;
-            Some(file.tracks.iter().filter(|t| t.kind == isobmff::TrackKind::Audio).filter_map(isobmff::Track::codec_params).collect())
+            Some(file.tracks.iter().filter(|t| t.kind == isobmff::TrackKind::Audio).map(isobmff::Track::codec_params).collect())
         }
         Some(Container::Matroska | Container::WebM) => {
             let file = matroska::open(src.clone()).ok()?;

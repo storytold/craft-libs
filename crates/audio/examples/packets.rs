@@ -14,7 +14,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let track = file.track_of_kind(isobmff::TrackKind::Audio).ok_or("no audio track")?;
     let t = &file.tracks[track];
     // The container-neutral codec description every craft-media demuxer produces.
-    let params = t.codec_params().ok_or("no sample entry")?;
+    let params = t.codec_params();
 
     let packets: Vec<Vec<u8>> = (0..t.samples.len()).map(|i| file.read_sample(bytes.as_slice(), track, i)).collect::<Result<_, _>>()?;
     // The first packets reveal HE-AAC that the configuration does not announce.

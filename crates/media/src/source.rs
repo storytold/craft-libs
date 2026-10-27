@@ -1,9 +1,8 @@
 //! Random-access byte sources: what the demuxers read from. One trait for every container, so a
 //! file, buffer or custom source implements it once.
 
-use std::cell::RefCell;
 use std::io::{self, Read, Seek, SeekFrom};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 /// Random-access, read-only byte source (file, in-memory buffer, web Blob…).
 ///
@@ -106,9 +105,10 @@ impl ByteSource for std::fs::File {
 /// Adapts any `Read + Seek` (e.g. `BufReader<File>`, `Cursor<Vec<u8>>`) into a [`ByteSource`].
 ///
 /// The length is taken once at construction; the stream position is tracked so sequential reads
-/// do not issue redundant seeks.
+/// do not issue redundant seeks. The reader sits behind a mutex, so the source is `Send + Sync`
+/// whenever `R` is `Send` and can be shared across threads.
 pub struct ReadSeekSource<R> {
-    inner: RefCell<(R, u64)>,
+    inner: Mutex<(R, u64)>,
     len: u64,
 }
 
@@ -116,11 +116,12 @@ impl<R: Read + Seek> ReadSeekSource<R> {
     /// Wrap a reader; seeks to the end once to learn the length.
     pub fn new(mut r: R) -> io::Result<Self> {
         let len = r.seek(SeekFrom::End(0))?;
-        Ok(Self { inner: RefCell::new((r, len)), len })
+        Ok(Self { inner: Mutex::new((r, len)), len })
     }
     /// Unwrap the reader.
     pub fn into_inner(self) -> R {
-        self.inner.into_inner().0
+        // A poisoned lock only means a read panicked in another thread; the reader is still usable.
+        self.inner.into_inner().unwrap_or_else(|e| e.into_inner()).0
     }
 }
 
@@ -132,7 +133,7 @@ impl<R: Read + Seek> ByteSource for ReadSeekSource<R> {
         if offset.checked_add(buf.len() as u64).is_none_or(|e| e > self.len) {
             return Err(eof());
         }
-        let mut g = self.inner.borrow_mut();
+        let mut g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         let (r, pos) = &mut *g;
         if *pos != offset {
             r.seek(SeekFrom::Start(offset))?;
@@ -177,5 +178,11 @@ mod tests {
         assert_eq!(ByteSource::len(&a), 4);
         let s: &[u8] = &v;
         assert_eq!(ByteSource::len(&s), 4);
+    }
+
+    #[test]
+    fn read_seek_source_is_send_and_sync() {
+        fn shareable<T: ByteSource + Send + Sync + 'static>(_: &T) {}
+        shareable(&ReadSeekSource::new(io::Cursor::new(vec![0u8; 4])).unwrap());
     }
 }

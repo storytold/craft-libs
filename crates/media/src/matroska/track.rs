@@ -245,10 +245,11 @@ impl Track {
             Codec::Vp9 { private } => (Id::Vp9, private.clone()),
             Codec::Av1 { av1c } => (Id::Av1, av1c.clone()),
             Codec::ProRes { .. } => (Id::ProRes, Vec::new()),
+            Codec::Apv { apvc } => (Id::Apv, apvc.clone()),
             Codec::Mjpeg => (Id::Mjpeg, Vec::new()),
             Codec::Aac { asc } => (Id::Aac, asc.clone()),
             Codec::Opus { head } => (Id::Opus, head.clone()),
-            Codec::Vorbis { headers } => (Id::Vorbis, crate::xiph_lace(headers)),
+            Codec::Vorbis { headers } => (Id::Vorbis, crate::xiph_lace(headers).unwrap_or_default()),
             Codec::Flac { private } => (Id::Flac, private.clone()),
             Codec::Pcm { .. } => (Id::Pcm, Vec::new()),
             Codec::Ac3 => (Id::Ac3, Vec::new()),
@@ -259,6 +260,13 @@ impl Track {
             _ => (Id::Unknown, Vec::new()),
         };
         let mut p = crate::CodecParams::new(id).with_extradata(extradata);
+        match &self.codec {
+            Codec::ProRes { fourcc: Some(tag) } | Codec::VfwFourcc { fourcc: tag, .. } => p = p.with_tag(*tag),
+            _ => {}
+        }
+        if let Some(v) = &self.video {
+            p = p.with_size(v.pixel_width, v.pixel_height);
+        }
         if let Some(a) = &self.audio {
             p = p.with_sample_rate(a.sampling_frequency.round() as u32).with_channels(u16::try_from(a.channels).unwrap_or(0));
         }

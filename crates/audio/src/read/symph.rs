@@ -669,6 +669,7 @@ impl Symph {
                 }
                 Err(SymError::DecodeError(m)) => {
                     self.errors += 1;
+                    self.info.damaged += 1;
                     corrupt_packet(self.errors, self.decoded, m)?;
                     if self.decoded == 0 || self.last_frames == 0 {
                         continue;

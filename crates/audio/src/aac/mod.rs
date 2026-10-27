@@ -70,6 +70,10 @@ pub enum Error {
     /// The configuration is malformed or outside the supported range.
     #[error("invalid configuration: {0}")]
     InvalidConfig(&'static str),
+    /// [`EncoderConfig`] asks for something the encoder cannot do (a rate that is not an AAC
+    /// rate, too many channels, a bitrate out of range).
+    #[error("invalid encoder settings: {0}")]
+    InvalidSettings(&'static str),
     /// A valid stream uses a feature this crate does not implement.
     #[error("unsupported feature: {0}")]
     Unsupported(&'static str),
@@ -165,6 +169,8 @@ const UPSAMPLE_HALF: usize = 12;
 /// samples as continuous decoding. From FilmCraft's `filmcraft-codecs`.
 #[cfg(feature = "aac-decode")]
 #[derive(Clone)]
+// Internal to HE-AAC output; public only so FilmCraft can re-export this module.
+#[doc(hidden)]
 pub struct Upsample2x {
     taps: [f32; 2 * UPSAMPLE_HALF],
     /// The last `2 × UPSAMPLE_HALF` input samples per channel.

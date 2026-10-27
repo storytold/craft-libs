@@ -13,7 +13,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Every audio track, for files that have several.
     for t in craft_audio::tracks(&bytes, ext)? {
-        println!("  track {}: {} {} Hz {} ch", t.index, t.codec.name(), t.sample_rate, t.channels);
+        let rate = t.sample_rate.map_or("?".into(), |r| r.to_string());
+        let channels = t.channels.map_or("?".into(), |c| c.to_string());
+        println!("  track {}: {} {rate} Hz {channels} ch", t.index, t.codec.name());
     }
 
     // The whole first track: planar f32, WAV channel order.

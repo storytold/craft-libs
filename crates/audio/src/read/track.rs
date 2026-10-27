@@ -53,6 +53,16 @@ pub struct TrackDecoder {
     last_frames: usize,
 }
 
+impl std::fmt::Debug for TrackDecoder {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TrackDecoder")
+            .field("codec", &self.codec)
+            .field("sample_rate", &self.sample_rate)
+            .field("layout", &self.layout)
+            .finish_non_exhaustive()
+    }
+}
+
 impl TrackDecoder {
     /// A decoder for the track `params` describes. `lookahead` holds the track's first packets
     /// (up to [`LOOKAHEAD_PACKETS`]; empty when they are not at hand): HE-AAC signalled only
@@ -143,9 +153,9 @@ impl TrackDecoder {
     }
 
     /// Decode one packet. An MP4 or Matroska packet may hold several MPEG audio or AC-3 frames;
-    /// an E-AC-3 dependent substream decodes to no frames. A corrupt Opus packet is concealed
-    /// (the decoder's own loss concealment), so it keeps its timing; for the other codecs call
-    /// [`TrackDecoder::conceal`] after an error.
+    /// an E-AC-3 dependent substream decodes to no frames. A packet that fails is an error for
+    /// every codec: call [`TrackDecoder::conceal`] for audio of its length, so what follows keeps
+    /// its timing.
     pub fn decode(&mut self, packet: &[u8]) -> Result<AudioBuffer> {
         let channels = match &mut self.inner {
             Inner::Aac { dec, up, order } => {
@@ -156,10 +166,7 @@ impl TrackDecoder {
                 reorder(out, *order)
             }
             Inner::Opus { dec, order } => {
-                let out = match dec.decode(Some(packet)) {
-                    Ok(o) => o,
-                    Err(_) => dec.decode(None)?,
-                };
+                let out = dec.decode(Some(packet))?;
                 reorder(out, *order)
             }
             Inner::Mpa(d) => {

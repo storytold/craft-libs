@@ -13,22 +13,25 @@ use crate::{AudioBuffer, AudioError, ChannelLayout, EncodeFormat, EncodeOptions,
 use std::io::{Seek, Write};
 
 /// Encode `buf` as WAV/BWF, AIFF/AIFF-C or FLAC. Integer depths clamp samples to [-1, 1]; float
-/// keeps values above full scale.
+/// keeps values above full scale. `opts.layout`, when set, must have `buf`'s channel count.
 ///
 /// ```
 /// # #[cfg(feature = "pcm-encode")] {
 /// use craft_audio::{AudioBuffer, BitDepth, EncodeFormat, EncodeOptions, encode};
 ///
 /// let buf = AudioBuffer::new(48_000, 2, 48_000); // one second of stereo silence
-/// let opts = EncodeOptions { format: EncodeFormat::Wav, bit_depth: BitDepth::Int24, dither: true, bwf: None };
+/// let opts = EncodeOptions::new(EncodeFormat::Wav).with_bit_depth(BitDepth::Int24).with_dither(true);
 /// let wav: Vec<u8> = encode(&buf, &opts).unwrap();
 /// assert_eq!(&wav[..4], b"RIFF");
 /// # }
 /// ```
 pub fn encode(buf: &AudioBuffer, opts: &EncodeOptions) -> Result<Vec<u8>> {
+    // Checked for every format; only a WAV records it.
+    #[cfg_attr(not(feature = "pcm-encode"), allow(unused_variables))]
+    let mask = opts.layout.map(|l| wav_mask(&l, buf.channels.len())).transpose()?;
     match opts.format {
         #[cfg(feature = "pcm-encode")]
-        EncodeFormat::Wav => wav::encode(buf, opts.bit_depth, opts.dither, opts.bwf.as_ref(), false, None),
+        EncodeFormat::Wav => wav::encode(buf, opts.bit_depth, opts.dither, opts.bwf.as_ref(), opts.force_rf64, mask),
         #[cfg(feature = "pcm-encode")]
         EncodeFormat::Aiff => aiff::encode(buf, opts.bit_depth, opts.dither),
         #[cfg(feature = "flac-encode")]
@@ -45,15 +48,15 @@ fn not_built(format: EncodeFormat) -> AudioError {
     AudioError::Unsupported(format!("writing {format:?} needs the `{feature}` feature"))
 }
 
-/// Formats [`encode`] can write, as the extensions that name them.
+/// The file extensions of the formats [`encode`] can write (those whose features are on).
 #[cfg(all(feature = "pcm-encode", feature = "flac-encode"))]
-pub const ENCODE_EXTENSIONS: &str = "wav, aif, aiff, flac";
-/// Formats [`encode`] can write, as the extensions that name them.
+pub const ENCODE_EXTENSIONS: &[&str] = &["wav", "aif", "aiff", "flac"];
+/// The file extensions of the formats [`encode`] can write (those whose features are on).
 #[cfg(all(feature = "pcm-encode", not(feature = "flac-encode")))]
-pub const ENCODE_EXTENSIONS: &str = "wav, aif, aiff";
-/// Formats [`encode`] can write, as the extensions that name them.
+pub const ENCODE_EXTENSIONS: &[&str] = &["wav", "aif", "aiff"];
+/// The file extensions of the formats [`encode`] can write (those whose features are on).
 #[cfg(all(feature = "flac-encode", not(feature = "pcm-encode")))]
-pub const ENCODE_EXTENSIONS: &str = "flac";
+pub const ENCODE_EXTENSIONS: &[&str] = &["flac"];
 
 /// The format [`encode`] writes for a file extension or format name (`wav`, `aiff`, `flac`, case-insensitive), or `None` when it cannot write it.
 pub fn encode_format_for(name: &str) -> Option<EncodeFormat> {
@@ -68,12 +71,6 @@ pub fn encode_format_for(name: &str) -> Option<EncodeFormat> {
     }
 }
 
-/// Encode a WAV file in the RF64 layout regardless of size (normally used only above 4 GiB).
-#[cfg(feature = "pcm-encode")]
-pub fn encode_wav_rf64(buf: &AudioBuffer, opts: &EncodeOptions) -> Result<Vec<u8>> {
-    wav::encode(buf, opts.bit_depth, opts.dither, opts.bwf.as_ref(), true, None)
-}
-
 /// The WAV speaker mask for `layout` over `channels` channels: its mask, or 0 (no speaker
 /// assignment) for an unordered layout. A layout for another channel count is an error.
 fn wav_mask(layout: &ChannelLayout, channels: usize) -> Result<u32> {
@@ -81,21 +78,6 @@ fn wav_mask(layout: &ChannelLayout, channels: usize) -> Result<u32> {
         return Err(AudioError::Encode(format!("a {}-channel layout for {channels} channels", layout.channels())));
     }
     Ok(layout.mask().unwrap_or(0))
-}
-
-/// Like [`encode`], with the speaker layout to record, for layouts a channel count alone cannot
-/// identify (5.1 with side vs back surrounds, 7.0 vs 6.1, Ambisonics as
-/// [`ChannelLayout::unordered`]). WAV stores it as `dwChannelMask`; AIFF and FLAC have fixed channel
-/// orders and ignore it. `buf` must hold `layout.channels()` channels.
-pub fn encode_with_layout(buf: &AudioBuffer, opts: &EncodeOptions, layout: ChannelLayout) -> Result<Vec<u8>> {
-    // Checked for every format; only a WAV records it.
-    #[cfg_attr(not(feature = "pcm-encode"), allow(unused_variables))]
-    let mask = wav_mask(&layout, buf.channels.len())?;
-    match opts.format {
-        #[cfg(feature = "pcm-encode")]
-        EncodeFormat::Wav => wav::encode(buf, opts.bit_depth, opts.dither, opts.bwf.as_ref(), false, Some(mask)),
-        _ => encode(buf, opts),
-    }
 }
 
 /// The error a stream encoder returns for every call after one of its writes has failed: the
@@ -106,7 +88,7 @@ fn failed_write_error() -> AudioError {
 }
 
 /// Writes WAV/BWF (RF64 above 4 GiB), AIFF / AIFF-C `fl32` or FLAC block by block, producing
-/// the same bytes [`encode_with_layout`] would for the whole buffer: a file of any length never
+/// the same bytes [`encode`] would for the whole buffer: a file of any length never
 /// has to fit in memory.
 ///
 /// ```
@@ -114,8 +96,8 @@ fn failed_write_error() -> AudioError {
 /// use craft_audio::{EncodeFormat, EncodeOptions, FileEncoder};
 /// use std::io::Cursor;
 ///
-/// let opts = EncodeOptions { format: EncodeFormat::Flac, ..Default::default() };
-/// let mut enc = FileEncoder::new(Cursor::new(Vec::new()), &opts, 2, 48_000, None).unwrap();
+/// let opts = EncodeOptions::new(EncodeFormat::Flac);
+/// let mut enc = FileEncoder::new(Cursor::new(Vec::new()), &opts, 2, 48_000).unwrap();
 /// let block = [vec![0.25f32; 4096], vec![-0.25f32; 4096]]; // one Vec (or slice) per channel
 /// for _ in 0..10 {
 ///     enc.write(&block, 4096).unwrap();
@@ -125,6 +107,20 @@ fn failed_write_error() -> AudioError {
 /// # }
 /// ```
 pub struct FileEncoder<W: Write + Seek>(Writer<W>);
+
+impl<W: Write + Seek> std::fmt::Debug for FileEncoder<W> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let format = match &self.0 {
+            #[cfg(feature = "pcm-encode")]
+            Writer::Wav(_) => EncodeFormat::Wav,
+            #[cfg(feature = "pcm-encode")]
+            Writer::Aiff(_) => EncodeFormat::Aiff,
+            #[cfg(feature = "flac-encode")]
+            Writer::Flac(_) => EncodeFormat::Flac,
+        };
+        f.debug_struct("FileEncoder").field("format", &format).finish_non_exhaustive()
+    }
+}
 
 enum Writer<W> {
     #[cfg(feature = "pcm-encode")]
@@ -136,13 +132,12 @@ enum Writer<W> {
 }
 
 impl<W: Write + Seek> FileEncoder<W> {
-    /// Starts a file at the current position of `out`. `layout` overrides the speaker layout a
-    /// WAV records (otherwise the usual one for the channel count); it must have `channels`
-    /// channels.
-    pub fn new(out: W, opts: &EncodeOptions, channels: usize, sample_rate: u32, layout: Option<ChannelLayout>) -> Result<Self> {
-        let (depth, dither) = (opts.bit_depth, opts.dither);
+    /// Starts a file of `channels` channels at the current position of `out`. `opts.layout`, when
+    /// set, must have `channels` channels.
+    pub fn new(out: W, opts: &EncodeOptions, channels: u16, sample_rate: u32) -> Result<Self> {
+        let (depth, dither, channels) = (opts.bit_depth, opts.dither, usize::from(channels));
         #[cfg_attr(not(feature = "pcm-encode"), allow(unused_variables))]
-        let mask = layout.map(|l| wav_mask(&l, channels)).transpose()?;
+        let mask = opts.layout.map(|l| wav_mask(&l, channels)).transpose()?;
         Ok(FileEncoder(match opts.format {
             #[cfg(feature = "pcm-encode")]
             EncodeFormat::Wav => Writer::Wav(wav::Writer::new(
@@ -151,7 +146,7 @@ impl<W: Write + Seek> FileEncoder<W> {
                 sample_rate,
                 depth,
                 dither,
-                wav::HeaderExtras { bwf: opts.bwf.as_ref(), mask, force_rf64: false },
+                wav::HeaderExtras { bwf: opts.bwf.as_ref(), mask, force_rf64: opts.force_rf64 },
             )?),
             #[cfg(feature = "pcm-encode")]
             EncodeFormat::Aiff => Writer::Aiff(aiff::Writer::new(out, channels, sample_rate, depth, dither)?),
@@ -225,10 +220,10 @@ mod tests {
     #[test]
     fn unbuilt_format_is_unsupported() {
         let (format, name) = if cfg!(feature = "pcm-encode") { (EncodeFormat::Flac, "flac") } else { (EncodeFormat::Wav, "wav") };
-        let opts = EncodeOptions { format, ..Default::default() };
+        let opts = EncodeOptions::new(format);
         let buf = AudioBuffer::new(48_000, 1, 16);
         assert!(matches!(encode(&buf, &opts), Err(AudioError::Unsupported(_))));
-        let enc = FileEncoder::new(std::io::Cursor::new(Vec::new()), &opts, 1, 48_000, None);
+        let enc = FileEncoder::new(std::io::Cursor::new(Vec::new()), &opts, 1, 48_000);
         assert!(matches!(enc, Err(AudioError::Unsupported(_))));
         assert_eq!(encode_format_for(name), None);
     }

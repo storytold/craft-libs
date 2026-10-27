@@ -24,6 +24,7 @@ use std::io;
 
 pub use crate::source::ByteSource;
 
+#[non_exhaustive]
 #[derive(Debug)]
 pub enum Error {
     Io(io::Error),
@@ -75,6 +76,7 @@ pub fn crc32(data: &[u8]) -> u32 {
 }
 
 /// The codec of a logical bitstream (from its first packet).
+#[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Codec {
     Opus,
@@ -110,6 +112,17 @@ impl Codec {
             Codec::Flac | Codec::Unknown => 1,
         }
     }
+    /// The shared identifier for this codec.
+    pub fn codec_id(self) -> crate::CodecId {
+        match self {
+            Codec::Opus => crate::CodecId::Opus,
+            Codec::Vorbis => crate::CodecId::Vorbis,
+            Codec::Flac => crate::CodecId::Flac,
+            Codec::Theora => crate::CodecId::Theora,
+            Codec::Speex => crate::CodecId::Speex,
+            Codec::Unknown => crate::CodecId::Unknown,
+        }
+    }
     pub fn name(self) -> &'static str {
         match self {
             Codec::Opus => "Opus",
@@ -124,6 +137,7 @@ impl Codec {
 
 /// A packet: its byte ranges (a packet may span pages) and the granule position of the page it
 /// completes on when it is that page's last completed packet.
+#[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Packet {
     pub parts: Vec<(u64, u32)>,
@@ -139,6 +153,7 @@ pub struct Packet {
 }
 
 /// A logical bitstream.
+#[non_exhaustive]
 #[derive(Clone, Debug)]
 pub struct Stream {
     pub serial: u32,
@@ -166,7 +181,7 @@ impl Stream {
                 .with_sample_rate(48_000)
                 .with_channels(first.get(9).copied().map_or(0, u16::from)),
             Codec::Vorbis => crate::CodecParams::new(Id::Vorbis)
-                .with_extradata(crate::xiph_lace(&self.headers))
+                .with_extradata(crate::xiph_lace(&self.headers).unwrap_or_default())
                 .with_sample_rate(le_u32(12))
                 .with_channels(first.get(11).copied().map_or(0, u16::from)),
             // The first packet is 0x7F "FLAC", version, header count, then `fLaC` + STREAMINFO;
@@ -176,14 +191,19 @@ impl Stream {
                 for h in self.headers.iter().skip(1) {
                     extradata.extend_from_slice(h);
                 }
-                crate::CodecParams::new(Id::Flac).with_extradata(extradata)
+                // STREAMINFO follows `fLaC` and its 4-byte block header: 10 bytes of block and frame
+                // sizes, then a 20-bit sample rate and 3 bits of channels less one.
+                let info = first.get(27..30).map_or(0, |b| (u32::from(b[0]) << 16) | (u32::from(b[1]) << 8) | u32::from(b[2]));
+                let channels = if info == 0 { 0 } else { ((info >> 1) & 7) as u16 + 1 };
+                crate::CodecParams::new(Id::Flac).with_extradata(extradata).with_sample_rate(info >> 4).with_channels(channels)
             }
-            _ => crate::CodecParams::new(Id::Unknown),
+            c => crate::CodecParams::new(c.codec_id()),
         }
     }
 }
 
 /// An opened Ogg file.
+#[non_exhaustive]
 #[derive(Clone, Debug)]
 pub struct OggFile {
     pub streams: Vec<Stream>,
@@ -399,6 +419,7 @@ pub fn opus_packet_samples(prefix: [u8; 2], size: u32) -> Option<u32> {
 }
 
 /// RFC 7845 §4 timing of an Opus stream.
+#[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OpusTiming {
     pub pre_skip: u32,
@@ -467,6 +488,7 @@ impl OpusTiming {
 }
 
 /// Vorbis identification header fields (Vorbis I §4.2.2).
+#[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct VorbisInfo {
     pub channels: u8,

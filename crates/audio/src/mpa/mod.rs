@@ -67,6 +67,7 @@ pub enum Mode {
 }
 
 /// The 32-bit frame header (§2.4.1.3, §2.4.2.3).
+#[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Header {
     /// MPEG version.
@@ -172,6 +173,7 @@ pub fn parse_header(b: &[u8]) -> Result<Header> {
 }
 
 /// One decoded frame.
+#[non_exhaustive]
 #[derive(Clone, Debug)]
 pub struct Frame {
     /// The frame's header.

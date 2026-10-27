@@ -55,6 +55,7 @@ const BITRATES: [u32; 19] = [32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224
 const NFCHANS: [usize; 8] = [2, 1, 2, 3, 3, 4, 4, 5];
 
 /// syncinfo and the start of bsi.
+#[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Header {
     /// Sampling rate in Hz (`fscod`, or `fscod2` for E-AC-3 reduced rates).
@@ -520,7 +521,7 @@ struct Globals {
 }
 
 /// State carried from block to block within a syncframe.
-struct Frame {
+struct FrameState {
     nfchans: usize,
     blksw: [bool; 5],
     dithflag: [bool; 5],
@@ -551,9 +552,9 @@ struct Frame {
     bap: [[u8; 256]; 7],
 }
 
-impl Frame {
-    fn new(nfchans: usize, fscod: usize) -> Frame {
-        Frame {
+impl FrameState {
+    fn new(nfchans: usize, fscod: usize) -> FrameState {
+        FrameState {
             nfchans,
             blksw: [false; 5],
             dithflag: [false; 5],
@@ -686,7 +687,7 @@ pub struct Decoder {
     seed: u32,
     /// E-AC-3: the block state of the last syncframe (acmod, lfeon, sample rate code), whose
     /// exponents a syncframe of fewer than six blocks may reuse.
-    carry: Option<(usize, bool, usize, Box<Frame>)>,
+    carry: Option<(usize, bool, usize, Box<FrameState>)>,
 }
 
 impl Default for Decoder {
@@ -695,10 +696,15 @@ impl Default for Decoder {
     }
 }
 
+/// The name FilmCraft's `filmcraft-ac3` used, kept so it can re-export this module.
+#[doc(hidden)]
+pub type Decoded = Frame;
+
 /// A decoded syncframe: [`Header::samples`] samples per channel (1536 for AC-3), WAV channel
 /// order. No channels for an E-AC-3 syncframe that is not [`Header::is_primary`].
+#[non_exhaustive]
 #[derive(Clone, Debug)]
-pub struct Decoded {
+pub struct Frame {
     /// The syncframe's header.
     pub header: Header,
     /// Planar samples, one `Vec` per output channel.
@@ -734,7 +740,7 @@ impl Decoder {
     }
 
     /// Decode one syncframe.
-    pub fn decode(&mut self, frame: &[u8]) -> Result<Decoded> {
+    pub fn decode(&mut self, frame: &[u8]) -> Result<Frame> {
         let h = parse_header(frame)?;
         if frame.len() < h.frame_bytes {
             return Err(Error::Invalid("truncated syncframe"));
@@ -786,15 +792,15 @@ impl Decoder {
             let l = r.read(6) as usize;
             r.skip((l + 1) * 8);
         }
-        let mut f = Frame::new(NFCHANS[acmod], fscod);
+        let mut f = FrameState::new(NFCHANS[acmod], fscod);
         let pcm = self.blocks(&mut r, &mut f, acmod, lfeon, 6, None)?;
-        Ok(Decoded { header: h, channels: wav_order(pcm, acmod, lfeon) })
+        Ok(Frame { header: h, channels: wav_order(pcm, acmod, lfeon) })
     }
 
     /// Decode one E-AC-3 syncframe (`frame` is exactly the syncframe).
-    fn decode_eac3(&mut self, frame: &[u8], h: Header) -> Result<Decoded> {
+    fn decode_eac3(&mut self, frame: &[u8], h: Header) -> Result<Frame> {
         if !h.is_primary() {
-            return Ok(Decoded { header: h, channels: Vec::new() });
+            return Ok(Frame { header: h, channels: Vec::new() });
         }
         // E-AC-3 has a single CRC, at the end (§E2.2.6): reseed the dither from the last words
         let n = frame.len();
@@ -807,11 +813,11 @@ impl Decoder {
         let mut e = eac3::FrameInfo::read(&mut r, &bsi, acmod, lfeon, nblocks, n / 2)?;
         let mut f = match self.carry.take() {
             Some((a, l, fs, f)) if (a, l, fs) == (acmod, lfeon, bsi.fscod) => f,
-            _ => Box::new(Frame::new(NFCHANS[acmod], bsi.fscod)),
+            _ => Box::new(FrameState::new(NFCHANS[acmod], bsi.fscod)),
         };
         let pcm = self.blocks(&mut r, &mut f, acmod, lfeon, nblocks, Some(&mut e))?;
         self.carry = Some((acmod, lfeon, bsi.fscod, f));
-        Ok(Decoded { header: h, channels: wav_order(pcm, acmod, lfeon) })
+        Ok(Frame { header: h, channels: wav_order(pcm, acmod, lfeon) })
     }
 
     /// Decode `nblocks` audio blocks and synthesize them (inverse transform, overlap-add), in coded
@@ -819,7 +825,7 @@ impl Decoder {
     fn blocks(
         &mut self,
         r: &mut Bits,
-        f: &mut Frame,
+        f: &mut FrameState,
         acmod: usize,
         lfeon: bool,
         nblocks: usize,
@@ -854,7 +860,7 @@ impl Decoder {
     fn audio_block(
         &mut self,
         r: &mut Bits,
-        f: &mut Frame,
+        f: &mut FrameState,
         acmod: usize,
         lfeon: bool,
         blk: usize,
