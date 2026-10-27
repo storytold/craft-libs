@@ -121,11 +121,14 @@ pub fn download_prefix(repo: &str) -> String {
 /// built from the release's own tag and the asset's own name, so a link can't point at another
 /// release or anywhere else (#764). `None` when the tag or name holds anything but ASCII letters,
 /// digits and `._+-`, which no Craft App release uses and which github.com could re-interpret.
+/// A `+` (semver build metadata) is written `%2B`, as GitHub writes it in `browser_download_url`
+/// (`.../download/17.0.9%2B9/jdk-17.0.9%2B9.deb` for the tag `17.0.9+9`).
 pub fn expected_download_url(repo: &str, tag: &str, name: &str) -> Option<String> {
     let plain = |s: &str, max: usize| {
         !s.is_empty() && s.len() <= max && s != "." && s != ".." && s.bytes().all(|b| b.is_ascii_alphanumeric() || b"._+-".contains(&b))
     };
-    (plain(tag, 64) && plain(name, 200) && valid_file_name(name)).then(|| format!("{}{tag}/{name}", download_prefix(repo)))
+    let encoded = |s: &str| s.replace('+', "%2B");
+    (plain(tag, 64) && plain(name, 200) && valid_file_name(name)).then(|| format!("{}{}/{}", download_prefix(repo), encoded(tag), encoded(name)))
 }
 
 /// Whether `url` is a download that truly belongs to `repo`.
@@ -238,14 +241,13 @@ fn release_from_value(v: &serde_json::Value, repo: &str) -> Result<Release, Stri
 }
 
 /// A release known only from its tag and `SHA256SUMS.txt` (the quota-free route: the
-/// `releases/latest` redirect names the tag, and the sums list every file).
+/// `releases/latest` redirect names the tag, and the sums list every file). Each link is
+/// [`expected_download_url`], so it's the one the check before the download accepts; a file
+/// without one is left out.
 pub fn release_from_sums(repo: &str, tag: &str, sums: &[(String, String)]) -> Release {
-    let prefix = download_prefix(repo);
-    let mut assets: Vec<Asset> = sums
-        .iter()
-        .map(|(hash, name)| Asset { name: name.clone(), size: 0, url: format!("{prefix}{tag}/{name}"), sha256: Some(hash.clone()) })
-        .collect();
-    assets.push(Asset { name: "SHA256SUMS.txt".into(), size: 0, url: format!("{prefix}{tag}/SHA256SUMS.txt"), sha256: None });
+    let asset =
+        |name: &str, sha256: Option<String>| expected_download_url(repo, tag, name).map(|url| Asset { name: name.to_string(), size: 0, url, sha256 });
+    let assets: Vec<Asset> = sums.iter().filter_map(|(hash, name)| asset(name, Some(hash.clone()))).chain(asset("SHA256SUMS.txt", None)).collect();
     Release {
         tag: tag.to_string(),
         version: version::parse(tag),
@@ -402,6 +404,25 @@ mod tests {
         {
             assert_eq!(expected_download_url(REPO, tag, name), None, "{tag:?} {name:?}");
         }
+    }
+
+    /// A `+` in the tag or name (semver build metadata) is `%2B` in GitHub's download links, but a
+    /// plain `+` in the asset's name and in the `releases/latest` redirect, as on bell-sw/Liberica's
+    /// releases. The API's assets, and those built from `SHA256SUMS.txt`, get the same link.
+    #[test]
+    fn a_plus_in_the_tag_is_percent_encoded_in_the_link() {
+        let name = "photocraft-1.0.0+build.1-linux-x86_64.AppImage";
+        let github = "https://github.com/storytold/photocraft/releases/download/v1.0.0%2Bbuild.1/photocraft-1.0.0%2Bbuild.1-linux-x86_64.AppImage";
+        let api = |url: &str| format!(r#"{{"tag_name":"v1.0.0+build.1","assets":[{{"name":"{name}","size":1,"browser_download_url":"{url}"}}]}}"#);
+        let r = parse_github_release(&api(github), REPO).unwrap();
+        assert_eq!((r.assets[0].name.as_str(), r.assets[0].url.as_str()), (name, github));
+        // GitHub never writes the `+` itself into the link.
+        assert!(parse_github_release(&api(&github.replace("%2B", "+")), REPO).unwrap().assets.is_empty());
+
+        let tag = tag_from_redirect("https://github.com/storytold/photocraft/releases/tag/v1.0.0+build.1", REPO).unwrap();
+        let r = release_from_sums(REPO, &tag, &[(HASH.to_string(), name.to_string())]);
+        assert_eq!(r.assets[0].url, github);
+        assert_eq!(r.sums_asset().unwrap().url, "https://github.com/storytold/photocraft/releases/download/v1.0.0%2Bbuild.1/SHA256SUMS.txt");
     }
 
     /// Links to other hosts or repositories, or that climb out with `..` or encoded separators,
