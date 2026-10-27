@@ -2,12 +2,16 @@
 //! AIFF readers, and [`TrackDecoder`]) comes first; symphonia decodes the rest.
 
 mod aiff;
+#[cfg(feature = "symphonia")]
 mod caf;
+#[cfg(feature = "symphonia")]
 mod flac;
+#[cfg(feature = "symphonia")]
 mod mp4;
 mod native;
 mod pcm;
 mod source;
+#[cfg(feature = "symphonia")]
 mod symph;
 mod track;
 mod wav;
@@ -19,6 +23,7 @@ use craft_media::ByteSource;
 use native::Native;
 use source::Src;
 use std::sync::Arc;
+#[cfg(feature = "symphonia")]
 use symph::Symph;
 
 /// The decode limit [`decode`] applies unless [`DecodeOptions::max_samples`] says otherwise:
@@ -158,6 +163,7 @@ pub struct TrackInfo {
 /// The decoder behind a [`Decoder`].
 enum Inner<'a> {
     Native(Box<Native<'a>>),
+    #[cfg(feature = "symphonia")]
     Symph(Box<Symph>),
 }
 
@@ -207,6 +213,12 @@ impl<'a> Decoder<'a> {
         if let Some(n) = Native::open(&src, container, opts.track) {
             return Ok(Decoder { inner: Inner::Native(Box::new(n?)) });
         }
+        Decoder::fallback(src, container, opts)
+    }
+
+    /// A file the native path does not read: symphonia's.
+    #[cfg(feature = "symphonia")]
+    fn fallback(src: Src<'a>, container: Option<Container>, opts: &DecodeOptions) -> Result<Decoder<'a>> {
         let mut s = Symph::open(src.whole()?, container, opts.track)?;
         // A WAV with a codec symphonia reads (ADPCM, A-law, ...) keeps its BWF metadata.
         if container == Some(Container::Wav)
@@ -217,11 +229,19 @@ impl<'a> Decoder<'a> {
         Ok(Decoder { inner: Inner::Symph(Box::new(s)) })
     }
 
+    /// A file the native path does not read, without symphonia.
+    #[cfg(not(feature = "symphonia"))]
+    fn fallback(_src: Src<'a>, container: Option<Container>, _opts: &DecodeOptions) -> Result<Decoder<'a>> {
+        let what = container.map_or("this file", Container::name);
+        Err(AudioError::Unsupported(format!("{what} needs a decoder this build leaves out (the `decode` feature adds symphonia)")))
+    }
+
     /// What the file holds. `frames` is 0 until decoded when the container does not say how long
     /// the track is ([`Decoder::length_known`]).
     pub fn info(&self) -> &AudioInfo {
         match &self.inner {
             Inner::Native(n) => n.info(),
+            #[cfg(feature = "symphonia")]
             Inner::Symph(s) => s.info(),
         }
     }
@@ -231,6 +251,7 @@ impl<'a> Decoder<'a> {
     pub fn length_known(&self) -> bool {
         match &self.inner {
             Inner::Native(n) => n.frames_known(),
+            #[cfg(feature = "symphonia")]
             Inner::Symph(s) => s.frames_known(),
         }
     }
@@ -240,6 +261,7 @@ impl<'a> Decoder<'a> {
     pub fn next_block(&mut self) -> Result<Option<AudioBuffer>> {
         match &mut self.inner {
             Inner::Native(n) => n.next_block(),
+            #[cfg(feature = "symphonia")]
             Inner::Symph(s) => s.next_block(),
         }
     }
@@ -249,6 +271,7 @@ impl<'a> Decoder<'a> {
     pub fn seek(&mut self, frame: u64) -> Result<u64> {
         match &mut self.inner {
             Inner::Native(n) => n.seek(frame),
+            #[cfg(feature = "symphonia")]
             Inner::Symph(s) => s.seek(frame),
         }
     }
@@ -356,6 +379,22 @@ fn tracks_in(src: &Src<'_>, ext_hint: Option<&str>) -> Result<Vec<TrackInfo>> {
             let i = n.info();
             Ok(list(vec![(i.codec, i.sample_rate, i.channels)]))
         }
+        #[cfg(feature = "symphonia")]
         None => Ok(list(symph::tracks(src.whole()?, container)?)),
+        #[cfg(not(feature = "symphonia"))]
+        None => Ok(Vec::new()),
+    }
+}
+
+#[cfg(all(test, not(feature = "symphonia")))]
+mod native_only_tests {
+    use super::*;
+
+    /// Without symphonia, a format with no native decoder is unsupported, not malformed.
+    #[test]
+    fn formats_left_to_symphonia_are_unsupported() {
+        let flac_header = [&b"fLaC"[..], &[0x80, 0, 0, 34], &[0; 34]].concat();
+        assert!(matches!(decode(&flac_header, None), Err(AudioError::Unsupported(m)) if m.contains("FLAC")));
+        assert!(matches!(probe(&flac_header, None), Err(AudioError::Unsupported(_))));
     }
 }

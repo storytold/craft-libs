@@ -11,20 +11,32 @@ repository.workspace = true
 workspace = true
 
 [features]
-# Probe and decode: WAV and AIFF natively; AAC, MP1/MP2, AC-3/E-AC-3, Opus and PCM through
+# Probe and decode files: WAV and AIFF natively; AAC, MP1/MP2, AC-3/E-AC-3, Opus and PCM through
 # craft-media's demuxers and this crate's decoders; MP3, FLAC, ALAC, Vorbis, CAF, ADPCM, A-law and
 # µ-law through symphonia.
-decode = ["craft-media/bitstream", "craft-media/isobmff", "craft-media/matroska", "craft-media/ogg", "dep:symphonia", "dep:log"]
-# Encode WAV/BWF/RF64, AIFF/AIFF-C and FLAC; the AAC and Opus packet encoders.
+decode = ["decode-native", "symphonia"]
+# `decode` without symphonia: only the formats with a native decoder (others are Unsupported).
+decode-native = ["aac-decode", "opus-decode", "mpa-decode", "ac3-decode", "craft-media/isobmff", "craft-media/matroska", "craft-media/ogg", "dep:log"]
+# The symphonia fallback for the formats with no native decoder yet.
+symphonia = ["decode-native", "dep:symphonia"]
+# Encode WAV/BWF/RF64, AIFF/AIFF-C and FLAC files.
 encode = ["craft-media/bitstream"]
+# Codec modules on their own, for packet-level use.
+aac-decode = ["craft-media/bitstream"]
+aac-encode = ["craft-media/bitstream"]
+opus-decode = []
+opus-encode = []
+mpa-decode = ["craft-media/bitstream"]
+ac3-decode = []
 # Multi-resolution waveform overviews (`peaks`).
 peaks = []
-# Encode AAC channels in parallel.
+# Encode AAC channels in parallel (with `aac-encode`).
 rayon = ["dep:rayon"]
 # Serialize and Deserialize for the shared types.
 serde = ["dep:serde", "craft-media/serde"]
 
 [dependencies]
+# symphonia keeps its AAC decoder for AAC in CAF, a container craft-media does not read.
 craft-media = { workspace = true }
 thiserror = { workspace = true }
 serde = { workspace = true, optional = true }
@@ -42,4 +54,4 @@ required-features = ["decode", "encode", "peaks"]
 
 [[test]]
 name = "codecs"
-required-features = ["decode", "encode"]
+required-features = ["decode", "encode", "aac-encode", "opus-encode"]

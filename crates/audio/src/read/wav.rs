@@ -22,6 +22,7 @@ pub(crate) enum WavParse {
     /// A PCM / float layout we decode natively.
     Native(WavLayout),
     /// A valid WAV whose codec we hand to symphonia (ADPCM, A-law, ...).
+    #[cfg_attr(not(feature = "symphonia"), allow(dead_code))]
     Foreign { bwf: Option<BwfInfo> },
 }
 
@@ -117,6 +118,7 @@ fn parse_bext(c: &[u8]) -> Option<BwfInfo> {
 /// Refuse the WAVE file at `at`, which symphonia reads (A-law, ADPCM, ...), if an INFO entry
 /// claims more bytes than the file holds: symphonia allocates each entry's length. Chunks are
 /// walked where symphonia reads them: after the bytes a chunk's parser used, not its length.
+#[cfg(feature = "symphonia")]
 pub(crate) fn check_info(b: &[u8], at: usize) -> Result<()> {
     if tag(b, at + 8) != Some(*b"WAVE") {
         return Ok(());
@@ -142,6 +144,7 @@ pub(crate) fn check_info(b: &[u8], at: usize) -> Result<()> {
 }
 
 /// The bytes symphonia reads of a `fmt ` chunk: some formats' parsers go by their own extra size.
+#[cfg(feature = "symphonia")]
 fn fmt_used(b: &[u8], body: usize, len: usize) -> usize {
     match le_u16(b, body) {
         Some(2 | 6 | 7 | 0x11) => le_u16(b, body + 16).map_or(len, |extra| 18 + usize::from(extra)),
@@ -152,6 +155,7 @@ fn fmt_used(b: &[u8], body: usize, len: usize) -> usize {
 
 /// Check the INFO entries in the `len` bytes from `start`; returns the bytes symphonia reads of
 /// them, with the pad it reads after an odd entry.
+#[cfg(feature = "symphonia")]
 fn info_entries(b: &[u8], start: usize, len: usize) -> Result<usize> {
     let mut used = 0;
     while used + 8 <= len {

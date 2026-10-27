@@ -14,18 +14,18 @@
 // EffectCraft allow these lints workspace-wide).
 #![allow(clippy::needless_range_loop, clippy::too_many_arguments)]
 
-#[cfg(feature = "decode")]
+#[cfg(feature = "opus-decode")]
 mod decode;
-#[cfg(feature = "encode")]
+#[cfg(feature = "opus-encode")]
 pub mod encoder;
 
-#[cfg(feature = "decode")]
+#[cfg(feature = "opus-decode")]
 pub use decode::{Bandwidth, Decoder, Error, Mode, OpusHead, Packet, Result, SAMPLE_RATES, StreamDecoder, Toc, packet};
 
 /// Channel order for Vorbis-ordered surround (mapping family 1, RFC 7845 §5.1.1.2): output channel
 /// → decoded channel, giving the WAV/SMPTE order (L R C LFE back… side…) the rest of craft-audio
 /// uses. From FilmCraft's `filmcraft-codecs`.
-#[cfg(feature = "decode")]
+#[cfg(feature = "opus-decode")]
 pub fn wav_order(channels: usize) -> Option<&'static [usize]> {
     Some(match channels {
         3 => &[0, 2, 1],

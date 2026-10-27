@@ -15,7 +15,7 @@
 //! so FilmCraft can re-export this module.
 //!
 //! ```
-//! # #[cfg(all(feature = "encode", feature = "decode"))] {
+//! # #[cfg(all(feature = "aac-encode", feature = "aac-decode"))] {
 //! use craft_audio::aac::{Decoder, Encoder, EncoderConfig};
 //!
 //! let mut enc = Encoder::new(EncoderConfig::cbr(48_000, 2, 128_000)).unwrap();
@@ -38,12 +38,12 @@
 #![allow(clippy::needless_range_loop)]
 // Tables, Huffman coding, MDCT, window and TNS code shared by the decoder and the encoder; each
 // side uses only part of it.
-#![cfg_attr(not(all(feature = "decode", feature = "encode")), allow(dead_code))]
+#![cfg_attr(not(all(feature = "aac-decode", feature = "aac-encode")), allow(dead_code))]
 
 mod config;
-#[cfg(feature = "decode")]
+#[cfg(feature = "aac-decode")]
 mod decoder;
-#[cfg(feature = "encode")]
+#[cfg(feature = "aac-encode")]
 mod encoder;
 mod huffman;
 mod huffman_tables;
@@ -53,9 +53,9 @@ mod tables;
 mod tns;
 
 pub use config::{AdtsHeader, AudioSpecificConfig, ElementType, ProgramConfig, config_layout, split_adts};
-#[cfg(feature = "decode")]
+#[cfg(feature = "aac-decode")]
 pub use decoder::Decoder;
-#[cfg(feature = "encode")]
+#[cfg(feature = "aac-encode")]
 pub use encoder::{BitrateMode, Encoder, EncoderConfig, EncoderStats};
 pub use mdct::WindowShape;
 pub use tables::{SAMPLE_RATES, sample_rate_index};
@@ -107,7 +107,7 @@ pub fn wav_order(channel_config: u8) -> Option<&'static [usize]> {
 /// AAC-LC config at 24 kHz or less) SBR is only visible as fill-element data in the access units,
 /// so the first ones are decoded to look for it. `None` if `asc` is not one the decoder reads.
 /// From FilmCraft's `filmcraft-codecs`.
-#[cfg(feature = "decode")]
+#[cfg(feature = "aac-decode")]
 pub fn output_rate<'a>(asc: &[u8], first_units: impl IntoIterator<Item = &'a [u8]>) -> Option<u32> {
     let mut dec = Decoder::new(asc).ok()?;
     let core = dec.sample_rate();
@@ -126,7 +126,7 @@ pub fn output_rate<'a>(asc: &[u8], first_units: impl IntoIterator<Item = &'a [u8
 }
 
 /// Taps on each side of the interpolation point in [`Upsample2x`].
-#[cfg(feature = "decode")]
+#[cfg(feature = "aac-decode")]
 const UPSAMPLE_HALF: usize = 12;
 
 /// 2× upsampler for HE-AAC. The decoder reconstructs the AAC-LC core at half the output rate and
@@ -136,7 +136,7 @@ const UPSAMPLE_HALF: usize = 12;
 /// The look-ahead delays the output by `UPSAMPLE_HALF` input samples (0.5 ms at 24 kHz); the
 /// state carries across packets, so a seek primed with the preceding packet gives the same
 /// samples as continuous decoding. From FilmCraft's `filmcraft-codecs`.
-#[cfg(feature = "decode")]
+#[cfg(feature = "aac-decode")]
 #[derive(Clone)]
 pub struct Upsample2x {
     taps: [f32; 2 * UPSAMPLE_HALF],
@@ -144,7 +144,7 @@ pub struct Upsample2x {
     hist: Vec<Vec<f32>>,
 }
 
-#[cfg(feature = "decode")]
+#[cfg(feature = "aac-decode")]
 impl Upsample2x {
     pub fn new(channels: usize) -> Self {
         let m = UPSAMPLE_HALF as f64;

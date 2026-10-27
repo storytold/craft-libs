@@ -1,7 +1,9 @@
 //! What the decoders read from: borrowed bytes or a shared [`ByteSource`], with small typed reads.
 
+#[cfg(feature = "symphonia")]
 use crate::{AudioError, Result};
 use craft_media::ByteSource;
+#[cfg(feature = "symphonia")]
 use std::borrow::Cow;
 use std::io;
 use std::sync::Arc;
@@ -77,6 +79,7 @@ impl Src<'_> {
     }
 
     /// The whole source in memory: borrowed for a buffer, read once for a shared source.
+    #[cfg(feature = "symphonia")]
     pub(crate) fn whole(&self) -> Result<Cow<'_, [u8]>> {
         match self {
             Src::Slice(b) => Ok(Cow::Borrowed(b)),

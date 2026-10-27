@@ -14,7 +14,7 @@
 //! names, so EffectCraft can re-export this module.
 //!
 //! ```
-//! # #[cfg(feature = "encode")] {
+//! # #[cfg(feature = "opus-encode")] {
 //! use craft_audio::opus::encoder::{Application, Mode, OpusEncoder};
 //! let mut enc = OpusEncoder::new(2, 128_000).unwrap();
 //! let pcm = vec![0.0f32; OpusEncoder::FRAME_SIZE * 2];

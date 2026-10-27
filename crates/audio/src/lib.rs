@@ -1,35 +1,40 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
-//! Audio file I/O and codecs for the Craft apps. Input and output are byte slices (no filesystem
-//! access); builds for `wasm32-unknown-unknown`.
+//! Audio file I/O and codecs for the Craft apps. Input and output are byte slices or a
+//! [`craft_media::ByteSource`] (no filesystem access of its own); builds for
+//! `wasm32-unknown-unknown`.
 //!
-//! - [`detect_format`], [`probe`], [`decode`] (feature `decode`): WAV and AIFF are read natively;
-//!   AAC, MP1/MP2, AC-3/E-AC-3, Opus and PCM in MP4/MOV, Matroska/WebM, Ogg or raw streams go
-//!   through craft-media's demuxers and this crate's decoders; everything else (MP3, FLAC, ALAC,
-//!   Vorbis, CAF, ADPCM, A-law, µ-law) through `symphonia`, which is to be replaced by native
-//!   decoders.
+//! - [`decode`], [`probe`], [`Decoder`] (streaming, seekable), [`tracks`], [`detect_container`]
+//!   (feature `decode`): WAV and AIFF are read natively; AAC, MP1/MP2, AC-3/E-AC-3, Opus and PCM
+//!   in MP4/MOV, Matroska/WebM, Ogg or raw streams go through craft-media's demuxers and
+//!   [`TrackDecoder`]; everything else (MP3, FLAC, ALAC, Vorbis, CAF, ADPCM, A-law, µ-law) through
+//!   `symphonia`, which is to be replaced by native decoders. Feature `decode-native` is the same
+//!   without symphonia.
+//! - [`TrackDecoder`] (feature `decode-native`): one track's packets from any demuxer to planar
+//!   `f32` in WAV channel order.
 //! - [`encode`], [`FileEncoder`], [`wav_float_header`] (feature `encode`): WAV/BWF/RF64,
 //!   AIFF/AIFF-C and FLAC, whole-buffer or incremental into any `Write + Seek`.
 //! - [`peaks`] (feature `peaks`): min/max/RMS pyramid for waveform drawing.
-//! - Codec modules for packet-level use: [`aac`] (AAC-LC decoder and encoder), [`mpa`] (MP1/MP2
-//!   decoder), [`ac3`] (AC-3/E-AC-3 decoder), [`opus`] (decoder and [`opus::encoder`]).
+//! - Codec modules for packet-level use, each with its own features: [`aac`] (`aac-decode`,
+//!   `aac-encode`), [`mpa`] (`mpa-decode`), [`ac3`] (`ac3-decode`), [`opus`] (`opus-decode`, and
+//!   [`opus::encoder`] with `opus-encode`).
 //!
 //! The shared types below build with no features.
 
-#[cfg(any(feature = "decode", feature = "encode"))]
+#[cfg(any(feature = "aac-decode", feature = "aac-encode"))]
 pub mod aac;
-#[cfg(feature = "decode")]
+#[cfg(feature = "ac3-decode")]
 pub mod ac3;
 mod buffer;
 mod layout;
-#[cfg(feature = "decode")]
+#[cfg(feature = "mpa-decode")]
 pub mod mpa;
-#[cfg(any(feature = "decode", feature = "encode"))]
+#[cfg(any(feature = "opus-decode", feature = "opus-encode"))]
 pub mod opus;
 #[cfg(feature = "peaks")]
 pub mod peaks;
-#[cfg(feature = "decode")]
+#[cfg(feature = "decode-native")]
 mod read;
-#[cfg(any(feature = "decode", feature = "encode"))]
+#[cfg(any(feature = "decode-native", feature = "encode"))]
 mod wav;
 #[cfg(feature = "encode")]
 mod write;
@@ -37,7 +42,7 @@ mod write;
 pub use buffer::AudioBuffer;
 pub use craft_media::{CodecId, CodecParams, Container, PcmFormat};
 pub use layout::{ChannelLayout, Speaker};
-#[cfg(feature = "decode")]
+#[cfg(feature = "decode-native")]
 pub use read::{
     DEFAULT_MAX_SAMPLES, DecodeOptions, Decoder, LOOKAHEAD_PACKETS, TrackDecoder, TrackInfo, decode, decode_with, detect_container, probe,
     probe_with, tracks, tracks_of,
@@ -73,7 +78,7 @@ pub type Result<T> = std::result::Result<T, AudioError>;
 // use `?` throughout: a codec's "unsupported" stays `Unsupported`, anything else in the input is
 // `Malformed`, and an encoder's refusal is `Encode`.
 
-#[cfg(any(feature = "decode", feature = "encode"))]
+#[cfg(any(feature = "aac-decode", feature = "aac-encode"))]
 impl From<aac::Error> for AudioError {
     fn from(e: aac::Error) -> Self {
         match e {
@@ -83,7 +88,7 @@ impl From<aac::Error> for AudioError {
     }
 }
 
-#[cfg(feature = "decode")]
+#[cfg(feature = "mpa-decode")]
 impl From<mpa::Error> for AudioError {
     fn from(e: mpa::Error) -> Self {
         match e {
@@ -93,7 +98,7 @@ impl From<mpa::Error> for AudioError {
     }
 }
 
-#[cfg(feature = "decode")]
+#[cfg(feature = "ac3-decode")]
 impl From<ac3::Error> for AudioError {
     fn from(e: ac3::Error) -> Self {
         match e {
@@ -103,7 +108,7 @@ impl From<ac3::Error> for AudioError {
     }
 }
 
-#[cfg(feature = "decode")]
+#[cfg(feature = "opus-decode")]
 impl From<opus::Error> for AudioError {
     fn from(e: opus::Error) -> Self {
         match e {
@@ -113,7 +118,7 @@ impl From<opus::Error> for AudioError {
     }
 }
 
-#[cfg(feature = "encode")]
+#[cfg(feature = "opus-encode")]
 impl From<opus::encoder::Error> for AudioError {
     fn from(e: opus::encoder::Error) -> Self {
         AudioError::Encode(e.to_string())
@@ -199,7 +204,7 @@ pub struct AudioInfo {
 
 impl AudioInfo {
     /// Info for a stream with `layout`'s channels and no BWF metadata.
-    #[cfg(feature = "decode")]
+    #[cfg(feature = "decode-native")]
     pub(crate) fn new(
         container: Container,
         codec: CodecId,

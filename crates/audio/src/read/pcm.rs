@@ -37,6 +37,7 @@ pub(crate) fn be_u32(b: &[u8], pos: usize) -> Option<u32> {
 }
 
 /// Big-endian `u64` at `pos`.
+#[cfg(feature = "symphonia")]
 pub(crate) fn be_u64(b: &[u8], pos: usize) -> Option<u64> {
     let s: [u8; 8] = b.get(pos..pos.checked_add(8)?)?.try_into().ok()?;
     Some(u64::from_be_bytes(s))
