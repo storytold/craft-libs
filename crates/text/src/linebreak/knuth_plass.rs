@@ -98,43 +98,11 @@ pub fn knuth_plass(items: &[Item], width: &dyn Fn(usize) -> f64, p: &Params) -> 
                     continue;
                 }
             }
-            let weight = if f.ratio > 0.0 {
-                p.stretch_weight
-            } else if f.ratio < 0.0 {
-                p.shrink_weight
-            } else {
-                1.0
-            };
-            let badness = (weight * 100.0 * f.ratio.abs().min(MAX_RATIO).powi(3)).min(p.max_badness);
-            let lp = p.line_penalty + badness;
-            let mut d = if forced {
-                lp * lp
-            } else if cost >= 0.0 {
-                lp * lp + cost * cost
-            } else {
-                lp * lp - cost * cost
-            };
-            if flagged && n.flagged {
-                d += p.flagged_demerits;
-            }
-            // A ragged line ending at a forced break says nothing about the rag: it keeps its
-            // neighbour's class.
-            let class = fitness_class(f.ratio, &p.fitness);
-            let fitness = if forced && p.rag.is_some() { n.fitness.unwrap_or(class) } else { class };
-            if n.fitness.is_some_and(|nf| fitness.abs_diff(nf) > 1) {
-                d += p.fitness_demerits;
-            }
+            let (d, fitness) = line_demerits(&n, f.ratio, forced, flagged, cost, p);
             let hyphens = if flagged { (n.hyphens + 1).min(max_hyphens) } else { 0 };
             let line = (n.line + 1).min(p.uniform_from);
             let demerits = n.demerits + d;
-            match best.iter_mut().find(|c| c.line == line && c.fitness == fitness && c.hyphens == hyphens) {
-                Some(c) if c.demerits <= demerits => {}
-                Some(c) => {
-                    c.demerits = demerits;
-                    c.from = a;
-                }
-                None => best.push(Candidate { line, fitness, hyphens, demerits, from: a }),
-            }
+            record(&mut best, Candidate { line, fitness, hyphens, demerits, from: a });
         }
         if p.overfull
             && keep.is_empty()
@@ -197,6 +165,62 @@ pub fn knuth_plass(items: &[Item], width: &dyn Fn(usize) -> f64, p: &Params) -> 
         }
     }
     let end = if s.ends_forced() { m - 1 } else { m };
+    let chain = best_chain(&nodes, &active, end)?;
+    let mut start = 0;
+    let mut lines = Vec::with_capacity(chain.len());
+    for (k, &b) in chain.iter().enumerate() {
+        let next = s.next_start(b);
+        lines.push(s.line(start, b, next, width(k), p, 0.0));
+        start = next;
+    }
+    Some(lines)
+}
+
+/// Keep the cheaper of the candidates sharing a (line class, fitness, hyphen state).
+fn record(best: &mut Vec<Candidate>, new: Candidate) {
+    match best.iter_mut().find(|c| c.line == new.line && c.fitness == new.fitness && c.hyphens == new.hyphens) {
+        Some(c) if c.demerits <= new.demerits => {}
+        Some(c) => {
+            c.demerits = new.demerits;
+            c.from = new.from;
+        }
+        None => best.push(new),
+    }
+}
+
+/// Demerits of ending a line of adjustment `ratio` after node `n` at a break, and its fitness class.
+fn line_demerits(n: &Node, ratio: f64, forced: bool, flagged: bool, cost: f64, p: &Params) -> (f64, u8) {
+    let weight = if ratio > 0.0 {
+        p.stretch_weight
+    } else if ratio < 0.0 {
+        p.shrink_weight
+    } else {
+        1.0
+    };
+    let badness = (weight * 100.0 * ratio.abs().min(MAX_RATIO).powi(3)).min(p.max_badness);
+    let lp = p.line_penalty + badness;
+    let mut d = if forced {
+        lp * lp
+    } else if cost >= 0.0 {
+        lp * lp + cost * cost
+    } else {
+        lp * lp - cost * cost
+    };
+    if flagged && n.flagged {
+        d += p.flagged_demerits;
+    }
+    // A ragged line ending at a forced break says nothing about the rag: it keeps its
+    // neighbour's class.
+    let class = fitness_class(ratio, &p.fitness);
+    let fitness = if forced && p.rag.is_some() { n.fitness.unwrap_or(class) } else { class };
+    if n.fitness.is_some_and(|nf| fitness.abs_diff(nf) > 1) {
+        d += p.fitness_demerits;
+    }
+    (d, fitness)
+}
+
+/// Break positions of the cheapest path that ends at `end`, in order.
+fn best_chain(nodes: &[Node], active: &[usize], end: usize) -> Option<Vec<usize>> {
     let last = active
         .iter()
         .copied()
@@ -212,12 +236,5 @@ pub fn knuth_plass(items: &[Item], width: &dyn Fn(usize) -> f64, p: &Params) -> 
         cur = n.prev;
     }
     chain.reverse();
-    let mut start = 0;
-    let mut lines = Vec::with_capacity(chain.len());
-    for (k, &b) in chain.iter().enumerate() {
-        let next = s.next_start(b);
-        lines.push(s.line(start, b, next, width(k), p, 0.0));
-        start = next;
-    }
-    Some(lines)
+    Some(chain)
 }
