@@ -2,8 +2,9 @@
 //! Revert Set, Export, Import… and Summarize…; actions that do not fit go into a More menu. New
 //! Set… and Rename… open an inline form under the row.
 
+use craft_ui::ComboBox;
 use craft_ui::layout::fit_toolbar;
-use egui::{ComboBox, Key as EguiKey, RichText, TextEdit, Ui};
+use egui::{Key as EguiKey, RichText, TextEdit, Ui};
 
 use super::{Draw, FIELD_W};
 use crate::profiles::{Profiles, set_name};

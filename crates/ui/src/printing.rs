@@ -213,7 +213,7 @@ impl State {
                 let printer_label = ui.label(labels.printer);
                 let shown = shown_names(&self.printers);
                 let selected = self.printers.iter().zip(&shown).find(|(p, _)| p.name == self.settings.printer).map(|(_, text)| text.as_str());
-                egui::ComboBox::from_id_salt("printer")
+                crate::ComboBox::from_id_salt("printer")
                     .width(width)
                     .wrap_mode(egui::TextWrapMode::Truncate)
                     .selected_text(if self.settings.printer.is_empty() { labels.select_printer } else { selected.unwrap_or(&self.settings.printer) })
@@ -238,7 +238,7 @@ impl State {
                     (Some(Duplex::ShortEdge), labels.short_edge),
                 ];
                 let duplex_label = ui.label(labels.duplex);
-                egui::ComboBox::from_id_salt("duplex")
+                crate::ComboBox::from_id_salt("duplex")
                     .width(width)
                     .wrap_mode(egui::TextWrapMode::Truncate)
                     .selected_text(

@@ -8,6 +8,7 @@
 use std::ops::Range;
 use std::sync::Arc;
 
+use craft_ui::ComboBox;
 use craft_ui::buttons::{IconButton, IconButtonStyle};
 use craft_ui::layout::{ResizeHandle, SplitAxis, SplitSize, split_rect};
 use craft_ui::tabs::{self, Tab};
@@ -15,8 +16,8 @@ use egui::Galley;
 use egui::accesskit::Live;
 use egui::text::{LayoutJob, TextFormat, TextWrapping};
 use egui::{
-    Align, Button, Color32, ComboBox, EventFilter, Id, Key as EguiKey, Label, Layout, Modifiers, Painter, Rect, Response, RichText, Role, ScrollArea,
-    Sense, Stroke, StrokeKind, TextEdit, TextStyle, Ui, UiBuilder, Vec2, WidgetInfo, WidgetText, pos2, vec2,
+    Align, Button, Color32, EventFilter, Id, Key as EguiKey, Label, Layout, Modifiers, Painter, Rect, Response, RichText, Role, ScrollArea, Sense,
+    Stroke, StrokeKind, TextEdit, TextStyle, Ui, UiBuilder, Vec2, WidgetInfo, WidgetText, pos2, vec2,
 };
 
 use crate::chord::Trigger;

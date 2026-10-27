@@ -7,6 +7,7 @@
 
 pub mod buttons;
 pub mod capture;
+pub mod combo;
 pub mod direction;
 pub mod docking;
 mod focus;
@@ -22,3 +23,5 @@ pub mod tabs;
 pub mod testing;
 pub mod text;
 pub mod theme;
+
+pub use combo::ComboBox;

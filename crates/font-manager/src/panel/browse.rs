@@ -119,25 +119,27 @@ impl FontsPanel {
         let search = &c.search;
         let language_text = &mut self.language_text;
         let query = &mut self.query;
-        widgets::select(ui, "craft-fonts.language", tl!("Language"), &selected, width, |ui| {
+        let row = ui.spacing().interact_size.y;
+        let header = |ui: &mut Ui| {
             let field =
                 widgets::field(ui, s, language_text, tl!("Name in English or in the language"), tl!("Find a language"), ui.available_width(), true);
             if field.gained_focus() || ui.memory(|m| m.focused().is_none()) {
                 field.request_focus();
             }
             ui.add_space(4.0);
-            let matches = search.languages(language_text);
-            let row = ui.spacing().interact_size.y;
-            egui::ScrollArea::vertical().max_height(300.0).auto_shrink([false, true]).show_rows(ui, row, matches.len() + 1, |ui, range| {
-                for n in range {
-                    if n == 0 {
-                        ui.selectable_value(&mut query.language, None, tl!("Any language"));
-                    } else if let Some(&i) = matches.get(n - 1) {
-                        ui.selectable_value(&mut query.language, Some(i), language_label(i));
-                    }
+            search.languages(language_text)
+        };
+        let rows = |ui: &mut Ui, range: std::ops::Range<usize>, matches: Vec<usize>| {
+            for n in range {
+                if n == 0 {
+                    ui.selectable_value(&mut query.language, None, tl!("Any language"));
+                } else if let Some(&i) = matches.get(n - 1) {
+                    ui.selectable_value(&mut query.language, Some(i), language_label(i));
                 }
-            });
-        });
+            }
+        };
+        let inner = widgets::select_box("craft-fonts.language", &selected, width).show_rows_with_header(ui, header, row, |m| m.len() + 1, rows);
+        widgets::name(ui, &inner.response, tl!("Language"));
         if self.query.language != before {
             self.focus_row = None;
         }

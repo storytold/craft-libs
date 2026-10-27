@@ -81,7 +81,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static, C: DockContent<P>> Do
             area: screen,
             focused: true,
             modifiers: Modifiers::NONE,
-            auto_collapse: true,
+            auto_collapse: false,
             maximized: None,
             raise: None,
             float_bounds: None,

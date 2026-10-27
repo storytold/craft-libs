@@ -158,7 +158,7 @@ Builder options on `DockArea`:
 |---|---|
 | `maximized(panel)` | Maximize Frame: that frame fills the area. |
 | `hide_panels(HidePanels)` | Hide panels for Tab and Shift+Tab. Protected panels stay. |
-| `auto_collapse_iconic(on)` | Close a flyout on Escape or a click outside (default on). |
+| `auto_collapse_iconic(on)` | Close a flyout on Escape or a click outside (default off: a flyout stays open until its icon or another icon is clicked). |
 | `raise_panel(panel)` | Raise a panel's floating window, or open its flyout, this frame. It moves no keyboard focus and does not set `DockOutput::focused`. |
 | `locked(on)` | Draw `Workspace::locked`: every panel gets `Permissions::locked`, so nothing starts a move, float or close the workspace would refuse. |
 | `blocked_rects(rects)` | App overlays that docking gestures must ignore. |
