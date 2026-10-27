@@ -66,6 +66,57 @@ pub enum AudioError {
 /// Result alias for this module.
 pub type Result<T> = std::result::Result<T, AudioError>;
 
+// Codec errors convert into `AudioError`, so code mixing the file API with the codec modules can
+// use `?` throughout: a codec's "unsupported" stays `Unsupported`, anything else in the input is
+// `Malformed`, and an encoder's refusal is `Encode`.
+
+#[cfg(any(feature = "decode", feature = "encode"))]
+impl From<aac::Error> for AudioError {
+    fn from(e: aac::Error) -> Self {
+        match e {
+            aac::Error::Unsupported(_) => AudioError::Unsupported(e.to_string()),
+            _ => AudioError::Malformed(e.to_string()),
+        }
+    }
+}
+
+#[cfg(feature = "decode")]
+impl From<mpa::Error> for AudioError {
+    fn from(e: mpa::Error) -> Self {
+        match e {
+            mpa::Error::Unsupported(_) => AudioError::Unsupported(e.to_string()),
+            _ => AudioError::Malformed(e.to_string()),
+        }
+    }
+}
+
+#[cfg(feature = "decode")]
+impl From<ac3::Error> for AudioError {
+    fn from(e: ac3::Error) -> Self {
+        match e {
+            ac3::Error::Unsupported(_) => AudioError::Unsupported(e.to_string()),
+            _ => AudioError::Malformed(e.to_string()),
+        }
+    }
+}
+
+#[cfg(feature = "decode")]
+impl From<opus::Error> for AudioError {
+    fn from(e: opus::Error) -> Self {
+        match e {
+            opus::Error::Unsupported(_) => AudioError::Unsupported(e.to_string()),
+            _ => AudioError::Malformed(e.to_string()),
+        }
+    }
+}
+
+#[cfg(feature = "encode")]
+impl From<opus::encoder::Error> for AudioError {
+    fn from(e: opus::encoder::Error) -> Self {
+        AudioError::Encode(e.to_string())
+    }
+}
+
 /// The file formats [`encode`] writes.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

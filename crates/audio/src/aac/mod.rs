@@ -64,6 +64,7 @@ pub use tables::{SAMPLE_RATES, sample_rate_index};
 pub const FRAME_LEN: usize = 1024;
 
 /// Errors from configuration parsing, encoding and decoding.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum Error {
     #[error("invalid configuration: {0}")]

@@ -66,6 +66,7 @@ fn celt_mode() -> &'static CeltMode {
 }
 
 /// Why an encoder could not be created or a frame could not be encoded.
+#[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum Error {
     /// Opus family-0 streams have 1 or 2 channels.

@@ -559,6 +559,9 @@ fn run(bytes: &[u8], detected: Option<Container>, count_only: bool) -> Result<(A
     let mut interleaved: Vec<f32> = Vec::new();
     let mut frames: u64 = 0;
     let mut errors = 0usize;
+    // Frames of the last decoded packet: the length of the silence that replaces a packet that
+    // fails to decode, so the audio after it keeps its timing.
+    let mut last_frames = 0usize;
     loop {
         let packet = match reader.next_packet() {
             Ok(Some(packet)) => packet,
@@ -578,6 +581,17 @@ fn run(bytes: &[u8], detected: Option<Container>, count_only: bool) -> Result<(A
             Err(SymError::DecodeError(m)) => {
                 errors += 1;
                 corrupt_packet(errors, frames, m)?;
+                if !planar.is_empty() && last_frames > 0 {
+                    frames = frames.saturating_add(last_frames as u64);
+                    if frames.saturating_mul(planar.len() as u64) > MAX_DECODE_SAMPLES {
+                        return Err(AudioError::TooLarge("decoded audio exceeds the 4 GiB limit".into()));
+                    }
+                    if !count_only {
+                        for plane in &mut planar {
+                            plane.resize(plane.len() + last_frames, 0.0);
+                        }
+                    }
+                }
                 continue;
             }
             Err(SymError::IoError(_)) => break,
@@ -593,6 +607,7 @@ fn run(bytes: &[u8], detected: Option<Container>, count_only: bool) -> Result<(A
             planar = init_planar(&mut info, ch)?;
         }
         let n = decoded.frames() as u64;
+        last_frames = decoded.frames();
         frames = frames.saturating_add(n);
         if frames.saturating_mul(ch as u64) > MAX_DECODE_SAMPLES {
             return Err(AudioError::TooLarge("decoded audio exceeds the 4 GiB limit".into()));

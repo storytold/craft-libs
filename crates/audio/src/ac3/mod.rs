@@ -29,6 +29,7 @@ mod tables;
 
 use std::sync::OnceLock;
 
+#[non_exhaustive]
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum Error {
     #[error("not an AC-3 frame")]

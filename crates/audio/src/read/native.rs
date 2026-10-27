@@ -117,13 +117,25 @@ impl Codec {
         Some(Codec::Opus { dec: Box::new(dec), order })
     }
 
+    /// The frames a packet holding `data` decodes to, from its codec and headers, when known
+    /// without decoding: what replaces it when it fails to decode.
+    fn nominal_frames(&self, data: &[u8]) -> Option<usize> {
+        match self {
+            Codec::Aac { up, .. } => Some(aac::FRAME_LEN * if up.is_some() { 2 } else { 1 }),
+            Codec::Mpa(_) => mpa::parse_header(data).ok().map(|h| h.samples()),
+            Codec::Ac3(_) => ac3::parse_header(data).ok().map(|h| h.samples()),
+            Codec::Opus { .. } => None,
+            Codec::Pcm { kind, channels } => Some(data.len() / (kind.bytes() * *channels).max(1)),
+        }
+    }
+
     /// Decode one packet. A packet may hold several MPEG audio or AC-3 frames (MP4, Matroska);
     /// E-AC-3 dependent substreams decode to no channels and are skipped. A corrupt Opus packet
     /// is concealed like a lost one, which keeps its timing.
-    fn decode(&mut self, data: &[u8]) -> std::result::Result<Vec<Vec<f32>>, String> {
+    fn decode(&mut self, data: &[u8]) -> Result<Vec<Vec<f32>>> {
         match self {
             Codec::Aac { dec, up, channel_config } => {
-                let mut out = dec.decode(data).map_err(|e| e.to_string())?;
+                let mut out = dec.decode(data)?;
                 if let Some(up) = up {
                     out = up.process(out);
                 }
@@ -132,7 +144,7 @@ impl Codec {
             Codec::Opus { dec, order } => {
                 let out = match dec.decode(Some(data)) {
                     Ok(o) => o,
-                    Err(_) => dec.decode(None).map_err(|e| e.to_string())?,
+                    Err(_) => dec.decode(None)?,
                 };
                 Ok(reorder(out, *order))
             }
@@ -142,7 +154,7 @@ impl Codec {
                 while let Some(rest) = data.get(p..).filter(|r| !r.is_empty()) {
                     let f = match d.decode(rest) {
                         Ok(f) => f,
-                        Err(e) if out.is_empty() => return Err(e.to_string()),
+                        Err(e) if out.is_empty() => return Err(e.into()),
                         Err(_) => break,
                     };
                     p += f.header.frame_bytes.max(1);
@@ -156,7 +168,7 @@ impl Codec {
                 while let Some(rest) = data.get(p..).filter(|r| !r.is_empty()) {
                     let f = match d.decode(rest) {
                         Ok(f) => f,
-                        Err(e) if out.is_empty() => return Err(e.to_string()),
+                        Err(e) if out.is_empty() => return Err(e.into()),
                         Err(_) => break,
                     };
                     p += f.header.frame_bytes.max(1);
@@ -168,7 +180,7 @@ impl Codec {
             }
             Codec::Pcm { kind, channels } => {
                 let frames = (data.len() / (kind.bytes() * *channels).max(1)) as u64;
-                deinterleave(data, *kind, *channels, frames).map_err(|e| e.to_string())
+                deinterleave(data, *kind, *channels, frames)
             }
         }
     }
@@ -194,25 +206,48 @@ struct Sink {
     limit: Option<u64>,
     count_only: bool,
     errors: usize,
+    /// The first error that says the stream is unsupported (rather than damaged), returned if
+    /// nothing decodes.
+    unsupported: Option<AudioError>,
+    /// Whether any packet decoded (silence standing in for failed packets does not count).
+    decoded: bool,
 }
 
 impl Sink {
     fn new(skip: u64, limit: Option<u64>, count_only: bool) -> Sink {
-        Sink { planar: Vec::new(), frames: 0, skip, limit, count_only, errors: 0 }
+        Sink { planar: Vec::new(), frames: 0, skip, limit, count_only, errors: 0, unsupported: None, decoded: false }
     }
 
     fn done(&self) -> bool {
         self.limit.is_some_and(|l| self.frames >= l)
     }
 
-    /// Note a corrupt packet; a stream that never decodes is malformed.
-    fn error(&mut self, msg: &str) -> Result<()> {
+    /// Note a packet that could not be read or decoded. A stream where nothing decodes is an
+    /// error: unsupported when a packet said so, else malformed.
+    fn error(&mut self, e: AudioError) -> Result<()> {
         self.errors += 1;
-        log::debug!("skipping corrupt packet: {msg}");
-        if self.errors > MAX_ERRORS && self.frames == 0 {
-            return Err(AudioError::Malformed(format!("no decodable packets: {msg}")));
+        log::debug!("concealing a packet that failed: {e}");
+        let msg = e.to_string();
+        if matches!(e, AudioError::Unsupported(_)) && self.unsupported.is_none() {
+            self.unsupported = Some(e);
+        }
+        if self.errors > MAX_ERRORS && !self.decoded {
+            return Err(self.no_audio(&msg));
         }
         Ok(())
+    }
+
+    /// The error for a stream that produced no audio.
+    fn no_audio(&mut self, msg: &str) -> AudioError {
+        self.unsupported.take().unwrap_or_else(|| AudioError::Malformed(format!("no decodable packets: {msg}")))
+    }
+
+    /// Stand in for a packet that failed with `frames` frames of silence on `channels` channels.
+    fn conceal(&mut self, channels: usize, frames: usize, trim_end: u64) -> Result<()> {
+        let decoded = self.decoded;
+        let r = self.push(vec![vec![0.0; frames]; channels], trim_end);
+        self.decoded = decoded;
+        r
     }
 
     /// Add a decoded block, less its last `trim_end` frames (Matroska `DiscardPadding`).
@@ -221,8 +256,9 @@ impl Sink {
         if ch == 0 || self.done() {
             return Ok(());
         }
+        self.decoded = true;
         if !self.planar.is_empty() && self.planar.len() != ch {
-            return self.error("the channel count changed mid-stream");
+            return self.error(AudioError::Malformed("the channel count changed mid-stream".into()));
         }
         let mut n = (block.iter().map(Vec::len).min().unwrap_or(0) as u64).saturating_sub(trim_end);
         let drop = self.skip.min(n);
@@ -249,9 +285,9 @@ impl Sink {
         Ok(())
     }
 
-    fn finish(self, plan: &Plan<'_>) -> Result<(AudioInfo, AudioBuffer)> {
-        if self.planar.is_empty() {
-            return Err(AudioError::Malformed("stream contains no audio".into()));
+    fn finish(mut self, plan: &Plan<'_>) -> Result<(AudioInfo, AudioBuffer)> {
+        if self.planar.is_empty() || !self.decoded {
+            return Err(self.no_audio("stream contains no audio"));
         }
         let channels = self.planar.len();
         u16::try_from(channels).map_err(|_| AudioError::Unsupported("too many channels".into()))?;
@@ -311,7 +347,7 @@ enum Packets<'a> {
 }
 
 /// A packet, or why it could not be read.
-type NextPacket = std::result::Result<Packet, String>;
+type NextPacket = Result<Packet>;
 
 /// A packet's bytes and the frames to drop from the end of its decoded audio.
 struct Packet {
@@ -328,20 +364,20 @@ impl Packets<'_> {
                 let i = *next;
                 (i < file.tracks.get(*track).map_or(0, |t| t.samples.len())).then(|| {
                     *next += 1;
-                    file.read_sample(*bytes, *track, i).map(whole).map_err(|e| e.to_string())
+                    file.read_sample(*bytes, *track, i).map(whole).map_err(|e| AudioError::Malformed(e.to_string()))
                 })
             }
             Packets::Ogg { file, bytes, stream, next } => {
                 let i = *next;
                 (i < file.streams.get(*stream).map_or(0, |s| s.packets.len())).then(|| {
                     *next += 1;
-                    file.read_packet(*bytes, *stream, i).map(whole).map_err(|e| e.to_string())
+                    file.read_packet(*bytes, *stream, i).map(whole).map_err(|e| AudioError::Malformed(e.to_string()))
                 })
             }
             Packets::Raw { frames, bytes, next } => {
                 let &(at, len) = frames.get(*next)?;
                 *next += 1;
-                Some(bytes.get(at..at.checked_add(len)?).map(|d| whole(d.to_vec())).ok_or_else(|| "frame out of range".into()))
+                Some(bytes.get(at..at.checked_add(len)?).map(|d| whole(d.to_vec())).ok_or_else(|| AudioError::Malformed("frame out of range".into())))
             }
             Packets::Mkv { demux, track, rate } => loop {
                 match demux.next_packet() {
@@ -351,7 +387,7 @@ impl Packets<'_> {
                     }
                     Ok(Some(_)) => continue,
                     Ok(None) => break None,
-                    Err(e) => break Some(Err(e.to_string())),
+                    Err(e) => break Some(Err(AudioError::Malformed(e.to_string()))),
                 }
             },
         }
@@ -685,22 +721,38 @@ fn plan(b: &[u8], detected: Option<Container>) -> Option<Result<Plan<'_>>> {
     }
 }
 
-/// Decode every packet of `plan` into `sink`.
+/// Decode every packet of `plan` into `sink`. A packet that cannot be read or decoded is replaced
+/// by silence of its length (its codec's frame length, else the last packet's), so the audio after
+/// it keeps its timing; Opus conceals its own lost packets.
 fn run(plan: &mut Plan<'_>, sink: &mut Sink) -> Result<()> {
+    // Channels and frames of the last decoded packet.
+    let mut last = (plan.layout.channels(), 0usize);
     while let Some(next) = plan.packets.next() {
         if sink.done() {
             break;
         }
-        let packet = match next {
-            Ok(p) => p,
+        let (data, trim_end) = match next {
+            Ok(p) => (p.data, p.trim_end),
             Err(e) => {
-                sink.error(&e)?;
-                continue;
+                sink.error(e)?;
+                (Vec::new(), 0)
             }
         };
-        match plan.codec.decode(&packet.data) {
-            Ok(block) => sink.push(block, packet.trim_end)?,
-            Err(e) => sink.error(&e)?,
+        if !data.is_empty() {
+            match plan.codec.decode(&data) {
+                Ok(block) => {
+                    if !block.is_empty() {
+                        last = (block.len(), block.iter().map(Vec::len).min().unwrap_or(0));
+                    }
+                    sink.push(block, trim_end)?;
+                    continue;
+                }
+                Err(e) => sink.error(e)?,
+            }
+        }
+        let frames = plan.codec.nominal_frames(&data).filter(|&n| n > 0).unwrap_or(last.1);
+        if last.0 > 0 && frames > 0 {
+            sink.conceal(last.0, frames, trim_end)?;
         }
     }
     Ok(())

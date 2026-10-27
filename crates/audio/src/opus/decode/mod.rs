@@ -17,6 +17,7 @@ pub use multistream::Decoder;
 pub use packet::{Bandwidth, Mode, Packet, Toc};
 
 /// Errors from header parsing and decoding.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Error {
     InvalidArgument(&'static str),
