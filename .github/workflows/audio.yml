@@ -1,0 +1,65 @@
+name: Shared audio
+
+on:
+  push:
+    branches: [main]
+    paths: ["crates/audio/**", "crates/media/**", "Cargo.toml", "Cargo.lock", ".github/workflows/audio.yml"]
+  pull_request:
+    paths: ["crates/audio/**", "crates/media/**", "Cargo.toml", "Cargo.lock", ".github/workflows/audio.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: shared-audio-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    timeout-minutes: 10
+    name: Audio lint, feature sets, WASM
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          components: rustfmt, clippy
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: craft-audio-lint
+      - run: cargo fmt -p craft-audio --check
+      - run: cargo clippy -p craft-audio --all-targets --locked --no-default-features -- -D warnings
+      - run: cargo clippy -p craft-audio --all-targets --locked --no-default-features --features decode -- -D warnings
+      - run: cargo clippy -p craft-audio --all-targets --locked --no-default-features --features encode -- -D warnings
+      - run: cargo clippy -p craft-audio --all-targets --locked --no-default-features --features peaks -- -D warnings
+      - run: cargo clippy -p craft-audio --all-targets --locked --all-features -- -D warnings
+      - run: cargo check -p craft-audio --all-features --locked --target wasm32-unknown-unknown
+  test:
+    timeout-minutes: 15
+    name: Audio tests with ffmpeg oracles
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: craft-audio-test
+      - name: Build tests while installing ffmpeg
+        run: |
+          # The man-db index rebuild after dpkg is slow on hosted runners.
+          sudo rm -f /var/lib/man-db/auto-update
+          (sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends ffmpeg) > "$RUNNER_TEMP/apt.log" 2>&1 &
+          apt=$!
+          cargo test -p craft-audio --all-features --locked --no-run
+          wait "$apt" || { cat "$RUNNER_TEMP/apt.log"; exit 1; }
+          ffmpeg -hide_banner -version | sed -n 1p
+      - run: cargo test -p craft-audio --all-features --locked
+        env:
+          CRAFT_MEDIA_REQUIRE_ORACLES: "1"
+          CRAFT_MEDIA_FIXTURES_DIR: ${{ runner.temp }}/media-fixtures

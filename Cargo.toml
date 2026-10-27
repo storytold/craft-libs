@@ -33,7 +33,9 @@ craft-fonts-build = { path = "crates/fonts-build" }
 craft-i18n = { path = "crates/i18n" }
 craft-jpeg = { path = "crates/jpeg" }
 craft-keymap = { path = "crates/keymap" }
-craft-media = { path = "crates/media" }
+craft-audio = { path = "crates/audio" }
+# No default features, so craft-audio's `encode` builds craft-media without `isobmff`.
+craft-media = { path = "crates/media", default-features = false }
 craft-media-testkit = { path = "crates/media-testkit" }
 craft-menu = { path = "crates/menu" }
 craft-prepress = { path = "crates/prepress" }
@@ -84,3 +86,10 @@ eframe = { git = "https://github.com/storytold/egui.git", rev = "6d518fc79968157
 egui_demo_lib = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
 egui_inspection = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
 winit = { git = "https://github.com/storytold/winit.git", rev = "a517b3846ee8457d84ee4975110bfda6797c44dc" }
+
+# symphonia's FLAC decoder restores LPC samples as `residual + (prediction as i32)`. In a valid
+# 32-bit stream the prediction can leave the i32 range while the sum does not, so a debug build
+# panics where a release build wraps to the right sample. Apps that decode 32-bit FLAC through
+# craft-audio's `decode` need the same override in their own workspace.
+[profile.dev.package.symphonia-bundle-flac]
+overflow-checks = false
