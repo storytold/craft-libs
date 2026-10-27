@@ -912,7 +912,6 @@ impl Draw<'_, '_> {
 
     fn shortcut_column(&self, ui: &mut Ui, layout: RowShortcutLayout<'_>) -> Option<RowAction> {
         let RowShortcutLayout { row, rect, shortcut_w, mirror, editable, selected, focused, font, text_color } = layout;
-        let v = ui.visuals();
         let col = Rect::from_min_max(pos2(rect.max.x - shortcut_w - ICON - 4.0, rect.min.y), pos2(rect.max.x - ICON - 4.0, rect.max.y));
         let painter = ui.painter_at(mirror.rect(col));
         let mut x = col.min.x;
