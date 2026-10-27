@@ -5,7 +5,7 @@ fn encoded(audio: &AudioBuffer, options: &EncodeOptions, streaming: bool) -> Vec
     if !streaming {
         return encode(audio, options).unwrap();
     }
-    let mut writer = FileEncoder::new(Cursor::new(Vec::new()), options, audio.num_channels() as u16, audio.sample_rate).unwrap();
+    let mut writer = FileEncoder::new(Cursor::new(Vec::new()), options, audio.sample_rate, audio.num_channels() as u16).unwrap();
     // Cross the writer's 4096-frame scratch boundary, then write a short final block.
     for start in (0..audio.frames()).step_by(4097) {
         let end = (start + 4097).min(audio.frames());

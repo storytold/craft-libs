@@ -11,7 +11,7 @@ const BEXT_MIN_LEN: usize = 602;
 /// Default speaker mask for a channel count (callers that know the layout pass their own): the
 /// usual layout's mask, or the first `n` positions for counts with no usual layout, up to 18.
 fn channel_mask(channels: usize) -> u32 {
-    match crate::ChannelLayout::default_for(channels).mask() {
+    match crate::ChannelLayout::default_for(crate::layout::count(channels)).mask() {
         Some(mask) => mask,
         None if channels <= 18 => (1u32 << channels) - 1,
         None => 0,

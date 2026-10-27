@@ -9,7 +9,7 @@ fn tone(channels: usize, frames: usize) -> AudioBuffer {
 fn streamed(buf: &AudioBuffer, opts: &EncodeOptions) -> Vec<u8> {
     let mut out = Cursor::new(b"pre".to_vec());
     out.set_position(3);
-    let mut enc = FileEncoder::new(out, opts, buf.channels.len() as u16, buf.sample_rate).unwrap();
+    let mut enc = FileEncoder::new(out, opts, buf.sample_rate, buf.channels.len() as u16).unwrap();
     let mut start = 0;
     for len in [1, 7, 4095, 4097, 333].into_iter().cycle() {
         if start >= buf.frames() {
@@ -45,7 +45,7 @@ fn streamed_files_match_whole_buffer_encodes() {
         for channels in [1, 6] {
             let buf = tone(channels, 20_001);
             // A layout applies to the buffer with as many channels.
-            let opts = match layout.filter(|l: &ChannelLayout| l.channels() == channels) {
+            let opts = match layout.filter(|l: &ChannelLayout| usize::from(l.channels()) == channels) {
                 Some(l) => base.clone().with_layout(l),
                 None => base.clone(),
             };
@@ -89,7 +89,7 @@ fn a_failed_write_poisons_the_encoder() {
     for format in [EncodeFormat::Wav, EncodeFormat::Aiff, EncodeFormat::Flac] {
         let opts = EncodeOptions::new(format).with_bit_depth(BitDepth::Int16).with_dither(false);
         let sink = FailAfter { inner: Cursor::new(Vec::new()), budget: 256 };
-        let mut enc = FileEncoder::new(sink, &opts, 2, buf.sample_rate).unwrap();
+        let mut enc = FileEncoder::new(sink, &opts, buf.sample_rate, 2).unwrap();
         // The sink accepts a prefix of the first block, then fails.
         assert!(enc.write(&buf.channels, buf.frames()).is_err(), "{format:?}");
         // Later calls must not claim success: the bytes on the sink no longer match the
@@ -104,7 +104,7 @@ fn blocks_past_a_format_limit_are_refused_before_anything_is_written() {
     let buf = tone(2, 100);
     for (format, limit) in [(EncodeFormat::Aiff, 1u64 << 30), (EncodeFormat::Flac, 1u64 << 36)] {
         let opts = EncodeOptions::new(format).with_bit_depth(BitDepth::Int16).with_dither(false);
-        let mut enc = FileEncoder::new(Cursor::new(Vec::new()), &opts, 2, buf.sample_rate).unwrap();
+        let mut enc = FileEncoder::new(Cursor::new(Vec::new()), &opts, buf.sample_rate, 2).unwrap();
         enc.write(&buf.channels, 100).unwrap();
         assert!(enc.check_room(limit / 2).is_ok(), "{format:?}");
         assert!(matches!(enc.check_room(limit), Err(AudioError::TooLarge(_))), "{format:?}");
@@ -158,4 +158,34 @@ fn decoder_reads_any_read_seek_source_and_reports_source_failures() {
     };
     assert!(matches!(err, AudioError::Io(_)), "{err}");
     assert_eq!(dec.info().damaged, 0);
+}
+
+#[test]
+fn seeking_to_or_past_the_end_ends_the_stream() {
+    use craft_audio::{DecodeOptions, Decoder};
+    let buf = tone(2, 4800);
+    for format in [EncodeFormat::Wav, EncodeFormat::Aiff, EncodeFormat::Flac] {
+        let file = encode(&buf, &EncodeOptions::new(format).with_bit_depth(BitDepth::Int16)).unwrap();
+        for target in [4800, 4801, 1_000_000] {
+            let mut dec = Decoder::from_bytes(&file, None, &DecodeOptions::default()).unwrap();
+            assert_eq!(dec.seek(target).unwrap(), 4800, "{format:?} seek({target})");
+            assert!(dec.next_block().unwrap().is_none(), "{format:?} seek({target})");
+            // Seeking back still works.
+            assert_eq!(dec.seek(4000).unwrap(), 4000, "{format:?}");
+            let left: usize = std::iter::from_fn(|| dec.next_block().unwrap()).map(|b| b.frames()).sum();
+            assert_eq!(left, 800, "{format:?}");
+        }
+    }
+}
+
+#[test]
+fn single_track_files_refuse_other_track_indexes() {
+    use craft_audio::{DecodeOptions, decode_with};
+    let buf = tone(1, 1000);
+    for format in [EncodeFormat::Wav, EncodeFormat::Aiff] {
+        let file = encode(&buf, &EncodeOptions::new(format)).unwrap();
+        assert!(decode_with(&file, None, &DecodeOptions::default().with_track(0)).is_ok(), "{format:?}");
+        let e = decode_with(&file, None, &DecodeOptions::default().with_track(1)).unwrap_err();
+        assert!(matches!(e, AudioError::Unsupported(_)), "{format:?}: {e}");
+    }
 }

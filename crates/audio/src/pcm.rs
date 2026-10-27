@@ -7,30 +7,35 @@ use crate::{AudioError, Result};
 pub(crate) const MAX_DECODE_SAMPLES: u64 = (4u64 << 30) / 4;
 
 /// Little-endian `u16` at `pos`.
+#[cfg(feature = "decode-native")]
 pub(crate) fn le_u16(b: &[u8], pos: usize) -> Option<u16> {
     let s = b.get(pos..pos.checked_add(2)?)?;
     Some(u16::from_le_bytes([*s.first()?, *s.get(1)?]))
 }
 
 /// Little-endian `u32` at `pos`.
+#[cfg(feature = "decode-native")]
 pub(crate) fn le_u32(b: &[u8], pos: usize) -> Option<u32> {
     let s: [u8; 4] = b.get(pos..pos.checked_add(4)?)?.try_into().ok()?;
     Some(u32::from_le_bytes(s))
 }
 
 /// Little-endian `u64` at `pos`.
+#[cfg(feature = "decode-native")]
 pub(crate) fn le_u64(b: &[u8], pos: usize) -> Option<u64> {
     let s: [u8; 8] = b.get(pos..pos.checked_add(8)?)?.try_into().ok()?;
     Some(u64::from_le_bytes(s))
 }
 
 /// Big-endian `u16` at `pos`.
+#[cfg(feature = "decode-native")]
 pub(crate) fn be_u16(b: &[u8], pos: usize) -> Option<u16> {
     let s: [u8; 2] = b.get(pos..pos.checked_add(2)?)?.try_into().ok()?;
     Some(u16::from_be_bytes(s))
 }
 
 /// Big-endian `u32` at `pos`.
+#[cfg(feature = "decode-native")]
 pub(crate) fn be_u32(b: &[u8], pos: usize) -> Option<u32> {
     let s: [u8; 4] = b.get(pos..pos.checked_add(4)?)?.try_into().ok()?;
     Some(u32::from_be_bytes(s))
@@ -38,12 +43,14 @@ pub(crate) fn be_u32(b: &[u8], pos: usize) -> Option<u32> {
 
 /// Big-endian `u64` at `pos`.
 #[cfg(feature = "symphonia")]
+#[cfg(feature = "decode-native")]
 pub(crate) fn be_u64(b: &[u8], pos: usize) -> Option<u64> {
     let s: [u8; 8] = b.get(pos..pos.checked_add(8)?)?.try_into().ok()?;
     Some(u64::from_be_bytes(s))
 }
 
 /// Four-byte tag at `pos`.
+#[cfg(feature = "decode-native")]
 pub(crate) fn tag(b: &[u8], pos: usize) -> Option<[u8; 4]> {
     b.get(pos..pos.checked_add(4)?)?.try_into().ok()
 }

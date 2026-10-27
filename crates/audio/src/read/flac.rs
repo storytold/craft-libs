@@ -1,6 +1,6 @@
 //! FLAC metadata checks run before symphonia decodes a stream (RFC 9639 metadata blocks).
 
-use super::pcm::{be_u32, le_u32};
+use crate::pcm::{be_u32, le_u32};
 use crate::{AudioError, AudioInfo, ChannelLayout, CodecId, Container, Result, SampleFormat};
 
 /// Refuse the FLAC stream at `at` if a comment or picture field claims more bytes than its
@@ -74,8 +74,8 @@ pub(crate) fn empty_stream_info(b: &[u8], at: usize) -> Option<AudioInfo> {
 pub(crate) fn flac_layout(channels: usize) -> ChannelLayout {
     match channels {
         7 => ChannelLayout::SURROUND_6_1,
-        1..=8 => ChannelLayout::default_for(channels),
-        n => ChannelLayout::unordered(n),
+        1..=8 => ChannelLayout::default_for(crate::layout::count(channels)),
+        n => ChannelLayout::unordered(crate::layout::count(n)),
     }
 }
 

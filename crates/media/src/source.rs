@@ -1,6 +1,8 @@
 //! Random-access byte sources: what the demuxers read from. One trait for every container, so a
 //! file, buffer or custom source implements it once.
 
+#![warn(missing_docs)]
+
 use std::io::{self, Read, Seek, SeekFrom};
 use std::sync::{Arc, Mutex};
 

@@ -4,7 +4,7 @@ use craft_audio::{
 };
 
 fn sine(sr: u32, channels: usize, frames: usize) -> AudioBuffer {
-    let mut b = AudioBuffer::new(sr, channels, frames);
+    let mut b = AudioBuffer::new(sr, channels as u16, frames);
     for (c, ch) in b.channels.iter_mut().enumerate() {
         let f = 220.0 * (c as f32 + 1.0);
         for (i, s) in ch.iter_mut().enumerate() {
@@ -288,17 +288,17 @@ fn multichannel_wav_speaker_masks() {
 #[test]
 fn float_wav_header_is_rewritten_in_place_as_the_file_grows() {
     let take = sine(48_000, 2, 1_000);
-    let mut file = wav_float_header(2, 48_000, 0).unwrap();
+    let mut file = wav_float_header(48_000, 2, 0).unwrap();
     let len = file.len();
     file.extend(take.interleaved().iter().flat_map(|s| s.to_le_bytes()));
     assert_eq!(decode(&file, None).unwrap().1.frames(), 1_000);
-    file[..len].copy_from_slice(&wav_float_header(2, 48_000, 600).unwrap());
+    file[..len].copy_from_slice(&wav_float_header(48_000, 2, 600).unwrap());
     assert_eq!(decode(&file, None).unwrap().1.frames(), 600);
-    file[..len].copy_from_slice(&wav_float_header(2, 48_000, 1_000).unwrap());
+    file[..len].copy_from_slice(&wav_float_header(48_000, 2, 1_000).unwrap());
     assert_eq!(file, encode(&take, &EncodeOptions::default().with_bit_depth(BitDepth::Float32)).unwrap());
-    let big = wav_float_header(2, 48_000, 600_000_000).unwrap();
+    let big = wav_float_header(48_000, 2, 600_000_000).unwrap();
     assert_eq!((&big[..4], big.len()), (&b"RF64"[..], len));
-    assert!(wav_float_header(0, 48_000, 0).is_err());
+    assert!(wav_float_header(48_000, 0, 0).is_err());
 }
 
 #[test]
@@ -310,9 +310,9 @@ fn zero_frame_flac_round_trips_like_wav_and_aiff() {
                 let bytes = encode(&AudioBuffer::new(48_000, channels, 0), &opts).unwrap();
                 let info = probe(&bytes, None).unwrap();
                 assert_eq!((info.container, info.sample_format, info.sample_rate, info.frames), (format.container(), expected_sf(depth), 48_000, 0));
-                assert_eq!(usize::from(info.channels), channels);
+                assert_eq!(info.channels, channels);
                 let (info, buf) = decode(&bytes, None).unwrap();
-                assert_eq!((info.frames, buf.frames(), buf.num_channels()), (0, 0, channels));
+                assert_eq!((info.frames, buf.frames(), buf.num_channels()), (0, 0, usize::from(channels)));
             }
         }
     }
@@ -330,5 +330,5 @@ fn flac_claiming_frames_but_holding_none_still_errors() {
 fn float_wav_header_rejects_a_frame_count_whose_total_size_overflows() {
     // 4 bytes per frame: the data length fits in u64, but adding the header to it does not.
     let frames = u64::MAX / 4;
-    assert!(matches!(wav_float_header(1, 48_000, frames), Err(craft_audio::AudioError::TooLarge(_))));
+    assert!(matches!(wav_float_header(48_000, 1, frames), Err(craft_audio::AudioError::TooLarge(_))));
 }

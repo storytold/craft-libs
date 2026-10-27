@@ -33,23 +33,28 @@ mod layout;
 pub mod mpa;
 #[cfg(any(feature = "opus-decode", feature = "opus-encode"))]
 pub mod opus;
+#[cfg(any(feature = "aac-decode", feature = "opus-decode", feature = "mpa-decode", feature = "ac3-decode"))]
+mod pcm;
 #[cfg(feature = "peaks")]
 pub mod peaks;
 #[cfg(feature = "decode-native")]
 mod read;
+#[cfg(any(feature = "aac-decode", feature = "opus-decode", feature = "mpa-decode", feature = "ac3-decode"))]
+mod track;
 #[cfg(any(feature = "decode-native", feature = "pcm-encode"))]
 mod wav;
 #[cfg(any(feature = "pcm-encode", feature = "flac-encode"))]
 mod write;
 
 pub use buffer::AudioBuffer;
-pub use craft_media::{CodecId, CodecParams, Container, PcmFormat};
+pub use craft_media::{ByteSource, CodecId, CodecParams, Container, PcmFormat, ReadSeekSource};
 pub use layout::{ChannelLayout, Speaker};
 #[cfg(feature = "decode-native")]
-pub use read::{
-    DEFAULT_MAX_SAMPLES, DecodeOptions, Decoder, LOOKAHEAD_PACKETS, TrackDecoder, TrackInfo, decode, decode_with, detect_container, probe,
-    probe_with, tracks, tracks_of,
-};
+pub use read::SharedSource;
+#[cfg(feature = "decode-native")]
+pub use read::{DEFAULT_MAX_SAMPLES, DecodeOptions, Decoder, TrackInfo, decode, decode_with, detect_container, probe, probe_with, tracks, tracks_of};
+#[cfg(any(feature = "aac-decode", feature = "opus-decode", feature = "mpa-decode", feature = "ac3-decode"))]
+pub use track::{LOOKAHEAD_PACKETS, TrackDecoder};
 #[cfg(feature = "pcm-encode")]
 pub use write::wav_float_header;
 #[cfg(any(feature = "pcm-encode", feature = "flac-encode"))]
@@ -272,7 +277,7 @@ impl AudioInfo {
         layout: ChannelLayout,
         frames: u64,
     ) -> AudioInfo {
-        let channels = u16::try_from(layout.channels()).unwrap_or(u16::MAX);
+        let channels = layout.channels();
         AudioInfo { container, codec, sample_format, sample_rate, channels, layout, frames, bwf: None, damaged: 0 }
     }
 

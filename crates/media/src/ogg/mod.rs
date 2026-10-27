@@ -18,18 +18,23 @@
 //! FilmCraft can re-export this module. `ByteSource` is the crate's one source trait (see the
 //! README).
 
+#![warn(missing_docs)]
+
 use std::collections::HashMap;
 use std::fmt;
 use std::io;
 
 pub use crate::source::ByteSource;
 
+/// Errors from reading an Ogg file.
 #[non_exhaustive]
 #[derive(Debug)]
 pub enum Error {
+    /// Reading the source failed.
     Io(io::Error),
     /// No Ogg page found.
     NotOgg,
+    /// The file is damaged beyond recovery.
     Invalid(String),
 }
 
@@ -51,6 +56,7 @@ impl From<io::Error> for Error {
     }
 }
 
+/// Result alias for this module.
 pub type Result<T> = std::result::Result<T, Error>;
 
 /// The capture pattern at the start of a file.
@@ -79,11 +85,17 @@ pub fn crc32(data: &[u8]) -> u32 {
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Codec {
+    /// Opus (RFC 7845).
     Opus,
+    /// Vorbis.
     Vorbis,
+    /// FLAC (the Ogg FLAC mapping).
     Flac,
+    /// Theora video.
     Theora,
+    /// Speex.
     Speex,
+    /// A codec this module does not recognize.
     Unknown,
 }
 
@@ -123,6 +135,7 @@ impl Codec {
             Codec::Unknown => crate::CodecId::Unknown,
         }
     }
+    /// A short display name: `"Opus"`, `"Vorbis"`.
     pub fn name(self) -> &'static str {
         match self {
             Codec::Opus => "Opus",
@@ -140,7 +153,9 @@ impl Codec {
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Packet {
+    /// Byte ranges `(offset, length)` of the packet's pieces, in order.
     pub parts: Vec<(u64, u32)>,
+    /// Total packet size in bytes.
     pub size: u32,
     /// Granule position of the completing page if this is the last packet completed on it.
     pub granule: Option<i64>,
@@ -156,15 +171,19 @@ pub struct Packet {
 #[non_exhaustive]
 #[derive(Clone, Debug)]
 pub struct Stream {
+    /// The bitstream serial number.
     pub serial: u32,
+    /// The codec, from the first packet.
     pub codec: Codec,
     /// Codec header packets (contents).
     pub headers: Vec<Vec<u8>>,
     /// Data packets after the headers.
     pub packets: Vec<Packet>,
+    /// Pages read for this stream.
     pub pages: u32,
     /// Granule position of the last page with one.
     pub last_granule: Option<i64>,
+    /// An end-of-stream page was read.
     pub saw_eos: bool,
 }
 
@@ -206,6 +225,7 @@ impl Stream {
 #[non_exhaustive]
 #[derive(Clone, Debug)]
 pub struct OggFile {
+    /// The logical bitstreams, in the order their first pages appear.
     pub streams: Vec<Stream>,
     /// Pages dropped for a bad CRC, lost sync, truncation…
     pub warnings: Vec<String>,
@@ -422,6 +442,7 @@ pub fn opus_packet_samples(prefix: [u8; 2], size: u32) -> Option<u32> {
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OpusTiming {
+    /// Samples to drop at the start (the `OpusHead` pre-skip).
     pub pre_skip: u32,
     /// Start of each packet's decoded output in output samples (48 kHz): 0 is the first sample
     /// after the pre-skip; the pre-skip samples have negative positions.
@@ -491,12 +512,16 @@ impl OpusTiming {
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct VorbisInfo {
+    /// Channel count.
     pub channels: u8,
+    /// Samples per second.
     pub sample_rate: u32,
+    /// Nominal bit rate in bits per second (0 or negative when not set).
     pub bitrate_nominal: i32,
 }
 
 impl VorbisInfo {
+    /// Reads the Vorbis identification header; `None` when it is not one.
     pub fn parse(h: &[u8]) -> Option<VorbisInfo> {
         if h.len() < 30 || !h.starts_with(b"\x01vorbis") {
             return None;

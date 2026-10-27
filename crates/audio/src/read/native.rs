@@ -11,8 +11,8 @@
 use super::aiff::{self, AiffParse};
 use super::id3v2_len;
 use super::source::{Src, io_error};
-use super::track::TrackDecoder;
 use super::wav::{self, WavParse};
+use crate::track::TrackDecoder;
 use crate::{AudioBuffer, AudioError, AudioInfo, CodecId, CodecParams, Container, PcmFormat, Result, aac, ac3, mpa};
 use craft_media::{isobmff, matroska, ogg};
 
@@ -268,6 +268,9 @@ pub(crate) struct Native<'a> {
     skip: u64,
     /// Presented frames, when the container says.
     limit: Option<u64>,
+    /// Set by [`Native::seek`]: running out of packets afterwards is the end of the stream, even
+    /// when nothing was decoded (a seek to the last frame).
+    seeked: bool,
     /// Decoded-timeline frame (from the first decoded sample) of the next decoded sample.
     pos: u64,
     /// The first decoded-timeline frame to present: `skip`, or a seek target.
@@ -287,16 +290,21 @@ impl<'a> Native<'a> {
         let body = head.get(at..).unwrap_or_default();
         // The bytes decide the container when they say; the detection (which may come from the
         // extension) only picks among raw streams.
+        // Formats with one track: any other track index is an error, as for a multi-track file.
+        let single = |opened: Option<Result<Native<'a>>>| match (track, opened) {
+            (Some(n), Some(Ok(_))) if n > 0 => Some(Err(AudioError::Unsupported(format!("no audio track {n}: the file has one")))),
+            (_, opened) => opened,
+        };
         match super::detect_container(&head, None).or(detected) {
-            Some(Container::Wav) if wav::is_wav(&head) => open_wav(src),
-            Some(Container::Aiff) if aiff::is_aiff(&head) => open_aiff(src),
+            Some(Container::Wav) if wav::is_wav(&head) => single(open_wav(src)),
+            Some(Container::Aiff) if aiff::is_aiff(&head) => single(open_aiff(src)),
             Some(Container::Ogg) if ogg::sniff(body) => open_ogg(src, track),
             Some(c @ (Container::Mp4 | Container::QuickTime)) if head.get(4..8) == Some(b"ftyp") => open_mp4(src, c, track),
             Some(c @ (Container::Matroska | Container::WebM)) if body.starts_with(&[0x1A, 0x45, 0xDF, 0xA3]) => open_mkv(src, c, track),
-            Some(Container::Adts) => open_adts(src).map(Ok),
-            Some(Container::MpegAudio) => open_mpa(src).map(Ok),
-            Some(Container::Ac3) => open_ac3(src).map(Ok),
-            None => open_ac3(src).or_else(|| open_adts(src)).or_else(|| open_mpa(src)).map(Ok),
+            Some(Container::Adts) => single(open_adts(src).map(Ok)),
+            Some(Container::MpegAudio) => single(open_mpa(src).map(Ok)),
+            Some(Container::Ac3) => single(open_ac3(src).map(Ok)),
+            None => single(open_ac3(src).or_else(|| open_adts(src)).or_else(|| open_mpa(src)).map(Ok)),
             _ => None,
         }
     }
@@ -322,7 +330,7 @@ impl<'a> Native<'a> {
             let Some(next) = self.packets.next() else {
                 // A track that declares no frames (an empty WAV or AIFF) is empty, not broken.
                 let empty = self.frames_known && self.info.frames == 0 && self.errors == 0;
-                if !self.decoded && !empty {
+                if !self.decoded && !empty && !(self.seeked && self.errors == 0) {
                     return Err(self.no_audio("stream contains no audio"));
                 }
                 return Ok(None);
@@ -406,6 +414,8 @@ impl<'a> Native<'a> {
             Some(l) => frame.min(l),
             None => frame,
         };
+        let frame = if self.frames_known { frame.min(self.info.frames) } else { frame };
+        self.seeked = true;
         let target = frame + self.skip;
         let start = self.packets.seek(target.saturating_sub(self.dec.preroll() as u64))?;
         self.dec.reset();
@@ -452,6 +462,7 @@ fn native<'a>(
         from: skip,
         errors: 0,
         decoded: false,
+        seeked: false,
         unsupported: None,
     })
 }
@@ -482,20 +493,21 @@ fn pcm_track<'a>(
     src: &Src<'a>,
     container: Container,
     info: AudioInfo,
-    kind: super::pcm::PcmKind,
+    kind: crate::pcm::PcmKind,
     start: u64,
     len: u64,
 ) -> Option<Result<Native<'a>>> {
     let channels = usize::from(info.channels);
     let frame_bytes = (kind.bytes() * channels) as u64;
     let (bits, float, big_endian, unsigned) = match kind {
-        super::pcm::PcmKind::Int { bytes, big_endian, unsigned } => ((bytes * 8) as u16, false, big_endian, unsigned),
-        super::pcm::PcmKind::Float { bytes, big_endian } => ((bytes * 8) as u16, true, big_endian, false),
+        crate::pcm::PcmKind::Int { bytes, big_endian, unsigned } => ((bytes * 8) as u16, false, big_endian, unsigned),
+        crate::pcm::PcmKind::Float { bytes, big_endian } => ((bytes * 8) as u16, true, big_endian, false),
     };
-    let params = CodecParams::new(CodecId::Pcm)
-        .with_sample_rate(info.sample_rate)
-        .with_channels(info.channels)
-        .with_pcm(PcmFormat::new(bits, float, big_endian, !unsigned));
+    let params = CodecParams::new(CodecId::Pcm).with_sample_rate(info.sample_rate).with_channels(info.channels).with_pcm(if float {
+        PcmFormat::float(bits, big_endian)
+    } else {
+        PcmFormat::int(bits, !unsigned, big_endian)
+    });
     let frames = len.checked_div(frame_bytes).unwrap_or(0).min(info.frames);
     let packets = Packets::Pcm { src: src.clone(), start, frames, frame_bytes, next_frame: 0 };
     let mut n = native(container, packets, &params, &[], 0, None, Some(frames))?;
@@ -588,7 +600,7 @@ fn open_adts<'a>(src: &Src<'a>) -> Option<Native<'a>> {
             (n > hl).then_some((p + u64::from(hl), n - hl, f))
         })
         .collect();
-    let lookahead = raw_lookahead(src, &payloads, super::track::LOOKAHEAD_PACKETS);
+    let lookahead = raw_lookahead(src, &payloads, crate::track::LOOKAHEAD_PACKETS);
     let mut n = native(Container::Adts, Packets::Raw { frames: payloads, src: src.clone(), next: 0 }, &params, &lookahead, 0, None, None)?;
     // HE-AAC decodes twice the core frame length.
     let per_frame = rescale(aac::FRAME_LEN as u64, u64::from(core), u64::from(n.info.sample_rate));
@@ -656,7 +668,7 @@ fn open_mp4<'a>(src: &Src<'a>, container: Container, track: Option<usize>) -> Op
     }
     let params = t.codec_params();
     let lookahead: Vec<Vec<u8>> =
-        (0..t.samples.len().min(super::track::LOOKAHEAD_PACKETS)).filter_map(|i| file.read_sample(src, track, i).ok()).collect();
+        (0..t.samples.len().min(crate::track::LOOKAHEAD_PACKETS)).filter_map(|i| file.read_sample(src, track, i).ok()).collect();
     let timescale = t.timescale;
     // Probe the decoder for the output rate before the timing is worked out.
     let rate = TrackDecoder::new(&params, &lookahead.iter().map(Vec::as_slice).collect::<Vec<_>>()).ok()?.sample_rate();
@@ -687,7 +699,7 @@ fn open_mkv<'a>(src: &Src<'a>, container: Container, track: Option<usize>) -> Op
     }
     let params = t.codec_params();
     let lookahead: Vec<Vec<u8>> =
-        (0..t.samples.len().min(super::track::LOOKAHEAD_PACKETS)).filter_map(|i| demux.read_sample(track, i).ok()).collect();
+        (0..t.samples.len().min(crate::track::LOOKAHEAD_PACKETS)).filter_map(|i| demux.read_sample(track, i).ok()).collect();
     let probe = TrackDecoder::new(&params, &lookahead.iter().map(Vec::as_slice).collect::<Vec<_>>()).ok()?;
     let rate = probe.sample_rate();
     let frames_of = match (probe.frames_per_packet(), params.pcm) {

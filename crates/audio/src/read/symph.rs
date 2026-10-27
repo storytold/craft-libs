@@ -20,7 +20,7 @@ use symphonia::core::meta::MetadataOptions;
 use symphonia::core::units::{TimeBase, Timestamp};
 
 use super::id3v2_len;
-use super::pcm::be_u32;
+use crate::pcm::be_u32;
 use crate::{AudioBuffer, AudioError, AudioInfo, ChannelLayout, CodecId, Container, Result, SampleFormat};
 
 /// The most frames a packet may declare: decoders allocate a packet's frames up front, and ALAC
@@ -434,10 +434,10 @@ fn layout_of(channels: Option<&Channels>) -> ChannelLayout {
             let bits = p.bits();
             match u32::try_from(bits) {
                 Ok(mask) if mask != 0 => ChannelLayout::from_mask(mask),
-                _ => ChannelLayout::unordered(bits.count_ones() as usize),
+                _ => ChannelLayout::unordered(bits.count_ones() as u16),
             }
         }
-        Some(c) => ChannelLayout::unordered(c.count()),
+        Some(c) => ChannelLayout::unordered(crate::layout::count(c.count())),
         None => ChannelLayout::unordered(0),
     }
 }
@@ -495,7 +495,6 @@ fn info_of(reader: &dyn FormatReader, detected: Option<Container>, n: Option<usi
     let p = audio_params(track).ok_or_else(|| AudioError::Unsupported("no decodable audio track".into()))?;
     let sample_rate = p.sample_rate.filter(|&r| r > 0).ok_or_else(|| AudioError::Malformed("unknown sample rate".into()))?;
     let layout = layout_of(p.channels.as_ref());
-    u16::try_from(layout.channels()).map_err(|_| AudioError::Unsupported("too many channels".into()))?;
     let frames = track.num_frames.unwrap_or(0);
     Ok((track.id, AudioInfo::new(container, codec_id_of(p.codec), sample_format_of(p), sample_rate, layout, frames)))
 }
@@ -661,7 +660,7 @@ impl Symph {
                     // The decoded stream is authoritative for the channel count.
                     if usize::from(self.info.channels) != ch {
                         self.info.channels = u16::try_from(ch).map_err(|_| AudioError::Unsupported("too many channels".into()))?;
-                        self.info.layout = ChannelLayout::unordered(ch);
+                        self.info.layout = ChannelLayout::unordered(crate::layout::count(ch));
                     }
                     self.decoded = self.decoded.saturating_add(n as u64);
                     self.last_frames = n;
@@ -700,6 +699,12 @@ impl Symph {
     /// Continue from frame `frame`: an accurate seek lands at or before it, and the frames up to
     /// it are dropped.
     pub(crate) fn seek(&mut self, frame: u64) -> Result<u64> {
+        // At or past a known end: nothing is left to decode.
+        if self.frames_known && frame >= self.info.frames {
+            self.ended = true;
+            self.discard = 0;
+            return Ok(self.info.frames);
+        }
         guarded(|| {
             let (Some(reader), Some(decoder)) = (self.reader.as_mut(), self.decoder.as_mut()) else { return Ok(0) };
             let rate = u64::from(self.info.sample_rate.max(1));
@@ -707,7 +712,19 @@ impl Symph {
             let (numer, denom) = self.time_base.map_or((1, rate), |tb| (u64::from(tb.numer.get()), u64::from(tb.denom.get())));
             let to_ts = |f: u64| u128::from(f) * u128::from(denom) / (u128::from(numer) * u128::from(rate));
             let ts = i64::try_from(to_ts(frame)).unwrap_or(i64::MAX);
-            let seeked = reader.seek(SeekMode::Accurate, SeekTo::Timestamp { ts: Timestamp::new(ts), track_id: self.track_id }).map_err(map_err)?;
+            let seeked = match reader.seek(SeekMode::Accurate, SeekTo::Timestamp { ts: Timestamp::new(ts), track_id: self.track_id }) {
+                Ok(s) => s,
+                // Past the end of a stream whose length is unknown: the stream is over.
+                Err(SymError::SeekError(_)) => {
+                    self.ended = true;
+                    return Ok(frame);
+                }
+                Err(SymError::IoError(e)) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
+                    self.ended = true;
+                    return Ok(frame);
+                }
+                Err(e) => return Err(map_err(e)),
+            };
             decoder.reset();
             let actual = u64::try_from(seeked.actual_ts.get()).unwrap_or(0);
             let actual = u64::try_from(u128::from(actual) * u128::from(numer) * u128::from(rate) / u128::from(denom)).unwrap_or(u64::MAX);

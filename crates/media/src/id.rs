@@ -5,6 +5,8 @@
 //! Both enums are `#[non_exhaustive]`: new formats are added as minor changes, so a `match` on them
 //! needs a `_` arm.
 
+#![warn(missing_docs)]
+
 /// The file or stream format that holds the codec data.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -183,7 +185,21 @@ impl CodecId {
 
     /// Whether this is a video codec.
     pub fn is_video(self) -> bool {
-        !self.is_audio() && self != CodecId::Unknown
+        matches!(
+            self,
+            CodecId::H264
+                | CodecId::Hevc
+                | CodecId::Av1
+                | CodecId::Vp8
+                | CodecId::Vp9
+                | CodecId::ProRes
+                | CodecId::Mjpeg
+                | CodecId::Mpeg2Video
+                | CodecId::Mpeg4Video
+                | CodecId::Theora
+                | CodecId::Dnxhd
+                | CodecId::Apv
+        )
     }
 }
 
@@ -194,15 +210,23 @@ impl CodecId {
 pub struct PcmFormat {
     /// Bits per sample (8, 16, 24, 32 for integers; 32 or 64 for floats).
     pub bits: u16,
+    /// IEEE float samples.
     pub float: bool,
+    /// Big-endian byte order.
     pub big_endian: bool,
     /// Signed integers (8-bit WAV and `raw ` QuickTime PCM are unsigned).
     pub signed: bool,
 }
 
 impl PcmFormat {
-    pub fn new(bits: u16, float: bool, big_endian: bool, signed: bool) -> PcmFormat {
-        PcmFormat { bits, float, big_endian, signed }
+    /// Integer samples of `bits` bits.
+    pub fn int(bits: u16, signed: bool, big_endian: bool) -> PcmFormat {
+        PcmFormat { bits, float: false, big_endian, signed }
+    }
+
+    /// IEEE float samples of `bits` bits (32 or 64).
+    pub fn float(bits: u16, big_endian: bool) -> PcmFormat {
+        PcmFormat { bits, float: true, big_endian, signed: true }
     }
 }
 
@@ -259,6 +283,7 @@ impl CodecParams {
         CodecParams { codec, extradata: Vec::new(), tag: None, sample_rate: None, channels: None, pcm: None, width: None, height: None }
     }
 
+    /// Sets `tag`.
     pub fn with_tag(mut self, tag: [u8; 4]) -> CodecParams {
         self.tag = Some(tag);
         self
@@ -270,21 +295,25 @@ impl CodecParams {
         self
     }
 
+    /// Sets `extradata`.
     pub fn with_extradata(mut self, extradata: impl Into<Vec<u8>>) -> CodecParams {
         self.extradata = extradata.into();
         self
     }
 
+    /// Sets `sample_rate`; 0 leaves it unknown.
     pub fn with_sample_rate(mut self, sample_rate: u32) -> CodecParams {
         self.sample_rate = (sample_rate > 0).then_some(sample_rate);
         self
     }
 
+    /// Sets `channels`; 0 leaves it unknown.
     pub fn with_channels(mut self, channels: u16) -> CodecParams {
         self.channels = (channels > 0).then_some(channels);
         self
     }
 
+    /// Sets `pcm`.
     pub fn with_pcm(mut self, pcm: PcmFormat) -> CodecParams {
         self.pcm = Some(pcm);
         self

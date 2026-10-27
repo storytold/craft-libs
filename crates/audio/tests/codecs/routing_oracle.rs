@@ -450,7 +450,7 @@ fn track_decoder_on_demuxed_packets_matches_decode() {
         let lookahead: Vec<&[u8]> = packets.iter().take(8).map(Vec::as_slice).collect();
         let mut dec = TrackDecoder::new(&params, &lookahead).unwrap();
         assert_eq!((dec.codec(), dec.sample_rate(), dec.layout()), (info.codec, info.sample_rate, info.layout), "{name}");
-        let mut out: Vec<Vec<f32>> = vec![Vec::new(); dec.channels()];
+        let mut out: Vec<Vec<f32>> = vec![Vec::new(); usize::from(dec.channels())];
         for p in &packets {
             for (o, ch) in out.iter_mut().zip(dec.decode(p).unwrap().channels) {
                 o.extend(ch);

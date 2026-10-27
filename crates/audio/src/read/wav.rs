@@ -1,8 +1,8 @@
 //! Native WAV / BWF / RF64 reader (RIFF chunk layout per the Microsoft multimedia
 //! specification, `bext` per EBU Tech 3285, `ds64` per EBU Tech 3306).
 
-use super::pcm::{PcmKind, le_u16, le_u32, le_u64, tag};
 use super::source::Src;
+use crate::pcm::{PcmKind, le_u16, le_u32, le_u64, tag};
 use crate::wav::{GUID_TAIL, WAVE_FORMAT_EXTENSIBLE, WAVE_FORMAT_IEEE_FLOAT, WAVE_FORMAT_PCM};
 use crate::{AudioError, AudioInfo, BwfInfo, ChannelLayout, CodecId, Container, Result, SampleFormat};
 
@@ -45,9 +45,9 @@ impl Fmt {
     fn layout(&self) -> ChannelLayout {
         let channels = usize::from(self.channels);
         match self.mask {
-            _ if self.ambisonic => ChannelLayout::unordered(channels),
-            Some(mask) => ChannelLayout::from_mask_and_channels(mask, channels),
-            None => ChannelLayout::default_for(channels),
+            _ if self.ambisonic => ChannelLayout::unordered(crate::layout::count(channels)),
+            Some(mask) => ChannelLayout::from_mask_and_channels(mask, crate::layout::count(channels)),
+            None => ChannelLayout::default_for(crate::layout::count(channels)),
         }
     }
 }

@@ -23,9 +23,7 @@ pub mod isobmff;
 pub mod matroska;
 #[cfg(feature = "ogg")]
 pub mod ogg;
-#[cfg(any(feature = "isobmff", feature = "matroska", feature = "ogg"))]
 pub mod source;
 
 pub use id::{CodecId, CodecParams, Container, PcmFormat, xiph_lace};
-#[cfg(any(feature = "isobmff", feature = "matroska", feature = "ogg"))]
 pub use source::{ByteSource, ReadSeekSource};

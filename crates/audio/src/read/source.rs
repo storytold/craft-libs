@@ -7,12 +7,30 @@ use std::borrow::Cow;
 use std::io;
 use std::sync::Arc;
 
+/// A source a [`crate::Decoder`] can own: a [`ByteSource`] that is `Send + Sync + 'static`, so
+/// the decoder can move between threads. On single-threaded WebAssembly (no `atomics`), where
+/// sources such as a JS `Blob` reader are not `Send`, any `ByteSource + 'static` is one.
+/// Implemented for every type that qualifies.
+#[cfg(not(all(target_arch = "wasm32", not(target_feature = "atomics"))))]
+pub trait SharedSource: ByteSource + Send + Sync + 'static {}
+#[cfg(not(all(target_arch = "wasm32", not(target_feature = "atomics"))))]
+impl<T: ByteSource + Send + Sync + 'static> SharedSource for T {}
+
+/// A source a [`crate::Decoder`] can own: a [`ByteSource`] that is `Send + Sync + 'static`, so
+/// the decoder can move between threads. On single-threaded WebAssembly (no `atomics`), where
+/// sources such as a JS `Blob` reader are not `Send`, any `ByteSource + 'static` is one.
+/// Implemented for every type that qualifies.
+#[cfg(all(target_arch = "wasm32", not(target_feature = "atomics")))]
+pub trait SharedSource: ByteSource + 'static {}
+#[cfg(all(target_arch = "wasm32", not(target_feature = "atomics")))]
+impl<T: ByteSource + 'static> SharedSource for T {}
+
 /// The bytes a decoder reads: a borrowed buffer, or a source shared with the caller (a file, a
 /// network-backed buffer).
 #[derive(Clone)]
 pub(crate) enum Src<'a> {
     Slice(&'a [u8]),
-    Shared(Arc<dyn ByteSource + Send + Sync>),
+    Shared(Arc<dyn SharedSource>),
 }
 
 impl ByteSource for Src<'_> {

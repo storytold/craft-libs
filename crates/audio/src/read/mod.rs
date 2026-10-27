@@ -14,18 +14,14 @@ mod flac;
 #[cfg(feature = "symphonia")]
 mod mp4;
 mod native;
-mod pcm;
 mod source;
 #[cfg(feature = "symphonia")]
 mod symph;
-mod track;
 mod wav;
 
-pub use track::{LOOKAHEAD_PACKETS, TrackDecoder};
-
 use crate::{AudioBuffer, AudioError, AudioInfo, ChannelLayout, CodecId, Container, Result};
-use craft_media::ByteSource;
 use native::Native;
+pub use source::SharedSource;
 use source::Src;
 use std::sync::Arc;
 #[cfg(feature = "symphonia")]
@@ -33,7 +29,7 @@ use symph::Symph;
 
 /// The decode limit [`decode`] applies unless [`DecodeOptions::max_samples`] says otherwise:
 /// 2^30 samples, 4 GiB of `f32`.
-pub const DEFAULT_MAX_SAMPLES: u64 = pcm::MAX_DECODE_SAMPLES;
+pub const DEFAULT_MAX_SAMPLES: u64 = crate::pcm::MAX_DECODE_SAMPLES;
 
 /// Size of an ID3v2 tag at the start of `b`, if there is one. The 10-byte footer flag (`0x10`)
 /// exists only in ID3v2.4; in v2.2/v2.3 that bit is reserved and must not extend the skip.
@@ -114,6 +110,14 @@ fn detect_by_ext(ext: &str) -> Option<Container> {
 
 /// The container of a file, by its magic bytes, falling back to the extension hint (`"wav"`,
 /// `".flac"`); `None` when neither says.
+///
+/// ```
+/// use craft_audio::{Container, detect_container};
+///
+/// assert_eq!(detect_container(b"fLaC\0\0\0\x22", None), Some(Container::Flac));
+/// assert_eq!(detect_container(&[0; 16], Some("wav")), Some(Container::Wav));
+/// assert_eq!(detect_container(&[0; 16], None), None);
+/// ```
 pub fn detect_container(bytes: &[u8], ext_hint: Option<&str>) -> Option<Container> {
     detect_by_magic(bytes, 0).or_else(|| ext_hint.and_then(detect_by_ext))
 }
@@ -206,10 +210,11 @@ impl std::fmt::Debug for Decoder<'_> {
 }
 
 impl Decoder<'static> {
-    /// Open a file read from `source` (a `std::fs::File`, a shared buffer, any
-    /// [`craft_media::ByteSource`]). `ext_hint` is the file's extension, used only when its bytes
-    /// do not say what it is.
-    pub fn open(source: impl ByteSource + Send + Sync + 'static, ext_hint: Option<&str>, opts: &DecodeOptions) -> Result<Decoder<'static>> {
+    /// Open a file read from `source`: a `std::fs::File`, a shared buffer, a
+    /// [`crate::ReadSeekSource`] around any `Read + Seek`, or any [`crate::ByteSource`] that is
+    /// [`SharedSource`] (`Send + Sync`, except on single-threaded WebAssembly). `ext_hint` is the
+    /// file's extension, used only when its bytes do not say what it is.
+    pub fn open(source: impl SharedSource, ext_hint: Option<&str>, opts: &DecodeOptions) -> Result<Decoder<'static>> {
         Decoder::from_src(Src::Shared(Arc::new(source)), ext_hint, opts)
     }
 }
@@ -244,9 +249,8 @@ impl<'a> Decoder<'a> {
 
     /// A file the native path does not read, without symphonia.
     #[cfg(not(feature = "symphonia"))]
-    fn fallback(_src: Src<'a>, container: Option<Container>, _opts: &DecodeOptions) -> Result<Decoder<'a>> {
-        let what = container.map_or("this file", Container::name);
-        Err(AudioError::Unsupported(format!("{what} needs a decoder this build leaves out (the `decode` feature adds symphonia)")))
+    fn fallback(src: Src<'a>, _container: Option<Container>, _opts: &DecodeOptions) -> Result<Decoder<'a>> {
+        Err(not_built(&src))
     }
 
     /// What the file holds. `frames` is 0 until decoded when the container does not say how long
@@ -337,6 +341,18 @@ pub fn probe(bytes: &[u8], ext_hint: Option<&str>) -> Result<AudioInfo> {
 }
 
 /// [`probe`] for the track `opts` names.
+///
+/// ```
+/// # #[cfg(feature = "pcm-encode")] {
+/// use craft_audio::{AudioBuffer, EncodeOptions, encode};
+/// let wav = encode(&AudioBuffer::new(48_000, 2, 4800), &EncodeOptions::default()).unwrap();
+/// use craft_audio::{DecodeOptions, probe_with};
+///
+/// let info = probe_with(&wav, Some("wav"), &DecodeOptions::default().with_track(0)).unwrap();
+/// assert_eq!((info.channels, info.frames), (2, 4800));
+/// assert!(probe_with(&wav, Some("wav"), &DecodeOptions::default().with_track(1)).is_err());
+/// # }
+/// ```
 pub fn probe_with(bytes: &[u8], ext_hint: Option<&str>, opts: &DecodeOptions) -> Result<AudioInfo> {
     Decoder::from_bytes(bytes, ext_hint, opts)?.probe()
 }
@@ -360,6 +376,20 @@ pub fn decode(bytes: &[u8], ext_hint: Option<&str>) -> Result<(AudioInfo, AudioB
 }
 
 /// [`decode`] with options: another track, or another size limit.
+///
+/// ```
+/// # #[cfg(feature = "pcm-encode")] {
+/// use craft_audio::{AudioBuffer, EncodeOptions, encode};
+/// let wav = encode(&AudioBuffer::new(48_000, 2, 4800), &EncodeOptions::default()).unwrap();
+/// use craft_audio::{AudioError, DecodeOptions, decode_with};
+///
+/// let (_, buf) = decode_with(&wav, None, &DecodeOptions::default()).unwrap();
+/// assert_eq!(buf.frames(), 4800);
+/// // 2 × 4800 samples are over a limit of 1000.
+/// let small = DecodeOptions::default().with_max_samples(1000);
+/// assert!(matches!(decode_with(&wav, None, &small), Err(AudioError::TooLarge(_))));
+/// # }
+/// ```
 pub fn decode_with(bytes: &[u8], ext_hint: Option<&str>, opts: &DecodeOptions) -> Result<(AudioInfo, AudioBuffer)> {
     let mut d = Decoder::from_bytes(bytes, ext_hint, opts)?;
     let declared = d.info().frames.saturating_mul(u64::from(d.info().channels.max(1)));
@@ -407,17 +437,36 @@ fn fit_channels(info: &mut AudioInfo, decoded: Option<usize>) {
         && ch != usize::from(info.channels)
     {
         info.channels = u16::try_from(ch).unwrap_or(u16::MAX);
-        info.layout = ChannelLayout::unordered(ch);
+        info.layout = ChannelLayout::unordered(crate::layout::count(ch));
     }
 }
 
 /// The audio tracks of a file, in the order [`DecodeOptions::track`] counts them.
+///
+/// ```
+/// # #[cfg(feature = "pcm-encode")] {
+/// use craft_audio::{AudioBuffer, EncodeOptions, encode};
+/// let wav = encode(&AudioBuffer::new(48_000, 2, 4800), &EncodeOptions::default()).unwrap();
+/// use craft_audio::{CodecId, tracks};
+///
+/// let list = tracks(&wav, None).unwrap();
+/// assert_eq!((list.len(), list[0].codec, list[0].channels), (1, CodecId::Pcm, Some(2)));
+/// # }
+/// ```
 pub fn tracks(bytes: &[u8], ext_hint: Option<&str>) -> Result<Vec<TrackInfo>> {
     tracks_in(&Src::Slice(bytes), ext_hint)
 }
 
 /// [`tracks`] for a file read from a source.
-pub fn tracks_of(source: impl ByteSource + Send + Sync + 'static, ext_hint: Option<&str>) -> Result<Vec<TrackInfo>> {
+///
+/// ```no_run
+/// # fn demo() -> craft_audio::Result<()> {
+/// for t in craft_audio::tracks_of(std::fs::File::open("interview.mkv")?, Some("mkv"))? {
+///     println!("track {}: {}", t.index, t.codec.name());
+/// }
+/// # Ok(()) }
+/// ```
+pub fn tracks_of(source: impl SharedSource, ext_hint: Option<&str>) -> Result<Vec<TrackInfo>> {
     tracks_in(&Src::Shared(Arc::new(source)), ext_hint)
 }
 
@@ -441,7 +490,17 @@ fn tracks_in(src: &Src<'_>, ext_hint: Option<&str>) -> Result<Vec<TrackInfo>> {
             Ok(list(symph::tracks(src.whole()?, container)?.into_iter().map(|(c, r, n)| (c, (r > 0).then_some(r), (n > 0).then_some(n))).collect()))
         }
         #[cfg(not(feature = "symphonia"))]
-        None => Ok(Vec::new()),
+        None => Err(not_built(src)),
+    }
+}
+
+/// The error for a file the native path does not read, in a build without symphonia: the build
+/// is blamed only when the bytes name a format.
+#[cfg(not(feature = "symphonia"))]
+fn not_built(src: &Src<'_>) -> AudioError {
+    match detect_container(&src.head(), None) {
+        Some(c) => AudioError::Unsupported(format!("{} needs a decoder this build leaves out (the `decode` feature adds symphonia)", c.name())),
+        None => AudioError::Unsupported("not a recognized audio format".into()),
     }
 }
 
@@ -455,5 +514,9 @@ mod native_only_tests {
         let flac_header = [&b"fLaC"[..], &[0x80, 0, 0, 34], &[0; 34]].concat();
         assert!(matches!(decode(&flac_header, None), Err(AudioError::Unsupported(m)) if m.contains("FLAC")));
         assert!(matches!(probe(&flac_header, None), Err(AudioError::Unsupported(_))));
+        // A track list says the same instead of listing nothing.
+        assert!(matches!(tracks(&flac_header, None), Err(AudioError::Unsupported(m)) if m.contains("FLAC")));
+        // Bytes that name no format are not blamed on the build.
+        assert!(matches!(tracks(&[7u8; 64], None), Err(AudioError::Unsupported(m)) if m.contains("not a recognized")));
     }
 }

@@ -6,9 +6,9 @@ demuxer, written from the public specifications. No `unsafe`, no panics on malfo
 for `wasm32-unknown-unknown`. Dependencies: `thiserror` (for `isobmff`), `serde` (optional).
 
 Codecs are in separate crates that depend on this one: [`craft-audio`](../audio/README.md) for
-audio; video codecs will be a later crate. What both need lives here: the containers, the bit I/O,
-one `ByteSource` trait, and the [shared identifiers](#containers-codecs-and-codec-parameters) a
-codec crate describes a file and configures a decoder with.
+audio; video codecs will go in a separate crate. What both need lives here: the containers, the
+bit I/O, one `ByteSource` trait, and the [shared identifiers](#containers-codecs-and-codec-parameters)
+that codec crates use to describe a file and configure a decoder.
 
 ## Features
 
@@ -19,7 +19,7 @@ codec crate describes a file and configures a decoder with.
 | `matroska` | `craft_media::matroska` | none |
 | `ogg` | `craft_media::ogg` | none |
 | (none) | `Container`, `CodecId`, `CodecParams`, `PcmFormat` | none |
-| `serde` | `Serialize`/`Deserialize` on `Container`, `CodecId` and `PcmFormat` | `serde` |
+| `serde` | `Serialize`/`Deserialize` on `Container`, `CodecId`, `CodecParams` and `PcmFormat` | `serde` |
 
 `default = ["isobmff"]`, so `bitstream` and `isobmff` build. `matroska` is opt-in: it is about as
 much code as `isobmff`, and most users of MP4/MOV (LightCraft, FigCraft, SoundCraft, EffectCraft)
@@ -415,6 +415,8 @@ Always built, with no dependencies, so codec crates share them:
 - `CodecId`: audio and video codecs (`Aac`, `HeAac`, `Opus`, `Eac3`, `Speex`, …, `H264`, `Hevc`,
   `Av1`, `ProRes`, `Dnxhd`, `Apv`, `Theora`, …, `Unknown`), with `name()`, `is_audio()`,
   `is_video()`.
+- `PcmFormat`: the layout of uncompressed samples, built with `PcmFormat::int(bits, signed,
+  big_endian)` or `PcmFormat::float(bits, big_endian)`.
 - `CodecParams`: what a decoder needs about a track, whatever its container: `codec`,
   `extradata`, `tag` (the container's four-character code, such as a ProRes profile), the audio
   fields `sample_rate`, `channels` and `pcm` (`PcmFormat`), and the video fields `width` and
@@ -429,11 +431,12 @@ All are `#[non_exhaustive]`: new formats and fields are minor changes.
 
 ## `ByteSource`
 
-`craft_media::ByteSource` (`len`, `read_at(offset, buf)`) is what every demuxer reads from;
-`isobmff::ByteSource`, `matroska::ByteSource` and `ogg::ByteSource` are the same trait. It is
-implemented for `[u8]`, `Vec<u8>`, `&T`, `Arc<T>`, `Box<T>` and `std::fs::File` (not on wasm), and
-`ReadSeekSource` adapts any `Read + Seek` (it is `Send + Sync` when the reader is `Send`). Implement it once for a custom source (a web `Blob`, a
-network range reader) to use every container with it.
+`craft_media::ByteSource` (`len`, `read_at(offset, buf)`) is what every demuxer reads from. It is
+always built, so a crate that uses only `bitstream` can name it too. `isobmff::ByteSource`,
+`matroska::ByteSource` and `ogg::ByteSource` are the same trait. It is implemented for `[u8]`,
+`Vec<u8>`, `&T`, `Arc<T>`, `Box<T>` and `std::fs::File` (not on wasm). `ReadSeekSource` adapts any
+`Read + Seek`; it is `Send + Sync` when the reader is `Send`. Implement the trait once for a
+custom source (a web `Blob`, a network range reader) to use every container with it.
 
 ## Tests
 
@@ -464,6 +467,5 @@ ffmpeg and ffprobe are test oracles only, never linked. The helpers are in `craf
 `$CRAFT_MEDIA_FFMPEG` / `$CRAFT_MEDIA_FFPROBE`, then `PATH`, then common install directories. When
 a tool is missing, the oracle tests print `SKIPPED` and pass; `CRAFT_MEDIA_REQUIRE_ORACLES=1` turns
 a skip into a failure. CI (`.github/workflows/media.yml`) sets it and installs Ubuntu's ffmpeg.
-craft-audio's oracle tests use the same variables.
-Generate every fixture ahead of time with
+craft-audio's oracle tests use the same variables. Generate every fixture ahead of time with
 `cargo test -p craft-media --all-features -- --ignored generate_fixtures`.

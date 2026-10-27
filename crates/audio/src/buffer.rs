@@ -14,8 +14,8 @@ pub struct AudioBuffer {
 
 impl AudioBuffer {
     /// A silent buffer with `channels` channels of `frames` frames each.
-    pub fn new(sample_rate: u32, channels: usize, frames: usize) -> Self {
-        Self { sample_rate, channels: vec![vec![0.0; frames]; channels] }
+    pub fn new(sample_rate: u32, channels: u16, frames: usize) -> Self {
+        Self { sample_rate, channels: vec![vec![0.0; frames]; usize::from(channels)] }
     }
 
     /// Number of frames (the length of the shortest channel; 0 when there are no channels).

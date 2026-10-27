@@ -272,7 +272,7 @@ impl Track {
         }
         if let Codec::Pcm { float, big_endian, bits } = self.codec {
             // 8-bit integer PCM is unsigned in Matroska, as in WAV.
-            p = p.with_pcm(crate::PcmFormat::new(bits, float, big_endian, float || bits > 8));
+            p = p.with_pcm(if float { crate::PcmFormat::float(bits, big_endian) } else { crate::PcmFormat::int(bits, bits > 8, big_endian) });
         }
         p
     }

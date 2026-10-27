@@ -6,6 +6,7 @@ use craft_audio::{AudioBuffer, BitDepth, ChannelLayout, EncodeFormat, EncodeOpti
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let dir = std::path::PathBuf::from(std::env::args().nth(1).unwrap_or_else(|| ".".into()));
+    std::fs::create_dir_all(&dir)?;
     let rate = 48_000;
     let tone: Vec<f32> = (0..rate).map(|i| (i as f32 * 440.0 * std::f32::consts::TAU / rate as f32).sin() * 0.5).collect();
     let stereo = AudioBuffer { sample_rate: rate as u32, channels: vec![tone.clone(), tone.clone()] };
@@ -21,7 +22,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Streamed: the same bytes, block by block into a file.
     let opts = EncodeOptions::new(EncodeFormat::Flac);
-    let mut enc = FileEncoder::new(std::fs::File::create(dir.join("tone.flac"))?, &opts, 2, rate as u32)?;
+    let mut enc = FileEncoder::new(std::fs::File::create(dir.join("tone.flac"))?, &opts, rate as u32, 2)?;
     for chunk in tone.chunks(4096) {
         enc.write(&[chunk, chunk], chunk.len())?;
     }

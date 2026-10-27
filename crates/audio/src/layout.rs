@@ -51,7 +51,7 @@ pub enum Speaker {
 
 impl Speaker {
     /// Every position, in mask-bit (and therefore WAV channel) order.
-    pub const ALL: [Speaker; 18] = [
+    pub const ALL: &[Speaker] = &[
         Speaker::FrontLeft,
         Speaker::FrontRight,
         Speaker::FrontCenter,
@@ -144,6 +144,12 @@ impl TryFrom<RawLayout> for ChannelLayout {
     }
 }
 
+/// A channel count as the API holds it, saturating at `u16::MAX`.
+#[cfg(any(feature = "aac-decode", feature = "opus-decode", feature = "mpa-decode", feature = "ac3-decode", feature = "pcm-encode"))]
+pub(crate) fn count(n: usize) -> u16 {
+    u16::try_from(n).unwrap_or(u16::MAX)
+}
+
 impl ChannelLayout {
     /// C.
     pub const MONO: ChannelLayout = ChannelLayout { channels: 1, mask: 0x4 };
@@ -168,12 +174,12 @@ impl ChannelLayout {
     /// make it unordered.
     pub fn from_mask(mask: u32) -> ChannelLayout {
         let channels = mask.count_ones() as u16;
-        if mask & !KNOWN_BITS != 0 { ChannelLayout::unordered(usize::from(channels)) } else { ChannelLayout { channels, mask } }
+        if mask & !KNOWN_BITS != 0 { ChannelLayout::unordered(channels) } else { ChannelLayout { channels, mask } }
     }
 
     /// `channels` channels described by `mask`, as WAV files store them: when the mask names a
     /// different number of speakers than there are channels, the channels are unordered.
-    pub fn from_mask_and_channels(mask: u32, channels: usize) -> ChannelLayout {
+    pub fn from_mask_and_channels(mask: u32, channels: u16) -> ChannelLayout {
         let layout = ChannelLayout::from_mask(mask);
         if mask != 0 && layout.is_ordered() && layout.channels() == channels { layout } else { ChannelLayout::unordered(channels) }
     }
@@ -181,7 +187,7 @@ impl ChannelLayout {
     /// The usual layout for a channel count, as WAV readers assume when a file has no mask: mono,
     /// stereo, L R C, quad, 5.0, 5.1, 6.1 (with a back centre), 7.1 (backs and sides), 7.1.4.
     /// Other counts are unordered.
-    pub fn default_for(channels: usize) -> ChannelLayout {
+    pub fn default_for(channels: u16) -> ChannelLayout {
         let mask = match channels {
             1 => 0x4,
             2 => 0x3,
@@ -198,13 +204,13 @@ impl ChannelLayout {
     }
 
     /// `channels` channels with no speaker assignment.
-    pub fn unordered(channels: usize) -> ChannelLayout {
-        ChannelLayout { channels: u16::try_from(channels).unwrap_or(u16::MAX), mask: 0 }
+    pub fn unordered(channels: u16) -> ChannelLayout {
+        ChannelLayout { channels, mask: 0 }
     }
 
     /// The number of channels.
-    pub fn channels(&self) -> usize {
-        usize::from(self.channels)
+    pub fn channels(&self) -> u16 {
+        self.channels
     }
 
     /// The speaker mask, or `None` for an unordered layout.

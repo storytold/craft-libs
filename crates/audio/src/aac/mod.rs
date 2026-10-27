@@ -3,7 +3,7 @@
 //! - [`Encoder`] (feature `aac-encode`): planar f32 → raw access units (+
 //!   [`Encoder::audio_specific_config`] for MP4 `esds`, optional ADTS framing). Psychoacoustic
 //!   model, window switching, M/S, TNS, bit reservoir, CBR/VBR, 1–8 channels.
-//! - [`Decoder`] (feature `decode`): `AudioSpecificConfig` + raw access units → planar f32.
+//! - [`Decoder`] (feature `aac-decode`): `AudioSpecificConfig` + raw access units → planar f32.
 //!   Supports M/S, intensity stereo, PNS, TNS, pulse data, both window shapes and every window
 //!   sequence.
 //!

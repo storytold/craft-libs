@@ -1,8 +1,8 @@
 //! Native AIFF / AIFF-C reader (Apple "Audio Interchange File Format" 1.3 and the AIFF-C
 //! draft: big-endian IFF chunks, 80-bit IEEE extended sample rate).
 
-use super::pcm::{PcmKind, be_u16, be_u32, tag};
 use super::source::Src;
+use crate::pcm::{PcmKind, be_u16, be_u32, tag};
 use crate::{AudioError, AudioInfo, ChannelLayout, CodecId, Container, Result, SampleFormat};
 
 const MAX_SAMPLE_RATE: f64 = 10_000_000.0;
@@ -138,6 +138,6 @@ fn layout(channels: usize) -> ChannelLayout {
         2 => ChannelLayout::STEREO,
         3 => ChannelLayout::SURROUND_3_0,
         4 => ChannelLayout::QUAD,
-        n => ChannelLayout::unordered(n),
+        n => ChannelLayout::unordered(crate::layout::count(n)),
     }
 }

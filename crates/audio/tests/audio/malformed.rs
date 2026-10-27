@@ -6,7 +6,7 @@ use craft_audio::{
 use proptest::prelude::*;
 
 fn small(format: EncodeFormat, depth: BitDepth, channels: usize) -> Vec<u8> {
-    let mut b = AudioBuffer::new(44_100, channels, 300);
+    let mut b = AudioBuffer::new(44_100, channels as u16, 300);
     for ch in &mut b.channels {
         for (i, s) in ch.iter_mut().enumerate() {
             *s = ((i as f32) * 0.1).sin() * 0.5;

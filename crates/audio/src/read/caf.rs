@@ -1,7 +1,7 @@
 //! Size checks on CAF chunks before symphonia reads them: it allocates whatever a magic cookie,
 //! a packet table or a packet claims, and a failed allocation aborts the process.
 
-use super::pcm::{be_u16, be_u32, be_u64};
+use crate::pcm::{be_u16, be_u32, be_u64};
 use crate::{AudioError, Result};
 
 /// Refuse the CAF stream at `at` if its magic cookie, packet table or packets claim more bytes

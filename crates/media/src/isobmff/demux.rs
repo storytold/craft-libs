@@ -164,7 +164,11 @@ impl Track {
         }
         match codec {
             CodecConfig::Pcm(c) => {
-                p = p.with_pcm(crate::PcmFormat::new(c.bits, c.float, c.big_endian, c.signed));
+                p = p.with_pcm(if c.float {
+                    crate::PcmFormat::float(c.bits, c.big_endian)
+                } else {
+                    crate::PcmFormat::int(c.bits, c.signed, c.big_endian)
+                });
                 p = p.with_sample_rate(c.sample_rate.round() as u32).with_channels(u16::try_from(c.channels).unwrap_or(0));
             }
             CodecConfig::Opus(o) => p = p.with_sample_rate(48_000).with_channels(u16::from(o.output_channels)),

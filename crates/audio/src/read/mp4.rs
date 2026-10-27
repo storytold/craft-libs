@@ -1,7 +1,7 @@
 //! Size checks on MP4 atoms before symphonia reads them: it allocates whatever an atom, a sample
 //! table or a sample claims, and a failed allocation aborts the process.
 
-use super::pcm::{be_u32, be_u64};
+use crate::pcm::{be_u32, be_u64};
 use crate::{AudioError, Result};
 
 #[derive(Clone, Copy)]
