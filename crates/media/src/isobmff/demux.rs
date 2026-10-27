@@ -604,7 +604,19 @@ impl SttsCursor<'_> {
     }
 }
 
-fn parse_stbl(stbl: &[u8], t: &mut Track, is_qt: bool, file_len: u64, budget: &mut SampleBudget) -> Result<()> {
+struct StblTables {
+    stts: Vec<(u32, u32)>,
+    ctts: Vec<(u32, u32)>,
+    stss: Option<Vec<u32>>,
+    stsc: Vec<(u32, u32, u32)>,
+    const_size: u32,
+    sample_count: usize,
+    sizes: Vec<u32>,
+    chunks: Vec<u64>,
+    sample_groups: Vec<SampleGroup>,
+}
+
+fn parse_stbl_tables(stbl: &[u8], t: &mut Track, is_qt: bool, file_len: u64) -> Result<StblTables> {
     let mut stts: Vec<(u32, u32)> = Vec::new();
     let mut ctts: Vec<(u32, u32)> = Vec::new();
     let mut stss: Option<Vec<u32>> = None;
@@ -730,8 +742,15 @@ fn parse_stbl(stbl: &[u8], t: &mut Track, is_qt: bool, file_len: u64, budget: &m
             _ => {}
         }
     }
-    t.sample_groups =
+    let sample_groups =
         sbgp.into_iter().map(|(gt, runs)| SampleGroup { grouping_type: gt, runs, descriptions: sgpd.remove(&gt).unwrap_or_default() }).collect();
+    Ok(StblTables { stts, ctts, stss, stsc, const_size, sample_count, sizes, chunks, sample_groups })
+}
+
+fn parse_stbl(stbl: &[u8], t: &mut Track, is_qt: bool, file_len: u64, budget: &mut SampleBudget) -> Result<()> {
+    let StblTables { stts, ctts, stss, stsc, const_size, mut sample_count, sizes, chunks, sample_groups } =
+        parse_stbl_tables(stbl, t, is_qt, file_len)?;
+    t.sample_groups = sample_groups;
     if sample_count == 0 || chunks.is_empty() || stsc.is_empty() {
         return Ok(());
     }

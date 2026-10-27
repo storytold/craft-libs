@@ -422,6 +422,14 @@ fn write_trak(b: &mut BoxBuf, t: &WTrack, movie_ts: u32, qt: bool, shift: u64, f
     b.end(u);
     b.end(r);
     b.end(d);
+    write_stbl(b, t, qt, shift, force_co64)?;
+    b.end(minf);
+    b.end(mdia);
+    b.end(trak);
+    Ok(())
+}
+
+fn write_stbl(b: &mut BoxBuf, t: &WTrack, qt: bool, shift: u64, force_co64: bool) -> Result<()> {
     let stbl = b.start(b"stbl");
     let m = b.start_full(b"stsd", 0, 0);
     b.u32(1);
@@ -503,9 +511,6 @@ fn write_trak(b: &mut BoxBuf, t: &WTrack, movie_ts: u32, qt: bool, shift: u64, f
     }
     b.end(m);
     b.end(stbl);
-    b.end(minf);
-    b.end(mdia);
-    b.end(trak);
     Ok(())
 }
 

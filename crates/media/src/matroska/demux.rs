@@ -4,8 +4,16 @@ use std::collections::{HashMap, VecDeque};
 
 use crate::matroska::ebml::{self, Children, Lacing, Size, parse_lacing, read_id, read_size};
 use crate::matroska::error::{Error, Result};
-use crate::matroska::ids::*;
-use crate::matroska::meta::*;
+use crate::matroska::ids::{
+    ATTACHED_FILE, ATTACHMENTS, BLOCK, BLOCK_ADD_ID, BLOCK_ADDITIONAL, BLOCK_ADDITIONS, BLOCK_DURATION, BLOCK_GROUP, BLOCK_MORE, CHAPTERS, CLUSTER,
+    CRC32, CUES, DISCARD_PADDING, DOC_TYPE, DOC_TYPE_READ_VERSION, DOC_TYPE_VERSION, EBML, EBML_MAX_ID_LENGTH, EBML_MAX_SIZE_LENGTH, FILE_DATA,
+    FILE_DESCRIPTION, FILE_MEDIA_TYPE, FILE_NAME, FILE_UID, INFO, REFERENCE_BLOCK, SEEK_HEAD, SEGMENT, SIMPLE_BLOCK, TAGS, TIMESTAMP, TRACK_ENTRY,
+    TRACKS, VOID, is_top_level,
+};
+use crate::matroska::meta::{
+    Attachment, ClusterInfo, CuePoint, Edition, SeekEntry, SegmentInfo, Tag, parse_chapters, parse_cues, parse_info, parse_seekhead, parse_tags,
+    parse_tracks,
+};
 use crate::matroska::source::{ByteSource, ReadSeekSource};
 use crate::matroska::track::{Sample, Track, TrackKind, gcd};
 

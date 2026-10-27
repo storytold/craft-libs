@@ -1379,95 +1379,7 @@ impl SampleEntry {
             return Ok(());
         }
         if let Some(v) = &self.video {
-            let m = b.start(&self.format.0);
-            b.zeros(6);
-            b.u16(self.data_reference_index);
-            b.u16(0);
-            b.u16(0);
-            b.u32(v.vendor.as_u32());
-            b.u32(v.temporal_quality);
-            b.u32(v.spatial_quality);
-            b.u16(v.width);
-            b.u16(v.height);
-            b.u32(v.horiz_resolution);
-            b.u32(v.vert_resolution);
-            b.u32(0);
-            b.u16(v.frame_count);
-            let name = v.compressor_name.as_bytes();
-            let n = name.len().min(31);
-            let mut nb = [0u8; 32];
-            nb[0] = n as u8;
-            nb[1..1 + n].copy_from_slice(&name[..n]);
-            b.bytes(&nb);
-            b.u16(v.depth);
-            b.i16(-1);
-            match &self.codec {
-                CodecConfig::Avc(c) => b.leaf(b"avcC", &c.to_bytes()),
-                CodecConfig::Hevc(c) => b.leaf(b"hvcC", &c.to_bytes()),
-                CodecConfig::Av1(c) => b.leaf(b"av1C", &c.to_bytes()),
-                CodecConfig::Vp9(c) => b.leaf(b"vpcC", &c.to_bytes()),
-                CodecConfig::Apv(c) => b.leaf(b"apvC", &c.to_bytes()),
-                _ => {}
-            }
-            if let Some(g) = v.gamma {
-                b.leaf(b"gama", &g.to_be_bytes());
-            }
-            if let Some(fi) = v.field_info {
-                b.leaf(b"fiel", &[fi.fields, fi.detail]);
-            }
-            if let Some(ci) = &v.color {
-                let m = b.start(b"colr");
-                match ci {
-                    ColorInfo::Nclx { primaries, transfer, matrix, full_range } => {
-                        b.bytes(b"nclx");
-                        b.u16(*primaries);
-                        b.u16(*transfer);
-                        b.u16(*matrix);
-                        b.u8(if *full_range { 0x80 } else { 0 });
-                    }
-                    ColorInfo::Nclc { primaries, transfer, matrix } => {
-                        b.bytes(b"nclc");
-                        b.u16(*primaries);
-                        b.u16(*transfer);
-                        b.u16(*matrix);
-                    }
-                    ColorInfo::Icc { kind, profile } => {
-                        b.bytes(&kind.0);
-                        b.bytes(profile);
-                    }
-                }
-                b.end(m);
-            }
-            if let Some(md) = &v.mastering_display {
-                b.leaf(b"mdcv", &md.to_bytes());
-            }
-            if let Some((cll, fall)) = v.content_light {
-                let mut d = cll.to_be_bytes().to_vec();
-                d.extend_from_slice(&fall.to_be_bytes());
-                b.leaf(b"clli", &d);
-            }
-            if let Some((h, vv)) = v.pixel_aspect {
-                let m = b.start(b"pasp");
-                b.u32(h);
-                b.u32(vv);
-                b.end(m);
-            }
-            if let Some(c) = v.clean_aperture {
-                let m = b.start(b"clap");
-                b.u32(c.width.0);
-                b.u32(c.width.1);
-                b.u32(c.height.0);
-                b.u32(c.height.1);
-                b.i32(c.horiz_offset.0);
-                b.u32(c.horiz_offset.1);
-                b.i32(c.vert_offset.0);
-                b.u32(c.vert_offset.1);
-                b.end(m);
-            }
-            if let Some(br) = self.bitrate {
-                write_btrt(b, br);
-            }
-            b.end(m);
+            self.write_video(b, v);
             return Ok(());
         }
         let a = self.audio.clone().ok_or_else(|| Error::Mux("sample entry has neither video nor audio params".into()))?;
@@ -1580,6 +1492,118 @@ impl SampleEntry {
         }
         b.end(m);
         Ok(())
+    }
+
+    fn write_video(&self, b: &mut BoxBuf, v: &VideoParams) {
+        let m = b.start(&self.format.0);
+        b.zeros(6);
+        b.u16(self.data_reference_index);
+        b.u16(0);
+        b.u16(0);
+        b.u32(v.vendor.as_u32());
+        b.u32(v.temporal_quality);
+        b.u32(v.spatial_quality);
+        b.u16(v.width);
+        b.u16(v.height);
+        b.u32(v.horiz_resolution);
+        b.u32(v.vert_resolution);
+        b.u32(0);
+        b.u16(v.frame_count);
+        let name = v.compressor_name.as_bytes();
+        let n = name.len().min(31);
+        let mut nb = [0u8; 32];
+        nb[0] = n as u8;
+        nb[1..1 + n].copy_from_slice(&name[..n]);
+        b.bytes(&nb);
+        b.u16(v.depth);
+        b.i16(-1);
+        write_video_codec_config(b, &self.codec);
+        write_video_descriptive_boxes(b, v);
+        if let Some(br) = self.bitrate {
+            write_btrt(b, br);
+        }
+        b.end(m);
+    }
+}
+
+fn write_video_codec_config(b: &mut BoxBuf, codec: &CodecConfig) {
+    match codec {
+        CodecConfig::Avc(config) => b.leaf(b"avcC", &config.to_bytes()),
+        CodecConfig::Hevc(config) => b.leaf(b"hvcC", &config.to_bytes()),
+        CodecConfig::Av1(config) => b.leaf(b"av1C", &config.to_bytes()),
+        CodecConfig::Vp9(config) => b.leaf(b"vpcC", &config.to_bytes()),
+        CodecConfig::Apv(config) => b.leaf(b"apvC", &config.to_bytes()),
+        _ => {}
+    }
+}
+
+fn write_video_descriptive_boxes(b: &mut BoxBuf, v: &VideoParams) {
+    if let Some(gamma) = v.gamma {
+        b.leaf(b"gama", &gamma.to_be_bytes());
+    }
+    if let Some(field_info) = v.field_info {
+        b.leaf(b"fiel", &[field_info.fields, field_info.detail]);
+    }
+    if let Some(color) = &v.color {
+        write_color_box(b, color);
+    }
+    if let Some(display) = &v.mastering_display {
+        b.leaf(b"mdcv", &display.to_bytes());
+    }
+    if let Some((cll, fall)) = v.content_light {
+        let mut data = cll.to_be_bytes().to_vec();
+        data.extend_from_slice(&fall.to_be_bytes());
+        b.leaf(b"clli", &data);
+    }
+    write_pixel_aspect_box(b, v.pixel_aspect);
+    write_clean_aperture_box(b, v.clean_aperture);
+}
+
+fn write_color_box(b: &mut BoxBuf, color: &ColorInfo) {
+    let m = b.start(b"colr");
+    match color {
+        ColorInfo::Nclx { primaries, transfer, matrix, full_range } => {
+            b.bytes(b"nclx");
+            b.u16(*primaries);
+            b.u16(*transfer);
+            b.u16(*matrix);
+            b.u8(if *full_range { 0x80 } else { 0 });
+        }
+        ColorInfo::Nclc { primaries, transfer, matrix } => {
+            b.bytes(b"nclc");
+            b.u16(*primaries);
+            b.u16(*transfer);
+            b.u16(*matrix);
+        }
+        ColorInfo::Icc { kind, profile } => {
+            b.bytes(&kind.0);
+            b.bytes(profile);
+        }
+    }
+    b.end(m);
+}
+
+fn write_pixel_aspect_box(b: &mut BoxBuf, pixel_aspect: Option<(u32, u32)>) {
+    if let Some((horizontal, vertical)) = pixel_aspect {
+        let m = b.start(b"pasp");
+        b.u32(horizontal);
+        b.u32(vertical);
+        b.end(m);
+    }
+}
+
+fn write_clean_aperture_box(b: &mut BoxBuf, clean_aperture: Option<CleanAperture>) {
+    if let Some(aperture) = clean_aperture {
+        let m = b.start(b"clap");
+        b.u32(aperture.width.0);
+        b.u32(aperture.width.1);
+        b.u32(aperture.height.0);
+        b.u32(aperture.height.1);
+        b.i32(aperture.horiz_offset.0);
+        b.u32(aperture.horiz_offset.1);
+        b.i32(aperture.vert_offset.0);
+        b.u32(aperture.vert_offset.1);
+        b.end(m);
     }
 }
 
