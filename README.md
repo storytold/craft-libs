@@ -66,8 +66,9 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   in each app.
 - [`craft-audio`](crates/audio/README.md): audio file I/O and codecs. WAV/AIFF read and write,
   FLAC encoder, AAC, MP1/MP2, AC-3/E-AC-3 and Opus decoders, AAC and Opus encoders, waveform
-  overviews; symphonia for MP3, FLAC decoding and the other formats until native decoders replace
-  it. Features `decode`, `encode`, `peaks`.
+  overviews, streaming and seeking (`Decoder`), packet decoding for any demuxer (`TrackDecoder`);
+  symphonia for MP3, FLAC decoding and the other formats until native decoders replace it.
+  Features `decode` (or `decode-native` without symphonia), `encode`, `peaks`, and one per codec.
 - [`craft-media`](crates/media/README.md): bit-level I/O (`bitstream`), clean-room MP4/MOV
   (`isobmff`) and Matroska/WebM (`matroska`) demuxers and muxers, an Ogg demuxer (`ogg`), from
   FilmCraft, and an ISO BMFF box reader. Containers only; codecs are in `craft-audio` (video
