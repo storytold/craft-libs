@@ -1,7 +1,8 @@
 //! RFC 6716 / RFC 8251 conformance vectors.
 //!
 //! The official vectors (opus_testvectors-rfc8251) are test data downloaded to
-//! `target/fixtures/opus/vectors/` (never committed). The test is skipped when they are absent.
+//! `target/fixtures/opus/vectors/` by `scripts/fetch-opus-vectors.sh` (never committed). Without
+//! them the tests print `SKIPPED`, or fail with `CRAFT_MEDIA_REQUIRE_ORACLES=1` (as in CI).
 //! For each vector we check (1) the final range-coder state after every packet against the value
 //! stored in the `.bit` file (bit-exact parsing), and (2) the decoded PCM against the reference
 //! `.dec` output using our implementation of the opus_compare-style quality metric
@@ -13,9 +14,14 @@ use std::path::PathBuf;
 
 use craft_audio::opus::StreamDecoder;
 
+/// The RFC 8251 vectors, or `None` after printing `SKIPPED` (a failure with
+/// `CRAFT_MEDIA_REQUIRE_ORACLES=1`). `scripts/fetch-opus-vectors.sh` fetches them.
 fn vectors_dir() -> Option<PathBuf> {
     let d = crate::common::fixture_subdir("opus").join("vectors");
-    d.join("testvector01.bit").exists().then_some(d)
+    if d.join("testvector01.bit").exists() {
+        return Some(d);
+    }
+    crate::common::skip(&format!("the Opus RFC 8251 vectors are not in {} (scripts/fetch-opus-vectors.sh fetches them)", d.display()))
 }
 
 fn read_bit(path: &PathBuf) -> Vec<(Vec<u8>, u32)> {
@@ -62,10 +68,7 @@ fn decode_vector(packets: &[(Vec<u8>, u32)], rate: u32, channels: usize, no_inv:
 
 #[test]
 fn rfc8251_test_vectors() {
-    let Some(dir) = vectors_dir() else {
-        eprintln!("opus test vectors not found; skipping");
-        return;
-    };
+    let Some(dir) = vectors_dir() else { return };
     let mut failures = Vec::new();
     for v in 1..=12 {
         let name = format!("testvector{v:02}");

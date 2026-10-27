@@ -75,9 +75,14 @@ fn concealment_before_and_after_packets() {
     assert!(out[0].iter().all(|&v| v == 0.0));
 }
 
+/// The RFC 8251 vectors, or `None` after printing `SKIPPED` (a failure with
+/// `CRAFT_MEDIA_REQUIRE_ORACLES=1`). `scripts/fetch-opus-vectors.sh` fetches them.
 fn vectors_dir() -> Option<PathBuf> {
     let d = crate::common::fixture_subdir("opus").join("vectors");
-    d.join("testvector01.bit").exists().then_some(d)
+    if d.join("testvector01.bit").exists() {
+        return Some(d);
+    }
+    crate::common::skip(&format!("the Opus RFC 8251 vectors are not in {} (scripts/fetch-opus-vectors.sh fetches them)", d.display()))
 }
 
 /// Real packets (from the conformance vectors) truncated and bit-flipped, interleaved with losses.
