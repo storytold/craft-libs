@@ -16,8 +16,8 @@ mod codec;
 mod demux;
 mod error;
 mod mux;
-mod source;
 
+pub use crate::source::ByteSource;
 pub use bytes::FourCc;
 pub use codec::{
     AacConfig, ApvConfig, AudioParams, Av1Config, AvcConfig, BitRate, CleanAperture, CodecConfig, ColorInfo, FieldInfo, FlacConfig, HevcConfig,
@@ -26,4 +26,3 @@ pub use codec::{
 pub use demux::{Edit, Metadata, Mp4File, Sample, SampleGroup, Track, TrackKind, open};
 pub use error::{Error, Result};
 pub use mux::{Brand, FragmentedWriter, Mp4Writer, TrackConfig, WriteSample, WriterOptions};
-pub use source::ByteSource;

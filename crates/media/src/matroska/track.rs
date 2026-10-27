@@ -234,6 +234,41 @@ pub struct Track {
 }
 
 impl Track {
+    /// What a decoder needs for this track, in the container-neutral form the codec crates take
+    /// (`CodecPrivate` is already in that form).
+    pub fn codec_params(&self) -> crate::CodecParams {
+        use crate::CodecId as Id;
+        let (id, extradata) = match &self.codec {
+            Codec::Avc { avcc } => (Id::H264, avcc.clone()),
+            Codec::Hevc { hvcc } => (Id::Hevc, hvcc.clone()),
+            Codec::Vp8 => (Id::Vp8, Vec::new()),
+            Codec::Vp9 { private } => (Id::Vp9, private.clone()),
+            Codec::Av1 { av1c } => (Id::Av1, av1c.clone()),
+            Codec::ProRes { .. } => (Id::ProRes, Vec::new()),
+            Codec::Mjpeg => (Id::Mjpeg, Vec::new()),
+            Codec::Aac { asc } => (Id::Aac, asc.clone()),
+            Codec::Opus { head } => (Id::Opus, head.clone()),
+            Codec::Vorbis { headers } => (Id::Vorbis, crate::xiph_lace(headers)),
+            Codec::Flac { private } => (Id::Flac, private.clone()),
+            Codec::Pcm { .. } => (Id::Pcm, Vec::new()),
+            Codec::Ac3 => (Id::Ac3, Vec::new()),
+            Codec::Eac3 => (Id::Eac3, Vec::new()),
+            Codec::Mp3 => (Id::Mp3, Vec::new()),
+            Codec::Mp2 => (Id::Mp2, Vec::new()),
+            Codec::Mp1 => (Id::Mp1, Vec::new()),
+            _ => (Id::Unknown, Vec::new()),
+        };
+        let mut p = crate::CodecParams::new(id).with_extradata(extradata);
+        if let Some(a) = &self.audio {
+            p = p.with_sample_rate(a.sampling_frequency.round() as u32).with_channels(u16::try_from(a.channels).unwrap_or(0));
+        }
+        if let Codec::Pcm { float, big_endian, bits } = self.codec {
+            // 8-bit integer PCM is unsigned in Matroska, as in WAV.
+            p = p.with_pcm(crate::PcmFormat::new(bits, float, big_endian, float || bits > 8));
+        }
+        p
+    }
+
     /// Bytes prepended to every frame by header-stripping compression, if any.
     pub fn stripped_header(&self) -> Option<&[u8]> {
         self.encodings.iter().find_map(|e| match e {

@@ -3,7 +3,7 @@
 use crate::isobmff::bytes::{BoxHeader, Cur, FourCc, boxes, find};
 use crate::isobmff::codec::{CodecConfig, SampleEntry, parse_sample_entry};
 use crate::isobmff::error::{Error, Result, invalid};
-use crate::isobmff::source::ByteSource;
+use crate::source::ByteSource;
 use std::collections::HashMap;
 
 /// Hard cap on the sample count of the whole file, all tracks and fragments (after PCM chunk merging).
@@ -146,6 +146,25 @@ impl Track {
     /// The first sample entry's codec configuration.
     pub fn codec(&self) -> Option<&CodecConfig> {
         self.entries.first().map(|e| &e.codec)
+    }
+
+    /// What a decoder needs for this track, in the container-neutral form the codec crates take;
+    /// `None` without a sample entry.
+    pub fn codec_params(&self) -> Option<crate::CodecParams> {
+        let codec = self.codec()?;
+        let mut p = crate::CodecParams::new(codec.codec_id()).with_extradata(codec.extradata());
+        if let Some(a) = self.audio() {
+            p = p.with_sample_rate(a.sample_rate.round() as u32).with_channels(u16::try_from(a.channels).unwrap_or(0));
+        }
+        match codec {
+            CodecConfig::Pcm(c) => {
+                p = p.with_pcm(crate::PcmFormat::new(c.bits, c.float, c.big_endian, c.signed));
+                p = p.with_sample_rate(c.sample_rate.round() as u32).with_channels(u16::try_from(c.channels).unwrap_or(0));
+            }
+            CodecConfig::Opus(o) => p = p.with_sample_rate(48_000).with_channels(u16::from(o.output_channels)),
+            _ => {}
+        }
+        Some(p)
     }
     pub fn video(&self) -> Option<&crate::isobmff::codec::VideoParams> {
         self.entries.first().and_then(|e| e.video.as_ref())

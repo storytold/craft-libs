@@ -1,9 +1,14 @@
 # craft-media
 
-Media containers and bit-level I/O for the Craft apps: an MSB-first bit reader and writer, and
-clean-room ISO BMFF (MP4), QuickTime (MOV) and Matroska (MKV, WebM) demuxers and muxers written
-from the public specifications. No `unsafe`, no panics on malformed input, and it builds for
-`wasm32-unknown-unknown`. The only dependency is `thiserror` (for `isobmff`).
+Media containers and bit-level I/O for the Craft apps: an MSB-first bit reader and writer,
+clean-room ISO BMFF (MP4), QuickTime (MOV) and Matroska (MKV, WebM) demuxers and muxers, and an Ogg
+demuxer, written from the public specifications. No `unsafe`, no panics on malformed input, builds
+for `wasm32-unknown-unknown`. Only dependency: `thiserror` (for `isobmff`).
+
+Codecs are in separate crates that depend on this one: [`craft-audio`](../audio/README.md) for
+audio; video codecs will be a later crate. What both need lives here: the containers, the bit I/O,
+one `ByteSource` trait, and the [shared identifiers](#containers-codecs-and-codec-parameters) a
+codec crate describes a file and configures a decoder with.
 
 ## Features
 
@@ -12,10 +17,13 @@ from the public specifications. No `unsafe`, no panics on malformed input, and i
 | `bitstream` | `craft_media::bitstream` | none |
 | `isobmff` | `craft_media::isobmff` | `bitstream`, `thiserror` |
 | `matroska` | `craft_media::matroska` | none |
+| `ogg` | `craft_media::ogg` | none |
+| (none) | `Container`, `CodecId`, `CodecParams`, `PcmFormat` | none |
+| `serde` | `Serialize`/`Deserialize` on `Container`, `CodecId` and `PcmFormat` | `serde` |
 
 `default = ["isobmff"]`, so `bitstream` and `isobmff` build. `matroska` is opt-in: it is about as
 much code as `isobmff`, and most users of MP4/MOV (LightCraft, FigCraft, SoundCraft, EffectCraft)
-do not read Matroska. The features are independent; `matroska` does not need the other two.
+do not read Matroska. `ogg` is opt-in as well. The features are independent.
 
 ```toml
 craft-media = { git = "https://github.com/storytold/craft-libs", rev = "<commit>", features = ["matroska"] }
@@ -30,9 +38,12 @@ craft-media = { git = "https://github.com/storytold/craft-libs", rev = "<commit>
 ## Boundaries
 
 - In scope: bit-level reading and writing, and container demuxing and muxing (boxes, sample
-  tables, sample entries and codec configuration records).
-- Out of scope for now: codecs (H.264, HEVC, ProRes, AAC and others). They stay in the apps.
-  Ogg and other containers can join later as their own features.
+  tables, sample entries and codec configuration records) for audio and video tracks.
+- Out of scope: codecs. Audio codecs are in `craft-audio`; video codecs (H.264, HEVC, ProRes and
+  others) stay in the apps until a video crate exists. Containers only FilmCraft reads (MXF,
+  MPEG-TS/PS, AVI) are not here yet.
+- Anything both the audio and the video codec crates need belongs here, so the two never depend
+  on each other.
 
 ## Origin and API
 
@@ -98,9 +109,11 @@ Other differences:
   accepted any entry.
 - `isobmff::Mp4Writer::write_sample` returns an error when a track would pass 2³² − 1 samples
   (PCM: frames), the most `stsz` can count; FilmCraft clamped the count.
-- `matroska::ByteSource` stays a separate trait from `isobmff::ByteSource`, with the same shape.
-  FilmCraft implements both for one type, which a single shared trait would reject as conflicting
-  impls.
+- `isobmff::ByteSource`, `matroska::ByteSource` and `ogg::ByteSource` are one trait,
+  `craft_media::ByteSource` (with `ReadSeekSource`, which was Matroska's). A type FilmCraft
+  implements both traits for keeps one of its two impls.
+- `isobmff::Track`, `matroska::Track` and `ogg::Stream` have `codec_params()`;
+  `isobmff::CodecConfig` has `codec_id()` and `extradata()`, and `OpusConfig::opus_head()`.
 
 ## `bitstream`
 
@@ -383,6 +396,39 @@ first frame (AV1 from `rav1e`) creates the writer after that frame.
   from codec parsers).
 - Muxer: no CRC-32, Chapters, Tags, Attachments, content encodings or block additions.
 
+## `ogg`
+
+A clean-room Ogg demuxer from FilmCraft's `filmcraft-ogg` (RFC 3533, RFC 7845 Ogg Opus, the Vorbis
+I Ogg mapping). `open` reads every page (CRC-32 checked; damage is skipped by searching for the next
+`OggS`), groups pages by logical stream and assembles packets across pages; codec headers are kept
+apart from audio packets. `OpusTiming` gives each Opus packet's start, the pre-skip and the end
+trimming of the final page. No muxer.
+
+## Containers, codecs and codec parameters
+
+Always built, with no dependencies, so codec crates share them:
+
+- `Container`: the file format (`Wav`, `Aiff`, `Flac`, `Mp4`, `QuickTime`, `Matroska`, `WebM`,
+  `Ogg`, `Caf`, `Adts`, `MpegAudio`, `Ac3`), with `name()`.
+- `CodecId`: audio and video codecs (`Aac`, `HeAac`, `Opus`, `Eac3`, …, `H264`, `Hevc`, `Av1`,
+  …, `Unknown`), with `name()`, `is_audio()`, `is_video()`.
+- `CodecParams`: what a decoder needs about a track, whatever its container: `codec`, `extradata`,
+  `sample_rate`, `channels`, `pcm` (`PcmFormat`). Built with `CodecParams::new(codec)` and the
+  `with_*` methods, or by the demuxers' `codec_params()`. `extradata` follows Matroska's
+  `CodecPrivate`, as ffmpeg's extradata does: the `AudioSpecificConfig` for AAC, the `OpusHead`
+  for Opus (MP4's `dOps` is converted), Xiph-laced headers for Vorbis (`xiph_lace`), `fLaC` +
+  metadata blocks for FLAC, the `avcC`/`hvcC`/`av1C` record for video.
+
+All are `#[non_exhaustive]`: new formats and fields are minor changes.
+
+## `ByteSource`
+
+`craft_media::ByteSource` (`len`, `read_at(offset, buf)`) is what every demuxer reads from;
+`isobmff::ByteSource`, `matroska::ByteSource` and `ogg::ByteSource` are the same trait. It is
+implemented for `[u8]`, `Vec<u8>`, `&T`, `Arc<T>`, `Box<T>` and `std::fs::File` (not on wasm), and
+`ReadSeekSource` adapts any `Read + Seek`. Implement it once for a custom source (a web `Blob`, a
+network range reader) to use every container with it.
+
 ## Tests
 
 - Unit tests cover the bit reader and writer, the box reader (64-bit, size-0, `uuid`, truncated and
@@ -390,7 +436,8 @@ first frame (AV1 from `rav1e`) creates the writer after that frame.
   guards. For Matroska: EBML integers, typed values, CRC-32, every lacing mode, codec mapping, a
   hand-built file (unknown-size Segment and Clusters, header stripping, BlockGroups, block
   additions, color and mastering metadata, Chapters, Tags, Attachments, CRC-32, Cue-less seek,
-  hostile cluster timestamps) and mux-demux round trips.
+  hostile cluster timestamps) and mux-demux round trips. For Ogg (`src/ogg`): page parsing, CRC,
+  packets across pages, damage resync and Opus timing.
 - `tests/roundtrip.rs`: property tests that write random multi-track files (progressive and
   fragmented) and read them back.
 - `tests/oracle_demux.rs` and `tests/oracle_mux.rs` compare the demuxer and muxer with ffprobe and
@@ -406,9 +453,11 @@ first frame (AV1 from `rav1e`) creates the writer after that frame.
   `fuzz.rs` also walks every box of a mutated file as a container and checks that each payload
   range stays inside its parent.
 
-ffmpeg and ffprobe are test oracles only, never linked. They are looked up in
+ffmpeg and ffprobe are test oracles only, never linked. The helpers are in `craft-media-testkit`
+(an unpublished crate, shared with craft-audio and the video crate to come). They are looked up in
 `$CRAFT_MEDIA_FFMPEG` / `$CRAFT_MEDIA_FFPROBE`, then `PATH`, then common install directories. When
 a tool is missing, the oracle tests print `SKIPPED` and pass; `CRAFT_MEDIA_REQUIRE_ORACLES=1` turns
 a skip into a failure. CI (`.github/workflows/media.yml`) sets it and installs Ubuntu's ffmpeg.
+craft-audio's oracle tests use the same variables.
 Generate every fixture ahead of time with
 `cargo test -p craft-media --all-features -- --ignored generate_fixtures`.

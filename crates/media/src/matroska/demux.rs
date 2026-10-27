@@ -6,8 +6,8 @@ use crate::matroska::ebml::{self, Children, Lacing, Size, parse_lacing, read_id,
 use crate::matroska::error::{Error, Result};
 use crate::matroska::ids::*;
 use crate::matroska::meta::*;
-use crate::matroska::source::{ByteSource, ReadSeekSource};
 use crate::matroska::track::{Sample, Track, TrackKind, gcd};
+use crate::source::{ByteSource, ReadSeekSource};
 
 const WIN: usize = 64 * 1024;
 /// Upper bound for level-1 metadata elements read into memory (Info, Tracks, Cues, Tags…).

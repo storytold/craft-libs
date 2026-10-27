@@ -891,10 +891,16 @@ dependencies = [
 name = "craft-media"
 version = "0.1.0"
 dependencies = [
+ "craft-media-testkit",
  "proptest",
+ "serde",
  "serde_json",
  "thiserror 2.0.21",
 ]
+
+[[package]]
+name = "craft-media-testkit"
+version = "0.1.0"
 
 [[package]]
 name = "craft-menu"

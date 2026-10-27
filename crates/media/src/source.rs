@@ -1,11 +1,14 @@
-//! Random-access byte sources for the demuxer.
+//! Random-access byte sources: what the demuxers read from. One trait for every container, so a
+//! file, buffer or custom source implements it once.
 
-use std::io;
+use std::cell::RefCell;
+use std::io::{self, Read, Seek, SeekFrom};
 use std::sync::Arc;
 
 /// Random-access, read-only byte source (file, in-memory buffer, web Blob…).
 ///
-/// Implementations must be able to serve reads at arbitrary offsets through `&self`.
+/// Implementations serve reads at arbitrary offsets through `&self`. `isobmff::ByteSource`,
+/// `matroska::ByteSource` and `ogg::ByteSource` are this trait.
 pub trait ByteSource {
     /// Total length in bytes.
     fn len(&self) -> u64;
@@ -94,10 +97,58 @@ impl ByteSource for std::fs::File {
     }
     #[cfg(not(any(unix, windows)))]
     fn read_at(&self, offset: u64, buf: &mut [u8]) -> io::Result<()> {
-        use std::io::{Read, Seek, SeekFrom};
         let mut f = self;
         f.seek(SeekFrom::Start(offset))?;
         f.read_exact(buf)
+    }
+}
+
+/// Adapts any `Read + Seek` (e.g. `BufReader<File>`, `Cursor<Vec<u8>>`) into a [`ByteSource`].
+///
+/// The length is taken once at construction; the stream position is tracked so sequential reads
+/// do not issue redundant seeks.
+pub struct ReadSeekSource<R> {
+    inner: RefCell<(R, u64)>,
+    len: u64,
+}
+
+impl<R: Read + Seek> ReadSeekSource<R> {
+    /// Wrap a reader; seeks to the end once to learn the length.
+    pub fn new(mut r: R) -> io::Result<Self> {
+        let len = r.seek(SeekFrom::End(0))?;
+        Ok(Self { inner: RefCell::new((r, len)), len })
+    }
+    /// Unwrap the reader.
+    pub fn into_inner(self) -> R {
+        self.inner.into_inner().0
+    }
+}
+
+impl<R: Read + Seek> ByteSource for ReadSeekSource<R> {
+    fn len(&self) -> u64 {
+        self.len
+    }
+    fn read_at(&self, offset: u64, buf: &mut [u8]) -> io::Result<()> {
+        if offset.checked_add(buf.len() as u64).is_none_or(|e| e > self.len) {
+            return Err(eof());
+        }
+        let mut g = self.inner.borrow_mut();
+        let (r, pos) = &mut *g;
+        if *pos != offset {
+            r.seek(SeekFrom::Start(offset))?;
+            *pos = offset;
+        }
+        let res = r.read_exact(buf);
+        match res {
+            Ok(()) => {
+                *pos = offset + buf.len() as u64;
+                Ok(())
+            }
+            Err(e) => {
+                *pos = u64::MAX; // unknown; force a seek next time
+                Err(e)
+            }
+        }
     }
 }
 
@@ -106,13 +157,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn slice_reads() {
+    fn slice_and_reader_sources() {
         let v = vec![1u8, 2, 3, 4];
         let mut b = [0u8; 2];
         v.read_at(1, &mut b).unwrap();
         assert_eq!(b, [2, 3]);
         assert!(v.read_at(3, &mut b).is_err());
         assert!(v.read_at(u64::MAX, &mut b).is_err());
+        let r = ReadSeekSource::new(io::Cursor::new(v.clone())).unwrap();
+        assert_eq!(r.len(), 4);
+        r.read_at(2, &mut b).unwrap();
+        assert_eq!(b, [3, 4]);
+        r.read_at(0, &mut b).unwrap();
+        assert_eq!(b, [1, 2]);
+        assert!(r.read_at(3, &mut b).is_err());
         let a: Arc<[u8]> = Arc::from(v.clone());
         a.read_at(2, &mut b).unwrap();
         assert_eq!(b, [3, 4]);
