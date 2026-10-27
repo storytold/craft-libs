@@ -74,6 +74,8 @@ impl<T: ByteSource + ?Sized> ByteSource for Box<T> {
     }
 }
 
+/// A file read in place. `len` asks the file system each time, and a failure there reads as an
+/// empty file; [`ReadSeekSource`] takes the length once and reports a failure when it is made.
 #[cfg(not(target_arch = "wasm32"))]
 impl ByteSource for std::fs::File {
     fn len(&self) -> u64 {

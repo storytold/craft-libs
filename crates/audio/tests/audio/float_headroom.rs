@@ -5,7 +5,7 @@ fn encoded(audio: &AudioBuffer, options: &EncodeOptions, streaming: bool) -> Vec
     if !streaming {
         return encode(audio, options).unwrap();
     }
-    let mut writer = FileEncoder::new(Cursor::new(Vec::new()), options, audio.sample_rate, audio.num_channels() as u16).unwrap();
+    let mut writer = FileEncoder::new(Cursor::new(Vec::new()), options, audio.sample_rate, audio.num_channels()).unwrap();
     // Cross the writer's 4096-frame scratch boundary, then write a short final block.
     for start in (0..audio.frames()).step_by(4097) {
         let end = (start + 4097).min(audio.frames());
@@ -48,7 +48,7 @@ fn assert_float_headroom(streaming: bool) {
                 assert!(bytes.ends_with(&pcm), "{format:?}, dither={dither}: stored sample bytes changed");
                 let (info, decoded) = decode(&bytes, None).unwrap();
                 assert_eq!(info.sample_format, SampleFormat::Float32);
-                assert_eq!((decoded.sample_rate, decoded.num_channels(), decoded.frames()), (48_000, channels, 4103));
+                assert_eq!((decoded.sample_rate, decoded.num_channels(), decoded.frames()), (48_000, channels as u16, 4103));
                 for (channel, (actual, expected)) in decoded.channels.iter().zip(&audio.channels).enumerate() {
                     for (frame, (actual, expected)) in actual.iter().zip(expected).enumerate() {
                         assert_eq!(actual.to_bits(), expected.to_bits(), "{format:?}, dither={dither}, channel={channel}, frame={frame}");

@@ -70,7 +70,7 @@ fn every_truncation_is_handled() {
             let cut = &file[..n];
             let _ = probe(cut, None);
             if let Ok((info, buf)) = decode(cut, None) {
-                assert_eq!(buf.num_channels(), info.channels as usize);
+                assert_eq!(buf.num_channels(), info.channels);
                 assert_eq!(buf.frames() as u64, info.frames);
             }
         }
@@ -706,7 +706,7 @@ proptest! {
 
     #[test]
     fn random_audio_roundtrips_through_flac(samples in proptest::collection::vec(-1.2f32..1.2, 1..3000), channels in 1usize..4) {
-        let buf = AudioBuffer::from_interleaved(48_000, channels, &samples);
+        let buf = AudioBuffer::from_interleaved(48_000, channels as u16, &samples);
         prop_assume!(buf.frames() > 0);
         let opts = EncodeOptions::new(EncodeFormat::Flac).with_bit_depth(BitDepth::Int24).with_dither(false);
         let (_, flac) = decode(&encode(&buf, &opts).unwrap(), None).unwrap();

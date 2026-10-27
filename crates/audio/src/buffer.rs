@@ -24,8 +24,8 @@ impl AudioBuffer {
     }
 
     /// Number of channels.
-    pub fn num_channels(&self) -> usize {
-        self.channels.len()
+    pub fn num_channels(&self) -> u16 {
+        u16::try_from(self.channels.len()).unwrap_or(u16::MAX)
     }
 
     /// Duration in seconds (0 when the sample rate is 0).
@@ -50,7 +50,8 @@ impl AudioBuffer {
 
     /// Build a planar buffer from interleaved samples. A trailing partial frame is dropped;
     /// `channels == 0` yields an empty buffer.
-    pub fn from_interleaved(sr: u32, channels: usize, data: &[f32]) -> Self {
+    pub fn from_interleaved(sr: u32, channels: u16, data: &[f32]) -> Self {
+        let channels = usize::from(channels);
         if channels == 0 {
             return Self { sample_rate: sr, channels: Vec::new() };
         }

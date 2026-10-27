@@ -1,5 +1,8 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![warn(missing_docs)]
+// The docs link items of every feature; built with fewer features, those links have no target.
+// CI and docs.rs build the docs with all features, where every link must resolve.
+#![cfg_attr(not(all(feature = "decode", feature = "encode", feature = "peaks")), allow(rustdoc::broken_intra_doc_links))]
 //! Audio file I/O and codecs for the Craft apps. Input and output are byte slices or a
 //! [`craft_media::ByteSource`] (no filesystem access of its own); builds for
 //! `wasm32-unknown-unknown`.
@@ -10,7 +13,7 @@
 //!   [`TrackDecoder`]; everything else (MP3, FLAC, ALAC, Vorbis, CAF, ADPCM, A-law, µ-law) through
 //!   `symphonia`, which is to be replaced by native decoders. Feature `decode-native` is the same
 //!   without symphonia.
-//! - [`TrackDecoder`] (feature `decode-native`): one track's packets from any demuxer to planar
+//! - [`TrackDecoder`] (any decoder feature): one track's packets from any demuxer to planar
 //!   `f32` in WAV channel order.
 //! - [`encode`], [`FileEncoder`]: WAV/BWF/RF64 and AIFF/AIFF-C (feature `pcm-encode`, which also
 //!   gives [`wav_float_header`]) and FLAC (feature `flac-encode`), whole-buffer or incremental into
@@ -47,6 +50,9 @@ mod wav;
 mod write;
 
 pub use buffer::AudioBuffer;
+/// The craft-media this crate is built with, for its containers: using it rather than a separate
+/// dependency keeps the types the two crates share identical.
+pub use craft_media;
 pub use craft_media::{ByteSource, CodecId, CodecParams, Container, PcmFormat, ReadSeekSource};
 pub use layout::{ChannelLayout, Speaker};
 #[cfg(feature = "decode-native")]

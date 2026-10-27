@@ -17,7 +17,7 @@ mod demux;
 mod error;
 mod mux;
 
-pub use crate::source::ByteSource;
+pub use crate::source::{ByteSource, ReadSeekSource};
 pub use bytes::FourCc;
 pub use codec::{
     AacConfig, ApvConfig, AudioParams, Av1Config, AvcConfig, BitRate, CleanAperture, CodecConfig, ColorInfo, FieldInfo, FlacConfig, HevcConfig,

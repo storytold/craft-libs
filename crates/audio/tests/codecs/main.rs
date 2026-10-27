@@ -14,3 +14,4 @@ mod mpa_oracle;
 mod opus;
 mod opusenc;
 mod routing_oracle;
+mod track_decoder;

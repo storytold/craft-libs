@@ -24,7 +24,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::io;
 
-pub use crate::source::ByteSource;
+pub use crate::source::{ByteSource, ReadSeekSource};
 
 /// Errors from reading an Ogg file.
 #[non_exhaustive]

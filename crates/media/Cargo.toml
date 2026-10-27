@@ -7,6 +7,9 @@ license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 
+[package.metadata.docs.rs]
+all-features = true
+
 [lints]
 workspace = true
 
@@ -17,7 +20,7 @@ isobmff = ["bitstream", "dep:thiserror"]
 matroska = []
 # Ogg demuxer (Ogg Opus and Vorbis mapping, `craft_media::ogg`).
 ogg = []
-# Serialize and Deserialize for `Container` and `CodecId`.
+# Serialize and Deserialize for `Container`, `CodecId`, `CodecParams` and `PcmFormat`.
 serde = ["dep:serde"]
 
 [dependencies]

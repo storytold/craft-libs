@@ -92,8 +92,15 @@ impl TrackDecoder {
     /// channel layout from the first frame. Without them those are taken from `params` and set
     /// from the first decoded packet.
     ///
+    /// Streams without codec configuration are accepted where the packets carry it: AAC with
+    /// empty `extradata` takes its configuration from the first packet's ADTS header (MPEG-TS,
+    /// raw `.aac`), and ADTS headers are stripped from every packet; Opus with empty `extradata`
+    /// and 1 or 2 `channels` (RTP, MPEG-TS) needs no `OpusHead`. Other missing configuration is
+    /// [`AudioError::Malformed`].
+    ///
     /// Codecs without a native packet decoder yet (MP3, FLAC, ALAC, Vorbis) are
-    /// [`AudioError::Unsupported`]; [`crate::decode`] decodes them through symphonia.
+    /// [`AudioError::Unsupported`]; `craft_audio::decode` decodes them through symphonia when the
+    /// `symphonia` feature is on.
     pub fn new(params: &CodecParams, lookahead: &[&[u8]]) -> Result<TrackDecoder> {
         let rate = params.sample_rate.unwrap_or(0);
         let channels = usize::from(params.channels.unwrap_or(0));
@@ -103,9 +110,21 @@ impl TrackDecoder {
         let (inner, codec, sample_rate, layout, sample_format) = match params.codec {
             #[cfg(feature = "aac-decode")]
             CodecId::Aac | CodecId::HeAac => {
-                let asc = params.extradata.as_slice();
+                // ADTS-framed packets (MPEG-TS, raw `.aac`) carry their configuration in each
+                // header: without extradata, the first header gives it.
+                let payloads: Vec<&[u8]> =
+                    lookahead.iter().map(|p| adts_payloads(p).and_then(|r| r.ok()).and_then(|v| v.first().copied()).unwrap_or(p)).collect();
+                let asc = if params.extradata.is_empty() {
+                    let h = lookahead.first().and_then(|p| aac::AdtsHeader::parse(p).ok()).ok_or_else(|| {
+                        AudioError::Malformed("AAC track without an AudioSpecificConfig (extradata), and its packets are not ADTS".into())
+                    })?;
+                    h.to_asc().to_bytes()
+                } else {
+                    params.extradata.clone()
+                };
+                let asc = asc.as_slice();
                 let dec = aac::Decoder::new(asc)?;
-                let out = aac::output_rate(asc, lookahead.iter().copied().take(LOOKAHEAD_PACKETS)).unwrap_or(dec.sample_rate());
+                let out = aac::output_rate(asc, payloads.iter().copied().take(LOOKAHEAD_PACKETS)).unwrap_or(dec.sample_rate());
                 let up = (dec.sample_rate().checked_mul(2) == Some(out)).then(|| aac::Upsample2x::new(dec.channels()));
                 let codec = if up.is_some() { CodecId::HeAac } else { CodecId::Aac };
                 let cfg = dec.config().channel_config;
@@ -146,7 +165,15 @@ impl TrackDecoder {
             },
             #[cfg(feature = "opus-decode")]
             CodecId::Opus => {
-                let head = opus::OpusHead::parse(&params.extradata)?;
+                // Opus over RTP or in MPEG-TS has no OpusHead: mono and stereo need none (RFC 7845
+                // mapping family 0), so one is made from the channel count.
+                let head = match (params.extradata.is_empty(), channels) {
+                    (false, _) => opus::OpusHead::parse(&params.extradata)?,
+                    (true, 1 | 2) => opus::OpusHead::parse(&default_opus_head(channels as u8, rate))?,
+                    (true, _) => {
+                        return Err(AudioError::Malformed("Opus track without an OpusHead (extradata) needs 1 or 2 channels".into()));
+                    }
+                };
                 let layout = opus_layout(&head);
                 let order = if head.mapping_family == 1 { opus::wav_order(head.channels) } else { None };
                 let dec = opus::Decoder::from_head(head, 48_000)?;
@@ -200,9 +227,17 @@ impl TrackDecoder {
         let channels = match &mut self.inner {
             #[cfg(feature = "aac-decode")]
             Inner::Aac { dec, up, order } => {
-                let mut out = dec.decode(packet)?;
-                if let Some(up) = up {
-                    out = up.process(out);
+                let mut out: Vec<Vec<f32>> = Vec::new();
+                let units = match adts_payloads(packet) {
+                    Some(units) => units?,
+                    None => vec![packet],
+                };
+                for unit in units {
+                    let mut block = dec.decode(unit)?;
+                    if let Some(up) = up {
+                        block = up.process(block);
+                    }
+                    append(&mut out, block);
                 }
                 reorder(out, *order)
             }
@@ -358,7 +393,10 @@ fn unsupported(codec: CodecId) -> AudioError {
     match feature {
         // A codec this crate decodes, in a build without its feature.
         Some(f) => AudioError::Unsupported(format!("decoding {} needs the `{f}` feature", codec.name())),
-        None => AudioError::Unsupported(format!("no native {} packet decoder yet (craft_audio::decode reads it through symphonia)", codec.name())),
+        None if cfg!(feature = "symphonia") => {
+            AudioError::Unsupported(format!("no native {} packet decoder yet (craft_audio::decode reads it through symphonia)", codec.name()))
+        }
+        None => AudioError::Unsupported(format!("no native {} packet decoder yet", codec.name())),
     }
 }
 
@@ -373,7 +411,7 @@ fn reorder(mut channels: Vec<Vec<f32>>, order: Option<&[usize]>) -> Vec<Vec<f32>
 }
 
 /// Append `more` to `out` channel by channel; a block whose channel count differs is dropped.
-#[cfg(any(feature = "mpa-decode", feature = "ac3-decode"))]
+#[cfg(any(feature = "aac-decode", feature = "mpa-decode", feature = "ac3-decode"))]
 fn append(out: &mut Vec<Vec<f32>>, more: Vec<Vec<f32>>) {
     if out.is_empty() {
         *out = more;
@@ -382,6 +420,34 @@ fn append(out: &mut Vec<Vec<f32>>, more: Vec<Vec<f32>>) {
             o.extend(c);
         }
     }
+}
+
+/// The raw access units of an ADTS-framed packet (one or more whole frames, nothing else), or
+/// `None` when the packet is not ADTS. Frames with several raw data blocks are unsupported.
+#[cfg(feature = "aac-decode")]
+fn adts_payloads(packet: &[u8]) -> Option<Result<Vec<&[u8]>>> {
+    if packet.len() < 7 || packet[0] != 0xFF || packet[1] & 0xF6 != 0xF0 {
+        return None;
+    }
+    let frames = aac::split_adts(packet).ok()?;
+    let whole: usize = frames.iter().map(|(h, _)| h.frame_length).sum();
+    if whole != packet.len() {
+        return None;
+    }
+    if frames.iter().any(|(h, _)| h.raw_data_blocks > 1) {
+        return Some(Err(AudioError::Unsupported("ADTS frames with several raw data blocks".into())));
+    }
+    Some(Ok(frames.into_iter().map(|(_, p)| p).collect()))
+}
+
+/// A mapping-family-0 `OpusHead` (RFC 7845 §5.1) for `channels` (1 or 2) and no pre-skip.
+#[cfg(feature = "opus-decode")]
+fn default_opus_head(channels: u8, input_rate: u32) -> Vec<u8> {
+    let mut h = b"OpusHead".to_vec();
+    h.extend_from_slice(&[1, channels, 0, 0]);
+    h.extend_from_slice(&(if input_rate > 0 { input_rate } else { 48_000 }).to_le_bytes());
+    h.extend_from_slice(&[0, 0, 0]);
+    h
 }
 
 /// The sample layout and stored format of PCM samples, `None` for a depth we do not read.

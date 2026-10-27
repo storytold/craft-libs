@@ -312,7 +312,7 @@ fn zero_frame_flac_round_trips_like_wav_and_aiff() {
                 assert_eq!((info.container, info.sample_format, info.sample_rate, info.frames), (format.container(), expected_sf(depth), 48_000, 0));
                 assert_eq!(info.channels, channels);
                 let (info, buf) = decode(&bytes, None).unwrap();
-                assert_eq!((info.frames, buf.frames(), buf.num_channels()), (0, 0, usize::from(channels)));
+                assert_eq!((info.frames, buf.frames(), buf.num_channels()), (0, 0, channels));
             }
         }
     }

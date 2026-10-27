@@ -116,11 +116,14 @@ fn failed_write_error() -> AudioError {
 /// assert_eq!(&flac[..4], b"fLaC");
 /// # }
 /// ```
-pub struct FileEncoder<W: Write + Seek>(Writer<W>);
+pub struct FileEncoder<W: Write + Seek> {
+    writer: Writer<W>,
+    channels: usize,
+}
 
 impl<W: Write + Seek> std::fmt::Debug for FileEncoder<W> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let format = match &self.0 {
+        let format = match &self.writer {
             #[cfg(feature = "pcm-encode")]
             Writer::Wav(_) => EncodeFormat::Wav,
             #[cfg(feature = "pcm-encode")]
@@ -148,7 +151,7 @@ impl<W: Write + Seek> FileEncoder<W> {
         let (depth, dither, channels) = (opts.bit_depth, opts.dither, usize::from(channels));
         #[cfg_attr(not(feature = "pcm-encode"), allow(unused_variables))]
         let mask = opts.layout.map(|l| wav_mask(&l, channels)).transpose()?;
-        Ok(FileEncoder(match opts.format {
+        let writer = match opts.format {
             #[cfg(feature = "pcm-encode")]
             EncodeFormat::Wav => Writer::Wav(wav::Writer::new(
                 out,
@@ -164,13 +167,14 @@ impl<W: Write + Seek> FileEncoder<W> {
             EncodeFormat::Flac => Writer::Flac(flac::Writer::new(out, channels, sample_rate, depth, dither)?),
             #[allow(unreachable_patterns)]
             f => return Err(not_built(f)),
-        }))
+        };
+        Ok(FileEncoder { writer, channels })
     }
 
     /// Fails, without writing anything, when `frames` more frames would not fit the format (an
     /// AIFF holds 4 GiB, a FLAC 2^36 frames).
     pub fn check_room(&self, frames: u64) -> Result<()> {
-        match &self.0 {
+        match &self.writer {
             #[cfg(feature = "pcm-encode")]
             Writer::Wav(w) => w.check_room(frames),
             #[cfg(feature = "pcm-encode")]
@@ -182,12 +186,19 @@ impl<W: Write + Seek> FileEncoder<W> {
     }
 
     /// Appends the first `frames` frames of `block`, one slice per channel (`&[Vec<f32>]`,
-    /// `&[&[f32]]`, …; missing samples are silence), unless they don't fit (see
-    /// [`FileEncoder::check_room`]). Once a write has failed, the encoder is unusable: the sink
-    /// may hold a prefix of the failed block, so every later `write` and `finish` fails instead of
-    /// completing an inconsistent file.
+    /// `&[&[f32]]`, …), unless they don't fit (see [`FileEncoder::check_room`]). `block` must
+    /// have one slice per channel, each at least `frames` long; otherwise nothing is written and
+    /// the error is [`AudioError::Encode`]. Once a write has failed for any other reason, the
+    /// encoder is unusable: the sink may hold a prefix of the failed block, so every later `write`
+    /// and `finish` fails instead of completing an inconsistent file.
     pub fn write<C: AsRef<[f32]>>(&mut self, block: &[C], frames: usize) -> Result<()> {
-        match &mut self.0 {
+        if block.len() != self.channels {
+            return Err(AudioError::Encode(format!("a block of {} channels for a {}-channel file", block.len(), self.channels)));
+        }
+        if let Some(short) = block.iter().map(|c| c.as_ref().len()).filter(|&n| n < frames).min() {
+            return Err(AudioError::Encode(format!("{frames} frames asked for, but a channel holds {short}")));
+        }
+        match &mut self.writer {
             #[cfg(feature = "pcm-encode")]
             Writer::Wav(w) => w.write(block, frames),
             #[cfg(feature = "pcm-encode")]
@@ -199,7 +210,7 @@ impl<W: Write + Seek> FileEncoder<W> {
 
     /// Completes the headers and hands back `out`, positioned at the end of the file.
     pub fn finish(self) -> Result<W> {
-        match self.0 {
+        match self.writer {
             #[cfg(feature = "pcm-encode")]
             Writer::Wav(w) => w.finish(),
             #[cfg(feature = "pcm-encode")]

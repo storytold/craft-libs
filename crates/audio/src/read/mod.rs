@@ -126,7 +126,8 @@ pub fn detect_container(bytes: &[u8], ext_hint: Option<&str>) -> Option<Containe
 ///
 /// `#[non_exhaustive]`: start from `DecodeOptions::default()` and use the `with_*` methods.
 #[non_exhaustive]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct DecodeOptions {
     /// Which audio track to decode, counted among the file's audio tracks as [`tracks`] lists
     /// them; `None` is the first.
@@ -182,9 +183,11 @@ enum Inner<'a> {
 /// and track choice.
 ///
 /// Native formats (WAV, AIFF, AAC, MP1/MP2, AC-3/E-AC-3, Opus and PCM in MP4/MOV, Matroska/WebM,
-/// Ogg or raw streams) are read packet by packet from the source, so memory use does not grow with
-/// the file. Formats symphonia decodes (MP3, FLAC, ALAC, Vorbis, CAF, ADPCM, A-law, µ-law) read the
-/// whole source into memory first; their decoded audio still streams.
+/// Ogg or raw streams) read their sample data from the source packet by packet. The container's
+/// packet index is held in memory (tens of bytes per packet), and opening an Ogg or Matroska
+/// file reads through the whole file to build it; WAV and AIFF need no index. Formats symphonia
+/// decodes (MP3, FLAC, ALAC, Vorbis, CAF, ADPCM, A-law, µ-law) read the whole source into memory
+/// first; their decoded audio still streams.
 ///
 /// ```no_run
 /// # fn demo() -> craft_audio::Result<()> {

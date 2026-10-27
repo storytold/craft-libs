@@ -645,15 +645,23 @@ fn open_ac3<'a>(src: &Src<'a>) -> Option<Native<'a>> {
 }
 
 /// The `n`-th audio track (the first when `None`) among `kinds`, as an index into them.
-fn audio_track(kinds: impl Iterator<Item = bool>, n: Option<usize>) -> Option<usize> {
-    kinds.enumerate().filter(|&(_, audio)| audio).map(|(i, _)| i).nth(n.unwrap_or(0))
+fn audio_track(kinds: impl Iterator<Item = bool>, n: Option<usize>) -> Option<Result<usize>> {
+    let audio: Vec<usize> = kinds.enumerate().filter(|&(_, audio)| audio).map(|(i, _)| i).collect();
+    if audio.is_empty() {
+        return None;
+    }
+    let n = n.unwrap_or(0);
+    Some(audio.get(n).copied().ok_or_else(|| AudioError::Unsupported(format!("no audio track {n}: the file has {}", audio.len()))))
 }
 
 /// An MP4 / QuickTime file's audio track, if its codec is native. Samples that claim to lie
 /// beyond the end of the file are refused rather than read leniently.
 fn open_mp4<'a>(src: &Src<'a>, container: Container, track: Option<usize>) -> Option<Result<Native<'a>>> {
     let file = isobmff::open(src).ok()?;
-    let track = audio_track(file.tracks.iter().map(|t| t.kind == isobmff::TrackKind::Audio), track)?;
+    let track = match audio_track(file.tracks.iter().map(|t| t.kind == isobmff::TrackKind::Audio), track)? {
+        Ok(t) => t,
+        Err(e) => return Some(Err(e)),
+    };
     let t = file.tracks.get(track)?;
     // A track with no samples (or sample sizes the demuxer refused) goes to the other path, whose
     // size checks name what is wrong.
@@ -663,7 +671,8 @@ fn open_mp4<'a>(src: &Src<'a>, container: Container, track: Option<usize>) -> Op
     if t.audio().is_some_and(|a| u64::from(a.samples_per_packet.max(a.const_frames_per_packet)) > MAX_PACKET_FRAMES) {
         return Some(Err(AudioError::Malformed("the file declares packets far longer than any codec uses".into())));
     }
-    if t.samples.iter().any(|s| s.offset.checked_add(u64::from(s.size)).is_none_or(|end| end > src.size())) {
+    let size = src.size();
+    if t.samples.iter().any(|s| s.offset.checked_add(u64::from(s.size)).is_none_or(|end| end > size)) {
         return Some(Err(AudioError::Malformed("MP4 sample is larger than the file".into())));
     }
     let params = t.codec_params();
@@ -692,7 +701,10 @@ fn open_mp4<'a>(src: &Src<'a>, container: Container, track: Option<usize>) -> Op
 fn open_mkv<'a>(src: &Src<'a>, container: Container, track: Option<usize>) -> Option<Result<Native<'a>>> {
     let demux = matroska::Demuxer::new(src.clone()).ok()?;
     let file = demux.file();
-    let track = audio_track(file.tracks.iter().map(|t| t.kind == matroska::TrackKind::Audio), track)?;
+    let track = match audio_track(file.tracks.iter().map(|t| t.kind == matroska::TrackKind::Audio), track)? {
+        Ok(t) => t,
+        Err(e) => return Some(Err(e)),
+    };
     let t = file.tracks.get(track)?;
     if !t.frames_readable() {
         return None;
@@ -736,7 +748,10 @@ fn open_mkv<'a>(src: &Src<'a>, container: Container, track: Option<usize>) -> Op
 /// An Ogg file's Opus stream (RFC 7845: pre-skip and end trimming applied).
 fn open_ogg<'a>(src: &Src<'a>, track: Option<usize>) -> Option<Result<Native<'a>>> {
     let file = ogg::open(src).ok()?;
-    let stream = audio_track(file.streams.iter().map(|s| s.codec != ogg::Codec::Unknown), track)?;
+    let stream = match audio_track(file.streams.iter().map(|s| s.codec.codec_id().is_audio()), track)? {
+        Ok(s) => s,
+        Err(e) => return Some(Err(e)),
+    };
     let s = file.streams.get(stream)?;
     if s.codec != ogg::Codec::Opus {
         return None;
@@ -766,7 +781,7 @@ pub(crate) fn tracks(src: &Src<'_>, detected: Option<Container>) -> Option<Vec<C
         }
         Some(Container::Ogg) => {
             let file = ogg::open(src).ok()?;
-            Some(file.streams.iter().filter(|s| s.codec != ogg::Codec::Unknown).map(ogg::Stream::codec_params).collect())
+            Some(file.streams.iter().filter(|s| s.codec.codec_id().is_audio()).map(ogg::Stream::codec_params).collect())
         }
         _ => None,
     }

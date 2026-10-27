@@ -18,7 +18,7 @@ that codec crates use to describe a file and configure a decoder.
 | `isobmff` | `craft_media::isobmff` | `bitstream`, `thiserror` |
 | `matroska` | `craft_media::matroska` | none |
 | `ogg` | `craft_media::ogg` | none |
-| (none) | `Container`, `CodecId`, `CodecParams`, `PcmFormat` | none |
+| (none) | `Container`, `CodecId`, `CodecParams`, `PcmFormat`, `xiph_lace`, `ByteSource`, `ReadSeekSource` | none |
 | `serde` | `Serialize`/`Deserialize` on `Container`, `CodecId`, `CodecParams` and `PcmFormat` | `serde` |
 
 `default = ["isobmff"]`, so `bitstream` and `isobmff` build. `matroska` is opt-in: it is about as

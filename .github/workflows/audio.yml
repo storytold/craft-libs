@@ -45,6 +45,13 @@ jobs:
       - run: cargo doc -p craft-audio --all-features --no-deps --locked
         env:
           RUSTDOCFLAGS: "-D warnings"
+      # Partial feature sets must document too (their links to other features are allowed to dangle).
+      - run: cargo doc -p craft-audio --no-default-features --features decode-native --no-deps --locked
+        env:
+          RUSTDOCFLAGS: "-D warnings"
+      - run: cargo doc -p craft-audio --no-default-features --features lossless-encode --no-deps --locked
+        env:
+          RUSTDOCFLAGS: "-D warnings"
       - run: cargo check -p craft-audio --all-features --locked --target wasm32-unknown-unknown
       - run: cargo check -p craft-audio --no-default-features --features lossless-encode --locked --target wasm32-unknown-unknown
   msrv:

@@ -108,8 +108,9 @@ fn blocks_past_a_format_limit_are_refused_before_anything_is_written() {
         enc.write(&buf.channels, 100).unwrap();
         assert!(enc.check_room(limit / 2).is_ok(), "{format:?}");
         assert!(matches!(enc.check_room(limit), Err(AudioError::TooLarge(_))), "{format:?}");
+        // A block that does not hold the frames it claims is refused before the limit is checked.
         if let Ok(frames) = usize::try_from(limit) {
-            assert!(matches!(enc.write::<Vec<f32>>(&[], frames), Err(AudioError::TooLarge(_))), "{format:?}");
+            assert!(matches!(enc.write::<Vec<f32>>(&[], frames), Err(AudioError::Encode(_))), "{format:?}");
         }
         assert_eq!(enc.finish().unwrap().into_inner(), encode(&buf, &opts).unwrap());
     }
@@ -188,4 +189,18 @@ fn single_track_files_refuse_other_track_indexes() {
         let e = decode_with(&file, None, &DecodeOptions::default().with_track(1)).unwrap_err();
         assert!(matches!(e, AudioError::Unsupported(_)), "{format:?}: {e}");
     }
+}
+
+#[test]
+fn short_or_missing_channels_are_refused_without_writing() {
+    let opts = EncodeOptions::new(EncodeFormat::Wav).with_bit_depth(BitDepth::Int16);
+    let mut enc = FileEncoder::new(Cursor::new(Vec::new()), &opts, 48_000, 2).unwrap();
+    let left = vec![0.1f32; 4];
+    // More frames than the channels hold, or too few channels: refused, nothing written.
+    assert!(matches!(enc.write(&[&left, &left], 10), Err(AudioError::Encode(_))));
+    assert!(matches!(enc.write(&[&left], 4), Err(AudioError::Encode(_))));
+    // The encoder is still usable.
+    enc.write(&[&left, &left], 4).unwrap();
+    let wav = enc.finish().unwrap().into_inner();
+    assert_eq!(craft_audio::probe(&wav, None).unwrap().frames, 4);
 }

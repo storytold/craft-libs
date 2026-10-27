@@ -509,7 +509,9 @@ fn track_choice_and_the_sample_limit() {
         assert_eq!((second.channels, second.sample_rate, buf.frames()), (2, 44_100, 88_200), "{ext}");
         let limited = decode_with(&bytes, None, &DecodeOptions::default().with_max_samples(1000));
         assert!(matches!(limited, Err(AudioError::TooLarge(_))), "{ext}");
-        assert!(decode_with(&bytes, None, &DecodeOptions::default().with_track(2)).is_err(), "{ext}: no third track");
+        // Refused from the track list, without reading the file through the fallback.
+        let missing = decode_with(&bytes, None, &DecodeOptions::default().with_track(2));
+        assert!(matches!(&missing, Err(AudioError::Unsupported(m)) if m.contains("no audio track 2")), "{ext}: {missing:?}");
     }
 }
 
