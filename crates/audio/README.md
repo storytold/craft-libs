@@ -39,7 +39,7 @@ by [symphonia](https://github.com/pdeljanov/Symphonia), which is to be replaced 
 | Raw ADTS AAC, MP1/MP2, AC-3, E-AC-3 | native frame sync | — |
 | CAF | symphonia | — |
 
-`encode` writes WAV, AIFF and FLAC. The AAC and Opus encoders output packets; muxing them into
+`lossless-encode` writes WAV, AIFF and FLAC. The AAC and Opus encoders output packets; muxing them into
 MP4 or Matroska is done with craft-media's muxers.
 
 ## Cargo features
@@ -52,7 +52,8 @@ No default features. The shared types (`AudioBuffer`, `AudioInfo`, `ChannelLayou
 | `decode` | `decode`, `probe`, `Decoder`, `tracks`, `TrackDecoder`; every format above | `decode-native`, `symphonia` |
 | `decode-native` | the same, native formats only (others are `Unsupported`) | the four decoders below, craft-media `isobmff`/`matroska`/`ogg`, `log` |
 | `symphonia` | the fallback for formats with no native decoder | `decode-native`, symphonia |
-| `encode` | `encode`, `FileEncoder`, `wav_float_header` (WAV, AIFF, FLAC) | craft-media `bitstream` |
+| `encode` | every encoder | `lossless-encode`, `aac-encode`, `opus-encode` |
+| `lossless-encode` | `encode`, `FileEncoder`, `wav_float_header` (WAV, AIFF, FLAC) | craft-media `bitstream` |
 | `aac-decode`, `aac-encode` | `aac::Decoder`, `aac::Encoder` | craft-media `bitstream` |
 | `opus-decode`, `opus-encode` | `opus::Decoder`/`StreamDecoder`, `opus::encoder::OpusEncoder` | none |
 | `mpa-decode`, `ac3-decode` | `mpa::Decoder`, `ac3::Decoder` | none / craft-media `bitstream` |
@@ -60,13 +61,13 @@ No default features. The shared types (`AudioBuffer`, `AudioInfo`, `ChannelLayou
 | `rayon` | parallel AAC encoding (with `aac-encode`) | `rayon` |
 | `serde` | `Serialize`/`Deserialize` on the shared types | `serde` |
 
-Export only (no decoders, no demuxers, no symphonia):
+WAV, AIFF and FLAC export only (no decoders, no demuxers, no symphonia):
 
 ```toml
-craft-audio = { git = "https://github.com/storytold/craft-libs", rev = "<commit>", features = ["encode"] }
+craft-audio = { git = "https://github.com/storytold/craft-libs", rev = "<commit>", features = ["lossless-encode"] }
 ```
 
-Decode, encode and waveform overviews:
+Decode, every encoder and waveform overviews:
 
 ```toml
 craft-audio = { git = "https://github.com/storytold/craft-libs", rev = "<commit>", features = ["decode", "encode", "peaks"] }
@@ -407,7 +408,8 @@ Changes from the app versions (what an app switching over adjusts):
   mask, and `probe` reports the layout instead of `wav_channel_mask`.
 - `AudioInfo`, `AudioError`, `SampleFormat`, `BitDepth` and the codec `Error` enums are
   `#[non_exhaustive]`.
-- Features are per codec; `encode` no longer includes the AAC and Opus encoders.
+- Features are per codec. SoundCraft's `encode` (WAV, AIFF, FLAC) is now `lossless-encode`;
+  `encode` turns on every encoder, AAC and Opus included.
 - `OpusEncoder::new`, `with_application`, `with_mode` and `encode_float` return `Result` instead
   of panicking on invalid channel count, mode/bandwidth or frame length.
 - `FileEncoder::write` takes any per-channel slices.

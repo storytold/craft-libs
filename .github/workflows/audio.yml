@@ -35,7 +35,7 @@ jobs:
       # Each feature on its own, so code that needs another feature fails here.
       - name: Clippy, each feature alone
         run: |
-          for f in "" decode decode-native symphonia encode peaks aac-decode aac-encode opus-decode opus-encode mpa-decode ac3-decode "aac-encode,rayon" serde; do
+          for f in "" decode decode-native symphonia encode lossless-encode peaks aac-decode aac-encode opus-decode opus-encode mpa-decode ac3-decode "aac-encode,rayon" serde; do
             echo "::group::features: ${f:-none}"
             cargo clippy -p craft-audio --all-targets --locked --no-default-features ${f:+--features "$f"} -- -D warnings
             echo "::endgroup::"
@@ -46,7 +46,7 @@ jobs:
         env:
           RUSTDOCFLAGS: "-D warnings"
       - run: cargo check -p craft-audio --all-features --locked --target wasm32-unknown-unknown
-      - run: cargo check -p craft-audio --no-default-features --features encode --locked --target wasm32-unknown-unknown
+      - run: cargo check -p craft-audio --no-default-features --features lossless-encode --locked --target wasm32-unknown-unknown
   msrv:
     timeout-minutes: 10
     name: Audio on the minimum Rust version
@@ -63,7 +63,7 @@ jobs:
       - run: cargo +1.95.0 check -p craft-audio -p craft-media --all-features --locked
   features:
     timeout-minutes: 10
-    name: Audio tests without symphonia and encode-only
+    name: Audio tests without symphonia and lossless-encode only
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -73,7 +73,7 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: craft-audio-features
-      - run: cargo test -p craft-audio --no-default-features --features encode --locked
+      - run: cargo test -p craft-audio --no-default-features --features lossless-encode --locked
       - run: cargo test -p craft-audio --no-default-features --features decode-native --locked
   test:
     timeout-minutes: 20

@@ -12,8 +12,9 @@
 //!   without symphonia.
 //! - [`TrackDecoder`] (feature `decode-native`): one track's packets from any demuxer to planar
 //!   `f32` in WAV channel order.
-//! - [`encode`], [`FileEncoder`], [`wav_float_header`] (feature `encode`): WAV/BWF/RF64,
+//! - [`encode`], [`FileEncoder`], [`wav_float_header`] (feature `lossless-encode`): WAV/BWF/RF64,
 //!   AIFF/AIFF-C and FLAC, whole-buffer or incremental into any `Write + Seek`.
+//!   Feature `encode` turns on `lossless-encode`, `aac-encode` and `opus-encode`.
 //! - [`peaks`] (feature `peaks`): min/max/RMS pyramid for waveform drawing.
 //! - Codec modules for packet-level use, each with its own features: [`aac`] (`aac-decode`,
 //!   `aac-encode`), [`mpa`] (`mpa-decode`), [`ac3`] (`ac3-decode`), [`opus`] (`opus-decode`, and
@@ -35,9 +36,9 @@ pub mod opus;
 pub mod peaks;
 #[cfg(feature = "decode-native")]
 mod read;
-#[cfg(any(feature = "decode-native", feature = "encode"))]
+#[cfg(any(feature = "decode-native", feature = "lossless-encode"))]
 mod wav;
-#[cfg(feature = "encode")]
+#[cfg(feature = "lossless-encode")]
 mod write;
 
 pub use buffer::AudioBuffer;
@@ -48,7 +49,7 @@ pub use read::{
     DEFAULT_MAX_SAMPLES, DecodeOptions, Decoder, LOOKAHEAD_PACKETS, TrackDecoder, TrackInfo, decode, decode_with, detect_container, probe,
     probe_with, tracks, tracks_of,
 };
-#[cfg(feature = "encode")]
+#[cfg(feature = "lossless-encode")]
 pub use write::{ENCODE_EXTENSIONS, FileEncoder, encode, encode_format_for, encode_wav_rf64, encode_with_layout, wav_float_header};
 
 /// Errors from probing, decoding and encoding.

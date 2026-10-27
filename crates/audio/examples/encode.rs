@@ -1,6 +1,6 @@
 //! Write a tone as WAV and FLAC, whole and streamed, and as AAC packets.
 //!
-//! `cargo run -p craft-audio --example encode --features encode,aac-encode -- out`
+//! `cargo run -p craft-audio --example encode --features lossless-encode,aac-encode -- out`
 
 use craft_audio::{AudioBuffer, BitDepth, ChannelLayout, EncodeFormat, EncodeOptions, FileEncoder, encode, encode_with_layout};
 

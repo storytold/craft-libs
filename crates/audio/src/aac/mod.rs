@@ -1,6 +1,6 @@
 //! Clean-room AAC-LC encoder and decoder (ISO/IEC 14496-3, MPEG-4 Audio, Low Complexity profile).
 //!
-//! - [`Encoder`] (feature `encode`): planar f32 → raw access units (+
+//! - [`Encoder`] (feature `aac-encode`): planar f32 → raw access units (+
 //!   [`Encoder::audio_specific_config`] for MP4 `esds`, optional ADTS framing). Psychoacoustic
 //!   model, window switching, M/S, TNS, bit reservoir, CBR/VBR, 1–8 channels.
 //! - [`Decoder`] (feature `decode`): `AudioSpecificConfig` + raw access units → planar f32.

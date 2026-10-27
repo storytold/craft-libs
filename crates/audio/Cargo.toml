@@ -19,8 +19,10 @@ decode = ["decode-native", "symphonia"]
 decode-native = ["aac-decode", "opus-decode", "mpa-decode", "ac3-decode", "craft-media/isobmff", "craft-media/matroska", "craft-media/ogg", "dep:log"]
 # The symphonia fallback for the formats with no native decoder yet.
 symphonia = ["decode-native", "dep:symphonia"]
+# Every encoder: the lossless file writers and the AAC and Opus encoders.
+encode = ["lossless-encode", "aac-encode", "opus-encode"]
 # Encode WAV/BWF/RF64, AIFF/AIFF-C and FLAC files.
-encode = ["craft-media/bitstream"]
+lossless-encode = ["craft-media/bitstream"]
 # Codec modules on their own, for packet-level use.
 aac-decode = ["craft-media/bitstream"]
 aac-encode = ["craft-media/bitstream"]
@@ -51,11 +53,11 @@ serde_json = { workspace = true }
 
 [[test]]
 name = "audio"
-required-features = ["decode", "encode", "peaks"]
+required-features = ["decode", "lossless-encode", "peaks"]
 
 [[test]]
 name = "codecs"
-required-features = ["decode", "encode", "aac-encode", "opus-encode"]
+required-features = ["decode", "encode"]
 
 [[example]]
 name = "info"
@@ -71,4 +73,4 @@ required-features = ["decode"]
 
 [[example]]
 name = "encode"
-required-features = ["encode", "aac-encode"]
+required-features = ["lossless-encode", "aac-encode"]
