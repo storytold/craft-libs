@@ -35,10 +35,13 @@ mod wav;
 mod write;
 
 pub use buffer::AudioBuffer;
-pub use craft_media::{CodecId, Container};
+pub use craft_media::{CodecId, CodecParams, Container, PcmFormat};
 pub use layout::{ChannelLayout, Speaker};
 #[cfg(feature = "decode")]
-pub use read::{decode, detect_container, probe};
+pub use read::{
+    DEFAULT_MAX_SAMPLES, DecodeOptions, Decoder, LOOKAHEAD_PACKETS, TrackDecoder, TrackInfo, decode, decode_with, detect_container, probe,
+    probe_with, tracks, tracks_of,
+};
 #[cfg(feature = "encode")]
 pub use write::{ENCODE_EXTENSIONS, FileEncoder, encode, encode_format_for, encode_wav_rf64, encode_with_layout, wav_float_header};
 

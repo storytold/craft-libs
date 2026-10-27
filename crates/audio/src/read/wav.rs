@@ -1,9 +1,10 @@
 //! Native WAV / BWF / RF64 reader (RIFF chunk layout per the Microsoft multimedia
 //! specification, `bext` per EBU Tech 3285, `ds64` per EBU Tech 3306).
 
-use super::pcm::{PcmKind, deinterleave, le_u16, le_u32, le_u64, tag};
+use super::pcm::{PcmKind, le_u16, le_u32, le_u64, tag};
+use super::source::Src;
 use crate::wav::{GUID_TAIL, WAVE_FORMAT_EXTENSIBLE, WAVE_FORMAT_IEEE_FLOAT, WAVE_FORMAT_PCM};
-use crate::{AudioBuffer, AudioError, AudioInfo, BwfInfo, ChannelLayout, CodecId, Container, Result, SampleFormat};
+use crate::{AudioError, AudioInfo, BwfInfo, ChannelLayout, CodecId, Container, Result, SampleFormat};
 
 /// Tail of the Ambisonic subtype GUIDs {0000000x-0721-11D3-8644-C8C1CA000000}: PCM (x = 1) and float (x = 3) as well.
 const AMBISONIC_TAIL: [u8; 14] = [0x00, 0x00, 0x21, 0x07, 0xD3, 0x11, 0x86, 0x44, 0xC8, 0xC1, 0xCA, 0x00, 0x00, 0x00];
@@ -12,8 +13,8 @@ const AMBISONIC_TAIL: [u8; 14] = [0x00, 0x00, 0x21, 0x07, 0xD3, 0x11, 0x86, 0x44
 pub(crate) struct WavLayout {
     pub info: AudioInfo,
     pub kind: PcmKind,
-    pub data_start: usize,
-    pub data_len: usize,
+    pub data_start: u64,
+    pub data_len: u64,
 }
 
 /// Outcome of parsing a WAV header.
@@ -172,20 +173,21 @@ pub(crate) fn is_wav(b: &[u8]) -> bool {
 /// True when everything from `from` to the end of the file is whole RIFF chunks (four printable
 /// ASCII id bytes, a size that fits, the pad byte after an odd size; the last chunk's pad may be
 /// missing): the metadata of a finished file, not samples.
-fn only_chunks_follow(b: &[u8], from: usize) -> bool {
+fn only_chunks_follow(src: &Src<'_>, from: u64) -> bool {
+    let total = src.size();
     let mut pos = from;
-    while pos < b.len() {
-        let (Some(id), Some(size)) = (tag(b, pos), le_u32(b, pos + 4)) else { return false };
+    while pos < total {
+        let (Some(id), Some(size)) = (src.tag(pos), src.le_u32(pos + 4)) else { return false };
         if !id.iter().all(|c| (0x20..0x7f).contains(c)) {
             return false;
         }
-        let size = size as usize;
-        let Some(end) = pos.checked_add(8).and_then(|body| body.checked_add(size)) else { return false };
-        if end > b.len() {
+        let size = u64::from(size);
+        let end = pos + 8 + size;
+        if end > total {
             return false;
         }
         let next = end + (size & 1);
-        if end == b.len() || next == b.len() {
+        if end == total || next == total {
             return true;
         }
         pos = next;
@@ -195,18 +197,18 @@ fn only_chunks_follow(b: &[u8], from: usize) -> bool {
 
 /// A `data` chunk header as found in the file, for [`data_chunk_len`].
 struct DataChunk {
-    body: usize,
+    body: u64,
     size32: u32,
     is_rf64: bool,
-    remaining: usize,
-    declared: usize,
+    remaining: u64,
+    declared: u64,
 }
 
 /// Bytes of audio a `data` chunk holds: leniently, whatever is present when the size is wrong or
 /// the recording was never finalised.
-fn data_chunk_len(b: &[u8], c: DataChunk) -> usize {
-    let finished = u64::from(le_u32(b, 4).unwrap_or(0)) + 8 == b.len() as u64;
-    let empty = c.size32 == 0 && !c.is_rf64 && finished && only_chunks_follow(b, c.body);
+fn data_chunk_len(src: &Src<'_>, c: DataChunk) -> u64 {
+    let finished = u64::from(src.le_u32(4).unwrap_or(0)) + 8 == src.size();
+    let empty = c.size32 == 0 && !c.is_rf64 && finished && only_chunks_follow(src, c.body);
     if c.size32 == 0 && !c.is_rf64 && !empty { c.remaining } else { c.declared.min(c.remaining) }
 }
 
@@ -232,38 +234,40 @@ fn pcm_layout(fmt: &Fmt) -> Result<Option<(PcmKind, SampleFormat)>> {
     }))
 }
 
-pub(crate) fn parse(b: &[u8]) -> Result<WavParse> {
-    if !is_wav(b) {
+/// Parse a WAV file's chunks: its format, `bext` metadata and where its samples are. Only chunk
+/// headers and the small `fmt `, `bext` and `ds64` bodies are read.
+pub(crate) fn parse(src: &Src<'_>) -> Result<WavParse> {
+    if !is_wav(&src.bytes_upto(0, 12)) {
         return Err(AudioError::Malformed("not a RIFF/RF64 WAVE file".into()));
     }
-    let is_rf64 = tag(b, 0).is_some_and(|t| &t != b"RIFF");
+    let total = src.size();
+    let is_rf64 = src.tag(0).is_some_and(|t| &t != b"RIFF");
     let mut ds64_data: Option<u64> = None;
     let mut fmt: Option<Fmt> = None;
     let mut bwf: Option<BwfInfo> = None;
-    let mut data: Option<(usize, usize)> = None;
+    let mut data: Option<(u64, u64)> = None;
 
-    let mut pos: usize = 12;
+    let mut pos: u64 = 12;
     // Bound the number of chunks we look at so a file of tiny chunks can't spin forever.
     let mut chunks = 0usize;
-    while let (Some(id), Some(size32)) = (tag(b, pos), le_u32(b, pos + 4)) {
+    while let (Some(id), Some(size32)) = (src.tag(pos), src.le_u32(pos + 4)) {
         chunks += 1;
         if chunks > 100_000 {
             break;
         }
-        let body = pos.checked_add(8).ok_or_else(|| AudioError::Malformed("chunk offset overflow".into()))?;
-        let remaining = b.len().saturating_sub(body);
-        let mut size = u64::from(size32);
+        let body = pos + 8;
+        let remaining = total.saturating_sub(body);
+        let mut declared = u64::from(size32);
         if &id == b"data" && is_rf64 && size32 == u32::MAX {
-            size = ds64_data.unwrap_or(remaining as u64);
+            declared = ds64_data.unwrap_or(remaining);
         }
-        let declared = usize::try_from(size).unwrap_or(usize::MAX);
         if &id == b"data" {
             // Lenient: a truncated recording (or a streaming writer's 0 / 0xFFFFFFFF size) still
             // yields whatever audio is actually present.
             // A size of 0 in a file whose RIFF size is right and that has only chunks after it is an
             // empty data chunk followed by metadata (LIST, bext, …); otherwise it is a recording
             // that was never finalised, and what follows is audio.
-            let len = data_chunk_len(b, DataChunk { body, size32, is_rf64, remaining, declared });
+            let len = data_chunk_len(src, DataChunk { body, size32, is_rf64, remaining, declared });
             if data.is_none() {
                 data = Some((body, len));
             }
@@ -275,19 +279,17 @@ pub(crate) fn parse(b: &[u8]) -> Result<WavParse> {
                 // A truncated non-audio chunk at the end of the file: stop scanning.
                 break;
             }
-            let c = b.get(body..body + declared).unwrap_or_default();
+            // The fields read from these chunks lie in their first bytes.
+            let small = |n: u64| src.bytes(body, usize::try_from(declared.min(n)).unwrap_or(0)).unwrap_or_default();
             match &id {
-                b"fmt " => fmt = Some(parse_fmt(c)?),
-                b"bext" => bwf = parse_bext(c),
-                b"ds64" => ds64_data = le_u64(c, 8),
+                b"fmt " => fmt = Some(parse_fmt(&small(256))?),
+                b"bext" => bwf = parse_bext(&small(4096)),
+                b"ds64" => ds64_data = le_u64(&small(64), 8),
                 _ => {}
             }
         }
-        let padded = declared.saturating_add(declared & 1);
-        pos = match body.checked_add(padded) {
-            Some(p) => p,
-            None => break,
-        };
+        let Some(next) = body.checked_add(declared).and_then(|p| p.checked_add(declared & 1)) else { break };
+        pos = next;
     }
 
     let fmt = fmt.ok_or_else(|| AudioError::Malformed("WAV has no fmt chunk".into()))?;
@@ -304,18 +306,11 @@ pub(crate) fn parse(b: &[u8]) -> Result<WavParse> {
         log::debug!("WAV block_align {} disagrees with computed {block}; using computed", fmt.block_align);
     }
     let (data_start, data_len) = data.ok_or_else(|| AudioError::Malformed("WAV has no data chunk".into()))?;
-    let frames = (data_len / block) as u64;
+    let frames = data_len / block as u64;
     Ok(WavParse::Native(WavLayout {
         info: AudioInfo { bwf, ..AudioInfo::new(Container::Wav, CodecId::Pcm, sample_format, fmt.sample_rate, fmt.layout(), frames) },
         kind,
         data_start,
         data_len,
     }))
-}
-
-pub(crate) fn decode(b: &[u8], layout: &WavLayout) -> Result<AudioBuffer> {
-    let end = layout.data_start.saturating_add(layout.data_len).min(b.len());
-    let data = b.get(layout.data_start..end).unwrap_or_default();
-    let channels = deinterleave(data, layout.kind, usize::from(layout.info.channels), layout.info.frames)?;
-    Ok(AudioBuffer { sample_rate: layout.info.sample_rate, channels })
 }

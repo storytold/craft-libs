@@ -1,9 +1,11 @@
 //! Decode path for everything that isn't native PCM WAV/AIFF, backed by `symphonia`.
 
+use std::borrow::Cow;
 use std::io::{Cursor, Seek, SeekFrom};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use symphonia::core::audio::Channels;
+use symphonia::core::codecs::audio::AudioDecoder;
 use symphonia::core::codecs::audio::well_known::{
     CODEC_ID_AAC, CODEC_ID_ADPCM_G722, CODEC_ID_ADPCM_G726, CODEC_ID_ADPCM_G726LE, CODEC_ID_ADPCM_IMA_QT, CODEC_ID_ADPCM_IMA_WAV, CODEC_ID_ADPCM_MS,
     CODEC_ID_ALAC, CODEC_ID_FLAC, CODEC_ID_MP1, CODEC_ID_MP2, CODEC_ID_MP3, CODEC_ID_OPUS, CODEC_ID_PCM_ALAW, CODEC_ID_PCM_F32BE, CODEC_ID_PCM_F32LE,
@@ -12,12 +14,13 @@ use symphonia::core::codecs::audio::well_known::{
 use symphonia::core::codecs::audio::{AudioCodecId, AudioCodecParameters, AudioDecoderOptions, CODEC_ID_NULL_AUDIO};
 use symphonia::core::errors::Error as SymError;
 use symphonia::core::formats::probe::{Hint, ProbeOptions, ProbeableFormat, Score, Scoreable};
-use symphonia::core::formats::{FormatOptions, FormatReader, Track};
+use symphonia::core::formats::{FormatOptions, FormatReader, SeekMode, SeekTo, Track};
 use symphonia::core::io::{MediaSourceStream, MediaSourceStreamOptions, ScopedStream};
 use symphonia::core::meta::MetadataOptions;
+use symphonia::core::units::{TimeBase, Timestamp};
 
 use super::id3v2_len;
-use super::pcm::{MAX_DECODE_SAMPLES, be_u32};
+use super::pcm::be_u32;
 use crate::{AudioBuffer, AudioError, AudioInfo, ChannelLayout, CodecId, Container, Result, SampleFormat};
 
 /// The most frames a packet may declare: decoders allocate a packet's frames up front, and ALAC
@@ -348,16 +351,18 @@ fn precheck(b: &[u8], start: usize, detected: Option<Container>) -> Result<Prech
 /// Skip leading ID3v2 tags, run the container size preflight, then probe with symphonia; a zero-frame FLAC found by
 /// the preflight comes back as [`Opened::Empty`] without probing. A size-checked container is refused when probing
 /// selects a different reader or one that was never checked, so incidental payload magic cannot bypass those limits.
-fn open(bytes: &[u8], detected: Option<Container>) -> Result<Opened> {
-    let start = skip_id3v2(bytes);
+fn open(bytes: Cow<'_, [u8]>, detected: Option<Container>) -> Result<Opened> {
+    let start = skip_id3v2(&bytes);
     if start > 0 && start >= bytes.len() {
         return Err(AudioError::Malformed("ID3v2 tag extends past the end of the file".into()));
     }
-    let checked = precheck(bytes, start, detected)?;
+    let checked = precheck(&bytes, start, detected)?;
     if let Precheck::Empty(info) = checked {
         return Ok(Opened::Empty(info));
     }
-    let mut mss = MediaSourceStream::new(Box::new(Cursor::new(bytes.to_vec())), MediaSourceStreamOptions::default());
+    // symphonia reads from an owned stream: a borrowed buffer is copied once, a buffer read from
+    // a shared source is moved in.
+    let mut mss = MediaSourceStream::new(Box::new(Cursor::new(bytes.into_owned())), MediaSourceStreamOptions::default());
     // Seek (rather than pre-positioning the cursor) so the stream's absolute position is `start`
     // too: container offsets such as MP4's `stco` are absolute file offsets.
     mss.seek(SeekFrom::Start(u64::try_from(start).unwrap_or(u64::MAX)))?;
@@ -478,14 +483,15 @@ fn audio_params(track: &Track) -> Option<&AudioCodecParameters> {
     track.codec_params.as_ref()?.audio()
 }
 
-/// The first track with a decodable audio codec, with the stream information the UI shows.
-fn info_of(reader: &dyn FormatReader, detected: Option<Container>) -> Result<(u32, AudioInfo)> {
+/// The audio tracks with a decodable codec.
+fn audio_tracks(reader: &dyn FormatReader) -> impl Iterator<Item = &Track> {
+    reader.tracks().iter().filter(|t| audio_params(t).is_some_and(|p| p.codec != CODEC_ID_NULL_AUDIO))
+}
+
+/// The `n`-th audio track (the first when `None`), with the stream information the UI shows.
+fn info_of(reader: &dyn FormatReader, detected: Option<Container>, n: Option<usize>) -> Result<(u32, AudioInfo)> {
     let container = container_of(reader.format_info().short_name, detected);
-    let track = reader
-        .tracks()
-        .iter()
-        .find(|t| audio_params(t).is_some_and(|p| p.codec != CODEC_ID_NULL_AUDIO))
-        .ok_or_else(|| AudioError::Unsupported("no decodable audio track".into()))?;
+    let track = audio_tracks(reader).nth(n.unwrap_or(0)).ok_or_else(|| AudioError::Unsupported("no decodable audio track".into()))?;
     let p = audio_params(track).ok_or_else(|| AudioError::Unsupported("no decodable audio track".into()))?;
     let sample_rate = p.sample_rate.filter(|&r| r > 0).ok_or_else(|| AudioError::Malformed("unknown sample rate".into()))?;
     let layout = layout_of(p.channels.as_ref());
@@ -505,155 +511,224 @@ fn demux_failure(frames: u64, e: SymError) -> Result<()> {
 
 /// Note a corrupt packet (the `errors`-th); a stream that never decodes is malformed.
 fn corrupt_packet(errors: usize, frames: u64, msg: &str) -> Result<()> {
-    log::debug!("skipping corrupt packet: {msg}");
+    log::debug!("concealing corrupt packet: {msg}");
     if errors > 1000 && frames == 0 {
         return Err(AudioError::Malformed(format!("no decodable packets: {msg}")));
     }
     Ok(())
 }
 
-/// The decoded stream is authoritative for the channel count: record it (a layout naming another
-/// count is dropped) and allocate the planes.
-fn init_planar(info: &mut AudioInfo, ch: usize) -> Result<Vec<Vec<f32>>> {
-    info.channels = u16::try_from(ch).map_err(|_| AudioError::Unsupported("too many channels".into()))?;
-    if info.layout.channels() != ch {
-        info.layout = ChannelLayout::unordered(ch);
-    }
-    Ok((0..ch).map(|_| Vec::new()).collect())
+/// A file decoded by symphonia, block by block.
+pub(crate) struct Symph {
+    /// `None` for a stream with no audio frames (a zero-frame FLAC).
+    reader: Option<Box<dyn FormatReader>>,
+    decoder: Option<Box<dyn AudioDecoder>>,
+    track_id: u32,
+    time_base: Option<TimeBase>,
+    info: AudioInfo,
+    frames_known: bool,
+    /// Frames decoded so far (for the "nothing decoded" checks).
+    decoded: u64,
+    errors: usize,
+    /// Frames of the last decoded packet: the length of the silence that replaces a packet that
+    /// fails to decode, so the audio after it keeps its timing.
+    last_frames: usize,
+    /// Frames still to drop after a seek landed before its target.
+    discard: u64,
+    ended: bool,
+    interleaved: Vec<f32>,
 }
 
-/// Append one interleaved block to the planes, replacing non-finite samples with silence.
-fn append_interleaved(planar: &mut [Vec<f32>], interleaved: &[f32], ch: usize) {
-    for frame in interleaved.chunks_exact(ch) {
-        for (dst, &s) in planar.iter_mut().zip(frame) {
-            dst.push(if s.is_finite() { s } else { 0.0 });
-        }
-    }
-}
-
-/// Decode the whole first audio track. When `count_only`, samples are counted but not stored.
-fn run(bytes: &[u8], detected: Option<Container>, count_only: bool) -> Result<(AudioInfo, AudioBuffer)> {
-    let mut reader = match open(bytes, detected)? {
-        Opened::Reader(reader) => reader,
-        Opened::Empty(info) => {
-            let buf = AudioBuffer::new(info.sample_rate, usize::from(info.channels), 0);
-            return Ok((info, buf));
-        }
-    };
-    let (track_id, mut info) = info_of(reader.as_ref(), detected)?;
-    let track = reader.tracks().iter().find(|t| t.id == track_id).ok_or_else(|| AudioError::Malformed("track vanished".into()))?;
-    if let Some(n) = track.num_frames {
-        let total = n.saturating_mul(u64::from(info.channels.max(1)));
-        if !count_only && total > MAX_DECODE_SAMPLES {
-            return Err(AudioError::TooLarge(format!("{total} samples exceeds the decode limit")));
-        }
-    }
-    let params = audio_params(track).cloned().ok_or_else(|| AudioError::Malformed("track vanished".into()))?;
-    let alac = params.extra_data.as_deref().filter(|_| params.codec == CODEC_ID_ALAC).and_then(|d| be_u32(d, 0));
-    if params.max_frames_per_packet.into_iter().chain(alac.map(u64::from)).any(|n| n > MAX_PACKET_FRAMES) {
-        return Err(AudioError::Malformed("the file declares packets far longer than any codec uses".into()));
-    }
-    let mut decoder = symphonia::default::get_codecs().make_audio_decoder(&params, &decoder_options()).map_err(map_err)?;
-
-    let mut planar: Vec<Vec<f32>> = Vec::new();
-    let mut interleaved: Vec<f32> = Vec::new();
-    let mut frames: u64 = 0;
-    let mut errors = 0usize;
-    // Frames of the last decoded packet: the length of the silence that replaces a packet that
-    // fails to decode, so the audio after it keeps its timing.
-    let mut last_frames = 0usize;
-    loop {
-        let packet = match reader.next_packet() {
-            Ok(Some(packet)) => packet,
-            Ok(None) => break,
-            Err(SymError::IoError(e)) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
-            Err(SymError::ResetRequired) => break,
-            Err(e) => {
-                demux_failure(frames, e)?;
-                break;
-            }
-        };
-        if packet.track_id != track_id {
-            continue;
-        }
-        let decoded = match decoder.decode(&packet) {
-            Ok(d) => d,
-            Err(SymError::DecodeError(m)) => {
-                errors += 1;
-                corrupt_packet(errors, frames, m)?;
-                if !planar.is_empty() && last_frames > 0 {
-                    frames = frames.saturating_add(last_frames as u64);
-                    if frames.saturating_mul(planar.len() as u64) > MAX_DECODE_SAMPLES {
-                        return Err(AudioError::TooLarge("decoded audio exceeds the 4 GiB limit".into()));
-                    }
-                    if !count_only {
-                        for plane in &mut planar {
-                            plane.resize(plane.len() + last_frames, 0.0);
-                        }
-                    }
+impl Symph {
+    /// Open audio track `track` (the first when `None`) of the file in `bytes`.
+    pub(crate) fn open(bytes: Cow<'_, [u8]>, detected: Option<Container>, track: Option<usize>) -> Result<Symph> {
+        guarded(move || {
+            let reader = match open(bytes, detected)? {
+                Opened::Reader(reader) => reader,
+                Opened::Empty(info) => {
+                    return Ok(Symph {
+                        reader: None,
+                        decoder: None,
+                        track_id: 0,
+                        time_base: None,
+                        info,
+                        frames_known: true,
+                        decoded: 0,
+                        errors: 0,
+                        last_frames: 0,
+                        discard: 0,
+                        ended: true,
+                        interleaved: Vec::new(),
+                    });
                 }
+            };
+            let (track_id, info) = info_of(reader.as_ref(), detected, track)?;
+            let t = reader.tracks().iter().find(|t| t.id == track_id).ok_or_else(|| AudioError::Malformed("track vanished".into()))?;
+            let params = audio_params(t).cloned().ok_or_else(|| AudioError::Malformed("track vanished".into()))?;
+            let alac = params.extra_data.as_deref().filter(|_| params.codec == CODEC_ID_ALAC).and_then(|d| be_u32(d, 0));
+            if params.max_frames_per_packet.into_iter().chain(alac.map(u64::from)).any(|n| n > MAX_PACKET_FRAMES) {
+                return Err(AudioError::Malformed("the file declares packets far longer than any codec uses".into()));
+            }
+            let decoder = symphonia::default::get_codecs().make_audio_decoder(&params, &decoder_options()).map_err(map_err)?;
+            let frames_known = info.frames > 0 && info.channels > 0;
+            Ok(Symph {
+                time_base: t.time_base,
+                reader: Some(reader),
+                decoder: Some(decoder),
+                track_id,
+                info,
+                frames_known,
+                decoded: 0,
+                errors: 0,
+                last_frames: 0,
+                discard: 0,
+                ended: false,
+                interleaved: Vec::new(),
+            })
+        })
+    }
+
+    pub(crate) fn info(&self) -> &AudioInfo {
+        &self.info
+    }
+
+    pub(crate) fn frames_known(&self) -> bool {
+        self.frames_known
+    }
+
+    /// The BWF metadata of the WAV around the stream (symphonia does not read `bext`).
+    pub(crate) fn set_bwf(&mut self, bwf: Option<crate::BwfInfo>) {
+        self.info.bwf = bwf;
+    }
+
+    /// The next block of decoded audio, or `None` at the end.
+    pub(crate) fn next_block(&mut self) -> Result<Option<AudioBuffer>> {
+        guarded(|| self.next_block_inner())
+    }
+
+    fn next_block_inner(&mut self) -> Result<Option<AudioBuffer>> {
+        let (Some(reader), Some(decoder)) = (self.reader.as_mut(), self.decoder.as_mut()) else { return Ok(None) };
+        loop {
+            if self.ended {
+                if self.info.channels == 0 {
+                    return Err(AudioError::Malformed("stream contains no audio".into()));
+                }
+                return Ok(None);
+            }
+            let packet = match reader.next_packet() {
+                Ok(Some(packet)) => packet,
+                Ok(None) | Err(SymError::ResetRequired) => {
+                    self.ended = true;
+                    continue;
+                }
+                Err(SymError::IoError(e)) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
+                    self.ended = true;
+                    continue;
+                }
+                Err(e) => {
+                    demux_failure(self.decoded, e)?;
+                    self.ended = true;
+                    continue;
+                }
+            };
+            if packet.track_id != self.track_id {
                 continue;
             }
-            Err(SymError::IoError(_)) => break,
-            Err(e) => return Err(map_err(e)),
-        };
-        // The interleaved copy below is laid out by planes: use their count so a decoder whose
-        // channel spec disagrees with its planes cannot trip the copy's length assertion.
-        let ch = decoded.num_planes();
-        if ch == 0 {
-            continue;
+            let block = match decoder.decode(&packet) {
+                Ok(decoded) => {
+                    // The interleaved copy below is laid out by planes: use their count so a
+                    // decoder whose channel spec disagrees with its planes cannot trip the copy's
+                    // length assertion.
+                    let ch = decoded.num_planes();
+                    if ch == 0 {
+                        continue;
+                    }
+                    let n = decoded.frames();
+                    let needed = n.checked_mul(ch).ok_or_else(|| AudioError::TooLarge("decoded audio exceeds the 4 GiB limit".into()))?;
+                    if self.interleaved.len() < needed {
+                        self.interleaved
+                            .try_reserve(needed - self.interleaved.len())
+                            .map_err(|_| AudioError::TooLarge("cannot allocate decoded audio".into()))?;
+                        self.interleaved.resize(needed, 0.0);
+                    }
+                    decoded.copy_to_slice_interleaved(&mut self.interleaved[..needed]);
+                    let mut planar = vec![Vec::with_capacity(n); ch];
+                    for frame in self.interleaved[..needed].chunks_exact(ch) {
+                        for (dst, &s) in planar.iter_mut().zip(frame) {
+                            dst.push(if s.is_finite() { s } else { 0.0 });
+                        }
+                    }
+                    // The decoded stream is authoritative for the channel count.
+                    if usize::from(self.info.channels) != ch {
+                        self.info.channels = u16::try_from(ch).map_err(|_| AudioError::Unsupported("too many channels".into()))?;
+                        self.info.layout = ChannelLayout::unordered(ch);
+                    }
+                    self.decoded = self.decoded.saturating_add(n as u64);
+                    self.last_frames = n;
+                    planar
+                }
+                Err(SymError::DecodeError(m)) => {
+                    self.errors += 1;
+                    corrupt_packet(self.errors, self.decoded, m)?;
+                    if self.decoded == 0 || self.last_frames == 0 {
+                        continue;
+                    }
+                    vec![vec![0.0; self.last_frames]; usize::from(self.info.channels)]
+                }
+                Err(SymError::IoError(_)) => {
+                    self.ended = true;
+                    continue;
+                }
+                Err(e) => return Err(map_err(e)),
+            };
+            let mut block = AudioBuffer { sample_rate: self.info.sample_rate, channels: block };
+            if self.discard > 0 {
+                let drop = (self.discard as usize).min(block.frames());
+                for c in &mut block.channels {
+                    c.drain(..drop);
+                }
+                self.discard -= drop as u64;
+                if block.frames() == 0 {
+                    continue;
+                }
+            }
+            return Ok(Some(block));
         }
-        if planar.is_empty() {
-            planar = init_planar(&mut info, ch)?;
-        }
-        let n = decoded.frames() as u64;
-        last_frames = decoded.frames();
-        frames = frames.saturating_add(n);
-        if frames.saturating_mul(ch as u64) > MAX_DECODE_SAMPLES {
-            return Err(AudioError::TooLarge("decoded audio exceeds the 4 GiB limit".into()));
-        }
-        if count_only {
-            continue;
-        }
-        let needed = usize::try_from(n)
-            .ok()
-            .and_then(|n| n.checked_mul(ch))
-            .ok_or_else(|| AudioError::TooLarge("decoded audio exceeds the 4 GiB limit".into()))?;
-        if interleaved.len() < needed {
-            interleaved.try_reserve(needed - interleaved.len()).map_err(|_| AudioError::TooLarge("cannot allocate decoded audio".into()))?;
-            interleaved.resize(needed, 0.0);
-        }
-        decoded.copy_to_slice_interleaved(&mut interleaved[..needed]);
-        append_interleaved(&mut planar, &interleaved[..needed], ch);
     }
-    if info.channels == 0 {
-        return Err(AudioError::Malformed("stream contains no audio".into()));
+
+    /// Continue from frame `frame`: an accurate seek lands at or before it, and the frames up to
+    /// it are dropped.
+    pub(crate) fn seek(&mut self, frame: u64) -> Result<u64> {
+        guarded(|| {
+            let (Some(reader), Some(decoder)) = (self.reader.as_mut(), self.decoder.as_mut()) else { return Ok(0) };
+            let rate = u64::from(self.info.sample_rate.max(1));
+            // Timestamps count `numer / denom` seconds; without a time base they count frames.
+            let (numer, denom) = self.time_base.map_or((1, rate), |tb| (u64::from(tb.numer.get()), u64::from(tb.denom.get())));
+            let to_ts = |f: u64| u128::from(f) * u128::from(denom) / (u128::from(numer) * u128::from(rate));
+            let ts = i64::try_from(to_ts(frame)).unwrap_or(i64::MAX);
+            let seeked = reader.seek(SeekMode::Accurate, SeekTo::Timestamp { ts: Timestamp::new(ts), track_id: self.track_id }).map_err(map_err)?;
+            decoder.reset();
+            let actual = u64::try_from(seeked.actual_ts.get()).unwrap_or(0);
+            let actual = u64::try_from(u128::from(actual) * u128::from(numer) * u128::from(rate) / u128::from(denom)).unwrap_or(u64::MAX);
+            self.discard = frame.saturating_sub(actual);
+            self.ended = false;
+            Ok(frame)
+        })
     }
-    if planar.is_empty() {
-        planar = (0..usize::from(info.channels)).map(|_| Vec::new()).collect();
-    }
-    info.frames = if count_only { frames } else { planar.iter().map(Vec::len).min().unwrap_or(0) as u64 };
-    let sample_rate = info.sample_rate;
-    Ok((info, AudioBuffer { sample_rate, channels: planar }))
 }
 
-pub(crate) fn probe(bytes: &[u8], detected: Option<Container>) -> Result<AudioInfo> {
-    guarded(|| {
+/// The codec parameters of each audio track symphonia finds, for a track list.
+pub(crate) fn tracks(bytes: Cow<'_, [u8]>, detected: Option<Container>) -> Result<Vec<(CodecId, u32, u16)>> {
+    guarded(move || {
         let reader = match open(bytes, detected)? {
             Opened::Reader(reader) => reader,
-            Opened::Empty(info) => return Ok(info),
+            Opened::Empty(info) => return Ok(vec![(info.codec, info.sample_rate, info.channels)]),
         };
-        let (_, info) = info_of(reader.as_ref(), detected)?;
-        if info.frames > 0 && info.channels > 0 {
-            return Ok(info);
-        }
-        // Length not in the header (e.g. MP3 without a Xing frame): count by decoding.
-        run(bytes, detected, true).map(|(i, _)| i)
+        Ok(audio_tracks(reader.as_ref())
+            .filter_map(audio_params)
+            .map(|p| (codec_id_of(p.codec), p.sample_rate.unwrap_or(0), p.channels.as_ref().map_or(0, |c| u16::try_from(c.count()).unwrap_or(0))))
+            .collect())
     })
-}
-
-pub(crate) fn decode(bytes: &[u8], detected: Option<Container>) -> Result<(AudioInfo, AudioBuffer)> {
-    guarded(|| run(bytes, detected, false))
 }
 
 #[cfg(test)]

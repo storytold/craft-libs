@@ -1,16 +1,17 @@
 //! Native AIFF / AIFF-C reader (Apple "Audio Interchange File Format" 1.3 and the AIFF-C
 //! draft: big-endian IFF chunks, 80-bit IEEE extended sample rate).
 
-use super::pcm::{PcmKind, be_u16, be_u32, deinterleave, tag};
-use crate::{AudioBuffer, AudioError, AudioInfo, ChannelLayout, CodecId, Container, Result, SampleFormat};
+use super::pcm::{PcmKind, be_u16, be_u32, tag};
+use super::source::Src;
+use crate::{AudioError, AudioInfo, ChannelLayout, CodecId, Container, Result, SampleFormat};
 
 const MAX_SAMPLE_RATE: f64 = 10_000_000.0;
 
 pub(crate) struct AiffLayout {
     pub info: AudioInfo,
     pub kind: PcmKind,
-    pub data_start: usize,
-    pub data_len: usize,
+    pub data_start: u64,
+    pub data_len: u64,
 }
 
 pub(crate) enum AiffParse {
@@ -41,39 +42,43 @@ pub(crate) fn extended_to_f64(b: &[u8]) -> Option<f64> {
     Some(if se & 0x8000 != 0 { -v } else { v })
 }
 
-pub(crate) fn parse(b: &[u8]) -> Result<AiffParse> {
-    if !is_aiff(b) {
+/// Parse an AIFF file's chunks: its `COMM` format and where its `SSND` samples are. Only chunk
+/// headers and the first bytes of `COMM` and `SSND` are read.
+pub(crate) fn parse(src: &Src<'_>) -> Result<AiffParse> {
+    let head = src.bytes_upto(0, 12);
+    if !is_aiff(&head) {
         return Err(AudioError::Malformed("not an AIFF/AIFF-C file".into()));
     }
-    let is_aifc = tag(b, 8).is_some_and(|t| &t == b"AIFC");
+    let total = src.size();
+    let is_aifc = tag(&head, 8).is_some_and(|t| &t == b"AIFC");
     let mut comm: Option<(i16, u32, i16, f64, [u8; 4])> = None;
-    let mut ssnd: Option<(usize, usize)> = None;
+    let mut ssnd: Option<(u64, u64)> = None;
 
-    let mut pos: usize = 12;
+    let mut pos: u64 = 12;
     let mut chunks = 0usize;
-    while let (Some(id), Some(size32)) = (tag(b, pos), be_u32(b, pos + 4)) {
+    while let (Some(id), Some(size32)) = (src.tag(pos), src.be_u32(pos + 4)) {
         chunks += 1;
         if chunks > 100_000 {
             break;
         }
-        let body = pos.checked_add(8).ok_or_else(|| AudioError::Malformed("chunk offset overflow".into()))?;
-        let remaining = b.len().saturating_sub(body);
-        let declared = usize::try_from(size32).unwrap_or(usize::MAX);
+        let body = pos + 8;
+        let remaining = total.saturating_sub(body);
+        let declared = u64::from(size32);
         let len = declared.min(remaining);
-        let c = b.get(body..body + len).unwrap_or_default();
         match &id {
             b"COMM" => {
+                let c = src.bytes(body, usize::try_from(len.min(64)).unwrap_or(0)).unwrap_or_default();
                 let short = || AudioError::Malformed("COMM chunk too short".into());
-                let channels = be_u16(c, 0).ok_or_else(short)? as i16;
-                let frames = be_u32(c, 2).ok_or_else(short)?;
-                let bits = be_u16(c, 6).ok_or_else(short)? as i16;
+                let channels = be_u16(&c, 0).ok_or_else(short)? as i16;
+                let frames = be_u32(&c, 2).ok_or_else(short)?;
+                let bits = be_u16(&c, 6).ok_or_else(short)? as i16;
                 let rate = extended_to_f64(c.get(8..18).ok_or_else(short)?).ok_or_else(|| AudioError::Malformed("invalid sample rate".into()))?;
-                let compression = if is_aifc { tag(c, 18).ok_or_else(short)? } else { *b"NONE" };
+                let compression = if is_aifc { tag(&c, 18).ok_or_else(short)? } else { *b"NONE" };
                 comm = Some((channels, frames, bits, rate, compression));
             }
             b"SSND" if ssnd.is_none() => {
-                let offset = usize::try_from(be_u32(c, 0).unwrap_or(0)).unwrap_or(usize::MAX);
-                let start = body.saturating_add(8).saturating_add(offset).min(b.len());
+                let offset = if len >= 4 { u64::from(src.be_u32(body).unwrap_or(0)) } else { 0 };
+                let start = body.saturating_add(8).saturating_add(offset).min(total);
                 let data_len = len.saturating_sub(8).saturating_sub(offset);
                 ssnd = Some((start, data_len));
             }
@@ -82,10 +87,8 @@ pub(crate) fn parse(b: &[u8]) -> Result<AiffParse> {
         if declared > remaining {
             break;
         }
-        pos = match body.checked_add(declared).and_then(|p| p.checked_add(declared & 1)) {
-            Some(p) => p,
-            None => break,
-        };
+        let Some(next) = body.checked_add(declared).and_then(|p| p.checked_add(declared & 1)) else { break };
+        pos = next;
     }
 
     let (channels, frames, bits, rate, compression) = comm.ok_or_else(|| AudioError::Malformed("AIFF has no COMM chunk".into()))?;
@@ -116,9 +119,9 @@ pub(crate) fn parse(b: &[u8]) -> Result<AiffParse> {
         b"fl64" | b"FL64" => (PcmKind::Float { bytes: 8, big_endian: true }, SampleFormat::Float64),
         _ => return Ok(AiffParse::Foreign),
     };
-    let (data_start, data_len) = ssnd.unwrap_or((b.len(), 0));
+    let (data_start, data_len) = ssnd.unwrap_or((total, 0));
     let block = kind.bytes().saturating_mul(channels as usize).max(1);
-    let frames = u64::from(frames).min((data_len / block) as u64);
+    let frames = u64::from(frames).min(data_len / block as u64);
     Ok(AiffParse::Native(AiffLayout {
         info: AudioInfo::new(Container::Aiff, CodecId::Pcm, sample_format, sample_rate, layout(usize::from(channels as u16)), frames),
         kind,
@@ -137,11 +140,4 @@ fn layout(channels: usize) -> ChannelLayout {
         4 => ChannelLayout::QUAD,
         n => ChannelLayout::unordered(n),
     }
-}
-
-pub(crate) fn decode(b: &[u8], layout: &AiffLayout) -> Result<AudioBuffer> {
-    let end = layout.data_start.saturating_add(layout.data_len).min(b.len());
-    let data = b.get(layout.data_start..end).unwrap_or_default();
-    let channels = deinterleave(data, layout.kind, usize::from(layout.info.channels), layout.info.frames)?;
-    Ok(AudioBuffer { sample_rate: layout.info.sample_rate, channels })
 }
