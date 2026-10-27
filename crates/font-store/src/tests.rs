@@ -192,7 +192,11 @@ fn lookups_match_exactly_and_refuse_near_matches() {
     assert_eq!(name("Test Var", "Light").unwrap(), "TestVar[wght].ttf");
     assert!(matches!(name("Test Var", "Thin"), Err(Unavailable::NoStyle { .. })));
     assert!(matches!(name("Test Var", "Bold Italic"), Err(Unavailable::NoStyle { .. })));
+}
 
+#[test]
+fn postscript_lookups_match_exactly() {
+    let index = index_of(&fixture().index).unwrap();
     assert_eq!(index.find_postscript("TestSans-Bold").unwrap().family.family, "Test Sans");
     assert_eq!(index.find_postscript("TestVar-SemiBold").unwrap().file.file_name(), "TestVar[wght].ttf");
     assert!(matches!(index.find_postscript("testsans-bold"), Err(Unavailable::NoPostScript(_))));
@@ -200,7 +204,11 @@ fn lookups_match_exactly_and_refuse_near_matches() {
     let Err(Unavailable::Ambiguous { families, .. }) = index.find_postscript("Shared-Regular") else { panic!("not ambiguous") };
     assert_eq!(families, ["Shared One", "Shared Two"]);
     assert!(index.family("Shared Two").unwrap().face_by_postscript("Shared-Regular").is_some());
+}
 
+#[test]
+fn styles_parse_and_urls_pin_the_commit() {
+    let index = index_of(&fixture().index).unwrap();
     assert_eq!(parse_style("Extra Bold Italic"), Some((800, true)));
     assert_eq!(parse_style("semi-bold"), Some((600, false)));
     assert_eq!(parse_style("Condensed Bold"), None);
