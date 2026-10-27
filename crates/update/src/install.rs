@@ -172,13 +172,15 @@ pub(crate) fn bind_artifact_version(app: &App, release: &Release, asset: &Asset)
     }
 
     // The release tag and filename embedded in a release download URL (`.../releases/download/<tag>/<name>`).
+    // A `+` in either is `%2B` there, as GitHub and `expected_download_url` write it; no other
+    // escape is decoded, so anything else still has to match as written.
     if let Some((_, rest)) = asset.url.split_once("/releases/download/") {
         let mut parts = rest.split('/');
-        let tag = parts.next().unwrap_or("");
-        let url_filename = parts.next().unwrap_or("");
+        let tag = parts.next().unwrap_or("").replace("%2B", "+");
+        let url_filename = parts.next().unwrap_or("").replace("%2B", "+");
         if tag.is_empty()
             || release_version
-                .map_or(tag != release.tag, |release_version| tag != release.tag && version::parse(tag).as_ref() != Some(release_version))
+                .map_or(tag != release.tag, |release_version| tag != release.tag && version::parse(&tag).as_ref() != Some(release_version))
         {
             return Err(mismatch());
         }
@@ -3022,6 +3024,33 @@ esac
             ..Asset::default()
         });
         assert!(check_download_link(app, &foreign_sums, &good).is_err());
+    }
+
+    /// A release whose tag has a `+` (semver build metadata) has `%2B` in its links. Both checks
+    /// before the download accept them, so `install_at` gets as far as the download, which the
+    /// cancelled job ends before anything is fetched. A link with another escape is still refused.
+    #[test]
+    fn install_accepts_a_plus_release_up_to_the_download() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::under(dir.path());
+        let http = Http::new(crate::TEST_AGENT).unwrap();
+        let phase = &mut |_| ();
+        let locations = InstallLocations::default();
+        let app = App::by_id("photocraft").unwrap();
+        let name = "photocraft-1.0.0+build.1-linux-x86_64.AppImage";
+        let release = release::release_from_sums(app.repo, "v1.0.0+build.1", &[("a".repeat(64), name.to_string())]);
+        let asset = release.assets[0].clone();
+        assert!(asset.url.ends_with("/download/v1.0.0%2Bbuild.1/photocraft-1.0.0%2Bbuild.1-linux-x86_64.AppImage"), "{}", asset.url);
+        assert_eq!(bind_artifact_version(app, &release, &asset), Ok(()));
+
+        let stop = Stop::default();
+        stop.cancel();
+        let mut job = Job { http: &http, paths: &paths, stop: &stop, phase, install_locations: &locations, replace: false };
+        let result = install_at(app, &release, &asset, PackageKind::AppImage, None, None, &mut job, None);
+        assert_eq!(result.unwrap_err(), crate::protocol::CANCELLED);
+
+        let other_escape = Asset { url: asset.url.replace("%2B", "%2b"), ..asset };
+        assert!(bind_artifact_version(app, &release, &other_escape).is_err());
     }
 
     #[cfg(target_os = "linux")]
