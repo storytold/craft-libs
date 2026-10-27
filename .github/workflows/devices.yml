@@ -1,0 +1,48 @@
+name: Device tools
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['crates/devices/**', 'crates/scan/**', 'crates/job/**', 'crates/atomic/**', 'Cargo.toml', 'Cargo.lock', '.github/workflows/devices.yml']
+  pull_request:
+    paths: ['crates/devices/**', 'crates/scan/**', 'crates/job/**', 'crates/atomic/**', 'Cargo.toml', 'Cargo.lock', '.github/workflows/devices.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  devices:
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --check
+      - run: cargo clippy -p craft-devices --all-targets --locked -- -D warnings
+      - run: cargo test -p craft-devices --locked
+      - run: cargo doc -p craft-devices --no-deps --locked
+        env:
+          RUSTDOCFLAGS: -D warnings
+
+  wasm:
+    timeout-minutes: 15
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check -p craft-devices --target wasm32-unknown-unknown --locked
