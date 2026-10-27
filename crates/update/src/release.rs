@@ -462,6 +462,8 @@ mod tests {
         }
     }
 
+    /// A link that shares the download prefix as text but climbs into another repository with `..`
+    /// or an encoded separator or dot isn't under it.
     #[test]
     fn traversal_cannot_escape_the_repository() {
         // Raw-prefix matches but the interpreted path climbs into another repository (CWE-180).
@@ -499,6 +501,8 @@ mod tests {
         assert_eq!(parse_github_release_list("[]", REPO, false).unwrap(), None);
     }
 
+    /// `SHA256SUMS.txt` lines, the tag in a `releases/latest` redirect, and the release built from
+    /// both; malformed lines, traversing names and `.`/`..` tags are dropped.
     #[test]
     fn reads_checksums_and_redirects() {
         let sums = parse_sha256sums(&format!("{HASH}  photocraft-0.5.0-macos-universal.dmg\n{HASH} *b.zip\nnot a line\n{HASH}  ../escape\n"));
@@ -514,8 +518,6 @@ mod tests {
         assert_eq!(r.version, Some(Version::new(0, 5, 0)));
     }
 
-    /// A name with a path, a hidden or reserved form, a control character or a percent-encoded
-    /// separator isn't a file name we'd save.
     #[test]
     fn a_name_listed_twice_gives_one_asset_or_none() {
         let other = "b".repeat(64);
@@ -549,6 +551,8 @@ mod tests {
         assert!(sums.iter().enumerate().all(|(i, (h, n))| *h == HASH && *n == format!("f{}", i + 1)));
     }
 
+    /// A name with a path, a hidden or reserved form, a control character or a percent-encoded
+    /// separator isn't a file name we'd save.
     #[test]
     fn file_names_cannot_escape() {
         for bad in ["", "..", "a/b", "a\\b", ".hidden", "c:x", "x\u{0}", "%2e%2e%2fother", "a%2Fb", "a%5cb", "x%2E%2E"] {

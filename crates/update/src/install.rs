@@ -58,6 +58,11 @@ pub fn install(
 
 type RecordCommit<'a> = Option<&'a mut dyn FnMut(&Record) -> Result<(), String>>;
 
+/// [`install`], with `commit` called once a portable ZIP's new files are in place and its version
+/// checked, so the caller can save its record; an error from it rolls the previous copy back
+/// (Windows only; ignored elsewhere). Refuses before downloading when the app is running, the
+/// asset isn't the release's version (`bind_artifact_version`), a newer copy is installed, or the
+/// link isn't the release's own (`check_download_link`).
 #[allow(clippy::too_many_arguments)]
 pub fn install_at(
     app: &App,
@@ -2957,6 +2962,8 @@ esac
         assert!(result.unwrap_err().contains("installed version 0.5.0 is newer"));
     }
 
+    /// An asset whose file name, link tag or link file name isn't the release's is refused before
+    /// the download, and so is one in another app's releases or with a foreign `SHA256SUMS.txt`.
     #[test]
     fn install_rejects_an_artifact_whose_version_is_not_the_advertised_one() {
         // The release advertises 99.0.0, but the selected artifact is an older official build
