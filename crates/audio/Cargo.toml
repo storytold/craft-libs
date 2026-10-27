@@ -22,7 +22,11 @@ symphonia = ["decode-native", "dep:symphonia"]
 # Every encoder: the lossless file writers and the AAC and Opus encoders.
 encode = ["lossless-encode", "aac-encode", "opus-encode"]
 # Encode WAV/BWF/RF64, AIFF/AIFF-C and FLAC files.
-lossless-encode = ["craft-media/bitstream"]
+lossless-encode = ["pcm-encode", "flac-encode"]
+# Encode WAV/BWF/RF64 and AIFF/AIFF-C files.
+pcm-encode = []
+# Encode FLAC files.
+flac-encode = ["craft-media/bitstream"]
 # Codec modules on their own, for packet-level use.
 aac-decode = ["craft-media/bitstream"]
 aac-encode = ["craft-media/bitstream"]

@@ -12,9 +12,10 @@
 //!   without symphonia.
 //! - [`TrackDecoder`] (feature `decode-native`): one track's packets from any demuxer to planar
 //!   `f32` in WAV channel order.
-//! - [`encode`], [`FileEncoder`], [`wav_float_header`] (feature `lossless-encode`): WAV/BWF/RF64,
-//!   AIFF/AIFF-C and FLAC, whole-buffer or incremental into any `Write + Seek`.
-//!   Feature `encode` turns on `lossless-encode`, `aac-encode` and `opus-encode`.
+//! - [`encode`], [`FileEncoder`]: WAV/BWF/RF64 and AIFF/AIFF-C (feature `pcm-encode`, which also
+//!   gives [`wav_float_header`]) and FLAC (feature `flac-encode`), whole-buffer or incremental into
+//!   any `Write + Seek`. Feature `lossless-encode` turns on both; feature `encode` turns on
+//!   `lossless-encode`, `aac-encode` and `opus-encode`.
 //! - [`peaks`] (feature `peaks`): min/max/RMS pyramid for waveform drawing.
 //! - Codec modules for packet-level use, each with its own features: [`aac`] (`aac-decode`,
 //!   `aac-encode`), [`mpa`] (`mpa-decode`), [`ac3`] (`ac3-decode`), [`opus`] (`opus-decode`, and
@@ -36,9 +37,9 @@ pub mod opus;
 pub mod peaks;
 #[cfg(feature = "decode-native")]
 mod read;
-#[cfg(any(feature = "decode-native", feature = "lossless-encode"))]
+#[cfg(any(feature = "decode-native", feature = "pcm-encode"))]
 mod wav;
-#[cfg(feature = "lossless-encode")]
+#[cfg(any(feature = "pcm-encode", feature = "flac-encode"))]
 mod write;
 
 pub use buffer::AudioBuffer;
@@ -49,8 +50,10 @@ pub use read::{
     DEFAULT_MAX_SAMPLES, DecodeOptions, Decoder, LOOKAHEAD_PACKETS, TrackDecoder, TrackInfo, decode, decode_with, detect_container, probe,
     probe_with, tracks, tracks_of,
 };
-#[cfg(feature = "lossless-encode")]
-pub use write::{ENCODE_EXTENSIONS, FileEncoder, encode, encode_format_for, encode_wav_rf64, encode_with_layout, wav_float_header};
+#[cfg(any(feature = "pcm-encode", feature = "flac-encode"))]
+pub use write::{ENCODE_EXTENSIONS, FileEncoder, encode, encode_format_for, encode_with_layout};
+#[cfg(feature = "pcm-encode")]
+pub use write::{encode_wav_rf64, wav_float_header};
 
 /// Errors from probing, decoding and encoding.
 #[non_exhaustive]
@@ -127,7 +130,8 @@ impl From<opus::encoder::Error> for AudioError {
     }
 }
 
-/// The file formats [`encode`] writes.
+/// The file formats [`encode`] writes. Each needs its feature: WAV and AIFF `pcm-encode`, FLAC
+/// `flac-encode`; asking for one that is not built returns [`AudioError::Unsupported`].
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]

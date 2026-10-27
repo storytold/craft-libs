@@ -283,7 +283,7 @@ impl<'a> Decoder<'a> {
 /// decoding the audio where the headers say enough.
 ///
 /// ```
-/// # #[cfg(feature = "lossless-encode")] {
+/// # #[cfg(feature = "pcm-encode")] {
 /// use craft_audio::{AudioBuffer, ChannelLayout, CodecId, Container, EncodeOptions, encode, probe};
 ///
 /// let wav = encode(&AudioBuffer::new(48_000, 2, 4800), &EncodeOptions::default()).unwrap();
@@ -320,7 +320,7 @@ pub fn probe_with(bytes: &[u8], ext_hint: Option<&str>, opts: &DecodeOptions) ->
 /// file instead, and [`decode_with`] for another track or size limit.
 ///
 /// ```
-/// # #[cfg(feature = "lossless-encode")] {
+/// # #[cfg(feature = "flac-encode")] {
 /// use craft_audio::{AudioBuffer, EncodeFormat, EncodeOptions, decode, encode};
 ///
 /// let tone: Vec<f32> = (0..4800).map(|i| (i as f32 * 0.05).sin() * 0.5).collect();

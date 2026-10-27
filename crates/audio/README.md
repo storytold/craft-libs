@@ -39,7 +39,7 @@ by [symphonia](https://github.com/pdeljanov/Symphonia), which is to be replaced 
 | Raw ADTS AAC, MP1/MP2, AC-3, E-AC-3 | native frame sync | — |
 | CAF | symphonia | — |
 
-`lossless-encode` writes WAV, AIFF and FLAC. The AAC and Opus encoders output packets; muxing them into
+`pcm-encode` writes WAV and AIFF, `flac-encode` writes FLAC, and `lossless-encode` turns on both. The AAC and Opus encoders output packets; muxing them into
 MP4 or Matroska is done with craft-media's muxers.
 
 ## Cargo features
@@ -53,7 +53,9 @@ No default features. The shared types (`AudioBuffer`, `AudioInfo`, `ChannelLayou
 | `decode-native` | the same, native formats only (others are `Unsupported`) | the four decoders below, craft-media `isobmff`/`matroska`/`ogg`, `log` |
 | `symphonia` | the fallback for formats with no native decoder | `decode-native`, symphonia |
 | `encode` | every encoder | `lossless-encode`, `aac-encode`, `opus-encode` |
-| `lossless-encode` | `encode`, `FileEncoder`, `wav_float_header` (WAV, AIFF, FLAC) | craft-media `bitstream` |
+| `lossless-encode` | WAV, AIFF and FLAC writing | `pcm-encode`, `flac-encode` |
+| `pcm-encode` | `encode`, `FileEncoder`, `encode_wav_rf64`, `wav_float_header` for WAV and AIFF | none |
+| `flac-encode` | `encode`, `FileEncoder` for FLAC | craft-media `bitstream` |
 | `aac-decode`, `aac-encode` | `aac::Decoder`, `aac::Encoder` | craft-media `bitstream` |
 | `opus-decode`, `opus-encode` | `opus::Decoder`/`StreamDecoder`, `opus::encoder::OpusEncoder` | none |
 | `mpa-decode`, `ac3-decode` | `mpa::Decoder`, `ac3::Decoder` | none / craft-media `bitstream` |
@@ -408,8 +410,9 @@ Changes from the app versions (what an app switching over adjusts):
   mask, and `probe` reports the layout instead of `wav_channel_mask`.
 - `AudioInfo`, `AudioError`, `SampleFormat`, `BitDepth` and the codec `Error` enums are
   `#[non_exhaustive]`.
-- Features are per codec. SoundCraft's `encode` (WAV, AIFF, FLAC) is now `lossless-encode`;
-  `encode` turns on every encoder, AAC and Opus included.
+- Features are per codec. SoundCraft's `encode` (WAV, AIFF, FLAC) is now `lossless-encode`, made of
+  `pcm-encode` (WAV, AIFF) and `flac-encode`; `encode` turns on every encoder, AAC and Opus
+  included. Writing a format whose feature is off returns `AudioError::Unsupported`.
 - `OpusEncoder::new`, `with_application`, `with_mode` and `encode_float` return `Result` instead
   of panicking on invalid channel count, mode/bandwidth or frame length.
 - `FileEncoder::write` takes any per-channel slices.

@@ -1,8 +1,9 @@
 //! PCM helpers shared by the WAV, AIFF and FLAC writers: quantization (with optional TPDF
 //! dither), interleaving and layout checks.
 
-use crate::{AudioBuffer, AudioError, BitDepth, Result};
-use std::io::Write;
+use crate::{AudioBuffer, AudioError, Result};
+#[cfg(feature = "pcm-encode")]
+use {crate::BitDepth, std::io::Write};
 
 /// Converts `f32` samples to integers of a given bit depth, clamping to [-1, 1] and optionally
 /// adding triangular (TPDF) dither of ±1 LSB.
@@ -47,6 +48,7 @@ impl Quantizer {
 }
 
 /// Bits per sample at `depth`, and whether they are float.
+#[cfg(feature = "pcm-encode")]
 pub(crate) fn sample_format(depth: BitDepth) -> (u16, bool) {
     match depth {
         BitDepth::Int16 => (16, false),
@@ -58,6 +60,7 @@ pub(crate) fn sample_format(depth: BitDepth) -> (u16, bool) {
 
 /// Interleaves `frames` frames of planar audio (missing samples are silence) as `bits`-bit
 /// samples and writes them to `out`, a few thousand frames at a time through `scratch`.
+#[cfg(feature = "pcm-encode")]
 pub(crate) fn write_interleaved<C: AsRef<[f32]>>(
     out: &mut impl Write,
     scratch: &mut Vec<u8>,
@@ -90,6 +93,7 @@ pub(crate) fn write_interleaved<C: AsRef<[f32]>>(
 }
 
 /// Preserve finite float samples, mapping NaN to 0 and infinities to their sign (±1).
+#[cfg(feature = "pcm-encode")]
 fn sanitize_float(x: f32) -> f32 {
     if x.is_finite() {
         x
