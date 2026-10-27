@@ -383,6 +383,7 @@ pub fn update(
         .ok_or_else(|| format!("{} {} has no {} for {}", app.name, release.version_label(), install.kind().label(), platform.label()))?;
     let asset = asset.clone();
     crate::install::bind_artifact_version(app, release, &asset)?;
+    crate::install::check_download_link(app, release, &asset)?;
     let mut job = Job { http, paths, stop, phase, install_locations: &Default::default(), replace: false };
     let file = install::download(release, &asset, &mut job)?;
     #[cfg(windows)]
@@ -2034,6 +2035,35 @@ mod tests {
         let running = Some("0.2.0-integration.20261029.f5b3f123");
         let result = update(&crate::suite::LAUNCHER, &install, &release, platform, &http, &paths, &stop, &mut phase, &last, running);
         assert!(result.unwrap_err().contains("is not newer than currently running version"));
+    }
+
+    /// storytold/craft-launcher#764: a self-update downloads only its own release's link. One into
+    /// another app's releases, with the right tag and name, is refused before anything is fetched.
+    #[test]
+    fn update_refuses_a_link_that_is_not_its_releases_own() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::under(dir.path());
+        let http = Http::new(crate::TEST_AGENT).unwrap();
+        let mut phase = |_| ();
+        let last = || Ok(());
+        let stop = Stop::default();
+        let name = "artcraft-launcher-0.3.0-linux-x86_64.AppImage";
+        let release = Release {
+            version: version::parse("0.3.0"),
+            tag: "v0.3.0".into(),
+            assets: vec![crate::release::Asset {
+                name: name.into(),
+                size: 1,
+                url: format!("https://github.com/storytold/photocraft/releases/download/v0.3.0/{name}"),
+                sha256: None,
+            }],
+            ..Release::default()
+        };
+        let install = Install::AppImage(dir.path().join("launcher.AppImage"));
+        use crate::{Arch, Os};
+        let platform = Platform { os: Os::Linux, arch: Arch::X64 };
+        let result = update(&crate::suite::LAUNCHER, &install, &release, platform, &http, &paths, &stop, &mut phase, &last, Some("0.2.0"));
+        assert!(result.unwrap_err().contains("isn't the one its release publishes"));
     }
 
     #[cfg(target_os = "linux")]
