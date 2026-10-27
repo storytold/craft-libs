@@ -276,6 +276,11 @@ fn detect(app: &App, exe: &Path) -> Option<Install> {
     if let Some(appimage) = std::env::var_os("APPIMAGE") {
         return Some(Install::AppImage(PathBuf::from(appimage)));
     }
+    match linux_location(app, exe) {
+        LinuxLocation::PackagePath => {}
+        LinuxLocation::System => return None,
+        LinuxLocation::Elsewhere => return exe.is_file().then(|| Install::Standalone(exe.to_path_buf())),
+    }
     let t = std::time::Duration::from_secs(10);
     if process::capture("dpkg-query", &["-W", "-f", "${db:Status-Status}", app.id], t).is_some_and(|s| s.trim() == "installed") {
         return Some(Install::Package(PackageKind::Deb, exe.to_path_buf()));
@@ -288,10 +293,34 @@ fn detect(app: &App, exe: &Path) -> Option<Install> {
     if crate::detect::linux::has_pacman_db() && process::capture("pacman", &["-Q", &app.bundle_id()], t).is_some() {
         return Some(Install::Package(PackageKind::ArchPkg, exe.to_path_buf()));
     }
-    if exe.is_file() {
-        return Some(Install::Standalone(exe.to_path_buf()));
-    }
     None
+}
+
+/// Where a Linux executable outside a Flatpak or AppImage runs from, for [`detect`].
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+#[derive(Debug, PartialEq, Eq)]
+enum LinuxLocation {
+    /// `/usr/bin/<id>`, where the release's deb, rpm and Arch packages put it. Only this path is
+    /// checked against the package databases: a copy elsewhere isn't the package's even when the
+    /// package is installed too.
+    PackagePath,
+    /// Anywhere else under a folder the system's package manager owns (`/usr`, `/opt`, `/bin`,
+    /// `/sbin`): a distribution or AUR package's copy, or one a system administrator put there.
+    /// It's theirs to update, and replacing it in place would write over a file pacman or dpkg owns.
+    System,
+    /// Anywhere else, such as a folder in the user's home: a standalone copy that replaces itself.
+    Elsewhere,
+}
+
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn linux_location(app: &App, exe: &Path) -> LinuxLocation {
+    if exe == Path::new("/usr/bin").join(app.id) {
+        LinuxLocation::PackagePath
+    } else if ["/usr", "/opt", "/bin", "/sbin"].iter().any(|dir| exe.starts_with(dir)) {
+        LinuxLocation::System
+    } else {
+        LinuxLocation::Elsewhere
+    }
 }
 
 /// Where this sandbox's Flatpak copy is installed, from `app-path` in `/.flatpak-info`.
@@ -2035,6 +2064,26 @@ mod tests {
         let running = Some("0.2.0-integration.20261029.f5b3f123");
         let result = update(&crate::suite::LAUNCHER, &install, &release, platform, &http, &paths, &stop, &mut phase, &last, running);
         assert!(result.unwrap_err().contains("is not newer than currently running version"));
+    }
+
+    /// Only `/usr/bin/<id>` is checked against the package databases, as before the launcher's
+    /// self-update moved here; another copy under a system folder (an AUR build, say) is left to
+    /// its package manager, and only a copy outside them replaces itself.
+    #[test]
+    fn only_the_packages_own_path_is_a_package_and_system_folders_are_left_alone() {
+        let app = &crate::suite::LAUNCHER;
+        assert_eq!(linux_location(app, Path::new("/usr/bin/artcraft-launcher")), LinuxLocation::PackagePath);
+        for system in [
+            "/usr/bin/artcraft-launcher-bin",
+            "/usr/local/bin/artcraft-launcher",
+            "/opt/artcraft-launcher/artcraft-launcher",
+            "/bin/artcraft-launcher",
+        ] {
+            assert_eq!(linux_location(app, Path::new(system)), LinuxLocation::System, "{system}");
+        }
+        for own in ["/home/me/bin/artcraft-launcher", "/home/me/.local/bin/artcraft-launcher", "/usrlocal/artcraft-launcher"] {
+            assert_eq!(linux_location(app, Path::new(own)), LinuxLocation::Elsewhere, "{own}");
+        }
     }
 
     /// storytold/craft-launcher#764: a self-update downloads only its own release's link. One into
