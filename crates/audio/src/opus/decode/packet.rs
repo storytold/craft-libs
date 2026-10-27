@@ -5,8 +5,11 @@ use crate::opus::decode::Error;
 /// Coding mode of an Opus frame.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mode {
+    /// SILK only (TOC configs 0-11).
     SilkOnly,
+    /// SILK and CELT (TOC configs 12-15).
     Hybrid,
+    /// CELT only (TOC configs 16-31).
     CeltOnly,
 }
 
@@ -27,15 +30,20 @@ impl Bandwidth {
 /// Decoded table-of-contents byte.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Toc {
+    /// Configuration number (0..=31, RFC 6716 Table 2).
     pub config: u8,
+    /// Coding mode, from `config`.
     pub mode: Mode,
+    /// Audio bandwidth, from `config`.
     pub bandwidth: Bandwidth,
+    /// Stereo flag (`s` bit).
     pub stereo: bool,
     /// Frame count code (0..=3).
     pub code: u8,
 }
 
 impl Toc {
+    /// Decode a TOC byte (RFC 6716 §3.1).
     pub fn parse(b: u8) -> Toc {
         let config = b >> 3;
         let (mode, bandwidth) = match config {
@@ -77,6 +85,7 @@ impl Toc {
         }
     }
 
+    /// Channels the frames are coded with: 2 when `stereo`, else 1.
     pub fn channels(&self) -> usize {
         if self.stereo { 2 } else { 1 }
     }
@@ -85,7 +94,9 @@ impl Toc {
 /// A parsed packet: TOC plus the byte ranges of each frame.
 #[derive(Clone, Debug)]
 pub struct Packet<'a> {
+    /// The packet's TOC byte.
     pub toc: Toc,
+    /// Compressed data of each frame.
     pub frames: Vec<&'a [u8]>,
     /// Bytes of padding (code 3 only).
     pub padding: usize,

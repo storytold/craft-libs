@@ -43,14 +43,17 @@ impl Decoder {
         Ok(Decoder { rate: sample_rate, streams, trim_pre_skip: false, skip_remaining: 0, scratch: vec![Vec::new(); head.streams], head })
     }
 
+    /// The `OpusHead` the decoder was created from.
     pub fn head(&self) -> &OpusHead {
         &self.head
     }
 
+    /// Output sampling rate in Hz.
     pub fn sample_rate(&self) -> u32 {
         self.rate
     }
 
+    /// Output channels (the header's channel count).
     pub fn channels(&self) -> usize {
         self.head.channels
     }
@@ -78,6 +81,7 @@ impl Decoder {
         self.streams.first().map_or(0, |s| s.final_range())
     }
 
+    /// Reset every stream's decoder state (e.g. after a seek) and restart pre-skip trimming.
     pub fn reset(&mut self) {
         for s in &mut self.streams {
             s.reset();

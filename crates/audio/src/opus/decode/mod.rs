@@ -20,9 +20,13 @@ pub use packet::{Mode, Packet, Toc};
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Error {
+    /// An argument is out of range (sampling rate, channel count, concealment length, output size).
     InvalidArgument(&'static str),
+    /// A malformed packet (RFC 6716 §3.4).
     InvalidPacket(&'static str),
+    /// A malformed `OpusHead` (RFC 7845 §5.1) or MP4 `dOps` box.
     InvalidHeader(&'static str),
+    /// A valid stream uses a feature this decoder does not implement.
     Unsupported(&'static str),
 }
 
@@ -39,4 +43,5 @@ impl std::fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
+/// Result with this module's [`Error`].
 pub type Result<T> = std::result::Result<T, Error>;

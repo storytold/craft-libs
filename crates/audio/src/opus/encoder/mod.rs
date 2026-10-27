@@ -77,7 +77,12 @@ pub enum Error {
     ModeBandwidth(Mode, Bandwidth),
     /// `encode_float` takes exactly `FRAME_SIZE * channels` samples.
     #[error("a frame is {expected} interleaved samples, not {got}")]
-    FrameLength { expected: usize, got: usize },
+    FrameLength {
+        /// Interleaved samples a frame takes (`FRAME_SIZE * channels`).
+        expected: usize,
+        /// Interleaved samples passed.
+        got: usize,
+    },
 }
 
 /// Intended use of the stream; selects the mode/bandwidth table.

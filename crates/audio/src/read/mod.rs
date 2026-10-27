@@ -134,11 +134,13 @@ impl Default for DecodeOptions {
 }
 
 impl DecodeOptions {
+    /// Decode the audio track at index `track` (see [`DecodeOptions::track`]).
     pub fn with_track(mut self, track: usize) -> DecodeOptions {
         self.track = Some(track);
         self
     }
 
+    /// Set [`DecodeOptions::max_samples`].
     pub fn with_max_samples(mut self, max_samples: u64) -> DecodeOptions {
         self.max_samples = max_samples;
         self

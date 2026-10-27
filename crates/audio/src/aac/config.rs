@@ -18,6 +18,7 @@ pub enum ElementType {
 }
 
 impl ElementType {
+    /// Channels the element carries: 2 for a CPE, 1 otherwise.
     pub fn channels(self) -> usize {
         if self == ElementType::Cpe { 2 } else { 1 }
     }
@@ -26,17 +27,25 @@ impl ElementType {
 /// A `program_config_element` (only the parts that affect channel mapping are interpreted).
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ProgramConfig {
+    /// `element_instance_tag` (4 bits).
     pub element_instance_tag: u8,
+    /// `object_type` (2 bits): the profile, audio object type minus 1.
     pub object_type: u8,
+    /// `sampling_frequency_index` (4 bits).
     pub sf_index: u8,
-    /// (is_cpe, tag) for front, side and back channel elements.
+    /// (is_cpe, tag) for each front channel element.
     pub front: Vec<(bool, u8)>,
+    /// (is_cpe, tag) for side channel elements.
     pub side: Vec<(bool, u8)>,
+    /// (is_cpe, tag) for back channel elements.
     pub back: Vec<(bool, u8)>,
+    /// Tags of the LFE channel elements.
     pub lfe: Vec<u8>,
+    /// Tags of the associated data elements.
     pub assoc_data: Vec<u8>,
     /// (is_ind_sw, tag)
     pub cc: Vec<(bool, u8)>,
+    /// Comment field bytes (at most 255 are written).
     pub comment: Vec<u8>,
 }
 
@@ -89,6 +98,7 @@ impl ProgramConfig {
         Ok(p)
     }
 
+    /// Serialise the element (no mixdown signalling; comment truncated to 255 bytes).
     pub fn write(&self, bw: &mut BitWriter) {
         bw.write_bits(self.element_instance_tag as u32, 4);
         bw.write_bits(self.object_type as u32, 2);
@@ -166,13 +176,17 @@ pub struct AudioSpecificConfig {
     pub sample_rate: u32,
     /// Index into the scalefactor-band tables (the signalled index, or derived from an explicit rate).
     pub sf_index: u8,
+    /// `channelConfiguration` (0 = channel layout from the program config element).
     pub channel_config: u8,
+    /// `frameLengthFlag`: 960-sample frames when set (refused by [`Self::parse`]).
     pub frame_length_flag: bool,
     /// Explicitly signalled SBR/PS (HE-AAC v1/v2); only the AAC-LC core is decoded.
     pub sbr: bool,
+    /// Explicitly signalled PS (audio object type 29, HE-AAC v2).
     pub ps: bool,
     /// Output (SBR) rate when `sbr` is set.
     pub extension_sample_rate: Option<u32>,
+    /// The program config element, present when `channel_config` is 0.
     pub pce: Option<ProgramConfig>,
 }
 
@@ -207,6 +221,8 @@ impl AudioSpecificConfig {
         }
     }
 
+    /// Parse an `AudioSpecificConfig` (§1.6.2.1). Only AAC-LC cores are accepted; explicit SBR/PS
+    /// signalling (audio object types 5 and 29) is recorded.
     pub fn parse(data: &[u8]) -> Result<AudioSpecificConfig> {
         let mut br = BitReader::new(data);
         let mut aot = read_aot(&mut br)?;
@@ -276,6 +292,7 @@ impl AudioSpecificConfig {
         }
     }
 
+    /// Total output channels of [`Self::layout`].
     pub fn channels(&self) -> usize {
         self.layout().iter().map(|e| e.0.channels()).sum()
     }
@@ -286,17 +303,22 @@ impl AudioSpecificConfig {
 pub struct AdtsHeader {
     /// Audio object type (`profile + 1`).
     pub object_type: u8,
+    /// `sampling_frequency_index` (4 bits).
     pub sf_index: u8,
+    /// `channel_configuration` (3 bits; 0 = program config element in the first frame).
     pub channel_config: u8,
     /// Whole frame length including the header.
     pub frame_length: usize,
+    /// `adts_buffer_fullness` (11 bits; 0x7FF signals variable bitrate).
     pub buffer_fullness: u16,
     /// Header length (7, or 9 with CRC).
     pub header_length: usize,
+    /// Raw data blocks in the frame (`number_of_raw_data_blocks_in_frame` + 1, so 1..=4).
     pub raw_data_blocks: u8,
 }
 
 impl AdtsHeader {
+    /// Parse the ADTS fixed and variable header at the start of `data` (§1.A.2.2).
     pub fn parse(data: &[u8]) -> Result<AdtsHeader> {
         let mut br = BitReader::new(data);
         if br.read_bits(12)? != 0xFFF {

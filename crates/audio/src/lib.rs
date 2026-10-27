@@ -1,4 +1,5 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
+#![warn(missing_docs)]
 //! Audio file I/O and codecs for the Craft apps. Input and output are byte slices or a
 //! [`craft_media::ByteSource`] (no filesystem access of its own); builds for
 //! `wasm32-unknown-unknown`.
@@ -154,11 +155,17 @@ impl EncodeFormat {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum SampleFormat {
+    /// Integer PCM, 1-8 bits.
     Int8,
+    /// Integer PCM, 9-16 bits.
     Int16,
+    /// Integer PCM, 17-24 bits.
     Int24,
+    /// Integer PCM, 25-32 bits.
     Int32,
+    /// 32-bit IEEE float.
     Float32,
+    /// 64-bit IEEE float.
     Float64,
     /// A lossy codec (MP3, AAC, Vorbis, ...): no fixed bit depth.
     Compressed,
@@ -168,8 +175,11 @@ pub enum SampleFormat {
 #[derive(Debug, Clone, Default, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct BwfInfo {
+    /// `Description` (up to 256 bytes).
     pub description: String,
+    /// `Originator` (up to 32 bytes).
     pub originator: String,
+    /// `OriginatorReference` (up to 32 bytes).
     pub originator_reference: String,
     /// `yyyy-mm-dd`.
     pub origination_date: String,
@@ -190,15 +200,18 @@ pub struct AudioInfo {
     pub container: Container,
     /// The codec of the audio track ([`CodecId::Pcm`] for uncompressed audio).
     pub codec: CodecId,
+    /// The stored sample representation.
     pub sample_format: SampleFormat,
     /// The decoded sample rate (for HE-AAC, the rate after spectral band replication).
     pub sample_rate: u32,
+    /// Decoded channel count.
     pub channels: u16,
     /// Which speaker each decoded channel feeds. Decoded audio is in WAV channel order when the
     /// layout is ordered.
     pub layout: ChannelLayout,
     /// Length in frames (samples per channel), after container trimming.
     pub frames: u64,
+    /// Broadcast Wave metadata from a WAV `bext` chunk.
     pub bwf: Option<BwfInfo>,
 }
 
@@ -228,8 +241,11 @@ impl AudioInfo {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum BitDepth {
+    /// 16-bit integer.
     Int16,
+    /// 24-bit integer.
     Int24,
+    /// 32-bit integer.
     Int32,
     /// Preserve finite samples, including values above full scale; map NaN to 0 and infinities to ±1.
     Float32,
@@ -239,7 +255,9 @@ pub enum BitDepth {
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct EncodeOptions {
+    /// Output file format.
     pub format: EncodeFormat,
+    /// Sample depth to write.
     pub bit_depth: BitDepth,
     /// Add TPDF dither when quantizing to an integer depth.
     pub dither: bool,

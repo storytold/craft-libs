@@ -11,23 +11,41 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Speaker {
+    /// Front left (`SPEAKER_FRONT_LEFT`, 0x1).
     FrontLeft,
+    /// Front right (`SPEAKER_FRONT_RIGHT`, 0x2).
     FrontRight,
+    /// Front centre (`SPEAKER_FRONT_CENTER`, 0x4).
     FrontCenter,
+    /// Low-frequency effects (`SPEAKER_LOW_FREQUENCY`, 0x8).
     Lfe,
+    /// Back left (`SPEAKER_BACK_LEFT`, 0x10).
     BackLeft,
+    /// Back right (`SPEAKER_BACK_RIGHT`, 0x20).
     BackRight,
+    /// Front left of centre (`SPEAKER_FRONT_LEFT_OF_CENTER`, 0x40).
     FrontLeftOfCenter,
+    /// Front right of centre (`SPEAKER_FRONT_RIGHT_OF_CENTER`, 0x80).
     FrontRightOfCenter,
+    /// Back centre (`SPEAKER_BACK_CENTER`, 0x100).
     BackCenter,
+    /// Side left (`SPEAKER_SIDE_LEFT`, 0x200).
     SideLeft,
+    /// Side right (`SPEAKER_SIDE_RIGHT`, 0x400).
     SideRight,
+    /// Top centre (`SPEAKER_TOP_CENTER`, 0x800).
     TopCenter,
+    /// Top front left (`SPEAKER_TOP_FRONT_LEFT`, 0x1000).
     TopFrontLeft,
+    /// Top front centre (`SPEAKER_TOP_FRONT_CENTER`, 0x2000).
     TopFrontCenter,
+    /// Top front right (`SPEAKER_TOP_FRONT_RIGHT`, 0x4000).
     TopFrontRight,
+    /// Top back left (`SPEAKER_TOP_BACK_LEFT`, 0x8000).
     TopBackLeft,
+    /// Top back centre (`SPEAKER_TOP_BACK_CENTER`, 0x10000).
     TopBackCenter,
+    /// Top back right (`SPEAKER_TOP_BACK_RIGHT`, 0x20000).
     TopBackRight,
 }
 
@@ -98,7 +116,9 @@ pub struct ChannelLayout {
 }
 
 impl ChannelLayout {
+    /// C.
     pub const MONO: ChannelLayout = ChannelLayout { channels: 1, mask: 0x4 };
+    /// L R.
     pub const STEREO: ChannelLayout = ChannelLayout { channels: 2, mask: 0x3 };
     /// L R C.
     pub const SURROUND_3_0: ChannelLayout = ChannelLayout { channels: 3, mask: 0x7 };

@@ -24,17 +24,22 @@ mod tables;
 use craft_media::bitstream::BitReader;
 use tables::AllocTable;
 
+/// Errors from header parsing and decoding.
 #[non_exhaustive]
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum Error {
+    /// The data does not start with a frame sync word.
     #[error("not an MPEG audio frame")]
     NoSync,
+    /// A valid stream uses a feature this decoder does not implement (Layer III, free format).
     #[error("unsupported MPEG audio: {0}")]
     Unsupported(&'static str),
+    /// Reserved or forbidden header values, or a truncated or inconsistent frame.
     #[error("invalid MPEG audio frame: {0}")]
     Invalid(&'static str),
 }
 
+/// Result with this module's [`Error`].
 pub type Result<T> = std::result::Result<T, Error>;
 
 /// MPEG audio version (`ID` bit, and the MPEG-2.5 extension of the sync word).
@@ -51,17 +56,20 @@ pub enum Version {
 /// Channel mode (`mode`, §2.4.2.3).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mode {
+    /// Two channels coded independently.
     Stereo,
     /// Intensity stereo above the bound given by `mode_extension` (Layers I and II).
     JointStereo,
     /// Two independent mono channels.
     DualChannel,
+    /// One channel.
     Mono,
 }
 
 /// The 32-bit frame header (§2.4.1.3, §2.4.2.3).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Header {
+    /// MPEG version.
     pub version: Version,
     /// 1, 2 or 3.
     pub layer: u8,
@@ -69,9 +77,13 @@ pub struct Header {
     pub crc: bool,
     /// 0 for the free format.
     pub bitrate_kbps: u32,
+    /// Sampling rate in Hz.
     pub sample_rate: u32,
+    /// `padding_bit`: the frame has one extra slot.
     pub padding: bool,
+    /// Channel mode.
     pub mode: Mode,
+    /// `mode_extension` (0-3); in joint stereo it selects the intensity stereo bound.
     pub mode_extension: u8,
     /// Bytes in the frame, header included (0 for the free format).
     pub frame_bytes: usize,
@@ -162,6 +174,7 @@ pub fn parse_header(b: &[u8]) -> Result<Header> {
 /// One decoded frame.
 #[derive(Clone, Debug)]
 pub struct Frame {
+    /// The frame's header.
     pub header: Header,
     /// Planar samples, [`Header::channels`] × [`Header::samples`].
     pub channels: Vec<Vec<f32>>,
@@ -185,6 +198,7 @@ impl Default for Decoder {
 }
 
 impl Decoder {
+    /// A decoder with empty synthesis filter state.
     pub fn new() -> Self {
         Self { v: [[0.0; 1024]; 2], sb: Box::new([[[0.0; 32]; 36]; 2]) }
     }

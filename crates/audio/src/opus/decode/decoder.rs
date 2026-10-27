@@ -55,10 +55,12 @@ impl StreamDecoder {
         })
     }
 
+    /// Output sampling rate in Hz.
     pub fn sample_rate(&self) -> u32 {
         self.rate
     }
 
+    /// Output channels (1 or 2).
     pub fn channels(&self) -> usize {
         self.channels
     }

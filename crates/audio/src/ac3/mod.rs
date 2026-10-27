@@ -29,17 +29,23 @@ mod tables;
 
 use std::sync::OnceLock;
 
+/// Errors from header parsing and decoding.
 #[non_exhaustive]
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum Error {
+    /// The data does not start with the syncword 0x0B77.
     #[error("not an AC-3 frame")]
     NoSync,
+    /// A valid stream uses a feature this decoder does not implement (bsid above 16, E-AC-3
+    /// adaptive hybrid transform, enhanced coupling, reserved stream type).
     #[error("unsupported AC-3: {0}")]
     Unsupported(String),
+    /// Reserved, out-of-range or truncated syncframe data.
     #[error("invalid AC-3 frame: {0}")]
     Invalid(&'static str),
 }
 
+/// Result with this module's [`Error`].
 pub type Result<T> = std::result::Result<T, Error>;
 
 /// Data rate in kb/s by frmsizecod / 2 (Table 5.18).
@@ -51,12 +57,18 @@ const NFCHANS: [usize; 8] = [2, 1, 2, 3, 3, 4, 4, 5];
 /// syncinfo and the start of bsi.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Header {
+    /// Sampling rate in Hz (`fscod`, or `fscod2` for E-AC-3 reduced rates).
     pub sample_rate: u32,
+    /// Data rate in kb/s: from `frmsizecod` (Table 5.18) for AC-3, computed from the frame size for
+    /// E-AC-3.
     pub bitrate_kbps: u32,
     /// Bytes in the syncframe.
     pub frame_bytes: usize,
+    /// Bit stream identification (`bsid`): up to 10 for AC-3, 11-16 for E-AC-3.
     pub bsid: u8,
+    /// Audio coding mode (`acmod`, Table 5.8), 0-7.
     pub acmod: u8,
+    /// LFE channel present (`lfeon`).
     pub lfeon: bool,
     /// Audio blocks (of 256 samples per channel) in the syncframe: 6 for AC-3; 1, 2, 3 or 6 for
     /// E-AC-3.
@@ -687,11 +699,14 @@ impl Default for Decoder {
 /// order. No channels for an E-AC-3 syncframe that is not [`Header::is_primary`].
 #[derive(Clone, Debug)]
 pub struct Decoded {
+    /// The syncframe's header.
     pub header: Header,
+    /// Planar samples, one `Vec` per output channel.
     pub channels: Vec<Vec<f32>>,
 }
 
 impl Decoder {
+    /// A decoder with empty overlap state.
     pub fn new() -> Decoder {
         Decoder { delay: [[0.0; 256]; 6], dither: 0, seed: 0x1234_5678, carry: None }
     }

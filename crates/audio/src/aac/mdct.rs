@@ -146,15 +146,19 @@ pub fn mdct_short() -> &'static Mdct {
 /// Window shape (`window_shape` bit): 0 = sine, 1 = Kaiser–Bessel derived.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum WindowShape {
+    /// Sine window (`window_shape` 0).
     #[default]
     Sine,
+    /// Kaiser–Bessel derived window (`window_shape` 1).
     Kbd,
 }
 
 impl WindowShape {
+    /// The shape signalled by a `window_shape` bit.
     pub fn from_bit(b: bool) -> Self {
         if b { WindowShape::Kbd } else { WindowShape::Sine }
     }
+    /// The `window_shape` bit for this shape.
     pub fn bit(self) -> u32 {
         (self == WindowShape::Kbd) as u32
     }

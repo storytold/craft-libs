@@ -67,12 +67,16 @@ pub const FRAME_LEN: usize = 1024;
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum Error {
+    /// The configuration is malformed or outside the supported range.
     #[error("invalid configuration: {0}")]
     InvalidConfig(&'static str),
+    /// A valid stream uses a feature this crate does not implement.
     #[error("unsupported feature: {0}")]
     Unsupported(&'static str),
+    /// Malformed bitstream data.
     #[error("invalid bitstream: {0}")]
     Bitstream(&'static str),
+    /// The bit reader ran past the end of the data.
     #[error("unexpected end of access unit")]
     Eof,
 }
@@ -83,6 +87,7 @@ impl From<craft_media::bitstream::BitError> for Error {
     }
 }
 
+/// Result with this module's [`Error`].
 pub type Result<T> = std::result::Result<T, Error>;
 
 /// Channel order for AAC surround (ISO/IEC 14496-3 Table 1.19, the decoder's element order: C, L R,
@@ -168,6 +173,7 @@ pub struct Upsample2x {
 
 #[cfg(feature = "aac-decode")]
 impl Upsample2x {
+    /// An upsampler for `channels` channels with empty history.
     pub fn new(channels: usize) -> Self {
         let m = UPSAMPLE_HALF as f64;
         let mut taps = [0f32; 2 * UPSAMPLE_HALF];
@@ -186,12 +192,14 @@ impl Upsample2x {
         Self { taps, hist: vec![vec![0.0; 2 * UPSAMPLE_HALF]; channels] }
     }
 
+    /// Clear the history (e.g. after a seek).
     pub fn reset(&mut self) {
         for h in &mut self.hist {
             h.fill(0.0);
         }
     }
 
+    /// Upsample planar channels by two: each output channel has twice the input samples.
     pub fn process(&mut self, input: Vec<Vec<f32>>) -> Vec<Vec<f32>> {
         if self.hist.len() < input.len() {
             self.hist.resize(input.len(), vec![0.0; 2 * UPSAMPLE_HALF]);

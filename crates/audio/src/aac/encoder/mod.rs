@@ -45,6 +45,7 @@ pub struct EncoderConfig {
     /// C L R Ls Rs LFE; (7) C L R Ls Rs Cs LFE; (8) C Lc Rc L R Ls Rs LFE. Audio in WAV order is
     /// reordered with [`crate::aac::aac_order`].
     pub channels: usize,
+    /// Rate control mode.
     pub mode: BitrateMode,
     /// Audio bandwidth in Hz (`None` = chosen from the bitrate / quality).
     pub bandwidth: Option<u32>,
@@ -52,12 +53,15 @@ pub struct EncoderConfig {
     pub tns: bool,
     /// Per-band mid/side stereo for channel pairs.
     pub ms_stereo: bool,
+    /// Window shape for every frame (`window_shape` bit).
     pub window_shape: WindowShape,
     /// Prefix every access unit with an ADTS header.
     pub adts: bool,
 }
 
 impl EncoderConfig {
+    /// Constant-bitrate settings at `bitrate_bps` bits per second, with TNS and M/S stereo on, sine
+    /// window, automatic bandwidth and no ADTS.
     pub fn cbr(sample_rate: u32, channels: usize, bitrate_bps: u32) -> EncoderConfig {
         EncoderConfig {
             sample_rate,
@@ -70,6 +74,7 @@ impl EncoderConfig {
             adts: false,
         }
     }
+    /// Constant-quality settings (`quality` as in [`BitrateMode::Vbr`]); otherwise as [`Self::cbr`].
     pub fn vbr(sample_rate: u32, channels: usize, quality: f32) -> EncoderConfig {
         EncoderConfig { mode: BitrateMode::Vbr(quality), ..Self::cbr(sample_rate, channels, 0) }
     }
@@ -78,13 +83,17 @@ impl EncoderConfig {
 /// Running statistics.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct EncoderStats {
+    /// Access units produced.
     pub frames: u64,
     /// Raw access-unit bytes (without ADTS headers).
     pub bytes: u64,
     /// Element-frames coded with eight short windows.
     pub short_blocks: u64,
+    /// Scalefactor bands coded as mid/side.
     pub ms_bands: u64,
+    /// Scalefactor bands of channel pairs considered for mid/side coding.
     pub stereo_bands: u64,
+    /// TNS filters applied.
     pub tns_filters: u64,
     /// Bits spent on fill elements (CBR padding).
     pub fill_bits: u64,
@@ -141,6 +150,8 @@ pub struct Encoder {
 }
 
 impl Encoder {
+    /// Create an encoder. Fails if the sampling rate is not an AAC rate, `channels` is outside
+    /// 1..=8, or the CBR bitrate is out of range for the channel count and rate.
     pub fn new(cfg: EncoderConfig) -> Result<Encoder> {
         let sf_index =
             sample_rate_index(cfg.sample_rate).ok_or(Error::InvalidConfig("sample rate must be one of the 13 AAC rates (7350–96000 Hz)"))?;
@@ -235,6 +246,7 @@ impl Encoder {
         })
     }
 
+    /// The settings the encoder was created with.
     pub fn config(&self) -> &EncoderConfig {
         &self.cfg
     }
@@ -255,6 +267,7 @@ impl Encoder {
         self.bandwidth
     }
 
+    /// Statistics so far.
     pub fn stats(&self) -> EncoderStats {
         self.stats
     }

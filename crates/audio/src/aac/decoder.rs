@@ -65,6 +65,7 @@ impl Decoder {
         Self::from_config(header.to_asc())
     }
 
+    /// Create a decoder from a parsed `AudioSpecificConfig`. Only audio object type 2 (AAC LC) is accepted.
     pub fn from_config(asc: AudioSpecificConfig) -> Result<Decoder> {
         if asc.object_type != 2 {
             return Err(Error::Unsupported("audio object type other than AAC LC"));
@@ -90,9 +91,11 @@ impl Decoder {
         self.channels = vec![ChannelState { overlap: vec![0.0; 1024], prev_shape: WindowShape::Sine }; n];
     }
 
+    /// The `AudioSpecificConfig` the decoder was created with.
     pub fn config(&self) -> &AudioSpecificConfig {
         &self.asc
     }
+    /// Output sampling rate in Hz: the AAC-LC core rate.
     pub fn sample_rate(&self) -> u32 {
         self.asc.sample_rate
     }
@@ -102,6 +105,7 @@ impl Decoder {
     pub fn sbr(&self) -> bool {
         self.asc.sbr || self.sbr_seen
     }
+    /// Output channels of the current element layout.
     pub fn channels(&self) -> usize {
         self.channels.len()
     }
