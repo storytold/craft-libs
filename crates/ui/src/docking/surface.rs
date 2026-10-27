@@ -1053,7 +1053,7 @@ impl<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> DockArea<'a, P> {
             locked: false,
             maximized: None,
             hide: HidePanels::None,
-            auto_collapse: true,
+            auto_collapse: false,
             float_bounds: None,
             monitors: Vec::new(),
             input_blocked: false,
@@ -1126,7 +1126,7 @@ impl<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> DockArea<'a, P> {
         self
     }
 
-    /// [D] Auto-Collapse Iconic Panels (default on): a flyout closes on Escape or a press
+    /// [D] Auto-Collapse Iconic Panels (default off): a flyout closes on Escape or a press
     /// outside it. Off, it stays open until its icon or another icon is clicked.
     pub fn auto_collapse_iconic(mut self, on: bool) -> Self {
         self.auto_collapse = on;
