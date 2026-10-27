@@ -3,7 +3,7 @@
 Media containers and bit-level I/O for the Craft apps: an MSB-first bit reader and writer,
 clean-room ISO BMFF (MP4), QuickTime (MOV) and Matroska (MKV, WebM) demuxers and muxers, and an Ogg
 demuxer, written from the public specifications. No `unsafe`, no panics on malformed input, builds
-for `wasm32-unknown-unknown`. Only dependency: `thiserror` (for `isobmff`).
+for `wasm32-unknown-unknown`. Dependencies: `thiserror` (for `isobmff`), `serde` (optional).
 
 Codecs are in separate crates that depend on this one: [`craft-audio`](../audio/README.md) for
 audio; video codecs will be a later crate. What both need lives here: the containers, the bit I/O,
@@ -112,8 +112,10 @@ Other differences:
 - `isobmff::ByteSource`, `matroska::ByteSource` and `ogg::ByteSource` are one trait,
   `craft_media::ByteSource` (with `ReadSeekSource`, which was Matroska's). A type FilmCraft
   implements both traits for keeps one of its two impls.
-- `isobmff::Track`, `matroska::Track` and `ogg::Stream` have `codec_params()`;
+- `isobmff::Track`, `matroska::Track` and `ogg::Stream` have `codec_params()`, all returning a
+  `CodecParams` (`CodecId::Unknown` for a codec without an identifier);
   `isobmff::CodecConfig` has `codec_id()` and `extradata()`, and `OpusConfig::opus_head()`.
+- `ogg::Codec` and `ogg::Error`, and the `ogg` structs, are `#[non_exhaustive]`.
 
 ## `bitstream`
 
@@ -410,14 +412,18 @@ Always built, with no dependencies, so codec crates share them:
 
 - `Container`: the file format (`Wav`, `Aiff`, `Flac`, `Mp4`, `QuickTime`, `Matroska`, `WebM`,
   `Ogg`, `Caf`, `Adts`, `MpegAudio`, `Ac3`), with `name()`.
-- `CodecId`: audio and video codecs (`Aac`, `HeAac`, `Opus`, `Eac3`, …, `H264`, `Hevc`, `Av1`,
-  …, `Unknown`), with `name()`, `is_audio()`, `is_video()`.
-- `CodecParams`: what a decoder needs about a track, whatever its container: `codec`, `extradata`,
-  `sample_rate`, `channels`, `pcm` (`PcmFormat`). Built with `CodecParams::new(codec)` and the
-  `with_*` methods, or by the demuxers' `codec_params()`. `extradata` follows Matroska's
-  `CodecPrivate`, as ffmpeg's extradata does: the `AudioSpecificConfig` for AAC, the `OpusHead`
-  for Opus (MP4's `dOps` is converted), Xiph-laced headers for Vorbis (`xiph_lace`), `fLaC` +
-  metadata blocks for FLAC, the `avcC`/`hvcC`/`av1C` record for video.
+- `CodecId`: audio and video codecs (`Aac`, `HeAac`, `Opus`, `Eac3`, `Speex`, …, `H264`, `Hevc`,
+  `Av1`, `ProRes`, `Dnxhd`, `Apv`, `Theora`, …, `Unknown`), with `name()`, `is_audio()`,
+  `is_video()`.
+- `CodecParams`: what a decoder needs about a track, whatever its container: `codec`,
+  `extradata`, `tag` (the container's four-character code, such as a ProRes profile), the audio
+  fields `sample_rate`, `channels` and `pcm` (`PcmFormat`), and the video fields `width` and
+  `height`. Built with `CodecParams::new(codec)` and the `with_*` methods, or by the demuxers'
+  `codec_params()`, which every container returns in the same form. `extradata` follows
+  Matroska's `CodecPrivate`, as ffmpeg's extradata does: the `AudioSpecificConfig` for AAC, the
+  `OpusHead` for Opus (MP4's `dOps` is converted), Xiph-laced headers for Vorbis (`xiph_lace`,
+  `None` for more than 256 packets), `fLaC` + metadata blocks for FLAC, the
+  `avcC`/`hvcC`/`av1C`/`apvC` record for video.
 
 All are `#[non_exhaustive]`: new formats and fields are minor changes.
 
@@ -426,7 +432,7 @@ All are `#[non_exhaustive]`: new formats and fields are minor changes.
 `craft_media::ByteSource` (`len`, `read_at(offset, buf)`) is what every demuxer reads from;
 `isobmff::ByteSource`, `matroska::ByteSource` and `ogg::ByteSource` are the same trait. It is
 implemented for `[u8]`, `Vec<u8>`, `&T`, `Arc<T>`, `Box<T>` and `std::fs::File` (not on wasm), and
-`ReadSeekSource` adapts any `Read + Seek`. Implement it once for a custom source (a web `Blob`, a
+`ReadSeekSource` adapts any `Read + Seek` (it is `Send + Sync` when the reader is `Send`). Implement it once for a custom source (a web `Blob`, a
 network range reader) to use every container with it.
 
 ## Tests
