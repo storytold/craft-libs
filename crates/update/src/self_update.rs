@@ -304,9 +304,10 @@ enum LinuxLocation {
     /// checked against the package databases: a copy elsewhere isn't the package's even when the
     /// package is installed too.
     PackagePath,
-    /// Anywhere else under a folder the system's package manager owns (`/usr`, `/opt`, `/bin`,
-    /// `/sbin`): a distribution or AUR package's copy, or one a system administrator put there.
-    /// It's theirs to update, and replacing it in place would write over a file pacman or dpkg owns.
+    /// Anywhere else under a folder a package manager owns (`/usr` but not `/usr/local`, `/opt`,
+    /// `/bin`, `/sbin`, `/nix`, `/snap`): a distribution, AUR, Nix or Snap copy. It's theirs to
+    /// update, and replacing it in place would write over a file the package manager owns (or
+    /// fail on a read-only store).
     System,
     /// Anywhere else, such as a folder in the user's home: a standalone copy that replaces itself.
     Elsewhere,
@@ -316,7 +317,7 @@ enum LinuxLocation {
 fn linux_location(app: &App, exe: &Path) -> LinuxLocation {
     if exe == Path::new("/usr/bin").join(app.id) {
         LinuxLocation::PackagePath
-    } else if ["/usr", "/opt", "/bin", "/sbin"].iter().any(|dir| exe.starts_with(dir)) {
+    } else if !exe.starts_with("/usr/local") && ["/usr", "/opt", "/bin", "/sbin", "/nix", "/snap"].iter().any(|dir| exe.starts_with(dir)) {
         LinuxLocation::System
     } else {
         LinuxLocation::Elsewhere
@@ -2068,20 +2069,26 @@ mod tests {
 
     /// Only `/usr/bin/<id>` is checked against the package databases, as before the launcher's
     /// self-update moved here; another copy under a system folder (an AUR build, say) is left to
-    /// its package manager, and only a copy outside them replaces itself.
+    /// its package manager, and only a copy outside them (`/usr/local` included, which no package
+    /// manager owns) replaces itself.
     #[test]
     fn only_the_packages_own_path_is_a_package_and_system_folders_are_left_alone() {
         let app = &crate::suite::LAUNCHER;
         assert_eq!(linux_location(app, Path::new("/usr/bin/artcraft-launcher")), LinuxLocation::PackagePath);
         for system in [
             "/usr/bin/artcraft-launcher-bin",
-            "/usr/local/bin/artcraft-launcher",
+            "/nix/store/abc-artcraft-launcher/bin/artcraft-launcher",
             "/opt/artcraft-launcher/artcraft-launcher",
             "/bin/artcraft-launcher",
         ] {
             assert_eq!(linux_location(app, Path::new(system)), LinuxLocation::System, "{system}");
         }
-        for own in ["/home/me/bin/artcraft-launcher", "/home/me/.local/bin/artcraft-launcher", "/usrlocal/artcraft-launcher"] {
+        for own in [
+            "/usr/local/bin/artcraft-launcher",
+            "/home/me/bin/artcraft-launcher",
+            "/home/me/.local/bin/artcraft-launcher",
+            "/usrlocal/artcraft-launcher",
+        ] {
             assert_eq!(linux_location(app, Path::new(own)), LinuxLocation::Elsewhere, "{own}");
         }
     }

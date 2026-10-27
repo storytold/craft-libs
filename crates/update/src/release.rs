@@ -261,7 +261,8 @@ pub fn release_from_sums(repo: &str, tag: &str, sums: &[(String, String)]) -> Re
 /// The tag in a `https://github.com/<repo>/releases/tag/<tag>` redirect target.
 pub fn tag_from_redirect(location: &str, repo: &str) -> Option<String> {
     let rest = location.strip_prefix(&format!("https://github.com/{repo}/releases/tag/"))?;
-    (!rest.is_empty() && rest.len() <= 64 && rest.bytes().all(|b| b.is_ascii_alphanumeric() || b"._-+".contains(&b))).then(|| rest.to_string())
+    (!rest.is_empty() && rest != "." && rest != ".." && rest.len() <= 64 && rest.bytes().all(|b| b.is_ascii_alphanumeric() || b"._-+".contains(&b)))
+        .then(|| rest.to_string())
 }
 
 /// Reads `sha256sum` output: `<hex>  <name>` (or `<hex> *<name>`) per line, one entry per name.
@@ -484,6 +485,9 @@ mod tests {
         assert_eq!(tag_from_redirect("https://github.com/storytold/photocraft/releases/tag/v0.5.0", REPO).as_deref(), Some("v0.5.0"));
         assert_eq!(tag_from_redirect("https://github.com/storytold/photocraft/releases", REPO), None);
         assert_eq!(tag_from_redirect("https://evil/storytold/photocraft/releases/tag/v1", REPO), None);
+        for dots in [".", ".."] {
+            assert_eq!(tag_from_redirect(&format!("https://github.com/storytold/photocraft/releases/tag/{dots}"), REPO), None);
+        }
         let r = release_from_sums(REPO, "v0.5.0", &sums);
         assert_eq!(r.assets[0].url, "https://github.com/storytold/photocraft/releases/download/v0.5.0/photocraft-0.5.0-macos-universal.dmg");
         assert_eq!(r.version, Some(Version::new(0, 5, 0)));
