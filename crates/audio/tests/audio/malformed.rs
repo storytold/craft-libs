@@ -1,9 +1,11 @@
 //! Hostile inputs must produce `Err` (or a best-effort `Ok`), never a panic.
 
-use craft_audio::{AudioBuffer, AudioError, BitDepth, EncodeOptions, FileFormat, SampleFormat, decode, detect_format, encode, probe};
+use craft_audio::{
+    AudioBuffer, AudioError, BitDepth, CodecId, Container, EncodeFormat, EncodeOptions, SampleFormat, decode, detect_container, encode, probe,
+};
 use proptest::prelude::*;
 
-fn small(format: FileFormat, depth: BitDepth, channels: usize) -> Vec<u8> {
+fn small(format: EncodeFormat, depth: BitDepth, channels: usize) -> Vec<u8> {
     let mut b = AudioBuffer::new(44_100, channels, 300);
     for ch in &mut b.channels {
         for (i, s) in ch.iter_mut().enumerate() {
@@ -56,12 +58,12 @@ fn fmt(tag: u16, channels: u16, sr: u32, bits: u16) -> Vec<u8> {
 #[test]
 fn every_truncation_is_handled() {
     let files = [
-        small(FileFormat::Wav, BitDepth::Int16, 2),
-        small(FileFormat::Wav, BitDepth::Float32, 6),
-        small(FileFormat::Aiff, BitDepth::Int24, 1),
-        small(FileFormat::Aiff, BitDepth::Float32, 2),
-        small(FileFormat::Flac, BitDepth::Int16, 2),
-        small(FileFormat::Flac, BitDepth::Int24, 1),
+        small(EncodeFormat::Wav, BitDepth::Int16, 2),
+        small(EncodeFormat::Wav, BitDepth::Float32, 6),
+        small(EncodeFormat::Aiff, BitDepth::Int24, 1),
+        small(EncodeFormat::Aiff, BitDepth::Float32, 2),
+        small(EncodeFormat::Flac, BitDepth::Int16, 2),
+        small(EncodeFormat::Flac, BitDepth::Int24, 1),
     ];
     for file in &files {
         for n in 0..file.len() {
@@ -77,7 +79,7 @@ fn every_truncation_is_handled() {
 
 #[test]
 fn truncated_data_chunk_yields_partial_audio() {
-    let file = small(FileFormat::Wav, BitDepth::Int16, 2);
+    let file = small(EncodeFormat::Wav, BitDepth::Int16, 2);
     let (info, buf) = decode(&file[..file.len() - 400], None).unwrap();
     assert_eq!(info.frames, 200);
     assert_eq!(buf.frames(), 200);
@@ -85,7 +87,8 @@ fn truncated_data_chunk_yields_partial_audio() {
 
 #[test]
 fn every_single_byte_corruption_is_handled() {
-    for file in [small(FileFormat::Wav, BitDepth::Int24, 2), small(FileFormat::Aiff, BitDepth::Int16, 2), small(FileFormat::Flac, BitDepth::Int16, 1)]
+    for file in
+        [small(EncodeFormat::Wav, BitDepth::Int24, 2), small(EncodeFormat::Aiff, BitDepth::Int16, 2), small(EncodeFormat::Flac, BitDepth::Int16, 1)]
     {
         for i in 0..file.len().min(200) {
             for v in [0x00, 0xFF, 0x7F, 0x80] {
@@ -103,7 +106,7 @@ fn zero_channels_is_malformed() {
     let wav = riff(&[(b"fmt ", fmt(1, 0, 44_100, 16)), (b"data", vec![0; 16])]);
     assert!(matches!(decode(&wav, None), Err(AudioError::Malformed(_))));
     assert!(probe(&wav, None).is_err());
-    let mut aiff = small(FileFormat::Aiff, BitDepth::Int16, 1);
+    let mut aiff = small(EncodeFormat::Aiff, BitDepth::Int16, 1);
     let comm = aiff.windows(4).position(|w| w == b"COMM").unwrap();
     aiff[comm + 8] = 0;
     aiff[comm + 9] = 0;
@@ -114,7 +117,7 @@ fn zero_channels_is_malformed() {
 fn zero_sample_rate_is_malformed() {
     let wav = riff(&[(b"fmt ", fmt(1, 2, 0, 16)), (b"data", vec![0; 16])]);
     assert!(decode(&wav, None).is_err());
-    let mut aiff = small(FileFormat::Aiff, BitDepth::Int16, 1);
+    let mut aiff = small(EncodeFormat::Aiff, BitDepth::Int16, 1);
     let comm = aiff.windows(4).position(|w| w == b"COMM").unwrap();
     for b in &mut aiff[comm + 16..comm + 26] {
         *b = 0;
@@ -155,7 +158,7 @@ fn absurd_chunk_sizes() {
     let (info, buf) = decode(&rf, None).unwrap();
     assert_eq!((info.frames, buf.frames()), (10, 10));
     // AIFF COMM claims more frames than present; SSND offset beyond the end.
-    let mut aiff = small(FileFormat::Aiff, BitDepth::Int16, 1);
+    let mut aiff = small(EncodeFormat::Aiff, BitDepth::Int16, 1);
     let comm = aiff.windows(4).position(|w| w == b"COMM").unwrap();
     aiff[comm + 10..comm + 14].copy_from_slice(&u32::MAX.to_be_bytes());
     assert_eq!(decode(&aiff, None).unwrap().1.frames(), 300);
@@ -215,7 +218,7 @@ fn well_formed_caf_still_reads() {
     let data = [vec![0; 4], pcm].concat();
     let lpcm = caf(&[caf_desc(b"lpcm", 2, 1, 1, 16), (b"chan", 12, chan), (b"free", 8, vec![0; 8]), (b"data", data.len() as i64, data)]);
     let (info, buf) = decode(&lpcm, None).unwrap();
-    assert_eq!((info.format, buf.frames()), (FileFormat::Caf, 480));
+    assert_eq!((info.container, buf.frames()), (Container::Caf, 480));
     let table = packet_table(3, 3072, &[10, 0x81, 0x48, 5]);
     let aac = caf(&[caf_desc(b"aac ", 0, 1024, 2, 0), (b"pakt", table.len() as i64, table), (b"data", 219, vec![0; 219])]);
     assert_eq!(probe(&aac, None).unwrap().frames, 3072);
@@ -309,7 +312,7 @@ fn packets_longer_than_any_codec_uses_are_refused() {
 #[test]
 fn flac_metadata_fields_beyond_their_block_are_refused() {
     let with_block = |kind: u8, body: &[u8]| {
-        let f = small(FileFormat::Flac, BitDepth::Int16, 1);
+        let f = small(EncodeFormat::Flac, BitDepth::Int16, 1);
         let head = ((0x80 | u32::from(kind)) << 24 | body.len() as u32).to_be_bytes();
         [&f[..4], &[f[4] & 0x7f], &f[5..42], &head, body, &f[42..]].concat()
     };
@@ -325,7 +328,7 @@ fn flac_metadata_fields_beyond_their_block_are_refused() {
 fn an_id3_tag_before_the_audio_is_skipped_unread() {
     let frame = [&b"TIT2"[..], &0x7fff_ffffu32.to_be_bytes(), &[0, 0, 3, b'h', b'i', 0]].concat();
     let tag = [&b"ID3\x03\0\0\0\0\0"[..], &[frame.len() as u8], &frame].concat();
-    let flac = small(FileFormat::Flac, BitDepth::Int16, 1);
+    let flac = small(EncodeFormat::Flac, BitDepth::Int16, 1);
     assert_eq!(decode(&[tag, flac].concat(), None).unwrap().1.frames(), 300);
 }
 
@@ -339,9 +342,9 @@ fn a_valid_mp3_with_incidental_container_magic_still_probes() {
     f[at..at + 8].copy_from_slice(b"caff\0\x01\0\0");
     f[at + 8..at + 12].copy_from_slice(b"kuki");
     f[at + 12..at + 20].copy_from_slice(&(1u64 << 50).to_be_bytes());
-    assert_eq!(detect_format(&f, None), FileFormat::Mp3);
+    assert_eq!(detect_container(&f, None), Some(Container::MpegAudio));
     let info = probe(&f, None).expect("valid MP3 with incidental container magic");
-    assert_eq!((info.format, info.sample_rate, info.channels), (FileFormat::Mp3, 44_100, 2));
+    assert_eq!((info.codec, info.sample_rate, info.channels), (CodecId::Mp3, 44_100, 2));
 }
 
 /// Symphonia 0.6's CAF/FLAC/MP4 `Scoreable` implementations are unconditional
@@ -357,15 +360,15 @@ fn a_container_marker_before_the_first_audio_frame_is_the_probed_candidate() {
     let malformed = caf(&[caf_desc(b"aac ", 0, 1024, 2, 0), (b"kuki", 1i64 << 50, vec![0; 8])]);
     for f in [[vec![0u8], malformed.clone(), mp3.clone()].concat(), [vec![0u8; 32], malformed.clone(), mp3.clone()].concat()] {
         // The hint still names the raw stream, but the probe sees the CAF marker first.
-        assert_eq!(detect_format(&f, Some("mp3")), FileFormat::Mp3);
+        assert_eq!(detect_container(&f, Some("mp3")), Some(Container::MpegAudio));
         assert!(matches!(probe(&f, Some("mp3")), Err(AudioError::Malformed(m)) if m.contains("larger than the file")));
         assert!(matches!(decode(&f, Some("mp3")), Err(AudioError::Malformed(m)) if m.contains("larger than the file")));
     }
     // Plain leading junk without format magic is tolerated, as before.
     let f = [vec![0u8; 32], mp3].concat();
-    assert_eq!(detect_format(&f, Some("mp3")), FileFormat::Mp3);
+    assert_eq!(detect_container(&f, Some("mp3")), Some(Container::MpegAudio));
     let info = probe(&f, Some("mp3")).expect("junk before a valid MP3");
-    assert_eq!((info.format, info.sample_rate, info.channels), (FileFormat::Mp3, 44_100, 2));
+    assert_eq!((info.codec, info.sample_rate, info.channels), (CodecId::Mp3, 44_100, 2));
 }
 
 /// More false `0xFFEx` pairs than the preflight's scoring budget must not make a later container
@@ -382,11 +385,11 @@ fn an_exhausted_audio_score_budget_does_not_reject_the_mp3_behind_it() {
     audio[at + 12..at + 20].copy_from_slice(&(1u64 << 50).to_be_bytes());
     let false_syncs: Vec<u8> = (0..256).flat_map(|_| [0xFFu8, 0xE2]).collect();
     let f = [false_syncs, audio].concat();
-    assert_eq!(detect_format(&f, Some("mp3")), FileFormat::Mp3);
+    assert_eq!(detect_container(&f, Some("mp3")), Some(Container::MpegAudio));
     let info = probe(&f, Some("mp3")).expect("valid MP3 after an exhausted audio score budget");
-    assert_eq!((info.format, info.sample_rate, info.channels), (FileFormat::Mp3, 44_100, 2));
+    assert_eq!((info.codec, info.sample_rate, info.channels), (CodecId::Mp3, 44_100, 2));
     let (decoded, buf) = decode(&f, Some("mp3")).expect("decode the same MP3");
-    assert_eq!((decoded.format, decoded.sample_rate, decoded.channels), (FileFormat::Mp3, 44_100, 2));
+    assert_eq!((decoded.codec, decoded.sample_rate, decoded.channels), (CodecId::Mp3, 44_100, 2));
     assert_eq!(decoded.frames, buf.frames() as u64);
 }
 
@@ -394,13 +397,13 @@ fn an_exhausted_audio_score_budget_does_not_reject_the_mp3_behind_it() {
 /// whose reader allocates from sizes in the file, the post-probe refusal still applies.
 #[test]
 fn a_container_selected_without_its_size_check_is_refused() {
-    let flac = small(FileFormat::Flac, BitDepth::Int16, 1);
+    let flac = small(EncodeFormat::Flac, BitDepth::Int16, 1);
     // Exactly the cap of false candidates, then one more that the reader rejects (invalid
     // bit-rate), so the preflight stops unchecked before reaching the FLAC marker behind it.
     let mut false_syncs: Vec<u8> = (0..256).flat_map(|_| [0xFFu8, 0xE2]).collect();
     false_syncs.extend_from_slice(&[0xFF, 0xFB, 0xF0, 0x00]);
     let f = [false_syncs, flac].concat();
-    assert_eq!(detect_format(&f, None), FileFormat::Mp3);
+    assert_eq!(detect_container(&f, None), Some(Container::MpegAudio));
     assert!(matches!(probe(&f, None), Err(AudioError::Malformed(m)) if m.contains("was not size-checked")));
     assert!(matches!(decode(&f, None), Err(AudioError::Malformed(m)) if m.contains("was not size-checked")));
 }
@@ -410,17 +413,17 @@ fn a_container_selected_without_its_size_check_is_refused() {
 #[test]
 fn zero_frame_flac_after_a_prefix_is_still_empty() {
     let flac =
-        encode(&AudioBuffer::new(48_000, 1, 0), &EncodeOptions { format: FileFormat::Flac, bit_depth: BitDepth::Int16, dither: false, bwf: None })
+        encode(&AudioBuffer::new(48_000, 1, 0), &EncodeOptions { format: EncodeFormat::Flac, bit_depth: BitDepth::Int16, dither: false, bwf: None })
             .unwrap();
     let tag = id3_tag(b"tag");
     for (f, detected) in [
-        ([vec![0x7A; 64], flac.clone()].concat(), FileFormat::Other),
-        ([tag.clone(), vec![0x7A; 16], flac.clone()].concat(), FileFormat::Mp3),
-        ([tag.clone(), tag, flac.clone()].concat(), FileFormat::Mp3),
+        ([vec![0x7A; 64], flac.clone()].concat(), None),
+        ([tag.clone(), vec![0x7A; 16], flac.clone()].concat(), Some(Container::MpegAudio)),
+        ([tag.clone(), tag, flac.clone()].concat(), Some(Container::MpegAudio)),
     ] {
-        assert_eq!(detect_format(&f, None), detected);
+        assert_eq!(detect_container(&f, None), detected);
         let info = probe(&f, None).expect("empty FLAC after a prefix");
-        assert_eq!((info.format, info.sample_rate, info.channels, info.frames), (FileFormat::Flac, 48_000, 1, 0));
+        assert_eq!((info.container, info.sample_rate, info.channels, info.frames), (Container::Flac, 48_000, 1, 0));
         assert_eq!(decode(&f, None).unwrap().1.frames(), 0);
     }
 }
@@ -441,12 +444,12 @@ fn adts_frame(payload: &[u8]) -> Vec<u8> {
 #[test]
 fn zero_frame_flac_after_a_false_mpeg_sync_is_still_empty() {
     let flac =
-        encode(&AudioBuffer::new(48_000, 1, 0), &EncodeOptions { format: FileFormat::Flac, bit_depth: BitDepth::Int16, dither: false, bwf: None })
+        encode(&AudioBuffer::new(48_000, 1, 0), &EncodeOptions { format: EncodeFormat::Flac, bit_depth: BitDepth::Int16, dither: false, bwf: None })
             .unwrap();
     for junk in [vec![0xFF, 0xE0, 0x00], vec![0xFF, 0xF0, 0x00], vec![0xFF, 0xFB, 0xF0, 0x00]] {
         let f = [junk, flac.clone()].concat();
         let info = probe(&f, None).expect("empty FLAC after a false sync");
-        assert_eq!((info.format, info.sample_rate, info.channels, info.frames), (FileFormat::Flac, 48_000, 1, 0));
+        assert_eq!((info.container, info.sample_rate, info.channels, info.frames), (Container::Flac, 48_000, 1, 0));
         assert_eq!(decode(&f, None).unwrap().1.frames(), 0);
     }
 }
@@ -485,9 +488,9 @@ fn a_valid_adts_stream_with_incidental_container_magic_still_probes() {
     let at = 100; // Inside frame 2's payload, leaving every frame header intact.
     frames[2][7 + at..7 + at + 12].copy_from_slice(b"caff\0\x01\0\0kuki");
     let f: Vec<u8> = frames.concat();
-    assert_eq!(detect_format(&f, None), FileFormat::Aac);
+    assert_eq!(detect_container(&f, None), Some(Container::Adts));
     let info = probe(&f, None).expect("valid ADTS with incidental container magic");
-    assert_eq!((info.format, info.sample_rate, info.channels), (FileFormat::Aac, 48_000, 2));
+    assert_eq!((info.codec, info.sample_rate, info.channels), (CodecId::Aac, 48_000, 2));
 }
 
 /// A later valid CAF must not excuse an earlier malformed container that the preflight or probe rejects.
@@ -593,7 +596,7 @@ fn hand_built_wav_variants() {
 
 #[test]
 fn aiff_sowt_little_endian() {
-    let be = small(FileFormat::Aiff, BitDepth::Int16, 2);
+    let be = small(EncodeFormat::Aiff, BitDepth::Int16, 2);
     let (_, expect) = decode(&be, None).unwrap();
     // Rebuild as AIFC/sowt by hand.
     let comm = be.windows(4).position(|w| w == b"COMM").unwrap();
@@ -620,30 +623,33 @@ fn aiff_sowt_little_endian() {
 }
 
 #[test]
-fn detect_format_by_magic_and_hint() {
-    assert_eq!(detect_format(&small(FileFormat::Wav, BitDepth::Int16, 1), Some("mp3")), FileFormat::Wav);
-    assert_eq!(detect_format(&small(FileFormat::Aiff, BitDepth::Int16, 1), None), FileFormat::Aiff);
-    assert_eq!(detect_format(&small(FileFormat::Flac, BitDepth::Int16, 1), None), FileFormat::Flac);
-    assert_eq!(detect_format(b"OggS\0\x02rest", None), FileFormat::Ogg);
-    assert_eq!(detect_format(b"caff\0\x01\0\0", None), FileFormat::Caf);
-    assert_eq!(detect_format(b"ID3\x04\0\0\0\0\0\x00", None), FileFormat::Mp3);
+fn detect_container_by_magic_and_hint() {
+    assert_eq!(detect_container(&small(EncodeFormat::Wav, BitDepth::Int16, 1), Some("mp3")), Some(Container::Wav));
+    assert_eq!(detect_container(&small(EncodeFormat::Aiff, BitDepth::Int16, 1), None), Some(Container::Aiff));
+    assert_eq!(detect_container(&small(EncodeFormat::Flac, BitDepth::Int16, 1), None), Some(Container::Flac));
+    assert_eq!(detect_container(b"OggS\0\x02rest", None), Some(Container::Ogg));
+    assert_eq!(detect_container(b"caff\0\x01\0\0", None), Some(Container::Caf));
+    assert_eq!(detect_container(b"ID3\x04\0\0\0\0\0\x00", None), Some(Container::MpegAudio));
     let mut id3_flac = b"ID3\x04\0\0\0\0\0\x02xx".to_vec();
     id3_flac.extend_from_slice(b"fLaC");
-    assert_eq!(detect_format(&id3_flac, None), FileFormat::Flac);
-    assert_eq!(detect_format(&[0xFF, 0xFB, 0x90, 0x00], None), FileFormat::Mp3);
-    assert_eq!(detect_format(&[0xFF, 0xF1, 0x50, 0x80], None), FileFormat::Aac);
+    assert_eq!(detect_container(&id3_flac, None), Some(Container::Flac));
+    assert_eq!(detect_container(&[0xFF, 0xFB, 0x90, 0x00], None), Some(Container::MpegAudio));
+    assert_eq!(detect_container(&[0xFF, 0xF1, 0x50, 0x80], None), Some(Container::Adts));
+    assert_eq!(detect_container(&[0x0B, 0x77, 0x00, 0x00], None), Some(Container::Ac3));
     let mut m4a = b"\0\0\0\x20ftypM4A ".to_vec();
     m4a.extend_from_slice(b"....stsd\0\0\0\0\0\0\0\x01\0\0\0\x24alac");
-    assert_eq!(detect_format(&m4a, None), FileFormat::Alac);
-    assert_eq!(detect_format(b"\0\0\0\x20ftypM4A ", None), FileFormat::Aac);
-    assert_eq!(detect_format(b"", Some(".WAV")), FileFormat::Wav);
-    assert_eq!(detect_format(b"zz", Some("aif")), FileFormat::Aiff);
-    assert_eq!(detect_format(b"zz", Some("m4a")), FileFormat::Aac);
-    assert_eq!(detect_format(b"zz", Some("M4B")), FileFormat::Aac);
-    assert_eq!(detect_format(b"zz", Some("flac")), FileFormat::Flac);
-    assert_eq!(detect_format(b"zz", Some("xyz")), FileFormat::Other);
-    assert_eq!(detect_format(b"zz", None), FileFormat::Other);
-    assert_eq!(detect_format(b"", None), FileFormat::Other);
+    assert_eq!(detect_container(&m4a, None), Some(Container::Mp4));
+    assert_eq!(detect_container(b"\0\0\0\x20ftypM4A ", None), Some(Container::Mp4));
+    assert_eq!(detect_container(b"\0\0\0\x14ftypqt  ", None), Some(Container::QuickTime));
+    assert_eq!(detect_container(b"", Some(".WAV")), Some(Container::Wav));
+    assert_eq!(detect_container(b"zz", Some("aif")), Some(Container::Aiff));
+    assert_eq!(detect_container(b"zz", Some("m4a")), Some(Container::Mp4));
+    assert_eq!(detect_container(b"zz", Some("M4B")), Some(Container::Mp4));
+    assert_eq!(detect_container(b"zz", Some("webm")), Some(Container::WebM));
+    assert_eq!(detect_container(b"zz", Some("flac")), Some(Container::Flac));
+    assert_eq!(detect_container(b"zz", Some("xyz")), None);
+    assert_eq!(detect_container(b"zz", None), None);
+    assert_eq!(detect_container(b"", None), None);
 }
 
 #[test]
@@ -668,7 +674,7 @@ fn garbage_in_compressed_containers_errors() {
 fn a_probed_container_that_disagrees_with_the_checked_marker_is_refused() {
     // The junk byte hides both magics, so the hint picks the marker: the FLAC is checked, but the
     // probe reads the WAVE before it.
-    let bytes = [vec![0], small(FileFormat::Wav, BitDepth::Int24, 2), small(FileFormat::Flac, BitDepth::Int24, 2)].concat();
+    let bytes = [vec![0], small(EncodeFormat::Wav, BitDepth::Int24, 2), small(EncodeFormat::Flac, BitDepth::Int24, 2)].concat();
     match decode(&bytes, Some("flac")) {
         Err(AudioError::Malformed(message)) => assert!(message.contains("probed container"), "unexpected message: {message}"),
         Err(other) => panic!("unexpected error kind: {other:?}"),
@@ -682,7 +688,7 @@ proptest! {
     #[test]
     fn random_bytes_never_panic(bytes in proptest::collection::vec(any::<u8>(), 0..2048), hint in 0usize..6) {
         let hint = [None, Some("wav"), Some("aiff"), Some("flac"), Some("mp3"), Some("ogg")][hint];
-        let _ = detect_format(&bytes, hint);
+        let _ = detect_container(&bytes, hint);
         let _ = probe(&bytes, hint);
         let _ = decode(&bytes, hint);
     }
@@ -704,9 +710,9 @@ proptest! {
     fn random_audio_roundtrips_through_flac(samples in proptest::collection::vec(-1.2f32..1.2, 1..3000), channels in 1usize..4) {
         let buf = AudioBuffer::from_interleaved(48_000, channels, &samples);
         prop_assume!(buf.frames() > 0);
-        let opts = EncodeOptions { format: FileFormat::Flac, bit_depth: BitDepth::Int24, dither: false, bwf: None };
+        let opts = EncodeOptions { format: EncodeFormat::Flac, bit_depth: BitDepth::Int24, dither: false, bwf: None };
         let (_, flac) = decode(&encode(&buf, &opts).unwrap(), None).unwrap();
-        let (_, wav) = decode(&encode(&buf, &EncodeOptions { format: FileFormat::Wav, ..opts }).unwrap(), None).unwrap();
+        let (_, wav) = decode(&encode(&buf, &EncodeOptions { format: EncodeFormat::Wav, ..opts }).unwrap(), None).unwrap();
         prop_assert_eq!(flac, wav);
     }
 }

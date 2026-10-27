@@ -3,7 +3,7 @@
 
 use super::pcm::{PcmKind, deinterleave, le_u16, le_u32, le_u64, tag};
 use crate::wav::{GUID_TAIL, WAVE_FORMAT_EXTENSIBLE, WAVE_FORMAT_IEEE_FLOAT, WAVE_FORMAT_PCM};
-use crate::{AudioBuffer, AudioError, AudioInfo, BwfInfo, FileFormat, Result, SampleFormat};
+use crate::{AudioBuffer, AudioError, AudioInfo, BwfInfo, ChannelLayout, CodecId, Container, Result, SampleFormat};
 
 /// Tail of the Ambisonic subtype GUIDs {0000000x-0721-11D3-8644-C8C1CA000000}: PCM (x = 1) and float (x = 3) as well.
 const AMBISONIC_TAIL: [u8; 14] = [0x00, 0x00, 0x21, 0x07, 0xD3, 0x11, 0x86, 0x44, 0xC8, 0xC1, 0xCA, 0x00, 0x00, 0x00];
@@ -31,6 +31,23 @@ struct Fmt {
     block_align: u16,
     bits: u16,
     valid_bits: u16,
+    /// `dwChannelMask` of a WAVE_FORMAT_EXTENSIBLE header.
+    mask: Option<u32>,
+    ambisonic: bool,
+}
+
+impl Fmt {
+    /// The speaker layout: the extensible mask when there is one (0 or a mask naming another
+    /// number of speakers leaves the channels unordered), unordered for Ambisonics, else the
+    /// usual layout for the channel count.
+    fn layout(&self) -> ChannelLayout {
+        let channels = usize::from(self.channels);
+        match self.mask {
+            _ if self.ambisonic => ChannelLayout::unordered(channels),
+            Some(mask) => ChannelLayout::from_mask_and_channels(mask, channels),
+            None => ChannelLayout::default_for(channels),
+        }
+    }
 }
 
 fn parse_fmt(c: &[u8]) -> Result<Fmt> {
@@ -42,6 +59,8 @@ fn parse_fmt(c: &[u8]) -> Result<Fmt> {
         block_align: le_u16(c, 12).ok_or_else(short)?,
         bits: le_u16(c, 14).unwrap_or(0),
         valid_bits: 0,
+        mask: None,
+        ambisonic: false,
     };
     fmt.valid_bits = fmt.bits;
     if fmt.tag == WAVE_FORMAT_EXTENSIBLE {
@@ -66,6 +85,8 @@ fn parse_fmt(c: &[u8]) -> Result<Fmt> {
         if tail == GUID_TAIL || tail == AMBISONIC_TAIL {
             fmt.tag = sub;
         }
+        fmt.mask = le_u32(c, 20);
+        fmt.ambisonic = tail == AMBISONIC_TAIL;
     }
     Ok(fmt)
 }
@@ -285,7 +306,7 @@ pub(crate) fn parse(b: &[u8]) -> Result<WavParse> {
     let (data_start, data_len) = data.ok_or_else(|| AudioError::Malformed("WAV has no data chunk".into()))?;
     let frames = (data_len / block) as u64;
     Ok(WavParse::Native(WavLayout {
-        info: AudioInfo { format: FileFormat::Wav, sample_format, sample_rate: fmt.sample_rate, channels: fmt.channels, frames, bwf },
+        info: AudioInfo { bwf, ..AudioInfo::new(Container::Wav, CodecId::Pcm, sample_format, fmt.sample_rate, fmt.layout(), frames) },
         kind,
         data_start,
         data_len,
@@ -297,20 +318,4 @@ pub(crate) fn decode(b: &[u8], layout: &WavLayout) -> Result<AudioBuffer> {
     let data = b.get(layout.data_start..end).unwrap_or_default();
     let channels = deinterleave(data, layout.kind, usize::from(layout.info.channels), layout.info.frames)?;
     Ok(AudioBuffer { sample_rate: layout.info.sample_rate, channels })
-}
-
-/// The `dwChannelMask` of a WAVE_FORMAT_EXTENSIBLE file (None for plain PCM/float headers).
-pub(crate) fn read_channel_mask(b: &[u8]) -> Option<u32> {
-    if !is_wav(b) {
-        return None;
-    }
-    let mut pos = 12usize;
-    for _ in 0..10_000 {
-        let (id, size) = (tag(b, pos)?, usize::try_from(le_u32(b, pos + 4)?).ok()?);
-        if &id == b"fmt " {
-            return (le_u16(b, pos + 8)? == WAVE_FORMAT_EXTENSIBLE).then(|| le_u32(b, pos + 8 + 20)).flatten();
-        }
-        pos = pos.checked_add(8)?.checked_add(size)?.checked_add(size & 1)?;
-    }
-    None
 }

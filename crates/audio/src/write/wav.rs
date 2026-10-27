@@ -8,22 +8,13 @@ use std::io::{Cursor, Seek, SeekFrom, Write};
 
 const BEXT_MIN_LEN: usize = 602;
 
-/// Default speaker mask for a channel count (callers that know the layout pass their own):
-/// mono, stereo, LCR, quad, 5.0, 5.1, 6.1, 7.1 (sides + rears), 7.1.4.
+/// Default speaker mask for a channel count (callers that know the layout pass their own): the
+/// usual layout's mask, or the first `n` positions for counts with no usual layout, up to 18.
 fn channel_mask(channels: usize) -> u32 {
-    match channels {
-        1 => 0x4,
-        2 => 0x3,
-        3 => 0x7,
-        4 => 0x33,
-        5 => 0x37,
-        6 => 0x3F,
-        7 => 0x13F,
-        8 => 0x63F,
-        // L R C LFE Lrs Rrs Lss Rss Ltf Rtf Ltr Rtr (7.1.4).
-        12 => 0x2_D63F,
-        n if n <= 18 => (1u32 << n) - 1,
-        _ => 0,
+    match crate::ChannelLayout::default_for(channels).mask() {
+        Some(mask) => mask,
+        None if channels <= 18 => (1u32 << channels) - 1,
+        None => 0,
     }
 }
 

@@ -1,5 +1,6 @@
 use craft_audio::{
-    AudioBuffer, BitDepth, BwfInfo, EncodeOptions, FileFormat, SampleFormat, decode, detect_format, encode, encode_wav_rf64, probe, wav_float_header,
+    AudioBuffer, BitDepth, BwfInfo, ChannelLayout, EncodeFormat, EncodeOptions, SampleFormat, decode, detect_container, encode, encode_wav_rf64,
+    probe, wav_float_header,
 };
 
 fn sine(sr: u32, channels: usize, frames: usize) -> AudioBuffer {
@@ -19,6 +20,7 @@ fn tolerance(depth: BitDepth, dither: bool) -> f32 {
         BitDepth::Int24 => 1.0 / 8_388_608.0,
         BitDepth::Int32 => 1e-7,
         BitDepth::Float32 => 0.0,
+        _ => unreachable!("a bit depth this test does not know"),
     };
     lsb * if dither { 1.6 } else { 0.6 } + 1e-7
 }
@@ -37,21 +39,22 @@ fn expected_sf(d: BitDepth) -> SampleFormat {
         BitDepth::Int24 => SampleFormat::Int24,
         BitDepth::Int32 => SampleFormat::Int32,
         BitDepth::Float32 => SampleFormat::Float32,
+        _ => unreachable!("a bit depth this test does not know"),
     }
 }
 
 #[test]
 fn wav_and_aiff_roundtrip_all_depths_and_layouts() {
-    for format in [FileFormat::Wav, FileFormat::Aiff] {
+    for format in [EncodeFormat::Wav, EncodeFormat::Aiff] {
         for depth in DEPTHS {
             for channels in [1, 2, 6] {
                 for dither in [false, true] {
                     let src = sine(48_000, channels, 4801);
                     let opts = EncodeOptions { format, bit_depth: depth, dither, bwf: None };
                     let bytes = encode(&src, &opts).unwrap();
-                    assert_eq!(detect_format(&bytes, None), format);
+                    assert_eq!(detect_container(&bytes, None), Some(format.container()));
                     let info = probe(&bytes, None).unwrap();
-                    assert_eq!(info.format, format);
+                    assert_eq!(info.container, format.container());
                     assert_eq!(info.sample_rate, 48_000);
                     assert_eq!(info.channels as usize, channels);
                     assert_eq!(info.frames, 4801);
@@ -73,11 +76,11 @@ fn flac_roundtrip_is_lossless_vs_wav() {
         for channels in [1, 2, 6] {
             // Spans several blocks plus a short final block.
             let src = sine(44_100, channels, 4096 * 2 + 17);
-            let wav = encode(&src, &EncodeOptions { format: FileFormat::Wav, bit_depth: depth, dither: false, bwf: None }).unwrap();
-            let flac = encode(&src, &EncodeOptions { format: FileFormat::Flac, bit_depth: depth, dither: false, bwf: None }).unwrap();
-            assert_eq!(detect_format(&flac, None), FileFormat::Flac);
+            let wav = encode(&src, &EncodeOptions { format: EncodeFormat::Wav, bit_depth: depth, dither: false, bwf: None }).unwrap();
+            let flac = encode(&src, &EncodeOptions { format: EncodeFormat::Flac, bit_depth: depth, dither: false, bwf: None }).unwrap();
+            assert_eq!(detect_container(&flac, None), Some(craft_audio::Container::Flac));
             let info = probe(&flac, None).unwrap();
-            assert_eq!(info.format, FileFormat::Flac);
+            assert_eq!((info.container, info.codec), (craft_audio::Container::Flac, craft_audio::CodecId::Flac));
             assert_eq!((info.sample_rate, info.channels as usize, info.frames), (44_100, channels, src.frames() as u64));
             assert_eq!(info.sample_format, expected_sf(depth));
             let (_, from_wav) = decode(&wav, None).unwrap();
@@ -103,11 +106,11 @@ fn flac_handles_silence_noise_full_scale_and_odd_rates() {
     }
     for depth in [BitDepth::Int16, BitDepth::Int24, BitDepth::Int32] {
         for dither in [false, true] {
-            let opts = EncodeOptions { format: FileFormat::Flac, bit_depth: depth, dither, bwf: None };
+            let opts = EncodeOptions { format: EncodeFormat::Flac, bit_depth: depth, dither, bwf: None };
             let flac = encode(&b, &opts).unwrap();
             let (info, out) = decode(&flac, None).unwrap();
             assert_eq!(info.sample_rate, 37_123);
-            let wav = encode(&b, &EncodeOptions { format: FileFormat::Wav, ..opts }).unwrap();
+            let wav = encode(&b, &EncodeOptions { format: EncodeFormat::Wav, ..opts }).unwrap();
             let (_, expect) = decode(&wav, None).unwrap();
             assert_eq!(out, expect, "{depth:?} dither={dither}");
         }
@@ -116,7 +119,7 @@ fn flac_handles_silence_noise_full_scale_and_odd_rates() {
 
 #[test]
 fn flac_rejects_unsupported_layouts() {
-    let opts = EncodeOptions { format: FileFormat::Flac, bit_depth: BitDepth::Float32, dither: false, bwf: None };
+    let opts = EncodeOptions { format: EncodeFormat::Flac, bit_depth: BitDepth::Float32, dither: false, bwf: None };
     assert!(encode(&sine(48_000, 2, 10), &opts).is_err());
     let opts = EncodeOptions { bit_depth: BitDepth::Int16, ..opts };
     assert!(encode(&sine(48_000, 9, 10), &opts).is_err());
@@ -139,7 +142,7 @@ fn bwf_roundtrip() {
     };
     let src = sine(96_000, 2, 1000);
     for depth in DEPTHS {
-        let opts = EncodeOptions { format: FileFormat::Wav, bit_depth: depth, dither: false, bwf: Some(bwf.clone()) };
+        let opts = EncodeOptions { format: EncodeFormat::Wav, bit_depth: depth, dither: false, bwf: Some(bwf.clone()) };
         let bytes = encode(&src, &opts).unwrap();
         let info = probe(&bytes, None).unwrap();
         assert_eq!(info.bwf.as_ref(), Some(&bwf));
@@ -178,11 +181,11 @@ fn wav_header_layout() {
 
 #[test]
 fn aiff_float_is_aifc() {
-    let b =
-        encode(&sine(44_100, 2, 10), &EncodeOptions { format: FileFormat::Aiff, bit_depth: BitDepth::Float32, ..EncodeOptions::default() }).unwrap();
+    let b = encode(&sine(44_100, 2, 10), &EncodeOptions { format: EncodeFormat::Aiff, bit_depth: BitDepth::Float32, ..EncodeOptions::default() })
+        .unwrap();
     assert_eq!(&b[8..12], b"AIFC");
     assert!(b.windows(4).any(|w| w == b"fl32"));
-    let b = encode(&sine(44_100, 2, 10), &EncodeOptions { format: FileFormat::Aiff, ..EncodeOptions::default() }).unwrap();
+    let b = encode(&sine(44_100, 2, 10), &EncodeOptions { format: EncodeFormat::Aiff, ..EncodeOptions::default() }).unwrap();
     assert_eq!(&b[8..12], b"AIFF");
     let form = u32::from_be_bytes([b[4], b[5], b[6], b[7]]) as usize;
     assert_eq!(form + 8, b.len());
@@ -191,7 +194,7 @@ fn aiff_float_is_aifc() {
 #[test]
 fn unusual_sample_rates_roundtrip() {
     for sr in [1, 8_000, 11_025, 22_050, 44_100, 88_200, 176_400, 192_000, 352_800, 384_000, 768_000] {
-        for format in [FileFormat::Wav, FileFormat::Aiff] {
+        for format in [EncodeFormat::Wav, EncodeFormat::Aiff] {
             let bytes = encode(&sine(sr, 1, 8), &EncodeOptions { format, ..EncodeOptions::default() }).unwrap();
             assert_eq!(probe(&bytes, None).unwrap().sample_rate, sr, "{format:?}");
         }
@@ -202,15 +205,13 @@ fn unusual_sample_rates_roundtrip() {
 fn encode_rejects_bad_buffers_and_formats() {
     assert!(encode(&AudioBuffer::default(), &EncodeOptions::default()).is_err());
     assert!(encode(&AudioBuffer::new(0, 2, 10), &EncodeOptions::default()).is_err());
-    for f in [FileFormat::Mp3, FileFormat::Ogg, FileFormat::Aac, FileFormat::Alac, FileFormat::Caf, FileFormat::Other] {
-        assert!(encode(&sine(48_000, 1, 10), &EncodeOptions { format: f, ..EncodeOptions::default() }).is_err());
-    }
+    // Formats `encode` cannot write are not `EncodeFormat` variants, so asking for one does not compile.
     // Non-finite samples are sanitized; only integer output clips finite samples.
     let mut b = AudioBuffer::new(48_000, 1, 4);
     b.channels[0] = vec![f32::NAN, f32::INFINITY, -5.0, 0.5];
-    for format in [FileFormat::Wav, FileFormat::Aiff, FileFormat::Flac] {
+    for format in [EncodeFormat::Wav, EncodeFormat::Aiff, EncodeFormat::Flac] {
         for depth in DEPTHS {
-            if format == FileFormat::Flac && depth == BitDepth::Float32 {
+            if format == EncodeFormat::Flac && depth == BitDepth::Float32 {
                 continue;
             }
             let bytes = encode(&b, &EncodeOptions { format, bit_depth: depth, ..EncodeOptions::default() }).unwrap();
@@ -253,21 +254,29 @@ fn serde_types_roundtrip() {
 #[test]
 fn multichannel_wav_speaker_masks() {
     let buf = |n: usize| AudioBuffer { sample_rate: 48_000, channels: (0..n).map(|c| vec![0.01 * c as f32; 64]).collect() };
-    let opts = EncodeOptions { format: FileFormat::Wav, bit_depth: BitDepth::Int24, dither: false, bwf: None };
+    let opts = EncodeOptions { format: EncodeFormat::Wav, bit_depth: BitDepth::Int24, dither: false, bwf: None };
     for (n, mask) in [(6usize, 0x3Fu32), (8, 0x63F), (12, 0x2_D63F)] {
         let bytes = craft_audio::encode(&buf(n), &opts).unwrap();
-        assert_eq!(craft_audio::wav_channel_mask(&bytes), Some(mask), "{n} channels");
+        assert_eq!(probe(&bytes, None).unwrap().layout, ChannelLayout::from_mask(mask), "{n} channels");
         assert_eq!(craft_audio::decode(&bytes, Some("wav")).unwrap().1.channels.len(), n);
     }
     // Explicit masks: 7.0 (sides + rears, no LFE) and Ambisonics (no positions).
-    let bytes = craft_audio::encode_with_channel_mask(&buf(7), &opts, 0x637).unwrap();
-    assert_eq!(craft_audio::wav_channel_mask(&bytes), Some(0x637));
-    let bytes = craft_audio::encode_with_channel_mask(&buf(4), &opts, 0).unwrap();
-    assert_eq!(craft_audio::wav_channel_mask(&bytes), Some(0));
-    // Plain 16-bit stereo stays a plain PCM header.
+    let bytes = craft_audio::encode_with_layout(&buf(7), &opts, ChannelLayout::from_mask(0x637)).unwrap();
+    assert_eq!(probe(&bytes, None).unwrap().layout, ChannelLayout::from_mask(0x637));
+    let bytes = craft_audio::encode_with_layout(&buf(4), &opts, ChannelLayout::unordered(4)).unwrap();
+    assert_eq!(probe(&bytes, None).unwrap().layout, ChannelLayout::unordered(4));
+    // Plain 16-bit stereo stays a plain PCM header (format tag 1), read back as stereo.
     let o16 = EncodeOptions { bit_depth: BitDepth::Int16, ..opts };
-    let bytes = craft_audio::encode_with_channel_mask(&buf(2), &o16, 0x3).unwrap();
-    assert_eq!(craft_audio::wav_channel_mask(&bytes), None);
+    let bytes = craft_audio::encode_with_layout(&buf(2), &o16, ChannelLayout::STEREO).unwrap();
+    let fmt = bytes.windows(4).position(|w| w == b"fmt ").unwrap();
+    assert_eq!(bytes.get(fmt + 8..fmt + 10), Some(&[1u8, 0][..]));
+    assert_eq!(probe(&bytes, None).unwrap().layout, ChannelLayout::STEREO);
+    // FLAC (decoded by symphonia) reports its channel assignment: six channels are 5.1.
+    let flac = EncodeOptions { format: EncodeFormat::Flac, ..o16.clone() };
+    let info = probe(&craft_audio::encode(&buf(6), &flac).unwrap(), None).unwrap();
+    assert_eq!((info.container, info.codec, info.layout), (craft_audio::Container::Flac, craft_audio::CodecId::Flac, ChannelLayout::SURROUND_5_1));
+    // A layout for another channel count is refused.
+    assert!(craft_audio::encode_with_layout(&buf(2), &o16, ChannelLayout::SURROUND_5_1).is_err());
 }
 
 #[test]
@@ -288,13 +297,13 @@ fn float_wav_header_is_rewritten_in_place_as_the_file_grows() {
 
 #[test]
 fn zero_frame_flac_round_trips_like_wav_and_aiff() {
-    for format in [FileFormat::Wav, FileFormat::Aiff, FileFormat::Flac] {
+    for format in [EncodeFormat::Wav, EncodeFormat::Aiff, EncodeFormat::Flac] {
         for depth in [BitDepth::Int16, BitDepth::Int24] {
             for channels in [1, 2] {
                 let opts = EncodeOptions { format, bit_depth: depth, ..EncodeOptions::default() };
                 let bytes = encode(&AudioBuffer::new(48_000, channels, 0), &opts).unwrap();
                 let info = probe(&bytes, None).unwrap();
-                assert_eq!((info.format, info.sample_format, info.sample_rate, info.frames), (format, expected_sf(depth), 48_000, 0));
+                assert_eq!((info.container, info.sample_format, info.sample_rate, info.frames), (format.container(), expected_sf(depth), 48_000, 0));
                 assert_eq!(usize::from(info.channels), channels);
                 let (info, buf) = decode(&bytes, None).unwrap();
                 assert_eq!((info.frames, buf.frames(), buf.num_channels()), (0, 0, channels));
@@ -305,7 +314,7 @@ fn zero_frame_flac_round_trips_like_wav_and_aiff() {
 
 #[test]
 fn flac_claiming_frames_but_holding_none_still_errors() {
-    let opts = EncodeOptions { format: FileFormat::Flac, bit_depth: BitDepth::Int16, ..EncodeOptions::default() };
+    let opts = EncodeOptions { format: EncodeFormat::Flac, bit_depth: BitDepth::Int16, ..EncodeOptions::default() };
     let mut bytes = encode(&AudioBuffer::new(48_000, 2, 0), &opts).unwrap();
     bytes[25] = 1; // STREAMINFO total samples (low byte of the 36-bit field) = 1
     assert!(decode(&bytes, None).is_err());

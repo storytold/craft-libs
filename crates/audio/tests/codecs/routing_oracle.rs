@@ -4,7 +4,7 @@
 //! of ffmpeg's decode; truncated and corrupted copies never panic. Fixtures are written by ffmpeg
 //! (skipped without it).
 
-use craft_audio::{FileFormat, decode, probe};
+use craft_audio::{ChannelLayout, CodecId, Container, decode, probe};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -20,7 +20,10 @@ struct Case {
     mono: bool,
     rate: u32,
     args: &'static [&'static str],
-    format: FileFormat,
+    container: Container,
+    codec: CodecId,
+    /// The speakers of the decoded channels (WAV order).
+    layout: ChannelLayout,
     channels: usize,
     /// Presented frames, or `None` for a raw stream (as many as ffmpeg decodes).
     frames: Option<usize>,
@@ -35,7 +38,9 @@ const CASES: &[Case] = &[
         mono: false,
         rate: 48_000,
         args: &["-c:a", "aac", "-b:a", "128k", "-aac_pns", "0"],
-        format: FileFormat::Aac,
+        container: Container::Adts,
+        codec: CodecId::Aac,
+        layout: ChannelLayout::STEREO,
         channels: 2,
         frames: None,
         min_snr: 120.0,
@@ -46,7 +51,9 @@ const CASES: &[Case] = &[
         mono: false,
         rate: 44_100,
         args: &["-c:a", "aac", "-b:a", "128k", "-aac_pns", "0"],
-        format: FileFormat::Aac,
+        container: Container::Mp4,
+        codec: CodecId::Aac,
+        layout: ChannelLayout::STEREO,
         channels: 2,
         frames: Some(220_500),
         min_snr: 120.0,
@@ -57,7 +64,9 @@ const CASES: &[Case] = &[
         mono: false,
         rate: 48_000,
         args: &["-c:a", "aac", "-b:a", "384k", "-aac_pns", "0"],
-        format: FileFormat::Aac,
+        container: Container::Mp4,
+        codec: CodecId::Aac,
+        layout: ChannelLayout::SURROUND_5_1_SIDE,
         channels: 6,
         frames: Some(240_000),
         min_snr: 120.0,
@@ -68,7 +77,9 @@ const CASES: &[Case] = &[
         mono: false,
         rate: 48_000,
         args: &["-c:a", "aac", "-b:a", "128k", "-aac_pns", "0"],
-        format: FileFormat::Aac,
+        container: Container::Matroska,
+        codec: CodecId::Aac,
+        layout: ChannelLayout::STEREO,
         channels: 2,
         frames: Some(240_000),
         min_snr: 120.0,
@@ -79,7 +90,9 @@ const CASES: &[Case] = &[
         mono: false,
         rate: 48_000,
         args: &["-c:a", "mp2"],
-        format: FileFormat::Mp3,
+        container: Container::MpegAudio,
+        codec: CodecId::Mp2,
+        layout: ChannelLayout::STEREO,
         channels: 2,
         frames: None,
         min_snr: 80.0,
@@ -91,7 +104,9 @@ const CASES: &[Case] = &[
         mono: true,
         rate: 48_000,
         args: &["-c:a", "mp2"],
-        format: FileFormat::Mp3,
+        container: Container::MpegAudio,
+        codec: CodecId::Mp2,
+        layout: ChannelLayout::MONO,
         channels: 1,
         frames: None,
         min_snr: 80.0,
@@ -102,7 +117,9 @@ const CASES: &[Case] = &[
         mono: false,
         rate: 48_000,
         args: &["-c:a", "mp2"],
-        format: FileFormat::Mp3,
+        container: Container::Matroska,
+        codec: CodecId::Mp2,
+        layout: ChannelLayout::STEREO,
         channels: 2,
         frames: Some(240_000),
         min_snr: 80.0,
@@ -113,7 +130,9 @@ const CASES: &[Case] = &[
         mono: false,
         rate: 48_000,
         args: &["-c:a", "mp2"],
-        format: FileFormat::Mp3,
+        container: Container::Mp4,
+        codec: CodecId::Mp2,
+        layout: ChannelLayout::STEREO,
         channels: 2,
         frames: Some(240_000),
         min_snr: 80.0,
@@ -124,7 +143,9 @@ const CASES: &[Case] = &[
         mono: false,
         rate: 48_000,
         args: &["-c:a", "ac3", "-b:a", "192k"],
-        format: FileFormat::Other,
+        container: Container::Ac3,
+        codec: CodecId::Ac3,
+        layout: ChannelLayout::STEREO,
         channels: 2,
         frames: None,
         min_snr: 25.0,
@@ -135,7 +156,9 @@ const CASES: &[Case] = &[
         mono: false,
         rate: 48_000,
         args: &["-c:a", "ac3", "-b:a", "448k"],
-        format: FileFormat::Other,
+        container: Container::Ac3,
+        codec: CodecId::Ac3,
+        layout: ChannelLayout::SURROUND_5_1_SIDE,
         channels: 6,
         frames: None,
         min_snr: 25.0,
@@ -146,7 +169,9 @@ const CASES: &[Case] = &[
         mono: false,
         rate: 48_000,
         args: &["-c:a", "eac3", "-b:a", "192k"],
-        format: FileFormat::Other,
+        container: Container::Ac3,
+        codec: CodecId::Eac3,
+        layout: ChannelLayout::STEREO,
         channels: 2,
         frames: None,
         min_snr: 25.0,
@@ -157,7 +182,9 @@ const CASES: &[Case] = &[
         mono: false,
         rate: 48_000,
         args: &["-c:a", "ac3"],
-        format: FileFormat::Other,
+        container: Container::Mp4,
+        codec: CodecId::Ac3,
+        layout: ChannelLayout::STEREO,
         channels: 2,
         frames: Some(240_000),
         min_snr: 25.0,
@@ -168,7 +195,9 @@ const CASES: &[Case] = &[
         mono: false,
         rate: 48_000,
         args: &["-c:a", "eac3"],
-        format: FileFormat::Other,
+        container: Container::Matroska,
+        codec: CodecId::Eac3,
+        layout: ChannelLayout::SURROUND_5_1_SIDE,
         channels: 6,
         frames: Some(240_000),
         min_snr: 25.0,
@@ -179,7 +208,9 @@ const CASES: &[Case] = &[
         mono: false,
         rate: 48_000,
         args: &["-c:a", "libopus", "-b:a", "128k"],
-        format: FileFormat::Ogg,
+        container: Container::Ogg,
+        codec: CodecId::Opus,
+        layout: ChannelLayout::STEREO,
         channels: 2,
         frames: Some(240_000),
         min_snr: 120.0,
@@ -190,7 +221,9 @@ const CASES: &[Case] = &[
         mono: false,
         rate: 48_000,
         args: &["-c:a", "libopus", "-b:a", "256k", "-mapping_family", "1"],
-        format: FileFormat::Ogg,
+        container: Container::Ogg,
+        codec: CodecId::Opus,
+        layout: ChannelLayout::SURROUND_5_1,
         channels: 6,
         frames: Some(240_000),
         min_snr: 120.0,
@@ -201,7 +234,9 @@ const CASES: &[Case] = &[
         mono: false,
         rate: 48_000,
         args: &["-c:a", "libopus", "-b:a", "96k"],
-        format: FileFormat::Other,
+        container: Container::WebM,
+        codec: CodecId::Opus,
+        layout: ChannelLayout::STEREO,
         channels: 2,
         frames: Some(240_000),
         min_snr: 120.0,
@@ -212,7 +247,9 @@ const CASES: &[Case] = &[
         mono: false,
         rate: 48_000,
         args: &["-c:a", "libopus", "-b:a", "96k"],
-        format: FileFormat::Other,
+        container: Container::Mp4,
+        codec: CodecId::Opus,
+        layout: ChannelLayout::STEREO,
         channels: 2,
         frames: Some(240_000),
         min_snr: 120.0,
@@ -223,7 +260,9 @@ const CASES: &[Case] = &[
         mono: false,
         rate: 48_000,
         args: &["-c:a", "pcm_s24be"],
-        format: FileFormat::Other,
+        container: Container::QuickTime,
+        codec: CodecId::Pcm,
+        layout: ChannelLayout::STEREO,
         channels: 2,
         frames: Some(240_000),
         min_snr: 140.0,
@@ -234,7 +273,9 @@ const CASES: &[Case] = &[
         mono: false,
         rate: 48_000,
         args: &["-c:a", "pcm_f32le"],
-        format: FileFormat::Other,
+        container: Container::Matroska,
+        codec: CodecId::Pcm,
+        layout: ChannelLayout::STEREO,
         channels: 2,
         frames: Some(240_000),
         min_snr: 140.0,
@@ -298,13 +339,19 @@ fn every_container_and_codec_decodes_home_grown() {
         let bytes = std::fs::read(&path).unwrap();
         let (info, buf) = decode(&bytes, None).unwrap_or_else(|e| panic!("{}: {e}", c.name));
         let reference = reference(&ff, &path);
-        assert_eq!((info.format, info.sample_rate, buf.channels.len()), (c.format, c.rate, c.channels), "{}", c.name);
+        assert_eq!((info.container, info.codec, info.sample_rate, buf.channels.len()), (c.container, c.codec, c.rate, c.channels), "{}", c.name);
+        assert_eq!(info.layout, c.layout, "{}: layout", c.name);
         let expected = c.frames.unwrap_or(reference.len() / c.channels);
         assert_eq!(buf.frames(), expected, "{}: presented frames", c.name);
         let s = snr(&buf.channels, &reference);
         assert!(s >= c.min_snr, "{}: SNR {s:.1} dB < {}", c.name, c.min_snr);
         let p = probe(&bytes, None).unwrap();
-        assert_eq!((p.format, p.sample_rate, usize::from(p.channels)), (c.format, c.rate, c.channels), "{}: probe", c.name);
+        assert_eq!(
+            (p.container, p.codec, p.sample_rate, usize::from(p.channels), p.layout),
+            (c.container, c.codec, c.rate, c.channels, c.layout),
+            "{}: probe",
+            c.name
+        );
     }
 }
 

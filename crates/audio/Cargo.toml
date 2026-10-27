@@ -14,18 +14,18 @@ workspace = true
 # Probe and decode: WAV and AIFF natively; AAC, MP1/MP2, AC-3/E-AC-3, Opus and PCM through
 # craft-media's demuxers and this crate's decoders; MP3, FLAC, ALAC, Vorbis, CAF, ADPCM, A-law and
 # µ-law through symphonia.
-decode = ["dep:craft-media", "craft-media/bitstream", "craft-media/isobmff", "craft-media/matroska", "craft-media/ogg", "dep:symphonia", "dep:log"]
+decode = ["craft-media/bitstream", "craft-media/isobmff", "craft-media/matroska", "craft-media/ogg", "dep:symphonia", "dep:log"]
 # Encode WAV/BWF/RF64, AIFF/AIFF-C and FLAC; the AAC and Opus packet encoders.
-encode = ["dep:craft-media", "craft-media/bitstream"]
+encode = ["craft-media/bitstream"]
 # Multi-resolution waveform overviews (`peaks`).
 peaks = []
 # Encode AAC channels in parallel.
 rayon = ["dep:rayon"]
 # Serialize and Deserialize for the shared types.
-serde = ["dep:serde"]
+serde = ["dep:serde", "craft-media/serde"]
 
 [dependencies]
-craft-media = { workspace = true, optional = true }
+craft-media = { workspace = true }
 thiserror = { workspace = true }
 serde = { workspace = true, optional = true }
 log = { version = "0.4", optional = true }

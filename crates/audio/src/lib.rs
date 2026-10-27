@@ -20,6 +20,7 @@ pub mod aac;
 #[cfg(feature = "decode")]
 pub mod ac3;
 mod buffer;
+mod layout;
 #[cfg(feature = "decode")]
 pub mod mpa;
 #[cfg(any(feature = "decode", feature = "encode"))]
@@ -34,12 +35,15 @@ mod wav;
 mod write;
 
 pub use buffer::AudioBuffer;
+pub use craft_media::{CodecId, Container};
+pub use layout::{ChannelLayout, Speaker};
 #[cfg(feature = "decode")]
-pub use read::{decode, detect_format, probe, wav_channel_mask};
+pub use read::{decode, detect_container, probe};
 #[cfg(feature = "encode")]
-pub use write::{ENCODE_EXTENSIONS, FileEncoder, encode, encode_format_for, encode_wav_rf64, encode_with_channel_mask, wav_float_header};
+pub use write::{ENCODE_EXTENSIONS, FileEncoder, encode, encode_format_for, encode_wav_rf64, encode_with_layout, wav_float_header};
 
 /// Errors from probing, decoding and encoding.
+#[non_exhaustive]
 #[derive(Debug, thiserror::Error)]
 pub enum AudioError {
     /// The format, codec or option is valid but not supported.
@@ -62,22 +66,32 @@ pub enum AudioError {
 /// Result alias for this module.
 pub type Result<T> = std::result::Result<T, AudioError>;
 
-/// Container / codec family of an audio file.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// The file formats [`encode`] writes.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub enum FileFormat {
+pub enum EncodeFormat {
+    /// WAV / BWF, RF64 above 4 GiB.
     Wav,
+    /// AIFF (integer depths) or AIFF-C `fl32` (float).
     Aiff,
+    /// FLAC (integer depths).
     Flac,
-    Mp3,
-    Ogg,
-    Aac,
-    Alac,
-    Caf,
-    Other,
+}
+
+impl EncodeFormat {
+    /// The container this format writes.
+    pub fn container(self) -> Container {
+        match self {
+            EncodeFormat::Wav => Container::Wav,
+            EncodeFormat::Aiff => Container::Aiff,
+            EncodeFormat::Flac => Container::Flac,
+        }
+    }
 }
 
 /// Stored sample representation.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum SampleFormat {
@@ -107,18 +121,43 @@ pub struct BwfInfo {
 }
 
 /// What `probe` learns about a file without decoding all of it.
+///
+/// `#[non_exhaustive]`: fields may be added, so it is only built by this crate.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct AudioInfo {
-    pub format: FileFormat,
+    /// The file format around the audio.
+    pub container: Container,
+    /// The codec of the audio track ([`CodecId::Pcm`] for uncompressed audio).
+    pub codec: CodecId,
     pub sample_format: SampleFormat,
+    /// The decoded sample rate (for HE-AAC, the rate after spectral band replication).
     pub sample_rate: u32,
     pub channels: u16,
+    /// Which speaker each decoded channel feeds. Decoded audio is in WAV channel order when the
+    /// layout is ordered.
+    pub layout: ChannelLayout,
+    /// Length in frames (samples per channel), after container trimming.
     pub frames: u64,
     pub bwf: Option<BwfInfo>,
 }
 
 impl AudioInfo {
+    /// Info for a stream with `layout`'s channels and no BWF metadata.
+    #[cfg(feature = "decode")]
+    pub(crate) fn new(
+        container: Container,
+        codec: CodecId,
+        sample_format: SampleFormat,
+        sample_rate: u32,
+        layout: ChannelLayout,
+        frames: u64,
+    ) -> AudioInfo {
+        let channels = u16::try_from(layout.channels()).unwrap_or(u16::MAX);
+        AudioInfo { container, codec, sample_format, sample_rate, channels, layout, frames, bwf: None }
+    }
+
     /// Duration in seconds.
     pub fn duration_secs(&self) -> f64 {
         if self.sample_rate == 0 { 0.0 } else { self.frames as f64 / f64::from(self.sample_rate) }
@@ -126,6 +165,7 @@ impl AudioInfo {
 }
 
 /// Bit depth for `encode`.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum BitDepth {
@@ -140,8 +180,7 @@ pub enum BitDepth {
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct EncodeOptions {
-    /// `Wav`, `Aiff` or `Flac`; anything else is [`AudioError::Unsupported`].
-    pub format: FileFormat,
+    pub format: EncodeFormat,
     pub bit_depth: BitDepth,
     /// Add TPDF dither when quantizing to an integer depth.
     pub dither: bool,
@@ -151,6 +190,6 @@ pub struct EncodeOptions {
 
 impl Default for EncodeOptions {
     fn default() -> Self {
-        Self { format: FileFormat::Wav, bit_depth: BitDepth::Int24, dither: false, bwf: None }
+        Self { format: EncodeFormat::Wav, bit_depth: BitDepth::Int24, dither: false, bwf: None }
     }
 }

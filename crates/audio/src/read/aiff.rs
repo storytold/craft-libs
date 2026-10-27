@@ -2,7 +2,7 @@
 //! draft: big-endian IFF chunks, 80-bit IEEE extended sample rate).
 
 use super::pcm::{PcmKind, be_u16, be_u32, deinterleave, tag};
-use crate::{AudioBuffer, AudioError, AudioInfo, FileFormat, Result, SampleFormat};
+use crate::{AudioBuffer, AudioError, AudioInfo, ChannelLayout, CodecId, Container, Result, SampleFormat};
 
 const MAX_SAMPLE_RATE: f64 = 10_000_000.0;
 
@@ -120,11 +120,23 @@ pub(crate) fn parse(b: &[u8]) -> Result<AiffParse> {
     let block = kind.bytes().saturating_mul(channels as usize).max(1);
     let frames = u64::from(frames).min((data_len / block) as u64);
     Ok(AiffParse::Native(AiffLayout {
-        info: AudioInfo { format: FileFormat::Aiff, sample_format, sample_rate, channels: channels as u16, frames, bwf: None },
+        info: AudioInfo::new(Container::Aiff, CodecId::Pcm, sample_format, sample_rate, layout(usize::from(channels as u16)), frames),
         kind,
         data_start,
         data_len,
     }))
+}
+
+/// The AIFF channel order (AIFF 1.3, "Sample Points"): mono, stereo, L R C and quad map to
+/// speakers; the six-channel order (L Lc C R Rc S) and larger counts have no WAV order.
+fn layout(channels: usize) -> ChannelLayout {
+    match channels {
+        1 => ChannelLayout::MONO,
+        2 => ChannelLayout::STEREO,
+        3 => ChannelLayout::SURROUND_3_0,
+        4 => ChannelLayout::QUAD,
+        n => ChannelLayout::unordered(n),
+    }
 }
 
 pub(crate) fn decode(b: &[u8], layout: &AiffLayout) -> Result<AudioBuffer> {

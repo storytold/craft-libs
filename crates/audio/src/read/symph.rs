@@ -3,10 +3,11 @@
 use std::io::{Cursor, Seek, SeekFrom};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
+use symphonia::core::audio::Channels;
 use symphonia::core::codecs::audio::well_known::{
     CODEC_ID_AAC, CODEC_ID_ADPCM_G722, CODEC_ID_ADPCM_G726, CODEC_ID_ADPCM_G726LE, CODEC_ID_ADPCM_IMA_QT, CODEC_ID_ADPCM_IMA_WAV, CODEC_ID_ADPCM_MS,
     CODEC_ID_ALAC, CODEC_ID_FLAC, CODEC_ID_MP1, CODEC_ID_MP2, CODEC_ID_MP3, CODEC_ID_OPUS, CODEC_ID_PCM_ALAW, CODEC_ID_PCM_F32BE, CODEC_ID_PCM_F32LE,
-    CODEC_ID_PCM_F64BE, CODEC_ID_PCM_F64LE, CODEC_ID_PCM_MULAW, CODEC_ID_VORBIS,
+    CODEC_ID_PCM_F64BE, CODEC_ID_PCM_F64BE_PLANAR, CODEC_ID_PCM_F64LE, CODEC_ID_PCM_MULAW, CODEC_ID_PCM_S32LE, CODEC_ID_VORBIS,
 };
 use symphonia::core::codecs::audio::{AudioCodecId, AudioCodecParameters, AudioDecoderOptions, CODEC_ID_NULL_AUDIO};
 use symphonia::core::errors::Error as SymError;
@@ -17,7 +18,7 @@ use symphonia::core::meta::MetadataOptions;
 
 use super::id3v2_len;
 use super::pcm::{MAX_DECODE_SAMPLES, be_u32};
-use crate::{AudioBuffer, AudioError, AudioInfo, FileFormat, Result, SampleFormat};
+use crate::{AudioBuffer, AudioError, AudioInfo, ChannelLayout, CodecId, Container, Result, SampleFormat};
 
 /// The most frames a packet may declare: decoders allocate a packet's frames up front, and ALAC
 /// takes its frame length from the file (encoders use 4096).
@@ -131,17 +132,17 @@ const SIZE_CHECKED_PROBE_FORMATS: &[&str] = &["caf", "flac", "isomp4", "wave"];
 /// The container markers to check for the family `detected` names. `None` is a raw audio stream
 /// (MP3, Ogg, AIFF), whose payload may contain container-like bytes: the unrestricted scan below
 /// finds a container only when one starts the stream, before any audio marker.
-fn container_markers(detected: FileFormat) -> Option<&'static [&'static [u8; 4]]> {
+fn container_markers(detected: Option<Container>) -> Option<&'static [&'static [u8; 4]]> {
     match detected {
         // RF64 and BW64 are the >4 GiB RIFF forms.
-        FileFormat::Wav => Some(&[b"RIFF", b"RF64", b"BW64"]),
-        FileFormat::Flac => Some(&[b"fLaC"]),
-        FileFormat::Caf => Some(&[b"caff"]),
-        // MP4/M4A put `ftyp` after the first atom's size field.
-        FileFormat::Aac | FileFormat::Alac => Some(&[b"ftyp"]),
+        Some(Container::Wav) => Some(&[b"RIFF", b"RF64", b"BW64"]),
+        Some(Container::Flac) => Some(&[b"fLaC"]),
+        Some(Container::Caf) => Some(&[b"caff"]),
+        // MP4/M4A put `ftyp` after the first atom's size field (an `.aac` name may hide one).
+        Some(Container::Mp4 | Container::QuickTime | Container::Adts) => Some(&[b"ftyp"]),
+        Some(Container::Aiff | Container::MpegAudio | Container::Ogg) => None,
         // Unknown files may carry junk before the container; symphonia's probe scans for markers.
-        FileFormat::Other => Some(&[b"caff", b"ftyp", b"fLaC", b"RIFF"]),
-        FileFormat::Aiff | FileFormat::Mp3 | FileFormat::Ogg => None,
+        _ => Some(&[b"caff", b"ftyp", b"fLaC", b"RIFF"]),
     }
 }
 
@@ -299,7 +300,7 @@ fn first_marker_with_budget(b: &[u8], start: usize, budget: &mut ScoreBudget) ->
 /// Run the early size checks on the container the probe can select. `start` is the first byte
 /// after leading ID3v2 tags. A zero-frame FLAC is returned as an empty stream because Symphonia
 /// 0.6's reader requires a first audio frame to resynchronize to.
-fn precheck(b: &[u8], start: usize, detected: FileFormat) -> Result<Precheck> {
+fn precheck(b: &[u8], start: usize, detected: Option<Container>) -> Result<Precheck> {
     let any_marker = |b: &[u8], start: usize| -> Result<Option<(FirstMarker, &'static str)>> {
         Ok(match first_marker(b, start)? {
             // Stop at the first marker of any kind, so container magic incidental to an audio
@@ -347,7 +348,7 @@ fn precheck(b: &[u8], start: usize, detected: FileFormat) -> Result<Precheck> {
 /// Skip leading ID3v2 tags, run the container size preflight, then probe with symphonia; a zero-frame FLAC found by
 /// the preflight comes back as [`Opened::Empty`] without probing. A size-checked container is refused when probing
 /// selects a different reader or one that was never checked, so incidental payload magic cannot bypass those limits.
-fn open(bytes: &[u8], detected: FileFormat) -> Result<Opened> {
+fn open(bytes: &[u8], detected: Option<Container>) -> Result<Opened> {
     let start = skip_id3v2(bytes);
     if start > 0 && start >= bytes.len() {
         return Err(AudioError::Malformed("ID3v2 tag extends past the end of the file".into()));
@@ -378,17 +379,61 @@ fn open(bytes: &[u8], detected: FileFormat) -> Result<Opened> {
     Ok(Opened::Reader(reader))
 }
 
-fn format_from_codec(codec: AudioCodecId, detected: FileFormat) -> FileFormat {
-    if detected != FileFormat::Other {
-        return detected;
+/// The codec symphonia reports, as a [`CodecId`].
+fn codec_id_of(c: AudioCodecId) -> CodecId {
+    match c {
+        c if (CODEC_ID_PCM_S32LE..=CODEC_ID_PCM_F64BE_PLANAR).contains(&c) => CodecId::Pcm,
+        c if c == CODEC_ID_PCM_ALAW => CodecId::ALaw,
+        c if c == CODEC_ID_PCM_MULAW => CodecId::MuLaw,
+        c if [CODEC_ID_ADPCM_G722, CODEC_ID_ADPCM_G726, CODEC_ID_ADPCM_G726LE, CODEC_ID_ADPCM_IMA_QT, CODEC_ID_ADPCM_IMA_WAV, CODEC_ID_ADPCM_MS]
+            .contains(&c) =>
+        {
+            CodecId::Adpcm
+        }
+        c if c == CODEC_ID_FLAC => CodecId::Flac,
+        c if c == CODEC_ID_ALAC => CodecId::Alac,
+        c if c == CODEC_ID_AAC => CodecId::Aac,
+        c if c == CODEC_ID_MP1 => CodecId::Mp1,
+        c if c == CODEC_ID_MP2 => CodecId::Mp2,
+        c if c == CODEC_ID_MP3 => CodecId::Mp3,
+        c if c == CODEC_ID_OPUS => CodecId::Opus,
+        c if c == CODEC_ID_VORBIS => CodecId::Vorbis,
+        _ => CodecId::Unknown,
     }
-    match codec {
-        c if c == CODEC_ID_FLAC => FileFormat::Flac,
-        c if c == CODEC_ID_MP3 || c == CODEC_ID_MP2 || c == CODEC_ID_MP1 => FileFormat::Mp3,
-        c if c == CODEC_ID_AAC => FileFormat::Aac,
-        c if c == CODEC_ID_ALAC => FileFormat::Alac,
-        c if c == CODEC_ID_VORBIS => FileFormat::Ogg,
-        _ => FileFormat::Other,
+}
+
+/// The container a symphonia reader stands for, refined by the detection (which tells MP4 from
+/// QuickTime and Matroska from WebM).
+fn container_of(short_name: &str, detected: Option<Container>) -> Container {
+    match short_name {
+        "wave" => Container::Wav,
+        "aiff" => Container::Aiff,
+        "flac" => Container::Flac,
+        "caf" => Container::Caf,
+        "ogg" => Container::Ogg,
+        "isomp4" if detected == Some(Container::QuickTime) => Container::QuickTime,
+        "isomp4" => Container::Mp4,
+        "matroska" if detected == Some(Container::WebM) => Container::WebM,
+        "matroska" => Container::Matroska,
+        "mp1" | "mp2" | "mp3" => Container::MpegAudio,
+        "aac" | "adts" => Container::Adts,
+        _ => detected.unwrap_or(Container::MpegAudio),
+    }
+}
+
+/// The speakers of symphonia's channel description; its first 18 position bits are the WAV mask
+/// bits, and its decoded planes follow them.
+fn layout_of(channels: Option<&Channels>) -> ChannelLayout {
+    match channels {
+        Some(Channels::Positioned(p)) => {
+            let bits = p.bits();
+            match u32::try_from(bits) {
+                Ok(mask) if mask != 0 => ChannelLayout::from_mask(mask),
+                _ => ChannelLayout::unordered(bits.count_ones() as usize),
+            }
+        }
+        Some(c) => ChannelLayout::unordered(c.count()),
+        None => ChannelLayout::unordered(0),
     }
 }
 
@@ -434,7 +479,8 @@ fn audio_params(track: &Track) -> Option<&AudioCodecParameters> {
 }
 
 /// The first track with a decodable audio codec, with the stream information the UI shows.
-fn info_of(reader: &dyn FormatReader, detected: FileFormat) -> Result<(u32, AudioInfo)> {
+fn info_of(reader: &dyn FormatReader, detected: Option<Container>) -> Result<(u32, AudioInfo)> {
+    let container = container_of(reader.format_info().short_name, detected);
     let track = reader
         .tracks()
         .iter()
@@ -442,19 +488,10 @@ fn info_of(reader: &dyn FormatReader, detected: FileFormat) -> Result<(u32, Audi
         .ok_or_else(|| AudioError::Unsupported("no decodable audio track".into()))?;
     let p = audio_params(track).ok_or_else(|| AudioError::Unsupported("no decodable audio track".into()))?;
     let sample_rate = p.sample_rate.filter(|&r| r > 0).ok_or_else(|| AudioError::Malformed("unknown sample rate".into()))?;
-    let channels = p.channels.as_ref().map(|c| c.count()).unwrap_or(0);
-    let channels = u16::try_from(channels).map_err(|_| AudioError::Unsupported("too many channels".into()))?;
-    Ok((
-        track.id,
-        AudioInfo {
-            format: format_from_codec(p.codec, detected),
-            sample_format: sample_format_of(p),
-            sample_rate,
-            channels,
-            frames: track.num_frames.unwrap_or(0),
-            bwf: None,
-        },
-    ))
+    let layout = layout_of(p.channels.as_ref());
+    u16::try_from(layout.channels()).map_err(|_| AudioError::Unsupported("too many channels".into()))?;
+    let frames = track.num_frames.unwrap_or(0);
+    Ok((track.id, AudioInfo::new(container, codec_id_of(p.codec), sample_format_of(p), sample_rate, layout, frames)))
 }
 
 /// A demux error ends the decode; it is only an error when nothing was decoded yet.
@@ -475,9 +512,13 @@ fn corrupt_packet(errors: usize, frames: u64, msg: &str) -> Result<()> {
     Ok(())
 }
 
-/// The decoded stream is authoritative for the channel count: record it and allocate the planes.
+/// The decoded stream is authoritative for the channel count: record it (a layout naming another
+/// count is dropped) and allocate the planes.
 fn init_planar(info: &mut AudioInfo, ch: usize) -> Result<Vec<Vec<f32>>> {
     info.channels = u16::try_from(ch).map_err(|_| AudioError::Unsupported("too many channels".into()))?;
+    if info.layout.channels() != ch {
+        info.layout = ChannelLayout::unordered(ch);
+    }
     Ok((0..ch).map(|_| Vec::new()).collect())
 }
 
@@ -491,7 +532,7 @@ fn append_interleaved(planar: &mut [Vec<f32>], interleaved: &[f32], ch: usize) {
 }
 
 /// Decode the whole first audio track. When `count_only`, samples are counted but not stored.
-fn run(bytes: &[u8], detected: FileFormat, count_only: bool) -> Result<(AudioInfo, AudioBuffer)> {
+fn run(bytes: &[u8], detected: Option<Container>, count_only: bool) -> Result<(AudioInfo, AudioBuffer)> {
     let mut reader = match open(bytes, detected)? {
         Opened::Reader(reader) => reader,
         Opened::Empty(info) => {
@@ -581,7 +622,7 @@ fn run(bytes: &[u8], detected: FileFormat, count_only: bool) -> Result<(AudioInf
     Ok((info, AudioBuffer { sample_rate, channels: planar }))
 }
 
-pub(crate) fn probe(bytes: &[u8], detected: FileFormat) -> Result<AudioInfo> {
+pub(crate) fn probe(bytes: &[u8], detected: Option<Container>) -> Result<AudioInfo> {
     guarded(|| {
         let reader = match open(bytes, detected)? {
             Opened::Reader(reader) => reader,
@@ -596,7 +637,7 @@ pub(crate) fn probe(bytes: &[u8], detected: FileFormat) -> Result<AudioInfo> {
     })
 }
 
-pub(crate) fn decode(bytes: &[u8], detected: FileFormat) -> Result<(AudioInfo, AudioBuffer)> {
+pub(crate) fn decode(bytes: &[u8], detected: Option<Container>) -> Result<(AudioInfo, AudioBuffer)> {
     guarded(|| run(bytes, detected, false))
 }
 
@@ -618,16 +659,27 @@ mod tests {
         params
     }
 
-    /// Codec ids map to their reported formats, while a format detected from the container wins over the codec.
+    /// symphonia's codec ids map to ours, PCM by its id range.
     #[test]
-    fn codecs_map_to_the_reported_formats() {
-        assert_eq!(format_from_codec(CODEC_ID_FLAC, FileFormat::Other), FileFormat::Flac);
-        assert_eq!(format_from_codec(CODEC_ID_MP3, FileFormat::Other), FileFormat::Mp3);
-        assert_eq!(format_from_codec(CODEC_ID_AAC, FileFormat::Other), FileFormat::Aac);
-        assert_eq!(format_from_codec(CODEC_ID_ALAC, FileFormat::Other), FileFormat::Alac);
-        assert_eq!(format_from_codec(CODEC_ID_VORBIS, FileFormat::Other), FileFormat::Ogg);
-        // The container detected from the bytes wins over the codec.
-        assert_eq!(format_from_codec(CODEC_ID_ALAC, FileFormat::Aac), FileFormat::Aac);
+    fn codecs_map_to_codec_ids() {
+        assert_eq!(codec_id_of(CODEC_ID_FLAC), CodecId::Flac);
+        assert_eq!(codec_id_of(CODEC_ID_MP3), CodecId::Mp3);
+        assert_eq!(codec_id_of(CODEC_ID_ALAC), CodecId::Alac);
+        assert_eq!(codec_id_of(CODEC_ID_VORBIS), CodecId::Vorbis);
+        assert_eq!(codec_id_of(CODEC_ID_PCM_S16LE), CodecId::Pcm);
+        assert_eq!(codec_id_of(CODEC_ID_PCM_F64LE), CodecId::Pcm);
+        assert_eq!(codec_id_of(CODEC_ID_ADPCM_MS), CodecId::Adpcm);
+        assert_eq!(codec_id_of(CODEC_ID_PCM_ALAW), CodecId::ALaw);
+    }
+
+    /// The reader names the container; the detection refines MP4 into QuickTime and Matroska into WebM.
+    #[test]
+    fn readers_map_to_containers() {
+        assert_eq!(container_of("isomp4", None), Container::Mp4);
+        assert_eq!(container_of("isomp4", Some(Container::QuickTime)), Container::QuickTime);
+        assert_eq!(container_of("matroska", Some(Container::WebM)), Container::WebM);
+        assert_eq!(container_of("mp3", None), Container::MpegAudio);
+        assert_eq!(container_of("wave", Some(Container::Wav)), Container::Wav);
     }
 
     /// PCM and FLAC keep their declared bit depth; lossy codecs report `Compressed` regardless of their decoded

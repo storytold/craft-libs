@@ -5,16 +5,15 @@ mod flac;
 mod pcm;
 mod wav;
 
-use crate::{AudioBuffer, AudioError, EncodeOptions, FileFormat, Result};
+use crate::{AudioBuffer, AudioError, ChannelLayout, EncodeFormat, EncodeOptions, Result};
 use std::io::{Seek, Write};
 
 /// Encode `buf` as WAV/BWF, AIFF/AIFF-C or FLAC. Samples are clamped to [-1, 1].
 pub fn encode(buf: &AudioBuffer, opts: &EncodeOptions) -> Result<Vec<u8>> {
     match opts.format {
-        FileFormat::Wav => wav::encode(buf, opts.bit_depth, opts.dither, opts.bwf.as_ref(), false, None),
-        FileFormat::Aiff => aiff::encode(buf, opts.bit_depth, opts.dither),
-        FileFormat::Flac => flac::encode(buf, opts.bit_depth, opts.dither),
-        other => Err(AudioError::Unsupported(format!("encoding {other:?} is not supported"))),
+        EncodeFormat::Wav => wav::encode(buf, opts.bit_depth, opts.dither, opts.bwf.as_ref(), false, None),
+        EncodeFormat::Aiff => aiff::encode(buf, opts.bit_depth, opts.dither),
+        EncodeFormat::Flac => flac::encode(buf, opts.bit_depth, opts.dither),
     }
 }
 
@@ -22,11 +21,11 @@ pub fn encode(buf: &AudioBuffer, opts: &EncodeOptions) -> Result<Vec<u8>> {
 pub const ENCODE_EXTENSIONS: &str = "wav, aif, aiff, flac";
 
 /// The format [`encode`] writes for a file extension or format name (`wav`, `aiff`, `flac`, case-insensitive), or `None` when it cannot write it.
-pub fn encode_format_for(name: &str) -> Option<FileFormat> {
+pub fn encode_format_for(name: &str) -> Option<EncodeFormat> {
     match name.trim_start_matches('.').to_ascii_lowercase().as_str() {
-        "wav" | "wave" | "bwf" => Some(FileFormat::Wav),
-        "aif" | "aiff" => Some(FileFormat::Aiff),
-        "flac" => Some(FileFormat::Flac),
+        "wav" | "wave" | "bwf" => Some(EncodeFormat::Wav),
+        "aif" | "aiff" => Some(EncodeFormat::Aiff),
+        "flac" => Some(EncodeFormat::Flac),
         _ => None,
     }
 }
@@ -36,12 +35,23 @@ pub fn encode_wav_rf64(buf: &AudioBuffer, opts: &EncodeOptions) -> Result<Vec<u8
     wav::encode(buf, opts.bit_depth, opts.dither, opts.bwf.as_ref(), true, None)
 }
 
-/// Like [`encode`], with an explicit WAV speaker mask (`dwChannelMask`, e.g. 0x60F) for layouts
-/// a channel count alone cannot identify (7.0 vs 6.1, 5.1.4 vs 7.1.2, Ambisonics = 0). AIFF and
-/// FLAC have fixed channel orders and ignore it.
-pub fn encode_with_channel_mask(buf: &AudioBuffer, opts: &EncodeOptions, mask: u32) -> Result<Vec<u8>> {
+/// The WAV speaker mask for `layout` over `channels` channels: its mask, or 0 (no speaker
+/// assignment) for an unordered layout. A layout for another channel count is an error.
+fn wav_mask(layout: &ChannelLayout, channels: usize) -> Result<u32> {
+    if layout.channels() != channels {
+        return Err(AudioError::Encode(format!("a {}-channel layout for {channels} channels", layout.channels())));
+    }
+    Ok(layout.mask().unwrap_or(0))
+}
+
+/// Like [`encode`], with the speaker layout to record, for layouts a channel count alone cannot
+/// identify (5.1 with side vs back surrounds, 7.0 vs 6.1, Ambisonics as
+/// [`ChannelLayout::unordered`]). WAV stores it as `dwChannelMask`; AIFF and FLAC have fixed channel
+/// orders and ignore it. `buf` must hold `layout.channels()` channels.
+pub fn encode_with_layout(buf: &AudioBuffer, opts: &EncodeOptions, layout: ChannelLayout) -> Result<Vec<u8>> {
+    let mask = wav_mask(&layout, buf.channels.len())?;
     match opts.format {
-        FileFormat::Wav => wav::encode(buf, opts.bit_depth, opts.dither, opts.bwf.as_ref(), false, Some(mask)),
+        EncodeFormat::Wav => wav::encode(buf, opts.bit_depth, opts.dither, opts.bwf.as_ref(), false, Some(mask)),
         _ => encode(buf, opts),
     }
 }
@@ -54,7 +64,7 @@ fn failed_write_error() -> AudioError {
 }
 
 /// Writes WAV/BWF (RF64 above 4 GiB), AIFF / AIFF-C `fl32` or FLAC block by block, producing
-/// the same bytes [`encode_with_channel_mask`] would for the whole buffer.
+/// the same bytes [`encode_with_layout`] would for the whole buffer.
 pub struct FileEncoder<W: Write + Seek>(Writer<W>);
 
 enum Writer<W> {
@@ -64,12 +74,14 @@ enum Writer<W> {
 }
 
 impl<W: Write + Seek> FileEncoder<W> {
-    /// Starts a file at the current position of `out`. `mask` overrides the WAV speaker mask
-    /// derived from the channel count.
-    pub fn new(out: W, opts: &EncodeOptions, channels: usize, sample_rate: u32, mask: Option<u32>) -> Result<Self> {
+    /// Starts a file at the current position of `out`. `layout` overrides the speaker layout a
+    /// WAV records (otherwise the usual one for the channel count); it must have `channels`
+    /// channels.
+    pub fn new(out: W, opts: &EncodeOptions, channels: usize, sample_rate: u32, layout: Option<ChannelLayout>) -> Result<Self> {
         let (depth, dither) = (opts.bit_depth, opts.dither);
+        let mask = layout.map(|l| wav_mask(&l, channels)).transpose()?;
         Ok(FileEncoder(match opts.format {
-            FileFormat::Wav => Writer::Wav(wav::Writer::new(
+            EncodeFormat::Wav => Writer::Wav(wav::Writer::new(
                 out,
                 channels,
                 sample_rate,
@@ -77,9 +89,8 @@ impl<W: Write + Seek> FileEncoder<W> {
                 dither,
                 wav::HeaderExtras { bwf: opts.bwf.as_ref(), mask, force_rf64: false },
             )?),
-            FileFormat::Aiff => Writer::Aiff(aiff::Writer::new(out, channels, sample_rate, depth, dither)?),
-            FileFormat::Flac => Writer::Flac(flac::Writer::new(out, channels, sample_rate, depth, dither)?),
-            other => return Err(AudioError::Unsupported(format!("encoding {other:?} is not supported"))),
+            EncodeFormat::Aiff => Writer::Aiff(aiff::Writer::new(out, channels, sample_rate, depth, dither)?),
+            EncodeFormat::Flac => Writer::Flac(flac::Writer::new(out, channels, sample_rate, depth, dither)?),
         }))
     }
 

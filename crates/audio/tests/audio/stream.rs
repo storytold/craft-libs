@@ -1,4 +1,4 @@
-use craft_audio::{AudioBuffer, AudioError, BitDepth, BwfInfo, EncodeOptions, FileEncoder, FileFormat, encode, encode_with_channel_mask};
+use craft_audio::{AudioBuffer, AudioError, BitDepth, BwfInfo, ChannelLayout, EncodeFormat, EncodeOptions, FileEncoder, encode, encode_with_layout};
 use std::io::{Cursor, Seek, SeekFrom, Write};
 
 fn tone(channels: usize, frames: usize) -> AudioBuffer {
@@ -6,10 +6,10 @@ fn tone(channels: usize, frames: usize) -> AudioBuffer {
     AudioBuffer { sample_rate: 44_100, channels }
 }
 
-fn streamed(buf: &AudioBuffer, opts: &EncodeOptions, mask: Option<u32>) -> Vec<u8> {
+fn streamed(buf: &AudioBuffer, opts: &EncodeOptions, layout: Option<ChannelLayout>) -> Vec<u8> {
     let mut out = Cursor::new(b"pre".to_vec());
     out.set_position(3);
-    let mut enc = FileEncoder::new(out, opts, buf.channels.len(), buf.sample_rate, mask).unwrap();
+    let mut enc = FileEncoder::new(out, opts, buf.channels.len(), buf.sample_rate, layout).unwrap();
     let mut start = 0;
     for len in [1, 7, 4095, 4097, 333].into_iter().cycle() {
         if start >= buf.frames() {
@@ -27,24 +27,26 @@ fn streamed(buf: &AudioBuffer, opts: &EncodeOptions, mask: Option<u32>) -> Vec<u
 fn streamed_files_match_whole_buffer_encodes() {
     let bwf = BwfInfo { description: "take".into(), time_reference: 123_456, ..Default::default() };
     let cases = [
-        (FileFormat::Wav, BitDepth::Int24, true, None, None),
-        (FileFormat::Wav, BitDepth::Float32, false, None, None),
-        (FileFormat::Wav, BitDepth::Int16, true, Some(bwf), Some(0x60F)),
-        (FileFormat::Aiff, BitDepth::Int24, true, None, None),
-        (FileFormat::Aiff, BitDepth::Float32, false, None, None),
-        (FileFormat::Flac, BitDepth::Int16, true, None, None),
-        (FileFormat::Flac, BitDepth::Int24, false, None, None),
+        (EncodeFormat::Wav, BitDepth::Int24, true, None, None),
+        (EncodeFormat::Wav, BitDepth::Float32, false, None, None),
+        (EncodeFormat::Wav, BitDepth::Int16, true, Some(bwf), Some(ChannelLayout::SURROUND_5_1_SIDE)),
+        (EncodeFormat::Aiff, BitDepth::Int24, true, None, None),
+        (EncodeFormat::Aiff, BitDepth::Float32, false, None, None),
+        (EncodeFormat::Flac, BitDepth::Int16, true, None, None),
+        (EncodeFormat::Flac, BitDepth::Int24, false, None, None),
     ];
-    for (format, bit_depth, dither, bwf, mask) in cases {
+    for (format, bit_depth, dither, bwf, layout) in cases {
         let opts = EncodeOptions { format, bit_depth, dither, bwf };
         for channels in [1, 6] {
             let buf = tone(channels, 20_001);
-            let whole = match mask {
-                Some(m) => encode_with_channel_mask(&buf, &opts, m),
+            // A layout applies to the buffer with as many channels.
+            let layout = layout.filter(|l| l.channels() == channels);
+            let whole = match layout {
+                Some(l) => encode_with_layout(&buf, &opts, l),
                 None => encode(&buf, &opts),
             }
             .unwrap();
-            assert_eq!(streamed(&buf, &opts, mask), [b"pre".as_slice(), &whole].concat(), "{opts:?}, {channels} channels");
+            assert_eq!(streamed(&buf, &opts, layout), [b"pre".as_slice(), &whole].concat(), "{opts:?}, {channels} channels");
         }
     }
 }
@@ -80,7 +82,7 @@ impl Seek for FailAfter {
 #[test]
 fn a_failed_write_poisons_the_encoder() {
     let buf = tone(2, 20_001);
-    for format in [FileFormat::Wav, FileFormat::Aiff, FileFormat::Flac] {
+    for format in [EncodeFormat::Wav, EncodeFormat::Aiff, EncodeFormat::Flac] {
         let opts = EncodeOptions { format, bit_depth: BitDepth::Int16, dither: false, bwf: None };
         let sink = FailAfter { inner: Cursor::new(Vec::new()), budget: 256 };
         let mut enc = FileEncoder::new(sink, &opts, 2, buf.sample_rate, None).unwrap();
@@ -96,7 +98,7 @@ fn a_failed_write_poisons_the_encoder() {
 #[test]
 fn blocks_past_a_format_limit_are_refused_before_anything_is_written() {
     let buf = tone(2, 100);
-    for (format, limit) in [(FileFormat::Aiff, 1u64 << 30), (FileFormat::Flac, 1u64 << 36)] {
+    for (format, limit) in [(EncodeFormat::Aiff, 1u64 << 30), (EncodeFormat::Flac, 1u64 << 36)] {
         let opts = EncodeOptions { format, bit_depth: BitDepth::Int16, dither: false, bwf: None };
         let mut enc = FileEncoder::new(Cursor::new(Vec::new()), &opts, 2, buf.sample_rate, None).unwrap();
         enc.write(&buf.channels, 100).unwrap();

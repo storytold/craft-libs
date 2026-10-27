@@ -10,7 +10,7 @@
 
 use super::id3v2_len;
 use super::pcm::{MAX_DECODE_SAMPLES, PcmKind, deinterleave};
-use crate::{AudioBuffer, AudioError, AudioInfo, FileFormat, Result, SampleFormat, aac, ac3, mpa, opus};
+use crate::{AudioBuffer, AudioError, AudioInfo, ChannelLayout, CodecId, Container, Result, SampleFormat, aac, ac3, mpa, opus};
 use craft_media::{isobmff, matroska, ogg};
 
 /// Corrupt packets tolerated before a stream that has produced nothing is malformed.
@@ -36,6 +36,59 @@ fn reorder(mut channels: Vec<Vec<f32>>, order: Option<&[usize]>) -> Vec<Vec<f32>
     }
 }
 
+/// The speakers of an AAC channel configuration, in the WAV order [`aac::wav_order`] gives;
+/// configuration 7 and program-config layouts keep the decoded order and are unordered.
+fn aac_layout(channel_config: u8, channels: usize) -> ChannelLayout {
+    match channel_config {
+        1 => ChannelLayout::MONO,
+        2 => ChannelLayout::STEREO,
+        3 => ChannelLayout::SURROUND_3_0,
+        4 => ChannelLayout::from_mask(0x107),
+        5 => ChannelLayout::from_mask(0x607),
+        6 => ChannelLayout::SURROUND_5_1_SIDE,
+        11 => ChannelLayout::SURROUND_6_1,
+        12 => ChannelLayout::SURROUND_7_1,
+        _ => ChannelLayout::unordered(channels),
+    }
+}
+
+/// The speakers of an Opus stream (RFC 7845 §5.1.1): Vorbis order for mapping family 1, reordered
+/// to WAV order by [`opus::wav_order`]; other families have no speaker assignment.
+fn opus_layout(head: &opus::OpusHead) -> ChannelLayout {
+    match (head.mapping_family, head.channels) {
+        (0 | 1, 1) => ChannelLayout::MONO,
+        (0 | 1, 2) => ChannelLayout::STEREO,
+        (1, 3) => ChannelLayout::SURROUND_3_0,
+        (1, 4) => ChannelLayout::QUAD,
+        (1, 5) => ChannelLayout::SURROUND_5_0,
+        (1, 6) => ChannelLayout::SURROUND_5_1,
+        (1, 7) => ChannelLayout::SURROUND_6_1,
+        (1, 8) => ChannelLayout::SURROUND_7_1,
+        (_, n) => ChannelLayout::unordered(n),
+    }
+}
+
+/// The speakers of an AC-3 / E-AC-3 program (A/52 Table 5.8) in the decoder's WAV order: fronts,
+/// LFE, surrounds. Dual mono (1+1) has no speaker assignment.
+fn ac3_layout(h: &ac3::Header) -> ChannelLayout {
+    let fronts = match h.acmod & 7 {
+        0 => return ChannelLayout::unordered(h.channels()),
+        1 => 0x4,
+        2 => 0x3,
+        3 => 0x7,
+        4 => 0x103,
+        5 => 0x107,
+        6 => 0x603,
+        _ => 0x607,
+    };
+    ChannelLayout::from_mask(fronts | if h.lfeon { 0x8 } else { 0 })
+}
+
+/// MPEG audio: mono, or stereo (also for dual channel and joint stereo).
+fn mpa_layout(h: &mpa::Header) -> ChannelLayout {
+    if h.channels() == 1 { ChannelLayout::MONO } else { ChannelLayout::STEREO }
+}
+
 impl Codec {
     /// AAC for `asc` at the stream's output `rate` (twice the core rate for HE-AAC: the decoded
     /// core is upsampled to it).
@@ -46,9 +99,16 @@ impl Codec {
         Some(Codec::Aac { dec: Box::new(dec), up, channel_config })
     }
 
-    /// Channels of an AAC stream (a program config or a channel configuration).
-    fn aac_channels(asc: &[u8]) -> u16 {
-        aac::Decoder::new(asc).map_or(0, |d| u16::try_from(d.channels()).unwrap_or(0))
+    /// The codec and layout of an AAC stream decoded at `rate`: HE-AAC when `rate` is twice the
+    /// core rate.
+    fn aac_info(asc: &[u8], rate: u32) -> (CodecId, ChannelLayout) {
+        match aac::Decoder::new(asc) {
+            Ok(d) => {
+                let codec = if d.sample_rate().checked_mul(2) == Some(rate) { CodecId::HeAac } else { CodecId::Aac };
+                (codec, aac_layout(d.config().channel_config, d.channels()))
+            }
+            Err(_) => (CodecId::Aac, ChannelLayout::unordered(0)),
+        }
     }
 
     fn opus(head: opus::OpusHead) -> Option<Codec> {
@@ -189,14 +249,18 @@ impl Sink {
         Ok(())
     }
 
-    fn finish(self, format: FileFormat, sample_format: SampleFormat, sample_rate: u32) -> Result<(AudioInfo, AudioBuffer)> {
+    fn finish(self, plan: &Plan<'_>) -> Result<(AudioInfo, AudioBuffer)> {
         if self.planar.is_empty() {
             return Err(AudioError::Malformed("stream contains no audio".into()));
         }
-        let channels = u16::try_from(self.planar.len()).map_err(|_| AudioError::Unsupported("too many channels".into()))?;
+        let channels = self.planar.len();
+        u16::try_from(channels).map_err(|_| AudioError::Unsupported("too many channels".into()))?;
+        // The decoded channel count is authoritative; a layout that disagrees with it is dropped.
+        let layout = if plan.layout.channels() == channels { plan.layout } else { ChannelLayout::unordered(channels) };
         let frames = if self.count_only { self.frames } else { self.planar.iter().map(Vec::len).min().unwrap_or(0) as u64 };
-        let info = AudioInfo { format, sample_format, sample_rate, channels, frames, bwf: None };
-        let channels = if self.count_only { vec![Vec::new(); usize::from(channels)] } else { self.planar };
+        let sample_rate = plan.sample_rate;
+        let info = AudioInfo::new(plan.container, plan.codec_id, plan.sample_format, sample_rate, layout, frames);
+        let channels = if self.count_only { vec![Vec::new(); channels] } else { self.planar };
         Ok((info, AudioBuffer { sample_rate, channels }))
     }
 }
@@ -205,16 +269,17 @@ impl Sink {
 struct Plan<'a> {
     codec: Codec,
     packets: Packets<'a>,
-    format: FileFormat,
+    container: Container,
+    codec_id: CodecId,
+    /// The speakers of the decoded channels, from the codec configuration.
+    layout: ChannelLayout,
     sample_format: SampleFormat,
     sample_rate: u32,
     /// Frames (at `sample_rate`) to drop from the start.
     skip: u64,
     /// Frames to keep in all, when the container says.
     limit: Option<u64>,
-    /// Channels and presented frames from headers and sample tables, for [`probe`]; 0 / `None`
-    /// when unknown.
-    channels: u16,
+    /// Presented frames from headers and sample tables, for [`probe`]; `None` when unknown.
     frames: Option<u64>,
 }
 
@@ -352,12 +417,14 @@ fn plan_adts(b: &[u8]) -> Option<Plan<'_>> {
     let payloads: Vec<(usize, usize)> =
         frames.iter().filter_map(|&(p, n)| aac::AdtsHeader::parse(b.get(p..)?).ok().map(|f| (p + f.header_length, n - f.header_length))).collect();
     let per_frame = rescale(aac::FRAME_LEN as u64, u64::from(h.to_asc().sample_rate), u64::from(rate));
+    let (codec_id, layout) = Codec::aac_info(&asc, rate);
     Some(Plan {
         codec: Codec::aac(&asc, rate)?,
-        channels: Codec::aac_channels(&asc),
+        codec_id,
+        layout,
         frames: Some(payloads.len() as u64 * per_frame),
         packets: Packets::Raw { frames: payloads, bytes: b, next: 0 },
-        format: FileFormat::Aac,
+        container: Container::Adts,
         sample_format: SampleFormat::Compressed,
         sample_rate: rate,
         skip: 0,
@@ -372,10 +439,11 @@ fn plan_mpa(b: &[u8]) -> Option<Plan<'_>> {
     let total = frames.iter().filter_map(|&(p, _)| mpa::parse_header(b.get(p..)?).ok()).map(|f| f.samples() as u64).sum();
     Some(Plan {
         codec: Codec::Mpa(Box::default()),
-        channels: u16::try_from(h.channels()).unwrap_or(0),
+        codec_id: if h.layer == 1 { CodecId::Mp1 } else { CodecId::Mp2 },
+        layout: mpa_layout(&h),
         frames: Some(total),
         packets: Packets::Raw { frames, bytes: b, next: 0 },
-        format: FileFormat::Mp3,
+        container: Container::MpegAudio,
         sample_format: SampleFormat::Compressed,
         sample_rate: h.sample_rate,
         skip: 0,
@@ -391,10 +459,11 @@ fn plan_ac3(b: &[u8]) -> Option<Plan<'_>> {
         frames.iter().filter_map(|&(p, _)| ac3::parse_header(b.get(p..)?).ok()).filter(ac3::Header::is_primary).map(|f| f.samples() as u64).sum();
     Some(Plan {
         codec: Codec::Ac3(Box::default()),
-        channels: u16::try_from(h.channels()).unwrap_or(0),
+        codec_id: if h.is_eac3() { CodecId::Eac3 } else { CodecId::Ac3 },
+        layout: ac3_layout(&h),
         frames: Some(total),
         packets: Packets::Raw { frames, bytes: b, next: 0 },
-        format: FileFormat::Other,
+        container: Container::Ac3,
         sample_format: SampleFormat::Compressed,
         sample_rate: h.sample_rate,
         skip: 0,
@@ -443,7 +512,7 @@ const MAX_PACKET_FRAMES: u64 = 1 << 20;
 /// An MP4 / QuickTime file's first audio track, if its codec is home-grown. Its atom sizes are
 /// checked against the file first, as on the symphonia path: a file that lies about them is
 /// refused rather than read leniently.
-fn plan_mp4(b: &[u8]) -> Option<Result<Plan<'_>>> {
+fn plan_mp4(b: &[u8], container: Container) -> Option<Result<Plan<'_>>> {
     if let Err(e) = super::mp4::check(b, 0) {
         return Some(Err(e));
     }
@@ -454,34 +523,36 @@ fn plan_mp4(b: &[u8]) -> Option<Result<Plan<'_>>> {
         return Some(Err(AudioError::Malformed("the file declares packets far longer than any codec uses".into())));
     }
     let first = file.read_sample(b, track, 0).ok();
-    let (codec, rate, sample_format, format, channels) = match t.codec()? {
+    let (codec, rate, sample_format, codec_id, layout) = match t.codec()? {
         isobmff::CodecConfig::Aac(a) => {
             let units: Vec<Vec<u8>> = (0..t.samples.len().min(8)).filter_map(|i| file.read_sample(b, track, i).ok()).collect();
             let rate = aac::output_rate(&a.asc, units.iter().map(Vec::as_slice))?;
-            (Codec::aac(&a.asc, rate)?, rate, SampleFormat::Compressed, FileFormat::Aac, Codec::aac_channels(&a.asc))
+            let (id, layout) = Codec::aac_info(&a.asc, rate);
+            (Codec::aac(&a.asc, rate)?, rate, SampleFormat::Compressed, id, layout)
         }
         isobmff::CodecConfig::Mp3 if matches!(first.as_deref().and_then(mpeg_layer), Some(1 | 2)) => {
             let h = mpa::parse_header(first.as_deref()?).ok()?;
-            (Codec::Mpa(Box::default()), h.sample_rate, SampleFormat::Compressed, FileFormat::Mp3, u16::try_from(h.channels()).unwrap_or(0))
+            let id = if h.layer == 1 { CodecId::Mp1 } else { CodecId::Mp2 };
+            (Codec::Mpa(Box::default()), h.sample_rate, SampleFormat::Compressed, id, mpa_layout(&h))
         }
         isobmff::CodecConfig::Ac3 { .. } | isobmff::CodecConfig::Eac3 { .. } => {
             let h = ac3::parse_header(first.as_deref()?).ok()?;
-            (Codec::Ac3(Box::default()), h.sample_rate, SampleFormat::Compressed, FileFormat::Other, u16::try_from(h.channels()).unwrap_or(0))
+            let id = if h.is_eac3() { CodecId::Eac3 } else { CodecId::Ac3 };
+            (Codec::Ac3(Box::default()), h.sample_rate, SampleFormat::Compressed, id, ac3_layout(&h))
         }
         isobmff::CodecConfig::Opus(o) => {
             let head = opus::OpusHead::from_dops(&o.to_bytes()).ok()?;
-            let channels = u16::try_from(head.channels).unwrap_or(0);
-            (Codec::opus(head)?, 48_000, SampleFormat::Compressed, FileFormat::Other, channels)
+            let layout = opus_layout(&head);
+            (Codec::opus(head)?, 48_000, SampleFormat::Compressed, CodecId::Opus, layout)
         }
         isobmff::CodecConfig::Pcm(p) => {
             let (kind, sf) = pcm_kind(p.bits, p.float, p.big_endian, !p.signed)?;
             let channels = usize::try_from(p.channels).ok().filter(|&c| c > 0)?;
             let rate = p.sample_rate.round() as u32;
-            (Codec::Pcm { kind, channels }, rate, sf, FileFormat::Other, u16::try_from(channels).unwrap_or(0))
+            (Codec::Pcm { kind, channels }, rate, sf, CodecId::Pcm, ChannelLayout::default_for(channels))
         }
         _ => return None,
     };
-    // The codec names the format: detection calls every MP4 `Aac` unless it holds ALAC.
     // A leading media edit (AAC priming, Opus pre-skip) is skipped, and the edit's duration is the
     // presentation length. Empty edits and multi-segment lists play the media as it is.
     let (skip, limit) = match t.edits.as_slice() {
@@ -497,18 +568,19 @@ fn plan_mp4(b: &[u8]) -> Option<Result<Plan<'_>>> {
     Some(Ok(Plan {
         codec,
         packets: Packets::Mp4 { file: Box::new(file), bytes: b, track, next: 0 },
-        format,
+        container,
+        codec_id,
+        layout,
         sample_format,
         sample_rate: rate,
         skip,
         limit,
-        channels,
         frames: Some(frames),
     }))
 }
 
 /// A Matroska / WebM file's first audio track, if its codec is home-grown.
-fn plan_mkv(b: &[u8]) -> Option<Plan<'_>> {
+fn plan_mkv(b: &[u8], container: Container) -> Option<Plan<'_>> {
     let demux = matroska::Demuxer::from_slice(b).ok()?;
     let file = demux.file();
     let track = file.track_of_kind(matroska::TrackKind::Audio)?;
@@ -519,29 +591,32 @@ fn plan_mkv(b: &[u8]) -> Option<Plan<'_>> {
     let first = demux.read_sample(track, 0).ok();
     let declared = t.audio.as_ref().map_or(0.0, |a| a.sampling_frequency).round() as u32;
     let declared_channels = t.audio.as_ref().and_then(|a| u16::try_from(a.channels).ok()).unwrap_or(0);
-    let (codec, rate, sample_format, format, channels) = match &t.codec {
+    let (codec, rate, sample_format, codec_id, layout) = match &t.codec {
         matroska::Codec::Aac { asc } => {
             let units: Vec<Vec<u8>> = (0..t.samples.len().min(8)).filter_map(|i| demux.read_sample(track, i).ok()).collect();
             let rate = aac::output_rate(asc, units.iter().map(Vec::as_slice))?;
-            (Codec::aac(asc, rate)?, rate, SampleFormat::Compressed, FileFormat::Aac, Codec::aac_channels(asc))
+            let (id, layout) = Codec::aac_info(asc, rate);
+            (Codec::aac(asc, rate)?, rate, SampleFormat::Compressed, id, layout)
         }
         matroska::Codec::Mp1 | matroska::Codec::Mp2 => {
             let h = mpa::parse_header(first.as_deref()?).ok()?;
-            (Codec::Mpa(Box::default()), h.sample_rate, SampleFormat::Compressed, FileFormat::Mp3, u16::try_from(h.channels()).unwrap_or(0))
+            let id = if h.layer == 1 { CodecId::Mp1 } else { CodecId::Mp2 };
+            (Codec::Mpa(Box::default()), h.sample_rate, SampleFormat::Compressed, id, mpa_layout(&h))
         }
         matroska::Codec::Ac3 | matroska::Codec::Eac3 => {
             let h = ac3::parse_header(first.as_deref()?).ok()?;
-            (Codec::Ac3(Box::default()), h.sample_rate, SampleFormat::Compressed, FileFormat::Other, u16::try_from(h.channels()).unwrap_or(0))
+            let id = if h.is_eac3() { CodecId::Eac3 } else { CodecId::Ac3 };
+            (Codec::Ac3(Box::default()), h.sample_rate, SampleFormat::Compressed, id, ac3_layout(&h))
         }
         matroska::Codec::Opus { head } => {
             let head = opus::OpusHead::parse(head).ok()?;
-            let channels = u16::try_from(head.channels).unwrap_or(0);
-            (Codec::opus(head)?, 48_000, SampleFormat::Compressed, FileFormat::Other, channels)
+            let layout = opus_layout(&head);
+            (Codec::opus(head)?, 48_000, SampleFormat::Compressed, CodecId::Opus, layout)
         }
         matroska::Codec::Pcm { float, big_endian, bits } => {
             let (kind, sf) = pcm_kind(*bits, *float, *big_endian, *bits <= 8 && !*float)?;
             let channels = usize::from(declared_channels).max(1);
-            (Codec::Pcm { kind, channels }, declared, sf, FileFormat::Other, declared_channels)
+            (Codec::Pcm { kind, channels }, declared, sf, CodecId::Pcm, ChannelLayout::default_for(channels))
         }
         _ => return None,
     };
@@ -558,12 +633,13 @@ fn plan_mkv(b: &[u8]) -> Option<Plan<'_>> {
     Some(Plan {
         codec,
         packets: Packets::Mkv { demux: Box::new(demux), track, rate },
-        format,
+        container,
+        codec_id,
+        layout,
         sample_format,
         sample_rate: rate,
         skip,
         limit: frames,
-        channels,
         frames,
     })
 }
@@ -576,40 +652,37 @@ fn plan_ogg(b: &[u8]) -> Option<Plan<'_>> {
     let head = opus::OpusHead::parse(s.headers.first()?).ok()?;
     let timing = ogg::OpusTiming::of(s, u32::from(head.pre_skip));
     let limit = u64::try_from(timing.total).ok();
-    let channels = u16::try_from(head.channels).unwrap_or(0);
+    let layout = opus_layout(&head);
     Some(Plan {
         codec: Codec::opus(head)?,
         packets: Packets::Ogg { file, bytes: b, stream, next: 0 },
-        format: FileFormat::Ogg,
+        container: Container::Ogg,
+        codec_id: CodecId::Opus,
+        layout,
         sample_format: SampleFormat::Compressed,
         sample_rate: 48_000,
         skip: u64::from(timing.pre_skip),
         limit,
-        channels,
         frames: limit,
     })
 }
 
 /// The home-grown plan for `b`, by its container and first frames.
-fn plan(b: &[u8], detected: FileFormat) -> Option<Result<Plan<'_>>> {
+fn plan(b: &[u8], detected: Option<Container>) -> Option<Result<Plan<'_>>> {
     let at = after_id3(b);
     let head = b.get(at..).unwrap_or_default();
-    if ogg::sniff(head) {
-        return plan_ogg(b).map(Ok);
-    }
-    if b.get(4..8) == Some(b"ftyp") {
-        return plan_mp4(b);
-    }
-    if head.starts_with(&[0x1A, 0x45, 0xDF, 0xA3]) {
-        return plan_mkv(b).map(Ok);
-    }
-    match detected {
-        FileFormat::Aac => plan_adts(b),
-        FileFormat::Mp3 => plan_mpa(b),
-        FileFormat::Other => plan_ac3(b).or_else(|| plan_adts(b)).or_else(|| plan_mpa(b)),
+    // The bytes decide the container when they say; the detection (which may come from the
+    // extension) only picks among raw streams.
+    match super::detect_container(b, None).or(detected) {
+        Some(Container::Ogg) if ogg::sniff(head) => plan_ogg(b).map(Ok),
+        Some(c @ (Container::Mp4 | Container::QuickTime)) if b.get(4..8) == Some(b"ftyp") => plan_mp4(b, c),
+        Some(c @ (Container::Matroska | Container::WebM)) if head.starts_with(&[0x1A, 0x45, 0xDF, 0xA3]) => plan_mkv(b, c).map(Ok),
+        Some(Container::Adts) => plan_adts(b).map(Ok),
+        Some(Container::MpegAudio) => plan_mpa(b).map(Ok),
+        Some(Container::Ac3) => plan_ac3(b).map(Ok),
+        None => plan_ac3(b).or_else(|| plan_adts(b)).or_else(|| plan_mpa(b)).map(Ok),
         _ => None,
     }
-    .map(Ok)
 }
 
 /// Decode every packet of `plan` into `sink`.
@@ -634,31 +707,26 @@ fn run(plan: &mut Plan<'_>, sink: &mut Sink) -> Result<()> {
 }
 
 /// Decode `b` with the home-grown demuxers and codecs; `None` when they do not handle it.
-pub(crate) fn decode(b: &[u8], detected: FileFormat, count_only: bool) -> Option<Result<(AudioInfo, AudioBuffer)>> {
+pub(crate) fn decode(b: &[u8], detected: Option<Container>, count_only: bool) -> Option<Result<(AudioInfo, AudioBuffer)>> {
     let mut plan = match plan(b, detected)? {
         Ok(p) => p,
         Err(e) => return Some(Err(e)),
     };
     let mut sink = Sink::new(plan.skip, plan.limit, count_only);
-    Some(run(&mut plan, &mut sink).and_then(|()| sink.finish(plan.format, plan.sample_format, plan.sample_rate)))
+    Some(run(&mut plan, &mut sink).and_then(|()| sink.finish(&plan)))
 }
 
 /// Probe `b` with the home-grown demuxers and codecs: channels and length from the frame headers
 /// or sample tables, decoding only when those do not say; `None` when they do not handle it.
-pub(crate) fn probe(b: &[u8], detected: FileFormat) -> Option<Result<AudioInfo>> {
+pub(crate) fn probe(b: &[u8], detected: Option<Container>) -> Option<Result<AudioInfo>> {
     let plan = match plan(b, detected)? {
         Ok(p) => p,
         Err(e) => return Some(Err(e)),
     };
     match plan.frames {
-        Some(frames) if plan.channels > 0 && plan.sample_rate > 0 => Some(Ok(AudioInfo {
-            format: plan.format,
-            sample_format: plan.sample_format,
-            sample_rate: plan.sample_rate,
-            channels: plan.channels,
-            frames,
-            bwf: None,
-        })),
+        Some(frames) if plan.layout.channels() > 0 && plan.sample_rate > 0 => {
+            Some(Ok(AudioInfo::new(plan.container, plan.codec_id, plan.sample_format, plan.sample_rate, plan.layout, frames)))
+        }
         _ => decode(b, detected, true).map(|r| r.map(|(info, _)| info)),
     }
 }
