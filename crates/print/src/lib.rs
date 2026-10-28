@@ -330,6 +330,59 @@ pub fn printer_options(printer: &str) -> Vec<PrinterOption> {
     }
 }
 
+/// A paper size a printer's driver offers, as a Print dialog lists it beside the standard sizes.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PrinterPaper {
+    /// The driver's keyword for it: on Windows the Print Schema name (`NorthAmericaLetter`,
+    /// `NorthAmerica4x6`) or the vendor's own.
+    pub key: String,
+    /// What the driver calls it (`Letter`, `4 x 6 in`); the keyword when it gives no name.
+    pub label: String,
+    /// Width and height in points as the driver has them: a label's width is across the feed,
+    /// so a 2.25 × 1.25 in label and a 1.25 × 2.25 in one are different stock.
+    pub size: (f64, f64),
+    /// Whether it is the driver's current default: the stock a label printer is set up for, an
+    /// office printer's tray paper. A Print dialog starts on it.
+    pub default: bool,
+}
+
+/// How many papers a driver may put in the list.
+pub const MAX_PRINTER_PAPERS: usize = 400;
+
+/// The paper sizes a printer's driver offers, in the driver's order: on Windows its
+/// PrintCapabilities page media sizes (roll media and sizes beyond 200 inches left out), the
+/// driver's current default marked. Empty
+/// when the printer or its capabilities can't be read, and on other platforms, where the CUPS
+/// queue's PPD holds them (`*PaperDimension`; the apps read it with their driver options).
+/// Reads the driver, so call it when a printer is chosen, not every frame.
+pub fn printer_papers(printer: &str) -> Vec<PrinterPaper> {
+    #[cfg(windows)]
+    {
+        windows::printer_papers(printer)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = printer;
+        Vec::new()
+    }
+}
+
+/// Whether `printer` is a thermal label printer: its driver offers only monochrome output and the
+/// paper in the user's settings is label-sized (at most 4.5 in on its short side). Such drivers
+/// dither every grey they are given, so a caller sends them black-and-white pictures at the
+/// printer's resolution through [`rgb::print_pages`] instead of a PDF (Windows; false elsewhere).
+pub fn is_label_printer(printer: &str) -> bool {
+    #[cfg(windows)]
+    {
+        windows::is_label_printer(printer)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = printer;
+        false
+    }
+}
+
 /// Whether [`open_printer_preferences`] can show the driver's own settings window (Windows).
 pub const HAS_PRINTER_PREFERENCES: bool = cfg!(windows);
 
