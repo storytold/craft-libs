@@ -11,6 +11,9 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
+craft-ecproj-format = { workspace = true }
+craft-pcraft-format = { workspace = true }
+craft-vectorcraft-format = { workspace = true }
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 serde = { workspace = true }
 # `unbounded_depth`: PhotoCraft manifests nest deeper than serde_json's 128 levels; the crate

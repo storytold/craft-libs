@@ -7,16 +7,16 @@
 //! ```
 //!
 //! Projects saved before `savedBy` existed start with `schema`. A project holds no rendered
-//! frames: footage is referenced by path.
+//! frames: footage is referenced by path. `savedBy` and `schema` are read with
+//! [`craft_ecproj_format::Head`].
 
 use std::collections::BTreeMap;
 
+use craft_ecproj_format::{Head, ReadError};
 use serde::Deserialize;
 
-use crate::{Budget, Error, Kind, Layer, Outline, Page, Rendition, Timing, check_version, malformed, parse, parse_versioned};
+use crate::{Budget, Error, Kind, Layer, Outline, Page, Rendition, Timing, check_depth, malformed, parse, too_new};
 
-/// The newest `schema` read.
-pub(crate) const SCHEMA_VERSION: u32 = 2;
 /// EffectCraft's time unit.
 const TICKS_PER_SECOND: f64 = 254_016_000_000.0;
 
@@ -39,32 +39,42 @@ pub(crate) fn sniff(head: &[u8]) -> bool {
     }
 }
 
-#[derive(Deserialize)]
-struct Head {
-    #[serde(rename = "savedBy", default)]
-    saved_by: Option<String>,
-    schema: u32,
-}
-
 fn json<'a>(bytes: &'a [u8], budget: &Budget) -> Result<&'a [u8], Error> {
     budget.check_json(bytes.len() as u64, "the project")?;
     Ok(bytes)
 }
 
+/// The project's [`Head`] read with [`Head::read`]; [`ReadError::TooNew`] when its schema is
+/// newer than this crate reads.
+fn read_head(json: &[u8], budget: &Budget) -> Result<Result<Head, ReadError>, Error> {
+    check_depth(json, budget.limits.max_depth)?;
+    let text = std::str::from_utf8(json).map_err(|e| malformed(format!("the project is not UTF-8: {e}")))?;
+    Ok(Head::read(text))
+}
+
+/// The project's [`Head`], refused when its schema is newer than this crate reads.
+fn head(json: &[u8], budget: &Budget) -> Result<Head, Error> {
+    read_head(json, budget)?.map_err(|e| match e {
+        ReadError::TooNew { too_new: e, .. } => too_new(Kind::EffectCraft, e.schema),
+        e => malformed(e),
+    })
+}
+
 pub(crate) fn info(bytes: &[u8], budget: &mut Budget) -> Result<(u32, Option<String>), Error> {
-    let head: Head = parse(json(bytes, budget)?, budget.limits)?;
-    Ok((head.schema, head.saved_by))
+    match read_head(json(bytes, budget)?, budget)? {
+        Ok(head) => Ok((head.schema, head.saved_by)),
+        Err(ReadError::TooNew { too_new, saved_by, .. }) => Ok((too_new.schema, saved_by)),
+        Err(e) => Err(malformed(e)),
+    }
 }
 
 pub(crate) fn renditions(bytes: &[u8], budget: &mut Budget) -> Result<Vec<Rendition>, Error> {
-    let head: Head = parse_versioned(json(bytes, budget)?, budget.limits, Kind::EffectCraft)?;
-    check_version(Kind::EffectCraft, head.schema)?;
+    head(json(bytes, budget)?, budget)?;
     Ok(vec![])
 }
 
 #[derive(Deserialize)]
 struct Project {
-    schema: u32,
     #[serde(default)]
     items: BTreeMap<String, ItemM>,
 }
@@ -132,8 +142,9 @@ struct SwitchesM {
 }
 
 pub(crate) fn outline(bytes: &[u8], budget: &mut Budget) -> Result<Outline, Error> {
-    let p: Project = parse_versioned(json(bytes, budget)?, budget.limits, Kind::EffectCraft)?;
-    check_version(Kind::EffectCraft, p.schema)?;
+    let json = json(bytes, budget)?;
+    head(json, budget)?;
+    let p: Project = parse(json, budget.limits)?;
     let mut comps: Vec<ItemM> = p.items.into_values().filter(|i| i.kind.kind == "Comp").collect();
     comps.sort_by_key(|i| i.id);
     let pages = comps

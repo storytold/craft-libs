@@ -11,45 +11,23 @@
 //! Since version 4, large members may follow the JSON after the marker `\n\0VCBLOBS\0`; such a
 //! member gives `"blob": [offset, length]` (from the end of the marker) instead of `data`. In a
 //! compressed file, the marker and the data after it are inside the gzip stream too. Files
-//! written before the rename say `"format": "drawcraft"`.
+//! written before the rename say `"format": "drawcraft"`. The envelope's members are
+//! [`craft_vectorcraft_format::Head`] and [`craft_vectorcraft_format::Image`].
 
 use std::borrow::Cow;
 use std::io::Read;
 
+use craft_vectorcraft_format::{BLOB_MAGIC, Head, Image, is_compressed};
 use flate2::read::GzDecoder;
 use serde::Deserialize;
 
-use crate::{Budget, Error, Kind, Layer, Outline, Page, Rendition, RenditionKind, b64, check_version, malformed, parse, parse_versioned};
+use crate::{Budget, Error, Kind, Layer, Outline, Page, Rendition, RenditionKind, malformed, parse, parse_versioned, too_new};
 
-/// The newest `version` read.
-pub(crate) const VERSION: u32 = 4;
-const BLOB_MAGIC: &[u8] = b"\n\0VCBLOBS\0";
 /// Bytes decompressed at a time.
 const CHUNK: u64 = 64 << 10;
 
-fn is_gzip(bytes: &[u8]) -> bool {
-    bytes.starts_with(&[0x1f, 0x8b])
-}
-
 pub(crate) fn sniff(head: &[u8]) -> bool {
-    const HEAD: u64 = 256;
-    let head: Cow<'_, [u8]> = if is_gzip(head) {
-        let mut out = Vec::with_capacity(HEAD as usize);
-        // A head cut short still decompresses its start.
-        let _ = GzDecoder::new(head).take(HEAD).read_to_end(&mut out);
-        Cow::Owned(out)
-    } else {
-        Cow::Borrowed(head.get(..HEAD as usize).unwrap_or(head))
-    };
-    head.trim_ascii_start().starts_with(b"{") && format_member(&head).is_some_and(|f| f == b"vectorcraft" || f == b"drawcraft")
-}
-
-/// The string value of the first `"format"` member in `text`.
-fn format_member(text: &[u8]) -> Option<&[u8]> {
-    const KEY: &[u8] = b"\"format\"";
-    let at = text.windows(KEY.len()).position(|w| w == KEY)?;
-    let rest = text.get(at + KEY.len()..)?.trim_ascii_start().strip_prefix(b":")?.trim_ascii_start().strip_prefix(b"\"")?;
-    rest.get(..rest.iter().position(|&b| b == b'"')?)
+    craft_vectorcraft_format::sniff(head)
 }
 
 /// Where the JSON ends and the data after the marker starts, when `text` holds a NUL. JSON holds
@@ -111,7 +89,7 @@ impl Tail<'_> {
 fn unpack<'a>(bytes: &'a [u8], budget: &mut Budget) -> Result<Unpacked<'a>, Error> {
     const JSON: &str = "the document's JSON";
     let too_long = |budget: &Budget| Error::LimitExceeded(format!("{JSON} is more than max_json ({} bytes)", budget.limits.max_json));
-    if !is_gzip(bytes) {
+    if !is_compressed(bytes) {
         let (json, tail) = match bytes.iter().position(|&b| b == 0) {
             Some(nul) => {
                 let (end, tail) = marker(bytes, nul)?;
@@ -164,93 +142,69 @@ fn unpack<'a>(bytes: &'a [u8], budget: &mut Budget) -> Result<Unpacked<'a>, Erro
     Ok(Unpacked { json: Cow::Owned(buf), tail: Tail::Stream { dec, read, counted: 0 } })
 }
 
-fn check_format(format: &str) -> Result<(), Error> {
-    if format == "vectorcraft" || format == "drawcraft" { Ok(()) } else { Err(malformed(format!("format is `{format}`"))) }
-}
-
+/// The format name, the version and the writer, read without the rest of the file, so that a file
+/// of a newer version still reports them.
 #[derive(Deserialize)]
-struct Head {
+struct Stamp {
     format: String,
     version: u32,
     #[serde(default)]
     generator: Option<String>,
 }
 
+/// The file's [`Stamp`], refused when the format is not VectorCraft's, and when the version is
+/// newer than this crate reads unless `newer` is true.
+fn stamp(json: &[u8], budget: &Budget, newer: bool) -> Result<Stamp, Error> {
+    let s: Stamp = if newer { parse(json, budget.limits)? } else { parse_versioned(json, budget.limits, Kind::VectorCraft)? };
+    match craft_vectorcraft_format::check(&s.format, s.version) {
+        Ok(()) => Ok(s),
+        Err(craft_vectorcraft_format::Error::Format(format)) => Err(malformed(format!("format is `{format}`"))),
+        Err(craft_vectorcraft_format::Error::TooNew(_)) if newer => Ok(s),
+        Err(craft_vectorcraft_format::Error::TooNew(version)) => Err(too_new(Kind::VectorCraft, version)),
+        Err(e) => Err(malformed(e)),
+    }
+}
+
 pub(crate) fn info(bytes: &[u8], budget: &mut Budget) -> Result<(u32, Option<String>), Error> {
     let json = unpack(bytes, budget)?.json;
-    let head: Head = parse(&json, budget.limits)?;
-    check_format(&head.format)?;
-    Ok((head.version, head.generator))
+    let s = stamp(&json, budget, true)?;
+    Ok((s.version, s.generator))
 }
 
-/// A member holding bytes: inline as base64 `data`, or after the JSON at `blob`.
-#[derive(Deserialize)]
-struct Member {
-    #[serde(default)]
-    mime: String,
-    #[serde(default)]
-    data: String,
-    #[serde(default)]
-    blob: Option<[u64; 2]>,
+/// Check the entry's size against `max_entry` and count it; for an entry after the JSON, the
+/// offset where it ends.
+fn take(image: &Image, budget: &mut Budget, what: &str) -> Result<Option<u64>, Error> {
+    budget.take_entry(image.len(), what)?;
+    Ok(image.blob.map(|[offset, len]| offset.saturating_add(len)))
 }
 
-impl Member {
-    /// Check the member's size against `max_entry` and count it; for a member after the JSON,
-    /// the offset where it ends.
-    fn take(&self, budget: &mut Budget, what: &str) -> Result<Option<u64>, Error> {
-        match self.blob {
-            Some([offset, len]) => {
-                budget.take_entry(len, what)?;
-                Ok(Some(offset.saturating_add(len)))
-            }
-            None => {
-                budget.take_entry(b64::decoded_len(&self.data), what)?;
-                Ok(None)
-            }
-        }
-    }
-
-    /// The member's bytes, after [`Member::take`].
-    fn bytes(&self, tail: &[u8], what: &str) -> Result<Vec<u8>, Error> {
-        match self.blob {
-            Some([offset, len]) => {
-                let range = usize::try_from(offset).ok().zip(usize::try_from(len).ok()).and_then(|(a, n)| Some(a..a.checked_add(n)?));
-                range.and_then(|r| tail.get(r)).map(<[u8]>::to_vec).ok_or_else(|| malformed(format!("the file ends before its {what}")))
-            }
-            None => b64::decode(&self.data).ok_or_else(|| malformed(format!("the {what} is not valid base64"))),
-        }
-    }
-}
-
-#[derive(Deserialize)]
-struct WithMembers {
-    format: String,
-    version: u32,
-    #[serde(default)]
-    preview: Option<Member>,
-    #[serde(default)]
-    pdf: Option<Member>,
+/// The entry's bytes, after [`take`] has checked its size.
+fn entry_bytes(image: &Image, tail: &[u8], what: &str) -> Result<Vec<u8>, Error> {
+    image.bytes_at_most(tail, u64::MAX).ok_or_else(|| match image.blob {
+        Some(_) => malformed(format!("the file ends before its {what}")),
+        None => malformed(format!("the {what} is not valid base64")),
+    })
 }
 
 pub(crate) fn renditions(bytes: &[u8], budget: &mut Budget) -> Result<Vec<Rendition>, Error> {
     let Unpacked { json, mut tail } = unpack(bytes, budget)?;
-    let f: WithMembers = parse_versioned(&json, budget.limits, Kind::VectorCraft)?;
-    check_format(&f.format)?;
-    check_version(Kind::VectorCraft, f.version)?;
-    let members: Vec<_> = [(RenditionKind::Thumbnail, f.preview, "preview", "image/png"), (RenditionKind::Pdf, f.pdf, "PDF", "application/pdf")]
-        .into_iter()
-        .filter_map(|(kind, m, what, mime)| Some((kind, m?, what, mime)))
-        .collect();
+    stamp(&json, budget, false)?;
+    let head: Head = parse(&json, budget.limits)?;
+    let members: Vec<_> =
+        [(RenditionKind::Thumbnail, head.preview, "preview", "image/png"), (RenditionKind::Pdf, head.pdf, "PDF", "application/pdf")]
+            .into_iter()
+            .filter_map(|(kind, m, what, mime)| Some((kind, m?, what, mime)))
+            .collect();
     // Every size is checked before any data after the JSON is decompressed.
     let mut end = 0u64;
     for (_, m, what, _) in &members {
-        end = end.max(m.take(budget, what)?.unwrap_or(0));
+        end = end.max(take(m, budget, what)?.unwrap_or(0));
     }
     let tail = if end > 0 { tail.up_to(end, budget)? } else { &[] };
     members
         .into_iter()
         .map(|(kind, m, what, mime)| {
-            let bytes = m.bytes(tail, what)?;
+            let bytes = entry_bytes(&m, tail, what)?;
             let mime = if m.mime.is_empty() { mime.to_string() } else { m.mime };
             Ok(Rendition { kind, mime, bytes })
         })
@@ -259,8 +213,6 @@ pub(crate) fn renditions(bytes: &[u8], budget: &mut Budget) -> Result<Vec<Rendit
 
 #[derive(Deserialize)]
 struct WithDocument {
-    format: String,
-    version: u32,
     document: DocM,
 }
 
@@ -318,9 +270,8 @@ struct KindM {
 
 pub(crate) fn outline(bytes: &[u8], budget: &mut Budget) -> Result<Outline, Error> {
     let json = unpack(bytes, budget)?.json;
-    let f: WithDocument = parse_versioned(&json, budget.limits, Kind::VectorCraft)?;
-    check_format(&f.format)?;
-    check_version(Kind::VectorCraft, f.version)?;
+    stamp(&json, budget, false)?;
+    let f: WithDocument = parse(&json, budget.limits)?;
     let pages = f
         .document
         .artboards

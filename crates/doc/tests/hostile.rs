@@ -196,7 +196,10 @@ fn only_the_json_of_a_compressed_file_is_counted_when_no_member_follows_it() {
 #[test]
 fn a_zip_entry_past_max_entry_is_refused_before_it_is_inflated() {
     let big = vec![0u8; 1 << 20];
-    let pc = zip(&[store("manifest.json", pcraft_manifest(1, "[]", r#","composite":"c.png""#).as_bytes()), deflated("c.png", &big)]);
+    let pc = zip(&[
+        store("manifest.json", pcraft_manifest(1, "[]", r#","composite":"composite/preview.png""#).as_bytes()),
+        deflated("composite/preview.png", &big),
+    ]);
     assert!(limit_exceeded(renditions(&pc, &small())));
     let mut limits = small();
     limits.max_entry = 2 << 20;

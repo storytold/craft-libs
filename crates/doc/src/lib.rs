@@ -8,6 +8,8 @@
 //! - [`outline`] returns the canvas, the pages (artboards or compositions) and the layers.
 //!
 //! Bytes go in and plain data comes out: no file system access, no rendering and no app crate.
+//! Each format's envelope is read through its craft-libs crate: `craft-pcraft-format`,
+//! `craft-vectorcraft-format` and `craft-ecproj-format`.
 //! A file whose format version is newer than this crate reads gives [`Info::supported`] `false`
 //! from [`info`] and [`Error::TooNew`] from the other calls.
 //!
@@ -22,7 +24,6 @@
 //! assert!(info.supported);
 //! ```
 
-mod b64;
 mod ecproj;
 mod pcraft;
 mod vectorcraft;
@@ -57,9 +58,9 @@ impl Kind {
     /// `version` or EffectCraft's `schema`.
     pub fn supported_version(self) -> u32 {
         match self {
-            Kind::PhotoCraft => pcraft::FORMAT_VERSION,
-            Kind::VectorCraft => vectorcraft::VERSION,
-            Kind::EffectCraft => ecproj::SCHEMA_VERSION,
+            Kind::PhotoCraft => craft_pcraft_format::FORMAT_VERSION,
+            Kind::VectorCraft => craft_vectorcraft_format::VERSION,
+            Kind::EffectCraft => craft_ecproj_format::SCHEMA_VERSION,
         }
     }
 }
@@ -332,7 +333,7 @@ impl<'a> Budget<'a> {
 
 /// Is the JSON text nested at most `max` levels deep (arrays and objects), and at most
 /// [`MAX_DEPTH`]?
-fn check_depth(json: &[u8], max: u32) -> Result<(), Error> {
+pub(crate) fn check_depth(json: &[u8], max: u32) -> Result<(), Error> {
     let max = max.min(MAX_DEPTH);
     let (mut depth, mut in_str, mut escaped) = (0u32, false, false);
     for &b in json {
@@ -394,12 +395,7 @@ pub(crate) fn parse_versioned<T: DeserializeOwned>(json: &[u8], limits: &Limits,
     })
 }
 
-/// Refuse a version newer than `kind` supports.
-pub(crate) fn check_version(kind: Kind, version: u32) -> Result<(), Error> {
-    if version > kind.supported_version() { Err(too_new(kind, version)) } else { Ok(()) }
-}
-
-fn too_new(kind: Kind, version: u32) -> Error {
+pub(crate) fn too_new(kind: Kind, version: u32) -> Error {
     Error::TooNew { kind, version, supported: kind.supported_version() }
 }
 

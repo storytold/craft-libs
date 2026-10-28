@@ -4,8 +4,13 @@ Reads PhotoCraft `.pcraft`, VectorCraft `.vectorcraft` and EffectCraft `.ecproj`
 without the apps: which app wrote a file, its format version, the previews and PDF it carries,
 and its pages and layers. It takes bytes and returns plain data. It does not open files, render
 or composite. No `unsafe`, no panics on malformed input, and it builds for
-`wasm32-unknown-unknown`. The dependencies are `serde`, `serde_json`, `thiserror` and `flate2`
-(its pure-Rust backend).
+`wasm32-unknown-unknown`. Each format's envelope is read through its crate in this repository:
+[`craft-pcraft-format`](../pcraft-format/README.md) (the `Manifest` members and checks, and
+`check_manifest`),
+[`craft-vectorcraft-format`](../vectorcraft-format/README.md) (`Head`, `Image`, `sniff`, the
+version and the marker) and [`craft-ecproj-format`](../ecproj-format/README.md) (`Head`, the
+schema check). The outlines are read with craft-doc's own read-only views of the documents. The
+other dependencies are `serde`, `serde_json`, `thiserror` and `flate2` (its pure-Rust backend).
 
 ```toml
 craft-doc = { git = "https://github.com/storytold/craft-libs", rev = "<commit>" }
@@ -71,6 +76,10 @@ A `.pcraft` bundle saved as a folder, ZIP64 archives and encrypted entries are n
 - `max_depth` (400, also the largest value it takes, `MAX_DEPTH`): the nesting of JSON arrays and
   objects, checked before parsing. PhotoCraft nests up to 100 groups of layers, three levels each.
 
+A PhotoCraft manifest with more than 4,194,304 JSON items
+(`craft_pcraft_format::MAX_MANIFEST_ITEMS`) is refused with `Error::LimitExceeded`, as PhotoCraft
+reads it.
+
 On a compressed `.vectorcraft` file, `info` and `outline` decompress only as far as the end of
 the JSON. `renditions` checks the size of each member after the JSON against `max_entry`
 before it decompresses any of that data, then decompresses only as far as the members end. The
@@ -95,6 +104,10 @@ limits.max_entry = 32 << 20;
   bytes, and inputs that pass each limit: a gzip bomb, a DEFLATE entry larger than its stated
   size, members longer than `max_entry`, JSON nested past `max_depth`, ZIP64, encryption, other
   compression methods and CRC mismatches.
+- `tests/envelopes.rs`: files whose envelope is written with the format crates' types read
+  through each call, and envelopes those crates refuse (a manifest without `generator`, a preview
+  that names another entry, a `format` member inside another member) are refused. A preview or
+  PDF member without `mime` gives no rendition.
 
 `.github/workflows/doc.yml` runs fmt, clippy and the tests on Linux and Windows, and a
 `wasm32-unknown-unknown` check.

@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
-    paths: ['crates/doc/**', 'Cargo.toml', 'Cargo.lock', '.github/workflows/doc.yml']
+    paths: ['crates/doc/**', 'crates/pcraft-format/**', 'crates/vectorcraft-format/**', 'crates/ecproj-format/**', 'Cargo.toml', 'Cargo.lock', '.github/workflows/doc.yml']
   pull_request:
-    paths: ['crates/doc/**', 'Cargo.toml', 'Cargo.lock', '.github/workflows/doc.yml']
+    paths: ['crates/doc/**', 'crates/pcraft-format/**', 'crates/vectorcraft-format/**', 'crates/ecproj-format/**', 'Cargo.toml', 'Cargo.lock', '.github/workflows/doc.yml']
 
 permissions:
   contents: read
