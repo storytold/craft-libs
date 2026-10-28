@@ -70,6 +70,11 @@ pub enum Scaling {
     /// Smaller sheets retain their size; the printable area centers the result.
     /// On Windows every sheet of the job goes on that one paper.
     ShrinkToFit,
+    /// Print at 100%, as a word processor does: like `ShrinkToFit`, except that a sheet the size
+    /// of the paper is not shrunk into the printable area; hardware margins clip it, as in
+    /// `Exact`. Other sheets are shrunk to fit, as in `ShrinkToFit`. On CUPS this is
+    /// `ShrinkToFit`.
+    ActualSize,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -162,7 +167,7 @@ pub fn lp_args(job: &Job) -> Vec<String> {
     opt(match job.scaling {
         Scaling::Exact => "fit-to-page=false",
         // PWG 5100.13 §6.2.5: auto-fit fits oversized pages and leaves smaller pages unscaled.
-        Scaling::ShrinkToFit => "print-scaling=auto-fit",
+        Scaling::ShrinkToFit | Scaling::ActualSize => "print-scaling=auto-fit",
     });
     for (key, value) in &job.options {
         // Driver options are PPD keywords; anything else is not something lp can be given.
@@ -590,6 +595,7 @@ fn windows_preview(job: &Job) -> Vec<String> {
             match job.scaling {
                 Scaling::Exact => "exact",
                 Scaling::ShrinkToFit => "shrink-to-fit",
+                Scaling::ActualSize => "actual-size",
             }
         ),
         format!("color={}", if job.grayscale { "monochrome" } else { "(driver default)" }),

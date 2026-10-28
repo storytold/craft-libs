@@ -323,4 +323,6 @@ fn queue_duplex_defaults_and_explicit_scaling_reach_the_spooler() {
     let shrink = lp_args(&Job { scaling: Scaling::ShrinkToFit, ..Job::default() });
     assert!(shrink.iter().any(|a| a == "print-scaling=auto-fit"));
     assert!(!shrink.iter().any(|a| a.starts_with("fit-to-page=")));
+    // Actual size is shrink-to-fit on CUPS.
+    assert_eq!(lp_args(&Job { scaling: Scaling::ActualSize, ..Job::default() }), shrink);
 }

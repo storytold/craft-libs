@@ -86,7 +86,7 @@ fn driver_ticket(device: &PrinterDevice, job: &Job, sheet: (f64, f64), landscape
     let media = ticket::matching_paper(&papers, sheet.0, sheet.1).and_then(|i| medias.get(i));
     let wanted = match (media, job.scaling) {
         (Some(m), _) => Some((m.size().width_in_micron(), m.size().height_in_micron())),
-        (None, Scaling::ShrinkToFit) => None,
+        (None, Scaling::ShrinkToFit | Scaling::ActualSize) => None,
         (None, Scaling::Exact) => {
             return Err(spool_error(format!(
                 "{} has no {:.2} × {:.2} inch paper; choose a paper size it has, or add this one in its driver",
@@ -194,9 +194,11 @@ pub(crate) fn submit_with_progress(pdf: &[u8], job: &Job, progress: &mut dyn FnM
         }
         let (fit, paper) = match job.scaling {
             Scaling::Exact => (Fit::Exact, first),
-            Scaling::ShrinkToFit => {
+            Scaling::ShrinkToFit | Scaling::ActualSize => {
                 let (short, long) = (ticket::points(paper.0.min(paper.1)), ticket::points(paper.0.max(paper.1)));
-                (Fit::Shrink { margin: imageable_margin(&device, &ticket) }, if landscape { (long, short) } else { (short, long) })
+                let margin = imageable_margin(&device, &ticket);
+                let fit = if job.scaling == Scaling::ActualSize { Fit::ActualSize { margin } } else { Fit::Shrink { margin } };
+                (fit, if landscape { (long, short) } else { (short, long) })
             }
         };
         let edits = sheets::plan(&read.sheets, paper, fit)?;
