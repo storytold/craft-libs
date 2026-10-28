@@ -148,6 +148,12 @@ The colour management module in crates/cms is extracted from:
   Licensed MIT OR Apache-2.0. Its generated ICC profile is dedicated to the public domain
   (CC0-1.0); see ATTRIBUTION.md.
 
+The TLS connector and transport in crates/nextcloud/src/tls.rs are adapted from:
+- ureq, src/tls/rustls.rs, version 3.5.0.
+  https://github.com/algesten/ureq
+  Copyright (c) 2019 Martin Algesten.
+  Licensed MIT OR Apache-2.0. The trust-on-first-use verifier is original to craft-libs.
+
 Optional PDF writer
 
 Krilla 0.8.2 (https://github.com/LaurenzV/krilla), MIT OR Apache-2.0.

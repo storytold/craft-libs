@@ -1,0 +1,26 @@
+name: Nextcloud
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['crates/nextcloud/**', 'crates/atomic/**', 'Cargo.toml', 'Cargo.lock', '.github/workflows/nextcloud.yml']
+  pull_request:
+    paths: ['crates/nextcloud/**', 'crates/atomic/**', 'Cargo.toml', 'Cargo.lock', '.github/workflows/nextcloud.yml']
+permissions:
+  contents: read
+jobs:
+  nextcloud:
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - run: cargo fmt --check
+      - run: cargo clippy -p craft-nextcloud --all-targets --all-features -- -D warnings
+      - run: cargo test -p craft-nextcloud --all-features --locked
