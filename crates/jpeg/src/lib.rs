@@ -196,6 +196,32 @@ pub struct FrameKind {
 /// EOI or the end of the data first. Reads only the headers, so it is cheap enough to route
 /// every JPEG an app opens.
 pub fn frame(b: &[u8]) -> Option<FrameKind> {
+    let (marker, seg) = frame_segment(b)?;
+    Some(FrameKind { marker, precision: *seg.get(2)? })
+}
+
+/// Whether `bytes` are a progressive JPEG whose frame samples some component more finely (across
+/// or down) than its first. zune-jpeg 0.5.15, the decoder behind `image`, asserts in its upsampler
+/// on such a frame (etemesi254/zune-image#236; fixed there by 36007420, unreleased as of
+/// 0.5.16-rc3), and in the browser a panic aborts the page. Until the fix ships, such a JPEG is
+/// refused from its header: the decoder refuses the larger ones itself, so nothing that decoded is
+/// lost. Baseline frames of the same shape decode and are left to it.
+/// shortcut: remove this check (and its callers' early return) once `Cargo.lock` has zune-jpeg
+/// 0.5.16 or later.
+pub fn finer_than_first(bytes: &[u8]) -> bool {
+    let Some((marker, seg)) = frame_segment(bytes) else { return false };
+    if !matches!(marker, 0xC2 | 0xC6 | 0xCA | 0xCE) {
+        return false;
+    }
+    // Length (2), precision (1), height (2), width (2), components (1), then id, sampling and
+    // table for each component.
+    let n = usize::from(seg.get(7).copied().unwrap_or(0));
+    let sampling = |k: usize| seg.get(9 + 3 * k).map(|b| (b >> 4, b & 0x0F));
+    let Some((h0, v0)) = sampling(0) else { return false };
+    (1..n).any(|k| sampling(k).is_some_and(|(h, v)| h > h0 || v > v0))
+}
+
+fn frame_segment(b: &[u8]) -> Option<(u8, &[u8])> {
     if b.get(..2) != Some(&[0xFF, 0xD8]) {
         return None;
     }
@@ -212,7 +238,7 @@ pub fn frame(b: &[u8]) -> Option<FrameKind> {
             _ => {
                 let len = usize::from(u16::from_be_bytes([*b.get(i + 2)?, *b.get(i + 3)?]));
                 if matches!(m, 0xC0..=0xCF) && !matches!(m, 0xC4 | 0xC8 | 0xCC) {
-                    return Some(FrameKind { marker: m, precision: *b.get(i + 4)? });
+                    return Some((m, b.get(i + 2..)?));
                 }
                 i = i.checked_add(2 + len)?;
             }
