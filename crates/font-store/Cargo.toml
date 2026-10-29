@@ -17,8 +17,8 @@ bundled-index = []
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
-sha2 = "0.10"
-skrifa = { version = "0.47", default-features = false, features = ["std"] }
+sha2 = "0.11"
+skrifa = { version = "0.48", default-features = false, features = ["std"] }
 thiserror = { workspace = true }
 
 # The store and the network are native only; the web keeps fonts elsewhere.
@@ -29,7 +29,7 @@ craft-font-catalog = { workspace = true }
 ureq = { version = "3", default-features = false, features = ["rustls", "gzip"] }
 
 [dev-dependencies]
-write-fonts = "0.54"
+write-fonts = "0.55"
 
 [lints]
 workspace = true

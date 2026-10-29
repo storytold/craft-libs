@@ -23,7 +23,7 @@ craft-i18n = { workspace = true, optional = true }
 egui = { workspace = true, features = ["serde", "default_fonts"] }
 craft-settings = { workspace = true }
 tempfile = "3"
-sha2 = "0.10"
+sha2 = "0.11"
 egui_kittest = "0.37"
 image = { version = "0.25", default-features = false, features = ["png"] }
 

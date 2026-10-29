@@ -20,9 +20,9 @@ egui = { workspace = true, optional = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 log = "0.4"
-getrandom = "0.3"
+getrandom = "0.4"
 tempfile = "3"
-sha2 = "0.10"
+sha2 = "0.11"
 ureq = { version = "3.4", default-features = false, features = ["rustls-no-provider", "_ring", "gzip", "platform-verifier"] }
 chrono = { workspace = true }
 semver = { version = "1", features = ["serde"] }
@@ -38,7 +38,7 @@ tar = { version = "0.4", default-features = false }
 plist = "1"
 
 [target.'cfg(target_os = "windows")'.dependencies]
-winreg = "0.55"
+winreg = "0.56"
 dunce = "1"
 zip = { version = "9", default-features = false, features = ["deflate"] }
 winsafe = { version = "0.0.29", features = ["advapi", "kernel", "shell", "version"] }
