@@ -92,14 +92,17 @@ impl Host {
         }
     }
 
-    /// Hear the host's messages for this app. The listener lives as long as the page.
+    /// Hear the host's messages for this app. The listener lives as long as the page. The
+    /// listeners are `Fn`: a page host can dispatch an event while one is still running (a
+    /// `saved` for the `save` the handler just posted), and wasm-bindgen refuses to re-enter an
+    /// `FnMut` closure before its body runs, so the message would never reach the queue.
     pub fn listen(&self, handler: impl FnMut(Message) + 'static) {
         let app = self.app;
         let inbox = Rc::new(Inbox::new(handler));
         match &self.transport {
             Transport::Parent { window, parent, origin } => {
                 let (parent, origin, inbox) = (parent.clone(), origin.clone(), inbox.clone());
-                let on_message = Closure::<dyn FnMut(web_sys::MessageEvent)>::new(move |event: web_sys::MessageEvent| {
+                let on_message = Closure::<dyn Fn(web_sys::MessageEvent)>::new(move |event: web_sys::MessageEvent| {
                     if event.origin() != origin || !event.source().is_some_and(|s| js_sys::Object::is(&s, &parent)) {
                         return;
                     }
@@ -116,7 +119,7 @@ impl Host {
             Transport::Page { canvas } => {
                 for kind in Incoming::ALL {
                     let inbox = inbox.clone();
-                    let on_event = Closure::<dyn FnMut(web_sys::CustomEvent)>::new(move |event: web_sys::CustomEvent| {
+                    let on_event = Closure::<dyn Fn(web_sys::CustomEvent)>::new(move |event: web_sys::CustomEvent| {
                         if let Some(message) = read(kind, &event.detail()) {
                             inbox.deliver(message);
                         }
