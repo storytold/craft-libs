@@ -7,29 +7,29 @@
 //! }
 //! ```
 
-use std::cell::{Cell, RefCell};
+use std::cell::Cell;
 use std::rc::Rc;
 
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::{JsCast as _, JsValue};
 use web_sys::js_sys;
 
-use crate::{Incoming, Mode, Outgoing, VERSION, file_name, message_type};
+use crate::{Inbox, Incoming, Mode, Outgoing, VERSION, file_name, message_type};
 
 /// A file the host passes in, not yet copied into the app's memory: check its size first.
 pub enum FileData {
     /// `bytes`: an `ArrayBuffer` or `Uint8Array`, viewed in place.
     Bytes(js_sys::Uint8Array),
-    /// `file` + `size`: a `File` or `Blob`, for the app to read in slices.
-    Blob { blob: web_sys::Blob, size: f64 },
+    /// `file`: a `File` or `Blob`, for the app to read in slices.
+    Blob(web_sys::Blob),
 }
 
 impl FileData {
-    /// The file's length in bytes.
+    /// The file's length in bytes, from the data itself (a host's `size` field is not trusted).
     pub fn size(&self) -> f64 {
         match self {
             Self::Bytes(array) => f64::from(array.length()),
-            Self::Blob { size, .. } => *size,
+            Self::Blob(blob) => blob.size(),
         }
     }
 }
@@ -95,10 +95,10 @@ impl Host {
     /// Hear the host's messages for this app. The listener lives as long as the page.
     pub fn listen(&self, handler: impl FnMut(Message) + 'static) {
         let app = self.app;
-        let handler = Rc::new(RefCell::new(handler));
+        let inbox = Rc::new(Inbox::new(handler));
         match &self.transport {
             Transport::Parent { window, parent, origin } => {
-                let (parent, origin, handler) = (parent.clone(), origin.clone(), handler.clone());
+                let (parent, origin, inbox) = (parent.clone(), origin.clone(), inbox.clone());
                 let on_message = Closure::<dyn FnMut(web_sys::MessageEvent)>::new(move |event: web_sys::MessageEvent| {
                     if event.origin() != origin || !event.source().is_some_and(|s| js_sys::Object::is(&s, &parent)) {
                         return;
@@ -106,7 +106,7 @@ impl Host {
                     let data = event.data();
                     let Some(kind) = string(&data, "type").and_then(|t| Incoming::parse(app, &t)) else { return };
                     if let Some(message) = read(kind, &data) {
-                        (handler.borrow_mut())(message);
+                        inbox.deliver(message);
                     }
                 });
                 if window.add_event_listener_with_callback("message", on_message.as_ref().unchecked_ref()).is_ok() {
@@ -115,10 +115,10 @@ impl Host {
             }
             Transport::Page { canvas } => {
                 for kind in Incoming::ALL {
-                    let handler = handler.clone();
+                    let inbox = inbox.clone();
                     let on_event = Closure::<dyn FnMut(web_sys::CustomEvent)>::new(move |event: web_sys::CustomEvent| {
                         if let Some(message) = read(kind, &event.detail()) {
-                            (handler.borrow_mut())(message);
+                            inbox.deliver(message);
                         }
                     });
                     let name = message_type(app, kind.kind());
@@ -213,12 +213,11 @@ fn read(kind: Incoming, data: &JsValue) -> Option<Message> {
     })
 }
 
-/// `file` (a `Blob`, with `size`) or `bytes` (an `ArrayBuffer` or `Uint8Array`), not copied.
+/// `file` (a `Blob`; its `size` field is ignored for the Blob's own) or `bytes` (an `ArrayBuffer` or `Uint8Array`), not copied.
 fn file_data(data: &JsValue) -> Option<FileData> {
     let file = get(data, "file");
     if let Some(blob) = file.dyn_ref::<web_sys::Blob>() {
-        let size = get(data, "size").as_f64().unwrap_or_else(|| blob.size());
-        return Some(FileData::Blob { blob: blob.clone(), size });
+        return Some(FileData::Blob(blob.clone()));
     }
     let bytes = get(data, "bytes");
     if let Some(array) = bytes.dyn_ref::<js_sys::Uint8Array>() {

@@ -26,6 +26,11 @@
 //! messages are `CustomEvent`s on the canvas, the fields in `detail`). This module is the contract
 //! itself and builds everywhere; [`web`] (wasm32 only) is the bridge an app's web shell calls.
 
+#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
+
+use std::cell::RefCell;
+use std::collections::VecDeque;
+
 #[cfg(target_arch = "wasm32")]
 pub mod web;
 
@@ -130,6 +135,34 @@ pub fn file_name(raw: Option<&str>, fallback: &str) -> String {
     trimmed.chars().take(MAX_NAME_CHARS).collect()
 }
 
+/// Hands the host's messages to the app's handler one at a time. A page host dispatches its events
+/// synchronously, so it can answer while the handler runs (a `saved` for the `save` the handler
+/// just posted): that message waits here and is handled as soon as the running call returns, never
+/// dropped and never given to a second, overlapping call.
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+pub(crate) struct Inbox<M, F> {
+    handler: RefCell<F>,
+    queue: RefCell<VecDeque<M>>,
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+impl<M, F: FnMut(M)> Inbox<M, F> {
+    pub(crate) fn new(handler: F) -> Self {
+        Self { handler: RefCell::new(handler), queue: RefCell::new(VecDeque::new()) }
+    }
+
+    pub(crate) fn deliver(&self, message: M) {
+        self.queue.borrow_mut().push_back(message);
+        // Already running: the outer call drains the queue.
+        let Ok(mut handler) = self.handler.try_borrow_mut() else { return };
+        loop {
+            let next = self.queue.borrow_mut().pop_front();
+            let Some(message) = next else { break };
+            handler(message);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -172,5 +205,31 @@ mod tests {
         assert_eq!(file_name(Some(".."), "x"), "x");
         assert_eq!(file_name(None, "Document.pdf"), "Document.pdf");
         assert_eq!(file_name(Some(&"é".repeat(300)), "x").chars().count(), MAX_NAME_CHARS);
+    }
+
+    #[test]
+    fn messages_that_arrive_while_the_handler_runs_wait_their_turn() {
+        use std::rc::Rc;
+        type Shared = Rc<Inbox<&'static str, Box<dyn FnMut(&'static str)>>>;
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let inbox: Rc<RefCell<Option<Shared>>> = Rc::new(RefCell::new(None));
+        let (log, me) = (seen.clone(), inbox.clone());
+        let handler: Box<dyn FnMut(&'static str)> = Box::new(move |m: &'static str| {
+            log.borrow_mut().push(format!("start {m}"));
+            // The page answers inside the handler, as a synchronous dispatchEvent does.
+            if m == "open"
+                && let Some(inbox) = me.borrow().clone()
+            {
+                inbox.deliver("saved");
+                inbox.deliver("handoff-done");
+            }
+            log.borrow_mut().push(format!("end {m}"));
+        });
+        let shared = Rc::new(Inbox::new(handler));
+        *inbox.borrow_mut() = Some(shared.clone());
+        shared.deliver("open");
+        assert_eq!(*seen.borrow(), ["start open", "end open", "start saved", "end saved", "start handoff-done", "end handoff-done"]);
+        shared.deliver("host");
+        assert_eq!(seen.borrow().len(), 8, "the inbox is usable again after draining");
     }
 }
