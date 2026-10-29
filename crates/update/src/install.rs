@@ -537,6 +537,12 @@ fn remove_appimage(app: &App, path: &Path, record: Option<&Record>) -> Result<()
     Ok(())
 }
 
+/// The id an installed Flatpak runs under: the one detection found it under, which may be one of
+/// the app's [`former_bundles`](App::former_bundles).
+fn flatpak_id(app: &App, installed: &Installed) -> String {
+    installed.package.clone().unwrap_or_else(|| app.bundle_id())
+}
+
 /// Starts an installed app.
 pub fn launch(app: &App, installed: &Installed, paths: &Paths) -> Result<(), String> {
     let _ = paths;
@@ -544,7 +550,7 @@ pub fn launch(app: &App, installed: &Installed, paths: &Paths) -> Result<(), Str
     match installed.source {
         InstallSource::Flatpak => {
             let mut cmd = process::flatpak_command();
-            cmd.args(["run", &app.bundle_id()]);
+            cmd.args(["run", &flatpak_id(app, installed)]);
             process::spawn_detached(cmd)
         }
         InstallSource::MacApp => process::open(path.as_os_str()),
@@ -969,7 +975,7 @@ pub(crate) mod linux {
             // The package detected (photocraft, photocraft-bin or photocraft-git).
             InstallSource::Pacman => remove(&["pacman", "-R", "--noconfirm"], installed.package.as_deref().unwrap_or(app.id)),
             InstallSource::Flatpak => {
-                let id = app.bundle_id();
+                let id = super::flatpak_id(app, installed);
                 let user = process::flatpak_command().args(["uninstall", "--user", "-y", "--noninteractive", &id]).status();
                 if user.is_ok_and(|s| s.success()) {
                     return Ok(());
@@ -1734,6 +1740,23 @@ pub mod windows {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_flatpak_runs_and_uninstalls_under_the_id_it_was_found_under() {
+        let sc = App {
+            bundle: Some("io.tangencylabs.solidcraft"),
+            former_bundles: &["ai.storyteller.solidcraft", "ai.storyteller.solvecraft"],
+            ..App::new("solidcraft", "SolidCraft", "3D modeling", "tangency-labs/solidcraft")
+        };
+        let found = |package: Option<&str>| Installed {
+            version: None,
+            source: InstallSource::Flatpak,
+            location: String::new(),
+            package: package.map(str::to_string),
+        };
+        assert_eq!(flatpak_id(&sc, &found(Some("ai.storyteller.solvecraft"))), "ai.storyteller.solvecraft");
+        assert_eq!(flatpak_id(&sc, &found(None)), "io.tangencylabs.solidcraft");
+    }
 
     #[cfg(unix)]
     #[test]

@@ -406,7 +406,8 @@ pub mod linux {
         }
         let order = [InstallSource::Deb, InstallSource::Rpm, InstallSource::Pacman, InstallSource::Flatpak];
         if let Some(p) = packages::find(app, &snapshot.packages, &order) {
-            let location = if p.manager == InstallSource::Flatpak { app.bundle_id() } else { binary_on_path(app.id) };
+            // A Flatpak runs under the id it was found under, which may be an older one.
+            let location = if p.manager == InstallSource::Flatpak { p.name.clone() } else { binary_on_path(app.id) };
             return Some(Installed { version: packages::version_of(p), source: p.manager, location, package: Some(p.name.clone()) });
         }
         detect_system_install(app)
@@ -458,6 +459,21 @@ pub mod freebsd {
 #[cfg(all(test, target_os = "linux"))]
 mod linux_tests {
     use super::*;
+
+    #[test]
+    fn a_flatpak_found_under_an_older_id_is_located_there() {
+        let sc = App {
+            bundle: Some("io.tangencylabs.solidcraft"),
+            former_bundles: &["ai.storyteller.solidcraft", "ai.storyteller.solvecraft"],
+            ..App::new("solidcraft", "SolidCraft", "3D modeling", "tangency-labs/solidcraft")
+        };
+        let flatpak = |name: &str| crate::packages::Package { manager: InstallSource::Flatpak, name: name.into(), version: "0.7.0".into() };
+        let snapshot = Snapshot { packages: vec![flatpak("ai.storyteller.solvecraft")] };
+        let found = linux::detect(&sc, &snapshot).unwrap();
+        assert_eq!(found.source, InstallSource::Flatpak);
+        assert_eq!(found.location, "ai.storyteller.solvecraft");
+        assert_eq!(found.package.as_deref(), Some("ai.storyteller.solvecraft"));
+    }
 
     #[test]
     fn ours_filter_matches_rpm_packages() {
