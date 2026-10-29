@@ -15,6 +15,15 @@ opens Windows printer preferences and submits jobs with copies, collation, duple
 
 - **macOS/Linux:** CUPS `lpstat`, `lpoptions` and `lp`. Jobs stream through stdin. Exact-size
   sheets use `fit-to-page=false`; shrink-to-fit uses IPP `print-scaling=auto-fit`.
+- **macOS paper tray:** a job whose options name no `InputSlot` also sends `AP_D_InputSlot=`,
+  the system Print dialog's Paper Feed: Auto Select. Without it CUPS uses the PPD's default
+  tray, and a printer whose default tray is empty holds the job while CUPS reports it completed
+  (storytold/pdfcraft#3752). A tray the job names wins, as does one in the user's `lpoptions`
+  defaults, which `lp` adds to every job. `apply_queue_defaults` puts the same choice in the
+  driver's tray option: `AUTO_SELECT` (an empty keyword, which `lp_args` never sends), labelled
+  "Auto Select", first and as the default unless the user's defaults name another tray. Apps
+  may show their own translation of the label. Other CUPS builds don't know `AP_D_InputSlot`,
+  so Linux jobs are unchanged.
 - **Windows:** in this process, with no PowerShell, script or other program started, so
   printing works where App Control for Business or AppLocker enforce script rules. Printers
   come from `EnumPrinters` (local queues and `\\server\queue` connections) and the default from
