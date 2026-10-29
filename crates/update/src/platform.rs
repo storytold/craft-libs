@@ -191,6 +191,20 @@ pub struct AssetName {
     pub kind: PackageKind,
 }
 
+impl AssetName {
+    /// The architecture the asset is built for: the last part of its token (`windows-x86` → x86).
+    /// `None` for a token that names none (`macos-universal`).
+    pub fn arch(&self) -> Option<Arch> {
+        match self.token.rsplit('-').next()? {
+            "x64" | "x86_64" => Some(Arch::X64),
+            "x86" => Some(Arch::X86),
+            "arm64" | "aarch64" => Some(Arch::Arm64),
+            "riscv64" => Some(Arch::Riscv64),
+            _ => None,
+        }
+    }
+}
+
 /// Reads suite package names or Tauri DMG/MSI names; `None` for checksums, zsync files, CLI
 /// and web bundles, or anything else.
 pub fn parse_asset_name(name: &str, stems: &[&str]) -> Option<AssetName> {
@@ -295,6 +309,15 @@ mod tests {
         assert!(pick_asset(&arm_only, &["artcraft"], Platform { os: Os::Windows, arch: Arch::X64 }, &[PackageKind::Msi]).is_none());
         assert!(parse_asset_name("ArtCraft_not-a-version_x64_en-US.msi", &["artcraft"]).is_none());
         assert!(parse_asset_name("ArtCraft_0.42.1_x64_extra_en-US.msi", &["artcraft"]).is_none());
+    }
+
+    #[test]
+    fn asset_names_carry_their_architecture() {
+        let arch = |name: &str| parse_asset_name(name, &["photocraft"]).unwrap().arch();
+        assert_eq!(arch("photocraft-0.5.0-windows-x64.msi"), Some(Arch::X64));
+        assert_eq!(arch("photocraft-0.5.0-windows-x86.msi"), Some(Arch::X86));
+        assert_eq!(arch("photocraft-0.5.0-linux-aarch64.tar.gz"), Some(Arch::Arm64));
+        assert_eq!(arch("photocraft-0.5.0-macos-universal.dmg"), None);
     }
 
     fn release(names: &[&str]) -> Release {
