@@ -242,11 +242,15 @@ pub fn child_viewport_id(id: WindowId) -> ViewportId {
 }
 
 /// egui reports a monitor's size but not its origin. Assume monitors of that size tile the
-/// desktop and take the tile holding the window's top-left corner, which is right for a single
-/// monitor and for side-by-side monitors of equal size.
+/// desktop and take the tile holding the window's centre, which is right for a single monitor and
+/// for side-by-side monitors of equal size, and stays put when a window's frame reaches past its
+/// tile's corner: a maximized window's top-left corner is a few points negative, and the tile the
+/// corner lands in would be the one before the monitor — a phantom monitor, and every new window
+/// cascaded into it opens off screen.
 fn monitor_bounds(window: Rect, monitor: egui::Vec2) -> Rect {
+    let centre = (window.x + window.width / 2.0, window.y + window.height / 2.0);
     let tile = |pos: f32, len: f32| if len > 0.0 { (pos / len).floor() * len } else { 0.0 };
-    Rect::new(tile(window.x, monitor.x), tile(window.y, monitor.y), monitor.x, monitor.y)
+    Rect::new(tile(centre.0, monitor.x), tile(centre.1, monitor.y), monitor.x, monitor.y)
 }
 
 #[cfg(test)]
@@ -397,5 +401,21 @@ mod tests {
         let monitor = egui::vec2(1920.0, 1080.0);
         assert_eq!(monitor_bounds(Rect::new(2000.0, 10.0, 1.0, 1.0), monitor), Rect::new(1920.0, 0.0, 1920.0, 1080.0));
         assert_eq!(monitor_bounds(Rect::new(10.0, 10.0, 1.0, 1.0), monitor), Rect::new(0.0, 0.0, 1920.0, 1080.0));
+    }
+
+    #[test]
+    fn a_maximized_windows_frame_overshoot_stays_on_its_monitor() {
+        let monitor = egui::vec2(1920.0, 1080.0);
+        // A maximized window reaches a few points past the monitor's corner; its top-left corner
+        // would pick the tile before the monitor — a phantom one at (-1920, -1080) — and every
+        // window cascaded from it opened off screen.
+        let maximized = Rect::new(-8.0, -8.0, 1936.0, 1096.0);
+        assert_eq!(monitor_bounds(maximized, monitor), Rect::new(0.0, 0.0, 1920.0, 1080.0));
+        // The same overshoot on a real monitor to the left and above still finds that monitor.
+        let left_above = Rect::new(-1928.0, -1088.0, 1936.0, 1096.0);
+        assert_eq!(monitor_bounds(left_above, monitor), Rect::new(-1920.0, -1080.0, 1920.0, 1080.0));
+        // A window standing on that monitor keeps finding it.
+        let there = Rect::new(-1920.0, -1080.0, 1440.0, 920.0);
+        assert_eq!(monitor_bounds(there, monitor), Rect::new(-1920.0, -1080.0, 1920.0, 1080.0));
     }
 }
