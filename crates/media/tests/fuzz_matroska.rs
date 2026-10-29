@@ -47,7 +47,8 @@ fn synthetic_files() -> Vec<Vec<u8>> {
 
 fn exercise(data: &[u8]) -> bool {
     let mut parsed = false;
-    for opts in [OpenOptions { index: true, verify_crc: true }, OpenOptions { index: false, verify_crc: false }] {
+    for opts in [OpenOptions { index: true, verify_crc: true, index_limit: None }, OpenOptions { index: false, verify_crc: false, index_limit: None }]
+    {
         let Ok(f) = open_with(data, &opts) else { continue };
         parsed = true;
         let _ = f.duration_ns();

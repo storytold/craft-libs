@@ -168,12 +168,12 @@ fn h264_aac() {
     assert!(!f.cues.is_empty());
     assert!(!f.seek_head.is_empty());
     check_seeks(&bytes, OpenOptions::default(), v, &packets);
-    check_seeks(&bytes, OpenOptions { index: false, verify_crc: false }, v, &packets);
+    check_seeks(&bytes, OpenOptions { index: false, verify_crc: false, index_limit: None }, v, &packets);
     check_seeks(&bytes, OpenOptions::default(), a, &packets);
     // Read + Seek entry point and CRC verification (ffmpeg writes CRC-32 in level-1 elements)
     let d = Demuxer::from_reader(std::io::Cursor::new(bytes.clone())).unwrap();
     assert_eq!(d.file().tracks.len(), 2);
-    let crc = open_with(&bytes[..], &OpenOptions { index: true, verify_crc: true }).unwrap();
+    let crc = open_with(&bytes[..], &OpenOptions { index: true, verify_crc: true, index_limit: None }).unwrap();
     assert!(crc.crc_checked > 0);
     assert!(crc.crc_errors.is_empty());
     let kf = Demuxer::from_slice(&bytes).unwrap().keyframe_index(v).unwrap();
@@ -192,7 +192,7 @@ fn vp9_opus_webm() {
     let v = f.track_of_kind(TrackKind::Video).unwrap();
     assert!(matches!(f.tracks[v].codec, Codec::Vp9 { .. }));
     check_seeks(&bytes, OpenOptions::default(), v, &packets);
-    check_seeks(&bytes, OpenOptions { index: false, verify_crc: false }, v, &packets);
+    check_seeks(&bytes, OpenOptions { index: false, verify_crc: false, index_limit: None }, v, &packets);
 }
 
 #[test]
@@ -241,7 +241,7 @@ fn cues_at_front() {
     assert!(!f.cues.is_empty());
     assert!(f.clusters.len() >= 5);
     let v = f.track_of_kind(TrackKind::Video).unwrap();
-    check_seeks(&bytes, OpenOptions { index: false, verify_crc: false }, v, &packets);
+    check_seeks(&bytes, OpenOptions { index: false, verify_crc: false, index_limit: None }, v, &packets);
 }
 
 #[test]
@@ -252,8 +252,8 @@ fn live_stream_without_cues() {
     assert!(f.duration_ns().unwrap() > 1_900_000_000);
     let v = f.track_of_kind(TrackKind::Video).unwrap();
     // no cues: seeking builds the index by scanning clusters
-    check_seeks(&bytes, OpenOptions { index: false, verify_crc: false }, v, &packets);
-    let mut d = Demuxer::with_options(&bytes[..], OpenOptions { index: false, verify_crc: false }).unwrap();
+    check_seeks(&bytes, OpenOptions { index: false, verify_crc: false, index_limit: None }, v, &packets);
+    let mut d = Demuxer::with_options(&bytes[..], OpenOptions { index: false, verify_crc: false, index_limit: None }).unwrap();
     assert!(!d.file().indexed);
     assert!(!d.keyframe_index(v).unwrap().is_empty());
     assert!(d.file().indexed);

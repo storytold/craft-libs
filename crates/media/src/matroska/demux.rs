@@ -49,6 +49,18 @@ impl FrameBudget {
         Self { frames: by_len.clamp(MIN_FRAME_ALLOWANCE, MAX_FRAMES), bytes: file_len }
     }
 
+    /// The budget left for a file whose `tracks` already hold the frames of an earlier scan.
+    fn resumed(file_len: u64, tracks: &[Track]) -> Self {
+        let mut b = Self::new(file_len);
+        let (frames, bytes) = tracks
+            .iter()
+            .flat_map(|t| t.samples.iter())
+            .fold((0usize, 0u64), |(n, b), s| (n.saturating_add(1), b.saturating_add(u64::from(s.size.max(1)))));
+        b.frames = b.frames.saturating_sub(frames);
+        b.bytes = b.bytes.saturating_sub(bytes);
+        b
+    }
+
     fn take(&mut self, frames: &[(u64, u32)]) -> Result<()> {
         self.frames = self.frames.checked_sub(frames.len()).ok_or(Error::TooLarge("frame count"))?;
         let bytes = frames.iter().map(|&(_, n)| u64::from(n.max(1))).sum::<u64>();
@@ -70,11 +82,24 @@ pub struct OpenOptions {
     /// Verify CRC-32 elements of level-1 elements (and clusters while indexing). Mismatches are
     /// recorded in [`MkvFile::crc_errors`]; parsing continues. Default `false`.
     pub verify_crc: bool,
+    /// Index only the front of the file: stop the cluster scan at this absolute byte offset.
+    /// Default `None` (scan every cluster).
+    ///
+    /// The first Cluster is always scanned (a file needs at least one to be useful). After it, a
+    /// Cluster is scanned only if it lies entirely below the limit, so the scan never reads past
+    /// `index_limit` (except inside the first Cluster) and a byte source that has loaded only the
+    /// front of the file is enough. Info and Tracks are read as usual; Cues, Tags and the other
+    /// elements after the scanned part are not read until the index is completed.
+    ///
+    /// The sample tables then cover everything before [`MkvFile::index_end`], which is `Some`
+    /// until the index is complete ([`MkvFile::indexed`]). Continue with [`MkvFile::extend_index`]
+    /// without rescanning. Ignored when `index` is `false`.
+    pub index_limit: Option<u64>,
 }
 
 impl Default for OpenOptions {
     fn default() -> Self {
-        Self { index: true, verify_crc: false }
+        Self { index: true, verify_crc: false, index_limit: None }
     }
 }
 
@@ -105,12 +130,27 @@ pub struct MkvFile {
     pub first_cluster: Option<u64>,
     /// Sample tables have been built by scanning all clusters.
     pub indexed: bool,
+    /// Set while an open limited by [`OpenOptions::index_limit`] left the index incomplete: the
+    /// absolute offset where the cluster scan stopped and where [`MkvFile::extend_index`]
+    /// continues. The tables cover every frame before it and none after. `None` once the index
+    /// is complete, and for files opened without an index.
+    pub index_end: Option<u64>,
+    /// Walker state to continue the scan from [`MkvFile::index_end`].
+    resume: Option<Resume>,
     /// Number of CRC-32 elements verified (with `verify_crc`).
     pub crc_checked: u32,
     /// Absolute offsets of elements whose CRC-32 did not match.
     pub crc_errors: Vec<u64>,
     /// Non-fatal problems met while parsing (damage, resyncs, truncation).
     pub warnings: Vec<String>,
+}
+
+/// What a scan stopped at [`MkvFile::index_end`] needs to continue: the level-1 elements already
+/// read (so a later pass does not read them twice) and the metadata byte budget left.
+#[derive(Clone, Debug, Default)]
+struct Resume {
+    parsed: HashMap<u64, u64>,
+    meta_left: u64,
 }
 
 /// One demuxed frame.
@@ -179,6 +219,10 @@ struct Cache {
 struct Io<'a, S: ByteSource + ?Sized> {
     src: &'a S,
     len: u64,
+    /// Bytes the caller has available (an [`OpenOptions::index_limit`]): the read window does not
+    /// run past it unless a read needs the bytes, so a source that has loaded only the front of
+    /// the file is not asked for the rest. `len` without a limit.
+    avail: u64,
     cache: &'a mut Cache,
 }
 
@@ -209,7 +253,7 @@ impl Hdr {
 impl<'a, S: ByteSource + ?Sized> Io<'a, S> {
     fn new(src: &'a S, cache: &'a mut Cache) -> Self {
         let len = src.len();
-        Self { src, len, cache }
+        Self { src, len, avail: len, cache }
     }
 
     /// Up to `n` (≤ WIN) bytes at `pos` (fewer at EOF).
@@ -221,7 +265,10 @@ impl<'a, S: ByteSource + ?Sized> Io<'a, S> {
         let want_end = (pos + n as u64).min(self.len);
         let c = &*self.cache;
         if !(pos >= c.start && want_end <= c.start + c.buf.len() as u64) {
-            let fill = ((self.len - pos) as usize).min(WIN);
+            let window_end = (pos + WIN as u64).min(self.len);
+            // stay inside what is available, but never fetch less than this read needs
+            let end = if self.avail > pos { window_end.min(self.avail).max(want_end) } else { want_end };
+            let fill = (end - pos) as usize;
             let mut buf = std::mem::take(&mut self.cache.buf);
             buf.resize(fill, 0);
             self.src.read_at(pos, &mut buf)?;
@@ -618,12 +665,20 @@ pub fn open_with<S: ByteSource>(src: S, opts: &OpenOptions) -> Result<MkvFile> {
 
 fn open_impl<S: ByteSource + ?Sized>(src: &S, opts: &OpenOptions, cache: &mut Cache) -> Result<MkvFile> {
     let mut io = Io::new(src, cache);
+    if let Some(l) = opts.index_limit.filter(|_| opts.index) {
+        io.avail = l;
+    }
     let len = io.len;
     // EBML header (tolerate leading junk in the first 64 KiB)
     let start = {
-        let b = io.peek(0, WIN)?;
         let magic = [0x1A, 0x45, 0xDF, 0xA3];
-        b.windows(4).position(|w| w == magic).ok_or_else(|| Error::NotMatroska("no EBML header".into()))? as u64
+        // the usual case needs 4 bytes, not the whole window (a source may hold only the front of the file)
+        if io.peek(0, 4)? == magic {
+            0
+        } else {
+            let b = io.peek(0, WIN)?;
+            b.windows(4).position(|w| w == magic).ok_or_else(|| Error::NotMatroska("no EBML header".into()))? as u64
+        }
     };
     let eh = io.header(start, len)?.ok_or_else(|| Error::NotMatroska("bad EBML header".into()))?;
     let hdr_end = eh.end(len);
@@ -671,6 +726,8 @@ fn open_impl<S: ByteSource + ?Sized>(src: &S, opts: &OpenOptions, cache: &mut Ca
         attachments: Vec::new(),
         first_cluster: None,
         indexed: false,
+        index_end: None,
+        resume: None,
         crc_checked: 0,
         crc_errors: Vec::new(),
         warnings: Vec::new(),
@@ -678,7 +735,8 @@ fn open_impl<S: ByteSource + ?Sized>(src: &S, opts: &OpenOptions, cache: &mut Ca
     if seg.overruns(len) {
         file.warnings.push("Segment extends past end of file (truncated)".into());
     }
-    let mut w = Walker { opts, parsed: HashMap::new(), meta_left: len, blocks_seen: false, lookup: None, budget: FrameBudget::new(len) };
+    let mut w =
+        Walker { opts, parsed: HashMap::new(), meta_left: len, blocks_seen: false, resuming: false, lookup: None, budget: FrameBudget::new(len) };
     w.walk(&mut io, &mut file)?;
     finish_tracks(&mut file);
     Ok(file)
@@ -692,6 +750,9 @@ struct Walker<'o> {
     /// valid file stays within its length; SeekHead entries pointing into one another do not.
     meta_left: u64,
     blocks_seen: bool,
+    /// Continuing a scan (see [`MkvFile::extend_index`]): keep `file.index_end` and the resume
+    /// state current, as a limited open does, so that a failed read can be retried.
+    resuming: bool,
     /// Built at the first Cluster after Tracks is parsed.
     lookup: Option<TrackIndex>,
     budget: FrameBudget,
@@ -699,9 +760,31 @@ struct Walker<'o> {
 
 impl Walker<'_> {
     fn walk<S: ByteSource + ?Sized>(&mut self, io: &mut Io<'_, S>, file: &mut MkvFile) -> Result<()> {
+        let start = file.segment_data_start;
+        self.walk_from(io, file, start)
+    }
+
+    /// Walk the Segment's children from `start`. With an [`OpenOptions::index_limit`] the walk may
+    /// stop early, leaving `file.index_end` and the resume state for [`MkvFile::extend_index`].
+    fn walk_from<S: ByteSource + ?Sized>(&mut self, io: &mut Io<'_, S>, file: &mut MkvFile, start: u64) -> Result<()> {
         let seg_end = file.segment_end;
-        let mut pos = file.segment_data_start;
+        let limit = self.opts.index_limit.filter(|_| self.opts.index);
+        if let Some(l) = limit {
+            io.avail = l;
+        }
+        let mut pos = start;
+        let track = limit.is_some() || self.resuming;
+        let mut stopped = false;
         while pos < seg_end {
+            if track {
+                self.save(file, pos);
+            }
+            // the first Cluster is always scanned; the rest only while they fit below the limit
+            // (checked before the header is read: that lies past the limit too)
+            if limit.is_some_and(|l| pos >= l) && !file.clusters.is_empty() {
+                stopped = true;
+                break;
+            }
             let Some(h) = io.header(pos, seg_end)? else {
                 match io.resync(pos + 1, seg_end)? {
                     Some(p) => {
@@ -712,12 +795,21 @@ impl Walker<'_> {
                     None => break,
                 }
             };
+            if let Some(l) = limit
+                && !file.clusters.is_empty()
+                && h.id == CLUSTER
+                && matches!(h.size, Size::Known(_))
+                && h.end(seg_end) > l
+            {
+                stopped = true;
+                break;
+            }
             match h.id {
                 CLUSTER => {
                     if file.first_cluster.is_none() {
                         file.first_cluster = Some(h.pos);
                         // make sure Info/Tracks are known before interpreting blocks
-                        self.follow_seek_head(io, file, &[INFO, TRACKS])?;
+                        self.follow_seek_head(io, file, &[INFO, TRACKS], u64::MAX)?;
                         if !self.opts.index {
                             break;
                         }
@@ -754,22 +846,43 @@ impl Walker<'_> {
                 }
             }
         }
-        self.follow_seek_head(io, file, &[INFO, TRACKS, CUES, CHAPTERS, TAGS, ATTACHMENTS, SEEK_HEAD])?;
+        if track {
+            self.save(file, pos);
+        }
+        if stopped {
+            // what lies after the scanned part (Cues, Tags…) waits for the rest of the index
+            let before = file.index_end.unwrap_or(pos);
+            self.follow_seek_head(io, file, &[INFO, TRACKS, CUES, CHAPTERS, TAGS, ATTACHMENTS, SEEK_HEAD], before)?;
+            file.cues.sort_by_key(|c| c.time);
+            file.indexed = false;
+            return Ok(());
+        }
+        self.follow_seek_head(io, file, &[INFO, TRACKS, CUES, CHAPTERS, TAGS, ATTACHMENTS, SEEK_HEAD], u64::MAX)?;
         // follow a second-level SeekHead reached through the first one
-        self.follow_seek_head(io, file, &[CUES, CHAPTERS, TAGS, ATTACHMENTS])?;
+        self.follow_seek_head(io, file, &[CUES, CHAPTERS, TAGS, ATTACHMENTS], u64::MAX)?;
         file.cues.sort_by_key(|c| c.time);
         file.indexed = self.opts.index;
+        file.index_end = None;
+        file.resume = None;
         Ok(())
     }
 
-    fn follow_seek_head<S: ByteSource + ?Sized>(&mut self, io: &mut Io<'_, S>, file: &mut MkvFile, ids: &[u32]) -> Result<()> {
+    /// Record that everything before `pos` is done: a read that fails from here on (data not
+    /// loaded yet) can be retried by [`MkvFile::extend_index`] without repeating any of it.
+    fn save(&self, file: &mut MkvFile, pos: u64) {
+        file.index_end = Some(pos);
+        file.resume = Some(Resume { parsed: self.parsed.clone(), meta_left: self.meta_left });
+    }
+
+    /// Read the elements of the given kinds that the SeekHead points at below `before`.
+    fn follow_seek_head<S: ByteSource + ?Sized>(&mut self, io: &mut Io<'_, S>, file: &mut MkvFile, ids: &[u32], before: u64) -> Result<()> {
         let entries = file.seek_head.clone();
         for e in entries {
             if !ids.contains(&e.id) {
                 continue;
             }
             let Some(abs) = file.segment_data_start.checked_add(e.position) else { continue };
-            if self.parsed.contains_key(&abs) || abs >= file.segment_end {
+            if self.parsed.contains_key(&abs) || abs >= file.segment_end || abs >= before {
                 continue;
             }
             match io.header(abs, file.segment_end)? {
@@ -932,6 +1045,27 @@ impl MkvFile {
         Some((end.max(0) as u64).saturating_mul(self.info.timestamp_scale))
     }
 
+    /// Continue a scan that an [`OpenOptions::index_limit`] stopped, from [`MkvFile::index_end`],
+    /// without rescanning what is indexed. `opts.index_limit` bounds the new scan like at open
+    /// (`None`: to the end of the Segment, which completes the index: Cues, Tags… are read and
+    /// [`MkvFile::indexed`] becomes `true`); `opts.verify_crc` applies as at open.
+    ///
+    /// A no-op when there is nothing left to scan, including a limit at or below `index_end`.
+    /// Safe to call again after an error such as a byte source that has not loaded the range yet
+    /// (`WouldBlock`): the clusters scanned before the failure stay indexed and `index_end` says
+    /// where the next call continues.
+    pub fn extend_index<S: ByteSource + ?Sized>(&mut self, src: &S, opts: &OpenOptions) -> Result<()> {
+        let Some(start) = self.index_end else { return Ok(()) };
+        let resume = self.resume.take().unwrap_or_default();
+        let opts = OpenOptions { index: true, ..opts.clone() };
+        let mut cache = Cache::default();
+        let mut io = Io::new(src, &mut cache);
+        let budget = FrameBudget::resumed(io.len, &self.tracks);
+        let mut w =
+            Walker { opts: &opts, parsed: resume.parsed, meta_left: resume.meta_left, blocks_seen: true, resuming: true, lookup: None, budget };
+        w.walk_from(&mut io, self, start)
+    }
+
     /// Index of the track with this `TrackNumber`.
     pub fn track_by_number(&self, number: u64) -> Option<usize> {
         self.tracks.iter().position(|t| t.number == number)
@@ -1048,12 +1182,16 @@ impl<S: ByteSource> Demuxer<S> {
         self.file.duration_ns()
     }
 
-    /// Scan all clusters and build sample tables (no-op if already indexed).
+    /// Scan all clusters and build sample tables (no-op if already indexed; continues a scan that
+    /// stopped at [`OpenOptions::index_limit`] from where it stopped).
     pub fn build_index(&mut self) -> Result<()> {
         if self.file.indexed {
             return Ok(());
         }
-        let opts = OpenOptions { index: true, verify_crc: self.opts.verify_crc };
+        let opts = OpenOptions { index: true, verify_crc: self.opts.verify_crc, index_limit: None };
+        if self.file.index_end.is_some() {
+            return self.file.extend_index(&self.src, &opts);
+        }
         self.file = open_impl(&self.src, &opts, &mut self.cache)?;
         self.lookup = track_index(&self.file.tracks);
         Ok(())
