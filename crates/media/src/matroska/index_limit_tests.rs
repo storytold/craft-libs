@@ -251,3 +251,19 @@ fn demuxer_completes_a_limited_index_and_seeks() {
     let at = d.seek(0, 3_500_000_000).expect("seek");
     assert_eq!(at.pts_ns, 3_500_000_000);
 }
+
+#[test]
+fn a_tiny_last_block_needs_no_bytes_past_its_cluster() {
+    let mut v = TrackSpec::new(TrackKind::Video, "V_MJPEG");
+    v.video_size = Some((16, 16));
+    let mut w = MkvWriter::new(Cursor::new(Vec::new()), vec![v], MuxOptions::default()).expect("writer");
+    for k in 0..30 {
+        w.write_frame(0, k * 100_000_000, true, &[k as u8], Some(100_000_000)).expect("frame");
+    }
+    let bytes = w.finish().expect("finish").into_inner();
+    let full = limited(&bytes, None);
+    // a 7-byte block ends each cluster: its header read must not reach into the next cluster
+    let src = Loaded { data: &bytes, loaded: Cell::new(full.clusters[0].end) };
+    let f = open_with(&src, &OpenOptions { index_limit: Some(src.loaded.get()), ..unlimited() }).expect("open");
+    assert_eq!(f.clusters.len(), 1);
+}

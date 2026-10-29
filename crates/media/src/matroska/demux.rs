@@ -297,7 +297,8 @@ impl<'a, S: ByteSource + ?Sized> Io<'a, S> {
         if pos >= limit {
             return Ok(None);
         }
-        let b = self.peek(pos, 12)?;
+        // never more than the parent holds: its last element may be shorter than a maximal header
+        let b = self.peek(pos, 12.min(usize::try_from(limit - pos).unwrap_or(12)))?;
         let Some((id, il)) = read_id(b) else { return Ok(None) };
         let Some((size, sl)) = read_size(&b[il..]) else { return Ok(None) };
         let hlen = il + sl;
