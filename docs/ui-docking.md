@@ -384,6 +384,9 @@ A flyout fits its content the same way, without the title bar.
 - With `DockStyle::wheel_selects_tabs`, the mouse wheel over a tab strip selects the next or
   previous tab. With `middle_click_closes_tabs`, a middle click on a closable panel's tab closes
   it.
+- A closable panel whose `DockContent::tab_close` returns true has a × after its tab's label
+  that closes it: always on the active tab, on an inactive tab while the pointer is over it.
+  The tab keeps the ×'s room either way, so it does not change width. `Hit::TabClose` names it.
 - A column's »/« button collapses it to icons, one icon per panel with a separator between groups.
   Widen an iconic column to show panel names. Click an icon to open its group as a flyout on the
   canvas side. Drag an icon to move its panel, or an icon group's top edge (the separator line above it) to move the group.

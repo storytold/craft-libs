@@ -3,7 +3,10 @@ use std::{fmt::Debug, hash::Hash, sync::Arc};
 use egui::{Color32, Galley, Id, Key, Rect, Sense, Stroke, StrokeKind, Ui, UiBuilder, pos2, vec2};
 
 use super::{Renderer, clamp_float, stripless};
-use crate::docking::{Action, DockContent, DropTarget, GroupDrag, GroupGesture, Placement, Target, begin_drag, surface::TAB_PADDING};
+use crate::docking::{
+    Action, DockContent, DropTarget, GroupDrag, GroupGesture, Placement, Target, begin_drag,
+    surface::{TAB_CLOSE_WIDTH, TAB_PADDING},
+};
 use crate::tabs;
 
 /// Where a group is drawn. It decides the drop targets the group offers and its gestures.
@@ -95,6 +98,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
                     .size()
                     .x
                     + TAB_PADDING
+                    + if self.tab_closes(p) { TAB_CLOSE_WIDTH } else { 0.0 }
             })
             .collect();
         let wanted = self.content.group_extra_tabs_width(panels, selected, floating);
@@ -387,14 +391,19 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
     /// double-click toggles minimized only when the owner minimizes. Middle-click closes only when
     /// the style enables it and the panel is closable. The context menu emits `Action`s, with float,
     /// move and close entries gated by the panel's permissions. `owner: None` removes minimized
-    /// semantics and undock latching. An elided label exposes its full text as hover text.
+    /// semantics and undock latching. An elided label exposes its full text as hover text. A tab of
+    /// a group whose panel asks for a × ([`Self::tab_closes`]) draws it after the label: always
+    /// on the active tab, on the others while the pointer is over the tab.
     pub(super) fn tab(&mut self, ui: &mut Ui, panel: &P, rect: Rect, active: bool, group: Rect, owner: Option<&TabGroup<'_, P>>) {
         let minimized = owner.filter(|owner| self.minimizes(owner)).map(|owner| owner.minimized);
         let policy = self.permissions(panel);
         let label = self.label_of(panel);
         let color = if active { self.style.text } else { self.style.inactive_text };
-        let galley = self.tab_label(ui, panel, &label, color, (rect.width() - TAB_PADDING).max(0.0));
+        let closes = owner.is_some() && self.tab_closes(panel);
+        let close_width = if closes { TAB_CLOSE_WIDTH } else { 0.0 };
+        let galley = self.tab_label(ui, panel, &label, color, (rect.width() - TAB_PADDING - close_width).max(0.0));
         let elided = galley.elided;
+        let label_end = rect.left() + TAB_PADDING * 0.5 + galley.size().x;
         let tab_id = self.id.with(("tab", panel));
         let pointer_focus = self.pointer_focus(ui, tab_id);
         let response = tabs::Tab::new(tab_id, &label, active)
@@ -408,6 +417,10 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
             });
         let response = if elided { response.on_hover_text(&label) } else { response };
         self.register_interaction(ui.ctx(), response.id);
+        // After the tab, so the × takes the clicks over it.
+        if closes && (active || ui.rect_contains_pointer(rect)) {
+            self.tab_close_button(ui, panel, rect, label_end);
+        }
         if response.is_pointer_button_down_on() || response.clicked_by(egui::PointerButton::Primary) {
             ui.ctx().data_mut(|d| d.insert_temp(tab_id.with("pointer-focus"), true));
         }
@@ -488,6 +501,29 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
                 self.group_menu(ui, owner, panel);
             }
         });
+    }
+
+    /// Whether `panel`'s tab in a group carries a ×: the host asks for one and the panel is
+    /// closable.
+    pub(super) fn tab_closes(&self, panel: &P) -> bool {
+        self.permissions(panel).closable && self.content.tab_close(panel)
+    }
+
+    /// The × of `tab`, in the room after its label (which ends at `label_end`): a click closes
+    /// `panel`.
+    fn tab_close_button(&mut self, ui: &mut Ui, panel: &P, tab: Rect, label_end: f32) {
+        let glyph = Rect::from_center_size(pos2(label_end + TAB_CLOSE_WIDTH * 0.5, tab.center().y), vec2(10.0, 10.0));
+        let response = ui.interact(glyph.expand(2.0).intersect(tab), self.id.with(("tab", panel)).with("close"), Sense::click());
+        self.register_interaction(ui.ctx(), response.id);
+        response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), &self.style.close_label));
+        let color = if response.hovered() { self.style.text } else { self.style.inactive_text };
+        let (k, stroke) = (3.5, Stroke::new(1.2, color));
+        let painter = ui.painter().with_clip_rect(tab.intersect(ui.clip_rect()));
+        painter.line_segment([glyph.center() + vec2(-k, -k), glyph.center() + vec2(k, k)], stroke);
+        painter.line_segment([glyph.center() + vec2(-k, k), glyph.center() + vec2(k, -k)], stroke);
+        if response.clicked() {
+            self.output.actions.push(Action::Close { panel: panel.clone() });
+        }
     }
 }
 

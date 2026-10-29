@@ -842,3 +842,52 @@ fn frame_tabs_follow_the_wheel_and_close_on_a_middle_click() {
     assert_eq!(out.actions, vec![Action::Close { panel: 2 }]);
     assert_eq!(second(&d), tabs(&[3], 0));
 }
+
+/// Panels 1 and 2 ask for a × on their tab; panel 3 does not.
+struct Closing;
+
+impl DockContent<u32> for Closing {
+    fn body(&mut self, ui: &mut egui::Ui, _: &u32) {
+        ui.label("Body");
+    }
+    fn logical_label(&self, panel: &u32) -> String {
+        format!("Panel {panel}")
+    }
+    fn tab_close(&self, panel: &u32) -> bool {
+        *panel != 3
+    }
+}
+
+#[test]
+/// The active tab always shows its ×, an inactive one only while the pointer is over it, and a
+/// panel the host gives none never does. The × keeps its room, so a tab keeps its width when it
+/// is hovered. A click on an inactive tab's × closes that panel without activating it; a locked
+/// layout shows none.
+fn tab_close_shows_on_the_active_tab_and_on_a_hovered_inactive_tab() {
+    let layout = Layout { root: Some(tabs(&[1, 2, 3], 0)), floating: Vec::new() };
+    let mut d = testing::DockDriver::new(layout, Closing);
+    d.move_to(pos2(400.0, 400.0));
+    assert!(d.hit(&Hit::TabClose(1)).is_some(), "the active tab's ×");
+    assert!(d.hit(&Hit::TabClose(2)).is_none(), "no × on an inactive tab the pointer is not over");
+    let (one, two, three) = (d.hit(&Hit::Tab(1)).unwrap(), d.hit(&Hit::Tab(2)).unwrap(), d.hit(&Hit::Tab(3)).unwrap());
+    assert!((one.width() - two.width()).abs() < 0.5, "{one:?} {two:?}");
+    assert!((two.width() - three.width() - 16.0).abs() < 0.5, "the × takes 16 pt: {two:?} {three:?}");
+
+    d.move_to(two.center());
+    let close = d.hit(&Hit::TabClose(2)).expect("hovering shows the inactive tab's ×");
+    assert!(two.contains_rect(close), "{close:?} inside {two:?}");
+    assert_eq!(d.hit(&Hit::Tab(2)), Some(two), "hovering keeps the tab's width");
+
+    d.move_to(three.center());
+    assert!(d.hit(&Hit::TabClose(3)).is_none(), "the host gives panel 3 no ×");
+    assert!(d.hit(&Hit::TabClose(2)).is_none(), "the × goes with the pointer");
+
+    d.move_to(close.center());
+    let out = d.click(close.center());
+    assert_eq!(out.actions, vec![Action::Close { panel: 2 }]);
+    assert_eq!(d.layout.root, Some(tabs(&[1, 3], 0)), "panel 1 stays active");
+
+    d.locked = true;
+    d.settle();
+    assert!(d.hit(&Hit::TabClose(1)).is_none(), "a locked layout closes nothing");
+}

@@ -14,6 +14,9 @@ use super::{DockArea, Floating, Layout, Node, render::RESIZE_HANDLES};
 pub enum Hit<P> {
     /// A tab: click activates, drag moves the panel (S1).
     Tab(P),
+    /// The × on a tab ([`super::DockContent::tab_close`]): click closes the panel. An
+    /// inactive tab draws it only while the pointer is over the tab.
+    TabClose(P),
     /// A group's drag bar: drag moves the group; a right click, Enter or Space opens the group
     /// menu (S2).
     DragBar(P),
@@ -95,6 +98,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> DockArea<'_, P> {
     pub fn hit_id(id: Id, hit: &Hit<P>) -> Id {
         match hit {
             Hit::Tab(p) => id.with(("tab", p)),
+            Hit::TabClose(p) => id.with(("tab", p)).with("close"),
             Hit::Icon(p) => id.with(("icon", p)),
             Hit::Overflow(p) => id.with(("overflow", p)),
             Hit::StackToggle(p) => id.with(("collapse", p)),
@@ -148,6 +152,7 @@ pub(super) fn named<P: Clone + Eq + Hash + Debug + Send + Sync + 'static>(area: 
         let p = || panel.clone();
         for hit in [
             Hit::Tab(p()),
+            Hit::TabClose(p()),
             Hit::Icon(p()),
             Hit::Overflow(p()),
             Hit::StackToggle(p()),

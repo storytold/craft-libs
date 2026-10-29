@@ -7,6 +7,9 @@ use super::{Action, DockError, DropTarget, Layout, Monitor, Permissions, render:
 /// Horizontal room around a tab's label, both when measuring its natural width and when cutting it.
 pub(super) const TAB_PADDING: f32 = 24.0;
 
+/// Room for the × after the label of a tab that has one ([`DockContent::tab_close`]).
+pub(super) const TAB_CLOSE_WIDTH: f32 = 16.0;
+
 /// Application-supplied chrome. Body renderers retain their own UI style and contents.
 #[derive(Clone, Debug)]
 #[non_exhaustive]
@@ -897,6 +900,13 @@ pub trait DockContent<P> {
     }
     fn label(&mut self, _ui: &Ui, _panel: &P, logical: &str, _font: &FontId, _color: Color32) -> egui::WidgetText {
         logical.into()
+    }
+    /// Whether the panel's tab in a tab group carries a × after its label that closes the panel:
+    /// always on the shown tab, on the others while the pointer is over the tab. Only closable
+    /// panels get one. The tab keeps the ×'s room either way, so it keeps its width when it is
+    /// shown or hovered. False (the default) draws no ×.
+    fn tab_close(&self, _panel: &P) -> bool {
+        false
     }
     /// Shape stock Float/Move/Close action text independently of panel identity.
     /// The renderer preserves `logical` for accessibility, even when the visual text differs.
