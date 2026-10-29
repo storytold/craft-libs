@@ -14,7 +14,7 @@ use std::io::Write as _;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use winprint::printer::{PrinterDevice, WinPdfPrinter};
-use winprint::ticket::document::{NS_PSK, OwnedName, PrintFeature, PrintTicketDocument, reader::ParsableXmlDocument as _};
+use winprint::ticket::document::{NS_PSK, OwnedName, PrintFeature, PrintTicketDocument, WithScoredProperties as _, reader::ParsableXmlDocument as _};
 use winprint::ticket::{FeatureOptionPack as _, PageMediaSize, PrintCapabilities, PrintTicket, PrintTicketBuilder};
 
 use crate::sheets::{self, Fit, SAME};
@@ -77,31 +77,49 @@ fn driver_offers(device: &PrinterDevice) -> ticket::Offered {
 
 /// [`crate::printer_papers`]: the driver's page media sizes as it has them, keyed by their
 /// Print Schema or vendor name and named by their display name, the driver's current default
-/// marked. Roll media (a side of 0) and sizes beyond PDF's 200-inch page limit are left out, as
-/// are repeated keywords.
+/// marked. Roll media (a side of 0), sizes beyond PDF's 200-inch page limit and the driver's
+/// custom-size entry are left out, as are repeated keywords.
 pub(crate) fn printer_papers(printer: &str) -> Vec<PrinterPaper> {
-    const MAX_SIDE: f64 = 14_400.0;
     let Ok(devices) = PrinterDevice::all() else { return Vec::new() };
     let Some(device) = devices.iter().find(|d| d.name() == printer) else { return Vec::new() };
     let base = user_ticket(device);
     let Ok(capabilities) = capabilities_for(device, base.as_ref()) else { return Vec::new() };
     let default_key = default_media_keyword(device, base.as_ref(), &capabilities);
+    papers_in(&capabilities, default_key.as_deref())
+}
+
+/// [`printer_papers`] from capabilities already read, so tests need no driver.
+fn papers_in(capabilities: &PrintCapabilities, default_key: Option<&str>) -> Vec<PrinterPaper> {
+    const MAX_SIDE: f64 = 14_400.0;
     let mut out: Vec<PrinterPaper> = Vec::new();
     for media in capabilities.page_media_sizes() {
         if out.len() >= crate::MAX_PRINTER_PAPERS {
             break;
         }
         let Some(key) = media.option().name.as_ref().map(|n| n.local_name.clone()).filter(|k| !k.is_empty()) else { continue };
+        if sized_by_parameter(&media) {
+            continue;
+        }
         let size = media.size();
         let (w, h) = (ticket::points(size.width_in_micron()), ticket::points(size.height_in_micron()));
         if size.is_roll() || !(1.0..=MAX_SIDE).contains(&w) || !(1.0..=MAX_SIDE).contains(&h) || out.iter().any(|p| p.key == key) {
             continue;
         }
         let label = media.display_name().filter(|l| !l.trim().is_empty()).map_or_else(|| key.clone(), |l| l.trim().to_string());
-        let default = default_key.as_deref() == Some(key.as_str());
+        let default = default_key == Some(key.as_str());
         out.push(PrinterPaper { key, label, size: (w, h), default });
     }
     out
+}
+
+/// Whether the driver leaves `media`'s width or height to a parameter: its custom-size entry
+/// (`psk:CustomMediaSize`, "User defined size"), whose size is the user's to type. Read as a
+/// paper it takes the parameter's default, the driver's smallest size (10 × 10 mm on an Xprinter
+/// XP-90), and a job on it would come out at that size.
+fn sized_by_parameter(media: &PageMediaSize) -> bool {
+    ["MediaSizeWidth", "MediaSizeHeight"]
+        .iter()
+        .any(|side| media.option().get_scored_property(side, Some(NS_PSK)).is_some_and(|p| p.parameter_ref.is_some()))
 }
 
 /// The signed-in user's own settings for the printer as a job ticket: what they set in its
@@ -453,6 +471,23 @@ pub(crate) fn submit_with_progress(pdf: &[u8], job: &Job, progress: &mut dyn FnM
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The page media sizes of an Xprinter XP-90 (Windows 11): a driver paper, two forms from
+    /// Print Server Properties, and the custom-size entry, whose sides are parameters.
+    const XP90_MEDIA: &str = r#"<psf:PrintCapabilities xmlns:psf="http://schemas.microsoft.com/windows/2003/08/printing/printschemaframework" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema" version="1" xmlns:ns0000="http://schemas.microsoft.com/windows/printing/oemdriverpt/XP_90_10_0_26100_9711_" xmlns:psk="http://schemas.microsoft.com/windows/2003/08/printing/printschemakeywords"><psf:Feature name="psk:PageMediaSize"><psf:Property name="psf:SelectionType"><psf:Value xsi:type="xsd:QName">psk:PickOne</psf:Value></psf:Property><psf:Property name="psk:DisplayName"><psf:Value xsi:type="xsd:string">Kağıt Boyutu</psf:Value></psf:Property><psf:Option name="ns0000:Option1" constrained="psk:None"><psf:ScoredProperty name="psk:MediaSizeWidth"><psf:Value xsi:type="xsd:integer">72071</psf:Value></psf:ScoredProperty><psf:ScoredProperty name="psk:MediaSizeHeight"><psf:Value xsi:type="xsd:integer">209957</psf:Value></psf:ScoredProperty><psf:Property name="psk:DisplayName"><psf:Value xsi:type="xsd:string">80(72.1) x 210 mm</psf:Value></psf:Property></psf:Option><psf:Option name="ns0000:UserForm225" constrained="psk:None"><psf:ScoredProperty name="psk:MediaSizeWidth"><psf:Value xsi:type="xsd:integer">58000</psf:Value></psf:ScoredProperty><psf:ScoredProperty name="psk:MediaSizeHeight"><psf:Value xsi:type="xsd:integer">40000</psf:Value></psf:ScoredProperty><psf:Property name="psk:DisplayName"><psf:Value xsi:type="xsd:string">BARKOD</psf:Value></psf:Property></psf:Option><psf:Option name="ns0000:UserForm226" constrained="psk:None"><psf:ScoredProperty name="psk:MediaSizeWidth"><psf:Value xsi:type="xsd:integer">58000</psf:Value></psf:ScoredProperty><psf:ScoredProperty name="psk:MediaSizeHeight"><psf:Value xsi:type="xsd:integer">48000</psf:Value></psf:ScoredProperty><psf:Property name="psk:DisplayName"><psf:Value xsi:type="xsd:string">58x44</psf:Value></psf:Property></psf:Option><psf:Option name="psk:CustomMediaSize" constrained="psk:None"><psf:Property name="psk:DisplayName"><psf:Value xsi:type="xsd:string">Kullanıcı Tanımlı Boyut</psf:Value></psf:Property><psf:ScoredProperty name="psk:MediaSizeWidth"><psf:ParameterRef name="psk:PageMediaSizeMediaSizeWidth"/></psf:ScoredProperty><psf:ScoredProperty name="psk:MediaSizeHeight"><psf:ParameterRef name="psk:PageMediaSizeMediaSizeHeight"/></psf:ScoredProperty></psf:Option></psf:Feature><psf:ParameterDef name="psk:PageMediaSizeMediaSizeWidth"><psf:Property name="psf:DataType"><psf:Value xsi:type="xsd:QName">xsd:integer</psf:Value></psf:Property><psf:Property name="psf:UnitType"><psf:Value xsi:type="xsd:string">microns</psf:Value></psf:Property><psf:Property name="psf:Multiple"><psf:Value xsi:type="xsd:integer">1</psf:Value></psf:Property><psf:Property name="psf:MaxValue"><psf:Value xsi:type="xsd:integer">72070</psf:Value></psf:Property><psf:Property name="psf:MinValue"><psf:Value xsi:type="xsd:integer">10009</psf:Value></psf:Property><psf:Property name="psf:DefaultValue"><psf:Value xsi:type="xsd:integer">10009</psf:Value></psf:Property><psf:Property name="psf:Mandatory"><psf:Value xsi:type="xsd:QName">psk:Conditional</psf:Value></psf:Property></psf:ParameterDef><psf:ParameterDef name="psk:PageMediaSizeMediaSizeHeight"><psf:Property name="psf:DataType"><psf:Value xsi:type="xsd:QName">xsd:integer</psf:Value></psf:Property><psf:Property name="psf:UnitType"><psf:Value xsi:type="xsd:string">microns</psf:Value></psf:Property><psf:Property name="psf:Multiple"><psf:Value xsi:type="xsd:integer">1</psf:Value></psf:Property><psf:Property name="psf:MaxValue"><psf:Value xsi:type="xsd:integer">4099910</psf:Value></psf:Property><psf:Property name="psf:MinValue"><psf:Value xsi:type="xsd:integer">10009</psf:Value></psf:Property><psf:Property name="psf:DefaultValue"><psf:Value xsi:type="xsd:integer">10009</psf:Value></psf:Property><psf:Property name="psf:Mandatory"><psf:Value xsi:type="xsd:QName">psk:Conditional</psf:Value></psf:Property></psf:ParameterDef></psf:PrintCapabilities>"#;
+
+    #[test]
+    fn the_custom_size_entry_is_not_listed_as_a_paper() {
+        let document = winprint::ticket::document::PrintCapabilitiesDocument::parse_from_bytes(XP90_MEDIA).unwrap();
+        let papers = papers_in(&PrintCapabilities { document }, Some("UserForm226"));
+        let keys: Vec<&str> = papers.iter().map(|p| p.key.as_str()).collect();
+        assert_eq!(keys, ["Option1", "UserForm225", "UserForm226"]);
+        let barkod = &papers[1];
+        assert_eq!(barkod.label, "BARKOD");
+        let mm = |pt: f64| pt * 25.4 / 72.0;
+        assert!((mm(barkod.size.0) - 58.0).abs() < 0.01 && (mm(barkod.size.1) - 40.0).abs() < 0.01, "{barkod:?}");
+        assert_eq!(papers.iter().filter(|p| p.default).map(|p| p.key.as_str()).collect::<Vec<_>>(), ["UserForm226"]);
+    }
 
     #[test]
     fn a_missing_printer_never_falls_back_to_another_queue() {
