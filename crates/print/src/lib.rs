@@ -5,19 +5,50 @@
 //! with the options as a PrintTicket, all in this process (`windows.rs`): no PowerShell or other
 //! program is started, so printing works where scripts are locked down. Other platforms report
 //! that printing isn't available yet; the print-ready PDF can still be saved.
+//!
+//! The spooler is also available as a [`backends::Backend`] in a [`Registry`] that can hold other
+//! backends beside it (see the README); the functions of this crate are unchanged.
+//!
+//! With the `wsd` cargo feature (on by default, not for `wasm32`) there is also a WS-Print network
+//! backend, `wsd::WsdBackend`: it lists only printers the app adds, discovers nothing and needs
+//! consent for every job (see the README). The `ipp` feature (also on by default) adds an IPP
+//! backend, `ipp::IppBackend`, with the same rules.
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+mod backend;
+mod builtin;
+mod clock;
+pub mod convert;
+#[cfg(all(feature = "ipp", not(target_arch = "wasm32")))]
+pub mod ipp;
+mod job;
+mod options;
 #[cfg(any(test, windows))]
 mod progress;
+pub mod pwg;
+mod registry;
+mod remote;
+mod retry;
 #[cfg(any(test, windows))]
 mod sheets;
+#[cfg(any(test, windows, all(unix, not(target_arch = "wasm32"))))]
+mod spool_render;
+mod tag;
+#[cfg(feature = "testing")]
+pub mod testing;
 #[cfg(test)]
 mod tests;
 #[cfg(any(test, windows))]
 mod ticket;
+mod trace;
+mod tracked;
+mod wake;
+mod watch;
 #[cfg(windows)]
 mod windows;
+#[cfg(all(feature = "wsd", not(target_arch = "wasm32")))]
+pub mod wsd;
 
 /// Native Windows driver settings, printable geometry and explicit RGB/GDI transport.
 /// Callers perform ICC conversion and compose page pixels/vector strokes. Other platforms
@@ -25,6 +56,47 @@ mod windows;
 pub mod rgb {
     pub use craft_winprint_gdi::*;
 }
+
+/// The [`backend::Backend`] trait and the neutral types a backend speaks. The crate's older
+/// `Backend` enum (the platform's built-in kind, see [`backend()`]) is unchanged.
+pub mod backends {
+    pub use crate::backend::*;
+}
+pub use backend::{
+    BackendClass, CancelToken, Document, DocumentFormat, ErrorKind, JobHint, NotFoundSubject, PrintError, PrinterDetails, PrinterRef, PrinterState,
+    PrinterStatus, ProgressCallback, Receipt, SubmitRequest, UserConfirmed,
+};
+#[cfg(any(windows, all(unix, not(target_arch = "wasm32"))))]
+pub use builtin::SystemSpooler;
+pub use convert::{Conversion, ConversionPolicy, ConvertContext, DocumentConverter, OwnedDocument, choose_raster_type, choose_resolution};
+/// The shared job vocabulary lives in the `craft-job` crate (also used by scanning) and keeps its
+/// names here, so `craft_print::JobId`, `craft_print::RetryPolicy` and the others resolve as before.
+/// Renamed on the way in: `JobTag` is [`Tag`], `ParseJobIdError` is [`ParseIdError`] (and its
+/// kind `ParseIdErrorKind`), `RetryAdvice::CheckPrinterFirst` is `RetryAdvice::CheckDeviceFirst`,
+/// and `JobState::Stopped` is `JobState::NeedsAttention`; `JobState::CompletedWithWarnings` is
+/// `JobState::Completed` with [`JobStatus::warnings`].
+pub use craft_job::{
+    BackendName, DeviceId, DocumentRef, ExpectedTotals, Fingerprint, HRESULT_DOMAIN, Jitter, JobDocuments, JobId, JobKind, JobState, JobTimes,
+    JobView, NativeCode, ParseIdError, ParseIdErrorKind, Progress, RetryAdvice, RetryFacts, RetryPolicy, RetrySafety, Tag, TagError, TagPlacement,
+    TagSupport, Timestamp, advise, namespaced_id, split_id,
+};
+pub use job::{ExpectedTotalsExt, JobStatus, Submitted, WatchSupport};
+pub use options::{ColourMode, JobOptions, Orientation, Quality, Resolution};
+pub use pwg::RasterType;
+pub use registry::{
+    BackendError, BackendInfo, Listing, RegisterError, Registry, cancel_job, job_status, list_printers, printer_details, register, registry,
+    set_converter, submit_job, submit_to_backend,
+};
+pub use remote::{FingerprintExt, JobFilter, JobQueryCaps, Reconciled, RemoteJob, filter_jobs, reconcile_jobs};
+pub use retry::{CANCEL_SLICE, Clock, JitterExt, ManualClock, Phase, SystemClock, advise_error, retry, retry_facts};
+pub use tag::{TagExt, TagPolicy, TagSupportExt};
+pub use trace::set_trace;
+pub use tracked::{
+    Advance, Attempt, AttemptError, AttemptOutcome, BytesSource, DocumentInfo, DocumentSource, FnSource, JobProgress, LifecycleState, LocalJobId,
+    Outcome, PrintJob, PrintJobConfig, RequestRecord, SimpleState, Snapshot, StaleReason, Staleness, TrailEntry, TrailEvent,
+};
+pub use wake::{WakeReceiver, WakeSender, wake_channel};
+pub use watch::{JobSource, JobWatch, WaitPolicy, WatchOutcome, WatchStep, wait_for_job};
 
 /// A system spooler failure. Document permissions belong to the caller.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -492,18 +564,30 @@ pub fn submit(pdf: &[u8], job: &Job) -> Result<String, Error> {
 /// success: only the returned result confirms submission, and a later failure may follow the
 /// last progress event. This does not report physical printing or provide cancellation.
 pub fn submit_with_progress(pdf: &[u8], job: &Job, progress: &mut dyn FnMut(usize, usize)) -> Result<String, Error> {
+    submit_staged(pdf, job, progress, &std::sync::atomic::AtomicBool::new(false))
+}
+
+/// [`submit_with_progress`] that sets `started` once the spooler may have taken the job (`lp` is
+/// running, or the first spool job begins): an error while it is still unset was a refusal before
+/// anything was sent.
+pub(crate) fn submit_staged(
+    pdf: &[u8],
+    job: &Job,
+    progress: &mut dyn FnMut(usize, usize),
+    started: &std::sync::atomic::AtomicBool,
+) -> Result<String, Error> {
     #[cfg(all(unix, not(target_arch = "wasm32")))]
     {
         let _ = progress;
-        submit_via(std::process::Command::new("lp"), pdf, job)
+        submit_via_staged(std::process::Command::new("lp"), pdf, job, started)
     }
     #[cfg(windows)]
     {
-        windows::submit_with_progress(pdf, job, progress)
+        windows::submit_with_render(pdf, job, &spool_render::RenderChoice::default(), progress, started).map(|spooled| spooled.message)
     }
     #[cfg(not(any(windows, all(unix, not(target_arch = "wasm32")))))]
     {
-        let _ = (pdf, job, progress);
+        let _ = (pdf, job, progress, started);
         Err(Error::Spool("printing to a printer isn't available on this platform yet; save the print-ready PDF instead".into()))
     }
 }
@@ -513,8 +597,19 @@ pub fn submit_with_progress(pdf: &[u8], job: &Job, progress: &mut dyn FnMut(usiz
 /// The job goes to `lp` on stdin, never through a file: a predictable job folder in a shared
 /// temp directory lets another local user read printed documents or swap the file before `lp`
 /// reads it.
+#[cfg(test)]
+pub(crate) fn submit_via(lp: std::process::Command, pdf: &[u8], job: &Job) -> Result<String, Error> {
+    submit_via_staged(lp, pdf, job, &std::sync::atomic::AtomicBool::new(false))
+}
+
+/// [`submit_via`] that sets `started` once `lp` is running.
 #[cfg(any(test, all(unix, not(target_arch = "wasm32"))))]
-pub(crate) fn submit_via(mut lp: std::process::Command, pdf: &[u8], job: &Job) -> Result<String, Error> {
+pub(crate) fn submit_via_staged(
+    mut lp: std::process::Command,
+    pdf: &[u8],
+    job: &Job,
+    started: &std::sync::atomic::AtomicBool,
+) -> Result<String, Error> {
     use std::io::Write;
     use std::process::Stdio;
     let mut child = lp
@@ -524,6 +619,7 @@ pub(crate) fn submit_via(mut lp: std::process::Command, pdf: &[u8], job: &Job) -
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| Error::Spool(format!("the print spooler is not available: {e}")))?;
+    started.store(true, std::sync::atomic::Ordering::SeqCst);
     let stdin = child.stdin.take();
     // Feed the job on its own thread while collecting the output, so neither side can fill a
     // pipe and wait on the other. Dropping `stdin` at the end closes it: the end of the job.

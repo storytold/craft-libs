@@ -61,6 +61,7 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   lookup with fallback (`pt-br` → `pt` → English), plurals, language names, the system locale and
   a pseudo locale. The catalogs stay a fully optional build input; apps keep `tl!` and their
   language setting.
+- [`craft-job`](crates/job/README.md): the small vocabulary printing and scanning share: `NativeCode`, `<backend>:<native>` job and device ids, and retry safety with one retry-advice function. No lifecycle, tracking or I/O.
 - [`craft-jpeg`](crates/jpeg/README.md): clean-room decoder for 12-bit and arithmetic-coded
   JPEG (T.81 SOF0/SOF1 at 12 bits, SOF9, SOF10), from PhotoCraft, and a frame probe for routing.
   Metadata stays in each app.
@@ -77,6 +78,8 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   stay in each app.
 - [`craft-print`](crates/print/README.md): PDF submission to CUPS and Windows, printer discovery,
   duplex/copies/colour and driver preferences. PDF generation stays in each app.
+  A registry of print backends, with a WS-Print network backend (cargo feature `wsd`, on by default;
+  it lists only printers the app adds and needs consent per job).
 
 - [`craft-quit`](crates/quit/src/lib.rs): native macOS quit, egui close handling and an optional
   app menu. Unsaved-document decisions and save prompts stay in each app.
@@ -87,6 +90,9 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   for 47 more languages (one cargo feature each).
 - [`craft-ui`](crates/ui/README.md): SVG catalogs, icon buttons, tabs, pane controls, transactional docking, print settings and theme helpers for egui frontends;
   assets, themes, localization and command handling stay in each app. Requires Rust 1.95 or later.
+- [`craft-wsd`](crates/wsd/README.md): Web Services for Devices core for network printers and scanners: bounded XML, SOAP 1.2 and
+  WS-Addressing, MTOM, faults, a local-network-only address policy, WS-Transfer, WS-Eventing and WS-Discovery messages, and a
+  blocking plain-HTTP transport with no TLS (on by default; never built for wasm32; use it only on a trusted network). Service clients (print, scan) are built on it in each app.
 - [Shared UI component audit](docs/ui-components-audit.md): source inventory, extraction priorities
   and compatibility boundaries across the Craft suite.
 - [Theme infrastructure](docs/theme-infrastructure.md): eight-app comparison and the small shared

@@ -3,9 +3,9 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
-    paths: ['crates/print/**', 'Cargo.toml', 'Cargo.lock', '.github/workflows/print.yml']
+    paths: ['crates/print/**', 'crates/wsd/**', 'crates/job/**', 'Cargo.toml', 'Cargo.lock', '.github/workflows/print.yml']
   pull_request:
-    paths: ['crates/print/**', 'Cargo.toml', 'Cargo.lock', '.github/workflows/print.yml']
+    paths: ['crates/print/**', 'crates/wsd/**', 'crates/job/**', 'Cargo.toml', 'Cargo.lock', '.github/workflows/print.yml']
 permissions:
   contents: read
 jobs:
@@ -19,11 +19,15 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           components: rustfmt, clippy
       - run: cargo fmt --check
-      - run: cargo clippy -p craft-print --all-targets -- -D warnings
+      - run: cargo clippy -p craft-print --all-targets --locked -- -D warnings
+      - run: cargo clippy -p craft-print --no-default-features --all-targets --locked -- -D warnings
+      - run: cargo clippy -p craft-print --all-targets --all-features --locked -- -D warnings
       - name: Prepare the Windows test driver
         if: runner.os == 'Windows'
         shell: powershell
@@ -34,3 +38,24 @@ jobs:
         timeout-minutes: 10
         env:
           CRAFT_PRINT_REQUIRE_QUEUE: ${{ runner.os == 'Windows' && '1' || '0' }}
+      - run: cargo test -p craft-print --all-features --locked
+        timeout-minutes: 10
+      - run: cargo doc -p craft-print --no-deps --locked
+        env:
+          RUSTDOCFLAGS: -D warnings
+      - run: cargo doc -p craft-print --no-deps --all-features --locked
+        env:
+          RUSTDOCFLAGS: -D warnings
+  wasm:
+    # The PWG raster encoder and the document types build for the browser (no spooler, no sockets there).
+    timeout-minutes: 15
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          targets: wasm32-unknown-unknown
+      - run: cargo check -p craft-print --no-default-features --target wasm32-unknown-unknown --locked
+      - run: cargo check -p craft-print --target wasm32-unknown-unknown --locked

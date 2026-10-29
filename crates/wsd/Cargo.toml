@@ -1,0 +1,28 @@
+[package]
+name = "craft-wsd"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Web Services for Devices (WSD) core for the Craft apps: bounded XML, SOAP 1.2 / WS-Addressing, MTOM, faults, a local-network-only URL policy, WS-Transfer, WS-Eventing and WS-Discovery messages, and a blocking HTTP transport"
+
+[lints]
+workspace = true
+
+[dependencies]
+roxmltree = { workspace = true }
+thiserror = { workspace = true }
+
+# The blocking HTTP transport. Plain http only (no TLS, no proxy, no redirects): a DeviceUrl is
+# always a numeric local address. Not built for wasm32, where there is no native HTTP client.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+ureq = { workspace = true }
+
+[dev-dependencies]
+# Lets this crate's own integration tests use the `testing` feature under a plain `cargo test`.
+craft-wsd = { path = ".", features = ["testing"] }
+
+[features]
+# A loopback HTTP server and an in-memory device for tests of clients built on this crate.
+testing = []
