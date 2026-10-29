@@ -280,6 +280,11 @@ fn actual_size_prints_paper_sized_sheets_unscaled() {
     let sheets = read(&pdf).unwrap();
     assert!(plan(&sheets.sheets, (612.0, 792.0), Fit::ActualSize { margin: 12.0 }).unwrap().is_empty());
     assert_eq!(plan(&sheets.sheets, (612.0, 792.0), Fit::Shrink { margin: 12.0 }).unwrap().len(), 1, "shrink-to-fit still shrinks it");
+    // A driver's Letter of 215.7 × 279.4 mm is chosen for the sheet (within a quarter of a
+    // millimetre), so it is the sheet's paper here too; 0.3 mm off is another paper.
+    let mm = |v: f64| v * 72.0 / 25.4;
+    assert!(plan(&sheets.sheets, (mm(215.7), mm(279.4)), Fit::ActualSize { margin: 12.0 }).unwrap().is_empty());
+    assert_eq!(plan(&sheets.sheets, (mm(215.6), mm(279.4)), Fit::ActualSize { margin: 12.0 }).unwrap().len(), 1);
 
     // A landscape sheet of the paper's size turns, unscaled.
     let pdf = test_pdf(&[LETTER_LANDSCAPE], false);
