@@ -243,9 +243,9 @@ impl Updater {
                 Action::None
             }
             StartupPromptResponse::Download => {
-                let url = prompt.release.html_url.clone();
+                let action = download_action(&prompt.release);
                 self.prompt = None;
-                Action::OpenUrl(url)
+                action
             }
             StartupPromptResponse::Later => {
                 // An installation carries on and reports through `tick`.
@@ -308,6 +308,12 @@ fn install(app: &'static App, installed: &self_update::Install, mut release: Rel
     self_update::update(app, installed, &release, platform, &http, &paths, &Stop::default(), &mut |_| {}, &|| Ok(()), Some(version))
 }
 
+/// Download in the prompt: the release page, when it is a safe web link (an app may build its
+/// `Release` from its own feed or cache, so the link isn't always one GitHub's parser checked).
+fn download_action(release: &Release) -> Action {
+    if crate::release::safe_web_link(&release.html_url) { Action::OpenUrl(release.html_url.clone()) } else { Action::None }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -323,6 +329,25 @@ mod tests {
         while updater.check.is_some() && std::time::Instant::now() < deadline {
             updater.tick(ctx);
             std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    /// #391: Download opens only a safe web link, whoever built the `Release`.
+    #[test]
+    fn download_opens_only_a_safe_release_page() {
+        let with = |url: &str| Release { html_url: url.into(), ..newer() };
+        let page = "https://github.com/storytold/photocraft/releases/tag/v9.0.0";
+        assert_eq!(download_action(&with(page)), Action::OpenUrl(page.into()));
+        for bad in [
+            "",
+            "http://github.com/x",
+            "file:///C:/Windows/system32/calc.exe",
+            "javascript:alert(1)",
+            "https://evil.example/a|calc",
+            "https://user@evil.example/",
+            "https://x.example/a b",
+        ] {
+            assert_eq!(download_action(&with(bad)), Action::None, "{bad:?}");
         }
     }
 
