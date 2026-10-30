@@ -1,7 +1,7 @@
 # craft-audio
 
 Audio file I/O and codecs for the Craft apps. Native implementations: WAV and AIFF read/write,
-FLAC encoder, AAC decoder/encoder, Opus decoder.
+FLAC encoder, AAC decoder/encoder, Opus decoder/encoder.
 Formats without a native decoder are decoded by [symphonia](#symphonia), which is to be replaced
 by native decoders.
 
@@ -26,12 +26,12 @@ No default features. The shared types (`AudioBuffer`, `AudioInfo`, `ChannelLayou
 | `decode` | `decode`, `probe`, `Decoder`, `tracks`, `TrackDecoder`; every format in [Format support](#format-support) | `decode-native`, `symphonia` |
 | `decode-native` | the same, native formats only (others are `Unsupported`) | the two decoders below, craft-media `isobmff`/`matroska`/`ogg`, `log` |
 | `symphonia` | the fallback for formats with no native decoder; turning it on is the same as `decode` | `decode-native`, symphonia |
-| `encode` | every encoder: the WAV, AIFF and FLAC file writers, and the AAC packet encoder | `lossless-encode`, `aac-encode` |
+| `encode` | every encoder: the WAV, AIFF and FLAC file writers, and the AAC and Opus packet encoders | `lossless-encode`, `aac-encode`, `opus-encode` |
 | `lossless-encode` | WAV, AIFF and FLAC writing | `pcm-encode`, `flac-encode` |
 | `pcm-encode` | `encode`, `FileEncoder` for WAV and AIFF; `wav_float_header` | none |
 | `flac-encode` | `encode`, `FileEncoder` for FLAC | craft-media `bitstream` |
 | `aac-decode`, `aac-encode` | `aac::Decoder`, `aac::Encoder` | craft-media `bitstream` |
-| `opus-decode` | `opus::Decoder`/`StreamDecoder` | none |
+| `opus-decode`, `opus-encode` | `opus::Decoder`/`StreamDecoder`, `opus::Encoder` | none |
 | `peaks` | `peaks::Peaks` | none |
 | `rayon` | parallel AAC encoding (with `aac-encode`) | `rayon` |
 | `serde` | `Serialize`/`Deserialize` on the shared types | `serde` |
@@ -243,6 +243,38 @@ mono, stereo and 8 channels: pass those channels as they are.
 are a playable `.aac` file. To write MP4 or Matroska, pass the access units to craft-media's
 muxers ([MP4](../media/README.md#muxing), [Matroska](../media/README.md#muxing-1)).
 
+### Encode Opus
+
+```rust
+use craft_audio::opus::Encoder;
+
+let mut enc = Encoder::new(2, 128_000)?;            // channels, bits per second
+let frame_len = Encoder::FRAME_SIZE * 2;            // 20 ms, interleaved stereo
+let mut samples = buf.interleaved();                // 48 kHz audio
+// The last frame is padded with silence.
+let padding = (frame_len - samples.len() % frame_len) % frame_len;
+samples.resize(samples.len() + padding, 0.0);
+let mut packets = Vec::new();
+for frame in samples.chunks_exact(frame_len) {
+    packets.push(enc.encode_float(frame)?);
+}
+let head = enc.opus_head();     // Matroska's CodecPrivate
+let pre_skip = enc.pre_skip();  // samples the player drops at the start
+```
+
+The encoder takes 48 kHz only, and craft-audio has no resampler.
+
+craft-media has no Ogg muxer, so `.opus` files cannot be written yet; Opus goes into
+Matroska/WebM or MP4:
+
+- **Matroska/WebM:** `head` is the track's `CodecPrivate`, and the pre-skip goes in
+  `TrackSpec::codec_delay_ns` (in nanoseconds at 48 kHz). The Matroska muxer cannot write
+  `DiscardPadding`, so the padding at the end stays in the file.
+- **MP4:** the sample entry takes an `isobmff::OpusConfig` (`dOps`) with the same fields as the
+  `OpusHead`: channels, pre-skip, input rate, gain and mapping family. `TrackConfig::media_start`
+  set to the pre-skip skips it; an explicit `TrackConfig::edits` with the audio's length also
+  drops the padding.
+
 ### Waveform overviews
 
 ```rust
@@ -290,7 +322,7 @@ match craft_audio::decode(&bytes, None) {
 | AAC-LC | native | native |
 | HE-AAC v1/v2 | native, core only (see [Limits](#limits)) | — |
 | MP1, MP2, MP3 (MPEG audio Layer I/II/III) | symphonia | — |
-| Opus | native | — |
+| Opus | native | native |
 | ALAC, Vorbis, ADPCM, A-law, µ-law | symphonia | — |
 
 | Container | Demuxer | Timing |
@@ -352,7 +384,7 @@ Each codec module's rustdoc lists the coding tools it implements.
 | WAV, AIFF | Microsoft RIFF, Apple AIFF/AIFF-C | read: integer 8–32-bit, float 32/64-bit, `WAVE_FORMAT_EXTENSIBLE` masks, RF64/BW64, BWF `bext`, truncated files; write: 16/24/32-bit integer and 32-bit float, RF64 above 4 GiB, any layout, TPDF dither | round trips; hostile-input tests |
 | FLAC encoder | RFC 9639 | 16, 24, 32 bits; 1–8 channels, layouts decoders would not assume for the count as a `WAVEFORMATEXTENSIBLE_CHANNEL_MASK` comment; up to 655,350 Hz; LPC, stereo decorrelation, wasted bits, STREAMINFO MD5 | bit-exact through ffmpeg, STREAMINFO MD5 checked against ffmpeg |
 | AAC (`aac`) | ISO/IEC 14496-3 | AAC-LC decode and encode (CBR, VBR, ADTS), 1–8 channels; HE-AAC: see [Limits](#limits) | ffmpeg: ~135 dB SNR; PNS noise differs per sample at equal band energy |
-| Opus (`opus`) | RFC 6716, 8251, 7845 | decoder: SILK, hybrid, CELT, all frame sizes, PLC and FEC, multistream (`Decoder`) and single stream (`StreamDecoder`), 8–48 kHz output | all 36 RFC 8251 conformance cases |
+| Opus (`opus`) | RFC 6716, 8251, 7845 | decoder: SILK, hybrid, CELT, all frame sizes, PLC and FEC, multistream (`Decoder`) and single stream (`StreamDecoder`), 8–48 kHz output; encoder (`Encoder`): SILK, hybrid, CELT, 48 kHz, 20 ms frames, mono or stereo | all 36 RFC 8251 conformance cases; encoder output through ffmpeg's two Opus decoders |
 
 ## symphonia
 
@@ -419,6 +451,7 @@ the full tests with ffmpeg and the vectors required.
 |---|---|
 | WAV, AIFF, `decode`/`probe`, peaks | SoundCraft `soundcraft-audio-io` [7dc56a4](https://github.com/storytold/soundcraft/commit/7dc56a4dbeebf57eacece09536726c57844fc59d) |
 | FLAC encoder, AAC, Opus decoder, Ogg | FilmCraft [8fda2f2](https://github.com/storytold/filmcraft/commit/8fda2f232198c4c79ff9cfe5b6a347bb1375fa9e) |
+| Opus encoder | EffectCraft `effectcraft-opusenc` [c618429](https://github.com/storytold/effectcraft/commit/c618429252587525a2a6d4b5bccbe4ec5261e1b9) |
 
 Where apps had overlapping implementations, the one that measured better was kept, with the
 tests of both:
@@ -435,7 +468,8 @@ For the apps switching from their own code; to be removed once all three have sw
 
 The codec modules' public items keep their names, so apps can re-export them
 (`pub use craft_audio::aac::*;`). Names kept only for that are `#[doc(hidden)]`:
-`aac::Upsample2x`, `aac::ProgramConfig::parse`, `aac::config_layout` and `aac::sample_rate_index`. What else an app adjusts:
+`opus::encoder::OpusEncoder` (now `opus::Encoder`), `aac::Upsample2x`, `aac::ProgramConfig::parse`,
+`aac::config_layout` and `aac::sample_rate_index`. What else an app adjusts:
 
 - `AudioInfo` has `container`, `codec`, `layout` and `damaged` instead of SoundCraft's `format`.
   `detect_container` replaces `detect_format`. `probe` reports the layout instead of
@@ -455,9 +489,11 @@ The codec modules' public items keep their names, so apps can re-export them
   `Speaker::ALL` is a slice.
 - `TrackInfo::sample_rate` and `channels` are `Option`s.
 - Features are per codec. SoundCraft's `encode` (WAV, AIFF, FLAC) is now `lossless-encode`, made
-  of `pcm-encode` (WAV, AIFF) and `flac-encode`. `encode` turns on every encoder, AAC
+  of `pcm-encode` (WAV, AIFF) and `flac-encode`. `encode` turns on every encoder, AAC and Opus
   included. Writing a format whose feature is off returns `AudioError::Unsupported`.
-- AAC encoder settings it cannot use are `aac::Error::InvalidSettings` (`AudioError::Encode`).
+- The Opus encoder's constructors and `encode_float` return `Result` instead of panicking on an
+  invalid channel count, mode/bandwidth or frame length. AAC encoder settings it cannot use are
+  `aac::Error::InvalidSettings` (`AudioError::Encode`).
 - `TrackDecoder::decode` returns an error for a corrupt Opus packet, as for the other codecs;
   call `conceal`.
 - `FileEncoder::write` takes any per-channel slices, but refuses a block with missing channels or

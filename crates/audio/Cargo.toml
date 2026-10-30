@@ -1,6 +1,6 @@
 [package]
 name = "craft-audio"
-description = "Audio file I/O and codecs: WAV/AIFF read and write, FLAC encoder, AAC and Opus decoders, AAC encoder."
+description = "Audio file I/O and codecs: WAV/AIFF read and write, FLAC encoder, AAC and Opus decoders, AAC and Opus encoders."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -22,8 +22,8 @@ decode = ["decode-native", "symphonia"]
 decode-native = ["aac-decode", "opus-decode", "craft-media/isobmff", "craft-media/matroska", "craft-media/ogg", "dep:log"]
 # The symphonia fallback for the formats with no native decoder yet.
 symphonia = ["decode-native", "dep:symphonia"]
-# Every encoder: the lossless file writers and the AAC encoder.
-encode = ["lossless-encode", "aac-encode"]
+# Every encoder: the lossless file writers and the AAC and Opus encoders.
+encode = ["lossless-encode", "aac-encode", "opus-encode"]
 # Encode WAV/BWF/RF64, AIFF/AIFF-C and FLAC files.
 lossless-encode = ["pcm-encode", "flac-encode"]
 # Encode WAV/BWF/RF64 and AIFF/AIFF-C files.
@@ -34,6 +34,7 @@ flac-encode = ["craft-media/bitstream"]
 aac-decode = ["craft-media/bitstream"]
 aac-encode = ["craft-media/bitstream"]
 opus-decode = []
+opus-encode = []
 # Multi-resolution waveform overviews (`peaks`).
 peaks = []
 # Encode AAC channels in parallel (with `aac-encode`).

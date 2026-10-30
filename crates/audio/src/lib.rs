@@ -18,10 +18,11 @@
 //! - [`encode`], [`FileEncoder`]: WAV/BWF/RF64 and AIFF/AIFF-C (feature `pcm-encode`, which also
 //!   gives [`wav_float_header`]) and FLAC (feature `flac-encode`), whole-buffer or incremental into
 //!   any `Write + Seek`. Feature `lossless-encode` turns on both; feature `encode` turns on
-//!   `lossless-encode` and `aac-encode`.
+//!   `lossless-encode`, `aac-encode` and `opus-encode`.
 //! - [`peaks`] (feature `peaks`): min/max/RMS pyramid for waveform drawing.
 //! - Codec modules for packet-level use, each with its own features: [`aac`] (`aac-decode`,
-//!   `aac-encode`), [`opus`] (`opus-decode`).
+//!   `aac-encode`), [`opus`] (`opus-decode`, and
+//!   [`opus::encoder`] with `opus-encode`).
 //!
 //! The shared types below build with no features.
 
@@ -29,7 +30,7 @@
 pub mod aac;
 mod buffer;
 mod layout;
-#[cfg(feature = "opus-decode")]
+#[cfg(any(feature = "opus-decode", feature = "opus-encode"))]
 pub mod opus;
 #[cfg(any(feature = "aac-decode", feature = "opus-decode"))]
 mod pcm;
@@ -108,6 +109,13 @@ impl From<opus::Error> for AudioError {
             opus::Error::Unsupported(_) => AudioError::Unsupported(e.to_string()),
             _ => AudioError::Malformed(e.to_string()),
         }
+    }
+}
+
+#[cfg(feature = "opus-encode")]
+impl From<opus::encoder::Error> for AudioError {
+    fn from(e: opus::encoder::Error) -> Self {
+        AudioError::Encode(e.to_string())
     }
 }
 
