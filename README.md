@@ -61,6 +61,7 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   lookup with fallback (`pt-br` → `pt` → English), plurals, language names, the system locale and
   a pseudo locale. The catalogs stay a fully optional build input; apps keep `tl!` and their
   language setting.
+- [`craft-ipc`](crates/ipc/README.md): Craft apps talking on one machine: per-user local sockets (Unix socket, Windows named pipe), token auth, instance discovery, launch on demand, focus hand-off, frame transfer and linked-file watching. Native only: it does not build for `wasm32`. Protocol in [PROTOCOL.md](crates/ipc/PROTOCOL.md).
 - [`craft-jpeg`](crates/jpeg/README.md): clean-room decoder for 12-bit and arithmetic-coded
   JPEG (T.81 SOF0/SOF1 at 12 bits, SOF9, SOF10), from PhotoCraft, and a frame probe for routing.
   Metadata stays in each app.

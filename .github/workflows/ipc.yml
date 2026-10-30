@@ -1,0 +1,36 @@
+name: IPC
+
+on:
+  push:
+    branches: [main]
+    paths: ["crates/ipc/**", "Cargo.toml", "Cargo.lock", ".github/workflows/ipc.yml"]
+  pull_request:
+    paths: ["crates/ipc/**", "Cargo.toml", "Cargo.lock", ".github/workflows/ipc.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ipc-${{ github.ref }}
+  cancel-in-progress: true
+
+# craft-ipc is native only (`interprocess` has no wasm32 build), so there is no WASM job.
+jobs:
+  linux:
+    timeout-minutes: 15
+    name: IPC (Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: craft-ipc-linux
+      - run: cargo fmt -p craft-ipc --check
+      - run: cargo clippy -p craft-ipc --all-targets --locked -- -D warnings
+      - run: cargo test -p craft-ipc --locked
