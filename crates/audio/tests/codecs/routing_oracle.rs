@@ -1,6 +1,7 @@
 //! `craft_audio::decode` routes each container and codec below to the home-grown demuxers and
-//! decoders, or to symphonia (FLAC): each pair decodes, sample-aligned, to its presentation
-//! length, within an SNR of ffmpeg's decode; truncated and corrupted copies never panic. Fixtures are written by ffmpeg
+//! decoders, or to symphonia (FLAC): each pair decodes, sample-aligned, to its presentation length
+//! (edit lists, Matroska `CodecDelay` and `DiscardPadding` applied), within an SNR
+//! of ffmpeg's decode; truncated and corrupted copies never panic. Fixtures are written by ffmpeg
 //! (skipped without it).
 
 use craft_audio::{ChannelLayout, CodecId, Container, decode, probe};
@@ -43,6 +44,58 @@ const CASES: &[Case] = &[
         channels: 2,
         frames: Some(240_000),
         min_snr: 140.0,
+    },
+    Case {
+        name: "aac.aac",
+        surround: false,
+        mono: false,
+        rate: 48_000,
+        args: &["-c:a", "aac", "-b:a", "128k", "-aac_pns", "0"],
+        container: Container::Adts,
+        codec: CodecId::Aac,
+        layout: ChannelLayout::STEREO,
+        channels: 2,
+        frames: None,
+        min_snr: 120.0,
+    },
+    Case {
+        name: "aac.m4a",
+        surround: false,
+        mono: false,
+        rate: 44_100,
+        args: &["-c:a", "aac", "-b:a", "128k", "-aac_pns", "0"],
+        container: Container::Mp4,
+        codec: CodecId::Aac,
+        layout: ChannelLayout::STEREO,
+        channels: 2,
+        frames: Some(220_500),
+        min_snr: 120.0,
+    },
+    Case {
+        name: "aac-5.1.m4a",
+        surround: true,
+        mono: false,
+        rate: 48_000,
+        args: &["-c:a", "aac", "-b:a", "384k", "-aac_pns", "0"],
+        container: Container::Mp4,
+        codec: CodecId::Aac,
+        layout: ChannelLayout::SURROUND_5_1_SIDE,
+        channels: 6,
+        frames: Some(240_000),
+        min_snr: 120.0,
+    },
+    Case {
+        name: "aac.mkv",
+        surround: false,
+        mono: false,
+        rate: 48_000,
+        args: &["-c:a", "aac", "-b:a", "128k", "-aac_pns", "0"],
+        container: Container::Matroska,
+        codec: CodecId::Aac,
+        layout: ChannelLayout::STEREO,
+        channels: 2,
+        frames: Some(240_000),
+        min_snr: 120.0,
     },
     Case {
         name: "pcm-s24be.mov",
@@ -101,6 +154,15 @@ fn reference(ff: &Path, file: &Path) -> Vec<f32> {
     out.stdout.as_chunks::<4>().0.iter().map(|c| f32::from_le_bytes(*c)).collect()
 }
 
+/// How many frames of priming ffmpeg before 9 decodes as audio at the start of `name`, which
+/// `decode` drops; ffmpeg 9 drops them too.
+fn reference_lead(name: &str) -> usize {
+    match name {
+        "aac.mkv" => 1024,
+        _ => 0,
+    }
+}
+
 /// SNR (dB) of `ours` (planar) against `reference` (interleaved), sample-aligned, over the
 /// frames both hold.
 fn snr(ours: &[Vec<f32>], reference: &[f32]) -> f64 {
@@ -133,7 +195,8 @@ fn every_container_and_codec_decodes_home_grown() {
         assert_eq!(info.layout, c.layout, "{}: layout", c.name);
         let expected = c.frames.unwrap_or(reference.len() / c.channels);
         assert_eq!(buf.frames(), expected, "{}: presented frames", c.name);
-        let s = snr(&buf.channels, &reference);
+        let mut s = snr(&buf.channels, &reference);
+        s = s.max(snr(&buf.channels, &reference[reference_lead(c.name) * c.channels..]));
         assert!(s >= c.min_snr, "{}: SNR {s:.1} dB < {}", c.name, c.min_snr);
         let p = probe(&bytes, None).unwrap();
         assert_eq!(
@@ -225,7 +288,7 @@ fn track_decoder_on_demuxed_packets_matches_decode() {
     use craft_audio::TrackDecoder;
     use craft_media::isobmff;
     let ff = require_ffmpeg!();
-    for name in ["pcm-s24be.mov"] {
+    for name in ["aac.m4a", "aac-5.1.m4a", "pcm-s24be.mov"] {
         let c = CASES.iter().find(|c| c.name == name).unwrap();
         let Some(path) = fixture(&ff, c) else { continue };
         let bytes = std::fs::read(&path).unwrap();
@@ -257,8 +320,8 @@ fn track_decoder_on_demuxed_packets_matches_decode() {
 fn track_choice_and_the_sample_limit() {
     use craft_audio::{AudioError, DecodeOptions, decode_with, tracks};
     let ff = require_ffmpeg!();
-    for ext in ["mkv", "mov"] {
-        let out = crate::testkit::fixtures_dir("routing").join(format!("two-tracks-pcm.{ext}"));
+    for ext in ["mkv", "mp4"] {
+        let out = crate::testkit::fixtures_dir("routing").join(format!("two-tracks.{ext}"));
         let Some(path) = crate::testkit::fixtures::generate(&out, |tmp| {
             let tmp = tmp.to_string_lossy();
             run(
@@ -277,7 +340,9 @@ fn track_choice_and_the_sample_limit() {
                     "-map",
                     "1:a",
                     "-c:a",
-                    "pcm_s16le",
+                    "aac",
+                    "-b:a",
+                    "96k",
                     &tmp,
                 ],
             )
@@ -287,7 +352,7 @@ fn track_choice_and_the_sample_limit() {
         let bytes = std::fs::read(&path).unwrap();
         let list = tracks(&bytes, None).unwrap();
         assert_eq!(list.len(), 2, "{ext}");
-        assert_eq!((list[0].codec, list[0].sample_rate, list[0].channels), (CodecId::Pcm, Some(48_000), Some(1)), "{ext}");
+        assert_eq!((list[0].codec, list[0].sample_rate, list[0].channels), (CodecId::Aac, Some(48_000), Some(1)), "{ext}");
         assert_eq!((list[1].sample_rate, list[1].channels), (Some(44_100), Some(2)), "{ext}");
         let (first, _) = decode_with(&bytes, None, &DecodeOptions::default()).unwrap();
         let (second, buf) = decode_with(&bytes, None, &DecodeOptions::default().with_track(1)).unwrap();
@@ -306,7 +371,7 @@ fn track_choice_and_the_sample_limit() {
 fn decoder_reads_from_a_file() {
     use craft_audio::{DecodeOptions, Decoder};
     let ff = require_ffmpeg!();
-    let c = CASES.iter().find(|c| c.name == "pcm-s24be.mov").unwrap();
+    let c = CASES.iter().find(|c| c.name == "aac.m4a").unwrap();
     let Some(path) = fixture(&ff, c) else { return };
     let (_, whole) = decode(&std::fs::read(&path).unwrap(), None).unwrap();
     let mut d = Decoder::open(std::fs::File::open(&path).unwrap(), None, &DecodeOptions::default()).unwrap();
@@ -317,4 +382,62 @@ fn decoder_reads_from_a_file() {
         frames += b.frames();
     }
     assert_eq!(frames, whole.frames());
+}
+
+/// `fixture`'s AAC packets in a Matroska file with no block durations, like ffmpeg 6's,
+/// and a `DURATION` tag for the track when `tag` is given.
+fn aac_mkv_without_durations(bytes: &[u8], tag: Option<&str>) -> Vec<u8> {
+    use craft_media::matroska::{Demuxer, LacingMode, MkvWriter, MuxOptions, TrackKind, TrackSpec};
+    let mut demux = Demuxer::from_slice(bytes).unwrap();
+    let track = demux.file().tracks[0].clone();
+    let mut spec = TrackSpec::new(TrackKind::Audio, track.codec_id.clone());
+    spec.codec_private = track.codec_private.clone();
+    spec.audio = Some((48_000.0, 2, None));
+    spec.codec_delay_ns = track.codec_delay_ns;
+    let opts = MuxOptions { lacing: LacingMode::None, ..MuxOptions::default() };
+    let mut w = MkvWriter::new(std::io::Cursor::new(Vec::new()), vec![spec], opts).unwrap();
+    while let Some(p) = demux.next_packet().unwrap() {
+        w.write_frame(0, p.pts_ns, true, &p.data, None).unwrap();
+    }
+    let mut out = w.finish().unwrap().into_inner();
+    let Some(tag) = tag else { return out };
+
+    fn el(id: &[u8], body: &[u8]) -> Vec<u8> {
+        assert!(body.len() < 127);
+        [id, &[0x80 | body.len() as u8], body].concat()
+    }
+    let uid = Demuxer::from_slice(&out).unwrap().file().tracks[0].uid.to_be_bytes();
+    let targets = el(&[0x63, 0xC0], &el(&[0x63, 0xC5], &uid));
+    let simple = el(&[0x67, 0xC8], &[el(&[0x45, 0xA3], b"DURATION"), el(&[0x44, 0x87], tag.as_bytes())].concat());
+    let tags = el(&[0x12, 0x54, 0xC3, 0x67], &el(&[0x73, 0x73], &[targets, simple].concat()));
+    out.extend_from_slice(&tags);
+    // The Segment's 8-byte size grows by the tags.
+    let at = out.windows(4).position(|w| w == [0x18, 0x53, 0x80, 0x67]).unwrap() + 4;
+    let size = u64::from_be_bytes(out[at..at + 8].try_into().unwrap()) + tags.len() as u64;
+    out[at..at + 8].copy_from_slice(&size.to_be_bytes());
+    out
+}
+
+/// A track with no block durations ends where its `DURATION` tag says, when that is inside the
+/// last packet. Otherwise all the file's audio is presented.
+#[test]
+fn matroska_aac_without_block_durations_ends_at_its_duration_tag() {
+    let ff = require_ffmpeg!();
+    let case = CASES.iter().find(|c| c.name == "aac.mkv").unwrap();
+    let Some(path) = fixture(&ff, case) else { return };
+    let bytes = std::fs::read(path).unwrap();
+    let frames = |tag| {
+        let file = aac_mkv_without_durations(&bytes, tag);
+        let (info, buf) = decode(&file, None).unwrap();
+        assert_eq!(probe(&file, None).unwrap().frames, info.frames, "{tag:?}");
+        buf.frames()
+    };
+    // 5 s, plus the 21 ms of priming the stored timestamps count
+    assert_eq!(frames(Some("00:00:05.021000000")), 240_000);
+    // 236 packets less the priming
+    let all = 236 * 1024 - 1024;
+    assert_eq!(frames(None), all);
+    assert_eq!(frames(Some("00:00:03.000000000")), all, "ends before the last packet");
+    assert_eq!(frames(Some("00:00:09.000000000")), all, "ends after the last packet");
+    assert_eq!(frames(Some("not a duration")), all);
 }

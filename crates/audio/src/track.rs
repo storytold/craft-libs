@@ -2,6 +2,8 @@
 //! codec. The file-level [`crate::decode`] and [`crate::Decoder`] use it for every native codec;
 //! an app with its own demuxer (MXF, MPEG-TS, a network stream) uses it directly.
 
+#[cfg(feature = "aac-decode")]
+use crate::aac;
 use crate::pcm::{PcmKind, deinterleave};
 use crate::{AudioBuffer, AudioError, ChannelLayout, CodecId, CodecParams, Result, SampleFormat};
 
@@ -10,7 +12,16 @@ pub const LOOKAHEAD_PACKETS: usize = 8;
 
 /// The codec-specific decoder behind a [`TrackDecoder`].
 enum Inner {
-    Pcm { kind: PcmKind, channels: usize },
+    #[cfg(feature = "aac-decode")]
+    Aac {
+        dec: Box<aac::Decoder>,
+        up: Option<aac::Upsample2x>,
+        order: Option<&'static [usize]>,
+    },
+    Pcm {
+        kind: PcmKind,
+        channels: usize,
+    },
 }
 
 /// Decodes the packets of one audio track to planar `f32`, in WAV channel order when
@@ -18,8 +29,9 @@ enum Inner {
 ///
 /// It takes the track's [`CodecParams`] (from `isobmff::Track::codec_params`,
 /// `matroska::Track::codec_params`, `ogg::Stream::codec_params`, or built by hand for another
-/// container) and decodes PCM. Container timing (priming, end trimming) is the caller's: every
-/// decoded sample is returned.
+/// container) and decodes AAC (LC; HE-AAC as its upsampled LC core) and PCM.
+/// Container timing (AAC priming, end trimming) is the caller's: every decoded sample is
+/// returned.
 ///
 /// ```no_run
 /// # fn demo(params: &craft_audio::CodecParams, packets: &[Vec<u8>]) -> craft_audio::Result<()> {
@@ -60,19 +72,45 @@ impl std::fmt::Debug for TrackDecoder {
 
 impl TrackDecoder {
     /// A decoder for the track `params` describes. `lookahead` holds the track's first packets
-    /// (up to [`LOOKAHEAD_PACKETS`]; empty when they are not at hand), for codecs that find their
-    /// configuration in the stream; PCM needs none. Missing configuration is
+    /// (up to [`LOOKAHEAD_PACKETS`]; empty when they are not at hand): HE-AAC signalled only
+    /// inside the stream is found in them.
+    ///
+    /// Streams without codec configuration are accepted where the packets carry it: AAC with
+    /// empty `extradata` takes its configuration from the first packet's ADTS header (MPEG-TS,
+    /// raw `.aac`), and ADTS headers are stripped from every packet. Other missing configuration is
     /// [`AudioError::Malformed`].
     ///
-    /// Codecs without a native packet decoder yet (AAC, MP3, FLAC, ALAC, Vorbis, Opus) are
+    /// Codecs without a native packet decoder yet (MP3, FLAC, ALAC, Vorbis, Opus) are
     /// [`AudioError::Unsupported`]; `craft_audio::decode` decodes them through symphonia when the
     /// `symphonia` feature is on.
     pub fn new(params: &CodecParams, lookahead: &[&[u8]]) -> Result<TrackDecoder> {
         let rate = params.sample_rate.unwrap_or(0);
         let channels = usize::from(params.channels.unwrap_or(0));
-        // PCM needs no lookahead; the codec decoders take their configuration from it.
-        let _ = lookahead;
         let (inner, codec, sample_rate, layout, sample_format) = match params.codec {
+            #[cfg(feature = "aac-decode")]
+            CodecId::Aac | CodecId::HeAac => {
+                // ADTS-framed packets (MPEG-TS, raw `.aac`) carry their configuration in each
+                // header: without extradata, the first header gives it.
+                let payloads: Vec<&[u8]> =
+                    lookahead.iter().map(|p| adts_payloads(p).and_then(|r| r.ok()).and_then(|v| v.first().copied()).unwrap_or(p)).collect();
+                let asc = if params.extradata.is_empty() {
+                    let h = lookahead.first().and_then(|p| aac::AdtsHeader::parse(p).ok()).ok_or_else(|| {
+                        AudioError::Malformed("AAC track without an AudioSpecificConfig (extradata), and its packets are not ADTS".into())
+                    })?;
+                    h.to_asc().to_bytes()
+                } else {
+                    params.extradata.clone()
+                };
+                let asc = asc.as_slice();
+                let dec = aac::Decoder::new(asc)?;
+                let out = aac::output_rate(asc, payloads.iter().copied().take(LOOKAHEAD_PACKETS)).unwrap_or(dec.sample_rate());
+                let up = (dec.sample_rate().checked_mul(2) == Some(out)).then(|| aac::Upsample2x::new(dec.channels()));
+                let codec = if up.is_some() { CodecId::HeAac } else { CodecId::Aac };
+                let cfg = dec.config().channel_config;
+                let layout = aac_layout(cfg, dec.channels());
+                let order = layout.is_ordered().then(|| aac::wav_order(cfg)).flatten();
+                (Inner::Aac { dec: Box::new(dec), up, order }, codec, out, layout, SampleFormat::Compressed)
+            }
             CodecId::Pcm => {
                 let pcm = params.pcm.ok_or_else(|| AudioError::Malformed("PCM track without a sample format".into()))?;
                 let (kind, sample_format) = pcm_kind(pcm.bits, pcm.float, pcm.big_endian, !pcm.signed)
@@ -87,12 +125,13 @@ impl TrackDecoder {
         Ok(TrackDecoder { inner, codec, sample_rate, layout, sample_format, last_frames: 0 })
     }
 
-    /// The codec.
+    /// The codec, refined from the stream: [`CodecId::HeAac`] for AAC with spectral band
+    /// replication.
     pub fn codec(&self) -> CodecId {
         self.codec
     }
 
-    /// The rate of the decoded audio.
+    /// The rate of the decoded audio (for HE-AAC, twice the AAC-LC core rate).
     pub fn sample_rate(&self) -> u32 {
         self.sample_rate
     }
@@ -116,6 +155,22 @@ impl TrackDecoder {
     /// its timing.
     pub fn decode(&mut self, packet: &[u8]) -> Result<AudioBuffer> {
         let channels = match &mut self.inner {
+            #[cfg(feature = "aac-decode")]
+            Inner::Aac { dec, up, order } => {
+                let mut out: Vec<Vec<f32>> = Vec::new();
+                let units = match adts_payloads(packet) {
+                    Some(units) => units?,
+                    None => vec![packet],
+                };
+                for unit in units {
+                    let mut block = dec.decode(unit)?;
+                    if let Some(up) = up {
+                        block = up.process(block);
+                    }
+                    append(&mut out, block);
+                }
+                reorder(out, *order)
+            }
             Inner::Pcm { kind, channels } => {
                 let frames = (packet.len() / (kind.bytes() * *channels).max(1)) as u64;
                 deinterleave(packet, *kind, *channels, frames)?
@@ -131,52 +186,114 @@ impl TrackDecoder {
     }
 
     /// What stands in for a lost or undecodable packet (`packet` when its bytes are at hand):
-    /// silence as long as the packet would have been (from its size, or the last packet). Empty
-    /// when the length is unknown. Fails with [`AudioError::TooLarge`](crate::AudioError::TooLarge)
-    /// when that silence would pass the decode limit (2^30 samples, as [`decode`](Self::decode)
-    /// has) or cannot be allocated, rather than return less than the packet's length.
+    /// silence as long as the packet would have been (from its frame
+    /// header, the codec's frame length, or the last packet). Empty when the length is unknown.
+    /// Fails with [`AudioError::TooLarge`](crate::AudioError::TooLarge) when that silence would pass
+    /// the decode limit (2^30 samples, as [`decode`](Self::decode) has) or cannot be allocated,
+    /// rather than return less than the packet's length.
     pub fn conceal(&mut self, packet: Option<&[u8]>) -> Result<AudioBuffer> {
         let data = packet.unwrap_or_default();
         let frames = match &mut self.inner {
+            #[cfg(feature = "aac-decode")]
+            Inner::Aac { up, .. } => Some(aac::FRAME_LEN * if up.is_some() { 2 } else { 1 }),
             Inner::Pcm { kind, channels } => Some(data.len() / (kind.bytes() * *channels).max(1)),
         };
         let frames = frames.filter(|&n| n > 0).unwrap_or(self.last_frames);
         Ok(AudioBuffer { sample_rate: self.sample_rate, channels: crate::pcm::silence(usize::from(self.layout.channels()), frames)? })
     }
 
-    /// The frames every packet decodes to, for codecs whose packets all have one length; `None`
-    /// for PCM.
+    /// The frames every packet decodes to, for codecs whose packets all have one length: AAC
+    /// (1024, 2048 for HE-AAC); `None` for PCM.
     pub fn frames_per_packet(&self) -> Option<usize> {
         match &self.inner {
+            #[cfg(feature = "aac-decode")]
+            Inner::Aac { up, .. } => Some(aac::FRAME_LEN * if up.is_some() { 2 } else { 1 }),
             Inner::Pcm { .. } => None,
         }
     }
 
     /// Frames to decode before a seek target and drop, so the decoder has settled when the target
-    /// is reached; none for PCM.
+    /// is reached: two AAC frames, none for PCM.
     pub fn preroll(&self) -> usize {
         match &self.inner {
+            #[cfg(feature = "aac-decode")]
+            Inner::Aac { up, .. } => 2 * aac::FRAME_LEN * if up.is_some() { 2 } else { 1 },
             Inner::Pcm { .. } => 0,
         }
     }
 
     /// Forget the decoder state, for a seek: the next packet decodes as if it were the first
-    /// (codecs with overlap need [`TrackDecoder::preroll`] frames to settle).
+    /// (codecs with overlap, such as AAC, need [`TrackDecoder::preroll`] frames to
+    /// settle).
     pub fn reset(&mut self) {
         // the packet before a seek says nothing about the length of a packet lost after it
         self.last_frames = 0;
         match &mut self.inner {
+            #[cfg(feature = "aac-decode")]
+            Inner::Aac { dec, up, .. } => {
+                dec.reset();
+                if let Some(up) = up {
+                    up.reset();
+                }
+            }
             Inner::Pcm { .. } => {}
         }
     }
 }
 
 fn unsupported(codec: CodecId) -> AudioError {
-    if cfg!(feature = "symphonia") {
-        AudioError::Unsupported(format!("no native {} packet decoder yet (craft_audio::decode reads it through symphonia)", codec.name()))
-    } else {
-        AudioError::Unsupported(format!("no native {} packet decoder yet", codec.name()))
+    let feature = match codec {
+        CodecId::Aac | CodecId::HeAac => Some("aac-decode"),
+        _ => None,
+    };
+    match feature {
+        // A codec this crate decodes, in a build without its feature.
+        Some(f) => AudioError::Unsupported(format!("decoding {} needs the `{f}` feature", codec.name())),
+        None if cfg!(feature = "symphonia") => {
+            AudioError::Unsupported(format!("no native {} packet decoder yet (craft_audio::decode reads it through symphonia)", codec.name()))
+        }
+        None => AudioError::Unsupported(format!("no native {} packet decoder yet", codec.name())),
     }
+}
+
+/// `channels` reordered by `order` (output channel → decoded channel); unchanged when the counts
+/// differ.
+#[cfg(feature = "aac-decode")]
+fn reorder(mut channels: Vec<Vec<f32>>, order: Option<&[usize]>) -> Vec<Vec<f32>> {
+    match order {
+        Some(order) if order.len() == channels.len() => order.iter().map(|&c| channels.get_mut(c).map(std::mem::take).unwrap_or_default()).collect(),
+        _ => channels,
+    }
+}
+
+/// Append `more` to `out` channel by channel; a block whose channel count differs is dropped.
+#[cfg(feature = "aac-decode")]
+fn append(out: &mut Vec<Vec<f32>>, more: Vec<Vec<f32>>) {
+    if out.is_empty() {
+        *out = more;
+    } else if out.len() == more.len() {
+        for (o, c) in out.iter_mut().zip(more) {
+            o.extend(c);
+        }
+    }
+}
+
+/// The raw access units of an ADTS-framed packet (one or more whole frames, nothing else), or
+/// `None` when the packet is not ADTS. Frames with several raw data blocks are unsupported.
+#[cfg(feature = "aac-decode")]
+fn adts_payloads(packet: &[u8]) -> Option<Result<Vec<&[u8]>>> {
+    if packet.len() < 7 || packet[0] != 0xFF || packet[1] & 0xF6 != 0xF0 {
+        return None;
+    }
+    let frames = aac::split_adts(packet).ok()?;
+    let whole: usize = frames.iter().map(|(h, _)| h.frame_length).sum();
+    if whole != packet.len() {
+        return None;
+    }
+    if frames.iter().any(|(h, _)| h.raw_data_blocks > 1) {
+        return Some(Err(AudioError::Unsupported("ADTS frames with several raw data blocks".into())));
+    }
+    Some(Ok(frames.into_iter().map(|(_, p)| p).collect()))
 }
 
 /// The sample layout and stored format of PCM samples, `None` for a depth we do not read.
@@ -195,6 +312,23 @@ pub(crate) fn pcm_kind(bits: u16, float: bool, big_endian: bool, unsigned: bool)
             Some((PcmKind::Int { bytes, big_endian, unsigned }, sf))
         }
         _ => None,
+    }
+}
+
+#[cfg(feature = "aac-decode")]
+/// The speakers of an AAC channel configuration, in the WAV order [`aac::wav_order`] gives;
+/// configuration 7 and program-config layouts keep the decoded order and are unordered.
+pub(crate) fn aac_layout(channel_config: u8, channels: usize) -> ChannelLayout {
+    match channel_config {
+        1 => ChannelLayout::MONO,
+        2 => ChannelLayout::STEREO,
+        3 => ChannelLayout::SURROUND_3_0,
+        4 => ChannelLayout::from_mask(0x107),
+        5 => ChannelLayout::from_mask(0x607),
+        6 => ChannelLayout::SURROUND_5_1_SIDE,
+        11 => ChannelLayout::SURROUND_6_1,
+        12 => ChannelLayout::SURROUND_7_1,
+        _ => ChannelLayout::unordered(crate::layout::count(channels)),
     }
 }
 
@@ -221,9 +355,12 @@ mod tests {
 
     #[test]
     fn codecs_without_a_packet_decoder_are_unsupported() {
-        for codec in [CodecId::Aac, CodecId::Flac, CodecId::Vorbis, CodecId::Alac, CodecId::Mp3, CodecId::Opus, CodecId::H264] {
+        for codec in [CodecId::Flac, CodecId::Vorbis, CodecId::Alac, CodecId::Mp3, CodecId::Opus, CodecId::H264] {
             assert!(matches!(TrackDecoder::new(&CodecParams::new(codec), &[]), Err(AudioError::Unsupported(_))), "{codec:?}");
         }
+        // A codec whose feature is off names the feature.
+        #[cfg(not(feature = "aac-decode"))]
+        assert!(matches!(TrackDecoder::new(&CodecParams::new(CodecId::Aac), &[]), Err(AudioError::Unsupported(m)) if m.contains("aac-decode")));
         // PCM needs its sample format.
         assert!(TrackDecoder::new(&CodecParams::new(CodecId::Pcm).with_channels(2).with_sample_rate(48_000), &[]).is_err());
     }

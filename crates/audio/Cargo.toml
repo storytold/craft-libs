@@ -1,6 +1,6 @@
 [package]
 name = "craft-audio"
-description = "Audio file I/O and codecs: WAV/AIFF read and write, FLAC encoder."
+description = "Audio file I/O and codecs: WAV/AIFF read and write, FLAC encoder, AAC decoder."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -14,11 +14,12 @@ all-features = true
 workspace = true
 
 [features]
-# Probe and decode files: WAV and AIFF natively; PCM in MP4 and Matroska through craft-media's
-# demuxers; AAC, MP1/MP2/MP3, FLAC, ALAC, Vorbis, CAF, ADPCM, A-law and µ-law through symphonia.
+# Probe and decode files: WAV and AIFF natively; AAC and PCM through craft-media's demuxers and
+# this crate's decoders; MP1/MP2/MP3, FLAC, ALAC, Vorbis, CAF, ADPCM, A-law and µ-law through
+# symphonia.
 decode = ["decode-native", "symphonia"]
 # `decode` without symphonia: only the formats with a native decoder (others are Unsupported).
-decode-native = ["craft-media/isobmff", "craft-media/matroska", "craft-media/ogg", "dep:log"]
+decode-native = ["aac-decode", "craft-media/isobmff", "craft-media/matroska", "craft-media/ogg", "dep:log"]
 # The symphonia fallback for the formats with no native decoder yet.
 symphonia = ["decode-native", "dep:symphonia"]
 # Every encoder: the lossless file writers.
@@ -29,12 +30,15 @@ lossless-encode = ["pcm-encode", "flac-encode"]
 pcm-encode = []
 # Encode FLAC files.
 flac-encode = ["craft-media/bitstream"]
+# Codec modules on their own, for packet-level use.
+aac-decode = ["craft-media/bitstream"]
 # Multi-resolution waveform overviews (`peaks`).
 peaks = []
 # Serialize and Deserialize for the shared types.
 serde = ["dep:serde", "craft-media/serde"]
 
 [dependencies]
+# symphonia keeps its AAC decoder for AAC in CAF, a container craft-media does not read.
 craft-media = { workspace = true }
 thiserror = { workspace = true }
 serde = { workspace = true, optional = true }
