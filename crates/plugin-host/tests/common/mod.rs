@@ -2,6 +2,11 @@
 
 #![allow(dead_code, unused_imports, clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
+pub mod gain;
+pub mod services;
+pub mod surfaces;
+pub mod v1;
+
 mod pkg;
 pub use pkg::{package_from, with_section};
 
@@ -92,4 +97,59 @@ pub fn block_on<F: Future>(fut: F) -> F::Output {
         Poll::Ready(v) => v,
         Poll::Pending => panic!("future was pending"),
     }
+}
+
+// ---- packages built from WAT text ----------------------------------------------------------
+
+/// The text of a fixture, for variants made with `str::replace`.
+pub fn fixture_text(name: &str) -> String {
+    let path = format!("{}/tests/fixtures/{name}.wat", env!("CARGO_MANIFEST_DIR"));
+    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path}: {e}"))
+}
+
+/// Replace `from` with `to` in `text`, and fail the test if `from` is absent. A variant that
+/// silently changed nothing would make its test prove nothing.
+pub fn swap(text: &str, from: &str, to: &str) -> String {
+    assert!(text.contains(from), "fixture has no {from:?}");
+    text.replacen(from, to, 1)
+}
+
+/// A manifest for the `echo` fixture. Contributions are listed by the caller.
+pub fn echo_manifest(id: &str, version: &str, contributions: Value) -> Value {
+    json!({
+        "schema": 1, "id": id, "name": id, "version": version,
+        "abi": { "craft": 1 },
+        "requires": { "ops": ["host.log", "host.progress", "host.cancelled", "cmd.execute", "cmd.list"] },
+        "permissions": { "required": ["commands.run:app.*"], "optional": ["ui.contribute"] },
+        "limits": { "memory_mb": 4, "stack_kb": 128 },
+        "contributions": contributions
+    })
+}
+
+pub fn echo_package(id: &str, version: &str, contributions: Value) -> Vec<u8> {
+    package_from(&fixture_text("echo"), &echo_manifest(id, version, contributions))
+}
+
+/// The contributions most lifecycle tests use. Entry numbers match `fixtures/echo.wat`.
+pub fn std_contribs() -> Value {
+    json!([
+        { "kind": "command", "id": "echo", "entry": 0, "label": "Echo", "menu": ["Plug-ins"], "shortcut": "Ctrl+E" },
+        { "kind": "command", "id": "boom", "entry": 1 },
+        { "kind": "command", "id": "spin", "entry": 2, "budget": "interactive" },
+        { "kind": "command", "id": "exec_boom", "entry": 3 },
+        { "kind": "command", "id": "err", "entry": 4 },
+        { "kind": "command", "id": "logs", "entry": 5 },
+        { "kind": "command", "id": "count", "entry": 6, "instance": "session" },
+        { "kind": "command", "id": "ver", "entry": 7 },
+        { "kind": "command", "id": "badjson", "entry": 8 }
+    ])
+}
+
+/// The echo fixture with `$ver` set to a digit, so a test can tell versions apart.
+pub fn echo_wat_v(digit: char) -> String {
+    swap(&fixture_text("echo"), "(global $ver i32 (i32.const 49))", &format!("(global $ver i32 (i32.const {}))", digit as u32))
+}
+
+pub fn echo_pkg(id: &str, version: &str, wat_text: &str, contribs: Value) -> Vec<u8> {
+    package_from(wat_text, &echo_manifest(id, version, contribs))
 }

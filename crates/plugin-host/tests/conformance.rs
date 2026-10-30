@@ -15,21 +15,26 @@ mod common;
 #[path = "fixtures/conformance/reference.rs"]
 mod reference;
 
+use std::collections::HashSet;
 use std::fmt::Debug;
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
+use common::services::TestServices;
 use common::{PAGE, STACK, block_on, gate, no_host};
+use craft_command::Owner;
 use craft_plugin_abi::descriptor::{Alpha, Kind, ProcessDescriptor, Sample};
 use craft_plugin_abi::ops::unpack_call_return;
-use craft_plugin_abi::{HostPolicy, Op, Status, check_package};
+use craft_plugin_abi::{HostPolicy, Op, Permission, Status, check_package};
+use craft_plugin_host::dispatch::{DispatchConfig, HostDispatcher, PluginContext};
 use craft_plugin_host::engine::wasmi::WasmiEngine;
 use craft_plugin_host::engine::wasmtime::WasmtimeEngine;
 use craft_plugin_host::engine::{
     Budget, Caps, CompileOptions, Engine, EngineId, Export, HostDispatch, HostError, HostResult, Instance, LoadError, Trap, Trust,
     require_deadline_enforcement,
 };
+use craft_plugin_host::store::MemoryStore;
 use reference::{Image, blur_reference, noise_image, posterize_reference};
 use serde_json::{Value, json};
 
@@ -444,6 +449,80 @@ fn compile_refuses_a_package_the_gate_rejected() {
         block_on(e.compile(&bytes, &report, opts())).map(|_| ()).map_err(|err| matches!(err, LoadError::Gate(_)))
     });
     assert_eq!(out, Err(true));
+}
+
+// ---- permissions ------------------------------------------------------------------------
+
+fn probe_with(e: &dyn Engine, declared: &[Op], grants: &[&str]) -> Vec<Result<Status, Trap>> {
+    let names: Vec<&str> = declared.iter().map(|o| o.name()).collect();
+    let services = TestServices::new();
+    let ctx = PluginContext {
+        owner: Owner { plugin_id: Arc::from("org.craft.conformance"), generation: 1 },
+        declared_ops: declared.iter().copied().collect::<HashSet<_>>(),
+        grants: grants.iter().map(|g| g.parse::<Permission>().unwrap()).collect(),
+        engine: e.id(),
+        random_seed: 1,
+    };
+    let dispatcher = HostDispatcher::new(
+        ctx,
+        services,
+        Arc::new(MemoryStore::new()),
+        Arc::new(craft_plugin_host::engine::SystemClock::new()),
+        Arc::new(AtomicBool::new(false)),
+        DispatchConfig::default(),
+    );
+    let b = budget();
+    let mut inst = instantiate(e, &package("probe", &names, "command"), dispatcher.handle(), &b).unwrap();
+    (0..20).map(|slot| invoke(inst.as_mut(), slot, 0, &b).map(|r| unpack(r).0)).collect()
+}
+
+#[test]
+fn a_plugin_that_lists_no_ops_is_denied_every_op() {
+    let out = on_all(|e| probe_with(e, &[], &[]));
+    // Slots 0 to 18 are the ops of this release. Slot 19 is the reserved 0x00A0, which no release serves.
+    let mut want = vec![Ok(Status::Denied); 19];
+    want.push(Ok(Status::Unsupported));
+    assert_eq!(out, want);
+}
+
+#[test]
+fn a_plugin_that_lists_every_op_but_holds_no_grant_is_denied_every_privileged_op() {
+    let out = on_all(|e| probe_with(e, &Op::ALL, &[]));
+    let status = |op: Op| out[Op::ALL.iter().position(|o| *o == op).unwrap()].clone();
+    let privileged = [
+        Op::CmdList,
+        Op::CmdExecute,
+        Op::DocQuery,
+        Op::DocApply,
+        Op::EventPoll,
+        Op::StateGet,
+        Op::StatePut,
+        Op::FsOpenPicked,
+        Op::FsRead,
+        Op::FsWrite,
+        Op::NetFetch,
+    ];
+    for op in privileged {
+        assert_eq!(status(op), Ok(Status::Denied), "{} must be denied without a grant", op.name());
+    }
+    // Controls: the ops that need no permission are not denied, so the denial above is the grant check.
+    for op in [Op::HostInfo, Op::HostCancelled, Op::TimeNow] {
+        assert_eq!(status(op), Ok(Status::Ok), "{} needs no grant", op.name());
+    }
+    // `random.bytes` degrades without a grant. The request `{}` has no `len`, so it answers E_BAD_ARG.
+    assert_eq!(status(Op::RandomBytes), Ok(Status::BadArg));
+    assert_eq!(out[19], Ok(Status::Unsupported));
+}
+
+#[test]
+fn a_grant_turns_the_same_denial_into_an_answer() {
+    // Control for the test above: with `state.local` the state ops pass the permission check.
+    // The request `{}` has no key, so the answer is E_BAD_ARG, not E_DENIED.
+    let out = on_all(|e| probe_with(e, &Op::ALL, &["state.local"]));
+    let at = |op: Op| out[Op::ALL.iter().position(|o| *o == op).unwrap()].clone();
+    assert_eq!(at(Op::StateGet), Ok(Status::BadArg));
+    assert_eq!(at(Op::StatePut), Ok(Status::BadArg));
+    assert_eq!(at(Op::CmdList), Ok(Status::Denied));
 }
 
 // ---- kernels ----------------------------------------------------------------------------

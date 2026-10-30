@@ -3,9 +3,9 @@ name: Plugin host
 on:
   push:
     branches: [main]
-    paths: ["crates/plugin-host/**", "crates/plugin-abi/**", "Cargo.toml", "Cargo.lock", ".github/workflows/plugin-host.yml"]
+    paths: ["crates/plugin-host/**", "crates/plugin-abi/**", "crates/command/**", "crates/ipc/**", "Cargo.toml", "Cargo.lock", ".github/workflows/plugin-host.yml"]
   pull_request:
-    paths: ["crates/plugin-host/**", "crates/plugin-abi/**", "Cargo.toml", "Cargo.lock", ".github/workflows/plugin-host.yml"]
+    paths: ["crates/plugin-host/**", "crates/plugin-abi/**", "crates/command/**", "crates/ipc/**", "Cargo.toml", "Cargo.lock", ".github/workflows/plugin-host.yml"]
   workflow_dispatch:
 
 permissions:
@@ -32,9 +32,8 @@ jobs:
         with:
           key: craft-plugin-host
       - run: cargo fmt -p craft-plugin-host --check
-      - run: cargo clippy -p craft-plugin-host --all-targets --locked -- -D warnings
-      - run: cargo clippy -p craft-plugin-host --all-targets --features wasmtime --locked -- -D warnings
-      - run: cargo test -p craft-plugin-host --locked
-      - run: cargo test -p craft-plugin-host --features wasmtime --locked
+      - run: crates/plugin-host/check-features.sh
       - run: cargo check -p craft-plugin-host --locked --target wasm32-unknown-unknown
+      - run: cargo check -p craft-plugin-host --features legacy-v1 --locked --target wasm32-unknown-unknown
       - run: cargo check -p craft-plugin-host --features browser --locked --target wasm32-unknown-unknown
+      - run: cargo check -p craft-plugin-host --features browser,legacy-v1 --locked --target wasm32-unknown-unknown

@@ -1233,11 +1233,15 @@ name = "craft-plugin-host"
 version = "0.1.0"
 dependencies = [
  "bitflags 2.13.2",
+ "craft-command",
+ "craft-ipc",
  "craft-plugin-abi",
  "js-sys",
+ "serde",
  "serde_json",
  "wasm-bindgen",
  "wasm-bindgen-futures",
+ "wasm-bindgen-test",
  "wasmi",
  "wasmi_core",
  "wasmtime",
