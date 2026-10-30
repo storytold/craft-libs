@@ -35,7 +35,7 @@ jobs:
       # Each feature on its own, so code that needs another feature fails here.
       - name: Clippy, each feature alone
         run: |
-          for f in "" decode decode-native symphonia encode lossless-encode pcm-encode peaks serde; do
+          for f in "" decode decode-native symphonia encode lossless-encode pcm-encode flac-encode peaks serde; do
             echo "::group::features: ${f:-none}"
             cargo clippy -p craft-audio --all-targets --locked --no-default-features ${f:+--features "$f"} -- -D warnings
             echo "::endgroup::"
@@ -82,6 +82,7 @@ jobs:
           key: craft-audio-features
       - run: cargo test -p craft-audio --no-default-features --features lossless-encode --locked
       - run: cargo test -p craft-audio --no-default-features --features pcm-encode --locked --lib
+      - run: cargo test -p craft-audio --no-default-features --features flac-encode --locked --lib
       - run: cargo test -p craft-audio --no-default-features --features decode-native --locked
   test:
     timeout-minutes: 20

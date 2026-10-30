@@ -15,8 +15,9 @@
 //! - [`TrackDecoder`] (feature `decode-native`): one track's packets from any demuxer to planar
 //!   `f32` in WAV channel order.
 //! - [`encode`], [`FileEncoder`]: WAV/BWF/RF64 and AIFF/AIFF-C (feature `pcm-encode`, which also
-//!   gives [`wav_float_header`]), whole-buffer or incremental into any `Write + Seek`. Features
-//!   `lossless-encode` and `encode` turn it on.
+//!   gives [`wav_float_header`]) and FLAC (feature `flac-encode`), whole-buffer or incremental into
+//!   any `Write + Seek`. Feature `lossless-encode` turns on both; feature `encode` is
+//!   the same as `lossless-encode`.
 //! - [`peaks`] (feature `peaks`): min/max/RMS pyramid for waveform drawing.
 //!
 //! The shared types below build with no features.
@@ -33,7 +34,7 @@ mod read;
 mod track;
 #[cfg(any(feature = "decode-native", feature = "pcm-encode"))]
 mod wav;
-#[cfg(feature = "pcm-encode")]
+#[cfg(any(feature = "pcm-encode", feature = "flac-encode"))]
 mod write;
 
 pub use buffer::AudioBuffer;
@@ -49,7 +50,9 @@ pub use read::{DEFAULT_MAX_SAMPLES, DecodeOptions, Decoder, TrackInfo, decode, d
 #[cfg(feature = "decode-native")]
 pub use track::{LOOKAHEAD_PACKETS, TrackDecoder};
 #[cfg(feature = "pcm-encode")]
-pub use write::{ENCODE_EXTENSIONS, FileEncoder, encode, encode_format_for, wav_float_header};
+pub use write::wav_float_header;
+#[cfg(any(feature = "pcm-encode", feature = "flac-encode"))]
+pub use write::{ENCODE_EXTENSIONS, FileEncoder, encode, encode_format_for};
 
 /// Errors from probing, decoding and encoding.
 #[non_exhaustive]
@@ -76,7 +79,8 @@ pub enum AudioError {
 /// Result alias for this module.
 pub type Result<T> = std::result::Result<T, AudioError>;
 
-/// The file formats [`encode`] writes (feature `pcm-encode`).
+/// The file formats [`encode`] writes. Each needs its feature: WAV and AIFF `pcm-encode`, FLAC
+/// `flac-encode`; asking for one that is not built returns [`AudioError::Unsupported`].
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -85,6 +89,8 @@ pub enum EncodeFormat {
     Wav,
     /// AIFF (integer depths) or AIFF-C `fl32` (float).
     Aiff,
+    /// FLAC (integer depths).
+    Flac,
 }
 
 impl EncodeFormat {
@@ -93,6 +99,7 @@ impl EncodeFormat {
         match self {
             EncodeFormat::Wav => Container::Wav,
             EncodeFormat::Aiff => Container::Aiff,
+            EncodeFormat::Flac => Container::Flac,
         }
     }
 }
@@ -244,8 +251,8 @@ pub enum BitDepth {
 /// ```
 /// use craft_audio::{BitDepth, EncodeFormat, EncodeOptions};
 ///
-/// let opts = EncodeOptions::new(EncodeFormat::Aiff).with_bit_depth(BitDepth::Int16).with_dither(true);
-/// assert_eq!(opts.format, EncodeFormat::Aiff);
+/// let opts = EncodeOptions::new(EncodeFormat::Flac).with_bit_depth(BitDepth::Int16).with_dither(true);
+/// assert_eq!(opts.format, EncodeFormat::Flac);
 /// ```
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]

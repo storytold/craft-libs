@@ -364,12 +364,12 @@ pub fn probe_with(bytes: &[u8], ext_hint: Option<&str>, opts: &DecodeOptions) ->
 /// file instead, and [`decode_with`] for another track or size limit.
 ///
 /// ```
-/// # #[cfg(feature = "pcm-encode")] {
+/// # #[cfg(feature = "flac-encode")] {
 /// use craft_audio::{AudioBuffer, EncodeFormat, EncodeOptions, decode, encode};
 ///
 /// let tone: Vec<f32> = (0..4800).map(|i| (i as f32 * 0.05).sin() * 0.5).collect();
-/// let aiff = encode(&AudioBuffer { sample_rate: 48_000, channels: vec![tone] }, &EncodeOptions::new(EncodeFormat::Aiff)).unwrap();
-/// let (info, buf) = decode(&aiff, None).unwrap();
+/// let flac = encode(&AudioBuffer { sample_rate: 48_000, channels: vec![tone] }, &EncodeOptions::new(EncodeFormat::Flac)).unwrap();
+/// let (info, buf) = decode(&flac, None).unwrap();
 /// assert_eq!((info.channels, buf.frames()), (1, 4800));
 /// # }
 /// ```

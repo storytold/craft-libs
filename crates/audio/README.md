@@ -1,6 +1,7 @@
 # craft-audio
 
-Audio file I/O and codecs for the Craft apps. Native implementations: WAV and AIFF read/write.
+Audio file I/O and codecs for the Craft apps. Native implementations: WAV and AIFF read/write,
+FLAC encoder.
 Formats without a native decoder are decoded by [symphonia](#symphonia), which is to be replaced
 by native decoders.
 
@@ -25,16 +26,17 @@ No default features. The shared types (`AudioBuffer`, `AudioInfo`, `ChannelLayou
 | `decode` | `decode`, `probe`, `Decoder`, `tracks`, `TrackDecoder`; every format in [Format support](#format-support) | `decode-native`, `symphonia` |
 | `decode-native` | the same, native formats only (others are `Unsupported`) | craft-media `isobmff`/`matroska`/`ogg`, `log` |
 | `symphonia` | the fallback for formats with no native decoder; turning it on is the same as `decode` | `decode-native`, symphonia |
-| `encode` | every encoder: the WAV and AIFF file writers | `lossless-encode` |
-| `lossless-encode` | WAV and AIFF writing | `pcm-encode` |
+| `encode` | every encoder: the WAV, AIFF and FLAC file writers | `lossless-encode` |
+| `lossless-encode` | WAV, AIFF and FLAC writing | `pcm-encode`, `flac-encode` |
 | `pcm-encode` | `encode`, `FileEncoder` for WAV and AIFF; `wav_float_header` | none |
+| `flac-encode` | `encode`, `FileEncoder` for FLAC | craft-media `bitstream` |
 | `peaks` | `peaks::Peaks` | none |
 | `serde` | `Serialize`/`Deserialize` on the shared types | `serde` |
 
 An app that decodes 32-bit FLAC with `decode` needs a profile override in its workspace; see
 [symphonia](#symphonia).
 
-WAV and AIFF export only (no decoders, no demuxers, no symphonia):
+WAV, AIFF and FLAC export only (no decoders, no demuxers, no symphonia):
 
 ```toml
 craft-audio = { git = "https://github.com/storytold/craft-libs", rev = "<commit>", features = ["lossless-encode"] }
@@ -179,8 +181,8 @@ use craft_audio::{AudioBuffer, BitDepth, ChannelLayout, EncodeFormat, EncodeOpti
 // makes a silent one to fill.
 let buf = AudioBuffer { sample_rate: 48_000, channels: vec![left, right] };
 
-let opts = EncodeOptions::new(EncodeFormat::Aiff).with_bit_depth(BitDepth::Int24).with_dither(true);
-let aiff: Vec<u8> = encode(&buf, &opts)?;
+let opts = EncodeOptions::new(EncodeFormat::Flac).with_bit_depth(BitDepth::Int24).with_dither(true);
+let flac: Vec<u8> = encode(&buf, &opts)?;
 
 // 5.1 with side surrounds: a layout other than the default for 6 channels, recorded in the WAV.
 let wav = encode(&surround, &EncodeOptions::default().with_layout(ChannelLayout::SURROUND_5_1_SIDE))?;
@@ -240,7 +242,7 @@ match craft_audio::decode(&bytes, None) {
 |---|---|---|
 | WAV, BWF, RF64/BW64 | native | native |
 | AIFF, AIFF-C | native | native |
-| FLAC | symphonia | — |
+| FLAC | symphonia | native |
 | AAC-LC, HE-AAC | symphonia | — |
 | MP1, MP2, MP3 (MPEG audio Layer I/II/III) | symphonia | — |
 | ALAC, Vorbis, ADPCM, A-law, µ-law | symphonia | — |
@@ -269,6 +271,7 @@ match craft_audio::decode(&bytes, None) {
 | Codec | Spec | Scope | Verified against |
 |---|---|---|---|
 | WAV, AIFF | Microsoft RIFF, Apple AIFF/AIFF-C | read: integer 8–32-bit, float 32/64-bit, `WAVE_FORMAT_EXTENSIBLE` masks, RF64/BW64, BWF `bext`, truncated files; write: 16/24/32-bit integer and 32-bit float, RF64 above 4 GiB, any layout, TPDF dither | round trips; hostile-input tests |
+| FLAC encoder | RFC 9639 | 16, 24, 32 bits; 1–8 channels; up to 655,350 Hz; LPC, stereo decorrelation, STREAMINFO MD5 | bit-exact through ffmpeg and the reference `flac` decoder |
 
 ## symphonia
 
@@ -320,12 +323,14 @@ the full tests with ffmpeg required.
 | Part | Source |
 |---|---|
 | WAV, AIFF, `decode`/`probe`, peaks | SoundCraft `soundcraft-audio-io` [7dc56a4](https://github.com/storytold/soundcraft/commit/7dc56a4dbeebf57eacece09536726c57844fc59d) |
+| FLAC encoder | FilmCraft [8fda2f2](https://github.com/storytold/filmcraft/commit/8fda2f232198c4c79ff9cfe5b6a347bb1375fa9e) |
 
 Where apps had overlapping implementations, the one that measured better was kept, with the
 tests of both:
 
 | Format | Kept | Reason |
 |---|---|---|
+| FLAC encoding | FilmCraft | 0.1–37% smaller output than SoundCraft's on 12 test signals; STREAMINFO MD5 |
 | WAV/AIFF writing | SoundCraft | only one with BWF, dither, arbitrary speaker masks, streaming without known length |
 
 ## Migration notes for apps
@@ -350,11 +355,12 @@ What an app adjusts:
   `#[non_exhaustive]`.
   `Speaker::ALL` is a slice.
 - `TrackInfo::sample_rate` and `channels` are `Option`s.
-- Features are per format. SoundCraft's `encode` is now `lossless-encode`, which turns on
-  `pcm-encode` (WAV, AIFF). `encode` turns on every encoder. Writing a format
+- Features are per format. SoundCraft's `encode` (WAV, AIFF, FLAC) is now `lossless-encode`, made
+  of `pcm-encode` (WAV, AIFF) and `flac-encode`. `encode` turns on every encoder. Writing a format
   whose feature is off returns `AudioError::Unsupported`.
 - `FileEncoder::write` takes any per-channel slices, but refuses a block with missing channels or
   short slices instead of filling them with silence.
 - `DecodeOptions` is not `Copy`.
+- The FLAC encoder's vendor string is `craft-audio <version>`.
 - `decode` tries the native path first (WAV, AIFF, and PCM in MP4 and Matroska), which decodes
   MP4 and Matroska files to presentation length. A failed source read is `AudioError::Io`.
