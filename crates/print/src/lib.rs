@@ -49,7 +49,8 @@ pub struct Printer {
     /// `_192_0_2_15` described as `192.0.2.15`. Windows names are already human: empty there.
     pub description: String,
     pub default: bool,
-    /// Whether the Windows driver reports duplex support; None when unknown (CUPS).
+    /// Whether the Windows driver reports duplex support; None when unknown (CUPS, and
+    /// [`printers`] on Windows, which doesn't read it: see [`two_sided`]).
     pub two_sided: Option<bool>,
 }
 
@@ -419,6 +420,23 @@ pub fn printers() -> Vec<Printer> {
     #[cfg(not(any(windows, all(unix, not(target_arch = "wasm32")))))]
     {
         Vec::new()
+    }
+}
+
+/// Whether `printer`'s driver takes two-sided settings from other programs (Windows: its
+/// PrintCapabilities offer a two-sided option); `None` when that can't be read, or off Windows.
+/// [`printers`] leaves [`Printer::two_sided`] unknown, because reading the capabilities of a
+/// printer that can't be reached, such as a WSD printer on another network, takes Windows about
+/// 48 s. Ask for the printer the user picks, off the UI thread.
+pub fn two_sided(printer: &str) -> Option<bool> {
+    #[cfg(windows)]
+    {
+        windows::two_sided_named(printer)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = printer;
+        None
     }
 }
 

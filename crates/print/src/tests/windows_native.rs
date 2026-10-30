@@ -410,6 +410,7 @@ fn windows_jobs_reach_the_spooler() {
         return;
     }
     let listed = spool::printers().into_iter().find(|p| p.name == name);
+    let duplex = spool::two_sided(name);
     let mixed = test_pdf(&[LETTER, LETTER_LANDSCAPE, LETTER], true);
     let job = Job { printer: Some(name.into()), title: "mixed.pdf".into(), ..Job::default() };
     let caller = std::thread::current().id();
@@ -422,7 +423,7 @@ fn windows_jobs_reach_the_spooler() {
         observed.borrow_mut().push((done, total));
     });
     let mut duplex_progress = Vec::new();
-    let duplex_refused = if listed.as_ref().is_some_and(|p| p.two_sided == Some(false)) {
+    let duplex_refused = if duplex == Some(false) {
         Some(spool::submit_with_progress(&mixed, &Job { duplex: Some(Duplex::LongEdge), ..job.clone() }, &mut |done, total| {
             duplex_progress.push((done, total));
         }))
@@ -430,7 +431,7 @@ fn windows_jobs_reach_the_spooler() {
         None
     };
     // The Print dialog's default, an explicit one-sided request, on a queue with no duplex unit.
-    let simplex_only = listed.as_ref().is_some_and(|p| p.two_sided == Some(false));
+    let simplex_only = duplex == Some(false);
     let one_sided = simplex_only.then(|| spool::submit(&mixed, &Job { duplex: Some(Duplex::Off), title: "simplex".into(), ..job.clone() }));
     let tabloid = test_pdf(&[TABLOID, LETTER], false);
     let shrink = Job { printer: Some(name.into()), scaling: Scaling::ShrinkToFit, title: "shrink".into(), ..Job::default() };
@@ -449,7 +450,8 @@ fn windows_jobs_reach_the_spooler() {
         "Get-PrintJob -PrinterName $name | Remove-PrintJob; foreach ($i in 1..20) { if (-not (Get-PrintJob -PrinterName $name)) { break }; Start-Sleep -Milliseconds 250 }; Remove-Printer -Name $name; if (Get-Printer -Name $name -ErrorAction SilentlyContinue) { throw 'the printer is still there' }; exit 0",
         name,
     );
-    assert!(listed.as_ref().is_some_and(|p| p.two_sided.is_some()), "the new printer is listed, its duplex support known: {listed:?}");
+    assert!(listed.as_ref().is_some_and(|p| p.two_sided.is_none()), "the new printer is listed without reading its driver: {listed:?}");
+    assert!(duplex.is_some(), "its duplex support is known when asked for: {duplex:?}");
     assert_eq!(sent.as_deref(), Ok("spooled 3 sheet(s)"), "{sent:?}");
     if let Some(refused) = duplex_refused {
         assert!(matches!(refused, Err(Error::Spool(ref m)) if m.contains("simplex/duplex") && m.contains("nothing was sent")), "{refused:?}");

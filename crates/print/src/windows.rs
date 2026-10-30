@@ -3,12 +3,12 @@
 //! PowerShell in Constrained Language Mode; storytold/pdfcraft#1107).
 //!
 //! The printers come from `EnumPrinters` (local queues and the user's connections, such as
-//! `\\server\queue`), the default from `GetDefaultPrinter`, and whether each driver takes
-//! two-sided settings from its PrintCapabilities. A job is drawn by the in-box
-//! `Windows.Data.Pdf` with Direct2D into the XPS print API, as vectors, and its options (copies,
-//! collation, two-sided, colour, paper, orientation, no driver scaling) travel as a PrintTicket
-//! that the driver validates before anything is sent. `winprint` and `winsafe` wrap the Win32
-//! and WinRT calls, so there is no `unsafe` here.
+//! `\\server\queue`) and the default from `GetDefaultPrinter`; whether a driver takes two-sided
+//! settings comes from its PrintCapabilities, read only for the printer asked about. A job is
+//! drawn by the in-box `Windows.Data.Pdf` with Direct2D into the XPS print API, as vectors, and
+//! its options (copies, collation, two-sided, colour, paper, orientation, no driver scaling)
+//! travel as a PrintTicket that the driver validates before anything is sent. `winprint` and
+//! `winsafe` wrap the Win32 and WinRT calls, so there is no `unsafe` here.
 
 use std::io::Write as _;
 
@@ -29,11 +29,20 @@ fn default_printer() -> Option<String> {
     winsafe::GetDefaultPrinter().ok().filter(|n| !n.is_empty())
 }
 
+/// The queues and the default only. Each driver's capabilities are left unread: Windows takes
+/// about 48 s to give up on a printer it can't reach (a WSD printer on another network), and
+/// reading every printer's made the list wait for each one in turn (storytold/pdfcraft#2192).
+/// [`two_sided_named`] reads them for the printer that is picked.
 pub(crate) fn printers() -> Vec<Printer> {
     match PrinterDevice::all() {
-        Ok(devices) => crate::printer_list(devices.iter().map(|d| (d.name().to_string(), two_sided(d))), default_printer().as_deref()),
+        Ok(devices) => crate::printer_list(devices.iter().map(|d| (d.name().to_string(), None)), default_printer().as_deref()),
         Err(_) => Vec::new(),
     }
+}
+
+/// [`two_sided`] for the queue named `name`; `None` when there is no such queue.
+pub(crate) fn two_sided_named(name: &str) -> Option<bool> {
+    PrinterDevice::all().ok()?.iter().find(|d| d.name() == name).and_then(two_sided)
 }
 
 /// Whether the printer's driver takes two-sided settings: its PrintCapabilities offer a two-sided
