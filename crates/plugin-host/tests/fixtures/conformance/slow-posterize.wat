@@ -1,0 +1,76 @@
+;; Conformance plugin `slow-posterize`. The posterize kernel with a busy loop per pixel, so the
+;; cost of a call is set by the host: params are u32 levels, then u32 `spin` (iterations per pixel).
+;; The output bytes equal `kernel-posterize` for the same levels. Used to stop a kernel mid-image.
+(module
+  (memory (export "memory") 8 1024)
+  ;; Bump allocator. It grows memory on demand and returns 0 when the grow fails.
+  (global $top (mut i32) (i32.const 8192))
+  (func $alloc (export "craft_alloc") (param $len i32) (param $align i32) (result i32)
+    (local $p i32) (local $end i64) (local $have i64) (local $pages i32)
+    (local.set $p (i32.and
+      (i32.add (global.get $top) (i32.sub (local.get $align) (i32.const 1)))
+      (i32.xor (i32.sub (local.get $align) (i32.const 1)) (i32.const -1))))
+    (local.set $end (i64.add (i64.extend_i32_u (local.get $p)) (i64.extend_i32_u (local.get $len))))
+    (if (i64.gt_u (local.get $end) (i64.const 0xFFFFFFFF)) (then (return (i32.const 0))))
+    (local.set $have (i64.shl (i64.extend_i32_u (memory.size)) (i64.const 16)))
+    (if (i64.gt_u (local.get $end) (local.get $have))
+      (then
+        (local.set $pages (i32.wrap_i64 (i64.shr_u (i64.add (i64.sub (local.get $end) (local.get $have)) (i64.const 65535)) (i64.const 16))))
+        (if (i32.eq (memory.grow (local.get $pages)) (i32.const -1)) (then (return (i32.const 0))))))
+    (global.set $top (i32.add (local.get $p) (local.get $len)))
+    (local.get $p))
+  (func (export "craft_abi") (result i32) i32.const 1)
+  (func (export "craft_free") (param i32 i32 i32))
+  (func $min (param i32 i32) (result i32) (select (local.get 0) (local.get 1) (i32.lt_s (local.get 0) (local.get 1))))
+  (func $max (param i32 i32) (result i32) (select (local.get 0) (local.get 1) (i32.gt_s (local.get 0) (local.get 1))))
+  (func (export "craft_process") (param $d i32) (param $dl i32) (result i32)
+    (local $w i32) (local $h i32) (local $stride i32) (local $in i32) (local $out i32) (local $pp i32)
+    (local $levels i32) (local $y i32) (local $x i32) (local $src i32) (local $dst i32) (local $v i32)
+    (local $spin i32) (local $k i32)
+    (if (i32.lt_u (local.get $dl) (i32.const 96)) (then (return (i32.const 2))))
+    ;; image, 4 channels, u8 samples
+    (if (i32.ne (i32.load offset=4 (local.get $d)) (i32.const 1)) (then (return (i32.const 3))))
+    (if (i32.ne (i32.load offset=24 (local.get $d)) (i32.const 4)) (then (return (i32.const 3))))
+    (if (i32.ne (i32.load offset=28 (local.get $d)) (i32.const 1)) (then (return (i32.const 3))))
+    (if (i32.lt_u (i32.load offset=92 (local.get $d)) (i32.const 8)) (then (return (i32.const 4))))
+    (local.set $pp (i32.load offset=88 (local.get $d)))
+    (local.set $levels (i32.load (local.get $pp)))
+    (if (i32.or (i32.lt_u (local.get $levels) (i32.const 2)) (i32.gt_u (local.get $levels) (i32.const 256))) (then (return (i32.const 4))))
+    (local.set $spin (i32.load offset=4 (local.get $pp)))
+    (local.set $w (i32.load offset=12 (local.get $d)))
+    (local.set $h (i32.load offset=16 (local.get $d)))
+    (local.set $stride (i32.load offset=20 (local.get $d)))
+    (local.set $in (i32.load offset=80 (local.get $d)))
+    (local.set $out (i32.load offset=84 (local.get $d)))
+    ;; 256 entry lookup table at 1024
+    (loop $lut
+      (i32.store8 offset=1024 (local.get $v)
+        (i32.div_u
+          (i32.mul (i32.shr_u (i32.mul (local.get $v) (local.get $levels)) (i32.const 8)) (i32.const 255))
+          (i32.sub (local.get $levels) (i32.const 1))))
+      (local.set $v (i32.add (local.get $v) (i32.const 1)))
+      (br_if $lut (i32.lt_u (local.get $v) (i32.const 256))))
+    (block $ydone (loop $yl
+      (br_if $ydone (i32.ge_u (local.get $y) (local.get $h)))
+      (local.set $src (i32.add (local.get $in) (i32.mul (local.get $y) (local.get $stride))))
+      (local.set $dst (i32.add (local.get $out) (i32.mul (local.get $y) (local.get $stride))))
+      (local.set $x (i32.const 0))
+      (block $xdone (loop $xl
+        (br_if $xdone (i32.ge_u (local.get $x) (local.get $w)))
+        (i32.store8 (local.get $dst) (i32.load8_u offset=1024 (i32.load8_u (local.get $src))))
+        (i32.store8 offset=1 (local.get $dst) (i32.load8_u offset=1024 (i32.load8_u offset=1 (local.get $src))))
+        (i32.store8 offset=2 (local.get $dst) (i32.load8_u offset=1024 (i32.load8_u offset=2 (local.get $src))))
+        (i32.store8 offset=3 (local.get $dst) (i32.load8_u offset=3 (local.get $src)))
+        (local.set $k (i32.const 0))
+        (loop $burn
+          (i32.store offset=16 (i32.const 0) (i32.add (i32.mul (i32.load offset=16 (i32.const 0)) (i32.const 31)) (local.get $k)))
+          (local.set $k (i32.add (local.get $k) (i32.const 1)))
+          (br_if $burn (i32.lt_u (local.get $k) (local.get $spin))))
+        (local.set $src (i32.add (local.get $src) (i32.const 4)))
+        (local.set $dst (i32.add (local.get $dst) (i32.const 4)))
+        (local.set $x (i32.add (local.get $x) (i32.const 1)))
+        (br $xl)))
+      (local.set $y (i32.add (local.get $y) (i32.const 1)))
+      (br $yl)))
+    (i32.const 0))
+  (func (export "craft_invoke") (param i32 i32 i32 i32 i32) (result i64) i64.const 0))

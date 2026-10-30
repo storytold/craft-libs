@@ -1,0 +1,142 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "craft://schemas/plugin/manifest/1",
+  "title": "craft.manifest (craft-abi 1)",
+  "description": "JSON stored in the craft.manifest custom section of a plugin module. Read by the policy gate before any guest code runs.",
+  "type": "object",
+  "required": ["schema", "id", "name", "version", "abi", "contributions"],
+  "additionalProperties": true,
+  "properties": {
+    "schema": { "const": 1 },
+    "id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9._-]{1,64}$",
+      "not": { "pattern": "^(([Ee][Cc]|[Pp][Cc]|[Vv][Cc]|[Cc][Rr][Aa][Ff][Tt]|[Aa][Pp][Pp]|[Pp][Ll][Uu][Gg][Ii][Nn])\\.|([Aa][Pp][Pp]|[Pp][Ll][Uu][Gg][Ii][Nn])$)" }
+    },
+    "name": { "type": "string", "maxLength": 80 },
+    "version": { "type": "string", "description": "semver" },
+    "description": { "type": "string", "maxLength": 2000 },
+    "author": { "type": "string" },
+    "license": { "type": "string" },
+    "homepage": { "type": "string", "format": "uri" },
+    "abi": {
+      "type": "object",
+      "required": ["craft"],
+      "properties": {
+        "craft": { "const": 1 },
+        "codec": { "enum": ["json"], "default": "json" }
+      }
+    },
+    "apps": {
+      "type": "object",
+      "description": "supported apps and semver ranges; absent means any app",
+      "additionalProperties": { "type": "string" }
+    },
+    "requires": {
+      "type": "object",
+      "properties": {
+        "features": { "type": "array", "items": { "enum": ["simd128"] } },
+        "ops": { "type": "array", "items": { "type": "string" } },
+        "engine_caps": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "permissions": {
+      "type": "object",
+      "properties": {
+        "required": { "type": "array", "items": { "$ref": "#/$defs/permission" } },
+        "optional": { "type": "array", "items": { "$ref": "#/$defs/permission" } }
+      }
+    },
+    "limits": {
+      "type": "object",
+      "properties": {
+        "memory_mb": { "type": "integer", "minimum": 1, "maximum": 4096 },
+        "stack_kb": { "type": "integer", "minimum": 64, "maximum": 8192 }
+      }
+    },
+    "contributions": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 256,
+      "items": { "$ref": "#/$defs/contribution" }
+    },
+    "legacy": { "enum": [null, "effectcraft-v1", "photocraft-v1", "vectorcraft-v1"] },
+    "signature": { "type": "null", "description": "reserved; a future signature lives in the craft.sig section" }
+  },
+  "$defs": {
+    "permission": {
+      "type": "string",
+      "pattern": "^(commands\\.run(:[A-Za-z0-9._*-]+)?|commands\\.observe|commands\\.intercept|doc\\.read(:(metadata|pixels))?|doc\\.write|ui\\.contribute|state\\.local|link\\.call:[a-z][a-z0-9-]*|link\\.exec:[a-z][a-z0-9-]*:[A-Za-z0-9._*-]+|fs\\.picked|net\\.fetch:https://[^\\s]+|clock|random|frames\\.read)$"
+    },
+    "contribution": {
+      "type": "object",
+      "required": ["kind", "id", "entry"],
+      "properties": {
+        "kind": {
+          "description": "A known kind, or a kind from a newer manifest. A host loads the entries it knows and marks the plugin partly supported (`ABI.md` section 2).",
+          "anyOf": [
+            { "enum": ["command", "hook", "effect", "filter", "audio-effect", "format", "panel", "menu", "object-filter", "live-effect"] },
+            { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,31}$" }
+          ]
+        },
+        "id": { "type": "string", "pattern": "^[A-Za-z0-9_-]{1,64}$" },
+        "entry": { "type": "integer", "minimum": 0 },
+        "label": { "type": "string" },
+        "category": { "type": "string" },
+        "instance": { "enum": ["fresh", "session"], "default": "fresh" },
+        "budget": { "enum": ["interactive", "render", "batch"] },
+        "menu": { "type": "array", "items": { "type": "string" } },
+        "shortcut": { "type": "string" },
+        "enabled": { "enum": ["always", "has-document", "has-selection", "cached"], "default": "has-document" },
+        "phase": { "enum": ["before", "after", "change"] },
+        "match": { "type": "array", "items": { "type": "string" } },
+        "dock": { "enum": ["left", "right", "bottom", "floating"] },
+        "title": { "type": "string" },
+        "extensions": { "type": "array", "items": { "type": "string" } },
+        "process": {
+          "type": "object",
+          "properties": {
+            "overlap": { "type": "integer", "minimum": 0, "maximum": 256 },
+            "band_bytes": { "type": "integer", "minimum": 65536 },
+            "sample": { "type": "array", "items": { "enum": ["u8", "u16", "f16", "f32"] } },
+            "alpha": { "enum": ["none", "straight", "premultiplied"] }
+          }
+        },
+        "params": { "$ref": "#/$defs/params" }
+      },
+      "allOf": [
+        { "if": { "properties": { "kind": { "const": "hook" } } }, "then": { "required": ["phase"] } },
+        {
+          "if": { "properties": { "kind": { "const": "hook" }, "phase": { "const": "before" } } },
+          "then": { "required": ["match"] }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "format" } } },
+          "then": {
+            "required": ["extensions"],
+            "properties": { "extensions": { "minItems": 1, "items": { "type": "string", "pattern": "^[a-z0-9]{1,16}$" } } }
+          }
+        }
+      ]
+    },
+    "params": {
+      "type": "object",
+      "maxProperties": 1024,
+      "propertyNames": { "pattern": "^[A-Za-z0-9][A-Za-z0-9_]*$" },
+      "additionalProperties": {
+        "type": "object",
+        "required": ["type"],
+        "properties": {
+          "type": { "enum": ["number", "int", "bool", "choice", "text", "color", "angle", "point2", "point3", "layer", "file", "json"] },
+          "label": { "type": "string" },
+          "group": { "type": "string" },
+          "default": {},
+          "min": { "type": "number" },
+          "max": { "type": "number" },
+          "decimals": { "type": "integer" },
+          "options": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    }
+  }
+}

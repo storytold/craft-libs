@@ -1,0 +1,28 @@
+[package]
+name = "craft-ipc"
+description = "Local-socket control server, client and discovery for Craft apps on one machine: token auth, launch on demand, focus hand-off. Native only."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+# Native only: `interprocess` has no wasm32 build, so this crate does not build for
+# wasm32-unknown-unknown. Apps gate it by target. interprocess is pinned: the transport behavior is
+# what the tests were run against.
+[dependencies]
+getrandom = "0.2.15"
+interprocess = "=2.4.4"
+serde.workspace = true
+serde_json.workspace = true
+sha2 = "0.10.9"
+
+[target.'cfg(windows)'.dependencies]
+widestring = "1"
+
+[dev-dependencies]
+# Default features off: the tests read local schemas and need no network resolver.
+jsonschema = { version = "0.49.9", default-features = false }
+
+[lints]
+workspace = true

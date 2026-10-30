@@ -25,6 +25,8 @@ kurbo = "0.13"
 thiserror = "2"
 craft-atomic = { path = "crates/atomic" }
 craft-cms = { path = "crates/cms" }
+craft-command = { path = "crates/command" }
+craft-command-derive = { path = "crates/command-derive" }
 craft-dialogs = { path = "crates/dialogs" }
 craft-docpath = { path = "crates/docpath" }
 craft-font-catalog = { path = "crates/font-catalog" }
@@ -32,10 +34,12 @@ craft-font-manager = { path = "crates/font-manager" }
 craft-font-store = { path = "crates/font-store" }
 craft-fonts-build = { path = "crates/fonts-build" }
 craft-i18n = { path = "crates/i18n" }
+craft-ipc = { path = "crates/ipc" }
 craft-jpeg = { path = "crates/jpeg" }
 craft-keymap = { path = "crates/keymap" }
 craft-media = { path = "crates/media" }
 craft-menu = { path = "crates/menu" }
+craft-plugin-abi = { path = "crates/plugin-abi" }
 craft-prepress = { path = "crates/prepress" }
 craft-print = { path = "crates/print" }
 craft-quit = { path = "crates/quit" }

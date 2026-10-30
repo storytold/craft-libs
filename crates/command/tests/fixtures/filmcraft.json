@@ -1,0 +1,442 @@
+{
+  "note": "FilmCraft params strings copied from cmd! and query! literals in the FilmCraft engine crate (src/commands.rs).",
+  "commands": [
+    {
+      "id": "clip.nest",
+      "params": "{\"name\":str}",
+      "required": [
+        "name"
+      ],
+      "properties": [
+        [
+          "name",
+          "\"name\":str"
+        ]
+      ]
+    },
+    {
+      "id": "file.newProject",
+      "params": "{\"name\":str}",
+      "required": [
+        "name"
+      ],
+      "properties": [
+        [
+          "name",
+          "\"name\":str"
+        ]
+      ]
+    },
+    {
+      "id": "file.newSequence",
+      "params": "{\"name\":str,\"width\":u32=1920,\"height\":u32=1080,\"fps\":f64=23.976,\"sampleRate\":u32=48000,\"video\":n=3,\"audio\":n=3,\"mix\":\"Stereo|Mono|5.1|Adaptive\"?,\"trackType\":\"Standard|Mono|5.1|Adaptive\"?,\"fromItem\":itemId?}",
+      "required": [
+        "name",
+        "width",
+        "height",
+        "fps",
+        "sampleRate",
+        "video",
+        "audio"
+      ],
+      "properties": [
+        [
+          "name",
+          "\"name\":str"
+        ],
+        [
+          "width",
+          "\"width\":u32=1920"
+        ],
+        [
+          "height",
+          "\"height\":u32=1080"
+        ],
+        [
+          "fps",
+          "\"fps\":f64=23.976"
+        ],
+        [
+          "sampleRate",
+          "\"sampleRate\":u32=48000"
+        ],
+        [
+          "video",
+          "\"video\":n=3"
+        ],
+        [
+          "audio",
+          "\"audio\":n=3"
+        ],
+        [
+          "mix",
+          "\"mix\":\"Stereo|Mono|5.1|Adaptive\"?"
+        ],
+        [
+          "trackType",
+          "\"trackType\":\"Standard|Mono|5.1|Adaptive\"?"
+        ],
+        [
+          "fromItem",
+          "\"fromItem\":itemId?"
+        ]
+      ]
+    },
+    {
+      "id": "file.newBin",
+      "params": "{\"name\":str,\"parent\":binId?}",
+      "required": [
+        "name"
+      ],
+      "properties": [
+        [
+          "name",
+          "\"name\":str"
+        ],
+        [
+          "parent",
+          "\"parent\":binId?"
+        ]
+      ]
+    },
+    {
+      "id": "file.import",
+      "params": "{\"paths\":[str],\"bin\":binId?,\"imageSequence\":bool?,\"replace\":bool?}",
+      "required": [
+        "paths"
+      ],
+      "properties": [
+        [
+          "paths",
+          "\"paths\":[str]"
+        ],
+        [
+          "bin",
+          "\"bin\":binId?"
+        ],
+        [
+          "imageSequence",
+          "\"imageSequence\":bool?"
+        ],
+        [
+          "replace",
+          "\"replace\":bool?"
+        ]
+      ]
+    },
+    {
+      "id": "file.exportAaf",
+      "params": "{\"path\":str,\"sequence\":id?,\"mixdownVideo\":bool?,\"mixdownFormat\":\"mov|mxf\"?,\"breakoutToMono\":bool?,\"audio\":\"embedded|separate|linked\"?,\"audioFormat\":\"wav|aiff|mxf\"?,\"sampleRate\":int?,\"bitDepth\":\"16|24\"?,\"trimAudio\":bool?,\"handles\":frames?,\"renderAudioEffects\":bool?,\"smallSectors\":bool?}",
+      "required": [
+        "path"
+      ],
+      "properties": [
+        [
+          "path",
+          "\"path\":str"
+        ],
+        [
+          "sequence",
+          "\"sequence\":id?"
+        ],
+        [
+          "mixdownVideo",
+          "\"mixdownVideo\":bool?"
+        ],
+        [
+          "mixdownFormat",
+          "\"mixdownFormat\":\"mov|mxf\"?"
+        ],
+        [
+          "breakoutToMono",
+          "\"breakoutToMono\":bool?"
+        ],
+        [
+          "audio",
+          "\"audio\":\"embedded|separate|linked\"?"
+        ],
+        [
+          "audioFormat",
+          "\"audioFormat\":\"wav|aiff|mxf\"?"
+        ],
+        [
+          "sampleRate",
+          "\"sampleRate\":int?"
+        ],
+        [
+          "bitDepth",
+          "\"bitDepth\":\"16|24\"?"
+        ],
+        [
+          "trimAudio",
+          "\"trimAudio\":bool?"
+        ],
+        [
+          "handles",
+          "\"handles\":frames?"
+        ],
+        [
+          "renderAudioEffects",
+          "\"renderAudioEffects\":bool?"
+        ],
+        [
+          "smallSectors",
+          "\"smallSectors\":bool?"
+        ]
+      ]
+    },
+    {
+      "id": "file.save",
+      "params": "{\"path\":str?}",
+      "required": [],
+      "properties": [
+        [
+          "path",
+          "\"path\":str?"
+        ]
+      ]
+    },
+    {
+      "id": "clip.rename",
+      "params": "{\"clip\":id?,\"item\":id?,\"name\":str}",
+      "required": [
+        "name"
+      ],
+      "properties": [
+        [
+          "clip",
+          "\"clip\":id?"
+        ],
+        [
+          "item",
+          "\"item\":id?"
+        ],
+        [
+          "name",
+          "\"name\":str"
+        ]
+      ]
+    },
+    {
+      "id": "prefs.get",
+      "params": "{\"key\":str?}",
+      "required": [],
+      "properties": [
+        [
+          "key",
+          "\"key\":str?"
+        ]
+      ]
+    },
+    {
+      "id": "effects.setParam",
+      "params": "{\"clip\":id,\"effect\":\"motion\"|index,\"param\":str,\"mask\":n?,\"value\":num|[x,y]|\"#rrggbb\"|bool|path|\"option name\" (a choice takes its index or its name),\"time\":ticks? (where the keyframe goes when the parameter is animated; a parameter that is not animated gets a new static value whatever the time),\"keyframe\":bool? (true: write a keyframe at `time` and animate the parameter),\"merge\":bool?,\"begin\":bool?}",
+      "required": [
+        "clip",
+        "effect",
+        "param",
+        "value"
+      ],
+      "properties": [
+        [
+          "clip",
+          "\"clip\":id"
+        ],
+        [
+          "effect",
+          "\"effect\":\"motion\"|index"
+        ],
+        [
+          "param",
+          "\"param\":str"
+        ],
+        [
+          "mask",
+          "\"mask\":n?"
+        ],
+        [
+          "value",
+          "\"value\":num|[x,y]|\"#rrggbb\"|bool|path|\"option name\" (a choice takes its index or its name)"
+        ],
+        [
+          "time",
+          "\"time\":ticks? (where the keyframe goes when the parameter is animated; a parameter that is not animated gets a new static value whatever the time)"
+        ],
+        [
+          "keyframe",
+          "\"keyframe\":bool? (true: write a keyframe at `time` and animate the parameter)"
+        ],
+        [
+          "merge",
+          "\"merge\":bool?"
+        ],
+        [
+          "begin",
+          "\"begin\":bool?"
+        ]
+      ]
+    },
+    {
+      "id": "file.newCountingLeader",
+      "params": "{}",
+      "required": [],
+      "properties": []
+    },
+    {
+      "id": "edit.clear",
+      "params": "{\"clips\":[id]?}",
+      "required": [],
+      "properties": [
+        [
+          "clips",
+          "\"clips\":[id]?"
+        ]
+      ]
+    },
+    {
+      "id": "sequence.deleteTrack",
+      "params": "{\"track\":\"V3\"|id}",
+      "required": [
+        "track"
+      ],
+      "properties": [
+        [
+          "track",
+          "\"track\":\"V3\"|id"
+        ]
+      ]
+    },
+    {
+      "id": "sequence.applyVideoTransition",
+      "params": "{\"clip\":id?,\"effect\":\"cross_dissolve|Cross Dissolve|…\"?,\"frames\":i64?,\"edge\":\"in\"|\"out\"?,\"params\":{param:value}?,\"reverse\":bool?}",
+      "required": [],
+      "properties": [
+        [
+          "clip",
+          "\"clip\":id?"
+        ],
+        [
+          "effect",
+          "\"effect\":\"cross_dissolve|Cross Dissolve|…\"?"
+        ],
+        [
+          "frames",
+          "\"frames\":i64?"
+        ],
+        [
+          "edge",
+          "\"edge\":\"in\"|\"out\"?"
+        ],
+        [
+          "params",
+          "\"params\":{param:value}?"
+        ],
+        [
+          "reverse",
+          "\"reverse\":bool?"
+        ]
+      ]
+    },
+    {
+      "id": "timeline.selectGap",
+      "params": "{\"track\":\"V1\"|id,\"time\":ticks|\"frame\":n|\"seconds\":f}",
+      "required": [
+        "track",
+        "time"
+      ],
+      "properties": [
+        [
+          "track",
+          "\"track\":\"V1\"|id"
+        ],
+        [
+          "time",
+          "\"time\":ticks|\"frame\":n|\"seconds\":f"
+        ]
+      ]
+    },
+    {
+      "id": "timeline.rateStretch",
+      "params": "{\"clip\":id,\"edge\":\"in|out\",\"delta\":ticks}",
+      "required": [
+        "clip",
+        "edge",
+        "delta"
+      ],
+      "properties": [
+        [
+          "clip",
+          "\"clip\":id"
+        ],
+        [
+          "edge",
+          "\"edge\":\"in|out\""
+        ],
+        [
+          "delta",
+          "\"delta\":ticks"
+        ]
+      ]
+    },
+    {
+      "id": "project.moveToBin",
+      "params": "{\"items\":[id|binId]?,\"bin\":binId|null}",
+      "required": [
+        "bin"
+      ],
+      "properties": [
+        [
+          "items",
+          "\"items\":[id|binId]?"
+        ],
+        [
+          "bin",
+          "\"bin\":binId|null"
+        ]
+      ]
+    },
+    {
+      "id": "file.discardRecovery",
+      "params": "{\"id\":str?,\"all\":bool?}",
+      "required": [],
+      "properties": [
+        [
+          "id",
+          "\"id\":str?"
+        ],
+        [
+          "all",
+          "\"all\":bool?"
+        ]
+      ]
+    },
+    {
+      "id": "source.open",
+      "params": "{\"item\":id?,\"clip\":id?}",
+      "required": [],
+      "properties": [
+        [
+          "item",
+          "\"item\":id?"
+        ],
+        [
+          "clip",
+          "\"clip\":id?"
+        ]
+      ]
+    },
+    {
+      "id": "playhead.step",
+      "params": "{\"frames\":i64}",
+      "required": [
+        "frames"
+      ],
+      "properties": [
+        [
+          "frames",
+          "\"frames\":i64"
+        ]
+      ]
+    }
+  ]
+}

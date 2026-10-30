@@ -1,0 +1,37 @@
+name: Plugin ABI
+
+on:
+  push:
+    branches: [main]
+    paths: ["crates/plugin-abi/**", "Cargo.toml", "Cargo.lock", ".github/workflows/plugin-abi.yml"]
+  pull_request:
+    paths: ["crates/plugin-abi/**", "Cargo.toml", "Cargo.lock", ".github/workflows/plugin-abi.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: plugin-abi-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    timeout-minutes: 10
+    name: Plugin ABI lint, tests, WASM
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          components: rustfmt, clippy
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: craft-plugin-abi
+      - run: cargo fmt -p craft-plugin-abi --check
+      - run: cargo clippy -p craft-plugin-abi --all-targets --locked -- -D warnings
+      - run: cargo test -p craft-plugin-abi --locked
+      - run: cargo check -p craft-plugin-abi --locked --target wasm32-unknown-unknown
