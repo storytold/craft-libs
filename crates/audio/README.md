@@ -1,7 +1,7 @@
 # craft-audio
 
 Audio file I/O and codecs for the Craft apps. Native implementations: WAV and AIFF read/write,
-FLAC encoder, AAC decoder.
+FLAC encoder, AAC and AC-3/E-AC-3 decoders.
 Formats without a native decoder are decoded by [symphonia](#symphonia), which is to be replaced
 by native decoders.
 
@@ -24,17 +24,19 @@ No default features. The shared types (`AudioBuffer`, `AudioInfo`, `ChannelLayou
 | Feature | Provides | Pulls in |
 |---|---|---|
 | `decode` | `decode`, `probe`, `Decoder`, `tracks`, `TrackDecoder`; every format in [Format support](#format-support) | `decode-native`, `symphonia` |
-| `decode-native` | the same, native formats only (others are `Unsupported`) | `aac-decode`, craft-media `isobmff`/`matroska`/`ogg`, `log` |
+| `decode-native` | the same, native formats only (others are `Unsupported`) | `aac-decode`, `ac3-decode`, craft-media `isobmff`/`matroska`/`ogg`, `log` |
 | `symphonia` | the fallback for formats with no native decoder; turning it on is the same as `decode` | `decode-native`, symphonia |
 | `encode` | every encoder: the WAV, AIFF and FLAC file writers | `lossless-encode` |
 | `lossless-encode` | WAV, AIFF and FLAC writing | `pcm-encode`, `flac-encode` |
 | `pcm-encode` | `encode`, `FileEncoder` for WAV and AIFF; `wav_float_header` | none |
 | `flac-encode` | `encode`, `FileEncoder` for FLAC | craft-media `bitstream` |
 | `aac-decode` | `aac::Decoder` | craft-media `bitstream` |
+| `ac3-decode` | `ac3::Decoder` | none |
 | `peaks` | `peaks::Peaks` | none |
 | `serde` | `Serialize`/`Deserialize` on the shared types | `serde` |
 
-`aac-decode` also gives `TrackDecoder`, for AAC and PCM.
+Either decoder feature (`aac-decode`, `ac3-decode`) also gives `TrackDecoder`, for that codec
+and PCM.
 
 An app that decodes 32-bit FLAC with `decode` needs a profile override in its workspace; see
 [symphonia](#symphonia).
@@ -175,8 +177,9 @@ for p in &packets {
 }
 ```
 
-It decodes AAC (finding HE-AAC in the lookahead) and PCM, and returns `AudioBuffer`s in WAV
-order when `layout()` is ordered. `codec()`, `sample_rate()` and `layout()` describe the output. Container timing is the caller's.
+It decodes AAC (finding HE-AAC in the lookahead), AC-3/E-AC-3 and PCM, and returns `AudioBuffer`s
+in WAV order when `layout()` is ordered. `codec()`, `sample_rate()` and `layout()` describe the
+output. Container timing is the caller's.
 
 Streams without codec configuration work where the packets carry it. AAC with empty `extradata`
 takes its configuration from the ADTS headers (MPEG-TS, raw `.aac`), which are stripped from each
@@ -186,7 +189,7 @@ To seek: position your demuxer at the packet that starts `preroll()` frames or m
 target, call `reset()`, decode from there, and drop the output before the target.
 
 The codec modules are also usable on their own. `aac::Decoder` returns the codec's channel order;
-`aac::wav_order(channel_config)` maps it to WAV order.
+`aac::wav_order(channel_config)` maps it to WAV order. `ac3::Decoder` outputs WAV order.
 
 ### Encode a file
 
@@ -263,6 +266,7 @@ match craft_audio::decode(&bytes, None) {
 | AAC-LC | native | — |
 | HE-AAC v1/v2 | native, core only (see [Limits](#limits)) | — |
 | MP1, MP2, MP3 (MPEG audio Layer I/II/III) | symphonia | — |
+| AC-3, E-AC-3 | native | — |
 | ALAC, Vorbis, ADPCM, A-law, µ-law | symphonia | — |
 | Opus | — | — |
 
@@ -271,7 +275,7 @@ match craft_audio::decode(&bytes, None) {
 | MP4, M4A, MOV | `craft_media::isobmff` for native codecs; symphonia for the others (ALAC, MP3, FLAC) | edit lists (AAC priming) |
 | Matroska, WebM | `craft_media::matroska` for native codecs; symphonia for the others (Vorbis, FLAC, MP3) | `CodecDelay`, `DiscardPadding` |
 | Ogg | symphonia (Vorbis, FLAC) | — |
-| Raw ADTS AAC | native frame sync | — |
+| Raw ADTS AAC, AC-3, E-AC-3 | native frame sync | — |
 | Raw MP1/MP2/MP3 | symphonia | — |
 | FLAC | symphonia | — |
 | CAF | symphonia | — |
@@ -298,6 +302,10 @@ match craft_audio::decode(&bytes, None) {
   the end a file declares is not presented.
 - A Matroska track's end comes from its timestamps, so it is known to one timestamp tick (usually
   1 ms) unless the last block has `DiscardPadding`.
+- E-AC-3: 7.1 programs decode as their 5.1 core. Adaptive hybrid transform and enhanced coupling
+  return `Unsupported`.
+- AC-3: not bit-exact. Zero-bit mantissas are filled with decoder-specific dither (A/52 §7.3.4),
+  so white noise matches ffmpeg at only 27 dB (AC-3) and 48 dB (E-AC-3) SNR.
 - A FLAC layout that decoders would not assume for the channel count depends on its
   `WAVEFORMATEXTENSIBLE_CHANNEL_MASK` comment. This includes the usual layouts for 5 and 6 channels:
   without the comment, back surrounds are read as side surrounds. It includes the usual 7-channel
@@ -308,7 +316,7 @@ match craft_audio::decode(&bytes, None) {
   sample rate the frame header cannot name, or with a layout that needs the mask comment.
 - `ChannelLayout::unordered` is written to FLAC as mask `0x0000`, as RFC 9639 §8.6.2 allows, but
   ffmpeg and `flac -d` ignore that mask and use their default layout for the channel count.
-- Not decoded at all: AC-3, E-AC-3, Opus and Speex.
+- Not decoded at all: Opus and Speex.
 - `TrackDecoder` returns `Unsupported` for MP3, FLAC, ALAC and Vorbis; `decode` and `Decoder` read
   those through symphonia.
 - MP4 edit lists: a single media edit (encoder priming and the end) is applied, alone or after one
@@ -344,6 +352,7 @@ Each codec module's rustdoc lists the coding tools it implements.
 | WAV, AIFF | Microsoft RIFF, Apple AIFF/AIFF-C | read: integer 8–32-bit, float 32/64-bit, `WAVE_FORMAT_EXTENSIBLE` masks, RF64/BW64, BWF `bext`, truncated files; write: 16/24/32-bit integer and 32-bit float, RF64 above 4 GiB, any layout, TPDF dither | round trips; hostile-input tests |
 | FLAC encoder | RFC 9639 | 16, 24, 32 bits; 1–8 channels, layouts decoders would not assume for the count as a `WAVEFORMATEXTENSIBLE_CHANNEL_MASK` comment; up to 655,350 Hz; LPC, stereo decorrelation, wasted bits, STREAMINFO MD5 | bit-exact through ffmpeg, STREAMINFO MD5 checked against ffmpeg |
 | AAC (`aac`) | ISO/IEC 14496-3 | AAC-LC decode, 1–8 channels; HE-AAC: see [Limits](#limits) | ffmpeg: ~135 dB SNR; PNS noise differs per sample at equal band energy |
+| AC-3/E-AC-3 (`ac3`) | ATSC A/52:2012 | all AC-3 channel modes and frame sizes; E-AC-3 independent substream 0 with spectral extension; output in WAV order, no downmix | ffmpeg: 65–94 dB SNR on tones, 27–48 dB on white noise (see [Limits](#limits)) |
 
 ## symphonia
 
@@ -397,7 +406,7 @@ the full tests with ffmpeg required.
 | Part | Source |
 |---|---|
 | WAV, AIFF, `decode`/`probe`, peaks | SoundCraft `soundcraft-audio-io` [7dc56a4](https://github.com/storytold/soundcraft/commit/7dc56a4dbeebf57eacece09536726c57844fc59d) |
-| FLAC encoder, AAC | FilmCraft [8fda2f2](https://github.com/storytold/filmcraft/commit/8fda2f232198c4c79ff9cfe5b6a347bb1375fa9e) |
+| FLAC encoder, AAC, AC-3 | FilmCraft [8fda2f2](https://github.com/storytold/filmcraft/commit/8fda2f232198c4c79ff9cfe5b6a347bb1375fa9e) |
 
 Where apps had overlapping implementations, the one that measured better was kept, with the
 tests of both:
@@ -414,8 +423,8 @@ For the apps switching from their own code; to be removed once all three have sw
 
 The codec modules' public items keep their names, so apps can re-export them
 (`pub use craft_audio::aac::*;`). Names kept only for that are `#[doc(hidden)]`:
-`aac::Upsample2x`, `aac::ProgramConfig::parse`, `aac::config_layout` and `aac::sample_rate_index`.
-What else an app adjusts:
+`ac3::Decoded` (now `ac3::Frame`), `aac::Upsample2x`, `aac::ProgramConfig::parse`,
+`aac::config_layout` and `aac::sample_rate_index`. What else an app adjusts:
 
 - `AudioInfo` has `container`, `codec`, `layout` and `damaged` instead of SoundCraft's `format`.
   `detect_container` replaces `detect_format`. `probe` reports the layout instead of
@@ -441,6 +450,7 @@ What else an app adjusts:
   short slices instead of filling them with silence.
 - `DecodeOptions` is not `Copy`.
 - The FLAC encoder's vendor string is `craft-audio <version>`.
-- `decode` tries native decoders first. AAC no longer goes through symphonia, except in CAF.
+- `decode` tries native decoders first. AAC and AC-3 no longer go through symphonia, except AAC in
+  CAF.
   MP4 and Matroska files decode to presentation length. A packet that fails is concealed, not
   dropped. A failed source read is `AudioError::Io`.
