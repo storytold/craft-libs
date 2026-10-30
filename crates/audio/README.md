@@ -1,7 +1,7 @@
 # craft-audio
 
 Audio file I/O and codecs for the Craft apps. Native implementations: WAV and AIFF read/write,
-FLAC encoder, AAC decoder.
+FLAC encoder, AAC decoder/encoder.
 Formats without a native decoder are decoded by [symphonia](#symphonia), which is to be replaced
 by native decoders.
 
@@ -26,12 +26,13 @@ No default features. The shared types (`AudioBuffer`, `AudioInfo`, `ChannelLayou
 | `decode` | `decode`, `probe`, `Decoder`, `tracks`, `TrackDecoder`; every format in [Format support](#format-support) | `decode-native`, `symphonia` |
 | `decode-native` | the same, native formats only (others are `Unsupported`) | `aac-decode`, craft-media `isobmff`/`matroska`/`ogg`, `log` |
 | `symphonia` | the fallback for formats with no native decoder; turning it on is the same as `decode` | `decode-native`, symphonia |
-| `encode` | every encoder: the WAV, AIFF and FLAC file writers | `lossless-encode` |
+| `encode` | every encoder: the WAV, AIFF and FLAC file writers, and the AAC packet encoder | `lossless-encode`, `aac-encode` |
 | `lossless-encode` | WAV, AIFF and FLAC writing | `pcm-encode`, `flac-encode` |
 | `pcm-encode` | `encode`, `FileEncoder` for WAV and AIFF; `wav_float_header` | none |
 | `flac-encode` | `encode`, `FileEncoder` for FLAC | craft-media `bitstream` |
-| `aac-decode` | `aac::Decoder` | craft-media `bitstream` |
+| `aac-decode`, `aac-encode` | `aac::Decoder`, `aac::Encoder` | craft-media `bitstream` |
 | `peaks` | `peaks::Peaks` | none |
+| `rayon` | parallel AAC encoding (with `aac-encode`) | `rayon` |
 | `serde` | `Serialize`/`Deserialize` on the shared types | `serde` |
 
 `aac-decode` also gives `TrackDecoder`, for AAC and PCM.
@@ -51,10 +52,10 @@ Decode, every encoder and waveform overviews:
 craft-audio = { git = "https://github.com/storytold/craft-libs", rev = "<commit>", features = ["decode", "encode", "peaks"] }
 ```
 
-Packets from an app's own demuxer, AAC:
+Packets from an app's own demuxer, AAC both ways:
 
 ```toml
-craft-audio = { git = "https://github.com/storytold/craft-libs", rev = "<commit>", features = ["aac-decode"] }
+craft-audio = { git = "https://github.com/storytold/craft-libs", rev = "<commit>", features = ["aac-decode", "aac-encode"] }
 ```
 
 craft-audio re-exports the craft-media types its API uses (`ByteSource`, `ReadSeekSource`,
@@ -73,7 +74,7 @@ cargo run -p craft-audio --example info --features decode -- take.m4a
 ```
 
 ```bash
-cargo run -p craft-audio --example encode --features lossless-encode -- out
+cargo run -p craft-audio --example encode --features lossless-encode,aac-encode -- out
 ```
 
 ```bash
@@ -216,6 +217,28 @@ features can write. `write` refuses a block without one slice per channel, or wi
 shorter than `frames`, and writes nothing. After a write fails for another reason, every later
 `write` and `finish` returns an error.
 
+### Encode AAC
+
+```rust
+use craft_audio::AudioError;
+use craft_audio::aac::{Encoder, EncoderConfig, aac_order};
+
+let mut enc = Encoder::new(EncoderConfig::cbr(48_000, 6, 384_000))?;
+let order = aac_order(6).ok_or_else(|| AudioError::Unsupported("no AAC order for 6 channels".into()))?;
+let input: Vec<&[f32]> = order.iter().map(|&c| wav_5_1[c].as_slice()).collect();
+let mut units = enc.encode(&input);            // zero or more access units
+units.extend(enc.flush());
+let asc = enc.audio_specific_config();         // for the MP4 `esds` box
+let priming = enc.priming_samples();           // for the edit list (1024)
+```
+
+The sample rate must be one of the 13 AAC rates (7350–96000 Hz). `aac_order` returns `None` for
+mono, stereo and 8 channels: pass those channels as they are.
+
+`EncoderConfig::cbr(..).with_adts(true)` makes every access unit an ADTS frame; concatenated, they
+are a playable `.aac` file. To write MP4 or Matroska, pass the access units to craft-media's
+muxers ([MP4](../media/README.md#muxing), [Matroska](../media/README.md#muxing-1)).
+
 ### Waveform overviews
 
 ```rust
@@ -240,7 +263,7 @@ convert into `AudioError` with `?`.
 | `Unsupported` | valid input using an unsupported codec, feature or option, or a format whose feature is off |
 | `Malformed` | corrupt or truncated input, or not the claimed format |
 | `TooLarge` | over a size limit (`DecodeOptions::max_samples`, an allocation) |
-| `Encode` | an encoder rejected the input or its settings (a buffer with no channels or a 0 Hz rate, a block shorter than its frame count, a wrong layout) |
+| `Encode` | an encoder rejected the input or its settings (a buffer with no channels or a 0 Hz rate, a block shorter than its frame count, a wrong layout, a rate AAC has no index for) |
 | `Io` | the source failed a read, or the `FileEncoder` writer failed |
 
 `AudioError` is `#[non_exhaustive]`, so a `match` needs a `_` arm:
@@ -260,7 +283,7 @@ match craft_audio::decode(&bytes, None) {
 | WAV, BWF, RF64/BW64 | native | native |
 | AIFF, AIFF-C | native | native |
 | FLAC | symphonia | native |
-| AAC-LC | native | — |
+| AAC-LC | native | native |
 | HE-AAC v1/v2 | native, core only (see [Limits](#limits)) | — |
 | MP1, MP2, MP3 (MPEG audio Layer I/II/III) | symphonia | — |
 | ALAC, Vorbis, ADPCM, A-law, µ-law | symphonia | — |
@@ -322,7 +345,7 @@ Each codec module's rustdoc lists the coding tools it implements.
 |---|---|---|---|
 | WAV, AIFF | Microsoft RIFF, Apple AIFF/AIFF-C | read: integer 8–32-bit, float 32/64-bit, `WAVE_FORMAT_EXTENSIBLE` masks, RF64/BW64, BWF `bext`, truncated files; write: 16/24/32-bit integer and 32-bit float, RF64 above 4 GiB, any layout, TPDF dither | round trips; hostile-input tests |
 | FLAC encoder | RFC 9639 | 16, 24, 32 bits; 1–8 channels, layouts decoders would not assume for the count as a `WAVEFORMATEXTENSIBLE_CHANNEL_MASK` comment; up to 655,350 Hz; LPC, stereo decorrelation, wasted bits, STREAMINFO MD5 | bit-exact through ffmpeg, STREAMINFO MD5 checked against ffmpeg |
-| AAC (`aac`) | ISO/IEC 14496-3 | AAC-LC decode, 1–8 channels; HE-AAC: see [Limits](#limits) | ffmpeg: ~135 dB SNR; PNS noise differs per sample at equal band energy |
+| AAC (`aac`) | ISO/IEC 14496-3 | AAC-LC decode and encode (CBR, VBR, ADTS), 1–8 channels; HE-AAC: see [Limits](#limits) | ffmpeg: ~135 dB SNR; PNS noise differs per sample at equal band energy |
 
 ## symphonia
 
@@ -393,16 +416,15 @@ For the apps switching from their own code; to be removed once all three have sw
 
 The codec modules' public items keep their names, so apps can re-export them
 (`pub use craft_audio::aac::*;`). Names kept only for that are `#[doc(hidden)]`:
-`aac::Upsample2x`, `aac::ProgramConfig::parse`, `aac::config_layout` and `aac::sample_rate_index`.
-What else an app adjusts:
+`aac::Upsample2x`, `aac::ProgramConfig::parse`, `aac::config_layout` and `aac::sample_rate_index`. What else an app adjusts:
 
 - `AudioInfo` has `container`, `codec`, `layout` and `damaged` instead of SoundCraft's `format`.
   `detect_container` replaces `detect_format`. `probe` reports the layout instead of
   `wav_channel_mask`.
 - `EncodeOptions` is built with `EncodeOptions::new(format)` and `with_*` methods. It carries the
   speaker layout and RF64, which replace `encode_with_layout`, `encode_wav_rf64` and
-  `FileEncoder::new`'s layout argument. `BwfInfo` is built the same way. `ENCODE_EXTENSIONS` is a
-  list.
+  `FileEncoder::new`'s layout argument. `BwfInfo` and `aac::EncoderConfig` are built the same way
+  (`with_adts`, …). `ENCODE_EXTENSIONS` is a list.
 - Arguments go sample rate, then channels, and channel counts are `u16`:
   `FileEncoder::new(out, &opts, sample_rate, channels)`, `wav_float_header(sample_rate,
   channels, frames)`, `AudioBuffer::new(sample_rate, channels, frames)`,
@@ -414,8 +436,9 @@ What else an app adjusts:
   `Speaker::ALL` is a slice.
 - `TrackInfo::sample_rate` and `channels` are `Option`s.
 - Features are per codec. SoundCraft's `encode` (WAV, AIFF, FLAC) is now `lossless-encode`, made
-  of `pcm-encode` (WAV, AIFF) and `flac-encode`. `encode` turns on every encoder. Writing a format
-  whose feature is off returns `AudioError::Unsupported`.
+  of `pcm-encode` (WAV, AIFF) and `flac-encode`. `encode` turns on every encoder, AAC
+  included. Writing a format whose feature is off returns `AudioError::Unsupported`.
+- AAC encoder settings it cannot use are `aac::Error::InvalidSettings` (`AudioError::Encode`).
 - `FileEncoder::write` takes any per-channel slices, but refuses a block with missing channels or
   short slices instead of filling them with silence.
 - `DecodeOptions` is not `Copy`.

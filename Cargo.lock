@@ -794,6 +794,7 @@ dependencies = [
  "craft-media-testkit",
  "log",
  "proptest",
+ "rayon",
  "serde",
  "serde_json",
  "symphonia",
