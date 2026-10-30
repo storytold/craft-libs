@@ -1,0 +1,9 @@
+id = "org.example.fmt"
+name = "Fmt"
+version = "1.0.0"
+
+[[contributions]]
+kind = "format"
+id = "inv"
+extensions = ["inv"]
+handler = "invert"

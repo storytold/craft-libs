@@ -1,0 +1,9 @@
+id = "org.example.t"
+name = "T"
+version = "1.0.0"
+
+[[contributions]]
+kind = "command"
+id = "a"
+entry = 3
+handler = "a"

@@ -1,0 +1,22 @@
+[package]
+name = "craft-plugin-sdk-macros"
+description = "The #[craft_plugin] attribute for craft-plugin-sdk: reads and checks craft.toml at compile time and emits the craft-abi 1 exports."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lib]
+proc-macro = true
+
+[dependencies]
+craft-plugin-abi.workspace = true
+proc-macro2 = "1"
+quote = "1"
+serde_json.workspace = true
+syn = { version = "2", features = ["full"] }
+toml = { version = "1", default-features = false, features = ["parse", "serde", "std"] }
+
+[lints]
+workspace = true
