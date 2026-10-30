@@ -1,6 +1,6 @@
 [package]
 name = "craft-audio"
-description = "Audio file I/O and codecs: WAV/AIFF read and write, FLAC encoder, AAC decoder and encoder."
+description = "Audio file I/O and codecs: WAV/AIFF read and write, FLAC encoder, AAC and Opus decoders, AAC encoder."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -14,12 +14,12 @@ all-features = true
 workspace = true
 
 [features]
-# Probe and decode files: WAV and AIFF natively; AAC and PCM through craft-media's demuxers and
-# this crate's decoders; MP1/MP2/MP3, FLAC, ALAC, Vorbis, CAF, ADPCM, A-law and µ-law through
-# symphonia.
+# Probe and decode files: WAV and AIFF natively; AAC, Opus and PCM through craft-media's
+# demuxers and this crate's decoders; MP1/MP2/MP3, FLAC, ALAC, Vorbis, CAF, ADPCM,
+# A-law and µ-law through symphonia.
 decode = ["decode-native", "symphonia"]
 # `decode` without symphonia: only the formats with a native decoder (others are Unsupported).
-decode-native = ["aac-decode", "craft-media/isobmff", "craft-media/matroska", "craft-media/ogg", "dep:log"]
+decode-native = ["aac-decode", "opus-decode", "craft-media/isobmff", "craft-media/matroska", "craft-media/ogg", "dep:log"]
 # The symphonia fallback for the formats with no native decoder yet.
 symphonia = ["decode-native", "dep:symphonia"]
 # Every encoder: the lossless file writers and the AAC encoder.
@@ -33,6 +33,7 @@ flac-encode = ["craft-media/bitstream"]
 # Codec modules on their own, for packet-level use.
 aac-decode = ["craft-media/bitstream"]
 aac-encode = ["craft-media/bitstream"]
+opus-decode = []
 # Multi-resolution waveform overviews (`peaks`).
 peaks = []
 # Encode AAC channels in parallel (with `aac-encode`).

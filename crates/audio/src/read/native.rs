@@ -1,11 +1,12 @@
 //! The native decode path: craft-media's demuxers (ISO BMFF / QuickTime, Matroska / WebM), raw
 //! ADTS streams, and WAV / AIFF PCM, feeding [`TrackDecoder`].
 //! [`Native::open`] answers `None` for a stream with no native codec (MP1/MP2/MP3, FLAC, ALAC,
-//! Vorbis, Opus, ...) or a container these demuxers do not read; the caller then uses symphonia.
+//! Vorbis, ...) or a container these demuxers do not read; the caller then uses symphonia.
 //!
 //! Every container is a [`Packets`] source over a [`Src`], read packet by packet, so a decode
-//! streams. Timing follows the containers: MP4 edit lists (AAC priming) and Matroska `CodecDelay` and
-//! per-block `DiscardPadding` are applied, so a file decodes to exactly its presentation length.
+//! streams. Timing follows the containers: MP4 edit lists (AAC priming, Opus pre-skip), Matroska
+//! `CodecDelay` and per-block `DiscardPadding`, and Ogg Opus pre-skip and end trimming (RFC 7845
+//! §4) are applied, so a file decodes to exactly its presentation length.
 
 use super::aiff::{self, AiffParse};
 use super::id3v2_len;
@@ -58,8 +59,17 @@ enum Packets<'a> {
         first_ns: i64,
         /// How a packet's place on the decoded timeline is found after a seek.
         frames: MkvFrames,
+        src: Src<'a>,
         /// A packet read ahead by a seek, returned next.
         pending: Option<Packet>,
+    },
+    Ogg {
+        file: Box<ogg::OggFile>,
+        src: Src<'a>,
+        stream: usize,
+        next: usize,
+        /// Output frame of each packet's first decoded sample (the pre-skip negative).
+        starts: Vec<i64>,
     },
     /// Frames of a raw stream: `(offset, length, decoded frames)`.
     Raw { frames: Vec<(u64, u32, u32)>, src: Src<'a>, next: usize },
@@ -77,6 +87,13 @@ impl Packets<'_> {
                 (i < file.tracks.get(*track).map_or(0, |t| t.samples.len())).then(|| {
                     *next += 1;
                     file.read_sample(src, *track, i).map(whole).map_err(mp4_error)
+                })
+            }
+            Packets::Ogg { file, src, stream, next, .. } => {
+                let i = *next;
+                (i < file.streams.get(*stream).map_or(0, |s| s.packets.len())).then(|| {
+                    *next += 1;
+                    file.read_packet(src, *stream, i).map(whole).map_err(ogg_error)
                 })
             }
             Packets::Raw { frames, src, next } => {
@@ -131,6 +148,12 @@ impl Packets<'_> {
                 *next = i;
                 Ok(s)
             }
+            Packets::Ogg { next, starts, .. } => {
+                let base = starts.first().copied().unwrap_or(0);
+                let (i, s) = at_or_before(starts.iter().map(|&s| u64::try_from(s.saturating_sub(base)).unwrap_or(0)), frame);
+                *next = i;
+                Ok(s)
+            }
             Packets::Raw { frames, next, .. } => {
                 let mut acc = 0u64;
                 let starts = frames.iter().map(|&(_, _, n)| {
@@ -146,7 +169,7 @@ impl Packets<'_> {
                 *next_frame = frame.min(*frames);
                 Ok(*next_frame)
             }
-            Packets::Mkv { demux, track, rate, first_ns, frames, pending } => {
+            Packets::Mkv { demux, track, rate, first_ns, frames, pending, src } => {
                 let ns = i64::try_from(rescale(frame, u64::from(*rate), 1_000_000_000)).unwrap_or(i64::MAX).saturating_add(*first_ns);
                 let point = demux.seek(*track, ns).map_err(mkv_error)?;
                 match mkv_next(demux, *track, *rate) {
@@ -154,7 +177,7 @@ impl Packets<'_> {
                         *pending = Some(p);
                         // Timestamps are rounded to the file's timestamp scale (often 1 ms), so the
                         // packet's index places it exactly where packets have a known length.
-                        let by_index = point.sample.and_then(|k| frames.start(k));
+                        let by_index = point.sample.and_then(|k| frames.start(src, k));
                         Ok(by_index.unwrap_or_else(|| {
                             rescale_round(u64::try_from(pts_ns.saturating_sub(*first_ns)).unwrap_or(0), 1_000_000_000, u64::from(*rate))
                         }))
@@ -173,16 +196,34 @@ enum MkvFrames {
     Constant(u64),
     /// PCM: the stored sizes of the track's packets, and the bytes per frame.
     Pcm { sizes: Vec<u32>, frame_bytes: u64 },
+    /// Opus: each packet's length is in its first bytes (RFC 6716 §3.1); the packets' places and
+    /// sizes, and their starts once read.
+    Opus { samples: Vec<(u64, u32)>, starts: Option<Vec<u64>> },
     /// From the timestamps.
     Timestamps,
 }
 
 impl MkvFrames {
     /// The decoded-timeline start of packet `k`, when the packets say.
-    fn start(&self, k: usize) -> Option<u64> {
+    fn start(&mut self, src: &Src<'_>, k: usize) -> Option<u64> {
         match self {
             MkvFrames::Constant(n) => Some(k as u64 * *n),
             MkvFrames::Pcm { sizes, frame_bytes } => Some(sizes.iter().take(k).map(|&s| u64::from(s)).sum::<u64>() / *frame_bytes),
+            MkvFrames::Opus { samples, starts } => {
+                let starts = starts.get_or_insert_with(|| {
+                    let mut acc = 0u64;
+                    samples
+                        .iter()
+                        .map(|&(at, size)| {
+                            let s = acc;
+                            let prefix = src.bytes(at, 2).and_then(|b| <[u8; 2]>::try_from(b).ok()).unwrap_or([0, 0]);
+                            acc += u64::from(ogg::opus_packet_samples(prefix, size).unwrap_or(0));
+                            s
+                        })
+                        .collect()
+                });
+                starts.get(k).copied()
+            }
             MkvFrames::Timestamps => None,
         }
     }
@@ -220,6 +261,13 @@ fn mkv_error(e: matroska::Error) -> AudioError {
     }
 }
 
+fn ogg_error(e: ogg::Error) -> AudioError {
+    match e {
+        ogg::Error::Io(e) => io_error(e),
+        e => AudioError::Malformed(e.to_string()),
+    }
+}
+
 /// A track the native path decodes: its packets, its decoder and its container timing.
 pub(crate) struct Native<'a> {
     packets: Packets<'a>,
@@ -227,7 +275,7 @@ pub(crate) struct Native<'a> {
     info: AudioInfo,
     /// Whether `info.frames` came from the container (else it is 0 until decoded).
     frames_known: bool,
-    /// Decoded frames at the start that are not presented (AAC priming).
+    /// Decoded frames at the start that are not presented (AAC priming, Opus pre-skip).
     skip: u64,
     /// Presented frames, when the container says.
     limit: Option<u64>,
@@ -267,6 +315,7 @@ impl<'a> Native<'a> {
         match sniffed.or(detected) {
             Some(Container::Wav) if wav::is_wav(&head) => single(open_wav(src)),
             Some(Container::Aiff) if aiff::is_aiff(&head) => single(open_aiff(src)),
+            Some(Container::Ogg) if ogg::sniff(body) => open_ogg(src, track),
             Some(c @ (Container::Mp4 | Container::QuickTime)) if head.get(4..8) == Some(b"ftyp") => open_mp4(src, c, track),
             Some(c @ (Container::Matroska | Container::WebM)) if body.starts_with(&[0x1A, 0x45, 0xDF, 0xA3]) => open_mkv(src, c, track),
             Some(Container::Adts) | None => single(open_adts(src, at)),
@@ -640,7 +689,7 @@ fn open_mp4<'a>(src: &Src<'a>, container: Container, track: Option<usize>) -> Op
     // Probe the decoder for the output rate before the timing is worked out.
     let probe = TrackDecoder::new(&params, &lookahead.iter().map(Vec::as_slice).collect::<Vec<_>>()).ok()?;
     let rate = probe.sample_rate();
-    // A leading media edit (AAC priming) is skipped, and the edit's duration is the
+    // A leading media edit (AAC priming, Opus pre-skip) is skipped, and the edit's duration is the
     // presentation length. Empty edits and multi-segment lists play the media as it is.
     // A leading empty edit (a delay before the track starts, ffmpeg's `-itsoffset` and muxers
     // aligning audio to video) does not change which media is presented: the media edit after it
@@ -721,9 +770,10 @@ fn open_mkv<'a>(src: &Src<'a>, container: Container, track: Option<usize>) -> Op
             let frame_bytes = u64::from(pcm.bits.div_ceil(8)) * u64::from(params.channels.unwrap_or(1).max(1));
             MkvFrames::Pcm { sizes: t.samples.iter().map(|s| s.size).collect(), frame_bytes: frame_bytes.max(1) }
         }
+        _ if params.codec == CodecId::Opus => MkvFrames::Opus { samples: t.samples.iter().map(|s| (s.offset, s.size)).collect(), starts: None },
         _ => MkvFrames::Timestamps,
     };
-    // `CodecDelay` (AAC priming) is decoded audio that is not presented.
+    // `CodecDelay` (AAC priming, Opus pre-skip) is decoded audio that is not presented.
     let skip = rescale_round(t.codec_delay_ns, 1_000_000_000, u64::from(rate));
     // The presentation ends with the last frame (timestamps, with `CodecDelay` already taken off,
     // are in ticks of `timebase` seconds); known only when the last frame has a duration.
@@ -755,7 +805,7 @@ fn open_mkv<'a>(src: &Src<'a>, container: Container, track: Option<usize>) -> Op
         _ => 0,
     };
     demux.seek(track, i64::MIN).ok()?;
-    let packets = Packets::Mkv { demux: Box::new(demux), track, rate, first_ns, frames: frames_of, pending: None };
+    let packets = Packets::Mkv { demux: Box::new(demux), track, rate, first_ns, frames: frames_of, src: src.clone(), pending: None };
     native(container, packets, &params, &lookahead, skip, frames, frames).map(Ok)
 }
 
@@ -788,6 +838,30 @@ fn tagged_last_duration(tag_ns: u64, last_pts: i64, delay_ticks: i64, packet_tic
     let tag_ticks = i64::try_from(rescale_round(tag_ns.saturating_mul(den), num.saturating_mul(1_000_000_000), 1)).ok()?;
     let duration = u64::try_from(tag_ticks.saturating_sub(delay_ticks).saturating_sub(last_pts)).ok()?;
     (duration > 0 && duration <= packet_ticks).then_some(duration)
+}
+
+/// An Ogg file's Opus stream (RFC 7845: pre-skip and end trimming applied).
+fn open_ogg<'a>(src: &Src<'a>, track: Option<usize>) -> Option<Result<Native<'a>>> {
+    let file = match demuxed(ogg::open(src), ogg_failure)? {
+        Ok(file) => file,
+        Err(e) => return Some(Err(e)),
+    };
+    let stream = match audio_track(file.streams.iter().map(|s| s.codec.codec_id().is_audio()), track)? {
+        Ok(s) => s,
+        Err(e) => return Some(Err(e)),
+    };
+    let s = file.streams.get(stream)?;
+    if s.codec != ogg::Codec::Opus {
+        return None;
+    }
+    let params = s.codec_params();
+    let head = crate::opus::OpusHead::parse(&params.extradata).ok()?;
+    let timing = ogg::OpusTiming::of(s, u32::from(head.pre_skip));
+    let limit = u64::try_from(timing.total).ok();
+    let skip = u64::from(timing.pre_skip);
+    let starts = timing.starts.clone();
+    let packets = Packets::Ogg { file: Box::new(file), src: src.clone(), stream, next: 0, starts };
+    native(Container::Ogg, packets, &params, &[], skip, limit, limit).map(Ok)
 }
 
 /// The audio tracks of `src` the native path reads, described for a track list; `None` when it
