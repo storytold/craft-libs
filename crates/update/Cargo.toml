@@ -11,8 +11,11 @@ repository.workspace = true
 workspace = true
 
 [features]
-default = []
-egui = ["dep:egui", "dep:image"]
+default = ["native"]
+# Downloads, installs and self-updates. Without it only the pure parts build (release parsing,
+# versions, platforms, the suite), which is what a wasm32 build can use.
+native = ["dep:getrandom", "dep:tempfile", "dep:sha2", "dep:ureq", "dep:flate2", "dep:tar", "dep:plist", "dep:winreg", "dep:dunce", "dep:zip", "dep:winsafe", "dep:verifysign"]
+egui = ["native", "dep:egui", "dep:image"]
 local-mirror = []
 
 [dependencies]
@@ -22,10 +25,10 @@ image = { version = "0.25", default-features = false, features = ["png"], option
 serde = { workspace = true }
 serde_json = { workspace = true }
 log = "0.4"
-getrandom = "0.3"
-tempfile = "3"
-sha2 = "0.10"
-ureq = { version = "3.4", default-features = false, features = ["rustls-no-provider", "_ring", "gzip", "platform-verifier"] }
+getrandom = { version = "0.3", optional = true }
+tempfile = { version = "3", optional = true }
+sha2 = { version = "0.10", optional = true }
+ureq = { version = "3.4", optional = true, default-features = false, features = ["rustls-no-provider", "_ring", "gzip", "platform-verifier"] }
 chrono = { workspace = true }
 semver = { version = "1", features = ["serde"] }
 
@@ -33,15 +36,15 @@ semver = { version = "1", features = ["serde"] }
 flate2 = "1"
 
 [target.'cfg(unix)'.dependencies]
-flate2 = "1"
-tar = { version = "0.4", default-features = false }
+flate2 = { version = "1", optional = true }
+tar = { version = "0.4", optional = true, default-features = false }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-plist = "1"
+plist = { version = "1", optional = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
-winreg = "0.55"
-dunce = "1"
-zip = { version = "9", default-features = false, features = ["deflate"] }
-winsafe = { version = "0.0.29", features = ["advapi", "kernel", "shell", "version"] }
-verifysign = "1"
+winreg = { version = "0.55", optional = true }
+dunce = { version = "1", optional = true }
+zip = { version = "9", optional = true, default-features = false, features = ["deflate"] }
+winsafe = { version = "0.0.29", optional = true, features = ["advapi", "kernel", "shell", "version"] }
+verifysign = { version = "1", optional = true }

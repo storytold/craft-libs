@@ -270,7 +270,7 @@ pub fn valid_file_name(name: &str) -> bool {
 
 /// `s` cut to at most `max` bytes (on a char boundary) with an ellipsis, for text from a
 /// release or the feed shown in the UI.
-pub(crate) fn truncate(s: &str, max: usize) -> String {
+pub fn truncate(s: &str, max: usize) -> String {
     if s.len() <= max {
         return s.to_string();
     }
