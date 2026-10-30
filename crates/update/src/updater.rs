@@ -243,7 +243,7 @@ impl Updater {
                 Action::None
             }
             StartupPromptResponse::Download => {
-                let action = download_action(&prompt.release);
+                let action = download_action(self.app, &prompt.release);
                 self.prompt = None;
                 action
             }
@@ -310,8 +310,15 @@ fn install(app: &'static App, installed: &self_update::Install, mut release: Rel
 
 /// Download in the prompt: the release page, when it is a safe web link (an app may build its
 /// `Release` from its own feed or cache, so the link isn't always one GitHub's parser checked).
-fn download_action(release: &Release) -> Action {
-    if crate::release::safe_web_link(&release.html_url) { Action::OpenUrl(release.html_url.clone()) } else { Action::None }
+/// A link that fails the check falls back to the app's releases page: the prompt has closed, so
+/// Download must still open something.
+fn download_action(app: &App, release: &Release) -> Action {
+    let safe = crate::release::safe_web_link;
+    if safe(&release.html_url) {
+        return Action::OpenUrl(release.html_url.clone());
+    }
+    let releases = app.releases_url();
+    if safe(&releases) { Action::OpenUrl(releases) } else { Action::None }
 }
 
 #[cfg(test)]
@@ -337,7 +344,8 @@ mod tests {
     fn download_opens_only_a_safe_release_page() {
         let with = |url: &str| Release { html_url: url.into(), ..newer() };
         let page = "https://github.com/storytold/photocraft/releases/tag/v9.0.0";
-        assert_eq!(download_action(&with(page)), Action::OpenUrl(page.into()));
+        assert_eq!(download_action(&PHOTOCRAFT, &with(page)), Action::OpenUrl(page.into()));
+        let releases = Action::OpenUrl(PHOTOCRAFT.releases_url());
         for bad in [
             "",
             "http://github.com/x",
@@ -346,9 +354,20 @@ mod tests {
             "https://evil.example/a|calc",
             "https://user@evil.example/",
             "https://x.example/a b",
+            "https://github.com/storytold/photocraft/releases/tag/v9&calc",
         ] {
-            assert_eq!(download_action(&with(bad)), Action::None, "{bad:?}");
+            assert_eq!(download_action(&PHOTOCRAFT, &with(bad)), releases, "{bad:?}");
         }
+    }
+
+    /// #391: the fallback passes the check for every app, so Download always opens a page.
+    #[test]
+    fn every_releases_page_is_a_safe_web_link() {
+        for app in crate::suite::SUITE.iter().chain([&crate::suite::LAUNCHER]) {
+            assert!(crate::release::safe_web_link(&app.releases_url()), "{}", app.id);
+        }
+        let broken = App::new("x", "X", "x", "a|b/c");
+        assert_eq!(download_action(&broken, &Release { html_url: "javascript:x".into(), ..newer() }), Action::None);
     }
 
     fn newer() -> Release {
