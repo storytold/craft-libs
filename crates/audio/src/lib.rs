@@ -8,11 +8,11 @@
 //! `wasm32-unknown-unknown`.
 //!
 //! - [`decode`], [`probe`], [`Decoder`] (streaming, seekable), [`tracks`], [`detect_container`]
-//!   (feature `decode`): WAV and AIFF are read natively; AAC, AC-3/E-AC-3, Opus and PCM in
-//!   MP4/MOV, Matroska/WebM, Ogg or raw streams go through craft-media's demuxers and
-//!   [`TrackDecoder`]; everything else (MP1/MP2/MP3, FLAC, ALAC, Vorbis, CAF, ADPCM, A-law,
-//!   µ-law) through `symphonia`, which is to be replaced by native decoders. Feature
-//!   `decode-native` is the same without symphonia.
+//!   (feature `decode`): WAV and AIFF are read natively; AAC, MP1/MP2, AC-3/E-AC-3, Opus and PCM
+//!   in MP4/MOV, Matroska/WebM, Ogg or raw streams go through craft-media's demuxers and
+//!   [`TrackDecoder`]; everything else (MP3, FLAC, ALAC, Vorbis, CAF, ADPCM, A-law, µ-law) through
+//!   `symphonia`, which is to be replaced by native decoders. Feature `decode-native` is the same
+//!   without symphonia.
 //! - [`TrackDecoder`] (any decoder feature): one track's packets from any demuxer to planar
 //!   `f32` in WAV channel order.
 //! - [`encode`], [`FileEncoder`]: WAV/BWF/RF64 and AIFF/AIFF-C (feature `pcm-encode`, which also
@@ -21,7 +21,7 @@
 //!   `lossless-encode`, `aac-encode` and `opus-encode`.
 //! - [`peaks`] (feature `peaks`): min/max/RMS pyramid for waveform drawing.
 //! - Codec modules for packet-level use, each with its own features: [`aac`] (`aac-decode`,
-//!   `aac-encode`), [`ac3`] (`ac3-decode`), [`opus`] (`opus-decode`, and
+//!   `aac-encode`), [`mpa`] (`mpa-decode`), [`ac3`] (`ac3-decode`), [`opus`] (`opus-decode`, and
 //!   [`opus::encoder`] with `opus-encode`).
 //!
 //! The shared types below build with no features.
@@ -32,15 +32,17 @@ pub mod aac;
 pub mod ac3;
 mod buffer;
 mod layout;
+#[cfg(feature = "mpa-decode")]
+pub mod mpa;
 #[cfg(any(feature = "opus-decode", feature = "opus-encode"))]
 pub mod opus;
-#[cfg(any(feature = "aac-decode", feature = "opus-decode", feature = "ac3-decode"))]
+#[cfg(any(feature = "aac-decode", feature = "opus-decode", feature = "mpa-decode", feature = "ac3-decode"))]
 mod pcm;
 #[cfg(feature = "peaks")]
 pub mod peaks;
 #[cfg(feature = "decode-native")]
 mod read;
-#[cfg(any(feature = "aac-decode", feature = "opus-decode", feature = "ac3-decode"))]
+#[cfg(any(feature = "aac-decode", feature = "opus-decode", feature = "mpa-decode", feature = "ac3-decode"))]
 mod track;
 #[cfg(any(feature = "decode-native", feature = "pcm-encode"))]
 mod wav;
@@ -57,7 +59,7 @@ pub use layout::{ChannelLayout, Speaker};
 pub use read::SharedSource;
 #[cfg(feature = "decode-native")]
 pub use read::{DEFAULT_MAX_SAMPLES, DecodeOptions, Decoder, TrackInfo, decode, decode_with, detect_container, probe, probe_with, tracks, tracks_of};
-#[cfg(any(feature = "aac-decode", feature = "opus-decode", feature = "ac3-decode"))]
+#[cfg(any(feature = "aac-decode", feature = "opus-decode", feature = "mpa-decode", feature = "ac3-decode"))]
 pub use track::{LOOKAHEAD_PACKETS, TrackDecoder};
 #[cfg(feature = "pcm-encode")]
 pub use write::wav_float_header;
@@ -99,6 +101,16 @@ impl From<aac::Error> for AudioError {
         match e {
             aac::Error::Unsupported(_) => AudioError::Unsupported(e.to_string()),
             aac::Error::InvalidSettings(_) => AudioError::Encode(e.to_string()),
+            _ => AudioError::Malformed(e.to_string()),
+        }
+    }
+}
+
+#[cfg(feature = "mpa-decode")]
+impl From<mpa::Error> for AudioError {
+    fn from(e: mpa::Error) -> Self {
+        match e {
+            mpa::Error::Unsupported(_) => AudioError::Unsupported(e.to_string()),
             _ => AudioError::Malformed(e.to_string()),
         }
     }

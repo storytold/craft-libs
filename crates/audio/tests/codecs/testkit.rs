@@ -38,6 +38,15 @@ pub fn fixtures_dir(sub: &str) -> PathBuf {
     d
 }
 
+pub mod oracle {
+    use std::path::PathBuf;
+
+    /// A tool by name, silently.
+    pub fn find_tool(name: &str) -> Option<PathBuf> {
+        crate::common::tool(name)
+    }
+}
+
 pub mod fixtures {
     use super::*;
 
