@@ -8,4 +8,5 @@ use craft_media_testkit as common;
 mod testkit;
 
 mod aac;
+mod mpa_oracle;
 mod routing_oracle;

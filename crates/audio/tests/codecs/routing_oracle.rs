@@ -98,6 +98,59 @@ const CASES: &[Case] = &[
         min_snr: 120.0,
     },
     Case {
+        name: "mp2.mp2",
+        surround: false,
+        mono: false,
+        rate: 48_000,
+        args: &["-c:a", "mp2"],
+        container: Container::MpegAudio,
+        codec: CodecId::Mp2,
+        layout: ChannelLayout::STEREO,
+        channels: 2,
+        frames: None,
+        min_snr: 80.0,
+    },
+    // ffmpeg's default for mono MP2 is 384 kbit/s, which ISO/IEC 11172-3 does not allow.
+    Case {
+        name: "mp2-mono.mp2",
+        surround: false,
+        mono: true,
+        rate: 48_000,
+        args: &["-c:a", "mp2"],
+        container: Container::MpegAudio,
+        codec: CodecId::Mp2,
+        layout: ChannelLayout::MONO,
+        channels: 1,
+        frames: None,
+        min_snr: 80.0,
+    },
+    Case {
+        name: "mp2.mkv",
+        surround: false,
+        mono: false,
+        rate: 48_000,
+        args: &["-c:a", "mp2"],
+        container: Container::Matroska,
+        codec: CodecId::Mp2,
+        layout: ChannelLayout::STEREO,
+        channels: 2,
+        frames: Some(240_000),
+        min_snr: 80.0,
+    },
+    Case {
+        name: "mp2.mp4",
+        surround: false,
+        mono: false,
+        rate: 48_000,
+        args: &["-c:a", "mp2"],
+        container: Container::Mp4,
+        codec: CodecId::Mp2,
+        layout: ChannelLayout::STEREO,
+        channels: 2,
+        frames: Some(240_000),
+        min_snr: 80.0,
+    },
+    Case {
         name: "pcm-s24be.mov",
         surround: false,
         mono: false,
@@ -170,6 +223,7 @@ fn ffmpeg_major(ff: &Path) -> Option<u32> {
 fn reference_lead(name: &str) -> usize {
     match name {
         "aac.mkv" => 1024,
+        "mp2.mkv" => 481,
         _ => 0,
     }
 }
@@ -191,6 +245,16 @@ fn snr(ours: &[Vec<f32>], reference: &[f32]) -> f64 {
     if e == 0.0 { f64::INFINITY } else { 10.0 * (s / e).log10() }
 }
 
+/// How many frames short of the input ffmpeg before 9 ends `name`: its lengths for these tracks
+/// leave out about the encoder's delay. The decoder presents what the file declares.
+fn early_end(name: &str) -> usize {
+    match name {
+        "mp2.mkv" => 480,
+        "mp2.mp4" => 528,
+        _ => 0,
+    }
+}
+
 #[test]
 fn every_container_and_codec_decodes_home_grown() {
     let ff = require_ffmpeg!();
@@ -206,7 +270,8 @@ fn every_container_and_codec_decodes_home_grown() {
         assert_eq!((info.container, info.codec, info.sample_rate, buf.channels.len()), (c.container, c.codec, c.rate, c.channels), "{}", c.name);
         assert_eq!(info.layout, c.layout, "{}: layout", c.name);
         let expected = c.frames.unwrap_or(reference.len() / c.channels);
-        assert_eq!(buf.frames(), expected, "{}: presented frames", c.name);
+        let frames = buf.frames();
+        assert!(frames == expected || frames == expected - early_end(c.name), "{}: presented frames: {frames} of {expected}", c.name);
         // One alignment, so audio that keeps the priming, or loses more than it, cannot pass.
         let lead = reference_lead(c.name) * c.channels;
         let s = match major {
@@ -305,7 +370,7 @@ fn track_decoder_on_demuxed_packets_matches_decode() {
     use craft_audio::TrackDecoder;
     use craft_media::isobmff;
     let ff = require_ffmpeg!();
-    for name in ["aac.m4a", "aac-5.1.m4a", "pcm-s24be.mov"] {
+    for name in ["aac.m4a", "aac-5.1.m4a", "mp2.mp4", "pcm-s24be.mov"] {
         let c = CASES.iter().find(|c| c.name == name).unwrap();
         let Some(path) = fixture(&ff, c) else { continue };
         let bytes = std::fs::read(&path).unwrap();

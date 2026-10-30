@@ -78,9 +78,9 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   scopes, conflicts, user overrides stored through craft-settings and import of other
   applications' shortcut sets. Command catalogs, file readers and the shortcut editor UI stay
   in each app.
-- [`craft-audio`](crates/audio/README.md): audio file I/O and codecs (WAV, AIFF, FLAC, AAC),
-  streaming and seeking, and packet decoding for any demuxer. See its README for formats and
-  features.
+- [`craft-audio`](crates/audio/README.md): audio file I/O and codecs (WAV, AIFF, FLAC, AAC,
+  MP1/MP2), streaming and seeking, and packet decoding for any demuxer. See its README for formats
+  and features.
 - [`craft-media`](crates/media/README.md): bit-level I/O (`bitstream`), clean-room MP4/MOV
   (`isobmff`) and Matroska/WebM (`matroska`) demuxers and muxers, an Ogg demuxer (`ogg`), from
   FilmCraft, and an ISO BMFF box reader. Containers only; codecs are in `craft-audio`, and
