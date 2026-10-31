@@ -58,9 +58,11 @@ fn the_top_gutter_is_reserved_by_default_and_can_be_owned_by_the_contents() {
 #[derive(Default)]
 struct Host {
     exclusive: bool,
+    stock_group: Option<u32>,
     bodies: usize,
     columns: Vec<Rect>,
     iconic: Vec<Rect>,
+    groups: std::collections::HashMap<u32, Rect>,
     collapsed: bool,
     protected: bool,
     frame_width: bool,
@@ -92,8 +94,9 @@ impl DockContent<u32> for Host {
     fn body(&mut self, _: &mut egui::Ui, _: &u32) {
         self.bodies += 1;
     }
-    fn custom_group(&mut self, _: &mut egui::Ui, _: &[u32], _: &u32, _: Rect, _: bool) -> bool {
-        self.exclusive
+    fn custom_group(&mut self, _: &mut egui::Ui, _: &[u32], selected: &u32, rect: Rect, _: bool) -> bool {
+        self.groups.insert(*selected, rect);
+        self.exclusive && self.stock_group.as_ref() != Some(selected)
     }
     fn owns_iconic_column(&self, _: &u32) -> bool {
         self.exclusive
@@ -257,5 +260,61 @@ fn internal_width_input_is_suppressed_only_when_explicitly_owned_through_overrid
         let mut host = Host { frame_width: true, split_width: owned, ..Default::default() };
         let hits = render(&layout, &mut host);
         assert_eq!(hits.iter().any(|(hit, _)| *hit == Hit::Divider(Divider::WindowSplit(1, vec![]))), !owned);
+    }
+}
+
+#[test]
+fn exclusive_docked_groups_skip_stock_body_bands_but_keep_column_edges() {
+    for owned in [false, true] {
+        for zone in [Zone::Top, Zone::Bottom, Zone::Left, Zone::Right] {
+            let ctx = Context::default();
+            let area = Id::unique("owned-dock-targets");
+            let layout = Layout {
+                root: Some(Node::Dock { side: Side::Start, columns: vec![Column::new(vec![Group::new(vec![1, 2], 0)], 240.0)] }),
+                floating: vec![Floating::single(vec![99], 0, [500.0, 100.0, 200.0, 150.0])],
+            };
+            let mut host = Host { exclusive: owned, stock_group: Some(99), ..Default::default() };
+            let mut step = |events, start: bool| {
+                let mut out = DockOutput::default();
+                ctx.run_ui(input(events), |ui| {
+                    let mut style = DockStyle::from_ui(ui);
+                    super::floating_tests::frame_style(&mut style);
+                    out = DockArea::new(area).show_content(ui, &layout, &style, &mut host);
+                    if start {
+                        assert!(begin_drag(ui.ctx(), area, 99, Rect::from_min_size(pos2(500.0, 100.0), vec2(200.0, 150.0))));
+                    }
+                })
+                .drop_without_applying_deltas();
+                (out, host.groups.get(&1).copied())
+            };
+            step(vec![], false);
+            step(vec![], false);
+            let (_, target) = step(vec![], false);
+            let target = target.expect("the docked group is drawn");
+            let from = pos2(550.0, 140.0);
+            step(vec![Event::PointerMoved(from), button(from, true)], true);
+            let to = match zone {
+                Zone::Top => pos2(target.center().x, target.top() + 50.0),
+                Zone::Bottom => pos2(target.center().x, target.bottom() - 20.0),
+                Zone::Left => pos2(target.left() + 20.0, target.center().y),
+                Zone::Right => pos2(target.right() - 20.0, target.center().y),
+                Zone::Center => unreachable!(),
+            };
+            step(vec![Event::PointerMoved(to)], false);
+            let (out, _) = step(vec![Event::PointerMoved(to), button(to, false)], false);
+            let group_drop = out.actions.iter().any(|a| {
+                matches!(
+                    a,
+                    Action::MovePanel { to: Target::At { placement: Placement::Group { .. }, .. }, .. }
+                        | Action::MoveGroup { to: Target::At { placement: Placement::Group { .. }, .. }, .. }
+                )
+            });
+            if matches!(zone, Zone::Top | Zone::Bottom) {
+                assert_eq!(group_drop, !owned, "{owned} {zone:?}: {:?}", out.actions);
+            } else {
+                assert!(!out.actions.is_empty(), "column edges still work: {owned} {zone:?}");
+                assert!(!group_drop, "column edges must not become group bands");
+            }
+        }
     }
 }

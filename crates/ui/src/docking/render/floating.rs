@@ -135,7 +135,9 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
     pub(super) fn floating_body(&mut self, ui: &mut Ui, window: &Floating<P>, body: Rect, frame: Rect) {
         let Some(key) = window.panels().next().cloned() else { return };
         match (&window.root, window.minimized) {
-            (Node::Tabs { panels, active }, true) => self.group(ui, panels, *active, true, body, GroupKind::Floating { window: frame }),
+            (Node::Tabs { panels, active }, true) => {
+                self.group(ui, panels, *active, true, body, GroupKind::Floating { window: frame });
+            }
             (_, true) => {}
             (root, false) => {
                 let outer = self.tree.replace((key, frame));

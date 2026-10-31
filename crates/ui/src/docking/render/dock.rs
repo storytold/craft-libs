@@ -509,9 +509,12 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
     /// seams and bands clipped to the visible `view`, and the height dividers.
     fn column_groups(&mut self, ui: &mut Ui, column: &Column<P>, heights: &[f32], area: Rect, view: Rect) {
         let rects = stacked(area, heights);
-        for (group, rect) in column.groups.iter().zip(&rects) {
-            self.group(ui, &group.panels, group.active, group.minimized, *rect, GroupKind::Dock);
-        }
+        let owned: Vec<_> = column
+            .groups
+            .iter()
+            .zip(&rects)
+            .map(|(group, rect)| self.group(ui, &group.panels, group.active, group.minimized, *rect, GroupKind::Dock))
+            .collect();
         let top = rects.last().map_or(area.top(), |r| r.bottom());
         let xs = view.x_range();
         let half = self.style.seam_band * 0.5;
@@ -525,7 +528,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
             }
         };
         let mut previous: Option<&P> = None;
-        for (group, rect) in column.groups.iter().zip(&rects) {
+        for ((group, rect), owned) in column.groups.iter().zip(&rects).zip(owned) {
             let Some(anchor) = group.panels.first() else { continue };
             if let Some(above) = previous {
                 let band = Rect::from_x_y_ranges(xs, (rect.top() - half)..=(rect.top() + half));
@@ -541,7 +544,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
                 self.dock_groups.push(DockGroup {
                     body,
                     center,
-                    sides: [None, None, Some((above, line(rect.top()))), Some((below, line(rect.bottom())))],
+                    sides: [None, None, (!owned).then(|| (above, line(rect.top()))), (!owned).then(|| (below, line(rect.bottom())))],
                 });
             }
             previous = Some(anchor);

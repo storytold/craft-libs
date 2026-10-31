@@ -16,7 +16,9 @@ and command handling remain in each application. No icons, fonts or application 
 `DockContent` can replace an iconic column or a complete tab group without a
 second layout tree. `column_rect` reports the fitted column before painting;
 `owns_iconic_column`/`iconic_column` and `custom_group` suppress the corresponding
-stock chrome, body and input when the host takes ownership. These hooks are also
+stock chrome, body and input when the host takes ownership. Docked custom groups
+also skip stock body top/bottom drop bands; column-edge targets remain available.
+These hooks are also
 forwarded by `show_customized`'s label/permissions/limits adapter.
 
 `resize_handle_style` and `split_separator` let the host paint one seam while

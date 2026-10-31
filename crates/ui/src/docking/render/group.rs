@@ -36,7 +36,7 @@ const OVERFLOW_WIDTH: f32 = 22.0;
 const WHEEL_NOTCH: f32 = 40.0;
 
 impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
-    /// Draw one tab group at `rect`.
+    /// Draw one tab group at `rect`, returning whether the host took exclusive ownership.
     ///
     /// An `active` index outside `panels` is a no-op. A lone protected panel is drawn stripless:
     /// its whole rect is the body and its only tab has `Rect::NOTHING`. Side splits are offered
@@ -45,15 +45,15 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
     /// hidden overflow tabs still appear in the drop target with `Rect::NOTHING`. The host's extra
     /// tabs follow the panel tabs and fit with them ([`fit_with_extra`]). `minimized` hides the body
     /// but keeps the strip. Tabs, strip, header and drag bar are mirrored in right-to-left layout.
-    pub(super) fn group(&mut self, ui: &mut Ui, panels: &[P], active: usize, minimized: bool, rect: Rect, kind: GroupKind) {
-        let Some(selected) = panels.get(active) else { return };
+    pub(super) fn group(&mut self, ui: &mut Ui, panels: &[P], active: usize, minimized: bool, rect: Rect, kind: GroupKind) -> bool {
+        let Some(selected) = panels.get(active) else { return false };
         let host_collapsed = self.content.group_collapsed(panels);
         let minimized = minimized || host_collapsed;
         if !host_collapsed {
             self.record_float(panels, rect.size(), rect.size());
         }
         if self.content.custom_group(ui, panels, selected, rect, matches!(kind, GroupKind::Floating { .. })) {
-            return;
+            return true;
         }
         let policy = self.permissions(selected);
         let splits = matches!(kind, GroupKind::Frame | GroupKind::Floating { .. }) && policy.accepts_splits;
@@ -71,7 +71,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
                 accepts_tabs: policy.accepts_tabs,
                 right_to_left: rtl,
             });
-            return;
+            return false;
         }
         let movable = panels.iter().all(|p| self.permissions(p).movable);
         let strip = Rect::from_min_max(rect.min, pos2(rect.right(), (rect.top() + self.style.tab_height).min(rect.bottom())));
@@ -175,6 +175,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
             self.contents(ui, selected, Rect::from_min_max(pos2(rect.left(), strip.bottom()), rect.max));
         }
         ui.painter().rect_stroke(rect, 0.0, self.style.border, StrokeKind::Inside);
+        false
     }
 
     /// A part of the strip the host draws (`header` or `extra-tabs`) at `rect`. A press in it
