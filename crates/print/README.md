@@ -61,8 +61,11 @@ opens Windows printer preferences and submits jobs with copies, collation, duple
   Parsing caps cumulative cross-reference/object-stream records at 500,000, decoded streams
   at 16 MiB each and 32 MiB per job, and parsed nodes/tokens at 250,000/16 MiB per job and
   32,000/1 MiB per object. Files exceeding these limits return a clear error.
-  Long-edge duplex is `TwoSidedLongEdge` and short-edge `TwoSidedShortEdge`; `duplex: None`
-  leaves duplex out of the ticket. Driver-specific defaults remain in Windows printer
+  Long-edge duplex is `TwoSidedLongEdge` and short-edge `TwoSidedShortEdge`.
+  Explicit bindings use `JobDuplexAllDocumentsContiguously` when it offers a two-sided option,
+  otherwise `DocumentDuplex` when that feature offers two-sided printing. Validation accepts either
+  scope and rejects missing, changed or conflicting bindings before submission.
+  `duplex: None` leaves duplex out of the ticket. Driver-specific defaults remain in Windows printer
   preferences (`rundll32 printui.dll`, the one process this crate starts, and only when asked).
 - **Browser/other targets:** discovery is empty and submission reports an unsupported
   platform; callers can offer PDF export instead.
