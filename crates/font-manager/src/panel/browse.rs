@@ -10,7 +10,10 @@ use crate::panel::app::{Detail, FontsPanel, Origin, Pending, Preset, Show, Tab, 
 use crate::panel::faces::{Owner, Shown};
 use crate::panel::i18n::{self, fmt, tl, tn};
 use crate::panel::jobs::Kind;
+use crate::panel::samples;
+use crate::panel::subsets::{Row, Subsets};
 use crate::panel::widgets::{self, Cell, Glyph, Skin};
+use crate::remote::PreviewKey;
 use crate::{FaceInfo, Source};
 
 /// Space round a card's contents.
@@ -27,6 +30,13 @@ struct Card<'a> {
     sample: &'a str,
     curated: bool,
     index_position: Option<usize>,
+}
+
+/// What a card's sample is drawn in.
+pub(crate) enum Face {
+    Local(Owner, FaceInfo),
+    /// A subset from the font preview service, and its decoded font.
+    Subset(PreviewKey, Arc<Vec<u8>>),
 }
 
 /// What a card shows at its reading end.
@@ -233,7 +243,10 @@ impl FontsPanel {
                 self.download_note(ui, &s);
                 self.catalogue_list(ui, &s);
             }
-            Tab::Installed => self.installed_list(ui, &s),
+            Tab::Installed => {
+                self.subsets.cancel_all();
+                self.installed_list(ui, &s);
+            }
         }
     }
 
@@ -257,7 +270,8 @@ impl FontsPanel {
             });
             // The size control at the reading end, the sample text filling the room between.
             let size_w = 176.0;
-            let hint = self.sample_for(["Latn"]);
+            let latin = self.index().and_then(|index| index.sample("Latn").map(|s| s.text.clone()));
+            let hint = self.sample_for(latin.as_deref(), ["Latn"]);
             let field_w = (ui.available_width() - size_w - 10.0).max(120.0);
             widgets::field(ui, s, &mut self.settings.sample, &hint, tl!("Sample text"), field_w, false);
             ui.allocate_ui_with_layout(vec2(size_w, s.h()), direction::row(ui), |ui| {
@@ -276,7 +290,12 @@ impl FontsPanel {
         }
         let mut allow = false;
         let mut hide = false;
-        let text = tl!("Fonts that aren't installed show a sample once you preview them. Nothing is downloaded until you allow it.");
+        // With a preview service, samples show without asking: the note is about installs only.
+        let text = if self.subsets.available() {
+            tl!("Nothing is installed until you allow downloads.")
+        } else {
+            tl!("Fonts that aren't installed show a sample once you preview them. Nothing is downloaded until you allow it.")
+        };
         widgets::note_with_actions(
             ui,
             s,
@@ -304,8 +323,14 @@ impl FontsPanel {
         CARD_TOP + self.skin.h() + CARD_GAP + self.settings.size * 1.32 + CARD_BOTTOM
     }
 
-    /// The scroll area for `count` cards; `card` draws row `n` into the rect it is given.
-    fn cards(&mut self, ui: &mut Ui, count: usize, mut card: impl FnMut(&mut FontsPanel, &mut Ui, usize, Rect) -> egui::Response) {
+    /// The scroll area for `count` cards; `card` draws row `n` into the rect it is given. Returns
+    /// the rows on screen.
+    fn cards(
+        &mut self,
+        ui: &mut Ui,
+        count: usize,
+        mut card: impl FnMut(&mut FontsPanel, &mut Ui, usize, Rect) -> egui::Response,
+    ) -> std::ops::Range<usize> {
         let row = self.row_height();
         let mut area = egui::ScrollArea::vertical().id_salt(("craft-fonts.cards", self.tab == Tab::Catalogue)).auto_shrink([false, false]);
         let viewport_h = ui.available_height();
@@ -321,6 +346,7 @@ impl FontsPanel {
             }
         }
         let output = area.show_rows(ui, row, count, |ui, range| {
+            let shown = range.clone();
             ui.spacing_mut().item_spacing.y = 0.0;
             let width = ui.available_width();
             let mut stepped = false;
@@ -357,8 +383,10 @@ impl FontsPanel {
                     }
                 }
             }
+            shown
         });
         ui.ctx().data_mut(|d| d.insert_temp(Id::unique(("craft-fonts.offset", self.tab == Tab::Catalogue)), output.state.clamped_offset().y));
+        output.inner
     }
 
     fn empty(&mut self, ui: &mut Ui, s: &Skin, title: &str, body: &str, clear: bool) {
@@ -386,6 +414,7 @@ impl FontsPanel {
                     let text = fmt("The font indexes can't be read: {error}", &[("error", &e)]);
                     ui.add(egui::Label::new(egui::RichText::new(text).color(s.p.bad)).wrap());
                 });
+                self.subsets.cancel_all();
                 return;
             }
         };
@@ -394,14 +423,36 @@ impl FontsPanel {
         widgets::label(ui, s, &count, s.p.faint);
         ui.add_space(8.0);
         if self.results.is_empty() {
+            self.subsets.cancel_all();
             self.empty(ui, s, tl!("No fonts match"), tl!("Try another name, or fewer filters."), true);
             return;
         }
         let results = self.results.clone();
-        self.cards(ui, results.len(), |me, ui, n, rect| {
+        let visible = self.cards(ui, results.len(), |me, ui, n, rect| {
             let i = results.get(n).copied().unwrap_or_default();
             me.catalogue_card(ui, &index, i, rect)
         });
+        self.request_subsets(ui.ctx(), &index, &results, visible);
+    }
+
+    /// Asks the preview service for the subsets of the rows on screen and round them.
+    fn request_subsets(&mut self, ctx: &egui::Context, index: &Index, results: &[usize], visible: std::ops::Range<usize>) {
+        let window = Subsets::window(&visible, results.len());
+        let rows: Vec<Option<Row<'_>>> = window.clone().map(|n| self.subset_row(index, *results.get(n)?)).collect();
+        self.subsets.request(ctx, index, window.start, &rows, visible);
+    }
+
+    /// The family at `i` in the index as a row drawn with a subset: `None` when it is installed
+    /// or previewed whole.
+    fn subset_row<'a>(&self, index: &'a Index, i: usize) -> Option<Row<'a>> {
+        let family = index.families().get(i)?;
+        if self.installed_by_name.contains_key(&family.family.to_lowercase())
+            || self.previewed.contains_key(&family_key(&family.source, &family.family))
+        {
+            return None;
+        }
+        let text = self.sample_for(samples::of_family(index, family), family.scripts.iter().map(String::as_str));
+        Some(Row { family, text })
     }
 
     /// Sources that couldn't be loaded, in a note above the list; the others show as usual.
@@ -476,7 +527,7 @@ impl FontsPanel {
         if faces_installed {
             return CardState::Installed;
         }
-        CardState::Offer { preview: !self.previewed.contains_key(&key) }
+        CardState::Offer { preview: !self.subsets.previewing() && !self.previewed.contains_key(&key) }
     }
 
     fn catalogue_card(&mut self, ui: &mut Ui, index: &Index, i: usize, rect: Rect) -> egui::Response {
@@ -488,11 +539,11 @@ impl FontsPanel {
         let state = self.catalogue_state(&family.source, &family.family, installed.is_some());
         let (source, curated) = source_label(index, family);
         let meta = [tn(style_count(family) as u64, "{n} style", "{n} styles"), category_label(family), source.to_owned()].join(" · ");
-        let sample = self.sample_for(family.scripts.iter().map(String::as_str));
+        let sample = self.sample_for(samples::of_family(index, family), family.scripts.iter().map(String::as_str));
         let face = match (installed, previewed) {
-            (Some(face), _) => Some((Owner::Installed, face)),
-            (None, Some(face)) => Some((Owner::Preview, face)),
-            (None, None) => None,
+            (Some(face), _) => Some(Face::Local(Owner::Installed, face)),
+            (None, Some(face)) => Some(Face::Local(Owner::Preview, face)),
+            (None, None) => self.subsets.font(index, &Row { family, text: sample.clone() }).map(|(key, font)| Face::Subset(key, font)),
         };
         let card = Card { key: &key, name: &family.family, meta: &meta, sample: &sample, curated, index_position: Some(i) };
         let resp = self.card(ui, &s, rect, card, face, state);
@@ -514,9 +565,12 @@ impl FontsPanel {
                 None => CardState::System,
             },
         };
-        let face = regular(&family.faces).cloned().map(|f| (Owner::Installed, f));
-        let scripts = self.index().and_then(|index| index.family(&family.name).map(|f| f.scripts.clone())).unwrap_or_default();
-        let sample = self.sample_for(scripts.iter().map(String::as_str));
+        let face = regular(&family.faces).cloned().map(|f| Face::Local(Owner::Installed, f));
+        let index = self.index();
+        let in_index = index.as_deref().and_then(|index| index.family(&family.name).map(|f| (index, f)));
+        let own = in_index.and_then(|(index, f)| samples::of_family(index, f));
+        let scripts = in_index.map(|(_, f)| f.scripts.as_slice()).unwrap_or_default();
+        let sample = self.sample_for(own, scripts.iter().map(String::as_str));
         let key = format!("{:?}\n{}", family.source, family.name);
         let card = Card { key: &key, name: &family.name, meta: &meta, sample: &sample, curated: true, index_position: None };
         let resp = self.card(ui, &s, rect, card, face, state);
@@ -532,7 +586,7 @@ impl FontsPanel {
 
     /// One family card: its name, styles and source on one line with its state at the end, and
     /// a sample in the face below.
-    fn card(&mut self, ui: &mut Ui, s: &Skin, rect: Rect, card: Card<'_>, face: Option<(Owner, FaceInfo)>, state: CardState) -> egui::Response {
+    fn card(&mut self, ui: &mut Ui, s: &Skin, rect: Rect, card: Card<'_>, face: Option<Face>, state: CardState) -> egui::Response {
         let Card { key, name, meta, sample, curated, index_position } = card;
         let p = s.p;
         let rtl = direction::is_rtl(ui);
@@ -647,21 +701,24 @@ impl FontsPanel {
     }
 
     /// `text` in the face, on one line; the interface font in a faint ink where the face isn't
-    /// here (not installed and not previewed).
-    pub(crate) fn paint_sample(&mut self, ui: &mut Ui, s: &Skin, rect: Rect, face: Option<&(Owner, FaceInfo)>, text: &str) {
+    /// here (not installed, not previewed and no subset from the preview service).
+    pub(crate) fn paint_sample(&mut self, ui: &mut Ui, s: &Skin, rect: Rect, face: Option<&Face>, text: &str) {
         let size = self.settings.size;
-        let (family, color) = match face {
-            Some((owner, face)) => {
+        let shown = match face {
+            Some(Face::Local(owner, face)) => {
                 let catalog = match owner {
                     Owner::Installed => Arc::clone(&self.catalog),
                     Owner::Preview => Arc::clone(&self.previews),
                 };
-                match self.faces.family(ui.ctx(), &catalog, *owner, face) {
-                    Shown::Ready(family) => (family, s.p.ink),
-                    Shown::Loading => return,
-                    Shown::Unavailable => (FontFamily::Proportional, s.p.faint),
-                }
+                Some(self.faces.family(ui.ctx(), &catalog, *owner, face))
             }
+            Some(Face::Subset(key, font)) => Some(self.faces.subset(ui.ctx(), key, font)),
+            None => None,
+        };
+        let (family, color) = match shown {
+            Some(Shown::Ready(family)) => (family, s.p.ink),
+            Some(Shown::Loading) => return,
+            Some(Shown::Unavailable) => (FontFamily::Proportional, s.p.faint),
             None => (FontFamily::Proportional, s.p.faint.gamma_multiply(0.8)),
         };
         let mut job = egui::text::LayoutJob::simple_singleline(text.to_owned(), FontId::new(size, family), color);

@@ -11,6 +11,7 @@ mod jobs;
 mod look;
 mod samples;
 mod sources;
+mod subsets;
 mod widgets;
 
 pub use app::{FontsPanel, Options, Preset, Settings, Tab, install_interface_fonts};

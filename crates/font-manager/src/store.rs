@@ -11,8 +11,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Condvar, Mutex};
 
 use craft_font_catalog::Catalog;
-pub use craft_font_store::UserSource;
 use craft_font_store::{Cancel, Client, Face, FontStore, Network, PINNED_INDEX, verify_font};
+pub use craft_font_store::{LegalText, PREVIEW_SERVICE_ENV, PreviewServiceSource, UserSource};
 
 use crate::index::{Family, Index};
 
@@ -103,6 +103,54 @@ pub trait Installer: Send + Sync {
     fn remove_user_source(&self, _url: &str) -> Result<(), StoreError> {
         Err(StoreError(NO_FOLDER.into()))
     }
+
+    /// The preview service's base URL, if one is set: [`craft_font_store::PREVIEW_SERVICE_ENV`], else the font
+    /// store's `preview_service` setting. Installs try it as a mirror first.
+    fn preview_service(&self) -> Option<String> {
+        None
+    }
+
+    /// Where [`Installer::preview_service`] comes from: the environment variable (the setting
+    /// can't change it), the saved setting, or nowhere.
+    fn preview_service_source(&self) -> PreviewServiceSource {
+        PreviewServiceSource::None
+    }
+
+    /// The store's HTTP client, if it has one. [`Previews`](crate::remote::Previews) fetches
+    /// with it, so a preview service that installs found unreachable is skipped by previews too,
+    /// and the reverse.
+    fn http_client(&self) -> Option<Client> {
+        None
+    }
+
+    /// Whether previews may be fetched from the preview service: the user's setting, on by
+    /// default.
+    fn previews_enabled(&self) -> bool {
+        true
+    }
+
+    /// Turns previews on or off, as the user's own action.
+    fn set_previews_enabled(&self, _enabled: bool) -> Result<(), StoreError> {
+        Err(StoreError(NO_FOLDER.into()))
+    }
+
+    /// Sets or clears the preview service (https, or http for a loopback host), as the user's own
+    /// action.
+    fn set_preview_service(&self, _url: Option<&str>) -> Result<(), StoreError> {
+        Err(StoreError(NO_FOLDER.into()))
+    }
+
+    /// The folder [`crate::remote::Previews`] caches preview subsets in; none keeps them only
+    /// for as long as the caller holds them.
+    fn preview_cache(&self) -> Option<PathBuf> {
+        None
+    }
+
+    /// The text of `family`'s licence or NOTICE file: the installed copy, else downloaded when
+    /// downloads are allowed. `None` when the family has no such file.
+    fn legal_text(&self, _index: &Index, _family: &Family, _which: LegalText) -> Result<Option<String>, StoreError> {
+        Err(StoreError(NO_FOLDER.into()))
+    }
 }
 
 const NO_FOLDER: &str = "there is no folder for the font store";
@@ -110,14 +158,19 @@ const NO_FOLDER: &str = "there is no folder for the font store";
 /// craft-font-store's store, in the user's font store folder.
 pub struct SuiteStore {
     store: FontStore,
-    client: Client,
 }
 
 impl SuiteStore {
     /// The store the catalog's environment names, rescanning `catalog` after each change.
     pub fn for_user(catalog: Arc<Catalog>) -> Option<SuiteStore> {
         let store = FontStore::for_user(catalog.env())?.with_catalog(catalog);
-        Some(SuiteStore { store, client: Client::default() })
+        Some(SuiteStore { store })
+    }
+
+    /// The store's HTTP client. Clones share the preview service's down state with installs;
+    /// [`Previews::new`](crate::remote::Previews::new) takes it through [`Installer::http_client`].
+    pub fn client(&self) -> Client {
+        self.store.client()
     }
 
     /// The store's source and name for the family holding `files`, which can differ from the
@@ -175,7 +228,7 @@ impl Installer for SuiteStore {
             let mut reasons = Vec::new();
             for url in index.file_urls(family, file) {
                 let mut on_bytes = |n: u64| progress(Progress { done: before.saturating_add(n), total });
-                match self.client.get(&url, file.size, &cancel, &mut on_bytes) {
+                match self.store.client().get(&url, file.size, &cancel, &mut on_bytes) {
                     Ok(bytes) => match verify_font(file, &bytes) {
                         Ok(()) => {
                             out.push(Downloaded { path: file.path.clone(), bytes });
@@ -213,6 +266,38 @@ impl Installer for SuiteStore {
 
     fn remove_user_source(&self, url: &str) -> Result<(), StoreError> {
         self.store.remove_user_source(url).map_err(err)
+    }
+
+    fn preview_service(&self) -> Option<String> {
+        self.store.preview_service()
+    }
+
+    fn preview_service_source(&self) -> PreviewServiceSource {
+        self.store.preview_service_source()
+    }
+
+    fn http_client(&self) -> Option<Client> {
+        Some(self.store.client())
+    }
+
+    fn set_preview_service(&self, url: Option<&str>) -> Result<(), StoreError> {
+        self.store.set_preview_service(url).map_err(err)
+    }
+
+    fn preview_cache(&self) -> Option<PathBuf> {
+        Some(self.store.previews_dir())
+    }
+
+    fn previews_enabled(&self) -> bool {
+        self.store.previews_enabled()
+    }
+
+    fn set_previews_enabled(&self, enabled: bool) -> Result<(), StoreError> {
+        self.store.set_previews_enabled(enabled).map_err(err)
+    }
+
+    fn legal_text(&self, index: &Index, family: &Family, which: LegalText) -> Result<Option<String>, StoreError> {
+        self.store.legal_text(index, family, which, &Cancel::new()).map_err(err)
     }
 }
 
@@ -271,6 +356,8 @@ pub struct FakeStore {
     /// Index files user sources "download", by URL.
     served_indexes: HashMap<String, Vec<u8>>,
     user: Mutex<Vec<UserSource>>,
+    preview_service: Mutex<Option<String>>,
+    previews: Mutex<bool>,
     /// User sources downloaded so far, and those whose file changed since.
     fetched: Mutex<Vec<String>>,
     changed: Mutex<Vec<String>>,
@@ -290,6 +377,8 @@ impl FakeStore {
             builtin: None,
             served_indexes: HashMap::new(),
             user: Mutex::new(Vec::new()),
+            preview_service: Mutex::new(None),
+            previews: Mutex::new(true),
             fetched: Mutex::new(Vec::new()),
             changed: Mutex::new(Vec::new()),
             held: (Mutex::new(false), Condvar::new()),
@@ -498,5 +587,46 @@ impl Installer for FakeStore {
     fn remove_user_source(&self, url: &str) -> Result<(), StoreError> {
         self.user.lock().map_err(err)?.retain(|s| s.url != url);
         Ok(())
+    }
+
+    fn preview_service(&self) -> Option<String> {
+        self.preview_service.lock().ok()?.clone()
+    }
+
+    fn preview_service_source(&self) -> PreviewServiceSource {
+        if self.preview_service().is_some() { PreviewServiceSource::Saved } else { PreviewServiceSource::None }
+    }
+
+    fn previews_enabled(&self) -> bool {
+        self.previews.lock().map_or(true, |p| *p)
+    }
+
+    fn set_previews_enabled(&self, enabled: bool) -> Result<(), StoreError> {
+        *self.previews.lock().map_err(err)? = enabled;
+        Ok(())
+    }
+
+    fn set_preview_service(&self, url: Option<&str>) -> Result<(), StoreError> {
+        let url = url.map(craft_font_store::check_preview_service).transpose().map_err(err)?;
+        *self.preview_service.lock().map_err(err)? = url;
+        Ok(())
+    }
+
+    fn preview_cache(&self) -> Option<PathBuf> {
+        Some(self.dir.join("previews"))
+    }
+
+    /// Served from the file table by the index path, like a font.
+    fn legal_text(&self, _: &Index, family: &Family, which: LegalText) -> Result<Option<String>, StoreError> {
+        let path = match which {
+            LegalText::License => family.license_file.as_ref().map(|f| f.path.as_str()).or(family.license_path.as_deref()),
+            LegalText::Notice => family.notice_file.as_ref().map(|f| f.path.as_str()),
+        };
+        let Some(path) = path else { return Ok(None) };
+        if !self.downloads_allowed() {
+            return Err(StoreError("downloading fonts is turned off".into()));
+        }
+        let bytes = self.files.get(path).ok_or_else(|| StoreError(format!("{path} isn't available")))?;
+        Ok(Some(String::from_utf8_lossy(bytes).into_owned()))
     }
 }
