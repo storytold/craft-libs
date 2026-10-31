@@ -1474,7 +1474,7 @@ pub mod macos {
 /// out the same way first.
 #[cfg(unix)]
 #[allow(dead_code)]
-mod tree {
+pub(crate) mod tree {
     use super::{App, Path, PathBuf, single_top_folder};
 
     /// Unpacks `file` and returns a staging folder laid out like `/usr/local`.
