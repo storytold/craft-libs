@@ -47,7 +47,14 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
     /// but keeps the strip. Tabs, strip, header and drag bar are mirrored in right-to-left layout.
     pub(super) fn group(&mut self, ui: &mut Ui, panels: &[P], active: usize, minimized: bool, rect: Rect, kind: GroupKind) {
         let Some(selected) = panels.get(active) else { return };
-        self.record_float(panels, rect.size(), rect.size());
+        if self.content.custom_group(ui, panels, selected, rect, matches!(kind, GroupKind::Floating { .. })) {
+            return;
+        }
+        let host_collapsed = self.content.group_collapsed(panels);
+        let minimized = minimized || host_collapsed;
+        if !host_collapsed {
+            self.record_float(panels, rect.size(), rect.size());
+        }
         let policy = self.permissions(selected);
         let splits = matches!(kind, GroupKind::Frame | GroupKind::Floating { .. }) && policy.accepts_splits;
         let rtl = self.style.right_to_left;
@@ -201,7 +208,21 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
         if self.minimizes(owner) && response.double_clicked() {
             self.output.actions.push(Action::SetMinimized { panel: owner.selected.clone(), minimized: !owner.minimized });
         }
-        let active = response.has_focus() || response.hovered();
+        let modality = self.id.with("keyboard-chrome-focus");
+        let keyboard_input = ui.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Key { pressed: true, .. })));
+        let pointer_input = ui.input(|i| i.pointer.any_pressed());
+        let keyboard_focus = ui.ctx().data_mut(|d| {
+            let on = if pointer_input {
+                false
+            } else if keyboard_input {
+                true
+            } else {
+                d.get_temp::<bool>(modality).unwrap_or(false)
+            };
+            d.insert_temp(modality, on);
+            on
+        });
+        let active = response.has_focus() && keyboard_focus;
         if active {
             ui.painter().with_clip_rect(hit).rect_stroke(
                 hit.shrink(1.0),
@@ -392,17 +413,22 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
         let minimized = owner.filter(|owner| self.minimizes(owner)).map(|owner| owner.minimized);
         let policy = self.permissions(panel);
         let label = self.label_of(panel);
-        let color = if active { self.style.text } else { self.style.inactive_text };
+        let visual_active = active && !owner.is_some_and(|owner| self.content.group_collapsed(owner.panels));
+        let color = if visual_active { self.style.text } else { self.style.inactive_text };
         let galley = self.tab_label(ui, panel, &label, color, (rect.width() - TAB_PADDING).max(0.0));
         let elided = galley.elided;
         let tab_id = self.id.with(("tab", panel));
         let pointer_focus = self.pointer_focus(ui, tab_id);
-        let response = tabs::Tab::new(tab_id, &label, active)
+        let response = tabs::Tab::new(tab_id, &label, visual_active)
             .sense(if policy.movable { Sense::click_and_drag() } else { Sense::click() })
             .focus_stroke(if pointer_focus { Stroke::NONE } else { Stroke::new(1.0, self.style.accent) })
             .show_at(ui, rect, |ui, response| {
                 let painter = ui.painter().with_clip_rect(rect.intersect(ui.clip_rect()));
-                painter.rect_filled(rect, 0.0, if active || response.hovered() { self.style.active_background } else { self.style.tab_background });
+                painter.rect_filled(
+                    rect,
+                    0.0,
+                    if visual_active || response.hovered() { self.style.active_background } else { self.style.tab_background },
+                );
                 let at = pos2(rect.left() + TAB_PADDING * 0.5, rect.center().y - galley.size().y * 0.5);
                 painter.galley(at, galley.clone(), color);
             });

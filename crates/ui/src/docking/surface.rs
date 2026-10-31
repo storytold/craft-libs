@@ -13,6 +13,8 @@ pub(super) const TAB_PADDING: f32 = 24.0;
 pub struct DockStyle {
     pub tab_height: f32,
     pub gap: f32,
+    /// Optional gap beside attached side docks. Other split/row dividers retain `gap`.
+    pub dock_gap: Option<f32>,
     pub min_pane: f32,
     pub background: Color32,
     pub tab_background: Color32,
@@ -175,6 +177,7 @@ impl DockStyle {
         Self {
             tab_height: 26.0,
             gap: 4.0,
+            dock_gap: None,
             min_pane: 40.0,
             background: visuals.panel_fill,
             tab_background: visuals.extreme_bg_color,
@@ -304,6 +307,7 @@ impl DockStyle {
             && self.font.size > 0.0
             && self.drop_line_width > 0.0
             && self.side_zone_fraction <= 0.5
+            && self.dock_gap.is_none_or(|gap| gap.is_finite() && (0.0..=4096.0).contains(&gap))
     }
 }
 
@@ -832,6 +836,39 @@ pub fn send_keys(ctx: &Context, viewport: egui::ViewportId, events: Vec<egui::Ev
 /// `show*` functions override `logical_label`, `permissions` and `limits`.
 pub trait DockContent<P> {
     fn body(&mut self, ui: &mut Ui, panel: &P);
+
+    /// Observe the fitted rectangle of each attached column, before its chrome is drawn.
+    fn column_rect(&mut self, _ctx: &Context, _column: &super::Column<P>, _rect: Rect, _side: super::Side) {}
+
+    /// An exclusive host surface replaces stock iconic painting, focus, drag and resize.
+    /// Placement and column-edge drop targets still belong to the workspace renderer.
+    fn owns_iconic_column(&self, _first: &P) -> bool {
+        false
+    }
+
+    /// Draw the complete iconic column inside its fitted rectangle when owned by the host.
+    fn iconic_column(&mut self, _ui: &mut Ui, _column: &super::Column<P>, _rect: Rect, _side: super::Side) {}
+
+    /// Return true after painting an exclusive group surface; stock tabs/body/targets are skipped.
+    /// The host supplies that group's size limits through `limits`.
+    fn custom_group(&mut self, _ui: &mut Ui, _panels: &[P], _active: &P, _rect: Rect, _floating: bool) -> bool {
+        false
+    }
+
+    /// Hosts which paint shared seams can keep the stock resize input without a second fill.
+    fn resize_handle_style(&self, default: crate::layout::ResizeHandleStyle) -> crate::layout::ResizeHandleStyle {
+        default
+    }
+    /// Presentation-only collapse of a group; its selected tab remains model state.
+    fn group_collapsed(&self, _panels: &[P]) -> bool {
+        false
+    }
+    /// Paint a fitted split gap in the owning surface, without another resize target.
+    fn split_separator(&mut self, _ui: &mut Ui, _rect: Rect) {}
+    /// The host supplies exclusive horizontal resize input for this floating tree.
+    fn owns_floating_width(&self, _panel: &P) -> bool {
+        false
+    }
     /// Plain text name for accessibility, menus and the default visual label.
     fn logical_label(&self, panel: &P) -> String
     where
@@ -967,6 +1004,30 @@ struct Overrides<'a, P, C: ?Sized> {
 impl<P, C: DockContent<P> + ?Sized> DockContent<P> for Overrides<'_, P, C> {
     fn body(&mut self, ui: &mut Ui, panel: &P) {
         self.inner.body(ui, panel);
+    }
+    fn column_rect(&mut self, ctx: &Context, column: &super::Column<P>, rect: Rect, side: super::Side) {
+        self.inner.column_rect(ctx, column, rect, side);
+    }
+    fn owns_iconic_column(&self, first: &P) -> bool {
+        self.inner.owns_iconic_column(first)
+    }
+    fn iconic_column(&mut self, ui: &mut Ui, column: &super::Column<P>, rect: Rect, side: super::Side) {
+        self.inner.iconic_column(ui, column, rect, side);
+    }
+    fn custom_group(&mut self, ui: &mut Ui, panels: &[P], active: &P, rect: Rect, floating: bool) -> bool {
+        self.inner.custom_group(ui, panels, active, rect, floating)
+    }
+    fn resize_handle_style(&self, default: crate::layout::ResizeHandleStyle) -> crate::layout::ResizeHandleStyle {
+        self.inner.resize_handle_style(default)
+    }
+    fn group_collapsed(&self, panels: &[P]) -> bool {
+        self.inner.group_collapsed(panels)
+    }
+    fn split_separator(&mut self, ui: &mut Ui, rect: Rect) {
+        self.inner.split_separator(ui, rect);
+    }
+    fn owns_floating_width(&self, panel: &P) -> bool {
+        self.inner.owns_floating_width(panel)
     }
     fn logical_label(&self, panel: &P) -> String {
         (self.label)(panel)
