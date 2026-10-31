@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, mpsc};
-use std::time::Duration;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, mpsc};
+use std::time::{Duration, Instant};
 
 use write_fonts::FontBuilder;
 use write_fonts::tables::fvar::{AxisInstanceArrays, Fvar, InstanceRecord, VariationAxisRecord};
@@ -429,6 +429,201 @@ fn added_fonts_come_first_and_respect_the_limits() {
 }
 
 #[test]
+fn scoped_fonts_are_seen_only_in_their_scope() {
+    let root = temp("scope");
+    let cat = system(&root);
+    let limits = Limits::default();
+    let (a, b) = (cat.new_scope(), cat.new_scope());
+    cat.rescan();
+    let generation = cat.generation();
+    // Each scope replaces the installed Test Sans Bold with its own (told apart by fsType); A also
+    // has a family of its own.
+    let a_bold = cat.add_bytes_in(a, font(&Spec { fs_type: 4, ..spec("Test Sans", "Bold", 700) }), Source::Document, &limits).unwrap();
+    let file = root.join("doc-a/DocOnly.ttf");
+    write(&file, font(&spec("Doc Only", "Regular", 400)));
+    cat.add_file_in(a, &file, Source::Document, &limits).unwrap();
+    cat.add_bytes_in(b, font(&Spec { fs_type: 8, ..spec("Test Sans", "Bold", 700) }), Source::Document, &limits).unwrap();
+    assert_eq!(cat.generation(), generation, "scoped changes leave other documents alone");
+    assert!(cat.generation_in(a) > generation);
+
+    let bold = |scope: Option<Scope>| {
+        let (face, m) = match scope {
+            Some(s) => cat.resolve_in(s, "Test Sans", "Bold"),
+            None => cat.resolve("Test Sans", "Bold"),
+        }
+        .unwrap();
+        assert_eq!(m, Match::Exact);
+        (face.source, face.fs_type)
+    };
+    assert_eq!(bold(Some(a)), (Source::Document, 4));
+    assert_eq!(bold(Some(b)), (Source::Document, 8));
+    assert_eq!(bold(None), (Source::System, 0));
+    // The scope's family keeps its shared styles, and other families resolve as unscoped.
+    assert_eq!(cat.resolve_in(a, "Test Sans", "Regular").unwrap(), cat.resolve("Test Sans", "Regular").unwrap());
+    assert_eq!(cat.styles_in(a, "test sans").len(), 5);
+    assert_eq!(cat.resolve_in(a, "Host Serif", "Bold").unwrap().0.source, Source::System);
+    assert!(cat.families_in(a).iter().any(|f| f == "Doc Only"));
+    assert!(!cat.families_in(b).iter().any(|f| f == "Doc Only"));
+    assert!(!cat.families().iter().any(|f| f == "Doc Only"));
+    assert_eq!(cat.family_in(a, "doc only").as_deref(), Some("Doc Only"));
+    assert!(cat.family("Doc Only").is_none());
+    assert!(cat.by_postscript_name_in(a, "DocOnly-Regular").is_some());
+    assert!(cat.by_postscript_name_in(b, "DocOnly-Regular").is_none());
+    assert!(cat.by_postscript_name("DocOnly-Regular").is_none());
+    assert!(cat.load_family_in(a, "Test Sans").iter().any(|f| f.info.fs_type == 4));
+    assert!(cat.load_family("Test Sans").iter().all(|f| f.info.fs_type == 0));
+
+    // The limit on added faces counts each scope on its own: A is full, B isn't.
+    let two = Limits { max_added_faces: 2, ..limits };
+    assert!(matches!(
+        cat.add_bytes_in(a, font(&spec("One More", "Regular", 400)), Source::Document, &two),
+        Err(FontFileError::TooManyFaces { max: 2 })
+    ));
+    cat.add_bytes_in(b, font(&spec("One More", "Regular", 400)), Source::Document, &two).unwrap();
+
+    // A face added without a scope comes after the scope's own, and the scopes' faces don't
+    // count against unscoped adds.
+    cat.add_bytes(font(&Spec { fs_type: 2, ..spec("Test Sans", "Bold", 700) }), Source::User, &two).unwrap();
+    assert_eq!(bold(None), (Source::User, 2));
+    assert_eq!(bold(Some(b)), (Source::Document, 8));
+
+    let before = cat.generation();
+    assert_eq!(cat.remove_scope(a), 2);
+    assert_eq!(cat.generation(), before);
+    assert_eq!(bold(Some(a)), (Source::User, 2));
+    assert_eq!(bold(Some(b)), (Source::Document, 8));
+    assert!(cat.family_in(a, "Doc Only").is_none());
+    assert!(matches!(cat.load(&a_bold[0]), Err(FontFileError::Gone)));
+    // Removing unscoped faces keeps the scopes'.
+    assert_eq!(cat.remove_added(Source::User), 1);
+    assert_eq!(bold(Some(b)), (Source::Document, 8));
+    assert_eq!(cat.load_family_in(b, "Test Sans").iter().filter(|f| f.info.fs_type == 8).count(), 1);
+}
+
+#[test]
+fn a_scope_lists_counts_and_removes_its_own_files() {
+    let root = temp("scope-own");
+    let cat = system(&root);
+    let limits = Limits::default();
+    let (a, b) = (cat.new_scope(), cat.new_scope());
+    assert_eq!(cat.scope_generation(a), 0);
+    let (one, two) = (root.join("doc-a/One.ttf"), root.join("doc-a/Two.ttc"));
+    write(&one, font(&spec("Doc One", "Regular", 400)));
+    write(&two, collection(&[font(&spec("Doc Two", "Regular", 400)), font(&spec("Doc Two", "Bold", 700))]));
+    cat.add_file_in(a, &one, Source::Document, &limits).unwrap();
+    cat.add_file_in(a, &two, Source::Document, &limits).unwrap();
+    // The same face again is listed once.
+    cat.add_bytes_in(a, font(&spec("Doc One", "Regular", 400)), Source::Document, &limits).unwrap();
+    let generation = cat.scope_generation(a);
+    assert_eq!(generation, 3);
+
+    // Another scope's, unscoped and scanned changes neither show in A's faces nor move its count.
+    cat.add_bytes_in(b, font(&spec("Other Doc", "Regular", 400)), Source::Document, &limits).unwrap();
+    cat.add_bytes(font(&spec("Shared Face", "Regular", 400)), Source::User, &limits).unwrap();
+    cat.rescan();
+    let names = |s: Scope| cat.faces_in(s).iter().map(|f| format!("{} {}", f.family, f.style)).collect::<Vec<_>>();
+    assert_eq!(names(a), ["Doc One Regular", "Doc Two Regular", "Doc Two Bold"]);
+    assert_eq!(names(b), ["Other Doc Regular"]);
+    assert_eq!(cat.scope_generation(a), generation);
+    assert_eq!(cat.scope_generation(b), 1);
+
+    assert_eq!(cat.remove_file_in(a, &two), 2);
+    assert_eq!(cat.scope_generation(a), generation + 1);
+    assert_eq!(names(a), ["Doc One Regular"]);
+    assert!(cat.family_in(a, "Doc Two").is_none());
+    assert_eq!(cat.remove_file_in(a, &two), 0);
+    assert_eq!(cat.remove_file_in(b, &one), 0);
+    assert_eq!(cat.scope_generation(a), generation + 1);
+    assert_eq!(cat.scope_generation(b), 1);
+    assert_eq!(cat.remove_scope(a), 2);
+    assert_eq!(cat.scope_generation(a), generation + 2);
+    assert!(cat.faces_in(a).is_empty());
+}
+
+#[test]
+fn a_scope_resolves_as_one_index_of_every_face_would() {
+    let root = temp("scope-names");
+    let cat = system(&root);
+    let limits = Limits::default();
+    let scope = cat.new_scope();
+    // A family spelled without the space answers to "Test Sans" only through an alias, so the
+    // installed family of that exact name wins there, as it does unscoped.
+    let doc = font(&Spec { fs_type: 4, ..spec("TestSans", "Bold", 700) });
+    cat.add_bytes_in(scope, doc.clone(), Source::Document, &limits).unwrap();
+    assert_eq!(cat.resolve_in(scope, "Test Sans", "Bold"), cat.resolve("Test Sans", "Bold"));
+    assert_eq!(cat.styles_in(scope, "Test Sans"), cat.styles("Test Sans"));
+    assert_eq!(cat.family_in(scope, "Test Sans").as_deref(), Some("Test Sans"));
+    let (own, m) = cat.resolve_in(scope, "TestSans", "Bold").unwrap();
+    assert_eq!((own.fs_type, m), (4, Match::Exact));
+    assert_eq!(cat.by_postscript_name_in(scope, "TestSans-Bold").unwrap().fs_type, 4);
+    assert_eq!(cat.by_postscript_name_in(scope, "TestSans-Regular"), cat.by_postscript_name("TestSans-Regular"));
+
+    // The scope's generation never repeats, removed and added to again included.
+    let added = cat.generation_in(scope);
+    assert_eq!(cat.remove_scope(scope), 1);
+    let removed = cat.generation_in(scope);
+    assert_eq!(cat.remove_scope(scope), 0);
+    assert_eq!(cat.generation_in(scope), removed);
+    assert_eq!(cat.resolve_in(scope, "TestSans", "Bold"), cat.resolve("TestSans", "Bold"));
+    cat.add_bytes_in(scope, doc, Source::Document, &limits).unwrap();
+    let again = cat.generation_in(scope);
+    assert!(added < removed && removed < again, "{added} {removed} {again}");
+    assert_eq!(cat.resolve_in(scope, "TestSans", "Bold").unwrap().0.fs_type, 4);
+}
+
+#[cfg(unix)]
+#[test]
+fn the_scan_skips_files_that_are_not_regular() {
+    let root = temp("fifo");
+    let dir = root.join("usr/share/fonts");
+    write(&dir.join("Real.ttf"), font(&spec("Real Face", "Regular", 400)));
+    let fifo = dir.join("Blocking.ttf");
+    assert!(std::process::Command::new("mkfifo").arg(&fifo).status().unwrap().success());
+    let named = fifo.clone();
+    let cat = Arc::new(Catalog::new(linux_env(&root)).with_font_service(false).with_lister(Arc::new(move || vec![named.clone()])));
+    // Opening a FIFO blocks until a writer comes, so the scan runs on a thread with a deadline.
+    let (tx, rx) = mpsc::channel();
+    let (scanning, opened) = (Arc::clone(&cat), fifo.clone());
+    std::thread::spawn(move || {
+        // The open itself doesn't wait, whatever an earlier check said.
+        let direct = crate::scan::file_faces(&opened, u64::MAX, Source::User);
+        tx.send((direct.len(), scanning.families().to_vec()))
+    });
+    let (direct, families) = rx.recv_timeout(Duration::from_secs(10)).expect("the scan opened the FIFO");
+    assert_eq!((direct, families.as_slice()), (0, ["Real Face".to_string()].as_slice()));
+    assert!(matches!(cat.add_file(&fifo, Source::User, &Limits::default()), Err(FontFileError::Io(_))));
+    assert!(matches!(cat.add_file(&dir, Source::User, &Limits::default()), Err(FontFileError::Io(_))));
+}
+
+#[cfg(unix)]
+#[test]
+fn a_confined_folder_skips_links_that_leave_it() {
+    use std::os::unix::fs::symlink;
+    let root = temp("confined");
+    let picked = root.join("picked");
+    write(&picked.join("Inside.ttf"), font(&spec("Inside Face", "Regular", 400)));
+    write(&picked.join("sub/Deep.ttf"), font(&spec("Deep Face", "Regular", 400)));
+    write(&root.join("outside/Secret.ttf"), font(&spec("Secret Face", "Regular", 400)));
+    write(&root.join("outside/dir/Other.ttf"), font(&spec("Other Face", "Regular", 400)));
+    symlink(root.join("outside/Secret.ttf"), picked.join("Secret.ttf")).unwrap();
+    symlink(root.join("outside/dir"), picked.join("dir")).unwrap();
+    symlink(&picked, root.join("picked-link")).unwrap();
+    let cat = Catalog::new(linux_env(&root)).with_font_service(false);
+    // The folder may itself be a link; what counts is where it leads.
+    cat.set_confined_dirs(vec![root.join("picked-link")]);
+    assert_eq!(cat.families().to_vec(), ["Deep Face", "Inside Face"]);
+    assert_eq!(cat.styles("Inside Face")[0].source, Source::User);
+    // A confined file opens by its real path without following a link swapped in for it.
+    assert!(crate::scan::open_regular(&picked.join("Inside.ttf"), true).is_ok());
+    assert!(crate::scan::open_regular(&picked.join("Secret.ttf"), true).is_err());
+    // As an app folder, the same folder follows its links.
+    cat.set_confined_dirs(vec![]);
+    cat.set_app_dirs(vec![picked]);
+    assert!(cat.rescan_if_changed());
+    assert_eq!(cat.families().to_vec(), ["Deep Face", "Inside Face", "Other Face", "Secret Face"]);
+}
+
+#[test]
 fn the_scan_reads_only_what_it_may() {
     let root = temp("bounded");
     let path = root.join("Big.ttf");
@@ -497,4 +692,498 @@ fn fork_of(fonts: &[Vec<u8>]) -> Vec<u8> {
     fork.extend(data);
     fork.extend(map);
     fork
+}
+
+#[test]
+fn changes_since_names_the_families_added_removed_and_changed() {
+    let root = temp("changes");
+    let dir = root.join("app-fonts");
+    write(&dir.join("AppFace-Regular.ttf"), font(&spec("App Face", "Regular", 400)));
+    let cat = Catalog::without_installed_fonts();
+    cat.set_app_dirs(vec![dir.clone()]);
+    let names = |v: &[String]| v.to_vec();
+    let start = cat.generation();
+    assert_eq!(names(&cat.changes_since(start).added), Vec::<String>::new());
+    cat.rescan();
+    let scanned = cat.generation();
+    assert_eq!(names(&cat.changes_since(start).added), ["App Face"]);
+    // Added and removed faces.
+    let limits = Limits::default();
+    cat.add_bytes(font(&spec("Added Face", "Regular", 400)), Source::User, &limits).unwrap();
+    let changes = cat.changes_since(scanned);
+    assert_eq!((names(&changes.added), changes.generation, changes.full), (vec!["Added Face".to_string()], cat.generation(), false));
+    let added = changes.generation;
+    cat.remove_added(Source::User);
+    assert_eq!(names(&cat.changes_since(added).removed), ["Added Face"]);
+    assert!(cat.changes_since(scanned).is_empty());
+    assert!(cat.changes_since(cat.generation()).is_empty());
+    // A scope's faces don't count.
+    let scope = cat.new_scope();
+    cat.add_bytes_in(scope, font(&spec("Scoped Face", "Regular", 400)), Source::Document, &limits).unwrap();
+    assert!(cat.changes_since(scanned).is_empty());
+    // A rescan: a family installed, a style added to one, then a family removed.
+    let before = cat.generation();
+    write(&dir.join("Installed-Regular.ttf"), font(&spec("Installed Face", "Regular", 400)));
+    write(&dir.join("AppFace-Bold.ttf"), font(&spec("App Face", "Bold", 700)));
+    cat.rescan();
+    let changes = cat.changes_since(before);
+    assert_eq!((names(&changes.added), names(&changes.changed)), (vec!["Installed Face".to_string()], vec!["App Face".to_string()]));
+    assert!(!cat.rescan_if_changed());
+    cat.rescan();
+    assert_eq!(cat.changes_since(changes.generation), Changes { generation: cat.generation(), ..Changes::default() });
+    std::fs::remove_file(dir.join("Installed-Regular.ttf")).unwrap();
+    cat.rescan();
+    let changes = cat.changes_since(before);
+    assert_eq!((names(&changes.added), names(&changes.removed), names(&changes.changed)), (vec![], vec![], vec!["App Face".to_string()]));
+    assert_eq!(names(&cat.changes_since(changes.generation - 1).removed), ["Installed Face"]);
+    // The history keeps the last 64 changes of the family set; older generations get `full`.
+    let bytes = font(&spec("Churn", "Regular", 400));
+    for _ in 0..40 {
+        cat.add_bytes(bytes.clone(), Source::User, &limits).unwrap();
+        cat.remove_added(Source::User);
+    }
+    let changes = cat.changes_since(before);
+    assert!(changes.full && changes.added.is_empty() && !changes.is_empty());
+    assert!(!cat.changes_since(cat.generation() - 10).full);
+}
+
+#[test]
+fn the_catalog_without_installed_fonts_sees_none_of_the_hosts() {
+    let cat = Catalog::without_installed_fonts();
+    assert!(font_dirs(cat.env()).is_empty() && font_store_dir(cat.env()).is_none());
+    assert_eq!(cat.rescan(), 0);
+    assert!(cat.families().is_empty());
+    assert!(!cat.installed_fonts_changed());
+    // It still takes bundled faces and the app's folders.
+    cat.add_bytes(font(&spec("Bundled Face", "Regular", 400)), Source::Bundled, &Limits::default()).unwrap();
+    let root = temp("empty");
+    write(&root.join("AppFace.ttf"), font(&spec("App Face", "Regular", 400)));
+    cat.set_app_dirs(vec![root]);
+    cat.rescan();
+    assert_eq!(cat.families().to_vec(), ["App Face", "Bundled Face"]);
+}
+
+/// Waits up to 10 seconds for `done`.
+fn wait_for(done: impl Fn() -> bool) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !done() {
+        assert!(Instant::now() < deadline, "timed out");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+}
+
+#[test]
+fn activations_share_one_worker_and_space_out_full_rescans() {
+    use crate::app::Refresh;
+
+    let root = temp("activate");
+    // A font service that names `listed` and waits while `blocked`, so a full rescan is
+    // visible (each calls it) and can be held running.
+    let (calls, blocked, listed) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicBool::new(false)), Arc::new(Mutex::new(Vec::new())));
+    let (c, b, l) = (Arc::clone(&calls), Arc::clone(&blocked), Arc::clone(&listed));
+    let lister: Lister = Arc::new(move || {
+        c.fetch_add(1, Ordering::SeqCst);
+        while b.load(Ordering::SeqCst) {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        l.lock().unwrap().clone()
+    });
+    let cat = Arc::new(Catalog::without_installed_fonts().with_lister(lister));
+    let (tx, rx) = mpsc::channel();
+    let on_change: app::OnChange = Arc::new(move |c: &Catalog| {
+        let _ = tx.send(c.families().to_vec());
+    });
+    let refresh = Arc::new(Refresh::new(Arc::clone(&cat), Duration::from_secs(60), Some(on_change)));
+    let t0 = Instant::now();
+    assert!(!refresh.activated_at(t0), "nothing before the first scan");
+    cat.rescan();
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+
+    // Within the interval: a change check only, which doesn't ask the font service.
+    assert!(refresh.activated_at(t0));
+    wait_for(|| !refresh.is_running());
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+
+    // After it: a full rescan, finding a font only the service knows. Activations while it runs
+    // start nothing.
+    let service = root.join("service/f1");
+    write(&service, font(&spec("Service Face", "Regular", 400)));
+    listed.lock().unwrap().push(service);
+    blocked.store(true, Ordering::SeqCst);
+    assert!(refresh.activated_at(t0 + Duration::from_secs(61)));
+    wait_for(|| calls.load(Ordering::SeqCst) == 2);
+    assert!(!refresh.activated_at(t0 + Duration::from_secs(200)));
+    assert!(!refresh.activated_at(t0 + Duration::from_secs(300)));
+    blocked.store(false, Ordering::SeqCst);
+    assert_eq!(rx.recv_timeout(Duration::from_secs(10)).unwrap(), ["Service Face"]);
+    wait_for(|| !refresh.is_running());
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+
+    // The interval counts from that full rescan.
+    assert!(refresh.activated_at(t0 + Duration::from_secs(120)));
+    wait_for(|| !refresh.is_running());
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+    assert!(refresh.activated_at(t0 + Duration::from_secs(121)));
+    wait_for(|| !refresh.is_running());
+    assert_eq!(calls.load(Ordering::SeqCst), 3);
+    // Nothing changed, so no call.
+    assert!(rx.try_recv().is_err());
+}
+
+#[test]
+fn a_file_replaced_in_place_loads_its_new_bytes() {
+    let root = temp("replace");
+    let path = root.join("fonts/Face.ttf");
+    write(&path, font(&spec("Face", "Regular", 400)));
+    let cat = Catalog::without_installed_fonts();
+    cat.set_app_dirs(vec![root.join("fonts")]);
+    let old = cat.load(&cat.styles("Face")[0]).unwrap();
+    // Held, so the old bytes stay cached.
+    let new = font(&Spec { width: 7, ..spec("Face", "Regular Wide", 400) });
+    std::fs::write(&path, &new).unwrap();
+    cat.rescan();
+    let face = cat.styles("Face")[0].clone();
+    assert_eq!(face.style, "Regular Wide");
+    assert_eq!(&*cat.load(&face).unwrap().bytes, new.as_slice());
+    assert_ne!(&*old.bytes, new.as_slice());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_confined_face_never_loads_through_a_link_swapped_in_after_the_scan() {
+    let root = temp("swap");
+    let picked = root.join("picked");
+    let inside = picked.join("Inside.ttf");
+    write(&inside, font(&spec("Inside Face", "Regular", 400)));
+    write(&root.join("outside/Secret.ttf"), font(&spec("Inside Face", "Regular", 400)));
+    let cat = Catalog::without_installed_fonts();
+    cat.set_confined_dirs(vec![picked]);
+    let face = cat.styles("Inside Face")[0].clone();
+    // Loaded and held, so its bytes are cached; then swapped for a link before a rescan.
+    let held = cat.load(&face).unwrap();
+    std::fs::remove_file(&inside).unwrap();
+    std::os::unix::fs::symlink(root.join("outside/Secret.ttf"), &inside).unwrap();
+    assert!(cat.load(&face).is_err());
+    drop(held);
+    assert!(cat.load(&face).is_err());
+    // An unconfined face of the same path follows the link.
+    let unconfined = FaceInfo { confined: false, ..face };
+    assert!(cat.load(&unconfined).is_ok());
+}
+
+/// A catalog whose font service blocks while `blocked`, and counts its calls.
+fn blocking_catalog(blocked: &Arc<AtomicBool>, calls: &Arc<AtomicUsize>) -> Arc<Catalog> {
+    let (b, c) = (Arc::clone(blocked), Arc::clone(calls));
+    let lister: Lister = Arc::new(move || {
+        c.fetch_add(1, Ordering::SeqCst);
+        while b.load(Ordering::SeqCst) {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        Vec::new()
+    });
+    Arc::new(Catalog::without_installed_fonts().with_lister(lister))
+}
+
+#[test]
+fn adding_fonts_never_waits_for_a_scan() {
+    let (blocked, calls) = (Arc::new(AtomicBool::new(true)), Arc::new(AtomicUsize::new(0)));
+    let cat = blocking_catalog(&blocked, &calls);
+    // During the first scan: the app's bundled fonts, one rebuild for all of them.
+    cat.scan_in_background();
+    wait_for(|| calls.load(Ordering::SeqCst) == 1);
+    let bundled: Vec<Arc<[u8]>> =
+        vec![font(&spec("Bundled One", "Regular", 400)).into(), b"not a font".as_slice().into(), font(&spec("Bundled Two", "Regular", 400)).into()];
+    let errors = crate::app::add_app_fonts(&cat, app::AppFonts { bundled, ..app::AppFonts::default() });
+    assert_eq!(errors.iter().map(|(i, _)| *i).collect::<Vec<_>>(), [1]);
+    assert!(!cat.is_ready() && blocked.load(Ordering::SeqCst));
+    assert_eq!(cat.generation(), 0);
+    blocked.store(false, Ordering::SeqCst);
+    assert_eq!(cat.families().to_vec(), ["Bundled One", "Bundled Two"]);
+    assert_eq!(cat.generation(), 1);
+    // During a rescan: the face is seen at once.
+    blocked.store(true, Ordering::SeqCst);
+    let rescan = std::thread::spawn({
+        let cat = Arc::clone(&cat);
+        move || cat.rescan()
+    });
+    wait_for(|| calls.load(Ordering::SeqCst) == 2);
+    cat.add_bytes(font(&spec("Later", "Regular", 400)), Source::User, &Limits::default()).unwrap();
+    assert_eq!(cat.families().to_vec(), ["Bundled One", "Bundled Two", "Later"]);
+    blocked.store(false, Ordering::SeqCst);
+    assert_eq!(rescan.join().unwrap(), 3);
+    assert_eq!(cat.families().to_vec(), ["Bundled One", "Bundled Two", "Later"]);
+}
+
+#[test]
+fn rescan_now_counts_as_the_full_rescan() {
+    use crate::app::Refresh;
+
+    let (blocked, calls) = (Arc::new(AtomicBool::new(false)), Arc::new(AtomicUsize::new(0)));
+    let cat = blocking_catalog(&blocked, &calls);
+    let root = temp("rescan-now");
+    cat.set_app_dirs(vec![root.clone()]);
+    let (tx, rx) = mpsc::channel();
+    let on_change: app::OnChange = Arc::new(move |c: &Catalog| {
+        let _ = tx.send(c.families().to_vec());
+    });
+    let refresh = Arc::new(Refresh::new(Arc::clone(&cat), Duration::from_secs(60), Some(on_change)));
+    let t0 = Instant::now();
+    cat.rescan();
+    assert!(refresh.activated_at(t0));
+    wait_for(|| !refresh.is_running());
+    // Reload fonts, after a font is installed: on this thread, with on_change.
+    write(&root.join("New.ttf"), font(&spec("New Face", "Regular", 400)));
+    let changes = refresh.rescan_now(Some(t0 + Duration::from_secs(59)));
+    assert_eq!(changes.added, ["New Face"]);
+    assert_eq!(rx.try_recv().unwrap(), ["New Face"]);
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+    // The interval counts from it: no full rescan at t0 + 60 s.
+    assert!(refresh.activated_at(t0 + Duration::from_secs(60)));
+    wait_for(|| !refresh.is_running());
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+    assert!(refresh.activated_at(t0 + Duration::from_secs(119)));
+    wait_for(|| !refresh.is_running());
+    assert_eq!(calls.load(Ordering::SeqCst), 3);
+    assert!(refresh.rescan_now(None).is_empty());
+    assert!(rx.try_recv().is_err());
+}
+
+/// A face made by a [`FaceCache`] test: the data's length, and which `make` call made it.
+type Made = (usize, usize);
+
+/// Makes faces for a [`FaceCache`] and counts the calls.
+fn maker(calls: &AtomicUsize) -> impl FnOnce(&FaceInfo, &FontData) -> Option<Made> + '_ {
+    |_, data| Some((data.bytes.len(), calls.fetch_add(1, Ordering::SeqCst) + 1))
+}
+
+/// `font(spec)` grown by `extra` bytes: another length, so the file counts as changed.
+fn padded(spec: &Spec, extra: usize) -> Vec<u8> {
+    let mut bytes = font(spec);
+    bytes.extend(std::iter::repeat_n(0, extra));
+    bytes
+}
+
+#[test]
+fn a_cached_face_is_made_once_and_let_go_when_its_file_changes() {
+    let root = temp("faces-installed");
+    let cat = system(&root);
+    let cache = FaceCache::new();
+    let calls = AtomicUsize::new(0);
+    let regular = |c: &Catalog| c.resolve("Test Sans", "Regular").unwrap().0;
+    let old = regular(&cat);
+    let first = cache.get_or_make(&cat, &old, maker(&calls)).unwrap();
+    assert!(Arc::ptr_eq(&first, &cache.get_or_make(&cat, &old, maker(&calls)).unwrap()));
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    cat.add_bytes(font(&spec("Other", "Regular", 400)), Source::User, &Limits::default()).unwrap();
+    assert!(cache.refresh(&cat).is_empty());
+
+    // Rewritten in place: let go once a rescan lists it changed, then made again.
+    let path = old.path.clone().unwrap();
+    let key = FaceKey::File(path.clone(), 0);
+    write(&path, padded(&spec("Test Sans", "Regular", 400), 64));
+    cat.rescan();
+    let gone = cache.refresh(&cat);
+    assert_eq!(gone.len(), 1);
+    assert_eq!(gone[0].0, key);
+    assert!(Arc::ptr_eq(&gone[0].1, &first));
+    let second = cache.get_or_make(&cat, &regular(&cat), maker(&calls)).unwrap();
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+    assert_eq!(second.0, first.0 + 64);
+    // A face looked up before the change gets the face of the file as it is.
+    assert!(Arc::ptr_eq(&second, &cache.get_or_make(&cat, &old, maker(&calls)).unwrap()));
+
+    // Made again before a refresh: the refresh returns the face it replaced.
+    write(&path, padded(&spec("Test Sans", "Regular", 400), 128));
+    cat.rescan();
+    let third = cache.get_or_make(&cat, &regular(&cat), maker(&calls)).unwrap();
+    assert_eq!(calls.load(Ordering::SeqCst), 3);
+    let gone = cache.refresh(&cat);
+    assert_eq!(gone.len(), 1);
+    assert!(Arc::ptr_eq(&gone[0].1, &second));
+
+    // Removed.
+    std::fs::remove_file(&path).unwrap();
+    cat.rescan();
+    let gone = cache.refresh(&cat);
+    assert_eq!(gone.len(), 1);
+    assert!(Arc::ptr_eq(&gone[0].1, &third));
+    assert!(cache.refresh(&cat).is_empty());
+}
+
+#[test]
+fn scope_faces_stay_while_a_scope_lists_their_file_unchanged() {
+    let root = temp("faces-scope");
+    let cat = Catalog::without_installed_fonts();
+    let limits = Limits::default();
+    let cache = FaceCache::new();
+    let calls = AtomicUsize::new(0);
+    let file = root.join("doc/Doc.ttf");
+    write(&file, font(&spec("Doc Face", "Regular", 400)));
+    let (a, b) = (cat.new_scope(), cat.new_scope());
+    let info = cat.add_file_in(a, &file, Source::Document, &limits).unwrap().remove(0);
+    let first = cache.get_or_make(&cat, &info, maker(&calls)).unwrap();
+    // The shared listing doesn't hold it; its scope does.
+    cat.add_bytes_in(b, font(&spec("Other", "Regular", 400)), Source::Document, &limits).unwrap();
+    assert!(cache.refresh(&cat).is_empty());
+    assert!(cache.forget_changed(&file).is_empty());
+
+    // The document replaced its file: the face is made again from the new one.
+    write(&file, padded(&spec("Doc Face", "Regular", 400), 64));
+    cat.remove_file_in(a, &file);
+    let info = cat.add_file_in(a, &file, Source::Document, &limits).unwrap().remove(0);
+    let second = cache.get_or_make(&cat, &info, maker(&calls)).unwrap();
+    assert_eq!((calls.load(Ordering::SeqCst), second.0), (2, first.0 + 64));
+    let gone = cache.refresh(&cat);
+    assert_eq!(gone.len(), 1);
+    assert!(Arc::ptr_eq(&gone[0].1, &first));
+
+    // Another scope with the same file shares the face, and keeps it after the first closes.
+    let in_b = cat.add_file_in(b, &file, Source::Document, &limits).unwrap().remove(0);
+    assert!(Arc::ptr_eq(&second, &cache.get_or_make(&cat, &in_b, maker(&calls)).unwrap()));
+    cat.remove_scope(a);
+    assert!(cache.refresh(&cat).is_empty());
+    cat.remove_file_in(b, &file);
+    let gone = cache.refresh(&cat);
+    assert_eq!(gone.len(), 1);
+    assert_eq!(gone[0].0, FaceKey::File(file.clone(), 0));
+
+    // An app's own watcher saw the file change.
+    let c = cat.new_scope();
+    let info = cat.add_file_in(c, &file, Source::Document, &limits).unwrap().remove(0);
+    cache.get_or_make(&cat, &info, maker(&calls)).unwrap();
+    write(&file, font(&spec("Doc Face", "Regular", 400)));
+    assert_eq!(cache.forget_changed(&file).len(), 1);
+    assert_eq!(calls.load(Ordering::SeqCst), 3);
+}
+
+#[test]
+fn faces_of_added_bytes_are_let_go_when_the_bytes_are_removed() {
+    let cat = Catalog::without_installed_fonts();
+    let limits = Limits::default();
+    let cache = FaceCache::new();
+    let calls = AtomicUsize::new(0);
+    let shared = cat.add_bytes(font(&spec("Added", "Regular", 400)), Source::User, &limits).unwrap().remove(0);
+    let scope = cat.new_scope();
+    let scoped = cat.add_bytes_in(scope, font(&spec("Scoped", "Regular", 400)), Source::Document, &limits).unwrap().remove(0);
+    let made = cache.get_or_make(&cat, &shared, maker(&calls)).unwrap();
+    assert!(Arc::ptr_eq(&made, &cache.get_or_make(&cat, &shared, maker(&calls)).unwrap()));
+    cache.get_or_make(&cat, &scoped, maker(&calls)).unwrap();
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+    assert!(cache.refresh(&cat).is_empty());
+
+    cat.remove_scope(scope);
+    let gone = cache.refresh(&cat);
+    assert_eq!(gone.len(), 1);
+    assert!(matches!(gone[0].0, FaceKey::Added(_, 0)));
+    cat.remove_added(Source::User);
+    let gone = cache.refresh(&cat);
+    assert_eq!(gone.len(), 1);
+    assert!(Arc::ptr_eq(&gone[0].1, &made));
+}
+
+#[test]
+fn threads_making_one_face_get_the_first_made() {
+    let cat = Catalog::without_installed_fonts();
+    let info = cat.add_bytes(font(&spec("Added", "Regular", 400)), Source::User, &Limits::default()).unwrap().remove(0);
+    let cache = FaceCache::new();
+    let calls = AtomicUsize::new(0);
+    let both = std::sync::Barrier::new(2);
+    let make = || {
+        cache.get_or_make(&cat, &info, |info, data| {
+            both.wait();
+            maker(&calls)(info, data)
+        })
+    };
+    let (a, b) = std::thread::scope(|s| {
+        let a = s.spawn(make);
+        let b = s.spawn(make);
+        (a.join().unwrap().unwrap(), b.join().unwrap().unwrap())
+    });
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+    assert!(Arc::ptr_eq(&a, &b));
+}
+
+#[test]
+fn a_face_made_after_a_refresh_is_checked_by_the_next() {
+    let root = temp("faces-after-refresh");
+    let cat = Catalog::without_installed_fonts();
+    let limits = Limits::default();
+    let cache = FaceCache::new();
+    let calls = AtomicUsize::new(0);
+    let file = root.join("doc/Doc.ttf");
+    write(&file, font(&spec("Doc Face", "Regular", 400)));
+    let scope = cat.new_scope();
+    let info = cat.add_file_in(scope, &file, Source::Document, &limits).unwrap().remove(0);
+    cache.get_or_make(&cat, &info, maker(&calls)).unwrap();
+    cat.remove_scope(scope);
+    assert_eq!(cache.refresh(&cat).len(), 1);
+    assert!(cache.refresh(&cat).is_empty());
+    // A layout that looked the face up before the scope closed makes it again, and nothing in
+    // the catalog changes after that.
+    cache.get_or_make(&cat, &info, maker(&calls)).unwrap();
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+    assert_eq!(cache.refresh(&cat).len(), 1);
+}
+
+#[test]
+fn a_watchers_forget_during_a_make_is_not_lost() {
+    let root = temp("faces-forget");
+    let cat = Catalog::without_installed_fonts();
+    let limits = Limits::default();
+    let cache = FaceCache::new();
+    let calls = AtomicUsize::new(0);
+    let file = root.join("doc/Doc.ttf");
+    write(&file, font(&spec("Doc Face", "Regular", 400)));
+    let scope = cat.new_scope();
+    let info = cat.add_file_in(scope, &file, Source::Document, &limits).unwrap().remove(0);
+    let first = cache
+        .get_or_make(&cat, &info, |info, data| {
+            assert!(cache.forget_changed(&file).is_empty());
+            maker(&calls)(info, data)
+        })
+        .unwrap();
+    // Not kept: the next call makes it again, and keeps that one.
+    let second = cache.get_or_make(&cat, &info, maker(&calls)).unwrap();
+    assert!(!Arc::ptr_eq(&first, &second));
+    assert!(Arc::ptr_eq(&second, &cache.get_or_make(&cat, &info, maker(&calls)).unwrap()));
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+    // The file as it was read is unchanged: a watcher's event lets go of nothing.
+    assert!(cache.forget_changed(&file).is_empty());
+}
+
+#[test]
+fn no_face_made_after_its_scope_closed_outlives_the_next_refresh() {
+    let root = temp("faces-race");
+    let cat = Catalog::without_installed_fonts();
+    let limits = Limits::default();
+    let cache = FaceCache::new();
+    let calls = AtomicUsize::new(0);
+    let file = root.join("doc/Doc.ttf");
+    write(&file, font(&spec("Doc Face", "Regular", 400)));
+    for _ in 0..20 {
+        let scope = cat.new_scope();
+        let info = cat.add_file_in(scope, &file, Source::Document, &limits).unwrap().remove(0);
+        let stop = AtomicBool::new(false);
+        std::thread::scope(|s| {
+            s.spawn(|| {
+                while !stop.load(Ordering::SeqCst) {
+                    cache.get_or_make(&cat, &info, maker(&calls)).unwrap();
+                }
+            });
+            s.spawn(|| {
+                while !stop.load(Ordering::SeqCst) {
+                    cache.refresh(&cat);
+                }
+            });
+            std::thread::sleep(Duration::from_millis(2));
+            cat.remove_scope(scope);
+            std::thread::sleep(Duration::from_millis(2));
+            stop.store(true, Ordering::SeqCst);
+        });
+        cache.refresh(&cat);
+        let before = calls.load(Ordering::SeqCst);
+        cache.get_or_make(&cat, &info, maker(&calls)).unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), before + 1);
+        cache.refresh(&cat);
+    }
 }

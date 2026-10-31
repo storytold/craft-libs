@@ -1,12 +1,13 @@
 //! The catalog: every installed face, found by any of its names, loaded once.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError, RwLock, Weak};
 use std::time::{Duration, SystemTime};
 
-use crate::scan::{self, Face, FaceInfo, Source, norm, style_italic, style_weight, style_width};
+use crate::scan::{self, Face, FaceInfo, FileStamp, Source, file_stamp, norm, style_italic, style_weight, style_width};
 use crate::{FontEnv, Os, font_dirs, font_store_dir};
 
 /// Lists font files that the platform's font service knows outside the font folders. Called by
@@ -50,15 +51,16 @@ pub enum FontFileError {
     Gone,
 }
 
-/// Limits on fonts added from files or bytes ([`Catalog::add_bytes`], [`Catalog::add_file`]),
-/// which may come from documents or downloads.
+/// Limits on fonts added from files or bytes ([`Catalog::add_bytes`], [`Catalog::add_file`] and
+/// their scoped forms), which may come from documents or downloads.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Limits {
     /// The largest file accepted.
     pub max_file_bytes: u64,
     /// The most faces read from one file (a collection).
     pub max_faces_per_file: u32,
-    /// The most added faces the catalog holds in all.
+    /// The most added faces one scope holds, and the most added without a scope: each scope and
+    /// the unscoped faces count on their own.
     pub max_added_faces: usize,
 }
 
@@ -76,6 +78,12 @@ pub enum Match {
     /// The family, in the style nearest to the one asked for.
     NearestStyle,
 }
+
+/// A set of added faces that only lookups in it see: one document's fonts
+/// ([`Catalog::new_scope`]). Inside a scope, its own faces come first, then the faces added
+/// without a scope, then the installed faces.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Scope(u64);
 
 /// A face's data: the whole file (or a suitcase font's resource) and the face's index in it.
 #[derive(Clone, Debug)]
@@ -106,6 +114,29 @@ enum Alias {
     Face(usize),
 }
 
+impl Alias {
+    fn face(&self) -> usize {
+        match self {
+            Alias::Family(i) | Alias::Legacy(i, _) | Alias::Face(i) => *i,
+        }
+    }
+
+    /// The order [`Index::resolve`] tries kinds of alias in.
+    fn tier(&self) -> u8 {
+        match self {
+            Alias::Family(_) => 0,
+            Alias::Legacy(..) => 1,
+            Alias::Face(_) => 2,
+        }
+    }
+}
+
+/// What tells faces apart: of the faces alike in it, lookups see only the first.
+fn identity(f: &Face) -> (String, String, Option<String>, Vec<(u32, u32)>) {
+    let variations = f.info.variations.iter().map(|(t, v)| (u32::from_be_bytes(*t), v.to_bits())).collect();
+    (f.info.family.to_ascii_lowercase(), norm(&f.info.style), f.keys.postscript.first().cloned(), variations)
+}
+
 /// One state of the catalog: what lookups read while a scan builds the next one.
 #[derive(Default)]
 struct Index {
@@ -115,19 +146,26 @@ struct Index {
     by_family: HashMap<String, Vec<usize>>,
     aliases: HashMap<String, Vec<Alias>>,
     postscript: HashMap<String, usize>,
+    /// How many of `faces` (the first ones) came from the added faces.
+    added: usize,
+    /// A hash of each family's faces by lowercase name, for [`Catalog::changes_since`]; set by
+    /// [`Catalog::publish`] only, so scope views don't pay for it.
+    signatures: HashMap<String, u64>,
 }
 
 impl Index {
     /// Added faces first: a document's or the app's own face wins over an installed face of the
     /// same family and style.
-    fn build(added: &[Face], scanned: &[Face]) -> Self {
+    fn build<'a>(added: &'a [Face], scanned: impl IntoIterator<Item = &'a Face>) -> Self {
         let mut faces: Vec<Face> = Vec::new();
         let mut seen = HashSet::new();
-        for f in added.iter().chain(scanned) {
-            let variations: Vec<(u32, u32)> = f.info.variations.iter().map(|(t, v)| (u32::from_be_bytes(*t), v.to_bits())).collect();
-            let key = (f.info.family.to_ascii_lowercase(), norm(&f.info.style), f.keys.postscript.first().cloned(), variations);
-            if seen.insert(key) {
+        let mut from_added = 0;
+        for (n, f) in added.iter().chain(scanned).enumerate() {
+            if seen.insert(identity(f)) {
                 faces.push(f.clone());
+                if n < added.len() {
+                    from_added += 1;
+                }
             }
         }
         let mut by_family: HashMap<String, Vec<usize>> = HashMap::new();
@@ -169,7 +207,34 @@ impl Index {
         }
         families.sort_by_cached_key(|f| (f.to_lowercase(), f.clone()));
         let infos: Arc<[FaceInfo]> = faces.iter().map(|f| f.info.clone()).collect();
-        Self { faces, infos, families: families.into(), by_family, aliases, postscript }
+        Self { faces, infos, families: families.into(), by_family, aliases, postscript, added: from_added, signatures: HashMap::new() }
+    }
+
+    /// What [`Index::signatures`] holds: for each family, a hash of its faces' names, styles,
+    /// weights, widths, files and the files' sizes and modification times, so whatever can lay
+    /// text out differently changes it.
+    fn family_signatures(&self) -> HashMap<String, u64> {
+        self.by_family
+            .iter()
+            .map(|(key, faces)| {
+                let mut h = DefaultHasher::new();
+                for f in faces.iter().filter_map(|i| self.face(*i)) {
+                    let i = &f.info;
+                    (&i.family, &i.style, &i.postscript_name, &i.path, i.index, i.blob, i.source, i.italic, i.file).hash(&mut h);
+                    (i.weight.to_bits(), i.width.to_bits()).hash(&mut h);
+                    for (tag, value) in &i.variations {
+                        (tag, value.to_bits()).hash(&mut h);
+                    }
+                }
+                (key.clone(), h.finish())
+            })
+            .collect()
+    }
+
+    /// The name of the family with lowercase name `key`.
+    fn family_named(&self, key: &str) -> Option<&str> {
+        let i = *self.by_family.get(key)?.first()?;
+        self.face(i).map(|f| f.info.family.as_str())
     }
 
     fn face(&self, i: usize) -> Option<&Face> {
@@ -240,24 +305,142 @@ impl Index {
     }
 }
 
+/// How many changes of the family set the history keeps ([`Catalog::changes_since`]).
+const HISTORY_CHANGES: usize = 64;
+/// How many family names the history holds in all. A change naming more (the first scan of a
+/// large system) clears the history.
+const HISTORY_NAMES: usize = 4096;
+
+/// How a family changed between two indexes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Change {
+    Added,
+    Removed,
+    Changed,
+}
+
+/// A family's lowercase name, its name and how it changed.
+type FamilyChange = (String, String, Change);
+
+/// The families each recent generation added, removed or changed, for unscoped lookups.
+#[derive(Default)]
+struct History {
+    /// Each generation that changed a family, oldest first, with the families (lowercase name,
+    /// name) and how they changed.
+    changes: VecDeque<(u64, Vec<FamilyChange>)>,
+    names: usize,
+    /// The oldest generation [`Catalog::changes_since`] can start from: the history holds every
+    /// change after it.
+    floor: u64,
+}
+
+impl History {
+    fn record(&mut self, generation: u64, old: &Index, new: &Index) {
+        let mut changes = Vec::new();
+        for (key, sig) in &new.signatures {
+            let change = match old.signatures.get(key) {
+                None => Change::Added,
+                Some(old) if old != sig => Change::Changed,
+                Some(_) => continue,
+            };
+            changes.push((key.clone(), new.family_named(key).unwrap_or(key).to_owned(), change));
+        }
+        for key in old.signatures.keys().filter(|k| !new.signatures.contains_key(*k)) {
+            changes.push((key.clone(), old.family_named(key).unwrap_or(key).to_owned(), Change::Removed));
+        }
+        if changes.is_empty() {
+            return;
+        }
+        if changes.len() > HISTORY_NAMES {
+            self.changes.clear();
+            self.names = 0;
+            self.floor = generation;
+            return;
+        }
+        self.names += changes.len();
+        self.changes.push_back((generation, changes));
+        while self.changes.len() > HISTORY_CHANGES || self.names > HISTORY_NAMES {
+            let Some((generation, changes)) = self.changes.pop_front() else { break };
+            self.names -= changes.len();
+            self.floor = generation;
+        }
+    }
+}
+
+/// The families unscoped lookups find differently since a generation ([`Catalog::changes_since`]):
+/// what an app re-resolves to know which documents to lay out again. Each list is sorted
+/// ignoring case.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Changes {
+    /// The generation these changes lead to: pass it to the next call.
+    pub generation: u64,
+    /// The catalog no longer knows what changed since then: re-resolve every family, and the
+    /// lists are empty.
+    pub full: bool,
+    /// Families found now that weren't.
+    pub added: Vec<String>,
+    /// Families that were found and aren't any more.
+    pub removed: Vec<String>,
+    /// Families found before and now whose faces changed: a style installed or removed, a file
+    /// replaced, a face added over an installed one.
+    pub changed: Vec<String>,
+}
+
+impl Changes {
+    /// Nothing changed.
+    pub fn is_empty(&self) -> bool {
+        !self.full && self.added.is_empty() && self.removed.is_empty() && self.changed.is_empty()
+    }
+}
+
 /// A style name as compared: normalized, with no style meaning `Regular`.
 fn style_key(style: &str) -> String {
     let ns = norm(style);
     if ns.is_empty() { "regular".into() } else { ns }
 }
 
+fn family_name(index: &Index, name: &str) -> Option<String> {
+    let i = *index.family_of(name)?.first()?;
+    index.face(i).map(|f| f.info.family.clone())
+}
+
+/// The faces of the family `family` names; `None` when no family has that name.
+fn styles_of(index: &Index, family: &str) -> Option<Vec<FaceInfo>> {
+    Some(index.family_of(family)?.iter().filter_map(|i| index.face(*i)).map(|f| f.info.clone()).collect())
+}
+
+fn resolve_face(index: &Index, name: &str, style: &str) -> Option<(FaceInfo, Match)> {
+    let (i, matched) = index.resolve(name, style)?;
+    Some((index.face(i)?.info.clone(), matched))
+}
+
+fn postscript_face(index: &Index, name: &str) -> Option<FaceInfo> {
+    let i = *index.postscript.get(&norm(name))?;
+    index.face(i).map(|f| f.info.clone())
+}
+
 /// What the catalog reads besides the platform's font folders.
 struct Config {
     app_dirs: Vec<PathBuf>,
+    confined_dirs: Vec<PathBuf>,
     listers: Vec<Lister>,
     font_service: bool,
 }
 
+/// A loaded file's bytes, while anything holds them.
+struct Loaded {
+    /// The file's stamp when read: a file replaced since is read again.
+    stamp: FileStamp,
+    /// Read without following a link in the file's place.
+    no_follow: bool,
+    bytes: Weak<[u8]>,
+}
+
 /// A file found by a scan, remembered so a rescan reads only files that changed.
 struct Cached {
-    len: u64,
-    modified: Option<SystemTime>,
-    faces: Vec<Face>,
+    stamp: FileStamp,
+    /// Shared with [`Added::scanned`].
+    faces: Arc<Vec<Face>>,
 }
 
 #[derive(Default)]
@@ -269,6 +452,7 @@ struct ScanState {
 #[derive(Default)]
 struct Stamp {
     app_dirs: Vec<PathBuf>,
+    confined_dirs: Vec<PathBuf>,
     /// Every folder the scan listed, and the folders holding the files listers named, with their
     /// modification times (`None`: missing).
     dirs: Vec<(PathBuf, Option<SystemTime>)>,
@@ -278,13 +462,165 @@ struct Stamp {
 
 #[derive(Default)]
 struct Added {
+    /// Faces added without a scope.
     faces: Vec<Face>,
+    /// The faces the last scan found, by file in path order; `None` before the first scan, which
+    /// then builds the index with the faces added before it. Kept here, not read from the scan's
+    /// state, so adding faces never waits for a scan.
+    scanned: Option<Vec<Arc<Vec<Face>>>>,
+    scopes: HashMap<Scope, Scoped>,
+    /// The bytes of faces added as bytes, with or without a scope.
     blobs: HashMap<u64, Arc<[u8]>>,
     next_blob: u64,
+    /// Counts every scope's changes together, so a scope's stamp never repeats.
+    scope_changes: u64,
+    /// Counts every add and removal, with or without a scope, for [`Catalog::face_changes`]:
+    /// before the first scan, unscoped ones don't move the generation.
+    changes: u64,
+}
+
+impl Added {
+    /// Record a change of `scope`'s faces: a new stamp, and a view to build again.
+    fn changed(&mut self, scope: Scope) -> &mut Scoped {
+        self.scope_changes += 1;
+        self.changes += 1;
+        let stamp = self.scope_changes;
+        let scoped = self.scopes.entry(scope).or_default();
+        scoped.stamp = stamp;
+        scoped.changes += 1;
+        scoped.view = None;
+        scoped
+    }
+
+    /// Whether `scope` (or the unscoped faces) has room for `more` faces within `limits`.
+    fn room(&self, scope: Option<Scope>, more: usize, limits: &Limits) -> Result<(), FontFileError> {
+        let held = match scope {
+            None => self.faces.len(),
+            Some(scope) => self.scopes.get(&scope).map_or(0, |s| s.faces.len()),
+        };
+        if held + more > limits.max_added_faces {
+            return Err(FontFileError::TooManyFaces { max: limits.max_added_faces });
+        }
+        Ok(())
+    }
+
+    /// Keep `bytes` for `faces` when `pending` more faces about to be added to `scope` leave room
+    /// within `limits`; returns the faces, pointing at the bytes.
+    fn store(
+        &mut self,
+        scope: Option<Scope>,
+        bytes: Arc<[u8]>,
+        mut faces: Vec<Face>,
+        pending: usize,
+        limits: &Limits,
+    ) -> Result<Vec<Face>, FontFileError> {
+        self.room(scope, pending + faces.len(), limits)?;
+        let blob = self.next_blob;
+        self.next_blob += 1;
+        self.blobs.insert(blob, bytes);
+        for f in &mut faces {
+            f.info.blob = Some(blob);
+        }
+        Ok(faces)
+    }
+
+    /// Drop the bytes no added face uses any more.
+    fn drop_unused_blobs(&mut self) {
+        let used: HashSet<u64> = self.faces.iter().chain(self.scopes.values().flat_map(|s| &s.faces)).filter_map(|f| f.info.blob).collect();
+        self.blobs.retain(|b, _| used.contains(b));
+    }
+}
+
+/// A scope's faces, and the view its lookups read. A removed scope keeps its entry, with no
+/// faces, so its stamp never goes back.
+#[derive(Default)]
+struct Scoped {
+    faces: Vec<Face>,
+    /// [`Added::scope_changes`] at the scope's last change, for [`Catalog::generation_in`].
+    stamp: u64,
+    /// The scope's own changes, for [`Catalog::scope_generation`].
+    changes: u64,
+    /// Built on the first lookup after a change of the scope or of the shared index.
+    view: Option<Arc<View>>,
+}
+
+/// What lookups in a scope read: an index of the scope's faces and the shared faces of their
+/// families, consulted before the shared index. [`View::answers`] says which of the two a name
+/// resolves in, so the result is what one index of every face would give.
+struct View {
+    /// The shared index this view was built from.
+    base: Arc<Index>,
+    index: Index,
+    /// The shared families and the scope's, sorted ignoring case.
+    families: Arc<[String]>,
+}
+
+impl View {
+    fn build(own: &[Face], base: Arc<Index>) -> Self {
+        let keys: BTreeSet<String> = own.iter().map(|f| f.info.family.to_ascii_lowercase()).collect();
+        let shared: Vec<Face> = keys.iter().filter_map(|k| base.by_family.get(k)).flatten().filter_map(|i| base.face(*i)).cloned().collect();
+        let index = Index::build(own, &shared);
+        let mut families: Vec<String> = base.families.to_vec();
+        let before = families.len();
+        families.extend(index.families.iter().filter(|f| !base.by_family.contains_key(&f.to_ascii_lowercase())).cloned());
+        if families.len() > before {
+            families.sort_by_cached_key(|f| (f.to_lowercase(), f.clone()));
+        }
+        Self { base, index, families: families.into() }
+    }
+
+    /// Whether `name` resolves to the scope's faces, trying names in [`Index::resolve`]'s order:
+    /// an exact family name, then each kind of alias. A family the view holds has scope faces;
+    /// otherwise the first kind of alias either index has decides, and the view's aliases list
+    /// the scope's faces first.
+    fn answers(&self, name: &str) -> bool {
+        let lower = name.to_ascii_lowercase();
+        if self.index.by_family.contains_key(&lower) {
+            return true;
+        }
+        if self.base.by_family.contains_key(&lower) {
+            return false;
+        }
+        let key = norm(name);
+        let (own, shared) = (self.index.aliases.get(&key), self.base.aliases.get(&key));
+        for tier in 0..3 {
+            if let Some(a) = own.into_iter().flatten().find(|a| a.tier() == tier) {
+                return a.face() < self.index.added;
+            }
+            if shared.into_iter().flatten().any(|a| a.tier() == tier) {
+                return false;
+            }
+        }
+        false
+    }
+
+    /// The scope's face with PostScript name `name`.
+    fn postscript(&self, name: &str) -> Option<usize> {
+        self.index.postscript.get(&norm(name)).copied().filter(|i| *i < self.index.added)
+    }
+}
+
+/// The faces of a font file's `bytes`, within `limits`, before they are added.
+fn bytes_faces(bytes: Arc<[u8]>, source: Source, limits: &Limits) -> Result<(Arc<[u8]>, Vec<Face>), FontFileError> {
+    let size = bytes.len() as u64;
+    if size > limits.max_file_bytes {
+        return Err(FontFileError::TooLarge { size, max: limits.max_file_bytes });
+    }
+    let faces = scan::data_faces(&bytes, limits.max_faces_per_file, None, source);
+    if faces.is_empty() {
+        return Err(FontFileError::NotAFont);
+    }
+    Ok((bytes, faces))
 }
 
 /// A family's faces, loaded once ([`Catalog::load_family`]).
 type FamilyLoad = Arc<OnceLock<Arc<[LoadedFace]>>>;
+
+/// Why a path isn't read as a font: it is a folder, a FIFO, a device or a socket, which could
+/// block or never end.
+fn not_a_regular_file() -> FontFileError {
+    FontFileError::Io(scan::not_a_regular_file())
+}
 
 /// The installed fonts: the platform's font folders, the files its font service knows, the font
 /// store and the app's own folders, plus faces added from files or bytes.
@@ -301,9 +637,13 @@ pub struct Catalog {
     scan: Mutex<ScanState>,
     stamp: Mutex<Stamp>,
     generation: AtomicU64,
+    /// Locked while [`Catalog::publish`] moves the generation on, so it and the history agree.
+    history: Mutex<History>,
     added: Mutex<Added>,
-    loaded: Mutex<HashMap<String, FamilyLoad>>,
-    files: Mutex<HashMap<PathBuf, Weak<[u8]>>>,
+    next_scope: AtomicU64,
+    /// Loaded families by scope (`None`: unscoped) and lowercase family name.
+    loaded: Mutex<HashMap<(Option<Scope>, String), FamilyLoad>>,
+    files: Mutex<HashMap<PathBuf, Loaded>>,
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -320,22 +660,49 @@ impl Catalog {
     pub fn new(env: FontEnv) -> Self {
         Self {
             env,
-            config: RwLock::new(Config { app_dirs: Vec::new(), listers: Vec::new(), font_service: cfg!(feature = "system") }),
+            config: RwLock::new(Config {
+                app_dirs: Vec::new(),
+                confined_dirs: Vec::new(),
+                listers: Vec::new(),
+                font_service: cfg!(feature = "system"),
+            }),
             index: RwLock::new(Arc::new(Index::default())),
             ready: OnceLock::new(),
             scan: Mutex::new(ScanState::default()),
             stamp: Mutex::new(Stamp::default()),
             generation: AtomicU64::new(0),
+            history: Mutex::new(History::default()),
             added: Mutex::new(Added::default()),
+            next_scope: AtomicU64::new(0),
             loaded: Mutex::new(HashMap::new()),
             files: Mutex::new(HashMap::new()),
         }
     }
 
-    /// The process's catalog, for [`FontEnv::from_process`].
+    /// A catalog of no installed fonts: no font folders, no font store and no font service. It
+    /// finds only the faces added to it ([`Catalog::add_bytes`]) and the folders given to
+    /// [`Catalog::set_app_dirs`] and [`Catalog::set_confined_dirs`]. For a CLI's "no system
+    /// fonts" switch ([`Catalog::init_global`]) and for tests that must not see the host's fonts.
+    pub fn without_installed_fonts() -> Self {
+        Self::new(FontEnv { os: Os::None, ..FontEnv::default() }).with_font_service(false)
+    }
+
+    /// The process's catalog: the one [`Catalog::init_global`] set, else one for
+    /// [`FontEnv::from_process`].
     pub fn global() -> &'static Arc<Catalog> {
-        static GLOBAL: OnceLock<Arc<Catalog>> = OnceLock::new();
         GLOBAL.get_or_init(|| Arc::new(Catalog::new(FontEnv::from_process())))
+    }
+
+    /// Make `catalog` the process's catalog ([`Catalog::global`]), for example
+    /// [`Catalog::without_installed_fonts`] for a CLI's "no system fonts" switch. Call it before
+    /// anything uses the global catalog; once something has, the catalog comes back as the error.
+    pub fn init_global(catalog: Catalog) -> Result<&'static Arc<Catalog>, Box<Catalog>> {
+        let mut catalog = Some(catalog);
+        let global = GLOBAL.get_or_init(|| Arc::new(catalog.take().unwrap_or_else(|| Catalog::new(FontEnv::from_process()))));
+        match catalog {
+            Some(catalog) => Err(Box::new(catalog)),
+            None => Ok(global),
+        }
     }
 
     /// Whether scans ask the platform's font service (CoreText, DirectWrite, fontconfig) for the
@@ -359,6 +726,13 @@ impl Catalog {
     /// [`Catalog::installed_fonts_changed`].
     pub fn set_app_dirs(&self, dirs: Vec<PathBuf>) {
         self.write_config().app_dirs = dirs;
+    }
+
+    /// Folders the user or an automation caller picked, read with their subfolders from the next
+    /// scan on, as [`Source::User`]. The scan stays inside each: a link whose target is outside
+    /// the folder is skipped. A change shows in [`Catalog::installed_fonts_changed`].
+    pub fn set_confined_dirs(&self, dirs: Vec<PathBuf>) {
+        self.write_config().confined_dirs = dirs;
     }
 
     fn write_config(&self) -> std::sync::RwLockWriteGuard<'_, Config> {
@@ -432,8 +806,11 @@ impl Catalog {
             return false;
         }
         let stamp = lock(&self.stamp);
-        if stamp.app_dirs != self.read_config().app_dirs {
-            return true;
+        {
+            let config = self.read_config();
+            if stamp.app_dirs != config.app_dirs || stamp.confined_dirs != config.confined_dirs {
+                return true;
+            }
         }
         if stamp.dirs.iter().any(|(p, t)| modified(p) != *t) {
             return true;
@@ -462,9 +839,30 @@ impl Catalog {
         Watch { stop }
     }
 
-    /// Counts the catalog's changes: each scan, and each face added or removed.
+    /// Counts the changes unscoped lookups see: each scan, and each face added or removed
+    /// without a scope. Faces added to or removed from a scope don't change it, so other
+    /// documents don't lay out again; [`Catalog::generation_in`] counts those too.
     pub fn generation(&self) -> u64 {
         self.generation.load(Ordering::Acquire)
+    }
+
+    /// Counts the changes lookups in `scope` see: [`Catalog::generation`] plus a stamp of the
+    /// scope's last change, taken from one counter of every scope's changes. It never goes down
+    /// and never repeats a value, [`Catalog::remove_scope`] and adding to the scope again
+    /// included. Read it before resolving or laying out, as for [`Catalog::changes_since`]: a
+    /// change that lands in between then shows as a newer value next time, instead of the old
+    /// layout being kept under it.
+    pub fn generation_in(&self, scope: Scope) -> u64 {
+        let own = lock(&self.added).scopes.get(&scope).map_or(0, |s| s.stamp);
+        self.generation() + own
+    }
+
+    /// Counts the changes of `scope`'s own faces: each add to it and each removal from it, and
+    /// nothing else (no scan, no unscoped change, no other scope's). 0 for a scope nothing was
+    /// added to. It never goes down, [`Catalog::remove_scope`] included. Read it before resolving
+    /// or laying out, as [`Catalog::generation_in`] says.
+    pub fn scope_generation(&self, scope: Scope) -> u64 {
+        lock(&self.added).scopes.get(&scope).map_or(0, |s| s.changes)
     }
 
     fn snapshot(&self) -> Arc<Index> {
@@ -472,10 +870,67 @@ impl Catalog {
         Arc::clone(&self.index.read().unwrap_or_else(PoisonError::into_inner))
     }
 
-    fn publish(&self, index: Index) {
-        *self.index.write().unwrap_or_else(PoisonError::into_inner) = Arc::new(index);
+    /// What changed for unscoped lookups since `generation` (a value of
+    /// [`Catalog::generation`]): the families added, removed and changed, so an app re-resolves
+    /// only the names those affect and lays out only the documents that use them. Take the
+    /// generation before resolving a document's fonts, so a change during that shows in the next
+    /// call. `full` when the history no longer reaches back that far (it keeps the last 64
+    /// changes of the family set, and the first scan of a large system clears it): re-resolve
+    /// everything then. Scopes have their own [`Catalog::generation_in`].
+    pub fn changes_since(&self, generation: u64) -> Changes {
+        let history = lock(&self.history);
+        let now = self.generation();
+        if generation >= now {
+            return Changes { generation: now, ..Changes::default() };
+        }
+        if generation < history.floor {
+            return Changes { generation: now, full: true, ..Changes::default() };
+        }
+        // Each family's state before the first change and after the last, with its latest name.
+        let mut net: HashMap<&str, (bool, bool, &str)> = HashMap::new();
+        for (key, name, change) in history.changes.iter().filter(|(g, _)| *g > generation).flat_map(|(_, c)| c) {
+            let entry = net.entry(key.as_str()).or_insert((*change != Change::Added, false, name.as_str()));
+            entry.1 = *change != Change::Removed;
+            entry.2 = name.as_str();
+        }
+        let mut changes = Changes { generation: now, ..Changes::default() };
+        for (before, after, name) in net.into_values() {
+            match (before, after) {
+                (false, true) => changes.added.push(name.to_owned()),
+                (true, false) => changes.removed.push(name.to_owned()),
+                (true, true) => changes.changed.push(name.to_owned()),
+                (false, false) => {}
+            }
+        }
+        for list in [&mut changes.added, &mut changes.removed, &mut changes.changed] {
+            list.sort_by_cached_key(|f| (f.to_lowercase(), f.clone()));
+        }
+        changes
+    }
+
+    fn publish(&self, mut index: Index) {
+        index.signatures = index.family_signatures();
+        let mut history = lock(&self.history);
+        let new = Arc::new(index);
+        let old = std::mem::replace(&mut *self.index.write().unwrap_or_else(PoisonError::into_inner), Arc::clone(&new));
         lock(&self.loaded).clear();
-        self.generation.fetch_add(1, Ordering::AcqRel);
+        let generation = self.generation.fetch_add(1, Ordering::AcqRel) + 1;
+        history.record(generation, &old, &new);
+    }
+
+    /// The shared index, and the view of `scope` when the scope has faces.
+    fn lookup(&self, scope: Scope) -> (Arc<Index>, Option<Arc<View>>) {
+        let base = self.snapshot();
+        let mut added = lock(&self.added);
+        let Some(scoped) = added.scopes.get_mut(&scope).filter(|s| !s.faces.is_empty()) else { return (base, None) };
+        if let Some(view) = &scoped.view
+            && Arc::ptr_eq(&view.base, &base)
+        {
+            return (base, Some(Arc::clone(view)));
+        }
+        let view = Arc::new(View::build(&scoped.faces, Arc::clone(&base)));
+        scoped.view = Some(Arc::clone(&view));
+        (base, Some(view))
     }
 
     /// The family names, sorted ignoring case.
@@ -483,23 +938,50 @@ impl Catalog {
         Arc::clone(&self.snapshot().families)
     }
 
-    /// Every face, added faces first.
+    /// The family names in `scope` ([`Catalog::families`] plus the scope's), sorted ignoring case.
+    pub fn families_in(&self, scope: Scope) -> Arc<[String]> {
+        match self.lookup(scope) {
+            (_, Some(view)) => Arc::clone(&view.families),
+            (base, None) => Arc::clone(&base.families),
+        }
+    }
+
+    /// Every face added without a scope or installed, added faces first.
     pub fn faces(&self) -> Arc<[FaceInfo]> {
         Arc::clone(&self.snapshot().infos)
+    }
+
+    /// The faces added to `scope`, in the order they were added; not the unscoped or installed
+    /// faces. Of the faces with the same family, style, PostScript name and instance, the first
+    /// added is listed, as lookups in the scope see it. It never waits for a scan.
+    pub fn faces_in(&self, scope: Scope) -> Vec<FaceInfo> {
+        let added = lock(&self.added);
+        let mut seen = HashSet::new();
+        added.scopes.get(&scope).map_or_else(Vec::new, |s| s.faces.iter().filter(|f| seen.insert(identity(f))).map(|f| f.info.clone()).collect())
     }
 
     /// The family `name` names: its own name ignoring ASCII case, or any other of its names
     /// (another language, a legacy name) ignoring case and everything but letters and digits.
     pub fn family(&self, name: &str) -> Option<String> {
-        let index = self.snapshot();
-        let i = *index.family_of(name)?.first()?;
-        index.face(i).map(|f| f.info.family.clone())
+        family_name(&self.snapshot(), name)
+    }
+
+    /// [`Catalog::family`] in `scope`.
+    pub fn family_in(&self, scope: Scope, name: &str) -> Option<String> {
+        let (base, view) = self.lookup(scope);
+        view.filter(|v| v.answers(name)).and_then(|v| family_name(&v.index, name)).or_else(|| family_name(&base, name))
     }
 
     /// The faces of the family `name` names ([`Catalog::family`]).
     pub fn styles(&self, family: &str) -> Vec<FaceInfo> {
-        let index = self.snapshot();
-        index.family_of(family).unwrap_or_default().iter().filter_map(|i| index.face(*i)).map(|f| f.info.clone()).collect()
+        styles_of(&self.snapshot(), family).unwrap_or_default()
+    }
+
+    /// [`Catalog::styles`] in `scope`: for a family the scope has faces of, the scope's faces and
+    /// the shared faces of other styles.
+    pub fn styles_in(&self, scope: Scope, family: &str) -> Vec<FaceInfo> {
+        let (base, view) = self.lookup(scope);
+        view.filter(|v| v.answers(family)).and_then(|v| styles_of(&v.index, family)).or_else(|| styles_of(&base, family)).unwrap_or_default()
     }
 
     /// The face for `name` in `style`, and how it matched. `name` is a family name (any of its
@@ -509,46 +991,85 @@ impl Catalog {
     /// italic differing counting as 1000, then the nearest width. An empty style is `Regular`.
     /// `None` when nothing has that name.
     pub fn resolve(&self, name: &str, style: &str) -> Option<(FaceInfo, Match)> {
-        let index = self.snapshot();
-        let (i, matched) = index.resolve(name, style)?;
-        Some((index.face(i)?.info.clone(), matched))
+        resolve_face(&self.snapshot(), name, style)
+    }
+
+    /// [`Catalog::resolve`] in `scope`: a name the scope's faces answer to resolves among them
+    /// and the shared faces of their families, any other name as [`Catalog::resolve`].
+    pub fn resolve_in(&self, scope: Scope, name: &str, style: &str) -> Option<(FaceInfo, Match)> {
+        let (base, view) = self.lookup(scope);
+        view.filter(|v| v.answers(name)).and_then(|v| resolve_face(&v.index, name, style)).or_else(|| resolve_face(&base, name, style))
     }
 
     /// The face with this PostScript name (a named instance's too), ignoring case and everything
     /// but letters and digits.
     pub fn by_postscript_name(&self, name: &str) -> Option<FaceInfo> {
-        let index = self.snapshot();
-        let i = *index.postscript.get(&norm(name))?;
-        index.face(i).map(|f| f.info.clone())
+        postscript_face(&self.snapshot(), name)
+    }
+
+    /// [`Catalog::by_postscript_name`] in `scope`, the scope's faces first.
+    pub fn by_postscript_name_in(&self, scope: Scope, name: &str) -> Option<FaceInfo> {
+        let (base, view) = self.lookup(scope);
+        match view.and_then(|v| Some((v.postscript(name)?, v))) {
+            Some((i, v)) => v.index.face(i).map(|f| f.info.clone()),
+            None => postscript_face(&base, name),
+        }
     }
 
     /// The data of `face`, read from its file (shared with other faces of the file still loaded).
     pub fn load(&self, face: &FaceInfo) -> Result<FontData, FontFileError> {
+        self.load_stamped(face).map(|(data, _)| data)
+    }
+
+    /// [`Catalog::load`], with the stamp of the file the bytes were read from (`None` for added
+    /// bytes, or a file that can't be stamped).
+    pub(crate) fn load_stamped(&self, face: &FaceInfo) -> Result<(FontData, Option<FileStamp>), FontFileError> {
         if let Some(blob) = face.blob {
             let bytes = lock(&self.added).blobs.get(&blob).cloned().ok_or(FontFileError::Gone)?;
-            return Ok(FontData { bytes, index: face.index });
+            return Ok((FontData { bytes, index: face.index }, None));
         }
         let path = face.path.as_deref().ok_or(FontFileError::Gone)?;
         if crate::suitcase::is_suitcase(path) {
+            // The scan gives a confined folder's suitcases no faces ([`scan::opened_file_faces`]).
+            if face.confined {
+                return Err(FontFileError::NotAFont);
+            }
+            // Taken before the read: a change during it shows as a change.
+            let stamp = std::fs::metadata(path).ok().map(|m| file_stamp(&m));
             let font = crate::suitcase::read_fonts(path).into_iter().nth(face.index as usize).ok_or(FontFileError::NotAFont)?;
-            return Ok(FontData { bytes: font.into(), index: 0 });
+            return Ok((FontData { bytes: font.into(), index: 0 }, stamp));
         }
-        Ok(FontData { bytes: self.file_bytes(path)?, index: face.index })
+        let (bytes, stamp) = self.file_bytes(path, face.confined)?;
+        Ok((FontData { bytes, index: face.index }, Some(stamp)))
     }
 
-    fn file_bytes(&self, path: &Path) -> Result<Arc<[u8]>, FontFileError> {
-        if let Some(bytes) = lock(&self.files).get(path).and_then(Weak::upgrade) {
-            return Ok(bytes);
+    /// The bytes of the file at `path`, shared while anything holds them. With `no_follow`
+    /// (a confined file), a link in its place is refused, and so are bytes cached by a read that
+    /// followed links.
+    fn file_bytes(&self, path: &Path, no_follow: bool) -> Result<(Arc<[u8]>, FileStamp), FontFileError> {
+        // A file replaced in place since it was read is read again.
+        let meta = if no_follow { std::fs::symlink_metadata(path) } else { std::fs::metadata(path) };
+        if let Some(meta) = meta.ok().filter(std::fs::Metadata::is_file)
+            && let Some(bytes) =
+                lock(&self.files).get(path).filter(|c| c.stamp == file_stamp(&meta) && (c.no_follow || !no_follow)).and_then(|c| c.bytes.upgrade())
+        {
+            return Ok((bytes, file_stamp(&meta)));
         }
-        let size = std::fs::metadata(path)?.len();
+        use std::io::Read;
+        let file = scan::open_regular(path, no_follow)?;
+        let meta = file.metadata()?;
+        let size = meta.len();
         if size > MAX_LOAD {
             return Err(FontFileError::TooLarge { size, max: MAX_LOAD });
         }
-        let bytes: Arc<[u8]> = std::fs::read(path)?.into();
+        let mut data = Vec::new();
+        file.take(MAX_LOAD).read_to_end(&mut data)?;
+        let bytes: Arc<[u8]> = data.into();
         let mut files = lock(&self.files);
-        files.retain(|_, w| w.strong_count() > 0);
-        files.insert(path.to_path_buf(), Arc::downgrade(&bytes));
-        Ok(bytes)
+        files.retain(|_, c| c.bytes.strong_count() > 0);
+        let stamp = file_stamp(&meta);
+        files.insert(path.to_path_buf(), Loaded { stamp, no_follow, bytes: Arc::downgrade(&bytes) });
+        Ok((bytes, stamp))
     }
 
     /// Every face of the family `family` names ([`Catalog::family`]) with its data. The first
@@ -557,41 +1078,95 @@ impl Catalog {
     /// read are left out. After a rescan, the next call reads the files again.
     pub fn load_family(&self, family: &str) -> Arc<[LoadedFace]> {
         let Some(name) = self.family(family) else { return Arc::from([]) };
-        let cell = Arc::clone(lock(&self.loaded).entry(name.to_ascii_lowercase()).or_default());
+        let cell = Arc::clone(lock(&self.loaded).entry((None, name.to_ascii_lowercase())).or_default());
         Arc::clone(
             cell.get_or_init(|| self.styles(&name).into_iter().filter_map(|info| Some(LoadedFace { data: self.load(&info).ok()?, info })).collect()),
         )
     }
 
-    /// Add the faces of a font file's `bytes` (a font or a collection) for this session, as
-    /// `source`. Returns the faces added.
-    pub fn add_bytes(&self, bytes: Vec<u8>, source: Source, limits: &Limits) -> Result<Vec<FaceInfo>, FontFileError> {
-        let size = bytes.len() as u64;
-        if size > limits.max_file_bytes {
-            return Err(FontFileError::TooLarge { size, max: limits.max_file_bytes });
-        }
-        let mut faces = scan::data_faces(&bytes, limits.max_faces_per_file, None, source);
-        if faces.is_empty() {
-            return Err(FontFileError::NotAFont);
-        }
-        self.ensure();
-        let mut added = lock(&self.added);
-        if added.faces.len() + faces.len() > limits.max_added_faces {
-            return Err(FontFileError::TooManyFaces { max: limits.max_added_faces });
-        }
-        let blob = added.next_blob;
-        added.next_blob += 1;
-        added.blobs.insert(blob, bytes.into());
-        for f in &mut faces {
-            f.info.blob = Some(blob);
-        }
-        Ok(self.push_added(added, faces))
+    /// [`Catalog::load_family`] in `scope`. A family the scope has no faces of is shared with
+    /// unscoped loads.
+    pub fn load_family_in(&self, scope: Scope, family: &str) -> Arc<[LoadedFace]> {
+        let (_, view) = self.lookup(scope);
+        let Some(name) = view.filter(|v| v.answers(family)).and_then(|v| family_name(&v.index, family)) else { return self.load_family(family) };
+        let cell = Arc::clone(lock(&self.loaded).entry((Some(scope), name.to_ascii_lowercase())).or_default());
+        Arc::clone(cell.get_or_init(|| {
+            self.styles_in(scope, &name).into_iter().filter_map(|info| Some(LoadedFace { data: self.load(&info).ok()?, info })).collect()
+        }))
     }
 
-    /// Add the faces of the font file at `path` for this session, as `source`, read in place.
-    /// Returns the faces added.
+    /// A new, empty scope, for one document's fonts. Faces added to it with
+    /// [`Catalog::add_bytes_in`] and [`Catalog::add_file_in`] are seen only by lookups in it
+    /// ([`Catalog::resolve_in`] and the other `_in` lookups) until [`Catalog::remove_scope`].
+    pub fn new_scope(&self) -> Scope {
+        Scope(self.next_scope.fetch_add(1, Ordering::Relaxed))
+    }
+
+    /// Add the faces of a font file's `bytes` (a font or a collection) for this session, as
+    /// `source`, seen by every lookup. Returns the faces added. It never waits for a scan: faces
+    /// added before the first scan join it. The catalog keeps `bytes` as an `Arc<[u8]>`; pass
+    /// one to share it without a copy.
+    pub fn add_bytes(&self, bytes: impl Into<Arc<[u8]>>, source: Source, limits: &Limits) -> Result<Vec<FaceInfo>, FontFileError> {
+        self.add_bytes_to(None, bytes.into(), source, limits)
+    }
+
+    /// [`Catalog::add_bytes`] for several fonts, with one rebuild of the lookups for all of them
+    /// (an app's bundled fonts). Returns each font's faces or why it wasn't added, in order.
+    pub fn add_bytes_many<B: Into<Arc<[u8]>>>(
+        &self,
+        fonts: impl IntoIterator<Item = B>,
+        source: Source,
+        limits: &Limits,
+    ) -> Vec<Result<Vec<FaceInfo>, FontFileError>> {
+        let parsed: Vec<_> = fonts.into_iter().map(|b| bytes_faces(b.into(), source, limits)).collect();
+        let mut added = lock(&self.added);
+        let mut all = Vec::new();
+        let results = parsed
+            .into_iter()
+            .map(|p| {
+                let (bytes, faces) = p?;
+                let faces = added.store(None, bytes, faces, all.len(), limits)?;
+                let infos = faces.iter().map(|f| f.info.clone()).collect();
+                all.extend(faces);
+                Ok(infos)
+            })
+            .collect();
+        if !all.is_empty() {
+            self.push_added(added, None, all);
+        }
+        results
+    }
+
+    /// [`Catalog::add_bytes`] into `scope`: only lookups in the scope see the faces.
+    pub fn add_bytes_in(&self, scope: Scope, bytes: impl Into<Arc<[u8]>>, source: Source, limits: &Limits) -> Result<Vec<FaceInfo>, FontFileError> {
+        self.add_bytes_to(Some(scope), bytes.into(), source, limits)
+    }
+
+    fn add_bytes_to(&self, scope: Option<Scope>, bytes: Arc<[u8]>, source: Source, limits: &Limits) -> Result<Vec<FaceInfo>, FontFileError> {
+        let (bytes, faces) = bytes_faces(bytes, source, limits)?;
+        let mut added = lock(&self.added);
+        let faces = added.store(scope, bytes, faces, 0, limits)?;
+        Ok(self.push_added(added, scope, faces))
+    }
+
+    /// Add the faces of the font file at `path` for this session, as `source`, read in place and
+    /// seen by every lookup. Returns the faces added. A path that isn't a regular file (after
+    /// following links) is refused unopened.
     pub fn add_file(&self, path: &Path, source: Source, limits: &Limits) -> Result<Vec<FaceInfo>, FontFileError> {
-        let size = std::fs::metadata(path)?.len();
+        self.add_file_to(None, path, source, limits)
+    }
+
+    /// [`Catalog::add_file`] into `scope`: only lookups in the scope see the faces.
+    pub fn add_file_in(&self, scope: Scope, path: &Path, source: Source, limits: &Limits) -> Result<Vec<FaceInfo>, FontFileError> {
+        self.add_file_to(Some(scope), path, source, limits)
+    }
+
+    fn add_file_to(&self, scope: Option<Scope>, path: &Path, source: Source, limits: &Limits) -> Result<Vec<FaceInfo>, FontFileError> {
+        let meta = std::fs::metadata(path)?;
+        if !meta.is_file() {
+            return Err(not_a_regular_file());
+        }
+        let size = meta.len();
         if size > limits.max_file_bytes {
             return Err(FontFileError::TooLarge { size, max: limits.max_file_bytes });
         }
@@ -604,55 +1179,119 @@ impl Catalog {
         if faces.is_empty() {
             return Err(FontFileError::NotAFont);
         }
-        self.ensure();
-        let added = lock(&self.added);
-        if added.faces.len() + faces.len() > limits.max_added_faces {
-            return Err(FontFileError::TooManyFaces { max: limits.max_added_faces });
+        // Taken before the read, so a change during it shows when the file is added again.
+        let stamp = file_stamp(&meta);
+        for f in &mut faces {
+            f.info.file = Some(stamp);
         }
-        Ok(self.push_added(added, faces))
+        let added = lock(&self.added);
+        added.room(scope, faces.len(), limits)?;
+        Ok(self.push_added(added, scope, faces))
     }
 
-    fn push_added(&self, mut added: MutexGuard<'_, Added>, faces: Vec<Face>) -> Vec<FaceInfo> {
+    /// Unscoped faces join the shared index (a new generation); a scope's faces only its view.
+    fn push_added(&self, mut added: MutexGuard<'_, Added>, scope: Option<Scope>, faces: Vec<Face>) -> Vec<FaceInfo> {
         let infos = faces.iter().map(|f| f.info.clone()).collect();
-        added.faces.extend(faces);
-        let scanned = self.scanned();
-        self.publish(Index::build(&added.faces, &scanned));
+        match scope {
+            None => {
+                added.faces.extend(faces);
+                added.changes += 1;
+                self.rebuild(&added);
+            }
+            Some(scope) => {
+                added.changed(scope).faces.extend(faces);
+                // Under the lock, as `publish` does: no load reads the old faces after the stamp.
+                lock(&self.loaded).retain(|(s, _), _| *s != Some(scope));
+            }
+        }
         infos
     }
 
-    /// Remove every added face of `source` (a closed document's fonts). Returns how many.
+    /// Remove every face of `source` added without a scope (a closed document's fonts). Returns
+    /// how many. Scopes keep theirs ([`Catalog::remove_scope`]).
     pub fn remove_added(&self, source: Source) -> usize {
         let mut added = lock(&self.added);
         let before = added.faces.len();
         added.faces.retain(|f| f.info.source != source);
-        let blobs: HashSet<u64> = added.faces.iter().filter_map(|f| f.info.blob).collect();
-        added.blobs.retain(|b, _| blobs.contains(b));
+        added.drop_unused_blobs();
         let removed = before - added.faces.len();
         if removed > 0 {
-            let scanned = self.scanned();
-            self.publish(Index::build(&added.faces, &scanned));
+            added.changes += 1;
+            self.rebuild(&added);
         }
         removed
     }
 
-    /// The faces the last scan found.
-    fn scanned(&self) -> Vec<Face> {
-        let scan = lock(&self.scan);
-        let mut faces: Vec<(&PathBuf, &Cached)> = scan.files.iter().collect();
-        faces.sort_by(|a, b| a.0.cmp(b.0));
-        faces.into_iter().flat_map(|(_, c)| c.faces.iter().cloned()).collect()
+    /// Remove `scope`'s faces (its document closed). Returns how many. Other scopes and unscoped
+    /// lookups don't change, nor does [`Catalog::generation`]. The scope keeps a few bytes, so
+    /// [`Catalog::generation_in`] never repeats a value.
+    pub fn remove_scope(&self, scope: Scope) -> usize {
+        let mut added = lock(&self.added);
+        let removed = added.scopes.get(&scope).map_or(0, |s| s.faces.len());
+        if removed == 0 {
+            return 0;
+        }
+        added.changed(scope).faces.clear();
+        added.drop_unused_blobs();
+        lock(&self.loaded).retain(|(s, _), _| *s != Some(scope));
+        removed
+    }
+
+    /// Remove the faces [`Catalog::add_file_in`] added to `scope` from the file at `path` (the path
+    /// as it was passed; the document deleted or replaced one of its font files). Returns how
+    /// many. A change of the scope's faces, as an add is, when there were any.
+    pub fn remove_file_in(&self, scope: Scope, path: &Path) -> usize {
+        let mut added = lock(&self.added);
+        let from_file = |f: &Face| f.info.blob.is_none() && f.info.path.as_deref() == Some(path);
+        let removed = added.scopes.get(&scope).map_or(0, |s| s.faces.iter().filter(|f| from_file(f)).count());
+        if removed == 0 {
+            return 0;
+        }
+        added.changed(scope).faces.retain(|f| !from_file(f));
+        lock(&self.loaded).retain(|(s, _), _| *s != Some(scope));
+        removed
+    }
+
+    /// Every face the catalog holds (the last scan's, those added without a scope and every
+    /// scope's) passed to `visit` under the lock of the added faces, without waiting for a scan.
+    /// Returns what [`Catalog::face_changes`] returned then.
+    pub(crate) fn visit_faces(&self, mut visit: impl FnMut(&FaceInfo)) -> (u64, u64) {
+        let added = lock(&self.added);
+        let scanned = added.scanned.iter().flatten().flat_map(|f| f.iter());
+        for f in added.faces.iter().chain(scanned).chain(added.scopes.values().flat_map(|s| &s.faces)) {
+            visit(&f.info);
+        }
+        (self.generation(), added.changes)
+    }
+
+    /// [`Catalog::generation`] and a count of every add and removal, scoped or not: when neither
+    /// moved, no face was added to or removed from the catalog and no scan changed it.
+    pub(crate) fn face_changes(&self) -> (u64, u64) {
+        // The generation moves under the same lock (`publish`, through `rebuild`).
+        let added = lock(&self.added);
+        (self.generation(), added.changes)
+    }
+
+    /// Publish the added faces with the last scan's; before the first scan, which does that,
+    /// nothing.
+    fn rebuild(&self, added: &Added) {
+        if let Some(scanned) = &added.scanned {
+            self.publish(Index::build(&added.faces, scanned.iter().flat_map(|f| f.iter())));
+        }
     }
 
     fn scan_now(&self, refresh: bool) {
         let mut state = lock(&self.scan);
-        let (app_dirs, listers, service) = {
+        let (app_dirs, confined_dirs, listers, service) = {
             let c = self.read_config();
-            (c.app_dirs.clone(), c.listers.clone(), c.font_service)
+            (c.app_dirs.clone(), c.confined_dirs.clone(), c.listers.clone(), c.font_service)
         };
         let ignore_case = self.env.os == Os::Windows;
-        let mut roots: Vec<(PathBuf, Source)> = font_dirs(&self.env).into_iter().map(|d| (d, Source::System)).collect();
-        roots.extend(font_store_dir(&self.env).map(|d| (d, Source::Store)));
-        roots.extend(app_dirs.iter().map(|d| (d.clone(), Source::App)));
+        // Each folder with its source and whether the walk stays inside it.
+        let mut roots: Vec<(PathBuf, Source, bool)> = font_dirs(&self.env).into_iter().map(|d| (d, Source::System, false)).collect();
+        roots.extend(font_store_dir(&self.env).map(|d| (d, Source::Store, false)));
+        roots.extend(app_dirs.iter().map(|d| (d.clone(), Source::App, false)));
+        roots.extend(confined_dirs.iter().map(|d| (d.clone(), Source::User, true)));
 
         let mut named: Vec<PathBuf> = Vec::new();
         let mut registered = Vec::new();
@@ -668,13 +1307,14 @@ impl Catalog {
         }
 
         let mut walk = Walk { ignore_case, seen_dirs: HashSet::new(), seen_files: HashSet::new(), entries: 0, dirs: Vec::new(), files: Vec::new() };
-        for (root, source) in &roots {
-            walk.dir(root, *source, 0);
+        for (root, source, confined) in &roots {
+            let inside = confined.then(|| walk.key(root));
+            walk.dir(root, *source, 0, inside.as_deref());
         }
         let mut parents = HashSet::new();
         for file in named {
             if file.is_dir() {
-                walk.dir(&file, Source::System, 0);
+                walk.dir(&file, Source::System, 0, None);
                 continue;
             }
             if let Some(parent) = file.parent()
@@ -682,33 +1322,48 @@ impl Catalog {
             {
                 walk.dirs.push((parent.to_path_buf(), modified(parent)));
             }
-            walk.file(file, Source::System, true);
+            walk.file(file, Source::System, true, None);
         }
 
         let mut files = HashMap::new();
-        for (path, source, by_name) in walk.files {
+        for (path, source, by_name, real) in walk.files {
             let Ok(meta) = std::fs::metadata(&path) else { continue };
-            let (len, mtime) = (meta.len(), meta.modified().ok());
-            let cached = state.files.remove(&path).filter(|c| c.len == len && c.modified == mtime);
+            // A FIFO or device named like a font would block the scan or never end.
+            if !meta.is_file() {
+                continue;
+            }
+            let stamp = file_stamp(&meta);
+            let cached = state.files.remove(&path).filter(|c| c.stamp == stamp);
             let mut faces = match cached {
                 Some(c) => c.faces,
-                None if by_name || scan::is_font_file(&path) || crate::suitcase::is_suitcase(&path) => scan::file_faces(&path, MAX_SCAN_READ, source),
+                None if by_name || scan::is_font_file(&path) || crate::suitcase::is_suitcase(&path) => {
+                    Arc::new(scan::opened_file_faces(&path, MAX_SCAN_READ, source, real))
+                }
                 None => continue,
             };
-            for f in &mut faces {
-                f.info.source = source;
+            if faces.iter().any(|f| f.info.source != source || f.info.confined != real || f.info.file != Some(stamp)) {
+                for f in Arc::make_mut(&mut faces) {
+                    f.info.source = source;
+                    f.info.confined = real;
+                    f.info.file = Some(stamp);
+                }
             }
-            files.insert(path, Cached { len, modified: mtime, faces });
+            files.insert(path, Cached { stamp, faces });
         }
+        let mut scanned: Vec<(&PathBuf, &Cached)> = files.iter().collect();
+        scanned.sort_by(|a, b| a.0.cmp(b.0));
+        let scanned: Vec<Arc<Vec<Face>>> = scanned.into_iter().map(|(_, c)| Arc::clone(&c.faces)).collect();
         state.files = files;
         drop(state);
 
-        *lock(&self.stamp) = Stamp { app_dirs, dirs: walk.dirs, registered };
-        let added = lock(&self.added);
-        let scanned = self.scanned();
-        self.publish(Index::build(&added.faces, &scanned));
+        *lock(&self.stamp) = Stamp { app_dirs, confined_dirs, dirs: walk.dirs, registered };
+        let mut added = lock(&self.added);
+        added.scanned = Some(scanned);
+        self.rebuild(&added);
     }
 }
+
+static GLOBAL: OnceLock<Arc<Catalog>> = OnceLock::new();
 
 /// Stops a [`Catalog::watch`] when dropped.
 #[must_use = "dropping a Watch stops it"]
@@ -729,8 +1384,9 @@ struct Walk {
     seen_files: HashSet<PathBuf>,
     entries: usize,
     dirs: Vec<(PathBuf, Option<SystemTime>)>,
-    /// Each file with where it was found and whether a lister named it.
-    files: Vec<(PathBuf, Source, bool)>,
+    /// Each file with where it was found, whether a lister named it, and whether it is a
+    /// confined folder's file recorded by its real path (opened without following a link).
+    files: Vec<(PathBuf, Source, bool, bool)>,
 }
 
 impl Walk {
@@ -739,9 +1395,11 @@ impl Walk {
         if self.ignore_case { PathBuf::from(real.to_string_lossy().to_lowercase()) } else { real }
     }
 
-    fn dir(&mut self, dir: &Path, source: Source, depth: usize) {
+    /// Walk `dir` and its subfolders. With `inside` (a confined folder's [`Walk::key`]), folders
+    /// and files whose real path is outside it are skipped.
+    fn dir(&mut self, dir: &Path, source: Source, depth: usize, inside: Option<&Path>) {
         let key = self.key(dir);
-        if !self.seen_dirs.insert(key) {
+        if inside.is_some_and(|root| !key.starts_with(root)) || !self.seen_dirs.insert(key) {
             return;
         }
         // Stamped before it is listed: a font installed meanwhile changes it after this.
@@ -761,18 +1419,29 @@ impl Walk {
         for (path, is_dir) in paths {
             if is_dir {
                 if depth < MAX_DEPTH {
-                    self.dir(&path, source, depth + 1);
+                    self.dir(&path, source, depth + 1, inside);
                 }
             } else {
-                self.file(path, source, false);
+                self.file(path, source, false, inside);
             }
         }
     }
 
-    fn file(&mut self, path: PathBuf, source: Source, by_name: bool) {
+    /// Record `path`. In a confined folder its real path is recorded, so a link swapped in after
+    /// this check can't lead the scan outside the folder.
+    fn file(&mut self, path: PathBuf, source: Source, by_name: bool, inside: Option<&Path>) {
         let key = self.key(&path);
-        if self.seen_files.insert(key) {
-            self.files.push((path, source, by_name));
+        if inside.is_some_and(|root| !key.starts_with(root)) || !self.seen_files.insert(key) {
+            return;
         }
+        let (path, real) = match inside {
+            // On Windows the real path is a `\\?\` path, which apps would show.
+            Some(_) if cfg!(unix) => match std::fs::canonicalize(&path) {
+                Ok(real) => (real, true),
+                Err(_) => return,
+            },
+            _ => (path, false),
+        };
+        self.files.push((path, source, by_name, real));
     }
 }
