@@ -97,6 +97,8 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   widget-state styling boundary.
 - [Panel docking](docs/ui-docking.md): validated panel moves, floating groups, workspace adapters
   and an optional egui docking surface.
+- [Native MCP suite plan](docs/native-mcp-suite-plan.md): proposed shared control and discovery
+  boundaries, app-first attachment, token measurements and phased adoption across 13 apps.
 
 ## License and credits
 
