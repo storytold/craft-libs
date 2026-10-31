@@ -299,6 +299,17 @@ and the digest that tells its profile from a document profile is still a hash of
 decoded profile bytes. PdfCraft's two raster tests are adapted in `tests/upstream_raster.rs`
 (`icc_profile_cache`).
 
+From [PdfCraft #3327](https://github.com/storytold/pdfcraft/pull/3327) (merged as
+b84121e978e13168caeaf86a63824111f16cdb99), hayro-interpret (35), marked `PdfCraft patch (35)` in
+the source: `path_as_rect` takes a five-element path as a rectangle only when its four points are
+distinct, each step from one to the next runs along a single axis, and the last returns to the
+first (with ClosePath, or a fourth line back to the exact start). Before, the length test also
+admitted one MoveTo and four LineTo, and the corner test only asked that every corner of the
+bounding box was visited, so a five-point open polyline whose ends reached the corners was drawn
+as that box (VectorCraft #2920: an open zigzag in an `.ai` file opened as a closed rectangle), and
+a clip of that shape was dropped. Tests: `context::path_as_rect_tests` and the `rectangles`
+module of `crates/pdf/tests/interpretation.rs`, which fails without the change.
+
 Local fixes on top of these ports, marked `Craft patch` or in the comments of the ported
 code: an inflated patch-mesh triangle is rebuilt with `Triangle::new`, so its stored dot
 products match its vertices (moving the points alone skewed barycentric coordinates by about

@@ -118,3 +118,114 @@ fn caller_decode_policy_survives_open_fallback() {
     assert_eq!(low.decode_limits().max_decoded_stream(), 32);
     assert_eq!(normal.decode_limits(), craft_pdf::syntax::DecodeLimits::default());
 }
+
+/// A path reaches the device as a rectangle only when it is one. A five-point open polyline whose
+/// points reach every corner of its own bounding box (VectorCraft #2920, a zigzag in an `.ai`
+/// file) used to be drawn as that box.
+#[cfg(feature = "interpret")]
+mod rectangles {
+    use craft_pdf::interpret::{
+        BlendMode, ClipPath, Context, Device, GlyphDrawMode, Image, InterpreterCache, InterpreterSettings, Paint, PathDrawMode, SoftMask,
+        TransformExt, font::Glyph,
+    };
+    use kurbo::{Affine, BezPath, Rect};
+
+    #[derive(Default)]
+    struct Shapes {
+        rects: usize,
+        paths: Vec<BezPath>,
+        clips: usize,
+    }
+
+    impl Device<'_> for Shapes {
+        fn set_soft_mask(&mut self, _: Option<SoftMask<'_>>) {}
+        fn set_blend_mode(&mut self, _: BlendMode) {}
+        fn draw_path(&mut self, path: &BezPath, _: Affine, _: &Paint<'_>, _: &PathDrawMode) {
+            self.paths.push(path.clone());
+        }
+        fn draw_rect(&mut self, _: &Rect, _: Affine, _: &Paint<'_>, _: &PathDrawMode) {
+            self.rects += 1;
+        }
+        fn push_clip_path(&mut self, _: &ClipPath) {
+            self.clips += 1;
+        }
+        fn push_transparency_group(&mut self, _: f32, _: Option<SoftMask<'_>>, _: BlendMode) {}
+        fn draw_glyph(&mut self, _: &Glyph<'_>, _: Affine, _: Affine, _: &Paint<'_>, _: &GlyphDrawMode) {}
+        fn draw_image(&mut self, _: Image<'_, '_>, _: Affine) {}
+        fn pop_clip_path(&mut self) {}
+        fn pop_transparency_group(&mut self) {}
+    }
+
+    fn draw(content: &str) -> Shapes {
+        let bytes = format!(
+            "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 120 60] /Contents 4 0 R >> endobj\n4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\ntrailer << /Root 1 0 R >>\n%%EOF",
+            content.len()
+        );
+        let pdf = craft_pdf::open_slice(bytes.as_bytes(), None).unwrap();
+        let page = &pdf.pages()[0];
+        let cache = InterpreterCache::new();
+        let mut context = Context::new(
+            page.initial_transform(true).to_kurbo(),
+            Rect::new(0.0, 0.0, 120.0, 60.0),
+            &cache,
+            page.xref(),
+            InterpreterSettings::default(),
+        );
+        let mut shapes = Shapes::default();
+        craft_pdf::interpret_page(page, &mut context, &mut shapes).unwrap();
+        shapes
+    }
+
+    /// The open zigzag of VectorCraft #2920: its ends and the points beside them land on all four
+    /// corners of its bounding box, and the peak at (60.571, 29.875) is on none.
+    const ZIGZAG: &str = "80 38 m 80 21.75 l 60.571 29.875 l 40 21.75 l 40 38 l";
+
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
+    fn an_open_five_point_polyline_is_stroked_as_drawn() {
+        let shapes = draw(&format!("0 0 0 RG 2 w {ZIGZAG} S"));
+        assert_eq!(shapes.rects, 0, "the zigzag was drawn as its bounding box");
+        assert_eq!(shapes.paths.len(), 1);
+        assert_eq!(shapes.paths[0].elements().len(), 5, "the five points arrive as written");
+    }
+
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
+    fn an_open_five_point_polyline_is_filled_as_drawn() {
+        let shapes = draw(&format!("0 0 0 rg {ZIGZAG} f"));
+        assert_eq!(shapes.rects, 0);
+        assert_eq!(shapes.paths.len(), 1);
+    }
+
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
+    fn a_closed_path_through_the_corners_out_of_order_is_not_a_rectangle() {
+        // A bow tie: every point is a corner of the bounding box, but two sides are diagonals.
+        let shapes = draw("0 0 0 RG 10 10 m 50 40 l 10 40 l 50 10 l h S");
+        assert_eq!(shapes.rects, 0);
+        assert_eq!(shapes.paths.len(), 1);
+    }
+
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
+    fn rectangles_still_take_the_rectangle_route() {
+        for content in [
+            "0 0 0 rg 10 10 40 30 re f",
+            "0 0 0 RG 10 10 40 30 re S",
+            "0 0 0 RG 10 10 m 50 10 l 50 40 l 10 40 l h S",
+            "0 0 0 rg 10 10 m 10 40 l 50 40 l 50 10 l 10 10 l f",
+        ] {
+            let shapes = draw(content);
+            assert_eq!((shapes.rects, shapes.paths.len()), (1, 0), "{content}");
+        }
+    }
+
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
+    fn a_polyline_clip_is_kept() {
+        // A clip that is a rectangle covering the page is dropped as a no-op; this one is not a
+        // rectangle, so it has to reach the device even though its bounding box covers the page.
+        let shapes = draw("0 0 m 120 0 l 60 30 l 0 60 l 120 60 l W n 0 0 0 rg 0 0 120 60 re f");
+        assert_eq!(shapes.clips, 1);
+    }
+}
