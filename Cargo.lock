@@ -1095,9 +1095,14 @@ dependencies = [
 name = "craft-window"
 version = "0.1.0"
 dependencies = [
+ "craft-atomic",
+ "craft-settings",
  "egui",
  "objc2 0.6.5",
  "objc2-app-kit 0.3.2",
+ "serde",
+ "serde_json",
+ "tempfile",
  "wayland-client",
 ]
 

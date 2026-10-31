@@ -137,6 +137,24 @@ for event in viewports.show(
 
 Immediate viewports repaint every window when one repaints, so cache expensive per-window drawing.
 
+## Window restore
+
+Feature `restore` (no egui): `craft_window::restore`.
+
+- `place(saved, monitors, home, &Defaults) -> Placement` is pure. First launch: the default size fitted
+  to the home monitor, maximized when it does not fit. Saved sizes are points at interface zoom 1.
+  A window with less than 64×64 pt of its top strip on any one monitor moves to its saved monitor,
+  else the nearest, else the primary; sizes clamp to the monitor's usable area and `min`. Positions
+  are physical pixels (negative left of or above the primary). `Defaults::no_position` (Wayland)
+  neither reads nor returns a position. Full screen returns only with `Defaults::restore_fullscreen`.
+- `Store::open(app_id)` keeps `window.json` beside `config.toml` (same folder rules as
+  `craft-settings`), `Store::in_memory()` keeps nothing. `get`, `set`, `save`.
+  Format: `{ "schema_version": 1, "windows": { "main": Placement, "<key>": Placement } }`.
+  Writes are atomic and private; a damaged file is moved aside as `window.broken-<ts>.json`; a newer
+  `schema_version` is read-only; unknown keys are written back unchanged.
+- `restore::legacy` reads eframe's `"window"` entry of `app.ron` (without a RON crate) and has small
+  JSON helpers for an app's own old format.
+
 ## Notes
 
 - The Wayland probe opens a short-lived connection and reads the global registry once, on its own

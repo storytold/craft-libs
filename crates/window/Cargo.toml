@@ -11,9 +11,15 @@ repository.workspace = true
 # `decorate`: set the decision on an `egui::ViewportBuilder`. `title_bar`: an app-drawn strip as
 # the title bar (on macOS with AppKit's `movable` flag). `Viewports`: one immediate viewport per window.
 egui = ["dep:egui", "dep:objc2", "dep:objc2-app-kit"]
+# `restore`: the window-restore store (`window.json` beside `config.toml`) and the pure `place`. No egui.
+restore = ["dep:craft-atomic", "dep:craft-settings", "dep:serde", "dep:serde_json"]
 
 [dependencies]
 egui = { workspace = true, optional = true }
+craft-atomic = { workspace = true, optional = true }
+craft-settings = { workspace = true, optional = true }
+serde = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
 
 # Only Linux and the BSDs probe a Wayland compositor; everywhere else the frame is the OS's.
 [target.'cfg(any(target_os = "linux", target_os = "freebsd", target_os = "openbsd", target_os = "netbsd"))'.dependencies]
@@ -23,6 +29,9 @@ wayland-client = "0.31"
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = { version = "0.6.4", default-features = false, features = ["std"], optional = true }
 objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSApplication", "NSButton", "NSControl", "NSResponder", "NSView", "NSWindow"], optional = true }
+
+[dev-dependencies]
+tempfile = "3"
 
 [lints]
 workspace = true

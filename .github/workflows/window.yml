@@ -35,3 +35,5 @@ jobs:
       - run: cargo clippy -p craft-window --all-targets --locked --features egui -- -D warnings
       - run: cargo test -p craft-window --locked -- --nocapture
       - run: cargo test -p craft-window --locked --features egui -- --nocapture
+      - run: cargo clippy -p craft-window --all-targets --locked --features restore -- -D warnings
+      - run: cargo test -p craft-window --locked --features restore,egui -- --nocapture
