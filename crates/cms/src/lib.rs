@@ -32,7 +32,7 @@ mod write;
 pub use builtin::Builtin;
 pub use clut::Clut;
 pub use curve::Curve;
-pub use gamut::GamutCheck;
+pub use gamut::{GamutCheck, Metric};
 pub use lut3d::Lut3d;
 pub use profile::{ColorSpace, Pcs, Profile, ProfileClass};
 pub use transform::{SampleKind, Transform, TransformOptions, black_point, cached};

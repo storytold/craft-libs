@@ -991,3 +991,61 @@ fn white_is_exact_on_every_path() {
         assert!(o[2] < 0.99, "{cmyk:?}: absolute paper {o:?}");
     }
 }
+
+/// `GamutCheck` measures in either metric (#62). ΔE76 overstates saturated colours — sRGB blue
+/// against the coated CMYK proof is 79.6 in ΔE76 and 15.0 in ΔE00 — and understates them near
+/// neutrals, so at the thresholds each metric is read against (4.0 and 2.0) the two disagree in
+/// both directions. DesignCraft computed its own warning in ΔE00 for that reason.
+#[test]
+fn gamut_check_measures_in_either_metric() {
+    use craft_cms::{GamutCheck, Metric};
+
+    assert_eq!(Metric::default(), Metric::De76, "the metric this has always used");
+    assert_eq!(Metric::De76.default_threshold(), 4.0);
+    assert_eq!(Metric::De2000.default_threshold(), 2.0);
+
+    let de76 = GamutCheck::with_metric(srgb(), cmyk(), Metric::De76, Metric::De76.default_threshold()).unwrap();
+    let de00 = GamutCheck::with_metric(srgb(), cmyk(), Metric::De2000, Metric::De2000.default_threshold()).unwrap();
+    assert_eq!(de76.metric(), Metric::De76);
+    assert_eq!(de00.metric(), Metric::De2000);
+
+    // `new` is the ΔE76 check it always was.
+    let old = GamutCheck::new(srgb(), cmyk(), 4.0).unwrap();
+    assert_eq!(old.metric(), Metric::De76);
+    for px in [[0.0, 0.0, 1.0], [1.0, 0.0, 0.0], [0.5, 0.5, 0.5]] {
+        assert_eq!(old.delta_e(&px).unwrap(), de76.delta_e(&px).unwrap(), "{px:?}");
+    }
+
+    // Saturated blue, the colour ΔE76 overstates most: both call it out of gamut, by numbers that
+    // are five times apart.
+    let blue = [0.0, 0.0, 1.0];
+    let (a, b) = (de76.delta_e(&blue).unwrap(), de00.delta_e(&blue).unwrap());
+    assert!((70.0..90.0).contains(&a), "blue in dE76: {a}");
+    assert!((10.0..20.0).contains(&b), "blue in dE2000: {b}");
+    assert!(a / b > 4.0, "dE76 overstates blue: {a} / {b}");
+    assert!(de76.out_of_gamut(&blue).unwrap() && de00.out_of_gamut(&blue).unwrap());
+
+    // A dark near-neutral olive, where ΔE00 is the larger of the two.
+    let olive = [0.3125, 0.25, 0.1875];
+    let (a, b) = (de76.delta_e(&olive).unwrap(), de00.delta_e(&olive).unwrap());
+    assert!(b > a, "dE2000 understated near the neutral axis: {a} / {b}");
+
+    // Over the cube, each metric flags colours the other does not, at its own threshold: the one
+    // threshold ΔE76 is given cannot hold for both ends of the space.
+    let n = 17;
+    let (mut only76, mut only00) = (0, 0);
+    for i in 0..n {
+        for j in 0..n {
+            for k in 0..n {
+                let d = |v: usize| v as f32 / (n - 1) as f32;
+                let px = [d(i), d(j), d(k)];
+                match (de76.out_of_gamut(&px).unwrap(), de00.out_of_gamut(&px).unwrap()) {
+                    (true, false) => only76 += 1,
+                    (false, true) => only00 += 1,
+                    _ => {}
+                }
+            }
+        }
+    }
+    assert!(only76 > 0 && only00 > 0, "dE76 only {only76}, dE2000 only {only00} of {}", n * n * n);
+}
