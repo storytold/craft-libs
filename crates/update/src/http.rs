@@ -131,6 +131,11 @@ impl Http {
 
     /// An optional token raises GitHub's limit from 60 to 5000 requests an hour. Only ever sent
     /// to api.github.com. Blank means none.
+    ///
+    /// ureq's Debug logs list only an allow-list of safe headers and leave `Authorization` out,
+    /// but its Trace logs are the unredacted wire, this token's `Authorization: Bearer` among it:
+    /// an app that sets one should redact Bearer tokens in its logger, or keep `ureq` and
+    /// `ureq_proto` at Debug or quieter.
     #[must_use]
     pub fn with_github_token(mut self, token: Option<String>) -> Self {
         self.token = token.map(|t| t.trim().to_string()).filter(|t| !t.is_empty());

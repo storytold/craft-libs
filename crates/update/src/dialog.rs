@@ -184,7 +184,10 @@ impl StartupPrompt {
                                 let ring = egui::Stroke::new(2.0, text_primary);
                                 ui.painter().rect_stroke(link.rect.expand(2.0), egui::CornerRadius::ZERO, ring, egui::StrokeKind::Outside);
                             }
-                            if link.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
+                            // `Release`'s fields are public: an app may build one from its own feed or
+                            // cache, so the link is checked here too, not only when parsed from GitHub.
+                            if link.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() && crate::release::safe_web_link(&self.release.html_url)
+                            {
                                 ui.ctx().open_url(egui::OpenUrl::new_tab(&self.release.html_url));
                             }
 
@@ -546,6 +549,33 @@ mod tests {
         let link = text_pos(&output, "What's new").expect("the link is painted");
         let button = text_pos(&output, "DOWNLOAD").expect("the button is painted");
         assert!((link.y - button.y).abs() <= 1.0, "link centred at {} but the button at {}", link.y, button.y);
+    }
+
+    /// #391: the "What's new" link opens the release page only when it is a safe web link; an app
+    /// that builds its own `Release` (a feed, a cache) can't hand the browser anything else.
+    #[test]
+    fn whats_new_opens_only_a_safe_link() {
+        let opened = |url: &str| {
+            let ctx = dark_context();
+            let mut prompt = prompt_for(false);
+            prompt.release.html_url = url.to_string();
+            frame(&ctx, &mut prompt, Vec::new());
+            let (_, output) = frame(&ctx, &mut prompt, Vec::new());
+            let at = text_pos(&output, "What's new").expect("the link is painted");
+            let button = |pressed| Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+            frame(&ctx, &mut prompt, vec![Event::PointerMoved(at)]);
+            frame(&ctx, &mut prompt, vec![button(true)]);
+            let (_, output) = frame(&ctx, &mut prompt, vec![button(false)]);
+            output.platform_output.commands.iter().find_map(|c| match c {
+                egui::OutputCommand::OpenUrl(u) => Some(u.url.clone()),
+                _ => None,
+            })
+        };
+        let page = "https://github.com/storytold/photocraft/releases/tag/v0.2.0";
+        assert_eq!(opened(page).as_deref(), Some(page));
+        for bad in ["", "file:///etc/passwd", "javascript:alert(1)", "https://evil.example/a&calc", "https://user@evil.example/"] {
+            assert_eq!(opened(bad), None, "{bad:?}");
+        }
     }
 
     #[test]
