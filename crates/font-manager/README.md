@@ -10,7 +10,7 @@ Fonts tab; the standalone app
 | `filter` | always | Search over the index: family names ignoring case and accents, category, language (English name, autonym or id) and script |
 | `index` | always | The pinned built-in indexes (Google Fonts and Noto) compiled into [`craft-font-store`](../font-store/README.md) (`bundled`), each family's source (`source_label`: its name and whether it is curated), and the categories |
 | `installed` | always | The installed fonts [`craft-font-catalog`](../font-catalog/README.md) sees, grouped by family and source |
-| `store` | always | `Installer`, what the interface needs from the font store: the download consent, install, remove, downloads for a preview, the indexes (`indexes`, `fetch_indexes`) and the sources the user added (`user_sources`, `add_user_source`, `remove_user_source`). `SuiteStore` is craft-font-store's store, `FakeStore` a stand-in for tests, `NoStore` one for when the store folder is unknown |
+| `store` | always | `Installer`, what the interface needs from the font store: the download consent, install, remove, downloads for a preview, the indexes (`indexes`, `fetch_indexes`) and the sources the user added (`user_sources`, `add_user_source`, `remove_user_source`) and the optional preview service address (`preview_service`, `set_preview_service`). `SuiteStore` is craft-font-store's store, `FakeStore` a stand-in for tests, `NoStore` one for when the store folder is unknown |
 | `FontsPanel` | `egui` | The whole interface as one egui panel |
 
 ## The panel
