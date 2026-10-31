@@ -344,6 +344,23 @@ fn lookup_by_every_name_kind() {
 }
 
 #[test]
+fn the_stores_face_wins_over_its_copy_in_the_os_folder() {
+    // A Flatpak's store sits under ~/.var/app, which sorts after the host's ~/.local/share/fonts
+    // the store copies its fonts into.
+    let root = temp("store-copy");
+    let bytes = font(&spec("Copied Sans", "Regular", 400));
+    write(&root.join("home/.local/share/fonts/Craft/Copied Sans/CopiedSans-Regular.ttf"), &bytes);
+    let store = root.join("home/.var/app/org.example.Fonts/data/craft-fonts");
+    write(&store.join("Copied Sans/CopiedSans-Regular.ttf"), &bytes);
+    let cat = Catalog::new(FontEnv { font_store: Some(store), ..linux_env(&root) }).with_font_service(false);
+    cat.rescan();
+    let styles = cat.styles("Copied Sans");
+    assert_eq!(styles.len(), 1);
+    assert_eq!(styles[0].source, Source::Store);
+    assert_eq!(cat.scanned_faces().iter().filter(|f| f.family == "Copied Sans").count(), 2);
+}
+
+#[test]
 fn installed_and_removed_fonts_are_seen_without_a_restart() {
     let root = temp("rescan");
     let cat = system(&root);

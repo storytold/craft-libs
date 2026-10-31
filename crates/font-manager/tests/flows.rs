@@ -10,10 +10,12 @@ use std::sync::Arc;
 
 use craft_font_manager::craft_font_catalog::Os;
 use craft_font_manager::index::Index;
-use craft_font_manager::store::{Call, FakeStore, Installer};
+use craft_font_manager::remote::{Fetch, Previews};
+use craft_font_manager::store::{Call, Conflict, FakeStore, Installer};
 use craft_font_manager::{Catalog, FontEnv, Source};
 use craft_font_manager::{FontsPanel, Look, Options, Palette, Runner, Settings, Tab, install_interface_fonts};
-use egui::accesskit::Role;
+use craft_font_store::{Cancel, FetchError};
+use egui::accesskit::{Role, Toggled};
 use egui_kittest::Harness;
 use egui_kittest::kittest::{By, NodeT, Queryable};
 
@@ -209,6 +211,134 @@ fn install_and_remove_one_style() {
     assert!(has_installed(&h, "Hack"));
 
     click(&mut h, "Remove Regular");
+    assert_eq!(store.calls().last(), Some(&Call::Remove("Hack".into())));
+    assert!(!has_installed(&h, "Hack"));
+}
+
+/// The OS user font folder as the panel names it on the system the tests run on.
+fn os_fonts() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "macOS Fonts"
+    } else if cfg!(target_os = "windows") {
+        "Windows Fonts"
+    } else if cfg!(target_os = "linux") {
+        "the Linux fonts folder"
+    } else {
+        "your fonts folder"
+    }
+}
+
+/// The switch that makes a store family available to all apps.
+fn toggle() -> String {
+    format!("Install in {}", os_fonts())
+}
+
+/// Hack installed from the store, with its detail sheet open, made available to all apps.
+fn available_hack(name: &str) -> (Harness<'static, FontsPanel>, Arc<FakeStore>) {
+    let (mut h, store) = setup(name, Settings::default());
+    allow(&mut h);
+    click(&mut h, "Hack");
+    click(&mut h, "Install all");
+    click_role(&mut h, Role::CheckBox, &toggle());
+    assert!(store.is_available_to_all("Hack", &[]));
+    (h, store)
+}
+
+#[test]
+fn withdrawing_lists_the_copies_left_in_place() {
+    let (mut h, store) = available_hack("withdraw");
+    let changed = PathBuf::from("/home/me/.local/share/fonts/Craft/Hack/Hack-Regular.ttf");
+    store.keep_next(vec![changed.clone()]);
+    click_role(&mut h, Role::CheckBox, &toggle());
+    assert_eq!(store.calls().last(), Some(&Call::Withdraw("Hack".into())));
+    assert_eq!(h.get_by_role_and_label(Role::CheckBox, &toggle()).accesskit_node().toggled(), Some(Toggled::False));
+    assert!(h.query_by_label_contains("changed after they were added").is_some());
+    assert!(h.query_by_label(&changed.display().to_string()).is_some());
+}
+
+#[test]
+fn styles_not_copied_yet_are_marked_and_copied_on_request() {
+    let (mut h, store) = available_hack("pending");
+    store.set_pending("Hack", vec!["Hack-Regular.ttf".into()]);
+    // The sheet reads the family's availability again when it opens.
+    h.key_press(egui::Key::Escape);
+    settle(&mut h);
+    click(&mut h, "Hack");
+    let marker = format!("Not yet in {}", os_fonts());
+    assert!(h.query_by_label(&marker).is_some());
+    click(&mut h, &format!("Install these in {} too", os_fonts()));
+    assert_eq!(store.calls().last(), Some(&Call::MakeAvailable("Hack".into())));
+    assert!(h.query_by_label(&marker).is_none());
+}
+
+#[test]
+fn a_family_made_available_to_all_apps_asks_before_removal() {
+    let (mut h, store) = available_hack("available");
+    assert_eq!(store.calls().last(), Some(&Call::MakeAvailable("Hack".into())));
+    assert_eq!(h.get_by_role_and_label(Role::CheckBox, &toggle()).accesskit_node().toggled(), Some(Toggled::True));
+    assert!(h.query_by_label_contains("only after they restart").is_some());
+    let question = format!("also removes it from {}", os_fonts());
+
+    click(&mut h, "Remove all");
+    assert!(h.query_by_label_contains(&question).is_some());
+    click(&mut h, "Cancel");
+    assert!(h.query_by_label_contains(&question).is_none());
+    click(&mut h, "Remove all");
+    h.key_press(egui::Key::Escape);
+    settle(&mut h);
+    assert!(h.query_by_label_contains(&question).is_none());
+    assert_eq!(h.state().details_family().as_deref(), Some("Hack"), "Escape closes the question, not the sheet");
+    assert_eq!(store.calls().last(), Some(&Call::MakeAvailable("Hack".into())), "nothing is removed before the user confirms");
+    assert!(has_installed(&h, "Hack"));
+
+    click(&mut h, "Remove all");
+    click(&mut h, "Remove");
+    assert_eq!(store.calls().last(), Some(&Call::Remove("Hack".into())));
+    assert!(!has_installed(&h, "Hack"));
+}
+
+#[test]
+fn a_refused_family_lists_the_fonts_in_the_way() {
+    let (mut h, store) = setup("refused", Settings::default());
+    allow(&mut h);
+    click(&mut h, "Hack");
+    click(&mut h, "Install all");
+    let path = PathBuf::from("/usr/share/fonts/Hack-Regular.ttf");
+    let blocking = PathBuf::from("/home/me/.local/share/fonts/Craft/Hack/Hack-Regular.ttf");
+    store.refuse_next(vec![
+        Conflict { postscript: Some("Hack-Regular".into()), path: path.clone() },
+        Conflict { postscript: None, path: blocking.clone() },
+    ]);
+    click_role(&mut h, Role::CheckBox, &toggle());
+    assert_eq!(store.calls().last(), Some(&Call::MakeAvailable("Hack".into())));
+    assert!(!store.is_available_to_all("Hack", &[]));
+    assert!(h.query_by_label_contains("already have these names").is_some());
+    assert!(h.query_by_label("Hack-Regular").is_some());
+    assert!(h.query_by_label(&path.display().to_string()).is_some());
+    assert!(h.query_by_label_contains(&format!("is in the way: {}", blocking.display())).is_some());
+    assert_eq!(h.get_by_role_and_label(Role::CheckBox, &toggle()).accesskit_node().toggled(), Some(Toggled::False));
+}
+
+#[test]
+fn without_an_os_folder_the_switch_is_hidden_and_copies_out_of_reach_are_named() {
+    let out_of_reach = "can't remove them";
+    let (mut h, store) = setup("unsupported", Settings::default());
+    store.lose_os_folder("the Snap build can't write the user font folder");
+    allow(&mut h);
+    click(&mut h, "Hack");
+    click(&mut h, "Install all");
+    assert!(h.query_by_role_and_label(Role::CheckBox, &toggle()).is_none());
+    assert!(h.query_by_label_contains(out_of_reach).is_none(), "nothing to say about a family without copies");
+
+    // Copies made before the folder went out of reach: named, and removal goes ahead without them.
+    let (mut h, store) = available_hack("out-of-reach");
+    store.lose_os_folder("the Flatpak has no write access to the user font folder");
+    h.key_press(egui::Key::Escape);
+    settle(&mut h);
+    click(&mut h, "Hack");
+    assert!(h.query_by_role_and_label(Role::CheckBox, &toggle()).is_none());
+    assert!(h.query_by_label_contains(out_of_reach).is_some());
+    click(&mut h, "Remove all");
     assert_eq!(store.calls().last(), Some(&Call::Remove("Hack".into())));
     assert!(!has_installed(&h, "Hack"));
 }
@@ -459,4 +589,316 @@ fn screenshots() {
         h.run_steps(20);
         click(h, "Amiri");
     });
+}
+
+#[test]
+fn fake_store_checks_the_preview_service_like_the_store() {
+    let store = FakeStore::new(std::env::temp_dir().join("craft-fm-fake-service"), HashMap::new());
+    for bad in [
+        "http://fonts.example.com",
+        "http://localhost:8080",
+        "ftp://fonts.example.com",
+        "https://user@fonts.example.com",
+        "https://fonts.example.com/?k=v",
+    ] {
+        assert!(store.set_preview_service(Some(bad)).is_err(), "{bad}");
+    }
+    store.set_preview_service(Some("http://127.0.0.1:8080/")).unwrap();
+    assert_eq!(store.preview_service().as_deref(), Some("http://127.0.0.1:8080"));
+    store.set_preview_service(None).unwrap();
+    assert_eq!(store.preview_service(), None);
+}
+
+/// A preview service that answers every subset with the same small font, and logs what it
+/// answered. While held it answers nothing, and a request cancelled meanwhile isn't logged.
+#[derive(Default)]
+struct FakeService {
+    answered: std::sync::Mutex<Vec<String>>,
+    held: std::sync::Mutex<bool>,
+    /// Answers sample subsets with HTTP 404, as for a sample text the service doesn't have.
+    no_samples: std::sync::Mutex<bool>,
+}
+
+impl Fetch for FakeService {
+    fn get(&self, url: &str, _: u64, cancel: &Cancel) -> Result<Vec<u8>, FetchError> {
+        while *self.held.lock().unwrap() {
+            if cancel.is_cancelled() {
+                return Err(FetchError::Cancelled);
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        self.answered.lock().unwrap().push(url.to_owned());
+        if *self.no_samples.lock().unwrap() && url.contains("/sample-") {
+            return Err(FetchError::Failed("HTTP 404".into()));
+        }
+        Ok(include_bytes!("data/Tiny-glyf.woff2").to_vec())
+    }
+}
+
+impl FakeService {
+    /// The URLs answered since the last call.
+    fn urls(&self) -> Vec<String> {
+        std::mem::take(&mut *self.answered.lock().unwrap())
+    }
+
+    /// What was answered since the last call, as (family number, subset): `sample`, `ascii`, or
+    /// `u` for typed characters.
+    fn take(&self) -> Vec<(usize, String)> {
+        let urls = std::mem::take(&mut *self.answered.lock().unwrap());
+        urls.iter()
+            .map(|url| {
+                let path = url.split("/v1/faces/").nth(1).unwrap();
+                let n = usize::from_str_radix(&path[..2], 16).unwrap();
+                let subset = path[64..].trim_start_matches("/list/").split(['/', '.']).next().unwrap();
+                let subset = if subset.starts_with("sample-") { "sample" } else { subset }.to_owned();
+                (n, subset)
+            })
+            .collect()
+    }
+}
+
+/// Forty Latin families, `Family 01` to `Family 40`, whose one file's sha256 starts with the
+/// family's number in hex, and an index sample for Latin.
+fn service_index() -> Index {
+    let families: Vec<String> = (1..=40)
+        .map(|n| {
+            format!(
+                r#"{{"family":"Family {n:02}","categories":["SANS_SERIF"],"languages":[0],"scripts":["Latn"],"license":"OFL","sample_script":"Latn",
+                "files":[{{"path":"ofl/family{n}/Family-Regular.ttf","size":1000,"sha256":"{}","style":"normal","weight":400,"axes":[],"postscript":[]}}]}}"#,
+                format!("{n:02x}").repeat(32)
+            )
+        })
+        .collect();
+    let json = format!(
+        r#"{{"schema":1,"version":"1.2","source":"google/fonts","commit":"45e3d5269e4a17d823f6d84470bc084dc5ae46f6","base_url":"https://cdn.jsdelivr.net/gh/google/fonts@45e3d5269e4a17d823f6d84470bc084dc5ae46f6/",
+        "languages":[{{"id":"en_Latn","name":"English","script":"Latn","population":1}}],
+        "scripts":[{{"id":"Latn","name":"Latin"}}],
+        "samples":{{"Latn":{{"text":"Sphinx of black quartz, judge my vow","method":"udhr","language":"en_Latn"}}}},
+        "families":[{}]}}"#,
+        families.join(",")
+    );
+    Index::from_json(json.as_bytes()).unwrap()
+}
+
+/// The panel over [`service_index`] with no installed fonts, previews fetched from `service` by
+/// `workers` threads, and the preview service not yet set.
+fn service_setup(name: &str, service: &Arc<FakeService>, workers: usize) -> (Harness<'static, FontsPanel>, Arc<FakeStore>) {
+    service_setup_with(name, service, workers, service_index())
+}
+
+/// [`service_setup`] over `index`.
+fn service_setup_with(name: &str, service: &Arc<FakeService>, workers: usize, index: Index) -> (Harness<'static, FontsPanel>, Arc<FakeStore>) {
+    let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("flows").join(name);
+    let _ = std::fs::remove_dir_all(&root);
+    let store_dir = root.join("store");
+    std::fs::create_dir_all(&store_dir).unwrap();
+    let env = FontEnv { os: Os::Unix, root: root.clone(), font_store: Some(store_dir.clone()), ..FontEnv::default() };
+    let catalog = Arc::new(Catalog::new(env).with_font_service(false));
+    catalog.rescan();
+    let store = Arc::new(FakeStore::new(store_dir, HashMap::new()));
+    let previews = Previews::new(store.clone()).with_fetcher(service.clone()).with_cache(None).with_workers(workers);
+    let options = Options { catalog, installer: store.clone(), index: Ok(index), runner: Runner::Inline };
+    let panel = FontsPanel::new(options, Settings::default()).with_previews(previews);
+    let mut harness = Harness::builder()
+        .with_size([1120.0, 678.0])
+        .allow_missing_glyphs()
+        .with_context_setup(|ctx| install_interface_fonts(ctx, &[]))
+        .build_ui_state(|ui, app: &mut FontsPanel| app.ui(ui), panel);
+    harness.run_steps(4);
+    (harness, store)
+}
+
+/// Sets the preview service, as a host's settings page does.
+fn set_service(h: &mut Harness<'_, FontsPanel>, store: &FakeStore) {
+    store.set_preview_service(Some("http://127.0.0.1:9")).unwrap();
+    h.state_mut().reload_preview_settings();
+    settle(h);
+}
+
+/// Steps until the panel has fetched what it asks for and asks for nothing more.
+fn idle(h: &mut Harness<'_, FontsPanel>) {
+    let mut quiet = 0;
+    for _ in 0..500 {
+        h.step();
+        quiet = if h.state().loading_previews() { 0 } else { quiet + 1 };
+        if quiet == 5 {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    panic!("previews kept loading");
+}
+
+/// Steps for longer than the pause after typing.
+fn pause(h: &mut Harness<'_, FontsPanel>) {
+    let start = std::time::Instant::now();
+    while start.elapsed() < std::time::Duration::from_millis(300) {
+        h.step();
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
+/// The family numbers of the cards on screen, in list order.
+fn on_screen(h: &Harness<'_, FontsPanel>) -> Vec<usize> {
+    let by = By::new().role(Role::Button).predicate(|n| n.label().is_some_and(|l| l.starts_with("Family ") && l.len() == 9));
+    let mut shown: Vec<usize> = h.get_all(by).map(|n| n.accesskit_node().label().unwrap()[7..].parse().unwrap()).collect();
+    shown.sort();
+    shown
+}
+
+fn numbers(answered: &[(usize, String)], subset: &str) -> Vec<usize> {
+    let mut n: Vec<usize> = answered.iter().filter(|(_, s)| s == subset).map(|(n, _)| *n).collect();
+    n.sort();
+    n
+}
+
+#[test]
+fn list_previews_follow_the_screen_and_the_typed_text() {
+    let service = Arc::new(FakeService::default());
+    let (mut h, store) = service_setup("list-previews", &service, 8);
+    // No service: the list stays as it is without one.
+    settle(&mut h);
+    assert!(service.take().is_empty());
+    let preview = By::new().predicate(|n| n.label().is_some_and(|l| l.contains("Preview") && l.contains("Family 01")));
+    assert!(h.get_all(preview).next().is_some(), "the whole-family preview is offered");
+
+    // The previews setting off: nothing is fetched.
+    store.set_previews_enabled(false).unwrap();
+    set_service(&mut h, &store);
+    assert!(!h.state().loading_previews());
+    assert!(service.take().is_empty());
+
+    // On, with downloads (installs) still off: previews load without asking.
+    store.set_previews_enabled(true).unwrap();
+    h.state_mut().reload_preview_settings();
+    idle(&mut h);
+    assert!(!h.state().downloads_allowed());
+    assert!(h.query_by_label("Nothing is installed until you allow downloads.").is_some());
+    let shown = on_screen(&h);
+    assert!(shown.len() >= 3 && shown.len() < 10, "{shown:?}");
+    assert_eq!(shown, (1..=shown.len()).collect::<Vec<_>>());
+    let answered = service.take();
+    // The screen and two more below (none above the first row), then ASCII for the screen.
+    assert_eq!(numbers(&answered, "sample"), (1..=3 * shown.len()).collect::<Vec<_>>());
+    assert_eq!(numbers(&answered, "ascii"), shown);
+    assert_eq!(answered.len(), 4 * shown.len(), "{answered:?}");
+
+    type_into(&mut h, "Sample text", "Hello, world");
+    pause(&mut h);
+    idle(&mut h);
+    assert!(service.take().is_empty(), "the ASCII subsets have typed ASCII");
+
+    h.state_mut().settings_mut().sample.clear();
+    type_into(&mut h, "Sample text", "สวัสดีครับ");
+    pause(&mut h);
+    idle(&mut h);
+    let answered = service.take();
+    assert_eq!(numbers(&answered, "u"), shown, "one subset of the typed characters per row on screen");
+    assert_eq!(answered.len(), shown.len(), "{answered:?}");
+}
+
+#[test]
+fn a_sample_the_service_lacks_falls_back_to_its_characters_once() {
+    let service = Arc::new(FakeService::default());
+    *service.no_samples.lock().unwrap() = true;
+    let (mut h, store) = service_setup("list-previews-404", &service, 8);
+    store.set_previews_enabled(true).unwrap();
+    set_service(&mut h, &store);
+    idle(&mut h);
+    let shown = on_screen(&h);
+    let answered = service.take();
+    assert_eq!(numbers(&answered, "sample"), (1..=3 * shown.len()).collect::<Vec<_>>(), "{answered:?}");
+    assert_eq!(numbers(&answered, "u"), shown, "one subset of the sample's characters per row on screen");
+    for _ in 0..3 {
+        pause(&mut h);
+        idle(&mut h);
+    }
+    assert!(numbers(&service.take(), "sample").is_empty(), "the sample is not asked for again");
+}
+
+#[test]
+fn scrolling_cancels_rows_that_left() {
+    let service = Arc::new(FakeService::default());
+    *service.held.lock().unwrap() = true;
+    let (mut h, store) = service_setup("list-previews-scroll", &service, 1);
+    set_service(&mut h, &store);
+    assert!(h.state().loading_previews());
+    assert_eq!(on_screen(&h).first(), Some(&1));
+
+    h.hover_at(egui::pos2(700.0, 400.0));
+    h.event(egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: egui::vec2(0.0, -100_000.0),
+        phase: egui::TouchPhase::Move,
+        source: egui::MouseWheelSource::Wheel,
+        modifiers: egui::Modifiers::NONE,
+    });
+    h.run_steps(30);
+    let shown = on_screen(&h);
+    assert_eq!(shown.last(), Some(&40), "{shown:?}");
+    *service.held.lock().unwrap() = false;
+    idle(&mut h);
+    let answered = service.take();
+    let first = shown[0] - shown.len();
+    assert!(!answered.is_empty());
+    assert!(answered.iter().all(|(n, _)| *n >= first), "rows that left the window were fetched: {answered:?}");
+}
+
+/// One family: a variable upright file (`wght` 100 to 900, three named instances) whose sha256
+/// is `ab…`, and a static italic, `cd…`.
+fn variable_index() -> Index {
+    let json = format!(
+        r#"{{"schema":1,"version":"1.2","source":"google/fonts","commit":"45e3d5269e4a17d823f6d84470bc084dc5ae46f6","base_url":"https://cdn.jsdelivr.net/gh/google/fonts@45e3d5269e4a17d823f6d84470bc084dc5ae46f6/",
+        "languages":[{{"id":"en_Latn","name":"English","script":"Latn","population":1}}],
+        "scripts":[{{"id":"Latn","name":"Latin"}}],
+        "samples":{{"Latn":{{"text":"Sphinx of black quartz, judge my vow","method":"udhr","language":"en_Latn"}}}},
+        "families":[{{"family":"Varia","categories":["SANS_SERIF"],"languages":[0],"scripts":["Latn"],"license":"OFL","sample_script":"Latn",
+          "files":[
+            {{"path":"ofl/varia/Varia[wght].ttf","size":1000,"sha256":"{}","style":"normal","weight":400,"axes":[{{"tag":"wght","min":100,"max":900}}],"postscript":[],
+              "instances":[{{"name":"Thin","coordinates":{{"wght":100}}}},{{"name":"Regular","coordinates":{{"wght":400}}}},{{"name":"Bold","coordinates":{{"wght":700}}}}],"list_instance":1}},
+            {{"path":"ofl/varia/Varia-Italic.ttf","size":1000,"sha256":"{}","style":"italic","weight":400,"axes":[],"postscript":[]}}]}}]}}"#,
+        "ab".repeat(32),
+        "cd".repeat(32)
+    );
+    Index::from_json(json.as_bytes()).unwrap()
+}
+
+#[test]
+fn a_variable_family_draws_one_var_subset_at_every_axis_value() {
+    let service = Arc::new(FakeService::default());
+    let (mut h, store) = service_setup_with("variable-details", &service, 8, variable_index());
+    // The previews setting off: the detail view asks for nothing.
+    store.set_previews_enabled(false).unwrap();
+    set_service(&mut h, &store);
+    click(&mut h, "Varia");
+    assert_eq!(h.state().details_family().as_deref(), Some("Varia"));
+    idle(&mut h);
+    assert!(service.urls().is_empty());
+
+    // On, with downloads still off.
+    store.set_previews_enabled(true).unwrap();
+    h.state_mut().reload_preview_settings();
+    idle(&mut h);
+    assert!(!h.state().downloads_allowed());
+    let urls = service.urls();
+    let var: Vec<&String> = urls.iter().filter(|u| u.contains("/var/")).collect();
+    assert_eq!(var.len(), 1, "one subset for the variable file's every style: {urls:?}");
+    assert!(var[0].ends_with(&format!("{}/var/sample-7eb13ed99f41.woff2", "ab".repeat(32))), "{urls:?}");
+    assert!(
+        urls.iter().any(|u| u.ends_with(&format!("{}/list/sample-7eb13ed99f41.woff2", "cd".repeat(32)))),
+        "the static italic's own sample: {urls:?}"
+    );
+    for style in ["Thin", "Regular", "Bold"] {
+        assert!(h.query_by_label(style).is_some(), "no {style} row");
+    }
+
+    let value = |h: &Harness<'_, FontsPanel>| h.get_by_role_and_label(Role::Slider, "Weight").accesskit_node().numeric_value();
+    assert_eq!(value(&h), Some(400.0));
+    h.get_by_role_and_label(Role::Slider, "Weight").focus();
+    h.step();
+    h.key_press(egui::Key::ArrowRight);
+    settle(&mut h);
+    assert_eq!(value(&h), Some(401.0));
+    idle(&mut h);
+    assert!(service.urls().is_empty(), "the slider asked for another subset");
 }

@@ -2,24 +2,29 @@
 //! the filters at the reading start, the family cards, and the details sheet over them.
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::craft_font_catalog::{FontEnv, Limits, Os};
 use crate::filter::{Query, Search};
-use crate::index::{Category, Family, Index, categories, source_label};
+use crate::index::{Category, Family, FontFile, Index, categories, source_label};
 use crate::installed::{InstalledFamily, group};
-use crate::store::{Installer, RemoveRequest, StoreError};
+use crate::remote::Previews;
+use crate::store::{Installer, LegalText, RemoveRequest, StoreError};
 use crate::{Catalog, FaceInfo, Source};
 use craft_i18n::Folder;
 use craft_ui::direction;
 use craft_ui::fonts::{CraftFace, I18nScripts, UiFonts};
 use egui::{CentralPanel, Context, Frame, Margin, Panel, Ui};
 
+use crate::panel::available::{Availability, Shared};
+use crate::panel::details::Legal;
 use crate::panel::faces::FaceFonts;
 use crate::panel::i18n::{self, I18N, LANGUAGES, fmt, tl};
 use crate::panel::jobs::{Finished, Jobs, Kind, Request, Runner};
 use crate::panel::look::{Look, Palette};
 use crate::panel::samples;
+use crate::panel::subsets::Subsets;
 use crate::panel::widgets::{self, Skin};
 
 /// Installs the standalone app's interface fonts in `ctx` and sets the interface direction: craft-ui's
@@ -182,13 +187,25 @@ pub struct FontsPanel {
     /// Downloaded preview files, never installed.
     pub(crate) previews: Arc<Catalog>,
     pub(crate) previewed: HashMap<String, Vec<FaceInfo>>,
+    /// The list's previews from the font preview service.
+    pub(crate) subsets: Subsets,
     pub(crate) faces: FaceFonts,
+    /// The detail view's axis sliders, by file sha256 and axis tag.
+    pub(crate) detail_axes: HashMap<(String, [u8; 4]), f32>,
+    /// Licence and NOTICE texts, by family key.
+    pub(crate) legal: HashMap<(String, LegalText), Legal>,
     pub(crate) jobs: Jobs,
     pub(crate) asking: Option<Pending>,
     /// By lower-case family name.
     pub(crate) failed: HashMap<String, Failure>,
     /// A problem that belongs to no family (the download setting couldn't be saved).
     pub(crate) notice: Option<String>,
+    /// What the last change to a family's availability to all apps did, by lower-case name.
+    pub(crate) sharing: HashMap<String, Shared>,
+    /// Families' availability to all apps as last read, by lower-case name.
+    pub(crate) availability: HashMap<String, Availability>,
+    /// A removal waiting for the user to confirm it: the family is available to all apps.
+    pub(crate) confirming: Option<RemoveRequest>,
     focused: bool,
     pub(crate) folder: Folder,
     /// The download consent as last read, and when.
@@ -207,6 +224,14 @@ pub struct FontsPanel {
 /// A removal goes by name alone (`source` empty).
 pub(crate) fn family_key(source: &str, family: &str) -> String {
     format!("{source}\n{}", family.to_lowercase())
+}
+
+/// The store files of `faces`, sorted, once each.
+pub(crate) fn store_files(faces: &[FaceInfo]) -> Vec<PathBuf> {
+    let mut files: Vec<_> = faces.iter().filter(|f| f.source == Source::Store).filter_map(|f| f.path.clone()).collect();
+    files.sort();
+    files.dedup();
+    files
 }
 
 /// The host of an https URL.
@@ -229,6 +254,12 @@ pub(crate) fn source_name(s: Source) -> &'static str {
         Source::Store => tl!("Font store"),
         _ => tl!("System"),
     }
+}
+
+/// The file of the face the list shows for a family of the index: the one closest to an upright
+/// regular.
+pub(crate) fn list_file(family: &Family) -> Option<&FontFile> {
+    family.files.iter().min_by_key(|f| (f.is_italic(), !f.has_weight(400, f.is_italic()), f.weight.abs_diff(400), !f.has_normal_width()))
 }
 
 /// The face closest to an upright regular.
@@ -262,6 +293,7 @@ impl FontsPanel {
         let catalogue = options.index.map(|index| Catalogue { search: Search::new(&index), index: Arc::new(index) });
         let previews = Arc::new(Catalog::new(FontEnv { os: Os::None, ..FontEnv::default() }).with_font_service(false));
         let look = Look::default();
+        let subsets = Subsets::new(Arc::clone(&options.installer), Previews::new(Arc::clone(&options.installer)));
         FontsPanel {
             settings,
             tab: Tab::Catalogue,
@@ -292,11 +324,17 @@ impl FontsPanel {
             detail: None,
             previews,
             previewed: HashMap::new(),
+            subsets,
             faces: FaceFonts::default(),
+            detail_axes: HashMap::new(),
+            legal: HashMap::new(),
             jobs: Jobs::new(options.runner),
             asking: None,
             failed: HashMap::new(),
             notice: None,
+            sharing: HashMap::new(),
+            availability: HashMap::new(),
+            confirming: None,
             focused: true,
             folder: Folder::new("en"),
             consent: None,
@@ -305,6 +343,24 @@ impl FontsPanel {
             move_focus: false,
             focus_search: false,
         }
+    }
+
+    /// Fetches the list's previews through `previews` instead of craft-font-store's client.
+    pub fn with_previews(mut self, previews: Previews) -> FontsPanel {
+        self.subsets.replace(previews);
+        self
+    }
+
+    /// Reads the preview service and previews settings again on the next frame, after a host's
+    /// settings page changed them. The panel also reads them every few seconds and when its
+    /// window regains focus.
+    pub fn reload_preview_settings(&mut self) {
+        self.subsets.read_settings_soon();
+    }
+
+    /// Whether previews from the font preview service are being fetched.
+    pub fn loading_previews(&self) -> bool {
+        self.subsets.loading()
     }
 
     /// Shows `index` (after the host fetched the sources, say). The details sheet closes, as
@@ -455,6 +511,8 @@ impl FontsPanel {
         let ctx = ui.ctx().clone();
         self.skin = Skin { p: self.look.palette(&ctx), look: self.look.clone() };
         self.faces.begin_frame(&ctx);
+        let typed = format!("{:?}\n{:?}\n{}", self.settings.preset, self.query.language, self.settings.sample);
+        self.subsets.begin_frame(&ctx, typed);
         self.poll_jobs();
         let focused = ctx.input(|i| i.focused);
         if focused && !self.focused {
@@ -462,6 +520,7 @@ impl FontsPanel {
                 self.catalog.rescan_if_changed();
             }
             self.consent = None;
+            self.subsets.read_settings_soon();
         }
         self.focused = focused;
         self.refresh_installed();
@@ -482,6 +541,7 @@ impl FontsPanel {
         CentralPanel::default().frame(main).show(ui, |ui| self.main(ui));
         self.details(&ctx, area);
         self.consent(&ctx);
+        self.confirm_removal(&ctx);
     }
 
     fn keys(&mut self, ctx: &Context) {
@@ -489,7 +549,7 @@ impl FontsPanel {
         if find {
             self.focus_search = true;
         }
-        if escape && self.asking.is_none() && self.detail.is_some() {
+        if escape && self.asking.is_none() && self.confirming.is_none() && self.detail.is_some() {
             self.detail = None;
         }
     }
@@ -497,10 +557,17 @@ impl FontsPanel {
     fn poll_jobs(&mut self) {
         for (job, result) in self.jobs.poll() {
             let key = family_key(&job.source, &job.family);
+            if matches!(job.kind, Kind::MakeAvailable | Kind::Withdraw) {
+                self.sharing_done(&job, result);
+                continue;
+            }
             match result {
                 Ok(Finished::Installed | Finished::Removed) => {
                     self.failed.remove(&key);
+                    self.availability.remove(&job.family.to_lowercase());
+                    self.sharing.remove(&job.family.to_lowercase());
                 }
+                Ok(Finished::MadeAvailable(_) | Finished::Withdrawn(_)) => {}
                 Ok(Finished::Previewed(files)) => {
                     self.failed.remove(&key);
                     let mut faces = Vec::new();
@@ -520,7 +587,7 @@ impl FontsPanel {
                     let retry = position.and_then(|i| match job.kind {
                         Kind::Install => Some(job.file.clone().map_or(Pending::Install(i), |path| Pending::InstallFile(i, path))),
                         Kind::Preview => Some(Pending::Preview(i)),
-                        Kind::Remove => None,
+                        Kind::Remove | Kind::MakeAvailable | Kind::Withdraw => None,
                     });
                     log::warn!("{} ({:?}): {e}", job.family, job.kind);
                     self.failed.insert(key, Failure { kind: job.kind, error: e.0, retry });
@@ -617,8 +684,9 @@ impl FontsPanel {
         self.installed_shown.0.clone()
     }
 
-    /// The sample for a family with `scripts`: what the user typed, else the preset.
-    pub(crate) fn sample_for<'a>(&self, scripts: impl IntoIterator<Item = &'a str>) -> String {
+    /// The sample for a family with `scripts` and the index sample `own` ([`samples::of_family`]):
+    /// what the user typed, else the preset.
+    pub(crate) fn sample_for<'a>(&self, own: Option<&str>, scripts: impl IntoIterator<Item = &'a str>) -> String {
         if !self.settings.sample.trim().is_empty() {
             return self.settings.sample.clone();
         }
@@ -627,7 +695,7 @@ impl FontsPanel {
             Preset::Numerals => samples::NUMERALS.to_owned(),
             Preset::Sentence => {
                 let language = self.catalogue.as_ref().ok().zip(self.query.language).and_then(|(c, l)| c.index.languages().get(l));
-                language.and_then(|l| samples::for_language(&l.id)).unwrap_or_else(|| samples::for_scripts(scripts)).to_owned()
+                language.and_then(|l| samples::for_language(&l.id)).or(own).unwrap_or_else(|| samples::for_scripts(scripts)).to_owned()
             }
         }
     }
@@ -659,16 +727,42 @@ impl FontsPanel {
         self.jobs.start(ctx, Arc::clone(&self.installer), Arc::clone(&self.catalog), request);
     }
 
-    /// Removes store files: a whole family, or the files of some of its styles.
+    /// Removes store files: a whole family, or the files of some of its styles. A family
+    /// available to all apps asks first, as its copies in the OS font folder go too.
     pub(crate) fn remove(&mut self, ctx: &Context, family: &str, faces: &[FaceInfo], whole: bool) {
-        let mut files: Vec<_> = faces.iter().filter(|f| f.source == Source::Store).filter_map(|f| f.path.clone()).collect();
-        files.sort();
-        files.dedup();
+        let files = store_files(faces);
         if files.is_empty() {
             return;
         }
-        self.failed.remove(&family_key("", family));
+        // Nothing else of the family while a job runs for it: a removal queued behind making it
+        // available would skip the question and then take the new copies.
+        if self.jobs.of("", family).is_some() {
+            return;
+        }
         let request = RemoveRequest { family: family.to_owned(), files, whole };
+        if self.has_copies(&request) {
+            self.confirming = Some(request);
+        } else {
+            self.start_removal(ctx, request);
+        }
+    }
+
+    /// Whether removing `request` takes copies from the OS font folder: the family is available
+    /// to all apps, the folder can be changed here, and the request isn't only styles not copied
+    /// yet. Copies out of reach stay, as the detail sheet says.
+    fn has_copies(&self, request: &RemoveRequest) -> bool {
+        if !self.installer.available_to_all_supported() || !self.installer.is_available_to_all(&request.family, &request.files) {
+            return false;
+        }
+        if request.whole {
+            return true;
+        }
+        let pending = self.installer.not_yet_available(&request.family, &request.files);
+        !request.files.iter().filter_map(|f| f.file_name()).all(|n| pending.iter().any(|p| *p == *n.to_string_lossy()))
+    }
+
+    pub(crate) fn start_removal(&mut self, ctx: &Context, request: RemoveRequest) {
+        self.failed.remove(&family_key("", &request.family));
         self.jobs.start(ctx, Arc::clone(&self.installer), Arc::clone(&self.catalog), Request::Remove(request));
     }
 

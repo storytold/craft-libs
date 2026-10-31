@@ -1,7 +1,13 @@
-//! The details sheet: a family's every style in its own face, its facts and languages, and
-//! installing or removing it whole or a style at a time.
+//! The details sheet: a family's every style in its own face, its facts, languages and licence,
+//! and installing or removing it whole or a style at a time.
+//!
+//! With a preview service, the styles not installed draw with its subsets: a static file's own,
+//! and one subset of each variable file with every axis kept, drawn at each named instance and at
+//! the values of the file's axis sliders. The axis values go with the text drawn, not with the
+//! font registered, so the sliders never register the face again.
 
 use std::sync::Arc;
+use std::sync::mpsc::{Receiver, TryRecvError};
 
 use craft_ui::direction;
 use egui::{
@@ -11,10 +17,13 @@ use egui::{
 
 use crate::index::{Family, FontFile, Index, script_name, source_label};
 use crate::panel::app::{Detail, FontsPanel, Pending, category_label, family_key, regular, source_name, style_count, style_name};
-use crate::panel::faces::Owner;
+use crate::panel::available::in_os_fonts;
+use crate::panel::faces::{Owner, Shown};
 use crate::panel::i18n::{self, fmt, tl, tn};
 use crate::panel::jobs::Kind;
+use crate::panel::samples;
 use crate::panel::widgets::{self, Glyph, Skin};
+use crate::store::{LegalText, StoreError};
 use crate::{FaceInfo, Source};
 
 /// From this width the sheet reads in two columns.
@@ -28,10 +37,38 @@ enum RowAction {
     Running(Option<f32>),
 }
 
+/// What a style row draws its sample with.
+enum RowFace {
+    /// An installed face, or one of a downloaded preview file.
+    Face(Owner, Box<FaceInfo>),
+    /// The preview service's subset of the family's file at this position, at these axis values
+    /// (none for a static file, or a variable file's default).
+    Subset(usize, Vec<([u8; 4], f32)>),
+    /// A variable file's subset at the values of its axis sliders.
+    Sliders(usize),
+}
+
 struct StyleRow {
     label: String,
-    face: Option<(Owner, FaceInfo)>,
+    face: Option<RowFace>,
     action: RowAction,
+}
+
+/// A licence or NOTICE text being read, or read.
+pub(crate) enum Legal {
+    Loading(Receiver<Result<Option<String>, StoreError>>),
+    /// `None` when the family has no such file.
+    Ready(Option<String>),
+    Failed(String),
+}
+
+/// A variable axis as its slider shows it.
+struct AxisRange {
+    tag: [u8; 4],
+    name: String,
+    min: f32,
+    default: f32,
+    max: f32,
 }
 
 fn weight_name(weight: u16) -> &'static str {
@@ -70,6 +107,61 @@ fn licence_name(id: &str) -> &str {
     }
 }
 
+/// `tag` as an OpenType tag: four printable ASCII characters, spaces only at the end.
+fn axis_tag(tag: &[u8]) -> Option<[u8; 4]> {
+    let tag: [u8; 4] = tag.try_into().ok()?;
+    let printable = tag.iter().all(|b| (0x20..=0x7e).contains(b));
+    let spaces_last = tag.iter().skip_while(|b| **b != b' ').all(|b| *b == b' ');
+    (printable && spaces_last && tag[0] != b' ').then_some(tag)
+}
+
+fn axis_name(tag: [u8; 4]) -> Option<&'static str> {
+    Some(match &tag {
+        b"wght" => tl!("Weight"),
+        b"wdth" => tl!("Width"),
+        b"ital" => tl!("Italic"),
+        b"slnt" => tl!("Slant"),
+        b"opsz" => tl!("Optical size"),
+        _ => return None,
+    })
+}
+
+/// A variable file's axes from its subset's `fvar` (the registered axes by their own names,
+/// others by the font's), else the index's ranges about the file's default style.
+fn axes_of(font: Option<&[u8]>, file: &FontFile) -> Vec<AxisRange> {
+    use skrifa::MetadataProvider;
+    if let Some(font) = font.and_then(|f| skrifa::FontRef::new(f).ok())
+        && !font.axes().is_empty()
+    {
+        return font
+            .axes()
+            .iter()
+            .filter(|a| !a.is_hidden() && a.min_value() < a.max_value())
+            .filter_map(|a| {
+                let tag = axis_tag(&a.tag().to_be_bytes())?;
+                let own = || font.localized_strings(a.name_id()).english_or_first().map(|n| n.to_string());
+                let name = axis_name(tag).map(str::to_owned).or_else(own).unwrap_or_else(|| String::from_utf8_lossy(&tag).trim().to_owned());
+                Some(AxisRange { tag, name, min: a.min_value(), default: a.default_value(), max: a.max_value() })
+            })
+            .collect();
+    }
+    file.axes
+        .iter()
+        .filter(|a| a.min < a.max)
+        .filter_map(|a| {
+            let tag = axis_tag(a.tag.as_bytes())?;
+            let default = match &tag {
+                b"wght" => f32::from(file.weight),
+                b"wdth" => file.width,
+                b"ital" => f32::from(u8::from(file.is_italic())),
+                _ => 0.0,
+            };
+            let name = axis_name(tag).map_or_else(|| a.tag.clone(), str::to_owned);
+            Some(AxisRange { tag, name, min: a.min, default: default.clamp(a.min, a.max), max: a.max })
+        })
+        .collect()
+}
+
 fn file_name(face: &FaceInfo) -> Option<String> {
     face.path.as_ref().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().into_owned())
 }
@@ -83,6 +175,17 @@ fn file_of<'a>(family: &'a Family, face: &FaceInfo) -> Option<&'a FontFile> {
 
 impl FontsPanel {
     pub(crate) fn details(&mut self, ctx: &Context, area: Rect) {
+        self.sheet(ctx, area);
+        self.subsets.request_detail(ctx);
+        if self.detail.is_none() {
+            self.detail_axes.clear();
+            // Read again when a sheet opens; outcomes are for the sheet they were shown in.
+            self.availability.clear();
+            self.sharing.clear();
+        }
+    }
+
+    fn sheet(&mut self, ctx: &Context, area: Rect) {
         let open = self.detail.is_some();
         let k = ctx.animate_bool_with_time(Id::unique("craft-fonts.sheet"), open, ctx.global_style().animation_time * 1.5);
         let Some(detail) = self.detail.clone() else { return };
@@ -165,7 +268,11 @@ impl FontsPanel {
         let Some(index) = self.index() else { return true };
         let Some(family) = index.families().get(i).cloned() else { return true };
         let key = family_key(&family.source, &family.family);
-        let installed: Vec<FaceInfo> = self.installed_by_name.get(&family.family.to_lowercase()).cloned().unwrap_or_default();
+        // Store files of a same-named family from another source are not this family's.
+        let mut installed: Vec<FaceInfo> = self.installed_by_name.get(&family.family.to_lowercase()).cloned().unwrap_or_default();
+        if let Some(folder) = self.installer.family_folder(&family) {
+            keep_store_folder(&mut installed, &folder);
+        }
         let store: Vec<FaceInfo> = installed.iter().filter(|f| f.source == Source::Store).cloned().collect();
         let on_system = !installed.is_empty() && store.is_empty();
         let previewed = self.previewed.get(&key).cloned();
@@ -189,6 +296,8 @@ impl FontsPanel {
                         Kind::Install => tl!("Installing"),
                         Kind::Remove => tl!("Removing"),
                         Kind::Preview => tl!("Downloading"),
+                        Kind::MakeAvailable => &in_os_fonts("Installing in {place}"),
+                        Kind::Withdraw => &in_os_fonts("Removing from {place}"),
                     };
                     self.progress(ui, s, what, *fraction, 220.0);
                 }
@@ -198,7 +307,13 @@ impl FontsPanel {
                     } else if widgets::button(ui, s, tl!("Install all"), widgets::Kind::Primary, s.h(), 0.0).clicked() {
                         self.ask(&ctx, Pending::Install(i));
                     }
-                    if !store.is_empty() && widgets::button(ui, s, tl!("Remove all"), widgets::Kind::Danger, s.h(), 0.0).clicked() {
+                    // A style's install runs: the family's removal waits for it.
+                    if !store.is_empty()
+                        && ui
+                            .add_enabled_ui(job.is_none(), |ui| widgets::button(ui, s, tl!("Remove all"), widgets::Kind::Danger, s.h(), 0.0))
+                            .inner
+                            .clicked()
+                    {
                         self.remove(&ctx, &family.family, &store, true);
                     }
                     if installed.is_empty()
@@ -211,6 +326,7 @@ impl FontsPanel {
                 }
             }
         });
+        self.available_to_all(ui, s, &family.family, &store);
         if installed.is_empty() && previewed.is_none() {
             let note = fmt("Preview downloads this font ({size}) for this session without installing it.", &[("size", &size)]);
             ui.label(RichText::new(note).size(12.5).color(s.p.muted));
@@ -230,12 +346,15 @@ impl FontsPanel {
                 });
             });
         }
-        if let Some(failure) = self.failed.get(&key).cloned() {
+        // A removal goes by name alone.
+        let failure = self.failed.get(&key).or_else(|| self.failed.get(&family_key("", &family.family))).cloned();
+        if let Some(failure) = failure {
             ui.add_space(4.0);
+            // Changes to availability report under their switch, never here.
             let what = match failure.kind {
-                Kind::Install => tl!("Couldn't install"),
                 Kind::Remove => tl!("Couldn't remove"),
                 Kind::Preview => tl!("Couldn't download"),
+                _ => tl!("Couldn't install"),
             };
             let buttons: &[&str] = if failure.retry.is_some() { &[tl!("Retry")] } else { &[] };
             let mut retry = false;
@@ -288,12 +407,12 @@ impl FontsPanel {
                 _ if face.source == Source::Store => RowAction::Remove(Box::new(face.clone())),
                 _ => RowAction::None,
             };
-            rows.push(StyleRow { label: style_name(face).to_owned(), face: Some((Owner::Installed, face.clone())), action });
+            rows.push(StyleRow { label: style_name(face).to_owned(), face: Some(RowFace::Face(Owner::Installed, Box::new(face.clone()))), action });
         }
         if on_system {
             return rows;
         }
-        for file in &family.files {
+        for (n, file) in family.files.iter().enumerate() {
             if store.iter().any(|x| file_name(x).as_deref() == Some(file.file_name())) {
                 continue;
             }
@@ -303,13 +422,31 @@ impl FontsPanel {
                 Some(fraction) => RowAction::Running(fraction),
                 None => RowAction::Install(file.path.clone()),
             };
-            if preview_faces.is_empty() {
+            if preview_faces.is_empty() && !self.subsets.available() {
                 rows.push(StyleRow { label: file_label(file), face: None, action });
+            } else if preview_faces.is_empty() && !file.is_variable() {
+                rows.push(StyleRow { label: file_label(file), face: Some(RowFace::Subset(n, Vec::new())), action });
+            } else if preview_faces.is_empty() {
+                // A variable file installs whole: the file's action on its first row.
+                let mut action = Some(action);
+                let mut take = || action.take().unwrap_or(RowAction::None);
+                for instance in &file.instances {
+                    let coords = instance.coordinates.iter().filter_map(|(tag, v)| Some((axis_tag(tag.as_bytes())?, *v))).collect();
+                    rows.push(StyleRow { label: instance.name.clone(), face: Some(RowFace::Subset(n, coords)), action: take() });
+                }
+                if file.instances.is_empty() {
+                    rows.push(StyleRow { label: tl!("Default").to_owned(), face: Some(RowFace::Subset(n, Vec::new())), action: take() });
+                }
+                rows.push(StyleRow { label: file_label(file), face: Some(RowFace::Sliders(n)), action: take() });
             } else {
                 for (n, face) in preview_faces.iter().enumerate() {
                     // A variable file's instances install together: the file's action on its first.
                     let action = if n == 0 { action_clone(&action) } else { RowAction::None };
-                    rows.push(StyleRow { label: style_name(face).to_owned(), face: Some((Owner::Preview, (*face).clone())), action });
+                    rows.push(StyleRow {
+                        label: style_name(face).to_owned(),
+                        face: Some(RowFace::Face(Owner::Preview, Box::new((*face).clone()))),
+                        action,
+                    });
                 }
             }
         }
@@ -328,8 +465,11 @@ impl FontsPanel {
                 self.progress(ui, s, tl!("Removing"), None, 220.0);
                 return;
             }
-            let remove =
-                ui.add_enabled_ui(family.removable(), |ui| widgets::button(ui, s, tl!("Remove all"), widgets::Kind::Danger, s.h(), 0.0)).inner;
+            let remove = ui
+                .add_enabled_ui(family.removable() && job.is_none(), |ui| {
+                    widgets::button(ui, s, tl!("Remove all"), widgets::Kind::Danger, s.h(), 0.0)
+                })
+                .inner;
             if !family.removable() {
                 let _ = remove.on_disabled_hover_text(tl!("System fonts are removed with your system's own font tools."));
                 widgets::label(ui, s, tl!("Removed with your system's font tools"), s.p.faint);
@@ -337,13 +477,16 @@ impl FontsPanel {
                 self.remove(&ctx, &family.name, &family.faces, true);
             }
         });
+        if source == Source::Store {
+            self.available_to_all(ui, s, &family.name, &family.faces);
+        }
         ui.add_space(14.0);
         let rows = family
             .faces
             .iter()
             .map(|face| StyleRow {
                 label: style_name(face).to_owned(),
-                face: Some((Owner::Installed, face.clone())),
+                face: Some(RowFace::Face(Owner::Installed, Box::new(face.clone()))),
                 action: if face.source == Source::Store { RowAction::Remove(Box::new(face.clone())) } else { RowAction::None },
             })
             .collect();
@@ -413,20 +556,142 @@ impl FontsPanel {
                     }
                     ui.add(egui::Label::new(RichText::new(text).size(13.0).color(s.p.muted)).wrap());
                 }
+                if let Some(index) = self.index()
+                    && let Some(family) = index.families().get(family_index)
+                {
+                    ui.add_space(8.0);
+                    self.licence_block(ui, s, &index, family_index, family);
+                }
             });
         });
     }
 
+    /// The licence, the copyright and designer, the upstream link, the NOTICE text, and the
+    /// licence text on demand; the fields the index lacks are left out.
+    fn licence_block(&mut self, ui: &mut Ui, s: &Skin, index: &Arc<Index>, i: usize, family: &Family) {
+        let ctx = ui.ctx().clone();
+        let key = family_key(&family.source, &family.family);
+        let allowed = self.allowed(ctx.input(|i| i.time));
+        // An Apache family's NOTICE is shown with its fonts: read it once downloads are allowed.
+        if family.notice_file.is_some() && allowed && !self.legal.contains_key(&(key.clone(), LegalText::Notice)) {
+            self.load_legal(&ctx, index, i, LegalText::Notice);
+        }
+        for state in self.legal.values_mut() {
+            if let Legal::Loading(rx) = state {
+                match rx.try_recv() {
+                    Ok(Ok(text)) => *state = Legal::Ready(text),
+                    Ok(Err(e)) => *state = Legal::Failed(e.0),
+                    Err(TryRecvError::Empty) => {}
+                    Err(TryRecvError::Disconnected) => *state = Legal::Ready(None),
+                }
+            }
+        }
+        let mut facts = Vec::new();
+        if !family.license.is_empty() {
+            facts.push((tl!("Licence").to_owned(), licence_name(&family.license).to_owned()));
+        }
+        if let Some(copyright) = family.copyright.as_deref().filter(|c| !c.trim().is_empty()) {
+            facts.push((tl!("Copyright").to_owned(), copyright.trim().to_owned()));
+        }
+        if !family.designer.is_empty() {
+            facts.push((tl!("Designer").to_owned(), family.designer.clone()));
+        }
+        if !facts.is_empty() {
+            facts_box(ui, s, &facts);
+        }
+        if let Some(url) = family.upstream.as_deref().filter(|u| u.starts_with("https://") || u.starts_with("http://")) {
+            let shown = url.trim_start_matches("https://").trim_start_matches("http://").trim_end_matches('/');
+            let link = widgets::link(ui, s, shown);
+            widgets::name(ui, &link, &fmt("Upstream: {url}", &[("url", url)]));
+            if link.clicked() {
+                ctx.open_url(egui::OpenUrl::new_tab(url));
+            }
+        }
+        if family.notice_file.is_some() {
+            self.legal_text(ui, s, index, i, &key, LegalText::Notice, tl!("Show notice"));
+        }
+        if family.license_file_name().is_some() {
+            self.legal_text(ui, s, index, i, &key, LegalText::License, tl!("Show licence text"));
+        }
+    }
+
+    /// A licence or NOTICE text: a button that reads it, then the text, or why it couldn't be read.
+    #[allow(clippy::too_many_arguments)]
+    fn legal_text(&mut self, ui: &mut Ui, s: &Skin, index: &Arc<Index>, i: usize, key: &str, which: LegalText, show: &str) {
+        let ctx = ui.ctx().clone();
+        let mut load = false;
+        match self.legal.get(&(key.to_owned(), which)) {
+            None => load = widgets::button(ui, s, show, widgets::Kind::Secondary, 28.0, 0.0).clicked(),
+            Some(Legal::Loading(_)) => {
+                ui.label(RichText::new(format!("{}…", tl!("Loading"))).size(12.5).color(s.p.muted));
+            }
+            Some(Legal::Ready(None)) => {}
+            Some(Legal::Ready(Some(text))) => {
+                let title = match which {
+                    LegalText::License => tl!("Licence text"),
+                    LegalText::Notice => tl!("Notice"),
+                };
+                widgets::label(ui, s, title, s.p.faint);
+                let text = text.clone();
+                egui::Frame::new().stroke(s.hairline()).corner_radius(s.look.corner).inner_margin(Margin::symmetric(10, 8)).show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    egui::ScrollArea::vertical().id_salt(("craft-fonts.legal", key, which)).max_height(220.0).show(ui, |ui| {
+                        ui.add(
+                            egui::Label::new(RichText::new(text).size(11.5).family(FontFamily::Monospace).color(s.p.muted)).wrap().selectable(true),
+                        );
+                    });
+                });
+            }
+            Some(Legal::Failed(error)) => {
+                let error = error.clone();
+                ui.add(egui::Label::new(RichText::new(error).size(12.5).color(s.p.bad)).wrap());
+                load = widgets::button(ui, s, tl!("Retry"), widgets::Kind::Secondary, 28.0, 0.0).clicked();
+            }
+        }
+        if load {
+            self.load_legal(&ctx, index, i, which);
+        }
+    }
+
+    /// Reads the licence or NOTICE text of the `i`th family through the store, on a thread.
+    fn load_legal(&mut self, ctx: &Context, index: &Arc<Index>, i: usize, which: LegalText) {
+        let Some(family) = index.families().get(i) else { return };
+        let key = (family_key(&family.source, &family.family), which);
+        let (tx, rx) = std::sync::mpsc::channel();
+        let installer = Arc::clone(&self.installer);
+        let index = Arc::clone(index);
+        let wake = ctx.clone();
+        let spawned = std::thread::Builder::new().name("font-licence".into()).spawn(move || {
+            if let Some(family) = index.families().get(i) {
+                let _ = tx.send(installer.legal_text(&index, family, which));
+            }
+            wake.request_repaint();
+        });
+        let state = match spawned {
+            Ok(_) => Legal::Loading(rx),
+            Err(e) => Legal::Failed(e.to_string()),
+        };
+        self.legal.insert(key, state);
+    }
+
     fn style_rows(&mut self, ui: &mut Ui, s: &Skin, family_index: usize, family: &str, scripts: &[String], rows: Vec<StyleRow>) {
         let ctx = ui.ctx().clone();
-        let installed = rows.iter().filter(|r| matches!(r.face, Some((Owner::Installed, _)))).count();
-        let title = if installed == rows.len() {
-            tn(rows.len() as u64, "{n} style installed", "{n} styles installed")
+        let installed = rows.iter().filter(|r| matches!(r.face, Some(RowFace::Face(Owner::Installed, _)))).count();
+        let styles = rows.iter().filter(|r| !matches!(r.face, Some(RowFace::Sliders(_)))).count();
+        let title = if installed == styles {
+            tn(styles as u64, "{n} style installed", "{n} styles installed")
         } else {
-            tn(rows.len() as u64, "{n} style", "{n} styles")
+            tn(styles as u64, "{n} style", "{n} styles")
         };
         widgets::label(ui, s, &title, s.p.faint);
-        let sample = self.sample_for(scripts.iter().map(String::as_str));
+        let index = self.index();
+        let own = index.as_deref().and_then(|index| {
+            let family = index.families().get(family_index).or_else(|| index.family(family))?;
+            samples::of_family(index, family)
+        });
+        // The family of the index whose files subset rows draw.
+        let of_index = index.as_ref().and_then(|index| Some((Arc::clone(index), index.families().get(family_index)?.clone())));
+        let sample = self.sample_for(own, scripts.iter().map(String::as_str));
         let size = self.settings.size.max(24.0);
         let width = ui.available_width();
         for row in rows {
@@ -435,6 +700,11 @@ impl FontsPanel {
             ui.add_space(10.0);
             ui.allocate_ui_with_layout(vec2(width, 28.0), direction::row(ui), |ui| {
                 widgets::label(ui, s, &row.label, s.p.muted);
+                if let Some(RowFace::Face(Owner::Installed, face)) = &row.face
+                    && self.pending_style(family, face)
+                {
+                    widgets::label(ui, s, &in_os_fonts("Not yet in {place}"), s.p.warn);
+                }
                 ui.with_layout(direction::trailing(ui), |ui| match &row.action {
                     RowAction::None => {}
                     RowAction::Running(fraction) => self.progress(ui, s, tl!("Installing"), *fraction, 140.0),
@@ -446,7 +716,8 @@ impl FontsPanel {
                         }
                     }
                     RowAction::Remove(face) => {
-                        let remove = widgets::button(ui, s, tl!("Remove"), widgets::Kind::Danger, 28.0, 0.0);
+                        let idle = self.jobs.of("", family).is_none();
+                        let remove = ui.add_enabled_ui(idle, |ui| widgets::button(ui, s, tl!("Remove"), widgets::Kind::Danger, 28.0, 0.0)).inner;
                         widgets::name(ui, &remove, &fmt("Remove {style}", &[("style", &row.label)]));
                         if remove.clicked() {
                             self.remove(&ctx, family, std::slice::from_ref(face), false);
@@ -455,35 +726,80 @@ impl FontsPanel {
                 });
             });
             ui.add_space(2.0);
-            self.wrapped_sample(ui, s, row.face.as_ref(), &sample, size, width);
+            let (shown, coords) = match row.face {
+                Some(RowFace::Face(owner, face)) => {
+                    let catalog = match owner {
+                        Owner::Installed => Arc::clone(&self.catalog),
+                        Owner::Preview => Arc::clone(&self.previews),
+                    };
+                    (Some(self.faces.family(&ctx, &catalog, owner, &face)), Vec::new())
+                }
+                Some(RowFace::Subset(n, coords)) => (self.subset_face(&ctx, of_index.as_ref(), n, &sample).0, coords),
+                Some(RowFace::Sliders(n)) => {
+                    let (shown, font) = self.subset_face(&ctx, of_index.as_ref(), n, &sample);
+                    let file = of_index.as_ref().and_then(|(_, family)| family.files.get(n));
+                    let coords = match file {
+                        Some(file) => self.axis_sliders(ui, s, file, &axes_of(font.as_deref().map(Vec::as_slice), file), width),
+                        None => Vec::new(),
+                    };
+                    (shown, coords)
+                }
+                None => (None, Vec::new()),
+            };
+            self.wrapped_sample(ui, s, shown, &coords, &sample, size, width);
             ui.add_space(12.0);
         }
     }
 
-    /// `text` in the face, wrapped to `width`; faint in the interface font when the face isn't here.
-    fn wrapped_sample(&mut self, ui: &mut Ui, s: &Skin, face: Option<&(Owner, FaceInfo)>, text: &str, size: f32, width: f32) {
-        let (family, color) = match face {
-            Some((owner, face)) => {
-                let catalog = match owner {
-                    Owner::Installed => Arc::clone(&self.catalog),
-                    Owner::Preview => Arc::clone(&self.previews),
-                };
-                match self.faces.family(ui.ctx(), &catalog, *owner, face) {
-                    crate::panel::faces::Shown::Ready(family) => (family, s.p.ink),
-                    crate::panel::faces::Shown::Loading => {
-                        ui.allocate_space(vec2(width, size * 1.3));
-                        return;
-                    }
-                    crate::panel::faces::Shown::Unavailable => (FontFamily::Proportional, s.p.faint),
-                }
+    /// The preview service's subset of the `n`th file of `family` for `text`, registered, and
+    /// its bytes; nothing while none of that file has loaded, or without a service.
+    fn subset_face(&mut self, ctx: &Context, family: Option<&(Arc<Index>, Family)>, n: usize, text: &str) -> (Option<Shown>, Option<Arc<Vec<u8>>>) {
+        let Some((index, family)) = family else { return (None, None) };
+        let Some(file) = family.files.get(n) else { return (None, None) };
+        match self.subsets.detail_font(index, family, file, text) {
+            Some((key, font)) => (Some(self.faces.subset(ctx, &key, &font)), Some(font)),
+            None => (None, None),
+        }
+    }
+
+    /// A slider for each of `axes`, with its name and value; returns the values set.
+    fn axis_sliders(&mut self, ui: &mut Ui, s: &Skin, file: &FontFile, axes: &[AxisRange], width: f32) -> Vec<([u8; 4], f32)> {
+        let mut coords = Vec::new();
+        for axis in axes {
+            let value = self.detail_axes.entry((file.sha256.clone(), axis.tag)).or_insert(axis.default);
+            ui.allocate_ui_with_layout(vec2(width, s.h()), direction::row(ui), |ui| {
+                ui.spacing_mut().item_spacing.x = 10.0;
+                ui.allocate_ui_with_layout(vec2(110.0, s.h()), direction::row(ui), |ui| {
+                    ui.set_width(110.0);
+                    widgets::label(ui, s, &axis.name, s.p.muted);
+                });
+                widgets::slider(ui, s, value, axis.min..=axis.max, (width - 180.0).clamp(80.0, 320.0), &axis.name);
+                widgets::label(ui, s, &format!("{value:.0}"), s.p.faint);
+            });
+            coords.push((axis.tag, *value));
+        }
+        coords
+    }
+
+    /// `text` in the face shown, at `coords`, wrapped to `width`; faint in the interface font
+    /// when there is no face.
+    #[allow(clippy::too_many_arguments)]
+    fn wrapped_sample(&mut self, ui: &mut Ui, s: &Skin, shown: Option<Shown>, coords: &[([u8; 4], f32)], text: &str, size: f32, width: f32) {
+        let has_face = shown.is_some();
+        let (family, color) = match shown {
+            Some(Shown::Ready(family)) => (family, s.p.ink),
+            Some(Shown::Loading) => {
+                ui.allocate_space(vec2(width, size * 1.3));
+                return;
             }
-            None => (FontFamily::Proportional, s.p.faint),
+            Some(Shown::Unavailable) | None => (FontFamily::Proportional, s.p.faint),
         };
-        let size = if face.is_some() { size } else { size.min(20.0) };
+        let size = if has_face { size } else { size.min(20.0) };
         // Sample text keeps its own direction whatever the interface's.
         let align = if craft_i18n::base_direction(text) == Some(craft_i18n::Direction::Rtl) { Align::Max } else { Align::Min };
         ui.allocate_ui_with_layout(vec2(width, 0.0), Layout::top_down(align), |ui| {
-            ui.add(egui::Label::new(RichText::new(text).font(FontId::new(size, family)).color(color)).wrap());
+            let text = RichText::new(text).font(FontId::new(size, family)).color(color).variations(coords.iter().copied());
+            ui.add(egui::Label::new(text).wrap());
         });
     }
 }
@@ -499,14 +815,11 @@ fn action_clone(action: &RowAction) -> RowAction {
 
 fn family_facts(index: &Index, family: &Family, size: &str) -> Vec<(String, String)> {
     let scripts: Vec<&str> = family.scripts.iter().map(|id| script_name(index, id).unwrap_or(id)).collect();
-    let mut facts = Vec::new();
-    if !family.designer.is_empty() {
-        facts.push((tl!("Designer").to_owned(), family.designer.clone()));
-    }
-    facts.push((tl!("Licence").to_owned(), licence_name(&family.license).to_owned()));
-    facts.push((tl!("Styles").to_owned(), i18n::number(style_count(family) as u64)));
-    facts.push((tl!("Files").to_owned(), i18n::number(family.files.len() as u64)));
-    facts.push((tl!("Download size").to_owned(), size.to_owned()));
+    let mut facts = vec![
+        (tl!("Styles").to_owned(), i18n::number(style_count(family) as u64)),
+        (tl!("Files").to_owned(), i18n::number(family.files.len() as u64)),
+        (tl!("Download size").to_owned(), size.to_owned()),
+    ];
     if !scripts.is_empty() {
         facts.push((tl!("Scripts").to_owned(), scripts.join(", ")));
     }
@@ -529,4 +842,28 @@ fn facts_box(ui: &mut Ui, s: &Skin, facts: &[(String, String)]) {
             ui.add(egui::Label::new(RichText::new(value).color(s.p.ink)).wrap());
         }
     });
+}
+
+/// Drops the store faces outside `folder`: the files of a same-named family from another source.
+fn keep_store_folder(faces: &mut Vec<FaceInfo>, folder: &std::path::Path) {
+    faces.retain(|f| belongs(f.source, f.path.as_deref(), folder));
+}
+
+/// Whether a face is not a store face, or is one directly in `folder`.
+fn belongs(source: Source, path: Option<&std::path::Path>, folder: &std::path::Path) -> bool {
+    source != Source::Store || path.and_then(|p| p.parent()) == Some(folder)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn same_named_families_from_two_sources_are_told_apart() {
+        let mine = Path::new("/s/mine/roboto");
+        assert!(belongs(Source::Store, Some(Path::new("/s/mine/roboto/Regular.ttf")), mine));
+        assert!(!belongs(Source::Store, Some(Path::new("/s/roboto/Regular.ttf")), mine));
+        assert!(belongs(Source::System, Some(Path::new("/sys/Roboto.ttf")), mine));
+    }
 }
