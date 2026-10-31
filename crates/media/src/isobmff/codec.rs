@@ -1,5 +1,6 @@
 //! Sample entries (`stsd` children) and codec configuration records: parsing and serialization.
 
+use crate::CodecId;
 use crate::bitstream::BitReader;
 use crate::isobmff::bytes::{BoxBuf, Cur, FourCc, boxes};
 use crate::isobmff::error::{Error, Result};
@@ -208,6 +209,50 @@ pub enum CodecConfig {
 }
 
 impl CodecConfig {
+    /// The codec this configuration is for. `Mp3` covers every MPEG audio layer: these entries
+    /// name none, and each frame header has it (ffmpeg stores MP2 as `mp4a` + 0x6B).
+    pub fn codec_id(&self) -> CodecId {
+        match self {
+            CodecConfig::Avc(_) => CodecId::H264,
+            CodecConfig::Hevc(_) => CodecId::Hevc,
+            CodecConfig::Av1(_) => CodecId::Av1,
+            CodecConfig::Vp9(_) => CodecId::Vp9,
+            CodecConfig::ProRes { .. } => CodecId::ProRes,
+            CodecConfig::Jpeg { .. } => CodecId::Mjpeg,
+            CodecConfig::Aac(_) => CodecId::Aac,
+            CodecConfig::Mp3 => CodecId::Mp3,
+            CodecConfig::Pcm(_) => CodecId::Pcm,
+            CodecConfig::Alac { .. } => CodecId::Alac,
+            CodecConfig::Opus(_) => CodecId::Opus,
+            CodecConfig::Flac(_) => CodecId::Flac,
+            CodecConfig::Ac3 { .. } => CodecId::Ac3,
+            CodecConfig::Eac3 { .. } => CodecId::Eac3,
+            CodecConfig::Dnx { .. } => CodecId::Dnxhd,
+            CodecConfig::Apv(_) => CodecId::Apv,
+            CodecConfig::Timecode(_) | CodecConfig::Unknown { .. } => CodecId::Unknown,
+        }
+    }
+
+    /// The codec configuration in Matroska's `CodecPrivate` form (see [`crate::CodecParams`]):
+    /// the `OpusHead` built from `dOps`, `fLaC` + the `dfLa` metadata blocks, the other records
+    /// as stored.
+    pub fn extradata(&self) -> Vec<u8> {
+        match self {
+            CodecConfig::Avc(c) => c.to_bytes(),
+            CodecConfig::Hevc(c) => c.to_bytes(),
+            CodecConfig::Av1(c) => c.to_bytes(),
+            CodecConfig::Vp9(c) => c.to_bytes(),
+            CodecConfig::Apv(c) => c.to_bytes(),
+            CodecConfig::Aac(a) => a.asc.clone(),
+            CodecConfig::Alac { cookie } => cookie.clone(),
+            CodecConfig::Opus(o) => o.opus_head(),
+            CodecConfig::Flac(f) => [b"fLaC".as_slice(), &f.metadata_blocks].concat(),
+            CodecConfig::Ac3 { dac3 } => dac3.clone(),
+            CodecConfig::Eac3 { dec3 } => dec3.clone(),
+            _ => Vec::new(),
+        }
+    }
+
     /// A short human-readable codec name.
     pub fn name(&self) -> &'static str {
         match self {
@@ -633,6 +678,23 @@ pub struct OpusConfig {
 }
 
 impl OpusConfig {
+    /// The Ogg Opus identification header (RFC 7845 §5.1) this `dOps` box describes: the same
+    /// fields, little-endian, behind the `OpusHead` magic.
+    pub fn opus_head(&self) -> Vec<u8> {
+        let mut h = Vec::with_capacity(19 + self.channel_mapping.len());
+        h.extend_from_slice(b"OpusHead");
+        h.push(1);
+        h.push(self.output_channels);
+        h.extend_from_slice(&self.pre_skip.to_le_bytes());
+        h.extend_from_slice(&self.input_sample_rate.to_le_bytes());
+        h.extend_from_slice(&self.output_gain.to_le_bytes());
+        h.push(self.channel_mapping_family);
+        if self.channel_mapping_family != 0 {
+            h.extend_from_slice(&self.channel_mapping);
+        }
+        h
+    }
+
     pub fn parse(data: &[u8]) -> Result<Self> {
         let mut c = Cur::labeled(data, "dOps");
         let _version = c.u8()?;
@@ -1838,5 +1900,31 @@ mod tests {
     fn asc_parse() {
         assert_eq!(parse_asc(&[0x11, 0x90]), Some((2, 48000, 2)));
         assert_eq!(parse_asc(&[]), None);
+    }
+}
+
+#[cfg(test)]
+mod params_tests {
+    use super::*;
+
+    /// `dOps` is big-endian; the `OpusHead` it becomes is little-endian, with the mapping table
+    /// only for families other than 0.
+    #[test]
+    fn dops_becomes_an_opus_head() {
+        let o = OpusConfig {
+            output_channels: 6,
+            pre_skip: 312,
+            input_sample_rate: 48_000,
+            output_gain: -256,
+            channel_mapping_family: 1,
+            channel_mapping: vec![4, 2, 0, 4, 1, 2, 3, 5],
+        };
+        let h = o.opus_head();
+        assert_eq!(&h[..8], b"OpusHead");
+        assert_eq!(&h[8..19], &[1, 6, 0x38, 0x01, 0x80, 0xBB, 0, 0, 0x00, 0xFF, 1]);
+        assert_eq!(&h[19..], &o.channel_mapping[..]);
+        let stereo = OpusConfig { output_channels: 2, channel_mapping_family: 0, channel_mapping: vec![9, 9], ..o };
+        assert_eq!(stereo.opus_head().len(), 19);
+        assert_eq!(CodecConfig::Opus(stereo).codec_id(), CodecId::Opus);
     }
 }

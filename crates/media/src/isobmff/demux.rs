@@ -3,7 +3,7 @@
 use crate::isobmff::bytes::{BoxHeader, Cur, FourCc, boxes, find};
 use crate::isobmff::codec::{CodecConfig, SampleEntry, parse_sample_entry};
 use crate::isobmff::error::{Error, Result, invalid};
-use crate::isobmff::source::ByteSource;
+use crate::source::ByteSource;
 use std::collections::HashMap;
 
 /// Hard cap on the sample count of the whole file, all tracks and fragments (after PCM chunk merging).
@@ -146,6 +146,35 @@ impl Track {
     /// The first sample entry's codec configuration.
     pub fn codec(&self) -> Option<&CodecConfig> {
         self.entries.first().map(|e| &e.codec)
+    }
+
+    /// What a decoder needs for this track, in the container-neutral form the codec crates take;
+    /// [`crate::CodecId::Unknown`] without a sample entry.
+    pub fn codec_params(&self) -> crate::CodecParams {
+        let Some(entry) = self.entries.first() else {
+            return crate::CodecParams::new(crate::CodecId::Unknown);
+        };
+        let codec = &entry.codec;
+        let mut p = crate::CodecParams::new(codec.codec_id()).with_extradata(codec.extradata()).with_tag(entry.format.0);
+        if let Some(v) = &entry.video {
+            p = p.with_size(u32::from(v.width), u32::from(v.height));
+        }
+        if let Some(a) = self.audio() {
+            p = p.with_sample_rate(a.sample_rate.round() as u32).with_channels(u16::try_from(a.channels).unwrap_or(0));
+        }
+        match codec {
+            CodecConfig::Pcm(c) => {
+                p = p.with_pcm(if c.float {
+                    crate::PcmFormat::float(c.bits, c.big_endian)
+                } else {
+                    crate::PcmFormat::int(c.bits, c.signed, c.big_endian)
+                });
+                p = p.with_sample_rate(c.sample_rate.round() as u32).with_channels(u16::try_from(c.channels).unwrap_or(0));
+            }
+            CodecConfig::Opus(o) => p = p.with_sample_rate(48_000).with_channels(u16::from(o.output_channels)),
+            _ => {}
+        }
+        p
     }
     pub fn video(&self) -> Option<&crate::isobmff::codec::VideoParams> {
         self.entries.first().and_then(|e| e.video.as_ref())
