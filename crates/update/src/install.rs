@@ -1113,13 +1113,7 @@ pub(crate) mod linux {
     /// Where menu entries and icons go: `$XDG_DATA_HOME`, else `~/.local/share`. Inside the
     /// launcher's own Flatpak that variable points into the sandbox, so the host's is used.
     pub fn host_data_dir() -> Option<PathBuf> {
-        if Path::new("/.flatpak-info").exists() {
-            if let Some(dir) = std::env::var_os("HOST_XDG_DATA_HOME").map(PathBuf::from).filter(|p| p.is_absolute()) {
-                return Some(dir);
-            }
-            return crate::folders::home_dir().map(|h| h.join(".local").join("share"));
-        }
-        crate::folders::data_local_dir()
+        crate::folders::host_data_local_dir()
     }
 
     /// The app's 128 px icon, as bundled in `assets/app-icons`.

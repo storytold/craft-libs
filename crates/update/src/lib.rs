@@ -15,6 +15,7 @@ mod msi_copy;
 mod msi_migrate;
 pub mod packages;
 pub mod paths;
+pub mod pins;
 pub mod platform;
 #[cfg(windows)]
 pub mod portable;

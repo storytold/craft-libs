@@ -2,12 +2,18 @@
 //! and the self-update worker. An app creates one [`Updater`], calls [`Updater::tick`] and
 //! [`Updater::show`] each frame, and acts on the [`Action`] it returns, so every app gets the same
 //! handling of failures, dropped workers, repaints and quitting.
+//!
+//! An app the launcher keeps on another version (see [`crate::pins`]) offers nothing itself: the
+//! check reads the shared choice first, and a requested check reports [`Status::UpToDate`] while
+//! [`Updater::managed`] says why.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, TryRecvError, channel};
 use std::time::Duration;
 
 use crate::dialog::{StartupPrompt, StartupPromptResponse};
+use crate::pins::{Choice, Pins};
 use crate::release::Release;
 use crate::{App, Http, Paths, Platform, Stop, check_for_update, self_update};
 
@@ -55,6 +61,10 @@ pub struct Updater {
     restart: bool,
     /// An update is installed and waits for the app to exit; nothing starts a second one.
     installed: bool,
+    /// The version-choice file to read in place of [`Pins::default_path`] (tests).
+    pins_path: Option<PathBuf>,
+    /// The launcher's choice for this app when it is not stable, as of the last check or offer.
+    managed: Option<Choice>,
 }
 
 impl Updater {
@@ -73,6 +83,8 @@ impl Updater {
             prompt: None,
             restart: false,
             installed: false,
+            pins_path: None,
+            managed: None,
         }
     }
 
@@ -80,6 +92,37 @@ impl Updater {
     pub fn with_source(mut self, source: CheckSource) -> Self {
         self.source = Some(source);
         self
+    }
+
+    /// Reads the version choices from `path` instead of the launcher's file (tests).
+    pub fn with_pins_path(mut self, path: impl Into<PathBuf>) -> Self {
+        self.pins_path = Some(path.into());
+        self
+    }
+
+    /// The launcher's choice for this app when it keeps it off stable releases (a pinned version,
+    /// nightlies, or a choice this version cannot read), as of the last check. A window answering
+    /// Help ▸ Check for Updates can say so instead of "newest version".
+    pub fn managed(&self) -> Option<&Choice> {
+        self.managed.as_ref()
+    }
+
+    /// Reads the launcher's choice for this app; remembers it when it is not stable.
+    fn read_choice(&mut self) -> bool {
+        let pins = match &self.pins_path {
+            Some(path) => Pins::load(path),
+            None => Pins::load_default(),
+        };
+        self.managed = Some(pins.choice(self.app.id)).filter(|c| *c != Choice::Stable);
+        if let Some(choice) = &self.managed {
+            log::info!("{} follows the launcher's choice ({choice:?}); no update offered here", self.app.name);
+            // A prompt opened before the pin would still install the stable release. One that is
+            // installing or finished stays: `tick` reports through it.
+            if self.install.is_none() && !self.installed {
+                self.prompt = None;
+            }
+        }
+        self.managed.is_some()
     }
 
     /// The check at start, once. Later calls do nothing.
@@ -98,7 +141,7 @@ impl Updater {
 
     /// Opens the startup prompt for a release the app found itself.
     pub fn offer(&mut self, release: Release) {
-        if self.install.is_none() && !self.installed {
+        if self.install.is_none() && !self.installed && !self.read_choice() {
             self.prompt = Some(StartupPrompt::new(self.app, release, self.version.clone()));
         }
     }
@@ -130,6 +173,11 @@ impl Updater {
         if self.check.is_some() {
             return;
         }
+        // The file is a few bytes, read once per check; the launcher may have changed it since.
+        if self.read_choice() {
+            self.finish_check(Ok(None));
+            return;
+        }
         let (tx, rx) = channel();
         let (source, app, version, ctx) = (self.source.clone(), self.app, self.version.clone(), ctx.clone());
         let spawned = std::thread::Builder::new().name("update-check".into()).spawn(move || {
@@ -150,6 +198,15 @@ impl Updater {
 
     fn finish_check(&mut self, answer: Checked) {
         let requested = std::mem::take(&mut self.requested);
+        // The launcher may have pinned or unpinned the app while the check ran: whatever the
+        // answer, an app it manages offers nothing and reports nothing to do.
+        if self.read_choice() {
+            if let Err(e) = &answer {
+                log::info!("{} update check failed ({e}), but the launcher manages its version", self.app.name);
+            }
+            self.status = if requested { Status::UpToDate } else { Status::Idle };
+            return;
+        }
         match answer {
             Ok(Some(release)) => {
                 self.status = Status::Idle;
@@ -264,6 +321,10 @@ impl Updater {
     }
 
     fn start_install(&mut self, ctx: &egui::Context) {
+        // The launcher may have pinned the app while the prompt was open; that closes it.
+        if self.install.is_none() && !self.installed && self.read_choice() {
+            return;
+        }
         let Some(prompt) = &mut self.prompt else { return };
         if self.installed {
             prompt.status_message = Some(format!("The update is installed. Close {} to finish; it restarts by itself.", self.app.name));
@@ -326,12 +387,17 @@ mod tests {
     use super::*;
     use crate::suite::PHOTOCRAFT;
 
+    /// An updater that never reads the real version-choice file.
     fn updater(answer: Checked) -> Updater {
-        Updater::new(&PHOTOCRAFT, "0.1.0").with_source(Arc::new(move || answer.clone()))
+        Updater::new(&PHOTOCRAFT, "0.1.0").with_source(Arc::new(move || answer.clone())).with_pins_path(no_pins())
+    }
+
+    pub(super) fn no_pins() -> PathBuf {
+        std::env::temp_dir().join("craft-update-tests-no-such-dir").join("versions.json")
     }
 
     /// Ticks until the running check has reported.
-    fn settle(updater: &mut Updater, ctx: &egui::Context) {
+    pub(super) fn settle(updater: &mut Updater, ctx: &egui::Context) {
         let deadline = std::time::Instant::now() + Duration::from_secs(10);
         while updater.check.is_some() && std::time::Instant::now() < deadline {
             updater.tick(ctx);
@@ -370,7 +436,7 @@ mod tests {
         assert_eq!(download_action(&broken, &Release { html_url: "javascript:x".into(), ..newer() }), Action::None);
     }
 
-    fn newer() -> Release {
+    pub(super) fn newer() -> Release {
         Release { tag: "v9.0.0".into(), version: crate::version::parse("9.0.0"), ..Release::default() }
     }
 
@@ -380,7 +446,7 @@ mod tests {
         const CHILD: &str = "CRAFT_UPDATE_PRETEND_TEST_APP";
         if let Ok(id) = std::env::var(CHILD) {
             let app = crate::suite::by_id(&id).unwrap();
-            let mut u = Updater::new(app, "99.0.0");
+            let mut u = Updater::new(app, "99.0.0").with_pins_path(no_pins());
             assert_eq!(u.version, "0.0.1", "{} ignored its pretend version", app.id);
             let version = u.version.clone();
             let repo = app.repo;
@@ -488,7 +554,7 @@ mod tests {
     #[test]
     fn a_panicking_check_is_an_error_not_a_hang() {
         let ctx = egui::Context::default();
-        let mut u = Updater::new(&PHOTOCRAFT, "0.1.0").with_source(Arc::new(|| std::panic::panic_any("boom")));
+        let mut u = Updater::new(&PHOTOCRAFT, "0.1.0").with_source(Arc::new(|| std::panic::panic_any("boom"))).with_pins_path(no_pins());
         u.check_now(&ctx);
         settle(&mut u, &ctx);
         assert!(matches!(u.status(), Status::Failed(_)));
@@ -578,3 +644,7 @@ mod tests {
         assert_eq!(u.show(&ctx), Action::None);
     }
 }
+
+#[cfg(test)]
+#[path = "updater_pin_tests.rs"]
+mod pin_tests;
