@@ -57,9 +57,12 @@ Windows Installer also resolves Program Files once, for the context it started i
 sets the new-install folder itself after the choice. Without that, "Everyone" installed into the
 user profile with a machine-wide registration.
 
-The ArtCraft Launcher and a direct install of the same MSI produce the same result: the
-launcher dispatches the same package and only adds `INSTALLFOLDER` (the user's chosen folder)
-and the context properties of the copy being updated.
+For the same scope and folder, the ArtCraft Launcher and a direct install of the same MSI
+produce the same result: the launcher dispatches the same package and only adds properties.
+For an update, those are `INSTALLFOLDER` (the remembered folder) and the context properties of
+the copy being updated. For a new install, the launcher also sets `ALLUSERS=1`, so the copy is
+per-machine; a direct run of the MSI keeps the package's per-user default unless the person
+picks "Everyone" in the wizard.
 
 ## What an update must preserve
 
