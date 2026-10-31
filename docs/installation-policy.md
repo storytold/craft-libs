@@ -3,8 +3,10 @@
 This is a proposed policy, not a claim about a published release. Preparation covers every
 current Craft app with a Windows MSI, plus the launcher's new-install folder. The
 [adoption inventory](windows-installation-adoption.md) records the scope and remaining gates.
-Only a copy in the old default folder moves (see below); chosen folders never do. Storage of settings, caches and models is a
-separate policy: [settings-storage.md](settings-storage.md).
+Folders are preserved except for the proposed automatic migration of an exact former default
+path (see below). That exception also covers a manually chosen path with the same spelling;
+all other chosen folders stay. Maintainer acceptance of this exception is part of accepting
+the policy. Storage of settings, caches and models is separate: [settings-storage.md](settings-storage.md).
 
 ## Installation contexts
 
@@ -66,13 +68,20 @@ picks "Everyone" in the wizard.
 
 ## What an update must preserve
 
-- **The exact folder.** An ordinary update installs into the remembered folder of the copy
-  being replaced, wherever the user put it. A folder someone chose is never moved.
-- **One exception: the old default.** A copy whose remembered folder is exactly the
-  pre-suite default `%ProgramFiles%\<App>\` moves to `%ProgramFiles%\ArtCraft\<App>` on its
-  next update. A folder that cannot be read counts as chosen and stays. Someone who typed
-  `C:\Program Files\<App>` by hand looks the same as the old default and will be moved;
-  Windows Installer kept no record of whether that folder was chosen.
+- **The exact folder, subject to the following exception.** An ordinary update installs into
+  the remembered folder of the copy being replaced. Every chosen folder outside the exact
+  former default is preserved.
+- **Explicit automatic-migration exception: the former default.** This proposal moves a copy
+  whose remembered folder is exactly `%ProgramFiles%\<App>\` to
+  `%ProgramFiles%\ArtCraft\<App>` on its next update, without a separate migration confirmation.
+  It also moves that exact path when someone typed it by hand: Windows Installer kept no
+  record that distinguishes a chosen path from an accepted default. Matching the path is not
+  evidence that the person accepted a default. An unreadable or different folder stays.
+  Maintainers must accept this exact-path exception as part of the policy before it is
+  adopted; it must not be described as preserving every manually chosen folder. Package-owned
+  shortcuts are recreated, but a shortcut someone made by hand to the old path may break.
+  Requiring migration consent instead is a change to this proposed rule; an in-app choice
+  would not itself require another Windows elevation prompt.
 - **The context.** A per-machine copy updates per-machine (`ALLUSERS=1`), a per-user copy
   per-user. MSI major upgrades cannot cross installation contexts, so a context change is a
   deliberate uninstall-and-reinstall, never an ordinary upgrade. The launcher queries
