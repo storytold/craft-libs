@@ -2000,6 +2000,125 @@ fn blocking_input_hands_focus_from_a_native_window_to_the_main_window() {
 }
 
 #[test]
+fn the_main_window_loses_the_pointer_while_a_native_window_has_it() {
+    // macOS tells a window the pointer left only when it leaves the window's frame: over a
+    // native window in front of it, the main window kept its last pointer, and an app's canvas
+    // cursor stayed drawn at the native window's edge.
+    let main_pointer = |d: &DockDriver<u32, Content>| d.ctx.input_for(egui::ViewportId::ROOT, |i| i.pointer.hover_pos());
+    let mut d = driver(layout(true));
+    let id = window(&d, 5).id;
+    let main = pos2(50.0, 50.0);
+    d.move_to(main);
+    assert_eq!(main_pointer(&d), Some(main));
+    d.window_pointer(id, ORIGIN + vec2(400.0, 200.0));
+    d.step(vec![]);
+    assert_eq!(main_pointer(&d), None, "the pointer is the native window's");
+    // Back over the main window, it has the pointer again.
+    d.move_to(main);
+    assert_eq!(main_pointer(&d), Some(main));
+    // The native window's input can tell of the move into it and of the pointer leaving it at
+    // once: the pointer was there, so the main window is still told it left.
+    let local = d.window_local(id, ORIGIN + vec2(400.0, 200.0)).unwrap();
+    d.window_step(id, vec![Event::PointerMoved(local), Event::PointerGone]);
+    d.step(vec![]);
+    assert_eq!(main_pointer(&d), None, "the pointer moved over the native window");
+}
+
+/// AppKit's resize area reaches a few points past a palette's frame, over the main window:
+/// there AppKit shows its resize cursor and takes a press, so the main window is told the
+/// pointer left, as over the palette itself, except while a drag in the main window holds it.
+#[cfg(target_os = "macos")]
+#[test]
+fn the_main_window_loses_the_pointer_over_a_palettes_outer_resize_area() {
+    let main_pointer = |d: &DockDriver<u32, Content>| d.ctx.input_for(egui::ViewportId::ROOT, |i| i.pointer.hover_pos());
+    let mut d = driver(layout(true));
+    let viewport = d.viewport(window(&d, 5).id);
+    d.step(vec![]);
+    let rect = d.host().windows[&viewport].rect;
+    // 2 pt left of the palette's left edge, in the main window's coordinates.
+    let band = pos2(rect.left() - 2.0, rect.center().y) - ORIGIN.to_vec2();
+    let main = pos2(50.0, 50.0);
+    d.move_to(main);
+    assert_eq!(main_pointer(&d), Some(main));
+    d.move_to(band);
+    d.step(vec![]);
+    assert_eq!(main_pointer(&d), None, "AppKit's resize area is the palette's");
+    d.move_to(main);
+    assert_eq!(main_pointer(&d), Some(main));
+    // Further out, the pointer stays the main window's.
+    let beyond = band - vec2(6.0, 0.0);
+    d.move_to(beyond);
+    assert_eq!(main_pointer(&d), Some(beyond));
+    // A drag in the main window keeps its moves over the resize area, also once another button
+    // was pressed and released during it.
+    d.press(main);
+    let secondary = |pressed| Event::PointerButton { pos: main, button: egui::PointerButton::Secondary, pressed, modifiers: Default::default() };
+    d.step(vec![secondary(true)]);
+    d.step(vec![secondary(false)]);
+    d.move_to(band);
+    d.step(vec![]);
+    assert_eq!(main_pointer(&d), Some(band));
+    d.release(band);
+}
+
+#[test]
+fn a_palette_hands_the_keyboard_back_when_the_pointer_comes_back_to_the_main_window() {
+    // After a click in a palette, its OS window has the keyboard: the main window's tool cursor
+    // and shortcuts waited for a click there. Once the pointer comes back from the palette to
+    // the main window, the main window takes the keyboard, after the palette's text field is
+    // done with it if one has it.
+    let focus_main = |d: &DockDriver<u32, Content>| {
+        d.host().commands.iter().filter(|(v, c)| *v == egui::ViewportId::ROOT && matches!(c, ViewportCommand::Focus)).count()
+    };
+    let palette = || {
+        let mut d = driver(layout(true));
+        let id = window(&d, 5).id;
+        let viewport = d.viewport(id);
+        d.host().focus = Some(viewport);
+        d.window_pointer(id, ORIGIN + vec2(400.0, 200.0));
+        d.step(vec![]);
+        (d, id)
+    };
+    let (mut d, _) = palette();
+    assert_eq!(focus_main(&d), 0, "the pointer is over the palette");
+    d.move_to(pos2(50.0, 50.0));
+    d.step(vec![]);
+    assert_eq!(focus_main(&d), 1, "the pointer came back to the main window, once");
+    // A text field of the palette keeps the keyboard until it is done.
+    let (mut d, _) = palette();
+    d.content.text = Some(5);
+    d.content.focus_text = true;
+    d.step(vec![]);
+    d.move_to(pos2(50.0, 50.0));
+    d.step(vec![]);
+    assert_eq!(focus_main(&d), 0, "a field of the palette has the keyboard");
+    d.content.blur_text = true;
+    d.step(vec![]);
+    d.step(vec![]);
+    assert_eq!(focus_main(&d), 1, "the field is done");
+    // A viewer is an ordinary window: it keeps the keyboard.
+    let (mut d, _) = palette();
+    d.content.normal = vec![5];
+    d.step(vec![]);
+    d.move_to(pos2(50.0, 50.0));
+    d.step(vec![]);
+    assert_eq!(focus_main(&d), 0, "a viewer has the keyboard");
+    // A press in AppKit's resize area, which reaches past the palette's frame, focuses the
+    // palette with the pointer still over the main window: the palette keeps the keyboard, or it
+    // would not redraw while it resizes.
+    let mut d = driver(layout(true));
+    let viewport = d.viewport(window(&d, 5).id);
+    d.move_to(pos2(296.0, 200.0));
+    d.host().focus = Some(viewport);
+    for _ in 0..3 {
+        d.step(vec![]);
+    }
+    d.move_to(pos2(290.0, 200.0));
+    d.step(vec![]);
+    assert_eq!(focus_main(&d), 0, "the pointer never left the main window");
+}
+
+#[test]
 fn blocking_input_cancels_a_drag_in_progress() {
     // A tab drag a native window owns.
     let mut d = blocked_driver();
