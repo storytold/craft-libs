@@ -26,6 +26,7 @@ thiserror = "2"
 craft-atomic = { path = "crates/atomic" }
 craft-cms = { path = "crates/cms" }
 craft-dialogs = { path = "crates/dialogs" }
+craft-doc = { path = "crates/doc" }
 craft-docpath = { path = "crates/docpath" }
 craft-font-catalog = { path = "crates/font-catalog" }
 craft-font-manager = { path = "crates/font-manager" }

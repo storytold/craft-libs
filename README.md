@@ -38,6 +38,9 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   the event loop: queued requests shown at the end of the frame and answered on a later frame,
   free-standing Open and Folder panels and Save sheets on macOS, case-insensitive filters. What
   to do with the answer stays in each app.
+- [`craft-doc`](crates/doc/README.md): reads PhotoCraft `.pcraft`, VectorCraft `.vectorcraft`
+  and EffectCraft `.ecproj` documents without the apps: the kind and version, the previews and
+  PDF they carry, and their pages and layers. Rendering and editing stay in each app.
 - [`craft-docpath`](crates/docpath/src/lib.rs): decides whether a path or `file:` URL stored in a
   document may be opened. Paths stored in documents are followed only when they are local or on the
   document's own network share; other network paths, device paths and non-file URLs are refused.

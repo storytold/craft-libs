@@ -1,0 +1,34 @@
+name: Craft documents
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['crates/doc/**', 'Cargo.toml', 'Cargo.lock', '.github/workflows/doc.yml']
+  pull_request:
+    paths: ['crates/doc/**', 'Cargo.toml', 'Cargo.lock', '.github/workflows/doc.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  doc:
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        # macOS runners are kept for releases: macOS runs only when started by hand.
+        os: ${{ github.event_name == 'workflow_dispatch' && fromJSON('["ubuntu-latest","windows-latest","macos-latest"]') || fromJSON('["ubuntu-latest","windows-latest"]') }}
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          components: rustfmt, clippy
+          targets: wasm32-unknown-unknown
+      - run: cargo fmt --check
+      - run: cargo clippy -p craft-doc --all-targets --locked -- -D warnings
+      - run: cargo test -p craft-doc --locked -- --nocapture
+      - run: cargo check -p craft-doc --all-features --locked --target wasm32-unknown-unknown

@@ -1,0 +1,22 @@
+[package]
+name = "craft-doc"
+description = "Read-only access to PhotoCraft, VectorCraft and EffectCraft documents: format detection, version, embedded previews and PDF, and the layer and page outline."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+serde = { workspace = true }
+# `unbounded_depth`: PhotoCraft manifests nest deeper than serde_json's 128 levels; the crate
+# checks the nesting against `Limits::max_depth` before parsing.
+serde_json = { workspace = true, features = ["unbounded_depth"] }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
