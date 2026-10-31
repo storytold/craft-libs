@@ -865,8 +865,14 @@ pub trait DockContent<P> {
     }
     /// Paint a fitted split gap in the owning surface, without another resize target.
     fn split_separator(&mut self, _ui: &mut Ui, _rect: Rect) {}
-    /// The host supplies exclusive horizontal resize input for this floating tree.
+    /// The host supplies horizontal resize input at the floating frame edges.
+    /// Internal split dividers retain stock input unless `owns_floating_split_width` is true.
     fn owns_floating_width(&self, _panel: &P) -> bool {
+        false
+    }
+    /// The host supplies horizontal resize input for every internal split in this floating tree.
+    /// This is separate from frame-edge ownership; only return true with replacement input.
+    fn owns_floating_split_width(&self, _panel: &P) -> bool {
         false
     }
     /// Plain text name for accessibility, menus and the default visual label.
@@ -1028,6 +1034,9 @@ impl<P, C: DockContent<P> + ?Sized> DockContent<P> for Overrides<'_, P, C> {
     }
     fn owns_floating_width(&self, panel: &P) -> bool {
         self.inner.owns_floating_width(panel)
+    }
+    fn owns_floating_split_width(&self, panel: &P) -> bool {
+        self.inner.owns_floating_split_width(panel)
     }
     fn logical_label(&self, panel: &P) -> String {
         (self.label)(panel)

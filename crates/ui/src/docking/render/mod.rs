@@ -214,7 +214,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
                 // Named by its layout path, which `ResizeSplit` takes and hits report.
                 self.content.split_separator(ui, split.divider);
                 let host_width =
-                    *axis == SplitAxis::Horizontal && self.tree.as_ref().is_some_and(|(panel, _)| self.content.owns_floating_width(panel));
+                    *axis == SplitAxis::Horizontal && self.tree.as_ref().is_some_and(|(panel, _)| self.content.owns_floating_split_width(panel));
                 if host_width {
                     return;
                 }
@@ -224,7 +224,11 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
                     *axis,
                     split.divider,
                     &self.style.resize_label,
-                    ResizeHandleStyle { hovered: self.style.accent, dragged: self.style.accent, focused: self.style.accent },
+                    self.content.resize_handle_style(ResizeHandleStyle {
+                        hovered: self.style.accent,
+                        dragged: self.style.accent,
+                        focused: self.style.accent,
+                    }),
                 )
                 .value(split.first_size(), (split.first_size() + lo)..=(split.first_size() + hi))
                 .show(ui);

@@ -459,13 +459,13 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
         }
         let side = side_at(edge, self.style.right_to_left);
         self.content.column_rect(ui.ctx(), column, rect, side);
+        self.record_column_float(column.groups.iter().flat_map(|g| g.panels.iter().cloned()).collect(), rect);
         if column.iconic && self.content.owns_iconic_column(first) {
             let mut child = ui.new_child(UiBuilder::new().id_salt(("host-iconic", first)).max_rect(rect));
             child.set_clip_rect(rect.intersect(ui.clip_rect()));
             self.content.iconic_column(&mut child, column, rect, side);
             return;
         }
-        self.record_column_float(column.groups.iter().flat_map(|g| g.panels.iter().cloned()).collect(), rect);
         let (bar, body, heights) = self.column_layout(column, rect);
         self.column_bar(ui, column, first, bar, rect, edge);
         if column.iconic && usable(body) {

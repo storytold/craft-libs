@@ -47,19 +47,21 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
     /// but keeps the strip. Tabs, strip, header and drag bar are mirrored in right-to-left layout.
     pub(super) fn group(&mut self, ui: &mut Ui, panels: &[P], active: usize, minimized: bool, rect: Rect, kind: GroupKind) {
         let Some(selected) = panels.get(active) else { return };
-        if self.content.custom_group(ui, panels, selected, rect, matches!(kind, GroupKind::Floating { .. })) {
-            return;
-        }
         let host_collapsed = self.content.group_collapsed(panels);
         let minimized = minimized || host_collapsed;
         if !host_collapsed {
             self.record_float(panels, rect.size(), rect.size());
         }
+        if self.content.custom_group(ui, panels, selected, rect, matches!(kind, GroupKind::Floating { .. })) {
+            return;
+        }
         let policy = self.permissions(selected);
         let splits = matches!(kind, GroupKind::Frame | GroupKind::Floating { .. }) && policy.accepts_splits;
         let rtl = self.style.right_to_left;
         if stripless(panels, &*self.content) {
-            self.contents(ui, selected, rect);
+            if !minimized {
+                self.contents(ui, selected, rect);
+            }
             self.targets.push(DropTarget {
                 anchor: selected.clone(),
                 rect,

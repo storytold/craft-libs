@@ -21,7 +21,9 @@ forwarded by `show_customized`'s label/permissions/limits adapter.
 
 `resize_handle_style` and `split_separator` let the host paint one seam while
 retaining stock resize input. `owns_floating_width` delegates horizontal floating
-handles to the host; stock vertical handles remain available. Presentation-only
+frame-edge handles to the host; internal dividers and vertical handles remain available.
+`owns_floating_split_width` separately delegates internal horizontal dividers when
+the host supplies their replacement input. Presentation-only
 `group_collapsed` does not change the selected tab in the shared model.
 
 All ownership hooks default to false/no-op. `DockStyle::dock_gap` defaults to

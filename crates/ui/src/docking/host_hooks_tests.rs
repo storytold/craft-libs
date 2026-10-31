@@ -61,8 +61,34 @@ struct Host {
     bodies: usize,
     columns: Vec<Rect>,
     iconic: Vec<Rect>,
+    collapsed: bool,
+    protected: bool,
+    frame_width: bool,
+    split_width: bool,
+    space: Option<FloatSpace<u32>>,
+    style_calls: std::cell::Cell<usize>,
 }
 impl DockContent<u32> for Host {
+    fn group_collapsed(&self, _: &[u32]) -> bool {
+        self.collapsed
+    }
+    fn permissions(&self, _: &u32) -> Permissions {
+        if self.protected { Permissions::PROTECTED } else { Permissions::default() }
+    }
+    fn owns_floating_split_width(&self, _: &u32) -> bool {
+        self.split_width
+    }
+    fn owns_floating_width(&self, _: &u32) -> bool {
+        self.frame_width
+    }
+    fn resize_handle_style(&self, _: crate::layout::ResizeHandleStyle) -> crate::layout::ResizeHandleStyle {
+        self.style_calls.set(self.style_calls.get() + 1);
+        crate::layout::ResizeHandleStyle {
+            hovered: egui::Color32::TRANSPARENT,
+            dragged: egui::Color32::TRANSPARENT,
+            focused: egui::Color32::TRANSPARENT,
+        }
+    }
     fn body(&mut self, _: &mut egui::Ui, _: &u32) {
         self.bodies += 1;
     }
@@ -88,12 +114,13 @@ fn render(layout: &Layout<u32>, host: &mut Host) -> Vec<(Hit<u32>, Rect)> {
             host.iconic.clear();
             let mut style = DockStyle::from_ui(ui);
             super::floating_tests::frame_style(&mut style);
+            let protected = host.protected;
             let shown = DockArea::new(Id::unique("host")).show_customized(
                 ui,
                 layout,
                 &style,
                 |id| format!("Pane {id}"),
-                |_| Permissions::default(),
+                |_| if protected { Permissions::PROTECTED } else { Permissions::default() },
                 |_| PanelLimits::default(),
                 host,
             );
@@ -101,6 +128,7 @@ fn render(layout: &Layout<u32>, host: &mut Host) -> Vec<(Hit<u32>, Rect)> {
         })
         .drop_without_applying_deltas();
     }
+    host.space = float_space(&ctx, Id::unique("host"));
     DockArea::hit_rects(&ctx, Id::unique("host"))
 }
 
@@ -143,5 +171,91 @@ fn invalid_side_dock_gaps_are_rejected_before_host_painting() {
             assert_eq!(host.bodies, 0);
         })
         .drop_without_applying_deltas();
+    }
+}
+
+#[test]
+fn host_owned_surfaces_record_fitted_float_geometry() {
+    let mut host = Host { exclusive: true, ..Default::default() };
+    let layout = Layout { root: Some(Node::Tabs { panels: vec![1, 2], active: 0 }), floating: vec![] };
+    render(&layout, &mut host);
+    let space = host.space.as_ref().unwrap();
+    assert!(space.panel(&1).is_some_and(|s| s.x > 700.0 && s.y > 0.0));
+    assert!(space.group(&2).is_some_and(|s| s.x > 700.0 && s.y > 0.0));
+}
+
+#[test]
+fn host_owned_iconic_columns_record_fitted_float_geometry() {
+    let mut host = Host { exclusive: true, ..Default::default() };
+    let mut column = Column::new(vec![Group::new(vec![1, 2], 0)], 90.0);
+    column.iconic = true;
+    let layout = Layout { root: Some(Node::Dock { side: Side::Start, columns: vec![column] }), floating: vec![] };
+    render(&layout, &mut host);
+    let size = host.space.as_ref().unwrap().column(&1).expect("host column is recorded");
+    assert_eq!(size.x, host.columns[0].width());
+    assert!(size.y > 0.0);
+}
+
+#[test]
+fn a_host_collapsed_protected_group_keeps_its_selection_without_drawing_a_body() {
+    let layout = Layout { root: Some(Node::Tabs { panels: vec![1], active: 0 }), floating: vec![] };
+    let mut host = Host { protected: true, collapsed: true, ..Default::default() };
+    render(&layout, &mut host);
+    assert_eq!(host.bodies, 0);
+    assert!(matches!(layout.root, Some(Node::Tabs { active: 0, .. })));
+    assert!(host.space.as_ref().unwrap().panel(&1).is_none());
+}
+
+#[test]
+fn frame_width_ownership_keeps_internal_split_input_and_host_style() {
+    use crate::layout::{SplitAxis, SplitSize};
+    let ctx = Context::default();
+    let mut window = Floating::single(vec![1], 0, [100.0, 100.0, 500.0, 350.0]);
+    window.root = Node::Split {
+        axis: SplitAxis::Horizontal,
+        size: SplitSize::Ratio(0.5),
+        first: Box::new(Node::Tabs { panels: vec![1], active: 0 }),
+        second: Box::new(Node::Tabs { panels: vec![2], active: 0 }),
+    };
+    let layout = Layout { root: None, floating: vec![window] };
+    let mut host = Host { frame_width: true, ..Default::default() };
+    let mut step = |events| {
+        let mut out = DockOutput::default();
+        ctx.run_ui(input(events), |ui| {
+            let mut style = DockStyle::from_ui(ui);
+            super::floating_tests::frame_style(&mut style);
+            out = DockArea::new(Id::unique("owned-width")).show_content(ui, &layout, &style, &mut host);
+        })
+        .drop_without_applying_deltas();
+        out
+    };
+    step(vec![]);
+    step(vec![]);
+    step(vec![]);
+    let hit = Hit::Divider(Divider::WindowSplit(1, vec![]));
+    let hits = DockArea::<u32>::hit_rects(&ctx, Id::unique("owned-width"));
+    let at = hits.iter().find(|(h, _)| *h == hit).expect("internal divider remains interactive").1.center();
+    step(vec![Event::PointerMoved(at), button(at, true)]);
+    step(vec![Event::PointerMoved(at + vec2(10.0, 0.0))]);
+    let out = step(vec![Event::PointerMoved(at + vec2(40.0, 0.0))]);
+    assert!(out.actions.iter().any(|a| matches!(a, Action::ResizeWindowSplit { .. })), "{:?}", out.actions);
+    assert!(host.style_calls.get() > 0);
+}
+
+#[test]
+fn internal_width_input_is_suppressed_only_when_explicitly_owned_through_overrides() {
+    use crate::layout::{SplitAxis, SplitSize};
+    let mut window = Floating::single(vec![1], 0, [100.0, 100.0, 500.0, 350.0]);
+    window.root = Node::Split {
+        axis: SplitAxis::Horizontal,
+        size: SplitSize::Ratio(0.5),
+        first: Box::new(Node::Tabs { panels: vec![1], active: 0 }),
+        second: Box::new(Node::Tabs { panels: vec![2], active: 0 }),
+    };
+    let layout = Layout { root: None, floating: vec![window] };
+    for owned in [false, true] {
+        let mut host = Host { frame_width: true, split_width: owned, ..Default::default() };
+        let hits = render(&layout, &mut host);
+        assert_eq!(hits.iter().any(|(hit, _)| *hit == Hit::Divider(Divider::WindowSplit(1, vec![]))), !owned);
     }
 }
