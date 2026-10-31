@@ -39,6 +39,7 @@ pub enum Script {
 
 impl Script {
     /// The ISO 15924 code, `Latn`.
+    #[must_use]
     pub fn code(self) -> &'static str {
         match self {
             Script::Arab => "Arab",
@@ -75,6 +76,7 @@ impl Script {
     }
 
     /// Whether text in this script runs right to left.
+    #[must_use]
     pub fn rtl(self) -> bool {
         matches!(self, Script::Arab | Script::Hebr | Script::Syrc | Script::Thaa)
     }
@@ -112,8 +114,12 @@ pub enum Han {
 /// where it is the language's own script. A language not in the table is taken to be written in
 /// Latin.
 // ponytail: the languages a Craft app ships or could plausibly ship; add a row with the locale.
+#[must_use]
 pub fn scripts(tag: &str) -> &'static [Script] {
-    use Script::*;
+    use Script::{
+        Arab, Armn, Beng, Cyrl, Deva, Ethi, Geor, Grek, Gujr, Guru, Hang, Hani, Hebr, Hira, Kana, Khmr, Knda, Laoo, Latn, Mlym, Mymr, Orya, Sinh,
+        Syrc, Taml, Telu, Thaa, Thai, Tibt,
+    };
     let tag = Subtags::parse(tag);
     if let Some(s) = tag.script.as_deref().and_then(subtag_scripts) {
         return s;
@@ -154,6 +160,7 @@ pub fn scripts(tag: &str) -> &'static [Script] {
 }
 
 /// The direction of a language tag's text: right to left when its main script is.
+#[must_use]
 pub fn direction(tag: &str) -> Direction {
     match scripts(tag).first() {
         Some(s) if s.rtl() => Direction::Rtl,
@@ -165,6 +172,7 @@ pub fn direction(tag: &str) -> Direction {
 /// P3): the contents of isolates (LRI, RLI or FSI up to the matching PDI) are skipped, and the
 /// search stops at the first paragraph separator. `None` when the paragraph has no strong
 /// character; P3 then reads it as left to right, and an app may use the interface direction.
+#[must_use]
 pub fn base_direction(text: &str) -> Option<Direction> {
     match unicode_bidi::get_base_direction(text) {
         unicode_bidi::Direction::Ltr => Some(Direction::Ltr),
@@ -175,9 +183,10 @@ pub fn base_direction(text: &str) -> Option<Direction> {
 
 /// The forms a language tag's Han characters take: `zh-CN`, `zh-SG`, `zh-Hans` and plain `zh` →
 /// Simplified; `zh-TW`, `zh-Hant` and the other regions CLDR writes in Traditional characters
-/// (`zh-US`, `zh-AU`) → Traditional; `zh-HK`, `zh-MO`, `zh-Hant-HK` and `yue` → HongKong; `ja` →
+/// (`zh-US`, `zh-AU`) → Traditional; `zh-HK`, `zh-MO`, `zh-Hant-HK` and `yue` → `HongKong`; `ja` →
 /// Japanese; `ko` → Korean. `None` for a language not written with Han, which leaves the choice
 /// to the font stack.
+#[must_use]
 pub fn han(tag: &str) -> Option<Han> {
     let tag = Subtags::parse(tag);
     let hong_kong = matches!(tag.region.as_deref(), Some("hk" | "mo"));
@@ -202,8 +211,14 @@ pub fn han(tag: &str) -> Option<Han> {
 // ponytail: mn-CN → Mong is left out until vertical Mongolian layout is supported.
 pub(crate) fn region_script(language: &str, region: &str) -> Option<&'static str> {
     Some(match (language, region) {
-        ("az", "iq" | "ir") | ("ha", "cm" | "sd") | ("kk", "af" | "cn" | "ir" | "mn") | ("ku", "iq" | "ir" | "lb") => "arab",
-        ("ky", "cn") | ("ms", "cc") | ("pa", "pk") | ("tg", "pk") | ("uz", "af") => "arab",
+        ("az", "iq" | "ir")
+        | ("ha", "cm" | "sd")
+        | ("kk", "af" | "cn" | "ir" | "mn")
+        | ("ku", "iq" | "ir" | "lb")
+        | ("ky", "cn")
+        | ("ms", "cc")
+        | ("pa" | "tg", "pk")
+        | ("uz", "af") => "arab",
         ("az", "ru") | ("ku", "am" | "az" | "ge" | "tm") | ("ug", "kz" | "mn") | ("uz", "cn") => "cyrl",
         ("ky", "tr") | ("sr", "me" | "ro" | "tr") => "latn",
         ("sd", "in") => "deva",
@@ -216,7 +231,10 @@ pub(crate) fn region_script(language: &str, region: &str) -> Option<&'static str
 /// The scripts a script subtag stands for, including the CLDR unions (`jpan`, `kore`). `None` for
 /// one not in [`Script`], so the language's own scripts apply.
 fn subtag_scripts(subtag: &str) -> Option<&'static [Script]> {
-    use Script::*;
+    use Script::{
+        Arab, Armn, Beng, Cyrl, Deva, Ethi, Geor, Grek, Gujr, Guru, Hang, Hani, Hebr, Hira, Kana, Khmr, Knda, Laoo, Latn, Mlym, Mong, Mymr, Orya,
+        Sinh, Syrc, Taml, Telu, Thaa, Thai, Tibt,
+    };
     Some(match subtag {
         "hans" | "hant" | "hani" => &[Hani],
         "jpan" => &[Hani, Hira, Kana],

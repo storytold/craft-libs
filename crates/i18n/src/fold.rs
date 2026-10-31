@@ -15,7 +15,7 @@
 //! `IRMAK` and `ırmak`. Plain `str::to_lowercase` follows no locale and turns `İ` into `i` plus a
 //! combining dot, which nothing typed would match.
 //!
-//! The Turkish i handling and sigma folding come from PdfCraft's `fold_case` (snipeTR,
+//! The Turkish i handling and sigma folding come from `PdfCraft`'s `fold_case` (snipeTR,
 //! nevicia2010-hub).
 
 use std::ops::Range;
@@ -34,6 +34,7 @@ pub struct Folder {
 impl Folder {
     /// Case- and accent-insensitive folding for `locale`, a language code such as `tr`, `pt-br`
     /// or `zh-hant` (any case, `-` or `_`).
+    #[must_use]
     pub fn new(locale: &str) -> Folder {
         let language = locale.split(['-', '_', '.', '@']).next().unwrap_or_default();
         Folder { turkic: language.eq_ignore_ascii_case("tr") || language.eq_ignore_ascii_case("az"), accents: false }
@@ -41,11 +42,13 @@ impl Folder {
 
     /// Accents count: `é` no longer matches `e`, and a match can't end on a letter whose accent it
     /// leaves out.
+    #[must_use]
     pub fn keep_accents(self) -> Folder {
         Folder { accents: true, ..self }
     }
 
     /// `s` folded, with the map back to `s`.
+    #[must_use]
     pub fn fold(&self, s: &str) -> Folded {
         let nfkd = DecomposingNormalizerBorrowed::new_nfkd();
         let extend = CodePointSetData::new::<GraphemeExtend>();
@@ -75,17 +78,19 @@ impl Folder {
     }
 
     /// `s` folded, without the map: a key to compare or store.
+    #[must_use]
     pub fn key(&self, s: &str) -> String {
         self.fold(s).text
     }
 
     /// Whether `haystack` contains `needle`, both folded.
+    #[must_use]
     pub fn contains(&self, haystack: &str, needle: &str) -> bool {
         self.fold(haystack).find(&self.fold(needle)).is_some()
     }
 
     /// One cluster, already in NFKD.
-    fn fold_cluster(&self, cluster: &str, out: &mut String) {
+    fn fold_cluster(self, cluster: &str, out: &mut String) {
         let mut chars = cluster.chars().peekable();
         while let Some(c) = chars.next() {
             match c {
@@ -202,6 +207,7 @@ pub struct Folded {
 
 impl Folded {
     /// The folded text.
+    #[must_use]
     pub fn as_str(&self) -> &str {
         &self.text
     }
@@ -209,6 +215,7 @@ impl Folded {
     /// The source byte range that folded bytes `range` came from, widened to whole source
     /// characters with their accents: `ss` in the folding of `Straße` maps back to `ß`, `e` in
     /// that of `é` to the whole `é`. An empty range maps to an empty one.
+    #[must_use]
     pub fn source_range(&self, range: Range<usize>) -> Range<usize> {
         // The last cluster starting at or before `at` is the one holding it: clusters that fold to
         // nothing share their offset with the next one.
@@ -224,6 +231,7 @@ impl Folded {
 
     /// The first match of `needle` (folded the same way), as a byte range of the source text.
     /// An empty needle matches at the start.
+    #[must_use]
     pub fn find(&self, needle: &Folded) -> Option<Range<usize>> {
         self.matches(needle).next()
     }
@@ -333,10 +341,10 @@ mod tests {
 
     #[test]
     fn matches_map_back_to_the_source() {
-        let f = Folder::new("en");
         fn find<'a>(f: Folder, haystack: &'a str, needle: &str) -> Option<&'a str> {
             f.fold(haystack).find(&f.fold(needle)).map(|r| &haystack[r])
         }
+        let f = Folder::new("en");
         let find = |haystack, needle| find(f, haystack, needle);
         assert_eq!(find("Große Straße", "strasse"), Some("Straße"));
         assert_eq!(find("Große Straße", "SS"), Some("ß"));
