@@ -173,6 +173,13 @@ pub fn base_direction(text: &str) -> Option<Direction> {
     }
 }
 
+/// The resolved direction of a paragraph or mixed-direction snippet: its [`base_direction`] when
+/// it contains a strong character outside isolates, or `fallback` (such as the interface or
+/// document direction) when it contains only neutral characters or numbers.
+pub fn auto_direction(text: &str, fallback: Direction) -> Direction {
+    base_direction(text).unwrap_or(fallback)
+}
+
 /// The forms a language tag's Han characters take: `zh-CN`, `zh-SG`, `zh-Hans` and plain `zh` →
 /// Simplified; `zh-TW`, `zh-Hant` and the other regions CLDR writes in Traditional characters
 /// (`zh-US`, `zh-AU`) → Traditional; `zh-HK`, `zh-MO`, `zh-Hant-HK` and `yue` → HongKong; `ja` →
@@ -265,7 +272,7 @@ impl Subtags {
         let tag = tag.trim().to_ascii_lowercase();
         let base = tag.split(['.', '@']).next().unwrap_or("").replace('_', "-");
         let mut parts = base.split('-').filter(|p| !p.is_empty());
-        let language = parts.next().unwrap_or("").to_owned();
+        let language = super::canonical_language(parts.next().unwrap_or("")).to_owned();
         let mut script = match tag.split_once('@').map(|(_, m)| m) {
             Some("latin") => Some("latn".to_owned()),
             Some("cyrillic") => Some("cyrl".to_owned()),
@@ -301,6 +308,11 @@ mod tests {
         assert_eq!(base_direction("123\nשלום"), None);
         assert_eq!(base_direction("1920 × 1080"), None);
         assert_eq!(base_direction(""), None);
+
+        assert_eq!(auto_direction("שלום Hello", Direction::Ltr), Direction::Rtl);
+        assert_eq!(auto_direction("Hello שלום", Direction::Rtl), Direction::Ltr);
+        assert_eq!(auto_direction("1920 × 1080", Direction::Rtl), Direction::Rtl);
+        assert_eq!(auto_direction("1920 × 1080", Direction::Ltr), Direction::Ltr);
     }
 
     /// Every locale the craft-i18n catalogs or an app ship, as the apps spell them.
@@ -319,6 +331,7 @@ mod tests {
             ("et", &[Latn], None),
             ("fi", &[Latn], None),
             ("fr", &[Latn], None),
+            ("he", &[Hebr], None),
             ("hr", &[Latn], None),
             ("hu", &[Latn], None),
             ("id", &[Latn], None),
@@ -351,9 +364,15 @@ mod tests {
         ] {
             assert_eq!(scripts(tag), want, "{tag}");
             assert_eq!(han(tag), han_forms, "{tag}");
-            let rtl = tag == "ar";
+            let rtl = matches!(tag, "ar" | "he");
             assert_eq!(direction(tag), if rtl { Direction::Rtl } else { Direction::Ltr }, "{tag}");
         }
+        // Legacy ISO 639-1 aliases normalize to their BCP 47 primary subtags.
+        assert_eq!(scripts("iw_IL.UTF-8"), &[Hebr]);
+        assert_eq!(direction("iw-IL"), Direction::Rtl);
+        assert_eq!(scripts("ji"), &[Hebr]);
+        assert_eq!(direction("ji"), Direction::Rtl);
+        assert_eq!(scripts("in-ID"), &[Latn]);
     }
 
     #[test]

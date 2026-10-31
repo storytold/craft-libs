@@ -9,7 +9,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use crate::cmap::Cmap;
-use crate::manifest::{ManifestEntry, ParseError, parse_manifest, script_matches};
+use crate::manifest::{DEFAULT_MANIFEST, HEBREW_MANIFEST, LATIN_MANIFEST, ManifestEntry, ParseError, parse_manifest, script_matches};
 
 const DIR_VAR: &str = "CRAFT_FONTS_DIR";
 const REQUIRED_VAR: &str = "CRAFT_FONTS_REQUIRED";
@@ -25,6 +25,7 @@ type Filter = Box<dyn Fn(&ManifestEntry) -> bool>;
 /// Which faces to embed, and from where. [`Embed::write`] does the work.
 #[derive(Default)]
 pub struct Embed {
+    manifest: Option<PathBuf>,
     scripts: Option<Vec<String>>,
     filter: Option<Filter>,
     dir: Option<PathBuf>,
@@ -70,6 +71,37 @@ impl Embed {
     /// [`Embed::scripts`] and [`Embed::filter`].
     pub fn documents(families: &[&str]) -> Self {
         Self { families: Some(families.iter().map(|f| (*f).to_owned()).collect()), ..Self::default() }
+    }
+
+    /// Read an opt-in manifest file relative to the `craft-fonts` checkout instead of
+    /// [`DEFAULT_MANIFEST`] (`"fonts/manifest.txt"`), such as [`HEBREW_MANIFEST`] or
+    /// [`LATIN_MANIFEST`].
+    pub fn manifest(mut self, rel_path: impl Into<PathBuf>) -> Self {
+        self.manifest = Some(rel_path.into());
+        self
+    }
+
+    /// Every face in the opt-in Hebrew catalog ([`HEBREW_MANIFEST`], `"fonts/hebrew-manifest.txt"`).
+    /// Narrow it with [`Embed::filter`] or select specific families with
+    /// [`Embed::hebrew_documents`].
+    pub fn hebrew() -> Self {
+        Self::new().manifest(HEBREW_MANIFEST)
+    }
+
+    /// Every face of these families from the opt-in Hebrew catalog ([`HEBREW_MANIFEST`]).
+    pub fn hebrew_documents(families: &[&str]) -> Self {
+        Self::documents(families).manifest(HEBREW_MANIFEST)
+    }
+
+    /// Every face in the opt-in Latin presentation catalog ([`LATIN_MANIFEST`],
+    /// `"fonts/latin-manifest.txt"`).
+    pub fn latin() -> Self {
+        Self::new().manifest(LATIN_MANIFEST)
+    }
+
+    /// Every face of these families from the opt-in Latin presentation catalog ([`LATIN_MANIFEST`]).
+    pub fn latin_documents(families: &[&str]) -> Self {
+        Self::documents(families).manifest(LATIN_MANIFEST)
     }
 
     /// Embed only faces with at least one of these script tags (see
@@ -233,9 +265,14 @@ impl Embed {
         Ok(faces)
     }
 
+    /// Path to the selected manifest file inside `dir`.
+    fn manifest_path(&self, dir: &Path) -> PathBuf {
+        dir.join(self.manifest.as_deref().unwrap_or_else(|| Path::new(DEFAULT_MANIFEST)))
+    }
+
     /// The wanted manifest entries with their canonical file paths.
     fn select(&self, dir: &Path, cargo: &mut Vec<String>) -> Result<Vec<Face>, Error> {
-        let manifest = dir.join("fonts/manifest.txt");
+        let manifest = self.manifest_path(dir);
         let text = std::fs::read_to_string(&manifest).map_err(|source| Error::Read { path: manifest.clone(), source })?;
         // Cargo treats a missing watched file as changed, which would rerun the build every time.
         cargo.push(format!("cargo::rerun-if-changed={}", manifest.display()));
@@ -364,7 +401,7 @@ impl Embed {
         if self.elsewhere.is_empty() {
             return Vec::new();
         }
-        let manifest = dir.join("fonts/manifest.txt");
+        let manifest = self.manifest_path(dir);
         // `select` read and parsed this manifest already.
         let entries = std::fs::read_to_string(&manifest).ok().and_then(|text| parse_manifest(&text).ok()).unwrap_or_default();
         for family in self.elsewhere.iter().filter(|f| !entries.iter().any(|e| &e.family == *f)) {
@@ -420,7 +457,7 @@ impl Embed {
     }
 
     fn check_required(&self, dir: &Path, faces: Vec<Face>) -> Result<Vec<Face>, Error> {
-        let manifest = dir.join("fonts/manifest.txt");
+        let manifest = self.manifest_path(dir);
         if faces.is_empty() {
             return Err(Error::NoFaces { manifest });
         }

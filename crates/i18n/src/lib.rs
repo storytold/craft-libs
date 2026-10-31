@@ -55,7 +55,7 @@ pub use fold::{Folded, Folder};
 pub use format::{Digits, Format};
 pub use number::{NumberError, parse_number};
 pub use region::{HourCycle, Measurement, Paper, Region};
-pub use scripts::{Direction, Han, Script, base_direction, direction, han, scripts};
+pub use scripts::{Direction, Han, Script, auto_direction, base_direction, direction, han, scripts};
 pub use size::{FileSize, SizeUnit};
 
 /// The catalogs an app embeds, one entry per locale: (locale, shared catalog, the app's catalog).
@@ -456,6 +456,14 @@ pub fn ltr(value: &str) -> String {
     wrap(LRI, value)
 }
 
+/// `value` as a right-to-left isolate (RLI…PDI), for right-to-left phrases that start with a
+/// number, Latin acronym or neutral character (`123 שלום`, `PDF בעברית`) so a first-strong
+/// isolate ([`isolate`]) would otherwise treat them as left to right. [`fmt`] takes the isolate
+/// off again in text with no right-to-left letter and no bidi control.
+pub fn rtl_isolate(value: &str) -> String {
+    wrap(RLI, value)
+}
+
 /// `text` without isolate marks (LRI, RLI, FSI, PDI): a [`fmt`] or [`I18n::trn`] result made fit
 /// for a file name, a log or a comparison.
 pub fn strip_isolates(text: &str) -> String {
@@ -584,9 +592,12 @@ fn candidates(tag: &str) -> Vec<String> {
     let tag = tag.trim().to_ascii_lowercase();
     let base = tag.split(['.', '@']).next().unwrap_or("").replace('_', "-");
     let mut parts: Vec<&str> = base.split('-').filter(|p| !p.is_empty()).collect();
-    let Some(&primary) = parts.first() else {
+    let Some(first) = parts.first_mut() else {
         return Vec::new();
     };
+    let original = *first;
+    *first = canonical_language(first);
+    let primary = *first;
     let modifier = match tag.split_once('@').map(|(_, m)| m) {
         Some("latin") => Some("latn"),
         Some("cyrillic") => Some("cyrl"),
@@ -606,7 +617,20 @@ fn candidates(tag: &str) -> Vec<String> {
         out.extend(candidates(&parts.join("-")));
         return out;
     }
-    let mut out: Vec<String> = (1..=parts.len()).rev().map(|n| parts.get(..n).unwrap_or_default().join("-")).collect();
+    let mut out = Vec::new();
+    for n in (1..=parts.len()).rev() {
+        out.push(parts.get(..n).unwrap_or_default().join("-"));
+        if original != primary {
+            let mut raw = parts.get(..n).unwrap_or_default().to_vec();
+            if let Some(first) = raw.first_mut() {
+                *first = original;
+            }
+            let raw = raw.join("-");
+            if !out.contains(&raw) {
+                out.push(raw);
+            }
+        }
+    }
     if let Some(s) = script
         && usual_script(primary).is_some_and(|usual| usual != s)
     {
@@ -650,6 +674,17 @@ fn usual_script(language: &str) -> Option<&'static str> {
         "pa" => "guru",
         _ => return None,
     })
+}
+
+/// Canonicalize deprecated ISO 639-1 primary language subtags (`iw` → `he`, `ji` → `yi`,
+/// `in` → `id`).
+pub(crate) fn canonical_language(language: &str) -> &str {
+    match language {
+        "iw" => "he",
+        "ji" => "yi",
+        "in" => "id",
+        other => other,
+    }
 }
 
 /// A BCP 47 region subtag: two letters or three digits.
@@ -1212,8 +1247,30 @@ mod tests {
 
     #[test]
     fn more_right_to_left() {
-        let i = all(&[("ps", "", ""), ("ckb", "", ""), ("yi", "", ""), ("ug", "", "")]).0;
+        let i = all(&[
+            ("he", "@id\tlanguage.name\tעברית\n@plural\t{n} page|{n} pages\tעמוד {n}|{n} עמודים|{n} עמודים\n", ""),
+            ("ps", "", ""),
+            ("ckb", "", ""),
+            ("yi", "", ""),
+            ("ug", "", ""),
+        ])
+        .0;
         assert!(i.languages().into_iter().skip(1).all(|l| i.rtl(l)));
+        let he = lang(&i, "he");
+        assert_eq!(i.name(he), "עברית");
+        assert_eq!(i.match_tag("he_IL.UTF-8"), Some(he));
+        assert_eq!(i.match_tag("iw_IL.UTF-8"), Some(he));
+        assert_eq!(i.match_tag("iw-IL"), Some(he));
+        assert_eq!(candidates("iw-IL"), ["he-il", "iw-il", "he", "iw"]);
+        assert_eq!(i.trn(he, 1, "{n} page", "{n} pages"), "עמוד \u{2066}1\u{2069}");
+        assert_eq!(i.trn(he, 2, "{n} page", "{n} pages"), "\u{2066}2\u{2069} עמודים");
+        assert_eq!(i.trn(he, 10, "{n} page", "{n} pages"), "\u{2066}10\u{2069} עמודים");
+        assert_eq!(i.trn_plain(he, 10, "{n} page", "{n} pages"), "10 עמודים");
+        let mixed = fmt(
+            "שמור את {file} בתיקייה {dir} ({note})",
+            &[("file", "Report 2.pdf"), ("dir", &ltr("/Users/dana/docs")), ("note", &rtl_isolate("PDF בעברית"))],
+        );
+        assert_eq!(mixed, "שמור את \u{2068}Report 2.pdf\u{2069} בתיקייה \u{2066}/Users/dana/docs\u{2069} (\u{2067}PDF בעברית\u{2069})");
     }
 
     #[test]

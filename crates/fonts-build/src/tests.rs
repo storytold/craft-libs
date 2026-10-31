@@ -123,7 +123,12 @@ fn rejects_a_checkout_under_a_non_utf8_path() {
     use std::os::unix::ffi::OsStrExt;
     let scratch = Scratch::new("non-utf8");
     let dir = scratch.0.join(std::ffi::OsStr::from_bytes(b"craft-fonts-\xff"));
-    std::fs::create_dir_all(dir.join("fonts")).unwrap();
+    // Filesystems such as macOS APFS reject non-UTF-8 paths at creation time (EILSEQ).
+    match std::fs::create_dir_all(dir.join("fonts")) {
+        Ok(()) => {}
+        Err(e) if matches!(e.raw_os_error(), Some(84 | 92)) || e.kind() == std::io::ErrorKind::InvalidInput => return,
+        Err(e) => panic!("creating non-UTF-8 test directory failed: {e}"),
+    }
     std::fs::copy(fixture().join("fonts/sans-arabic/SansArabic.ttf"), dir.join("fonts/a.ttf")).unwrap();
     std::fs::write(dir.join("fonts/manifest.txt"), "A | Regular | fonts/a.ttf | Arab | OFL-1.1 | OFL.txt | 00 | src\n").unwrap();
     let r = run(Embed::new(), Some(&dir), Some("1"));
@@ -251,6 +256,29 @@ fn integrity_is_base64_of_the_hex_hash() {
     for bad in ["", "00", "zz08ef1fc69f15e87ce52bda8a9c24714e4125daf7e50a40edb1aa2be10dff1"] {
         assert_eq!(integrity(bad), "", "{bad:?}");
     }
+}
+
+/// Opt-in Hebrew and Latin manifests embed their selected faces independently of the default manifest.
+#[test]
+fn embeds_from_opt_in_hebrew_and_latin_manifests() {
+    let scratch = Scratch::new("hebrew-manifest");
+    let dir = scratch.0.join("craft-fonts");
+    std::fs::create_dir_all(dir.join("fonts")).unwrap();
+    std::fs::copy(fixture().join("fonts/sans-arabic/SansArabic.ttf"), dir.join("fonts/heebo.ttf")).unwrap();
+    std::fs::copy(fixture().join("fonts/sans-arabic/SansArabic.ttf"), dir.join("fonts/david.ttf")).unwrap();
+    std::fs::write(
+        dir.join("fonts/hebrew-manifest.txt"),
+        "Heebo | Variable | fonts/heebo.ttf | Hebr,Latn | OFL-1.1 | fonts/OFL.txt | 00 | src\n\
+         David Libre | Regular | fonts/david.ttf | Hebr,Latn | OFL-1.1 | fonts/OFL.txt | 00 | src\n",
+    )
+    .unwrap();
+    std::fs::write(dir.join("fonts/latin-manifest.txt"), "Latin Face | Regular | fonts/david.ttf | Latn | OFL-1.1 | fonts/OFL.txt | 00 | src\n")
+        .unwrap();
+    let r = run(Embed::hebrew(), Some(&dir), Some("1"));
+    assert_eq!(r.result.unwrap(), ["Heebo Variable", "David Libre Regular"]);
+    let r = run(Embed::hebrew_documents(&["David Libre"]), Some(&dir), Some("1"));
+    assert_eq!(r.result.unwrap(), ["David Libre Regular"]);
+    assert_eq!(run(Embed::latin(), Some(&dir), Some("1")).result.unwrap(), ["Latin Face Regular"]);
 }
 
 /// A font with only a `cmap` table: a Windows format 4 subtable with `bmp` segments `(first,
