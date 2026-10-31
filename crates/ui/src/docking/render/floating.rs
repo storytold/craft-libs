@@ -54,7 +54,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
 
     /// The title bar and, for a movable (resizable) window, the resize band above it.
     fn window_chrome(&self, window: &Floating<P>) -> f32 {
-        let band = if window.panels().all(|panel| self.permissions(panel).movable) { RESIZE_BAND } else { 0.0 };
+        let band = if self.style.title_height > 0.0 && window.panels().all(|panel| self.permissions(panel).movable) { RESIZE_BAND } else { 0.0 };
         band + self.style.title_height
     }
 
@@ -81,12 +81,15 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
         let style = ChromeStyle::from_dock(self.style);
         let resize_label = self.style.resize_window_label.clone();
         let opacity = self.drag_opacity(ctx, first);
-        let response =
-            FloatingFrame::new(id, rect).bounds(screen).limits(limits).resizable(movable).resize_label(&resize_label).opacity(opacity).show(
-                ctx,
-                &style,
-                |ui, contents| self.window_contents(ui, window, contents, rect, &style),
-            );
+        let response = FloatingFrame::new(id, rect)
+            .bounds(screen)
+            .limits(limits)
+            .reserve_top_resize_band(self.style.title_height > 0.0)
+            .resizable(movable)
+            .resize_axes([!self.content.owns_floating_width(first), true])
+            .resize_label(&resize_label)
+            .opacity(opacity)
+            .show(ctx, &style, |ui, contents| self.window_contents(ui, window, contents, rect, &style));
         for handle in &response.handles {
             self.register_interaction(ctx, handle.id);
         }

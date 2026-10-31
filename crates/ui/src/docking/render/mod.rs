@@ -212,6 +212,12 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
                 // The divider's inner-edge hit margin must win over child scrollbars, just
                 // as accordion dividers win over the adjacent panel's content.
                 // Named by its layout path, which `ResizeSplit` takes and hits report.
+                self.content.split_separator(ui, split.divider);
+                let host_width =
+                    *axis == SplitAxis::Horizontal && self.tree.as_ref().is_some_and(|(panel, _)| self.content.owns_floating_width(panel));
+                if host_width {
+                    return;
+                }
                 let layout_path = self.original_path(path);
                 let response = ResizeHandle::new(
                     self.split_id(&layout_path),
@@ -490,11 +496,15 @@ pub(in crate::docking) fn node_limits<P>(node: &Node<P>, style: &DockStyle, cont
         Node::Split { axis, first, second, .. } => {
             let a = node_limits(first, style, content);
             let b = node_limits(second, style, content);
+            let gap = if matches!(first.as_ref(), Node::Dock { .. }) || matches!(second.as_ref(), Node::Dock { .. }) {
+                style.dock_gap.unwrap_or(style.gap)
+            } else {
+                style.gap
+            };
             let limits = match axis {
-                SplitAxis::Horizontal => PanelLimits {
-                    min: vec2(a.min.x + b.min.x + style.gap, a.min.y.max(b.min.y)),
-                    max: vec2(a.max.x + b.max.x + style.gap, a.max.y.min(b.max.y)),
-                },
+                SplitAxis::Horizontal => {
+                    PanelLimits { min: vec2(a.min.x + b.min.x + gap, a.min.y.max(b.min.y)), max: vec2(a.max.x + b.max.x + gap, a.max.y.min(b.max.y)) }
+                }
                 SplitAxis::Vertical => PanelLimits {
                     min: vec2(a.min.x.max(b.min.x), a.min.y + b.min.y + style.gap),
                     max: vec2(a.max.x.min(b.max.x), a.max.y + b.max.y + style.gap),

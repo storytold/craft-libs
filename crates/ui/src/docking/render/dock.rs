@@ -77,7 +77,7 @@ pub(in crate::docking) fn dock_rects<P>(
     style: &DockStyle,
     content: &dyn crate::docking::DockContent<P>,
 ) -> (Rect, Rect, f32) {
-    let gap = style.gap;
+    let gap = style.dock_gap.unwrap_or(style.gap);
     let room = (rect.width() - gap - super::node_limits(other, style, content).min.x).clamp(0.0, rect.width());
     let width = columns.iter().map(|c| column_width(c, style)).sum::<f32>().clamp(0.0, room);
     let (dock, rest) = match edge_of(side, style.right_to_left) {
@@ -266,10 +266,12 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
             _ => return false,
         };
         let (dock, rest, room) = dock_rects(side, columns, other, rect, self.style, &*self.content);
-        self.dock(ui, side, columns, dock, room);
         path.push(dock_first);
         self.node(ui, other, rest, path, root);
         path.pop();
+        // The divider's hit margin reaches into the sibling (often the canvas). Register
+        // the dock after that sibling so a seam press belongs to the resize handle.
+        self.dock(ui, side, columns, dock, room);
         true
     }
 
@@ -328,6 +330,9 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
         }
         // Registered after the columns, so the narrow hit areas win at the edges.
         for (index, column, first, width, inner) in drawn {
+            if column.iconic && self.content.owns_iconic_column(first) {
+                continue;
+            }
             if width < 1.0 {
                 continue;
             }
@@ -412,7 +417,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
     }
 
     fn handle_style(&self) -> ResizeHandleStyle {
-        ResizeHandleStyle { hovered: self.style.accent, dragged: self.style.accent, focused: self.style.accent }
+        self.content.resize_handle_style(ResizeHandleStyle { hovered: self.style.accent, dragged: self.style.accent, focused: self.style.accent })
     }
 
     /// Width bounds of an expanded column from its panels' limits.
@@ -450,6 +455,14 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
 
     fn column(&mut self, ui: &mut Ui, column: &Column<P>, first: &P, rect: Rect, edge: Edge) {
         if !usable(rect) {
+            return;
+        }
+        let side = side_at(edge, self.style.right_to_left);
+        self.content.column_rect(ui.ctx(), column, rect, side);
+        if column.iconic && self.content.owns_iconic_column(first) {
+            let mut child = ui.new_child(UiBuilder::new().id_salt(("host-iconic", first)).max_rect(rect));
+            child.set_clip_rect(rect.intersect(ui.clip_rect()));
+            self.content.iconic_column(&mut child, column, rect, side);
             return;
         }
         self.record_column_float(column.groups.iter().flat_map(|g| g.panels.iter().cloned()).collect(), rect);

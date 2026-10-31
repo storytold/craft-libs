@@ -11,6 +11,28 @@ The current delivery covers nine creative apps (DesignCraft, VectorCraft, PhotoC
 records their scope and acceptance limits. Assets (font files included), complete themes, localization
 and command handling remain in each application. No icons, fonts or application engines are bundled.
 
+## Host-owned docking chrome
+
+`DockContent` can replace an iconic column or a complete tab group without a
+second layout tree. `column_rect` reports the fitted column before painting;
+`owns_iconic_column`/`iconic_column` and `custom_group` suppress the corresponding
+stock chrome, body and input when the host takes ownership. These hooks are also
+forwarded by `show_customized`'s label/permissions/limits adapter.
+
+`resize_handle_style` and `split_separator` let the host paint one seam while
+retaining stock resize input. `owns_floating_width` delegates horizontal floating
+handles to the host; stock vertical handles remain available. Presentation-only
+`group_collapsed` does not change the selected tab in the shared model.
+
+All ownership hooks default to false/no-op. `DockStyle::dock_gap` defaults to
+`None`, preserving the ordinary split gap; setting it affects side-dock seams
+only. `FloatingFrame::resize_axes` defaults to both axes and preserves an enabled
+axis at corners when the other is disabled. A host with its own title bar can
+disable the separate top gutter through `reserve_top_resize_band(false)`.
+
+Exhaustive `DockStyle` struct literals need `dock_gap: None`; constructors such
+as `from_ui` and `from_visuals` supply the compatible default.
+
 ## SVG catalogs
 
 ```rust
