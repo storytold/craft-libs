@@ -1,5 +1,5 @@
 use crate::{BlendMode, FillRule};
-use crate::color::ColorSpace;
+use crate::color::{ColorSpace, DefaultColorSpaces, DeviceFamily};
 use crate::context::Context;
 use crate::convert::{convert_line_cap, convert_line_join};
 use crate::device::Device;
@@ -120,6 +120,15 @@ pub struct InterpreterSettings {
     /// costs a decode and a resample each for pixels nobody can see. Never set it for a final
     /// render (tiles, whole pages, print, export).
     pub preview: bool,
+    /// PdfCraft patch (35): draw one ink's separation instead of the composite page (see
+    /// [`Plate`](crate::color::Plate)). Soft masks still draw in colour: a mask's luminosity
+    /// comes from its group's colours, not from the page's plate (a DeviceCMYK luminosity
+    /// mask's from its own process plates, see `SoftMask::plate`). Patch 36: the plate's
+    /// `simulation` converts process colour to an output intent's CMYK.
+    pub plate: Option<crate::color::Plate>,
+    /// PdfCraft patch (35): told about each spot ink a paint uses (colours, images, shadings
+    /// and uncoloured patterns), whether or not `plate` is set.
+    pub ink_sink: Option<crate::color::InkSinkFn>,
 }
 
 impl Default for InterpreterSettings {
@@ -142,6 +151,8 @@ impl Default for InterpreterSettings {
             ocg_overrides: Arc::new(Vec::new()),
             cancelled: None,
             preview: false,
+            plate: None,
+            ink_sink: None,
         }
     }
 }
@@ -175,6 +186,9 @@ pub fn interpret_page<'a>(
     if context.settings.render_annotations
         && let Some(annot_arr) = page.raw().get::<Array<'_>>(ANNOTS)
     {
+        // PdfCraft patch (29): bracket the annotations so devices can tell their paints from
+        // the document's own (the reading-colours setting recolours the document, not comments).
+        device.begin_annotations();
         for annot in annot_arr.iter::<Dict<'_>>() {
             let flags = annot.get::<u32>(F).unwrap_or(0);
 
@@ -275,6 +289,7 @@ pub fn interpret_page<'a>(
                 draw_highlight_without_appearance(&annot, context, device);
             }
         }
+        device.end_annotations();
     }
 }
 
@@ -332,6 +347,30 @@ fn draw_highlight_without_appearance<'a>(
     context.restore_state(device);
 }
 
+/// PdfCraft patch (#3018): the color space `cs` or `CS` selects by `name`: a device space, else
+/// the `/ColorSpace` resource `name`. A device space, named directly or by a resource, is
+/// replaced by its default from `defaults` (ISO 32000-2 §8.6.5.6).
+fn named_color_space<'a>(
+    name: &hayro_syntax::object::Name<'_>,
+    resources: &Resources<'a>,
+    defaults: &DefaultColorSpaces<'_, '_>,
+    context: &mut Context<'a>,
+) -> Option<ColorSpace> {
+    if let Some(named) = ColorSpace::new_from_name(name) {
+        let default = DeviceFamily::of_name(name).and_then(|family| defaults.get(family));
+        return Some(default.map_or(named, |(space, _)| space));
+    }
+    let resource = resources.get_color_space(name);
+    if let Some((space, _)) = resource
+        .as_ref()
+        .and_then(DeviceFamily::of_object)
+        .and_then(|family| defaults.get(family))
+    {
+        return Some(space);
+    }
+    context.get_color_space(resources, name)
+}
+
 /// Interprets the instructions that `ops` yields, until they run out or the caller cancels. It runs
 /// once per window of a content stream, between one `save_state` and its restore (see
 /// `interpret_content`).
@@ -341,6 +380,13 @@ fn interpret_window<'a>(
     context: &mut Context<'a>,
     device: &mut impl Device<'a>,
 ) {
+    // PdfCraft patch (#3018): the resources' DefaultGray, DefaultRGB and DefaultCMYK replace the
+    // device spaces that color operators and images select (ISO 32000-2 §8.6.5.6).
+    let defaults = DefaultColorSpaces::new(
+        resources,
+        &context.interpreter_cache.object_cache,
+        context.settings.plate.is_some(),
+    );
     while let Some(op) = ops.next() {
         // PdfCraft patch: stop when the caller cancelled (see `InterpreterSettings::cancelled`).
         if context.settings.cancelled.as_ref().is_some_and(|c| c.load(Ordering::Relaxed)) {
@@ -349,18 +395,21 @@ fn interpret_window<'a>(
         match op {
             TypedInstruction::SaveState(_) => context.save_state(),
             TypedInstruction::StrokeColorDeviceRgb(s) => {
-                context.get_mut().graphics_state.stroke_cs = ColorSpace::device_rgb();
+                // PdfCraft patch (#3018): DeviceRGB, or the DefaultRGB that replaces it.
+                context.get_mut().graphics_state.stroke_cs = defaults.device(DeviceFamily::Rgb);
                 context.get_mut().graphics_state.stroke_color =
                     smallvec![s.0.as_f32(), s.1.as_f32(), s.2.as_f32()];
                 context.get_mut().graphics_state.stroke_pattern = None;
             }
             TypedInstruction::StrokeColorDeviceGray(s) => {
-                context.get_mut().graphics_state.stroke_cs = ColorSpace::device_gray();
+                // PdfCraft patch (#3018): DeviceGray, or the DefaultGray that replaces it.
+                context.get_mut().graphics_state.stroke_cs = defaults.device(DeviceFamily::Gray);
                 context.get_mut().graphics_state.stroke_color = smallvec![s.0.as_f32()];
                 context.get_mut().graphics_state.stroke_pattern = None;
             }
             TypedInstruction::StrokeColorCmyk(s) => {
-                context.get_mut().graphics_state.stroke_cs = ColorSpace::device_cmyk();
+                // PdfCraft patch (#3018): DeviceCMYK, or the DefaultCMYK that replaces it.
+                context.get_mut().graphics_state.stroke_cs = defaults.device(DeviceFamily::Cmyk);
                 context.get_mut().graphics_state.stroke_color =
                     smallvec![s.0.as_f32(), s.1.as_f32(), s.2.as_f32(), s.3.as_f32()];
                 context.get_mut().graphics_state.stroke_pattern = None;
@@ -424,18 +473,24 @@ fn interpret_window<'a>(
                 fill_stroke_path(context, device, FillRule::NonZero);
             }
             TypedInstruction::NonStrokeColorDeviceGray(s) => {
-                context.get_mut().graphics_state.none_stroke_cs = ColorSpace::device_gray();
+                // PdfCraft patch (#3018): DeviceGray, or the DefaultGray that replaces it.
+                context.get_mut().graphics_state.none_stroke_cs =
+                    defaults.device(DeviceFamily::Gray);
                 context.get_mut().graphics_state.non_stroke_color = smallvec![s.0.as_f32()];
                 context.get_mut().graphics_state.non_stroke_pattern = None;
             }
             TypedInstruction::NonStrokeColorDeviceRgb(s) => {
-                context.get_mut().graphics_state.none_stroke_cs = ColorSpace::device_rgb();
+                // PdfCraft patch (#3018): DeviceRGB, or the DefaultRGB that replaces it.
+                context.get_mut().graphics_state.none_stroke_cs =
+                    defaults.device(DeviceFamily::Rgb);
                 context.get_mut().graphics_state.non_stroke_color =
                     smallvec![s.0.as_f32(), s.1.as_f32(), s.2.as_f32()];
                 context.get_mut().graphics_state.non_stroke_pattern = None;
             }
             TypedInstruction::NonStrokeColorCmyk(s) => {
-                context.get_mut().graphics_state.none_stroke_cs = ColorSpace::device_cmyk();
+                // PdfCraft patch (#3018): DeviceCMYK, or the DefaultCMYK that replaces it.
+                context.get_mut().graphics_state.none_stroke_cs =
+                    defaults.device(DeviceFamily::Cmyk);
                 context.get_mut().graphics_state.non_stroke_color =
                     smallvec![s.0.as_f32(), s.1.as_f32(), s.2.as_f32(), s.3.as_f32()];
                 context.get_mut().graphics_state.non_stroke_pattern = None;
@@ -524,13 +579,9 @@ fn interpret_window<'a>(
                 // Ignore for now.
             }
             TypedInstruction::ColorSpaceStroke(c) => {
-                let cs = if let Some(named) = ColorSpace::new_from_name(c.0) {
-                    named
-                } else {
-                    context
-                        .get_color_space(resources, c.0)
-                        .unwrap_or(ColorSpace::device_gray())
-                };
+                // PdfCraft patch (#3018): see `named_color_space`.
+                let cs = named_color_space(c.0, resources, &defaults, context)
+                    .unwrap_or(ColorSpace::device_gray());
 
                 if !cs.is_pattern() {
                     context.get_mut().graphics_state.stroke_pattern = None;
@@ -539,13 +590,9 @@ fn interpret_window<'a>(
                 context.get_mut().graphics_state.stroke_cs = cs;
             }
             TypedInstruction::ColorSpaceNonStroke(c) => {
-                let cs = if let Some(named) = ColorSpace::new_from_name(c.0) {
-                    named
-                } else {
-                    context
-                        .get_color_space(resources, c.0)
-                        .unwrap_or(ColorSpace::device_gray())
-                };
+                // PdfCraft patch (#3018): see `named_color_space`.
+                let cs = named_color_space(c.0, resources, &defaults, context)
+                    .unwrap_or(ColorSpace::device_gray());
 
                 if !cs.is_pattern() {
                     context.get_mut().graphics_state.non_stroke_pattern = None;
@@ -555,11 +602,9 @@ fn interpret_window<'a>(
             }
             TypedInstruction::DashPattern(p) => {
                 context.get_mut().graphics_state.stroke_props.dash_offset = p.1.as_f32();
-                // kurbo apparently cannot properly deal with offsets that are exactly 0.
+                // PdfCraft patch: bounded, see `types::dash_array`.
                 context.get_mut().graphics_state.stroke_props.dash_array =
-                    p.0.iter::<f32>()
-                        .map(|n| if n == 0.0 { 0.01 } else { n })
-                        .collect();
+                    crate::types::dash_array(p.0.iter::<f32>());
             }
             TypedInstruction::RenderingIntent(_) => {
                 // Ignore for now.
@@ -570,7 +615,7 @@ fn interpret_window<'a>(
                 context.get_mut().graphics_state.non_stroke_pattern = n.1.and_then(|name| {
                     resources
                         .get_pattern(name)
-                        .and_then(|d| Pattern::new(d, context, resources))
+                        .and_then(|d| Pattern::new(d, context, resources, &defaults))
                 });
             }
             TypedInstruction::StrokeColorNamed(n) => {
@@ -579,7 +624,7 @@ fn interpret_window<'a>(
                 context.get_mut().graphics_state.stroke_pattern = n.1.and_then(|name| {
                     resources
                         .get_pattern(name)
-                        .and_then(|d| Pattern::new(d, context, resources))
+                        .and_then(|d| Pattern::new(d, context, resources, &defaults))
                 });
             }
             TypedInstruction::BeginMarkedContentWithProperties(bdc) => {
@@ -780,6 +825,8 @@ fn interpret_window<'a>(
                         &cache,
                         Some(&decoded_cache),
                         transfer_function.clone(),
+                        // PdfCraft patch (#3018): an image in a device space draws in its default.
+                        &defaults,
                     )
                 }) {
                     draw_xobject(&x_object, resources, context, device);
@@ -790,14 +837,17 @@ fn interpret_window<'a>(
                 let transfer_function = context.get().graphics_state.transfer_function.clone();
                 let cache = context.interpreter_cache.object_cache.clone();
                 // PdfCraft patch: inline images are not cached (see `DecodedImageKey`).
+                // PdfCraft patch (#3018): an inline image in a device space, named directly or by a
+                // resource, draws in its default.
                 if let Some(x_object) = ImageXObject::new(
                     i.0,
-                    |name| context.get_color_space(resources, name),
+                    |name| named_color_space(name, resources, &defaults, context),
                     &warning_sink,
                     &cache,
                     None,
                     false,
                     transfer_function,
+                    Some(&defaults),
                 ) {
                     draw_image_xobject(&x_object, context, device);
                 }
@@ -816,9 +866,18 @@ fn interpret_window<'a>(
                     .get_shading(s.0)
                     .and_then(|o| {
                         let (dict, stream) = dict_or_stream(&o)?;
-                        Shading::new(dict, stream, &context.interpreter_cache.object_cache)
+                        // PdfCraft patch (#3018): a shading in a device space draws in its default.
+                        Shading::new(
+                            dict,
+                            stream,
+                            &context.interpreter_cache.object_cache,
+                            &defaults,
+                        )
                     })
-                    .map(|s| {
+                    .map(|mut s| {
+                        // Craft patch (flatten): `sh` ignores `/Background` (ISO 32000-2
+                        // §8.7.4.5.1); only a shading pattern paints it.
+                        s.background = None;
                         Pattern::Shading(ShadingPattern {
                             shading: Arc::new(s),
                             matrix: Affine::IDENTITY,

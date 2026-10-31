@@ -604,9 +604,17 @@ impl<'a> Page<'a> {
         {
             (A4.width() as f32, A4.height() as f32)
         } else {
+            // PdfCraft patch: retain a one-point floor after UserUnit, not one raw unit.
+            // The stored unit is finite and within 1..=75000. Round upward only if the
+            // reciprocal's f32 product would fall below one and trigger a placeholder.
+            let mut raw_floor = 1.0 / self.user_unit;
+            if raw_floor * self.user_unit < 1.0 {
+                raw_floor = raw_floor.next_up();
+            }
+            let raw_floor = f64::from(raw_floor);
             (
-                crop_box.width().max(1.0) as f32,
-                crop_box.height().max(1.0) as f32,
+                crop_box.width().max(raw_floor) as f32,
+                crop_box.height().max(raw_floor) as f32,
             )
         }
     }
@@ -1004,6 +1012,45 @@ mod page_tree_tests {
         let repaired = cached_with_limit(&objects, 1).unwrap();
         assert_eq!(repaired.get().len(), 1);
         assert_eq!(repaired.get()[0].raw().obj_id().unwrap().obj_number, 3);
+    }
+
+    fn raw_crop_unit_page(unit: f64, crop: [f64; 4]) -> Vec<u8> {
+        let bounds = crop.map(|n| n.to_string()).join(" ");
+        let objects = [
+            "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
+            format!("<< /Type /Page /Parent 2 0 R /MediaBox [{bounds}] /CropBox [{bounds}] /UserUnit {unit} /Resources << >> /Contents [] >>"),
+        ];
+        pdf_bytes(&objects)
+    }
+
+    /// PdfCraft patch: a tiny crop box keeps a one-point floor after `/UserUnit`, not one raw unit.
+    #[test]
+    fn raw_crop_unit_floor_is_one_point_after_user_unit() {
+        for (unit, width, height) in [(1.0, 1.0, 1.0), (4096.0, 512.0, 1024.0), (75000.0, 9375.0, 18750.0)] {
+            let pdf = Pdf::new(raw_crop_unit_page(unit, [10.0, 20.0, 10.125, 20.25])).unwrap();
+            let page = &pdf.pages()[0];
+            assert_eq!(page.base_dimensions(), ((width / unit) as f32, (height / unit) as f32), "unit={unit}");
+        }
+        // In f32, the nearest reciprocal of 41 or 47 multiplies back to 0.99999994.
+        for unit in [1.0, 41.0, 47.0] {
+            let pdf = Pdf::new(raw_crop_unit_page(unit, [0.0, 0.0, 0.01, 0.01])).unwrap();
+            let page = &pdf.pages()[0];
+            let (width, height) = page.base_dimensions();
+            assert!(width * page.user_unit() >= 1.0 && height * page.user_unit() >= 1.0, "unit={unit}");
+            let (width, height) = page.render_dimensions();
+            assert!((1.0..=1.000001).contains(&width) && (1.0..=1.000001).contains(&height), "unit={unit}: {width} by {height}");
+        }
+        // A nearly-zero crop box still falls back to A4.
+        for unit in [1.0, 4096.0, 75000.0] {
+            for side in [0.0, 0.0001] {
+                let pdf = Pdf::new(raw_crop_unit_page(unit, [0.0, 0.0, side, side])).unwrap();
+                let page = &pdf.pages()[0];
+                let expected = (595.2755905511812_f64 as f32, 841.8897637795277_f64 as f32);
+                assert_eq!(page.base_dimensions(), expected, "unit={unit}, side={side}");
+                assert_eq!(page.render_dimensions(), (expected.0 * unit as f32, expected.1 * unit as f32));
+            }
+        }
     }
 }
 

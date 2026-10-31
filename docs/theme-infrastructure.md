@@ -93,7 +93,9 @@ locale handling and fallback order: PhotoCraft uses its text and preference crat
 uses `vectorcraft_text`; DesignCraft and WordCraft use their font crates; PdfCraft adds script
 and system fallback; LightCraft uses its engine catalog; FilmCraft and EffectCraft use their text
 crates and local font discovery. DesignCraft also configures named Arabic shaping families.
-These dependencies and font assets stay outside `craft-ui`.
+Those dependencies and the font files stay in the apps. What they had in common, the fallback
+order and the system-font fallback, is `craft_ui::fonts` (see the
+[craft-ui README](../crates/ui/README.md#ui-fonts)); each app hands it the faces it embeds.
 
 Theme references occur throughout panels, menus and tools, with local visual/spacing overrides
 in every app. A source search alone cannot turn this into a percentage of correctly themed UI:
@@ -128,7 +130,7 @@ Examples worth preserving or reviewing separately:
   customize backgrounds and slider widths.
 
 This extraction preserves those choices. It does not certify whole-app accessibility or theme
-consistency, and it does not move font installation into the shared crate.
+consistency. Font installation is separate from theme application: `craft_ui::fonts` handles it.
 
 ## Migration and validation
 

@@ -3,11 +3,31 @@
 
 use crate::matroska::codec::map_codec;
 use crate::matroska::ebml::{Children, float, int, string, uint};
-use crate::matroska::ids::*;
+use crate::matroska::ids::{
+    ALPHA_MODE, AUDIO, BIT_DEPTH, BITS_PER_CHANNEL, CB_SUBSAMPLING_HORZ, CB_SUBSAMPLING_VERT, CHANNELS, CHAP_COUNTRY, CHAP_LANGUAGE,
+    CHAP_LANGUAGE_BCP47, CHAP_STRING, CHAPTER_ATOM, CHAPTER_DISPLAY, CHAPTER_FLAG_ENABLED, CHAPTER_FLAG_HIDDEN, CHAPTER_STRING_UID, CHAPTER_TIME_END,
+    CHAPTER_TIME_START, CHAPTER_UID, CHROMA_SITING_HORZ, CHROMA_SITING_VERT, CHROMA_SUBSAMPLING_HORZ, CHROMA_SUBSAMPLING_VERT, CODEC_DELAY, CODEC_ID,
+    CODEC_NAME, CODEC_PRIVATE, COLOUR, COLOUR_SPACE, CONTENT_COMP_ALGO, CONTENT_COMP_SETTINGS, CONTENT_COMPRESSION, CONTENT_ENCODING,
+    CONTENT_ENCODING_ORDER, CONTENT_ENCODING_SCOPE, CONTENT_ENCODING_TYPE, CONTENT_ENCODINGS, CUE_BLOCK_NUMBER, CUE_CLUSTER_POSITION, CUE_DURATION,
+    CUE_POINT, CUE_RELATIVE_POSITION, CUE_TIME, CUE_TRACK, CUE_TRACK_POSITIONS, DATE_UTC, DEFAULT_DURATION, DISPLAY_HEIGHT, DISPLAY_UNIT,
+    DISPLAY_WIDTH, DURATION, EDITION_ENTRY, EDITION_FLAG_DEFAULT, EDITION_FLAG_HIDDEN, EDITION_FLAG_ORDERED, EDITION_UID, FIELD_ORDER, FLAG_DEFAULT,
+    FLAG_ENABLED, FLAG_FORCED, FLAG_HEARING_IMPAIRED, FLAG_INTERLACED, FLAG_LACING, LANGUAGE, LANGUAGE_BCP47, LUMINANCE_MAX, LUMINANCE_MIN,
+    MASTERING_METADATA, MATRIX_COEFFICIENTS, MAX_CLL, MAX_FALL, MUXING_APP, NAME, OUTPUT_SAMPLING_FREQUENCY, PIXEL_CROP_BOTTOM, PIXEL_CROP_LEFT,
+    PIXEL_CROP_RIGHT, PIXEL_CROP_TOP, PIXEL_HEIGHT, PIXEL_WIDTH, PRIMARIES, PRIMARY_B_X, PRIMARY_B_Y, PRIMARY_G_X, PRIMARY_G_Y, PRIMARY_R_X,
+    PRIMARY_R_Y, PROJECTION, PROJECTION_POSE_PITCH, PROJECTION_POSE_ROLL, PROJECTION_POSE_YAW, PROJECTION_TYPE, RANGE, SAMPLING_FREQUENCY, SEEK,
+    SEEK_ID, SEEK_POSITION, SEEK_PRE_ROLL, SEGMENT_UUID, SIMPLE_TAG, STEREO_MODE, TAG, TAG_ATTACHMENT_UID, TAG_BINARY, TAG_CHAPTER_UID, TAG_DEFAULT,
+    TAG_EDITION_UID, TAG_LANGUAGE, TAG_NAME, TAG_STRING, TAG_TRACK_UID, TARGET_TYPE, TARGET_TYPE_VALUE, TARGETS, TIMESTAMP_SCALE, TITLE, TRACK_ENTRY,
+    TRACK_NUMBER, TRACK_TYPE, TRACK_UID, TRANSFER_CHARACTERISTICS, VIDEO, WHITE_POINT_X, WHITE_POINT_Y, WRITING_APP,
+};
 use crate::matroska::track::{AudioInfo, Color, ContentEncoding, MasteringMetadata, Projection, Track, TrackKind, VideoInfo, gcd};
 
 // A malformed Matroska file may contain arbitrarily deep ChapterAtom and SimpleTag chains.
 const MAX_META_DEPTH: usize = 64;
+/// Longest header-stripping prefix accepted. It is copied in front of every frame, laced
+/// zero-length frames included, so its length multiplies what a small file can make a reader
+/// produce. Real files strip a few bytes of codec header; a longer one is treated as an
+/// unsupported compression and its frames are not reconstructed.
+const MAX_STRIPPED_HEADER: usize = 256;
 /// Largest accepted `TimestampScale` (about 4.3 s per tick). It keeps tick to nanosecond
 /// arithmetic on 64-bit timestamps within `i128`.
 const MAX_TIMESTAMP_SCALE: u64 = 1 << 32;
@@ -403,8 +423,8 @@ fn parse_video(d: &[u8]) -> VideoInfo {
             FIELD_ORDER => v.field_order = Some(u),
             STEREO_MODE => v.stereo_mode = Some(u),
             ALPHA_MODE => v.alpha_mode = u,
-            COLOR_SPACE => v.color_space = e.data.try_into().ok(),
-            COLOR => v.color = Some(parse_color(e.data)),
+            COLOUR_SPACE => v.color_space = e.data.try_into().ok(),
+            COLOUR => v.color = Some(parse_color(e.data)),
             PROJECTION => {
                 let mut p = Projection::default();
                 for x in Children::new(e.data) {
@@ -466,7 +486,7 @@ fn parse_encodings(d: &[u8]) -> Vec<ContentEncoding> {
             ContentEncoding::Encryption { scope }
         } else {
             let (algo, settings) = comp.unwrap_or((0, Vec::new()));
-            if algo == 3 {
+            if algo == 3 && settings.len() <= MAX_STRIPPED_HEADER {
                 ContentEncoding::HeaderStripping { bytes: settings, scope }
             } else {
                 ContentEncoding::Compression { algo, settings, scope }
@@ -542,14 +562,18 @@ pub(crate) fn parse_tracks(d: &[u8], timestamp_scale: u64) -> Vec<Track> {
             t.audio = Some(AudioInfo::default());
         }
         // CodecPrivate may itself be header-stripped (scope bit 2 = private data)
-        for enc in &t.encodings {
+        // Prepends in list order, built in one pass: a hostile entry can list millions.
+        let mut prefix = Vec::new();
+        for enc in t.encodings.iter().rev() {
             if let ContentEncoding::HeaderStripping { bytes, scope } = enc
                 && scope & 2 != 0
             {
-                let mut p = bytes.clone();
-                p.extend_from_slice(&t.codec_private);
-                t.codec_private = p;
+                prefix.extend_from_slice(bytes);
             }
+        }
+        if !prefix.is_empty() {
+            prefix.extend_from_slice(&t.codec_private);
+            t.codec_private = prefix;
         }
         t.codec = map_codec(&t.codec_id, &t.codec_private, t.audio.as_ref());
         out.push(t);
@@ -560,6 +584,56 @@ pub(crate) fn parse_tracks(d: &[u8], timestamp_scale: u64) -> Vec<Track> {
 #[cfg(test)]
 mod metadata_depth_tests {
     use super::*;
+    use crate::matroska::mux::{el, el_uint};
+
+    fn header_stripping(bytes: &[u8]) -> Vec<ContentEncoding> {
+        let mut comp = Vec::new();
+        el_uint(&mut comp, CONTENT_COMP_ALGO, 3);
+        el(&mut comp, CONTENT_COMP_SETTINGS, bytes);
+        let mut enc = Vec::new();
+        el(&mut enc, CONTENT_COMPRESSION, &comp);
+        let mut encs = Vec::new();
+        el(&mut encs, CONTENT_ENCODING, &enc);
+        parse_encodings(&encs)
+    }
+
+    #[test]
+    fn a_long_stripped_header_is_not_put_in_front_of_frames() {
+        let kept = header_stripping(&[7; MAX_STRIPPED_HEADER]);
+        assert!(matches!(&kept[..], [ContentEncoding::HeaderStripping { bytes, .. }] if bytes.len() == MAX_STRIPPED_HEADER));
+        let refused = header_stripping(&[7; MAX_STRIPPED_HEADER + 1]);
+        assert!(matches!(&refused[..], [ContentEncoding::Compression { algo: 3, .. }]), "{refused:?}");
+    }
+
+    fn track_with_private(private: &[u8], strips: &[(&[u8], u64)]) -> Track {
+        let mut encs = Vec::new();
+        for &(bytes, scope) in strips {
+            let mut comp = Vec::new();
+            el_uint(&mut comp, CONTENT_COMP_ALGO, 3);
+            el(&mut comp, CONTENT_COMP_SETTINGS, bytes);
+            let mut enc = Vec::new();
+            el_uint(&mut enc, CONTENT_ENCODING_SCOPE, scope);
+            el(&mut enc, CONTENT_COMPRESSION, &comp);
+            el(&mut encs, CONTENT_ENCODING, &enc);
+        }
+        let mut te = Vec::new();
+        el_uint(&mut te, TRACK_NUMBER, 1);
+        el(&mut te, CODEC_ID, b"V_TEST");
+        el(&mut te, CODEC_PRIVATE, private);
+        el(&mut te, CONTENT_ENCODINGS, &encs);
+        let mut tracks = Vec::new();
+        el(&mut tracks, TRACK_ENTRY, &te);
+        let mut parsed = parse_tracks(&tracks, 1_000_000);
+        assert_eq!(parsed.len(), 1);
+        parsed.remove(0)
+    }
+
+    #[test]
+    fn codec_private_stripped_headers_are_restored_in_reverse_order() {
+        let strips: [(&[u8], u64); 4] = [(b"first", 2), (b"", 2), (b"second", 2), (b"frame", 1)];
+        assert_eq!(track_with_private(b"private", &strips).codec_private, b"secondfirstprivate");
+        assert_eq!(track_with_private(b"private", &[(b"frame", 1)]).codec_private, b"private");
+    }
 
     #[test]
     fn deeply_nested_chapters_stop_at_depth_limit() {

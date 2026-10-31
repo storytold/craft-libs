@@ -26,6 +26,8 @@ pub struct Options {
     /// Straight-alpha sRGB bytes; output pixels are always premultiplied.
     pub background: [u8; 4],
     /// Generic solid-colour mapping; reading presets and print bypass policy belong to callers.
+    /// It also maps a plate's gray film (`InterpreterSettings::plate`), so a plate render that
+    /// must keep its tints leaves it `None`. Knockout clears are never mapped.
     pub color_replacement: Option<ColorReplacement>,
 }
 

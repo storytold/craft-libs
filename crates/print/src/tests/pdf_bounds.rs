@@ -254,3 +254,225 @@ fn an_inflate_limit_stops_later_stream_and_object_work() {
     assert_eq!(reader.budget.nodes, 0);
     assert_eq!(reader.budget.tokens, 0);
 }
+
+#[test]
+fn an_oversized_inherited_media_box_is_not_copied_for_every_page() {
+    // One inline MediaBox far longer than four numbers, inherited by many small pages.
+    let pages = 4_000;
+    let media = vec!["0"; 25_000].join(" ");
+    let kids: Vec<String> = (0..pages).map(|i| format!("{} 0 R", i + 3)).collect();
+    let mut objects = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+        format!("<< /Type /Pages /Kids [{}] /Count {pages} /MediaBox [{media}] >>", kids.join(" ")),
+    ];
+    objects.extend((0..pages).map(|_| "<< /Type /Page /Parent 2 0 R >>".to_string()));
+    let mut pdf = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, object) in objects.iter().enumerate() {
+        offsets.push(pdf.len());
+        pdf.extend_from_slice(format!("{} 0 obj\n{object}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = pdf.len();
+    pdf.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f\r\n", objects.len() + 1).as_bytes());
+    for offset in offsets {
+        pdf.extend_from_slice(format!("{offset:010} 00000 n\r\n").as_bytes());
+    }
+    pdf.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objects.len() + 1).as_bytes());
+    let started = std::time::Instant::now();
+    let sheets = read(&pdf).unwrap();
+    assert!(started.elapsed() < std::time::Duration::from_secs(10), "{:?}", started.elapsed());
+    assert_eq!(sheets.sheets.len(), pages);
+}
+
+/// A classic-xref PDF of these objects, numbered from 1.
+fn classic(objects: &[String]) -> Vec<u8> {
+    let mut pdf = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, object) in objects.iter().enumerate() {
+        offsets.push(pdf.len());
+        pdf.extend_from_slice(format!("{} 0 obj\n{object}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = pdf.len();
+    pdf.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f\r\n", objects.len() + 1).as_bytes());
+    for offset in offsets {
+        pdf.extend_from_slice(format!("{offset:010} 00000 n\r\n").as_bytes());
+    }
+    pdf.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objects.len() + 1).as_bytes());
+    pdf
+}
+
+/// Three Letter pages that inherit their MediaBox and Resources; the third is turned by its own
+/// `/Rotate 90`, and carries `extra` in its dictionary.
+fn three_pages(extra: &str) -> Vec<u8> {
+    classic(&three_page_objects(extra))
+}
+
+fn three_page_objects(extra: &str) -> Vec<String> {
+    let mut objects = vec![
+        "<< /Type /Catalog /Pages 2 0 R /PageMode /UseNone >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R 4 0 R 5 0 R] /Count 3 /MediaBox [0 0 612 792] /Resources << /ProcSet [/PDF] >> >>".to_string(),
+        "<< /Type /Page /Parent 2 0 R /Contents 6 0 R >>".to_string(),
+        "<< /Type /Page /Parent 2 0 R /Contents 7 0 R >>".to_string(),
+        format!("<< /Type /Page /Parent 2 0 R /Contents 8 0 R /Rotate 90 {extra} >>"),
+    ];
+    objects.extend((0..3).map(|_| "<< /Length 0 >>\nstream\n\nendstream".to_string()));
+    objects
+}
+
+/// `pdf` with `copies` collated copies in one job, or `None` when they can't be.
+fn repeat(pdf: &[u8], copies: u32, two_sided: bool) -> Option<Vec<u8>> {
+    read(pdf).unwrap().repeated(&[], Repeat { copies, two_sided }).unwrap()
+}
+
+#[test]
+fn collated_copies_repeat_the_pages_with_a_blank_back_between_odd_copies() {
+    let pdf = three_pages("");
+    let sheets = read(&pdf).unwrap();
+    // The turned page comes back upright in a portrait job, in every copy.
+    let edits = plan(&sheets.sheets, (612.0, 792.0), Fit::Exact).unwrap();
+    let content = |n: u32| Some(Obj::Ref(n, 0));
+    for (two_sided, expected) in [
+        (true, vec![content(6), content(7), content(8), None, content(6), content(7), content(8)]),
+        (false, vec![content(6), content(7), content(8), content(6), content(7), content(8)]),
+    ] {
+        let updated = sheets.repeated(&edits, Repeat { copies: 2, two_sided }).unwrap().unwrap();
+        let repeated = read(&updated).unwrap();
+        let contents: Vec<Option<Obj>> = repeated.sheets.iter().map(|s| get(&s.dict, b"Contents").cloned()).collect();
+        assert_eq!(contents, expected);
+        for sheet in &repeated.sheets {
+            assert_eq!((sheet.size(), sheet.rotate % 180), ((612.0, 792.0), 0), "{sheet:?}");
+            // What the old parent gave each page is the page's own now.
+            assert!(get(&sheet.dict, b"Resources").is_some());
+            assert!(sheet.obj.is_some_and(|(num, _)| num >= sheets.size), "every copy is a new page object");
+        }
+        assert_eq!(get(&repeated.catalog, b"PageMode"), get(&sheets.catalog, b"PageMode"), "the rest of the catalog is kept");
+        // The inherited resources are written once and shared.
+        let resources: Vec<_> = repeated.sheets.iter().filter(|s| get(&s.dict, b"Contents").is_some()).map(|s| get(&s.dict, b"Resources")).collect();
+        assert!(matches!(resources[0], Some(Obj::Ref(..))) && resources.iter().all(|r| *r == resources[0]), "{resources:?}");
+    }
+    // Without the edits the last page stays turned, and so does the blank back after it.
+    let bytes = repeat(&pdf, 2, true).unwrap();
+    let repeated = read(&bytes).unwrap();
+    assert_eq!((repeated.sheets[3].size(), repeated.sheets[3].rotate), (repeated.sheets[2].size(), 90));
+    // An even page count needs no blank; one copy is the document as it is.
+    let even = classic(&[
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 612 792] >>".into(),
+        "<< /Type /Page /Parent 2 0 R >>".into(),
+        "<< /Type /Page /Parent 2 0 R >>".into(),
+    ]);
+    assert_eq!(read(&repeat(&even, 3, true).unwrap()).unwrap().sheets.len(), 6);
+    assert_eq!(repeat(&pdf, 1, true).unwrap(), pdf);
+    // A cross-reference stream, with the catalog and the page in an object stream.
+    for compressed in [false, true] {
+        let bytes = repeat(&fixture("3 0 R", compressed, ""), 3, false).unwrap();
+        let repeated = read(&bytes).unwrap();
+        assert_eq!(repeated.sheets.len(), 3);
+        assert_eq!(repeated.xref_stream, compressed);
+    }
+}
+
+#[test]
+fn collated_copies_that_cannot_be_one_job_are_left_to_separate_jobs() {
+    assert!(repeat(&three_pages("/Annots [6 0 R]"), 2, false).is_none(), "annotations");
+    let pdf = three_pages("");
+    assert!(repeat(&pdf, 50_000, false).is_none(), "too many pages");
+    let encrypted = Sheets { trailer: vec![(b"Encrypt".to_vec(), Obj::Ref(9, 0))], ..read(&pdf).unwrap() };
+    assert!(encrypted.repeated(&[], Repeat { copies: 2, two_sided: false }).unwrap().is_none(), "encrypted");
+}
+
+#[test]
+fn a_null_missing_or_free_entry_inherits_and_an_empty_annotation_list_is_none() {
+    // Object 9 is written, but its cross-reference entry is free.
+    let mut objects = three_page_objects("/Resources 9 0 R");
+    objects.push("<< /ProcSet [/Text] >>".into());
+    let mut free = classic(&objects);
+    let at = free.windows(9).rposition(|w| w == b"00000 n\r\n").unwrap();
+    free[at + 6] = b'f';
+    for (extra, pdf) in [
+        ("/Resources null", three_pages("/Resources null")),
+        ("/Resources 99 0 R", three_pages("/Resources 99 0 R")),
+        ("/Resources 9 0 R (free)", free),
+        ("/Annots null", three_pages("/Annots null")),
+        ("/Annots []", three_pages("/Annots []")),
+    ] {
+        let bytes = repeat(&pdf, 2, false).unwrap();
+        let repeated = read(&bytes).unwrap();
+        let resources: Vec<_> = repeated.sheets.iter().map(|s| get(&s.dict, b"Resources")).collect();
+        assert!(matches!(resources[0], Some(Obj::Ref(..))) && resources.iter().all(|r| *r == resources[0]), "{extra}: {resources:?}");
+    }
+}
+
+#[test]
+fn large_inherited_resources_are_written_once_for_every_copy() {
+    let pages = 4_000;
+    let procset = vec!["/PDF"; 25_000].join(" ");
+    let kids: Vec<String> = (0..pages).map(|i| format!("{} 0 R", i + 3)).collect();
+    let mut objects = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+        format!("<< /Type /Pages /Kids [{}] /Count {pages} /MediaBox [0 0 612 792] /Resources << /ProcSet [{procset}] >> >>", kids.join(" ")),
+    ];
+    objects.extend((0..pages).map(|_| "<< /Type /Page /Parent 2 0 R >>".to_string()));
+    let pdf = classic(&objects);
+    let updated = repeat(&pdf, 3, false).unwrap();
+    assert!(updated.len() < pdf.len() + (4 << 20), "{} bytes", updated.len());
+    assert_eq!(read(&updated).unwrap().sheets.len(), 3 * pages);
+}
+
+fn flate_dict() -> Dict {
+    vec![(b"Filter".to_vec(), Obj::Name(b"FlateDecode".to_vec()))]
+}
+
+fn varied(len: usize) -> Vec<u8> {
+    (0..len).map(|i| u8::try_from(i * i % 251).unwrap_or(0)).collect()
+}
+
+#[test]
+fn a_valid_flate_stream_round_trips() {
+    let raw = varied(4000);
+    let packed = miniz_oxide::deflate::compress_to_vec_zlib(&raw, 6);
+    let mut budget = Budget::default();
+    assert_eq!(decode(&flate_dict(), &packed, &mut budget), Some(raw.clone()));
+    assert_eq!(budget.decoded, raw.len());
+    assert!(!budget.exhausted);
+}
+
+#[test]
+fn a_truncated_flate_stream_yields_only_the_bytes_it_inflated() {
+    let raw = varied(4000);
+    let packed = miniz_oxide::deflate::compress_to_vec_zlib(&raw, 6);
+    let cut = packed.get(..packed.len() * 3 / 4).unwrap_or_default();
+    let mut budget = Budget::default();
+    let got = decode(&flate_dict(), cut, &mut budget).unwrap_or_default();
+    assert!(!got.is_empty() && got.len() < raw.len());
+    assert!(raw.starts_with(&got), "a prefix of the data, with no zero padding");
+    assert!(!budget.exhausted);
+}
+
+#[test]
+fn a_stream_rejected_before_any_output_is_none_not_zeros() {
+    // A zlib header, then a reserved deflate block type: nothing is ever inflated, and the
+    // bare-deflate retry rejects it too.
+    let bad = [0x78, 0x9c, 0x07, 0xff, 0xff, 0xff, 0xff, 0xff];
+    let mut budget = Budget::default();
+    assert!(decode(&flate_dict(), &bad, &mut budget).is_none());
+    assert_eq!(budget.decoded, 0);
+    assert!(!budget.exhausted);
+}
+
+#[test]
+fn a_bare_deflate_stream_still_decodes_through_the_retry() {
+    let raw = varied(500);
+    let packed = miniz_oxide::deflate::compress_to_vec(&raw, 6);
+    let mut budget = Budget::default();
+    assert_eq!(decode(&flate_dict(), &packed, &mut budget), Some(raw));
+}
+
+#[test]
+fn an_over_limit_flate_stream_sets_exhausted() {
+    let packed = miniz_oxide::deflate::compress_to_vec_zlib(&vec![7u8; 4096], 6);
+    let mut budget = Budget { decoded: MAX_DECODED - 100, ..Budget::default() };
+    assert!(decode(&flate_dict(), &packed, &mut budget).is_none());
+    assert!(budget.exhausted);
+    assert_eq!(budget.decoded, MAX_DECODED - 100);
+}

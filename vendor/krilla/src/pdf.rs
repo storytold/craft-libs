@@ -18,7 +18,7 @@ use crate::configure::{PdfVersion, ValidationError};
 use crate::error::{KrillaError, KrillaResult};
 use crate::graphics::color::rgb;
 use crate::resource::Resource;
-use crate::serialize::{MaybeDeviceColorSpace, SerializeContext};
+use crate::serialize::{GroupColorSpace, MaybeDeviceColorSpace, SerializeContext};
 use crate::surface::Location;
 use crate::util::{Deferred, Prehashed};
 
@@ -179,10 +179,16 @@ impl PdfSerializerContext {
             // but we just always allocate it if we have at least one PDF,
             // regardless of how the files are embedded. We can change this in the
             // future, but it keeps the code simpler.
-            let xobject_group_color_space = sc.register_colorspace(
-                chunk_container,
-                rgb::color_space(sc.serialize_settings().no_device_cs).into(),
-            );
+            //
+            // Under CMYK blending the group writes no `/CS` and inherits the page group,
+            // so no color space is registered.
+            let xobject_group_color_space = match sc.serialize_settings().group_color_space {
+                GroupColorSpace::Rgb => Some(sc.register_colorspace(
+                    chunk_container,
+                    rgb::color_space(sc.serialize_settings().no_device_cs).into(),
+                )),
+                GroupColorSpace::Cmyk => None,
+            };
             let chunk_settings = sc.chunk_settings();
 
             let deferred_chunk = Deferred::new(move || {
@@ -197,11 +203,11 @@ impl PdfSerializerContext {
                 // krilla PDF, we replace `local_ref` with `cs_ref` such that it
                 // actually points to the colorspace that is embedded in the full PDF.
                 let (assigned_cs_ref, should_cs_ref) = match &xobject_group_color_space {
-                    MaybeDeviceColorSpace::DeviceRgb => (None, None),
-                    MaybeDeviceColorSpace::ColorSpace(cs) => {
+                    None | Some(MaybeDeviceColorSpace::DeviceRgb) => (None, None),
+                    Some(MaybeDeviceColorSpace::ColorSpace(cs)) => {
                         (Some(new_ref.bump()), Some(cs.get_ref()))
                     }
-                    MaybeDeviceColorSpace::DeviceGray | MaybeDeviceColorSpace::DeviceCMYK => {
+                    Some(MaybeDeviceColorSpace::DeviceGray | MaybeDeviceColorSpace::DeviceCMYK) => {
                         unreachable!()
                     }
                 };
@@ -224,7 +230,9 @@ impl PdfSerializerContext {
                     Box::new(|| new_ref.bump()),
                     chunk_settings,
                     |group| {
-                        if let Some(local_group_color_space_ref) = assigned_cs_ref {
+                        if xobject_group_color_space.is_none() {
+                            // Inherit the blending space of the page group.
+                        } else if let Some(local_group_color_space_ref) = assigned_cs_ref {
                             group
                                 .insert(Name(b"CS"))
                                 .primitive(local_group_color_space_ref);

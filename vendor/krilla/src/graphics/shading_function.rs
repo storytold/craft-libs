@@ -4,15 +4,18 @@ use std::sync::Arc;
 
 use bumpalo::Bump;
 use pdf_writer::types::{FunctionShadingType, PostScriptOp};
+use pdf_writer::writers::StreamShadingType;
 use pdf_writer::{Chunk, Finish, Ref};
 use tiny_skia_path::Point;
 
 use crate::chunk_container::ChunkContainer;
 use crate::configure::ValidationError;
 use crate::geom::{Rect, Transform};
-use crate::graphics::color::luma;
-use crate::graphics::color::{Color, ColorSpace};
-use crate::graphics::paint::{LinearGradient, RadialGradient, SweepGradient};
+use crate::graphics::color::device_n::{self, Colorant, DeviceNSpace, Process};
+use crate::graphics::color::separation::{self, SeparationColorant, SeparationSpace};
+use crate::graphics::color::{cmyk, luma};
+use crate::graphics::color::{Color, ColorSpace, RegularColor, SpecialColor};
+use crate::graphics::paint::{LinearGradient, MeshGradient, RadialGradient, SweepGradient};
 use crate::graphics::paint::{SpreadMethod, Stop};
 use crate::num::NormalizedF32;
 use crate::resource;
@@ -82,6 +85,7 @@ impl Hash for PostScriptGradient {
 pub(crate) enum GradientProperties {
     RadialAxialGradient(RadialAxialGradient),
     PostScriptGradient(PostScriptGradient),
+    MeshGradient(Arc<MeshGradient>),
 }
 
 impl GradientProperties {
@@ -98,6 +102,7 @@ impl GradientProperties {
                     return Some((&psg.stops[0].color, psg.stops[0].opacity));
                 }
             }
+            GradientProperties::MeshGradient(_) => {}
         }
 
         None
@@ -218,10 +223,237 @@ pub(crate) struct ShadingFunction(Arc<Repr>);
 
 impl ShadingFunction {
     pub(crate) fn new(properties: GradientProperties, use_opacities: bool) -> Self {
+        let properties = if use_opacities {
+            properties
+        } else {
+            properties.with_common_color_space()
+        };
         Self(Arc::new(Repr {
             properties,
             use_opacities,
         }))
+    }
+}
+
+impl GradientProperties {
+    /// Rewrite stops, or mesh corner colors, in different ink-based color spaces into one
+    /// space (see [`common_color_space`]); other gradients are returned unchanged.
+    fn with_common_color_space(self) -> Self {
+        fn convert(stops: &mut [Stop]) {
+            let colors: Vec<Color> = stops.iter().map(|s| s.color.clone()).collect();
+            if let Some(colors) = common_color_space(&colors) {
+                for (stop, color) in stops.iter_mut().zip(colors) {
+                    stop.color = color;
+                }
+            }
+        }
+
+        match self {
+            GradientProperties::RadialAxialGradient(mut rag) => {
+                convert(&mut rag.stops);
+                GradientProperties::RadialAxialGradient(rag)
+            }
+            GradientProperties::PostScriptGradient(mut psg) => {
+                convert(&mut psg.stops);
+                GradientProperties::PostScriptGradient(psg)
+            }
+            GradientProperties::MeshGradient(mesh) => {
+                let colors: Vec<Color> = mesh
+                    .patches
+                    .iter()
+                    .flat_map(|p| p.colors.iter().cloned())
+                    .collect();
+                let Some(colors) = common_color_space(&colors) else {
+                    return GradientProperties::MeshGradient(mesh);
+                };
+                let mut mesh = Arc::unwrap_or_clone(mesh);
+                let corners = mesh.patches.iter_mut().flat_map(|p| p.colors.iter_mut());
+                for (corner, color) in corners.zip(colors) {
+                    *corner = color;
+                }
+                GradientProperties::MeshGradient(Arc::new(mesh))
+            }
+        }
+    }
+}
+
+/// The inks of one gradient color: process tints and spot tints (0–255).
+struct Inks {
+    process: [u8; 4],
+    /// Process colorants a DeviceN color names, even at zero tint.
+    named_process: [bool; 4],
+    spots: Vec<(String, u8)>,
+}
+
+/// A spot named by a gradient color: the Separation space a stop used, and the CMYK
+/// alternate a DeviceN space needs.
+struct SpotInk {
+    name: String,
+    separation: Option<SeparationSpace>,
+    alternate: Option<cmyk::Color>,
+}
+
+/// Record a spot; the first Separation space and CMYK alternate seen for a name win.
+fn add_spot(
+    spot_inks: &mut Vec<SpotInk>,
+    name: &str,
+    separation: Option<&SeparationSpace>,
+    alternate: Option<cmyk::Color>,
+) {
+    match spot_inks.iter_mut().find(|s| s.name == name) {
+        Some(ink) => {
+            if ink.separation.is_none() {
+                ink.separation = separation.cloned();
+            }
+            if ink.alternate.is_none() {
+                ink.alternate = alternate;
+            }
+        }
+        None => spot_inks.push(SpotInk {
+            name: name.to_owned(),
+            separation: separation.cloned(),
+            alternate,
+        }),
+    }
+}
+
+fn same_color_space(a: &Color, b: &Color) -> bool {
+    match (a, b) {
+        (Color::Regular(a), Color::Regular(b)) => {
+            std::mem::discriminant(a) == std::mem::discriminant(b)
+        }
+        (
+            Color::Special(SpecialColor::Separation(a)),
+            Color::Special(SpecialColor::Separation(b)),
+        ) => a.space == b.space,
+        (Color::Special(SpecialColor::DeviceN(a)), Color::Special(SpecialColor::DeviceN(b))) => {
+            a.space == b.space
+        }
+        _ => false,
+    }
+}
+
+/// The colors rewritten in one color space when they are in different spaces built from
+/// inks (CMYK, gray as black, named spots with a CMYK fallback, DeviceN). `None` keeps
+/// them as they are: they share a space already, or one of them isn't made of inks.
+///
+/// A process colorant takes part when a color has it at a nonzero tint or a DeviceN color
+/// names it; a spot takes part when any color names it. One spot alone gives a Separation
+/// space, process colorants alone DeviceCMYK, anything else a DeviceN space with the
+/// process colorants in CMYK order, then the spots in the order the colors name them.
+/// Paper (CMYK 0 0 0 0, white, tint 0) adds no colorant, so a spot to paper stays a
+/// Separation gradient.
+pub(crate) fn common_color_space(colors: &[Color]) -> Option<Vec<Color>> {
+    let first = colors.first()?;
+    if colors.iter().all(|c| same_color_space(first, c)) {
+        return None;
+    }
+
+    let mut spot_inks: Vec<SpotInk> = Vec::new();
+    let mut all_inks = Vec::with_capacity(colors.len());
+    for color in colors {
+        let mut inks = Inks {
+            process: [0; 4],
+            named_process: [false; 4],
+            spots: Vec::new(),
+        };
+        match color {
+            Color::Regular(RegularColor::Cmyk(c)) => inks.process = [c.0, c.1, c.2, c.3],
+            Color::Regular(RegularColor::Luma(l)) => inks.process[3] = 255 - l.0,
+            Color::Regular(RegularColor::Rgb(_)) => return None,
+            Color::Special(SpecialColor::Separation(s)) => {
+                let SeparationColorant::Custom(name) = &s.space.colorant else {
+                    return None;
+                };
+                let alternate = match s.space.fallback {
+                    RegularColor::Cmyk(c) => Some(c),
+                    _ => None,
+                };
+                add_spot(&mut spot_inks, name, Some(&s.space), alternate);
+                inks.spots.push((name.clone(), s.tint));
+            }
+            Color::Special(SpecialColor::DeviceN(c)) => {
+                for (colorant, tint) in c.space.colorants().iter().zip(&c.tints) {
+                    match colorant {
+                        Colorant::Process(p) => {
+                            let i = Process::ALL.iter().position(|q| q == p).unwrap_or(0);
+                            inks.process[i] = *tint;
+                            inks.named_process[i] = true;
+                        }
+                        Colorant::Spot { name, alternate } => {
+                            add_spot(&mut spot_inks, name, None, Some(*alternate));
+                            inks.spots.push((name.clone(), *tint));
+                        }
+                    }
+                }
+            }
+        }
+        all_inks.push(inks);
+    }
+
+    let process: Vec<usize> = (0..4)
+        .filter(|&i| {
+            all_inks
+                .iter()
+                .any(|inks| inks.process[i] > 0 || inks.named_process[i])
+        })
+        .collect();
+    let spot_tint = |inks: &Inks, name: &str| {
+        inks.spots
+            .iter()
+            .find(|(n, _)| n == name)
+            .map_or(0, |(_, t)| *t)
+    };
+
+    match (process.as_slice(), spot_inks.as_slice()) {
+        (_, []) => Some(
+            all_inks
+                .iter()
+                .map(|inks| {
+                    let [c, m, y, k] = inks.process;
+                    cmyk::Color::new(c, m, y, k).into()
+                })
+                .collect(),
+        ),
+        ([], [spot]) => {
+            let space = match (&spot.separation, spot.alternate) {
+                (Some(space), _) => space.clone(),
+                (None, Some(alternate)) => SeparationSpace::new(
+                    SeparationColorant::Custom(spot.name.clone()),
+                    alternate.into(),
+                ),
+                (None, None) => return None,
+            };
+            Some(
+                all_inks
+                    .iter()
+                    .map(|inks| {
+                        separation::Color::new(spot_tint(inks, &spot.name), space.clone()).into()
+                    })
+                    .collect(),
+            )
+        }
+        _ => {
+            let mut colorants: Vec<Colorant> = process
+                .iter()
+                .map(|&i| Colorant::Process(Process::ALL[i]))
+                .collect();
+            for spot in &spot_inks {
+                colorants.push(Colorant::Spot {
+                    name: spot.name.clone(),
+                    alternate: spot.alternate?,
+                });
+            }
+            let space = DeviceNSpace::new(colorants)?;
+            all_inks
+                .iter()
+                .map(|inks| {
+                    let mut tints: Vec<u8> = process.iter().map(|&i| inks.process[i]).collect();
+                    tints.extend(spot_inks.iter().map(|s| spot_tint(inks, &s.name)));
+                    device_n::Color::new(tints, space.clone()).map(Color::from)
+                })
+                .collect()
+        }
     }
 }
 
@@ -265,6 +497,35 @@ impl Cacheable for ShadingFunction {
                     registered_cs,
                 )
             }
+            GradientProperties::MeshGradient(mg) => {
+                // No patches paints nothing; the shading is still written, as it is referenced.
+                let first = mg
+                    .patches
+                    .first()
+                    .map_or_else(|| luma::Color::black().into(), |p| p.colors[0].clone());
+                // `ShadingFunction::new` has brought ink-based colors into one space; any
+                // others left can't share the stream's one color space.
+                if !self.0.use_opacities
+                    && sc.mixed_mesh_colors.is_none()
+                    && !mg
+                        .patches
+                        .iter()
+                        .flat_map(|p| p.colors.iter())
+                        .all(|c| same_color_space(&first, c))
+                {
+                    sc.mixed_mesh_colors = Some(sc.location);
+                }
+                let shading_cs = shading_color_space(sc, first, self.0.use_opacities);
+                let registered_cs = sc.register_colorspace(chunk_container, shading_cs);
+                serialize_mesh_shading(
+                    sc,
+                    &mut stream_chunk,
+                    root_ref,
+                    mg,
+                    self.0.use_opacities,
+                    registered_cs,
+                );
+            }
         }
 
         // Note: The stream chunk might be empty.
@@ -282,6 +543,83 @@ fn shading_color_space(sc: &mut SerializeContext, color: Color, use_opacities: b
     } else {
         color.color_space(sc)
     }
+}
+
+/// A mesh gradient as a Type 6 (Coons patch mesh) shading: per patch an 8-bit edge flag (0, no
+/// shared edge), the twelve points as 32-bit coordinates over the mesh's bounds (`Decode`), and
+/// the four corner colors (with `use_opacities`, the opacities as gray) at 8 bits a component,
+/// Flate-compressed. 32-bit coordinates keep the patches where they are to well under a printer
+/// dot, as Illustrator writes its meshes.
+fn serialize_mesh_shading(
+    sc: &mut SerializeContext,
+    chunk: &mut Chunk,
+    root_ref: Ref,
+    mesh: &MeshGradient,
+    use_opacities: bool,
+    cs: MaybeDeviceColorSpace,
+) {
+    let (mut x0, mut y0, mut x1, mut y1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
+    for (x, y) in mesh.patches.iter().flat_map(|p| p.points.iter()) {
+        (x0, y0, x1, y1) = (x0.min(*x), y0.min(*y), x1.max(*x), y1.max(*y));
+    }
+    if !(x0.is_finite() && y0.is_finite() && x1.is_finite() && y1.is_finite()) {
+        (x0, y0, x1, y1) = (0.0, 0.0, 1.0, 1.0);
+    }
+    // A zero-size range would divide by zero: widen it by a point either way.
+    if x1 - x0 < f32::EPSILON {
+        (x0, x1) = (x0 - 1.0, x1 + 1.0);
+    }
+    if y1 - y0 < f32::EPSILON {
+        (y0, y1) = (y0 - 1.0, y1 + 1.0);
+    }
+    let components = if use_opacities {
+        1
+    } else {
+        mesh.patches
+            .first()
+            .map_or(1, |p| p.colors[0].to_pdf_color().len())
+    };
+    let coord = |v: f32, lo: f32, hi: f32| {
+        (((f64::from(v) - f64::from(lo)) / (f64::from(hi) - f64::from(lo))).clamp(0.0, 1.0)
+            * f64::from(u32::MAX))
+        .round() as u32
+    };
+    let byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+    let mut data = Vec::with_capacity(mesh.patches.len() * (1 + 12 * 8 + 4 * components));
+    for patch in &mesh.patches {
+        data.push(0u8);
+        for (x, y) in &patch.points {
+            data.extend(coord(*x, x0, x1).to_be_bytes());
+            data.extend(coord(*y, y0, y1).to_be_bytes());
+        }
+        for (color, opacity) in patch.colors.iter().zip(patch.opacities.iter()) {
+            if use_opacities {
+                data.push(byte(opacity.get()));
+            } else {
+                let values = color.to_pdf_color();
+                // Mixed spaces fail the document (`mixed_mesh_colors`); still never misread bytes.
+                for i in 0..components {
+                    data.push(byte(values.get(i).copied().unwrap_or(0.0)));
+                }
+            }
+        }
+    }
+    let filter_stream =
+        FilterStreamBuilder::new_from_binary_data(&data).finish(&sc.serialize_settings());
+    let mut shading = chunk.stream_shading(root_ref, filter_stream.encoded_data());
+    filter_stream.write_filters(shading.deref_mut().deref_mut());
+    shading.shading_type(StreamShadingType::CoonsPatch);
+    set_colorspace(cs, shading.deref_mut().deref_mut());
+    shading.bits_per_coordinate(32);
+    shading.bits_per_component(8);
+    shading.bits_per_flag(8);
+    let mut decode = vec![x0, x1, y0, y1];
+    for _ in 0..components {
+        decode.extend([0.0, 1.0]);
+    }
+    shading.decode(decode);
+    shading.anti_alias(mesh.anti_alias);
+    shading.finish();
 }
 
 fn serialize_postscript_shading(
@@ -497,13 +835,21 @@ fn serialize_sweep_postscript(
         properties.domain.bottom(),
     ]);
 
-    if use_opacities {
-        postscript_function.range([0.0, 1.0]);
-    } else {
-        postscript_function.range([0.0, 1.0, 0.0, 1.0, 0.0, 1.0]);
-    }
+    postscript_function.range([0.0, 1.0].repeat(output_components(properties, use_opacities)));
 
     root_ref
+}
+
+/// The number of values a PostScript gradient function returns.
+fn output_components(properties: &PostScriptGradient, use_opacities: bool) -> usize {
+    if use_opacities {
+        1
+    } else {
+        properties
+            .stops
+            .first()
+            .map_or(1, |s| s.color.to_pdf_color().len())
+    }
 }
 
 const MAX_POSTSCRIPT_STOPS: usize = 97;
@@ -563,11 +909,7 @@ fn serialize_linear_postscript(
         properties.domain.bottom(),
     ]);
 
-    if use_opacities {
-        postscript_function.range([0.0, 1.0]);
-    } else {
-        postscript_function.range([0.0, 1.0, 0.0, 1.0, 0.0, 1.0]);
-    }
+    postscript_function.range([0.0, 1.0].repeat(output_components(properties, use_opacities)));
 
     root_ref
 }

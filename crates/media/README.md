@@ -39,8 +39,42 @@ craft-media = { git = "https://github.com/storytold/craft-libs", rev = "<commit>
 The code comes from FilmCraft's `filmcraft-bitstream`, `filmcraft-isobmff` and
 `filmcraft-matroska` crates at
 [storytold/filmcraft@6c3948a](https://github.com/storytold/filmcraft/commit/6c3948a36c80e4996d924766ba7157eec4fca85e).
-Every public item keeps its name, signature and behavior for valid input, so FilmCraft can turn
-all three crates into re-exports (`pub use craft_media::isobmff::*;`). The differences:
+Public items keep their names and signatures, so FilmCraft can turn all three crates into
+re-exports (`pub use craft_media::isobmff::*;`), except for the renames below. Our own names use
+US spelling; names taken from a specification keep its spelling.
+
+Renamed:
+
+| FilmCraft | craft-media |
+|---|---|
+| `matroska::Colour` | `matroska::Color` |
+| `matroska::VideoInfo::colour` | `matroska::VideoInfo::color` |
+| `matroska::VideoInfo::colour_space` | `matroska::VideoInfo::color_space` |
+
+The element IDs `element_ids::COLOUR` and `COLOUR_SPACE` and the field
+`isobmff::VpcConfig::colour_primaries` keep the spellings of the Matroska and VP9 specifications.
+
+Output that differs on valid input:
+
+- Matroska lacing applies only to tracks with a `DefaultDuration`, and a lace ends at a timestamp
+  gap. Readers space the frames of a lace by `DefaultDuration`, so FilmCraft's laces moved frames
+  that followed a gap.
+- The sample budget covers the whole file, so a multi-track file with more than 2²⁶ samples in
+  total fails with `TooLarge` (ISO BMFF: all tracks and fragments; Matroska: all tracks, and at
+  most 2¹⁶ TrackEntries). FilmCraft capped ISO BMFF per track and Matroska not at all.
+- MOV and MP4 PCM chunks end at 1 MiB, as ffmpeg writes them; FilmCraft wrote
+  each contiguous run of one track as one chunk. The reader splits a PCM chunk above 16 MiB into
+  samples of at most 16 MiB; FilmCraft made it one sample, cut at 4 GiB.
+- MOV PCM at 65,536 Hz and above, and unsigned 16-bit PCM, is written as `lpcm` (sound
+  description v2), and signed 8-bit PCM as `twos`. FilmCraft wrote 0 Hz for the former and
+  labeled the signedness wrongly for the latter two. `raw ` under a sound handler reads as PCM.
+- Matroska `BlockDuration` is rounded to the nearest tick; FilmCraft truncated it.
+- A Matroska `TimestampScale` above 2³² is ignored, like a zero scale.
+- `matroska::MkvWriter` writes `MuxingApp` = `craft-media`, and `MuxOptions::default()` has
+  `writing_app` = `craft-media` (FilmCraft: `filmcraft-matroska` and `filmcraft`). Apps set
+  `writing_app` to their own name.
+
+Other differences:
 
 - `bitstream::BitReader::read_ue_plus` (from DeckCraft's copy) is new.
 - `isobmff::boxes` is new: FilmCraft's private box iterator and byte reader, made public (see
@@ -49,15 +83,21 @@ all three crates into re-exports (`pub use craft_media::isobmff::*;`). The diffe
   without a debug assertion: `peek` and `read_bits` return the low 32 bits of the field (use
   `read_bits_u64` for wide fields), and `write_bits` writes leading zero bits, at most 64 bits in
   all.
-- `bitstream::length_prefixed_nals` returns `BitError::Eof` for a zero `length_size` on non-empty
-  data and cannot overflow on a hostile length prefix.
+- `bitstream::length_prefixed_nals` returns the new `BitError::InvalidNalLengthSize` for a
+  `length_size` outside 1 to 4 (as FilmCraft does since filmcraft#2953) and cannot overflow on a
+  hostile length prefix.
 - `isobmff::PcmConfig::bytes_per_frame` saturates at `u32::MAX` for a hostile channel count.
 - `matroska`: a cluster timestamp above `i64::MAX` saturates at `i64::MAX` (FilmCraft wraps it to
   a negative value), and adding a block's relative timestamp saturates instead of overflowing (a
   debug-build panic in FilmCraft).
-- `matroska::MkvWriter` writes `MuxingApp` = `craft-media`, and `MuxOptions::default()` has
-  `writing_app` = `craft-media` (FilmCraft: `filmcraft-matroska` and `filmcraft`). Apps set
-  `writing_app` to their own name.
+- `matroska::Error::TooLarge` is new: indexing a file past the limits above returns it.
+- `matroska::MuxOptions::max_lace_frames` is clamped to 1 to 256; FilmCraft wrote a corrupt
+  frame count above 256.
+- `isobmff::Mp4Writer::set_sample_entry` returns an error when the new entry changes the codec,
+  the media type or the PCM frame size, and `Error::NoSuchTrack` for a bad index. FilmCraft
+  accepted any entry.
+- `isobmff::Mp4Writer::write_sample` returns an error when a track would pass 2³² − 1 samples
+  (PCM: frames), the most `stsz` can count; FilmCraft clamped the count.
 - `matroska::ByteSource` stays a separate trait from `isobmff::ByteSource`, with the same shape.
   FilmCraft implements both for one type, which a single shared trait would reject as conflicting
   impls.
@@ -109,7 +149,7 @@ let bytes = mp4.read_sample(&file, v, key)?;    // raw sample (AVCC/HVCC length-
   raw for the caller to interpret.
 - **Uncompressed PCM** (`lpcm`, `sowt`, `twos`, `in24`, `in32`, `fl32`, `fl64`, `raw `, `ipcm`, `fpcm`) is
   merged to one `Sample` per chunk (`pcm_chunked = true`), with `duration` in frames. This avoids one
-  table entry per audio frame.
+  table entry per audio frame. A chunk above 16 MiB becomes several samples of at most 16 MiB.
 
 #### Parsed boxes
 `ftyp`, `moov/mvhd`, `trak/tkhd`, `edts/elst` (v0/v1), `tref`, `mdia/mdhd` (v0/v1, ISO and Mac language
@@ -145,7 +185,8 @@ Video entries also parse `colr` (`nclx`/`nclc`/ICC), `pasp`, `clap`, `fiel`, `ga
 #### Robustness
 The parser does not panic on malformed input; every error comes back as an `Error`. Table counts are
 checked against the bytes in their box before anything is allocated. A constant-size `stsz` count is
-clamped to what fits in the file. `trun` counts are checked, and each track is capped at 2²⁶ samples.
+clamped to what fits in the file. `trun` counts are checked, and the whole file (all tracks and
+fragments) is capped at 2²⁶ samples.
 `moov`/`moof` are capped at 1 GiB. Compressed movie headers (`cmov`) are rejected with
 `Error::Unsupported`.
 
@@ -170,7 +211,8 @@ let bytes = w.finish_faststart()?.into_inner(); // or finish() for moov-at-end
 - Brands: `Brand::Mp4` writes `isom` with `isom iso2 avc1 mp41 mp42`. `Brand::Mov` writes `qt  `, uses
   QuickTime `hdlr`/Pascal names, and sets `wide` as the placeholder box.
 - Tables written: `stts`, `ctts` (v1 when an offset is negative), `stss` (omitted when every sample is
-  sync), `stsc`, `stsz` (constant or table), `stco`/`co64`. Consecutive samples of one track share a chunk.
+  sync), `stsc`, `stsz` (constant or table), `stco`/`co64`. Consecutive samples of one track share a chunk;
+  a PCM chunk ends at 1 MiB.
 - Sample entries come from `SampleEntry` (`avc`, `hevc`, `prores`, `jpeg`, `aac`, `pcm`, or any demuxed
   entry). Remuxing copies codec config, `colr`, `pasp`, `clap`, `fiel`, `gama` and `btrt`.
   PCM is written as `sowt`/`twos` (16-bit) or `raw ` (8-bit) or sound description v2 `lpcm` in MOV, and as
@@ -224,7 +266,7 @@ for b in BoxIter::new(&bytes) {
 - `sidx`/`mfra` are ignored, because the demuxer scans every top-level box. `stsd` entries with a
   QuickTime color table are not decoded.
 - Subtitle and text tracks (`tx3g`, `c608`, `wvtt`) and `mp4v` show up as `Unknown`.
-- Muxer: one `mdat`, no chunk-size or duration limits (the caller controls interleaving), no `sdtp`,
+- Muxer: one `mdat`, no chunk-size or duration limits outside PCM (the caller controls interleaving), no `sdtp`,
   `sgpd`/`sbgp` or `cslg` output, ISO-style `meta/ilst` metadata is not written, and the fragmented
   writer has no PCM, `sidx` or `mfra`.
 
@@ -274,6 +316,10 @@ while let Some(p) = d.next_packet()? {        // file order, all tracks
 - **Damage:** an undecodable or oversized element starts a byte scan for the next plausible level-1
   element (a Cluster whose first child is Timestamp, or a sized metadata element); a truncated final
   block is dropped. Problems are listed in `MkvFile::warnings`.
+- **Limits:** indexing stops with `Error::TooLarge` past 2²⁶ frames in the file, past one frame
+  per file byte (each frame counts its stored size, and at least one byte), or past 2¹⁶
+  TrackEntries. Level-1 elements read at most the file's length in all, so SeekHead entries that
+  point into one another are skipped with a warning.
 - **Seeking** (`Demuxer::seek(track, time_ns)`): uses the sample index when present, otherwise Cues
   (refined by scanning the cued cluster for the exact keyframe), otherwise builds the index by
   scanning all clusters. `Demuxer::keyframe_index(track)` returns the keyframe list.
@@ -321,7 +367,8 @@ while let Some(p) = d.next_packet()? {        // file order, all tracks
 keyframe, data, duration_ns)` per frame, then `finish()`. It writes the EBML header, Segment,
 SeekHead, Info (with Duration), Tracks, Clusters of SimpleBlocks (a new cluster at a video keyframe
 after `cluster_duration_ns`), BlockGroups for frames whose duration differs from the track's
-`default_duration_ns`, optional audio lacing (Xiph, EBML, fixed-size), and Cues (video keyframes,
+`default_duration_ns`, optional audio lacing (Xiph, EBML, fixed-size; for tracks with a
+`default_duration_ns`, at most 256 frames, ending at a timestamp gap), and Cues (video keyframes,
 or the first frame of each track per cluster). `MuxOptions::doc_type` = `"webm"` writes WebM.
 CodecPrivate is fixed when the writer is created, so a codec whose configuration arrives with the
 first frame (AV1 from `rav1e`) creates the writer after that frame.

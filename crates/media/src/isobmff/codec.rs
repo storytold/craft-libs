@@ -491,7 +491,7 @@ pub struct VpcConfig {
     pub bit_depth: u8,
     pub chroma_subsampling: u8,
     pub full_range: bool,
-    pub color_primaries: u8,
+    pub colour_primaries: u8,
     pub transfer_characteristics: u8,
     pub matrix_coefficients: u8,
     pub codec_init: Vec<u8>,
@@ -512,7 +512,7 @@ impl VpcConfig {
         let profile = c.u8()?;
         let level = c.u8()?;
         let a = c.u8()?;
-        let color_primaries = c.u8()?;
+        let colour_primaries = c.u8()?;
         let transfer_characteristics = c.u8()?;
         let matrix_coefficients = c.u8()?;
         let n = c.u16()? as usize;
@@ -523,7 +523,7 @@ impl VpcConfig {
             bit_depth: a >> 4,
             chroma_subsampling: (a >> 1) & 7,
             full_range: a & 1 != 0,
-            color_primaries,
+            colour_primaries,
             transfer_characteristics,
             matrix_coefficients,
             codec_init,
@@ -535,7 +535,7 @@ impl VpcConfig {
         b.u8(self.profile);
         b.u8(self.level);
         b.u8((self.bit_depth << 4) | ((self.chroma_subsampling & 7) << 1) | self.full_range as u8);
-        b.u8(self.color_primaries);
+        b.u8(self.colour_primaries);
         b.u8(self.transfer_characteristics);
         b.u8(self.matrix_coefficients);
         b.u16(self.codec_init.len() as u16);
@@ -1009,6 +1009,9 @@ pub(crate) fn parse_sample_entry(format: FourCc, payload: &[u8], handler: FourCc
             let _size_of_struct = c.u32()?;
             a.sample_rate = c.f64()?;
             a.channels = c.u32()?;
+            if a.channels > u32::from(u16::MAX) {
+                return Err(Error::Invalid(format!("QuickTime v2 sound entry with {} channels", a.channels)));
+            }
             let _always = c.u32()?;
             a.const_bits_per_channel = c.u32()?;
             a.lpcm_flags = c.u32()?;
@@ -1052,7 +1055,7 @@ pub(crate) fn parse_sample_entry(format: FourCc, payload: &[u8], handler: FourCc
             },
             b"ac-3" => CodecConfig::Ac3 { dac3: get(b"dac3").unwrap_or(&[]).to_vec() },
             b"ec-3" => CodecConfig::Eac3 { dec3: get(b"dec3").unwrap_or(&[]).to_vec() },
-            b"lpcm" | b"sowt" | b"twos" | b"in24" | b"in32" | b"fl32" | b"fl64" | b"raw " | b"NONE" => CodecConfig::Pcm(qt_pcm(f, &a)),
+            b"lpcm" | b"sowt" | b"twos" | b"in24" | b"in32" | b"fl32" | b"fl64" | b"raw " | b"NONE" => CodecConfig::Pcm(qt_pcm(f, &a)?),
             b"ipcm" | b"fpcm" => {
                 let mut pcm = PcmConfig {
                     bits: a.sample_size,
@@ -1078,11 +1081,12 @@ pub(crate) fn parse_sample_entry(format: FourCc, payload: &[u8], handler: FourCc
     Ok(SampleEntry { format, data_reference_index, codec: unknown(), video: None, audio: None, bitrate: None })
 }
 
-fn qt_pcm(f: &[u8; 4], a: &AudioParams) -> PcmConfig {
+fn qt_pcm(f: &[u8; 4], a: &AudioParams) -> Result<PcmConfig> {
     let mut p = PcmConfig { channels: a.channels, sample_rate: a.sample_rate, signed: true, ..Default::default() };
     match f {
         b"lpcm" => {
-            p.bits = a.const_bits_per_channel as u16;
+            p.bits = u16::try_from(a.const_bits_per_channel)
+                .map_err(|_| Error::Invalid(format!("lpcm with {} bits per channel", a.const_bits_per_channel)))?;
             p.float = a.lpcm_flags & 1 != 0;
             p.big_endian = a.lpcm_flags & 2 != 0;
             p.signed = a.lpcm_flags & 4 != 0 || p.float;
@@ -1113,7 +1117,7 @@ fn qt_pcm(f: &[u8; 4], a: &AudioParams) -> PcmConfig {
         }
         _ => {}
     }
-    p
+    Ok(p)
 }
 
 fn parse_btrt(p: &[u8]) -> Result<BitRate> {
@@ -1375,95 +1379,7 @@ impl SampleEntry {
             return Ok(());
         }
         if let Some(v) = &self.video {
-            let m = b.start(&self.format.0);
-            b.zeros(6);
-            b.u16(self.data_reference_index);
-            b.u16(0);
-            b.u16(0);
-            b.u32(v.vendor.as_u32());
-            b.u32(v.temporal_quality);
-            b.u32(v.spatial_quality);
-            b.u16(v.width);
-            b.u16(v.height);
-            b.u32(v.horiz_resolution);
-            b.u32(v.vert_resolution);
-            b.u32(0);
-            b.u16(v.frame_count);
-            let name = v.compressor_name.as_bytes();
-            let n = name.len().min(31);
-            let mut nb = [0u8; 32];
-            nb[0] = n as u8;
-            nb[1..1 + n].copy_from_slice(&name[..n]);
-            b.bytes(&nb);
-            b.u16(v.depth);
-            b.i16(-1);
-            match &self.codec {
-                CodecConfig::Avc(c) => b.leaf(b"avcC", &c.to_bytes()),
-                CodecConfig::Hevc(c) => b.leaf(b"hvcC", &c.to_bytes()),
-                CodecConfig::Av1(c) => b.leaf(b"av1C", &c.to_bytes()),
-                CodecConfig::Vp9(c) => b.leaf(b"vpcC", &c.to_bytes()),
-                CodecConfig::Apv(c) => b.leaf(b"apvC", &c.to_bytes()),
-                _ => {}
-            }
-            if let Some(g) = v.gamma {
-                b.leaf(b"gama", &g.to_be_bytes());
-            }
-            if let Some(fi) = v.field_info {
-                b.leaf(b"fiel", &[fi.fields, fi.detail]);
-            }
-            if let Some(ci) = &v.color {
-                let m = b.start(b"colr");
-                match ci {
-                    ColorInfo::Nclx { primaries, transfer, matrix, full_range } => {
-                        b.bytes(b"nclx");
-                        b.u16(*primaries);
-                        b.u16(*transfer);
-                        b.u16(*matrix);
-                        b.u8(if *full_range { 0x80 } else { 0 });
-                    }
-                    ColorInfo::Nclc { primaries, transfer, matrix } => {
-                        b.bytes(b"nclc");
-                        b.u16(*primaries);
-                        b.u16(*transfer);
-                        b.u16(*matrix);
-                    }
-                    ColorInfo::Icc { kind, profile } => {
-                        b.bytes(&kind.0);
-                        b.bytes(profile);
-                    }
-                }
-                b.end(m);
-            }
-            if let Some(md) = &v.mastering_display {
-                b.leaf(b"mdcv", &md.to_bytes());
-            }
-            if let Some((cll, fall)) = v.content_light {
-                let mut d = cll.to_be_bytes().to_vec();
-                d.extend_from_slice(&fall.to_be_bytes());
-                b.leaf(b"clli", &d);
-            }
-            if let Some((h, vv)) = v.pixel_aspect {
-                let m = b.start(b"pasp");
-                b.u32(h);
-                b.u32(vv);
-                b.end(m);
-            }
-            if let Some(c) = v.clean_aperture {
-                let m = b.start(b"clap");
-                b.u32(c.width.0);
-                b.u32(c.width.1);
-                b.u32(c.height.0);
-                b.u32(c.height.1);
-                b.i32(c.horiz_offset.0);
-                b.u32(c.horiz_offset.1);
-                b.i32(c.vert_offset.0);
-                b.u32(c.vert_offset.1);
-                b.end(m);
-            }
-            if let Some(br) = self.bitrate {
-                write_btrt(b, br);
-            }
-            b.end(m);
+            self.write_video(b, v);
             return Ok(());
         }
         let a = self.audio.clone().ok_or_else(|| Error::Mux("sample entry has neither video nor audio params".into()))?;
@@ -1577,6 +1493,118 @@ impl SampleEntry {
         b.end(m);
         Ok(())
     }
+
+    fn write_video(&self, b: &mut BoxBuf, v: &VideoParams) {
+        let m = b.start(&self.format.0);
+        b.zeros(6);
+        b.u16(self.data_reference_index);
+        b.u16(0);
+        b.u16(0);
+        b.u32(v.vendor.as_u32());
+        b.u32(v.temporal_quality);
+        b.u32(v.spatial_quality);
+        b.u16(v.width);
+        b.u16(v.height);
+        b.u32(v.horiz_resolution);
+        b.u32(v.vert_resolution);
+        b.u32(0);
+        b.u16(v.frame_count);
+        let name = v.compressor_name.as_bytes();
+        let n = name.len().min(31);
+        let mut nb = [0u8; 32];
+        nb[0] = n as u8;
+        nb[1..1 + n].copy_from_slice(&name[..n]);
+        b.bytes(&nb);
+        b.u16(v.depth);
+        b.i16(-1);
+        write_video_codec_config(b, &self.codec);
+        write_video_descriptive_boxes(b, v);
+        if let Some(br) = self.bitrate {
+            write_btrt(b, br);
+        }
+        b.end(m);
+    }
+}
+
+fn write_video_codec_config(b: &mut BoxBuf, codec: &CodecConfig) {
+    match codec {
+        CodecConfig::Avc(config) => b.leaf(b"avcC", &config.to_bytes()),
+        CodecConfig::Hevc(config) => b.leaf(b"hvcC", &config.to_bytes()),
+        CodecConfig::Av1(config) => b.leaf(b"av1C", &config.to_bytes()),
+        CodecConfig::Vp9(config) => b.leaf(b"vpcC", &config.to_bytes()),
+        CodecConfig::Apv(config) => b.leaf(b"apvC", &config.to_bytes()),
+        _ => {}
+    }
+}
+
+fn write_video_descriptive_boxes(b: &mut BoxBuf, v: &VideoParams) {
+    if let Some(gamma) = v.gamma {
+        b.leaf(b"gama", &gamma.to_be_bytes());
+    }
+    if let Some(field_info) = v.field_info {
+        b.leaf(b"fiel", &[field_info.fields, field_info.detail]);
+    }
+    if let Some(color) = &v.color {
+        write_color_box(b, color);
+    }
+    if let Some(display) = &v.mastering_display {
+        b.leaf(b"mdcv", &display.to_bytes());
+    }
+    if let Some((cll, fall)) = v.content_light {
+        let mut data = cll.to_be_bytes().to_vec();
+        data.extend_from_slice(&fall.to_be_bytes());
+        b.leaf(b"clli", &data);
+    }
+    write_pixel_aspect_box(b, v.pixel_aspect);
+    write_clean_aperture_box(b, v.clean_aperture);
+}
+
+fn write_color_box(b: &mut BoxBuf, color: &ColorInfo) {
+    let m = b.start(b"colr");
+    match color {
+        ColorInfo::Nclx { primaries, transfer, matrix, full_range } => {
+            b.bytes(b"nclx");
+            b.u16(*primaries);
+            b.u16(*transfer);
+            b.u16(*matrix);
+            b.u8(if *full_range { 0x80 } else { 0 });
+        }
+        ColorInfo::Nclc { primaries, transfer, matrix } => {
+            b.bytes(b"nclc");
+            b.u16(*primaries);
+            b.u16(*transfer);
+            b.u16(*matrix);
+        }
+        ColorInfo::Icc { kind, profile } => {
+            b.bytes(&kind.0);
+            b.bytes(profile);
+        }
+    }
+    b.end(m);
+}
+
+fn write_pixel_aspect_box(b: &mut BoxBuf, pixel_aspect: Option<(u32, u32)>) {
+    if let Some((horizontal, vertical)) = pixel_aspect {
+        let m = b.start(b"pasp");
+        b.u32(horizontal);
+        b.u32(vertical);
+        b.end(m);
+    }
+}
+
+fn write_clean_aperture_box(b: &mut BoxBuf, clean_aperture: Option<CleanAperture>) {
+    if let Some(aperture) = clean_aperture {
+        let m = b.start(b"clap");
+        b.u32(aperture.width.0);
+        b.u32(aperture.width.1);
+        b.u32(aperture.height.0);
+        b.u32(aperture.height.1);
+        b.i32(aperture.horiz_offset.0);
+        b.u32(aperture.horiz_offset.1);
+        b.i32(aperture.vert_offset.0);
+        b.u32(aperture.vert_offset.1);
+        b.end(m);
+    }
 }
 
 fn write_btrt(b: &mut BoxBuf, br: BitRate) {
@@ -1651,7 +1679,7 @@ mod tests {
             bit_depth: 10,
             chroma_subsampling: 1,
             full_range: true,
-            color_primaries: 9,
+            colour_primaries: 9,
             transfer_characteristics: 16,
             matrix_coefficients: 9,
             codec_init: vec![],
@@ -1733,8 +1761,19 @@ mod tests {
         assert_eq!(PcmConfig { bits: 16, channels: u32::MAX, ..Default::default() }.bytes_per_frame(), u32::MAX);
         let ok = parse_sample_entry(FourCc(*b"lpcm"), &qt_v2_lpcm(2, 16), FourCc(*b"soun"), true).unwrap();
         assert!(matches!(ok.codec, CodecConfig::Pcm(p) if p.bytes_per_frame() == 4));
-        let hostile = parse_sample_entry(FourCc(*b"lpcm"), &qt_v2_lpcm(u32::MAX, 16), FourCc(*b"soun"), true).unwrap();
-        assert!(matches!(hostile.codec, CodecConfig::Pcm(p) if p.bytes_per_frame() == u32::MAX));
+    }
+
+    #[test]
+    fn qt_v2_pcm_rejects_channels_and_bits_past_16_bits() {
+        let entry = |channels, bits| parse_sample_entry(FourCc(*b"lpcm"), &qt_v2_lpcm(channels, bits), FourCc(*b"soun"), true);
+        assert!(matches!(entry(u32::MAX, 16), Err(Error::Invalid(_))));
+        assert!(matches!(entry(65_536, 16), Err(Error::Invalid(_))));
+        assert!(entry(65_535, 16).is_ok());
+        // 0x0001_0010 would read as 16-bit PCM, and 0x0001_0000 would fall back to the sample size.
+        assert!(matches!(entry(2, 0x0001_0010), Err(Error::Invalid(_))));
+        assert!(matches!(entry(2, 0x0001_0000), Err(Error::Invalid(_))));
+        let ok = entry(2, 24).unwrap();
+        assert!(matches!(ok.codec, CodecConfig::Pcm(p) if p.bits == 24));
     }
 
     #[test]

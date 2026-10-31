@@ -1,0 +1,23 @@
+[package]
+name = "craft-jpeg-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+craft-jpeg = { path = ".." }
+
+# Its own workspace: cargo-fuzz needs nightly and sanitizer flags, so this crate stays out of the
+# craft-libs workspace and its lockfile.
+[workspace]
+
+[[bin]]
+name = "decode"
+path = "fuzz_targets/decode.rs"
+test = false
+doc = false
+bench = false

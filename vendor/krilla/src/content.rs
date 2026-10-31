@@ -16,11 +16,13 @@ use crate::configure::ValidationError;
 #[cfg(feature = "raster-images")]
 use crate::geom::Size;
 use crate::geom::{Point, Rect, Transform};
+use crate::graphics::blend::{GroupOptions, Overprint};
 use crate::graphics::color::{Color, ColorSpace};
 use crate::graphics::graphics_state::{ExtGState, GraphicsStates};
 #[cfg(feature = "raster-images")]
 use crate::graphics::image::Image;
 use crate::graphics::mask::Mask;
+use crate::graphics::optional_content::{self, OpenMarks};
 use crate::graphics::paint::{Fill, FillRule, InnerPaint, LineCap, LineJoin, Paint, Stroke};
 use crate::graphics::shading_function::{
     GradientProperties, GradientPropertiesExt, ShadingFunction,
@@ -41,8 +43,8 @@ use crate::text::{Glyph, GlyphId};
 use crate::util::{calculate_stroke_bbox, NameExt};
 
 pub(crate) struct ContentBuilder {
-    rd_builder: ResourceDictionaryBuilder,
-    content: Content,
+    pub(crate) rd_builder: ResourceDictionaryBuilder,
+    pub(crate) content: Content,
     validation_errors: HashSet<ValidationError>,
     root_transform: Transform,
     graphics_states: GraphicsStates,
@@ -56,6 +58,7 @@ pub(crate) struct ContentBuilder {
     /// A temporary buffer that's reused across the builder.
     scratch: Vec<u8>,
     pub(crate) active_marked_content: bool,
+    pub(crate) optional_content: OpenMarks,
 }
 
 /// Stores either a device-specific color space,
@@ -83,6 +86,7 @@ impl ContentBuilder {
             bbox: None,
             scratch: Vec::new(),
             active_marked_content: false,
+            optional_content: OpenMarks::default(),
         }
     }
 
@@ -95,7 +99,8 @@ impl ContentBuilder {
         }
     }
 
-    pub(crate) fn finish(self, sc: &mut SerializeContext) -> Stream {
+    pub(crate) fn finish(mut self, sc: &mut SerializeContext) -> Stream {
+        optional_content::close_open_marks(&mut self, sc);
         let buf = self.content.finish();
         sc.register_limits(buf.limits());
 
@@ -152,6 +157,7 @@ impl ContentBuilder {
             panic!("can't end marked content when none has been started");
         }
 
+        self.optional_content.tag_ended();
         self.content.end_marked_content();
         self.active_marked_content = false;
     }
@@ -181,6 +187,12 @@ impl ContentBuilder {
             let state = ExtGState::new().blend_mode(blend_mode);
             self.graphics_states.combine(&state);
         }
+    }
+
+    pub(crate) fn set_overprint(&mut self, overprint: Overprint) {
+        let state =
+            ExtGState::new().overprint(overprint.fill, overprint.stroke, overprint.to_pdf_mode());
+        self.graphics_states.combine(&state);
     }
 
     pub(crate) fn expand_bbox(&mut self, new_bbox: Rect) {
@@ -926,14 +938,15 @@ impl ContentBuilder {
         self.draw_xobject(sc, chunk_container, x_object, &state);
     }
 
-    pub(crate) fn draw_isolated(
+    pub(crate) fn draw_group(
         &mut self,
         sc: &mut SerializeContext,
         chunk_container: &mut ChunkContainer,
+        options: GroupOptions,
         stream: Stream,
     ) {
         let state = ExtGState::new();
-        let x_object = XObject::new(stream, true, false, None);
+        let x_object = XObject::group(stream, options);
         self.draw_xobject(sc, chunk_container, x_object, &state);
     }
 
@@ -1113,6 +1126,16 @@ impl ContentBuilder {
             InnerPaint::SweepGradient(sg) => {
                 let (gradient_props, transform) = sg.clone().gradient_properties(bounds);
                 write_gradient(gradient_props, sc, chunk_container, transform, self);
+            }
+            InnerPaint::MeshGradient(mg) => {
+                let transform = mg.transform;
+                write_gradient(
+                    GradientProperties::MeshGradient(mg.clone()),
+                    sc,
+                    chunk_container,
+                    transform,
+                    self,
+                );
             }
             InnerPaint::Pattern(pat) => {
                 let mut pat = Arc::unwrap_or_clone(pat.clone());

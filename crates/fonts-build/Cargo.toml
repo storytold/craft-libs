@@ -1,0 +1,23 @@
+[package]
+name = "craft-fonts-build"
+description = "Embeds the optional craft-fonts faces from an app's build.rs, plus the EmbeddedFace type the generated table uses."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[features]
+# Cut the `role ui` faces to the catalogs' characters (`Embed::subset_to`). Enable it only in an
+# app's `[build-dependencies]`, so the subsetter stays out of the app itself.
+subset = ["dep:skera", "dep:skrifa"]
+
+[dependencies]
+skera = { version = "0.8", optional = true }
+skrifa = { version = "0.48", default-features = false, features = ["std"], optional = true }
+
+[dev-dependencies]
+craft-fonts-build-consumer = { path = "tests/consumer" }
+
+[lints]
+workspace = true

@@ -351,14 +351,25 @@ impl FilterResult<'_> {
     }
 }
 
+/// PdfCraft patch (20): the end-of-line after the `stream` keyword. Microsoft Reporting Services
+/// writes `stream \r\n`, a space before the line break, which the specification does not allow.
+/// Without this the content stream was taken to start at the space, failed to inflate, and the
+/// page rendered blank (bank statements, invoices) while other viewers showed it. Only spaces and
+/// tabs are skipped, and only when a line break follows, so stream data is never swallowed.
+fn forward_stream_eol(r: &mut Reader<'_>) -> Option<()> {
+    r.forward_while(|b| b == b' ' || b == b'\t');
+    r.forward_tag(b"\n")
+        .or_else(|| r.forward_tag(b"\r\n"))
+        // Technically not allowed, but no reason to not try it.
+        .or_else(|| r.forward_tag(b"\r"))
+}
+
 fn parse_proper<'a>(r: &mut Reader<'a>, dict: &Dict<'a>) -> Option<Stream<'a>> {
     let length = dict.get::<u32>(LENGTH)?;
 
     r.skip_white_spaces_and_comments();
     r.forward_tag(b"stream")?;
-    r.forward_tag(b"\n")
-        .or_else(|| r.forward_tag(b"\r\n"))
-        .or_else(|| r.forward_tag(b"\r"))?;
+    forward_stream_eol(r)?;
     let data = r.read_bytes(length as usize)?;
     r.skip_white_spaces();
     r.forward_tag(b"endstream")?;
@@ -374,11 +385,7 @@ fn parse_fallback<'a>(r: &mut Reader<'a>, dict: &Dict<'a>) -> Option<Stream<'a>>
     // A wrong `/Length` still recovers, because that keyword sits directly after the dict.
     r.skip_white_spaces_and_comments();
     r.forward_tag(b"stream")?;
-
-    r.forward_tag(b"\n")
-        .or_else(|| r.forward_tag(b"\r\n"))
-        // Technically not allowed, but no reason to not try it.
-        .or_else(|| r.forward_tag(b"\r"))?;
+    forward_stream_eol(r)?;
 
     let tail = r.tail()?;
     let endstream_offset = find_needle(tail, b"endstream")?;
@@ -462,5 +469,22 @@ mod tests {
         let data = b"<< /Yes 5 0 R /Off 6 0 R >>\nendobj\n11 0 obj << /Length 5 >> stream\nhello\nendstream";
         let mut r = Reader::new(data);
         assert!(r.read_with_context::<Stream<'_>>(&ReaderContext::dummy()).is_none());
+    }
+
+    /// PdfCraft patch (20): spaces or tabs between `stream` and its line break are skipped.
+    #[test]
+    fn stream_keyword_may_be_followed_by_spaces_before_the_line_break() {
+        for data in [
+            &b"<< /Length 10 >> stream \r\nabcdefghij\nendstream"[..],
+            &b"<< /Length 10 >> stream\t \nabcdefghij\nendstream"[..],
+            &b"<< /Length 999 >> stream \r\nabcdefghij\nendstream"[..],
+        ] {
+            let mut r = Reader::new(data);
+            let stream = r
+                .read_with_context::<Stream<'_>>(&ReaderContext::dummy())
+                .unwrap();
+
+            assert_eq!(stream.data, b"abcdefghij");
+        }
     }
 }

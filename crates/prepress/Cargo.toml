@@ -1,0 +1,27 @@
+[package]
+name = "craft-prepress"
+description = "Prepress for the Craft apps: ink model, per-ink plates rendered from a PDF, coverage, ink limits and composite preview"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+craft-pdf = { workspace = true, features = ["raster", "write"] }
+craft-cms = { workspace = true }
+thiserror = { workspace = true }
+kurbo = { workspace = true, optional = true }
+linesweeper = { version = "0.5", optional = true }
+ttf-parser = { version = "=0.25.1", optional = true }
+
+[dev-dependencies]
+craft-plate-test = { workspace = true }
+ttf-parser = "=0.25.1"
+
+[features]
+# The transparency flattener.
+flatten = ["craft-pdf/write-pdf", "dep:kurbo", "dep:linesweeper", "dep:ttf-parser"]

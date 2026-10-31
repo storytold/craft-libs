@@ -1,0 +1,140 @@
+[
+  {
+    "name": "crw-canon-eos-d30.crw",
+    "body": "Canon EOS D30",
+    "source": "https://raw.pixls.us/getfile.php/1307/nice/Canon%20-%20EOS%20D30%20-%20RAW%20(3:2).CRW",
+    "sha256": "4ee482f2b6f9f1a8d370703ea04e9f2abaa49356973a7f56b229af93a78e8a2e",
+    "license": "CC0-1.0",
+    "expect": {
+      "width": 2224, "height": 1456, "bits": 12, "selector": 1, "cfa": "RGGB",
+      "active": [56, 12, 2160, 1440], "model": "Canon EOS D30", "exif_orientation": 1, "capture_unix": 1482512730,
+      "wb": null, "black": [127.9338, 127.8187, 128.2763, 128.4221], "white": 4095.0,
+      "samples_sha256": "8ac62f45a4ee04efebed7900eb46dd263dc4a03a96c4fe711dc41b6bec6078fe"
+    }
+  },
+  {
+    "name": "crw-canon-eos-d60.crw",
+    "body": "Canon EOS D60",
+    "source": "https://raw.pixls.us/getfile.php/2010/nice/Canon%20-%20EOS%20D60%20-%20RAW%20(3:2).CRW",
+    "sha256": "2b98659ecff170af1dfe44f89b493139e75e995b2979686f6ff0847cfb56b97f",
+    "license": "CC0-1.0",
+    "expect": {
+      "width": 3152, "height": 2068, "bits": 12, "selector": 0, "cfa": "RGGB",
+      "active": [72, 16, 3072, 2048], "model": "Canon EOS D60", "exif_orientation": 1, "capture_unix": 1467566074,
+      "wb": [2.627477, 1.0, 1.0990753], "black": [127.4332, 127.0843, 127.3606, 126.9793], "white": 3984.0,
+      "samples_sha256": "e01a6bc5cb8f67cd066f68863a04050f183c41e45395e8d4bc3b5ba4393561bb"
+    }
+  },
+  {
+    "name": "crw-canon-eos-10d-a.crw",
+    "body": "Canon EOS 10D",
+    "source": "https://raw.pixls.us/getfile.php/2027/nice/Canon%20-%20EOS%2010D%20-%20RAW%20(3:2).CRW",
+    "sha256": "b0730eb3a67cc2281a32e0b2ee104199246928d954a68b7e5b72366514c73d02",
+    "license": "CC0-1.0",
+    "expect": {
+      "width": 3152, "height": 2068, "bits": 12, "selector": 0, "cfa": "RGGB",
+      "active": [72, 16, 3072, 2048], "model": "Canon EOS 10D", "exif_orientation": 1, "capture_unix": 1228574022,
+      "wb": [2.09375, 1.0, 1.4915866], "black": [127.8010, 126.4857, 127.8322, 126.5070], "white": 3983.0,
+      "samples_sha256": "3aecb01756492569734885710dafd6ffc26421ac0b5a7fa1c151973d48cd389a"
+    }
+  },
+  {
+    "name": "crw-canon-eos-10d-b.crw",
+    "body": "Canon EOS 10D",
+    "source": "https://raw.pixls.us/getfile.php/3164/nice/Canon%20-%20EOS%2010D%20-%20RAW%20(3:2).crw",
+    "sha256": "e879c94afdc64dabc88b01ce2d02628aa225259303ec71dd61f7fb0322bfea2d",
+    "license": "CC0-1.0",
+    "expect": {
+      "width": 3152, "height": 2068, "bits": 12, "selector": 2, "cfa": "RGGB",
+      "active": [72, 16, 3072, 2048], "model": "Canon EOS 10D", "exif_orientation": 1, "capture_unix": 1105175848,
+      "wb": [1.8184005, 1.0, 1.3529766], "black": [124.6726, 125.9032, 124.6995, 125.9359], "white": 3990.0,
+      "samples_sha256": "25d8c540bace7ae9b92ab631fae3c4effee9625e388af600cdf60894764d3f92"
+    }
+  },
+  {
+    "name": "crw-canon-eos-10d-c.crw",
+    "body": "Canon EOS 10D",
+    "source": "https://raw.pixls.us/getfile.php/3165/nice/Canon%20-%20EOS%2010D%20-%20RAW%20(3:2).crw",
+    "sha256": "58144118854657df5cd2185df40fecf6b665fc6754fef0416c2f222b68b025c6",
+    "license": "CC0-1.0",
+    "expect": {
+      "width": 3152, "height": 2068, "bits": 12, "selector": 2, "cfa": "RGGB",
+      "active": [72, 16, 3072, 2048], "model": "Canon EOS 10D", "exif_orientation": 1, "capture_unix": 1109761444,
+      "wb": [1.9759471, 1.0, 1.1220685], "black": [127.7952, 128.2460, 127.8664, 128.3089], "white": 3988.0,
+      "samples_sha256": "c1bc8c958de399ecb5fbaeb3bd473baabbb534c5874508f9b51c3984a1319c7f"
+    }
+  },
+  {
+    "name": "crw-canon-eos-300d-a.crw",
+    "body": "Canon EOS 300D",
+    "source": "https://raw.pixls.us/getfile.php/1983/nice/Canon%20-%20EOS%20300D%20-%20RAW%20(3:2).crw",
+    "sha256": "47da16e1668af5500eea63cf42cf2992d9cb3d32180b8d786f17f1e2a57f39f4",
+    "license": "CC0-1.0",
+    "expect": {
+      "width": 3152, "height": 2068, "bits": 12, "selector": 0, "cfa": "RGGB",
+      "active": [72, 16, 3072, 2048], "model": "Canon EOS 300D DIGITAL", "exif_orientation": 8, "capture_unix": 1083408238,
+      "wb": [1.9579327, 1.0, 1.2632211], "black": [125.1676, 124.4162, 125.1797, 124.3886], "white": 3987.0,
+      "samples_sha256": "87848353618212be07370d659ceaa2ab349ba79b29c73702368233be2371de65"
+    }
+  },
+  {
+    "name": "crw-canon-eos-300d-b.crw",
+    "body": "Canon EOS 300D",
+    "source": "https://raw.pixls.us/getfile.php/3162/nice/Canon%20-%20EOS%20300D%20-%20RAW%20(3:2).CRW",
+    "sha256": "9e7f62239fe728046af28d0d4a8a722d35d40146a79794a5bda1775306af4383",
+    "license": "CC0-1.0",
+    "expect": {
+      "width": 3152, "height": 2068, "bits": 12, "selector": 2, "cfa": "RGGB",
+      "active": [72, 16, 3072, 2048], "model": "Canon EOS 300D DIGITAL", "exif_orientation": 8, "capture_unix": 1182188238,
+      "wb": [2.230908, 1.0, 1.1737823], "black": [124.8050, 124.1321, 125.1695, 124.2802], "white": 3992.0,
+      "samples_sha256": "b1b61526c67948b600a03a89df0a301bc220f303bf8b70c93ea657356875a715"
+    }
+  },
+  {
+    "name": "crw-canon-eos-digital-rebel.crw",
+    "body": "Canon EOS Digital Rebel",
+    "source": "https://raw.pixls.us/getfile.php/1308/nice/Canon%20-%20EOS%20Digital%20Rebel%20-%20RAW%20(3:2).CRW",
+    "sha256": "d6a3131bfac390fde01b96882ec378211f04570c3252708b58f0d05b33a9fdfc",
+    "license": "CC0-1.0",
+    "expect": {
+      "width": 3152, "height": 2068, "bits": 12, "selector": 0, "cfa": "RGGB",
+      "active": [72, 16, 3072, 2048], "model": "Canon EOS DIGITAL REBEL", "exif_orientation": 1, "capture_unix": 1480372394,
+      "wb": [1.6094965, 1.0, 1.676627], "black": [262.0760, 260.0167, 261.7442, 260.0508], "white": 4095.0,
+      "samples_sha256": "ec487fc432a31a648fc8238452976fd96115ff058bc6989352bdebdf997d99aa"
+    }
+  },
+  {
+    "name": "crw-canon-powershot-g1.crw",
+    "body": "Canon PowerShot G1",
+    "source": "https://raw.pixls.us/getfile.php/2073/nice/Canon%20-%20PowerShot%20G1%20-%20RAW%20(4:3).crw",
+    "sha256": "f39be5acf14057ce04527fd8d0574e57ec8ed5fed082d7bfaff763075a44ee8a",
+    "license": "CC0-1.0",
+    "expect": {
+      "width": 2144, "height": 1560, "bits": 10, "selector": 1, "cfa": "GBRG",
+      "active": [24, 15, 2048, 1536], "model": "Canon PowerShot G1", "exif_orientation": 1, "capture_unix": 1065594172,
+      "wb": null, "black": [28.7314, 28.7637, 28.7544, 28.6963], "white": 1023.0,
+      "samples_sha256": "2316b72fd8d84cff2abbac1e56d9a6ea76997ee9a4182a040d9e261735393ba2"
+    }
+  },
+  {
+    "name": "crw-canon-powershot-g5.crw",
+    "body": "Canon PowerShot G5",
+    "source": "https://raw.pixls.us/getfile.php/1746/nice/Canon%20-%20PowerShot%20G5%20-%20RAW%20(4:3).CRW",
+    "sha256": "bb084223d714871b99de4f549eaf00513e30a7080feeead700252c2008060196",
+    "license": "CC0-1.0",
+    "expect": "unsupported"
+  },
+  {
+    "name": "crw-canon-powershot-g6.crw",
+    "body": "Canon PowerShot G6",
+    "source": "https://raw.pixls.us/getfile.php/4226/nice/Canon%20-%20PowerShot%20G6%20-%20RAW%20(4:3).CRW",
+    "sha256": "244378e1f5660b6cc6cefc93a75ed4928d0b28aa6304ff327b61c748538f4fef",
+    "license": "CC0-1.0",
+    "expect": {
+      "width": 3160, "height": 2344, "bits": 12, "selector": 0, "cfa": "RGGB",
+      "active": [64, 24, 3072, 2304], "model": "Canon PowerShot G6", "exif_orientation": 1, "capture_unix": 1607955982,
+      "wb": null, "black": [128.9415, 128.9516, 129.0142, 129.0901], "white": 4080.0,
+      "samples_sha256": "17804ed2ff64873e7d24ca06c58a4c8d095aad1907affb938ebcd12b618fa7ac"
+    }
+  }
+]

@@ -1,0 +1,571 @@
+diff --git a/src/error.rs b/src/error.rs
+index 26cd767..1807ac3 100644
+--- a/src/error.rs
++++ b/src/error.rs
+@@ -24,6 +24,11 @@ pub type KrillaResult<T> = Result<T, KrillaError>;
+ pub enum KrillaError {
+     /// A page or surface failed during cleanup; discard the complete document.
+     Poisoned,
++    /// [`GroupColorSpace::Cmyk`] with `no_device_cs` needs a `cmyk_profile` for the group
++    /// color space.
++    ///
++    /// [`GroupColorSpace::Cmyk`]: crate::GroupColorSpace::Cmyk
++    MissingGroupCmykProfile,
+     /// An error while attempting to embed a font.
+     Font(Font, String),
+     /// A list of validation errors. Can only occur if you set the `validator` in
+@@ -62,6 +67,9 @@ impl Display for KrillaError {
+     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+         match self {
+             KrillaError::Poisoned => f.write_str("document contains a failed page or surface"),
++            KrillaError::MissingGroupCmykProfile => {
++                f.write_str("a CMYK group color space with no_device_cs needs a CMYK profile")
++            }
+             KrillaError::Font(_, message) => write!(f, "failed to embed font: {message}"),
+             KrillaError::Validation(errors) => {
+                 let count = errors.len();
+diff --git a/src/graphics/graphics_state.rs b/src/graphics/graphics_state.rs
+index 918f059..9fc913c 100644
+--- a/src/graphics/graphics_state.rs
++++ b/src/graphics/graphics_state.rs
+@@ -122,6 +122,7 @@ impl Cacheable for ExtGState {
+         if let Some(nsa) = self.0.non_stroking_alpha {
+             if nsa != NormalizedF32::ONE {
+                 sc.register_validation_error(ValidationError::Transparency(sc.location));
++                sc.mark_transparent(root_ref);
+             }
+ 
+             ext_st.non_stroking_alpha(nsa.get());
+@@ -130,6 +131,7 @@ impl Cacheable for ExtGState {
+         if let Some(sa) = self.0.stroking_alpha {
+             if sa != NormalizedF32::ONE {
+                 sc.register_validation_error(ValidationError::Transparency(sc.location));
++                sc.mark_transparent(root_ref);
+             }
+ 
+             ext_st.stroking_alpha(sa.get());
+@@ -138,6 +140,7 @@ impl Cacheable for ExtGState {
+         if let Some(bm) = self.0.blend_mode {
+             if bm != BlendMode::Normal {
+                 sc.register_validation_error(ValidationError::Transparency(sc.location));
++                sc.mark_transparent(root_ref);
+             }
+ 
+             ext_st.blend_mode(bm);
+@@ -145,6 +148,7 @@ impl Cacheable for ExtGState {
+ 
+         if let Some(mask_ref) = self.0.mask {
+             sc.register_validation_error(ValidationError::Transparency(sc.location));
++            sc.mark_transparent(root_ref);
+ 
+             ext_st.pair(Name(b"SMask"), mask_ref);
+         }
+diff --git a/src/graphics/image.rs b/src/graphics/image.rs
+index 22a68ca..c911f06 100644
+--- a/src/graphics/image.rs
++++ b/src/graphics/image.rs
+@@ -365,6 +365,7 @@ impl Image {
+     ) {
+         let soft_mask_id = self.0.metadata.has_alpha.then(|| {
+             sc.register_validation_error(ValidationError::Transparency(sc.location));
++            sc.mark_transparent(root_ref);
+             sc.new_ref()
+         });
+ 
+diff --git a/src/graphics/mask.rs b/src/graphics/mask.rs
+index ffbb3de..9fc958e 100644
+--- a/src/graphics/mask.rs
++++ b/src/graphics/mask.rs
+@@ -5,10 +5,10 @@ use pdf_writer::{Finish, Name, Ref};
+ use crate::chunk_container::ChunkContainer;
+ use crate::geom::{Rect, Transform};
+ use crate::graphics::shading_function::{GradientProperties, ShadingFunction};
+-use crate::graphics::xobject::XObject;
++use crate::graphics::xobject::{GroupRole, XObject};
+ use crate::resource;
+ use crate::resource::Resourceable;
+-use crate::serialize::{Cacheable, SerializeContext};
++use crate::serialize::{Cacheable, GroupColorSpace, SerializeContext};
+ use crate::stream::Stream;
+ use crate::stream::StreamBuilder;
+ 
+@@ -108,9 +108,15 @@ impl Cacheable for Mask {
+         chunk_container: &mut ChunkContainer,
+         root_ref: Ref,
+     ) {
++        // Under RGB blending a mask source group is written like a content group, so
++        // keeping the content role there leaves object deduplication as it was.
++        let role = match sc.serialize_settings().group_color_space {
++            GroupColorSpace::Rgb => GroupRole::Content,
++            GroupColorSpace::Cmyk => GroupRole::MaskSource,
++        };
+         let x_object = sc.register_cacheable(
+             chunk_container,
+-            XObject::new(self.stream, false, true, self.custom_bbox),
++            XObject::with_role(self.stream, false, true, self.custom_bbox, role),
+         );
+ 
+         let chunk = &mut chunk_container.non_stream.masks;
+diff --git a/src/graphics/tiling_pattern.rs b/src/graphics/tiling_pattern.rs
+index e26f1d8..94e640e 100644
+--- a/src/graphics/tiling_pattern.rs
++++ b/src/graphics/tiling_pattern.rs
+@@ -85,6 +85,10 @@ impl Cacheable for TilingPattern {
+             sc.register_validation_error(validation_error);
+         }
+ 
++        if sc.uses_transparency(&self.stream.resource_dictionary) {
++            sc.mark_transparent(root_ref);
++        }
++
+         let pattern_stream = FilterStreamBuilder::new_from_content_stream(
+             &self.stream.content,
+             &sc.serialize_settings(),
+diff --git a/src/graphics/xobject.rs b/src/graphics/xobject.rs
+index 28d6f38..6c56b0e 100644
+--- a/src/graphics/xobject.rs
++++ b/src/graphics/xobject.rs
+@@ -1,24 +1,36 @@
+ use std::ops::DerefMut;
+ use std::sync::Arc;
+ 
++use pdf_writer::writers::Group;
+ use pdf_writer::{Finish, Name, Ref};
+ 
+ use crate::chunk_container::ChunkContainer;
+ use crate::configure::ValidationError;
+ use crate::geom::Rect;
+-use crate::graphics::color::{rgb, DEVICE_RGB};
++use crate::graphics::color::{rgb, DEVICE_CMYK, DEVICE_RGB};
+ use crate::resource;
+ use crate::resource::{Resource, Resourceable};
+-use crate::serialize::{Cacheable, MaybeDeviceColorSpace, SerializeContext};
++use crate::serialize::{Cacheable, GroupColorSpace, MaybeDeviceColorSpace, SerializeContext};
+ use crate::stream::{FilterStreamBuilder, Stream};
+ use crate::util::{NameExt, Prehashed};
+ 
++/// What a group XObject is used for, which decides its `/CS` under
++/// [`GroupColorSpace::Cmyk`].
++#[derive(Debug, Hash, Eq, PartialEq, Clone, Copy)]
++pub(crate) enum GroupRole {
++    /// Drawn in a page or another form: inherits the parent's blending space.
++    Content,
++    /// The `/G` of a soft mask: has no parent, so it names its blending space.
++    MaskSource,
++}
++
+ #[derive(Debug, Hash, Eq, PartialEq)]
+ struct Repr {
+     stream: Stream,
+     isolated: bool,
+     transparency_group_color_space: bool,
+     custom_bbox: Option<Rect>,
++    role: GroupRole,
+ }
+ 
+ #[derive(Debug, Hash, Clone, Eq, PartialEq)]
+@@ -26,10 +38,26 @@ pub(crate) struct XObject(Arc<Prehashed<Repr>>);
+ 
+ impl XObject {
+     pub(crate) fn new(
++        stream: Stream,
++        isolated: bool,
++        transparency_group_color_space: bool,
++        custom_bbox: Option<Rect>,
++    ) -> Self {
++        Self::with_role(
++            stream,
++            isolated,
++            transparency_group_color_space,
++            custom_bbox,
++            GroupRole::Content,
++        )
++    }
++
++    pub(crate) fn with_role(
+         stream: Stream,
+         isolated: bool,
+         mut transparency_group_color_space: bool,
+         custom_bbox: Option<Rect>,
++        role: GroupRole,
+     ) -> Self {
+         // In case a mask was invoked in the content stream, we _always_ create
+         // a new transparency group. Please see <https://github.com/typst/typst/issues/5509>.
+@@ -48,6 +76,7 @@ impl XObject {
+             isolated,
+             transparency_group_color_space,
+             custom_bbox,
++            role,
+         })))
+     }
+ 
+@@ -79,6 +108,10 @@ impl Cacheable for XObject {
+             sc.register_validation_error(ValidationError::Transparency(sc.location));
+         }
+ 
++        if use_transparency_group || sc.uses_transparency(&self.0.stream.resource_dictionary) {
++            sc.mark_transparent(root_ref);
++        }
++
+         let serialize_settings = sc.serialize_settings();
+ 
+         // "Ordinarily, the CS entry may be present only for isolated transparency groups (those
+@@ -88,13 +121,21 @@ impl Cacheable for XObject {
+         //
+         // So while we don't technically always need to write it, let's just play it save
+         // and always add a group color space in case we have a transparency group.
+-        let transparency_group_cs = if use_transparency_group {
+-            Some(sc.register_colorspace(
+-                chunk_container,
+-                rgb::color_space(serialize_settings.no_device_cs).into(),
+-            ))
+-        } else {
++        //
++        // Under `GroupColorSpace::Cmyk`, content groups inherit the CMYK page group instead.
++        let transparency_group_cs = if !use_transparency_group {
+             None
++        } else {
++            match (serialize_settings.group_color_space, self.0.role) {
++                (GroupColorSpace::Rgb, _) => Some(sc.register_colorspace(
++                    chunk_container,
++                    rgb::color_space(serialize_settings.no_device_cs).into(),
++                )),
++                (GroupColorSpace::Cmyk, GroupRole::Content) => None,
++                (GroupColorSpace::Cmyk, GroupRole::MaskSource) => {
++                    Some(sc.mask_group_color_space(chunk_container))
++                }
++            }
+         };
+ 
+         let x_object_stream = FilterStreamBuilder::new_from_content_stream(
+@@ -126,14 +167,7 @@ impl Cacheable for XObject {
+             }
+ 
+             if let Some(transparency_group_cs) = transparency_group_cs {
+-                let pdf_cs = transparency.insert(Name(b"CS"));
+-
+-                match transparency_group_cs {
+-                    MaybeDeviceColorSpace::DeviceRgb => pdf_cs.primitive(DEVICE_RGB.to_pdf_name()),
+-                    // Can only be SRGB
+-                    MaybeDeviceColorSpace::ColorSpace(cs) => pdf_cs.primitive(cs.get_ref()),
+-                    _ => unreachable!(),
+-                }
++                write_group_color_space(transparency, transparency_group_cs);
+             }
+ 
+             transparency.finish();
+@@ -145,6 +179,18 @@ impl Cacheable for XObject {
+     }
+ }
+ 
++/// Write the `/CS` of a transparency group: DeviceRGB, DeviceCMYK, sRGB or the CMYK profile.
++pub(crate) fn write_group_color_space(group: &mut Group<'_>, cs: MaybeDeviceColorSpace) {
++    let pdf_cs = group.insert(Name(b"CS"));
++
++    match cs {
++        MaybeDeviceColorSpace::DeviceRgb => pdf_cs.primitive(DEVICE_RGB.to_pdf_name()),
++        MaybeDeviceColorSpace::DeviceCMYK => pdf_cs.primitive(DEVICE_CMYK.to_pdf_name()),
++        MaybeDeviceColorSpace::ColorSpace(cs) => pdf_cs.primitive(cs.get_ref()),
++        _ => unreachable!(),
++    }
++}
++
+ impl Resourceable for XObject {
+     type Resource = resource::XObject;
+ }
+diff --git a/src/lib.rs b/src/lib.rs
+index efbe6f8..b331053 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -176,7 +176,7 @@ pub use document::*;
+ pub use graphics::*;
+ pub use interactive::*;
+ pub use interchange::*;
+-pub use serialize::SerializeSettings;
++pub use serialize::{GroupColorSpace, SerializeSettings};
+ 
+ /// Identifies the local patch that discards unfinished page/surface state during unwind.
+ pub const CRAFT_UNWIND_SAFE_DROP: bool = true;
+diff --git a/src/page.rs b/src/page.rs
+index ed6b1e2..3b3227b 100644
+--- a/src/page.rs
++++ b/src/page.rs
+@@ -14,10 +14,11 @@ use crate::configure::ValidationError;
+ use crate::content::ContentBuilder;
+ use crate::error::KrillaResult;
+ use crate::geom::{Rect, Size, Transform};
++use crate::graphics::xobject::write_group_color_space;
+ use crate::interactive::annotation::Annotation;
+ use crate::interchange::tagging::{Identifier, PageTagIdentifier};
+ use crate::resource::ResourceDictionary;
+-use crate::serialize::{PageInfo, SerializeContext};
++use crate::serialize::{GroupColorSpace, PageInfo, SerializeContext};
+ use crate::stream::{FilterStreamBuilder, Stream};
+ use crate::surface::Surface;
+ use crate::tagging::AnnotationIdentifier;
+@@ -412,8 +413,20 @@ impl InternalPage {
+             }
+         }
+ 
++        // Under CMYK blending, a page that blends gets a page group naming the space its
++        // content groups inherit. Opaque pages stay without one (PDF/X-1a and X-3).
++        let page_group_cs = (sc.serialize_settings().group_color_space == GroupColorSpace::Cmyk
++            && sc.uses_transparency(&self.stream_resources))
++        .then(|| sc.cmyk_group_color_space(chunk_container));
++
+         let chunk = &mut chunk_container.non_stream.pages;
+         let mut page = chunk.page(root_ref);
++        if let Some(cs) = page_group_cs {
++            let mut group = page.group();
++            group.transparency();
++            write_group_color_space(&mut group, cs);
++            group.finish();
++        }
+         self.stream_resources.to_pdf_resources(
+             &mut page,
+             sc,
+diff --git a/src/pdf.rs b/src/pdf.rs
+index bbdae8e..b2666a7 100644
+--- a/src/pdf.rs
++++ b/src/pdf.rs
+@@ -18,7 +18,7 @@ use crate::configure::{PdfVersion, ValidationError};
+ use crate::error::{KrillaError, KrillaResult};
+ use crate::graphics::color::rgb;
+ use crate::resource::Resource;
+-use crate::serialize::{MaybeDeviceColorSpace, SerializeContext};
++use crate::serialize::{GroupColorSpace, MaybeDeviceColorSpace, SerializeContext};
+ use crate::surface::Location;
+ use crate::util::{Deferred, Prehashed};
+ 
+@@ -179,10 +179,16 @@ impl PdfSerializerContext {
+             // but we just always allocate it if we have at least one PDF,
+             // regardless of how the files are embedded. We can change this in the
+             // future, but it keeps the code simpler.
+-            let xobject_group_color_space = sc.register_colorspace(
+-                chunk_container,
+-                rgb::color_space(sc.serialize_settings().no_device_cs).into(),
+-            );
++            //
++            // Under CMYK blending the group writes no `/CS` and inherits the page group,
++            // so no color space is registered.
++            let xobject_group_color_space = match sc.serialize_settings().group_color_space {
++                GroupColorSpace::Rgb => Some(sc.register_colorspace(
++                    chunk_container,
++                    rgb::color_space(sc.serialize_settings().no_device_cs).into(),
++                )),
++                GroupColorSpace::Cmyk => None,
++            };
+             let chunk_settings = sc.chunk_settings();
+ 
+             let deferred_chunk = Deferred::new(move || {
+@@ -197,11 +203,11 @@ impl PdfSerializerContext {
+                 // krilla PDF, we replace `local_ref` with `cs_ref` such that it
+                 // actually points to the colorspace that is embedded in the full PDF.
+                 let (assigned_cs_ref, should_cs_ref) = match &xobject_group_color_space {
+-                    MaybeDeviceColorSpace::DeviceRgb => (None, None),
+-                    MaybeDeviceColorSpace::ColorSpace(cs) => {
++                    None | Some(MaybeDeviceColorSpace::DeviceRgb) => (None, None),
++                    Some(MaybeDeviceColorSpace::ColorSpace(cs)) => {
+                         (Some(new_ref.bump()), Some(cs.get_ref()))
+                     }
+-                    MaybeDeviceColorSpace::DeviceGray | MaybeDeviceColorSpace::DeviceCMYK => {
++                    Some(MaybeDeviceColorSpace::DeviceGray | MaybeDeviceColorSpace::DeviceCMYK) => {
+                         unreachable!()
+                     }
+                 };
+@@ -224,7 +230,9 @@ impl PdfSerializerContext {
+                     Box::new(|| new_ref.bump()),
+                     chunk_settings,
+                     |group| {
+-                        if let Some(local_group_color_space_ref) = assigned_cs_ref {
++                        if xobject_group_color_space.is_none() {
++                            // Inherit the blending space of the page group.
++                        } else if let Some(local_group_color_space_ref) = assigned_cs_ref {
+                             group
+                                 .insert(Name(b"CS"))
+                                 .primitive(local_group_color_space_ref);
+diff --git a/src/resource.rs b/src/resource.rs
+index 5ad0585..56b8488 100644
+--- a/src/resource.rs
++++ b/src/resource.rs
+@@ -326,6 +326,10 @@ where
+         format!("{}{}", T::get_prefix(), num)
+     }
+ 
++    pub(crate) fn refs(&self) -> impl Iterator<Item = Ref> + '_ {
++        self.entries.iter().copied()
++    }
++
+     pub(crate) fn get_entries(&self) -> impl Iterator<Item = (String, Ref)> + '_ {
+         self.entries
+             .iter()
+diff --git a/src/serialize.rs b/src/serialize.rs
+index d79ce28..58c0090 100644
+--- a/src/serialize.rs
++++ b/src/serialize.rs
+@@ -16,7 +16,7 @@ use crate::configure::validate::ValidationStore;
+ use crate::configure::{Configuration, PdfVersion, ValidationError, Validators};
+ use crate::error::{KrillaError, KrillaResult, LimitError};
+ use crate::geom::Size;
+-use crate::graphics::color::{rgb, ColorSpace};
++use crate::graphics::color::{cmyk, luma, rgb, ColorSpace};
+ use crate::graphics::icc::{ICCBasedColorSpace, ICCProfile};
+ #[cfg(feature = "raster-images")]
+ use crate::graphics::image::Image;
+@@ -29,7 +29,7 @@ use crate::page::{InternalPage, PageLabel, PageLabelContainer};
+ #[cfg(feature = "pdf")]
+ use crate::pdf::{PdfDocument, PdfSerializerContext};
+ use crate::resource;
+-use crate::resource::{Resource, Resourceable};
++use crate::resource::{Resource, ResourceDictionary, Resourceable};
+ use crate::surface::{Location, Surface};
+ use crate::text::GlyphId;
+ use crate::text::{Font, FontContainer, FontIdentifier};
+@@ -116,6 +116,30 @@ pub struct SerializeSettings {
+     /// just use the default function which doesn't render them at all. If you do want this, it
+     /// is recommended that you use the function provided by the `krilla-svg` crate.
+     pub render_svg_glyph_fn: RenderSvgGlyphFn,
++    /// The color space in which transparency is blended.
++    ///
++    /// See [`GroupColorSpace`].
++    pub group_color_space: GroupColorSpace,
++}
++
++/// The color space in which transparency groups blend.
++#[derive(Clone, Copy, Debug, Default, Hash, PartialEq, Eq)]
++pub enum GroupColorSpace {
++    /// Every transparency group gets an RGB `/CS` (DeviceRGB, or sRGB when
++    /// `no_device_cs` is set). Pages get no `/Group`. Suits screen output.
++    #[default]
++    Rgb,
++    /// Pages that use transparency get a page group with a CMYK `/CS`: DeviceCMYK, or the
++    /// [`SerializeSettings::cmyk_profile`] when `no_device_cs` is set. Content groups and
++    /// embedded PDF pages write no `/CS` and inherit it. Soft-mask groups, which have no
++    /// parent, name DeviceCMYK, or sGrey when `no_device_cs` is set. Pages without
++    /// transparency get no page group.
++    ///
++    /// With `no_device_cs` and no `cmyk_profile`, [`Document::finish`] fails with
++    /// [`KrillaError::MissingGroupCmykProfile`].
++    ///
++    /// [`Document::finish`]: crate::Document::finish
++    Cmyk,
+ }
+ 
+ pub type RenderSvgGlyphFn = fn(&[u8], rgb::Color, GlyphId, (f32, f32), &mut Surface) -> Option<()>;
+@@ -148,6 +172,7 @@ impl Default for SerializeSettings {
+             configuration: Configuration::default(),
+             enable_tagging: true,
+             render_svg_glyph_fn: |_, _, _, _, _| None,
++            group_color_space: GroupColorSpace::Rgb,
+         }
+     }
+ }
+@@ -275,6 +300,11 @@ pub(crate) struct SerializeContext {
+     validation_store: ValidationStore,
+     /// The current location, if set.
+     pub(crate) location: Option<Location>,
++    /// Objects whose use makes a page blend: transparent graphics states, groups, images
++    /// with alpha, and forms, patterns and Type 3 fonts that use any of these. Decides
++    /// which pages get a page group under [`GroupColorSpace::Cmyk`]. Cached objects are
++    /// serialized once, so this is tracked by reference instead of by location.
++    transparent_refs: HashSet<Ref>,
+ }
+ 
+ impl SerializeContext {
+@@ -309,6 +339,50 @@ impl SerializeContext {
+             chunk_settings,
+             limits: Limits::new(),
+             validation_store: ValidationStore::new(),
++            transparent_refs: HashSet::new(),
++        }
++    }
++
++    /// Record that drawing `object` involves transparency.
++    pub(crate) fn mark_transparent(&mut self, object: Ref) {
++        self.transparent_refs.insert(object);
++    }
++
++    /// Whether content using `resources` involves transparency.
++    pub(crate) fn uses_transparency(&self, resources: &ResourceDictionary) -> bool {
++        resources
++            .ext_g_states
++            .refs()
++            .chain(resources.x_objects.refs())
++            .chain(resources.patterns.refs())
++            .chain(resources.fonts.refs())
++            .any(|r| self.transparent_refs.contains(&r))
++    }
++
++    /// The CMYK blending color space for page groups under [`GroupColorSpace::Cmyk`]. Falls back to DeviceCMYK when `no_device_cs` is set
++    /// without a CMYK profile; `finish` rejects that configuration.
++    pub(crate) fn cmyk_group_color_space(
++        &mut self,
++        chunk_container: &mut ChunkContainer,
++    ) -> MaybeDeviceColorSpace {
++        let cs = cmyk::color_space(&self.serialize_settings)
++            .unwrap_or_else(|| DeviceColorSpace::Cmyk.into());
++        self.register_colorspace(chunk_container, cs.into())
++    }
++
++    /// The blending color space of soft-mask groups under [`GroupColorSpace::Cmyk`]:
++    /// DeviceCMYK, or sGrey when `no_device_cs` is set. A mask group has no parent, so it
++    /// need not match the page group. An ICC CMYK mask group would give the default black
++    /// backdrop a luminosity above 0, because 100% black through a CMYK profile is not black,
++    /// and the masked object would show where the mask content paints nothing.
++    pub(crate) fn mask_group_color_space(
++        &mut self,
++        chunk_container: &mut ChunkContainer,
++    ) -> MaybeDeviceColorSpace {
++        if self.serialize_settings.no_device_cs {
++            self.register_colorspace(chunk_container, luma::color_space(true).into())
++        } else {
++            self.cmyk_group_color_space(chunk_container)
+         }
+     }
+ 
+@@ -428,9 +502,13 @@ impl SerializeContext {
+         let xobj_ref = self.new_ref();
+ 
+         // Note that `add_xobject` might return a different ref than the one we created.
+-        self.global_objects
+-            .pdf_ctx
+-            .add_xobject(pdf, page_idx, xobj_ref, self.location)
++        let xobj_ref =
++            self.global_objects
++                .pdf_ctx
++                .add_xobject(pdf, page_idx, xobj_ref, self.location);
++        // Embedded pages are always drawn as isolated transparency groups.
++        self.mark_transparent(xobj_ref);
++        xobj_ref
+     }
+ 
+     pub(crate) fn page_tree_ref(&mut self) -> Ref {
+@@ -450,6 +528,14 @@ impl SerializeContext {
+     }
+ 
+     pub(crate) fn finish(mut self, mut chunk_container: ChunkContainer) -> KrillaResult<Pdf> {
++        let settings = &self.serialize_settings;
++        if settings.group_color_space == GroupColorSpace::Cmyk
++            && settings.no_device_cs
++            && settings.cmyk_profile.is_none()
++        {
++            return Err(KrillaError::MissingGroupCmykProfile);
++        }
++
+         // We need to be careful here that we serialize the objects in the right order,
+         // as in some cases we use MaybeTake::take to remove an object, which means that
+         // no object that is serialized afterwards must depend on it.
+diff --git a/src/text/type3.rs b/src/text/type3.rs
+index 1ba149c..9d43bd6 100644
+--- a/src/text/type3.rs
++++ b/src/text/type3.rs
+@@ -212,6 +212,9 @@ impl Type3Font {
+             .collect::<Vec<Ref>>();
+ 
+         let resource_dictionary = rd_builder.finish();
++        if sc.uses_transparency(&resource_dictionary) {
++            sc.mark_transparent(root_ref);
++        }
+         let chunk = &mut chunk_container.non_stream.fonts;
+ 
+         let descriptor_ref = if sc.serialize_settings().pdf_version() >= PdfVersion::Pdf15 {

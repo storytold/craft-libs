@@ -1,6 +1,8 @@
 Craft App Libraries
 ===================
 
+<a href="https://sonarcloud.io/project/overview?id=storytold_craft-libs"><img alt="Scanned by SonarCloud" src="https://img.shields.io/badge/Scanned_by-SonarCloud-4b9fd5?style=flat-square&logo=sonarqubecloud&logoColor=white"></a>
+
 This repo contains libraries used by the various Craft Apps. It's a Rust monorepo workspace, and the libraries can be included by any Craft Apps that need them.
 
 In the future this may grow to include non-Rust library code.
@@ -23,6 +25,8 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
 
 ## Libraries
 
+- [`craft-platform`](crates/platform/README.md): optional native dialog lifecycle, Linux/BSD desktop appearance observation and browser download ownership; application policy stays in the apps.
+
 - [`craft-ai-core`](crates/ai-core/README.md): the data model and contract for AI in the Craft Apps (connections, models, tools, requests, jobs, consent, history, route spec). Pure, no I/O, wasm-safe. Contract in [docs/ai-shared-layer.md](docs/ai-shared-layer.md).
 - [`craft-pdf`](crates/pdf/README.md): independently optional PDF parsing, interpretation, rasterization and guarded authoring. Apps retain layout, fonts, editing and export policy; writer-only consumers do not enable the shared reader.
 
@@ -30,16 +34,51 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
 - [`craft-cms`](crates/cms/README.md): pure-Rust ICC v2/v4 colour management: profile parsing
   and writing, transforms, rendering intents, black point compensation, soft proofing, gamut
   checks, 3D LUTs and built-in profiles (sRGB, Display P3, synthetic coated CMYK and others).
+- [`craft-crw`](crates/crw/README.md): clean-room Canon CRW (CIFF) raw decoder, from LightCraft:
+  the heap container, the entropy coding derived by black-box analysis (frozen code tables), sensor
+  black and white levels and as-shot white balance. The complete derivation record (plan, sources
+  log, scripts, verification) is in `crates/crw/clean-room/`. Colour stays in each app.
+- [`craft-dialogs`](crates/dialogs/README.md): native file and message dialogs that never block
+  the event loop: queued requests shown at the end of the frame and answered on a later frame,
+  free-standing Open and Folder panels and Save sheets on macOS, case-insensitive filters. What
+  to do with the answer stays in each app.
 - [`craft-docpath`](crates/docpath/src/lib.rs): decides whether a path or `file:` URL stored in a
   document may be opened. Paths stored in documents are followed only when they are local or on the
   document's own network share; other network paths, device paths and non-file URLs are refused.
+- [`craft-font-catalog`](crates/font-catalog/README.md): the installed fonts on every platform
+  (font folders, fontconfig and Flatpak host folders, CoreText, DirectWrite, the font store),
+  lookup by family, style, localized, legacy, full and PostScript names, family loads shared
+  between threads, and rescans when fonts are installed or removed.
+- [`craft-font-manager`](crates/font-manager/README.md): Craft Font Manager as a library: search
+  and filters over the Google Fonts index, installed fonts by family, the font store interface,
+  and (`egui` feature) `FontsPanel`, the whole interface as one panel for the launcher's Fonts tab
+  and the standalone app.
+- [`craft-font-store`](crates/font-store/README.md): the suite's font store: the pinned Google
+  Fonts and Noto indexes plus indexes the user adds (never curated), exact lookup by family and
+  style or PostScript name, and installs from each source's URLs (jsDelivr, then raw GitHub)
+  checked by size, sha256 and parsing, with the licence, a manifest, and removal. Off until the
+  user turns downloading on; agents can't.
+- [`craft-fonts-build`](crates/fonts-build/README.md): embeds the optional craft-fonts faces
+  from an app's `build.rs` (`CRAFT_FONTS_DIR`, `CRAFT_FONTS_REQUIRED`, script filters) as a table
+  of `EmbeddedFace`s. No dependencies; the app picks the faces.
 - [`craft-i18n`](crates/i18n/README.md): translations over the embedded craft-i18n catalogs:
   lookup with fallback (`pt-br` → `pt` → English), plurals, language names, the system locale and
   a pseudo locale. The catalogs stay a fully optional build input; apps keep `tl!` and their
   language setting.
+- [`craft-jpeg`](crates/jpeg/README.md): clean-room decoder for 12-bit and arithmetic-coded
+  JPEG (T.81 SOF0/SOF1 at 12 bits, SOF9, SOF10), from PhotoCraft, and a frame probe for routing.
+  Metadata stays in each app.
+- [`craft-keymap`](crates/keymap/README.md): keyboard bindings: chords and their text forms,
+  scopes, conflicts, user overrides stored through craft-settings and import of other
+  applications' shortcut sets. Command catalogs, file readers and the shortcut editor UI stay
+  in each app.
 - [`craft-media`](crates/media/README.md): bit-level I/O (`bitstream`), clean-room MP4/MOV
   (`isobmff`) and Matroska/WebM (`matroska`) demuxers and muxers, from FilmCraft, and an ISO BMFF
   box reader. Containers only; codecs stay in each app.
+- [`craft-menu`](crates/menu/README.md): an app's menus as a macOS menu bar: the Mac layout
+  (app menu, Window, Help, system-key clashes), a platform backend trait, and key equivalents
+  fed back to egui as the input egui-winit would have made. Commands and their enabled state
+  stay in each app.
 - [`craft-print`](crates/print/README.md): PDF submission to CUPS and Windows, printer discovery,
   duplex/copies/colour and driver preferences. PDF generation stays in each app.
 
@@ -47,6 +86,9 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   app menu. Unsaved-document decisions and save prompts stay in each app.
 
 - [`craft-settings`](crates/settings/README.md): `config.toml` settings storage for every app: platform folders, portable mode and overrides, atomic saves while running, backup, damaged-file recovery and schema migrations. Policy in [docs/settings-storage.md](docs/settings-storage.md).
+- [`craft-text`](crates/text/README.md): text processing below the composer. Its `hyphen` module finds
+  hyphenation points, with a bundled US English dictionary and patterns and optional hypher patterns
+  for 47 more languages (one cargo feature each).
 - [`craft-ui`](crates/ui/README.md): SVG catalogs, icon buttons, tabs, pane controls, transactional docking, print settings and theme helpers for egui frontends;
   assets, themes, localization and command handling stay in each app. Requires Rust 1.95 or later.
 - [Shared UI component audit](docs/ui-components-audit.md): source inventory, extraction priorities

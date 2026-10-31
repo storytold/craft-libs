@@ -195,6 +195,13 @@ pub const HANDLED_OPTIONS: &[&str] = &["PageSize", "PageRegion", "Duplex", "Coll
 /// Caps on what a PPD may make the dialog hold (PPDs are text files from the printer vendor).
 const MAX_OPTIONS: usize = 400;
 const MAX_CHOICES: usize = 400;
+/// Longest group, option or choice label kept, in characters; every option copies its group's.
+const MAX_PPD_LABEL: usize = 256;
+
+/// `label`, cut to [`MAX_PPD_LABEL`] characters.
+fn ppd_label(label: &str) -> String {
+    label.chars().take(MAX_PPD_LABEL).collect()
+}
 
 /// A PPD keyword: printable ASCII without spaces, `/`, `:` or `=`.
 fn is_ppd_keyword(s: &str) -> bool {
@@ -220,7 +227,7 @@ pub fn parse_ppd(ppd: &str) -> Vec<PrinterOption> {
         let line = line.trim_end_matches('\r');
         if let Some(rest) = line.strip_prefix("*OpenGroup:") {
             let (k, l) = name_label(rest);
-            (group_key, group) = (k.to_string(), l.to_string());
+            (group_key, group) = (k.to_string(), ppd_label(l));
         } else if line.starts_with("*CloseGroup") {
             (group_key, group) = (String::new(), String::new());
         } else if let Some(rest) = line.strip_prefix("*OpenUI") {
@@ -228,7 +235,7 @@ pub fn parse_ppd(ppd: &str) -> Vec<PrinterOption> {
             let (key, label) = name_label(head.trim().trim_start_matches('*'));
             open = is_ppd_keyword(key).then(|| PrinterOption {
                 key: key.to_string(),
-                label: label.to_string(),
+                label: ppd_label(label),
                 group: group.clone(),
                 choices: Vec::new(),
                 default: String::new(),
@@ -251,7 +258,7 @@ pub fn parse_ppd(ppd: &str) -> Vec<PrinterOption> {
                 let head = rest.split_once(':').map_or(rest, |(h, _)| h);
                 let (choice, label) = name_label(head);
                 if is_ppd_keyword(choice) && o.choices.len() < MAX_CHOICES && o.choices.iter().all(|(c, _)| c != choice) {
-                    o.choices.push((choice.to_string(), label.to_string()));
+                    o.choices.push((choice.to_string(), ppd_label(label)));
                 }
             }
         }
@@ -387,8 +394,19 @@ fn lpstat_e_command() -> std::process::Command {
 pub fn printers() -> Vec<Printer> {
     #[cfg(all(unix, not(target_arch = "wasm32")))]
     {
-        let Some(queues) = lpstat_command().output().ok().map(|o| String::from_utf8_lossy(&o.stdout).into_owned()) else {
-            return Vec::new();
+        let queues = match lpstat_command().output() {
+            Ok(o) => {
+                // Exits 1 with only driverless printers ("No destinations added"); `-e` still finds them.
+                if !o.status.success() {
+                    log::info!("lpstat -p -d exited with {}: {}", o.status, String::from_utf8_lossy(&o.stderr).trim());
+                }
+                String::from_utf8_lossy(&o.stdout).into_owned()
+            }
+            Err(e) => {
+                // A Flatpak needs lpstat/lp bundled plus the CUPS socket and Avahi (see README).
+                log::warn!("no printers: lpstat could not run ({e}); install the CUPS client tools");
+                return Vec::new();
+            }
         };
         // A spooler without `-e`, or one whose discovery times out, only loses the driverless names.
         let available = lpstat_e_command().output().ok().map(|o| String::from_utf8_lossy(&o.stdout).into_owned());
@@ -413,8 +431,9 @@ pub fn printers_parsed(queues: &str, available: Option<&str>) -> Vec<Printer> {
     let mut printers = parse_lpstat(queues);
     let default = default_destination(queues);
     if let Some(names) = available {
+        let mut seen: std::collections::HashSet<String> = printers.iter().map(|p| p.name.clone()).collect();
         for name in parse_lpstat_e(names) {
-            if !printers.iter().any(|p| p.name == name) {
+            if seen.insert(name.clone()) {
                 printers.push(Printer { default: default == Some(name.as_str()), name, description: String::new(), two_sided: None });
             }
         }
@@ -475,7 +494,9 @@ pub fn submit(pdf: &[u8], job: &Job) -> Result<String, Error> {
 
 /// [`submit`] with Windows sheet-processing progress: `(processed, sheets)` before the first
 /// sheet and after each sheet is successfully added to the native print job. Counts refer to
-/// source PDF sheets, regardless of copies or duplex. CUPS reports no progress.
+/// source PDF sheets, regardless of copies or duplex, except for collated copies on a driver
+/// that can't collate: every copy's sheets are sent, in one job or a job per copy, and counted
+/// together. CUPS reports no progress.
 ///
 /// The callback runs synchronously on the thread calling this function, need not be `Send`,
 /// and should return promptly. It is never retained. All sheets processed is not terminal
@@ -582,7 +603,7 @@ fn windows_preview(job: &Job) -> Vec<String> {
                 Scaling::ShrinkToFit => "shrink-to-fit",
             }
         ),
-        format!("color={}", if job.grayscale { "monochrome" } else { "color" }),
+        format!("color={}", if job.grayscale { "monochrome" } else { "(driver default)" }),
     ]
 }
 

@@ -7,6 +7,7 @@ use pdf_writer::types::ProcSet;
 use pdf_writer::writers;
 use pdf_writer::{Chunk, Dict, Finish, Name, Ref};
 
+use crate::graphics::optional_content::Properties;
 use crate::serialize::{Cacheable, SerializeContext};
 use crate::util::NameExt;
 
@@ -180,6 +181,7 @@ pub(crate) struct ResourceDictionaryBuilder {
     pub(crate) x_objects: ResourceMapper<XObject>,
     pub(crate) shadings: ResourceMapper<Shading>,
     pub(crate) fonts: ResourceMapper<Font>,
+    pub(crate) properties: ResourceMapper<Properties>,
 }
 
 impl ResourceDictionaryBuilder {
@@ -191,6 +193,7 @@ impl ResourceDictionaryBuilder {
             x_objects: ResourceMapper::new(),
             shadings: ResourceMapper::new(),
             fonts: ResourceMapper::new(),
+            properties: ResourceMapper::new(),
         }
     }
 
@@ -209,6 +212,7 @@ impl ResourceDictionaryBuilder {
             x_objects: self.x_objects.into_resource_list(),
             shadings: self.shadings.into_resource_list(),
             fonts: self.fonts.into_resource_list(),
+            properties: self.properties.into_resource_list(),
         }
     }
 }
@@ -221,6 +225,7 @@ pub(crate) struct ResourceDictionary {
     pub(crate) x_objects: ResourceList<XObject>,
     pub(crate) shadings: ResourceList<Shading>,
     pub(crate) fonts: ResourceList<Font>,
+    pub(crate) properties: ResourceList<Properties>,
 }
 
 impl Default for ResourceDictionary {
@@ -232,6 +237,7 @@ impl Default for ResourceDictionary {
             x_objects: ResourceList::empty(),
             shadings: ResourceList::empty(),
             fonts: ResourceList::empty(),
+            properties: ResourceList::empty(),
         }
     }
 }
@@ -253,7 +259,8 @@ impl ResourceDictionary {
             || self.patterns.len() > 0
             || self.x_objects.len() > 0
             || self.shadings.len() > 0
-            || self.fonts.len() > 0;
+            || self.fonts.len() > 0
+            || self.properties.len() > 0;
 
         if !write_proc_sets && !has_resource_entries {
             // `Resources` dictionary is mandatory (or rather, it's mandatory if
@@ -282,6 +289,7 @@ impl ResourceDictionary {
         write_resource_type::<XObject>(&mut resources, &self.x_objects);
         write_resource_type::<Shading>(&mut resources, &self.shadings);
         write_resource_type::<Font>(&mut resources, &self.fonts);
+        write_resource_type::<Properties>(&mut resources, &self.properties);
         parent.set_resources(resources_ref);
     }
 }
@@ -324,6 +332,10 @@ where
 
     fn name_from_number(num: ResourceNumber) -> String {
         format!("{}{}", T::get_prefix(), num)
+    }
+
+    pub(crate) fn refs(&self) -> impl Iterator<Item = Ref> + '_ {
+        self.entries.iter().copied()
     }
 
     pub(crate) fn get_entries(&self) -> impl Iterator<Item = (String, Ref)> + '_ {

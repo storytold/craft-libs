@@ -95,7 +95,7 @@ impl Filter {
             Self::AsciiHexDecode => ascii_hex::decode(data)
                 .map(FilterResult::from_data)
                 .ok_or(DecodeFailure::StreamDecode),
-            Self::Ascii85Decode => ascii_85::decode(data)
+            Self::Ascii85Decode => ascii_85::decode(data, limit)
                 .map(FilterResult::from_data)
                 .ok_or(DecodeFailure::StreamDecode),
             Self::RunLengthDecode => run_length::decode(data, limit)
@@ -110,11 +110,11 @@ impl Filter {
             #[cfg(feature = "images")]
             Self::DctDecode => dct::decode(data, params, image_params).ok_or(DecodeFailure::ImageDecode),
             #[cfg(feature = "images")]
-            Self::CcittFaxDecode => ccitt::decode(data, params, image_params).ok_or(DecodeFailure::ImageDecode),
+            Self::CcittFaxDecode => ccitt::decode(data, params, image_params, limit).ok_or(DecodeFailure::ImageDecode),
             #[cfg(feature = "images")]
             Self::Jbig2Decode => jbig2::decode(data, params, image_params).ok_or(DecodeFailure::ImageDecode),
             #[cfg(feature = "images")]
-            Self::JpxDecode => jpx::decode(data, image_params).ok_or(DecodeFailure::ImageDecode),
+            Self::JpxDecode => jpx::decode(data, image_params, limit).ok_or(DecodeFailure::ImageDecode),
             #[cfg(not(feature = "images"))]
             Self::DctDecode | Self::CcittFaxDecode | Self::Jbig2Decode | Self::JpxDecode => {
                 warn!("image decoding is not supported (enable the `images` feature)");
@@ -168,6 +168,30 @@ pub(crate) fn decode_limit(params: &ImageDecodeParams, last: bool, limits: crate
 /// real fax lines are a few thousand pixels wide.
 pub fn ccitt_size_ok(columns: u32, rows: u32) -> bool {
     const MAX_COLUMNS: u32 = 1 << 20;
-    const MAX_PIXELS: u64 = 1 << 28;
-    columns > 0 && columns <= MAX_COLUMNS && u64::from(columns) * u64::from(rows.max(1)) <= MAX_PIXELS
+    columns > 0 && columns <= MAX_COLUMNS && u64::from(columns) * u64::from(rows.max(1)) <= MAX_CCITT_PIXELS
+}
+
+/// PdfCraft patch: the most pixels a CCITT image may decode to.
+const MAX_CCITT_PIXELS: u64 = 1 << 28;
+
+/// PdfCraft patch: the most rows of `columns` pixels, `row_bytes` bytes each once decoded, that fit
+/// both `limit` bytes and the pixel cap; at least one when one row fits.
+pub(crate) fn ccitt_max_rows(columns: u32, row_bytes: u32, limit: usize) -> u32 {
+    let by_pixels = MAX_CCITT_PIXELS / u64::from(columns.max(1));
+    let by_bytes = u64::try_from(limit).unwrap_or(u64::MAX) / u64::from(row_bytes.max(1));
+    u32::try_from(by_pixels.min(by_bytes)).unwrap_or(u32::MAX)
+}
+
+#[cfg(test)]
+mod ccitt_tests {
+    use super::ccitt_max_rows;
+
+    /// PdfCraft patch: an image of unknown height decodes at most the rows that fit both the output
+    /// limit (in 1-bit rows) and the 2^28-pixel cap.
+    #[test]
+    fn unknown_ccitt_rows_fit_the_limit_and_the_pixel_cap() {
+        assert_eq!(ccitt_max_rows(1728, 216, 216 * 100), 100);
+        assert_eq!(ccitt_max_rows(1 << 20, 1 << 17, usize::MAX), 1 << 8);
+        assert_eq!(ccitt_max_rows(1728, 216, 100), 0);
+    }
 }

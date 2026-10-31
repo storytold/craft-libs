@@ -1,0 +1,20 @@
+[package]
+name = "craft-plate-test"
+description = "Print-color test scenes for Craft apps: reference PDFs and PDF structure checks"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+craft-cms = { workspace = true }
+craft-pdf = { workspace = true, features = ["write-pdf", "write-simple-text"] }
+hayro-syntax = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }

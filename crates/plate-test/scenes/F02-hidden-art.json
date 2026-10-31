@@ -1,0 +1,63 @@
+{
+  "id": "F02",
+  "title": "Art hidden under opaque fills, with transparency over them: nothing of it shows",
+  "source": "vectorcraft#2161 (old art under opaque layers showed through an X-1a export)",
+  "page": [360, 216],
+  "settings": {"group_cs": "cmyk"},
+  "objects": [
+    {
+      "type": "group",
+      "note": "an old copy of the page, still visible and fully covered",
+      "objects": [
+        {"type": "rect", "rect": [190, 30, 140, 156], "fill": {"cmyk": [0, 30, 0, 0]}},
+        {"type": "text", "at": [200, 80], "size": 40, "text": "HHH", "fill": {"cmyk": [0, 0, 0, 100]}},
+        {"type": "rect", "rect": [200, 100, 120, 6], "fill": {"cmyk": [0, 0, 0, 100]}},
+        {"type": "rect", "rect": [200, 115, 120, 0.5], "fill": {"cmyk": [0, 0, 0, 100]}},
+        {"type": "rect", "rect": [200, 130, 12, 12], "stroke": {"paint": {"cmyk": [0, 0, 0, 100]}, "width": 1}},
+        {
+          "type": "image",
+          "rect": [260, 140, 60, 40],
+          "image": {"px": [6, 4], "split": [{"cmyk": [100, 0, 0, 0]}, {"cmyk": [0, 0, 100, 0]}]}
+        },
+        {"type": "rect", "rect": [200, 150, 50, 30], "fill": {"cmyk": [0, 100, 0, 0]}, "opacity": 0.5},
+        {"type": "text", "at": [30, 80], "size": 40, "text": "HHH", "fill": {"cmyk": [0, 0, 0, 100]}},
+        {"type": "rect", "rect": [30, 100, 120, 6], "fill": {"cmyk": [0, 0, 0, 100]}}
+      ]
+    },
+    {"type": "rect", "rect": [20, 20, 150, 176], "fill": {"cmyk": [0, 0, 0, 0]}, "note": "white card"},
+    {"type": "rect", "rect": [180, 20, 160, 176], "fill": {"cmyk": [100, 6, 41, 3]}, "note": "teal box"},
+    {"type": "rect", "rect": [100, 160, 200, 20], "fill": {"cmyk": [0, 0, 0, 100]}, "opacity": 0.3, "note": "a 30% black band over both"}
+  ],
+  "expect": {
+    "plates": ["Cyan", "Magenta", "Yellow", "Black"],
+    "points": [
+      {"at": [230, 103], "inks": {"Cyan": 100, "Magenta": 6, "Yellow": 41, "Black": 3}, "tol": 0.5, "note": "teal over a hidden K bar"},
+      {"at": [215, 70], "inks": {"Cyan": 100, "Magenta": 6, "Yellow": 41, "Black": 3}, "tol": 0.5, "note": "teal over hidden text"},
+      {"at": [290, 150], "inks": {"Cyan": 100, "Magenta": 6, "Yellow": 41, "Black": 3}, "tol": 0.5, "note": "teal over a hidden image"},
+      {"at": [206, 136], "inks": {"Cyan": 100, "Magenta": 6, "Yellow": 41, "Black": 3}, "tol": 0.5, "note": "teal over a hidden checkbox"},
+      {"at": [335, 25], "inks": {"Cyan": 100, "Magenta": 6, "Yellow": 41, "Black": 3}, "tol": 0.5, "note": "teal over nothing"},
+      {"at": [60, 103], "inks": {}, "tol": 0.5, "note": "white card over a hidden K bar"},
+      {"at": [45, 70], "inks": {}, "tol": 0.5, "note": "white card over hidden text"},
+      {"at": [175, 108], "inks": {}, "tol": 0.5, "note": "paper between the card and the box"},
+      {
+        "at": [220, 170],
+        "inks": {"Cyan": 70, "Magenta": 4.2, "Yellow": 28.7, "Black": 32.1},
+        "tol": 2,
+        "note": "band over teal over a hidden 50% magenta fill"
+      },
+      {
+        "at": [290, 170],
+        "inks": {"Cyan": 70, "Magenta": 4.2, "Yellow": 28.7, "Black": 32.1},
+        "tol": 2,
+        "note": "band over teal over a hidden image"
+      },
+      {"at": [130, 170], "inks": {"Black": 30}, "tol": 2, "note": "band over the white card"}
+    ]
+  },
+  "structure": {
+    "page_group": "DeviceCMYK",
+    "color_spaces": ["DeviceCMYK"],
+    "device_rgb": false,
+    "output_intents": []
+  }
+}

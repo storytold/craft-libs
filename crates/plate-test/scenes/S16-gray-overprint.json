@@ -1,0 +1,42 @@
+{
+  "id": "S16",
+  "title": "DeviceGray 50% fill overprint over Gold and Teal",
+  "source": "research S16 (GWG 3.0 idea)",
+  "page": [360, 216],
+  "inks": [{"name": "Gold", "cmyk": [0, 20, 60, 20]}, {"name": "Teal", "cmyk": [80, 0, 30, 0]}],
+  "objects": [
+    {"type": "rect", "rect": [20, 20, 150, 176], "fill": {"spot": "Gold", "tint": 100}},
+    {"type": "rect", "rect": [190, 20, 150, 176], "fill": {"spot": "Teal", "tint": 100}},
+    {
+      "type": "rect",
+      "rect": [60, 60, 240, 96],
+      "fill": {"gray": 50},
+      "overprint": {"fill": true}
+    }
+  ],
+  "expect": {
+    "plates": ["Cyan", "Magenta", "Yellow", "Black", "Gold", "Teal"],
+    "points": [
+      {"at": [40, 108], "inks": {"Gold": 100}, "tol": 2, "note": "Gold only"},
+      {
+        "at": [100, 108],
+        "inks": {},
+        "tol": 2,
+        "info": true,
+        "note": "gray over Gold: devices differ (DeviceGray maps to K; overprint may keep the spot)"
+      },
+      {"at": [260, 108], "inks": {}, "tol": 2, "info": true, "note": "gray over Teal"}
+    ]
+  },
+  "structure": {
+    "page_group": "none",
+    "group_cs": [],
+    "overprint": true,
+    "smask": false,
+    "blend_modes": [],
+    "color_spaces": ["DeviceGray", "Separation(Gold, alt DeviceCMYK)", "Separation(Teal, alt DeviceCMYK)"],
+    "ext_g_states": [{"op": true}],
+    "device_rgb": false,
+    "output_intents": []
+  }
+}
