@@ -235,6 +235,10 @@ fn exe_after_msi(app: &App, registered: bool, exe: &Path) -> PathBuf {
         .unwrap_or_else(|| exe.to_path_buf())
 }
 
+/// How the running copy at `exe` was installed on Linux, or `None` when it isn't this app's to
+/// update: a Flatpak release bundle (per user or system-wide), an AppImage, the deb/rpm/Arch
+/// package at `/usr/bin/<id>`, or a standalone copy outside the package managers' folders
+/// ([`linux_location`]).
 #[cfg(target_os = "linux")]
 fn detect(app: &App, exe: &Path) -> Option<Install> {
     if process::in_sandbox() {
@@ -249,6 +253,11 @@ fn detect(app: &App, exe: &Path) -> Option<Install> {
     if let Some(appimage) = std::env::var_os("APPIMAGE") {
         return Some(Install::AppImage(PathBuf::from(appimage)));
     }
+    match linux_location(app, exe) {
+        LinuxLocation::PackagePath => {}
+        LinuxLocation::System => return None,
+        LinuxLocation::Elsewhere => return exe.is_file().then(|| Install::Standalone(exe.to_path_buf())),
+    }
     let t = std::time::Duration::from_secs(10);
     if process::capture("dpkg-query", &["-W", "-f", "${db:Status-Status}", app.id], t).is_some_and(|s| s.trim() == "installed") {
         return Some(Install::Package(PackageKind::Deb, exe.to_path_buf()));
@@ -261,10 +270,36 @@ fn detect(app: &App, exe: &Path) -> Option<Install> {
     if crate::detect::linux::has_pacman_db() && process::capture("pacman", &["-Q", &app.bundle_id()], t).is_some() {
         return Some(Install::Package(PackageKind::ArchPkg, exe.to_path_buf()));
     }
-    if exe.is_file() {
-        return Some(Install::Standalone(exe.to_path_buf()));
-    }
     None
+}
+
+/// Where a Linux executable outside a Flatpak or AppImage runs from, for [`detect`].
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+#[derive(Debug, PartialEq, Eq)]
+enum LinuxLocation {
+    /// `/usr/bin/<id>`, where the release's deb, rpm and Arch packages put it. Only this path is
+    /// checked against the package databases: a copy elsewhere isn't the package's even when the
+    /// package is installed too.
+    PackagePath,
+    /// Anywhere else under a folder a package manager owns (`/usr` but not `/usr/local`, `/opt`,
+    /// `/bin`, `/sbin`, `/nix`, `/snap`): a distribution, AUR, Nix or Snap copy. It's theirs to
+    /// update, and replacing it in place would write over a file the package manager owns (or
+    /// fail on a read-only store).
+    System,
+    /// Anywhere else, such as a folder in the user's home: a standalone copy that replaces itself.
+    Elsewhere,
+}
+
+/// Which [`LinuxLocation`] `exe` is in, from its path alone.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn linux_location(app: &App, exe: &Path) -> LinuxLocation {
+    if exe == Path::new("/usr/bin").join(app.id) {
+        LinuxLocation::PackagePath
+    } else if !exe.starts_with("/usr/local") && ["/usr", "/opt", "/bin", "/sbin", "/nix", "/snap"].iter().any(|dir| exe.starts_with(dir)) {
+        LinuxLocation::System
+    } else {
+        LinuxLocation::Elsewhere
+    }
 }
 
 /// Where this sandbox's Flatpak copy is installed, from `app-path` in `/.flatpak-info`.
@@ -356,6 +391,7 @@ pub fn update(
         .ok_or_else(|| format!("{} {} has no {} for {}", app.name, release.version_label(), install.kind().label(), platform.label()))?;
     let asset = asset.clone();
     crate::install::bind_artifact_version(app, release, &asset)?;
+    crate::install::check_download_link(app, release, &asset)?;
     let mut job = Job { http, paths, stop, phase, install_locations: &Default::default(), replace: false };
     let file = install::download(release, &asset, &mut job)?;
     #[cfg(windows)]
@@ -1843,6 +1879,83 @@ mod tests {
         let result = update(&crate::suite::LAUNCHER, &install, &release, platform, &http, &paths, &stop, &mut phase, &last, Some("0.2.0"));
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("is not newer than currently running version"));
+    }
+
+    /// Only `/usr/bin/<id>` is checked against the package databases, as before the launcher's
+    /// self-update moved here; another copy under a system folder (an AUR build, say) is left to
+    /// its package manager, and only a copy outside them (`/usr/local` included, which no package
+    /// manager owns) replaces itself.
+    #[test]
+    fn only_the_packages_own_path_is_a_package_and_system_folders_are_left_alone() {
+        let app = &crate::suite::LAUNCHER;
+        assert_eq!(linux_location(app, Path::new("/usr/bin/artcraft-launcher")), LinuxLocation::PackagePath);
+        for system in [
+            "/usr/bin/artcraft-launcher-bin",
+            "/nix/store/abc-artcraft-launcher/bin/artcraft-launcher",
+            "/opt/artcraft-launcher/artcraft-launcher",
+            "/bin/artcraft-launcher",
+        ] {
+            assert_eq!(linux_location(app, Path::new(system)), LinuxLocation::System, "{system}");
+        }
+        for own in [
+            "/usr/local/bin/artcraft-launcher",
+            "/home/me/bin/artcraft-launcher",
+            "/home/me/.local/bin/artcraft-launcher",
+            "/usrlocal/artcraft-launcher",
+        ] {
+            assert_eq!(linux_location(app, Path::new(own)), LinuxLocation::Elsewhere, "{own}");
+        }
+    }
+
+    /// storytold/craft-launcher#764: a self-update downloads only its own release's link. One into
+    /// another app's releases, with the right tag and name, is refused before anything is fetched.
+    #[test]
+    fn update_refuses_a_link_that_is_not_its_releases_own() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::under(dir.path());
+        let http = Http::new(crate::TEST_AGENT).unwrap();
+        let mut phase = |_| ();
+        let last = || Ok(());
+        let stop = Stop::default();
+        let name = "artcraft-launcher-0.3.0-linux-x86_64.AppImage";
+        let release = Release {
+            version: version::parse("0.3.0"),
+            tag: "v0.3.0".into(),
+            assets: vec![crate::release::Asset {
+                name: name.into(),
+                size: 1,
+                url: format!("https://github.com/storytold/photocraft/releases/download/v0.3.0/{name}"),
+                sha256: None,
+            }],
+            ..Release::default()
+        };
+        let install = Install::AppImage(dir.path().join("launcher.AppImage"));
+        use crate::{Arch, Os};
+        let platform = Platform { os: Os::Linux, arch: Arch::X64 };
+        let result = update(&crate::suite::LAUNCHER, &install, &release, platform, &http, &paths, &stop, &mut phase, &last, Some("0.2.0"));
+        assert!(result.unwrap_err().contains("isn't the one its release publishes"));
+    }
+
+    /// A launcher release whose tag has a `+` (semver build metadata) has `%2B` in its links.
+    /// The self-update accepts them and gets as far as the download, which the cancelled stop ends
+    /// before anything is fetched.
+    #[test]
+    fn update_accepts_a_plus_release_up_to_the_download() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::under(dir.path());
+        let http = Http::new(crate::TEST_AGENT).unwrap();
+        let mut phase = |_| ();
+        let last = || Ok(());
+        let stop = Stop::default();
+        stop.cancel();
+        let app = &crate::suite::LAUNCHER;
+        let name = "artcraft-launcher-0.3.0+build.1-linux-x86_64.AppImage";
+        let release = crate::release::release_from_sums(app.repo, "v0.3.0+build.1", &[("a".repeat(64), name.to_string())]);
+        let install = Install::AppImage(dir.path().join("launcher.AppImage"));
+        use crate::{Arch, Os};
+        let platform = Platform { os: Os::Linux, arch: Arch::X64 };
+        let result = update(app, &install, &release, platform, &http, &paths, &stop, &mut phase, &last, Some("0.2.0"));
+        assert_eq!(result.unwrap_err(), crate::protocol::CANCELLED);
     }
 
     #[test]

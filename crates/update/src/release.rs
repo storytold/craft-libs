@@ -115,6 +115,20 @@ pub fn download_prefix(repo: &str) -> String {
     format!("https://github.com/{repo}/releases/download/")
 }
 
+/// The one link a GitHub release asset may have: `https://github.com/<repo>/releases/download/<tag>/<name>`,
+/// built from the release's own tag and the asset's own name, so a link can't point at another
+/// release or anywhere else (#764). `None` when the tag or name holds anything but ASCII letters,
+/// digits and `._+-`, which no Craft App release uses and which github.com could re-interpret.
+/// A `+` (semver build metadata) is written `%2B`, as GitHub writes it in `browser_download_url`
+/// (`.../download/17.0.9%2B9/jdk-17.0.9%2B9.deb` for the tag `17.0.9+9`).
+pub fn expected_download_url(repo: &str, tag: &str, name: &str) -> Option<String> {
+    let plain = |s: &str, max: usize| {
+        !s.is_empty() && s.len() <= max && s != "." && s != ".." && s.bytes().all(|b| b.is_ascii_alphanumeric() || b"._+-".contains(&b))
+    };
+    let encoded = |s: &str| s.replace('+', "%2B");
+    (plain(tag, 64) && plain(name, 200) && valid_file_name(name)).then(|| format!("{}{}/{}", download_prefix(repo), encoded(tag), encoded(name)))
+}
+
 /// Whether `url` is a download that truly belongs to `repo`.
 ///
 /// A raw `starts_with(prefix)` check is not enough: a value such as
@@ -151,11 +165,12 @@ fn contains_traversal(rest: &str) -> bool {
     rest.split('/').any(|seg| seg == "." || seg == "..")
 }
 
-/// Percent-encoded slash or backslash (`%2f`, `%5c`): a client could decode these back into
-/// separators after the check, so a confined URL must not contain them.
+/// Percent-encoded slash, backslash or dot (`%2f`, `%5c`, `%2e`): a client or github.com could
+/// decode these back into separators or a `..` segment after the check (#764), so a confined URL
+/// must not contain them.
 fn contains_encoded_separator(rest: &str) -> bool {
     let bytes = rest.as_bytes();
-    bytes.windows(3).any(|w| w[0] == b'%' && matches!(&w[1..].to_ascii_lowercase()[..], b"2f" | b"5c"))
+    bytes.windows(3).any(|w| w[0] == b'%' && matches!(&w[1..].to_ascii_lowercase()[..], b"2f" | b"5c" | b"2e"))
 }
 
 /// Reads `GET /repos/<repo>/releases/latest` (or one element of `/releases`).
@@ -187,6 +202,9 @@ pub fn parse_github_release_list(json: &str, repo: &str, allow_prerelease: bool)
     Ok(best)
 }
 
+/// One release object of the GitHub API, with every text capped and only the assets whose name is
+/// a plain file name and whose link is exactly [`expected_download_url`]. An API error object
+/// (`message`) becomes its text.
 fn release_from_value(v: &serde_json::Value, repo: &str) -> Result<Release, String> {
     if let Some(msg) = v["message"].as_str() {
         return Err(if msg == "Not Found" { "no releases yet".into() } else { format!("GitHub says: {}", truncate(msg, 200)) });
@@ -194,14 +212,14 @@ fn release_from_value(v: &serde_json::Value, repo: &str) -> Result<Release, Stri
     let tag = v["tag_name"].as_str().filter(|t| !t.is_empty() && t.len() <= 64).ok_or("no release found")?.to_string();
     let releases = format!("https://github.com/{repo}/releases");
     let html_url = v["html_url"].as_str().and_then(|u| safe_release_html_url(repo, u)).unwrap_or_else(|| releases.clone());
-    let prefix = download_prefix(repo);
     let assets = v["assets"]
         .as_array()
         .map(|list| {
             list.iter()
                 .filter_map(|a| {
                     let name = a["name"].as_str().filter(|n| valid_file_name(n))?.to_string();
-                    let url = a["browser_download_url"].as_str().filter(|u| download_url_under(u, &prefix))?.to_string();
+                    let url =
+                        a["browser_download_url"].as_str().filter(|u| expected_download_url(repo, &tag, &name).as_deref() == Some(*u))?.to_string();
                     let sha256 = a["digest"].as_str().and_then(|d| d.strip_prefix("sha256:")).filter(|h| is_hex64(h)).map(str::to_ascii_lowercase);
                     Some(Asset { name, size: a["size"].as_u64().unwrap_or(0), url, sha256 })
                 })
@@ -221,14 +239,13 @@ fn release_from_value(v: &serde_json::Value, repo: &str) -> Result<Release, Stri
 }
 
 /// A release known only from its tag and `SHA256SUMS.txt` (the quota-free route: the
-/// `releases/latest` redirect names the tag, and the sums list every file).
+/// `releases/latest` redirect names the tag, and the sums list every file). Each link is
+/// [`expected_download_url`], so it's the one the check before the download accepts; a file
+/// without one is left out.
 pub fn release_from_sums(repo: &str, tag: &str, sums: &[(String, String)]) -> Release {
-    let prefix = download_prefix(repo);
-    let mut assets: Vec<Asset> = sums
-        .iter()
-        .map(|(hash, name)| Asset { name: name.clone(), size: 0, url: format!("{prefix}{tag}/{name}"), sha256: Some(hash.clone()) })
-        .collect();
-    assets.push(Asset { name: "SHA256SUMS.txt".into(), size: 0, url: format!("{prefix}{tag}/SHA256SUMS.txt"), sha256: None });
+    let asset =
+        |name: &str, sha256: Option<String>| expected_download_url(repo, tag, name).map(|url| Asset { name: name.to_string(), size: 0, url, sha256 });
+    let assets: Vec<Asset> = sums.iter().filter_map(|(hash, name)| asset(name, Some(hash.clone()))).chain(asset("SHA256SUMS.txt", None)).collect();
     Release {
         tag: tag.to_string(),
         version: version::parse(tag),
@@ -244,7 +261,8 @@ pub fn release_from_sums(repo: &str, tag: &str, sums: &[(String, String)]) -> Re
 /// The tag in a `https://github.com/<repo>/releases/tag/<tag>` redirect target.
 pub fn tag_from_redirect(location: &str, repo: &str) -> Option<String> {
     let rest = location.strip_prefix(&format!("https://github.com/{repo}/releases/tag/"))?;
-    (!rest.is_empty() && rest.len() <= 64 && rest.bytes().all(|b| b.is_ascii_alphanumeric() || b"._-+".contains(&b))).then(|| rest.to_string())
+    (!rest.is_empty() && rest != "." && rest != ".." && rest.len() <= 64 && rest.bytes().all(|b| b.is_ascii_alphanumeric() || b"._-+".contains(&b)))
+        .then(|| rest.to_string())
 }
 
 /// Reads `sha256sum` output: `<hex>  <name>` (or `<hex> *<name>`) per line.
@@ -265,6 +283,7 @@ pub fn valid_file_name(name: &str) -> bool {
         && name != "."
         && name != ".."
         && !name.starts_with('.')
+        && !contains_encoded_separator(name)
         && !name.chars().any(|c| c.is_control() || matches!(c, '/' | '\\' | ':' | '<' | '>' | '"' | '|' | '?' | '*'))
 }
 
@@ -274,11 +293,7 @@ pub(crate) fn truncate(s: &str, max: usize) -> String {
     if s.len() <= max {
         return s.to_string();
     }
-    let mut end = max;
-    while !s.is_char_boundary(end) {
-        end -= 1;
-    }
-    format!("{}…", &s[..end])
+    format!("{}…", &s[..s.floor_char_boundary(max)])
 }
 
 #[cfg(test)]
@@ -347,6 +362,48 @@ mod tests {
         assert_eq!(r.assets[0].size, 123);
     }
 
+    /// #764: an API asset's link must be exactly this release's `<tag>/<name>`.
+    #[test]
+    fn a_download_link_must_be_its_releases_own() {
+        for url in [
+            // Another release of the same app (a rollback), or another file name.
+            "https://github.com/storytold/photocraft/releases/download/v0.4.0/photocraft-0.5.0-macos-universal.dmg",
+            "https://github.com/storytold/photocraft/releases/download/v0.5.0/photocraft-0.4.0-macos-universal.dmg",
+            "https://github.com/storytold/photocraft/releases/download/%2e%2e/%2E%2E/%2e%2e/%2e%2e/other/repo/releases/download/v1/photocraft-0.5.0-macos-universal.dmg",
+        ] {
+            assert!(parse_github_release(&api_json(url), REPO).unwrap().assets.is_empty(), "{url}");
+        }
+        assert_eq!(
+            expected_download_url(REPO, "v0.6.0-rc.1", "photocraft-0.6.0-rc.1-macos-universal.dmg").as_deref(),
+            Some("https://github.com/storytold/photocraft/releases/download/v0.6.0-rc.1/photocraft-0.6.0-rc.1-macos-universal.dmg")
+        );
+        for (tag, name) in [("", "x.dmg"), ("..", "x.dmg"), ("v1", ".."), ("v1", "a/b.dmg"), ("v1", "a%2fb.dmg"), ("v 1", "x.dmg"), ("v1", ".x.dmg")]
+        {
+            assert_eq!(expected_download_url(REPO, tag, name), None, "{tag:?} {name:?}");
+        }
+    }
+
+    /// A `+` in the tag or name (semver build metadata) is `%2B` in GitHub's download links, but a
+    /// plain `+` in the asset's name and in the `releases/latest` redirect, as on bell-sw/Liberica's
+    /// releases. The API's assets, and those built from `SHA256SUMS.txt`, get the same link.
+    #[test]
+    fn a_plus_in_the_tag_is_percent_encoded_in_the_link() {
+        let name = "photocraft-1.0.0+build.1-linux-x86_64.AppImage";
+        let github = "https://github.com/storytold/photocraft/releases/download/v1.0.0%2Bbuild.1/photocraft-1.0.0%2Bbuild.1-linux-x86_64.AppImage";
+        let api = |url: &str| format!(r#"{{"tag_name":"v1.0.0+build.1","assets":[{{"name":"{name}","size":1,"browser_download_url":"{url}"}}]}}"#);
+        let r = parse_github_release(&api(github), REPO).unwrap();
+        assert_eq!((r.assets[0].name.as_str(), r.assets[0].url.as_str()), (name, github));
+        // GitHub never writes the `+` itself into the link.
+        assert!(parse_github_release(&api(&github.replace("%2B", "+")), REPO).unwrap().assets.is_empty());
+
+        let tag = tag_from_redirect("https://github.com/storytold/photocraft/releases/tag/v1.0.0+build.1", REPO).unwrap();
+        let r = release_from_sums(REPO, &tag, &[(HASH.to_string(), name.to_string())]);
+        assert_eq!(r.assets[0].url, github);
+        assert_eq!(r.sums_asset().unwrap().url, "https://github.com/storytold/photocraft/releases/download/v1.0.0%2Bbuild.1/SHA256SUMS.txt");
+    }
+
+    /// Links to other hosts or repositories, or that climb out with `..` or encoded separators,
+    /// are dropped.
     #[test]
     fn drops_downloads_that_point_elsewhere() {
         for url in ["https://evil.example/photocraft.dmg", "https://github.com/storytold/other/releases/download/v1/x.dmg", "javascript:alert(1)"] {
@@ -382,6 +439,8 @@ mod tests {
         }
     }
 
+    /// A link that shares the download prefix as text but climbs into another repository with `..`
+    /// or an encoded separator or dot isn't under it.
     #[test]
     fn traversal_cannot_escape_the_repository() {
         // Raw-prefix matches but the interpreted path climbs into another repository (CWE-180).
@@ -392,6 +451,9 @@ mod tests {
             "https://github.com/storytold/photocraft/releases/download/v1/sub/x.dmg",
             "https://github.com/storytold/photocraft/releases/download/v1%2f..%2f..%2fx.dmg",
             "https://github.com/storytold/photocraft/releases/download/v1/x%2fy.dmg",
+            "https://github.com/storytold/photocraft/releases/download/%2e%2e/x.dmg",
+            "https://github.com/storytold/photocraft/releases/download/%2E%2E/x.dmg",
+            "https://github.com/storytold/photocraft/releases/download/v1/%2e%2e",
         ] {
             let prefix = download_prefix(REPO);
             assert!(!download_url_under(url, &prefix), "{url}");
@@ -416,6 +478,8 @@ mod tests {
         assert_eq!(parse_github_release_list("[]", REPO, false).unwrap(), None);
     }
 
+    /// `SHA256SUMS.txt` lines, the tag in a `releases/latest` redirect, and the release built from
+    /// both; malformed lines, traversing names and `.`/`..` tags are dropped.
     #[test]
     fn reads_checksums_and_redirects() {
         let sums = parse_sha256sums(&format!("{HASH}  photocraft-0.5.0-macos-universal.dmg\n{HASH} *b.zip\nnot a line\n{HASH}  ../escape\n"));
@@ -423,16 +487,30 @@ mod tests {
         assert_eq!(tag_from_redirect("https://github.com/storytold/photocraft/releases/tag/v0.5.0", REPO).as_deref(), Some("v0.5.0"));
         assert_eq!(tag_from_redirect("https://github.com/storytold/photocraft/releases", REPO), None);
         assert_eq!(tag_from_redirect("https://evil/storytold/photocraft/releases/tag/v1", REPO), None);
+        for dots in [".", ".."] {
+            assert_eq!(tag_from_redirect(&format!("https://github.com/storytold/photocraft/releases/tag/{dots}"), REPO), None);
+        }
         let r = release_from_sums(REPO, "v0.5.0", &sums);
         assert_eq!(r.assets[0].url, "https://github.com/storytold/photocraft/releases/download/v0.5.0/photocraft-0.5.0-macos-universal.dmg");
         assert_eq!(r.version, Some(Version::new(0, 5, 0)));
     }
 
+    /// A name with a path, a hidden or reserved form, a control character or a percent-encoded
+    /// separator isn't a file name we'd save.
     #[test]
     fn file_names_cannot_escape() {
-        for bad in ["", "..", "a/b", "a\\b", ".hidden", "c:x", "x\u{0}"] {
+        for bad in ["", "..", "a/b", "a\\b", ".hidden", "c:x", "x\u{0}", "%2e%2e%2fother", "a%2Fb", "a%5cb", "x%2E%2E"] {
             assert!(!valid_file_name(bad), "{bad:?}");
         }
         assert!(valid_file_name("photocraft-0.5.0-linux-x86_64.AppImage"));
+    }
+
+    /// A `SHA256SUMS.txt` line whose name hides a traversal is dropped, so `release_from_sums`
+    /// never builds a link from it; the ordinary line beside it is kept.
+    #[test]
+    fn checksum_names_with_encoded_separators_make_no_download() {
+        let hash = "a".repeat(64);
+        let sums = parse_sha256sums(&format!("{hash}  %2e%2e%2f%2e%2e%2fother%2frepo%2fx.dmg\n{hash}  photocraft-0.5.0-macos-universal.dmg\n"));
+        assert_eq!(sums.iter().map(|(_, n)| n.as_str()).collect::<Vec<_>>(), ["photocraft-0.5.0-macos-universal.dmg"]);
     }
 }
