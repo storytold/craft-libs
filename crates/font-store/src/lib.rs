@@ -33,8 +33,8 @@ mod http;
 mod store;
 
 pub use index::{
-    Axis, Face, Family, FontFile, FontSource, GOOGLE_FONTS, Index, IndexError, LICENSES, Language, LicenseFile, MAJOR_VERSION, MAX_FILE_BYTES,
-    MAX_INDEX_BYTES, MAX_LICENSE_BYTES, Script, SourceProblem, Unavailable, parse_style,
+    Axis, Face, Family, FontFile, FontSource, GOOGLE_FONTS, Index, IndexError, Instance, LICENSES, Language, LicenseFile, MAJOR_VERSION,
+    MAX_FILE_BYTES, MAX_INDEX_BYTES, MAX_LICENSE_BYTES, Sample, Script, SourceProblem, Unavailable, parse_style,
 };
 pub use pin::{IndexPin, PINNED_INDEX};
 pub use sources::{SourceEntry, SourcesFile};

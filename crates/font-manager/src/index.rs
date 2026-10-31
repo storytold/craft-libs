@@ -23,12 +23,14 @@ pub enum Category {
     Serif,
     Display,
     Handwriting,
+    Script,
     Monospace,
 }
 
 impl Category {
     /// The categories the filter offers, in Google Fonts' order.
-    pub const ALL: [Category; 5] = [Category::SansSerif, Category::Serif, Category::Display, Category::Handwriting, Category::Monospace];
+    pub const ALL: [Category; 6] =
+        [Category::SansSerif, Category::Serif, Category::Display, Category::Handwriting, Category::Script, Category::Monospace];
 
     /// The index's name for it (`SANS_SERIF`).
     pub fn of(name: &str) -> Option<Category> {
@@ -41,11 +43,36 @@ impl Category {
             _ => None,
         }
     }
+
+    /// The category a taxonomy tag (`Sans/Geometric`, `Script/Brush`, `Monospace`) belongs to. The
+    /// `Feeling` group describes mood, not shape, and has none.
+    pub fn of_tag(tag: &str) -> Option<Category> {
+        let (group, trait_) = tag.split_once('/').unwrap_or((tag, ""));
+        match group {
+            "Sans" => Some(Category::SansSerif),
+            "Serif" => Some(Category::Serif),
+            "Display" => Some(Category::Display),
+            "Monospace" => Some(Category::Monospace),
+            "Script" if matches!(trait_, "Handwritten" | "Informal") => Some(Category::Handwriting),
+            "Script" => Some(Category::Script),
+            _ => None,
+        }
+    }
 }
 
-/// A family's categories that this version knows.
-pub fn categories(family: &Family) -> impl Iterator<Item = Category> + '_ {
-    family.categories.iter().filter_map(|c| Category::of(c))
+/// A family's categories: the groups of its taxonomy tags, or, when the tags give none, the
+/// index's `categories` that this version knows.
+pub fn categories(family: &Family) -> std::vec::IntoIter<Category> {
+    let mut found: Vec<Category> = Vec::new();
+    for c in family.tags.iter().filter_map(|t| Category::of_tag(t)) {
+        if !found.contains(&c) {
+            found.push(c);
+        }
+    }
+    if found.is_empty() {
+        found.extend(family.categories.iter().filter_map(|c| Category::of(c)));
+    }
+    found.into_iter()
 }
 
 pub fn script_name<'a>(index: &'a Index, id: &str) -> Option<&'a str> {
@@ -62,6 +89,10 @@ mod tests {
         assert!(index.families().len() > 1000);
         let roboto = index.family("roboto").unwrap();
         assert_eq!(categories(roboto).collect::<Vec<_>>(), [Category::SansSerif]);
+        assert_eq!(Category::of_tag("Script/Brush"), Some(Category::Script));
+        assert_eq!(Category::of_tag("Script/Informal"), Some(Category::Handwriting));
+        assert_eq!(Category::of_tag("Serif/Slab"), Some(Category::Serif));
+        assert_eq!(Category::of_tag("Feeling/Calm"), None);
         assert_eq!(script_name(&index, "Arab"), Some("Arabic"));
         assert_eq!(source_label(&index, roboto), ("Google Fonts", true));
         let cjk = index.family("Noto Sans CJK JP").unwrap();

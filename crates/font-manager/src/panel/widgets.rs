@@ -378,7 +378,21 @@ pub fn field(ui: &mut Ui, s: &Skin, text: &mut String, hint: &str, label: &str, 
 
 /// A drop-down `width` wide showing `selected`, named `label`.
 pub fn select<R>(ui: &mut Ui, id_salt: &str, label: &str, selected: &str, width: f32, add: impl FnOnce(&mut Ui) -> R) -> Option<R> {
-    let inner = select_box(id_salt, selected, width).show_ui(ui, add);
+    select_closing(ui, id_salt, label, selected, width, egui::PopupCloseBehavior::CloseOnClick, add)
+}
+
+/// [`select`] with its own close behavior: with `CloseOnClickOutside`, rows call `ui.close()`
+/// themselves and other widgets in the menu keep it open.
+pub fn select_closing<R>(
+    ui: &mut Ui,
+    id_salt: &str,
+    label: &str,
+    selected: &str,
+    width: f32,
+    close: egui::PopupCloseBehavior,
+    add: impl FnOnce(&mut Ui) -> R,
+) -> Option<R> {
+    let inner = select_box(id_salt, selected, width).close_behavior(close).show_ui(ui, add);
     name(ui, &inner.response, label);
     inner.inner
 }
