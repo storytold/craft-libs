@@ -1332,9 +1332,11 @@ fn get_components(
             buf
         }
         8 => data.iter().map(|v| *v as u16).collect(),
+        // A trailing odd byte is the high byte of a last sample whose low byte is missing, so pad
+        // it with zero like the other branches pad short data.
         16 => data
             .chunks(2)
-            .map(|v| u16::from_be_bytes([v[0], v[1]]))
+            .map(|v| u16::from_be_bytes([v[0], v.get(1).copied().unwrap_or(0)]))
             .collect(),
         _ => {
             warn!("unsupported bits per component: {bits_per_component}");
@@ -1485,4 +1487,17 @@ fn convert_each(cs: &ColorSpace, input: &[f32], n: usize, output: &mut [u8]) {
 /// 2^28 pixels, the renderer's `MAX_IMAGE_PIXELS`).
 pub fn image_size_ok(width: u32, height: u32) -> bool {
     width > 0 && height > 0 && u64::from(width) * u64::from(height) <= 1 << 28
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sixteen_bit_components_with_odd_length_data_pad_the_missing_byte() {
+        let color_space = ColorSpace::device_gray();
+
+        assert_eq!(get_components(&[0x41], 1, 1, &color_space, 16), Some(vec![0x4100]));
+        assert_eq!(get_components(&[0x01, 0x02, 0x03], 2, 1, &color_space, 16), Some(vec![0x0102, 0x0300]));
+    }
 }
