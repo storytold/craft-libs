@@ -576,13 +576,19 @@ fn a_laced_block_larger_than_the_cap_is_skipped_without_reading_its_body() {
     }
 }
 
-/// Fake Cluster candidates (each costs the resync two window refills), then a real Cluster.
-fn damaged_before_a_cluster() -> Vec<u8> {
+/// One fake Cluster candidate: it costs the resync two window refills, about 128 KiB.
+fn fake_cluster_unit() -> Vec<u8> {
     let mut unit = Vec::new();
     write_id(&mut unit, CLUSTER);
     ebml::write_size(&mut unit, 512 << 10, 8);
     write_id(&mut unit, VOID);
     ebml::write_size(&mut unit, 64 << 10, 3);
+    unit
+}
+
+/// Fake Cluster candidates, then a real Cluster.
+fn damaged_before_a_cluster() -> Vec<u8> {
+    let unit = fake_cluster_unit();
     let mut f = one_cluster(0, &[]);
     // cut the real cluster off: keep EBML, Segment, Info and Tracks
     let cluster_at = f.windows(4).position(|w| w == CLUSTER.to_be_bytes()).unwrap();
@@ -609,4 +615,31 @@ fn building_the_index_gets_its_own_recovery_budget() {
     let mut d = Demuxer::with_options(&f[..], opts).unwrap();
     d.build_index().unwrap();
     assert_eq!(d.file().tracks[0].samples.len(), 1, "the second pass found the cluster too: {:?}", d.file().warnings);
+}
+
+#[test]
+fn packet_reading_keeps_its_recovery_budget_after_the_index_is_built() {
+    // a Cluster, about 40 MiB of recovery reads of damage, then a second Cluster
+    let mut f = one_cluster(0, &{
+        let mut b = Vec::new();
+        el(&mut b, SIMPLE_BLOCK, &block(1, 0, 0x80, &[1]));
+        b
+    });
+    f.push(0x00);
+    for _ in 0..320 {
+        f.extend_from_slice(&fake_cluster_unit());
+    }
+    f.resize(f.len() + (700 << 10), 0);
+    write_id(&mut f, CLUSTER);
+    write_unknown_size(&mut f, 8);
+    el_uint(&mut f, TIMESTAMP, 10);
+    el(&mut f, SIMPLE_BLOCK, &block(1, 0, 0x80, &[2]));
+    let mut d = Demuxer::with_options(&f[..], OpenOptions { index: false, verify_crc: false }).unwrap();
+    d.build_index().unwrap();
+    assert_eq!(d.file().tracks[0].samples.len(), 2, "the index found both clusters: {:?}", d.file().warnings);
+    let mut n = 0;
+    while d.next_packet().unwrap().is_some() {
+        n += 1;
+    }
+    assert_eq!(n, 2, "reading ended at the damage: {:?}", d.file().warnings);
 }

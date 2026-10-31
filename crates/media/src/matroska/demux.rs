@@ -1124,6 +1124,8 @@ impl<S: ByteSource> Demuxer<S> {
         }
         let opts = OpenOptions { index: true, verify_crc: self.opts.verify_crc };
         self.file = open_impl(&self.src, &opts, &mut self.cache)?;
+        // the index pass spent its own budget; packet reading keeps a whole one
+        self.cache.recovery_left = RECOVERY_BUDGET;
         self.lookup = track_index(&self.file.tracks);
         Ok(())
     }
