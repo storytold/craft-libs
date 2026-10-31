@@ -27,6 +27,7 @@ craft-atomic = { path = "crates/atomic" }
 craft-cms = { path = "crates/cms" }
 craft-dialogs = { path = "crates/dialogs" }
 craft-docpath = { path = "crates/docpath" }
+craft-ecproj-format = { path = "crates/ecproj-format" }
 craft-font-catalog = { path = "crates/font-catalog" }
 craft-font-manager = { path = "crates/font-manager" }
 craft-font-store = { path = "crates/font-store" }

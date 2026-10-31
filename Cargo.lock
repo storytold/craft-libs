@@ -792,6 +792,15 @@ name = "craft-docpath"
 version = "0.1.0"
 
 [[package]]
+name = "craft-ecproj-format"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-font-catalog"
 version = "0.1.0"
 dependencies = [
