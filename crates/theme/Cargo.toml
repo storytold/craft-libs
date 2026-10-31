@@ -1,0 +1,23 @@
+[package]
+name = "craft-theme"
+description = "The Craft apps' suite-theme contract: theme identity, core colour roles, derived states, contrast checks, built-in themes and resolution. No egui, no I/O."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[features]
+default = []
+# Serialize and Deserialize for the data types: colours as "#rrggbb[aa]", ids as strings.
+serde = ["dep:serde"]
+
+[dependencies]
+serde = { workspace = true, optional = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

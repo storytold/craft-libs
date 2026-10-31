@@ -1,9 +1,29 @@
 //! Theme mechanisms for egui widgets, with palettes and theme selection owned by applications.
 //!
-//! This module does not store a theme or change global visuals; [`crate::fonts`] installs fonts.
-//! Applications decide their colors, borders, typography, spacing and saved preferences independently.
+//! [`WidgetPalette`] colors egui's widget states. [`color32`] and [`install`] bridge the suite-theme
+//! contract in `craft_theme` to egui: an app maps a resolved theme's roles to its own tokens and
+//! styles, then installs one style per egui theme. This module stores no theme and keeps nothing in
+//! egui's context; [`crate::fonts`] installs fonts. Applications decide their colors, borders,
+//! typography, spacing and saved preferences independently.
 
-use egui::{Color32, CornerRadius, Stroke, style::Widgets};
+use egui::{Color32, CornerRadius, Stroke, Style, Theme, ThemePreference, style::Widgets};
+
+/// A suite-theme colour as egui's (premultiplied) colour.
+pub fn color32(c: craft_theme::Rgba) -> Color32 {
+    let [r, g, b, a] = c.0;
+    Color32::from_rgba_unmultiplied(r, g, b, a)
+}
+
+/// Sets the style egui uses in light and in dark, and lets egui pick between them from the
+/// system's answer ([`ThemePreference::System`]).
+///
+/// An app with a fixed mode passes its chosen variant's style twice; one following the system
+/// passes each variant's, and egui switches without a rebuild.
+pub fn install(ctx: &egui::Context, light: Style, dark: Style) {
+    ctx.set_style_of(Theme::Light, light);
+    ctx.set_style_of(Theme::Dark, dark);
+    ctx.set_theme(ThemePreference::System);
+}
 
 /// Background colors for egui's five widget interaction states.
 ///
@@ -93,5 +113,23 @@ mod tests {
         assert_eq!(widgets.inactive.bg_fill, Color32::GRAY);
         assert_eq!(widgets.inactive.weak_bg_fill, Color32::GRAY);
         assert_eq!(widgets.active.bg_stroke, Stroke::new(3.0, Color32::YELLOW));
+    }
+
+    #[test]
+    fn bridge_converts_colors_and_installs_both_styles() {
+        assert_eq!(color32(craft_theme::Rgba::from_rgb_u32(0x2D81FF)), Color32::from_rgb(0x2D, 0x81, 0xFF));
+        assert_eq!(color32(craft_theme::Rgba([255, 0, 0, 128])), Color32::from_rgba_unmultiplied(255, 0, 0, 128));
+
+        let ctx = egui::Context::default();
+        let mut light = Style::default();
+        light.visuals = egui::Visuals::light();
+        light.visuals.panel_fill = Color32::RED;
+        let mut dark = Style::default();
+        dark.visuals.panel_fill = Color32::BLUE;
+        ctx.set_theme(ThemePreference::Light);
+        install(&ctx, light, dark);
+        assert_eq!(ctx.style_of(Theme::Light).visuals.panel_fill, Color32::RED);
+        assert_eq!(ctx.style_of(Theme::Dark).visuals.panel_fill, Color32::BLUE);
+        assert_eq!(ctx.options(|o| o.theme_preference), ThemePreference::System);
     }
 }

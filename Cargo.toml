@@ -42,6 +42,7 @@ craft-print = { path = "crates/print" }
 craft-quit = { path = "crates/quit" }
 craft-settings = { path = "crates/settings" }
 craft-text = { path = "crates/text" }
+craft-theme = { path = "crates/theme" }
 craft-ui = { path = "crates/ui" }
 craft-update = { path = "crates/update" }
 craft-window = { path = "crates/window" }
