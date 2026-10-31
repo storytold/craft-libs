@@ -1,0 +1,26 @@
+name: Colour management
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['crates/cms/**', 'Cargo.toml', 'Cargo.lock', '.github/workflows/cms.yml']
+  pull_request:
+    paths: ['crates/cms/**', 'Cargo.toml', 'Cargo.lock', '.github/workflows/cms.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  cms:
+    timeout-minutes: 20
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - run: cargo clippy -p craft-cms --all-targets --all-features --locked -- -D warnings
+      # Release: the FOGRA39 fit and ink-limit tests take about 35 s in debug and 4 s here. Tests that need
+      # installed system profiles print "skipped:" when none are present.
+      - run: cargo test -p craft-cms --all-features --release --locked -- --nocapture
