@@ -1,13 +1,15 @@
-//! Random-access byte sources for the demuxer.
+//! Random-access byte sources: what the demuxers read from. One trait for every container, so a
+//! file, buffer or custom source implements it once.
 
-use std::cell::RefCell;
+#![warn(missing_docs)]
+
 use std::io::{self, Read, Seek, SeekFrom};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 /// Random-access, read-only byte source (file, in-memory buffer, web Blob…).
 ///
-/// Same shape as `craft_media::isobmff::ByteSource`, so one adapter type can implement both. They
-/// are separate traits so that a type can implement both without conflicting impls.
+/// Implementations serve reads at arbitrary offsets through `&self`. `isobmff::ByteSource`,
+/// `matroska::ByteSource` and `ogg::ByteSource` are this trait.
 pub trait ByteSource {
     /// Total length in bytes.
     fn len(&self) -> u64;
@@ -72,6 +74,8 @@ impl<T: ByteSource + ?Sized> ByteSource for Box<T> {
     }
 }
 
+/// A file read in place. `len` asks the file system each time, and a failure there reads as an
+/// empty file; [`ReadSeekSource`] takes the length once and reports a failure when it is made.
 #[cfg(not(target_arch = "wasm32"))]
 impl ByteSource for std::fs::File {
     fn len(&self) -> u64 {
@@ -105,9 +109,10 @@ impl ByteSource for std::fs::File {
 /// Adapts any `Read + Seek` (e.g. `BufReader<File>`, `Cursor<Vec<u8>>`) into a [`ByteSource`].
 ///
 /// The length is taken once at construction; the stream position is tracked so sequential reads
-/// do not issue redundant seeks.
+/// do not issue redundant seeks. The reader sits behind a mutex, so the source is `Send + Sync`
+/// whenever `R` is `Send` and can be shared across threads.
 pub struct ReadSeekSource<R> {
-    inner: RefCell<(R, u64)>,
+    inner: Mutex<(R, u64)>,
     len: u64,
 }
 
@@ -115,11 +120,12 @@ impl<R: Read + Seek> ReadSeekSource<R> {
     /// Wrap a reader; seeks to the end once to learn the length.
     pub fn new(mut r: R) -> io::Result<Self> {
         let len = r.seek(SeekFrom::End(0))?;
-        Ok(Self { inner: RefCell::new((r, len)), len })
+        Ok(Self { inner: Mutex::new((r, len)), len })
     }
     /// Unwrap the reader.
     pub fn into_inner(self) -> R {
-        self.inner.into_inner().0
+        // A poisoned lock only means a read panicked in another thread; the reader is still usable.
+        self.inner.into_inner().unwrap_or_else(|e| e.into_inner()).0
     }
 }
 
@@ -131,9 +137,15 @@ impl<R: Read + Seek> ByteSource for ReadSeekSource<R> {
         if offset.checked_add(buf.len() as u64).is_none_or(|e| e > self.len) {
             return Err(eof());
         }
-        let mut g = self.inner.borrow_mut();
+        let mut g = self.inner.lock().unwrap_or_else(|e| {
+            // a read panicked in another thread and may have moved the reader; force a seek
+            let mut g = e.into_inner();
+            g.1 = u64::MAX;
+            g
+        });
         let (r, pos) = &mut *g;
         if *pos != offset {
+            *pos = u64::MAX; // unknown until the seek succeeds
             r.seek(SeekFrom::Start(offset))?;
             *pos = offset;
         }
@@ -170,5 +182,44 @@ mod tests {
         r.read_at(0, &mut b).unwrap();
         assert_eq!(b, [1, 2]);
         assert!(r.read_at(3, &mut b).is_err());
+        let a: Arc<[u8]> = Arc::from(v.clone());
+        a.read_at(2, &mut b).unwrap();
+        assert_eq!(b, [3, 4]);
+        assert_eq!(ByteSource::len(&a), 4);
+        let s: &[u8] = &v;
+        assert_eq!(ByteSource::len(&s), 4);
+    }
+
+    #[test]
+    fn read_seek_source_seeks_after_a_panicked_read() {
+        struct PanicOnce(io::Cursor<Vec<u8>>, bool);
+        impl Read for PanicOnce {
+            fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+                let n = self.0.read(&mut buf[..1])?;
+                if std::mem::take(&mut self.1) {
+                    panic!("read failed halfway");
+                }
+                Ok(n)
+            }
+        }
+        impl Seek for PanicOnce {
+            fn seek(&mut self, to: SeekFrom) -> io::Result<u64> {
+                self.0.seek(to)
+            }
+        }
+        let r = ReadSeekSource::new(PanicOnce(io::Cursor::new(vec![1, 2, 3, 4]), false)).unwrap();
+        let mut b = [0u8; 2];
+        r.read_at(0, &mut b).unwrap();
+        r.inner.lock().unwrap().0.1 = true;
+        // the reader moves one byte, then panics with the tracked position at 2
+        assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| r.read_at(2, &mut b))).is_err());
+        r.read_at(2, &mut b).unwrap();
+        assert_eq!(b, [3, 4]);
+    }
+
+    #[test]
+    fn read_seek_source_is_send_and_sync() {
+        fn shareable<T: ByteSource + Send + Sync + 'static>(_: &T) {}
+        shareable(&ReadSeekSource::new(io::Cursor::new(vec![0u8; 4])).unwrap());
     }
 }

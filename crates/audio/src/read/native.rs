@@ -1,0 +1,577 @@
+//! The native decode path: craft-media's demuxers (ISO BMFF / QuickTime, Matroska / WebM) and
+//! WAV / AIFF PCM, feeding [`TrackDecoder`].
+//! [`Native::open`] answers `None` for a stream with no native codec (AAC, MP1/MP2/MP3, FLAC,
+//! ALAC, Vorbis, Opus, ...) or a container these demuxers do not read; the caller then uses symphonia.
+//!
+//! Every container is a [`Packets`] source over a [`Src`], read packet by packet, so a decode
+//! streams. Timing follows the containers: MP4 edit lists (AAC priming) and Matroska `CodecDelay` and
+//! per-block `DiscardPadding` are applied, so a file decodes to exactly its presentation length.
+
+use super::aiff::{self, AiffParse};
+use super::id3v2_len;
+use super::source::{Src, io_error};
+use super::wav::{self, WavParse};
+use crate::track::TrackDecoder;
+use crate::{AudioBuffer, AudioError, AudioInfo, CodecId, CodecParams, Container, PcmFormat, Result};
+use craft_media::{isobmff, matroska, ogg};
+
+/// Corrupt packets tolerated before a stream that has produced nothing is an error.
+const MAX_ERRORS: usize = 1000;
+/// The most frames a packet may declare (as on the symphonia path): decoders allocate a packet's
+/// frames up front.
+const MAX_PACKET_FRAMES: u64 = 1 << 20;
+/// Frames per packet read from a WAV or AIFF file.
+const PCM_PACKET_FRAMES: u64 = 4096;
+
+/// A packet's bytes and the frames to drop from the end of its decoded audio (Matroska
+/// `DiscardPadding`).
+struct Packet {
+    data: Vec<u8>,
+    trim_end: u64,
+}
+
+/// Where a track's packets come from.
+enum Packets<'a> {
+    Mp4 {
+        file: Box<isobmff::Mp4File>,
+        src: Src<'a>,
+        track: usize,
+        next: usize,
+        /// Media timescale and output rate, for packet start times.
+        timescale: u32,
+        rate: u32,
+    },
+    /// Matroska is read packet by packet, which carries each block's `DiscardPadding`.
+    Mkv {
+        demux: Box<matroska::Demuxer<Src<'a>>>,
+        track: usize,
+        rate: u32,
+        /// The track's first packet's timestamp (ffmpeg starts AAC tracks before 0), the decoded
+        /// timeline's origin.
+        first_ns: i64,
+        /// How a packet's place on the decoded timeline is found after a seek.
+        frames: MkvFrames,
+        /// A packet read ahead by a seek, returned next.
+        pending: Option<Packet>,
+    },
+    /// Interleaved PCM in `start..start + frames * frame_bytes` (WAV, AIFF).
+    Pcm { src: Src<'a>, start: u64, frames: u64, frame_bytes: u64, next_frame: u64 },
+}
+
+impl Packets<'_> {
+    /// The next packet of the track, or `None` at its end.
+    fn next(&mut self) -> Option<Result<Packet>> {
+        let whole = |data: Vec<u8>| Packet { data, trim_end: 0 };
+        match self {
+            Packets::Mp4 { file, src, track, next, .. } => {
+                let i = *next;
+                (i < file.tracks.get(*track).map_or(0, |t| t.samples.len())).then(|| {
+                    *next += 1;
+                    file.read_sample(src, *track, i).map(whole).map_err(mp4_error)
+                })
+            }
+            Packets::Pcm { src, start, frames, frame_bytes, next_frame } => {
+                let n = (*frames - *next_frame).min(PCM_PACKET_FRAMES);
+                if n == 0 {
+                    return None;
+                }
+                let at = *start + *next_frame * *frame_bytes;
+                *next_frame += n;
+                // A truncated file holds fewer bytes than its header says: decode what is there.
+                Some(src.read_upto(at, usize::try_from(n * *frame_bytes).unwrap_or(0)).map(whole))
+            }
+            Packets::Mkv { demux, track, rate, pending, .. } => match pending.take() {
+                Some(p) => Some(Ok(p)),
+                None => mkv_next(demux, *track, *rate).map(|r| r.map(|(p, _)| p)),
+            },
+        }
+    }
+
+    /// Position the source at the latest packet whose decoded audio starts at or before output
+    /// frame `frame` (counted from the track's first decoded sample) and return where that packet
+    /// starts.
+    fn seek(&mut self, frame: u64) -> Result<u64> {
+        // The last index whose start is <= frame, given the starts in order.
+        fn at_or_before(starts: impl Iterator<Item = u64>, frame: u64) -> (usize, u64) {
+            let mut found = (0, 0);
+            for (i, s) in starts.enumerate() {
+                if s > frame {
+                    break;
+                }
+                found = (i, s);
+            }
+            found
+        }
+        match self {
+            Packets::Mp4 { file, track, next, timescale, rate, .. } => {
+                let samples = file.tracks.get(*track).map(|t| t.samples.as_slice()).unwrap_or_default();
+                let first = samples.first().map_or(0, |s| s.dts);
+                let starts =
+                    samples.iter().map(|s| rescale(u64::try_from(s.dts.saturating_sub(first)).unwrap_or(0), u64::from(*timescale), u64::from(*rate)));
+                let (i, s) = at_or_before(starts, frame);
+                *next = i;
+                Ok(s)
+            }
+            Packets::Pcm { frames, next_frame, .. } => {
+                *next_frame = frame.min(*frames);
+                Ok(*next_frame)
+            }
+            Packets::Mkv { demux, track, rate, first_ns, frames, pending } => {
+                let ns = i64::try_from(rescale(frame, u64::from(*rate), 1_000_000_000)).unwrap_or(i64::MAX).saturating_add(*first_ns);
+                let point = demux.seek(*track, ns).map_err(mkv_error)?;
+                match mkv_next(demux, *track, *rate) {
+                    Some(Ok((p, pts_ns))) => {
+                        *pending = Some(p);
+                        // Timestamps are rounded to the file's timestamp scale (often 1 ms), so the
+                        // packet's index places it exactly where packets have a known length.
+                        let by_index = point.sample.and_then(|k| frames.start(k));
+                        Ok(by_index.unwrap_or_else(|| {
+                            rescale_round(u64::try_from(pts_ns.saturating_sub(*first_ns)).unwrap_or(0), 1_000_000_000, u64::from(*rate))
+                        }))
+                    }
+                    Some(Err(e)) => Err(e),
+                    None => Ok(frame),
+                }
+            }
+        }
+    }
+}
+
+/// How the decoded-timeline start of a Matroska packet is found from its index.
+enum MkvFrames {
+    /// Every packet decodes to this many frames.
+    Constant(u64),
+    /// PCM: the stored sizes of the track's packets, and the bytes per frame.
+    Pcm { sizes: Vec<u32>, frame_bytes: u64 },
+    /// From the timestamps.
+    Timestamps,
+}
+
+impl MkvFrames {
+    /// The decoded-timeline start of packet `k`, when the packets say.
+    fn start(&self, k: usize) -> Option<u64> {
+        match self {
+            MkvFrames::Constant(n) => Some(k as u64 * *n),
+            MkvFrames::Pcm { sizes, frame_bytes } => Some(sizes.iter().take(k).map(|&s| u64::from(s)).sum::<u64>() / *frame_bytes),
+            MkvFrames::Timestamps => None,
+        }
+    }
+}
+
+/// The next packet of Matroska track `track` and its timestamp in nanoseconds.
+fn mkv_next(demux: &mut matroska::Demuxer<Src<'_>>, track: usize, rate: u32) -> Option<Result<(Packet, i64)>> {
+    loop {
+        match demux.next_packet() {
+            Ok(Some(p)) if p.track == track => {
+                let pad = p.discard_padding_ns.and_then(|ns| u64::try_from(ns).ok()).unwrap_or(0);
+                let packet = Packet { data: p.data, trim_end: rescale_round(pad, 1_000_000_000, u64::from(rate)) };
+                return Some(Ok((packet, p.pts_ns)));
+            }
+            Ok(Some(_)) => continue,
+            Ok(None) => return None,
+            Err(e) => return Some(Err(mkv_error(e))),
+        }
+    }
+}
+
+/// Container read errors: the source failing is [`AudioError::Io`], anything else in the file is
+/// [`AudioError::Malformed`].
+fn mp4_error(e: isobmff::Error) -> AudioError {
+    match e {
+        isobmff::Error::Io(e) => io_error(e),
+        e => AudioError::Malformed(e.to_string()),
+    }
+}
+
+fn mkv_error(e: matroska::Error) -> AudioError {
+    match e {
+        matroska::Error::Io(e) => io_error(e),
+        e => AudioError::Malformed(e.to_string()),
+    }
+}
+
+/// A track the native path decodes: its packets, its decoder and its container timing.
+pub(crate) struct Native<'a> {
+    packets: Packets<'a>,
+    dec: TrackDecoder,
+    info: AudioInfo,
+    /// Whether `info.frames` came from the container (else it is 0 until decoded).
+    frames_known: bool,
+    /// Decoded frames at the start that are not presented (AAC priming).
+    skip: u64,
+    /// Presented frames, when the container says.
+    limit: Option<u64>,
+    /// Set by [`Native::seek`]: running out of packets afterwards is the end of the stream, even
+    /// when nothing was decoded (a seek to the last frame).
+    seeked: bool,
+    /// Decoded-timeline frame (from the first decoded sample) of the next decoded sample.
+    pos: u64,
+    /// The first decoded-timeline frame to present: `skip`, or a seek target.
+    from: u64,
+    errors: usize,
+    decoded: bool,
+    /// The first error that said the stream is unsupported, returned if nothing decodes.
+    unsupported: Option<AudioError>,
+}
+
+impl<'a> Native<'a> {
+    /// Open the audio track `track` (the first when `None`) of the file in `src`; `None` when the
+    /// native path does not decode it.
+    pub(crate) fn open(src: &Src<'a>, detected: Option<Container>, track: Option<usize>) -> Option<Result<Native<'a>>> {
+        let head = src.head();
+        let at = after_id3(&head);
+        let body = head.get(at..).unwrap_or_default();
+        // The bytes decide the container when they say; the detection (which may come from the
+        // extension) only picks among raw streams.
+        // Formats with one track: any other track index is an error, as for a multi-track file.
+        let single = |opened: Option<Result<Native<'a>>>| match (track, opened) {
+            (Some(n), Some(Ok(_))) if n > 0 => Some(Err(AudioError::Unsupported(format!("no audio track {n}: the file has one")))),
+            (_, opened) => opened,
+        };
+        match super::detect_container(&head, None).or(detected) {
+            Some(Container::Wav) if wav::is_wav(&head) => single(open_wav(src)),
+            Some(Container::Aiff) if aiff::is_aiff(&head) => single(open_aiff(src)),
+            Some(c @ (Container::Mp4 | Container::QuickTime)) if head.get(4..8) == Some(b"ftyp") => open_mp4(src, c, track),
+            Some(c @ (Container::Matroska | Container::WebM)) if body.starts_with(&[0x1A, 0x45, 0xDF, 0xA3]) => open_mkv(src, c, track),
+            _ => None,
+        }
+    }
+
+    /// What the stream is; `frames` is 0 when the container does not say (see `frames_known`).
+    pub(crate) fn info(&self) -> &AudioInfo {
+        &self.info
+    }
+
+    pub(crate) fn frames_known(&self) -> bool {
+        self.frames_known
+    }
+
+    /// The next block of presented audio, or `None` at the end. A packet that is damaged or cannot
+    /// be decoded is replaced by the decoder's concealment (silence of its length), so the audio
+    /// after it keeps its timing; a stream where nothing decodes is an error. A failing source is
+    /// returned as [`AudioError::Io`] and skips that packet.
+    pub(crate) fn next_block(&mut self) -> Result<Option<AudioBuffer>> {
+        loop {
+            if self.limit.is_some_and(|l| self.pos >= l.saturating_add(self.skip)) {
+                return Ok(None);
+            }
+            let Some(next) = self.packets.next() else {
+                // A track that declares no frames (an empty WAV or AIFF) is empty, not broken.
+                let empty = self.frames_known && self.info.frames == 0 && self.errors == 0;
+                if !self.decoded && !empty && !(self.seeked && self.errors == 0) {
+                    return Err(self.no_audio("stream contains no audio"));
+                }
+                return Ok(None);
+            };
+            let (block, trim_end) = match next {
+                Ok(p) => match self.dec.decode(&p.data) {
+                    Ok(block) => {
+                        if block.channels.is_empty() {
+                            continue;
+                        }
+                        self.decoded = true;
+                        (block, p.trim_end)
+                    }
+                    Err(e) => {
+                        self.error(e)?;
+                        (self.dec.conceal(Some(&p.data)), p.trim_end)
+                    }
+                },
+                // The source failing is not damage in the file: the caller decides whether to retry.
+                Err(e @ AudioError::Io(_)) => return Err(e),
+                Err(e) => {
+                    self.error(e)?;
+                    (self.dec.conceal(None), 0)
+                }
+            };
+            if let Some(out) = self.present(block, trim_end) {
+                return Ok(Some(out));
+            }
+        }
+    }
+
+    /// The part of a decoded `block` (less its last `trim_end` frames) that is presented.
+    fn present(&mut self, mut block: AudioBuffer, trim_end: u64) -> Option<AudioBuffer> {
+        let n = (block.frames() as u64).saturating_sub(trim_end);
+        let start = self.pos;
+        self.pos += n;
+        let end = match self.limit {
+            Some(l) => self.pos.min(l.saturating_add(self.skip)),
+            None => self.pos,
+        };
+        let first = start.max(self.from);
+        if first >= end {
+            return None;
+        }
+        let (a, b) = ((first - start) as usize, (end - start) as usize);
+        for c in &mut block.channels {
+            c.truncate(b);
+            c.drain(..a);
+            for s in c.iter_mut().filter(|s| !s.is_finite()) {
+                *s = 0.0;
+            }
+        }
+        Some(block)
+    }
+
+    /// Note a packet that could not be read or decoded. A stream where nothing decodes is an
+    /// error: unsupported when a packet said so, else malformed.
+    fn error(&mut self, e: AudioError) -> Result<()> {
+        self.errors += 1;
+        self.info.damaged += 1;
+        log::debug!("concealing a packet that failed: {e}");
+        let msg = e.to_string();
+        if matches!(e, AudioError::Unsupported(_)) && self.unsupported.is_none() {
+            self.unsupported = Some(e);
+        }
+        if self.errors > MAX_ERRORS && !self.decoded {
+            return Err(self.no_audio(&msg));
+        }
+        Ok(())
+    }
+
+    fn no_audio(&mut self, msg: &str) -> AudioError {
+        self.unsupported.take().unwrap_or_else(|| AudioError::Malformed(format!("no decodable packets: {msg}")))
+    }
+
+    /// Continue from presented frame `frame`: back up the decoder's pre-roll, decode from the
+    /// packet before it and drop what comes before `frame`. Returns the frame decoding resumes at
+    /// (`frame`, or the end of the stream).
+    pub(crate) fn seek(&mut self, frame: u64) -> Result<u64> {
+        let frame = match self.limit {
+            Some(l) => frame.min(l),
+            None => frame,
+        };
+        let frame = if self.frames_known { frame.min(self.info.frames) } else { frame };
+        self.seeked = true;
+        let target = frame + self.skip;
+        let start = self.packets.seek(target.saturating_sub(self.dec.preroll() as u64))?;
+        self.dec.reset();
+        self.pos = start;
+        self.from = target;
+        Ok(frame)
+    }
+}
+
+/// Where a stream starts: after any ID3v2 tags.
+fn after_id3(b: &[u8]) -> usize {
+    let mut at = 0;
+    while let Some(len) = b.get(at..).and_then(id3v2_len) {
+        at = at.saturating_add(len);
+    }
+    at
+}
+
+/// A native track from its parts; `None` when [`TrackDecoder`] does not decode the codec (it is
+/// then left to symphonia).
+fn native<'a>(
+    container: Container,
+    packets: Packets<'a>,
+    params: &CodecParams,
+    lookahead: &[Vec<u8>],
+    skip: u64,
+    limit: Option<u64>,
+    frames: Option<u64>,
+) -> Option<Native<'a>> {
+    let lookahead: Vec<&[u8]> = lookahead.iter().map(Vec::as_slice).collect();
+    let dec = TrackDecoder::new(params, &lookahead).ok()?;
+    let mut info = AudioInfo::new(container, dec.codec(), dec.sample_format(), dec.sample_rate(), dec.layout(), frames.unwrap_or(0));
+    if dec.channels() == 0 || dec.sample_rate() == 0 {
+        info.frames = 0;
+    }
+    Some(Native {
+        packets,
+        info,
+        frames_known: frames.is_some() && dec.channels() > 0 && dec.sample_rate() > 0,
+        dec,
+        skip,
+        limit,
+        pos: 0,
+        from: skip,
+        errors: 0,
+        decoded: false,
+        seeked: false,
+        unsupported: None,
+    })
+}
+
+fn open_wav<'a>(src: &Src<'a>) -> Option<Result<Native<'a>>> {
+    let layout = match wav::parse(src) {
+        Ok(WavParse::Native(l)) => l,
+        Ok(WavParse::Foreign { .. }) => return None,
+        Err(e) => return Some(Err(e)),
+    };
+    let mut n = pcm_track(src, Container::Wav, layout.info.clone(), layout.kind, layout.data_start, layout.data_len);
+    if let Some(Ok(n)) = &mut n {
+        n.info.bwf = layout.info.bwf;
+    }
+    n
+}
+
+fn open_aiff<'a>(src: &Src<'a>) -> Option<Result<Native<'a>>> {
+    match aiff::parse(src) {
+        Ok(AiffParse::Native(l)) => pcm_track(src, Container::Aiff, l.info, l.kind, l.data_start, l.data_len),
+        Ok(AiffParse::Foreign) => None,
+        Err(e) => Some(Err(e)),
+    }
+}
+
+/// A WAV or AIFF file's samples as a PCM track.
+fn pcm_track<'a>(
+    src: &Src<'a>,
+    container: Container,
+    info: AudioInfo,
+    kind: crate::pcm::PcmKind,
+    start: u64,
+    len: u64,
+) -> Option<Result<Native<'a>>> {
+    let channels = usize::from(info.channels);
+    let frame_bytes = (kind.bytes() * channels) as u64;
+    let (bits, float, big_endian, unsigned) = match kind {
+        crate::pcm::PcmKind::Int { bytes, big_endian, unsigned } => ((bytes * 8) as u16, false, big_endian, unsigned),
+        crate::pcm::PcmKind::Float { bytes, big_endian } => ((bytes * 8) as u16, true, big_endian, false),
+    };
+    let params = CodecParams::new(CodecId::Pcm).with_sample_rate(info.sample_rate).with_channels(info.channels).with_pcm(if float {
+        PcmFormat::float(bits, big_endian)
+    } else {
+        PcmFormat::int(bits, !unsigned, big_endian)
+    });
+    let frames = len.checked_div(frame_bytes).unwrap_or(0).min(info.frames);
+    let packets = Packets::Pcm { src: src.clone(), start, frames, frame_bytes, next_frame: 0 };
+    let mut n = native(container, packets, &params, &[], 0, None, Some(frames))?;
+    // The file's own description wins: its layout (an extensible mask) and stored sample format.
+    n.info = AudioInfo { frames, ..info };
+    Some(Ok(n))
+}
+
+/// The `n`-th audio track (the first when `None`) among `kinds`, as an index into them.
+fn audio_track(kinds: impl Iterator<Item = bool>, n: Option<usize>) -> Option<Result<usize>> {
+    let audio: Vec<usize> = kinds.enumerate().filter(|&(_, audio)| audio).map(|(i, _)| i).collect();
+    if audio.is_empty() {
+        return None;
+    }
+    let n = n.unwrap_or(0);
+    Some(audio.get(n).copied().ok_or_else(|| AudioError::Unsupported(format!("no audio track {n}: the file has {}", audio.len()))))
+}
+
+/// An MP4 / QuickTime file's audio track, if its codec is native. Samples that claim to lie
+/// beyond the end of the file are refused rather than read leniently.
+fn open_mp4<'a>(src: &Src<'a>, container: Container, track: Option<usize>) -> Option<Result<Native<'a>>> {
+    let file = isobmff::open(src).ok()?;
+    let track = match audio_track(file.tracks.iter().map(|t| t.kind == isobmff::TrackKind::Audio), track)? {
+        Ok(t) => t,
+        Err(e) => return Some(Err(e)),
+    };
+    let t = file.tracks.get(track)?;
+    // A track with no samples (or sample sizes the demuxer refused) goes to the other path, whose
+    // size checks name what is wrong.
+    if t.samples.is_empty() {
+        return None;
+    }
+    if t.audio().is_some_and(|a| u64::from(a.samples_per_packet.max(a.const_frames_per_packet)) > MAX_PACKET_FRAMES) {
+        return Some(Err(AudioError::Malformed("the file declares packets far longer than any codec uses".into())));
+    }
+    let size = src.size();
+    if t.samples.iter().any(|s| s.offset.checked_add(u64::from(s.size)).is_none_or(|end| end > size)) {
+        return Some(Err(AudioError::Malformed("MP4 sample is larger than the file".into())));
+    }
+    let params = t.codec_params();
+    let lookahead: Vec<Vec<u8>> =
+        (0..t.samples.len().min(crate::track::LOOKAHEAD_PACKETS)).filter_map(|i| file.read_sample(src, track, i).ok()).collect();
+    let timescale = t.timescale;
+    // Probe the decoder for the output rate before the timing is worked out.
+    let rate = TrackDecoder::new(&params, &lookahead.iter().map(Vec::as_slice).collect::<Vec<_>>()).ok()?.sample_rate();
+    // A leading media edit (AAC priming) is skipped, and the edit's duration is the
+    // presentation length. Empty edits and multi-segment lists play the media as it is.
+    let (skip, limit) = match t.edits.as_slice() {
+        [e] if e.media_time >= 0 && e.media_rate == 0x0001_0000 => {
+            let skip = rescale(e.media_time.unsigned_abs(), u64::from(timescale), u64::from(rate));
+            let limit = (e.segment_duration > 0).then(|| rescale(e.segment_duration, u64::from(file.timescale), u64::from(rate)));
+            (skip, limit)
+        }
+        _ => (0, None),
+    };
+    let media: u64 = t.samples.iter().map(|s| u64::from(s.duration)).sum();
+    let frames = limit.unwrap_or_else(|| rescale(media, u64::from(timescale), u64::from(rate)).saturating_sub(skip));
+    let packets = Packets::Mp4 { file: Box::new(file), src: src.clone(), track, next: 0, timescale, rate };
+    native(container, packets, &params, &lookahead, skip, limit, Some(frames)).map(Ok)
+}
+
+/// A Matroska / WebM file's audio track, if its codec is native.
+fn open_mkv<'a>(src: &Src<'a>, container: Container, track: Option<usize>) -> Option<Result<Native<'a>>> {
+    let demux = matroska::Demuxer::new(src.clone()).ok()?;
+    let file = demux.file();
+    let track = match audio_track(file.tracks.iter().map(|t| t.kind == matroska::TrackKind::Audio), track)? {
+        Ok(t) => t,
+        Err(e) => return Some(Err(e)),
+    };
+    let t = file.tracks.get(track)?;
+    if !t.frames_readable() {
+        return None;
+    }
+    let params = t.codec_params();
+    let lookahead: Vec<Vec<u8>> =
+        (0..t.samples.len().min(crate::track::LOOKAHEAD_PACKETS)).filter_map(|i| demux.read_sample(track, i).ok()).collect();
+    let probe = TrackDecoder::new(&params, &lookahead.iter().map(Vec::as_slice).collect::<Vec<_>>()).ok()?;
+    let rate = probe.sample_rate();
+    let frames_of = match (probe.frames_per_packet(), params.pcm) {
+        (Some(n), _) => MkvFrames::Constant(n as u64),
+        (None, Some(pcm)) => {
+            let frame_bytes = u64::from(pcm.bits.div_ceil(8)) * u64::from(params.channels.unwrap_or(1).max(1));
+            MkvFrames::Pcm { sizes: t.samples.iter().map(|s| s.size).collect(), frame_bytes: frame_bytes.max(1) }
+        }
+        _ => MkvFrames::Timestamps,
+    };
+    // `CodecDelay` (AAC priming) is decoded audio that is not presented.
+    let skip = rescale_round(t.codec_delay_ns, 1_000_000_000, u64::from(rate));
+    // The presentation ends with the last frame (timestamps, with `CodecDelay` already taken off,
+    // are in ticks of `timebase` seconds); known only when the last frame has a duration.
+    let (num, den) = t.timebase;
+    let last = t.samples.iter().max_by_key(|s| s.pts);
+    let frames = last.filter(|s| s.duration > 0).and_then(|s| {
+        let end = u64::try_from(s.pts.saturating_add(i64::try_from(s.duration).ok()?)).ok()?;
+        Some(rescale_round(end.saturating_mul(num), den, u64::from(rate)))
+    });
+    let mut demux = demux;
+    // The first packet's own timestamp is the decoded timeline's origin; read it and rewind.
+    let first = mkv_next(&mut demux, track, rate);
+    let first_ns = match first {
+        Some(Ok((_, pts_ns))) => pts_ns,
+        _ => 0,
+    };
+    demux.seek(track, i64::MIN).ok()?;
+    let packets = Packets::Mkv { demux: Box::new(demux), track, rate, first_ns, frames: frames_of, pending: None };
+    native(container, packets, &params, &lookahead, skip, frames, frames).map(Ok)
+}
+
+/// The audio tracks of `src` the native path reads, described for a track list; `None` when it
+/// does not read the container.
+pub(crate) fn tracks(src: &Src<'_>, detected: Option<Container>) -> Option<Vec<CodecParams>> {
+    let head = src.head();
+    match super::detect_container(&head, None).or(detected) {
+        Some(Container::Mp4 | Container::QuickTime) => {
+            let file = isobmff::open(src).ok()?;
+            Some(file.tracks.iter().filter(|t| t.kind == isobmff::TrackKind::Audio).map(isobmff::Track::codec_params).collect())
+        }
+        Some(Container::Matroska | Container::WebM) => {
+            let file = matroska::open(src.clone()).ok()?;
+            Some(file.tracks.iter().filter(|t| t.kind == matroska::TrackKind::Audio).map(matroska::Track::codec_params).collect())
+        }
+        Some(Container::Ogg) => {
+            let file = ogg::open(src).ok()?;
+            Some(file.streams.iter().filter(|s| s.codec.codec_id().is_audio()).map(ogg::Stream::codec_params).collect())
+        }
+        _ => None,
+    }
+}
+
+/// `v` in units of `from` per second, in units of `to` per second (truncated).
+fn rescale(v: u64, from: u64, to: u64) -> u64 {
+    if from == 0 { 0 } else { u64::try_from(u128::from(v) * u128::from(to) / u128::from(from)).unwrap_or(u64::MAX) }
+}
+
+/// [`rescale`], rounded to the nearest unit: for durations stored in a coarser unit than samples
+/// (Matroska's nanoseconds hold 1024 samples at 48 kHz as 21 333 333 ns).
+fn rescale_round(v: u64, from: u64, to: u64) -> u64 {
+    if from == 0 { 0 } else { u64::try_from((u128::from(v) * u128::from(to) + u128::from(from) / 2) / u128::from(from)).unwrap_or(u64::MAX) }
+}
