@@ -296,13 +296,20 @@ while let Some(p) = d.next_packet()? {        // file order, all tracks
 }
 ```
 
-- **Open** (`open`, `open_with(src, &OpenOptions { index, verify_crc })`): EBML header (DocType
+- **Open** (`open`, `open_with(src, &OpenOptions { index, verify_crc, index_limit })`): EBML header (DocType
   `matroska` or `webm`), the first Segment, and its level-1 elements: SeekHead (followed for
   elements after the clusters), Info, Tracks, Cues, Chapters, Tags, Attachments (listed with offset
   and size; payloads are not read). With `index: true` (the default) every Cluster is scanned,
   element and block headers only, to build per-track `Sample` tables (`offset`, `size`, `pts`,
   `duration`, `keyframe`, cluster, block offset, lace index, `BlockAdditional` location) and
   keyframe lists. With `index: false`, `open` stops at the first Cluster.
+- **Progressive index** (`index_limit: Some(offset)`): the scan stops at that byte offset, so a
+  source that has loaded only the front of the file opens at once. The first Cluster is always
+  scanned; later ones only if they end below the limit. `MkvFile::index_end` is `Some(offset)`
+  while the index is incomplete (`indexed` is `false`; the tables are exact for everything before
+  it; Cues after the scanned part are not read yet), and `MkvFile::extend_index(src, &opts)`
+  continues from there with a larger limit (`None`: to the end, which completes the index)
+  without rescanning. A read that fails part-way (data not loaded yet) can be retried.
 - **Timestamps:** Matroska ticks are `TimestampScale` ns (usually 1 ms); `Track::timebase` is that
   as a reduced fraction of a second. `pts` is in ticks, `pts_ns` in exact nanoseconds. `CodecDelay`
   is subtracted (RFC 9559), as FFmpeg does, so Opus and Vorbis priming gives negative pts. Laced

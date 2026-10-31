@@ -203,12 +203,12 @@ fn assert_crc_mismatch_is_reported(bytes: &[u8]) {
     let mut corrupted = bytes.to_vec();
     let title = corrupted.windows(9).position(|window| window == b"Synthetic").unwrap();
     corrupted[title] = b's';
-    let file = open_with(&corrupted[..], &OpenOptions { index: true, verify_crc: true }).unwrap();
+    let file = open_with(&corrupted[..], &OpenOptions { index: true, verify_crc: true, index_limit: None }).unwrap();
     assert_eq!(file.crc_errors.len(), 1);
 }
 
 fn assert_seek_builds_an_index(bytes: &[u8]) {
-    let mut demuxer = Demuxer::with_options(bytes, OpenOptions { index: false, verify_crc: false }).unwrap();
+    let mut demuxer = Demuxer::with_options(bytes, OpenOptions { index: false, verify_crc: false, index_limit: None }).unwrap();
     assert_eq!(demuxer.file().tracks.len(), 2);
     assert_eq!(demuxer.seek(0, 1_100_000_000).unwrap().pts, 1000);
     assert_eq!(demuxer.seek(0, 1_130_000_000).unwrap().pts, 1120);
@@ -219,7 +219,7 @@ fn assert_seek_builds_an_index(bytes: &[u8]) {
 #[test]
 fn synthetic_file() {
     let bytes = synthetic();
-    let file = open_with(&bytes[..], &OpenOptions { index: true, verify_crc: true }).unwrap();
+    let file = open_with(&bytes[..], &OpenOptions { index: true, verify_crc: true, index_limit: None }).unwrap();
     assert_synthetic_metadata(&file, &bytes);
     assert_synthetic_packets(&file, &bytes);
     assert_crc_mismatch_is_reported(&bytes);
@@ -327,7 +327,7 @@ fn cue_position_past_the_file_falls_back_to_the_index() {
         let mut el_cues = Vec::new();
         el(&mut el_cues, CUES, &cues);
         bytes.splice(at..at, el_cues);
-        let mut d = Demuxer::with_options(bytes, OpenOptions { index: false, verify_crc: false }).unwrap();
+        let mut d = Demuxer::with_options(bytes, OpenOptions { index: false, verify_crc: false, index_limit: None }).unwrap();
         assert_eq!(d.file().cues.len(), 1);
         assert_eq!(d.seek(0, 0).unwrap().pts, 1000);
     }
@@ -449,7 +449,7 @@ fn overlapping_seek_head_targets_are_read_once() {
     }
     f.resize(f.len() + pad, 0xEC);
     let src = Counting(&f, std::cell::Cell::new(0));
-    let file = open_with(&src, &OpenOptions { index: false, verify_crc: false }).unwrap();
+    let file = open_with(&src, &OpenOptions { index: false, verify_crc: false, index_limit: None }).unwrap();
     assert_eq!(file.seek_head.len(), n as usize);
     assert!(src.1.get() <= 4 * f.len() as u64, "read {} bytes of a {}-byte file", src.1.get(), f.len());
 }

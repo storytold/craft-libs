@@ -15,6 +15,8 @@ mod demux;
 pub mod ebml;
 mod error;
 mod ids;
+#[cfg(test)]
+mod index_limit_tests;
 mod meta;
 mod mux;
 mod source;
