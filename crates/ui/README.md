@@ -4,6 +4,7 @@
 embedded SVG catalogs; `buttons` paints accessible icon buttons; `tabs` handles tab fitting and
 interaction; `layout` provides toolbar fitting, split geometry and resize handles; `theme` shares widget-state styling.
 `docking` supplies transactional panel moves and an optional docking surface.
+`pick` supplies hover/current-choice marks, the colour swatch, and list rows with a recent section; `anchor` places a floating bar over a selection.
 `printing` supplies printer/job controls and asynchronous feedback used by WordCraft and GridCraft.
 `fonts` installs the UI font stack, the same fallback order in every app.
 `localized` supplies number fields that write and read the user's region's numbers.

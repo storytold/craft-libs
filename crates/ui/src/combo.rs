@@ -15,13 +15,13 @@ use std::cell::RefCell;
 use std::ops::Range;
 
 use egui::{
-    Align, Align2, AsIdSalt, Atom, AtomExt as _, Atoms, Context, Direction, Frame, Id, IdSalt, InnerResponse, IntoAtoms, LayerId, NumExt as _, Order,
-    Painter, Popup, PopupCloseBehavior, Rect, RectAlign, Response, Role, ScrollArea, Sense, Shape, TextStyle, TextWrapMode, Ui, Vec2, WidgetAtom,
-    WidgetInfo,
     class::{ClassName, Classes, HasClasses},
     style::{StyleModifier, WidgetVisuals},
     vec2,
     widget_style::ButtonStyle,
+    Align, Align2, AsIdSalt, Atom, AtomExt as _, Atoms, Context, Direction, Frame, Id, IdSalt, InnerResponse, IntoAtoms, LayerId, NumExt as _, Order,
+    Painter, Popup, PopupCloseBehavior, Rect, RectAlign, Response, Role, ScrollArea, Sense, Shape, TextStyle, TextWrapMode, Ui, Vec2, WidgetAtom,
+    WidgetInfo,
 };
 
 pub use egui::IconPainter;
@@ -661,5 +661,5 @@ fn room(align: RectAlign, anchor: Rect, screen: Rect) -> f32 {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests;
