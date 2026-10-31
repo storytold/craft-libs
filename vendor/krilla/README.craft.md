@@ -26,6 +26,7 @@ itself omits those texts. Its examples and four CC0 ICC profiles are retained wi
 | `patches/14-devicen-pdf-version.patch` | DeviceN attributes by PDF version | `graphics/device_n.rs` |
 | `patches/15-pdfx-conformance.patch` | PDF/X conformance key | `serialize.rs` |
 | `patches/16-modification-date.patch` | Modification date | `interchange/metadata.rs` |
+| `patches/17-color-precision.patch` | Color precision | `graphics/{color,shading_function}.rs` |
 
 Each patch applies with `patch -p1` from this directory, in numeric order, to the pristine
 crate. `SOURCE.json` records, for every retained file, the upstream hash (`upstream_sha256`)
@@ -410,3 +411,22 @@ Tests: `crates/pdf/tests/writing.rs` (`writes_pages_metadata_and_selected_versio
 `the_creation_date_is_the_modification_date_when_none_is_given`) and
 `crates/prepress/tests/flatten_document.rs`
 (`a_document_flattens_page_by_page_and_keeps_boxes_metadata_and_shared_fonts`).
+
+## 17: color precision
+
+Upstream stores gray, CMYK, Separation and DeviceN components as `u8`, so every ink is written
+as a multiple of 1/255: C75 becomes 0.7490196 and C4 M4 Y4 K4 becomes 0.039215688.
+
+- `cmyk::Color::new_f32`, `luma::Color::new_f32`, `separation::Color::new_f32` and
+  `device_n::Color::new_f32` take components from 0 to 1 and write them as given. Values
+  outside 0 to 1 are clamped and NaN is 0.
+- The `u8` constructors keep their signatures and write `value / 255`, as upstream does.
+- The colors store each component as an `f32` whose bits `Eq` and `Hash` compare; -0 is
+  stored as 0, so equal components compare equal. `RegularColor::as_rgb` rounds gray to the
+  nearest 8-bit value.
+- Gradient stops that are rewritten into one DeviceCMYK, Separation or DeviceN space keep
+  their components, and a DeviceN color's CMYK alternate (annotations, tags) is no longer
+  rounded.
+- Mesh gradients write their corner colors and opacities at 16 bits a component instead of 8.
+
+Tests: `crates/pdf/tests/print_color.rs` (`f32_colors_*`, `mesh_*`, `rgb_mesh_is_a_device_rgb_shading`).

@@ -933,8 +933,8 @@ fn mesh(patches: Vec<MeshPatch>) -> backend::paint::Paint {
 }
 
 /// Each Type 6 shading in the file: color space family and colorant names, components a
-/// corner (from `/Decode`), and the corner color bytes of each patch.
-type MeshSummary = ((String, Vec<String>), usize, Vec<Vec<u8>>);
+/// corner (from `/Decode`), and the 16-bit corner color components of each patch.
+type MeshSummary = ((String, Vec<String>), usize, Vec<Vec<u16>>);
 
 fn mesh_shadings(bytes: &[u8]) -> Vec<MeshSummary> {
     let pdf = hayro_syntax::Pdf::new(Arc::new(bytes.to_vec())).unwrap();
@@ -946,19 +946,25 @@ fn mesh_shadings(bytes: &[u8]) -> Vec<MeshSummary> {
             continue;
         }
         assert_eq!(dict.get::<i32>(b"BitsPerCoordinate".as_slice()), Some(32));
-        assert_eq!(dict.get::<i32>(b"BitsPerComponent".as_slice()), Some(8));
+        assert_eq!(dict.get::<i32>(b"BitsPerComponent".as_slice()), Some(16));
         assert_eq!(dict.get::<i32>(b"BitsPerFlag".as_slice()), Some(8));
         let cs = dict.get::<Object<'_>>(b"ColorSpace".as_slice()).unwrap();
         let decode = dict.get::<Array<'_>>(b"Decode".as_slice()).unwrap().iter::<f32>().count();
         let components = (decode - 4) / 2;
         let data = stream.decoded().unwrap();
-        let patch_len = 1 + 12 * 8 + 4 * components;
+        let patch_len = 1 + 12 * 8 + 4 * 2 * components;
         assert_eq!(data.len() % patch_len, 0, "whole patches of {components} components a corner");
-        let corners = data.chunks(patch_len).map(|patch| patch[1 + 12 * 8..].to_vec()).collect();
+        let samples = |bytes: &[u8]| -> Vec<u16> { bytes.chunks(2).map(|c| u16::from_be_bytes([c[0], c[1]])).collect() };
+        let corners = data.chunks(patch_len).map(|patch| samples(&patch[1 + 12 * 8..])).collect();
         out.push((colorant_names(&cs), components, corners));
     }
     out.sort_by(|a, b| a.0.cmp(&b.0));
     out
+}
+
+/// 8-bit components as the 16-bit components that carry the same value (`v * 257`).
+fn wide(components: Vec<u16>) -> Vec<u16> {
+    components.into_iter().map(|v| v * 257).collect()
 }
 
 fn gold_spot(tint: u8) -> backend::color::Color {
@@ -981,7 +987,7 @@ fn mesh_mixing_process_and_spot_corners_is_a_device_n_shading() {
         ]
     };
     let names = |v: &[&str]| v.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
-    let expected = vec![vec![255, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 0], vec![0, 0, 255, 0, 0, 128, 255, 0, 0, 255, 0, 0]];
+    let expected = vec![wide(vec![255, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 0]), wide(vec![0, 0, 255, 0, 0, 128, 255, 0, 0, 255, 0, 0])];
 
     let opaque = page_with(|surface| fill_rect(surface, 0.0, mesh(patches(1.0))));
     assert_eq!(mesh_shadings(&opaque), vec![(("DeviceN".to_owned(), names(&["Cyan", "Black", "Gold"])), 3, expected.clone())]);
@@ -989,7 +995,7 @@ fn mesh_mixing_process_and_spot_corners_is_a_device_n_shading() {
     let translucent = page_with(|surface| fill_rect(surface, 0.0, mesh(patches(0.5))));
     let found = mesh_shadings(&translucent);
     assert_eq!(found.len(), 2, "{found:?}");
-    assert_eq!(found[0], (("DeviceGray".to_owned(), vec![]), 1, vec![vec![255; 4], vec![255, 255, 255, 128]]));
+    assert_eq!(found[0], (("DeviceGray".to_owned(), vec![]), 1, vec![wide(vec![255; 4]), vec![65535, 65535, 65535, 32768]]));
     assert_eq!(found[1], (("DeviceN".to_owned(), names(&["Cyan", "Black", "Gold"])), 3, expected));
     assert_eq!(soft_masks(&translucent).len(), 1);
 }
@@ -1022,8 +1028,88 @@ fn rgb_mesh_is_a_device_rgb_shading() {
     let rgb = |r, g, b| -> backend::color::Color { backend::color::rgb::Color::new(r, g, b).into() };
     let patch = square(10.0, 10.0, 40.0, [rgb(255, 0, 0), rgb(0, 255, 0), rgb(0, 0, 255), rgb(255, 255, 255)], [1.0; 4]);
     let bytes = page_with(|surface| fill_rect(surface, 0.0, mesh(vec![patch])));
-    let corners = vec![vec![255, 0, 0, 0, 255, 0, 0, 0, 255, 255, 255, 255]];
+    let corners = vec![wide(vec![255, 0, 0, 0, 255, 0, 0, 0, 255, 255, 255, 255])];
     assert_eq!(mesh_shadings(&bytes), vec![(("DeviceRGB".to_owned(), vec![]), 3, corners)]);
+}
+
+// Color precision (the `new_f32` constructors).
+
+/// The first page's content stream as text.
+fn content(bytes: &[u8]) -> String {
+    let pdf = hayro_syntax::Pdf::new(Arc::new(bytes.to_vec())).unwrap();
+    let page = pdf.pages().iter().next().unwrap();
+    String::from_utf8_lossy(page.page_stream().unwrap()).into_owned()
+}
+
+/// CMYK inks, gray, spot tints and DeviceN tints made with `new_f32` are written as given, so
+/// C75 is 0.75 and not 191/255; the 8-bit constructors still write `value / 255`.
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn f32_colors_are_written_without_rounding() {
+    use backend::color::separation::{self, SeparationColorant, SeparationSpace};
+    let gold_space = SeparationSpace::new(SeparationColorant::Custom("Gold".to_owned()), gold().into());
+    let space = DeviceNSpace::new([Colorant::Process(Process::Cyan), spot("Gold", gold())]).unwrap();
+    let colors: Vec<backend::color::Color> = vec![
+        cmyk::Color::new_f32(0.75, 0.0, 1.0, 0.0).into(),
+        cmyk::Color::new_f32(0.04, 0.04, 0.04, 0.04).into(),
+        luma::Color::new_f32(0.96).into(),
+        separation::Color::new_f32(0.75, gold_space).into(),
+        device_n::Color::new_f32(vec![0.45, 0.04], space).unwrap().into(),
+        cmyk::Color::new(191, 0, 255, 0).into(),
+    ];
+    let text = content(&device_n_sample(cmyk_settings(), colors).unwrap());
+    for op in ["0.75 0 1 0 k", "0.04 0.04 0.04 0.04 k", "0.96 g", "0.75 scn", "0.45 0.04 scn", "0.7490196 0 1 0 k"] {
+        assert!(text.contains(op), "{op:?} in {text:?}");
+    }
+}
+
+/// `new_f32` clamps to 0 to 1 and reads NaN and -0 as 0, so a color equals (and hashes like)
+/// the 8-bit color with the same components.
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn f32_colors_clamp_and_compare_by_value() {
+    use std::collections::HashSet;
+    let odd = cmyk::Color::new_f32(1.5, -0.2, f32::NAN, -0.0);
+    assert_eq!(odd, cmyk::Color::new(255, 0, 0, 0));
+    assert_eq!(HashSet::from([odd, cmyk::Color::new(255, 0, 0, 0)]).len(), 1);
+    assert_eq!(luma::Color::new_f32(2.0), luma::Color::white());
+    let text = content(&page_with(|surface| fill_rect(surface, 0.0, odd.into())));
+    assert!(text.contains("1 0 0 0 k"), "{text:?}");
+}
+
+/// The colors of a shading's function (`/C0` and `/C1` of the first shading's exponential
+/// function).
+fn shading_ends(bytes: &[u8]) -> (Vec<f32>, Vec<f32>) {
+    let pdf = hayro_syntax::Pdf::new(Arc::new(bytes.to_vec())).unwrap();
+    let page = pdf.pages().iter().next().unwrap();
+    let patterns = &page.resources().patterns;
+    let key = patterns.keys().next().unwrap();
+    let pattern = patterns.get::<Dict<'_>>(key.as_ref()).unwrap();
+    let shading = pattern.get::<Dict<'_>>(b"Shading".as_slice()).unwrap();
+    let function = shading.get::<Dict<'_>>(b"Function".as_slice()).unwrap();
+    let floats = |key: &[u8]| -> Vec<f32> { function.get::<Array<'_>>(key).unwrap().iter::<f32>().collect() };
+    (floats(b"C0"), floats(b"C1"))
+}
+
+/// Gradient stops keep their inks when a spot and process colors are rewritten into one
+/// DeviceN space, and mesh corners are written at 16 bits, so K 75% reads 0.749996 rather than
+/// 191/255.
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn f32_colors_keep_their_inks_in_shadings() {
+    use backend::color::separation::{self, SeparationColorant, SeparationSpace};
+    let gold_spot: backend::color::Color =
+        separation::Color::new_f32(0.75, SeparationSpace::new(SeparationColorant::Custom("Gold".to_owned()), gold().into())).into();
+    let cyan: backend::color::Color = cmyk::Color::new_f32(0.04, 0.0, 0.0, 0.0).into();
+    let bytes = page_with(|surface| fill_rect(surface, 0.0, linear([gold_spot, cyan])));
+    assert_eq!(shadings(&bytes)[0].0, ("DeviceN".to_owned(), vec!["Cyan".to_owned(), "Gold".to_owned()]));
+    assert_eq!(shading_ends(&bytes), (vec![0.0, 0.75], vec![0.04, 0.0]));
+
+    let k75 = || -> backend::color::Color { cmyk::Color::new_f32(0.0, 0.0, 0.0, 0.75).into() };
+    let patch = square(10.0, 10.0, 40.0, [k75(), k75(), k75(), k75()], [1.0; 4]);
+    let bytes = page_with(|surface| fill_rect(surface, 0.0, mesh(vec![patch])));
+    let corner = [0, 0, 0, 49151];
+    assert_eq!(mesh_shadings(&bytes), vec![(("DeviceCMYK".to_owned(), vec![]), 4, vec![corner.repeat(4)])]);
 }
 
 const FOGRA39: &[u8] = include_bytes!("../../cms/profiles/craft-coated-fogra39.icc");
