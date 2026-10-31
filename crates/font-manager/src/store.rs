@@ -12,7 +12,7 @@ use std::sync::{Condvar, Mutex};
 
 use craft_font_catalog::Catalog;
 pub use craft_font_store::UserSource;
-use craft_font_store::{Cancel, Client, Face, FontStore, Network, PINNED_INDEX, verify_font};
+use craft_font_store::{Cancel, Client, Face, FontStore, Network, PINNED_INDEX, PreviewServiceSource, verify_font};
 
 use crate::index::{Family, Index};
 
@@ -103,34 +103,121 @@ pub trait Installer: Send + Sync {
     fn remove_user_source(&self, _url: &str) -> Result<(), StoreError> {
         Err(StoreError(NO_FOLDER.into()))
     }
+
+    /// The preview service's base URL, if one is set: [`craft_font_store::PREVIEW_SERVICE_ENV`], else the font
+    /// store's `preview_service` setting. Installs try it as a mirror first.
+    fn preview_service(&self) -> Option<String> {
+        None
+    }
+
+    /// Where [`Installer::preview_service`] comes from: the environment variable (the setting
+    /// can't change it), the saved setting, or nowhere.
+    fn preview_service_source(&self) -> PreviewServiceSource {
+        PreviewServiceSource::None
+    }
+
+    /// The store's HTTP client, if it has one. [`Previews`](crate::remote::Previews) fetches
+    /// with it, so a preview service that installs found unreachable is skipped by previews too,
+    /// and the reverse.
+    fn http_client(&self) -> Option<Client> {
+        None
+    }
+
+    /// Whether previews may be fetched from the preview service: the user's setting, on by
+    /// default.
+    fn previews_enabled(&self) -> bool {
+        true
+    }
+
+    /// Turns previews on or off, as the user's own action.
+    fn set_previews_enabled(&self, _enabled: bool) -> Result<(), StoreError> {
+        Err(StoreError(NO_FOLDER.into()))
+    }
+
+    /// Sets or clears the preview service (https, or http for a loopback host), as the user's own
+    /// action.
+    fn set_preview_service(&self, _url: Option<&str>) -> Result<(), StoreError> {
+        Err(StoreError(NO_FOLDER.into()))
+    }
+
+    /// The folder [`crate::remote::Previews`] caches preview subsets in; none keeps them only
+    /// for as long as the caller holds them.
+    fn preview_cache(&self) -> Option<PathBuf> {
+        None
+    }
+
+    /// Whether store families can be made available to all apps (copied into the OS user font
+    /// folder). The interface offers the action only when this is true.
+    fn available_to_all_supported(&self) -> bool {
+        false
+    }
+
+    /// Whether the store family `family` (its name, and the files the catalog found for it in
+    /// the font store) is available to all apps. Cheap enough to call for every row.
+    fn is_available_to_all(&self, _family: &str, _files: &[PathBuf]) -> bool {
+        false
+    }
+
+    /// The files of an available store family not available to all apps yet (styles an agent
+    /// installed, say), by their names in the store, for the interface to offer copying them.
+    fn not_yet_available(&self, _family: &str, _files: &[PathBuf]) -> Vec<String> {
+        Vec::new()
+    }
+
+    /// Makes a store family available to all apps, as the user's own action; calling it again
+    /// copies the styles [`Installer::not_yet_available`] lists. A font on the system with one of
+    /// its PostScript names refuses it, naming the fonts. It blocks (hashing, copying, a catalog
+    /// rescan): call it on a worker thread.
+    fn make_available(&self, _family: &str, _files: &[PathBuf]) -> Result<(), StoreError> {
+        Err(StoreError(NOT_HERE.into()))
+    }
+
+    /// Takes a store family's copies out of the OS user font folder, as the user's own action.
+    /// Returns the copies left in place because they changed since. It blocks: call it on a
+    /// worker thread.
+    fn withdraw(&self, _family: &str, _files: &[PathBuf]) -> Result<Vec<PathBuf>, StoreError> {
+        Err(StoreError(NOT_HERE.into()))
+    }
 }
 
 const NO_FOLDER: &str = "there is no folder for the font store";
+const NOT_HERE: &str = "fonts can't be made available to all apps here";
 
 /// craft-font-store's store, in the user's font store folder.
 pub struct SuiteStore {
     store: FontStore,
-    client: Client,
 }
 
 impl SuiteStore {
     /// The store the catalog's environment names, rescanning `catalog` after each change.
     pub fn for_user(catalog: Arc<Catalog>) -> Option<SuiteStore> {
         let store = FontStore::for_user(catalog.env())?.with_catalog(catalog);
-        Some(SuiteStore { store, client: Client::default() })
+        Some(SuiteStore { store })
     }
 
-    /// The store's source and name for the family holding `files`, which can differ from the
-    /// name in the fonts themselves.
-    fn installed_name(&self, request: &RemoveRequest) -> Option<(String, String)> {
+    /// The store's HTTP client. Clones share the preview service's down state with installs;
+    /// [`Previews::new`](crate::remote::Previews::new) takes it through [`Installer::http_client`].
+    pub fn client(&self) -> Client {
+        self.store.client()
+    }
+
+    /// The store's source and name for the family `family` holding `files`, which can differ
+    /// from the name in the fonts themselves.
+    fn installed_name(&self, family: &str, files: &[PathBuf]) -> Option<(String, String)> {
         let dir = self.store.dir();
         let installed = self.store.installed();
-        let lower = request.family.to_lowercase();
+        let lower = family.to_lowercase();
         installed
             .iter()
-            .find(|f| request.files.iter().any(|path| path.starts_with(dir.join(&f.dir))))
+            .find(|f| files.iter().any(|path| path.starts_with(dir.join(&f.dir))))
             .or_else(|| installed.iter().find(|f| f.family.to_lowercase() == lower))
             .map(|f| (f.source.clone(), f.family.clone()))
+    }
+}
+
+impl SuiteStore {
+    fn found(&self, family: &str, files: &[PathBuf]) -> Result<(String, String), StoreError> {
+        self.installed_name(family, files).ok_or_else(|| err(craft_font_store::Error::NotInstalled(family.to_owned())))
     }
 }
 
@@ -155,7 +242,7 @@ impl Installer for SuiteStore {
     }
 
     fn remove(&self, request: &RemoveRequest) -> Result<(), StoreError> {
-        let (source, name) = self.installed_name(request).ok_or_else(|| err(craft_font_store::Error::NotInstalled(request.family.clone())))?;
+        let (source, name) = self.found(&request.family, &request.files)?;
         if request.whole {
             return self.store.remove_family(&source, &name).map_err(err);
         }
@@ -175,7 +262,7 @@ impl Installer for SuiteStore {
             let mut reasons = Vec::new();
             for url in index.file_urls(family, file) {
                 let mut on_bytes = |n: u64| progress(Progress { done: before.saturating_add(n), total });
-                match self.client.get(&url, file.size, &cancel, &mut on_bytes) {
+                match self.store.client().get(&url, file.size, &cancel, &mut on_bytes) {
                     Ok(bytes) => match verify_font(file, &bytes) {
                         Ok(()) => {
                             out.push(Downloaded { path: file.path.clone(), bytes });
@@ -213,6 +300,56 @@ impl Installer for SuiteStore {
 
     fn remove_user_source(&self, url: &str) -> Result<(), StoreError> {
         self.store.remove_user_source(url).map_err(err)
+    }
+
+    fn preview_service(&self) -> Option<String> {
+        self.store.preview_service()
+    }
+
+    fn preview_service_source(&self) -> PreviewServiceSource {
+        self.store.preview_service_source()
+    }
+
+    fn http_client(&self) -> Option<Client> {
+        Some(self.store.client())
+    }
+
+    fn set_preview_service(&self, url: Option<&str>) -> Result<(), StoreError> {
+        self.store.set_preview_service(url).map_err(err)
+    }
+
+    fn preview_cache(&self) -> Option<PathBuf> {
+        Some(self.store.previews_dir())
+    }
+
+    fn previews_enabled(&self) -> bool {
+        self.store.previews_enabled()
+    }
+
+    fn set_previews_enabled(&self, enabled: bool) -> Result<(), StoreError> {
+        self.store.set_previews_enabled(enabled).map_err(err)
+    }
+
+    fn available_to_all_supported(&self) -> bool {
+        self.store.available_to_all_supported()
+    }
+
+    fn is_available_to_all(&self, family: &str, files: &[PathBuf]) -> bool {
+        self.store.available_family_holding(family, files).is_some()
+    }
+
+    fn not_yet_available(&self, family: &str, files: &[PathBuf]) -> Vec<String> {
+        self.installed_name(family, files).map(|(source, name)| self.store.pending_files(&source, &name)).unwrap_or_default()
+    }
+
+    fn make_available(&self, family: &str, files: &[PathBuf]) -> Result<(), StoreError> {
+        let (source, name) = self.found(family, files)?;
+        self.store.make_available(&source, &name).map(drop).map_err(err)
+    }
+
+    fn withdraw(&self, family: &str, files: &[PathBuf]) -> Result<Vec<PathBuf>, StoreError> {
+        let (source, name) = self.found(family, files)?;
+        self.store.withdraw(&source, &name).map_err(err)
     }
 }
 
@@ -253,6 +390,8 @@ pub enum Call {
     InstallFile(String, String),
     Remove(String),
     Download(String),
+    MakeAvailable(String),
+    Withdraw(String),
 }
 
 /// A font store without a network: "downloads" come from a table of file bytes by index path,
@@ -271,11 +410,15 @@ pub struct FakeStore {
     /// Index files user sources "download", by URL.
     served_indexes: HashMap<String, Vec<u8>>,
     user: Mutex<Vec<UserSource>>,
+    preview_service: Mutex<Option<String>>,
+    previews: Mutex<bool>,
     /// User sources downloaded so far, and those whose file changed since.
     fetched: Mutex<Vec<String>>,
     changed: Mutex<Vec<String>>,
     /// Downloads stop halfway while this is true.
     held: (Mutex<bool>, Condvar),
+    /// Families made available to all apps, by name.
+    available: Mutex<Vec<String>>,
 }
 
 impl FakeStore {
@@ -290,9 +433,12 @@ impl FakeStore {
             builtin: None,
             served_indexes: HashMap::new(),
             user: Mutex::new(Vec::new()),
+            preview_service: Mutex::new(None),
+            previews: Mutex::new(true),
             fetched: Mutex::new(Vec::new()),
             changed: Mutex::new(Vec::new()),
             held: (Mutex::new(false), Condvar::new()),
+            available: Mutex::new(Vec::new()),
         }
     }
 
@@ -430,6 +576,9 @@ impl Installer for FakeStore {
         if let Some(outside) = request.files.iter().find(|f| !self.in_store(f)) {
             return Err(StoreError(format!("{} isn't in the font store", outside.display())));
         }
+        if request.whole {
+            self.available.lock().map_err(err)?.retain(|f| !f.eq_ignore_ascii_case(&request.family));
+        }
         for file in &request.files {
             std::fs::remove_file(file).map_err(err)?;
         }
@@ -498,5 +647,55 @@ impl Installer for FakeStore {
     fn remove_user_source(&self, url: &str) -> Result<(), StoreError> {
         self.user.lock().map_err(err)?.retain(|s| s.url != url);
         Ok(())
+    }
+
+    fn preview_service(&self) -> Option<String> {
+        self.preview_service.lock().ok()?.clone()
+    }
+
+    fn preview_service_source(&self) -> PreviewServiceSource {
+        if self.preview_service().is_some() { PreviewServiceSource::Saved } else { PreviewServiceSource::None }
+    }
+
+    fn previews_enabled(&self) -> bool {
+        self.previews.lock().map_or(true, |p| *p)
+    }
+
+    fn set_previews_enabled(&self, enabled: bool) -> Result<(), StoreError> {
+        *self.previews.lock().map_err(err)? = enabled;
+        Ok(())
+    }
+
+    fn set_preview_service(&self, url: Option<&str>) -> Result<(), StoreError> {
+        let url = url.map(craft_font_store::check_preview_service).transpose().map_err(err)?;
+        *self.preview_service.lock().map_err(err)? = url;
+        Ok(())
+    }
+
+    fn preview_cache(&self) -> Option<PathBuf> {
+        Some(self.dir.join("previews"))
+    }
+
+    fn available_to_all_supported(&self) -> bool {
+        true
+    }
+
+    fn is_available_to_all(&self, family: &str, _files: &[PathBuf]) -> bool {
+        self.available.lock().is_ok_and(|a| a.iter().any(|f| f.eq_ignore_ascii_case(family)))
+    }
+
+    fn make_available(&self, family: &str, _files: &[PathBuf]) -> Result<(), StoreError> {
+        self.record(Call::MakeAvailable(family.to_owned()));
+        let mut available = self.available.lock().map_err(err)?;
+        if !available.iter().any(|f| f.eq_ignore_ascii_case(family)) {
+            available.push(family.to_owned());
+        }
+        Ok(())
+    }
+
+    fn withdraw(&self, family: &str, _files: &[PathBuf]) -> Result<Vec<PathBuf>, StoreError> {
+        self.record(Call::Withdraw(family.to_owned()));
+        self.available.lock().map_err(err)?.retain(|f| !f.eq_ignore_ascii_case(family));
+        Ok(Vec::new())
     }
 }

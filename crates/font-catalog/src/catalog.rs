@@ -119,17 +119,29 @@ struct Index {
 
 impl Index {
     /// Added faces first: a document's or the app's own face wins over an installed face of the
-    /// same family and style.
+    /// same family and style. Among scanned duplicates the font store's face wins, so a store
+    /// font copied into the OS font folder stays the store's wherever the folders sort.
     fn build(added: &[Face], scanned: &[Face]) -> Self {
-        let mut faces: Vec<Face> = Vec::new();
-        let mut seen = HashSet::new();
-        for f in added.iter().chain(scanned) {
+        let all: Vec<&Face> = added.iter().chain(scanned).collect();
+        let mut winner: HashMap<_, usize> = HashMap::new();
+        for (i, f) in all.iter().enumerate() {
             let variations: Vec<(u32, u32)> = f.info.variations.iter().map(|(t, v)| (u32::from_be_bytes(*t), v.to_bits())).collect();
             let key = (f.info.family.to_ascii_lowercase(), norm(&f.info.style), f.keys.postscript.first().cloned(), variations);
-            if seen.insert(key) {
-                faces.push(f.clone());
+            match winner.entry(key) {
+                std::collections::hash_map::Entry::Vacant(e) => {
+                    e.insert(i);
+                }
+                std::collections::hash_map::Entry::Occupied(mut e) => {
+                    let held = *e.get();
+                    if held >= added.len() && all[held].info.source != Source::Store && f.info.source == Source::Store {
+                        e.insert(i);
+                    }
+                }
             }
         }
+        let mut kept: Vec<usize> = winner.into_values().collect();
+        kept.sort_unstable();
+        let faces: Vec<Face> = kept.into_iter().map(|i| all[i].clone()).collect();
         let mut by_family: HashMap<String, Vec<usize>> = HashMap::new();
         let mut aliases: HashMap<String, Vec<Alias>> = HashMap::new();
         let mut postscript: HashMap<String, usize> = HashMap::new();
@@ -314,6 +326,12 @@ fn modified(path: &Path) -> Option<SystemTime> {
     std::fs::metadata(path).and_then(|m| m.modified()).ok()
 }
 
+/// The faces of the font file at `path` as a scan reads them, named instances included, with
+/// `source` as their source. Empty when it isn't a font.
+pub fn read_faces(path: &Path, source: Source) -> Vec<FaceInfo> {
+    scan::file_faces(path, MAX_SCAN_READ, source).into_iter().map(|f| f.info).collect()
+}
+
 impl Catalog {
     /// A catalog of the fonts installed on the system `env` describes, the font store, and the
     /// files the platform's font service lists (with the `system` feature).
@@ -476,6 +494,14 @@ impl Catalog {
         *self.index.write().unwrap_or_else(PoisonError::into_inner) = Arc::new(index);
         lock(&self.loaded).clear();
         self.generation.fetch_add(1, Ordering::AcqRel);
+    }
+
+    /// Every face the last scan found, in path order, with the faces [`Catalog::faces`] drops as
+    /// duplicates of another of the same family, style and PostScript name. Faces added from
+    /// files or bytes aren't in it. For telling apart copies of one font in different places.
+    pub fn scanned_faces(&self) -> Vec<FaceInfo> {
+        self.ensure();
+        self.scanned().into_iter().map(|f| f.info).collect()
     }
 
     /// The family names, sorted ignoring case.

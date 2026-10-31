@@ -28,7 +28,7 @@ mod scan;
 mod suitcase;
 pub mod system;
 
-pub use catalog::{Catalog, FontData, FontFileError, Limits, Lister, LoadedFace, Match, Watch};
+pub use catalog::{Catalog, FontData, FontFileError, Limits, Lister, LoadedFace, Match, Watch, read_faces};
 pub use env::{FontEnv, Os, font_dirs, font_store_dir, office_font_dirs};
 pub use fontconfig::fontconfig_dirs;
 pub use scan::{FaceInfo, LocalizedName, Source, is_font_file, style_italic, style_weight, style_width};
