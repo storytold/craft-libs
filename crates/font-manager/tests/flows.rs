@@ -10,9 +10,11 @@ use std::sync::Arc;
 
 use craft_font_manager::craft_font_catalog::Os;
 use craft_font_manager::index::Index;
+use craft_font_manager::remote::{Fetch, Previews};
 use craft_font_manager::store::{Call, FakeStore, Installer};
 use craft_font_manager::{Catalog, FontEnv, Source};
 use craft_font_manager::{FontsPanel, Look, Options, Palette, Runner, Settings, Tab, install_interface_fonts};
+use craft_font_store::{Cancel, FetchError};
 use egui::accesskit::Role;
 use egui_kittest::Harness;
 use egui_kittest::kittest::{By, NodeT, Queryable};
@@ -459,4 +461,270 @@ fn screenshots() {
         h.run_steps(20);
         click(h, "Amiri");
     });
+}
+
+#[test]
+fn fake_store_checks_the_preview_service_like_the_store() {
+    let store = FakeStore::new(std::env::temp_dir().join("craft-fm-fake-service"), HashMap::new());
+    for bad in [
+        "http://fonts.example.com",
+        "http://localhost:8080",
+        "ftp://fonts.example.com",
+        "https://user@fonts.example.com",
+        "https://fonts.example.com/?k=v",
+    ] {
+        assert!(store.set_preview_service(Some(bad)).is_err(), "{bad}");
+    }
+    store.set_preview_service(Some("http://127.0.0.1:8080/")).unwrap();
+    assert_eq!(store.preview_service().as_deref(), Some("http://127.0.0.1:8080"));
+    store.set_preview_service(None).unwrap();
+    assert_eq!(store.preview_service(), None);
+}
+
+/// A preview service that answers every subset with the same small font, and logs what it
+/// answered. While held it answers nothing, and a request cancelled meanwhile isn't logged.
+#[derive(Default)]
+struct FakeService {
+    answered: std::sync::Mutex<Vec<String>>,
+    held: std::sync::Mutex<bool>,
+    /// Answers sample subsets with HTTP 404, as for a sample text the service doesn't have.
+    no_samples: std::sync::Mutex<bool>,
+}
+
+impl Fetch for FakeService {
+    fn get(&self, url: &str, _: u64, cancel: &Cancel) -> Result<Vec<u8>, FetchError> {
+        while *self.held.lock().unwrap() {
+            if cancel.is_cancelled() {
+                return Err(FetchError::Cancelled);
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        self.answered.lock().unwrap().push(url.to_owned());
+        if *self.no_samples.lock().unwrap() && url.contains("/sample-") {
+            return Err(FetchError::Failed("HTTP 404".into()));
+        }
+        Ok(include_bytes!("data/Tiny-glyf.woff2").to_vec())
+    }
+}
+
+impl FakeService {
+    /// What was answered since the last call, as (family number, subset): `sample`, `ascii`, or
+    /// `u` for typed characters.
+    fn take(&self) -> Vec<(usize, String)> {
+        let urls = std::mem::take(&mut *self.answered.lock().unwrap());
+        urls.iter()
+            .map(|url| {
+                let path = url.split("/v1/faces/").nth(1).unwrap();
+                let n = usize::from_str_radix(&path[..2], 16).unwrap();
+                let subset = path[64..].trim_start_matches("/list/").split(['/', '.']).next().unwrap();
+                let subset = if subset.starts_with("sample-") { "sample" } else { subset }.to_owned();
+                (n, subset)
+            })
+            .collect()
+    }
+}
+
+/// Forty Latin families, `Family 01` to `Family 40`, whose one file's sha256 starts with the
+/// family's number in hex, and an index sample for Latin.
+fn service_index() -> Index {
+    service_index_with(r#"{"Latn":{"text":"Sphinx of black quartz, judge my vow","method":"udhr","language":"en_Latn"}}"#)
+}
+
+/// [`service_index`] with `samples` as its sample texts.
+fn service_index_with(samples: &str) -> Index {
+    let families: Vec<String> = (1..=40)
+        .map(|n| {
+            format!(
+                r#"{{"family":"Family {n:02}","categories":["SANS_SERIF"],"languages":[0],"scripts":["Latn"],"license":"OFL","sample_script":"Latn",
+                "files":[{{"path":"ofl/family{n}/Family-Regular.ttf","size":1000,"sha256":"{}","style":"normal","weight":400,"axes":[],"postscript":[]}}]}}"#,
+                format!("{n:02x}").repeat(32)
+            )
+        })
+        .collect();
+    let json = format!(
+        r#"{{"schema":1,"version":"1.2","source":"google/fonts","commit":"45e3d5269e4a17d823f6d84470bc084dc5ae46f6","base_url":"https://cdn.jsdelivr.net/gh/google/fonts@45e3d5269e4a17d823f6d84470bc084dc5ae46f6/",
+        "languages":[{{"id":"en_Latn","name":"English","script":"Latn","population":1}}],
+        "scripts":[{{"id":"Latn","name":"Latin"}}],
+        "samples":{samples},
+        "families":[{}]}}"#,
+        families.join(",")
+    );
+    Index::from_json(json.as_bytes()).unwrap()
+}
+
+/// The panel over [`service_index`] with no installed fonts, previews fetched from `service` by
+/// `workers` threads, and the preview service not yet set.
+fn service_setup(name: &str, service: &Arc<FakeService>, workers: usize) -> (Harness<'static, FontsPanel>, Arc<FakeStore>) {
+    service_setup_with(name, service, workers, service_index())
+}
+
+fn service_setup_with(name: &str, service: &Arc<FakeService>, workers: usize, index: Index) -> (Harness<'static, FontsPanel>, Arc<FakeStore>) {
+    let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("flows").join(name);
+    let _ = std::fs::remove_dir_all(&root);
+    let store_dir = root.join("store");
+    std::fs::create_dir_all(&store_dir).unwrap();
+    let env = FontEnv { os: Os::Unix, root: root.clone(), font_store: Some(store_dir.clone()), ..FontEnv::default() };
+    let catalog = Arc::new(Catalog::new(env).with_font_service(false));
+    catalog.rescan();
+    let store = Arc::new(FakeStore::new(store_dir, HashMap::new()));
+    let previews = Previews::new(store.clone()).with_fetcher(service.clone()).with_cache(None).with_workers(workers);
+    let options = Options { catalog, installer: store.clone(), index: Ok(index), runner: Runner::Inline };
+    let panel = FontsPanel::new(options, Settings::default()).with_previews(previews);
+    let mut harness = Harness::builder()
+        .with_size([1120.0, 678.0])
+        .allow_missing_glyphs()
+        .with_context_setup(|ctx| install_interface_fonts(ctx, &[]))
+        .build_ui_state(|ui, app: &mut FontsPanel| app.ui(ui), panel);
+    harness.run_steps(4);
+    (harness, store)
+}
+
+/// Sets the preview service, as a host's settings page does.
+fn set_service(h: &mut Harness<'_, FontsPanel>, store: &FakeStore) {
+    store.set_preview_service(Some("http://127.0.0.1:9")).unwrap();
+    h.state_mut().reload_preview_settings();
+    settle(h);
+}
+
+/// Steps until the panel has fetched what it asks for and asks for nothing more.
+fn idle(h: &mut Harness<'_, FontsPanel>) {
+    let mut quiet = 0;
+    for _ in 0..500 {
+        h.step();
+        quiet = if h.state().loading_previews() { 0 } else { quiet + 1 };
+        if quiet == 5 {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    panic!("previews kept loading");
+}
+
+/// Steps for longer than the pause after typing.
+fn pause(h: &mut Harness<'_, FontsPanel>) {
+    let start = std::time::Instant::now();
+    while start.elapsed() < std::time::Duration::from_millis(300) {
+        h.step();
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
+/// The family numbers of the cards on screen, in list order.
+fn on_screen(h: &Harness<'_, FontsPanel>) -> Vec<usize> {
+    let by = By::new().role(Role::Button).predicate(|n| n.label().is_some_and(|l| l.starts_with("Family ") && l.len() == 9));
+    let mut shown: Vec<usize> = h.get_all(by).map(|n| n.accesskit_node().label().unwrap()[7..].parse().unwrap()).collect();
+    shown.sort();
+    shown
+}
+
+fn numbers(answered: &[(usize, String)], subset: &str) -> Vec<usize> {
+    let mut n: Vec<usize> = answered.iter().filter(|(_, s)| s == subset).map(|(n, _)| *n).collect();
+    n.sort();
+    n
+}
+
+#[test]
+fn list_previews_follow_the_screen_and_the_typed_text() {
+    let service = Arc::new(FakeService::default());
+    let (mut h, store) = service_setup("list-previews", &service, 8);
+    // No service: the list stays as it is without one.
+    settle(&mut h);
+    assert!(service.take().is_empty());
+    let preview = || By::new().predicate(|n| n.label().is_some_and(|l| l.contains("Preview") && l.contains("Family 01")));
+    assert!(h.get_all(preview()).next().is_some(), "the whole-family preview is offered");
+
+    // The previews setting off: nothing is fetched.
+    store.set_previews_enabled(false).unwrap();
+    set_service(&mut h, &store);
+    assert!(!h.state().loading_previews());
+    assert!(service.take().is_empty());
+
+    // On, with downloads (installs) still off: previews load without asking.
+    store.set_previews_enabled(true).unwrap();
+    h.state_mut().reload_preview_settings();
+    idle(&mut h);
+    assert!(!h.state().downloads_allowed());
+    assert!(h.query_by_label("Nothing is installed until you allow downloads.").is_some());
+    assert!(h.query_all(preview()).next().is_none(), "no session download while the service previews");
+    let shown = on_screen(&h);
+    assert!(shown.len() >= 3 && shown.len() < 10, "{shown:?}");
+    assert_eq!(shown, (1..=shown.len()).collect::<Vec<_>>());
+    let answered = service.take();
+    // The screen and two more below (none above the first row), then ASCII for the screen.
+    assert_eq!(numbers(&answered, "sample"), (1..=3 * shown.len()).collect::<Vec<_>>());
+    assert_eq!(numbers(&answered, "ascii"), shown);
+    assert_eq!(answered.len(), 4 * shown.len(), "{answered:?}");
+
+    type_into(&mut h, "Sample text", "Hello, world");
+    pause(&mut h);
+    idle(&mut h);
+    assert!(service.take().is_empty(), "the ASCII subsets have typed ASCII");
+
+    h.state_mut().settings_mut().sample.clear();
+    type_into(&mut h, "Sample text", "สวัสดีครับ");
+    pause(&mut h);
+    idle(&mut h);
+    let answered = service.take();
+    assert_eq!(numbers(&answered, "u"), shown, "one subset of the typed characters per row on screen");
+    assert_eq!(answered.len(), shown.len(), "{answered:?}");
+}
+
+#[test]
+fn a_sample_the_service_lacks_falls_back_to_its_characters_once() {
+    let service = Arc::new(FakeService::default());
+    *service.no_samples.lock().unwrap() = true;
+    let (mut h, store) = service_setup("list-previews-404", &service, 8);
+    store.set_previews_enabled(true).unwrap();
+    set_service(&mut h, &store);
+    idle(&mut h);
+    let shown = on_screen(&h);
+    let answered = service.take();
+    assert_eq!(numbers(&answered, "sample"), (1..=3 * shown.len()).collect::<Vec<_>>(), "{answered:?}");
+    assert_eq!(numbers(&answered, "u"), shown, "one subset of the sample's characters per row on screen");
+    for _ in 0..3 {
+        pause(&mut h);
+        idle(&mut h);
+    }
+    assert!(numbers(&service.take(), "sample").is_empty(), "the sample is not asked for again");
+}
+
+#[test]
+fn a_family_without_a_sample_text_gets_its_rows_subset() {
+    let service = Arc::new(FakeService::default());
+    let (mut h, store) = service_setup_with("list-previews-no-sample", &service, 8, service_index_with("{}"));
+    store.set_previews_enabled(true).unwrap();
+    set_service(&mut h, &store);
+    idle(&mut h);
+    let shown = on_screen(&h);
+    let answered = service.take();
+    assert!(numbers(&answered, "sample").is_empty(), "{answered:?}");
+    assert_eq!(numbers(&answered, "ascii"), shown, "{answered:?}");
+}
+
+#[test]
+fn scrolling_cancels_rows_that_left() {
+    let service = Arc::new(FakeService::default());
+    *service.held.lock().unwrap() = true;
+    let (mut h, store) = service_setup("list-previews-scroll", &service, 1);
+    set_service(&mut h, &store);
+    assert!(h.state().loading_previews());
+    assert_eq!(on_screen(&h).first(), Some(&1));
+
+    h.hover_at(egui::pos2(700.0, 400.0));
+    h.event(egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: egui::vec2(0.0, -100_000.0),
+        phase: egui::TouchPhase::Move,
+        source: egui::MouseWheelSource::Wheel,
+        modifiers: egui::Modifiers::NONE,
+    });
+    h.run_steps(30);
+    let shown = on_screen(&h);
+    assert_eq!(shown.last(), Some(&40), "{shown:?}");
+    *service.held.lock().unwrap() = false;
+    idle(&mut h);
+    let answered = service.take();
+    let first = shown[0] - shown.len();
+    assert!(!answered.is_empty());
+    assert!(answered.iter().all(|(n, _)| *n >= first), "rows that left the window were fetched: {answered:?}");
 }
