@@ -385,6 +385,13 @@ impl<T: Settings> SettingsStore<T> {
             Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
             Err(e) => return Err(e.into()),
         };
+        // A blank file still parses, so adopting it below would replace this store's document --
+        // and with it every comment and unknown key the app does not manage -- with an empty one;
+        // blank text is never written as a backup either, so the content would be lost. A blank
+        // file is not an edit to adopt: keep what this store loaded and leave the file alone.
+        if text.trim().is_empty() {
+            return Ok(None);
+        }
         let Ok(mut doc) = document::parse(&text) else {
             self.moved_aside.push(recovery::move_aside(path)?);
             return Ok(None);
