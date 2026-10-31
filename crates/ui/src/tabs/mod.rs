@@ -7,6 +7,9 @@
 
 use egui::{Id, Rect, Response, Sense, Stroke, StrokeKind, Ui, Vec2};
 
+mod dialog;
+pub use dialog::DialogTabStyle;
+
 /// Tabs visible on a strip and tabs that need an overflow menu, all in original order.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct TabFit {
