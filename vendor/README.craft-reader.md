@@ -327,6 +327,12 @@ fonts without Encoding) and #1499 (byte-aligned packed TIFF predictor rows).
 Synthetic tests cover 1/2/4/8-bit RGB rows and rendering, plus embedded TrueType
 text with absent or partial ToUnicode maps and explicit encoding precedence.
 
+A caller-owned `CancellationCheck` supplements the existing atomic cancellation flag. Its shared
+sticky latch is polled between operators, text-array items, glyphs, content windows and annotations,
+allowing an application to bound repeated interpretation work on single-threaded WebAssembly.
+No application clock, fuel amount or scheduling policy enters the backend. Facade contracts cover
+default completion, nested forms, long text and arrays, shared budgets and cancelled raster output.
+
 ## Craft patches for the flattener
 
 Local changes for craft-prepress's PDF-in adapter (`craft_prepress::flatten::pdf`), which reads
