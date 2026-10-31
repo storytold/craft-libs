@@ -524,3 +524,112 @@ fn a_footer_that_changes_height_every_pass_settles() {
     h.run();
     assert!(*h.state() - before <= 4, "the menu keeps remeasuring: {} passes in two frames", *h.state() - before);
 }
+
+/// A combo box that reports where its button and entries are, so a test can hold the button down,
+/// move onto an entry and release there, as press-and-browse does.
+struct Browsing {
+    selected: usize,
+    button: egui::Rect,
+    rows: Vec<egui::Rect>,
+    popup: egui::Id,
+}
+
+fn browsing(press_and_browse: bool) -> Harness<'static, Browsing> {
+    Harness::builder().with_size(egui::vec2(400.0, 400.0)).build_ui_state(
+        move |ui, s: &mut Browsing| {
+            s.rows.clear();
+            let inner = ComboBox::new("size", "Size").selected_text(SIZES[s.selected]).press_and_browse(press_and_browse).show_ui(ui, |ui| {
+                for (i, name) in SIZES.iter().enumerate() {
+                    let row = ui.selectable_label(i == s.selected, *name);
+                    let row = super::browse_hover(ui, row);
+                    s.rows.push(row.rect);
+                    if row.clicked() || super::browse_pick(ui, &row) {
+                        s.selected = i;
+                    }
+                }
+            });
+            s.button = inner.response.rect;
+            s.popup = super::popup_id(inner.response.id);
+        },
+        Browsing { selected: 0, button: egui::Rect::NOTHING, rows: Vec::new(), popup: egui::Id::NULL },
+    )
+}
+
+fn pointer_button(h: &mut Harness<'_, Browsing>, at: egui::Pos2, pressed: bool) {
+    if pressed {
+        h.event(egui::Event::PointerMoved(at));
+        h.step();
+    }
+    let event = egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::default() };
+    h.event(event);
+    h.step();
+}
+
+fn is_open(h: &Harness<'_, Browsing>) -> bool {
+    egui::Popup::is_id_open(&h.ctx, h.state().popup)
+}
+
+#[test]
+fn a_press_opens_the_menu_and_releasing_over_an_entry_picks_it() {
+    let mut h = browsing(true);
+    h.run();
+    let button = h.state().button.center();
+    pointer_button(&mut h, button, true);
+    assert!(is_open(&h), "the press opens the menu");
+    assert_eq!(h.state().rows.len(), SIZES.len(), "the entries are up while the button is still down");
+
+    // Let the menu settle where it will stay, as it does before the user moves.
+    h.run();
+    let entry = h.state().rows[2].center();
+    h.event(egui::Event::PointerMoved(entry));
+    h.step();
+    assert!(is_open(&h), "moving onto an entry keeps the menu open");
+
+    pointer_button(&mut h, entry, false);
+    assert_eq!(h.state().selected, 2, "the release over the third entry chooses it");
+    assert!(!is_open(&h), "and closes the menu");
+}
+
+#[test]
+fn a_press_released_back_over_the_button_leaves_the_menu_open() {
+    let mut h = browsing(true);
+    h.run();
+    let button = h.state().button.center();
+    pointer_button(&mut h, button, true);
+    pointer_button(&mut h, button, false);
+    assert!(is_open(&h), "released over the button, the menu stays up");
+    assert_eq!(h.state().selected, 0, "and nothing was chosen");
+
+    pointer_button(&mut h, button, true);
+    assert!(!is_open(&h), "pressing the button again closes it");
+}
+
+#[test]
+fn escape_closes_a_menu_opened_by_a_press() {
+    let mut h = browsing(true);
+    h.run();
+    let center = h.state().button.center();
+    pointer_button(&mut h, center, true);
+    assert!(is_open(&h));
+    h.event(egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::default() });
+    h.step();
+    assert!(!is_open(&h), "Escape closes it");
+}
+
+#[test]
+fn without_press_and_browse_the_menu_opens_and_chooses_on_release() {
+    let mut h = browsing(false);
+    h.run();
+    let button = h.state().button.center();
+    pointer_button(&mut h, button, true);
+    assert!(!is_open(&h), "the press does not open the menu");
+    pointer_button(&mut h, button, false);
+    assert!(is_open(&h), "egui's click opens it on release");
+    h.run();
+
+    let entry = h.state().rows[2].center();
+    pointer_button(&mut h, entry, true);
+    pointer_button(&mut h, entry, false);
+    assert_eq!(h.state().selected, 2, "a click on an entry still chooses it");
+    assert!(!is_open(&h), "and closes the menu");
+}
