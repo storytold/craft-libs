@@ -34,3 +34,14 @@ jobs:
       - name: Check inherited Linux ACLs
         if: runner.os == 'Linux'
         run: cargo test -p craft-atomic --locked -- --ignored --nocapture
+
+  wasm:
+    name: Atomic WASM
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - run: cargo check -p craft-atomic --target wasm32-unknown-unknown
+
