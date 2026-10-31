@@ -1,0 +1,16 @@
+[package]
+name = "craft-web-host"
+description = "The host messages between a Craft app's web build and the page that hosts it: one contract and one bridge for every app."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+# Already in every web build's Cargo.lock through eframe.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2"
+web-sys = { version = "0.3", features = ["Blob", "CustomEvent", "CustomEventInit", "Element", "Event", "EventTarget", "Location", "MessageEvent", "Window"] }
+
+[lints]
+workspace = true

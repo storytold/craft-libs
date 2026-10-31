@@ -45,6 +45,7 @@ craft-text = { path = "crates/text" }
 craft-ui = { path = "crates/ui" }
 craft-update = { path = "crates/update" }
 craft-window = { path = "crates/window" }
+craft-web-host = { path = "crates/web-host" }
 egui = { version = "0.37", default-features = false }
 rayon = "1"
 serde = { version = "1", features = ["derive"] }
