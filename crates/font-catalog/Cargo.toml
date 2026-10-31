@@ -15,17 +15,17 @@ default = ["system"]
 system = ["dep:fontique"]
 
 [dependencies]
-skrifa = { version = "0.47", default-features = false, features = ["std"] }
+skrifa = { version = "0.48", default-features = false, features = ["std"] }
 thiserror = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-fontique = { version = "0.11.1", default-features = false, features = ["system", "fontconfig-dlopen"], optional = true }
+fontique = { version = "0.12.0", default-features = false, features = ["system", "fontconfig-dlopen"], optional = true }
 
 [target.'cfg(windows)'.dependencies]
-windows-registry = "0.6"
+windows-registry = "0.100"
 
 [dev-dependencies]
-write-fonts = "0.54"
+write-fonts = "0.55"
 
 [lints]
 workspace = true
