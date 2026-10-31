@@ -987,9 +987,10 @@ impl Stack {
 }
 
 /// A system font provider that prefers `locale`'s fonts, shared by every stack and check that asks
-/// for the same locale. Every locale's provider asks one index of the installed fonts, built once
-/// on a background thread; a lookup before it is built waits for it. `None` without the
-/// `system_fonts` feature and on the web.
+/// for the same locale. Every locale's provider asks one index of the installed fonts (the system's
+/// and the Craft font store's, from craft-font-catalog), built on a background thread and rebuilt
+/// when the catalog rescans; a lookup before it is built, or while it is rebuilt, waits for it.
+/// `None` without the `system_fonts` feature and on the web.
 ///
 /// To ask whether installed fonts can draw a language, pass it to
 /// [`UiFonts::system_provider`] and check with [`assert_covers_with_system`] or

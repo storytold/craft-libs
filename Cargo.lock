@@ -1042,6 +1042,7 @@ dependencies = [
 name = "craft-ui"
 version = "0.1.0"
 dependencies = [
+ "craft-font-catalog",
  "craft-fonts-build",
  "craft-i18n",
  "eframe",
