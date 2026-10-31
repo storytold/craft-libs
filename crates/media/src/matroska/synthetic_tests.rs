@@ -518,8 +518,8 @@ fn warnings_are_capped() {
     el(&mut g, SEEK_HEAD, &sh2);
     el(&mut g, VOID, &vec![0xEC; 100_000]);
     let file = open_with(&g[..], &OpenOptions::default()).unwrap();
-    assert!(file.warnings.len() <= 300, "{} warnings", file.warnings.len());
-    assert!(file.warnings.len() > 3, "the cap must still leave warnings");
+    assert_eq!(file.warnings.len(), 257, "256 kept and the note");
+    assert_eq!(file.warnings.last().map(String::as_str), Some("further warnings omitted"));
 }
 
 /// `prefix` followed by zeros up to `len` bytes, without holding them.
@@ -535,6 +535,9 @@ impl ByteSource for Sparse {
     fn read_at(&self, offset: u64, buf: &mut [u8]) -> std::io::Result<()> {
         if offset.checked_add(buf.len() as u64).is_none_or(|e| e > self.len) {
             return Err(std::io::ErrorKind::UnexpectedEof.into());
+        }
+        if buf.len() > 64 << 20 {
+            return Err(std::io::Error::other("a read this large is the bug under test"));
         }
         for (i, b) in buf.iter_mut().enumerate() {
             *b = self.prefix.get((offset as usize).saturating_add(i)).copied().unwrap_or(0);
@@ -554,4 +557,56 @@ fn a_block_larger_than_u32_is_not_indexed_with_a_truncated_size() {
     let len = prefix.len() as u64 + frame;
     let f = open_with(Sparse { prefix, len }, &OpenOptions::default()).unwrap();
     assert!(f.tracks[0].samples.is_empty(), "{:?}", f.tracks[0].samples);
+}
+
+#[test]
+fn a_laced_block_larger_than_the_cap_is_skipped_without_reading_its_body() {
+    // flags 0x02 / 0x06 / 0x04: Xiph, EBML and fixed-size lacing
+    for flags in [0x82u8, 0x86, 0x84] {
+        let frame = (1u64 << 32) + 100;
+        let mut hdr = Vec::new();
+        write_id(&mut hdr, SIMPLE_BLOCK);
+        ebml::write_size(&mut hdr, 4 + frame, 8);
+        hdr.extend_from_slice(&[0x81, 0, 0, flags]);
+        let prefix = one_cluster(0, &hdr);
+        let len = prefix.len() as u64 + frame;
+        let f = open_with(Sparse { prefix, len }, &OpenOptions::default());
+        let f = f.unwrap_or_else(|e| panic!("flags {flags:#x}: {e:?}"));
+        assert!(f.tracks[0].samples.is_empty(), "flags {flags:#x}: {:?}", f.tracks[0].samples);
+    }
+}
+
+/// Fake Cluster candidates (each costs the resync two window refills), then a real Cluster.
+fn damaged_before_a_cluster() -> Vec<u8> {
+    let mut unit = Vec::new();
+    write_id(&mut unit, CLUSTER);
+    ebml::write_size(&mut unit, 512 << 10, 8);
+    write_id(&mut unit, VOID);
+    ebml::write_size(&mut unit, 64 << 10, 3);
+    let mut f = one_cluster(0, &[]);
+    // cut the real cluster off: keep EBML, Segment, Info and Tracks
+    let cluster_at = f.windows(4).position(|w| w == CLUSTER.to_be_bytes()).unwrap();
+    f.truncate(cluster_at);
+    f.push(0x00);
+    // about 50 MiB of recovery reads: under the 64 MiB budget once, over it twice
+    for _ in 0..400 {
+        f.extend_from_slice(&unit);
+    }
+    f.resize(f.len() + (700 << 10), 0);
+    write_id(&mut f, CLUSTER);
+    write_unknown_size(&mut f, 8);
+    el_uint(&mut f, TIMESTAMP, 0);
+    el(&mut f, SIMPLE_BLOCK, &block(1, 0, 0x80, &[1, 2, 3]));
+    f
+}
+
+#[test]
+fn building_the_index_gets_its_own_recovery_budget() {
+    let f = damaged_before_a_cluster();
+    let opts = OpenOptions { index: false, verify_crc: false };
+    let one = open_with(&f[..], &OpenOptions::default()).unwrap();
+    assert_eq!(one.tracks[0].samples.len(), 1, "one pass finds the cluster: {:?}", one.warnings);
+    let mut d = Demuxer::with_options(&f[..], opts).unwrap();
+    d.build_index().unwrap();
+    assert_eq!(d.file().tracks[0].samples.len(), 1, "the second pass found the cluster too: {:?}", d.file().warnings);
 }

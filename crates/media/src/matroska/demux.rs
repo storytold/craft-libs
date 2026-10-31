@@ -22,6 +22,9 @@ const WIN: usize = 64 * 1024;
 const RECOVERY_BUDGET: u64 = 64 << 20;
 /// Largest EBML header element read. A real one is a few dozen bytes.
 const MAX_EBML_HEADER: u64 = 4096;
+/// Largest laced block body read into memory to split its frames. Laced blocks hold small frames
+/// (audio); a bigger one is skipped as damage rather than read whole.
+const MAX_LACED_BODY: u64 = 16 << 20;
 /// Warnings kept per file; the rest are counted in one last entry.
 const MAX_WARNINGS: usize = 256;
 /// Upper bound for level-1 metadata elements read into memory (Info, Tracks, Cues, Tags…).
@@ -446,7 +449,11 @@ fn parse_block<S: ByteSource + ?Sized>(io: &mut Io<'_, S>, data_start: u64, len:
         let Ok(size) = u32::try_from(len.saturating_sub(hdr)) else { return Ok(None) };
         vec![(data_start + hdr, size)]
     } else {
-        let body = io.read_vec(data_start + hdr, len - hdr)?;
+        let body_len = len.saturating_sub(hdr);
+        if body_len > MAX_LACED_BODY {
+            return Ok(None);
+        }
+        let body = io.read_vec(data_start + hdr, body_len)?;
         let Ok(laced) = parse_lacing(lacing, &body) else { return Ok(None) };
         let mut frames = Vec::with_capacity(laced.len());
         for (o, l) in laced {
@@ -668,6 +675,8 @@ pub fn open_with<S: ByteSource>(src: S, opts: &OpenOptions) -> Result<MkvFile> {
 }
 
 fn open_impl<S: ByteSource + ?Sized>(src: &S, opts: &OpenOptions, cache: &mut Cache) -> Result<MkvFile> {
+    // each pass over the file (open, building the index) gets the whole budget
+    cache.recovery_left = RECOVERY_BUDGET;
     let mut io = Io::new(src, cache);
     let len = io.len;
     // EBML header (tolerate leading junk in the first 64 KiB)
@@ -1084,6 +1093,8 @@ impl<S: ByteSource> Demuxer<S> {
     pub fn with_options(src: S, opts: OpenOptions) -> Result<Self> {
         let mut cache = Cache::default();
         let file = open_impl(&src, &opts, &mut cache)?;
+        // reading packets recovers from damage on its own budget, not what the open left
+        cache.recovery_left = RECOVERY_BUDGET;
         let pos = file.first_cluster.unwrap_or(file.segment_end);
         let lookup = track_index(&file.tracks);
         Ok(Self { src, file, opts, cache, lookup, pos, cluster: None, pending: VecDeque::new(), skip_laces: None, done: false })
