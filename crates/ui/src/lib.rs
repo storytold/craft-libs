@@ -18,6 +18,7 @@ pub mod layout;
 pub mod localized;
 pub mod panes;
 pub mod printing;
+pub mod slider;
 pub mod tabs;
 #[cfg(all(feature = "screen-testing", not(target_arch = "wasm32")))]
 pub mod testing;
