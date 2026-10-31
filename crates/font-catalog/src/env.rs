@@ -207,17 +207,27 @@ pub fn font_dirs(env: &FontEnv) -> Vec<PathBuf> {
 /// fonts it downloads), which other apps don't see. Apps that open Office documents add them to
 /// their catalog ([`crate::Catalog::set_app_dirs`]).
 pub fn office_font_dirs(env: &FontEnv) -> Vec<PathBuf> {
+    let mut dirs = office_cloud_font_dirs(env);
+    dirs.extend(office_bundled_font_dirs(env));
+    dirs
+}
+
+/// The folders Office downloads its cloud fonts into: in Office's group container on macOS,
+/// whose reading can raise a privacy prompt, and under `%LOCALAPPDATA%` on Windows.
+pub(crate) fn office_cloud_font_dirs(env: &FontEnv) -> Vec<PathBuf> {
     match env.os {
-        Os::MacOs => {
-            let mut dirs: Vec<PathBuf> =
-                env.home.iter().map(|h| h.join("Library/Group Containers/UBF8T346G9.Office/FontCache/4/CloudFonts")).collect();
-            dirs.extend(
-                ["Microsoft Word", "Microsoft Excel", "Microsoft PowerPoint", "Microsoft Outlook"]
-                    .map(|app| env.rooted(format!("/Applications/{app}.app/Contents/Resources/DFonts"))),
-            );
-            dirs
-        }
+        Os::MacOs => env.home.iter().map(|h| h.join("Library/Group Containers/UBF8T346G9.Office/FontCache/4/CloudFonts")).collect(),
         Os::Windows => env.local_app_data.iter().map(|l| l.join("Microsoft\\FontCache\\4\\CloudFonts")).collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// The fonts inside the Office apps' bundles on macOS (`DFonts`); none elsewhere.
+pub(crate) fn office_bundled_font_dirs(env: &FontEnv) -> Vec<PathBuf> {
+    match env.os {
+        Os::MacOs => ["Microsoft Word", "Microsoft Excel", "Microsoft PowerPoint", "Microsoft Outlook"]
+            .map(|app| env.rooted(format!("/Applications/{app}.app/Contents/Resources/DFonts")))
+            .into(),
         _ => Vec::new(),
     }
 }

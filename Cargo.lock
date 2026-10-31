@@ -807,6 +807,7 @@ name = "craft-font-catalog"
 version = "0.1.0"
 dependencies = [
  "fontique",
+ "libc",
  "skrifa 0.47.0",
  "thiserror 2.0.21",
  "windows-registry",
