@@ -176,6 +176,24 @@ pub fn is_self_updating(app: &App) -> bool {
     current(app).is_some()
 }
 
+/// Whether `exe` sits in a folder a macOS package manager owns (Homebrew, MacPorts, Nix).
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn macos_package_manager_owns(exe: &Path) -> bool {
+    // Homebrew (both prefixes), MacPorts and the Nix store; component-wise, so `/opt/homebrewed` is not one
+    ["/opt/homebrew", "/usr/local/Cellar", "/usr/local/Homebrew", "/usr/local/opt", "/opt/local", "/nix"].iter().any(|root| exe.starts_with(root))
+}
+
+/// Whether `exe` sits in a folder a Windows package manager owns (scoop, winget, Chocolatey, the
+/// Store).
+#[cfg_attr(not(windows), allow(dead_code))]
+fn windows_package_manager_owns(exe: &Path) -> bool {
+    // Compared as text so the rule reads the same wherever it is tested: either separator, any case.
+    let text = exe.to_string_lossy().to_lowercase();
+    let parts: Vec<&str> = text.split(['\\', '/']).collect();
+    parts.contains(&"windowsapps")
+        || parts.windows(2).any(|w| matches!((w[0], w[1]), ("scoop", "apps" | "shims") | ("winget", "packages") | ("chocolatey", "lib" | "bin")))
+}
+
 #[cfg(target_os = "macos")]
 fn detect(app: &App, exe: &Path) -> Option<Install> {
     if let Some(bundle) = exe.ancestors().find(|p| p.extension().is_some_and(|e| e == "app"))
@@ -184,6 +202,11 @@ fn detect(app: &App, exe: &Path) -> Option<Install> {
         && id == app.bundle_id()
     {
         return Some(Install::MacApp(bundle.to_path_buf()));
+    }
+    // A package manager's copy is its to update (replacing it in place leaves its record stale), and
+    // a program inside another app's bundle is that app's file.
+    if macos_package_manager_owns(exe) || exe.ancestors().any(|p| p.extension().is_some_and(|e| e == "app")) {
+        return None;
     }
     if exe.is_file() {
         return Some(Install::Standalone(exe.to_path_buf()));
@@ -203,6 +226,10 @@ fn detect(app: &App, exe: &Path) -> Option<Install> {
     // installed for everyone must never be unpacked over as if it were a loose folder.
     if crate::msi_copy::windows::find(app, exe).is_some() {
         return Some(Install::Msi(exe.to_path_buf()));
+    }
+    // scoop, winget, Chocolatey and the Store own their copies; an in-place replace leaves their record stale
+    if windows_package_manager_owns(exe) {
+        return None;
     }
     if exe.is_file() {
         return Some(Install::Standalone(exe.to_path_buf()));
@@ -895,6 +922,71 @@ fn run_step(app: &App, reference: &Path, pid: u32, exe: &Path, step: &Finish, wa
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn macos_package_manager_folders_are_recognised() {
+        for owned in [
+            "/opt/homebrew/bin/artcraft-launcher",
+            "/opt/homebrew/Cellar/artcraft/1.0/bin/artcraft-launcher",
+            "/usr/local/Cellar/artcraft/1.0/bin/artcraft-launcher",
+            "/usr/local/Homebrew/bin/artcraft-launcher",
+            "/usr/local/opt/artcraft/bin/artcraft-launcher",
+            "/opt/local/bin/artcraft-launcher",
+            "/nix/store/abc123-artcraft/bin/artcraft-launcher",
+        ] {
+            assert!(macos_package_manager_owns(Path::new(owned)), "{owned}");
+        }
+        for loose in [
+            "/Users/ada/bin/artcraft-launcher",
+            "/usr/local/bin/artcraft-launcher",
+            "/Users/ada/opt/homebrew/bin/artcraft-launcher",
+            "/opt/homebrewed/artcraft-launcher",
+            "/Applications/Tools/artcraft-launcher",
+        ] {
+            assert!(!macos_package_manager_owns(Path::new(loose)), "{loose}");
+        }
+    }
+
+    #[test]
+    fn windows_package_manager_folders_are_recognised() {
+        for owned in [
+            r"C:\Users\Ada\scoop\apps\artcraft-launcher\current\artcraft-launcher.exe",
+            r"C:\Users\Ada\scoop\shims\artcraft-launcher.exe",
+            r"C:\ProgramData\scoop\apps\artcraft-launcher\current\artcraft-launcher.exe",
+            r"C:\Users\Ada\AppData\Local\Microsoft\WinGet\Packages\Storytold.ArtCraftLauncher_x\artcraft-launcher.exe",
+            r"C:\ProgramData\chocolatey\lib\artcraft-launcher\tools\artcraft-launcher.exe",
+            r"C:\Program Files\WindowsApps\Storytold.ArtCraftLauncher_1.0_x64\artcraft-launcher.exe",
+        ] {
+            assert!(windows_package_manager_owns(Path::new(owned)), "{owned}");
+        }
+        for loose in [
+            r"C:\Tools\ArtCraft Launcher\artcraft-launcher.exe",
+            r"D:\myscoopy\apps\artcraft-launcher.exe",
+            r"C:\Users\Ada\Downloads\artcraft-launcher.exe",
+        ] {
+            assert!(!windows_package_manager_owns(Path::new(loose)), "{loose}");
+        }
+    }
+
+    /// A program inside an `.app` bundle that is not this app's own (a different bundle id) is
+    /// another app's file, not a loose copy of ours to replace.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn an_executable_in_another_apps_bundle_is_not_self_updating() {
+        let dir = tempfile::tempdir().unwrap();
+        let macos = dir.path().join("Other.app/Contents/MacOS");
+        std::fs::create_dir_all(&macos).unwrap();
+        let mut info = plist::Dictionary::new();
+        info.insert("CFBundleIdentifier".into(), plist::Value::String("com.example.other".into()));
+        plist::Value::Dictionary(info).to_file_xml(dir.path().join("Other.app/Contents/Info.plist")).unwrap();
+        let exe = macos.join("other");
+        std::fs::write(&exe, b"binary").unwrap();
+        assert_eq!(detect(&crate::suite::LAUNCHER, &exe), None);
+        // a loose copy outside any bundle is still a standalone one
+        let loose = dir.path().join("artcraft-launcher");
+        std::fs::write(&loose, b"binary").unwrap();
+        assert_eq!(detect(&crate::suite::LAUNCHER, &loose), Some(Install::Standalone(loose.clone())));
+    }
 
     #[cfg(unix)]
     #[test]
