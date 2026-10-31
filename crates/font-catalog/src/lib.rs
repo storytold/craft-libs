@@ -10,6 +10,9 @@
 //! registry's font list. The scan reads each file's table directory and its `name`, `OS/2` and
 //! `fvar` tables, never whole files, and a rescan reads only files that changed.
 //!
+//! Apps start it, refresh it on window activation and learn which families changed through
+//! [`app`].
+//!
 //! ```no_run
 //! use craft_font_catalog::{Catalog, Match};
 //!
@@ -20,6 +23,7 @@
 //! }
 //! ```
 
+pub mod app;
 mod catalog;
 mod env;
 mod fontconfig;
@@ -28,7 +32,7 @@ mod scan;
 mod suitcase;
 pub mod system;
 
-pub use catalog::{Catalog, FontData, FontFileError, Limits, Lister, LoadedFace, Match, Watch};
+pub use catalog::{Catalog, Changes, FontData, FontFileError, Limits, Lister, LoadedFace, Match, Scope, Watch};
 pub use env::{FontEnv, Os, font_dirs, font_store_dir, office_font_dirs};
 pub use fontconfig::fontconfig_dirs;
 pub use scan::{FaceInfo, LocalizedName, Source, is_font_file, style_italic, style_weight, style_width};
