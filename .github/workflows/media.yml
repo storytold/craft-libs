@@ -3,9 +3,9 @@ name: Shared media
 on:
   push:
     branches: [main]
-    paths: ["crates/media/**", "Cargo.toml", "Cargo.lock", ".github/workflows/media.yml"]
+    paths: ["crates/media/**", "crates/media-testkit/**", "Cargo.toml", "Cargo.lock", ".github/workflows/media.yml"]
   pull_request:
-    paths: ["crates/media/**", "Cargo.toml", "Cargo.lock", ".github/workflows/media.yml"]
+    paths: ["crates/media/**", "crates/media-testkit/**", "Cargo.toml", "Cargo.lock", ".github/workflows/media.yml"]
   workflow_dispatch:
 
 permissions:
@@ -37,6 +37,8 @@ jobs:
       - run: cargo clippy -p craft-media --all-targets --locked -- -D warnings
       - run: cargo clippy -p craft-media --all-targets --locked --no-default-features --features matroska -- -D warnings
       - run: cargo clippy -p craft-media --all-targets --locked --all-features -- -D warnings
+      - run: cargo clippy -p craft-media-testkit --all-targets --locked -- -D warnings
+      - run: cargo clippy -p craft-media --all-targets --locked --no-default-features --features serde -- -D warnings
       - run: cargo check -p craft-media --all-features --locked --target wasm32-unknown-unknown
   test:
     timeout-minutes: 15
