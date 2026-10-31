@@ -14,6 +14,7 @@ Discussion: [storytold/craft-libs#12](https://github.com/storytold/craft-libs/is
 | Recovery and autosave files | Platform data folder (`paths::data_dir`) | Not settings; must survive a settings reset |
 | Settings that belong to a library or project (LightCraft) | Inside that folder, via `SettingsStore::open_at` | Travels with the library |
 | API keys and tokens | The OS keychain | Never in a plain-text file |
+| Suite themes: the suite's theme choice and the user's theme library | `ArtCraft/themes` in the local config folder, via `craft-theme-store` ([suite-themes.md](suite-themes.md#file-format-and-storage)) | Shared by every Craft app and machine-local; writes take a lock and merge, unlike `config.toml` |
 
 ## The config folder
 

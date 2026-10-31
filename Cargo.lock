@@ -1039,11 +1039,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-theme"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "craft-theme-store"
+version = "0.1.0"
+dependencies = [
+ "craft-atomic",
+ "craft-theme",
+ "dirs",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "craft-ui"
 version = "0.1.0"
 dependencies = [
  "craft-fonts-build",
  "craft-i18n",
+ "craft-theme",
  "eframe",
  "egui",
  "egui_extras",

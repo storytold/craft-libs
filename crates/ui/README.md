@@ -2,7 +2,7 @@
 
 `craft-ui` provides small egui components with application-supplied styles. `icons` prepares
 embedded SVG catalogs; `buttons` paints accessible icon buttons; `tabs` handles tab fitting and
-interaction; `layout` provides toolbar fitting, split geometry and resize handles; `theme` shares widget-state styling.
+interaction; `layout` provides toolbar fitting, split geometry and resize handles; `theme` shares widget-state styling and bridges suite themes to egui.
 `docking` supplies transactional panel moves and an optional docking surface.
 `printing` supplies printer/job controls and asynchronous feedback used by WordCraft and GridCraft.
 `fonts` installs the UI font stack, the same fallback order in every app.
@@ -221,6 +221,10 @@ selection colors, shadows, spacing, context storage and preference serialization
 application; fonts are installed by `fonts`, below. See the
 [eight-app comparison](../../docs/theme-infrastructure.md) for the exact common operation and the
 differences preserved by the adapters.
+
+`theme::color32` converts a [`craft-theme`](../theme/README.md) colour to egui's, and
+`theme::install(ctx, light, dark)` sets egui's light and dark styles and `ThemePreference::System`
+for an app that maps a suite theme onto its own styles ([suite themes](../../docs/suite-themes.md)).
 
 ## UI fonts
 
