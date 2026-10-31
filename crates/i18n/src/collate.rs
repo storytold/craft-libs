@@ -30,6 +30,7 @@ impl Collator {
     /// Sorting for `locale`, a language code such as `sv`, `pt-br` or `zh-hant` (any case, `-`
     /// or `_`, glibc forms such as `sv_SE.UTF-8` and `sr_RS@latin`). A BCP 47 collation type
     /// picks another order where there is one: `zh-hant-u-co-pinyin`, `zh-hans-u-co-stroke`.
+    #[must_use]
     pub fn new(locale: &str) -> Collator {
         let mut prefs: CollatorPreferences = Locale::try_from_str(&bcp47(locale)).unwrap_or(Locale::UNKNOWN).into();
         prefs.numeric_ordering = Some(CollationNumericOrdering::True);
@@ -46,6 +47,7 @@ impl Collator {
     /// the collation counts as equal (`Layer 2` and `Layer 02`) is in code point order, so a sort
     /// doesn't depend on the input order. Without collation data (never with the embedded data)
     /// this is code point order.
+    #[must_use]
     pub fn compare(&self, a: &str, b: &str) -> Ordering {
         match &self.0 {
             Some(c) => c.as_borrowed().compare(a, b).then_with(|| a.cmp(b)),

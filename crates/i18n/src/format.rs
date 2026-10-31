@@ -4,7 +4,7 @@
 use std::fmt;
 
 use fixed_decimal::{Decimal, Sign};
-use icu_decimal::{DecimalFormatter, parts};
+use icu_decimal::{DecimalFormatter, options::DecimalFormatterOptions, parts};
 use icu_locale_core::Locale;
 use icu_locale_core::extensions::unicode::{key, value};
 use writeable::{Part, PartsWrite, Writeable};
@@ -46,7 +46,8 @@ impl Format {
         if digits == Digits::Latin {
             locale.extensions.unicode.keywords.set(key!("nu"), value!("latn"));
         }
-        let decimal = data::provider().and_then(|p| DecimalFormatter::try_new_with_buffer_provider(p, (&locale).into(), Default::default()).ok());
+        let decimal = data::provider()
+            .and_then(|p| DecimalFormatter::try_new_with_buffer_provider(p, (&locale).into(), DecimalFormatterOptions::default()).ok());
         let mut format = Format { decimal, group: None, point: None, percent: ("", "%"), marks: Marks::default() };
         // The locale's own separators and digits, read from a number that shows them all.
         let probe = format.parts(&Decimal::try_from_str("-1234567.5").unwrap_or_default());
@@ -81,6 +82,7 @@ impl Format {
     }
 
     /// The format for a locale tag (`de-CH`, `ar-EG`), with the locale's own digits.
+    #[must_use]
     pub fn from_tag(tag: &str) -> Format {
         Format::new(&Region::from_tag(tag), Digits::Locale)
     }
@@ -92,6 +94,7 @@ impl Format {
 
     /// `value` rounded to `decimals` digits after the decimal separator; infinities and NaN are
     /// `∞`, `-∞` and `NaN`.
+    #[must_use]
     pub fn number(&self, value: f64, decimals: usize) -> String {
         match to_decimal(value, decimals) {
             Some(d) => self.write(&d),
@@ -101,6 +104,7 @@ impl Format {
 
     /// [`Self::number`] without grouping separators, for values such as pixel sizes and years:
     /// `1920`, `١٩٢٠`, `1234,5`.
+    #[must_use]
     pub fn number_ungrouped(&self, value: f64, decimals: usize) -> String {
         match to_decimal(value, decimals) {
             Some(d) => {
@@ -113,6 +117,7 @@ impl Format {
 
     /// `ratio` as a percentage with `decimals` digits after the decimal separator: `0.5` is
     /// `50%`, `50 %` (French, German), `%50` (Turkish), `٥٠٪؜` (Egyptian Arabic).
+    #[must_use]
     pub fn percent(&self, ratio: f64, decimals: usize) -> String {
         let Some(d) = to_decimal(ratio * 100.0, decimals) else {
             return format!("{}{}{}", self.percent.0, non_finite(ratio), self.percent.1);
@@ -212,7 +217,7 @@ impl PartsWrite for Sink<'_> {
                 _ => return result,
             };
             if slot.is_empty() {
-                *slot = written.to_owned();
+                written.clone_into(slot);
             }
         }
         result
@@ -370,7 +375,7 @@ mod tests {
         for (tag, want) in
             [("en", "50%"), ("de", "50\u{a0}%"), ("fr", "12,5\u{a0}%"), ("tr", "%50"), ("ar-EG", "٥٠٪\u{61c}"), ("fa", "۵۰٪"), ("hi", "50%")]
         {
-            let decimals = if tag == "fr" { 1 } else { 0 };
+            let decimals = usize::from(tag == "fr");
             let ratio = if tag == "fr" { 0.125 } else { 0.5 };
             assert_eq!(Format::from_tag(tag).percent(ratio, decimals), want, "{tag}");
         }
