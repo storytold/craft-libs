@@ -43,6 +43,7 @@ craft-settings = { path = "crates/settings" }
 craft-text = { path = "crates/text" }
 craft-ui = { path = "crates/ui" }
 craft-update = { path = "crates/update" }
+craft-vectorcraft-format = { path = "crates/vectorcraft-format" }
 craft-window = { path = "crates/window" }
 egui = { version = "0.37", default-features = false }
 rayon = "1"

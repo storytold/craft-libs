@@ -87,6 +87,9 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   for 47 more languages (one cargo feature each).
 - [`craft-ui`](crates/ui/README.md): SVG catalogs, icon buttons, tabs, pane controls, transactional docking, print settings and theme helpers for egui frontends;
   assets, themes, localization and command handling stay in each app. Requires Rust 1.95 or later.
+- [`craft-vectorcraft-format`](crates/vectorcraft-format/README.md): the envelope of VectorCraft's
+  `.vectorcraft` file: its members, versions, embedded images and the data after the JSON, with the
+  document as a type parameter. The document and its migrations stay in VectorCraft.
 - [Shared UI component audit](docs/ui-components-audit.md): source inventory, extraction priorities
   and compatibility boundaries across the Craft suite.
 - [Theme infrastructure](docs/theme-infrastructure.md): eight-app comparison and the small shared
