@@ -266,7 +266,12 @@ fn internal_width_input_is_suppressed_only_when_explicitly_owned_through_overrid
 #[test]
 fn exclusive_docked_groups_skip_stock_body_bands_but_keep_column_edges() {
     for owned in [false, true] {
-        for zone in [Zone::Top, Zone::Bottom, Zone::Left, Zone::Right] {
+        for (zone, anchor, inset) in [
+            (Zone::Top, egui::Align2::CENTER_TOP, vec2(0.0, 50.0)),
+            (Zone::Bottom, egui::Align2::CENTER_BOTTOM, vec2(0.0, -20.0)),
+            (Zone::Left, egui::Align2::LEFT_CENTER, vec2(20.0, 0.0)),
+            (Zone::Right, egui::Align2::RIGHT_CENTER, vec2(-20.0, 0.0)),
+        ] {
             let ctx = Context::default();
             let area = Id::unique("owned-dock-targets");
             let layout = Layout {
@@ -293,13 +298,7 @@ fn exclusive_docked_groups_skip_stock_body_bands_but_keep_column_edges() {
             let target = target.expect("the docked group is drawn");
             let from = pos2(550.0, 140.0);
             step(vec![Event::PointerMoved(from), button(from, true)], true);
-            let to = match zone {
-                Zone::Top => pos2(target.center().x, target.top() + 50.0),
-                Zone::Bottom => pos2(target.center().x, target.bottom() - 20.0),
-                Zone::Left => pos2(target.left() + 20.0, target.center().y),
-                Zone::Right => pos2(target.right() - 20.0, target.center().y),
-                Zone::Center => unreachable!(),
-            };
+            let to = anchor.pos_in_rect(&target) + inset;
             step(vec![Event::PointerMoved(to)], false);
             let (out, _) = step(vec![Event::PointerMoved(to), button(to, false)], false);
             let group_drop = out.actions.iter().any(|a| {
