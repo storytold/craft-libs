@@ -356,6 +356,11 @@ pub(crate) fn data_faces(data: &[u8], max_faces: u32, path: Option<&Path>, sourc
 /// and `OS/2` tables, at most `max_read` bytes in all: a scan opens thousands of files, many of
 /// them megabytes long. A Mac suitcase font's `sfnt` resources are read instead.
 pub(crate) fn file_faces(path: &Path, max_read: u64, source: Source) -> Vec<Face> {
+    opened_file_faces(path, max_read, source, false)
+}
+
+/// [`file_faces`], opening the file with [`open_regular`]'s `no_follow`.
+pub(crate) fn opened_file_faces(path: &Path, max_read: u64, source: Source, no_follow: bool) -> Vec<Face> {
     if crate::suitcase::is_suitcase(path) {
         if crate::suitcase::fork_len(path) > max_read {
             return vec![];
@@ -369,10 +374,33 @@ pub(crate) fn file_faces(path: &Path, max_read: u64, source: Source) -> Vec<Face
         }
         return faces;
     }
-    match std::fs::File::open(path) {
+    match open_regular(path, no_follow) {
         Ok(file) => reader_faces(file, MAX_FACES, max_read, path, source),
         Err(_) => vec![],
     }
+}
+
+pub(crate) fn not_a_regular_file() -> std::io::Error {
+    std::io::Error::new(std::io::ErrorKind::InvalidInput, "not a regular file")
+}
+
+/// `path` opened for reading, when it is a regular file (after following links). The check is
+/// on the open file, so a FIFO or device swapped in after an earlier check is refused too; on
+/// Unix the open doesn't wait for a FIFO's writer (`O_NONBLOCK`, which reads of a regular file
+/// ignore). With `no_follow`, on Unix a link as the last component is refused (`O_NOFOLLOW`);
+/// links in the folders above it are still followed.
+pub(crate) fn open_regular(path: &Path, no_follow: bool) -> std::io::Result<std::fs::File> {
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::custom_flags(&mut options, libc::O_NONBLOCK | if no_follow { libc::O_NOFOLLOW } else { 0 });
+    #[cfg(not(unix))]
+    let _ = no_follow;
+    let file = options.open(path)?;
+    if !file.metadata()?.is_file() {
+        return Err(not_a_regular_file());
+    }
+    Ok(file)
 }
 
 fn reader_faces(mut file: impl std::io::Read + std::io::Seek, max_faces: u32, max_read: u64, path: &Path, source: Source) -> Vec<Face> {
