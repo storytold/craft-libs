@@ -528,7 +528,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
             }
         };
         let mut previous: Option<&P> = None;
-        for ((group, rect), owned) in column.groups.iter().zip(&rects).zip(owned) {
+        for ((group, rect), owned) in column.groups.iter().zip(&rects).zip(&owned) {
             let Some(anchor) = group.panels.first() else { continue };
             if let Some(above) = previous {
                 let band = Rect::from_x_y_ranges(xs, (rect.top() - half)..=(rect.top() + half));
@@ -544,13 +544,14 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
                 self.dock_groups.push(DockGroup {
                     body,
                     center,
-                    sides: [None, None, (!owned).then(|| (above, line(rect.top()))), (!owned).then(|| (below, line(rect.bottom())))],
+                    sides: [None, None, (!*owned).then(|| (above, line(rect.top()))), (!*owned).then(|| (below, line(rect.bottom())))],
                 });
             }
             previous = Some(anchor);
         }
         // The room under the last group, when every group is minimized, stacks below it.
         if let Some(last) = previous
+            && !owned.last().copied().unwrap_or(false)
             && top < view.bottom()
         {
             let band = Rect::from_x_y_ranges(xs, top..=view.bottom());

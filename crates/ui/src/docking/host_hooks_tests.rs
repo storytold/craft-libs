@@ -317,3 +317,49 @@ fn exclusive_docked_groups_skip_stock_body_bands_but_keep_column_edges() {
         }
     }
 }
+
+#[test]
+fn owned_minimized_groups_skip_the_trailing_stock_target() {
+    for owned in [false, true] {
+        let ctx = Context::default();
+        let area = Id::unique("owned-dock-targets");
+        let mut layout = Layout {
+            root: Some(Node::Dock { side: Side::Start, columns: vec![Column::new(vec![Group::new(vec![1, 2], 0)], 240.0)] }),
+            floating: vec![Floating::single(vec![99], 0, [500.0, 100.0, 200.0, 150.0])],
+        };
+        if let Some(Node::Dock { columns, .. }) = &mut layout.root {
+            columns[0].groups[0].minimized = true;
+        }
+        let mut host = Host { exclusive: owned, stock_group: Some(99), ..Default::default() };
+        let mut step = |events, start: bool| {
+            let mut out = DockOutput::default();
+            ctx.run_ui(input(events), |ui| {
+                let mut style = DockStyle::from_ui(ui);
+                super::floating_tests::frame_style(&mut style);
+                out = DockArea::new(area).show_content(ui, &layout, &style, &mut host);
+                if start {
+                    assert!(begin_drag(ui.ctx(), area, 99, Rect::from_min_size(pos2(500.0, 100.0), vec2(200.0, 150.0))));
+                }
+            })
+            .drop_without_applying_deltas();
+            (out, host.groups.get(&1).copied())
+        };
+        step(vec![], false);
+        step(vec![], false);
+        let (_, target) = step(vec![], false);
+        let target = target.expect("the docked group is drawn");
+        let from = pos2(550.0, 140.0);
+        step(vec![Event::PointerMoved(from), button(from, true)], true);
+        let to = pos2(target.center().x, target.bottom() + 60.0);
+        step(vec![Event::PointerMoved(to)], false);
+        let (out, _) = step(vec![Event::PointerMoved(to), button(to, false)], false);
+        let group_drop = out.actions.iter().any(|a| {
+            matches!(
+                a,
+                Action::MovePanel { to: Target::At { placement: Placement::Group { .. }, .. }, .. }
+                    | Action::MoveGroup { to: Target::At { placement: Placement::Group { .. }, .. }, .. }
+            )
+        });
+        assert_eq!(group_drop, !owned, "owned={owned}: {:?}", out.actions);
+    }
+}
