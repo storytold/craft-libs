@@ -80,6 +80,12 @@ impl Format {
     ///
     /// Percent signs, units and the space before a unit (`50 %`, `12 px`) are not read; strip them
     /// first. Anything else is an error rather than a guess.
+    ///
+    /// # Errors
+    ///
+    /// Returns `NumberError::Empty` for an empty input or one reduced to spaces and a sign,
+    /// `Unexpected` for an invalid character, `MixedDigits` for mixed digit sets, `Separator`
+    /// for misplaced marks, and `TooLarge` when the parsed value is not finite.
     pub fn parse(&self, text: &str) -> Result<f64, NumberError> {
         let marks = self.marks;
         let text: String = text.chars().filter(|c| !is_bidi_mark(*c)).collect();
@@ -129,6 +135,11 @@ impl Format {
 /// The number in `text` as `locale` (a language tag, `de-CH`, `ar_EG.UTF-8`) writes it:
 /// [`Format::parse`] for [`Format::from_tag`]. Build the [`Format`] once to read many numbers. A
 /// locale CLDR doesn't know reads as CLDR's root does (`1,234.5`).
+///
+/// # Errors
+///
+/// Returns the same `NumberError` as [`Format::parse`] for invalid digits, characters, or
+/// separators, or when the value is not finite.
 pub fn parse_number(text: &str, locale: &str) -> Result<f64, NumberError> {
     Format::from_tag(locale).parse(text)
 }
