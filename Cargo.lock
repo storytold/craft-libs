@@ -1099,6 +1099,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-wsd"
+version = "0.1.0"
+dependencies = [
+ "craft-wsd",
+ "roxmltree 0.21.2",
+ "thiserror 2.0.21",
+ "ureq",
+]
+
+[[package]]
 name = "crc32fast"
 version = "1.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"

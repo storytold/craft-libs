@@ -1,0 +1,40 @@
+name: WSD core
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['crates/wsd/**', 'Cargo.toml', 'Cargo.lock', '.github/workflows/wsd.yml']
+  pull_request:
+    paths: ['crates/wsd/**', 'Cargo.toml', 'Cargo.lock', '.github/workflows/wsd.yml']
+permissions:
+  contents: read
+jobs:
+  wsd:
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+          targets: wasm32-unknown-unknown
+      - run: cargo fmt --check
+      - run: cargo clippy -p craft-wsd --all-targets --locked -- -D warnings
+      - run: cargo clippy -p craft-wsd --all-targets --all-features --locked -- -D warnings
+      - run: cargo test -p craft-wsd --locked
+      - run: cargo test -p craft-wsd --all-features --locked
+      - run: cargo doc -p craft-wsd --no-deps --locked
+        env:
+          RUSTDOCFLAGS: -D warnings
+      - run: cargo doc -p craft-wsd --no-deps --all-features --locked
+        env:
+          RUSTDOCFLAGS: -D warnings
+      - name: Message layer builds for the browser (no HTTP client there)
+        if: runner.os == 'Linux'
+        run: cargo check --target wasm32-unknown-unknown -p craft-wsd --locked
