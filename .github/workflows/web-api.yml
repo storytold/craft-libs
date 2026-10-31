@@ -1,0 +1,48 @@
+name: Web API (page command API + @craft/app)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['crates/web-api/**', 'js/craft-app/**', 'Cargo.toml', 'Cargo.lock', '.github/workflows/web-api.yml']
+  pull_request:
+    paths: ['crates/web-api/**', 'js/craft-app/**', 'Cargo.toml', 'Cargo.lock', '.github/workflows/web-api.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  web-api:
+    # One OS: the crate is platform-independent JSON handling plus wasm32; no platform code.
+    timeout-minutes: 30
+    runs-on: ubuntu-latest
+    env:
+      CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER: wasm-bindgen-test-runner
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          components: rustfmt, clippy
+          targets: wasm32-unknown-unknown
+      - name: Install the matching WASM test runner
+        shell: bash
+        run: |
+          runner_version=$(python3 -c 'import tomllib; d=tomllib.load(open("Cargo.lock", "rb")); print(next(p["version"] for p in d["package"] if p["name"] == "wasm-bindgen"))')
+          cargo install wasm-bindgen-cli --version "$runner_version" --locked
+      - run: cargo fmt --check
+      - run: cargo clippy -p craft-web-api --all-targets --locked -- -D warnings
+      - run: cargo clippy -p craft-web-api --all-targets --locked --target wasm32-unknown-unknown -- -D warnings
+      - run: cargo test -p craft-web-api --locked
+      - run: cargo test -p craft-web-api --locked --target wasm32-unknown-unknown
+
+  craft-app-host:
+    # Plain-JS host components for framed apps; tested with the built-in node test runner,
+    # no dependencies and no build step.
+    timeout-minutes: 10
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 24
+      - run: node --test 'js/craft-app/test/**/*.test.mjs'

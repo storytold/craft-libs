@@ -91,6 +91,10 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   for 47 more languages (one cargo feature each).
 - [`craft-ui`](crates/ui/README.md): SVG catalogs, icon buttons, tabs, pane controls, transactional docking, print settings and theme helpers for egui frontends;
   assets, themes, localization and command handling stay in each app. Requires Rust 1.95 or later.
+- [`craft-web-api`](crates/web-api/README.md): the page command API every Craft web build offers its page — one
+  `window.<app>` shape (`request`, `execute`, `commands`, `docInspect`, `uiInspect`, `screenshot`) over the app's
+  JSON control channel — and [`@craft/app`](js/craft-app/README.md), which embeds a web build in a page (vanilla,
+  web component and React faces).
 - [Shared UI component audit](docs/ui-components-audit.md): source inventory, extraction priorities
   and compatibility boundaries across the Craft suite.
 - [Theme infrastructure](docs/theme-infrastructure.md): eight-app comparison and the small shared
