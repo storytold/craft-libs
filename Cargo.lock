@@ -814,6 +814,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-font-info"
+version = "0.1.0"
+dependencies = [
+ "skrifa 0.44.0",
+ "write-fonts 0.54.1",
+]
+
+[[package]]
 name = "craft-font-manager"
 version = "0.1.0"
 dependencies = [

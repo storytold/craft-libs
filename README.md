@@ -49,6 +49,9 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   (font folders, fontconfig and Flatpak host folders, CoreText, DirectWrite, the font store),
   lookup by family, style, localized, legacy, full and PostScript names, family loads shared
   between threads, and rescans when fonts are installed or removed.
+- [`craft-font-info`](crates/font-info/README.md): what a font face offers for fine typography:
+  variation axes and named instances by the font's own names, and every OpenType feature with
+  its stylistic-set or character-variant name and the characters it changes.
 - [`craft-font-manager`](crates/font-manager/README.md): Craft Font Manager as a library: search
   and filters over the Google Fonts index, installed fonts by family, the font store interface,
   and (`egui` feature) `FontsPanel`, the whole interface as one panel for the launcher's Fonts tab
