@@ -28,6 +28,7 @@ craft-cms = { path = "crates/cms" }
 craft-crw = { path = "crates/crw" }
 craft-dialogs = { path = "crates/dialogs" }
 craft-docpath = { path = "crates/docpath" }
+craft-gdi = { path = "crates/gdi" }
 craft-font-catalog = { path = "crates/font-catalog" }
 craft-font-manager = { path = "crates/font-manager" }
 craft-font-store = { path = "crates/font-store" }

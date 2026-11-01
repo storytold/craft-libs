@@ -719,7 +719,7 @@ running `cargo deny` need a licence exception for `webpki-root-certs` (CDLA-Perm
 list data reqwest brings) and an advisory ignore for RUSTSEC-2024-0370 (`proc-macro-error`
 unmaintained, a compile-time proc macro of winprint's `fmt-derive`).
 
-`craft_print::rgb` exposes the safe `craft-winprint-gdi` API for native driver settings,
+`craft_print::rgb` exposes the safe `craft-gdi` API for native driver settings,
 printable geometry, RGB pages and caller-composed vector strokes. Applications retain ICC
 conversion, document layout, labels and print-mark composition. The shared transport validates
 single-copy DEVMODE settings before emitting manual copies and checks GDI errors. Color policy

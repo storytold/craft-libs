@@ -1,0 +1,30 @@
+[package]
+name = "craft-gdi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Safe Windows driver settings and RGB/GDI print transport"
+
+# The Win32 calls live in the `windows` module, which allows `unsafe`; nothing else in the crate
+# may. The other lints are the workspace's.
+[lints.rust]
+unsafe_code = "deny"
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(craft_pdf_unicode_fixtures)"] }
+
+[lints.clippy]
+cognitive_complexity = "deny"
+too_many_arguments = "deny"
+wildcard_imports = "deny"
+dbg_macro = "warn"
+todo = "warn"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "=0.61.2", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_Graphics_Printing",
+    "Win32_Storage_Xps",
+    "Win32_UI_ColorSystem",
+] }

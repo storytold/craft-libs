@@ -54,7 +54,7 @@ pub mod wsd;
 /// Callers perform ICC conversion and compose page pixels/vector strokes. Other platforms
 /// return `rgb::PrintError::Unsupported`; the PDF spooler remains independent of this API.
 pub mod rgb {
-    pub use craft_winprint_gdi::*;
+    pub use craft_gdi::*;
 }
 
 /// The [`backend::Backend`] trait and the neutral types a backend speaks. The crate's older
