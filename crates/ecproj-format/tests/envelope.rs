@@ -91,6 +91,22 @@ fn a_file_with_an_empty_view_holds_saved_by_then_the_project() {
 }
 
 #[test]
+fn a_compact_file_holds_the_same_members_on_one_line() {
+    let view = View { active_comp: Some(1), open_comps: vec![1, 2], comp_times: BTreeMap::from([(1, 254_016_000_000)]) };
+    let p = project();
+    let text = File::new("0.12.0", &view, &p).to_json_compact().unwrap();
+    assert_eq!(
+        text,
+        r#"{"savedBy":"0.12.0","activeComp":1,"openComps":[1,2],"compTimes":{"1":254016000000},"schema":2,"settings":{"bit_depth":"Bpc8"},"items":{"1":{"id":1,"name":"Comp 1"},"2":{"id":2,"name":"clip.mov"}},"next_id":3}"#
+    );
+    assert_eq!(serde_json::from_str::<Project>(&text).unwrap(), p);
+    assert_eq!(Head::read(&text).unwrap(), Head { saved_by: Some("0.12.0".into()), schema: 2 });
+    assert_eq!(saved_by(&text).as_deref(), Some("0.12.0"));
+    let pretty = File::new("0.12.0", &view, &p).to_json().unwrap();
+    assert_eq!(serde_json::from_str::<serde_json::Value>(&text).unwrap(), serde_json::from_str::<serde_json::Value>(&pretty).unwrap());
+}
+
+#[test]
 fn a_written_file_reads_back_as_the_project_and_its_head() {
     let p = project();
     let view = View { active_comp: Some(1), ..View::default() };
@@ -111,11 +127,26 @@ fn a_project_saved_before_saved_by_has_a_head_without_it() {
 fn a_head_needs_a_schema() {
     assert!(Head::read(r#"{"savedBy": "0.12.0", "items": {}}"#).is_err());
     assert!(Head::read(r#"{"savedBy": "0.12.0", "schema": "2"}"#).is_err());
-    assert!(Head::read("[2]").is_err());
+    assert!(Head::read("[]").is_err());
     assert!(Head::read(r#"["0.12.0", 2]"#).is_err());
     assert!(Head::read(r#"{"schema": 2, "schema": 2}"#).is_err());
-    assert!(Head::read(r#"{"savedBy": "a", "savedBy": "b", "schema": 2}"#).is_err());
     assert!(Head::read(r#"{"schema": 2} {}"#).is_err());
+    assert!(Head::read(r#"[2] []"#).is_err());
+    assert!(Head::read("2").is_err());
+}
+
+#[test]
+fn a_head_reads_a_saved_by_that_is_not_one_string_as_none() {
+    assert_eq!(Head::read(r#"{"savedBy": 12, "schema": 2}"#).unwrap(), Head { saved_by: None, schema: 2 });
+    assert_eq!(Head::read(r#"{"savedBy": ["0.12.0"], "schema": 2}"#).unwrap(), Head { saved_by: None, schema: 2 });
+    assert_eq!(Head::read(r#"{"savedBy": "a", "savedBy": "b", "schema": 2}"#).unwrap(), Head { saved_by: None, schema: 2 });
+    assert_eq!(Head::read(r#"{"savedBy": "a", "schema": 2, "savedBy": 1, "savedBy": "c"}"#).unwrap(), Head { saved_by: None, schema: 2 });
+}
+
+#[test]
+fn a_head_reads_the_schema_of_a_project_written_as_an_array() {
+    assert_eq!(Head::read(r#"[2, {}, {}, 1]"#).unwrap(), Head { saved_by: None, schema: 2 });
+    assert_eq!(Head::read("[1]").unwrap(), Head { saved_by: None, schema: 1 });
 }
 
 #[test]
@@ -128,6 +159,9 @@ fn a_head_skips_other_members_of_any_type() {
 fn saved_by_is_none_unless_it_is_a_string_in_a_json_object() {
     assert_eq!(saved_by(r#"{"savedBy": 12, "schema": 2}"#), None);
     assert_eq!(saved_by(r#"{"savedBy": null, "schema": 2}"#), None);
+    assert_eq!(saved_by(r#"{"savedBy": "a", "savedBy": "b", "schema": 2}"#), None);
+    assert_eq!(saved_by(r#"{"savedBy": "a", "savedBy": 1}"#), None);
+    assert_eq!(saved_by(r#"{"savedBy": {"v": "0.12.0"}, "schema": 2}"#), None);
     assert_eq!(saved_by(r#"["savedBy", "0.12.0"]"#), None);
     assert_eq!(saved_by(r#"["0.12.0"]"#), None);
     assert_eq!(saved_by(r#"{"savedBy": "0.12.0"} []"#), None);

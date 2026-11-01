@@ -2,7 +2,8 @@
 //! The envelope of EffectCraft `.ecproj` project files, for EffectCraft, which writes them, and
 //! for the apps that read them.
 //!
-//! A project file is one UTF-8 JSON object, indented with two spaces:
+//! A project file is one UTF-8 JSON object. EffectCraft indents it with two spaces, or writes it
+//! on one line when Settings ▸ Project ▸ Save Compact Project Files is on:
 //!
 //! ```text
 //! {
@@ -23,8 +24,8 @@
 //! - `schema` is the project schema. [`check_schema`] refuses a schema newer than
 //!   [`SCHEMA_VERSION`].
 //!
-//! [`File`] writes the object. [`Head`] reads `savedBy` and `schema` from it, and [`saved_by`]
-//! reads `savedBy` alone.
+//! [`File`] writes the object: [`File::to_json`] indented, [`File::to_json_compact`] on one line.
+//! [`Head`] reads `savedBy` and `schema` from either form, and [`saved_by`] reads `savedBy` alone.
 //!
 //! ```
 //! use std::collections::BTreeMap;
@@ -37,8 +38,11 @@
 //!
 //! let project = Project { schema: craft_ecproj_format::SCHEMA_VERSION, items: BTreeMap::from([(1, "Comp 1".to_string())]) };
 //! craft_ecproj_format::check_schema(project.schema)?;
-//! let text = craft_ecproj_format::File::new("0.12.0", &BTreeMap::<String, u64>::new(), &project).to_json()?;
+//! let view = BTreeMap::<String, u64>::new();
+//! let file = craft_ecproj_format::File::new("0.12.0", &view, &project);
+//! let text = file.to_json()?;
 //! assert_eq!(text, "{\n  \"savedBy\": \"0.12.0\",\n  \"schema\": 2,\n  \"items\": {\n    \"1\": \"Comp 1\"\n  }\n}");
+//! assert_eq!(file.to_json_compact()?, r#"{"savedBy":"0.12.0","schema":2,"items":{"1":"Comp 1"}}"#);
 //!
 //! let head = craft_ecproj_format::Head::read(&text)?;
 //! assert_eq!((head.saved_by.as_deref(), head.schema), (Some("0.12.0"), 2));
@@ -51,7 +55,7 @@
 use std::borrow::Cow;
 use std::fmt;
 
-use serde::de::{self, IgnoredAny, MapAccess, Visitor};
+use serde::de::{self, IgnoredAny, MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
 
 /// The newest project schema. Schema 2 measures the positions of effects on layers without a
@@ -79,6 +83,10 @@ pub fn check_schema(schema: u32) -> Result<(), TooNew> {
 ///
 /// `view` and `project` must each serialize as a map or a struct, and their member names must not
 /// repeat `savedBy` or each other.
+///
+/// The values are written as they are, without a check: JSON has no NaN or infinity, and
+/// `serde_json` writes either as `null`, which may not read back as the project. The caller
+/// checks its values before saving.
 #[derive(Debug, Serialize)]
 pub struct File<'a, V, P> {
     /// The version of the app that writes the file.
@@ -101,14 +109,22 @@ impl<'a, V: Serialize, P: Serialize> File<'a, V, P> {
     pub fn to_json(&self) -> Result<String, serde_json::Error> {
         serde_json::to_string_pretty(self)
     }
+
+    /// The file's text on one line, with no spaces between tokens and no newline at the end.
+    pub fn to_json_compact(&self) -> Result<String, serde_json::Error> {
+        serde_json::to_string(self)
+    }
 }
 
-/// `savedBy` and `schema`, read from a project file. Other members are skipped. Only a JSON object
-/// reads as a `Head`.
+/// `savedBy` and `schema`, read from a project file. Other members are skipped.
+///
+/// A `Head` reads what EffectCraft opens: a JSON object with a `schema` that is a `u32`, or a JSON
+/// array whose first element is the schema (serde's array form of the project, with no
+/// `savedBy`). Two `schema` members are refused.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Head {
     /// The version of the app that wrote the file. `None` for projects saved before `savedBy` was
-    /// added.
+    /// added, and when `savedBy` is not a string or appears more than once.
     pub saved_by: Option<String>,
     /// The project schema.
     pub schema: u32,
@@ -123,14 +139,15 @@ impl Head {
 
 impl<'de> Deserialize<'de> for Head {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let members = deserializer.deserialize_map(MembersVisitor { schema: true })?;
+        let members = deserializer.deserialize_struct("Head", &["savedBy", "schema"], MembersVisitor { schema: true })?;
         let schema = members.schema.ok_or_else(|| de::Error::missing_field("schema"))?;
         Ok(Head { saved_by: members.saved_by, schema })
     }
 }
 
 /// The `savedBy` of project file `text`. `None` when the file has none, when it is not a JSON
-/// object, or when `savedBy` is not a string. Other members, `schema` included, are skipped.
+/// object, or when `savedBy` is not a string or appears more than once. Other members, `schema`
+/// included, are skipped.
 pub fn saved_by(text: &str) -> Option<String> {
     let mut de = serde_json::Deserializer::from_str(text);
     let members = de.deserialize_map(MembersVisitor { schema: false }).ok()?;
@@ -161,10 +178,13 @@ impl<'de> Visitor<'de> for MembersVisitor {
         let mut seen_saved_by = false;
         while let Some(key) = map.next_key::<Cow<'de, str>>()? {
             match &*key {
-                "savedBy" if seen_saved_by => return Err(de::Error::duplicate_field("savedBy")),
                 "savedBy" => {
+                    let value = map.next_value::<serde_json::Value>()?;
+                    members.saved_by = match value {
+                        serde_json::Value::String(version) if !seen_saved_by => Some(version),
+                        _ => None,
+                    };
                     seen_saved_by = true;
-                    members.saved_by = map.next_value()?;
                 }
                 "schema" if self.schema && members.schema.is_some() => return Err(de::Error::duplicate_field("schema")),
                 "schema" if self.schema => members.schema = Some(map.next_value()?),
@@ -174,5 +194,16 @@ impl<'de> Visitor<'de> for MembersVisitor {
             }
         }
         Ok(members)
+    }
+
+    /// A project written as an array holds its members in order, `schema` first, and no
+    /// `savedBy`. Only a [`Head`] reads one.
+    fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Members, A::Error> {
+        if !self.schema {
+            return Err(de::Error::invalid_type(de::Unexpected::Seq, &self));
+        }
+        let schema = seq.next_element::<u32>()?.ok_or_else(|| de::Error::invalid_length(0, &self))?;
+        while seq.next_element::<IgnoredAny>()?.is_some() {}
+        Ok(Members { saved_by: None, schema: Some(schema) })
     }
 }
