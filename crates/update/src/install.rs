@@ -3060,6 +3060,110 @@ esac
         assert!(bind_artifact_version(app, &release, &other_escape).is_err());
     }
 
+    /// craft-launcher#764: `install_at` refuses, before downloading, an asset whose link is the
+    /// right path on another host, and a release whose `SHA256SUMS.txt` (what the download is
+    /// checked against) is linked elsewhere. The stop is cancelled, so if the check stopped working
+    /// the install would end at the download with `CANCELLED` instead of fetching anything.
+    #[test]
+    fn install_refuses_links_off_the_releases_own_before_downloading() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::under(dir.path());
+        let http = Http::new(crate::TEST_AGENT).unwrap();
+        let locations = InstallLocations::default();
+        let app = App::by_id("photocraft").unwrap();
+        let name = "photocraft-0.5.0-linux-x86_64.AppImage";
+        let own = release::release_from_sums(app.repo, "v0.5.0", &[("a".repeat(64), name.to_string())]);
+        let refuse = |release: &Release, asset: &Asset| {
+            let stop = Stop::default();
+            stop.cancel();
+            let phase = &mut |_| ();
+            let mut job = Job { http: &http, paths: &paths, stop: &stop, phase, install_locations: &locations, replace: false };
+            let result = install_at(app, release, asset, PackageKind::AppImage, None, None, &mut job, None);
+            assert!(result.as_ref().is_err_and(|e| e.contains("isn't the one its release publishes")), "{}: {result:?}", asset.url);
+        };
+
+        for url in [
+            format!("https://evil.example/storytold/photocraft/releases/download/v0.5.0/{name}"),
+            format!("http://github.com/storytold/photocraft/releases/download/v0.5.0/{name}"),
+            format!("https://github.com.evil.example/storytold/photocraft/releases/download/v0.5.0/{name}"),
+        ] {
+            refuse(&own, &Asset { url, ..own.assets[0].clone() });
+        }
+
+        let mut sums_elsewhere = own.clone();
+        let sums = sums_elsewhere.assets.iter_mut().find(|a| a.name == "SHA256SUMS.txt").unwrap();
+        sums.url = "https://evil.example/storytold/photocraft/releases/download/v0.5.0/SHA256SUMS.txt".into();
+        refuse(&sums_elsewhere, &sums_elsewhere.assets[0]);
+    }
+
+    /// A download that fails its checksum (twice, as a resumed file gets one fresh try) replaces
+    /// nothing: the installed copy keeps its bytes, the install never starts, the record isn't
+    /// committed, and the bad file isn't kept for the next try.
+    #[test]
+    fn a_download_that_fails_its_checksum_replaces_nothing() {
+        use crate::http::tests::{Reply, body, serve};
+        let app = App::by_id("photocraft").unwrap();
+        let (body, sha) = body();
+        let (url, requests) = serve(body.clone(), vec![Reply::Corrupt, Reply::Corrupt]);
+        let name = "photocraft-0.5.0-linux-x86_64.AppImage";
+        let asset = Asset { name: name.into(), size: body.len() as u64, url, sha256: Some(sha) };
+        let release = Release { version: version::parse("0.5.0"), tag: "v0.5.0".into(), assets: vec![asset.clone()], ..Release::default() };
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::under(dir.path());
+        let http = Http::new(crate::TEST_AGENT).unwrap();
+        let old = dir.path().join("Apps").join("PhotoCraft.AppImage");
+        std::fs::create_dir_all(old.parent().unwrap()).unwrap();
+        std::fs::write(&old, b"the installed 0.4.0").unwrap();
+        let installed =
+            Installed { version: version::parse("0.4.0"), source: InstallSource::Launcher, location: old.display().to_string(), package: None };
+        let previous = record("0.4.0", PackageKind::AppImage, old.clone(), vec![], false);
+        let mut phases = Vec::new();
+        let mut phase = |p: JobPhase| phases.push(p);
+        let locations = InstallLocations::default();
+        let stop = Stop::default();
+        let mut job = Job { http: &http, paths: &paths, stop: &stop, phase: &mut phase, install_locations: &locations, replace: false };
+        let mut committed = false;
+        let mut commit = |_: &Record| {
+            committed = true;
+            Ok(())
+        };
+        let result = install_at(app, &release, &asset, PackageKind::AppImage, Some(&installed), Some(&previous), &mut job, Some(&mut commit));
+        assert!(result.as_ref().is_err_and(|e| e.contains("checksum")), "{result:?}");
+        assert_eq!(std::fs::read(&old).unwrap(), b"the installed 0.4.0");
+        assert!(!phases.contains(&JobPhase::Installing), "{phases:?}");
+        assert!(!committed);
+        assert!(!download_path(&paths, &asset).exists());
+        assert_eq!(requests.lock().unwrap().len(), 2);
+    }
+
+    /// A running installed copy isn't replaced; the stop is cancelled in case the check stops
+    /// working. Windows finds a process by its file name, so the running test binary stands in for
+    /// the copy. Elsewhere `pgrep -f` matches the command line, so a probe runs with the copy's path.
+    #[test]
+    fn install_refuses_while_the_installed_copy_is_running() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::under(dir.path());
+        let http = Http::new(crate::TEST_AGENT).unwrap();
+        let phase = &mut |_| ();
+        let locations = InstallLocations::default();
+        let app = App::by_id("photocraft").unwrap();
+        let name = "photocraft-0.5.0-linux-x86_64.AppImage";
+        let release = release::release_from_sums(app.repo, "v0.5.0", &[("a".repeat(64), name.to_string())]);
+        #[cfg(windows)]
+        let location = std::env::current_exe().unwrap().display().to_string();
+        #[cfg(unix)]
+        let location = dir.path().join("PhotoCraft.AppImage").display().to_string();
+        #[cfg(unix)]
+        let _probe = crate::process::tests::RunningProbe::start(&location);
+        assert!(process::is_running(Path::new(&location)), "{location} should be seen as running");
+        let installed = Installed { version: version::parse("0.4.0"), source: InstallSource::Launcher, location, package: None };
+        let stop = Stop::default();
+        stop.cancel();
+        let mut job = Job { http: &http, paths: &paths, stop: &stop, phase, install_locations: &locations, replace: false };
+        let result = install_at(app, &release, &release.assets[0], PackageKind::AppImage, Some(&installed), None, &mut job, None);
+        assert!(result.as_ref().is_err_and(|e| e.contains("is running")), "{result:?}");
+    }
+
     #[cfg(target_os = "linux")]
     #[test]
     fn package_kinds_order_matches_launcher_format() {
