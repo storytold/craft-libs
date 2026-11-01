@@ -520,3 +520,33 @@ pub fn live_move(ctx: &Context, bar: &Response, rect: Rect, bounds: Rect) -> Opt
     forget();
     None
 }
+
+#[cfg(test)]
+mod compatibility_tests {
+    use super::*;
+
+    #[test]
+    fn defaults_preserve_pre_host_hook_frame_geometry() {
+        let rect = Rect::from_min_size(pos2(100.0, 100.0), vec2(300.0, 200.0));
+        let frame = FloatingFrame::new(Id::unique("defaults"), rect);
+        assert_eq!(frame.resize_axes, [true, true]);
+        assert!(frame.reserve_top_resize_band);
+        assert!(frame.resizable);
+        // Literal pre-PR hit rectangles: preserve these rather than silently enlarging them.
+        let expected = [
+            [388.0, 288.0, 400.0, 300.0],
+            [100.0, 112.0, 104.0, 288.0],
+            [396.0, 112.0, 400.0, 288.0],
+            [112.0, 296.0, 388.0, 300.0],
+            [100.0, 288.0, 112.0, 300.0],
+            [112.0, 100.0, 388.0, 104.0],
+            [100.0, 100.0, 112.0, 104.0],
+            [388.0, 100.0, 400.0, 104.0],
+        ];
+        for ((_, hit, _), [x0, y0, x1, y1]) in handles(rect).into_iter().zip(expected) {
+            assert_eq!(hit, Rect::from_min_max(pos2(x0, y0), pos2(x1, y1)));
+            // Audit result: legacy targets do NOT meet a 24-by-24 logical-pixel target.
+            assert!(hit.width() < 24.0 || hit.height() < 24.0);
+        }
+    }
+}

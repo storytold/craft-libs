@@ -363,3 +363,63 @@ fn owned_minimized_groups_skip_the_trailing_stock_target() {
         assert_eq!(group_drop, !owned, "owned={owned}: {:?}", out.actions);
     }
 }
+
+#[test]
+fn disabled_edge_axes_ignore_pointer_drags_and_enabled_edges_obey_limits() {
+    for axes in [[true, true], [true, false], [false, true], [false, false]] {
+        for horizontal in [true, false] {
+            for grow in [true, false] {
+                let ctx = Context::default();
+                let rect = Rect::from_min_size(pos2(400.0, 300.0), vec2(300.0, 200.0));
+                let bounds = Rect::from_min_max(pos2(0.0, 0.0), pos2(720.0, 520.0));
+                let frame = |events| {
+                    let mut resized = None;
+                    ctx.run_ui(input(events), |ui| {
+                        let style = chrome::ChromeStyle::from_ui(ui);
+                        resized = chrome::FloatingFrame::new(Id::unique("edge-axis"), rect)
+                            .resize_axes(axes)
+                            .bounds(bounds)
+                            .limits(PanelLimits { min: vec2(160.0, 120.0), max: vec2(310.0, 210.0) })
+                            .show(ui.ctx(), &style, |_, _| ())
+                            .resized;
+                    })
+                    .drop_without_applying_deltas();
+                    resized
+                };
+                frame(vec![]);
+                frame(vec![]);
+                let from = if horizontal { pos2(rect.right() - 2.0, rect.center().y) } else { pos2(rect.center().x, rect.bottom() - 2.0) };
+                frame(vec![Event::PointerMoved(from), button(from, true)]);
+                let delta = if horizontal { vec2(10.0, 0.0) } else { vec2(0.0, 10.0) };
+                frame(vec![Event::PointerMoved(from + delta)]);
+                let result = frame(vec![Event::PointerMoved(from + delta * if grow { 100.0 } else { -100.0 })]);
+                let enabled = if horizontal { axes[0] } else { axes[1] };
+                let expected = if horizontal { vec2(if grow { 310.0 } else { 160.0 }, 200.0) } else { vec2(300.0, if grow { 210.0 } else { 120.0 }) };
+                assert_eq!(result, enabled.then(|| Rect::from_min_size(rect.min, expected)), "{axes:?} horizontal={horizontal} grow={grow}");
+            }
+        }
+    }
+}
+
+#[test]
+fn frame_at_viewport_edge_cannot_resize_beyond_it() {
+    let ctx = Context::default();
+    let rect = Rect::from_min_max(pos2(400.0, 300.0), pos2(800.0, 600.0));
+    let frame = |events| {
+        let mut result = None;
+        ctx.run_ui(input(events), |ui| {
+            let style = chrome::ChromeStyle::from_ui(ui);
+            let response = chrome::FloatingFrame::new(Id::unique("viewport-edge"), rect).show(ui.ctx(), &style, |_, _| ());
+            assert_eq!(response.rect, rect);
+            result = response.resized;
+        })
+        .drop_without_applying_deltas();
+        result
+    };
+    frame(vec![]);
+    frame(vec![]);
+    let from = rect.max - vec2(2.0, 2.0);
+    frame(vec![Event::PointerMoved(from), button(from, true)]);
+    frame(vec![Event::PointerMoved(from + vec2(10.0, 10.0))]);
+    assert_eq!(frame(vec![Event::PointerMoved(from + vec2(100.0, 100.0))]), None);
+}
