@@ -32,7 +32,8 @@ version 4, entries of `INLINE_MAX` (8 KiB) or more follow the JSON after `BLOB_M
 `File<D>` give the bytes VectorCraft writes before the data after the JSON. `Head` reads only
 `preview` and `pdf`. `Contents<D>` reads `format`, `version`, `profiles`, `document` and
 `images`, and skips `generator`, `preview` and `pdf` as the JSON is read, so their base64 is not
-buffered or kept; it accepts and refuses the same files as `File<D>`. `Image` has `mime`, `data` (base64), `blob` and `proxy` (a linked image's
+buffered or kept. `Contents<D>` reads the files VectorCraft opens: unlike `File<D>`, it accepts a
+repeated `generator`, `preview` or `pdf`, and like it, refuses any other repeated member. `Image` has `mime`, `data` (base64), `blob` and `proxy` (a linked image's
 low-resolution preview).
 
 ## Use

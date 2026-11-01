@@ -217,19 +217,38 @@ fn contents_read_the_document_images_and_profiles_without_the_preview_and_pdf() 
         contents.check().unwrap();
         assert!(contents.is_legacy() == file.is_legacy());
     }
-    // Members of the wrong shape are skipped as `File` reads them as `None`; a repeated member,
-    // a missing document and a newer version are refused as in `File`.
+    // Members of the wrong shape are skipped as `File` reads them as `None`; a missing document
+    // and a newer version are refused as in `File`.
     let odd = br#"{"format":"vectorcraft","version":4,"generator":7,"preview":"x","pdf":{"blob":"y"},"document":{"layers":[]},"z":[1]}"#;
     let contents: Contents<Doc> = serde_json::from_slice(odd).unwrap();
     assert!(contents.document.layers.is_empty() && contents.images.is_empty());
-    for bad in
-        [&br#"{"format":"vectorcraft","version":4,"pdf":null,"pdf":null,"document":{"layers":[]}}"#[..], br#"{"format":"vectorcraft","version":4}"#]
-    {
-        assert!(serde_json::from_slice::<File<Doc>>(bad).is_err());
-        assert!(serde_json::from_slice::<Contents<Doc>>(bad).is_err());
-    }
+    let no_document = br#"{"format":"vectorcraft","version":4}"#;
+    assert!(serde_json::from_slice::<File<Doc>>(no_document).is_err());
+    assert!(serde_json::from_slice::<Contents<Doc>>(no_document).is_err());
     let newer: Contents<IgnoredAny> = serde_json::from_str(r#"{"format":"vectorcraft","version":5,"document":0}"#).unwrap();
     assert_eq!(newer.check(), Err(Error::TooNew(5)));
+}
+
+#[test]
+fn contents_read_a_repeated_generator_preview_or_pdf_and_refuse_other_repeated_members() {
+    // VectorCraft opens a file whose generator, preview or PDF is repeated, and refuses one whose
+    // format, version, document, images or profiles are.
+    let png = r#"{"mime":"image/png","data":"iVBORw0KGgo="}"#;
+    let file = |extra: &str| format!(r#"{{"format":"vectorcraft","version":4,{extra}"document":{{"layers":[]}},"images":{{}}}}"#);
+    for extra in [
+        r#""generator":"a","generator":"b","#.to_string(),
+        format!(r#""preview":{png},"preview":{png},"#),
+        r#""pdf":null,"pdf":{"mime":"application/pdf","data":"JQ=="},"#.to_string(),
+        r#""generator":7,"preview":"x","pdf":1,"generator":7,"preview":"x","pdf":1,"#.to_string(),
+    ] {
+        let contents: Contents<Doc> = serde_json::from_str(&file(&extra)).unwrap_or_else(|e| panic!("{extra}: {e}"));
+        assert!(contents.document.layers.is_empty() && contents.check().is_ok());
+    }
+    for extra in
+        [r#""format":"vectorcraft","#, r#""version":4,"#, r#""document":{"layers":[]},"#, r#""images":{},"#, r#""profiles":{},"profiles":{},"#]
+    {
+        assert!(serde_json::from_str::<Contents<Doc>>(&file(extra)).is_err(), "{extra}");
+    }
 }
 
 #[test]

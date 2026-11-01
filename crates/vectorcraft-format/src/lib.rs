@@ -166,20 +166,15 @@ pub fn check(format: &str, version: u32) -> Result<(), Error> {
 
 /// The members of a file that a reader of its document needs: [`File`] without `generator`,
 /// `preview` and `pdf`. Those three are skipped as the JSON is read, so their data is neither
-/// buffered nor kept. A file reads as `Contents` exactly when it reads as a [`File`]: any value of
-/// the skipped members is accepted, and a repeated member is refused.
+/// buffered nor kept. `Contents` reads the files VectorCraft opens: any value of the skipped
+/// members is accepted, a repeated `generator`, `preview` or `pdf` is accepted (a [`File`] refuses
+/// it), and a repeated `format`, `version`, `profiles`, `document` or `images` is refused.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct Contents<D> {
     pub format: String,
     pub version: u32,
-    #[serde(default, rename = "generator")]
-    _generator: serde::de::IgnoredAny,
-    #[serde(default, rename = "preview")]
-    _preview: serde::de::IgnoredAny,
     #[serde(default)]
     pub profiles: BTreeMap<String, Image>,
-    #[serde(default, rename = "pdf")]
-    _pdf: serde::de::IgnoredAny,
     pub document: D,
     #[serde(default)]
     pub images: BTreeMap<String, Image>,
