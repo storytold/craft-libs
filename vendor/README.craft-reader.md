@@ -113,6 +113,7 @@ Raw array iteration now ends safely if validation and object parsing disagree;
 standalone sign tokens retain the reader's zero tolerance.
 `Dict::entries` and a dictionary's `Debug` output skip an entry whose value does not parse,
 as in [Hayro #1501](https://github.com/LaurenzV/hayro/pull/1501).
+The `Debug` output of a dictionary or an array ends with its closing brace or bracket.
 Byte transfer-function samples use rounded 8-bit values; failed or non-finite evaluations
 leave the sample unchanged. Historical source hashes remain in each `SOURCE.json`,
 alongside local hashes and the compatibility reference.
