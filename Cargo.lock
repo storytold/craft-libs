@@ -997,6 +997,7 @@ dependencies = [
  "log",
  "miniz_oxide 0.9.1",
  "roxmltree 0.21.2",
+ "serde_json",
  "tempfile",
  "winprint",
  "winsafe",
