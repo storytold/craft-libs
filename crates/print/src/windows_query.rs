@@ -1,5 +1,5 @@
-//! Read-only Windows spooler queries in a disposable copy of the calling executable.
-//! Drivers cannot hold the UI or another printer's query; no job submission is exposed here.
+//! Windows subprocesses for read-only spooler queries and native printer preferences.
+//! Query workers accept only discovery and duplex reads, never preferences or jobs.
 
 use std::io::Write as _;
 use std::process::Command;
@@ -10,6 +10,7 @@ use crate::Printer;
 use crate::command::OUTPUT_CAP;
 
 const SWITCH: &str = "--craft-printer-query";
+const LIST_LIMIT: Duration = Duration::from_secs(10);
 const LIMIT: Duration = Duration::from_secs(60);
 
 pub(super) fn preferences_command(printer: &str) -> std::io::Result<Command> {
@@ -34,7 +35,7 @@ fn query(operation: &str, printer: &str, cancelled: &AtomicBool, limit: Duration
 }
 
 pub(super) fn printers() -> Vec<Printer> {
-    query("list", "", &AtomicBool::new(false), Duration::from_secs(10))
+    query("list", "", &AtomicBool::new(false), LIST_LIMIT)
         .ok()
         .and_then(|bytes| serde_json::from_slice::<Vec<(String, bool)>>(&bytes).ok())
         .unwrap_or_default()
@@ -48,9 +49,9 @@ pub(super) fn two_sided(printer: &str, cancelled: &AtomicBool) -> Option<bool> {
 }
 
 /// Handle the private read-only worker invocation before CLI or desktop startup. Returns
-/// `None` for a normal launch. The host must immediately exit when this returns `Some`, using
-/// its value as the success status. Even if its parent exits, a hung driver outlives it by at most
-/// one query deadline. Worker arguments cannot select a file, submit a job, or start a GUI.
+/// `None` for a normal launch. Handled queries terminate this process after writing their answer.
+/// If `Some` is returned, the host must immediately exit using its value as the success status.
+/// Worker arguments cannot select a file, submit a job, or start a GUI.
 pub fn worker() -> Option<bool> {
     let mut args = std::env::args_os().skip(1);
     if args.next().as_deref() != Some(std::ffi::OsStr::new(SWITCH)) {
@@ -67,6 +68,7 @@ pub fn worker() -> Option<bool> {
     if !valid {
         return Some(false);
     }
+    let limit = if operation.as_deref() == Some("list") { LIST_LIMIT } else { LIMIT };
     let (sender, receiver) = std::sync::mpsc::channel();
     let spawned = std::thread::Builder::new().name("Windows printer query".into()).spawn(move || {
         let value = if operation.as_deref() == Some("list") {
@@ -80,8 +82,16 @@ pub fn worker() -> Option<bool> {
     if spawned.is_err() {
         return Some(false);
     }
-    let Ok(Ok(bytes)) = receiver.recv_timeout(LIMIT) else { return Some(false) };
-    Some(bytes.len() as u64 <= OUTPUT_CAP && std::io::stdout().lock().write_all(&bytes).is_ok())
+    let success = match receiver.recv_timeout(limit) {
+        Ok(Ok(bytes)) if bytes.len() as u64 <= OUTPUT_CAP => {
+            let mut stdout = std::io::stdout().lock();
+            stdout.write_all(&bytes).and_then(|()| stdout.flush()).is_ok()
+        }
+        _ => false,
+    };
+    // ExitProcess can deadlock in driver DLL detach while another thread holds a driver lock.
+    let _ = winsafe::HPROCESS::GetCurrentProcess().TerminateProcess(u32::from(!success));
+    Some(false)
 }
 
 #[cfg(test)]

@@ -146,8 +146,8 @@ drops are refused before submission.
 ## Interactive discovery and capability lifetime
 
 Call `query_printers()` off the UI thread to list queues without querying driver capabilities.
-On Windows, dispatch `query_worker()` before normal application startup and exit when it
-returns `Some`:
+On Windows, dispatch `query_worker()` before normal application startup. It terminates handled
+queries; if it returns `Some`, exit with that status:
 
 ```rust,no_run
 #[cfg(windows)]
