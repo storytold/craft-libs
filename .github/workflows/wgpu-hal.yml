@@ -1,0 +1,24 @@
+name: Vendored wgpu-hal source
+
+on:
+  push:
+    branches: [main]
+    paths: ['vendor/wgpu-hal/**', 'scripts/verify_wgpu_hal.py', '.github/workflows/wgpu-hal.yml']
+  pull_request:
+    paths: ['vendor/wgpu-hal/**', 'scripts/verify_wgpu_hal.py', '.github/workflows/wgpu-hal.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  verify-source:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Download the published wgpu-hal source
+        run: curl --fail --location --silent --show-error https://static.crates.io/crates/wgpu-hal/wgpu-hal-30.0.1.crate --output wgpu-hal-30.0.1.crate
+      - name: Check every source file, patch and upstream license
+        run: python3 scripts/verify_wgpu_hal.py wgpu-hal-30.0.1.crate

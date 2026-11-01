@@ -1534,7 +1534,13 @@ impl crate::Surface for Surface {
                     },
                     BufferUsage: Dxgi::DXGI_USAGE_RENDER_TARGET_OUTPUT,
                     BufferCount: swap_chain_buffer,
-                    Scaling: Dxgi::DXGI_SCALING_STRETCH,
+                    // Composition swap chains require STRETCH; only HWND presentation
+                    // needs NONE to avoid resampling a restored window's UI.
+                    Scaling: if matches!(self.target, SurfaceTarget::WndHandle(_)) {
+                        Dxgi::DXGI_SCALING_NONE
+                    } else {
+                        Dxgi::DXGI_SCALING_STRETCH
+                    },
                     SwapEffect: Dxgi::DXGI_SWAP_EFFECT_FLIP_DISCARD,
                     Flags: flags.0 as u32,
                 };
