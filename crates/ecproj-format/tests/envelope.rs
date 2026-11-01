@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use craft_ecproj_format::{File, Head, SCHEMA_VERSION, TooNew, check_schema, saved_by};
+use craft_ecproj_format::{File, Head, ReadError, SCHEMA_VERSION, check_schema};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Default, Serialize)]
@@ -101,7 +101,6 @@ fn a_compact_file_holds_the_same_members_on_one_line() {
     );
     assert_eq!(serde_json::from_str::<Project>(&text).unwrap(), p);
     assert_eq!(Head::read(&text).unwrap(), Head { saved_by: Some("0.12.0".into()), schema: 2 });
-    assert_eq!(saved_by(&text).as_deref(), Some("0.12.0"));
     let pretty = File::new("0.12.0", &view, &p).to_json().unwrap();
     assert_eq!(serde_json::from_str::<serde_json::Value>(&text).unwrap(), serde_json::from_str::<serde_json::Value>(&pretty).unwrap());
 }
@@ -113,25 +112,25 @@ fn a_written_file_reads_back_as_the_project_and_its_head() {
     let text = File::new("0.12.0", &view, &p).to_json().unwrap();
     assert_eq!(serde_json::from_str::<Project>(&text).unwrap(), p);
     assert_eq!(Head::read(&text).unwrap(), Head { saved_by: Some("0.12.0".into()), schema: 2 });
-    assert_eq!(saved_by(&text).as_deref(), Some("0.12.0"));
 }
 
 #[test]
 fn a_project_saved_before_saved_by_has_a_head_without_it() {
     let text = r#"{"schema": 1, "settings": {}, "items": {}, "next_id": 1}"#;
     assert_eq!(Head::read(text).unwrap(), Head { saved_by: None, schema: 1 });
-    assert_eq!(saved_by(text), None);
 }
 
 #[test]
 fn a_head_needs_a_schema() {
     assert!(Head::read(r#"{"savedBy": "0.12.0", "items": {}}"#).is_err());
     assert!(Head::read(r#"{"savedBy": "0.12.0", "schema": "2"}"#).is_err());
+    assert!(Head::read(r#"{"savedBy": "0.13.0", "schema": null, "schema": "3"}"#).is_err());
     assert!(Head::read("[]").is_err());
     assert!(Head::read(r#"["0.12.0", 2]"#).is_err());
     assert!(Head::read(r#"{"schema": 2, "schema": 2}"#).is_err());
     assert!(Head::read(r#"{"schema": 2} {}"#).is_err());
-    assert!(Head::read(r#"[2] []"#).is_err());
+    assert!(Head::read(r#"{"savedBy": "0.12.0", "schema": 2"#).is_err());
+    assert!(Head::read("").is_err());
     assert!(Head::read("2").is_err());
 }
 
@@ -139,14 +138,31 @@ fn a_head_needs_a_schema() {
 fn a_head_reads_a_saved_by_that_is_not_one_string_as_none() {
     assert_eq!(Head::read(r#"{"savedBy": 12, "schema": 2}"#).unwrap(), Head { saved_by: None, schema: 2 });
     assert_eq!(Head::read(r#"{"savedBy": ["0.12.0"], "schema": 2}"#).unwrap(), Head { saved_by: None, schema: 2 });
+    assert_eq!(Head::read(r#"{"savedBy": {"v": "0.12.0"}, "schema": 2}"#).unwrap(), Head { saved_by: None, schema: 2 });
     assert_eq!(Head::read(r#"{"savedBy": "a", "savedBy": "b", "schema": 2}"#).unwrap(), Head { saved_by: None, schema: 2 });
     assert_eq!(Head::read(r#"{"savedBy": "a", "schema": 2, "savedBy": 1, "savedBy": "c"}"#).unwrap(), Head { saved_by: None, schema: 2 });
+    assert_eq!(Head::read(r#"{"schema": 2, "savedBy": "0.13.0-dev"}"#).unwrap(), Head { saved_by: Some("0.13.0-dev".into()), schema: 2 });
 }
 
 #[test]
-fn a_head_reads_the_schema_of_a_project_written_as_an_array() {
-    assert_eq!(Head::read(r#"[2, {}, {}, 1]"#).unwrap(), Head { saved_by: None, schema: 2 });
-    assert_eq!(Head::read("[1]").unwrap(), Head { saved_by: None, schema: 1 });
+fn a_head_reads_the_object_form_only() {
+    assert!(matches!(Head::read(r#"[2, {}, {}, 1]"#), Err(ReadError::Json(_))));
+    assert!(matches!(Head::read("[1]"), Err(ReadError::Json(_))));
+    assert!(matches!(Head::read(r#"["savedBy", "0.12.0"]"#), Err(ReadError::Json(_))));
+}
+
+#[test]
+fn a_head_refuses_a_newer_schema() {
+    let Err(ReadError::TooNew { too_new, saved_by, .. }) = Head::read(r#"{"savedBy": "0.13.0", "schema": 3}"#) else {
+        panic!("schema 3 is newer than 2")
+    };
+    assert_eq!((too_new.schema, too_new.supported), (3, 2));
+    assert_eq!(saved_by.as_deref(), Some("0.13.0"));
+    let Err(e) = Head::read(r#"{"schema": 4294967295, "savedBy": 1}"#) else { panic!("schema u32::MAX is newer than 2") };
+    assert_eq!(e.to_string(), "project schema 4294967295 is newer than this version supports (2)");
+    let ReadError::TooNew { saved_by, .. } = e else { panic!("{e:?} is not TooNew") };
+    assert_eq!(saved_by, None);
+    assert_eq!(Head::read(r#"{"savedBy": "0.12.0", "schema": 2}"#).unwrap(), Head { saved_by: Some("0.12.0".into()), schema: 2 });
 }
 
 #[test]
@@ -156,31 +172,13 @@ fn a_head_skips_other_members_of_any_type() {
 }
 
 #[test]
-fn saved_by_is_none_unless_it_is_a_string_in_a_json_object() {
-    assert_eq!(saved_by(r#"{"savedBy": 12, "schema": 2}"#), None);
-    assert_eq!(saved_by(r#"{"savedBy": null, "schema": 2}"#), None);
-    assert_eq!(saved_by(r#"{"savedBy": "a", "savedBy": "b", "schema": 2}"#), None);
-    assert_eq!(saved_by(r#"{"savedBy": "a", "savedBy": 1}"#), None);
-    assert_eq!(saved_by(r#"{"savedBy": {"v": "0.12.0"}, "schema": 2}"#), None);
-    assert_eq!(saved_by(r#"["savedBy", "0.12.0"]"#), None);
-    assert_eq!(saved_by(r#"["0.12.0"]"#), None);
-    assert_eq!(saved_by(r#"{"savedBy": "0.12.0"} []"#), None);
-    assert_eq!(saved_by(r#"{"savedBy": "0.12.0", "schema": 2"#), None);
-    assert_eq!(saved_by(""), None);
-    assert_eq!(saved_by(r#"{"schema": 2, "savedBy": "0.13.0-dev"}"#).as_deref(), Some("0.13.0-dev"));
-    assert_eq!(saved_by(r#"{"savedBy": "0.13.0", "schema": null, "schema": "3"}"#).as_deref(), Some("0.13.0"));
-}
-
-#[test]
 fn a_deeply_nested_saved_by_is_skipped_like_other_members() {
     let deep = format!("{}{}", "[".repeat(10_000), "]".repeat(10_000));
     let text = format!(r#"{{"savedBy": {deep}, "schema": 2, "items": {deep}}}"#);
     assert_eq!(Head::read(&text).unwrap(), Head { saved_by: None, schema: 2 });
-    assert_eq!(saved_by(&text), None);
     let deep_map = format!("{}0{}", r#"{"v": "#.repeat(10_000), "}".repeat(10_000));
     let text = format!(r#"{{"savedBy": "0.12.0", "savedBy": {deep_map}, "schema": 2}}"#);
     assert_eq!(Head::read(&text).unwrap(), Head { saved_by: None, schema: 2 });
-    assert_eq!(saved_by(&text), None);
 }
 
 #[test]
@@ -188,7 +186,6 @@ fn a_wide_saved_by_array_reads_as_none() {
     let wide = format!("[{}0]", "0,".repeat(1_000_000));
     let text = format!(r#"{{"savedBy": {wide}, "schema": 2, "savedBy": {wide}}}"#);
     assert_eq!(Head::read(&text).unwrap(), Head { saved_by: None, schema: 2 });
-    assert_eq!(saved_by(&text), None);
     let text = format!(r#"{{"schema": 2, "savedBy": "0.12.0", "savedBy": "{}"}}"#, "9".repeat(1_000_000));
     assert_eq!(Head::read(&text).unwrap(), Head { saved_by: None, schema: 2 });
 }
@@ -199,8 +196,10 @@ fn check_schema_refuses_only_a_newer_schema() {
     assert_eq!(check_schema(0), Ok(()));
     assert_eq!(check_schema(1), Ok(()));
     assert_eq!(check_schema(2), Ok(()));
-    assert_eq!(check_schema(3), Err(TooNew { schema: 3, supported: 2 }));
-    assert_eq!(check_schema(u32::MAX), Err(TooNew { schema: u32::MAX, supported: 2 }));
+    for schema in [3, u32::MAX] {
+        let Err(e) = check_schema(schema) else { panic!("schema {schema} is newer than 2") };
+        assert_eq!((e.schema, e.supported), (schema, 2));
+    }
 }
 
 #[test]

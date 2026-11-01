@@ -25,7 +25,8 @@
 //!   [`SCHEMA_VERSION`].
 //!
 //! [`File`] writes the object: [`File::to_json`] indented, [`File::to_json_compact`] on one line.
-//! [`Head`] reads `savedBy` and `schema` from either form, and [`saved_by`] reads `savedBy` alone.
+//! [`Head::read`] reads `savedBy` and `schema` from either, and refuses a schema newer than
+//! [`SCHEMA_VERSION`].
 //!
 //! ```
 //! use std::collections::BTreeMap;
@@ -64,8 +65,15 @@ use serde::{Deserialize, Deserializer, Serialize};
 pub const SCHEMA_VERSION: u32 = 2;
 
 /// A project's schema is newer than [`SCHEMA_VERSION`].
+///
+/// Other crates read its fields but do not build one:
+///
+/// ```compile_fail
+/// let _ = craft_ecproj_format::TooNew { schema: 3, supported: 2 };
+/// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 #[error("project schema {schema} is newer than this version supports ({supported})")]
+#[non_exhaustive]
 pub struct TooNew {
     /// The schema the project declares.
     pub schema: u32,
@@ -116,95 +124,114 @@ impl<'a, V: Serialize, P: Serialize> File<'a, V, P> {
     }
 }
 
-/// `savedBy` and `schema`, read from a project file. Other members are skipped.
-///
-/// A `Head` reads what EffectCraft opens: a JSON object with a `schema` that is a `u32`, or a JSON
-/// array whose first element is the schema (serde's array form of the project, with no
-/// `savedBy`). Two `schema` members are refused.
+/// `savedBy` and `schema`, read from a project file by [`Head::read`].
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Head {
     /// The version of the app that wrote the file. `None` for projects saved before `savedBy` was
     /// added, and when `savedBy` is not a string or appears more than once.
     pub saved_by: Option<String>,
-    /// The project schema.
+    /// The project schema, no newer than [`SCHEMA_VERSION`].
     pub schema: u32,
 }
 
 impl Head {
-    /// Reads `text`, a project file. The schema is not checked: call [`check_schema`] on it.
-    pub fn read(text: &str) -> Result<Head, serde_json::Error> {
-        serde_json::from_str(text)
+    /// Reads `text`, a project file: one JSON object with a `schema` that is a `u32`. Other
+    /// members are skipped, and two `schema` members are refused. A schema newer than
+    /// [`SCHEMA_VERSION`] is refused with [`ReadError::TooNew`], which holds the file's `savedBy`.
+    pub fn read(text: &str) -> Result<Head, ReadError> {
+        let mut deserializer = serde_json::Deserializer::from_str(text);
+        let head = deserializer.deserialize_map(HeadVisitor)?;
+        deserializer.end()?;
+        if let Err(too_new) = check_schema(head.schema) {
+            return Err(ReadError::TooNew { too_new, saved_by: head.saved_by });
+        }
+        Ok(head)
     }
 }
 
-impl<'de> Deserialize<'de> for Head {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let members = deserializer.deserialize_struct("Head", &["savedBy", "schema"], MembersVisitor { schema: true })?;
-        let schema = members.schema.ok_or_else(|| de::Error::missing_field("schema"))?;
-        Ok(Head { saved_by: members.saved_by, schema })
-    }
+/// [`Head::read`] could not read a project file.
+///
+/// Other crates match it with a wildcard arm, and match [`ReadError::TooNew`] with `..`:
+///
+/// ```
+/// use craft_ecproj_format::{Head, ReadError};
+///
+/// let text = r#"{"savedBy": "0.13.0", "schema": 3}"#;
+/// let message = match Head::read(text) {
+///     Ok(_) => String::new(),
+///     Err(ReadError::TooNew { too_new, saved_by, .. }) => format!("saved by {}: {too_new}", saved_by.unwrap_or_default()),
+///     Err(e) => e.to_string(),
+/// };
+/// assert_eq!(message, "saved by 0.13.0: project schema 3 is newer than this version supports (2)");
+/// ```
+///
+/// ```compile_fail
+/// fn name(e: craft_ecproj_format::ReadError) -> &'static str {
+///     match e {
+///         craft_ecproj_format::ReadError::Json(_) => "json",
+///         craft_ecproj_format::ReadError::TooNew { .. } => "too new",
+///     }
+/// }
+/// ```
+///
+/// ```compile_fail
+/// fn saved_by(e: craft_ecproj_format::ReadError) -> Option<String> {
+///     match e {
+///         craft_ecproj_format::ReadError::TooNew { too_new: _, saved_by } => saved_by,
+///         _ => None,
+///     }
+/// }
+/// ```
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+pub enum ReadError {
+    /// The text is not one JSON object with a `schema` that is a `u32`.
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
+    /// The schema is newer than [`SCHEMA_VERSION`]. Reads as [`TooNew`] does.
+    #[error("{too_new}")]
+    #[non_exhaustive]
+    TooNew {
+        /// The schema the file declares, and [`SCHEMA_VERSION`].
+        too_new: TooNew,
+        /// The file's `savedBy`, read as [`Head::saved_by`] is.
+        saved_by: Option<String>,
+    },
 }
 
-/// The `savedBy` of project file `text`. `None` when the file has none, when it is not a JSON
-/// object, or when `savedBy` is not a string or appears more than once. Other members, `schema`
-/// included, are skipped.
-pub fn saved_by(text: &str) -> Option<String> {
-    let mut de = serde_json::Deserializer::from_str(text);
-    let members = de.deserialize_map(MembersVisitor { schema: false }).ok()?;
-    de.end().ok()?;
-    members.saved_by
-}
+/// Reads a [`Head`] from a JSON object. Other members are skipped.
+struct HeadVisitor;
 
-/// The envelope members of a JSON object.
-struct Members {
-    saved_by: Option<String>,
-    schema: Option<u32>,
-}
-
-/// Reads `savedBy`, and `schema` when `schema` is true. Other members are skipped.
-struct MembersVisitor {
-    schema: bool,
-}
-
-impl<'de> Visitor<'de> for MembersVisitor {
-    type Value = Members;
+impl<'de> Visitor<'de> for HeadVisitor {
+    type Value = Head;
 
     fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str("a project file object")
     }
 
-    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Members, A::Error> {
-        let mut members = Members { saved_by: None, schema: None };
+    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Head, A::Error> {
+        let mut saved_by = None;
         let mut seen_saved_by = false;
+        let mut schema = None;
         while let Some(key) = map.next_key::<Cow<'de, str>>()? {
             match &*key {
                 "savedBy" if seen_saved_by => {
                     map.next_value::<IgnoredAny>()?;
-                    members.saved_by = None;
+                    saved_by = None;
                 }
                 "savedBy" => {
-                    members.saved_by = map.next_value::<SavedBy>()?.0;
+                    saved_by = map.next_value::<SavedBy>()?.0;
                     seen_saved_by = true;
                 }
-                "schema" if self.schema && members.schema.is_some() => return Err(de::Error::duplicate_field("schema")),
-                "schema" if self.schema => members.schema = Some(map.next_value()?),
+                "schema" if schema.is_some() => return Err(de::Error::duplicate_field("schema")),
+                "schema" => schema = Some(map.next_value()?),
                 _ => {
                     map.next_value::<IgnoredAny>()?;
                 }
             }
         }
-        Ok(members)
-    }
-
-    /// A project written as an array holds its members in order, `schema` first, and no
-    /// `savedBy`. Only a [`Head`] reads one.
-    fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Members, A::Error> {
-        if !self.schema {
-            return Err(de::Error::invalid_type(de::Unexpected::Seq, &self));
-        }
-        let schema = seq.next_element::<u32>()?.ok_or_else(|| de::Error::invalid_length(0, &self))?;
-        while seq.next_element::<IgnoredAny>()?.is_some() {}
-        Ok(Members { saved_by: None, schema: Some(schema) })
+        let schema = schema.ok_or_else(|| de::Error::missing_field("schema"))?;
+        Ok(Head { saved_by, schema })
     }
 }
 
