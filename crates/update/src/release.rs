@@ -393,6 +393,11 @@ mod tests {
             "https://github.com/storytold/photocraft/releases/download/v0.4.0/photocraft-0.5.0-macos-universal.dmg",
             "https://github.com/storytold/photocraft/releases/download/v0.5.0/photocraft-0.4.0-macos-universal.dmg",
             "https://github.com/storytold/photocraft/releases/download/%2e%2e/%2E%2E/%2e%2e/%2e%2e/other/repo/releases/download/v1/photocraft-0.5.0-macos-universal.dmg",
+            // The right path on another host, over plain http, or behind a look-alike host.
+            "https://evil.example/storytold/photocraft/releases/download/v0.5.0/photocraft-0.5.0-macos-universal.dmg",
+            "http://github.com/storytold/photocraft/releases/download/v0.5.0/photocraft-0.5.0-macos-universal.dmg",
+            "https://github.com.evil.example/storytold/photocraft/releases/download/v0.5.0/photocraft-0.5.0-macos-universal.dmg",
+            "https://github.com@evil.example/storytold/photocraft/releases/download/v0.5.0/photocraft-0.5.0-macos-universal.dmg",
         ] {
             assert!(parse_github_release(&api_json(url), REPO).unwrap().assets.is_empty(), "{url}");
         }
@@ -404,6 +409,32 @@ mod tests {
         {
             assert_eq!(expected_download_url(REPO, tag, name), None, "{tag:?} {name:?}");
         }
+    }
+
+    /// Two entries for one asset name, one with the release's own link and one elsewhere: only the
+    /// release's own survives, in either order, so a later lookup by name can't pick the other.
+    /// Built from `SHA256SUMS.txt`, every entry for a repeated name gets that same single link.
+    #[test]
+    fn two_links_for_one_asset_keep_only_the_releases_own() {
+        let name = "photocraft-0.5.0-macos-universal.dmg";
+        let own = format!("https://github.com/storytold/photocraft/releases/download/v0.5.0/{name}");
+        let asset = |url: &str| format!(r#"{{"name":"{name}","size":123,"browser_download_url":"{url}","digest":"sha256:{HASH}"}}"#);
+        let elsewhere = "https://evil.example/storytold/photocraft/releases/download/v0.5.0/photocraft-0.5.0-macos-universal.dmg";
+        for (first, second) in [(elsewhere, own.as_str()), (own.as_str(), elsewhere)] {
+            let json = format!(
+                r#"{{"tag_name":"v0.5.0","name":"PhotoCraft v0.5.0","html_url":"https://github.com/storytold/photocraft/releases/tag/v0.5.0",
+                "published_at":"2026-10-08T14:52:50Z","prerelease":false,"body":"Notes","assets":[{},{}]}}"#,
+                asset(first),
+                asset(second)
+            );
+            let r = parse_github_release(&json, REPO).unwrap();
+            assert_eq!(r.assets.len(), 1, "{first} {second}");
+            assert_eq!(r.assets[0].url, own);
+        }
+
+        let r = release_from_sums(REPO, "v0.5.0", &[("a".repeat(64), name.to_string()), ("b".repeat(64), name.to_string())]);
+        let links: Vec<&str> = r.assets.iter().filter(|a| a.name == name).map(|a| a.url.as_str()).collect();
+        assert!(!links.is_empty() && links.iter().all(|url| *url == own), "{links:?}");
     }
 
     /// A `+` in the tag or name (semver build metadata) is `%2B` in GitHub's download links, but a
