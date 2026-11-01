@@ -201,6 +201,21 @@ https://github.com/storytold/filmcraft, https://github.com/storytold/effectcraft
 Copyright (c) 2026 ArtCraft Team and the respective application and craft-libs contributors.
 All adapted source is licensed MIT OR Apache-2.0.
 
+Windows printing
+
+craft-print drives the Windows print system through winprint
+(https://github.com/ArcticLampyrid/winprint.rs), BSD-3-Clause, Copyright (c) 2021 - 2024, alampy.com. The licence text
+is retained in licenses/print/winprint/LICENSE-BSD-3-Clause.txt: redistributions in source or binary
+form must reproduce that notice, the conditions and the disclaimer, and the names of the copyright
+holder and contributors may not be used to endorse products derived from it without written permission.
+
+The Windows driver settings and RGB/GDI transport in crates/gdi (craft-gdi) come from:
+- storytold/winprint.rs, crates/gdi (first published as storytold/winprint.rs#1),
+  https://github.com/storytold/winprint.rs, revision 417ac3c4d14d3da5485a99c7d5ce8f05664ec312,
+  by @skylartaylor, MIT OR Apache-2.0. It derives from @Moiztermind's PhotoCraft printing proposal,
+  https://github.com/storytold/photocraft/pull/3013, MIT OR Apache-2.0.
+  Copyright (c) 2026 ArtCraft Team and the respective contributors.
+
 The Canon CRW decoder in crates/crw (src/lib.rs, src/tables.rs, src/tests.rs, tests/) and its
 derivation record (crates/crw/clean-room/) come from:
 - LightCraft, crates/raw/src/vendor/crw.rs, crates/raw/src/vendor/crw_tables.rs,
