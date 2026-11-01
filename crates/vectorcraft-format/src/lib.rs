@@ -246,7 +246,8 @@ impl<'a> Entries<'a> {
 
     /// The entry's bytes, as [`Image::bytes`] gives them; an entry naming a range this reader has
     /// already read gets the same buffer. [`Error::TooBig`] when the bytes this reader has copied
-    /// from `tail`, the entry's included, would be more than `tail` holds.
+    /// from `tail`, the entry's included, would be more than `tail` holds; a refused entry is not
+    /// counted.
     pub fn bytes(&mut self, image: &Image) -> Result<Option<Arc<[u8]>>, Error> {
         let Some(at) = image.blob else {
             return Ok(base64::decode(&image.data).map(Arc::from));
@@ -257,10 +258,11 @@ impl<'a> Entries<'a> {
         let Some(bytes) = entry(self.tail, at) else {
             return Ok(None);
         };
-        self.copied = self.copied.saturating_add(bytes.len() as u64);
-        if self.copied > self.tail.len() as u64 {
+        let copied = self.copied.saturating_add(bytes.len() as u64);
+        if copied > self.tail.len() as u64 {
             return Err(Error::TooBig);
         }
+        self.copied = copied;
         let bytes: Arc<[u8]> = Arc::from(bytes);
         self.done.insert(at, Arc::clone(&bytes));
         Ok(Some(bytes))

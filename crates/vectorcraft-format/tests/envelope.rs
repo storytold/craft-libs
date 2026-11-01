@@ -165,6 +165,15 @@ fn entries_copy_at_most_the_data_after_the_json_in_all() {
     // Overlapping ranges that differ copy the shared bytes once each, and pass the data's size.
     let from = |at: u64| Image { mime: "image/png".into(), blob: Some([at, len - at]), ..Image::default() };
     assert!(matches!(entries.bytes(&from(1)), Err(Error::TooBig)));
+    // A refused entry is not counted, so the entries after it still read.
+    assert_eq!(entries.copied(), len);
+    let mut entries = Entries::new(&tail);
+    let part = |at: u64, n: u64| Image { mime: "image/png".into(), blob: Some([at, n]), ..Image::default() };
+    assert!(entries.bytes(&part(0, len / 2)).is_ok_and(|b| b.is_some()));
+    assert!(matches!(entries.bytes(&part(1, len - 1)), Err(Error::TooBig)));
+    assert_eq!(entries.copied(), len / 2);
+    assert!(entries.bytes(&part(len / 2, len / 2)).is_ok_and(|b| b.is_some()));
+    assert_eq!(entries.copied(), len);
     // Entries that name each byte once read whole, with inline and missing entries beside them.
     let mut entries = Entries::new(&tail);
     let half = |at: u64| Image { mime: "image/png".into(), blob: Some([at, len / 2]), ..Image::default() };
