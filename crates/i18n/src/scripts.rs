@@ -39,7 +39,6 @@ pub enum Script {
 
 impl Script {
     /// The ISO 15924 code, `Latn`.
-    #[must_use]
     pub fn code(self) -> &'static str {
         match self {
             Script::Arab => "Arab",
@@ -76,7 +75,6 @@ impl Script {
     }
 
     /// Whether text in this script runs right to left.
-    #[must_use]
     pub fn rtl(self) -> bool {
         matches!(self, Script::Arab | Script::Hebr | Script::Syrc | Script::Thaa)
     }
@@ -114,7 +112,6 @@ pub enum Han {
 /// where it is the language's own script. A language not in the table is taken to be written in
 /// Latin.
 // ponytail: the languages a Craft app ships or could plausibly ship; add a row with the locale.
-#[must_use]
 pub fn scripts(tag: &str) -> &'static [Script] {
     use Script::{
         Arab, Armn, Beng, Cyrl, Deva, Ethi, Geor, Grek, Gujr, Guru, Hang, Hani, Hebr, Hira, Kana, Khmr, Knda, Laoo, Latn, Mlym, Mymr, Orya, Sinh,
@@ -160,7 +157,6 @@ pub fn scripts(tag: &str) -> &'static [Script] {
 }
 
 /// The direction of a language tag's text: right to left when its main script is.
-#[must_use]
 pub fn direction(tag: &str) -> Direction {
     match scripts(tag).first() {
         Some(s) if s.rtl() => Direction::Rtl,
@@ -172,7 +168,6 @@ pub fn direction(tag: &str) -> Direction {
 /// P3): the contents of isolates (LRI, RLI or FSI up to the matching PDI) are skipped, and the
 /// search stops at the first paragraph separator. `None` when the paragraph has no strong
 /// character; P3 then reads it as left to right, and an app may use the interface direction.
-#[must_use]
 pub fn base_direction(text: &str) -> Option<Direction> {
     match unicode_bidi::get_base_direction(text) {
         unicode_bidi::Direction::Ltr => Some(Direction::Ltr),
@@ -186,7 +181,6 @@ pub fn base_direction(text: &str) -> Option<Direction> {
 /// (`zh-US`, `zh-AU`) → Traditional; `zh-HK`, `zh-MO`, `zh-Hant-HK` and `yue` → `HongKong`; `ja` →
 /// Japanese; `ko` → Korean. `None` for a language not written with Han, which leaves the choice
 /// to the font stack.
-#[must_use]
 pub fn han(tag: &str) -> Option<Han> {
     let tag = Subtags::parse(tag);
     let hong_kong = matches!(tag.region.as_deref(), Some("hk" | "mo"));

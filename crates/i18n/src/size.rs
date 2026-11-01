@@ -33,7 +33,6 @@ impl SizeUnit {
 /// // `12 MB`, `3.4 MB`, `640 KB`: decimal steps, whole kilobytes, no decimals from 10 MB.
 /// let style = FileSize::DECIMAL.smallest(SizeUnit::Kilo).largest(SizeUnit::Mega).unit_decimals(SizeUnit::Kilo, 0).whole_from(10);
 /// ```
-#[must_use]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct FileSize {
     step: u64,
@@ -166,7 +165,6 @@ impl FileSize {
 impl I18n {
     /// `bytes` as a file size in `lang`, written the way `style` says (`1.5 MB`, `512 bytes`), the
     /// number as [`I18n::format`] writes it (`1,5 Mo`).
-    #[must_use]
     pub fn file_size(&self, lang: Lang, bytes: u64, style: FileSize) -> String {
         let (unit, n, decimals) = style.parts(bytes);
         if unit == SizeUnit::Byte && !style.byte_symbol {
@@ -178,7 +176,6 @@ impl I18n {
     /// `value` with `decimals` digits after the decimal separator in the unit template `unit`, an
     /// English catalog key with the number as `{n}` (`{n} px`, `{n} dB`), the number as
     /// [`I18n::format`] writes it. Percentages are [`crate::Format::percent`].
-    #[must_use]
     pub fn measure(&self, lang: Lang, value: f64, decimals: usize, unit: &str) -> String {
         self.unit_text(lang, unit, &self.format().number(value, decimals))
     }
