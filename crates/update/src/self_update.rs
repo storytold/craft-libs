@@ -781,12 +781,24 @@ fn same_cache_as_helper(app: &App, paths: &Paths, exe: &Path) -> Result<(), Stri
     }
 }
 
+/// The path to hand to `WinVerifyTrust`. A program without the `longPathAware` manifest entry makes
+/// it fail with `CRYPT_E_FILE_ERROR` on a plain path of 260 characters or more, so a long path goes
+/// in its verbatim form (`\\?\C:\...`, as `canonicalize` returns), which it accepts.
+#[cfg(windows)]
+fn verifiable_path(path: &Path) -> std::path::PathBuf {
+    const MAX_PATH: usize = 260;
+    if path.as_os_str().len() < MAX_PATH {
+        return path.to_path_buf();
+    }
+    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+}
+
 /// Accepts `file` when it carries a valid Authenticode signature from the same publisher as
 /// `reference`, this program. Refuses an unsigned file, another publisher's, and every file when
 /// `reference` itself isn't signed.
 #[cfg(windows)]
 fn signed_like(app: &App, reference: &Path, file: &Path) -> Result<(), String> {
-    let publisher = |path: &Path| verifysign::verify_file(path).map(|signature| signature.subject_name());
+    let publisher = |path: &Path| verifysign::verify_file(&verifiable_path(path)).map(|signature| signature.subject_name());
     let ours = publisher(reference).map_err(|e| format!("this copy of {} isn't signed ({e}), so it doesn't install updates", app.name))?;
     let theirs = publisher(file).map_err(|e| format!("{} isn't signed ({e})", file.display()))?;
     if ours == theirs { Ok(()) } else { Err(format!("{} isn't signed by {}'s publisher", file.display(), app.name)) }
@@ -1337,6 +1349,27 @@ mod tests {
         assert_eq!(signed_like(&crate::suite::LAUNCHER, &cmd, &cmd), Ok(()));
         assert!(signed_like(&crate::suite::LAUNCHER, &cmd, &unsigned).is_err_and(|e| e.contains("isn't signed")));
         assert!(signed_like(&crate::suite::LAUNCHER, &unsigned, &cmd).is_err_and(|e| e.contains("doesn't install updates")));
+    }
+
+    /// A signed program in a folder nested past 260 characters, where unpacked updates of a deep
+    /// portable copy end up, still passes the signature check.
+    #[cfg(windows)]
+    #[test]
+    fn a_signed_file_at_a_path_past_max_path_still_verifies() {
+        let cmd = system_program("cmd.exe");
+        let root = std::env::temp_dir().join(format!("craft-update-long-path-{}", std::process::id()));
+        let mut deep = root.clone();
+        while deep.as_os_str().len() < 300 {
+            deep.push("a-folder-with-a-long-name-0123456789");
+        }
+        std::fs::create_dir_all(&deep).unwrap();
+        let copy = deep.join("cmd.exe");
+        std::fs::copy(&cmd, &copy).unwrap();
+        let long = copy.as_os_str().len() >= 260;
+        let result = signed_like(&crate::suite::LAUNCHER, &cmd, &copy);
+        let _ = std::fs::remove_dir_all(&root);
+        assert!(long);
+        assert_eq!(result, Ok(()));
     }
 
     /// An unsigned launcher says so before it quits for an update. `cargo test` binaries are
