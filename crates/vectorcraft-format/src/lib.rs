@@ -33,8 +33,9 @@
 
 pub mod base64;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::io::{self, Read, Write};
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
@@ -227,26 +228,32 @@ pub fn entry(tail: &[u8], [offset, len]: [u64; 2]) -> Option<&[u8]> {
 
 /// Reads the entries of one file, copying at most as many bytes from the data after the JSON as
 /// that data holds, in all. A file VectorCraft writes names each of those bytes once, so all of
-/// its entries read. Entries that name the same bytes again and again are refused once their
-/// copies pass that size, as VectorCraft's reader refuses them.
+/// its entries read. Entries that name the same `[offset, length]` share one copy, which counts
+/// once. Entries whose different ranges overlap copy the shared bytes once each, and are refused
+/// once their copies pass that size, as VectorCraft's reader refuses them.
 #[derive(Debug, Clone)]
 pub struct Entries<'a> {
     tail: &'a [u8],
     copied: u64,
+    done: HashMap<[u64; 2], Arc<[u8]>>,
 }
 
 impl<'a> Entries<'a> {
     /// A reader of entries over `tail`, the data after the JSON (from [`split_tail`]).
     pub fn new(tail: &'a [u8]) -> Self {
-        Self { tail, copied: 0 }
+        Self { tail, copied: 0, done: HashMap::new() }
     }
 
-    /// The entry's bytes, as [`Image::bytes`] gives them. [`Error::TooBig`] when the bytes this
-    /// reader has copied from `tail`, the entry's included, would be more than `tail` holds.
-    pub fn bytes(&mut self, image: &Image) -> Result<Option<Vec<u8>>, Error> {
+    /// The entry's bytes, as [`Image::bytes`] gives them; an entry naming a range this reader has
+    /// already read gets the same buffer. [`Error::TooBig`] when the bytes this reader has copied
+    /// from `tail`, the entry's included, would be more than `tail` holds.
+    pub fn bytes(&mut self, image: &Image) -> Result<Option<Arc<[u8]>>, Error> {
         let Some(at) = image.blob else {
-            return Ok(base64::decode(&image.data));
+            return Ok(base64::decode(&image.data).map(Arc::from));
         };
+        if let Some(bytes) = self.done.get(&at) {
+            return Ok(Some(Arc::clone(bytes)));
+        }
         let Some(bytes) = entry(self.tail, at) else {
             return Ok(None);
         };
@@ -254,7 +261,9 @@ impl<'a> Entries<'a> {
         if self.copied > self.tail.len() as u64 {
             return Err(Error::TooBig);
         }
-        Ok(Some(bytes.to_vec()))
+        let bytes: Arc<[u8]> = Arc::from(bytes);
+        self.done.insert(at, Arc::clone(&bytes));
+        Ok(Some(bytes))
     }
 
     /// The bytes copied from `tail` so far.

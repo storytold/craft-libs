@@ -64,9 +64,12 @@ let pdf = file.pdf.map(|p| entries.bytes(&p)).transpose()?.flatten();
 - A `generator`, `preview` or `pdf` of the wrong shape reads as `None` in `File` and `Head`.
 - `Image::len` gives the size an entry states without decoding it; `Image::bytes(after)` decodes
   `data` or copies the `blob` range, and `entry(after, [offset, length])` returns the range.
-- `Entries::new(after)` reads a file's entries: `Entries::bytes` returns `Error::TooBig` once the
-  `blob` ranges it has copied add up to more than `after` holds, as when many entries name the
-  same bytes.
+- `Entries::new(after)` reads a file's entries: `Entries::bytes` returns each entry's bytes as an
+  `Arc<[u8]>`, gives entries that name the same `[offset, length]` one shared buffer, and returns
+  `Error::TooBig` once the `blob` ranges it has copied add up to more than `after` holds, as when
+  many different ranges overlap.
+- `base64::decode` does not check the unused bits before the padding: `Zh==` decodes like `Zg==`,
+  as in VectorCraft's own decoder.
 - `File::tail()`, or `Tail::new(version)`, places each entry with `Tail::image`: after the JSON
   for version 4 and entries of at least `INLINE_MAX` bytes, inline otherwise. `Tail::write_to`
   writes the marker and the entries.

@@ -153,15 +153,23 @@ fn entries_copy_at_most_the_data_after_the_json_in_all() {
     let tail = vec![7u8; 1 << 20];
     let len = tail.len() as u64;
     let whole = Image { mime: "image/png".into(), blob: Some([0, len]), ..Image::default() };
-    // Many entries naming the same bytes: the first copy fits, the second passes the data's size.
+    // Many entries naming the same range share one copy, which counts once.
     let mut entries = Entries::new(&tail);
-    assert!(entries.bytes(&whole).is_ok_and(|b| b.as_ref() == Some(&tail)));
-    assert!(matches!(entries.bytes(&whole), Err(Error::TooBig)));
+    let first = entries.bytes(&whole).ok().flatten();
+    assert_eq!(first.as_deref(), Some(&tail[..]));
+    for _ in 0..3 {
+        let again = entries.bytes(&whole).ok().flatten();
+        assert!(again.as_ref().zip(first.as_ref()).is_some_and(|(a, b)| std::sync::Arc::ptr_eq(a, b)));
+    }
+    assert_eq!(entries.copied(), len);
+    // Overlapping ranges that differ copy the shared bytes once each, and pass the data's size.
+    let from = |at: u64| Image { mime: "image/png".into(), blob: Some([at, len - at]), ..Image::default() };
+    assert!(matches!(entries.bytes(&from(1)), Err(Error::TooBig)));
     // Entries that name each byte once read whole, with inline and missing entries beside them.
     let mut entries = Entries::new(&tail);
     let half = |at: u64| Image { mime: "image/png".into(), blob: Some([at, len / 2]), ..Image::default() };
     assert_eq!(entries.bytes(&half(0)).unwrap().map(|b| b.len()), Some(tail.len() / 2));
-    assert_eq!(entries.bytes(&Image::inline("image/png", PNG)), Ok(Some(PNG.to_vec())));
+    assert_eq!(entries.bytes(&Image::inline("image/png", PNG)).unwrap().as_deref(), Some(PNG));
     assert_eq!(entries.bytes(&half(len)), Ok(None));
     assert_eq!(entries.bytes(&half(len / 2)).unwrap().map(|b| b.len()), Some(tail.len() / 2));
     assert_eq!(entries.copied(), len);
