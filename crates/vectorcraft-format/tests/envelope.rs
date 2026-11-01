@@ -301,6 +301,15 @@ fn sniff_needs_a_vectorcraft_format_member() {
     let pretty = written(&file, &tail, true);
     assert!(sniff(&plain) && sniff(&pretty));
     assert!(sniff(b" \n{\"format\" : \"drawcraft\"}"));
+    // Keys and values are compared as JSON reads them, escapes decoded.
+    let esc = |s: &str| s.replace('|', "\\");
+    let escaped = esc(r#"{"|u0066ormat":"vector|u0063raft","version":4,"document":{"layers":[]}}"#);
+    assert!(sniff(escaped.as_bytes()));
+    assert_eq!(serde_json::from_str::<File<Doc>>(&escaped).unwrap().format, EXTENSION);
+    assert!(sniff(esc(r#"{"format":"draw|u0063raft"}"#).as_bytes()));
+    for no in [r#"{"form|u0061t":"other","format":"vectorcraft"}"#, r#"{"format":"vectorcraft|u0021"}"#, r#"{"format":"vectorcraft|"}"#] {
+        assert!(!sniff(esc(no).as_bytes()), "{no}");
+    }
     assert!(sniff(br#"{"generator":"format","x":{"format":"other","a":[1,"]"]},"n":-1.5e3,"t":true,"s":"\"format\":","format":"vectorcraft"}"#));
     assert!(is_compressed(&gzip(&plain)) && !is_compressed(&plain));
     assert!(sniff(&gzip(&plain)));

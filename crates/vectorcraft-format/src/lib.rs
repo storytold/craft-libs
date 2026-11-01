@@ -322,23 +322,24 @@ pub fn sniff(head: &[u8]) -> bool {
     } else {
         head.get(..HEAD).unwrap_or(head)
     };
-    format_member(head).is_some_and(|f| f == EXTENSION.as_bytes() || f == LEGACY_EXTENSION.as_bytes())
+    format_member(head).is_some_and(|f| f == EXTENSION || f == LEGACY_EXTENSION)
 }
 
-/// The string value of the top-level `format` member of the object `text` starts, as written
-/// (escapes are not decoded). `None` when `text` ends before it, or the value is not a string.
-fn format_member(text: &[u8]) -> Option<&[u8]> {
+/// The string value of the top-level `format` member of the object `text` starts, with keys and
+/// values compared as JSON reads them (escapes decoded). `None` when `text` ends before it, or the
+/// value is not a string.
+fn format_member(text: &[u8]) -> Option<String> {
     let mut s = Scan { text, at: 0 };
     s.space();
     s.expect(b'{')?;
     loop {
         s.space();
-        let key = s.string()?;
+        let key = s.decoded()?;
         s.space();
         s.expect(b':')?;
         s.space();
-        if key == b"format" {
-            return s.string();
+        if key == "format" {
+            return s.decoded();
         }
         s.skip_value()?;
         s.space();
@@ -377,6 +378,13 @@ impl<'a> Scan<'a> {
                 _ => self.at += 1,
             }
         }
+    }
+
+    /// The string that starts here, as JSON reads it.
+    fn decoded(&mut self) -> Option<String> {
+        let start = self.at;
+        self.string()?;
+        serde_json::from_slice(self.text.get(start..self.at)?).ok()
     }
 
     /// Move past the value that starts here: a string, an object or array with everything in it,

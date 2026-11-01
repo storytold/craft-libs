@@ -58,7 +58,8 @@ let pdf = file.pdf.map(|p| entries.bytes(&p)).transpose()?.flatten();
 ```
 
 - `sniff(head)` recognizes a file, plain or gzip, from its first 256 bytes after decompression:
-  they start with `{` and the first `"format"` member is `"vectorcraft"` or `"drawcraft"`.
+  they start with `{` and the first `"format"` member is `"vectorcraft"` or `"drawcraft"`, with
+  JSON escapes in the key and value decoded.
 - `is_compressed(bytes)` checks for the gzip magic bytes.
 - `split_tail(bytes)` and `json_part(bytes)` find the JSON and the data after it in an
   uncompressed or decompressed file.
