@@ -323,6 +323,14 @@ fn an_encrypted_file_is_turned_but_not_reframed() {
 }
 
 #[test]
+fn two_sided_is_unknown_for_a_printer_that_is_not_there() {
+    // A name no queue has, as when a printer was removed after the list was read: unknown, at
+    // once, never an error or a guess.
+    assert_eq!(spool::two_sided("craft-print: no such printer \u{1F5A8}"), None);
+    assert_eq!(spool::two_sided(""), None);
+}
+
+#[test]
 fn unreadable_sheets_are_errors_never_panics() {
     for bad in [&b""[..], b"not a pdf", b"%PDF-1.7\nstartxref\n999999\n%%EOF", b"%PDF-1.7\nxref\n0 1\ntrailer\n<< >>\nstartxref\n9\n%%EOF"] {
         assert!(crate::sheets::read(bad).is_err());
