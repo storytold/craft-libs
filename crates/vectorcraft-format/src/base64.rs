@@ -42,7 +42,9 @@ pub fn decoded_len(s: &str) -> u64 {
 }
 
 /// The bytes `s` encodes; `None` when it is not valid padded base64. Padding is allowed only at
-/// the end.
+/// the end. The unused bits before the padding are not checked, so a non-canonical group decodes
+/// like its canonical form (`Zh==` gives the bytes of `Zg==`, and `Zm9=` those of `Zm8=`), as
+/// VectorCraft's own decoder reads them.
 pub fn decode(s: &str) -> Option<Vec<u8>> {
     let clean = s.bytes().filter(|b| !b.is_ascii_whitespace());
     let n = clean.clone().count();
@@ -107,6 +109,16 @@ mod tests {
         for n in 0..all.len() {
             assert_eq!(decode(&encode(&all[..n])).as_deref(), Some(&all[..n]));
         }
+    }
+
+    #[test]
+    fn nonzero_bits_before_the_padding_are_ignored() {
+        for (loose, canonical) in [("Zh==", "Zg=="), ("Zm9=", "Zm8=")] {
+            assert_eq!(decode(loose), decode(canonical), "{loose}");
+            assert_eq!(decoded_len(loose), decoded_len(canonical), "{loose}");
+        }
+        assert_eq!(decode("Zh==").as_deref(), Some(&b"f"[..]));
+        assert_eq!(decode("Zm9=").as_deref(), Some(&b"fo"[..]));
     }
 
     #[test]
