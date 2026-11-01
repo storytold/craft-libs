@@ -94,8 +94,8 @@ pub fn install_at(
     {
         return Err(format!("Cannot update {} to {}: installed version {} is newer", app.name, release.version_label(), inst_v));
     }
-    log::info!("{}: starting {} to {} ({})", app.name, if existing.is_some() { "update" } else { "install" }, release.version_label(), kind.label());
     check_download_link(app, release, asset)?;
+    log::info!("{}: starting {} to {} ({})", app.name, if existing.is_some() { "update" } else { "install" }, release.version_label(), kind.label());
     let file = download(release, asset, job)?;
     log::info!("{}: download ready ({}), running installer...", app.name, file.display());
     // Past this point the install can't be interrupted halfway.
@@ -202,7 +202,7 @@ pub(crate) fn bind_artifact_version(app: &App, release: &Release, asset: &Asset)
 /// release's `SHA256SUMS.txt` that the download is checked against. A `local-mirror` build also
 /// accepts the developer's loopback mirror, whose links the feed parser has already confined; so
 /// do this crate's tests, whose downloads come from a server on 127.0.0.1.
-pub(crate) fn check_download_link(app: &App, release: &Release, asset: &Asset) -> Result<(), String> {
+pub fn check_download_link(app: &App, release: &Release, asset: &Asset) -> Result<(), String> {
     let own = |a: &Asset| {
         ((cfg!(feature = "local-mirror") || cfg!(test)) && crate::http::is_loopback(&a.url))
             || release::expected_download_url(app.repo, &release.tag, &a.name).as_deref() == Some(a.url.as_str())

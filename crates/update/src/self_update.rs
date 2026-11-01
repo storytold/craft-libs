@@ -263,8 +263,10 @@ fn exe_after_msi(app: &App, registered: bool, exe: &Path) -> PathBuf {
 }
 
 /// How the running copy at `exe` was installed on Linux, or `None` when it isn't this app's to
-/// update: a Flatpak bundle installed per user, an AppImage, the deb/rpm/Arch package at
-/// `/usr/bin/<id>`, or a standalone copy outside the package managers' folders ([`linux_location`]).
+/// update: a Flatpak release bundle (per user or system-wide), an AppImage, the deb/rpm/Arch
+/// package at `/usr/bin/<id>`, or a standalone copy outside the package managers' folders
+/// ([`linux_location`]). A `/usr/bin/<id>` that none of those package databases claims is also
+/// `None`: it sits in a system folder, so it isn't treated as a standalone copy.
 #[cfg(target_os = "linux")]
 fn detect(app: &App, exe: &Path) -> Option<Install> {
     if process::in_sandbox() {
@@ -296,6 +298,10 @@ fn detect(app: &App, exe: &Path) -> Option<Install> {
     if crate::detect::linux::has_pacman_db() && process::capture("pacman", &["-Q", &app.bundle_id()], t).is_some() {
         return Some(Install::Package(PackageKind::ArchPkg, exe.to_path_buf()));
     }
+    // `/usr/bin/<id>` that no package database claims, e.g. copied there by hand or put there by a
+    // package whose name isn't the app's id. Replacing it would write over a system folder without
+    // a package to do it, so it doesn't update itself.
+    log::info!("{}: {} belongs to no deb, rpm or Arch package, so it doesn't update itself", app.name, exe.display());
     None
 }
 
