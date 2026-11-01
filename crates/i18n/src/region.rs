@@ -73,7 +73,6 @@ impl Region {
     /// `nu` stays in the number and time locales (`ar-EG-u-nu-latn`). `C` and `POSIX` are the C
     /// locale: English, A4, metric, a `.` decimal and no grouping. An empty or unreadable tag is
     /// `en-US`; a bare `en` is the United States, any other bare language has no territory.
-    #[must_use]
     pub fn from_tag(tag: &str) -> Region {
         match Tag::parse(tag) {
             Some(tag) => Region::from_parts(&tag),
@@ -86,7 +85,6 @@ impl Region {
 
     /// The region for an app's saved region setting: `""` or `auto` (any case) is
     /// [`Region::system`], anything else a locale tag for [`Region::from_tag`].
-    #[must_use]
     pub fn from_setting(setting: &str) -> Region {
         let setting = setting.trim();
         if setting.is_empty() || setting.eq_ignore_ascii_case("auto") { Region::system() } else { Region::from_tag(setting) }
@@ -101,7 +99,6 @@ impl Region {
     /// - Linux and the BSDs: `LC_ALL`, else each of `LC_NUMERIC`, `LC_TIME`, `LC_MEASUREMENT` and
     ///   `LC_PAPER` on its own, else `LANG`.
     /// - The web and Android: the preferred language, the only locale they expose.
-    #[must_use]
     pub fn system() -> Region {
         static SYSTEM: OnceLock<Region> = OnceLock::new();
         SYSTEM.get_or_init(read_system).clone()

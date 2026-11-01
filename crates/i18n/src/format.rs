@@ -82,7 +82,6 @@ impl Format {
     }
 
     /// The format for a locale tag (`de-CH`, `ar-EG`), with the locale's own digits.
-    #[must_use]
     pub fn from_tag(tag: &str) -> Format {
         Format::new(&Region::from_tag(tag), Digits::Locale)
     }
@@ -94,7 +93,6 @@ impl Format {
 
     /// `value` rounded to `decimals` digits after the decimal separator; infinities and NaN are
     /// `∞`, `-∞` and `NaN`.
-    #[must_use]
     pub fn number(&self, value: f64, decimals: usize) -> String {
         match to_decimal(value, decimals) {
             Some(d) => self.write(&d),
@@ -104,7 +102,6 @@ impl Format {
 
     /// [`Self::number`] without grouping separators, for values such as pixel sizes and years:
     /// `1920`, `١٩٢٠`, `1234,5`.
-    #[must_use]
     pub fn number_ungrouped(&self, value: f64, decimals: usize) -> String {
         match to_decimal(value, decimals) {
             Some(d) => {
@@ -117,7 +114,6 @@ impl Format {
 
     /// `ratio` as a percentage with `decimals` digits after the decimal separator: `0.5` is
     /// `50%`, `50 %` (French, German), `%50` (Turkish), `٥٠٪؜` (Egyptian Arabic).
-    #[must_use]
     pub fn percent(&self, ratio: f64, decimals: usize) -> String {
         let Some(d) = to_decimal(ratio * 100.0, decimals) else {
             return format!("{}{}{}", self.percent.0, non_finite(ratio), self.percent.1);

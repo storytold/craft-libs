@@ -158,7 +158,6 @@ impl I18n {
     /// to left, say). Locales that can't be used are skipped and come back as problems for the app
     /// to log. A locale's bad rows are logged (`log::warn!`) when it is first looked up in, and
     /// [`I18n::check_all`] lists them all.
-    #[must_use]
     pub fn new(embedded: &'static Embedded, offered: &[&str]) -> (I18n, Vec<String>) {
         let mut problems = Vec::new();
         let mut locales = vec![bare("en"), bare("pseudo")];
@@ -420,7 +419,6 @@ impl I18n {
 /// value that already is one isolate keeps it; pass numbers, paths and codes through [`ltr`].
 /// Other text gets no marks, and a value's own isolate is taken off. Unknown placeholders stay as written,
 /// and inserted values are never read as templates, so a file name containing `{n}` stays intact.
-#[must_use]
 pub fn fmt(template: &str, args: &[(&str, &str)]) -> String {
     fill(template, args, true)
 }
@@ -428,7 +426,6 @@ pub fn fmt(template: &str, args: &[(&str, &str)]) -> String {
 /// [`fmt`] without isolates, for text that goes where the marks would get in the way: file
 /// names, logs, terminals, text compared or parsed later. Every isolate mark is taken off, in
 /// the template and in the values.
-#[must_use]
 pub fn fmt_plain(template: &str, args: &[(&str, &str)]) -> String {
     strip_isolates(&fill(template, args, false))
 }
@@ -449,7 +446,6 @@ const ALM: char = '\u{061C}';
 /// `value` as a first-strong isolate (FSI…PDI): it takes the direction of its first strong
 /// letter and can't reorder the text around it. What [`fmt`] does to each value in text with a
 /// right-to-left letter.
-#[must_use]
 pub fn isolate(value: &str) -> String {
     wrap(FSI, value)
 }
@@ -458,14 +454,12 @@ pub fn isolate(value: &str) -> String {
 /// codes, which read left to right in every language. In an RTL first-strong isolate, the
 /// segments of `/home/مستخدم/file.txt` would run right to left. [`fmt`] takes the isolate off
 /// again in text with no right-to-left letter.
-#[must_use]
 pub fn ltr(value: &str) -> String {
     wrap(LRI, value)
 }
 
 /// `text` without isolate marks (LRI, RLI, FSI, PDI): a [`fmt`] or [`I18n::trn`] result made fit
 /// for a file name, a log or a comparison.
-#[must_use]
 pub fn strip_isolates(text: &str) -> String {
     text.chars().filter(|c| !matches!(*c, LRI | RLI | FSI | PDI)).collect()
 }
