@@ -178,12 +178,12 @@ impl<'de> Visitor<'de> for MembersVisitor {
         let mut seen_saved_by = false;
         while let Some(key) = map.next_key::<Cow<'de, str>>()? {
             match &*key {
+                "savedBy" if seen_saved_by => {
+                    map.next_value::<IgnoredAny>()?;
+                    members.saved_by = None;
+                }
                 "savedBy" => {
-                    let value = map.next_value::<serde_json::Value>()?;
-                    members.saved_by = match value {
-                        serde_json::Value::String(version) if !seen_saved_by => Some(version),
-                        _ => None,
-                    };
+                    members.saved_by = map.next_value::<SavedBy>()?.0;
                     seen_saved_by = true;
                 }
                 "schema" if self.schema && members.schema.is_some() => return Err(de::Error::duplicate_field("schema")),
@@ -205,5 +205,80 @@ impl<'de> Visitor<'de> for MembersVisitor {
         let schema = seq.next_element::<u32>()?.ok_or_else(|| de::Error::invalid_length(0, &self))?;
         while seq.next_element::<IgnoredAny>()?.is_some() {}
         Ok(Members { saved_by: None, schema: Some(schema) })
+    }
+}
+
+/// A `savedBy` value: the string, or `None` for any other value. Arrays and objects are skipped
+/// element by element with [`IgnoredAny`], so a large or deeply nested value is not kept.
+struct SavedBy(Option<String>);
+
+impl<'de> Deserialize<'de> for SavedBy {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        deserializer.deserialize_any(SavedByVisitor)
+    }
+}
+
+struct SavedByVisitor;
+
+impl<'de> Visitor<'de> for SavedByVisitor {
+    type Value = SavedBy;
+
+    fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("any JSON value")
+    }
+
+    fn visit_str<E: de::Error>(self, v: &str) -> Result<SavedBy, E> {
+        Ok(SavedBy(Some(v.to_owned())))
+    }
+
+    fn visit_string<E: de::Error>(self, v: String) -> Result<SavedBy, E> {
+        Ok(SavedBy(Some(v)))
+    }
+
+    fn visit_bool<E: de::Error>(self, _: bool) -> Result<SavedBy, E> {
+        Ok(SavedBy(None))
+    }
+
+    fn visit_i64<E: de::Error>(self, _: i64) -> Result<SavedBy, E> {
+        Ok(SavedBy(None))
+    }
+
+    fn visit_i128<E: de::Error>(self, _: i128) -> Result<SavedBy, E> {
+        Ok(SavedBy(None))
+    }
+
+    fn visit_u64<E: de::Error>(self, _: u64) -> Result<SavedBy, E> {
+        Ok(SavedBy(None))
+    }
+
+    fn visit_u128<E: de::Error>(self, _: u128) -> Result<SavedBy, E> {
+        Ok(SavedBy(None))
+    }
+
+    fn visit_f64<E: de::Error>(self, _: f64) -> Result<SavedBy, E> {
+        Ok(SavedBy(None))
+    }
+
+    fn visit_unit<E: de::Error>(self) -> Result<SavedBy, E> {
+        Ok(SavedBy(None))
+    }
+
+    fn visit_none<E: de::Error>(self) -> Result<SavedBy, E> {
+        Ok(SavedBy(None))
+    }
+
+    fn visit_some<D: Deserializer<'de>>(self, deserializer: D) -> Result<SavedBy, D::Error> {
+        deserializer.deserialize_ignored_any(IgnoredAny)?;
+        Ok(SavedBy(None))
+    }
+
+    fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<SavedBy, A::Error> {
+        while seq.next_element::<IgnoredAny>()?.is_some() {}
+        Ok(SavedBy(None))
+    }
+
+    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<SavedBy, A::Error> {
+        while map.next_entry::<IgnoredAny, IgnoredAny>()?.is_some() {}
+        Ok(SavedBy(None))
     }
 }

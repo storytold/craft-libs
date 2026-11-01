@@ -172,6 +172,28 @@ fn saved_by_is_none_unless_it_is_a_string_in_a_json_object() {
 }
 
 #[test]
+fn a_deeply_nested_saved_by_is_skipped_like_other_members() {
+    let deep = format!("{}{}", "[".repeat(10_000), "]".repeat(10_000));
+    let text = format!(r#"{{"savedBy": {deep}, "schema": 2, "items": {deep}}}"#);
+    assert_eq!(Head::read(&text).unwrap(), Head { saved_by: None, schema: 2 });
+    assert_eq!(saved_by(&text), None);
+    let deep_map = format!("{}0{}", r#"{"v": "#.repeat(10_000), "}".repeat(10_000));
+    let text = format!(r#"{{"savedBy": "0.12.0", "savedBy": {deep_map}, "schema": 2}}"#);
+    assert_eq!(Head::read(&text).unwrap(), Head { saved_by: None, schema: 2 });
+    assert_eq!(saved_by(&text), None);
+}
+
+#[test]
+fn a_wide_saved_by_array_reads_as_none() {
+    let wide = format!("[{}0]", "0,".repeat(1_000_000));
+    let text = format!(r#"{{"savedBy": {wide}, "schema": 2, "savedBy": {wide}}}"#);
+    assert_eq!(Head::read(&text).unwrap(), Head { saved_by: None, schema: 2 });
+    assert_eq!(saved_by(&text), None);
+    let text = format!(r#"{{"schema": 2, "savedBy": "0.12.0", "savedBy": "{}"}}"#, "9".repeat(1_000_000));
+    assert_eq!(Head::read(&text).unwrap(), Head { saved_by: None, schema: 2 });
+}
+
+#[test]
 fn check_schema_refuses_only_a_newer_schema() {
     assert_eq!(SCHEMA_VERSION, 2);
     assert_eq!(check_schema(0), Ok(()));
