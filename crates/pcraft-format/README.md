@@ -25,8 +25,9 @@ A bundle is a ZIP archive or a directory with these entries:
 | `save.lock` | `SAVE_LOCK` | directory bundles only: held while a save runs (empty) |
 
 `<blake3>` is the BLAKE3 hash of the uncompressed bytes as 64 lowercase hex digits.
-`is_valid_hash` checks that form; check a hash read from a file with it before building an
-entry name. `EXTENSION` is `pcraft` and `FORMAT_VERSION` is 1.
+`is_valid_hash` checks that form. `tile_path` and `blob_path` return `None` for any other
+string, so a hash read from a file never becomes an entry name such as `tiles/../x.zst`.
+`EXTENSION` is `pcraft` and `FORMAT_VERSION` is 1.
 
 ## Use
 
@@ -43,9 +44,11 @@ let manifest: Manifest<MyDocument> = serde_json::from_value(value)?;
 - `Manifest<D>` has `format_version`, `generator`, `document: D`, `thumbnail` and `composite`,
   and serializes them in that order. Absent previews serialize as `null`. On read, missing
   previews are `None` and members the type does not name are skipped.
-- `TileRef` has `tx`, `ty` and `hash`.
+- `TileRef` has `tx`, `ty` and `hash`. `TileRef::path` gives its entry, or `None` when the
+  hash is not valid.
 - `check_manifest(json, &Limits)` checks the size, the nesting and the item count in one pass
-  without recursion. `parse_manifest(json, &Limits)` runs that check and then parses into a
+  without recursion. PhotoCraft's own check of a manifest it saves tests the nesting and the
+  item count only. `parse_manifest(json, &Limits)` runs that check and then parses into a
   `serde_json::Value` with serde_json's 128-level recursion limit turned off.
 - `migrate(&mut value, steps, target)` upgrades the JSON in place, where `steps[i]` upgrades
   version `i + 1` to `i + 2`, and returns the version the file had. `Step<E>` is
@@ -64,9 +67,9 @@ let manifest: Manifest<MyDocument> = serde_json::from_value(value)?;
 - `max_blob_bytes` (1 GiB): one decompressed blob.
 - `max_total_bytes` (16 GiB): every decompressed tile and blob in one bundle.
 - `max_depth` (367, `manifest_depth(MAX_GROUP_DEPTH)`): the nesting of JSON arrays and objects.
-  PhotoCraft nests up to `MAX_GROUP_DEPTH` (100) layer groups, three levels each, and allows 64
-  more levels for the document and leaf layers. A value above `MAX_DEPTH` (400) is treated as
-  400, so parsing stays within the stack.
+  PhotoCraft nests up to `MAX_GROUP_DEPTH` (100, a copy of PhotoCraft's own constant) layer
+  groups, three levels each, and allows 64 more levels for the document and leaf layers. A
+  value above `MAX_DEPTH` (400) is treated as 400, so parsing stays within the stack.
 - `max_items` (`MAX_MANIFEST_ITEMS`, 4,194,304): arrays and objects opened, plus elements and
   members after a comma.
 
@@ -85,7 +88,8 @@ limits.max_manifest_bytes = 16 << 20;
 
 - `tests/manifest.rs`: a manifest with and without previews serializes with
   `serde_json::to_vec_pretty` to JSON written by hand in the test, byte for byte, and reads
-  back equal; missing previews and unknown members; entry names and hash checks.
+  back equal; missing previews and unknown members; entry names, hash checks, and no entry name
+  for an invalid hash.
 - `tests/limits.rs`: the default limits, nesting at and past `max_depth`, items at and past
   `max_items`, brackets inside strings, the manifest size, JSON errors and the messages.
 - `tests/migrate.rs`: steps in order, partial chains, the current version, newer, missing,

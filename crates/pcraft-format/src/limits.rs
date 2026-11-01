@@ -1,6 +1,7 @@
 use crate::Error;
 
-/// Deepest nesting of layer groups PhotoCraft saves.
+/// Deepest nesting of layer groups PhotoCraft saves. The value is a copy of PhotoCraft's
+/// `photocraft_doc::MAX_GROUP_DEPTH`; change both together.
 pub const MAX_GROUP_DEPTH: usize = 100;
 
 /// Default [`Limits::max_items`]: the most JSON items (arrays and objects opened, plus elements
@@ -55,6 +56,10 @@ impl Default for Limits {
 /// [`MAX_DEPTH`]) and
 /// [`Limits::max_items`] in one pass without recursion. Brackets and commas inside strings are
 /// not counted. Returns [`Error::LimitExceeded`] for the first limit passed.
+///
+/// PhotoCraft's own check of a manifest it is about to save tests the depth and the items only.
+/// This check also refuses JSON larger than [`Limits::max_manifest_bytes`], so a writer that runs
+/// it before saving refuses a manifest of more than that size.
 pub fn check_manifest(json: &[u8], limits: &Limits) -> Result<(), Error> {
     if json.len() > limits.max_manifest_bytes {
         return Err(Error::LimitExceeded(format!("`{}` exceeds {} bytes", crate::MANIFEST, limits.max_manifest_bytes)));

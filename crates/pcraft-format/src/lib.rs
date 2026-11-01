@@ -58,18 +58,20 @@ pub const SAVE_LOCK: &str = "save.lock";
 /// Hex-encoded BLAKE3 hash (64 lowercase hex digits) of an object's uncompressed bytes.
 pub type Hash = String;
 
-/// The entry of the tile with hash `hash`: `tiles/<hash>.zst`.
-pub fn tile_path(hash: &str) -> String {
-    format!("tiles/{hash}.zst")
+/// The entry of the tile with hash `hash`: `tiles/<hash>.zst`. `None` when [`is_valid_hash`]
+/// refuses `hash`.
+pub fn tile_path(hash: &str) -> Option<String> {
+    is_valid_hash(hash).then(|| format!("tiles/{hash}.zst"))
 }
 
-/// The entry of the blob with hash `hash`: `blobs/<hash>.zst`.
-pub fn blob_path(hash: &str) -> String {
-    format!("blobs/{hash}.zst")
+/// The entry of the blob with hash `hash`: `blobs/<hash>.zst`. `None` when [`is_valid_hash`]
+/// refuses `hash`.
+pub fn blob_path(hash: &str) -> Option<String> {
+    is_valid_hash(hash).then(|| format!("blobs/{hash}.zst"))
 }
 
-/// `true` when `hash` is 64 lowercase hex digits, the only form [`tile_path`] and [`blob_path`]
-/// are given in a valid manifest. Check a hash from a file with it before building an entry name.
+/// `true` when `hash` is 64 lowercase hex digits, the only form a valid manifest gives.
+/// [`tile_path`] and [`blob_path`] build no entry name for any other string.
 pub fn is_valid_hash(hash: &str) -> bool {
     hash.len() == 64 && hash.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
@@ -94,12 +96,19 @@ pub struct Manifest<D> {
 }
 
 /// One tile of a surface: its column `tx`, its row `ty` and the hash of its samples, stored at
-/// [`tile_path`].
+/// [`tile_path`]. `hash` is read as written; [`TileRef::path`] checks it.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct TileRef {
     pub tx: i32,
     pub ty: i32,
     pub hash: Hash,
+}
+
+impl TileRef {
+    /// The tile's entry, [`tile_path`] of its `hash`: `None` when the hash is not valid.
+    pub fn path(&self) -> Option<String> {
+        tile_path(&self.hash)
+    }
 }
 
 /// Why a manifest could not be read.

@@ -110,8 +110,20 @@ fn entry_names_match_the_bundle_layout() {
     assert_eq!(THUMB, "thumb.png");
     assert_eq!(COMPOSITE, "composite/preview.png");
     assert_eq!(SAVE_LOCK, "save.lock");
-    assert_eq!(tile_path(HASH), format!("tiles/{HASH}.zst"));
-    assert_eq!(blob_path(HASH), format!("blobs/{HASH}.zst"));
+    assert_eq!(tile_path(HASH), Some(format!("tiles/{HASH}.zst")));
+    assert_eq!(blob_path(HASH), Some(format!("blobs/{HASH}.zst")));
+}
+
+#[test]
+fn no_entry_name_is_built_from_an_invalid_hash() {
+    for hash in ["../../etc/passwd", "../x", "", &HASH.to_uppercase(), &HASH[1..]] {
+        assert_eq!(tile_path(hash), None, "{hash}");
+        assert_eq!(blob_path(hash), None, "{hash}");
+    }
+    let tile: TileRef = serde_json::from_str(r#"{"tx":0,"ty":0,"hash":"../x"}"#).unwrap();
+    assert_eq!(tile.path(), None);
+    let tile = TileRef { tx: 1, ty: -1, hash: HASH.into() };
+    assert_eq!(tile.path(), Some(format!("tiles/{HASH}.zst")));
 }
 
 #[test]
