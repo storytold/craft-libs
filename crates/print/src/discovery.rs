@@ -28,8 +28,8 @@ impl Drop for Wake {
     }
 }
 
-/// Own one print dialog's capability knowledge. Call [`Self::refresh`] on opening the dialog,
-/// after driver settings close, or when the application receives a printer-change event.
+/// Own one print dialog's capability knowledge. Call [`Self::refresh`] on opening the dialog
+/// and [`Self::invalidate`] after a printer's driver settings close or its configuration changes.
 /// Call [`Self::select`] when selection changes, [`Self::poll`] after a wake, and select `None`
 /// when the dialog closes.
 /// Successful answers are reused within this session; failures retry after reselection or
@@ -46,6 +46,15 @@ impl DuplexSession {
         self.active = None;
         self.selected = None;
         self.answers.clear();
+    }
+
+    /// Forget one printer's answer and cancel its read, without affecting other printers.
+    pub fn invalidate(&mut self, printer: &str) {
+        self.answers.remove(printer);
+        if self.selected.as_deref() == Some(printer) {
+            self.active = None;
+            self.selected = None;
+        }
     }
 
     /// Unknown means either unread or unavailable, never an assertion of simplex support.
@@ -138,6 +147,41 @@ mod tests {
         session.select(Some("Office"), &source, wake);
         settle(&mut session, "Office");
         assert_eq!(session.answer("Office"), Some(&Some(false)));
+    }
+
+    #[test]
+    fn invalidation_preserves_another_printers_pending_read_and_cached_answer() {
+        let reads = Arc::new(AtomicUsize::new(0));
+        let count = reads.clone();
+        let released = Arc::new(AtomicBool::new(false));
+        let release = released.clone();
+        let source: DuplexSource = Arc::new(move |printer, cancel| {
+            if printer == "Office" {
+                return Some(count.fetch_add(1, Ordering::SeqCst) > 0);
+            }
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while !release.load(Ordering::Acquire) && !cancel.load(Ordering::Acquire) && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            (!cancel.load(Ordering::Acquire)).then_some(false)
+        });
+        let wake: Arc<dyn Fn() + Send + Sync> = Arc::new(|| {});
+        let mut session = DuplexSession::default();
+        session.select(Some("Office"), &source, wake.clone());
+        settle(&mut session, "Office");
+        session.select(Some("Other"), &source, wake.clone());
+        session.invalidate("Office");
+        assert_eq!(session.answer("Office"), None);
+        released.store(true, Ordering::Release);
+        settle(&mut session, "Other");
+        assert_eq!(session.answer("Other"), Some(&Some(false)), "the pending read was not cancelled");
+        session.select(Some("Office"), &source, wake.clone());
+        settle(&mut session, "Office");
+        assert_eq!(session.answer("Office"), Some(&Some(true)), "the affected printer was read again");
+        session.invalidate("Office");
+        session.select(Some("Other"), &source, wake);
+        assert_eq!(session.answer("Other"), Some(&Some(false)), "the cached answer survives");
+        assert_eq!(reads.load(Ordering::SeqCst), 2);
     }
 
     #[test]

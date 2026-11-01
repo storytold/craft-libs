@@ -168,9 +168,10 @@ its `DuplexSource` and a repaint callback to `select()`, then call `poll()` to r
 Successes are reused within the session; failures retry after reselection. Select `None` when
 the dialog closes, or drop the session, to cancel pending work.
 
-Call `refresh()` on opening Print, after `wait_printer_preferences()` returns, and after a
-printer-change notification if the host handles one. Refresh cancels old work and forgets all
-answers. `wait_printer_preferences()` belongs on a background thread and has no timeout while
+Call `refresh()` on opening Print to cancel old work and forget all answers. Call
+`invalidate(printer)` after that printer's `wait_printer_preferences()` returns, or when the
+host receives a change notification for it. Invalidation leaves other printers' answers and
+pending reads intact. `wait_printer_preferences()` belongs on a background thread and has no timeout while
 the user interacts with the window. Capability answers are advisory; submission validates the
 job independently. Query deadlines never kill or retry submitted jobs.
 
