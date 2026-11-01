@@ -30,8 +30,8 @@ impl Drop for Wake {
 
 /// Own one print dialog's capability knowledge. Call [`Self::refresh`] on opening the dialog
 /// and [`Self::invalidate`] after a printer's driver settings close or its configuration changes.
-/// Call [`Self::select`] when selection changes, [`Self::poll`] after a wake, and select `None`
-/// when the dialog closes.
+/// Call [`Self::select`] when selection changes and after refresh or invalidation, even if the
+/// selection stays the same. Call [`Self::poll`] after a wake, and select `None` when the dialog closes.
 /// Successful answers are reused within this session; failures retry after reselection or
 /// refresh. Dropping this value cancels the active reader. No state is persisted to disk.
 #[derive(Default)]
@@ -144,9 +144,15 @@ mod tests {
         session.select(Some("Office"), &source, wake.clone());
         assert_eq!(calls.load(Ordering::SeqCst), 2);
         session.refresh();
+        session.select(Some("Office"), &source, wake.clone());
+        settle(&mut session, "Office");
+        assert_eq!(session.answer("Office"), Some(&Some(false)));
+        session.invalidate("Office");
+        assert_eq!(session.answer("Office"), None);
         session.select(Some("Office"), &source, wake);
         settle(&mut session, "Office");
         assert_eq!(session.answer("Office"), Some(&Some(false)));
+        assert_eq!(calls.load(Ordering::SeqCst), 4, "invalidating the current selection starts a fresh read on select");
     }
 
     #[test]

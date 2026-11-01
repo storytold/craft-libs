@@ -175,6 +175,10 @@ pending reads intact. `wait_printer_preferences()` belongs on a background threa
 the user interacts with the window. Capability answers are advisory; submission validates the
 job independently. Query deadlines never kill or retry submitted jobs.
 
+After refresh or invalidation, call `select()` with the current selection even if it did not
+change. This starts any missing read. Calling `select()` on each UI poll is also supported;
+cached answers do not start another read.
+
 Windows dependencies: the maintained [`winprint` fork](https://github.com/storytold/winprint.rs)
 (BSD-3-Clause, pinned to an immutable Git revision, its PDFium-downloading `pdfium` feature off) and `winsafe` (MIT) hold every Win32 and WinRT call, so the crate keeps `unsafe` forbidden;
 `roxmltree` reads PrintTickets and `miniz_oxide` inflates PDF streams. `winprint` 0.2.1 lists

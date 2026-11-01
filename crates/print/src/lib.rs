@@ -472,9 +472,9 @@ pub fn printers() -> Vec<Printer> {
 /// Whether `printer`'s driver takes two-sided settings from other programs (Windows: its
 /// PrintCapabilities offer a two-sided option); `None` when that can't be read (no printer by that
 /// name, or a driver that doesn't answer), or off Windows.
-/// [`printers`] leaves [`Printer::two_sided`] unknown, because reading the capabilities of a
-/// printer that can't be reached, such as a WSD printer on another network, takes Windows about
-/// 48 s. Ask for the printer the user picks, off the UI thread.
+/// [`printers`] leaves [`Printer::two_sided`] unknown. Read only the selected printer, off the
+/// UI thread: Windows can block while contacting an unavailable printer. Use [`query_two_sided`]
+/// for an isolated, cancellable read.
 pub fn two_sided(printer: &str) -> Option<bool> {
     #[cfg(windows)]
     {
