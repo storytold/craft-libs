@@ -14,6 +14,11 @@
 //!
 //! In full screen the strip is not a title bar: neither a drag nor a double-click acts on the
 //! window.
+//!
+//! The strip itself stays physical: it is never mirrored for a right-to-left interface, and the
+//! macOS traffic-light gutter at its left end is never direction-aware. What mirrors is the
+//! arrangement of the app's controls on it (see `craft_ui::direction`), and the caption-button
+//! groups when the app draws them (see [`crate::caption`]).
 
 use std::sync::{Once, OnceLock};
 
