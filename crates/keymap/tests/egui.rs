@@ -22,9 +22,11 @@ fn every_key_converts_both_ways() {
     for &key in Key::ALL {
         assert_eq!(Key::from_egui(key.to_egui()), Some(key), "{key}");
     }
-    for k in [EguiKey::Copy, EguiKey::Cut, EguiKey::Paste, EguiKey::BrowserBack, EguiKey::ShiftLeft, EguiKey::IntlBackslash] {
+    for k in [EguiKey::Copy, EguiKey::Cut, EguiKey::Paste, EguiKey::BrowserBack, EguiKey::ShiftLeft] {
         assert_eq!(Key::from_egui(k), None);
     }
+    assert_eq!(Key::from_egui(EguiKey::IntlBackslash), Some(Key::IntlBackslash));
+    assert_eq!(Key::IntlBackslash.to_egui(), EguiKey::IntlBackslash);
 }
 
 #[test]
@@ -506,6 +508,40 @@ fn the_dispatcher_reads_presses_by_the_layout() {
     let mut d = Dispatcher::new().with_layout(Layout::new().with_latin(false));
     let (ran, _) = run(&mut d, &km, &Active::NONE, frame(1.0, ctrl_shift, vec![at(EguiKey::CloseBracket, EguiKey::D, ctrl_shift)]));
     assert_eq!(ran, ["edit.duplicate"]);
+}
+
+#[test]
+fn the_iso_key_next_to_left_shift_runs_its_bindings() {
+    let app = |id: &str, key: &str| Bindable::new(id, id, Scope::app()).with_default(Binding::parse(key).unwrap());
+    let km = Keymap::new(
+        vec![
+            app("iso", "IntlBackslash"),
+            app("iso.shift", "Shift+IntlBackslash"),
+            app("iso.ctrl", "Cmd+IntlBackslash"),
+            app("backslash", "\\"),
+            app("pipe", "Shift+\\"),
+            app("comma.shift", "Shift+,"),
+        ],
+        Scopes::new(),
+        Platform::Windows,
+    );
+    // Turkish Q: the key types `<`, and `>` with Shift. egui has no key for either character and
+    // reports the press as the key itself.
+    let at =
+        |modifiers| Event::Key { key: EguiKey::IntlBackslash, physical_key: Some(EguiKey::IntlBackslash), pressed: true, repeat: false, modifiers };
+    let shift = Modifiers::SHIFT;
+    let mut d = Dispatcher::new();
+    let (ran, left) = run(&mut d, &km, &Active::NONE, frame(1.0, Modifiers::NONE, vec![at(Modifiers::NONE), Event::Text("<".into())]));
+    assert_eq!(ran, ["iso"]);
+    assert!(left.is_empty(), "{left:?}");
+    let (ran, left) = run(&mut d, &km, &Active::NONE, frame(2.0, shift, vec![at(shift), Event::Text(">".into())]));
+    assert_eq!(ran, ["iso.shift"]);
+    assert!(left.is_empty(), "{left:?}");
+    let (ran, _) = run(&mut d, &km, &Active::NONE, frame(3.0, CTRL, vec![at(CTRL)]));
+    assert_eq!(ran, ["iso.ctrl"]);
+    // The press without Shift taught the layout the key's character.
+    assert_eq!(chord("Cmd+IntlBackslash").display_for(Platform::Windows, d.layout()), "Ctrl+<");
+    assert_eq!(chord("Shift+IntlBackslash").display_for(Platform::Windows, d.layout()), "Shift+<");
 }
 
 #[test]

@@ -562,6 +562,25 @@ let status = craft_print::job_status(&job)?;          // one GetJobElements; or 
 
 - **macOS/Linux:** CUPS `lpstat`, `lpoptions` and `lp`. Jobs stream through stdin. Exact-size
   sheets use `fit-to-page=false`; shrink-to-fit uses IPP `print-scaling=auto-fit`. The IPP backend sends `print-scaling` (`auto-fit` for shrink-to-fit, `none` for actual size when the printer lists it, unless its published default is already `none`) only to a printer whose `print-scaling-supported` lists it, and then lists `JobHint::Scaling` as honoured; otherwise shrink-to-fit is a warning and the document goes as it is.
+- **Flatpak:** the Freedesktop runtime has libcups but not `lpstat`/`lp`/`lpoptions`, so the app
+  bundles them (the apps' manifests build them from CUPS as a `cups-client` module). What each
+  piece is for:
+  - `lpstat` and `--socket=cups`: the printer list. Without either it is empty, and a missing
+    `lpstat` is logged.
+  - `--system-talk-name=org.freedesktop.Avahi`: driverless network printers (`lpstat -e`).
+    Without it the list keeps the spooler's queues and loses only those.
+  - `lp`: submitting jobs.
+  - Driver options (`printer_options`) come from the queue's PPD in `/etc/cups/ppd`; `lpoptions`
+    only marks which choices are current. Flatpak reserves `/etc`, so the host's PPDs, and with
+    them these options, are out of reach in a Flatpak whether or not `lpoptions` is there.
+  - `--filesystem=~/.cups:ro`: the user's default printer and saved options, and a server named
+    in their `client.conf`. A network server also needs `--share=network`. A server named only
+    in the host's `/etc/cups/client.conf` is invisible in the sandbox, as is all of `/etc`;
+    `flatpak override --user --env=CUPS_SERVER=host:port <app-id>` names it for that one app.
+  - A socket path in `client.conf`: Flatpak mounts the socket it chooses at
+    `/var/run/cups/cups.sock`, so the manifests' wrapper around the tools points CUPS there when
+    CUPS' socket is the one Flatpak chose, and fails when it isn't rather than reach another
+    server. Server names and `CUPS_SERVER` are left alone.
 - **Windows:** in this process, with no PowerShell, script or other program started, so
   printing works where App Control for Business or AppLocker enforce script rules. Printers
   come from `EnumPrinters` (local queues and `\\server\queue` connections) and the default from
@@ -691,9 +710,9 @@ Windows discovery reports driver duplex support in `Printer::two_sided` (a two-s
 the driver's PrintCapabilities); CUPS leaves it unknown. Explicit simplex/duplex choices that the driver
 drops are refused before submission.
 
-Windows dependencies: the maintained [`winprint` fork](https://github.com/storytold/winprint.rs)
-(BSD-3-Clause, pinned to an immutable Git revision, its PDFium-downloading `pdfium` feature off) and `winsafe` (MIT) hold every Win32 and WinRT call, so the crate keeps `unsafe` forbidden;
-`roxmltree` reads PrintTickets and `miniz_oxide` inflates PDF streams. `winprint` 0.2.1 lists
+Windows dependencies: [`winprint`](https://github.com/ArcticLampyrid/winprint.rs) 0.3.1
+(BSD-3-Clause, pinned to its release tag, its PDFium-downloading `pdfium` feature off) and `winsafe` (MIT) hold every Win32 and WinRT call, so the crate keeps `unsafe` forbidden;
+`roxmltree` reads PrintTickets and `miniz_oxide` inflates PDF streams. `winprint` lists
 reqwest (with rustls) and sigstore crates as non-optional build-dependencies, used only by its
 `pdfium` feature: they compile into its build script on Windows but not into the library. Apps
 running `cargo deny` need a licence exception for `webpki-root-certs` (CDLA-Permissive-2.0, CA

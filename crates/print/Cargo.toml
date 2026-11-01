@@ -40,6 +40,9 @@ workspace = true
 craft-wsd = { workspace = true, optional = true }
 # Reading the printer's replies (the same crate and version the Windows code uses).
 roxmltree = { version = "0.21", optional = true }
+[target.'cfg(unix)'.dependencies]
+# Says why the printer list is empty when lpstat can't run (e.g. a Flatpak without CUPS tools).
+log = "0.4"
 
 [target.'cfg(windows)'.dependencies]
 # Printing without starting anything (storytold/pdfcraft#1107): the printer list (EnumPrinters)
@@ -47,10 +50,8 @@ roxmltree = { version = "0.21", optional = true }
 # PrintTicket) are safe wrappers over Win32 and WinRT (BSD-3-Clause). Its default `pdfium`
 # feature downloads PDFium at build time and is off. The maintained BSD-3-Clause fork
 # preserves terminal failures/cancellation and bounds the completion notification wait.
-# Pinned to an immutable revision; review before bumping. This is the head of storytold/winprint.rs#7, which has the
-# page drawing at the ticket's resolution (`DxgiPrintContext::dpi`) and the cancel guard; move the pin to the merge
-# commit once #7 has merged.
-winprint = { git = "https://github.com/storytold/winprint.rs", rev = "f6231139b1af7a78635c7971cdf4f2aba4170b87", default-features = false }
+# winprint 0.3.1: pages drawn at the ticket's resolution, progress with cancellation, and the cancel guard.
+winprint = { git = "https://github.com/ArcticLampyrid/winprint.rs", tag = "v0.3.1", default-features = false }
 # GetDefaultPrinter (MIT).
 winsafe = { version = "0.0.29", default-features = false, features = ["winspool"] }
 # The job file's private folder.
