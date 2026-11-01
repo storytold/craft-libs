@@ -1,8 +1,8 @@
 use std::io::Write;
 
 use craft_vectorcraft_format::{
-    BLOB_MAGIC, EXTENSION, Entries, Error, File, Head, INLINE_MAX, Image, LEGACY_EXTENSION, Tail, VERSION, base64, check, entry, is_compressed,
-    json_part, sniff, split_tail,
+    BLOB_MAGIC, Contents, EXTENSION, Entries, Error, File, Head, INLINE_MAX, Image, LEGACY_EXTENSION, Tail, VERSION, base64, check, entry,
+    is_compressed, json_part, sniff, split_tail,
 };
 use serde::de::IgnoredAny;
 use serde::{Deserialize, Serialize};
@@ -198,6 +198,38 @@ fn optional_members_of_the_wrong_shape_read_as_none() {
     let head: Head = serde_json::from_slice(good).unwrap();
     assert_eq!(head.preview, Some(Image::inline("image/png", PNG)));
     assert!(head.pdf.is_none());
+}
+
+#[test]
+fn contents_read_the_document_images_and_profiles_without_the_preview_and_pdf() {
+    let big = vec![b'%'; 64 << 10];
+    let mut file = File::new(doc());
+    file.version = 2;
+    file.generator = Some("VectorCraft 0.17.0".into());
+    file.preview = Some(Image::inline("image/png", &big));
+    file.pdf = Some(Image::inline("application/pdf", &big));
+    file.profiles.insert("Gray".into(), Image::inline(craft_vectorcraft_format::ICC_MIME, &[4, 5]));
+    file.images.insert("k".into(), Image::inline("image/png", PNG));
+    for json in [serde_json::to_vec(&file).unwrap(), serde_json::to_vec_pretty(&file).unwrap()] {
+        let contents: Contents<Doc> = serde_json::from_slice(&json).unwrap();
+        let Contents { format, version, profiles, document, images, .. } = contents.clone();
+        assert_eq!((format, version, profiles, document, images), (file.format.clone(), 2, file.profiles.clone(), doc(), file.images.clone()));
+        contents.check().unwrap();
+        assert!(contents.is_legacy() == file.is_legacy());
+    }
+    // Members of the wrong shape are skipped as `File` reads them as `None`; a repeated member,
+    // a missing document and a newer version are refused as in `File`.
+    let odd = br#"{"format":"vectorcraft","version":4,"generator":7,"preview":"x","pdf":{"blob":"y"},"document":{"layers":[]},"z":[1]}"#;
+    let contents: Contents<Doc> = serde_json::from_slice(odd).unwrap();
+    assert!(contents.document.layers.is_empty() && contents.images.is_empty());
+    for bad in
+        [&br#"{"format":"vectorcraft","version":4,"pdf":null,"pdf":null,"document":{"layers":[]}}"#[..], br#"{"format":"vectorcraft","version":4}"#]
+    {
+        assert!(serde_json::from_slice::<File<Doc>>(bad).is_err());
+        assert!(serde_json::from_slice::<Contents<Doc>>(bad).is_err());
+    }
+    let newer: Contents<IgnoredAny> = serde_json::from_str(r#"{"format":"vectorcraft","version":5,"document":0}"#).unwrap();
+    assert_eq!(newer.check(), Err(Error::TooNew(5)));
 }
 
 #[test]

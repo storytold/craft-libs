@@ -30,7 +30,9 @@ version 4, entries of `INLINE_MAX` (8 KiB) or more follow the JSON after `BLOB_M
 
 `File<D>` holds these members in this order. `serde_json::to_vec` and `to_vec_pretty` of a
 `File<D>` give the bytes VectorCraft writes before the data after the JSON. `Head` reads only
-`preview` and `pdf`. `Image` has `mime`, `data` (base64), `blob` and `proxy` (a linked image's
+`preview` and `pdf`. `Contents<D>` reads `format`, `version`, `profiles`, `document` and
+`images`, and skips `generator`, `preview` and `pdf` as the JSON is read, so their base64 is not
+buffered or kept; it accepts and refuses the same files as `File<D>`. `Image` has `mime`, `data` (base64), `blob` and `proxy` (a linked image's
 low-resolution preview).
 
 ## Use
@@ -62,6 +64,8 @@ let pdf = file.pdf.map(|p| entries.bytes(&p)).transpose()?.flatten();
 - `File::check` and `check` return `Error::Format` for another format name and `Error::TooNew`
   for a version newer than `VERSION`.
 - A `generator`, `preview` or `pdf` of the wrong shape reads as `None` in `File` and `Head`.
+  `File` and `Head` hold each of these values in memory while checking its shape; `Contents`
+  skips them.
 - `Image::len` gives the size an entry states without decoding it; `Image::bytes(after)` decodes
   `data` or copies the `blob` range, and `entry(after, [offset, length])` returns the range.
 - `Entries::new(after)` reads a file's entries: `Entries::bytes` returns each entry's bytes as an
@@ -83,7 +87,7 @@ Size limits on the JSON and on decompression stay with each reader.
 through `File` and `Tail` with JSON written out by hand in VectorCraft's layout (compact and
 pretty, version 4 with data after the JSON, version 2 under the former name), reads them back,
 and checks `split_tail`, `sniff` on plain, gzip and truncated gzip input, the limit `Entries`
-puts on the bytes copied, members of the wrong shape, and the base64 vectors of RFC 4648.
+puts on the bytes copied, members of the wrong shape, `Contents` against `File`, and the base64 vectors of RFC 4648.
 
 `.github/workflows/vectorcraft-format.yml` runs fmt, clippy and the tests on Linux and Windows,
 and a `wasm32-unknown-unknown` check.

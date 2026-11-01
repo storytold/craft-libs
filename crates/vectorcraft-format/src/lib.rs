@@ -22,6 +22,7 @@
 //! Files written under the former name say `"format": "drawcraft"`.
 //!
 //! - [`File`], [`Head`] and [`Image`] are the members, in the order VectorCraft writes them.
+//!   [`Contents`] reads a file's document, images and profiles, and skips the preview and PDF.
 //! - [`split_tail`] separates a file's JSON from the data after it; [`Entries`] reads a file's
 //!   entries from either place, copying at most the size of that data in all; [`Tail`] places
 //!   entries when writing.
@@ -76,7 +77,8 @@ pub enum Error {
 /// The top-level object of a file, with the document as `D`. Serialized with `serde_json`, it
 /// gives the bytes VectorCraft writes, compact or pretty: the members in this order, `generator`,
 /// `preview`, `profiles` and `pdf` left out when absent, `images` always written. A `generator`,
-/// `preview` or `pdf` of the wrong shape reads as `None`, as VectorCraft opens such a file.
+/// `preview` or `pdf` of the wrong shape reads as `None`, as VectorCraft opens such a file. A
+/// reader that does not use those three reads [`Contents`] instead.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct File<D> {
     /// [`EXTENSION`], or [`LEGACY_EXTENSION`] in versions 1 and 2.
@@ -160,6 +162,39 @@ pub fn check(format: &str, version: u32) -> Result<(), Error> {
         return Err(Error::TooNew(version));
     }
     Ok(())
+}
+
+/// The members of a file that a reader of its document needs: [`File`] without `generator`,
+/// `preview` and `pdf`. Those three are skipped as the JSON is read, so their data is neither
+/// buffered nor kept. A file reads as `Contents` exactly when it reads as a [`File`]: any value of
+/// the skipped members is accepted, and a repeated member is refused.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct Contents<D> {
+    pub format: String,
+    pub version: u32,
+    #[serde(default, rename = "generator")]
+    _generator: serde::de::IgnoredAny,
+    #[serde(default, rename = "preview")]
+    _preview: serde::de::IgnoredAny,
+    #[serde(default)]
+    pub profiles: BTreeMap<String, Image>,
+    #[serde(default, rename = "pdf")]
+    _pdf: serde::de::IgnoredAny,
+    pub document: D,
+    #[serde(default)]
+    pub images: BTreeMap<String, Image>,
+}
+
+impl<D> Contents<D> {
+    /// [`File::check`].
+    pub fn check(&self) -> Result<(), Error> {
+        check(&self.format, self.version)
+    }
+
+    /// [`File::is_legacy`].
+    pub fn is_legacy(&self) -> bool {
+        self.format == LEGACY_EXTENSION
+    }
 }
 
 /// The members of a file besides its document, which is skipped without being decoded. A
