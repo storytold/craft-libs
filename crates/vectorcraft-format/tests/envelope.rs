@@ -1,8 +1,8 @@
 use std::io::Write;
 
 use craft_vectorcraft_format::{
-    BLOB_MAGIC, EXTENSION, Error, File, Head, INLINE_MAX, Image, LEGACY_EXTENSION, Tail, VERSION, base64, check, entry, is_compressed, json_part,
-    sniff, split_tail,
+    BLOB_MAGIC, EXTENSION, Entries, Error, File, Head, INLINE_MAX, Image, LEGACY_EXTENSION, Tail, VERSION, base64, check, entry, is_compressed,
+    json_part, sniff, split_tail,
 };
 use serde::de::IgnoredAny;
 use serde::{Deserialize, Serialize};
@@ -146,6 +146,50 @@ fn entries_outside_the_data_or_with_bad_base64_give_none() {
     assert_eq!(blob.bytes(tail), None);
     assert_eq!(Image { data: "QU*D".into(), ..Image::default() }.bytes(tail), None);
     assert!(Image::default().is_empty());
+}
+
+#[test]
+fn entries_copy_at_most_the_data_after_the_json_in_all() {
+    let tail = vec![7u8; 1 << 20];
+    let len = tail.len() as u64;
+    let whole = Image { mime: "image/png".into(), blob: Some([0, len]), ..Image::default() };
+    // Many entries naming the same bytes: the first copy fits, the second passes the data's size.
+    let mut entries = Entries::new(&tail);
+    assert!(entries.bytes(&whole).is_ok_and(|b| b.as_ref() == Some(&tail)));
+    assert!(matches!(entries.bytes(&whole), Err(Error::TooBig)));
+    // Entries that name each byte once read whole, with inline and missing entries beside them.
+    let mut entries = Entries::new(&tail);
+    let half = |at: u64| Image { mime: "image/png".into(), blob: Some([at, len / 2]), ..Image::default() };
+    assert_eq!(entries.bytes(&half(0)).unwrap().map(|b| b.len()), Some(tail.len() / 2));
+    assert_eq!(entries.bytes(&Image::inline("image/png", PNG)), Ok(Some(PNG.to_vec())));
+    assert_eq!(entries.bytes(&half(len)), Ok(None));
+    assert_eq!(entries.bytes(&half(len / 2)).unwrap().map(|b| b.len()), Some(tail.len() / 2));
+    assert_eq!(entries.copied(), len);
+    assert_eq!(Entries::new(&[]).bytes(&whole), Ok(None));
+}
+
+#[test]
+fn optional_members_of_the_wrong_shape_read_as_none() {
+    let json = br#"{"format":"vectorcraft","version":4,"generator":7,"preview":"x","pdf":{"blob":"y"},"document":{"layers":[]}}"#;
+    let file: File<Doc> = serde_json::from_slice(json).unwrap();
+    assert_eq!((file.generator, file.preview, file.pdf), (None, None, None));
+    let skipped: File<IgnoredAny> = serde_json::from_slice(json).unwrap();
+    assert!(skipped.preview.is_none());
+    let head: Head = serde_json::from_slice(json).unwrap();
+    assert_eq!(head, Head::default());
+    let good = br#"{"preview":{"mime":"image/png","data":"iVBORw0KGgo="},"pdf":null}"#;
+    let head: Head = serde_json::from_slice(good).unwrap();
+    assert_eq!(head.preview, Some(Image::inline("image/png", PNG)));
+    assert!(head.pdf.is_none());
+}
+
+#[test]
+fn a_files_tail_follows_its_version() {
+    let mut file = File::new(doc());
+    let pdf = pdf();
+    assert_eq!(file.tail().image("application/pdf", &pdf, false).blob, Some([0, pdf.len() as u64]));
+    file.version = 2;
+    assert!(file.tail().image("application/pdf", &pdf, false).blob.is_none());
 }
 
 #[test]

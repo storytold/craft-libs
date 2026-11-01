@@ -22,8 +22,9 @@
 //! Files written under the former name say `"format": "drawcraft"`.
 //!
 //! - [`File`], [`Head`] and [`Image`] are the members, in the order VectorCraft writes them.
-//! - [`split_tail`] separates a file's JSON from the data after it; [`Image::bytes`] reads an
-//!   entry from either place; [`Tail`] places entries when writing.
+//! - [`split_tail`] separates a file's JSON from the data after it; [`Entries`] reads a file's
+//!   entries from either place, copying at most the size of that data in all; [`Tail`] places
+//!   entries when writing.
 //! - [`sniff`] and [`is_compressed`] recognize a file from its first bytes.
 //! - [`base64`] encodes and decodes the `data` members.
 //!
@@ -67,27 +68,30 @@ pub enum Error {
     Format(String),
     #[error("file version {0} is newer than this reader supports ({VERSION})")]
     TooNew(u32),
+    #[error("the entries name more bytes than the data after the JSON holds")]
+    TooBig,
 }
 
 /// The top-level object of a file, with the document as `D`. Serialized with `serde_json`, it
 /// gives the bytes VectorCraft writes, compact or pretty: the members in this order, `generator`,
-/// `preview`, `profiles` and `pdf` left out when absent, `images` always written.
+/// `preview`, `profiles` and `pdf` left out when absent, `images` always written. A `generator`,
+/// `preview` or `pdf` of the wrong shape reads as `None`, as VectorCraft opens such a file.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct File<D> {
     /// [`EXTENSION`], or [`LEGACY_EXTENSION`] in versions 1 and 2.
     pub format: String,
     pub version: u32,
     /// `"VectorCraft <app version>"`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "lenient")]
     pub generator: Option<String>,
     /// A PNG of the first artboard, at most [`PREVIEW_MAX`] pixels on its longer side.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "lenient")]
     pub preview: Option<Image>,
     /// ICC files by profile name (Embed ICC Profiles).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub profiles: BTreeMap<String, Image>,
     /// A PDF of every artboard (Create PDF-Compatible File).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "lenient")]
     pub pdf: Option<Image>,
     pub document: D,
     /// The images the document uses, by key.
@@ -119,9 +123,34 @@ impl<D> File<D> {
     pub fn is_legacy(&self) -> bool {
         self.format == LEGACY_EXTENSION
     }
+
+    /// An empty [`Tail`] for this file's `version`. Set `version` before calling it.
+    pub fn tail<'a>(&self) -> Tail<'a> {
+        Tail::new(self.version)
+    }
 }
 
-/// [`File::check`] for a `format` and `version` read on their own.
+/// An optional member read as `None` when its value has the wrong shape.
+fn lenient<'de, De, T>(d: De) -> Result<Option<T>, De::Error>
+where
+    De: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Lenient<T> {
+        Value(T),
+        Other(serde::de::IgnoredAny),
+    }
+    Ok(match Lenient::deserialize(d)? {
+        Lenient::Value(v) => Some(v),
+        Lenient::Other(_) => None,
+    })
+}
+
+/// [`File::check`] for a `format` and `version` read on their own. Every version up to
+/// [`VERSION`] passes, 0 included, as VectorCraft opens them; [`MIN_VERSION`] limits only the
+/// versions VectorCraft writes.
 pub fn check(format: &str, version: u32) -> Result<(), Error> {
     if format != EXTENSION && format != LEGACY_EXTENSION {
         return Err(Error::Format(format.into()));
@@ -132,12 +161,13 @@ pub fn check(format: &str, version: u32) -> Result<(), Error> {
     Ok(())
 }
 
-/// The members of a file besides its document, which is skipped without being decoded.
+/// The members of a file besides its document, which is skipped without being decoded. A
+/// `preview` or `pdf` of the wrong shape reads as `None`, as in [`File`].
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
 pub struct Head {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient")]
     pub preview: Option<Image>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient")]
     pub pdf: Option<Image>,
 }
 
@@ -178,7 +208,8 @@ impl Image {
 
     /// The entry's bytes: `data` decoded, or the range `blob` names in `tail` (the data after the
     /// JSON, from [`split_tail`]). `None` when `data` is not valid base64 or `tail` ends before the
-    /// range does.
+    /// range does. Each call copies the range again; read the entries of one file through
+    /// [`Entries`], which limits the bytes copied in all.
     pub fn bytes(&self, tail: &[u8]) -> Option<Vec<u8>> {
         match self.blob {
             Some(at) => entry(tail, at).map(<[u8]>::to_vec),
@@ -192,6 +223,44 @@ pub fn entry(tail: &[u8], [offset, len]: [u64; 2]) -> Option<&[u8]> {
     let start = usize::try_from(offset).ok()?;
     let end = start.checked_add(usize::try_from(len).ok()?)?;
     tail.get(start..end)
+}
+
+/// Reads the entries of one file, copying at most as many bytes from the data after the JSON as
+/// that data holds, in all. A file VectorCraft writes names each of those bytes once, so all of
+/// its entries read. Entries that name the same bytes again and again are refused once their
+/// copies pass that size, as VectorCraft's reader refuses them.
+#[derive(Debug, Clone)]
+pub struct Entries<'a> {
+    tail: &'a [u8],
+    copied: u64,
+}
+
+impl<'a> Entries<'a> {
+    /// A reader of entries over `tail`, the data after the JSON (from [`split_tail`]).
+    pub fn new(tail: &'a [u8]) -> Self {
+        Self { tail, copied: 0 }
+    }
+
+    /// The entry's bytes, as [`Image::bytes`] gives them. [`Error::TooBig`] when the bytes this
+    /// reader has copied from `tail`, the entry's included, would be more than `tail` holds.
+    pub fn bytes(&mut self, image: &Image) -> Result<Option<Vec<u8>>, Error> {
+        let Some(at) = image.blob else {
+            return Ok(base64::decode(&image.data));
+        };
+        let Some(bytes) = entry(self.tail, at) else {
+            return Ok(None);
+        };
+        self.copied = self.copied.saturating_add(bytes.len() as u64);
+        if self.copied > self.tail.len() as u64 {
+            return Err(Error::TooBig);
+        }
+        Ok(Some(bytes.to_vec()))
+    }
+
+    /// The bytes copied from `tail` so far.
+    pub fn copied(&self) -> u64 {
+        self.copied
+    }
 }
 
 /// Is this gzip data (a file saved with Use Compression)?
@@ -348,7 +417,8 @@ pub struct Tail<'a> {
 }
 
 impl<'a> Tail<'a> {
-    /// An empty tail for a file of `version`.
+    /// An empty tail for a file of `version`, which is the file's own `version`; [`File::tail`]
+    /// takes it from the file.
     pub fn new(version: u32) -> Self {
         Self { parts: vec![], len: 0, after: version >= TAIL_SINCE }
     }

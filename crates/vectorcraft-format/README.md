@@ -36,11 +36,11 @@ low-resolution preview).
 ## Use
 
 ```rust
-use craft_vectorcraft_format::{File, Tail, VERSION, split_tail};
+use craft_vectorcraft_format::{Entries, File, split_tail};
 
 // Writing
-let mut tail = Tail::new(VERSION);
 let mut file = File::new(document);
+let mut tail = file.tail();
 file.generator = Some(format!("VectorCraft {version}"));
 file.pdf = Some(tail.image("application/pdf", &pdf, false));
 let mut out = serde_json::to_vec(&file)?;
@@ -50,7 +50,8 @@ tail.write_to(&mut out)?;
 let (json, after) = split_tail(&bytes);
 let file: File<serde::de::IgnoredAny> = serde_json::from_slice(json)?;
 file.check()?;
-let pdf = file.pdf.and_then(|p| p.bytes(after));
+let mut entries = Entries::new(after);
+let pdf = file.pdf.map(|p| entries.bytes(&p)).transpose()?.flatten();
 ```
 
 - `sniff(head)` recognizes a file, plain or gzip, from its first 256 bytes after decompression:
@@ -60,11 +61,15 @@ let pdf = file.pdf.and_then(|p| p.bytes(after));
   uncompressed or decompressed file.
 - `File::check` and `check` return `Error::Format` for another format name and `Error::TooNew`
   for a version newer than `VERSION`.
+- A `generator`, `preview` or `pdf` of the wrong shape reads as `None` in `File` and `Head`.
 - `Image::len` gives the size an entry states without decoding it; `Image::bytes(after)` decodes
   `data` or copies the `blob` range, and `entry(after, [offset, length])` returns the range.
-- `Tail::new(version)` places each entry with `Tail::image`: after the JSON for version 4 and
-  entries of at least `INLINE_MAX` bytes, inline otherwise. `Tail::write_to` writes the marker and
-  the entries.
+- `Entries::new(after)` reads a file's entries: `Entries::bytes` returns `Error::TooBig` once the
+  `blob` ranges it has copied add up to more than `after` holds, as when many entries name the
+  same bytes.
+- `File::tail()`, or `Tail::new(version)`, places each entry with `Tail::image`: after the JSON
+  for version 4 and entries of at least `INLINE_MAX` bytes, inline otherwise. `Tail::write_to`
+  writes the marker and the entries.
 - `base64::encode`, `decode` and `decoded_len` handle the `data` members.
 
 Size limits on the JSON and on decompression stay with each reader.
@@ -74,8 +79,8 @@ Size limits on the JSON and on decompression stay with each reader.
 `cargo test -p craft-vectorcraft-format` runs `tests/envelope.rs`, which compares files written
 through `File` and `Tail` with JSON written out by hand in VectorCraft's layout (compact and
 pretty, version 4 with data after the JSON, version 2 under the former name), reads them back,
-and checks `split_tail`, `sniff` on plain, gzip and truncated gzip input, and the base64 vectors of
-RFC 4648.
+and checks `split_tail`, `sniff` on plain, gzip and truncated gzip input, the limit `Entries`
+puts on the bytes copied, members of the wrong shape, and the base64 vectors of RFC 4648.
 
 `.github/workflows/vectorcraft-format.yml` runs fmt, clippy and the tests on Linux and Windows,
 and a `wasm32-unknown-unknown` check.
