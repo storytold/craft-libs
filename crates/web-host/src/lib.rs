@@ -208,6 +208,32 @@ mod tests {
     }
 
     #[test]
+    fn malformed_message_types_name_no_kind() {
+        for bad in
+            ["", ":", "pdfcraft", "pdfcraft:", ":open", "pdfcraft:open:extra", "pdfcraft:OPEN", "pdfcraft: open", "pdfcraftx:open", "pdfcraft/open"]
+        {
+            assert_eq!(Incoming::parse("pdfcraft", bad), None, "{bad:?}");
+        }
+        assert_eq!(Incoming::parse("pdfcraft", "pdfcraft:open"), Some(Incoming::Open));
+        // The app's own outgoing kinds are not messages to it.
+        assert_eq!(Incoming::parse("pdfcraft", "pdfcraft:save"), None);
+    }
+
+    #[test]
+    fn host_file_names_with_hostile_parts_are_cleaned() {
+        // Only control characters, or only separators: nothing is left, so the fallback.
+        assert_eq!(file_name(Some("\u{0}\u{7}\n\t"), "Drawing.dxf"), "Drawing.dxf");
+        assert_eq!(file_name(Some("///"), "Drawing.dxf"), "Drawing.dxf");
+        assert_eq!(file_name(Some("   "), "Drawing.dxf"), "Drawing.dxf");
+        // Mixed separators and a control character inside the last part.
+        assert_eq!(file_name(Some("a/b\\c\u{1b}[31m.txt"), "x"), "c[31m.txt");
+        // Exactly at the limit stays whole; one over is cut; the limit counts characters, not bytes.
+        assert_eq!(file_name(Some(&"a".repeat(MAX_NAME_CHARS)), "x").chars().count(), MAX_NAME_CHARS);
+        assert_eq!(file_name(Some(&"a".repeat(MAX_NAME_CHARS + 1)), "x").chars().count(), MAX_NAME_CHARS);
+        assert_eq!(file_name(Some(&"\u{1F4C4}".repeat(300)), "x"), "\u{1F4C4}".repeat(MAX_NAME_CHARS));
+    }
+
+    #[test]
     fn messages_that_arrive_while_the_handler_runs_wait_their_turn() {
         use std::rc::Rc;
         type Shared = Rc<Inbox<&'static str, Box<dyn FnMut(&'static str)>>>;
