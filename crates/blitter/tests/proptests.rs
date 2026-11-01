@@ -1,98 +1,79 @@
-use craft_blitter::{BlendMode, blit_rgba8, blit_rgba16, blit_rgba32f};
+use craft_blitter::{AlphaMode, BlendMode, CompositeOp, blit_rgba8_opts, blit_rgba16_opts, blit_rgba32f_opts};
 use proptest::prelude::*;
 
 fn arb_blend_mode() -> impl Strategy<Value = BlendMode> {
-    prop_oneof![
-        Just(BlendMode::Normal),
-        Just(BlendMode::Multiply),
-        Just(BlendMode::Screen),
-        Just(BlendMode::Overlay),
-        Just(BlendMode::Darken),
-        Just(BlendMode::Lighten),
-        Just(BlendMode::ColorDodge),
-        Just(BlendMode::ColorBurn),
-        Just(BlendMode::HardLight),
-        Just(BlendMode::SoftLight),
-        Just(BlendMode::Difference),
-        Just(BlendMode::Exclusion),
-        Just(BlendMode::Hue),
-        Just(BlendMode::Saturation),
-        Just(BlendMode::Color),
-        Just(BlendMode::Luminosity),
-        Just(BlendMode::LinearBurn),
-        Just(BlendMode::LinearDodge),
-        Just(BlendMode::VividLight),
-        Just(BlendMode::LinearLight),
-        Just(BlendMode::PinLight),
-        Just(BlendMode::HardMix),
-        Just(BlendMode::Subtract),
-        Just(BlendMode::Divide),
-        Just(BlendMode::Reflect),
-        Just(BlendMode::Glow),
-        Just(BlendMode::Negation),
-        Just(BlendMode::Xor),
-    ]
+    prop::sample::select(&BlendMode::ALL[..])
+}
+
+fn arb_alpha_mode() -> impl Strategy<Value = AlphaMode> {
+    prop_oneof![Just(AlphaMode::Straight), Just(AlphaMode::Premultiplied)]
+}
+
+fn arb_composite_op() -> impl Strategy<Value = CompositeOp> {
+    prop_oneof![Just(CompositeOp::SourceOver), Just(CompositeOp::SourceAtop)]
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(50))]
+    #![proptest_config(ProptestConfig::with_cases(64))]
 
     #[test]
     fn prop_never_panics_on_arbitrary_rgba8_slices(
-        mut dst in prop::collection::vec(any::<u8>(), 0..64),
-        src in prop::collection::vec(any::<u8>(), 0..64),
+        mut dst in prop::collection::vec(any::<u8>(), 0..96),
+        src in prop::collection::vec(any::<u8>(), 0..96),
         mode in arb_blend_mode(),
         opacity in any::<f32>(),
-        fill in any::<f32>(),
+        alpha in arb_alpha_mode(),
+        op in arb_composite_op(),
     ) {
-        blit_rgba8(&mut dst, &src, mode, opacity, fill);
+        blit_rgba8_opts(&mut dst, &src, mode, opacity, alpha, op);
     }
 
     #[test]
     fn prop_never_panics_on_arbitrary_rgba16_slices(
-        mut dst in prop::collection::vec(any::<u16>(), 0..64),
-        src in prop::collection::vec(any::<u16>(), 0..64),
+        mut dst in prop::collection::vec(any::<u16>(), 0..96),
+        src in prop::collection::vec(any::<u16>(), 0..96),
         mode in arb_blend_mode(),
         opacity in any::<f32>(),
-        fill in any::<f32>(),
+        alpha in arb_alpha_mode(),
+        op in arb_composite_op(),
     ) {
-        blit_rgba16(&mut dst, &src, mode, opacity, fill);
+        blit_rgba16_opts(&mut dst, &src, mode, opacity, alpha, op);
     }
 
     #[test]
     fn prop_never_panics_on_arbitrary_rgba32f_slices(
-        mut dst in prop::collection::vec(prop::array::uniform4(any::<f32>()), 0..16),
-        src in prop::collection::vec(prop::array::uniform4(any::<f32>()), 0..16),
+        mut dst in prop::collection::vec(prop::array::uniform4(any::<f32>()), 0..24),
+        src in prop::collection::vec(prop::array::uniform4(any::<f32>()), 0..24),
         mode in arb_blend_mode(),
         opacity in any::<f32>(),
-        fill in any::<f32>(),
         hdr in any::<bool>(),
+        alpha in arb_alpha_mode(),
+        op in arb_composite_op(),
     ) {
-        blit_rgba32f(&mut dst, &src, mode, opacity, fill, hdr);
+        blit_rgba32f_opts(&mut dst, &src, mode, opacity, hdr, alpha, op);
     }
 
     #[test]
-    fn prop_zero_opacity_is_noop_rgba8(
-        mut dst in prop::collection::vec(any::<u8>(), 0..32),
-        src in prop::collection::vec(any::<u8>(), 0..32),
+    fn prop_non_positive_opacity_is_noop(
+        mut dst8 in prop::collection::vec(any::<u8>(), 0..48),
+        src8 in prop::collection::vec(any::<u8>(), 0..48),
+        mut dst32 in prop::collection::vec(prop::array::uniform4(any::<f32>()), 0..12),
+        src32 in prop::collection::vec(prop::array::uniform4(any::<f32>()), 0..12),
         mode in arb_blend_mode(),
-        fill in any::<f32>(),
-    ) {
-        let original = dst.clone();
-        blit_rgba8(&mut dst, &src, mode, 0.0, fill);
-        prop_assert_eq!(dst, original);
-    }
-
-    #[test]
-    fn prop_zero_opacity_is_noop_rgba32f(
-        mut dst in prop::collection::vec(prop::array::uniform4(any::<f32>()), 0..8),
-        src in prop::collection::vec(prop::array::uniform4(any::<f32>()), 0..8),
-        mode in arb_blend_mode(),
-        fill in any::<f32>(),
+        alpha in arb_alpha_mode(),
+        op in arb_composite_op(),
         hdr in any::<bool>(),
     ) {
-        let original = dst.clone();
-        blit_rgba32f(&mut dst, &src, mode, 0.0, fill, hdr);
-        prop_assert_eq!(dst, original);
+        let orig8 = dst8.clone();
+        blit_rgba8_opts(&mut dst8, &src8, mode, 0.0, alpha, op);
+        prop_assert_eq!(dst8, orig8);
+
+        let orig32 = dst32.clone();
+        blit_rgba32f_opts(&mut dst32, &src32, mode, 0.0, hdr, alpha, op);
+        for (a, b) in dst32.iter().zip(&orig32) {
+            for c in 0..4 {
+                prop_assert_eq!(a[c].to_bits(), b[c].to_bits());
+            }
+        }
     }
 }

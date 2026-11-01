@@ -1,201 +1,163 @@
+use craft_blitter::float::blit_rgba32f_scalar;
+use craft_blitter::simd::{composite_separable_rgb_span_serial, supports_lanes};
 use craft_blitter::{
-    BlendMode, blit_rgba8, blit_rgba8_clipped, blit_rgba8_premultiplied, blit_rgba16, blit_rgba16_clipped, blit_rgba16_premultiplied, blit_rgba32f,
-    blit_rgba32f_clipped, blit_rgba32f_gamma, blit_rgba32f_premultiplied,
+    AlphaMode, BlendMode, CompositeOp, blit_rgba8, blit_rgba8_atop, blit_rgba8_opts, blit_rgba8_premultiplied, blit_rgba16, blit_rgba16_atop,
+    blit_rgba16_opts, blit_rgba16_premultiplied, blit_rgba32f, blit_rgba32f_atop, blit_rgba32f_opts, blit_rgba32f_premultiplied, composite,
+    composite_atop,
 };
 
-#[test]
-fn test_mismatched_slice_lengths_no_panic() {
-    // 10 pixels destination, 6 pixels source
-    let mut dst = vec![0u8; 40];
-    let src = vec![255u8; 24];
-    blit_rgba8(&mut dst, &src, BlendMode::Normal, 1.0, 1.0);
-
-    // First 6 pixels blitted
-    for &val in &dst[..24] {
-        assert_eq!(val, 255);
-    }
-    // Remaining 4 pixels untouched
-    for &val in &dst[24..40] {
-        assert_eq!(val, 0);
-    }
-
-    // 5 pixels destination, 10 pixels source
-    let mut dst2 = vec![100u8; 20];
-    let mut src2 = Vec::new();
-    for _ in 0..10 {
-        src2.extend_from_slice(&[200, 200, 200, 255]);
-    }
-    blit_rgba8(&mut dst2, &src2, BlendMode::Normal, 1.0, 1.0);
-    for chunk in dst2.as_chunks::<4>().0 {
-        assert_eq!(chunk, &[200, 200, 200, 255]);
-    }
-}
-
-#[test]
-fn test_clipping_group_isolation_rgba8() {
-    // Base layer: pixel 0 transparent, pixel 1 alpha 128, pixel 2 alpha 255
-    let mut dst = [
-        0u8, 0, 0, 0, // Transparent pixel
-        50, 50, 50, 128, // Translucent pixel
-        100, 100, 100, 255, // Opaque pixel
-    ];
-    let src = [200u8, 200, 200, 255, 200, 200, 200, 255, 200, 200, 200, 255];
-
-    blit_rgba8_clipped(&mut dst, &src, BlendMode::Normal, 1.0, 1.0);
-
-    // Pixel 0 must remain completely untouched [0, 0, 0, 0]
-    assert_eq!(&dst[0..4], &[0, 0, 0, 0]);
-
-    // Pixel 1: alpha must remain locked to 128
-    assert_eq!(dst[7], 128);
-
-    // Pixel 2: alpha must remain locked to 255
-    assert_eq!(dst[11], 255);
-}
-
-#[test]
-fn test_clipping_group_isolation_rgba16() {
-    let mut dst = [0u16, 0, 0, 0, 10000, 10000, 10000, 32768, 20000, 20000, 20000, 65535];
-    let src = [50000u16, 50000, 50000, 65535, 50000, 50000, 50000, 65535, 50000, 50000, 50000, 65535];
-    blit_rgba16_clipped(&mut dst, &src, BlendMode::Normal, 1.0, 1.0);
-    assert_eq!(&dst[0..4], &[0, 0, 0, 0]);
-    assert_eq!(dst[7], 32768);
-    assert_eq!(dst[11], 65535);
-
-    let mut dst_plain = [10000u16, 10000, 10000, 65535];
-    blit_rgba16(&mut dst_plain, &src[0..4], BlendMode::Normal, 1.0, 1.0);
-    assert_eq!(dst_plain, src[0..4]);
-}
-
-#[test]
-fn test_clipping_group_isolation_rgba32f() {
-    let mut dst = [[0.0f32, 0.0, 0.0, 0.0], [0.2, 0.2, 0.2, 0.5], [0.5, 0.5, 0.5, 1.0]];
-    let src = [[1.0f32, 1.0, 1.0, 1.0], [1.0, 1.0, 1.0, 1.0], [1.0, 1.0, 1.0, 1.0]];
-
-    blit_rgba32f_clipped(&mut dst, &src, BlendMode::Normal, 1.0, 1.0, false);
-
-    assert_eq!(dst[0], [0.0, 0.0, 0.0, 0.0]);
-    assert_eq!(dst[1][3], 0.5);
-    assert_eq!(dst[2][3], 1.0);
-}
-
-#[test]
-fn test_premultiplied_alpha_paths() {
-    // RGBA8 premultiplied
-    let mut dst8 = [50u8, 50, 50, 128];
-    let src8 = [100u8, 100, 100, 200];
-    blit_rgba8_premultiplied(&mut dst8, &src8, 1.0);
-    assert!(dst8[3] >= 200);
-
-    // RGBA16 premultiplied
-    let mut dst16 = [10000u16, 10000, 10000, 32768];
-    let src16 = [20000u16, 20000, 20000, 50000];
-    blit_rgba16_premultiplied(&mut dst16, &src16, 1.0);
-    assert!(dst16[3] >= 50000);
-
-    // RGBA32F premultiplied
-    let mut dst32 = [[0.2f32, 0.2, 0.2, 0.5]];
-    let src32 = [[0.4f32, 0.4, 0.4, 0.8]];
-    blit_rgba32f_premultiplied(&mut dst32, &src32, 1.0);
-    assert!((dst32[0][3] - (0.8 + 0.5 * 0.2)).abs() < 1e-6);
-}
-
-#[test]
-fn test_various_span_sizes_simd_and_tail() {
-    for len in [1, 7, 8, 9, 15, 16, 17, 33, 100, 4096, 5000] {
-        let mut dst = vec![[0.2f32, 0.4, 0.6, 1.0]; len];
-        let src = vec![[0.8f32, 0.1, 0.3, 0.5]; len];
-
-        blit_rgba32f(&mut dst, &src, BlendMode::Normal, 1.0, 1.0, false);
-
-        // Every pixel should be identical
-        for (i, px) in dst.iter().enumerate() {
-            assert!((px[0] - dst[0][0]).abs() < 1e-6, "pixel {i} differs");
-            assert!((px[1] - dst[0][1]).abs() < 1e-6, "pixel {i} differs");
-            assert!((px[2] - dst[0][2]).abs() < 1e-6, "pixel {i} differs");
-            assert!((px[3] - dst[0][3]).abs() < 1e-6, "pixel {i} differs");
+fn assert_bits_eq_span(a: &[[f32; 4]], b: &[[f32; 4]], ctx: &str) {
+    assert_eq!(a.len(), b.len(), "{ctx}: length mismatch");
+    for (i, (pa, pb)) in a.iter().zip(b).enumerate() {
+        for c in 0..4 {
+            assert_eq!(pa[c].to_bits(), pb[c].to_bits(), "{ctx} pixel {i} ch {c}: {pa:?} != {pb:?}");
         }
     }
 }
 
 #[test]
-fn test_rgba32f_gamma_text_blit() {
-    let mut dst = [[129.0 / 255.0, 129.0 / 255.0, 129.0 / 255.0, 1.0]];
-    let src = [[0.0f32, 0.2, 0.6, 0.686]];
-    blit_rgba32f_gamma(&mut dst, &src, BlendMode::Normal, 1.0, 1.0, 1.45, false);
+fn simd_lanes_and_parallel_spans_are_bit_identical_to_scalar_fallback() {
+    let lengths = [0usize, 1, 7, 8, 9, 15, 16, 17, 63, 64, 65, 4095, 4096, 4097, 5000];
 
-    assert!((dst[0][0] * 255.0 - 57.0).abs() < 1.0);
-    assert!((dst[0][1] * 255.0 - 80.0).abs() < 1.0);
-    assert!((dst[0][2] * 255.0 - 146.0).abs() < 1.0);
+    for &len in &lengths {
+        let base_dst: Vec<[f32; 4]> = (0..len)
+            .map(|i| match i % 5 {
+                0 => [0.0, 0.0, 0.0, 0.0],
+                1 => [0.25, 0.5, 0.75, 1.0],
+                2 => [0.8, 0.1, 0.4, 0.4],
+                3 => [1.5, 0.2, 2.25, 0.85],
+                _ => [0.1, 0.9, 0.3, -0.0],
+            })
+            .collect();
+        let src: Vec<[f32; 4]> = (0..len)
+            .map(|i| match i % 6 {
+                0 => [0.9, 0.2, 0.5, 0.0],
+                1 => [0.6, 0.3, 0.8, 1.0],
+                2 => [0.15, 0.85, 0.35, 0.55],
+                3 => [2.0, 0.5, 1.25, 0.7],
+                4 => [0.4, 0.4, 0.4, f32::NAN],
+                _ => [0.7, 0.2, 0.1, -0.25],
+            })
+            .collect();
+
+        for mode in BlendMode::ALL {
+            for hdr in [false, true] {
+                for opacity in [0.0f32, 0.37, 1.0] {
+                    let mut scalar = base_dst.clone();
+                    blit_rgba32f_scalar(&mut scalar, &src, mode, opacity, hdr, AlphaMode::Straight, CompositeOp::SourceOver);
+
+                    if supports_lanes(mode) {
+                        let mut simd_serial = base_dst.clone();
+                        assert!(composite_separable_rgb_span_serial(&mut simd_serial, &src, mode, opacity, hdr,));
+                        assert_bits_eq_span(&simd_serial, &scalar, &format!("serial {mode:?} len={len} hdr={hdr} op={opacity}"));
+                    }
+
+                    let mut public_out = base_dst.clone();
+                    blit_rgba32f(&mut public_out, &src, mode, opacity, hdr);
+                    assert_bits_eq_span(&public_out, &scalar, &format!("public {mode:?} len={len} hdr={hdr} op={opacity}"));
+                }
+            }
+        }
+    }
 }
 
 #[test]
-fn test_premultiplied_non_normal_and_fill_modes() {
-    use craft_blitter::{AlphaMode, blit_rgba8_opts, blit_rgba16_opts, blit_rgba32f_opts};
+fn source_atop_preserves_backdrop_alpha_across_depths() {
+    // Straight RGBA8: transparent pixel stays transparent; translucent keeps alpha = 128.
+    let mut dst8 = [0u8, 0, 0, 0, 50, 50, 50, 128, 100, 100, 100, 255];
+    let src8 = [200u8, 200, 200, 255, 200, 200, 200, 255, 200, 200, 200, 255];
+    blit_rgba8_atop(&mut dst8, &src8, BlendMode::Normal, 1.0);
+    assert_eq!(&dst8[0..4], &[0, 0, 0, 0]);
+    assert_eq!(&dst8[4..8], &[200, 200, 200, 128]);
+    assert_eq!(&dst8[8..12], &[200, 200, 200, 255]);
 
-    // 1. Premultiplied Multiply (RGBA8)
-    let mut dst8 = [128u8, 128, 128, 128]; // straight color: [255, 255, 255]
-    let src8 = [64u8, 64, 64, 128]; // straight color: [128, 128, 128]
-    blit_rgba8_opts(&mut dst8, &src8, BlendMode::Multiply, 1.0, 1.0, AlphaMode::Premultiplied, false);
-    // Multiply of 255 and 128 is 128. Output alpha = 128 + 128*(1 - 0.5) = 192.
-    // Premultiplied RGB channel should be <= Alpha channel
+    // Straight RGBA16:
+    let mut dst16 = [0u16, 0, 0, 0, 10000, 10000, 10000, 32768, 20000, 20000, 20000, 65535];
+    let src16 = [50000u16, 50000, 50000, 65535, 50000, 50000, 50000, 65535, 50000, 50000, 50000, 65535];
+    blit_rgba16_atop(&mut dst16, &src16, BlendMode::Normal, 1.0);
+    assert_eq!(&dst16[0..4], &[0, 0, 0, 0]);
+    assert_eq!(&dst16[4..8], &[50000, 50000, 50000, 32768]);
+    assert_eq!(&dst16[8..12], &[50000, 50000, 50000, 65535]);
+
+    // Straight RGBA32F (`Co = (1 - as) * Cb + as * B(Cb, Cs)`, `ao = ab`):
+    let mut dst32 = [[0.0f32, 0.0, 0.0, 0.0], [0.2, 0.4, 0.6, 0.5]];
+    let src32 = [[1.0f32, 1.0, 1.0, 1.0], [0.5, 0.5, 0.5, 0.5]];
+    blit_rgba32f_atop(&mut dst32, &src32, BlendMode::Multiply, 1.0, false);
+    assert_eq!(dst32[0], [0.0, 0.0, 0.0, 0.0]);
+    let want = composite_atop(BlendMode::Multiply, [0.2, 0.4, 0.6, 0.5], [0.5, 0.5, 0.5, 0.5], 1.0);
+    for c in 0..4 {
+        assert!((dst32[1][c] - want[c]).abs() < 1e-6);
+    }
+    assert_eq!(dst32[1][3], 0.5);
+}
+
+#[test]
+fn premultiplied_source_over_and_source_atop_maintain_associated_alpha_invariant() {
+    // SourceOver Normal:
+    let mut dst8 = [50u8, 50, 50, 128];
+    blit_rgba8_premultiplied(&mut dst8, &[100, 100, 100, 200], 1.0);
     assert!(dst8[0] <= dst8[3]);
-    assert!(dst8[1] <= dst8[3]);
-    assert!(dst8[2] <= dst8[3]);
-    assert_eq!(dst8[3], 192);
 
-    // 2. Premultiplied Normal with partial fill (RGBA8)
-    let mut dst_norm = [0u8, 0, 0, 0];
-    let src_norm = [200u8, 200, 200, 200];
-    blit_rgba8_opts(&mut dst_norm, &src_norm, BlendMode::Normal, 1.0, 0.5, AlphaMode::Premultiplied, false);
-    assert_eq!(dst_norm[3], 100);
-    assert_eq!(dst_norm[0], 100);
-
-    // 3. Premultiplied non-normal (RGBA16)
-    let mut dst16 = [32768u16, 32768, 32768, 32768];
-    let src16 = [16384u16, 16384, 16384, 32768];
-    blit_rgba16_opts(&mut dst16, &src16, BlendMode::Multiply, 1.0, 1.0, AlphaMode::Premultiplied, false);
+    let mut dst16 = [10000u16, 10000, 10000, 32768];
+    blit_rgba16_premultiplied(&mut dst16, &[20000, 20000, 20000, 50000], 1.0);
     assert!(dst16[0] <= dst16[3]);
-    assert!(dst16[1] <= dst16[3]);
-    assert!(dst16[2] <= dst16[3]);
 
-    // 4. Premultiplied non-normal (RGBA32F)
-    let mut dst32 = [[0.5f32, 0.5, 0.5, 0.5]];
-    let src32 = [[0.25f32, 0.25, 0.25, 0.5]];
-    blit_rgba32f_opts(&mut dst32, &src32, BlendMode::Multiply, 1.0, 1.0, 1.0, false, AlphaMode::Premultiplied, false);
-    assert!(dst32[0][0] <= dst32[0][3]);
-    assert!((dst32[0][3] - 0.75).abs() < 1e-5);
+    let mut dst32 = [[0.2f32, 0.2, 0.2, 0.5]];
+    blit_rgba32f_premultiplied(&mut dst32, &[[0.4, 0.4, 0.4, 0.8]], 1.0);
+    assert!((dst32[0][0] - 0.44).abs() < 1e-6);
+    assert!((dst32[0][3] - 0.9).abs() < 1e-6);
+
+    // Premultiplied SourceAtop Normal (`Dca' = Sca * Da + Dca * (1 - Sa)`, `Da' = Da`):
+    // Opaque white [1, 1, 1, 1] atop half-transparent black [0, 0, 0, 0.5] -> [0.5, 0.5, 0.5, 0.5].
+    let mut atop32 = [[0.0f32, 0.0, 0.0, 0.5]];
+    blit_rgba32f_opts(&mut atop32, &[[1.0, 1.0, 1.0, 1.0]], BlendMode::Normal, 1.0, false, AlphaMode::Premultiplied, CompositeOp::SourceAtop);
+    for c in 0..4 {
+        assert!((atop32[0][c] - 0.5).abs() < 1e-6, "{atop32:?}");
+    }
+
+    let mut atop8 = [0u8, 0, 0, 128];
+    blit_rgba8_opts(&mut atop8, &[255, 255, 255, 255], BlendMode::Normal, 1.0, AlphaMode::Premultiplied, CompositeOp::SourceAtop);
+    assert_eq!(atop8, [128, 128, 128, 128]);
+
+    let mut atop16 = [0u16, 0, 0, 32768];
+    blit_rgba16_opts(&mut atop16, &[65535, 65535, 65535, 65535], BlendMode::Normal, 1.0, AlphaMode::Premultiplied, CompositeOp::SourceAtop);
+    assert_eq!(atop16, [32768, 32768, 32768, 32768]);
+
+    // Premultiplied Multiply SourceOver:
+    let mut mul8 = [128u8, 128, 128, 128];
+    blit_rgba8_opts(&mut mul8, &[64, 64, 64, 128], BlendMode::Multiply, 1.0, AlphaMode::Premultiplied, CompositeOp::SourceOver);
+    assert!(mul8[0] <= mul8[3]);
+    assert_eq!(mul8[3], 192);
 }
 
 #[test]
-fn test_special_eight_clamping_robustness() {
-    use craft_blitter::special::{composite_special_eight_u8, composite_special_eight_u16};
+fn mismatched_slices_and_nan_inputs_do_not_panic_or_corrupt_backdrop() {
+    // Unaligned & mismatched byte lengths: 10 pixels dst + 2 trailing bytes, 6 pixels src + 3 bytes.
+    let mut dst = vec![7u8; 42];
+    let src = vec![250u8; 27];
+    blit_rgba8(&mut dst, &src, BlendMode::Normal, 1.0);
+    assert!(dst[..24].iter().all(|&b| b == 250));
+    assert!(dst[24..].iter().all(|&b| b == 7));
 
-    // op8 / fill8 larger than 255 should not panic with overflow
-    let bg8 = [100u8, 150, 200, 255];
-    let src8 = [50u8, 120, 180, 255];
-    let res8 = composite_special_eight_u8(BlendMode::VividLight, bg8, src8, 999, 888);
-    assert_eq!(res8[3], 255);
+    // Empty slices:
+    blit_rgba8(&mut [], &[1, 2, 3, 4], BlendMode::Normal, 1.0);
+    blit_rgba16(&mut [], &[1, 2, 3, 4], BlendMode::Normal, 1.0);
+    blit_rgba32f(&mut [], &[[1.0; 4]], BlendMode::Normal, 1.0, false);
 
-    // op16 / fill16 larger than 65535 should not panic with overflow
-    let bg16 = [25000u16, 35000, 45000, 65535];
-    let src16 = [15000u16, 25000, 35000, 65535];
-    let res16 = composite_special_eight_u16(BlendMode::VividLight, bg16, src16, 999_999, 888_888);
-    assert_eq!(res16[3], 65535);
-}
+    // NaN opacity is a no-op across all depths:
+    let mut d8 = [10u8, 20, 30, 255];
+    blit_rgba8(&mut d8, &[200, 200, 200, 255], BlendMode::Normal, f32::NAN);
+    assert_eq!(d8, [10, 20, 30, 255]);
 
-#[test]
-fn test_nan_opacity_and_fill_sanitization() {
-    use craft_blitter::{AlphaMode, blit_rgba32f_opts};
+    let mut d16 = [100u16, 200, 300, 65535];
+    blit_rgba16(&mut d16, &[5000, 5000, 5000, 65535], BlendMode::Normal, f32::NAN);
+    assert_eq!(d16, [100, 200, 300, 65535]);
 
-    let mut dst = [[0.5f32, 0.5, 0.5, 1.0]];
-    let src = [[0.8f32, 0.8, 0.8, 1.0]];
+    let mut d32 = [[0.25f32, 0.5, 0.75, 1.0]];
+    blit_rgba32f(&mut d32, &[[0.9, 0.9, 0.9, 1.0]], BlendMode::Normal, f32::NAN, false);
+    assert_eq!(d32[0], [0.25, 0.5, 0.75, 1.0]);
 
-    // NaN opacity should be treated as 0 (no-op)
-    blit_rgba32f_opts(&mut dst, &src, BlendMode::Normal, f32::NAN, 1.0, 1.0, false, AlphaMode::Straight, false);
-    assert_eq!(dst[0], [0.5, 0.5, 0.5, 1.0]);
-
-    // NaN fill should be treated as 1.0
-    blit_rgba32f_opts(&mut dst, &src, BlendMode::Normal, 1.0, f32::NAN, 1.0, false, AlphaMode::Straight, false);
-    assert_eq!(dst[0], [0.8, 0.8, 0.8, 1.0]);
+    // NaN source alpha is treated as transparent in composite():
+    let bg = [0.3f32, 0.4, 0.5, 1.0];
+    assert_eq!(composite(BlendMode::Multiply, bg, [0.9, 0.9, 0.9, f32::NAN], 1.0), bg);
 }

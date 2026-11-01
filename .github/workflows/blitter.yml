@@ -1,0 +1,45 @@
+name: Shared Blitter
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['crates/blitter/**', 'Cargo.toml', 'Cargo.lock', '.github/workflows/blitter.yml']
+  pull_request:
+    paths: ['crates/blitter/**', 'Cargo.toml', 'Cargo.lock', '.github/workflows/blitter.yml']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: shared-blitter-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  blitter:
+    timeout-minutes: 15
+    name: Blitter lint, tests, alloc-check, WASM (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        # macOS runners are kept for releases: macOS runs only when started by hand.
+        os: ${{ github.event_name == 'workflow_dispatch' && fromJSON('["ubuntu-latest","windows-latest","macos-latest"]') || fromJSON('["ubuntu-latest","windows-latest"]') }}
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          components: rustfmt, clippy
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: craft-blitter-${{ matrix.os }}
+      - run: cargo fmt -p craft-blitter --check
+      - run: cargo fmt --manifest-path crates/blitter/alloc-check/Cargo.toml --check
+      - run: cargo clippy -p craft-blitter --all-targets --locked -- -D warnings
+      - run: cargo clippy --manifest-path crates/blitter/alloc-check/Cargo.toml --all-targets --locked -- -D warnings
+      - run: cargo test -p craft-blitter --locked
+      - run: cargo test --manifest-path crates/blitter/alloc-check/Cargo.toml --locked -- --test-threads=1
+      - run: cargo check -p craft-blitter --locked --target wasm32-unknown-unknown

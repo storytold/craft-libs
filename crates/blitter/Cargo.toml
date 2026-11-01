@@ -1,6 +1,6 @@
 [package]
 name = "craft-blitter"
-description = "High-performance zero-allocation SIMD blitter and compositing engine for ArtCraft"
+description = "CPU raster blending and Porter-Duff compositing for the Craft apps"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

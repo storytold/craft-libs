@@ -1,19 +1,32 @@
-//! Unsafe-free SIMD auto-vectorization across compile-time constant array chunks.
+//! Safe 8-pixel Structure-of-Arrays (SoA) chunked auto-vectorization for `RGBA32F` spans.
 //!
-//! Features:
-//! - Safe chunking via standard library `slice::as_chunks_mut::<8>()` and `slice::as_chunks::<8>()`.
-//! - Stack Structure-of-Arrays (SoA) transposition for vector registers.
-//! - Parallel chunk processing via Rayon (`PAR_THRESHOLD = 4096`) on native platforms.
-//! - Safe scalar remainder tail processing without pixel truncation.
-//! - Non-panicking slice length clamping.
-//! - Vectorized separable blend kernels for Multiply, Screen, Add, Darken, Lighten, Difference, LinearBurn, Exclusion, Subtract.
+//! # Vectorization Design (`#![forbid(unsafe_code)]`)
+//! The workspace forbids `unsafe` (`[workspace.lints.rust] unsafe_code = "forbid"` in `Cargo.toml`
+//! and `AGENTS.md`), and targets stable Rust (`edition = "2024"`). Rather than architecture-specific
+//! `std::arch` intrinsics, this module transposes fixed 8-pixel chunks (`slice::as_chunks::<8>()`)
+//! on the stack from Array-of-Structures (`[[f32; 4]; 8]`) into Structure-of-Arrays (`[f32; 8]` per
+//! channel) with branchless inner loops so LLVM emits packed vector instructions (`SSE`/`AVX` on
+//! `x86_64`, `NEON` on `aarch64`, `simd128` on `wasm32` when enabled).
+//!
+//! Every expression in [`normal_lanes`] and [`separable_blend_lanes`] matches the IEEE-754
+//! operation tree of [`crate::float::composite_f32`], and tail pixels (`len % 8`) run through
+//! [`crate::float::composite_f32`]. Rust does not fuse `+`/`*` into FMA on `f32`, so the chunked
+//! path and [`crate::float::blit_rgba32f_scalar`] produce bit-identical IEEE-754 outputs across
+//! CPUs.
+//!
+//! Provenance: [`normal_lanes`] is adapted from `storytold/photocraft`
+//! (`crates/compose/src/psblend.rs`, MIT OR Apache-2.0; see root `NOTICE`) and generalized in
+//! [`separable_blend_lanes`] to 9 additional separable modes.
 
 use crate::BlendMode;
 
+/// Number of `RGBA32F` pixels processed per SoA vector chunk (`8 * f32 = 256 bits`).
 pub const LANES: usize = 8;
+
+/// Minimum pixel count before native entry points split work across Rayon (`4096` pixels).
 pub const PAR_THRESHOLD: usize = 4096;
 
-/// Stack-based conversion from Array-of-Structures (AoS) to Structure-of-Arrays (SoA).
+/// Stack conversion from Array-of-Structures (`[[f32; 4]; 8]`) to Structure-of-Arrays (`[f32; 8]` x 4).
 #[inline(always)]
 pub fn transpose_from_aos(p: &[[f32; 4]; LANES]) -> ([f32; LANES], [f32; LANES], [f32; LANES], [f32; LANES]) {
     let r = std::array::from_fn(|i| p[i][0]);
@@ -23,34 +36,33 @@ pub fn transpose_from_aos(p: &[[f32; 4]; LANES]) -> ([f32; LANES], [f32; LANES],
     (r, g, b, a)
 }
 
-/// Stack-based conversion from Structure-of-Arrays (SoA) to Array-of-Structures (AoS).
+/// Stack conversion from Structure-of-Arrays (`[f32; 8]` x 4) to Array-of-Structures (`[[f32; 4]; 8]`).
 #[inline(always)]
 pub fn transpose_to_aos(r: [f32; LANES], g: [f32; LANES], b: [f32; LANES], a: [f32; LANES]) -> [[f32; 4]; LANES] {
     std::array::from_fn(|i| [r[i], g[i], b[i], a[i]])
 }
 
-/// Vectorized Normal blend over a fixed block of 8 pixels without branching.
+/// Vectorized straight-alpha `Normal` `source-over` blend over an 8-pixel block (`W3C` §5 / §9.1.2).
 #[inline]
 #[allow(clippy::needless_range_loop)]
 pub fn normal_lanes(b: &mut [[f32; 4]; LANES], s: &[[f32; 4]; LANES], opacity: f32) {
-    let lane = |p: &[[f32; 4]; LANES], c: usize| -> [f32; LANES] { std::array::from_fn(|i| p[i][c]) };
-    let (b0, b1, b2, ab) = (lane(b, 0), lane(b, 1), lane(b, 2), lane(b, 3));
-    let (s0, s1, s2, s3) = (lane(s, 0), lane(s, 1), lane(s, 2), lane(s, 3));
+    let (b0, b1, b2, ab) = transpose_from_aos(b);
+    let (s0, s1, s2, s3) = transpose_from_aos(s);
     let mut as_ = [0.0f32; LANES];
     let mut ao = [0.0f32; LANES];
     let mut kb = [0.0f32; LANES];
     let mut inv = [0.0f32; LANES];
     for i in 0..LANES {
         as_[i] = s3[i] * opacity;
-        ao[i] = as_[i] + ab[i] * (1.0 - as_[i]);
         kb[i] = ab[i] * (1.0 - as_[i]);
+        ao[i] = as_[i] + kb[i];
         inv[i] = if ao[i] > 0.0 { 1.0 / ao[i] } else { 0.0 };
     }
     for i in 0..LANES {
         let mix =
             [(kb[i] * b0[i] + as_[i] * s0[i]) * inv[i], (kb[i] * b1[i] + as_[i] * s1[i]) * inv[i], (kb[i] * b2[i] + as_[i] * s2[i]) * inv[i], ao[i]];
-        let keep = (s3[i] <= 0.0) | (as_[i] <= 0.0);
-        let gone = ao[i] <= 0.0;
+        let keep = (s3[i].is_nan() || s3[i] <= 0.0) | (as_[i].is_nan() || as_[i] <= 0.0);
+        let gone = ao[i].is_nan() || ao[i] <= 0.0;
         b[i] = if keep {
             b[i]
         } else if gone {
@@ -61,19 +73,16 @@ pub fn normal_lanes(b: &mut [[f32; 4]; LANES], s: &[[f32; 4]; LANES], opacity: f
     }
 }
 
-/// Generic vectorized separable blend over a fixed block of 8 pixels.
-///
-/// Implements W3C/PDF Porter-Duff compositing with arbitrary separable per-channel blend functions:
-/// $$c_o = \frac{(1 - a_s) a_b c_b + (1 - a_b) a_s c_s + a_s a_b B(c_b, c_s)}{a_o}$$
+/// Vectorized straight-alpha `source-over` separable blend over an 8-pixel block (`W3C` §10):
+/// `Co = ((1 - as) * ab * Cb + (1 - ab) * as * Cs + as * ab * B(Cb, Cs)) / ao`.
 #[inline(always)]
 #[allow(clippy::needless_range_loop)]
 pub fn separable_blend_lanes<F>(b: &mut [[f32; 4]; LANES], s: &[[f32; 4]; LANES], opacity: f32, blend_fn: F)
 where
     F: Fn([f32; LANES], [f32; LANES]) -> [f32; LANES],
 {
-    let lane = |p: &[[f32; 4]; LANES], c: usize| -> [f32; LANES] { std::array::from_fn(|i| p[i][c]) };
-    let (b0, b1, b2, ab) = (lane(b, 0), lane(b, 1), lane(b, 2), lane(b, 3));
-    let (s0, s1, s2, s3) = (lane(s, 0), lane(s, 1), lane(s, 2), lane(s, 3));
+    let (b0, b1, b2, ab) = transpose_from_aos(b);
+    let (s0, s1, s2, s3) = transpose_from_aos(s);
 
     let mut as_ = [0.0f32; LANES];
     let mut ao = [0.0f32; LANES];
@@ -102,8 +111,8 @@ where
             (wb[i] * b2[i] + ws[i] * s2[i] + wbs[i] * bb[i]) * inv[i],
             ao[i],
         ];
-        let keep = (s3[i] <= 0.0) | (as_[i] <= 0.0);
-        let gone = ao[i] <= 0.0;
+        let keep = (s3[i].is_nan() || s3[i] <= 0.0) | (as_[i].is_nan() || as_[i] <= 0.0);
+        let gone = ao[i].is_nan() || ao[i] <= 0.0;
         b[i] = if keep {
             b[i]
         } else if gone {
@@ -114,155 +123,70 @@ where
     }
 }
 
-/// Vectorized Multiply blend over 8 pixels.
+/// Vectorized `Multiply` blend over 8 pixels (`W3C` §10.1.2).
 #[inline]
 pub fn multiply_lanes(b: &mut [[f32; 4]; LANES], s: &[[f32; 4]; LANES], opacity: f32) {
     separable_blend_lanes(b, s, opacity, |cb, cs| std::array::from_fn(|i| cb[i] * cs[i]));
 }
 
-/// Vectorized Screen blend over 8 pixels.
+/// Vectorized `Screen` blend over 8 pixels (`W3C` §10.1.3).
 #[inline]
 pub fn screen_lanes(b: &mut [[f32; 4]; LANES], s: &[[f32; 4]; LANES], opacity: f32) {
     separable_blend_lanes(b, s, opacity, |cb, cs| std::array::from_fn(|i| cb[i] + cs[i] - cb[i] * cs[i]));
 }
 
-/// Vectorized Add (Linear Dodge) blend over 8 pixels.
+/// Vectorized `LinearDodge` (Add) blend over 8 pixels (`Khronos` `LINEARDODGE_NV` / `PLUS_NV`).
 #[inline]
 pub fn add_lanes(b: &mut [[f32; 4]; LANES], s: &[[f32; 4]; LANES], opacity: f32, hdr: bool) {
     if hdr {
-        separable_blend_lanes(b, s, opacity, |cb, cs| std::array::from_fn(|i| cb[i] + cs[i]));
+        separable_blend_lanes(b, s, opacity, |cb, cs| std::array::from_fn(|i| (cb[i] + cs[i]).min(f32::MAX)));
     } else {
         separable_blend_lanes(b, s, opacity, |cb, cs| std::array::from_fn(|i| (cb[i] + cs[i]).min(1.0)));
     }
 }
 
-/// Vectorized Darken blend over 8 pixels.
+/// Vectorized `Darken` blend over 8 pixels (`W3C` §10.1.5).
 #[inline]
 pub fn darken_lanes(b: &mut [[f32; 4]; LANES], s: &[[f32; 4]; LANES], opacity: f32) {
     separable_blend_lanes(b, s, opacity, |cb, cs| std::array::from_fn(|i| cb[i].min(cs[i])));
 }
 
-/// Vectorized Lighten blend over 8 pixels.
+/// Vectorized `Lighten` blend over 8 pixels (`W3C` §10.1.6).
 #[inline]
 pub fn lighten_lanes(b: &mut [[f32; 4]; LANES], s: &[[f32; 4]; LANES], opacity: f32) {
     separable_blend_lanes(b, s, opacity, |cb, cs| std::array::from_fn(|i| cb[i].max(cs[i])));
 }
 
-/// Vectorized Difference blend over 8 pixels.
+/// Vectorized `Difference` blend over 8 pixels (`W3C` §10.1.11).
 #[inline]
 pub fn difference_lanes(b: &mut [[f32; 4]; LANES], s: &[[f32; 4]; LANES], opacity: f32) {
     separable_blend_lanes(b, s, opacity, |cb, cs| std::array::from_fn(|i| (cb[i] - cs[i]).abs()));
 }
 
-/// Vectorized Linear Burn blend over 8 pixels.
+/// Vectorized `LinearBurn` blend over 8 pixels (`Khronos` `LINEARBURN_NV`).
 #[inline]
 pub fn linear_burn_lanes(b: &mut [[f32; 4]; LANES], s: &[[f32; 4]; LANES], opacity: f32) {
     separable_blend_lanes(b, s, opacity, |cb, cs| std::array::from_fn(|i| (cb[i] + cs[i] - 1.0).max(0.0)));
 }
 
-/// Vectorized Exclusion blend over 8 pixels.
+/// Vectorized `Exclusion` blend over 8 pixels (`W3C` §10.1.12).
 #[inline]
 pub fn exclusion_lanes(b: &mut [[f32; 4]; LANES], s: &[[f32; 4]; LANES], opacity: f32) {
     separable_blend_lanes(b, s, opacity, |cb, cs| std::array::from_fn(|i| cb[i] + cs[i] - 2.0 * cb[i] * cs[i]));
 }
 
-/// Vectorized Subtract blend over 8 pixels.
+/// Vectorized `Subtract` blend over 8 pixels (`Khronos` `MINUS_CLAMPED_NV`).
 #[inline]
 pub fn subtract_lanes(b: &mut [[f32; 4]; LANES], s: &[[f32; 4]; LANES], opacity: f32) {
     separable_blend_lanes(b, s, opacity, |cb, cs| std::array::from_fn(|i| (cb[i] - cs[i]).max(0.0)));
 }
 
-/// Dispatches a chunk of 8 pixels for supported blend modes.
-/// Returns `true` if handled by vectorization, `false` if the mode requires scalar math.
+/// Returns `true` if `mode` has a branchless 8-lane SoA kernel in this module.
 #[inline]
-pub fn blend_lanes(b: &mut [[f32; 4]; LANES], s: &[[f32; 4]; LANES], mode: BlendMode, opacity: f32, hdr: bool) -> bool {
-    match mode {
-        BlendMode::Normal => {
-            normal_lanes(b, s, opacity);
-            true
-        }
-        BlendMode::Multiply => {
-            multiply_lanes(b, s, opacity);
-            true
-        }
-        BlendMode::Screen => {
-            screen_lanes(b, s, opacity);
-            true
-        }
-        BlendMode::LinearDodge => {
-            add_lanes(b, s, opacity, hdr);
-            true
-        }
-        BlendMode::Darken => {
-            darken_lanes(b, s, opacity);
-            true
-        }
-        BlendMode::Lighten => {
-            lighten_lanes(b, s, opacity);
-            true
-        }
-        BlendMode::Difference => {
-            difference_lanes(b, s, opacity);
-            true
-        }
-        BlendMode::LinearBurn => {
-            linear_burn_lanes(b, s, opacity);
-            true
-        }
-        BlendMode::Exclusion => {
-            exclusion_lanes(b, s, opacity);
-            true
-        }
-        BlendMode::Subtract => {
-            subtract_lanes(b, s, opacity);
-            true
-        }
-        _ => false,
-    }
-}
-
-/// Sequential vectorized span runner for supported separable modes.
-pub fn composite_separable_rgb_span_serial(dst: &mut [[f32; 4]], src: &[[f32; 4]], mode: BlendMode, opacity: f32, hdr: bool) -> bool {
-    match mode {
+pub const fn supports_lanes(mode: BlendMode) -> bool {
+    matches!(
+        mode,
         BlendMode::Normal
-        | BlendMode::Multiply
-        | BlendMode::Screen
-        | BlendMode::LinearDodge
-        | BlendMode::Darken
-        | BlendMode::Lighten
-        | BlendMode::Difference
-        | BlendMode::LinearBurn
-        | BlendMode::Exclusion
-        | BlendMode::Subtract => {}
-        _ => return false,
-    }
-
-    let n = dst.len().min(src.len());
-    let (dc, dt) = dst[..n].as_chunks_mut::<LANES>();
-    let (sc, st) = src[..n].as_chunks::<LANES>();
-
-    for (b, s) in dc.iter_mut().zip(sc) {
-        blend_lanes(b, s, mode, opacity, hdr);
-    }
-    for (b, s) in dt.iter_mut().zip(st) {
-        if s[3] <= 0.0 {
-            continue;
-        }
-        *b = crate::float::composite_f32(mode, *b, *s, opacity, hdr);
-    }
-    true
-}
-
-/// Span runner with Rayon parallelization on native targets and scalar fallback on WASM.
-pub fn composite_separable_rgb_span(dst: &mut [[f32; 4]], src: &[[f32; 4]], mode: BlendMode, opacity: f32, hdr: bool) -> bool {
-    let n = dst.len().min(src.len());
-    let dst = &mut dst[..n];
-    let src = &src[..n];
-
-    #[cfg(not(target_arch = "wasm32"))]
-    if dst.len() >= PAR_THRESHOLD {
-        match mode {
-            BlendMode::Normal
             | BlendMode::Multiply
             | BlendMode::Screen
             | BlendMode::LinearDodge
@@ -271,28 +195,77 @@ pub fn composite_separable_rgb_span(dst: &mut [[f32; 4]], src: &[[f32; 4]], mode
             | BlendMode::Difference
             | BlendMode::LinearBurn
             | BlendMode::Exclusion
-            | BlendMode::Subtract => {
-                use rayon::prelude::*;
-                dst.par_chunks_mut(PAR_THRESHOLD).zip(src.par_chunks(PAR_THRESHOLD)).for_each(|(d_chunk, s_chunk)| {
-                    composite_separable_rgb_span_serial(d_chunk, s_chunk, mode, opacity, hdr);
-                });
-                return true;
-            }
-            _ => return false,
+            | BlendMode::Subtract
+    )
+}
+
+/// Dispatches an 8-pixel block for supported separable modes, returning `false` otherwise.
+#[inline]
+pub fn blend_lanes(b: &mut [[f32; 4]; LANES], s: &[[f32; 4]; LANES], mode: BlendMode, opacity: f32, hdr: bool) -> bool {
+    match mode {
+        BlendMode::Normal => normal_lanes(b, s, opacity),
+        BlendMode::Multiply => multiply_lanes(b, s, opacity),
+        BlendMode::Screen => screen_lanes(b, s, opacity),
+        BlendMode::LinearDodge => add_lanes(b, s, opacity, hdr),
+        BlendMode::Darken => darken_lanes(b, s, opacity),
+        BlendMode::Lighten => lighten_lanes(b, s, opacity),
+        BlendMode::Difference => difference_lanes(b, s, opacity),
+        BlendMode::LinearBurn => linear_burn_lanes(b, s, opacity),
+        BlendMode::Exclusion => exclusion_lanes(b, s, opacity),
+        BlendMode::Subtract => subtract_lanes(b, s, opacity),
+        _ => return false,
+    }
+    true
+}
+
+/// Serial 8-lane vectorized span runner with scalar remainder tail.
+///
+/// Returns `false` without mutating `dst` if `mode` is not handled by [`blend_lanes`].
+pub fn composite_separable_rgb_span_serial(dst: &mut [[f32; 4]], src: &[[f32; 4]], mode: BlendMode, opacity: f32, hdr: bool) -> bool {
+    if !supports_lanes(mode) {
+        return false;
+    }
+    if opacity.is_nan() || opacity <= 0.0 {
+        return true;
+    }
+    let opacity = opacity.min(1.0);
+    let n = dst.len().min(src.len());
+    let (dc, dt) = dst[..n].as_chunks_mut::<LANES>();
+    let (sc, st) = src[..n].as_chunks::<LANES>();
+
+    for (b, s) in dc.iter_mut().zip(sc) {
+        blend_lanes(b, s, mode, opacity, hdr);
+    }
+    for (b, s) in dt.iter_mut().zip(st) {
+        if s[3].is_nan() || s[3] <= 0.0 {
+            continue;
         }
+        *b = crate::float::composite_f32(mode, *b, *s, opacity, hdr);
+    }
+    true
+}
+
+/// Vectorized span runner with Rayon parallelization above [`PAR_THRESHOLD`] on native targets.
+pub fn composite_separable_rgb_span(dst: &mut [[f32; 4]], src: &[[f32; 4]], mode: BlendMode, opacity: f32, hdr: bool) -> bool {
+    if !supports_lanes(mode) {
+        return false;
+    }
+    if opacity.is_nan() || opacity <= 0.0 {
+        return true;
+    }
+    let opacity = opacity.min(1.0);
+    let n = dst.len().min(src.len());
+    let dst = &mut dst[..n];
+    let src = &src[..n];
+
+    #[cfg(not(target_arch = "wasm32"))]
+    if dst.len() >= PAR_THRESHOLD {
+        use rayon::prelude::*;
+        dst.par_chunks_mut(PAR_THRESHOLD).zip(src.par_chunks(PAR_THRESHOLD)).for_each(|(d_chunk, s_chunk)| {
+            composite_separable_rgb_span_serial(d_chunk, s_chunk, mode, opacity, hdr);
+        });
+        return true;
     }
 
     composite_separable_rgb_span_serial(dst, src, mode, opacity, hdr)
-}
-
-/// Backwards-compatible alias for Normal mode serial span.
-#[inline]
-pub fn composite_normal_rgb_span_serial(dst: &mut [[f32; 4]], src: &[[f32; 4]], opacity: f32) {
-    composite_separable_rgb_span_serial(dst, src, BlendMode::Normal, opacity, false);
-}
-
-/// Backwards-compatible alias for Normal mode parallel span.
-#[inline]
-pub fn composite_normal_rgb_span(dst: &mut [[f32; 4]], src: &[[f32; 4]], opacity: f32) {
-    composite_separable_rgb_span(dst, src, BlendMode::Normal, opacity, false);
 }
