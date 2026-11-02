@@ -217,13 +217,15 @@ fn composed_chars(core: &[char]) -> (Vec<char>, Vec<Option<usize>>) {
 }
 
 /// Does a pack's `pats` hyphenate `core` in `lang`? Russian, Bulgarian and Turkish: a word in
-/// their script (the guard their rules use). Polish, Portuguese, Italian and German: every word,
-/// as their embedded patterns do. Any other language: a word whose letters the patterns know.
+/// their script (the guard their rules use) whose letters the patterns know, so a word with a
+/// letter the pack never mentions (`ё`) goes on to the built-in rules. Polish, Portuguese, Italian
+/// and German: every word, as their embedded patterns do. Any other language: a word whose letters
+/// the patterns know.
 fn pack_patterns_fit(lang: ProofLang, pats: &Patterns, core: &[char]) -> bool {
     match lang {
-        ProofLang::Ru => core.iter().all(|&c| crate::ru::is_cyrillic(c)),
-        ProofLang::Bg => core.iter().all(|&c| crate::bg::is_letter(c)),
-        ProofLang::Tr => core.iter().all(|&c| crate::tr::hyphen::is_letter(c)),
+        ProofLang::Ru => core.iter().all(|&c| crate::ru::is_cyrillic(c)) && pats.values(core).is_some(),
+        ProofLang::Bg => core.iter().all(|&c| crate::bg::is_letter(c)) && pats.values(core).is_some(),
+        ProofLang::Tr => core.iter().all(|&c| crate::tr::hyphen::is_letter(c)) && pats.values(core).is_some(),
         ProofLang::Pl | ProofLang::Pt | ProofLang::It | ProofLang::De => true,
         _ => pats.values(core).is_some(),
     }
@@ -533,6 +535,19 @@ fn heuristic_points_pl(c: &[char]) -> Vec<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// craft-libs#497 review: a Russian, Bulgarian or Turkish pack's patterns only take a word
+    /// whose letters they know; any other goes to the built-in rules, not the English heuristic.
+    #[test]
+    fn pack_patterns_for_ru_bg_tr_need_every_letter_of_the_word() {
+        let chars = |w: &str| w.chars().collect::<Vec<_>>();
+        let cases = [(ProofLang::Ru, "1на 1ка", "нака", "ёка"), (ProofLang::Bg, "1на 1ка", "нака", "жка"), (ProofLang::Tr, "a1b", "abab", "abğ")];
+        for (lang, pat, known, unknown) in cases {
+            let p = Patterns::parse(pat);
+            assert!(pack_patterns_fit(lang, &p, &chars(known)), "{lang:?} {known}");
+            assert!(!pack_patterns_fit(lang, &p, &chars(unknown)), "{lang:?} {unknown}");
+        }
+    }
 
     /// CodeRabbit on craft-libs#484: a Turkish word with a suffix after an apostrophe is
     /// hyphenated by the Turkish rules, part by part, never next to the apostrophe.
