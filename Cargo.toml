@@ -25,8 +25,10 @@ kurbo = "0.13"
 thiserror = "2"
 craft-atomic = { path = "crates/atomic" }
 craft-cms = { path = "crates/cms" }
+craft-crw = { path = "crates/crw" }
 craft-dialogs = { path = "crates/dialogs" }
 craft-docpath = { path = "crates/docpath" }
+craft-ecproj-format = { path = "crates/ecproj-format" }
 craft-font-catalog = { path = "crates/font-catalog" }
 craft-font-manager = { path = "crates/font-manager" }
 craft-font-store = { path = "crates/font-store" }
@@ -36,14 +38,18 @@ craft-ipc = { path = "crates/ipc" }
 craft-jpeg = { path = "crates/jpeg" }
 craft-keymap = { path = "crates/keymap" }
 craft-media = { path = "crates/media" }
+craft-media-testkit = { path = "crates/media-testkit" }
 craft-menu = { path = "crates/menu" }
+craft-pcraft-format = { path = "crates/pcraft-format" }
 craft-prepress = { path = "crates/prepress" }
 craft-print = { path = "crates/print" }
+craft-proof = { path = "crates/proof" }
 craft-quit = { path = "crates/quit" }
 craft-settings = { path = "crates/settings" }
 craft-text = { path = "crates/text" }
 craft-ui = { path = "crates/ui" }
 craft-update = { path = "crates/update" }
+craft-vectorcraft-format = { path = "crates/vectorcraft-format" }
 craft-window = { path = "crates/window" }
 egui = { version = "0.37", default-features = false }
 rayon = "1"

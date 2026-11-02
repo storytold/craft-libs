@@ -277,12 +277,12 @@ impl GradientProperties {
     }
 }
 
-/// The inks of one gradient color: process tints and spot tints (0–255).
+/// The inks of one gradient color: process tints and spot tints (0–1).
 struct Inks {
-    process: [u8; 4],
+    process: [f32; 4],
     /// Process colorants a DeviceN color names, even at zero tint.
     named_process: [bool; 4],
-    spots: Vec<(String, u8)>,
+    spots: Vec<(String, f32)>,
 }
 
 /// A spot named by a gradient color: the Separation space a stop used, and the CMYK
@@ -353,13 +353,13 @@ pub(crate) fn common_color_space(colors: &[Color]) -> Option<Vec<Color>> {
     let mut all_inks = Vec::with_capacity(colors.len());
     for color in colors {
         let mut inks = Inks {
-            process: [0; 4],
+            process: [0.0; 4],
             named_process: [false; 4],
             spots: Vec::new(),
         };
         match color {
-            Color::Regular(RegularColor::Cmyk(c)) => inks.process = [c.0, c.1, c.2, c.3],
-            Color::Regular(RegularColor::Luma(l)) => inks.process[3] = 255 - l.0,
+            Color::Regular(RegularColor::Cmyk(c)) => inks.process = c.to_pdf_color(),
+            Color::Regular(RegularColor::Luma(l)) => inks.process[3] = 1.0 - l.to_pdf_color(),
             Color::Regular(RegularColor::Rgb(_)) => return None,
             Color::Special(SpecialColor::Separation(s)) => {
                 let SeparationColorant::Custom(name) = &s.space.colorant else {
@@ -370,19 +370,19 @@ pub(crate) fn common_color_space(colors: &[Color]) -> Option<Vec<Color>> {
                     _ => None,
                 };
                 add_spot(&mut spot_inks, name, Some(&s.space), alternate);
-                inks.spots.push((name.clone(), s.tint));
+                inks.spots.push((name.clone(), s.tint.get()));
             }
             Color::Special(SpecialColor::DeviceN(c)) => {
                 for (colorant, tint) in c.space.colorants().iter().zip(&c.tints) {
                     match colorant {
                         Colorant::Process(p) => {
                             let i = Process::ALL.iter().position(|q| q == p).unwrap_or(0);
-                            inks.process[i] = *tint;
+                            inks.process[i] = tint.get();
                             inks.named_process[i] = true;
                         }
                         Colorant::Spot { name, alternate } => {
                             add_spot(&mut spot_inks, name, None, Some(*alternate));
-                            inks.spots.push((name.clone(), *tint));
+                            inks.spots.push((name.clone(), tint.get()));
                         }
                     }
                 }
@@ -395,14 +395,14 @@ pub(crate) fn common_color_space(colors: &[Color]) -> Option<Vec<Color>> {
         .filter(|&i| {
             all_inks
                 .iter()
-                .any(|inks| inks.process[i] > 0 || inks.named_process[i])
+                .any(|inks| inks.process[i] > 0.0 || inks.named_process[i])
         })
         .collect();
     let spot_tint = |inks: &Inks, name: &str| {
         inks.spots
             .iter()
             .find(|(n, _)| n == name)
-            .map_or(0, |(_, t)| *t)
+            .map_or(0.0, |(_, t)| *t)
     };
 
     match (process.as_slice(), spot_inks.as_slice()) {
@@ -411,7 +411,7 @@ pub(crate) fn common_color_space(colors: &[Color]) -> Option<Vec<Color>> {
                 .iter()
                 .map(|inks| {
                     let [c, m, y, k] = inks.process;
-                    cmyk::Color::new(c, m, y, k).into()
+                    cmyk::Color::new_f32(c, m, y, k).into()
                 })
                 .collect(),
         ),
@@ -428,7 +428,8 @@ pub(crate) fn common_color_space(colors: &[Color]) -> Option<Vec<Color>> {
                 all_inks
                     .iter()
                     .map(|inks| {
-                        separation::Color::new(spot_tint(inks, &spot.name), space.clone()).into()
+                        separation::Color::new_f32(spot_tint(inks, &spot.name), space.clone())
+                            .into()
                     })
                     .collect(),
             )
@@ -448,9 +449,9 @@ pub(crate) fn common_color_space(colors: &[Color]) -> Option<Vec<Color>> {
             all_inks
                 .iter()
                 .map(|inks| {
-                    let mut tints: Vec<u8> = process.iter().map(|&i| inks.process[i]).collect();
+                    let mut tints: Vec<f32> = process.iter().map(|&i| inks.process[i]).collect();
                     tints.extend(spot_inks.iter().map(|s| spot_tint(inks, &s.name)));
-                    device_n::Color::new(tints, space.clone()).map(Color::from)
+                    device_n::Color::new_f32(tints, space.clone()).map(Color::from)
                 })
                 .collect()
         }
@@ -547,7 +548,7 @@ fn shading_color_space(sc: &mut SerializeContext, color: Color, use_opacities: b
 
 /// A mesh gradient as a Type 6 (Coons patch mesh) shading: per patch an 8-bit edge flag (0, no
 /// shared edge), the twelve points as 32-bit coordinates over the mesh's bounds (`Decode`), and
-/// the four corner colors (with `use_opacities`, the opacities as gray) at 8 bits a component,
+/// the four corner colors (with `use_opacities`, the opacities as gray) at 16 bits a component,
 /// Flate-compressed. 32-bit coordinates keep the patches where they are to well under a printer
 /// dot, as Illustrator writes its meshes.
 fn serialize_mesh_shading(
@@ -584,8 +585,8 @@ fn serialize_mesh_shading(
             * f64::from(u32::MAX))
         .round() as u32
     };
-    let byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
-    let mut data = Vec::with_capacity(mesh.patches.len() * (1 + 12 * 8 + 4 * components));
+    let component = |v: f32| ((v.clamp(0.0, 1.0) * 65535.0).round() as u16).to_be_bytes();
+    let mut data = Vec::with_capacity(mesh.patches.len() * (1 + 12 * 8 + 4 * 2 * components));
     for patch in &mesh.patches {
         data.push(0u8);
         for (x, y) in &patch.points {
@@ -594,12 +595,12 @@ fn serialize_mesh_shading(
         }
         for (color, opacity) in patch.colors.iter().zip(patch.opacities.iter()) {
             if use_opacities {
-                data.push(byte(opacity.get()));
+                data.extend(component(opacity.get()));
             } else {
                 let values = color.to_pdf_color();
                 // Mixed spaces fail the document (`mixed_mesh_colors`); still never misread bytes.
                 for i in 0..components {
-                    data.push(byte(values.get(i).copied().unwrap_or(0.0)));
+                    data.extend(component(values.get(i).copied().unwrap_or(0.0)));
                 }
             }
         }
@@ -611,7 +612,7 @@ fn serialize_mesh_shading(
     shading.shading_type(StreamShadingType::CoonsPatch);
     set_colorspace(cs, shading.deref_mut().deref_mut());
     shading.bits_per_coordinate(32);
-    shading.bits_per_component(8);
+    shading.bits_per_component(16);
     shading.bits_per_flag(8);
     let mut decode = vec![x0, x1, y0, y1];
     for _ in 0..components {

@@ -1,0 +1,79 @@
+name: Shared CRW
+
+on:
+  push:
+    branches: [main]
+    paths: ["crates/crw/**", "scripts/fetch-crw-samples.py", "Cargo.toml", "Cargo.lock", ".github/workflows/crw.yml"]
+  pull_request:
+    paths: ["crates/crw/**", "scripts/fetch-crw-samples.py", "Cargo.toml", "Cargo.lock", ".github/workflows/crw.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: shared-crw-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native:
+    timeout-minutes: 20
+    name: CRW lint and tests (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: craft-crw-${{ matrix.os }}
+      - run: cargo fmt -p craft-crw --check
+      - run: cargo clippy -p craft-crw --all-targets --locked -- -D warnings
+      - run: cargo test -p craft-crw --locked
+
+  wasm:
+    timeout-minutes: 10
+    name: CRW WASM
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: craft-crw-wasm
+      - run: cargo check -p craft-crw --locked --target wasm32-unknown-unknown
+
+  samples:
+    timeout-minutes: 20
+    name: CRW sample files decode exactly
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: craft-crw-samples
+      - name: Cache the CC0 sample files
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ runner.temp }}/crw-samples
+          key: crw-samples-${{ hashFiles('crates/crw/tests/samples.json') }}
+      - name: Fetch the pinned CC0 sample files (raw.pixls.us)
+        run: python scripts/fetch-crw-samples.py "$RUNNER_TEMP/crw-samples"
+      - run: cargo test -p craft-crw --release --locked --test samples -- --nocapture
+        env:
+          CRAFT_CRW_SAMPLES: ${{ runner.temp }}/crw-samples
+          CRAFT_CRW_REQUIRE_SAMPLES: "1"

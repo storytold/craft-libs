@@ -1,0 +1,411 @@
+diff --git a/src/graphics/color.rs b/src/graphics/color.rs
+index 6fb0618..06a3098 100644
+--- a/src/graphics/color.rs
++++ b/src/graphics/color.rs
+@@ -69,7 +69,7 @@
+ //! [`SerializeSettings`]: crate::SerializeSettings
+ 
+ use std::fmt::Debug;
+-use std::hash::Hash;
++use std::hash::{Hash, Hasher};
+ 
+ use crate::configure::ValidationError;
+ use crate::graphics::icc::ICCBasedColorSpace;
+@@ -82,6 +82,48 @@ pub(crate) const DEVICE_GRAY: &str = "DeviceGray";
+ /// The PDF name for the device CMYK color space.
+ pub(crate) const DEVICE_CMYK: &str = "DeviceCMYK";
+ 
++/// A color component from 0 to 1: a gray level, a process ink or a spot tint.
++///
++/// `new` clamps the value to 0 to 1 and turns NaN and -0 into 0, so equal components have equal
++/// bits; `Eq` and `Hash` compare the bits.
++#[derive(Debug, Clone, Copy)]
++pub(crate) struct Tint(f32);
++
++impl Tint {
++    pub(crate) fn new(value: f32) -> Self {
++        // `max` returns the other operand for NaN; adding 0 turns -0 into 0.
++        Tint(value.max(0.0).min(1.0) + 0.0)
++    }
++
++    /// The component `value / 255`, as the 8-bit constructors give it.
++    pub(crate) fn from_u8(value: u8) -> Self {
++        Tint(f32::from(value) / 255.0)
++    }
++
++    pub(crate) fn get(self) -> f32 {
++        self.0
++    }
++
++    /// The nearest 8-bit value.
++    pub(crate) fn to_u8(self) -> u8 {
++        (self.0 * 255.0).round() as u8
++    }
++}
++
++impl PartialEq for Tint {
++    fn eq(&self, other: &Self) -> bool {
++        self.0.to_bits() == other.0.to_bits()
++    }
++}
++
++impl Eq for Tint {}
++
++impl Hash for Tint {
++    fn hash<H: Hasher>(&self, state: &mut H) {
++        self.0.to_bits().hash(state);
++    }
++}
++
+ /// A wrapper for storing colors from different color spaces.
+ #[derive(Debug, Hash, Eq, PartialEq, Clone)]
+ pub enum Color {
+@@ -160,7 +202,10 @@ impl RegularColor {
+     pub(crate) fn as_rgb(self) -> Option<rgb::Color> {
+         Some(match self {
+             Self::Rgb(r) => r,
+-            Self::Luma(l) => rgb::Color::new(l.0, l.0, l.0),
++            Self::Luma(l) => {
++                let v = l.0.to_u8();
++                rgb::Color::new(v, v, v)
++            }
+             Self::Cmyk(_) => return None,
+         })
+     }
+@@ -183,16 +228,24 @@ impl SpecialColor {
+ 
+ /// Gray-scale colors.
+ pub mod luma {
+-    use crate::color::{CieBasedColorSpace, DeviceColorSpace, RegularColor, RegularColorSpace};
++    use crate::color::{
++        CieBasedColorSpace, DeviceColorSpace, RegularColor, RegularColorSpace, Tint,
++    };
+ 
+     /// A luma color.
+     #[derive(Debug, Hash, Eq, PartialEq, Clone, Copy)]
+-    pub struct Color(pub(crate) u8);
++    pub struct Color(pub(crate) Tint);
+ 
+     impl Color {
+         /// Create a new luma color.
+         pub fn new(lightness: u8) -> Color {
+-            Color(lightness)
++            Color(Tint::from_u8(lightness))
++        }
++
++        /// Create a luma color from a lightness from 0 (black) to 1 (white), written to the
++        /// PDF without rounding. Values outside 0 to 1 are clamped, and NaN is 0.
++        pub fn new_f32(lightness: f32) -> Color {
++            Color(Tint::new(lightness))
+         }
+ 
+         /// Create a black luma color.
+@@ -206,7 +259,7 @@ pub mod luma {
+         }
+ 
+         pub(crate) fn to_pdf_color(self) -> f32 {
+-            self.0 as f32 / 255.0
++            self.0.get()
+         }
+     }
+ 
+@@ -251,27 +304,43 @@ impl From<SpecialColor> for Color {
+ 
+ /// CMYK colors.
+ pub mod cmyk {
+-    use crate::color::{CieBasedColorSpace, DeviceColorSpace, RegularColorSpace};
++    use crate::color::{CieBasedColorSpace, DeviceColorSpace, RegularColorSpace, Tint};
+     use crate::graphics::icc::ICCBasedColorSpace;
+     use crate::SerializeSettings;
+ 
+     /// A CMYK color.
+     #[derive(Debug, Hash, Eq, PartialEq, Clone, Copy)]
+-    pub struct Color(pub(crate) u8, pub(crate) u8, pub(crate) u8, pub(crate) u8);
++    pub struct Color(
++        pub(crate) Tint,
++        pub(crate) Tint,
++        pub(crate) Tint,
++        pub(crate) Tint,
++    );
+ 
+     impl Color {
+         /// Create a new CMYK color.
+         pub fn new(cyan: u8, magenta: u8, yellow: u8, black: u8) -> Color {
+-            Color(cyan, magenta, yellow, black)
++            Color(
++                Tint::from_u8(cyan),
++                Tint::from_u8(magenta),
++                Tint::from_u8(yellow),
++                Tint::from_u8(black),
++            )
++        }
++
++        /// Create a CMYK color from inks from 0 to 1, written to the PDF without rounding.
++        /// Values outside 0 to 1 are clamped, and NaN is 0.
++        pub fn new_f32(cyan: f32, magenta: f32, yellow: f32, black: f32) -> Color {
++            Color(
++                Tint::new(cyan),
++                Tint::new(magenta),
++                Tint::new(yellow),
++                Tint::new(black),
++            )
+         }
+ 
+         pub(crate) fn to_pdf_color(self) -> [f32; 4] {
+-            [
+-                self.0 as f32 / 255.0,
+-                self.1 as f32 / 255.0,
+-                self.2 as f32 / 255.0,
+-                self.3 as f32 / 255.0,
+-            ]
++            [self.0.get(), self.1.get(), self.2.get(), self.3.get()]
+         }
+     }
+ 
+@@ -390,23 +459,35 @@ pub mod rgb {
+ 
+ /// Separation (spot) colors.
+ pub mod separation {
+-    use crate::color::RegularColor;
++    use crate::color::{RegularColor, Tint};
+ 
+     /// A spot color.
+     #[derive(Debug, Hash, Eq, PartialEq, Clone)]
+     pub struct Color {
+-        pub(crate) tint: u8,
++        pub(crate) tint: Tint,
+         pub(crate) space: SeparationSpace,
+     }
+ 
+     impl Color {
+         /// Create a new spot color.
+         pub fn new(tint: u8, space: SeparationSpace) -> Self {
+-            Self { tint, space }
++            Self {
++                tint: Tint::from_u8(tint),
++                space,
++            }
++        }
++
++        /// Create a spot color with a tint from 0 to 1, written to the PDF without rounding.
++        /// A tint outside 0 to 1 is clamped, and NaN is 0.
++        pub fn new_f32(tint: f32, space: SeparationSpace) -> Self {
++            Self {
++                tint: Tint::new(tint),
++                space,
++            }
+         }
+ 
+         pub(crate) fn to_pdf_color(&self) -> f32 {
+-            self.tint as f32 / 255.0
++            self.tint.get()
+         }
+ 
+         pub(crate) fn color_space(&self) -> SeparationSpace {
+@@ -498,7 +579,7 @@ pub mod separation {
+ pub mod device_n {
+     use std::sync::Arc;
+ 
+-    use crate::color::cmyk;
++    use crate::color::{cmyk, Tint};
+ 
+     /// A process colorant.
+     #[derive(Debug, Eq, PartialEq, Hash, Clone, Copy)]
+@@ -656,7 +737,7 @@ pub mod device_n {
+     /// A DeviceN color: one tint per colorant of its space.
+     #[derive(Debug, Hash, Eq, PartialEq, Clone)]
+     pub struct Color {
+-        pub(crate) tints: Vec<u8>,
++        pub(crate) tints: Vec<Tint>,
+         pub(crate) space: DeviceNSpace,
+     }
+ 
+@@ -666,20 +747,30 @@ pub mod device_n {
+         ///
+         /// Returns `None` unless there is one tint per colorant.
+         pub fn new(tints: Vec<u8>, space: DeviceNSpace) -> Option<Self> {
++            Self::new_f32(
++                tints.into_iter().map(|t| Tint::from_u8(t).get()).collect(),
++                space,
++            )
++        }
++
++        /// Create a DeviceN color with tints from 0 (no ink) to 1 (full ink), in the order
++        /// of the space's colorants, written to the PDF without rounding. Tints outside 0
++        /// to 1 are clamped, and NaN is 0.
++        ///
++        /// Returns `None` unless there is one tint per colorant.
++        pub fn new_f32(tints: Vec<f32>, space: DeviceNSpace) -> Option<Self> {
++            let tints: Vec<Tint> = tints.into_iter().map(Tint::new).collect();
+             (tints.len() == space.colorants.len()).then_some(Self { tints, space })
+         }
+ 
+         pub(crate) fn to_pdf_color(&self) -> Vec<f32> {
+-            self.tints.iter().map(|t| *t as f32 / 255.0).collect()
++            self.tints.iter().map(|t| t.get()).collect()
+         }
+ 
+         /// The color in the alternate CMYK space.
+         pub(crate) fn alternate(&self) -> cmyk::Color {
+-            let [c, m, y, k] = self
+-                .space
+-                .alternate(&self.to_pdf_color())
+-                .map(|v| (v * 255.0).round().clamp(0.0, 255.0) as u8);
+-            cmyk::Color::new(c, m, y, k)
++            let [c, m, y, k] = self.space.alternate(&self.to_pdf_color());
++            cmyk::Color::new_f32(c, m, y, k)
+         }
+     }
+ 
+diff --git a/src/graphics/shading_function.rs b/src/graphics/shading_function.rs
+index 74c56f3..8aae81a 100644
+--- a/src/graphics/shading_function.rs
++++ b/src/graphics/shading_function.rs
+@@ -277,12 +277,12 @@ impl GradientProperties {
+     }
+ }
+ 
+-/// The inks of one gradient color: process tints and spot tints (0–255).
++/// The inks of one gradient color: process tints and spot tints (0–1).
+ struct Inks {
+-    process: [u8; 4],
++    process: [f32; 4],
+     /// Process colorants a DeviceN color names, even at zero tint.
+     named_process: [bool; 4],
+-    spots: Vec<(String, u8)>,
++    spots: Vec<(String, f32)>,
+ }
+ 
+ /// A spot named by a gradient color: the Separation space a stop used, and the CMYK
+@@ -353,13 +353,13 @@ pub(crate) fn common_color_space(colors: &[Color]) -> Option<Vec<Color>> {
+     let mut all_inks = Vec::with_capacity(colors.len());
+     for color in colors {
+         let mut inks = Inks {
+-            process: [0; 4],
++            process: [0.0; 4],
+             named_process: [false; 4],
+             spots: Vec::new(),
+         };
+         match color {
+-            Color::Regular(RegularColor::Cmyk(c)) => inks.process = [c.0, c.1, c.2, c.3],
+-            Color::Regular(RegularColor::Luma(l)) => inks.process[3] = 255 - l.0,
++            Color::Regular(RegularColor::Cmyk(c)) => inks.process = c.to_pdf_color(),
++            Color::Regular(RegularColor::Luma(l)) => inks.process[3] = 1.0 - l.to_pdf_color(),
+             Color::Regular(RegularColor::Rgb(_)) => return None,
+             Color::Special(SpecialColor::Separation(s)) => {
+                 let SeparationColorant::Custom(name) = &s.space.colorant else {
+@@ -370,19 +370,19 @@ pub(crate) fn common_color_space(colors: &[Color]) -> Option<Vec<Color>> {
+                     _ => None,
+                 };
+                 add_spot(&mut spot_inks, name, Some(&s.space), alternate);
+-                inks.spots.push((name.clone(), s.tint));
++                inks.spots.push((name.clone(), s.tint.get()));
+             }
+             Color::Special(SpecialColor::DeviceN(c)) => {
+                 for (colorant, tint) in c.space.colorants().iter().zip(&c.tints) {
+                     match colorant {
+                         Colorant::Process(p) => {
+                             let i = Process::ALL.iter().position(|q| q == p).unwrap_or(0);
+-                            inks.process[i] = *tint;
++                            inks.process[i] = tint.get();
+                             inks.named_process[i] = true;
+                         }
+                         Colorant::Spot { name, alternate } => {
+                             add_spot(&mut spot_inks, name, None, Some(*alternate));
+-                            inks.spots.push((name.clone(), *tint));
++                            inks.spots.push((name.clone(), tint.get()));
+                         }
+                     }
+                 }
+@@ -395,14 +395,14 @@ pub(crate) fn common_color_space(colors: &[Color]) -> Option<Vec<Color>> {
+         .filter(|&i| {
+             all_inks
+                 .iter()
+-                .any(|inks| inks.process[i] > 0 || inks.named_process[i])
++                .any(|inks| inks.process[i] > 0.0 || inks.named_process[i])
+         })
+         .collect();
+     let spot_tint = |inks: &Inks, name: &str| {
+         inks.spots
+             .iter()
+             .find(|(n, _)| n == name)
+-            .map_or(0, |(_, t)| *t)
++            .map_or(0.0, |(_, t)| *t)
+     };
+ 
+     match (process.as_slice(), spot_inks.as_slice()) {
+@@ -411,7 +411,7 @@ pub(crate) fn common_color_space(colors: &[Color]) -> Option<Vec<Color>> {
+                 .iter()
+                 .map(|inks| {
+                     let [c, m, y, k] = inks.process;
+-                    cmyk::Color::new(c, m, y, k).into()
++                    cmyk::Color::new_f32(c, m, y, k).into()
+                 })
+                 .collect(),
+         ),
+@@ -428,7 +428,8 @@ pub(crate) fn common_color_space(colors: &[Color]) -> Option<Vec<Color>> {
+                 all_inks
+                     .iter()
+                     .map(|inks| {
+-                        separation::Color::new(spot_tint(inks, &spot.name), space.clone()).into()
++                        separation::Color::new_f32(spot_tint(inks, &spot.name), space.clone())
++                            .into()
+                     })
+                     .collect(),
+             )
+@@ -448,9 +449,9 @@ pub(crate) fn common_color_space(colors: &[Color]) -> Option<Vec<Color>> {
+             all_inks
+                 .iter()
+                 .map(|inks| {
+-                    let mut tints: Vec<u8> = process.iter().map(|&i| inks.process[i]).collect();
++                    let mut tints: Vec<f32> = process.iter().map(|&i| inks.process[i]).collect();
+                     tints.extend(spot_inks.iter().map(|s| spot_tint(inks, &s.name)));
+-                    device_n::Color::new(tints, space.clone()).map(Color::from)
++                    device_n::Color::new_f32(tints, space.clone()).map(Color::from)
+                 })
+                 .collect()
+         }
+@@ -547,7 +548,7 @@ fn shading_color_space(sc: &mut SerializeContext, color: Color, use_opacities: b
+ 
+ /// A mesh gradient as a Type 6 (Coons patch mesh) shading: per patch an 8-bit edge flag (0, no
+ /// shared edge), the twelve points as 32-bit coordinates over the mesh's bounds (`Decode`), and
+-/// the four corner colors (with `use_opacities`, the opacities as gray) at 8 bits a component,
++/// the four corner colors (with `use_opacities`, the opacities as gray) at 16 bits a component,
+ /// Flate-compressed. 32-bit coordinates keep the patches where they are to well under a printer
+ /// dot, as Illustrator writes its meshes.
+ fn serialize_mesh_shading(
+@@ -584,8 +585,8 @@ fn serialize_mesh_shading(
+             * f64::from(u32::MAX))
+         .round() as u32
+     };
+-    let byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+-    let mut data = Vec::with_capacity(mesh.patches.len() * (1 + 12 * 8 + 4 * components));
++    let component = |v: f32| ((v.clamp(0.0, 1.0) * 65535.0).round() as u16).to_be_bytes();
++    let mut data = Vec::with_capacity(mesh.patches.len() * (1 + 12 * 8 + 4 * 2 * components));
+     for patch in &mesh.patches {
+         data.push(0u8);
+         for (x, y) in &patch.points {
+@@ -594,12 +595,12 @@ fn serialize_mesh_shading(
+         }
+         for (color, opacity) in patch.colors.iter().zip(patch.opacities.iter()) {
+             if use_opacities {
+-                data.push(byte(opacity.get()));
++                data.extend(component(opacity.get()));
+             } else {
+                 let values = color.to_pdf_color();
+                 // Mixed spaces fail the document (`mixed_mesh_colors`); still never misread bytes.
+                 for i in 0..components {
+-                    data.push(byte(values.get(i).copied().unwrap_or(0.0)));
++                    data.extend(component(values.get(i).copied().unwrap_or(0.0)));
+                 }
+             }
+         }
+@@ -611,7 +612,7 @@ fn serialize_mesh_shading(
+     shading.shading_type(StreamShadingType::CoonsPatch);
+     set_colorspace(cs, shading.deref_mut().deref_mut());
+     shading.bits_per_coordinate(32);
+-    shading.bits_per_component(8);
++    shading.bits_per_component(16);
+     shading.bits_per_flag(8);
+     let mut decode = vec![x0, x1, y0, y1];
+     for _ in 0..components {
