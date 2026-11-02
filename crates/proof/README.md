@@ -156,8 +156,9 @@ English spelling uses the first of these that is there; `english_source(lang)` s
    (Australian words such as `billabong`, with en-GB's spelling policy); en-NZ, en-IE and the
    other British-spelling Englishes read en-GB; Canadian English reads en-CA. A word is right when the English's own
    dictionary knows it (or `en-extra.txt` does), never because another English's does
-   (`colourblind` is wrong in en-US, `colorblind` in en-GB); suggestions come from the same
-   dictionary. SCOWL's size-60 lists keep one spelling per dialect, and Word accepts more, so
+   (`colourblind` is wrong in en-US, `colorblind` in en-GB); the one exception is Australian
+   English, which also takes en-GB's words (`enquiry`: en-AU's list keeps `inquiry` only).
+   Suggestions come from the English's own dictionary (en-AU's for Australian). SCOWL's size-60 lists keep one spelling per dialect, and Word accepts more, so
    British English also takes the `-ize` spellings of its `-ise` words that American or Canadian
    English spell so (`organize`, `realization`; never `wize` or `advize`, and never `-yze`: `reanalyze` stays American), and `en-variants.txt` flags the other dialect's spellings and accepts this
    dialect's other spellings of known words (`judgement` in en-US). English with no dialect

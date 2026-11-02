@@ -7,7 +7,8 @@
 //! 3. **Embedded SCOWL**: the run's English's SCOWL dictionary (en-US, en-GB, en-AU or en-CA) embedded
 //!    from craft-i18n at build time ([`crate::scowl`]); a word it knows (British English: also
 //!    the `-ize` spelling of one it knows, [`ise_spelling`]), or the supplement ([`EXTRA`]), is
-//!    right; never one only another English knows. When it is there, the system locations aren't
+//!    right; never one only another English knows, except that Australian English also takes
+//!    en-GB's words (its suggestions still come from en-AU). When it is there, the system locations aren't
 //!    searched.
 //! 4. **System Hunspell**: a pair for the run's own English in the system locations (none on the
 //!    web). `COMPOUNDRULE` (ordinals) and `OCONV` are read; flag-based compounding is ignored
@@ -318,8 +319,8 @@ fn pick(found: Loaded, lang: ProofLang) -> Speller {
     }
     let Some(d) = crate::scowl::dict(lang) else { return Speller::List };
     let mut ds = vec![d];
-    // SCOWL's en-AU list keeps one spelling per word (`enquiry`, not `inquiry`); the British list
-    // has the rest, which Australian English takes. Suggestions come from the first, en-AU.
+    // SCOWL's en-AU list keeps one spelling per word (`inquiry`; `enquiry` is only in the en-GB
+    // list), and Australian English takes both. Suggestions come from the first, en-AU.
     if lang == ProofLang::EnAu
         && let Some(gb) = crate::scowl::dict(ProofLang::EnGb)
     {

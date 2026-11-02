@@ -8,7 +8,9 @@
 //! en-NZ: New Zealand English keeps `programme` and has few words of its own in SCOWL's en-AU
 //! data, so it stays on en-GB. Its suggestions
 //! come from its own dictionary, and a word is right when its own dictionary knows it: the other
-//! dialects' dictionaries are never asked (en-US would take `colourblind` from en-GB's). SCOWL
+//! dialects' dictionaries are never asked (en-US would take `colourblind` from en-GB's), except
+//! that en-AU's list keeps one spelling per word, so Australian English also takes en-GB's words
+//! (`enquiry`; its suggestions still come from en-AU). SCOWL
 //! picks one spelling per dialect (en-GB `-ise` has no `organize`, en-US no `judgement`), and Word
 //! accepts more, so British English also takes the `-ize` spellings of its `-ise` words that
 //! en-US or en-CA spells so, and `en-variants.txt` widens each dialect by its pairs
