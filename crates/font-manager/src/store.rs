@@ -11,8 +11,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Condvar, Mutex};
 
 use craft_font_catalog::Catalog;
-pub use craft_font_store::UserSource;
 use craft_font_store::{Cancel, Client, Face, FontStore, Network, PINNED_INDEX, verify_font};
+pub use craft_font_store::{PREVIEW_SERVICE_ENV, PreviewServiceSource, UserSource};
 
 use crate::index::{Family, Index};
 
@@ -101,6 +101,35 @@ pub trait Installer: Send + Sync {
 
     /// Removes a source the user added. Families installed from it stay installed.
     fn remove_user_source(&self, _url: &str) -> Result<(), StoreError> {
+        Err(StoreError(NO_FOLDER.into()))
+    }
+
+    /// The preview service's base URL, if one is set: [`craft_font_store::PREVIEW_SERVICE_ENV`], else the font
+    /// store's `preview_service` setting. Installs try it as a mirror first.
+    fn preview_service(&self) -> Option<String> {
+        None
+    }
+
+    /// Where [`Installer::preview_service`] comes from: the environment variable (the setting
+    /// can't change it), the saved setting, or nowhere.
+    fn preview_service_source(&self) -> PreviewServiceSource {
+        PreviewServiceSource::None
+    }
+
+    /// Whether previews may be fetched from the preview service: the user's setting, on by
+    /// default.
+    fn previews_enabled(&self) -> bool {
+        true
+    }
+
+    /// Turns previews on or off, as the user's own action.
+    fn set_previews_enabled(&self, _enabled: bool) -> Result<(), StoreError> {
+        Err(StoreError(NO_FOLDER.into()))
+    }
+
+    /// Sets or clears the preview service (https, or http for a loopback host), as the user's own
+    /// action.
+    fn set_preview_service(&self, _url: Option<&str>) -> Result<(), StoreError> {
         Err(StoreError(NO_FOLDER.into()))
     }
 }
@@ -214,6 +243,26 @@ impl Installer for SuiteStore {
     fn remove_user_source(&self, url: &str) -> Result<(), StoreError> {
         self.store.remove_user_source(url).map_err(err)
     }
+
+    fn preview_service(&self) -> Option<String> {
+        self.store.preview_service()
+    }
+
+    fn preview_service_source(&self) -> PreviewServiceSource {
+        self.store.preview_service_source()
+    }
+
+    fn set_preview_service(&self, url: Option<&str>) -> Result<(), StoreError> {
+        self.store.set_preview_service(url).map_err(err)
+    }
+
+    fn previews_enabled(&self) -> bool {
+        self.store.previews_enabled()
+    }
+
+    fn set_previews_enabled(&self, enabled: bool) -> Result<(), StoreError> {
+        self.store.set_previews_enabled(enabled).map_err(err)
+    }
 }
 
 /// The store when the system names no folder for it (no home folder): nothing installs.
@@ -271,6 +320,8 @@ pub struct FakeStore {
     /// Index files user sources "download", by URL.
     served_indexes: HashMap<String, Vec<u8>>,
     user: Mutex<Vec<UserSource>>,
+    preview_service: Mutex<Option<String>>,
+    previews: Mutex<bool>,
     /// User sources downloaded so far, and those whose file changed since.
     fetched: Mutex<Vec<String>>,
     changed: Mutex<Vec<String>>,
@@ -290,6 +341,8 @@ impl FakeStore {
             builtin: None,
             served_indexes: HashMap::new(),
             user: Mutex::new(Vec::new()),
+            preview_service: Mutex::new(None),
+            previews: Mutex::new(true),
             fetched: Mutex::new(Vec::new()),
             changed: Mutex::new(Vec::new()),
             held: (Mutex::new(false), Condvar::new()),
@@ -497,6 +550,29 @@ impl Installer for FakeStore {
 
     fn remove_user_source(&self, url: &str) -> Result<(), StoreError> {
         self.user.lock().map_err(err)?.retain(|s| s.url != url);
+        Ok(())
+    }
+
+    fn preview_service(&self) -> Option<String> {
+        self.preview_service.lock().ok()?.clone()
+    }
+
+    fn preview_service_source(&self) -> PreviewServiceSource {
+        if self.preview_service().is_some() { PreviewServiceSource::Saved } else { PreviewServiceSource::None }
+    }
+
+    fn previews_enabled(&self) -> bool {
+        self.previews.lock().map_or(true, |p| *p)
+    }
+
+    fn set_previews_enabled(&self, enabled: bool) -> Result<(), StoreError> {
+        *self.previews.lock().map_err(err)? = enabled;
+        Ok(())
+    }
+
+    fn set_preview_service(&self, url: Option<&str>) -> Result<(), StoreError> {
+        let url = url.map(craft_font_store::check_preview_service).transpose().map_err(err)?;
+        *self.preview_service.lock().map_err(err)? = url;
         Ok(())
     }
 }
