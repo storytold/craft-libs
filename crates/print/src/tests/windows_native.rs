@@ -300,6 +300,20 @@ fn actual_size_prints_paper_sized_sheets_unscaled() {
     let actual = plan(&sheets.sheets, (612.0, 792.0), Fit::ActualSize { margin: 18.0 }).unwrap();
     let shrink = plan(&sheets.sheets, (612.0, 792.0), Fit::Shrink { margin: 18.0 }).unwrap();
     assert_eq!(actual, shrink);
+
+    // A sheet just short of the paper (a Word document's 209 × 296 mm page on A4) prints at
+    // 100%, centred, however wide the printer's margins: shrinking it into the printable area
+    // made its margins print about half a centimetre wider.
+    let a4 = (mm(210.0), mm(297.0));
+    let short = TestPage { media: Some([0.0, 0.0, mm(209.0), mm(296.0)]), ..LETTER };
+    let pdf = test_pdf(&[short], false);
+    let sheets = read(&pdf).unwrap();
+    let edits = plan(&sheets.sheets, a4, Fit::ActualSize { margin: 12.0 }).unwrap();
+    let frame = edits[0].frame.as_ref().expect("reframed onto A4");
+    assert_eq!(frame.matrix[0], 1.0, "unscaled");
+    assert!((frame.matrix[4] - mm(0.5)).abs() < 1e-6 && (frame.matrix[5] - mm(0.5)).abs() < 1e-6, "{:?}", frame.matrix);
+    let shrink = plan(&sheets.sheets, a4, Fit::Shrink { margin: 12.0 }).unwrap();
+    assert!(shrink[0].frame.as_ref().unwrap().matrix[0] < 0.98, "shrink-to-fit still shrinks it (to 97.5%)");
 }
 
 #[test]

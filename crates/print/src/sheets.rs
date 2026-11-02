@@ -1133,7 +1133,11 @@ pub(crate) fn plan(sheets: &[Sheet], paper: (f64, f64), fit: Fit) -> Result<Vec<
             }
             Fit::ActualSize { .. } if same_paper((w, h), paper) => None,
             Fit::Shrink { margin } | Fit::ActualSize { margin } => {
-                let margin = if margin.is_finite() && margin > 0.0 && 2.0 * margin < pw.min(ph) { margin } else { 0.0 };
+                // Actual size prints a sheet that fits on the paper at 100%, as a word processor
+                // does: a page a millimetre short of A4 lost about 3% to the printable area, so
+                // its margins printed half a centimetre wider. Only larger sheets shrink.
+                let fits = matches!(fit, Fit::ActualSize { .. }) && w <= pw + PAPER_SAME && h <= ph + PAPER_SAME;
+                let margin = if !fits && margin.is_finite() && margin > 0.0 && 2.0 * margin < pw.min(ph) { margin } else { 0.0 };
                 let scale = ((pw - 2.0 * margin) / w).min((ph - 2.0 * margin) / h).min(1.0);
                 if scale >= 1.0 && close((w, h), paper) {
                     None
