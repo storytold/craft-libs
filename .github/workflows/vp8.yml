@@ -1,0 +1,37 @@
+name: Shared VP8
+
+on:
+  push:
+    branches: [main]
+    paths: ["crates/vp8/**", "Cargo.toml", "Cargo.lock", ".github/workflows/vp8.yml"]
+  pull_request:
+    paths: ["crates/vp8/**", "Cargo.toml", "Cargo.lock", ".github/workflows/vp8.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: shared-vp8-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    timeout-minutes: 15
+    name: VP8 decoder lint, tests, WASM
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          components: rustfmt, clippy
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: craft-vp8
+      - run: cargo fmt -p craft-vp8 --check
+      - run: cargo clippy -p craft-vp8 --all-targets --locked -- -D warnings
+      - run: cargo test -p craft-vp8 --locked
+      - run: cargo check -p craft-vp8 --locked --target wasm32-unknown-unknown

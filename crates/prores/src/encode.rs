@@ -680,7 +680,7 @@ mod alpha_tests {
 #[cfg(test)]
 mod alpha_conformance_tests {
     use super::*;
-    use filmcraft_bitstream::BitReader;
+    use craft_media::bitstream::BitReader;
 
     /// RDD 36:2022 §5.3.3 and Tables 12–14, using a bounds-checked reader.
     /// Unlike the production decoder's zero-padded hot path, this checks every

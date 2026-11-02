@@ -1,0 +1,37 @@
+name: Shared Testkit
+
+on:
+  push:
+    branches: [main]
+    paths: ["crates/testkit/**", "Cargo.toml", "Cargo.lock", ".github/workflows/testkit.yml"]
+  pull_request:
+    paths: ["crates/testkit/**", "Cargo.toml", "Cargo.lock", ".github/workflows/testkit.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: shared-testkit-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    timeout-minutes: 10
+    name: Testkit lint, tests, WASM
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          components: rustfmt, clippy
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: craft-testkit
+      - run: cargo fmt -p craft-testkit --check
+      - run: cargo clippy -p craft-testkit --all-targets --locked -- -D warnings
+      - run: cargo test -p craft-testkit --locked
+      - run: cargo check -p craft-testkit --locked --target wasm32-unknown-unknown

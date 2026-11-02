@@ -48,20 +48,15 @@ craft-ui = { path = "crates/ui" }
 craft-update = { path = "crates/update" }
 craft-vectorcraft-format = { path = "crates/vectorcraft-format" }
 craft-window = { path = "crates/window" }
-craft-bitstream = { path = "crates/bitstream" }
 craft-h264enc = { path = "crates/h264enc" }
 craft-prores = { path = "crates/prores" }
 craft-hevcenc = { path = "crates/hevcenc" }
 craft-av1enc = { path = "crates/av1enc" }
 craft-vp9enc = { path = "crates/vp9enc" }
-craft-aac = { path = "crates/aac" }
-craft-audio-io = { path = "crates/audio-io" }
 craft-dnx = { path = "crates/dnx" }
-craft-opus = { path = "crates/opus" }
 craft-vp8 = { path = "crates/vp8" }
 craft-testkit = { path = "crates/testkit" }
 craft-codecs = { path = "crates/codecs" }
-symphonia = { version = "0.6", default-features = false, features = ["mp1", "mp2", "mp3", "flac", "vorbis", "ogg", "wav", "pcm", "aiff", "isomp4", "aac", "alac", "adpcm", "caf", "mkv"] }
 log = "0.4"
 egui = { version = "0.37", default-features = false }
 rayon = "1"

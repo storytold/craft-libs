@@ -1,6 +1,6 @@
 //! Fast MSB-first bit reader/writer for slice payloads (the hot path of the codec).
 //!
-//! Frame and picture headers use `filmcraft_bitstream`; the entropy-coded slice data uses these
+//! Frame and picture headers use `craft_media::bitstream`; the entropy-coded slice data uses these
 //! specialised helpers, which read 64-bit windows and decode a whole codeword per call.
 
 use crate::tables::Codebook;

@@ -1,0 +1,37 @@
+name: Shared DNx
+
+on:
+  push:
+    branches: [main]
+    paths: ["crates/dnx/**", "Cargo.toml", "Cargo.lock", ".github/workflows/dnx.yml"]
+  pull_request:
+    paths: ["crates/dnx/**", "Cargo.toml", "Cargo.lock", ".github/workflows/dnx.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: shared-dnx-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    timeout-minutes: 15
+    name: DNx codec lint, tests, WASM
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          components: rustfmt, clippy
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: craft-dnx
+      - run: cargo fmt -p craft-dnx --check
+      - run: cargo clippy -p craft-dnx --all-targets --locked -- -D warnings
+      - run: cargo test -p craft-dnx --locked
+      - run: cargo check -p craft-dnx --locked --target wasm32-unknown-unknown

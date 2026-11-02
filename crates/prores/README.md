@@ -1,7 +1,7 @@
 # craft-prores
 
 Clean-room Apple ProRes decoder and encoder in pure Rust, written from the public [SMPTE RDD 36:2022](https://pub.smpte.org/doc/rdd36/20220909-pub/rdd36-2022.pdf)
-bitstream description. Layer L0: depends only on `craft-bitstream`, `thiserror` and (optional,
+bitstream description. Layer L0: depends only on `craft-media` (with `bitstream` feature), `thiserror` and (optional,
 feature `threads`, default on) `rayon`. Builds for `wasm32-unknown-unknown`; no `unsafe`.
 
 ## API

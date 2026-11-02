@@ -1,6 +1,6 @@
 //! NAL unit and parameter-set/slice-header generation (§7.3), SEI and the AVCDecoderConfigurationRecord.
 
-use filmcraft_bitstream::{BitWriter, escape_rbsp};
+use craft_media::bitstream::{BitWriter, escape_rbsp};
 
 pub const NAL_SLICE: u8 = 1;
 pub const NAL_IDR: u8 = 5;

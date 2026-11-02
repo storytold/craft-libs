@@ -15,6 +15,6 @@ default = ["threads"]
 threads = ["dep:rayon"]
 
 [dependencies]
-filmcraft-bitstream = { package = "craft-bitstream", path = "../bitstream" }
+craft-media = { workspace = true, default-features = false, features = ["bitstream"] }
 thiserror = { workspace = true }
 rayon = { workspace = true, optional = true }

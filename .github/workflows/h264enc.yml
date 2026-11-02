@@ -1,0 +1,37 @@
+name: Shared H.264 Encoder
+
+on:
+  push:
+    branches: [main]
+    paths: ["crates/h264enc/**", "Cargo.toml", "Cargo.lock", ".github/workflows/h264enc.yml"]
+  pull_request:
+    paths: ["crates/h264enc/**", "Cargo.toml", "Cargo.lock", ".github/workflows/h264enc.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: shared-h264enc-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    timeout-minutes: 10
+    name: H.264 encoder lint, tests, WASM
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          components: rustfmt, clippy
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: craft-h264enc
+      - run: cargo fmt -p craft-h264enc --check
+      - run: cargo clippy -p craft-h264enc --all-targets --locked -- -D warnings
+      - run: cargo test -p craft-h264enc --locked
+      - run: cargo check -p craft-h264enc --locked --target wasm32-unknown-unknown

@@ -1,8 +1,8 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
-//! Storytold ArtCraft shared media codecs library.
+//! Storytold ArtCraft shared video codecs library.
 //!
-//! Centralizes high-performance pure-Rust media codecs across video and audio:
+//! Centralizes high-performance pure-Rust video codecs:
 //! - H.264 / AVC video encoding (`craft-h264enc`)
 //! - Apple ProRes video encoding and decoding (`craft-prores`)
 //! - Avid DNxHD / DNxHR SMPTE ST 2019-1 encoding and decoding (`craft-dnx`)
@@ -10,9 +10,6 @@
 //! - AV1 video encoding (`craft-av1enc`)
 //! - VP9 video encoding (`craft-vp9enc`)
 //! - VP8 video decoding (`craft-vp8`)
-//! - AAC-LC audio encoding and decoding (`craft-aac`)
-//! - Universal audio decoding & FLAC/AIFF encoding (`craft-audio-io`)
-//! - Opus audio decoding & packet parsing (`craft-opus`)
 
 #[cfg(feature = "h264")]
 pub use craft_h264enc as h264;
@@ -34,12 +31,3 @@ pub use craft_vp9enc as vp9;
 
 #[cfg(feature = "vp8")]
 pub use craft_vp8 as vp8;
-
-#[cfg(feature = "aac")]
-pub use craft_aac as aac;
-
-#[cfg(feature = "audio-io")]
-pub use craft_audio_io as audio_io;
-
-#[cfg(feature = "opus")]
-pub use craft_opus as opus;
