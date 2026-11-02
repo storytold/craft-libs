@@ -1,9 +1,9 @@
-# filmcraft-dnx
+# craft-dnx
 
 Clean-room Avid DNxHD / DNxHR (VC-3) decoder and encoder in pure Rust, written from the public
 **SMPTE ST 2019-1:2016** *VC-3 Picture Compression and Data Stream Format* and its
 **Amendment 1:2023** (both free from `pub.smpte.org`). Layer L0: depends only on
-`filmcraft-bitstream`, `thiserror` and (optional, feature `threads`, default on) `rayon`. Builds
+`thiserror` and (optional, feature `threads`, default on) `rayon`. Builds
 for `wasm32-unknown-unknown`; no `unsafe`.
 
 The constant tables (Annex D quantisation weights, Annex E VLC tables) were extracted from the
@@ -31,7 +31,7 @@ only as an external fixture generator and test oracle.
 ## API
 
 ```rust
-use filmcraft_dnx::*;
+use craft_dnx::*;
 
 let frame: Frame = decode_frame(&sample)?;               // one or two coding units
 let f = decode_frame_with(&sample, &DecodeOptions { threads: false, ..Default::default() })?;
@@ -45,7 +45,7 @@ let sample: Vec<u8> = enc.encode(&frame)?;               // exactly enc.frame_si
 `Frame { width, height, chroma, rgb, bit_depth, y, cb, cr: Vec<u16>, alpha, interlace,
 color_volume, cid, par }` holds planar samples without row padding. Interlaced frames are woven
 (field 1 = top field on even lines). RGB frames hold G, B, R in `y`, `cb`, `cr`. In MOV the
-sample entry is `AVdn` (DNxHD) or `AVdh` (DNxHR); `filmcraft-codecs` reads the CID from the
+sample entry is `AVdn` (DNxHD) or `AVdh` (DNxHR); `craft-codecs` reads the CID from the
 first frame header to label the stream.
 
 ## Decoder
@@ -54,7 +54,7 @@ first frame header to label the stream.
   independently and in parallel, writing straight into their 16-line bands.
 - VLCs are decoded with two-level lookup tables (11-bit primary) built from the Annex E lists.
 - Inverse quantisation with the CID's Annex D weights; IDCT: the exact orthonormal 8×8 inverse DCT
-  of equation 8.3, evaluated separably in `f32` (shared design with `filmcraft-prores`).
+  of equation 8.3, evaluated separably in `f32` (shared design with `craft-prores`).
   Output: `floor(x·s + 2^(b−1) + ½)` clipped to `[0, 2^b − 1]`, where `s = 4` at 12 bits (the
   12-bit coefficient domain is ¼ of the orthonormal DCT, as Table 14's 13-bit IDCT input range
   for 12-bit samples implies) and 1 otherwise.
@@ -119,9 +119,9 @@ decoder within ±2 (90–99% identical). Luma PSNR against the source: HQ 58.8 d
 
 ## Performance
 
-`cargo test --release -p filmcraft-dnx --test it perf:: -- --ignored --nocapture` on an M4 Pro
+`cargo test --release -p craft-dnx --test it perf:: -- --ignored --nocapture` on an M4 Pro
 (14 cores) while the machine was **heavily overloaded** by other jobs (load average ≈ 190).
-Under the same load `filmcraft-prores`' perf test measured 30 fps threaded / 11.8 fps single
+Under the same load `craft-prores`' perf test measured 30 fps threaded / 11.8 fps single
 for a 1080p HQ frame, against 318 / 53 fps in its README on a less loaded machine, so these are
 lower bounds by a factor of roughly 4–10:
 
@@ -138,4 +138,4 @@ lower bounds by a factor of roughly 4–10:
 - Encoder: no DNxHD (HD CIDs), interlaced, alpha or VBR output; no RDO/trellis.
 - CIDs 1256/1260 and alpha decoding are implemented from the standard but have no oracle
   fixtures, because no available encoder produces them.
-- No MXF; DNx in MOV only (via `filmcraft-isobmff` / `filmcraft-codecs`).
+- No MXF; DNx in MOV only (via `craft-media` / `craft-codecs`).

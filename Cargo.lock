@@ -812,9 +812,12 @@ dependencies = [
  "craft-aac",
  "craft-audio-io",
  "craft-av1enc",
+ "craft-dnx",
  "craft-h264enc",
  "craft-hevcenc",
+ "craft-opus",
  "craft-prores",
+ "craft-vp8",
  "craft-vp9enc",
 ]
 
@@ -839,6 +842,15 @@ dependencies = [
  "objc2-foundation 0.3.2",
  "raw-window-handle",
  "rfd",
+]
+
+[[package]]
+name = "craft-dnx"
+version = "0.1.0"
+dependencies = [
+ "craft-testkit",
+ "rayon",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -997,6 +1009,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-opus"
+version = "0.1.0"
+dependencies = [
+ "craft-testkit",
+]
+
+[[package]]
 name = "craft-pcraft-format"
 version = "0.1.0"
 dependencies = [
@@ -1108,6 +1127,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-testkit"
+version = "0.1.0"
+
+[[package]]
 name = "craft-text"
 version = "0.1.0"
 dependencies = [
@@ -1183,6 +1206,14 @@ dependencies = [
  "flate2",
  "serde",
  "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "craft-vp8"
+version = "0.1.0"
+dependencies = [
+ "craft-testkit",
  "thiserror 2.0.21",
 ]
 

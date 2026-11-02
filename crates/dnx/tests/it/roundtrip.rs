@@ -1,6 +1,6 @@
 //! Encoder → decoder round trips and robustness against corrupt data (no ffmpeg needed).
 
-use filmcraft_dnx::{ChromaFormat, DecodeOptions, Encoder, EncoderConfig, Frame, Profile, decode_frame, decode_frame_with, probe};
+use craft_dnx::{ChromaFormat, DecodeOptions, Encoder, EncoderConfig, Frame, Profile, decode_frame, decode_frame_with, probe};
 
 /// A synthetic picture: gradients, a ring pattern and some hashed texture.
 fn picture(w: u32, h: u32, chroma: ChromaFormat, depth: u8, seed: u32) -> Frame {

@@ -12,3 +12,7 @@ workspace = true
 
 [dependencies]
 thiserror = { workspace = true }
+
+[dev-dependencies]
+craft-testkit = { workspace = true }
+

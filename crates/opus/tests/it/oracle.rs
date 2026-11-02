@@ -11,7 +11,7 @@ use crate::common;
 
 use std::process::Command;
 
-use filmcraft_opus::{Decoder, Mode, OpusHead, Packet};
+use craft_opus::{Decoder, Mode, OpusHead, Packet};
 
 fn has_libopus(ff: &std::path::Path) -> bool {
     Command::new(ff).args(["-hide_banner", "-encoders"]).output().map(|o| String::from_utf8_lossy(&o.stdout).contains("libopus")).unwrap_or(false)
@@ -101,7 +101,14 @@ fn run(case: &Case, rate: u32) -> (f64, f64, Vec<Mode>) {
             eprintln!("{:5.2}s ref {:9.3e} ours {:9.3e} snr {:6.1}", b as f32 * 0.25, er, eo, common::snr_db(r, o));
         }
     }
-    assert_eq!(ours.len(), reference.len(), "{}: length mismatch vs libopus (samples/ch {} vs {})", case.name, total, reference.len() / case.channels);
+    assert_eq!(
+        ours.len(),
+        reference.len(),
+        "{}: length mismatch vs libopus (samples/ch {} vs {})",
+        case.name,
+        total,
+        reference.len() / case.channels
+    );
     let snr = common::snr_db(&reference, &ours);
     let q = if case.channels <= 2 { common::opus_quality(&reference, &ours, case.channels, rate) } else { f64::NAN };
     let _ = std::fs::remove_file(&raw);
@@ -136,9 +143,27 @@ fn libopus_oracle() {
             args: &["-b:a", "16k", "-application", "voip", "-frame_duration", "40"],
             min_snr_celt: 0.0,
         },
-        Case { name: "speech_stereo_24k_voip", channels: 2, signal: common::speech, args: &["-b:a", "24k", "-application", "voip"], min_snr_celt: 0.0 },
-        Case { name: "music_stereo_32k_audio", channels: 2, signal: common::music, args: &["-b:a", "32k", "-application", "audio"], min_snr_celt: 0.0 },
-        Case { name: "music_stereo_64k_audio_10ms", channels: 2, signal: common::music, args: &["-b:a", "64k", "-frame_duration", "10"], min_snr_celt: 0.0 },
+        Case {
+            name: "speech_stereo_24k_voip",
+            channels: 2,
+            signal: common::speech,
+            args: &["-b:a", "24k", "-application", "voip"],
+            min_snr_celt: 0.0,
+        },
+        Case {
+            name: "music_stereo_32k_audio",
+            channels: 2,
+            signal: common::music,
+            args: &["-b:a", "32k", "-application", "audio"],
+            min_snr_celt: 0.0,
+        },
+        Case {
+            name: "music_stereo_64k_audio_10ms",
+            channels: 2,
+            signal: common::music,
+            args: &["-b:a", "64k", "-frame_duration", "10"],
+            min_snr_celt: 0.0,
+        },
         Case {
             name: "music_stereo_96k_lowdelay_2_5ms",
             channels: 2,
@@ -197,7 +222,13 @@ fn libopus_oracle_output_rates() {
     }
     let cases = [
         Case { name: "rates_music_stereo_64k", channels: 2, signal: common::music, args: &["-b:a", "64k"], min_snr_celt: 0.0 },
-        Case { name: "rates_speech_mono_16k", channels: 1, signal: common::speech, args: &["-b:a", "16k", "-application", "voip"], min_snr_celt: 0.0 },
+        Case {
+            name: "rates_speech_mono_16k",
+            channels: 1,
+            signal: common::speech,
+            args: &["-b:a", "16k", "-application", "voip"],
+            min_snr_celt: 0.0,
+        },
     ];
     let mut failures = Vec::new();
     for case in &cases {

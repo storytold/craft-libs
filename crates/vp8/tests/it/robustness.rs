@@ -2,7 +2,7 @@
 
 use crate::common;
 
-use filmcraft_vp8::{Decoder, Error};
+use craft_vp8::{Decoder, Error};
 
 fn xorshift(seed: &mut u64) -> u64 {
     *seed ^= *seed << 13;
@@ -16,7 +16,7 @@ fn decode_all(frames: &[Vec<u8>]) {
     for (i, f) in frames.iter().enumerate() {
         let _ = dec.is_disposable(f);
         let _ = dec.decode(f, i as i64);
-        let _ = filmcraft_vp8::keyframe_info(f);
+        let _ = craft_vp8::keyframe_info(f);
     }
 }
 
@@ -102,5 +102,5 @@ fn inter_frame_without_key_frame_is_an_error() {
     assert!(dec.decode(frames[1], 1).unwrap().is_some());
     dec.reset();
     assert!(matches!(dec.decode(frames[2], 2), Err(Error::MissingReference(_))));
-    assert!(filmcraft_vp8::is_keyframe(frames[0]) && !filmcraft_vp8::is_keyframe(frames[1]));
+    assert!(craft_vp8::is_keyframe(frames[0]) && !craft_vp8::is_keyframe(frames[1]));
 }

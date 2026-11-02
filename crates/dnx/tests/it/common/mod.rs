@@ -2,17 +2,17 @@
 //! reference decoder (never linked).
 #![allow(dead_code)]
 
-use filmcraft_dnx::{Frame, probe};
+use craft_dnx::{Frame, probe};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// ffmpeg, or `None` after printing `SKIPPED` (see `filmcraft_testkit::oracle`).
+/// ffmpeg, or `None` after printing `SKIPPED` (see `craft_testkit::oracle`).
 pub fn ffmpeg() -> Option<PathBuf> {
-    filmcraft_testkit::ffmpeg_or_skip("dnx oracle")
+    craft_testkit::ffmpeg_or_skip("dnx oracle")
 }
 
 pub fn fixture_dir() -> PathBuf {
-    filmcraft_testkit::fixtures_dir("dnx")
+    craft_testkit::fixtures_dir("dnx")
 }
 
 pub fn run(ff: &Path, args: &[&str]) {
@@ -41,7 +41,7 @@ impl Spec {
 pub fn make(ff: &Path, spec: &Spec) -> PathBuf {
     let path = fixture_dir().join(format!("{}.mov", spec.name));
     if !path.exists() {
-        let tmp = filmcraft_testkit::temp_path(&path);
+        let tmp = craft_testkit::temp_path(&path);
         let frames = spec.frames.to_string();
         let mut args = vec!["-f", "lavfi", "-i", spec.lavfi.as_str(), "-frames:v", frames.as_str(), "-c:v", "dnxhd"];
         args.extend(spec.enc.iter().copied());
@@ -49,7 +49,7 @@ pub fn make(ff: &Path, spec: &Spec) -> PathBuf {
         let t = tmp.to_str().unwrap().to_string();
         args.push(&t);
         run(ff, &args);
-        filmcraft_testkit::fixtures::publish(&tmp, &path).unwrap();
+        craft_testkit::fixtures::publish(&tmp, &path).unwrap();
     }
     path
 }
@@ -260,25 +260,25 @@ pub struct SourceFrameSpec<'a> {
     pub frames: u32,
     pub width: u32,
     pub height: u32,
-    pub chroma: filmcraft_dnx::ChromaFormat,
+    pub chroma: craft_dnx::ChromaFormat,
     pub depth: u8,
 }
 
 pub fn source_frames(ff: &Path, spec: SourceFrameSpec<'_>) -> Vec<Frame> {
     let SourceFrameSpec { name, lavfi, frames, width: w, height: h, chroma, depth } = spec;
     let pix = match (chroma, depth) {
-        (filmcraft_dnx::ChromaFormat::Yuv422, 8) => "yuv422p",
-        (filmcraft_dnx::ChromaFormat::Yuv422, 10) => "yuv422p10le",
-        (filmcraft_dnx::ChromaFormat::Yuv422, _) => "yuv422p12le",
+        (craft_dnx::ChromaFormat::Yuv422, 8) => "yuv422p",
+        (craft_dnx::ChromaFormat::Yuv422, 10) => "yuv422p10le",
+        (craft_dnx::ChromaFormat::Yuv422, _) => "yuv422p12le",
         (_, 10) => "yuv444p10le",
         _ => "yuv444p12le",
     };
     let path = fixture_dir().join(format!("{name}.{pix}.raw"));
     if !path.exists() {
-        let tmp = filmcraft_testkit::temp_path(&path);
+        let tmp = craft_testkit::temp_path(&path);
         let f = frames.to_string();
         run(ff, &["-f", "lavfi", "-i", lavfi, "-frames:v", &f, "-f", "rawvideo", "-pix_fmt", pix, tmp.to_str().unwrap()]);
-        filmcraft_testkit::fixtures::publish(&tmp, &path).unwrap();
+        craft_testkit::fixtures::publish(&tmp, &path).unwrap();
     }
     let bytes = std::fs::read(&path).unwrap();
     let s: Vec<u16> = if depth == 8 {

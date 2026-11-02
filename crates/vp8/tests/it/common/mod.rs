@@ -2,7 +2,7 @@
 //! and the decode helpers.
 #![allow(dead_code)]
 
-use filmcraft_vp8::{Decoder, Picture};
+use craft_vp8::{Decoder, Picture};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -124,8 +124,14 @@ pub fn ensure(f: &Fixture) -> Option<(PathBuf, PathBuf)> {
     if !ivf.exists() {
         let tmp = dir.join(format!("{}.tmp.{}.ivf", f.name, unique()));
         // the source at an even size, scaled to the fixture's (possibly odd) size
-        let src =
-            format!("{}=size={}x{}:rate=25,scale={}:{},format=yuv420p", f.source, f.width.next_multiple_of(2), f.height.next_multiple_of(2), f.width, f.height);
+        let src = format!(
+            "{}=size={}x{}:rate=25,scale={}:{},format=yuv420p",
+            f.source,
+            f.width.next_multiple_of(2),
+            f.height.next_multiple_of(2),
+            f.width,
+            f.height
+        );
         let two_pass = f.args.first() == Some(&"2pass");
         let args: Vec<&str> = f.args.iter().copied().filter(|a| *a != "2pass").collect();
         let log = dir.join(format!("{}.{}.passlog", f.name, unique()));

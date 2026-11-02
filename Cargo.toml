@@ -59,6 +59,7 @@ craft-audio-io = { path = "crates/audio-io" }
 craft-dnx = { path = "crates/dnx" }
 craft-opus = { path = "crates/opus" }
 craft-vp8 = { path = "crates/vp8" }
+craft-testkit = { path = "crates/testkit" }
 craft-codecs = { path = "crates/codecs" }
 symphonia = { version = "0.6", default-features = false, features = ["mp1", "mp2", "mp3", "flac", "vorbis", "ogg", "wav", "pcm", "aiff", "isomp4", "aac", "alac", "adpcm", "caf", "mkv"] }
 log = "0.4"

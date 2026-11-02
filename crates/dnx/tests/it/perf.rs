@@ -1,6 +1,6 @@
-//! Throughput: `cargo test --release -p filmcraft-dnx --test it perf:: -- --ignored --nocapture`.
+//! Throughput: `cargo test --release -p craft-dnx --test it perf:: -- --ignored --nocapture`.
 
-use filmcraft_dnx::{ChromaFormat, DecodeOptions, Encoder, EncoderConfig, Frame, Profile, decode_frame_with};
+use craft_dnx::{ChromaFormat, DecodeOptions, Encoder, EncoderConfig, Frame, Profile, decode_frame_with};
 use std::time::Instant;
 
 fn busy(w: u32, h: u32, chroma: ChromaFormat, depth: u8) -> Frame {
@@ -25,7 +25,9 @@ fn busy(w: u32, h: u32, chroma: ChromaFormat, depth: u8) -> Frame {
 #[test]
 #[ignore]
 fn throughput() {
-    for (profile, depth, w, h) in [(Profile::Hq, 8, 1920, 1080), (Profile::Hqx, 10, 1920, 1080), (Profile::Sq, 8, 3840, 2160), (Profile::Hqx, 10, 3840, 2160)] {
+    for (profile, depth, w, h) in
+        [(Profile::Hq, 8, 1920, 1080), (Profile::Hqx, 10, 1920, 1080), (Profile::Sq, 8, 3840, 2160), (Profile::Hqx, 10, 3840, 2160)]
+    {
         let mut cfg = EncoderConfig::new(profile, w, h);
         cfg.bit_depth = depth;
         let src = busy(w, h, cfg.chroma(), depth);

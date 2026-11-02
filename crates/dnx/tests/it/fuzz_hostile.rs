@@ -4,7 +4,7 @@
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
-use filmcraft_dnx::{ChromaFormat, DecodeOptions, Encoder, EncoderConfig, Frame, Profile, decode_frame_with, probe};
+use craft_dnx::{ChromaFormat, DecodeOptions, Encoder, EncoderConfig, Frame, Profile, decode_frame_with, probe};
 
 struct Rng(u64);
 impl Rng {
@@ -21,9 +21,13 @@ impl Rng {
 
 fn seeds() -> Vec<Vec<u8>> {
     let mut v = Vec::new();
-    for (profile, depth, w, h) in
-        [(Profile::Lb, 8, 64u32, 48u32), (Profile::Hq, 8, 48, 32), (Profile::Hqx, 10, 64, 32), (Profile::Hqx, 12, 48, 32), (Profile::R444, 10, 48, 32)]
-    {
+    for (profile, depth, w, h) in [
+        (Profile::Lb, 8, 64u32, 48u32),
+        (Profile::Hq, 8, 48, 32),
+        (Profile::Hqx, 10, 64, 32),
+        (Profile::Hqx, 12, 48, 32),
+        (Profile::R444, 10, 48, 32),
+    ] {
         let mut cfg = EncoderConfig::new(profile, w, h);
         cfg.bit_depth = depth;
         let chroma = cfg.chroma();
@@ -45,7 +49,7 @@ fn seeds() -> Vec<Vec<u8>> {
 }
 
 fn run(d: &[u8], label: &str) {
-    filmcraft_testkit::set_progress(label);
+    craft_testkit::set_progress(label);
     let res = catch_unwind(AssertUnwindSafe(|| {
         let _ = probe(d);
         for opts in [DecodeOptions::default(), DecodeOptions { threads: true, spec_dequant: true }] {
@@ -61,7 +65,7 @@ const DEADLINE_SECS: u64 = 600;
 /// CI runs a rotating share of every part of the sweep; `FILMCRAFT_FUZZ_ITERS=1500` runs all of it (see [`Depth`]).
 #[test]
 fn hostile_frames_never_panic() {
-    filmcraft_testkit::with_deadline(DEADLINE_SECS, sweep);
+    craft_testkit::with_deadline(DEADLINE_SECS, sweep);
 }
 
 fn sweep() {

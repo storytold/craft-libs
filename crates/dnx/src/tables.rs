@@ -2,8 +2,8 @@
 //! the Annex E codeword lists in [`crate::spec_tables`].
 
 use crate::spec_tables::{
-    AMP_E_1, AMP_E_4, AMP_E_7, AMP_E_10, AMP_E_13, AMP_E_16, DC_E_1, DC_E_4, DC_E_7, DC_E_10, DC_E_13, DC_E_16, RUN_E_1, RUN_E_4, RUN_E_7, RUN_E_10, RUN_E_13,
-    RUN_E_16, W_D_1, W_D_2, W_D_3, W_D_4, W_D_5, W_D_6, W_D_7, W_D_8, W_D_9, W_D_10, W_D_11,
+    AMP_E_1, AMP_E_4, AMP_E_7, AMP_E_10, AMP_E_13, AMP_E_16, DC_E_1, DC_E_4, DC_E_7, DC_E_10, DC_E_13, DC_E_16, RUN_E_1, RUN_E_4, RUN_E_7, RUN_E_10,
+    RUN_E_13, RUN_E_16, W_D_1, W_D_2, W_D_3, W_D_4, W_D_5, W_D_6, W_D_7, W_D_8, W_D_9, W_D_10, W_D_11,
 };
 use std::sync::OnceLock;
 

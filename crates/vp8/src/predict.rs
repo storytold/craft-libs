@@ -327,8 +327,12 @@ pub fn predict_inter(reference: &RefPlane, dst: DstPlane, rect: BlockRect, (mvx,
             }
         } else {
             for (c, d) in row.iter_mut().enumerate() {
-                let v =
-                    tmp[r][c] * vf[0] + tmp[r + 1][c] * vf[1] + tmp[r + 2][c] * vf[2] + tmp[r + 3][c] * vf[3] + tmp[r + 4][c] * vf[4] + tmp[r + 5][c] * vf[5];
+                let v = tmp[r][c] * vf[0]
+                    + tmp[r + 1][c] * vf[1]
+                    + tmp[r + 2][c] * vf[2]
+                    + tmp[r + 3][c] * vf[3]
+                    + tmp[r + 4][c] * vf[4]
+                    + tmp[r + 5][c] * vf[5];
                 *d = round(v) as u8;
             }
         }

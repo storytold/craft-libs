@@ -10,13 +10,14 @@ use crate::header::{EntropyContext, FrameHeader, FrameTag, LfDeltas, Segmentatio
 use crate::loopfilter::{self, Kind, Params};
 use crate::predict::{self, BlockRect, DstPlane, RefPlane};
 use crate::spec_tables::{
-    AC_QLOOKUP, BILINEAR_FILTERS, BMODE_PROBS, COEFF_BANDS, DC_QLOOKUP, KF_BMODE_PROBS, KF_UV_MODE_PROBS, KF_YMODE_PROBS, MODE_CONTEXTS, MVPARTITION_PROBS,
-    SIXTAP_FILTERS, SUB_MV_REF_PROBS,
+    AC_QLOOKUP, BILINEAR_FILTERS, BMODE_PROBS, COEFF_BANDS, DC_QLOOKUP, KF_BMODE_PROBS, KF_UV_MODE_PROBS, KF_YMODE_PROBS, MODE_CONTEXTS,
+    MVPARTITION_PROBS, SIXTAP_FILTERS, SUB_MV_REF_PROBS,
 };
 use crate::tables::{
-    ABOVE_4X4, B_DC_PRED, B_HE_PRED, B_PRED, B_TM_PRED, B_VE_PRED, BMODE_TREE, CAT_BASE, COEFF_TREE, DC_PRED, DCT_0, DCT_4, DCT_CAT1, DCT_EOB, H_PRED,
-    KF_YMODE_TREE, LEFT_4X4, MV_NEAR, MV_NEAREST, MV_NEW, MV_REF_TREE, MV_SPLIT, MV_ZERO, MVP_BITS, MVP_IS_SHORT, MVP_SHORT, MVP_SIGN, MVPARTITION_TREE, PCAT,
-    SEGMENT_TREE, SMALL_MV_TREE, SPLIT_COUNTS, SPLIT_MAPS, SUB_MV_REF_TREE, TM_PRED, UV_MODE_TREE, V_PRED, YMODE_TREE, ZERO_4X4, ZIGZAG,
+    ABOVE_4X4, B_DC_PRED, B_HE_PRED, B_PRED, B_TM_PRED, B_VE_PRED, BMODE_TREE, CAT_BASE, COEFF_TREE, DC_PRED, DCT_0, DCT_4, DCT_CAT1, DCT_EOB,
+    H_PRED, KF_YMODE_TREE, LEFT_4X4, MV_NEAR, MV_NEAREST, MV_NEW, MV_REF_TREE, MV_SPLIT, MV_ZERO, MVP_BITS, MVP_IS_SHORT, MVP_SHORT, MVP_SIGN,
+    MVPARTITION_TREE, PCAT, SEGMENT_TREE, SMALL_MV_TREE, SPLIT_COUNTS, SPLIT_MAPS, SUB_MV_REF_TREE, TM_PRED, UV_MODE_TREE, V_PRED, YMODE_TREE,
+    ZERO_4X4, ZIGZAG,
 };
 use crate::transform;
 
@@ -831,7 +832,13 @@ fn predict_inter_mb(r: &Frame, frame: &mut Frame, mb_x: usize, mb_y: usize, info
     let fp = |v: i32| if full_pixel { v & !7 } else { v };
     if info.mode != MV_SPLIT {
         let m = info.mv;
-        predict::predict_inter(&ry, DstPlane { data: &mut frame.y, stride: ys }, BlockRect { x: px, y: py, w: 16, h: 16 }, (m.col * 2, m.row * 2), filters);
+        predict::predict_inter(
+            &ry,
+            DstPlane { data: &mut frame.y, stride: ys },
+            BlockRect { x: px, y: py, w: 16, h: 16 },
+            (m.col * 2, m.row * 2),
+            filters,
+        );
         // chroma: the luma vector in quarter pixels is the chroma vector in eighth pixels
         let (cx, cy) = (fp(m.col), fp(m.row));
         predict::predict_inter(&ru, DstPlane { data: &mut frame.u, stride: cs }, BlockRect { x: px / 2, y: py / 2, w: 8, h: 8 }, (cx, cy), filters);

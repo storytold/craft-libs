@@ -2,12 +2,14 @@
 
 use crate::common;
 use common::*;
-use filmcraft_dnx::{DecodeOptions, decode_frame_with};
+use craft_dnx::{DecodeOptions, decode_frame_with};
 
 fn specs() -> Vec<Spec> {
     let t = |s: &str, r: u32| format!("testsrc2=s={s}:r={r}");
     let m = |s: &str, r: u32| format!("mandelbrot=s={s}:r={r}");
-    let n = |s: &str, r: u32| format!("testsrc2=s={s}:r={r},noise=alls=60:allf=t,lutyuv=y=clip(val\\,24\\,231):u=clip(val\\,24\\,231):v=clip(val\\,24\\,231)");
+    let n = |s: &str, r: u32| {
+        format!("testsrc2=s={s}:r={r},noise=alls=60:allf=t,lutyuv=y=clip(val\\,24\\,231):u=clip(val\\,24\\,231):v=clip(val\\,24\\,231)")
+    };
     vec![
         // DNxHD (HD profile)
         Spec::new("hd1237_testsrc", t("1920x1080", 25), 2, &["-b:v", "120M", "-pix_fmt", "yuv422p"], "yuv422p"),
@@ -58,8 +60,8 @@ fn decode_matches_ffmpeg() {
         let mut st = Stats::default();
         let mut off = 0;
         for (i, p) in pk.iter().enumerate() {
-            let f =
-                decode_frame_with(p, &DecodeOptions { threads: i % 2 == 0, ..Default::default() }).unwrap_or_else(|e| panic!("{} frame {i}: {e}", spec.name));
+            let f = decode_frame_with(p, &DecodeOptions { threads: i % 2 == 0, ..Default::default() })
+                .unwrap_or_else(|e| panic!("{} frame {i}: {e}", spec.name));
             let ours = planes(&f, spec.pix_fmt);
             let n = frame_samples(&f);
             st.add(&ours, &raw[off..off + n]);
@@ -69,7 +71,7 @@ fn decode_matches_ffmpeg() {
         println!(
             "{:<22} cid {} max {} mean {:.5} exact {:.3}% beyond ±1: {}",
             spec.name,
-            filmcraft_dnx::probe(&pk[0]).unwrap().cid,
+            craft_dnx::probe(&pk[0]).unwrap().cid,
             st.max,
             st.mean(),
             st.exact_pct(),

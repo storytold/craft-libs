@@ -12,7 +12,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let hdr_len = usize::from(u16::from_le_bytes([data[6], data[7]]));
     let mut pos = hdr_len;
     let mut out = std::io::BufWriter::new(std::fs::File::create(output)?);
-    let mut dec = filmcraft_vp8::Decoder::new();
+    let mut dec = craft_vp8::Decoder::new();
     let mut n = 0;
     let t = std::time::Instant::now();
     while pos + 12 <= data.len() {

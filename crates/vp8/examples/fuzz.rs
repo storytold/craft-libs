@@ -75,14 +75,14 @@ fn main() {
                 }
             }
             let r = std::panic::catch_unwind(|| {
-                let mut dec = filmcraft_vp8::Decoder::new();
+                let mut dec = craft_vp8::Decoder::new();
                 let mut n = 0u64;
                 for (k, f) in fr.iter().enumerate() {
                     let _ = dec.is_disposable(f);
                     if dec.decode(f, k as i64).is_ok() {
                         n += 1;
                     }
-                    let _ = filmcraft_vp8::keyframe_info(f);
+                    let _ = craft_vp8::keyframe_info(f);
                 }
                 n
             });

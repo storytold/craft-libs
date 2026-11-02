@@ -6,7 +6,7 @@
 //! ffmpeg's decoder differs from the text of SMPTE ST 2019-1 (see the README): the quantisation
 //! weights it uses for CID 1271, and its reconstruction offset.
 //!
-//! `DNX_CID=1271 cargo test -p filmcraft-dnx --lib ffmpeg_probe -- --ignored --nocapture`
+//! `DNX_CID=1271 cargo test -p craft-dnx --lib ffmpeg_probe -- --ignored --nocapture`
 use crate::bits::Writer;
 use crate::header::{self, EOF_SIGNATURE, FieldCode, FrameHeader, SCAN_INDEX_OFFSET};
 use crate::tables::{ZIGZAG, cid_info, vlc};
@@ -104,8 +104,8 @@ fn stream_cid(input: ProbeStream) -> Vec<u8> {
 #[test]
 #[ignore]
 fn probe_weights() {
-    let ff = filmcraft_testkit::ffmpeg().unwrap();
-    let dir = filmcraft_testkit::fixtures_dir("dnx");
+    let ff = craft_testkit::ffmpeg().unwrap();
+    let dir = craft_testkit::fixtures_dir("dnx");
     let cid: u32 = std::env::var("DNX_CID").unwrap().parse().unwrap();
     let (w, h, depth): (u32, u32, u8) = match cid {
         1250 => (1280, 720, 10),
@@ -220,8 +220,8 @@ fn probe_weights() {
 #[test]
 #[ignore]
 fn probe_reconstruction() {
-    let ff = filmcraft_testkit::ffmpeg().unwrap();
-    let dir = filmcraft_testkit::fixtures_dir("dnx");
+    let ff = craft_testkit::ffmpeg().unwrap();
+    let dir = craft_testkit::fixtures_dir("dnx");
     let cid: u32 = std::env::var("DNX_CID").unwrap().parse().unwrap();
     let (w, h, depth): (u32, u32, u8) = match cid {
         1250 => (1280, 720, 10),
@@ -235,8 +235,17 @@ fn probe_reconstruction() {
     for q in [1u32, 2, 3, 4, 8, 16] {
         let mut xs = vec![];
         for amp in 1..=40u32 {
-            let s =
-                stream_cid(ProbeStream { cid, width: w, height: h, depth, quantizer: q, coefficient_position: 1, amplitude: amp, negative: false, block: 0 });
+            let s = stream_cid(ProbeStream {
+                cid,
+                width: w,
+                height: h,
+                depth,
+                quantizer: q,
+                coefficient_position: 1,
+                amplitude: amp,
+                negative: false,
+                block: 0,
+            });
             let path = dir.join("explore.dnxhd");
             std::fs::write(&path, &s).unwrap();
             let out = std::process::Command::new(&ff)
@@ -254,7 +263,10 @@ fn probe_reconstruction() {
             let mut sum = 0f64;
             for j in 0..8 {
                 for i in 0..8 {
-                    sum += 0.25 * (px[j * w as usize + i] - mid) * ((2 * i + 1) as f64 * std::f64::consts::PI / 16.0).cos() * std::f64::consts::FRAC_1_SQRT_2;
+                    sum += 0.25
+                        * (px[j * w as usize + i] - mid)
+                        * ((2 * i + 1) as f64 * std::f64::consts::PI / 16.0).cos()
+                        * std::f64::consts::FRAC_1_SQRT_2;
                 }
             }
             xs.push((amp as f64, sum));

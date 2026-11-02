@@ -289,7 +289,12 @@ fn decode_row(ctx: &Ctx, data: &[u8], bands: [&mut [u16]; 4]) -> Result<Vec<bool
             let slot = if rgb && !acf { 3 + comp } else { comp };
             let w = &wq[(comp != 0) as usize];
             decode_block(ctx, &mut r, &mut pred[slot], w, &mut block)?;
-            store(ctx, bands[comp], BlockPosition { plane: comp, macroblock: mb, x_offset: xo as usize, y_offset: yo as usize, field: mff }, &mut block);
+            store(
+                ctx,
+                bands[comp],
+                BlockPosition { plane: comp, macroblock: mb, x_offset: xo as usize, y_offset: yo as usize, field: mff },
+                &mut block,
+            );
         }
         if rgb {
             acfs.push(acf);

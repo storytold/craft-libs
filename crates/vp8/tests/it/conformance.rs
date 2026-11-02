@@ -59,7 +59,7 @@ fn hidden_and_disposable_frames() {
         let data = std::fs::read(&ivf).unwrap();
         let frames = common::ivf_frames(&data);
         // every picture, and which frames could be left out (asked right before each is decoded)
-        let mut dec = filmcraft_vp8::Decoder::new();
+        let mut dec = craft_vp8::Decoder::new();
         let mut all = Vec::new();
         let mut disposable = Vec::new();
         for (i, f) in frames.iter().enumerate() {
@@ -77,7 +77,7 @@ fn hidden_and_disposable_frames() {
         if name == "temporal_layers" {
             assert!(disposable.iter().filter(|&&d| d).count() >= frames.len() / 3, "{name}: the enhancement layer is disposable: {disposable:?}");
         }
-        let mut dec = filmcraft_vp8::Decoder::new();
+        let mut dec = craft_vp8::Decoder::new();
         for (i, f) in frames.iter().enumerate() {
             if disposable[i] {
                 continue;

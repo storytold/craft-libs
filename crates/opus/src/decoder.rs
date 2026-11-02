@@ -365,7 +365,8 @@ impl StreamDecoder {
             &mut dec,
         )?;
 
-        let Redundancy { present: redundancy, celt_to_silk, bytes: redundancy_bytes, packet_len: len } = self.read_redundancy(mode, fec, data_len, &mut dec);
+        let Redundancy { present: redundancy, celt_to_silk, bytes: redundancy_bytes, packet_len: len } =
+            self.read_redundancy(mode, fec, data_len, &mut dec);
         let mut start_band = 0;
         if mode != Mode::CeltOnly {
             start_band = 17;

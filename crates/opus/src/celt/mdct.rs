@@ -275,8 +275,9 @@ mod tests {
     fn fft_matches_reference_implementation() {
         for &n in &[15usize, 30, 60, 120, 240, 480, 960] {
             let fft = Fft::new(n);
-            let x: Vec<Cpx> =
-                (0..n).map(|i| Cpx { re: (((i * 7919) % 2003) as f32 - 1000.0) / 500.0, im: (((i * 104729) % 1009) as f32 - 500.0) / 250.0 }).collect();
+            let x: Vec<Cpx> = (0..n)
+                .map(|i| Cpx { re: (((i * 7919) % 2003) as f32 - 1000.0) / 500.0, im: (((i * 104729) % 1009) as f32 - 500.0) / 250.0 })
+                .collect();
             let mut new = x.clone();
             fft.process(&mut new, &mut Vec::new());
             let mut old = x.clone();
@@ -299,7 +300,11 @@ mod tests {
         im.backward(&x, 1, &mut out, &[], overlap, &mut ImdctScratch::default());
         // Direct IMDCT y[t] = sum X[k] cos(2pi/N (t + 1/2 + N/4)(k + 1/2)), t in 0..N.
         let y: Vec<f64> = (0..n)
-            .map(|t| (0..n2).map(|k| x[k] as f64 * (2.0 * std::f64::consts::PI / n as f64 * (t as f64 + 0.5 + n as f64 / 4.0) * (k as f64 + 0.5)).cos()).sum())
+            .map(|t| {
+                (0..n2)
+                    .map(|k| x[k] as f64 * (2.0 * std::f64::consts::PI / n as f64 * (t as f64 + 0.5 + n as f64 / 4.0) * (k as f64 + 0.5)).cos())
+                    .sum()
+            })
             .collect();
         // The folded half: out[i] relates to y in the middle half; check proportionality.
         let mid: Vec<f64> = (0..n2).map(|i| y[n / 4 + i]).collect();

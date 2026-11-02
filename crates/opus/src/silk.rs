@@ -13,9 +13,9 @@ use lpc::{MAX_LPC_ORDER, bwexpander, div32_varq, inverse32_varq, nlsf_decode, nl
 use resampler::Resampler;
 use tables::{
     CB_NB_10, CB_NB_20, CB_WB_10, CB_WB_20, DELTA_GAIN, EXC_LSB, EXC_SIGN, GAIN_MSB, LBRR_FLAGS, LTP_FILTER, LTP_PERIODICITY, LTP_SCALE, LTP_TAPS_0,
-    LTP_TAPS_1, LTP_TAPS_2, MID_ONLY, NLSF_EXT, NLSF_INTERP, NLSF_SEL_NBMB, NLSF_SEL_WB, NLSF_STAGE1, NLSF_STAGE2, PITCH_CONTOUR, PITCH_DELTA, PITCH_HIGH,
-    PITCH_LOW, PULSE_COUNT, RATE_LEVEL, SHELL_2, SHELL_4, SHELL_8, SHELL_16, STEREO_PRED_JOINT, STEREO_WEIGHTS_Q13, TYPE_ACTIVE, TYPE_INACTIVE, UNIFORM3,
-    UNIFORM4, UNIFORM5, UNIFORM8,
+    LTP_TAPS_1, LTP_TAPS_2, MID_ONLY, NLSF_EXT, NLSF_INTERP, NLSF_SEL_NBMB, NLSF_SEL_WB, NLSF_STAGE1, NLSF_STAGE2, PITCH_CONTOUR, PITCH_DELTA,
+    PITCH_HIGH, PITCH_LOW, PULSE_COUNT, RATE_LEVEL, SHELL_2, SHELL_4, SHELL_8, SHELL_16, STEREO_PRED_JOINT, STEREO_WEIGHTS_Q13, TYPE_ACTIVE,
+    TYPE_INACTIVE, UNIFORM3, UNIFORM4, UNIFORM5, UNIFORM8,
 };
 
 use crate::range::RangeDecoder;
@@ -493,7 +493,11 @@ fn log2lin(in_log_q7: i32) -> i32 {
     }
     let out = 1i32 << (in_log_q7 >> 7);
     let frac = in_log_q7 & 0x7F;
-    if in_log_q7 < 2048 { out + ((out * smlawb(frac, frac * (128 - frac), -174)) >> 7) } else { out + (out >> 7) * smlawb(frac, frac * (128 - frac), -174) }
+    if in_log_q7 < 2048 {
+        out + ((out * smlawb(frac, frac * (128 - frac), -174)) >> 7)
+    } else {
+        out + (out >> 7) * smlawb(frac, frac * (128 - frac), -174)
+    }
 }
 
 fn lpc_analysis_filter(out: &mut [i16], input: &[i16], b: &[i32], d: usize) {
@@ -780,7 +784,14 @@ impl SilkDecoder {
     }
 
     /// Decodes one SILK frame (10 or 20 ms) into interleaved `out` at the API rate.
-    pub fn decode(&mut self, mut dec: Option<&mut RangeDecoder>, lost: LostFlag, new_packet: bool, payload_ms: usize, out: &mut [f32]) -> Result<usize> {
+    pub fn decode(
+        &mut self,
+        mut dec: Option<&mut RangeDecoder>,
+        lost: LostFlag,
+        new_packet: bool,
+        payload_ms: usize,
+        out: &mut [f32],
+    ) -> Result<usize> {
         let nci = self.channels_internal;
         let stereo_to_mono = self.prepare_frame(new_packet, payload_ms)?;
         self.decode_packet_header(&mut dec, lost)?;
@@ -791,7 +802,8 @@ impl SilkDecoder {
             match dec.as_deref_mut() {
                 Some(d) if coded => {
                     self.ms_pred = stereo_decode_pred(d);
-                    let side_inactive = (lost == LostFlag::Normal && !self.ch[1].vad_flags[fi]) || (lost == LostFlag::Lbrr && !self.ch[1].lbrr_flags[fi]);
+                    let side_inactive =
+                        (lost == LostFlag::Normal && !self.ch[1].vad_flags[fi]) || (lost == LostFlag::Lbrr && !self.ch[1].lbrr_flags[fi]);
                     self.decode_only_middle = if side_inactive { d.icdf(&MID_ONLY, 8) == 1 } else { false };
                 }
                 _ => {

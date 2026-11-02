@@ -11,7 +11,7 @@ use crate::common;
 
 use std::path::PathBuf;
 
-use filmcraft_opus::StreamDecoder;
+use craft_opus::StreamDecoder;
 
 fn vectors_dir() -> Option<PathBuf> {
     let d = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/fixtures/opus/vectors");
@@ -145,7 +145,7 @@ fn vector_diag() {
             dec.decode_interleaved(None, &mut out).unwrap();
             lines.push((start, "LOST".to_string()));
         } else {
-            let p = filmcraft_opus::Packet::parse(pkt).unwrap();
+            let p = craft_opus::Packet::parse(pkt).unwrap();
             dec.decode_interleaved(Some(pkt), &mut out).unwrap();
             lines.push((start, format!("{:?} {:?} st{} n{}", p.toc.mode, p.toc.bandwidth, p.toc.stereo as u8, p.frames.len())));
         }

@@ -359,7 +359,16 @@ impl CeltDecoder {
                 *v = -28.0;
             }
         }
-        self.synthesis(SynthesisFrame { bands: &x, samples: n, start_band: start, end_band: eff_end, coded_channels: c, transient: is_transient, lm, silence });
+        self.synthesis(SynthesisFrame {
+            bands: &x,
+            samples: n,
+            start_band: start,
+            end_band: eff_end,
+            coded_channels: c,
+            transient: is_transient,
+            lm,
+            silence,
+        });
         self.x = x;
 
         // Post-filter.
@@ -439,7 +448,8 @@ impl CeltDecoder {
 
     /// Denormalisation + IMDCT into the decode memory (`celt_synthesis`).
     fn synthesis(&mut self, frame: SynthesisFrame<'_>) {
-        let SynthesisFrame { bands: x, samples: n, start_band: start, end_band: eff_end, coded_channels: c, transient: is_transient, lm, silence } = frame;
+        let SynthesisFrame { bands: x, samples: n, start_band: start, end_band: eff_end, coded_channels: c, transient: is_transient, lm, silence } =
+            frame;
         let cc = self.channels;
         let m = self.m;
         let mm = 1usize << lm;

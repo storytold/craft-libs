@@ -5,7 +5,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use filmcraft_vp8::Decoder;
+use craft_vp8::Decoder;
 
 struct Rng(u64);
 impl Rng {
@@ -41,8 +41,8 @@ fn ivf_frames(data: &[u8]) -> Vec<Vec<u8>> {
 }
 
 fn make(ff: &std::path::Path, name: &str, args: &str, pix: &str) -> Option<Vec<Vec<u8>>> {
-    let out = filmcraft_testkit::fixtures_dir("vp8").join(format!("{name}.ivf"));
-    let p = filmcraft_testkit::fixtures::generate(&out, |tmp| {
+    let out = craft_testkit::fixtures_dir("vp8").join(format!("{name}.ivf"));
+    let p = craft_testkit::fixtures::generate(&out, |tmp| {
         let a: Vec<&str> = args.split_whitespace().collect();
         matches!(
             Command::new(ff)
@@ -72,7 +72,7 @@ fn count_panics() {
 }
 
 fn run_all(frames: &[Vec<u8>], label: &str) {
-    filmcraft_testkit::set_progress(label);
+    craft_testkit::set_progress(label);
     count_panics();
     let before = PANICS.load(Ordering::SeqCst);
     let res = catch_unwind(AssertUnwindSafe(|| {
@@ -96,21 +96,21 @@ const DEADLINE_SECS: u64 = 600;
 
 #[test]
 fn hostile_streams_never_panic() {
-    filmcraft_testkit::with_deadline(DEADLINE_SECS, sweep);
+    craft_testkit::with_deadline(DEADLINE_SECS, sweep);
 }
 
 fn sweep() {
-    let Some(ff) = filmcraft_testkit::ffmpeg_or_skip("VP8 fuzz") else { return };
+    let Some(ff) = craft_testkit::ffmpeg_or_skip("VP8 fuzz") else { return };
     for &(name, args, pix) in SEEDS {
-        if !filmcraft_testkit::ffmpeg_has_encoder(&ff, "libvpx") {
-            filmcraft_testkit::skip("VP8 fuzz", &format!("this ffmpeg has no libvpx encoder (seed {name})"));
+        if !craft_testkit::ffmpeg_has_encoder(&ff, "libvpx") {
+            craft_testkit::skip("VP8 fuzz", &format!("this ffmpeg has no libvpx encoder (seed {name})"));
             continue;
         }
         let Some(seed) = make(&ff, name, args, pix) else {
             panic!("ffmpeg has libvpx but could not encode the {name} seed");
         };
         if seed.is_empty() {
-            filmcraft_testkit::skip("VP8 fuzz", &format!("the {name} seed has no frames"));
+            craft_testkit::skip("VP8 fuzz", &format!("the {name} seed has no frames"));
             continue;
         }
         // truncate each of the first frames at every length

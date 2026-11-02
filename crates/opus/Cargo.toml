@@ -11,3 +11,7 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
+
+[dev-dependencies]
+craft-testkit = { workspace = true }
+

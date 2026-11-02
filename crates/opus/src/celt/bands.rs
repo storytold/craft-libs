@@ -651,11 +651,15 @@ impl BandCtx<'_, '_, '_> {
                 if rebalance > 3 << BITRES && sp.itheta != 0 {
                     sbits += rebalance - (3 << BITRES);
                 }
-                cm |= self
-                    .quant_band(y, QuantBandInput { samples: n, bits: sbits, blocks: bb, lowband: None, lm, lowband_out: None, gain: side, fill: fill >> bb });
+                cm |= self.quant_band(
+                    y,
+                    QuantBandInput { samples: n, bits: sbits, blocks: bb, lowband: None, lm, lowband_out: None, gain: side, fill: fill >> bb },
+                );
             } else {
-                cm = self
-                    .quant_band(y, QuantBandInput { samples: n, bits: sbits, blocks: bb, lowband: None, lm, lowband_out: None, gain: side, fill: fill >> bb });
+                cm = self.quant_band(
+                    y,
+                    QuantBandInput { samples: n, bits: sbits, blocks: bb, lowband: None, lm, lowband_out: None, gain: side, fill: fill >> bb },
+                );
                 rebalance = sbits - (rebalance - self.remaining_bits);
                 if rebalance > 3 << BITRES && sp.itheta != 16384 {
                     mbits += rebalance - (3 << BITRES);
@@ -852,15 +856,19 @@ pub fn quant_all_bands(input: QuantAllBandsInput<'_, '_>) {
                 &mut scratch[..n]
             });
             let lo = if last { None } else { Some(&mut norm[out_off..out_off + n]) };
-            x_cm =
-                ctx.quant_band(x, QuantBandInput { samples: n, bits: b / 2, blocks: bb, lowband: lb, lm: lm as i32, lowband_out: lo, gain: 1.0, fill: x_cm });
+            x_cm = ctx.quant_band(
+                x,
+                QuantBandInput { samples: n, bits: b / 2, blocks: bb, lowband: lb, lm: lm as i32, lowband_out: lo, gain: 1.0, fill: x_cm },
+            );
             let lb2 = effective_lowband.map(|e| {
                 scratch2[..n].copy_from_slice(&norm2[e..e + n]);
                 &mut scratch2[..n]
             });
             let lo2 = if last { None } else { Some(&mut norm2[out_off..out_off + n]) };
-            y_cm =
-                ctx.quant_band(y, QuantBandInput { samples: n, bits: b / 2, blocks: bb, lowband: lb2, lm: lm as i32, lowband_out: lo2, gain: 1.0, fill: y_cm });
+            y_cm = ctx.quant_band(
+                y,
+                QuantBandInput { samples: n, bits: b / 2, blocks: bb, lowband: lb2, lm: lm as i32, lowband_out: lo2, gain: 1.0, fill: y_cm },
+            );
         } else {
             let lb = effective_lowband.map(|e| {
                 scratch[..n].copy_from_slice(&norm[e..e + n]);
