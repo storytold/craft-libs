@@ -27,7 +27,7 @@ for p in enc.flush() { /* ... */ }
 ```
 
 - Input: planar 4:2:0 8-bit (`YuvFrame` with strides); any even size, non-multiple-of-16 sizes are
-  cropped via the SPS frame cropping. `encode` returns an error (`Error::InvalidFrame`) instead of panicking on short planes.
+  cropped via the SPS frame cropping. `encode` returns an error (`Error::BadFrame`) instead of panicking on short planes.
 - Output: one `Packet` per picture in decoding order with `pts` (as given), `dts` (reorder-delayed, always
   `<= pts` and strictly increasing), `keyframe` (IDR) and the frame type/QP. Annex-B packets carry an AUD,
   SPS/PPS on every IDR and an identification SEI on the first picture.
@@ -74,11 +74,6 @@ Results on the synthetic content (moving gradient, grain noise, text-like edges,
 | 640x360 CBR 1500 kbit/s | 1518 kbit/s (+1.2%) |
 | 640x360 1-pass VBR 1000 kbit/s | 981 kbit/s (−1.9%) |
 | 640x360 2-pass VBR 800 kbit/s | 840 kbit/s (+5.0%) |
-
-Development tool: `cargo run --release -p craft-h264enc --example h264enc_synth -- W H FRAMES
-[profile] [preset] [bframes] [qpN|crfN|cbrN|vbrN] [slices] [synth|testsrc2|mandelbrot]` encodes, decodes with
-ffmpeg and reports speed, bitrate, PSNR and any encoder/decoder mismatch (`MAP=1` prints a per-MB mismatch map,
-`PERF=k` cycles k source pictures for speed runs).
 
 ## Limitations / not yet implemented
 

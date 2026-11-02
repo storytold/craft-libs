@@ -60,7 +60,10 @@ impl PassStats {
     pub fn from_text(text: &str) -> Option<PassStats> {
         let mut lines = text.lines();
         let head = lines.next()?;
-        let fps = head.strip_prefix("h264enc-pass1 fps=")?.trim().parse().ok()?;
+        let fps: f64 = head.strip_prefix("h264enc-pass1 fps=")?.trim().parse().ok()?;
+        if !fps.is_finite() || fps <= 0.0 {
+            return None;
+        }
         let mut frames = Vec::new();
         for l in lines {
             let mut it = l.split_whitespace();
@@ -70,12 +73,11 @@ impl PassStats {
                 "B" => SliceType::B,
                 _ => return None,
             };
-            frames.push(FrameStat {
-                slice_type: t,
-                qscale: it.next()?.parse().ok()?,
-                bits: it.next()?.parse().ok()?,
-                cplx: it.next()?.parse().ok()?,
-            });
+            let qscale: f64 = it.next()?.parse().ok()?;
+            if !qscale.is_finite() || qscale <= 0.0 {
+                return None;
+            }
+            frames.push(FrameStat { slice_type: t, qscale, bits: it.next()?.parse().ok()?, cplx: it.next()?.parse().ok()? });
         }
         Some(PassStats { frames, fps })
     }
@@ -318,5 +320,16 @@ mod tests {
             assert!((remaining_bits[i] - planned_bits[i..].iter().sum::<f64>()).abs() < f64::EPSILON);
         }
         assert_eq!(remaining_bits[planned_bits.len()], 0.0);
+    }
+
+    #[test]
+    fn pass_stats_from_text_rejects_invalid_values() {
+        assert!(PassStats::from_text("h264enc-pass1 fps=0\nI 1.0 1000 10.0\n").is_none());
+        assert!(PassStats::from_text("h264enc-pass1 fps=-30\nI 1.0 1000 10.0\n").is_none());
+        assert!(PassStats::from_text("h264enc-pass1 fps=NaN\nI 1.0 1000 10.0\n").is_none());
+        assert!(PassStats::from_text("h264enc-pass1 fps=30\nI 0 1000 10.0\n").is_none());
+        assert!(PassStats::from_text("h264enc-pass1 fps=30\nI -1.5 1000 10.0\n").is_none());
+        assert!(PassStats::from_text("h264enc-pass1 fps=30\nI NaN 1000 10.0\n").is_none());
+        assert!(PassStats::from_text("h264enc-pass1 fps=30\nI 1.0 1000 10.0\n").is_some());
     }
 }

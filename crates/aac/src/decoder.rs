@@ -80,12 +80,15 @@ impl Decoder {
     /// Create a decoder for an ADTS stream from its first header. With channel configuration 0 the
     /// channel layout is taken from the program config element carried in the first frame.
     pub fn from_adts(header: &crate::config::AdtsHeader) -> Result<Decoder> {
-        Self::from_config(header.to_asc())
+        Self::from_config(header.to_asc()?)
     }
 
     pub fn from_config(asc: AudioSpecificConfig) -> Result<Decoder> {
         if asc.object_type != 2 {
             return Err(Error::Unsupported("audio object type other than AAC LC"));
+        }
+        if asc.sample_rate == 0 {
+            return Err(Error::InvalidConfig("invalid sampling frequency"));
         }
         let layout = asc.layout();
         if layout.is_empty() && asc.channel_config != 0 {

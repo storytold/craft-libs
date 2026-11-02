@@ -31,7 +31,8 @@
 //! # Ok::<(), craft_aac::Error>(())
 //! ```
 
-#![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable))]
+#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
+#![allow(clippy::needless_range_loop, clippy::type_complexity)]
 
 mod config;
 mod decoder;

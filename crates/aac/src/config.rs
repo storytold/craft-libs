@@ -181,6 +181,9 @@ fn read_rate(br: &mut BitReader) -> Result<(u8, u32)> {
     let i = br.read_bits(4)? as u8;
     if i == 15 {
         let r = br.read_bits(24)?;
+        if r == 0 {
+            return Err(Error::InvalidConfig("invalid sampling frequency"));
+        }
         return Ok((table_index_for_rate(r), r));
     }
     let r = *SAMPLE_RATES.get(i as usize).ok_or(Error::InvalidConfig("reserved sampling frequency index"))?;
@@ -189,10 +192,11 @@ fn read_rate(br: &mut BitReader) -> Result<(u8, u32)> {
 
 impl AudioSpecificConfig {
     /// A plain AAC-LC configuration.
-    pub fn lc(sf_index: u8, channel_config: u8) -> AudioSpecificConfig {
-        AudioSpecificConfig {
+    pub fn lc(sf_index: u8, channel_config: u8) -> Result<AudioSpecificConfig> {
+        let sample_rate = SAMPLE_RATES.get(sf_index as usize).copied().ok_or(Error::InvalidConfig("reserved sampling frequency index"))?;
+        Ok(AudioSpecificConfig {
             object_type: 2,
-            sample_rate: SAMPLE_RATES.get(sf_index as usize).copied().unwrap_or(0),
+            sample_rate,
             sf_index,
             channel_config,
             frame_length_flag: false,
@@ -200,7 +204,7 @@ impl AudioSpecificConfig {
             ps: false,
             extension_sample_rate: None,
             pce: None,
-        }
+        })
     }
 
     pub fn parse(data: &[u8]) -> Result<AudioSpecificConfig> {
@@ -323,8 +327,10 @@ impl AdtsHeader {
 
     /// The equivalent `AudioSpecificConfig`. Channel configuration 0 (PCE in-band) is resolved by the
     /// decoder from the first frame; this returns stereo-less layout in that case.
-    pub fn to_asc(&self) -> AudioSpecificConfig {
-        AudioSpecificConfig { object_type: self.object_type, ..AudioSpecificConfig::lc(self.sf_index, self.channel_config) }
+    pub fn to_asc(&self) -> Result<AudioSpecificConfig> {
+        let mut asc = AudioSpecificConfig::lc(self.sf_index, self.channel_config)?;
+        asc.object_type = self.object_type;
+        Ok(asc)
     }
 
     /// Write a 7-byte header (no CRC) for a frame whose raw payload is `payload_len` bytes.
@@ -382,19 +388,19 @@ mod tests {
 
     #[test]
     fn asc_roundtrip() {
-        let a = AudioSpecificConfig::lc(4, 2);
+        let a = AudioSpecificConfig::lc(4, 2).unwrap();
         let b = a.to_bytes();
         assert_eq!(b, vec![0x12, 0x10]);
         assert_eq!(AudioSpecificConfig::parse(&b).unwrap(), a);
         // 48 kHz 5.1
-        let a = AudioSpecificConfig::lc(3, 6);
+        let a = AudioSpecificConfig::lc(3, 6).unwrap();
         assert_eq!(AudioSpecificConfig::parse(&a.to_bytes()).unwrap().channels(), 6);
     }
 
     #[test]
     fn amd4_channel_configurations() {
         // 6.1 and 7.1 back (#922); 22.2 and 7.1 with heights stay unsupported
-        let channels = |c| AudioSpecificConfig::parse(&AudioSpecificConfig::lc(3, c).to_bytes()).map(|a| a.channels()).ok();
+        let channels = |c| AudioSpecificConfig::parse(&AudioSpecificConfig::lc(3, c).unwrap().to_bytes()).map(|a| a.channels()).ok();
         assert_eq!([7, 11, 12].map(channels), [Some(8), Some(7), Some(8)]);
         assert_eq!([13, 14].map(config_layout), [None, None]);
     }
@@ -410,10 +416,23 @@ mod tests {
             lfe: vec![0],
             ..Default::default()
         };
-        let a = AudioSpecificConfig { pce: Some(pce), ..AudioSpecificConfig::lc(3, 0) };
+        let a = AudioSpecificConfig { pce: Some(pce), ..AudioSpecificConfig::lc(3, 0).unwrap() };
         let p = AudioSpecificConfig::parse(&a.to_bytes()).unwrap();
         assert_eq!(p.channels(), 7);
         assert_eq!(p, a);
+    }
+
+    #[test]
+    fn invalid_sampling_frequency() {
+        assert!(AudioSpecificConfig::lc(13, 2).is_err());
+        assert!(AudioSpecificConfig::lc(14, 2).is_err());
+        // Escaped sample rate of 0 is rejected
+        let mut bw = BitWriter::new();
+        bw.write_bits(2, 5); // AOT 2 (LC)
+        bw.write_bits(15, 4); // explicit rate
+        bw.write_bits(0, 24); // 0 Hz
+        bw.write_bits(2, 4); // channel config
+        assert!(AudioSpecificConfig::parse(&bw.finish()).is_err());
     }
 
     #[test]

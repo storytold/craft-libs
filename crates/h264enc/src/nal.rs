@@ -303,7 +303,7 @@ pub fn level_at_least(requested: u8, needed: u8) -> u8 {
 }
 
 /// Pick the lowest level satisfying frame size, macroblock rate, DPB size and (optionally) bitrate.
-pub fn pick_level(width_mbs: u32, height_mbs: u32, fps: f64, dpb_frames: u32, kbps: Option<u32>, high: bool) -> u8 {
+pub fn pick_level(width_mbs: u32, height_mbs: u32, fps: f64, dpb_frames: u32, kbps: Option<u32>, high: bool) -> Option<u8> {
     // (level_idc, MaxMBPS, MaxFS, MaxDpbMbs, MaxBR kbit/s)
     const LEVELS: [(u8, u64, u64, u64, u64); 19] = [
         (10, 1485, 99, 396, 64),
@@ -332,8 +332,21 @@ pub fn pick_level(width_mbs: u32, height_mbs: u32, fps: f64, dpb_frames: u32, kb
         let br_ok = kbps.is_none_or(|k| (k as u64) * 1000 <= max_br * if high { 1250 } else { 1000 });
         let dim_ok = (width_mbs as u64).pow(2) <= 8 * max_fs && (height_mbs as u64).pow(2) <= 8 * max_fs;
         if fs <= max_fs && mbps <= max_mbps && fs * dpb_frames as u64 <= max_dpb && br_ok && dim_ok {
-            return l;
+            return Some(l);
         }
     }
-    62
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pick_level_bounds() {
+        // Standard 1080p @ 30fps
+        assert_eq!(pick_level(120, 68, 30.0, 1, None, false), Some(40));
+        // Extreme dimensions exceeding Level 6.2 MaxFS
+        assert_eq!(pick_level(1024, 1024, 30.0, 1, None, false), None);
+    }
 }

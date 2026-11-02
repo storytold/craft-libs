@@ -17,7 +17,8 @@
 //! packets.extend(enc.flush());
 //! ```
 
-#![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable))]
+#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
+#![allow(clippy::needless_range_loop)]
 
 mod cabac;
 mod cabac_mb;
@@ -434,8 +435,12 @@ impl Encoder {
         };
         let max_refs = if cfg.bframes > 0 { 2 } else { 1 };
         if let Pass::Second(st) = &cfg.pass {
-            if st.frames.is_empty() || !st.fps.is_finite() || st.fps <= 0.0 {
-                return Err(Error::InvalidConfig("second pass needs non-empty first-pass statistics with a positive fps".into()));
+            let invalid =
+                st.frames.is_empty() || !st.fps.is_finite() || st.fps <= 0.0 || st.frames.iter().any(|f| !f.qscale.is_finite() || f.qscale <= 0.0);
+            if invalid {
+                return Err(Error::InvalidConfig(
+                    "second pass needs non-empty first-pass statistics with a positive fps and valid frame qscales".into(),
+                ));
             }
         }
         let (kbps_for_level, rc_kind, vbv) = match (&cfg.rate, &cfg.pass) {
@@ -461,7 +466,8 @@ impl Encoder {
         if matches!(cfg.rate, RateControl::Cbr { kbps: 0 } | RateControl::Vbr { target_kbps: 0, .. }) {
             return Err(Error::InvalidConfig("bitrate must be non-zero".into()));
         }
-        let auto = nal::pick_level(mbw as u32, mbh as u32, fps, max_refs as u32, kbps_for_level, high);
+        let auto = nal::pick_level(mbw as u32, mbh as u32, fps, max_refs as u32, kbps_for_level, high)
+            .ok_or_else(|| Error::InvalidConfig("configuration exceeds H.264 level 6.2 limits".into()))?;
         let level = cfg.level.map_or(auto, |l| nal::level_at_least(l, auto));
         let (profile_idc, constraint) = match cfg.profile {
             Profile::Baseline => (66u8, 0xC0u8), // constraint_set0 + set1 => Constrained Baseline

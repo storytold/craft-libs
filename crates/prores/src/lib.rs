@@ -9,7 +9,8 @@
 //!
 //! See the crate README for bitstream details, accuracy and limitations.
 
-#![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable))]
+#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
+#![allow(clippy::needless_range_loop)]
 
 mod bits;
 mod dct;

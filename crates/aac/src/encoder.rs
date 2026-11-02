@@ -154,7 +154,7 @@ impl Encoder {
             8 => (7, config_layout(7).unwrap_or_default()),
             n => (n as u8, config_layout(n as u8).unwrap_or_default()),
         };
-        let mut asc = AudioSpecificConfig::lc(sf_index, channel_config);
+        let mut asc = AudioSpecificConfig::lc(sf_index, channel_config)?;
         if channel_config == 0 {
             asc.pce = Some(ProgramConfig {
                 element_instance_tag: 0,
