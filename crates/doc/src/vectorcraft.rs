@@ -21,7 +21,7 @@ use craft_vectorcraft_format::{BLOB_MAGIC, Head, Image, is_compressed};
 use flate2::read::GzDecoder;
 use serde::Deserialize;
 
-use crate::{Budget, Error, Kind, Layer, Outline, Page, Rendition, RenditionKind, malformed, parse, parse_versioned, too_new};
+use crate::{Budget, Error, Kind, Layer, Outline, Page, Rendition, RenditionKind, counted, malformed, parse, parse_versioned, too_new};
 
 /// Bytes decompressed at a time.
 const CHUNK: u64 = 64 << 10;
@@ -190,23 +190,22 @@ pub(crate) fn renditions(bytes: &[u8], budget: &mut Budget) -> Result<Vec<Rendit
     let Unpacked { json, mut tail } = unpack(bytes, budget)?;
     stamp(&json, budget, false)?;
     let head: Head = parse(&json, budget.limits)?;
-    let members: Vec<_> =
-        [(RenditionKind::Thumbnail, head.preview, "preview", "image/png"), (RenditionKind::Pdf, head.pdf, "PDF", "application/pdf")]
-            .into_iter()
-            .filter_map(|(kind, m, what, mime)| Some((kind, m?, what, mime)))
-            .collect();
+    // A member without a MIME type gives no rendition: a preview may be PNG or JPEG.
+    let members: Vec<_> = [(RenditionKind::Thumbnail, head.preview, "preview"), (RenditionKind::Pdf, head.pdf, "PDF")]
+        .into_iter()
+        .filter_map(|(kind, m, what)| Some((kind, m.filter(|m| !m.mime.is_empty())?, what)))
+        .collect();
     // Every size is checked before any data after the JSON is decompressed.
     let mut end = 0u64;
-    for (_, m, what, _) in &members {
+    for (_, m, what) in &members {
         end = end.max(take(m, budget, what)?.unwrap_or(0));
     }
     let tail = if end > 0 { tail.up_to(end, budget)? } else { &[] };
     members
         .into_iter()
-        .map(|(kind, m, what, mime)| {
+        .map(|(kind, m, what)| {
             let bytes = entry_bytes(&m, tail, what)?;
-            let mime = if m.mime.is_empty() { mime.to_string() } else { m.mime };
-            Ok(Rendition { kind, mime, bytes })
+            Ok(Rendition { kind, mime: m.mime, bytes })
         })
         .collect()
 }
@@ -218,10 +217,10 @@ struct WithDocument {
 
 #[derive(Deserialize)]
 struct DocM {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "counted")]
     artboards: Vec<ArtboardM>,
     /// Bottom first.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "counted")]
     layers: Vec<NodeM>,
 }
 

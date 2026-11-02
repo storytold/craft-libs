@@ -125,6 +125,8 @@ fn a_pcraft_manifest_with_a_repeated_member_or_a_late_newer_version_is_refused()
 fn a_vectorcraft_member_without_a_mime_type_is_skipped() {
     let file = vectorcraft_json(4, &format!(r#""preview":{{"data":"{}"}}"#, base64(&png(1, 1, 0))));
     assert!(renditions(file.as_bytes(), &limits()).unwrap().is_empty());
+    let empty = vectorcraft_json(4, &format!(r#""preview":{},"pdf":{}"#, inline("", &png(1, 1, 0)), inline("", PDF)));
+    assert!(renditions(empty.as_bytes(), &limits()).unwrap().is_empty());
 }
 
 #[test]

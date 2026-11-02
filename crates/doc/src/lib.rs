@@ -29,7 +29,13 @@ mod pcraft;
 mod vectorcraft;
 mod zip;
 
-use serde::de::DeserializeOwned;
+use std::cell::Cell;
+use std::collections::BTreeMap;
+use std::fmt;
+use std::marker::PhantomData;
+
+use serde::Deserialize;
+use serde::de::{self, DeserializeOwned, DeserializeSeed, Deserializer, MapAccess, SeqAccess, Visitor};
 
 /// The app that wrote a document.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -125,6 +131,10 @@ pub struct Limits {
     /// Deepest nesting of JSON arrays and objects, at most [`MAX_DEPTH`] (a larger value counts
     /// as [`MAX_DEPTH`]). Default [`MAX_DEPTH`].
     pub max_depth: u32,
+    /// Most list elements one call reads, together: EffectCraft project items and composition
+    /// layers, VectorCraft artboards and layers, and PhotoCraft layers at every level. Each is
+    /// counted before it is read. Default 1,048,576.
+    pub max_items: u64,
 }
 
 /// The deepest JSON nesting any call reads: 400 levels, which holds PhotoCraft's 100 nested
@@ -133,7 +143,7 @@ pub const MAX_DEPTH: u32 = 400;
 
 impl Default for Limits {
     fn default() -> Self {
-        Limits { max_json: 256 << 20, max_entry: 256 << 20, max_total: 1 << 30, max_depth: MAX_DEPTH }
+        Limits { max_json: 256 << 20, max_entry: 256 << 20, max_total: 1 << 30, max_depth: MAX_DEPTH, max_items: 1 << 20 }
     }
 }
 
@@ -155,7 +165,8 @@ pub enum RenditionKind {
 #[non_exhaustive]
 pub struct Rendition {
     pub kind: RenditionKind,
-    /// The MIME type: the one the file gives, else `image/png` or `application/pdf`.
+    /// The MIME type: the one a VectorCraft file gives (a member without one gives no
+    /// rendition), or `image/png` for PhotoCraft's previews.
     pub mime: String,
     pub bytes: Vec<u8>,
 }
@@ -199,7 +210,8 @@ pub struct Page {
     pub y: f64,
     pub width: f64,
     pub height: f64,
-    /// A composition's frame rate and duration; `None` for an artboard.
+    /// A composition's frame rate and duration; `None` for an artboard, and for a composition
+    /// that gives either one without the other.
     pub timing: Option<Timing>,
     /// A composition's layers, bottom first; empty for an artboard.
     pub layers: Vec<Layer>,
@@ -361,10 +373,109 @@ pub(crate) fn check_depth(json: &[u8], max: u32) -> Result<(), Error> {
     Ok(())
 }
 
+thread_local! {
+    /// The elements [`counted`] lists may still read in the current [`parse`], and whether a
+    /// list went past them.
+    static ITEMS: Cell<(u64, bool)> = const { Cell::new((u64::MAX, false)) };
+}
+
+/// Run `f` with `max` elements for [`counted`] lists; when `f` fails after a list went past
+/// them, the error is [`Error::LimitExceeded`].
+fn counting<T>(max: u64, f: impl FnOnce() -> Result<T, Error>) -> Result<T, Error> {
+    let saved = ITEMS.with(|c| c.replace((max, false)));
+    let r = f();
+    let (_, over) = ITEMS.with(|c| c.replace(saved));
+    match r {
+        Err(_) if over => Err(Error::LimitExceeded(format!("the file lists more than max_items ({max}) items, layers and pages"))),
+        r => r,
+    }
+}
+
+/// Count one list element against [`Limits::max_items`].
+fn take_item<E: de::Error>() -> Result<(), E> {
+    ITEMS.with(|c| match c.get().0.checked_sub(1) {
+        Some(left) => {
+            c.set((left, false));
+            Ok(())
+        }
+        None => {
+            c.set((0, true));
+            Err(E::custom("more than max_items list elements"))
+        }
+    })
+}
+
+/// A `T` read after one element is counted with [`take_item`].
+struct Item<T>(PhantomData<T>);
+
+impl<'de, T: Deserialize<'de>> DeserializeSeed<'de> for Item<T> {
+    type Value = T;
+
+    fn deserialize<D: Deserializer<'de>>(self, d: D) -> Result<T, D::Error> {
+        take_item()?;
+        T::deserialize(d)
+    }
+}
+
+/// A list read by [`parse`] (as `#[serde(deserialize_with = "counted")]`), each element counted
+/// against [`Limits::max_items`] before it is read.
+pub(crate) fn counted<'de, D: Deserializer<'de>, T: Deserialize<'de>>(d: D) -> Result<Vec<T>, D::Error> {
+    struct List<T>(PhantomData<T>);
+    impl<'de, T: Deserialize<'de>> Visitor<'de> for List<T> {
+        type Value = Vec<T>;
+
+        fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            f.write_str("a list")
+        }
+
+        fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Vec<T>, A::Error> {
+            let mut out = Vec::new();
+            while let Some(v) = seq.next_element_seed(Item(PhantomData))? {
+                out.push(v);
+            }
+            Ok(out)
+        }
+    }
+    d.deserialize_seq(List(PhantomData))
+}
+
+/// [`counted`] for a list that may be `null`.
+pub(crate) fn counted_option<'de, D: Deserializer<'de>, T: Deserialize<'de>>(d: D) -> Result<Option<Vec<T>>, D::Error> {
+    struct Counted<T>(Vec<T>);
+    impl<'de, T: Deserialize<'de>> Deserialize<'de> for Counted<T> {
+        fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+            counted(d).map(Counted)
+        }
+    }
+    Ok(Option::<Counted<T>>::deserialize(d)?.map(|c| c.0))
+}
+
+/// [`counted`] for a map, each value counted before it is read.
+pub(crate) fn counted_map<'de, D: Deserializer<'de>, T: Deserialize<'de>>(d: D) -> Result<BTreeMap<String, T>, D::Error> {
+    struct Map<T>(PhantomData<T>);
+    impl<'de, T: Deserialize<'de>> Visitor<'de> for Map<T> {
+        type Value = BTreeMap<String, T>;
+
+        fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            f.write_str("a map")
+        }
+
+        fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<BTreeMap<String, T>, A::Error> {
+            let mut out = BTreeMap::new();
+            while let Some(k) = map.next_key::<String>()? {
+                let v = map.next_value_seed(Item(PhantomData))?;
+                out.insert(k, v);
+            }
+            Ok(out)
+        }
+    }
+    d.deserialize_map(Map(PhantomData))
+}
+
 /// Parse one JSON value of type `T` from `json`, after checking its nesting against the limits.
 pub(crate) fn parse<T: DeserializeOwned>(json: &[u8], limits: &Limits) -> Result<T, Error> {
     check_depth(json, limits.max_depth)?;
-    parse_checked(json).map_err(malformed)
+    counting(limits.max_items, || parse_checked(json).map_err(malformed))
 }
 
 /// Parse JSON whose nesting [`check_depth`] has accepted.
@@ -389,9 +500,11 @@ struct Version {
 /// newer format may change what `T` expects.
 pub(crate) fn parse_versioned<T: DeserializeOwned>(json: &[u8], limits: &Limits, kind: Kind) -> Result<T, Error> {
     check_depth(json, limits.max_depth)?;
-    parse_checked(json).map_err(|e| match parse_checked::<Version>(json) {
-        Ok(v) if v.version > kind.supported_version() => too_new(kind, v.version),
-        _ => malformed(e),
+    counting(limits.max_items, || {
+        parse_checked(json).map_err(|e| match parse_checked::<Version>(json) {
+            Ok(v) if v.version > kind.supported_version() => too_new(kind, v.version),
+            _ => malformed(e),
+        })
     })
 }
 
@@ -412,7 +525,7 @@ mod tests {
 
     #[test]
     fn the_budget_refuses_past_its_limits() {
-        let limits = Limits { max_json: 10, max_entry: 5, max_total: 8, max_depth: 4 };
+        let limits = Limits { max_json: 10, max_entry: 5, max_total: 8, max_depth: 4, max_items: 2 };
         let mut b = Budget::new(&limits);
         assert!(b.take_entry(6, "x").is_err());
         assert!(b.take_entry(5, "x").is_ok());

@@ -180,6 +180,38 @@ fn json_nested_past_max_depth_is_refused() {
 }
 
 #[test]
+fn lists_past_max_items_are_refused() {
+    let with_max = |n: u64| {
+        let mut l = Limits::default();
+        l.max_items = n;
+        l
+    };
+    // Four project items and two layers; layers of `{}` count as well.
+    let ec = ecproj(2);
+    assert_eq!(outline(ec.as_bytes(), &with_max(6)).unwrap().pages.len(), 2);
+    assert!(limit_exceeded(outline(ec.as_bytes(), &with_max(5))));
+    let empty = ec.replacen(r#""layers": []"#, &format!(r#""layers": [{}{{}}]"#, "{},".repeat(9)), 1);
+    assert_eq!(outline(empty.as_bytes(), &with_max(16)).unwrap().pages[0].layers.len(), 10);
+    assert!(limit_exceeded(outline(empty.as_bytes(), &with_max(15))));
+    let null = ec.replacen(r#""layers": []"#, r#""layers": null"#, 1);
+    assert!(outline(null.as_bytes(), &with_max(6)).unwrap().pages[0].layers.is_empty());
+    // Two artboards and two layers.
+    let vc = vectorcraft_json(4, "");
+    assert_eq!(outline(vc.as_bytes(), &with_max(4)).unwrap().layers.len(), 2);
+    assert!(limit_exceeded(outline(vc.as_bytes(), &with_max(3))));
+    // An element past the limit is refused before it is read.
+    let bad = vc.replacen(r#""artboards":["#, r#""artboards":[{"rect":0},"#, 1);
+    assert!(matches!(outline(bad.as_bytes(), &with_max(4)), Err(Error::Malformed(_))));
+    assert!(limit_exceeded(outline(bad.as_bytes(), &with_max(0))));
+    // A group and its one layer.
+    let leaf = pcraft_layer("Leaf", true, "Normal", 1.0, raster());
+    let group = pcraft_layer("G", true, "Normal", 1.0, &format!(r#"{{"kind":"group","expanded":false,"children":[{leaf}]}}"#));
+    let pc = zip(&[store("manifest.json", pcraft_manifest(1, &format!("[{group}]"), "").as_bytes())]);
+    assert_eq!(outline(&pc, &with_max(2)).unwrap().layers[0].children.len(), 1);
+    assert!(limit_exceeded(outline(&pc, &with_max(1))));
+}
+
+#[test]
 fn only_the_json_of_a_compressed_file_is_counted_when_no_member_follows_it() {
     let mut file = vectorcraft_json(4, "").into_bytes();
     let json_len = file.len() as u64;

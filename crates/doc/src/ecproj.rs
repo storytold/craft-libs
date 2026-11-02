@@ -15,7 +15,7 @@ use std::collections::BTreeMap;
 use craft_ecproj_format::{Head, ReadError};
 use serde::Deserialize;
 
-use crate::{Budget, Error, Kind, Layer, Outline, Page, Rendition, Timing, check_depth, malformed, parse, too_new};
+use crate::{Budget, Error, Kind, Layer, Outline, Page, Rendition, Timing, check_depth, counted_map, counted_option, malformed, parse, too_new};
 
 /// EffectCraft's time unit.
 const TICKS_PER_SECOND: f64 = 254_016_000_000.0;
@@ -116,7 +116,7 @@ pub(crate) fn renditions(bytes: &[u8], budget: &mut Budget) -> Result<Vec<Rendit
 
 #[derive(Deserialize)]
 struct Project {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "counted_map")]
     items: BTreeMap<String, ItemM>,
 }
 
@@ -144,7 +144,7 @@ struct ItemKindM {
     #[serde(default)]
     duration: Option<i64>,
     /// A composition's layers, the top one first.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "counted_option")]
     layers: Option<Vec<LayerM>>,
 }
 
@@ -195,10 +195,10 @@ pub(crate) fn outline(bytes: &[u8], budget: &mut Budget) -> Result<Outline, Erro
             let (Some(width), Some(height)) = (k.width, k.height) else {
                 return Err(malformed(format!("composition `{}` has no size", i.name)));
             };
-            let timing = k.frame_rate.map(|r| Timing {
+            let timing = k.frame_rate.zip(k.duration).map(|(r, duration)| Timing {
                 frame_rate_num: r.num,
                 frame_rate_den: r.den,
-                duration_seconds: k.duration.unwrap_or(0) as f64 / TICKS_PER_SECOND,
+                duration_seconds: duration as f64 / TICKS_PER_SECOND,
             });
             let layers = k
                 .layers

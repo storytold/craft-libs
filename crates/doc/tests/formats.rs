@@ -248,6 +248,14 @@ fn ecproj_has_no_renditions_and_lists_its_comps() {
 }
 
 #[test]
+fn an_ecproj_comp_without_a_duration_has_no_timing() {
+    let p = ecproj(2).replacen(r#""duration": 254016000000, "#, "", 1);
+    let o = outline(p.as_bytes(), &limits()).unwrap();
+    assert_eq!((o.pages[0].name.as_str(), o.pages[0].timing), ("Intro", None));
+    assert!(o.pages[1].timing.is_some());
+}
+
+#[test]
 fn kinds_name_their_extension_and_version() {
     assert_eq!(
         [Kind::PhotoCraft, Kind::VectorCraft, Kind::EffectCraft].map(|k| (k.extension(), k.supported_version())),

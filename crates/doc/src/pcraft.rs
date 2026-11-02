@@ -8,7 +8,7 @@ use serde::Deserialize;
 use serde::de::{DeserializeOwned, IgnoredAny};
 
 use crate::zip::{Zip, local_names_include};
-use crate::{Budget, Canvas, Error, Kind, Layer, MAX_DEPTH, Outline, Rendition, RenditionKind, malformed, parse, parse_versioned, too_new};
+use crate::{Budget, Canvas, Error, Kind, Layer, MAX_DEPTH, Outline, Rendition, RenditionKind, counted, malformed, parse, parse_versioned, too_new};
 
 pub(crate) fn sniff(head: &[u8]) -> bool {
     head.starts_with(b"PK\x03\x04") && (local_names_include(head, MANIFEST) || Zip::open(head).is_ok_and(|z| z.find(MANIFEST).is_some()))
@@ -108,6 +108,7 @@ struct DocM {
     mode: String,
     depth: String,
     /// Bottom to top.
+    #[serde(deserialize_with = "counted")]
     layers: Vec<LayerM>,
 }
 
@@ -129,7 +130,7 @@ struct LayerM {
 #[derive(Deserialize)]
 struct ContentM {
     kind: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "counted")]
     children: Vec<LayerM>,
 }
 
