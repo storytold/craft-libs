@@ -327,6 +327,8 @@ pub(crate) fn suggest_in(d: &AffixDict, word: &str, max: usize, t: &Tuning) -> V
         };
         // A KEEPCASE word only exists in its dictionary case: `Km` would be flagged, so offer `km`.
         let t = if recased != text && text.split(' ').any(|p| d.case_locked(p)) { text } else { recased };
+        // Shown as the dictionary's OCONV table writes it (`'` → `’` in French).
+        let t = d.output(&t).into_owned();
         if t != word && !out.contains(&t) {
             out.push(t);
         }
@@ -516,6 +518,50 @@ fn scan(col: &mut Collector, chars: &[char], map: &[Vec<char>]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// craft-libs#489 review repros: OCONV applies to a suggestion after its case is set, case
+    /// sensitively, as the hunspell 1.7.5 CLI answers on the same files (`KBT` → `KAT`, not
+    /// `K’T`), and every suggestion is right.
+    #[test]
+    fn oconv_suggestions_match_hunspell() {
+        type Case = (&'static str, &'static str, &'static [(&'static str, &'static str)]);
+        let cases: &[Case] = &[
+            ("SET UTF-8\nTRY ab\nOCONV 1\nOCONV a ’\n", "1\nkat\n", &[("kbt", "k’t"), ("Kbt", "K’t"), ("KBT", "KAT"), ("kot", "k’t")]),
+            ("SET UTF-8\nTRY ab\nOCONV 1\nOCONV k q\n", "1\nkat\n", &[("kbt", "qat"), ("Kbt", "Kat"), ("KBT", "KAT"), ("kot", "qat")]),
+            (
+                "SET UTF-8\nTRY esianrtolcdugmphbyfvkwz'\nICONV 1\nICONV ’ '\nOCONV 1\nOCONV ' ’\nSFX S Y 1\nSFX S 0 's .\n",
+                "2\ncolour/S\ndon't\n",
+                &[("dont", "don’t"), ("DONT", "DON’T"), ("colours", "colour’s")],
+            ),
+        ];
+        for (aff, dic, words) in cases {
+            let d = AffixDict::from_hunspell(aff, dic, &[]).unwrap();
+            for (word, want) in *words {
+                let got = suggest_in(&d, word, 8, &Tuning::DEFAULT);
+                assert!(got.iter().any(|g| g == want), "{word}: {got:?}, want {want}");
+                for g in &got {
+                    assert!(d.check(g) || !aff.contains("ICONV"), "{word} → {g} is not right");
+                }
+            }
+        }
+    }
+
+    /// craft-libs#489 review: 65,536 ICONV pairs on one first character cost one hash lookup per
+    /// prefix, not a scan of the table, per position of a long word and per suggestion.
+    #[test]
+    fn a_huge_conversion_table_on_one_character_stays_fast() {
+        let mut aff = String::from("SET UTF-8\nTRY abc\nICONV 65536\n");
+        let a60 = "a".repeat(60);
+        for c in (0x100u32..).filter_map(char::from_u32).take(65_536) {
+            aff.push_str(&format!("ICONV {a60}{c} x\n"));
+        }
+        let d = AffixDict::from_hunspell(&aff, "1\nabc\n", &[]).unwrap();
+        let t = std::time::Instant::now();
+        assert!(!d.check(&"a".repeat(470)));
+        let _ = suggest_in(&d, "abd", 4, &Tuning::DEFAULT);
+        let _ = suggest_in(&d, &"a".repeat(40), 4, &Tuning::DEFAULT);
+        assert!(t.elapsed().as_secs() < 5, "{:?}", t.elapsed());
+    }
 
     #[test]
     fn an_extra_trailing_letter_is_dropped_before_a_short_word_split() {

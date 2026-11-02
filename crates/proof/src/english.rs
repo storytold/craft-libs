@@ -10,7 +10,8 @@
 //!    right; never one only another English knows. When it is there, the system locations aren't
 //!    searched.
 //! 4. **System Hunspell**: a pair for the run's own English in the system locations (none on the
-//!    web).
+//!    web). `COMPOUNDRULE` (ordinals) and `OCONV` are read; flag-based compounding is ignored
+//!    ([`crate::hunspell::load_english`]).
 //! 5. **Built-in word list**: [`WORDS`], the whole public-domain Moby word list compiled into
 //!    the crate (without its break points), with WordCraft's own supplement of modern words
 //!    ([`EXTRA`]) and the usual inflections. A word it doesn't know is misspelled. (The Moby list
@@ -21,8 +22,8 @@
 //! folder before the next name. Another English's dictionary is never used: it would mark this
 //! English's spellings (`colour` in an `en_US` one). A file that can't be read is skipped for the
 //! next name or folder, and one file is read once for every English that uses it. `COMPOUNDRULE`
-//! (ordinals) is read; flag-based compounding and `OCONV` are ignored
-//! ([`crate::hunspell::load_english`]).
+//! (ordinals) and `OCONV` (suggestions are written as the dictionary says: `don’t`) are read;
+//! flag-based compounding is ignored ([`crate::hunspell::load_english`]).
 //!
 //! Whichever it is, the dialect policy of `en-variants.txt` ([`crate::en_variants`], when it is
 //! embedded) flags the other dialect's spellings and accepts this dialect's spellings of known

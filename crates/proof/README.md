@@ -86,8 +86,9 @@ English spelling uses the first of these that is there; `english_source(lang)` s
    the built-in list, which has both spellings. Each name is looked for in every folder before the
    next name; a file that can't be read is skipped for the next name or folder; one file is read
    once for every English that uses it. `COMPOUNDRULE`, `ONLYINCOMPOUND` and `COMPOUNDMIN`
-   (ordinals such as `21st`) are read; flag-based compounding (`COMPOUNDFLAG`…) and `OCONV` are
-   ignored for English rather than refused. None on the web.
+   (ordinals such as `21st`) are read; flag-based compounding (`COMPOUNDFLAG`…) is ignored for
+   English rather than refused; `OCONV` writes suggestions as the dictionary says (`don’t`), as for
+   every language. None on the web.
 5. **Built-in list:** `data/en-words.dic`, the whole Moby word list (about 165,000 words, 344 KB
    compressed, words only) built into the crate, with `data/en-extra.txt` (WordCraft's supplement
    of modern words, a copy of craft-i18n's) and the inflection rules. A word it doesn't know is

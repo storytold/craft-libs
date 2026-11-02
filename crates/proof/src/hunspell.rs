@@ -226,9 +226,9 @@ pub fn load(aff: &Path, dic: &Path) -> Result<AffixDict, String> {
     AffixDict::from_hunspell(&aff_text, &dic_text, &[source.as_str()])
 }
 
-/// [`load`] for an English dictionary: directives that only matter for other languages
-/// (compounding, output conversion) are ignored rather than refused
-/// ([`AffixDict::from_hunspell_english`]).
+/// [`load`] for an English dictionary: flag-based compounding (`COMPOUNDFLAG`…), which this engine
+/// does not implement, is ignored rather than refused ([`AffixDict::from_hunspell_english`]); `OCONV`
+/// is applied to suggestions, as for every language.
 pub fn load_english(aff: &Path, dic: &Path) -> Result<AffixDict, String> {
     let (aff_text, dic_text) = decode(&read_capped(aff)?, &read_capped(dic)?)?;
     let source = format!("Hunspell dictionary {}", dic.display());

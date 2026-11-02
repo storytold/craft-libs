@@ -675,13 +675,29 @@ fn suggest_english(word: &str, max: usize, lang: ProofLang) -> Vec<String> {
     }
     let shared = english::suggest(word, max.saturating_add(2), lang);
     for s in shared {
-        let s = english_preferred(&s.to_lowercase(), lang).map_or(s, |p| match_case(word, p));
-        if !out.contains(&s) {
+        let s = in_dialect(&s, word, lang);
+        // `color's` and `color’s` are one suggestion (a dictionary's OCONV writes the second).
+        let key = s.replace('’', "'");
+        if !out.iter().any(|o| o.replace('’', "'") == key) {
             out.push(s);
         }
     }
     out.truncate(max);
     out
+}
+
+/// A suggestion `s` for `word` in `lang`'s spelling. Suggestions come as the dictionary's OCONV
+/// writes them (`colour’s`); the dialect lists use `'`, so the mapping reads `'` and the result
+/// keeps the dictionary's apostrophe (`color’s`).
+fn in_dialect(s: &str, word: &str, lang: ProofLang) -> String {
+    let curly = s.contains('’');
+    match english_preferred(&s.to_lowercase().replace('’', "'"), lang) {
+        Some(p) => {
+            let p = match_case(word, p);
+            if curly { p.replace('\'', "’") } else { p }
+        }
+        None => s.to_string(),
+    }
 }
 
 /// Words in `text`: (byte start, byte end). Combining marks belong to the word they follow, so a
@@ -1066,6 +1082,18 @@ mod tests {
     }
 
     use super::*;
+
+    /// craft-libs#489 review: a suggestion an OCONV table wrote with `’` is still mapped to this
+    /// dialect's spelling (`colour’s` → `color’s` in American English), and keeps its apostrophe.
+    #[test]
+    fn curly_suggestions_are_mapped_to_the_dialect() {
+        if english_preferred("colour's", ProofLang::En).is_none() {
+            return; // no dialect lists without CRAFT_I18N_DIR
+        }
+        assert_eq!(in_dialect("colour’s", "colours", ProofLang::En), "color’s");
+        assert_eq!(in_dialect("colour's", "colours", ProofLang::En), "color's");
+        assert_eq!(in_dialect("colour’s", "colours", ProofLang::EnGb), "colour’s");
+    }
 
     /// The non-English test dictionaries every dictionaries-folder test puts in its folder, so
     /// tests running meanwhile see the same words whichever of those folders is set.
