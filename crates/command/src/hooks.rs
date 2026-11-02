@@ -105,9 +105,29 @@ impl Call {
 pub trait Interceptor<S>: Send + Sync {
     fn interest(&self) -> &Interest;
 
+    /// A gate reads the call and answers with a [`Verdict`]. It gets `&Call` so it cannot edit the
+    /// params, id, origin or depth in place. A change reaches the call only as
+    /// [`Verdict::Rewrite`], and the hook layer drops that verdict when the gate panics or overruns
+    /// its budget. A gate that edits the call does not compile:
+    ///
+    /// ```compile_fail
+    /// use craft_command::{Call, Interceptor, Interest, Verdict};
+    ///
+    /// struct Edit(Interest);
+    /// impl Interceptor<()> for Edit {
+    ///     fn interest(&self) -> &Interest {
+    ///         &self.0
+    ///     }
+    ///     fn before(&self, _session: &mut (), call: &Call) -> Verdict {
+    ///         call.params = serde_json::Value::Null;
+    ///         Verdict::Pass
+    ///     }
+    /// }
+    /// ```
+    ///
     /// `session` is the app session, borrowed mutably so a gate can lend it to code that must reach
     /// it during the call (a plugin host call such as `cmd.execute` or `doc.query`).
-    fn before(&self, _session: &mut S, _call: &mut Call) -> Verdict {
+    fn before(&self, _session: &mut S, _call: &Call) -> Verdict {
         Verdict::Pass
     }
 
@@ -332,6 +352,7 @@ impl<S> Hooks<S> {
     /// 6 ms disables that gate, drops its veto or rewrite, and the chain continues as `Pass`. A gate
     /// whose owner has already spent more than 6 ms of the window does not run. It is disabled too.
     /// Time is charged per plugin id, so one owner cannot disable another owner's gates.
+    /// A gate gets `&Call`, so a rewrite reaches the call only as a [`Verdict::Rewrite`] that survives these rules.
     /// The chain fails open, except for a [`Interceptor::security`] gate: it is never timed out and a
     /// panic in it vetoes the command.
     pub fn before(&self, session: &mut S, call: &mut Call, clock: &dyn Clock) -> Verdict {
@@ -557,7 +578,8 @@ impl<S> Hooks<S> {
 
     fn run_before_gate(&self, session: &mut S, call: &mut Call, entry: &Entry<S>, clock: &dyn Clock, started: u64) -> GateStop {
         let interceptor = Arc::clone(&entry.interceptor);
-        let result = std::panic::catch_unwind(AssertUnwindSafe(|| interceptor.before(session, call)));
+        let view: &Call = call;
+        let result = std::panic::catch_unwind(AssertUnwindSafe(|| interceptor.before(session, view)));
         let delta = clock.now_ms().saturating_sub(started);
         let break_reason = self.budget_break(entry, delta);
         match result {

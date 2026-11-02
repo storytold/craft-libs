@@ -71,7 +71,7 @@ impl Interceptor<()> for VetoGate {
         &self.interest
     }
 
-    fn before(&self, _session: &mut (), _call: &mut Call) -> Verdict {
+    fn before(&self, _session: &mut (), _call: &Call) -> Verdict {
         self.befores.fetch_add(1, Ordering::SeqCst);
         Verdict::Veto { reason: "no".to_string(), by: "gate".to_string() }
     }
@@ -93,7 +93,7 @@ impl Interceptor<()> for CountGate {
         &self.interest
     }
 
-    fn before(&self, _session: &mut (), _call: &mut Call) -> Verdict {
+    fn before(&self, _session: &mut (), _call: &Call) -> Verdict {
         self.befores.fetch_add(1, Ordering::SeqCst);
         Verdict::Pass
     }
@@ -150,7 +150,7 @@ impl Interceptor<()> for UnregGate {
         &self.interest
     }
 
-    fn before(&self, _session: &mut (), _call: &mut Call) -> Verdict {
+    fn before(&self, _session: &mut (), _call: &Call) -> Verdict {
         self.befores.fetch_add(1, Ordering::SeqCst);
         assert_eq!(self.hooks.unregister_owner(&self.owner), 1);
         Verdict::Pass
@@ -201,7 +201,7 @@ impl Interceptor<()> for SlowGate {
         &self.interest
     }
 
-    fn before(&self, _session: &mut (), _call: &mut Call) -> Verdict {
+    fn before(&self, _session: &mut (), _call: &Call) -> Verdict {
         self.runs.fetch_add(1, Ordering::SeqCst);
         let started = Instant::now();
         while started.elapsed() < Duration::from_millis(5) {
@@ -242,7 +242,7 @@ impl Interceptor<()> for PanicGate {
         &self.interest
     }
 
-    fn before(&self, _session: &mut (), _call: &mut Call) -> Verdict {
+    fn before(&self, _session: &mut (), _call: &Call) -> Verdict {
         self.runs.fetch_add(1, Ordering::SeqCst);
         panic!("gate blew up");
     }
@@ -278,7 +278,7 @@ impl Interceptor<()> for OrderGate {
         &self.interest
     }
 
-    fn before(&self, _session: &mut (), _call: &mut Call) -> Verdict {
+    fn before(&self, _session: &mut (), _call: &Call) -> Verdict {
         self.log.lock().expect("log").push(format!("b:{}", self.name));
         Verdict::Pass
     }
@@ -314,7 +314,7 @@ impl Interceptor<()> for NameGate {
         &self.interest
     }
 
-    fn before(&self, _session: &mut (), _call: &mut Call) -> Verdict {
+    fn before(&self, _session: &mut (), _call: &Call) -> Verdict {
         self.log.lock().expect("log").push(self.name);
         Verdict::Pass
     }
@@ -351,7 +351,7 @@ impl Interceptor<()> for TickGate {
         &self.interest
     }
 
-    fn before(&self, _session: &mut (), _call: &mut Call) -> Verdict {
+    fn before(&self, _session: &mut (), _call: &Call) -> Verdict {
         self.runs.fetch_add(1, Ordering::SeqCst);
         self.clock.0.fetch_add(self.add_ms, Ordering::SeqCst);
         if self.veto { Verdict::Veto { reason: "frame".to_string(), by: "tick".to_string() } } else { Verdict::Pass }
@@ -605,7 +605,7 @@ impl Interceptor<()> for SeeOriginGate {
         &self.interest
     }
 
-    fn before(&self, _session: &mut (), call: &mut Call) -> Verdict {
+    fn before(&self, _session: &mut (), call: &Call) -> Verdict {
         self.seen.lock().expect("seen").push(call.origin);
         Verdict::Pass
     }
@@ -633,7 +633,7 @@ impl Interceptor<u32> for CountSession {
         &self.interest
     }
 
-    fn before(&self, session: &mut u32, _call: &mut Call) -> Verdict {
+    fn before(&self, session: &mut u32, _call: &Call) -> Verdict {
         *session += 1;
         Verdict::Pass
     }
@@ -765,7 +765,7 @@ impl Interceptor<()> for Secure {
         true
     }
 
-    fn before(&self, _session: &mut (), _call: &mut Call) -> Verdict {
+    fn before(&self, _session: &mut (), _call: &Call) -> Verdict {
         self.clock.0.fetch_add(self.add_ms, Ordering::SeqCst);
         assert!(!self.panics, "boom");
         Verdict::Pass
@@ -790,4 +790,39 @@ fn a_security_gate_is_never_timed_out_and_a_panic_in_it_vetoes() {
         assert!(matches!(&verdict, Verdict::Veto { reason, .. } if reason.contains("security gate failed")), "{verdict:?}");
     }
     assert_eq!(hooks.disable_reason(broken), None, "a failing security gate fails closed, it is not switched off");
+}
+
+#[test]
+fn change_bus_queue_is_bounded_for_a_stalled_subscriber() {
+    let hooks = Hooks::<()>::new();
+    let bus = hooks.change_bus::<u32>();
+    let stalled = bus.subscribe();
+    for revision in 0..1000u32 {
+        hooks.changed(u64::from(revision), Cause::Untracked, false, revision);
+    }
+    let drained = bus.drain(stalled);
+    assert!(drained.len() <= 256, "a subscriber that never drained holds {} snapshots", drained.len());
+    assert_eq!(drained.last().map(|change| change.snapshot), Some(999), "the newest change is kept");
+
+    for revision in 0..300u32 {
+        hooks.changed(u64::from(revision), Cause::Untracked, false, revision);
+    }
+    let (changes, lost) = bus.drain_with_lost(stalled);
+    assert_eq!((changes.len(), lost), (256, 44));
+    assert_eq!(bus.drain_with_lost(stalled), (Vec::new(), 0), "the lost count is consumed by drain");
+}
+
+#[test]
+fn observer_coalesce_window_survives_a_drain() {
+    let queue = ObserverQueue::new();
+    let clock = ManualClock(AtomicU64::new(0));
+    let sub = queue.subscribe(Some(100));
+    queue.push("drag", Origin::Ui, &clock);
+    assert_eq!(queue.drain(sub).len(), 1);
+    clock.0.store(10, Ordering::SeqCst);
+    queue.push("drag", Origin::Ui, &clock);
+    assert!(queue.drain(sub).is_empty(), "a push inside the window is coalesced even after a drain");
+    clock.0.store(100, Ordering::SeqCst);
+    queue.push("drag", Origin::Ui, &clock);
+    assert_eq!(queue.drain(sub).len(), 1, "a push after the window is recorded");
 }
