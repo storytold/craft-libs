@@ -15,6 +15,7 @@ use std::time::Duration;
 use crate::dialog::{StartupPrompt, StartupPromptResponse};
 use crate::pins::{Choice, Pins};
 use crate::release::Release;
+use crate::translate::{Translate, english};
 use crate::{App, Http, Paths, Platform, Stop, check_for_update, self_update};
 
 /// Asks for the newest release (blocking; it runs on its own thread). Tests stand in for the network
@@ -65,6 +66,8 @@ pub struct Updater {
     pins_path: Option<PathBuf>,
     /// The launcher's choice for this app when it is not stable, as of the last check or offer.
     managed: Option<Choice>,
+    /// Puts the prompt and its messages in the interface language ([`crate::translate`]).
+    translate: Translate,
 }
 
 impl Updater {
@@ -85,7 +88,26 @@ impl Updater {
             installed: false,
             pins_path: None,
             managed: None,
+            translate: english,
         }
+    }
+
+    /// Words the startup prompt and the messages it shows with `translate`, in the app's
+    /// interface language ([`crate::translate`]). Errors from the network stay as they came.
+    #[must_use]
+    pub fn with_translator(mut self, translate: Translate) -> Self {
+        self.translate = translate;
+        self
+    }
+
+    /// The startup prompt for `release`, in the interface language.
+    fn prompt_for(&self, release: Release) -> StartupPrompt {
+        StartupPrompt::new(self.app, release, self.version.clone()).with_translator(self.translate)
+    }
+
+    /// "The update is installed…", in the interface language.
+    fn installed_message(&self) -> String {
+        (self.translate)("The update is installed. Close {app} to finish; it restarts by itself.", &[("app", self.app.name)])
     }
 
     /// Replaces the network with `source` (tests).
@@ -142,7 +164,7 @@ impl Updater {
     /// Opens the startup prompt for a release the app found itself.
     pub fn offer(&mut self, release: Release) {
         if self.install.is_none() && !self.installed && !self.read_choice() {
-            self.prompt = Some(StartupPrompt::new(self.app, release, self.version.clone()));
+            self.prompt = Some(self.prompt_for(release));
         }
     }
 
@@ -211,7 +233,7 @@ impl Updater {
             Ok(Some(release)) => {
                 self.status = Status::Idle;
                 if self.prompt.is_none() && self.install.is_none() && !self.installed {
-                    self.prompt = Some(StartupPrompt::new(self.app, release, self.version.clone()));
+                    self.prompt = Some(self.prompt_for(release));
                 }
             }
             Ok(None) => self.status = if requested { Status::UpToDate } else { Status::Idle },
@@ -253,10 +275,10 @@ impl Updater {
                     Ok(()) => {
                         self.installed = true;
                         self.restart = true;
+                        let message = self.installed_message();
                         if let Some(prompt) = &mut self.prompt {
                             prompt.is_installing = false;
-                            prompt.status_message =
-                                Some(format!("The update is installed. Close {} to finish; it restarts by itself.", self.app.name));
+                            prompt.status_message = Some(message);
                         }
                     }
                     Err(e) => {
@@ -265,7 +287,7 @@ impl Updater {
                         if self.prompt.is_none()
                             && let Some(release) = release
                         {
-                            self.prompt = Some(StartupPrompt::new(self.app, release, self.version.clone()));
+                            self.prompt = Some(self.prompt_for(release));
                         }
                         if let Some(prompt) = &mut self.prompt {
                             prompt.is_installing = false;
@@ -316,7 +338,7 @@ impl Updater {
         if can_start {
             self.start_install(ctx);
         } else if let Some(prompt) = &mut self.prompt {
-            prompt.status_message = Some("Save or close your open work first; the update restarts the app.".into());
+            prompt.status_message = Some((self.translate)("Save or close your open work first; the update restarts the app.", &[]));
         }
     }
 
@@ -325,13 +347,14 @@ impl Updater {
         if self.install.is_none() && !self.installed && self.read_choice() {
             return;
         }
+        let (installed_message, t) = (self.installed_message(), self.translate);
         let Some(prompt) = &mut self.prompt else { return };
         if self.installed {
-            prompt.status_message = Some(format!("The update is installed. Close {} to finish; it restarts by itself.", self.app.name));
+            prompt.status_message = Some(installed_message);
             return;
         }
         let Some(installed) = self_update::current(self.app) else {
-            prompt.status_message = Some("Cannot auto-update this installation type. Please download manually.".into());
+            prompt.status_message = Some(t("Cannot auto-update this installation type. Please download manually.", &[]));
             prompt.is_installing = false;
             return;
         };
