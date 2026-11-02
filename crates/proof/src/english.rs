@@ -98,6 +98,15 @@ fn names(lang: ProofLang) -> &'static [&'static str] {
     }
 }
 
+/// The names [`names`] gives that outrank the dialect's own embedded SCOWL dictionary: its own pair
+/// only, not Australian English's British fallback (a user's `en_GB` is for British text).
+fn own_names(lang: ProofLang) -> &'static [&'static str] {
+    match lang {
+        ProofLang::EnAu => &["en_AU", "en-AU"],
+        _ => names(lang),
+    }
+}
+
 /// How many Englishes have a slot of their own ([`slot`]).
 const ENGLISHES: usize = 4;
 
@@ -206,7 +215,7 @@ fn key(lang: ProofLang) -> &'static str {
 /// would rather use), for [`note_error`].
 fn load(lang: ProofLang) -> (Loaded, Option<(PathBuf, String)>) {
     let candidates = if crate::scowl::dict(lang).is_some() {
-        crate::hunspell::user_candidates(names(lang))
+        crate::hunspell::user_candidates(own_names(lang))
     } else {
         crate::hunspell::candidates_exact(names(lang))
     };
@@ -651,6 +660,14 @@ mod tests {
         std::fs::write(dir.join("en_AU.aff"), "SET UTF-8\n").unwrap();
         std::fs::write(dir.join("en_AU.dic"), "1\nzzyzx\n").unwrap();
         assert_eq!(found(names(ProofLang::EnAu)), ["en_AU", "en_GB"]);
+        // craft-libs#496 review: with SCOWL embedded, a user's en_GB must not outrank its en-AU.
+        assert_eq!(found(own_names(ProofLang::EnAu)), ["en_AU"]);
+        std::fs::remove_file(dir.join("en_AU.aff")).unwrap();
+        std::fs::remove_file(dir.join("en_AU.dic")).unwrap();
+        assert!(found(own_names(ProofLang::EnAu)).is_empty(), "an en_GB alone is not Australian English's own");
+        for lang in [ProofLang::En, ProofLang::EnGb, ProofLang::EnCa] {
+            assert_eq!(own_names(lang), names(lang));
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 
