@@ -64,7 +64,9 @@ pub(crate) fn is_british(lang: ProofLang) -> bool {
 /// Why `lang`'s embedded SCOWL dictionary failed to load, once something tried to load it.
 pub(crate) fn load_error(lang: ProofLang) -> Option<String> {
     let (i, ..) = source(lang);
-    DICTS.get(i)?.get()?.as_ref().err().map(|e| format!("embedded SCOWL dictionary: {e}"))
+    let own = DICTS.get(i).and_then(|d| d.get()).and_then(|r| r.as_ref().err()).map(|e| format!("embedded SCOWL dictionary: {e}"));
+    // Australian English also reads the en-GB list (`crate::english`): its failure is reported too.
+    own.or_else(|| if lang == ProofLang::EnAu { load_error(ProofLang::EnGb).map(|e| format!("{e} (en-GB, also read for en-AU)")) } else { None })
 }
 
 /// The SCOWL copyright and licence notices (the upstream README, with the Ispell BSD licence of
