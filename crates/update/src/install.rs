@@ -90,7 +90,7 @@ pub fn install_at(
         return Err(format!("Cannot update {} to {}: installed version {} is newer", app.name, release.version_label(), inst_v));
     }
     log::info!("{}: starting {} to {} ({})", app.name, if existing.is_some() { "update" } else { "install" }, release.version_label(), kind.label());
-    #[cfg(all(target_os = "linux", feature = "experimental-oci-migration"))]
+    #[cfg(all(target_os = "linux", feature = "oci_migration"))]
     if kind == PackageKind::Flatpak
         && !job.replace
         && !release.prerelease
@@ -1011,8 +1011,8 @@ pub mod linux {
         root.queue.alone(&cancelled(stop), &mut turn(phase, JobPhase::Installing), install_one).unwrap_or(Err(CANCELLED.into()))
     }
 
-    /// Experimental in-place migration; only an absent ref permits bundle fallback.
-    #[cfg(feature = "experimental-oci-migration")]
+    /// Opt-in OCI migration; only an absent ref permits bundle fallback.
+    #[cfg(feature = "oci_migration")]
     pub fn migrate_bundle_to_oci(app: &App, installed: &Installed, expected: &super::version::Version, stop: &Stop) -> Result<bool, String> {
         if installed.source != InstallSource::Flatpak || installed.externally_managed || !app.repo.starts_with("storytold/") {
             return Ok(false);
