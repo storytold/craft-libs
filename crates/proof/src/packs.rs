@@ -190,8 +190,9 @@ const BUILT_IN_MOBY_NOTICE: &str = "The English word list built into craft-proof
 const EXTRA_EN_NOTICE: &str = "The English word supplement (en-extra.txt), common words the Moby list lacks, is written by \
 WordCraft contributors and licensed MIT OR Apache-2.0.";
 
-/// The locales whose Language data is embedded in this build: `en-us`, and by default `de`,
-/// `pl`, `pt`, `it`, `ru` (until Language packs ship, CP4.4); a build with `CRAFT_PROOF_EMBED`
+/// The locales whose upstream Language data is embedded in this build: `en-us`, and by default `de`,
+/// `pl`, `pt`, `it` (until Language packs ship, CP4.4; our own `ru-extra.txt` is embedded but not
+/// listed); a build with `CRAFT_PROOF_EMBED`
 /// embeds English and the ones it names (`en`: English only).
 pub fn embedded_locales() -> &'static [&'static str] {
     crate::data::EMBEDDED_LOCALES

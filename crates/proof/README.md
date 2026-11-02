@@ -79,7 +79,7 @@ pub fn packs_dir() -> Option<PathBuf>;                 // ＋
 pub fn installed() -> Vec<InstalledPack>;              // InstalledPack { locale, name, licence, path }, by locale
 pub fn licence_texts() -> Vec<(String, String)>;       // (title, text): embedded English notices, then each pack's LICENCES/*
 pub fn load_errors() -> Vec<(String, String)>;         // ＋ (locale or folder, reason): packs skipped, pattern files that failed
-pub fn embedded_locales() -> &'static [&'static str];  // ＋ what this build embeds ("en-us", "de", "pl", "pt", "it", "ru" by default; "en-us" with CRAFT_PROOF_EMBED=en)
+pub fn embedded_locales() -> &'static [&'static str];  // ＋ what this build embeds ("en-us", "de", "pl", "pt", "it" by default; "en-us" with CRAFT_PROOF_EMBED=en)
 
 // craft_proof (crate root)
 pub enum ProofLang { …, Pack(PackLocale), Other }      // ＋ Pack: any language without tools of its own (nl, fr, sr-Latn…)
