@@ -171,7 +171,8 @@ fn ends_sentence(gap: &str, prev: &str) -> bool {
     if end != '.' && (rest.contains('—') || after_marks.starts_with(|c| c != '\u{1}' && CLOSING.contains(&c))) {
         return false;
     }
-    rest.starts_with(char::is_whitespace) && rest.trim_start().chars().all(|c| matches!(c, '"' | '“' | '«' | '(' | '[' | '\'' | '—'))
+    rest.starts_with(char::is_whitespace)
+        && rest.trim_start().chars().all(|c| c.is_whitespace() || matches!(c, '"' | '“' | '«' | '(' | '[' | '\'' | '—'))
 }
 
 fn repeated_words(text: &str, ws: &[(usize, usize)], v: &mut Vec<Issue>) {
@@ -419,6 +420,7 @@ mod tests {
         assert!(fixes("Vado a Roma? sì.").contains(&pair("sì", "Sì")), "a bare question still ends the sentence");
         // After a period the dash opens the next line of speech: a sentence starts.
         assert!(fixes("Finì. —domani partiamo.").contains(&pair("domani", "Domani")), "{:?}", fixes("Finì. —domani partiamo."));
+        assert!(fixes("Finì. — domani partiamo.").contains(&pair("domani", "Domani")), "{:?}", fixes("Finì. — domani partiamo."));
         // An inline object (`\u{1}`) is not a closing quote.
         assert!(fixes("Chi era?\u{1} era Marco.").contains(&pair("era", "Era")), "{:?}", fixes("Chi era?\u{1} era Marco."));
     }
