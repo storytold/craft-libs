@@ -226,6 +226,10 @@ fn parse_cond(text: &str) -> Result<Box<[Cond]>, String> {
 
 /// Most affix rules one simple-word check tries, all prefixes and suffix chains together.
 const MAX_SIMPLE_WORK: usize = 1 << 16;
+/// Most affix rules one simple-word check of a suggestion candidate tries.
+const MAX_SUGGEST_SIMPLE_WORK: usize = 1 << 11;
+/// Most affix rules the simple-word checks of one suggestion call try in all.
+const MAX_SUGGEST_STEPS: usize = 1 << 23;
 /// Most homonyms of one stem kept apart ([`AffixDict::homonyms`]); past it their flags count merged.
 const MAX_HOMONYMS: usize = 16;
 /// How many suffixes a word may carry in a row through continuation classes (`work` +
@@ -878,6 +882,30 @@ impl<'a> FlagProbe<'a> {
             FlagProbe::Few(flags) => intersects(set, flags),
             FlagProbe::Many(bits) => set.iter().any(|&f| bits.get(usize::from(f) >> 6).is_some_and(|w| w & (1 << (f & 63)) != 0)),
         }
+    }
+}
+
+// ponytail: a thread-local rather than a parameter through every check path; the guard below
+// restores it, so nested or concurrent calls on other threads don't share it.
+thread_local! {
+    /// Affix rules one suggestion call may still try in its simple-word checks, while it runs
+    /// ([`SuggestSteps`]); `None` outside one.
+    static SUGGEST_STEPS: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+}
+
+/// While alive, the simple-word checks on this thread share [`MAX_SUGGEST_STEPS`] affix rules
+/// (one suggestion call: thousands of candidates can't each spend a full check's budget).
+pub(crate) struct SuggestSteps(Option<usize>);
+
+impl SuggestSteps {
+    pub(crate) fn start() -> SuggestSteps {
+        SuggestSteps(SUGGEST_STEPS.with(|s| s.replace(Some(MAX_SUGGEST_STEPS))))
+    }
+}
+
+impl Drop for SuggestSteps {
+    fn drop(&mut self) {
+        SUGGEST_STEPS.with(|s| s.set(self.0));
     }
 }
 
@@ -1812,10 +1840,23 @@ impl AffixDict {
             return false;
         }
         // The affix rules tried for this word, all ways together: past MAX_SIMPLE_WORK it is
-        // taken for no word (hostile rules can't make one word cost seconds).
-        let steps = Steps(std::cell::Cell::new(MAX_SIMPLE_WORK));
+        // taken for no word (hostile rules can't make one word cost seconds). Inside a
+        // suggestion call the word gets at most MAX_SUGGEST_SIMPLE_WORK of the call's budget.
+        let shared = SUGGEST_STEPS.with(std::cell::Cell::get);
+        let cap = shared.map_or(MAX_SIMPLE_WORK, |left| left.min(MAX_SUGGEST_SIMPLE_WORK));
+        let steps = Steps(std::cell::Cell::new(cap));
+        let found = self.simple_word_in(w, excluded, prefixes, &steps);
+        if let Some(left) = shared {
+            let spent = cap.saturating_sub(steps.0.get()).max(1);
+            SUGGEST_STEPS.with(|s| s.set(Some(left.saturating_sub(spent))));
+        }
+        found
+    }
+
+    /// [`AffixDict::simple_word_with`] in the affix rules `steps` allows.
+    fn simple_word_in(&self, w: &str, excluded: Excluded, prefixes: bool, steps: &Steps) -> bool {
         // A stem that needs an affix is no word on its own.
-        if self.stem_flags_except(w, excluded.and(self.need_affix)).is_some() || self.suffixed(w, None, false, false, excluded, &steps) {
+        if self.stem_flags_except(w, excluded.and(self.need_affix)).is_some() || self.suffixed(w, None, false, false, excluded, steps) {
             return true;
         }
         if !prefixes {
@@ -1833,6 +1874,9 @@ impl AffixDict {
         // that leave the same root alike are answered together, in one walk each.
         let mut taken: Vec<(String, bool, bool, bool, u16)> = Vec::new();
         for r in rules {
+            if !steps.spend(1) {
+                return false;
+            }
             let Some(rest) = w.strip_prefix(&*r.add) else { continue };
             if (rest.is_empty() && !self.full_strip) || self.cont_holds(r, self.only_in_compound) {
                 continue;
@@ -1871,11 +1915,11 @@ impl AffixDict {
                     return true;
                 }
                 plain.retain(|&f| self.is_cont_flag(f));
-                if !plain.is_empty() && self.form_has_flag(root, &plain, INNER_CHAIN, None, excluded, &steps) {
+                if !plain.is_empty() && self.form_has_flag(root, &plain, INNER_CHAIN, None, excluded, steps) {
                     return true;
                 }
             }
-            if !crossed.is_empty() && self.suffixed(root, Some(&FlagProbe::new(&crossed)), *circ, *needs, excluded, &steps) {
+            if !crossed.is_empty() && self.suffixed(root, Some(&FlagProbe::new(&crossed)), *circ, *needs, excluded, steps) {
                 return true;
             }
         }
@@ -2063,9 +2107,11 @@ impl AffixDict {
             return false;
         }
         let ends = lower.char_indices().map(|(i, c)| i + c.len_utf8());
-        ends.filter_map(|b| Some((self.mixed.get(lower.get(..b)?)?, lower.get(b..)?))).any(|(stems, rest)| {
-            stems.iter().take(MAX_HOMONYMS).filter_map(|&i| self.word(i as usize)).any(|m| self.simple_word(&format!("{m}{rest}"), excluded))
-        })
+        // At most MAX_HOMONYMS stems in all are tried, whatever the word's length.
+        ends.filter_map(|b| Some((self.mixed.get(lower.get(..b)?)?, lower.get(b..)?)))
+            .flat_map(|(stems, rest)| stems.iter().filter_map(|&i| self.word(i as usize)).map(move |m| (m, rest)))
+            .take(MAX_HOMONYMS)
+            .any(|(m, rest)| self.simple_word(&format!("{m}{rest}"), excluded))
     }
 
     /// CHECKSHARPS: is `lower` (a word in capitals, lowercased) a word with some of its `ss` read
@@ -3559,6 +3605,32 @@ pub(crate) mod tests {
             let _ = d.check(&"a".repeat(n));
         }
         let _ = d.suggest(&format!("{}x", "a".repeat(39)), 8);
+        assert!(t.elapsed().as_secs() < 10, "{:?}", t.elapsed());
+    }
+
+    #[test]
+    fn suggesting_with_a_long_try_line_shares_one_budget() {
+        // craft-libs#497 review: a thousand one-letter prefixes, 40 chained suffix lengths and
+        // a 128-letter TRY line. Each TRY candidate is a simple-word check; one suggest call
+        // shares one budget between them (17 s in a release build before, 0.06 s after).
+        let mut aff = String::from("SET UTF-8\nFLAG num\nTRY ");
+        aff.extend(('a'..='z').chain((0x100..0x166).filter_map(char::from_u32)));
+        aff.push('\n');
+        for f in 1..=1000u32 {
+            let c = char::from_u32(0x4e00 + f).unwrap();
+            aff.push_str(&format!("PFX {f} Y 1\nPFX {f} {c} 0 .\n"));
+        }
+        let conts: Vec<String> = (0..286).map(|k| (5000 + k * 7).to_string()).collect();
+        for len in 1..=40 {
+            for k in 0..50 {
+                let f = 5000 + (len - 1) * 50 + k;
+                aff.push_str(&format!("SFX {f} Y 1\nSFX {f} 0 {}/{} .\n", "a".repeat(len), conts.join(",")));
+            }
+        }
+        assert_eq!(aff.lines().nth(2).map(|l| l.chars().count()), Some(4 + 128));
+        let d = AffixDict::from_hunspell(&aff, "2\nb/1,5000\nab/2\n", &[]).unwrap();
+        let t = std::time::Instant::now();
+        let _ = d.suggest(&format!("{}x{}", "a".repeat(20), "a".repeat(19)), 8);
         assert!(t.elapsed().as_secs() < 10, "{:?}", t.elapsed());
     }
 

@@ -365,6 +365,8 @@ pub(crate) fn suggest_in(d: &AffixDict, word: &str, max: usize, t: &Tuning) -> V
     if n == 0 || n > MAX_LETTERS || max == 0 || d.is_empty() || word.contains(char::is_whitespace) {
         return Vec::new();
     }
+    // The simple-word checks of this call share one budget of affix rules.
+    let _steps = crate::affix::SuggestSteps::start();
     let case = casing(word);
     let input = word.to_lowercase();
     let chars: Vec<char> = input.chars().collect();
