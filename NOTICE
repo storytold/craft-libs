@@ -200,3 +200,16 @@ https://github.com/storytold/craft-launcher, https://github.com/storytold/photoc
 https://github.com/storytold/filmcraft, https://github.com/storytold/effectcraft.
 Copyright (c) 2026 ArtCraft Team and the respective application and craft-libs contributors.
 All adapted source is licensed MIT OR Apache-2.0.
+
+The Canon CRW decoder in crates/crw (src/lib.rs, src/tables.rs, src/tests.rs, tests/) and its
+derivation record (crates/crw/clean-room/) come from:
+- LightCraft, crates/raw/src/vendor/crw.rs, crates/raw/src/vendor/crw_tables.rs,
+  crates/raw/tests/crw_oracle.rs, crates/raw/tests/it/vendor_robust.rs and clean-room/crw/,
+  https://github.com/storytold/lightcraft/pull/3021, revision 6ca439b5155820d2befeacd81ec0c6a80b2bd3bc
+  (decoder ported at 70c755e42a65661401142819278d51b0c5977f7f; the record is identical at both).
+  https://github.com/storytold/lightcraft
+  Copyright (c) 2026 ArtCraft Team and the LightCraft contributors.
+Its white-level plateau estimate (saturation_plateau) is LightCraft's vendor::white_from_data at the
+same revision. The CRW compression was derived clean-room from CC0 sample files and the
+maintainer's own photographs by black-box comparison with a reference decoder's command-line
+output; no raw-decoder source was consulted (crates/crw/clean-room/sources.md).

@@ -224,3 +224,44 @@ fn labels_show_the_layouts_own_punctuation() {
     assert_eq!(craft_keymap::Trigger::double(chord("[")).display_for(Platform::Linux, &russian), "Х Х");
     assert_eq!(label(&Layout::new(), "Cmd+[", Platform::Linux), "Ctrl+[");
 }
+
+#[test]
+fn the_iso_key_next_to_left_shift_keeps_shift_and_shows_the_layouts_character() {
+    let p = Platform::Windows;
+    // Turkish Q: the key types `<`, and `>` with Shift, which egui reports as the key itself.
+    let plain = at("IntlBackslash", Key::IntlBackslash);
+    let shifted = at("Shift+IntlBackslash", Key::IntlBackslash);
+    let mut turkish = Layout::new();
+    assert_eq!(turkish.resolve(&plain), Some(chord("IntlBackslash")));
+    assert_eq!(turkish.resolve(&shifted), Some(chord("Shift+IntlBackslash")));
+    assert_eq!(texts(&turkish.candidates(&shifted)), ["Shift+IntlBackslash"]);
+    assert_eq!(turkish.resolve(&at("Cmd+IntlBackslash", Key::IntlBackslash)), Some(chord("Cmd+IntlBackslash")));
+    assert!(turkish.matches(&chord("IntlBackslash"), &plain, p));
+    assert!(turkish.matches(&chord("Shift+IntlBackslash"), &shifted, p));
+    for other in ["Shift+IntlBackslash", "\\", ",", "Shift+,"] {
+        assert!(!turkish.matches(&chord(other), &plain, p), "{other}");
+    }
+    for other in ["IntlBackslash", "\\", "Shift+\\", "|", ",", "Shift+,"] {
+        assert!(!turkish.matches(&chord(other), &shifted, p), "Shift: {other}");
+    }
+
+    let label = |layout: &Layout, text: &str, p| chord(text).display_for(p, layout);
+    assert_eq!(label(&turkish, "Cmd+IntlBackslash", p), "Ctrl+IntlBackslash", "nothing typed yet");
+    turkish.observe(Key::IntlBackslash, Mods::SHIFT, ">");
+    assert_eq!(turkish.char_at(Key::IntlBackslash), None, "a Shift press teaches nothing");
+    turkish.observe(Key::IntlBackslash, Mods::NONE, "<");
+    assert_eq!(label(&turkish, "Cmd+IntlBackslash", p), "Ctrl+<");
+    assert_eq!(label(&turkish, "Shift+IntlBackslash", p), "Shift+<");
+    assert_eq!(label(&turkish, "Cmd+IntlBackslash", Platform::Mac), "⌘<");
+    // The key's name is no character, so a position that types `I` does not hide the label.
+    let typed_i = Layout::new().with_char(Key::IntlBackslash, '<').with_char(Key::Quote, 'I');
+    assert_eq!(label(&typed_i, "IntlBackslash", p), "<");
+
+    // UK: the key types `\` and `|`, keys egui has, so it runs the `\` bindings.
+    let uk = Layout::new();
+    let backslash = at("\\", Key::IntlBackslash);
+    let pipe = at("Shift+|", Key::IntlBackslash);
+    assert_eq!(uk.resolve(&backslash), Some(chord("\\")));
+    assert!(uk.matches(&chord("\\"), &backslash, p));
+    assert!(uk.matches(&chord("Shift+\\"), &pipe, p));
+}

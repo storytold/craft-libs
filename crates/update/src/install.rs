@@ -908,6 +908,86 @@ pub(crate) mod linux {
         kinds
     }
 
+    /// Flags for `flatpak install` of one bundle. A per-user install stays noninteractive.
+    /// A system-wide install is also noninteractive: it runs under `pkexec`, which asks for the
+    /// password. Flatpak's own install-bundle action does not. Its polkit message needs `$(path)`,
+    /// and current polkit denies the action when that detail is missing, with no dialog.
+    pub(crate) fn flatpak_bundle_flags(system: bool) -> &'static [&'static str] {
+        if system {
+            &["install", "--system", "-y", "--noninteractive", "--reinstall", "--bundle"]
+        } else {
+            &["install", "--user", "-y", "--noninteractive", "--reinstall", "--bundle"]
+        }
+    }
+
+    /// Program prefix for a system-wide bundle reinstall. Inside the sandbox the host runs it,
+    /// because this process cannot see the host's `pkexec` or write `/var/lib/flatpak`.
+    pub(crate) fn system_bundle_prefix(in_sandbox: bool) -> &'static [&'static str] {
+        if in_sandbox { &["flatpak-spawn", "--host", "pkexec", "/usr/bin/flatpak"] } else { &["pkexec", "/usr/bin/flatpak"] }
+    }
+
+    fn system_bundle_command(file: &Path) -> Result<std::process::Command, String> {
+        if !process::in_sandbox() && pkexec().is_none() {
+            return Err("installing system-wide needs polkit (pkexec), which isn't installed".into());
+        }
+        let prefix = system_bundle_prefix(process::in_sandbox());
+        let Some((program, rest)) = prefix.split_first() else {
+            return Err("couldn't start Flatpak".into());
+        };
+        let mut cmd = process::command(*program);
+        cmd.args(rest);
+        cmd.args(flatpak_bundle_flags(true));
+        cmd.arg(file);
+        Ok(cmd)
+    }
+
+    pub(crate) fn flatpak_bundle_error(output: &std::process::Output) -> Result<(), String> {
+        if output.status.success() {
+            return Ok(());
+        }
+        // pkexec: 126 = the password prompt was dismissed, 127 = not authorized.
+        if matches!(output.status.code(), Some(126 | 127)) {
+            let detail = String::from_utf8_lossy(&output.stderr);
+            log::warn!("flatpak bundle install ended with {:?}: {}", output.status.code(), detail.trim());
+            return Err(CANCELLED.into());
+        }
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let err = stderr.trim();
+        let err = if err.is_empty() { String::from_utf8_lossy(&output.stdout).trim().to_string() } else { err.to_string() };
+        if err.is_empty() {
+            Err("Flatpak couldn't install the bundle (it needs the Flathub remote for its runtime)".into())
+        } else {
+            let clean_err = err.strip_prefix("error: ").or_else(|| err.strip_prefix("Error: ")).unwrap_or(&err);
+            Err(format!("Flatpak couldn't install the bundle: {clean_err}"))
+        }
+    }
+
+    /// Reinstalls a downloaded `.flatpak` bundle. `system` replaces the system-wide copy through
+    /// `pkexec`. Per-user stays a normal `flatpak install --user`, which needs no password.
+    pub(crate) fn install_flatpak_bundle(file: &Path, system: bool, stop: &Stop, phase: &mut dyn FnMut(JobPhase)) -> Result<(), String> {
+        install_flatpak_bundle_via(&SYSTEM, file, system, stop, phase)
+    }
+
+    fn install_flatpak_bundle_via(root: &Root<'_>, file: &Path, system: bool, stop: &Stop, phase: &mut dyn FnMut(JobPhase)) -> Result<(), String> {
+        let install_one = || {
+            log::info!("executing flatpak install --reinstall --bundle for {}", file.display());
+            let mut cmd = if system {
+                system_bundle_command(file)?
+            } else {
+                let mut cmd = process::flatpak_command();
+                cmd.args(flatpak_bundle_flags(false));
+                cmd.arg(file);
+                cmd
+            };
+            let output = cmd.output().map_err(|e| format!("couldn't start Flatpak ({e})"))?;
+            if output.status.success() {
+                log::info!("flatpak install succeeded for {}", file.display());
+            }
+            flatpak_bundle_error(&output)
+        };
+        root.queue.alone(&cancelled(stop), &mut turn(phase, JobPhase::Installing), install_one).unwrap_or(Err(CANCELLED.into()))
+    }
+
     /// Installs (or upgrades) a downloaded package with the system's own tools.
     pub fn install_package(kind: PackageKind, file: &Path, stop: &Stop, phase: &mut dyn FnMut(JobPhase)) -> Result<(), String> {
         if kind == PackageKind::Deb && system_tool("apt-get").is_none() {
@@ -925,31 +1005,7 @@ pub(crate) mod linux {
             return as_root(root, command, f, stop, phase, JobPhase::Installing);
         }
         match kind {
-            PackageKind::Flatpak => {
-                let install_one = || {
-                    log::info!("executing flatpak install --reinstall --bundle for {}", file.display());
-                    let output = process::flatpak_command()
-                        .args(["install", "--user", "-y", "--noninteractive", "--reinstall", "--bundle"])
-                        .arg(f)
-                        .output()
-                        .map_err(|e| format!("couldn't start Flatpak ({e})"))?;
-                    if output.status.success() {
-                        log::info!("flatpak install succeeded for {}", file.display());
-                        Ok(())
-                    } else {
-                        let stderr = String::from_utf8_lossy(&output.stderr);
-                        let err = stderr.trim();
-                        let err = if err.is_empty() { String::from_utf8_lossy(&output.stdout).trim().to_string() } else { err.to_string() };
-                        if err.is_empty() {
-                            Err("Flatpak couldn't install the bundle (it needs the Flathub remote for its runtime)".into())
-                        } else {
-                            let clean_err = err.strip_prefix("error: ").or_else(|| err.strip_prefix("Error: ")).unwrap_or(&err);
-                            Err(format!("Flatpak couldn't install the bundle: {clean_err}"))
-                        }
-                    }
-                };
-                root.queue.alone(&cancelled(stop), &mut turn(phase, JobPhase::Installing), install_one).unwrap_or(Err(CANCELLED.into()))
-            }
+            PackageKind::Flatpak => install_flatpak_bundle_via(root, file, false, stop, phase),
             other => Err(format!("{} isn't a system package", other.label())),
         }
     }
@@ -1113,13 +1169,7 @@ pub(crate) mod linux {
     /// Where menu entries and icons go: `$XDG_DATA_HOME`, else `~/.local/share`. Inside the
     /// launcher's own Flatpak that variable points into the sandbox, so the host's is used.
     pub fn host_data_dir() -> Option<PathBuf> {
-        if Path::new("/.flatpak-info").exists() {
-            if let Some(dir) = std::env::var_os("HOST_XDG_DATA_HOME").map(PathBuf::from).filter(|p| p.is_absolute()) {
-                return Some(dir);
-            }
-            return crate::folders::home_dir().map(|h| h.join(".local").join("share"));
-        }
-        crate::folders::data_local_dir()
+        crate::folders::host_data_local_dir()
     }
 
     /// The app's 128 px icon, as bundled in `assets/app-icons`.
@@ -1645,9 +1695,18 @@ fn msi_command(program: &Path, msi: &Path) -> Result<std::process::Command, Stri
     Ok(command)
 }
 
+/// The self-update command: [`msi_command`] plus the properties that keep the installed copy's
+/// Windows Installer context (`msi_copy::update_arguments`).
+#[cfg_attr(not(windows), allow(dead_code))]
+fn reinstall_command(program: &Path, msi: &Path, context: &[&str]) -> Result<std::process::Command, String> {
+    let mut command = msi_command(program, msi)?;
+    command.args(context);
+    Ok(command)
+}
+
 /// Where `msi_command` asks Windows Installer to write its log.
 #[cfg_attr(not(windows), allow(dead_code))]
-fn msi_log(msi: &Path) -> PathBuf {
+pub(crate) fn msi_log(msi: &Path) -> PathBuf {
     msi.with_extension("log")
 }
 
@@ -1667,7 +1726,9 @@ pub(crate) fn msi_path(msi: &Path) -> Result<PathBuf, String> {
 pub mod windows {
     use crate::protocol::CANCELLED;
 
-    use super::{App, INSTALLER, JobPhase, Path, PathBuf, Stop, cancelled, msi_command, msi_folder_argument, msi_log, process, turn};
+    use super::{
+        App, INSTALLER, JobPhase, Path, PathBuf, Stop, cancelled, msi_command, msi_folder_argument, msi_log, process, reinstall_command, turn,
+    };
 
     fn msiexec() -> PathBuf {
         std::env::var_os("SystemRoot").map_or_else(|| PathBuf::from(r"C:\Windows"), PathBuf::from).join(r"System32\msiexec.exe")
@@ -1700,17 +1761,41 @@ pub mod windows {
         })
     }
 
-    /// Runs the launcher's own new MSI for a self-update, with the same progress window and no
-    /// restart as [`run_msi`], and waits for it.
-    pub fn reinstall(msi: &Path) -> Result<(), String> {
-        let status = msi_command(&msiexec(), msi)?.status().map_err(|e| format!("couldn't start the Windows Installer ({e})"))?;
-        explain(status.code())
+    /// Runs an app's own new MSI for a self-update, with the same progress window and no restart
+    /// as [`run_msi`], and waits for it. `context` keeps the installed copy's Windows Installer
+    /// context; `folder`, when given, is where it goes. A failure names the installer's log,
+    /// which is the only place 1603 is explained.
+    pub fn reinstall(msi: &Path, context: &[&str], folder: Option<&Path>) -> Result<(), String> {
+        use std::os::windows::process::CommandExt;
+        let mut command = reinstall_command(&msiexec(), msi, context)?;
+        if let Some(dir) = folder {
+            command.raw_arg(msi_folder_argument(dir)?);
+        }
+        let status = command.status().map_err(|e| format!("couldn't start the Windows Installer ({e})"))?;
+        explain(status.code()).map_err(|e| match status.code() {
+            Some(1602) | None => e,
+            _ => format!("{e}. Its log is at {}", msi_log(msi).display()),
+        })
     }
 
     /// Runs `work` once no other Windows Installer job of ours is running (a second one would
     /// stop with error 1618). Cancelled while it waits, it never runs.
     fn in_turn(stop: &Stop, phase: &mut dyn FnMut(JobPhase), working: JobPhase, work: impl FnOnce() -> Result<(), String>) -> Result<(), String> {
         INSTALLER.alone(&cancelled(stop), &mut turn(phase, working), work).unwrap_or_else(|| Err(CANCELLED.into()))
+    }
+
+    /// Removes one installed product by its code, with a progress window and no restart, and waits.
+    /// A per-user product asks for no permission. `log` receives the installer's verbose log.
+    pub fn remove_product(product_code: &str, log: &Path) -> Result<(), String> {
+        if !crate::msi_context::valid_product_code(product_code) {
+            return Err(format!("{product_code} isn't a Windows Installer product code"));
+        }
+        let status = process::command(msiexec())
+            .args(["/x", product_code, "/passive", "/norestart", "/l*v"])
+            .arg(log)
+            .status()
+            .map_err(|e| format!("couldn't start the Windows Installer ({e})"))?;
+        explain(status.code()).map_err(|e| format!("{e}. Its log is at {}", log.display()))
     }
 
     pub fn uninstall_msi(app: &App, stop: &Stop, phase: &mut dyn FnMut(JobPhase)) -> Result<(), String> {
@@ -1735,6 +1820,31 @@ pub mod windows {
 mod tests {
     use super::*;
 
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_system_flatpak_bundle_is_reinstalled_with_pkexec_on_that_installation() {
+        assert_eq!(super::linux::flatpak_bundle_flags(false), ["install", "--user", "-y", "--noninteractive", "--reinstall", "--bundle"]);
+        let system = super::linux::flatpak_bundle_flags(true);
+        assert_eq!(system, ["install", "--system", "-y", "--noninteractive", "--reinstall", "--bundle"]);
+        assert!(!system.contains(&"--user"));
+        assert_eq!(super::linux::system_bundle_prefix(true), ["flatpak-spawn", "--host", "pkexec", "/usr/bin/flatpak"]);
+        assert_eq!(super::linux::system_bundle_prefix(false), ["pkexec", "/usr/bin/flatpak"]);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_dismissed_system_bundle_password_cancels_and_a_flatpak_error_is_kept() {
+        use std::os::unix::process::ExitStatusExt;
+        use std::process::Output;
+        let dismissed = Output { status: std::process::ExitStatus::from_raw(126 << 8), stdout: Vec::new(), stderr: Vec::new() };
+        assert_eq!(super::linux::flatpak_bundle_error(&dismissed).unwrap_err(), "cancelled");
+        let failed =
+            Output { status: std::process::ExitStatus::from_raw(1 << 8), stdout: Vec::new(), stderr: b"error: something went wrong\n".to_vec() };
+        assert_eq!(super::linux::flatpak_bundle_error(&failed).unwrap_err(), "Flatpak couldn't install the bundle: something went wrong");
+        let ok = Output { status: std::process::ExitStatus::from_raw(0), stdout: Vec::new(), stderr: Vec::new() };
+        assert!(super::linux::flatpak_bundle_error(&ok).is_ok());
+    }
+
     #[cfg(unix)]
     #[test]
     fn msi_install_uses_the_package_target_instead_of_a_symlinked_cache() {
@@ -1758,6 +1868,22 @@ mod tests {
                 file.canonicalize().unwrap().with_extension("log").as_os_str()
             ]
         );
+    }
+
+    #[test]
+    fn a_self_update_keeps_the_installed_copys_context_after_the_package_options() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("GridCraft.msi");
+        std::fs::write(&file, b"test package").unwrap();
+        let resolved = msi_path(&file).unwrap();
+        for context in [&["ALLUSERS=1"][..], &["ALLUSERS=2", "MSIINSTALLPERUSER=1"], &[]] {
+            let command = reinstall_command(Path::new("msiexec.exe"), &file, context).unwrap();
+            let args: Vec<_> = command.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
+            let mut expected: Vec<String> = ["/i", &resolved.to_string_lossy(), "/passive", "/norestart", "/l*v"].map(String::from).to_vec();
+            expected.push(resolved.with_extension("log").to_string_lossy().into_owned());
+            expected.extend(context.iter().map(|p| p.to_string()));
+            assert_eq!(args, expected);
+        }
     }
 
     #[test]

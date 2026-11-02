@@ -12,11 +12,15 @@ workspace = true
 
 [features]
 default = []
-egui = ["dep:egui"]
+egui = ["dep:egui", "dep:image"]
 local-mirror = []
+# tests/dialog_screenshots.rs: renders the dialogs to PNG with egui_kittest's wgpu renderer.
+snapshot = ["egui", "egui_kittest/wgpu"]
 
 [dependencies]
 egui = { workspace = true, optional = true }
+# Decodes the app icon the startup prompt shows (`App::icon_png`); PNG only.
+image = { version = "0.25", default-features = false, features = ["png"], optional = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 log = "0.4"
@@ -29,6 +33,9 @@ semver = { version = "1", features = ["serde"] }
 
 [dev-dependencies]
 flate2 = "1"
+egui_kittest = "0.37"
+# egui's own Hack and Ubuntu Light for the screenshots (egui is built without default fonts).
+epaint_default_fonts = "0.37"
 
 [target.'cfg(unix)'.dependencies]
 flate2 = "1"

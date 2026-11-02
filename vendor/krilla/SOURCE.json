@@ -152,7 +152,7 @@
     {
       "path": "src/graphics/color.rs",
       "upstream_sha256": "e5843d33ef184ab5c458025d1b1dc53df6ee6aaf085595ea14604d080b98f8a4",
-      "sha256": "553c2c1ce7a7c26dc11a227d70db0e30933e0b0e69d2d6c550e1384c0a3037ec"
+      "sha256": "5b0de85e0f3eac2905f975f676f1ef5d0eebb99a9a35670fefb419ed36fed6cf"
     },
     {
       "path": "src/graphics/device_n.rs",
@@ -207,7 +207,7 @@
     {
       "path": "src/graphics/shading_function.rs",
       "upstream_sha256": "0e0fc8bb1a32272457ef560fa80933972d0f5ef5fb7046424c6de48093cfd978",
-      "sha256": "2831ec0d78a755db9311a16d01afd5c9f714e4d43bdf69b42c0cb291387ca743"
+      "sha256": "6da45a96a98d32d4ef878fa03ac1fddbccccea2e2d6333d3a0e90ca009061f81"
     },
     {
       "path": "src/graphics/shading_pattern.rs",

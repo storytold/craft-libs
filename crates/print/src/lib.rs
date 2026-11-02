@@ -394,8 +394,19 @@ fn lpstat_e_command() -> std::process::Command {
 pub fn printers() -> Vec<Printer> {
     #[cfg(all(unix, not(target_arch = "wasm32")))]
     {
-        let Some(queues) = lpstat_command().output().ok().map(|o| String::from_utf8_lossy(&o.stdout).into_owned()) else {
-            return Vec::new();
+        let queues = match lpstat_command().output() {
+            Ok(o) => {
+                // Exits 1 with only driverless printers ("No destinations added"); `-e` still finds them.
+                if !o.status.success() {
+                    log::info!("lpstat -p -d exited with {}: {}", o.status, String::from_utf8_lossy(&o.stderr).trim());
+                }
+                String::from_utf8_lossy(&o.stdout).into_owned()
+            }
+            Err(e) => {
+                // A Flatpak needs lpstat/lp bundled plus the CUPS socket and Avahi (see README).
+                log::warn!("no printers: lpstat could not run ({e}); install the CUPS client tools");
+                return Vec::new();
+            }
         };
         // A spooler without `-e`, or one whose discovery times out, only loses the driverless names.
         let available = lpstat_e_command().output().ok().map(|o| String::from_utf8_lossy(&o.stdout).into_owned());

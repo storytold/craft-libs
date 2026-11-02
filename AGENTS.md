@@ -1,8 +1,6 @@
 # AGENTS.md
 
-Shared Rust libraries for the Craft Apps. The shared standards live in
-[craftrules](https://github.com/storytold/craftrules) (`../../craftrules` on a dev machine): read its
-`AGENTS.md`, then `standards/never-crash.md`, `standards/engineering.md` and `standards/licensing.md`.
+Shared Rust libraries for the Craft Apps.
 
 - **Never crash.** Every crate's `lib.rs` starts with
   `#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]`.

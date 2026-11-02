@@ -776,6 +776,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-crw"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-dialogs"
 version = "0.1.0"
 dependencies = [
@@ -801,6 +812,15 @@ dependencies = [
 [[package]]
 name = "craft-docpath"
 version = "0.1.0"
+
+[[package]]
+name = "craft-ecproj-format"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+]
 
 [[package]]
 name = "craft-font-catalog"
@@ -914,10 +934,16 @@ dependencies = [
 name = "craft-media"
 version = "0.1.0"
 dependencies = [
+ "craft-media-testkit",
  "proptest",
+ "serde",
  "serde_json",
  "thiserror 2.0.21",
 ]
+
+[[package]]
+name = "craft-media-testkit"
+version = "0.1.0"
 
 [[package]]
 name = "craft-menu"
@@ -929,6 +955,15 @@ dependencies = [
  "muda",
  "objc2 0.6.5",
  "objc2-app-kit 0.3.2",
+]
+
+[[package]]
+name = "craft-pcraft-format"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -994,6 +1029,7 @@ name = "craft-print"
 version = "0.1.0"
 dependencies = [
  "craft-winprint-gdi",
+ "log",
  "miniz_oxide 0.9.1",
  "roxmltree 0.21.2",
  "tempfile",
@@ -1072,8 +1108,11 @@ dependencies = [
  "chrono",
  "dunce",
  "egui",
+ "egui_kittest",
+ "epaint_default_fonts",
  "flate2",
  "getrandom 0.3.4",
+ "image",
  "log",
  "plist",
  "semver",
@@ -1087,6 +1126,16 @@ dependencies = [
  "winreg",
  "winsafe",
  "zip",
+]
+
+[[package]]
+name = "craft-vectorcraft-format"
+version = "0.1.0"
+dependencies = [
+ "flate2",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
