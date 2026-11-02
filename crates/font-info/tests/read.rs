@@ -448,3 +448,60 @@ fn unresolvable_subtables_stay_within_budget() {
     // Nothing resolved, so nothing changed; the tags are still listed.
     assert!(d.features.is_empty() || d.features.iter().all(|f| f.changed == 0));
 }
+
+/// `tag`'s table in `font`, as the table directory places it.
+fn table<'a>(font: &'a [u8], tag: &[u8; 4]) -> &'a [u8] {
+    let count = usize::from(u16::from_be_bytes([font[4], font[5]]));
+    (0..count)
+        .map(|i| 12 + i * 16)
+        .find(|&record| &font[record..record + 4] == tag)
+        .map(|record| {
+            let offset = u32::from_be_bytes(font[record + 8..record + 12].try_into().unwrap()) as usize;
+            let length = u32::from_be_bytes(font[record + 12..record + 16].try_into().unwrap()) as usize;
+            &font[offset..offset + length]
+        })
+        .unwrap()
+}
+
+/// A static font has nothing to vary and no features: everything reads empty, nothing fails.
+#[test]
+fn a_static_font_has_no_axes_instances_or_features() {
+    let d = craft_font_info::read(&one_glyph_font(), 0).unwrap();
+    assert!(d.axes.is_empty() && d.instances.is_empty() && d.stat_axes.is_empty() && d.features.is_empty(), "{d:?}");
+    assert_eq!(d.variations_prefix, None);
+    assert!(d.axis("wght").is_none() && !d.has_feature("liga"));
+}
+
+/// An `fvar` whose axis and instance counts run past the table's end is left out, and the rest of
+/// the face still reads.
+#[test]
+fn an_fvar_counting_past_its_end_is_left_out() {
+    let f = font();
+    let mut fvar = table(&f, b"fvar").to_vec();
+    fvar[8..10].copy_from_slice(&u16::MAX.to_be_bytes()); // axisCount
+    fvar[12..14].copy_from_slice(&u16::MAX.to_be_bytes()); // instanceCount
+    let d = craft_font_info::read(&with_table(&f, b"fvar", &fvar), 0).unwrap();
+    assert!(d.axes.is_empty() && d.instances.is_empty(), "{:?} {:?}", d.axes, d.instances);
+    assert!(d.has_feature("ss01") && d.has_feature("cv11"), "the features still read");
+}
+
+/// A `FeatureList` that counts more records than it holds is left out; one whose record points
+/// past the table's end keeps its tag but changes nothing.
+#[test]
+fn a_feature_list_pointing_past_its_end_is_left_out() {
+    let f = font();
+    let mut gsub = table(&f, b"GSUB").to_vec();
+    let features = usize::from(u16::from_be_bytes([gsub[6], gsub[7]]));
+    let mut overcounted = gsub.clone();
+    overcounted[features..features + 2].copy_from_slice(&u16::MAX.to_be_bytes()); // featureCount
+    let d = craft_font_info::read(&with_table(&f, b"GSUB", &overcounted), 0).unwrap();
+    let tags: Vec<&str> = d.features.iter().map(|f| f.tag.as_str()).collect();
+    assert_eq!(tags, ["kern"], "only GPOS's feature is left");
+    assert_eq!(d.axes.len(), 2, "the axes still read");
+
+    // The first record's offset, after the count and its tag.
+    gsub[features + 6..features + 8].copy_from_slice(&u16::MAX.to_be_bytes());
+    let d = craft_font_info::read(&with_table(&f, b"GSUB", &gsub), 0).unwrap();
+    let changed: Vec<(&str, usize)> = d.features.iter().map(|f| (f.tag.as_str(), f.changed)).collect();
+    assert_eq!(changed, [("cv11", 1), ("kern", 0), ("ss01", 0)], "ss01's first record is skipped, its tag kept");
+}
