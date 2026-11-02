@@ -790,7 +790,12 @@ pub fn references(cf: &ClassFile, owner: &str, method: Option<&str>, max: usize)
                 0xb2..=0xb5 if method.is_none() => cf.resolve_ref(cp).and_then(|r| (r.owner == owner).then(|| ("field", r.display()))),
                 0xbb | 0xbd | 0xc0 | 0xc1 | 0xc5 if method.is_none() => {
                     let name = class_name_at(&cf.pool, cp);
-                    (name.trim_start_matches('[') == owner).then_some(("type", internal_to_dotted(&name)))
+                    let component = if name.starts_with('[') {
+                        name.trim_start_matches('[').strip_prefix('L').and_then(|n| n.strip_suffix(';'))
+                    } else {
+                        Some(name.as_str())
+                    };
+                    (component == Some(owner)).then_some(("type", internal_to_dotted(&name)))
                 }
                 _ => None,
             };
@@ -809,6 +814,84 @@ pub fn references(cf: &ClassFile, owner: &str, method: Option<&str>, max: usize)
 mod tests {
     use super::*;
     use craft_anything_testkit::java as fx;
+
+    /// Two valid static methods: a one-dimensional allocation and a two-dimensional one.
+    fn array_reference_class(component: &str, array: &str) -> ClassFile {
+        let utf8 = |s: &str| {
+            let mut bytes = vec![1];
+            bytes.extend_from_slice(&(s.len() as u16).to_be_bytes());
+            bytes.extend_from_slice(s.as_bytes());
+            bytes
+        };
+        let pool = [
+            utf8("sample/ArrayUses"),
+            vec![7, 0, 1],
+            utf8("java/lang/Object"),
+            vec![7, 0, 3],
+            utf8("Code"),
+            utf8("row"),
+            utf8(&format!("()[L{component};")),
+            utf8("grid"),
+            utf8(&format!("(){array}")),
+            utf8(component),
+            vec![7, 0, 10],
+            utf8(array),
+            vec![7, 0, 12],
+        ];
+        let mut bytes = vec![0xca, 0xfe, 0xba, 0xbe, 0, 0, 0, 52, 0, 14];
+        bytes.extend(pool.into_iter().flatten());
+        // public/super, this, super, no interfaces or fields, two methods.
+        bytes.extend_from_slice(&[0, 0x21, 0, 2, 0, 4, 0, 0, 0, 0, 0, 2]);
+        for (name, descriptor, code) in [(6u16, 7u16, vec![4, 0xbd, 0, 11, 0xb0]), (8, 9, vec![4, 4, 0xc5, 0, 13, 2, 0xb0])] {
+            for word in [9u16, name, descriptor, 1, 5] {
+                bytes.extend_from_slice(&word.to_be_bytes());
+            }
+            bytes.extend_from_slice(&(12u32 + code.len() as u32).to_be_bytes());
+            bytes.extend_from_slice(&[0, 2, 0, 0]); // max_stack, max_locals
+            bytes.extend_from_slice(&(code.len() as u32).to_be_bytes());
+            bytes.extend_from_slice(&code);
+            bytes.extend_from_slice(&[0, 0, 0, 0]); // exception table and nested attributes
+        }
+        bytes.extend_from_slice(&[0, 0]); // class attributes
+        let cf = parse(&bytes).unwrap();
+        assert!(cf.warnings.is_empty(), "{:?}", cf.warnings);
+        cf
+    }
+
+    #[test]
+    fn object_arrays_reference_the_component_class() {
+        let cf = array_reference_class("java/lang/String", "[[Ljava/lang/String;");
+        let (refs, more) = references(&cf, "java/lang/String", None, 10);
+        assert!(!more);
+        assert_eq!(refs.len(), 2, "{refs:?}");
+        assert_eq!((refs[0].instruction, refs[0].pc), ("anewarray", 1));
+        assert_eq!((refs[1].instruction, refs[1].pc), ("multianewarray", 2));
+        assert_eq!(refs[1].target, "java.lang.String[][]");
+        let (limited, more) = references(&cf, "java/lang/String", None, 1);
+        assert_eq!(limited, refs[..1]);
+        assert!(more);
+        assert_eq!(references(&cf, "java/lang/String", Some("grid"), 10), (Vec::new(), false));
+        assert_eq!(references(&cf, "java/lang/Integer", None, 10), (Vec::new(), false));
+    }
+
+    #[test]
+    fn array_components_keep_class_names_beginning_with_l() {
+        for component in ["Leaf", "LLeaf"] {
+            let cf = array_reference_class(component, &format!("[[L{component};"));
+            let (refs, more) = references(&cf, component, None, 10);
+            assert_eq!(refs.len(), 2, "{component}: {refs:?}");
+            assert!(!more);
+        }
+    }
+
+    #[test]
+    fn primitive_arrays_do_not_reference_a_class_named_after_the_descriptor() {
+        let cf = array_reference_class("I", "[[I");
+        let (refs, more) = references(&cf, "I", None, 10);
+        assert!(!more);
+        assert_eq!(refs.len(), 1, "{refs:?}");
+        assert_eq!(refs[0].instruction, "anewarray");
+    }
 
     #[test]
     fn parses_fixture() {
