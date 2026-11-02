@@ -120,7 +120,7 @@ impl Codec {
         match self {
             Codec::Opus => 2,
             Codec::Vorbis | Codec::Theora => 3,
-            Codec::Speex => 2,
+            Codec::Speex => 2, // see `speex_header_count`
             Codec::Flac | Codec::Unknown => 1,
         }
     }
@@ -164,6 +164,13 @@ fn flac_header_count(first: &[u8]) -> usize {
     }
 }
 
+/// Header packets of a Speex stream: the Speex header, the comment header and the
+/// `extra_headers` the Speex header states (a 32-bit little-endian field at offset 68).
+fn speex_header_count(first: &[u8]) -> usize {
+    let extra = first.get(68..72).map_or(0, |b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]));
+    2 + usize::try_from(extra).unwrap_or(usize::MAX).min(usize::from(u16::MAX))
+}
+
 /// A packet: its byte ranges (a packet may span pages) and the granule position of the page it
 /// completes on when it is that page's last completed packet.
 #[non_exhaustive]
@@ -205,11 +212,14 @@ pub struct Stream {
     header_count: usize,
     /// The bytes of `headers`, kept as they are added.
     header_bytes: usize,
+    /// The page sequence number the next page should carry.
+    next_seq: Option<u32>,
 }
 
 impl Stream {
     /// What a decoder needs for this stream, in the container-neutral form the codec crates take:
-    /// the `OpusHead`, the Vorbis headers Xiph-laced, or `fLaC` + the FLAC metadata blocks.
+    /// the `OpusHead`, the Vorbis or Theora headers Xiph-laced, `fLaC` + the FLAC metadata blocks
+    /// (the last one flagged last), or the Speex header.
     pub fn codec_params(&self) -> crate::CodecParams {
         use crate::CodecId as Id;
         let first = self.headers.first().map(Vec::as_slice).unwrap_or_default();
@@ -227,8 +237,21 @@ impl Stream {
             // the other header packets are metadata blocks.
             Codec::Flac => {
                 let mut extradata = first.get(9..).unwrap_or_default().to_vec();
+                // block headers: STREAMINFO's after `fLaC`, then one per metadata packet
+                let mut blocks = vec![4];
                 for h in self.headers.iter().skip(1) {
+                    blocks.push(extradata.len());
                     extradata.extend_from_slice(h);
+                }
+                // exactly the last block is flagged last, also when an audio frame ended the
+                // metadata of a stream that does not state its header count
+                let blocks: Vec<usize> = blocks.into_iter().filter(|&at| at < extradata.len()).collect();
+                for (k, &at) in blocks.iter().enumerate() {
+                    if k + 1 == blocks.len() {
+                        extradata[at] |= 0x80;
+                    } else {
+                        extradata[at] &= 0x7F;
+                    }
                 }
                 // STREAMINFO follows `fLaC` and its 4-byte block header: 10 bytes of block and frame
                 // sizes, then a 20-bit sample rate and 3 bits of channels less one.
@@ -236,7 +259,13 @@ impl Stream {
                 let channels = if info == 0 { 0 } else { ((info >> 1) & 7) as u16 + 1 };
                 crate::CodecParams::new(Id::Flac).with_extradata(extradata).with_sample_rate(info >> 4).with_channels(channels)
             }
-            c => crate::CodecParams::new(c.codec_id()),
+            Codec::Theora => crate::CodecParams::new(Id::Theora).with_extradata(crate::xiph_lace(&self.headers).unwrap_or_default()),
+            // the Speex header: rate at offset 36 and channels at 48, 32-bit little-endian
+            Codec::Speex => crate::CodecParams::new(Id::Speex)
+                .with_extradata(first)
+                .with_sample_rate(le_u32(36))
+                .with_channels(u16::try_from(le_u32(48)).unwrap_or(0)),
+            Codec::Unknown => crate::CodecParams::new(Id::Unknown),
         }
     }
 }
@@ -257,6 +286,32 @@ struct Partial {
     prefix: Vec<u8>,
 }
 
+/// Bytes the damage-recovery scan may read in one call.
+const SCAN_CHUNK: usize = 64 << 10;
+/// Bytes the damage-recovery scans of one file may examine in all.
+const RECOVERY_BUDGET: usize = 64 << 20;
+/// Cap on the packets kept from one file, all streams and headers together.
+const MAX_PACKETS: usize = 1 << 26;
+/// Bytes of file each kept packet needs beyond the first `MIN_PACKET_ALLOWANCE`. A kept packet
+/// takes about 60 bytes of memory and a zero lacing value describes one in a single byte, so
+/// without this a file could make the packet lists about 60 times its own size.
+const FILE_BYTES_PER_PACKET: u64 = 8;
+/// Packets any file may keep, however short.
+const MIN_PACKET_ALLOWANCE: usize = 1 << 20;
+/// The most metadata packets kept for an Ogg FLAC stream that does not state its header count.
+const MAX_UNSTATED_HEADERS: usize = 1024;
+
+/// Where a damage-recovery scan stopped.
+#[derive(Debug, PartialEq, Eq)]
+enum Capture {
+    /// The next capture pattern starts here.
+    At(u64),
+    /// The source ended first.
+    End,
+    /// The file's recovery budget ran out first.
+    BudgetSpent,
+}
+
 /// Read every page and assemble the packets of every logical bitstream.
 pub fn open(src: &(impl ByteSource + ?Sized)) -> Result<OggFile> {
     let len = src.len();
@@ -266,33 +321,39 @@ pub fn open(src: &(impl ByteSource + ?Sized)) -> Result<OggFile> {
     let mut warnings = Vec::new();
     let mut pos = 0u64;
     let mut found_any = false;
-    let mut recovery_budget = 64 << 20;
+    let mut recovery_budget = RECOVERY_BUDGET;
+    let mut packet_budget = usize::try_from(len / FILE_BYTES_PER_PACKET).unwrap_or(usize::MAX).clamp(MIN_PACKET_ALLOWANCE, MAX_PACKETS);
     let mut hdr = [0u8; 27 + 255];
     while pos + 27 <= len {
         src.read_at(pos, &mut hdr[..27])?;
         if &hdr[..4] != b"OggS" || hdr[4] != 0 {
             match find_capture(src, pos + 1, len, &mut recovery_budget)? {
-                Some(p) => {
+                Capture::At(p) => {
                     if found_any {
                         warnings.push(format!("lost sync at byte {pos}; resumed at {p}"));
                     }
                     pos = p;
                     continue;
                 }
-                None => break,
+                Capture::End => break,
+                Capture::BudgetSpent => {
+                    warnings.push(format!("lost sync at byte {pos}; the rest of the file is past the recovery budget"));
+                    break;
+                }
             }
         }
         let nseg = hdr[26] as usize;
-        if pos + 27 + nseg as u64 > len {
-            warnings.push(format!("truncated page header at byte {pos}"));
-            break;
-        }
-        src.read_at(pos + 27, &mut hdr[27..27 + nseg])?;
-        let body_len: u64 = hdr[27..27 + nseg].iter().map(|&b| b as u64).sum();
-        let page_len = 27 + nseg as u64 + body_len;
-        if pos + page_len > len {
-            warnings.push(format!("truncated page at byte {pos}"));
-            break;
+        let page_len = if pos + 27 + nseg as u64 <= len {
+            src.read_at(pos + 27, &mut hdr[27..27 + nseg])?;
+            27 + nseg as u64 + hdr[27..27 + nseg].iter().map(|&b| b as u64).sum::<u64>()
+        } else {
+            u64::MAX
+        };
+        if pos.saturating_add(page_len) > len {
+            // truncated, or a damaged lacing value: look for a page further on
+            warnings.push(format!("page at byte {pos} runs past the end of the file"));
+            pos += 1;
+            continue;
         }
         let mut page = vec![0u8; page_len as usize];
         src.read_at(pos, &mut page)?;
@@ -307,8 +368,17 @@ pub fn open(src: &(impl ByteSource + ?Sized)) -> Result<OggFile> {
         let flags = page[5];
         let granule = i64::from_le_bytes(page[6..14].try_into().unwrap_or([0; 8]));
         let serial = u32::from_le_bytes([page[14], page[15], page[16], page[17]]);
+        let seq = u32::from_le_bytes([page[18], page[19], page[20], page[21]]);
         let lacing = page[27..27 + nseg].to_vec();
         let body_off = pos + 27 + nseg as u64;
+        // a beginning-of-stream page for a serial already seen starts the next link of a chained
+        // file (RFC 3533 §4), which may reuse the serial
+        if flags & 0x02 != 0 && by_serial.contains_key(&serial) {
+            by_serial.remove(&serial);
+            if partial.remove(&serial).is_some() {
+                warnings.push(format!("incomplete packet before page at byte {pos}"));
+            }
+        }
         let si = *by_serial.entry(serial).or_insert_with(|| {
             streams.push(Stream {
                 serial,
@@ -320,10 +390,17 @@ pub fn open(src: &(impl ByteSource + ?Sized)) -> Result<OggFile> {
                 saw_eos: false,
                 header_count: 1,
                 header_bytes: 0,
+                next_seq: None,
             });
             streams.len() - 1
         });
         let st = &mut streams[si];
+        // a gap in the page sequence numbers is a lost page: a packet it continued is incomplete
+        if st.next_seq.is_some_and(|n| n != seq) {
+            warnings.push(format!("pages missing before page at byte {pos}"));
+            partial.remove(&serial);
+        }
+        st.next_seq = Some(seq.wrapping_add(1));
         let page_index = st.pages;
         st.pages += 1;
         if flags & 0x04 != 0 {
@@ -351,8 +428,14 @@ pub fn open(src: &(impl ByteSource + ?Sized)) -> Result<OggFile> {
                 }
                 let p = partial.entry(serial).or_insert_with(|| Partial { parts: Vec::new(), size: 0, prefix: Vec::new() });
                 if n > 0 {
+                    let Some(size) = p.size.checked_add(n as u32) else {
+                        warnings.push(format!("packet over 4 GiB dropped at byte {pos}"));
+                        partial.remove(&serial);
+                        skip_fragment = l == 255;
+                        continue;
+                    };
                     p.parts.push((body_off + a, n as u32));
-                    p.size += n as u32;
+                    p.size = size;
                     let s = (body_off - pos + a) as usize;
                     let need = 2usize.saturating_sub(p.prefix.len()).min(n as usize);
                     p.prefix.extend_from_slice(&page[s..s + need]);
@@ -366,6 +449,11 @@ pub fn open(src: &(impl ByteSource + ?Sized)) -> Result<OggFile> {
                 }
             }
         }
+        let Some(left) = packet_budget.checked_sub(completed.len()) else {
+            warnings.push(format!("stopped at byte {pos}: more packets than a file of this size can hold"));
+            break;
+        };
+        packet_budget = left;
         if granule != -1 {
             st.last_granule = Some(granule);
             if let Some(last) = completed.last_mut() {
@@ -378,6 +466,7 @@ pub fn open(src: &(impl ByteSource + ?Sized)) -> Result<OggFile> {
                 st.codec = Codec::of(&data);
                 st.header_count = match st.codec {
                     Codec::Flac => flac_header_count(&data),
+                    Codec::Speex => speex_header_count(&data),
                     c => c.header_count(),
                 };
             }
@@ -386,17 +475,22 @@ pub fn open(src: &(impl ByteSource + ?Sized)) -> Result<OggFile> {
                 if st.header_count == usize::MAX && !st.headers.is_empty() {
                     // FLAC with an unstated count: metadata packets run to the one flagged last. A
                     // packet that is no metadata block (an audio frame starts with 0xFF) ends them,
-                    // and so does `MAX_UNSTATED_HEADER_BYTES`, so audio is never held as headers.
-                    let is_block = data.first().is_some_and(|b| b & 0x7F <= 6);
-                    if !is_block || st.header_bytes.saturating_add(data.len()) > MAX_UNSTATED_HEADER_BYTES {
-                        if is_block {
-                            warnings.push(format!("stream {}: FLAC metadata beyond {} bytes read as audio", st.serial, MAX_UNSTATED_HEADER_BYTES));
-                        }
+                    // and so do the caps, so audio is never held as headers.
+                    if !is_flac_metadata_block(&data) {
                         st.header_count = st.headers.len();
                         st.packets.push(pk);
                         continue;
                     }
-                    if data.first().is_some_and(|b| b & 0x80 != 0) {
+                    if st.headers.len() >= MAX_UNSTATED_HEADERS || st.header_bytes.saturating_add(data.len()) > MAX_UNSTATED_HEADER_BYTES {
+                        warnings.push(format!(
+                            "stream {}: FLAC metadata beyond {MAX_UNSTATED_HEADERS} blocks or {MAX_UNSTATED_HEADER_BYTES} bytes read as audio",
+                            st.serial
+                        ));
+                        st.header_count = st.headers.len();
+                        st.packets.push(pk);
+                        continue;
+                    }
+                    if data[0] & 0x80 != 0 {
                         st.header_count = st.headers.len() + 1;
                     }
                 }
@@ -417,22 +511,34 @@ pub fn open(src: &(impl ByteSource + ?Sized)) -> Result<OggFile> {
     Ok(OggFile { streams, warnings })
 }
 
-fn find_capture(src: &(impl ByteSource + ?Sized), from: u64, len: u64, budget: &mut usize) -> Result<Option<u64>> {
-    let mut at = from;
-    while at + 4 <= len && *budget > 0 {
-        let n = ((len - at) as usize).min(1 << 20).min(*budget);
-        let mut buf = vec![0u8; n];
-        src.read_at(at, &mut buf)?;
-        *budget = budget.saturating_sub(n);
-        if let Some(i) = buf.windows(4).position(|w| w == b"OggS") {
-            return Ok(Some(at + i as u64));
-        }
-        if n < 4 {
-            break;
-        }
-        at += (n - 3) as u64;
+/// A FLAC metadata block: a defined block type (0–6) and as many bytes as its 4-byte header says.
+fn is_flac_metadata_block(data: &[u8]) -> bool {
+    match data {
+        [kind, a, b, c, body @ ..] => kind & 0x7F <= 6 && body.len() == (usize::from(*a) << 16 | usize::from(*b) << 8 | usize::from(*c)),
+        _ => false,
     }
-    Ok(None)
+}
+
+/// Scan for the next capture pattern from `from`, examining at most `budget` positions and
+/// charging the positions examined.
+fn find_capture(src: &(impl ByteSource + ?Sized), from: u64, len: u64, budget: &mut usize) -> Result<Capture> {
+    let mut at = from;
+    let mut buf = vec![0u8; (len.saturating_sub(from) as usize).min(SCAN_CHUNK + 3)];
+    while at + 4 <= len {
+        if *budget == 0 {
+            return Ok(Capture::BudgetSpent);
+        }
+        let positions = ((len - at - 3) as usize).min(SCAN_CHUNK).min(*budget);
+        let n = positions + 3;
+        src.read_at(at, &mut buf[..n])?;
+        if let Some(i) = buf[..n].windows(4).position(|w| w == b"OggS") {
+            *budget -= i + 1;
+            return Ok(Capture::At(at + i as u64));
+        }
+        *budget -= positions;
+        at += positions as u64;
+    }
+    Ok(Capture::End)
 }
 
 fn read_parts(src: &(impl ByteSource + ?Sized), parts: &[(u64, u32)]) -> Result<Vec<u8>> {
@@ -501,6 +607,8 @@ pub struct OpusTiming {
 impl OpusTiming {
     /// Timing of the Opus stream `s` (`pre_skip` from its `OpusHead`).
     pub fn of(stream: &Stream, pre_skip: u32) -> OpusTiming {
+        // Granule positions come straight from the file, so the arithmetic saturates: a hostile
+        // value gives wrong positions, never an overflow.
         let durations: Vec<u32> = stream.packets.iter().map(|p| opus_packet_samples(p.prefix, p.size).unwrap_or(0)).collect();
         let n = durations.len();
         let mut ends: Vec<Option<i64>> = vec![None; n];
@@ -517,38 +625,44 @@ impl OpusTiming {
                 // trailing packets without a granule (truncated file): continue from the cursor
                 let mut c = cursor.unwrap_or(0);
                 for k in i..n {
-                    c += durations[k] as i64;
+                    c = c.saturating_add(i64::from(durations[k]));
                     ends[k] = Some(c);
                 }
                 break;
             }
             let Some(g) = stream.packets[j].granule else { break };
-            let sum: i64 = durations[i..=j].iter().map(|&d| d as i64).sum();
-            let forward = cursor.map(|c| c + sum);
-            let end = match forward {
+            let sum = durations[i..=j].iter().fold(0i64, |a, &d| a.saturating_add(i64::from(d)));
+            let eos = stream.packets[j].eos;
+            let end = match cursor.map(|c| c.saturating_add(sum)) {
                 // end trimming on the last page (RFC 7845 §4.5): keep the forward positions
-                Some(f) if stream.packets[j].eos && g < f => {
+                Some(f) if eos && g < f => {
                     trimmed_end = Some(g);
                     f
                 }
                 Some(f) if f == g => f,
+                // the only page with audio is also the last: its packets start at 0 and the
+                // shortfall is trimmed at the end (RFC 7845 §4.5)
+                None if eos && g < sum => {
+                    trimmed_end = Some(g);
+                    sum
+                }
                 // first page, or a discontinuity: trust the granule
                 _ => g,
             };
             let mut e = end;
             for k in (i..=j).rev() {
                 ends[k] = Some(e);
-                e -= durations[k] as i64;
+                e = e.saturating_sub(i64::from(durations[k]));
             }
             cursor = Some(end);
             i = j + 1;
         }
-        let raw_starts: Vec<i64> = ends.iter().zip(&durations).map(|(e, &d)| e.unwrap_or(0) - d as i64).collect();
+        let raw_starts: Vec<i64> = ends.iter().zip(&durations).map(|(e, &d)| e.unwrap_or(0).saturating_sub(i64::from(d))).collect();
         let base = raw_starts.first().copied().unwrap_or(0).max(0);
-        let shift = base + pre_skip as i64;
-        let starts: Vec<i64> = raw_starts.iter().map(|s| s - shift).collect();
+        let shift = base.saturating_add(i64::from(pre_skip));
+        let starts: Vec<i64> = raw_starts.iter().map(|s| s.saturating_sub(shift)).collect();
         let end_all = trimmed_end.or(cursor).unwrap_or(0);
-        let total = (end_all - shift).max(0);
+        let total = end_all.saturating_sub(shift).max(0);
         OpusTiming { pre_skip, starts, durations, total }
     }
 }
