@@ -129,6 +129,10 @@ impl Updater {
     #[must_use]
     pub fn with_translator(mut self, translate: Translate) -> Self {
         self.translate = translate;
+        // A prompt already open (an offer made before) speaks the new language from its next draw.
+        if let Some(prompt) = &mut self.prompt {
+            prompt.translate = translate;
+        }
         self
     }
 
@@ -599,6 +603,26 @@ mod tests {
         drop(tx);
         u.tick(&ctx);
         assert!(u.prompt.as_ref().is_some_and(|p| p.message().is_some()));
+    }
+
+    /// A translator given after the prompt opened reaches it too.
+    #[test]
+    fn a_translator_given_later_reaches_the_open_prompt() {
+        fn shout(text: &str, args: &[(&str, &str)]) -> String {
+            crate::translate::fill(&text.to_uppercase(), args)
+        }
+        let ctx = egui::Context::default();
+        let mut u = updater(Ok(None));
+        u.offer(newer());
+        u.request_install(&ctx, false);
+        let mut u = u.with_translator(shout);
+        let message = |u: &Updater| u.prompt.as_ref().and_then(StartupPrompt::message).unwrap_or_default();
+        assert!(message(&u).starts_with("SAVE OR CLOSE"), "{}", message(&u));
+        // And the prompts it opens later.
+        u.prompt = None;
+        u.offer(newer());
+        u.request_install(&ctx, false);
+        assert!(message(&u).starts_with("SAVE OR CLOSE"), "{}", message(&u));
     }
 
     /// The updater's own failures (a dropped or panicking worker) are in the interface language;
