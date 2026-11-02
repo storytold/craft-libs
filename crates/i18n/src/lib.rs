@@ -13,6 +13,7 @@
 mod catalog;
 #[cfg(feature = "collate")]
 mod collate;
+pub mod encoding;
 mod fold;
 mod format;
 mod number;
