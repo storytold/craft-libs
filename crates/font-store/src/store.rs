@@ -7,6 +7,8 @@
 //! manifest.json        what is installed
 //! indexes/             the last indexes fetched: sources.json, one file per source
 //! <family dir>/        google/fonts' folder name, or <source>/<family>: the fonts and the licence
+//! language-packs/      installed Language packs, one folder per locale (`crate::language_packs`)
+//! language-packs.json  which Language packs are installed, from which index entry
 //! .staging/            downloads being installed; nothing a font scan picks up
 //! .lock                held while the store changes
 //! ```
@@ -30,7 +32,7 @@ use crate::verify::{VerifyError, is_font, sha256_hex, verify_font};
 
 const SETTINGS: &str = "settings.json";
 const MANIFEST: &str = "manifest.json";
-const INDEX_CACHE: &str = "indexes";
+pub(crate) const INDEX_CACHE: &str = "indexes";
 const SOURCES_CACHE: &str = "sources.json";
 const STAGING: &str = ".staging";
 const LOCK: &str = ".lock";
@@ -111,7 +113,7 @@ pub enum Error {
     },
 }
 
-fn io(what: impl Into<String>) -> impl FnOnce(std::io::Error) -> Error {
+pub(crate) fn io(what: impl Into<String>) -> impl FnOnce(std::io::Error) -> Error {
     let what = what.into();
     move |source| Error::Io { what, source }
 }
@@ -336,7 +338,7 @@ impl FontStore {
         self.dir.join(INDEX_CACHE).join(format!("user-{key}"))
     }
 
-    fn require_network(&self) -> Result<(), Error> {
+    pub(crate) fn require_network(&self) -> Result<(), Error> {
         if self.network() == Network::On { Ok(()) } else { Err(Error::NetworkOff) }
     }
 
@@ -545,7 +547,7 @@ impl FontStore {
     }
 
     /// Downloads from each URL in turn until one gives bytes that pass `check`.
-    fn fetch(
+    pub(crate) fn fetch(
         &self,
         urls: &[String],
         max: u64,
@@ -712,7 +714,7 @@ impl FontStore {
         }
     }
 
-    fn lock(&self) -> Result<File, Error> {
+    pub(crate) fn lock(&self) -> Result<File, Error> {
         std::fs::create_dir_all(&self.dir).map_err(io("creating the font store folder"))?;
         let file = File::options().create(true).truncate(false).write(true).open(self.dir.join(LOCK)).map_err(io("locking the font store"))?;
         file.lock().map_err(io("locking the font store"))?;
@@ -740,12 +742,12 @@ impl FontStore {
         self.write_file(MANIFEST, &bytes)
     }
 
-    fn write_file(&self, name: &str, bytes: &[u8]) -> Result<(), Error> {
+    pub(crate) fn write_file(&self, name: &str, bytes: &[u8]) -> Result<(), Error> {
         std::fs::create_dir_all(&self.dir).map_err(io("creating the font store folder"))?;
         craft_atomic::atomic_write(&self.dir.join(name), bytes).map_err(io(format!("saving {name}")))
     }
 
-    fn sweep_staging(&self) {
+    pub(crate) fn sweep_staging(&self) {
         for e in std::fs::read_dir(self.dir.join(STAGING)).into_iter().flatten().flatten() {
             let old = e.metadata().and_then(|m| m.modified()).is_ok_and(|t| SystemTime::now().duration_since(t).is_ok_and(|d| d > STALE));
             if old {
@@ -818,7 +820,7 @@ fn user_index(bytes: &[u8], user: &UserSource) -> Result<Index, IndexError> {
     Ok(index)
 }
 
-fn read_limited(path: &Path, max: u64) -> Option<Vec<u8>> {
+pub(crate) fn read_limited(path: &Path, max: u64) -> Option<Vec<u8>> {
     if std::fs::metadata(path).ok()?.len() > max {
         return None;
     }
@@ -830,16 +832,28 @@ fn host(url: &str) -> &str {
 }
 
 /// A folder of downloads under `.staging`, deleted when dropped.
-struct Stage {
-    dir: PathBuf,
+pub(crate) struct Stage {
+    pub(crate) dir: PathBuf,
 }
 
 impl Stage {
-    fn new(store: &Path) -> Result<Self, Error> {
+    pub(crate) fn new(store: &Path) -> Result<Self, Error> {
         static N: AtomicU64 = AtomicU64::new(0);
-        let dir = store.join(STAGING).join(format!("{}-{}", std::process::id(), N.fetch_add(1, Ordering::Relaxed)));
-        std::fs::create_dir_all(&dir).map_err(io("creating a download folder"))?;
-        Ok(Self { dir })
+        let staging = store.join(STAGING);
+        std::fs::create_dir_all(&staging).map_err(io("creating a download folder"))?;
+        // A folder of that name may be another process's (PID namespaces in Flatpak or
+        // containers repeat ids) or a stale one: never touched here, the next name is taken
+        // (stale ones go in `sweep_staging`).
+        let mut last = None;
+        for _ in 0..1000 {
+            let dir = staging.join(format!("{}-{}", std::process::id(), N.fetch_add(1, Ordering::Relaxed)));
+            match std::fs::create_dir(&dir) {
+                Ok(()) => return Ok(Self { dir }),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => last = Some(e),
+                Err(e) => return Err(io("creating a download folder")(e)),
+            }
+        }
+        Err(io("creating a download folder")(last.unwrap_or_else(|| std::io::Error::other("no free name"))))
     }
 
     /// Writes a verified download as `<name>.part`, which no font scan picks up.
