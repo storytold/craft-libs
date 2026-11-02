@@ -24,25 +24,25 @@ pub const LICENSES: [&str; 3] = ["OFL", "APACHE2", "UFL"];
 #[derive(Debug, thiserror::Error)]
 pub enum IndexError {
     /// More than [`MAX_INDEX_BYTES`].
-    #[error("the font index is larger than {max} bytes")]
+    #[error("the index is larger than {max} bytes")]
     TooLarge {
         /// The limit.
         max: usize,
     },
     /// Not JSON, or a field has the wrong type.
-    #[error("the font index can't be read: {0}")]
+    #[error("the index can't be read: {0}")]
     Json(String),
     /// A major version this crate doesn't know.
-    #[error("the font index has version {0}; this build reads version {MAJOR_VERSION}.x")]
+    #[error("the index has version {0}; this build reads version {MAJOR_VERSION}.x")]
     Version(String),
     /// An entry breaks the format's rules.
-    #[error("the font index has an invalid entry: {0}")]
+    #[error("the index has an invalid entry: {0}")]
     Invalid(String),
     /// A gzipped index that doesn't decompress.
-    #[error("the gzipped font index can't be read: {0}")]
+    #[error("the gzipped index can't be read: {0}")]
     Gzip(String),
     /// The bytes aren't the pinned ones.
-    #[error("the font index doesn't have the sha256 this build expects")]
+    #[error("the index doesn't have the sha256 this build expects")]
     Checksum,
 }
 
