@@ -12,9 +12,10 @@ use crate::{Error, Limits, Manifest, Step, migrate, parse_manifest};
 /// 3. The members are read in the order the parsed JSON object holds them, the document as `D`.
 ///
 /// A missing `thumbnail` or `composite` reads as `None`, and members the envelope does not name
-/// are skipped. A member of the wrong type is [`Error::Json`], and so is a missing member, which
-/// is reported after the members that are present, in the order serde's derived `Deserialize`
-/// reports them.
+/// are skipped. A missing or invalid `format_version` is [`Error::Corrupt`], from [`migrate`].
+/// Any other member of the wrong type is [`Error::Json`], and so is a missing `generator` or
+/// `document`, which is reported after the members that are present, in the order serde's derived
+/// `Deserialize` reports them.
 pub fn read_manifest<D: DeserializeOwned, E: From<Error>>(json: &[u8], limits: &Limits, steps: &[Step<E>], target: u32) -> Result<Manifest<D>, E> {
     read_manifest_with(json, limits, steps, target, |document| serde_json::from_value(document).map_err(|e| E::from(Error::Json(e))))
 }

@@ -133,8 +133,10 @@ fn a_manifest_with_several_faults_reports_the_one_a_derived_struct_reports() {
 }
 
 #[test]
-fn a_missing_version_is_corrupt() {
+fn a_missing_or_invalid_version_is_corrupt() {
     assert!(matches!(read(br#"{"generator":"g","document":{"name":"a"}}"#), Err(Error::Corrupt(_))));
+    assert!(matches!(read(br#"{"format_version":"1","generator":"g","document":{"name":"a"}}"#), Err(Error::Corrupt(_))));
+    assert!(matches!(read(br#"{"format_version":1.5,"generator":"g","document":{"name":"a"}}"#), Err(Error::Corrupt(_))));
     assert!(matches!(read(b"[1]"), Err(Error::Corrupt(_))));
 }
 
