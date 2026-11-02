@@ -247,15 +247,32 @@ pub fn tag_from_redirect(location: &str, repo: &str) -> Option<String> {
     (!rest.is_empty() && rest.len() <= 64 && rest.bytes().all(|b| b.is_ascii_alphanumeric() || b"._-+".contains(&b))).then(|| rest.to_string())
 }
 
-/// Reads `sha256sum` output: `<hex>  <name>` (or `<hex> *<name>`) per line.
+/// Reads `sha256sum` output: `<hex>  <name>` (or `<hex> *<name>`) per line, one entry per name.
+/// A line repeated as is counts once; a name listed with two different hashes is dropped, so the
+/// file has no checksum and isn't installed, whichever line comes first.
 pub fn parse_sha256sums(text: &str) -> Vec<(String, String)> {
-    text.lines()
-        .filter_map(|line| {
-            let (hash, rest) = line.trim().split_once(char::is_whitespace)?;
-            let name = rest.trim_start().trim_start_matches('*');
-            (is_hex64(hash) && valid_file_name(name)).then(|| (hash.to_ascii_lowercase(), name.to_string()))
-        })
-        .collect()
+    let mut sums: Vec<(String, String)> = Vec::new();
+    let mut conflicting: Vec<String> = Vec::new();
+    for line in text.lines() {
+        let Some((hash, rest)) = line.trim().split_once(char::is_whitespace) else { continue };
+        let name = rest.trim_start().trim_start_matches('*');
+        if !is_hex64(hash) || !valid_file_name(name) {
+            continue;
+        }
+        let hash = hash.to_ascii_lowercase();
+        match sums.iter().find(|(_, n)| n == name) {
+            None => sums.push((hash, name.to_string())),
+            Some((h, _)) if *h == hash => {}
+            Some(_) => {
+                if !conflicting.iter().any(|n| n == name) {
+                    log::warn!("SHA256SUMS.txt lists {name} with different checksums; ignoring it");
+                    conflicting.push(name.to_string());
+                }
+            }
+        }
+    }
+    sums.retain(|(_, n)| !conflicting.contains(n));
+    sums
 }
 
 /// A bare file name we'd be willing to save: no paths, no control characters.
@@ -426,6 +443,26 @@ mod tests {
         let r = release_from_sums(REPO, "v0.5.0", &sums);
         assert_eq!(r.assets[0].url, "https://github.com/storytold/photocraft/releases/download/v0.5.0/photocraft-0.5.0-macos-universal.dmg");
         assert_eq!(r.version, Some(Version::new(0, 5, 0)));
+    }
+
+    #[test]
+    fn a_name_listed_twice_gives_one_asset_or_none() {
+        let other = "b".repeat(64);
+        // The same line twice (and the same hash in upper case) is one entry.
+        let sums = parse_sha256sums(&format!("{HASH}  a.zip\n{HASH} *a.zip\n{}  a.zip\n", HASH.to_ascii_uppercase()));
+        assert_eq!(sums, [(HASH.to_string(), "a.zip".to_string())]);
+        let r = release_from_sums(REPO, "v0.5.0", &sums);
+        assert_eq!(r.assets.iter().filter(|a| a.name == "a.zip").count(), 1);
+        // Two hashes for one name: the name is dropped in either line order, and the other
+        // files keep theirs.
+        for text in [format!("{HASH}  a.zip\n{other}  a.zip\n{HASH}  b.zip\n"), format!("{other}  a.zip\n{HASH}  b.zip\n{HASH}  a.zip\n")] {
+            let sums = parse_sha256sums(&text);
+            assert_eq!(sums, [(HASH.to_string(), "b.zip".to_string())], "{text}");
+            let r = release_from_sums(REPO, "v0.5.0", &sums);
+            assert!(r.assets.iter().all(|a| a.name != "a.zip"), "{text}");
+        }
+        // A third, matching line doesn't bring the name back.
+        assert!(parse_sha256sums(&format!("{HASH}  a.zip\n{other}  a.zip\n{HASH}  a.zip\n")).is_empty());
     }
 
     #[test]
