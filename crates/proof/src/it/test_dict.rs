@@ -133,6 +133,7 @@ io
 /// Make [`AFF`]/[`DIC`] the Italian dictionary (every test that needs one calls this; they all
 /// install the same one, so tests running in parallel agree).
 pub fn install() {
+    crate::hold_dictionary_tests();
     if let Err(e) = super::install_dictionary(AFF, DIC) {
         panic!("test dictionary: {e}");
     }

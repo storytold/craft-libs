@@ -41,6 +41,9 @@ pub(crate) trait Slot: Sync {
     fn has_dictionary(&self) -> bool;
     /// See [`DictSlot::reload`].
     fn reload(&self);
+    /// See [`DictSlot::names`].
+    #[cfg(test)]
+    fn names(&self) -> &'static [&'static str];
 }
 
 impl<D: Dictionary> Slot for DictSlot<D> {
@@ -58,6 +61,11 @@ impl<D: Dictionary> Slot for DictSlot<D> {
 
     fn reload(&self) {
         DictSlot::reload(self);
+    }
+
+    #[cfg(test)]
+    fn names(&self) -> &'static [&'static str] {
+        DictSlot::names(self)
     }
 }
 

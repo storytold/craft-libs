@@ -363,7 +363,10 @@ mod tests {
         assert!(suggest::suggest_in(&none, "превет", 5).is_empty());
     }
 
-    #[cfg_attr(not(craft_proof_data), ignore = "needs the Language data (CRAFT_I18N_DIR)")]
+    #[cfg_attr(
+        not(craft_proof_embed = "ru"),
+        ignore = "needs the ru Language data (CRAFT_I18N_DIR; ru-extra.txt is embedded in every build that has it)"
+    )]
     #[test]
     fn russian_words_are_correct() {
         test_dict::install();

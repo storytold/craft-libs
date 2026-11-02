@@ -15,6 +15,12 @@ fn latin(c: char) -> bool {
 /// letter or has no letters, it has digits or is a short word in capitals (an acronym) and the
 /// options skip those, or it is in another script.
 pub(crate) fn word_to_check<'a>(d: &AffixDict, word: &'a str, opts: &Options) -> Option<&'a str> {
+    word_to_check_in(d, word, opts).filter(|w| w.chars().any(latin))
+}
+
+/// [`word_to_check`] in any script: the start of a Language pack language's check, whose
+/// dictionary may be Cyrillic, Greek or any other script.
+pub(crate) fn word_to_check_in<'a>(d: &AffixDict, word: &'a str, opts: &Options) -> Option<&'a str> {
     if d.is_empty() {
         return None;
     }
@@ -24,10 +30,11 @@ pub(crate) fn word_to_check<'a>(d: &AffixDict, word: &'a str, opts: &Options) ->
     if n <= 1 || (opts.ignore_numbers && w.chars().any(|c| c.is_ascii_digit())) || !w.chars().any(char::is_alphabetic) {
         return None;
     }
-    if opts.ignore_uppercase && w.chars().all(|c| !c.is_lowercase()) && n <= 6 {
+    // Only a word with a cased letter can be in capitals: Hebrew, Arabic, Thai… words have none.
+    if opts.ignore_uppercase && w.chars().any(char::is_uppercase) && w.chars().all(|c| !c.is_lowercase()) && n <= 6 {
         return None;
     }
-    w.chars().any(latin).then_some(w)
+    Some(w)
 }
 
 #[cfg(test)]

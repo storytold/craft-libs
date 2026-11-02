@@ -76,6 +76,8 @@ mod checker_tests {
 
     #[test]
     fn vietnamese_paragraphs_under_english_get_no_marks() {
+        // English results depend on the dictionaries other tests install.
+        crate::hold_dictionary_tests();
         let text = "Hôm nay tôi đi học, trời rất đẹp và mát mẻ.";
         let spans = [(0..text.len(), ProofLang::En)];
         assert!(check_text_with(text, &spans, &Options::default(), true, false).is_empty());
@@ -87,7 +89,7 @@ mod checker_tests {
     /// `yesterdy` (R6.4).
     #[test]
     fn english_keeps_its_marks_and_skips_vietnamese_names() {
-        let _guard = crate::DICTIONARY_TESTS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        crate::hold_dictionary_tests();
         let text = "We met Nguyễn yesterdy at the office.";
         let issues = check_text_with(text, &[(0..text.len(), ProofLang::En)], &Options::default(), false, false);
         let flagged: Vec<&str> = issues.iter().filter_map(|i| text.get(i.start..i.end)).collect();

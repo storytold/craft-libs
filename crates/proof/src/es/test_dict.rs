@@ -103,6 +103,7 @@ zqprohibida/F
 /// Install the fixture for every variety: [`DIC`] for Spain, [`DIC_AMERICAS`] for Mexico, Latin
 /// America and Uruguay.
 pub fn install() {
+    crate::hold_dictionary_tests();
     for (lang, dic) in [(ProofLang::Es, DIC), (ProofLang::EsMx, DIC_AMERICAS), (ProofLang::Es419, DIC_AMERICAS), (ProofLang::EsUy, DIC_AMERICAS)] {
         if let Err(e) = super::install_dictionary(lang, AFF, dic) {
             panic!("test dictionary: {e}");

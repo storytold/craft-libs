@@ -163,6 +163,8 @@ mod tests {
 
     #[test]
     fn czech_dispatch_messages_options_and_mixed_spans() {
+        // English results depend on the dictionaries other tests install.
+        crate::hold_dictionary_tests();
         test_dict::install();
         assert!(crate::has_dictionary(Some("cs-CZ")));
         assert!(crate::is_correct_for("městě", Some("cze")));

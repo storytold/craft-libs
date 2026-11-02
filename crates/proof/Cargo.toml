@@ -14,6 +14,7 @@ workspace = true
 [dependencies]
 log = "0.4"
 miniz_oxide = "0.9"
+toml = { version = "1", default-features = false, features = ["parse", "serde", "std"] }
 unicode-normalization = "0.1"
 
 [dev-dependencies]

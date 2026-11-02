@@ -60,3 +60,9 @@ jobs:
           cargo clippy -p craft-proof --all-targets --locked -- -D warnings
           cargo test -p craft-proof --locked
           cargo check -p craft-proof --locked --target wasm32-unknown-unknown
+      - name: The English-only build (CRAFT_PROOF_EMBED=en, CP4.4's default once Language packs ship)
+        env:
+          CRAFT_I18N_DIR: ${{ github.workspace }}/craft-i18n
+          CRAFT_I18N_REQUIRED: "1"
+          CRAFT_PROOF_EMBED: en
+        run: cargo test -p craft-proof --locked

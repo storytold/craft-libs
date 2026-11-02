@@ -156,7 +156,10 @@ fn forms(base: &str, class: &str) -> Vec<String> {
 mod tests {
     use super::*;
 
-    #[cfg_attr(not(craft_proof_data), ignore = "needs the Language data (CRAFT_I18N_DIR)")]
+    #[cfg_attr(
+        not(craft_proof_embed = "ru"),
+        ignore = "needs the ru Language data (CRAFT_I18N_DIR; ru-extra.txt is embedded in every build that has it)"
+    )]
     #[test]
     fn supplement_words_decline() {
         for w in [

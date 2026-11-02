@@ -124,6 +124,7 @@ pub const DIC: &str = "62
 
 /// Install the test dictionary as the Russian one.
 pub fn install() {
+    crate::hold_dictionary_tests();
     if let Err(e) = super::install_dictionary(AFF, DIC) {
         panic!("test dictionary: {e}");
     }

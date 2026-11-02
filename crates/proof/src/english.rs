@@ -191,13 +191,17 @@ fn key(lang: ProofLang) -> &'static str {
     names(lang).first().copied().unwrap_or("en_US")
 }
 
-/// Read the first Hunspell pair of `lang`'s own that loads, trying each name in each folder
-/// ([`crate::hunspell::candidates`]; with SCOWL embedded, the dictionaries folder only:
+/// Read the first Hunspell pair of `lang`'s own that loads, trying each name in each folder and
+/// an installed pack named exactly for it ([`crate::hunspell::candidates_exact`]: never another
+/// dialect's file or pack; with SCOWL embedded, the dictionaries folder only:
 /// [`crate::hunspell::user_candidates`]), with the first failure before it (the file `lang`
 /// would rather use), for [`note_error`].
 fn load(lang: ProofLang) -> (Loaded, Option<(PathBuf, String)>) {
-    let candidates =
-        if crate::scowl::dict(lang).is_some() { crate::hunspell::user_candidates(names(lang)) } else { crate::hunspell::candidates(names(lang)) };
+    let candidates = if crate::scowl::dict(lang).is_some() {
+        crate::hunspell::user_candidates(names(lang))
+    } else {
+        crate::hunspell::candidates_exact(names(lang))
+    };
     if candidates.is_empty() {
         log::info!("English spelling: no Hunspell {} dictionary to read first; using SCOWL or the built-in word list", key(lang));
         return (None, None);

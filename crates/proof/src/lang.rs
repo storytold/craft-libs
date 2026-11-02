@@ -27,7 +27,8 @@ pub enum ProofLang {
     /// There is no Bulgarian dictionary or grammar yet, so, as for [`ProofLang::Other`], no
     /// spelling or grammar marks.
     Bg,
-    /// Portuguese (`pt`, `pt-BR`, `pt-PT`): the installed Hunspell dictionary (VERO and
+    /// Portuguese (`pt`, `pt-BR`; `pt-PT` is [`ProofLang::Pack`] `pt-pt`, with its own dictionary
+    /// and these grammar rules and patterns): the installed Hunspell dictionary (VERO and
     /// friends, when there is one), the Portuguese grammar rules and the Portuguese hyphenation
     /// patterns.
     Pt,
@@ -66,11 +67,18 @@ pub enum ProofLang {
     /// dictionary (else the neighbouring Rioplatense `es_AR`, a Latin American or a generic one),
     /// and the `vos` forms of verbs (`tenés`, `vení`, `decime`) accepted ([`crate::es::voseo`]).
     EsUy,
-    /// German (`de`, `de-DE`, `de-AT`, `de-CH`…): hyphenation by the German patterns (reformed
+    /// German (`de`, `de-DE`, `de-AT`…; `de-CH` and `de-LI` are [`ProofLang::Pack`] `de-ch`, with
+    /// their own dictionary and these patterns): hyphenation by the German patterns (reformed
     /// spelling). There is no German dictionary or grammar yet, so, as for [`ProofLang::Other`],
     /// no spelling or grammar marks.
     De,
-    /// A language without proofing tools here (`fr-FR`, `ja-JP`, `x-none`…). Like Word without
+    /// Any other language, by its tag (`nl`, `fr-FR`, `sr-Latn`): spelling and suggestions from
+    /// its Hunspell dictionary (the dictionaries folder, an installed Language pack, the system's)
+    /// through the shared affix engine with default tuning, and hyphenation from its Language
+    /// pack. No grammar rules. Without a dictionary or pack it behaves exactly as
+    /// [`ProofLang::Other`]: no marks, English hyphenation fallback.
+    Pack(PackLocale),
+    /// A language without proofing tools here (`x-none`, `zxx`, `und`, a malformed tag). Like Word without
     /// the language's proofing tools: no spelling or grammar marks, so its words are never
     /// flagged as English misspellings. Hyphenation keeps using the English patterns, as before
     /// languages were told apart.
@@ -100,7 +108,8 @@ impl ProofLang {
     /// The proofing language of a BCP 47 tag (`pl-PL`, `en_GB`, `PL`…). The primary subtag
     /// counts, and for English and Spanish the region too ([`ProofLang::english`],
     /// [`ProofLang::spanish`]). No tag (or an empty one) is English, WordCraft's default editing
-    /// language.
+    /// language. Any other valid language tag is [`ProofLang::Pack`] with its [`PackLocale`];
+    /// `x-none`, `und`, `zxx`, `mul`, `mis` and malformed tags are [`ProofLang::Other`].
     pub fn from_tag(tag: Option<&str>) -> ProofLang {
         let Some(tag) = tag.map(str::trim).filter(|t| !t.is_empty()) else { return ProofLang::En };
         let primary = tag.split(['-', '_']).next().unwrap_or("");
@@ -111,7 +120,12 @@ impl ProofLang {
         } else if primary.eq_ignore_ascii_case("bg") || primary.eq_ignore_ascii_case("bul") {
             ProofLang::Bg
         } else if primary.eq_ignore_ascii_case("pt") || primary.eq_ignore_ascii_case("por") {
-            ProofLang::Pt
+            // European Portuguese spells differently: its own dictionary (`pt_PT`, a `pt-pt` pack).
+            if region(tag).is_some_and(|r| r.eq_ignore_ascii_case("PT")) {
+                PackLocale::new("pt-PT").map_or(ProofLang::Pt, ProofLang::Pack)
+            } else {
+                ProofLang::Pt
+            }
         } else if primary.eq_ignore_ascii_case("it") || primary.eq_ignore_ascii_case("ita") {
             ProofLang::It
         } else if primary.eq_ignore_ascii_case("hr") || primary.eq_ignore_ascii_case("hrv") {
@@ -127,9 +141,15 @@ impl ProofLang {
         } else if primary.eq_ignore_ascii_case("es") || primary.eq_ignore_ascii_case("spa") {
             ProofLang::spanish(tag)
         } else if ["de", "deu", "ger"].iter().any(|c| primary.eq_ignore_ascii_case(c)) {
-            ProofLang::De
+            // Swiss (and Liechtenstein) German spells without ß: its own dictionary (`de_CH`, a
+            // `de-ch` pack).
+            if region(tag).is_some_and(|r| r.eq_ignore_ascii_case("CH") || r.eq_ignore_ascii_case("LI")) {
+                PackLocale::new("de-CH").map_or(ProofLang::De, ProofLang::Pack)
+            } else {
+                ProofLang::De
+            }
         } else {
-            ProofLang::Other
+            PackLocale::new(tag).map_or(ProofLang::Other, ProofLang::Pack)
         }
     }
 
@@ -156,6 +176,17 @@ impl ProofLang {
         }
     }
 
+    /// The built-in language whose hyphenation, grammar and messages a regional
+    /// [`ProofLang::Pack`] language shares: German for `de-ch`, Portuguese for `pt-pt` (their
+    /// spelling is their own). Any other language is itself.
+    pub(crate) fn built_in(self) -> ProofLang {
+        match self {
+            ProofLang::Pack(l) if l.primary() == "de" => ProofLang::De,
+            ProofLang::Pack(l) if l.primary() == "pt" => ProofLang::Pt,
+            other => other,
+        }
+    }
+
     /// Is this one of the Englishes ([`ProofLang::En`], [`ProofLang::EnGb`], [`ProofLang::EnCa`])?
     pub fn is_english(self) -> bool {
         matches!(self, ProofLang::En | ProofLang::EnGb | ProofLang::EnCa)
@@ -167,9 +198,14 @@ impl ProofLang {
         matches!(self, ProofLang::Es | ProofLang::EsMx | ProofLang::Es419 | ProofLang::EsUy)
     }
 
-    /// The primary language subtag (`en`, `pl`, `bg`, `tr`, `ru`, `cs`, `id`, `de`, `es`); empty for [`ProofLang::Other`].
+    /// The primary language subtag (`en`, `pl`, `bg`, `tr`, `ru`, `cs`, `id`, `de`, `es`); empty for
+    /// [`ProofLang::Other`] and for a [`ProofLang::Pack`] language, whose locale isn't `'static`:
+    /// use [`ProofLang::tag`] wherever the code names the language (keys, settings, saved or
+    /// reported values), or every pack language would read the same. Kept `'static` so existing
+    /// callers (`PROOFED.map(ProofLang::code)`) don't break.
     pub fn code(self) -> &'static str {
         match self {
+            ProofLang::Pack(_) => "",
             ProofLang::En | ProofLang::EnGb | ProofLang::EnCa => "en",
             ProofLang::Pl => "pl",
             ProofLang::Bg => "bg",
@@ -186,15 +222,138 @@ impl ProofLang {
         }
     }
 
-    /// Does WordCraft check spelling and grammar in this language?
-    pub fn is_proofed(self) -> bool {
-        Self::PROOFED.contains(&self)
+    /// The locale whose Hunspell dictionary (dictionaries folder, Language pack, system) spells
+    /// this language through the shared affix engine: a [`ProofLang::Pack`] language's own, and
+    /// German's and Bulgarian's, which have hyphenation (and Bulgarian rules) of their own but no
+    /// dictionary slot. `None` for the languages with a slot of their own, English and `Other`.
+    pub(crate) fn spelling_locale(self) -> Option<PackLocale> {
+        match self {
+            ProofLang::Pack(l) => Some(l),
+            ProofLang::De => PackLocale::new("de-DE"),
+            ProofLang::Bg => PackLocale::new("bg-BG"),
+            _ => None,
+        }
     }
+
+    /// The code that names this language, for keys, settings and reported values: [`code`] for
+    /// the built-in languages (`en`, `es`, …), the locale for a [`ProofLang::Pack`] one (`nl`,
+    /// `sr-latn`), so no two pack languages share one; empty for [`ProofLang::Other`].
+    ///
+    /// [`code`]: ProofLang::code
+    pub fn tag(self) -> std::borrow::Cow<'static, str> {
+        match self {
+            ProofLang::Pack(l) => std::borrow::Cow::Owned(l.as_str().to_string()),
+            other => std::borrow::Cow::Borrowed(other.code()),
+        }
+    }
+
+    /// The locale of a [`ProofLang::Pack`] language.
+    pub fn pack_locale(self) -> Option<PackLocale> {
+        if let ProofLang::Pack(l) = self { Some(l) } else { None }
+    }
+
+    /// Does WordCraft check spelling in this language? For a [`ProofLang::Pack`] language, German
+    /// and Bulgarian: is a dictionary for it available now (read on first use, cached until the dictionaries folder or
+    /// the packs change)?
+    pub fn is_proofed(self) -> bool {
+        match self.spelling_locale() {
+            Some(l) => crate::pack_lang::has_dictionary(l),
+            None => Self::PROOFED.contains(&self),
+        }
+    }
+}
+
+/// The locale of a [`ProofLang::Pack`] language: a lowercase BCP 47 tag (`nl`, `fr-fr`,
+/// `sr-latn`) of at most [`PackLocale::MAX_LEN`] bytes, stored inline so [`ProofLang`] stays `Copy`.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct PackLocale {
+    len: u8,
+    bytes: [u8; PackLocale::MAX_LEN],
+}
+
+impl PackLocale {
+    /// Longest locale kept; a longer tag is cut at a subtag boundary.
+    pub const MAX_LEN: usize = 15;
+
+    /// The locale of a language tag (`nl-NL`, `sr_Latn`, `fr-FR.UTF-8`): lowercased, `_` as `-`,
+    /// without a POSIX `.…`/`@…` tail or anything from a singleton on (`-x-…`, `-u-…`). `None` for
+    /// a tag that isn't a language (`x-none`, `i-…`, `und`, `zxx`, `mul`, `mis`, malformed ones).
+    pub fn new(tag: &str) -> Option<PackLocale> {
+        let tag = tag.trim().split(['.', '@']).next().unwrap_or("");
+        let mut parts = tag.split(['-', '_']);
+        let primary = parts.next()?.to_ascii_lowercase();
+        if !(2..=8).contains(&primary.len())
+            || !primary.bytes().all(|b| b.is_ascii_lowercase())
+            || ["und", "zxx", "mul", "mis"].contains(&primary.as_str())
+        {
+            return None;
+        }
+        let mut out = primary;
+        for p in parts {
+            if p.len() <= 1 || p.len() > 8 || !p.bytes().all(|b| b.is_ascii_alphanumeric()) || out.len() + 1 + p.len() > Self::MAX_LEN {
+                break;
+            }
+            out.push('-');
+            out.push_str(&p.to_ascii_lowercase());
+        }
+        let mut bytes = [0u8; Self::MAX_LEN];
+        for (b, c) in bytes.iter_mut().zip(out.bytes()) {
+            *b = c;
+        }
+        Some(PackLocale { len: u8::try_from(out.len()).ok()?, bytes })
+    }
+
+    /// The locale (`nl`, `fr-fr`).
+    pub fn as_str(&self) -> &str {
+        self.bytes.get(..usize::from(self.len)).and_then(|b| std::str::from_utf8(b).ok()).unwrap_or_default()
+    }
+
+    /// The primary language subtag (`fr`).
+    pub fn primary(&self) -> &str {
+        self.as_str().split('-').next().unwrap_or_default()
+    }
+}
+
+impl std::fmt::Debug for PackLocale {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "PackLocale({:?})", self.as_str())
+    }
+}
+
+impl std::fmt::Display for PackLocale {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Is a subtag a script (four ASCII letters: `Latn`, `cyrl`)?
+pub(crate) fn is_script(subtag: &str) -> bool {
+    subtag.len() == 4 && subtag.bytes().all(|b| b.is_ascii_alphabetic())
+}
+
+/// The script a language is written in when its tag names none, lowercase, for the languages
+/// written in more than one (or whose packs may name it): Serbian is Cyrillic, Bosnian and
+/// Croatian Latin… `None`: the language doesn't say, and a pack naming a script never serves it.
+pub(crate) fn default_script(primary: &str) -> Option<&'static str> {
+    Some(match primary {
+        "sr" | "ru" | "uk" | "be" | "bg" | "mk" | "kk" | "ky" | "tg" | "mn" | "tt" | "ba" | "cv" | "os" | "ce" => "cyrl",
+        "bs" | "hr" | "sh" | "az" | "uz" | "tk" | "ms" | "ha" | "ro" | "sq" | "tr" | "ku" | "so" => "latn",
+        "zh" => "hans",
+        "pa" => "guru",
+        _ => return None,
+    })
+}
+
+/// The script of a tag (`sr-latn`, `sr_Latn`): the one it names, else its language's default.
+pub(crate) fn effective_script(tag: &str) -> Option<String> {
+    let mut parts = tag.split(['-', '_']);
+    let primary = parts.next().unwrap_or_default().to_ascii_lowercase();
+    parts.find(|p| is_script(p)).map(str::to_ascii_lowercase).or_else(|| default_script(&primary).map(str::to_string))
 }
 
 /// The region of a tag: the first two-letter or three-digit subtag after the language and
 /// script, before any singleton; a POSIX `.UTF-8` or `@…` tail is ignored.
-fn region(tag: &str) -> Option<&str> {
+pub(crate) fn region(tag: &str) -> Option<&str> {
     let tag = tag.split(['.', '@']).next().unwrap_or("");
     // Subtags after a singleton (`x-…` private use, `u-…` extensions) aren't regions.
     tag.split(['-', '_'])
@@ -285,7 +444,10 @@ mod tests {
     #[test]
     fn tags_resolve_primary_languages() {
         assert_tags(&["pl", "pl-PL", "PL-pl", "pl_PL", "pl_PL.UTF-8", " pl-PL ", "pol"], ProofLang::Pl);
-        assert_tags(&["pt", "pt-BR", "PT_br", "pt-BR.UTF-8", " pt-PT ", "por"], ProofLang::Pt);
+        assert_tags(&["pt", "pt-BR", "PT_br", "pt-BR.UTF-8", "pt-AO", "por"], ProofLang::Pt);
+        let pt_pt = ProofLang::Pack(PackLocale::new("pt-pt").unwrap());
+        assert_tags(&[" pt-PT ", "pt_PT.UTF-8", "por-PT"], pt_pt);
+        assert_eq!((pt_pt.built_in(), ProofLang::Pt.built_in()), (ProofLang::Pt, ProofLang::Pt));
         assert_tags(&["it", "it-IT", "IT_it", "it-CH", "it-CH.UTF-8", " it-IT ", "ita"], ProofLang::It);
         assert_tags(&["cs", "cs-CZ", "CS-cz", "cs_CZ", " ces ", "CES", "cze", "CZE"], ProofLang::Cs);
         assert_tags(&["id", "id-ID", "ID-id", "id_ID", "id_ID.UTF-8", " id-ID ", "ind", "in", "in_ID"], ProofLang::Id);
@@ -332,7 +494,10 @@ mod tests {
     fn tags_resolve_additional_locales_and_defaults() {
         assert_tags(&["bg", "bg-BG", "BG_bg", "bg_BG.UTF-8", "bul"], ProofLang::Bg);
         assert_tags(&["tr", "tr-TR", "tr-CY", "TR_tr", "tur"], ProofLang::Tr);
-        assert_tags(&["de", "de-DE", "de-CH", "DE_at", "deu", "ger"], ProofLang::De);
+        assert_tags(&["de", "de-DE", "DE_at", "deu", "ger"], ProofLang::De);
+        let de_ch = ProofLang::Pack(PackLocale::new("de-ch").unwrap());
+        assert_tags(&["de-CH", "de_CH.UTF-8", "de-LI"], de_ch);
+        assert_eq!(de_ch.built_in(), ProofLang::De);
         assert_tags(&["ru", "ru-RU", "RU-ru", "ru_RU", "ru_RU.UTF-8", " ru-RU ", "rus"], ProofLang::Ru);
         assert!(!ProofLang::De.is_proofed());
         assert!(!ProofLang::Bg.is_proofed());
@@ -356,9 +521,28 @@ mod tests {
         assert!(ProofLang::Pl.is_proofed() && !ProofLang::Other.is_proofed());
     }
 
+    /// Two pack languages never share a key: `tag()` is the locale, while `code()` is empty.
+    #[test]
+    fn tag_names_each_pack_language() {
+        let (nl, fr) = (ProofLang::from_tag(Some("nl")), ProofLang::from_tag(Some("fr-FR")));
+        assert_eq!((nl.code(), fr.code()), ("", ""));
+        assert_eq!((nl.tag().as_ref(), fr.tag().as_ref()), ("nl", "fr-fr"));
+        for l in ProofLang::PROOFED {
+            assert_eq!(l.tag(), l.code());
+        }
+        assert_eq!(ProofLang::Other.tag(), "");
+    }
+
     #[test]
     fn tags_reject_unknown_or_partial_language_codes() {
-        assert_tags(&["fr-FR", "dex", "x-none", "ja-JP", "plx", "bgx", "trx", "csx", "idx", "inx", "esx", "spax", "e", "-"], ProofLang::Other);
+        // A partial code is another language, never the one it starts like.
+        for tag in ["fr-FR", "dex", "ja-JP", "plx", "bgx", "trx", "csx", "idx", "inx", "esx", "spax"] {
+            let lang = ProofLang::from_tag(Some(tag));
+            assert_eq!(lang.pack_locale().map(|l| l.to_string()), Some(tag.to_ascii_lowercase()), "{tag}");
+            assert_eq!(lang.code(), "", "{tag}: a pack language's locale is pack_locale()");
+            assert_eq!(lang.tag(), lang.pack_locale().map(|l| l.as_str().to_string()).unwrap_or_default(), "{tag}");
+        }
+        assert_tags(&["x-none", "e", "-", "und", "zxx", "i-klingon"], ProofLang::Other);
     }
 
     /// #3360, #3553: Spanish is proofed, by region: Spain (and no region), Mexico, Uruguay, and

@@ -18,6 +18,11 @@
 //! **German**: the TeX German patterns for the reformed spelling ([`Patterns::de`]), also for
 //! Swiss text, whose `ss` the patterns split like any double consonant (`Stras-se`).
 //!
+//! **Installed Language packs** ([`crate::packs`]): a pack's `hyphenation.pat` for the language
+//! comes first, for every language but English (embedded). The Polish, Portuguese, Italian and
+//! German patterns are embedded by default too until Language packs ship (CP4.4); a build with
+//! `CRAFT_PROOF_EMBED=en` leaves them to their packs.
+//!
 //! Then the paragraph's limits ([`Limits`]) are applied.
 
 pub use crate::dict;
@@ -114,7 +119,8 @@ fn is_apostrophe(c: char) -> bool {
 }
 
 fn is_word_char(c: char) -> bool {
-    c.is_alphabetic() || is_apostrophe(c)
+    // A combining mark belongs to its letter (decomposed `a` + U+0301 is one letter, `á`).
+    c.is_alphabetic() || is_apostrophe(c) || unicode_normalization::char::is_combining_mark(c)
 }
 
 /// Unrestricted break points of one lowercase core (letters and `'` only, no leading/trailing `'`).
@@ -123,6 +129,17 @@ fn core_breaks(core: &[char], lang: ProofLang) -> (Vec<usize>, Source) {
     if n < 2 {
         return (vec![], Source::None);
     }
+    // An installed Language pack's patterns come before the embedded ones and the rules, for a
+    // word in the language's script; any other word goes on as before (a Latin word in a Russian
+    // run is hyphenated as English).
+    if let Some(p) = crate::packs::hyphenation(lang)
+        && pack_patterns_fit(lang.built_in(), &p, core)
+    {
+        return if lang == ProofLang::Pl { core_breaks_pl_with(&p, core) } else { core_breaks_patterns(&p, core) };
+    }
+    // Swiss German and European Portuguese without patterns of their own use German's and
+    // Portuguese's.
+    let lang = lang.built_in();
     if lang == ProofLang::Pl {
         return core_breaks_pl(core);
     }
@@ -171,9 +188,46 @@ fn core_breaks(core: &[char], lang: ProofLang) -> (Vec<usize>, Source) {
     (heuristic_points(core), Source::Heuristic)
 }
 
+/// `core` composed (NFC), with the index in `core` where each composed character's base starts
+/// (`None` for a character that isn't the first of its base's group). Never longer than `core`.
+fn composed_chars(core: &[char]) -> (Vec<char>, Vec<Option<usize>>) {
+    use unicode_normalization::UnicodeNormalization;
+    use unicode_normalization::char::is_combining_mark;
+    let mut nfc: Vec<char> = Vec::with_capacity(core.len());
+    let mut starts: Vec<Option<usize>> = Vec::with_capacity(core.len());
+    let mut i = 0;
+    while i < core.len() {
+        let end = core.get(i + 1..).and_then(|rest| rest.iter().position(|&c| !is_combining_mark(c))).map_or(core.len(), |n| i + 1 + n);
+        let group: String = core.get(i..end).unwrap_or_default().iter().collect();
+        for (k, c) in group.nfc().enumerate() {
+            nfc.push(c);
+            starts.push((k == 0).then_some(i));
+        }
+        i = end;
+    }
+    (nfc, starts)
+}
+
+/// Does a pack's `pats` hyphenate `core` in `lang`? Russian, Bulgarian and Turkish: a word in
+/// their script (the guard their rules use). Polish, Portuguese, Italian and German: every word,
+/// as their embedded patterns do. Any other language: a word whose letters the patterns know.
+fn pack_patterns_fit(lang: ProofLang, pats: &Patterns, core: &[char]) -> bool {
+    match lang {
+        ProofLang::Ru => core.iter().all(|&c| crate::ru::is_cyrillic(c)),
+        ProofLang::Bg => core.iter().all(|&c| crate::bg::is_letter(c)),
+        ProofLang::Tr => core.iter().all(|&c| crate::tr::hyphen::is_letter(c)),
+        ProofLang::Pl | ProofLang::Pt | ProofLang::It | ProofLang::De => true,
+        _ => pats.values(core).is_some(),
+    }
+}
+
 /// Polish: exception words, then the patterns, then the Polish syllable heuristic.
 fn core_breaks_pl(core: &[char]) -> (Vec<usize>, Source) {
-    let pats = Patterns::pl();
+    core_breaks_pl_with(Patterns::pl(), core)
+}
+
+/// [`core_breaks_pl`] with `pats` (the embedded Polish patterns or an installed pack's).
+fn core_breaks_pl_with(pats: &Patterns, core: &[char]) -> (Vec<usize>, Source) {
     // No Polish patterns embedded: hyphenation is off.
     if pats.is_empty() {
         return (vec![], Source::None);
@@ -219,6 +273,16 @@ pub fn word_breaks(word: &str) -> (Vec<usize>, Source) {
 /// run is hyphenated separately). No break is ever placed next to an apostrophe or non-letter.
 pub fn word_breaks_in(word: &str, lang: ProofLang) -> (Vec<usize>, Source) {
     let chars: Vec<char> = word.chars().collect();
+    // Patterns are composed text (NFC), as spelling reads words: a decomposed word (`a` + U+0301)
+    // is hyphenated composed, and the breaks mapped back to its own chars.
+    if unicode_normalization::is_nfc_quick(word.chars()) != unicode_normalization::IsNormalized::Yes {
+        let (nfc, starts) = composed_chars(&chars);
+        if nfc.len() < chars.len() {
+            let composed: String = nfc.iter().collect();
+            let (pts, src) = word_breaks_in(&composed, lang);
+            return (pts.into_iter().filter_map(|i| starts.get(i).copied().flatten()).collect(), src);
+        }
+    }
     let mut out = Vec::new();
     let mut src = Source::None;
     let mut i = 0;
@@ -758,7 +822,7 @@ mod tests {
         hyphenate_word_in(w, &Limits::default(), ProofLang::Pl)
     }
 
-    #[cfg_attr(not(craft_proof_data), ignore = "needs the Language data (CRAFT_I18N_DIR)")]
+    #[cfg_attr(not(craft_proof_embed = "pl"), ignore = "needs the pl Language data (CRAFT_I18N_DIR; not in a CRAFT_PROOF_EMBED=en build)")]
     #[test]
     fn polish_patterns_load() {
         let p = Patterns::pl();
@@ -775,7 +839,7 @@ mod tests {
         hyphenate_word_in(w, &Limits::default(), ProofLang::It)
     }
 
-    #[cfg_attr(not(craft_proof_data), ignore = "needs the Language data (CRAFT_I18N_DIR)")]
+    #[cfg_attr(not(craft_proof_embed = "it"), ignore = "needs the it Language data (CRAFT_I18N_DIR; not in a CRAFT_PROOF_EMBED=en build)")]
     #[test]
     fn italian_patterns_load() {
         let p = Patterns::it();
@@ -784,7 +848,7 @@ mod tests {
         assert_eq!(p.exception_count(), 0);
     }
 
-    #[cfg_attr(not(craft_proof_data), ignore = "needs the Language data (CRAFT_I18N_DIR)")]
+    #[cfg_attr(not(craft_proof_embed = "it"), ignore = "needs the it Language data (CRAFT_I18N_DIR; not in a CRAFT_PROOF_EMBED=en build)")]
     #[test]
     fn italian_words_hyphenate_by_italian_rules() {
         for (w, want) in [
@@ -811,7 +875,7 @@ mod tests {
         assert_eq!(word_breaks_in("famiglia", ProofLang::It).1, Source::Patterns);
     }
 
-    #[cfg_attr(not(craft_proof_data), ignore = "needs the Language data (CRAFT_I18N_DIR)")]
+    #[cfg_attr(not(craft_proof_embed = "pt"), ignore = "needs the pt Language data (CRAFT_I18N_DIR; not in a CRAFT_PROOF_EMBED=en build)")]
     #[test]
     fn portuguese_patterns_load() {
         let p = Patterns::pt();
@@ -823,7 +887,7 @@ mod tests {
         assert_eq!(p.exception("software"), Some(&[4][..]));
     }
 
-    #[cfg_attr(not(craft_proof_data), ignore = "needs the Language data (CRAFT_I18N_DIR)")]
+    #[cfg_attr(not(craft_proof_embed = "pt"), ignore = "needs the pt Language data (CRAFT_I18N_DIR; not in a CRAFT_PROOF_EMBED=en build)")]
     #[test]
     fn portuguese_words_hyphenate_by_portuguese_rules() {
         for (w, want) in [
@@ -843,7 +907,7 @@ mod tests {
         }
     }
 
-    #[cfg_attr(not(craft_proof_data), ignore = "needs the Language data (CRAFT_I18N_DIR)")]
+    #[cfg_attr(not(craft_proof_embed = "pl"), ignore = "needs the pl Language data (CRAFT_I18N_DIR; not in a CRAFT_PROOF_EMBED=en build)")]
     #[test]
     fn polish_words_hyphenate_by_polish_rules() {
         for (w, want) in [
@@ -877,7 +941,7 @@ mod tests {
         assert_eq!(word_breaks_in("konstytucja", ProofLang::Pl).1, Source::Patterns);
     }
 
-    #[cfg_attr(not(craft_proof_data), ignore = "needs the Language data (CRAFT_I18N_DIR)")]
+    #[cfg_attr(not(craft_proof_embed = "pl"), ignore = "needs the pl Language data (CRAFT_I18N_DIR; not in a CRAFT_PROOF_EMBED=en build)")]
     #[test]
     fn polish_heuristic_for_foreign_letters() {
         // Letters outside the Polish alphabet: the Polish syllable heuristic, digraphs kept whole.
@@ -899,7 +963,7 @@ mod tests {
         }
     }
 
-    #[cfg_attr(not(craft_proof_data), ignore = "needs the Language data (CRAFT_I18N_DIR)")]
+    #[cfg_attr(not(craft_proof_embed = "de"), ignore = "needs the de Language data (CRAFT_I18N_DIR; not in a CRAFT_PROOF_EMBED=en build)")]
     #[test]
     fn german_patterns_load() {
         let p = Patterns::de();
@@ -908,7 +972,7 @@ mod tests {
         assert_eq!(p.exception_count(), 0);
     }
 
-    #[cfg_attr(not(craft_proof_data), ignore = "needs the Language data (CRAFT_I18N_DIR)")]
+    #[cfg_attr(not(craft_proof_embed = "de"), ignore = "needs the de Language data (CRAFT_I18N_DIR; not in a CRAFT_PROOF_EMBED=en build)")]
     #[test]
     fn german_words_follow_the_german_patterns() {
         let de = |w: &str| hyphenate_word_in(w, &Limits::default(), ProofLang::De);
