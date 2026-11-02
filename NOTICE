@@ -21,6 +21,10 @@ crates/cms/tests/data/FOGRA39.txt: FOGRA39 characterisation data, distributed un
   imply certification, approval or endorsement by Fogra."
 crates/text/assets/hyphen/en-us.dic: public domain, derived from the Moby Hyphenator II list by
   Grady Ward (Project Gutenberg eBook #3204).
+crates/proof/data/en-words.dic: public domain, the words of the Moby Hyphenator II list by Grady
+  Ward (Project Gutenberg eBook #3204), without its break points.
+crates/proof/data/en-extra.txt: MIT OR Apache-2.0, WordCraft contributors' own list of modern
+  English words (a copy of craft-i18n's language-data/en-us/en-extra.txt).
 crates/text/assets/hyphen/en-us.pat: CC0-1.0, trained from en-us.dic by DesignCraft's trainer.
 Hyphenation patterns for other languages, embedded through the hypher crate only when the
   matching craft-text feature is enabled (none are by default). They come from hyph-utf8,

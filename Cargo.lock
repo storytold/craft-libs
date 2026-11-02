@@ -1027,6 +1027,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-proof"
+version = "0.1.0"
+dependencies = [
+ "log",
+ "miniz_oxide 0.9.1",
+ "proptest",
+ "unicode-normalization",
+]
+
+[[package]]
 name = "craft-quit"
 version = "0.1.0"
 dependencies = [
