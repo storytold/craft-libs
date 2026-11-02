@@ -378,6 +378,7 @@ pub fn update(
                     package: None,
                     externally_managed: false,
                     origin: None,
+                    installation: None,
                 };
                 let placed = install::macos::install_dmg(app, &file, Some(&existing), None, false, paths, &install::macos::Expect::release(release));
                 let _ = std::fs::remove_file(&file);
@@ -1611,6 +1612,7 @@ mod tests {
             package: None,
             externally_managed: false,
             origin: None,
+            installation: None,
         };
         // An unsigned test bundle: the signature check has its own tests in `install`.
         let expect = install::macos::Expect { team: None, version: None };

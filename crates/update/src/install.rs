@@ -426,7 +426,9 @@ fn managed_elsewhere_with(app: &App, installed: &Installed, uninstall: bool, rep
             Some(pacman_update_hint(app, &pkg, repo_fn(&pkg).as_deref()))
         }
         InstallSource::Flatpak if !uninstall && installed.externally_managed => {
-            Some(format!("{} was installed from FlatPark. Update it with flatpak update {}", app.name, app.bundle_id()))
+            let default_pkg = app.bundle_id();
+            let pkg = installed.package.as_deref().unwrap_or(&default_pkg);
+            Some(format!("{} was installed from FlatPark. Update it with flatpak update {pkg}", app.name))
         }
         InstallSource::Binary => Some(format!("{} was installed outside the launcher. Update or remove it the way it was installed.", app.name)),
         _ => None,
@@ -995,13 +997,20 @@ pub mod linux {
     }
 
     /// Updates an installed Flatpak from its remote repository (such as FlatPark).
-    pub fn update_flatpak_app(app: &App, user: bool, stop: &Stop, phase: &mut dyn FnMut(JobPhase)) -> Result<(), String> {
+    pub fn update_flatpak_app(app: &App, id: &str, installation: Option<&str>, stop: &Stop, phase: &mut dyn FnMut(JobPhase)) -> Result<(), String> {
         phase(JobPhase::Installing);
         stop.check()?;
-        let id = app.bundle_id();
-        let mut cmd = if user {
+        let is_user = installation == Some("user");
+        let scope_args: Vec<String> = match installation {
+            Some("user") => vec!["--user".into()],
+            Some("system") | None => vec!["--system".into()],
+            Some(named) => vec![format!("--installation={named}")],
+        };
+        let mut cmd = if is_user {
             let mut c = process::flatpak_command();
-            c.args(["update", "--user", "-y", "--noninteractive", &id]);
+            c.arg("update");
+            c.args(&scope_args);
+            c.args(["-y", "--noninteractive", id]);
             c
         } else {
             let prefix = system_bundle_prefix(process::in_sandbox());
@@ -1010,7 +1019,9 @@ pub mod linux {
             };
             let mut c = process::command(*program);
             c.args(rest);
-            c.args(["update", "--system", "-y", "--noninteractive", &id]);
+            c.arg("update");
+            c.args(&scope_args);
+            c.args(["-y", "--noninteractive", id]);
             c
         };
         let output = cmd.output().map_err(|e| format!("couldn't run flatpak ({e})"))?;
@@ -1974,6 +1985,7 @@ mod tests {
             package: None,
             externally_managed: false,
             origin: None,
+            installation: None,
         };
         assert_eq!(destination(app, PackageKind::Msi, Some(&msi), Some(&old), &unavailable).unwrap(), Some(dir.path().join("MSI/PhotoCraft")));
         assert!(destination(app, PackageKind::TarGz, None, None, &locations).unwrap_err().contains("aren't supported"));
@@ -1992,6 +2004,7 @@ mod tests {
             package: None,
             externally_managed: false,
             origin: None,
+            installation: None,
         };
         let users = Installed {
             version: None,
@@ -2000,6 +2013,7 @@ mod tests {
             package: None,
             externally_managed: false,
             origin: None,
+            installation: None,
         };
         let chosen = dir.path().join("New apps");
         std::fs::create_dir(&chosen).unwrap();
@@ -2682,7 +2696,15 @@ mod tests {
 
     #[test]
     fn updates_keep_the_installed_format() {
-        let inst = |source| Installed { version: None, source, location: String::new(), package: None, externally_managed: false, origin: None };
+        let inst = |source| Installed {
+            version: None,
+            source,
+            location: String::new(),
+            package: None,
+            externally_managed: false,
+            origin: None,
+            installation: None,
+        };
         let app = crate::App::by_id("photocraft").unwrap();
         let available = available_kinds();
         if let Some(first) = available.first() {
@@ -2706,6 +2728,7 @@ mod tests {
             package: Some(name.into()),
             externally_managed: false,
             origin: None,
+            installation: None,
         };
         let app = crate::App::by_id("wordcraft").unwrap();
         assert!(is_release_arch_package(app, &pacman("ai.storyteller.wordcraft")));
@@ -2741,6 +2764,7 @@ mod tests {
             package: Some(name.into()),
             externally_managed: false,
             origin: None,
+            installation: None,
         };
         let app = crate::App::by_id("filmcraft").unwrap();
         let installed = pacman("filmcraft-bin");
@@ -2758,6 +2782,7 @@ mod tests {
             package: Some(name.into()),
             externally_managed: false,
             origin: None,
+            installation: None,
         };
         let app = crate::App::by_id("filmcraft").unwrap();
         let installed = pacman("ai.storyteller.filmcraft");
@@ -2776,6 +2801,7 @@ mod tests {
             package: Some("ai.storyteller.photocraft".into()),
             externally_managed: true,
             origin: Some("flatpark".into()),
+            installation: Some("user".into()),
         };
         assert!(flatpark_installed.is_externally_managed());
         assert_eq!(choose_kinds_with(app, Some(&flatpark_installed), None, &[], &[PackageKind::Flatpak], false), Vec::<PackageKind>::new());
@@ -2784,6 +2810,22 @@ mod tests {
         // During uninstall, managed_elsewhere returns None so it can be removed
         assert_eq!(managed_elsewhere_with(app, &flatpark_installed, true, |_| None), None);
 
+        // When installed under a former bundle ID, the hint targets that detected ID
+        let former_installed = Installed {
+            version: version::parse("0.19.0"),
+            source: InstallSource::Flatpak,
+            location: "ai.storyteller.photocraft-old".into(),
+            package: Some("ai.storyteller.photocraft-old".into()),
+            externally_managed: true,
+            origin: Some("flatpark".into()),
+            installation: Some("system".into()),
+        };
+        let hint_former = managed_elsewhere_with(app, &former_installed, false, |_| None);
+        assert_eq!(
+            hint_former.as_deref(),
+            Some("PhotoCraft was installed from FlatPark. Update it with flatpak update ai.storyteller.photocraft-old")
+        );
+
         let bundle_installed = Installed {
             version: version::parse("0.19.0"),
             source: InstallSource::Flatpak,
@@ -2791,6 +2833,7 @@ mod tests {
             package: Some("ai.storyteller.photocraft".into()),
             externally_managed: false,
             origin: Some("photocraft-origin".into()),
+            installation: Some("user".into()),
         };
         assert!(!bundle_installed.is_externally_managed());
         assert_eq!(choose_kinds_with(app, Some(&bundle_installed), None, &[], &[PackageKind::Flatpak], false), vec![PackageKind::Flatpak]);
@@ -2804,7 +2847,7 @@ mod tests {
         let stop = Stop::default();
         stop.cancel();
         let mut phase = |_| ();
-        assert_eq!(linux::update_flatpak_app(app, true, &stop, &mut phase), Err(CANCELLED.into()));
+        assert_eq!(linux::update_flatpak_app(app, "ai.storyteller.photocraft", Some("user"), &stop, &mut phase), Err(CANCELLED.into()));
     }
 
     #[test]
@@ -2832,6 +2875,7 @@ mod tests {
             package: None,
             externally_managed: false,
             origin: None,
+            installation: None,
         };
         let stop = Stop::default();
         let mut job = Job { http: &http, paths: &paths, stop: &stop, phase, install_locations: &locations, replace: false };
@@ -3065,6 +3109,7 @@ mod tests {
                 package: None,
                 externally_managed: false,
                 origin: None,
+                installation: None,
             };
             let paths = Paths::under(dir.path());
             let image = dmg(dir.path(), "0.6.0");
@@ -3105,6 +3150,7 @@ mod tests {
                 package: None,
                 externally_managed: false,
                 origin: None,
+                installation: None,
             };
             let image = dmg(dir.path(), "0.6.0");
             let release = Release { tag: "v0.6.0".into(), version: version::parse("0.6.0"), ..Release::default() };
