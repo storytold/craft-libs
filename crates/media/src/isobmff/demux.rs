@@ -291,6 +291,9 @@ pub struct Mp4File {
     pub moov_offset: u64,
     /// Number of `moof` boxes found.
     pub fragment_count: usize,
+    /// Nero chapter list (`udta/chpl`), starts in the movie timescale. QuickTime chapter tracks
+    /// live in media data: read them with [`Mp4File::read_chapters`].
+    pub chpl_chapters: Vec<crate::isobmff::Chapter>,
 }
 
 impl Mp4File {
@@ -305,6 +308,27 @@ impl Mp4File {
     }
     pub fn sync_sample_before(&self, track: usize, index: usize) -> Option<usize> {
         Some(self.tracks.get(track)?.sync_sample_before(index))
+    }
+    /// The chapter list: the QuickTime chapter track (the text track a `tref/chap` points at; titles
+    /// read from `src`, starts in the movie timescale, edit-adjusted) when there is one, else the
+    /// Nero `chpl` list. Empty when the file has neither.
+    pub fn read_chapters<S: ByteSource + ?Sized>(&self, src: &S) -> Result<Vec<crate::isobmff::Chapter>> {
+        let chap_id = self.tracks.iter().flat_map(|t| &t.references).find(|(k, _)| k == b"chap").and_then(|(_, ids)| ids.first().copied());
+        let Some(ti) = chap_id.and_then(|id| self.tracks.iter().position(|t| t.id == id)) else { return Ok(self.chpl_chapters.clone()) };
+        let Some(t) = self.tracks.get(ti) else { return Ok(self.chpl_chapters.clone()) };
+        let mut out = Vec::new();
+        for i in 0..t.samples.len().min(crate::isobmff::MAX_CHAPTERS.saturating_mul(16)) {
+            let data = self.read_sample(src, ti, i)?;
+            let title = crate::isobmff::chapters::parse_text_sample(&data).unwrap_or_default();
+            let pts = t.presentation_pts(i).unwrap_or(0).max(0) as u64;
+            let start = if t.timescale == 0 {
+                0
+            } else {
+                (u128::from(pts) * u128::from(self.timescale) / u128::from(t.timescale)).min(u128::from(u64::MAX)) as u64
+            };
+            out.push(crate::isobmff::Chapter { start, title });
+        }
+        Ok(out)
     }
     /// First track of the given kind.
     pub fn track_of_kind(&self, kind: TrackKind) -> Option<usize> {
@@ -368,6 +392,7 @@ pub fn open<S: ByteSource>(src: S) -> Result<Mp4File> {
         fragmented: false,
         moov_offset,
         fragment_count: moofs.len(),
+        chpl_chapters: Vec::new(),
     };
     if let Some(f) = &ftyp {
         let mut c = Cur::labeled(f, "ftyp");
@@ -381,6 +406,7 @@ pub fn open<S: ByteSource>(src: S) -> Result<Mp4File> {
     let mut trex: HashMap<u32, Trex> = HashMap::new();
     let mut trak_payloads = Vec::new();
     let mut meta_left = MAX_METADATA_BYTES;
+    let mut chpl = None;
     for b in boxes(&moov) {
         let b = b?;
         match &b.kind.0 {
@@ -410,10 +436,16 @@ pub fn open<S: ByteSource>(src: S) -> Result<Mp4File> {
                     }
                 }
             }
-            b"udta" => parse_udta(b.payload, &mut file.metadata, &mut meta_left),
+            b"udta" => {
+                parse_udta(b.payload, &mut file.metadata, &mut meta_left);
+                chpl = find(b.payload, b"chpl");
+            }
             b"meta" => parse_meta(b.payload, &mut file.metadata, &mut meta_left),
             _ => {}
         }
+    }
+    if let Some(p) = chpl {
+        file.chpl_chapters = crate::isobmff::chapters::parse_chpl(p, file.timescale);
     }
     let mut budget = SampleBudget::new(len);
     for p in trak_payloads {
