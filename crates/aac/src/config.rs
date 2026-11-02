@@ -192,7 +192,7 @@ impl AudioSpecificConfig {
     pub fn lc(sf_index: u8, channel_config: u8) -> AudioSpecificConfig {
         AudioSpecificConfig {
             object_type: 2,
-            sample_rate: SAMPLE_RATES[sf_index as usize],
+            sample_rate: SAMPLE_RATES.get(sf_index as usize).copied().unwrap_or(0),
             sf_index,
             channel_config,
             frame_length_flag: false,

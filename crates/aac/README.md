@@ -1,8 +1,8 @@
-# filmcraft-aac
+# craft-aac
 
 A clean-room AAC-LC encoder and decoder (ISO/IEC 14496-3, MPEG-4 Audio, Low Complexity profile),
 written from the standard and the public psychoacoustics literature. Layer L0: it depends only on
-`filmcraft-bitstream` and `thiserror` (plus optional `rayon`), has no `unsafe`, and builds for
+`craft-bitstream` and `thiserror` (plus optional `rayon`), has no `unsafe`, and builds for
 `wasm32-unknown-unknown`.
 
 No FFmpeg/FAAC/FDK-AAC/libfaad or other GPL/LGPL code was read or ported. ffmpeg is used only as an
@@ -11,7 +11,7 @@ external **test oracle** (decoding our streams, producing reference streams).
 ## API
 
 ```rust
-use filmcraft_aac::{Decoder, Encoder, EncoderConfig, BitrateMode, AdtsHeader, split_adts};
+use craft_aac::{Decoder, Encoder, EncoderConfig, BitrateMode, AdtsHeader, split_adts};
 
 // Encoder: planar f32 (±1.0) → raw access units
 let mut enc = Encoder::new(EncoderConfig::cbr(48_000, 2, 128_000))?;   // or EncoderConfig::vbr(48_000, 2, 3.0)
@@ -101,7 +101,7 @@ checked: malformed access units return `Err`, never panic.
 
 ## Test results
 
-All produced by `cargo test -p filmcraft-aac -- --nocapture` (ffmpeg 9.0 at `/opt/homebrew/bin` as
+All produced by `cargo test -p craft-aac -- --nocapture` (ffmpeg 9.0 at `/opt/homebrew/bin` as
 oracle; tests skip when it is absent). Fixtures go to `target/fixtures/aac/`.
 
 ### Encoder quality / bitrate (2 s synthetic signals, decoded by ffmpeg)
@@ -169,9 +169,8 @@ channels.
 - Syntax, tables (scalefactor bands, TNS limits), filterbank, TNS, PNS, M/S and intensity stereo are
   implemented from ISO/IEC 14496-3.
 - The Huffman codebooks (`src/huffman_tables.rs`) are the normative values of the standard's Annex
-  4.A, recovered by black-box probing of the ffmpeg *binary* as an oracle: `tools/` contains the
-  Python (stdlib-only) scripts that craft single-frame streams repeating a candidate bit string, fit the
-  decoded output to the IMDCT basis, and walk the code tree. Every table is verified to be a complete
+  4.A, recovered offline by black-box probing of the ffmpeg *binary* as an oracle (single-frame
+  streams repeating a candidate bit string, fitted to the IMDCT basis). Every table is verified to be a complete
   prefix code (Kraft sum exactly 1) covering each index once (unit test), and the decoder matches
   ffmpeg to ~1e-7 on real streams.
 - Psychoacoustics follow textbook models (Bark scale, Schroeder spreading, Terhardt ATH, Johnston-style

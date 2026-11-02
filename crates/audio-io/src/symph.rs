@@ -77,8 +77,8 @@ fn guarded<T>(f: impl FnOnce() -> Result<T>) -> Result<T> {
 }
 
 /// What [`open`] found: a reader, or a stream that holds no audio frames and has no reader.
-enum Opened {
-    Reader(Box<dyn FormatReader>),
+enum Opened<'a> {
+    Reader(Box<dyn FormatReader + 'a>),
     Empty(AudioInfo),
 }
 
@@ -346,7 +346,7 @@ fn precheck(b: &[u8], start: usize, detected: FileFormat) -> Result<Precheck> {
 /// Skip leading ID3v2 tags, run the container size preflight, then probe with symphonia; a zero-frame FLAC found by
 /// the preflight comes back as [`Opened::Empty`] without probing. A size-checked container is refused when probing
 /// selects a different reader or one that was never checked, so incidental payload magic cannot bypass those limits.
-fn open(bytes: &[u8], detected: FileFormat) -> Result<Opened> {
+fn open<'a>(bytes: &'a [u8], detected: FileFormat) -> Result<Opened<'a>> {
     let start = skip_id3v2(bytes);
     if start > 0 && start >= bytes.len() {
         return Err(AudioError::Malformed("ID3v2 tag extends past the end of the file".into()));
@@ -355,11 +355,11 @@ fn open(bytes: &[u8], detected: FileFormat) -> Result<Opened> {
     if let Precheck::Empty(info) = checked {
         return Ok(Opened::Empty(info));
     }
-    let mut mss = MediaSourceStream::new(Box::new(Cursor::new(bytes.to_vec())), MediaSourceStreamOptions::default());
+    let mut mss = MediaSourceStream::new(Box::new(Cursor::new(bytes)), MediaSourceStreamOptions::default());
     // Seek (rather than pre-positioning the cursor) so the stream's absolute position is `start`
     // too: container offsets such as MP4's `stco` are absolute file offsets.
     mss.seek(SeekFrom::Start(u64::try_from(start).unwrap_or(u64::MAX)))?;
-    let reader: Box<dyn FormatReader> =
+    let reader: Box<dyn FormatReader + 'a> =
         symphonia::default::get_probe().probe(&Hint::new(), mss, FormatOptions::default(), MetadataOptions::default()).map_err(map_err)?;
     let probed = reader.format_info().short_name;
     match checked {

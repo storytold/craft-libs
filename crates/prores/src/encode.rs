@@ -116,6 +116,9 @@ impl Encoder {
         let mb_width = w.div_ceil(16);
         let mb_height = h.div_ceil(16);
         let widths = row_slice_widths(mb_width, cfg.log2_slice_mbs);
+        if widths.len().saturating_mul(mb_height) > u16::MAX as usize {
+            return Err(Error::Input("too many slices for the picture header; increase log2_slice_mbs".into()));
+        }
         let mut jobs = Vec::with_capacity(widths.len() * mb_height);
         for row in 0..mb_height {
             let mut x = 0;

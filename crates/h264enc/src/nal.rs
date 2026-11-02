@@ -305,7 +305,7 @@ pub fn level_at_least(requested: u8, needed: u8) -> u8 {
 /// Pick the lowest level satisfying frame size, macroblock rate, DPB size and (optionally) bitrate.
 pub fn pick_level(width_mbs: u32, height_mbs: u32, fps: f64, dpb_frames: u32, kbps: Option<u32>, high: bool) -> u8 {
     // (level_idc, MaxMBPS, MaxFS, MaxDpbMbs, MaxBR kbit/s)
-    const LEVELS: [(u8, u64, u64, u64, u64); 17] = [
+    const LEVELS: [(u8, u64, u64, u64, u64); 19] = [
         (10, 1485, 99, 396, 64),
         (11, 3000, 396, 900, 192),
         (12, 6000, 396, 2376, 384),
@@ -322,6 +322,8 @@ pub fn pick_level(width_mbs: u32, height_mbs: u32, fps: f64, dpb_frames: u32, kb
         (50, 589824, 22080, 110400, 135000),
         (51, 983040, 36864, 184320, 240000),
         (52, 2073600, 36864, 184320, 240000),
+        (60, 4177920, 139264, 696320, 240000),
+        (61, 8355840, 139264, 696320, 480000),
         (62, 16711680, 139264, 696320, 800000),
     ];
     let fs = (width_mbs * height_mbs) as u64;

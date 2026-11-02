@@ -1,4 +1,4 @@
-# effectcraft-vp9enc
+# craft-vp9enc
 
 A small VP9 encoder for WebM export (profile 0, 8-bit 4:2:0, BT.709).
 

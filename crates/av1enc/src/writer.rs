@@ -191,7 +191,7 @@ impl<'a> TileWriter<'a> {
             };
             self.sw.symbol(partition, cdf);
         } else if has_cols || has_rows {
-            assert!(split, "blocks crossing the frame edge are split");
+            debug_assert!(split, "blocks crossing the frame edge are split");
             let pcdf: &[u16] = match bsl {
                 2 => &self.cdf.partition_w16[ctx],
                 3 => &self.cdf.partition_w32[ctx],
@@ -208,7 +208,7 @@ impl<'a> TileWriter<'a> {
             let cdf = [((1i32 << 15) - psum) as u16, 1 << 15, 0];
             self.sw.symbol_fixed(1, &cdf);
         } else {
-            assert!(split);
+            debug_assert!(split);
         }
         match node {
             Node::Split(ch) => {
@@ -303,7 +303,7 @@ impl<'a> TileWriter<'a> {
             }
         } else {
             let log2 = (n4 * 4).trailing_zeros();
-            assert!(log2 <= 5, "64x64 blocks are coded as skip blocks");
+            debug_assert!(log2 <= 5, "64x64 blocks are coded as skip blocks");
             for plane in 0..3 {
                 let s = (plane > 0) as u32;
                 self.coeffs(plane, (c * 4) >> s, (r * 4) >> s, tx_size_for(log2 - s), b, &b.coefs[plane]);
@@ -584,7 +584,7 @@ impl<'a> TileWriter<'a> {
                 self.sw.symbol(s, &mut self.cdf.intra_tx_type_set2[sqr][b.y_mode]);
             }
         } else {
-            assert_eq!(t, DCT_DCT);
+            debug_assert_eq!(t, DCT_DCT);
         }
         self.set_tx_types(x4, y4, tx_sz, t);
     }

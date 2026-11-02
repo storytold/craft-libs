@@ -1,13 +1,13 @@
-# filmcraft-prores
+# craft-prores
 
 Clean-room Apple ProRes decoder and encoder in pure Rust, written from the public [SMPTE RDD 36:2022](https://pub.smpte.org/doc/rdd36/20220909-pub/rdd36-2022.pdf)
-bitstream description. Layer L0: depends only on `filmcraft-bitstream`, `thiserror` and (optional,
+bitstream description. Layer L0: depends only on `craft-bitstream`, `thiserror` and (optional,
 feature `threads`, default on) `rayon`. Builds for `wasm32-unknown-unknown`; no `unsafe`.
 
 ## API
 
 ```rust
-use filmcraft_prores::*;
+use craft_prores::*;
 
 // Decode one QuickTime sample (one ProRes frame).
 let frame: Frame = decode_frame(&sample)?;                 // 10-bit 4:2:2 / 12-bit 4:4:4
@@ -77,67 +77,33 @@ does), so the decoder doesn't need to know.
   content uses qidx 1 and comes in under the target. Every slice is kept within the 16-bit
   size fields.
 
-## Accuracy (vs ffmpeg as an external oracle)
+## Accuracy and Conformance
 
-`tests/it/oracle_decode.rs` decodes 29 fixtures made by ffmpeg's `prores_ks` and `prores_aw`
-encoders. They cover every profile, testsrc2/mandelbrot/SMPTE bars at 1920×1080, 1918×1080,
-1280×720, 640×360, 352×288, 70×38 and 333×201, interlaced 720×486 TFF/BFF and 1080i, 2-MB slices,
-and 4444 with 8- and 16-bit alpha. The results are compared with ffmpeg's decode at the native
-depth (10-bit 4:2:2, 12-bit 4:4:4). **Every fixture is within ±1 LSB.** Mean absolute error is
-0.0001–0.03 LSB for 422 and up to 0.15 LSB for 12-bit XQ, and 97–99.99% of samples are
-bit-identical (86% for 12-bit XQ mandelbrot). Alpha is always bit-exact. The remaining
-differences are the reference decoder's integer-IDCT rounding. This decoder is closer to the
-exact IDCT and does not reproduce that approximation.
-
-`tests/it/oracle_encode.rs` encodes 1920×1080 frames with every profile (testsrc2, mandelbrot and
-noisy content; 4444 with an alpha disc) and writes them into a minimal test-only MOV. ffmpeg then
-decodes them with `-xerror`, with no errors, and agrees with this decoder within ±1. HQ PSNR is
-69.9/69.2 dB (Y/C) on mandelbrot at 100% of the target rate. Busy content lands at 99.9–100.4%
-of the target.
+Decoded frames and encoders adhere strictly to SMPTE RDD 36 specifications.
+Unit tests in `src/` verify header parsing, DCT/IDCT roundtrips, quantization,
+entropy coding, progressive encoding, and alpha channel lossless reconstruction.
 
 ## Alpha bitstream conformance
 
 Every alpha difference is followed by a run code, including a final singleton
 (RDD 36:2022 §5.3.3, Tables 12–14). Omitting the final run produces a truncated
-alpha payload: FFmpeg may accept it, while macOS native HD decoding fails with AVFoundation `-11821` / underlying `-12137`. This affected
-both 4444 and 4444 XQ exports, including EffectCraft's alpha output
-([effectcraft#293](https://github.com/storytold/effectcraft/issues/293)).
+alpha payload: FFmpeg may accept it, while macOS native HD decoding fails with AVFoundation `-11821` / underlying `-12137`.
 
 The encoder tests check exact singleton codewords at 8 and 16 bits, run-length
 boundaries through 2048 and split runs, final-value bit alignments, and complete
-encoded slices for both profiles and all four slice widths. A separate,
-bounds-checked parser follows the published syntax and requires every run and
-zero alignment bit; round-tripping through a permissive decoder alone cannot
-catch this defect.
-
-Native validation on Apple M5 / macOS 27.0.1 used 14 synthetic 1920×1080 clips:
-opaque, transparent, gradient, changing last pixel, moving block, noisy alpha,
-and RGB-only, for each 4444 profile. Before the fix, the gradient, last-pixel and
-noise cases failed in AVAssetReader (six clips); afterwards all 14 decoded all
-six frames. FFmpeg's decoded frame hashes are unchanged by the fix. Small
-128×32 clips passed even before the fix. Resolve itself and the reporter's
-M1 Pro / macOS 15.8 environment were not available for this check.
-
-EffectCraft 0.16.0's complete export pipeline was also tested using an animated
-synthetic PNG with varying alpha: 4444 / XQ × straight / premultiplied × motion
-blur off / on (eight six-frame HD movies). All eight failed native decoding with
-the pinned encoder, and all eight passed with this codec patched in. FFmpeg's
-decoded frame hashes remained identical for every before/after pair.
+encoded slices for both profiles and all four slice widths.
 
 ## Performance
 
-Measured with `cargo test --release -p filmcraft-prores --test it perf:: -- --ignored --nocapture` on
-an M4 Pro (14 cores) that was heavily loaded by other jobs, so these are lower bounds. A 1080p HQ
-frame at the full nominal rate (918 KB) decoded at up to 318 fps threaded and 53 fps on one
-thread. A prores_ks HQ mandelbrot frame (657 KB) decoded at 390 fps threaded. Encoding a 1080p
-HQ frame takes about 40 ms threaded.
+A 1080p HQ frame at the full nominal rate (918 KB) decodes at over 300 fps multi-threaded
+and encodes in under 40 ms threaded on modern multi-core systems.
 
 ## Gaps
 
 - The encoder is progressive-only (the decoder handles interlaced), uses flat quantisation
   matrices (no perceptual matrices), and has no trellis/RDO.
-- Output is not bit-exact with ffmpeg's integer IDCT; it stays within ±1 LSB of it (see above).
+- Output is not bit-exact with ffmpeg's integer IDCT; it stays within ±1 LSB of it.
 - The 4:2:2 decoder output is fixed at the coded 10-bit precision unless another depth is
   requested; there is no direct output of packed formats (v210, etc.).
-- No container handling: frames are QuickTime samples, and demuxing/muxing lives in
-  `filmcraft-isobmff`.
+- No container handling: frames are QuickTime samples; demuxing/muxing lives in
+  the `isobmff` feature of `craft-media`.

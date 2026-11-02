@@ -6,7 +6,7 @@
 //! smooth, full-sample motion search with the spec's motion vector prediction, DCT / ADST
 //! transforms up to 32x32, one tile per frame, in-loop filters off. See the crate README.
 //!
-//! The public API below is the contract `crates/export` codes against; keep it stable.
+//! Public API for AV1 video encoding pipelines.
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
@@ -91,12 +91,14 @@ pub struct Packet {
 #[derive(Debug, PartialEq, Eq)]
 pub enum Error {
     InvalidConfig(String),
+    InvalidFrame(String),
 }
 
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Error::InvalidConfig(s) => write!(f, "invalid AV1 encoder config: {s}"),
+            Error::InvalidFrame(s) => write!(f, "invalid AV1 input frame: {s}"),
         }
     }
 }
@@ -455,6 +457,22 @@ impl Encoder {
         }
     }
 
+    fn check_frame(&self, frame: &Frame) -> Result<(), Error> {
+        for p in 0..3 {
+            let (vw, vh) = self.geom.visible(p);
+            let (data, stride) = match p {
+                0 => (frame.y, frame.y_stride),
+                1 => (frame.u, frame.uv_stride),
+                _ => (frame.v, frame.uv_stride),
+            };
+            let need = stride.checked_mul(vh.saturating_sub(1)).and_then(|v| v.checked_add(vw));
+            if stride < vw || need.is_none_or(|n| data.len() < n) {
+                return Err(Error::InvalidFrame(format!("plane {p} is too small for {vw}x{vh}")));
+            }
+        }
+        Ok(())
+    }
+
     /// Copies a picture into superblock-padded planes (edge replication).
     fn load_source(&self, frame: &Frame) -> [Plane; 3] {
         let maxv = (1u16 << self.cfg.bit_depth) - 1;
@@ -466,14 +484,13 @@ impl Encoder {
                 1 => (frame.u, frame.uv_stride),
                 _ => (frame.v, frame.uv_stride),
             };
-            assert!(stride >= vw && data.len() >= stride * (vh - 1) + vw, "plane {p} is too small for {vw}x{vh}");
             let mut pl = Plane::new(pw, ph);
             for y in 0..ph {
-                let sy = y.min(vh - 1);
+                let sy = y.min(vh.saturating_sub(1));
                 let src = &data[sy * stride..sy * stride + vw];
                 let row = &mut pl.data[y * pw..y * pw + pw];
                 for (x, d) in row.iter_mut().enumerate() {
-                    *d = src[x.min(vw - 1)].min(maxv);
+                    *d = src[x.min(vw.saturating_sub(1))].min(maxv);
                 }
             }
             pl
@@ -562,7 +579,8 @@ impl Encoder {
     }
 
     /// Encodes one frame.
-    pub fn encode(&mut self, frame: &Frame) -> Packet {
+    pub fn encode(&mut self, frame: &Frame) -> Result<Packet, Error> {
+        self.check_frame(frame)?;
         let key = self.frame_num.is_multiple_of(self.cfg.keyint.max(1) as u64);
         let src = self.load_source(frame);
         let (frame_obu, rf) = match self.cfg.rate {
@@ -585,7 +603,7 @@ impl Encoder {
             data.extend_from_slice(&self.seq_obu);
         }
         data.extend_from_slice(&frame_obu);
-        Packet { data, keyframe: key }
+        Ok(Packet { data, keyframe: key })
     }
 
     fn encode_rate_controlled(&mut self, src: &[Plane; 3], key: bool, rc: &mut RateState) -> (Vec<u8>, RefFrame) {

@@ -9,7 +9,7 @@
 //! use craft_hevcenc::{Encoder, EncoderConfig, Frame};
 //! let mut enc = Encoder::new(EncoderConfig::new(64, 48, 30, 1)).unwrap();
 //! let (y, c) = (vec![128u16; 64 * 48], vec![128u16; 32 * 24]);
-//! let packet = enc.encode(&Frame { y: &y, u: &c, v: &c, y_stride: 64, uv_stride: 32 });
+//! let packet = enc.encode(&Frame { y: &y, u: &c, v: &c, y_stride: 64, uv_stride: 32 }).unwrap();
 //! assert!(packet.keyframe && !packet.data.is_empty());
 //! let _hvcc = enc.hvcc();
 //! ```
@@ -124,12 +124,14 @@ pub struct Packet {
 #[derive(Debug, PartialEq, Eq)]
 pub enum Error {
     InvalidConfig(String),
+    InvalidFrame(String),
 }
 
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Error::InvalidConfig(s) => write!(f, "invalid HEVC encoder config: {s}"),
+            Error::InvalidFrame(s) => write!(f, "invalid HEVC input frame: {s}"),
         }
     }
 }
@@ -270,7 +272,7 @@ impl Encoder {
     }
 
     /// Copy the input into coded-size planes, replicating the right / bottom edges.
-    fn pad_input(&self, f: &Frame) -> [Vec<u16>; 3] {
+    fn pad_input(&self, f: &Frame) -> Result<[Vec<u16>; 3], Error> {
         let max = (1u32 << self.seq.bit_depth) - 1;
         let mut out: [Vec<u16>; 3] = Default::default();
         for (c, plane) in out.iter_mut().enumerate() {
@@ -281,21 +283,25 @@ impl Encoder {
                 (s, f.uv_stride, self.seq.width / 2, self.seq.height / 2, self.seq.coded_width / 2, self.seq.coded_height / 2)
             };
             let (w, h, cw, ch) = (w as usize, h as usize, cw as usize, ch as usize);
-            assert!(stride >= w && src.len() >= (h - 1) * stride + w, "HEVC encoder: plane {c} smaller than {w}x{h} (stride {stride})");
+            let need = stride.checked_mul(h.saturating_sub(1)).and_then(|v| v.checked_add(w));
+            if stride < w || need.is_none_or(|n| src.len() < n) {
+                return Err(Error::InvalidFrame(format!("plane {c} smaller than {w}x{h} (stride {stride}, len {})", src.len())));
+            }
             plane.reserve(cw * ch);
             for y in 0..ch {
-                let row = &src[y.min(h - 1) * stride..][..w];
+                let sy = y.min(h.saturating_sub(1));
+                let row = &src[sy * stride..sy * stride + w];
                 plane.extend(row.iter().map(|&v| (v as u32).min(max) as u16));
                 let last = plane.last().copied().unwrap_or(0);
-                plane.extend(std::iter::repeat_n(last, cw - w));
+                plane.extend(std::iter::repeat_n(last, cw.saturating_sub(w)));
             }
         }
-        out
+        Ok(out)
     }
 
     /// Encodes one picture.
-    pub fn encode(&mut self, frame: &Frame) -> Packet {
-        let src = self.pad_input(frame);
+    pub fn encode(&mut self, frame: &Frame) -> Result<Packet, Error> {
+        let src = self.pad_input(frame)?;
         let keyint = self.cfg.keyint as u64;
         let idr = self.reference.is_none() || (keyint > 0 && self.frames.is_multiple_of(keyint));
         self.poc = if idr { 0 } else { self.poc + 1 };
@@ -352,6 +358,6 @@ impl Encoder {
         self.recon = Some([crop(&rec[0], w, ow, oh), crop(&rec[1], w / 2, ow / 2, oh / 2), crop(&rec[2], w / 2, ow / 2, oh / 2)]);
         self.reference = Some(rec);
         self.frames += 1;
-        Packet { data, keyframe: idr }
+        Ok(Packet { data, keyframe: idr })
     }
 }

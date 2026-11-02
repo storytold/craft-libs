@@ -446,8 +446,9 @@ pub fn rgba_to_yuv420(rgba: &[u8], w: u32, h: u32, full_range: bool) -> (Vec<u8>
     let mut v = vec![0u8; cw * ch];
     let (ys, yo, cs) = if full_range { (255.0, 0.0, 255.0) } else { (219.0, 16.0, 224.0) };
     let px = |x: usize, yy: usize| -> [f32; 3] {
-        let i = (yy.min(h - 1) * w + x.min(w - 1)) * 4;
-        [rgba[i] as f32 / 255.0, rgba[i + 1] as f32 / 255.0, rgba[i + 2] as f32 / 255.0]
+        let i = (yy.min(h.saturating_sub(1)) * w + x.min(w.saturating_sub(1))) * 4;
+        let c = rgba.get(i..i + 3).unwrap_or(&[0, 0, 0]);
+        [c[0] as f32 / 255.0, c[1] as f32 / 255.0, c[2] as f32 / 255.0]
     };
     let luma = |c: [f32; 3]| 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
     for yy in 0..h {

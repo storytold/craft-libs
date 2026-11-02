@@ -44,8 +44,9 @@ impl BoolEncoder {
             && let Some(b) = self.out.get_mut(i)
         {
             *b = b.wrapping_add(1);
-            if *b == 255 {
-                // The grown byte joins the 0xFF bytes before it.
+            if *b == 255 && start == end {
+                // The grown byte is the last byte: it joins the 0xFF bytes before it.
+                // (When a run was cleared, `out` ends in 0x00 and `ff_start` stays `end`.)
                 let mut s = i;
                 while s > 0 && self.out.get(s - 1) == Some(&255) {
                     s -= 1;
@@ -230,6 +231,16 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn carry_after_fe_before_ff_run() {
+        let mut e = BoolEncoder { out: vec![0x10, 0xFE, 0xFF], range: 255, bottom: 0, bit_count: 24, ff_start: 2 };
+        e.add_one();
+        assert_eq!(e.out, [0x10, 0xFF, 0x00]);
+        e.push_byte(0xFF);
+        e.add_one();
+        assert_eq!(e.out, [0x10, 0xFF, 0x01, 0x00]);
     }
 
     #[test]

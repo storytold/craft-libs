@@ -433,6 +433,11 @@ impl Encoder {
             },
         };
         let max_refs = if cfg.bframes > 0 { 2 } else { 1 };
+        if let Pass::Second(st) = &cfg.pass {
+            if st.frames.is_empty() || !st.fps.is_finite() || st.fps <= 0.0 {
+                return Err(Error::InvalidConfig("second pass needs non-empty first-pass statistics with a positive fps".into()));
+            }
+        }
         let (kbps_for_level, rc_kind, vbv) = match (&cfg.rate, &cfg.pass) {
             (RateControl::Qp(q), _) => (None, RcKind::Qp((*q).min(51)), (None, None)),
             (RateControl::Crf(c), _) => (Some(crf_level_kbps(*c, mbw, mbh, fps)), RcKind::Crf(c.clamp(0.0, 51.0)), (None, None)),
