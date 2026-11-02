@@ -979,7 +979,9 @@ impl AffixDict {
         let mut is_word = |cand: &[char]| {
             work += 1;
             let cand: String = cand.iter().collect();
-            work > MAX_WORK || self.simple_word_with(&cand, excluded, self.stem_set(&cand).is_none())
+            // Past its budget a candidate counts as a word: the compound is then rejected, as
+            // it is past MAX_WORK, so a suggestion never offers one the check would refuse.
+            work > MAX_WORK || self.simple_word_budgeted(&cand, excluded, self.stem_set(&cand).is_none()).unwrap_or(true)
         };
         let near = self.near_miss(&s.chars, s.c.two_words, &mut is_word);
         s.work = work;
