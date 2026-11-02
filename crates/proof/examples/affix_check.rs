@@ -8,6 +8,8 @@
 //! cargo run --release -p craft-proof --example affix_check -- gen de_DE.aff de_DE.dic 2000 7 > words.txt
 //! # Single words instead: forms of random stems, and stems with another stem's ending.
 //! cargo run --release -p craft-proof --example affix_check -- single de_DE.aff de_DE.dic 2000 7 > words.txt
+//! # Suggestions: `word<TAB>microseconds<TAB>suggestion,suggestion…` per line.
+//! cargo run --release -p craft-proof --example affix_check -- suggest de_DE.aff de_DE.dic < typos.txt
 //! ```
 //!
 //! The answers are compared with `hunspell -d <path without extension> -l` on the same words
@@ -144,6 +146,16 @@ fn main() -> Result<(), String> {
             eprintln!("{} words in {took:?}", words.len());
             Ok(())
         }
+        [cmd, aff, dic] if cmd == "suggest" => {
+            let d = load(aff, dic)?;
+            let mut out = std::io::stdout().lock();
+            for w in std::io::stdin().lock().lines().map_while(Result::ok) {
+                let t = std::time::Instant::now();
+                let s = d.suggest(&w, 8);
+                writeln!(out, "{w}\t{}\t{}", t.elapsed().as_micros(), s.join(",")).map_err(|e| e.to_string())?;
+            }
+            Ok(())
+        }
         [cmd, aff, dic, n, seed] if cmd == "gen" || cmd == "single" => {
             let d = load(aff, dic)?;
             let n: usize = n.parse().map_err(|_| "n is a number")?;
@@ -154,6 +166,6 @@ fn main() -> Result<(), String> {
             }
             Ok(())
         }
-        _ => Err("usage: affix_check check <aff> <dic> < words | affix_check gen|single <aff> <dic> <n> <seed>".into()),
+        _ => Err("usage: affix_check check|suggest <aff> <dic> < words | affix_check gen|single <aff> <dic> <n> <seed>".into()),
     }
 }

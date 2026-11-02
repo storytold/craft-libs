@@ -25,8 +25,12 @@ use crate::affix::{AffixDict, Casing, capitalize, casing};
 /// Longest word suggestions are looked for, in letters.
 pub(crate) const MAX_LETTERS: usize = 40;
 const MAX_MAP_VARIANTS: usize = 4096;
+/// Most candidates kept waiting for the compound check in one call (the rest are dropped).
+const MAX_DEFERRED: usize = 1 << 14;
 /// Stems the scan of round 6 expands.
 const SCAN_STEMS: usize = 48;
+/// Most affix rules tried in all to make those stems' forms (Mongolian has 12,000 rules).
+const SCAN_FORMS_WORK: usize = 1 << 16;
 
 const COST_CASE: u32 = 0;
 pub(crate) const COST_ADD_DIACRITIC: u32 = 4;
@@ -125,8 +129,12 @@ struct Collector<'a> {
     names: bool,
     /// May half of a missing space be one ([`Tuning::strict_case`])?
     split_names: bool,
-    /// Candidates checked with compounds so far (at most `MAX_SUGGEST_COMPOUNDS`).
-    compound_checks: usize,
+    /// Candidates no simple word, left for the compound check: (cost, order, candidate).
+    deferred: Vec<(u32, usize, String)>,
+    /// Steps left for the compound searches of this call (`MAX_SUGGEST_COMPOUND_WORK` at first).
+    compound_work: usize,
+    /// The pieces those searches analysed, shared between them.
+    pieces: crate::affix::Pieces,
 }
 
 impl Collector<'_> {
@@ -143,20 +151,68 @@ impl Collector<'_> {
                 self.tested.insert(cand.to_string(), cost);
             }
         }
+        // A candidate is checked as simple words here; one of a single word that isn't one waits
+        // for the compound check, which the cheapest candidates get first ([`Self::compounds`]).
+        if !self.accept(cand, cost, false) && self.d.flag_compounds() && !cand.contains(' ') && self.deferred.len() < MAX_DEFERRED {
+            self.seq += 1;
+            self.deferred.push((cost, self.seq, cand.to_string()));
+        }
+    }
+
+    /// Check the waiting candidates as compounds, cheapest (then earliest) first, in one budget
+    /// of steps per call: compound checks cost far more than lookups, and a one-letter slip of a
+    /// long compound is the likeliest intent.
+    ///
+    /// A candidate changed where the word stops being parts (`ziekenhusopname`: `zieken` and
+    /// `opname` are, `hus` isn't) goes first.
+    fn compounds(&mut self) {
+        let mut waiting = std::mem::take(&mut self.deferred);
+        if waiting.is_empty() {
+            return;
+        }
+        let gap = self.d.compound_gap(&self.input, self.names, &mut self.compound_work, &mut self.pieces);
+        let input: Vec<char> = self.input.chars().collect();
+        let outside = |cand: &str| {
+            let Some((from, to)) = gap else { return false };
+            let at = cand.chars().zip(&input).position(|(a, b)| a != *b).unwrap_or(input.len().min(cand.chars().count()));
+            at + 1 < from || at > to + 1
+        };
+        let mut waiting: Vec<(bool, u32, usize, String)> = waiting.drain(..).map(|(cost, seq, cand)| (outside(&cand), cost, seq, cand)).collect();
+        waiting.sort_unstable();
+        for (_, cost, _, cand) in waiting {
+            if self.compound_work == 0 {
+                break;
+            }
+            // Offered again at a lower cost meanwhile: that offer is the one to check.
+            if self.tested.get(&cand).is_some_and(|&c| c < cost) || self.found.contains_key(&cand) {
+                continue;
+            }
+            self.accept(&cand, cost, true);
+        }
+    }
+
+    /// Keep `cand` if each of its words is in the dictionary (`compounds`: flag-based compounds
+    /// count); whether it was.
+    fn accept(&mut self, cand: &str, cost: u32, compounds: bool) -> bool {
         let mut words = Vec::new();
         let mut cost = cost;
         let names = if cand.contains(' ') { self.split_names } else { self.names };
-        let compounds = self.d.flag_compounds() && self.compound_checks < crate::affix::MAX_SUGGEST_COMPOUNDS;
-        self.compound_checks += usize::from(compounds);
+        let d = self.d;
+        let mut work = self.compound_work;
+        let pieces = &mut self.pieces;
+        let mut is_word =
+            |w: &str| if compounds { d.contains_suggestible_spending(w, &mut work, pieces) } else { d.contains_suggestible_with(w, false) };
         for part in cand.split(' ') {
-            if self.d.contains_suggestible_with(part, compounds) {
+            if is_word(part) {
                 words.push(part.to_string());
             } else if !names {
-                return;
+                self.compound_work = work;
+                return false;
             } else {
                 let c = capitalize(part);
-                if !self.d.contains_suggestible_with(&c, compounds) {
-                    return;
+                if !is_word(&c) {
+                    self.compound_work = work;
+                    return false;
                 }
                 words.push(c);
                 // A name ranks after a common word at the same distance (`moze` → `może`, then
@@ -164,7 +220,9 @@ impl Collector<'_> {
                 cost += 1;
             }
         }
+        self.compound_work = work;
         self.keep(words.join(" "), cost);
+        true
     }
 
     /// Keep a suggestion known to be correct, unless the dictionary says never to offer it.
@@ -312,8 +370,18 @@ pub(crate) fn suggest_in(d: &AffixDict, word: &str, max: usize, t: &Tuning) -> V
     let chars: Vec<char> = input.chars().collect();
     let names = !t.strict_case || case != Casing::Lower;
     let split_names = !t.strict_case;
-    let mut col =
-        Collector { d, input: input.clone(), tested: HashMap::new(), found: HashMap::new(), seq: 0, names, split_names, compound_checks: 0 };
+    let mut col = Collector {
+        d,
+        input: input.clone(),
+        tested: HashMap::new(),
+        found: HashMap::new(),
+        seq: 0,
+        names,
+        split_names,
+        deferred: Vec::new(),
+        compound_work: crate::affix::MAX_SUGGEST_COMPOUND_WORK,
+        pieces: Default::default(),
+    };
     add_case(&mut col, word, &input);
     let map = groups(d, t);
     add_map_slips(&mut col, &chars, &map, t);
@@ -321,9 +389,11 @@ pub(crate) fn suggest_in(d: &AffixDict, word: &str, max: usize, t: &Tuning) -> V
     add_splits(&mut col, &input, &t.split);
     add_key_neighbours(&mut col, &chars);
     add_typos(&mut col, &chars, t);
+    col.compounds();
     // 6. Further off: scan the stems that start like the word.
     if col.count_within(COST_MISTYPE) < max {
         scan(&mut col, &chars, &map);
+        col.compounds();
     }
     let mut found: Vec<(String, (u32, usize))> = col.found.into_iter().collect();
     // Among equal costs, the change nearest the word's start is the likelier intent
@@ -526,8 +596,9 @@ fn scan(col: &mut Collector, chars: &[char], map: &[Vec<char>]) {
     best.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(b.1)));
     let related = |a: char, b: char| fold(a, map) == fold(b, map);
     let limit = 4;
+    let mut budget = SCAN_FORMS_WORK;
     for (_, stem) in best {
-        for form in d.forms(stem) {
+        for form in d.forms_spending(stem, &mut budget) {
             let lf: Vec<char> = form.to_lowercase().chars().collect();
             if lf.len().abs_diff(chars.len()) > 2 {
                 continue;
@@ -653,7 +724,9 @@ mod tests {
             seq: 0,
             names: true,
             split_names: true,
-            compound_checks: 0,
+            deferred: Vec::new(),
+            compound_work: crate::affix::MAX_SUGGEST_COMPOUND_WORK,
+            pieces: Default::default(),
         };
         col.offer("cafe", COST_DROP_DIACRITIC);
         col.offer("cafe", COST_REP);

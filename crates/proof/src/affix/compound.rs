@@ -51,10 +51,10 @@ pub(super) const MAX_PARTS: usize = 16;
 /// Most steps one compound check may take (affix rules tried, parts looked up, splits followed).
 pub(super) const MAX_WORK: usize = 1 << 16;
 /// Most steps the compound search of one suggestion candidate may take.
-pub(crate) const MAX_SUGGEST_WORK: usize = 1 << 11;
-/// Most candidates of one suggestion call whose compound search runs; the later ones are
-/// checked as simple words only, so a long garbled word's suggestions stay quick.
-pub(crate) const MAX_SUGGEST_COMPOUNDS: usize = 128;
+pub(crate) const MAX_SUGGEST_WORK: usize = 1 << 13;
+/// Most steps the compound searches of one suggestion call may take in all; the candidates
+/// left are checked as simple words only, so a long garbled word's suggestions stay quick.
+pub(crate) const MAX_SUGGEST_COMPOUND_WORK: usize = 1 << 17;
 /// Most `CHECKCOMPOUNDPATTERN` lines (the Dutch dictionary has 52).
 const MAX_PATTERNS: usize = 512;
 /// Longest text on either side of a `CHECKCOMPOUNDPATTERN`, in bytes.
@@ -384,6 +384,9 @@ struct Info {
     stem: u32,
     /// How many words it counts as (`COMPOUNDROOT`: two).
     words: u8,
+    /// Syllables of its suffix the Hungarian rule leaves out (as the last part): a suffix with no
+    /// continuation classes doesn't count.
+    tail: u8,
 }
 
 /// A stem found for a part, and the affixes that make the part from it.
@@ -396,6 +399,15 @@ struct Analysis<'a> {
     /// The inner suffix of two in a row (`sfx` is the outer one).
     inner: Option<&'a Rule>,
 }
+
+/// Most pieces a [`Pieces`] cache keeps.
+const MAX_CACHED_PIECES: usize = 1 << 14;
+
+/// The infos of pieces, kept across the compound checks of one suggestion call: its candidates
+/// differ from the word by a letter or two, so most of their pieces are the same. Indexed by
+/// whether the piece starts the word (KEEPCASE holds there).
+#[derive(Default)]
+pub(crate) struct Pieces([crate::patterns::FxMap<Box<str>, Box<[Info]>>; 2], usize);
 
 /// One compound check: the word, its parts' analyses (each piece looked up once), the parts
 /// chosen so far and the work done.
@@ -417,14 +429,31 @@ struct Search<'a> {
     work: usize,
     /// [`AffixDict::near_word`], once answered.
     near: Option<bool>,
+    /// Pieces analysed by earlier checks with the same exclusions.
+    cache: Option<&'a mut Pieces>,
 }
 
 impl AffixDict {
     /// Is `w` a compound by the flag-based rules (see the module docs)? `capitalized`: the word
     /// as the user wrote it starts with a capital (`FORCEUCASE`).
     pub(super) fn flag_compound(&self, w: &str, excluded: Excluded, capitalized: bool) -> bool {
+        // A suggestion candidate's search gets MAX_SUGGEST_WORK steps.
+        let mut budget = if excluded.suggesting() { MAX_SUGGEST_WORK } else { MAX_WORK };
+        self.flag_compound_spending(w, excluded, capitalized, &mut budget, None)
+    }
+
+    /// [`AffixDict::flag_compound`] in at most `budget` steps (and [`MAX_WORK`]), taking the
+    /// steps it spends off `budget`. `cache`: pieces analysed before, with the same `excluded`.
+    pub(super) fn flag_compound_spending(
+        &self,
+        w: &str,
+        excluded: Excluded,
+        capitalized: bool,
+        budget: &mut usize,
+        cache: Option<&mut Pieces>,
+    ) -> bool {
         let Some(c) = self.cpd.as_deref() else { return false };
-        if excluded.no_compounds() || w.is_empty() || w.len() > super::MAX_WORD_BYTES {
+        if excluded.no_compounds() || w.is_empty() || w.len() > super::MAX_WORD_BYTES || *budget == 0 {
             return false;
         }
         if self.is_forbidden(w) {
@@ -433,7 +462,7 @@ impl AffixDict {
         // KEEPCASE holds for the first part only (from `baz/K`, `Foobaz` and `FOOBAZ` are right
         // in the CLI, `Bazfoo` and `BAZFOO` wrong).
         let first_excluded = excluded;
-        let excluded = excluded.without(self.keepcase);
+        let excluded = excluded.without_keep();
         let cuts: Vec<usize> = w.char_indices().map(|(i, _)| i).chain(std::iter::once(w.len())).collect();
         let chars: Vec<char> = w.chars().collect();
         let n = cuts.len();
@@ -448,11 +477,83 @@ impl AffixDict {
             memo: vec![None; n * n],
             infos: Vec::new(),
             path: Vec::with_capacity(MAX_PARTS),
-            // A suggestion candidate's search gets MAX_SUGGEST_WORK steps of the budget.
-            work: if excluded.suggesting() { MAX_WORK - MAX_SUGGEST_WORK } else { 0 },
+            work: MAX_WORK - (*budget).min(MAX_WORK),
             near: None,
+            cache,
         };
-        self.parts_from(&mut s, 0)
+        let start = s.work;
+        let found = self.parts_from(&mut s, 0);
+        *budget = budget.saturating_sub(s.work.saturating_sub(start).max(1));
+        found
+    }
+
+    /// Where a slip in `w` (no compound) likely is, in chars: from the furthest point its start
+    /// reaches as compound parts to the nearest its end does, if anything reaches. A candidate
+    /// changed there is checked as a compound first. `capitalized`: the same with a capital
+    /// first letter counts too.
+    pub(crate) fn compound_gap(&self, w: &str, capitalized: bool, budget: &mut usize, pieces: &mut Pieces) -> Option<(usize, usize)> {
+        let c = self.cpd.as_deref()?;
+        if w.is_empty() || w.len() > super::MAX_WORD_BYTES || *budget == 0 {
+            return None;
+        }
+        let excluded = self.excluded(true);
+        let n = w.chars().count();
+        let min = self.compound_min.max(1);
+        let mut reach = vec![false; n + 1];
+        let mut back = vec![false; n + 1];
+        let cap = capitalized.then(|| super::capitalize(w));
+        for word in std::iter::once(w).chain(cap.as_deref()) {
+            let mut s = Search {
+                c,
+                w: word,
+                cuts: word.char_indices().map(|(i, _)| i).chain(std::iter::once(word.len())).collect(),
+                chars: word.chars().collect(),
+                excluded: excluded.without_keep(),
+                first_excluded: excluded,
+                capitalized,
+                memo: vec![None; (n + 1) * (n + 1)],
+                infos: Vec::new(),
+                path: Vec::new(),
+                work: MAX_WORK - (*budget).min(MAX_WORK),
+                near: None,
+                cache: Some(&mut *pieces),
+            };
+            let start = s.work;
+            let fits = |s: &mut Search, a: usize, b: usize, place: u8| {
+                let (x, y) = self.infos_of(s, a, b);
+                s.infos.get(x as usize..y as usize).is_some_and(|infos| infos.iter().any(|i| i.pos & place != 0))
+            };
+            for a in 0..n {
+                if a > 0 && !reach.get(a).copied().unwrap_or(false) {
+                    continue;
+                }
+                for b in a.saturating_add(min)..n {
+                    if s.work <= MAX_WORK
+                        && fits(&mut s, a, b, if a == 0 { FIRST } else { MIDDLE })
+                        && let Some(r) = reach.get_mut(b)
+                    {
+                        *r = true;
+                    }
+                }
+            }
+            for b in (1..=n).rev() {
+                if b < n && !back.get(b).copied().unwrap_or(false) {
+                    continue;
+                }
+                for a in 1..=b.saturating_sub(min) {
+                    if s.work <= MAX_WORK
+                        && fits(&mut s, a, b, if b == n { LAST } else { MIDDLE })
+                        && let Some(r) = back.get_mut(a)
+                    {
+                        *r = true;
+                    }
+                }
+            }
+            *budget = budget.saturating_sub(s.work.saturating_sub(start));
+        }
+        let from = reach.iter().rposition(|&r| r).unwrap_or(0);
+        let to = back.iter().position(|&r| r).unwrap_or(n);
+        Some((from.min(to), from.max(to)))
     }
 
     /// Can the rest of the word, from char `start`, be split into parts after `s.path`?
@@ -516,7 +617,14 @@ impl AffixDict {
             return *r;
         }
         let from = u32::try_from(s.infos.len()).unwrap_or(u32::MAX);
-        if let (Some(&x), Some(&y)) = (s.cuts.get(a), s.cuts.get(b))
+        let cached = s.cuts.get(a).zip(s.cuts.get(b)).and_then(|(&x, &y)| s.w.get(x..y)).and_then(|piece| {
+            let map = s.cache.as_deref()?.0.get(usize::from(a == 0))?;
+            map.get(piece).map(|v| v.to_vec())
+        });
+        if let Some(v) = cached {
+            s.work += 1;
+            s.infos.extend(v);
+        } else if let (Some(&x), Some(&y)) = (s.cuts.get(a), s.cuts.get(b))
             && let Some(piece) = s.w.get(x..y)
         {
             // Deduplicated by hashing, and at most MAX_INFOS per piece (each one is tried at
@@ -534,6 +642,15 @@ impl AffixDict {
                 }
             });
             s.work = work;
+            // Only a piece analysed in full is kept (one cut short by the budget isn't).
+            if work <= MAX_WORK
+                && let Some(c) = s.cache.as_deref_mut()
+                && c.1 < MAX_CACHED_PIECES
+                && let Some(map) = c.0.get_mut(usize::from(a == 0))
+            {
+                map.insert(piece.into(), found.clone().into());
+                c.1 += 1;
+            }
             s.infos.extend(found);
         }
         let to = u32::try_from(s.infos.len()).unwrap_or(u32::MAX);
@@ -588,11 +705,19 @@ impl AffixDict {
                 marks |= 1 << i;
             }
         }
-        let words = if carries(c.root) { 2 } else { 1 };
-        // FORCEUCASE counts on the stem only (a suffix's continuation class holding it is ignored);
+        // COMPOUNDROOT and FORCEUCASE count on the stem only (an affix's continuation class
+        // holding them is ignored);
         // a pattern's `0` means no suffix (a prefix doesn't count): the CLI's answers.
+        let words = if c.root.is_some_and(|f| has(an.set, f)) { 2 } else { 1 };
         let force = c.force_ucase.is_some_and(|f| has(an.set, f));
-        Some(Info { pos, marks, unmodified: an.sfx.is_none(), force, stem: an.stem, words })
+        // The Hungarian syllable rule leaves out a suffix with no continuation classes (the
+        // CLI's answers: `bab|bab|baata` from `ata` is right, from `ata/Z` wrong).
+        let tail = match (&c.syllables, an.sfx) {
+            (Some((_, vowels)), Some(r)) if self.set(r.cont).is_empty() => r.add.chars().filter(|ch| vowels.contains(ch)).count(),
+            _ => 0,
+        };
+        let tail = u8::try_from(tail).unwrap_or(u8::MAX);
+        Some(Info { pos, marks, unmodified: an.sfx.is_none(), force, stem: an.stem, words, tail })
     }
 
     /// Every way `p` is a stem, or a stem with a prefix, one or two suffixes, or a prefix and a
@@ -737,10 +862,17 @@ impl AffixDict {
     /// The stem `w` as a compound part: its index and flags, unless it is forbidden or excluded.
     /// A stem with `ONLYINCOMPOUND` homonyms beside others is two: each group's flags apply on
     /// their own (`foo/XOS` and `foo/T`: `foos` is a part, `foot` is not, as in the CLI).
+    ///
+    /// Homonyms kept apart ([`AffixDict::homonyms`]) are each a part of their own: a suffix and
+    /// the compound flag must come from one (Dutch `poeder` the noun compounds, `poederden` the
+    /// verb form doesn't: `schuurpoederden` is wrong in the CLI).
     fn part_stems(&self, w: &str, excluded: Excluded) -> impl Iterator<Item = (u32, &[u16])> {
         let found = self.stem_lookup(w);
+        let apart = found.and_then(|(stem, _)| self.homonyms.get(&stem).map(|h| (stem, h)));
+        let main = found.filter(|_| apart.is_none());
+        let each = apart.into_iter().flat_map(move |(stem, h)| h.iter().map(move |&id| (stem, self.set(id))));
         let only = found.and_then(|(stem, _)| self.cpd_sets.get(&stem).map(|&c| (stem, self.set(c))));
-        found.into_iter().chain(only).filter(move |(_, set)| !excluded.hits(set) && !self.forbidden.is_some_and(|f| has(set, f)))
+        main.into_iter().chain(each).chain(only).filter(move |(_, set)| !excluded.hits(set) && !self.forbidden.is_some_and(|f| has(set, f)))
     }
 
     /// May a part with `info` start at char `start`, after the last part of `s.path`
@@ -789,7 +921,10 @@ impl AffixDict {
         match &s.c.syllables {
             None => false,
             Some(_) if !whole => true,
-            Some((most, vowels)) => s.chars.iter().filter(|c| vowels.contains(c)).count() <= *most,
+            Some((most, vowels)) => {
+                let tail = s.path.last().map_or(0, |p| usize::from(p.2.tail));
+                s.chars.iter().filter(|c| vowels.contains(c)).count().saturating_sub(tail) <= *most
+            }
         }
     }
 
@@ -838,9 +973,13 @@ impl AffixDict {
         }
         let excluded = s.excluded;
         let mut work = s.work;
+        // A word listed as a stem that can't stand alone (ONLYINCOMPOUND, NEEDAFFIX) counts here
+        // only with a suffix, not with a prefix (`ver` + `kehr` beside `verkehr/zo`:
+        // `Fahrradverkehr` is right in the CLI).
         let mut is_word = |cand: &[char]| {
             work += 1;
-            work > MAX_WORK || self.simple_word(&cand.iter().collect::<String>(), excluded)
+            let cand: String = cand.iter().collect();
+            work > MAX_WORK || self.simple_word_with(&cand, excluded, self.stem_set(&cand).is_none())
         };
         let near = self.near_miss(&s.chars, s.c.two_words, &mut is_word);
         s.work = work;
@@ -1123,8 +1262,36 @@ mod tests {
             let took = t.elapsed();
             eprintln!("{locale}: suggestions for {garbled} in {took:?}");
             assert!(took.as_secs() < 5, "{locale}: {took:?}");
+            // A one-letter slip of a long compound gets the compound back.
+            for (typo, meant) in TYPOS.iter().filter(|t| t.0 == *locale).flat_map(|t| t.1.iter()) {
+                let got = d.suggest(typo, 8);
+                assert!(got.iter().any(|g| g == meant), "{locale}: {typo} → {got:?}, not {meant}");
+            }
         }
     }
+
+    /// (locale, [(typo, the compound meant)]): each one's suggestions hold it.
+    const TYPOS: &[(&str, &[(&str, &str)])] = &[
+        (
+            "de",
+            &[
+                ("Donaudampfschff", "Donaudampfschiff"),
+                ("Arbetszimmer", "Arbeitszimmer"),
+                ("Kinerspielplatz", "Kinderspielplatz"),
+                ("Bundesverfassugsgericht", "Bundesverfassungsgericht"),
+            ],
+        ),
+        (
+            "nl",
+            &[
+                ("ziekenhusopname", "ziekenhuisopname"),
+                ("voetbawledstrijd", "voetbalwedstrijd"),
+                ("arbeidsongeschiktheidsverzeekring", "arbeidsongeschiktheidsverzekering"),
+                ("tandartsafsparak", "tandartsafspraak"),
+                ("belastingaagifte", "belastingaangifte"),
+            ],
+        ),
+    ];
 
     /// (locale, right words, wrong words), the CLI's answers.
     const REAL: &[(&str, &str, &str)] = &[
@@ -1714,6 +1881,110 @@ mod tests {
             right: true,
             listed: "foo brok foofoo foobrok foobroken brokfoo brokbrok brokbroken foofoofoo foofoobrok foofoobroken foobrokfoo \
                 foobrokbrok foobrokbroken brokfoofoo brokfoobrok brokfoobroken brokbrokfoo brokbrokbrok brokbrokbroken",
+        },
+        Pinned {
+            name: "mixed_keep",
+            aff: "COMPOUNDFLAG X\nKEEPCASE K",
+            dic: "foo/X baz/XK Qux/X bar/X",
+            pieces: "foo baz Qux Baz Foo BAZ QUX",
+            extra: "BazQux BazfooQux FooQux FooBaz fooBaz FOOQux BAZQux",
+            right: true,
+            listed: "foo baz Qux Foo QUX foofoo foobaz fooQux bazfoo bazbaz bazQux Quxfoo Quxbaz QuxQux Foofoo Foobaz FooQux QUXBAZ \
+                foofoofoo foofoobaz foofooQux foobazfoo foobazbaz foobazQux fooQuxfoo fooQuxbaz fooQuxQux bazfoofoo bazfoobaz \
+                bazfooQux bazbazfoo bazbazbaz bazbazQux bazQuxfoo bazQuxbaz bazQuxQux Quxfoofoo Quxfoobaz QuxfooQux Quxbazfoo \
+                Quxbazbaz QuxbazQux QuxQuxfoo QuxQuxbaz QuxQuxQux Foofoofoo Foofoobaz FoofooQux Foobazfoo Foobazbaz FoobazQux \
+                FooQuxfoo FooQuxbaz FooQuxQux QUXBAZBAZ",
+        },
+        Pinned {
+            name: "mixed_case_chk",
+            aff: "COMPOUNDFLAG X\nCHECKCOMPOUNDCASE",
+            dic: "foo/X Qux/X bar/X",
+            pieces: "foo Qux Foo bar Bar",
+            extra: "",
+            right: true,
+            listed: "foo Qux Foo bar Bar foofoo foobar Quxfoo Quxbar Foofoo Foobar barfoo barbar Barfoo Barbar foofoofoo foofoobar \
+                foobarfoo foobarbar Quxfoofoo Quxfoobar Quxbarfoo Quxbarbar Foofoofoo Foofoobar Foobarfoo Foobarbar barfoofoo \
+                barfoobar barbarfoo barbarbar Barfoofoo Barfoobar Barbarfoo Barbarbar",
+        },
+        Pinned {
+            name: "mixed_forbid",
+            aff: "COMPOUNDFLAG X\nFORBIDDENWORD F",
+            dic: "foo/X Qux/X fooQux/F bar/X",
+            pieces: "foo Qux Foo bar",
+            extra: "FooQux fooQux FOOQUX",
+            right: false,
+            listed: "fooQux fooFoo QuxFoo FooQux FooFoo barFoo foofooFoo fooQuxFoo fooFoofoo fooFooQux fooFooFoo fooFoobar \
+                foobarFoo QuxfooFoo QuxQuxFoo QuxFoofoo QuxFooQux QuxFooFoo QuxFoobar QuxbarFoo FoofooFoo FooQuxFoo FooFoofoo \
+                FooFooQux FooFooFoo FooFoobar FoobarFoo barfooFoo barQuxFoo barFoofoo barFooQux barFooFoo barFoobar barbarFoo \
+                FOOQUX",
+        },
+        Pinned {
+            name: "mixed_onlyc",
+            aff: "COMPOUNDFLAG X\nONLYINCOMPOUND O",
+            dic: "foo/XO Qux/X bar/X",
+            pieces: "foo Qux Foo bar Bar",
+            extra: "",
+            right: true,
+            listed: "Qux bar Bar foofoo fooQux foobar Quxfoo QuxQux Quxbar Foofoo FooQux Foobar barfoo barQux barbar Barfoo BarQux \
+                Barbar foofoofoo foofooQux foofoobar fooQuxfoo fooQuxQux fooQuxbar foobarfoo foobarQux foobarbar Quxfoofoo \
+                QuxfooQux Quxfoobar QuxQuxfoo QuxQuxQux QuxQuxbar Quxbarfoo QuxbarQux Quxbarbar Foofoofoo FoofooQux Foofoobar \
+                FooQuxfoo FooQuxQux FooQuxbar Foobarfoo FoobarQux Foobarbar barfoofoo barfooQux barfoobar barQuxfoo barQuxQux \
+                barQuxbar barbarfoo barbarQux barbarbar Barfoofoo BarfooQux Barfoobar BarQuxfoo BarQuxQux BarQuxbar Barbarfoo \
+                BarbarQux Barbarbar",
+        },
+        Pinned {
+            name: "mixed_force",
+            aff: "COMPOUNDFLAG X\nFORCEUCASE U",
+            dic: "foo/X Qux/XU bar/XU",
+            pieces: "foo Qux Foo bar Bar",
+            extra: "",
+            right: true,
+            listed: "foo Qux Foo bar Bar foofoo fooQux Quxfoo QuxQux Quxbar Foofoo FooQux Foobar barfoo barQux Barfoo BarQux Barbar \
+                foofoofoo foofooQux fooQuxfoo fooQuxQux fooQuxbar foobarfoo foobarQux Quxfoofoo QuxfooQux Quxfoobar QuxQuxfoo \
+                QuxQuxQux QuxQuxbar Quxbarfoo QuxbarQux Quxbarbar Foofoofoo FoofooQux Foofoobar FooQuxfoo FooQuxQux FooQuxbar \
+                Foobarfoo FoobarQux Foobarbar barfoofoo barfooQux barQuxfoo barQuxQux barQuxbar barbarfoo barbarQux Barfoofoo \
+                BarfooQux Barfoobar BarQuxfoo BarQuxQux BarQuxbar Barbarfoo BarbarQux Barbarbar",
+        },
+        Pinned {
+            name: "keep_nosug",
+            aff: "COMPOUNDFLAG X\nKEEPCASE K\nNOSUGGEST K",
+            dic: "foo/X baz/XK",
+            pieces: "foo baz Foo Baz",
+            extra: "",
+            right: true,
+            listed: "foo baz Foo foofoo foobaz bazfoo bazbaz Foofoo Foobaz foofoofoo foofoobaz foobazfoo foobazbaz bazfoofoo \
+                bazfoobaz bazbazfoo bazbazbaz Foofoofoo Foofoobaz Foobazfoo Foobazbaz",
+        },
+        Pinned {
+            name: "root_affix",
+            aff: "COMPOUNDFLAG Y\nCOMPOUNDWORDMAX 2\nCOMPOUNDROOT R\nCOMPOUNDPERMITFLAG P\nSFX A Y 1\nSFX A 0 s/RP .\nPFX B Y 1\nPFX B 0 un/RP .",
+            dic: "foo/YAB bar/YAB baz/YR",
+            pieces: "foo foos unfoo bar bars baz",
+            extra: "",
+            right: true,
+            listed: "foo foos unfoo bar bars baz foofoo foofoos foounfoo foobar foobars foosfoo foosfoos foosunfoo foosbar foosbars \
+                unfoofoo unfoofoos unfoounfoo unfoobar unfoobars barfoo barfoos barunfoo barbar barbars barsfoo barsfoos \
+                barsunfoo barsbar barsbars",
+        },
+        Pinned {
+            name: "syllable_hu_suffix",
+            aff: "LANG hu_HU\nCOMPOUNDMIN 1\nCOMPOUNDFLAG Y\nCOMPOUNDWORDMAX 2\nCOMPOUNDSYLLABLE 4 aeiou\nSFX C Y 1\nSFX C 0 ata .\nSFX D Y 1\nSFX D 0 ete/Z .\nSFX E Y 1\nSFX E 0 t/F .\nSFX F Y 1\nSFX F 0 ete .",
+            dic: "ba/Y bab/YCDE",
+            pieces: "ba bab babata babete babtete",
+            extra: "bababababata babababababete bababababtete",
+            right: true,
+            listed: "ba bab babata babete babtete baba babab bababata bababete bababtete babba babbab babbabata babbabete \
+                babbabtete bababa bababab babababata babababtete bababba bababbab bababbabata bababbabtete babbaba babbabab \
+                babbababata babbababtete babbabba babbabbab babbabbabata babbabbabtete bababababata bababababtete",
+        },
+        Pinned {
+            name: "near_prefix_shadow",
+            aff: "COMPOUNDBEGIN x\nCOMPOUNDMIDDLE y\nCOMPOUNDEND z\nNEEDAFFIX h\nONLYINCOMPOUND o\nSFX S Y 1\nSFX S 0 ad .\nPFX P Y 1\nPFX P 0 fa .\nSFX T Y 1\nSFX T 0 hr .\nPFX V Y 1\nPFX V 0 ve .",
+            dic: "fahr/x rad/y verkehr/zo hrrad/P fahrrad/h rke/VT fahrr/S",
+            pieces: "fahr rad verkehr",
+            extra: "fahrradverkehr fahrradverkehrr fahrradverkehrad",
+            right: true,
+            listed: "fahr rad verkehr fahrrad fahrverkehr fahrradverkehr",
         },
     ];
 }
