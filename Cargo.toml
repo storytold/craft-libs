@@ -37,6 +37,7 @@ craft-i18n = { path = "crates/i18n" }
 craft-jpeg = { path = "crates/jpeg" }
 craft-keymap = { path = "crates/keymap" }
 craft-media = { path = "crates/media" }
+craft-media-testkit = { path = "crates/media-testkit" }
 craft-menu = { path = "crates/menu" }
 craft-pcraft-format = { path = "crates/pcraft-format" }
 craft-prepress = { path = "crates/prepress" }
