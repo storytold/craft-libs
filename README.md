@@ -86,8 +86,16 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   stay in each app.
 - [`craft-plugin-abi`](crates/plugin-abi/README.md): "craft-abi 1" for WebAssembly plugins: the manifest, permission names, host call numbers and the install-time policy gate that checks a package before any guest code runs. No engine. Builds for `wasm32`.
 - [`craft-plugin-host`](crates/plugin-host/README.md): runs craft-abi 1 plugins. The engine layer: an `Engine` trait, a wasmi engine (every target), an optional wasmtime engine (native) and browser engines (wasm32).
+- [`craft-pcraft-format`](crates/pcraft-format/README.md): the envelope of PhotoCraft's `.pcraft`
+  bundle: `Manifest<D>` with the document as a type parameter, `TileRef`, the entry paths, the
+  manifest decode limits and the migration runner. The document model stays in PhotoCraft.
 - [`craft-print`](crates/print/README.md): PDF submission to CUPS and Windows, printer discovery,
   duplex/copies/colour and driver preferences. PDF generation stays in each app.
+- [`craft-proof`](crates/proof/README.md): proofing per language (spelling, suggestions, grammar,
+  hyphenation, a Hunspell reader, user words, Language packs). The word lists and patterns are
+  craft-i18n's `language-data/`, embedded at build time from `CRAFT_I18N_DIR`: English and the
+  carry-over locales by default, the set `CRAFT_PROOF_EMBED` names otherwise (`en` for English
+  only); other languages come from installed Language packs.
 
 - [`craft-quit`](crates/quit/src/lib.rs): native macOS quit, egui close handling and an optional
   app menu. Unsaved-document decisions and save prompts stay in each app.
