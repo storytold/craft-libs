@@ -15,7 +15,7 @@ use std::time::Duration;
 use crate::dialog::{StartupPrompt, StartupPromptResponse};
 use crate::pins::{Choice, Pins};
 use crate::release::Release;
-use crate::translate::{Translate, english};
+use crate::translate::{Note, Translate, english};
 use crate::{App, Http, Paths, Platform, Stop, check_for_update, self_update};
 
 /// Asks for the newest release (blocking; it runs on its own thread). Tests stand in for the network
@@ -105,9 +105,9 @@ impl Updater {
         StartupPrompt::new(self.app, release, self.version.clone()).with_translator(self.translate)
     }
 
-    /// "The update is installed…", in the interface language.
-    fn installed_message(&self) -> String {
-        (self.translate)("The update is installed. Close {app} to finish; it restarts by itself.", &[("app", self.app.name)])
+    /// "The update is installed…", translated when the prompt draws.
+    fn installed_note(&self) -> Note {
+        Note::new("The update is installed. Close {app} to finish; it restarts by itself.", &[("app", self.app.name)])
     }
 
     /// Replaces the network with `source` (tests).
@@ -275,10 +275,10 @@ impl Updater {
                     Ok(()) => {
                         self.installed = true;
                         self.restart = true;
-                        let message = self.installed_message();
+                        let note = self.installed_note();
                         if let Some(prompt) = &mut self.prompt {
                             prompt.is_installing = false;
-                            prompt.status_message = Some(message);
+                            prompt.set_note(note);
                         }
                     }
                     Err(e) => {
@@ -291,7 +291,7 @@ impl Updater {
                         }
                         if let Some(prompt) = &mut self.prompt {
                             prompt.is_installing = false;
-                            prompt.status_message = Some(e);
+                            prompt.set_message(e);
                         }
                     }
                 }
@@ -338,7 +338,7 @@ impl Updater {
         if can_start {
             self.start_install(ctx);
         } else if let Some(prompt) = &mut self.prompt {
-            prompt.status_message = Some((self.translate)("Save or close your open work first; the update restarts the app.", &[]));
+            prompt.set_note(Note::new("Save or close your open work first; the update restarts the app.", &[]));
         }
     }
 
@@ -347,19 +347,19 @@ impl Updater {
         if self.install.is_none() && !self.installed && self.read_choice() {
             return;
         }
-        let (installed_message, t) = (self.installed_message(), self.translate);
+        let installed_note = self.installed_note();
         let Some(prompt) = &mut self.prompt else { return };
         if self.installed {
-            prompt.status_message = Some(installed_message);
+            prompt.set_note(installed_note);
             return;
         }
         let Some(installed) = self_update::current(self.app) else {
-            prompt.status_message = Some(t("Cannot auto-update this installation type. Please download manually.", &[]));
+            prompt.set_note(Note::new("Cannot auto-update this installation type. Please download manually.", &[]));
             prompt.is_installing = false;
             return;
         };
         prompt.is_installing = true;
-        prompt.status_message = None;
+        prompt.clear_message();
         let (tx, rx) = channel();
         let (app, version, ctx, release) = (self.app, self.version.clone(), ctx.clone(), prompt.release.clone());
         let worker_release = release.clone();
@@ -374,7 +374,7 @@ impl Updater {
             Ok(_) => self.install = Some((rx, release)),
             Err(e) => {
                 prompt.is_installing = false;
-                prompt.status_message = Some(format!("couldn't start the update ({e})"));
+                prompt.set_note(Note::new("Couldn't start the update ({error})", &[("error", &e.to_string())]));
             }
         }
     }
@@ -561,7 +561,7 @@ mod tests {
         u.install = Some((rx, newer()));
         drop(tx);
         u.tick(&ctx);
-        assert!(u.prompt.as_ref().is_some_and(|p| p.status_message.is_some()));
+        assert!(u.prompt.as_ref().is_some_and(|p| p.message().is_some()));
     }
 
     #[test]
@@ -587,7 +587,35 @@ mod tests {
         u.offer(newer());
         u.request_install(&ctx, false);
         assert!(u.install.is_none(), "nothing is scheduled while there is unsaved work");
-        assert!(u.prompt.as_ref().is_some_and(|p| !p.is_installing && p.status_message.is_some()));
+        assert!(u.prompt.as_ref().is_some_and(|p| !p.is_installing && p.message().is_some()));
+    }
+
+    /// The updater's own messages follow the interface language while the prompt shows them:
+    /// they are translated when it draws, not when they are set.
+    #[test]
+    fn the_prompts_own_messages_follow_a_language_change() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        static FRENCH: AtomicBool = AtomicBool::new(false);
+        fn translate(text: &str, args: &[(&str, &str)]) -> String {
+            let text = if FRENCH.load(Ordering::Relaxed) { format!("FR {text}") } else { text.to_owned() };
+            crate::translate::fill(&text, args)
+        }
+        let ctx = egui::Context::default();
+        let mut u = updater(Ok(None)).with_translator(translate);
+        u.offer(newer());
+        u.request_install(&ctx, false);
+        let message = |u: &Updater| u.prompt.as_ref().and_then(StartupPrompt::message).unwrap_or_default();
+        assert!(message(&u).starts_with("Save or close"), "{}", message(&u));
+        FRENCH.store(true, Ordering::Relaxed);
+        assert!(message(&u).starts_with("FR Save or close"), "{}", message(&u));
+        // An installed update names the app, in the language of the moment.
+        let (tx, rx) = channel();
+        u.install = Some((rx, newer()));
+        assert!(tx.send(Ok(())).is_ok());
+        u.tick(&ctx);
+        assert!(message(&u).starts_with("FR The update is installed. Close PhotoCraft"), "{}", message(&u));
+        FRENCH.store(false, Ordering::Relaxed);
+        assert!(message(&u).starts_with("The update is installed."), "{}", message(&u));
     }
 
     /// One frame with the updater's prompt drawn.

@@ -4,7 +4,7 @@ use egui::{Align, Align2, Color32, Layout, RichText, Vec2};
 
 use crate::app::App;
 use crate::release::Release;
-use crate::translate::{Translate, button, english};
+use crate::translate::{Note, Translate, button, english};
 use crate::updater::Status;
 
 /// What the user chose in the startup update prompt.
@@ -28,7 +28,11 @@ pub struct StartupPrompt {
     pub running_version: String,
     pub is_self_updating: bool,
     pub open: bool,
+    /// A message shown as it is: an error from the network or the installer.
     pub status_message: Option<String>,
+    /// One of the crate's own messages, translated each time the prompt draws; shown instead of
+    /// `status_message`. [`StartupPrompt::set_note`] and [`StartupPrompt::set_message`] keep one.
+    pub status_note: Option<Note>,
     pub is_installing: bool,
     /// Puts the card's words in the interface language ([`crate::translate`]); English by default.
     pub translate: Translate,
@@ -45,9 +49,33 @@ impl StartupPrompt {
             is_self_updating,
             open: true,
             status_message: None,
+            status_note: None,
             is_installing: false,
             translate: english,
         }
+    }
+
+    /// Shows one of the crate's own messages, in the interface language whenever it draws.
+    pub fn set_note(&mut self, note: Note) {
+        self.status_note = Some(note);
+        self.status_message = None;
+    }
+
+    /// Shows `message` as it is (an error from elsewhere).
+    pub fn set_message(&mut self, message: String) {
+        self.status_note = None;
+        self.status_message = Some(message);
+    }
+
+    /// Clears the message.
+    pub fn clear_message(&mut self) {
+        self.status_note = None;
+        self.status_message = None;
+    }
+
+    /// The message the prompt shows, in the interface language.
+    pub fn message(&self) -> Option<String> {
+        self.status_note.as_ref().map(|note| note.translated(self.translate)).or_else(|| self.status_message.clone())
     }
 
     /// The prompt with its words in the interface language ([`crate::translate`]).
@@ -95,7 +123,7 @@ impl StartupPrompt {
 
                         ui.add_space(8.0);
 
-                        if let Some(msg) = &self.status_message {
+                        if let Some(msg) = self.message() {
                             let alert_bg = if is_dark { Color32::from_rgb(50, 30, 20) } else { Color32::from_rgb(255, 242, 235) };
                             let alert_color = Color32::from_rgb(225, 95, 30);
                             egui::Frame::new()
@@ -538,6 +566,7 @@ mod tests {
             is_self_updating,
             open: true,
             status_message: None,
+            status_note: None,
             is_installing: false,
             translate: english,
         }

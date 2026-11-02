@@ -27,32 +27,55 @@ pub fn english(text: &str, args: &[(&str, &str)]) -> String {
     fill(text, args)
 }
 
-/// `template` with each `{name}` in `args` replaced by its value. A placeholder that `args`
-/// lacks stays as written. An inserted value is never read as a template, so a value containing
-/// `{app}` stays intact.
+/// `template` with each `{name}` in `args` replaced by its value, by the rules of
+/// `craft_i18n::fmt` (without its bidi isolates): a placeholder runs from a `{` to the next `}`,
+/// and one that `args` lacks stays as written, braces and all. An inserted value is never read as
+/// a template, so a value containing `{app}` stays intact.
 pub fn fill(template: &str, args: &[(&str, &str)]) -> String {
     let mut out = String::with_capacity(template.len());
     let mut rest = template;
-    while let Some(open) = rest.find('{') {
-        let (before, from_brace) = rest.split_at(open);
+    while let Some((before, after_open)) = rest.split_once('{') {
         out.push_str(before);
-        let value = from_brace.find('}').and_then(|close| {
-            let name = from_brace.get(1..close)?;
-            args.iter().find(|(key, _)| *key == name).map(|(_, value)| (*value, close))
-        });
-        match value {
-            Some((value, close)) => {
-                out.push_str(value);
-                rest = from_brace.get(close + 1..).unwrap_or("");
-            }
+        let Some((name, after_close)) = after_open.split_once('}') else {
+            out.push('{');
+            rest = after_open;
+            break;
+        };
+        match args.iter().find(|(key, _)| *key == name) {
+            Some((_, value)) => out.push_str(value),
             None => {
                 out.push('{');
-                rest = from_brace.get(1..).unwrap_or("");
+                out.push_str(name);
+                out.push('}');
             }
         }
+        rest = after_close;
     }
     out.push_str(rest);
     out
+}
+
+/// One of the crate's own messages in the startup prompt ("The update is installed…"), kept as
+/// its English text and values so it is translated each time the prompt draws: a change of
+/// interface language while it shows changes it too.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Note {
+    /// The English text, the lookup key.
+    pub text: &'static str,
+    /// The values of its `{name}` placeholders.
+    pub args: Vec<(&'static str, String)>,
+}
+
+impl Note {
+    pub fn new(text: &'static str, args: &[(&'static str, &str)]) -> Self {
+        Self { text, args: args.iter().map(|(k, v)| (*k, (*v).to_owned())).collect() }
+    }
+
+    /// The note in the interface language.
+    pub fn translated(&self, translate: Translate) -> String {
+        let args: Vec<(&str, &str)> = self.args.iter().map(|(k, v)| (*k, v.as_str())).collect();
+        translate(self.text, &args)
+    }
 }
 
 /// A button label: `label` (title case, the lookup key) translated, then in capitals, as the card
@@ -72,6 +95,9 @@ mod tests {
         assert_eq!(fill("{version}: {app}", &[("app", "A"), ("version", "1")]), "1: A");
         // Unknown and unclosed placeholders stay; a value holding a placeholder stays as it is.
         assert_eq!(fill("{nope} and {app", &[("app", "X")]), "{nope} and {app");
+        // An unknown candidate stays whole through its closing brace, as craft_i18n::fmt keeps it.
+        assert_eq!(fill("{bad {app}", &[("app", "X")]), "{bad {app}");
+        assert_eq!(fill("{bad} {app}", &[("app", "X")]), "{bad} X");
         assert_eq!(fill("by {developer}", &[("developer", "{developer}")]), "by {developer}");
         assert_eq!(fill("é {app} ü", &[("app", "日本")]), "é 日本 ü");
         assert_eq!(fill("", &[]), "");
@@ -86,5 +112,7 @@ mod tests {
             fill(if text == "Later" { "Plus tard" } else { text }, args)
         }
         assert_eq!(button(french, "Later"), "PLUS TARD");
+        let note = Note::new("Close {app} to finish", &[("app", "PdfCraft")]);
+        assert_eq!(note.translated(english), "Close PdfCraft to finish");
     }
 }
