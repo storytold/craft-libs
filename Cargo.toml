@@ -28,6 +28,7 @@ craft-cms = { path = "crates/cms" }
 craft-crw = { path = "crates/crw" }
 craft-dialogs = { path = "crates/dialogs" }
 craft-docpath = { path = "crates/docpath" }
+craft-ecproj-format = { path = "crates/ecproj-format" }
 craft-font-catalog = { path = "crates/font-catalog" }
 craft-font-manager = { path = "crates/font-manager" }
 craft-font-store = { path = "crates/font-store" }
@@ -37,6 +38,7 @@ craft-jpeg = { path = "crates/jpeg" }
 craft-keymap = { path = "crates/keymap" }
 craft-media = { path = "crates/media" }
 craft-menu = { path = "crates/menu" }
+craft-pcraft-format = { path = "crates/pcraft-format" }
 craft-prepress = { path = "crates/prepress" }
 craft-print = { path = "crates/print" }
 craft-quit = { path = "crates/quit" }
@@ -44,6 +46,7 @@ craft-settings = { path = "crates/settings" }
 craft-text = { path = "crates/text" }
 craft-ui = { path = "crates/ui" }
 craft-update = { path = "crates/update" }
+craft-vectorcraft-format = { path = "crates/vectorcraft-format" }
 craft-window = { path = "crates/window" }
 craft-bitstream = { path = "crates/bitstream" }
 craft-h264enc = { path = "crates/h264enc" }
