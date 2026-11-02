@@ -165,9 +165,10 @@ fn ends_sentence(gap: &str, prev: &str) -> bool {
     }
     let after_marks = t.trim_start_matches(['.', '!', '?']);
     let rest = after_marks.trim_start_matches(CLOSING);
+    // (Not the object placeholder `\u{1}`: `Chi era?\u{1} era Marco.` still starts a sentence.)
     // `«Vai?» disse lui.` and `—Vai? —disse lui.`: the narration after a quoted question or
     // exclamation, or after a dialogue dash, goes on in lower case.
-    if rest.contains('—') || (end != '.' && after_marks.starts_with(CLOSING)) {
+    if rest.contains('—') || (end != '.' && after_marks.starts_with(|c| c != '\u{1}' && CLOSING.contains(&c))) {
         return false;
     }
     rest.starts_with(char::is_whitespace) && rest.trim_start().chars().all(|c| matches!(c, '"' | '“' | '«' | '(' | '[' | '\'' | '—'))
@@ -416,6 +417,8 @@ mod tests {
             assert!(fixes(t).is_empty(), "{t}: {:?}", fixes(t));
         }
         assert!(fixes("Vado a Roma? sì.").contains(&pair("sì", "Sì")), "a bare question still ends the sentence");
+        // An inline object (`\u{1}`) is not a closing quote.
+        assert!(fixes("Chi era?\u{1} era Marco.").contains(&pair("era", "Era")), "{:?}", fixes("Chi era?\u{1} era Marco."));
     }
 
     #[test]
