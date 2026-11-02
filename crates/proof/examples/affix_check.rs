@@ -48,6 +48,9 @@ fn decapitalize(w: &str) -> String {
     c.next().map(|f| f.to_lowercase().chain(c).collect()).unwrap_or_default()
 }
 
+/// Attempts per requested word before a generator gives up (a dictionary that yields none).
+const MAX_TRIES_PER_WORD: usize = 1000;
+
 fn generate(d: &AffixDict, n: usize, seed: u64) -> Vec<String> {
     let stems: Vec<&str> = d.stems().filter(|s| s.chars().all(char::is_alphabetic)).collect();
     let mut rng = Rng(seed.max(1));
@@ -57,7 +60,10 @@ fn generate(d: &AffixDict, n: usize, seed: u64) -> Vec<String> {
         forms.get(rng.below(forms.len())).cloned().unwrap_or_else(|| s.to_string())
     };
     let mut out = Vec::with_capacity(n);
-    while out.len() < n {
+    // A dictionary without alphabetic stems yields no word: give up instead of looping forever.
+    let mut tries = n.saturating_mul(MAX_TRIES_PER_WORD);
+    while out.len() < n && !stems.is_empty() && tries > 0 {
+        tries -= 1;
         let parts = 2 + rng.below(2);
         let mut w = form(&mut rng);
         for _ in 1..parts {
@@ -100,7 +106,9 @@ fn single(d: &AffixDict, n: usize, seed: u64) -> Vec<String> {
     endings.sort();
     endings.dedup();
     let mut out = Vec::with_capacity(n);
-    while out.len() < n {
+    let mut tries = n.saturating_mul(MAX_TRIES_PER_WORD);
+    while out.len() < n && !stems.is_empty() && tries > 0 {
+        tries -= 1;
         let s = stems.get(rng.below(stems.len())).copied().unwrap_or_default();
         let forms = d.forms(s);
         if let Some(f) = forms.get(rng.below(forms.len())) {
@@ -161,6 +169,9 @@ fn main() -> Result<(), String> {
             let n: usize = n.parse().map_err(|_| "n is a number")?;
             let seed: u64 = seed.parse().map_err(|_| "seed is a number")?;
             let words = if cmd == "gen" { generate(&d, n, seed) } else { single(&d, n, seed) };
+            if words.len() < n {
+                return Err(format!("only {} of {n} words could be generated from this dictionary", words.len()));
+            }
             for w in words {
                 println!("{w}");
             }
