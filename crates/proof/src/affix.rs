@@ -224,6 +224,8 @@ fn parse_cond(text: &str) -> Result<Box<[Cond]>, String> {
     Ok(out.into_boxed_slice())
 }
 
+/// Most affix rules one simple-word check tries, all prefixes and suffix chains together.
+const MAX_SIMPLE_WORK: usize = 1 << 16;
 /// Most homonyms of one stem kept apart ([`AffixDict::homonyms`]); past it their flags count merged.
 const MAX_HOMONYMS: usize = 16;
 /// How many suffixes a word may carry in a row through continuation classes (`work` +
@@ -876,6 +878,18 @@ impl<'a> FlagProbe<'a> {
             FlagProbe::Few(flags) => intersects(set, flags),
             FlagProbe::Many(bits) => set.iter().any(|&f| bits.get(usize::from(f) >> 6).is_some_and(|w| w & (1 << (f & 63)) != 0)),
         }
+    }
+}
+
+/// Affix rules a word's check may still try ([`MAX_SIMPLE_WORK`] at first).
+struct Steps(std::cell::Cell<usize>);
+
+impl Steps {
+    /// Take `n` steps; false when they ran out.
+    fn spend(&self, n: usize) -> bool {
+        let left = self.0.get();
+        self.0.set(left.saturating_sub(n.max(1)));
+        left > 0
     }
 }
 
@@ -1660,7 +1674,7 @@ impl AffixDict {
     /// With `pfx` set (a prefix was taken off: the flags of the prefixes that could be it), every
     /// rule on the way must allow cross products and one prefix's flag must come from the stem or
     /// a continuation class on the way (`meg` + `épít` + `és` + `e`).
-    fn form_has_flag(&self, w: &str, flags: &[u16], depth: u8, pfx: Option<&FlagProbe>, excluded: Excluded) -> bool {
+    fn form_has_flag(&self, w: &str, flags: &[u16], depth: u8, pfx: Option<&FlagProbe>, excluded: Excluded, steps: &Steps) -> bool {
         let fits = |f: &[u16]| intersects(f, flags) && pfx.is_none_or(|p| p.meets(f));
         if if pfx.is_some() { self.homonym_meets(w, excluded, fits) } else { self.stem_flags_except(w, excluded).is_some_and(fits) } {
             return true;
@@ -1683,6 +1697,9 @@ impl AffixDict {
             let (Some(base), Some(add)) = (w.get(..b), w.get(b..)) else { continue };
             let Some(groups) = self.sfx_index.get(add) else { continue };
             for g in groups.iter().filter(|g| !g.cont_rules.is_empty()) {
+                if !steps.spend(g.cont_rules.len()) {
+                    return false;
+                }
                 root.clear();
                 root.push_str(base);
                 root.push_str(&g.strip);
@@ -1702,7 +1719,7 @@ impl AffixDict {
                 for (list, p) in [(&mut inner, pfx), (&mut met, None)] {
                     list.sort_unstable();
                     list.dedup();
-                    if !list.is_empty() && self.form_has_flag(&root, list, depth - 1, p, excluded) {
+                    if !list.is_empty() && self.form_has_flag(&root, list, depth - 1, p, excluded, steps) {
                         return true;
                     }
                 }
@@ -1794,8 +1811,11 @@ impl AffixDict {
         if w.is_empty() || w.len() > MAX_WORD_BYTES || self.is_forbidden(w) {
             return false;
         }
+        // The affix rules tried for this word, all ways together: past MAX_SIMPLE_WORK it is
+        // taken for no word (hostile rules can't make one word cost seconds).
+        let steps = Steps(std::cell::Cell::new(MAX_SIMPLE_WORK));
         // A stem that needs an affix is no word on its own.
-        if self.stem_flags_except(w, excluded.and(self.need_affix)).is_some() || self.suffixed(w, None, false, false, excluded) {
+        if self.stem_flags_except(w, excluded.and(self.need_affix)).is_some() || self.suffixed(w, None, false, false, excluded, &steps) {
             return true;
         }
         if !prefixes {
@@ -1828,6 +1848,9 @@ impl AffixDict {
         let mut plain: Vec<u16> = Vec::new();
         let mut crossed: Vec<u16> = Vec::new();
         for group in taken.chunk_by(|a, b| (&a.0, a.1, a.2) == (&b.0, b.1, b.2)) {
+            if !steps.spend(group.len()) {
+                return false;
+            }
             let Some((root, circ, needs, ..)) = group.first() else { continue };
             plain.clear();
             crossed.clear();
@@ -1839,18 +1862,20 @@ impl AffixDict {
                     crossed.push(flag);
                 }
             }
+            plain.sort_unstable();
             plain.dedup();
+            crossed.sort_unstable();
             crossed.dedup();
             if !plain.is_empty() {
                 if self.stem_flags_except(root, excluded).is_some_and(|f| intersects(f, &plain)) {
                     return true;
                 }
                 plain.retain(|&f| self.is_cont_flag(f));
-                if !plain.is_empty() && self.form_has_flag(root, &plain, INNER_CHAIN, None, excluded) {
+                if !plain.is_empty() && self.form_has_flag(root, &plain, INNER_CHAIN, None, excluded, &steps) {
                     return true;
                 }
             }
-            if !crossed.is_empty() && self.suffixed(root, Some(&FlagProbe::new(&crossed)), *circ, *needs, excluded) {
+            if !crossed.is_empty() && self.suffixed(root, Some(&FlagProbe::new(&crossed)), *circ, *needs, excluded, &steps) {
                 return true;
             }
         }
@@ -1905,7 +1930,7 @@ impl AffixDict {
     /// from `re/N` and `s/N`).
     /// `need` holds the flags of all the prefixes that could have been taken off (one walk for
     /// them all: a thousand prefix rules adding nothing cost one walk, not a thousand).
-    fn suffixed(&self, w: &str, need: Option<&FlagProbe>, circ: bool, pfx_needs: bool, excluded: Excluded) -> bool {
+    fn suffixed(&self, w: &str, need: Option<&FlagProbe>, circ: bool, pfx_needs: bool, excluded: Excluded, steps: &Steps) -> bool {
         // Fits the suffix rule `r`: circumfix alike, and in need of another affix only when a
         // prefix that doesn't is there.
         let fits = |r: &Rule| {
@@ -1923,6 +1948,9 @@ impl AffixDict {
             let (Some(base), Some(add)) = (w.get(..b), w.get(b..)) else { continue };
             let Some(groups) = self.sfx_index.get(add) else { continue };
             for g in groups {
+                if !steps.spend(g.rules.len()) {
+                    return false;
+                }
                 root.clear();
                 root.push_str(base);
                 root.push_str(&g.strip);
@@ -1968,7 +1996,7 @@ impl AffixDict {
                     for (list, p) in [(&mut flags, need), (&mut met, None)] {
                         list.sort_unstable();
                         list.dedup();
-                        if !list.is_empty() && self.form_has_flag(&root, list, INNER_CHAIN, p, excluded) {
+                        if !list.is_empty() && self.form_has_flag(&root, list, INNER_CHAIN, p, excluded, steps) {
                             return true;
                         }
                     }
@@ -3494,6 +3522,44 @@ pub(crate) mod tests {
         }
         let _ = d.suggest(&format!("{}x", "a".repeat(39)), 8);
         assert!(t.elapsed().as_secs() < 5, "{:?}", t.elapsed());
+    }
+
+    #[test]
+    fn prefixes_with_and_without_cross_products_on_one_root() {
+        // The CLI's answers: `redo` and `rework` right, from `c` (no cross products) beside `a`
+        // and `b` (cross products) adding the same `re`.
+        let aff = "SET UTF-8\nPFX a Y 1\nPFX a 0 re .\nPFX b Y 1\nPFX b 0 re .\nPFX c N 1\nPFX c 0 re .\nSFX S Y 1\nSFX S 0 s .\n";
+        let d = AffixDict::from_hunspell(aff, "2\ndo/c\nwork/cS\n", &[]).unwrap();
+        assert!(d.check("redo") && d.check("rework") && d.check("works"));
+        assert!(!d.check("reworks"));
+        let aff = "SET UTF-8\nFLAG num\nPFX 1 Y 1\nPFX 1 0 re .\nPFX 2 Y 1\nPFX 2 0 re .\nPFX 3 N 1\nPFX 3 0 re .\nPFX 4 N 1\nPFX 4 0 re .\nPFX 5 N 1\nPFX 5 0 re .\n";
+        let d = AffixDict::from_hunspell(aff, "5\nfoo/3\nbar/4\nbaz/5\nqux/1\nquu/2\n", &[]).unwrap();
+        assert!(["refoo", "rebar", "rebaz", "requx", "requu"].iter().all(|w| d.check(w)));
+    }
+
+    #[test]
+    fn many_prefixes_with_their_own_roots_stay_cheap() {
+        // A thousand prefix rules each stripping its own letter (a thousand roots), and 40
+        // chained suffix lengths of 50 flags each: one word's rules share one budget.
+        let mut aff = String::from("SET UTF-8\nFLAG num\n");
+        for f in 1..=1000u32 {
+            let c = char::from_u32(0x4e00 + f).unwrap();
+            aff.push_str(&format!("PFX {f} Y 1\nPFX {f} {c} 0 .\n"));
+        }
+        let conts: Vec<String> = (0..50).map(|k| (5000 + k * 7).to_string()).collect();
+        for len in 1..=40 {
+            for k in 0..50 {
+                let f = 5000 + (len - 1) * 50 + k;
+                aff.push_str(&format!("SFX {f} Y 1\nSFX {f} 0 {}/{} .\n", "a".repeat(len), conts.join(",")));
+            }
+        }
+        let d = AffixDict::from_hunspell(&aff, "2\nb/1,5000\nab/2\n", &[]).unwrap();
+        let t = std::time::Instant::now();
+        for n in [40, 119] {
+            let _ = d.check(&"a".repeat(n));
+        }
+        let _ = d.suggest(&format!("{}x", "a".repeat(39)), 8);
+        assert!(t.elapsed().as_secs() < 10, "{:?}", t.elapsed());
     }
 
     #[test]
