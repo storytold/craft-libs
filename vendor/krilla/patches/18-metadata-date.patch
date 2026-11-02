@@ -1,0 +1,15 @@
+diff --git a/src/interchange/metadata.rs b/src/interchange/metadata.rs
+index 6c74b36..63c5266 100644
+--- a/src/interchange/metadata.rs
++++ b/src/interchange/metadata.rs
+@@ -211,6 +211,10 @@
+ 
+         if let Some(date) = self.modified().map(xmp_date) {
+             xmp.modify_date(date);
++
++            // The metadata last changed when the file did, so it carries the
++            // same instant as the modification date.
++            xmp.metadata_date(date);
+         }
+ 
+         if let Some(date) = self.creation_date.map(xmp_date) {
