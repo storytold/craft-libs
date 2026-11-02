@@ -65,7 +65,7 @@ fn ends_sentence(gap: &str, prev: &str) -> bool {
     let after_marks = t.trim_start_matches(['.', '!', '?']);
     let rest = after_marks.trim_start_matches(CLOSING);
     // `"Vai?" disse ele.` (not the object placeholder `\u{1}`): narration after a quoted question or exclamation goes on in lower case.
-    if end != '.' && after_marks.starts_with(|c| c != '\u{1}' && CLOSING.contains(&c)) {
+    if end != '.' && after_marks.trim_start_matches('\u{1}').starts_with(CLOSING) {
         return false;
     }
     // A dialogue dash after the mark brings back the narration (`—Vai? —disse ele.`), which goes
@@ -231,6 +231,8 @@ mod tests {
         clean("\"Vai?\" disse ele.");
         clean("«Vai!» gritou ela.");
         assert!(!messages("Vai? \"sim\".").is_empty(), "a bare question still ends the sentence");
+        // An inline object (`\u{1}`) before a real closing quote is skipped.
+        clean("\"Vai?\u{1}\" disse ele.");
         // An inline object (`\u{1}`) is not a closing quote.
         assert!(!messages("Quem era?\u{1} era Marco.").is_empty());
         clean("Ele disse: \"Volto amanhã\". E saiu.");

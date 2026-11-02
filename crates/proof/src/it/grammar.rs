@@ -168,7 +168,7 @@ fn ends_sentence(gap: &str, prev: &str) -> bool {
     // (Not the object placeholder `\u{1}`: `Chi era?\u{1} era Marco.` still starts a sentence.)
     // `«Vai?» disse lui.` and `—Vai? —disse lui.`: the narration after a quoted question or
     // exclamation (not after a period: `Finì. —domani` starts a sentence), or after a dialogue dash, goes on in lower case.
-    if end != '.' && (rest.contains('—') || after_marks.starts_with(|c| c != '\u{1}' && CLOSING.contains(&c))) {
+    if end != '.' && (rest.contains('—') || after_marks.trim_start_matches('\u{1}').starts_with(CLOSING)) {
         return false;
     }
     rest.starts_with(char::is_whitespace)
@@ -421,6 +421,8 @@ mod tests {
         // After a period the dash opens the next line of speech: a sentence starts.
         assert!(fixes("Finì. —domani partiamo.").contains(&pair("domani", "Domani")), "{:?}", fixes("Finì. —domani partiamo."));
         assert!(fixes("Finì. — domani partiamo.").contains(&pair("domani", "Domani")), "{:?}", fixes("Finì. — domani partiamo."));
+        // An inline object (`\u{1}`) before a real closing quote is skipped.
+        assert!(fixes("«Vai?\u{1}» disse lui.").is_empty(), "{:?}", fixes("«Vai?\u{1}» disse lui."));
         // An inline object (`\u{1}`) is not a closing quote.
         assert!(fixes("Chi era?\u{1} era Marco.").contains(&pair("era", "Era")), "{:?}", fixes("Chi era?\u{1} era Marco."));
     }
