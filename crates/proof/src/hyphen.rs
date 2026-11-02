@@ -223,12 +223,17 @@ fn composed_chars(core: &[char]) -> (Vec<char>, Vec<Option<usize>>) {
 /// the patterns know.
 fn pack_patterns_fit(lang: ProofLang, pats: &Patterns, core: &[char]) -> bool {
     match lang {
-        ProofLang::Ru => core.iter().all(|&c| crate::ru::is_cyrillic(c)) && pats.values(core).is_some(),
-        ProofLang::Bg => core.iter().all(|&c| crate::bg::is_letter(c)) && pats.values(core).is_some(),
-        ProofLang::Tr => core.iter().all(|&c| crate::tr::hyphen::is_letter(c)) && pats.values(core).is_some(),
+        ProofLang::Ru => core.iter().all(|&c| crate::ru::is_cyrillic(c)) && pack_knows(pats, core),
+        ProofLang::Bg => core.iter().all(|&c| crate::bg::is_letter(c)) && pack_knows(pats, core),
+        ProofLang::Tr => core.iter().all(|&c| crate::tr::hyphen::is_letter(c)) && pack_knows(pats, core),
         ProofLang::Pl | ProofLang::Pt | ProofLang::It | ProofLang::De => true,
         _ => pats.values(core).is_some(),
     }
+}
+
+/// Do `pats` know `core`: an exception word, or a word whose letters the patterns mention?
+fn pack_knows(pats: &Patterns, core: &[char]) -> bool {
+    pats.exception(&core.iter().collect::<String>()).is_some() || pats.values(core).is_some()
 }
 
 /// Polish: exception words, then the patterns, then the Polish syllable heuristic.
@@ -547,6 +552,17 @@ mod tests {
             assert!(pack_patterns_fit(lang, &p, &chars(known)), "{lang:?} {known}");
             assert!(!pack_patterns_fit(lang, &p, &chars(unknown)), "{lang:?} {unknown}");
         }
+    }
+
+    /// An exception word of a pack keeps its breaks even with a letter the patterns never mention.
+    #[test]
+    fn pack_exception_words_need_no_pattern_letters() {
+        let chars = |w: &str| w.chars().collect::<Vec<_>>();
+        let p = Patterns::parse("1на 1ка ё-ка");
+        let w = chars("ёка");
+        assert!(pack_patterns_fit(ProofLang::Ru, &p, &w));
+        assert_eq!(core_breaks_patterns(&p, &w), (vec![1], Source::Dictionary));
+        assert!(!pack_patterns_fit(ProofLang::Ru, &p, &chars("ёна")));
     }
 
     /// CodeRabbit on craft-libs#484: a Turkish word with a suffix after an apostrophe is
