@@ -11,6 +11,8 @@ repository.workspace = true
 workspace = true
 
 [features]
+# Opt-in migration of first party Flatpak bundles to the ArtCraft OCI remote.
+experimental-oci-migration = []
 default = []
 egui = ["dep:egui", "dep:image"]
 local-mirror = []
