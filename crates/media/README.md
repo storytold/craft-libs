@@ -184,7 +184,7 @@ Boxes with 64-bit sizes and with size 0 (runs to the end of the file) are suppor
 | `jpeg mjpa mjpb` | `Jpeg { fourcc }` |
 | `AVdn AVdh` | `Dnx { fourcc }` |
 | `mp4a` + `esds` (in `wave` too) | `Aac(AacConfig)`: ASC bytes + decoded object type/rate/channels; `Mp3` for OTI 0x69/0x6B |
-| `.mp3`/`.mp2` | `Mp3`: MPEG-1/2 audio of any layer (each frame header names it) |
+| `.mp3`/`.mp2` | `Mp3`: MPEG-1/2 audio of any layer (each frame header names it; `Track::codec_params()` reports `Mp1`, `Mp2` or `Mp3` from the first frame) |
 | PCM fourccs | `Pcm(PcmConfig)`: bits, float, endianness (`enda`, lpcm flags, `pcmC`), channels, rate |
 | `alac` | `Alac { cookie }` |
 | `Opus` + `dOps` | `Opus(OpusConfig)` |

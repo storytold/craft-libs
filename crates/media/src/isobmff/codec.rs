@@ -183,7 +183,8 @@ pub enum CodecConfig {
     Apv(ApvConfig),
     Aac(AacConfig),
     /// MPEG-1/2 audio (esds object type 0x69/0x6B, or QuickTime `.mp3` / `.mp2`). Usually layer
-    /// III, but these name no layer: ffmpeg stores MP2 as `mp4a` + 0x6B. Each frame header has it.
+    /// III, but these name no layer: ffmpeg stores MP2 as `mp4a` + 0x6B. Each frame header has it,
+    /// and [`crate::isobmff::Track::codec_params`] reports the layer the first frame names.
     Mp3,
     Pcm(PcmConfig),
     /// ALAC magic cookie (ALACSpecificConfig, 24 bytes, optionally followed by a channel layout).
@@ -210,7 +211,8 @@ pub enum CodecConfig {
 
 impl CodecConfig {
     /// The codec this configuration is for. `Mp3` covers every MPEG audio layer: these entries
-    /// name none, and each frame header has it (ffmpeg stores MP2 as `mp4a` + 0x6B).
+    /// name none, and each frame header has it (ffmpeg stores MP2 as `mp4a` + 0x6B);
+    /// [`crate::isobmff::Track::codec_params`] reads it from the first frame.
     pub fn codec_id(&self) -> CodecId {
         match self {
             CodecConfig::Avc(_) => CodecId::H264,
