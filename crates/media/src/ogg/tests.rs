@@ -460,3 +460,38 @@ fn flac_extradata_flags_exactly_the_last_block() {
     let p = open(&ogg_flac(0, true, 0xFF)[..]).unwrap().streams[0].codec_params();
     assert_eq!((p.extradata.len(), p.extradata[4] & 0x80), (4 + 4 + 34, 0x80));
 }
+
+#[test]
+fn pages_that_fail_their_crc_are_charged_to_the_recovery_budget() {
+    // after one good page, fake page headers every 282 bytes, each claiming a 64 KB body: every
+    // one is read and hashed before it fails its CRC, so without charging that work the file
+    // would cost gigabytes of hashing
+    let mut f = Vec::new();
+    let (l, b) = lace(&[&opus_head(0)], false);
+    page(&mut f, 0x02, 0, 1, 0, &l, &b);
+    let mut fake = b"OggS\0\0".to_vec();
+    fake.resize(26, 0);
+    fake.push(255);
+    fake.extend_from_slice(&[255; 255]);
+    for _ in 0..1500 {
+        f.extend_from_slice(&fake);
+    }
+    let o = open(&f).unwrap();
+    assert!(o.warnings.iter().any(|w| w.contains("past the recovery budget")), "{:?}", o.warnings.last());
+    let bad = o.warnings.iter().filter(|w| w.contains("bad CRC on page")).count();
+    assert!(bad <= RECOVERY_BUDGET / (27 + 255 + 255 * 255) + 1, "{bad}");
+    assert!(o.warnings.len() <= MAX_DAMAGE_WARNINGS + 2, "{}", o.warnings.len());
+}
+
+#[test]
+fn damage_warnings_are_capped() {
+    let mut w = Warnings::default();
+    for i in 0..MAX_DAMAGE_WARNINGS + 10 {
+        w.damage(|| format!("damage {i}"));
+    }
+    w.push("budget".into());
+    let list = w.finish();
+    assert_eq!(list.len(), MAX_DAMAGE_WARNINGS + 2);
+    assert_eq!(list[MAX_DAMAGE_WARNINGS], "budget");
+    assert_eq!(list.last().unwrap(), "10 more damaged regions not listed");
+}

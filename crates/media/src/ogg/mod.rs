@@ -270,6 +270,52 @@ impl Stream {
     }
 }
 
+impl Stream {
+    /// File a completed packet: the first one sets the codec and how many headers follow it, then
+    /// header packets are read in, and the rest are audio.
+    fn add_packet(&mut self, src: &(impl ByteSource + ?Sized), pk: Packet, warnings: &mut Warnings) -> Result<()> {
+        if self.headers.is_empty() && self.packets.is_empty() {
+            let data = read_parts(src, &pk.parts)?;
+            self.codec = Codec::of(&data);
+            self.header_count = match self.codec {
+                Codec::Flac => flac_header_count(&data),
+                Codec::Speex => speex_header_count(&data),
+                c => c.header_count(),
+            };
+        }
+        if self.headers.len() >= self.header_count || !self.packets.is_empty() {
+            self.packets.push(pk);
+            return Ok(());
+        }
+        let data = read_parts(src, &pk.parts)?;
+        if self.header_count == usize::MAX && !self.headers.is_empty() {
+            // FLAC with an unstated count: metadata packets run to the one flagged last. A packet
+            // that is no metadata block (an audio frame starts with 0xFF) ends them, and so do the
+            // caps, so audio is never held as headers.
+            if !is_flac_metadata_block(&data) {
+                self.header_count = self.headers.len();
+                self.packets.push(pk);
+                return Ok(());
+            }
+            if self.headers.len() >= MAX_UNSTATED_HEADERS || self.header_bytes.saturating_add(data.len()) > MAX_UNSTATED_HEADER_BYTES {
+                warnings.push(format!(
+                    "stream {}: FLAC metadata beyond {MAX_UNSTATED_HEADERS} blocks or {MAX_UNSTATED_HEADER_BYTES} bytes read as audio",
+                    self.serial
+                ));
+                self.header_count = self.headers.len();
+                self.packets.push(pk);
+                return Ok(());
+            }
+            if data[0] & 0x80 != 0 {
+                self.header_count = self.headers.len() + 1;
+            }
+        }
+        self.header_bytes = self.header_bytes.saturating_add(data.len());
+        self.headers.push(data);
+        Ok(())
+    }
+}
+
 /// An opened Ogg file.
 #[non_exhaustive]
 #[derive(Clone, Debug)]
@@ -300,6 +346,34 @@ const FILE_BYTES_PER_PACKET: u64 = 8;
 const MIN_PACKET_ALLOWANCE: usize = 1 << 20;
 /// The most metadata packets kept for an Ogg FLAC stream that does not state its header count.
 const MAX_UNSTATED_HEADERS: usize = 1024;
+/// Warnings kept about damaged pages; the rest are counted in one closing warning.
+const MAX_DAMAGE_WARNINGS: usize = 1024;
+
+/// The warnings of [`open`]: those about damaged pages are capped at `MAX_DAMAGE_WARNINGS`, so a
+/// file of damage cannot make a warning per byte.
+#[derive(Default)]
+struct Warnings {
+    list: Vec<String>,
+    damage: usize,
+}
+
+impl Warnings {
+    fn push(&mut self, warning: String) {
+        self.list.push(warning);
+    }
+    fn damage(&mut self, warning: impl FnOnce() -> String) {
+        if self.damage < MAX_DAMAGE_WARNINGS {
+            self.list.push(warning());
+        }
+        self.damage += 1;
+    }
+    fn finish(mut self) -> Vec<String> {
+        if let Some(more) = self.damage.checked_sub(MAX_DAMAGE_WARNINGS).filter(|&n| n > 0) {
+            self.list.push(format!("{more} more damaged regions not listed"));
+        }
+        self.list
+    }
+}
 
 /// Where a damage-recovery scan stopped.
 #[derive(Debug, PartialEq, Eq)]
@@ -318,7 +392,7 @@ pub fn open(src: &(impl ByteSource + ?Sized)) -> Result<OggFile> {
     let mut streams: Vec<Stream> = Vec::new();
     let mut by_serial: HashMap<u32, usize> = HashMap::new();
     let mut partial: HashMap<u32, Partial> = HashMap::new();
-    let mut warnings = Vec::new();
+    let mut warnings = Warnings::default();
     let mut pos = 0u64;
     let mut found_any = false;
     let mut recovery_budget = RECOVERY_BUDGET;
@@ -330,7 +404,7 @@ pub fn open(src: &(impl ByteSource + ?Sized)) -> Result<OggFile> {
             match find_capture(src, pos + 1, len, &mut recovery_budget)? {
                 Capture::At(p) => {
                     if found_any {
-                        warnings.push(format!("lost sync at byte {pos}; resumed at {p}"));
+                        warnings.damage(|| format!("lost sync at byte {pos}; resumed at {p}"));
                     }
                     pos = p;
                     continue;
@@ -351,7 +425,7 @@ pub fn open(src: &(impl ByteSource + ?Sized)) -> Result<OggFile> {
         };
         if pos.saturating_add(page_len) > len {
             // truncated, or a damaged lacing value: look for a page further on
-            warnings.push(format!("page at byte {pos} runs past the end of the file"));
+            warnings.damage(|| format!("page at byte {pos} runs past the end of the file"));
             pos += 1;
             continue;
         }
@@ -360,7 +434,13 @@ pub fn open(src: &(impl ByteSource + ?Sized)) -> Result<OggFile> {
         let stored_crc = u32::from_le_bytes([page[22], page[23], page[24], page[25]]);
         page[22..26].fill(0);
         if crc32(&page) != stored_crc {
-            warnings.push(format!("bad CRC on page at byte {pos}"));
+            warnings.damage(|| format!("bad CRC on page at byte {pos}"));
+            // reading and hashing a page that turns out damaged is recovery work too
+            recovery_budget = recovery_budget.saturating_sub(page.len());
+            if recovery_budget == 0 {
+                warnings.push(format!("bad CRC at byte {pos}; the rest of the file is past the recovery budget"));
+                break;
+            }
             pos += 1;
             continue;
         }
@@ -376,7 +456,7 @@ pub fn open(src: &(impl ByteSource + ?Sized)) -> Result<OggFile> {
         if flags & 0x02 != 0 && by_serial.contains_key(&serial) {
             by_serial.remove(&serial);
             if partial.remove(&serial).is_some() {
-                warnings.push(format!("incomplete packet before page at byte {pos}"));
+                warnings.damage(|| format!("incomplete packet before page at byte {pos}"));
             }
         }
         let si = *by_serial.entry(serial).or_insert_with(|| {
@@ -397,7 +477,7 @@ pub fn open(src: &(impl ByteSource + ?Sized)) -> Result<OggFile> {
         let st = &mut streams[si];
         // a gap in the page sequence numbers is a lost page: a packet it continued is incomplete
         if st.next_seq.is_some_and(|n| n != seq) {
-            warnings.push(format!("pages missing before page at byte {pos}"));
+            warnings.damage(|| format!("pages missing before page at byte {pos}"));
             partial.remove(&serial);
         }
         st.next_seq = Some(seq.wrapping_add(1));
@@ -409,7 +489,7 @@ pub fn open(src: &(impl ByteSource + ?Sized)) -> Result<OggFile> {
         // a continued page without a pending packet (lost a page): drop the fragment
         let continued = flags & 0x01 != 0;
         if !continued && partial.remove(&serial).is_some() {
-            warnings.push(format!("incomplete packet before page at byte {pos}"));
+            warnings.damage(|| format!("incomplete packet before page at byte {pos}"));
         }
         let mut completed: Vec<Packet> = Vec::new();
         let mut off = 0u64;
@@ -461,44 +541,7 @@ pub fn open(src: &(impl ByteSource + ?Sized)) -> Result<OggFile> {
             }
         }
         for pk in completed {
-            if st.headers.is_empty() && st.packets.is_empty() {
-                let data = read_parts(src, &pk.parts)?;
-                st.codec = Codec::of(&data);
-                st.header_count = match st.codec {
-                    Codec::Flac => flac_header_count(&data),
-                    Codec::Speex => speex_header_count(&data),
-                    c => c.header_count(),
-                };
-            }
-            if st.headers.len() < st.header_count && st.packets.is_empty() {
-                let data = read_parts(src, &pk.parts)?;
-                if st.header_count == usize::MAX && !st.headers.is_empty() {
-                    // FLAC with an unstated count: metadata packets run to the one flagged last. A
-                    // packet that is no metadata block (an audio frame starts with 0xFF) ends them,
-                    // and so do the caps, so audio is never held as headers.
-                    if !is_flac_metadata_block(&data) {
-                        st.header_count = st.headers.len();
-                        st.packets.push(pk);
-                        continue;
-                    }
-                    if st.headers.len() >= MAX_UNSTATED_HEADERS || st.header_bytes.saturating_add(data.len()) > MAX_UNSTATED_HEADER_BYTES {
-                        warnings.push(format!(
-                            "stream {}: FLAC metadata beyond {MAX_UNSTATED_HEADERS} blocks or {MAX_UNSTATED_HEADER_BYTES} bytes read as audio",
-                            st.serial
-                        ));
-                        st.header_count = st.headers.len();
-                        st.packets.push(pk);
-                        continue;
-                    }
-                    if data[0] & 0x80 != 0 {
-                        st.header_count = st.headers.len() + 1;
-                    }
-                }
-                st.header_bytes = st.header_bytes.saturating_add(data.len());
-                st.headers.push(data);
-            } else {
-                st.packets.push(pk);
-            }
+            st.add_packet(src, pk, &mut warnings)?;
         }
         pos += page_len;
     }
@@ -508,7 +551,7 @@ pub fn open(src: &(impl ByteSource + ?Sized)) -> Result<OggFile> {
     if !partial.is_empty() {
         warnings.push("file ends inside a packet".into());
     }
-    Ok(OggFile { streams, warnings })
+    Ok(OggFile { streams, warnings: warnings.finish() })
 }
 
 /// A FLAC metadata block: a defined block type (0–6) and as many bytes as its 4-byte header says.
@@ -520,16 +563,19 @@ fn is_flac_metadata_block(data: &[u8]) -> bool {
 }
 
 /// Scan for the next capture pattern from `from`, examining at most `budget` positions and
-/// charging the positions examined.
+/// charging the positions examined. Reads start small and double up to `SCAN_CHUNK`, so a
+/// nearby pattern costs a small read.
 fn find_capture(src: &(impl ByteSource + ?Sized), from: u64, len: u64, budget: &mut usize) -> Result<Capture> {
     let mut at = from;
-    let mut buf = vec![0u8; (len.saturating_sub(from) as usize).min(SCAN_CHUNK + 3)];
+    let mut chunk = 256;
+    let mut buf = Vec::new();
     while at + 4 <= len {
         if *budget == 0 {
             return Ok(Capture::BudgetSpent);
         }
-        let positions = ((len - at - 3) as usize).min(SCAN_CHUNK).min(*budget);
+        let positions = ((len - at - 3) as usize).min(chunk).min(*budget);
         let n = positions + 3;
+        buf.resize(n, 0);
         src.read_at(at, &mut buf[..n])?;
         if let Some(i) = buf[..n].windows(4).position(|w| w == b"OggS") {
             *budget -= i + 1;
@@ -537,6 +583,7 @@ fn find_capture(src: &(impl ByteSource + ?Sized), from: u64, len: u64, budget: &
         }
         *budget -= positions;
         at += positions as u64;
+        chunk = (chunk * 2).min(SCAN_CHUNK);
     }
     Ok(Capture::End)
 }
