@@ -100,6 +100,38 @@ fn a_missing_or_invalid_envelope_member_is_a_json_error() {
     }
 }
 
+/// The manifest as a struct with a derived `Deserialize`, for comparing errors.
+#[derive(Debug, Deserialize)]
+#[allow(dead_code)]
+struct Derived {
+    format_version: u32,
+    generator: String,
+    document: Doc,
+    #[serde(default)]
+    thumbnail: Option<String>,
+    #[serde(default)]
+    composite: Option<String>,
+}
+
+#[test]
+fn a_manifest_with_several_faults_reports_the_one_a_derived_struct_reports() {
+    for json in [
+        json!({"format_version": 1, "composite": 1, "document": {"title": "a"}}),
+        json!({"format_version": 1, "generator": 2, "document": {"title": "a"}}),
+        json!({"format_version": 1, "document": {"title": "a"}, "thumbnail": 3}),
+        json!({"format_version": 1, "document": {"name": "a"}, "thumbnail": 3}),
+        json!({"format_version": 1, "thumbnail": 3}),
+        json!({"format_version": 1}),
+        json!({"format_version": 1, "generator": "g"}),
+        json!({"format_version": 1, "composite": [], "generator": {}}),
+    ] {
+        let want = serde_json::from_value::<Derived>(json.clone()).err().map(|e| format!("manifest JSON: {e}"));
+        let got = read(json.to_string().as_bytes()).err().map(|e| e.to_string());
+        assert!(want.is_some());
+        assert_eq!(got, want, "{json}");
+    }
+}
+
 #[test]
 fn a_missing_version_is_corrupt() {
     assert!(matches!(read(br#"{"generator":"g","document":{"name":"a"}}"#), Err(Error::Corrupt(_))));

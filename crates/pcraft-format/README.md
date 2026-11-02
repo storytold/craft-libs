@@ -43,7 +43,7 @@ let manifest: Manifest<MyDocument> = craft_pcraft_format::read_manifest(&manifes
 
 - `read_manifest(json, &Limits, steps, target)` is the reader of a manifest. It runs
   `parse_manifest`, then `migrate`, which refuses a version newer than `target`, then reads the
-  document as `D` and the other members. `read_manifest_with` takes a function that reads the
+  members, the document as `D`. `read_manifest_with` takes a function that reads the
   document from its `serde_json::Value` instead of `D`'s `Deserialize`.
 - `Manifest<D>` has `format_version`, `generator`, `document: D`, `thumbnail` and `composite`,
   and serializes them in that order. Absent previews serialize as `null`. On read, missing
@@ -100,7 +100,8 @@ limits.max_manifest_bytes = 16 << 20;
   for an invalid hash.
 - `tests/read.rs`: `read_manifest` and `read_manifest_with` read the envelope and the document,
   refuse a newer version with the writer's `generator`, refuse a manifest past the limits, run
-  the steps first, and report missing or mistyped members.
+  the steps first, and report missing or mistyped members as a struct with a derived
+  `Deserialize` reports them, in the same order.
 - Doc tests: `Manifest` and `TileRef` are not built by struct literal, `Manifest` has no
   `Deserialize`, and `Error::TooNew` is matched with `..`.
 - `tests/limits.rs`: the default limits, nesting at and past `max_depth`, items at and past
