@@ -260,8 +260,21 @@ fn decode_latin5(bytes: &[u8]) -> String {
 /// ISO 8859-2 code points 0xA0..=0xFF (0x00..=0x9F map to themselves).
 const ISO_8859_2_HIGH: &str = "\u{a0}Ą˘Ł¤ĽŚ§¨ŠŞŤŹ\u{ad}ŽŻ°ą˛ł´ľśˇ¸šşťź˝žżŔÁÂĂÄĹĆÇČÉĘËĚÍÎĎĐŃŇÓÔŐÖ×ŘŮÚŰÜÝŢßŕáâăäĺćçčéęëěíîďđńňóôőö÷řůúűüýţ˙";
 
-fn decode_latin2(bytes: &[u8]) -> String {
-    let high: Vec<char> = ISO_8859_2_HIGH.chars().collect();
+/// ISO 8859-7 (Greek) code points 0xA0..=0xFF; 0xAE, 0xD2 and 0xFF are unassigned and all read
+/// as U+FFFD. From the
+/// Unicode Consortium's mapping file `MAPPINGS/ISO8859/8859-7.TXT` (2003 edition, with € ₯ ͺ).
+/// The encoding of the Greek dictionary (`SET ISO8859-7`).
+const ISO_8859_7_HIGH: &str =
+    "\u{a0}‘’£€₯¦§¨©ͺ«¬\u{ad}\u{fffd}―°±²³΄΅Ά·ΈΉΊ»Ό½ΎΏΐΑΒΓΔΕΖΗΘΙΚΛΜΝΞΟΠΡ\u{fffd}ΣΤΥΦΧΨΩΪΫάέήίΰαβγδεζηθικλμνξοπρςστυφχψωϊϋόύώ\u{fffd}";
+
+/// ISO 8859-15 (Latin-9) code points 0xA0..=0xFF: ISO 8859-1 with € Š š Ž ž Œ œ Ÿ in eight
+/// places. From the Unicode Consortium's mapping file `MAPPINGS/ISO8859/8859-15.TXT`. The
+/// encoding of the Estonian dictionary (`SET ISO8859-15`).
+const ISO_8859_15_HIGH: &str = "\u{a0}¡¢£€¥Š§š©ª«¬\u{ad}®¯°±²³Žµ¶·ž¹º»ŒœŸ¿ÀÁÂÃÄÅÆÇÈÉÊËÌÍÎÏÐÑÒÓÔÕÖ×ØÙÚÛÜÝÞßàáâãäåæçèéêëìíîïðñòóôõö÷øùúûüýþÿ";
+
+/// Decode an ISO 8859 part whose bytes 0xA0..=0xFF are `high` (0x00..=0x9F map to themselves).
+fn decode_iso(bytes: &[u8], high: &str) -> String {
+    let high: Vec<char> = high.chars().collect();
     bytes.iter().map(|&b| if b < 0xa0 { char::from(b) } else { high.get(usize::from(b - 0xa0)).copied().unwrap_or('\u{fffd}') }).collect()
 }
 
@@ -282,7 +295,8 @@ fn decode_high(bytes: &[u8], high: &str) -> String {
 
 /// Decode an `.aff`/`.dic` pair to UTF-8 from the encoding the `.aff`'s `SET` line names
 /// (UTF-8 when there is none; ISO 8859-2 is the other one Polish dictionaries use, ISO 8859-1 the
-/// one the original Portuguese VERO uses, ISO 8859-9 the one older Turkish dictionaries use, KOI8-R
+/// one the original Portuguese VERO uses, ISO 8859-7 the Greek one, ISO 8859-15 the Estonian one,
+/// ISO 8859-9 the one older Turkish dictionaries use, KOI8-R
 /// and Windows-1251 the ones older Russian dictionaries use).
 ///
 /// Under a UTF-8 `SET` with single-byte flags (no `FLAG` line, or `FLAG DEFAULT`), flags are bytes,
@@ -303,7 +317,9 @@ pub fn decode(aff: &[u8], dic: &[u8]) -> Result<(String, String), String> {
             Ok((decode_utf8_aff(aff)?, decode_utf8_dic(dic)?))
         }
         "ISO8859-1" | "ISO-8859-1" => Ok((decode_latin1(aff), decode_latin1(dic))),
-        "ISO8859-2" | "ISO-8859-2" => Ok((decode_latin2(aff), decode_latin2(dic))),
+        "ISO8859-2" | "ISO-8859-2" => Ok((decode_iso(aff, ISO_8859_2_HIGH), decode_iso(dic, ISO_8859_2_HIGH))),
+        "ISO8859-7" | "ISO-8859-7" => Ok((decode_iso(aff, ISO_8859_7_HIGH), decode_iso(dic, ISO_8859_7_HIGH))),
+        "ISO8859-15" | "ISO-8859-15" => Ok((decode_iso(aff, ISO_8859_15_HIGH), decode_iso(dic, ISO_8859_15_HIGH))),
         "ISO8859-9" | "ISO-8859-9" => Ok((decode_latin5(aff), decode_latin5(dic))),
         "KOI8-R" | "KOI8R" => Ok((decode_high(aff, KOI8_R_HIGH), decode_high(dic, KOI8_R_HIGH))),
         "CP1251" | "WINDOWS-1251" | "MICROSOFT-CP1251" => Ok((decode_high(aff, CP1251_HIGH), decode_high(dic, CP1251_HIGH))),
@@ -600,6 +616,33 @@ mod tests {
         let _ = note_load::<()>(key, dic, Err("too large".into()));
         clear_load_error(key);
         assert_eq!(load_error(key), None);
+    }
+
+    /// Every table covers its 96 (ISO 8859) or 128 (KOI8-R, Windows-1251) high bytes.
+    #[test]
+    fn tables_are_complete() {
+        for t in [ISO_8859_2_HIGH, ISO_8859_7_HIGH, ISO_8859_15_HIGH] {
+            assert_eq!(t.chars().count(), 96, "{t}");
+        }
+        for t in [KOI8_R_HIGH, CP1251_HIGH] {
+            assert_eq!(t.chars().count(), 128, "{t}");
+        }
+    }
+
+    #[test]
+    fn decodes_greek_and_latin9() {
+        // `σπίτι νερό` in ISO 8859-7, and a flag after the slash stays ASCII.
+        let (a, d) = decode(b"SET ISO8859-7\nTRY \xe1\n", b"2\n\xf3\xf0\xdf\xf4\xe9/A\n\xed\xe5\xf1\xfc\n").unwrap();
+        assert!(a.contains("TRY α"), "{a}");
+        assert_eq!(d, "2\nσπίτι/A\nνερό\n");
+        // Unassigned bytes and the 2003 additions.
+        let (_, d) = decode(b"SET ISO-8859-7\n", b"\xae\xd2\xff\xa4\xa5\xaa\xa2").unwrap();
+        assert_eq!(d, "\u{fffd}\u{fffd}\u{fffd}€₯ͺ’");
+        // `šokolaad õun` in ISO 8859-15, and its eight differences from ISO 8859-1.
+        let (_, d) = decode(b"SET ISO8859-15\n", b"\xa8okolaad \xf5un").unwrap();
+        assert_eq!(d, "šokolaad õun");
+        let (_, d) = decode(b"SET ISO-8859-15\n", b"\xa4\xa6\xa8\xb4\xb8\xbc\xbd\xbe\xe4").unwrap();
+        assert_eq!(d, "€ŠšŽžŒœŸä");
     }
 
     #[test]
