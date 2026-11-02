@@ -357,3 +357,47 @@ fn native_module_is_not_mistaken_for_legacy() {
     assert_eq!(report.legacy, None);
     assert!(!report.is_accepted());
 }
+
+/// A module with one memory whose custom page size exponent is `log2` and whose maximum is `max`.
+/// `wat` cannot write an exponent the engine would refuse, so the bytes are written by hand.
+fn memory_with_page_size(log2: u32, max: u8) -> Vec<u8> {
+    let mut exp = Vec::new();
+    leb(log2 as usize, &mut exp);
+    // flags 0x09: has maximum (bit 0) and custom page size (bit 3).
+    let mut body = vec![1u8, 0x09, 1, max];
+    body.extend_from_slice(&exp);
+    let mut wasm = b"\0asm\x01\0\0\0".to_vec();
+    wasm.push(5);
+    leb(body.len(), &mut wasm);
+    wasm.extend_from_slice(&body);
+    wasm
+}
+
+/// The page size exponent comes from the module. The reader refuses 64 and up. Below that the
+/// product with the maximum still fits `u128`. Neither path may panic.
+#[test]
+fn hostile_memory_page_size_exponents_never_panic() {
+    for log2 in [200u32, 128, 127, 64] {
+        let report = gate(&memory_with_page_size(log2, 4));
+        assert!(report.violations.iter().any(|v| matches!(v, Violation::Malformed(_))), "log2 {log2}: {report:#?}");
+    }
+    let report = gate(&memory_with_page_size(63, 4));
+    assert!(report.violations.iter().any(|v| matches!(v, Violation::MemoryMaxTooLarge { .. })), "{report:#?}");
+}
+
+/// Legacy modules have no manifest, but the feature allow list still binds them.
+#[test]
+fn legacy_modules_still_meet_the_feature_allow_list() {
+    for prefix in ["ec_", "pc_", "vc_"] {
+        let src = |body: &str| format!(r#"(module (memory (export "memory") 1) {body} (func (export "{prefix}run")))"#);
+        // Control: plain legacy module loads.
+        assert!(gate(&wat::parse_str(src("")).unwrap()).is_accepted(), "{prefix}");
+        let simd = gate(&wat::parse_str(src("(func (result v128) v128.const i64x2 0 0)")).unwrap());
+        assert!(simd.violations.contains(&Violation::Feature(F::Simd128)), "{prefix}: {simd:#?}");
+        let mem64 = gate(&wat::parse_str(format!(r#"(module (memory (export "memory") i64 1 2) (func (export "{prefix}run")))"#)).unwrap());
+        assert!(mem64.violations.contains(&Violation::Feature(F::Memory64)), "{prefix}: {mem64:#?}");
+        // A body that does not validate is reported, not shipped to the shim.
+        let bad = gate(&wat::parse_str(src("(func (result i32) i32.const 1 i32.const 2)")).unwrap());
+        assert!(bad.violations.iter().any(|v| matches!(v, Violation::InvalidModule(_))), "{prefix}: {bad:#?}");
+    }
+}

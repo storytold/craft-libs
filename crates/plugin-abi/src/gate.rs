@@ -352,8 +352,10 @@ fn check_structure(facts: &Facts<'_>, manifest: Option<&Manifest>, host: &HostPo
         match mem.maximum {
             None => out.push(Violation::MemoryMaxMissing),
             Some(max_pages) => {
-                let page = 1u128 << mem.page_size_log2.unwrap_or(16);
-                let max_bytes = u128::from(max_pages) * page;
+                // The reader limits the exponent today. The gate does not rely on that: a shift or a
+                // product that does not fit `u128` counts as larger than any cap.
+                let page = 1u128.checked_shl(mem.page_size_log2.unwrap_or(16)).unwrap_or(u128::MAX);
+                let max_bytes = u128::from(max_pages).saturating_mul(page);
                 if max_bytes > limit_bytes {
                     out.push(Violation::MemoryMaxTooLarge { max_bytes, limit_bytes });
                 }
@@ -487,14 +489,18 @@ pub fn check_package(bytes: &[u8], host: &HostPolicy) -> PolicyReport {
     };
     match legacy_of(&facts) {
         Ok(Some(abi)) => {
-            // A legacy prefix changes the export names the shim wants, not the resource caps.
-            // The size, memory count, table and function caps still apply. Imports are refused by the
-            // shim itself. A start function runs under the shim's fuel and wall clock.
+            // A legacy prefix changes the export names the shim wants, not the resource caps or the
+            // feature allow list. The size, memory count, table, function and feature rules still apply.
+            // Imports are refused by the shim itself. A start function runs under the shim's fuel and
+            // wall clock.
             report.legacy = Some(abi);
             if bytes.len() > MAX_PACKAGE_BYTES {
                 report.violations.push(Violation::PackageTooLarge { bytes: bytes.len() });
             }
             check_resource_caps(&facts, true, &mut report.violations);
+            // The feature allow list keeps the answer the same on every engine. A legacy module has no
+            // manifest to ask for `simd128`, so it gets the base set.
+            check_features(bytes, allowed_features(None, host), &mut report.violations);
             return report;
         }
         Ok(None) => {}
