@@ -3,6 +3,8 @@
 //! Everything here is untrusted input. Sizes are bounded by the caller, download links must point
 //! at the app's own release downloads, and checksums must look like checksums.
 
+use std::collections::{HashMap, HashSet};
+
 use serde::{Deserialize, Serialize};
 
 use crate::version::{self, Version};
@@ -248,11 +250,14 @@ pub fn tag_from_redirect(location: &str, repo: &str) -> Option<String> {
 }
 
 /// Reads `sha256sum` output: `<hex>  <name>` (or `<hex> *<name>`) per line, one entry per name.
-/// A line repeated as is counts once; a name listed with two different hashes is dropped, so the
-/// file has no checksum and isn't installed, whichever line comes first.
+/// A line repeated as is counts once; a name listed with two different hashes is dropped,
+/// whichever line comes first, so the list vouches for neither (a file nothing else vouches for
+/// isn't installed).
 pub fn parse_sha256sums(text: &str) -> Vec<(String, String)> {
     let mut sums: Vec<(String, String)> = Vec::new();
-    let mut conflicting: Vec<String> = Vec::new();
+    // Where each name is in `sums`: a 4 MiB list holds some 60,000 names, too many to search.
+    let mut index: HashMap<&str, usize> = HashMap::new();
+    let mut conflicting: HashSet<&str> = HashSet::new();
     for line in text.lines() {
         let Some((hash, rest)) = line.trim().split_once(char::is_whitespace) else { continue };
         let name = rest.trim_start().trim_start_matches('*');
@@ -260,18 +265,19 @@ pub fn parse_sha256sums(text: &str) -> Vec<(String, String)> {
             continue;
         }
         let hash = hash.to_ascii_lowercase();
-        match sums.iter().find(|(_, n)| n == name) {
-            None => sums.push((hash, name.to_string())),
-            Some((h, _)) if *h == hash => {}
-            Some(_) => {
-                if !conflicting.iter().any(|n| n == name) {
+        match index.get(name) {
+            None => {
+                index.insert(name, sums.len());
+                sums.push((hash, name.to_string()));
+            }
+            Some(&i) => {
+                if sums.get(i).is_some_and(|(h, _)| *h != hash) && conflicting.insert(name) {
                     log::warn!("SHA256SUMS.txt lists {name} with different checksums; ignoring it");
-                    conflicting.push(name.to_string());
                 }
             }
         }
     }
-    sums.retain(|(_, n)| !conflicting.contains(n));
+    sums.retain(|(_, n)| !conflicting.contains(n.as_str()));
     sums
 }
 
@@ -463,6 +469,19 @@ mod tests {
         }
         // A third, matching line doesn't bring the name back.
         assert!(parse_sha256sums(&format!("{HASH}  a.zip\n{other}  a.zip\n{HASH}  a.zip\n")).is_empty());
+    }
+
+    #[test]
+    fn a_full_size_list_keeps_its_order_and_finds_a_conflict_across_it() {
+        // About as many names as fit in the 4 MiB a list may be, and a conflict between the
+        // first and last lines.
+        let other = "b".repeat(64);
+        let mut text: String = (0..57_000).map(|i| format!("{HASH}  f{i}\n")).collect();
+        text.push_str(&format!("{other}  f0\n"));
+        assert!(text.len() <= 4 << 20);
+        let sums = parse_sha256sums(&text);
+        assert_eq!(sums.len(), 56_999);
+        assert!(sums.iter().enumerate().all(|(i, (h, n))| *h == HASH && *n == format!("f{}", i + 1)));
     }
 
     #[test]
