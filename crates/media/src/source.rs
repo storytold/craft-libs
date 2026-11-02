@@ -157,6 +157,7 @@ impl<R: Read + Seek> ByteSource for ReadSeekSource<R> {
             // a read panicked in another thread and may have moved the reader; force a seek
             let mut g = e.into_inner();
             g.1 = u64::MAX;
+            self.inner.clear_poison();
             g
         });
         let (r, pos) = &mut *g;
@@ -257,6 +258,7 @@ mod tests {
         assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| r.read_at(2, &mut b))).is_err());
         r.read_at(2, &mut b).unwrap();
         assert_eq!(b, [3, 4]);
+        assert!(!r.inner.is_poisoned(), "recovered once, not on every read");
     }
 
     #[test]

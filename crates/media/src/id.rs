@@ -249,7 +249,8 @@ impl PcmFormat {
 /// | APV | the `apvC` record |
 ///
 /// `sample_rate` and `channels` are what the container declares (for HE-AAC with implicit
-/// signalling, usually the core rate); `width` and `height` are the coded picture size of a video
+/// signalling, usually the core rate), except that Opus is always 48 kHz, the rate it decodes at;
+/// `width` and `height` are the coded picture size of a video
 /// track. `tag` is the container's four-character code for the codec when it has one (the MP4
 /// sample entry format, Matroska's ProRes or VfW FourCC), which is how a ProRes profile (`apcn`,
 /// `ap4h`, …) or a DNx variant is told apart.

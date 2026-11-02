@@ -257,6 +257,9 @@ impl Track {
             Codec::Mp3 => (Id::Mp3, Vec::new()),
             Codec::Mp2 => (Id::Mp2, Vec::new()),
             Codec::Mp1 => (Id::Mp1, Vec::new()),
+            // the ALACSpecificConfig, as MP4's `alac` box holds it after its FullBox header
+            Codec::Other(id) if id == "A_ALAC" => (Id::Alac, self.codec_private.clone()),
+            Codec::VfwFourcc { fourcc: [b'A', b'V', b'd', b'n' | b'h'], .. } => (Id::Dnxhd, Vec::new()),
             _ => (Id::Unknown, Vec::new()),
         };
         let mut p = crate::CodecParams::new(id).with_extradata(extradata);
@@ -269,6 +272,10 @@ impl Track {
         }
         if let Some(a) = &self.audio {
             p = p.with_sample_rate(a.sampling_frequency.round() as u32).with_channels(u16::try_from(a.channels).unwrap_or(0));
+        }
+        if let Codec::Opus { .. } = self.codec {
+            // Opus always decodes at 48 kHz; a muxer may have declared the input rate instead
+            p = p.with_sample_rate(48_000);
         }
         if let Codec::Pcm { float, big_endian, bits } = self.codec {
             // 8-bit integer PCM is unsigned in Matroska, as in WAV.
@@ -422,5 +429,38 @@ mod aspect_overflow_tests {
     fn ordinary_pixel_aspect_is_unchanged() {
         let video = VideoInfo { pixel_width: 1920, pixel_height: 1080, display_width: Some(1440), display_height: Some(1080), ..Default::default() };
         assert_eq!(video.pixel_aspect(), (3, 4));
+    }
+}
+
+#[cfg(test)]
+mod codec_params_tests {
+    use crate::CodecId;
+    use crate::matroska::mux::{MkvWriter, MuxOptions, TrackSpec};
+    use crate::matroska::{Demuxer, TrackKind};
+
+    #[test]
+    fn alac_dnx_and_opus_match_mp4() {
+        let cookie: Vec<u8> = (0..24).collect();
+        let mut alac = TrackSpec::new(TrackKind::Audio, "A_ALAC");
+        alac.codec_private = cookie.clone();
+        alac.audio = Some((44_100.0, 2, Some(16)));
+        let mut bih = vec![0u8; 40];
+        bih[16..20].copy_from_slice(b"AVdn");
+        let mut dnx = TrackSpec::new(TrackKind::Video, "V_MS/VFW/FOURCC");
+        dnx.codec_private = bih;
+        dnx.video_size = Some((1920, 1080));
+        let mut opus = TrackSpec::new(TrackKind::Audio, "A_OPUS");
+        opus.codec_private = [b"OpusHead".as_slice(), &[1, 2, 0x38, 0x01, 0x44, 0xAC, 0, 0, 0, 0, 0]].concat();
+        opus.audio = Some((44_100.0, 2, None)); // the input rate, as some muxers write it
+        let mut m = MkvWriter::new(std::io::Cursor::new(Vec::new()), vec![alac, dnx, opus], MuxOptions::default()).unwrap();
+        for t in 0..3 {
+            m.write_frame(t, 0, true, &[0; 4], None).unwrap();
+        }
+        let bytes = m.finish().unwrap().into_inner();
+        let d = Demuxer::from_slice(&bytes).unwrap();
+        let p: Vec<_> = d.tracks().iter().map(|t| t.codec_params()).collect();
+        assert_eq!((p[0].codec, p[0].extradata.as_slice()), (CodecId::Alac, cookie.as_slice()));
+        assert_eq!((p[1].codec, p[1].tag), (CodecId::Dnxhd, Some(*b"AVdn")));
+        assert_eq!((p[2].codec, p[2].sample_rate, p[2].channels), (CodecId::Opus, Some(48_000), Some(2)));
     }
 }
