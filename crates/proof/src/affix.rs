@@ -17,7 +17,7 @@
 //! flags), `PFX`/`SFX` with strip, append and condition (`.`, letters, `[abc]`, `[^abc]`), cross
 //! products, continuation classes on suffixes (at most two suffixes in a row, as in Hunspell),
 //! `FORBIDDENWORD`, `NOSUGGEST`, `KEEPCASE` (the stem is a word only in its own letter case),
-//! `NEEDAFFIX`, `CIRCUMFIX`, `FULLSTRIP`, input conversion (`ICONV`: ligatures such as `ﬁ` read as
+//! `NEEDAFFIX`, `CIRCUMFIX`, `FULLSTRIP`, `CHECKSHARPS` (German `SS` for `ß` in capitals), input conversion (`ICONV`: ligatures such as `ﬁ` read as
 //! `fi`), output conversion of suggestions (`OCONV`) and ignored characters (`IGNORE`), and the
 //! suggestion tables `TRY`, `KEY`, `MAP` and `REP`.
 //! Compounds by `COMPOUNDRULE` (patterns of flags with `*` and `?`, as SCOWL's English
@@ -77,7 +77,6 @@ const MAX_DISTINCT_FLAGS: usize = 1 << 16;
 
 /// Directives that change which words are correct in ways this engine doesn't implement.
 const UNSUPPORTED: &[&str] = &[
-    "CHECKSHARPS",
     "COMPLEXPREFIXES",
     "COMPOUNDBEGIN",
     "COMPOUNDEND",
@@ -208,6 +207,9 @@ fn parse_cond(text: &str) -> Result<Box<[Cond]>, String> {
 const MAX_CHAIN: u8 = 2;
 /// How many suffixes may sit under the outermost one: the depth `form_has_flag` walks.
 const INNER_CHAIN: u8 = MAX_CHAIN - 1;
+/// Most `ss` pairs of a word in capitals that CHECKSHARPS reads as `ß` (each combination is tried:
+/// at most 31 variants).
+const MAX_SHARPS: usize = 5;
 /// Most forms [`AffixDict::forms`] lists for one stem (real stems have a few hundred at most).
 pub const MAX_FORMS: usize = 4096;
 /// Most rules [`AffixDict::forms`] tries along continuation chains and prefix–suffix cross
@@ -305,6 +307,9 @@ pub struct AffixDict {
     circumfix: Option<u16>,
     /// `FULLSTRIP`: an affix may strip (and so replace) a whole stem.
     full_strip: bool,
+    /// `CHECKSHARPS`: in a word in capitals, `SS` may stand for `ß` (`STRASSE` for `Straße`), and
+    /// a `KEEPCASE` word with `ß` may be capitalized and written in capitals with `SS`.
+    check_sharps: bool,
     /// `ICONV`: input conversions applied before a lookup.
     iconv: Conv,
     /// `OCONV`: output conversions applied to suggestions.
@@ -417,9 +422,15 @@ pub enum Casing {
 }
 
 /// The casing of `w`.
+///
+/// `ß` has no capital of its own in Hunspell's tables and counts as neither case, as there:
+/// `STRAßE` is in capitals.
 pub fn casing(w: &str) -> Casing {
     let (mut upper, mut lower, mut first_upper) = (0usize, 0usize, false);
     for (i, c) in w.chars().enumerate() {
+        if c == 'ß' {
+            continue;
+        }
         if c.is_uppercase() {
             upper += 1;
             if i == 0 {
@@ -467,6 +478,7 @@ struct Rules {
     need_affix: Option<FlagKey>,
     circumfix: Option<FlagKey>,
     full_strip: bool,
+    check_sharps: bool,
     iconv: Vec<(String, String)>,
     oconv: Vec<(String, String)>,
     ignore: Vec<char>,
@@ -873,6 +885,7 @@ fn parse_aff(aff: &str, english: bool) -> Result<Rules, String> {
             "NEEDAFFIX" => r.need_affix = Some(r.one_flag(at(1)).map_err(|e| format!("line {}: {dir} needs one flag: {e}", n + 1))?),
             "CIRCUMFIX" => r.circumfix = Some(r.one_flag(at(1)).map_err(|e| format!("line {}: {dir} needs one flag: {e}", n + 1))?),
             "FULLSTRIP" => r.full_strip = true,
+            "CHECKSHARPS" => r.check_sharps = true,
             "FLAG" => r.set_mode(at(1)).map_err(|e| format!("line {}: {e}", n + 1))?,
             "FORBIDDENWORD" => r.forbidden = Some(r.one_flag(at(1)).map_err(|e| format!("line {}: {dir} needs one flag: {e}", n + 1))?),
             "NOSUGGEST" => r.no_suggest = Some(r.one_flag(at(1)).map_err(|e| format!("line {}: {dir} needs one flag: {e}", n + 1))?),
@@ -1087,6 +1100,7 @@ impl AffixDict {
             need_affix: rules.need_affix.and_then(id_of),
             circumfix: rules.circumfix.and_then(id_of),
             full_strip: rules.full_strip,
+            check_sharps: rules.check_sharps,
             flag_mode: mode,
             iconv: Conv::new(rules.iconv),
             oconv: Conv::new(rules.oconv),
@@ -1628,15 +1642,51 @@ impl AffixDict {
         if self.contains_except(&w, excluded) {
             return true;
         }
-        let excluded = excluded.and(self.keepcase);
+        // Over this no case variant can be a word either.
+        if w.len() > MAX_INPUT_BYTES {
+            return false;
+        }
+        let keep = excluded.and(self.keepcase);
         match casing(&w) {
             Casing::Lower | Casing::Mixed => false,
-            Casing::Initial => self.contains_except(&w.to_lowercase(), excluded),
+            Casing::Initial => {
+                let lower = w.to_lowercase();
+                // CHECKSHARPS: a KEEPCASE word with `ß` may be capitalized (`Gruß` for `Gruß/k`).
+                let ex = if self.check_sharps && lower.contains('ß') { excluded } else { keep };
+                self.contains_except(&lower, ex)
+            }
             Casing::Upper => {
                 let lower = w.to_lowercase();
-                self.contains_except(&capitalize(&lower), excluded) || self.contains_except(&lower, excluded)
+                self.contains_except(&capitalize(&lower), keep)
+                    || self.contains_except(&lower, keep)
+                    || (self.check_sharps && self.sharps(&lower, excluded))
             }
         }
+    }
+
+    /// CHECKSHARPS: is `lower` (a word in capitals, lowercased) a word with some of its `ss` read
+    /// as `ß`, in lower case or capitalized? Such a form may come from a `KEEPCASE` stem (in
+    /// capitals a word with `ß` is written with `SS`). The first [`MAX_SHARPS`] `ss` pairs are
+    /// tried, in every combination.
+    fn sharps(&self, lower: &str, excluded: Excluded) -> bool {
+        let at: Vec<usize> = lower.match_indices("ss").map(|(i, _)| i).take(MAX_SHARPS).collect();
+        let mut variant = String::with_capacity(lower.len());
+        for pick in 1u32..(1 << at.len()) {
+            variant.clear();
+            let mut from = 0;
+            for (k, &i) in at.iter().enumerate() {
+                if pick & (1 << k) != 0 {
+                    variant.push_str(lower.get(from..i).unwrap_or_default());
+                    variant.push('ß');
+                    from = i + 2;
+                }
+            }
+            variant.push_str(lower.get(from..).unwrap_or_default());
+            if self.contains_except(&variant, excluded) || self.contains_except(&capitalize(&variant), excluded) {
+                return true;
+            }
+        }
+        false
     }
 
     /// Every form of the stem `stem` (itself included), unsorted, possibly with repeats; at most
@@ -1775,6 +1825,11 @@ impl AffixDict {
         rules
     }
 
+    /// Whether the dictionary sets `CHECKSHARPS` (`SS` may stand for `ß` in capitals).
+    pub(crate) fn check_sharps(&self) -> bool {
+        self.check_sharps
+    }
+
     /// The `TRY` letters, most frequent first (suggestions try these).
     pub fn try_chars(&self) -> &str {
         &self.try_chars
@@ -1837,6 +1892,9 @@ impl AffixDict {
         };
         if self.full_strip {
             out.push_str("FULLSTRIP\n");
+        }
+        if self.check_sharps {
+            out.push_str("CHECKSHARPS\n");
         }
         for (directive, flag) in [
             ("FORBIDDENWORD", self.forbidden),
@@ -1946,6 +2004,7 @@ impl AffixDict {
                 "TRY" => rules.try_chars = cap_try(at(1)),
                 "KEY" => rules.key = at(1).to_string(),
                 "FULLSTRIP" => rules.full_strip = true,
+                "CHECKSHARPS" => rules.check_sharps = true,
                 directive @ ("FORBIDDENWORD" | "NOSUGGEST" | "SUBSTANDARD" | "KEEPCASE" | "ONLYINCOMPOUND" | "NEEDAFFIX" | "CIRCUMFIX") => {
                     let c = rules.one_flag(at(1)).map_err(|e| format!("affix dictionary: bad {directive} in `{line}`: {e}"))?;
                     match directive {
@@ -2503,6 +2562,50 @@ pub(crate) mod tests {
             let back = AffixDict::from_bytes(&d.to_bytes().unwrap()).unwrap();
             assert_eq!(back.check("ac"), d.check("ac"));
         }
+    }
+
+    /// CHECKSHARPS answers as Hunspell 1.7 gives them on the same files (`*` correct, `&` not).
+    #[test]
+    fn checksharps_reads_ss_as_sharp_s_in_capitals() {
+        let dic = "6\nstraße\nMaße\nfußball/k\nmesse\nGruß/k\nSchloss\n";
+        let words = [
+            ("straße", true, true),
+            ("Straße", true, true),
+            ("STRASSE", false, true),
+            ("STRAßE", true, true),
+            ("STRAẞE", true, true),
+            ("Strasse", false, false),
+            ("strasse", false, false),
+            ("MASSE", false, true),
+            ("MAßE", true, true),
+            ("maße", false, false),
+            ("FUSSBALL", false, true),
+            ("fußball", true, true),
+            ("Fußball", false, true),
+            ("FUßBALL", false, false),
+            ("MESSE", true, true),
+            ("MEßE", false, false),
+            ("GRUSS", false, true),
+            ("Gruß", true, true),
+            ("gruß", false, false),
+            ("GRUß", false, false),
+            ("SCHLOSS", true, true),
+            ("SCHLOß", false, false),
+        ];
+        for (sharps, aff) in [(false, "SET UTF-8\nKEEPCASE k\n"), (true, "SET UTF-8\nCHECKSHARPS\nKEEPCASE k\n")] {
+            let d = AffixDict::from_hunspell(aff, dic, &[]).unwrap();
+            let back = AffixDict::from_bytes(&d.to_bytes().unwrap()).unwrap();
+            for (w, without, with) in words {
+                let want = if sharps { with } else { without };
+                assert_eq!(d.check(w), want, "{w}, CHECKSHARPS {sharps}");
+                assert_eq!(back.check(w), want, "{w}, CHECKSHARPS {sharps}, compact");
+            }
+        }
+        assert_eq!(casing("STRAßE"), Casing::Upper);
+        assert_eq!(casing("Maß"), Casing::Initial);
+        // Many `SS` pairs: only the first MAX_SHARPS are varied, and a long word costs nothing.
+        let d = AffixDict::from_hunspell("CHECKSHARPS\n", "1\naßaßaßaßaß\n", &[]).unwrap();
+        assert!(d.check("ASSASSASSASSASS") && !d.check(&"SS".repeat(60)));
     }
 
     #[test]

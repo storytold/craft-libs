@@ -319,21 +319,37 @@ pub(crate) fn suggest_in(d: &AffixDict, word: &str, max: usize, t: &Tuning) -> V
     let diff_at = |text: &str| chars.iter().zip(text.chars()).position(|(a, b)| *a != b).unwrap_or(n);
     found.sort_by_key(|(text, (cost, seq))| (*cost, diff_at(text), *seq));
     let mut out: Vec<String> = Vec::new();
-    for (text, _) in found {
-        let recased = match case {
-            Casing::Initial => capitalize(&text),
-            Casing::Upper if n > 1 => text.to_uppercase(),
-            _ => text.clone(),
-        };
+    'found: for (text, _) in found {
         // A KEEPCASE word only exists in its dictionary case: `Km` would be flagged, so offer `km`.
-        let t = if recased != text && text.split(' ').any(|p| d.case_locked(p)) { text } else { recased };
-        // Shown as the dictionary's OCONV table writes it (`'` → `’` in French).
-        let t = d.output(&t).into_owned();
-        if t != word && !out.contains(&t) {
-            out.push(t);
-        }
-        if out.len() >= max {
-            break;
+        // Under CHECKSHARPS one with `ß` may still be capitalized, or written in capitals with SS
+        // (`Fußball`, `FUSSBALL`), as hunspell 1.7.5 offers.
+        let locked = text.split(' ').any(|p| d.case_locked(p));
+        let sharp = d.check_sharps() && text.contains('ß');
+        let recased: Vec<String> = match case {
+            Casing::Initial if !locked || sharp => vec![capitalize(&text)],
+            // In capitals `ß` stays `ß` (`STRAßE` is right with or without CHECKSHARPS); under
+            // CHECKSHARPS the SS spelling comes first, as Hunspell offers it.
+            Casing::Upper if n > 1 => {
+                let ss = text.to_uppercase();
+                let kept: String = text.split('ß').map(str::to_uppercase).collect::<Vec<_>>().join("ß");
+                match (locked, sharp) {
+                    (false, false) => vec![kept],
+                    (false, true) => vec![ss, kept],
+                    (true, true) => vec![ss, text.clone()],
+                    (true, false) => vec![text.clone()],
+                }
+            }
+            _ => vec![text.clone()],
+        };
+        for t in recased {
+            // Shown as the dictionary's OCONV table writes it (`'` → `’` in French).
+            let t = d.output(&t).into_owned();
+            if t != word && !out.contains(&t) {
+                out.push(t);
+            }
+            if out.len() >= max {
+                break 'found;
+            }
         }
     }
     out
@@ -518,6 +534,31 @@ fn scan(col: &mut Collector, chars: &[char], map: &[Vec<char>]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// craft-libs#490 review: a suggestion recased to capitals keeps `ß` (`STRAßE`, right with or
+    /// without CHECKSHARPS); under CHECKSHARPS the SS form comes first, and a KEEPCASE `ß` word may
+    /// be capitalized or written in capitals with SS. Expected lists are the hunspell 1.7.5 CLI's
+    /// on the same files; every suggestion is right.
+    #[test]
+    fn sharp_s_suggestions_match_hunspell() {
+        let try_ = "TRY esianrtolcdugmphbyfvkwzß\n";
+        let cases: &[(String, &str, &str, &[&str])] = &[
+            (format!("SET UTF-8\n{try_}"), "1\nstraße\n", "STRAßEE", &["STRAßE"]),
+            (format!("SET UTF-8\nCHECKSHARPS\n{try_}"), "1\nstraße\n", "STRAßEE", &["STRASSE", "STRAßE"]),
+            (format!("SET UTF-8\nCHECKSHARPS\n{try_}"), "1\nstraße\n", "Straßee", &["Straße"]),
+            (format!("SET UTF-8\nCHECKSHARPS\nKEEPCASE k\n{try_}"), "2\nfußball/k\nGruß/k\n", "FUSBALL", &["FUSSBALL", "fußball"]),
+            (format!("SET UTF-8\nCHECKSHARPS\nKEEPCASE k\n{try_}"), "2\nfußball/k\nGruß/k\n", "Fusball", &["Fußball"]),
+            (format!("SET UTF-8\nCHECKSHARPS\nKEEPCASE k\n{try_}"), "2\nfußball/k\nGruß/k\n", "GRUS", &["GRUSS", "Gruß"]),
+        ];
+        for (aff, dic, word, want) in cases {
+            let d = AffixDict::from_hunspell(aff, dic, &[]).unwrap();
+            let got = suggest_in(&d, word, 8, &Tuning::DEFAULT);
+            assert_eq!(&got, want, "{word} with\n{aff}");
+            for g in &got {
+                assert!(d.check(g), "{word} → {g} is not right");
+            }
+        }
+    }
 
     /// craft-libs#489 review repros: OCONV applies to a suggestion after its case is set, case
     /// sensitively, as the hunspell 1.7.5 CLI answers on the same files (`KBT` → `KAT`, not
