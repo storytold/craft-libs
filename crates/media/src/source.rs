@@ -74,6 +74,13 @@ impl<T: ByteSource + ?Sized> ByteSource for Box<T> {
     }
 }
 
+/// Past the largest offset a file can have (`i64::MAX`), where the OS would fail with
+/// `InvalidInput` instead of reporting the end of the file.
+#[cfg(not(target_arch = "wasm32"))]
+fn past_file_offsets(offset: u64, len: usize) -> bool {
+    offset.checked_add(len as u64).is_none_or(|e| e > i64::MAX as u64)
+}
+
 /// A file read in place. `len` asks the file system each time, and a failure there reads as an
 /// empty file; [`ReadSeekSource`] takes the length once and reports a failure when it is made.
 #[cfg(not(target_arch = "wasm32"))]
@@ -83,11 +90,17 @@ impl ByteSource for std::fs::File {
     }
     #[cfg(unix)]
     fn read_at(&self, offset: u64, buf: &mut [u8]) -> io::Result<()> {
+        if past_file_offsets(offset, buf.len()) {
+            return Err(eof());
+        }
         std::os::unix::fs::FileExt::read_exact_at(self, buf, offset)
     }
     #[cfg(windows)]
     fn read_at(&self, mut offset: u64, mut buf: &mut [u8]) -> io::Result<()> {
         use std::os::windows::fs::FileExt;
+        if past_file_offsets(offset, buf.len()) {
+            return Err(eof());
+        }
         while !buf.is_empty() {
             let n = self.seek_read(buf, offset)?;
             if n == 0 {
@@ -100,6 +113,9 @@ impl ByteSource for std::fs::File {
     }
     #[cfg(not(any(unix, windows)))]
     fn read_at(&self, offset: u64, buf: &mut [u8]) -> io::Result<()> {
+        if past_file_offsets(offset, buf.len()) {
+            return Err(eof());
+        }
         let mut f = self;
         f.seek(SeekFrom::Start(offset))?;
         f.read_exact(buf)
@@ -188,6 +204,32 @@ mod tests {
         assert_eq!(ByteSource::len(&a), 4);
         let s: &[u8] = &v;
         assert_eq!(ByteSource::len(&s), 4);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn file_sources_read_like_a_buffer() {
+        let v: Vec<u8> = (0..=255).collect();
+        let path = std::env::temp_dir().join(format!("craft-media-source-{}.bin", std::process::id()));
+        std::fs::write(&path, &v).unwrap();
+        let f = std::fs::File::open(&path).unwrap();
+        let r = ReadSeekSource::new(std::fs::File::open(&path).unwrap()).unwrap();
+        let sources: [&dyn ByteSource; 3] = [&v, &f, &r];
+        for s in sources {
+            assert_eq!(s.len(), 256);
+            // out of order, so ReadSeekSource has to seek back
+            for (offset, n) in [(0, 0), (10, 16), (0, 256), (200, 56), (255, 1), (3, 7)] {
+                let mut b = vec![0u8; n];
+                s.read_at(offset as u64, &mut b).unwrap();
+                assert_eq!(b, v[offset..offset + n], "offset {offset}, {n} bytes");
+            }
+            for (offset, n) in [(200, 57), (256, 1), (300, 1), (u64::MAX, 1), (u64::MAX - 1, 4)] {
+                let err = s.read_at(offset, &mut vec![0u8; n]).unwrap_err();
+                assert_eq!(err.kind(), io::ErrorKind::UnexpectedEof, "offset {offset}, {n} bytes");
+            }
+        }
+        drop((f, r)); // Windows deletes no open file
+        std::fs::remove_file(&path).ok();
     }
 
     #[test]
