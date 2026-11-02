@@ -17,6 +17,7 @@ Leave these to the automated tests; repeat them by hand only to investigate a fa
 | Linux input methods on this box: fcitx5 on Xvfb (XIM), fcitx5 on headless sway (text-input-v3) and IBus on Xvfb; Pinyin, Hangul, Telex and Anthy compositions, a click into a composing field, a pointer unplugged while composing | [IME harness](https://github.com/storytold/craft-libs/pull/212), `tools/ime-harness/` |
 | Each app's key screens in Arabic, Japanese, Traditional Chinese, Korean, Thai and Vietnamese with no system fonts; one scripted IME composition and one non-Latin shortcut per app | `craft_ui::testing` ([craft-ui README](../crates/ui/README.md#testing-screens-in-each-language)) |
 | The shortcut rule for Russian, Arabic 101, Hebrew, Greek, Thai, AZERTY, Dvorak and QWERTZ presses as egui reports them | craft-keymap's tests |
+| `craft-ui` with default features compiling, clippy-clean and tested against stock crates.io egui 0.37.0; packaged-manifest smoke (no machine-local path, branch pin or hidden winit); `craft-ui --all-features` compiling for wasm32-unknown-unknown (compile-only — the browser IME/input matrix stays manual below) | `ci/registry-egui/check.sh` ([README](../ci/registry-egui/README.md)); the wasm check also runs in CI's `ui.yml` wasm job |
 
 The manual list covers what those can't reach: the input methods and layouts of Windows and
 macOS, desktop Linux sessions, the browser on phones, and screen readers.

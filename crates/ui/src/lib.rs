@@ -13,6 +13,7 @@ pub mod docking;
 mod focus;
 pub mod fonts;
 pub mod icons;
+#[cfg(feature = "ime")]
 pub mod ime;
 pub mod layout;
 pub mod localized;

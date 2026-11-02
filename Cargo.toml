@@ -31,8 +31,8 @@ craft-docpath = { path = "crates/docpath" }
 craft-font-catalog = { path = "crates/font-catalog" }
 craft-font-manager = { path = "crates/font-manager" }
 craft-font-store = { path = "crates/font-store" }
-craft-fonts-build = { path = "crates/fonts-build" }
-craft-i18n = { path = "crates/i18n" }
+craft-fonts-build = { path = "crates/fonts-build", version = "=0.1.0" }
+craft-i18n = { path = "crates/i18n", version = "=0.1.0" }
 craft-jpeg = { path = "crates/jpeg" }
 craft-keymap = { path = "crates/keymap" }
 craft-media = { path = "crates/media" }

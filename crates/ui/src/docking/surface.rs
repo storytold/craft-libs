@@ -887,7 +887,7 @@ pub trait DockContent<P> {
     }
     /// A native floating window drew its panel bodies (feature `native-windows`): called once
     /// per pass of the window, after its last body, with the window's `ui`. An app that
-    /// publishes its own IME descriptor, outside [`crate::ime::Composer`], publishes it here for
+    /// publishes its own IME descriptor, outside `crate::ime::Composer` (feature `ime`), publishes it here for
     /// the window. Windows drawn in the main window's pass get no call.
     fn window_drawn(&mut self, _ui: &mut Ui) {}
     /// Host-owned drop resolution for targets the renderer cannot know about. Returning

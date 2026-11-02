@@ -1,0 +1,24 @@
+[package]
+name = "registry-egui-smoke"
+version = "0.0.0"
+publish = false
+edition = "2024"
+rust-version = "1.95"
+license = "MIT OR Apache-2.0"
+
+# Isolated workspace: its own [workspace], not a member of the root one. Nothing here
+# patches crates.io, so egui resolves to stock registry 0.37.0
+# (docs/egui-037-migration-plan.md §5.2, CL-4). craft-ui's default features must compile
+# against stock egui: the fork-only `ime` module is behind craft-ui's `ime` feature and
+# the `Style::set_right_to_left` call resolves to the no-op trait shim.
+[workspace]
+resolver = "3"
+
+[dependencies]
+craft-ui = { path = "../../crates/ui", features = ["serde"] }
+# Pin the stock baseline exactly; the suite fork is derived from upstream tag 0.37.0.
+egui = { version = "=0.37.0", default-features = false }
+epaint = { version = "=0.37.0", default-features = false }
+
+[lints.rust]
+unsafe_code = "forbid"

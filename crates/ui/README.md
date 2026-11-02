@@ -596,13 +596,25 @@ no default features; see [UI fonts](#ui-fonts) for `color_fonts` and `system_fon
 `testing` adds the headless docking driver `docking::testing`. See the
 [suite audit](../../docs/ui-components-audit.md) for candidates, policies and adoption order.
 
+With its default features the crate also builds against **stock crates.io egui 0.37.0**: the
+suite's patched egui (which adds `Style::right_to_left` and the `ime_context` module) is opted
+into by patching in the consumer's own `[patch.crates-io]`, and fork-only APIs are reached
+through method shims that no-op on stock egui (`direction::apply`) or sit behind the
+non-default, fork-only `ime` feature (canvas input methods; `native-windows` implies it).
+`ci/registry-egui/` proves the stock build and inspects the packaged manifest — run
+[`ci/registry-egui/check.sh`](../../ci/registry-egui/README.md) for the registry, package and
+wasm gates. The published manifest never carries a machine-local path or a branch pin.
+
 Validation:
 
 ```sh
 cargo fmt --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
-cargo check --target wasm32-unknown-unknown -p craft-ui
+cargo clippy -p craft-ui --all-targets --all-features -- -D warnings
+cargo test -p craft-ui --all-features
+cargo check -p craft-ui --all-features --target wasm32-unknown-unknown
+./ci/registry-egui/check.sh
 ```
 
 The [visual regression suite](../../docs/ui-visual-regressions.md) compares the actual controls

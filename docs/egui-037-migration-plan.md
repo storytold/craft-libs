@@ -1209,3 +1209,28 @@ WordCraft supplies alignment from the fork's `rtl_paragraph` field. This preserv
 Prepared helper tests check independent row alignment, unchanged cached row data, mesh bounds, invalid widths and oversized rows. WordCraft's real Arabic/mixed/neutral-paragraph test passes in `egui037-wordcraft-candidate-20261023-targeted-07`, including atlas-bitmap bracket orientation. Stock shared-library tests, performance and independent component review are pending; the prior 110-test result predates this helper.
 
 The second independent component review found no blocking helper defect. Word now clips balloon ink to the card and disables the fork-only start-edge override before custom row alignment. Additional source tests cover fractional scale, zero width, idempotence and separate ink bounds. Execution remains pending.
+
+### Migration gates landed — 2026-11-02
+
+On branch `rtl/migration-edge-cases-cl-gates` (base `f8f8829`), per CL-4 and the 07 checklist:
+
+- `ci/registry-egui/` isolated workspace (own `[workspace]`, no patch): `craft-ui` with
+  default features passes clippy and tests against stock crates.io egui 0.37.0, with exactly
+  one registry egui source in the graph; `check.sh` also runs the `cargo package -p craft-ui`
+  smoke (staged workspace, since the internal crates are unpublished) and fails on any
+  machine-local path, `git +`/`branch =` pin or hidden winit in the packaged manifest, plus
+  the `cargo check -p craft-ui --all-features --locked --target wasm32-unknown-unknown`
+  compile gate (the same command CI's `ui.yml` wasm job runs).
+- Stock-compatibility fixes the smoke exposed: `combo.rs` read the fork-only
+  `Style::right_to_left` field directly and is now routed through
+  `craft_ui::direction` (the `Context` temp set by `direction::apply`, the documented
+  contract); the `ime` composer module is built on the fork-only `egui::ime_context` API and
+  is now behind craft-ui's non-default fork-only `ime` feature (`native-windows` implies it).
+  No suite app consumes `craft_ui::ime` today (PhotoCraft verified by search).
+- Docking persistence round-trip test
+  (`docking::dock_tests::a_saved_layout_round_trips_byte_identical_across_directions_and_only_mirrors_on_screen`):
+  a saved layout loads byte-identical under either direction and only its on-screen
+  placement mirrors — no persisted-layout migration, closing the 07 persisted-layout hazard.
+- Docs synced in the same change: `docs/ui-docking.md`, `docs/language-testing.md`,
+  `crates/ui/README.md` (compatibility paragraph + validation block). No pinned hashes above
+  were rewritten.
