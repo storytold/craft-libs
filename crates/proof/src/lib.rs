@@ -2627,7 +2627,12 @@ mod tests {
             ProofLang::Id,
             ProofLang::Pl,
             ProofLang::Ru,
-        ];
+            ProofLang::Tr,
+            ProofLang::EnAu,
+            ProofLang::EnCa,
+        ]
+        .into_iter()
+        .chain(PackLocale::new("pt-PT").map(ProofLang::Pack));
         for lang in langs {
             for n in 2..=5 {
                 let text = format!("Aaa{}bbb", " ".repeat(n));

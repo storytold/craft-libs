@@ -209,23 +209,17 @@ pub fn check_with(text: &str, capital_first: bool) -> Vec<Issue> {
                 });
             }
         }
-        // Double space
-        if c == ' ' && i + 1 < chars.len() && chars[i + 1].1 == ' ' && (i == 0 || chars[i - 1].1 != ' ') {
-            let mut end = idx + 1;
-            while end < text.len() && text.as_bytes().get(end) == Some(&b' ') {
-                end += 1;
-            }
-            v.push(Issue {
-                start: idx,
-                end,
-                kind: IssueKind::Grammar,
-                message: "Fazladan boşluk".into(),
-                suggestions: vec![" ".into()],
-                lang: ProofLang::Tr,
-            });
-        }
     }
-
+    for run in crate::space_runs(text) {
+        v.push(Issue {
+            start: run.start,
+            end: run.end,
+            kind: IssueKind::Grammar,
+            message: "Fazladan boşluk".into(),
+            suggestions: vec![" ".into()],
+            lang: ProofLang::Tr,
+        });
+    }
     // 3. Comma before or after conjunctions (`ali, ve veli` or `ve, veli`)
     for (i, &(w_start, w_end)) in ws.iter().enumerate() {
         let word = match text.get(w_start..w_end) {
