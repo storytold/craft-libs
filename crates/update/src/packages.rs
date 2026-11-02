@@ -13,6 +13,12 @@ pub struct Package {
     pub name: String,
     /// As the package manager reports it (`0.5.0-1`); empty when it doesn't say.
     pub version: String,
+    /// Whether this is a user installation (`true`) or system installation (`false`).
+    pub user: bool,
+    /// The origin remote (`flatpark`, `<app>-origin`, `flathub`), when known.
+    pub origin: Option<String>,
+    /// The installation scope or name (`user`, `system`, or a named installation), for Flatpak installs.
+    pub installation: Option<String>,
 }
 
 /// `dpkg-query -W -f '${Package}|${db:Status-Status}|${Version}\n'`: installed packages only.
@@ -46,16 +52,33 @@ pub fn parse_pacman(text: &str) -> Vec<(String, String)> {
         .collect()
 }
 
-/// `flatpak list --app --columns=application,version`: the version column is often empty for
-/// bundles built from a release tarball.
-pub fn parse_flatpak_list(text: &str) -> Vec<(String, String)> {
+/// `flatpak list --app --columns=application,version,origin,installation`: parses id, version, origin, and installation.
+pub fn parse_flatpak_list_with_origin(text: &str) -> Vec<(String, String, Option<String>, Option<String>)> {
     text.lines()
         .filter_map(|line| {
             let mut f = line.split('\t');
             let id = f.next()?.trim();
-            (!id.is_empty()).then(|| (id.to_string(), f.next().unwrap_or("").trim().to_string()))
+            if id.is_empty() {
+                return None;
+            }
+            let version = f.next().unwrap_or("").trim().to_string();
+            let origin = f.next().map(str::trim).filter(|o| !o.is_empty()).map(ToString::to_string);
+            let installation = f.next().map(str::trim).filter(|i| !i.is_empty()).map(ToString::to_string);
+            Some((id.to_string(), version, origin, installation))
         })
         .collect()
+}
+
+/// `flatpak list --app --columns=application,version`: the version column is often empty for
+/// bundles built from a release tarball.
+pub fn parse_flatpak_list(text: &str) -> Vec<(String, String)> {
+    parse_flatpak_list_with_origin(text).into_iter().map(|(id, v, _, _)| (id, v)).collect()
+}
+
+/// Whether an origin string indicates an install from FlatPark.
+pub fn is_flatpark_origin(origin: &str) -> bool {
+    let o = origin.trim();
+    o.eq_ignore_ascii_case("flatpark") || o.to_ascii_lowercase().contains("flatpark")
 }
 
 /// The `Version:` line of `flatpak info <id>`.
@@ -78,11 +101,14 @@ pub fn candidate_names(app: &App, manager: InstallSource) -> Vec<String> {
     }
 }
 
-/// The package of `app` among `installed`, preferring the manager listed first in `order`.
+/// The package of `app` among `installed`, preferring the manager listed first in `order`. A user
+/// install beats a system one under any of the app's ids; within a scope the current id wins.
 pub fn find<'a>(app: &App, installed: &'a [Package], order: &[InstallSource]) -> Option<&'a Package> {
     order.iter().find_map(|manager| {
         let names = candidate_names(app, *manager);
-        names.iter().find_map(|n| installed.iter().find(|p| p.manager == *manager && p.name == *n))
+        [true, false]
+            .into_iter()
+            .find_map(|user| names.iter().find_map(|n| installed.iter().find(|p| p.manager == *manager && p.user == user && p.name == *n)))
     })
 }
 
@@ -96,7 +122,7 @@ mod tests {
     use super::*;
 
     fn pkgs(manager: InstallSource, list: Vec<(String, String)>) -> Vec<Package> {
-        list.into_iter().map(|(name, version)| Package { manager, name, version }).collect()
+        list.into_iter().map(|(name, version)| Package { manager, name, version, user: false, origin: None, installation: None }).collect()
     }
 
     #[test]
@@ -157,5 +183,144 @@ mod tests {
         // 0.5.0-1 is the 0.5.0 release, not a pre-release of it.
         assert_eq!(version_of(hit).unwrap().to_string(), "0.5.0");
         assert_eq!(find(photo, &installed, &[InstallSource::Flatpak]).unwrap().version, "0.4.0");
+    }
+
+    #[test]
+    fn parses_flatpak_list_with_origin_and_spots_flatpark() {
+        let text = "ai.storyteller.photocraft\t0.19.0\tflatpark\tuser\nai.storyteller.cadcraft\t0.16.0\tcadcraft-origin\tsystem\nai.storyteller.wordcraft\t0.14.0\t\t\n";
+        let list = parse_flatpak_list_with_origin(text);
+        assert_eq!(
+            list,
+            [
+                ("ai.storyteller.photocraft".into(), "0.19.0".into(), Some("flatpark".into()), Some("user".into())),
+                ("ai.storyteller.cadcraft".into(), "0.16.0".into(), Some("cadcraft-origin".into()), Some("system".into())),
+                ("ai.storyteller.wordcraft".into(), "0.14.0".into(), None, None),
+            ]
+        );
+        assert!(is_flatpark_origin("flatpark"));
+        assert!(is_flatpark_origin("FlatPark"));
+        assert!(is_flatpark_origin("flatpark-origin"));
+        assert!(!is_flatpark_origin("cadcraft-origin"));
+        assert!(!is_flatpark_origin("flathub"));
+        assert!(!is_flatpark_origin(""));
+    }
+
+    #[test]
+    fn flatpak_find_prioritizes_user_over_system() {
+        let photo = App::by_id("photocraft").unwrap();
+        let installed = vec![
+            Package {
+                manager: InstallSource::Flatpak,
+                name: "ai.storyteller.photocraft".into(),
+                version: "0.18.0".into(),
+                user: false,
+                origin: Some("flathub".into()),
+                installation: Some("system".into()),
+            },
+            Package {
+                manager: InstallSource::Flatpak,
+                name: "ai.storyteller.photocraft".into(),
+                version: "0.19.0".into(),
+                user: true,
+                origin: Some("flatpark".into()),
+                installation: Some("user".into()),
+            },
+        ];
+        let found = find(photo, &installed, &[InstallSource::Flatpak]).unwrap();
+        assert!(found.user);
+        assert_eq!(found.version, "0.19.0");
+        assert_eq!(found.origin.as_deref(), Some("flatpark"));
+        assert_eq!(found.installation.as_deref(), Some("user"));
+    }
+}
+
+/// Matches the OCI URL from https://getartcraft.com/artcraft-oci.flatpakrepo,
+/// independently of its local remote name (normally `artcraft-oci`).
+pub fn is_artcraft_remote(origin: &str, remotes: &str) -> bool {
+    remotes.lines().any(|line| {
+        let Some((name, url)) = line.split_once('\t') else { return false };
+        let url = url.trim().trim_end_matches('/');
+        name.trim() == origin && url == "oci+https://getartcraft.com"
+    })
+}
+
+#[cfg(test)]
+mod remote_url_tests {
+    use super::*;
+    #[test]
+    fn recognizes_custom_names_and_rejects_unrelated_urls() {
+        assert!(is_artcraft_remote("artcraft-oci", "artcraft-oci\toci+https://getartcraft.com\n"));
+        assert!(is_artcraft_remote("custom", "custom\toci+https://getartcraft.com/\n"));
+        for url in [
+            "oci+https://getartcraft.com.evil",
+            "oci+https://getartcraft.com/other",
+            "oci+http://getartcraft.com",
+            "https://getartcraft.com/linux",
+            "https://getartcraft.com/artcraft-oci.flatpakrepo",
+            "https://getartcraft.com",
+        ] {
+            assert!(!is_artcraft_remote("custom", &format!("custom\t{url}")));
+        }
+        assert!(!is_artcraft_remote("other", "custom\toci+https://getartcraft.com"));
+    }
+}
+
+/// A missing ref permits bundle fallback; an unknown or different version must not replace it.
+#[cfg(all(target_os = "linux", feature = "oci_migration"))]
+pub(crate) fn oci_ref_available(reference: &str, expected: &version::Version, listing: &str) -> Result<bool, String> {
+    for line in listing.lines() {
+        let mut fields = line.split('\t');
+        if fields.next().map(str::trim) != Some(reference) {
+            continue;
+        }
+        let candidate = fields.next().and_then(|value| version::parse(value.trim()));
+        if candidate.as_ref() != Some(expected) {
+            return Err("The ArtCraft OCI repository does not yet provide the selected version".into());
+        }
+        return Ok(true);
+    }
+    Ok(false)
+}
+
+#[cfg(all(test, target_os = "linux", feature = "oci_migration"))]
+mod migration_tests {
+    use super::*;
+    #[test]
+    fn migration_requires_the_exact_ref_and_selected_version() {
+        let reference = "app/ai.storyteller.photocraft/x86_64/stable";
+        let expected = version::parse("1.2.3").unwrap();
+        assert_eq!(oci_ref_available(reference, &expected, &format!("{reference}\t1.2.3")), Ok(true));
+        assert_eq!(oci_ref_available(reference, &expected, "app/ai.storyteller.photocraft/aarch64/stable\t1.2.3"), Ok(false));
+        for value in ["", "1.2.2", "1.2.4", "unknown"] {
+            assert!(oci_ref_available(reference, &expected, &format!("{reference}\t{value}")).is_err());
+        }
+    }
+}
+
+/// Only a confirmed bundle origin with no repository URL permits bundle replacement.
+/// Missing rows are unknown, so preserve remote ownership conservatively.
+pub fn remote_manages_flatpak(origin: &str, remotes: &str) -> bool {
+    remotes
+        .lines()
+        .find_map(|line| {
+            let mut fields = line.split('\t');
+            if fields.next().map(str::trim) != Some(origin) {
+                return None;
+            }
+            Some(fields.next().is_some_and(|url| !url.trim().is_empty()))
+        })
+        .unwrap_or(true)
+}
+
+#[cfg(test)]
+mod remote_ownership_tests {
+    use super::*;
+    #[test]
+    fn only_confirmed_empty_urls_allow_bundle_replacement() {
+        assert!(!remote_manages_flatpak("app-origin", "app-origin\t\n"));
+        assert!(remote_manages_flatpak("renamed", "renamed\thttps://example.org/repo\n"));
+        assert!(remote_manages_flatpak("renamed", "renamed\toci+https://getartcraft.com\n"));
+        assert!(remote_manages_flatpak("missing", "other\t\n"));
+        assert!(!remote_manages_flatpak("app-origin", "app-origin"));
     }
 }
