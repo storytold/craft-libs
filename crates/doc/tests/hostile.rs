@@ -116,6 +116,25 @@ fn a_compressed_member_past_max_entry_is_refused_before_the_tail_is_inflated() {
 }
 
 #[test]
+fn a_compressed_member_whose_offset_passes_max_total_is_refused_before_the_tail_is_inflated() {
+    // A 4-byte preview stated 200 MiB past the marker, in a file whose data after the JSON is
+    // 1 MiB.
+    let mut file = vectorcraft_json(4, &format!(r#""preview":{}"#, blob("image/png", 200 << 20, 4))).into_bytes();
+    file.extend(BLOB_MAGIC);
+    file.extend(vec![0u8; 1 << 20]);
+    let gz = gzip(&file);
+    let mut limits = small();
+    limits.max_total = 64 << 20;
+    match renditions(&gz, &limits) {
+        Err(Error::LimitExceeded(m)) => assert!(m.contains("max_total"), "{m}"),
+        other => panic!("{other:?}"),
+    }
+    // Within max_total, the stream is read as far as it goes, and it ends first.
+    limits.max_total = 256 << 20;
+    assert!(matches!(renditions(&gz, &limits), Err(Error::Malformed(_))));
+}
+
+#[test]
 fn a_nul_outside_the_marker_is_malformed_without_reading_on() {
     // A NUL where the marker is not, then 8 MiB that compress to almost nothing.
     let mut file = vectorcraft_json(4, "").into_bytes();

@@ -122,6 +122,65 @@ fn a_pcraft_manifest_with_a_repeated_member_or_a_late_newer_version_is_refused()
 }
 
 #[test]
+fn a_pcraft_manifest_that_is_a_json_array_is_malformed() {
+    // The members of a manifest in field order; read_manifest reads only a JSON object.
+    let array = r#"[1,"photocraft-format 0.1.0",{"size":{"width":1,"height":1},"resolution_dpi":72.0,"mode":"Rgb","depth":"U8","layers":[]},"thumb.png",null]"#;
+    let format_limits = craft_pcraft_format::Limits::default();
+    assert!(craft_pcraft_format::read_manifest::<serde_json::Value, craft_pcraft_format::Error>(array.as_bytes(), &format_limits, &[], 1).is_err());
+    let bundle = zip(&[store("manifest.json", array.as_bytes()), store("thumb.png", &png(1, 1, 0))]);
+    assert!(matches!(info(&bundle, &limits()), Err(Error::Malformed(_))));
+    assert!(matches!(renditions(&bundle, &limits()), Err(Error::Malformed(_))));
+    assert!(matches!(outline(&bundle, &limits()), Err(Error::Malformed(_))));
+}
+
+#[test]
+fn a_newer_file_with_another_format_s_version_member_is_too_new() {
+    // `version` and `schema` are not PhotoCraft's version member, nor `schema` VectorCraft's.
+    let manifest = r#"{"format_version":2,"version":1,"schema":1,"generator":"photocraft-format 9","document":"elsewhere"}"#;
+    let pc = zip(&[store("manifest.json", manifest.as_bytes())]);
+    // A repeated `format` makes the stamp unreadable; the version still decides.
+    let vc = vectorcraft_json(5, r#""schema":1,"format":"vectorcraft""#);
+    for (bytes, kind, version) in [(pc, Kind::PhotoCraft, 2), (vc.into_bytes(), Kind::VectorCraft, 5)] {
+        let refused = Error::TooNew { kind, version, supported: kind.supported_version() };
+        assert_eq!(renditions(&bytes, &limits()), Err(refused.clone()), "{kind:?}");
+        assert_eq!(outline(&bytes, &limits()), Err(refused), "{kind:?}");
+    }
+    // Bytes after the JSON make a newer file malformed, not too new.
+    let trailing = format!("{}x", vectorcraft_json(5, ""));
+    assert!(matches!(renditions(trailing.as_bytes(), &limits()), Err(Error::Malformed(_))));
+}
+
+#[test]
+fn a_generator_that_is_not_a_string_reads_as_none() {
+    let vc = vectorcraft_json(4, "").replacen(r#""generator":"VectorCraft 0.1.0""#, r#""generator":{"name":"VectorCraft"}"#, 1);
+    assert_eq!(info(vc.as_bytes(), &limits()).unwrap().generator, None);
+    assert_eq!(outline(vc.as_bytes(), &limits()).unwrap().pages.len(), 2);
+    let file = craft_vectorcraft_format::File::<serde_json::Value>::read(vc.as_bytes()).unwrap();
+    assert_eq!(file.generator, None);
+    // read_manifest needs a string, so the other calls refuse it; migrate reads it as none.
+    let manifest = pcraft_manifest(1, "[]", "").replacen(r#""generator":"photocraft-format 0.1.0""#, r#""generator":7"#, 1);
+    let bundle = zip(&[store("manifest.json", manifest.as_bytes())]);
+    assert_eq!(info(&bundle, &limits()).unwrap().generator, None);
+    assert!(matches!(renditions(&bundle, &limits()), Err(Error::Malformed(_))));
+}
+
+#[test]
+fn a_repeated_vectorcraft_member_reads_as_its_last_value() {
+    let (first, last) = (png(1, 1, 0), png(2, 2, 9));
+    let members = format!(r#""generator":"VectorCraft 0.2.0","preview":{},"preview":{}"#, inline("image/png", &first), inline("image/png", &last));
+    let vc = vectorcraft_json(4, &members);
+    let file = craft_vectorcraft_format::File::<serde_json::Value>::read(vc.as_bytes()).unwrap();
+    assert_eq!(file.preview.unwrap().bytes(&[]).unwrap(), last);
+    let r = renditions(vc.as_bytes(), &limits()).unwrap();
+    assert_eq!((r.len(), &r[0].bytes), (1, &last));
+    assert_eq!(info(vc.as_bytes(), &limits()).unwrap().generator.as_deref(), Some("VectorCraft 0.2.0"));
+    // A repeated version is refused, as File::read refuses it.
+    let twice = vectorcraft_json(4, r#""version":4"#);
+    assert!(craft_vectorcraft_format::File::<serde_json::Value>::read(twice.as_bytes()).is_err());
+    assert!(matches!(info(twice.as_bytes(), &limits()), Err(Error::Malformed(_))));
+}
+
+#[test]
 fn a_vectorcraft_member_without_a_mime_type_is_skipped() {
     let file = vectorcraft_json(4, &format!(r#""preview":{{"data":"{}"}}"#, base64(&png(1, 1, 0))));
     assert!(renditions(file.as_bytes(), &limits()).unwrap().is_empty());

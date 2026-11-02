@@ -7,8 +7,8 @@ or composite. No `unsafe`, no panics on malformed input, and it builds for
 `wasm32-unknown-unknown`. Each format's envelope is read through its crate in this repository:
 [`craft-pcraft-format`](../pcraft-format/README.md) (the `Manifest` members and checks, and
 `check_manifest`),
-[`craft-vectorcraft-format`](../vectorcraft-format/README.md) (`Head`, `Image`, `sniff`, the
-version and the marker) and [`craft-ecproj-format`](../ecproj-format/README.md) (`Head`, the
+[`craft-vectorcraft-format`](../vectorcraft-format/README.md) (`Image`, `sniff`, the version
+and the marker) and [`craft-ecproj-format`](../ecproj-format/README.md) (`Head`, the
 schema check). The outlines are read with craft-doc's own read-only views of the documents. The
 other dependencies are `serde`, `serde_json`, `thiserror` and `flate2` (its pure-Rust backend).
 
@@ -34,7 +34,8 @@ let outline = craft_doc::outline(&bytes, &limits)?;
 
 - `sniff(head) -> Option<Kind>` reads the first bytes. The first 64 KiB are enough for every file
   the apps write. A re-zipped `.pcraft` whose `manifest.json` entry starts after the head is
-  recognized only when `head` holds the whole file.
+  recognized only when `head` holds the whole file. When `head` holds a whole ZIP archive, the
+  names in its central directory decide.
 - `info(bytes, &Limits) -> Result<Info, Error>`: the kind, the version the file declares, the
   writer it names, and `supported`, which is `false` when the version is newer than the crate
   reads.
@@ -42,7 +43,8 @@ let outline = craft_doc::outline(&bytes, &limits)?;
   (`Pdf`, `Thumbnail`, `Composite`), a `mime` and the `bytes`.
 - `outline(bytes, &Limits) -> Result<Outline, Error>`: `canvas`, `pages` and `layers`.
 - `Error` is `Unrecognized`, `Malformed`, `TooNew`, `Unsupported` or `LimitExceeded`. A file
-  whose version is newer than the crate reads gives `TooNew` from `renditions` and `outline`.
+  whose version is newer than the crate reads gives `TooNew` from `renditions` and `outline`. A
+  ZIP archive whose `manifest.json` has no `format_version` gives `Unrecognized`.
 
 ## What each format gives
 
@@ -75,6 +77,8 @@ A `.pcraft` bundle saved as a folder, ZIP64 archives and encrypted entries are n
   returns as a rendition, together.
 - `max_depth` (400, also the largest value it takes, `MAX_DEPTH`): the nesting of JSON arrays and
   objects, checked before parsing. PhotoCraft nests up to 100 groups of layers, three levels each.
+  `renditions` and `outline` refuse a PhotoCraft manifest nested deeper than 367 levels
+  (`craft_pcraft_format::manifest_depth(MAX_GROUP_DEPTH)`), as PhotoCraft does.
 
 A PhotoCraft manifest with more than 4,194,304 JSON items
 (`craft_pcraft_format::MAX_MANIFEST_ITEMS`) is refused with `Error::LimitExceeded`, as PhotoCraft
@@ -82,7 +86,8 @@ reads it.
 
 On a compressed `.vectorcraft` file, `info` and `outline` decompress only as far as the end of
 the JSON. `renditions` checks the size of each member after the JSON against `max_entry`
-before it decompresses any of that data, then decompresses only as far as the members end. The
+before it decompresses any of that data, and the offset where the last member ends against
+`max_total`. It then decompresses only as far as the members end, and keeps only their bytes. The
 struct is `#[non_exhaustive]`: start from the defaults and set the fields you
 change.
 
@@ -105,9 +110,11 @@ limits.max_entry = 32 << 20;
   size, members longer than `max_entry`, JSON nested past `max_depth`, ZIP64, encryption, other
   compression methods and CRC mismatches.
 - `tests/envelopes.rs`: files whose envelope is written with the format crates' types read
-  through each call, and envelopes those crates refuse (a manifest without `generator`, a preview
-  that names another entry, a `format` member inside another member) are refused. A preview or
-  PDF member without `mime` gives no rendition.
+  through each call, and envelopes those crates refuse (a manifest without `generator`, a
+  manifest that is a JSON array, a preview that names another entry, a `format` member inside
+  another member) are refused. A preview or PDF member without `mime` gives no rendition, and a
+  VectorCraft `generator`, `preview` or `pdf` reads as `File::read` reads it: as `None` when it
+  has the wrong shape, and as its last value when it is repeated.
 
 `.github/workflows/doc.yml` runs fmt, clippy and the tests on Linux and Windows, and a
 `wasm32-unknown-unknown` check.

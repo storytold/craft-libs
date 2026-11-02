@@ -91,7 +91,9 @@ pub struct Info {
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum Error {
-    /// [`sniff`] does not recognize the bytes as a Craft document.
+    /// [`sniff`] does not recognize the bytes as a Craft document, or a ZIP archive's
+    /// `manifest.json` is a JSON object without `format_version`, so the archive is not a
+    /// PhotoCraft bundle.
     #[error("not a PhotoCraft, VectorCraft or EffectCraft document")]
     Unrecognized,
     /// The file is damaged or does not follow its format.
@@ -129,7 +131,9 @@ pub struct Limits {
     /// renditions, together. Default 1 GiB.
     pub max_total: u64,
     /// Deepest nesting of JSON arrays and objects, at most [`MAX_DEPTH`] (a larger value counts
-    /// as [`MAX_DEPTH`]). Default [`MAX_DEPTH`].
+    /// as [`MAX_DEPTH`]). Default [`MAX_DEPTH`]. [`renditions`] and [`outline`] also refuse a
+    /// PhotoCraft manifest nested deeper than PhotoCraft reads, 367 levels
+    /// (`craft_pcraft_format::manifest_depth(MAX_GROUP_DEPTH)`).
     pub max_depth: u32,
     /// Most list elements one call reads, together: EffectCraft project items and composition
     /// layers, VectorCraft artboards and layers, and PhotoCraft layers at every level. Each is
@@ -487,25 +491,80 @@ fn parse_checked<T: DeserializeOwned>(json: &[u8]) -> Result<T, serde_json::Erro
     Ok(v)
 }
 
-/// A document's version number: VectorCraft's `version`, PhotoCraft's `format_version` or
-/// EffectCraft's `schema`.
-#[derive(serde::Deserialize)]
-struct Version {
-    #[serde(alias = "format_version", alias = "schema")]
-    version: u32,
+/// The top-level member that holds a document's version number: VectorCraft's `version`,
+/// PhotoCraft's `format_version` or EffectCraft's `schema`.
+fn version_member(kind: Kind) -> &'static str {
+    match kind {
+        Kind::PhotoCraft => "format_version",
+        Kind::VectorCraft => "version",
+        Kind::EffectCraft => "schema",
+    }
+}
+
+/// The version number in the member a [`Visitor`] is given, read from the top-level JSON object;
+/// the other members are skipped, and a repeated one reads as its last value.
+struct VersionIn(&'static str);
+
+impl<'de> Visitor<'de> for VersionIn {
+    type Value = Option<u32>;
+
+    fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("a JSON object")
+    }
+
+    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Option<u32>, A::Error> {
+        let mut version = None;
+        while let Some(key) = map.next_key::<String>()? {
+            if key == self.0 {
+                version = Some(map.next_value()?);
+            } else {
+                map.next_value::<de::IgnoredAny>()?;
+            }
+        }
+        Ok(version)
+    }
 }
 
 /// Parse `T` from `json`; when that fails, report [`Error::TooNew`] instead if the file's version
-/// (its top-level `version`, `format_version` or `schema`) is newer than `kind` supports, since a
+/// (its top-level member that [`version_member`] names) is newer than `kind` supports, since a
 /// newer format may change what `T` expects.
 pub(crate) fn parse_versioned<T: DeserializeOwned>(json: &[u8], limits: &Limits, kind: Kind) -> Result<T, Error> {
     check_depth(json, limits.max_depth)?;
     counting(limits.max_items, || {
-        parse_checked(json).map_err(|e| match parse_checked::<Version>(json) {
-            Ok(v) if v.version > kind.supported_version() => too_new(kind, v.version),
-            _ => malformed(e),
+        parse_checked(json).map_err(|e| {
+            let mut de = serde_json::Deserializer::from_slice(json);
+            de.disable_recursion_limit();
+            let version = (&mut de).deserialize_map(VersionIn(version_member(kind))).and_then(|v| de.end().map(|()| v));
+            match version {
+                Ok(Some(version)) if version > kind.supported_version() => too_new(kind, version),
+                _ => malformed(e),
+            }
         })
     })
+}
+
+/// A member read as `None` when its value has the wrong shape, as the format crates read a
+/// file's optional members.
+pub(crate) struct Lenient<T>(pub(crate) Option<T>);
+
+impl<'de, T: Deserialize<'de>> Deserialize<'de> for Lenient<T> {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Shape<T> {
+            Value(T),
+            Other(de::IgnoredAny),
+        }
+        Ok(Lenient(match Shape::deserialize(d)? {
+            Shape::Value(v) => Some(v),
+            Shape::Other(_) => None,
+        }))
+    }
+}
+
+/// [`Lenient`] as a `deserialize_with` function.
+pub(crate) fn lenient<'de, D: Deserializer<'de>, T: Deserialize<'de>>(d: D) -> Result<Option<T>, D::Error> {
+    Lenient::deserialize(d).map(|l| l.0)
 }
 
 pub(crate) fn too_new(kind: Kind, version: u32) -> Error {

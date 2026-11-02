@@ -11,17 +11,20 @@
 //! Since version 4, large members may follow the JSON after the marker `\n\0VCBLOBS\0`; such a
 //! member gives `"blob": [offset, length]` (from the end of the marker) instead of `data`. In a
 //! compressed file, the marker and the data after it are inside the gzip stream too. Files
-//! written before the rename say `"format": "drawcraft"`. The envelope's members are
-//! [`craft_vectorcraft_format::Head`] and [`craft_vectorcraft_format::Image`].
+//! written before the rename say `"format": "drawcraft"`. The envelope's members are those of
+//! [`craft_vectorcraft_format::File`], read as [`craft_vectorcraft_format::File::read`] reads
+//! them, and [`craft_vectorcraft_format::Image`].
 
 use std::borrow::Cow;
+use std::fmt;
 use std::io::Read;
 
-use craft_vectorcraft_format::{BLOB_MAGIC, Head, Image, is_compressed};
+use craft_vectorcraft_format::{BLOB_MAGIC, Image, entry, is_compressed, marker_at};
 use flate2::read::GzDecoder;
 use serde::Deserialize;
+use serde::de::{self, Deserializer, IgnoredAny, MapAccess, Visitor};
 
-use crate::{Budget, Error, Kind, Layer, Outline, Page, Rendition, RenditionKind, counted, malformed, parse, parse_versioned, too_new};
+use crate::{Budget, Error, Kind, Layer, Lenient, Outline, Page, Rendition, RenditionKind, counted, malformed, parse, parse_versioned, too_new};
 
 /// Bytes decompressed at a time.
 const CHUNK: u64 = 64 << 10;
@@ -31,13 +34,11 @@ pub(crate) fn sniff(head: &[u8]) -> bool {
 }
 
 /// Where the JSON ends and the data after the marker starts, when `text` holds a NUL. JSON holds
-/// no raw NUL and the marker's second byte is one, so the JSON ends right before the first NUL;
-/// a NUL that is not the marker's makes the file malformed.
-fn marker(text: &[u8], nul: usize) -> Result<(usize, usize), Error> {
-    match nul.checked_sub(1) {
-        Some(at) if text.get(at..).is_some_and(|r| r.starts_with(BLOB_MAGIC)) => Ok((at, at + BLOB_MAGIC.len())),
-        _ => Err(malformed("the file holds a NUL byte outside the marker after its JSON")),
-    }
+/// no raw NUL and the marker's second byte is one, so the JSON ends right before the first NUL.
+/// The marker must follow the JSON's closing `}`, `]` or `"`, as
+/// [`craft_vectorcraft_format::marker_at`] requires; any other NUL makes the file malformed.
+fn marker(text: &[u8]) -> Result<(usize, usize), Error> {
+    marker_at(text).map(|at| (at, at + BLOB_MAGIC.len())).ok_or_else(|| malformed("the file holds a NUL byte outside the marker after its JSON"))
 }
 
 fn damaged(e: std::io::Error) -> Error {
@@ -54,32 +55,61 @@ struct Unpacked<'a> {
 enum Tail<'a> {
     /// In an uncompressed file.
     Slice(&'a [u8]),
-    /// Still in the gzip stream: `read` holds what was decompressed past the marker already,
-    /// of which `counted` bytes are counted against the budget.
-    Stream { dec: Box<GzDecoder<&'a [u8]>>, read: Vec<u8>, counted: usize },
+    /// Still in the gzip stream: `read` holds what was decompressed past the marker already, not
+    /// yet counted against the budget.
+    Stream { dec: Box<GzDecoder<&'a [u8]>>, read: Vec<u8> },
 }
 
 impl Tail<'_> {
-    /// The data up to `end` (less where the file ends first), decompressing only that far.
-    fn up_to(&mut self, end: u64, budget: &mut Budget) -> Result<&[u8], Error> {
-        match self {
-            Tail::Slice(s) => Ok(s),
-            Tail::Stream { dec, read, counted } => {
-                let end = usize::try_from(end).map_err(|_| Error::LimitExceeded("the data after the JSON does not fit in memory".into()))?;
-                let had = read.len().min(end);
-                if had > *counted {
-                    budget.take((had - *counted) as u64, "the decompressed document")?;
-                    *counted = had;
-                }
-                if read.len() < end {
-                    let want = ((end - read.len()) as u64).min(budget.left().saturating_add(1));
-                    let n = (&mut **dec).take(want).read_to_end(read).map_err(damaged)?;
-                    budget.take(n as u64, "the decompressed document")?;
-                    *counted += n;
-                }
-                Ok(read.as_slice())
+    /// The bytes each `[offset, length]` in `ranges` names, or `None` for a range the file ends
+    /// before. A compressed file is decompressed only as far as the last range ends, and that
+    /// offset is checked against the budget before anything past the marker is decompressed.
+    /// Every byte decompressed is counted; only the bytes inside the ranges are kept.
+    fn ranges(self, ranges: &[[u64; 2]], budget: &mut Budget) -> Result<Vec<Option<Vec<u8>>>, Error> {
+        const WHAT: &str = "the decompressed document";
+        let (mut dec, read) = match self {
+            Tail::Slice(s) => return Ok(ranges.iter().map(|&r| entry(s, r).map(<[u8]>::to_vec)).collect()),
+            Tail::Stream { dec, read } => (dec, read),
+        };
+        let end = ranges.iter().map(|&[offset, len]| offset.saturating_add(len)).max().unwrap_or(0);
+        if end > budget.left() {
+            return Err(Error::LimitExceeded(format!(
+                "the file states data up to byte {end} after its JSON, more than max_total ({} bytes) in all",
+                budget.limits.max_total
+            )));
+        }
+        // The ranges in file order, overlapping ones merged.
+        let mut spans: Vec<[u64; 2]> = ranges.iter().map(|&[offset, len]| [offset, offset.saturating_add(len)]).collect();
+        spans.sort_unstable();
+        let mut merged: Vec<[u64; 2]> = vec![];
+        for [start, end] in spans {
+            match merged.last_mut() {
+                Some(last) if start <= last[1] => last[1] = last[1].max(end),
+                _ => merged.push([start, end]),
             }
         }
+        let mut src = read.as_slice().chain(&mut *dec);
+        let (mut at, mut kept) = (0u64, Vec::<(u64, Vec<u8>)>::new());
+        for [start, end] in merged {
+            let skipped = std::io::copy(&mut (&mut src).take(start.saturating_sub(at)), &mut std::io::sink()).map_err(damaged)?;
+            budget.take(skipped, WHAT)?;
+            at += skipped;
+            if at < start {
+                break;
+            }
+            let mut bytes = vec![];
+            let n = (&mut src).take(end - start).read_to_end(&mut bytes).map_err(damaged)?;
+            budget.take(n as u64, WHAT)?;
+            at += n as u64;
+            kept.push((start, bytes));
+            if at < end {
+                break;
+            }
+        }
+        Ok(ranges
+            .iter()
+            .map(|&[offset, len]| kept.iter().find_map(|(start, bytes)| entry(bytes, [offset.checked_sub(*start)?, len])).map(<[u8]>::to_vec))
+            .collect())
     }
 }
 
@@ -90,12 +120,11 @@ fn unpack<'a>(bytes: &'a [u8], budget: &mut Budget) -> Result<Unpacked<'a>, Erro
     const JSON: &str = "the document's JSON";
     let too_long = |budget: &Budget| Error::LimitExceeded(format!("{JSON} is more than max_json ({} bytes)", budget.limits.max_json));
     if !is_compressed(bytes) {
-        let (json, tail) = match bytes.iter().position(|&b| b == 0) {
-            Some(nul) => {
-                let (end, tail) = marker(bytes, nul)?;
-                (bytes.get(..end).unwrap_or_default(), bytes.get(tail..).unwrap_or_default())
-            }
-            None => (bytes, &[][..]),
+        let (json, tail) = if bytes.contains(&0) {
+            let (end, tail) = marker(bytes)?;
+            (bytes.get(..end).unwrap_or_default(), bytes.get(tail..).unwrap_or_default())
+        } else {
+            (bytes, &[][..])
         };
         budget.check_json(json.len() as u64, JSON)?;
         return Ok(Unpacked { json: Cow::Borrowed(json), tail: Tail::Slice(tail) });
@@ -120,7 +149,7 @@ fn unpack<'a>(bytes: &'a [u8], budget: &mut Budget) -> Result<Unpacked<'a>, Erro
         if let Some(nul) = nul
             && buf.len() >= nul + BLOB_MAGIC.len() - 1
         {
-            let s = marker(&buf, nul)?;
+            let s = marker(&buf)?;
             split = Some(s);
             // The data after the marker in this chunk is counted when it is read.
             used = s.1.saturating_sub(start).min(n);
@@ -133,29 +162,78 @@ fn unpack<'a>(bytes: &'a [u8], budget: &mut Budget) -> Result<Unpacked<'a>, Erro
     let (json_len, tail_at) = match (split, nul) {
         (Some(s), _) => s,
         // The stream ended inside the marker.
-        (None, Some(nul)) => marker(&buf, nul)?,
+        (None, Some(_)) => marker(&buf)?,
         (None, None) => (buf.len(), buf.len()),
     };
     budget.check_json(json_len as u64, JSON)?;
     let read = if tail_at <= buf.len() { buf.split_off(tail_at) } else { vec![] };
     buf.truncate(json_len);
-    Ok(Unpacked { json: Cow::Owned(buf), tail: Tail::Stream { dec, read, counted: 0 } })
+    Ok(Unpacked { json: Cow::Owned(buf), tail: Tail::Stream { dec, read } })
 }
 
-/// The format name, the version and the writer, read without the rest of the file, so that a file
-/// of a newer version still reports them.
-#[derive(Deserialize)]
-struct Stamp {
+/// The format name, the version, the writer and, when `IMAGES` is true, the preview and the PDF,
+/// read without the rest of the file, so that a file of a newer version still reports them. The
+/// members are read as [`craft_vectorcraft_format::File::read`] reads them: a missing or repeated
+/// `format` or `version` is refused, and a `generator`, `preview` or `pdf` of the wrong shape
+/// reads as `None` and a repeated one as its last value.
+struct Stamp<const IMAGES: bool> {
     format: String,
     version: u32,
-    #[serde(default)]
     generator: Option<String>,
+    preview: Option<Image>,
+    pdf: Option<Image>,
+}
+
+/// Reads the value of member `name` into `slot`, refusing a second one.
+fn once<'de, A: MapAccess<'de>, T: Deserialize<'de>>(map: &mut A, slot: &mut Option<T>, name: &'static str) -> Result<(), A::Error> {
+    if slot.is_some() {
+        return Err(de::Error::duplicate_field(name));
+    }
+    *slot = Some(map.next_value()?);
+    Ok(())
+}
+
+impl<'de, const IMAGES: bool> Deserialize<'de> for Stamp<IMAGES> {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        struct StampVisitor<const IMAGES: bool>;
+        impl<'de, const IMAGES: bool> Visitor<'de> for StampVisitor<IMAGES> {
+            type Value = Stamp<IMAGES>;
+
+            fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                f.write_str("a VectorCraft file's JSON object")
+            }
+
+            fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Stamp<IMAGES>, A::Error> {
+                let (mut format, mut version, mut generator, mut preview, mut pdf) = (None, None, None, None, None);
+                while let Some(key) = map.next_key::<String>()? {
+                    match key.as_str() {
+                        "format" => once(&mut map, &mut format, "format")?,
+                        "version" => once(&mut map, &mut version, "version")?,
+                        "generator" => generator = map.next_value::<Lenient<String>>()?.0,
+                        "preview" if IMAGES => preview = map.next_value::<Lenient<Image>>()?.0,
+                        "pdf" if IMAGES => pdf = map.next_value::<Lenient<Image>>()?.0,
+                        _ => {
+                            map.next_value::<IgnoredAny>()?;
+                        }
+                    }
+                }
+                Ok(Stamp {
+                    format: format.ok_or_else(|| de::Error::missing_field("format"))?,
+                    version: version.ok_or_else(|| de::Error::missing_field("version"))?,
+                    generator,
+                    preview,
+                    pdf,
+                })
+            }
+        }
+        d.deserialize_map(StampVisitor::<IMAGES>)
+    }
 }
 
 /// The file's [`Stamp`], refused when the format is not VectorCraft's, and when the version is
 /// newer than this crate reads unless `newer` is true.
-fn stamp(json: &[u8], budget: &Budget, newer: bool) -> Result<Stamp, Error> {
-    let s: Stamp = if newer { parse(json, budget.limits)? } else { parse_versioned(json, budget.limits, Kind::VectorCraft)? };
+fn stamp<const IMAGES: bool>(json: &[u8], budget: &Budget, newer: bool) -> Result<Stamp<IMAGES>, Error> {
+    let s: Stamp<IMAGES> = if newer { parse(json, budget.limits)? } else { parse_versioned(json, budget.limits, Kind::VectorCraft)? };
     match craft_vectorcraft_format::check(&s.format, s.version) {
         Ok(()) => Ok(s),
         Err(craft_vectorcraft_format::Error::Format(format)) => Err(malformed(format!("format is `{format}`"))),
@@ -167,44 +245,31 @@ fn stamp(json: &[u8], budget: &Budget, newer: bool) -> Result<Stamp, Error> {
 
 pub(crate) fn info(bytes: &[u8], budget: &mut Budget) -> Result<(u32, Option<String>), Error> {
     let json = unpack(bytes, budget)?.json;
-    let s = stamp(&json, budget, true)?;
+    let s = stamp::<false>(&json, budget, true)?;
     Ok((s.version, s.generator))
 }
 
-/// Check the entry's size against `max_entry` and count it; for an entry after the JSON, the
-/// offset where it ends.
-fn take(image: &Image, budget: &mut Budget, what: &str) -> Result<Option<u64>, Error> {
-    budget.take_entry(image.len(), what)?;
-    Ok(image.blob.map(|[offset, len]| offset.saturating_add(len)))
-}
-
-/// The entry's bytes, after [`take`] has checked its size.
-fn entry_bytes(image: &Image, tail: &[u8], what: &str) -> Result<Vec<u8>, Error> {
-    image.bytes_at_most(tail, u64::MAX).ok_or_else(|| match image.blob {
-        Some(_) => malformed(format!("the file ends before its {what}")),
-        None => malformed(format!("the {what} is not valid base64")),
-    })
-}
-
 pub(crate) fn renditions(bytes: &[u8], budget: &mut Budget) -> Result<Vec<Rendition>, Error> {
-    let Unpacked { json, mut tail } = unpack(bytes, budget)?;
-    stamp(&json, budget, false)?;
-    let head: Head = parse(&json, budget.limits)?;
+    let Unpacked { json, tail } = unpack(bytes, budget)?;
+    let head = stamp::<true>(&json, budget, false)?;
     // A member without a MIME type gives no rendition: a preview may be PNG or JPEG.
     let members: Vec<_> = [(RenditionKind::Thumbnail, head.preview, "preview"), (RenditionKind::Pdf, head.pdf, "PDF")]
         .into_iter()
         .filter_map(|(kind, m, what)| Some((kind, m.filter(|m| !m.mime.is_empty())?, what)))
         .collect();
     // Every size is checked before any data after the JSON is decompressed.
-    let mut end = 0u64;
     for (_, m, what) in &members {
-        end = end.max(take(m, budget, what)?.unwrap_or(0));
+        budget.take_entry(m.len(), what)?;
     }
-    let tail = if end > 0 { tail.up_to(end, budget)? } else { &[] };
+    let ranges: Vec<[u64; 2]> = members.iter().filter_map(|(_, m, _)| m.blob).collect();
+    let mut blobs = if ranges.is_empty() { vec![] } else { tail.ranges(&ranges, budget)? }.into_iter();
     members
         .into_iter()
         .map(|(kind, m, what)| {
-            let bytes = entry_bytes(&m, tail, what)?;
+            let bytes = match m.blob {
+                Some(_) => blobs.next().flatten().ok_or_else(|| malformed(format!("the file ends before its {what}")))?,
+                None => m.bytes_at_most(&[], u64::MAX).ok_or_else(|| malformed(format!("the {what} is not valid base64")))?,
+            };
             Ok(Rendition { kind, mime: m.mime, bytes })
         })
         .collect()
@@ -269,7 +334,7 @@ struct KindM {
 
 pub(crate) fn outline(bytes: &[u8], budget: &mut Budget) -> Result<Outline, Error> {
     let json = unpack(bytes, budget)?.json;
-    stamp(&json, budget, false)?;
+    stamp::<false>(&json, budget, false)?;
     let f: WithDocument = parse(&json, budget.limits)?;
     let pages = f
         .document

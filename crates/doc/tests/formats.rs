@@ -59,6 +59,34 @@ fn sniff_refuses_other_files() {
 }
 
 #[test]
+fn sniff_reads_the_names_in_the_central_directory_of_a_whole_archive() {
+    let mut pc = zip(&[store("manifest.json", pcraft_manifest(1, "[]", "").as_bytes())]);
+    // The local header still names manifest.json; the central directory names Xanifest.json.
+    let c = pc.windows(4).rposition(|w| w == [0x50, 0x4b, 0x01, 0x02]).unwrap();
+    pc[c + 46] = b'X';
+    assert_eq!(sniff(&pc), None);
+    assert_eq!(info(&pc, &limits()), Err(Error::Unrecognized));
+    // A head too short to reach the central directory is read through its local headers.
+    assert_eq!(sniff(pc.get(..60).unwrap()), Some(Kind::PhotoCraft));
+}
+
+#[test]
+fn a_zip_whose_manifest_has_no_format_version_is_not_photocraft() {
+    // A browser extension: a ZIP archive with a manifest.json of its own.
+    let ext = zip(&[store("manifest.json", br#"{"manifest_version":3,"name":"Example","version":"1.0"}"#)]);
+    assert_eq!(sniff(&ext), Some(Kind::PhotoCraft));
+    assert_eq!(info(&ext, &limits()), Err(Error::Unrecognized));
+    assert_eq!(renditions(&ext, &limits()), Err(Error::Unrecognized));
+    assert_eq!(outline(&ext, &limits()), Err(Error::Unrecognized));
+    // A format_version that is present and not a number is a damaged manifest.
+    for version in ["null", r#""1""#] {
+        let damaged = zip(&[store("manifest.json", pcraft_manifest(1, "[]", "").replacen("1", version, 1).as_bytes())]);
+        assert!(matches!(info(&damaged, &limits()), Err(Error::Malformed(_))), "{version}");
+        assert!(matches!(outline(&damaged, &limits()), Err(Error::Malformed(_))), "{version}");
+    }
+}
+
+#[test]
 fn info_reads_version_and_writer() {
     let i = info(vectorcraft_json(3, "").as_bytes(), &limits()).unwrap();
     assert_eq!((i.kind, i.version, i.generator.as_deref(), i.supported), (Kind::VectorCraft, 3, Some("VectorCraft 0.1.0"), true));
@@ -130,6 +158,43 @@ fn vectorcraft_members_after_the_json() {
         // The JSON alone answers info and outline.
         assert_eq!(info(&bytes, &limits()).unwrap().version, 4);
         assert_eq!(outline(&bytes, &limits()).unwrap().pages.len(), 2);
+    }
+}
+
+#[test]
+fn compressed_members_after_the_json_read_their_own_ranges() {
+    // 100,000 bytes the document uses, then the preview and the PDF; then the same bytes named by
+    // a PDF member that overlaps the preview.
+    let image = vec![0xCD; 100_000];
+    let preview = png(5, 5, 2);
+    let mut tail = image.clone();
+    tail.extend(&preview);
+    tail.extend(PDF);
+    let at = image.len();
+    for (pdf_at, pdf_len, pdf) in [(at + preview.len(), PDF.len(), PDF.to_vec()), (at, preview.len() + PDF.len(), [&preview[..], PDF].concat())] {
+        let members = format!(r#""preview":{},"pdf":{}"#, blob("image/png", at, preview.len()), blob("application/pdf", pdf_at, pdf_len));
+        let mut file = vectorcraft_json(4, &members).into_bytes();
+        file.extend(BLOB_MAGIC);
+        file.extend(&tail);
+        for bytes in [file.clone(), gzip(&file)] {
+            let r = renditions(&bytes, &limits()).unwrap();
+            assert_eq!((&r[0].bytes, &r[1].bytes), (&preview, &pdf));
+        }
+    }
+}
+
+#[test]
+fn the_marker_follows_the_json_directly() {
+    // A space between the JSON and the marker: the format crate does not split the file there.
+    let mut file = vectorcraft_json(4, &format!(r#""pdf":{}"#, blob("application/pdf", 0, PDF.len()))).into_bytes();
+    file.push(b' ');
+    file.extend(BLOB_MAGIC);
+    file.extend(PDF);
+    assert!(craft_vectorcraft_format::split_tail(&file).1.is_empty());
+    for bytes in [file.clone(), gzip(&file)] {
+        assert!(matches!(info(&bytes, &limits()), Err(Error::Malformed(_))));
+        assert!(matches!(renditions(&bytes, &limits()), Err(Error::Malformed(_))));
+        assert!(matches!(outline(&bytes, &limits()), Err(Error::Malformed(_))));
     }
 }
 
@@ -213,21 +278,29 @@ fn pcraft_outline_has_the_canvas_and_layer_tree() {
 }
 
 #[test]
-fn pcraft_groups_nest_to_the_depth_cap() {
-    // 3 levels to the layer list, 3 per group and 4 for the leaf: 397 of the 400 levels.
-    let mut layer = pcraft_layer("Leaf", true, "Normal", 1.0, raster());
-    for i in 0..130 {
-        layer = pcraft_layer(&format!("G{i}"), true, "Normal", 1.0, &format!(r#"{{"kind":"group","expanded":false,"children":[{layer}]}}"#));
-    }
-    let pc = zip(&[deflated("manifest.json", pcraft_manifest(1, &format!("[{layer}]"), "").as_bytes())]);
-    let o = outline(&pc, &limits()).unwrap();
+fn pcraft_groups_nest_to_photocraft_s_depth_limit() {
+    // 3 levels to the layer list, 3 per group and 4 for the leaf: 367 levels for 120 groups,
+    // PhotoCraft's limit (`manifest_depth(MAX_GROUP_DEPTH)`).
+    let nested = |groups: usize| {
+        let mut layer = pcraft_layer("Leaf", true, "Normal", 1.0, raster());
+        for i in 0..groups {
+            layer = pcraft_layer(&format!("G{i}"), true, "Normal", 1.0, &format!(r#"{{"kind":"group","expanded":false,"children":[{layer}]}}"#));
+        }
+        zip(&[deflated("manifest.json", pcraft_manifest(1, &format!("[{layer}]"), "").as_bytes())])
+    };
+    let o = outline(&nested(120), &limits()).unwrap();
     let mut depth = 0;
     let mut l = &o.layers[0];
     while let Some(c) = l.children.first() {
         depth += 1;
         l = c;
     }
-    assert_eq!((depth, l.name.as_str()), (130, "Leaf"));
+    assert_eq!((depth, l.name.as_str()), (120, "Leaf"));
+    // One more group is past the limit, though within MAX_DEPTH.
+    let deeper = nested(121);
+    assert!(matches!(outline(&deeper, &limits()), Err(Error::LimitExceeded(_))));
+    assert!(matches!(renditions(&deeper, &limits()), Err(Error::LimitExceeded(_))));
+    assert_eq!(info(&deeper, &limits()).unwrap().version, 1);
 }
 
 #[test]
