@@ -75,21 +75,8 @@ fn spaces(text: &str, lang: ProofLang, v: &mut Vec<Issue>) {
             v.push(issue(i, i + 1 + p.len_utf8(), "Espacio antes de un signo de puntuación".into(), vec![p.to_string()], lang));
         }
     }
-    // Each run of two or more spaces once, over the whole run.
-    let bytes = text.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes.get(i) != Some(&b' ') {
-            i += 1;
-            continue;
-        }
-        let start = i;
-        while bytes.get(i) == Some(&b' ') {
-            i += 1;
-        }
-        if i - start >= 2 {
-            v.push(issue(start, i, "Espacio doble".into(), vec![" ".into()], lang));
-        }
+    for run in crate::space_runs(text) {
+        v.push(issue(run.start, run.end, "Espacio doble".into(), vec![" ".into()], lang));
     }
 }
 

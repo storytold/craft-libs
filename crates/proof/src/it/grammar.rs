@@ -211,11 +211,8 @@ fn spaces(text: &str, v: &mut Vec<Issue>) {
             v.push(issue(i, i + 1 + p.len_utf8(), "Spazio prima della punteggiatura".into(), vec![p.to_string()]));
         }
     }
-    for (i, _) in text.match_indices("  ") {
-        if i > 0 && text.get(..i).is_some_and(|t| t.ends_with(' ')) {
-            continue;
-        }
-        v.push(issue(i, i + 2, "Spazio doppio".into(), vec![" ".into()]));
+    for run in crate::space_runs(text) {
+        v.push(issue(run.start, run.end, "Spazio doppio".into(), vec![" ".into()]));
     }
 }
 

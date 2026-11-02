@@ -152,6 +152,28 @@ fn dictionary_key(w: &str) -> String {
     composed(&w.to_lowercase()).into_owned()
 }
 
+/// Each run of two or more spaces in `text`, once, over the whole run (a fix replaces it with one
+/// space). A run of three is one issue over three, not a pair and a leftover.
+pub(crate) fn space_runs(text: &str) -> Vec<Range<usize>> {
+    let bytes = text.as_bytes();
+    let mut runs = Vec::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes.get(i) != Some(&b' ') {
+            i += 1;
+            continue;
+        }
+        let start = i;
+        while bytes.get(i) == Some(&b' ') {
+            i += 1;
+        }
+        if i - start >= 2 {
+            runs.push(start..i);
+        }
+    }
+    runs
+}
+
 /// Add a word to the user dictionary ("Add to Dictionary"). It applies to every language.
 pub fn add_word(w: &str) {
     if user_words().write().unwrap_or_else(std::sync::PoisonError::into_inner).insert(dictionary_key(w)) {
@@ -1098,13 +1120,10 @@ fn grammar_en(text: &str, capital_first: bool) -> Vec<Issue> {
             lang: ProofLang::En,
         });
     }
-    for (i, _) in text.match_indices("  ") {
-        if i > 0 && text.get(..i).is_some_and(|t| t.ends_with(' ')) {
-            continue;
-        }
+    for run in space_runs(text) {
         v.push(Issue {
-            start: i,
-            end: i + 2,
+            start: run.start,
+            end: run.end,
             kind: IssueKind::Grammar,
             message: "Extra space".into(),
             suggestions: vec![" ".into()],
@@ -2589,6 +2608,35 @@ mod tests {
         }
         assert!(is_correct_in("billabong", au) && !is_correct_in("billabong", gb), "en-AU still has its own");
         assert!(suggest_in("billabon", 5, au).iter().any(|s| s == "billabong"), "{:?}", suggest_in("billabon", 5, au));
+    }
+
+    /// Review follow-up: a run of spaces is one issue over the whole run, in every language with a
+    /// double-space rule (a run of three used to leave two after the fix, four three).
+    #[test]
+    fn a_run_of_spaces_is_one_issue_in_every_language() {
+        assert_eq!(space_runs("a b  c   d    "), [3..5, 6..9, 10..14]);
+        assert!(space_runs("a b c").is_empty() && space_runs("").is_empty() && space_runs(" ").is_empty());
+        let langs = [
+            ProofLang::En,
+            ProofLang::EnGb,
+            ProofLang::Es,
+            ProofLang::It,
+            ProofLang::Pt,
+            ProofLang::Cs,
+            ProofLang::Hr,
+            ProofLang::Id,
+            ProofLang::Pl,
+            ProofLang::Ru,
+        ];
+        for lang in langs {
+            for n in 2..=5 {
+                let text = format!("Aaa{}bbb", " ".repeat(n));
+                let hits: Vec<_> =
+                    check_grammar_in(&text, lang).into_iter().filter(|i| i.start <= 3 && i.end > 3 && i.suggestions == [" "]).collect();
+                assert_eq!(hits.len(), 1, "{lang:?} {n}: {hits:?}");
+                assert_eq!((hits[0].start, hits[0].end), (3, 3 + n), "{lang:?} {n}");
+            }
+        }
     }
 
     /// English spelling reads SCOWL 2026 through the affix engine: one dictionary per English,
