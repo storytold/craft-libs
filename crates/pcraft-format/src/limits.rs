@@ -20,7 +20,9 @@ pub const fn manifest_depth(groups: usize) -> usize {
 }
 
 /// Limits applied while reading a bundle from an untrusted source. The defaults are the ones
-/// PhotoCraft loads with.
+/// PhotoCraft loads with. [`check_manifest`], [`parse_manifest`] and [`crate::read_manifest`]
+/// apply `max_manifest_bytes`, `max_depth` and `max_items`; the caller applies `max_blob_bytes`
+/// and `max_total_bytes`.
 ///
 /// The struct is `#[non_exhaustive]`: start from [`Limits::default`] and set the fields you
 /// change.
@@ -29,9 +31,11 @@ pub const fn manifest_depth(groups: usize) -> usize {
 pub struct Limits {
     /// Largest `manifest.json`, in bytes (256 MiB).
     pub max_manifest_bytes: usize,
-    /// Largest decompressed blob, in bytes (1 GiB).
+    /// Largest decompressed blob, in bytes (1 GiB). The crate does not read blobs or apply this
+    /// limit: the caller that decompresses them enforces it.
     pub max_blob_bytes: usize,
-    /// Most decompressed tile and blob bytes in one bundle (16 GiB).
+    /// Most decompressed tile and blob bytes in one bundle (16 GiB). The crate does not read
+    /// tiles or blobs or apply this limit: the caller that decompresses them enforces it.
     pub max_total_bytes: u64,
     /// Deepest JSON nesting of the manifest (`manifest_depth(MAX_GROUP_DEPTH)`, 367). Values
     /// above [`MAX_DEPTH`] are treated as [`MAX_DEPTH`].

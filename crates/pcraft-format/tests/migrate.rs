@@ -46,7 +46,9 @@ fn the_current_version_is_left_unchanged() {
 #[test]
 fn a_newer_version_is_too_new() {
     let mut v = json!({"format_version": 4});
-    assert!(matches!(migrate(&mut v, STEPS, 3), Err(Error::TooNew { found: 4, supported: 3 })));
+    assert!(matches!(migrate(&mut v, STEPS, 3), Err(Error::TooNew { found: 4, supported: 3, generator: None, .. })));
+    let mut v = json!({"format_version": 4, "generator": "photocraft-format 2.0.0"});
+    assert!(matches!(migrate(&mut v, STEPS, 3), Err(Error::TooNew { generator: Some(g), .. }) if g == "photocraft-format 2.0.0"));
 }
 
 #[test]
@@ -108,5 +110,5 @@ fn steps_return_the_caller_s_error_type() {
     assert!(matches!(migrate(&mut v, steps, 3), Err(AppError::Step("refused"))));
     assert_eq!(v, json!({"format_version": 2, "document": {"flag": true}}));
     let mut newer = json!({"format_version": 9});
-    assert!(matches!(migrate(&mut newer, steps, 3), Err(AppError::Format(Error::TooNew { found: 9, supported: 3 }))));
+    assert!(matches!(migrate(&mut newer, steps, 3), Err(AppError::Format(Error::TooNew { found: 9, supported: 3, .. }))));
 }

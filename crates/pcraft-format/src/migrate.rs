@@ -10,7 +10,8 @@ pub type Step<E = Error> = fn(&mut Value) -> Result<(), E>;
 /// version `i + 1` to `i + 2`. Returns the version the manifest had.
 ///
 /// - A missing or non-integer `format_version`, one past `u32`, or `0` is [`Error::Corrupt`].
-/// - A version newer than `target` is [`Error::TooNew`].
+/// - A version newer than `target` is [`Error::TooNew`], holding the manifest's `generator` when
+///   it is a string.
 /// - A version with no step to the next one is [`Error::Unsupported`].
 ///
 /// A step's error is returned as it is, and the steps before it have already changed `v`. A step
@@ -22,7 +23,8 @@ pub fn migrate<E: From<Error>>(v: &mut Value, steps: &[Step<E>], target: u32) ->
         return Err(corrupt("format_version 0 is invalid").into());
     }
     if found > target {
-        return Err(Error::TooNew { found, supported: target }.into());
+        let generator = v.get("generator").and_then(Value::as_str).map(str::to_owned);
+        return Err(Error::TooNew { found, supported: target, generator }.into());
     }
     for ver in found..target {
         let step =

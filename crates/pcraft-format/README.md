@@ -27,7 +27,9 @@ A bundle is a ZIP archive or a directory with these entries:
 `<blake3>` is the BLAKE3 hash of the uncompressed bytes as 64 lowercase hex digits.
 `is_valid_hash` checks that form. `tile_path` and `blob_path` return `None` for any other
 string, so a hash read from a file never becomes an entry name such as `tiles/../x.zst`.
-`EXTENSION` is `pcraft` and `FORMAT_VERSION` is 1.
+`TILES_DIR` (`tiles`), `BLOBS_DIR` (`blobs`) and `COMPOSITE_DIR` (`composite`) name the
+directories, and `OBJECT_SUFFIX` (`.zst`) ends every tile and blob entry. `EXTENSION` is
+`pcraft` and `FORMAT_VERSION` is 1.
 
 ## Use
 
@@ -36,16 +38,20 @@ use craft_pcraft_format::{FORMAT_VERSION, Limits, Manifest, Step};
 
 const STEPS: &[Step] = &[];
 
-let mut value = craft_pcraft_format::parse_manifest(&manifest_json, &Limits::default())?;
-craft_pcraft_format::migrate(&mut value, STEPS, FORMAT_VERSION)?;
-let manifest: Manifest<MyDocument> = serde_json::from_value(value)?;
+let manifest: Manifest<MyDocument> = craft_pcraft_format::read_manifest(&manifest_json, &Limits::default(), STEPS, FORMAT_VERSION)?;
 ```
 
+- `read_manifest(json, &Limits, steps, target)` is the reader of a manifest. It runs
+  `parse_manifest`, then `migrate`, which refuses a version newer than `target`, then reads the
+  document as `D` and the other members. `read_manifest_with` takes a function that reads the
+  document from its `serde_json::Value` instead of `D`'s `Deserialize`.
 - `Manifest<D>` has `format_version`, `generator`, `document: D`, `thumbnail` and `composite`,
   and serializes them in that order. Absent previews serialize as `null`. On read, missing
-  previews are `None` and members the type does not name are skipped.
-- `TileRef` has `tx`, `ty` and `hash`. `TileRef::path` gives its entry, or `None` when the
-  hash is not valid.
+  previews are `None` and members the type does not name are skipped. `Manifest` has no
+  `Deserialize` and is `#[non_exhaustive]`: `Manifest::new(generator, document)` builds one at
+  `FORMAT_VERSION` without previews.
+- `TileRef` has `tx`, `ty` and `hash`, and is `#[non_exhaustive]`: `TileRef::new(tx, ty, hash)`
+  builds one. `TileRef::path` gives its entry, or `None` when the hash is not valid.
 - `check_manifest(json, &Limits)` checks the size, the nesting and the item count in one pass
   without recursion. PhotoCraft's own check of a manifest it saves tests the nesting and the
   item count only. `parse_manifest(json, &Limits)` runs that check and then parses into a
@@ -56,7 +62,8 @@ let manifest: Manifest<MyDocument> = serde_json::from_value(value)?;
   error type.
 - `Error` is `Corrupt`, `Unsupported`, `TooNew`, `LimitExceeded` or `Json`. A manifest whose
   `format_version` is newer than `target` gives `TooNew`, and one with no step to the next
-  version gives `Unsupported`.
+  version gives `Unsupported`. `TooNew` holds `found`, `supported` and the manifest's
+  `generator` (`None` when it is missing or not a string), and is matched with `..`.
 
 ## Limits
 
@@ -73,8 +80,9 @@ let manifest: Manifest<MyDocument> = serde_json::from_value(value)?;
 - `max_items` (`MAX_MANIFEST_ITEMS`, 4,194,304): arrays and objects opened, plus elements and
   members after a comma.
 
-`check_manifest` and `parse_manifest` apply the manifest limits. The blob and total limits are
-for the caller that reads the entries. The struct is `#[non_exhaustive]`: start from the
+`check_manifest`, `parse_manifest` and `read_manifest` apply the manifest limits. The crate
+does not read tiles or blobs, so it does not apply `max_blob_bytes` or `max_total_bytes`: the
+caller that decompresses the entries enforces them. The struct is `#[non_exhaustive]`: start from the
 defaults and set the fields you change.
 
 ```rust
@@ -90,6 +98,11 @@ limits.max_manifest_bytes = 16 << 20;
   `serde_json::to_vec_pretty` to JSON written by hand in the test, byte for byte, and reads
   back equal; missing previews and unknown members; entry names, hash checks, and no entry name
   for an invalid hash.
+- `tests/read.rs`: `read_manifest` and `read_manifest_with` read the envelope and the document,
+  refuse a newer version with the writer's `generator`, refuse a manifest past the limits, run
+  the steps first, and report missing or mistyped members.
+- Doc tests: `Manifest` and `TileRef` are not built by struct literal, `Manifest` has no
+  `Deserialize`, and `Error::TooNew` is matched with `..`.
 - `tests/limits.rs`: the default limits, nesting at and past `max_depth`, items at and past
   `max_items`, brackets inside strings, the manifest size, JSON errors and the messages.
 - `tests/migrate.rs`: steps in order, partial chains, the current version, newer, missing,
