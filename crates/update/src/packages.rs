@@ -13,6 +13,8 @@ pub struct Package {
     pub name: String,
     /// As the package manager reports it (`0.5.0-1`); empty when it doesn't say.
     pub version: String,
+    /// The origin remote (`flatpark`, `<app>-origin`, `flathub`), when known.
+    pub origin: Option<String>,
 }
 
 /// `dpkg-query -W -f '${Package}|${db:Status-Status}|${Version}\n'`: installed packages only.
@@ -46,16 +48,32 @@ pub fn parse_pacman(text: &str) -> Vec<(String, String)> {
         .collect()
 }
 
-/// `flatpak list --app --columns=application,version`: the version column is often empty for
-/// bundles built from a release tarball.
-pub fn parse_flatpak_list(text: &str) -> Vec<(String, String)> {
+/// `flatpak list --app --columns=application,version,origin`: parses id, version and origin.
+pub fn parse_flatpak_list_with_origin(text: &str) -> Vec<(String, String, Option<String>)> {
     text.lines()
         .filter_map(|line| {
             let mut f = line.split('\t');
             let id = f.next()?.trim();
-            (!id.is_empty()).then(|| (id.to_string(), f.next().unwrap_or("").trim().to_string()))
+            if id.is_empty() {
+                return None;
+            }
+            let version = f.next().unwrap_or("").trim().to_string();
+            let origin = f.next().map(str::trim).filter(|o| !o.is_empty()).map(ToString::to_string);
+            Some((id.to_string(), version, origin))
         })
         .collect()
+}
+
+/// `flatpak list --app --columns=application,version`: the version column is often empty for
+/// bundles built from a release tarball.
+pub fn parse_flatpak_list(text: &str) -> Vec<(String, String)> {
+    parse_flatpak_list_with_origin(text).into_iter().map(|(id, v, _)| (id, v)).collect()
+}
+
+/// Whether an origin string indicates an install from FlatPark.
+pub fn is_flatpark_origin(origin: &str) -> bool {
+    let o = origin.trim();
+    o.eq_ignore_ascii_case("flatpark") || o.to_ascii_lowercase().contains("flatpark")
 }
 
 /// The `Version:` line of `flatpak info <id>`.
@@ -96,7 +114,7 @@ mod tests {
     use super::*;
 
     fn pkgs(manager: InstallSource, list: Vec<(String, String)>) -> Vec<Package> {
-        list.into_iter().map(|(name, version)| Package { manager, name, version }).collect()
+        list.into_iter().map(|(name, version)| Package { manager, name, version, origin: None }).collect()
     }
 
     #[test]
@@ -157,5 +175,26 @@ mod tests {
         // 0.5.0-1 is the 0.5.0 release, not a pre-release of it.
         assert_eq!(version_of(hit).unwrap().to_string(), "0.5.0");
         assert_eq!(find(photo, &installed, &[InstallSource::Flatpak]).unwrap().version, "0.4.0");
+    }
+
+    #[test]
+    fn parses_flatpak_list_with_origin_and_spots_flatpark() {
+        let text =
+            "ai.storyteller.photocraft\t0.19.0\tflatpark\nai.storyteller.cadcraft\t0.16.0\tcadcraft-origin\nai.storyteller.wordcraft\t0.14.0\t\n";
+        let list = parse_flatpak_list_with_origin(text);
+        assert_eq!(
+            list,
+            [
+                ("ai.storyteller.photocraft".into(), "0.19.0".into(), Some("flatpark".into())),
+                ("ai.storyteller.cadcraft".into(), "0.16.0".into(), Some("cadcraft-origin".into())),
+                ("ai.storyteller.wordcraft".into(), "0.14.0".into(), None),
+            ]
+        );
+        assert!(is_flatpark_origin("flatpark"));
+        assert!(is_flatpark_origin("FlatPark"));
+        assert!(is_flatpark_origin("flatpark-origin"));
+        assert!(!is_flatpark_origin("cadcraft-origin"));
+        assert!(!is_flatpark_origin("flathub"));
+        assert!(!is_flatpark_origin(""));
     }
 }

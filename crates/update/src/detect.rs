@@ -67,6 +67,8 @@ fn from_manifest(app: &App, manifest: &Manifest) -> Option<Installed> {
         source: InstallSource::Launcher,
         location: rec.path.display().to_string(),
         package: None,
+        externally_managed: false,
+        origin: None,
     })
 }
 
@@ -169,7 +171,14 @@ pub mod macos {
         let full_key = format!("{}Version", app.name);
         let text =
             [full_key.as_str(), "CFBundleShortVersionString", "CFBundleVersion"].iter().find_map(|k| dict.get(k).and_then(plist::Value::as_string));
-        Some(Installed { version: text.and_then(version::parse), source: InstallSource::MacApp, location: path.display().to_string(), package: None })
+        Some(Installed {
+            version: text.and_then(version::parse),
+            source: InstallSource::MacApp,
+            location: path.display().to_string(),
+            package: None,
+            externally_managed: false,
+            origin: None,
+        })
     }
 }
 
@@ -277,6 +286,8 @@ pub mod windows {
             source: InstallSource::Msi,
             location: m.exe.map_or_else(|| app.name.to_string(), |p| p.display().to_string()),
             package: Some(m.product_code),
+            externally_managed: false,
+            origin: None,
         })
     }
 }
@@ -303,7 +314,7 @@ pub mod linux {
         let t = Duration::from_secs(10);
         let mut out = Vec::new();
         let mut add = |manager, list: Vec<(String, String)>| {
-            out.extend(list.into_iter().filter(|(n, _)| ours(n)).map(|(name, version)| Package { manager, name, version }));
+            out.extend(list.into_iter().filter(|(n, _)| ours(n)).map(|(name, version)| Package { manager, name, version, origin: None }));
         };
         if let Some(list) = capture("dpkg-query", &["-W", "-f", "${Package}|${db:Status-Status}|${Version}\n"], t) {
             add(InstallSource::Deb, packages::parse_dpkg(&list));
@@ -319,15 +330,20 @@ pub mod linux {
             add(InstallSource::Pacman, packages::parse_pacman(&list));
         }
         let arch = format!("--arch={}", std::env::consts::ARCH);
-        if let Some(list) = crate::process::capture_flatpak(&["list", "--app", &arch, "--columns=application,version"], t) {
-            let mut flatpaks = packages::parse_flatpak_list(&list);
+        if let Some(list) = crate::process::capture_flatpak(&["list", "--app", &arch, "--columns=application,version,origin"], t) {
+            let mut flatpaks = packages::parse_flatpak_list_with_origin(&list);
             // Bundles built from a release tarball often list no version: ask Flatpak directly.
-            for (id, version) in flatpaks.iter_mut().filter(|(id, v)| v.is_empty() && id.starts_with("ai.storyteller.")) {
+            for (id, version, _) in flatpaks.iter_mut().filter(|(id, v, _)| v.is_empty() && id.starts_with("ai.storyteller.")) {
                 if let Some(v) = crate::process::capture_flatpak(&["info", &arch, id], t).as_deref().and_then(packages::parse_flatpak_info) {
                     *version = v;
                 }
             }
-            add(InstallSource::Flatpak, flatpaks);
+            out.extend(flatpaks.into_iter().filter(|(n, _, _)| ours(n)).map(|(name, version, origin)| Package {
+                manager: InstallSource::Flatpak,
+                name,
+                version,
+                origin,
+            }));
         }
         out
     }
@@ -402,12 +418,27 @@ pub mod linux {
 
     pub fn detect(app: &App, snapshot: &Snapshot) -> Option<Installed> {
         if let Some((path, version)) = appimages(app).into_iter().next() {
-            return Some(Installed { version, source: InstallSource::AppImage, location: path.display().to_string(), package: None });
+            return Some(Installed {
+                version,
+                source: InstallSource::AppImage,
+                location: path.display().to_string(),
+                package: None,
+                externally_managed: false,
+                origin: None,
+            });
         }
         let order = [InstallSource::Deb, InstallSource::Rpm, InstallSource::Pacman, InstallSource::Flatpak];
         if let Some(p) = packages::find(app, &snapshot.packages, &order) {
             let location = if p.manager == InstallSource::Flatpak { app.bundle_id() } else { binary_on_path(app.id) };
-            return Some(Installed { version: packages::version_of(p), source: p.manager, location, package: Some(p.name.clone()) });
+            let externally_managed = p.manager == InstallSource::Flatpak && p.origin.as_deref().is_some_and(packages::is_flatpark_origin);
+            return Some(Installed {
+                version: packages::version_of(p),
+                source: p.manager,
+                location,
+                package: Some(p.name.clone()),
+                externally_managed,
+                origin: p.origin.clone(),
+            });
         }
         detect_system_install(app)
     }
@@ -418,7 +449,14 @@ pub mod linux {
     /// to whatever installed it, since it can't tell which package manager that was.
     fn detect_system_install(app: &App) -> Option<Installed> {
         let bin = find_binary(app.id)?;
-        Some(Installed { version: binary_version(&bin, app), source: InstallSource::Binary, location: bin.display().to_string(), package: None })
+        Some(Installed {
+            version: binary_version(&bin, app),
+            source: InstallSource::Binary,
+            location: bin.display().to_string(),
+            package: None,
+            externally_managed: true,
+            origin: None,
+        })
     }
 
     fn find_binary(id: &str) -> Option<PathBuf> {
@@ -445,7 +483,14 @@ pub mod freebsd {
         if !bin.exists() {
             return None;
         }
-        Some(Installed { version: binary_version(&bin, app), source: InstallSource::Binary, location: bin.display().to_string(), package: None })
+        Some(Installed {
+            version: binary_version(&bin, app),
+            source: InstallSource::Binary,
+            location: bin.display().to_string(),
+            package: None,
+            externally_managed: true,
+            origin: None,
+        })
     }
 
     /// `<app> --version` prints `<app> 0.5.0 (sha, date)`.
