@@ -33,8 +33,8 @@ mod http;
 mod store;
 
 pub use index::{
-    Axis, Face, Family, FontFile, FontSource, GOOGLE_FONTS, Index, IndexError, LICENSES, Language, LicenseFile, MAJOR_VERSION, MAX_FILE_BYTES,
-    MAX_INDEX_BYTES, MAX_LICENSE_BYTES, Script, SourceProblem, Unavailable, parse_style,
+    Axis, Face, Family, FontFile, FontSource, GOOGLE_FONTS, Index, IndexError, Instance, LICENSES, Language, LicenseFile, MAJOR_VERSION,
+    MAX_FILE_BYTES, MAX_INDEX_BYTES, MAX_LICENSE_BYTES, Sample, Script, SourceProblem, Unavailable, parse_style,
 };
 pub use pin::{IndexPin, PINNED_INDEX};
 pub use sources::{SourceEntry, SourcesFile};
@@ -43,7 +43,10 @@ pub use verify::{VerifyError, is_font, sha256_hex, verify_font};
 #[cfg(not(target_arch = "wasm32"))]
 pub use http::{Cancel, Client, FetchError, Timeouts, USER_AGENT};
 #[cfg(not(target_arch = "wasm32"))]
-pub use store::{Caller, Error, FontStore, InstalledFamily, InstalledFile, Network, Problem, Progress, UserSource};
+pub use store::{
+    Caller, Error, FontStore, InstalledFamily, InstalledFile, Network, PREVIEW_SERVICE_ENV, PreviewServiceSource, Problem, Progress, UserSource,
+    check_preview_service,
+};
 
 #[cfg(test)]
 mod tests;

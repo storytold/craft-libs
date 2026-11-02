@@ -28,7 +28,10 @@ A source the user adds is an index file at an https URL (`.json` or `.json.gz`).
 | Off until the user turns it on | `FontStore::network()` is `Network::Off` until `enable_network()`. The setting is `settings.json` in the store folder, so it holds for every app. |
 | Only the user turns it on | `FontStore::for_user` is for the app's own interface; call `enable_network()` from a setting or from the user's Install click. `FontStore::for_agent` (MCP, CLI, scripting) gets `Error::NotAllowed`. An agent can install while the user has the network on. |
 | No requests at startup | Nothing in the crate makes a request on its own. Only `fetch_indexes` and the installs do, and they return `Error::NetworkOff` without one while the network is off. |
-| One HTTP client | `Client`: ureq with rustls and the webpki roots, HTTPS only, no cookies, `User-Agent: craft-font-store/<version>`. Timeouts: 15 s to connect, 30 s to the response headers, 10 minutes per file. |
+| Optional preview service | Off unless set: no default address. `CRAFT_FONT_PREVIEW_URL`, else the `preview_service` field of `settings.json` (`FontStore::set_preview_service`, user only, `Error::NotAllowed` for an agent). `FontStore::preview_service()` returns the one in effect and `preview_service_source()` says whether it is `Env`, `Saved` or `None`; the variable's name is `PREVIEW_SERVICE_ENV`. https only; http is accepted only for the addresses `127.0.0.1` and `::1`, never for a host name, which a resolver can point off the machine. A trailing slash is dropped. Example: `CRAFT_FONT_PREVIEW_URL=https://fonts.example.com`. |
+| Previews setting | `previews` in `settings.json`, on by default: `FontStore::previews_enabled()`, `set_previews_enabled(bool)` (user only, `Error::NotAllowed` for an agent). The app fetches previews from a set service only while it is on; installs ignore it. |
+| Mirror first | With a service set, an install requests `<service>/v1/files/<sha256>` for each font file and `<service>/v1/licences/<sha256>` for a licence (when the index gives its sha256) before the index's URLs. The size and sha256 checks are the same, and a response that fails them moves on to the next URL. |
+| One HTTP client | `Client`: ureq with rustls and the webpki roots, HTTPS only (plain http only to `127.0.0.1` or `::1`, following no redirects, for a preview service run locally), no cookies, `User-Agent: craft-font-store/<version>`. Timeouts: 15 s to connect, 30 s to the response headers, 10 minutes per file. |
 
 A file's URLs come from its source's URL templates, best first. Both built-in sources use `https://cdn.jsdelivr.net/gh/{repo}@{ref}/{path}`, then `https://raw.githubusercontent.com/{repo}/{ref}/{path}`. The store tries the next URL after any failure: a network error, an HTTP error (jsDelivr answers 403 for files over 20 MB, such as the Noto Serif CJK fonts), or bytes that don't verify.
 
@@ -52,6 +55,10 @@ Reading checks every entry: the version (a major version other than 1 is refused
 | `index.sources()`, `index.source_of(family)` | Each source's name, homepage, curated flag, commit, and families left out with why. |
 | `family.source`, `family.is_curated()` | The family's source ID, and whether that source is curated. |
 | `index.file_urls(family, file)`, `index.license_urls(family)` | The URLs to try, best first. |
+| `family.tags`, `family.copyright`, `family.reserved_names`, `family.notice_file`, `family.upstream` | Format 1.2: design traits, the copyright notice, the Reserved Font Names (a client that modifies a font renames it when there are any), an Apache family's `NOTICE` file and where the family is developed. Absent in a 1.1 index: empty or `None`. |
+| `file.instances`, `file.list_instance` | Format 1.2: a variable font's named instances, and the position of the one a font list shows (`None`: the default instance). |
+| `index.samples()`, `index.sample(script)` | Format 1.2: the default preview text of each script. When sources have one for the same script, the first source's wins. |
+| `index.sample_text(family, file)` | The file's preview text: its own `sample_text`, else the sample of its `sample_script`, else of the family's `sample_script`. |
 
 ## Exact matches only
 
@@ -93,6 +100,7 @@ When every file has passed, the store takes `.lock`, moves the files into the fa
 settings.json        the network setting and the sources the user added
 manifest.json        what is installed
 indexes/             the last indexes fetched: sources.json, <source>.json.gz, user-<hash>
+previews/            preview subsets (WOFF2) craft-font-manager caches, at most 50 MB
 <family folder>/     the font files and the licence
 .staging/            downloads being installed
 .lock                held while the store changes
