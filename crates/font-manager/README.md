@@ -10,7 +10,8 @@ Fonts tab; the standalone app
 | `filter` | always | Search over the index: family names ignoring case and accents, category, language (English name, autonym or id) and script |
 | `index` | always | The pinned built-in indexes (Google Fonts and Noto) compiled into [`craft-font-store`](../font-store/README.md) (`bundled`), each family's source (`source_label`: its name and whether it is curated), and the categories |
 | `installed` | always | The installed fonts [`craft-font-catalog`](../font-catalog/README.md) sees, grouped by family and source |
-| `store` | always | `Installer`, what the interface needs from the font store: the download consent, install, remove, downloads for a preview, the indexes (`indexes`, `fetch_indexes`) and the sources the user added (`user_sources`, `add_user_source`, `remove_user_source`). `SuiteStore` is craft-font-store's store, `FakeStore` a stand-in for tests, `NoStore` one for when the store folder is unknown |
+| `store` | always | `Installer`, what the interface needs from the font store: the download consent, install, remove, downloads for a preview, the indexes (`indexes`, `fetch_indexes`) and the sources the user added (`user_sources`, `add_user_source`, `remove_user_source`) and the optional preview service address (`preview_service`, `set_preview_service`) and the previews setting (`previews_enabled`, `set_previews_enabled`). `SuiteStore` is craft-font-store's store, `FakeStore` a stand-in for tests, `NoStore` one for when the store folder is unknown |
+| `remote` | always | The preview service client: subset URLs (`PreviewKey`, `Codepoints`), a fetch pool (`Previews`: 8 at a time, highest priority first, cancel by key, results by `poll`) that decodes WOFF2, and the disk cache in the store's `previews/` folder (`DiskCache`, least recently used out past 50 MB). It requests nothing unless a preview service is set and previews are enabled (`Installer::previews_enabled`, a user setting, on by default). There is no prompt, and the install consent (`downloads_allowed`) is not consulted. With previews off nothing goes to the network, and cached previews are still used |
 | `FontsPanel` | `egui` | The whole interface as one egui panel |
 
 ## The panel
@@ -25,9 +26,13 @@ The layout follows Adobe Fonts' and Google Fonts' browse pages.
   card's state at its end (Install and Preview, Installed, a progress bar while downloading,
   Couldn't install with Retry, "Not curated" for a source the user added), and a large sample in
   the face below. The list is virtual: only the cards on screen are laid out, and their faces load
-  as they come into view. The arrow keys step through the cards and Enter opens one.
-- **Sample toolbar**: a preset (a sentence in the language filtered by, or in the family's own
-  script when it has no Latin; the alphabet; numerals), the sample text, and the size.
+  as they come into view. With a preview service set, families that aren't installed draw from
+  small subsets of their face: the sample for the cards on screen, then one screen above and two
+  below, then ASCII for the Latin cards on screen; typed text outside those asks for its own
+  characters once typing pauses. The arrow keys step through the cards and Enter opens one.
+- **Sample toolbar**: a preset (a sentence in the language filtered by, else the family's own
+  sample from the index, by its `sample_script`; the alphabet; numerals), the sample text, and the
+  size.
 - **Details sheet** over the list: every style in its own face with Install or Remove for each,
   Install all and Remove all, the source, designer, licence, scripts and languages, and what a
   preview downloads.
@@ -65,15 +70,19 @@ panel.ui(ui);
 | `show_downloads_switch(false)` | For a host with the switch in its own settings |
 | `sources_ui(ui)` | The font sources, for a host's settings page |
 | `set_index(index)` | The indexes, after the host fetched them |
+| `with_previews(previews)`, `loading_previews()` | The list's preview service pool (tests pass one with a stand-in `Fetch`), and whether it is fetching |
+| `reload_preview_settings()` | Reads the preview service and previews settings again after a host's settings page changed them (also every few seconds) |
 | `set_language(tag)` | The interface language, the host's own; English when its catalog isn't embedded |
 | `install_interface_fonts(ctx, craft_faces)` | For a host without interface fonts of its own (the standalone app): craft-ui's font stack for the panel's language, craft-fonts' faces the app embeds with craft-fonts-build, and the interface direction |
 
 ## Network use
 
-Nothing is downloaded until the user allows it. Downloads are off by default; the first Install or
-Preview asks first. Files come from each source's repositories at the commit or tag its index
+Nothing is installed or downloaded whole until the user allows it. Downloads are off by default;
+the first Install or Preview asks first. Files come from each source's repositories at the commit or tag its index
 records, through jsDelivr (raw GitHub as the fallback), and each is checked against the index's
-size and sha256 before use. Previews stay in memory and are never installed. A source the user
+size and sha256 before use. Previews stay in memory and are never installed. List previews from a
+preview service don't ask: they follow the previews setting (on by default), not the download
+consent; with the setting off, only subsets already in the disk cache are shown. A source the user
 adds is an index at an https URL; its families are never curated.
 
 ## Strings

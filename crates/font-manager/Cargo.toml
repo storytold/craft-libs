@@ -24,6 +24,8 @@ egui = { workspace = true, features = ["default_fonts"], optional = true }
 craft-ui = { workspace = true, optional = true }
 serde = { workspace = true, optional = true }
 log = { version = "0.4", optional = true }
+# Decodes the preview service's WOFF2 subsets; pure Rust. Brotli only: WOFF 1 isn't served.
+wuff = { version = "0.2.9", default-features = false, features = ["brotli"] }
 
 [dev-dependencies]
 egui_kittest = { version = "0.37", features = ["wgpu", "snapshot"] }
@@ -32,6 +34,8 @@ epaint_default_fonts = "0.37"
 image = { version = "0.25", default-features = false, features = ["png"] }
 # The system's fonts for the Japanese and Arabic screenshots.
 egui_system_font_provider = "0.37"
+# The shared preview test vectors.
+serde_json = { workspace = true }
 
 [[test]]
 name = "flows"

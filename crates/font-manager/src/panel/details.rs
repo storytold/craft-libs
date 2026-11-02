@@ -14,6 +14,7 @@ use crate::panel::app::{Detail, FontsPanel, Pending, category_label, family_key,
 use crate::panel::faces::Owner;
 use crate::panel::i18n::{self, fmt, tl, tn};
 use crate::panel::jobs::Kind;
+use crate::panel::samples;
 use crate::panel::widgets::{self, Glyph, Skin};
 use crate::{FaceInfo, Source};
 
@@ -169,6 +170,7 @@ impl FontsPanel {
         let store: Vec<FaceInfo> = installed.iter().filter(|f| f.source == Source::Store).cloned().collect();
         let on_system = !installed.is_empty() && store.is_empty();
         let previewed = self.previewed.get(&key).cloned();
+        let session_preview = installed.is_empty() && previewed.is_none() && !self.subsets.previewing();
         let job = self.jobs.of(&family.source, &family.family).map(|j| (j.kind, j.file.clone(), j.fraction()));
         let (source, curated) = source_label(&index, &family);
         let eyebrow = [source.to_owned(), category_label(&family)].join(" · ");
@@ -201,17 +203,14 @@ impl FontsPanel {
                     if !store.is_empty() && widgets::button(ui, s, tl!("Remove all"), widgets::Kind::Danger, s.h(), 0.0).clicked() {
                         self.remove(&ctx, &family.family, &store, true);
                     }
-                    if installed.is_empty()
-                        && previewed.is_none()
-                        && widgets::button(ui, s, tl!("Preview"), widgets::Kind::Secondary, s.h(), 0.0).clicked()
-                    {
+                    if session_preview && widgets::button(ui, s, tl!("Preview"), widgets::Kind::Secondary, s.h(), 0.0).clicked() {
                         self.ask(&ctx, Pending::Preview(i));
                     }
                     widgets::label(ui, s, &fmt("{size} download", &[("size", &size)]), s.p.faint);
                 }
             }
         });
-        if installed.is_empty() && previewed.is_none() {
+        if session_preview {
             let note = fmt("Preview downloads this font ({size}) for this session without installing it.", &[("size", &size)]);
             ui.label(RichText::new(note).size(12.5).color(s.p.muted));
         }
@@ -426,7 +425,12 @@ impl FontsPanel {
             tn(rows.len() as u64, "{n} style", "{n} styles")
         };
         widgets::label(ui, s, &title, s.p.faint);
-        let sample = self.sample_for(scripts.iter().map(String::as_str));
+        let index = self.index();
+        let own = index.as_deref().and_then(|index| {
+            let family = index.families().get(family_index).or_else(|| index.family(family))?;
+            samples::of_family(index, family)
+        });
+        let sample = self.sample_for(own, scripts.iter().map(String::as_str));
         let size = self.settings.size.max(24.0);
         let width = ui.available_width();
         for row in rows {
