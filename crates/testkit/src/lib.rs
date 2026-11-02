@@ -70,8 +70,14 @@ pub fn ffmpeg_has_encoder(ff: &Path, encoder: &str) -> bool {
     if !output.status.success() {
         return false;
     }
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    stdout.contains(encoder)
+    parse_has_encoder(&String::from_utf8_lossy(&output.stdout), encoder)
+}
+
+fn parse_has_encoder(stdout: &str, encoder: &str) -> bool {
+    stdout.lines().any(|line| {
+        let mut parts = line.split_whitespace();
+        if let (Some(_flags), Some(name)) = (parts.next(), parts.next()) { name == encoder } else { false }
+    })
 }
 
 /// Report a skipped test.
@@ -84,9 +90,35 @@ pub fn set_progress(label: &str) {
     eprintln!("PROGRESS: {label}");
 }
 
-/// Run closure with an execution deadline (runs closure directly in test runner).
-pub fn with_deadline<F: FnOnce()>(_secs: u64, f: F) {
-    f();
+/// Run closure with an execution deadline, terminating with a panic if the limit is exceeded.
+#[allow(clippy::panic)]
+pub fn with_deadline<F: FnOnce() + Send + 'static>(secs: u64, f: F) {
+    let timeout_secs = std::env::var("CRAFT_TEST_TIMEOUT_SECS")
+        .or_else(|_| std::env::var("FILMCRAFT_HOSTILE_TIMEOUT_SECS"))
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(secs);
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    let handle = std::thread::spawn(move || {
+        f();
+        let _ = tx.send(());
+    });
+    match rx.recv_timeout(std::time::Duration::from_secs(timeout_secs)) {
+        Ok(()) => {
+            if let Err(payload) = handle.join() {
+                std::panic::resume_unwind(payload);
+            }
+        }
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+            panic!("test exceeded execution deadline of {timeout_secs} seconds");
+        }
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+            if let Err(payload) = handle.join() {
+                std::panic::resume_unwind(payload);
+            }
+        }
+    }
 }
 
 /// Return fixture directory for a crate/category, creating it if needed.
@@ -144,5 +176,42 @@ pub mod fixtures {
             let _ = std::fs::remove_file(&tmp);
             None
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_has_encoder_exact_match() {
+        let sample = "\
+Encoders:
+ V..... = Video
+ ------
+ V....D libvpx-vp9          libvpx VP9 (codec vp9)
+ V....D libvpx              libvpx VP8 (codec vp8)
+ A....D flac                FLAC (Free Lossless Audio Codec)
+";
+        assert!(parse_has_encoder(sample, "libvpx"));
+        assert!(parse_has_encoder(sample, "libvpx-vp9"));
+        assert!(parse_has_encoder(sample, "flac"));
+        assert!(!parse_has_encoder(sample, "vp8"));
+        assert!(!parse_has_encoder(sample, "libvp"));
+    }
+
+    #[test]
+    fn with_deadline_completes() {
+        with_deadline(5, || {
+            // fast operation
+        });
+    }
+
+    #[test]
+    #[should_panic(expected = "test exceeded execution deadline")]
+    fn with_deadline_times_out() {
+        with_deadline(1, || {
+            std::thread::sleep(std::time::Duration::from_secs(3));
+        });
     }
 }
