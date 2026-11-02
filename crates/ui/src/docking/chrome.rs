@@ -116,8 +116,10 @@ pub struct FloatingFrame<'a> {
     bounds: Option<Rect>,
     limits: PanelLimits,
     resizable: bool,
+    resize_axes: [bool; 2],
     resize_label: &'a str,
     opacity: f32,
+    reserve_top_resize_band: bool,
 }
 
 /// What a [`FloatingFrame`] did this frame.
@@ -137,7 +139,17 @@ pub struct FrameResponse<R> {
 
 impl<'a> FloatingFrame<'a> {
     pub fn new(id: Id, rect: Rect) -> Self {
-        Self { id, rect, bounds: None, limits: PanelLimits::default(), resizable: true, resize_label: "Resize window", opacity: 1.0 }
+        Self {
+            id,
+            rect,
+            bounds: None,
+            limits: PanelLimits::default(),
+            resizable: true,
+            resize_axes: [true, true],
+            resize_label: "Resize window",
+            opacity: 1.0,
+            reserve_top_resize_band: true,
+        }
     }
 
     /// The frame stays inside `bounds`; the default is the viewport's content rect.
@@ -153,8 +165,20 @@ impl<'a> FloatingFrame<'a> {
         self
     }
 
+    /// Reserve a separate top resize gutter; disable when contents already supply a header.
+    pub fn reserve_top_resize_band(mut self, reserve: bool) -> Self {
+        self.reserve_top_resize_band = reserve;
+        self
+    }
+
     pub fn resizable(mut self, resizable: bool) -> Self {
         self.resizable = resizable;
+        self
+    }
+
+    /// Restrict the stock edge handles when a host owns resizing on one axis.
+    pub fn resize_axes(mut self, axes: [bool; 2]) -> Self {
+        self.resize_axes = axes;
         self
     }
 
@@ -192,8 +216,11 @@ impl<'a> FloatingFrame<'a> {
             ui.set_min_size(rect.size());
             ui.allocate_rect(rect, Sense::hover());
             ui.painter().rect_filled(rect, 0.0, style.background);
-            let contents =
-                if self.resizable { Rect::from_min_max(pos2(rect.left(), (rect.top() + RESIZE_BAND).min(rect.bottom())), rect.max) } else { rect };
+            let contents = if self.resizable && self.reserve_top_resize_band {
+                Rect::from_min_max(pos2(rect.left(), (rect.top() + RESIZE_BAND).min(rect.bottom())), rect.max)
+            } else {
+                rect
+            };
             let inner = add_contents(ui, contents);
             ui.painter().rect_stroke(rect, 0.0, style.stroke, StrokeKind::Outside);
             let (resized, resize_started, handles) = if self.resizable { self.handles(ui, rect, bounds, style) } else { (None, None, Vec::new()) };
@@ -217,7 +244,14 @@ impl<'a> FloatingFrame<'a> {
         let mut responses = Vec::new();
         let limits = PanelLimits { min: self.limits.min.max(vec2(40.0, RESIZE_BAND + TITLE_HEIGHT + 20.0)).min(self.limits.max), ..self.limits };
         let canceled = ui.input(|input| input.key_pressed(Key::Escape)) || crate::focus::lost(ui.ctx());
-        for (name, handle, direction) in handles(rect) {
+        for (name, mut handle, mut direction) in handles(rect) {
+            if !self.reserve_top_resize_band && direction.y < 0.0 {
+                handle.max.y = (rect.top() + ui.ctx().pixels_per_point().recip()).min(rect.bottom());
+            }
+            direction = vec2(if self.resize_axes[0] { direction.x } else { 0.0 }, if self.resize_axes[1] { direction.y } else { 0.0 });
+            if direction == egui::Vec2::ZERO {
+                continue;
+            }
             if !super::targets::usable(handle) {
                 continue;
             }
@@ -485,4 +519,34 @@ pub fn live_move(ctx: &Context, bar: &Response, rect: Rect, bounds: Rect) -> Opt
     // The drag ended without a release on this bar (the bar was not shown).
     forget();
     None
+}
+
+#[cfg(test)]
+mod compatibility_tests {
+    use super::*;
+
+    #[test]
+    fn defaults_preserve_pre_host_hook_frame_geometry() {
+        let rect = Rect::from_min_size(pos2(100.0, 100.0), vec2(300.0, 200.0));
+        let frame = FloatingFrame::new(Id::unique("defaults"), rect);
+        assert_eq!(frame.resize_axes, [true, true]);
+        assert!(frame.reserve_top_resize_band);
+        assert!(frame.resizable);
+        // Literal pre-PR hit rectangles: preserve these rather than silently enlarging them.
+        let expected = [
+            [388.0, 288.0, 400.0, 300.0],
+            [100.0, 112.0, 104.0, 288.0],
+            [396.0, 112.0, 400.0, 288.0],
+            [112.0, 296.0, 388.0, 300.0],
+            [100.0, 288.0, 112.0, 300.0],
+            [112.0, 100.0, 388.0, 104.0],
+            [100.0, 100.0, 112.0, 104.0],
+            [388.0, 100.0, 400.0, 104.0],
+        ];
+        for ((_, hit, _), [x0, y0, x1, y1]) in handles(rect).into_iter().zip(expected) {
+            assert_eq!(hit, Rect::from_min_max(pos2(x0, y0), pos2(x1, y1)));
+            // Audit result: legacy targets do NOT meet a 24-by-24 logical-pixel target.
+            assert!(hit.width() < 24.0 || hit.height() < 24.0);
+        }
+    }
 }
