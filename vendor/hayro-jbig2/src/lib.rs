@@ -311,7 +311,7 @@ fn decode_segments(
                 // Intermediate segments cannot have unknown length.
                 let header = generic::parse(&mut reader, false)?;
                 let region = generic::decode(&header, scratch_buffers)?;
-                page_state.store_region(seg.header.segment_number, region.bitmap);
+                page_state.store_region(seg.header.segment_number, region.bitmap)?;
             }
             SegmentType::PatternDictionary => {
                 let header = pattern::parse(&mut reader)?;
@@ -437,7 +437,7 @@ fn decode_segments(
                     &page_state.standard_tables,
                     scratch_buffers,
                 )?;
-                page_state.store_region(seg.header.segment_number, region.bitmap);
+                page_state.store_region(seg.header.segment_number, region.bitmap)?;
             }
             SegmentType::ImmediateHalftoneRegion | SegmentType::ImmediateLosslessHalftoneRegion => {
                 let pattern_dict = seg
@@ -476,7 +476,7 @@ fn decode_segments(
 
                 let header = halftone::parse(&mut reader)?;
                 let region = halftone::decode(&header, pattern_dict, scratch_buffers)?;
-                page_state.store_region(seg.header.segment_number, region.bitmap);
+                page_state.store_region(seg.header.segment_number, region.bitmap)?;
             }
             SegmentType::IntermediateGenericRefinementRegion => {
                 // Same logic as immediate refinement, but store result instead of combining.
@@ -489,7 +489,7 @@ fn decode_segments(
 
                 let header = generic_refinement::parse(&mut reader)?;
                 let region = generic_refinement::decode(&header, reference, scratch_buffers)?;
-                page_state.store_region(seg.header.segment_number, region.bitmap);
+                page_state.store_region(seg.header.segment_number, region.bitmap)?;
             }
             SegmentType::ImmediateGenericRefinementRegion
             | SegmentType::ImmediateLosslessGenericRefinementRegion => {
@@ -545,6 +545,22 @@ fn decode_segments(
     Ok(())
 }
 
+/// Craft patch (reader): the most pixels a page's retained intermediate regions may add up
+/// to (2^30). Each region alone is capped (see `bitmap::MAX_PIXELS`), but a hostile stream
+/// can keep many at once, each behind a ~30-byte segment header (hayro #1695): the per-region
+/// cap alone lets a few hundred bytes hold hundreds of megabytes, unbounded by the page, which
+/// can stay tiny. A real striped page covers its own area once, and the largest page that
+/// `bitmap::MAX_PIXELS` allows sits far below this.
+pub(crate) const MAX_RETAINED_PIXELS: u64 = 1 << 30;
+
+/// Craft patch (reader): whether storing `region` on top of `total` already-retained pixels
+/// stays within [`MAX_RETAINED_PIXELS`].
+pub(crate) fn retained_region_fits(total: u64, region: &Bitmap) -> bool {
+    total
+        .saturating_add(u64::from(region.width) * u64::from(region.height))
+        <= MAX_RETAINED_PIXELS
+}
+
 /// Page-level decoding state for a JBIG2 page.
 #[derive(Default)]
 pub(crate) struct PageState {
@@ -554,6 +570,9 @@ pub(crate) struct PageState {
     pub(crate) page_pristine: bool,
     /// Decoded intermediate regions, stored as (`segment_number`, region) pairs.
     pub(crate) referred_segments: Vec<(u32, Bitmap)>,
+    /// Craft patch (reader): the pixels the retained intermediate regions add up to; see
+    /// [`MAX_RETAINED_PIXELS`].
+    pub(crate) retained_pixels: u64,
     /// Decoded pattern dictionaries, stored as (`segment_number`, dictionary) pairs.
     pub(crate) pattern_dictionaries: Vec<(u32, PatternDictionary)>,
     /// Decoded symbol dictionaries, stored as (`segment_number`, dictionary) pairs.
@@ -570,6 +589,7 @@ impl PageState {
         self.page_info = page_info;
         self.page_pristine = true;
         self.referred_segments.clear();
+        self.retained_pixels = 0;
         self.pattern_dictionaries.clear();
         self.symbol_dictionaries.clear();
         self.huffman_tables.clear();
@@ -611,8 +631,14 @@ impl PageState {
     }
 
     /// Store a decoded region for later reference.
-    fn store_region(&mut self, segment_number: u32, region: Bitmap) {
+    fn store_region(&mut self, segment_number: u32, region: Bitmap) -> Result<()> {
+        // Craft patch (reader): see `MAX_RETAINED_PIXELS`.
+        if !retained_region_fits(self.retained_pixels, &region) {
+            bail!(OverflowError::BitmapDimension);
+        }
+        self.retained_pixels += u64::from(region.width) * u64::from(region.height);
         self.referred_segments.push((segment_number, region));
+        Ok(())
     }
 
     /// Look up a referred segment by number.
@@ -689,4 +715,38 @@ fn init_page(
     page.reset(page_info);
 
     Ok(())
+}
+
+#[cfg(test)]
+mod retained_region_tests {
+    // Craft patch (reader): see `MAX_RETAINED_PIXELS`.
+    use super::*;
+
+    #[test]
+    fn retained_regions_are_capped() {
+        let tiny = Bitmap::new(1, 1).unwrap();
+        assert!(retained_region_fits(0, &tiny));
+        assert!(retained_region_fits(MAX_RETAINED_PIXELS - 1, &tiny));
+        assert!(!retained_region_fits(MAX_RETAINED_PIXELS, &tiny));
+
+        // The per-bitmap cap is 2^28 pixels, so four maximal regions fit and the fifth does not.
+        let max = Bitmap::new(16384, 16384).unwrap();
+        assert!(retained_region_fits(0, &max));
+        assert!(retained_region_fits(MAX_RETAINED_PIXELS - (1 << 28), &max));
+        assert!(!retained_region_fits(MAX_RETAINED_PIXELS - (1 << 28) + 1, &max));
+    }
+
+    #[test]
+    fn store_region_counts_and_refuses_past_the_cap() {
+        let mut state = PageState::default();
+        let region = Bitmap::new(2, 3).unwrap();
+        state.store_region(1, region).unwrap();
+        assert_eq!(state.retained_pixels, 6);
+        assert_eq!(state.referred_segments.len(), 1);
+        state.retained_pixels = MAX_RETAINED_PIXELS;
+        assert!(state.store_region(2, region).is_err());
+        assert_eq!(state.referred_segments.len(), 1);
+        state.reset(PageInformation::default());
+        assert_eq!(state.retained_pixels, 0);
+    }
 }
