@@ -62,7 +62,12 @@ fn ends_sentence(gap: &str, prev: &str) -> bool {
     if end == '.' && abbreviation_or_number(prev) {
         return false;
     }
-    let rest = t.trim_start_matches(['.', '!', '?']).trim_start_matches(CLOSING);
+    let after_marks = t.trim_start_matches(['.', '!', '?']);
+    let rest = after_marks.trim_start_matches(CLOSING);
+    // `"Vai?" disse ele.`: narration after a quoted question or exclamation goes on in lower case.
+    if end != '.' && after_marks.starts_with(CLOSING) {
+        return false;
+    }
     // A dialogue dash after the mark brings back the narration (`—Vai? —disse ele.`), which goes
     // on in lower case.
     rest.starts_with(char::is_whitespace) && !rest.contains('—') && rest.trim_start().chars().all(|c| OPENING.contains(&c))
@@ -225,6 +230,10 @@ mod tests {
         // craft-libs#488 review: no space after the dash.
         clean("—Vai? —disse ele.");
         clean("— Vai? — disse ele.");
+        // craft-libs#496 review: a closing quote after the mark.
+        clean("\"Vai?\" disse ele.");
+        clean("«Vai!» gritou ela.");
+        assert!(!messages("Vai? \"sim\".").is_empty(), "a bare question still ends the sentence");
         clean("Ele disse: \"Volto amanhã\". E saiu.");
         // A list item may start in lower case.
         clean("maçãs,");

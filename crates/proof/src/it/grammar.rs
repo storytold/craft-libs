@@ -150,10 +150,12 @@ fn abbreviation_or_number(prev: &str) -> bool {
         || ABBREVIATIONS.contains(&prev.to_lowercase().as_str())
 }
 
+const CLOSING: [char; 8] = ['"', '”', '’', '\'', ')', '»', ']', '\u{1}'];
+
 /// Does the gap between two words end a sentence: a `.`, `!` or `?` (not an ellipsis, not after
 /// an abbreviation), then space, with nothing but quotes and brackets around?
 fn ends_sentence(gap: &str, prev: &str) -> bool {
-    let t = gap.trim_start_matches(['"', '”', '’', '\'', ')', '»', ']', '\u{1}']);
+    let t = gap.trim_start_matches(CLOSING);
     let Some(end) = t.chars().next() else { return false };
     if !matches!(end, '.' | '!' | '?') || t.starts_with("..") {
         return false;
@@ -161,7 +163,13 @@ fn ends_sentence(gap: &str, prev: &str) -> bool {
     if end == '.' && abbreviation_or_number(prev) {
         return false;
     }
-    let rest = t.trim_start_matches(['.', '!', '?']).trim_start_matches(['"', '”', '’', '\'', ')', '»', ']']);
+    let after_marks = t.trim_start_matches(['.', '!', '?']);
+    let rest = after_marks.trim_start_matches(CLOSING);
+    // `«Vai?» disse lui.` and `—Vai? —disse lui.`: the narration after a quoted question or
+    // exclamation, or after a dialogue dash, goes on in lower case.
+    if rest.contains('—') || (end != '.' && after_marks.starts_with(CLOSING)) {
+        return false;
+    }
     rest.starts_with(char::is_whitespace) && rest.trim_start().chars().all(|c| matches!(c, '"' | '“' | '«' | '(' | '[' | '\'' | '—'))
 }
 
@@ -401,6 +409,16 @@ mod tests {
                 "after an abbreviation: {t}"
             );
         }
+    }
+
+    /// craft-libs#496 review: narration after a quoted or dashed question or exclamation goes on in
+    /// lower case.
+    #[test]
+    fn narration_after_a_quoted_question_is_not_a_new_sentence() {
+        for t in ["«Vai?» disse lui.", "«Vieni!» gridò Anna.", "\"Vai?\" disse lui.", "—Vai? —disse lui.", "— Vai! — disse lui."] {
+            assert!(fixes(t).is_empty(), "{t}: {:?}", fixes(t));
+        }
+        assert!(fixes("Vado a Roma? sì.").contains(&pair("sì", "Sì")), "a bare question still ends the sentence");
     }
 
     #[test]
