@@ -1,11 +1,13 @@
 //! The one HTTP client: blocking HTTPS GET through ureq with rustls, timeouts, a size cap,
-//! progress and cancellation.
+//! progress and cancellation. Plain http only to a loopback host, and only when the caller opts
+//! in for a preview service run locally.
 
+use std::collections::HashMap;
 use std::io::Read;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError};
-use std::time::Duration;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// Cancels a download from another thread. Clones share the flag.
 #[derive(Clone, Debug, Default)]
@@ -47,6 +49,14 @@ impl Default for Timeouts {
     }
 }
 
+impl FetchError {
+    /// Whether the server couldn't be reached or didn't answer in time, as opposed to answering
+    /// with an HTTP status or too much data.
+    pub fn is_network(&self) -> bool {
+        matches!(self, FetchError::Failed(m) if !m.starts_with("HTTP "))
+    }
+}
+
 /// Why a request failed.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum FetchError {
@@ -64,13 +74,34 @@ pub enum FetchError {
     Failed(String),
 }
 
+/// How long a preview service that failed on the network is skipped.
+pub const SERVICE_BACKOFF: Duration = Duration::from_secs(60);
+
+/// `scheme://host:port` of `url`, lowercased.
+fn service_origin(url: &str) -> String {
+    let (scheme, rest) = url.split_once("://").unwrap_or(("", url));
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    format!("{}://{}", scheme.to_ascii_lowercase(), authority.to_ascii_lowercase())
+}
+
+fn now_millis() -> u64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64)
+}
+
 /// The User-Agent every request sends: the crate and its version, nothing about the user.
 pub const USER_AGENT: &str = concat!("craft-font-store/", env!("CARGO_PKG_VERSION"));
 
-/// The HTTP client. HTTPS only; no cookies, no credentials.
+/// The HTTP client. HTTPS only, except [`Client::get_from_service`], which also speaks plain
+/// http to `127.0.0.1` or `::1`; no cookies, no credentials.
 #[derive(Clone)]
 pub struct Client {
     agent: ureq::Agent,
+    /// For `http://` to a loopback host. It follows no redirects, so it never leaves the machine.
+    loopback: ureq::Agent,
+    /// The origins of preview services that failed on the network, each with when it may be
+    /// tried again. Clones share it.
+    service_down: Arc<Mutex<HashMap<String, u64>>>,
+    https_only: bool,
     /// URL prefixes the tests serve from a local server.
     #[cfg(test)]
     pub(crate) rewrite: Vec<(String, String)>,
@@ -95,19 +126,40 @@ impl Client {
     }
 
     fn build(t: Timeouts, https_only: bool) -> Self {
-        let config = ureq::Agent::config_builder()
-            .https_only(https_only)
-            .user_agent(USER_AGENT)
-            .timeout_connect(Some(t.connect))
-            .timeout_recv_response(Some(t.response))
-            .timeout_global(Some(t.overall))
-            .max_redirects(3)
-            .http_status_as_error(true)
-            .build();
+        let agent = |https_only: bool, redirects: u32| {
+            let builder = ureq::Agent::config_builder();
+            // A loopback request never goes through an environment proxy.
+            let builder = if https_only || redirects > 0 { builder } else { builder.proxy(None) };
+            let config = builder
+                .https_only(https_only)
+                .user_agent(USER_AGENT)
+                .timeout_connect(Some(t.connect))
+                .timeout_recv_response(Some(t.response))
+                .timeout_global(Some(t.overall))
+                .max_redirects(redirects)
+                .http_status_as_error(true)
+                .build();
+            ureq::Agent::new_with_config(config)
+        };
         Self {
-            agent: ureq::Agent::new_with_config(config),
+            agent: agent(https_only, 3),
+            loopback: agent(false, 0),
+            service_down: Arc::new(Mutex::new(HashMap::new())),
+            https_only,
             #[cfg(test)]
             rewrite: Vec::new(),
+        }
+    }
+
+    /// A client with other timeouts that shares this one's preview-service down state, so a
+    /// pool with short timeouts (previews) and the installs agree on which service is down.
+    pub fn with_timeouts(&self, timeouts: Timeouts) -> Client {
+        let fresh = Self::build(timeouts, self.https_only);
+        Client {
+            service_down: Arc::clone(&self.service_down),
+            #[cfg(test)]
+            rewrite: self.rewrite.clone(),
+            ..fresh
         }
     }
 
@@ -130,12 +182,52 @@ impl Client {
     /// GETs `url`, at most `max` bytes, calling `on_bytes` with the bytes read so far. The
     /// request runs on a helper thread, so `cancel` stops it even while the server sends nothing.
     pub fn get(&self, url: &str, max: u64, cancel: &Cancel, on_bytes: &mut dyn FnMut(u64)) -> Result<Vec<u8>, FetchError> {
+        self.request(url, max, cancel, on_bytes, false)
+    }
+
+    /// [`Client::get`] for a URL built from the validated preview-service setting: plain `http://`
+    /// to a loopback host is allowed, without following redirects. Never call it with a URL from
+    /// an index or a user source.
+    ///
+    /// After a network failure (no connection, a timeout; not an HTTP status) that service (its
+    /// scheme, host and port) counts as down for [`SERVICE_BACKOFF`]: calls in that time fail at once, so a service that is off
+    /// doesn't make every request wait out the timeouts. Clones of the client share this.
+    pub fn get_from_service(&self, url: &str, max: u64, cancel: &Cancel, on_bytes: &mut dyn FnMut(u64)) -> Result<Vec<u8>, FetchError> {
+        if self.service_is_down(url) {
+            return Err(FetchError::Failed("the preview service is down".into()));
+        }
+        let got = self.request(url, max, cancel, on_bytes, true);
+        if got.as_ref().is_err_and(FetchError::is_network) {
+            self.mark_service_down(url);
+        }
+        got
+    }
+
+    /// Whether a network failure of the preview service at `service` (its URL or any URL on it)
+    /// is recent enough to skip it. Another service is not down.
+    pub fn service_is_down(&self, service: &str) -> bool {
+        let down = self.service_down.lock().unwrap_or_else(|e| e.into_inner());
+        down.get(&service_origin(service)).is_some_and(|until| now_millis() < *until)
+    }
+
+    /// Marks the preview service at `service` as down for [`SERVICE_BACKOFF`].
+    pub fn mark_service_down(&self, service: &str) {
+        let until = now_millis() + SERVICE_BACKOFF.as_millis() as u64;
+        let mut down = self.service_down.lock().unwrap_or_else(|e| e.into_inner());
+        let now = now_millis();
+        down.retain(|_, until| now < *until);
+        down.insert(service_origin(service), until);
+    }
+
+    fn request(&self, url: &str, max: u64, cancel: &Cancel, on_bytes: &mut dyn FnMut(u64), allow_loopback_http: bool) -> Result<Vec<u8>, FetchError> {
         if cancel.is_cancelled() {
             return Err(FetchError::Cancelled);
         }
         let stop = Arc::new(AtomicBool::new(false));
         let (tx, rx) = mpsc::channel();
-        let (agent, url, flag) = (self.agent.clone(), self.url(url), Arc::clone(&stop));
+        let url = self.url(url);
+        let agent = if allow_loopback_http && is_loopback_http(&url) { self.loopback.clone() } else { self.agent.clone() };
+        let flag = Arc::clone(&stop);
         std::thread::Builder::new()
             .name("font-store-fetch".into())
             .spawn(move || {
@@ -160,6 +252,20 @@ impl Client {
             }
         }
     }
+}
+
+/// Whether `url` is `http://` to `127.0.0.1` or `[::1]`.
+pub(crate) fn is_loopback_http(url: &str) -> bool {
+    let Some(rest) = url.get(..7).filter(|s| s.eq_ignore_ascii_case("http://")).and_then(|_| url.get(7..)) else { return false };
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    if authority.contains('@') {
+        return false;
+    }
+    let host = match authority.strip_prefix('[') {
+        Some(v6) => v6.split(']').next().unwrap_or_default(),
+        None => authority.split(':').next().unwrap_or_default(),
+    };
+    matches!(host.to_ascii_lowercase().as_str(), "127.0.0.1" | "::1")
 }
 
 enum Msg {
