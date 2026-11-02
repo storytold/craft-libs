@@ -1773,11 +1773,13 @@ mod tests {
         let (pt_br, pt_pt) = (pack("pt-br"), pack("pt-pt"));
         packs::reload();
         assert_eq!(chosen_dictionary(tag("pt-PT"), &system), Some(pt_pt.clone()));
+        assert_eq!(chosen_dictionary(tag("pt-AO"), &system), Some(pt_pt.clone()), "Angola writes like Portugal");
         assert_eq!(chosen_dictionary(tag("pt-BR"), &system), Some(pt_br.clone()));
         std::fs::remove_dir_all(pt_br.parent().unwrap()).unwrap();
         let sys_pt_br = sys("pt_BR");
         packs::reload();
         assert_eq!(chosen_dictionary(tag("pt-PT"), &system), Some(pt_pt.clone()));
+        assert_eq!(chosen_dictionary(tag("pt-MZ"), &system), Some(pt_pt.clone()), "never the system's Brazilian one");
         assert_eq!(chosen_dictionary(tag("pt-BR"), &system), Some(sys_pt_br), "another region's pack after the system's right region");
         std::fs::remove_dir_all(&packs_dir).unwrap();
 
