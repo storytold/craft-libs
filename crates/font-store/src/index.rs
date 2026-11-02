@@ -76,6 +76,29 @@ pub struct Script {
     pub name: String,
 }
 
+/// A script's default preview text.
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub struct Sample {
+    /// The text: a sentence for `udhr`, the poem for `iroha`, characters for `exemplar`.
+    pub text: String,
+    /// Where it comes from: `udhr`, `iroha` or `exemplar`.
+    #[serde(default)]
+    pub method: String,
+    /// The gflanguages ID of the text's language.
+    #[serde(default)]
+    pub language: String,
+}
+
+/// A named instance of a variable font.
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub struct Instance {
+    /// The instance's subfamily name (`Bold`).
+    pub name: String,
+    /// The user coordinate of each axis, by axis tag.
+    #[serde(default)]
+    pub coordinates: BTreeMap<String, f32>,
+}
+
 /// A variation axis of a font file.
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 pub struct Axis {
@@ -110,6 +133,19 @@ pub struct FontFile {
     /// PostScript names: the face's and, for a variable font, each named instance's.
     #[serde(default)]
     pub postscript: Vec<String>,
+    /// Format 1.2: a variable font's named instances, in font order; empty for a static font.
+    #[serde(default)]
+    pub instances: Vec<Instance>,
+    /// Format 1.2: the instance a font list shows, as a position in `instances`; none when the
+    /// list shows the default instance.
+    #[serde(default)]
+    pub list_instance: Option<usize>,
+    /// Format 1.2: the file's own preview script, when not the family's `sample_script`.
+    #[serde(default)]
+    pub sample_script: Option<String>,
+    /// Format 1.2: the file's own preview text, when no script sample fits it.
+    #[serde(default)]
+    pub sample_text: Option<String>,
     /// The repository holding the file, when not the family's.
     #[serde(default)]
     pub repo: Option<String>,
@@ -216,6 +252,25 @@ pub struct Family {
     /// The licence file, with its size and sha256.
     #[serde(default)]
     pub license_file: Option<LicenseFile>,
+    /// Format 1.2: design traits, sorted, from the index's tag vocabulary.
+    #[serde(default)]
+    pub tags: Vec<String>,
+    /// Format 1.2: the script whose sample previews the family.
+    #[serde(default)]
+    pub sample_script: Option<String>,
+    /// Format 1.2: the copyright notice.
+    #[serde(default)]
+    pub copyright: Option<String>,
+    /// Format 1.2: the Reserved Font Names the OFL notice declares. A client that modifies a font
+    /// must rename it when this isn't empty.
+    #[serde(default)]
+    pub reserved_names: Vec<String>,
+    /// Format 1.2: an Apache family's `NOTICE` file, located like the licence file.
+    #[serde(default)]
+    pub notice_file: Option<LicenseFile>,
+    /// Format 1.2: where the family is developed.
+    #[serde(default)]
+    pub upstream: Option<String>,
     /// The repository holding the files, when not the source's.
     #[serde(default)]
     pub repo: Option<String>,
@@ -399,7 +454,7 @@ pub struct SourceProblem {
     pub error: String,
 }
 
-pub(crate) type Part = (FontSource, Vec<Language>, Vec<Script>, Vec<Family>);
+pub(crate) type Part = (FontSource, Vec<Language>, Vec<Script>, BTreeMap<String, Sample>, Vec<Family>);
 
 /// The checked indexes of one or more sources. Families are sorted by name; families of the same
 /// name are in source order (built-in sources in `sources.json` order, then the user's), and
@@ -410,6 +465,7 @@ pub struct Index {
     problems: Vec<SourceProblem>,
     languages: Vec<Language>,
     scripts: Vec<Script>,
+    samples: BTreeMap<String, Sample>,
     families: Vec<Family>,
     by_name: HashMap<String, Vec<usize>>,
     by_postscript: HashMap<String, Vec<(usize, usize)>>,
@@ -457,7 +513,7 @@ impl Index {
             for source in part.sources {
                 let (mine, rest): (Vec<Family>, Vec<Family>) = families.into_iter().partition(|f| f.source == source.id);
                 families = rest;
-                list.push((source, part.languages.clone(), part.scripts.clone(), mine));
+                list.push((source, part.languages.clone(), part.scripts.clone(), part.samples.clone(), mine));
             }
         }
         Self::assemble(list, problems)
@@ -481,8 +537,9 @@ impl Index {
         let mut sources: Vec<FontSource> = Vec::new();
         let mut languages: BTreeMap<String, Language> = BTreeMap::new();
         let mut scripts: BTreeMap<String, Script> = BTreeMap::new();
+        let mut samples: BTreeMap<String, Sample> = BTreeMap::new();
         let mut families: Vec<(Family, Vec<String>)> = Vec::new();
-        for (source, langs, scrs, fams) in parts {
+        for (source, langs, scrs, smps, fams) in parts {
             if sources.iter().any(|s| s.id == source.id) {
                 problems.push(SourceProblem {
                     source: source.user_url.clone().unwrap_or_else(|| source.id.clone()),
@@ -500,6 +557,9 @@ impl Index {
             }
             for s in scrs {
                 scripts.entry(s.id.clone()).or_insert(s);
+            }
+            for (script, sample) in smps {
+                samples.entry(script).or_insert(sample);
             }
             sources.push(source);
         }
@@ -531,6 +591,7 @@ impl Index {
             problems,
             languages: languages.into_values().collect(),
             scripts: scripts.into_values().collect(),
+            samples,
             families: merged,
             by_name,
             by_postscript,
@@ -570,6 +631,29 @@ impl Index {
     /// Every script a family uses, sorted by code.
     pub fn scripts(&self) -> &[Script] {
         &self.scripts
+    }
+
+    /// The default preview text of every script, by ISO 15924 code. When several sources have one
+    /// for a script, the first source's wins.
+    pub fn samples(&self) -> &BTreeMap<String, Sample> {
+        &self.samples
+    }
+
+    /// The default preview text of a script.
+    pub fn sample(&self, script: &str) -> Option<&Sample> {
+        self.samples.get(script)
+    }
+
+    /// The preview text of a file of `family`: the file's own `sample_text`, else the sample of
+    /// its `sample_script`. A file with its own `sample_script` has none when that script has no
+    /// sample; only a file without one uses the family's.
+    pub fn sample_text<'a>(&'a self, family: &'a Family, file: &'a FontFile) -> Option<&'a str> {
+        if let Some(text) = &file.sample_text {
+            return Some(text);
+        }
+        let sample = |script: &Option<String>| script.as_deref().and_then(|s| self.sample(s));
+        let script = if file.sample_script.is_some() { &file.sample_script } else { &family.sample_script };
+        sample(script).map(|s| s.text.as_str())
     }
 
     /// The family of this name, ignoring case, from the first source that has it. Only the whole

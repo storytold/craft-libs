@@ -460,3 +460,21 @@ fn screenshots() {
         click(h, "Amiri");
     });
 }
+
+#[test]
+fn fake_store_checks_the_preview_service_like_the_store() {
+    let store = FakeStore::new(std::env::temp_dir().join("craft-fm-fake-service"), HashMap::new());
+    for bad in [
+        "http://fonts.example.com",
+        "http://localhost:8080",
+        "ftp://fonts.example.com",
+        "https://user@fonts.example.com",
+        "https://fonts.example.com/?k=v",
+    ] {
+        assert!(store.set_preview_service(Some(bad)).is_err(), "{bad}");
+    }
+    store.set_preview_service(Some("http://127.0.0.1:8080/")).unwrap();
+    assert_eq!(store.preview_service().as_deref(), Some("http://127.0.0.1:8080"));
+    store.set_preview_service(None).unwrap();
+    assert_eq!(store.preview_service(), None);
+}

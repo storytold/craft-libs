@@ -1,0 +1,84 @@
+{
+ "about": "Shared test vectors for font-preview-service (server, B2) and craft-font-manager's preview client (C3). Both must produce exactly these strings.",
+ "rules": {
+  "codepoints": "The codepoints of the text, minus C0 controls (< U+0020), C1 controls and DEL (U+007F-009F) and surrogates; deduplicated and sorted. Written as lowercase hex without leading zeros; a run of two or more consecutive codepoints is written first-last; items joined by commas. The empty set is the empty string. At most 256 codepoints.",
+  "closure": "Server only: the codepoints above, plus the NFKD decomposition of each kept character, plus U+0020, U+200C, U+200D and U+25CC. Applied before subsetting; not part of the URL."
+ },
+ "vectors": [
+  {
+   "text": "Whereas recognition of the inherent dignity",
+   "codepoints": "20,57,61,63-69,6e-6f,72-74,79",
+   "closure": "20,57,61,63-69,6e-6f,72-74,79,200c-200d,25cc"
+  },
+  {
+   "text": "ABCDEFGHIJKLMNOPQRSTUVWXYZ abcdefghijklmnopqrstuvwxyz",
+   "codepoints": "20,41-5a,61-7a",
+   "closure": "20,41-5a,61-7a,200c-200d,25cc"
+  },
+  {
+   "text": "0123456789 & ? ! @ # % ( ) [ ] { } $ € £ ¥",
+   "codepoints": "20-21,23-26,28-29,30-39,3f-40,5b,5d,7b,7d,a3,a5,20ac",
+   "closure": "20-21,23-26,28-29,30-39,3f-40,5b,5d,7b,7d,a3,a5,200c-200d,20ac,25cc"
+  },
+  {
+   "text": "aab",
+   "codepoints": "61-62",
+   "closure": "20,61-62,200c-200d,25cc"
+  },
+  {
+   "text": "ab",
+   "codepoints": "61-62",
+   "closure": "20,61-62,200c-200d,25cc"
+  },
+  {
+   "text": "abc",
+   "codepoints": "61-63",
+   "closure": "20,61-63,200c-200d,25cc"
+  },
+  {
+   "text": "Line one\nLine two\t!",
+   "codepoints": "20-21,4c,65,69,6e-6f,74,77",
+   "closure": "20-21,4c,65,69,6e-6f,74,77,200c-200d,25cc"
+  },
+  {
+   "text": "โดยที่การไม่นำพาและการหมิ่นในคุณค่าของสิทธิมนุษยชน",
+   "codepoints": "e01-e02,e04,e07,e0a,e13-e14,e17-e19,e1e,e21-e23,e25,e29-e2b,e2d,e30,e32-e35,e38,e41-e44,e48",
+   "closure": "20,e01-e02,e04,e07,e0a,e13-e14,e17-e19,e1e,e21-e23,e25,e29-e2b,e2d,e30,e32-e35,e38,e41-e44,e48,e4d,200c-200d,25cc"
+  },
+  {
+   "text": "ສະບາຍດີ ນຳ",
+   "codepoints": "20,e8d,e94,e99-e9a,eaa,eb0,eb2-eb3,eb5",
+   "closure": "20,e8d,e94,e99-e9a,eaa,eb0,eb2-eb3,eb5,ecd,200c-200d,25cc"
+  },
+  {
+   "text": "चूंकि मानव परिवार के सभी सदस्यों",
+   "codepoints": "20,902,915,91a,926,928,92a,92d-930,935,938,93e-940,942,947,94b,94d",
+   "closure": "20,902,915,91a,926,928,92a,92d-930,935,938,93e-940,942,947,94b,94d,200c-200d,25cc"
+  },
+  {
+   "text": "لمّا كان الاعتراف بالكرامة",
+   "codepoints": "20,627-62a,631,639,641,643-646,651",
+   "closure": "20,627-62a,631,639,641,643-646,651,200c-200d,25cc"
+  },
+  {
+   "text": "人類社会のすべての構成員",
+   "codepoints": "3059,3066,306e,3079,4eba,4f1a,54e1,6210,69cb,793e,985e",
+   "closure": "20,200c-200d,25cc,3059,3066,306e,3078-3079,3099,4eba,4f1a,54e1,6210,69cb,793e,985e"
+  },
+  {
+   "text": "Œuvre ﬁne ²",
+   "codepoints": "20,65,6e,72,75-76,b2,152,fb01",
+   "closure": "20,32,65-66,69,6e,72,75-76,b2,152,200c-200d,25cc,fb01"
+  },
+  {
+   "text": "😀 👍🏽",
+   "codepoints": "20,1f3fd,1f44d,1f600",
+   "closure": "20,200c-200d,25cc,1f3fd,1f44d,1f600"
+  },
+  {
+   "text": "",
+   "codepoints": "",
+   "closure": "20,200c-200d,25cc"
+  }
+ ]
+}

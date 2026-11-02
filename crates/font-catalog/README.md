@@ -54,6 +54,8 @@ Each face (`FaceInfo`) has its family and style, legacy family and style, family
 - `family(name)` and `resolve(name, style)` accept any name of a family: its own name ignoring ASCII case, its names in other languages and its legacy names ignoring case and anything but letters and digits. `resolve` also accepts a legacy family with its legacy style (`Roboto Light` / `Regular`), a full name, and a PostScript name.
 - Within a family, `resolve` matches the style by name (any of its names). Otherwise it picks the nearest weight, with italic differing counting as 1000, then the nearest width. It returns `Match::Exact` or `Match::NearestStyle`, so the app decides about substitutes.
 - `by_postscript_name(name)`.
+- `faces()` lists each face once: of faces with the same family, style and PostScript name it keeps the first (added faces, then by path), except that the font store's face wins over a scanned copy elsewhere, such as one in the OS font folder. `scanned_faces()` lists every face the scan found, the same font in two places included, for telling copies apart (craft-font-store's conflict check).
+- `read_faces(path, source)` reads one file's faces, named instances included, as a scan does, without a catalog.
 
 ## Loading and threads
 
