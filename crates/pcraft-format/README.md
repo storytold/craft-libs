@@ -63,7 +63,8 @@ let manifest: Manifest<MyDocument> = craft_pcraft_format::read_manifest(&manifes
   error type.
 - `Error` is `Corrupt`, `Unsupported`, `TooNew`, `LimitExceeded` or `Json`. A manifest whose
   `format_version` is newer than `target` gives `TooNew`, and one with no step to the next
-  version gives `Unsupported`. `TooNew` holds `found`, `supported` and the manifest's
+  version gives `Unsupported`. A missing or invalid `format_version` gives `Corrupt`, and any
+  other missing or mistyped member gives `Json`. `TooNew` holds `found`, `supported` and the manifest's
   `generator` (`None` when it is missing or not a string), and is matched with `..`.
 
 ## Limits
@@ -102,7 +103,8 @@ limits.max_manifest_bytes = 16 << 20;
 - `tests/read.rs`: `read_manifest` and `read_manifest_with` read the envelope and the document,
   refuse a newer version with the writer's `generator`, refuse a manifest past the limits, run
   the steps first, and report missing or mistyped members as a struct with a derived
-  `Deserialize` reports them, in the same order.
+  `Deserialize` reports them, in the same order; a missing or invalid `format_version` is
+  `Corrupt`, and so is a preview that names another entry, such as `../x` or an absolute path.
 - Doc tests: `Manifest` and `TileRef` are not built by struct literal, `Manifest` has no
   `Deserialize`, and `Error::TooNew` is matched with `..`.
 - `tests/limits.rs`: the default limits, nesting at and past `max_depth`, items at and past
