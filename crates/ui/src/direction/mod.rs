@@ -425,5 +425,12 @@ impl Unmirrored {
     ];
 }
 
+pub mod dialog;
+mod scope;
+pub mod window;
+
+pub use dialog::{CLOSE_BOX_SIZE, close_box_rect, dialog_content, dialog_row, title_drag_band, trailing_min};
+pub use window::{clamp_window_min_size, float_window_x, sizing_pass_ltr, window_body};
+
 #[cfg(test)]
 mod tests;

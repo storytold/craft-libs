@@ -128,6 +128,7 @@
 //! }
 //! ```
 
+mod caption;
 mod list;
 mod menu;
 mod place;
@@ -136,9 +137,10 @@ pub mod title_bar;
 #[cfg(feature = "egui")]
 mod viewports;
 
+pub use caption::{Metrics, layout_slots, reserved, slots};
 pub use list::{Closed, WindowId, WindowList};
 pub use menu::{Document, MenuEntry, WindowMenu};
-pub use place::{CASCADE_STEP, Rect, cascade};
+pub use place::{CASCADE_STEP, Rect, cascade, cascade_in, cascade_rtl};
 #[cfg(feature = "egui")]
 pub use viewports::{Viewports, WindowEvent, child_viewport_id};
 

@@ -54,6 +54,22 @@ pub fn cascade(previous: Rect, size: [f32; 2], bounds: Rect, step: f32) -> Rect 
     Rect::new(axis(previous.x, size[0], bounds.x, bounds.right()), axis(previous.y, size[1], bounds.y, bounds.bottom()), size[0], size[1])
 }
 
+/// [`cascade`] in a right-to-left interface: the x step measures from the bounds' reading-end
+/// (right) edge and runs toward reading start, wrapped back inside `bounds` on both sides — the
+/// same rule as the floating-panel `float_window_x`. The y step is unchanged.
+pub fn cascade_rtl(previous: Rect, size: [f32; 2], bounds: Rect, step: f32) -> Rect {
+    // Reflect the x axis about the bounds, cascade left-to-right there, reflect back.
+    let flip = |x: f32, w: f32| bounds.x + bounds.right() - x - w;
+    let mirrored = Rect::new(flip(previous.x, previous.width), previous.y, previous.width, previous.height);
+    let placed = cascade(mirrored, size, bounds, step);
+    Rect::new(flip(placed.x, placed.width), placed.y, placed.width, placed.height)
+}
+
+/// [`cascade`], or [`cascade_rtl`] when `rtl`: where a new window goes in the interface direction.
+pub fn cascade_in(previous: Rect, size: [f32; 2], bounds: Rect, step: f32, rtl: bool) -> Rect {
+    if rtl { cascade_rtl(previous, size, bounds, step) } else { cascade(previous, size, bounds, step) }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -83,5 +99,24 @@ mod tests {
         assert_eq!(cascade(prev, [400.0, 300.0], SCREEN, 28.0), Rect::new(0.0, 0.0, 400.0, 300.0));
         let prev = Rect::new(10.0, 10.0, 400.0, 300.0);
         assert_eq!(cascade(prev, [1200.0, 900.0], SCREEN, 28.0), Rect::new(0.0, 0.0, 1200.0, 900.0));
+    }
+
+    #[test]
+    fn cascade_rtl_steps_left_from_the_right_edge() {
+        // Mirrored x of 500 is 1000 - 500 - 400 = 100; LTR cascade gives 128; back: 1000 - 128 - 400 = 472.
+        let prev = Rect::new(500.0, 50.0, 400.0, 300.0);
+        assert_eq!(cascade_rtl(prev, [400.0, 300.0], SCREEN, 28.0), Rect::new(472.0, 78.0, 400.0, 300.0));
+        assert_eq!(cascade_in(prev, [400.0, 300.0], SCREEN, 28.0, true), Rect::new(472.0, 78.0, 400.0, 300.0));
+        assert_eq!(cascade_in(prev, [400.0, 300.0], SCREEN, 28.0, false), cascade(prev, [400.0, 300.0], SCREEN, 28.0));
+    }
+
+    #[test]
+    fn cascade_rtl_wraps_at_the_reading_start_edge() {
+        // A window at the physical left (the RTL reading start) wraps to the right edge.
+        let prev = Rect::new(0.0, 480.0, 400.0, 300.0);
+        assert_eq!(cascade_rtl(prev, [400.0, 300.0], SCREEN, 28.0), Rect::new(600.0, 0.0, 400.0, 300.0));
+        // A window too wide for the bounds goes to the reading-end corner (physical right).
+        let prev = Rect::new(10.0, 10.0, 400.0, 300.0);
+        assert_eq!(cascade_rtl(prev, [1200.0, 900.0], SCREEN, 28.0), Rect::new(1000.0 - 1200.0, 0.0, 1200.0, 900.0));
     }
 }
