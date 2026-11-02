@@ -450,7 +450,7 @@ pub mod linux {
         if let Some(p) = packages::find(app, &snapshot.packages, &order) {
             let location = if p.manager == InstallSource::Flatpak { p.name.clone() } else { binary_on_path(app.id) };
             let externally_managed = p.manager == InstallSource::Flatpak
-                && p.origin.as_deref().is_some_and(|origin| {
+                && p.origin.as_deref().is_none_or(|origin| {
                     if packages::is_flatpark_origin(origin) {
                         return true;
                     }
@@ -459,8 +459,8 @@ pub mod linux {
                         Some("system") | None => "--system".to_string(),
                         Some(name) => format!("--installation={name}"),
                     };
-                    crate::process::capture_flatpak(&["remotes", &scope, "--columns=name,url"], Duration::from_secs(10))
-                        .is_some_and(|remotes| packages::is_artcraft_remote(origin, &remotes))
+                    crate::process::capture_flatpak(&["remotes", &scope, "--show-disabled", "--columns=name,url"], Duration::from_secs(10))
+                        .is_none_or(|remotes| packages::remote_manages_flatpak(origin, &remotes))
                 });
             return Some(Installed {
                 version: packages::version_of(p),
