@@ -63,6 +63,40 @@ EffectCraft layers have no `opacity`, because opacity is an animated property th
 A `.pcraft` bundle saved as a folder, ZIP64 archives and encrypted entries are not read. The
 `.ecprojx` XML copies are not read.
 
+## PhotoCraft layer pixels
+
+With the feature `pcraft-pixels`, which adds `ruzstd` and `blake3` (both pure Rust),
+`pcraft_layer_rgba(bytes, layer, &Limits)` decodes one layer of a `.pcraft` bundle over the
+canvas:
+
+```toml
+craft-doc = { git = "https://github.com/storytold/craft-libs", rev = "<commit>", features = ["pcraft-pixels"] }
+```
+
+- `layer` is a path of indexes through `Outline::layers` and each group's `children`, bottom
+  first: `&[1, 0]` is the bottom layer inside the second layer from the bottom.
+- A raster layer gives its surface; a text, shape or smart object layer gives the rendered copy
+  PhotoCraft saves with it. A group, an adjustment or fill layer, a layer saved without a rendered
+  copy, or a path that names no layer gives `Ok(None)`.
+- `LayerPixels::rgba` holds `width` × `height` RGBA pixels, row by row, in the layer's sample
+  type: `Samples::U8`, `U16` or `F32`. Grayscale repeats the gray value in red, green and blue,
+  and a surface without alpha is opaque. Pixels without a tile hold the surface's default pixel.
+  Tiles outside the canvas, at negative columns and rows among them, are not read.
+- `LayerPixels::mask` holds the layer mask, one sample per pixel, with its `enabled`, `density`
+  and `feather` as saved. Density and feather are not applied.
+- RGB and grayscale documents are read at 8, 16 and 32 bits. Other color modes give
+  `Error::Unsupported`.
+- The decoded layer and the decoded mask each count as one entry against `max_entry`, and with
+  every tile read and decompressed against `max_total`, checked before they are allocated. A tile
+  is decoded only up to its size, 256 × 256 pixels, and its samples must match the BLAKE3 hash
+  that names them. A tile's zstd frame larger than the tile plus an eighth and 4 KiB, or one that
+  declares a window larger than 8 MiB, is refused.
+
+`tests/pixels.rs` builds bundles with tiles compressed by `ruzstd` and runs with
+`cargo test -p craft-doc --all-features`: 8, 16 and 32-bit tiles, the default pixel, negative
+tile coordinates, a mask, layers in groups and layers without pixels, a CMYK document, a zstd
+bomb, and the limits.
+
 ## Limits
 
 `Limits` (fields `max_json`, `max_entry`, `max_total`, `max_depth`) bounds each call:
