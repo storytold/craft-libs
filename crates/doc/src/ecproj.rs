@@ -20,23 +20,64 @@ use crate::{Budget, Error, Kind, Layer, Outline, Page, Rendition, Timing, check_
 /// EffectCraft's time unit.
 const TICKS_PER_SECOND: f64 = 254_016_000_000.0;
 
-/// The first member name of the JSON object `text` starts with.
-fn first_key(text: &[u8]) -> Option<&[u8]> {
-    let s = text.trim_ascii_start().strip_prefix(b"{")?.trim_ascii_start().strip_prefix(b"\"")?;
-    s.get(..s.iter().position(|&b| b == b'"')?)
-}
-
-fn contains(hay: &[u8], needle: &[u8]) -> bool {
-    hay.windows(needle.len()).any(|w| w == needle)
-}
-
-pub(crate) fn sniff(head: &[u8]) -> bool {
-    let has = |k: &[u8]| contains(head, k);
-    match first_key(head) {
-        Some(b"savedBy") => has(b"\"schema\""),
-        Some(b"schema") => has(b"\"items\"") || has(b"\"savedBy\""),
-        _ => false,
+/// Calls `stop` with each member name of the JSON object `text` starts with, in order, as far as
+/// `text` goes, until it returns `true`. Members of nested objects are skipped. A name is given as
+/// written, escapes included.
+fn top_level_keys<'a>(text: &'a [u8], mut stop: impl FnMut(&'a [u8]) -> bool) {
+    let Some(body) = text.trim_ascii_start().strip_prefix(b"{") else { return };
+    let (mut depth, mut want_key, mut i) = (0u32, true, 0);
+    while let Some(&b) = body.get(i) {
+        match b {
+            b'"' => {
+                let start = i + 1;
+                let mut end = start;
+                loop {
+                    match body.get(end) {
+                        None => return,
+                        Some(b'\\') => end += 2,
+                        Some(b'"') => break,
+                        Some(_) => end += 1,
+                    }
+                }
+                if depth == 0
+                    && want_key
+                    && let Some(key) = body.get(start..end)
+                    && stop(key)
+                {
+                    return;
+                }
+                want_key = false;
+                i = end;
+            }
+            b'{' | b'[' => depth += 1,
+            b'}' | b']' if depth == 0 => return,
+            b'}' | b']' => depth -= 1,
+            b',' if depth == 0 => want_key = true,
+            _ => {}
+        }
+        i += 1;
     }
+}
+
+/// A project starts with `savedBy` followed by `schema`, or, saved before `savedBy` existed, with
+/// `schema` followed by `items` or `savedBy`, all top-level members.
+pub(crate) fn sniff(head: &[u8]) -> bool {
+    let (mut first, mut found) = (None::<&[u8]>, false);
+    top_level_keys(head, |key| match first {
+        None => {
+            first = Some(key);
+            !matches!(key, b"savedBy" | b"schema")
+        }
+        Some(b"savedBy") => {
+            found = key == b"schema";
+            found
+        }
+        Some(_) => {
+            found = key == b"items" || key == b"savedBy";
+            found
+        }
+    });
+    found
 }
 
 fn json<'a>(bytes: &'a [u8], budget: &Budget) -> Result<&'a [u8], Error> {

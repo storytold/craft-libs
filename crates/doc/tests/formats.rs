@@ -48,6 +48,9 @@ fn sniff_refuses_other_files() {
         ("another format", br#"{"format":"vectorcraftx","version":4}"#),
         ("a JSON array", br#"["vectorcraft"]"#),
         ("savedBy without schema", br#"{"savedBy":"1.0","items":{}}"#),
+        ("savedBy with schema only in a nested object", br#"{"savedBy":"1.0","metadata":{"schema":1}}"#),
+        ("savedBy with schema only in a value", br#"{"savedBy":"1.0","note":"\"schema\""}"#),
+        ("schema with items only in a nested object", br#"{"schema":1,"meta":{"items":[]}}"#),
         ("gzip of other JSON", &gzip(br#"{"format":"svg"}"#)),
         ("PK alone", b"PK\x03\x04"),
     ] {
