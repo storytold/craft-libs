@@ -45,6 +45,11 @@ const SAMPLES: [&str; 10] = [
 #[test]
 fn nothing_is_embedded() {
     assert!(crate::data::EN_US_DIC.is_empty());
+    assert!(crate::data::EN_US_SPELLING.is_empty() && crate::data::EN_GB_SPELLING.is_empty() && crate::data::EN_CA_SPELLING.is_empty());
+    assert!(crate::scowl::notice().is_none());
+    for l in [ProofLang::En, ProofLang::EnGb, ProofLang::EnCa] {
+        assert!(crate::scowl::dict(l).is_none() && crate::scowl::load_error(l).is_none());
+    }
     assert!(dict::Dictionary::en_us().is_empty());
     for p in [patterns::Patterns::en_us(), patterns::Patterns::pl(), patterns::Patterns::pt(), patterns::Patterns::it(), patterns::Patterns::de()] {
         assert!(p.is_empty());

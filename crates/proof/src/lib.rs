@@ -1,8 +1,9 @@
 //! Proofing for the Craft Apps (moved from WordCraft's `wordcraft-proof`), per language. A run's language (its BCP 47 tag) picks the tools through
 //! [`ProofLang`]; the `*_in` functions take it, the older English-only ones remain.
 //!
-//! - **English** ([`ProofLang::En`]; also text with no language): spelling against the
-//!   public-domain Moby word list (~160k words, the same list that drives hyphenation) plus our
+//! - **English** ([`ProofLang::En`]; also text with no language): spelling against the SCOWL
+//!   2026 Hunspell dictionary of the run's English ([`scowl`]; else the public-domain Moby word
+//!   list, ~160k words, the same list that drives hyphenation) plus our
 //!   supplement of modern words it lacks (craft-i18n's `language-data/en-us/en-extra.txt`: `desktop`, `email`,
 //!   `download`…), with inflections (`-s`, `-es`, `-ed`, `-ing`, `-ly`, `'s`…), a user dictionary and ignore lists;
 //!   suggestions by edit distance. Grammar checks that are cheap and reliable: repeated words,
@@ -48,11 +49,12 @@
 //!
 //! [`check_text`] checks a paragraph whose runs are in different languages.
 //!
-//! **Language data** (the Moby word list, the pattern files, our word supplements) is embedded at
-//! build time from craft-i18n's `language-data/` (`CRAFT_I18N_DIR`, see `build.rs`). English
-//! spelling never goes unchecked: without the embedded word list it uses an English Hunspell
-//! dictionary installed on the system, and without one the whole Moby word list built into the
-//! crate (see [`english_source`]). Hyphenation that needs the data is off without it; grammar and the
+//! **Language data** (the SCOWL English dictionaries, the Moby word list, the pattern files, our
+//! word supplements) is embedded at build time from craft-i18n's `language-data/`
+//! (`CRAFT_I18N_DIR`, see `build.rs`). English spelling never goes unchecked: a dictionaries-folder
+//! English first, then the embedded SCOWL dictionary, then an English Hunspell dictionary
+//! installed on the system, then the whole Moby word list built into the crate (see
+//! [`english_source`]). Hyphenation that needs the data is off without it; grammar and the
 //! rule-based hyphenation (Bulgarian, Turkish, Russian) are code and still work.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
@@ -78,6 +80,7 @@ pub mod patterns;
 pub mod pl;
 pub mod pt;
 pub mod ru;
+pub mod scowl;
 mod slot;
 mod spelling;
 pub mod tr;
@@ -315,7 +318,7 @@ pub fn installed_dictionaries() -> Vec<(ProofLang, Option<std::path::PathBuf>)> 
 
 /// Why the dictionary found for `lang` failed to load (unsupported encoding, too large, a parse
 /// error), if it was read and failed. Doesn't read anything itself: a dictionary nobody has
-/// checked yet reports `None` (#2830). For an English, the embedded word list or (without it) the
+/// checked yet reports `None` (#2830). For an English, its embedded SCOWL dictionary or the
 /// English Hunspell dictionary that failed; English then uses the next source ([`english_source`]).
 pub fn dictionary_load_error(lang: ProofLang) -> Option<String> {
     if matches!(lang, ProofLang::En | ProofLang::EnGb | ProofLang::EnCa) {
@@ -324,12 +327,11 @@ pub fn dictionary_load_error(lang: ProofLang) -> Option<String> {
     hunspell::load_error(language(lang)?.slot.name()).map(|(_, reason)| reason)
 }
 
-/// Where the spelling of an English `lang` comes from now (`None` for other languages): the word
-/// list embedded at build time, else an English Hunspell dictionary from the dictionaries folder
-/// or the system (the run's English first), else the Moby word list built into the crate.
-/// Each English uses only its own Hunspell dictionary (`en_US`, `en_GB`, `en_CA`): without it,
-/// the built-in list, which has both spellings. Reads the Hunspell dictionary once when there is no
-/// embedded word list (it is cached afterwards).
+/// Where the spelling of an English `lang` comes from now (`None` for other languages), in this
+/// order: a Hunspell dictionary of its own (`en_US`, `en_GB`, `en_CA`) in the dictionaries
+/// folder, the SCOWL dictionary embedded at build time, one of its own on the system, else the
+/// Moby word list built into the crate. Another English's dictionary is never used. Reads the
+/// Hunspell dictionary once (it is cached afterwards).
 pub fn english_source(lang: ProofLang) -> Option<EnglishSource> {
     lang.is_english().then(|| english::source(lang))
 }
@@ -467,7 +469,7 @@ pub(crate) fn is_common_word(w: &str) -> bool {
 }
 
 /// Our supplement of common words the Moby list lacks (`desktop`, `email`, `download`…): one
-/// lowercase base form per line, `#` comments. Inflections come from [`known_core`].
+/// lowercase base form per line, `#` comments. Inflections come from [`known_with`].
 use data::EXTRA_EN;
 
 /// The supplement's words: the Language data's copy, else the crate's own ([`english::EXTRA`]).
@@ -477,19 +479,16 @@ fn extra_words() -> &'static HashSet<&'static str> {
     E.get_or_init(|| extra.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#')).collect())
 }
 
-/// A base form in the dictionary or the supplement.
-fn base_known(d: &dict::Dictionary, w: &str) -> bool {
-    d.get(w).is_some() || extra_words().contains(w)
-}
-
-fn known_core(w: &str) -> bool {
-    let d = dict::Dictionary::en_us();
-    known_with(w, &|s| base_known(d, s))
-}
-
-/// [`known_core`] against the word list built into the crate (no embedded word list).
+/// Is `w` (lower case) a word of the built-in Moby list or the supplement, with the inflection
+/// rules ([`known_with`])?
 pub(crate) fn known_in_word_list(w: &str) -> bool {
     known_with(w, &|s| english::word_list_contains(s) || extra_words().contains(s))
+}
+
+/// Is `w` (lower case) a word of the supplement alone, with the inflection rules (the SCOWL
+/// dictionaries take it as an addition)?
+pub(crate) fn known_in_supplement(w: &str) -> bool {
+    known_with(w, &|s| extra_words().contains(s))
 }
 
 /// Is `w` (lower case) a word, by `base_known` (a base form in the word list), the common words,
@@ -615,66 +614,16 @@ pub(crate) fn accepted_by_options(word: &str, opts: &Options) -> bool {
         || in_user_dictionary(&w.to_lowercase())
 }
 
-/// Is the English word list embedded? Without it English is checked against an installed
-/// Hunspell dictionary or the word list built into the crate ([`english`]).
-pub(crate) fn english_data() -> bool {
-    !dict::Dictionary::en_us().is_empty()
-}
-
-/// [`is_correct`] with the File › Options › Proofing choices.
+/// [`is_correct`] with the File › Options › Proofing choices: English with no dialect, so a word
+/// any English spells so is right (`color` and `colour`; American English's dictionary when it
+/// isn't SCOWL: [`english_source`]), without the dialect policy.
 pub fn is_correct_with(word: &str, opts: &Options) -> bool {
-    if !english_data() {
-        return english::is_correct(word, ProofLang::En, opts);
-    }
-    let w = word.trim_matches(|c: char| !c.is_alphanumeric() && c != '\'');
-    let w = w.trim_matches('\'');
-    if accepted_by_options(w, opts) {
-        return true;
-    }
-    if !w.is_ascii() && !w.chars().any(|c| c.is_ascii_alphabetic()) {
-        return true; // other scripts: no dictionary
-    }
-    let lower = w.to_lowercase().replace('’', "'");
-    if known_core(&lower) {
-        return true;
-    }
-    // Hyphenated compounds: each part.
-    if lower.contains('-') {
-        return lower.split('-').all(|p| p.is_empty() || known_core(p));
-    }
-    false
+    english::is_correct(word, ProofLang::En, opts, false)
 }
 
 /// Spelling suggestions for a misspelled word (best first, at most `max`).
 pub fn suggest(word: &str, max: usize) -> Vec<String> {
-    if !english_data() {
-        return english::suggest(word, max, ProofLang::En);
-    }
-    suggest_from(word, max, dict::Dictionary::en_us().iter().map(|(w, _)| w))
-}
-
-/// [`suggest`] from `words` (lower case) and our supplement.
-pub(crate) fn suggest_from<'a>(word: &str, max: usize, words: impl Iterator<Item = &'a str>) -> Vec<String> {
-    let lower = word.to_lowercase();
-    let n = lower.chars().count();
-    if n == 0 || n > 40 {
-        return Vec::new();
-    }
-    let mut scored: Vec<(usize, i64, String)> = Vec::new();
-    let target: Vec<char> = lower.chars().collect();
-    for w in words.chain(extra_words().iter().copied()) {
-        let wn = w.chars().count();
-        if wn + 2 < n || wn > n + 2 {
-            continue;
-        }
-        let dist = damerau(&target, w);
-        if dist <= 2 {
-            let same_first = w.chars().next() == target.first().copied();
-            scored.push((dist, if same_first { 0 } else { 1 }, w.to_string()));
-        }
-    }
-    scored.sort_by(|a, b| (a.0, a.1, a.2.len().abs_diff(n)).cmp(&(b.0, b.1, b.2.len().abs_diff(n))).then(a.2.cmp(&b.2)));
-    scored.into_iter().take(max).map(|(_, _, w)| match_case(word, w)).collect()
+    english::suggest(word, max, ProofLang::En)
 }
 
 /// `w` (lower case) in the case of `word`: all capitals, an initial capital, or as it is.
@@ -709,26 +658,11 @@ fn english_preferred(lower: &str, lang: ProofLang) -> Option<String> {
 }
 
 /// Is `word` spelled right in the English `lang` ([`ProofLang::En`], [`ProofLang::EnGb`],
-/// [`ProofLang::EnCa`])? The shared word list's words, less the other dialect's spellings
+/// [`ProofLang::EnCa`])? Its dictionary's words ([`english`]), less the other dialect's spellings
 /// (`colour` in American English, `color` in British), plus this dialect's spellings of the
-/// list's words ([`en_variants`]). The user dictionary overrules both.
+/// dictionary's words ([`en_variants`]). The user dictionary overrules both.
 fn is_correct_english(word: &str, lang: ProofLang, opts: &Options) -> bool {
-    if !english_data() {
-        return english::is_correct(word, lang, opts);
-    }
-    let w = word.trim_matches(|c: char| !c.is_alphanumeric() && c != '\'').trim_matches('\'');
-    if accepted_by_options(w, opts) {
-        return true;
-    }
-    let lower = w.to_lowercase().replace('’', "'");
-    if in_user_dictionary(&lower) {
-        return true;
-    }
-    let parts: Vec<&str> = lower.split('-').filter(|p| !p.is_empty()).collect();
-    if parts.iter().any(|p| en_variants::is_foreign(p, lang)) {
-        return false;
-    }
-    is_correct_with(word, opts) || (!parts.is_empty() && parts.iter().all(|p| known_core(p) || en_variants::known_variant(p, lang, known_core)))
+    english::is_correct(word, lang, opts, true)
 }
 
 /// Spelling suggestions in the English `lang`: this dialect's spelling first when `word` is the
@@ -739,7 +673,7 @@ fn suggest_english(word: &str, max: usize, lang: ProofLang) -> Vec<String> {
     if let Some(p) = english_preferred(&lower, lang) {
         out.push(match_case(word, p));
     }
-    let shared = if english_data() { suggest(word, max.saturating_add(2)) } else { english::suggest(word, max.saturating_add(2), lang) };
+    let shared = english::suggest(word, max.saturating_add(2), lang);
     for s in shared {
         let s = english_preferred(&s.to_lowercase(), lang).map_or(s, |p| match_case(word, p));
         if !out.contains(&s) {
@@ -748,41 +682,6 @@ fn suggest_english(word: &str, max: usize, lang: ProofLang) -> Vec<String> {
     }
     out.truncate(max);
     out
-}
-
-/// Optimal string alignment distance, early-exit at 3.
-pub(crate) fn damerau(a: &[char], b: &str) -> usize {
-    let b: Vec<char> = b.chars().collect();
-    let (n, m) = (a.len(), b.len());
-    let mut prev2 = vec![0usize; m + 1];
-    let mut prev: Vec<usize> = (0..=m).collect();
-    let mut cur = vec![0usize; m + 1];
-    for i in 1..=n {
-        if let Some(c) = cur.get_mut(0) {
-            *c = i;
-        }
-        let mut row_min = i;
-        for j in 1..=m {
-            let (ai, bj) = (a.get(i - 1), b.get(j - 1));
-            let cost = usize::from(ai != bj);
-            let mut v = (prev.get(j).copied().unwrap_or(9) + 1)
-                .min(cur.get(j - 1).copied().unwrap_or(9) + 1)
-                .min(prev.get(j - 1).copied().unwrap_or(9) + cost);
-            if i > 1 && j > 1 && a.get(i - 1) == b.get(j - 2) && a.get(i - 2) == b.get(j - 1) {
-                v = v.min(prev2.get(j - 2).copied().unwrap_or(9) + 1);
-            }
-            if let Some(c) = cur.get_mut(j) {
-                *c = v;
-            }
-            row_min = row_min.min(v);
-        }
-        if row_min > 2 {
-            return 3;
-        }
-        std::mem::swap(&mut prev2, &mut prev);
-        std::mem::swap(&mut prev, &mut cur);
-    }
-    prev.get(m).copied().unwrap_or(9)
 }
 
 /// Words in `text`: (byte start, byte end). Combining marks belong to the word they follow, so a
@@ -1212,11 +1111,20 @@ mod tests {
         set_dictionaries_folder(Some(dir.to_path_buf()));
     }
 
-    /// R6.4, English never goes unchecked: with no embedded word list, an English Hunspell
-    /// dictionary (here in the dictionaries folder) is used before the word list built into the
-    /// crate; with one, the embedded list stays in use whatever is installed.
+    /// Language-data builds embed SCOWL: an English dictionary in the dictionaries folder would
+    /// then come before it for every English test running meanwhile, so the folder tests below
+    /// run without the data only; `english::tests` checks the order with the data.
+    fn scowl_embedded() -> bool {
+        scowl::dict(ProofLang::En).is_some()
+    }
+
+    /// R6.4, English never goes unchecked: an English Hunspell dictionary in the dictionaries
+    /// folder is used before the word list built into the crate.
     #[test]
     fn english_hunspell_dictionary_is_used_before_the_built_in_list() {
+        if scowl_embedded() {
+            return;
+        }
         let _guard = DICTIONARY_TESTS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let dir = std::env::temp_dir().join(format!("wc-proof-en-hunspell-{}", std::process::id()));
         // A tiny en_US. `hous` and `because` aren't words in it, so a marked `because` is this
@@ -1224,12 +1132,7 @@ mod tests {
         let english: &[(&str, &[u8], &[u8])] =
             &[("en_US", b"SET UTF-8\nTRY esiarntolcdugmphbyfvkwz\nSFX S Y 1\nSFX S 0 s .\n", b"3\nteh\nthe\nhouse/S\n")];
         folder_with_english(&dir, english);
-        if english_data() {
-            assert_eq!(english_source(ProofLang::En), Some(EnglishSource::Embedded));
-            // (The Moby list has `teh`.)
-            assert!(!is_correct_in("becuase", ProofLang::En) && is_correct_in("because", ProofLang::En));
-            assert_eq!(dictionary_load_error(ProofLang::En), None);
-        } else {
+        {
             let dic = dir.join("en_US.dic");
             assert_eq!(english_source(ProofLang::En), Some(EnglishSource::Hunspell(dic.clone())));
             for w in ["teh", "Teh", "the", "house", "houses", "House"] {
@@ -1258,9 +1161,7 @@ mod tests {
         assert!(check_text("hous teh", &[(0..8, ProofLang::De)]).is_empty());
         assert_eq!(english_source(ProofLang::Pl), None);
         drop_english_files(&dir, english);
-        if !english_data() {
-            assert_ne!(english_source(ProofLang::En), Some(EnglishSource::Hunspell(dir.join("en_US.dic"))));
-        }
+        assert_ne!(english_source(ProofLang::En), Some(EnglishSource::Hunspell(dir.join("en_US.dic"))));
     }
 
     /// R6.4: an English Hunspell dictionary that is there but can't be read (an encoding we don't
@@ -1269,16 +1170,16 @@ mod tests {
     /// still marks `becuase`.
     #[test]
     fn unreadable_english_dictionary_is_reported_and_skipped() {
+        if scowl_embedded() {
+            return;
+        }
         let _guard = DICTIONARY_TESTS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let dir = std::env::temp_dir().join(format!("wc-proof-en-unreadable-{}", std::process::id()));
         let english: &[(&str, &[u8], &[u8])] =
             &[("en_US", b"SET UTF-8\n", b"0\n"), ("en_GB", b"SET SHIFT_JIS\n", b"1\ncolour\n"), ("en_CA", b"SET UTF-8\n", b"1\n\xff\xfe\n")];
         folder_with_english(&dir, english);
         for (lang, reason) in [(ProofLang::En, "no words"), (ProofLang::EnGb, "unsupported encoding"), (ProofLang::EnCa, "not UTF-8")] {
-            if english_data() {
-                assert_eq!(english_source(lang), Some(EnglishSource::Embedded));
-                assert_eq!(dictionary_load_error(lang), None, "{lang:?}: never read");
-            } else {
+            {
                 // The built-in list, or a dictionary installed on the system (tried next).
                 let source = english_source(lang);
                 assert!(!matches!(&source, Some(EnglishSource::Hunspell(p)) if p.starts_with(&dir)), "{lang:?}: {source:?}");
@@ -1298,6 +1199,9 @@ mod tests {
     /// American English gets a dictionary that loads: the British tests don't hold the lock.)
     #[test]
     fn english_tries_its_next_dictionary_and_reads_real_world_directives() {
+        if scowl_embedded() {
+            return;
+        }
         let _guard = DICTIONARY_TESTS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let dir = std::env::temp_dir().join(format!("wc-proof-en-next-{}", std::process::id()));
         let aff: &[u8] = b"SET UTF-8\nICONV 1\nICONV \xe2\x80\x99 '\nOCONV 1\nOCONV ' \xe2\x80\x99\nCOMPOUNDMIN 1\nONLYINCOMPOUND c\n\
@@ -1308,7 +1212,7 @@ mod tests {
             ("en_GB", b"SET SHIFT_JIS\n", b"1\ncolour\n"),
         ];
         folder_with_english(&dir, english);
-        if !english_data() {
+        {
             let us = Some(EnglishSource::Hunspell(dir.join("en-US.dic")));
             // A real en_US installed elsewhere (WORDCRAFT_DICTIONARIES, the system) comes first:
             // the same name in every folder before the next name.
@@ -1752,6 +1656,149 @@ mod tests {
         }
         let text = "The wilful knight took the sceptre to fulfil his enrolment, paid the instalment and read the encyclopaedia.";
         assert!(check_spelling_in(text, gb).is_empty(), "{:?}", check_spelling_in(text, gb));
+    }
+
+    /// English spelling reads SCOWL 2026 through the affix engine: one dictionary per English,
+    /// its notice embedded, and its ordinals (`COMPOUNDRULE`) understood.
+    #[cfg_attr(not(craft_proof_data), ignore = "needs the Language data (CRAFT_I18N_DIR)")]
+    #[test]
+    fn english_reads_scowl() {
+        for l in [ProofLang::En, ProofLang::EnGb, ProofLang::EnCa] {
+            let d = scowl::dict(l).unwrap_or_else(|| panic!("{l:?}: {:?}", scowl::load_error(l)));
+            assert!(d.len() > 40_000, "{l:?}: {} stems", d.len());
+            assert_eq!(english_source(l), Some(EnglishSource::Embedded));
+            assert_eq!(dictionary_load_error(l), None);
+        }
+        assert!(std::ptr::eq(scowl::dict(ProofLang::EnGb).unwrap(), scowl::dict(ProofLang::from_tag(Some("en-AU"))).unwrap()), "en-AU reads en-GB");
+        let notice = scowl::notice().unwrap();
+        for credit in ["Kevin Atkinson", "Geoff Kuenning", "clause 4 removed", "Benjamin Titze"] {
+            assert!(notice.contains(credit), "{credit}");
+        }
+        // Ordinals are compounds of digit stems; `1th` is only a part.
+        let strict = Options { ignore_numbers: false, ..Options::default() };
+        for w in ["1st", "21st", "102nd", "33rd", "11th", "112th", "2026th"] {
+            assert!(is_correct_in_with(w, ProofLang::En, &strict), "{w}");
+        }
+        for w in ["1th", "21th", "11st", "3nd"] {
+            assert!(!is_correct_in_with(w, ProofLang::En, &strict), "{w}");
+        }
+        // Affixed forms and possessives come from the affix rules.
+        for w in ["unrecognizable", "reorganization", "children's", "Mississippi's", "can't", "can’t"] {
+            assert!(is_correct_in(w, ProofLang::En), "{w}");
+        }
+        assert!(!is_correct_in("mississippi", ProofLang::En), "a proper noun in lower case");
+        // Suggestions come from the run's own dictionary.
+        assert!(suggest_in("colur", 5, ProofLang::EnGb).contains(&"colour".to_string()), "{:?}", suggest_in("colur", 5, ProofLang::EnGb));
+        assert!(suggest_in("colr", 5, ProofLang::En).contains(&"color".to_string()), "{:?}", suggest_in("colr", 5, ProofLang::En));
+        assert_eq!(suggest_in("organisation", 5, ProofLang::En).first().map(String::as_str), Some("organization"));
+        assert_eq!(suggest_in("color", 5, ProofLang::EnGb).first().map(String::as_str), Some("colour"));
+    }
+
+    /// craft-libs#483 review: English suggestions offer a missing space only between two
+    /// lower-case words of three letters or more, after every one-word candidate, and no word the
+    /// dictionary only has capitalized (`Col`, `Wis`) for a lower-case word.
+    #[cfg_attr(not(craft_proof_data), ignore = "needs the Language data (CRAFT_I18N_DIR)")]
+    #[test]
+    fn english_suggestions_skip_junk_splits_and_names() {
+        for (w, l) in [
+            ("colour", ProofLang::En),
+            ("theatr", ProofLang::En),
+            ("publically", ProofLang::En),
+            ("cheque", ProofLang::En),
+            ("colr", ProofLang::En),
+            ("wiss", ProofLang::En),
+            ("theatr", ProofLang::EnGb),
+        ] {
+            let got = suggest_in(w, 8, l);
+            assert!(!got.is_empty(), "{w}");
+            assert!(got.iter().all(|s| !s.chars().any(char::is_uppercase)), "{w} in {l:?}: {got:?}");
+            let first_split = got.iter().position(|s| s.contains(' ')).unwrap_or(got.len());
+            assert!(got.iter().skip(first_split).all(|s| s.contains(' ')), "{w}: a split before a word: {got:?}");
+            assert!(got.iter().filter(|s| s.contains(' ')).all(|s| s.split(' ').all(|p| p.chars().count() >= 3)), "{w}: {got:?}");
+        }
+        assert_eq!(suggest_in("publically", 5, ProofLang::En).first().map(String::as_str), Some("publicly"));
+        assert_eq!(suggest_in("colour", 5, ProofLang::En).first().map(String::as_str), Some("color"));
+        assert_eq!(suggest_in("theatr", 5, ProofLang::EnGb).first().map(String::as_str), Some("theatre"));
+        assert!(suggest_in("Londn", 5, ProofLang::En).contains(&"London".to_string()), "a capitalized word may get a name");
+    }
+
+    /// `en-variants.txt` stays with SCOWL: SCOWL's size-60 lists keep one spelling per dialect,
+    /// and Word accepts more (both `-ize` and `-ise` in British English, `judgement` in American).
+    #[cfg_attr(not(craft_proof_data), ignore = "needs the Language data (CRAFT_I18N_DIR)")]
+    #[test]
+    fn dialect_policy_widens_scowl() {
+        let gb = scowl::dict(ProofLang::EnGb).unwrap();
+        let us = scowl::dict(ProofLang::En).unwrap();
+        assert!(!gb.check("organize") && gb.check("organise") && !us.check("judgement"), "SCOWL alone is stricter");
+        assert!(is_correct_in("organize", ProofLang::EnGb) && is_correct_in("organise", ProofLang::EnGb));
+        assert!(is_correct_in("judgement", ProofLang::En) && !is_correct_in("colour", ProofLang::En));
+        assert!(is_correct_in("encyclopaedia", ProofLang::EnGb) && is_correct_in("encyclopedia", ProofLang::EnGb));
+    }
+
+    /// craft-libs#483 review: each English checks against its own SCOWL dictionary only. A stem
+    /// one English's dictionary has and another's lacks (`colourblind`, `greyscale` in en-GB;
+    /// `colorblind`, `esophagi` in en-US) doesn't cross, unless our dialect policy or the `-ize`
+    /// spellings of British English say so. Sampled from every pair of Englishes.
+    #[cfg_attr(not(craft_proof_data), ignore = "needs the Language data (CRAFT_I18N_DIR)")]
+    #[test]
+    fn scowl_dialects_dont_cross() {
+        let langs = [
+            (ProofLang::En, crate::data::EN_US_SPELLING),
+            (ProofLang::EnGb, crate::data::EN_GB_SPELLING),
+            (ProofLang::EnCa, crate::data::EN_CA_SPELLING),
+        ];
+        for (from, dic) in langs {
+            for (to, _) in langs {
+                if from == to {
+                    continue;
+                }
+                let d = scowl::dict(to).unwrap();
+                let widened = |w: &str| {
+                    let x = english::ise_spelling(w);
+                    (scowl::is_british(to) && x.as_deref().is_some_and(|x| d.check(x)))
+                        || en_variants::known_variant(w, to, |x| d.check(x))
+                        || known_in_supplement(w)
+                };
+                let only: Vec<&str> = dic
+                    .lines()
+                    .skip(1)
+                    .map(|l| l.split('/').next().unwrap_or_default())
+                    .filter(|w| w.len() > 3 && w.chars().all(|c| c.is_ascii_lowercase()) && !d.check(w) && !widened(w))
+                    .collect();
+                assert!(only.len() >= 40, "{from:?} → {to:?}: {}", only.len());
+                let step = only.len() / 40;
+                let crossed: Vec<&str> = only.iter().step_by(step.max(1)).copied().filter(|w| is_correct_in(w, to)).collect();
+                assert!(crossed.is_empty(), "{from:?} words right in {to:?}: {crossed:?}");
+            }
+        }
+        for (w, l) in [("colourblind", ProofLang::En), ("greyscale", ProofLang::En), ("colorblind", ProofLang::EnGb), ("esophagi", ProofLang::EnGb)] {
+            assert!(!is_correct_in(w, l), "{w} in {l:?}");
+        }
+        for (w, l) in
+            [("colorblind", ProofLang::En), ("colourblind", ProofLang::EnGb), ("organizational", ProofLang::EnGb), ("realized", ProofLang::EnGb)]
+        {
+            assert!(is_correct_in(w, l), "{w} in {l:?}");
+        }
+    }
+
+    /// craft-libs#483 re-review: British English takes the `-ize` spelling of an `-ise` word only
+    /// when American or Canadian English spells it so; a misspelling whose `-s-` form is a word
+    /// (`wize`, `advize`) stays wrong, as in Hunspell's en-GB.
+    #[cfg_attr(not(craft_proof_data), ignore = "needs the Language data (CRAFT_I18N_DIR)")]
+    #[test]
+    fn british_ize_needs_a_real_ize_word() {
+        let wrong = [
+            "wize", "rize", "noize", "dizease", "advize", "rizing", "praize", "raize", "poize", "wizer", "surprize", "arize", "revize", "devize",
+            "mizer", "concize", "precize", "exercize", "chaize",
+        ];
+        for l in [ProofLang::EnGb, ProofLang::from_tag(Some("en-AU"))] {
+            for w in wrong.iter().chain(&["colorize"]) {
+                assert!(!is_correct_in(w, l), "{w} in {l:?}");
+            }
+            for w in ["organize", "realization", "colourize", "organizing", "realizes"] {
+                assert!(is_correct_in(w, l), "{w} in {l:?}");
+            }
+        }
     }
 
     #[cfg_attr(not(craft_proof_data), ignore = "needs the Language data (CRAFT_I18N_DIR)")]

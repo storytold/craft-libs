@@ -14,6 +14,10 @@
 //!
 //! `include_str!` takes a string, so a `CRAFT_I18N_DIR` that isn't valid UTF-8 can't be embedded:
 //! it is treated like a folder without the data.
+//!
+//! English: SCOWL's en-US, en-GB (-ise) and en-CA dictionaries; en-AU is not embedded, as
+//! Australian English is checked as British-spelling English (`ProofLang::EnGb`). The SCOWL
+//! notice is embedded once (the four upstream READMEs differ only in their title and build line).
 
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
@@ -21,6 +25,13 @@ use std::path::{Path, PathBuf};
 /// (constant, path under `language-data/`, bytes rather than text).
 const FILES: &[(&str, &str, bool)] = &[
     ("EN_US_DIC", "en-us/en-us.dic", true),
+    ("EN_US_AFF", "en-us/spelling.aff", false),
+    ("EN_US_SPELLING", "en-us/spelling.dic", false),
+    ("EN_GB_AFF", "en-gb/spelling.aff", false),
+    ("EN_GB_SPELLING", "en-gb/spelling.dic", false),
+    ("EN_CA_AFF", "en-ca/spelling.aff", false),
+    ("EN_CA_SPELLING", "en-ca/spelling.dic", false),
+    ("SCOWL_NOTICE", "en-us/LICENCE-SCOWL.txt", false),
     ("EN_US_PAT", "en-us/hyphenation.pat", false),
     ("EXTRA_EN", "en-us/en-extra.txt", false),
     ("EN_VARIANTS", "en-us/en-variants.txt", false),

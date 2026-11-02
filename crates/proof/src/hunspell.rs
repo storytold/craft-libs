@@ -154,6 +154,25 @@ pub fn candidates(names: &[&str]) -> Vec<(PathBuf, PathBuf)> {
     candidates_in(&search_dirs(lo.as_deref()), names)
 }
 
+/// [`candidates`] in the folders the user keeps dictionaries in for WordCraft ([`user_dirs`])
+/// only, not the system locations.
+pub fn user_candidates(names: &[&str]) -> Vec<(PathBuf, PathBuf)> {
+    candidates_in(&user_dirs(), names)
+}
+
+/// The folders of [`search_dirs`] the user keeps dictionaries in for WordCraft: the one set with
+/// [`set_dictionary_dir`], `WORDCRAFT_DICTIONARIES`, and WordCraft's own `dictionaries` folder
+/// under the user's application data. The rest are the system's (and LibreOffice's).
+pub fn user_dirs() -> Vec<PathBuf> {
+    let extra = EXTRA_DIR.read().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
+    let env = std::env::var_os("WORDCRAFT_DICTIONARIES").filter(|v| !v.is_empty()).map(PathBuf::from);
+    let wordcraft_own = |d: &Path| {
+        d.file_name().is_some_and(|n| n == "dictionaries")
+            && d.parent().and_then(Path::file_name).is_some_and(|n| n.eq_ignore_ascii_case("wordcraft"))
+    };
+    search_dirs(None).into_iter().filter(|d| Some(d) == extra.as_ref() || Some(d) == env.as_ref() || wordcraft_own(d)).collect()
+}
+
 /// [`candidates`] in `dirs`.
 pub fn candidates_in(dirs: &[PathBuf], names: &[&str]) -> Vec<(PathBuf, PathBuf)> {
     let mut out: Vec<(PathBuf, PathBuf)> = Vec::new();

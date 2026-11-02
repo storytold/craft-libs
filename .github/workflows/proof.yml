@@ -25,10 +25,12 @@ jobs:
         with:
           persist-credentials: false
       # The Language data (craft-i18n `language-data/`), embedded by crates/proof/build.rs.
+      # Pinned to storytold/craft-i18n#114's head (#109's SCOWL dictionaries + judgment/judgement,
+      # CP2.1); TODO(CP2.1): move to #114's merge commit once it merges.
       - uses: actions/checkout@v4
         with:
           repository: storytold/craft-i18n
-          ref: 062a6375c322c88b96691a17f7b5fed71c51f7a8
+          ref: c239f934ace90b7939afaceb23b472ceeafd6b8a
           path: craft-i18n
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable

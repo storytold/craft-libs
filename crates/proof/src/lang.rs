@@ -6,7 +6,7 @@
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum ProofLang {
     /// American English (`en`, `en-US`, and every region not listed for [`ProofLang::EnGb`] or
-    /// [`ProofLang::EnCa`]): the public-domain Moby word list, the English grammar rules and the
+    /// [`ProofLang::EnCa`]): SCOWL's en-US dictionary ([`crate::scowl`]), the English grammar rules and the
     /// English hyphenation dictionary and patterns. British spellings (`colour`, `centre`,
     /// `organise`) are flagged, with the American form suggested ([`crate::en_variants`]). Also
     /// text with no language at all (WordCraft's default editing language is US English, like

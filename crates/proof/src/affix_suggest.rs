@@ -43,6 +43,8 @@ const COST_SWAP: u32 = 14;
 const COST_DROP_OR_ADD: u32 = 15;
 pub(crate) const COST_MISTYPE: u32 = 16;
 const COST_SCAN: u32 = 20;
+/// A missing space ranked after every one-word candidate (English: [`Split::Custom`]).
+pub(crate) const COST_SPLIT_LAST: u32 = COST_SCAN + 4 * 3 + 1;
 
 /// What a language adds to its dictionary's tables.
 pub(crate) struct Tuning {
@@ -62,6 +64,9 @@ pub(crate) struct Tuning {
     pub map_cost: fn(char, char) -> u32,
     /// The cost of typing letter `c` at `i` of the word (`chars`, lower case) instead.
     pub mistype_cost: fn(&[char], usize, char) -> u32,
+    /// Offer a word only the dictionary capitalizes (a name, an abbreviation: `Col`, `Wis`) only
+    /// when the word itself is capitalized, and never as half of a missing space (`Che Que`).
+    pub strict_case: bool,
 }
 
 /// Where a missing space may go.
@@ -78,8 +83,17 @@ pub(crate) enum Split {
 
 impl Tuning {
     /// The dictionary's tables alone (Czech, Indonesian, Spanish).
-    pub(crate) const DEFAULT: Tuning =
-        Tuning { split: Split::Anywhere, alphabet: "", map: &[], rep: &[], rep_cost: COST_REP, max_map_changes: 4, map_cost, mistype_cost };
+    pub(crate) const DEFAULT: Tuning = Tuning {
+        split: Split::Anywhere,
+        alphabet: "",
+        map: &[],
+        rep: &[],
+        rep_cost: COST_REP,
+        max_map_changes: 4,
+        map_cost,
+        mistype_cost,
+        strict_case: false,
+    };
 }
 
 /// The cost of changing letter `from` to its MAP relative `to`. Adding a missing accent is the
@@ -107,6 +121,10 @@ struct Collector<'a> {
     /// Suggestion → (cost, order found).
     found: HashMap<String, (u32, usize)>,
     seq: usize,
+    /// May a word the dictionary only has capitalized be offered ([`Tuning::strict_case`])?
+    names: bool,
+    /// May half of a missing space be one ([`Tuning::strict_case`])?
+    split_names: bool,
 }
 
 impl Collector<'_> {
@@ -125,9 +143,12 @@ impl Collector<'_> {
         }
         let mut words = Vec::new();
         let mut cost = cost;
+        let names = if cand.contains(' ') { self.split_names } else { self.names };
         for part in cand.split(' ') {
             if self.d.contains_suggestible(part) {
                 words.push(part.to_string());
+            } else if !names {
+                return;
             } else {
                 let c = capitalize(part);
                 if !self.d.contains_suggestible(&c) {
@@ -278,7 +299,9 @@ pub(crate) fn suggest_in(d: &AffixDict, word: &str, max: usize, t: &Tuning) -> V
     let case = casing(word);
     let input = word.to_lowercase();
     let chars: Vec<char> = input.chars().collect();
-    let mut col = Collector { d, input: input.clone(), tested: HashMap::new(), found: HashMap::new(), seq: 0 };
+    let names = !t.strict_case || case != Casing::Lower;
+    let split_names = !t.strict_case;
+    let mut col = Collector { d, input: input.clone(), tested: HashMap::new(), found: HashMap::new(), seq: 0, names, split_names };
     add_case(&mut col, word, &input);
     let map = groups(d, t);
     add_map_slips(&mut col, &chars, &map, t);
@@ -479,6 +502,9 @@ fn scan(col: &mut Collector, chars: &[char], map: &[Vec<char>]) {
             if lf.len().abs_diff(chars.len()) > 2 {
                 continue;
             }
+            if !col.names && form.chars().any(char::is_uppercase) {
+                continue;
+            }
             let dist = weighted_distance(&lf, chars, &related, limit);
             if dist <= limit && lf.as_slice() != chars {
                 col.keep(form, COST_SCAN + dist * 3);
@@ -504,7 +530,8 @@ mod tests {
     #[test]
     fn a_cheaper_later_offer_wins() {
         let d = AffixDict::from_hunspell("", "1\ncafe\n", &[]).unwrap();
-        let mut col = Collector { d: &d, input: "cafè".into(), tested: HashMap::new(), found: HashMap::new(), seq: 0 };
+        let mut col =
+            Collector { d: &d, input: "cafè".into(), tested: HashMap::new(), found: HashMap::new(), seq: 0, names: true, split_names: true };
         col.offer("cafe", COST_DROP_DIACRITIC);
         col.offer("cafe", COST_REP);
         col.offer("cafe", COST_SCAN);

@@ -1,29 +1,40 @@
 //! English spelling never goes unchecked. Its words come from the first of these that is there:
 //!
-//! 1. **Embedded**: the Moby word list embedded from craft-i18n at build time (`CRAFT_I18N_DIR`,
-//!    see `build.rs`). When it is there, nothing in this module is used.
-//! 2. **System Hunspell**: a Hunspell `.aff`/`.dic` pair for the run's own English found by
-//!    [`crate::hunspell`] (`en_US` for American, `en_GB` for British, `en_CA` for Canadian
-//!    English; each name in the dictionaries folder and then the system locations before the
-//!    next name; none on the web). Another English's dictionary is never used: it would mark this
-//!    English's spellings (`colour` in an `en_US` one), so without its own dictionary an English
-//!    uses the built-in list, which has both spellings. A file that can't be read is skipped for
-//!    the next name or folder, and one file is read once for every English that uses it.
-//!    Directives that only matter for other languages (compounding, output conversion) are
-//!    ignored ([`crate::hunspell::load_english`]).
-//! 3. **Built-in word list**: [`WORDS`], the whole public-domain Moby word list compiled into
+//! 1. **Dictionaries folder**: a Hunspell `.aff`/`.dic` pair for the run's own English that the
+//!    user keeps for WordCraft ([`crate::hunspell::user_dirs`]: the folder set in the options,
+//!    `WORDCRAFT_DICTIONARIES`, WordCraft's own `dictionaries` folder).
+//! 2. **Installed English pack**: reserved for Language packs (craft-libs#485, CP4.2).
+//! 3. **Embedded SCOWL**: the run's English's SCOWL dictionary (en-US, en-GB or en-CA) embedded
+//!    from craft-i18n at build time ([`crate::scowl`]); a word it knows (British English: also
+//!    the `-ize` spelling of one it knows, [`ise_spelling`]), or the supplement ([`EXTRA`]), is
+//!    right; never one only another English knows. When it is there, the system locations aren't
+//!    searched.
+//! 4. **System Hunspell**: a pair for the run's own English in the system locations (none on the
+//!    web).
+//! 5. **Built-in word list**: [`WORDS`], the whole public-domain Moby word list compiled into
 //!    the crate (without its break points), with WordCraft's own supplement of modern words
-//!    ([`EXTRA`]) and the usual inflections. A word it doesn't know is misspelled, as with the
-//!    embedded list.
+//!    ([`EXTRA`]) and the usual inflections. A word it doesn't know is misspelled. (The Moby list
+//!    embedded from craft-i18n is the same list; it is used for hyphenation only.)
 //!
-//! A Hunspell dictionary that is there but can't be read (unsupported encoding, too large, a
-//! parse error, no words) is skipped, and its reason is reported by
+//! Hunspell dictionaries are found by [`crate::hunspell`] by their own English's names only
+//! (`en_US` for American, `en_GB` for British, `en_CA` for Canadian English), each name in every
+//! folder before the next name. Another English's dictionary is never used: it would mark this
+//! English's spellings (`colour` in an `en_US` one). A file that can't be read is skipped for the
+//! next name or folder, and one file is read once for every English that uses it. `COMPOUNDRULE`
+//! (ordinals) is read; flag-based compounding and `OCONV` are ignored
+//! ([`crate::hunspell::load_english`]).
+//!
+//! Whichever it is, the dialect policy of `en-variants.txt` ([`crate::en_variants`], when it is
+//! embedded) flags the other dialect's spellings and accepts this dialect's spellings of known
+//! words. A Hunspell dictionary that is there but can't be read (unsupported encoding, too large,
+//! a parse error, no words) is skipped, and its reason is reported by
 //! [`crate::dictionary_load_error`]. Non-English text is never checked against any of these.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock, PoisonError, RwLock};
 
 use crate::affix::AffixDict;
+use crate::affix_suggest::{Split, Tuning};
 use crate::dict::Dictionary;
 use crate::{Options, ProofLang};
 
@@ -47,7 +58,7 @@ const MAX_CANDIDATES: usize = 8;
 /// Where English spelling comes from now ([`crate::english_source`]).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum EnglishSource {
-    /// The Moby word list embedded from craft-i18n at build time.
+    /// The English's SCOWL dictionary embedded from craft-i18n at build time.
     Embedded,
     /// An English Hunspell dictionary from the dictionaries folder or the system: its `.dic` file.
     Hunspell(PathBuf),
@@ -112,14 +123,9 @@ impl State {
 
 static HUNSPELL: RwLock<State> = RwLock::new(State::new());
 
-/// Why the embedded word list failed to decode, if it did.
-static EMBEDDED_ERROR: OnceLock<String> = OnceLock::new();
-
-/// Remember that the embedded word list is there but failed to decode (English then uses the
-/// next source).
+/// The embedded Moby list (hyphenation) failed to decode: log it. Spelling doesn't use it.
 pub(crate) fn note_embedded_error(e: String) {
-    log::error!("embedded English word list: {e}; English spelling falls back to Hunspell or the built-in word list");
-    let _ = EMBEDDED_ERROR.set(e);
+    log::error!("embedded English word list: {e}; English hyphenation falls back to the patterns");
 }
 
 /// The English Hunspell dictionary for `lang` (read on first use).
@@ -185,12 +191,14 @@ fn key(lang: ProofLang) -> &'static str {
 }
 
 /// Read the first Hunspell pair of `lang`'s own that loads, trying each name in each folder
-/// ([`crate::hunspell::candidates`]), with the first failure before it (the file `lang` would
-/// rather use), for [`note_error`].
+/// ([`crate::hunspell::candidates`]; with SCOWL embedded, the dictionaries folder only:
+/// [`crate::hunspell::user_candidates`]), with the first failure before it (the file `lang`
+/// would rather use), for [`note_error`].
 fn load(lang: ProofLang) -> (Loaded, Option<(PathBuf, String)>) {
-    let candidates = crate::hunspell::candidates(names(lang));
+    let candidates =
+        if crate::scowl::dict(lang).is_some() { crate::hunspell::user_candidates(names(lang)) } else { crate::hunspell::candidates(names(lang)) };
     if candidates.is_empty() {
-        log::info!("English spelling: no Hunspell {} dictionary installed; using the built-in word list", key(lang));
+        log::info!("English spelling: no Hunspell {} dictionary to read first; using SCOWL or the built-in word list", key(lang));
         return (None, None);
     }
     let mut first_error: Option<(PathBuf, String)> = None;
@@ -209,7 +217,7 @@ fn load(lang: ProofLang) -> (Loaded, Option<(PathBuf, String)>) {
             }
         }
     }
-    log::warn!("English spelling: no {} Hunspell dictionary could be read; using the built-in word list", key(lang));
+    log::warn!("English spelling: no {} Hunspell dictionary could be read; using SCOWL or the built-in word list", key(lang));
     (None, first_error)
 }
 
@@ -232,45 +240,150 @@ pub(crate) fn reload() {
     }
 }
 
-/// Where the spelling of `lang` (an English) comes from now. Reads the Hunspell dictionary once
-/// when there is no embedded data (it is cached afterwards).
+/// Where the spelling of `lang` (an English) comes from now, in the order of the module docs.
+/// Reads the Hunspell dictionary once (it is cached afterwards).
 pub(crate) fn source(lang: ProofLang) -> EnglishSource {
-    if crate::english_data() {
-        EnglishSource::Embedded
-    } else {
-        hunspell(lang).map_or(EnglishSource::CoreList, |(_, dic)| EnglishSource::Hunspell(dic))
+    match speller(lang) {
+        Speller::Hunspell(_, dic) => EnglishSource::Hunspell(dic),
+        Speller::Scowl(..) => EnglishSource::Embedded,
+        Speller::List => EnglishSource::CoreList,
     }
 }
 
-/// Why a source of `lang`'s spelling failed to load: the embedded word list, or (without it) the
-/// Hunspell dictionary found for it. Reads nothing itself.
+/// Why a source of `lang`'s spelling failed to load: its embedded SCOWL dictionary, or the
+/// Hunspell dictionary it would rather have used. Reads nothing itself.
 pub(crate) fn load_error(lang: ProofLang) -> Option<String> {
-    if let Some(e) = EMBEDDED_ERROR.get() {
-        return Some(e.clone());
-    }
-    if crate::english_data() {
-        return None;
-    }
-    crate::hunspell::load_error(key(lang)).map(|(_, reason)| reason)
+    crate::scowl::load_error(lang).or_else(|| crate::hunspell::load_error(key(lang)).map(|(_, reason)| reason))
 }
 
-/// Is `word` spelled right in `lang` (an English) when no word list is embedded: against the
-/// Hunspell dictionary, or else the built-in word list.
-pub(crate) fn is_correct(word: &str, lang: ProofLang, opts: &Options) -> bool {
+/// What `lang` is checked against now.
+enum Speller {
+    /// A dictionaries-folder or system Hunspell dictionary, and its `.dic` file.
+    Hunspell(Arc<AffixDict>, PathBuf),
+    /// `lang`'s own SCOWL dictionary (every English's, for English with no dialect: [`generic`]),
+    /// and whether British `-ize` spellings are right too ([`ise_spelling`]).
+    Scowl(Vec<&'static AffixDict>, bool),
+    /// The built-in word list.
+    List,
+}
+
+fn speller(lang: ProofLang) -> Speller {
+    pick(hunspell(lang), lang)
+}
+
+/// The lookup order: the Hunspell dictionary `found` for `lang` (with SCOWL embedded, only one in
+/// the dictionaries folder is looked for), then SCOWL, then the built-in list. (The installed
+/// English pack, craft-libs#485, goes between the first two.)
+fn pick(found: Loaded, lang: ProofLang) -> Speller {
+    if let Some((d, dic)) = found {
+        return Speller::Hunspell(d, dic);
+    }
+    match crate::scowl::dict(lang) {
+        Some(d) => Speller::Scowl(vec![d], crate::scowl::is_british(lang)),
+        None => Speller::List,
+    }
+}
+
+/// [`speller`] for English with no dialect ([`crate::is_correct`]): a SCOWL word of any English
+/// is right, as in the built-in list, which has both spellings.
+fn generic(s: Speller) -> Speller {
+    match s {
+        Speller::Scowl(..) => {
+            let all: Vec<_> = [ProofLang::En, ProofLang::EnGb, ProofLang::EnCa].into_iter().filter_map(crate::scowl::dict).collect();
+            Speller::Scowl(all, false)
+        }
+        other => other,
+    }
+}
+
+impl Speller {
+    /// Is `w` (as written, `’` read as `'`) a word: as a whole, or each part of a hyphenated one?
+    fn knows(&self, w: &str) -> bool {
+        match self {
+            Speller::Hunspell(d, _) => affix_correct(&[d.as_ref()], w, false),
+            Speller::Scowl(ds, ise) => {
+                affix_correct(ds, w, true)
+                    || (*ise
+                        && ise_spelling(w).is_some_and(|x| affix_correct(ds, &x, true))
+                        && ize_elsewhere(w, |d, p| affix_correct(&[d], p, false)))
+            }
+            Speller::List => list_correct(w),
+        }
+    }
+
+    /// Is the lower-case base form `p` a word (for the dialect policy's other spelling)?
+    fn knows_lower(&self, p: &str) -> bool {
+        match self {
+            Speller::Hunspell(d, _) => d.check(p),
+            Speller::Scowl(ds, ise) => {
+                ds.iter().any(|d| d.check(p) || (*ise && ise_spelling(p).is_some_and(|x| d.check(&x)) && ize_elsewhere(p, |d, p| d.check(p))))
+            }
+            Speller::List => crate::known_in_word_list(p),
+        }
+    }
+}
+
+/// Is `word` spelled right in `lang` (an English), against its own dictionary ([`speller`]); with
+/// `policy` false, English with no dialect: any English's SCOWL dictionary ([`generic`]). With
+/// `policy`, also by the dialect policy of `en-variants.txt`: the other dialect's spellings are
+/// wrong and this dialect's spellings of known words right. The user dictionary overrules both.
+pub(crate) fn is_correct(word: &str, lang: ProofLang, opts: &Options, policy: bool) -> bool {
     let w = word.trim_matches(|c: char| !c.is_alphanumeric() && c != '\'' && c != '’').trim_matches(['\'', '’']);
     if crate::accepted_by_options(w, opts) || !w.chars().any(|c| c.is_ascii_alphabetic()) {
         return true; // other scripts: not English
     }
     let w = w.replace('’', "'");
-    match hunspell(lang) {
-        Some((d, _)) => hunspell_correct(&d, &w),
-        None => list_correct(&w),
+    let lower = w.to_lowercase();
+    let parts: Vec<&str> = lower.split('-').filter(|p| !p.is_empty()).collect();
+    if policy && parts.iter().any(|p| crate::en_variants::is_foreign(p, lang)) {
+        return false;
     }
+    let s = if policy { speller(lang) } else { generic(speller(lang)) };
+    s.knows(&w)
+        || (policy && !parts.is_empty() && parts.iter().all(|p| s.knows_lower(p) || crate::en_variants::known_variant(p, lang, |x| s.knows_lower(x))))
 }
 
-/// Against an installed English Hunspell dictionary: the word, or each part of a hyphenated one.
-fn hunspell_correct(d: &AffixDict, w: &str) -> bool {
-    let known = |p: &str| p.chars().count() <= 1 || d.check(p) || crate::in_user_dictionary(&p.to_lowercase());
+/// `w` with its `-ize`/`-yze` endings (and their forms: `-ization`, `-izing`…) spelled `-ise`/
+/// `-yse`, when it has any: British English takes both (Word accepts `organize` and `organise` in
+/// en-GB), and SCOWL's en-GB dictionary has only `-ise`. A `z` between `i`/`y` and a vowel is
+/// swapped; the `-ize` form counts only when American or Canadian English spells the word so
+/// ([`ize_elsewhere`]), or `wize` would pass as `wise`.
+pub(crate) fn ise_spelling(w: &str) -> Option<String> {
+    let b = w.as_bytes();
+    let mut out = b.to_vec();
+    let mut changed = false;
+    for i in 1..b.len() {
+        let after = b.get(i + 1).is_some_and(|c| b"aeiAEI".contains(c));
+        if after
+            && matches!(b.get(i - 1), Some(b'i' | b'y' | b'I' | b'Y'))
+            && let Some(c) = out.get_mut(i)
+        {
+            match *c {
+                b'z' => *c = b's',
+                b'Z' => *c = b'S',
+                _ => continue,
+            }
+            changed = true;
+        }
+    }
+    if changed { String::from_utf8(out).ok() } else { None }
+}
+
+/// Is `w` a word in American or Canadian English's SCOWL dictionary (`check` asks one): the
+/// `-ize` spellings British English takes are theirs (`organize`, never `advize` or `wize`).
+fn ize_elsewhere(w: &str, check: impl Fn(&AffixDict, &str) -> bool) -> bool {
+    [ProofLang::En, ProofLang::EnCa].into_iter().filter_map(crate::scowl::dict).any(|d| check(d, w))
+}
+
+/// Against affix dictionaries (any of them): the word, or each part of a hyphenated one; with
+/// `supplement`, our supplement's words count too.
+fn affix_correct(ds: &[&AffixDict], w: &str, supplement: bool) -> bool {
+    let known = |p: &str| {
+        p.chars().count() <= 1
+            || ds.iter().any(|d| d.check(p))
+            || crate::in_user_dictionary(&p.to_lowercase())
+            || (supplement && crate::known_in_supplement(&p.to_lowercase()))
+    };
     known(w) || (w.contains('-') && w.split('-').filter(|p| !p.is_empty()).all(known))
 }
 
@@ -285,13 +398,23 @@ fn list_correct(w: &str) -> bool {
     crate::known_in_word_list(&lower) || (lower.contains('-') && lower.split('-').filter(|p| !p.is_empty()).all(crate::known_in_word_list))
 }
 
-/// Spelling suggestions in `lang` (an English) when no word list is embedded: from the Hunspell
-/// dictionary, or else the built-in word list.
+/// Spelling suggestions in `lang` (an English), from its dictionary ([`speller`]).
 pub(crate) fn suggest(word: &str, max: usize, lang: ProofLang) -> Vec<String> {
-    match hunspell(lang) {
-        Some((d, _)) => crate::cs::suggest::suggest_in(&d, word, max),
-        None => list_suggest(word, max),
+    match speller(lang) {
+        Speller::Hunspell(d, _) => crate::affix_suggest::suggest_in(&d, word, max, &TUNING),
+        Speller::Scowl(ds, _) => ds.first().map_or_else(Vec::new, |d| crate::affix_suggest::suggest_in(d, word, max, &TUNING)),
+        Speller::List => list_suggest(word, max),
     }
+}
+
+/// English suggestions from an affix dictionary: its own tables, a missing space only between two
+/// words of three letters or more and after every one-word candidate (`publically` → `publicly`
+/// before `public ally`), and no abbreviation or name offered for a lower-case word (`col`, `Wis`).
+const TUNING: Tuning = Tuning { split: Split::Custom(split_cost), strict_case: true, ..Tuning::DEFAULT };
+
+/// The cost of a missing space in English ([`TUNING`]).
+fn split_cost(a: &str, b: &str) -> Option<u32> {
+    (a.chars().count() >= 3 && b.chars().count() >= 3).then_some(crate::affix_suggest::COST_SPLIT_LAST)
 }
 
 /// Letters an edit may add or put in a word's place.
@@ -458,6 +581,46 @@ mod tests {
             let _ = list_suggest(&word, 5);
         }
         assert!(start.elapsed() < std::time::Duration::from_secs(5), "{:?}", start.elapsed());
+    }
+
+    /// The lookup order (README): a dictionaries-folder English comes before SCOWL, SCOWL before
+    /// the built-in list; each English looks for its own dictionary only, and with SCOWL embedded
+    /// the system locations aren't searched. (Checked here without touching the process-wide
+    /// folder, which every English test running meanwhile would see.)
+    #[test]
+    fn lookup_order() {
+        let tiny = Arc::new(AffixDict::from_hunspell("", "1\nzzyzx\n", &[]).unwrap());
+        let file = PathBuf::from("/folder/en_US.dic");
+        for lang in [ProofLang::En, ProofLang::EnGb, ProofLang::EnCa] {
+            assert!(matches!(pick(Some((tiny.clone(), file.clone())), lang), Speller::Hunspell(_, p) if p == file), "{lang:?}");
+            let fallback = pick(None, lang);
+            if crate::scowl::dict(lang).is_some() {
+                assert!(
+                    matches!(&fallback, Speller::Scowl(ds, _) if ds.len() == 1 && std::ptr::eq(ds[0], crate::scowl::dict(lang).unwrap())),
+                    "{lang:?}"
+                );
+                assert!(fallback.knows("21st") && !fallback.knows("becuase"), "{lang:?}");
+                assert_eq!(fallback.knows("colour"), lang != ProofLang::En, "{lang:?}: its own dictionary only");
+            } else {
+                assert!(matches!(fallback, Speller::List), "{lang:?}");
+            }
+        }
+        let dir = std::env::temp_dir().join(format!("wc-proof-en-order-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        for name in ["en_US", "en_GB", "en_CA"] {
+            std::fs::write(dir.join(format!("{name}.aff")), "SET UTF-8\n").unwrap();
+            std::fs::write(dir.join(format!("{name}.dic")), "1\nzzyzx\n").unwrap();
+        }
+        let found = |names: &[&str]| -> Vec<String> {
+            crate::hunspell::candidates_in(std::slice::from_ref(&dir), names)
+                .iter()
+                .filter_map(|(_, d)| d.file_stem().map(|n| n.to_string_lossy().into_owned()))
+                .collect()
+        };
+        assert_eq!(found(names(ProofLang::EnGb)), ["en_GB"], "a user's en_US doesn't stand in for SCOWL's en-GB");
+        assert_eq!(found(names(ProofLang::EnCa)), ["en_CA"]);
+        assert_eq!(found(names(ProofLang::En)), ["en_US"]);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// craft-libs#482 review: a load that started before a reload (the dictionaries folder
