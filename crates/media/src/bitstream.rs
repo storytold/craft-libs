@@ -150,7 +150,25 @@ impl<'a> BitReader<'a> {
     }
 
     /// Raw Exp-Golomb codeNum, up to 32 leading zeros (so below 2^33).
+    #[inline]
     fn read_code_num(&mut self) -> Result<u64> {
+        // Codes up to 31 bits (15 leading zeros) that lie wholly inside the data: one peek.
+        let w = self.peek(32);
+        let zeros = w.leading_zeros();
+        if zeros < 16 {
+            let len = 2 * zeros + 1;
+            if len as usize <= self.bits_left() {
+                self.pos += len as usize;
+                // The `len`-bit field is 2^zeros + suffix; codeNum is that minus one.
+                return Ok(u64::from((w >> (32 - len)) - 1));
+            }
+        }
+        self.read_code_num_slow()
+    }
+
+    /// [`Self::read_code_num`] bit by bit: long codes, the end of the data and invalid codes.
+    #[cold]
+    fn read_code_num_slow(&mut self) -> Result<u64> {
         let mut zeros = 0u32;
         while !self.read_bit()? {
             zeros += 1;
@@ -239,9 +257,12 @@ impl BitWriter {
         let x = v + 1;
         let len = 64 - x.leading_zeros();
         let zeros = len - 1;
-        for _ in 0..zeros {
-            self.write_bit(false);
+        if zeros + len <= 32 {
+            // The leading zeros are the high bits of a (zeros + len)-bit field.
+            self.write_bits(x as u32, zeros + len);
+            return;
         }
+        self.write_bits(0, zeros);
         if len > 32 {
             self.write_bits((x >> 32) as u32, len - 32);
             self.write_bits(x as u32, 32);
@@ -722,6 +743,143 @@ mod tests {
         assert_eq!(r.peek(32), 0);
         assert_eq!(r.read_bit(), Err(BitError::Eof));
         assert_eq!(r.position(), usize::MAX);
+    }
+
+    /// Verbatim copy of the bit-by-bit `read_code_num` that the one-peek version replaced.
+    fn old_read_code_num(r: &mut BitReader) -> Result<u64> {
+        let mut zeros = 0u32;
+        while !r.read_bit()? {
+            zeros += 1;
+            if zeros > 32 {
+                return Err(BitError::InvalidExpGolomb);
+            }
+        }
+        if zeros == 0 {
+            return Ok(0);
+        }
+        let v = r.read_bits_u64(zeros)?;
+        Ok((1u64 << zeros) - 1 + v)
+    }
+
+    fn old_read_ue(r: &mut BitReader) -> Result<u32> {
+        u32::try_from(old_read_code_num(r)?).map_err(|_| BitError::InvalidExpGolomb)
+    }
+
+    fn old_read_se(r: &mut BitReader) -> Result<i32> {
+        let k = old_read_code_num(r)? as i64;
+        let v = if k & 1 == 1 { (k + 1) / 2 } else { -(k / 2) };
+        i32::try_from(v).map_err(|_| BitError::InvalidExpGolomb)
+    }
+
+    /// Verbatim copy of the `write_ue` / `write_code_num` before the one-call version.
+    fn old_write_code_num(w: &mut BitWriter, v: u64) {
+        let x = v + 1;
+        let len = 64 - x.leading_zeros();
+        let zeros = len - 1;
+        for _ in 0..zeros {
+            w.write_bit(false);
+        }
+        if len > 32 {
+            w.write_bits((x >> 32) as u32, len - 32);
+            w.write_bits(x as u32, 32);
+        } else {
+            w.write_bits(x as u32, len);
+        }
+    }
+
+    #[test]
+    fn exp_golomb_reader_matches_the_pre_change_reader() {
+        let mut rng = Rng(0xD1B5_4A32_D192_ED03);
+        for round in 0..20_000u32 {
+            let len = rng.below(17) as usize;
+            let mut data: Vec<u8> = (0..len).map(|_| rng.next() as u8).collect();
+            if round % 2 == 0 && len > 0 {
+                // A zero run of 28..=40 bits, then a one bit, somewhere in the buffer.
+                let start = rng.below(len as u64 * 8) as usize;
+                let zeros = 28 + rng.below(13) as usize;
+                for p in start..(start + zeros + 1).min(len * 8) {
+                    data[p / 8] &= !(0x80 >> (p % 8));
+                }
+                if start + zeros < len * 8 {
+                    let p = start + zeros;
+                    data[p / 8] |= 0x80 >> (p % 8);
+                }
+            }
+            // Every start position, including the last bits and past the end.
+            for pos in 0..=len * 8 + 2 {
+                let mut old = BitReader::new(&data);
+                let mut new = BitReader::new(&data);
+                old.seek_bits(pos);
+                new.seek_bits(pos);
+                // Several codes in a row, so the position after each result is checked too.
+                for step in 0..4 {
+                    if (round + step) % 2 == 0 {
+                        assert_eq!(new.read_ue(), old_read_ue(&mut old), "ue {data:02x?} pos {pos} step {step}");
+                    } else {
+                        assert_eq!(new.read_se(), old_read_se(&mut old), "se {data:02x?} pos {pos} step {step}");
+                    }
+                    assert_eq!(new.position(), old.position(), "position {data:02x?} pos {pos} step {step}");
+                    assert_eq!(new.bits_left(), old.bits_left());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn exp_golomb_reader_edge_codes() {
+        // 31-bit (15 zeros) and 32-bit (16 zeros) codes, 33-bit-wide codes, and 32 or 33 zeros.
+        for zeros in 0..=34usize {
+            for extra in 0..4usize {
+                let total = (2 * zeros + 1 + extra).div_ceil(8) * 8;
+                let mut data = vec![0u8; total / 8];
+                data[zeros / 8] |= 0x80 >> (zeros % 8);
+                for tail in [0u8, 0xFF] {
+                    let mut d = data.clone();
+                    for p in 2 * zeros + 1..total {
+                        if tail != 0 {
+                            d[p / 8] |= 0x80 >> (p % 8);
+                        }
+                    }
+                    for cut in [d.len(), d.len().saturating_sub(1)] {
+                        let d = &d[..cut];
+                        let (mut o, mut n) = (BitReader::new(d), BitReader::new(d));
+                        assert_eq!(n.read_ue(), old_read_ue(&mut o), "ue zeros {zeros} cut {cut}");
+                        assert_eq!(n.position(), o.position());
+                        let (mut o, mut n) = (BitReader::new(d), BitReader::new(d));
+                        assert_eq!(n.read_se(), old_read_se(&mut o), "se zeros {zeros} cut {cut}");
+                        assert_eq!(n.position(), o.position());
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn write_ue_matches_the_pre_change_writer() {
+        let mut rng = Rng(0x1234_5678_9ABC_DEF1);
+        let mut values: Vec<u32> = vec![0, 1, 2, 3, 6, 7, 8, 65534, 65535, 65536, u32::MAX - 1, u32::MAX];
+        values.extend((0..32).flat_map(|b| [(1u32 << b) - 1, 1 << b, (1u32 << b) + 1]));
+        values.extend((0..5000).map(|_| (rng.next() as u32) >> rng.below(32)));
+        for (i, &v) in values.iter().enumerate() {
+            for lead in [0u32, 1, 3, 7] {
+                let mut new = BitWriter::new();
+                let mut old = BitWriter::new();
+                new.write_bits(0x55, lead);
+                old.write_bits(0x55, lead);
+                new.write_ue(v);
+                old_write_code_num(&mut old, u64::from(v));
+                assert_eq!(new.bit_len(), old.bit_len(), "value {v} lead {lead} (#{i})");
+                assert_eq!(new.finish(), old.finish(), "value {v} lead {lead} (#{i})");
+            }
+        }
+        // write_se goes through the same code with codeNum 2^32 at i32::MIN.
+        for v in [0, 1, -1, 2, -2, i32::MAX, i32::MIN, i32::MIN + 1] {
+            let mut new = BitWriter::new();
+            new.write_se(v);
+            new.rbsp_trailing();
+            let b = new.finish();
+            assert_eq!(BitReader::new(&b).read_se(), Ok(v));
+        }
     }
 
     proptest! {
