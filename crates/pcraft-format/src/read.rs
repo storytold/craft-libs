@@ -2,7 +2,7 @@ use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
-use crate::{Error, Limits, Manifest, Step, migrate, parse_manifest};
+use crate::{COMPOSITE, Error, Limits, Manifest, Step, THUMB, migrate, parse_manifest};
 
 /// Reads manifest JSON into a [`Manifest`] whose document is `D`.
 ///
@@ -12,9 +12,11 @@ use crate::{Error, Limits, Manifest, Step, migrate, parse_manifest};
 /// 3. The members are read in the order the parsed JSON object holds them, the document as `D`.
 ///
 /// A missing `thumbnail` or `composite` reads as `None`, and members the envelope does not name
-/// are skipped. A member of the wrong type is [`Error::Json`], and so is a missing member, which
-/// is reported after the members that are present, in the order serde's derived `Deserialize`
-/// reports them.
+/// are skipped. A missing or invalid `format_version` is [`Error::Corrupt`], from [`migrate`].
+/// Any other member of the wrong type is [`Error::Json`], and so is a missing member, which is
+/// reported after the members that are present, in the order serde's derived `Deserialize`
+/// reports them. A `thumbnail` other than [`THUMB`] or a `composite` other than [`COMPOSITE`] is
+/// [`Error::Corrupt`], checked after the members are read.
 pub fn read_manifest<D: DeserializeOwned, E: From<Error>>(json: &[u8], limits: &Limits, steps: &[Step<E>], target: u32) -> Result<Manifest<D>, E> {
     read_manifest_with(json, limits, steps, target, |document| serde_json::from_value(document).map_err(|e| E::from(Error::Json(e))))
 }
@@ -50,11 +52,22 @@ pub fn read_manifest_with<D, E: From<Error>>(
         }
     }
     let missing = |name| Error::Json(serde::de::Error::missing_field(name));
-    Ok(Manifest {
+    let manifest = Manifest {
         format_version: format_version.ok_or_else(|| missing("format_version"))?,
         generator: generator.ok_or_else(|| missing("generator"))?,
         document: doc.ok_or_else(|| missing("document"))?,
         thumbnail,
         composite,
-    })
+    };
+    check_preview("thumbnail", manifest.thumbnail.as_deref(), THUMB)?;
+    check_preview("composite", manifest.composite.as_deref(), COMPOSITE)?;
+    Ok(manifest)
+}
+
+/// Refuses a preview member that names an entry other than `expected`.
+fn check_preview(member: &str, entry: Option<&str>, expected: &str) -> Result<(), Error> {
+    match entry {
+        Some(entry) if entry != expected => Err(Error::Corrupt(format!("`{member}` names {entry:?}, not {expected:?}"))),
+        _ => Ok(()),
+    }
 }

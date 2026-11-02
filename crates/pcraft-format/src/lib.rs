@@ -89,8 +89,9 @@ pub fn is_valid_hash(hash: &str) -> bool {
 /// `manifest.json`: the envelope around the app's document `D`.
 ///
 /// The fields serialize in this order, and `thumbnail` and `composite` serialize as `null` when
-/// absent. [`read_manifest`] reads one: a missing `thumbnail` or `composite` reads as `None`, and
-/// members the type does not name are skipped.
+/// absent. [`read_manifest`] reads one: a missing `thumbnail` or `composite` reads as `None`,
+/// members the type does not name are skipped, and a preview that names any entry other than
+/// [`THUMB`] or [`COMPOSITE`] is refused.
 ///
 /// The struct is `#[non_exhaustive]`: build one with [`Manifest::new`] and set the previews.
 ///
@@ -110,9 +111,9 @@ pub struct Manifest<D> {
     /// Free-form writer identification, for example `photocraft-format 0.1.0`.
     pub generator: String,
     pub document: D,
-    /// The thumbnail entry, normally [`THUMB`].
+    /// The thumbnail entry, [`THUMB`]. [`read_manifest`] refuses any other name.
     pub thumbnail: Option<String>,
-    /// The flattened preview entry, normally [`COMPOSITE`].
+    /// The flattened preview entry, [`COMPOSITE`]. [`read_manifest`] refuses any other name.
     pub composite: Option<String>,
 }
 

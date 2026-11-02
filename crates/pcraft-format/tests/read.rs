@@ -1,4 +1,4 @@
-use craft_pcraft_format::{Error, FORMAT_VERSION, Limits, Manifest, Step, TileRef, read_manifest, read_manifest_with};
+use craft_pcraft_format::{COMPOSITE, Error, FORMAT_VERSION, Limits, Manifest, Step, THUMB, TileRef, read_manifest, read_manifest_with};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -136,6 +136,26 @@ fn a_manifest_with_several_faults_reports_the_one_a_derived_struct_reports() {
 fn a_missing_version_is_corrupt() {
     assert!(matches!(read(br#"{"generator":"g","document":{"name":"a"}}"#), Err(Error::Corrupt(_))));
     assert!(matches!(read(b"[1]"), Err(Error::Corrupt(_))));
+}
+
+#[test]
+fn a_preview_other_than_its_entry_is_corrupt() {
+    for (member, entry) in [
+        ("thumbnail", "../x"),
+        ("thumbnail", "/etc/passwd"),
+        ("composite", "../x"),
+        ("composite", "C:\\x.png"),
+        ("thumbnail", "composite/preview.png"),
+        ("composite", "thumb.png"),
+    ] {
+        let json = json!({"format_version": 1, "generator": "g", "document": {"name": "a"}, member: entry});
+        let e = read(json.to_string().as_bytes()).err();
+        assert!(matches!(&e, Some(Error::Corrupt(_))), "{json}: {e:?}");
+    }
+    let json =
+        json!({"format_version": 1, "generator": "g", "document": {"name": "a"}, "thumbnail": "thumb.png", "composite": "composite/preview.png"});
+    let m = read(json.to_string().as_bytes()).unwrap();
+    assert_eq!((m.thumbnail.as_deref(), m.composite.as_deref()), (Some(THUMB), Some(COMPOSITE)));
 }
 
 #[derive(Debug)]

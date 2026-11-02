@@ -47,9 +47,10 @@ let manifest: Manifest<MyDocument> = craft_pcraft_format::read_manifest(&manifes
   document from its `serde_json::Value` instead of `D`'s `Deserialize`.
 - `Manifest<D>` has `format_version`, `generator`, `document: D`, `thumbnail` and `composite`,
   and serializes them in that order. Absent previews serialize as `null`. On read, missing
-  previews are `None` and members the type does not name are skipped. `Manifest` has no
-  `Deserialize` and is `#[non_exhaustive]`: `Manifest::new(generator, document)` builds one at
-  `FORMAT_VERSION` without previews.
+  previews are `None`, members the type does not name are skipped, and a `thumbnail` other
+  than `thumb.png` or a `composite` other than `composite/preview.png` gives `Corrupt`.
+  `Manifest` has no `Deserialize` and is `#[non_exhaustive]`: `Manifest::new(generator,
+  document)` builds one at `FORMAT_VERSION` without previews.
 - `TileRef` has `tx`, `ty` and `hash`, and is `#[non_exhaustive]`: `TileRef::new(tx, ty, hash)`
   builds one. `TileRef::path` gives its entry, or `None` when the hash is not valid.
 - `check_manifest(json, &Limits)` checks the size, the nesting and the item count in one pass
