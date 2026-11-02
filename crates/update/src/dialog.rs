@@ -30,8 +30,9 @@ pub struct StartupPrompt {
     pub open: bool,
     /// A message shown as it is: an error from the network or the installer.
     pub status_message: Option<String>,
-    /// One of the crate's own messages, translated each time the prompt draws; shown instead of
-    /// `status_message`. [`StartupPrompt::set_note`] and [`StartupPrompt::set_message`] keep one.
+    /// One of the crate's own messages, translated each time the prompt draws. `status_message`
+    /// wins when both are set, so an error written straight to it shows.
+    /// [`StartupPrompt::set_note`] and [`StartupPrompt::set_message`] keep only one.
     pub status_note: Option<Note>,
     pub is_installing: bool,
     /// Puts the card's words in the interface language ([`crate::translate`]); English by default.
@@ -73,9 +74,10 @@ impl StartupPrompt {
         self.status_message = None;
     }
 
-    /// The message the prompt shows, in the interface language.
+    /// The message the prompt shows, in the interface language: `status_message` (an error
+    /// written to it), else the note.
     pub fn message(&self) -> Option<String> {
-        self.status_note.as_ref().map(|note| note.translated(self.translate)).or_else(|| self.status_message.clone())
+        self.status_message.clone().or_else(|| self.status_note.as_ref().map(|note| note.translated(self.translate)))
     }
 
     /// The prompt with its words in the interface language ([`crate::translate`]).
@@ -857,6 +859,19 @@ mod tests {
         let (_, output) = frame(&ctx, &mut prompt, Vec::new());
         let painted = painted_text(&output);
         assert!(painted.lines().any(|l| l == "by Someone Else") && !painted.contains("by ArtCraft"), "{painted}");
+    }
+
+    /// An error written straight to `status_message` shows even when a note was set before.
+    #[test]
+    fn a_literal_error_wins_over_a_stale_note() {
+        let mut prompt = prompt_for(false);
+        prompt.set_note(Note::new("Save or close your open work first; the update restarts the app.", &[]));
+        prompt.status_message = Some("disk full".into());
+        assert_eq!(prompt.message().as_deref(), Some("disk full"));
+        prompt.set_note(Note::new("Close {app}", &[("app", "PhotoCraft")]));
+        assert_eq!(prompt.message().as_deref(), Some("Close PhotoCraft"));
+        prompt.clear_message();
+        assert_eq!(prompt.message(), None);
     }
 
     #[test]

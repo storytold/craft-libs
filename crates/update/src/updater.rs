@@ -48,6 +48,38 @@ pub enum Action {
 
 type Checked = Result<Option<Release>, String>;
 
+/// Why an installation failed: the installer's own words, shown as they are, or the updater's,
+/// shown in the interface language.
+#[derive(Debug)]
+enum Failure {
+    Installer(String),
+    Updater(Note),
+}
+
+impl Failure {
+    /// The worker panicked.
+    fn panicked() -> Self {
+        Self::Updater(Note::new("The update failed unexpectedly.", &[]))
+    }
+
+    /// The worker went away without an answer.
+    fn dropped() -> Self {
+        Self::Updater(Note::new("The update stopped unexpectedly.", &[]))
+    }
+}
+
+impl From<String> for Failure {
+    fn from(e: String) -> Self {
+        Self::Installer(e)
+    }
+}
+
+impl From<&str> for Failure {
+    fn from(e: &str) -> Self {
+        Self::Installer(e.to_owned())
+    }
+}
+
 pub struct Updater {
     app: &'static App,
     version: String,
@@ -57,7 +89,7 @@ pub struct Updater {
     requested: bool,
     started: bool,
     check: Option<Receiver<Checked>>,
-    install: Option<(Receiver<Result<(), String>>, Release)>,
+    install: Option<(Receiver<Result<(), Failure>>, Release)>,
     prompt: Option<StartupPrompt>,
     restart: bool,
     /// An update is installed and waits for the app to exit; nothing starts a second one.
@@ -267,7 +299,7 @@ impl Updater {
                     ctx.request_repaint_after(Duration::from_millis(100));
                     None
                 }
-                Err(TryRecvError::Disconnected) => Some(Err("the update stopped unexpectedly".into())),
+                Err(TryRecvError::Disconnected) => Some(Err(Failure::dropped())),
             };
             if let Some(outcome) = outcome {
                 let release = self.install.take().map(|(_, release)| release);
@@ -281,8 +313,11 @@ impl Updater {
                             prompt.set_note(note);
                         }
                     }
-                    Err(e) => {
-                        log::warn!("{} self-update failed: {e}", self.app.name);
+                    Err(failure) => {
+                        match &failure {
+                            Failure::Installer(e) => log::warn!("{} self-update failed: {e}", self.app.name),
+                            Failure::Updater(note) => log::warn!("{} self-update failed: {}", self.app.name, note.translated(english)),
+                        }
                         // The prompt may have been dismissed meanwhile: bring it back with the reason.
                         if self.prompt.is_none()
                             && let Some(release) = release
@@ -291,7 +326,10 @@ impl Updater {
                         }
                         if let Some(prompt) = &mut self.prompt {
                             prompt.is_installing = false;
-                            prompt.set_message(e);
+                            match failure {
+                                Failure::Installer(e) => prompt.set_message(e),
+                                Failure::Updater(note) => prompt.set_note(note),
+                            }
                         }
                     }
                 }
@@ -364,9 +402,8 @@ impl Updater {
         let (app, version, ctx, release) = (self.app, self.version.clone(), ctx.clone(), prompt.release.clone());
         let worker_release = release.clone();
         let spawned = std::thread::Builder::new().name("self-update".into()).spawn(move || {
-            let run = || install(app, &installed, worker_release, &version);
-            let outcome =
-                std::panic::catch_unwind(std::panic::AssertUnwindSafe(run)).unwrap_or_else(|_| Err("the update failed unexpectedly".into()));
+            let run = || install(app, &installed, worker_release, &version).map_err(Failure::Installer);
+            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(run)).unwrap_or_else(|_| Err(Failure::panicked()));
             let _ = tx.send(outcome);
             ctx.request_repaint();
         });
@@ -557,11 +594,37 @@ mod tests {
     fn a_dropped_install_worker_is_an_error() {
         let ctx = egui::Context::default();
         let mut u = updater(Ok(None));
-        let (tx, rx) = channel::<Result<(), String>>();
+        let (tx, rx) = channel::<Result<(), Failure>>();
         u.install = Some((rx, newer()));
         drop(tx);
         u.tick(&ctx);
         assert!(u.prompt.as_ref().is_some_and(|p| p.message().is_some()));
+    }
+
+    /// The updater's own failures (a dropped or panicking worker) are in the interface language;
+    /// the installer's are shown as they came.
+    #[test]
+    fn the_updaters_own_failures_are_translated_and_the_installers_are_not() {
+        fn shout(text: &str, args: &[(&str, &str)]) -> String {
+            crate::translate::fill(&text.to_uppercase(), args)
+        }
+        let ctx = egui::Context::default();
+        let message = |u: &Updater| u.prompt.as_ref().and_then(StartupPrompt::message).unwrap_or_default();
+        for (failure, want) in [
+            (Some(Failure::panicked()), "THE UPDATE FAILED UNEXPECTEDLY."),
+            (None, "THE UPDATE STOPPED UNEXPECTEDLY."),
+            (Some("disk full".into()), "disk full"),
+        ] {
+            let mut u = updater(Ok(None)).with_translator(shout);
+            let (tx, rx) = channel();
+            u.install = Some((rx, newer()));
+            match failure {
+                Some(f) => assert!(tx.send(Err(f)).is_ok()),
+                None => drop(tx),
+            }
+            u.tick(&ctx);
+            assert_eq!(message(&u), want);
+        }
     }
 
     #[test]
