@@ -23,9 +23,8 @@ pub enum ProofLang {
     /// Polish (`pl`, `pl-PL`): the installed Hunspell dictionary (when there is one), the Polish grammar rules and the Polish
     /// hyphenation patterns.
     Pl,
-    /// Bulgarian (`bg`, `bg-BG`): hyphenation by the Bulgarian syllable rules ([`crate::bg`]).
-    /// There is no Bulgarian dictionary or grammar yet, so, as for [`ProofLang::Other`], no
-    /// spelling or grammar marks.
+    /// Bulgarian (`bg`, `bg-BG`): hyphenation by the Bulgarian syllable rules ([`crate::bg`]), and
+    /// spelling when a Bulgarian Hunspell dictionary or `bg` pack is found. No grammar rules yet.
     Bg,
     /// Portuguese (`pt`, `pt-BR`; `pt-PT` is [`ProofLang::Pack`] `pt-pt`, with its own dictionary
     /// and these grammar rules and patterns): the installed Hunspell dictionary (VERO and
@@ -69,8 +68,8 @@ pub enum ProofLang {
     EsUy,
     /// German (`de`, `de-DE`, `de-AT`…; `de-CH` and `de-LI` are [`ProofLang::Pack`] `de-ch`, with
     /// their own dictionary and these patterns): hyphenation by the German patterns (reformed
-    /// spelling). There is no German dictionary or grammar yet, so, as for [`ProofLang::Other`],
-    /// no spelling or grammar marks.
+    /// spelling), and spelling when a German Hunspell dictionary or `de` pack is found. No grammar
+    /// rules yet.
     De,
     /// Any other language, by its tag (`nl`, `fr-FR`, `sr-Latn`): spelling and suggestions from
     /// its Hunspell dictionary (the dictionaries folder, an installed Language pack, the system's)
@@ -112,7 +111,7 @@ impl ProofLang {
     /// `x-none`, `und`, `zxx`, `mul`, `mis` and malformed tags are [`ProofLang::Other`].
     pub fn from_tag(tag: Option<&str>) -> ProofLang {
         let Some(tag) = tag.map(str::trim).filter(|t| !t.is_empty()) else { return ProofLang::En };
-        let primary = tag.split(['-', '_']).next().unwrap_or("");
+        let primary = tag.split(['-', '_', '.', '@']).next().unwrap_or("");
         if primary.eq_ignore_ascii_case("en") || primary.eq_ignore_ascii_case("eng") {
             ProofLang::english(tag)
         } else if primary.eq_ignore_ascii_case("pl") || primary.eq_ignore_ascii_case("pol") {
@@ -148,6 +147,9 @@ impl ProofLang {
             } else {
                 ProofLang::De
             }
+        } else if tag.split_once('@').is_some_and(|(_, m)| m.eq_ignore_ascii_case("latin")) {
+            // POSIX `sr_RS@latin`: the Latin-script language (`sr-latn`).
+            PackLocale::new(&format!("{primary}-latn")).map_or(ProofLang::Other, ProofLang::Pack)
         } else {
             PackLocale::new(tag).map_or(ProofLang::Other, ProofLang::Pack)
         }
@@ -443,7 +445,13 @@ mod tests {
 
     #[test]
     fn tags_resolve_primary_languages() {
-        assert_tags(&["pl", "pl-PL", "PL-pl", "pl_PL", "pl_PL.UTF-8", " pl-PL ", "pol"], ProofLang::Pl);
+        assert_tags(&["pl", "pl-PL", "PL-pl", "pl_PL", "pl_PL.UTF-8", " pl-PL ", "pol", "pl@euro", "pl.UTF-8"], ProofLang::Pl);
+        // craft-libs#482 review: a POSIX charset or modifier with no region.
+        assert_tags(&["en.UTF-8", "en@euro"], ProofLang::En);
+        assert_tags(&["de.UTF-8"], ProofLang::De);
+        let sr_latn = ProofLang::Pack(PackLocale::new("sr-latn").unwrap());
+        assert_tags(&["sr@latin", "sr_RS@latin", "sr_RS.UTF-8@latin", "sr-Latn"], sr_latn);
+        assert_tags(&["sr", "sr@cyrillic"], ProofLang::Pack(PackLocale::new("sr").unwrap()));
         assert_tags(&["pt", "pt-BR", "PT_br", "pt-BR.UTF-8", "pt-AO", "por"], ProofLang::Pt);
         let pt_pt = ProofLang::Pack(PackLocale::new("pt-pt").unwrap());
         assert_tags(&[" pt-PT ", "pt_PT.UTF-8", "por-PT"], pt_pt);
@@ -499,8 +507,11 @@ mod tests {
         assert_tags(&["de-CH", "de_CH.UTF-8", "de-LI"], de_ch);
         assert_eq!(de_ch.built_in(), ProofLang::De);
         assert_tags(&["ru", "ru-RU", "RU-ru", "ru_RU", "ru_RU.UTF-8", " ru-RU ", "rus"], ProofLang::Ru);
-        assert!(!ProofLang::De.is_proofed());
-        assert!(!ProofLang::Bg.is_proofed());
+        // German and Bulgarian are proofed when a dictionary is found (craft-libs#485 review: an
+        // installed hunspell-de-de must not fail this test), so only their locales are fixed here.
+        assert_eq!(ProofLang::De.spelling_locale(), PackLocale::new("de-de"));
+        assert_eq!(ProofLang::Bg.spelling_locale(), PackLocale::new("bg-bg"));
+        assert!(!ProofLang::PROOFED.contains(&ProofLang::De) && !ProofLang::PROOFED.contains(&ProofLang::Bg));
         assert_eq!(ProofLang::Bg.code(), "bg");
         assert!(ProofLang::Pt.is_proofed() && !ProofLang::Other.is_proofed());
         assert!(ProofLang::Tr.is_proofed());

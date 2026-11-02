@@ -25,6 +25,33 @@ crates/proof/data/en-words.dic: public domain, the words of the Moby Hyphenator 
   Ward (Project Gutenberg eBook #3204), without its break points.
 crates/proof/data/en-extra.txt: MIT OR Apache-2.0, WordCraft contributors' own list of modern
   English words (a copy of craft-i18n's language-data/en-us/en-extra.txt).
+craft-proof Language data, embedded at build time from craft-i18n's language-data/ when
+  CRAFT_I18N_DIR is set (CRAFT_PROOF_EMBED picks the locales; by default English and the German,
+  Polish, Portuguese, Italian and Russian data). Each file keeps its licence header; the
+  licences are listed in craft-i18n's ATTRIBUTION.md, and a pattern file's notice ships with any
+  application that embeds it. The Portuguese hyphenation patterns (language-data/pt/
+  hyphenation.pat, hyph-utf8 hyph-pt 1.4) are under the BSD 3-clause licence:
+  Copyright (C) 1987, 1994, 1996, 2015 Pedro J. de Rezende, 1996, 2015 J. Joao Dias Almeida,
+  2024 Leonardo Araujo and Aline Benevides.
+  Redistribution and use in source and binary forms, with or without modification, are
+  permitted provided that the following conditions are met:
+  * Redistributions of source code must retain the above copyright notice, this list of
+    conditions and the following disclaimer.
+  * Redistributions in binary form must reproduce the above copyright notice, this list of
+    conditions and the following disclaimer in the documentation and/or other materials
+    provided with the distribution.
+  * Neither the name of the University of Campinas, of the University of Minho nor the names of
+    its contributors may be used to endorse or promote products derived from this software
+    without specific prior written permission.
+  THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR
+  IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND
+  FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL PEDRO J. DE REZENDE OR J.JOAO
+  DIAS ALMEIDA BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+  CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+  SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+  THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
+  OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+  POSSIBILITY OF SUCH DAMAGE.
 crates/text/assets/hyphen/en-us.pat: CC0-1.0, trained from en-us.dic by DesignCraft's trainer.
 Hyphenation patterns for other languages, embedded through the hypher crate only when the
   matching craft-text feature is enabled (none are by default). They come from hyph-utf8,

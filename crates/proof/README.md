@@ -29,6 +29,7 @@ use craft_proof::{ProofLang, check_text_with, suggest_in, Options};
 use craft_proof::hyphen::{hyphen_points_in, Limits};
 
 // A paragraph whose runs are in different languages (byte ranges of `text`).
+let text = "The colour of the hous.";
 let issues = check_text_with(text, &[(0..text.len(), ProofLang::EnGb)], &Options::default(), true, false);
 let fixes = suggest_in("colour", 5, ProofLang::En);
 let breaks = hyphen_points_in("hyphenation", &Limits::default(), ProofLang::En);
@@ -166,8 +167,8 @@ English spelling uses the first of these that is there; `english_source(lang)` s
 4. **System Hunspell:** the English's own pair in the system locations. Never another English's:
    an `en_US` dictionary would mark British spellings, so en-GB and en-CA without their own use
    the built-in list, which has both spellings. Each name is looked for in every folder before the
-   next name; a file that can't be read is skipped for the next name or folder; one file is read
-   once for every English that uses it. `COMPOUNDRULE`, `ONLYINCOMPOUND` and `COMPOUNDMIN`
+   next name; a file that can't be read is skipped for the next name or folder, up to the first eight
+   candidates (the rest aren't tried); one file is read once for every English that uses it. `COMPOUNDRULE`, `ONLYINCOMPOUND` and `COMPOUNDMIN`
    (ordinals such as `21st`) are read; flag-based compounding (`COMPOUNDFLAG`…) is ignored for
    English rather than refused; `OCONV` writes suggestions as the dictionary says (`don’t`), as for
    every language. None on the web.

@@ -55,15 +55,17 @@ const MAX_INPUT_BYTES: usize = 4 * MAX_WORD_BYTES;
 const MAX_CONV_PAIRS: usize = 1 << 16;
 /// Longest text on either side of an `ICONV` or `OCONV` pair, in bytes.
 const MAX_CONV_BYTES: usize = 64;
-/// Most flags one `.dic` entry or one continuation class field may carry. Real dictionaries use a
-/// few hundred at most (Belarusian: 264); a longer field is hostile and is refused (`.aff`) or
-/// skipped (`.dic`, though its `FORBIDDENWORD` and `NOSUGGEST` flags still apply to the word).
-pub const MAX_FLAGS_PER_ENTRY: usize = 1024;
+/// Most flags one `.dic` entry or one continuation class field may carry. LibreOffice's Turkish
+/// dictionary has 920 entries over 1,024 flags (`abart`, `savaş`: up to 3,926), so the cap sits
+/// well above that; a longer field is hostile and is refused (`.aff`) or skipped (`.dic`, though
+/// its `FORBIDDENWORD` and `NOSUGGEST` flags still apply to the word). What all the flags of a
+/// dictionary may cost together is bounded by `MAX_SET_DATA`.
+pub const MAX_FLAGS_PER_ENTRY: usize = 8192;
 /// Most flags one stem may carry once its homonyms (the same word on several `.dic` lines) are
 /// merged, and so most flags a stem line of the compact format may carry. Larger than
 /// [`MAX_FLAGS_PER_ENTRY`] because merged sets aren't `.dic` fields; a homonym that would take the
 /// set past it adds only its `FORBIDDENWORD` and `NOSUGGEST` flags, as an exclusion is never lost.
-pub const MAX_FLAGS_PER_STEM: usize = 8 * MAX_FLAGS_PER_ENTRY;
+pub const MAX_FLAGS_PER_STEM: usize = 4 * MAX_FLAGS_PER_ENTRY;
 /// Most `AF` aliases, and most bytes of alias text in all: each alias is read once and shared by
 /// the stems using it, so these bound the flags an `AF` table can make a dictionary hold
 /// (the largest Language pack's table: 1,596 aliases, 19 KB).
@@ -72,6 +74,7 @@ const MAX_ALIAS_BYTES: usize = 4 << 20;
 /// Most flags all distinct flag sets (stems' and continuation classes') may hold together: a lookup
 /// tests each distinct continuation set it meets at most once, so this bounds its cost.
 const MAX_SET_DATA: usize = 1 << 23;
+
 /// Most distinct flags a dictionary may use: each gets a `u16` id.
 const MAX_DISTINCT_FLAGS: usize = 1 << 16;
 

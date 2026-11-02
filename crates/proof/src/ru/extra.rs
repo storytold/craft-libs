@@ -133,7 +133,14 @@ fn forms(base: &str, class: &str) -> Vec<String> {
         }
         "adj" => {
             if let Some(stem) = base.strip_suffix("ый").or_else(|| base.strip_suffix("ой")) {
-                let mut v = with(stem, &["ого", "ому", "ым", "ом", "ая", "ой", "ую", "ое", "ые", "ых", "ыми"]);
+                // `ы` is written `и` after г, к, х and ж, ш, ч, щ (`дорогие`, `большими`).
+                let i = is_velar(last(stem)) || is_hushing(last(stem));
+                let ends: &[&str] = if i {
+                    &["ого", "ому", "им", "ом", "ая", "ой", "ую", "ое", "ие", "их", "ими"]
+                } else {
+                    &["ого", "ому", "ым", "ом", "ая", "ой", "ую", "ое", "ые", "ых", "ыми"]
+                };
+                let mut v = with(stem, ends);
                 v.push(base.to_string());
                 return v;
             }
@@ -155,6 +162,16 @@ fn forms(base: &str, class: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// craft-libs#495 review: `-ой` adjectives after a velar or hushing letter take `и`.
+    #[test]
+    fn oi_adjectives_spell_i_after_velars_and_hushers() {
+        let f = forms("дорогой", "adj");
+        assert!(f.contains(&"дорогие".to_string()) && f.contains(&"дорогими".to_string()) && !f.iter().any(|w| w.contains('ы')), "{f:?}");
+        let f = forms("большой", "adj");
+        assert!(f.contains(&"больших".to_string()) && !f.iter().any(|w| w.contains('ы')), "{f:?}");
+        assert!(forms("молодой", "adj").contains(&"молодые".to_string()));
+    }
 
     #[cfg_attr(
         not(craft_proof_embed = "ru"),

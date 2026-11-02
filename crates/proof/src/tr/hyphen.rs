@@ -3,12 +3,13 @@
 //! Turkish words are split at syllables according to Turkish Language Association (TDK) rules.
 //! Because Turkish syllable boundaries are fully regular, they can be determined directly by rule
 //! without needing external pattern files or word lists:
-//! - Turkish vowels: `a`, `e`, `ı`, `i`, `o`, `ö`, `u`, `ü` (both lowercase and uppercase).
-//! - A single consonant between two vowels joins the following syllable (`ba-lık`, `ö-ğren-ci`).
+//! - Turkish vowels: `a`, `e`, `ı`, `i`, `o`, `ö`, `u`, `ü`, and `â`, `î`, `û` (`hi-kâ-ye`,
+//!   `dük-kân`), lowercase and uppercase.
+//! - A single consonant between two vowels joins the following syllable (`ba-lık`, `a-ra-ba`).
 //! - Of two consonants between two vowels, the first stays with the preceding syllable and the
-//!   second joins the next (`alt-lık`, `sev-gi`, `tür-kçe`).
+//!   second joins the next (`öğ-ren-ci`, `sev-gi`, `kar-deş`).
 //! - Of three consonants between two vowels, the first two stay with the preceding syllable and the
-//!   third joins the next (`türk-çe`, `sürp-riz`).
+//!   third joins the next (`türk-çe`, `alt-lık`, `sürp-riz`).
 //! - In compound words, syllable division follows pronunciation across the boundary (`ba-şöğ-ret-men`,
 //!   `il-ko-kul`), which matches the general vowel/consonant distribution rules.
 //!
@@ -17,7 +18,7 @@
 
 /// Is `c` a Turkish vowel?
 pub fn is_vowel(c: char) -> bool {
-    matches!(c, 'a' | 'e' | 'ı' | 'i' | 'o' | 'ö' | 'u' | 'ü' | 'A' | 'E' | 'I' | 'İ' | 'O' | 'Ö' | 'U' | 'Ü')
+    matches!(c, 'a' | 'e' | 'ı' | 'i' | 'o' | 'ö' | 'u' | 'ü' | 'â' | 'î' | 'û' | 'A' | 'E' | 'I' | 'İ' | 'O' | 'Ö' | 'U' | 'Ü' | 'Â' | 'Î' | 'Û')
 }
 
 /// Is `c` a Turkish letter?
@@ -84,6 +85,18 @@ mod tests {
         assert_eq!(split("şiir"), "şi-ir");
         assert_eq!(split("ilkokul"), "il-ko-kul");
         assert_eq!(split("başöğretmen"), "ba-şöğ-ret-men");
+    }
+
+    /// CodeRabbit on craft-libs#484: `â`, `î` and `û` are vowels, and the module doc's examples
+    /// are the ones the rules give.
+    #[test]
+    fn circumflex_vowels_and_doc_examples() {
+        assert_eq!(split("dükkân"), "dük-kân");
+        assert_eq!(split("hikâye"), "hi-kâ-ye");
+        assert_eq!(split("kâğıt"), "kâ-ğıt");
+        assert_eq!(split("millî"), "mil-lî");
+        assert_eq!(split("kardeş"), "kar-deş");
+        assert_eq!(split("sürpriz"), "sürp-riz");
     }
 
     #[test]

@@ -24,7 +24,9 @@ pub(crate) fn word_to_check_in<'a>(d: &AffixDict, word: &'a str, opts: &Options)
     if d.is_empty() {
         return None;
     }
-    let w = word.trim_matches(|c: char| !c.is_alphanumeric() && c != '\'' && c != '’');
+    // A trailing combining mark with no precomposed form (`x\u{338}`) is part of the word.
+    let edge = |c: char| !c.is_alphanumeric() && c != '\'' && c != '’';
+    let w = word.trim_start_matches(edge).trim_end_matches(|c| edge(c) && !unicode_normalization::char::is_combining_mark(c));
     let w = w.trim_matches(['\'', '’']);
     let n = w.chars().count();
     if n <= 1 || (opts.ignore_numbers && w.chars().any(|c| c.is_ascii_digit())) || !w.chars().any(char::is_alphabetic) {
@@ -55,5 +57,14 @@ mod tests {
         assert_eq!(word_to_check(&d, "PKO", &strict), Some("PKO"));
         assert_eq!(word_to_check(&d, "B2B", &strict), Some("B2B"));
         assert_eq!(word_to_check(&d, "PRZEDSIĘBIORSTWO", &defaults), Some("PRZEDSIĘBIORSTWO"), "only short capitals are acronyms");
+    }
+
+    /// craft-libs#487 review: a trailing combining mark stays on the word it marks.
+    #[test]
+    fn trailing_combining_marks_are_kept() {
+        let d = AffixDict::from_hunspell("", "1\nkot\n", &[]).unwrap();
+        let defaults = Options::default();
+        assert_eq!(word_to_check(&d, "kox\u{338}", &defaults), Some("kox\u{338}"));
+        assert_eq!(word_to_check(&d, "(kox\u{338}).", &defaults), Some("kox\u{338}"));
     }
 }

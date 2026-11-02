@@ -2,7 +2,7 @@
 //! README): every word of the public-domain Moby Hyphenator II list, without its break points.
 //!
 //! ```sh
-//! cargo run -p craft-proof --example en_words -- <craft-i18n>/language-data/en-us/en-us.dic data/en-words.dic
+//! cargo run -p craft-proof --example en_words -- <craft-i18n>/language-data/en-us/en-us.dic crates/proof/data/en-words.dic
 //! ```
 //!
 //! The input is craft-i18n's `en-us.dic`: the Moby Hyphenator II list by Grady Ward (Project

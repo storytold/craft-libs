@@ -148,8 +148,16 @@ fn core_breaks(core: &[char], lang: ProofLang) -> (Vec<usize>, Source) {
     if lang == ProofLang::Bg && core.iter().all(|&c| crate::bg::is_letter(c)) {
         return (crate::bg::points(core), Source::Rules);
     }
-    if lang == ProofLang::Tr && core.iter().all(|&c| crate::tr::hyphen::is_letter(c)) {
-        return (crate::tr::hyphen::points(core), Source::Rules);
+    // A suffix written after an apostrophe (`Ankara'dan`, `Türkiye'nin`) is hyphenated part by
+    // part; no break goes next to the apostrophe ([`word_breaks_in`] drops those).
+    if lang == ProofLang::Tr && core.iter().all(|&c| c == '\'' || crate::tr::hyphen::is_letter(c)) {
+        let mut out = Vec::new();
+        let mut start = 0;
+        for part in core.split(|&c| c == '\'') {
+            out.extend(crate::tr::hyphen::points(part).into_iter().map(|p| p + start));
+            start += part.len() + 1;
+        }
+        return (out, Source::Rules);
     }
     match lang {
         ProofLang::Pt => return core_breaks_patterns(Patterns::pt(), core),
@@ -525,6 +533,18 @@ fn heuristic_points_pl(c: &[char]) -> Vec<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// CodeRabbit on craft-libs#484: a Turkish word with a suffix after an apostrophe is
+    /// hyphenated by the Turkish rules, part by part, never next to the apostrophe.
+    #[test]
+    fn turkish_apostrophe_suffixes_follow_turkish_rules() {
+        let tr = |w: &str| hyphenate_word_in(w, &Limits::default(), ProofLang::Tr);
+        assert_eq!(tr("Ankara'dan"), "An-ka-ra'dan");
+        assert_eq!(tr("Türkiye'nin"), "Tür-ki-ye'nin");
+        assert_eq!(tr("İstanbul'daki"), "İs-tan-bul'da-ki");
+        assert_eq!(word_breaks_in("Ankara'dan", ProofLang::Tr).1, Source::Rules);
+        assert_eq!(tr("Ankara"), "An-ka-ra", "no apostrophe: as before");
+    }
 
     fn h(w: &str) -> String {
         hyphenate_word(w, &Limits::default())

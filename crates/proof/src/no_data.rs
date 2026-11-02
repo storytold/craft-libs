@@ -64,7 +64,15 @@ fn nothing_is_embedded() {
 fn english_spelling_still_marks_misspellings() {
     crate::hold_dictionary_tests();
     for l in [ProofLang::En, ProofLang::EnGb, ProofLang::EnCa] {
-        assert!(matches!(crate::english_source(l), Some(EnglishSource::Hunspell(_) | EnglishSource::CoreList)), "{l:?}");
+        let source = crate::english_source(l);
+        assert!(matches!(source, Some(EnglishSource::Hunspell(_) | EnglishSource::CoreList)), "{l:?}");
+        // Any English dictionary marks junk and knows `the`; the word-by-word results below are
+        // the built-in list's, so an installed dictionary (with `teh`, without `because`) is
+        // not held to them (craft-libs#482 and #487 reviews).
+        assert!(!crate::is_correct_in("zxqvbnwk", l) && crate::is_correct_in("the", l), "{l:?}");
+        if !matches!(source, Some(EnglishSource::CoreList)) {
+            continue;
+        }
         assert!(!crate::is_correct_in("becuase", l) && !crate::is_correct_in("teh", l), "{l:?}");
         assert!(crate::suggest_in("teh", 5, l).contains(&"the".to_string()), "{l:?}");
         assert!(crate::suggest_in("becuase", 5, l).contains(&"because".to_string()), "{l:?}");
@@ -73,11 +81,15 @@ fn english_spelling_still_marks_misspellings() {
         }
         assert_eq!(crate::check_spelling_in("Becuase the house of the people", l).len(), 1, "{l:?}");
     }
-    assert!(
-        !crate::is_correct("becuase") && !crate::is_correct_with("becuase", &Options::default()) && !crate::is_correct_for("becuase", Some("en-GB"))
-    );
-    assert!(crate::suggest("becuase", 5).contains(&"because".to_string()));
-    assert_eq!(crate::check_spelling("Becuase house").len(), 1);
+    if matches!(crate::english_source(ProofLang::En), Some(EnglishSource::CoreList)) {
+        assert!(
+            !crate::is_correct("becuase")
+                && !crate::is_correct_with("becuase", &Options::default())
+                && !crate::is_correct_for("becuase", Some("en-GB"))
+        );
+        assert!(crate::suggest("becuase", 5).contains(&"because".to_string()));
+        assert_eq!(crate::check_spelling("Becuase house").len(), 1);
+    }
     // The dialect variants are Language data: none without it.
     for w in ["colour", "color"] {
         assert_eq!(en_variants::preferred(w, ProofLang::En), None);

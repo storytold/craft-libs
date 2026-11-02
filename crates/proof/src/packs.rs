@@ -389,8 +389,8 @@ fn licence_files(pack: &Path, left: &mut u64) -> Vec<(String, String)> {
             let path = dir.join(&n);
             let size = std::fs::symlink_metadata(&path).ok().filter(std::fs::Metadata::is_file)?.len();
             if size > (*left).min(MAX_LICENCE) {
-                // Over what is left: none of the rest is read either.
-                *left = 0;
+                // Too big, or over what is left: this file is skipped, smaller ones still fit.
+                log::warn!("Language pack licence {} is {size} bytes; not shown", path.display());
                 return None;
             }
             let bytes = read_capped(&path, size.min(MAX_LICENCE)).ok()?;

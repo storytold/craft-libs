@@ -71,8 +71,9 @@ fn check(d: &AffixDict, word: &str, opts: &crate::Options) -> bool {
     let Some(w) = crate::spelling::word_to_check(d, word, opts) else {
         return true;
     };
+    // The whole word first, as Hunspell does: a hyphenated entry or user word.
     if w.contains('-') {
-        return w.split('-').all(|p| p.chars().count() <= 1 || known(d, p));
+        return known(d, w) || w.split('-').all(|p| p.chars().count() <= 1 || known(d, p));
     }
     known(d, w)
 }
@@ -94,6 +95,14 @@ mod tests {
         assert!(d.len() > 50, "{}", d.len());
         assert!(d.rule_count() >= 5, "the test dictionary's affix rules");
         assert!(!d.rep().is_empty() && !d.map().is_empty() && !d.try_chars().is_empty());
+    }
+
+    /// craft-libs#487 review: a hyphenated dictionary entry is a word even when its parts aren't.
+    #[test]
+    fn a_hyphenated_entry_is_looked_up_whole() {
+        let d = AffixDict::from_hunspell("SET UTF-8\n", "1\ntic-tac\n", &[]).unwrap();
+        assert!(is_correct_with(&d, "tic-tac"));
+        assert!(!is_correct_with(&d, "tic-tacc"));
     }
 
     #[test]

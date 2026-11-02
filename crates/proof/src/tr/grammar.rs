@@ -10,6 +10,7 @@
 //!   `ne ... ne` conjunctions should not have commas immediately before or after them.
 //! - **Doubled punctuation** (`..`, `,,`, `;;`).
 
+use super::suggest::turkish_to_lower;
 use crate::{Issue, IssueKind, ProofLang, words};
 
 /// Turkish reduplications and emphatic word pairings that are intentionally repeated.
@@ -120,15 +121,15 @@ const ALLOWED_REPEATS: &[&str] = &[
 /// Turkish abbreviations that end with a period and after which lower case may continue.
 const ABBREVIATIONS: &[&str] = &[
     "vb", "vs", "vd", "bkz", "bknz", "ör", "örnek", "mad", "md", "s", "sf", "sn", "dk", "sa", "yy", "m", "km", "cm", "mm", "gr", "kg", "mg", "dr",
-    "prof", "doç", "yrd", "av", "ist", "ank", "izm", "cad", "sok", "mah", "apt", "no", "tel", "faks", "tl", "kr", "krş", "a.ş", "ltd", "şti", "t.c",
-    "tbmm", "meb", "möt", "mö", "ms",
+    "prof", "doç", "yrd", "av", "ist", "ank", "izm", "cad", "sok", "mah", "apt", "no", "tel", "faks", "tl", "kr", "krş", "ltd", "şti", "tbmm", "meb",
+    "möt", "mö", "ms",
 ];
 
 /// Conjunctions that must not be preceded by a comma.
 const CONJUNCTIONS_NO_PRE_COMMA: &[&str] = &["ve", "veya", "yahut", "velev", "veyahut", "de", "da"];
 
 /// Conjunctions that must not be followed by a comma.
-const CONJUNCTIONS_NO_POST_COMMA: &[&str] = &["ve", "veya", "yahut", "veyahut", "hem", "ne", "ya", "gerek", "ister", "de", "da"];
+const CONJUNCTIONS_NO_POST_COMMA: &[&str] = &["ve", "veya", "yahut", "veyahut", "hem", "gerek", "ister"];
 
 /// Check grammar and punctuation in a Turkish text block.
 pub fn check(text: &str) -> Vec<Issue> {
@@ -152,9 +153,11 @@ pub fn check_with(text: &str, capital_first: bool) -> Vec<Issue> {
             None => continue,
         };
         let only_spaces = gap.chars().all(|c| c == ' ' || c == '\t');
-        let lower1 = w1.to_lowercase();
-        let lower2 = w2.to_lowercase();
-        if only_spaces && lower1 == lower2 && !ALLOWED_REPEATS.contains(&lower1.as_str()) {
+        let lower1 = turkish_to_lower(w1);
+        let lower2 = turkish_to_lower(w2);
+        // Words, not numbers or codes (`1 1`, `A1 A1`); `Ankara'da Ankara'da` is one.
+        let word = w1.chars().any(char::is_alphabetic) && !w1.chars().any(|c| c.is_numeric());
+        if only_spaces && word && lower1 == lower2 && !ALLOWED_REPEATS.contains(&lower1.as_str()) {
             v.push(Issue {
                 start: pair[1].0,
                 end: pair[1].1,
@@ -172,9 +175,30 @@ pub fn check_with(text: &str, capital_first: bool) -> Vec<Issue> {
         let (idx, c) = chars[i];
         if matches!(c, ',' | '.' | '?' | '!' | ';' | ':') && i > 0 && chars[i - 1].1 == ' ' {
             let prev_sp = chars[i - 1].0;
-            // Leave emoticons and ellipses alone
-            let is_dot_in_dots = c == '.' && (i + 1 < chars.len() && chars[i + 1].1 == '.');
-            if !is_dot_in_dots {
+            // Leave ellipses (` ...`), numbers (` .5`), emoticons (` :)`, ` ;-)`, ` :D`) and
+            // scores (`3 : 1`) alone.
+            let after = chars.get(i + 1).map(|&(_, a)| a);
+            let ratio = c == ':'
+                && i >= 2
+                && chars.get(i - 2).is_some_and(|&(_, b)| b.is_ascii_digit())
+                && after == Some(' ')
+                && chars.get(i + 2).is_some_and(|&(_, d)| d.is_ascii_digit());
+            // `:)`, `;(`, `:-)` are emoticons; `:D` and `;P` only when a space or the end follows
+            // (`;Dün` is a stray space before a word).
+            let ends = |k: usize| chars.get(k).is_none_or(|&(_, e)| e.is_whitespace());
+            let emoticon = match after {
+                Some(')' | '(') => true,
+                Some('-') => matches!(chars.get(i + 2), Some(&(_, ')' | '('))),
+                Some('D' | 'P') => ends(i + 2),
+                _ => false,
+            };
+            let flag = !ratio
+                && match c {
+                    ',' | '!' | '?' => true,
+                    ':' | ';' => !emoticon,
+                    _ => !matches!(after, Some('.')) && !after.is_some_and(|a| a.is_ascii_digit()),
+                };
+            if flag {
                 v.push(Issue {
                     start: prev_sp,
                     end: idx + c.len_utf8(),
@@ -205,7 +229,7 @@ pub fn check_with(text: &str, capital_first: bool) -> Vec<Issue> {
     // 3. Comma before or after conjunctions (`ali, ve veli` or `ve, veli`)
     for (i, &(w_start, w_end)) in ws.iter().enumerate() {
         let word = match text.get(w_start..w_end) {
-            Some(w) => w.to_lowercase(),
+            Some(w) => turkish_to_lower(w),
             None => continue,
         };
         // Check comma before conjunction
@@ -268,9 +292,18 @@ pub fn check_with(text: &str, capital_first: bool) -> Vec<Issue> {
         let prev_word = text.get(ws[i - 1].0..prev_end).unwrap_or("");
         if let Some(gap) = text.get(prev_end..w_start) {
             let trimmed = gap.trim();
+            // A space must follow the mark (`rapor.txt`, `www.example.com` are one token), and a
+            // number before a period is an ordinal (`5. sınıf`, `21. yüzyıl`).
+            let spaced = gap.rfind(['.', '?', '!']).and_then(|m| gap.get(m + 1..)).is_some_and(|rest| rest.contains(char::is_whitespace));
+            let ordinal = trimmed.ends_with('.') && prev_word.chars().any(|c| c.is_ascii_digit());
+            // An initial (`A.Ş.`, `T.C.`, `M. Kemal`) ends no sentence.
+            let initial = trimmed.starts_with('.') && prev_word.chars().count() == 1;
             if (trimmed.ends_with('.') || trimmed.ends_with('?') || trimmed.ends_with('!'))
+                && spaced
+                && !ordinal
+                && !initial
                 && !trimmed.contains("...")
-                && !ABBREVIATIONS.contains(&prev_word.to_lowercase().as_str())
+                && !ABBREVIATIONS.contains(&turkish_to_lower(prev_word).as_str())
                 && let Some(w) = text.get(w_start..w_end)
                 && w.chars().next().is_some_and(char::is_lowercase)
             {
@@ -310,6 +343,31 @@ pub fn turkish_capitalize(s: &str) -> String {
 mod tests {
     use super::*;
 
+    /// CodeRabbit on craft-libs#484/#489: emoticons, decimals and scores aren't stray spaces;
+    /// ordinals and file or web names don't end a sentence.
+    #[test]
+    fn emoticons_numbers_ordinals_and_names_are_left_alone() {
+        for ok in [
+            "Harika :)",
+            "Tamam ;)",
+            "Süper :D",
+            "Oran .5 oldu.",
+            "Maç 3 : 1 bitti.",
+            "Ali 5. sınıfta okuyor.",
+            "Bina 21. yüzyıldan kalma.",
+            "Dosyayı rapor.txt olarak kaydet.",
+            "Adres www.example.com olarak yazıldı.",
+        ] {
+            assert!(check(ok).is_empty(), "{ok}: {:?}", check(ok));
+        }
+        assert_eq!(check("Gel , bak.").len(), 1, "a real stray space is still flagged");
+        for bad in ["Not :bu", "Ne ?Bu", "Peki ;Dün", "Evet !"] {
+            assert!(check(bad).iter().any(|i| i.message.starts_with("Noktalama")), "{bad}: {:?}", check(bad));
+        }
+        assert!(check("Harika :-) dedi.").is_empty() && check("Peki ;P").is_empty());
+        assert_eq!(check("Geldi. bu iyi.").len(), 1, "a real sentence start is still flagged");
+    }
+
     #[test]
     fn clean_turkish_text_produces_no_issues() {
         let text = "Bu bir test cümlesidir. Kitap ve defter aldım. Çocuk yavaş yavaş yürüdü.";
@@ -343,10 +401,39 @@ mod tests {
         assert_eq!(issues.len(), 1);
         assert!(issues[0].message.contains("virgül konulmaz"));
 
-        let text2 = "Bana kalırsa bu mesele de, haklı olan taraf bizdik.";
+        let text2 = "Elma ve, armut.";
         let issues2 = check(text2);
         assert_eq!(issues2.len(), 1);
-        assert!(issues2[0].message.contains("'de' bağlacından sonra virgül konulmaz"));
+        assert!(issues2[0].message.contains("'ve' bağlacından sonra virgül konulmaz"));
+    }
+
+    /// `de`/`da`, `ne` and `ya` often take a comma after them in correct Turkish, so no mark
+    /// (craft-libs#488 review).
+    #[test]
+    fn a_comma_after_de_ne_or_ya_is_fine() {
+        for text in ["Ali de, Veli de geldi.", "Ne, sen mi geldin?", "Ya, bilmiyorum.", "Bu mesele de, haklı olan bizdik."] {
+            assert!(check(text).is_empty(), "{text}: {:?}", check(text));
+        }
+    }
+
+    /// craft-libs#495 review: initials (`A.Ş.`, `T.C.`) and `İst.` end no sentence, and Turkish
+    /// case folding finds `Işık ışık`; a word with an apostrophe is still a repeat.
+    #[test]
+    fn turkish_case_and_initials() {
+        for text in ["Şirket A.Ş. bugün açıldı.", "O T.C. vatandaşı.", "Adres İst. caddesi."] {
+            assert!(check(text).is_empty(), "{text}: {:?}", check(text));
+        }
+        for text in ["Işık ışık yandı.", "Ankara'da Ankara'da kaldık."] {
+            assert_eq!(check(text).iter().filter(|i| i.message == "Yinelenen sözcük").count(), 1, "{text}");
+        }
+    }
+
+    /// Repeated numbers are not repeated words (craft-libs#488 review).
+    #[test]
+    fn repeated_numbers_are_not_flagged() {
+        for text in ["Skor 1 1 bitti.", "Toplam 100 100 değil.", "Oda A1 A1 değil."] {
+            assert!(check(text).is_empty(), "{text}: {:?}", check(text));
+        }
     }
 
     #[test]

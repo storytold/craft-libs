@@ -15,11 +15,19 @@ pub fn check(text: &str) -> Vec<Issue> {
     issues
 }
 
+/// Words Czech repeats on purpose (`ne ne`, `ano ano`, `už už`, `to to`).
+const ALLOWED_REPEATS: &[&str] = &["ne", "ano", "už", "to", "jo", "no", "tak", "pryč", "dál", "pomalu", "honem"];
+
 fn repeated_words(text: &str, ws: &[(usize, usize)], v: &mut Vec<Issue>) {
     for pair in ws.windows(2) {
         let [(a0, b0), (a1, b1)] = pair else { continue };
         let (Some(w0), Some(w1), Some(gap)) = (text.get(*a0..*b0), text.get(*a1..*b1), text.get(*b0..*a1)) else { continue };
-        if !gap.is_empty() && gap.chars().all(char::is_whitespace) && w0.chars().all(char::is_alphabetic) && w0.to_lowercase() == w1.to_lowercase() {
+        if !gap.is_empty()
+            && gap.chars().all(char::is_whitespace)
+            && w0.chars().all(char::is_alphabetic)
+            && w0.to_lowercase() == w1.to_lowercase()
+            && !ALLOWED_REPEATS.contains(&w0.to_lowercase().as_str())
+        {
             v.push(issue(*a0, *b1, format!("Opakované slovo: „{w1}“"), vec![w0.to_string()]));
         }
     }
@@ -65,6 +73,15 @@ fn spaces(text: &str, v: &mut Vec<Issue>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// craft-libs#495 review: intentional repeats aren't marked; others still are.
+    #[test]
+    fn intentional_repeats_are_fine() {
+        for text in ["Ne ne, to nechci.", "Ano ano, přijdu.", "Už už odcházel.", "To to bylo krásné."] {
+            assert!(check(text).is_empty(), "{text}: {:?}", check(text));
+        }
+        assert_eq!(check("Byl byl doma.").len(), 1);
+    }
 
     #[test]
     fn repeated_words_and_spaces_have_czech_messages() {

@@ -288,13 +288,16 @@ fn spaces(text: &str, v: &mut Vec<Issue>) {
         let Some(p) = it.next() else { continue };
         let after = it.next();
         let flag = match p {
-            ',' => true,
+            // ` ,,` opens a typed quote (the doubled-punctuation rule suggests `„`).
+            ',' => after != Some(','),
             // `;)` and `;-)` are emoticons.
             ';' => !matches!(after, Some(')' | '(' | '-' | 'P' | 'D')),
             // ` ...` is an ellipsis, ` .5` a number.
             '.' => !matches!(after, Some('.')) && !after.is_some_and(|a| a.is_ascii_digit()),
             // ` :)`, ` :-)`, ` :D` and similar are emoticons; ` ?!` is still a stray space.
-            ':' | '!' | '?' => after.is_none_or(|a| a.is_whitespace() || matches!(a, '"' | '”' | '»' | '’' | '!' | '?')),
+            ':' | '!' | '?' => {
+                !crate::score_colon(text, i) && after.is_none_or(|a| a.is_whitespace() || matches!(a, '"' | '”' | '»' | '’' | '!' | '?'))
+            }
             _ => false,
         };
         if flag {

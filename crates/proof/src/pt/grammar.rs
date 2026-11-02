@@ -63,7 +63,9 @@ fn ends_sentence(gap: &str, prev: &str) -> bool {
         return false;
     }
     let rest = t.trim_start_matches(['.', '!', '?']).trim_start_matches(CLOSING);
-    rest.starts_with(char::is_whitespace) && rest.trim_start().chars().all(|c| OPENING.contains(&c))
+    // A dialogue dash after the mark brings back the narration (`—Vai? —disse ele.`), which goes
+    // on in lower case.
+    rest.starts_with(char::is_whitespace) && !rest.contains('—') && rest.trim_start().chars().all(|c| OPENING.contains(&c))
 }
 
 /// Grammar issues in a paragraph of Portuguese text, in order.
@@ -115,7 +117,7 @@ fn spaces(text: &str, v: &mut Vec<Issue>) {
             // ` ...` is an ellipsis, ` .5` a number.
             '.' => !matches!(after, Some('.')) && !after.is_some_and(|a| a.is_ascii_digit()),
             // ` :)`, ` :-)`, ` :D` and similar are emoticons; ` ?!` is still a stray space.
-            ':' | '!' | '?' => after.is_none_or(|a| a.is_whitespace() || matches!(a, '"' | '”' | '’' | '!' | '?')),
+            ':' | '!' | '?' => !crate::score_colon(text, i) && after.is_none_or(|a| a.is_whitespace() || matches!(a, '"' | '”' | '’' | '!' | '?')),
             _ => false,
         };
         if flag {
@@ -220,6 +222,9 @@ mod tests {
         clean("Zhou ficou em 5. lugar no séc. XX.");
         clean("Esperei... e ele apareceu.");
         clean("— Vai — disse ele. — Amanhã eu volto.");
+        // craft-libs#488 review: no space after the dash.
+        clean("—Vai? —disse ele.");
+        clean("— Vai? — disse ele.");
         clean("Ele disse: \"Volto amanhã\". E saiu.");
         // A list item may start in lower case.
         clean("maçãs,");

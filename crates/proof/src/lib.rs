@@ -675,6 +675,13 @@ pub(crate) fn accepted_by_options(word: &str, opts: &Options) -> bool {
         || in_user_dictionary(&w.to_lowercase())
 }
 
+/// Is the space at byte `space` of `text` the first of a score or ratio's `3 : 1`, which keeps
+/// its spaces (the grammar rules' space-before-punctuation check)?
+pub(crate) fn score_colon(text: &str, space: usize) -> bool {
+    text.get(..space).and_then(|t| t.chars().next_back()).is_some_and(|c| c.is_ascii_digit())
+        && text.get(space..).is_some_and(|t| t.starts_with(" : ") && t.get(3..).and_then(|r| r.chars().next()).is_some_and(|c| c.is_ascii_digit()))
+}
+
 /// [`is_correct`] with the File › Options › Proofing choices: English with no dialect, so a word
 /// any English spells so is right (`color` and `colour`; American English's dictionary when it
 /// isn't SCOWL: [`english_source`]), without the dialect policy.
@@ -1928,6 +1935,45 @@ mod tests {
         packs::set_packs_dir(None);
         set_dictionaries_folder(Some(shared_test_folder()));
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// craft-libs#485 review: a licence file that is too big is skipped alone; the pack's other
+    /// licences and the next pack's are still shown.
+    #[test]
+    fn an_oversized_licence_skips_only_itself() {
+        crate::hold_dictionary_tests();
+        set_dictionaries_folder(Some(shared_test_folder()));
+        let root = std::env::temp_dir().join(format!("wc-proof-licence-skip-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        for l in ["qa", "qb"] {
+            let dir = write_pack(&root, l, &[]);
+            std::fs::write(dir.join("LICENCES").join("A-HUGE"), vec![b'x'; (4 << 20) + 1]).unwrap();
+            std::fs::write(dir.join("LICENCES").join("COPYING"), format!("licence {l}")).unwrap();
+        }
+        packs::set_packs_dir(Some(root.clone()));
+        let texts = packs::licence_texts();
+        let shown: Vec<&str> = texts.iter().filter(|(t, _)| t.contains("(q")).map(|(_, x)| x.as_str()).collect();
+        assert_eq!(shown, ["licence qa", "licence qb"]);
+        packs::set_packs_dir(None);
+        set_dictionaries_folder(Some(shared_test_folder()));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// craft-libs#483 and #488 reviews: a score keeps its spaces (`3 : 1`) in every language's
+    /// space-before-punctuation rule, and in Polish and Russian ` ,,` (a typed opening quote) is
+    /// left to the doubled-punctuation rule alone.
+    #[test]
+    fn scores_and_typed_quotes_keep_their_spaces() {
+        let space_marks = |text: &str, lang| check_grammar_in(text, lang).into_iter().filter(|i| text.get(i.start..i.start + 1) == Some(" ")).count();
+        for lang in [ProofLang::Ru, ProofLang::Pl, ProofLang::Hr, ProofLang::It, ProofLang::Pt] {
+            assert_eq!(space_marks("Wynik 3 : 1 dzisiaj.", lang), 0, "{lang:?}");
+            assert_eq!(space_marks("Wynik 3 : dzisiaj.", lang), 1, "{lang:?}: not a score");
+        }
+        for (text, lang) in [("Powiedział ,,tak” wczoraj.", ProofLang::Pl), ("Он сказал ,,да” вчера.", ProofLang::Ru)] {
+            let issues = check_grammar_in(text, lang);
+            assert_eq!(space_marks(text, lang), 0, "{issues:?}");
+            assert!(issues.iter().any(|i| text.get(i.start..i.end) == Some(",,")), "the quote rule still marks it: {issues:?}");
+        }
     }
 
     /// Pack languages for the cache tests: `qa`, `qb`… each knowing `word<locale>`.

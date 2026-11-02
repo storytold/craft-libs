@@ -88,8 +88,10 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
 - [`craft-print`](crates/print/README.md): PDF submission to CUPS and Windows, printer discovery,
   duplex/copies/colour and driver preferences. PDF generation stays in each app.
 - [`craft-proof`](crates/proof/README.md): proofing per language (spelling, suggestions, grammar,
-  hyphenation, a Hunspell reader, user words). The word lists and patterns are craft-i18n's
-  `language-data/`, embedded at build time from `CRAFT_I18N_DIR`.
+  hyphenation, a Hunspell reader, user words, Language packs). The word lists and patterns are
+  craft-i18n's `language-data/`, embedded at build time from `CRAFT_I18N_DIR`: English and the
+  carry-over locales by default, the set `CRAFT_PROOF_EMBED` names otherwise (`en` for English
+  only); other languages come from installed Language packs.
 
 - [`craft-quit`](crates/quit/src/lib.rs): native macOS quit, egui close handling and an optional
   app menu. Unsaved-document decisions and save prompts stay in each app.

@@ -105,16 +105,7 @@ fn search_tiers(lo_exts: Option<&[String]>) -> (Vec<PathBuf>, Vec<PathBuf>) {
                 system.extend(lo_dirs(&base.join("LibreOffice").join("share").join("extensions").to_string_lossy()));
             }
         }
-        // If LibreOffice is installed on another drive (e.g. D:\Program Files\LibreOffice), check drives C..Z
-        for drive in b'C'..=b'Z' {
-            let drive_char = drive as char;
-            for pf in ["Program Files", "Program Files (x86)"] {
-                let lo_base = PathBuf::from(format!(r"{drive_char}:\{pf}\LibreOffice\share\extensions"));
-                if lo_base.is_dir() {
-                    system.extend(lo_dirs(&lo_base.to_string_lossy()));
-                }
-            }
-        }
+        system.extend(lo_drive_dirs(lo_exts, || LO_DRIVE_BASES.get_or_init(|| lo_drive_bases(Path::is_dir))));
     } else if cfg!(target_os = "macos") {
         if let Some(h) = &home {
             // An app started from Finder or the Dock doesn't see `WORDCRAFT_DICTIONARIES`; this
@@ -143,6 +134,26 @@ fn search_tiers(lo_exts: Option<&[String]>) -> (Vec<PathBuf>, Vec<PathBuf>) {
     }
     (dirs, system)
 }
+
+/// LibreOffice's language folders (`<drive>:\Program Files\LibreOffice\share\extensions\<ext>`)
+/// on the drives C to Z where LibreOffice is installed (`bases`). No drive is probed without
+/// `lo_exts` (no LibreOffice folders are wanted then).
+fn lo_drive_dirs<'a>(lo_exts: Option<&[String]>, bases: impl FnOnce() -> &'a [PathBuf]) -> Vec<PathBuf> {
+    let Some(exts) = lo_exts else { return Vec::new() };
+    bases().iter().flat_map(|base| exts.iter().map(|e| base.join(e))).collect()
+}
+
+/// The `LibreOffice\share\extensions` folders on drives C to Z (48 probes).
+fn lo_drive_bases(is_dir: impl Fn(&Path) -> bool) -> Vec<PathBuf> {
+    ('C'..='Z')
+        .flat_map(|drive| ["Program Files", "Program Files (x86)"].map(|pf| PathBuf::from(format!(r"{drive}:\{pf}\LibreOffice\share\extensions"))))
+        .filter(|base| is_dir(base))
+        .collect()
+}
+
+/// [`lo_drive_bases`], probed once per process.
+// ponytail: a LibreOffice installed while the app runs is seen after a restart.
+static LO_DRIVE_BASES: std::sync::OnceLock<Vec<PathBuf>> = std::sync::OnceLock::new();
 
 /// The user's data folder on Linux and the BSDs: `$XDG_DATA_HOME` when it is an absolute path (the
 /// XDG Base Directory spec ignores a relative one), else `~/.local/share`.
@@ -609,6 +620,31 @@ fn decode_utf8_dic(dic: &[u8]) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// CodeRabbit on craft-libs#489: without LibreOffice extension names no drive is probed; with
+    /// them, only drives where LibreOffice is found give folders.
+    #[test]
+    fn libreoffice_drives_are_probed_only_when_wanted() {
+        let probes = std::cell::Cell::new(0);
+        let count = |_: &Path| {
+            probes.set(probes.get() + 1);
+            false
+        };
+        // craft-libs#495 review: the drives are probed once, not on every lookup.
+        let cache = std::sync::OnceLock::new();
+        let cached = || cache.get_or_init(|| lo_drive_bases(count)).as_slice();
+        assert!(lo_drive_dirs(None, cached).is_empty());
+        assert_eq!(probes.get(), 0);
+        let exts = ["dict-tr".to_string()];
+        assert!(lo_drive_dirs(Some(&exts), cached).is_empty());
+        assert!(lo_drive_dirs(Some(&exts), cached).is_empty());
+        assert_eq!(probes.get(), 48);
+        let found = lo_drive_bases(|p: &Path| p.to_string_lossy().starts_with(r"D:\Program Files\"));
+        assert_eq!(
+            lo_drive_dirs(Some(&exts), || found.as_slice()),
+            [PathBuf::from(r"D:\Program Files\LibreOffice\share\extensions").join("dict-tr")]
+        );
+    }
 
     /// Another region's Language pack never beats the system's dictionary of the right region
     /// (`pt-pt` pack vs system `pt_BR`; `de-ch` vs `de_DE`; `en-gb` vs `en_US`), but beats the

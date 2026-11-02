@@ -78,12 +78,8 @@ fn check(d: &TrDict, word: &str, opts: &crate::Options) -> bool {
     }
     let w = word.trim_matches(|c: char| !c.is_alphanumeric() && c != '\'' && c != '’');
     let w = w.trim_matches(['\'', '’']);
-    let n = w.chars().count();
-    if n <= 1 || (opts.ignore_numbers && w.chars().any(|c| c.is_ascii_digit())) || !w.chars().any(char::is_alphabetic) {
-        return true;
-    }
-    // Check user dictionary first
-    if crate::in_user_dictionary(&suggest::turkish_to_lower(w)) || crate::in_user_dictionary(&w.to_lowercase()) {
+    // One letter, no letters, digits, capitals (Ignore words in UPPERCASE) or the user dictionary.
+    if crate::accepted_by_options(w, opts) || crate::in_user_dictionary(&suggest::turkish_to_lower(w)) {
         return true;
     }
 
@@ -160,5 +156,16 @@ mod tests {
         assert!(!crate::is_correct_in_with("ev-kitapp2", lang, &check_digits));
         assert!(crate::is_correct_in_with("2026", lang, &check_digits), "numbers alone stay correct");
         assert!(is_correct("kitapp2"), "direct checks keep the defaults");
+    }
+
+    /// Ignore words in UPPERCASE reaches Turkish's own entry points too, so `NATO` and `TBMM` are
+    /// right by default and checked when the option is off (craft-libs#495 review).
+    #[test]
+    fn turkish_ignores_capitals_unless_told_otherwise() {
+        test_dict::install();
+        let check_caps = crate::Options { ignore_uppercase: false, ..crate::Options::default() };
+        assert!(is_correct("TBMMX") && is_correct_with_options("TBMMX", &crate::Options::default()));
+        assert!(!is_correct_with_options("TBMMX", &check_caps));
+        assert!(is_correct_with_options("KİTAP", &check_caps), "a word in Turkish capitals is still looked up");
     }
 }

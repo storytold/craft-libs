@@ -95,8 +95,9 @@ fn check(d: &AffixDict, word: &str, opts: &crate::Options) -> bool {
     if TRUNCATIONS.contains(&lower.as_str()) || left_to_grammar(&lower) {
         return true;
     }
+    // The whole word first, as Hunspell does: a hyphenated entry or user word.
     if w.contains('-') {
-        return w.split('-').all(|p| p.chars().count() <= 1 || known(d, p));
+        return known(d, w) || w.split('-').all(|p| p.chars().count() <= 1 || known(d, p));
     }
     if let Some((head, tail)) = w.split_once(['\'', '’'])
         && PROCLITICS.contains(&head.to_lowercase().as_str())
@@ -137,6 +138,14 @@ mod tests {
         let ok = found.as_ref().is_some_and(|(a, d)| a.ends_with("it_CH.aff") && d.ends_with("it_CH.dic"));
         assert!(ok, "{found:?}");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// craft-libs#487 review: a hyphenated dictionary entry is a word even when its parts aren't.
+    #[test]
+    fn a_hyphenated_entry_is_looked_up_whole() {
+        let d = AffixDict::from_hunspell("SET UTF-8\n", "1\ntic-tac\n", &[]).unwrap();
+        assert!(is_correct_with(&d, "tic-tac"));
+        assert!(!is_correct_with(&d, "tic-tacc"));
     }
 
     #[test]

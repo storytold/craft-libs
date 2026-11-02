@@ -201,25 +201,32 @@ fn alternatives(c: char, map: &[Vec<char>]) -> Vec<char> {
 }
 
 /// Every way of changing up to `t.max_map_changes` letters of `chars` to a MAP relative (`alts`,
-/// letter by letter), with its cost, each written after `buf`.
-fn map_variants(chars: &[char], alts: &[Vec<char>], t: &Tuning, changes: usize, cost: u32, buf: &mut Vec<char>, out: &mut Vec<(String, u32)>) {
-    if out.len() >= MAX_MAP_VARIANTS {
+/// letter by letter), with its cost: all one-change variants first, then two, and so on, so the
+/// [`MAX_MAP_VARIANTS`] cap drops the variants with the most changes.
+fn map_variants(chars: &[char], alts: &[Vec<char>], t: &Tuning, out: &mut Vec<(String, u32)>) {
+    let mut buf = Vec::with_capacity(chars.len());
+    for n in 1..=t.max_map_changes.min(chars.len()) {
+        exact_map_variants(chars, alts, t, n, 0, &mut buf, out);
+    }
+}
+
+/// [`map_variants`] with exactly `left` more changes, each written after `buf`.
+fn exact_map_variants(chars: &[char], alts: &[Vec<char>], t: &Tuning, left: usize, cost: u32, buf: &mut Vec<char>, out: &mut Vec<(String, u32)>) {
+    if out.len() >= MAX_MAP_VARIANTS || left > chars.len() {
         return;
     }
     let Some((&c, rest)) = chars.split_first() else {
-        if changes > 0 {
-            out.push((buf.iter().collect(), cost));
-        }
+        out.push((buf.iter().collect(), cost));
         return;
     };
     let (here, later) = alts.split_first().map_or((&[][..], &[][..]), |(h, l)| (h.as_slice(), l));
     buf.push(c);
-    map_variants(rest, later, t, changes, cost, buf, out);
+    exact_map_variants(rest, later, t, left, cost, buf, out);
     buf.pop();
-    if changes < t.max_map_changes {
+    if left > 0 {
         for &a in here {
             buf.push(a);
-            map_variants(rest, later, t, changes + 1, cost + (t.map_cost)(c, a), buf, out);
+            exact_map_variants(rest, later, t, left - 1, cost + (t.map_cost)(c, a), buf, out);
             buf.pop();
         }
     }
@@ -368,7 +375,7 @@ fn add_case(col: &mut Collector, word: &str, input: &str) {
 fn add_map_slips(col: &mut Collector, chars: &[char], map: &[Vec<char>], t: &Tuning) {
     let alts: Vec<Vec<char>> = chars.iter().map(|&c| alternatives(c, map)).collect();
     let mut variants = Vec::new();
-    map_variants(chars, &alts, t, 0, 0, &mut Vec::with_capacity(chars.len()), &mut variants);
+    map_variants(chars, &alts, t, &mut variants);
     variants.sort_by_key(|v| v.1);
     for (v, cost) in &variants {
         col.offer(v, *cost);
@@ -534,6 +541,22 @@ fn scan(col: &mut Collector, chars: &[char], map: &[Vec<char>]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// craft-libs#487 review: MAP variants are made by number of changes, so when a long word has
+    /// more than [`MAX_MAP_VARIANTS`] of them the cap drops the most-changed ones, never a single
+    /// slip (here the first letter's, which depth-first order reached last).
+    #[test]
+    fn the_map_cap_keeps_the_fewest_changes() {
+        let chars: Vec<char> = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".chars().collect();
+        let alts = vec!["áàâäãåā".chars().collect::<Vec<char>>(); chars.len()];
+        let mut out = Vec::new();
+        map_variants(&chars, &alts, &Tuning::DEFAULT, &mut out);
+        assert_eq!(out.len(), MAX_MAP_VARIANTS);
+        let changed = |v: &str| v.chars().filter(|&c| c != 'a').count();
+        assert_eq!(out.iter().filter(|(v, _)| changed(v) == 1).count(), 30 * 7, "every single slip is kept");
+        assert!(out.iter().any(|(v, _)| v.starts_with('á') && changed(v) == 1));
+        assert!(out.windows(2).all(|w| changed(&w[0].0) <= changed(&w[1].0)), "fewest changes first");
+    }
 
     /// craft-libs#490 review: a suggestion recased to capitals keeps `ß` (`STRAßE`, right with or
     /// without CHECKSHARPS); under CHECKSHARPS the SS form comes first, and a KEEPCASE `ß` word may
