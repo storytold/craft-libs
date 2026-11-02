@@ -15,6 +15,7 @@ mod msi_copy;
 mod msi_migrate;
 pub mod packages;
 pub mod paths;
+pub mod pins;
 pub mod platform;
 #[cfg(windows)]
 pub mod portable;
@@ -47,10 +48,12 @@ pub use time::parse_rfc3339;
 pub use version::{Version, is_newer, parse as parse_version};
 
 #[cfg(feature = "egui")]
-pub use dialog::{StartupPrompt, StartupPromptResponse};
+pub use dialog::{CheckResultDialog, CheckResultResponse, StartupPrompt, StartupPromptResponse};
 
 /// Checks for an update against GitHub releases for the given app.
 pub fn check_for_update(app: &App, http: &Http, current_version: &str) -> Result<Option<Release>, String> {
+    let version = self_update::current_version(app, current_version).map(|v| v.to_string());
+    let current_version = version.as_deref().unwrap_or(current_version);
     let url = format!("https://api.github.com/repos/{}/releases?per_page=30", app.repo);
     match http.get_api(&url, None)? {
         crate::http::Fetched::Body { text, .. } => offered_release(&text, app.repo, current_version),

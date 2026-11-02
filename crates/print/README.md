@@ -15,6 +15,25 @@ opens Windows printer preferences and submits jobs with copies, collation, duple
 
 - **macOS/Linux:** CUPS `lpstat`, `lpoptions` and `lp`. Jobs stream through stdin. Exact-size
   sheets use `fit-to-page=false`; shrink-to-fit uses IPP `print-scaling=auto-fit`.
+- **Flatpak:** the Freedesktop runtime has libcups but not `lpstat`/`lp`/`lpoptions`, so the app
+  bundles them (the apps' manifests build them from CUPS as a `cups-client` module). What each
+  piece is for:
+  - `lpstat` and `--socket=cups`: the printer list. Without either it is empty, and a missing
+    `lpstat` is logged.
+  - `--system-talk-name=org.freedesktop.Avahi`: driverless network printers (`lpstat -e`).
+    Without it the list keeps the spooler's queues and loses only those.
+  - `lp`: submitting jobs.
+  - Driver options (`printer_options`) come from the queue's PPD in `/etc/cups/ppd`; `lpoptions`
+    only marks which choices are current. Flatpak reserves `/etc`, so the host's PPDs, and with
+    them these options, are out of reach in a Flatpak whether or not `lpoptions` is there.
+  - `--filesystem=~/.cups:ro`: the user's default printer and saved options, and a server named
+    in their `client.conf`. A network server also needs `--share=network`. A server named only
+    in the host's `/etc/cups/client.conf` is invisible in the sandbox, as is all of `/etc`;
+    `flatpak override --user --env=CUPS_SERVER=host:port <app-id>` names it for that one app.
+  - A socket path in `client.conf`: Flatpak mounts the socket it chooses at
+    `/var/run/cups/cups.sock`, so the manifests' wrapper around the tools points CUPS there when
+    CUPS' socket is the one Flatpak chose, and fails when it isn't rather than reach another
+    server. Server names and `CUPS_SERVER` are left alone.
 - **Windows:** in this process, with no PowerShell, script or other program started, so
   printing works where App Control for Business or AppLocker enforce script rules. Printers
   come from `EnumPrinters` (local queues and `\\server\queue` connections) and the default from

@@ -212,7 +212,7 @@
       "path": "src/object/array.rs",
       "source_sha256": "6fbddf05724848db2389068a0504cff6b0783e35baa58e64bf2a31d48a1042ea",
       "source_git_blob": "d39230f7dbf114dd202a16b21f7a6bb70be5ead3",
-      "sha256": "36e937b44ca020e1b4846a47e8126bcf141d8fe1ba084690f17a4878861f7f7d"
+      "sha256": "4537ab5cc06383e8b1e0dc97ae9fa1ee2869201615a37dea26bd0665006b2dd0"
     },
     {
       "path": "src/object/bool.rs",
@@ -230,7 +230,7 @@
       "path": "src/object/dict.rs",
       "source_sha256": "bcfefabe931614b79ea54940d02fce534eb2363f1b75a03d6428fd7a04c57981",
       "source_git_blob": "1e016b567e8ec17801fa8282c47f653092839cb5",
-      "sha256": "c53c686b05163fcb714d1ddacc8c55d340f745c29fead38f38d3c6b691673730"
+      "sha256": "dac4329027aacb68c937fb2aa4b839960e0a94b6af40c4176b614ffa48157933"
     },
     {
       "path": "src/object/indirect.rs",
@@ -370,6 +370,7 @@
   },
   "local_safety_repairs": [
     "Match existing standalone-plus-as-zero tolerance in number parsing while retaining regular-character terminator rejection and numeric overflow guards.",
-    "End raw array iteration on object parse failure instead of panicking when validation and parsing differ."
+    "End raw array iteration on object parse failure instead of panicking when validation and parsing differ.",
+    "Skip a dictionary entry whose value does not parse in Dict::entries and Dict's Debug output instead of panicking, as in LaurenzV/hayro#1501 (23a8e290d4195ab31f737c12a1b079c114cdd13c)."
   ]
 }

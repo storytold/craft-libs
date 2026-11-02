@@ -34,6 +34,10 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
 - [`craft-cms`](crates/cms/README.md): pure-Rust ICC v2/v4 colour management: profile parsing
   and writing, transforms, rendering intents, black point compensation, soft proofing, gamut
   checks, 3D LUTs and built-in profiles (sRGB, Display P3, synthetic coated CMYK and others).
+- [`craft-crw`](crates/crw/README.md): clean-room Canon CRW (CIFF) raw decoder, from LightCraft:
+  the heap container, the entropy coding derived by black-box analysis (frozen code tables), sensor
+  black and white levels and as-shot white balance. The complete derivation record (plan, sources
+  log, scripts, verification) is in `crates/crw/clean-room/`. Colour stays in each app.
 - [`craft-dialogs`](crates/dialogs/README.md): native file and message dialogs that never block
   the event loop: queued requests shown at the end of the frame and answered on a later frame,
   free-standing Open and Folder panels and Save sheets on macOS, case-insensitive filters. What
@@ -41,6 +45,9 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
 - [`craft-docpath`](crates/docpath/src/lib.rs): decides whether a path or `file:` URL stored in a
   document may be opened. Paths stored in documents are followed only when they are local or on the
   document's own network share; other network paths, device paths and non-file URLs are refused.
+- [`craft-ecproj-format`](crates/ecproj-format/README.md): the envelope of EffectCraft `.ecproj`
+  project files: `savedBy`, the schema version and its check, and the file object with the
+  project and its saved view as type parameters. The project model stays in EffectCraft.
 - [`craft-font-catalog`](crates/font-catalog/README.md): the installed fonts on every platform
   (font folders, fontconfig and Flatpak host folders, CoreText, DirectWrite, the font store),
   lookup by family, style, localized, legacy, full and PostScript names, family loads shared
@@ -76,8 +83,16 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   fed back to egui as the input egui-winit would have made. Commands and their enabled state
   stay in each app.
 - [`craft-plugin-abi`](crates/plugin-abi/README.md): "craft-abi 1" for WebAssembly plugins: the manifest, permission names, host call numbers and the install-time policy gate that checks a package before any guest code runs. No engine. Builds for `wasm32`.
+- [`craft-pcraft-format`](crates/pcraft-format/README.md): the envelope of PhotoCraft's `.pcraft`
+  bundle: `Manifest<D>` with the document as a type parameter, `TileRef`, the entry paths, the
+  manifest decode limits and the migration runner. The document model stays in PhotoCraft.
 - [`craft-print`](crates/print/README.md): PDF submission to CUPS and Windows, printer discovery,
   duplex/copies/colour and driver preferences. PDF generation stays in each app.
+- [`craft-proof`](crates/proof/README.md): proofing per language (spelling, suggestions, grammar,
+  hyphenation, a Hunspell reader, user words, Language packs). The word lists and patterns are
+  craft-i18n's `language-data/`, embedded at build time from `CRAFT_I18N_DIR`: English and the
+  carry-over locales by default, the set `CRAFT_PROOF_EMBED` names otherwise (`en` for English
+  only); other languages come from installed Language packs.
 
 - [`craft-quit`](crates/quit/src/lib.rs): native macOS quit, egui close handling and an optional
   app menu. Unsaved-document decisions and save prompts stay in each app.
@@ -88,6 +103,9 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   for 47 more languages (one cargo feature each).
 - [`craft-ui`](crates/ui/README.md): SVG catalogs, icon buttons, tabs, pane controls, transactional docking, print settings and theme helpers for egui frontends;
   assets, themes, localization and command handling stay in each app. Requires Rust 1.95 or later.
+- [`craft-vectorcraft-format`](crates/vectorcraft-format/README.md): the envelope of VectorCraft's
+  `.vectorcraft` file: its members, versions, embedded images and the data after the JSON, with the
+  document as a type parameter. The document and its migrations stay in VectorCraft.
 - [Shared UI component audit](docs/ui-components-audit.md): source inventory, extraction priorities
   and compatibility boundaries across the Craft suite.
 - [Theme infrastructure](docs/theme-infrastructure.md): eight-app comparison and the small shared
