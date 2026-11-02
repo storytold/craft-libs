@@ -428,7 +428,12 @@ fn managed_elsewhere_with(app: &App, installed: &Installed, uninstall: bool, rep
         InstallSource::Flatpak if !uninstall && installed.externally_managed => {
             let default_pkg = app.bundle_id();
             let pkg = installed.package.as_deref().unwrap_or(&default_pkg);
-            Some(format!("{} was installed from FlatPark. Update it with flatpak update {pkg}", app.name))
+            let scope = match installed.installation.as_deref() {
+                Some("user") => "--user".to_string(),
+                Some("system") | None => "--system".to_string(),
+                Some(name) => format!("--installation={name}"),
+            };
+            Some(format!("{} was installed from FlatPark. Update it with flatpak update {scope} {pkg}", app.name))
         }
         InstallSource::Binary => Some(format!("{} was installed outside the launcher. Update or remove it the way it was installed.", app.name)),
         _ => None,
@@ -1000,31 +1005,22 @@ pub mod linux {
     pub fn update_flatpak_app(app: &App, id: &str, installation: Option<&str>, stop: &Stop, phase: &mut dyn FnMut(JobPhase)) -> Result<(), String> {
         phase(JobPhase::Installing);
         stop.check()?;
-        let is_user = installation == Some("user");
-        let scope_args: Vec<String> = match installation {
-            Some("user") => vec!["--user".into()],
-            Some("system") | None => vec!["--system".into()],
-            Some(named) => vec![format!("--installation={named}")],
+        let scope_arg = match installation {
+            Some("user") => "--user".to_string(),
+            Some("system") | None => "--system".to_string(),
+            Some(named) => format!("--installation={named}"),
         };
-        let mut cmd = if is_user {
-            let mut c = process::flatpak_command();
-            c.arg("update");
-            c.args(&scope_args);
-            c.args(["-y", "--noninteractive", id]);
-            c
+        // Let Flatpak's system helper authorize system updates through polkit.
+        // watch-bus also terminates the host command if the sandbox proxy exits.
+        let mut cmd = if process::in_sandbox() {
+            let mut command = process::command("flatpak-spawn");
+            command.args(["--host", "--watch-bus", "flatpak"]);
+            command
         } else {
-            let prefix = system_bundle_prefix(process::in_sandbox());
-            let Some((program, rest)) = prefix.split_first() else {
-                return Err("couldn't start Flatpak".into());
-            };
-            let mut c = process::command(*program);
-            c.args(rest);
-            c.arg("update");
-            c.args(&scope_args);
-            c.args(["-y", "--noninteractive", id]);
-            c
+            process::command("flatpak")
         };
-        let output = cmd.output().map_err(|e| format!("couldn't run flatpak ({e})"))?;
+        cmd.args(["update", &scope_arg, "-y", "--noninteractive", id]);
+        let output = process::cancellable_output(cmd, || stop.check())?;
         if output.status.success() {
             return Ok(());
         }
@@ -2806,7 +2802,7 @@ mod tests {
         assert!(flatpark_installed.is_externally_managed());
         assert_eq!(choose_kinds_with(app, Some(&flatpark_installed), None, &[], &[PackageKind::Flatpak], false), Vec::<PackageKind>::new());
         let hint = managed_elsewhere_with(app, &flatpark_installed, false, |_| None);
-        assert_eq!(hint.as_deref(), Some("PhotoCraft was installed from FlatPark. Update it with flatpak update ai.storyteller.photocraft"));
+        assert_eq!(hint.as_deref(), Some("PhotoCraft was installed from FlatPark. Update it with flatpak update --user ai.storyteller.photocraft"));
         // During uninstall, managed_elsewhere returns None so it can be removed
         assert_eq!(managed_elsewhere_with(app, &flatpark_installed, true, |_| None), None);
 
@@ -2823,7 +2819,7 @@ mod tests {
         let hint_former = managed_elsewhere_with(app, &former_installed, false, |_| None);
         assert_eq!(
             hint_former.as_deref(),
-            Some("PhotoCraft was installed from FlatPark. Update it with flatpak update ai.storyteller.photocraft-old")
+            Some("PhotoCraft was installed from FlatPark. Update it with flatpak update --system ai.storyteller.photocraft-old")
         );
 
         let bundle_installed = Installed {
