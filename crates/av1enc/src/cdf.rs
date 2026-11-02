@@ -1,6 +1,6 @@
 //! The adaptive CDFs this encoder codes with (the subset of spec 6.8.2 init_non_coeff_cdfs /
-//! init_coeff_cdfs that its syntax uses). Layout as in filmcraft-av1: each innermost array
-//! holds N cumulative values (the last is 32768) plus the adaptation counter.
+//! init_coeff_cdfs that its syntax uses). Each innermost array holds N cumulative values
+//! (the last is 32768) plus the adaptation counter.
 
 use crate::tables::{
     DEFAULT_ANGLE_DELTA_CDF, DEFAULT_COEFF_BASE_CDF, DEFAULT_COEFF_BASE_EOB_CDF, DEFAULT_COEFF_BR_CDF, DEFAULT_DC_SIGN_CDF, DEFAULT_DRL_MODE_CDF,
