@@ -1,5 +1,9 @@
-//! Sample text: a sentence in the language the catalogue is filtered by, or in a family's own
-//! script when it has no Latin, so a sample never comes out as boxes.
+//! Sample text: a family's own sentence from the index (its script's, by `sample_script`), the
+//! one the preview service's sample subsets hold; a sentence in the language the catalogue is
+//! filtered by; and built-in sentences by script for families the index has no sample for.
+
+use crate::index::{Family, Index};
+use crate::panel::app::list_file;
 
 /// The English pangram, the sample for Latin.
 pub const PANGRAM: &str = "The quick brown fox jumps over the lazy dog";
@@ -77,6 +81,12 @@ pub fn for_script(script: &str) -> Option<&'static str> {
         "Hant" => Some(TRADITIONAL),
         _ => BY_SCRIPT.iter().find(|(s, _)| *s == script).and_then(|(_, code)| language(code)),
     }
+}
+
+/// The sample of the face the list shows for `family`, from the index: the sentence of the
+/// face's `sample_script` (else the family's), or the face's own text.
+pub fn of_family<'a>(index: &'a Index, family: &'a Family) -> Option<&'a str> {
+    list_file(family).and_then(|file| index.sample_text(family, file))
 }
 
 /// The sample for a family with `scripts`: the pangram when it has Latin, else a sentence in the

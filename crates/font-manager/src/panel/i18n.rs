@@ -90,10 +90,11 @@ mod tests {
             "Google Fonts",
             "{source}: {error}",
         ];
-        let sources = [include_str!("app.rs"), include_str!("browse.rs"), include_str!("details.rs"), include_str!("sources.rs")];
+        let sources =
+            [include_str!("app.rs"), include_str!("browse.rs"), include_str!("details.rs"), include_str!("sources.rs"), include_str!("available.rs")];
         let mut keys = Vec::new();
         for source in sources {
-            for marker in ["tl!(", "fmt("] {
+            for marker in ["tl!(", "fmt(", "in_os_fonts("] {
                 for part in source.split(marker).skip(1) {
                     if let Some(key) = part.trim_start().strip_prefix('"').and_then(|p| p.find('"').map(|end| &p[..end])) {
                         keys.push(key.to_owned());

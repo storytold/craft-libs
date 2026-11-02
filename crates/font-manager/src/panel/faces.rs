@@ -1,4 +1,5 @@
-//! Drawing text in a font face itself: each face shown becomes an egui font family of its own.
+//! Drawing text in a font face itself: each face shown (installed, a downloaded preview file, or
+//! a subset from the font preview service) becomes an egui font family of its own.
 //!
 //! Adding a font makes egui rebuild its fonts, so faces are added a few per frame, and once more
 //! than [`MAX_REGISTERED`] are loaded the ones not drawn in the last frame are taken out again,
@@ -9,11 +10,15 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+use crate::remote::PreviewKey;
 use crate::{Catalog, FaceInfo};
 use egui::epaint::text::{Blob, FontInsert, FontPriority, InsertFontFamily, VariationCoords};
 use egui::{Context, FontData, FontFamily, FontTweak};
 
 const MAX_REGISTERED: usize = 64;
+/// A frame that adds faces rebuilds every registered font once, however many it adds; the cost
+/// grows with the bytes registered (`add_font_cost`: about 4.5 ms with 64 service subsets, 90 ms
+/// with 64 whole files of Hack's size, in a release build).
 const PER_FRAME: usize = 6;
 /// Larger files are not drawn: a whole CJK family can be hundreds of megabytes.
 const MAX_FILE_BYTES: u64 = 48 << 20;
@@ -77,7 +82,24 @@ impl FaceFonts {
 
     /// The family that draws `face`, once egui has loaded it.
     pub fn family(&mut self, ctx: &Context, catalog: &Catalog, owner: Owner, face: &FaceInfo) -> Shown {
-        let key = key(owner, face);
+        self.show(ctx, key(owner, face), || {
+            let too_large = face.path.as_ref().and_then(|p| std::fs::metadata(p).ok()).is_some_and(|m| m.len() > MAX_FILE_BYTES);
+            let data = if too_large { None } else { catalog.load(face).ok() }?;
+            let blob: Blob = Arc::new(data.bytes);
+            let tweak = FontTweak { coords: VariationCoords::new(face.variations.iter().map(|(tag, v)| (*tag, *v))), ..Default::default() };
+            Some(FontData::from_blob(blob, data.index).tweak(tweak))
+        })
+    }
+
+    /// The family that draws a subset from the preview service, the decoded `font` of `subset`.
+    pub fn subset(&mut self, ctx: &Context, subset: &PreviewKey, font: &Arc<Vec<u8>>) -> Shown {
+        let key = format!("face:{:?}:{}", Owner::Preview, subset.path());
+        self.show(ctx, key, || Some(FontData::from_blob(Arc::clone(font) as Blob, 0)))
+    }
+
+    /// The family registered as `key`; `load` gives its font the first time, within the frame's
+    /// budget.
+    fn show(&mut self, ctx: &Context, key: String, load: impl FnOnce() -> Option<FontData>) -> Shown {
         if self.failed.contains(&key) {
             return Shown::Unavailable;
         }
@@ -95,17 +117,13 @@ impl FaceFonts {
             return Shown::Loading;
         }
         self.budget -= 1;
-        let too_large = face.path.as_ref().and_then(|p| std::fs::metadata(p).ok()).is_some_and(|m| m.len() > MAX_FILE_BYTES);
-        let data = if too_large { None } else { catalog.load(face).ok() };
-        let Some(data) = data else {
+        let Some(data) = load() else {
             self.failed.insert(key);
             return Shown::Unavailable;
         };
-        let blob: Blob = Arc::new(data.bytes);
-        let tweak = FontTweak { coords: VariationCoords::new(face.variations.iter().map(|(tag, v)| (*tag, *v))), ..Default::default() };
         let family = FontFamily::Name(key.as_str().into());
         let insert = InsertFontFamily { family: family.clone(), priority: FontPriority::Highest };
-        ctx.add_font(FontInsert::new(&key, FontData::from_blob(blob, data.index).tweak(tweak), vec![insert]));
+        ctx.add_font(FontInsert::new(&key, data, vec![insert]));
         self.registered.insert(key, (family, self.frame));
         ctx.request_repaint();
         Shown::Loading
@@ -138,5 +156,73 @@ mod tests {
         assert_eq!(stale.len(), 20);
         assert!(stale.keys().all(|k| k[5..].parse::<usize>().unwrap() < 20));
         assert_eq!(faces.registered.len(), MAX_REGISTERED);
+    }
+
+    /// What registering faces costs egui with [`MAX_REGISTERED`] faces on screen, on the CPU:
+    /// the fonts rebuilt, the text laid out and its glyphs rasterized again (not the atlas
+    /// upload). `cargo test -p craft-font-manager --features egui --release --lib add_font_cost -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn add_font_cost() {
+        use std::time::{Duration, Instant};
+        let tiny = wuff::decompress_woff2(include_bytes!("../../tests/data/Tiny-glyf.woff2")).unwrap();
+        let median = |mut v: Vec<Duration>| {
+            v.sort();
+            v[v.len() / 2]
+        };
+        for (what, bytes) in [("Hack, 309 KB", epaint_default_fonts::HACK_REGULAR.to_vec()), ("a 1 KB subset", tiny)] {
+            let ctx = Context::default();
+            crate::install_interface_fonts(&ctx, &[]);
+            let blob: Blob = Arc::new(bytes);
+            let frame = |names: &[String]| {
+                let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+                    for name in names {
+                        let family = FontFamily::Name(name.as_str().into());
+                        ui.label(egui::RichText::new("Sphinx of black quartz, judge my vow").size(36.0).family(family));
+                    }
+                });
+            };
+            let add = |names: &mut Vec<String>, n: usize| {
+                for _ in 0..n {
+                    let name = format!("face:{}", names.len());
+                    let insert = InsertFontFamily { family: FontFamily::Name(name.as_str().into()), priority: FontPriority::Highest };
+                    ctx.add_font(FontInsert::new(&name, FontData::from_blob(Arc::clone(&blob), 0), vec![insert]));
+                    names.push(name);
+                }
+            };
+            let keep = |names: &mut Vec<String>, n: usize| {
+                names.truncate(n);
+                let mut definitions = ctx.fonts(|f| f.definitions().clone());
+                definitions.font_data.retain(|name, _| !name.starts_with("face:") || names.contains(name));
+                definitions
+                    .families
+                    .retain(|family, _| !matches!(family, FontFamily::Name(n) if n.starts_with("face:") && !names.iter().any(|x| x == &**n)));
+                ctx.set_fonts(definitions);
+                frame(names);
+            };
+            let mut names = Vec::new();
+            add(&mut names, MAX_REGISTERED);
+            frame(&names);
+            let timed = |f: &mut dyn FnMut()| {
+                let start = Instant::now();
+                f();
+                start.elapsed()
+            };
+            let steady = median((0..9).map(|_| timed(&mut || frame(&names))).collect());
+            let mut by_count = Vec::new();
+            for n in [1, PER_FRAME] {
+                let times = (0..9)
+                    .map(|_| {
+                        keep(&mut names, MAX_REGISTERED - n);
+                        timed(&mut || {
+                            add(&mut names, n);
+                            frame(&names);
+                        })
+                    })
+                    .collect();
+                by_count.push((n, median(times)));
+            }
+            println!("{what}, {MAX_REGISTERED} faces drawn: frame {steady:?}; frame adding n faces: {by_count:?}");
+        }
     }
 }

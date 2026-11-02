@@ -1,12 +1,14 @@
-//! Installs, removals and preview downloads, one at a time on a worker thread.
+//! Installs, removals, preview downloads and making families available to all apps, one at a
+//! time on a worker thread.
 
 use std::collections::BTreeMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender, channel};
 
 use crate::Catalog;
 use crate::index::Index;
-use crate::store::{Downloaded, Installer, Progress, RemoveRequest, StoreError};
+use crate::store::{Downloaded, Installer, MadeAvailable, Progress, RemoveRequest, StoreError};
 
 type Task = Box<dyn FnOnce() + Send>;
 
@@ -24,10 +26,13 @@ pub enum Kind {
     Install,
     Remove,
     Preview,
+    MakeAvailable,
+    Withdraw,
 }
 
 pub struct Running {
-    /// The family's source; empty for a removal, which goes by the installed files.
+    /// The family's source; empty for a removal or a change to its availability to all apps,
+    /// which go by the installed files.
     pub source: String,
     pub family: String,
     pub kind: Kind,
@@ -47,6 +52,9 @@ pub enum Finished {
     Installed,
     Removed,
     Previewed(Vec<Downloaded>),
+    MadeAvailable(MadeAvailable),
+    /// The copies left in place because they changed since.
+    Withdrawn(Vec<PathBuf>),
 }
 
 enum Msg {
@@ -62,6 +70,9 @@ pub enum Request {
     Remove(RemoveRequest),
     /// A family of the index, by position.
     Preview(Arc<Index>, usize),
+    /// A store family by name, and the files the catalog found for it in the store.
+    MakeAvailable(String, Vec<PathBuf>),
+    Withdraw(String, Vec<PathBuf>),
 }
 
 pub struct Jobs {
@@ -117,6 +128,8 @@ impl Jobs {
                 let file = if r.whole { None } else { r.files.first().map(|p| p.display().to_string()) };
                 (String::new(), r.family.clone(), Kind::Remove, file, 0)
             }
+            Request::MakeAvailable(family, _) => (String::new(), family.clone(), Kind::MakeAvailable, None, 0),
+            Request::Withdraw(family, _) => (String::new(), family.clone(), Kind::Withdraw, None, 0),
         };
         self.running.insert(id, Running { source, family, kind, file, progress: Progress { done: 0, total } });
         let tx = self.tx.clone();
@@ -136,6 +149,9 @@ impl Jobs {
                 }
                 Request::Remove(r) => installer.remove(&r).map(|()| Finished::Removed),
                 Request::Preview(index, i) => family(&index, i).and_then(|f| installer.download(&index, &f, &mut progress)).map(Finished::Previewed),
+                // The store rescans the catalog itself after these.
+                Request::MakeAvailable(name, files) => installer.make_available(&name, &files).map(Finished::MadeAvailable),
+                Request::Withdraw(name, files) => installer.withdraw(&name, &files).map(Finished::Withdrawn),
             };
             if matches!(result, Ok(Finished::Installed | Finished::Removed)) {
                 catalog.rescan();
