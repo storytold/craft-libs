@@ -70,10 +70,10 @@ pub enum Scaling {
     /// Smaller sheets retain their size; the printable area centers the result.
     /// On Windows every sheet of the job goes on that one paper.
     ShrinkToFit,
-    /// Print at 100%, as a word processor does: like `ShrinkToFit`, except that a sheet the size
-    /// of the paper is not shrunk into the printable area; hardware margins clip it, as in
-    /// `Exact`. Other sheets are shrunk to fit, as in `ShrinkToFit`. On CUPS this is
-    /// `ShrinkToFit`.
+    /// Print at 100%, as a word processor does: like `ShrinkToFit`, except that a sheet that fits
+    /// on the paper (its size, or smaller) is not shrunk into the printable area; hardware margins
+    /// clip it, as in `Exact`. Only sheets larger than the paper are shrunk to fit, as in
+    /// `ShrinkToFit`. On CUPS this is `ShrinkToFit`.
     ActualSize,
 }
 

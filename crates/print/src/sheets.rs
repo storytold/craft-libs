@@ -1061,8 +1061,8 @@ pub(crate) enum Fit {
     /// Sheets are shrunk (never enlarged) to fit inside `margin` points of the paper's edges, and
     /// centred on it.
     Shrink { margin: f64 },
-    /// Sheets the paper's size print as they are, where hardware margins may clip them; the
-    /// others as `Shrink`.
+    /// Sheets that fit on the paper (its size or smaller) print as they are, centred, where
+    /// hardware margins may clip them; larger ones as `Shrink`.
     ActualSize { margin: f64 },
 }
 
