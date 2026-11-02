@@ -201,7 +201,7 @@ impl Collector<'_> {
         let mut work = self.compound_work;
         let pieces = &mut self.pieces;
         let mut is_word =
-            |w: &str| if compounds { d.contains_suggestible_spending(w, &mut work, pieces) } else { d.contains_suggestible_with(w, false) };
+            |w: &str| if compounds { d.flag_compound_spending_suggestible(w, &mut work, pieces) } else { d.contains_suggestible_with(w, false) };
         for part in cand.split(' ') {
             if is_word(part) {
                 words.push(part.to_string());
