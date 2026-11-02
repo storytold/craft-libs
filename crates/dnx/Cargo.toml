@@ -1,0 +1,20 @@
+[package]
+name = "craft-dnx"
+description = "Clean-room Avid DNxHD / DNxHR (SMPTE ST 2019-1 VC-3) decoder and encoder for the Craft ecosystem"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+default = ["threads"]
+threads = ["dep:rayon"]
+
+[dependencies]
+filmcraft-bitstream = { package = "craft-bitstream", path = "../bitstream" }
+thiserror = { workspace = true }
+rayon = { workspace = true, optional = true }

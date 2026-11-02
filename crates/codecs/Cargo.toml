@@ -1,6 +1,6 @@
 [package]
 name = "craft-codecs"
-description = "Umbrella crate re-exporting pure-Rust media codecs (H.264, ProRes, HEVC, AV1, VP9, AAC, Audio-IO)"
+description = "Umbrella crate re-exporting pure-Rust media codecs (H.264, ProRes, DNx, HEVC, AV1, VP9, VP8, AAC, Audio-IO, Opus)"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -12,20 +12,26 @@ workspace = true
 
 [features]
 default = ["all"]
-all = ["h264", "prores", "hevc", "av1", "vp9", "aac", "audio-io"]
+all = ["h264", "prores", "dnx", "hevc", "av1", "vp9", "vp8", "aac", "audio-io", "opus"]
 h264 = ["dep:craft-h264enc"]
 prores = ["dep:craft-prores"]
+dnx = ["dep:craft-dnx"]
 hevc = ["dep:craft-hevcenc"]
 av1 = ["dep:craft-av1enc"]
 vp9 = ["dep:craft-vp9enc"]
+vp8 = ["dep:craft-vp8"]
 aac = ["dep:craft-aac"]
 audio-io = ["dep:craft-audio-io"]
+opus = ["dep:craft-opus"]
 
 [dependencies]
 craft-h264enc = { workspace = true, optional = true }
 craft-prores = { workspace = true, optional = true }
+craft-dnx = { workspace = true, optional = true }
 craft-hevcenc = { workspace = true, optional = true }
 craft-av1enc = { workspace = true, optional = true }
 craft-vp9enc = { workspace = true, optional = true }
+craft-vp8 = { workspace = true, optional = true }
 craft-aac = { workspace = true, optional = true }
 craft-audio-io = { workspace = true, optional = true }
+craft-opus = { workspace = true, optional = true }

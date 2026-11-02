@@ -5,17 +5,23 @@
 //! Centralizes high-performance pure-Rust media codecs across video and audio:
 //! - H.264 / AVC video encoding (`craft-h264enc`)
 //! - Apple ProRes video encoding and decoding (`craft-prores`)
+//! - Avid DNxHD / DNxHR SMPTE ST 2019-1 encoding and decoding (`craft-dnx`)
 //! - HEVC / H.265 video encoding (`craft-hevcenc`)
 //! - AV1 video encoding (`craft-av1enc`)
 //! - VP9 video encoding (`craft-vp9enc`)
+//! - VP8 video decoding (`craft-vp8`)
 //! - AAC-LC audio encoding and decoding (`craft-aac`)
 //! - Universal audio decoding & FLAC/AIFF encoding (`craft-audio-io`)
+//! - Opus audio decoding & packet parsing (`craft-opus`)
 
 #[cfg(feature = "h264")]
 pub use craft_h264enc as h264;
 
 #[cfg(feature = "prores")]
 pub use craft_prores as prores;
+
+#[cfg(feature = "dnx")]
+pub use craft_dnx as dnx;
 
 #[cfg(feature = "hevc")]
 pub use craft_hevcenc as hevc;
@@ -26,8 +32,14 @@ pub use craft_av1enc as av1;
 #[cfg(feature = "vp9")]
 pub use craft_vp9enc as vp9;
 
+#[cfg(feature = "vp8")]
+pub use craft_vp8 as vp8;
+
 #[cfg(feature = "aac")]
 pub use craft_aac as aac;
 
 #[cfg(feature = "audio-io")]
 pub use craft_audio_io as audio_io;
+
+#[cfg(feature = "opus")]
+pub use craft_opus as opus;
