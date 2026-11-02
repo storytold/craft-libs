@@ -290,7 +290,7 @@ impl<S: 'static> Interceptor<S> for BeforeGate<S> {
         &self.interest
     }
 
-    fn before(&self, session: &mut S, call: &mut Call) -> Verdict {
+    fn before(&self, session: &mut S, call: &Call) -> Verdict {
         let Some(_running) = Reentry::enter(self.id) else {
             return Verdict::Pass;
         };

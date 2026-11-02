@@ -595,7 +595,7 @@ impl Interceptor<Sess> for Hog {
         &self.interest
     }
 
-    fn before(&self, _session: &mut Sess, _call: &mut Call) -> Verdict {
+    fn before(&self, _session: &mut Sess, _call: &Call) -> Verdict {
         self.clock.0.fetch_add(2, Ordering::SeqCst);
         Verdict::Pass
     }
