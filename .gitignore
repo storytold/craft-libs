@@ -1,8 +1,10 @@
 *~
 plan/
 plans/
+target/
 /target
 .DS_Store
 /.claude/
 .idea/
-/vendor/*/target
+/vendor/*target/
+/target
