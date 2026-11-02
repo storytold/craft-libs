@@ -321,7 +321,7 @@ fn hyphenated(d: &AffixDict, w: &str, opts: &crate::Options) -> bool {
     }
     match lp.as_slice() {
         // `кое-кто`, `кой-какой`.
-        [prefix, rest] if PRONOUN_PREFIXES.contains(prefix) => return parts.get(1).is_some_and(|r| known(d, r)),
+        [prefix, _] if PRONOUN_PREFIXES.contains(prefix) => return parts.get(1).is_some_and(|r| known(d, r)),
         // `по-русски` (from `русский`), `по-новому`, `по-моему`.
         ["по", rest] => {
             let Some(r) = parts.get(1) else { return false };

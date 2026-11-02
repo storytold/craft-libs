@@ -79,7 +79,7 @@ pub fn packs_dir() -> Option<PathBuf>;                 // ＋
 pub fn installed() -> Vec<InstalledPack>;              // InstalledPack { locale, name, licence, path }, by locale
 pub fn licence_texts() -> Vec<(String, String)>;       // (title, text): embedded English notices, then each pack's LICENCES/*
 pub fn load_errors() -> Vec<(String, String)>;         // ＋ (locale or folder, reason): packs skipped, pattern files that failed
-pub fn embedded_locales() -> &'static [&'static str];  // ＋ what this build embeds ("en-us", "de", "pl", "pt", "it", "ru" by default; "en-us" with CRAFT_PROOF_EMBED=en)
+pub fn embedded_locales() -> &'static [&'static str];  // ＋ locales with embedded upstream data, not our supplements ("en-us", "en-gb", "en-ca", "en-au", "pl", "pt", "it", "de" by default; the four English ones with CRAFT_PROOF_EMBED=en)
 
 // craft_proof (crate root)
 pub enum ProofLang { …, Pack(PackLocale), Other }      // ＋ Pack: any language without tools of its own (nl, fr, sr-Latn…)
@@ -200,7 +200,7 @@ craft-i18n's copy.
 The SCOWL notice (SCOWL's licence, the Ispell BSD licence of the affix files and Benjamin Titze's
 notice) is embedded with the dictionaries: `craft_proof::scowl::notice()`, for an About window.
 
-Embedding SCOWL adds 1,542,396 bytes of Language data (the en-US, en-GB and en-CA `.aff`/`.dic`
+Embedding SCOWL adds 2,056,533 bytes of Language data (the en-US, en-GB, en-CA and en-AU `.aff`/`.dic`
 and the notice); the Moby list (432,905 bytes) stays for hyphenation.
 
 ## Check
