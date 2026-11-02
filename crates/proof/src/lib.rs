@@ -2571,6 +2571,26 @@ mod tests {
         assert!(check_spelling_in(text, gb).is_empty(), "{:?}", check_spelling_in(text, gb));
     }
 
+    /// Review follow-up: SCOWL's en-AU list keeps one spelling per word, so Australian English also
+    /// takes a word the en-GB list has (`enquiry`, `guerrilla`, `liquorice`); American-only
+    /// spellings, wrong in both, stay wrong. Suggestions still come from the en-AU list.
+    #[cfg_attr(not(craft_proof_data), ignore = "needs the Language data (CRAFT_I18N_DIR)")]
+    #[test]
+    fn australian_english_also_takes_british_words() {
+        crate::hold_dictionary_tests();
+        let (au, gb) = (ProofLang::EnAu, ProofLang::EnGb);
+        for w in ["enquiry", "enquire", "guerrilla", "guerrillas", "euthanise", "liveable", "liquorice", "veranda", "burka", "Anthea"] {
+            assert!(is_correct_in(w, gb), "en-GB: {w}");
+            assert!(is_correct_in(w, au), "en-AU: {w}");
+        }
+        for w in ["analyze", "catalyze", "color", "center", "defense", "zzyzxq"] {
+            assert!(!is_correct_in(w, gb), "en-GB: {w}");
+            assert!(!is_correct_in(w, au), "en-AU: {w}");
+        }
+        assert!(is_correct_in("billabong", au) && !is_correct_in("billabong", gb), "en-AU still has its own");
+        assert!(suggest_in("billabon", 5, au).iter().any(|s| s == "billabong"), "{:?}", suggest_in("billabon", 5, au));
+    }
+
     /// English spelling reads SCOWL 2026 through the affix engine: one dictionary per English,
     /// its notice embedded, and its ordinals (`COMPOUNDRULE`) understood.
     #[cfg_attr(not(craft_proof_data), ignore = "needs the Language data (CRAFT_I18N_DIR)")]

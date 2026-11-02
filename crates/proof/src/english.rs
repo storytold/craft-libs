@@ -91,11 +91,27 @@ fn names(lang: ProofLang) -> &'static [&'static str] {
     match lang {
         ProofLang::EnGb => &["en_GB", "en-GB"],
         ProofLang::EnCa => &["en_CA", "en-CA"],
-        // Australian English's own, else a British one: the British-spelling dictionary it read
-        // before it had its own (a system en_GB on a build without SCOWL).
+        // Australian English's own, else a British one (a system en_GB on a build without SCOWL):
+        // [`exact_candidates`] reads every en_AU source before any en_GB one.
         ProofLang::EnAu => &["en_AU", "en-AU", "en_GB", "en-GB"],
         _ => &["en_US", "en-US"],
     }
+}
+
+/// The Hunspell pairs of `lang` without SCOWL, from `find` (a folder search for some names,
+/// [`crate::hunspell::candidates_exact`]): its own names first, and only then Australian English's
+/// British fallback, so every en_AU source (a dictionaries folder, a pack, the system) comes before
+/// any en_GB one.
+fn exact_candidates(lang: ProofLang, find: impl Fn(&[&str]) -> Vec<(PathBuf, PathBuf)>) -> Vec<(PathBuf, PathBuf)> {
+    let mut out = find(own_names(lang));
+    if lang == ProofLang::EnAu {
+        for c in find(&names(lang)[own_names(lang).len()..]) {
+            if !out.iter().any(|(_, d)| *d == c.1) {
+                out.push(c);
+            }
+        }
+    }
+    out
 }
 
 /// The names [`names`] gives that outrank the dialect's own embedded SCOWL dictionary: its own pair
@@ -217,7 +233,7 @@ fn load(lang: ProofLang) -> (Loaded, Option<(PathBuf, String)>) {
     let candidates = if crate::scowl::dict(lang).is_some() {
         crate::hunspell::user_candidates(own_names(lang))
     } else {
-        crate::hunspell::candidates_exact(names(lang))
+        exact_candidates(lang, crate::hunspell::candidates_exact)
     };
     if candidates.is_empty() {
         log::info!("English spelling: no Hunspell {} dictionary to read first; using SCOWL or the built-in word list", key(lang));
@@ -300,10 +316,16 @@ fn pick(found: Loaded, lang: ProofLang) -> Speller {
     if let Some((d, dic)) = found {
         return Speller::Hunspell(d, dic);
     }
-    match crate::scowl::dict(lang) {
-        Some(d) => Speller::Scowl(vec![d], crate::scowl::is_british(lang)),
-        None => Speller::List,
+    let Some(d) = crate::scowl::dict(lang) else { return Speller::List };
+    let mut ds = vec![d];
+    // SCOWL's en-AU list keeps one spelling per word (`enquiry`, not `inquiry`); the British list
+    // has the rest, which Australian English takes. Suggestions come from the first, en-AU.
+    if lang == ProofLang::EnAu
+        && let Some(gb) = crate::scowl::dict(ProofLang::EnGb)
+    {
+        ds.push(gb);
     }
+    Speller::Scowl(ds, crate::scowl::is_british(lang))
 }
 
 /// [`speller`] for English with no dialect ([`crate::is_correct`]): a SCOWL word of any English
@@ -631,11 +653,11 @@ mod tests {
             let fallback = pick(None, lang);
             if crate::scowl::dict(lang).is_some() {
                 assert!(
-                    matches!(&fallback, Speller::Scowl(ds, _) if ds.len() == 1 && std::ptr::eq(ds[0], crate::scowl::dict(lang).unwrap())),
+                    matches!(&fallback, Speller::Scowl(ds, _) if ds.len() == if lang == ProofLang::EnAu { 2 } else { 1 } && std::ptr::eq(ds[0], crate::scowl::dict(lang).unwrap())),
                     "{lang:?}"
                 );
                 assert!(fallback.knows("21st") && !fallback.knows("becuase"), "{lang:?}");
-                assert_eq!(fallback.knows("colour"), lang != ProofLang::En, "{lang:?}: its own dictionary only");
+                assert_eq!(fallback.knows("colour"), lang != ProofLang::En, "{lang:?}: its own dictionary (en-AU: and en-GB's)");
             } else {
                 assert!(matches!(fallback, Speller::List), "{lang:?}");
             }
@@ -668,6 +690,31 @@ mod tests {
         for lang in [ProofLang::En, ProofLang::EnGb, ProofLang::EnCa] {
             assert_eq!(own_names(lang), names(lang));
         }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Without SCOWL, every en_AU source comes before any en_GB one (a dictionaries folder's, an
+    /// installed pack's, the system's): a user's en_GB doesn't outrank a system en_AU.
+    #[test]
+    fn australian_english_reads_every_en_au_before_any_en_gb() {
+        let dir = std::env::temp_dir().join(format!("wc-proof-en-au-order-{}", std::process::id()));
+        for sub in ["user", "system"] {
+            std::fs::create_dir_all(dir.join(sub)).unwrap();
+        }
+        let write = |sub: &str, name: &str| {
+            std::fs::write(dir.join(sub).join(format!("{name}.aff")), "SET UTF-8\n").unwrap();
+            std::fs::write(dir.join(sub).join(format!("{name}.dic")), "1\nzzyzx\n").unwrap();
+        };
+        write("user", "en_GB");
+        write("system", "en_AU");
+        let (user, system) = (vec![dir.join("user")], vec![dir.join("system")]);
+        let find = |n: &[&str]| crate::hunspell::ordered(n, &user, &[], &system, &[]);
+        let stems = |v: Vec<(PathBuf, PathBuf)>| -> Vec<String> {
+            v.iter().filter_map(|(_, d)| d.file_stem().map(|s| s.to_string_lossy().into_owned())).collect()
+        };
+        assert_eq!(stems(exact_candidates(ProofLang::EnAu, find)), ["en_AU", "en_GB"]);
+        assert_eq!(stems(exact_candidates(ProofLang::EnGb, find)), ["en_GB"]);
+        assert_eq!(stems(exact_candidates(ProofLang::En, find)), Vec::<String>::new());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
