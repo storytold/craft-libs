@@ -11,6 +11,46 @@ fn fixture() -> Vec<u8> {
     b"%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 40 20] >> endobj\ntrailer << /Root 1 0 R >>\n%%EOF".to_vec()
 }
 
+fn wrong_length_xref_stream() -> Vec<u8> {
+    let mut bytes = b"%PDF-1.7\n".to_vec();
+    let mut offsets = vec![0];
+    for object in [
+        "1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n",
+        "2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n",
+        "3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 40 20] >> endobj\n",
+    ] {
+        offsets.push(bytes.len() as u32);
+        bytes.extend_from_slice(object.as_bytes());
+    }
+    let xref = bytes.len();
+    offsets.push(xref as u32);
+    bytes.extend_from_slice(b"4 0 obj << /Type /XRef /Size 5 /Root 1 0 R /W [1 4 2] /Length 1 >>\nstream\n");
+    for (index, offset) in offsets.into_iter().enumerate() {
+        bytes.push(u8::from(index != 0));
+        bytes.extend_from_slice(&offset.to_be_bytes());
+        bytes.extend_from_slice(&0u16.to_be_bytes());
+    }
+    bytes.extend(std::iter::repeat_n(b'x', 8 << 20));
+    bytes.extend_from_slice(format!("\nendstream\nendobj\nstartxref\n{xref}\n%%EOF").as_bytes());
+    bytes
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn cancellation_reaches_a_wrong_length_xref_streams_fallback() {
+    // Poll 128 is inside find_endstream's search through the 8 MiB tail. With the control
+    // omitted at populate_from_xref_stream, the successful open makes only 103 polls.
+    const CANCEL_AT: usize = 128;
+    let bytes = Arc::new(wrong_length_xref_stream());
+    assert_eq!(open(bytes.clone(), None).unwrap().pages().len(), 1);
+    let polls = Arc::new(AtomicUsize::new(0));
+    let counter = polls.clone();
+    let cancel = syntax::Cancellation::new(move || counter.fetch_add(1, Ordering::Relaxed) + 1 == CANCEL_AT);
+    let result = open_with_options_and_cancel(bytes, None, &OpenOptions::default(), &cancel);
+    assert!(matches!(result, Err(CancellableOpenError::Cancelled)));
+    assert_eq!(polls.load(Ordering::Relaxed), CANCEL_AT);
+}
+
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 #[cfg_attr(not(target_arch = "wasm32"), test)]
 fn cancellation_takes_precedence_for_an_initial_request() {
