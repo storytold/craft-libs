@@ -16,6 +16,7 @@ craft-proof = { git = "https://github.com/storytold/craft-libs", rev = "<commit>
 | English (en-US, en-CA, en-AU, en-GB and the British-spelling Englishes such as en-NZ) | SCOWL 2026 Hunspell dictionary per English + `en-extra.txt`, dialect policy (`en-variants.txt`); a dictionaries-folder English first; without SCOWL the installed Hunspell English, else the built-in Moby list ([below](#english-is-always-checked)) | yes | Moby list, our patterns, heuristic |
 | Polish, Portuguese, Italian | the installed Hunspell dictionary | yes | TeX patterns (embedded, or a Language pack) |
 | Croatian, Turkish, Russian, Czech, Indonesian, Spanish (es, es-MX, es-419, es-UY) | the installed Hunspell dictionary (Russian also `ru-extra.txt`) | yes | Turkish and Russian rules; English fallback otherwise |
+| Romanian (ro, ro-RO, ro-MD) | the installed Hunspell `ro_RO` (or `ro_MD`); cedilla ş/ţ read as ș/ț, hyphenated forms (`într-o`, `s-a`) part by part | yes | a `ro` Language pack, else the English fallback |
 | German | — | — | TeX patterns (embedded, or a Language pack) |
 | Bulgarian | — | — | syllable rules |
 

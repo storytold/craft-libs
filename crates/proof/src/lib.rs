@@ -35,6 +35,12 @@
 //! - **Indonesian** ([`ProofLang::Id`], module [`id`]): the installed Hunspell `id_ID`
 //!   dictionary (not bundled), dictionary-driven suggestions and generic checks with Indonesian
 //!   messages. Hyphenation uses the existing English fallback.
+//! - **Romanian** ([`ProofLang::Ro`], module [`ro`]): spelling against the Hunspell `ro_RO`
+//!   dictionary installed on the system (rospell, e.g. LibreOffice's; not bundled), cedilla
+//!   `ş`/`ţ` read as comma-below `ș`/`ț`, hyphenated forms (`într-o`, `s-a`) part by part,
+//!   suggestions tuned for Romanian (missing diacritics, `î`/`â`, missing hyphens and spaces),
+//!   and conservative grammar rules with Romanian messages (`nici un` → `niciun`, a comma
+//!   before `ci`/`dar`). Hyphenation from a `ro` Language pack, else the English fallback.
 //! - **Spanish** ([`ProofLang::Es`], [`ProofLang::EsMx`], [`ProofLang::Es419`], [`ProofLang::EsUy`],
 //!   module [`es`]): each variety's installed Hunspell dictionary (`es_ES`, `es_MX`, `es_419`,
 //!   `es_UY`, with fallbacks; not bundled), dictionary-driven suggestions, Uruguayan `vos` forms,
@@ -84,6 +90,7 @@ pub mod packs;
 pub mod patterns;
 pub mod pl;
 pub mod pt;
+pub mod ro;
 pub mod ru;
 pub mod scowl;
 mod slot;
@@ -219,7 +226,7 @@ struct Language {
 
 /// Every language proofed against a Hunspell dictionary, in the order File › Options › Proofing
 /// lists them. English has a built-in word list and is handled apart.
-static LANGUAGES: [Language; 12] = [
+static LANGUAGES: [Language; 13] = [
     Language {
         lang: ProofLang::Pl,
         slot: &pl::DICT,
@@ -317,6 +324,14 @@ static LANGUAGES: [Language; 12] = [
         is_correct: es::is_correct_with_options,
         suggest: es::suggest,
         grammar: |t, l, _| es::grammar::check(t, l),
+    },
+    Language {
+        lang: ProofLang::Ro,
+        slot: &ro::DICT,
+        message: "Posibilă greșeală de ortografie",
+        is_correct: |w, _, _| ro::is_correct(w),
+        suggest: |w, n, _| ro::suggest(w, n),
+        grammar: |t, _, c| ro::grammar::check_with(t, c),
     },
 ];
 
@@ -1205,6 +1220,7 @@ mod tests {
             (ProofLang::Ru, "ru_RU"),
             (ProofLang::Cs, "cs_CZ"),
             (ProofLang::Id, "id_ID"),
+            (ProofLang::Ro, "ro_RO"),
             // #3360: each Spanish variety names its own.
             (ProofLang::Es, "es_ES"),
             (ProofLang::EsMx, "es_MX"),
@@ -1262,6 +1278,7 @@ mod tests {
             ("ru_RU", ru::test_dict::AFF, ru::test_dict::DIC),
             ("cs_CZ", cs::test_dict::AFF, cs::test_dict::DIC),
             ("id_ID", id::test_dict::AFF, id::test_dict::DIC),
+            ("ro_RO", ro::test_dict::AFF, ro::test_dict::DIC),
             ("es_ES", es::test_dict::AFF, es::test_dict::DIC),
             ("es_MX", es::test_dict::AFF, es::test_dict::DIC_AMERICAS),
             ("es_419", es::test_dict::AFF, es::test_dict::DIC_AMERICAS),
@@ -1502,7 +1519,7 @@ mod tests {
         // the languages' own tests install theirs concurrently, so an exact path would race them.
         // The folder is searched first whatever is in use.
         let found = installed_dictionaries();
-        let names = ["pl_PL", "pt_BR", "it_IT", "hr_HR", "tr_TR", "ru_RU", "cs_CZ", "id_ID", "es_ES", "es_MX", "es_419", "es_UY"];
+        let names = ["pl_PL", "pt_BR", "it_IT", "hr_HR", "tr_TR", "ru_RU", "cs_CZ", "id_ID", "es_ES", "es_MX", "es_419", "es_UY", "ro_RO"];
         assert_eq!(
             found.iter().map(|(lang, _)| *lang).collect::<Vec<_>>(),
             [
@@ -1517,7 +1534,8 @@ mod tests {
                 ProofLang::Es,
                 ProofLang::EsMx,
                 ProofLang::Es419,
-                ProofLang::EsUy
+                ProofLang::EsUy,
+                ProofLang::Ro
             ]
         );
         for ((lang, path), name) in found.iter().zip(names) {
@@ -2203,6 +2221,7 @@ mod tests {
             (ProofLang::Tr, "elma ve armut"),
             (ProofLang::Pt, "maçãs e peras"),
             (ProofLang::Ru, "яблоки и груши"),
+            (ProofLang::Ro, "mere și pere"),
         ] {
             let first = text.split(' ').next().unwrap();
             assert!(grammar(text, lang, true).is_empty(), "{lang:?} list item: {:?}", grammar(text, lang, true));
@@ -2212,6 +2231,7 @@ mod tests {
         // Later sentences in a list item are still checked.
         assert_eq!(grammar("item one. then two", ProofLang::En, true), ["then"]);
         assert_eq!(grammar("elma ve armut. sonra kiraz", ProofLang::Tr, true), ["sonra"]);
+        assert_eq!(grammar("mere și pere. apoi cireșe", ProofLang::Ro, true), ["apoi"]);
     }
 
     #[cfg_attr(not(craft_proof_data), ignore = "needs the Language data (CRAFT_I18N_DIR)")]
@@ -3183,6 +3203,28 @@ mod tests {
 
     #[cfg_attr(not(craft_proof_data), ignore = "needs the Language data (CRAFT_I18N_DIR)")]
     #[test]
+    fn romanian_uses_its_own_tools() {
+        // English results depend on the dictionaries other tests install.
+        crate::hold_dictionary_tests();
+        ro::test_dict::install();
+        let ro = "Fata merge acasă și citește o carte într-o zi frumoasă.";
+        assert!(check_spelling_in(ro, ProofLang::Ro).is_empty(), "{:?}", check_spelling_in(ro, ProofLang::Ro));
+        assert!(check_spelling_in(ro, ProofLang::En).len() >= 3, "Romanian words are English misspellings");
+        let v = check_spelling_in("Merg la Brașov cu cîine.", ProofLang::Ro);
+        assert_eq!(flagged("Merg la Brașov cu cîine.", &v), ["cîine"]);
+        assert_eq!((v[0].lang, v[0].message.as_str()), (ProofLang::Ro, "Posibilă greșeală de ortografie"));
+        assert!(suggest_in("cîine", 5, ProofLang::Ro).contains(&"câine".to_string()));
+        // Text typed with cedilla letters is not flagged word by word.
+        assert!(check_spelling_in("Ştiinţă şi ţară.", ProofLang::Ro).is_empty());
+        // Romanian grammar speaks Romanian and has no English a/an rule.
+        let g = check_grammar_in("acesta acesta este a apple, nici un test", ProofLang::Ro);
+        assert!(g.iter().any(|i| i.message == "Cuvânt repetat: „acesta”"), "{g:?}");
+        assert!(g.iter().any(|i| i.message == "Se scrie legat: „niciun”"), "{g:?}");
+        assert!(!g.iter().any(|i| i.message.contains("\"an\"")), "{g:?}");
+    }
+
+    #[cfg_attr(not(craft_proof_data), ignore = "needs the Language data (CRAFT_I18N_DIR)")]
+    #[test]
     fn mixed_language_paragraphs_check_each_run_in_its_language() {
         // English results depend on the dictionaries other tests install.
         crate::hold_dictionary_tests();
@@ -3215,6 +3257,14 @@ mod tests {
         let v = check_text(t, &[(0..t.len(), ProofLang::It)]);
         assert_eq!(flagged(t, &v), ["lbiro", "caffe"], "{v:?}");
         assert!(v.iter().all(|i| i.lang == ProofLang::It && i.message == "Possibile errore di ortografia"), "{v:?}");
+        // Romanian checks in its span only, with the Romanian message; an English quote inside it
+        // is spelled in English.
+        ro::test_dict::install();
+        let t = "El a spus „hello wrold” și a plecat cu cîine.";
+        let (a, b) = (t.find("hello").unwrap(), t.find('”').unwrap());
+        let v = check_text(t, &[(0..a, ProofLang::Ro), (a..b, ProofLang::En), (b..t.len(), ProofLang::Ro)]);
+        assert_eq!(flagged(t, &v), ["wrold", "cîine"], "{v:?}");
+        assert!(v.iter().all(|i| (i.lang == ProofLang::Ro) == (i.message == "Posibilă greșeală de ortografie")), "{v:?}");
     }
 
     proptest::proptest! {
@@ -3226,7 +3276,7 @@ mod tests {
             let _ = has_dictionary(Some(&s));
             let _ = is_correct_for(&s, Some(&s));
             let _ = hyphen::hyphen_points(&s, &hyphen::Limits::default());
-            for lang in [ProofLang::En, ProofLang::EnGb, ProofLang::EnCa, ProofLang::Pl, ProofLang::Pt, ProofLang::It, ProofLang::Hr, ProofLang::Tr, ProofLang::Ru, ProofLang::Cs, ProofLang::Id, ProofLang::De, ProofLang::Es, ProofLang::EsMx, ProofLang::Es419, ProofLang::EsUy, ProofLang::Other] {
+            for lang in [ProofLang::En, ProofLang::EnGb, ProofLang::EnCa, ProofLang::Pl, ProofLang::Pt, ProofLang::It, ProofLang::Hr, ProofLang::Tr, ProofLang::Ru, ProofLang::Cs, ProofLang::Id, ProofLang::Ro, ProofLang::De, ProofLang::Es, ProofLang::EsMx, ProofLang::Es419, ProofLang::EsUy, ProofLang::Other] {
                 let _ = check_spelling_in(&s, lang);
                 let _ = check_grammar_in(&s, lang);
                 let _ = is_correct_in(&s, lang);
@@ -3279,8 +3329,8 @@ mod tests {
         }
 
         #[test]
-        fn mixed_spans_never_panic(s in "\\PC{0,60}", cuts in proptest::collection::vec((0usize..80, 0usize..80, 0u8..15), 0..6)) {
-            let langs = [ProofLang::En, ProofLang::EnGb, ProofLang::EnCa, ProofLang::Pl, ProofLang::Pt, ProofLang::It, ProofLang::Tr, ProofLang::Ru, ProofLang::Cs, ProofLang::Id, ProofLang::Es, ProofLang::EsMx, ProofLang::Es419, ProofLang::EsUy, ProofLang::Other];
+        fn mixed_spans_never_panic(s in "\\PC{0,60}", cuts in proptest::collection::vec((0usize..80, 0usize..80, 0u8..16), 0..6)) {
+            let langs = [ProofLang::En, ProofLang::EnGb, ProofLang::EnCa, ProofLang::Pl, ProofLang::Pt, ProofLang::It, ProofLang::Tr, ProofLang::Ru, ProofLang::Cs, ProofLang::Id, ProofLang::Ro, ProofLang::Es, ProofLang::EsMx, ProofLang::Es419, ProofLang::EsUy, ProofLang::Other];
             let spans: Vec<(Range<usize>, ProofLang)> = cuts.iter().map(|&(a, b, l)| (a.min(b)..a.max(b), langs[l as usize % langs.len()])).collect();
             for i in check_text(&s, &spans) {
                 proptest::prop_assert!(i.start <= i.end && i.end <= s.len());
