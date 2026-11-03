@@ -799,8 +799,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-doc"
+version = "0.1.0"
+dependencies = [
+ "craft-ecproj-format",
+ "craft-pcraft-format",
+ "craft-vectorcraft-format",
+ "flate2",
+ "proptest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-docpath"
 version = "0.1.0"
+
+[[package]]
+name = "craft-ecproj-format"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+]
 
 [[package]]
 name = "craft-font-catalog"
@@ -837,11 +860,15 @@ dependencies = [
  "craft-atomic",
  "craft-font-catalog",
  "flate2",
+ "log",
+ "ruzstd",
  "serde",
  "serde_json",
  "sha2",
  "skrifa 0.47.0",
+ "tar",
  "thiserror 2.0.21",
+ "toml",
  "ureq",
  "write-fonts 0.54.1",
 ]
@@ -914,10 +941,16 @@ dependencies = [
 name = "craft-media"
 version = "0.1.0"
 dependencies = [
+ "craft-media-testkit",
  "proptest",
+ "serde",
  "serde_json",
  "thiserror 2.0.21",
 ]
+
+[[package]]
+name = "craft-media-testkit"
+version = "0.1.0"
 
 [[package]]
 name = "craft-menu"
@@ -929,6 +962,15 @@ dependencies = [
  "muda",
  "objc2 0.6.5",
  "objc2-app-kit 0.3.2",
+]
+
+[[package]]
+name = "craft-pcraft-format"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -1102,6 +1144,16 @@ dependencies = [
  "winreg",
  "winsafe",
  "zip",
+]
+
+[[package]]
+name = "craft-vectorcraft-format"
+version = "0.1.0"
+dependencies = [
+ "flate2",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -4656,6 +4708,12 @@ dependencies = [
  "unicode-properties",
  "unicode-script",
 ]
+
+[[package]]
+name = "ruzstd"
+version = "0.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "69e4ce4a039f42bf25920b95667e4d789e98749ab11bbb8d2c2936f788421bb5"
 
 [[package]]
 name = "ryu"

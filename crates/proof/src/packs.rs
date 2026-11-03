@@ -34,6 +34,13 @@ pub(crate) const SPELLING: &str = "spelling";
 const HYPHENATION: &str = "hyphenation.pat";
 /// Most languages whose pack patterns are remembered (a document may tag thousands).
 const MAX_HYPHENATION_LOOKUPS: usize = 256;
+/// The memory budget of the remembered pack patterns, in estimated bytes ([`pattern_bytes`]):
+/// a pack's patterns may be as large as a dictionary (64 MB of file), and up to
+/// [`MAX_HYPHENATION_LOOKUPS`] of them are kept, so they get a budget of their own, as the
+/// dictionaries do (`pack_lang::MAX_LOADED_BYTES`).
+const MAX_HYPHENATION_BYTES: u64 = 256 << 20;
+/// Estimated memory per pattern (its packed key, its values and the map's own room).
+const BYTES_PER_PATTERN: u64 = 64;
 /// A pack's description.
 const PACK_TOML: &str = "pack.toml";
 /// A pack's licence texts.
@@ -80,15 +87,18 @@ struct State {
     dir: Option<PathBuf>,
     scan: Option<Arc<Scan>>,
     /// Each language's pack patterns once looked up (`None`: no pack has them), at most
-    /// [`MAX_HYPHENATION_LOOKUPS`] languages (cleared when full).
+    /// [`MAX_HYPHENATION_LOOKUPS`] languages and [`MAX_HYPHENATION_BYTES`] (cleared when full).
     hyphenation: BTreeMap<ProofLang, Option<Arc<Patterns>>>,
+    /// The estimated memory of the patterns in [`State::hyphenation`].
+    hyphenation_bytes: u64,
     /// (locale, reason) of pack hyphenation files that failed to load.
     hyphenation_errors: Vec<(String, String)>,
     /// Counts changes, so a scan or load that started before one is not kept.
     changes: u64,
 }
 
-static STATE: RwLock<State> = RwLock::new(State { dir: None, scan: None, hyphenation: BTreeMap::new(), hyphenation_errors: Vec::new(), changes: 0 });
+static STATE: RwLock<State> =
+    RwLock::new(State { dir: None, scan: None, hyphenation: BTreeMap::new(), hyphenation_bytes: 0, hyphenation_errors: Vec::new(), changes: 0 });
 
 fn read() -> RwLockReadGuard<'static, State> {
     STATE.read().unwrap_or_else(PoisonError::into_inner)
@@ -121,6 +131,7 @@ pub fn reload() {
 fn forget(s: &mut State) {
     s.scan = None;
     s.hyphenation.clear();
+    s.hyphenation_bytes = 0;
     s.hyphenation_errors.clear();
     s.changes = s.changes.wrapping_add(1);
 }
@@ -532,7 +543,7 @@ fn hyphenation_locales(lang: ProofLang) -> Vec<String> {
         ProofLang::EsUy => &["es-uy", "es-419", "es"],
         ProofLang::De => &["de", "de-1996", "de-de"],
         ProofLang::Pack(l) => return crate::pack_lang::hyphenation_locales(l),
-        ProofLang::En | ProofLang::EnGb | ProofLang::EnCa | ProofLang::Other => &[],
+        ProofLang::En | ProofLang::EnGb | ProofLang::EnAu | ProofLang::EnCa | ProofLang::Other => &[],
     };
     names.iter().map(|n| (*n).to_string()).collect()
 }
@@ -567,10 +578,8 @@ pub(crate) fn hyphenation(lang: ProofLang) -> Option<Arc<Patterns>> {
     let mut s = write();
     if s.changes == changes && !s.hyphenation.contains_key(&lang) {
         // ponytail: cleared when full, an LRU if many languages each need their patterns.
-        if s.hyphenation.len() >= MAX_HYPHENATION_LOOKUPS {
-            s.hyphenation.clear();
-        }
-        s.hyphenation.insert(lang, found.clone());
+        let bytes = found.as_deref().map_or(0, pattern_bytes);
+        remember_patterns(&mut s, lang, found.clone(), bytes, MAX_HYPHENATION_BYTES);
         for e in errors {
             if !s.hyphenation_errors.contains(&e) {
                 s.hyphenation_errors.push(e);
@@ -578,6 +587,23 @@ pub(crate) fn hyphenation(lang: ProofLang) -> Option<Arc<Patterns>> {
         }
     }
     found
+}
+
+/// Estimated memory of `p`.
+fn pattern_bytes(p: &Patterns) -> u64 {
+    (p.len() as u64).saturating_add(p.exception_count() as u64).saturating_mul(BYTES_PER_PATTERN)
+}
+
+/// Remember `lang`'s pack patterns (`bytes` of them): over [`MAX_HYPHENATION_LOOKUPS`] languages
+/// or `budget` bytes, the ones remembered so far are forgotten first. Patterns larger than the
+/// whole budget are still kept alone, or they would be read from disk for every word.
+fn remember_patterns(s: &mut State, lang: ProofLang, found: Option<Arc<Patterns>>, bytes: u64, budget: u64) {
+    if s.hyphenation.len() >= MAX_HYPHENATION_LOOKUPS || s.hyphenation_bytes.saturating_add(bytes) > budget {
+        s.hyphenation.clear();
+        s.hyphenation_bytes = 0;
+    }
+    s.hyphenation.insert(lang, found);
+    s.hyphenation_bytes = s.hyphenation_bytes.saturating_add(bytes);
 }
 
 /// How many languages' pack patterns are remembered now.
@@ -600,6 +626,29 @@ fn load_patterns(path: &Path) -> Result<Patterns, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Review follow-up (craft-libs#485): the remembered pack patterns have a memory budget, not
+    /// only a count, so 256 languages of large patterns can't each stay in memory.
+    #[test]
+    fn remembered_patterns_keep_to_a_memory_budget() {
+        let mut s = State { dir: None, scan: None, hyphenation: BTreeMap::new(), hyphenation_bytes: 0, hyphenation_errors: Vec::new(), changes: 0 };
+        let p = Arc::new(Patterns::parse("hy3ph he2n hena4 hen5at 1na n2at 1tio 2io o2n"));
+        let bytes = pattern_bytes(&p);
+        assert_eq!(bytes, 9 * BYTES_PER_PATTERN);
+        let lang = |t: &str| ProofLang::from_tag(Some(t));
+        let budget = bytes * 2;
+        remember_patterns(&mut s, lang("nl"), Some(p.clone()), bytes, budget);
+        remember_patterns(&mut s, lang("fr"), Some(p.clone()), bytes, budget);
+        remember_patterns(&mut s, lang("sv"), None, 0, budget);
+        assert_eq!((s.hyphenation.len(), s.hyphenation_bytes), (3, budget), "a language with no patterns takes no room");
+        remember_patterns(&mut s, lang("da"), Some(p.clone()), bytes, budget);
+        assert_eq!((s.hyphenation.len(), s.hyphenation_bytes), (1, bytes), "over the budget: the others are forgotten");
+        assert!(s.hyphenation.contains_key(&lang("da")));
+        remember_patterns(&mut s, lang("fi"), Some(p.clone()), budget * 4, budget);
+        assert_eq!((s.hyphenation.len(), s.hyphenation_bytes), (1, budget * 4), "patterns over the whole budget are kept alone");
+        forget(&mut s);
+        assert_eq!((s.hyphenation.len(), s.hyphenation_bytes), (0, 0));
+    }
 
     /// Review of #485: a pack's name loses bidirectional and other format characters.
     #[test]
