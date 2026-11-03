@@ -225,6 +225,74 @@ pub fn decode_text<'a>(
 * *Policy on Valid UTF-8:* If `options.force_encoding` is `None` and `input` is valid UTF-8, `decode_text` **never runs heuristic transcoding**. Valid UTF-8 is preserved as UTF-8, applying only `normalize_nfc` if requested.
 * *Policy on Windows-1258:* If `options.normalize_nfc` is `true`, `decode_text` passes the decoded output through `normalize_nfc()`. If `false`, the semi-decomposed string is returned verbatim.
 
+#### Tier 1 Extension: Robust Decoding Contract & Invariants
+
+##### 1. Operating Modes: Strict vs. Practical
+Consumers may configure the decoding pipeline with one of two behavioral modes:
+* `DecodeMode::Strict`: Enforces rigid conformance to standard specification tables (TCVN 5712:1993, VNI, CP1258.TXT). Any unmapped byte, orphan diacritic, or truncated sequence immediately halts execution and returns an explicit `DecodeError`.
+* `DecodeMode::Practical` (Default for Craft Apps): Optimized for real-world document tolerance (1995–2005 archival corpora).
+  - Preserves Windows-1252 typographic punctuation in the `0x80..=0x9F` range (curly quotes `“ ”`, em-dash `—`, ellipsis `…`).
+  - Flushes pending base vowels at EOF safely.
+  - Converts orphan combining marks into standalone spacing accents rather than discarding bytes.
+  - Emits non-fatal diagnostic warnings via `tracing` when encountering legacy VSCII-1 control codes.
+
+##### 2. Contract 1: One-Way Canonical Normalization & Lossy Tolerance
+* **The One-Way Bridge:** Decoding is formally defined as a one-way transformation from legacy byte streams to canonical UTF-8 NFC:
+  $$\text{Legacy Bytes (TCVN3 / VNI / CP1258)} \xrightarrow{\text{Decode}} \text{Canonical UTF-8 NFC}$$
+* **Lossy-Tolerant Invariant (Non-goal):** 
+  * Reverse transcoding ($E(D(B)) = B$) is explicitly out of scope and non-deterministic due to NFC diacritic composition and lossy punctuation normalization.
+  * Every string returned by `decode_text` is guaranteed to be in **Unicode Normalization Form C (NFC)** via `icu_normalizer`. Downstream text shapers, search indices, and layout engines will never receive decomposed combining marks or legacy control bytes from decoded legacy text.
+
+##### 3. Contract 2: Pending-at-EOF Policy & Truncated Sequence
+VNI is a multi-byte composite encoding (Base character + Diacritic mark byte). When the data stream terminates (EOF) or encounters an anomalous sequence, the decoder follows a deterministic two-mode matrix:
+
+| Situation at EOF | Mode: `Strict` | Mode: `Practical` (Default for Craft Apps) |
+| :--- | :--- | :--- |
+| **Pending base vowel at EOF**<br>*(e.g., stream terminates with byte `'a'`)* | Returns `Err(DecodeError::TruncatedSequence { offset, base })` | **Flushes pending base vowel to output** safely as regular character (`'a'`). |
+| **Orphan diacritic mark**<br>*(e.g., mark byte `0xF8` following a space or consonant `k`)* | Returns `Err(DecodeError::OrphanDiacritic { byte, offset })` | **Emits standalone spacing accent** (e.g. `0xF8` $\to$ `` ` `` `U+0060`), never panics or drops bytes. |
+| **DOS control bytes (`0x01..=0x1F`)**<br>*(Legacy VSCII-1 vestiges in old CAD files)* | Returns `Err(DecodeError::StrictRejection { byte, offset })` | Emits non-fatal diagnostic warning via `tracing::warn!` and sanitizes as whitespace. |
+
+##### 4. Contract 3: Ambiguity Rejection & Heuristic Threshold
+To prevent autonomous detectors from over-confident false transcoding on short or ambiguous byte sequences:
+* **Heuristic Activation Threshold:** Autonomous encoding detection requires an input length $\ge 16$ bytes and at least 2 distinct signature distributions (e.g., TCVN3 via pairs `0xA7`/`0xAE` or double vowels `0xCA`, `0xD4`; VNI via postfix byte pairs `0xF8`, `0xF9`, `0xEF`).
+* **Conflict & Safety Rules:** If candidate encodings (e.g., TCVN3 vs. VNI-Windows / CP1258) yield conflicting confidence scores differing by less than $30\%$, detection yields `DetectionResult::Ambiguous { candidates }`. The system must prompt caller intervention rather than executing speculative transcoding.
+
+##### 5. Contract 4: Explicit Error Model (`DecodeError`)
+Eliminates generic errors, providing unambiguous context for failures:
+```rust
+#[derive(Debug, thiserror::Error, PartialEq, Eq, Clone)]
+pub enum DecodeError {
+    #[error("Invalid UTF-8 sequence at offset {offset}")]
+    InvalidUtf8 { offset: usize },
+
+    #[error("Unmapped byte 0x{byte:02X} at offset {offset} in encoding {encoding:?}")]
+    UnmappedByte { byte: u8, offset: usize, encoding: LegacyEncoding },
+
+    #[error("Truncated composite sequence at EOF (pending base byte 0x{base:02X})")]
+    TruncatedSequence { offset: usize, base: u8 },
+
+    #[error("Orphan diacritic mark 0x{byte:02X} at offset {offset} without a preceding base vowel")]
+    OrphanDiacritic { byte: u8, offset: usize },
+
+    #[error("Ambiguous encoding detected between candidates {candidates:?}")]
+    AmbiguousEncoding { candidates: &'static [LegacyEncoding] },
+
+    #[error("Decoding mode Strict rejected non-standard byte 0x{byte:02X} at offset {offset}")]
+    StrictRejection { byte: u8, offset: usize },
+}
+```
+
+##### 6. Contract 5: Performance & Bounded Linear Allocation
+* **Zero-Panic Policy:** `#![forbid(unsafe_code)]`. Memory safety invariants enforced across all paths; fuzz-tested with `cargo-fuzz` on arbitrary byte streams without unexpected panics.
+* **Bounded Linear Allocation $O(N)$:** Decoder capacity is estimated once upfront (`String::with_capacity(input.len() * 6 / 5)`). No re-allocations during steady-state VNI composite streaming.
+
+##### 7. Real-World Archival Test Corpora (Mandatory Fixtures)
+The implementation must pass validation against authentic, anonymized test fixtures in `crates/i18n/src/encoding/fixtures/`:
+1. `tcvn3_cad_dwg.txt`: Technical drawing text entities using `.VnTime` and `.VnTimeH`.
+2. `vni_contract_1998.txt`: Business contract text employing uppercase/lowercase VNI-Times and mixed CapsLock diacritics (`0xD8..=0xD9`).
+3. `cp1258_accounting.txt`: Tabular accounting exports containing hybrid precomposed and combining diacritics.
+4. `clean_utf8_payload.txt`: Modern UTF-8 text, asserting zero byte alteration and zero memory allocation (`Cow::Borrowed`).
+
 #### Verification & Test Fixtures
 * **Semantic Verification over Byte-for-Byte Round-Trip:** Decoding is verified against curated fixtures (official TCVN 5712:1993, VNI standard, and CP1258 specification tables). Reverse encoding is tested only for representable subsets and semantic equivalence ($D(E(U)) = U$), recognizing that canonical normalization collapses non-unique legacy byte forms.
 * **Full Byte Domain Audit:** Unit tests asserting every byte `0x00..=0xFF` produces either the exact Unicode mapping or `Err(DecodeError::UnmappedByte)`.
