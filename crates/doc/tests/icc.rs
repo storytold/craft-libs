@@ -234,6 +234,33 @@ fn declared_nonzero_content_sizes_are_checked_before_and_after_decoding() {
 }
 
 #[test]
+/// A present zero size permits an empty payload, while an omitted size permits streamed data.
+fn explicit_zero_content_sizes_match_only_empty_payloads() {
+    // A two-byte FCS has an offset of 256, so zero uses one, four or eight bytes.
+    for (descriptor, width, single) in [(0x80, 4, false), (0xc0, 8, false), (0x20, 1, true), (0xa0, 4, true), (0xe0, 8, true)] {
+        for payload in [b"p".as_slice(), b"".as_slice()] {
+            let h = hash(payload);
+            let path = craft_pcraft_format::blob_path(&h).unwrap();
+            let m = named_manifest(&h);
+            let mut z = vec![0x28, 0xb5, 0x2f, 0xfd, descriptor];
+            if !single {
+                z.push(0); // 1 KiB window
+            }
+            z.extend(std::iter::repeat_n(0, width));
+            z.extend_from_slice(&[if payload.is_empty() { 1 } else { 9 }, 0, 0]);
+            z.extend_from_slice(payload);
+            let result = pcraft_icc_profile(&zip(&[store("manifest.json", m.as_bytes()), store(&path, &z)]), &Limits::default());
+            if payload.is_empty() {
+                assert_eq!(result, Ok(Some(Vec::new())), "descriptor {descriptor:#x}");
+            } else {
+                assert!(matches!(result, Err(Error::Malformed(_))), "descriptor {descriptor:#x}: {result:?}");
+            }
+        }
+    }
+    assert_eq!(pcraft_icc_profile(&bundle(b"p"), &Limits::default()), Ok(Some(b"p".to_vec())), "unknown content size still streams");
+}
+
+#[test]
 /// Damaged envelopes and frames fail through the public accessor without escaping a panic.
 fn truncations_and_mutations_do_not_panic() {
     let archive = bundle(b"synthetic profile");

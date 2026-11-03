@@ -569,6 +569,9 @@ fn unzstd_bounded(frame: &[u8], size: DecodedSize, what: &str) -> Result<Vec<u8>
         DecodedSize::Exact(n) | DecodedSize::AtMost(n) => n,
     };
     let declared = dec.decoder.content_size();
+    // After header validation, descriptor bits 7-6 (FCS flag) or 5 (single segment) mean
+    // the size is present, even when zero. See RFC 8878, section 3.1.1.1.1.1.
+    let has_content_size = frame.get(4).is_some_and(|descriptor| descriptor & 0xe0 != 0);
     if matches!(size, DecodedSize::AtMost(_)) && declared > len as u64 {
         return Err(Error::LimitExceeded(format!("{what}: declared payload exceeds {len} bytes")));
     }
@@ -599,7 +602,7 @@ fn unzstd_bounded(frame: &[u8], size: DecodedSize, what: &str) -> Result<Vec<u8>
     if matches!(size, DecodedSize::Exact(_)) && out.len() < len {
         return Err(malformed(format!("{what} decodes to {} bytes, not {len}", out.len())));
     }
-    if matches!(size, DecodedSize::AtMost(_)) && declared != 0 && declared != out.len() as u64 {
+    if matches!(size, DecodedSize::AtMost(_)) && has_content_size && declared != out.len() as u64 {
         return Err(malformed(format!("{what}: declared payload size {declared} differs from {} decoded bytes", out.len())));
     }
     if !dec.decoder.is_finished() {
