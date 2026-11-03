@@ -10,11 +10,12 @@
 //!   `dl.`, `prof.`, `nr.`, `str.`), initials, ordinal numbers and ellipses, and the low opening
 //!   quote `„`.
 //! - **Doubled punctuation** (`,,`, `..`, `;;`).
-//! - **`nici un` / `nici o`** written apart where the norm (DOOM, 2005) joins them: `niciun`,
-//!   `nicio`, `niciunul`, `niciuna`… — not in the correlative `nici …, nici …` (`nici unul,
-//!   nici altul`, `nici un frate, nici mai mulți`), where the words stay apart.
-//! - **Missing comma before `ci` and `dar`** joining two clauses (`Nu vine azi ci mâine`), not
-//!   at a sentence start and not where `dar` is the noun (`un dar`, `de dar`).
+//! - **Contextual diacritics** in enumerated adjacent court phrases (`instanta de judecată`,
+//!   `în calitate de parat`), without changing ambiguous standalone words or valid verbs.
+//!
+//! Context-dependent changes (`nici un`, punctuation before `ci`/`dar`) are left alone:
+//! without grammatical analysis they misclassify valid correlative wording, nouns and office
+//! abbreviations such as `CI`. This module does not claim full Romanian grammar checking.
 //!
 //! No English rule (such as `a`/`an`) applies to Romanian text.
 
@@ -34,57 +35,6 @@ const ABBREVIATIONS: &[&str] = &[
     "str", "bd", "bdul", "bl", "sc", "ap", "et", "jud", "mun", "or", "com", "sat", "loc", "tel", "fax", "ex", "cf", "cca", "aprox", "max", "min",
     "sec", "mil", "mld", "lei", "ian", "feb", "febr", "mar", "apr", "iun", "iul", "aug", "sept", "oct", "nov", "dec", "lun", "mie", "joi", "vin",
     "sâm", "dum", "ed", "red", "trad", "coord", "op", "cit", "ibid", "id", "v", "vs", "obs", "n", "s", "a", "î", "d", "hr",
-];
-
-/// Words before `dar` that make it the noun (`un dar`, `al darului`), not the conjunction.
-const DAR_NOUN_BEFORE: &[&str] = &[
-    "un",
-    "unui",
-    "al",
-    "acest",
-    "acel",
-    "acestui",
-    "acelui",
-    "cel",
-    "de",
-    "ca",
-    "cu",
-    "drept",
-    "în",
-    "pe",
-    "la",
-    "din",
-    "prin",
-    "fără",
-    "vreun",
-    "niciun",
-    "orice",
-    "ce",
-    "mare",
-    "frumos",
-    "mic",
-    "primul",
-    "singurul",
-    "adevărat",
-    "minunat",
-    "divin",
-    "și",
-    "sau",
-    "ori",
-    "iar",
-    "dar",
-];
-
-/// `nici` + this word → the joined form the norm asks for.
-const NICI_JOINED: &[(&str, &str)] = &[
-    ("un", "niciun"),
-    ("o", "nicio"),
-    ("unul", "niciunul"),
-    ("una", "niciuna"),
-    ("unui", "niciunui"),
-    ("unei", "niciunei"),
-    ("unuia", "niciunuia"),
-    ("uneia", "niciuneia"),
 ];
 
 fn issue(start: usize, end: usize, message: String, suggestions: Vec<String>) -> Issue {
@@ -112,7 +62,7 @@ fn ends_sentence(gap: &str, prev: &str) -> bool {
         return false;
     }
     let after = t.trim_start_matches(['.', '!', '?']);
-    // A quotation that ends in its own `?` or `!` goes on in lower case: „Vii?” a întrebat.
+    // A reporting clause after a quoted question/exclamation continues in lower case.
     if matches!(end, '?' | '!') && after.starts_with(['"', '”', '’', '»']) {
         return false;
     }
@@ -135,6 +85,14 @@ fn repeated_words(text: &str, ws: &[(usize, usize)], v: &mut Vec<Issue>) {
     }
 }
 
+/// A common typed stand-in for Romanian low opening quotes, without changing the source.
+fn ascii_opening_quote(text: &str, at: usize) -> bool {
+    let before = text.get(..at).and_then(|s| s.chars().next_back());
+    text.get(at..).is_some_and(|s| s.starts_with(",,"))
+        && before.is_none_or(|c| c.is_whitespace() || matches!(c, '(' | '[' | '—' | '–'))
+        && text.get(at.saturating_add(2)..).and_then(|s| s.chars().next()).is_some_and(char::is_alphanumeric)
+}
+
 fn spaces(text: &str, v: &mut Vec<Issue>) {
     for (i, c) in text.char_indices() {
         if c != ' ' {
@@ -145,14 +103,12 @@ fn spaces(text: &str, v: &mut Vec<Issue>) {
         let Some(p) = it.next() else { continue };
         let after = it.next();
         let flag = match p {
-            // ` ,,` opens a typed quote, so the space before it is right.
-            ',' => after != Some(','),
+            ',' => !ascii_opening_quote(text, i.saturating_add(1)),
             // `;)` and `;-)` are emoticons.
             ';' => !matches!(after, Some(')' | '(' | '-' | 'P' | 'D')),
             // ` ...` is an ellipsis, ` .5` a number.
             '.' => !matches!(after, Some('.')) && !after.is_some_and(|a| a.is_ascii_digit()),
             // ` :)`, ` :-)`, ` :D` and similar are emoticons; ` ?!` is still a stray space.
-            // A score or ratio (`3 : 1`) keeps its spaces.
             ':' | '!' | '?' => !crate::score_colon(text, i) && after.is_none_or(|a| a.is_whitespace() || matches!(a, '"' | '”' | '’' | '!' | '?')),
             _ => false,
         };
@@ -160,19 +116,32 @@ fn spaces(text: &str, v: &mut Vec<Issue>) {
             v.push(issue(i, i + 1 + p.len_utf8(), "Spațiu înaintea semnului de punctuație".into(), vec![p.to_string()]));
         }
     }
-    // The whole run, so the fix leaves one space.
+    // Replacing the complete run leaves exactly one space.
     for run in crate::space_runs(text) {
         v.push(issue(run.start, run.end, "Spațiu dublu".into(), vec![" ".into()]));
     }
 }
 
-fn sentence_capitals(text: &str, ws: &[(usize, usize)], capital_first: bool, v: &mut Vec<Issue>) {
+fn sentence_capitals(text: &str, ws: &[(usize, usize)], capital_first: bool, contextual: &mut [Issue], v: &mut Vec<Issue>) {
     let mut after_end = capital_first;
+    // Contextual fixes are in word order. Advance once through them, not a scan per sentence.
+    let mut fixes = contextual.iter_mut().peekable();
     for (k, (a, b)) in ws.iter().enumerate() {
         let Some(w) = text.get(*a..*b) else { continue };
+        while fixes.peek().is_some_and(|i| i.start < *a) {
+            fixes.next();
+        }
         if after_end && w.chars().next().is_some_and(char::is_lowercase) && w.chars().all(char::is_alphabetic) {
-            let fixed: String = w.chars().next().map(|f| f.to_uppercase().chain(w.chars().skip(1)).collect()).unwrap_or_default();
-            v.push(issue(*a, *b, "Majusculă la început de propoziție".into(), vec![fixed]));
+            let capital = |word: &str| word.chars().next().map(|f| f.to_uppercase().chain(word.chars().skip(1)).collect()).unwrap_or_default();
+            if let Some(fix) = fixes.peek_mut().filter(|i| i.start == *a && i.end == *b) {
+                // A contextual diacritic fix on this same word also needs the initial capital:
+                // offer `Instanța` once, rather than competing `Instanta` / `instanța` marks.
+                for suggestion in &mut fix.suggestions {
+                    *suggestion = capital(suggestion);
+                }
+            } else {
+                v.push(issue(*a, *b, "Majusculă la început de propoziție".into(), vec![capital(w)]));
+            }
         }
         // Only the gap up to the next word decides (`Salut. apoi`: `. ` ends the sentence).
         let next = ws.get(k + 1).map_or(text.len(), |n| n.0);
@@ -183,127 +152,17 @@ fn sentence_capitals(text: &str, ws: &[(usize, usize)], capital_first: bool, v: 
 fn doubled_punctuation(text: &str, v: &mut Vec<Issue>) {
     for pat in [",,", "..", ";;", "::", "??", "!!"] {
         for (i, _) in text.match_indices(pat) {
+            if pat == ",," && ascii_opening_quote(text, i) {
+                continue;
+            }
             if pat == ".." && text.get(i + 2..).is_some_and(|r| r.starts_with('.')) {
                 continue; // ellipsis
             }
             if pat == ".." && text.get(..i).is_some_and(|t| t.ends_with('.')) {
                 continue; // the end of an ellipsis
             }
-            // `,,` before a word, after a space: a typed opening quote, which `„` replaces.
-            let typed_quote = pat == ",,"
-                && text.get(i + 2..).and_then(|t| t.chars().next()).is_some_and(char::is_alphabetic)
-                && (i == 0 || text.get(..i).is_some_and(|t| t.ends_with(char::is_whitespace)));
-            let fix = if typed_quote { "„".to_string() } else { pat[..1].to_string() };
-            v.push(issue(i, i + pat.len(), "Punctuație dublă".into(), vec![fix]));
+            v.push(issue(i, i + pat.len(), "Punctuație dublă".into(), vec![pat[..1].into()]));
         }
-    }
-}
-
-/// Does the gap between two words hold a sentence end or a clause break (`.`, `!`, `?`, `;`,
-/// `:`, `,`, a dash)?
-fn breaks_clause(gap: &str) -> bool {
-    gap.chars().any(|c| matches!(c, '.' | '!' | '?' | ';' | ':' | ',' | '—' | '–'))
-}
-
-/// Is `w` the word `want`, in any case (cedilla letters read as comma-below)?
-fn is_word(w: &str, want: &str) -> bool {
-    super::comma_below(&w.to_lowercase()) == want
-}
-
-/// For each word of `ws`: its sentence (a number that grows at each sentence end) and whether it
-/// is a `nici` after a comma (`…, nici`). Read once per paragraph, so each `nici` pair looks its
-/// sentence up instead of scanning the rest of the paragraph.
-fn nici_sentences(text: &str, ws: &[(usize, usize)]) -> Vec<(usize, bool)> {
-    let mut out = Vec::with_capacity(ws.len());
-    let mut sentence = 0usize;
-    for (j, (a, b)) in ws.iter().enumerate() {
-        let prev = j.checked_sub(1).and_then(|p| ws.get(p)).copied();
-        let gap = prev.map_or("", |p| text.get(p.1..*a).unwrap_or(""));
-        // A sentence end starts a new sentence; the period of an abbreviation or number (`nr.`,
-        // `5.`) doesn't.
-        let prev_word = prev.map_or("", |p| text.get(p.0..p.1).unwrap_or(""));
-        let abbreviation = gap.trim_start().starts_with('.') && !gap.contains("..") && abbreviation_or_number(prev_word);
-        if gap.contains(['!', '?']) || (gap.contains('.') && !abbreviation) {
-            sentence = sentence.saturating_add(1);
-        }
-        let comma_nici = gap.contains(',') && text.get(*a..*b).is_some_and(|w| is_word(w, "nici"));
-        out.push((sentence, comma_nici));
-    }
-    out
-}
-
-/// `nici un`, `nici o` … written apart, except in the correlative `nici …, nici …`.
-fn nici_apart(text: &str, ws: &[(usize, usize)], v: &mut Vec<Issue>) {
-    let marks = nici_sentences(text, ws);
-    // The next `…, nici` at or after each word, in the same sentence (filled from the end).
-    let mut next_comma_nici: Vec<Option<usize>> = vec![None; ws.len()];
-    let mut later: Option<usize> = None;
-    for j in (0..ws.len()).rev() {
-        let (sentence, comma_nici) = marks.get(j).copied().unwrap_or_default();
-        if later.is_some_and(|l| marks.get(l).is_none_or(|m| m.0 != sentence)) {
-            later = None;
-        }
-        if comma_nici {
-            later = Some(j);
-        }
-        if let Some(slot) = next_comma_nici.get_mut(j) {
-            *slot = later;
-        }
-    }
-    // Whether a `nici` comes before each word in the same sentence.
-    let mut nici_before: Vec<bool> = Vec::with_capacity(ws.len());
-    let mut seen: Option<usize> = None;
-    for (j, (a, b)) in ws.iter().enumerate() {
-        let sentence = marks.get(j).map_or(0, |m| m.0);
-        nici_before.push(seen == Some(sentence));
-        if text.get(*a..*b).is_some_and(|w| is_word(w, "nici")) {
-            seen = Some(sentence);
-        }
-    }
-    for (k, pair) in ws.windows(2).enumerate() {
-        let [(a0, b0), (a1, b1)] = pair else { continue };
-        let (Some(w0), Some(w1), Some(gap)) = (text.get(*a0..*b0), text.get(*a1..*b1), text.get(*b0..*a1)) else { continue };
-        if !is_word(w0, "nici") || gap != " " {
-            continue;
-        }
-        let Some((_, joined)) = NICI_JOINED.iter().find(|(apart, _)| is_word(w1, apart)) else { continue };
-        // Correlative `nici … , nici …` (`nici unul, nici altul`, `nici un frate, nici o soră`):
-        // `nici` is an adverb there and the words stay apart (DOOM). A later `…, nici` in the same
-        // sentence makes this the first half; a `…, nici` here after an earlier `nici` of the
-        // sentence makes it the second.
-        let sentence = marks.get(k).map(|m| m.0);
-        let first_half = next_comma_nici.get(k + 2).copied().flatten().is_some_and(|j| marks.get(j).map(|m| m.0) == sentence);
-        let second_half = marks.get(k).is_some_and(|m| m.1) && nici_before.get(k).copied().unwrap_or(false);
-        if first_half || second_half {
-            continue;
-        }
-        let fixed = if w0.chars().all(|c| !c.is_lowercase()) && w1.chars().all(|c| !c.is_lowercase()) {
-            joined.to_uppercase()
-        } else if w0.starts_with(char::is_uppercase) {
-            crate::affix::capitalize(joined)
-        } else {
-            (*joined).to_string()
-        };
-        v.push(issue(*a0, *b1, format!("Se scrie legat: „{joined}”"), vec![fixed]));
-    }
-}
-
-/// A missing comma before the adversative `ci` or `dar` between two words of one clause.
-fn comma_before_adversative(text: &str, ws: &[(usize, usize)], v: &mut Vec<Issue>) {
-    // `Dar…` / `Ci…` opening a sentence has no word before it in the same clause: only pairs of
-    // words with nothing but space between them are looked at.
-    for pair in ws.windows(2) {
-        let [(a0, b0), (a1, b1)] = pair else { continue };
-        let (Some(w0), Some(w1), Some(gap)) = (text.get(*a0..*b0), text.get(*a1..*b1), text.get(*b0..*a1)) else { continue };
-        if breaks_clause(gap) || !gap.chars().all(char::is_whitespace) || gap.is_empty() {
-            continue;
-        }
-        let is_ci = is_word(w1, "ci");
-        let is_dar = is_word(w1, "dar") && !DAR_NOUN_BEFORE.contains(&super::comma_below(&w0.to_lowercase()).as_str());
-        if !(is_ci || is_dar) || !w0.chars().all(char::is_alphabetic) {
-            continue;
-        }
-        v.push(issue(*b0, *a1, format!("Virgulă lipsă înainte de „{}”", w1.to_lowercase()), vec![", ".into()]));
     }
 }
 
@@ -319,16 +178,35 @@ pub fn check_with(text: &str, capital_first: bool) -> Vec<Issue> {
     let mut v = Vec::new();
     repeated_words(text, &ws, &mut v);
     spaces(text, &mut v);
-    sentence_capitals(text, &ws, capital_first, &mut v);
+    let mut contextual = Vec::new();
+    super::context::check(text, &ws, &mut contextual);
+    sentence_capitals(text, &ws, capital_first, &mut contextual, &mut v);
     doubled_punctuation(text, &mut v);
-    nici_apart(text, &ws, &mut v);
-    comma_before_adversative(text, &ws, &mut v);
+    v.extend(contextual);
     v.sort_by_key(|i| (i.start, i.end));
     v
 }
 
 #[cfg(test)]
 mod tests {
+    /// ASCII low opening quotes are not duplicate commas or spaces-before-punctuation errors.
+    #[test]
+    fn ascii_opening_quotes_are_not_rewritten_as_commas() {
+        for text in [r#"El a spus ,,Vin mâine"."#, r#",,Citat"."#, r#"Exemplu —,,Citat"."#, r#"Exemplu [,,Citat"]."#] {
+            assert!(check(text).is_empty(), "{text}: {:?}", check(text));
+        }
+        assert!(check("Text,, alt text.").iter().any(|i| i.message == "Punctuație dublă"));
+        assert!(check("Text , alt text.").iter().any(|i| i.message == "Spațiu înaintea semnului de punctuație"));
+    }
+
+    /// Office abbreviations and contextual wording must not receive speculative replacements.
+    #[test]
+    fn office_wording_does_not_receive_contextual_grammar_guesses() {
+        for text in ["Anexăm copie CI pentru verificare.", "Nu este nici un calculator, nici un telefon.", "Bunul primit este dar, nu împrumut."] {
+            assert!(check(text).is_empty(), "{text}: {:?}", check(text));
+        }
+    }
+
     use super::*;
 
     fn messages(t: &str) -> Vec<String> {
@@ -356,11 +234,6 @@ mod tests {
         assert_eq!(&"Salut. apoi am plecat."[v[0].start..v[0].end], "apoi");
         // After a quotation mark or bracket too; never after an abbreviation or an ellipsis.
         assert_eq!(messages("A venit.” apoi a plecat."), ["Majusculă la început de propoziție"]);
-        // A quotation ending in its own `?` or `!` goes on in lower case; a full stop inside the
-        // quotation still ends the sentence.
-        for t in ["„Vii?” a întrebat.", "„Stai!” a strigat el.", "«Unde?» a zis."] {
-            assert!(messages(t).is_empty(), "{t}: {:?}", messages(t));
-        }
         assert!(check("Merge cu dl. Popescu... apoi pleacă.").is_empty());
     }
 
@@ -382,46 +255,113 @@ mod tests {
     }
 
     #[test]
-    fn nici_un_is_joined() {
-        let v = check("Nu am nici un ban și nici o speranță.");
-        let fixes: Vec<(&str, &str)> = v.iter().map(|i| (i.message.as_str(), i.suggestions[0].as_str())).collect();
-        assert_eq!(fixes, [("Se scrie legat: „niciun”", "niciun"), ("Se scrie legat: „nicio”", "nicio")], "{v:?}");
-        let v = check("Nici unul nu a venit.");
-        assert_eq!(v.first().map(|i| i.suggestions[0].as_str()), Some("Niciunul"), "{v:?}");
-        // The correlative pronouns stay apart; a `nici` in a new sentence doesn't count.
-        assert!(check("Nici una, nici alta nu mi-a plăcut.").is_empty());
-        assert_eq!(messages("Nu vreau nici unul. Nici altul."), ["Se scrie legat: „niciunul”"]);
-        assert_eq!(messages("Nu am nici un ban. Nici el nu are."), ["Se scrie legat: „niciun”"]);
-        // Any correlative `nici …, nici …` keeps the words apart (DOOM).
-        assert!(check("N-am nici un frate, nici mai mulți.").is_empty());
-        // An abbreviation's period doesn't end the sentence the search runs through.
-        assert!(check("N-am nici un nr. de telefon, nici alt mijloc de contact.").is_empty());
-        // Both halves of a correlative stay apart, the second too (CodeRabbit on craft-libs#550).
-        assert!(check("Nici un frate, nici o soră.").is_empty());
-        // A `…, nici` in the next sentence doesn't make one here.
-        assert_eq!(messages("Nu am nici un ban. Mâine, nici el."), ["Se scrie legat: „niciun”"]);
-        // All capitals stay all capitals; an initial capital stays initial.
-        let v = check("NU AM NICI UN BAN.");
-        assert_eq!(v.first().map(|i| i.suggestions[0].as_str()), Some("NICIUN"), "{v:?}");
+    fn cedilla_spellings_are_read_too() {
+        // `şi` with a cedilla is the same word as `și`.
+        assert!(check("Merg şi eu.").is_empty());
+        assert!(check("Nu am nici un leu.").is_empty(), "context-dependent wording stays unchanged");
+        // Repeats are compared with the cedilla read as comma-below: `şcoală școală` repeats,
+        // and the allowed `puțin puțin` is allowed in either spelling.
+        assert_eq!(messages("Merg la şcoală școală."), ["Cuvânt repetat: „școală”"]);
+        assert!(check("Mai stai puţin puţin.").is_empty());
     }
 
     #[test]
-    fn a_long_paragraph_of_nici_pairs_is_checked_once() {
-        // Many joinable pairs and no sentence end: each pair looks its sentence up once.
-        let t = "nici un ban, ".repeat(5000);
-        let v = check(&t);
-        assert!(v.iter().all(|i| i.message != "Se scrie legat: „niciun”"), "all correlative");
-        let t = "nici un ban și ".repeat(5000);
-        assert_eq!(check(&t).iter().filter(|i| i.message == "Se scrie legat: „niciun”").count(), 5000);
+    fn contextual_diacritics_recognize_specific_court_phrases() {
+        for (text, wrong, fixed) in [
+            ("Instanta de judecată a stabilit termenul.", "Instanta", "Instanța"),
+            ("Instanta de apel a stabilit termenul.", "Instanta", "Instanța"),
+            ("Ne adresăm instantei de recurs.", "instantei", "instanței"),
+            ("Cererea se află pe rolul instantei.", "instantei", "instanței"),
+            ("Ne prezentăm în fața instantei.", "instantei", "instanței"),
+            ("Persoana are calitatea de parat.", "parat", "pârât"),
+            ("Persoana figurează în calitate de parat.", "parat", "pârât"),
+            ("Cererea se judecă în contradictoriu cu paratul.", "paratul", "pârâtul"),
+            ("Reclamantul și paratul au fost citați.", "paratul", "pârâtul"),
+            ("Paratul a depus întâmpinare.", "Paratul", "Pârâtul"),
+            ("Se solicită citarea paratului.", "paratului", "pârâtului"),
+            ("Se solicită obligarea paratului.", "paratului", "pârâtului"),
+        ] {
+            let found: Vec<_> = check(text).into_iter().filter(|i| i.message.starts_with("Diacritice în context juridic:")).collect();
+            assert_eq!(found.len(), 1, "{text}: {found:?}");
+            let i = &found[0];
+            assert_eq!(text.get(i.start..i.end), Some(wrong), "{text}");
+            assert_eq!(i.suggestions, [fixed], "{text}");
+            assert_eq!(i.kind, IssueKind::Grammar);
+            assert_eq!(i.lang, ProofLang::Ro);
+        }
     }
 
+    #[test]
+    fn contextual_diacritics_leave_other_senses_and_literals_alone() {
+        for text in [
+            "Portarul a parat lovitura.",
+            "Sportivul a parat atacul.",
+            "Atacul a fost parat.",
+            "A parat de fiecare dată.",
+            "Este cafea instant.",
+            "Textul de probă: instanta.",
+            "Textul de probă: parat.",
+            "Instanta se inițializează.",
+            "Instanta de apelare a funcției este separată.",
+            "Instanța de judecată a stabilit termenul.",
+            "Persoana are calitatea de pârât.",
+            "Exemplu: instanta_de_judecată.",
+            "Exemplu_instanta de judecată.",
+            "Exemplu: instanta.de.judecată.",
+            "Exemplu: https://example.invalid/instanta/de/judecată.",
+            "Se folosește «instanta» de judecată ca exemplu.",
+            "În exemplu, `instanta de judecată` este text literal.",
+            "Textul menționează calitate de «parat».",
+            "Instanta. De judecată se discută separat.",
+            "Instanta\nde judecată este pe două linii.",
+            "Se discută despre calitate de. Parat este alt cuvânt.",
+        ] {
+            let found: Vec<_> = check(text).into_iter().filter(|i| i.message.starts_with("Diacritice în context juridic:")).collect();
+            assert!(found.is_empty(), "{text}: {found:?}");
+        }
+    }
+
+    #[test]
+    fn contextual_diacritics_keep_case_unicode_offsets_and_whitespace() {
+        use unicode_normalization::UnicodeNormalization;
+        for (text, wrong, fixed) in [
+            ("INSTAnta de judecată.", "", ""),
+            ("INSTANTA DE JUDECATĂ.", "INSTANTA", "INSTANȚA"),
+            ("Ne prezentăm în faţa instantei.", "instantei", "instanței"),
+            ("Reclamantul şi paratul au fost citați.", "paratul", "pârâtul"),
+            ("Cererea este pe\u{a0}rolul\u{a0}instantei.", "instantei", "instanței"),
+        ] {
+            let source: String = text.nfd().collect();
+            let found: Vec<_> = check(&source).into_iter().filter(|i| i.message.starts_with("Diacritice în context juridic:")).collect();
+            if wrong.is_empty() {
+                assert!(found.is_empty(), "{source}: {found:?}");
+                continue;
+            }
+            assert_eq!(found.len(), 1, "{source}: {found:?}");
+            assert_eq!(source.get(found[0].start..found[0].end), Some(wrong));
+            assert_eq!(found[0].suggestions, [fixed]);
+        }
+    }
+
+    #[test]
+    fn contextual_diacritics_merge_sentence_capitals_but_keep_list_fragments() {
+        let text = "instanta de judecată a stabilit termenul.";
+        let found = check(text);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0].suggestions, ["Instanța"]);
+        let fragment = check_with(text, false);
+        assert_eq!(fragment.len(), 1, "{fragment:?}");
+        assert_eq!(fragment[0].suggestions, ["instanța"]);
+        let next = check("Salut. instanta de judecată a stabilit termenul.");
+        assert_eq!(next.len(), 1, "{next:?}");
+        assert_eq!(next[0].suggestions, ["Instanța"]);
+    }
     #[test]
     fn spaces_before_quotes_and_in_scores_and_runs() {
         // ` ,,` opens a typed quotation: the space before it is right, and the `,,` itself is
         // offered as `„`.
         let v = check("A spus ,,da”.");
-        assert_eq!(v.len(), 1, "{v:?}");
-        assert_eq!((v[0].message.as_str(), v[0].suggestions[0].as_str()), ("Punctuație dublă", "„"));
+        assert!(v.is_empty(), "typed opening quotes stay unchanged: {v:?}");
         assert_eq!(messages("A spus , da."), ["Spațiu înaintea semnului de punctuație"]);
         // A score keeps its spaces; a stray space before a colon is still flagged.
         assert!(check("Scorul a fost 3 : 1.").is_empty(), "{:?}", check("Scorul a fost 3 : 1."));
@@ -434,24 +374,9 @@ mod tests {
     }
 
     #[test]
-    fn comma_before_ci_and_dar() {
-        let v = check("Nu vine azi ci mâine.");
-        assert_eq!(v.len(), 1, "{v:?}");
-        assert_eq!((v[0].message.as_str(), v[0].suggestions[0].as_str()), ("Virgulă lipsă înainte de „ci”", ", "));
-        assert_eq!(&"Nu vine azi ci mâine."[v[0].start..v[0].end], " ");
-        assert_eq!(messages("Am vrut dar n-am putut."), ["Virgulă lipsă înainte de „dar”"]);
-        // The noun `dar` (a gift) takes no comma.
-        assert!(check("I-a făcut un dar.").is_empty());
-    }
-
-    #[test]
-    fn cedilla_spellings_are_read_too() {
-        // `şi` with a cedilla is the same word as `și`.
-        assert!(check("Merg şi eu.").is_empty());
-        assert_eq!(messages("Nu am nici un leu."), ["Se scrie legat: „niciun”"]);
-        // Repeats are compared with the cedilla read as comma-below: `şcoală școală` repeats,
-        // and the allowed `puțin puțin` is allowed in either spelling.
-        assert_eq!(messages("Merg la şcoală școală."), ["Cuvânt repetat: „școală”"]);
-        assert!(check("Mai stai puţin puţin.").is_empty());
+    fn reporting_clauses_after_quoted_questions_stay_lowercase() {
+        for t in ["„Vii?” a întrebat.", "„Stai!” a strigat el.", "«Unde?» a zis."] {
+            assert!(check(t).is_empty(), "{t}: {:?}", check(t));
+        }
     }
 }

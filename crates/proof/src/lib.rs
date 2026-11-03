@@ -39,8 +39,8 @@
 //!   dictionary installed on the system (rospell, e.g. LibreOffice's; not bundled), cedilla
 //!   `ş`/`ţ` read as comma-below `ș`/`ț`, hyphenated forms (`într-o`, `s-a`) part by part,
 //!   suggestions tuned for Romanian (missing diacritics, `î`/`â`, missing hyphens and spaces),
-//!   and conservative grammar rules with Romanian messages (`nici un` → `niciun`, a comma
-//!   before `ci`/`dar`). Hyphenation from a `ro` Language pack, else the English fallback.
+//!   and conservative checks plus narrow contextual diacritic suggestions for court phrases.
+//!   Broad `nici un` and comma-before-`ci`/`dar` guesses are disabled. Hyphenation from a `ro` Language pack, else the English fallback.
 //! - **Spanish** ([`ProofLang::Es`], [`ProofLang::EsMx`], [`ProofLang::Es419`], [`ProofLang::EsUy`],
 //!   module [`es`]): each variety's installed Hunspell dictionary (`es_ES`, `es_MX`, `es_419`,
 //!   `es_UY`, with fallbacks; not bundled), dictionary-driven suggestions, Uruguayan `vos` forms,

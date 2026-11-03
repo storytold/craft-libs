@@ -230,3 +230,22 @@ WordCraft maintainers: echelon, dylanmtaylor, aiongg.
 
 MIT OR Apache-2.0. The Language data carries its own licences, recorded in craft-i18n's
 `ATTRIBUTION.md`.
+
+## Romanian contextual extension
+
+Romanian's base is @Moogabe's storytold/wordcraft#2565, ported by @vioreltus in
+storytold/craft-libs#550. The conservative contextual extension and compound
+exclusion regressions follow @ro-legal-docx's WordCraft#4743 and @VladMcj's
+ro-legal-docx/wordcraft#1 (41fdb5ea), adapted to the current shared affix engine.
+
+Suggestions for `instanta`/`instantei` and `parat`/`paratul`/`paratului` require
+enumerated adjacent court phrases. They are manual suggestions, not general
+grammar or semantic analysis. Bare ambiguous words, the valid `parat` verb,
+identifiers and tested literals remain unchanged. Ignore All opts out.
+Broad `nici un` and comma-before-`ci`/`dar` guesses are disabled because they
+misclassify valid office wording. Typed `,,` opening quotes are left unchanged.
+Romanian Language-pack spelling and hyphenation remain supported; no dictionary
+data is bundled. NFC/NFD and cedilla normalization affect lookup, not saved text.
+
+Optional external-dictionary qualification (data stays outside the repository):
+`CRAFT_ROMANIAN_TEST_DICT=/absolute/dictionaries cargo test -p craft-proof --test romanian_dictionary -- --ignored`.

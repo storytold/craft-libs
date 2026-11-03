@@ -2212,6 +2212,27 @@ impl AffixDict {
         self.check_except(w, self.excluded(true))
     }
 
+    /// Does a listed spelling block a language-specific compound fallback?
+    pub(crate) fn excludes_spelling(&self, word: &str) -> bool {
+        self.excludes_variant(word, false)
+    }
+
+    /// Does a listed spelling block suggestion fallback, including case variants?
+    pub(crate) fn excludes_suggestions(&self, word: &str) -> bool {
+        self.excludes_variant(word, true)
+    }
+
+    /// Probe listed forms without relaxing the public spelling/suggestion exclusions.
+    fn excludes_variant(&self, word: &str, suggesting: bool) -> bool {
+        let excluded = self.excluded(suggesting).keeping(self.keepcase);
+        let blocked = |form: &str| {
+            let normalized = self.normalize(form);
+            self.is_forbidden(&normalized) || (self.check_except(form, Excluded::default()) && !self.check_except(form, excluded))
+        };
+        let lower = word.to_lowercase();
+        blocked(word) || blocked(&lower) || blocked(&capitalize(&lower))
+    }
+
     /// Whether `w` is a word only through a `KEEPCASE` stem, so it is correct in this letter case
     /// alone (`km` from `km/K`, which `Km` and `KM` are not).
     pub(crate) fn case_locked(&self, w: &str) -> bool {
@@ -2890,6 +2911,29 @@ pub(crate) mod tests {
         for aff in ["", "NOSUGGEST N\n"] {
             let ordinary = AffixDict::from_hunspell(aff, "2\nmixCase\nhidden/N\n", &[]).unwrap();
             assert!(suggest(&ordinary, "MIXCASX", 8).contains(&"MIXCASE".into()));
+        }
+    }
+
+    /// Compound guards honor exclusions in mixed case without rejecting ordinary words.
+    #[test]
+    fn excluded_listing_includes_case_and_affixed_forms() {
+        let d = AffixDict::from_hunspell(
+            "NOSUGGEST N\nSUBSTANDARD S\nFORBIDDENWORD F\nSFX A Y 1\nSFX A 0 s .\n",
+            "4\nsecret/NA\nbanned/FA\nordinary/A\nsubstandard/SA\n",
+            &[],
+        )
+        .unwrap();
+        for word in ["secret", "Secrets", "SeCrEt", "substandard", "Substandards", "SuBsTaNdArD"] {
+            assert!(!d.excludes_spelling(word), "NOSUGGEST is correct: {word}");
+            assert!(d.excludes_suggestions(word), "{word}");
+        }
+        for word in ["banned", "BANNEDS", "BanNeD"] {
+            assert!(d.excludes_spelling(word), "{word}");
+            assert!(d.excludes_suggestions(word), "{word}");
+        }
+        for word in ["unknown", "ordinary", "OrDiNaRy"] {
+            assert!(!d.excludes_spelling(word), "{word}");
+            assert!(!d.excludes_suggestions(word), "{word}");
         }
     }
 
