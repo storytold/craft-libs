@@ -7,7 +7,8 @@
 //!    writer typed ranks after the known confusions;
 //! 3. the REP table of common confusions (`żeka` → `rzeka`);
 //! 4. a missing space (`napewno` → `na pewno`), or a missing apostrophe where the dictionary
-//!    knows the elided form (`jadore` → `j'adore`, `lacqua` → `l'acqua`), which ranks first;
+//!    knows the elided form (`jadore` → `j'adore`, `lacqua` → `l'acqua`); an elision ranks just before
+//!    the missing space, so after the accent, MAP and REP fixes above;
 //! 5. keyboard neighbours from the KEY rows, then one typo: a letter left out, added, swapped with
 //!    the next or mistyped (TRY letters);
 //! 6. when that finds fewer than asked for: the stems that start like the word (MAP relatives
@@ -80,10 +81,14 @@ pub(crate) struct Tuning {
     /// Offer a word only the dictionary capitalizes (a name, an abbreviation: `Col`, `Wis`) only
     /// when the word itself is capitalized, and never as half of a missing space (`Che Que`).
     pub strict_case: bool,
-    /// Does the language elide a word before an apostrophe (French `j'adore`, Italian `l'acqua`)?
-    /// Then a missing apostrophe before a dictionary word ranks first ([`COST_ELISION`]); otherwise
-    /// every missing apostrophe ranks after the one-letter fixes (English `churchs` → `churches`
-    /// before `church's`, `neer` → `never` before `ne'er`).
+    /// Offer a missing apostrophe before a suggestible word of 2+ letters as an elision (French
+    /// `j'adore`, Italian `l'acqua`), ranked at [`COST_ELISION`]: after the accent, MAP and REP fixes,
+    /// before the missing space (`j adore`) and the typos. On by default ([`Tuning::DEFAULT`]) because
+    /// the pack languages share it, so it does not mean "this language elides": the dictionary check
+    /// gates it, and a dictionary without such forms never offers one. A language that never elides
+    /// and has apostrophe forms that compete turns it off (English); then every missing apostrophe
+    /// ranks after the one-letter fixes (`churchs` → `churches` before `church's`, `neer` → `never`
+    /// before `ne'er`).
     pub elision: bool,
 }
 
@@ -493,7 +498,7 @@ fn add_confusions(col: &mut Collector, input: &str, t: &Tuning) {
 /// apostrophe: the dictionary's own check says whether `a'b` is right, so no language list is
 /// needed and a dictionary without such forms never offers one. A true elision, whose second part
 /// is a word itself (French `j'adore`, Italian and Catalan `l'acqua`, `dell'anno`), ranks before
-/// the space (`j adore`) and every typo when the language elides ([`Tuning::elision`]); any other
+/// the space (`j adore`) and every typo while [`Tuning::elision`] is on; any other
 /// form after the one-letter fixes ([`COST_APOSTROPHE`]). At most two lookups per split, and only after a short first part
 /// ([`MAX_ELIDED`]).
 fn add_splits(col: &mut Collector, input: &str, t: &Tuning) {
@@ -812,10 +817,10 @@ mod tests {
     const FR_DIC: &str = "5\nadore/j'\nami/l'\njade\nj\nl\n";
 
     /// Craft-proof bug: French `Jadore` was offered `Adore, J adore, Jade` but never `J’adore`. A
-    /// missing apostrophe the dictionary accepts comes first, before the missing space, in the
+    /// missing apostrophe the dictionary accepts comes before the missing space, in the
     /// writer's case and with the dictionary's apostrophe.
     #[test]
-    fn a_missing_elision_apostrophe_is_offered_first() {
+    fn a_missing_elision_apostrophe_is_offered_before_the_missing_space() {
         let d = AffixDict::from_hunspell(FR_AFF, FR_DIC, &[]).unwrap();
         assert!(d.check("j'adore") && d.check("j’adore") && !d.check("jadore"));
         for (word, want, space) in
@@ -843,7 +848,7 @@ mod tests {
 
     /// Review of the elision fix: an apostrophe form whose second part is no word (a Catalan
     /// enclitic `acusi't`, an English possessive `church's`) ranks after the one-letter fixes,
-    /// while a true elision (`l'home`) still comes first.
+    /// while a true elision (`l'home`) still ranks first among them.
     #[test]
     fn an_apostrophe_before_no_word_ranks_after_one_letter_fixes() {
         let aff = "SET UTF-8\nTRY acdehimorstu\nWORDCHARS '\nSFX T Y 1\nSFX T 0 't .\nPFX L Y 1\nPFX L 0 l' .\nSFX S Y 1\nSFX S 0 es .\nSFX M Y 1\nSFX M 0 's .\n";
