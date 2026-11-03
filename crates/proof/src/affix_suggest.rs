@@ -39,8 +39,12 @@ pub(crate) const COST_OTHER_MAP: u32 = 7;
 const COST_DROP_DIACRITIC: u32 = 11;
 const COST_REP: u32 = 10;
 pub(crate) const COST_SPLIT: u32 = 12;
-/// A missing apostrophe after an elided word the dictionary knows (`j'adore`, `dell'anno`).
+/// A missing apostrophe between an elided word and a dictionary word of two letters or more
+/// (`j'adore`, `qu'il`, `dell'anno`).
 const COST_ELISION: u32 = COST_SPLIT - 1;
+/// Any other missing apostrophe the dictionary accepts (a possessive `church's`, an enclitic
+/// `acusi't`, a contraction `he'd`), ranked after every one-letter fix (`churches`, `acudit`).
+const COST_APOSTROPHE: u32 = COST_MISTYPE + 1;
 /// Longest elided first part tried, in letters (`quoiqu'`, `lorsqu'`, `quell'`).
 const MAX_ELIDED: usize = 7;
 /// A missing space leaving a half shorter than three letters ([`Split::Anywhere`]).
@@ -76,6 +80,11 @@ pub(crate) struct Tuning {
     /// Offer a word only the dictionary capitalizes (a name, an abbreviation: `Col`, `Wis`) only
     /// when the word itself is capitalized, and never as half of a missing space (`Che Que`).
     pub strict_case: bool,
+    /// Does the language elide a word before an apostrophe (French `j'adore`, Italian `l'acqua`)?
+    /// Then a missing apostrophe before a dictionary word ranks first ([`COST_ELISION`]); otherwise
+    /// every missing apostrophe ranks after the one-letter fixes (English `churchs` → `churches`
+    /// before `church's`, `neer` → `never` before `ne'er`).
+    pub elision: bool,
 }
 
 /// Where a missing space may go.
@@ -102,6 +111,7 @@ impl Tuning {
         map_cost,
         mistype_cost,
         strict_case: false,
+        elision: true,
     };
 }
 
@@ -393,7 +403,7 @@ pub(crate) fn suggest_in(d: &AffixDict, word: &str, max: usize, t: &Tuning) -> V
     let map = groups(d, t);
     add_map_slips(&mut col, &chars, &map, t);
     add_confusions(&mut col, &input, t);
-    add_splits(&mut col, &input, &t.split);
+    add_splits(&mut col, &input, t);
     add_key_neighbours(&mut col, &chars);
     add_typos(&mut col, &chars, t);
     col.compounds();
@@ -480,18 +490,21 @@ fn add_confusions(col: &mut Collector, input: &str, t: &Tuning) {
 }
 
 /// Round 4: a missing space; both halves must be dictionary words. Before it, a missing
-/// apostrophe: the dictionary's own check says whether `a'b` is right (French `j'adore`, Italian
-/// and Catalan `l'acqua`, `dell'anno`), so no language list is needed and a dictionary without
-/// elided forms never offers one; it ranks before the space (`j adore`). At most one lookup per
-/// split, and only after a short first part ([`MAX_ELIDED`]).
-fn add_splits(col: &mut Collector, input: &str, split: &Split) {
+/// apostrophe: the dictionary's own check says whether `a'b` is right, so no language list is
+/// needed and a dictionary without such forms never offers one. A true elision, whose second part
+/// is a word itself (French `j'adore`, Italian and Catalan `l'acqua`, `dell'anno`), ranks before
+/// the space (`j adore`) and every typo when the language elides ([`Tuning::elision`]); any other
+/// form after the one-letter fixes ([`COST_APOSTROPHE`]). At most two lookups per split, and only after a short first part
+/// ([`MAX_ELIDED`]).
+fn add_splits(col: &mut Collector, input: &str, t: &Tuning) {
     let elides = !input.contains(['\'', '’']);
     for (n, (i, _)) in input.char_indices().enumerate().skip(1) {
         let (Some(a), Some(b)) = (input.get(..i), input.get(i..)) else { continue };
         if elides && n <= MAX_ELIDED {
-            col.offer(&format!("{a}'{b}"), COST_ELISION);
+            let word = t.elision && b.chars().nth(1).is_some() && col.d.contains_suggestible_with(b, false);
+            col.offer(&format!("{a}'{b}"), if word { COST_ELISION } else { COST_APOSTROPHE });
         }
-        if let Some(cost) = split_cost(split, a, b) {
+        if let Some(cost) = split_cost(&t.split, a, b) {
             col.offer(&format!("{a} {b}"), cost);
         }
     }
@@ -826,5 +839,33 @@ mod tests {
             assert!(got.iter().all(|g| !g.contains(['\'', '’'])), "{word}: {got:?}");
         }
         assert_eq!(suggest_in(&d, "napewno", 6, &Tuning::DEFAULT).first().map(String::as_str), Some("na pewno"));
+    }
+
+    /// Review of the elision fix: an apostrophe form whose second part is no word (a Catalan
+    /// enclitic `acusi't`, an English possessive `church's`) ranks after the one-letter fixes,
+    /// while a true elision (`l'home`) still comes first.
+    #[test]
+    fn an_apostrophe_before_no_word_ranks_after_one_letter_fixes() {
+        let aff = "SET UTF-8\nTRY acdehimorstu\nWORDCHARS '\nSFX T Y 1\nSFX T 0 't .\nPFX L Y 1\nPFX L 0 l' .\nSFX S Y 1\nSFX S 0 es .\nSFX M Y 1\nSFX M 0 's .\n";
+        let d = AffixDict::from_hunspell(aff, "5\nacudit\nacusi/T\nhome/L\nl\nchurch/SM\n", &[]).unwrap();
+        assert!(d.check("acusi't") && d.check("church's"));
+        for (word, before, after) in [("acusit", "acudit", "acusi't"), ("churchs", "churches", "church's"), ("lhome", "l'home", "l home")] {
+            let got = suggest_in(&d, word, 8, &Tuning::DEFAULT);
+            let at = |s: &str| got.iter().position(|g| g == s);
+            assert!(at(before).is_some() && at(before) < at(after) && at(after).is_some(), "{word}: {got:?}");
+        }
+        assert_eq!(suggest_in(&d, "lhome", 8, &Tuning::DEFAULT).first().map(String::as_str), Some("l'home"));
+        assert!(suggest_in(&d, "churchs", 8, &Tuning::DEFAULT).iter().position(|g| g == "church") < Some(2), "drop the s");
+    }
+
+    /// A language without elision ([`Tuning::elision`], English) ranks every missing apostrophe
+    /// after the one-letter fixes, even before a word (`neer` → `near` before `ne'er`).
+    #[test]
+    fn a_language_without_elision_ranks_apostrophes_late() {
+        let d = AffixDict::from_hunspell("SET UTF-8\nTRY aenr\nWORDCHARS '\n", "3\nne'er\ner\nnear\n", &[]).unwrap();
+        let english = Tuning { elision: false, ..Tuning::DEFAULT };
+        assert_eq!(suggest_in(&d, "neer", 4, &english).first().map(String::as_str), Some("near"));
+        assert!(suggest_in(&d, "neer", 4, &english).contains(&"ne'er".to_string()));
+        assert_eq!(suggest_in(&d, "neer", 4, &Tuning::DEFAULT).first().map(String::as_str), Some("ne'er"), "an elision");
     }
 }
