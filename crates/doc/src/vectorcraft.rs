@@ -25,6 +25,7 @@ use flate2::read::GzDecoder;
 use serde::Deserialize;
 use serde::de::{self, Deserializer, IgnoredAny, MapAccess, SeqAccess, Visitor};
 
+use crate::cancel::Reader;
 use crate::{
     Budget, Error, Kind, Layer, Lenient, Outline, Page, Rendition, RenditionKind, Scalar, Shaped, counted, malformed, parse, parse_versioned, too_new,
 };
@@ -36,12 +37,37 @@ pub(crate) fn sniff(head: &[u8]) -> bool {
     craft_vectorcraft_format::sniff(head)
 }
 
+pub(crate) fn sniff_checked(head: &[u8], control: Option<&crate::cancel::Control<'_>>) -> Result<bool, Error> {
+    if control.is_none() || !is_compressed(head) {
+        return Ok(sniff(head));
+    }
+    // Match the format crate's 256-byte probe, including truncated gzip input. Bound input
+    // reads too: optional gzip header fields can exceed the decoded probe's length.
+    let mut prefix = Vec::new();
+    let _ = GzDecoder::new(Reader::new(head, control)).take(256).read_to_end(&mut prefix);
+    crate::cancel::check(control)?;
+    Ok(!is_compressed(&prefix) && sniff(&prefix))
+}
+
 /// Where the JSON ends and the data after the marker starts, when `text` holds a NUL. JSON holds
 /// no raw NUL and the marker's second byte is one, so the JSON ends right before the first NUL.
 /// The marker must follow the JSON's closing `}`, `]` or `"`, as
 /// [`craft_vectorcraft_format::marker_at`] requires; any other NUL makes the file malformed.
-fn marker(text: &[u8]) -> Result<(usize, usize), Error> {
-    marker_at(text).map(|at| (at, at + BLOB_MAGIC.len())).ok_or_else(|| malformed("the file holds a NUL byte outside the marker after its JSON"))
+fn marker(text: &[u8], nul: usize) -> Result<(usize, usize), Error> {
+    // Start at the byte before the marker so the shared check inspects a bounded suffix,
+    // rather than scanning the already searched JSON again.
+    let found = nul.checked_sub(2).and_then(|start| marker_at(text.get(start..)?).map(|at| start + at));
+    found.map(|at| (at, at + BLOB_MAGIC.len())).ok_or_else(|| malformed("the file holds a NUL byte outside the marker after its JSON"))
+}
+
+fn first_nul(bytes: &[u8], budget: &Budget) -> Result<Option<usize>, Error> {
+    for (i, chunk) in bytes.chunks(crate::cancel::CHUNK).enumerate() {
+        budget.check_cancelled()?;
+        if chunk.contains(&0) {
+            return Ok(chunk.iter().position(|&b| b == 0).map(|at| i * crate::cancel::CHUNK + at));
+        }
+    }
+    Ok(None)
 }
 
 fn damaged(e: std::io::Error) -> Error {
@@ -49,21 +75,21 @@ fn damaged(e: std::io::Error) -> Error {
 }
 
 /// A file's JSON, and the data after it.
-struct Unpacked<'a> {
+struct Unpacked<'a, 'c> {
     json: Cow<'a, [u8]>,
-    tail: Tail<'a>,
+    tail: Tail<'a, 'c>,
 }
 
 /// The data after the marker.
-enum Tail<'a> {
+enum Tail<'a, 'c> {
     /// In an uncompressed file.
     Slice(&'a [u8]),
     /// Still in the gzip stream: `read` holds what was decompressed past the marker already, not
     /// yet counted against the budget.
-    Stream { dec: Box<GzDecoder<&'a [u8]>>, read: Vec<u8> },
+    Stream { dec: Box<GzDecoder<Reader<'c, &'a [u8]>>>, read: Vec<u8> },
 }
 
-impl Tail<'_> {
+impl Tail<'_, '_> {
     /// The bytes each `[offset, length]` in `ranges` names, or `None` for a range the file ends
     /// before. A compressed file is decompressed only as far as the last range ends, and that
     /// offset is checked against the budget before anything past the marker is decompressed.
@@ -71,7 +97,7 @@ impl Tail<'_> {
     fn ranges(self, ranges: &[[u64; 2]], budget: &mut Budget) -> Result<Vec<Option<Vec<u8>>>, Error> {
         const WHAT: &str = "the decompressed document";
         let (mut dec, read) = match self {
-            Tail::Slice(s) => return Ok(ranges.iter().map(|&r| entry(s, r).map(<[u8]>::to_vec)).collect()),
+            Tail::Slice(s) => return ranges.iter().map(|&r| entry(s, r).map(|bytes| budget.copy(bytes)).transpose()).collect(),
             Tail::Stream { dec, read } => (dec, read),
         };
         let end = ranges.iter().map(|&[offset, len]| offset.saturating_add(len)).max().unwrap_or(0);
@@ -96,7 +122,7 @@ impl Tail<'_> {
         let stated = ranges.iter().fold(0u64, |n, &[_, len]| n.saturating_add(len));
         let spanned = merged.iter().fold(0u64, |n, &[start, end]| n.saturating_add(end - start));
         budget.take(stated.saturating_sub(spanned), WHAT)?;
-        let mut src = read.as_slice().chain(&mut *dec);
+        let mut src = Reader::new(read.as_slice().chain(&mut *dec), budget.control);
         let (mut at, mut kept) = (0u64, Vec::<(u64, Vec<u8>)>::new());
         for [start, end] in merged {
             let skipped = std::io::copy(&mut (&mut src).take(start.saturating_sub(at)), &mut std::io::sink()).map_err(damaged)?;
@@ -114,22 +140,24 @@ impl Tail<'_> {
                 break;
             }
         }
-        Ok(ranges
+        ranges
             .iter()
-            .map(|&[offset, len]| kept.iter().find_map(|(start, bytes)| entry(bytes, [offset.checked_sub(*start)?, len])).map(<[u8]>::to_vec))
-            .collect())
+            .map(|&[offset, len]| {
+                kept.iter().find_map(|(start, bytes)| entry(bytes, [offset.checked_sub(*start)?, len])).map(|bytes| budget.copy(bytes)).transpose()
+            })
+            .collect()
     }
 }
 
 /// A file's JSON and where the data after it is. A compressed file is decompressed only as far
 /// as the end of the marker, every byte used counted against the budget, and its JSON is
 /// checked against `max_json` as it grows.
-fn unpack<'a>(bytes: &'a [u8], budget: &mut Budget) -> Result<Unpacked<'a>, Error> {
+fn unpack<'a, 'c>(bytes: &'a [u8], budget: &mut Budget<'c>) -> Result<Unpacked<'a, 'c>, Error> {
     const JSON: &str = "the document's JSON";
     let too_long = |budget: &Budget| Error::LimitExceeded(format!("{JSON} is more than max_json ({} bytes)", budget.limits.max_json));
     if !is_compressed(bytes) {
-        let (json, tail) = if bytes.contains(&0) {
-            let (end, tail) = marker(bytes)?;
+        let (json, tail) = if let Some(nul) = first_nul(bytes, budget)? {
+            let (end, tail) = marker(bytes, nul)?;
             (bytes.get(..end).unwrap_or_default(), bytes.get(tail..).unwrap_or_default())
         } else {
             (bytes, &[][..])
@@ -137,18 +165,18 @@ fn unpack<'a>(bytes: &'a [u8], budget: &mut Budget) -> Result<Unpacked<'a>, Erro
         budget.check_json(json.len() as u64, JSON)?;
         return Ok(Unpacked { json: Cow::Borrowed(json), tail: Tail::Slice(tail) });
     }
-    let mut dec = Box::new(GzDecoder::new(bytes));
+    let mut dec = Box::new(GzDecoder::new(Reader::new(bytes, budget.control)));
     let mut buf = Vec::new();
     let mut split: Option<(usize, usize)> = None;
     let mut nul: Option<usize> = None;
     loop {
         let start = buf.len();
         let want = CHUNK.min(budget.left().saturating_add(1));
-        let n = (&mut *dec).take(want).read_to_end(&mut buf).map_err(damaged)?;
+        let n = Reader::new(&mut *dec, budget.control).take(want).read_to_end(&mut buf).map_err(damaged)?;
         // The JSON ends before the first NUL: until there is one, all of it is JSON. The marker
         // may end in a later chunk than its first NUL.
         if nul.is_none() {
-            nul = buf.get(start..).and_then(|b| b.iter().position(|&c| c == 0)).map(|p| p + start);
+            nul = first_nul(buf.get(start..).unwrap_or_default(), budget)?.map(|p| p + start);
         }
         if nul.unwrap_or(buf.len()).saturating_sub(1) as u64 > budget.limits.max_json {
             return Err(too_long(budget));
@@ -157,7 +185,7 @@ fn unpack<'a>(bytes: &'a [u8], budget: &mut Budget) -> Result<Unpacked<'a>, Erro
         if let Some(nul) = nul
             && buf.len() >= nul + BLOB_MAGIC.len() - 1
         {
-            let s = marker(&buf)?;
+            let s = marker(&buf, nul)?;
             split = Some(s);
             // The data after the marker in this chunk is counted when it is read.
             used = s.1.saturating_sub(start).min(n);
@@ -170,7 +198,7 @@ fn unpack<'a>(bytes: &'a [u8], budget: &mut Budget) -> Result<Unpacked<'a>, Erro
     let (json_len, tail_at) = match (split, nul) {
         (Some(s), _) => s,
         // The stream ended inside the marker.
-        (None, Some(_)) => marker(&buf)?,
+        (None, Some(nul)) => marker(&buf, nul)?,
         (None, None) => (buf.len(), buf.len()),
     };
     budget.check_json(json_len as u64, JSON)?;
@@ -408,7 +436,7 @@ impl<'de, const IMAGES: bool> Deserialize<'de> for Stamp<IMAGES> {
 /// The file's [`Stamp`], refused when the format is not VectorCraft's, and when the version is
 /// newer than this crate reads unless `newer` is true.
 fn stamp<const IMAGES: bool>(json: &[u8], budget: &Budget, newer: bool) -> Result<Stamp<IMAGES>, Error> {
-    let s: Stamp<IMAGES> = if newer { parse(json, budget.limits)? } else { parse_versioned(json, budget.limits, Kind::VectorCraft)? };
+    let s: Stamp<IMAGES> = if newer { parse(json, budget)? } else { parse_versioned(json, budget, Kind::VectorCraft)? };
     match craft_vectorcraft_format::check(&s.format, s.version) {
         Ok(()) => Ok(s),
         Err(craft_vectorcraft_format::Error::Format(format)) => Err(malformed(format!("format is `{format}`"))),
@@ -424,6 +452,15 @@ pub(crate) fn info(bytes: &[u8], budget: &mut Budget) -> Result<(u32, Option<Str
     Ok((s.version, s.generator))
 }
 
+fn inline_bytes(image: &Image, budget: &Budget, what: &str) -> Result<Vec<u8>, Error> {
+    let bytes = if budget.control.is_some() {
+        image.bytes_at_most_with_check(&[], u64::MAX, || budget.check_cancelled())?
+    } else {
+        image.bytes_at_most(&[], u64::MAX)
+    };
+    bytes.ok_or_else(|| malformed(format!("the {what} is not valid base64")))
+}
+
 pub(crate) fn renditions(bytes: &[u8], budget: &mut Budget) -> Result<Vec<Rendition>, Error> {
     let Unpacked { json, tail } = unpack(bytes, budget)?;
     let head = stamp::<true>(&json, budget, false)?;
@@ -437,10 +474,11 @@ pub(crate) fn renditions(bytes: &[u8], budget: &mut Budget) -> Result<Vec<Rendit
     // member is counted here.
     let compressed = matches!(tail, Tail::Stream { .. });
     for (_, m, what) in &members {
+        let len = if budget.control.is_some() { m.len_with_check(|| budget.check_cancelled())? } else { m.len() };
         if compressed && m.blob.is_some() {
-            budget.check_entry(m.len(), what)?;
+            budget.check_entry(len, what)?;
         } else {
-            budget.take_entry(m.len(), what)?;
+            budget.take_entry(len, what)?;
         }
     }
     let ranges: Vec<[u64; 2]> = members.iter().filter_map(|(_, m, _)| m.blob).collect();
@@ -448,10 +486,12 @@ pub(crate) fn renditions(bytes: &[u8], budget: &mut Budget) -> Result<Vec<Rendit
     members
         .into_iter()
         .map(|(kind, m, what)| {
+            budget.check_cancelled()?;
             let bytes = match m.blob {
                 Some(_) => blobs.next().flatten().ok_or_else(|| malformed(format!("the file ends before its {what}")))?,
-                None => m.bytes_at_most(&[], u64::MAX).ok_or_else(|| malformed(format!("the {what} is not valid base64")))?,
+                None => inline_bytes(&m, budget, what)?,
             };
+            budget.check_cancelled()?;
             Ok(Rendition { kind, mime: m.mime, bytes })
         })
         .collect()
@@ -517,34 +557,42 @@ struct KindM {
 pub(crate) fn outline(bytes: &[u8], budget: &mut Budget) -> Result<Outline, Error> {
     let json = unpack(bytes, budget)?.json;
     stamp::<false>(&json, budget, false)?;
-    let f: WithDocument = parse(&json, budget.limits)?;
-    let pages = f
-        .document
+    let f: WithDocument = parse(&json, budget)?;
+    document_outline(f.document, budget)
+}
+
+fn document_outline(document: DocM, budget: &Budget) -> Result<Outline, Error> {
+    let pages = document
         .artboards
         .into_iter()
-        .map(|a| Page {
-            name: a.name,
-            x: a.rect.x0.min(a.rect.x1),
-            y: a.rect.y0.min(a.rect.y1),
-            width: (a.rect.x1 - a.rect.x0).abs(),
-            height: (a.rect.y1 - a.rect.y0).abs(),
-            timing: None,
-            layers: vec![],
+        .map(|a| {
+            budget.check_cancelled()?;
+            Ok(Page {
+                name: a.name,
+                x: a.rect.x0.min(a.rect.x1),
+                y: a.rect.y0.min(a.rect.y1),
+                width: (a.rect.x1 - a.rect.x0).abs(),
+                height: (a.rect.y1 - a.rect.y0).abs(),
+                timing: None,
+                layers: vec![],
+            })
         })
-        .collect();
-    let layers = f
-        .document
+        .collect::<Result<_, Error>>()?;
+    let layers = document
         .layers
         .into_iter()
-        .map(|n| Layer {
-            name: n.name.unwrap_or_default(),
-            kind: n.kind.kind,
-            visible: n.visible,
-            opacity: Some(n.opacity),
-            blend: Some(n.blend.unwrap_or_else(|| "Normal".into())),
-            children: vec![],
+        .map(|n| {
+            budget.check_cancelled()?;
+            Ok(Layer {
+                name: n.name.unwrap_or_default(),
+                kind: n.kind.kind,
+                visible: n.visible,
+                opacity: Some(n.opacity),
+                blend: Some(n.blend.unwrap_or_else(|| "Normal".into())),
+                children: vec![],
+            })
         })
-        .collect();
+        .collect::<Result<_, Error>>()?;
     Ok(Outline { canvas: None, pages, layers })
 }
 
@@ -553,6 +601,36 @@ mod tests {
     use super::*;
     use crate::tests::{unread_array, unread_object};
     use serde::de::value::{Error as ValueError, MapDeserializer, SeqDeserializer, StrDeserializer};
+
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn conversion_stops_inside_document_layers() {
+        use std::cell::Cell;
+        let node = r#"{"kind":{"type":"Path"}}"#;
+        let json = format!(r#"{{"layers":[{node},{node},{node},{node},{node}]}}"#);
+        let document: DocM = serde_json::from_str(&json).unwrap();
+        let polls = Cell::new(0);
+        let cancel = || {
+            polls.set(polls.get() + 1);
+            polls.get() == 4
+        };
+        let result = crate::cancel::run(&cancel, |control| document_outline(document, &Budget::controlled(&crate::Limits::default(), control)));
+        assert_eq!(result, Err(Error::Cancelled));
+        assert_eq!(polls.get(), 4);
+    }
+
+    #[test]
+    fn inline_cancellation_interrupts_extraction() {
+        let image = Image::inline("application/pdf", &vec![1; 2 << 20]);
+        let polls = std::cell::Cell::new(0);
+        let cancelled = || {
+            polls.set(polls.get() + 1);
+            polls.get() >= 10
+        };
+        let result = crate::cancel::run(&cancelled, |control| inline_bytes(&image, &Budget::controlled(&crate::Limits::default(), control), "PDF"));
+        assert!(matches!(result, Err(Error::Cancelled)));
+        assert_eq!(polls.get(), 10);
+    }
 
     #[test]
     fn an_image_of_the_wrong_shape_is_skipped_without_reading_it_whole() {
@@ -612,7 +690,7 @@ mod tests {
         for shape in shapes {
             let json = format!(r#"{{"format":"vectorcraft","version":4,"generator":{shape},"preview":{shape},"pdf":{shape},"document":0}}"#);
             let file = craft_vectorcraft_format::File::<IgnoredAny>::read(json.as_bytes()).unwrap();
-            let stamp: Stamp<true> = crate::parse(json.as_bytes(), &crate::Limits::default()).unwrap();
+            let stamp: Stamp<true> = crate::parse(json.as_bytes(), &crate::Budget::new(&crate::Limits::default())).unwrap();
             assert_eq!((&stamp.generator, &stamp.preview, &stamp.pdf), (&file.generator, &file.preview, &file.pdf), "{shape}");
         }
     }

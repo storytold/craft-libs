@@ -44,9 +44,28 @@ let outline = craft_doc::outline(&bytes, &limits)?;
 - `renditions(bytes, &Limits) -> Result<Vec<Rendition>, Error>`: each `Rendition` has a `kind`
   (`Pdf`, `Thumbnail`, `Composite`), a `mime` and the `bytes`.
 - `outline(bytes, &Limits) -> Result<Outline, Error>`: `canvas`, `pages` and `layers`.
-- `Error` is `Unrecognized`, `Malformed`, `TooNew`, `Unsupported` or `LimitExceeded`. A file
+- `Error` is `Unrecognized`, `Malformed`, `TooNew`, `Unsupported`, `LimitExceeded` or `Cancelled`. A file
   whose version is newer than the crate reads gives `TooNew` from `renditions` and `outline`. A
   ZIP archive whose `manifest.json` has no `format_version` gives `Unrecognized`.
+
+### Cooperative cancellation
+
+`info_with_cancel`, `renditions_with_cancel` and `outline_with_cancel` take the same bytes and
+limits plus `&dyn Fn() -> bool`. The callback runs on the calling thread. Once it returns true,
+that call stops with `Error::Cancelled`, even if a later callback result would be false.
+
+```rust
+use std::sync::atomic::{AtomicBool, Ordering};
+
+let stopped = AtomicBool::new(false);
+let renditions = craft_doc::renditions_with_cancel(&bytes, &limits, &|| stopped.load(Ordering::Relaxed))?;
+```
+
+Checks occur during format detection, JSON scans and parsing, gzip input and output, rendition
+copies, ZIP directory and entry reads, CRC traversal, and outline conversion, including shared
+header, manifest and base64 helpers.
+The existing entry points keep their behavior and limits. PDF parsing/rendering and optional
+PhotoCraft layer pixel decoding are separate operations.
 
 ## What each format gives
 

@@ -26,6 +26,7 @@
 //! assert!(info.supported);
 //! ```
 
+mod cancel;
 mod ecproj;
 mod pcraft;
 #[cfg(feature = "pcraft-pixels")]
@@ -98,6 +99,9 @@ pub struct Info {
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum Error {
+    /// A cancellation-aware read observed the caller's cancellation request.
+    #[error("document read canceled")]
+    Cancelled,
     /// [`sniff`] does not recognize the bytes as a Craft document, or a ZIP archive's
     /// `manifest.json` is a JSON object without `format_version`, so the archive is not a
     /// PhotoCraft bundle.
@@ -273,15 +277,45 @@ pub fn sniff(head: &[u8]) -> Option<Kind> {
     }
 }
 
+fn read_kind(bytes: &[u8], budget: &Budget) -> Result<Kind, Error> {
+    if pcraft::sniff_checked(bytes, budget.control)? {
+        Ok(Kind::PhotoCraft)
+    } else if vectorcraft::sniff_checked(bytes, budget.control)? {
+        Ok(Kind::VectorCraft)
+    } else if ecproj::sniff_checked(bytes, budget.control)? {
+        Ok(Kind::EffectCraft)
+    } else {
+        Err(Error::Unrecognized)
+    }
+}
+
 /// The document's kind, version and writer. A version newer than this crate reads is not an
 /// error here: [`Info::supported`] is `false`.
 pub fn info(bytes: &[u8], limits: &Limits) -> Result<Info, Error> {
     let mut budget = Budget::new(limits);
-    let kind = sniff(bytes).ok_or(Error::Unrecognized)?;
+    read_info(bytes, &mut budget)
+}
+
+/// [`info`] with cooperative cancellation. The callback runs synchronously on this thread;
+/// returning true stops the read at a checkpoint with [`Error::Cancelled`]. The limits and
+/// returned data are the same as [`info`].
+///
+/// ```
+/// use std::sync::atomic::{AtomicBool, Ordering};
+/// let stopped = AtomicBool::new(true);
+/// let result = craft_doc::info_with_cancel(b"", &craft_doc::Limits::default(), &|| stopped.load(Ordering::Relaxed));
+/// assert_eq!(result, Err(craft_doc::Error::Cancelled));
+/// ```
+pub fn info_with_cancel(bytes: &[u8], limits: &Limits, cancelled: &dyn Fn() -> bool) -> Result<Info, Error> {
+    cancel::run(cancelled, |control| read_info(bytes, &mut Budget::controlled(limits, control)))
+}
+
+fn read_info(bytes: &[u8], budget: &mut Budget) -> Result<Info, Error> {
+    let kind = read_kind(bytes, budget)?;
     let (version, generator) = match kind {
-        Kind::PhotoCraft => pcraft::info(bytes, &mut budget)?,
-        Kind::VectorCraft => vectorcraft::info(bytes, &mut budget)?,
-        Kind::EffectCraft => ecproj::info(bytes, &mut budget)?,
+        Kind::PhotoCraft => pcraft::info(bytes, budget)?,
+        Kind::VectorCraft => vectorcraft::info(bytes, budget)?,
+        Kind::EffectCraft => ecproj::info(bytes, budget)?,
     };
     Ok(Info { kind, version, generator, supported: version <= kind.supported_version() })
 }
@@ -292,20 +326,39 @@ pub fn info(bytes: &[u8], limits: &Limits) -> Result<Info, Error> {
 /// manifest names; an `.ecproj` project has none.
 pub fn renditions(bytes: &[u8], limits: &Limits) -> Result<Vec<Rendition>, Error> {
     let mut budget = Budget::new(limits);
-    match sniff(bytes).ok_or(Error::Unrecognized)? {
-        Kind::PhotoCraft => pcraft::renditions(bytes, &mut budget),
-        Kind::VectorCraft => vectorcraft::renditions(bytes, &mut budget),
-        Kind::EffectCraft => ecproj::renditions(bytes, &mut budget),
+    read_renditions(bytes, &mut budget)
+}
+
+/// [`renditions`] with cooperative cancellation, as [`info_with_cancel`]. This interrupts
+/// extraction; it does not parse or render the PDF or decode the image a rendition contains.
+pub fn renditions_with_cancel(bytes: &[u8], limits: &Limits, cancelled: &dyn Fn() -> bool) -> Result<Vec<Rendition>, Error> {
+    cancel::run(cancelled, |control| read_renditions(bytes, &mut Budget::controlled(limits, control)))
+}
+
+fn read_renditions(bytes: &[u8], budget: &mut Budget) -> Result<Vec<Rendition>, Error> {
+    match read_kind(bytes, budget)? {
+        Kind::PhotoCraft => pcraft::renditions(bytes, budget),
+        Kind::VectorCraft => vectorcraft::renditions(bytes, budget),
+        Kind::EffectCraft => ecproj::renditions(bytes, budget),
     }
 }
 
 /// The document's canvas, pages and layers (see [`Outline`]).
 pub fn outline(bytes: &[u8], limits: &Limits) -> Result<Outline, Error> {
     let mut budget = Budget::new(limits);
-    match sniff(bytes).ok_or(Error::Unrecognized)? {
-        Kind::PhotoCraft => pcraft::outline(bytes, &mut budget),
-        Kind::VectorCraft => vectorcraft::outline(bytes, &mut budget),
-        Kind::EffectCraft => ecproj::outline(bytes, &mut budget),
+    read_outline(bytes, &mut budget)
+}
+
+/// [`outline`] with cooperative cancellation, as [`info_with_cancel`].
+pub fn outline_with_cancel(bytes: &[u8], limits: &Limits, cancelled: &dyn Fn() -> bool) -> Result<Outline, Error> {
+    cancel::run(cancelled, |control| read_outline(bytes, &mut Budget::controlled(limits, control)))
+}
+
+fn read_outline(bytes: &[u8], budget: &mut Budget) -> Result<Outline, Error> {
+    match read_kind(bytes, budget)? {
+        Kind::PhotoCraft => pcraft::outline(bytes, budget),
+        Kind::VectorCraft => vectorcraft::outline(bytes, budget),
+        Kind::EffectCraft => ecproj::outline(bytes, budget),
     }
 }
 
@@ -316,12 +369,38 @@ fn malformed(m: impl std::fmt::Display) -> Error {
 /// The bytes one call may still decompress, read out of ZIP entries or return as renditions.
 pub(crate) struct Budget<'a> {
     pub(crate) limits: &'a Limits,
+    pub(crate) control: Option<&'a cancel::Control<'a>>,
     left: u64,
 }
 
 impl<'a> Budget<'a> {
     fn new(limits: &'a Limits) -> Self {
-        Budget { limits, left: limits.max_total }
+        Budget { limits, control: None, left: limits.max_total }
+    }
+
+    fn controlled(limits: &'a Limits, control: &'a cancel::Control<'a>) -> Self {
+        Budget { limits, control: Some(control), left: limits.max_total }
+    }
+
+    pub(crate) fn check_cancelled(&self) -> Result<(), Error> {
+        if let Some(control) = self.control {
+            control.check()?;
+        }
+        Ok(())
+    }
+
+    /// Copy bytes whose size the caller has already checked against the budget.
+    pub(crate) fn copy(&self, bytes: &[u8]) -> Result<Vec<u8>, Error> {
+        if self.control.is_none() {
+            return Ok(bytes.to_vec());
+        }
+        self.check_cancelled()?;
+        let mut out = Vec::with_capacity(bytes.len());
+        for chunk in bytes.chunks(cancel::CHUNK) {
+            self.check_cancelled()?;
+            out.extend_from_slice(chunk);
+        }
+        Ok(out)
     }
 
     /// Bytes still allowed.
@@ -331,6 +410,7 @@ impl<'a> Budget<'a> {
 
     /// Count `n` bytes of `what` against the total.
     pub(crate) fn take(&mut self, n: u64, what: &str) -> Result<(), Error> {
+        self.check_cancelled()?;
         self.left = self
             .left
             .checked_sub(n)
@@ -340,6 +420,7 @@ impl<'a> Budget<'a> {
 
     /// Check one rendition or ZIP entry of `n` bytes against `max_entry`.
     pub(crate) fn check_entry(&self, n: u64, what: &str) -> Result<(), Error> {
+        self.check_cancelled()?;
         if n > self.limits.max_entry {
             return Err(Error::LimitExceeded(format!("{what} is {n} bytes, more than max_entry ({})", self.limits.max_entry)));
         }
@@ -354,6 +435,7 @@ impl<'a> Budget<'a> {
 
     /// Check `n` bytes of JSON against `max_json`.
     pub(crate) fn check_json(&self, n: u64, what: &str) -> Result<(), Error> {
+        self.check_cancelled()?;
         if n > self.limits.max_json {
             return Err(Error::LimitExceeded(format!("{what} is more than max_json ({} bytes)", self.limits.max_json)));
         }
@@ -363,29 +445,34 @@ impl<'a> Budget<'a> {
 
 /// Is the JSON text nested at most `max` levels deep (arrays and objects), and at most
 /// [`MAX_DEPTH`]?
-pub(crate) fn check_depth(json: &[u8], max: u32) -> Result<(), Error> {
+pub(crate) fn check_depth(json: &[u8], max: u32, control: Option<&cancel::Control<'_>>) -> Result<(), Error> {
     let max = max.min(MAX_DEPTH);
     let (mut depth, mut in_str, mut escaped) = (0u32, false, false);
-    for &b in json {
-        if in_str {
+    for chunk in json.chunks(cancel::CHUNK) {
+        if let Some(control) = control {
+            control.check()?;
+        }
+        for &b in chunk {
+            if in_str {
+                match b {
+                    _ if escaped => escaped = false,
+                    b'\\' => escaped = true,
+                    b'"' => in_str = false,
+                    _ => {}
+                }
+                continue;
+            }
             match b {
-                _ if escaped => escaped = false,
-                b'\\' => escaped = true,
-                b'"' => in_str = false,
+                b'"' => in_str = true,
+                b'[' | b'{' => {
+                    depth += 1;
+                    if depth > max {
+                        return Err(Error::LimitExceeded(format!("JSON nested deeper than max_depth ({max} levels)")));
+                    }
+                }
+                b']' | b'}' => depth = depth.saturating_sub(1),
                 _ => {}
             }
-            continue;
-        }
-        match b {
-            b'"' => in_str = true,
-            b'[' | b'{' => {
-                depth += 1;
-                if depth > max {
-                    return Err(Error::LimitExceeded(format!("JSON nested deeper than max_depth ({max} levels)")));
-                }
-            }
-            b']' | b'}' => depth = depth.saturating_sub(1),
-            _ => {}
         }
     }
     Ok(())
@@ -491,18 +578,23 @@ pub(crate) fn counted_map<'de, D: Deserializer<'de>, T: Deserialize<'de>>(d: D) 
 }
 
 /// Parse one JSON value of type `T` from `json`, after checking its nesting against the limits.
-pub(crate) fn parse<T: DeserializeOwned>(json: &[u8], limits: &Limits) -> Result<T, Error> {
-    check_depth(json, limits.max_depth)?;
-    counting(limits.max_items, || parse_checked(json).map_err(malformed))
+pub(crate) fn parse<T: DeserializeOwned>(json: &[u8], budget: &Budget) -> Result<T, Error> {
+    check_depth(json, budget.limits.max_depth, budget.control)?;
+    counting(budget.limits.max_items, || parse_checked(json, budget).map_err(malformed))
 }
 
 /// Parse JSON whose nesting [`check_depth`] has accepted.
-fn parse_checked<T: DeserializeOwned>(json: &[u8]) -> Result<T, serde_json::Error> {
-    let mut de = serde_json::Deserializer::from_slice(json);
-    de.disable_recursion_limit();
-    let v = T::deserialize(&mut de)?;
-    de.end()?;
-    Ok(v)
+fn parse_checked<T: DeserializeOwned>(json: &[u8], budget: &Budget) -> Result<T, serde_json::Error> {
+    fn read<'de, T: DeserializeOwned, R: serde_json::de::Read<'de>>(mut de: serde_json::Deserializer<R>) -> Result<T, serde_json::Error> {
+        de.disable_recursion_limit();
+        let v = T::deserialize(&mut de)?;
+        de.end()?;
+        Ok(v)
+    }
+    match budget.control {
+        Some(control) => read(serde_json::Deserializer::from_reader(cancel::Reader::new(json, Some(control)))),
+        None => read(serde_json::Deserializer::from_slice(json)),
+    }
 }
 
 /// The top-level member that holds a document's version number: VectorCraft's `version`,
@@ -545,13 +637,23 @@ impl<'de> Visitor<'de> for VersionIn {
 /// Parse `T` from `json`; when that fails, report [`Error::TooNew`] instead if the file's version
 /// (its top-level member that [`version_member`] names) is newer than `kind` supports, since a
 /// newer format may change what `T` expects.
-pub(crate) fn parse_versioned<T: DeserializeOwned>(json: &[u8], limits: &Limits, kind: Kind) -> Result<T, Error> {
-    check_depth(json, limits.max_depth)?;
-    counting(limits.max_items, || {
-        parse_checked(json).map_err(|e| {
-            let mut de = serde_json::Deserializer::from_slice(json);
-            de.disable_recursion_limit();
-            let version = (&mut de).deserialize_map(VersionIn(version_member(kind))).and_then(|v| de.end().map(|()| v));
+pub(crate) fn parse_versioned<T: DeserializeOwned>(json: &[u8], budget: &Budget, kind: Kind) -> Result<T, Error> {
+    fn version<'de, R: serde_json::de::Read<'de>>(mut de: serde_json::Deserializer<R>, kind: Kind) -> Result<Option<u32>, serde_json::Error> {
+        de.disable_recursion_limit();
+        let version = (&mut de).deserialize_map(VersionIn(version_member(kind)))?;
+        de.end()?;
+        Ok(version)
+    }
+    check_depth(json, budget.limits.max_depth, budget.control)?;
+    counting(budget.limits.max_items, || {
+        parse_checked(json, budget).map_err(|e| {
+            if let Err(cancelled) = budget.check_cancelled() {
+                return cancelled;
+            }
+            let version = match budget.control {
+                Some(control) => version(serde_json::Deserializer::from_reader(cancel::Reader::new(json, Some(control))), kind),
+                None => version(serde_json::Deserializer::from_slice(json), kind),
+            };
             match version {
                 Ok(Some(version)) if version > kind.supported_version() => too_new(kind, version),
                 _ => malformed(e),
@@ -684,9 +786,9 @@ mod tests {
 
     #[test]
     fn depth_counts_brackets_outside_strings() {
-        assert!(check_depth(br#"[[["[[[[[[[["]]]"#, 3).is_ok());
-        assert!(check_depth(br#"[[[["\"[["]]]]"#, 3).is_err());
-        assert!(check_depth(br#"{"a":{"b":[1]}}"#, 3).is_ok());
+        assert!(check_depth(br#"[[["[[[[[[[["]]]"#, 3, None).is_ok());
+        assert!(check_depth(br#"[[[["\"[["]]]]"#, 3, None).is_err());
+        assert!(check_depth(br#"{"a":{"b":[1]}}"#, 3, None).is_ok());
     }
 
     #[test]

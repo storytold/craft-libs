@@ -57,11 +57,13 @@ let manifest: Manifest<MyDocument> = craft_pcraft_format::read_manifest(&manifes
   without recursion. PhotoCraft's own check of a manifest it saves tests the nesting and the
   item count only. `parse_manifest(json, &Limits)` runs that check and then parses into a
   `serde_json::Value` with serde_json's 128-level recursion limit turned off.
+- `check_manifest_with_cancel(json, &Limits, &cancelled)` applies those same checks while
+  polling a callback between bounded portions of JSON. A true result stops with `Error::Cancelled`.
 - `migrate(&mut value, steps, target)` upgrades the JSON in place, where `steps[i]` upgrades
   version `i + 1` to `i + 2`, and returns the version the file had. `Step<E>` is
   `fn(&mut Value) -> Result<(), E>`; with `E: From<Error>`, the steps return the caller's own
   error type.
-- `Error` is `Corrupt`, `Unsupported`, `TooNew`, `LimitExceeded` or `Json`. A manifest whose
+- `Error` is `Corrupt`, `Unsupported`, `TooNew`, `LimitExceeded`, `Json` or `Cancelled`. A manifest whose
   `format_version` is newer than `target` gives `TooNew`, and one with no step to the next
   version gives `Unsupported`. A missing or invalid `format_version` gives `Corrupt`, and any
   other missing or mistyped member gives `Json`. `TooNew` holds `found`, `supported` and the manifest's
