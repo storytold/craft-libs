@@ -6,6 +6,8 @@
 //! - [`info`] reads the format version and the writer the file names.
 //! - [`renditions`] returns the previews and the PDF a file carries.
 //! - [`outline`] returns the canvas, the pages (artboards or compositions) and the layers.
+//! - `pcraft_layer_rgba`, with the feature `pcraft-pixels`, decodes a PhotoCraft layer's pixels
+//!   and its layer mask.
 //!
 //! Bytes go in and plain data comes out: no file system access, no rendering and no app crate.
 //! Each format's envelope is read through its craft-libs crate: `craft-pcraft-format`,
@@ -26,8 +28,13 @@
 
 mod ecproj;
 mod pcraft;
+#[cfg(feature = "pcraft-pixels")]
+mod pcraft_pixels;
 mod vectorcraft;
 mod zip;
+
+#[cfg(feature = "pcraft-pixels")]
+pub use pcraft_pixels::{LayerMask, LayerPixels, Samples, pcraft_layer_rgba};
 
 use std::cell::Cell;
 use std::collections::BTreeMap;
