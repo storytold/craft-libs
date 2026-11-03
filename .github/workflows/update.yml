@@ -29,9 +29,16 @@ jobs:
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           components: rustfmt, clippy
+          targets: wasm32-unknown-unknown
       - run: cargo fmt --check
       # Default (no egui) and the egui feature both build and lint cleanly.
       - run: cargo clippy -p craft-update --all-targets --locked -- -D warnings
       - run: cargo clippy -p craft-update --all-targets --locked --features egui -- -D warnings
       - run: cargo test -p craft-update --locked -- --nocapture
       - run: cargo test -p craft-update --locked --features egui -- --nocapture
+      # Without `native`, release parsing, versions and platforms build for the web (ArtCraft
+      # Launcher's wasm32 core uses them).
+      - run: cargo clippy -p craft-update --all-targets --locked --no-default-features -- -D warnings
+      - run: cargo test -p craft-update --locked --no-default-features
+      - if: matrix.os == 'ubuntu-latest'
+        run: cargo clippy -p craft-update --locked --no-default-features --target wasm32-unknown-unknown -- -D warnings
