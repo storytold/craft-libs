@@ -223,8 +223,9 @@ const PREFIXES: &[&str] = &["без", "из", "над", "об", "обез", "о�
 /// `pts` of a lowercase Serbian `core`, with the join of a compound as §186е has it: `пред-услов`,
 /// never `преду-слов`, though the patterns allow both. A vowel alone between two breaks after a
 /// prefix belongs to the second word, so the break after it goes. In a Latin word, a break inside
-/// a one-letter `lj`, `nj` or `dž` goes too.
-pub(crate) fn compound_breaks(core: &[char], pts: Vec<usize>) -> Vec<usize> {
+/// a one-letter `lj`, `nj` or `dž` goes too. Without `joins` (breaks found by no Serbian data),
+/// only that: nothing is added.
+pub(crate) fn compound_breaks(core: &[char], pts: Vec<usize>, joins: bool) -> Vec<usize> {
     let (word, at) = if is_latin(core) {
         match cyrillic(core) {
             Some(x) => x,
@@ -242,18 +243,20 @@ pub(crate) fn compound_breaks(core: &[char], pts: Vec<usize>) -> Vec<usize> {
     }
     let mut marks: Vec<usize> = pts.iter().filter_map(|&p| letter.get(p).copied().flatten()).collect();
     let starts = |s: &str, from: usize| s.chars().enumerate().all(|(i, c)| word.get(from + i) == Some(&c));
-    for root in COMPOUNDS {
-        let (prefix, rest) = root.split_once('|').unwrap_or((root, ""));
-        let n = prefix.chars().count();
-        if starts(prefix, 0) && starts(rest, n) {
-            marks.retain(|&p| p > n);
-            marks.push(n);
+    if joins {
+        for root in COMPOUNDS {
+            let (prefix, rest) = root.split_once('|').unwrap_or((root, ""));
+            let n = prefix.chars().count();
+            if starts(prefix, 0) && starts(rest, n) {
+                marks.retain(|&p| p > n);
+                marks.push(n);
+            }
         }
-    }
-    for prefix in PREFIXES {
-        let n = prefix.chars().count();
-        if starts(prefix, 0) && word.get(n).is_some_and(|c| "аеиоу".contains(*c)) && marks.contains(&n) {
-            marks.retain(|&p| p != n + 1);
+        for prefix in PREFIXES {
+            let n = prefix.chars().count();
+            if starts(prefix, 0) && word.get(n).is_some_and(|c| "аеиоу".contains(*c)) && marks.contains(&n) {
+                marks.retain(|&p| p != n + 1);
+            }
         }
     }
     marks.sort_unstable();
@@ -345,16 +348,20 @@ mod tests {
     fn compounds_break_at_the_join() {
         // Breaks after every letter but the last, as patterns that allow everything give them.
         let all = |w: &str| (1..w.chars().count()).collect::<Vec<_>>();
-        assert!(!compound_breaks(&chars("предуслов"), all("предуслов")).contains(&5), "пред-у-слов loses у-");
-        assert!(!compound_breaks(&chars("preduslov"), all("preduslov")).contains(&5));
+        assert!(!compound_breaks(&chars("предуслов"), all("предуслов"), true).contains(&5), "пред-у-слов loses у-");
+        assert!(!compound_breaks(&chars("preduslov"), all("preduslov"), true).contains(&5));
         assert_eq!(
-            compound_breaks(&chars("пододбор"), vec![2, 4, 5]),
+            compound_breaks(&chars("пододбор"), vec![2, 4, 5], true),
             [3, 5],
             "под-од-бор: the join replaces по-, and о alone goes with the second word"
         );
         // Not a prefix before a vowel: nothing changes.
-        assert_eq!(compound_breaks(&chars("разорити"), vec![2, 4, 6]), [2, 4, 6]);
+        assert_eq!(compound_breaks(&chars("разорити"), vec![2, 4, 6], true), [2, 4, 6]);
         // A break inside a one-letter digraph goes.
-        assert_eq!(compound_breaks(&chars("konj"), vec![2, 3]), [2]);
+        assert_eq!(compound_breaks(&chars("konj"), vec![2, 3], true), [2]);
+        // Without joins, only that.
+        assert_eq!(compound_breaks(&chars("konj"), vec![2, 3], false), [2]);
+        assert_eq!(compound_breaks(&chars("pododbor"), vec![2, 5], false), [2, 5]);
+        assert_eq!(compound_breaks(&chars("пододбор"), vec![2, 4, 5], false), [2, 4, 5]);
     }
 }

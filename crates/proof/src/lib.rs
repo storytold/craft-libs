@@ -1976,10 +1976,15 @@ mod tests {
         let all = hyphen::Limits { min_word: 2, after_first: 1, before_last: 1, capitalized: true };
         let (sr, sr_latn) = (ProofLang::from_tag(Some("sr")), ProofLang::from_tag(Some("sr-Latn")));
         let h = |w: &str, lim: &hyphen::Limits, lang: ProofLang| hyphen::hyphenate_word_in(w, lim, lang);
-        // No packs: no Serbian hyphenation, not even at a compound's join.
+        // No packs: no Serbian hyphenation, not even at a compound's join. The word goes on as in
+        // any other language (the English fallback, when English data is embedded).
         std::fs::create_dir_all(&root).unwrap();
         packs::set_packs_dir(Some(root.clone()));
-        assert_eq!(hyphen::word_breaks_in("пододбор", sr), (vec![], hyphen::Source::None));
+        let mk = ProofLang::from_tag(Some("mk"));
+        assert_eq!(hyphen::word_breaks_in("пододбор", sr), hyphen::word_breaks_in("пододбор", mk));
+        assert_eq!(hyphen::word_breaks_in("pododbor", sr_latn), hyphen::word_breaks_in("pododbor", mk));
+        // Still never inside a one-letter digraph (`ma-nj-ina`).
+        assert!(!hyphen::word_breaks_in("manjina", sr_latn).0.contains(&3));
         // Only the Latin pack: its patterns in either script, never inside a one-letter digraph,
         // and its exception words.
         let latin_pack = format!("\\patterns{{\n{latin}}}\n\\hyphenation{{\nbudž-et\n}}\n");

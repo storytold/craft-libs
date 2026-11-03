@@ -234,7 +234,11 @@ fn serbian_core_breaks(core: &[char], lang: ProofLang) -> Option<(Vec<usize>, So
         let Some((word, map)) = spelling else { continue };
         if let Some(p) = [own.clone(), crate::packs::hyphenation(other)].into_iter().flatten().find(|p| pack_knows(p, word)) {
             let (pts, src) = core_breaks_patterns(&p, word);
-            return Some((back(&pts, map), src));
+            let pts = back(&pts, map);
+            // Compounds break at the join where the patterns found the breaks, never in an
+            // exception word.
+            let pts = if src == Source::Patterns { crate::sr::compound_breaks(core, pts, true) } else { pts };
+            return Some((pts, src));
         }
     }
     None
@@ -363,10 +367,11 @@ pub fn word_breaks_in(word: &str, lang: ProofLang) -> (Vec<usize>, Source) {
         }
         let core: Vec<char> = chars[a..b].iter().map(|&c| if is_apostrophe(c) { '\'' } else { c.to_lowercase().next().unwrap_or(c) }).collect();
         let (mut pts, s) = core_breaks(&core, lang);
-        // Serbian compounds and digraphs adjust what patterns or the heuristic found, never an
-        // exception word, and add nothing where hyphenation is off.
+        // Whatever found the breaks (the English fallback too), a Serbian word is never split
+        // inside a one-letter digraph. A compound's join comes only from Serbian patterns
+        // ([`serbian_core_breaks`]).
         if crate::sr::is_serbian(lang) && matches!(s, Source::Patterns | Source::Heuristic) {
-            pts = crate::sr::compound_breaks(&core, pts);
+            pts = crate::sr::compound_breaks(&core, pts, false);
         }
         if src == Source::None {
             src = s;
