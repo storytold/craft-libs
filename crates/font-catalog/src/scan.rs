@@ -175,8 +175,8 @@ fn name(font: &skrifa::FontRef<'_>, ids: &[StringId]) -> Option<String> {
 const MAX_NAME_RECORDS: usize = 512;
 /// Distinct strings, with their language, kept per name ID.
 const MAX_NAMES: usize = 128;
-/// Legacy family and style pairs kept per face. The pairs are a product of two name lists, so
-/// they get a budget of their own.
+/// Distinct legacy family and style pairs kept per face. The pairs are a product of two name
+/// lists, so they get a budget of their own.
 const MAX_LEGACY_PAIRS: usize = 256;
 
 /// Every distinct string of `id`, with its language, in the order the font lists them (at most
@@ -227,18 +227,22 @@ pub(crate) fn font_faces(font: &skrifa::FontRef<'_>, index: u32, path: Option<&P
     // typographic style: every weight of `Hiragino Sans` is `Regular` in its own legacy family.
     let style_names: Vec<String> = if typo_style.is_empty() { legacy_style.iter().map(|(_, s)| s.clone()).collect() } else { typo_style };
     let mut styles: Vec<String> = std::iter::once(style.as_str()).chain(style_names.iter().map(String::as_str)).map(norm).collect();
-    let mut legacy: Vec<(String, String)> = if typo_family.is_empty() {
-        vec![]
-    } else {
-        legacy_family
+    // Sorted and distinct; the budget counts distinct pairs, so repeats across languages do not
+    // crowd out real ones.
+    let mut legacy_pairs: std::collections::BTreeSet<(String, String)> = std::collections::BTreeSet::new();
+    if !typo_family.is_empty() {
+        let pairs = legacy_family
             .iter()
             .flat_map(|(lf, f)| legacy_style.iter().filter(move |(ls, _)| ls == lf).map(move |(_, s)| (norm(f), norm(s))))
-            .filter(|(f, s)| !f.is_empty() && !s.is_empty())
-            .take(MAX_LEGACY_PAIRS)
-            .collect()
-    };
-    legacy.sort();
-    legacy.dedup();
+            .filter(|(f, s)| !f.is_empty() && !s.is_empty());
+        for pair in pairs {
+            legacy_pairs.insert(pair);
+            if legacy_pairs.len() == MAX_LEGACY_PAIRS {
+                break;
+            }
+        }
+    }
+    let legacy: Vec<(String, String)> = legacy_pairs.into_iter().collect();
     let mut postscript: Vec<String> = all_names(font, StringId::POSTSCRIPT_NAME).iter().map(|n| norm(n)).collect();
     let mut full_names: Vec<String> = all_names(font, StringId::FULL_NAME).iter().map(|n| norm(n)).collect();
     for v in [&mut families, &mut styles, &mut full_names, &mut postscript] {

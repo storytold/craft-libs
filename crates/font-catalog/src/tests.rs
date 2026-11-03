@@ -537,5 +537,5 @@ fn repeated_name_records_are_bounded_before_pairing() {
     let face = faces.first().expect("a face");
     assert_eq!(face.info.family, "Typo Family");
     assert!(!face.keys.legacy.is_empty());
-    assert!(face.keys.legacy.len() <= 256, "{} legacy pairs", face.keys.legacy.len());
+    assert_eq!(face.keys.legacy.len(), 256, "the pair budget counts distinct pairs");
 }
