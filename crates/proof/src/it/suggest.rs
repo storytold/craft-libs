@@ -51,11 +51,15 @@ mod tests {
     #[test]
     fn a_missing_elision_apostrophe_is_offered_first() {
         let aff = "SET UTF-8\nWORDCHARS '\nPFX L Y 1\nPFX L 0 l' .\nPFX D Y 1\nPFX D 0 dell' .\n";
-        let d = AffixDict::from_hunspell(aff, "4\nacqua/L\nanno/D\nl\ndella\n", &[]).unwrap();
+        let d = AffixDict::from_hunspell(aff, "5\nacqua/L\nanno/D\nl\ndella\ndell\n", &[]).unwrap();
         for (word, want) in [("lacqua", "l'acqua"), ("Lacqua", "L'acqua"), ("dellanno", "dell'anno")] {
             let got = suggest_in(&d, word, 6);
             assert_eq!(got.first().map(String::as_str), Some(want), "{word}: {got:?}");
         }
+        // With both halves words, the missing space is offered too, after the elision.
+        let got = suggest_in(&d, "dellanno", 6);
+        let at = |w: &str| got.iter().position(|x| x == w);
+        assert!(at("dell anno").is_some() && at("dell'anno") < at("dell anno"), "{got:?}");
     }
 
     #[test]
