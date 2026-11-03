@@ -115,7 +115,7 @@ pub(crate) fn follows_title(text: &str, start: usize) -> bool {
 /// A Latin word still gets its own grammar checks even when a Khmer word is adjacent.
 pub(crate) fn touches_khmer(text: &str, start: usize, end: usize) -> bool {
     let Some(marked) = text.get(start..end) else { return false };
-    let line_break = |c: char| matches!(c, '\n' | '\r' | '\u{2028}' | '\u{2029}');
+    let line_break = |c: char| matches!(c, '\n' | '\r' | '\u{85}' | '\u{2028}' | '\u{2029}');
     let before = text.get(..start).and_then(|s| s.rsplit(line_break).next());
     let after = text.get(end..).and_then(|s| s.split(line_break).next());
     marked.chars().any(khmer)
@@ -192,9 +192,11 @@ mod tests {
         let issues = crate::check_text(mixed, &[]);
         assert!(issues.iter().any(|i| i.kind == IssueKind::Grammar && i.start == 0 && i.end == 5 && i.suggestions == ["Hello"]));
         assert!(!issues.iter().any(|i| i.message == "Extra space"), "Khmer-adjacent spacing stays untouched");
-        for separate_lines in ["ខ្មែរ\n  Hello", "Hello  \nខ្មែរ"] {
-            let issues = crate::check_text(separate_lines, &[]);
-            assert!(issues.iter().any(|i| i.message == "Extra space"), "a line break ends Khmer adjacency: {issues:?}");
+        for line_break in ["\n", "\r", "\r\n", "\u{85}", "\u{2028}", "\u{2029}"] {
+            for separate_lines in [format!("ខ្មែរ{line_break}  Hello"), format!("Hello  {line_break}ខ្មែរ")] {
+                let issues = crate::check_text(&separate_lines, &[]);
+                assert!(issues.iter().any(|i| i.message == "Extra space"), "a line break ends Khmer adjacency: {separate_lines:?} {issues:?}");
+            }
         }
         let mixed = "Tôi yêu tiếng Việt ពាក្យសំដី";
         assert!(crate::vi::looks_vietnamese(mixed));
