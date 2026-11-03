@@ -35,6 +35,7 @@ use icu_normalizer::ComposingNormalizerBorrowed;
 pub mod detect;
 pub mod tcvn3;
 pub mod vni;
+pub mod windows1258;
 
 #[cfg(test)]
 mod tests;
@@ -42,6 +43,7 @@ mod tests;
 pub use detect::{detect_vietnamese_encoding, is_already_unicode_vietnamese, is_vietnamese_font};
 pub use tcvn3::{transcode_tcvn3, transcode_tcvn3_h};
 pub use vni::transcode_vni;
+pub use windows1258::{decode_windows1258, transcode_windows1258};
 
 /// Detected or specified legacy Vietnamese encoding.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -52,6 +54,8 @@ pub enum LegacyEncoding {
     Tcvn3H,
     /// VNI Windows composite and extended byte encoding.
     Vni,
+    /// Windows-1258 (CP1258) Vietnamese code page with combining diacritics.
+    Windows1258,
 }
 
 /// Backwards-compatible alias matching CADCraft's `VietnameseEncoding`.
@@ -64,9 +68,39 @@ impl LegacyEncoding {
             Self::Tcvn3 => "TCVN3 (ABC)",
             Self::Tcvn3H => "TCVN3 All-Caps",
             Self::Vni => "VNI-Windows",
+            Self::Windows1258 => "Windows-1258",
         }
     }
 }
+
+/// Errors that can occur during 8-bit legacy decoding.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DecodeError {
+    /// Invalid UTF-8 sequence encountered at byte offset.
+    InvalidUtf8 { offset: usize },
+    /// Unmapped byte in legacy encoding table encountered at byte offset.
+    UnmappedByte { byte: u8, offset: usize, encoding: LegacyEncoding },
+    /// Malformed composite byte sequence encountered at byte offset.
+    MalformedSequence { offset: usize, encoding: LegacyEncoding },
+}
+
+impl std::fmt::Display for DecodeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidUtf8 { offset } => {
+                write!(f, "invalid UTF-8 byte sequence encountered at byte offset {offset}")
+            }
+            Self::UnmappedByte { byte, offset, encoding } => {
+                write!(f, "unmapped byte 0x{byte:02X} encountered at byte offset {offset} for encoding {:?}", encoding)
+            }
+            Self::MalformedSequence { offset, encoding } => {
+                write!(f, "malformed composite byte sequence encountered at byte offset {offset} for encoding {:?}", encoding)
+            }
+        }
+    }
+}
+
+impl std::error::Error for DecodeError {}
 
 /// Result of a transcoding operation, preserving whether the text was modified and which encoding was used.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -108,6 +142,7 @@ pub fn transcode_summary(hint: Option<&str>) -> &'static str {
     match hint.and_then(is_vietnamese_font) {
         Some(LegacyEncoding::Vni) => "VNI Windows",
         Some(LegacyEncoding::Tcvn3 | LegacyEncoding::Tcvn3H) => "TCVN3",
+        Some(LegacyEncoding::Windows1258) => "Windows-1258",
         None => "legacy 8-bit",
     }
 }
@@ -133,11 +168,44 @@ pub fn transcode_vietnamese<'a>(s: &'a str, font_hint: Option<&str>) -> Cow<'a, 
         LegacyEncoding::Tcvn3 => transcode_tcvn3(s),
         LegacyEncoding::Tcvn3H => transcode_tcvn3_h(s),
         LegacyEncoding::Vni => transcode_vni(s),
+        LegacyEncoding::Windows1258 => transcode_windows1258(s),
     }
 }
 
 /// Drop-in alias for [`transcode_vietnamese`] matching downstream caller conventions.
 pub use transcode_vietnamese as transcode;
+
+/// Pure decoding primitive: maps bytes strictly to Unicode codepoints without hidden normalization.
+pub fn decode(input: &[u8], encoding: LegacyEncoding) -> Result<Cow<'_, str>, DecodeError> {
+    match encoding {
+        LegacyEncoding::Windows1258 => decode_windows1258(input),
+        LegacyEncoding::Tcvn3 | LegacyEncoding::Tcvn3H | LegacyEncoding::Vni => {
+            if input.is_ascii() {
+                if let Ok(s) = std::str::from_utf8(input) {
+                    return Ok(Cow::Borrowed(s));
+                }
+                return Err(DecodeError::InvalidUtf8 { offset: 0 });
+            }
+            if let Ok(s) = std::str::from_utf8(input) {
+                let transcoded = match encoding {
+                    LegacyEncoding::Tcvn3 => transcode_tcvn3(s),
+                    LegacyEncoding::Tcvn3H => transcode_tcvn3_h(s),
+                    LegacyEncoding::Vni => transcode_vni(s),
+                    LegacyEncoding::Windows1258 => Cow::Borrowed(s),
+                };
+                return Ok(transcoded);
+            }
+            let s: String = input.iter().map(|&b| b as char).collect();
+            let transcoded = match encoding {
+                LegacyEncoding::Tcvn3 => transcode_tcvn3(&s),
+                LegacyEncoding::Tcvn3H => transcode_tcvn3_h(&s),
+                LegacyEncoding::Vni => transcode_vni(&s),
+                LegacyEncoding::Windows1258 => Cow::Borrowed(""),
+            };
+            Ok(Cow::Owned(transcoded.into_owned()))
+        }
+    }
+}
 
 /// Transcode using an explicitly known encoding, skipping heuristic detection.
 ///
@@ -148,6 +216,7 @@ pub fn transcode_explicit<'a>(text: &'a str, encoding: LegacyEncoding) -> Cow<'a
         LegacyEncoding::Tcvn3 => transcode_tcvn3(text),
         LegacyEncoding::Tcvn3H => transcode_tcvn3_h(text),
         LegacyEncoding::Vni => transcode_vni(text),
+        LegacyEncoding::Windows1258 => transcode_windows1258(text),
     }
 }
 
@@ -167,6 +236,7 @@ pub fn transcode_to_unicode<'a>(s: &'a str, font_hint: Option<&str>) -> Transcod
         LegacyEncoding::Tcvn3 => transcode_tcvn3(s),
         LegacyEncoding::Tcvn3H => transcode_tcvn3_h(s),
         LegacyEncoding::Vni => transcode_vni(s),
+        LegacyEncoding::Windows1258 => transcode_windows1258(s),
     };
 
     let was_transcoded = matches!(&transcoded, Cow::Owned(_)) || (transcoded.as_ref() != s);

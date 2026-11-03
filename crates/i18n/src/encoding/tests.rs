@@ -1,9 +1,9 @@
 use std::borrow::Cow;
 
 use super::{
-    LegacyEncoding, VietnameseEncoding, detect_legacy_encoding, detect_vietnamese_encoding, font_hint, is_already_unicode_vietnamese, is_legacy_text,
-    is_serif_legacy_font, is_vietnamese_font, normalize_nfc, transcode, transcode_explicit, transcode_summary, transcode_tcvn3, transcode_to_unicode,
-    transcode_vietnamese, transcode_vni, transcode_with_summary, validate_and_normalize,
+    DecodeError, LegacyEncoding, VietnameseEncoding, decode, detect_legacy_encoding, detect_vietnamese_encoding, font_hint,
+    is_already_unicode_vietnamese, is_legacy_text, is_serif_legacy_font, is_vietnamese_font, normalize_nfc, transcode, transcode_explicit,
+    transcode_summary, transcode_tcvn3, transcode_to_unicode, transcode_vietnamese, transcode_vni, transcode_with_summary, validate_and_normalize,
 };
 
 #[test]
@@ -300,4 +300,31 @@ fn test_transcode_explicit_and_validate_normalize() {
 
     let legacy_vni = validate_and_normalize("NHOÂM 3003 DAØY 2MM");
     assert_eq!(legacy_vni, Err("VNI-Windows"));
+}
+
+#[test]
+fn test_windows1258_decode_and_transcode_explicit() {
+    assert_eq!(LegacyEncoding::Windows1258.display_name(), "Windows-1258");
+
+    // Pure byte decode
+    let bytes = b"Ti\xEA\xECng Vi\xEA\xF2t 100.000\xFE";
+    let pure_decoded = decode(bytes, LegacyEncoding::Windows1258);
+    assert!(pure_decoded.is_ok());
+    if let Ok(text) = pure_decoded {
+        assert_eq!(text.as_ref(), "Tiê\u{0301}ng Viê\u{0323}t 100.000\u{20AB}");
+    }
+
+    // Explicit transcode with NFC normalization
+    let latin1_repr = "Ti\u{00EA}\u{00EC}ng Vi\u{00EA}\u{00F2}t 100.000\u{00FE}";
+    let transcoded = transcode_explicit(latin1_repr, LegacyEncoding::Windows1258);
+    assert_eq!(transcoded, "Tiếng Việt 100.000₫");
+
+    // ASCII fast path in decode
+    let ascii_bytes = b"Standard ASCII Text 123";
+    let ascii_decoded = decode(ascii_bytes, LegacyEncoding::Windows1258);
+    assert!(matches!(ascii_decoded, Ok(Cow::Borrowed(_))));
+
+    // Error formatting
+    let err = DecodeError::UnmappedByte { byte: 0x81, offset: 5, encoding: LegacyEncoding::Windows1258 };
+    assert_eq!(format!("{err}"), "unmapped byte 0x81 encountered at byte offset 5 for encoding Windows1258");
 }
