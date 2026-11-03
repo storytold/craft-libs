@@ -4,10 +4,11 @@
 //!    user keeps for WordCraft ([`crate::hunspell::user_dirs`]: the folder set in the options,
 //!    `WORDCRAFT_DICTIONARIES`, WordCraft's own `dictionaries` folder).
 //! 2. **Installed English pack**: reserved for Language packs (craft-libs#485, CP4.2).
-//! 3. **Embedded SCOWL**: the run's English's SCOWL dictionary (en-US, en-GB or en-CA) embedded
+//! 3. **Embedded SCOWL**: the run's English's SCOWL dictionary (en-US, en-GB, en-AU or en-CA) embedded
 //!    from craft-i18n at build time ([`crate::scowl`]); a word it knows (British English: also
 //!    the `-ize` spelling of one it knows, [`ise_spelling`]), or the supplement ([`EXTRA`]), is
-//!    right; never one only another English knows. When it is there, the system locations aren't
+//!    right; never one only another English knows, except that Australian English also takes
+//!    en-GB's words (its suggestions still come from en-AU). When it is there, the system locations aren't
 //!    searched.
 //! 4. **System Hunspell**: a pair for the run's own English in the system locations (none on the
 //!    web). `COMPOUNDRULE` (ordinals) and `OCONV` are read; flag-based compounding is ignored
@@ -18,8 +19,9 @@
 //!    embedded from craft-i18n is the same list; it is used for hyphenation only.)
 //!
 //! Hunspell dictionaries are found by [`crate::hunspell`] by their own English's names only
-//! (`en_US` for American, `en_GB` for British, `en_CA` for Canadian English), each name in every
-//! folder before the next name. Another English's dictionary is never used: it would mark this
+//! (`en_US` for American, `en_GB` for British, `en_CA` for Canadian English; `en_AU`, then
+//! `en_GB`, for Australian), each name in every folder before the next name. Another English's
+//! dictionary is never used: it would mark this
 //! English's spellings (`colour` in an `en_US` one). A file that can't be read is skipped for the
 //! next name or folder, and one file is read once for every English that uses it. `COMPOUNDRULE`
 //! (ordinals) and `OCONV` (suggestions are written as the dictionary says: `don’t`) are read;
@@ -90,15 +92,47 @@ fn names(lang: ProofLang) -> &'static [&'static str] {
     match lang {
         ProofLang::EnGb => &["en_GB", "en-GB"],
         ProofLang::EnCa => &["en_CA", "en-CA"],
+        // Australian English's own, else a British one (a system en_GB on a build without SCOWL):
+        // [`exact_candidates`] reads every en_AU source before any en_GB one.
+        ProofLang::EnAu => &["en_AU", "en-AU", "en_GB", "en-GB"],
         _ => &["en_US", "en-US"],
     }
 }
+
+/// The Hunspell pairs of `lang` without SCOWL, from `find` (a folder search for some names,
+/// [`crate::hunspell::candidates_exact`]): its own names first, and only then Australian English's
+/// British fallback, so every en_AU source (a dictionaries folder, a pack, the system) comes before
+/// any en_GB one.
+fn exact_candidates(lang: ProofLang, find: impl Fn(&[&str]) -> Vec<(PathBuf, PathBuf)>) -> Vec<(PathBuf, PathBuf)> {
+    let mut out = find(own_names(lang));
+    if lang == ProofLang::EnAu {
+        for c in find(&names(lang)[own_names(lang).len()..]) {
+            if !out.iter().any(|(_, d)| *d == c.1) {
+                out.push(c);
+            }
+        }
+    }
+    out
+}
+
+/// The names [`names`] gives that outrank the dialect's own embedded SCOWL dictionary: its own pair
+/// only, not Australian English's British fallback (a user's `en_GB` is for British text).
+fn own_names(lang: ProofLang) -> &'static [&'static str] {
+    match lang {
+        ProofLang::EnAu => &["en_AU", "en-AU"],
+        _ => names(lang),
+    }
+}
+
+/// How many Englishes have a slot of their own ([`slot`]).
+const ENGLISHES: usize = 4;
 
 /// The slot of each English in [`State::slots`].
 fn slot(lang: ProofLang) -> usize {
     match lang {
         ProofLang::EnGb => 1,
         ProofLang::EnCa => 2,
+        ProofLang::EnAu => 3,
         _ => 0,
     }
 }
@@ -109,7 +143,7 @@ type Loaded = Option<(Arc<AffixDict>, PathBuf)>;
 /// The English Hunspell dictionaries, under one lock.
 struct State {
     /// Per English (see [`slot`]): `None` until first use, then what was found.
-    slots: [Option<Loaded>; 3],
+    slots: [Option<Loaded>; ENGLISHES],
     /// Every `.dic` file read, so Englishes that use the same file share one copy.
     files: Vec<(PathBuf, Arc<AffixDict>)>,
     /// Counts reloads, so a load that started before one is not kept.
@@ -118,7 +152,7 @@ struct State {
 
 impl State {
     const fn new() -> Self {
-        State { slots: [None, None, None], files: Vec::new(), reloads: 0 }
+        State { slots: [None, None, None, None], files: Vec::new(), reloads: 0 }
     }
 }
 
@@ -181,7 +215,7 @@ fn already_read(state: &RwLock<State>, dic: &Path) -> Option<Arc<AffixDict>> {
 /// Forget what `state` holds, so the next check looks again.
 fn forget(state: &RwLock<State>) {
     let mut s = state.write().unwrap_or_else(PoisonError::into_inner);
-    s.slots = [None, None, None];
+    s.slots = [None, None, None, None];
     s.files.clear();
     s.reloads = s.reloads.wrapping_add(1);
 }
@@ -198,9 +232,9 @@ fn key(lang: ProofLang) -> &'static str {
 /// would rather use), for [`note_error`].
 fn load(lang: ProofLang) -> (Loaded, Option<(PathBuf, String)>) {
     let candidates = if crate::scowl::dict(lang).is_some() {
-        crate::hunspell::user_candidates(names(lang))
+        crate::hunspell::user_candidates(own_names(lang))
     } else {
-        crate::hunspell::candidates_exact(names(lang))
+        exact_candidates(lang, crate::hunspell::candidates_exact)
     };
     if candidates.is_empty() {
         log::info!("English spelling: no Hunspell {} dictionary to read first; using SCOWL or the built-in word list", key(lang));
@@ -240,7 +274,7 @@ fn note_error(lang: ProofLang, error: Option<(PathBuf, String)>) {
 /// folder changed).
 pub(crate) fn reload() {
     forget(&HUNSPELL);
-    for lang in [ProofLang::En, ProofLang::EnGb, ProofLang::EnCa] {
+    for lang in [ProofLang::En, ProofLang::EnGb, ProofLang::EnCa, ProofLang::EnAu] {
         crate::hunspell::clear_load_error(key(lang));
     }
 }
@@ -283,10 +317,16 @@ fn pick(found: Loaded, lang: ProofLang) -> Speller {
     if let Some((d, dic)) = found {
         return Speller::Hunspell(d, dic);
     }
-    match crate::scowl::dict(lang) {
-        Some(d) => Speller::Scowl(vec![d], crate::scowl::is_british(lang)),
-        None => Speller::List,
+    let Some(d) = crate::scowl::dict(lang) else { return Speller::List };
+    let mut ds = vec![d];
+    // SCOWL's en-AU list keeps one spelling per word (`inquiry`; `enquiry` is only in the en-GB
+    // list), and Australian English takes both. Suggestions come from the first, en-AU.
+    if lang == ProofLang::EnAu
+        && let Some(gb) = crate::scowl::dict(ProofLang::EnGb)
+    {
+        ds.push(gb);
     }
+    Speller::Scowl(ds, crate::scowl::is_british(lang))
 }
 
 /// [`speller`] for English with no dialect ([`crate::is_correct`]): a SCOWL word of any English
@@ -348,11 +388,12 @@ pub(crate) fn is_correct(word: &str, lang: ProofLang, opts: &Options, policy: bo
         || (policy && !parts.is_empty() && parts.iter().all(|p| s.knows_lower(p) || crate::en_variants::known_variant(p, lang, |x| s.knows_lower(x))))
 }
 
-/// `w` with its `-ize`/`-yze` endings (and their forms: `-ization`, `-izing`…) spelled `-ise`/
-/// `-yse`, when it has any: British English takes both (Word accepts `organize` and `organise` in
-/// en-GB), and SCOWL's en-GB dictionary has only `-ise`. A `z` between `i`/`y` and a vowel is
-/// swapped; the `-ize` form counts only when American or Canadian English spells the word so
-/// ([`ize_elsewhere`]), or `wize` would pass as `wise`.
+/// `w` with its `-ize` endings (and their forms: `-ization`, `-izing`…) spelled `-ise`, when it
+/// has any: British English takes both (Word accepts `organize` and `organise` in en-GB), and
+/// SCOWL's en-GB dictionary has only `-ise`. A `z` between `i` and a vowel is swapped; the `-ize`
+/// form counts only when American or Canadian English spells the word so ([`ize_elsewhere`]), or
+/// `wize` would pass as `wise`. Never `-yze`: Oxford spelling has `analyse`, `paralyse`, so
+/// `reanalyze` or `breathalyzer` is American in British English, as Hunspell's en_GB says.
 pub(crate) fn ise_spelling(w: &str) -> Option<String> {
     let b = w.as_bytes();
     let mut out = b.to_vec();
@@ -360,7 +401,7 @@ pub(crate) fn ise_spelling(w: &str) -> Option<String> {
     for i in 1..b.len() {
         let after = b.get(i + 1).is_some_and(|c| b"aeiAEI".contains(c));
         if after
-            && matches!(b.get(i - 1), Some(b'i' | b'y' | b'I' | b'Y'))
+            && matches!(b.get(i - 1), Some(b'i' | b'I'))
             && let Some(c) = out.get_mut(i)
         {
             match *c {
@@ -512,6 +553,18 @@ fn list_suggest(word: &str, max: usize) -> Vec<String> {
 mod tests {
     use super::*;
 
+    /// Review follow-up: only `-ize` is swapped for `-ise`, never `-yze` for `-yse` (Oxford
+    /// spelling has `analyse`), so `reanalyze`, `breathalyzer`, `paralyzingly` stay American.
+    #[test]
+    fn ise_spelling_swaps_ize_only() {
+        assert_eq!(ise_spelling("organize").as_deref(), Some("organise"));
+        assert_eq!(ise_spelling("Realizations").as_deref(), Some("Realisations"));
+        assert_eq!(ise_spelling("ORGANIZING").as_deref(), Some("ORGANISING"));
+        for w in ["reanalyze", "reanalyzed", "breathalyze", "breathalyzer", "paralyzingly", "catalyze", "Analyzer", "ANALYZE"] {
+            assert_eq!(ise_spelling(w), None, "{w}");
+        }
+    }
+
     #[test]
     fn built_in_list_is_the_whole_moby_list() {
         let d = words();
@@ -596,16 +649,16 @@ mod tests {
     fn lookup_order() {
         let tiny = Arc::new(AffixDict::from_hunspell("", "1\nzzyzx\n", &[]).unwrap());
         let file = PathBuf::from("/folder/en_US.dic");
-        for lang in [ProofLang::En, ProofLang::EnGb, ProofLang::EnCa] {
+        for lang in [ProofLang::En, ProofLang::EnGb, ProofLang::EnAu, ProofLang::EnCa] {
             assert!(matches!(pick(Some((tiny.clone(), file.clone())), lang), Speller::Hunspell(_, p) if p == file), "{lang:?}");
             let fallback = pick(None, lang);
             if crate::scowl::dict(lang).is_some() {
                 assert!(
-                    matches!(&fallback, Speller::Scowl(ds, _) if ds.len() == 1 && std::ptr::eq(ds[0], crate::scowl::dict(lang).unwrap())),
+                    matches!(&fallback, Speller::Scowl(ds, _) if ds.len() == if lang == ProofLang::EnAu { 2 } else { 1 } && std::ptr::eq(ds[0], crate::scowl::dict(lang).unwrap())),
                     "{lang:?}"
                 );
                 assert!(fallback.knows("21st") && !fallback.knows("becuase"), "{lang:?}");
-                assert_eq!(fallback.knows("colour"), lang != ProofLang::En, "{lang:?}: its own dictionary only");
+                assert_eq!(fallback.knows("colour"), lang != ProofLang::En, "{lang:?}: its own dictionary (en-AU: and en-GB's)");
             } else {
                 assert!(matches!(fallback, Speller::List), "{lang:?}");
             }
@@ -625,6 +678,44 @@ mod tests {
         assert_eq!(found(names(ProofLang::EnGb)), ["en_GB"], "a user's en_US doesn't stand in for SCOWL's en-GB");
         assert_eq!(found(names(ProofLang::EnCa)), ["en_CA"]);
         assert_eq!(found(names(ProofLang::En)), ["en_US"]);
+        // Australian English: its own, else the British one it read before it had its own.
+        assert_eq!(found(names(ProofLang::EnAu)), ["en_GB"]);
+        std::fs::write(dir.join("en_AU.aff"), "SET UTF-8\n").unwrap();
+        std::fs::write(dir.join("en_AU.dic"), "1\nzzyzx\n").unwrap();
+        assert_eq!(found(names(ProofLang::EnAu)), ["en_AU", "en_GB"]);
+        // craft-libs#496 review: with SCOWL embedded, a user's en_GB must not outrank its en-AU.
+        assert_eq!(found(own_names(ProofLang::EnAu)), ["en_AU"]);
+        std::fs::remove_file(dir.join("en_AU.aff")).unwrap();
+        std::fs::remove_file(dir.join("en_AU.dic")).unwrap();
+        assert!(found(own_names(ProofLang::EnAu)).is_empty(), "an en_GB alone is not Australian English's own");
+        for lang in [ProofLang::En, ProofLang::EnGb, ProofLang::EnCa] {
+            assert_eq!(own_names(lang), names(lang));
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Without SCOWL, every en_AU source comes before any en_GB one (a dictionaries folder's, an
+    /// installed pack's, the system's): a user's en_GB doesn't outrank a system en_AU.
+    #[test]
+    fn australian_english_reads_every_en_au_before_any_en_gb() {
+        let dir = std::env::temp_dir().join(format!("wc-proof-en-au-order-{}", std::process::id()));
+        for sub in ["user", "system"] {
+            std::fs::create_dir_all(dir.join(sub)).unwrap();
+        }
+        let write = |sub: &str, name: &str| {
+            std::fs::write(dir.join(sub).join(format!("{name}.aff")), "SET UTF-8\n").unwrap();
+            std::fs::write(dir.join(sub).join(format!("{name}.dic")), "1\nzzyzx\n").unwrap();
+        };
+        write("user", "en_GB");
+        write("system", "en_AU");
+        let (user, system) = (vec![dir.join("user")], vec![dir.join("system")]);
+        let find = |n: &[&str]| crate::hunspell::ordered(n, &user, &[], &system, &[]);
+        let stems = |v: Vec<(PathBuf, PathBuf)>| -> Vec<String> {
+            v.iter().filter_map(|(_, d)| d.file_stem().map(|s| s.to_string_lossy().into_owned())).collect()
+        };
+        assert_eq!(stems(exact_candidates(ProofLang::EnAu, find)), ["en_AU", "en_GB"]);
+        assert_eq!(stems(exact_candidates(ProofLang::EnGb, find)), ["en_GB"]);
+        assert_eq!(stems(exact_candidates(ProofLang::En, find)), Vec::<String>::new());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
