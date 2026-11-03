@@ -70,6 +70,101 @@ fn texts(d: &Driver) -> Vec<String> {
 
 const CANVAS: Pos2 = pos2(600.0, 400.0);
 
+/// DesignCraft #2131: an iconic flyout's bottom edge changes its height and keeps it.
+#[test]
+fn flyout_resize_keeps_its_size_after_release_and_reopening() {
+    let mut d = DockDriver::new(docked(&[&[1, 2], &[3]], true), Content);
+    let icon = hit(&d, Hit::Icon(1)).center();
+    d.click(icon);
+    d.settle();
+    let rect = |d: &Driver| d.ctx.memory(|m| m.area_rect(d.id.with("flyout"))).unwrap();
+    let before = rect(&d);
+    let bottom = before.center_bottom() - vec2(0.0, 2.0);
+    d.drag(bottom, bottom + vec2(0.0, 120.0));
+    d.settle();
+    let grown = rect(&d);
+    assert!((grown.height() - before.height() - 120.0).abs() < 1.0, "{before:?} -> {grown:?}");
+    assert_eq!(open(&d), Some(1), "resizing does not close or float the panel");
+    assert!(d.layout.floating.is_empty());
+    let saved = first_column(&d.layout);
+    assert_eq!(saved.groups[0].height, Some(grown.height()));
+    // Selecting another tab of the same group, closing and reopening keeps the size.
+    d.click(hit(&d, Hit::Icon(2)).center());
+    d.settle();
+    assert_eq!(rect(&d).height(), grown.height());
+    d.click(hit(&d, Hit::Icon(2)).center());
+    d.click(icon);
+    d.settle();
+    assert_eq!(rect(&d).height(), grown.height());
+    let bottom = rect(&d).center_bottom() - vec2(0.0, 2.0);
+    d.drag(bottom, bottom - vec2(0.0, 60.0));
+    d.settle();
+    assert!((rect(&d).height() - grown.height() + 60.0).abs() < 1.0);
+}
+
+#[test]
+fn flyout_width_and_top_resizes_work_on_both_dock_edges() {
+    for right in [false, true] {
+        let mut layout = docked(&[&[1], &[3]], true);
+        if right {
+            let Some(Node::Split { first, second, size, .. }) = &mut layout.root else { panic!("split") };
+            std::mem::swap(first, second);
+            *size = SplitSize::FixedSecond(240.0);
+            let Node::Dock { side, .. } = second.as_mut() else { panic!("dock") };
+            *side = Side::End;
+        }
+        let mut d = DockDriver::new(layout, Content);
+        d.click(hit(&d, Hit::Icon(1)).center());
+        d.settle();
+        let rect = |d: &Driver| d.ctx.memory(|m| m.area_rect(d.id.with("flyout"))).unwrap();
+        let before = rect(&d);
+        let edge = if right { before.left_center() + vec2(2.0, 0.0) } else { before.right_center() - vec2(2.0, 0.0) };
+        d.drag(edge, edge + vec2(if right { -80.0 } else { 80.0 }, 0.0));
+        d.settle();
+        let wider = rect(&d);
+        assert!((wider.width() - before.width() - 80.0).abs() < 1.0, "{before:?} -> {wider:?}");
+        let bottom = wider.center_bottom() - vec2(0.0, 2.0);
+        d.drag(bottom, bottom + vec2(0.0, 80.0));
+        d.settle();
+        let wider = rect(&d);
+        let top = wider.center_top() + vec2(0.0, 2.0);
+        d.drag(top, top + vec2(0.0, 30.0));
+        d.settle();
+        let shorter = rect(&d);
+        assert!((shorter.top() - wider.top() - 30.0).abs() < 1.0, "{wider:?} -> {shorter:?}");
+        assert!((shorter.bottom() - wider.bottom()).abs() < 1.0, "the opposite edge stays anchored");
+        assert!(d.screen.contains_rect(shorter));
+        let original = d.layout.clone();
+        d.locked = true;
+        d.settle();
+        let bottom = rect(&d).center_bottom() - vec2(0.0, 2.0);
+        d.drag(bottom, bottom + vec2(0.0, 40.0));
+        d.settle();
+        assert_eq!(d.layout, original, "locked layouts cannot resize flyouts");
+    }
+}
+
+#[test]
+fn a_height_filling_flyout_stays_stable_before_its_first_resize() {
+    struct Fill;
+    impl DockContent<u32> for Fill {
+        fn body(&mut self, ui: &mut egui::Ui, _: &u32) {
+            ui.allocate_space(ui.available_size());
+        }
+        fn logical_label(&self, panel: &u32) -> String {
+            format!("Panel {panel}")
+        }
+    }
+    let mut d = DockDriver::new(docked(&[&[1]], true), Fill);
+    d.click(d.hit(&Hit::Icon(1)).unwrap().center());
+    d.settle();
+    let rect = d.ctx.memory(|m| m.area_rect(d.id.with("flyout"))).unwrap();
+    for _ in 0..20 {
+        d.settle();
+    }
+    assert_eq!(d.ctx.memory(|m| m.area_rect(d.id.with("flyout"))), Some(rect));
+}
+
 #[test]
 fn collapsed_column_shows_one_icon_per_panel_with_group_separators() {
     let d = DockDriver::new(docked(&[&[1, 2], &[3]], true), Content);

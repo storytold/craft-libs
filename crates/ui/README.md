@@ -13,6 +13,11 @@ and command handling remain in each application. No icons, fonts or application 
 
 ## Host-owned docking chrome
 
+Iconic panel flyouts support the stock frame-edge resize handles. Their height is
+stored in the dock group's `height`, and their width in the dock column's `width`;
+closing or switching tabs preserves the user's size. Untouched flyouts still fit
+short content. Layout locks and content size limits apply to the handles.
+
 `DockContent` can replace an iconic column or a complete tab group without a
 second layout tree. `column_rect` reports the fitted column before painting;
 `owns_iconic_column`/`iconic_column` and `custom_group` suppress the corresponding
