@@ -108,6 +108,11 @@ fn blocks_past_a_format_limit_are_refused_before_anything_is_written() {
         enc.write(&buf.channels, 100).unwrap();
         assert!(enc.check_room(limit / 2).is_ok(), "{format:?}");
         assert!(matches!(enc.check_room(limit), Err(AudioError::TooLarge(_))), "{format:?}");
+        if format == EncodeFormat::Flac {
+            // 100 frames are in: STREAMINFO counts up to 2^36 - 1 in all.
+            assert!(enc.check_room(limit - 101).is_ok());
+            assert!(matches!(enc.check_room(limit - 100), Err(AudioError::TooLarge(_))));
+        }
         // A block that does not hold the frames it claims is refused before the limit is checked.
         if let Ok(frames) = usize::try_from(limit) {
             assert!(matches!(enc.write::<Vec<f32>>(&[], frames), Err(AudioError::Encode(_))), "{format:?}");

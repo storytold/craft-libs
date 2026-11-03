@@ -140,6 +140,8 @@ fn bwf_roundtrip() {
         .with_time_reference(0x1_2345_6789); // > 32 bits
     let src = sine(96_000, 2, 1000);
     // RF64 is a WAV layout: other formats ignore it.
+    let aiff = encode(&src, &EncodeOptions::new(EncodeFormat::Aiff).with_force_rf64(true)).unwrap();
+    assert_eq!(&aiff[..4], b"FORM");
     let flac = encode(&src, &EncodeOptions::new(EncodeFormat::Flac).with_force_rf64(true)).unwrap();
     assert_eq!(&flac[..4], b"fLaC");
     for depth in DEPTHS {

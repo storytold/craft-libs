@@ -36,6 +36,9 @@ fn check(channels: usize, sample_rate: u32, depth: BitDepth) -> Result<u8> {
     }
 }
 
+/// Frames quantized and handed to the encoder at a time: its block size.
+const CHUNK: usize = 4096;
+
 fn encoder_error(e: encoder::Error) -> AudioError {
     AudioError::Encode(format!("FLAC: {e}"))
 }
@@ -88,16 +91,21 @@ impl<W: Write + Seek> Writer<W> {
             return Err(super::failed_write_error());
         }
         let total = self.check_room(frames as u64)?;
-        for (c, (p, q)) in self.planar.iter_mut().zip(self.quantizers.iter_mut()).enumerate() {
-            let src = block.get(c).map(AsRef::as_ref).unwrap_or_default();
-            p.clear();
-            p.extend((0..frames).map(|i| q.quantize(src.get(i).copied().unwrap_or(0.0))));
-        }
-        let refs: Vec<&[i32]> = self.planar.iter().map(Vec::as_slice).collect();
-        let written = self.encoder.encode(&refs).map_err(encoder_error).and_then(|bytes| Ok(self.out.write_all(&bytes)?));
-        if let Err(e) = written {
-            self.failed = true;
-            return Err(e);
+        // One FLAC block at a time: the encoder then holds less than two blocks, and the copies
+        // stay small however long `block` is.
+        for at in (0..frames).step_by(CHUNK) {
+            let end = frames.min(at + CHUNK);
+            for (c, (p, q)) in self.planar.iter_mut().zip(self.quantizers.iter_mut()).enumerate() {
+                let src = block.get(c).map(AsRef::as_ref).unwrap_or_default();
+                p.clear();
+                p.extend((at..end).map(|i| q.quantize(src.get(i).copied().unwrap_or(0.0))));
+            }
+            let refs: Vec<&[i32]> = self.planar.iter().map(Vec::as_slice).collect();
+            let written = self.encoder.encode(&refs).map_err(encoder_error).and_then(|bytes| Ok(self.out.write_all(&bytes)?));
+            if let Err(e) = written {
+                self.failed = true;
+                return Err(e);
+            }
         }
         self.frames = total;
         Ok(())

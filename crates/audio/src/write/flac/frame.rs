@@ -27,9 +27,10 @@ fn block_size_code(n: u16) -> (u8, Option<(u32, u32)>) {
     }
 }
 
-/// Frame header sample rate code; 0 refers to STREAMINFO.
-fn sample_rate_code(rate: u32) -> u8 {
-    match rate {
+/// Frame header sample rate code, with the value stored after the header for codes 12–14 (kHz,
+/// Hz, tens of Hz); 0 refers to STREAMINFO and is left for rates none of those can name.
+fn sample_rate_code(rate: u32) -> (u8, Option<(u32, u32)>) {
+    let code = match rate {
         88_200 => 1,
         176_400 => 2,
         192_000 => 3,
@@ -41,8 +42,12 @@ fn sample_rate_code(rate: u32) -> u8 {
         44_100 => 9,
         48_000 => 10,
         96_000 => 11,
+        r if r % 1000 == 0 && r / 1000 <= 0xFF => return (12, Some((r / 1000, 8))),
+        r if r <= 0xFFFF => return (13, Some((r, 16))),
+        r if r % 10 == 0 && r / 10 <= 0xFFFF => return (14, Some((r / 10, 16))),
         _ => 0,
-    }
+    };
+    (code, None)
 }
 
 /// Frame header sample size code; 0 refers to STREAMINFO.
@@ -160,9 +165,11 @@ pub fn write(spec: &FrameSpec) -> Vec<u8> {
         Some(Stereo::MidSide) => 10,
         _ => spec.channels.len().saturating_sub(1) as u8,
     };
-    let mut h = vec![0xFF, 0xF8, bs_code << 4 | sample_rate_code(spec.sample_rate), channel_code << 4 | sample_size_code(spec.bps) << 1];
+    let (sr_code, sr_extra) = sample_rate_code(spec.sample_rate);
+    let mut h = vec![0xFF, 0xF8, bs_code << 4 | sr_code, channel_code << 4 | sample_size_code(spec.bps) << 1];
     coded_number(spec.number, &mut h);
-    if let Some((v, n)) = bs_extra {
+    // the uncommon block size, then the uncommon sample rate (§9.1.6, §9.1.7)
+    for (v, n) in [bs_extra, sr_extra].into_iter().flatten() {
         if n == 8 {
             h.push(v as u8);
         } else {
@@ -201,5 +208,17 @@ mod tests {
         assert_eq!(code(0x1_0000), [0xF0, 0x90, 0x80, 0x80]);
         assert_eq!(code(0x7FFF_FFFF), [0xFD, 0xBF, 0xBF, 0xBF, 0xBF, 0xBF]);
         assert_eq!(code(0xF_FFFF_FFFF), [0xFE, 0xBF, 0xBF, 0xBF, 0xBF, 0xBF, 0xBF]);
+    }
+
+    #[test]
+    fn sample_rates_outside_the_table_are_named_in_the_header() {
+        assert_eq!(sample_rate_code(48_000), (10, None));
+        assert_eq!(sample_rate_code(64_000), (12, Some((64, 8))));
+        assert_eq!(sample_rate_code(11_025), (13, Some((11_025, 16))));
+        assert_eq!(sample_rate_code(37_800), (13, Some((37_800, 16))));
+        assert_eq!(sample_rate_code(352_800), (14, Some((35_280, 16))));
+        assert_eq!(sample_rate_code(655_350), (14, Some((65_535, 16))));
+        // neither whole kHz, at most 65535 Hz, nor whole tens of Hz
+        assert_eq!(sample_rate_code(100_001), (0, None));
     }
 }

@@ -133,7 +133,7 @@ fn every_signal_round_trips_exactly() {
 
 #[test]
 fn channel_layouts_rates_and_sizes() {
-    let cases: [(&str, u8, u8, u32, usize); 8] = [
+    let cases: [(&str, u8, u8, u32, usize); 12] = [
         ("mono-8bit", 1, 8, 8_000, 3_001),
         ("mono-24-44k1", 1, 24, 44_100, 9_999),
         ("stereo-20bit", 2, 20, 96_000, 10_000),
@@ -141,6 +141,10 @@ fn channel_layouts_rates_and_sizes() {
         ("mono-32", 1, 32, 48_000, 7_777),
         ("5.1-32", 6, 32, 96_000, 12_345),
         ("odd-rate", 2, 16, 37_800, 5_000),
+        ("rate-khz", 2, 16, 64_000, 5_000),
+        ("rate-tens", 2, 24, 352_800, 5_000),
+        ("rate-max", 1, 16, 655_350, 5_000),
+        ("rate-from-streaminfo", 1, 16, 100_001, 5_000),
         ("tiny", 2, 16, 48_000, 1),
     ];
     for (name, ch, bps, rate, n) in cases {

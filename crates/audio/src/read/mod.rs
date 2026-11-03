@@ -364,7 +364,7 @@ pub fn probe_with(bytes: &[u8], ext_hint: Option<&str>, opts: &DecodeOptions) ->
 /// file instead, and [`decode_with`] for another track or size limit.
 ///
 /// ```
-/// # #[cfg(feature = "flac-encode")] {
+/// # #[cfg(all(feature = "flac-encode", feature = "symphonia"))] {
 /// use craft_audio::{AudioBuffer, EncodeFormat, EncodeOptions, decode, encode};
 ///
 /// let tone: Vec<f32> = (0..4800).map(|i| (i as f32 * 0.05).sin() * 0.5).collect();
