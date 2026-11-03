@@ -6,7 +6,8 @@
 //!    adding a missing accent is the commonest slip and ranks first, while taking away one the
 //!    writer typed ranks after the known confusions;
 //! 3. the REP table of common confusions (`żeka` → `rzeka`);
-//! 4. a missing space (`napewno` → `na pewno`);
+//! 4. a missing space (`napewno` → `na pewno`), or a missing apostrophe where the dictionary
+//!    knows the elided form (`jadore` → `j'adore`, `lacqua` → `l'acqua`), which ranks first;
 //! 5. keyboard neighbours from the KEY rows, then one typo: a letter left out, added, swapped with
 //!    the next or mistyped (TRY letters);
 //! 6. when that finds fewer than asked for: the stems that start like the word (MAP relatives
@@ -38,6 +39,10 @@ pub(crate) const COST_OTHER_MAP: u32 = 7;
 const COST_DROP_DIACRITIC: u32 = 11;
 const COST_REP: u32 = 10;
 pub(crate) const COST_SPLIT: u32 = 12;
+/// A missing apostrophe after an elided word the dictionary knows (`j'adore`, `dell'anno`).
+const COST_ELISION: u32 = COST_SPLIT - 1;
+/// Longest elided first part tried, in letters (`quoiqu'`, `lorsqu'`, `quell'`).
+const MAX_ELIDED: usize = 7;
 /// A missing space leaving a half shorter than three letters ([`Split::Anywhere`]).
 const COST_SPLIT_SHORT: u32 = 17;
 /// A missing space between two longer halves with no short word beside it ([`Split::Near`]).
@@ -474,10 +479,18 @@ fn add_confusions(col: &mut Collector, input: &str, t: &Tuning) {
     }
 }
 
-/// Round 4: a missing space; both halves must be dictionary words.
+/// Round 4: a missing space; both halves must be dictionary words. Before it, a missing
+/// apostrophe: the dictionary's own check says whether `a'b` is right (French `j'adore`, Italian
+/// and Catalan `l'acqua`, `dell'anno`), so no language list is needed and a dictionary without
+/// elided forms never offers one; it ranks before the space (`j adore`). At most one lookup per
+/// split, and only after a short first part ([`MAX_ELIDED`]).
 fn add_splits(col: &mut Collector, input: &str, split: &Split) {
-    for (i, _) in input.char_indices().skip(1) {
+    let elides = !input.contains(['\'', '’']);
+    for (n, (i, _)) in input.char_indices().enumerate().skip(1) {
         let (Some(a), Some(b)) = (input.get(..i), input.get(i..)) else { continue };
+        if elides && n <= MAX_ELIDED {
+            col.offer(&format!("{a}'{b}"), COST_ELISION);
+        }
         if let Some(cost) = split_cost(split, a, b) {
             col.offer(&format!("{a} {b}"), cost);
         }
@@ -777,5 +790,41 @@ mod tests {
         assert!(suggest_in(&d, "nakot", 4, &near).contains(&"na kot".into()));
         assert!(!suggest_in(&d, "kotna", 4, &near).contains(&"kot na".into()), "no stray short half");
         assert!(suggest_in(&d, "kotna", 4, &Tuning::DEFAULT).contains(&"kot na".into()));
+    }
+
+    /// A French elision in the shape of the LibreOffice `fr` dictionary (written for this test):
+    /// long flags named after the elided word, `’` read as `'` and written back as `’`.
+    const FR_AFF: &str = "SET UTF-8\nFLAG long\nWORDCHARS -’'\nICONV 1\nICONV ’ '\nOCONV 1\nOCONV ' ’\n\
+        PFX j' Y 1\nPFX j' 0 j' .\nPFX l' Y 1\nPFX l' 0 l' .\n";
+    const FR_DIC: &str = "5\nadore/j'\nami/l'\njade\nj\nl\n";
+
+    /// Craft-proof bug: French `Jadore` was offered `Adore, J adore, Jade` but never `J’adore`. A
+    /// missing apostrophe the dictionary accepts comes first, before the missing space, in the
+    /// writer's case and with the dictionary's apostrophe.
+    #[test]
+    fn a_missing_elision_apostrophe_is_offered_first() {
+        let d = AffixDict::from_hunspell(FR_AFF, FR_DIC, &[]).unwrap();
+        assert!(d.check("j'adore") && d.check("j’adore") && !d.check("jadore"));
+        for (word, want, space) in
+            [("Jadore", "J’adore", "J adore"), ("jadore", "j’adore", "j adore"), ("JADORE", "J’ADORE", "J ADORE"), ("lami", "l’ami", "l ami")]
+        {
+            let got = suggest_in(&d, word, 6, &Tuning::DEFAULT);
+            assert_eq!(got.first().map(String::as_str), Some(want), "{word}: {got:?}");
+            let at = |s: &str| got.iter().position(|g| g == s);
+            assert!(at(want) < at(space) || at(space).is_none(), "{word}: {got:?}");
+        }
+        // A word the writer gave an apostrophe isn't split again.
+        assert!(!suggest_in(&d, "j'adorr", 6, &Tuning::DEFAULT).iter().any(|g| g.matches('’').count() > 1));
+    }
+
+    /// A dictionary without elided forms offers no apostrophe: the missing space is still first.
+    #[test]
+    fn no_apostrophe_without_elided_forms_in_the_dictionary() {
+        let d = AffixDict::from_hunspell("SET UTF-8\n", "4\nadore\nj\nna\npewno\n", &[]).unwrap();
+        for word in ["jadore", "napewno"] {
+            let got = suggest_in(&d, word, 6, &Tuning::DEFAULT);
+            assert!(got.iter().all(|g| !g.contains(['\'', '’'])), "{word}: {got:?}");
+        }
+        assert_eq!(suggest_in(&d, "napewno", 6, &Tuning::DEFAULT).first().map(String::as_str), Some("na pewno"));
     }
 }
