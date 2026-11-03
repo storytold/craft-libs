@@ -72,7 +72,9 @@ fn can_suggest_phrase(d: &AffixDict, text: &str) -> bool {
     text.split(' ').all(|word| {
         !word.is_empty()
             && (d.can_suggest(word)
-                || (word.contains('-') && !d.excludes_suggestions(word) && word.split('-').all(|part| !part.is_empty() && d.can_suggest(part))))
+                || (word.contains('-')
+                    && !d.excludes_suggestions(word)
+                    && word.split('-').all(|part| super::is_clitic(part) || (!part.is_empty() && d.can_suggest(part)))))
     })
 }
 
@@ -90,7 +92,9 @@ impl Collector<'_> {
             if part.is_empty() {
                 return;
             }
-            if self.d.contains_suggestible(part) || (part.contains('-') && part.split('-').all(|p| !p.is_empty() && self.d.contains_suggestible(p))) {
+            // A one-letter clitic (`s-a`) needs no entry of its own, as in spelling.
+            let hyphen_part = |p: &str| super::is_clitic(p) || (!p.is_empty() && self.d.contains_suggestible(p));
+            if self.d.contains_suggestible(part) || (part.contains('-') && part.split('-').all(hyphen_part)) {
                 words.push(part.to_string());
             } else {
                 let c = capitalize(part);
@@ -379,7 +383,12 @@ fn recase(d: &AffixDict, text: String, case: Casing, n: usize) -> String {
     // A KEEPCASE word, or a KEEPCASE part of a hyphenated one (`casă-caz` with `caz/K`), keeps
     // the dictionary's case.
     let locked = |p: &str| d.case_locked(p) || p.split('-').any(|q| d.case_locked(q));
-    if recased != text && text.split(' ').any(locked) { text } else { recased }
+    let changed_locked = match case {
+        // Initial casing changes only the first letter: only the first word's first part counts.
+        Casing::Initial => text.split(' ').next().is_some_and(|head| d.case_locked(head) || head.split('-').next().is_some_and(|p| d.case_locked(p))),
+        _ => text.split(' ').any(locked),
+    };
+    if recased != text && changed_locked { text } else { recased }
 }
 
 /// Round 6: rank the stems starting with the word's first letter (or a MAP relative of it, either
@@ -461,6 +470,17 @@ mod tests {
         let found = suggest_in(&d, "kmm", 8);
         assert!(found.iter().any(|s| s == "kn"), "{found:?}");
         assert!(!found.iter().any(|s| s == "km"), "{found:?}");
+    }
+
+    /// A clitic needs no entry to be suggested; an initial capital reaches only the first part.
+    #[test]
+    fn clitics_and_initial_capitals_in_suggestions() {
+        let d = AffixDict::from_hunspell("", "2\na\ncasă\n", &[]).unwrap_or_default();
+        assert!(suggest_in(&d, "sa", 8).iter().any(|s| s == "s-a"), "{:?}", suggest_in(&d, "sa", 8));
+        // `alo` is KEEPCASE, `s` is not: `Salo` becomes `S-alo`, not `s-alo`.
+        let d = AffixDict::from_hunspell("KEEPCASE K\n", "2\ns\nalo/K\n", &[]).unwrap_or_default();
+        let found = suggest_in(&d, "Salo", 8);
+        assert!(found.iter().any(|s| s == "S-alo"), "{found:?}");
     }
 
     /// A KEEPCASE part keeps a hyphenated suggestion in the dictionary's case.

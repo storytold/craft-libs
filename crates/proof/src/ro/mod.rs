@@ -99,14 +99,18 @@ pub fn is_correct_with(d: &AffixDict, word: &str) -> bool {
     }
     // `într-o`, `s-a`, `dă-mi-l`, `nord-est`: every part is a word (or a one-letter clitic).
     // An empty part (`casă--câine`) is no word.
-    w.contains('-')
-        && !d.excludes_spelling(&w)
-        && w.split('-').all(|p| (p.chars().count() == 1 && CLITICS.contains(&p)) || (!p.is_empty() && known(d, p)))
+    w.contains('-') && !d.excludes_spelling(&w) && w.split('-').all(|p| is_clitic(p) || (!p.is_empty() && known(d, p)))
 }
 
 /// The one-letter clitics a hyphen joins (`s-a`, `dă-mi-l`, `într-o`, `n-am`, `c-a`, `v-a`, `i-a`,
 /// `m-a`, `l-a`): any other single letter after a hyphen (`casă-q`) is no word.
 const CLITICS: &[&str] = &["a", "c", "e", "i", "l", "m", "n", "o", "s", "v"];
+
+/// Is `part` (a piece between hyphens) one of [`CLITICS`], in any case (`S-a` opening a sentence,
+/// `S-A` in capitals)?
+pub(crate) fn is_clitic(part: &str) -> bool {
+    part.chars().count() == 1 && CLITICS.contains(&part.to_lowercase().as_str())
+}
 
 /// Is one word (comma-below already) in the dictionary or the user dictionary? A user word is
 /// found in either spelling: added with cedillas (`şcoală`) it covers `școală` too.
@@ -211,6 +215,10 @@ mod tests {
         // Only a clitic stands alone after a hyphen (CodeRabbit on #550).
         assert!(is_correct("s-a") && is_correct("dă-mi-l") && is_correct("n-am"));
         assert!(!is_correct("casă-q") && !is_correct("casă-z"));
+        // A clitic in capitals is still a clitic, whether or not the dictionary lists it alone.
+        let d = AffixDict::from_hunspell("", "2\na\ncasă\n", &[]).unwrap_or_default();
+        assert!(is_correct_with(&d, "s-a") && is_correct_with(&d, "S-a") && is_correct_with(&d, "S-A"));
+        assert!(!is_correct_with(&d, "Q-a"));
         assert!(is_correct("casă-"), "a hyphen at the edge is trimmed, so the word is checked alone");
     }
 
