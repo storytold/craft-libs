@@ -23,6 +23,8 @@ thread_local! {
     static CLEANUP_ATTEMPTS: RefCell<Vec<PathBuf>> = const { RefCell::new(Vec::new()) };
     #[cfg(unix)]
     static REPLACE_CLEANUP_PARENT: RefCell<Option<(PathBuf, PathBuf, PathBuf)>> = const { RefCell::new(None) };
+    #[cfg(unix)]
+    static REPLACE_MOVE_PARENT: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
 }
 
 struct InjectFailure(Option<IoFailure>);
@@ -60,6 +62,21 @@ pub(super) fn before_cleanup(path: &Path) -> std::io::Result<()> {
 
 fn take_cleanup_attempts() -> Vec<PathBuf> {
     CLEANUP_ATTEMPTS.with_borrow_mut(std::mem::take)
+}
+
+/// Replace the recovery parent immediately before moving a pack, keeping a matching outside ID.
+pub(super) fn before_pack_move(stage: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    if let Some(outside) = REPLACE_MOVE_PARENT.take() {
+        let parent = stage.parent().ok_or_else(|| std::io::Error::other("missing recovery parent"))?;
+        let id = stage.file_name().ok_or_else(|| std::io::Error::other("missing recovery ID"))?;
+        std::fs::create_dir(outside.join(id))?;
+        std::fs::rename(parent, parent.with_extension("original"))?;
+        std::os::unix::fs::symlink(outside, parent)?;
+    }
+    #[cfg(not(unix))]
+    let _ = stage;
+    Ok(())
 }
 
 /// A local HTTP server answering 200 with the body set for a path, else 404.
@@ -518,6 +535,42 @@ fn residual_cleanup_stays_anchored_after_recovery_parent_replacement() {
     assert!(!moved.join("11-12").exists(), "the originally opened recovery folder is cleaned");
     std::fs::remove_file(parent).unwrap();
     std::fs::remove_dir_all(outside).unwrap();
+    std::fs::remove_dir_all(store.dir()).unwrap();
+}
+
+/// Pack moves and cleanup must agree on the originally opened recovery directory.
+#[cfg(unix)]
+#[test]
+fn removal_move_stays_with_its_cleanup_anchor_after_parent_replacement() {
+    let (store, _server, pin, _) = setup("remove-move-parent-race");
+    let index = store.fetch_pack_index_from(&IndexSource::Pinned(pin), &Cancel::new()).unwrap();
+    store.install_pack_from(false, &index, index.pack("nl").unwrap(), &Cancel::new(), &mut |_| {}).unwrap();
+    let outside = temp("remove-move-parent-race-outside");
+    std::fs::write(outside.join("keep"), b"untouched").unwrap();
+    REPLACE_MOVE_PARENT.set(Some(outside.clone()));
+    store.remove_language_pack("nl").unwrap();
+    assert_eq!(std::fs::read(outside.join("keep")).unwrap(), b"untouched");
+    for entry in std::fs::read_dir(&outside).unwrap().flatten() {
+        assert!(!entry.path().join("nl/spelling.dic").exists(), "the dictionary must never move into the replacement recovery target");
+    }
+    assert!(std::fs::read_dir(store.language_packs_dir().join(".removing.original")).unwrap().next().is_none());
+    std::fs::remove_file(store.language_packs_dir().join(".removing")).unwrap();
+    std::fs::remove_dir_all(outside).unwrap();
+    std::fs::remove_dir_all(store.dir()).unwrap();
+}
+
+/// Removing a stale record needs no recovery directory when there is no folder to move.
+#[test]
+fn removing_a_missing_pack_folder_only_updates_the_record() {
+    let (store, _server, pin, _) = setup("remove-missing-folder");
+    let index = store.fetch_pack_index_from(&IndexSource::Pinned(pin), &Cancel::new()).unwrap();
+    store.install_pack_from(false, &index, index.pack("nl").unwrap(), &Cancel::new(), &mut |_| {}).unwrap();
+    std::fs::remove_dir_all(store.language_packs_dir().join("nl")).unwrap();
+    let blocker = store.language_packs_dir().join(".removing");
+    std::fs::write(&blocker, b"not a directory").unwrap();
+    store.remove_language_pack("nl").expect("no recovery folder is needed for a record-only removal");
+    assert!(store.read_record().unwrap().packs.is_empty());
+    assert_eq!(std::fs::read(blocker).unwrap(), b"not a directory");
     std::fs::remove_dir_all(store.dir()).unwrap();
 }
 

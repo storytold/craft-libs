@@ -453,6 +453,10 @@ impl FontStore {
         if !known && !has_folder {
             return Err(Error::NotInstalled(locale.to_string()));
         }
+        if !has_folder {
+            installed.packs.retain(|pack| pack.locale != locale);
+            return self.write_installed(&installed);
+        }
         let stage = self.language_pack_removal_stage(&installed.committed_removals)?;
         let backup = stage.dir.join(locale);
         if has_folder {
@@ -464,14 +468,18 @@ impl FontStore {
                 .ok_or_else(|| io("recording a Language pack removal")(std::io::Error::other("invalid backup name")))?
                 .to_string();
             #[cfg(test)]
-            tests::fail_io(tests::IoFailure::Rename).map_err(io(format!("removing the {locale} pack")))?;
-            std::fs::rename(&dest, &backup).map_err(io(format!("removing the {locale} pack")))?;
+            {
+                tests::before_pack_move(&stage.dir).map_err(io(format!("preparing the {locale} pack removal")))?;
+                tests::fail_io(tests::IoFailure::Rename).map_err(io(format!("removing the {locale} pack")))?;
+            }
+            stage.recovery_root().and_then(|root| root.move_pack(locale)).map_err(io(format!("removing the {locale} pack")))?;
             installed.committed_removals.push(id);
         }
         installed.packs.retain(|p| p.locale != locale);
         finish_pack_removal(stage, &backup, &dest, has_folder, self.write_installed(&installed))
     }
 
+    /// Retain the move, rollback, and cleanup capabilities; preserve the stage if opening fails.
     fn language_pack_removal_stage(&self, excluded: &[String]) -> Result<Stage, Error> {
         // A failed rollback or interrupted removal must not lose its backup to the download
         // sweep. Locale scans ignore this hidden directory.
@@ -479,7 +487,7 @@ impl FontStore {
         // If opening the anchor fails, preserve the stage instead of falling back to a
         // path-based recursive delete. Ordinary download stages keep their existing policy.
         let root = PackRemovalRoot::open(self.dir()).map_err(io("opening the Language pack recovery folder"))?;
-        Ok(stage.with_recovery_cleanup(root))
+        stage.with_recovery_cleanup(root)
     }
 
     /// Reject redirected or non-directory recovery ancestors before staging a removal.
@@ -627,8 +635,9 @@ impl FontStore {
 /// The caller-selected store is the ambient authority boundary, not an untrusted child path.
 pub(crate) struct PackRemovalRoot {
     _store: std::fs::File,
-    _packs: std::fs::File,
+    packs: std::fs::File,
     recovery: std::fs::File,
+    stage: Option<std::fs::File>,
 }
 
 impl PackRemovalRoot {
@@ -638,7 +647,31 @@ impl PackRemovalRoot {
         let root = open_ambient_dir(store, cap_primitives::ambient_authority())?;
         let packs = open_dir_nofollow(&root, Path::new("language-packs"))?;
         let recovery = open_dir_nofollow(&packs, Path::new(".removing"))?;
-        Ok(Self { _store: root, _packs: packs, recovery })
+        Ok(Self { _store: root, packs, recovery, stage: None })
+    }
+
+    /// Pin the new stage itself so pack moves and rollback share the same destination.
+    pub(crate) fn with_stage(mut self, id: &str) -> std::io::Result<Self> {
+        self.stage = Some(cap_primitives::fs::open_dir_nofollow(&self.recovery, Path::new(id))?);
+        Ok(self)
+    }
+
+    /// Move the locale folder into the retained stage without resolving its display path.
+    fn move_pack(&self, locale: &str) -> std::io::Result<()> {
+        let stage = self.stage.as_ref().ok_or_else(|| std::io::Error::other("missing recovery stage"))?;
+        cap_primitives::fs::rename(&self.packs, Path::new(locale), stage, Path::new(locale))
+    }
+
+    /// Restore to the original pack parent through the same handles used by the move.
+    fn restore_pack(&self, locale: &str) -> std::io::Result<()> {
+        let stage = self.stage.as_ref().ok_or_else(|| std::io::Error::other("missing recovery stage"))?;
+        cap_primitives::fs::rename(stage, Path::new(locale), &self.packs, Path::new(locale))
+    }
+
+    /// Release the child lock before deletion while retaining every recovery ancestor.
+    pub(crate) fn remove_stage(mut self, id: &str, display_parent: &Path) -> std::io::Result<()> {
+        drop(self.stage.take());
+        self.remove(id, display_parent)
     }
 
     /// Resolve only a validated receipt relative to the retained recovery directory.
@@ -649,9 +682,14 @@ impl PackRemovalRoot {
     }
 }
 
+/// Restore through the retained stage on a failed commit; retain the backup if rollback fails.
 fn finish_pack_removal(stage: Stage, backup: &Path, dest: &Path, moved: bool, saved: Result<(), Error>) -> Result<(), Error> {
     if let Err(error) = saved {
-        if moved && let Err(restore) = std::fs::rename(backup, dest) {
+        let restore = || {
+            let locale = dest.file_name().and_then(|name| name.to_str()).ok_or_else(|| std::io::Error::other("invalid pack name"))?;
+            stage.recovery_root()?.restore_pack(locale)
+        };
+        if moved && let Err(restore) = restore() {
             stage.keep_for_recovery();
             return Err(io(format!("saving the Language pack list failed ({error}); the original pack is preserved at {}", backup.display()))(
                 restore,

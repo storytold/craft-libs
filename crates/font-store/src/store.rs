@@ -901,10 +901,21 @@ impl Stage {
     }
 
     /// Recovery stages delete through a retained capability, never through their display path.
-    pub(crate) fn with_recovery_cleanup(mut self, root: crate::language_packs::PackRemovalRoot) -> Self {
-        self.recovery_cleanup = Some(root);
+    pub(crate) fn with_recovery_cleanup(mut self, root: crate::language_packs::PackRemovalRoot) -> Result<Self, Error> {
+        let id = self
+            .dir
+            .file_name()
+            .and_then(|name| name.to_str())
+            .filter(|name| Self::valid_name(name))
+            .ok_or_else(|| io("opening the Language pack recovery stage")(std::io::Error::other("invalid recovery ID")))?;
+        self.recovery_cleanup = Some(root.with_stage(id).map_err(io("opening the Language pack recovery stage"))?);
         self.remove_on_drop = true;
-        self
+        Ok(self)
+    }
+
+    /// Borrow the capability used for recovery moves, rollback, and eventual cleanup.
+    pub(crate) fn recovery_root(&self) -> std::io::Result<&crate::language_packs::PackRemovalRoot> {
+        self.recovery_cleanup.as_ref().ok_or_else(|| std::io::Error::other("missing recovery capability"))
     }
 
     /// Writes a verified download as `<name>.part`, which no font scan picks up.
@@ -924,11 +935,11 @@ impl Drop for Stage {
     /// Recovery cleanup uses its retained capability; ordinary download staging keeps its policy.
     fn drop(&mut self) {
         if self.remove_on_drop {
-            if let Some(root) = &self.recovery_cleanup {
+            if let Some(root) = self.recovery_cleanup.take() {
                 if let Some(id) = self.dir.file_name().and_then(|name| name.to_str()).filter(|name| Self::valid_name(name))
                     && let Some(parent) = self.dir.parent()
                 {
-                    let _ = root.remove(id, parent);
+                    let _ = root.remove_stage(id, parent);
                 }
             } else {
                 let _ = std::fs::remove_dir_all(&self.dir);
