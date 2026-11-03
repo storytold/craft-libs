@@ -287,7 +287,8 @@ pub struct PackLocale {
 }
 
 impl PackLocale {
-    /// Longest locale kept; a longer tag is cut at a subtag boundary.
+    /// Longest locale kept; a longer tag is cut at the subtag that would pass it (whatever the
+    /// subtag is: `sr-Cyrl-RS-ijekavsk` loses its variant, `sr-RS-ijekavsk` keeps it).
     pub const MAX_LEN: usize = 15;
 
     /// The locale of a language tag (`nl-NL`, `sr_Latn`, `fr-FR.UTF-8`): lowercased, `_` as `-`,
@@ -366,15 +367,27 @@ pub(crate) fn effective_script(tag: &str) -> Option<String> {
     parts.find(|p| is_script(p)).map(str::to_ascii_lowercase).or_else(|| default_script(&primary).map(str::to_string))
 }
 
+/// The position of the region among a tag's subtags: the first two-letter or three-digit one
+/// after the language (so a four-letter script is never one), before any singleton.
+pub(crate) fn region_index<S: AsRef<str>>(parts: &[S]) -> Option<usize> {
+    parts.iter().enumerate().skip(1).take_while(|(_, p)| p.as_ref().len() != 1).find_map(|(i, p)| {
+        let p = p.as_ref();
+        ((p.len() == 2 && p.bytes().all(|b| b.is_ascii_alphabetic())) || (p.len() == 3 && p.bytes().all(|b| b.is_ascii_digit()))).then_some(i)
+    })
+}
+
+/// `items` without the one at `index`.
+pub(crate) fn without_index<T: Clone>(items: &[T], index: usize) -> Vec<T> {
+    items.iter().enumerate().filter(|(i, _)| *i != index).map(|(_, p)| p.clone()).collect()
+}
+
 /// The region of a tag: the first two-letter or three-digit subtag after the language and
 /// script, before any singleton; a POSIX `.UTF-8` or `@…` tail is ignored.
 pub(crate) fn region(tag: &str) -> Option<&str> {
     let tag = tag.split(['.', '@']).next().unwrap_or("");
     // Subtags after a singleton (`x-…` private use, `u-…` extensions) aren't regions.
-    tag.split(['-', '_'])
-        .skip(1)
-        .take_while(|p| p.len() != 1)
-        .find(|p| (p.len() == 2 && p.chars().all(|c| c.is_ascii_alphabetic())) || (p.len() == 3 && p.chars().all(|c| c.is_ascii_digit())))
+    let parts: Vec<&str> = tag.split(['-', '_']).collect();
+    region_index(&parts).and_then(|i| parts.get(i).copied())
 }
 
 /// Regions whose Spanish is Latin American ([`ProofLang::Es419`]): Latin America and the
