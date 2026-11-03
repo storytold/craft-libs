@@ -37,7 +37,7 @@ craft-fonts-build = { path = "crates/fonts-build" }
 craft-i18n = { path = "crates/i18n" }
 craft-jpeg = { path = "crates/jpeg" }
 craft-keymap = { path = "crates/keymap" }
-craft-media = { path = "crates/media" }
+craft-media = { path = "crates/media", default-features = false }
 craft-media-testkit = { path = "crates/media-testkit" }
 craft-menu = { path = "crates/menu" }
 craft-pcraft-format = { path = "crates/pcraft-format" }
@@ -60,7 +60,6 @@ craft-dnx = { path = "crates/dnx" }
 craft-vp8 = { path = "crates/vp8" }
 craft-testkit = { path = "crates/testkit" }
 craft-codecs = { path = "crates/codecs" }
-log = "0.4"
 egui = { version = "0.37", default-features = false }
 rayon = "1"
 serde = { version = "1", features = ["derive"] }

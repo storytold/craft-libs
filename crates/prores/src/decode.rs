@@ -6,9 +6,8 @@ use crate::header::{FrameHeader, PictureHeader, row_slice_widths};
 use crate::tables::{DC_CB, DC_CTX_INIT, FIRST_DC_CB, LEVEL_CB, LEVEL_CTX_INIT, RUN_CB, RUN_CTX_INIT, SCAN_INTERLACED, SCAN_PROGRESSIVE, qscale};
 use crate::{AlphaType, ChromaFormat, Error, Frame, Interlace, Result};
 
-/// Maximum aggregate decoded plane storage for one ProRes frame (256 MiB).
-// 1 GiB: 8K ProRes 4444 with alpha is 283 MB of 16-bit planes
-const MAX_FRAME_BYTES: usize = 1 << 30;
+/// Maximum aggregate decoded plane storage for one ProRes frame (300 MiB; 8K ProRes 4444 with alpha is ~265 MiB).
+const MAX_FRAME_BYTES: usize = 300 * 1024 * 1024;
 
 /// Decoder options.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

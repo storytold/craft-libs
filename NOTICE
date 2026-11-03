@@ -244,3 +244,30 @@ Its white-level plateau estimate (saturation_plateau) is LightCraft's vendor::wh
 same revision. The CRW compression was derived clean-room from CC0 sample files and the
 maintainer's own photographs by black-box comparison with a reference decoder's command-line
 output; no raw-decoder source was consulted (crates/crw/clean-room/sources.md).
+
+Video codecs source provenance
+
+The pure-Rust video codec crates (crates/h264enc, crates/prores, crates/dnx, crates/vp8,
+crates/hevcenc, crates/vp9enc, crates/av1enc) adapt and port video codec implementations
+from FilmCraft (https://github.com/storytold/filmcraft) pinned at revision
+68919ed87aa6a097a4d21414ec7c438883f5fe22:
+- crates/h264enc is ported from FilmCraft's crates/h264enc (filmcraft-h264enc).
+- crates/prores is ported from FilmCraft's crates/prores (filmcraft-prores).
+- crates/dnx is ported from FilmCraft's crates/dnx (filmcraft-dnx).
+- crates/vp8 is ported from FilmCraft's crates/vp8 (filmcraft-vp8).
+- crates/hevcenc: ITU-T H.265 intra/inter prediction, deblocking, and constant tables are
+  adapted and mirrored from FilmCraft's crates/hevc (filmcraft-hevc decoder).
+- crates/vp9enc: VP9 normative tables and boolean entropy coding are adapted and transcribed
+  from FilmCraft's crates/vp9 (filmcraft-vp9 decoder).
+- crates/av1enc: Inverse transform routines and OBU bitstream syntax are adapted and mirrored
+  from FilmCraft's crates/av1 (filmcraft-av1 decoder), alongside normative specification tables
+  from the AOMedia AV1 specification.
+
+FilmCraft contributors to these crates include: aiongg, dylanmtaylor, earlvanze, echelon,
+g1obalworlds, jahvari, EthanSuquet, JordyUSA, MrCloudy2, Silvertree2010, Tom1tk,
+adventurelands, cirocueto2013-wq, kler, marshiyar, skylartaylor, thecyberbutler, vangel76,
+and the FilmCraft contributors.
+Source: https://github.com/storytold/filmcraft
+Copyright (c) 2026 ArtCraft Team and the FilmCraft contributors.
+Licensed under MIT OR Apache-2.0.
+

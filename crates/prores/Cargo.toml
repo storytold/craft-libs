@@ -18,3 +18,7 @@ threads = ["dep:rayon"]
 craft-media = { workspace = true, default-features = false, features = ["bitstream"] }
 thiserror = { workspace = true }
 rayon = { workspace = true, optional = true }
+
+[dev-dependencies]
+craft-testkit = { workspace = true }
+

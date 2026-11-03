@@ -921,7 +921,7 @@ impl Encoder {
         }
         if !self.sei_sent {
             self.sei_sent = true;
-            let text = format!("filmcraft-h264enc {} - clean-room H.264 encoder - options: {}", env!("CARGO_PKG_VERSION"), self.options());
+            let text = format!("craft-h264enc {} - clean-room H.264 encoder - options: {}", env!("CARGO_PKG_VERSION"), self.options());
             nals.push(nal::nal(0, NAL_SEI, &nal::sei_user_data_rbsp(&text)));
             if self.cfg.mastering_display.is_some() || self.cfg.content_light.is_some() {
                 nals.push(nal::nal(0, NAL_SEI, &nal::sei_hdr_rbsp(self.cfg.mastering_display.as_ref(), self.cfg.content_light)));
