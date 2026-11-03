@@ -434,6 +434,19 @@ fn scan(col: &mut Collector, chars: &[char]) {
 
 #[cfg(test)]
 mod tests {
+    /// Recasing cannot resurrect an exact NOSUGGEST/SUBSTANDARD/FORBIDDENWORD listing.
+    #[test]
+    fn uppercase_excluded_words_do_not_return_after_recasing() {
+        for flag in ["N", "S", "F"] {
+            let d =
+                AffixDict::from_hunspell("NOSUGGEST N\nSUBSTANDARD S\nFORBIDDENWORD F\nREP 1\nREP zyx caz\n", &format!("2\ncaz\nCAZ/{flag}\n"), &[])
+                    .unwrap();
+            assert!(suggest_in(&d, "zyx", 8).contains(&"caz".to_string()), "allowed lowercase route");
+            let found = suggest_in(&d, "ZYX", 8);
+            assert!(!found.contains(&"CAZ".to_string()), "{flag}: {found:?}");
+        }
+    }
+
     /// A whole compound's KEEPCASE restriction must not be bypassed by splitting it.
     #[test]
     fn keepcase_compounds_do_not_fall_back_to_unrestricted_parts() {
