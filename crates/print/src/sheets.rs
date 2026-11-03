@@ -829,10 +829,7 @@ impl Reader<'_> {
             let (Ok(num), Some(at)) = (u32::try_from(num), usize::try_from(at).ok().and_then(|a| a.checked_add(first))) else { break };
             objects.push((num, at));
         }
-        if lx.exhausted {
-            self.budget.exhausted = true;
-            return None;
-        }
+        self.budget.parsed(&lx)?;
         Some(ObjStm { data, objects })
     }
 
