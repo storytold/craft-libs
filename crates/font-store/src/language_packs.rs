@@ -478,8 +478,17 @@ impl FontStore {
         Stage::in_dir_excluding(&self.pack_removal_dir()?, excluded)
     }
 
+    /// Reject redirected or non-directory recovery ancestors before staging a removal.
     fn pack_removal_dir(&self) -> Result<PathBuf, Error> {
-        let parent = self.language_packs_dir().join(".removing");
+        let packs = self.language_packs_dir();
+        match std::fs::symlink_metadata(&packs) {
+            Ok(metadata) if !metadata.is_dir() || metadata.file_type().is_symlink() => {
+                return Err(io("using the Language pack folder")(std::io::Error::other("not a plain directory")));
+            }
+            Err(error) if error.kind() != std::io::ErrorKind::NotFound => return Err(io("reading the Language pack folder")(error)),
+            _ => {}
+        }
+        let parent = packs.join(".removing");
         match std::fs::symlink_metadata(&parent) {
             Ok(metadata) if !metadata.is_dir() || metadata.file_type().is_symlink() => {
                 return Err(io("using the Language pack recovery folder")(std::io::Error::other("not a plain directory")));
@@ -497,6 +506,7 @@ impl FontStore {
             return;
         }
         let Ok(parent) = self.pack_removal_dir() else { return };
+        let Ok(root) = PackRemovalRoot::open(self.dir()) else { return };
         let ids = &installed.committed_removals;
         if ids.is_empty() {
             return;
@@ -517,7 +527,7 @@ impl FontStore {
             }
             let id = &ids[next];
             next += 1;
-            if let Err(error) = remove_committed_backup(&parent.join(id))
+            if let Err(error) = root.remove(id, &parent)
                 && error.kind() != std::io::ErrorKind::NotFound
             {
                 log::warn!("cannot clean up committed Language pack removal {id}: {error}");
@@ -549,10 +559,12 @@ impl FontStore {
         Ok(rebuilt)
     }
 
-    /// The record as written, if there is one that can be read.
+    /// Preserve readable pack metadata and valid receipts when an optional receipt is malformed.
     fn read_record(&self) -> Option<Installed> {
-        let installed: Installed = read_limited(&self.dir().join(INSTALLED), MAX_PACK_INDEX_BYTES).and_then(|b| serde_json::from_slice(&b).ok())?;
-        installed.committed_removals.iter().all(|name| Stage::valid_name(name)).then_some(installed)
+        let mut installed: Installed =
+            read_limited(&self.dir().join(INSTALLED), MAX_PACK_INDEX_BYTES).and_then(|b| serde_json::from_slice(&b).ok())?;
+        installed.committed_removals.retain(|name| Stage::valid_name(name));
+        Some(installed)
     }
 
     /// The installed packs as their folders say: each folder named by a locale, with the name
@@ -606,10 +618,31 @@ impl FontStore {
     }
 }
 
-fn remove_committed_backup(path: &Path) -> std::io::Result<()> {
-    #[cfg(test)]
-    tests::before_cleanup(path)?;
-    std::fs::remove_dir_all(path)
+/// Keep recovery ancestors open until cleanup ends. Unix operations use directory-relative
+/// handles; Windows directory handles deny deletion and renaming while they remain open.
+/// The caller-selected store is the ambient authority boundary, not an untrusted child path.
+struct PackRemovalRoot {
+    _store: std::fs::File,
+    _packs: std::fs::File,
+    recovery: std::fs::File,
+}
+
+impl PackRemovalRoot {
+    /// Open each named child without following a symlink; preserve every ancestor handle.
+    fn open(store: &Path) -> std::io::Result<Self> {
+        use cap_primitives::fs::{open_ambient_dir, open_dir_nofollow};
+        let root = open_ambient_dir(store, cap_primitives::ambient_authority())?;
+        let packs = open_dir_nofollow(&root, Path::new("language-packs"))?;
+        let recovery = open_dir_nofollow(&packs, Path::new(".removing"))?;
+        Ok(Self { _store: root, _packs: packs, recovery })
+    }
+
+    /// Resolve only a validated receipt relative to the retained recovery directory.
+    fn remove(&self, id: &str, _display_parent: &Path) -> std::io::Result<()> {
+        #[cfg(test)]
+        tests::before_cleanup(&_display_parent.join(id))?;
+        cap_primitives::fs::remove_dir_all(&self.recovery, Path::new(id))
+    }
 }
 
 fn finish_pack_removal(stage: Stage, backup: &Path, dest: &Path, moved: bool, saved: Result<(), Error>) -> Result<(), Error> {

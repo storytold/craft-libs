@@ -21,6 +21,8 @@ pub(super) enum IoFailure {
 thread_local! {
     static IO_FAILURE: Cell<Option<IoFailure>> = const { Cell::new(None) };
     static CLEANUP_ATTEMPTS: RefCell<Vec<PathBuf>> = const { RefCell::new(Vec::new()) };
+    #[cfg(unix)]
+    static REPLACE_CLEANUP_PARENT: RefCell<Option<(PathBuf, PathBuf, PathBuf)>> = const { RefCell::new(None) };
 }
 
 struct InjectFailure(Option<IoFailure>);
@@ -45,8 +47,14 @@ pub(super) fn fail_io(failure: IoFailure) -> std::io::Result<()> {
     }
 }
 
+/// Record attempts and inject deterministic failures or a single ancestor replacement.
 pub(super) fn before_cleanup(path: &Path) -> std::io::Result<()> {
     CLEANUP_ATTEMPTS.with_borrow_mut(|attempts| attempts.push(path.to_path_buf()));
+    #[cfg(unix)]
+    if let Some((parent, moved, outside)) = REPLACE_CLEANUP_PARENT.take() {
+        std::fs::rename(&parent, moved)?;
+        std::os::unix::fs::symlink(outside, parent)?;
+    }
     fail_io(IoFailure::Cleanup)
 }
 
@@ -466,6 +474,114 @@ fn recovery_cleanup_does_not_follow_a_replaced_parent_symlink() {
     std::fs::remove_file(store.language_packs_dir().join(".removing")).unwrap();
     std::fs::remove_dir_all(outside).unwrap();
     std::fs::remove_dir_all(store.dir()).unwrap();
+}
+
+/// The language-packs ancestor must not redirect a committed cleanup outside the store.
+#[cfg(unix)]
+#[test]
+fn residual_cleanup_rejects_a_symlinked_language_packs_ancestor() {
+    let (store, _server, _pin, _) = setup("remove-symlink-packs");
+    let outside = temp("remove-symlink-packs-outside");
+    std::fs::create_dir_all(outside.join(".removing/11-12")).unwrap();
+    std::fs::write(outside.join(".removing/11-12/keep"), b"untouched").unwrap();
+    std::fs::create_dir_all(store.dir()).unwrap();
+    std::os::unix::fs::symlink(&outside, store.language_packs_dir()).unwrap();
+    let mut record = Installed::default();
+    record.committed_removals.push("11-12".into());
+    store.write_installed(&record).unwrap();
+    drop(store.lock().unwrap());
+    assert_eq!(std::fs::read(outside.join(".removing/11-12/keep")).unwrap(), b"untouched");
+    assert!(store.pack_removal_dir().is_err());
+    std::fs::remove_file(store.language_packs_dir()).unwrap();
+    std::fs::remove_dir_all(outside).unwrap();
+    std::fs::remove_dir_all(store.dir()).unwrap();
+}
+
+/// A replacement after validation must not redirect recursive deletion to the new target.
+#[cfg(unix)]
+#[test]
+fn residual_cleanup_stays_anchored_after_recovery_parent_replacement() {
+    let (store, _server, _pin, _) = setup("remove-parent-race");
+    let parent = store.language_packs_dir().join(".removing");
+    let moved = store.language_packs_dir().join(".removing-old");
+    let outside = temp("remove-parent-race-outside");
+    for base in [&parent, &outside] {
+        std::fs::create_dir_all(base.join("11-12")).unwrap();
+        std::fs::write(base.join("11-12/keep"), b"untouched").unwrap();
+    }
+    let mut record = Installed::default();
+    record.committed_removals.push("11-12".into());
+    store.write_installed(&record).unwrap();
+    REPLACE_CLEANUP_PARENT.set(Some((parent.clone(), moved.clone(), outside.clone())));
+    drop(store.lock().unwrap());
+    assert_eq!(std::fs::read(outside.join("11-12/keep")).unwrap(), b"untouched");
+    assert!(!moved.join("11-12").exists(), "the originally opened recovery folder is cleaned");
+    std::fs::remove_file(parent).unwrap();
+    std::fs::remove_dir_all(outside).unwrap();
+    std::fs::remove_dir_all(store.dir()).unwrap();
+}
+
+/// Retained Windows handles prevent replacement of every recovery ancestor during cleanup.
+#[cfg(windows)]
+#[test]
+fn recovery_cleanup_locks_all_windows_ancestors_until_removal_finishes() {
+    let (store, _server, _pin, _) = setup("remove-windows-parent-locks");
+    let parent = store.language_packs_dir().join(".removing");
+    let outside = temp("remove-windows-parent-outside");
+    std::fs::create_dir_all(parent.join("11-12")).unwrap();
+    std::fs::create_dir_all(outside.join("11-12")).unwrap();
+    std::fs::write(outside.join("11-12/keep"), b"untouched").unwrap();
+    let root = PackRemovalRoot::open(store.dir()).unwrap();
+    let packs = store.language_packs_dir();
+    for ancestor in [parent.as_path(), packs.as_path(), store.dir()] {
+        assert!(
+            std::fs::rename(ancestor, ancestor.with_extension("replaced")).is_err(),
+            "an open ancestor cannot be replaced: {}",
+            ancestor.display()
+        );
+    }
+    root.remove("11-12", &parent).unwrap();
+    assert!(!parent.join("11-12").exists());
+    assert_eq!(std::fs::read(outside.join("11-12/keep")).unwrap(), b"untouched");
+    drop(root);
+    std::fs::remove_dir_all(outside).unwrap();
+    std::fs::remove_dir_all(store.dir()).unwrap();
+}
+
+/// A malformed optional receipt must not discard valid receipts or installed-pack metadata.
+#[test]
+fn residual_one_bad_receipt_preserves_valid_metadata_and_cleanup() {
+    let (store, _server, pin, _) = setup("remove-mixed-receipts");
+    let index = store.fetch_pack_index_from(&IndexSource::Pinned(pin), &Cancel::new()).unwrap();
+    store.install_pack_from(false, &index, index.pack("nl").unwrap(), &Cancel::new(), &mut |_| {}).unwrap();
+    let original = store.read_record().unwrap();
+    let parent = store.language_packs_dir().join(".removing");
+    std::fs::create_dir_all(parent.join("11-12")).unwrap();
+    std::fs::write(parent.join("11-12/keep"), b"committed").unwrap();
+    let mut raw = serde_json::to_value(&original).unwrap();
+    raw["committed_removals"] = serde_json::json!(["11-12", "../outside"]);
+    std::fs::write(store.dir().join(INSTALLED), serde_json::to_vec(&raw).unwrap()).unwrap();
+    let record = store.read_record().expect("one invalid receipt must not invalidate the whole record");
+    assert_eq!(record.committed_removals, ["11-12"]);
+    assert_eq!(serde_json::to_value(&record.packs).unwrap(), serde_json::to_value(&original.packs).unwrap());
+    drop(store.lock().unwrap());
+    assert!(!parent.join("11-12").exists());
+    std::fs::remove_dir_all(store.dir()).unwrap();
+}
+
+/// Exclusions do not consume filesystem candidates; hostile iterator input remains bounded.
+#[test]
+fn residual_stage_exclusions_leave_the_filesystem_candidate_budget() {
+    let parent = temp("stage-excluded-budget");
+    let excluded: Vec<String> = (0..1000).map(|n| format!("0-{n}")).collect();
+    let stage = Stage::create_in(&parent, &excluded, excluded.iter().cloned().chain(std::iter::once("0-1000".into())))
+        .expect("a free name after excluded receipts is still considered");
+    drop(stage);
+    assert!(Stage::create_in(&parent, &excluded, std::iter::repeat_with(|| "0-0".into())).is_err());
+    assert!(Stage::create_in(&parent, &[], std::iter::repeat_with(|| "../invalid".into())).is_err());
+    std::fs::create_dir(parent.join("0-1001")).unwrap();
+    assert!(Stage::create_in(&parent, &[], std::iter::repeat_with(|| "0-1001".into())).is_err());
+    std::fs::remove_dir_all(parent).unwrap();
 }
 
 #[test]

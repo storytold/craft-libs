@@ -865,17 +865,24 @@ impl Stage {
         name.split_once('-').is_some_and(|(pid, counter)| pid.parse::<u32>().is_ok() && counter.parse::<u64>().is_ok())
     }
 
-    /// The candidate iterator also lets tests reproduce a restarted PID/counter sequence.
+    /// Allow distinct receipt exclusions in addition to 1,000 filesystem candidates.
+    /// Bound total iterator reads too, including repeated excluded or malformed names.
     pub(crate) fn create_in(staging: &Path, excluded: &[String], names: impl Iterator<Item = String>) -> Result<Self, Error> {
         std::fs::create_dir_all(staging).map_err(io("creating a temporary folder"))?;
         // A folder of that name may be another process's (PID namespaces in Flatpak or
         // containers repeat ids) or a stale one: never touched here, the next name is taken
         // (`sweep_staging` handles ordinary download staging, not recovery folders).
         let mut last = None;
-        for name in names.take(1000) {
-            if !Self::valid_name(&name) || excluded.contains(&name) {
+        let mut candidates = 0;
+        let excluded: std::collections::HashSet<&str> = excluded.iter().map(String::as_str).collect();
+        for name in names.take(1000usize.saturating_add(excluded.len())) {
+            if !Self::valid_name(&name) || excluded.contains(name.as_str()) {
                 continue;
             }
+            if candidates == 1000 {
+                break;
+            }
+            candidates += 1;
             let dir = staging.join(name);
             match std::fs::create_dir(&dir) {
                 Ok(()) => return Ok(Self { dir, remove_on_drop: true }),
