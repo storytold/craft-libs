@@ -1,10 +1,19 @@
 //! A ZIP reader for `.pcraft` bundles: STORE and DEFLATE entries, found through the central
 //! directory, CRC-checked. No ZIP64, no encryption, no archives split across disks.
 
+#[cfg(feature = "pcraft-pixels")]
+use std::collections::HashMap;
 use std::io::Read;
 use std::ops::Range;
 
 use crate::{Budget, Error, malformed};
+
+#[cfg(test)]
+thread_local! {
+    /// How many times this thread has walked a central directory with [`Zip::find`] or
+    /// [`Zip::index`].
+    pub(crate) static SCANS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
 
 const LOCAL_SIG: u32 = 0x0403_4b50;
 const CENTRAL_SIG: u32 = 0x0201_4b50;
@@ -112,9 +121,27 @@ impl<'a> Zip<'a> {
         Ok(Zip { bytes, entries })
     }
 
-    /// The first entry named `name`.
+    /// The first entry named `name`. Each call walks the central directory; for many lookups,
+    /// use [`Zip::index`].
     pub(crate) fn find(&self, name: &str) -> Option<&Entry> {
+        #[cfg(test)]
+        SCANS.with(|n| n.set(n.get() + 1));
         self.entries.iter().find(|e| self.bytes.get(e.name.clone()) == Some(name.as_bytes()))
+    }
+
+    /// Every entry by name, the first of each name as [`Zip::find`] gives it, built in one walk of
+    /// the central directory.
+    #[cfg(feature = "pcraft-pixels")]
+    pub(crate) fn index(&self) -> HashMap<&'a [u8], &Entry> {
+        #[cfg(test)]
+        SCANS.with(|n| n.set(n.get() + 1));
+        let mut index = HashMap::with_capacity(self.entries.len());
+        for e in &self.entries {
+            if let Some(name) = self.bytes.get(e.name.clone()) {
+                index.entry(name).or_insert(e);
+            }
+        }
+        index
     }
 
     /// The entry's bytes, decompressed and CRC-checked; their size is checked against `max` and
