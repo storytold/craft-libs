@@ -845,6 +845,7 @@ fn host(url: &str) -> &str {
 pub(crate) struct Stage {
     pub(crate) dir: PathBuf,
     remove_on_drop: bool,
+    recovery_cleanup: Option<crate::language_packs::PackRemovalRoot>,
 }
 
 impl Stage {
@@ -885,7 +886,7 @@ impl Stage {
             candidates += 1;
             let dir = staging.join(name);
             match std::fs::create_dir(&dir) {
-                Ok(()) => return Ok(Self { dir, remove_on_drop: true }),
+                Ok(()) => return Ok(Self { dir, remove_on_drop: true, recovery_cleanup: None }),
                 Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => last = Some(e),
                 Err(e) => return Err(io("creating a temporary folder")(e)),
             }
@@ -894,8 +895,16 @@ impl Stage {
     }
 
     /// The caller places recovery data outside the ordinary download staging sweep.
-    pub(crate) fn keep_for_recovery(mut self) {
+    pub(crate) fn keep_for_recovery(mut self) -> Self {
         self.remove_on_drop = false;
+        self
+    }
+
+    /// Recovery stages delete through a retained capability, never through their display path.
+    pub(crate) fn with_recovery_cleanup(mut self, root: crate::language_packs::PackRemovalRoot) -> Self {
+        self.recovery_cleanup = Some(root);
+        self.remove_on_drop = true;
+        self
     }
 
     /// Writes a verified download as `<name>.part`, which no font scan picks up.
@@ -912,9 +921,18 @@ impl Stage {
 }
 
 impl Drop for Stage {
+    /// Recovery cleanup uses its retained capability; ordinary download staging keeps its policy.
     fn drop(&mut self) {
         if self.remove_on_drop {
-            let _ = std::fs::remove_dir_all(&self.dir);
+            if let Some(root) = &self.recovery_cleanup {
+                if let Some(id) = self.dir.file_name().and_then(|name| name.to_str()).filter(|name| Self::valid_name(name))
+                    && let Some(parent) = self.dir.parent()
+                {
+                    let _ = root.remove(id, parent);
+                }
+            } else {
+                let _ = std::fs::remove_dir_all(&self.dir);
+            }
         }
     }
 }

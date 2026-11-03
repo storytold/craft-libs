@@ -475,7 +475,11 @@ impl FontStore {
     fn language_pack_removal_stage(&self, excluded: &[String]) -> Result<Stage, Error> {
         // A failed rollback or interrupted removal must not lose its backup to the download
         // sweep. Locale scans ignore this hidden directory.
-        Stage::in_dir_excluding(&self.pack_removal_dir()?, excluded)
+        let stage = Stage::in_dir_excluding(&self.pack_removal_dir()?, excluded)?.keep_for_recovery();
+        // If opening the anchor fails, preserve the stage instead of falling back to a
+        // path-based recursive delete. Ordinary download stages keep their existing policy.
+        let root = PackRemovalRoot::open(self.dir()).map_err(io("opening the Language pack recovery folder"))?;
+        Ok(stage.with_recovery_cleanup(root))
     }
 
     /// Reject redirected or non-directory recovery ancestors before staging a removal.
@@ -621,7 +625,7 @@ impl FontStore {
 /// Keep recovery ancestors open until cleanup ends. Unix operations use directory-relative
 /// handles; Windows directory handles deny deletion and renaming while they remain open.
 /// The caller-selected store is the ambient authority boundary, not an untrusted child path.
-struct PackRemovalRoot {
+pub(crate) struct PackRemovalRoot {
     _store: std::fs::File,
     _packs: std::fs::File,
     recovery: std::fs::File,
@@ -638,7 +642,7 @@ impl PackRemovalRoot {
     }
 
     /// Resolve only a validated receipt relative to the retained recovery directory.
-    fn remove(&self, id: &str, _display_parent: &Path) -> std::io::Result<()> {
+    pub(crate) fn remove(&self, id: &str, _display_parent: &Path) -> std::io::Result<()> {
         #[cfg(test)]
         tests::before_cleanup(&_display_parent.join(id))?;
         cap_primitives::fs::remove_dir_all(&self.recovery, Path::new(id))

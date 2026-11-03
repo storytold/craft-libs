@@ -521,6 +521,29 @@ fn residual_cleanup_stays_anchored_after_recovery_parent_replacement() {
     std::fs::remove_dir_all(store.dir()).unwrap();
 }
 
+/// Immediate stage cleanup must not follow a recovery parent replaced after stage creation.
+#[cfg(unix)]
+#[test]
+fn recovery_stage_drop_stays_anchored_after_parent_replacement() {
+    let (store, _server, _pin, _) = setup("remove-stage-parent-race");
+    let stage = store.language_pack_removal_stage(&[]).unwrap();
+    let id = stage.dir.file_name().unwrap().to_owned();
+    std::fs::write(stage.dir.join("owned"), b"staged").unwrap();
+    let outside = temp("remove-stage-parent-race-outside");
+    std::fs::create_dir(outside.join(&id)).unwrap();
+    std::fs::write(outside.join(&id).join("keep"), b"untouched").unwrap();
+    let parent = store.language_packs_dir().join(".removing");
+    let moved = store.language_packs_dir().join(".removing-old");
+    std::fs::rename(&parent, &moved).unwrap();
+    std::os::unix::fs::symlink(&outside, &parent).unwrap();
+    drop(stage);
+    assert_eq!(std::fs::read(outside.join(&id).join("keep")).unwrap(), b"untouched");
+    assert!(!moved.join(&id).exists(), "the original stage is cleaned via its retained parent");
+    std::fs::remove_file(parent).unwrap();
+    std::fs::remove_dir_all(outside).unwrap();
+    std::fs::remove_dir_all(store.dir()).unwrap();
+}
+
 /// Retained Windows handles prevent replacement of every recovery ancestor during cleanup.
 #[cfg(windows)]
 #[test]
