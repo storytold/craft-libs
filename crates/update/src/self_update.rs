@@ -480,12 +480,9 @@ fn unmark_unless_scheduled(paths: &Paths, scheduled: Result<(), String>) -> Resu
 /// mounted from its own (now unlinked) file, so it keeps working until it exits.
 #[cfg(target_os = "linux")]
 fn replace_appimage(new: &Path, path: &Path) -> Result<(), String> {
-    use std::os::unix::fs::PermissionsExt;
-    let dir = path.parent().ok_or("the AppImage isn't in a folder")?;
-    let staged = dir.join(format!(".{}.update", path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()));
-    std::fs::copy(new, &staged).map_err(|e| format!("couldn't write next to {} ({e})", path.display()))?;
+    path.parent().ok_or("the AppImage isn't in a folder")?;
     // The replacement AppImage must be executable; 0o755 is not group/world-writable.
-    std::fs::set_permissions(&staged, std::fs::Permissions::from_mode(0o755)).map_err(|e| e.to_string())?; // NOSONAR
+    let staged = stage_copy(new, path, 0o755)?; // NOSONAR
     std::fs::rename(&staged, path).map_err(|e| {
         let _ = std::fs::remove_file(&staged);
         format!("couldn't replace {} ({e})", path.display())
@@ -570,20 +567,24 @@ fn stage(from: &Path, to: &Path, executable: bool) -> Result<PathBuf, String> {
     use std::os::unix::fs::PermissionsExt;
     let dir = to.parent().ok_or_else(|| format!("{} isn't in a folder", to.display()))?;
     std::fs::create_dir_all(dir).map_err(|e| format!("couldn't create {} ({e})", dir.display()))?;
+    let mode = std::fs::metadata(from).map(|m| m.permissions().mode()).unwrap_or(0o644);
+    stage_copy(from, to, if executable { 0o755 } else { mode & 0o755 })
+}
+
+/// Copies `from` to a new file beside `to` and returns its path. The file is created exclusively
+/// under an unpredictable name, so a link someone left at a guessable name is never followed,
+/// and its bytes and `mode` go through the open handle. Removed again when any step fails.
+#[cfg(unix)]
+fn stage_copy(from: &Path, to: &Path, mode: u32) -> Result<PathBuf, String> {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = to.parent().ok_or_else(|| format!("{} isn't in a folder", to.display()))?;
     let name = to.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-    let staged = dir.join(format!(".{name}.{}.update", std::process::id()));
-    let done = std::fs::copy(from, &staged).map_err(|e| format!("couldn't write next to {} ({e})", to.display())).and_then(|_| {
-        let mode = std::fs::metadata(from).map(|m| m.permissions().mode()).unwrap_or(0o644);
-        let mode = if executable { 0o755 } else { mode & 0o755 };
-        std::fs::set_permissions(&staged, std::fs::Permissions::from_mode(mode)).map_err(|e| e.to_string())
-    });
-    match done {
-        Ok(()) => Ok(staged),
-        Err(e) => {
-            let _ = std::fs::remove_file(&staged);
-            Err(e)
-        }
-    }
+    let write_error = |e: std::io::Error| format!("couldn't write next to {} ({e})", to.display());
+    let mut staged = tempfile::Builder::new().prefix(&format!(".{name}.")).suffix(".update").tempfile_in(dir).map_err(write_error)?;
+    let mut source = std::fs::File::open(from).map_err(|e| format!("couldn't read {} ({e})", from.display()))?;
+    std::io::copy(&mut source, staged.as_file_mut()).map_err(write_error)?;
+    staged.as_file().set_permissions(std::fs::Permissions::from_mode(mode)).map_err(|e| e.to_string())?;
+    staged.into_temp_path().keep().map_err(|e| e.to_string())
 }
 
 /// A regular file, not a link to one.
@@ -1032,6 +1033,22 @@ fn run_step(app: &App, reference: &Path, pid: u32, exe: &Path, step: &Finish, wa
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
+    #[test]
+    fn staging_never_writes_through_a_link_at_the_old_staging_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let (new, exe, victim) = (dir.path().join("new"), dir.path().join("app"), dir.path().join("victim"));
+        std::fs::write(&new, b"replacement").unwrap();
+        std::fs::write(&exe, b"old").unwrap();
+        std::fs::write(&victim, b"keep me").unwrap();
+        // The names staging used to take: `.app.update` and `.app.<pid>.update`.
+        std::os::unix::fs::symlink(&victim, dir.path().join(".app.update")).unwrap();
+        std::os::unix::fs::symlink(&victim, dir.path().join(format!(".app.{}.update", std::process::id()))).unwrap();
+        let staged = stage_copy(&new, &exe, 0o755).unwrap();
+        assert_eq!(std::fs::read(&staged).unwrap(), b"replacement");
+        assert!(std::fs::symlink_metadata(&staged).unwrap().file_type().is_file());
+        assert_eq!(std::fs::read(&victim).unwrap(), b"keep me");
+    }
     #[test]
     fn macos_package_manager_folders_are_recognised() {
         for owned in [
