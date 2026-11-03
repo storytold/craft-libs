@@ -44,9 +44,21 @@ pub use detect::{
     DetectionResult, EncodingEvidence, EncodingMetadata, detect_encoding, detect_encoding_from_str, detect_vietnamese_encoding,
     is_already_unicode_vietnamese, is_vietnamese_font,
 };
-pub use tcvn3::{transcode_tcvn3, transcode_tcvn3_h};
-pub use vni::transcode_vni;
+pub use tcvn3::{WINDOWS_1252_PUNCTUATION, decode_tcvn3, transcode_tcvn3, transcode_tcvn3_h};
+pub use vni::{VniDecoder, decode_vni, transcode_vni};
 pub use windows1258::{decode_windows1258, transcode_windows1258};
+
+/// Decoding mode: Strict specification adherence vs Practical real-world legacy document ingestion.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum DecodeMode {
+    /// Strict specification mode: only canonical standard bytes are mapped.
+    /// Unofficial byte positions (such as CP1252 punctuation in TCVN3/VNI) return `DecodeError::UnmappedByte`.
+    Strict,
+    /// Practical mode (default): enables CP1252 punctuation fallback (0x80..=0x9F), VNI CapsLock handling,
+    /// and standalone/orphan diacritic fallback to preserve real-world legacy documents (Word, Excel, AutoCAD).
+    #[default]
+    Practical,
+}
 
 /// Detected or specified legacy Vietnamese encoding.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -179,34 +191,19 @@ pub fn transcode_vietnamese<'a>(s: &'a str, font_hint: Option<&str>) -> Cow<'a, 
 pub use transcode_vietnamese as transcode;
 
 /// Pure decoding primitive: maps bytes strictly to Unicode codepoints without hidden normalization.
+///
+/// Uses [`DecodeMode::Practical`] by default to preserve typography and diacritics in legacy documents.
 pub fn decode(input: &[u8], encoding: LegacyEncoding) -> Result<Cow<'_, str>, DecodeError> {
+    decode_with_mode(input, encoding, DecodeMode::Practical)
+}
+
+/// Pure decoding primitive with explicit [`DecodeMode`] selection.
+pub fn decode_with_mode(input: &[u8], encoding: LegacyEncoding, mode: DecodeMode) -> Result<Cow<'_, str>, DecodeError> {
     match encoding {
         LegacyEncoding::Windows1258 => decode_windows1258(input),
-        LegacyEncoding::Tcvn3 | LegacyEncoding::Tcvn3H | LegacyEncoding::Vni => {
-            if input.is_ascii() {
-                if let Ok(s) = std::str::from_utf8(input) {
-                    return Ok(Cow::Borrowed(s));
-                }
-                return Err(DecodeError::InvalidUtf8 { offset: 0 });
-            }
-            if let Ok(s) = std::str::from_utf8(input) {
-                let transcoded = match encoding {
-                    LegacyEncoding::Tcvn3 => transcode_tcvn3(s),
-                    LegacyEncoding::Tcvn3H => transcode_tcvn3_h(s),
-                    LegacyEncoding::Vni => transcode_vni(s),
-                    LegacyEncoding::Windows1258 => Cow::Borrowed(s),
-                };
-                return Ok(transcoded);
-            }
-            let s: String = input.iter().map(|&b| b as char).collect();
-            let transcoded = match encoding {
-                LegacyEncoding::Tcvn3 => transcode_tcvn3(&s),
-                LegacyEncoding::Tcvn3H => transcode_tcvn3_h(&s),
-                LegacyEncoding::Vni => transcode_vni(&s),
-                LegacyEncoding::Windows1258 => Cow::Borrowed(""),
-            };
-            Ok(Cow::Owned(transcoded.into_owned()))
-        }
+        LegacyEncoding::Tcvn3 => decode_tcvn3(input, false, mode),
+        LegacyEncoding::Tcvn3H => decode_tcvn3(input, true, mode),
+        LegacyEncoding::Vni => decode_vni(input, mode),
     }
 }
 

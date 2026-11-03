@@ -170,6 +170,21 @@ Windows-1258 maps Latin-1 accented vowels directly, but uses five explicit combi
 
 *Separation Invariant:* `decode(input, LegacyEncoding::Windows1258)` **does not perform implicit NFC normalization**. It outputs the exact sequence of base characters and combining marks. Canonical normalization is deferred to `normalize_nfc` or the `decode_text` facade when requested.
 
+#### Practical vs. Strict Mode Contracts
+
+To survive real-world documents (1995–2005), the decoder must support two modes:
+
+1. **Strict Mode (Specification Only):** Maps only canonical specification bytes (TCVN 5712:1993, VNI standard, or CP1258.TXT). Throws `DecodeError::UnmappedByte` on any non-standard byte (e.g., CP1252 punctuation).
+2. **Practical Mode (Default for Document Ingestion):** 
+   - **CP1252 Fallback:** Maps the `0x80..=0x9F` range to Windows-1252 punctuation (curly quotes, en/em dashes, bullets, ellipses) to prevent losing punctuation in legacy Word/CAD documents.
+   - **VNI CapsLock Handling:** Recognizes uppercase VNI tone marks (`0xD8` $\to$ `Ø`, `0xD9` $\to$ `Ù`, `0xDA` $\to$ `Ú`, `0xD5` $\to$ `Õ`, `0xCF` $\to$ `Ï`) and maps them correctly to uppercase Vietnamese characters.
+   - **Orphan Diacritic Fallback:** If a VNI mark byte is not preceded by a valid base vowel, it is emitted as a standalone spacing accent (e.g., `\u{00B4}` for acute) rather than being dropped or causing a panic.
+   - **Streaming State Machine:** The VNI decoder maintains a `pending_base` state to handle chunk boundaries without breaking composite characters (base + mark).
+
+#### Font Hint Overrides (TCVN3H)
+If metadata indicates an uppercase font (e.g., `.VnTimeH`), the decoder MUST use the `TCVN3_UPPER_MAP` instead of the standard lower map, ensuring legacy all-caps headers render correctly.
+
+
 #### Primitive 3: Canonical Normalization & Allocation Contract
 ```rust
 pub fn normalize_nfc(input: &str) -> Cow<'_, str>;

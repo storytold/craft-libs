@@ -1,10 +1,10 @@
 use std::borrow::Cow;
 
 use super::{
-    DecodeError, DetectionResult, EncodingEvidence, EncodingMetadata, LegacyEncoding, VietnameseEncoding, decode, detect_encoding,
-    detect_encoding_from_str, detect_legacy_encoding, detect_vietnamese_encoding, font_hint, is_already_unicode_vietnamese, is_legacy_text,
-    is_serif_legacy_font, is_vietnamese_font, normalize_nfc, transcode, transcode_explicit, transcode_summary, transcode_tcvn3, transcode_to_unicode,
-    transcode_vietnamese, transcode_vni, transcode_with_summary, validate_and_normalize,
+    DecodeError, DecodeMode, DetectionResult, EncodingEvidence, EncodingMetadata, LegacyEncoding, VietnameseEncoding, VniDecoder, decode,
+    decode_tcvn3, decode_vni, decode_with_mode, detect_encoding, detect_encoding_from_str, detect_legacy_encoding, detect_vietnamese_encoding,
+    font_hint, is_already_unicode_vietnamese, is_legacy_text, is_serif_legacy_font, is_vietnamese_font, normalize_nfc, transcode, transcode_explicit,
+    transcode_summary, transcode_tcvn3, transcode_to_unicode, transcode_vietnamese, transcode_vni, transcode_with_summary, validate_and_normalize,
 };
 
 #[test]
@@ -365,4 +365,83 @@ fn test_detection_result_and_evidence_hierarchy() {
     // 5. Pure ASCII is Unknown (no legacy mutation)
     let res_ascii = detect_encoding(b"Clean ASCII Text 123", None);
     assert_eq!(res_ascii, DetectionResult::Unknown);
+}
+
+#[test]
+fn test_vni_capslock() {
+    let res1 = decode(b"VI\xcfT NAM", LegacyEncoding::Vni).expect("VNI CapsLock with standalone Ï");
+    assert_eq!(res1.as_ref(), "VIỆT NAM");
+
+    let res2 = decode(b"VI\xca\xcfT NAM", LegacyEncoding::Vni).expect("VNI CapsLock with ÊÏ");
+    assert_eq!(res2.as_ref(), "VIỆT NAM");
+
+    let to_hop = decode(b"TO\xc5NG", LegacyEncoding::Vni).expect("VNI CapsLock O mark");
+    assert_eq!(to_hop.as_ref(), "TỔNG");
+}
+
+#[test]
+fn test_tcvn3h_uppercase_font() {
+    // In .VnTime (lower), 0xD2 is 'ề'
+    let lower_res = decode_tcvn3(b"\xd2", false, DecodeMode::Practical).expect("TCVN3 lower byte");
+    assert_eq!(lower_res.as_ref(), "ề");
+
+    // In .VnTimeH (upper), 0xD2 is 'Ề'
+    let upper_res = decode_tcvn3(b"\xd2", true, DecodeMode::Practical).expect("TCVN3 upper byte");
+    assert_eq!(upper_res.as_ref(), "Ề");
+
+    // Via facade decode with LegacyEncoding::Tcvn3H
+    let facade_res = decode(b"\xd2", LegacyEncoding::Tcvn3H).expect("TCVN3H decode");
+    assert_eq!(facade_res.as_ref(), "Ề");
+}
+
+#[test]
+fn test_cp1252_punctuation_preservation() {
+    // b"\x93\x91" are left double quote “ and left single quote ‘
+    let punct_vni = decode(b"\x93\x91", LegacyEncoding::Vni).expect("CP1252 quotes in VNI");
+    assert_eq!(punct_vni.as_ref(), "“‘");
+
+    let punct_tcvn = decode(b"\x93\x91", LegacyEncoding::Tcvn3).expect("CP1252 quotes in TCVN3");
+    assert_eq!(punct_tcvn.as_ref(), "“‘");
+
+    // Real sentence: “trích dẫn” in TCVN3
+    // “ (0x93), t, r, í (0xDD), c, h, ' ', đ (0xAE), ẫ (0xC9), n, ” (0x94)
+    let sentence = b"\x93tr\xddch d\xc9n\x94";
+    let transcoded = decode(sentence, LegacyEncoding::Tcvn3).expect("TCVN3 with quotes");
+    assert_eq!(transcoded.as_ref(), "“trích dẫn”");
+
+    // Strict mode rejects CP1252 punctuation
+    let strict_res = decode_with_mode(b"\x93", LegacyEncoding::Tcvn3, DecodeMode::Strict);
+    assert_eq!(strict_res, Err(DecodeError::UnmappedByte { byte: 0x93, offset: 0, encoding: LegacyEncoding::Tcvn3 }));
+}
+
+#[test]
+fn test_vni_orphan_diacritic_fallback() {
+    // Standalone acute: b"f\xf9" -> "f´"
+    let orphan = decode_vni(b"f\xf9", DecodeMode::Practical).expect("VNI orphan acute mark");
+    assert_eq!(orphan.as_ref(), "f\u{00B4}");
+
+    // Standalone grave: b"123 \xf8" -> "123 `"
+    let grave = decode(b"123 \xf8", LegacyEncoding::Vni).expect("VNI orphan grave mark");
+    assert_eq!(grave.as_ref(), "123 `");
+
+    // Strict mode returns UnmappedByte for orphan mark
+    let strict_orphan = decode_with_mode(b"f\xf9", LegacyEncoding::Vni, DecodeMode::Strict);
+    assert_eq!(strict_orphan, Err(DecodeError::UnmappedByte { byte: 0xF9, offset: 1, encoding: LegacyEncoding::Vni }));
+}
+
+#[test]
+fn test_vni_streaming_chunk_boundaries() {
+    // Simulate buffer split between base 'a' (chunk 1) and diacritic mark 0xF9 (chunk 2)
+    let mut decoder = VniDecoder::new(DecodeMode::Practical);
+    let mut out = String::new();
+
+    decoder.decode_chunk(b"Ban ve so 1a", &mut out).expect("Chunk 1");
+    // 'a' is held as pending_base
+    assert_eq!(out, "Ban ve so 1");
+
+    decoder.decode_chunk(b"\xf9 va chi tiet", &mut out).expect("Chunk 2");
+    decoder.finish(&mut out);
+
+    // 'a' and '\xf9' seamlessly composed into 'á'
+    assert_eq!(out, "Ban ve so 1á va chi tiet");
 }
