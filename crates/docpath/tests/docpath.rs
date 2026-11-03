@@ -401,3 +401,34 @@ fn refusals_have_messages() {
         assert!(!r.to_string().is_empty());
     }
 }
+
+#[cfg(unix)]
+#[test]
+fn a_non_unicode_document_path_keeps_the_namespace_rules() {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+    let doc = Path::new(OsStr::from_bytes(b"/home/u/\xff/a.doc"));
+    assert_eq!(resolve("img/x.png", Some(doc)).unwrap(), Path::new(OsStr::from_bytes(b"/home/u/\xff/img/x.png")));
+    let device = Path::new(OsStr::from_bytes(b"/??/\xff/a.doc"));
+    assert_eq!(resolve("x.png", Some(device)), Err(Refused::Device));
+    assert_eq!(resolve("x.png", Some(Path::new("/??/u/a.doc"))), Err(Refused::Device));
+}
+
+#[cfg(windows)]
+#[test]
+fn a_non_unicode_document_path_keeps_the_namespace_rules() {
+    use std::ffi::OsString;
+    use std::os::windows::ffi::OsStringExt;
+    let native = |s: &str| {
+        // An unpaired surrogate in the folder name makes the path non-Unicode.
+        let mut w: Vec<u16> = s.encode_utf16().collect();
+        let at = w.iter().rposition(|c| *c == u16::from(b'\\')).unwrap_or(0);
+        w.insert(at, 0xD800);
+        std::path::PathBuf::from(OsString::from_wide(&w))
+    };
+    assert!(resolve("x.png", Some(native(r"C:\docs\a.doc").as_path())).is_ok());
+    assert!(resolve("x.png", Some(native(r"\\server\share\docs\a.doc").as_path())).is_ok());
+    for doc in [r"\\.\COM1\docs\a.doc", r"\\?\GLOBALROOT\Device\docs\a.doc", r"\??\C:\docs\a.doc"] {
+        assert_eq!(resolve("x.png", Some(native(doc).as_path())), Err(Refused::Device), "{doc}");
+    }
+}

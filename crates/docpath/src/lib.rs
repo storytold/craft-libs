@@ -75,8 +75,9 @@
 //! assert_eq!(resolve_absolute("img/logo.png", None), Err(Refused::Invalid));
 //! ```
 
+use std::ffi::OsStr;
 use std::fmt;
-use std::path::{MAIN_SEPARATOR, Path, PathBuf};
+use std::path::{Component, MAIN_SEPARATOR, Path, PathBuf, Prefix};
 
 /// What a stored path refers to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -605,8 +606,11 @@ fn render(root: &Root, comps: &[String]) -> PathBuf {
     PathBuf::from(prefix + &comps.join(&sep.to_string()))
 }
 
-/// A relative link next to a document whose path is not UTF-8 (possible on Unix only).
+/// A relative link next to a document whose path is not Unicode (bytes that are not UTF-8 on
+/// Unix, an unpaired surrogate on Windows). The link inherits the document's root, so that root
+/// is held to the rules [`resolve`] applies to a Unicode document path.
 fn join_native(doc: &Path, comps: &[String]) -> Result<PathBuf, Refused> {
+    check_native_root(doc)?;
     let mut p = doc.parent().map(Path::to_path_buf).unwrap_or_default();
     for c in comps {
         match c.as_str() {
@@ -620,4 +624,20 @@ fn join_native(doc: &Path, comps: &[String]) -> Result<PathBuf, Refused> {
         }
     }
     Ok(p)
+}
+
+/// Refuses a native document path rooted in a device or object-manager namespace (`\\.\`,
+/// `\\?\` other than a drive or `UNC`, `\??\`), as [`parse`] does for a Unicode one. Drives and
+/// shares are kept; a share is then the link's boundary as for a Unicode path.
+fn check_native_root(doc: &Path) -> Result<(), Refused> {
+    let mut comps = doc.components();
+    match comps.next() {
+        Some(Component::Prefix(p)) => match p.kind() {
+            Prefix::Disk(_) | Prefix::VerbatimDisk(_) => Ok(()),
+            Prefix::UNC(host, _) | Prefix::VerbatimUNC(host, _) if host != "." && host != "?" => Ok(()),
+            _ => Err(Refused::Device),
+        },
+        Some(Component::RootDir) if comps.next() == Some(Component::Normal(OsStr::new("??"))) => Err(Refused::Device),
+        _ => Ok(()),
+    }
 }
