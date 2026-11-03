@@ -196,19 +196,22 @@ pub(crate) fn ordered(
     let first = names.first().map(|n| norm(n));
     let (region, rest): (Vec<&str>, Vec<&str>) = names.iter().copied().partition(|n| Some(norm(n)) == first);
     let pack: &[&str] = &[crate::packs::SPELLING];
+    // (folder, names, a Language pack's: never read through a symbolic link, as the pack scan
+    // checks; a system folder's dictionaries often are links, `en_GB.dic` → `en_GB-ise.dic`).
     let tiers = dirs
         .iter()
-        .map(|d| (d, names))
-        .chain(region_packs.iter().map(|d| (d, pack)))
-        .chain(system.iter().map(|d| (d, &region[..])))
-        .chain(other_packs.iter().map(|d| (d, pack)))
-        .chain(system.iter().map(|d| (d, &rest[..])));
+        .map(|d| (d, names, false))
+        .chain(region_packs.iter().map(|d| (d, pack, true)))
+        .chain(system.iter().map(|d| (d, &region[..], false)))
+        .chain(other_packs.iter().map(|d| (d, pack, true)))
+        .chain(system.iter().map(|d| (d, &rest[..], false)));
+    let file = |p: &Path, pack: bool| if pack { std::fs::symlink_metadata(p).is_ok_and(|m| m.is_file()) } else { p.is_file() };
     let mut out: Vec<(PathBuf, PathBuf)> = Vec::new();
-    for (dir, names) in tiers {
+    for (dir, names, in_pack) in tiers {
         for n in names {
             let aff = dir.join(format!("{n}.aff"));
             let dic = dir.join(format!("{n}.dic"));
-            if aff.is_file() && dic.is_file() && !out.iter().any(|(_, d)| *d == dic) {
+            if file(&aff, in_pack) && file(&dic, in_pack) && !out.iter().any(|(_, d)| *d == dic) {
                 out.push((aff, dic));
             }
         }
@@ -694,6 +697,34 @@ mod tests {
             assert_eq!(find_in(&folder, &[other]).map(|(_, d)| d), Some(mine));
             let _ = std::fs::remove_dir_all(&root);
         }
+    }
+
+    /// Review follow-up (craft-libs#485): a pack's `spelling.aff`/`.dic` that is a symbolic link
+    /// (swapped in after the pack scan) is never a candidate; one in a system folder still is.
+    #[cfg(unix)]
+    #[test]
+    fn pack_files_are_never_read_through_a_link() {
+        let root = std::env::temp_dir().join(format!("wc-proof-pack-links-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let (pack, system, elsewhere) = (root.join("packs").join("nl"), root.join("system"), root.join("elsewhere"));
+        for d in [&pack, &system, &elsewhere] {
+            std::fs::create_dir_all(d).unwrap();
+        }
+        std::fs::write(elsewhere.join("x.aff"), "SET UTF-8\n").unwrap();
+        std::fs::write(elsewhere.join("x.dic"), "1\nx\n").unwrap();
+        std::fs::write(pack.join("spelling.aff"), "SET UTF-8\n").unwrap();
+        std::os::unix::fs::symlink(elsewhere.join("x.dic"), pack.join("spelling.dic")).unwrap();
+        std::os::unix::fs::symlink(elsewhere.join("x.aff"), system.join("nl.aff")).unwrap();
+        std::os::unix::fs::symlink(elsewhere.join("x.dic"), system.join("nl.dic")).unwrap();
+        let got: Vec<PathBuf> =
+            ordered(&["nl"], &[], std::slice::from_ref(&pack), std::slice::from_ref(&system), &[]).into_iter().map(|(_, d)| d).collect();
+        assert_eq!(got, [system.join("nl.dic")], "the system's link is followed, the pack's never");
+        std::fs::remove_file(pack.join("spelling.dic")).unwrap();
+        std::fs::write(pack.join("spelling.dic"), "1\nx\n").unwrap();
+        let got: Vec<PathBuf> =
+            ordered(&["nl"], &[], std::slice::from_ref(&pack), std::slice::from_ref(&system), &[]).into_iter().map(|(_, d)| d).collect();
+        assert_eq!(got, [pack.join("spelling.dic"), system.join("nl.dic")]);
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// WordCraft's own dictionaries folder under the user's application data is searched on every

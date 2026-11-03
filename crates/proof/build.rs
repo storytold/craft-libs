@@ -16,9 +16,8 @@
 //! `include_str!` takes a string, so a `CRAFT_I18N_DIR` that isn't valid UTF-8 can't be embedded:
 //! it is treated like a folder without the data.
 //!
-//! English: SCOWL's en-US, en-GB (-ise) and en-CA dictionaries; en-AU is not embedded, as
-//! Australian English is checked as British-spelling English (`ProofLang::EnGb`). The SCOWL
-//! notice is embedded once (the four upstream READMEs differ only in their title and build line).
+//! English: SCOWL's en-US, en-GB (-ise), en-CA and en-AU dictionaries. The SCOWL notice is
+//! embedded once (the four upstream READMEs differ only in their title and build line).
 
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
@@ -34,6 +33,8 @@ const FILES: &[(&str, &str, bool)] = &[
     ("EN_GB_SPELLING", "en-gb/spelling.dic", false),
     ("EN_CA_AFF", "en-ca/spelling.aff", false),
     ("EN_CA_SPELLING", "en-ca/spelling.dic", false),
+    ("EN_AU_AFF", "en-au/spelling.aff", false),
+    ("EN_AU_SPELLING", "en-au/spelling.dic", false),
     ("SCOWL_NOTICE", "en-us/LICENCE-SCOWL.txt", false),
     ("EN_US_PAT", "en-us/hyphenation.pat", false),
     ("EXTRA_EN", "en-us/en-extra.txt", false),
@@ -152,8 +153,18 @@ fn main() {
             files.sort();
             for f in files {
                 println!("cargo::rerun-if-changed={}", f.display());
+                // `include_str!` fails the whole build on a file that isn't UTF-8 (a Latin-1
+                // licence text) and can't name a path that isn't either: leave such a file out.
+                let Some(path) = f.to_str() else {
+                    println!("cargo::{level}=CRAFT_I18N_DIR: the path {} is not UTF-8; its licence text is not embedded", f.display());
+                    continue;
+                };
+                if let Err(e) = std::fs::read_to_string(&f) {
+                    println!("cargo::{level}=CRAFT_I18N_DIR: {path} can't be read as text ({e}); its licence text is not embedded");
+                    continue;
+                }
                 let title = format!("{locale}: {}", f.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default());
-                let _ = write!(licences, "({title:?}, include_str!({:?})), ", f.display().to_string());
+                let _ = write!(licences, "({title:?}, include_str!({path:?})), ");
             }
         }
     }

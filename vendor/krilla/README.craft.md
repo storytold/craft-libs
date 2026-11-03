@@ -427,6 +427,10 @@ as a multiple of 1/255: C75 becomes 0.7490196 and C4 M4 Y4 K4 becomes 0.03921568
 - Gradient stops that are rewritten into one DeviceCMYK, Separation or DeviceN space keep
   their components, and a DeviceN color's CMYK alternate (annotations, tags) is no longer
   rounded.
+- A gray stop rewritten into a CMYK space becomes the black ink `1 - gray`, subtracted from the
+  shortest decimal that writes the gray, so gray 0.96 is K 0.04. An 8-bit gray `n` is K
+  `(255 - n) / 255`, as `cmyk::Color::new` writes it.
 - Mesh gradients write their corner colors and opacities at 16 bits a component instead of 8.
 
-Tests: `crates/pdf/tests/print_color.rs` (`f32_colors_*`, `mesh_*`, `rgb_mesh_is_a_device_rgb_shading`).
+Tests: `crates/pdf/tests/print_color.rs` (`f32_colors_*`, `gray_stops_keep_their_exact_black_in_cmyk_shadings`,
+`mesh_*`, `rgb_mesh_is_a_device_rgb_shading`).

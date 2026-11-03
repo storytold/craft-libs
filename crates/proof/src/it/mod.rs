@@ -97,8 +97,14 @@ fn check(d: &AffixDict, word: &str, opts: &crate::Options) -> bool {
     }
     // The whole word first, as Hunspell does: a hyphenated entry or user word.
     if w.contains('-') {
-        return known(d, w) || w.split('-').all(|p| p.chars().count() <= 1 || known(d, p));
+        return known(d, w) || w.split('-').all(|p| p.chars().count() <= 1 || known_elided(d, p));
     }
+    known_elided(d, w)
+}
+
+/// [`known`] for a word that may start with an elided proclitic (`l'amico`, `l'ex`): the word after
+/// the apostrophe is what gets checked.
+fn known_elided(d: &AffixDict, w: &str) -> bool {
     if let Some((head, tail)) = w.split_once(['\'', '’'])
         && PROCLITICS.contains(&head.to_lowercase().as_str())
         && !tail.is_empty()
@@ -146,6 +152,16 @@ mod tests {
         let d = AffixDict::from_hunspell("SET UTF-8\n", "1\ntic-tac\n", &[]).unwrap();
         assert!(is_correct_with(&d, "tic-tac"));
         assert!(!is_correct_with(&d, "tic-tacc"));
+    }
+
+    /// craft-libs#496 review: an elision inside a hyphenated word (`l'ex-amico`) is read per part.
+    #[test]
+    fn an_elision_in_a_hyphenated_part_is_read() {
+        let d = AffixDict::from_hunspell("SET UTF-8\n", "2\nex\namico\n", &[]).unwrap();
+        for w in ["l'ex-amico", "dell’ex-amico", "ex-amico"] {
+            assert!(is_correct_with(&d, w), "{w}");
+        }
+        assert!(!is_correct_with(&d, "l'exx-amico"));
     }
 
     #[test]
