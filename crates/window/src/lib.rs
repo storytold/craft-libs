@@ -28,8 +28,10 @@
 //!
 //! When the app draws the frame, [`Frame::App`] carries the [`Layout`] of window buttons the
 //! desktop names (GNOME's `button-layout`), so the app's header bar puts minimize, maximize and
-//! close where that desktop puts them. This crate decides *whether* and *where*; drawing the
-//! buttons stays with each app (their title bars differ).
+//! close where that desktop puts them. This crate decides *whether* and *where*; with the `egui`
+//! feature, [`controls`] also draws the buttons and the resize edges, so they look and behave the
+//! same in every app. Where the buttons go in the header bar stays with each app (their title
+//! bars differ).
 //!
 //! # With egui
 //!
@@ -128,6 +130,8 @@
 //! }
 //! ```
 
+#[cfg(feature = "egui")]
+pub mod controls;
 mod list;
 mod menu;
 mod place;
@@ -319,13 +323,14 @@ impl Layout {
     }
 }
 
-/// GNOME's button layout where `gsettings` can read it, else the default. Returns the default on
-/// any platform without `gsettings` or when the value names no usable button.
+/// GNOME's button layout, else the default. It is read from the XDG Desktop Portal first, which
+/// answers inside a Flatpak sandbox too (where `gsettings` reads the sandbox's own settings, not
+/// the desktop's), then from `gsettings`. Returns the default on any platform without either, or
+/// when the value names no usable button.
 fn desktop_button_layout() -> Layout {
     #[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "openbsd", target_os = "netbsd"))]
-    if let Some(value) = platform::gsettings_button_layout() {
-        let layout = Layout::parse(&value);
-        if layout.is_usable() {
+    for read in [platform::portal_button_layout, platform::gsettings_button_layout] {
+        if let Some(layout) = read().map(|value| Layout::parse(&value)).filter(Layout::is_usable) {
             return layout;
         }
     }
@@ -374,14 +379,14 @@ mod platform {
     /// compositor that never answers would leave that one worker parked for the process's life;
     /// acceptable because this is a single, one-shot call, not a repeated one.)
     pub(super) fn wayland_leaves_frame_to_app() -> bool {
-        bounded(registry_leaves_frame_to_app).flatten().unwrap_or(false)
+        bounded(PROBE_TIMEOUT, registry_leaves_frame_to_app).flatten().unwrap_or(false)
     }
 
     /// Run `f` on a short-lived worker thread with a 500 ms deadline, so a stalled dependency can't
     /// block window startup. `None` when the thread can't be spawned or `f` doesn't finish in time;
     /// otherwise `f`'s return value. For a child process, prefer [`gsettings_button_layout`], which
     /// also kills and reaps the child on timeout; this helper only bounds the caller's wait.
-    fn bounded<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> Option<T> {
+    fn bounded<T: Send + 'static>(timeout: Duration, f: impl FnOnce() -> T + Send + 'static) -> Option<T> {
         let (send, receive) = mpsc::sync_channel(1);
         let spawned = std::thread::Builder::new().name("craft-window-probe".into()).spawn(move || {
             let _ = send.send(f());
@@ -389,7 +394,37 @@ mod platform {
         if spawned.is_err() {
             return None;
         }
-        receive.recv_timeout(Duration::from_millis(500)).ok()
+        receive.recv_timeout(timeout).ok()
+    }
+
+    /// How long the compositor probe and `gsettings` may take.
+    const PROBE_TIMEOUT: Duration = Duration::from_millis(500);
+
+    /// How long the portal may take. Longer than the probe: it may be starting on demand when an
+    /// app is opened right after login.
+    const PORTAL_TIMEOUT: Duration = Duration::from_secs(1);
+
+    /// GNOME's `button-layout`, read through the XDG Desktop Portal's Settings interface
+    /// (`org.freedesktop.portal.Settings.ReadOne`). `None` when there is no session bus or portal,
+    /// the portal doesn't know the key, or it doesn't answer within [`PORTAL_TIMEOUT`].
+    pub(super) fn portal_button_layout() -> Option<String> {
+        bounded(PORTAL_TIMEOUT, || {
+            let connection = zbus::blocking::connection::Builder::session().ok()?.method_timeout(PORTAL_TIMEOUT).build().ok()?;
+            let reply = connection
+                .call_method(
+                    Some("org.freedesktop.portal.Desktop"),
+                    "/org/freedesktop/portal/desktop",
+                    Some("org.freedesktop.portal.Settings"),
+                    "ReadOne",
+                    &("org.gnome.desktop.wm.preferences", "button-layout"),
+                )
+                .ok()?;
+            let (value,) = reply.body().deserialize::<(zbus::zvariant::OwnedValue,)>().ok()?;
+            let value = String::try_from(value).ok()?;
+            let value = value.trim();
+            if value.is_empty() { None } else { Some(value.to_string()) }
+        })
+        .flatten()
     }
 
     /// A fresh connection (never winit's inherited one): `None` when there is no Wayland
@@ -436,7 +471,7 @@ mod platform {
             let _ = child.wait();
             return None;
         }
-        let output = receive.recv_timeout(Duration::from_millis(500));
+        let output = receive.recv_timeout(PROBE_TIMEOUT);
         // Kill-and-reap whether it finished or timed out: a finished child still needs reaping, and
         // a timed-out one must not linger. `kill` on an exited child is a harmless error.
         let _ = child.kill();

@@ -105,10 +105,11 @@ pub fn empty_area(ui: &mut egui::Ui, rect: egui::Rect) -> egui::Response {
         ui.data_mut(|d| d.insert_temp(armed, press));
     }
     if press.is_some() && ui.input(|i| i.pointer.is_decidedly_dragging()) && ui.data(|d| d.get_temp::<Option<f64>>(armed)) == Some(press) {
-        // Once per press: AppKit's drag loop takes the mouse-up, so egui may still see the button
-        // down afterwards.
+        // Once per press: AppKit's drag loop and a Wayland compositor's move take the mouse-up, so
+        // egui may still see the button down afterwards. `desktop_grab` lets
+        // `controls::DesktopGrab` give it back.
         ui.data_mut(|d| d.remove::<Option<f64>>(armed));
-        ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
+        crate::controls::desktop_grab(ui.ctx(), egui::ViewportCommand::StartDrag);
     }
     resp
 }
