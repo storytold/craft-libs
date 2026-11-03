@@ -169,6 +169,7 @@ pub enum ContentEncoding {
     /// `ContentCompAlgo` 3: the given bytes were stripped from the start of every frame.
     HeaderStripping { bytes: Vec<u8>, scope: u64 },
     /// Other compression (0 zlib, 1 bzlib, 2 lzo1x): not supported for reading frame data.
+    /// `algo` is `u64::MAX` for a chain of more encodings than a reader checks.
     Compression { algo: u64, settings: Vec<u8>, scope: u64 },
     /// Encryption (not supported for reading frame data).
     Encryption { scope: u64 },

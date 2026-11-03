@@ -10,6 +10,11 @@ repository.workspace = true
 [lints]
 workspace = true
 
+[features]
+default = []
+# `pcraft_layer_rgba`: a PhotoCraft layer's pixels and its layer mask.
+pcraft-pixels = ["dep:blake3", "dep:ruzstd"]
+
 [dependencies]
 craft-ecproj-format = { workspace = true }
 craft-pcraft-format = { workspace = true }
@@ -20,6 +25,9 @@ serde = { workspace = true }
 # checks the nesting against `Limits::max_depth` before parsing.
 serde_json = { workspace = true, features = ["unbounded_depth"] }
 thiserror = { workspace = true }
+# `pcraft-pixels`: PhotoCraft's tiles are zstd frames named by the BLAKE3 hash of their samples.
+blake3 = { version = "1.8", default-features = false, features = ["pure"], optional = true }
+ruzstd = { version = "0.9", default-features = false, features = ["std"], optional = true }
 
 [dev-dependencies]
 proptest = { workspace = true }
