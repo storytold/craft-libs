@@ -53,7 +53,7 @@ fn signal(kind: &str, n: usize, bps: u8, seed: u64) -> Vec<i32> {
 
 fn encode(planar: &[Vec<i32>], cfg: EncoderConfig, chunk: usize) -> Result<Vec<u8>, Error> {
     let mut enc = Encoder::new(cfg)?;
-    let mut file = enc.header();
+    let mut file = enc.header(&[]);
     let n = planar.first().map_or(0, Vec::len);
     let mut at = 0;
     while at < n {
@@ -188,7 +188,7 @@ fn bad_input_is_an_error_not_a_panic() {
     assert_eq!(enc.encode(&[&[-32_769], &[0]]), Err(Error::SampleRange(-32_769)));
     // nothing encoded: no frames, and a header that still says "unknown"
     assert!(enc.finish().is_empty());
-    assert_eq!(&enc.header()[..4], b"fLaC");
+    assert_eq!(&enc.header(&[])[..4], b"fLaC");
 }
 
 /// 32-bit stereo at the extremes of i32: left minus right would need 33 bits, so the encoder must
@@ -207,4 +207,29 @@ fn full_scale_32_bit_stereo_round_trips() {
     }
     let mut enc = Encoder::new(EncoderConfig::new(48_000, 2, 32)).unwrap();
     assert!(enc.encode(&[&[i32::MIN, i32::MAX], &[0, -1]]).is_ok());
+}
+
+/// A layout FLAC's channel assignment does not name is recorded as a channel mask comment, which
+/// ffmpeg reads: the usual 7-channel layout (backs and a back centre) differs from FLAC's 6.1.
+#[test]
+fn layouts_other_than_flacs_are_recorded() {
+    use crate::{AudioBuffer, ChannelLayout, EncodeFormat, EncodeOptions};
+    let Some(ffprobe) = common::ffprobe() else { return };
+    let cases = [
+        ("layout-stereo", 2, None, "stereo"),
+        ("layout-7-default", 7, None, "6.1(back)"),
+        ("layout-6.1-side", 7, Some(ChannelLayout::SURROUND_6_1), "6.1"),
+        ("layout-5.1-side", 6, Some(ChannelLayout::SURROUND_5_1_SIDE), "5.1(side)"),
+    ];
+    for (name, channels, layout, expected) in cases {
+        let buf = AudioBuffer::new(48_000, channels, 100);
+        let mut opts = EncodeOptions::new(EncodeFormat::Flac);
+        opts.layout = layout;
+        let file = crate::encode(&buf, &opts).unwrap();
+        let path = common::fixture_subdir("flac").join(format!("{name}.flac"));
+        std::fs::write(&path, &file).unwrap();
+        let out =
+            Command::new(&ffprobe).args(["-v", "error", "-show_entries", "stream=channel_layout", "-of", "csv=p=0"]).arg(&path).output().unwrap();
+        assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), expected, "{name}");
+    }
 }

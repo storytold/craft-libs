@@ -27,7 +27,6 @@ use std::io::{Seek, Write};
 /// ```
 pub fn encode(buf: &AudioBuffer, opts: &EncodeOptions) -> Result<Vec<u8>> {
     // Checked for every format; only a WAV records it.
-    #[cfg_attr(not(feature = "pcm-encode"), allow(unused_variables))]
     let mask = opts.layout.map(|l| wav_mask(&l, buf.channels.len())).transpose()?;
     match opts.format {
         #[cfg(feature = "pcm-encode")]
@@ -35,7 +34,7 @@ pub fn encode(buf: &AudioBuffer, opts: &EncodeOptions) -> Result<Vec<u8>> {
         #[cfg(feature = "pcm-encode")]
         EncodeFormat::Aiff => aiff::encode(buf, opts.bit_depth, opts.dither),
         #[cfg(feature = "flac-encode")]
-        EncodeFormat::Flac => flac::encode(buf, opts.bit_depth, opts.dither),
+        EncodeFormat::Flac => flac::encode(buf, opts.bit_depth, opts.dither, mask),
         #[allow(unreachable_patterns)]
         f => Err(not_built(f)),
     }
@@ -152,7 +151,6 @@ impl<W: Write + Seek> FileEncoder<W> {
     /// `opts.layout`, when set, must have `channels` channels.
     pub fn new(out: W, opts: &EncodeOptions, sample_rate: u32, channels: u16) -> Result<Self> {
         let (depth, dither, channels) = (opts.bit_depth, opts.dither, usize::from(channels));
-        #[cfg_attr(not(feature = "pcm-encode"), allow(unused_variables))]
         let mask = opts.layout.map(|l| wav_mask(&l, channels)).transpose()?;
         let writer = match opts.format {
             #[cfg(feature = "pcm-encode")]
@@ -167,7 +165,7 @@ impl<W: Write + Seek> FileEncoder<W> {
             #[cfg(feature = "pcm-encode")]
             EncodeFormat::Aiff => Writer::Aiff(aiff::Writer::new(out, channels, sample_rate, depth, dither)?),
             #[cfg(feature = "flac-encode")]
-            EncodeFormat::Flac => Writer::Flac(flac::Writer::new(out, channels, sample_rate, depth, dither)?),
+            EncodeFormat::Flac => Writer::Flac(flac::Writer::new(out, channels, sample_rate, depth, dither, mask)?),
             #[allow(unreachable_patterns)]
             f => return Err(not_built(f)),
         };

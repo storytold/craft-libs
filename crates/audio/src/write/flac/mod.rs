@@ -13,7 +13,7 @@ use craft_media_testkit as common;
 mod oracle_tests;
 
 use super::pcm::{Quantizer, validate_buffer, validate_layout};
-use crate::{AudioBuffer, AudioError, BitDepth, Result};
+use crate::{AudioBuffer, AudioError, BitDepth, ChannelLayout, Result};
 use encoder::{Encoder, EncoderConfig, STREAMINFO_OFFSET};
 use std::io::{Cursor, Seek, SeekFrom, Write};
 
@@ -39,6 +39,20 @@ fn check(channels: usize, sample_rate: u32, depth: BitDepth) -> Result<u8> {
 /// Frames quantized and handed to the encoder at a time: its block size.
 const CHUNK: usize = 4096;
 
+/// FLAC's channel assignment for 1–8 channels (RFC 9639 §9.1.3) as a WAV mask: the usual layout
+/// for the count, except that 7 channels are 6.1 with side surrounds (FL FR FC LFE BC SL SR).
+fn flac_mask(channels: usize) -> u32 {
+    let layout = if channels == 7 { ChannelLayout::SURROUND_6_1 } else { ChannelLayout::default_for(channels as u16) };
+    layout.mask().unwrap_or(0)
+}
+
+/// The `WAVEFORMATEXTENSIBLE_CHANNEL_MASK` comment (RFC 9639 §8.6.2) for a layout FLAC's channel
+/// assignment does not already say: `mask` (the usual layout for the count when `None`).
+fn mask_comment(channels: usize, mask: Option<u32>) -> Option<String> {
+    let mask = mask.unwrap_or_else(|| ChannelLayout::default_for(channels as u16).mask().unwrap_or(0));
+    (mask != flac_mask(channels)).then(|| format!("WAVEFORMATEXTENSIBLE_CHANNEL_MASK=0x{mask:04X}"))
+}
+
 fn encoder_error(e: encoder::Error) -> AudioError {
     AudioError::Encode(format!("FLAC: {e}"))
 }
@@ -58,12 +72,16 @@ pub(crate) struct Writer<W> {
 }
 
 impl<W: Write + Seek> Writer<W> {
-    pub(crate) fn new(mut out: W, channels: usize, sample_rate: u32, depth: BitDepth, dither: bool) -> Result<Self> {
+    /// `mask` is the speaker layout as a WAV channel mask (the usual layout for the count when
+    /// `None`), recorded as a comment when FLAC's channel assignment says otherwise.
+    pub(crate) fn new(mut out: W, channels: usize, sample_rate: u32, depth: BitDepth, dither: bool, mask: Option<u32>) -> Result<Self> {
         let bps = check(channels, sample_rate, depth)?;
         // `check` bounds channels to 1..=8.
         let encoder = Encoder::new(EncoderConfig::new(sample_rate, channels as u8, bps)).map_err(encoder_error)?;
         let start = out.stream_position()?;
-        out.write_all(&encoder.header())?;
+        let comment = mask_comment(channels, mask);
+        let comments: Vec<&str> = comment.iter().map(String::as_str).collect();
+        out.write_all(&encoder.header(&comments))?;
         Ok(Writer {
             out,
             start,
@@ -125,14 +143,14 @@ impl<W: Write + Seek> Writer<W> {
     }
 }
 
-pub(crate) fn encode(buf: &AudioBuffer, depth: BitDepth, dither: bool) -> Result<Vec<u8>> {
+pub(crate) fn encode(buf: &AudioBuffer, depth: BitDepth, dither: bool, mask: Option<u32>) -> Result<Vec<u8>> {
     validate_buffer(buf)?;
     let bps = check(buf.channels.len(), buf.sample_rate, depth)?;
     let frames = buf.frames();
     let mut out = Vec::new();
     out.try_reserve(frames.saturating_mul(buf.channels.len()).saturating_mul(usize::from(bps) / 8) / 2)
         .map_err(|_| AudioError::TooLarge("cannot allocate FLAC output".into()))?;
-    let mut w = Writer::new(Cursor::new(out), buf.channels.len(), buf.sample_rate, depth, dither)?;
+    let mut w = Writer::new(Cursor::new(out), buf.channels.len(), buf.sample_rate, depth, dither, mask)?;
     w.write(&buf.channels, frames)?;
     Ok(w.finish()?.into_inner())
 }

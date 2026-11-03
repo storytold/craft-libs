@@ -88,19 +88,23 @@ impl Encoder {
     }
 
     /// `fLaC`, the STREAMINFO block (sizes and MD5 unknown yet: see [`Encoder::streaminfo`]) and a
-    /// VORBIS_COMMENT block with the vendor string.
-    pub fn header(&self) -> Vec<u8> {
+    /// VORBIS_COMMENT block with the vendor string and `comments` (`NAME=value`, each short).
+    pub fn header(&self, comments: &[&str]) -> Vec<u8> {
         let mut v = b"fLaC".to_vec();
         v.extend_from_slice(&[0, 0, 0, 34]);
         v.extend_from_slice(&self.streaminfo_with(0, 0, 0, [0; 16]));
         let vendor = concat!("craft-audio ", env!("CARGO_PKG_VERSION"));
-        let len = 4 + vendor.len() + 4;
+        let len = 4 + vendor.len() + 4 + comments.iter().map(|c| 4 + c.len()).sum::<usize>();
         // last metadata block, type 4 (VORBIS_COMMENT), little-endian lengths inside
         v.push(0x84);
         v.extend_from_slice(&(len as u32).to_be_bytes()[1..]);
         v.extend_from_slice(&(vendor.len() as u32).to_le_bytes());
         v.extend_from_slice(vendor.as_bytes());
-        v.extend_from_slice(&0u32.to_le_bytes());
+        v.extend_from_slice(&(comments.len() as u32).to_le_bytes());
+        for c in comments {
+            v.extend_from_slice(&(c.len() as u32).to_le_bytes());
+            v.extend_from_slice(c.as_bytes());
+        }
         v
     }
 
