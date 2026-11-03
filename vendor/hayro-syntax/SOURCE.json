@@ -338,7 +338,7 @@
       "path": "src/xref.rs",
       "source_sha256": "51ffeeb7d4ac035bae2cd5ba9288c180088ae06cdcefe2b29dfeda560a793aa0",
       "source_git_blob": "20e33a410489d42e438a3f2b87d70c7bb8d66eae",
-      "sha256": "98fb56eb5c2da8b0c40202ed30b2f464874c1143436e72eda4e49f2333dd7c7f"
+      "sha256": "95261b80fd7bdc946de625325c6c6fc9fd7c0c5b3273ad62b8666dff215e5bd9"
     },
     {
       "path": "src/decode_limits_tests.rs",
