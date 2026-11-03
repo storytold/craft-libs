@@ -43,6 +43,11 @@ let outline = craft_doc::outline(&bytes, &limits)?;
   reads.
 - `renditions(bytes, &Limits) -> Result<Vec<Rendition>, Error>`: each `Rendition` has a `kind`
   (`Pdf`, `Thumbnail`, `Composite`), a `mime` and the `bytes`.
+- `rendition(bytes, RenditionKind, &Limits) -> Result<Option<Rendition>, Error>`: the requested
+  kind only, or `None` when absent. Container metadata and JSON limits are still checked. Other
+  rendition payloads are not decoded or copied: a damaged preview does not prevent reading the
+  PDF, and a missing thumbnail ZIP entry does not prevent reading the composite. A compressed
+  member's offset still counts against `max_total`, including bytes traversed to reach it.
 - `outline(bytes, &Limits) -> Result<Outline, Error>`: `canvas`, `pages` and `layers`.
 - `Error` is `Unrecognized`, `Malformed`, `TooNew`, `Unsupported` or `LimitExceeded`. A file
   whose version is newer than the crate reads gives `TooNew` from `renditions` and `outline`. A

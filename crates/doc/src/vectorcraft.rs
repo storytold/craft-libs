@@ -345,8 +345,9 @@ impl<'de, T: Container> de::DeserializeSeed<'de> for Contained<T> {
 /// members are read as [`craft_vectorcraft_format::File::read`] reads them: a missing or repeated
 /// `format` or `version` is refused, and a `generator`, `preview` or `pdf` of the wrong shape
 /// reads as `None` and a repeated one as its last value. When `IMAGES` is true, a missing or
-/// repeated `document` is refused too; its value is skipped.
-struct Stamp<const IMAGES: bool> {
+/// repeated `document` is refused too; its value is skipped. `PREVIEW` and `PDF` choose which
+/// image values to read; unrequested values are skipped without copying their strings.
+struct Stamp<const IMAGES: bool, const PREVIEW: bool, const PDF: bool> {
     format: String,
     version: u32,
     generator: Option<String>,
@@ -363,17 +364,17 @@ fn once<'de, A: MapAccess<'de>, T: Deserialize<'de>>(map: &mut A, slot: &mut Opt
     Ok(())
 }
 
-impl<'de, const IMAGES: bool> Deserialize<'de> for Stamp<IMAGES> {
+impl<'de, const IMAGES: bool, const PREVIEW: bool, const PDF: bool> Deserialize<'de> for Stamp<IMAGES, PREVIEW, PDF> {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        struct StampVisitor<const IMAGES: bool>;
-        impl<'de, const IMAGES: bool> Visitor<'de> for StampVisitor<IMAGES> {
-            type Value = Stamp<IMAGES>;
+        struct StampVisitor<const IMAGES: bool, const PREVIEW: bool, const PDF: bool>;
+        impl<'de, const IMAGES: bool, const PREVIEW: bool, const PDF: bool> Visitor<'de> for StampVisitor<IMAGES, PREVIEW, PDF> {
+            type Value = Stamp<IMAGES, PREVIEW, PDF>;
 
             fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
                 f.write_str("a VectorCraft file's JSON object")
             }
 
-            fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Stamp<IMAGES>, A::Error> {
+            fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Stamp<IMAGES, PREVIEW, PDF>, A::Error> {
                 let (mut format, mut version, mut generator, mut preview, mut pdf) = (None, None, None, None, None);
                 let mut document: Option<IgnoredAny> = None;
                 while let Some(key) = map.next_key::<String>()? {
@@ -382,8 +383,8 @@ impl<'de, const IMAGES: bool> Deserialize<'de> for Stamp<IMAGES> {
                         "version" => once(&mut map, &mut version, "version")?,
                         "document" if IMAGES => once(&mut map, &mut document, "document")?,
                         "generator" => generator = map.next_value::<Lenient<String>>()?.0,
-                        "preview" if IMAGES => preview = map.next_value::<Lenient<Image>>()?.0,
-                        "pdf" if IMAGES => pdf = map.next_value::<Lenient<Image>>()?.0,
+                        "preview" if IMAGES && PREVIEW => preview = map.next_value::<Lenient<Image>>()?.0,
+                        "pdf" if IMAGES && PDF => pdf = map.next_value::<Lenient<Image>>()?.0,
                         _ => {
                             map.next_value::<IgnoredAny>()?;
                         }
@@ -401,14 +402,18 @@ impl<'de, const IMAGES: bool> Deserialize<'de> for Stamp<IMAGES> {
                 })
             }
         }
-        d.deserialize_map(StampVisitor::<IMAGES>)
+        d.deserialize_map(StampVisitor::<IMAGES, PREVIEW, PDF>)
     }
 }
 
 /// The file's [`Stamp`], refused when the format is not VectorCraft's, and when the version is
 /// newer than this crate reads unless `newer` is true.
-fn stamp<const IMAGES: bool>(json: &[u8], budget: &Budget, newer: bool) -> Result<Stamp<IMAGES>, Error> {
-    let s: Stamp<IMAGES> = if newer { parse(json, budget.limits)? } else { parse_versioned(json, budget.limits, Kind::VectorCraft)? };
+fn stamp<const IMAGES: bool, const PREVIEW: bool, const PDF: bool>(
+    json: &[u8],
+    budget: &Budget,
+    newer: bool,
+) -> Result<Stamp<IMAGES, PREVIEW, PDF>, Error> {
+    let s: Stamp<IMAGES, PREVIEW, PDF> = if newer { parse(json, budget.limits)? } else { parse_versioned(json, budget.limits, Kind::VectorCraft)? };
     match craft_vectorcraft_format::check(&s.format, s.version) {
         Ok(()) => Ok(s),
         Err(craft_vectorcraft_format::Error::Format(format)) => Err(malformed(format!("format is `{format}`"))),
@@ -420,16 +425,28 @@ fn stamp<const IMAGES: bool>(json: &[u8], budget: &Budget, newer: bool) -> Resul
 
 pub(crate) fn info(bytes: &[u8], budget: &mut Budget) -> Result<(u32, Option<String>), Error> {
     let json = unpack(bytes, budget)?.json;
-    let s = stamp::<false>(&json, budget, true)?;
+    let s = stamp::<false, false, false>(&json, budget, true)?;
     Ok((s.version, s.generator))
 }
 
-pub(crate) fn renditions(bytes: &[u8], budget: &mut Budget) -> Result<Vec<Rendition>, Error> {
+/// Skip unrequested image fields during deserialization, including their inline base64 strings.
+fn images<const PREVIEW: bool, const PDF: bool>(json: &[u8], budget: &Budget) -> Result<(Option<Image>, Option<Image>), Error> {
+    let head = stamp::<true, PREVIEW, PDF>(json, budget, false)?;
+    Ok((head.preview, head.pdf))
+}
+
+pub(crate) fn renditions(bytes: &[u8], wanted: Option<RenditionKind>, budget: &mut Budget) -> Result<Vec<Rendition>, Error> {
     let Unpacked { json, tail } = unpack(bytes, budget)?;
-    let head = stamp::<true>(&json, budget, false)?;
+    let (preview, pdf) = match wanted {
+        None => images::<true, true>(&json, budget),
+        Some(RenditionKind::Thumbnail) => images::<true, false>(&json, budget),
+        Some(RenditionKind::Pdf) => images::<false, true>(&json, budget),
+        Some(RenditionKind::Composite) => images::<false, false>(&json, budget),
+    }?;
     // A member without a MIME type gives no rendition: a preview may be PNG or JPEG.
-    let members: Vec<_> = [(RenditionKind::Thumbnail, head.preview, "preview"), (RenditionKind::Pdf, head.pdf, "PDF")]
+    let members: Vec<_> = [(RenditionKind::Thumbnail, preview, "preview"), (RenditionKind::Pdf, pdf, "PDF")]
         .into_iter()
+        .filter(|(kind, _, _)| wanted.is_none_or(|wanted| wanted == *kind))
         .filter_map(|(kind, m, what)| Some((kind, m.filter(|m| !m.mime.is_empty())?, what)))
         .collect();
     // Every size is checked before any data after the JSON is decompressed. A member after the
@@ -516,7 +533,7 @@ struct KindM {
 
 pub(crate) fn outline(bytes: &[u8], budget: &mut Budget) -> Result<Outline, Error> {
     let json = unpack(bytes, budget)?.json;
-    stamp::<false>(&json, budget, false)?;
+    stamp::<false, false, false>(&json, budget, false)?;
     let f: WithDocument = parse(&json, budget.limits)?;
     let pages = f
         .document
@@ -553,6 +570,21 @@ mod tests {
     use super::*;
     use crate::tests::{unread_array, unread_object};
     use serde::de::value::{Error as ValueError, MapDeserializer, SeqDeserializer, StrDeserializer};
+
+    /// An ignored field must use IgnoredAny, which can skip this sentinel without asking it
+    /// to deserialize an image or materialize any strings.
+    #[test]
+    fn unrequested_images_are_skipped_before_their_strings_are_read() {
+        fn skipped<const PREVIEW: bool, const PDF: bool>(field: &str) {
+            let map = MapDeserializer::<_, ValueError>::new([(field, crate::tests::Unread), ("document", crate::tests::Unread)].into_iter());
+            let err = Stamp::<true, PREVIEW, PDF>::deserialize(map).err().unwrap();
+            assert!(err.to_string().contains("missing field `format`"), "{err}");
+        }
+        skipped::<false, true>("preview");
+        skipped::<true, false>("pdf");
+        skipped::<false, false>("preview");
+        skipped::<false, false>("pdf");
+    }
 
     #[test]
     fn an_image_of_the_wrong_shape_is_skipped_without_reading_it_whole() {
@@ -612,7 +644,7 @@ mod tests {
         for shape in shapes {
             let json = format!(r#"{{"format":"vectorcraft","version":4,"generator":{shape},"preview":{shape},"pdf":{shape},"document":0}}"#);
             let file = craft_vectorcraft_format::File::<IgnoredAny>::read(json.as_bytes()).unwrap();
-            let stamp: Stamp<true> = crate::parse(json.as_bytes(), &crate::Limits::default()).unwrap();
+            let stamp: Stamp<true, true, true> = crate::parse(json.as_bytes(), &crate::Limits::default()).unwrap();
             assert_eq!((&stamp.generator, &stamp.preview, &stamp.pdf), (&file.generator, &file.preview, &file.pdf), "{shape}");
         }
     }
