@@ -8,6 +8,7 @@
 //! - [`outline`] returns the canvas, the pages (artboards or compositions) and the layers.
 //! - `pcraft_layer_rgba`, with the feature `pcraft-pixels`, decodes a PhotoCraft layer's pixels
 //!   and its layer mask.
+//! - `pcraft_icc_profile`, with the same feature, returns a document's raw declared ICC payload.
 //!
 //! Bytes go in and plain data comes out: no file system access, no rendering and no app crate.
 //! Each format's envelope is read through its craft-libs crate: `craft-pcraft-format`,
@@ -34,7 +35,7 @@ mod vectorcraft;
 mod zip;
 
 #[cfg(feature = "pcraft-pixels")]
-pub use pcraft_pixels::{LayerMask, LayerPixels, Samples, pcraft_layer_rgba};
+pub use pcraft_pixels::{LayerMask, LayerPixels, Samples, pcraft_icc_profile, pcraft_layer_rgba};
 
 use std::cell::Cell;
 use std::collections::BTreeMap;
@@ -146,6 +147,8 @@ pub struct Limits {
     /// Most list elements one call reads, together: EffectCraft project items and composition
     /// layers, VectorCraft artboards and layers, and PhotoCraft layers at every level. Each is
     /// counted before it is read. Default 1,048,576.
+    /// `pcraft_icc_profile` instead caps structural JSON items throughout the manifest,
+    /// including skipped fields, before reading its profile reference.
     pub max_items: u64,
 }
 
