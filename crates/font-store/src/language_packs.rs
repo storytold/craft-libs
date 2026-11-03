@@ -463,6 +463,8 @@ impl FontStore {
                 .filter(|name| Stage::valid_name(name))
                 .ok_or_else(|| io("recording a Language pack removal")(std::io::Error::other("invalid backup name")))?
                 .to_string();
+            #[cfg(test)]
+            tests::fail_io(tests::IoFailure::Rename).map_err(io(format!("removing the {locale} pack")))?;
             std::fs::rename(&dest, &backup).map_err(io(format!("removing the {locale} pack")))?;
             installed.committed_removals.push(id);
         }
@@ -495,13 +497,34 @@ impl FontStore {
             return;
         }
         let Ok(parent) = self.pack_removal_dir() else { return };
-        for id in installed.committed_removals {
-            if let Err(error) = std::fs::remove_dir_all(parent.join(&id))
+        let ids = &installed.committed_removals;
+        if ids.is_empty() {
+            return;
+        }
+        // All scheduler state is read and updated under the store lock. Complete finite
+        // rounds so appended receipts cannot keep old failures waiting behind a growing tail.
+        const ATTEMPTS: usize = 4;
+        let mut end = self.pack_removal_round_end.load(std::sync::atomic::Ordering::Relaxed).min(ids.len());
+        let mut next = self.pack_removal_cursor.load(std::sync::atomic::Ordering::Relaxed);
+        if next >= end {
+            next = 0;
+            end = ids.len();
+        }
+        for _ in 0..ATTEMPTS.min(ids.len()) {
+            if next == end {
+                next = 0;
+                end = ids.len();
+            }
+            let id = &ids[next];
+            next += 1;
+            if let Err(error) = remove_committed_backup(&parent.join(id))
                 && error.kind() != std::io::ErrorKind::NotFound
             {
                 log::warn!("cannot clean up committed Language pack removal {id}: {error}");
             }
         }
+        self.pack_removal_cursor.store(next, std::sync::atomic::Ordering::Relaxed);
+        self.pack_removal_round_end.store(end, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// The record of installed packs. One that can't be read is copied aside as
@@ -563,6 +586,8 @@ impl FontStore {
     }
 
     fn write_installed(&self, installed: &Installed) -> Result<(), Error> {
+        #[cfg(test)]
+        tests::fail_io(tests::IoFailure::RecordWrite).map_err(io("saving the Language pack list"))?;
         let parent = self.language_packs_dir().join(".removing");
         // Keep receipts until their backup has actually disappeared. A future locked sweep
         // retries failed cleanup, and stage creation excludes IDs whose receipts remain.
@@ -579,6 +604,12 @@ impl FontStore {
             .map_err(|e| io("saving the Language pack list")(std::io::Error::other(e)))?;
         self.write_file(INSTALLED, &bytes)
     }
+}
+
+fn remove_committed_backup(path: &Path) -> std::io::Result<()> {
+    #[cfg(test)]
+    tests::before_cleanup(path)?;
+    std::fs::remove_dir_all(path)
 }
 
 fn finish_pack_removal(stage: Stage, backup: &Path, dest: &Path, moved: bool, saved: Result<(), Error>) -> Result<(), Error> {

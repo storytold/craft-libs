@@ -1,3 +1,4 @@
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -9,6 +10,49 @@ use super::*;
 use crate::store::Caller;
 
 const RELEASE: &str = "https://github.com/storytold/craft-i18n/releases/download/language-packs-1/";
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum IoFailure {
+    Rename,
+    RecordWrite,
+    Cleanup,
+}
+
+thread_local! {
+    static IO_FAILURE: Cell<Option<IoFailure>> = const { Cell::new(None) };
+    static CLEANUP_ATTEMPTS: RefCell<Vec<PathBuf>> = const { RefCell::new(Vec::new()) };
+}
+
+struct InjectFailure(Option<IoFailure>);
+
+impl InjectFailure {
+    fn new(failure: IoFailure) -> Self {
+        Self(IO_FAILURE.replace(Some(failure)))
+    }
+}
+
+impl Drop for InjectFailure {
+    fn drop(&mut self) {
+        IO_FAILURE.set(self.0);
+    }
+}
+
+pub(super) fn fail_io(failure: IoFailure) -> std::io::Result<()> {
+    if IO_FAILURE.get() == Some(failure) {
+        Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, format!("injected {failure:?} failure")))
+    } else {
+        Ok(())
+    }
+}
+
+pub(super) fn before_cleanup(path: &Path) -> std::io::Result<()> {
+    CLEANUP_ATTEMPTS.with_borrow_mut(|attempts| attempts.push(path.to_path_buf()));
+    fail_io(IoFailure::Cleanup)
+}
+
+fn take_cleanup_attempts() -> Vec<PathBuf> {
+    CLEANUP_ATTEMPTS.with_borrow_mut(std::mem::take)
+}
 
 /// A local HTTP server answering 200 with the body set for a path, else 404.
 struct Server {
@@ -207,6 +251,27 @@ fn a_failed_pack_removal_preserves_the_files_and_installed_record() {
 }
 
 #[test]
+fn removal_io_failures_preserve_the_pack_on_every_platform() {
+    for failure in [IoFailure::Rename, IoFailure::RecordWrite] {
+        let (store, _server, pin, _) = setup(&format!("remove-injected-{failure:?}"));
+        let index = store.fetch_pack_index_from(&IndexSource::Pinned(pin), &Cancel::new()).unwrap();
+        let got = store.install_pack_from(false, &index, index.pack("nl").unwrap(), &Cancel::new(), &mut |_| {}).unwrap();
+        let dictionary = store.language_packs_dir().join("nl/spelling.dic");
+        let before_dictionary = std::fs::read(&dictionary).unwrap();
+        let before_record = std::fs::read(store.dir().join(INSTALLED)).unwrap();
+        let injected = InjectFailure::new(failure);
+        let result = store.remove_language_pack("nl");
+        drop(injected);
+        assert!(matches!(result, Err(Error::Io { .. })), "{failure:?}: {result:?}");
+        assert_eq!(std::fs::read(&dictionary).unwrap(), before_dictionary, "{failure:?}");
+        assert_eq!(std::fs::read(store.dir().join(INSTALLED)).unwrap(), before_record, "{failure:?}");
+        assert_eq!(store.installed_language_packs(), vec![got]);
+        assert!(std::fs::read_dir(store.language_packs_dir().join(".removing")).unwrap().next().is_none());
+        std::fs::remove_dir_all(store.dir()).unwrap();
+    }
+}
+
+#[test]
 fn a_failed_removal_rollback_keeps_a_recoverable_pack_outside_download_cleanup() {
     let (store, _server, pin, _) = setup("remove-rollback-failure");
     let index = store.fetch_pack_index_from(&IndexSource::Pinned(pin), &Cancel::new()).unwrap();
@@ -258,7 +323,18 @@ fn committed_removal_cleanup_survives_interruption_and_does_not_reuse_a_recorded
     installed.committed_removals.push(id.clone());
     store.write_installed(&installed).unwrap();
     stage.keep_for_recovery(); // Simulate exiting after the atomic record commit, before Drop.
-    assert!(backup.join("spelling.dic").is_file());
+    let before_dictionary = std::fs::read(backup.join("spelling.dic")).unwrap();
+    let before_record = std::fs::read(store.dir().join(INSTALLED)).unwrap();
+    {
+        let _injected = InjectFailure::new(IoFailure::Cleanup);
+        let _lock = store.lock().unwrap();
+        assert_eq!(std::fs::read(backup.join("spelling.dic")).unwrap(), before_dictionary);
+        assert_eq!(std::fs::read(store.dir().join(INSTALLED)).unwrap(), before_record);
+        assert_eq!(store.read_record().unwrap().committed_removals.as_slice(), std::slice::from_ref(&id));
+        store.write_installed(&installed).unwrap();
+        assert_eq!(store.read_record().unwrap().committed_removals.as_slice(), std::slice::from_ref(&id));
+        assert_eq!(std::fs::read(store.dir().join(INSTALLED)).unwrap(), before_record);
+    }
     let _lock = store.lock().unwrap();
     assert!(!backup.exists(), "a committed leftover is cleaned at the next locked store operation");
     let installed = store.read_installed().unwrap();
@@ -273,6 +349,81 @@ fn committed_removal_cleanup_survives_interruption_and_does_not_reuse_a_recorded
     assert!(store.read_record().unwrap().committed_removals.is_empty());
     assert!(store.installed_language_packs().is_empty());
     drop(_lock);
+    std::fs::remove_dir_all(store.dir()).unwrap();
+}
+
+#[test]
+fn committed_cleanup_attempts_are_bounded_and_rotate_past_failures() {
+    let (store, _server, _, _) = setup("remove-bounded-cleanup");
+    let parent = store.language_packs_dir().join(".removing");
+    let ids: Vec<_> = (0..9).map(|n| format!("0-{n}")).collect();
+    for id in &ids {
+        std::fs::create_dir_all(parent.join(id)).unwrap();
+        std::fs::write(parent.join(id).join("keep"), id).unwrap();
+    }
+    let mut installed = Installed { committed_removals: ids.clone(), ..Installed::default() };
+    store.write_installed(&installed).unwrap();
+    let before = std::fs::read(store.dir().join(INSTALLED)).unwrap();
+    take_cleanup_attempts();
+    {
+        let _injected = InjectFailure::new(IoFailure::Cleanup);
+        for expected in [&ids[..4], &ids[4..8], &ids[8..9]] {
+            drop(store.lock().unwrap());
+            let attempts = take_cleanup_attempts();
+            assert_eq!(attempts.len(), 4, "cleanup work is bounded even when every deletion fails");
+            for id in expected {
+                assert!(attempts.contains(&parent.join(id)), "receipt {id} gets a turn despite failed earlier receipts");
+            }
+        }
+        let reopened = FontStore::new(store.dir().to_path_buf(), Caller::User);
+        drop(reopened.lock().unwrap());
+        assert_eq!(std::fs::read(store.dir().join(INSTALLED)).unwrap(), before, "recreating the store never loses receipts");
+        for id in &ids {
+            assert_eq!(std::fs::read(parent.join(id).join("keep")).unwrap(), id.as_bytes());
+        }
+        // Adding one failed receipt per lock must not strand the oldest entries at a moving
+        // tail. An ever-increasing counter modulo the growing length eventually does that.
+        take_cleanup_attempts();
+        for arrivals in [1, 4] {
+            let store = FontStore::new(store.dir().to_path_buf(), Caller::User);
+            let mut revisited_oldest = false;
+            for n in 0..64 {
+                for offset in 0..arrivals {
+                    let id = format!("{arrivals}-{}", n * arrivals + offset);
+                    std::fs::create_dir(parent.join(&id)).unwrap();
+                    std::fs::write(parent.join(&id).join("keep"), &id).unwrap();
+                    installed.committed_removals.push(id);
+                }
+                store.write_installed(&installed).unwrap();
+                drop(store.lock().unwrap());
+                let attempts = take_cleanup_attempts();
+                assert_eq!(attempts.len(), 4);
+                if n >= 40 && attempts.contains(&parent.join(&ids[0])) {
+                    revisited_oldest = true;
+                }
+            }
+            assert!(revisited_oldest, "old receipts keep getting turns with {arrivals} new failures per lock");
+        }
+        // A later record write can prune many already-deleted backups between rounds.
+        for id in &installed.committed_removals[..installed.committed_removals.len() - 2] {
+            std::fs::remove_dir_all(parent.join(id)).unwrap();
+        }
+        store.write_installed(&installed).unwrap();
+        installed = store.read_record().unwrap();
+        assert_eq!(installed.committed_removals.len(), 2);
+        drop(store.lock().unwrap());
+        let attempts = take_cleanup_attempts();
+        assert_eq!(attempts.len(), 2);
+        for id in &installed.committed_removals {
+            assert!(attempts.contains(&parent.join(id)), "shrinking the list does not skip retained receipts");
+        }
+    }
+    for _ in 0..installed.committed_removals.len() {
+        drop(store.lock().unwrap());
+    }
+    assert!(std::fs::read_dir(parent).unwrap().next().is_none());
+    store.write_installed(&installed).unwrap();
+    assert!(store.read_record().unwrap().committed_removals.is_empty());
     std::fs::remove_dir_all(store.dir()).unwrap();
 }
 

@@ -141,10 +141,15 @@ let installed = store.installed_language_packs();
 Removal restores the original folder if the installed-record update fails. If restoration also
 fails, the error names a preserved backup under `language-packs/.removing/`. That recovery
 folder is outside the ordinary download staging sweep; cleanup does not delete the backup.
-Committed removals record their backup IDs in the same atomic record update. The next locked
-store operation retries cleanup of those backups; failed rollback backups have no receipt and
-remain available for recovery. Receipts stay until cleanup succeeds and cannot be reused for a
-new removal while they remain recorded.
+Committed removals record their backup IDs in the same atomic record update. Each locked store
+operation attempts cleanup of at most four recorded backups, completing finite rounds through
+the receipts within a live store so failed entries are revisited even as new receipts arrive.
+This bounds the number of
+deletion attempts, not the work to delete one backup. Recreating the store resets the cursor;
+backups and receipts remain available for later retries, and the next lock need not finish all
+pending cleanup. Failed rollback backups have no receipt and remain available for recovery.
+Receipts stay until cleanup succeeds and a later record write prunes them; their IDs cannot be
+reused for a new removal while they remain recorded.
 
 **Unpacking is hostile-input safe:** pure-Rust zstd (`ruzstd`, MIT; every frame is read, and nothing but tar padding may follow the archive) and `tar` (MIT OR Apache-2.0); regular files and the `LICENCES` folder only (no links or devices). Only the contract's names are allowed: `pack.toml`, `spelling.aff`, `spelling.dic`, `hyphenation.pat` at the root and `LICENCES/<name>` (`[A-Za-z0-9._-]`, no leading or trailing dot, no Windows device names such as `CON` or `nul.txt`). Each file at most 64 MiB, 256 MiB and 256 entries per pack. `pack.toml` is required and must name the entry's locale; the files the index promises (`spelling`, `hyphenation`) must be there. Index entries need a lowercase BCP 47 locale (listed once, not a Windows device name), a sha256 and an `https://` URL; names, licences, versions, classes and the release lose control and bidi/format characters before they are stored or listed; an optional `source` must be an `https://` URL. At most 4096 zstd frames per archive. An unreadable `language-packs.json` is copied to `language-packs.json.bad` and rebuilt from the pack folders (each `pack.toml`) atomically in place, as is a missing one when pack folders are there, so no installed pack drops out of the list. Only an install or removal (under the store lock) rewrites it; listing reads the folders meanwhile and writes nothing.
 

@@ -17,7 +17,7 @@ use std::fs::File;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::{Duration, SystemTime};
 
 use craft_font_catalog::{Catalog, FontEnv, font_store_dir};
@@ -218,6 +218,8 @@ pub struct FontStore {
     caller: Caller,
     client: Client,
     catalog: Option<Arc<Catalog>>,
+    pub(crate) pack_removal_cursor: AtomicUsize,
+    pub(crate) pack_removal_round_end: AtomicUsize,
 }
 
 impl std::fmt::Debug for FontStore {
@@ -240,7 +242,14 @@ impl FontStore {
 
     /// A store in `dir`.
     pub fn new(dir: PathBuf, caller: Caller) -> Self {
-        Self { dir, caller, client: Client::default(), catalog: None }
+        Self {
+            dir,
+            caller,
+            client: Client::default(),
+            catalog: None,
+            pack_removal_cursor: AtomicUsize::new(0),
+            pack_removal_round_end: AtomicUsize::new(0),
+        }
     }
 
     /// Uses `client` for downloads (other timeouts).
