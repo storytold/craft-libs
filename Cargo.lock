@@ -2782,6 +2782,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "wayland-client",
+ "zbus",
 ]
 
 [[package]]
