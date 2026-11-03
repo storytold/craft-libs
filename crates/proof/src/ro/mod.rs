@@ -22,14 +22,16 @@ pub(crate) mod test_dict;
 
 use std::sync::Arc;
 
-use crate::slot::DictSlot;
-
 use crate::affix::AffixDict;
+use crate::slot::DictSlot;
 
 pub use suggest::suggest;
 
 /// File names of a Romanian Hunspell dictionary (Romania first, then Moldova).
 const NAMES: &[&str] = &["ro_RO", "ro-RO", "ro_MD", "ro"];
+
+/// The Romanian dictionary, found on first use (see [`DictSlot`]).
+pub(crate) static DICT: DictSlot<AffixDict> = DictSlot::new(NAMES, "Romanian");
 
 /// The Romanian dictionary: the installed Hunspell `ro_RO` (read on first use), one given with
 /// [`install_dictionary`], or an empty one when none is available (Romanian spelling is off
@@ -38,25 +40,18 @@ pub fn dictionary() -> Arc<AffixDict> {
     DICT.get()
 }
 
-/// The Romanian dictionary, managed by the shared loader and reload generation.
-pub(crate) static DICT: DictSlot<AffixDict> = DictSlot::new(NAMES, "Romanian");
-
-/// Use an in-memory dictionary. A failed parse leaves the current one intact.
+/// Use this Romanian dictionary from now on (Hunspell `.aff` and `.dic` text, decoded to
+/// UTF-8), for example one the user picked. On error the current dictionary stays.
 pub fn install_dictionary(aff: &str, dic: &str) -> Result<(), String> {
     DICT.install(aff, dic)
 }
 
-/// Forget the loaded dictionary and resolve the configured folder on next use.
-pub fn reload_dictionary() {
-    DICT.reload();
-}
-
-/// The installed Romanian file; in-memory dictionaries report no file.
+/// The dictionary file in use; an in-memory dictionary reports none.
 pub fn installed_path() -> Option<std::path::PathBuf> {
     DICT.installed_path()
 }
 
-/// Is a Romanian dictionary available?
+/// Is a Romanian dictionary available (spelling is checked)?
 pub fn has_dictionary() -> bool {
     DICT.has_dictionary()
 }
@@ -103,19 +98,24 @@ pub fn is_correct_with(d: &AffixDict, word: &str) -> bool {
     if !w.chars().any(is_latin_letter) {
         return true; // other scripts: no dictionary
     }
-    if known(d, w) {
+    let w = comma_below(w);
+    if known(d, &w) {
         return true;
     }
     // `într-o`, `s-a`, `dă-mi-l`, `nord-est`: every part is a word (or a one-letter clitic).
-    w.contains('-') && !d.excludes_spelling(&comma_below(w)) && w.split('-').all(|p| p.chars().count() <= 1 || known(d, p))
+    // An empty part (`casă--câine`) is no word.
+    w.contains('-') && !d.excludes_spelling(&w) && w.split('-').all(|p| p.chars().count() == 1 || (!p.is_empty() && known(d, p)))
 }
 
-/// Is one word in the dictionary or the user dictionary? Keep the original spelling for
-/// Add to Dictionary / Ignore All, including each part of a hyphenated word.
+/// Is one word (comma-below already) in the dictionary or the user dictionary? A user word is
+/// found in either spelling: added with cedillas (`şcoală`) it covers `școală` too.
 fn known(d: &AffixDict, w: &str) -> bool {
-    let normalized = comma_below(w);
-    let lower = normalized.to_lowercase();
-    d.check(&normalized) || crate::in_user_dictionary(&lower) || crate::in_user_dictionary(&cedilla(&lower))
+    let lower = w.to_lowercase();
+    d.check(w)
+        || crate::in_user_dictionary(&lower)
+        || crate::in_user_dictionary(&cedilla(&lower))
+        // An entry mixing the two spellings (`zqșcoalăţx`) matches every typing of it.
+        || (lower.contains(['ș', 'ț']) && crate::in_user_dictionary_as(&lower, comma_below))
 }
 
 /// `word` with the comma-below `ș`/`ț` written with cedillas (`ş`/`ţ`): the other spelling a user
@@ -157,6 +157,39 @@ mod tests {
         let ok = found.as_ref().is_some_and(|(a, d)| a.ends_with("ro_MD.aff") && d.ends_with("ro_MD.dic"));
         assert!(ok, "{found:?}");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_user_word_counts_in_either_spelling() {
+        test_dict::install();
+        // Added with cedillas, it covers the comma-below spelling, and the other way round.
+        assert!(!is_correct("zqşcoalăx") && !is_correct("zqșcoalăx"));
+        crate::add_word("zqşcoalăx");
+        assert!(is_correct("zqșcoalăx") && is_correct("zqşcoalăx"));
+        crate::remove_word("zqşcoalăx");
+        crate::add_word("zqțarăx");
+        assert!(is_correct("zqţarăx") && is_correct("zqțarăx"));
+        crate::remove_word("zqțarăx");
+    }
+
+    #[test]
+    fn a_mixed_user_word_counts_in_every_spelling() {
+        test_dict::install();
+        // Added mixing cedilla and comma-below letters, it matches each typing (CodeRabbit).
+        crate::add_word("zqșcoalăţx");
+        for w in ["zqșcoalăţx", "zqșcoalățx", "zqşcoalăţx", "zqşcoalățx"] {
+            assert!(is_correct(w), "{w}");
+        }
+        crate::remove_word("zqșcoalăţx");
+        assert!(!is_correct("zqșcoalățx"));
+    }
+
+    #[test]
+    fn an_empty_hyphen_part_is_no_word() {
+        test_dict::install();
+        assert!(is_correct("într-o") && is_correct("casă-casă"));
+        assert!(!is_correct("casă--casă"), "a doubled hyphen leaves an empty part");
+        assert!(is_correct("casă-"), "a hyphen at the edge is trimmed, so the word is checked alone");
     }
 
     #[test]
@@ -246,7 +279,7 @@ mod tests {
     #[test]
     #[ignore]
     fn installed_dictionary_checks_real_text() {
-        reload_dictionary();
+        DICT.reload();
         if !has_dictionary() {
             eprintln!("no ro_RO dictionary installed");
             return;
@@ -266,6 +299,13 @@ mod tests {
     }
 
     #[test]
+    fn user_dictionary_applies() {
+        test_dict::install();
+        assert!(!is_correct("zxqcuvântromânesc"));
+        crate::add_word("Zxqcuvântromânesc");
+        assert!(is_correct("zxqcuvântromânesc"));
+    }
+    #[test]
     fn user_dictionary_keeps_legacy_cedilla_spellings() {
         let d = AffixDict::from_hunspell(test_dict::AFF, test_dict::DIC, &[]).expect("synthetic dictionary");
         let added = "zxqşţcuvânt";
@@ -282,25 +322,5 @@ mod tests {
         }
         crate::add_word("zxqșțmodern");
         assert!(is_correct_with(&d, "zxqşţmodern"), "modern entry also accepts a legacy spelling");
-    }
-
-    #[test]
-    fn user_dictionary_applies() {
-        test_dict::install();
-        assert!(!is_correct("zxqcuvântromânesc"));
-        crate::add_word("Zxqcuvântromânesc");
-        assert!(is_correct("zxqcuvântromânesc"));
-    }
-    #[test]
-    fn a_user_word_counts_in_either_spelling() {
-        test_dict::install();
-        // Added with cedillas, it covers the comma-below spelling, and the other way round.
-        assert!(!is_correct("zqşcoalăx") && !is_correct("zqșcoalăx"));
-        crate::add_word("zqşcoalăx");
-        assert!(is_correct("zqșcoalăx") && is_correct("zqşcoalăx"));
-        crate::remove_word("zqşcoalăx");
-        crate::add_word("zqțarăx");
-        assert!(is_correct("zqţarăx") && is_correct("zqțarăx"));
-        crate::remove_word("zqțarăx");
     }
 }

@@ -425,7 +425,7 @@ fn scan(col: &mut Collector, chars: &[char]) {
                 continue;
             }
             let dist = weighted_distance(&lf, chars, &related, limit);
-            if dist <= limit && lf.as_slice() != chars {
+            if dist <= limit && lf.as_slice() != chars && d.contains_suggestible(&form) {
                 col.keep(form, COST_SCAN + dist * 3);
             }
         }
@@ -601,5 +601,20 @@ mod tests {
         col.offer("casă", COST_REP);
         col.offer("casă", COST_DROP_OR_ADD);
         assert_eq!(col.found.get("casă").map(|f| f.0), Some(COST_REP));
+    }
+    #[test]
+    fn the_rep_table_is_tried() {
+        // `qqqq` → `a` is three letters shorter: no typo route or stem scan reaches it, only REP.
+        let with = crate::affix::AffixDict::from_hunspell("REP 1\nREP qqqq a\n", "1\ncasa\n", &[]).unwrap_or_default();
+        let without = crate::affix::AffixDict::from_hunspell("", "1\ncasa\n", &[]).unwrap_or_default();
+        assert_eq!(suggest_in(&with, "cqqqqsa", 5), ["casa"]);
+        assert!(suggest_in(&without, "cqqqqsa", 5).is_empty());
+    }
+
+    #[test]
+    fn nosuggest_forms_are_never_offered() {
+        let d = crate::affix::AffixDict::from_hunspell("NOSUGGEST N\n", "2\ncasa\ncasx/N\n", &[]).unwrap_or_default();
+        let s = suggest_in(&d, "casz", 5);
+        assert!(s.iter().any(|w| w == "casa") && !s.iter().any(|w| w == "casx"), "{s:?}");
     }
 }

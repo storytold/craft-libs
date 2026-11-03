@@ -409,6 +409,16 @@ pub(crate) fn in_user_dictionary(lower: &str) -> bool {
         || ignored_words().read().unwrap_or_else(std::sync::PoisonError::into_inner).contains(&*key)
 }
 
+/// Is a user-dictionary or Ignore All entry equal to `lower` once both are passed through
+/// `canonical`? For a language whose letters have two spellings (Romanian `ş`/`ș`): an entry
+/// typed either way, or mixing both, matches every spelling of the word. Walks the entries, so a
+/// caller tries the exact lookup ([`in_user_dictionary`]) first.
+pub(crate) fn in_user_dictionary_as(lower: &str, canonical: impl Fn(&str) -> String) -> bool {
+    let want = canonical(&composed(lower));
+    let matches = |set: &RwLock<HashSet<String>>| set.read().unwrap_or_else(std::sync::PoisonError::into_inner).iter().any(|e| canonical(e) == want);
+    matches(user_words()) || matches(ignored_words())
+}
+
 /// Words in the user dictionary.
 pub fn user_dictionary() -> Vec<String> {
     let mut v: Vec<String> = user_words().read().unwrap_or_else(std::sync::PoisonError::into_inner).iter().cloned().collect();
