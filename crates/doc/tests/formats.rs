@@ -270,6 +270,14 @@ fn pcraft_prefers_the_full_size_composite_without_reading_the_preview() {
         assert_eq!(r.len(), 1);
         assert_eq!((r[0].kind, r[0].mime.as_str(), &r[0].bytes), (RenditionKind::Composite, "image/png", &full));
     }
+    let manifest = pcraft_manifest(1, "[]", r#", "full_composite":"composite/full.png", "composite":"composite/preview.png""#);
+    let mut tight = limits();
+    tight.max_entry = manifest.len().max(full.len()) as u64;
+    let oversized = vec![0; tight.max_entry as usize + 1];
+    for preview in [store("composite/preview.png", &oversized), deflated("composite/preview.png", &oversized)] {
+        let pc = zip(&[store("manifest.json", manifest.as_bytes()), deflated("composite/full.png", &full), preview]);
+        assert_eq!(renditions(&pc, &tight).unwrap()[0].bytes, full);
+    }
     let manifest = pcraft_manifest(1, "[]", r#", "full_composite":"composite/full.png""#);
     let pc = zip(&[store("manifest.json", manifest.as_bytes()), store("composite/full.png", &full)]);
     assert_eq!(renditions(&pc, &limits()).unwrap()[0].bytes, full);
