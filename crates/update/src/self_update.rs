@@ -578,9 +578,9 @@ fn stage(from: &Path, to: &Path, executable: bool) -> Result<PathBuf, String> {
 fn stage_copy(from: &Path, to: &Path, mode: u32) -> Result<PathBuf, String> {
     use std::os::unix::fs::PermissionsExt;
     let dir = to.parent().ok_or_else(|| format!("{} isn't in a folder", to.display()))?;
-    let name = to.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     let write_error = |e: std::io::Error| format!("couldn't write next to {} ({e})", to.display());
-    let mut staged = tempfile::Builder::new().prefix(&format!(".{name}.")).suffix(".update").tempfile_in(dir).map_err(write_error)?;
+    // fixed prefix: the temp name's length must not grow with the destination's basename
+    let mut staged = tempfile::Builder::new().prefix(".staged-").suffix(".update").tempfile_in(dir).map_err(write_error)?;
     let mut source = std::fs::File::open(from).map_err(|e| format!("couldn't read {} ({e})", from.display()))?;
     std::io::copy(&mut source, staged.as_file_mut()).map_err(write_error)?;
     staged.as_file().set_permissions(std::fs::Permissions::from_mode(mode)).map_err(|e| e.to_string())?;

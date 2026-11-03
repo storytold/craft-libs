@@ -1634,6 +1634,10 @@ pub(crate) mod tree {
         for mut dir in directories {
             dir.unpack_in(staging).map_err(|e| format!("couldn't unpack archive directory ({e})"))?;
         }
+        // tar reads a limit-truncated stream as a clean end of archive, so an exhausted limit is refused here.
+        if archive.into_inner().limit() == 0 {
+            return Err("archive exceeds maximum size".into());
+        }
         let top = single_top_folder(staging)?;
         if top.join("bin").join(app.id).is_file() {
             return Ok(top);
