@@ -218,12 +218,16 @@ fn a_failed_removal_rollback_keeps_a_recoverable_pack_outside_download_cleanup()
     let stage_dir = stage.dir.clone();
     let backup = stage_dir.join("nl");
     std::fs::rename(&dest, &backup).unwrap();
-    // A replacement appearing at the original path makes restoration fail. Keep it too.
-    std::fs::write(&dest, b"replacement").unwrap();
+    // A nonempty replacement directory prevents restoration on Unix and Windows.
+    // A replacement file can be overwritten by a directory rename on Windows.
+    std::fs::create_dir(&dest).unwrap();
+    let replacement = dest.join("replacement");
+    std::fs::write(&replacement, b"replacement").unwrap();
     let failed = io("saving the Language pack list")(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "injected record failure"));
     let result = finish_pack_removal(stage, &backup, &dest, true, Err(failed));
     assert!(matches!(result, Err(Error::Io { .. })));
-    assert!(result.unwrap_err().to_string().contains(&backup.display().to_string()));
+    let error = result.unwrap_err().to_string();
+    assert!(error.contains(&backup.display().to_string()), "{error}");
     #[cfg(unix)]
     {
         let old = std::time::SystemTime::now() - Duration::from_secs(7200);
@@ -232,9 +236,9 @@ fn a_failed_removal_rollback_keeps_a_recoverable_pack_outside_download_cleanup()
     store.sweep_staging();
     drop(store.lock().unwrap());
     assert_eq!(std::fs::read(backup.join("spelling.dic")).unwrap(), before_dictionary);
-    assert_eq!(std::fs::read(&dest).unwrap(), b"replacement");
+    assert_eq!(std::fs::read(&replacement).unwrap(), b"replacement");
     assert_eq!(std::fs::read(store.dir().join(INSTALLED)).unwrap(), before_record);
-    std::fs::remove_file(&dest).unwrap();
+    std::fs::remove_dir_all(&dest).unwrap();
     std::fs::rename(&backup, &dest).unwrap();
     assert_eq!(store.installed_language_packs(), vec![got]);
     std::fs::remove_dir_all(store.dir()).unwrap();
