@@ -113,8 +113,17 @@ pub fn regions_with(shapes: &[Shape], clips: &[ClipPath], sliver: f64) -> Result
     Ok(Arrangement::new(shapes, clips, sliver)?.regions())
 }
 
+/// Box comparisons [`overlap_groups`] makes before it folds the boxes still open into one group:
+/// many boxes sharing a horizontal span would otherwise cost one comparison per pair.
+const MAX_OVERLAP_COMPARISONS: usize = 4_000_000;
+
 /// Indices of `bounds` grouped by overlap, transitively, each group in index order. Touching boxes
 /// overlap; NaN boxes overlap nothing.
+///
+/// Past [`MAX_OVERLAP_COMPARISONS`] the boxes still open at the sweep line are folded into one
+/// group under their joint box. Those groups are larger than the overlaps require, which is safe
+/// (a group only says which items are cut into regions together) and bounded by
+/// [`FlattenOptions::max_regions`](super::FlattenOptions::max_regions).
 pub fn overlap_groups(bounds: &[Rect]) -> Vec<Vec<usize>> {
     fn find(p: &mut [usize], mut i: usize) -> usize {
         while p[i] != i {
@@ -128,8 +137,10 @@ pub fn overlap_groups(bounds: &[Rect]) -> Vec<Vec<usize>> {
     order.sort_by(|a, b| a.1.x0.total_cmp(&b.1.x0));
     // Sweep left to right, comparing each box with those still open at its left edge.
     let mut open: Vec<(usize, Rect)> = Vec::new();
+    let mut comparisons = 0_usize;
     for (i, b) in order {
         open.retain(|(_, o)| o.x1 >= b.x0);
+        comparisons += open.len();
         for (j, o) in &open {
             if o.y0 <= b.y1 && b.y0 <= o.y1 {
                 let (a, c) = (find(&mut parent, i), find(&mut parent, *j));
@@ -137,6 +148,15 @@ pub fn overlap_groups(bounds: &[Rect]) -> Vec<Vec<usize>> {
             }
         }
         open.push((i, b));
+        if comparisons > MAX_OVERLAP_COMPARISONS && open.len() > 1 {
+            let (first, joint) = open[0];
+            let joint = open[1..].iter().fold(joint, |j, (k, o)| {
+                let (a, c) = (find(&mut parent, first), find(&mut parent, *k));
+                parent[a.max(c)] = a.min(c);
+                j.union(*o)
+            });
+            open = vec![(first, joint)];
+        }
     }
     let mut groups: Vec<Vec<usize>> = Vec::new();
     let mut slot: Vec<Option<usize>> = vec![None; bounds.len()];
@@ -157,6 +177,9 @@ pub fn overlap_groups(bounds: &[Rect]) -> Vec<Vec<usize>> {
 /// other item paints as it is. Groups are transitive so that an opaque item keeps its place in
 /// paint order above or below everything it overlaps.
 pub fn transparent_groups(bounds: &[Rect], transparent: &[bool]) -> Vec<Vec<usize>> {
+    if !transparent.iter().any(|t| *t) {
+        return Vec::new();
+    }
     let mut groups = overlap_groups(bounds);
     groups.retain(|g| g.iter().any(|&i| transparent.get(i).copied().unwrap_or(false)));
     groups
@@ -984,6 +1007,14 @@ mod tests {
         assert_eq!(overlap_groups(&bounds), vec![vec![0, 2, 3], vec![1], vec![4]]);
         assert_eq!(transparent_groups(&bounds, &[false, false, false, true, false]), vec![vec![0, 2, 3]]);
         assert!(transparent_groups(&bounds, &[false; 5]).is_empty());
+    }
+
+    #[test]
+    fn stacked_boxes_fold_into_one_group_past_the_comparison_budget() {
+        // Boxes one above the other, all sharing x 0–10: each stays open for every later one.
+        let stack = |n: usize| -> Vec<Rect> { (0..n).map(|i| Rect::new(0.0, 2.0 * i as f64, 10.0, 2.0 * i as f64 + 1.0)).collect() };
+        assert_eq!(overlap_groups(&stack(2_000)).len(), 2_000, "2 million comparisons: compared one by one");
+        assert_eq!(overlap_groups(&stack(4_000)).len(), 1, "8 million comparisons: folded");
     }
 
     /// About 1,000 rectangles on a letter page. Run with `--ignored --nocapture`.
