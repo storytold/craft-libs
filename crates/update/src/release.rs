@@ -35,6 +35,12 @@ pub struct Release {
     pub notes: String,
     pub prerelease: bool,
     pub assets: Vec<Asset>,
+    /// The `owner/name` repository the release was read from, whose download links its assets
+    /// must be (`install::check_download_link`). Usually the app's own; a feed that announces a
+    /// renamed repository reads the release from the new one. Empty means the app's own (a
+    /// release saved before this field, or one built by hand).
+    #[serde(default)]
+    pub repo: String,
 }
 
 impl Release {
@@ -119,16 +125,21 @@ pub fn download_prefix(repo: &str) -> String {
 
 /// The one link a GitHub release asset may have: `https://github.com/<repo>/releases/download/<tag>/<name>`,
 /// built from the release's own tag and the asset's own name, so a link can't point at another
-/// release or anywhere else (#764). `None` when the tag or name holds anything but ASCII letters,
-/// digits and `._+-`, which no Craft App release uses and which github.com could re-interpret.
+/// release or anywhere else (#764). `None` unless the tag is a [`valid_tag`] and the name a
+/// [`valid_file_name`]: only ASCII letters, digits and `._+-`, which github.com can't re-interpret.
 /// A `+` (semver build metadata) is written `%2B`, as GitHub writes it in `browser_download_url`
 /// (`.../download/17.0.9%2B9/jdk-17.0.9%2B9.deb` for the tag `17.0.9+9`).
 pub fn expected_download_url(repo: &str, tag: &str, name: &str) -> Option<String> {
-    let plain = |s: &str, max: usize| {
-        !s.is_empty() && s.len() <= max && s != "." && s != ".." && s.bytes().all(|b| b.is_ascii_alphanumeric() || b"._+-".contains(&b))
-    };
     let encoded = |s: &str| s.replace('+', "%2B");
-    (plain(tag, 64) && plain(name, 200) && valid_file_name(name)).then(|| format!("{}{}/{}", download_prefix(repo), encoded(tag), encoded(name)))
+    (valid_tag(tag) && valid_file_name(name)).then(|| format!("{}{}/{}", download_prefix(repo), encoded(tag), encoded(name)))
+}
+
+/// Whether `url` is `expected`, an [`expected_download_url`], with each `%2B` in either read as
+/// `+`. GitHub serves a `+` in a download path the same either way, and links built before
+/// `%2B` (an older launcher's feed, or a release saved by an older version) write it plainly.
+/// No other escape is read, so `%2b` or `%2e` still has to match as written.
+pub fn same_download_url(url: &str, expected: &str) -> bool {
+    url == expected || url.replace("%2B", "+") == expected.replace("%2B", "+")
 }
 
 /// Whether `url` is a download that truly belongs to `repo`.
@@ -159,7 +170,7 @@ fn download_suffix_ok(rest: &str) -> bool {
     }
     let mut parts = rest.split('/');
     let (Some(tag), Some(name), None) = (parts.next(), parts.next(), parts.next()) else { return false };
-    !tag.is_empty() && tag != "." && tag != ".." && tag.len() <= 64 && !tag.contains('\\') && valid_file_name(name)
+    valid_tag(tag) && valid_file_name(name)
 }
 
 /// Any `.` or `..` path segment that could climb out of the repository.
@@ -211,7 +222,7 @@ fn release_from_value(v: &serde_json::Value, repo: &str) -> Result<Release, Stri
     if let Some(msg) = v["message"].as_str() {
         return Err(if msg == "Not Found" { "no releases yet".into() } else { format!("GitHub says: {}", truncate(msg, 200)) });
     }
-    let tag = v["tag_name"].as_str().filter(|t| !t.is_empty() && t.len() <= 64).ok_or("no release found")?.to_string();
+    let tag = v["tag_name"].as_str().filter(|t| valid_tag(t)).ok_or("no release found")?.to_string();
     let releases = format!("https://github.com/{repo}/releases");
     let html_url = v["html_url"].as_str().and_then(|u| safe_release_html_url(repo, u)).unwrap_or_else(|| releases.clone());
     let assets = v["assets"]
@@ -237,6 +248,7 @@ fn release_from_value(v: &serde_json::Value, repo: &str) -> Result<Release, Stri
         notes: v["body"].as_str().map(|b| truncate(b, MAX_NOTES)).unwrap_or_default(),
         prerelease: v["prerelease"].as_bool().unwrap_or(false),
         assets,
+        repo: repo.to_string(),
     })
 }
 
@@ -257,14 +269,25 @@ pub fn release_from_sums(repo: &str, tag: &str, sums: &[(String, String)]) -> Re
         notes: String::new(),
         prerelease: false,
         assets,
+        repo: repo.to_string(),
     }
 }
 
 /// The tag in a `https://github.com/<repo>/releases/tag/<tag>` redirect target.
 pub fn tag_from_redirect(location: &str, repo: &str) -> Option<String> {
     let rest = location.strip_prefix(&format!("https://github.com/{repo}/releases/tag/"))?;
-    (!rest.is_empty() && rest != "." && rest != ".." && rest.len() <= 64 && rest.bytes().all(|b| b.is_ascii_alphanumeric() || b"._-+".contains(&b)))
-        .then(|| rest.to_string())
+    valid_tag(rest).then(|| rest.to_string())
+}
+
+/// A release tag we'd put in a URL, a file or the UI: up to 64 of `[A-Za-z0-9._+-]`, not
+/// starting with a dot, so no separators, control or bidi characters and no `.`/`..`.
+pub fn valid_tag(tag: &str) -> bool {
+    tag.len() <= 64 && !tag.starts_with('.') && plain_name(tag)
+}
+
+/// Non-empty and only `[A-Za-z0-9._+-]`, the characters every Craft release tag and asset uses.
+fn plain_name(s: &str) -> bool {
+    !s.is_empty() && s.bytes().all(|b| b.is_ascii_alphanumeric() || b"._-+".contains(&b))
 }
 
 /// Reads `sha256sum` output: `<hex>  <name>` (or `<hex> *<name>`) per line, one entry per name.
@@ -299,15 +322,19 @@ pub fn parse_sha256sums(text: &str) -> Vec<(String, String)> {
     sums
 }
 
-/// A bare file name we'd be willing to save: no paths, no control characters.
+/// A bare file name we'd be willing to save: only `[A-Za-z0-9._+-]` (so no path, escape, control
+/// or bidi character), no leading or trailing dot, and not a name Windows reserves for a device
+/// (`CON`, `nul.txt`, `COM1.msi`).
 pub fn valid_file_name(name: &str) -> bool {
-    !name.is_empty()
-        && name.len() <= 200
-        && name != "."
-        && name != ".."
-        && !name.starts_with('.')
-        && !contains_encoded_separator(name)
-        && !name.chars().any(|c| c.is_control() || matches!(c, '/' | '\\' | ':' | '<' | '>' | '"' | '|' | '?' | '*'))
+    name.len() <= 200 && !name.starts_with('.') && !name.ends_with('.') && plain_name(name) && !windows_device(name)
+}
+
+/// Whether `name`'s part before the first dot is a Windows device name, which opens the device
+/// instead of a file in any folder.
+fn windows_device(name: &str) -> bool {
+    let stem = name.split('.').next().unwrap_or_default().to_ascii_uppercase();
+    matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || matches!(stem.as_bytes(), [b'C', b'O', b'M', b'1'..=b'9'] | [b'L', b'P', b'T', b'1'..=b'9'])
 }
 
 /// `s` cut to at most `max` bytes (on a char boundary) with an ellipsis, for text from a
@@ -586,10 +613,80 @@ mod tests {
     /// separator isn't a file name we'd save.
     #[test]
     fn file_names_cannot_escape() {
-        for bad in ["", "..", "a/b", "a\\b", ".hidden", "c:x", "x\u{0}", "%2e%2e%2fother", "a%2Fb", "a%5cb", "x%2E%2E"] {
+        for bad in [
+            "",
+            "..",
+            "a/b",
+            "a\\b",
+            ".hidden",
+            "c:x",
+            "x\u{0}",
+            "%2e%2e%2fother",
+            "a%2Fb",
+            "a%5cb",
+            "x%2E%2E",
+            "a b.dmg",
+            "a#b",
+            "evil\u{202e}gpj.exe",
+            "x.msi.",
+            "CON",
+            "nul.txt",
+            "COM1.msi",
+            "lpt9",
+            "prn",
+            "aux.log",
+            "a".repeat(201).as_str(),
+        ] {
             assert!(!valid_file_name(bad), "{bad:?}");
         }
-        assert!(valid_file_name("photocraft-0.5.0-linux-x86_64.AppImage"));
+        for good in [
+            "photocraft-0.5.0-linux-x86_64.AppImage",
+            "lightcraft_0.9.0_amd64.deb",
+            "x-1.0+git.tar.gz",
+            "console.zip",
+            "COM10.txt",
+            "COM0.msi",
+            "lpt0",
+        ] {
+            assert!(valid_file_name(good), "{good:?}");
+        }
+    }
+
+    /// The tag rule the launcher's feed shares (craft-launcher#1024): plain characters, no
+    /// leading dot, at most 64 bytes, for the API's `tag_name`, a redirect and a download link.
+    #[test]
+    fn tags_are_plain() {
+        for good in ["v0.6.0", "v1.0.0-beta.2", "nightly-2026-10-29", "v1+build.7"] {
+            assert!(valid_tag(good), "{good:?}");
+        }
+        for bad in ["", ".", "..", ".v1", "v1/x", "v1\\x", "v1\nx", "v1\u{0}x", "v1\u{202e}", "v 1", "v1?x", "v".repeat(65).as_str()] {
+            assert!(!valid_tag(bad), "{bad:?}");
+        }
+        let api = r#"{"tag_name": "v1\u202egpj", "html_url": "", "assets": []}"#;
+        assert!(parse_github_release(api, REPO).is_err());
+        let prefix = download_prefix(REPO);
+        assert!(download_url_under(&format!("{prefix}v1/a.dmg"), &prefix));
+        assert!(!download_url_under(&format!("{prefix}v1\u{202e}/a.dmg"), &prefix), "an odd tag in a download link");
+        assert!(!download_url_under(&format!("{prefix}v1/a\u{202e}.dmg"), &prefix), "an odd name in a download link");
+        assert_eq!(tag_from_redirect(&format!("https://github.com/{REPO}/releases/tag/v1\u{202e}"), REPO), None);
+    }
+
+    /// A `+` matches written plainly or as `%2B`, either side; no other escape is read.
+    #[test]
+    fn a_plus_link_matches_either_way_and_nothing_else_does() {
+        let expected = expected_download_url(REPO, "v1.0.0+b.1", "photocraft-1.0.0+b.1-linux-x86_64.AppImage").unwrap();
+        assert!(same_download_url(&expected, &expected));
+        assert!(same_download_url(&expected.replace("%2B", "+"), &expected));
+        assert!(!same_download_url(&expected.replace("%2B", "%2b"), &expected));
+        assert!(!same_download_url(&expected.replace("v1.0.0", "v1.0.1"), &expected));
+    }
+
+    /// Both converters record the repository they read the release from.
+    #[test]
+    fn a_release_knows_its_repository() {
+        assert_eq!(release_from_sums(REPO, "v0.5.0", &[]).repo, REPO);
+        let api = r#"{"tag_name": "v0.5.0", "assets": []}"#;
+        assert_eq!(parse_github_release(api, REPO).unwrap().repo, REPO);
     }
 
     /// A `SHA256SUMS.txt` line whose name hides a traversal is dropped, so `release_from_sums`
