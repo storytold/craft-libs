@@ -2241,6 +2241,10 @@ impl AffixDict {
 
     fn check_except(&self, w: &str, excluded: Excluded) -> bool {
         let w = self.normalize(w);
+        // An explicitly forbidden spelling wins over every case/compound fallback.
+        if self.is_forbidden(&w) {
+            return false;
+        }
         if self.contains_except(&w, excluded) {
             return true;
         }
@@ -2249,7 +2253,13 @@ impl AffixDict {
             return false;
         }
         let keep = excluded.keeping(self.keepcase);
-        match casing(&w) {
+        let case = casing(&w);
+        // A listed spelling excluded from suggestions must not return through its
+        // allowed lower-case homograph (CAZ/N versus caz). Unlisted capitals still fall back.
+        if case != Casing::Lower && self.contains_except(&w, Excluded::default()) {
+            return false;
+        }
+        match case {
             Casing::Lower => false,
             // A compound may join a capitalized stem to others, and the word start with a
             // capital (`FooQux` from `foo` and `Qux`: right in the CLI).
@@ -2911,6 +2921,24 @@ pub(crate) mod tests {
         for aff in ["", "NOSUGGEST N\n"] {
             let ordinary = AffixDict::from_hunspell(aff, "2\nmixCase\nhidden/N\n", &[]).unwrap();
             assert!(suggest(&ordinary, "MIXCASX", 8).contains(&"MIXCASE".into()));
+        }
+    }
+
+    /// Exact excluded spellings take precedence over an allowed case fallback.
+    #[test]
+    fn case_fallback_does_not_revive_excluded_exact_spellings() {
+        for flag in ["N", "S", "F"] {
+            let d =
+                AffixDict::from_hunspell("NOSUGGEST N\nSUBSTANDARD S\nFORBIDDENWORD F\n", &format!("3\ncaz\nCaz/{flag}\nCAZ/{flag}\n"), &[]).unwrap();
+            assert!(d.check("caz") && d.can_suggest("caz"));
+            for word in ["Caz", "CAZ"] {
+                assert_eq!(d.check(word), flag != "F", "{word}/{flag}");
+                assert!(!d.can_suggest(word), "{word}/{flag}");
+            }
+        }
+        let ordinary = AffixDict::from_hunspell("", "1\ncaz\n", &[]).unwrap();
+        for word in ["caz", "Caz", "CAZ"] {
+            assert!(ordinary.check(word) && ordinary.can_suggest(word), "unlisted case variants: {word}");
         }
     }
 
