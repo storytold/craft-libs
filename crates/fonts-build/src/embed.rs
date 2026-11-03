@@ -6,7 +6,7 @@ use std::collections::HashSet;
 use std::ffi::OsString;
 use std::fmt::{self, Write as _};
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use crate::cmap::Cmap;
 use crate::manifest::{ManifestEntry, ParseError, parse_manifest, script_matches};
@@ -34,6 +34,13 @@ pub struct Embed {
     texts: Vec<PathBuf>,
     families: Option<Vec<String>>,
     elsewhere: Vec<String>,
+    serve: Option<Serve>,
+}
+
+/// Where [`Embed::serve`] copies the faces, and the URL prefix they are served under.
+struct Serve {
+    dir: PathBuf,
+    url_prefix: String,
 }
 
 /// A selected face and the file the table embeds it from.
@@ -42,8 +49,9 @@ struct Face {
     path: PathBuf,
     index: u32,
     /// An interface face to cut to the catalogs' characters before it is embedded.
-    #[cfg_attr(not(feature = "subset"), expect(dead_code))]
     cut: bool,
+    /// Hex SHA-256 of the file: the manifest's, or the cut's.
+    sha256: String,
 }
 
 impl Embed {
@@ -82,8 +90,8 @@ impl Embed {
     /// CJK faces are dropped and the rest are kept. Without catalogs the interface faces are left
     /// out too, with a `cargo::warning`, so a full CJK face is never embedded for the interface.
     /// A manifest with no interface face is also a `cargo::warning` when that drops a CJK face.
-    /// Combines with [`Embed::scripts`] and [`Embed::filter`]; with `CRAFT_FONTS_REQUIRED=1`, an
-    /// interface face satisfies its script tags.
+    /// Combines with [`Embed::scripts`], [`Embed::filter`] and [`Embed::serve`]; with
+    /// `CRAFT_FONTS_REQUIRED=1`, an interface face satisfies its script tags.
     pub fn for_ui(mut self) -> Self {
         self.ui = true;
         self
@@ -138,6 +146,22 @@ impl Embed {
         self
     }
 
+    /// Copy the selected faces into `dir` instead of embedding them, for a web build that serves
+    /// them beside its wasm, and write a table of [`ServedFace`](crate::ServedFace)s.
+    ///
+    /// Each font file and its licence file keep their path under the checkout's `fonts/`
+    /// directory (`noto-sans-arabic/NotoSansArabic.ttf`), and a face's `url` is `url_prefix`
+    /// followed by that path, so `serve("web/fonts", "fonts/")` suits a page that serves
+    /// `web/fonts` as `fonts/`. An interface face cut by `Embed::subset_to` is served from its cut,
+    /// with the start of the cut's SHA-256 in the file name (`ui/NotoSansTCUI-Regular.<hash>.ttf`)
+    /// and the cut's own integrity value. A relative `dir` is under the package directory, where
+    /// Cargo runs build scripts. Files already there with the same bytes are left as they are;
+    /// files of faces no longer selected, and earlier cuts, are not removed.
+    pub fn serve(mut self, dir: impl Into<PathBuf>, url_prefix: &str) -> Self {
+        self.serve = Some(Serve { dir: dir.into(), url_prefix: url_prefix.to_owned() });
+        self
+    }
+
     /// Write the face table to `out_file` and print the `cargo::` lines; returns the faces
     /// embedded.
     ///
@@ -183,9 +207,18 @@ impl Embed {
                 self.check_coverage(faces, dir, cargo);
             }
         }
-        let tabled = selected.and_then(|faces| Ok((table(&faces)?, faces.into_iter().map(|face| face.entry).collect())));
-        let (table, faces) = match tabled {
-            Ok(tabled) => tabled,
+        let selected = match (selected, &self.serve, &dir) {
+            (Ok(faces), Some(serve), Some(dir)) => match serve.copy(dir, &faces, cargo) {
+                Ok(table) => Ok((table, faces)),
+                Err(e) => {
+                    write(&out, EMPTY_TABLE)?;
+                    return Err(e);
+                }
+            },
+            (selected, ..) => selected.and_then(|faces| Ok((table(&faces)?, faces))),
+        };
+        let (table, faces) = match selected {
+            Ok((table, faces)) => (table, faces.into_iter().map(|face| face.entry).collect()),
             Err(e) if required => {
                 write(&out, EMPTY_TABLE)?;
                 return Err(e);
@@ -207,6 +240,8 @@ impl Embed {
         // Cargo treats a missing watched file as changed, which would rerun the build every time.
         cargo.push(format!("cargo::rerun-if-changed={}", manifest.display()));
         let entries = parse_manifest(&text).map_err(|error| Error::Parse { manifest: manifest.clone(), error })?;
+        // The manifest read, so the checkout exists. Faces and licences must resolve under it.
+        let root = dir.canonicalize().map_err(|source| Error::Read { path: dir.to_path_buf(), source })?;
         if let Some(families) = &self.families {
             let unknown: Vec<String> = families.iter().filter(|f| !entries.iter().any(|e| &e.family == *f)).cloned().collect();
             if !unknown.is_empty() {
@@ -245,12 +280,26 @@ impl Embed {
                 uncut.push(format!("{} {}", entry.family, entry.style));
                 continue;
             }
+            // A manifest path names a file in the checkout, and is served under the same name.
+            for file in [&entry.file, &entry.licence_file] {
+                if !file.is_empty() && !is_checkout_relative(file) {
+                    return Err(Error::OutsideCheckout { manifest, file: file.clone() });
+                }
+            }
             let file = dir.join(&entry.file);
             // `include_bytes!` resolves relative paths from the including source file.
             let path = file.canonicalize().map_err(|source| Error::Read { path: file, source })?;
+            // A symlink in the checkout must not pull a file from elsewhere on the build host. A
+            // missing licence is only warned about when serving; one that exists must be inside.
+            if !path.starts_with(&root) {
+                return Err(Error::OutsideCheckout { manifest, file: entry.file });
+            }
+            if !entry.licence_file.is_empty() && dir.join(&entry.licence_file).canonicalize().is_ok_and(|licence| !licence.starts_with(&root)) {
+                return Err(Error::OutsideCheckout { manifest, file: entry.licence_file });
+            }
             cargo.push(format!("cargo::rerun-if-changed={}", path.display()));
-            let index = entry.index;
-            faces.push(Face { entry, path, index, cut });
+            let (index, sha256) = (entry.index, entry.sha256.clone());
+            faces.push(Face { entry, path, index, cut, sha256 });
         }
         if !uncut.is_empty() {
             let why = if self.catalogs.is_some() { "Embed::subset_to was given no translation catalogs" } else { "no translation catalogs" };
@@ -303,6 +352,7 @@ impl Embed {
             }
             face.path = out;
             face.index = 0;
+            face.sha256 = crate::sha256::hex(&bytes);
         }
         Ok(())
     }
@@ -336,7 +386,20 @@ impl Embed {
         for family in self.elsewhere.iter().filter(|f| !entries.iter().any(|e| &e.family == *f)) {
             cargo.push(format!("cargo::warning=craft-fonts: embedded_elsewhere names {family}, which {} lacks", manifest.display()));
         }
-        entries.into_iter().filter(|e| self.elsewhere.contains(&e.family)).collect()
+        let root = dir.canonicalize().ok();
+        let inside = |file: &str| {
+            is_checkout_relative(file) && root.as_ref().is_some_and(|root| dir.join(file).canonicalize().is_ok_and(|path| path.starts_with(root)))
+        };
+        let mut kept = Vec::new();
+        for entry in entries.into_iter().filter(|e| self.elsewhere.contains(&e.family)) {
+            // A face outside the checkout is not read, so it covers no characters.
+            if !dir.join(&entry.file).exists() || inside(&entry.file) {
+                kept.push(entry);
+            } else {
+                cargo.push(format!("cargo::warning=craft-fonts: {}: {:?} is not a file inside the checkout", manifest.display(), entry.file));
+            }
+        }
+        kept
     }
 
     /// Warn about each catalog's and [`Embed::check_text`] file's characters that neither an
@@ -439,6 +502,160 @@ fn table(faces: &[Face]) -> Result<String, Error> {
     Ok(src)
 }
 
+impl Serve {
+    /// Copy the faces' files and licences into the served directory; returns the table.
+    fn copy(&self, checkout: &Path, faces: &[Face], cargo: &mut Vec<String>) -> Result<String, Error> {
+        let root = checkout.canonicalize().map_err(|source| Error::Read { path: checkout.to_path_buf(), source })?;
+        let manifest = checkout.join("fonts/manifest.txt");
+        let mut copied: Vec<String> = Vec::new();
+        let mut src = String::from("// Generated by craft-fonts-build. Do not edit.\n&[\n");
+        for face in faces {
+            let (entry, path) = (&face.entry, &face.path);
+            let served = served_file(face);
+            let font = std::fs::read(path).map_err(|source| Error::Read { path: path.clone(), source })?;
+            let size = font.len();
+            if !copied.contains(&served) {
+                copied.push(served.clone());
+                // `select` checked the manifest paths; the served names must stay under `dir` too.
+                for name in [served.as_str(), served_path(&entry.licence_file)] {
+                    if !name.is_empty() && !is_checkout_relative(name) {
+                        return Err(Error::OutsideCheckout { manifest, file: name.to_owned() });
+                    }
+                    // Writing follows a symlink, so one in the served directory could redirect it.
+                    let to = self.dir.join(name);
+                    if !name.is_empty() && has_symlink(&self.dir, &to) {
+                        return Err(Error::Write { path: to, source: io::Error::other("a symlink is in the way") });
+                    }
+                }
+                copy_file(path, &self.dir.join(&served), cargo)?;
+                let licence = (!entry.licence_file.is_empty())
+                    .then(|| checkout.join(&entry.licence_file).canonicalize().ok())
+                    .flatten()
+                    .filter(|licence| licence.is_file());
+                match licence {
+                    None => cargo.push(format!("cargo::warning=craft-fonts: no licence file beside {}", entry.file)),
+                    Some(licence) if !licence.starts_with(&root) => {
+                        return Err(Error::OutsideCheckout { manifest, file: entry.licence_file.clone() });
+                    }
+                    Some(licence) => copy_file(&licence, &self.dir.join(served_path(&entry.licence_file)), cargo)?,
+                }
+            }
+            let coverage = crate::coverage::of_face(&font, face.index).unwrap_or_else(|| {
+                cargo.push(format!("cargo::warning=craft-fonts: no character map in {}; the face is never fetched for a character", entry.file));
+                Vec::new()
+            });
+            let scripts: Vec<String> = entry.scripts.iter().map(|s| format!("{s:?}")).collect();
+            let _ = writeln!(
+                src,
+                "    ServedFace {{ family: {:?}, style: {:?}, scripts: &[{}], index: {}, url: {:?}, size: {size}, integrity: {:?}, coverage: {} }},",
+                entry.family,
+                entry.style,
+                scripts.join(", "),
+                face.index,
+                format!("{}{served}", self.url_prefix),
+                integrity(&face.sha256),
+                byte_string(&coverage),
+            );
+        }
+        src.push_str("]\n");
+        Ok(src)
+    }
+}
+
+/// A byte string literal, printable ASCII as itself.
+fn byte_string(bytes: &[u8]) -> String {
+    let mut out = String::from("b\"");
+    for &b in bytes {
+        match b {
+            b'"' | b'\\' => {
+                out.push('\\');
+                out.push(char::from(b));
+            }
+            0x20..=0x7E => out.push(char::from(b)),
+            _ => {
+                let _ = write!(out, "\\x{b:02x}");
+            }
+        }
+    }
+    out.push('"');
+    out
+}
+
+/// Where a face's file is served, under the served directory: its checkout path under `fonts/`.
+/// A cut adds the start of its SHA-256 before the extension (`ui/A.1234abcd5678ef90.ttf`), so a
+/// cut from changed catalogs gets a new URL instead of meeting a cached copy that fails its
+/// integrity check.
+fn served_file(face: &Face) -> String {
+    let file = served_path(&face.entry.file);
+    if !face.cut {
+        return file.to_owned();
+    }
+    let hash = face.sha256.get(..16).unwrap_or(&face.sha256);
+    match file.rsplit_once('.') {
+        Some((stem, extension)) if !extension.contains('/') => format!("{stem}.{hash}.{extension}"),
+        _ => format!("{file}.{hash}"),
+    }
+}
+
+/// Whether a manifest path stays under the directory it is joined to: relative, without `..`, a
+/// root or a drive prefix.
+fn is_checkout_relative(file: &str) -> bool {
+    !file.is_empty() && Path::new(file).components().all(|c| matches!(c, Component::Normal(_) | Component::CurDir))
+}
+
+/// Whether `to`, or a directory between `dir` and `to`, is a symlink. `symlink_metadata` doesn't
+/// follow one.
+fn has_symlink(dir: &Path, to: &Path) -> bool {
+    let Ok(rest) = to.strip_prefix(dir) else { return true };
+    let mut current = dir.to_path_buf();
+    rest.components().any(|component| {
+        current.push(component);
+        std::fs::symlink_metadata(&current).is_ok_and(|m| m.file_type().is_symlink())
+    })
+}
+
+/// A checkout path relative to the served directory: `fonts/a/A.ttf` → `a/A.ttf`.
+fn served_path(file: &str) -> &str {
+    file.strip_prefix("fonts/").unwrap_or(file)
+}
+
+/// Copy `from` unless `to` already holds the same bytes. The copy keeps `from`'s modification time
+/// and is watched, so the build copies it again once it is deleted, without running every build.
+fn copy_file(from: &Path, to: &Path, cargo: &mut Vec<String>) -> Result<(), Error> {
+    cargo.push(format!("cargo::rerun-if-changed={}", to.display()));
+    let write_error = |source| Error::Write { path: to.to_path_buf(), source };
+    let read_error = |source| Error::Read { path: from.to_path_buf(), source };
+    let bytes = std::fs::read(from).map_err(read_error)?;
+    if std::fs::read(to).is_ok_and(|old| old == bytes) {
+        return Ok(());
+    }
+    if let Some(parent) = to.parent() {
+        std::fs::create_dir_all(parent).map_err(write_error)?;
+    }
+    std::fs::write(to, &bytes).map_err(write_error)?;
+    // Cargo reruns a build script whose watched files are newer than its last run.
+    let modified = std::fs::metadata(from).and_then(|m| m.modified()).map_err(read_error)?;
+    std::fs::File::options().write(true).open(to).and_then(|f| f.set_modified(modified)).map_err(write_error)
+}
+
+/// The Subresource Integrity value (`sha256-<base64>`) of a hex SHA-256, or `""` for a value that
+/// isn't one.
+pub(crate) fn integrity(sha256: &str) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let digest: Option<Vec<u8>> =
+        (sha256.len() == 64).then(|| (0..32).map(|i| u8::from_str_radix(sha256.get(2 * i..2 * i + 2)?, 16).ok()).collect()).flatten();
+    let Some(digest) = digest else { return String::new() };
+    let mut out = String::from("sha256-");
+    for chunk in digest.chunks(3) {
+        let n = chunk.iter().enumerate().fold(0u32, |n, (i, b)| n | (u32::from(*b) << (16 - 8 * i)));
+        for i in 0..4 {
+            let c = if i <= chunk.len() { ALPHABET[((n >> (18 - 6 * i)) & 63) as usize] } else { b'=' };
+            out.push(char::from(c));
+        }
+    }
+    out
+}
+
 fn write(path: &Path, contents: &str) -> Result<(), Error> {
     std::fs::write(path, contents).map_err(|source| Error::Write { path: path.to_path_buf(), source })
 }
@@ -469,6 +686,9 @@ pub enum Error {
     UnknownFamilies { manifest: PathBuf, families: Vec<String>, known: Vec<String> },
     /// A face to embed has a path that isn't UTF-8, which `include_bytes!` can't name.
     NonUtf8Path { path: PathBuf },
+    /// A manifest font or licence path is absolute, climbs out with `..`, or resolves (through a
+    /// symlink) to a file outside the checkout.
+    OutsideCheckout { manifest: PathBuf, file: String },
 }
 
 impl fmt::Display for Error {
@@ -501,6 +721,9 @@ impl fmt::Display for Error {
                 known.join(", ")
             ),
             Self::NonUtf8Path { path } => write!(f, "cannot embed {}: include_bytes! needs a UTF-8 path", path.display()),
+            Self::OutsideCheckout { manifest, file } => {
+                write!(f, "{}: {file:?} is not a file inside the checkout", manifest.display())
+            }
         }
     }
 }

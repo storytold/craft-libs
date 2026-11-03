@@ -427,6 +427,15 @@ fn snap_minified_image(
     (w.abs_diff(planned.0) <= 1 && h.abs_diff(planned.1) <= 1).then_some((w, h, x0, y0))
 }
 
+/// PdfCraft patch (#3296): what `Renderer::set_paint` found out: the clip path to apply while
+/// painting (if any), or that the paint touches no pixel of the canvas, so the caller skips
+/// the fill or stroke (a mesh shading whose triangles all lie outside the path or canvas).
+#[must_use]
+enum PaintSetup {
+    Clip(Option<BezPath>),
+    Nothing,
+}
+
 pub(crate) struct Renderer {
     pub(crate) ctx: RenderContext,
     /// PdfCraft patch: when set, solid text and line-art paint colours are remapped
@@ -1093,23 +1102,26 @@ impl Renderer {
     }
 
     #[must_use]
-    fn set_paint(&mut self, paint: &Paint<'_>, path: &BezPath, is_stroke: bool) -> Option<BezPath> {
+    fn set_paint(&mut self, paint: &Paint<'_>, path: &BezPath, is_stroke: bool) -> PaintSetup {
         // Knockout patch (pdfcraft #2974): in a knockout erase pass every paint clears what is
         // under its shape (a transparent fill with `Compose::Copy`, weighted by coverage).
         if self.erasing {
             self.ctx.set_blend_mode(knockout_blend_mode());
             self.ctx.set_paint(AlphaColor::<Srgb>::new([0.0, 0.0, 0.0, 0.0]));
             // A shading's `/BBox` clips what it paints, so it clips what it clears too.
-            return match paint {
+            return PaintSetup::Clip(match paint {
                 Paint::Pattern(p) => match p.as_ref() {
                     Pattern::Shading(s) => s.shading.clip_path.clone(),
                     _ => None,
                 },
                 _ => None,
-            };
+            });
         }
         let mut paint_transform = Affine::IDENTITY;
         let mut clip_path = None;
+        // PdfCraft patch (#3296): `Extend::Repeat` tiles the texture over the path; a mesh
+        // texture covers its triangles alone and must not repeat outside them.
+        let mut extend = peniko::Extend::Repeat;
 
         let paint: PaintType = match paint.clone() {
             Paint::Color(c) => {
@@ -1142,6 +1154,28 @@ impl Renderer {
                         // pixel around it: texels at a fractional edge look one pixel further).
                         let encoded = s.encode_within(Some(bbox.inflate(1.0, 1.0)));
 
+                        // PdfCraft patch (#3296): a mesh paints only where its triangles are.
+                        // The texture covers the triangles alone (and a pixel around them,
+                        // which stays transparent and is what `Extend::Pad` repeats), not the
+                        // whole path (the canvas, for `sh`): sampled pixel by pixel, 310
+                        // one-triangle meshes on a plan cost 310 full tiles per tile, and the
+                        // watchdog gave the page up. A mesh with no triangle on the canvas
+                        // paints nothing at all.
+                        if let Some(extent) = encoded.extent {
+                            // An empty extent (no triangle in the area) is `Rect::ZERO`, which
+                            // sits at the canvas origin: test it before intersecting, or a
+                            // 1 × 1 transparent texture would still be painted over the whole
+                            // path (310 of them cost 230 ms per tile).
+                            if extent.width() <= 0.0 || extent.height() <= 0.0 {
+                                return PaintSetup::Nothing;
+                            }
+                            bbox = bbox.intersect(extent.inflate(1.0, 1.0));
+                            if bbox.width() <= 0.0 || bbox.height() <= 0.0 {
+                                return PaintSetup::Nothing;
+                            }
+                            extend = peniko::Extend::Pad;
+                        }
+
                         // PdfCraft patch (backport of hayro 0.8): axial and radial shadings
                         // become native gradients instead of a texture sampled pixel by pixel.
                         // Upstream also shifts by half a pixel for vello_cpu 0.3; 0.0.8 already
@@ -1157,7 +1191,7 @@ impl Renderer {
                             self.ctx
                                 .set_paint_transform(path_transform.inverse() * native.transform);
                             self.ctx.set_paint(native_gradient(native));
-                            return clip_path;
+                            return PaintSetup::Clip(clip_path);
                         }
 
                         let (image, width, height, transform, may_have_transparency) =
@@ -1176,8 +1210,8 @@ impl Renderer {
                         let image = Image {
                             image: ImageSource::Pixmap(Arc::new(pixmap)),
                             sampler: ImageSampler {
-                                x_extend: peniko::Extend::Repeat,
-                                y_extend: peniko::Extend::Repeat,
+                                x_extend: extend,
+                                y_extend: extend,
                                 quality: ImageQuality::Medium,
                                 alpha: 1.0,
                             },
@@ -1263,7 +1297,7 @@ impl Renderer {
                             };
                             self.ctx.set_paint_transform(paint_transform);
                             self.ctx.set_paint(PaintType::Image(image));
-                            return clip_path;
+                            return PaintSetup::Clip(clip_path);
                         }
                         // PdfCraft patch: the cell pixmap is `step × scale` pixels, which only the
                         // u16 cast below bounded (a fuzzed /XStep far beyond /BBox gave 65535² cells).
@@ -1341,7 +1375,7 @@ impl Renderer {
         self.ctx.set_paint_transform(paint_transform);
         self.ctx.set_paint(paint);
 
-        clip_path
+        PaintSetup::Clip(clip_path)
     }
 
     fn stroke_path(
@@ -1361,7 +1395,9 @@ impl Renderer {
 
         // PdfCraft patch: apply the reading-colours mapping before painting.
         let paint = self.replaced(paint, is_text);
-        let clip_path = self.set_paint(&paint, path, true);
+        let PaintSetup::Clip(clip_path) = self.set_paint(&paint, path, true) else {
+            return;
+        };
         if let Some(clip_path) = clip_path.as_ref() {
             self.push_clip_path_inner(clip_path, FillRule::NonZero);
         }
@@ -1390,7 +1426,9 @@ impl Renderer {
 
         // PdfCraft patch: apply the reading-colours mapping before painting.
         let paint = self.replaced(paint, is_text);
-        let clip_path = self.set_paint(&paint, path, false);
+        let PaintSetup::Clip(clip_path) = self.set_paint(&paint, path, false) else {
+            return;
+        };
         if let Some(clip_path) = clip_path.as_ref() {
             self.push_clip_path_inner(clip_path, fill_rule);
         }
@@ -1618,14 +1656,19 @@ impl<'a> Device<'a> for Renderer {
                                 );
                                 self.ctx.set_transform(transform);
 
-                                let clip_path =
-                                    self.set_paint(paint, &stencil_rect.to_path(0.1), true);
-                                if let Some(clip_path) = clip_path.as_ref() {
-                                    self.push_clip_path_inner(clip_path, FillRule::NonZero);
-                                }
-                                self.ctx.fill_rect(&stencil_rect);
-                                if clip_path.is_some() {
-                                    self.ctx.pop_clip_path();
+                                // PdfCraft patch: a stencil mask is painted with the fill
+                                // (non-stroking) paint; `true` drew an uncolored tiling pattern
+                                // in its stroke color (black by default) (#2975).
+                                if let PaintSetup::Clip(clip_path) =
+                                    self.set_paint(paint, &stencil_rect.to_path(0.1), false)
+                                {
+                                    if let Some(clip_path) = clip_path.as_ref() {
+                                        self.push_clip_path_inner(clip_path, FillRule::NonZero);
+                                    }
+                                    self.ctx.fill_rect(&stencil_rect);
+                                    if clip_path.is_some() {
+                                        self.ctx.pop_clip_path();
+                                    }
                                 }
 
                                 self.ctx.pop_layer();
@@ -1844,7 +1887,9 @@ impl<'a> Device<'a> for Renderer {
 
                 // PdfCraft patch: apply the reading-colours mapping before painting.
                 let paint = self.replaced(paint, false);
-                let clip_path = self.set_paint(&paint, &path, false);
+                let PaintSetup::Clip(clip_path) = self.set_paint(&paint, &path, false) else {
+                    return;
+                };
                 if let Some(clip_path) = clip_path.as_ref() {
                     self.push_clip_path_inner(clip_path, *fill_rule);
                 }
@@ -1876,8 +1921,8 @@ impl<'a> Device<'a> for Renderer {
             GlyphDrawMode::Stroke(s) => {
                 Self::stroke_glyph(self, glyph, transform, glyph_transform, paint, s);
             }
-            GlyphDrawMode::Invisible => {
-                // Don't render invisible text for visual output
+            GlyphDrawMode::Invisible | GlyphDrawMode::Clip => {
+                // PdfCraft patch (#3116): neither mode paints; the interpreter installs the clip.
             }
         }
     }

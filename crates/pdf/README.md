@@ -119,6 +119,12 @@ serialization uses the same backend version as before extraction. It provides:
   postprocessing. App errors pass through; serialization errors retain backend diagnostics.
   Caught panic messages retain up to 1024 Unicode scalar values; the installed panic hook
   remains responsible for logging source locations and full diagnostics.
+- `write::uri_target`: the Krilla link target for a URI link, or `None` when `safe_url`
+  refuses it. Apps build URI links with it instead of `backend::action::LinkAction`, so a
+  link target from someone else's document becomes a PDF link only when it is an `http`/`https`
+  URL with a host or a `mailto` address. A refused target writes no link annotation.
+- `safe_url` (crate root, any feature): the same rule, for apps that open links themselves,
+  such as a slide show.
 
 ### Print color
 
@@ -140,7 +146,8 @@ let writer = Writer::new(SerializeSettings { configuration, ..settings }, metada
 
 For another profile, fill `PrintColor` with its condition identifier (`Custom` when it is
 not registered) and `info`. The settings claim no PDF/X version and are not checked against
-PDF/X; apps that claim conformance set `pdfx_version` and keep their own checks. Writing these
+PDF/X; apps that claim conformance set `pdfx_version` (and `pdfx_conformance` for PDF/X-1a
+and X-3) and keep their own checks. Writing these
 settings needs the patched Krilla (`CRAFT_PRINT_COLOR`, see
 [`vendor/krilla/README.craft.md`](../../vendor/krilla/README.craft.md)).
 

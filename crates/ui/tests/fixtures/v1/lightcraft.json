@@ -1,0 +1,67 @@
+{
+  "uiScale": 1.0,
+  "docking": {
+    "layout": {
+      "root": {
+        "Split": {
+          "axis": "Horizontal",
+          "size": {
+            "FixedSecond": 270.0
+          },
+          "first": {
+            "Split": {
+              "axis": "Horizontal",
+              "size": {
+                "FixedFirst": 268.0
+              },
+              "first": {
+                "Tabs": {
+                  "panels": [
+                    "library"
+                  ],
+                  "active": 0
+                }
+              },
+              "second": {
+                "Tabs": {
+                  "panels": [
+                    "canvas"
+                  ],
+                  "active": 0
+                }
+              }
+            }
+          },
+          "second": {
+            "Tabs": {
+              "panels": [
+                "tools"
+              ],
+              "active": 0
+            }
+          }
+        }
+      },
+      "floating": []
+    },
+    "hidden": [
+      [
+        "presets",
+        {
+          "floating": null,
+          "anchor": "canvas",
+          "placement": {
+            "Split": "Right"
+          },
+          "size": {
+            "FixedSecond": 300.0
+          },
+          "stack": null,
+          "sibling": [
+            "canvas"
+          ]
+        }
+      ]
+    ]
+  }
+}

@@ -76,6 +76,8 @@ pub(crate) fn fill_path_impl<'a>(
     let paint = get_paint(context, false);
     device.set_soft_mask(context.get().graphics_state.soft_mask.clone());
     device.set_blend_mode(context.get().graphics_state.blend_mode);
+    // Craft patch (flatten): tell the device the overprint parameters.
+    set_overprint(context, device);
 
     let mut draw = |path: &BezPath| {
         // pdf.js issue 4260: Replace zero-sized paths with a small stroke instead.
@@ -136,6 +138,8 @@ pub(crate) fn stroke_path_impl<'a>(
     let stroke_props = context.stroke_props();
     device.set_soft_mask(context.get().graphics_state.soft_mask.clone());
     device.set_blend_mode(context.get().graphics_state.blend_mode);
+    // Craft patch (flatten): tell the device the overprint parameters.
+    set_overprint(context, device);
     let paint = get_paint(context, true);
 
     let path = path.unwrap_or(context.path());
@@ -146,6 +150,16 @@ pub(crate) fn stroke_path_impl<'a>(
     } else {
         device.draw_path(path, base_transform, &paint, &draw_mode);
     }
+}
+
+/// Craft patch (flatten): passes the graphics state's `op`, `OP` and `OPM` to the device.
+pub(crate) fn set_overprint<'a>(context: &Context<'a>, device: &mut impl Device<'a>) {
+    let state = &context.get().graphics_state;
+    device.set_overprint(
+        state.overprint_fill,
+        state.overprint_stroke,
+        state.overprint_mode,
+    );
 }
 
 pub(crate) fn get_paint<'a>(context: &Context<'a>, is_stroke: bool) -> Paint<'a> {
@@ -178,6 +192,9 @@ pub(crate) fn get_paint<'a>(context: &Context<'a>, is_stroke: bool) -> Paint<'a>
                 pattern.set_transfer_function(tf.clone());
             }
 
+            // PdfCraft patch (#3246): `CA`/`ca` can be set by a `gs` after `scn`/`SCN`, so the
+            // pattern takes the alpha current at paint time.
+            pattern.set_alpha(data.alpha);
             pattern.pre_concat_transform(context.root_transform());
 
             Paint::Pattern(Box::new(pattern))
@@ -232,6 +249,8 @@ fn plate_paint<'a>(
         }
         Pattern::Tiling(t) => t.for_plate(plate, overprint, overprint_mode),
     }
+    // PdfCraft patch (#3246): the alpha current at paint time, as in `get_paint`.
+    pattern.set_alpha(data.alpha);
     pattern.pre_concat_transform(context.root_transform());
     Paint::Pattern(Box::new(pattern))
 }

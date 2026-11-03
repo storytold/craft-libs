@@ -99,7 +99,7 @@ impl InkId {
     }
 
     /// The id of process ink `p`, the same in every [`InkSet`].
-    pub fn process(p: Process) -> Self {
+    pub const fn process(p: Process) -> Self {
         Self(p as u16)
     }
 }

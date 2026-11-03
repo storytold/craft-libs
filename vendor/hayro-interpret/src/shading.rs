@@ -4,9 +4,9 @@
 
 use crate::CacheKey;
 use crate::cache::Cache;
-use crate::color::{ColorComponents, ColorSpace};
+use crate::color::{ColorComponents, ColorSpace, DefaultColorSpaces, DeviceFamily};
 use crate::function::{Function, StitchingBounds, Values, interpolate};
-use crate::util::{Float32Ext, PointExt, RectExt};
+use crate::util::{Float32Ext, PointExt, RectExt, hash128};
 use hayro_syntax::bit_reader::BitReader;
 use hayro_syntax::object::Array;
 use hayro_syntax::object::Dict;
@@ -144,7 +144,7 @@ impl Shading {
     pub(crate) fn for_plate(&mut self, plate: &crate::color::Plate) {
         self.color_space = self.color_space.plate(plate);
         let simulation = plate.simulation.as_ref().map(|s| s.digest());
-        self.cache_key = crate::util::hash128(&(
+        self.cache_key = hash128(&(
             self.cache_key,
             &plate.ink,
             simulation,
@@ -152,12 +152,24 @@ impl Shading {
         ));
     }
 
-    pub(crate) fn new(dict: &Dict<'_>, stream: Option<&Stream<'_>>, cache: &Cache) -> Option<Self> {
-        let cache_key = dict.cache_key();
-
+    /// PdfCraft patch (#3018): a shading in a device space is drawn in its default color space
+    /// from `defaults`, the resources it is painted with (ISO 32000-2 §8.6.5.6), and keyed by
+    /// it as an image is.
+    pub(crate) fn new(
+        dict: &Dict<'_>,
+        stream: Option<&Stream<'_>>,
+        cache: &Cache,
+        defaults: &DefaultColorSpaces<'_, '_>,
+    ) -> Option<Self> {
         let shading_num = dict.get::<u8>(SHADING_TYPE)?;
 
-        let color_space = ColorSpace::new(dict.get(COLORSPACE)?, cache)?;
+        let color_space_obj = dict.get::<Object<'_>>(COLORSPACE)?;
+        let default =
+            DeviceFamily::of_object(&color_space_obj).and_then(|family| defaults.get(family));
+        let (color_space, cache_key) = match default {
+            Some((space, key)) => (space, hash128(&(dict.cache_key(), key))),
+            None => (ColorSpace::new(color_space_obj, cache)?, dict.cache_key()),
+        };
 
         let shading_type = match shading_num {
             1 => {
@@ -386,6 +398,24 @@ impl Triangle {
     /// Return whether the point is contained within the triangle.
     pub fn contains_point(&self, pos: Point) -> bool {
         self.kurbo_tri.winding(pos) != 0
+    }
+
+    /// PdfCraft patch (#3035): whether the point is inside the triangle or on one of its edges.
+    /// Two triangles of a mesh share an edge; a sample on it belongs to both (their colors
+    /// agree there), where `contains_point` can give it to neither and leave a seam. A
+    /// degenerate triangle covers nothing.
+    pub fn covers(&self, pos: Point) -> bool {
+        // Relative to the barycentric coordinates' scale (1), well above f64 rounding.
+        const EDGE: f64 = 1e-9;
+        let (a, b, c) = (self.p0.point, self.p1.point, self.p2.point);
+        let (v0, v1, v2) = (b - a, c - a, pos - a);
+        let denom = self.d00 * self.d11 - self.d01 * self.d01;
+        let (d20, d21) = (v2.dot(v0), v2.dot(v1));
+        let v = (self.d11 * d20 - self.d01 * d21) / denom;
+        let w = (self.d00 * d21 - self.d01 * d20) / denom;
+        // A degenerate triangle divides by zero: NaN fails every comparison, and infinite
+        // coordinates can't sum to at most one.
+        v >= -EDGE && w >= -EDGE && v + w <= 1.0 + EDGE
     }
 
     /// Return the bounding box of the triangle.
@@ -798,13 +828,22 @@ where
 
             // Converting to triangles is lossy and can lead to gaps. To make this a bit better,
             // we slightly inflate the triangles.
-            let inflate = |mut triangle: Triangle| {
+            // Craft patch: the inflated triangle is built anew, so its stored dot products
+            // (and `kurbo_tri`) match its vertices; moving the points alone skewed the
+            // barycentric coordinates by about 5 %.
+            let inflate = |triangle: Triangle| {
                 let mid = triangle.kurbo_tri.centroid();
-                triangle.p0.point = inflate_point(triangle.p0.point, mid);
-                triangle.p1.point = inflate_point(triangle.p1.point, mid);
-                triangle.p2.point = inflate_point(triangle.p2.point, mid);
+                let Triangle {
+                    mut p0,
+                    mut p1,
+                    mut p2,
+                    ..
+                } = triangle;
+                p0.point = inflate_point(p0.point, mid);
+                p1.point = inflate_point(p1.point, mid);
+                p2.point = inflate_point(p2.point, mid);
 
-                triangle
+                Triangle::new(p0, p1, p2)
             };
 
             // PdfCraft patch (33): the second triangle takes the vertices the first copied.

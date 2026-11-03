@@ -7,6 +7,8 @@
 pub mod cms;
 pub mod composite;
 pub mod coverage;
+#[cfg(feature = "flatten")]
+pub mod flatten;
 pub mod ink;
 pub mod plates;
 

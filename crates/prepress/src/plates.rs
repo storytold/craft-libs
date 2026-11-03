@@ -222,7 +222,7 @@ fn plate_scale(w: f32, h: f32, scale: f32) -> f32 {
     if s.is_finite() && s > 0.0 { s } else { f32::MIN_POSITIVE }
 }
 
-fn fallback(fallback: &Fallback) -> Result<(Option<CmykSimulation>, Conversion), Error> {
+pub(crate) fn fallback(fallback: &Fallback) -> Result<(Option<CmykSimulation>, Conversion), Error> {
     let (conversion, icc): (CmsConversion, &[u8]) = match fallback {
         Fallback::DeviceFormulas => return Ok((None, Conversion::DeviceFormulas)),
         Fallback::Fogra39 => (CmsConversion::fogra39(), craft_cms::builtin::COATED_FOGRA39_ICC),
@@ -264,7 +264,7 @@ fn text_entry(dict: &Dict<'_>, key: &[u8]) -> Option<String> {
 
 /// A PDF text string (ISO 32000-2 §7.9.2.2): UTF-16BE or UTF-8 after its byte order mark, else
 /// PDFDocEncoding, read here as Latin-1 (they differ only in rarely used punctuation).
-fn pdf_text(bytes: &[u8]) -> String {
+pub(crate) fn pdf_text(bytes: &[u8]) -> String {
     if let Some(utf16) = bytes.strip_prefix(&[0xFE, 0xFF]) {
         let units: Vec<u16> = utf16.as_chunks::<2>().0.iter().map(|c| u16::from_be_bytes(*c)).collect();
         return String::from_utf16_lossy(&units);
@@ -278,18 +278,8 @@ fn pdf_text(bytes: &[u8]) -> String {
 /// The printing condition of page `page` (ISO 32000-2 §14.11.5): of the page's own
 /// `/OutputIntents` (PDF 2.0), else the catalog's, the first whose `/DestOutputProfile` is a
 /// CMYK profile craft-cms converts into, a `GTS_PDFX` intent before the others.
-fn output_intent(pdf: &Pdf, page: usize) -> Option<(CmykSimulation, Conversion)> {
-    fn list<'a>(intents: Option<Array<'a>>) -> Vec<Dict<'a>> {
-        intents.iter().flat_map(|a| a.iter::<Dict<'a>>()).take(MAX_OUTPUT_INTENTS).collect()
-    }
-    let xref = pdf.xref();
-    let mut listed = list(pdf.pages().get(page).and_then(|p| p.raw().get::<Array<'_>>(OUTPUT_INTENTS)));
-    if listed.is_empty() {
-        listed = list(xref.get::<Dict<'_>>(xref.root_id()).and_then(|catalog| catalog.get::<Array<'_>>(OUTPUT_INTENTS)));
-    }
-    // A stable sort: the PDF/X intent first, the others in their order.
-    listed.sort_by_key(|d| d.get::<Name<'_>>(S).is_none_or(|s| s.as_ref() != b"GTS_PDFX"));
-    listed.iter().find_map(|intent| {
+pub(crate) fn output_intent(pdf: &Pdf, page: usize) -> Option<(CmykSimulation, Conversion)> {
+    output_intents(pdf, page).iter().find_map(|intent| {
         let icc = intent.get::<Stream<'_>>(DEST_OUTPUT_PROFILE)?.decoded_within(MAX_PROFILE_BYTES).ok()?;
         let simulation = CmsConversion::new(&icc).ok()?.simulation(&icc);
         let condition = text_entry(intent, OUTPUT_CONDITION_IDENTIFIER);
@@ -301,6 +291,50 @@ fn output_intent(pdf: &Pdf, page: usize) -> Option<(CmykSimulation, Conversion)>
             .unwrap_or_else(|| "unnamed CMYK profile".to_string());
         Some((simulation, Conversion::OutputIntent { profile, condition }))
     })
+}
+
+/// The output intent [`output_intent`] picks, as written in the PDF.
+#[cfg(feature = "flatten")]
+pub(crate) struct IntentProfile {
+    pub icc: Vec<u8>,
+    pub identifier: Option<String>,
+    pub condition: Option<String>,
+    pub registry_name: Option<String>,
+    pub info: Option<String>,
+}
+
+/// The output intent [`output_intent`] picks: its profile bytes and entries, to write the same
+/// intent again.
+#[cfg(feature = "flatten")]
+pub(crate) fn output_intent_profile(pdf: &Pdf, page: usize) -> Option<IntentProfile> {
+    output_intents(pdf, page).iter().find_map(|intent| {
+        let icc = intent.get::<Stream<'_>>(DEST_OUTPUT_PROFILE)?.decoded_within(MAX_PROFILE_BYTES).ok()?;
+        if *icc != *craft_cms::builtin::COATED_FOGRA39_ICC && CmsConversion::new(&icc).is_err() {
+            return None;
+        }
+        Some(IntentProfile {
+            icc: icc.into_owned(),
+            identifier: text_entry(intent, OUTPUT_CONDITION_IDENTIFIER),
+            condition: text_entry(intent, OUTPUT_CONDITION),
+            registry_name: text_entry(intent, b"RegistryName"),
+            info: text_entry(intent, b"Info"),
+        })
+    })
+}
+
+/// The page's own `/OutputIntents` (PDF 2.0), else the catalog's, a `GTS_PDFX` intent first.
+fn output_intents(pdf: &Pdf, page: usize) -> Vec<Dict<'_>> {
+    fn list<'a>(intents: Option<Array<'a>>) -> Vec<Dict<'a>> {
+        intents.iter().flat_map(|a| a.iter::<Dict<'a>>()).take(MAX_OUTPUT_INTENTS).collect()
+    }
+    let xref = pdf.xref();
+    let mut listed = list(pdf.pages().get(page).and_then(|p| p.raw().get::<Array<'_>>(OUTPUT_INTENTS)));
+    if listed.is_empty() {
+        listed = list(xref.get::<Dict<'_>>(xref.root_id()).and_then(|catalog| catalog.get::<Array<'_>>(OUTPUT_INTENTS)));
+    }
+    // A stable sort: the PDF/X intent first, the others in their order.
+    listed.sort_by_key(|d| d.get::<Name<'_>>(S).is_none_or(|s| s.as_ref() != b"GTS_PDFX"));
+    listed
 }
 
 #[cfg(test)]

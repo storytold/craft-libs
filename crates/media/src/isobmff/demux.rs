@@ -3,7 +3,7 @@
 use crate::isobmff::bytes::{BoxHeader, Cur, FourCc, boxes, find};
 use crate::isobmff::codec::{CodecConfig, SampleEntry, parse_sample_entry};
 use crate::isobmff::error::{Error, Result, invalid};
-use crate::isobmff::source::ByteSource;
+use crate::source::ByteSource;
 use std::collections::HashMap;
 
 /// Hard cap on the sample count of the whole file, all tracks and fragments (after PCM chunk merging).
@@ -140,12 +140,61 @@ pub struct Track {
     pub pcm_chunked: bool,
     sync_index: Vec<u32>,
     pts_order: Vec<u32>,
+    /// Per entry: the MPEG audio codec its first sample's frame header names, for the
+    /// [`CodecConfig::Mp3`] entries, which name no layer themselves.
+    mpeg_audio: Vec<Option<crate::CodecId>>,
 }
 
 impl Track {
     /// The first sample entry's codec configuration.
     pub fn codec(&self) -> Option<&CodecConfig> {
         self.entries.first().map(|e| &e.codec)
+    }
+
+    /// What a decoder needs for this track, in the container-neutral form the codec crates take:
+    /// [`Track::codec_params_for`] the first sample's description (the first entry for a track
+    /// without samples, or when that index names no entry). A track whose samples use more than
+    /// one description ([`Track::has_mixed_descriptions`]) needs `codec_params_for` per sample.
+    pub fn codec_params(&self) -> crate::CodecParams {
+        let first = self.samples.first().map(|s| s.description_index);
+        self.codec_params_for(first.filter(|&i| i >= 1 && i as usize <= self.entries.len()).unwrap_or(1))
+    }
+
+    /// What a decoder needs for the samples whose [`Sample::description_index`] is
+    /// `description_index` (1-based, into [`Track::entries`]); [`crate::CodecId::Unknown`] when
+    /// there is no such entry.
+    pub fn codec_params_for(&self, description_index: u32) -> crate::CodecParams {
+        let Some(entry) = description_index.checked_sub(1).and_then(|i| self.entries.get(i as usize)) else {
+            return crate::CodecParams::new(crate::CodecId::Unknown);
+        };
+        let codec = &entry.codec;
+        let id = self.mpeg_audio.get(description_index as usize - 1).copied().flatten().unwrap_or(codec.codec_id());
+        let mut p = crate::CodecParams::new(id).with_extradata(codec.extradata()).with_tag(entry.format.0);
+        if let Some(v) = &entry.video {
+            p = p.with_size(u32::from(v.width), u32::from(v.height));
+        }
+        if let Some(a) = &entry.audio {
+            p = p.with_sample_rate(a.sample_rate.round() as u32).with_channels(u16::try_from(a.channels).unwrap_or(0));
+        }
+        match codec {
+            CodecConfig::Pcm(c) => {
+                p = p.with_pcm(if c.float {
+                    crate::PcmFormat::float(c.bits, c.big_endian)
+                } else {
+                    crate::PcmFormat::int(c.bits, c.signed, c.big_endian)
+                });
+                p = p.with_sample_rate(c.sample_rate.round() as u32).with_channels(u16::try_from(c.channels).unwrap_or(0));
+            }
+            CodecConfig::Opus(o) => p = p.with_sample_rate(48_000).with_channels(u16::from(o.output_channels)),
+            _ => {}
+        }
+        p
+    }
+
+    /// True when the samples use more than one sample description, so no single
+    /// [`Track::codec_params`] describes them all.
+    pub fn has_mixed_descriptions(&self) -> bool {
+        self.samples.windows(2).any(|w| w[0].description_index != w[1].description_index)
     }
     pub fn video(&self) -> Option<&crate::isobmff::codec::VideoParams> {
         self.entries.first().and_then(|e| e.video.as_ref())
@@ -402,8 +451,37 @@ pub fn open<S: ByteSource>(src: S) -> Result<Mp4File> {
                 tc.start_frame = Some(u32::from_be_bytes(b));
             }
         }
+        t.mpeg_audio = mpeg_audio_layers(t, &src);
     }
     Ok(file)
+}
+
+/// For each [`CodecConfig::Mp3`] entry, the layer its first sample's frame header names (these
+/// entries name none: ffmpeg stores MP2 as `mp4a` + 0x6B), else what the sample entry says
+/// (QuickTime `.mp2`, `.mp3`).
+fn mpeg_audio_layers<S: ByteSource>(t: &Track, src: &S) -> Vec<Option<crate::CodecId>> {
+    use crate::CodecId;
+    let from_header = |index: u32| {
+        let s = t.samples.iter().find(|s| s.description_index == index && s.size >= 4)?;
+        let mut b = [0u8; 4];
+        src.read_at(s.offset, &mut b).ok()?;
+        if b[0] != 0xFF || b[1] & 0xE0 != 0xE0 {
+            return None;
+        }
+        match (b[1] >> 1) & 3 {
+            3 => Some(CodecId::Mp1),
+            2 => Some(CodecId::Mp2),
+            1 => Some(CodecId::Mp3),
+            _ => None,
+        }
+    };
+    (1..)
+        .zip(&t.entries)
+        .map(|(index, e)| match e.codec {
+            CodecConfig::Mp3 => from_header(index).or(Some(if e.format == b".mp2" { CodecId::Mp2 } else { CodecId::Mp3 })),
+            _ => None,
+        })
+        .collect()
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -457,6 +535,7 @@ fn parse_trak(p: &[u8], file: &Mp4File, file_len: u64, budget: &mut SampleBudget
         pcm_chunked: false,
         sync_index: Vec::new(),
         pts_order: Vec::new(),
+        mpeg_audio: Vec::new(),
     };
     let mut mdia = None;
     for b in boxes(p) {
@@ -604,7 +683,19 @@ impl SttsCursor<'_> {
     }
 }
 
-fn parse_stbl(stbl: &[u8], t: &mut Track, is_qt: bool, file_len: u64, budget: &mut SampleBudget) -> Result<()> {
+struct StblTables {
+    stts: Vec<(u32, u32)>,
+    ctts: Vec<(u32, u32)>,
+    stss: Option<Vec<u32>>,
+    stsc: Vec<(u32, u32, u32)>,
+    const_size: u32,
+    sample_count: usize,
+    sizes: Vec<u32>,
+    chunks: Vec<u64>,
+    sample_groups: Vec<SampleGroup>,
+}
+
+fn parse_stbl_tables(stbl: &[u8], t: &mut Track, is_qt: bool, file_len: u64) -> Result<StblTables> {
     let mut stts: Vec<(u32, u32)> = Vec::new();
     let mut ctts: Vec<(u32, u32)> = Vec::new();
     let mut stss: Option<Vec<u32>> = None;
@@ -730,8 +821,15 @@ fn parse_stbl(stbl: &[u8], t: &mut Track, is_qt: bool, file_len: u64, budget: &m
             _ => {}
         }
     }
-    t.sample_groups =
+    let sample_groups =
         sbgp.into_iter().map(|(gt, runs)| SampleGroup { grouping_type: gt, runs, descriptions: sgpd.remove(&gt).unwrap_or_default() }).collect();
+    Ok(StblTables { stts, ctts, stss, stsc, const_size, sample_count, sizes, chunks, sample_groups })
+}
+
+fn parse_stbl(stbl: &[u8], t: &mut Track, is_qt: bool, file_len: u64, budget: &mut SampleBudget) -> Result<()> {
+    let StblTables { stts, ctts, stss, stsc, const_size, mut sample_count, sizes, chunks, sample_groups } =
+        parse_stbl_tables(stbl, t, is_qt, file_len)?;
+    t.sample_groups = sample_groups;
     if sample_count == 0 || chunks.is_empty() || stsc.is_empty() {
         return Ok(());
     }
@@ -1061,6 +1159,60 @@ mod tests {
         assert_eq!(c.take(3), 10 + 5 + 5);
         assert_eq!(c.next_value(), 5);
         assert_eq!(c.next_value(), 0);
+    }
+
+    #[test]
+    fn codec_params_follow_the_sample_description() {
+        use crate::isobmff::codec::SampleEntry;
+        use crate::isobmff::mux::{Brand, Mp4Writer, TrackConfig, WriteSample, WriterOptions};
+        let mut w = Mp4Writer::new(std::io::Cursor::new(Vec::new()), WriterOptions::new(Brand::Mp4)).unwrap();
+        let a = w.add_track(TrackConfig::new(SampleEntry::aac(vec![0x12, 0x10], 2, 48_000), 48_000)).unwrap();
+        for _ in 0..2 {
+            w.write_sample(a, WriteSample { data: &[0; 8], duration: 1024, composition_offset: 0, is_sync: true }).unwrap();
+        }
+        let out = w.finish().unwrap().into_inner();
+        let mut t = open(out.as_slice()).unwrap().tracks.remove(0);
+        assert!(!t.has_mixed_descriptions());
+        assert_eq!(t.codec_params(), t.codec_params_for(1));
+        // entry 1 unused, every sample on entry 2 (a 44.1 kHz mono AudioSpecificConfig)
+        t.entries.push(SampleEntry::aac(vec![0x12, 0x08], 1, 44_100));
+        t.samples.iter_mut().for_each(|s| s.description_index = 2);
+        let p = t.codec_params();
+        assert_eq!((p.extradata.as_slice(), p.sample_rate, p.channels), (&[0x12, 0x08][..], Some(44_100), Some(1)));
+        assert_eq!(t.codec_params_for(1).extradata, [0x12, 0x10]);
+        assert_eq!(t.codec_params_for(0).codec, crate::CodecId::Unknown);
+        assert_eq!(t.codec_params_for(3).codec, crate::CodecId::Unknown);
+        assert!(!t.has_mixed_descriptions());
+        t.samples[1].description_index = 1;
+        assert!(t.has_mixed_descriptions());
+        t.samples[0].description_index = 0; // malformed: falls back to the first entry
+        assert_eq!(t.codec_params().extradata, [0x12, 0x10]);
+    }
+
+    #[test]
+    fn mpeg_audio_layer_comes_from_the_first_frame() {
+        use crate::CodecId;
+        use crate::isobmff::codec::SampleEntry;
+        use crate::isobmff::mux::{Brand, Mp4Writer, TrackConfig, WriteSample, WriterOptions};
+        // MPEG-1 frame headers: layer I, II, III; then no frame header at all
+        let cases: [(&[u8; 4], Brand, [u8; 2], CodecId); 5] = [
+            (b"mp4a", Brand::Mp4, [0xFF, 0xFF], CodecId::Mp1),
+            (b"mp4a", Brand::Mp4, [0xFF, 0xFD], CodecId::Mp2),
+            (b"mp4a", Brand::Mp4, [0xFF, 0xFB], CodecId::Mp3),
+            (b"mp4a", Brand::Mp4, [0, 0], CodecId::Mp3),
+            (b".mp2", Brand::Mov, [0, 0], CodecId::Mp2),
+        ];
+        for (format, brand, header, want) in cases {
+            let mut w = Mp4Writer::new(std::io::Cursor::new(Vec::new()), WriterOptions::new(brand)).unwrap();
+            let entry = SampleEntry::audio(FourCc(*format), CodecConfig::Mp3, 2, 48_000.0, 16);
+            let a = w.add_track(TrackConfig::new(entry, 48_000)).unwrap();
+            let frame = [&header[..], &[0x94, 0x00, 0, 0, 0, 0]].concat();
+            w.write_sample(a, WriteSample { data: &frame, duration: 1152, composition_offset: 0, is_sync: true }).unwrap();
+            let out = w.finish().unwrap().into_inner();
+            let t = &open(out.as_slice()).unwrap().tracks[0];
+            assert_eq!(t.codec(), Some(&CodecConfig::Mp3));
+            assert_eq!(t.codec_params().codec, want, "{format:?} {header:02X?}");
+        }
     }
 
     #[test]

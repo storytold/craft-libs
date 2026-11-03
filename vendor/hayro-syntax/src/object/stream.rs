@@ -201,9 +201,9 @@ impl<'a> Stream<'a> {
 
     /// PdfCraft patch: the decoded data of the stream, for callers that budget what a page
     /// holds. Flate, LZW and RunLength stop at `max` bytes (and at
-    /// this PDF's ordinary stream limit in any case). A stream without filters is returned
-    /// as it is; ASCIIHex and ASCII85 barely expand, and the image codecs stop at their own pixel
-    /// limits.
+    /// this PDF's ordinary stream limit in any case), and a JBIG2 page that would decode past it
+    /// is refused. A stream without filters is returned as it is; ASCIIHex and ASCII85 barely
+    /// expand, and the other image codecs stop at their own pixel limits.
     pub fn decoded_within(&self, max: usize) -> Result<Cow<'a, [u8]>, DecodeFailure> {
         self.decode_within(&ImageDecodeParams::default(), max)
             .map(|r| r.data)

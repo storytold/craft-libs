@@ -52,6 +52,12 @@ pub struct ExtGState {
     pub opm: Option<i32>,
     #[serde(rename = "BM", skip_serializing_if = "Option::is_none")]
     pub bm: Option<String>,
+    /// `/ca` (fill and text alpha).
+    #[serde(rename = "ca", skip_serializing_if = "Option::is_none")]
+    pub alpha_fill: Option<f32>,
+    /// `/CA` (stroke alpha).
+    #[serde(rename = "CA", skip_serializing_if = "Option::is_none")]
+    pub alpha_stroke: Option<f32>,
     /// The soft mask's `/S`, when the state sets a mask.
     #[serde(rename = "SMask", skip_serializing_if = "Option::is_none")]
     pub smask: Option<String>,
@@ -208,6 +214,8 @@ impl Walk {
             op_stroke: gs.get::<bool>(b"OP".as_slice()),
             op_fill: gs.get::<bool>(b"op".as_slice()),
             opm: gs.get::<i32>(b"OPM".as_slice()),
+            alpha_fill: gs.get::<f32>(b"ca".as_slice()),
+            alpha_stroke: gs.get::<f32>(b"CA".as_slice()),
             bm: gs.get::<Object<'_>>(b"BM".as_slice()).and_then(|bm| match bm {
                 Object::Name(name) => Some(name.as_str().to_owned()),
                 Object::Array(names) => names.iter::<Name<'_>>().next().map(|n| n.as_str().to_owned()),
@@ -306,6 +314,29 @@ fn describe(cs: &Object<'_>, depth: usize) -> String {
         }
         _ => "?".to_owned(),
     }
+}
+
+/// Live transparency left in a page that should have none, as a flattener's output must: transparency
+/// groups, soft masks in graphics states, blend modes other than Normal, and `ca` or `CA` below 1.
+/// Soft masks of images are not graphics states and are allowed. Empty when there is none.
+pub fn transparency(summary: &Summary) -> Vec<String> {
+    let mut out: Vec<String> = summary.groups.iter().filter(|g| g.s == "Transparency").map(|g| format!("transparency group ({})", g.at)).collect();
+    for gs in &summary.ext_g_states {
+        if let Some(mask) = gs.smask.as_deref().filter(|m| !m.is_empty() && *m != "None") {
+            out.push(format!("soft mask /{mask}"));
+        }
+        if let Some(bm) = gs.bm.as_deref().filter(|b| *b != "Normal" && *b != "Compatible") {
+            out.push(format!("blend mode /{bm}"));
+        }
+        for (key, alpha) in [("ca", gs.alpha_fill), ("CA", gs.alpha_stroke)] {
+            if let Some(a) = alpha.filter(|a| *a < 1.0) {
+                out.push(format!("/{key} {a}"));
+            }
+        }
+    }
+    out.sort();
+    out.dedup();
+    out
 }
 
 /// A scene's `structure` block. Every field is optional; only the fields present are checked.

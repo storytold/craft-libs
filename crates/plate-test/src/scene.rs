@@ -232,6 +232,17 @@ pub struct ImageSource {
     /// Gray image for soft masks: white inside, fading to black over this many pt at the edges.
     #[serde(default)]
     pub feather: Option<f32>,
+    /// An alpha channel, written as the image's `/SMask` (a PNG with transparency).
+    #[serde(default)]
+    pub alpha: Option<ImageAlpha>,
+}
+
+/// Image alpha: `opacity` (0–1) for pixels whose centers lie inside `rect` (page pt), 0 for the rest.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ImageAlpha {
+    pub rect: [f32; 4],
+    pub opacity: f32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -462,6 +473,9 @@ impl Scene {
             }
             if image.px[0] == 0 || image.px[1] == 0 || image.px[0] > 4096 || image.px[1] > 4096 {
                 out.push("image px must be 1–4096".into());
+            }
+            if image.alpha.as_ref().is_some_and(|a| image.feather.is_some() || !(0.0..=1.0).contains(&a.opacity)) {
+                out.push("image alpha needs a color image and an opacity of 0–1".into());
             }
         }
         if (kind == Kind::Pdf) != object.scene.is_some() {

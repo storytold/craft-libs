@@ -84,6 +84,8 @@ pub struct Metadata {
     pub description: Option<String>,
     pub keywords: Vec<String>,
     pub created: Option<backend::metadata::DateTime>,
+    /// Written as the modification date; `created` is written there when this is `None`.
+    pub modified: Option<backend::metadata::DateTime>,
 }
 
 impl Metadata {
@@ -98,6 +100,9 @@ impl Metadata {
         }
         if let Some(created) = self.created {
             metadata = metadata.creation_date(created);
+        }
+        if let Some(modified) = self.modified {
+            metadata = metadata.modification_date(modified);
         }
         metadata
     }
@@ -137,6 +142,14 @@ impl Writer {
     pub fn finish(self) -> Result<Vec<u8>, WriteError> {
         guard(|| self.document.finish().map_err(|error| WriteError::Serialization(Box::new(error))))
     }
+}
+
+/// The link target that opens `url`, or `None` when [`safe_url`](crate::safe_url) refuses it.
+/// Build URI links with this instead of `backend::action::LinkAction` so a refused target
+/// writes no link annotation; the page content stays as drawn. The URI is written trimmed.
+pub fn uri_target(url: &str) -> Option<backend::annotation::Target> {
+    let url = url.trim();
+    crate::safe_url(url).then(|| backend::annotation::Target::Action(backend::action::LinkAction::new(url.to_owned()).into()))
 }
 
 fn check_font_input(size: usize, variations: Option<&[([u8; 4], f32)]>) -> Result<(), WriteError> {

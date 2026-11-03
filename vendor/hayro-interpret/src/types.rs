@@ -106,6 +106,39 @@ impl RasterImage<'_> {
     }
 }
 
+impl RasterImage<'_> {
+    /// Craft patch (flatten): the image's samples as inks, in its own color space (see
+    /// [`InkImage`]); process colour converts through `simulation` where plate mode converts it.
+    pub fn with_inks(
+        &self,
+        simulation: Option<&crate::color::CmykSimulation>,
+        func: impl FnOnce(InkImage),
+    ) {
+        if let Some(image) = crate::x_object::decode_inks(&self.0, simulation) {
+            func(image);
+        }
+    }
+}
+
+/// Craft patch (flatten): a raster image decoded into inks rather than RGB.
+#[derive(Clone)]
+pub struct InkImage {
+    /// The width in samples.
+    pub width: u32,
+    /// The height in samples.
+    pub height: u32,
+    /// What each sample's values are.
+    pub space: crate::color::InkSpace,
+    /// The image's color space (an Indexed space itself, not its base).
+    pub color_space: crate::color::ColorSpace,
+    /// `space.len()` bytes per sample, rows top to bottom, 255 = 1.0.
+    pub samples: Vec<u8>,
+    /// The `/SMask`, `/Mask` or `/SMaskInData` alpha, at its own size.
+    pub alpha: Option<LumaData>,
+    /// As [`RgbData::scale_factors`].
+    pub scale_factors: (f32, f32),
+}
+
 impl CacheKey for RasterImage<'_> {
     fn cache_key(&self) -> u128 {
         self.0.cache_key()
@@ -284,6 +317,8 @@ pub enum GlyphDrawMode {
     Fill,
     /// Draw using a stroke.
     Stroke(StrokeProps),
+    /// PdfCraft patch (#3116): text that shapes a clip; report it without painting a glyph.
+    Clip,
     /// Invisible text (for text extraction but not visual rendering).
     Invisible,
 }

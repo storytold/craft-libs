@@ -1,13 +1,16 @@
 use crate::cache::{Cache, DecodedImageCache, DecodedImageKey};
-use crate::color::{ColorComponents, ColorSpace, InkUse, Plate, ToRgb};
+use crate::color::{
+    CmykSimulation, ColorComponents, ColorSpace, DefaultColorSpaces, DeviceFamily, InkSpace,
+    InkUse, Plate, ToRgb,
+};
 use crate::context::Context;
 use crate::device::Device;
 use crate::function::{Function, interpolate};
-use crate::interpret::path::get_paint;
+use crate::interpret::path::{get_paint, set_overprint};
 use crate::interpret::state::ActiveTransferFunction;
-use crate::{BlendMode, CacheKey, ClipPath, Image, RasterImage, StencilImage};
+use crate::{BlendMode, CacheKey, ClipPath, Image, Paint, RasterImage, StencilImage};
 use crate::{FillRule, InterpreterWarning, WarningSinkFn, interpret};
-use crate::{ImageData, LumaData, RgbData};
+use crate::{ImageData, InkImage, LumaData, RgbData};
 use hayro_syntax::bit_reader::BitReader;
 use hayro_syntax::content::TypedIter;
 use hayro_syntax::object::Array;
@@ -36,6 +39,7 @@ impl<'a> XObject<'a> {
         cache: &Cache,
         decoded_cache: Option<&DecodedImageCache>,
         transfer_function: Option<ActiveTransferFunction>,
+        defaults: &DefaultColorSpaces<'_, '_>,
     ) -> Option<Self> {
         let dict = stream.dict();
         match dict.get::<Name<'_>>(SUBTYPE)?.deref() {
@@ -47,6 +51,7 @@ impl<'a> XObject<'a> {
                 decoded_cache,
                 false,
                 transfer_function,
+                Some(defaults),
             )?)),
             FORM => Some(Self::FormXObject(FormXObject::new(stream)?)),
             _ => None,
@@ -205,6 +210,10 @@ pub(crate) fn draw_form_xobject<'a, 'b>(
         if x_object.is_knockout {
             device.set_knockout();
         }
+        // Craft patch (flatten): tell the device the group is isolated.
+        if x_object.is_isolated {
+            device.set_isolated();
+        }
     }
 
     device.set_soft_mask(context.get().graphics_state.soft_mask.clone());
@@ -336,10 +345,22 @@ pub(crate) fn draw_image_xobject<'a, 'b>(
 
     device.set_soft_mask(None);
     device.set_blend_mode(BlendMode::default());
+    // Craft patch (flatten): tell the device the overprint parameters.
+    set_overprint(context, device);
+    // PdfCraft patch (46): the group just pushed applies the fill opacity, so a stencil mask's
+    // paint (the fill color) must not carry it again: at `ca 0.5` a mask was drawn at a
+    // quarter of its opacity (#2975). The alpha is put back below: `restore_state` doesn't
+    // when the saved-state bound skipped the save.
+    let fill_alpha = context.get().graphics_state.non_stroke_alpha;
+    context.get_mut().graphics_state.non_stroke_alpha = 1.0;
 
     let image = if x_object.is_mask {
         Image::Stencil(StencilImage {
-            paint: get_paint(context, false),
+            // A pattern paint keeps the opacity it was set with: drop it too (patch 46).
+            paint: match get_paint(context, false) {
+                Paint::Pattern(pattern) => Paint::Pattern(Box::new(pattern.without_opacity())),
+                paint => paint,
+            },
             image_xobject: x_object.clone(),
         })
     } else {
@@ -349,6 +370,7 @@ pub(crate) fn draw_image_xobject<'a, 'b>(
     device.draw_image(image, transform);
     device.pop_transparency_group();
 
+    context.get_mut().graphics_state.non_stroke_alpha = fill_alpha;
     context.restore_state(device);
 
     if has_oc {
@@ -387,6 +409,9 @@ pub(crate) struct ImageXObject<'a> {
     warning_sink: WarningSinkFn,
     /// PdfCraft patch (35): the plate the image is drawn on, if any.
     plate: Option<Plate>,
+    /// PdfCraft patch (#3018): the cache key of the default color space drawn in place of the
+    /// image's device space, if one is.
+    default_space: Option<u128>,
 }
 
 impl<'a> ImageXObject<'a> {
@@ -401,6 +426,9 @@ impl<'a> ImageXObject<'a> {
         }
     }
 
+    /// PdfCraft patch (#3018): an image in a device space is drawn in its default color space
+    /// from `defaults`. Masks have none to replace, and `resolve_cs` (an inline image's named
+    /// color space) substitutes its own.
     pub(crate) fn new(
         stream: &Stream<'a>,
         resolve_cs: impl FnOnce(&Name<'_>) -> Option<ColorSpace>,
@@ -409,6 +437,7 @@ impl<'a> ImageXObject<'a> {
         decoded_cache: Option<&DecodedImageCache>,
         mut is_mask: bool,
         transfer_function: Option<ActiveTransferFunction>,
+        defaults: Option<&DefaultColorSpaces<'_, '_>>,
     ) -> Option<Self> {
         let dict = stream.dict();
 
@@ -418,6 +447,7 @@ impl<'a> ImageXObject<'a> {
             .unwrap_or(false);
         is_mask |= is_stencil_mask;
 
+        let mut default_space = None;
         let image_cs = if is_mask {
             // Masks are always single-channel.
             Some(ColorSpace::device_gray())
@@ -426,15 +456,25 @@ impl<'a> ImageXObject<'a> {
                 .get::<Object<'_>>(CS)
                 .or_else(|| dict.get::<Object<'_>>(COLORSPACE));
 
-            cs_obj
-                .clone()
-                .and_then(|c| ColorSpace::new(c, cache))
-                // Inline images can also refer to color spaces by name.
-                .or_else(|| {
-                    cs_obj
-                        .and_then(|c| c.into_name())
-                        .and_then(|n| resolve_cs(&n))
-                })
+            let default = cs_obj
+                .as_ref()
+                .and_then(DeviceFamily::of_object)
+                .zip(defaults)
+                .and_then(|(family, defaults)| defaults.get(family));
+            if let Some((space, key)) = default {
+                default_space = Some(key);
+                Some(space)
+            } else {
+                cs_obj
+                    .clone()
+                    .and_then(|c| ColorSpace::new(c, cache))
+                    // Inline images can also refer to color spaces by name.
+                    .or_else(|| {
+                        cs_obj
+                            .and_then(|c| c.into_name())
+                            .and_then(|n| resolve_cs(&n))
+                    })
+            }
         };
 
         let interpolate = dict
@@ -462,6 +502,7 @@ impl<'a> ImageXObject<'a> {
             is_mask,
             is_stencil_mask,
             plate: None,
+            default_space,
         })
     }
 
@@ -525,6 +566,8 @@ impl<'a> ImageXObject<'a> {
             is_mask: self.is_mask,
             is_stencil_mask: self.is_stencil_mask,
             interpolate: self.interpolate,
+            // PdfCraft patch (#3018): the same image drawn in a default color space or without one.
+            default_space: self.default_space,
             // PdfCraft patch (32): see `decode_reads_target`.
             target: if self.decode_reads_target() {
                 target_dimension
@@ -914,6 +957,111 @@ fn decode_raster(
     Some(DecodedRaster { image, alpha })
 }
 
+/// Craft patch (flatten): the image's samples in its own space's inks (see
+/// [`RasterImage::with_inks`](crate::RasterImage::with_inks)): `/Decode` and `/Matte` applied,
+/// process colour converted as [`ColorSpace::ink_values`] does, transfer functions left out
+/// (as on a plate).
+pub(crate) fn decode_inks(
+    obj: &ImageXObject<'_>,
+    simulation: Option<&CmykSimulation>,
+) -> Option<InkImage> {
+    if obj.is_mask {
+        return None;
+    }
+    let mut ctx = decode_context(obj, None)?;
+    let cs = ctx.color_space.clone();
+    let n = cs.components();
+    if n == 0 {
+        return None;
+    }
+    let space = cs.ink_space(simulation);
+    let bpc = ctx.bits_per_component;
+    let mut height = ctx.height;
+    let is_default = ctx.decode_arr == cs.default_decode_arr(bpc as f32);
+    let is_inverted = ctx.decode_arr == cs.inverted_default_decode_arr(bpc as f32);
+    let identity = !cs.is_indexed()
+        && space.len() == n
+        && !matches!(space, InkSpace::Cmyk { converted: true });
+    let matte = obj
+        .stream
+        .dict()
+        .get::<Stream<'_>>(SMASK)
+        .and_then(|s| s.dict().get::<ColorComponents>(MATTE))
+        .filter(|m| m.len() == n && !cs.is_indexed());
+
+    let mut alpha_height = height;
+    let alpha = resolve_alpha(
+        obj,
+        &mut ctx.decoded,
+        None,
+        &cs,
+        bpc,
+        ctx.width,
+        &mut alpha_height,
+        ctx.scale_factors,
+        None,
+    )
+    .flatten();
+    let matte_alpha = alpha
+        .as_ref()
+        .filter(|a| a.width == ctx.width && a.height == height && matte.is_some());
+
+    let samples = if bpc == 8 && identity && (is_default || is_inverted) && matte_alpha.is_none() {
+        let mut data = ctx.decoded.data.into_owned();
+        fix_image_length(&mut data, ctx.width, &mut height, 0, &cs)?;
+        if is_inverted {
+            for b in &mut data {
+                *b = 255 - *b;
+            }
+        }
+        data
+    } else {
+        let mut components = get_components(&ctx.decoded.data, ctx.width, height, &cs, bpc)?;
+        fix_image_length(&mut components, ctx.width, &mut height, 0, &cs)?;
+        let width = space.len();
+        let mut samples = Vec::with_capacity(components.len() / n * width);
+        let mut colors = Vec::new();
+        let mut values = Vec::new();
+        const CHUNK: usize = 1 << 14;
+        for (c, chunk) in components.chunks(CHUNK * n).enumerate() {
+            colors.clear();
+            for pixel in chunk.chunks_exact(n) {
+                let start = colors.len();
+                for (sample, range) in pixel.iter().zip(&ctx.decode_arr) {
+                    colors.push(decode_sample(*sample, bpc, *range));
+                }
+                colors.resize(start + n, 0.0);
+            }
+            if let (Some(matte), Some(alpha)) = (&matte, matte_alpha) {
+                for (k, pixel) in colors.chunks_exact_mut(n).enumerate() {
+                    let a = alpha.data.get(c * CHUNK + k).copied().unwrap_or(255);
+                    if a == 0 {
+                        continue;
+                    }
+                    let a = f32::from(a) / 255.0;
+                    for (v, m) in pixel.iter_mut().zip(matte.iter()) {
+                        *v = m + (*v - m) / a;
+                    }
+                }
+            }
+            values.clear();
+            cs.ink_values(&colors, simulation, &mut values);
+            samples.extend(values.iter().map(|v| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8));
+        }
+        samples
+    };
+
+    Some(InkImage {
+        width: ctx.width,
+        height,
+        space,
+        color_space: cs,
+        samples,
+        alpha,
+        scale_factors: ctx.scale_factors,
+    })
+}
+
 fn decode_mask_bytes(
     mut decoded_data: Cow<'_, [u8]>,
     width: u32,
@@ -1001,7 +1149,7 @@ fn resolve_alpha(
         .get::<Stream<'_>>(SMASK)
         .or_else(|| dict.get::<Stream<'_>>(MASK))
     {
-        let obj = ImageXObject::new(&s_mask, |_| None, &obj.warning_sink, &obj.cache, obj.decoded_cache.as_ref(), true, None)?;
+        let obj = ImageXObject::new(&s_mask, |_| None, &obj.warning_sink, &obj.cache, obj.decoded_cache.as_ref(), true, None, None)?;
 
         decode_mask(&obj, target_dimension).map(|decoded| decoded.luma)
     } else if let Some(color_key_mask) = dict.get::<SmallVec<[u16; 4]>>(MASK) {
@@ -1061,7 +1209,7 @@ fn resolve_matte(
     let mut matte_rgb = [0_u8; 3];
     color_space.convert_f32(&matte, &mut matte_rgb, false);
 
-    let mask_obj = ImageXObject::new(&s_mask, |_| None, &obj.warning_sink, &obj.cache, obj.decoded_cache.as_ref(), true, None)?;
+    let mask_obj = ImageXObject::new(&s_mask, |_| None, &obj.warning_sink, &obj.cache, obj.decoded_cache.as_ref(), true, None, None)?;
     let alpha = decode_mask(&mask_obj, target_dimension)?.luma;
 
     Some((alpha, matte_rgb))
@@ -1184,9 +1332,11 @@ fn get_components(
             buf
         }
         8 => data.iter().map(|v| *v as u16).collect(),
+        // A trailing odd byte is the high byte of a last sample whose low byte is missing, so pad
+        // it with zero like the other branches pad short data.
         16 => data
             .chunks(2)
-            .map(|v| u16::from_be_bytes([v[0], v[1]]))
+            .map(|v| u16::from_be_bytes([v[0], v.get(1).copied().unwrap_or(0)]))
             .collect(),
         _ => {
             warn!("unsupported bits per component: {bits_per_component}");
@@ -1337,4 +1487,17 @@ fn convert_each(cs: &ColorSpace, input: &[f32], n: usize, output: &mut [u8]) {
 /// 2^28 pixels, the renderer's `MAX_IMAGE_PIXELS`).
 pub fn image_size_ok(width: u32, height: u32) -> bool {
     width > 0 && height > 0 && u64::from(width) * u64::from(height) <= 1 << 28
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sixteen_bit_components_with_odd_length_data_pad_the_missing_byte() {
+        let color_space = ColorSpace::device_gray();
+
+        assert_eq!(get_components(&[0x41], 1, 1, &color_space, 16), Some(vec![0x4100]));
+        assert_eq!(get_components(&[0x01, 0x02, 0x03], 2, 1, &color_space, 16), Some(vec![0x0102, 0x0300]));
+    }
 }

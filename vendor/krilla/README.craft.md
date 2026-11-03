@@ -22,6 +22,11 @@ itself omits those texts. Its examples and four CC0 ICC profiles are retained wi
 | `patches/10-mesh-gradients.patch` | Mesh gradients | `content.rs`, `error.rs`, `graphics/{mask,paint,shading_function}.rs`, `serialize.rs`, `surface.rs` |
 | `patches/11-png-decode-cap.patch` | PNG decode cap | `graphics/image.rs` |
 | `patches/12-optional-content.patch` | Optional content | `chunk_container.rs`, `configure/{PDF_A1,PDF_A2,PDF_A4,PDF_UA1}.md`, `configure/validate.rs`, `content.rs`, `error.rs`, `graphics/{mod,optional_content}.rs`, `lib.rs`, `resource.rs`, `serialize.rs`, `surface.rs` |
+| `patches/13-annotation-bounds.patch` | Annotation and destination bounds | `error.rs`, `interactive/{annotation,destination}.rs`, `page.rs`, `serialize.rs` |
+| `patches/14-devicen-pdf-version.patch` | DeviceN attributes by PDF version | `graphics/device_n.rs` |
+| `patches/15-pdfx-conformance.patch` | PDF/X conformance key | `serialize.rs` |
+| `patches/16-modification-date.patch` | Modification date | `interchange/metadata.rs` |
+| `patches/17-color-precision.patch` | Color precision | `graphics/{color,shading_function}.rs` |
 
 Each patch applies with `patch -p1` from this directory, in numeric order, to the pristine
 crate. `SOURCE.json` records, for every retained file, the upstream hash (`upstream_sha256`)
@@ -180,7 +185,7 @@ written as CMYK, which knocks out or replaces the other plates.
 - From PDF 1.6, a space with spots gets an attributes dictionary whose `/Colorants` maps
   each spot to its Separation space. When spots and process inks mix, it is
   `/Subtype /NChannel` with `/Process << /ColorSpace alternate /Components [/Cyan /Magenta
-  /Yellow /Black] >>`.
+  /Yellow /Black] >>`. Patch 14 changes which of these each PDF version gets.
 - Validation: a spot's CMYK alternate counts as its Separation fallback, so one colorant
   name keeps one alternate across Separation and DeviceN spaces
   (`ValidationError::InconsistentSeparationFallback`). `/All` and `/None` are Separation-only
@@ -336,3 +341,96 @@ get small hooks.
 `CRAFT_OPTIONAL_CONTENT` marks the patch; craft-pdf requires it at compile time.
 
 Tests: `crates/pdf/tests/optional_content.rs`.
+
+## 13: annotation and destination bounds
+
+Upstream panics on link geometry that has no finite place on the page, which aborts a WASM
+app. `Document::finish` returns an error instead and writes nothing for the object:
+
+| Input | Upstream | Error |
+|---|---|---|
+| `LinkAnnotation::new_with_quad_points` with no quads, a non-finite point, or a bounding box whose width or height overflows | `assert!` or `unwrap` | `InvalidAnnotationGeometry(location)` |
+| A link rect or quad bounding box that overflows when flipped into PDF coordinates (`page_height - y`) | `unwrap` | `InvalidAnnotationGeometry(location)` |
+| A media, crop, bleed, trim or art box that overflows the same way | `unwrap` | `InvalidPageBox(page_index)` |
+| An `XyzDestination` page index past the last page | `panic!` | `InvalidDestination(page_index)` |
+| An `XyzDestination` point that maps to a non-finite coordinate | writes `inf` or `NaN` | `InvalidDestination(page_index)` |
+
+The constructors keep their signatures: `LinkAnnotation` holds an `Option<Rect>` and the check
+runs at serialization, before the annotation object starts. Refusing a single annotation
+instead of skipping it keeps the indices of tagged annotations in the structure tree valid.
+
+Tests: `crates/pdf/tests/link_annotations.rs`.
+
+## 14: DeviceN attributes by PDF version
+
+Patch 06 writes the DeviceN attributes dictionary only from PDF 1.6. A PDF/X-1a file is PDF
+1.3 or 1.4, so its spots then had no `/Colorants`, and a file written at 1.6 or later and
+relabeled 1.4 kept `/Subtype /NChannel` and `/Process`, which preflight tools flag in a 1.4
+file.
+
+ISO 32000-1, 8.6.6.5 (Table 71) marks the attributes dictionary and its `/Colorants` entry
+PDF 1.3, and `/Subtype`, `/Process` and `/MixingHints` PDF 1.6; the PDF Reference for 1.3 and
+1.4 lists `/Colorants` as the dictionary's only entry. The spec was checked from memory, not
+against the text.
+
+- Every version krilla writes (1.4 and later): a space with spots gets an attributes
+  dictionary with `/Colorants`, each spot mapped to its Separation space.
+- From PDF 1.6, a space that mixes spots and process inks also gets `/Subtype /NChannel` and
+  `/Process`, as patch 06 writes them.
+- A space of process inks only gets no attributes, as before.
+
+Tests: `crates/pdf/tests/print_color.rs` (`device_n_attributes_follow_the_pdf_version`) and
+`crates/prepress/tests/flatten_document.rs` (`pdf_x1a_output_is_pdf_14_without_nchannel`).
+
+## 15: PDF/X conformance key
+
+Patch 08 writes only `GTS_PDFXVersion`. PDF/X-1a and X-3 also need `GTS_PDFXConformance` in
+the document information dictionary: a PDF/X-1a:2003 file carries `GTS_PDFXVersion
+(PDF/X-1:2003)` and `GTS_PDFXConformance (PDF/X-1a:2003)` (ISO 15930-4). Later parts (X-4
+and on) have no conformance key.
+
+- `SerializeSettings::pdfx_conformance: Option<String>` writes `/GTS_PDFXConformance` to the
+  dictionary, under the same PDF 2.0 rule as patch 08's entries. It defaults to `None`.
+- There is no XMP property for it: the `pdfxid` schema (ISO 15930-7) defines only
+  `GTS_PDFXVersion`. A PDF 2.0 file therefore omits the key.
+
+Tests: `crates/pdf/tests/print_color.rs` (`trapped_and_pdfx_version_are_written_to_info_and_xmp`)
+and `crates/prepress/tests/flatten_document.rs` (`pdf_x1a_output_is_pdf_14_without_nchannel`).
+
+## 16: modification date
+
+Upstream has only a creation date and writes it as the modification date too (`/ModDate` and
+`xmp:ModifyDate`), so a document rewritten from another, such as a flattened copy, can't keep
+its source's modification date.
+
+- `Metadata::modification_date(DateTime)` sets the date written as `/ModDate` and
+  `xmp:ModifyDate`. Without it, the creation date is written there, as upstream does.
+- The XMP history events keep the creation date.
+
+Tests: `crates/pdf/tests/writing.rs` (`writes_pages_metadata_and_selected_version_without_a_renderer`,
+`the_creation_date_is_the_modification_date_when_none_is_given`) and
+`crates/prepress/tests/flatten_document.rs`
+(`a_document_flattens_page_by_page_and_keeps_boxes_metadata_and_shared_fonts`).
+
+## 17: color precision
+
+Upstream stores gray, CMYK, Separation and DeviceN components as `u8`, so every ink is written
+as a multiple of 1/255: C75 becomes 0.7490196 and C4 M4 Y4 K4 becomes 0.039215688.
+
+- `cmyk::Color::new_f32`, `luma::Color::new_f32`, `separation::Color::new_f32` and
+  `device_n::Color::new_f32` take components from 0 to 1 and write them as given. Values
+  outside 0 to 1 are clamped and NaN is 0.
+- The `u8` constructors keep their signatures and write `value / 255`, as upstream does.
+- The colors store each component as an `f32` whose bits `Eq` and `Hash` compare; -0 is
+  stored as 0, so equal components compare equal. `RegularColor::as_rgb` rounds gray to the
+  nearest 8-bit value.
+- Gradient stops that are rewritten into one DeviceCMYK, Separation or DeviceN space keep
+  their components, and a DeviceN color's CMYK alternate (annotations, tags) is no longer
+  rounded.
+- A gray stop rewritten into a CMYK space becomes the black ink `1 - gray`, subtracted from the
+  shortest decimal that writes the gray, so gray 0.96 is K 0.04. An 8-bit gray `n` is K
+  `(255 - n) / 255`, as `cmyk::Color::new` writes it.
+- Mesh gradients write their corner colors and opacities at 16 bits a component instead of 8.
+
+Tests: `crates/pdf/tests/print_color.rs` (`f32_colors_*`, `gray_stops_keep_their_exact_black_in_cmyk_shadings`,
+`mesh_*`, `rgb_mesh_is_a_device_rgb_shading`).

@@ -16,6 +16,8 @@ concurrency:
 
 jobs:
   sonarcloud:
-    # Tracked at @main so org-wide CI improvements propagate without PR churn.
+    # Track shared CI improvements on main.
     uses: storytold/craft-common-actions/.github/workflows/sonarcloud.yml@main
+    with:
+      pdf-test-fonts: true
     secrets: inherit

@@ -107,6 +107,14 @@ pub trait Device<'a> {
     fn begin_knockout_erase(&mut self) {}
     /// Knockout patch (pdfcraft #2974): see `knockout_erase_wanted`.
     fn end_knockout_erase(&mut self) {}
+    /// Craft patch (flatten): the overprint parameters for the paints that follow, until the
+    /// next call: `op` (`fill`, for fills, glyph fills and images), `OP` (`stroke`) and `OPM`
+    /// (`mode`, 0 or 1; ISO 32000-2 §8.6.7). Called where `set_blend_mode` is called for a
+    /// paint.
+    fn set_overprint(&mut self, _fill: bool, _stroke: bool, _mode: u8) {}
+    /// Craft patch (flatten): the transparency group just pushed is isolated (`/I true`), until
+    /// the matching `pop_transparency_group`.
+    fn set_isolated(&mut self) {}
 }
 
 /// A device that discards all drawing operations.

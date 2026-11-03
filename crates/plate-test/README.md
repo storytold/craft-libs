@@ -17,6 +17,18 @@ and the PDF structure a correct print export has.
 `tests/scenes.rs` parses every scene, writes every scene without `pending`, and checks the
 structure. It runs in CI in seconds, with the unit tests of the TIFF reader and the judge.
 
+## Scenes
+
+The file names say what each scene tests; `title` and `source` say more.
+
+| IDs | Cases |
+|---|---|
+| `S01`–`S17` | Print-color research cases: overprint, spots, blending spaces, knockout and isolated groups, masks, placed PDFs, gradients |
+| `D01`–`D10` | DesignCraft print cases (its DC list) and a GWG idea (D04) |
+| `M1`, `M2`, `N1` | Luminosity mask backdrop and transfer; DeviceN overprint |
+| `F01` | Flattener: a semi-transparent image over a flat fill; where the image's alpha is 0 the fill prints unchanged (vectorcraft#2160) |
+| `F02` | Flattener: art hidden under opaque fills, with transparency over them, leaves no trace (vectorcraft#2161) |
+
 ## Scene format
 
 Coordinates are points from the page's top-left corner; rectangles are `[x, y, width, height]`.
@@ -57,7 +69,9 @@ Paints:
 Images are synthetic: `{"px": [w, h], "ramp": [paint, paint]}` (left to right),
 `"split": [paint, paint]` (left and right halves) or `"feather": pt` (a gray soft-mask image,
 white inside and fading to black at the edges). Shadows and feathers are luminosity masks over
-such an image.
+such an image. A ramp or split image can carry `"alpha": {"rect": [x, y, w, h], "opacity": 0.6}`,
+written as its `/SMask` like a PNG with transparency: pixels whose centers lie in `rect` (page
+pt) have that opacity, the rest 0.
 
 Tolerances: ±2 for device, spot and overprint values; ±6 for blends and ICC; ±10 for shadows and
 gradients.
@@ -130,6 +144,13 @@ are expected to fail; the report shows what the writer prints today. A pending s
 is reported as such: its plates don't show the missing feature under Ghostscript, so its
 `structure` block is the check that does. The test fails when a scene without `pending` fails or
 the harness errors.
+
+`scripts/plate-check.sh --flatten` runs the same check on each scene's page flattened by
+craft-prepress (`flatten_page` at 300 dpi; the test is `flatten_plates` in craft-prepress, since
+craft-prepress dev-depends on this crate). The flattened page must also have no transparency
+left (`structure::transparency`: transparency groups, soft masks in graphics states, blend modes
+other than Normal, `ca`/`CA` below 1). Its report goes to `plate-test/flattened/` and shows both
+pages side by side, with the flattener's time per scene.
 
 The results go to `plate-test/report.md` and `results.json` in Cargo's target directory
 (`CARGO_TARGET_DIR` is respected). The script sets `CRAFT_PDF_TEST_FONT_DIR` to

@@ -515,3 +515,25 @@ fn a_knockout_group_separates_with_only_the_top_object_in_the_overlap() {
     let blended = plates(&group(""), &inks(&[]), true, None);
     assert_eq!(blended.at(20, 20), [25, 50, 0, 0], "both squares without /K");
 }
+
+/// PdfCraft #3018: `/DefaultCMYK` and `/DefaultGray` change how device color looks, not the
+/// inks it prints with. Under them DeviceCMYK still separates as its components (and keeps the
+/// nonzero overprint mode), a DeviceCMYK image sample by sample, and DeviceGray on black alone,
+/// with or without a simulation whose profile differs from the default.
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+fn default_color_spaces_leave_device_color_on_its_plates() {
+    let image = stream("/Type /XObject /Subtype /Image /Width 1 /Height 1 /BitsPerComponent 8 /ColorSpace /DeviceCMYK", &[51, 102, 153, 204]);
+    let objects = [stream("/N 4", CGATS), stream("/N 1", &synthetic_icc::gray_profile("Gray 2.2")), image];
+    let content = "0 0 0 1 k 0 0 10 40 re f 1 0 0 0 k 10 0 10 40 re f /M1 gs 0 1 0 0 k 10 0 10 40 re f \
+                   q 10 0 0 40 20 0 cm /Im1 Do Q 0.25 g 30 0 10 40 re f";
+    let resources = "/ExtGState << /M1 << /OP true /OPM 1 >> >> /XObject << /Im1 7 0 R >>";
+    let calibrated = format!("{resources} /ColorSpace << /DefaultCMYK [/ICCBased 5 0 R] /DefaultGray [/ICCBased 6 0 R] >>");
+    let expected: [[u32; 4]; 4] = [[0, 0, 0, 100], [100, 100, 0, 0], [20, 40, 60, 80], [0, 0, 0, 75]];
+    for simulation in [None, Some(press_simulation())] {
+        let s = plates(&page_pdf(content, &calibrated, &objects), &inks(&[]), true, simulation.as_ref());
+        for (x, want) in [5, 15, 25, 35].into_iter().zip(expected) {
+            assert_eq!(s.at(x, 20), want, "x {x}, simulated: {}", simulation.is_some());
+        }
+    }
+}

@@ -43,6 +43,15 @@ pub enum KrillaError {
     /// Optional content marks were not balanced: an end without a start, a mark still open
     /// when its stream finished, or a mark overlapping a tagged section.
     UnbalancedOptionalContent(Option<Location>),
+    /// A link annotation has no finite bounding box on its page: its quad points are empty
+    /// or not finite, or its rect doesn't map to finite page coordinates.
+    InvalidAnnotationGeometry(Option<Location>),
+    /// An XYZ destination targets a page the document doesn't have (the index is
+    /// zero-based), or a point that isn't finite on that page.
+    InvalidDestination(usize),
+    /// A page's media, crop, bleed, trim or art box doesn't map to finite PDF coordinates.
+    /// Holds the zero-based page index.
+    InvalidPageBox(usize),
     /// An error while attempting to embed a font.
     Font(Font, String),
     /// A list of validation errors. Can only occur if you set the `validator` in
@@ -96,6 +105,20 @@ impl Display for KrillaError {
                 f.write_str("optional content marks are not balanced")?;
                 write_location(f, *location)
             }
+            KrillaError::InvalidAnnotationGeometry(location) => {
+                f.write_str("a link annotation has no finite bounding box")?;
+                write_location(f, *location)
+            }
+            KrillaError::InvalidDestination(page_index) => write!(
+                f,
+                "a destination on page {} is not in the document or not finite",
+                page_index.saturating_add(1)
+            ),
+            KrillaError::InvalidPageBox(page_index) => write!(
+                f,
+                "a page box on page {} doesn't map to finite coordinates",
+                page_index.saturating_add(1)
+            ),
             KrillaError::Font(_, message) => write!(f, "failed to embed font: {message}"),
             KrillaError::Validation(errors) => {
                 let count = errors.len();

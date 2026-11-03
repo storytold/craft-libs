@@ -2,8 +2,9 @@
 //! detail pane: what the set will change, what did not match and why, suggestions to pick from,
 //! and after the import the report of what was skipped, taken or failed.
 
+use craft_ui::ComboBox;
 use egui::text::{LayoutJob, TextFormat};
-use egui::{ComboBox, Label, Rect, RichText, ScrollArea, TextEdit, TextStyle, Ui};
+use egui::{Label, Rect, RichText, ScrollArea, TextEdit, TextStyle, Ui};
 
 use super::{Draw, FIELD_W, fill};
 use crate::chord::foreign::{ForeignError, ReadNote};
@@ -108,12 +109,22 @@ impl Draw<'_, '_> {
         }
     }
 
+    /// Translate the note shown for an approximated imported shortcut; currently
+    /// only the numeric-keypad read-as-main-key note exists.
     fn read_note(&self, n: ReadNote) -> String {
         match n {
             ReadNote::Numpad => self.ui("numeric keypad key read as main key"),
         }
     }
 
+    /// Draw the import review and return the chosen action.
+    ///
+    /// The set name defaults to a translated "Imported"; it is only considered valid when no set
+    /// catalog exists or `set_name` accepts it, but the raw text is stored in `state.review.name`
+    /// even when invalid. Import is offered independently of the command count. The summary counts
+    /// changed commands plus unmatched, shortcutless, unreadable, approximated and truncated report
+    /// entries. Returns `Act::Import`, `Act::Close`, or `Act::Pick` when a suggestion is chosen; the
+    /// caller applies the action.
     fn plan_view(&mut self, ui: &mut Ui, plan: &ImportPlan, mut name: String) -> Option<Act> {
         let mut act = None;
         let report = &plan.report;
@@ -206,7 +217,7 @@ impl Draw<'_, '_> {
                             }
                         });
                         let resp = combo.response.on_hover_text(self.vis(&label));
-                        resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, true, &label));
+                        resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, true, &label));
                         self.tag(|| format!("shortcuts.import.suggestion.{si}"), resp.rect, &label);
                     });
                 }

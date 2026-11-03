@@ -394,8 +394,19 @@ fn lpstat_e_command() -> std::process::Command {
 pub fn printers() -> Vec<Printer> {
     #[cfg(all(unix, not(target_arch = "wasm32")))]
     {
-        let Some(queues) = lpstat_command().output().ok().map(|o| String::from_utf8_lossy(&o.stdout).into_owned()) else {
-            return Vec::new();
+        let queues = match lpstat_command().output() {
+            Ok(o) => {
+                // Exits 1 with only driverless printers ("No destinations added"); `-e` still finds them.
+                if !o.status.success() {
+                    log::info!("lpstat -p -d exited with {}: {}", o.status, String::from_utf8_lossy(&o.stderr).trim());
+                }
+                String::from_utf8_lossy(&o.stdout).into_owned()
+            }
+            Err(e) => {
+                // A Flatpak needs lpstat/lp bundled plus the CUPS socket and Avahi (see README).
+                log::warn!("no printers: lpstat could not run ({e}); install the CUPS client tools");
+                return Vec::new();
+            }
         };
         // A spooler without `-e`, or one whose discovery times out, only loses the driverless names.
         let available = lpstat_e_command().output().ok().map(|o| String::from_utf8_lossy(&o.stdout).into_owned());
@@ -483,7 +494,9 @@ pub fn submit(pdf: &[u8], job: &Job) -> Result<String, Error> {
 
 /// [`submit`] with Windows sheet-processing progress: `(processed, sheets)` before the first
 /// sheet and after each sheet is successfully added to the native print job. Counts refer to
-/// source PDF sheets, regardless of copies or duplex. CUPS reports no progress.
+/// source PDF sheets, regardless of copies or duplex, except for collated copies on a driver
+/// that can't collate: every copy's sheets are sent, in one job or a job per copy, and counted
+/// together. CUPS reports no progress.
 ///
 /// The callback runs synchronously on the thread calling this function, need not be `Send`,
 /// and should return promptly. It is never retained. All sheets processed is not terminal
@@ -590,7 +603,7 @@ fn windows_preview(job: &Job) -> Vec<String> {
                 Scaling::ShrinkToFit => "shrink-to-fit",
             }
         ),
-        format!("color={}", if job.grayscale { "monochrome" } else { "color" }),
+        format!("color={}", if job.grayscale { "monochrome" } else { "(driver default)" }),
     ]
 }
 

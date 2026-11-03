@@ -111,6 +111,10 @@ The implementation replays bounded source operands without allocating a glyph bu
 The existing Type 3 single-paint behavior and incomplete-content diagnostics remain.
 Raw array iteration now ends safely if validation and object parsing disagree;
 standalone sign tokens retain the reader's zero tolerance.
+`Dict::entries` and a dictionary's `Debug` output skip an entry whose value does not parse,
+as in [Hayro #1501](https://github.com/LaurenzV/hayro/pull/1501).
+The `Debug` output of an array ends with its closing bracket, and that of a dictionary
+with entries ends with its closing brace; an empty dictionary prints as `Dict`.
 Byte transfer-function samples use rounded 8-bit values; failed or non-finite evaluations
 leave the sample unchanged. Historical source hashes remain in each `SOURCE.json`,
 alongside local hashes and the compatibility reference.
@@ -182,6 +186,141 @@ ported.
   codestream's own dimensions is refused before decoding, and its buffer is reserved fallibly:
   the image dictionary's smaller size no longer stands in for the size the decoder allocates.
 
+Paint fixes from the [PdfCraft revision 0b670caf4a090e9d83a7f41a84b4cb2144a2d33e ledger](https://github.com/storytold/pdfcraft/blob/0b670caf4a090e9d83a7f41a84b4cb2144a2d33e/vendor/README.md),
+each marked `PdfCraft patch` in the source: hayro-interpret (46) with its hayro counterpart
+(PdfCraft #2977), a stencil mask is painted with the fill paint, not the stroke paint, at the
+fill opacity once, and a pattern paint drops the opacity it captured at `scn`
+(`Pattern::without_opacity`); the unledgered PdfCraft #3246, a shading pattern takes the alpha
+current when it is painted (`Pattern::set_alpha`, also on a plate), so a `gs` after `scn` or
+`SCN` still applies; (36), marked `PdfCraft patch (#3035)` because the plate-mode code uses
+(35) and (36) for #2770's own numbers, a mesh pixel whose corner no triangle holds takes the
+triangle covering its center (`Triangle::covers`), so shared edges leave no seam; and (51),
+the saved-state byte and count sums saturate, so a huge dash array or clip list stays over
+the bound on 32-bit targets instead of wrapping. The PdfCraft raster tests for (46), #3246 and
+(36) are adapted in `tests/upstream_raster.rs`.
+
+Font and text fixes from the [PdfCraft revision 0b670caf4a090e9d83a7f41a84b4cb2144a2d33e ledger](https://github.com/storytold/pdfcraft/blob/0b670caf4a090e9d83a7f41a84b4cb2144a2d33e/vendor/README.md),
+each marked `PdfCraft patch` in the source: hayro-interpret (49) (PdfCraft #2949 and its
+follow-up), `OpenTypeFontBlob::new` accepts a `post` table version 1.0, 2.0 or 3.0 written
+with its 16-bit halves swapped (`00 00 00 03`, as ScanSoft PDF Create! embeds every font), and
+`glyph_names` reads such a table from a copy with the version written correctly, so a 2.0
+table's names serve `/Differences`; any other unknown version is still refused; (50)
+(PdfCraft #3958), `CffFontBlob::glyph_index_by_name` looks names up in a map built on first
+use and shared between clones instead of searching the charset for every character code, and
+the first glyph with a name still wins; and the unledgered PdfCraft #3116 (#3109), marked
+`PdfCraft patch (#3116)`, text in mode 7 (clip only) installs its clip and reaches the device
+as `GlyphDrawMode::Clip`, which hayro does not paint, so extraction that leaves out invisible
+OCR text (mode 3) keeps a heading drawn through its clip. The unit tests
+`font::blob::tests::{a_post_version_with_swapped_halves_is_read_as_the_version_it_means,
+glyph_names_resolve_to_the_first_glyph_with_that_name}` come with (49) and (50); the #3116
+contract is in `tests/upstream_text.rs`.
+
+Fixes from the [PdfCraft revision 0b670caf4a090e9d83a7f41a84b4cb2144a2d33e ledger](https://github.com/storytold/pdfcraft/blob/0b670caf4a090e9d83a7f41a84b4cb2144a2d33e/vendor/README.md),
+by its item ids, each marked `PdfCraft patch` in the source. hayro-syntax (24), PdfCraft
+#2400: `xref::prev_offset` reads a trailer `/Prev` written as a reference `N G R` as the
+offset that object holds when the section's own entries place it (iText's
+`indirectPrev.pdf`), and otherwise as offset N (tiff2pdf), so the earlier sections' pages
+are seen. Each section's entries are read before its `Prev` is followed; the local
+xref-stream bounds above apply to them unchanged. Tests:
+`xref::tests::prev_as_reference_reaches_the_earlier_section` and
+`xref::tests::prev_as_reference_to_an_object_holding_the_offset_reads_that_offset`.
+hayro-syntax (P5), PdfCraft #3184: `filter::jpx::decode` applies a JP2 palette (`pclr`) when
+the image dictionary has no `/ColorSpace`, or one that does not resolve, since the colors then
+come from the JP2 header (ISO 32000-2 §7.4.9). With a `/ColorSpace` the raw indices are kept,
+as an `/Indexed` space needs. Resolved palette colors are 8-bit samples whatever the
+precision of the indices; an image without a palette keeps its own. Tests:
+`filter::jpx::tests::jpx_palette_is_applied_without_a_color_space`,
+`filter::jpx::tests::jpx_palette_indices_stay_raw_for_an_indexed_color_space` and
+`filter::jpx::tests::palette_colours_are_eight_bit_and_other_samples_keep_their_precision`.
+PdfCraft's raster test `a_jp2_palette_keeps_its_colours_whatever_the_index_precision` is not
+ported: the unit tests show the same behavior.
+
+From [PdfCraft revision 0b670caf4a090e9d83a7f41a84b4cb2144a2d33e](https://github.com/storytold/pdfcraft/tree/0b670caf4a090e9d83a7f41a84b4cb2144a2d33e/vendor),
+unledgered and marked `PdfCraft patch` in the source: hayro-syntax #3438 (issue #3107), with
+its look-ahead bound from 01af6cba3. An inline image without a filter ends at the byte
+length its `/W`, `/H`, `/CS`, `/BPC` and `/IM` give (rows padded to whole bytes) when white
+space and `EI` follow there, so an `EI` inside its samples does not end it. Conflicting
+long and short keys, filters and other color spaces keep the `EI` look-ahead. When the
+computed end lies past the content window, the tokenizer asks for more data only while the
+image, its header and the terminator fit within `MAX_DECODED_STREAM`, and otherwise falls
+back to the look-ahead. Its unit tests in `content::tests` come with it. PdfCraft's raster
+test is not ported: the windowed tokenizer tests cover the same content streams.
+
+Rendering fixes from the [PdfCraft revision 0b670caf4a090e9d83a7f41a84b4cb2144a2d33e ledger](https://github.com/storytold/pdfcraft/blob/0b670caf4a090e9d83a7f41a84b4cb2144a2d33e/vendor/README.md),
+each marked `PdfCraft patch` in the source: hayro-interpret (40) (PdfCraft #2987), an optional
+content membership dictionary with a visibility expression (`/VE`: `/And`, `/Or` and `/Not`
+over groups the document lists in `/OCProperties /OCGs`) shows its content when the
+expression is true, ahead of `/OCGs` and `/P`; a malformed expression, or one nested deeper
+than 32 levels, is ignored and `/OCGs` and `/P` decide; and hayro (18) (PdfCraft #2972), the
+page renders as one transparency group over a transparent backdrop that is then put on the
+background, so a blend mode over an empty part of the page keeps its color; with a color
+replacement (reading colors) the background stays inside the group as its backdrop. A plate
+render (`InterpreterSettings::plate`) also keeps the background inside, marked `Craft patch`,
+so blend modes on a separation's film blend with the paper. The PdfCraft raster tests of both
+are adapted in `tests/upstream_raster.rs`.
+
+Default color spaces from the [PdfCraft revision 0b670caf4a090e9d83a7f41a84b4cb2144a2d33e ledger](https://github.com/storytold/pdfcraft/blob/0b670caf4a090e9d83a7f41a84b4cb2144a2d33e/vendor/README.md):
+hayro-interpret (38) (PdfCraft #3018), marked `PdfCraft patch (#3018)` because the plate-mode
+code labels #2770's changes by that pull request's own patch numbers. The `/DefaultGray`,
+`/DefaultRGB` and `/DefaultCMYK` color spaces of the resources in scope (ISO 32000-2
+§8.6.5.6) replace the device space that `g`/`G`, `rg`/`RG`, `k`/`K` and `cs`/`CS` select (by
+name, or through a `/ColorSpace` resource that is a device space), and the device
+`/ColorSpace` of an image XObject, an inline image or a shading painted by `sh` or as a
+shading pattern (`DefaultColorSpaces`, looked up once per content window). A default that is
+a device, Lab, Indexed or Pattern space, or has the wrong number of components, is ignored.
+Decoded images and shadings are cached per default. Two local differences: a form XObject
+with `/Resources` of its own sees only its own defaults, as it sees only its own other
+resources here (`Resources::from_scope`), where PdfCraft falls back to the page's; and on a
+plate (patch 35) no default applies, so DeviceCMYK still separates as its components with
+the nonzero overprint mode, and DeviceGray on black alone, rather than through a DefaultCMYK
+or DefaultGray profile and the CMYK simulation of patch 36. PdfCraft's eight raster tests are
+adapted in `tests/upstream_raster.rs` (`default_color_spaces`); the plate case is
+`default_color_spaces_leave_device_color_on_its_plates` in `tests/plates.rs`.
+
+A rendering speedup from the [PdfCraft revision 0b670caf4a090e9d83a7f41a84b4cb2144a2d33e ledger](https://github.com/storytold/pdfcraft/blob/0b670caf4a090e9d83a7f41a84b4cb2144a2d33e/vendor/README.md),
+hayro-interpret (35) with hayro (19), PdfCraft #3296, marked `PdfCraft patch (#3296)` because
+the plate-mode code uses (35) for #2770's own numbers. `EncodedShadingPattern::extent` is the
+device-space rectangle of the pixels a mesh shading's triangles touched when it was encoded
+(`None` for function-based, axial and radial shadings, and for a mesh with a `/Background`).
+`Renderer::set_paint` returns `PaintSetup`: a mesh texture covers that extent (and a
+transparent pixel around it, padded instead of repeated) rather than the whole path, and a
+mesh with no triangle on the canvas returns `PaintSetup::Nothing`, which the fill, stroke,
+rect and stencil callers skip. The rendered output is the same. The knockout erase pass
+returns before the extent is used, so it still clears under the whole path. Tests:
+`mesh_extent_tests::{a_mesh_paints_its_triangles_alone, a_mesh_keeps_the_graphics_state_alpha,
+a_mesh_off_the_canvas_paints_nothing}` in hayro.
+
+An ICC profile cache fix from the [PdfCraft revision 0b670caf4a090e9d83a7f41a84b4cb2144a2d33e ledger](https://github.com/storytold/pdfcraft/blob/0b670caf4a090e9d83a7f41a84b4cb2144a2d33e/vendor/README.md):
+hayro-interpret (48) (PdfCraft #3020), marked `PdfCraft patch (#3020)`. The color space read
+from an `/ICCBased` profile stream is cached by `IccProfileKey`, not by the stream
+dictionary's bytes alone, so two profiles with the same `/N` and `/Length` no longer share
+whichever was read first. A stream object is looked up by its object identifier without
+reading it, and on a miss by its dictionary key and raw (decrypted, undecoded) bytes, so
+copies of a profile are read once; a stream written directly in its array has only the
+content key. `InterpreterCache::icc_profile_reads` counts the reads. The CMYK simulation of
+patch 36 doesn't use this cache: it is built from the output intent's bytes by the caller,
+and the digest that tells its profile from a document profile is still a hash of the
+decoded profile bytes. PdfCraft's two raster tests are adapted in `tests/upstream_raster.rs`
+(`icc_profile_cache`).
+
+From [PdfCraft #3327](https://github.com/storytold/pdfcraft/pull/3327) (merged as
+b84121e978e13168caeaf86a63824111f16cdb99), hayro-interpret (35), marked `PdfCraft patch (35)` in
+the source: `path_as_rect` takes a five-element path as a rectangle only when its four points are
+distinct, each step from one to the next runs along a single axis, and the last returns to the
+first (with ClosePath, or a fourth line back to the exact start). Before, the length test also
+admitted one MoveTo and four LineTo, and the corner test only asked that every corner of the
+bounding box was visited, so a five-point open polyline whose ends reached the corners was drawn
+as that box (VectorCraft #2920: an open zigzag in an `.ai` file opened as a closed rectangle), and
+a clip of that shape was dropped. Tests: `context::path_as_rect_tests` and the `rectangles`
+module of `crates/pdf/tests/interpretation.rs`, which fails without the change.
+
+Local fixes on top of these ports, marked `Craft patch` or in the comments of the ported
+code: an inflated patch-mesh triangle is rebuilt with `Triangle::new`, so its stored dot
+products match its vertices (moving the points alone skewed barycentric coordinates by about
+5 %, in `covers` and in interpolation); a stencil image puts the fill alpha back itself, since
+`restore_state` doesn't when the saved-state bound skipped the save; and a resolved JP2
+palette decodes to 8 bits whatever `/BitsPerComponent` the dictionary gives.
+
 This remains the patched 0.7 backend. It retains the existing Bradford Lab conversion,
 floating component precision and codec versions, rather than claiming full 0.8
 equivalence. The independent color oracles, backend tests and facade contracts cover
@@ -202,3 +341,21 @@ The snapshot also preserves PdfCraft #1477 (WinAnsi Unicode fallback for TrueTyp
 fonts without Encoding) and #1499 (byte-aligned packed TIFF predictor rows).
 Synthetic tests cover 1/2/4/8-bit RGB rows and rendering, plus embedded TrueType
 text with absent or partial ToUnicode maps and explicit encoding precedence.
+
+## Craft patches for the flattener
+
+Local changes for craft-prepress's PDF-in adapter (`craft_prepress::flatten::pdf`), which reads
+pages through a `Device` that keeps colors as inks and embeds the source fonts again. Code
+comments label them `Craft patch (flatten)`.
+
+| Files | Change |
+|---|---|
+| hayro-interpret `font/outline.rs`, `font/cid.rs` | `OutlineFontData::embedded`: true when the bytes come from the PDF's `FontFile*`, false for a non-embedded CID font's substitute from the font resolver |
+| hayro-interpret `font/outline.rs`, `font/cid.rs`, `font/blob.rs` | `OutlineFontData::index`: the face index of the bytes in a font collection, as the resolver returned it |
+| hayro-interpret `font/outline.rs`, `font/type1.rs`, `font/mod.rs` | `OutlineGlyph::font_data` returns the bare CFF bytes of a simple `FontFile3/Type1C` font, with `embedded: true`; its glyph ids index the CFF. The descriptive fields (`postscript_name`, `weight`, flags) are left empty |
+| hayro-interpret `device.rs` | `Device::set_overprint(fill, stroke, mode)`: the `op`, `OP` and `OPM` for the paints that follow. `Device::set_isolated`: the group just pushed is isolated (`/I true`). Both default to no-ops |
+| hayro-interpret `interpret/path.rs`, `interpret/text.rs`, `x_object.rs` | `set_overprint` is called where `set_blend_mode` is for fills, strokes (the `sh` operator included), glyphs and images; `set_isolated` after an isolated group is pushed |
+| hayro-interpret `color.rs` | `Color::ink_paint`: the inks a color paints, as plate mode separates it (`color::InkPaint`). `Color::spot_alternate`: a spot ink at 100% (`color::SpotAlternate`), CMYK when the alternate space is DeviceCMYK. `Color::opacity` and `Color::is_device_cmyk` |
+| hayro-interpret `color.rs` | `color::InkSpace`, `ColorSpace::ink_space` and `ColorSpace::ink_values`: how a space's colors are kept as inks (gray, CMYK, its colorants, `All`, `None`) and colors converted in batches, process color as `Color::ink_paint` converts it. `ColorSpace::components`; `ColorSpace::is_device_cmyk` and `ColorSpace::spot_alternate` public |
+| hayro-interpret `types.rs`, `x_object.rs` | `RasterImage::with_inks`: an image's samples in its own space's inks (`InkImage`), `/Decode` and `/Matte` applied, transfer functions left out, with its alpha at the alpha's own size |
+| hayro-interpret `interpret/mod.rs` | The `sh` operator drops the shading's `/Background`, which only a shading pattern paints (ISO 32000-2 §8.7.4.5.1) |

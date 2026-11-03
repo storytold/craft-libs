@@ -10,12 +10,14 @@ use hayro_syntax::object::Name;
 use hayro_syntax::object::Object;
 use hayro_syntax::object::Stream;
 use hayro_syntax::object::dict::keys::*;
+use hayro_syntax::page::Resources;
 use moxcms::{
     ColorProfile, DataColorSpace, Layout, ProfileText, RenderingIntent, Transform8BitExecutor,
     TransformF32Executor, TransformOptions,
 };
 use smallvec::{SmallVec, ToSmallVec, smallvec};
 use std::borrow::Cow;
+use std::cell::OnceCell;
 use std::fmt::{Debug, Formatter};
 use std::ops::Deref;
 use std::sync::{Arc, LazyLock, OnceLock};
@@ -122,12 +124,51 @@ pub(crate) enum ColorSpaceType {
     Plate(PlateSpace),
 }
 
+/// PdfCraft patch (#3020): what the color space read from an `/ICCBased` profile stream is
+/// cached by. hayro keyed it by the stream dictionary's bytes alone, so two different profiles
+/// with the same `/N` and `/Length` shared whichever was read first, and colors in the second
+/// were drawn through the first.
+#[derive(Hash)]
+enum IccProfileKey<'a> {
+    /// The stream object a space names, looked up without reading the stream: an object holds
+    /// one profile for as long as the document, and so the cache, lives.
+    Object(object::ObjectIdentifier),
+    /// What the space is built from: the stream dictionary's key (its bytes, the old key:
+    /// `/N`, `/Alternate`, the filters) and the stream's own bytes, decrypted but not decoded,
+    /// which decode to the profile. Copies of a profile share it, and a lookup never decodes:
+    /// decoding waits for a miss.
+    Content { dict: u128, data: &'a [u8] },
+}
+
+/// PdfCraft patch (#3020): the object of the `/ICCBased` profile `stream` that `array` names,
+/// or `None` for a stream written directly in the array (its dictionary lies within the
+/// array's bytes). Such a stream has no object of its own: its dictionary reports the object
+/// that holds the array, which every other stream written there reports too.
+fn icc_stream_object(array: &Array<'_>, stream: &Stream<'_>) -> Option<object::ObjectIdentifier> {
+    let dict = stream.dict();
+    if array.data().as_ptr_range().contains(&dict.data().as_ptr()) {
+        return None;
+    }
+    dict.obj_id()
+}
+
+/// PdfCraft patch: the deepest a color space may nest inside others (`Pattern` over `Indexed`
+/// over `ICCBased` with an `/Alternate` is four). Each level can be a fresh indirect object, so
+/// without a bound a long chain of them exhausts the stack.
+const MAX_COLOR_SPACE_DEPTH: u8 = 8;
+
 impl ColorSpaceType {
-    fn new(object: Object<'_>, cache: &Cache) -> Option<Self> {
-        Self::new_inner(object, cache)
+    fn new(object: Object<'_>, cache: &Cache, depth: u8) -> Option<Self> {
+        if depth >= MAX_COLOR_SPACE_DEPTH {
+            warn!("color space nesting depth exceeded");
+
+            return None;
+        }
+
+        Self::new_inner(object, cache, depth)
     }
 
-    fn new_inner(object: Object<'_>, cache: &Cache) -> Option<Self> {
+    fn new_inner(object: Object<'_>, cache: &Cache, depth: u8) -> Option<Self> {
         if let Object::Name(name) = object {
             return Self::new_from_name(&name);
         } else if let Object::Array(color_array) = object {
@@ -140,34 +181,50 @@ impl ColorSpaceType {
                     let dict = icc_stream.dict();
                     let num_components = dict.get::<usize>(N)?;
 
-                    return cache.get_or_insert_with(icc_stream.cache_key(), || {
-                        if let Some(decoded) = icc_stream.decoded().ok().as_ref() {
-                            ICCProfile::new(decoded, num_components)
-                                .map(|icc| {
-                                    // TODO: For SVG and PNG we can assume that the output color space is
-                                    // sRGB. If we ever implement PDF-to-PDF, we probably want to
-                                    // let the user pass the native color type and don't make this optimization
-                                    // if it's not sRGB.
-                                    if icc.is_srgb() {
-                                        Self::DeviceRgb
-                                    } else {
-                                        Self::ICCBased(icc)
-                                    }
-                                })
-                                .or_else(|| {
-                                    dict.get::<Object<'_>>(ALTERNATE)
-                                        .and_then(|o| Self::new(o, cache))
-                                })
-                                .or_else(|| match dict.get::<u8>(N) {
-                                    Some(1) => Some(Self::DeviceGray),
-                                    Some(3) => Some(Self::DeviceRgb),
-                                    Some(4) => Some(Self::DeviceCmyk),
-                                    _ => None,
-                                })
-                        } else {
-                            None
+                    // PdfCraft patch (#3020): cached by what the profile is read from (see
+                    // `IccProfileKey`), not by the stream dictionary's bytes alone.
+                    let read = || {
+                        let data = icc_stream.raw_data();
+                        let content = IccProfileKey::Content {
+                            dict: icc_stream.cache_key(),
+                            data: &data,
+                        };
+                        cache.get_or_insert_with(hash128(&content), || {
+                            cache.count_icc_profile_read();
+                            if let Some(decoded) = icc_stream.decoded().ok().as_ref() {
+                                ICCProfile::new(decoded, num_components)
+                                    .map(|icc| {
+                                        // TODO: For SVG and PNG we can assume that the output color space is
+                                        // sRGB. If we ever implement PDF-to-PDF, we probably want to
+                                        // let the user pass the native color type and don't make this optimization
+                                        // if it's not sRGB.
+                                        if icc.is_srgb() {
+                                            Self::DeviceRgb
+                                        } else {
+                                            Self::ICCBased(icc)
+                                        }
+                                    })
+                                    .or_else(|| {
+                                        dict.get::<Object<'_>>(ALTERNATE)
+                                            .and_then(|o| Self::new(o, cache, depth + 1))
+                                    })
+                                    .or_else(|| match dict.get::<u8>(N) {
+                                        Some(1) => Some(Self::DeviceGray),
+                                        Some(3) => Some(Self::DeviceRgb),
+                                        Some(4) => Some(Self::DeviceCmyk),
+                                        _ => None,
+                                    })
+                            } else {
+                                None
+                            }
+                        })
+                    };
+                    return match icc_stream_object(&color_array, &icc_stream) {
+                        Some(object) => {
+                            cache.get_or_insert_with(hash128(&IccProfileKey::Object(object)), read)
                         }
-                    });
+                        None => read(),
+                    };
                 }
                 CALCMYK => return Some(Self::DeviceCmyk),
                 CALGRAY => {
@@ -186,19 +243,19 @@ impl ColorSpaceType {
                     return Some(Self::Lab(Lab::new(&lab_dict)?));
                 }
                 INDEXED | I => {
-                    return Some(Self::Indexed(Indexed::new(&color_array, cache)?));
+                    return Some(Self::Indexed(Indexed::new(&color_array, cache, depth)?));
                 }
                 SEPARATION => {
-                    return Some(Self::Separation(Separation::new(&color_array, cache)?));
+                    return Some(Self::Separation(Separation::new(&color_array, cache, depth)?));
                 }
                 DEVICE_N => {
-                    return Some(Self::DeviceN(DeviceN::new(&color_array, cache)?));
+                    return Some(Self::DeviceN(DeviceN::new(&color_array, cache, depth)?));
                 }
                 PATTERN => {
                     let _ = iter.next::<Name<'_>>();
                     let cs = iter
                         .next::<Object<'_>>()
-                        .and_then(|o| ColorSpace::new(o, cache))
+                        .and_then(|o| ColorSpace::new_nested(o, cache, depth + 1))
                         .unwrap_or(ColorSpace::device_rgb());
                     return Some(Self::Pattern(cs));
                 }
@@ -231,7 +288,12 @@ pub struct ColorSpace(Arc<ColorSpaceType>);
 impl ColorSpace {
     /// Create a new color space from the given object.
     pub(crate) fn new(object: Object<'_>, cache: &Cache) -> Option<Self> {
-        Some(Self(Arc::new(ColorSpaceType::new(object, cache)?)))
+        Self::new_nested(object, cache, 0)
+    }
+
+    /// PdfCraft patch: a color space found `depth` levels inside others.
+    fn new_nested(object: Object<'_>, cache: &Cache, depth: u8) -> Option<Self> {
+        Some(Self(Arc::new(ColorSpaceType::new(object, cache, depth)?)))
     }
 
     /// Create a new color space from the name.
@@ -360,6 +422,149 @@ impl ColorSpace {
     pub fn to_rgba(&self, c: &[f32], opacity: f32, manual_scale: bool) -> AlphaColor {
         self.to_alpha_color(c, opacity, manual_scale)
             .unwrap_or(AlphaColor::BLACK)
+    }
+
+    /// PdfCraft patch (#3018): whether this space can be the default color space of `family`
+    /// (ISO 32000-2 §8.6.5.6): it has as many components as the device space and is not a
+    /// Lab, Indexed or Pattern space. Nor is a device space: a default that names one is
+    /// ignored, so substitution never recurses.
+    fn can_stand_in_for(&self, family: DeviceFamily) -> bool {
+        !matches!(
+            self.0.as_ref(),
+            ColorSpaceType::DeviceGray
+                | ColorSpaceType::DeviceRgb
+                | ColorSpaceType::DeviceCmyk
+                | ColorSpaceType::Lab(_)
+                | ColorSpaceType::Indexed(_)
+                | ColorSpaceType::Pattern(_)
+        ) && self.num_components() == family.num_components()
+    }
+}
+
+/// PdfCraft patch (#3018): a device color space (ISO 32000-2 §8.6.4), which the resources'
+/// default color space for it replaces wherever content selects it (§8.6.5.6).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DeviceFamily {
+    Gray,
+    Rgb,
+    Cmyk,
+}
+
+impl DeviceFamily {
+    /// The device space a color space operand names: `/DeviceGray`, `/DeviceRGB` or
+    /// `/DeviceCMYK` (or an abbreviation read as one), alone or at the head of an array. `None`
+    /// for any other space, including the ICC-based and calibrated ones drawn as device color
+    /// here (an sRGB profile, `/CalCMYK`): they are not device spaces.
+    pub(crate) fn of_object(object: &Object<'_>) -> Option<Self> {
+        match object {
+            Object::Name(name) => Self::of_name(name),
+            Object::Array(array) => array
+                .flex_iter()
+                .next::<Name<'_>>()
+                .and_then(|name| Self::of_name(&name)),
+            _ => None,
+        }
+    }
+
+    /// The device space `name` names, as [`DeviceFamily::of_object`].
+    pub(crate) fn of_name(name: &Name<'_>) -> Option<Self> {
+        match name.deref() {
+            DEVICE_GRAY | G => Some(Self::Gray),
+            DEVICE_RGB | RGB => Some(Self::Rgb),
+            DEVICE_CMYK | CMYK => Some(Self::Cmyk),
+            _ => None,
+        }
+    }
+
+    /// The device space itself.
+    fn space(self) -> ColorSpace {
+        match self {
+            Self::Gray => ColorSpace::device_gray(),
+            Self::Rgb => ColorSpace::device_rgb(),
+            Self::Cmyk => ColorSpace::device_cmyk(),
+        }
+    }
+
+    fn num_components(self) -> u8 {
+        match self {
+            Self::Gray => 1,
+            Self::Rgb => 3,
+            Self::Cmyk => 4,
+        }
+    }
+
+    /// The `/ColorSpace` resource that holds the default for this space.
+    fn default_key(self) -> &'static [u8] {
+        match self {
+            Self::Gray => DEFAULT_GRAY,
+            Self::Rgb => DEFAULT_RGB,
+            Self::Cmyk => DEFAULT_CMYK,
+        }
+    }
+}
+
+/// PdfCraft patch (#3018): the default color spaces (`/DefaultGray`, `/DefaultRGB` and
+/// `/DefaultCMYK`, ISO 32000-2 §8.6.5.6) of the resources content is drawn with, each read the
+/// first time the content selects its device space. Like any named resource, a default comes
+/// from the resources in scope: a form XObject without `/Resources` draws in its page's
+/// defaults, one with `/Resources` only in its own.
+///
+/// On a plate (patch 35) device color keeps its device space: plates separate DeviceCMYK
+/// by its components, with nonzero overprint mode, and a DefaultCMYK profile would route it
+/// through the CMYK simulation (patch 36) instead. Defaults change how device color looks,
+/// not which inks it is printed with.
+pub(crate) struct DefaultColorSpaces<'r, 'a> {
+    resources: &'r Resources<'a>,
+    cache: Cache,
+    on_plate: bool,
+    gray: OnceCell<Option<(ColorSpace, u128)>>,
+    rgb: OnceCell<Option<(ColorSpace, u128)>>,
+    cmyk: OnceCell<Option<(ColorSpace, u128)>>,
+}
+
+impl<'r, 'a> DefaultColorSpaces<'r, 'a> {
+    pub(crate) fn new(resources: &'r Resources<'a>, cache: &Cache, on_plate: bool) -> Self {
+        Self {
+            resources,
+            cache: cache.clone(),
+            on_plate,
+            gray: OnceCell::new(),
+            rgb: OnceCell::new(),
+            cmyk: OnceCell::new(),
+        }
+    }
+
+    /// The default for `family`, with the cache key of the object it was read from. `None`
+    /// when the resources have none, or theirs is not a color space that can stand in for
+    /// the device space, or on a plate: device color is then drawn as it is.
+    pub(crate) fn get(&self, family: DeviceFamily) -> Option<(ColorSpace, u128)> {
+        if self.on_plate {
+            return None;
+        }
+        let found = match family {
+            DeviceFamily::Gray => &self.gray,
+            DeviceFamily::Rgb => &self.rgb,
+            DeviceFamily::Cmyk => &self.cmyk,
+        };
+        found
+            .get_or_init(|| {
+                let object = self
+                    .resources
+                    .get_color_space(&Name::new_unescaped(family.default_key()))?;
+                let key = object.cache_key();
+                let space = self
+                    .cache
+                    .get_or_insert_with(key, || ColorSpace::new(object.clone(), &self.cache))?;
+                space.can_stand_in_for(family).then_some((space, key))
+            })
+            .clone()
+    }
+
+    /// The color space content that selects `family` draws in: its default, else the device
+    /// space itself.
+    pub(crate) fn device(&self, family: DeviceFamily) -> ColorSpace {
+        self.get(family)
+            .map_or_else(|| family.space(), |(space, _)| space)
     }
 }
 
@@ -825,11 +1030,11 @@ pub(crate) struct Indexed {
 }
 
 impl Indexed {
-    fn new(array: &Array<'_>, cache: &Cache) -> Option<Self> {
+    fn new(array: &Array<'_>, cache: &Cache, depth: u8) -> Option<Self> {
         let mut iter = array.flex_iter();
         // Skip name
         let _ = iter.next::<Name<'_>>()?;
-        let base_color_space = ColorSpace::new(iter.next::<Object<'_>>()?, cache)?;
+        let base_color_space = ColorSpace::new_nested(iter.next::<Object<'_>>()?, cache, depth + 1)?;
         let hival = iter.next::<u32>()?.min(u8::MAX as u32) as u8;
 
         let values = {
@@ -894,12 +1099,12 @@ pub(crate) struct Separation {
 }
 
 impl Separation {
-    fn new(array: &Array<'_>, cache: &Cache) -> Option<Self> {
+    fn new(array: &Array<'_>, cache: &Cache, depth: u8) -> Option<Self> {
         let mut iter = array.flex_iter();
         // Skip `/Separation`
         let _ = iter.next::<Name<'_>>()?;
         let name = iter.next::<Name<'_>>()?;
-        let alternate_space = ColorSpace::new(iter.next::<Object<'_>>()?, cache)?;
+        let alternate_space = ColorSpace::new_nested(iter.next::<Object<'_>>()?, cache, depth + 1)?;
         let tint_transform = Function::new(&iter.next::<Object<'_>>()?)?;
         // Either I did something wrong, or no other viewers properly handles
         // `All`, so let's just ignore it as well.
@@ -945,7 +1150,7 @@ pub(crate) struct DeviceN {
 }
 
 impl DeviceN {
-    fn new(array: &Array<'_>, cache: &Cache) -> Option<Self> {
+    fn new(array: &Array<'_>, cache: &Cache, depth: u8) -> Option<Self> {
         let mut iter = array.flex_iter();
         // Skip `/DeviceN`
         let _ = iter.next::<Name<'_>>()?;
@@ -956,7 +1161,7 @@ impl DeviceN {
             .collect::<Vec<_>>();
         let num_components = u8::try_from(names.len()).ok()?;
         let all_none = names.iter().all(|n| n.as_str() == "None");
-        let alternate_space = ColorSpace::new(iter.next::<Object<'_>>()?, cache)?;
+        let alternate_space = ColorSpace::new_nested(iter.next::<Object<'_>>()?, cache, depth + 1)?;
         let tint_transform = Function::new(&iter.next::<Object<'_>>()?)?;
 
         if num_components == 0 {
@@ -1231,6 +1436,16 @@ pub struct Color {
 }
 
 impl Color {
+    /// PdfCraft patch (46): the same color, fully opaque (see `Pattern::without_opacity`). A
+    /// fully transparent color stays so: on a plate it is the paint that leaves the plate as it
+    /// is (`for_plate`), and making it opaque would knock the plate out.
+    pub(crate) fn opaque(mut self) -> Self {
+        if self.opacity != 0.0 {
+            self.opacity = 1.0;
+        }
+        self
+    }
+
     pub(crate) fn new(color_space: ColorSpace, components: ColorComponents, opacity: f32) -> Self {
         Self {
             color_space,
@@ -1874,8 +2089,8 @@ impl ColorSpace {
     }
 
     /// PdfCraft patch (35): DeviceCMYK itself (`CalCMYK` reads as it too), where the nonzero
-    /// overprint mode applies.
-    pub(crate) fn is_device_cmyk(&self) -> bool {
+    /// overprint mode applies. Craft patch (flatten): public.
+    pub fn is_device_cmyk(&self) -> bool {
         matches!(self.0.as_ref(), ColorSpaceType::DeviceCmyk)
     }
 
@@ -2341,6 +2556,299 @@ pub(crate) trait ToRgb {
     }
 }
 
+/// Craft patch (flatten): the inks a colour paints, for devices that keep colours as inks
+/// instead of RGB (see [`Color::ink_paint`]).
+#[derive(Clone, Debug, PartialEq)]
+pub enum InkPaint {
+    /// Tints `0.0..=1.0` of the listed inks; other inks are unspecified. Process colour lists
+    /// all four process inks.
+    Tints(Vec<(Ink, f32)>),
+    /// The same tint on every plate (the `All` colorant).
+    All(f32),
+    /// No ink (the `None` colorant).
+    None,
+}
+
+/// Craft patch (flatten): how a spot ink looks at 100%, from its colour space's alternate.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum SpotAlternate {
+    /// The alternate space is DeviceCMYK: the tint transform's CMYK.
+    Cmyk([f32; 4]),
+    /// Any other alternate space: the sRGB appearance.
+    Srgb([u8; 3]),
+}
+
+impl Color {
+    /// Craft patch (flatten): the opacity (`ca` or `CA`) the colour paints with.
+    pub fn opacity(&self) -> f32 {
+        self.opacity
+    }
+
+    /// Craft patch (flatten): whether the colour was set in DeviceCMYK itself, where the
+    /// nonzero overprint mode applies (ISO 32000-2 §8.6.7).
+    pub fn is_device_cmyk(&self) -> bool {
+        self.color_space.is_device_cmyk()
+    }
+
+    /// Craft patch (flatten): the inks the colour paints, as plate mode separates it:
+    /// `Separation` and `DeviceN` colorants as they are, and process colour as CMYK, converted
+    /// through `simulation` where plate mode converts it. `None` for a pattern space.
+    pub fn ink_paint(&self, simulation: Option<&CmykSimulation>) -> Option<InkPaint> {
+        self.color_space
+            .ink_paint(&self.components, simulation, false)
+    }
+
+    /// Craft patch (flatten): how spot `ink` of this colour's space looks at 100%; `None` when
+    /// the space doesn't name it.
+    pub fn spot_alternate(&self, ink: &Ink) -> Option<SpotAlternate> {
+        self.color_space.spot_alternate(ink)
+    }
+}
+
+impl ColorSpace {
+    /// Craft patch (flatten): see [`Color::ink_paint`].
+    fn ink_paint(
+        &self,
+        components: &[f32],
+        simulation: Option<&CmykSimulation>,
+        manual_scale: bool,
+    ) -> Option<InkPaint> {
+        let get = |k: usize| unit(components.get(k).copied().unwrap_or(0.0));
+        Some(match self.0.as_ref() {
+            ColorSpaceType::Separation(s) => match &s.colorant {
+                Colorant::None => InkPaint::None,
+                Colorant::All => InkPaint::All(get(0)),
+                Colorant::Ink(ink) => InkPaint::Tints(vec![(ink.clone(), get(0))]),
+            },
+            ColorSpaceType::DeviceN(d) => {
+                let tints: Vec<_> = d
+                    .colorants
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(k, c)| match c {
+                        Colorant::Ink(ink) => Some((ink.clone(), get(k))),
+                        _ => None,
+                    })
+                    .collect();
+                if d.is_none || tints.is_empty() {
+                    InkPaint::None
+                } else {
+                    InkPaint::Tints(tints)
+                }
+            }
+            ColorSpaceType::Indexed(i) => {
+                let index = components.first().copied().unwrap_or(0.0);
+                let index = (clamp_component(index, 0.0, f32::from(i.hival)) + 0.5) as usize;
+                return i.base.ink_paint(i.values.get(index)?, simulation, true);
+            }
+            ColorSpaceType::Pattern(_) => return None,
+            ColorSpaceType::Plate(p) => {
+                return p.inner.ink_paint(components, simulation, manual_scale);
+            }
+            _ => {
+                let cmyk = self.process_cmyk(components, simulation, manual_scale)?;
+                InkPaint::Tints(Ink::PROCESS.into_iter().zip(cmyk).collect())
+            }
+        })
+    }
+
+    /// Craft patch (flatten): see [`Color::spot_alternate`].
+    pub fn spot_alternate(&self, ink: &Ink) -> Option<SpotAlternate> {
+        let (alternate, transform, components) = match self.0.as_ref() {
+            ColorSpaceType::Separation(s) => {
+                if s.colorant != Colorant::Ink(ink.clone()) {
+                    return None;
+                }
+                (&s.alternate_space, &s.tint_transform, smallvec![1.0])
+            }
+            ColorSpaceType::DeviceN(d) => {
+                let k = d
+                    .colorants
+                    .iter()
+                    .position(|c| matches!(c, Colorant::Ink(i) if i == ink))?;
+                let mut components: ColorComponents = smallvec![0.0; d.colorants.len()];
+                *components.get_mut(k)? = 1.0;
+                (&d.alternate_space, &d.tint_transform, components)
+            }
+            ColorSpaceType::Indexed(i) => return i.base.spot_alternate(ink),
+            ColorSpaceType::Pattern(cs) => return cs.spot_alternate(ink),
+            ColorSpaceType::Plate(p) => return p.inner.spot_alternate(ink),
+            _ => return None,
+        };
+        if alternate.is_device_cmyk()
+            && let Some(cmyk) = transform.eval(components.clone())
+            && let [c, m, y, k] = cmyk[..]
+        {
+            return Some(SpotAlternate::Cmyk([c, m, y, k].map(unit)));
+        }
+        Some(SpotAlternate::Srgb(self.appearance(&components)))
+    }
+}
+
+/// Craft patch (flatten): the components a device that keeps colours as inks stores a space's
+/// colours in, as plate mode separates them (see [`ColorSpace::ink_values`]).
+#[derive(Clone, Debug, PartialEq)]
+pub enum InkSpace {
+    /// DeviceGray: one gray level, 1 = white.
+    Gray,
+    /// The four process tints. `converted` when the colours are converted into CMYK (RGB, Lab,
+    /// CIE-based and ICC spaces other than a CMYK profile the simulation leaves as it is).
+    Cmyk {
+        /// Whether the colours are converted into CMYK.
+        converted: bool,
+    },
+    /// Tints of these inks: `Separation` and `DeviceN` colorants, `None` colorants left out.
+    Inks(Vec<Ink>),
+    /// One tint for every ink (the `All` colorant).
+    All,
+    /// No ink (the `None` colorant, or a pattern space).
+    None,
+}
+
+impl InkSpace {
+    /// Values per colour.
+    pub fn len(&self) -> usize {
+        match self {
+            Self::Gray | Self::All => 1,
+            Self::Cmyk { .. } => 4,
+            Self::Inks(inks) => inks.len(),
+            Self::None => 0,
+        }
+    }
+
+    /// Whether colours have no values (the space paints nothing).
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
+impl ColorSpace {
+    /// Craft patch (flatten): the components per colour.
+    pub fn components(&self) -> usize {
+        usize::from(self.num_components())
+    }
+
+    /// Craft patch (flatten): how [`Self::ink_values`] stores this space's colours. An Indexed
+    /// space stores its base space's.
+    pub fn ink_space(&self, simulation: Option<&CmykSimulation>) -> InkSpace {
+        match self.0.as_ref() {
+            ColorSpaceType::DeviceGray => InkSpace::Gray,
+            ColorSpaceType::DeviceCmyk => InkSpace::Cmyk { converted: false },
+            ColorSpaceType::ICCBased(icc) if icc.0.number_components == 4 => InkSpace::Cmyk {
+                converted: simulation.is_some_and(|s| self.simulated_by(s)),
+            },
+            ColorSpaceType::Indexed(i) => i.base.ink_space(simulation),
+            ColorSpaceType::Separation(s) => match &s.colorant {
+                Colorant::Ink(ink) => InkSpace::Inks(vec![ink.clone()]),
+                Colorant::All => InkSpace::All,
+                Colorant::None => InkSpace::None,
+            },
+            ColorSpaceType::DeviceN(d) => {
+                let inks: Vec<Ink> = d
+                    .colorants
+                    .iter()
+                    .filter_map(|c| match c {
+                        Colorant::Ink(ink) => Some(ink.clone()),
+                        _ => None,
+                    })
+                    .collect();
+                if d.is_none || inks.is_empty() {
+                    InkSpace::None
+                } else {
+                    InkSpace::Inks(inks)
+                }
+            }
+            ColorSpaceType::Pattern(_) => InkSpace::None,
+            ColorSpaceType::Plate(p) => p.inner.ink_space(simulation),
+            _ => InkSpace::Cmyk { converted: true },
+        }
+    }
+
+    /// Craft patch (flatten): the colours `colors` (whole colours of [`Self::components`]
+    /// values each) appended to `out` as [`Self::ink_space`] values, `0.0..=1.0`. Process
+    /// colour converts as [`Color::ink_paint`] does, in batches.
+    pub fn ink_values(&self, colors: &[f32], simulation: Option<&CmykSimulation>, out: &mut Vec<f32>) {
+        self.ink_values_scaled(colors, simulation, false, out);
+    }
+
+    fn ink_values_scaled(
+        &self,
+        colors: &[f32],
+        simulation: Option<&CmykSimulation>,
+        manual_scale: bool,
+        out: &mut Vec<f32>,
+    ) {
+        let n = usize::from(self.num_components()).max(1);
+        let colors = &colors[..colors.len() / n * n];
+        match self.0.as_ref() {
+            ColorSpaceType::Indexed(i) => {
+                let width = i.base.ink_space(simulation).len();
+                let mut table = Vec::with_capacity((usize::from(i.hival) + 1) * width);
+                for values in &i.values {
+                    let start = table.len();
+                    i.base.ink_values_scaled(values, simulation, true, &mut table);
+                    table.resize(start + width, 0.0);
+                }
+                for index in colors {
+                    let index = (clamp_component(*index, 0.0, f32::from(i.hival)) + 0.5) as usize;
+                    match table.get(index * width..(index + 1) * width) {
+                        Some(values) => out.extend_from_slice(values),
+                        None => out.extend(std::iter::repeat_n(0.0, width)),
+                    }
+                }
+            }
+            ColorSpaceType::Plate(p) => p.inner.ink_values_scaled(colors, simulation, manual_scale, out),
+            ColorSpaceType::Pattern(_) => {}
+            ColorSpaceType::DeviceGray => out.extend(colors.iter().map(|v| unit(*v))),
+            ColorSpaceType::Separation(s) => {
+                if s.colorant != Colorant::None {
+                    out.extend(colors.iter().map(|v| unit(*v)));
+                }
+            }
+            ColorSpaceType::DeviceN(d) => {
+                if d.is_none {
+                    return;
+                }
+                for colour in colors.chunks_exact(n) {
+                    for (c, v) in d.colorants.iter().zip(colour) {
+                        if matches!(c, Colorant::Ink(_)) {
+                            out.push(unit(*v));
+                        }
+                    }
+                }
+            }
+            _ => {
+                let start = out.len();
+                out.resize(start + colors.len() / n * 4, 0.0);
+                if let Some(simulation) = simulation.filter(|s| self.simulated_by(s))
+                    && self
+                        .simulate_cmyk(simulation, colors, manual_scale, &mut out[start..])
+                        .is_some()
+                {
+                    for v in &mut out[start..] {
+                        *v = unit(*v);
+                    }
+                    return;
+                }
+                if self.separates_through_srgb() {
+                    let mut rgb = vec![0_u8; colors.len() / n * 3];
+                    if self.convert_f32(colors, &mut rgb, manual_scale).is_some() {
+                        for (cmyk, rgb) in out[start..].chunks_exact_mut(4).zip(rgb.chunks_exact(3)) {
+                            cmyk.copy_from_slice(&rgb_to_cmyk([rgb[0], rgb[1], rgb[2]].map(u8_to_f32)));
+                        }
+                        return;
+                    }
+                }
+                for (cmyk, colour) in out[start..].chunks_exact_mut(4).zip(colors.chunks_exact(n)) {
+                    if let Some(c) = self.process_cmyk(colour, None, manual_scale) {
+                        cmyk.copy_from_slice(&c);
+                    }
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod device_color_compatibility_tests {
     use super::ColorSpace;
@@ -2358,5 +2866,54 @@ mod device_color_compatibility_tests {
         let space = ColorSpace::device_gray();
         assert_eq!(space.to_rgba(&[0.5], 0.5, false).to_rgba8(), [128, 128, 128, 128]);
         assert_eq!(space.to_rgba(&[], 1.0, false).to_rgba8(), [0, 0, 0, 255]);
+    }
+}
+
+#[cfg(test)]
+mod nesting_tests {
+    use super::{Cache, ColorSpace, MAX_COLOR_SPACE_DEPTH};
+    use hayro_syntax::Pdf;
+    use hayro_syntax::object::{Object, ObjectIdentifier};
+
+    /// A PDF whose object 3 starts a chain of `levels` `/Indexed` spaces, each naming the next
+    /// as its base through an indirect reference, ending in `/DeviceGray`.
+    fn indexed_chain(levels: usize) -> Pdf {
+        let mut objects = vec!["<< /Type /Catalog /Pages 2 0 R >>".to_string(), "<< /Type /Pages /Count 0 /Kids [] >>".to_string()];
+        for i in 0..levels {
+            objects.push(format!("[/Indexed {} 0 R 0 <00>]", i + 4));
+        }
+        objects.push("/DeviceGray".to_string());
+        let mut out = b"%PDF-1.7\n".to_vec();
+        let mut offsets = Vec::new();
+        for (i, body) in objects.iter().enumerate() {
+            offsets.push(out.len());
+            out.extend_from_slice(format!("{} 0 obj\n{body}\nendobj\n", i + 1).as_bytes());
+        }
+        let xref = out.len();
+        out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).as_bytes());
+        for offset in offsets {
+            out.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+        }
+        out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objects.len() + 1).as_bytes());
+        Pdf::new(out).expect("synthetic pdf")
+    }
+
+    fn chain_space(levels: usize) -> Option<ColorSpace> {
+        let pdf = indexed_chain(levels);
+        let object = pdf.xref().get::<Object<'_>>(ObjectIdentifier::new(3, 0)).expect("chain start");
+        ColorSpace::new(object, &Cache::new())
+    }
+
+    #[test]
+    fn nested_color_spaces_stop_at_the_depth_limit() {
+        let deepest = usize::from(MAX_COLOR_SPACE_DEPTH) - 1;
+        assert!(chain_space(1).is_some());
+        assert!(chain_space(deepest).is_some(), "the base at the deepest allowed level resolves");
+        assert!(chain_space(deepest + 1).is_none());
+    }
+
+    #[test]
+    fn a_long_indirect_chain_fails_without_exhausting_the_stack() {
+        assert!(chain_space(100_000).is_none());
     }
 }
