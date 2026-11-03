@@ -109,7 +109,7 @@ also records SEAlang and other source lists. SIL publishes an MIT license,
 Copyright (c) 2015 SIL NRSI. The contributor supplied SEAlang's MIT notice,
 Copyright (c) 2010, Doug Cooper, with a screenshot of its License page.
 These notices accompany Aksara's SBBIC MIT notice in `LICENSE-AKSARA`.
-This identifies the reported resource lineage, not a source-by-source manifest
-of the tagger's training corpus; its exact composition has not been separately
-identified. Raw artifacts remain pinned by `source-pins.json`; no private
-training text is redistributed here.
+SBBIC also confirmed that the tagger was trained on internal documents it has
+permission to train with. This identifies the reported resource lineage, not a
+source-by-source manifest of those documents. Raw artifacts remain pinned by
+`source-pins.json`; no private training text is redistributed here.
