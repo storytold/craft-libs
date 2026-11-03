@@ -338,14 +338,15 @@ impl<'a> Lexer<'a> {
             return None;
         }
         if word.iter().all(u8::is_ascii_digit) {
-            let after = self.pos;
+            let (after, tokens, exhausted) = (self.pos, self.tokens, self.exhausted);
             if let (Some(num), Some(generation)) = (std::str::from_utf8(word).ok().and_then(|w| w.parse::<u32>().ok()), self.unsigned())
                 && let Ok(generation) = u16::try_from(generation)
                 && self.keyword(b"R")
             {
                 return Some(Obj::Ref(num, generation));
             }
-            self.pos = after;
+            // The caller rescans what the lookahead skipped: it must not be charged twice.
+            (self.pos, self.tokens, self.exhausted) = (after, tokens, exhausted);
         }
         self.tokens = self.tokens.checked_add(word.len())?;
         if self.tokens > self.max_tokens {
@@ -827,6 +828,10 @@ impl Reader<'_> {
             let (Some(num), Some(at)) = (lx.unsigned(), lx.unsigned()) else { break };
             let (Ok(num), Some(at)) = (u32::try_from(num), usize::try_from(at).ok().and_then(|a| a.checked_add(first))) else { break };
             objects.push((num, at));
+        }
+        if lx.exhausted {
+            self.budget.exhausted = true;
+            return None;
         }
         Some(ObjStm { data, objects })
     }

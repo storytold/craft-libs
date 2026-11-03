@@ -488,3 +488,25 @@ fn an_over_limit_flate_stream_sets_exhausted() {
     assert!(budget.exhausted);
     assert_eq!(budget.decoded, MAX_DECODED - 100);
 }
+
+#[test]
+fn a_failed_reference_lookahead_does_not_charge_skipped_bytes_twice() {
+    // `1`, 600 KB of blanks, `2`: the lookahead for `1 2 R` skips the blanks and rewinds.
+    let array = format!("[1{}2]", " ".repeat(600_000));
+    let obj = Lexer::new(array.as_bytes(), 0).object(0);
+    assert!(matches!(obj, Some(Obj::Array(a)) if a.len() == 2));
+}
+
+#[test]
+fn an_object_stream_header_past_the_token_limit_exhausts_the_budget() {
+    let mut raw = b"1 ".to_vec();
+    raw.resize(MAX_OBJECT_TOKENS + 16, b' ');
+    raw.extend_from_slice(b"0 null");
+    let packed = miniz_oxide::deflate::compress_to_vec_zlib(&raw, 6);
+    let mut pdf = format!("6 0 obj\n<< /Type /ObjStm /N 1 /First 4 /Filter /FlateDecode /Length {} >>\nstream\n", packed.len()).into_bytes();
+    pdf.extend_from_slice(&packed);
+    pdf.extend_from_slice(b"\nendstream\nendobj\n");
+    let mut reader = Reader { data: &pdf, entries: HashMap::from([(6, Entry::At(0))]), objstms: HashMap::new(), budget: Budget::default() };
+    assert!(reader.load_objstm(6).is_none());
+    assert!(reader.budget.exhausted);
+}
