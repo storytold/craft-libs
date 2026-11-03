@@ -125,6 +125,13 @@ mod device {
         assert_eq!(empty.clips.len(), 1, "the empty clip is applied");
         assert!(empty.clips[0].is_empty(), "and it clips everything away: {:?}", empty.clips[0]);
 
+        // Visible glyphs in the same mode clip to their outlines, as they always did: one clip, not
+        // empty, and the fill still painted beneath it (noted in review).
+        let visible = clips_of("q BT 7 Tr /F1 12 Tf 4 4 Td (H) Tj ET 1 0 0 rg 0 0 40 20 re f Q");
+        assert_eq!(visible.clips.len(), 1, "the glyph outline is applied as the clip");
+        assert!(!visible.clips[0].is_empty(), "and it holds the outline");
+        assert_eq!(visible.paths, 1);
+
         // A clipping mode with no glyph shown at all leaves the clipping path alone.
         let none = clips_of("q BT 7 Tr /F1 12 Tf 4 4 Td ET 1 0 0 rg 0 0 40 20 re f Q");
         assert!(none.clips.is_empty(), "nothing was shown, so nothing clips");
@@ -192,4 +199,35 @@ fn caller_decode_policy_survives_open_fallback() {
     let normal = craft_pdf::open_slice(bytes, None).unwrap();
     assert_eq!(low.decode_limits().max_decoded_stream(), 32);
     assert_eq!(normal.decode_limits(), craft_pdf::syntax::DecodeLimits::default());
+}
+
+/// What the clip does to the page, rendered: the device test above shows the clip the interpreter
+/// sets, this shows the pixels it leaves (noted in review).
+#[cfg(all(feature = "raster", not(target_arch = "wasm32")))]
+mod rendered {
+    use craft_pdf::raster::{self, Options, RenderCache};
+
+    /// The share of a 40 x 20 pt page painted red (the fill), after `text` and then the fill.
+    fn red_share(text: &str) -> f64 {
+        let content = format!("q {text} 1 0 0 rg 0 0 40 20 re f Q");
+        let bytes = format!(
+            "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 40 20] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >> endobj\n4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n5 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >> endobj\ntrailer << /Root 1 0 R >>\n%%EOF",
+            content.len()
+        );
+        let pdf = craft_pdf::open_slice(bytes.as_bytes(), None).unwrap();
+        let page = raster::render(&pdf.pages()[0], &RenderCache::new(), &Default::default(), &Options { background: [255; 4], ..Default::default() })
+            .unwrap();
+        let pixels = page.bytes().as_chunks::<4>().0;
+        let red = pixels.iter().filter(|p| p[0] > 200 && p[1] < 80 && p[2] < 80).count();
+        red as f64 / pixels.len() as f64
+    }
+
+    #[test]
+    fn an_empty_text_clip_hides_what_follows_and_a_visible_one_shows_its_glyphs() {
+        assert!(red_share("") > 0.99, "no text object: the fill covers the page");
+        assert_eq!(red_share("BT 7 Tr /F1 12 Tf 4 4 Td ( ) Tj ET"), 0.0, "an outline-less glyph in 7 Tr: nothing paints");
+        let through = red_share("BT 7 Tr /F1 12 Tf 4 4 Td (H) Tj ET");
+        assert!(through > 0.02 && through < 0.5, "visible glyphs in 7 Tr: the fill shows through the H only ({through})");
+        assert!(red_share("BT 7 Tr /F1 12 Tf 4 4 Td ET") > 0.99, "no glyph shown: the clip is unchanged");
+    }
 }
