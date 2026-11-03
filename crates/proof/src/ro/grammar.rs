@@ -223,7 +223,9 @@ fn nici_sentences(text: &str, ws: &[(usize, usize)]) -> Vec<(usize, bool)> {
         // `5.`) doesn't.
         let prev_word = prev.map_or("", |p| text.get(p.0..p.1).unwrap_or(""));
         let abbreviation = gap.trim_start().starts_with('.') && !gap.contains("..") && abbreviation_or_number(prev_word);
-        if gap.contains(['!', '?']) || (gap.contains('.') && !abbreviation) {
+        // An ellipsis followed by a comma (`frate..., nici`) goes on in the same sentence.
+        let ellipsis_comma = (gap.contains("..") || gap.contains('…')) && gap.trim_start().trim_start_matches(['.', '…']).starts_with(',');
+        if gap.contains(['!', '?']) || (gap.contains('.') && !abbreviation && !ellipsis_comma) {
             sentence = sentence.saturating_add(1);
         }
         let comma_nici = gap.contains(',') && text.get(*a..*b).is_some_and(|w| is_word(w, "nici"));
@@ -398,6 +400,9 @@ mod tests {
         assert!(check("N-am nici un nr. de telefon, nici alt mijloc de contact.").is_empty());
         // Both halves of a correlative stay apart, the second too (CodeRabbit on craft-libs#550).
         assert!(check("Nici un frate, nici o soră.").is_empty());
+        // An ellipsis before the comma keeps the sentence going; one before a new sentence doesn't.
+        assert!(check("Nici un frate..., nici o soră.").is_empty(), "{:?}", check("Nici un frate..., nici o soră."));
+        assert_eq!(messages("Nu am nici un ban... Mâine, nici el."), ["Se scrie legat: „niciun”"]);
         // A `…, nici` in the next sentence doesn't make one here.
         assert_eq!(messages("Nu am nici un ban. Mâine, nici el."), ["Se scrie legat: „niciun”"]);
         // All capitals stay all capitals; an initial capital stays initial.

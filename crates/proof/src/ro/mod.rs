@@ -97,14 +97,19 @@ pub fn is_correct_with(d: &AffixDict, word: &str) -> bool {
         return true;
     }
     // `într-o`, `s-a`, `dă-mi-l`, `nord-est`: every part is a word (or a one-letter clitic).
-    w.contains('-') && w.split('-').all(|p| p.chars().count() <= 1 || known(d, p))
+    // An empty part (`casă--câine`) is no word.
+    w.contains('-') && w.split('-').all(|p| p.chars().count() == 1 || (!p.is_empty() && known(d, p)))
 }
 
 /// Is one word (comma-below already) in the dictionary or the user dictionary? A user word is
 /// found in either spelling: added with cedillas (`şcoală`) it covers `școală` too.
 fn known(d: &AffixDict, w: &str) -> bool {
     let lower = w.to_lowercase();
-    d.check(w) || crate::in_user_dictionary(&lower) || crate::in_user_dictionary(&cedilla(&lower))
+    d.check(w)
+        || crate::in_user_dictionary(&lower)
+        || crate::in_user_dictionary(&cedilla(&lower))
+        // An entry mixing the two spellings (`zqșcoalăţx`) matches every typing of it.
+        || (lower.contains(['ș', 'ț']) && crate::in_user_dictionary_as(&lower, comma_below))
 }
 
 /// `word` with the comma-below `ș`/`ț` written with cedillas (`ş`/`ţ`): the other spelling a user
@@ -159,6 +164,26 @@ mod tests {
         crate::add_word("zqțarăx");
         assert!(is_correct("zqţarăx") && is_correct("zqțarăx"));
         crate::remove_word("zqțarăx");
+    }
+
+    #[test]
+    fn a_mixed_user_word_counts_in_every_spelling() {
+        test_dict::install();
+        // Added mixing cedilla and comma-below letters, it matches each typing (CodeRabbit).
+        crate::add_word("zqșcoalăţx");
+        for w in ["zqșcoalăţx", "zqșcoalățx", "zqşcoalăţx", "zqşcoalățx"] {
+            assert!(is_correct(w), "{w}");
+        }
+        crate::remove_word("zqșcoalăţx");
+        assert!(!is_correct("zqșcoalățx"));
+    }
+
+    #[test]
+    fn an_empty_hyphen_part_is_no_word() {
+        test_dict::install();
+        assert!(is_correct("într-o") && is_correct("casă-casă"));
+        assert!(!is_correct("casă--casă"), "a doubled hyphen leaves an empty part");
+        assert!(is_correct("casă-"), "a hyphen at the edge is trimmed, so the word is checked alone");
     }
 
     #[test]

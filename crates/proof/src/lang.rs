@@ -370,7 +370,8 @@ pub(crate) fn default_script(primary: &str) -> Option<&'static str> {
 pub(crate) fn effective_script(tag: &str) -> Option<String> {
     let mut parts = tag.split(['-', '_']);
     let primary = parts.next().unwrap_or_default().to_ascii_lowercase();
-    parts.find(|p| is_script(p)).map(str::to_ascii_lowercase).or_else(|| default_script(&primary).map(str::to_string))
+    // Subtags after a singleton (`x-…` private use, `u-…` extensions) name no script.
+    parts.take_while(|p| p.len() != 1).find(|p| is_script(p)).map(str::to_ascii_lowercase).or_else(|| default_script(&primary).map(str::to_string))
 }
 
 /// The region of a tag: the first two-letter or three-digit subtag after the language and
@@ -484,6 +485,8 @@ mod tests {
         assert_eq!(ProofLang::Id.code(), "id");
         assert!(ProofLang::Id.is_proofed() && ProofLang::PROOFED.contains(&ProofLang::Id));
         assert_tags(&["ro", "ro-RO", "RO_ro", "ro-MD", "ro_RO.UTF-8", " ro-RO ", "ron", "rum", "mo", "ro-Latn-RO"], ProofLang::Ro);
+        // A script-like subtag in a private-use extension is no script.
+        assert_eq!(ProofLang::from_tag(Some("ro-x-Cyrl")), ProofLang::Ro);
         for tag in ["ro-Cyrl", "mo-Cyrl", "ro-Cyrl-MD"] {
             assert!(matches!(ProofLang::from_tag(Some(tag)), ProofLang::Pack(_)), "{tag}: Cyrillic Romanian is a pack language");
         }

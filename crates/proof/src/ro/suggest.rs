@@ -84,11 +84,11 @@ impl Collector<'_> {
             if part.is_empty() {
                 return;
             }
-            if self.d.contains(part) || (part.contains('-') && part.split('-').all(|p| !p.is_empty() && self.d.contains(p))) {
+            if self.d.contains_suggestible(part) || (part.contains('-') && part.split('-').all(|p| !p.is_empty() && self.d.contains_suggestible(p))) {
                 words.push(part.to_string());
             } else {
                 let c = capitalize(part);
-                if !self.d.contains(&c) {
+                if !self.d.contains_suggestible(&c) {
                     return;
                 }
                 words.push(c);
@@ -253,9 +253,9 @@ pub fn suggest_in(d: &AffixDict, word: &str, max: usize) -> Vec<String> {
     let chars: Vec<char> = input.chars().collect();
     let mut col = Collector { d, input: input.clone(), tested: HashMap::new(), found: HashMap::new(), seq: 0 };
     // 1. Letter case.
-    if d.contains(&input) && word != input {
+    if d.contains_suggestible(&input) && word != input {
         col.keep(input.clone(), COST_CASE);
-    } else if d.contains(&capitalize(&input)) && word != capitalize(&input) {
+    } else if d.contains_suggestible(&capitalize(&input)) && word != capitalize(&input) {
         col.keep(capitalize(&input), COST_CASE);
     }
     // 2. Diacritics and other MAP slips.
@@ -410,9 +410,9 @@ fn scan(col: &mut Collector, chars: &[char]) {
                 continue;
             }
             let dist = weighted_distance(&lf, chars, &related, limit);
-            // `forms` doesn't leave out a form FORBIDDENWORD bars: only a form the dictionary
-            // accepts is offered.
-            if dist <= limit && lf.as_slice() != chars && d.contains(&form) {
+            // `forms` keeps the forms of NOSUGGEST stems and forms FORBIDDENWORD bars: only a
+            // form the dictionary would suggest is offered.
+            if dist <= limit && lf.as_slice() != chars && d.contains_suggestible(&form) {
                 col.keep(form, COST_SCAN + dist * 3);
             }
         }
@@ -426,6 +426,22 @@ mod tests {
     fn has(word: &str, want: &str) {
         let s = suggest(word, 8);
         assert!(s.iter().any(|x| x == want), "{word} → {s:?}, want {want}");
+    }
+
+    #[test]
+    fn the_rep_table_is_tried() {
+        // `qqqq` → `a` is three letters shorter: no typo route or stem scan reaches it, only REP.
+        let with = crate::affix::AffixDict::from_hunspell("REP 1\nREP qqqq a\n", "1\ncasa\n", &[]).unwrap_or_default();
+        let without = crate::affix::AffixDict::from_hunspell("", "1\ncasa\n", &[]).unwrap_or_default();
+        assert_eq!(suggest_in(&with, "cqqqqsa", 5), ["casa"]);
+        assert!(suggest_in(&without, "cqqqqsa", 5).is_empty());
+    }
+
+    #[test]
+    fn nosuggest_forms_are_never_offered() {
+        let d = crate::affix::AffixDict::from_hunspell("NOSUGGEST N\n", "2\ncasa\ncasx/N\n", &[]).unwrap_or_default();
+        let s = suggest_in(&d, "casz", 5);
+        assert!(s.iter().any(|w| w == "casa") && !s.iter().any(|w| w == "casx"), "{s:?}");
     }
 
     #[test]
