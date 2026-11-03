@@ -313,8 +313,9 @@ fn packets_longer_than_any_codec_uses_are_refused() {
 fn flac_metadata_fields_beyond_their_block_are_refused() {
     let with_block = |kind: u8, body: &[u8]| {
         let f = small(EncodeFormat::Flac, BitDepth::Int16, 1);
-        let head = ((0x80 | u32::from(kind)) << 24 | body.len() as u32).to_be_bytes();
-        [&f[..4], &[f[4] & 0x7f], &f[5..42], &head, body, &f[42..]].concat()
+        // between STREAMINFO and the encoder's VORBIS_COMMENT, which stays the last block
+        let head = (u32::from(kind) << 24 | body.len() as u32).to_be_bytes();
+        [&f[..42], &head, body, &f[42..]].concat()
     };
     let picture = |data: u32| [&[0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 0][..], &[0; 16], &data.to_be_bytes(), &[1, 2, 3]].concat();
     assert_eq!(decode(&with_block(6, &picture(3)), None).unwrap().1.frames(), 300);
