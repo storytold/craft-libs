@@ -549,7 +549,7 @@ pub(crate) fn decode_vni_single_byte(byte: u8, offset: usize, mode: DecodeMode) 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct VniDecoder {
     mode: DecodeMode,
-    pending_base: Option<char>,
+    pending_base_byte: Option<u8>,
 }
 
 impl Default for VniDecoder {
@@ -561,7 +561,7 @@ impl Default for VniDecoder {
 impl VniDecoder {
     /// Create a new streaming VNI decoder.
     pub const fn new(mode: DecodeMode) -> Self {
-        Self { mode, pending_base: None }
+        Self { mode, pending_base_byte: None }
     }
 
     /// Decode a chunk of bytes, appending the decoded Unicode characters to `out`.
@@ -572,27 +572,30 @@ impl VniDecoder {
         while i < len {
             let byte = chunk[i];
 
-            // If we have a pending base character from the previous chunk
-            if let Some(base) = self.pending_base {
+            // If we have a pending base byte from the previous chunk
+            if let Some(prev_byte) = self.pending_base_byte {
                 let mark_char = byte as char;
-                if base == 'I' && (mark_char == 'Ï' || mark_char == 'ï') && i + 1 < len && (chunk[i + 1] == b'T' || chunk[i + 1] == b't') {
+                let base_char = byte_to_vni_base(prev_byte);
+                if base_char == 'I' && (mark_char == 'Ï' || mark_char == 'ï') && i + 1 < len && (chunk[i + 1] == b'T' || chunk[i + 1] == b't') {
                     out.push_str("IỆ");
-                    self.pending_base = None;
+                    self.pending_base_byte = None;
                     i += 1;
                     continue;
-                } else if base == 'i' && (mark_char == 'ï' || mark_char == 'Ï') && i + 1 < len && (chunk[i + 1] == b'T' || chunk[i + 1] == b't') {
+                } else if base_char == 'i' && (mark_char == 'ï' || mark_char == 'Ï') && i + 1 < len && (chunk[i + 1] == b'T' || chunk[i + 1] == b't')
+                {
                     out.push_str("iệ");
-                    self.pending_base = None;
+                    self.pending_base_byte = None;
                     i += 1;
                     continue;
-                } else if let Some(comp) = match_vni_composite(base, mark_char) {
+                } else if let Some(comp) = match_vni_composite(base_char, mark_char) {
                     out.push(comp);
-                    self.pending_base = None;
+                    self.pending_base_byte = None;
                     i += 1;
                     continue;
                 } else {
-                    out.push(base);
-                    self.pending_base = None;
+                    let ch = decode_vni_single_byte(prev_byte, 0, self.mode)?;
+                    out.push(ch);
+                    self.pending_base_byte = None;
                     continue;
                 }
             }
@@ -600,8 +603,7 @@ impl VniDecoder {
             // If byte could be a base character and this is the last byte of the chunk:
             let is_last_byte = i + 1 == len;
             if is_last_byte && is_vni_base_candidate(byte) {
-                let base_char = byte_to_vni_base(byte);
-                self.pending_base = Some(base_char);
+                self.pending_base_byte = Some(byte);
                 break;
             }
 
@@ -638,8 +640,10 @@ impl VniDecoder {
 
     /// Flush any remaining pending base character to `out`.
     pub fn finish(mut self, out: &mut String) {
-        if let Some(base) = self.pending_base.take() {
-            out.push(base);
+        if let Some(byte) = self.pending_base_byte.take()
+            && let Ok(ch) = decode_vni_single_byte(byte, 0, self.mode)
+        {
+            out.push(ch);
         }
     }
 }

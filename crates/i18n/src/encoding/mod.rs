@@ -207,6 +207,94 @@ pub fn decode_with_mode(input: &[u8], encoding: LegacyEncoding, mode: DecodeMode
     }
 }
 
+/// Configuration options for the [`decode_text`] composite facade.
+#[derive(Clone, Copy, Debug)]
+pub struct DecodeOptions<'a> {
+    /// Explicitly forced encoding, bypassing heuristic detection.
+    pub force_encoding: Option<LegacyEncoding>,
+    /// Metadata hints (e.g. font name, codepage) from document containers.
+    pub metadata: Option<&'a EncodingMetadata<'a>>,
+    /// Whether to canonically compose the output into Unicode NFC (default: true).
+    pub normalize_nfc: bool,
+    /// Decoding mode: Strict specification vs Practical legacy tolerance (default: Practical).
+    pub mode: DecodeMode,
+}
+
+impl Default for DecodeOptions<'_> {
+    fn default() -> Self {
+        Self { force_encoding: None, metadata: None, normalize_nfc: true, mode: DecodeMode::Practical }
+    }
+}
+
+/// Unified decoding facade combining detection, decoding, and canonical NFC normalization.
+///
+/// Invariants:
+/// - If `force_encoding` is `None` and `input` is valid UTF-8, heuristic transcoding is never executed.
+/// - If `normalize_nfc` is true, output is guaranteed canonical Unicode Normalization Form C.
+/// - Returns `Cow::Borrowed` with zero allocations on pure ASCII or already-canonical UTF-8 inputs.
+pub fn decode_text<'a>(input: &'a [u8], options: &DecodeOptions<'a>) -> Result<Cow<'a, str>, DecodeError> {
+    // 1. Explicit forced encoding
+    if let Some(enc) = options.force_encoding {
+        let decoded = decode_with_mode(input, enc, options.mode)?;
+        if options.normalize_nfc {
+            return Ok(apply_nfc_cow(decoded));
+        }
+        return Ok(decoded);
+    }
+
+    // 2. Fast path: check valid UTF-8
+    if let Ok(s) = std::str::from_utf8(input) {
+        // If metadata explicitly provides font name or codepage hint
+        if let Some(meta) = options.metadata {
+            let detection = detect_encoding(input, Some(meta));
+            if let DetectionResult::HighConfidence { encoding, evidence } = detection
+                && matches!(evidence, EncodingEvidence::FontHint | EncodingEvidence::Metadata)
+                && !is_already_unicode_vietnamese(s)
+            {
+                let decoded = decode_with_mode(input, encoding, options.mode)?;
+                if options.normalize_nfc {
+                    return Ok(apply_nfc_cow(decoded));
+                }
+                return Ok(decoded);
+            }
+        }
+
+        // Genuine UTF-8: never apply heuristic legacy decoding to valid UTF-8
+        if options.normalize_nfc {
+            return Ok(normalize_nfc(s));
+        }
+        return Ok(Cow::Borrowed(s));
+    }
+
+    // 3. Non-UTF8 bytes: detect encoding via content heuristics or metadata
+    let detection = detect_encoding(input, options.metadata);
+    if let Some(enc) = detection.encoding() {
+        let decoded = decode_with_mode(input, enc, options.mode)?;
+        if options.normalize_nfc {
+            return Ok(apply_nfc_cow(decoded));
+        }
+        return Ok(decoded);
+    }
+
+    // 4. Neither valid UTF-8 nor a recognized Vietnamese legacy encoding
+    let valid_up_to = match std::str::from_utf8(input) {
+        Ok(_) => 0,
+        Err(e) => e.valid_up_to(),
+    };
+    Err(DecodeError::InvalidUtf8 { offset: valid_up_to })
+}
+
+#[inline]
+fn apply_nfc_cow<'a>(cow: Cow<'a, str>) -> Cow<'a, str> {
+    match cow {
+        Cow::Borrowed(b) => normalize_nfc(b),
+        Cow::Owned(o) => {
+            let nfc = ComposingNormalizerBorrowed::new_nfc();
+            if nfc.is_normalized_utf8(o.as_bytes()) { Cow::Owned(o) } else { Cow::Owned(nfc.normalize(&o).into_owned()) }
+        }
+    }
+}
+
 /// Transcode using an explicitly known encoding, skipping heuristic detection.
 ///
 /// Use this in `pdfcraft` or strict pipelines when metadata (such as a known PDF font name)

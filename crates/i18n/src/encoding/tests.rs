@@ -1,10 +1,11 @@
 use std::borrow::Cow;
 
 use super::{
-    DecodeError, DecodeMode, DetectionResult, EncodingEvidence, EncodingMetadata, LegacyEncoding, VietnameseEncoding, VniDecoder, decode,
-    decode_tcvn3, decode_vni, decode_with_mode, detect_encoding, detect_encoding_from_str, detect_legacy_encoding, detect_vietnamese_encoding,
-    font_hint, is_already_unicode_vietnamese, is_legacy_text, is_serif_legacy_font, is_vietnamese_font, normalize_nfc, transcode, transcode_explicit,
-    transcode_summary, transcode_tcvn3, transcode_to_unicode, transcode_vietnamese, transcode_vni, transcode_with_summary, validate_and_normalize,
+    DecodeError, DecodeMode, DecodeOptions, DetectionResult, EncodingEvidence, EncodingMetadata, LegacyEncoding, VietnameseEncoding, VniDecoder,
+    decode, decode_tcvn3, decode_text, decode_vni, decode_with_mode, detect_encoding, detect_encoding_from_str, detect_legacy_encoding,
+    detect_vietnamese_encoding, font_hint, is_already_unicode_vietnamese, is_legacy_text, is_serif_legacy_font, is_vietnamese_font, normalize_nfc,
+    transcode, transcode_explicit, transcode_summary, transcode_tcvn3, transcode_to_unicode, transcode_vietnamese, transcode_vni,
+    transcode_with_summary, validate_and_normalize,
 };
 
 #[test]
@@ -444,4 +445,124 @@ fn test_vni_streaming_chunk_boundaries() {
 
     // 'a' and '\xf9' seamlessly composed into 'á'
     assert_eq!(out, "Ban ve so 1á va chi tiet");
+}
+
+#[test]
+fn test_fixture_clean_utf8_payload() {
+    let clean_bytes = include_bytes!("fixtures/clean_utf8_payload.txt");
+    let clean_res = decode_text(clean_bytes, &DecodeOptions::default()).expect("Clean UTF-8 decode");
+    assert!(matches!(clean_res, Cow::Borrowed(_)), "Clean UTF-8 text must take fast path and remain Borrowed with zero allocation");
+    assert!(clean_res.contains("Cộng hòa Xã hội Chủ nghĩa Việt Nam"));
+    assert!(clean_res.contains("Độc lập - Tự do - Hạnh phúc"));
+    assert!(clean_res.contains("tiêu chuẩn TCVN"));
+    assert_eq!(normalize_nfc(clean_res.as_ref()), clean_res.as_ref());
+}
+
+#[test]
+fn test_fixture_tcvn3_cad_dwg() {
+    let tcvn3_bytes = include_bytes!("fixtures/tcvn3_cad_dwg.txt");
+
+    // Practical mode: preserves CP1252 quotes “...” and decodes standard TCVN3 body
+    let tcvn3_practical =
+        decode_text(tcvn3_bytes, &DecodeOptions { force_encoding: Some(LegacyEncoding::Tcvn3), mode: DecodeMode::Practical, ..Default::default() })
+            .expect("Practical TCVN3 CAD DWG decoding");
+
+    assert!(tcvn3_practical.contains("“Tiêu chuẩn thiết kế kết cấu bê tông cốt thép”"));
+    assert!(tcvn3_practical.contains("Ghi chú: Kiểm tra kích thước trước khi gia công."));
+    assert!(tcvn3_practical.contains("Cao độ: +3.500m; Vật liệu: Thép CT3."));
+
+    for c in tcvn3_practical.chars() {
+        assert!(!matches!(c, '\u{0300}'..='\u{036F}'), "TCVN3 output must not contain combining diacritics: {c:?}");
+    }
+
+    // Line 1 in .VnTimeH (all-caps CAD font entity mapping)
+    let tcvn3_lines: Vec<&[u8]> = tcvn3_bytes.split(|&b| b == b'\n').collect();
+    let header = decode_text(
+        tcvn3_lines[0],
+        &DecodeOptions { force_encoding: Some(LegacyEncoding::Tcvn3H), mode: DecodeMode::Practical, ..Default::default() },
+    )
+    .expect("Decode TCVN3H header");
+    assert_eq!(header.as_ref(), "BẢN VẼ CHI TIẾT CÔNG TRÌNH");
+
+    // Strict mode: rejects CP1252 left quote 0x93 with exact byte offset
+    let tcvn3_strict_err =
+        decode_text(tcvn3_bytes, &DecodeOptions { force_encoding: Some(LegacyEncoding::Tcvn3), mode: DecodeMode::Strict, ..Default::default() });
+    assert_eq!(tcvn3_strict_err, Err(DecodeError::UnmappedByte { byte: 0x93, offset: 27, encoding: LegacyEncoding::Tcvn3 }));
+}
+
+#[test]
+fn test_fixture_vni_contract_1998() {
+    let vni_bytes = include_bytes!("fixtures/vni_contract_1998.txt");
+
+    // Practical mode: decodes CapsLock diacritics and gracefully converts orphan mark to standalone acute
+    let vni_practical =
+        decode_text(vni_bytes, &DecodeOptions { force_encoding: Some(LegacyEncoding::Vni), mode: DecodeMode::Practical, ..Default::default() })
+            .expect("Practical VNI contract decoding");
+
+    assert!(vni_practical.contains("CỘNG HÒA XÃ HỘI CHỦ NGHĨA VIỆT NAM"));
+    assert!(vni_practical.contains("ĐỘC LẬP - TỰ DO - HẠNH PHÚC"));
+    assert!(vni_practical.contains("HỢP ĐỒNG KINH TẾ SỐ 198/HĐKT"));
+    assert!(vni_practical.contains("Điều 1: Giá cả và phương thức thanh toán"));
+    assert!(vni_practical.contains("Số tiền: 500.000.000 f´"));
+
+    for c in vni_practical.chars() {
+        assert!(!matches!(c, '\u{0300}'..='\u{036F}'), "VNI output must not contain combining diacritics: {c:?}");
+    }
+
+    // Strict mode: rejects orphan diacritic byte 0xF9 with exact offset
+    let vni_strict_err =
+        decode_text(vni_bytes, &DecodeOptions { force_encoding: Some(LegacyEncoding::Vni), mode: DecodeMode::Strict, ..Default::default() });
+    assert_eq!(vni_strict_err, Err(DecodeError::UnmappedByte { byte: 0xF9, offset: 179, encoding: LegacyEncoding::Vni }));
+
+    // Streaming state machine: stream vni_bytes in small 7-byte chunks
+    let mut streaming_decoder = VniDecoder::new(DecodeMode::Practical);
+    let mut streamed_out = String::new();
+    for chunk in vni_bytes.chunks(7) {
+        streaming_decoder.decode_chunk(chunk, &mut streamed_out).expect("Streaming VNI chunk");
+    }
+    streaming_decoder.finish(&mut streamed_out);
+    assert_eq!(streamed_out, vni_practical.as_ref(), "Streaming output must match whole-file decoding");
+}
+
+#[test]
+fn test_fixture_cp1258_accounting() {
+    let cp1258_bytes = include_bytes!("fixtures/cp1258_accounting.txt");
+
+    // Pure decoding primitive (without implicit NFC normalization)
+    let cp1258_pure =
+        decode_text(cp1258_bytes, &DecodeOptions { force_encoding: Some(LegacyEncoding::Windows1258), normalize_nfc: false, ..Default::default() })
+            .expect("Pure CP1258 decoding");
+
+    assert!(cp1258_pure.contains('₫'));
+    assert!(
+        cp1258_pure.chars().any(|c| matches!(c, '\u{0300}'..='\u{036F}')),
+        "Pure CP1258 decoding must preserve combining diacritics without hidden NFC"
+    );
+
+    // Canonical NFC decoding: all combining marks composed into precomposed NFC
+    let cp1258_nfc =
+        decode_text(cp1258_bytes, &DecodeOptions { force_encoding: Some(LegacyEncoding::Windows1258), normalize_nfc: true, ..Default::default() })
+            .expect("NFC CP1258 decoding");
+
+    assert!(cp1258_nfc.contains('₫'));
+    assert!(cp1258_nfc.contains("MÃ VT\tTÊN VẬT TƯ\tSỐ LƯỢNG\tĐƠN GIÁ\tTHÀNH TIỀN"));
+    assert!(cp1258_nfc.contains("Xi măng PCB40\t100\t85.000 ₫\t8.500.000 ₫"));
+    assert!(cp1258_nfc.contains("Thép cuộn phi 6\t500\t18.500 ₫\t9.250.000 ₫"));
+    assert!(cp1258_nfc.contains("TỔNG CỘNG:\t\t\t\t17.750.000 ₫"));
+
+    assert!(!cp1258_nfc.chars().any(|c| matches!(c, '\u{0300}'..='\u{036F}')), "NFC CP1258 decoding must not contain any leftover combining marks");
+
+    // Undefined byte rejection: 0x81 is strictly undefined in CP1258.TXT
+    let mut invalid_cp = cp1258_bytes.to_vec();
+    invalid_cp[5] = 0x81;
+    let cp_err = decode_text(&invalid_cp, &DecodeOptions { force_encoding: Some(LegacyEncoding::Windows1258), ..Default::default() });
+    assert_eq!(cp_err, Err(DecodeError::UnmappedByte { byte: 0x81, offset: 5, encoding: LegacyEncoding::Windows1258 }));
+}
+
+#[test]
+fn test_real_world_corpora_fixtures() {
+    test_fixture_clean_utf8_payload();
+    test_fixture_tcvn3_cad_dwg();
+    test_fixture_vni_contract_1998();
+    test_fixture_cp1258_accounting();
 }
