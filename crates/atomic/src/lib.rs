@@ -342,10 +342,12 @@ fn split(target: &Path, path: &Path) -> io::Result<(PathBuf, String)> {
     Ok((dir, name.to_string_lossy().into_owned()))
 }
 
-/// Create a temporary file in `dir`, fill it with `fill`, give it the permissions of the file it
-/// replaces (`replaced`, Unix) and flush it. Permission restoration is skipped when the mode
-/// already matches after `fill`. A leftover file with the same name is skipped. When any step
-/// fails, the temporary file is removed.
+/// Create a temporary file in `dir`, fill it with `fill`, give it the permissions and group of
+/// the file it replaces (`replaced`, Unix) and flush it. Permission restoration is skipped when
+/// the mode already matches after `fill`; the group bits are dropped when the file cannot be put
+/// in the replaced file's group, so they never open the file to a group that was not granted
+/// them. A leftover file with the same name is skipped. When any step fails, the temporary file
+/// is removed.
 fn stage(
     fs: &dyn AtomicFs,
     dir: &Path,
@@ -382,6 +384,16 @@ fn stage(
                             // Compare permission and special bits, not file-type bits.
                             if (file.metadata()?.permissions().mode() & 0o7777) == (p.mode() & 0o7777) {
                                 return Ok(());
+                            }
+                            // The group bits belong to the replaced file's group, which a new
+                            // inode need not be in (setgid directory, another primary group).
+                            if let Some(replaced) = replaced
+                                && p.mode() & 0o070 != 0
+                                && std::os::unix::fs::fchown(&file, None, Some(std::os::unix::fs::MetadataExt::gid(replaced))).is_err()
+                            {
+                                let mut p = p;
+                                p.set_mode(p.mode() & !0o070);
+                                return fs.set_permissions(&file, p);
                             }
                         }
                         fs.set_permissions(&file, p)
@@ -1094,6 +1106,11 @@ mod tests {
             let fs = Faulty { fail_normal_create: true, ..Default::default() };
             replace_with_options(&fs, NO_RETRY, &p, NewFilePermissions::PlatformDefault, |f| f.write_all(b"replacement"))?;
             assert_eq!(std::fs::metadata(&p)?.permissions().mode() & 0o777, mode);
+            assert_eq!(
+                std::os::unix::fs::MetadataExt::gid(&std::fs::metadata(&p)?),
+                std::os::unix::fs::MetadataExt::gid(&d.0.metadata()?),
+                "kept in the directory's group"
+            );
             assert!(!fs.events.borrow().contains(&"create_new_normal"));
             assert_eq!(*fs.created_modes.borrow(), [0o600]);
         }
