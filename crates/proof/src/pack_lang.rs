@@ -219,8 +219,15 @@ pub(crate) fn names(locale: PackLocale) -> Vec<String> {
         // The language's default script: its script-less names are in that script too.
         Some(s) if parts.get(s).is_some_and(|p| Some(*p) == default) => {
             let without = crate::lang::without_index(&cased, s);
+            let region = crate::lang::region_index(&without);
             for n in (1..=without.len()).rev() {
-                push(without.get(..n).unwrap_or_default());
+                let prefix = without.get(..n).unwrap_or_default();
+                push(prefix);
+                if let Some(r) = region
+                    && r + 1 < n
+                {
+                    push(&crate::lang::without_index(prefix, r));
+                }
             }
         }
         Some(_) => {}
@@ -443,6 +450,11 @@ mod tests {
         );
         // With a script the same variant passes the length limit (15 bytes), and is cut by it.
         assert_eq!(l("sr-Cyrl-RS-ijekavsk").as_str(), "sr-cyrl-rs");
+        // A variant that fits with the default script is looked up without the region too, script-less as well.
+        let n = names(l("sr-Cyrl-RS-1994"));
+        assert!(n.contains(&"sr_Cyrl_1994".to_string()), "{n:?}");
+        assert!(n.contains(&"sr_1994".to_string()), "{n:?}");
+        assert!(n.iter().position(|x| x == "sr_1994") < n.iter().position(|x| x == "sr_RS"), "{n:?}");
         assert_eq!(hyphenation_locales(l("ca-ES-valencia")), ["ca-es-valencia", "ca-valencia", "ca-es", "ca"]);
         assert_eq!(hyphenation_locales(l("fr-CA")), ["fr-ca", "fr"]);
         assert_eq!(hyphenation_locales(l("sr-Latn")), ["sr-latn"]);
