@@ -579,13 +579,14 @@ pub(crate) fn tracks(src: &Src<'_>, detected: Option<Container>) -> Option<Resul
 
 /// What is damaged in `src`, when it is in a container the native demuxers read and they find it
 /// truncated or structurally invalid: the error to return when symphonia cannot read it either.
+/// Ogg is left out: `ogg::open` skips damaged pages and calls a file with none it can read not
+/// Ogg, and symphonia reports a damaged Ogg stream as malformed itself.
 #[cfg(feature = "symphonia")]
 pub(crate) fn damage(src: &Src<'_>, detected: Option<Container>) -> Option<String> {
     let head = src.head_checked().ok()?;
     let failure = match super::detect_container(&head, None).or(detected) {
         Some(Container::Mp4 | Container::QuickTime) => mp4_failure(isobmff::open(src).err()?),
         Some(Container::Matroska | Container::WebM) => mkv_failure(matroska::open(src.clone()).err()?),
-        Some(Container::Ogg) => ogg_failure(ogg::open(src).err()?),
         _ => return None,
     };
     match failure {
