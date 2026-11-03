@@ -291,15 +291,25 @@ impl BitWriter {
 /// Remove emulation-prevention bytes (`00 00 03` → `00 00`) from a NAL payload.
 pub fn unescape_rbsp(data: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(data.len());
-    let mut zeros = 0;
-    for &b in data {
-        if zeros >= 2 && b == 3 {
-            zeros = 0;
-            continue;
+    // `data[start..]` is not copied yet; a removed `03` restarts the zero count at `start`.
+    let mut start = 0;
+    // Candidate position of an `03` preceded by two zeros at or after `start`.
+    let mut i = 2;
+    while let Some(&b) = data.get(i) {
+        if b != 0 {
+            // A nonzero byte at `i` rules out an `00 00 03` ending at i + 1 or i + 2.
+            if b == 3 && data.get(i - 2..i) == Some(&[0, 0][..]) {
+                out.extend_from_slice(data.get(start..i).unwrap_or_default());
+                start = i + 1;
+                i = start + 2;
+            } else {
+                i += 3;
+            }
+        } else {
+            i += 1;
         }
-        out.push(b);
-        zeros = if b == 0 { zeros + 1 } else { 0 };
     }
+    out.extend_from_slice(data.get(start..).unwrap_or_default());
     out
 }
 
@@ -462,6 +472,68 @@ mod tests {
         let esc = escape_rbsp(&raw);
         assert_eq!(esc, vec![0, 0, 3, 1, 0, 0, 3, 0, 5, 0, 0, 3, 3]);
         assert_eq!(unescape_rbsp(&esc), raw);
+    }
+
+    /// Verbatim copy of the byte-at-a-time `unescape_rbsp` that this one replaced.
+    fn old_unescape_rbsp(data: &[u8]) -> Vec<u8> {
+        let mut out = Vec::with_capacity(data.len());
+        let mut zeros = 0;
+        for &b in data {
+            if zeros >= 2 && b == 3 {
+                zeros = 0;
+                continue;
+            }
+            out.push(b);
+            zeros = if b == 0 { zeros + 1 } else { 0 };
+        }
+        out
+    }
+
+    #[test]
+    fn unescape_edge_cases() {
+        let cases: &[(&[u8], &[u8])] = &[
+            (&[], &[]),
+            (&[3], &[3]),
+            (&[0, 0], &[0, 0]),
+            (&[0, 0, 3], &[0, 0]),
+            (&[0, 0, 3, 3], &[0, 0, 3]),
+            (&[0, 0, 3, 0, 0, 3], &[0, 0, 0, 0]),
+            (&[0, 0, 0, 3], &[0, 0, 0]),
+            (&[0, 0, 0, 0, 3, 1], &[0, 0, 0, 0, 1]),
+            (&[0, 3, 0, 0, 3, 7], &[0, 3, 0, 0, 7]),
+            (&[1, 0, 0, 3, 3, 0, 0, 3], &[1, 0, 0, 3, 0, 0]),
+            (&[0, 0, 3, 0, 3], &[0, 0, 0, 3]),
+        ];
+        for (input, want) in cases {
+            assert_eq!(unescape_rbsp(input), *want, "input {input:?}");
+            assert_eq!(old_unescape_rbsp(input), *want, "input {input:?}");
+        }
+    }
+
+    #[test]
+    fn unescape_matches_the_pre_change_function_on_random_buffers() {
+        // Fixed-seed xorshift64*, no new dependencies.
+        let mut state = 0x9E37_79B9_7F4A_7C15u64;
+        let mut next = move || {
+            state ^= state >> 12;
+            state ^= state << 25;
+            state ^= state >> 27;
+            (state.wrapping_mul(0x2545_F491_4F6C_DD1D) >> 32) as u32
+        };
+        for round in 0..20_000u32 {
+            let len = (next() % 300) as usize;
+            // Mostly zeros and threes, some small values, some random bytes.
+            let zero_bias = next() % 4;
+            let data: Vec<u8> = (0..len)
+                .map(|_| match next() % 8 {
+                    0..=3 if zero_bias > 0 => 0,
+                    4 | 5 => 3,
+                    6 => (next() % 5) as u8,
+                    _ => (next() & 0xFF) as u8,
+                })
+                .collect();
+            assert_eq!(unescape_rbsp(&data), old_unescape_rbsp(&data), "round {round}: {data:?}");
+        }
     }
 
     #[test]
