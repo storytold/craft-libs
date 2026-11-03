@@ -455,8 +455,9 @@ pub(crate) fn suggest(word: &str, max: usize, lang: ProofLang) -> Vec<String> {
 
 /// English suggestions from an affix dictionary: its own tables, a missing space only between two
 /// words of three letters or more and after every one-word candidate (`publically` → `publicly`
-/// before `public ally`), and no abbreviation or name offered for a lower-case word (`col`, `Wis`).
-const TUNING: Tuning = Tuning { split: Split::Custom(split_cost), strict_case: true, ..Tuning::DEFAULT };
+/// before `public ally`), no abbreviation or name offered for a lower-case word (`col`, `Wis`), and
+/// no elision (`churchs` → `churches` before `church's`).
+const TUNING: Tuning = Tuning { split: Split::Custom(split_cost), strict_case: true, elision: false, ..Tuning::DEFAULT };
 
 /// The cost of a missing space in English ([`TUNING`]).
 fn split_cost(a: &str, b: &str) -> Option<u32> {
