@@ -438,7 +438,10 @@ fn for_ui_embeds_cjk_faces_only_as_cut_interface_faces() {
     assert_eq!(warnings(&r), Vec::<String>::new());
     let r = run(Embed::documents(&["Noto Sans TC UI", "Noto Sans TC"]), Some(&dir), Some("1"));
     assert_eq!(r.result.as_ref().unwrap(), &["Noto Sans TC Regular", "Noto Sans TC UI Regular"]);
-    assert!(r.table.contains("fonts/1.ttf"), "{}", r.table);
+    // Generated Rust escapes native separators (and Windows' canonical path prefix).
+    // Match the selected file's complete include expression on every platform.
+    let interface_face = dir.join("fonts/1.ttf").canonicalize().unwrap();
+    assert!(r.table.contains(&format!("include_bytes!({interface_face:?})")), "{}", r.table);
 }
 
 #[test]
