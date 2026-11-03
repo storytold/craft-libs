@@ -81,7 +81,7 @@ fn context(ui: &mut Ui, review: &Review, issue: &Issue, colors: &Colors) {
 
 /// A full-width row that applies its suggestion when clicked.
 fn suggestion_row(ui: &mut Ui, suggestion: &str, colors: &Colors) -> bool {
-    let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), 30.0), Sense::click());
+    let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), 25.0), Sense::click());
     response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, suggestion));
     if response.hovered() {
         ui.painter().rect_filled(rect, 0.0, colors.hover);
@@ -179,18 +179,21 @@ fn current_issue(ui: &mut Ui, review: &mut Review, issue: &Issue, host: &dyn Hos
         });
     }
     ui.add_space(8.0);
-    if link(ui, text, "Ignore Once", colors) {
-        after = Some(After::Act(Action::IgnoreOnce));
-    }
-    if spelling && link(ui, text, "Ignore All", colors) {
-        after = Some(After::Act(Action::IgnoreAll));
-    }
-    if spelling && link(ui, text, "Add to Dictionary", colors) {
-        after = Some(After::Act(Action::AddToDictionary));
-    }
-    if !review.manual && link(ui, text, "Change…", colors) {
-        review.manual = true;
-    }
+    // On wrapping lines: a docked panel is often too short for a column of them to stay in view.
+    ui.horizontal_wrapped(|ui| {
+        if link(ui, text, "Ignore Once", colors) {
+            after = Some(After::Act(Action::IgnoreOnce));
+        }
+        if spelling && link(ui, text, "Ignore All", colors) {
+            after = Some(After::Act(Action::IgnoreAll));
+        }
+        if spelling && link(ui, text, "Add to Dictionary", colors) {
+            after = Some(After::Act(Action::AddToDictionary));
+        }
+        if !review.manual && link(ui, text, "Change…", colors) {
+            review.manual = true;
+        }
+    });
     if review.manual {
         ui.add_space(8.0);
         let name = label(ui, text, "Change to:", 12.0, colors.text);
