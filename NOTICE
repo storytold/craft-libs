@@ -244,3 +244,9 @@ Its white-level plateau estimate (saturation_plateau) is LightCraft's vendor::wh
 same revision. The CRW compression was derived clean-room from CC0 sample files and the
 maintainer's own photographs by black-box comparison with a reference decoder's command-line
 output; no raw-decoder source was consulted (crates/crw/clean-room/sources.md).
+
+Khmer support: adapted from Aksara, Copyright (c) 2025 SBBIC Khmer, MIT;
+see crates/khmer/LICENSE-AKSARA and source-pins.json. The compact spelling
+index is inspired by touchde's WordCraft PR #3110 contiguous dictionary storage;
+its parser and frequency-preserving index are implemented here. Language data
+is optional, pinned, and unchanged at source. No ICU dictionary data is copied.

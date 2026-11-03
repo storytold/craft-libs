@@ -40,6 +40,10 @@
 //!   `es_UY`, with fallbacks; not bundled), dictionary-driven suggestions, Uruguayan `vos` forms,
 //!   and generic checks plus the opening `¿`/`¡` with Spanish messages. Hyphenation uses the
 //!   existing English fallback.
+//! - **Khmer** ([`ProofLang::Km`], module [`km`]): an optional Aksara language build,
+//!   original-byte-offset word segmentation, suggestions and preferred-spelling rules. Khmer
+//!   words are detected inside otherwise English text. With the explicit data pack embedded,
+//!   checking is offline; absent data disables Khmer diagnostics.
 //! - **German** ([`ProofLang::De`]): hyphenation by `hyph-utf8`'s German patterns (reformed
 //!   spelling, MIT); no spelling or grammar marks yet.
 //! - **Any other language** ([`ProofLang::Pack`], module [`packs`]): spelling and suggestions
@@ -78,6 +82,9 @@ pub mod hunspell;
 pub mod hyphen;
 pub mod id;
 pub mod it;
+pub mod km;
+/// Shared Khmer segmentation and orthography API for layout and proofing.
+pub use craft_khmer as khmer;
 pub mod lang;
 mod pack_lang;
 pub mod packs;
@@ -599,7 +606,8 @@ fn known_with(w: &str, base_known: &dyn Fn(&str) -> bool) -> bool {
 /// document default, which is en-US. Runs in a language without one are skipped (#100) instead
 /// of flagging every word against another language's dictionary; see [`ProofLang::from_tag`].
 pub fn has_dictionary(lang: Option<&str>) -> bool {
-    ProofLang::from_tag(lang).is_proofed()
+    let lang = ProofLang::from_tag(lang);
+    lang.is_proofed() && (lang != ProofLang::Km || craft_khmer::data_available())
 }
 
 /// The Hunspell dictionary name (`pl_PL`, `it_IT`, `nl_NL`) a proofing language needs but doesn't
@@ -846,14 +854,20 @@ pub fn check_spelling_in(text: &str, lang: ProofLang) -> Vec<Issue> {
 /// rescanned the token each time, so a long whitespace-free run of punctuation-separated words
 /// cost quadratic scanning (#1335).
 fn spelling_issues(text: &str, lang: impl Fn(usize) -> ProofLang, opts: &Options) -> Vec<Issue> {
+    spelling_issues_with_words(text, lang, opts, &km::proof_words(text))
+}
+
+fn spelling_issues_with_words(text: &str, lang: impl Fn(usize) -> ProofLang, opts: &Options, words: &[(usize, usize)]) -> Vec<Issue> {
     let mut token = (0, 0, false);
-    words(text)
-        .into_iter()
+    words
+        .iter()
+        .copied()
         .filter_map(|(a, b)| {
             if a < token.0 || a >= token.1 {
                 token = enclosing_token(text, a, b);
             }
-            spelling_issue(text, a, b, lang(a), opts, token.2)
+            let language = km::detected_language(text.get(a..b).unwrap_or(""), lang(a));
+            spelling_issue(text, a, b, language, opts, token.2)
         })
         .collect()
 }
@@ -911,12 +925,19 @@ fn spelling_message(lang: ProofLang) -> &'static str {
 /// classification of the word's enclosing token, from [`enclosing_token`].
 fn spelling_issue(text: &str, a: usize, b: usize, lang: ProofLang, opts: &Options, internet: bool) -> Option<Issue> {
     let w = text.get(a..b)?;
+    if lang == ProofLang::Km && km::follows_title(text, a) {
+        return None;
+    }
     // A word with a Vietnamese-only letter (a name like Nguyễn in English text) isn't English.
     if (opts.ignore_internet && internet) || (lang.is_english() && vi::is_vietnamese_word(w)) || is_correct_in_with(w, lang, opts) {
         return None;
     }
-    let message = spelling_message(lang);
-    Some(Issue { start: a, end: b, kind: IssueKind::Spelling, message: message.into(), suggestions: Vec::new(), lang })
+    let message =
+        if lang == ProofLang::Km { "អាចមានកំហុសអក្ខរាវិរុទ្ធ" } else { spelling_message(lang) };
+    // The repetition sign is valid suffix text, not part of the misspelled stem.
+    // Excluding it from the edit range preserves both the sign and its formatting.
+    let end = if lang == ProofLang::Km { b.saturating_sub(w.len() - w.trim_end_matches('ៗ').len()) } else { b };
+    Some(Issue { start: a, end, kind: IssueKind::Spelling, message: message.into(), suggestions: Vec::new(), lang })
 }
 
 /// Is `word` spelled correctly in `lang`? Always true in a language without a dictionary.
@@ -938,6 +959,9 @@ fn composed(word: &str) -> std::borrow::Cow<'_, str> {
 /// [`is_correct_in`] with the File › Options › Proofing choices. A word with combining marks is
 /// checked as its composed form ([`composed`]).
 pub fn is_correct_in_with(word: &str, lang: ProofLang, opts: &Options) -> bool {
+    if lang == ProofLang::Km {
+        return km::is_correct(word, opts);
+    }
     let word = &*composed(word);
     if lang.is_english() {
         return is_correct_english(word, lang, opts);
@@ -952,6 +976,9 @@ pub fn is_correct_in_with(word: &str, lang: ProofLang, opts: &Options) -> bool {
 /// Spelling suggestions for a word misspelled in `lang` (best first, at most `max`), composed
 /// ([`composed`]) like the dictionaries' words.
 pub fn suggest_in(word: &str, max: usize, lang: ProofLang) -> Vec<String> {
+    if lang == ProofLang::Km {
+        return km::suggest(word, max);
+    }
     let word = &*composed(word);
     if lang.is_english() {
         return suggest_english(word, max, lang);
@@ -974,6 +1001,7 @@ pub fn check_grammar_in(text: &str, lang: ProofLang) -> Vec<Issue> {
 /// (false for a list item).
 fn grammar_in(text: &str, lang: ProofLang, capital_first: bool) -> Vec<Issue> {
     match lang {
+        ProofLang::Km => km::grammar(text),
         ProofLang::En => grammar_en(text, capital_first),
         ProofLang::EnGb | ProofLang::EnAu | ProofLang::EnCa => grammar_en(text, capital_first).into_iter().map(|i| Issue { lang, ..i }).collect(),
         // `pt-pt` shares Portuguese's rules, its issues in its own language.
@@ -1028,7 +1056,20 @@ fn check_text_once(text: &str, spans: &[(Range<usize>, ProofLang)], opts: &Optio
         let k = merged.partition_point(|(r, _)| r.end <= i);
         merged.get(k).filter(|(r, _)| r.start <= i).map_or(default, |s| s.1)
     };
-    let mut v: Vec<Issue> = spelling_issues(text, lang_at, opts);
+    // A single Khmer word/phrase can cross formatting runs. Never offer a replacement
+    // that also edits a run whose language disables Khmer proofing (including noProof).
+    let enabled = |issue: &Issue| {
+        issue.lang != ProofLang::Km
+            || text.get(issue.start..issue.end).is_some_and(|word| {
+                word.char_indices().all(|(offset, _)| {
+                    let lang = lang_at(issue.start + offset);
+                    lang == ProofLang::Km || lang.is_english()
+                })
+            })
+    };
+    // Reuse segmentation for language detection; each edit still checks fresh text.
+    let words = km::proof_words(text);
+    let mut v: Vec<Issue> = spelling_issues_with_words(text, lang_at, opts, &words).into_iter().filter(&enabled).collect();
     if !grammar {
         v.sort_by_key(|i| (i.start, i.end));
         return v;
@@ -1044,11 +1085,17 @@ fn check_text_once(text: &str, spans: &[(Range<usize>, ProofLang)], opts: &Optio
     if covered < text.len() || merged.is_empty() {
         langs.push(default);
     }
+    if words.iter().any(|&(a, b)| km::detected_language(text.get(a..b).unwrap_or(""), lang_at(a)) == ProofLang::Km) {
+        langs.push(ProofLang::Km);
+    }
     langs.sort();
     langs.dedup();
     for lang in langs {
         let found = grammar_in(text, lang, !list_item);
-        v.extend(found.into_iter().filter(|i| lang_at(i.start) == lang));
+        v.extend(found.into_iter().filter(|i| {
+            let detected = km::detected_language(text.get(i.start..i.end).unwrap_or(""), lang_at(i.start));
+            detected == lang && enabled(i) && (!lang.is_english() || !km::touches_khmer(text, i.start, i.end))
+        }));
     }
     v.sort_by_key(|i| (i.start, i.end));
     v
@@ -1214,10 +1261,10 @@ mod tests {
             assert_eq!(dictionary_needed(l, false), Some(name), "{l:?}");
             assert_eq!(dictionary_needed(l, true), None, "{l:?}");
         }
-        // Every proofed language other than English has a Hunspell dictionary to report.
+        // English and Khmer use bundled dictionaries; the others use Hunspell.
         for l in ProofLang::PROOFED {
-            let english = l.is_english();
-            assert_eq!(dictionary_needed(l, false).is_some(), !english, "{l:?}");
+            let bundled = l.is_english() || l == ProofLang::Km;
+            assert_eq!(dictionary_needed(l, false).is_some(), !bundled, "{l:?}");
         }
         for l in [ProofLang::En, ProofLang::Other] {
             assert_eq!(dictionary_needed(l, false), None);
@@ -2170,11 +2217,11 @@ mod tests {
         }
     }
 
-    /// Every proofed language other than English has a row in the language table, and only those.
+    /// Every Hunspell language has a row; English and Khmer use bundled dictionaries.
     #[test]
     fn the_language_table_covers_the_proofed_languages() {
         for l in ProofLang::PROOFED {
-            assert_eq!(language(l).is_some(), !l.is_english(), "{l:?}");
+            assert_eq!(language(l).is_some(), !l.is_english() && l != ProofLang::Km, "{l:?}");
         }
         for (i, row) in LANGUAGES.iter().enumerate() {
             assert!(row.lang.is_proofed(), "{:?}", row.lang);
@@ -3041,8 +3088,9 @@ mod tests {
         }
         // The gate follows the dictionaries, not English: every proofed language is proofed.
         for d in ProofLang::PROOFED.map(ProofLang::code) {
-            assert!(has_dictionary(Some(d)), "{d}");
-            assert!(has_dictionary(Some(&format!("{}-XX", d.to_ascii_uppercase()))), "{d}");
+            let available = d != "km" || craft_khmer::data_available();
+            assert_eq!(has_dictionary(Some(d)), available, "{d}");
+            assert_eq!(has_dictionary(Some(&format!("{}-XX", d.to_ascii_uppercase()))), available, "{d}");
         }
     }
 

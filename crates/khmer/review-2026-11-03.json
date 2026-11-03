@@ -1,0 +1,497 @@
+{
+  "summary": {
+    "reviewer": "@sungkhum",
+    "created": "2026-11-03T05:15:38.615Z",
+    "source_export_sha256": "f8b2e23a25a3041197d59bf5fcbb95902d702447a2f338822ff2057873817645",
+    "recorded_input_sha256": "39b021ba98a1a205996412a13d10af0407bdf9ff0d507d1d6eecc9b42181018d",
+    "engine_binary_sha256": {
+      "aksara": "2d5d285ee51c836025a08f8c036d17b9bdeecfe150bf558f2669b51ffaecced1",
+      "custom": "964713be3aaa41f0ed69b76069c8879a37a7ef8e5292f28b2c612b641c1ac463",
+      "icu": "2e7515369732034b16a44dd1cbbcd0eca626e46a2de27fc5726f0d6c97a85a5f",
+      "fourth": "82ea1a91f7cd5ba7085d0f914ecbbf89ffc05fcf7abc918d4c93e4d89bef24da"
+    },
+    "records": 14,
+    "unique_cases": 13,
+    "public_records": 14,
+    "excluded_private_records": 0,
+    "unique_rejected_engine_boundaries": 19,
+    "unique_rejected_positions": 13,
+    "rejected_positions_by_engine": {
+      "icu": 10,
+      "custom": 9
+    },
+    "explicit_row_verdicts": {
+      "fourth/acceptable": 1,
+      "aksara/acceptable": 1,
+      "custom/wrong": 2,
+      "icu/wrong": 2
+    },
+    "qualification": "Selected disagreement specimens, one reviewer. Not a random sample or accuracy estimate. Done and unmarked do not mean acceptable. Candidate offsets are not necessarily rendered line breaks.",
+    "reviewer_clarification": "The reviewer subsequently clarified that keeping compounds whole can be fine; finer meaningful divisions are preferred for line-breaking flexibility. Preserve original dropdown judgments as recorded, but do not present compound granularity alone as a linguistic error."
+  },
+  "engines": {
+    "aksara": {
+      "label": "Aksara · previous optimized",
+      "short": "Aksara",
+      "source": "Previous optimized native preview; Aksara 31740e9d"
+    },
+    "custom": {
+      "label": "#3110 · custom dictionary",
+      "short": "#3110 custom",
+      "source": "touchde a71c1184e94ffb0a37f15bec8c77e6fdf36b0c32"
+    },
+    "icu": {
+      "label": "#1579 · ICU4X",
+      "short": "#1579 ICU",
+      "source": "NguyenDuc2309 5c9cd9774efd948df467cbb3072ad4f57b7eebb2"
+    },
+    "fourth": {
+      "label": "Fourth · combined candidate",
+      "short": "Fourth",
+      "source": "Local shared candidate on WordCraft 0a5b4221; exact patch digests in sibling submission/manifest.json"
+    }
+  },
+  "records": [
+    {
+      "case_id": "aksara_reference-6",
+      "input_mode": "authored",
+      "text": "អ្វីៗ",
+      "verdicts": {},
+      "flags": {
+        "icu:12": {
+          "engine": "icu",
+          "byte": 12,
+          "utf16": 4,
+          "judgment": "wrong",
+          "origin": "user-screenshot"
+        }
+      },
+      "done": true,
+      "captured_candidates": {
+        "aksara": [],
+        "custom": [],
+        "icu": [
+          12
+        ],
+        "fourth": []
+      }
+    },
+    {
+      "case_id": "aksara_reference-7",
+      "input_mode": "authored",
+      "text": "សំដី",
+      "verdicts": {},
+      "flags": {},
+      "done": true,
+      "captured_candidates": {
+        "aksara": [],
+        "custom": [],
+        "icu": [],
+        "fourth": []
+      }
+    },
+    {
+      "case_id": "aksara_reference-8",
+      "input_mode": "authored",
+      "text": "កំលាំង",
+      "verdicts": {},
+      "flags": {},
+      "done": true,
+      "captured_candidates": {
+        "aksara": [],
+        "custom": [],
+        "icu": [],
+        "fourth": []
+      }
+    },
+    {
+      "case_id": "aksara_reference-6",
+      "input_mode": "automatic",
+      "text": "អ្វីៗ",
+      "verdicts": {},
+      "flags": {
+        "icu:12": {
+          "engine": "icu",
+          "byte": 12,
+          "utf16": 4,
+          "judgment": "wrong",
+          "origin": "review-click"
+        }
+      },
+      "done": true,
+      "captured_candidates": {
+        "aksara": [],
+        "custom": [],
+        "icu": [
+          12
+        ],
+        "fourth": []
+      }
+    },
+    {
+      "case_id": "aksara_reference-9",
+      "input_mode": "automatic",
+      "text": "កំណត់សំគាល់",
+      "verdicts": {},
+      "flags": {},
+      "done": true,
+      "captured_candidates": {
+        "aksara": [
+          15
+        ],
+        "custom": [],
+        "icu": [],
+        "fourth": [
+          15
+        ]
+      }
+    },
+    {
+      "case_id": "aksara_reference-10",
+      "input_mode": "automatic",
+      "text": "អ្នកចម្រៀង",
+      "verdicts": {},
+      "flags": {},
+      "done": true,
+      "captured_candidates": {
+        "aksara": [
+          12
+        ],
+        "custom": [],
+        "icu": [],
+        "fourth": [
+          12
+        ]
+      }
+    },
+    {
+      "case_id": "pr3110_reference-63",
+      "input_mode": "automatic",
+      "text": "ក្នុងគោលដៅបង្កើនការយល់ដឹង",
+      "verdicts": {
+        "fourth": "acceptable",
+        "aksara": "acceptable",
+        "custom": "wrong",
+        "icu": "wrong"
+      },
+      "flags": {},
+      "done": true,
+      "captured_candidates": {
+        "aksara": [
+          15,
+          24,
+          30,
+          48,
+          57,
+          66
+        ],
+        "custom": [
+          15,
+          30,
+          48
+        ],
+        "icu": [
+          15,
+          30,
+          48,
+          66
+        ],
+        "fourth": [
+          15,
+          24,
+          30,
+          48,
+          57,
+          66
+        ]
+      }
+    },
+    {
+      "case_id": "aksara_synthetic-6",
+      "input_mode": "automatic",
+      "text": "ល្ងឹមរូប",
+      "verdicts": {
+        "custom": "wrong"
+      },
+      "flags": {
+        "custom:12": {
+          "engine": "custom",
+          "byte": 12,
+          "utf16": 4,
+          "judgment": "wrong",
+          "origin": "review-click"
+        }
+      },
+      "done": true,
+      "captured_candidates": {
+        "aksara": [
+          15
+        ],
+        "custom": [
+          12,
+          15
+        ],
+        "icu": [
+          15
+        ],
+        "fourth": [
+          15
+        ]
+      }
+    },
+    {
+      "case_id": "aksara_synthetic-1538",
+      "input_mode": "automatic",
+      "text": "ទ្រីភេនម្ចាស់",
+      "verdicts": {
+        "icu": "wrong"
+      },
+      "flags": {
+        "icu:18": {
+          "engine": "icu",
+          "byte": 18,
+          "utf16": 6,
+          "judgment": "wrong",
+          "origin": "review-click"
+        },
+        "icu:27": {
+          "engine": "icu",
+          "byte": 27,
+          "utf16": 9,
+          "judgment": "wrong",
+          "origin": "review-click"
+        },
+        "custom:18": {
+          "engine": "custom",
+          "byte": 18,
+          "utf16": 6,
+          "judgment": "wrong",
+          "origin": "review-click"
+        },
+        "custom:12": {
+          "engine": "custom",
+          "byte": 12,
+          "utf16": 4,
+          "judgment": "wrong",
+          "origin": "review-click"
+        }
+      },
+      "done": true,
+      "captured_candidates": {
+        "aksara": [
+          21
+        ],
+        "custom": [
+          12,
+          18
+        ],
+        "icu": [
+          15,
+          18,
+          27
+        ],
+        "fourth": [
+          21
+        ]
+      }
+    },
+    {
+      "case_id": "aksara_synthetic-2357",
+      "input_mode": "automatic",
+      "text": "ថោរ",
+      "verdicts": {},
+      "flags": {
+        "icu:6": {
+          "engine": "icu",
+          "byte": 6,
+          "utf16": 2,
+          "judgment": "wrong",
+          "origin": "review-click"
+        }
+      },
+      "done": true,
+      "captured_candidates": {
+        "aksara": [],
+        "custom": [],
+        "icu": [
+          6
+        ],
+        "fourth": []
+      }
+    },
+    {
+      "case_id": "aksara_synthetic-3205",
+      "input_mode": "automatic",
+      "text": "កសីករ",
+      "verdicts": {},
+      "flags": {
+        "custom:3": {
+          "engine": "custom",
+          "byte": 3,
+          "utf16": 1,
+          "judgment": "wrong",
+          "origin": "review-click"
+        },
+        "custom:9": {
+          "engine": "custom",
+          "byte": 9,
+          "utf16": 3,
+          "judgment": "wrong",
+          "origin": "review-click"
+        },
+        "icu:3": {
+          "engine": "icu",
+          "byte": 3,
+          "utf16": 1,
+          "judgment": "wrong",
+          "origin": "review-click"
+        },
+        "icu:9": {
+          "engine": "icu",
+          "byte": 9,
+          "utf16": 3,
+          "judgment": "wrong",
+          "origin": "review-click"
+        }
+      },
+      "done": true,
+      "captured_candidates": {
+        "aksara": [],
+        "custom": [
+          3,
+          9
+        ],
+        "icu": [
+          3,
+          9
+        ],
+        "fourth": []
+      }
+    },
+    {
+      "case_id": "aksara_synthetic-4032",
+      "input_mode": "automatic",
+      "text": "Latin 🦀 ស្នីទ្ឋស្នាលស្រាប់ ១២៣!",
+      "verdicts": {},
+      "flags": {
+        "custom:32": {
+          "engine": "custom",
+          "byte": 32,
+          "utf16": 16,
+          "judgment": "wrong",
+          "origin": "review-click"
+        },
+        "custom:23": {
+          "engine": "custom",
+          "byte": 23,
+          "utf16": 13,
+          "judgment": "wrong",
+          "origin": "review-click"
+        },
+        "icu:23": {
+          "engine": "icu",
+          "byte": 23,
+          "utf16": 13,
+          "judgment": "wrong",
+          "origin": "review-click"
+        },
+        "icu:32": {
+          "engine": "icu",
+          "byte": 32,
+          "utf16": 16,
+          "judgment": "wrong",
+          "origin": "review-click"
+        }
+      },
+      "done": true,
+      "captured_candidates": {
+        "aksara": [
+          47
+        ],
+        "custom": [
+          23,
+          32,
+          47
+        ],
+        "icu": [
+          23,
+          32,
+          47
+        ],
+        "fourth": [
+          47
+        ]
+      }
+    },
+    {
+      "case_id": "aksara_synthetic-5185",
+      "input_mode": "automatic",
+      "text": "សមិ្ដ",
+      "verdicts": {},
+      "flags": {
+        "icu:12": {
+          "engine": "icu",
+          "byte": 12,
+          "utf16": 4,
+          "judgment": "wrong",
+          "origin": "review-click"
+        },
+        "custom:3": {
+          "engine": "custom",
+          "byte": 3,
+          "utf16": 1,
+          "judgment": "wrong",
+          "origin": "review-click"
+        }
+      },
+      "done": true,
+      "captured_candidates": {
+        "aksara": [],
+        "custom": [
+          3
+        ],
+        "icu": [
+          12
+        ],
+        "fourth": []
+      }
+    },
+    {
+      "case_id": "pr3110_synthetic-5346",
+      "input_mode": "automatic",
+      "text": "រដ្ឋការងារ",
+      "verdicts": {},
+      "flags": {
+        "custom:21": {
+          "engine": "custom",
+          "byte": 21,
+          "utf16": 7,
+          "judgment": "wrong",
+          "origin": "review-click"
+        },
+        "icu:21": {
+          "engine": "icu",
+          "byte": 21,
+          "utf16": 7,
+          "judgment": "wrong",
+          "origin": "review-click"
+        }
+      },
+      "done": true,
+      "captured_candidates": {
+        "aksara": [
+          12
+        ],
+        "custom": [
+          21
+        ],
+        "icu": [
+          21
+        ],
+        "fourth": [
+          12
+        ]
+      }
+    }
+  ]
+}
