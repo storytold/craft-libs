@@ -423,7 +423,21 @@ fn locales_for(names: &[&str]) -> Vec<String> {
         }
     };
     for n in names {
-        push(n.to_ascii_lowercase().replace('_', "-"));
+        let l = n.to_ascii_lowercase().replace('_', "-");
+        // A variant after the region (`ca-es-valencia`) is the language-and-variant pack's
+        // (`ca-valencia`) before the region's or the language's alone.
+        let parts: Vec<&str> = l.split('-').collect();
+        let region =
+            parts.iter().enumerate().skip(1).find(|(_, p)| {
+                (p.len() == 2 && p.bytes().all(|b| b.is_ascii_alphabetic())) || (p.len() == 3 && p.bytes().all(|b| b.is_ascii_digit()))
+            });
+        let without = region
+            .filter(|(r, _)| r + 1 < parts.len())
+            .map(|(r, _)| parts.iter().enumerate().filter(|(i, _)| *i != r).map(|(_, p)| *p).collect::<Vec<&str>>().join("-"));
+        push(l);
+        if let Some(w) = without {
+            push(w);
+        }
     }
     // The primary language alone, when it is written in the same script (`sr_Latn` is never
     // plain `sr`, which is Cyrillic; `sr_Cyrl` is).
@@ -683,6 +697,8 @@ mod tests {
         assert_eq!(region_locales(&["sr_Latn", "sr-Latn"]), ["sr-latn"]);
         assert!(region_locales(&[]).is_empty());
         assert_eq!(locales_for(&["es_419", "es"]), ["es-419", "es"]);
+        assert_eq!(locales_for(&["ca_ES_valencia", "ca_ES", "ca"]), ["ca-es-valencia", "ca-valencia", "ca-es", "ca"]);
+        assert_eq!(locales_for(&["ca_ES", "ca"]), ["ca-es", "ca"]);
         assert_eq!(locales_for(&["../x", "a b"]), Vec::<String>::new());
     }
 

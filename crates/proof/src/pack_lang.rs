@@ -202,8 +202,22 @@ pub(crate) fn names(locale: PackLocale) -> Vec<String> {
     let default = crate::lang::default_script(primary);
     // Each shorter prefix too (`sr-latn-rs` → `sr-latn`), never dropping the script subtag.
     let keep = script.map_or(1, |s| s + 1);
+    // The region subtag, when one follows the language (and script): a variant after it
+    // (`ca-ES-valencia`) is also looked up without it (`ca-valencia`), before the region alone,
+    // as packs and dictionaries name a variant by the language and the variant.
+    let region = parts.iter().enumerate().skip(1).find(|(i, p)| {
+        Some(*i) != script
+            && ((p.len() == 2 && p.bytes().all(|b| b.is_ascii_alphabetic())) || (p.len() == 3 && p.bytes().all(|b| b.is_ascii_digit())))
+    });
     for n in (keep..=cased.len()).rev() {
-        push(cased.get(..n).unwrap_or_default());
+        let prefix = cased.get(..n).unwrap_or_default();
+        push(prefix);
+        if let Some((r, _)) = region
+            && r + 1 < n
+        {
+            let without: Vec<String> = prefix.iter().enumerate().filter(|(i, _)| *i != r).map(|(_, p)| p.clone()).collect();
+            push(&without);
+        }
     }
     match script {
         // The language's default script: its script-less names are in that script too.
@@ -420,6 +434,11 @@ mod tests {
         assert_eq!(names(l("sr")), ["sr", "sr_Cyrl", "sr-Cyrl"]);
         // A four-character subtag that isn't letters is no script.
         assert_eq!(names(l("de-1996")), ["de_1996", "de-1996", "de"]);
+        // A variant after the region is looked up without the region before the region alone
+        // (`ca-ES-valencia` is the `ca-valencia` pack's), and the region alone still is `ca-ES`.
+        assert_eq!(names(l("ca-ES-valencia")), ["ca_ES_valencia", "ca-ES-valencia", "ca_valencia", "ca-valencia", "ca_ES", "ca-ES", "ca"]);
+        assert_eq!(names(l("ca-ES")), ["ca_ES", "ca-ES", "ca"]);
+        assert_eq!(hyphenation_locales(l("ca-ES-valencia")), ["ca-es-valencia", "ca-valencia", "ca-es", "ca"]);
         assert_eq!(hyphenation_locales(l("fr-CA")), ["fr-ca", "fr"]);
         assert_eq!(hyphenation_locales(l("sr-Latn")), ["sr-latn"]);
         assert_eq!(hyphenation_locales(l("sr-Cyrl")), ["sr-cyrl", "sr"]);
