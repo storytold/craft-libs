@@ -40,7 +40,10 @@ pub mod windows1258;
 #[cfg(test)]
 mod tests;
 
-pub use detect::{detect_vietnamese_encoding, is_already_unicode_vietnamese, is_vietnamese_font};
+pub use detect::{
+    DetectionResult, EncodingEvidence, EncodingMetadata, detect_encoding, detect_encoding_from_str, detect_vietnamese_encoding,
+    is_already_unicode_vietnamese, is_vietnamese_font,
+};
 pub use tcvn3::{transcode_tcvn3, transcode_tcvn3_h};
 pub use vni::transcode_vni;
 pub use windows1258::{decode_windows1258, transcode_windows1258};

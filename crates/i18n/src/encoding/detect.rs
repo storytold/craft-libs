@@ -164,12 +164,59 @@ pub fn is_already_unicode_vietnamese(s: &str) -> bool {
     false
 }
 
-/// Detect if a text string has unambiguous characteristic byte signatures of VNI or TCVN3.
-pub fn detect_vietnamese_encoding(s: &str) -> Option<LegacyEncoding> {
-    if s.is_ascii() || is_already_unicode_vietnamese(s) {
-        return None;
+/// Source of evidence used to detect or enforce a legacy Vietnamese text encoding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum EncodingEvidence {
+    /// Explicitly forced by caller or application configuration (highest priority).
+    Explicit,
+    /// Container metadata (e.g. DXF `$DWGCODEPAGE`, PDF font dict).
+    Metadata,
+    /// Advisory font name pattern (e.g. `.VnTime` -> TCVN3, `VNI-Times` -> VNI).
+    FontHint,
+    /// Statistical byte-distribution heuristic score on text content.
+    Heuristic,
+}
+
+/// Categorized outcome of Vietnamese text encoding detection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DetectionResult {
+    /// High-confidence detection backed by explicit evidence or verified signatures.
+    HighConfidence { encoding: LegacyEncoding, evidence: EncodingEvidence },
+    /// Multiple candidate encodings match valid byte distributions equally, or metadata conflicts.
+    Ambiguous(&'static [LegacyEncoding]),
+    /// Byte patterns match no known Vietnamese encoding profile.
+    Unknown,
+}
+
+impl DetectionResult {
+    /// Returns the detected encoding if confidence is high, or `None` if ambiguous or unknown.
+    pub const fn encoding(&self) -> Option<LegacyEncoding> {
+        match self {
+            Self::HighConfidence { encoding, .. } => Some(*encoding),
+            _ => None,
+        }
     }
 
+    /// Returns the evidence source if confidence is high, or `None`.
+    pub const fn evidence(&self) -> Option<EncodingEvidence> {
+        match self {
+            Self::HighConfidence { evidence, .. } => Some(*evidence),
+            _ => None,
+        }
+    }
+}
+
+/// External metadata hints for encoding detection.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct EncodingMetadata<'a> {
+    pub font_name: Option<&'a str>,
+    pub codepage_hint: Option<u32>,
+}
+
+/// Score text content against VNI and TCVN3 characteristic byte signatures.
+///
+/// Returns `(vni_valid, tcvn_valid, vni_score, tcvn_score)`.
+fn score_vietnamese_encodings(s: &str) -> (bool, bool, usize, usize) {
     let mut vni_score = 0;
     let mut tcvn_score = 0;
     let mut vni_composite_found = false;
@@ -256,11 +303,52 @@ pub fn detect_vietnamese_encoding(s: &str) -> Option<LegacyEncoding> {
     let vni_valid = vni_score >= vni_threshold;
     let tcvn_valid = tcvn_score >= tcvn_threshold;
 
-    if vni_valid && vni_score > tcvn_score {
-        Some(LegacyEncoding::Vni)
-    } else if tcvn_valid && tcvn_score > vni_score {
-        Some(LegacyEncoding::Tcvn3)
-    } else {
-        None
+    (vni_valid, tcvn_valid, vni_score, tcvn_score)
+}
+
+/// Detect the legacy Vietnamese encoding of a string slice with evidence categorization.
+pub fn detect_encoding_from_str(s: &str) -> DetectionResult {
+    if s.is_ascii() || is_already_unicode_vietnamese(s) {
+        return DetectionResult::Unknown;
     }
+
+    let (vni_valid, tcvn_valid, vni_score, tcvn_score) = score_vietnamese_encodings(s);
+
+    if vni_valid && tcvn_valid && vni_score == tcvn_score {
+        return DetectionResult::Ambiguous(&[LegacyEncoding::Vni, LegacyEncoding::Tcvn3]);
+    }
+
+    if vni_valid && vni_score > tcvn_score {
+        DetectionResult::HighConfidence { encoding: LegacyEncoding::Vni, evidence: EncodingEvidence::Heuristic }
+    } else if tcvn_valid && tcvn_score > vni_score {
+        DetectionResult::HighConfidence { encoding: LegacyEncoding::Tcvn3, evidence: EncodingEvidence::Heuristic }
+    } else {
+        DetectionResult::Unknown
+    }
+}
+
+/// Detect the legacy Vietnamese encoding of raw input bytes using metadata hints and content heuristics.
+pub fn detect_encoding(input: &[u8], metadata: Option<&EncodingMetadata<'_>>) -> DetectionResult {
+    if let Some(meta) = metadata {
+        if let Some(font) = meta.font_name
+            && let Some(enc) = is_vietnamese_font(font)
+        {
+            return DetectionResult::HighConfidence { encoding: enc, evidence: EncodingEvidence::FontHint };
+        }
+        if meta.codepage_hint == Some(1258) {
+            return DetectionResult::HighConfidence { encoding: LegacyEncoding::Windows1258, evidence: EncodingEvidence::Metadata };
+        }
+    }
+
+    if let Ok(s) = std::str::from_utf8(input) {
+        detect_encoding_from_str(s)
+    } else {
+        let latin1_s: String = input.iter().map(|&b| b as char).collect();
+        detect_encoding_from_str(&latin1_s)
+    }
+}
+
+/// Detect if a text string has unambiguous characteristic byte signatures of VNI or TCVN3.
+pub fn detect_vietnamese_encoding(s: &str) -> Option<LegacyEncoding> {
+    detect_encoding_from_str(s).encoding()
 }

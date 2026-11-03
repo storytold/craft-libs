@@ -1,9 +1,10 @@
 use std::borrow::Cow;
 
 use super::{
-    DecodeError, LegacyEncoding, VietnameseEncoding, decode, detect_legacy_encoding, detect_vietnamese_encoding, font_hint,
-    is_already_unicode_vietnamese, is_legacy_text, is_serif_legacy_font, is_vietnamese_font, normalize_nfc, transcode, transcode_explicit,
-    transcode_summary, transcode_tcvn3, transcode_to_unicode, transcode_vietnamese, transcode_vni, transcode_with_summary, validate_and_normalize,
+    DecodeError, DetectionResult, EncodingEvidence, EncodingMetadata, LegacyEncoding, VietnameseEncoding, decode, detect_encoding,
+    detect_encoding_from_str, detect_legacy_encoding, detect_vietnamese_encoding, font_hint, is_already_unicode_vietnamese, is_legacy_text,
+    is_serif_legacy_font, is_vietnamese_font, normalize_nfc, transcode, transcode_explicit, transcode_summary, transcode_tcvn3, transcode_to_unicode,
+    transcode_vietnamese, transcode_vni, transcode_with_summary, validate_and_normalize,
 };
 
 #[test]
@@ -327,4 +328,41 @@ fn test_windows1258_decode_and_transcode_explicit() {
     // Error formatting
     let err = DecodeError::UnmappedByte { byte: 0x81, offset: 5, encoding: LegacyEncoding::Windows1258 };
     assert_eq!(format!("{err}"), "unmapped byte 0x81 encountered at byte offset 5 for encoding Windows1258");
+}
+
+#[test]
+fn test_detection_result_and_evidence_hierarchy() {
+    // 1. Font name hint (advisory)
+    let meta_tcvn = EncodingMetadata { font_name: Some(".VnTime"), codepage_hint: None };
+    let res = detect_encoding(b"Unknown text", Some(&meta_tcvn));
+    assert_eq!(res, DetectionResult::HighConfidence { encoding: LegacyEncoding::Tcvn3, evidence: EncodingEvidence::FontHint });
+    assert_eq!(res.encoding(), Some(LegacyEncoding::Tcvn3));
+    assert_eq!(res.evidence(), Some(EncodingEvidence::FontHint));
+
+    let meta_vni = EncodingMetadata { font_name: Some("VNI-Times"), codepage_hint: None };
+    let res_vni = detect_encoding(b"Unknown text", Some(&meta_vni));
+    assert_eq!(res_vni, DetectionResult::HighConfidence { encoding: LegacyEncoding::Vni, evidence: EncodingEvidence::FontHint });
+
+    // 2. Codepage container metadata (Windows-1258)
+    let meta_cp1258 = EncodingMetadata { font_name: None, codepage_hint: Some(1258) };
+    let res_cp = detect_encoding(b"Plain text", Some(&meta_cp1258));
+    assert_eq!(res_cp, DetectionResult::HighConfidence { encoding: LegacyEncoding::Windows1258, evidence: EncodingEvidence::Metadata });
+
+    // 3. Content heuristic on legacy text
+    assert_eq!(
+        detect_encoding_from_str("B¶n vÏ chi tiÕt"),
+        DetectionResult::HighConfidence { encoding: LegacyEncoding::Tcvn3, evidence: EncodingEvidence::Heuristic }
+    );
+
+    let res_heuristic = detect_encoding("B¶n vÏ chi tiÕt".as_bytes(), None);
+    assert_eq!(res_heuristic, DetectionResult::HighConfidence { encoding: LegacyEncoding::Tcvn3, evidence: EncodingEvidence::Heuristic });
+
+    // 4. Unicode safety: genuine Unicode text never identified as legacy
+    let res_unicode = detect_encoding("Bản vẽ chi tiết".as_bytes(), None);
+    assert_eq!(res_unicode, DetectionResult::Unknown);
+    assert_eq!(res_unicode.encoding(), None);
+
+    // 5. Pure ASCII is Unknown (no legacy mutation)
+    let res_ascii = detect_encoding(b"Clean ASCII Text 123", None);
+    assert_eq!(res_ascii, DetectionResult::Unknown);
 }

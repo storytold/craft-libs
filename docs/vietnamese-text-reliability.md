@@ -99,10 +99,10 @@ Heuristic algorithms must never silently guess or mutate valid text. Evidence pr
 
 ```rust
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Encoding {
-    Utf8,
+pub enum LegacyEncoding {
     Tcvn3,
-    VniWindows,
+    Tcvn3H,
+    Vni,
     Windows1258,
 }
 
@@ -118,11 +118,11 @@ pub enum EncodingEvidence {
 pub enum DetectionResult {
     /// High-confidence detection backed by explicit evidence or verified signatures.
     HighConfidence {
-        encoding: Encoding,
+        encoding: LegacyEncoding,
         evidence: EncodingEvidence,
     },
     /// Multiple candidate encodings match valid byte distributions equally, or metadata conflicts.
-    Ambiguous(&'static [Encoding]),
+    Ambiguous(&'static [LegacyEncoding]),
     /// Byte patterns match no known Vietnamese encoding profile.
     Unknown,
 }
@@ -144,22 +144,17 @@ Single-byte decoding tables map the high byte range `0x80..=0xFF`. Because some 
 ```rust
 pub type HighByteTable = [Option<char>; 128];
 
-#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DecodeError {
-    #[error("Invalid UTF-8 byte sequence encountered at byte offset {offset}")]
     InvalidUtf8 { offset: usize },
-
-    #[error("Unmapped byte 0x{byte:02X} encountered for encoding {encoding:?}")]
-    UnmappedByte { byte: u8, encoding: Encoding },
-
-    #[error("Malformed composite byte sequence at offset {offset} in encoding {encoding:?}")]
-    MalformedSequence { offset: usize, encoding: Encoding },
+    UnmappedByte { byte: u8, offset: usize, encoding: LegacyEncoding },
+    MalformedSequence { offset: usize, encoding: LegacyEncoding },
 }
 
 /// Pure decoding primitive: maps bytes strictly to Unicode codepoints without hidden normalization.
 pub fn decode(
     input: &[u8],
-    encoding: Encoding,
+    encoding: LegacyEncoding,
 ) -> Result<Cow<'_, str>, DecodeError>;
 ```
 
@@ -173,7 +168,7 @@ Windows-1258 maps Latin-1 accented vowels directly, but uses five explicit combi
 * **9 Undefined / Unmapped Bytes:**
   `0x81, 0x8A, 0x8D, 0x8E, 0x8F, 0x90, 0x9A, 0x9D, 0x9E` are mapped to `None` in `HighByteTable`, returning `Err(DecodeError::UnmappedByte)`.
 
-*Separation Invariant:* `decode(input, Encoding::Windows1258)` **does not perform implicit NFC normalization**. It outputs the exact sequence of base characters and combining marks. Canonical normalization is deferred to `normalize_nfc` or the `decode_text` facade when requested.
+*Separation Invariant:* `decode(input, LegacyEncoding::Windows1258)` **does not perform implicit NFC normalization**. It outputs the exact sequence of base characters and combining marks. Canonical normalization is deferred to `normalize_nfc` or the `decode_text` facade when requested.
 
 #### Primitive 3: Canonical Normalization & Allocation Contract
 ```rust
@@ -192,7 +187,7 @@ For consumer convenience, `craft-i18n` exposes a unified facade combining the th
 ```rust
 #[derive(Debug, Clone, Copy)]
 pub struct DecodeOptions<'a> {
-    pub force_encoding: Option<Encoding>,
+    pub force_encoding: Option<LegacyEncoding>,
     pub metadata: Option<&'a EncodingMetadata<'a>>,
     pub normalize_nfc: bool,
 }
