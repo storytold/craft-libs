@@ -111,14 +111,17 @@ pub(crate) fn follows_title(text: &str, start: usize) -> bool {
     false
 }
 
-/// English rules must not mark Khmer or impose English spacing beside it. A Latin
-/// word still gets its own grammar checks even when a Khmer word is adjacent.
+/// English rules must not mark Khmer or impose English spacing beside it on the same line.
+/// A Latin word still gets its own grammar checks even when a Khmer word is adjacent.
 pub(crate) fn touches_khmer(text: &str, start: usize, end: usize) -> bool {
     let Some(marked) = text.get(start..end) else { return false };
+    let line_break = |c: char| matches!(c, '\n' | '\r' | '\u{2028}' | '\u{2029}');
+    let before = text.get(..start).and_then(|s| s.rsplit(line_break).next());
+    let after = text.get(end..).and_then(|s| s.split(line_break).next());
     marked.chars().any(khmer)
         || (!marked.chars().any(char::is_alphabetic)
-            && (text.get(..start).and_then(|s| s.chars().rev().find(|c| !c.is_whitespace())).is_some_and(khmer)
-                || text.get(end..).and_then(|s| s.chars().find(|c| !c.is_whitespace())).is_some_and(khmer)))
+            && (before.and_then(|s| s.chars().rev().find(|c| !c.is_whitespace())).is_some_and(khmer)
+                || after.and_then(|s| s.chars().find(|c| !c.is_whitespace())).is_some_and(khmer)))
 }
 
 #[cfg(test)]
@@ -189,6 +192,10 @@ mod tests {
         let issues = crate::check_text(mixed, &[]);
         assert!(issues.iter().any(|i| i.kind == IssueKind::Grammar && i.start == 0 && i.end == 5 && i.suggestions == ["Hello"]));
         assert!(!issues.iter().any(|i| i.message == "Extra space"), "Khmer-adjacent spacing stays untouched");
+        for separate_lines in ["ខ្មែរ\nhello  world", "hello  world\nខ្មែរ"] {
+            let issues = crate::check_text(separate_lines, &[]);
+            assert!(issues.iter().any(|i| i.message == "Extra space"), "a line break ends Khmer adjacency: {issues:?}");
+        }
         let mixed = "Tôi yêu tiếng Việt ពាក្យសំដី";
         assert!(crate::vi::looks_vietnamese(mixed));
         for spans in [vec![], vec![(0..mixed.len(), ProofLang::En)]] {

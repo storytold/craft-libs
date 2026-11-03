@@ -72,7 +72,6 @@ jobs:
     name: Khmer segmentation and proofing with pinned data
     runs-on: ubuntu-latest
     env:
-      CRAFT_KHMER_DIR: ${{ runner.temp }}/khmer-pack
       CRAFT_KHMER_REQUIRED: "1"
     steps:
       - uses: actions/checkout@v4
@@ -85,6 +84,8 @@ jobs:
       # Read the same source pins as build.rs, without depending on an unmerged
       # craft-i18n staging CLI. build.rs also verifies converted canonical bytes.
       - name: Fetch verified Khmer sources
+        env:
+          CRAFT_KHMER_DIR: ${{ runner.temp }}/khmer-pack
         run: |
           python3 - <<'PYTHON'
           import hashlib
@@ -109,6 +110,8 @@ jobs:
               dest.write_bytes(data)
           PYTHON
       - name: Run data-enabled Khmer checks
+        env:
+          CRAFT_KHMER_DIR: ${{ runner.temp }}/khmer-pack
         run: |
           cargo test -p craft-khmer --locked
           cargo test -p craft-proof --locked km::tests
