@@ -9,7 +9,7 @@
 
 #[cfg(all(feature = "system", not(target_arch = "wasm32")))]
 mod imp {
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use std::sync::{Mutex, PoisonError};
 
     use fontique::{Collection, CollectionOptions, SourceKind};
@@ -29,11 +29,60 @@ mod imp {
         std::panic::catch_unwind(|| {
             let mut collection = Collection::new(CollectionOptions { shared: false, system_fonts: true });
             if let Some(store) = font_store_dir(&FontEnv::from_process()).filter(|d| d.is_dir()) {
-                collection.load_fonts_from_paths([store]);
+                let files = store_files(&store);
+                if !files.is_empty() {
+                    collection.load_fonts_from_paths(files);
+                }
             }
             collection
         })
         .ok()
+    }
+
+    /// Most faces a font-store collection may have to be handed to fontique. fontique 0.11
+    /// registers a collection file once for every face in it, each time scanning all its faces
+    /// again and rebuilding the family's font list, so the work grows with the fourth power of
+    /// the face count. Larger collections are left to the catalog's own scan, which reads each
+    /// face once.
+    const MAX_COLLECTION_FACES: u32 = 64;
+    /// Most font-store files handed to fontique, and how deep its folders are walked.
+    const MAX_STORE_FILES: usize = 20_000;
+    const MAX_STORE_DEPTH: u32 = 4;
+
+    /// The regular files under the font store `dir` that fontique may import: at most
+    /// [`MAX_STORE_FILES`], no deeper than [`MAX_STORE_DEPTH`], without symbolic links, and
+    /// without collections of more than [`MAX_COLLECTION_FACES`] faces.
+    fn store_files(dir: &Path) -> Vec<PathBuf> {
+        let mut out = Vec::new();
+        let mut folders = vec![(dir.to_path_buf(), 0u32)];
+        while let Some((folder, depth)) = folders.pop() {
+            let Ok(rd) = std::fs::read_dir(&folder) else { continue };
+            for entry in rd.flatten() {
+                if out.len() >= MAX_STORE_FILES {
+                    return out;
+                }
+                let Ok(kind) = entry.file_type() else { continue };
+                let path = entry.path();
+                if kind.is_dir() {
+                    if depth < MAX_STORE_DEPTH {
+                        folders.push((path, depth + 1));
+                    }
+                } else if kind.is_file() && collection_faces(&path) <= MAX_COLLECTION_FACES {
+                    out.push(path);
+                }
+            }
+        }
+        out
+    }
+
+    /// The face count a collection's header declares; 1 for any other file.
+    fn collection_faces(path: &Path) -> u32 {
+        use std::io::Read;
+        let mut head = [0u8; 12];
+        match std::fs::File::open(path).and_then(|mut f| f.read_exact(&mut head)) {
+            Ok(()) if head.starts_with(b"ttcf") => u32::from_be_bytes([head[8], head[9], head[10], head[11]]),
+            _ => 1,
+        }
     }
 
     fn with<R>(refresh: bool, f: impl FnOnce(&mut Shared) -> R) -> R {
@@ -82,6 +131,32 @@ mod imp {
             files.dedup();
             files
         })
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn store_files_leave_out_large_collections_links_and_deep_folders() {
+            let dir = std::env::temp_dir().join(format!("craft-font-catalog-store-files-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            let family = dir.join("source/family");
+            std::fs::create_dir_all(&family).unwrap();
+            std::fs::create_dir_all(dir.join("a/b/c/d/e")).unwrap();
+            let ttc = |faces: u32| [b"ttcf".as_slice(), &0x0001_0000u32.to_be_bytes(), &faces.to_be_bytes()].concat();
+            std::fs::write(family.join("Face.ttf"), b"\0\x01\0\0 a font").unwrap();
+            std::fs::write(family.join("Small.ttc"), ttc(4)).unwrap();
+            std::fs::write(family.join("Huge.ttc"), ttc(100_000)).unwrap();
+            std::fs::write(family.join("tiny"), b"x").unwrap();
+            std::fs::write(dir.join("a/b/c/d/e/Deep.ttf"), b"font").unwrap();
+            #[cfg(unix)]
+            std::os::unix::fs::symlink(family.join("Face.ttf"), family.join("Link.ttf")).unwrap();
+            let mut files = store_files(&dir);
+            files.sort();
+            assert_eq!(files, vec![family.join("Face.ttf"), family.join("Small.ttc"), family.join("tiny")]);
+            let _ = std::fs::remove_dir_all(&dir);
+        }
     }
 }
 
