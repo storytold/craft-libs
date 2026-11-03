@@ -89,19 +89,22 @@ pub fn load_errors() -> Vec<(String, String)>;         // ＋ (locale or folder,
 pub fn embedded_locales() -> &'static [&'static str];  // ＋ locales with embedded upstream data, not our supplements ("en-us", "en-gb", "en-ca", "en-au", "pl", "pt", "it", "de" by default; the four English ones with CRAFT_PROOF_EMBED=en)
 
 // craft_proof (crate root)
-pub enum ProofLang { …, Pack(PackLocale), Other }      // ＋ Pack: any language without tools of its own (nl, fr, sr-Latn…)
+pub enum ProofLang { …, Pack(PackLocale), Other }      // ＋ Pack: a language without a dedicated built-in variant (nl, fr, sr-Latn…)
 pub struct PackLocale;                                 // ＋ Copy; PackLocale::new(tag) -> Option<Self>, .as_str() "nl-nl", .primary() "nl", Display
 impl ProofLang { pub fn pack_locale(self) -> Option<PackLocale>; } // ＋
 pub fn pack_dictionary_file(lang: ProofLang) -> Option<PathBuf>;  // ＋ the .dic a Pack language reads now; None = unchecked
 ```
 
-`ProofLang::from_tag` now gives `Pack(locale)` for every valid language tag it has no tools for
+`ProofLang::from_tag` now gives `Pack(locale)` for every valid language tag without a dedicated built-in variant
 (`nl-NL` → `Pack("nl-nl")`, `fr-FR`, `ja-JP`, `sr-Latn`…); `Other` is left for `x-none`, `und`,
 `zxx`, `mul`, `mis`, `i-…` and malformed tags. A `Pack` language is spell-checked and given
 suggestions from its Hunspell dictionary (dictionaries folder → installed pack → system Hunspell)
-through the shared affix engine with default tuning, and hyphenated from its pack's
-`hyphenation.pat`; it has no grammar rules and the generic English spelling message. Without a
-dictionary or pack it behaves exactly as `Other` did (no marks, English hyphenation fallback).
+through the shared affix engine with default tuning (French tuning for `fr` packs), and
+hyphenated from its pack's `hyphenation.pat`. Most pack languages use no dedicated grammar
+rules; regional variants can reuse a built-in language's rules. French packs use the French
+spelling message and the conservative French grammar and typography described above. Without a dictionary or pack,
+spelling has no marks and hyphenation falls back to English; French grammar and typography
+still apply independently of a spelling dictionary.
 `has_dictionary(tag)` / `ProofLang::is_proofed()` say whether a `Pack` language has a dictionary
 now (read on first use, cached). Loaded `Pack` dictionaries share a 256 MB budget (estimated from their files); the least recently used goes first, but never one used in the paragraph being checked, and languages with no dictionary take no room. Downstream `match`es on `ProofLang` need a `Pack(_)` arm; `code()` stays `&'static str`
 and is `""` for it, as for `Other`: anything that keys, saves or reports a language (settings, caches, JSON/MCP output) uses `tag()`, which is `code()` for the built-ins and the locale (`nl`, `fr-fr`) for a pack language.

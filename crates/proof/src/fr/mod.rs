@@ -44,6 +44,7 @@ pub(crate) fn check(d: &AffixDict, word: &str, opts: &Options) -> bool {
     if known(d, w) {
         return true;
     }
+    let original = w;
     let w = w.replace('’', "'");
     if known(d, &w) {
         return true;
@@ -56,7 +57,7 @@ pub(crate) fn check(d: &AffixDict, word: &str, opts: &Options) -> bool {
     {
         return true;
     }
-    w.contains('-') && w.split('-').all(|p| !p.is_empty() && (p.chars().count() <= 1 || known(d, p)))
+    original.contains('-') && original.split('-').all(|p| !p.is_empty() && (p.chars().count() <= 1 || known(d, p) || known(d, &p.replace('’', "'"))))
 }
 
 fn known(d: &AffixDict, word: &str) -> bool {
@@ -146,6 +147,17 @@ mod tests {
         }
         assert!(is_correct_with(&d, "e\u{301}cole"));
         assert!(!is_correct_with(&d, "maison\u{338}"), "a trailing mark is part of the word");
+    }
+
+    #[test]
+    fn curly_apostrophes_in_compounds_keep_exact_dictionary_parts() {
+        let d = AffixDict::from_hunspell("SET UTF-8\n", "4\naujourd’hui\nécole\ncafé\nl'école\n", &[]).unwrap();
+        for word in ["aujourd’hui-école", "aujourd’hui-e\u{301}cole", "café-aujourd’hui", "l’école-aujourd’hui"] {
+            assert!(is_correct_with(&d, word), "{word}");
+        }
+        for word in ["aujourd’hui-écolle", "aujourd’hui--école", "aujourd'hui-école"] {
+            assert!(!is_correct_with(&d, word), "{word}");
+        }
     }
 
     #[test]

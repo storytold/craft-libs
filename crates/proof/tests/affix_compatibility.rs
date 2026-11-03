@@ -87,6 +87,8 @@ fn legacy_compact_data_is_refused_without_reinterpreting_homonyms() {
         assert_eq!(hex.len() % 2, 0);
         let bytes: Vec<_> =
             hex.as_bytes().as_chunks::<2>().0.iter().map(|pair| u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap()).collect();
+        let raw = miniz_oxide::inflate::decompress_to_vec(&bytes).unwrap();
+        assert!(raw.starts_with(b"WCAFF1\n"), "fixture must contain WCAFF1 data: {}", case.name);
         assert!(AffixDict::from_bytes(&bytes).is_err(), "WCAFF1 must be regenerated as WCAFF2: {}", case.name);
     }
 }
