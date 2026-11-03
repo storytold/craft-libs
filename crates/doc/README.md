@@ -42,7 +42,11 @@ let outline = craft_doc::outline(&bytes, &limits)?;
   writer it names, and `supported`, which is `false` when the version is newer than the crate
   reads.
 - `renditions(bytes, &Limits) -> Result<Vec<Rendition>, Error>`: each `Rendition` has a `kind`
-  (`Pdf`, `Thumbnail`, `Composite`), a `mime` and the `bytes`.
+  (`Pdf`, `Thumbnail`, `Composite`), a `mime` and the `bytes`. `is_full_composite` is true only
+  for a PhotoCraft composite selected from an explicit `full_composite` declaration; it is
+  false for the legacy preview and every other rendition. It records the selected source,
+  without decoding pixels or checking canvas dimensions. Derived equality and debug output
+  include this provenance.
 - `outline(bytes, &Limits) -> Result<Outline, Error>`: `canvas`, `pages` and `layers`.
 - `Error` is `Unrecognized`, `Malformed`, `TooNew`, `Unsupported` or `LimitExceeded`. A file
   whose version is newer than the crate reads gives `TooNew` from `renditions` and `outline`. A

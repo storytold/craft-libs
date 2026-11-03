@@ -181,6 +181,11 @@ pub struct Rendition {
     /// rendition), or `image/png` for PhotoCraft's previews.
     pub mime: String,
     pub bytes: Vec<u8>,
+    /// True only for a PhotoCraft [`RenditionKind::Composite`] selected from the manifest's
+    /// explicit `full_composite` member. False for the legacy composite preview and all other
+    /// renditions. This records the selected source; image bytes and canvas dimensions are
+    /// not decoded or validated. Equality and debug output include this provenance.
+    pub is_full_composite: bool,
 }
 
 /// The structure of a document, without its content.

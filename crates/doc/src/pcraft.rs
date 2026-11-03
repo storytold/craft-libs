@@ -136,16 +136,18 @@ pub(crate) fn info(bytes: &[u8], budget: &mut Budget) -> Result<(u32, Option<Str
     stamp(&json, budget)
 }
 
+/// Extract declared previews, retaining whether the selected composite names the full member.
 pub(crate) fn renditions(bytes: &[u8], budget: &mut Budget) -> Result<Vec<Rendition>, Error> {
     let (zip, json) = manifest(bytes, budget)?;
     let m: Envelope<IgnoredAny> = read(&json, budget)?;
+    let composite_is_full = m.full_composite.is_some();
     let mut out = vec![];
     for (kind, path) in [(RenditionKind::Thumbnail, m.thumbnail), (RenditionKind::Composite, m.full_composite.or(m.composite))] {
         let Some(path) = path else { continue };
         let entry = zip.find(&path).ok_or_else(|| malformed(format!("the manifest names `{path}`, which the bundle does not have")))?;
         let max = budget.limits.max_entry;
         let bytes = zip.read(entry, max, budget, &path)?;
-        out.push(Rendition { kind, mime: "image/png".into(), bytes });
+        out.push(Rendition { kind, mime: "image/png".into(), bytes, is_full_composite: kind == RenditionKind::Composite && composite_is_full });
     }
     Ok(out)
 }

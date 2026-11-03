@@ -424,6 +424,7 @@ pub(crate) fn info(bytes: &[u8], budget: &mut Budget) -> Result<(u32, Option<Str
     Ok((s.version, s.generator))
 }
 
+/// Extract VectorCraft's declared thumbnail and PDF payloads.
 pub(crate) fn renditions(bytes: &[u8], budget: &mut Budget) -> Result<Vec<Rendition>, Error> {
     let Unpacked { json, tail } = unpack(bytes, budget)?;
     let head = stamp::<true>(&json, budget, false)?;
@@ -452,7 +453,7 @@ pub(crate) fn renditions(bytes: &[u8], budget: &mut Budget) -> Result<Vec<Rendit
                 Some(_) => blobs.next().flatten().ok_or_else(|| malformed(format!("the file ends before its {what}")))?,
                 None => m.bytes_at_most(&[], u64::MAX).ok_or_else(|| malformed(format!("the {what} is not valid base64")))?,
             };
-            Ok(Rendition { kind, mime: m.mime, bytes })
+            Ok(Rendition { kind, mime: m.mime, bytes, is_full_composite: false })
         })
         .collect()
 }
