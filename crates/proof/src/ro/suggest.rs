@@ -355,8 +355,12 @@ pub fn suggest_in(d: &AffixDict, word: &str, max: usize) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     for (text, _) in found {
         let t = recase(d, text, case, n);
-        if t != word && can_suggest_phrase(d, &t) && !out.contains(&t) {
-            out.push(t);
+        // Eligibility on the dictionary's own spelling; the user sees it through OCONV.
+        if t != word && can_suggest_phrase(d, &t) {
+            let shown = d.output(&t).into_owned();
+            if shown != word && !out.contains(&shown) {
+                out.push(shown);
+            }
         }
         if out.len() >= max {
             break;
@@ -372,7 +376,10 @@ fn recase(d: &AffixDict, text: String, case: Casing, n: usize) -> String {
         Casing::Upper if n > 1 => text.to_uppercase(),
         _ => text.clone(),
     };
-    if recased != text && text.split(' ').any(|p| d.case_locked(p)) { text } else { recased }
+    // A KEEPCASE word, or a KEEPCASE part of a hyphenated one (`casă-caz` with `caz/K`), keeps
+    // the dictionary's case.
+    let locked = |p: &str| d.case_locked(p) || p.split('-').any(|q| d.case_locked(q));
+    if recased != text && text.split(' ').any(locked) { text } else { recased }
 }
 
 /// Round 6: rank the stems starting with the word's first letter (or a MAP relative of it, either
@@ -445,6 +452,25 @@ mod tests {
             let found = suggest_in(&d, "ZYX", 8);
             assert!(!found.contains(&"CAZ".to_string()), "{flag}: {found:?}");
         }
+    }
+
+    /// OCONV turns the dictionary's spelling into the displayed one (CodeRabbit on #550).
+    #[test]
+    fn romanian_oconv_applies_to_suggestions() {
+        let d = AffixDict::from_hunspell("SET UTF-8\nOCONV 1\nOCONV m n\n", "3\nkm\nfier\ncasă\n", &[]).unwrap();
+        let found = suggest_in(&d, "kmm", 8);
+        assert!(found.iter().any(|s| s == "kn"), "{found:?}");
+        assert!(!found.iter().any(|s| s == "km"), "{found:?}");
+    }
+
+    /// A KEEPCASE part keeps a hyphenated suggestion in the dictionary's case.
+    #[test]
+    fn a_keepcase_part_keeps_the_compound_suggestion_lower_case() {
+        // `s` + `alo` is offered as `s-alo`; `alo/K` is lower case only, so `S-ALO` would be no word.
+        let d = AffixDict::from_hunspell("KEEPCASE K\n", "2\ns\nalo/K\n", &[]).unwrap();
+        let found = suggest_in(&d, "SALO", 8);
+        assert!(found.iter().any(|s| s == "s-alo"), "{found:?}");
+        assert!(!found.iter().any(|s| s == "S-ALO"), "{found:?}");
     }
 
     /// A whole compound's KEEPCASE restriction must not be bypassed by splitting it.

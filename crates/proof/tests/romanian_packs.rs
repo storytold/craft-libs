@@ -9,6 +9,8 @@ fn installed_path() -> Option<std::path::PathBuf> {
 fn romanian_pack_spelling_hyphenation_and_folder_precedence() {
     // This integration test owns its process; no shared test dictionary or real documents.
     let root = std::env::temp_dir().join(format!("craft-ro-pack-{}", std::process::id()));
+    // A folder left by an earlier run with the same process id would be found first.
+    let _ = std::fs::remove_dir_all(&root);
     let pack = root.join("packs/ro-ro");
     let folder = root.join("dictionaries");
     std::fs::create_dir_all(&pack).unwrap();
@@ -42,5 +44,6 @@ fn romanian_pack_spelling_hyphenation_and_folder_precedence() {
     assert!(ro::is_correct("textmemorie"));
     set_dictionaries_folder(Some(folder));
     assert!(ro::is_correct("exemplusintetic"));
-    // Retain the synthetic files for inspection; no cleanup deletes files.
+    set_dictionaries_folder(None);
+    let _ = std::fs::remove_dir_all(&root);
 }

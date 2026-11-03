@@ -2227,7 +2227,11 @@ impl AffixDict {
         let excluded = self.excluded(suggesting).keeping(self.keepcase);
         let blocked = |form: &str| {
             let normalized = self.normalize(form);
-            self.is_forbidden(&normalized) || (self.check_except(form, Excluded::default()) && !self.check_except(form, excluded))
+            // A form listed only as a NEEDAFFIX stem (`casă-caz/NA`) is no word on its own, so its
+            // parts can't make it one either.
+            let needs_affix = self.need_affix.is_some_and(|f| self.stem_set(&normalized).is_some_and(|set| has(set, f)))
+                && !self.check_except(form, Excluded::default());
+            self.is_forbidden(&normalized) || needs_affix || (self.check_except(form, Excluded::default()) && !self.check_except(form, excluded))
         };
         let lower = word.to_lowercase();
         blocked(word) || blocked(&lower) || blocked(&capitalize(&lower))
@@ -2922,6 +2926,17 @@ pub(crate) mod tests {
             let ordinary = AffixDict::from_hunspell(aff, "2\nmixCase\nhidden/N\n", &[]).unwrap();
             assert!(suggest(&ordinary, "MIXCASX", 8).contains(&"MIXCASE".into()));
         }
+    }
+
+    /// A compound listed only as a NEEDAFFIX stem is excluded; with its affix it is a word.
+    #[test]
+    fn a_needaffix_listing_blocks_the_bare_compound() {
+        let d = AffixDict::from_hunspell("NEEDAFFIX N\nSFX A Y 1\nSFX A 0 uri .\n", "3\ncasă\ncaz\ncasă-caz/NA\n", &[]).unwrap();
+        assert!(!d.check("casă-caz") && d.check("casă-cazuri"));
+        assert!(d.excludes_spelling("casă-caz") && d.excludes_suggestions("casă-caz"));
+        assert!(!d.excludes_spelling("casă-cazuri"), "the affixed form is a word");
+        let plain = AffixDict::from_hunspell("", "2\ncasă\ncaz\n", &[]).unwrap();
+        assert!(!plain.excludes_spelling("casă-caz"), "an unlisted compound is not excluded");
     }
 
     /// Exact excluded spellings take precedence over an allowed case fallback.

@@ -99,8 +99,14 @@ pub fn is_correct_with(d: &AffixDict, word: &str) -> bool {
     }
     // `într-o`, `s-a`, `dă-mi-l`, `nord-est`: every part is a word (or a one-letter clitic).
     // An empty part (`casă--câine`) is no word.
-    w.contains('-') && !d.excludes_spelling(&w) && w.split('-').all(|p| p.chars().count() == 1 || (!p.is_empty() && known(d, p)))
+    w.contains('-')
+        && !d.excludes_spelling(&w)
+        && w.split('-').all(|p| (p.chars().count() == 1 && CLITICS.contains(&p)) || (!p.is_empty() && known(d, p)))
 }
+
+/// The one-letter clitics a hyphen joins (`s-a`, `dă-mi-l`, `într-o`, `n-am`, `c-a`, `v-a`, `i-a`,
+/// `m-a`, `l-a`): any other single letter after a hyphen (`casă-q`) is no word.
+const CLITICS: &[&str] = &["a", "c", "e", "i", "l", "m", "n", "o", "s", "v"];
 
 /// Is one word (comma-below already) in the dictionary or the user dictionary? A user word is
 /// found in either spelling: added with cedillas (`şcoală`) it covers `școală` too.
@@ -202,6 +208,9 @@ mod tests {
         test_dict::install();
         assert!(is_correct("într-o") && is_correct("casă-casă"));
         assert!(!is_correct("casă--casă"), "a doubled hyphen leaves an empty part");
+        // Only a clitic stands alone after a hyphen (CodeRabbit on #550).
+        assert!(is_correct("s-a") && is_correct("dă-mi-l") && is_correct("n-am"));
+        assert!(!is_correct("casă-q") && !is_correct("casă-z"));
         assert!(is_correct("casă-"), "a hyphen at the edge is trimmed, so the word is checked alone");
     }
 
