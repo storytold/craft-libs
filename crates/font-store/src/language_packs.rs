@@ -476,7 +476,11 @@ impl FontStore {
             installed.committed_removals.push(id);
         }
         installed.packs.retain(|p| p.locale != locale);
-        finish_pack_removal(stage, &backup, &dest, has_folder, self.write_installed(&installed))
+        let saved = stage
+            .recovery_root()
+            .map_err(io("using the Language pack recovery stage"))
+            .and_then(|root| self.write_installed_with_recovery(&installed, Some(root)));
+        finish_pack_removal(stage, &backup, &dest, has_folder, saved)
     }
 
     /// Retain the move, rollback, and cleanup capabilities; preserve the stage if opening fails.
@@ -609,19 +613,22 @@ impl FontStore {
         Installed { version: 1, packs, committed_removals: Vec::new() }
     }
 
+    /// Prune receipts only through an available recovery capability; otherwise retain them.
     fn write_installed(&self, installed: &Installed) -> Result<(), Error> {
+        let recovery = if installed.committed_removals.is_empty() { None } else { PackRemovalRoot::open(self.dir()).ok() };
+        self.write_installed_with_recovery(installed, recovery.as_ref())
+    }
+
+    /// Commit removal receipts against the same recovery directory used for the pack move.
+    fn write_installed_with_recovery(&self, installed: &Installed, recovery: Option<&PackRemovalRoot>) -> Result<(), Error> {
         #[cfg(test)]
         tests::fail_io(tests::IoFailure::RecordWrite).map_err(io("saving the Language pack list"))?;
-        let parent = self.language_packs_dir().join(".removing");
         // Keep receipts until their backup has actually disappeared. A future locked sweep
         // retries failed cleanup, and stage creation excludes IDs whose receipts remain.
         let committed_removals = installed
             .committed_removals
             .iter()
-            .filter(|id| {
-                Stage::valid_name(id)
-                    && !matches!(std::fs::symlink_metadata(parent.join(id)), Err(error) if error.kind() == std::io::ErrorKind::NotFound)
-            })
+            .filter(|id| Stage::valid_name(id) && recovery.is_none_or(|root| root.retains_receipt(id)))
             .cloned()
             .collect();
         let bytes = serde_json::to_vec_pretty(&Installed { version: 1, packs: installed.packs.clone(), committed_removals })
@@ -666,6 +673,14 @@ impl PackRemovalRoot {
     fn restore_pack(&self, locale: &str) -> std::io::Result<()> {
         let stage = self.stage.as_ref().ok_or_else(|| std::io::Error::other("missing recovery stage"))?;
         cap_primitives::fs::rename(stage, Path::new(locale), &self.packs, Path::new(locale))
+    }
+
+    /// Absence must be observed relative to this directory, never through its display path.
+    fn retains_receipt(&self, id: &str) -> bool {
+        !matches!(
+            cap_primitives::fs::stat(&self.recovery, Path::new(id), cap_primitives::fs::FollowSymlinks::No),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound
+        )
     }
 
     /// Release the child lock before deletion while retaining every recovery ancestor.

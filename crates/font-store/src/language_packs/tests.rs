@@ -24,7 +24,7 @@ thread_local! {
     #[cfg(unix)]
     static REPLACE_CLEANUP_PARENT: RefCell<Option<(PathBuf, PathBuf, PathBuf)>> = const { RefCell::new(None) };
     #[cfg(unix)]
-    static REPLACE_MOVE_PARENT: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
+    static REPLACE_MOVE_PARENT: RefCell<Option<(PathBuf, bool)>> = const { RefCell::new(None) };
 }
 
 struct InjectFailure(Option<IoFailure>);
@@ -67,10 +67,12 @@ fn take_cleanup_attempts() -> Vec<PathBuf> {
 /// Replace the recovery parent immediately before moving a pack, keeping a matching outside ID.
 pub(super) fn before_pack_move(stage: &Path) -> std::io::Result<()> {
     #[cfg(unix)]
-    if let Some(outside) = REPLACE_MOVE_PARENT.take() {
+    if let Some((outside, matching_id)) = REPLACE_MOVE_PARENT.take() {
         let parent = stage.parent().ok_or_else(|| std::io::Error::other("missing recovery parent"))?;
         let id = stage.file_name().ok_or_else(|| std::io::Error::other("missing recovery ID"))?;
-        std::fs::create_dir(outside.join(id))?;
+        if matching_id {
+            std::fs::create_dir(outside.join(id))?;
+        }
         std::fs::rename(parent, parent.with_extension("original"))?;
         std::os::unix::fs::symlink(outside, parent)?;
     }
@@ -547,7 +549,7 @@ fn removal_move_stays_with_its_cleanup_anchor_after_parent_replacement() {
     store.install_pack_from(false, &index, index.pack("nl").unwrap(), &Cancel::new(), &mut |_| {}).unwrap();
     let outside = temp("remove-move-parent-race-outside");
     std::fs::write(outside.join("keep"), b"untouched").unwrap();
-    REPLACE_MOVE_PARENT.set(Some(outside.clone()));
+    REPLACE_MOVE_PARENT.set(Some((outside.clone(), true)));
     store.remove_language_pack("nl").unwrap();
     assert_eq!(std::fs::read(outside.join("keep")).unwrap(), b"untouched");
     for entry in std::fs::read_dir(&outside).unwrap().flatten() {
@@ -555,6 +557,36 @@ fn removal_move_stays_with_its_cleanup_anchor_after_parent_replacement() {
     }
     assert!(std::fs::read_dir(store.language_packs_dir().join(".removing.original")).unwrap().next().is_none());
     std::fs::remove_file(store.language_packs_dir().join(".removing")).unwrap();
+    std::fs::remove_dir_all(outside).unwrap();
+    std::fs::remove_dir_all(store.dir()).unwrap();
+}
+
+/// An unavailable display path must not prune a receipt for a backup held by its capability.
+#[cfg(unix)]
+#[test]
+fn committed_receipt_survives_parent_replacement_and_failed_immediate_cleanup() {
+    let (store, _server, pin, _) = setup("remove-receipt-parent-race");
+    let index = store.fetch_pack_index_from(&IndexSource::Pinned(pin), &Cancel::new()).unwrap();
+    store.install_pack_from(false, &index, index.pack("nl").unwrap(), &Cancel::new(), &mut |_| {}).unwrap();
+    let dictionary = std::fs::read(store.language_packs_dir().join("nl/spelling.dic")).unwrap();
+    let outside = temp("remove-receipt-parent-race-outside");
+    REPLACE_MOVE_PARENT.set(Some((outside.clone(), false)));
+    let injected = InjectFailure::new(IoFailure::Cleanup);
+    store.remove_language_pack("nl").unwrap();
+    drop(injected);
+    let record = store.read_record().unwrap();
+    assert_eq!(record.committed_removals.len(), 1, "the committed receipt must survive a missing path under the replacement parent");
+    let id = &record.committed_removals[0];
+    let parent = store.language_packs_dir().join(".removing");
+    let original = parent.with_extension("original");
+    assert_eq!(std::fs::read(original.join(id).join("nl/spelling.dic")).unwrap(), dictionary);
+    assert!(std::fs::read_dir(&outside).unwrap().next().is_none());
+    std::fs::remove_file(&parent).unwrap();
+    std::fs::rename(original, &parent).unwrap();
+    drop(store.lock().unwrap());
+    assert!(!parent.join(id).exists(), "the persisted receipt drives a later anchored retry");
+    store.write_installed(&record).unwrap();
+    assert!(store.read_record().unwrap().committed_removals.is_empty());
     std::fs::remove_dir_all(outside).unwrap();
     std::fs::remove_dir_all(store.dir()).unwrap();
 }
