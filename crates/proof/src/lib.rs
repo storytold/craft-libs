@@ -152,6 +152,28 @@ fn dictionary_key(w: &str) -> String {
     composed(&w.to_lowercase()).into_owned()
 }
 
+/// Each run of two or more spaces in `text`, once, over the whole run (a fix replaces it with one
+/// space). A run of three is one issue over three, not a pair and a leftover.
+pub(crate) fn space_runs(text: &str) -> Vec<Range<usize>> {
+    let bytes = text.as_bytes();
+    let mut runs = Vec::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes.get(i) != Some(&b' ') {
+            i += 1;
+            continue;
+        }
+        let start = i;
+        while bytes.get(i) == Some(&b' ') {
+            i += 1;
+        }
+        if i - start >= 2 {
+            runs.push(start..i);
+        }
+    }
+    runs
+}
+
 /// Add a word to the user dictionary ("Add to Dictionary"). It applies to every language.
 pub fn add_word(w: &str) {
     if user_words().write().unwrap_or_else(std::sync::PoisonError::into_inner).insert(dictionary_key(w)) {
@@ -340,7 +362,7 @@ pub fn installed_dictionaries() -> Vec<(ProofLang, Option<std::path::PathBuf>)> 
 /// checked yet reports `None` (#2830). For an English, its embedded SCOWL dictionary or the
 /// English Hunspell dictionary that failed; English then uses the next source ([`english_source`]).
 pub fn dictionary_load_error(lang: ProofLang) -> Option<String> {
-    if matches!(lang, ProofLang::En | ProofLang::EnGb | ProofLang::EnCa) {
+    if lang.is_english() {
         return english::load_error(lang);
     }
     if let Some(l) = lang.spelling_locale() {
@@ -669,7 +691,7 @@ pub(crate) fn accepted_by_options(word: &str, opts: &Options) -> bool {
         || !w.chars().any(char::is_alphabetic)
         || (opts.ignore_numbers && w.chars().any(|c| c.is_ascii_digit()))
         // Only a word with a cased letter is in capitals: a Hebrew or Thai word has none.
-        || (opts.ignore_uppercase && w.chars().any(char::is_uppercase) && w.chars().all(|c| !c.is_lowercase()))
+        || (opts.ignore_uppercase && spelling::in_capitals(w))
         // The whole word: the languages split a hyphenated word into its parts, and an added
         // `Unigranrio-RJ` is none of them (#2082).
         || in_user_dictionary(&w.to_lowercase())
@@ -953,7 +975,7 @@ pub fn check_grammar_in(text: &str, lang: ProofLang) -> Vec<Issue> {
 fn grammar_in(text: &str, lang: ProofLang, capital_first: bool) -> Vec<Issue> {
     match lang {
         ProofLang::En => grammar_en(text, capital_first),
-        ProofLang::EnGb | ProofLang::EnCa => grammar_en(text, capital_first).into_iter().map(|i| Issue { lang, ..i }).collect(),
+        ProofLang::EnGb | ProofLang::EnAu | ProofLang::EnCa => grammar_en(text, capital_first).into_iter().map(|i| Issue { lang, ..i }).collect(),
         // `pt-pt` shares Portuguese's rules, its issues in its own language.
         _ => language(lang.built_in())
             .map_or_else(Vec::new, |l| (l.grammar)(text, lang, capital_first).into_iter().map(|i| Issue { lang, ..i }).collect()),
@@ -1098,13 +1120,10 @@ fn grammar_en(text: &str, capital_first: bool) -> Vec<Issue> {
             lang: ProofLang::En,
         });
     }
-    for (i, _) in text.match_indices("  ") {
-        if i > 0 && text.get(..i).is_some_and(|t| t.ends_with(' ')) {
-            continue;
-        }
+    for run in space_runs(text) {
         v.push(Issue {
-            start: i,
-            end: i + 2,
+            start: run.start,
+            end: run.end,
             kind: IssueKind::Grammar,
             message: "Extra space".into(),
             suggestions: vec![" ".into()],
@@ -1197,7 +1216,7 @@ mod tests {
         }
         // Every proofed language other than English has a Hunspell dictionary to report.
         for l in ProofLang::PROOFED {
-            let english = matches!(l, ProofLang::En | ProofLang::EnGb | ProofLang::EnCa);
+            let english = l.is_english();
             assert_eq!(dictionary_needed(l, false).is_some(), !english, "{l:?}");
         }
         for l in [ProofLang::En, ProofLang::Other] {
@@ -1321,7 +1340,8 @@ mod tests {
         }
         // Text in a language without proofing is never checked with English.
         assert!(check_spelling_in("hous teh zxqv", ProofLang::Other).is_empty());
-        assert!(check_text("hous teh", &[(0..8, ProofLang::De)]).is_empty());
+        // `Other` has no dictionary on any machine (German may: a system `de_DE` Hunspell).
+        assert!(check_text("hous teh", &[(0..8, ProofLang::Other)]).is_empty());
         assert_eq!(english_source(ProofLang::Pl), None);
         drop_english_files(&dir, english);
         assert_ne!(english_source(ProofLang::En), Some(EnglishSource::Hunspell(dir.join("en_US.dic"))));
@@ -1704,6 +1724,31 @@ mod tests {
         let text = "שלום שלוםם";
         let issues = check_text(text, &[(0..text.len(), he)]);
         assert_eq!(issues.iter().map(|i| &text[i.start..i.end]).collect::<Vec<_>>(), ["שלוםם"], "{issues:?}");
+        packs::set_packs_dir(None);
+        set_dictionaries_folder(Some(shared_test_folder()));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Review follow-up (craft-libs#485): a word in another script than a pack language's
+    /// dictionary (a Russian name in a Dutch run, a Dutch word in a Greek one) isn't marked; a
+    /// misspelling in the dictionary's own script still is.
+    #[test]
+    fn pack_languages_leave_other_scripts_alone() {
+        crate::hold_dictionary_tests();
+        set_dictionaries_folder(Some(shared_test_folder()));
+        let root = std::env::temp_dir().join(format!("wc-proof-other-script-packs-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        write_pack(&root, "nl", &[("spelling.aff", b"SET UTF-8\n"), ("spelling.dic", "2\nhuis\nkat\n".as_bytes())]);
+        write_pack(&root, "el", &[("spelling.aff", b"SET UTF-8\n"), ("spelling.dic", "1\nσπίτι\n".as_bytes())]);
+        packs::set_packs_dir(Some(root.clone()));
+        let (nl, el) = (ProofLang::from_tag(Some("nl-NL")), ProofLang::from_tag(Some("el-GR")));
+        assert!(is_correct_in("huis", nl) && !is_correct_in("huiss", nl));
+        assert!(!is_correct_in("zzzz", nl), "a misspelling in the dictionary's script, whatever its letters");
+        assert!(is_correct_in("Пушкин", nl) && is_correct_in("σπίτι", nl));
+        assert!(is_correct_in("σπίτι", el) && !is_correct_in("σπίτιι", el) && is_correct_in("huis", el));
+        let text = "Пушкин huiss";
+        let issues = check_text(text, &[(0..text.len(), nl)]);
+        assert_eq!(issues.iter().map(|i| &text[i.start..i.end]).collect::<Vec<_>>(), ["huiss"], "{issues:?}");
         packs::set_packs_dir(None);
         set_dictionaries_folder(Some(shared_test_folder()));
         let _ = std::fs::remove_dir_all(&root);
@@ -2465,6 +2510,49 @@ mod tests {
         assert_eq!(suggest_in("programmes", 5, us).first().map(String::as_str), Some("programs"));
     }
 
+    /// Review follow-up: British English takes `-ize` (Oxford spelling) but never `-yze`, also in
+    /// forms en-variants.txt doesn't list. Hunspell 1.7.5 with SCOWL's en_GB rejects these too.
+    #[cfg_attr(not(craft_proof_data), ignore = "needs the Language data (CRAFT_I18N_DIR)")]
+    #[test]
+    fn british_english_rejects_unlisted_yze_forms() {
+        crate::hold_dictionary_tests();
+        let gb = ProofLang::EnGb;
+        for w in ["reanalyze", "reanalyzed", "breathalyze", "breathalyzer", "paralyzingly", "catalyze", "analyzer"] {
+            assert!(!is_correct_in(w, gb), "en-GB: {w}");
+            assert!(is_correct_in(w, ProofLang::En), "en-US: {w}");
+        }
+        for w in ["reanalyse", "breathalyser", "paralysingly", "catalyse", "organize", "realization"] {
+            assert!(is_correct_in(w, gb), "en-GB: {w}");
+        }
+    }
+
+    /// Review follow-up: Australian English reads SCOWL's own en-AU dictionary (craft-i18n ships
+    /// it), not en-GB's: its Australian words are right and spelled as Hunspell's en_AU spells
+    /// them; British English doesn't take them. The British policy still applies: American
+    /// spellings are wrong, `-ise` and `-ize` both right.
+    #[cfg_attr(not(craft_proof_data), ignore = "needs the Language data (CRAFT_I18N_DIR)")]
+    #[test]
+    fn australian_english_reads_its_own_scowl() {
+        crate::hold_dictionary_tests();
+        let (au, gb) = (ProofLang::EnAu, ProofLang::EnGb);
+        assert!(scowl::is_british(au));
+        assert_eq!(english_source(au), Some(EnglishSource::Embedded));
+        for w in ["billabong", "brumby", "larrikinism", "bunyip", "corroboree", "Bundaberg", "Rockhampton"] {
+            assert!(is_correct_in(w, au), "en-AU: {w}");
+            assert!(!is_correct_in(w, gb), "en-GB: {w}");
+            assert!(is_correct_for(w, Some("en-AU")), "en-AU tag: {w}");
+        }
+        for w in ["colour", "centre", "organise", "organize", "analyse", "travelled", "defence"] {
+            assert!(is_correct_in(w, au), "en-AU: {w}");
+        }
+        for w in ["color", "center", "analyze", "reanalyze", "defense"] {
+            assert!(!is_correct_in(w, au), "en-AU: {w}");
+        }
+        let text = "The larrikin saw a brumby by the billabong and analysed the colour of the sky.";
+        assert!(check_spelling_in(text, au).is_empty(), "{:?}", check_spelling_in(text, au));
+        assert_eq!(check_spelling_in(text, gb).len(), 3, "larrikin, brumby, billabong: {:?}", check_spelling_in(text, gb));
+    }
+
     /// More British spellings that must stay right in en-GB and en-AU (#1281): -re, single l, ae,
     /// with their inflections.
     #[test]
@@ -2472,7 +2560,7 @@ mod tests {
         // English results depend on the dictionaries other tests install.
         crate::hold_dictionary_tests();
         let gb = ProofLang::EnGb;
-        assert_eq!(ProofLang::from_tag(Some("en-AU")), gb);
+        assert_eq!(ProofLang::from_tag(Some("en-AU")), ProofLang::EnAu);
         for w in [
             "goitre",
             "goitres",
@@ -2497,9 +2585,64 @@ mod tests {
             "encyclopaedias",
         ] {
             assert!(is_correct_in(w, gb), "en-GB: {w}");
+            assert!(is_correct_in(w, ProofLang::EnAu), "en-AU: {w}");
         }
         let text = "The wilful knight took the sceptre to fulfil his enrolment, paid the instalment and read the encyclopaedia.";
         assert!(check_spelling_in(text, gb).is_empty(), "{:?}", check_spelling_in(text, gb));
+    }
+
+    /// Review follow-up: SCOWL's en-AU list keeps one spelling per word, so Australian English also
+    /// takes a word the en-GB list has (`enquiry`, `guerrilla`, `liquorice`); American-only
+    /// spellings, wrong in both, stay wrong. Suggestions still come from the en-AU list.
+    #[cfg_attr(not(craft_proof_data), ignore = "needs the Language data (CRAFT_I18N_DIR)")]
+    #[test]
+    fn australian_english_also_takes_british_words() {
+        crate::hold_dictionary_tests();
+        let (au, gb) = (ProofLang::EnAu, ProofLang::EnGb);
+        for w in ["enquiry", "enquire", "guerrilla", "guerrillas", "euthanise", "liveable", "liquorice", "veranda", "burka", "Anthea"] {
+            assert!(is_correct_in(w, gb), "en-GB: {w}");
+            assert!(is_correct_in(w, au), "en-AU: {w}");
+        }
+        for w in ["analyze", "catalyze", "color", "center", "defense", "zzyzxq"] {
+            assert!(!is_correct_in(w, gb), "en-GB: {w}");
+            assert!(!is_correct_in(w, au), "en-AU: {w}");
+        }
+        assert!(is_correct_in("billabong", au) && !is_correct_in("billabong", gb), "en-AU still has its own");
+        assert!(suggest_in("billabon", 5, au).iter().any(|s| s == "billabong"), "{:?}", suggest_in("billabon", 5, au));
+    }
+
+    /// Review follow-up: a run of spaces is one issue over the whole run, in every language with a
+    /// double-space rule (a run of three used to leave two after the fix, four three).
+    #[test]
+    fn a_run_of_spaces_is_one_issue_in_every_language() {
+        assert_eq!(space_runs("a b  c   d    "), [3..5, 6..9, 10..14]);
+        assert!(space_runs("a b c").is_empty() && space_runs("").is_empty() && space_runs(" ").is_empty());
+        let langs = [
+            ProofLang::En,
+            ProofLang::EnGb,
+            ProofLang::Es,
+            ProofLang::It,
+            ProofLang::Pt,
+            ProofLang::Cs,
+            ProofLang::Hr,
+            ProofLang::Id,
+            ProofLang::Pl,
+            ProofLang::Ru,
+            ProofLang::Tr,
+            ProofLang::EnAu,
+            ProofLang::EnCa,
+        ]
+        .into_iter()
+        .chain(PackLocale::new("pt-PT").map(ProofLang::Pack));
+        for lang in langs {
+            for n in 2..=5 {
+                let text = format!("Aaa{}bbb", " ".repeat(n));
+                let hits: Vec<_> =
+                    check_grammar_in(&text, lang).into_iter().filter(|i| i.start <= 3 && i.end > 3 && i.suggestions == [" "]).collect();
+                assert_eq!(hits.len(), 1, "{lang:?} {n}: {hits:?}");
+                assert_eq!((hits[0].start, hits[0].end), (3, 3 + n), "{lang:?} {n}");
+            }
+        }
     }
 
     /// English spelling reads SCOWL 2026 through the affix engine: one dictionary per English,
@@ -2513,7 +2656,8 @@ mod tests {
             assert_eq!(english_source(l), Some(EnglishSource::Embedded));
             assert_eq!(dictionary_load_error(l), None);
         }
-        assert!(std::ptr::eq(scowl::dict(ProofLang::EnGb).unwrap(), scowl::dict(ProofLang::from_tag(Some("en-AU"))).unwrap()), "en-AU reads en-GB");
+        assert!(!std::ptr::eq(scowl::dict(ProofLang::EnGb).unwrap(), scowl::dict(ProofLang::EnAu).unwrap()), "en-AU reads its own");
+        assert!(std::ptr::eq(scowl::dict(ProofLang::EnGb).unwrap(), scowl::dict(ProofLang::from_tag(Some("en-NZ"))).unwrap()), "en-NZ reads en-GB");
         let notice = scowl::notice().unwrap();
         for credit in ["Kevin Atkinson", "Geoff Kuenning", "clause 4 removed", "Benjamin Titze"] {
             assert!(notice.contains(credit), "{credit}");
