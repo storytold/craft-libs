@@ -156,7 +156,7 @@ mod tests {
         let found = crate::hunspell::find_in(&dir, NAMES);
         let ok = found.as_ref().is_some_and(|(a, d)| a.ends_with("ro_MD.aff") && d.ends_with("ro_MD.dic"));
         assert!(ok, "{found:?}");
-        // Keep this synthetic dictionary directory for inspection; no cleanup deletes files.
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -290,5 +290,17 @@ mod tests {
         assert!(!is_correct("zxqcuvântromânesc"));
         crate::add_word("Zxqcuvântromânesc");
         assert!(is_correct("zxqcuvântromânesc"));
+    }
+    #[test]
+    fn a_user_word_counts_in_either_spelling() {
+        test_dict::install();
+        // Added with cedillas, it covers the comma-below spelling, and the other way round.
+        assert!(!is_correct("zqşcoalăx") && !is_correct("zqșcoalăx"));
+        crate::add_word("zqşcoalăx");
+        assert!(is_correct("zqșcoalăx") && is_correct("zqşcoalăx"));
+        crate::remove_word("zqşcoalăx");
+        crate::add_word("zqțarăx");
+        assert!(is_correct("zqţarăx") && is_correct("zqțarăx"));
+        crate::remove_word("zqțarăx");
     }
 }
