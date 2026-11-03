@@ -385,7 +385,7 @@ pub fn update(
             }
             #[cfg(target_os = "linux")]
             Install::Package(kind, exe) => {
-                let result = install::linux::install_package(*kind, &file, stop, phase);
+                let result = install::linux::install_package(*kind, &file, None, stop, phase);
                 let _ = std::fs::remove_file(&file);
                 result?;
                 relaunch_after_exit(app, pid, &[exe.as_os_str()])
@@ -399,7 +399,7 @@ pub fn update(
                     // would install a second one beside it.
                     None => return Err(format!("this copy of {} can't update itself; download the new version instead", app.name)),
                 };
-                let result = install::linux::install_flatpak_bundle(&file, system, stop, phase);
+                let result = install::linux::update_flatpak_bundle(&file, &app.bundle_id(), system, stop, phase);
                 let _ = std::fs::remove_file(&file);
                 result?;
                 relaunch_flatpak_after_exit(app)
