@@ -218,6 +218,14 @@ fn document_outline(d: DocM, budget: &Budget) -> Result<Outline, Error> {
     })
 }
 
+/// The archive and the manifest's document read as `D`, checked as [`outline`] reads it.
+#[cfg(feature = "pcraft-pixels")]
+pub(crate) fn document<'a, D: DeserializeOwned>(bytes: &'a [u8], budget: &mut Budget) -> Result<(Zip<'a>, D), Error> {
+    let (zip, json) = manifest(bytes, budget)?;
+    let document = read::<D>(&json, budget)?.document;
+    Ok((zip, document))
+}
+
 #[cfg(test)]
 mod cancellation_tests {
     #![allow(clippy::unwrap_used)]
@@ -240,12 +248,4 @@ mod cancellation_tests {
         assert_eq!(result, Err(Error::Cancelled));
         assert_eq!(polls.get(), 4);
     }
-}
-
-/// The archive and the manifest's document read as `D`, checked as [`outline`] reads it.
-#[cfg(feature = "pcraft-pixels")]
-pub(crate) fn document<'a, D: DeserializeOwned>(bytes: &'a [u8], budget: &mut Budget) -> Result<(Zip<'a>, D), Error> {
-    let (zip, json) = manifest(bytes, budget)?;
-    let document = read::<D>(&json, budget)?.document;
-    Ok((zip, document))
 }
