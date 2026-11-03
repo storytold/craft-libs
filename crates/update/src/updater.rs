@@ -15,6 +15,7 @@ use std::time::Duration;
 use crate::dialog::{StartupPrompt, StartupPromptResponse};
 use crate::pins::{Choice, Pins};
 use crate::release::Release;
+use crate::translate::{Note, Translate, english};
 use crate::{App, Http, Paths, Platform, Stop, check_for_update, self_update};
 
 /// Asks for the newest release (blocking; it runs on its own thread). Tests stand in for the network
@@ -47,6 +48,38 @@ pub enum Action {
 
 type Checked = Result<Option<Release>, String>;
 
+/// Why an installation failed: the installer's own words, shown as they are, or the updater's,
+/// shown in the interface language.
+#[derive(Debug)]
+enum Failure {
+    Installer(String),
+    Updater(Note),
+}
+
+impl Failure {
+    /// The worker panicked.
+    fn panicked() -> Self {
+        Self::Updater(Note::new("The update failed unexpectedly.", &[]))
+    }
+
+    /// The worker went away without an answer.
+    fn dropped() -> Self {
+        Self::Updater(Note::new("The update stopped unexpectedly.", &[]))
+    }
+}
+
+impl From<String> for Failure {
+    fn from(e: String) -> Self {
+        Self::Installer(e)
+    }
+}
+
+impl From<&str> for Failure {
+    fn from(e: &str) -> Self {
+        Self::Installer(e.to_owned())
+    }
+}
+
 pub struct Updater {
     app: &'static App,
     version: String,
@@ -56,7 +89,7 @@ pub struct Updater {
     requested: bool,
     started: bool,
     check: Option<Receiver<Checked>>,
-    install: Option<(Receiver<Result<(), String>>, Release)>,
+    install: Option<(Receiver<Result<(), Failure>>, Release)>,
     prompt: Option<StartupPrompt>,
     restart: bool,
     /// An update is installed and waits for the app to exit; nothing starts a second one.
@@ -65,6 +98,8 @@ pub struct Updater {
     pins_path: Option<PathBuf>,
     /// The launcher's choice for this app when it is not stable, as of the last check or offer.
     managed: Option<Choice>,
+    /// Puts the prompt and its messages in the interface language ([`crate::translate`]).
+    translate: Translate,
 }
 
 impl Updater {
@@ -85,7 +120,30 @@ impl Updater {
             installed: false,
             pins_path: None,
             managed: None,
+            translate: english,
         }
+    }
+
+    /// Words the startup prompt and the messages it shows with `translate`, in the app's
+    /// interface language ([`crate::translate`]). Errors from the network stay as they came.
+    #[must_use]
+    pub fn with_translator(mut self, translate: Translate) -> Self {
+        self.translate = translate;
+        // A prompt already open (an offer made before) speaks the new language from its next draw.
+        if let Some(prompt) = &mut self.prompt {
+            prompt.translate = translate;
+        }
+        self
+    }
+
+    /// The startup prompt for `release`, in the interface language.
+    fn prompt_for(&self, release: Release) -> StartupPrompt {
+        StartupPrompt::new(self.app, release, self.version.clone()).with_translator(self.translate)
+    }
+
+    /// "The update is installed…", translated when the prompt draws.
+    fn installed_note(&self) -> Note {
+        Note::new("The update is installed. Close {app} to finish; it restarts by itself.", &[("app", self.app.name)])
     }
 
     /// Replaces the network with `source` (tests).
@@ -142,7 +200,7 @@ impl Updater {
     /// Opens the startup prompt for a release the app found itself.
     pub fn offer(&mut self, release: Release) {
         if self.install.is_none() && !self.installed && !self.read_choice() {
-            self.prompt = Some(StartupPrompt::new(self.app, release, self.version.clone()));
+            self.prompt = Some(self.prompt_for(release));
         }
     }
 
@@ -211,7 +269,7 @@ impl Updater {
             Ok(Some(release)) => {
                 self.status = Status::Idle;
                 if self.prompt.is_none() && self.install.is_none() && !self.installed {
-                    self.prompt = Some(StartupPrompt::new(self.app, release, self.version.clone()));
+                    self.prompt = Some(self.prompt_for(release));
                 }
             }
             Ok(None) => self.status = if requested { Status::UpToDate } else { Status::Idle },
@@ -245,7 +303,7 @@ impl Updater {
                     ctx.request_repaint_after(Duration::from_millis(100));
                     None
                 }
-                Err(TryRecvError::Disconnected) => Some(Err("the update stopped unexpectedly".into())),
+                Err(TryRecvError::Disconnected) => Some(Err(Failure::dropped())),
             };
             if let Some(outcome) = outcome {
                 let release = self.install.take().map(|(_, release)| release);
@@ -253,23 +311,29 @@ impl Updater {
                     Ok(()) => {
                         self.installed = true;
                         self.restart = true;
+                        let note = self.installed_note();
                         if let Some(prompt) = &mut self.prompt {
                             prompt.is_installing = false;
-                            prompt.status_message =
-                                Some(format!("The update is installed. Close {} to finish; it restarts by itself.", self.app.name));
+                            prompt.set_note(note);
                         }
                     }
-                    Err(e) => {
-                        log::warn!("{} self-update failed: {e}", self.app.name);
+                    Err(failure) => {
+                        match &failure {
+                            Failure::Installer(e) => log::warn!("{} self-update failed: {e}", self.app.name),
+                            Failure::Updater(note) => log::warn!("{} self-update failed: {}", self.app.name, note.translated(english)),
+                        }
                         // The prompt may have been dismissed meanwhile: bring it back with the reason.
                         if self.prompt.is_none()
                             && let Some(release) = release
                         {
-                            self.prompt = Some(StartupPrompt::new(self.app, release, self.version.clone()));
+                            self.prompt = Some(self.prompt_for(release));
                         }
                         if let Some(prompt) = &mut self.prompt {
                             prompt.is_installing = false;
-                            prompt.status_message = Some(e);
+                            match failure {
+                                Failure::Installer(e) => prompt.set_message(e),
+                                Failure::Updater(note) => prompt.set_note(note),
+                            }
                         }
                     }
                 }
@@ -300,9 +364,9 @@ impl Updater {
                 Action::None
             }
             StartupPromptResponse::Download => {
-                let url = prompt.release.html_url.clone();
+                let action = download_action(self.app, &prompt.release);
                 self.prompt = None;
-                Action::OpenUrl(url)
+                action
             }
             StartupPromptResponse::Later => {
                 // An installation carries on and reports through `tick`.
@@ -316,7 +380,7 @@ impl Updater {
         if can_start {
             self.start_install(ctx);
         } else if let Some(prompt) = &mut self.prompt {
-            prompt.status_message = Some("Save or close your open work first; the update restarts the app.".into());
+            prompt.set_note(Note::new("Save or close your open work first; the update restarts the app.", &[]));
         }
     }
 
@@ -325,25 +389,25 @@ impl Updater {
         if self.install.is_none() && !self.installed && self.read_choice() {
             return;
         }
+        let installed_note = self.installed_note();
         let Some(prompt) = &mut self.prompt else { return };
         if self.installed {
-            prompt.status_message = Some(format!("The update is installed. Close {} to finish; it restarts by itself.", self.app.name));
+            prompt.set_note(installed_note);
             return;
         }
         let Some(installed) = self_update::current(self.app) else {
-            prompt.status_message = Some("Cannot auto-update this installation type. Please download manually.".into());
+            prompt.set_note(Note::new("Cannot auto-update this installation type. Please download manually.", &[]));
             prompt.is_installing = false;
             return;
         };
         prompt.is_installing = true;
-        prompt.status_message = None;
+        prompt.clear_message();
         let (tx, rx) = channel();
         let (app, version, ctx, release) = (self.app, self.version.clone(), ctx.clone(), prompt.release.clone());
         let worker_release = release.clone();
         let spawned = std::thread::Builder::new().name("self-update".into()).spawn(move || {
-            let run = || install(app, &installed, worker_release, &version);
-            let outcome =
-                std::panic::catch_unwind(std::panic::AssertUnwindSafe(run)).unwrap_or_else(|_| Err("the update failed unexpectedly".into()));
+            let run = || install(app, &installed, worker_release, &version).map_err(Failure::Installer);
+            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(run)).unwrap_or_else(|_| Err(Failure::panicked()));
             let _ = tx.send(outcome);
             ctx.request_repaint();
         });
@@ -351,7 +415,7 @@ impl Updater {
             Ok(_) => self.install = Some((rx, release)),
             Err(e) => {
                 prompt.is_installing = false;
-                prompt.status_message = Some(format!("couldn't start the update ({e})"));
+                prompt.set_note(Note::new("Couldn't start the update ({error})", &[("error", &e.to_string())]));
             }
         }
     }
@@ -367,6 +431,19 @@ fn install(app: &'static App, installed: &self_update::Install, mut release: Rel
     let paths = Paths::for_app(app).map_err(|e| format!("could not find paths: {e}"))?;
     let platform = Platform::current().ok_or("unsupported platform for self update")?;
     self_update::update(app, installed, &release, platform, &http, &paths, &Stop::default(), &mut |_| {}, &|| Ok(()), Some(version))
+}
+
+/// Download in the prompt: the release page, when it is a safe web link (an app may build its
+/// `Release` from its own feed or cache, so the link isn't always one GitHub's parser checked).
+/// A link that fails the check falls back to the app's releases page: the prompt has closed, so
+/// Download must still open something.
+fn download_action(app: &App, release: &Release) -> Action {
+    let safe = crate::release::safe_web_link;
+    if safe(&release.html_url) {
+        return Action::OpenUrl(release.html_url.clone());
+    }
+    let releases = app.releases_url();
+    if safe(&releases) { Action::OpenUrl(releases) } else { Action::None }
 }
 
 #[cfg(test)]
@@ -390,6 +467,37 @@ mod tests {
             updater.tick(ctx);
             std::thread::sleep(Duration::from_millis(5));
         }
+    }
+
+    /// #391: Download opens only a safe web link, whoever built the `Release`.
+    #[test]
+    fn download_opens_only_a_safe_release_page() {
+        let with = |url: &str| Release { html_url: url.into(), ..newer() };
+        let page = "https://github.com/storytold/photocraft/releases/tag/v9.0.0";
+        assert_eq!(download_action(&PHOTOCRAFT, &with(page)), Action::OpenUrl(page.into()));
+        let releases = Action::OpenUrl(PHOTOCRAFT.releases_url());
+        for bad in [
+            "",
+            "http://github.com/x",
+            "file:///C:/Windows/system32/calc.exe",
+            "javascript:alert(1)",
+            "https://evil.example/a|calc",
+            "https://user@evil.example/",
+            "https://x.example/a b",
+            "https://github.com/storytold/photocraft/releases/tag/v9&calc",
+        ] {
+            assert_eq!(download_action(&PHOTOCRAFT, &with(bad)), releases, "{bad:?}");
+        }
+    }
+
+    /// #391: the fallback passes the check for every app, so Download always opens a page.
+    #[test]
+    fn every_releases_page_is_a_safe_web_link() {
+        for app in crate::suite::SUITE.iter().chain([&crate::suite::LAUNCHER]) {
+            assert!(crate::release::safe_web_link(&app.releases_url()), "{}", app.id);
+        }
+        let broken = App::new("x", "X", "x", "a|b/c");
+        assert_eq!(download_action(&broken, &Release { html_url: "javascript:x".into(), ..newer() }), Action::None);
     }
 
     pub(super) fn newer() -> Release {
@@ -534,11 +642,57 @@ mod tests {
     fn a_dropped_install_worker_is_an_error() {
         let ctx = egui::Context::default();
         let mut u = updater(Ok(None));
-        let (tx, rx) = channel::<Result<(), String>>();
+        let (tx, rx) = channel::<Result<(), Failure>>();
         u.install = Some((rx, newer()));
         drop(tx);
         u.tick(&ctx);
-        assert!(u.prompt.as_ref().is_some_and(|p| p.status_message.is_some()));
+        assert!(u.prompt.as_ref().is_some_and(|p| p.message().is_some()));
+    }
+
+    /// A translator given after the prompt opened reaches it too.
+    #[test]
+    fn a_translator_given_later_reaches_the_open_prompt() {
+        fn shout(text: &str, args: &[(&str, &str)]) -> String {
+            crate::translate::fill(&text.to_uppercase(), args)
+        }
+        let ctx = egui::Context::default();
+        let mut u = updater(Ok(None));
+        u.offer(newer());
+        u.request_install(&ctx, false);
+        let mut u = u.with_translator(shout);
+        let message = |u: &Updater| u.prompt.as_ref().and_then(StartupPrompt::message).unwrap_or_default();
+        assert!(message(&u).starts_with("SAVE OR CLOSE"), "{}", message(&u));
+        // And the prompts it opens later.
+        u.prompt = None;
+        u.offer(newer());
+        u.request_install(&ctx, false);
+        assert!(message(&u).starts_with("SAVE OR CLOSE"), "{}", message(&u));
+    }
+
+    /// The updater's own failures (a dropped or panicking worker) are in the interface language;
+    /// the installer's are shown as they came.
+    #[test]
+    fn the_updaters_own_failures_are_translated_and_the_installers_are_not() {
+        fn shout(text: &str, args: &[(&str, &str)]) -> String {
+            crate::translate::fill(&text.to_uppercase(), args)
+        }
+        let ctx = egui::Context::default();
+        let message = |u: &Updater| u.prompt.as_ref().and_then(StartupPrompt::message).unwrap_or_default();
+        for (failure, want) in [
+            (Some(Failure::panicked()), "THE UPDATE FAILED UNEXPECTEDLY."),
+            (None, "THE UPDATE STOPPED UNEXPECTEDLY."),
+            (Some("disk full".into()), "disk full"),
+        ] {
+            let mut u = updater(Ok(None)).with_translator(shout);
+            let (tx, rx) = channel();
+            u.install = Some((rx, newer()));
+            match failure {
+                Some(f) => assert!(tx.send(Err(f)).is_ok()),
+                None => drop(tx),
+            }
+            u.tick(&ctx);
+            assert_eq!(message(&u), want);
+        }
     }
 
     #[test]
@@ -564,7 +718,35 @@ mod tests {
         u.offer(newer());
         u.request_install(&ctx, false);
         assert!(u.install.is_none(), "nothing is scheduled while there is unsaved work");
-        assert!(u.prompt.as_ref().is_some_and(|p| !p.is_installing && p.status_message.is_some()));
+        assert!(u.prompt.as_ref().is_some_and(|p| !p.is_installing && p.message().is_some()));
+    }
+
+    /// The updater's own messages follow the interface language while the prompt shows them:
+    /// they are translated when it draws, not when they are set.
+    #[test]
+    fn the_prompts_own_messages_follow_a_language_change() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        static FRENCH: AtomicBool = AtomicBool::new(false);
+        fn translate(text: &str, args: &[(&str, &str)]) -> String {
+            let text = if FRENCH.load(Ordering::Relaxed) { format!("FR {text}") } else { text.to_owned() };
+            crate::translate::fill(&text, args)
+        }
+        let ctx = egui::Context::default();
+        let mut u = updater(Ok(None)).with_translator(translate);
+        u.offer(newer());
+        u.request_install(&ctx, false);
+        let message = |u: &Updater| u.prompt.as_ref().and_then(StartupPrompt::message).unwrap_or_default();
+        assert!(message(&u).starts_with("Save or close"), "{}", message(&u));
+        FRENCH.store(true, Ordering::Relaxed);
+        assert!(message(&u).starts_with("FR Save or close"), "{}", message(&u));
+        // An installed update names the app, in the language of the moment.
+        let (tx, rx) = channel();
+        u.install = Some((rx, newer()));
+        assert!(tx.send(Ok(())).is_ok());
+        u.tick(&ctx);
+        assert!(message(&u).starts_with("FR The update is installed. Close PhotoCraft"), "{}", message(&u));
+        FRENCH.store(false, Ordering::Relaxed);
+        assert!(message(&u).starts_with("The update is installed."), "{}", message(&u));
     }
 
     /// One frame with the updater's prompt drawn.

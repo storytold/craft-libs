@@ -204,6 +204,14 @@ fn read_only_file_makes_the_save_fail_visibly() {
     let (mut store, _) = open_in(tmp.path());
     store.flush().unwrap();
     std::fs::set_permissions(config_path(tmp.path()), std::fs::Permissions::from_mode(0o400)).unwrap();
+    match std::fs::File::options().write(true).open(config_path(tmp.path())) {
+        Ok(_) => {
+            eprintln!("skipping permission test: environment permits writes into a 0400 file");
+            return;
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {}
+        Err(error) => panic!("unexpected file write-probe failure: {error}"),
+    }
     store.update(|p| p.general.language = "fr".into());
     let r = store.tick(Instant::now() + Duration::from_secs(1));
     assert!(matches!(r.status, SaveStatus::Failed(craft_settings::SettingsError::Io(_))), "{r:?}");
