@@ -91,7 +91,7 @@ impl Dictionary {
     }
 
     /// Serialize (deflate-compressed).
-    pub fn to_bytes(&self) -> Vec<u8> {
+    pub fn to_bytes(&self) -> Result<Vec<u8>, String> {
         let mut raw = MAGIC.to_vec();
         let mut prev: Vec<u8> = Vec::new();
         for (w, m) in self.iter() {
@@ -102,7 +102,11 @@ impl Dictionary {
             raw.push(b'\n');
             prev = h;
         }
-        miniz_oxide::deflate::compress_to_vec(&raw, 10)
+        // decode refuses anything past MAX_INFLATED, so refuse to write it
+        if raw.len() > MAX_INFLATED {
+            return Err(format!("hyphenation dictionary: {} bytes exceeds the {MAX_INFLATED}-byte limit", raw.len()));
+        }
+        Ok(miniz_oxide::deflate::compress_to_vec(&raw, 10))
     }
 
     /// Deserialize data written by [`Dictionary::to_bytes`].
@@ -155,7 +159,7 @@ mod tests {
     fn roundtrip() {
         let e: Vec<(String, u64)> = ["ty-pog-ra-phy", "cat", "hap-pen", "o'clock", "naïve-té", "naïve"].iter().map(|s| parse_hyphenated(s)).collect();
         let d = Dictionary::from_entries(e);
-        let back = Dictionary::from_bytes(&d.to_bytes()).unwrap();
+        let back = Dictionary::from_bytes(&d.to_bytes().unwrap()).unwrap();
         assert_eq!(back.len(), 6);
         assert_eq!(back.get("typography").map(|m| hyphenated("typography", m)), Some("ty-pog-ra-phy".to_string()));
         assert_eq!(back.get("cat"), Some(0));
