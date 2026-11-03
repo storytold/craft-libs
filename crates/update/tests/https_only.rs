@@ -1,3 +1,5 @@
+#![cfg(feature = "native")]
+
 //! `Http::new` as an app gets it: an integration test builds the library without `cfg(test)`, so
 //! this is the release configuration (or the `local-mirror` one, with that feature on).
 
