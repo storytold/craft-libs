@@ -109,7 +109,9 @@ mod tests {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt as _;
-            assert_eq!(std::fs::metadata(a.path()).unwrap().permissions().mode() & 0o077, 0);
+            let mode = std::fs::metadata(a.path()).unwrap().permissions().mode();
+            assert_eq!(mode & 0o077, 0);
+            assert_ne!(mode & 0o200, 0, "owner must be able to write");
         }
         let path = a.path().to_path_buf();
         drop(a);
