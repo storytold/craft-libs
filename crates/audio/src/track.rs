@@ -31,7 +31,7 @@ enum Inner {
 /// for p in packets {
 ///     let block = match dec.decode(p) {
 ///         Ok(block) => block,
-///         Err(_) => dec.conceal(Some(p)), // keep the timing across a damaged packet
+///         Err(_) => dec.conceal(Some(p))?, // keep the timing across a damaged packet
 ///     };
 ///     // block.channels: one Vec<f32> per channel
 /// }
@@ -132,18 +132,24 @@ impl TrackDecoder {
 
     /// What stands in for a lost or undecodable packet (`packet` when its bytes are at hand):
     /// silence as long as the packet would have been (from its size, or the last packet). Empty
-    /// when the length is unknown. A packet past the decode limit ([`decode`](Self::decode)'s
-    /// `TooLarge`, over 2^30 samples) is concealed with silence of that limit's length.
-    pub fn conceal(&mut self, packet: Option<&[u8]>) -> AudioBuffer {
+    /// when the length is unknown. Fails with [`AudioError::TooLarge`](crate::AudioError::TooLarge)
+    /// when that silence would pass the decode limit (2^30 samples, as [`decode`](Self::decode)
+    /// has) or cannot be allocated, rather than return less than the packet's length.
+    pub fn conceal(&mut self, packet: Option<&[u8]>) -> Result<AudioBuffer> {
         let data = packet.unwrap_or_default();
         let frames = match &mut self.inner {
             Inner::Pcm { kind, channels } => Some(data.len() / (kind.bytes() * *channels).max(1)),
         };
         let frames = frames.filter(|&n| n > 0).unwrap_or(self.last_frames);
-        // bounded like a decoded packet: a packet too large to decode is not too large to conceal
         let channels = usize::from(self.layout.channels());
-        let frames = frames.min(usize::try_from(crate::pcm::MAX_DECODE_SAMPLES).unwrap_or(usize::MAX) / channels.max(1));
-        AudioBuffer { sample_rate: self.sample_rate, channels: vec![vec![0.0; frames]; channels] }
+        let total = (frames as u64).saturating_mul(channels as u64);
+        if total > crate::pcm::MAX_DECODE_SAMPLES {
+            return Err(AudioError::TooLarge(format!(
+                "{total} samples of concealment exceed the {}-sample decode limit",
+                crate::pcm::MAX_DECODE_SAMPLES
+            )));
+        }
+        Ok(AudioBuffer { sample_rate: self.sample_rate, channels: crate::pcm::silence(channels, frames)? })
     }
 
     /// The frames every packet decodes to, for codecs whose packets all have one length; `None`
@@ -210,7 +216,7 @@ mod tests {
         assert_eq!((dec.codec(), dec.sample_rate(), dec.layout()), (CodecId::Pcm, 48_000, ChannelLayout::STEREO));
         let block = dec.decode(&[0x00, 0x40, 0x00, 0xC0]).unwrap();
         assert_eq!(block.channels, vec![vec![0.5], vec![-0.5]]);
-        assert_eq!(dec.conceal(None).frames(), 1);
+        assert_eq!(dec.conceal(None).unwrap().frames(), 1);
     }
 
     #[test]

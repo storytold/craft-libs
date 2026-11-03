@@ -25,7 +25,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut frames = 0;
     for p in &packets {
         // A damaged packet is replaced by concealment of its length, so the timeline holds.
-        let block = dec.decode(p).unwrap_or_else(|_| dec.conceal(Some(p)));
+        let block = dec.decode(p).or_else(|_| dec.conceal(Some(p)))?;
         frames += block.frames();
     }
     // Container timing (the edit list's priming) is the caller's to apply; `decode` does it.

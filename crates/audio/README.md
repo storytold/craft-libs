@@ -160,7 +160,7 @@ let params = CodecParams::new(CodecId::Pcm).with_pcm(PcmFormat::int(24, true, tr
 let lookahead: Vec<&[u8]> = packets.iter().take(craft_audio::LOOKAHEAD_PACKETS).map(Vec::as_slice).collect();
 let mut dec = TrackDecoder::new(&params, &lookahead)?;
 for p in &packets {
-    let block = dec.decode(p).unwrap_or_else(|_| dec.conceal(Some(p)));
+    let block = dec.decode(p).or_else(|_| dec.conceal(Some(p)))?;
 }
 ```
 

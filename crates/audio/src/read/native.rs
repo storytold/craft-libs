@@ -277,14 +277,14 @@ impl<'a> Native<'a> {
                     }
                     Err(e) => {
                         self.error(e)?;
-                        (self.dec.conceal(Some(&p.data)), p.trim_end)
+                        (self.dec.conceal(Some(&p.data))?, p.trim_end)
                     }
                 },
                 // The source failing is not damage in the file: the caller decides whether to retry.
                 Err(e @ AudioError::Io(_)) => return Err(e),
                 Err(e) => {
                     self.error(e)?;
-                    (self.dec.conceal(None), 0)
+                    (self.dec.conceal(None)?, 0)
                 }
             };
             if let Some(out) = self.present(block, trim_end) {

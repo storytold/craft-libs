@@ -122,7 +122,6 @@ pub(crate) fn planar(channels: usize, frames: usize) -> Result<Vec<Vec<f32>>> {
 }
 
 /// `channels` channels of `frames` samples of silence, allocated fallibly.
-#[cfg(feature = "symphonia")]
 pub(crate) fn silence(channels: usize, frames: usize) -> Result<Vec<Vec<f32>>> {
     let mut out = planar(channels, frames)?;
     for ch in &mut out {
