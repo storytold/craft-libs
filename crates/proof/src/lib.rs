@@ -1711,7 +1711,7 @@ mod tests {
             ],
         );
         packs::set_packs_dir(Some(root.clone()));
-        assert!(nl.is_proofed() && has_dictionary(Some("nl-BE")) && !has_dictionary(Some("fr-FR")));
+        assert!(nl.is_proofed() && has_dictionary(Some("nl-BE")) && !has_dictionary(Some("zxx")));
         assert_eq!(pack_dictionary_file(nl), Some(pack.join("spelling.dic")));
         assert_eq!(pack_dictionary_file(ProofLang::from_tag(Some("nl"))), Some(pack.join("spelling.dic")), "a region falls back to the pack");
         for w in ["huis", "Huis", "huizen", "huisen", "fietsen", "HUIS"] {
@@ -1727,8 +1727,17 @@ mod tests {
         assert!(suggest_in("fietz", 5, nl).contains(&"fiets".to_string()), "{:?}", suggest_in("fietz", 5, nl));
         assert!(check_grammar_in("de de huis", nl).is_empty(), "no grammar rules");
         assert_eq!(hyphen::hyphenate_word_in("xxnaxx", &hyphen::Limits::default(), nl), "xx-naxx");
-        assert!(unchecked(ProofLang::from_tag(Some("fr-FR"))), "a language with no pack stays unchecked");
+        assert!(unchecked(ProofLang::from_tag(Some("zxx"))), "explicitly unchecked content stays unchecked");
         assert_eq!(check_text(text, &[]), english_before, "English is unaffected");
+        // French can be installed on the host too; it must not be an absence fixture.
+        // A synthetic pack gives this assertion the same answer on every platform.
+        let fr = ProofLang::from_tag(Some("fr-FR"));
+        let french = write_pack(&root, "fr", &[("spelling.aff", b"SET UTF-8\n"), ("spelling.dic", "2\nbonjour\nélève\n".as_bytes())]);
+        packs::reload();
+        assert!(has_dictionary(Some("fr-FR")));
+        assert_eq!(pack_dictionary_file(fr), Some(french.join("spelling.dic")));
+        assert!(is_correct_for("bonjour", Some("fr-FR")));
+        assert!(!is_correct_for("zxqnotfrench", Some("fr-FR")), "a supported language must not be silently bypassed");
         // A broken dictionary is reported, never a panic.
         std::fs::write(pack.join("spelling.aff"), "SET SHIFT_JIS\n").unwrap();
         packs::reload();
@@ -3082,7 +3091,9 @@ mod tests {
         for l in [None, Some(""), Some("  "), Some("en"), Some("en-US"), Some("en-GB"), Some("EN-us"), Some("en_US")] {
             assert!(has_dictionary(l), "{l:?}");
         }
-        for l in [Some("lt-LT"), Some("fr-FR"), Some("de"), Some("uk"), Some("-US"), Some("e")] {
+        // Real languages may have an embedded, downloaded or system dictionary.
+        // Non-linguistic content and invalid/unknown tags are stable absence fixtures.
+        for l in [Some("zxx"), Some("zz-ZZ"), Some("-US"), Some("e")] {
             assert!(!has_dictionary(l), "{l:?}");
         }
         // The gate follows the dictionaries, not English: every proofed language is proofed.
@@ -3155,8 +3166,8 @@ mod tests {
     #[test]
     fn non_english_words_are_not_flagged() {
         for w in ["ąžuolas", "élève", "über", "labas", "bonjour"] {
-            assert!(is_correct_for(w, Some("lt-LT")), "{w}");
-            assert!(is_correct_for(w, Some("fr-FR")), "{w}");
+            assert!(is_correct_for(w, Some("zxx")), "{w}");
+            assert!(is_correct_for(w, Some("zz-ZZ")), "{w}");
         }
         assert!(!is_correct_for("helo", Some("en-US")), "English typos still flagged");
         assert!(!is_correct_for("helo", None), "default language still proofed");
