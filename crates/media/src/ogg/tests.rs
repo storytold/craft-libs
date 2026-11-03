@@ -595,9 +595,39 @@ fn stated_header_counts_are_capped() {
         let (l, b) = lace(&[&b"pk"[..]; 220], false);
         page(&mut f, 0, 0, 4, seq, &l, &b);
     }
-    let o = open(&f).unwrap();
+    let src = Counted(f, Default::default());
+    let o = open(&src).unwrap();
     assert_eq!((o.streams[0].headers.len(), o.streams[0].packets.len()), (MAX_HEADERS, 1101 - MAX_HEADERS));
     assert!(o.warnings.iter().any(|w| w.contains("header packets beyond")), "{:?}", o.warnings);
+    // each page once, and each header once more: the first packet is not read twice, and the
+    // packet past the cap is not read at all
+    let headers: usize = o.streams[0].headers.iter().map(Vec::len).sum();
+    assert_eq!(src.1.get(), src.len() + headers as u64);
+}
+
+#[test]
+fn header_bytes_hold_two_of_the_largest_flac_metadata_blocks() {
+    const { assert!(MAX_HEADER_BYTES >= 2 * (4 + (1 << 24) - 1) + (64 << 10)) }
+}
+
+#[test]
+fn a_scan_span_of_4_gib_still_advances() {
+    // zeros but for a capture pattern at 1000, in a source 2^32 + 3 bytes long: a span cast to
+    // `usize` before it was clamped would be 0 on a 32-bit target, and the scan would not move
+    struct Sparse;
+    impl ByteSource for Sparse {
+        fn len(&self) -> u64 {
+            (1 << 32) + 3
+        }
+        fn read_at(&self, offset: u64, buf: &mut [u8]) -> io::Result<()> {
+            for (i, b) in buf.iter_mut().enumerate() {
+                *b = b"OggS".get((offset + i as u64).wrapping_sub(1000) as usize).copied().unwrap_or(0);
+            }
+            Ok(())
+        }
+    }
+    let mut r = Recovery::new(Sparse.len());
+    assert_eq!(find_capture(&Sparse, 0, Sparse.len(), &mut r).unwrap(), Capture::At(1000));
 }
 
 #[test]

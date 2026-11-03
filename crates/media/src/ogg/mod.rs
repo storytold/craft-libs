@@ -148,9 +148,12 @@ impl Codec {
     }
 }
 
-/// The most header bytes kept for one stream: room for the largest FLAC metadata block (2^24
-/// bytes, such as a picture) twice over.
-const MAX_HEADER_BYTES: usize = 32 << 20;
+/// The most header bytes kept for one stream: room for two of the largest FLAC metadata blocks (a
+/// 4-byte block header and up to 2^24 - 1 bytes, such as a picture) and the rest of the headers.
+const MAX_HEADER_BYTES: usize = 64 << 20;
+/// Bytes of a stream's first packet that identify its codec and header count (the Speex header's
+/// `extra_headers` field ends at 72).
+const FIRST_PACKET_PREFIX: usize = 80;
 
 /// Header packets of an Ogg FLAC stream, from its first packet (0x7F "FLAC", version, a 16-bit
 /// big-endian count of the header packets after it, then `fLaC` and STREAMINFO): that count plus
@@ -281,28 +284,36 @@ impl Stream {
     /// File a completed packet: the first one sets the codec and how many headers follow it, then
     /// header packets are read in, and the rest are audio.
     fn add_packet(&mut self, src: &(impl ByteSource + ?Sized), pk: Packet, warnings: &mut Warnings) -> Result<()> {
+        let size = pk.size as usize;
+        // the first packet is read once: for its codec, and then as a header (a packet too large
+        // to be one is only read as far as the codec needs)
+        let mut first = None;
         if self.headers.is_empty() && self.packets.is_empty() {
-            let data = read_parts(src, &pk.parts)?;
+            let data = read_parts(src, &pk.parts, if size <= MAX_HEADER_BYTES { size } else { FIRST_PACKET_PREFIX })?;
             self.codec = Codec::of(&data);
             self.header_count = match self.codec {
                 Codec::Flac => flac_header_count(&data),
                 Codec::Speex => speex_header_count(&data),
                 c => c.header_count(),
             };
+            first = Some(data).filter(|d| d.len() == size);
         }
         if self.headers.len() >= self.header_count || !self.packets.is_empty() {
             self.packets.push(pk);
             return Ok(());
         }
-        let data = read_parts(src, &pk.parts)?;
         // a count the file states (FLAC, Speex) or leaves open is capped, so a hostile first
-        // packet cannot turn the audio into headers
-        if self.headers.len() >= MAX_HEADERS || self.header_bytes.saturating_add(data.len()) > MAX_HEADER_BYTES {
+        // packet cannot turn the audio into headers; a packet past the cap is not read
+        if self.headers.len() >= MAX_HEADERS || self.header_bytes.saturating_add(size) > MAX_HEADER_BYTES {
             warnings.push(format!("stream {}: header packets beyond {MAX_HEADERS} or {MAX_HEADER_BYTES} bytes read as data", self.serial));
             self.header_count = self.headers.len();
             self.packets.push(pk);
             return Ok(());
         }
+        let data = match first {
+            Some(data) => data,
+            None => read_parts(src, &pk.parts, size)?,
+        };
         if self.header_count == usize::MAX && !self.headers.is_empty() {
             // FLAC with an unstated count: metadata packets run to the one flagged last. A packet
             // that is no metadata block (an audio frame starts with 0xFF) ends them, so audio is
@@ -381,11 +392,13 @@ impl Warnings {
     }
 }
 
-/// The cost of damage recovery. Every read of [`open`] is charged here: the first read of a byte is
-/// free, and bytes read again (scanning through the body of a page that failed its CRC, a scan's
-/// read past the pattern it found, the overlapping bodies of fake page headers) are charged to a
-/// budget of twice the file's length plus `RECOVERY_ALLOWANCE`. A file is then read at most about
-/// three times over, and damage costs a large file no more, in proportion, than a small one.
+/// The cost of damage recovery. Every read of a page or a scan in [`open`] is charged here: the
+/// first read of a byte is free, and bytes read again (scanning through the body of a page that
+/// failed its CRC, a scan's read past the pattern it found, the overlapping bodies of fake page
+/// headers) are charged to a budget of twice the file's length plus `RECOVERY_ALLOWANCE`. Pages
+/// are then read at most about three times over, and damage costs a large file no more, in
+/// proportion, than a small one. Header packets are read once more when they are filed; packets do
+/// not overlap, so that adds at most the file's length.
 struct Recovery {
     budget: u64,
     /// Bytes before this offset have been read.
@@ -632,7 +645,8 @@ fn find_capture(src: &(impl ByteSource + ?Sized), from: u64, len: u64, recovery:
     let mut chunk = 256;
     let mut buf = Vec::new();
     while at + 4 <= len {
-        let positions = ((len - at - 3) as usize).min(chunk);
+        // clamped before the cast, so a span of 2^32 bytes cannot truncate to 0 on 32-bit targets
+        let positions = (len - at - 3).min(chunk as u64) as usize;
         let n = positions + 3;
         buf.resize(n, 0);
         src.read_at(at, &mut buf[..n])?;
@@ -648,11 +662,15 @@ fn find_capture(src: &(impl ByteSource + ?Sized), from: u64, len: u64, recovery:
     Ok(Capture::End)
 }
 
-fn read_parts(src: &(impl ByteSource + ?Sized), parts: &[(u64, u32)]) -> Result<Vec<u8>> {
-    let mut v = Vec::with_capacity(parts.iter().map(|p| p.1 as usize).sum());
+/// The first `max` bytes of a packet's parts.
+fn read_parts(src: &(impl ByteSource + ?Sized), parts: &[(u64, u32)], max: usize) -> Result<Vec<u8>> {
+    let mut v = Vec::with_capacity(parts.iter().map(|p| p.1 as usize).sum::<usize>().min(max));
     for &(o, n) in parts {
         let a = v.len();
-        v.resize(a + n as usize, 0);
+        if a == max {
+            break;
+        }
+        v.resize(a + (n as usize).min(max - a), 0);
         src.read_at(o, &mut v[a..])?;
     }
     Ok(v)
@@ -666,7 +684,7 @@ impl OggFile {
     /// The bytes of packet `i` of stream `s`.
     pub fn read_packet(&self, src: &(impl ByteSource + ?Sized), s: usize, i: usize) -> Result<Vec<u8>> {
         let p = self.streams.get(s).and_then(|st| st.packets.get(i)).ok_or_else(|| Error::Invalid(format!("no packet {i} in stream {s}")))?;
-        read_parts(src, &p.parts)
+        read_parts(src, &p.parts, usize::MAX)
     }
 }
 
