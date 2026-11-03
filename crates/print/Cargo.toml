@@ -24,8 +24,10 @@ log = "0.4"
 # PrintTicket) are safe wrappers over Win32 and WinRT (BSD-3-Clause). Its default `pdfium`
 # feature downloads PDFium at build time and is off. The maintained BSD-3-Clause fork
 # preserves terminal failures/cancellation and bounds the completion notification wait.
-# Pinned to an immutable revision; review before bumping.
-winprint = { git = "https://github.com/storytold/winprint.rs", rev = "5f80b9baf6b58937c401656634e42d33f00ddf49", default-features = false }
+# It also draws each page at the job's resolution rather than at ~96 dpi on the sheet
+# (storytold/winprint.rs#7, storytold/pdfcraft#4941). Pinned to an immutable revision;
+# review before bumping.
+winprint = { git = "https://github.com/storytold/winprint.rs", rev = "f6231139b1af7a78635c7971cdf4f2aba4170b87", default-features = false }
 # GetDefaultPrinter (MIT).
 winsafe = { version = "0.0.29", default-features = false, features = ["winspool"] }
 # The job file's private folder.
