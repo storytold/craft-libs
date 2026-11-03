@@ -756,3 +756,71 @@ fn served_faces_carry_the_characters_their_cmap_maps() {
     assert!(table.contains(r#"family: "Broken""#) && table.ends_with("coverage: b\"\" },\n]\n"), "{table}");
     assert!(warnings(&r).iter().any(|w| w.contains("no character map in fonts/1.ttf")), "{:?}", warnings(&r));
 }
+
+#[test]
+fn manifest_paths_stay_inside_the_checkout() {
+    let scratch = Scratch::new("outside");
+    let dir = scratch.0.join("craft-fonts");
+    std::fs::create_dir_all(dir.join("fonts")).unwrap();
+    std::fs::write(dir.join("fonts/a.ttf"), b"a").unwrap();
+    std::fs::write(dir.join("fonts/OFL.txt"), b"licence").unwrap();
+    let secret = scratch.0.join("secret.txt");
+    std::fs::write(&secret, b"host file").unwrap();
+    let served = scratch.0.join("served");
+    let line = |file: &str, licence: &str| format!("Sans | Regular | {file} | Latn | OFL-1.1 | {licence} | 00 | src\n");
+    let outside = |r: &Run| matches!(r.result, Err(Error::OutsideCheckout { .. }));
+
+    // Parent components and absolute paths, for the face and for its licence, embedded or served.
+    for (file, licence) in [
+        ("../secret.txt", "fonts/OFL.txt"),
+        (secret.to_str().unwrap(), "fonts/OFL.txt"),
+        ("fonts/../../secret.txt", "fonts/OFL.txt"),
+        ("fonts/a.ttf", "../secret.txt"),
+        ("fonts/a.ttf", secret.to_str().unwrap()),
+    ] {
+        std::fs::write(dir.join("fonts/manifest.txt"), line(file, licence)).unwrap();
+        let r = run(Embed::new(), Some(&dir), None);
+        assert!(r.result.is_ok() && !r.table.contains("include_bytes!"), "{file} {licence}: {:?} {}", r.result, r.table);
+        assert!(warnings(&r).iter().any(|w| w.contains("not a file inside the checkout")), "{file} {licence}: {:?}", r.cargo);
+        assert!(outside(&run(Embed::new(), Some(&dir), Some("1"))), "{file} {licence}");
+        assert!(outside(&run(Embed::new().serve(&served, "fonts/"), Some(&dir), Some("1"))), "{file} {licence}");
+    }
+    assert!(!served.exists());
+
+    // A symlink in the checkout that leads out of it.
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(&secret, dir.join("fonts/link.ttf")).unwrap();
+        std::os::unix::fs::symlink(&secret, dir.join("fonts/LINK.txt")).unwrap();
+        std::fs::write(dir.join("fonts/manifest.txt"), line("fonts/link.ttf", "fonts/OFL.txt")).unwrap();
+        assert!(outside(&run(Embed::new(), Some(&dir), Some("1"))));
+        std::fs::write(dir.join("fonts/manifest.txt"), line("fonts/a.ttf", "fonts/LINK.txt")).unwrap();
+        assert!(outside(&run(Embed::new(), Some(&dir), Some("1"))));
+        assert!(outside(&run(Embed::new().serve(&served, "fonts/"), Some(&dir), Some("1"))));
+        assert!(!served.join("LINK.txt").exists());
+
+        // An embedded_elsewhere face behind such a symlink is not read for coverage.
+        let text = scratch.0.join("text.ftl");
+        std::fs::write(&text, "x = a\n").unwrap();
+        let manifest =
+            format!("{}Mono | Regular | fonts/link.ttf | Latn | OFL-1.1 | fonts/OFL.txt | 00 | src\n", line("fonts/a.ttf", "fonts/OFL.txt"));
+        std::fs::write(dir.join("fonts/manifest.txt"), manifest).unwrap();
+        let r = run(Embed::documents(&["Sans"]).embedded_elsewhere(&["Mono"]).check_text([&text]), Some(&dir), None);
+        assert!(warnings(&r).iter().any(|w| w.contains("\"fonts/link.ttf\" is not a file inside the checkout")), "{:?}", r.cargo);
+
+        // A symlink in the served directory doesn't redirect the copy.
+        std::fs::write(dir.join("fonts/manifest.txt"), line("fonts/a.ttf", "fonts/OFL.txt")).unwrap();
+        std::fs::create_dir_all(&served).unwrap();
+        std::os::unix::fs::symlink(&secret, served.join("OFL.txt")).unwrap();
+        let r = run(Embed::new().serve(&served, "fonts/"), Some(&dir), Some("1"));
+        assert!(matches!(r.result, Err(Error::Write { .. })), "{:?}", r.result);
+        assert_eq!(std::fs::read(&secret).unwrap(), b"host file");
+        std::fs::remove_file(served.join("OFL.txt")).unwrap();
+    }
+
+    // A plain checkout path still embeds and serves.
+    std::fs::write(dir.join("fonts/manifest.txt"), line("fonts/a.ttf", "fonts/OFL.txt")).unwrap();
+    assert_eq!(run(Embed::new(), Some(&dir), Some("1")).result.unwrap(), ["Sans Regular"]);
+    run(Embed::new().serve(&served, "fonts/"), Some(&dir), Some("1")).result.unwrap();
+    assert_eq!(std::fs::read(served.join("OFL.txt")).unwrap(), b"licence");
+}
