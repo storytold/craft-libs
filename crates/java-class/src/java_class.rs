@@ -275,23 +275,9 @@ fn decode_mutf8(bytes: &[u8]) -> String {
     let mut units: Vec<u16> = Vec::new();
     let mut i = 0usize;
     while i < bytes.len() {
-        let Some(&b0) = bytes.get(i) else { break };
-        if b0 < 0x80 {
-            units.push(u16::from(b0));
-            i += 1;
-        } else if b0 & 0xe0 == 0xc0 {
-            let b1 = bytes.get(i + 1).copied().unwrap_or(0);
-            units.push((u16::from(b0 & 0x1f) << 6) | u16::from(b1 & 0x3f));
-            i += 2;
-        } else if b0 & 0xf0 == 0xe0 {
-            let b1 = bytes.get(i + 1).copied().unwrap_or(0);
-            let b2 = bytes.get(i + 2).copied().unwrap_or(0);
-            units.push((u16::from(b0 & 0x0f) << 12) | (u16::from(b1 & 0x3f) << 6) | u16::from(b2 & 0x3f));
-            i += 3;
-        } else {
-            units.push(0xfffd);
-            i += 1;
-        }
+        let (unit, consumed) = crate::bytes::mutf8_unit(bytes.get(i..).unwrap_or_default());
+        units.push(unit);
+        i += consumed;
     }
     String::from_utf16_lossy(&units)
 }
