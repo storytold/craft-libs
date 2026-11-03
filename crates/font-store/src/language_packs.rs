@@ -125,6 +125,9 @@ pub struct InstalledLanguagePack {
 struct Installed {
     version: u32,
     packs: Vec<InstalledLanguagePack>,
+    /// Committed backup IDs, recorded atomically with removing their pack entries.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    committed_removals: Vec<String>,
 }
 
 impl PackIndex {
@@ -442,20 +445,63 @@ impl FontStore {
         if !is_locale(locale) {
             return Err(Error::NotInstalled(locale.chars().take(40).collect()));
         }
-        let stage = Stage::new(self.dir())?;
         let _lock = self.lock()?;
         let dest = self.language_packs_dir().join(locale);
         let mut installed = self.read_installed()?;
         let known = installed.packs.iter().any(|p| p.locale == locale);
-        if !known && std::fs::symlink_metadata(&dest).is_err() {
+        let has_folder = std::fs::symlink_metadata(&dest).is_ok();
+        if !known && !has_folder {
             return Err(Error::NotInstalled(locale.to_string()));
         }
-        if std::fs::symlink_metadata(&dest).is_ok() {
-            std::fs::rename(&dest, stage.dir.join(locale)).map_err(io(format!("removing the {locale} pack")))?;
+        let stage = self.language_pack_removal_stage(&installed.committed_removals)?;
+        let backup = stage.dir.join(locale);
+        if has_folder {
+            let id = stage
+                .dir
+                .file_name()
+                .and_then(|name| name.to_str())
+                .filter(|name| Stage::valid_name(name))
+                .ok_or_else(|| io("recording a Language pack removal")(std::io::Error::other("invalid backup name")))?
+                .to_string();
+            std::fs::rename(&dest, &backup).map_err(io(format!("removing the {locale} pack")))?;
+            installed.committed_removals.push(id);
         }
         installed.packs.retain(|p| p.locale != locale);
-        self.write_installed(&installed)
-        // `stage` deletes the old folder when dropped.
+        finish_pack_removal(stage, &backup, &dest, has_folder, self.write_installed(&installed))
+    }
+
+    fn language_pack_removal_stage(&self, excluded: &[String]) -> Result<Stage, Error> {
+        // A failed rollback or interrupted removal must not lose its backup to the download
+        // sweep. Locale scans ignore this hidden directory.
+        Stage::in_dir_excluding(&self.pack_removal_dir()?, excluded)
+    }
+
+    fn pack_removal_dir(&self) -> Result<PathBuf, Error> {
+        let parent = self.language_packs_dir().join(".removing");
+        match std::fs::symlink_metadata(&parent) {
+            Ok(metadata) if !metadata.is_dir() || metadata.file_type().is_symlink() => {
+                return Err(io("using the Language pack recovery folder")(std::io::Error::other("not a plain directory")));
+            }
+            Err(error) if error.kind() != std::io::ErrorKind::NotFound => return Err(io("reading the Language pack recovery folder")(error)),
+            _ => {}
+        }
+        Ok(parent)
+    }
+
+    /// Called only after acquiring the store lock: a snapshot must not delete a newly reused ID.
+    pub(crate) fn sweep_committed_pack_removals(&self) {
+        let Some(installed) = self.read_record() else { return };
+        if installed.version != 1 {
+            return;
+        }
+        let Ok(parent) = self.pack_removal_dir() else { return };
+        for id in installed.committed_removals {
+            if let Err(error) = std::fs::remove_dir_all(parent.join(&id))
+                && error.kind() != std::io::ErrorKind::NotFound
+            {
+                log::warn!("cannot clean up committed Language pack removal {id}: {error}");
+            }
+        }
     }
 
     /// The record of installed packs. One that can't be read is copied aside as
@@ -482,7 +528,8 @@ impl FontStore {
 
     /// The record as written, if there is one that can be read.
     fn read_record(&self) -> Option<Installed> {
-        read_limited(&self.dir().join(INSTALLED), MAX_PACK_INDEX_BYTES).and_then(|b| serde_json::from_slice::<Installed>(&b).ok())
+        let installed: Installed = read_limited(&self.dir().join(INSTALLED), MAX_PACK_INDEX_BYTES).and_then(|b| serde_json::from_slice(&b).ok())?;
+        installed.committed_removals.iter().all(|name| Stage::valid_name(name)).then_some(installed)
     }
 
     /// The installed packs as their folders say: each folder named by a locale, with the name
@@ -512,14 +559,40 @@ impl FontStore {
             })
             .collect();
         packs.sort_by(|a, b| a.locale.cmp(&b.locale));
-        Installed { version: 1, packs }
+        Installed { version: 1, packs, committed_removals: Vec::new() }
     }
 
     fn write_installed(&self, installed: &Installed) -> Result<(), Error> {
-        let bytes = serde_json::to_vec_pretty(&Installed { version: 1, packs: installed.packs.clone() })
+        let parent = self.language_packs_dir().join(".removing");
+        // Keep receipts until their backup has actually disappeared. A future locked sweep
+        // retries failed cleanup, and stage creation excludes IDs whose receipts remain.
+        let committed_removals = installed
+            .committed_removals
+            .iter()
+            .filter(|id| {
+                Stage::valid_name(id)
+                    && !matches!(std::fs::symlink_metadata(parent.join(id)), Err(error) if error.kind() == std::io::ErrorKind::NotFound)
+            })
+            .cloned()
+            .collect();
+        let bytes = serde_json::to_vec_pretty(&Installed { version: 1, packs: installed.packs.clone(), committed_removals })
             .map_err(|e| io("saving the Language pack list")(std::io::Error::other(e)))?;
         self.write_file(INSTALLED, &bytes)
     }
+}
+
+fn finish_pack_removal(stage: Stage, backup: &Path, dest: &Path, moved: bool, saved: Result<(), Error>) -> Result<(), Error> {
+    if let Err(error) = saved {
+        if moved && let Err(restore) = std::fs::rename(backup, dest) {
+            stage.keep_for_recovery();
+            return Err(io(format!("saving the Language pack list failed ({error}); the original pack is preserved at {}", backup.display()))(
+                restore,
+            ));
+        }
+        return Err(error);
+    }
+    // The record committed the removal; dropping the stage cleans up its old files.
+    Ok(())
 }
 
 /// The zstd frames of `archive` one after another, as one stream (`zstd` writes one frame, but

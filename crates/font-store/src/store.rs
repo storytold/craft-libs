@@ -718,6 +718,7 @@ impl FontStore {
         std::fs::create_dir_all(&self.dir).map_err(io("creating the font store folder"))?;
         let file = File::options().create(true).truncate(false).write(true).open(self.dir.join(LOCK)).map_err(io("locking the font store"))?;
         file.lock().map_err(io("locking the font store"))?;
+        self.sweep_committed_pack_removals();
         Ok(file)
     }
 
@@ -831,29 +832,54 @@ fn host(url: &str) -> &str {
     url.split("://").nth(1).and_then(|r| r.split('/').next()).unwrap_or(url)
 }
 
-/// A folder of downloads under `.staging`, deleted when dropped.
+/// A temporary folder, deleted when dropped unless kept for recovery.
 pub(crate) struct Stage {
     pub(crate) dir: PathBuf,
+    remove_on_drop: bool,
 }
 
 impl Stage {
     pub(crate) fn new(store: &Path) -> Result<Self, Error> {
+        Self::in_dir(&store.join(STAGING))
+    }
+
+    pub(crate) fn in_dir(staging: &Path) -> Result<Self, Error> {
+        Self::in_dir_excluding(staging, &[])
+    }
+
+    pub(crate) fn in_dir_excluding(staging: &Path, excluded: &[String]) -> Result<Self, Error> {
         static N: AtomicU64 = AtomicU64::new(0);
-        let staging = store.join(STAGING);
-        std::fs::create_dir_all(&staging).map_err(io("creating a download folder"))?;
+        Self::create_in(staging, excluded, std::iter::repeat_with(|| format!("{}-{}", std::process::id(), N.fetch_add(1, Ordering::Relaxed))))
+    }
+
+    pub(crate) fn valid_name(name: &str) -> bool {
+        name.split_once('-').is_some_and(|(pid, counter)| pid.parse::<u32>().is_ok() && counter.parse::<u64>().is_ok())
+    }
+
+    /// The candidate iterator also lets tests reproduce a restarted PID/counter sequence.
+    pub(crate) fn create_in(staging: &Path, excluded: &[String], names: impl Iterator<Item = String>) -> Result<Self, Error> {
+        std::fs::create_dir_all(staging).map_err(io("creating a temporary folder"))?;
         // A folder of that name may be another process's (PID namespaces in Flatpak or
         // containers repeat ids) or a stale one: never touched here, the next name is taken
-        // (stale ones go in `sweep_staging`).
+        // (`sweep_staging` handles ordinary download staging, not recovery folders).
         let mut last = None;
-        for _ in 0..1000 {
-            let dir = staging.join(format!("{}-{}", std::process::id(), N.fetch_add(1, Ordering::Relaxed)));
+        for name in names.take(1000) {
+            if !Self::valid_name(&name) || excluded.contains(&name) {
+                continue;
+            }
+            let dir = staging.join(name);
             match std::fs::create_dir(&dir) {
-                Ok(()) => return Ok(Self { dir }),
+                Ok(()) => return Ok(Self { dir, remove_on_drop: true }),
                 Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => last = Some(e),
-                Err(e) => return Err(io("creating a download folder")(e)),
+                Err(e) => return Err(io("creating a temporary folder")(e)),
             }
         }
-        Err(io("creating a download folder")(last.unwrap_or_else(|| std::io::Error::other("no free name"))))
+        Err(io("creating a temporary folder")(last.unwrap_or_else(|| std::io::Error::other("no free name"))))
+    }
+
+    /// The caller places recovery data outside the ordinary download staging sweep.
+    pub(crate) fn keep_for_recovery(mut self) {
+        self.remove_on_drop = false;
     }
 
     /// Writes a verified download as `<name>.part`, which no font scan picks up.
@@ -871,7 +897,9 @@ impl Stage {
 
 impl Drop for Stage {
     fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.dir);
+        if self.remove_on_drop {
+            let _ = std::fs::remove_dir_all(&self.dir);
+        }
     }
 }
 

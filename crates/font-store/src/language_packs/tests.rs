@@ -171,6 +171,148 @@ fn install_list_replace_and_remove_a_pack() {
     assert!(matches!(store.remove_language_pack("../x"), Err(Error::NotInstalled(_))));
 }
 
+#[cfg(unix)]
+#[test]
+fn a_failed_pack_removal_preserves_the_files_and_installed_record() {
+    use std::os::unix::fs::PermissionsExt;
+    for record_failure in [true, false] {
+        let (store, _server, pin, _) = setup(if record_failure { "remove-record-failure" } else { "remove-rename-failure" });
+        let index = store.fetch_pack_index_from(&IndexSource::Pinned(pin), &Cancel::new()).unwrap();
+        let got = store.install_pack_from(false, &index, index.pack("nl").unwrap(), &Cancel::new(), &mut |_| {}).unwrap();
+        let dictionary = store.language_packs_dir().join("nl/spelling.dic");
+        let before_dictionary = std::fs::read(&dictionary).unwrap();
+        let before_record = std::fs::read(store.dir().join(INSTALLED)).unwrap();
+        drop(store.language_pack_removal_stage(&[]).unwrap());
+        // The staging and pack subdirectories remain writable when only the store root
+        // rejects the atomic record replacement. The other case rejects the pack rename.
+        let protected = if record_failure { store.dir().to_path_buf() } else { store.language_packs_dir() };
+        let permissions = std::fs::metadata(&protected).unwrap().permissions();
+        std::fs::set_permissions(&protected, std::fs::Permissions::from_mode(0o555)).unwrap();
+        let probe = protected.join("write-probe");
+        if std::fs::File::create(&probe).is_ok() {
+            std::fs::set_permissions(&protected, permissions).unwrap();
+            std::fs::remove_dir_all(store.dir()).unwrap();
+            continue; // root ignores permissions
+        }
+        let result = store.remove_language_pack("nl");
+        std::fs::set_permissions(&protected, permissions).unwrap();
+        assert!(matches!(result, Err(Error::Io { .. })), "{result:?}");
+        assert_eq!(std::fs::read(&dictionary).unwrap(), before_dictionary, "record failure: {record_failure}");
+        assert_eq!(std::fs::read(store.dir().join(INSTALLED)).unwrap(), before_record);
+        assert_eq!(store.installed_language_packs(), vec![got]);
+        assert!(std::fs::read_dir(store.dir().join(".staging")).unwrap().next().is_none());
+        assert!(std::fs::read_dir(store.language_packs_dir().join(".removing")).unwrap().next().is_none());
+        std::fs::remove_dir_all(store.dir()).unwrap();
+    }
+}
+
+#[test]
+fn a_failed_removal_rollback_keeps_a_recoverable_pack_outside_download_cleanup() {
+    let (store, _server, pin, _) = setup("remove-rollback-failure");
+    let index = store.fetch_pack_index_from(&IndexSource::Pinned(pin), &Cancel::new()).unwrap();
+    let got = store.install_pack_from(false, &index, index.pack("nl").unwrap(), &Cancel::new(), &mut |_| {}).unwrap();
+    let before_record = std::fs::read(store.dir().join(INSTALLED)).unwrap();
+    let dest = store.language_packs_dir().join("nl");
+    let before_dictionary = std::fs::read(dest.join("spelling.dic")).unwrap();
+    let stage = store.language_pack_removal_stage(&[]).unwrap();
+    let stage_dir = stage.dir.clone();
+    let backup = stage_dir.join("nl");
+    std::fs::rename(&dest, &backup).unwrap();
+    // A replacement appearing at the original path makes restoration fail. Keep it too.
+    std::fs::write(&dest, b"replacement").unwrap();
+    let failed = io("saving the Language pack list")(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "injected record failure"));
+    let result = finish_pack_removal(stage, &backup, &dest, true, Err(failed));
+    assert!(matches!(result, Err(Error::Io { .. })));
+    assert!(result.unwrap_err().to_string().contains(&backup.display().to_string()));
+    #[cfg(unix)]
+    {
+        let old = std::time::SystemTime::now() - Duration::from_secs(7200);
+        std::fs::File::open(&stage_dir).unwrap().set_times(std::fs::FileTimes::new().set_modified(old)).unwrap();
+    }
+    store.sweep_staging();
+    drop(store.lock().unwrap());
+    assert_eq!(std::fs::read(backup.join("spelling.dic")).unwrap(), before_dictionary);
+    assert_eq!(std::fs::read(&dest).unwrap(), b"replacement");
+    assert_eq!(std::fs::read(store.dir().join(INSTALLED)).unwrap(), before_record);
+    std::fs::remove_file(&dest).unwrap();
+    std::fs::rename(&backup, &dest).unwrap();
+    assert_eq!(store.installed_language_packs(), vec![got]);
+    std::fs::remove_dir_all(store.dir()).unwrap();
+}
+
+#[test]
+fn committed_removal_cleanup_survives_interruption_and_does_not_reuse_a_recorded_id() {
+    let (store, _server, pin, _) = setup("remove-committed-cleanup");
+    let index = store.fetch_pack_index_from(&IndexSource::Pinned(pin), &Cancel::new()).unwrap();
+    store.install_pack_from(false, &index, index.pack("nl").unwrap(), &Cancel::new(), &mut |_| {}).unwrap();
+    let mut installed = store.read_installed().unwrap();
+    let stage = store.language_pack_removal_stage(&installed.committed_removals).unwrap();
+    let id = stage.dir.file_name().unwrap().to_str().unwrap().to_string();
+    let backup = stage.dir.join("nl");
+    std::fs::rename(store.language_packs_dir().join("nl"), &backup).unwrap();
+    installed.packs.clear();
+    installed.committed_removals.push(id.clone());
+    store.write_installed(&installed).unwrap();
+    stage.keep_for_recovery(); // Simulate exiting after the atomic record commit, before Drop.
+    assert!(backup.join("spelling.dic").is_file());
+    let _lock = store.lock().unwrap();
+    assert!(!backup.exists(), "a committed leftover is cleaned at the next locked store operation");
+    let installed = store.read_installed().unwrap();
+    assert_eq!(installed.committed_removals.as_slice(), std::slice::from_ref(&id));
+    // A restarted PID/counter could propose the old name after cleanup removed its directory.
+    // Its still-recorded receipt must exclude it until the next record update prunes it.
+    let parent = store.pack_removal_dir().unwrap();
+    let fresh = Stage::create_in(&parent, &installed.committed_removals, [id.clone(), "0-0".into()].into_iter()).unwrap();
+    assert_eq!(fresh.dir.file_name().unwrap(), "0-0");
+    drop(fresh);
+    store.write_installed(&installed).unwrap();
+    assert!(store.read_record().unwrap().committed_removals.is_empty());
+    assert!(store.installed_language_packs().is_empty());
+    drop(_lock);
+    std::fs::remove_dir_all(store.dir()).unwrap();
+}
+
+#[test]
+fn removal_receipts_cannot_name_paths_outside_the_recovery_folder() {
+    let (store, _server, pin, _) = setup("remove-invalid-receipts");
+    let index = store.fetch_pack_index_from(&IndexSource::Pinned(pin), &Cancel::new()).unwrap();
+    store.install_pack_from(false, &index, index.pack("nl").unwrap(), &Cancel::new(), &mut |_| {}).unwrap();
+    let outside = temp("remove-outside");
+    std::fs::write(outside.join("keep"), b"untouched").unwrap();
+    let before = std::fs::read(store.dir().join(INSTALLED)).unwrap();
+    for bad in ["../outside".to_string(), outside.display().to_string(), "1-2/../../outside".to_string()] {
+        let mut record: serde_json::Value = serde_json::from_slice(&before).unwrap();
+        record["committed_removals"] = serde_json::json!([bad]);
+        std::fs::write(store.dir().join(INSTALLED), serde_json::to_vec(&record).unwrap()).unwrap();
+        drop(store.lock().unwrap());
+        assert_eq!(std::fs::read(outside.join("keep")).unwrap(), b"untouched");
+    }
+    std::fs::remove_dir_all(outside).unwrap();
+    std::fs::remove_dir_all(store.dir()).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn recovery_cleanup_does_not_follow_a_replaced_parent_symlink() {
+    let (store, _server, pin, _) = setup("remove-symlink-parent");
+    let index = store.fetch_pack_index_from(&IndexSource::Pinned(pin), &Cancel::new()).unwrap();
+    store.install_pack_from(false, &index, index.pack("nl").unwrap(), &Cancel::new(), &mut |_| {}).unwrap();
+    let outside = temp("remove-symlink-outside");
+    std::fs::create_dir(outside.join("11-12")).unwrap();
+    std::fs::write(outside.join("11-12/keep"), b"untouched").unwrap();
+    std::os::unix::fs::symlink(&outside, store.language_packs_dir().join(".removing")).unwrap();
+    let mut record = store.read_installed().unwrap();
+    record.committed_removals.push("11-12".into());
+    store.write_installed(&record).unwrap();
+    drop(store.lock().unwrap());
+    assert!(matches!(store.remove_language_pack("nl"), Err(Error::Io { .. })));
+    assert_eq!(std::fs::read(outside.join("11-12/keep")).unwrap(), b"untouched");
+    assert!(store.language_packs_dir().join("nl/spelling.dic").is_file());
+    std::fs::remove_file(store.language_packs_dir().join(".removing")).unwrap();
+    std::fs::remove_dir_all(outside).unwrap();
+    std::fs::remove_dir_all(store.dir()).unwrap();
+}
+
 #[test]
 fn network_off_pins_and_checksums_are_enforced() {
     let (store, server, pin, archive) = setup("pins");
