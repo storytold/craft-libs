@@ -1178,13 +1178,8 @@ mod tests {
         let opened = OsString::from("Bericht.docx");
         let spaced = OsString::from("Haus Anschluss.xlsx");
         let apostrophe = OsString::from("O'Brien.xlsm");
-        let kept = relaunch_args_from([
-            opened.clone(),
-            OsString::from("--update-apply"),
-            spaced.clone(),
-            apostrophe.clone(),
-            OsString::from(FINISH_FLAG),
-        ]);
+        let kept =
+            relaunch_args_from([opened.clone(), OsString::from("--update-apply"), spaced.clone(), apostrophe.clone(), OsString::from(FINISH_FLAG)]);
         assert_eq!(kept, vec![opened, spaced.clone(), apostrophe.clone()]);
         assert!(kept.iter().all(|arg| !arg.to_string_lossy().contains("Bericht.docx Haus")));
 
