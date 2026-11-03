@@ -100,9 +100,25 @@ pub fn is_correct_with(d: &AffixDict, word: &str) -> bool {
     w.contains('-') && w.split('-').all(|p| p.chars().count() <= 1 || known(d, p))
 }
 
-/// Is one word in the dictionary or the user dictionary?
+/// Is one word (comma-below already) in the dictionary or the user dictionary? A user word is
+/// found in either spelling: added with cedillas (`şcoală`) it covers `școală` too.
 fn known(d: &AffixDict, w: &str) -> bool {
-    d.check(w) || crate::in_user_dictionary(&w.to_lowercase())
+    let lower = w.to_lowercase();
+    d.check(w) || crate::in_user_dictionary(&lower) || crate::in_user_dictionary(&cedilla(&lower))
+}
+
+/// `word` with the comma-below `ș`/`ț` written with cedillas (`ş`/`ţ`): the other spelling a user
+/// word may have been added in.
+fn cedilla(word: &str) -> String {
+    word.chars()
+        .map(|c| match c {
+            'ș' => 'ş',
+            'Ș' => 'Ş',
+            'ț' => 'ţ',
+            'Ț' => 'Ţ',
+            c => c,
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -130,6 +146,19 @@ mod tests {
         let ok = found.as_ref().is_some_and(|(a, d)| a.ends_with("ro_MD.aff") && d.ends_with("ro_MD.dic"));
         assert!(ok, "{found:?}");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_user_word_counts_in_either_spelling() {
+        test_dict::install();
+        // Added with cedillas, it covers the comma-below spelling, and the other way round.
+        assert!(!is_correct("zqşcoalăx") && !is_correct("zqșcoalăx"));
+        crate::add_word("zqşcoalăx");
+        assert!(is_correct("zqșcoalăx") && is_correct("zqşcoalăx"));
+        crate::remove_word("zqşcoalăx");
+        crate::add_word("zqțarăx");
+        assert!(is_correct("zqţarăx") && is_correct("zqțarăx"));
+        crate::remove_word("zqțarăx");
     }
 
     #[test]

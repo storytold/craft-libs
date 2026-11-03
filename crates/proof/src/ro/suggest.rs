@@ -61,7 +61,8 @@ struct Collector<'a> {
     d: &'a AffixDict,
     /// The word, lower case.
     input: String,
-    tested: HashSet<String>,
+    /// Candidates offered so far, with the lowest cost each was offered at.
+    tested: HashMap<String, u32>,
     /// Suggestion → (cost, order found).
     found: HashMap<String, (u32, usize)>,
     seq: usize,
@@ -71,9 +72,12 @@ impl Collector<'_> {
     /// Check a lower-case candidate (a word, or words joined by a space or hyphen) and keep it
     /// if every word is in the dictionary, as written or capitalized (names).
     fn offer(&mut self, cand: &str, cost: u32) {
-        if cand.is_empty() || cand == self.input || !self.tested.insert(cand.to_string()) {
+        // A candidate offered again more cheaply (a REP route after a MAP one) is looked at
+        // again, so it keeps the lower cost.
+        if cand.is_empty() || cand == self.input || self.tested.get(cand).is_some_and(|&c| c <= cost) {
             return;
         }
+        self.tested.insert(cand.to_string(), cost);
         let mut words = Vec::new();
         let mut cost = cost;
         for part in cand.split(' ') {
@@ -247,7 +251,7 @@ pub fn suggest_in(d: &AffixDict, word: &str, max: usize) -> Vec<String> {
     let case = casing(word);
     let input = super::comma_below(&word.to_lowercase());
     let chars: Vec<char> = input.chars().collect();
-    let mut col = Collector { d, input: input.clone(), tested: HashSet::new(), found: HashMap::new(), seq: 0 };
+    let mut col = Collector { d, input: input.clone(), tested: HashMap::new(), found: HashMap::new(), seq: 0 };
     // 1. Letter case.
     if d.contains(&input) && word != input {
         col.keep(input.clone(), COST_CASE);
@@ -406,7 +410,9 @@ fn scan(col: &mut Collector, chars: &[char]) {
                 continue;
             }
             let dist = weighted_distance(&lf, chars, &related, limit);
-            if dist <= limit && lf.as_slice() != chars {
+            // `forms` doesn't leave out a form FORBIDDENWORD bars: only a form the dictionary
+            // accepts is offered.
+            if dist <= limit && lf.as_slice() != chars && d.contains(&form) {
                 col.keep(form, COST_SCAN + dist * 3);
             }
         }
@@ -420,6 +426,18 @@ mod tests {
     fn has(word: &str, want: &str) {
         let s = suggest(word, 8);
         assert!(s.iter().any(|x| x == want), "{word} → {s:?}, want {want}");
+    }
+
+    #[test]
+    fn a_cheaper_route_to_a_candidate_lowers_its_cost() {
+        // CodeRabbit on craft-libs#550: a candidate first reached at a dearer cost (MAP) and then
+        // more cheaply (REP) keeps the cheaper cost.
+        let d = crate::affix::AffixDict::from_hunspell("", "2\ncasă\ncasa\n", &[]).unwrap_or_default();
+        let mut col = Collector { d: &d, input: "csaă".into(), tested: HashMap::new(), found: HashMap::new(), seq: 0 };
+        col.offer("casă", COST_DROP_DIACRITIC);
+        col.offer("casă", COST_REP);
+        col.offer("casă", COST_DROP_OR_ADD);
+        assert_eq!(col.found.get("casă").map(|f| f.0), Some(COST_REP));
     }
 
     #[test]

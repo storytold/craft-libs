@@ -3201,6 +3201,23 @@ mod tests {
         assert!(g.iter().any(|i| i.message.contains("ripetuta")), "{g:?}");
     }
 
+    /// The `ProofLang::Ro` row of [`LANGUAGES`] without Language data: spelling, its message,
+    /// suggestions and grammar reach the `ro` module (CodeRabbit on craft-libs#550).
+    #[test]
+    fn romanian_spelling_dispatches_without_language_data() {
+        crate::hold_dictionary_tests();
+        ro::test_dict::install();
+        let ro = "Fata merge acasă și citește o carte într-o zi frumoasă.";
+        assert!(check_spelling_in(ro, ProofLang::Ro).is_empty(), "{:?}", check_spelling_in(ro, ProofLang::Ro));
+        let v = check_spelling_in("Merg la Brașov cu cîine.", ProofLang::Ro);
+        assert_eq!(flagged("Merg la Brașov cu cîine.", &v), ["cîine"]);
+        assert_eq!((v[0].lang, v[0].message.as_str()), (ProofLang::Ro, "Posibilă greșeală de ortografie"));
+        assert!(check_spelling_in("Ştiinţă şi ţară.", ProofLang::Ro).is_empty());
+        assert!(suggest_in("cîine", 5, ProofLang::Ro).contains(&"câine".to_string()));
+        assert!(check_grammar_in("nici un test", ProofLang::Ro).iter().any(|i| i.message == "Se scrie legat: „niciun”"));
+        assert_eq!(ProofLang::from_tag(Some("ro-RO")), ProofLang::Ro);
+    }
+
     #[cfg_attr(not(craft_proof_data), ignore = "needs the Language data (CRAFT_I18N_DIR)")]
     #[test]
     fn romanian_uses_its_own_tools() {

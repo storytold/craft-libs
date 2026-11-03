@@ -145,24 +145,24 @@ fn spaces(text: &str, v: &mut Vec<Issue>) {
         let Some(p) = it.next() else { continue };
         let after = it.next();
         let flag = match p {
-            ',' => true,
+            // ` ,,` opens a typed quote, so the space before it is right.
+            ',' => after != Some(','),
             // `;)` and `;-)` are emoticons.
             ';' => !matches!(after, Some(')' | '(' | '-' | 'P' | 'D')),
             // ` ...` is an ellipsis, ` .5` a number.
             '.' => !matches!(after, Some('.')) && !after.is_some_and(|a| a.is_ascii_digit()),
             // ` :)`, ` :-)`, ` :D` and similar are emoticons; ` ?!` is still a stray space.
-            ':' | '!' | '?' => after.is_none_or(|a| a.is_whitespace() || matches!(a, '"' | '”' | '’' | '!' | '?')),
+            // A score or ratio (`3 : 1`) keeps its spaces.
+            ':' | '!' | '?' => !crate::score_colon(text, i) && after.is_none_or(|a| a.is_whitespace() || matches!(a, '"' | '”' | '’' | '!' | '?')),
             _ => false,
         };
         if flag {
             v.push(issue(i, i + 1 + p.len_utf8(), "Spațiu înaintea semnului de punctuație".into(), vec![p.to_string()]));
         }
     }
-    for (i, _) in text.match_indices("  ") {
-        if i > 0 && text.get(..i).is_some_and(|t| t.ends_with(' ')) {
-            continue;
-        }
-        v.push(issue(i, i + 2, "Spațiu dublu".into(), vec![" ".into()]));
+    // The whole run, so the fix leaves one space.
+    for run in crate::space_runs(text) {
+        v.push(issue(run.start, run.end, "Spațiu dublu".into(), vec![" ".into()]));
     }
 }
 
@@ -189,7 +189,12 @@ fn doubled_punctuation(text: &str, v: &mut Vec<Issue>) {
             if pat == ".." && text.get(..i).is_some_and(|t| t.ends_with('.')) {
                 continue; // the end of an ellipsis
             }
-            v.push(issue(i, i + pat.len(), "Punctuație dublă".into(), vec![pat[..1].into()]));
+            // `,,` before a word, after a space: a typed opening quote, which `„` replaces.
+            let typed_quote = pat == ",,"
+                && text.get(i + 2..).and_then(|t| t.chars().next()).is_some_and(char::is_alphabetic)
+                && (i == 0 || text.get(..i).is_some_and(|t| t.ends_with(char::is_whitespace)));
+            let fix = if typed_quote { "„".to_string() } else { pat[..1].to_string() };
+            v.push(issue(i, i + pat.len(), "Punctuație dublă".into(), vec![fix]));
         }
     }
 }
@@ -205,8 +210,56 @@ fn is_word(w: &str, want: &str) -> bool {
     super::comma_below(&w.to_lowercase()) == want
 }
 
+/// For each word of `ws`: its sentence (a number that grows at each sentence end) and whether it
+/// is a `nici` after a comma (`…, nici`). Read once per paragraph, so each `nici` pair looks its
+/// sentence up instead of scanning the rest of the paragraph.
+fn nici_sentences(text: &str, ws: &[(usize, usize)]) -> Vec<(usize, bool)> {
+    let mut out = Vec::with_capacity(ws.len());
+    let mut sentence = 0usize;
+    for (j, (a, b)) in ws.iter().enumerate() {
+        let prev = j.checked_sub(1).and_then(|p| ws.get(p)).copied();
+        let gap = prev.map_or("", |p| text.get(p.1..*a).unwrap_or(""));
+        // A sentence end starts a new sentence; the period of an abbreviation or number (`nr.`,
+        // `5.`) doesn't.
+        let prev_word = prev.map_or("", |p| text.get(p.0..p.1).unwrap_or(""));
+        let abbreviation = gap.trim_start().starts_with('.') && !gap.contains("..") && abbreviation_or_number(prev_word);
+        if gap.contains(['!', '?']) || (gap.contains('.') && !abbreviation) {
+            sentence = sentence.saturating_add(1);
+        }
+        let comma_nici = gap.contains(',') && text.get(*a..*b).is_some_and(|w| is_word(w, "nici"));
+        out.push((sentence, comma_nici));
+    }
+    out
+}
+
 /// `nici un`, `nici o` … written apart, except in the correlative `nici …, nici …`.
 fn nici_apart(text: &str, ws: &[(usize, usize)], v: &mut Vec<Issue>) {
+    let marks = nici_sentences(text, ws);
+    // The next `…, nici` at or after each word, in the same sentence (filled from the end).
+    let mut next_comma_nici: Vec<Option<usize>> = vec![None; ws.len()];
+    let mut later: Option<usize> = None;
+    for j in (0..ws.len()).rev() {
+        let (sentence, comma_nici) = marks.get(j).copied().unwrap_or_default();
+        if later.is_some_and(|l| marks.get(l).is_none_or(|m| m.0 != sentence)) {
+            later = None;
+        }
+        if comma_nici {
+            later = Some(j);
+        }
+        if let Some(slot) = next_comma_nici.get_mut(j) {
+            *slot = later;
+        }
+    }
+    // Whether a `nici` comes before each word in the same sentence.
+    let mut nici_before: Vec<bool> = Vec::with_capacity(ws.len());
+    let mut seen: Option<usize> = None;
+    for (j, (a, b)) in ws.iter().enumerate() {
+        let sentence = marks.get(j).map_or(0, |m| m.0);
+        nici_before.push(seen == Some(sentence));
+        if text.get(*a..*b).is_some_and(|w| is_word(w, "nici")) {
+            seen = Some(sentence);
+        }
+    }
     for (k, pair) in ws.windows(2).enumerate() {
         let [(a0, b0), (a1, b1)] = pair else { continue };
         let (Some(w0), Some(w1), Some(gap)) = (text.get(*a0..*b0), text.get(*a1..*b1), text.get(*b0..*a1)) else { continue };
@@ -214,26 +267,14 @@ fn nici_apart(text: &str, ws: &[(usize, usize)], v: &mut Vec<Issue>) {
             continue;
         }
         let Some((_, joined)) = NICI_JOINED.iter().find(|(apart, _)| is_word(w1, apart)) else { continue };
-        // Correlative `nici … , nici …` (`nici unul, nici altul`, `nici un frate, nici mai mulți`):
-        // `nici` is an adverb there and the words stay apart (DOOM). A later `nici` after a comma
-        // in the same sentence counts.
-        let mut correlative = false;
-        for (j, (a, b)) in ws.iter().enumerate().skip(k + 2) {
-            let prev = ws.get(j.saturating_sub(1)).copied().unwrap_or((*a, *a));
-            let gap = text.get(prev.1..*a).unwrap_or("");
-            // A sentence end stops the search; the period of an abbreviation or number (`nr.`,
-            // `5.`) doesn't.
-            let prev_word = text.get(prev.0..prev.1).unwrap_or("");
-            let abbreviation = gap.trim_start().starts_with('.') && !gap.contains("..") && abbreviation_or_number(prev_word);
-            if gap.contains(['!', '?']) || (gap.contains('.') && !abbreviation) {
-                break;
-            }
-            if gap.contains(',') && text.get(*a..*b).is_some_and(|w| is_word(w, "nici")) {
-                correlative = true;
-                break;
-            }
-        }
-        if correlative {
+        // Correlative `nici … , nici …` (`nici unul, nici altul`, `nici un frate, nici o soră`):
+        // `nici` is an adverb there and the words stay apart (DOOM). A later `…, nici` in the same
+        // sentence makes this the first half; a `…, nici` here after an earlier `nici` of the
+        // sentence makes it the second.
+        let sentence = marks.get(k).map(|m| m.0);
+        let first_half = next_comma_nici.get(k + 2).copied().flatten().is_some_and(|j| marks.get(j).map(|m| m.0) == sentence);
+        let second_half = marks.get(k).is_some_and(|m| m.1) && nici_before.get(k).copied().unwrap_or(false);
+        if first_half || second_half {
             continue;
         }
         let fixed = if w0.chars().all(|c| !c.is_lowercase()) && w1.chars().all(|c| !c.is_lowercase()) {
@@ -355,9 +396,41 @@ mod tests {
         assert!(check("N-am nici un frate, nici mai mulți.").is_empty());
         // An abbreviation's period doesn't end the sentence the search runs through.
         assert!(check("N-am nici un nr. de telefon, nici alt mijloc de contact.").is_empty());
+        // Both halves of a correlative stay apart, the second too (CodeRabbit on craft-libs#550).
+        assert!(check("Nici un frate, nici o soră.").is_empty());
+        // A `…, nici` in the next sentence doesn't make one here.
+        assert_eq!(messages("Nu am nici un ban. Mâine, nici el."), ["Se scrie legat: „niciun”"]);
         // All capitals stay all capitals; an initial capital stays initial.
         let v = check("NU AM NICI UN BAN.");
         assert_eq!(v.first().map(|i| i.suggestions[0].as_str()), Some("NICIUN"), "{v:?}");
+    }
+
+    #[test]
+    fn a_long_paragraph_of_nici_pairs_is_checked_once() {
+        // Many joinable pairs and no sentence end: each pair looks its sentence up once.
+        let t = "nici un ban, ".repeat(5000);
+        let v = check(&t);
+        assert!(v.iter().all(|i| i.message != "Se scrie legat: „niciun”"), "all correlative");
+        let t = "nici un ban și ".repeat(5000);
+        assert_eq!(check(&t).iter().filter(|i| i.message == "Se scrie legat: „niciun”").count(), 5000);
+    }
+
+    #[test]
+    fn spaces_before_quotes_and_in_scores_and_runs() {
+        // ` ,,` opens a typed quotation: the space before it is right, and the `,,` itself is
+        // offered as `„`.
+        let v = check("A spus ,,da”.");
+        assert_eq!(v.len(), 1, "{v:?}");
+        assert_eq!((v[0].message.as_str(), v[0].suggestions[0].as_str()), ("Punctuație dublă", "„"));
+        assert_eq!(messages("A spus , da."), ["Spațiu înaintea semnului de punctuație"]);
+        // A score keeps its spaces; a stray space before a colon is still flagged.
+        assert!(check("Scorul a fost 3 : 1.").is_empty(), "{:?}", check("Scorul a fost 3 : 1."));
+        assert_eq!(messages("Avem trei lucruri : mere."), ["Spațiu înaintea semnului de punctuație"]);
+        // A run of spaces is one issue over the whole run, so the fix leaves one space.
+        let t = "Am   venit.";
+        let v = check(t);
+        assert_eq!(v.len(), 1, "{v:?}");
+        assert_eq!((&t[v[0].start..v[0].end], v[0].suggestions[0].as_str()), ("   ", " "));
     }
 
     #[test]

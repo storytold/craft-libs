@@ -148,8 +148,11 @@ impl ProofLang {
             ProofLang::Cs
         } else if primary.eq_ignore_ascii_case("id") || primary.eq_ignore_ascii_case("ind") || primary.eq_ignore_ascii_case("in") {
             ProofLang::Id
-        } else if ["ro", "ron", "rum", "mo", "mol"].iter().any(|p| primary.eq_ignore_ascii_case(p)) {
-            // `mo`/`mol` are the withdrawn Moldovan tags, Romanian since 2008.
+        } else if ["ro", "ron", "rum", "mo", "mol"].iter().any(|p| primary.eq_ignore_ascii_case(p))
+            && effective_script(tag).is_none_or(|s| s == "latn")
+        {
+            // `mo`/`mol` are the withdrawn Moldovan tags, Romanian since 2008. Romanian in another
+            // script (`ro-Cyrl`, `mo-Cyrl`) keeps its own pack.
             ProofLang::Ro
         } else if primary.eq_ignore_ascii_case("es") || primary.eq_ignore_ascii_case("spa") {
             ProofLang::spanish(tag)
@@ -480,7 +483,10 @@ mod tests {
         assert!(ProofLang::Cs.is_proofed() && ProofLang::PROOFED.contains(&ProofLang::Cs));
         assert_eq!(ProofLang::Id.code(), "id");
         assert!(ProofLang::Id.is_proofed() && ProofLang::PROOFED.contains(&ProofLang::Id));
-        assert_tags(&["ro", "ro-RO", "RO_ro", "ro-MD", "ro_RO.UTF-8", " ro-RO ", "ron", "rum", "mo"], ProofLang::Ro);
+        assert_tags(&["ro", "ro-RO", "RO_ro", "ro-MD", "ro_RO.UTF-8", " ro-RO ", "ron", "rum", "mo", "ro-Latn-RO"], ProofLang::Ro);
+        for tag in ["ro-Cyrl", "mo-Cyrl", "ro-Cyrl-MD"] {
+            assert!(matches!(ProofLang::from_tag(Some(tag)), ProofLang::Pack(_)), "{tag}: Cyrillic Romanian is a pack language");
+        }
         assert!(ProofLang::Ro.is_proofed() && ProofLang::PROOFED.contains(&ProofLang::Ro));
         assert_eq!(ProofLang::Ro.code(), "ro");
     }
