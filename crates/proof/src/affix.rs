@@ -1176,6 +1176,9 @@ fn parse_aff(aff: &str, english: bool) -> Result<Rules, String> {
     Ok(r)
 }
 
+/// A dictionary's stems as `(word, start, end, is a word)` ranges of one buffer of flag keys.
+type StemFlags = (Vec<(String, usize, usize, bool)>, Vec<FlagKey>);
+
 impl AffixDict {
     /// Build from Hunspell `.aff` and `.dic` text (decoded to UTF-8; the `.dic` count line and
     /// morphological fields are ignored). `comments` (provenance, licence) are kept with the data.
@@ -1246,10 +1249,9 @@ impl AffixDict {
         AffixDict::build(rules, stems, comments.iter().map(ToString::to_string).collect(), MAX_FLAGS_PER_ENTRY, max_flags)
     }
 
-    /// Build from parsed rules and stems whose flag fields carry at most `entry_cap` flags each
-    /// ([`MAX_FLAGS_PER_ENTRY`] for `.dic` entries, [`MAX_FLAGS_PER_STEM`] for compact data).
-    /// The stems' flags may number `max_flags` in all ([`MAX_STEM_FLAGS`]), counted as they are read.
-    fn build(rules: Rules, stems: Vec<(String, String)>, comments: Vec<String>, entry_cap: usize, max_flags: usize) -> Result<AffixDict, String> {
+    /// Read each stem's flag field ([`AffixDict::build`] explains the rules) into ranges of one key
+    /// buffer, within the `max_flags` budget: the stems as `(word, start, end, is a word)`, and the keys.
+    fn read_stem_flags(rules: &Rules, stems: Vec<(String, String)>, entry_cap: usize, max_flags: usize) -> Result<StemFlags, String> {
         let mode = rules.mode;
         // A `.dic` entry's malformed flag items read as Hunspell reads them ([`FlagMode`]); an
         // entry with more than MAX_FLAGS_PER_STEM flags, or compact data whose flags don't read,
@@ -1295,10 +1297,19 @@ impl AffixDict {
                 read_stems.push((w, a, b, word));
             }
         }
-        let mut stems = read_stems;
         if skipped > 0 {
             log::debug!("affix dictionary: {skipped} entries with unreadable or too many flags skipped");
         }
+        Ok((read_stems, stem_keys))
+    }
+
+    /// Build from parsed rules and stems whose flag fields carry at most `entry_cap` flags each
+    /// ([`MAX_FLAGS_PER_ENTRY`] for `.dic` entries, [`MAX_FLAGS_PER_STEM`] for compact data).
+    /// The stems' flags may number `max_flags` in all ([`MAX_STEM_FLAGS`]), counted as they are read.
+    fn build(rules: Rules, stems: Vec<(String, String)>, comments: Vec<String>, entry_cap: usize, max_flags: usize) -> Result<AffixDict, String> {
+        let mode = rules.mode;
+        let exclusion_keys = [rules.forbidden, rules.no_suggest, rules.substandard];
+        let (mut stems, stem_keys) = AffixDict::read_stem_flags(&rules, stems, entry_cap, max_flags)?;
         let conts = |rs: &[RawRule]| rs.iter().map(|r| mode.parse(&r.4)).collect::<Result<Vec<_>, _>>();
         let (pfx_cont, sfx_cont) = (conts(&rules.prefixes)?, conts(&rules.suffixes)?);
         // Flags: every one a rule, a stem or a directive uses gets an id, in key order.
