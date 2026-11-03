@@ -88,6 +88,7 @@ pub mod ru;
 pub mod scowl;
 mod slot;
 mod spelling;
+pub mod sr;
 pub mod tr;
 pub mod vi;
 
@@ -1954,6 +1955,52 @@ mod tests {
             hyphen::hyphenate_word_in("κανα\u{301}κανα", &lim, grc),
             hyphen::hyphenate_word_in("κανάκανα", &lim, grc).replace('ά', "α\u{301}")
         );
+        packs::set_packs_dir(None);
+        set_dictionaries_folder(Some(shared_test_folder()));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Serbian: a Latin word is hyphenated through its Cyrillic spelling with the Cyrillic `sr`
+    /// pack's patterns, so `nj` and `dž` split only where they are two letters, and a word in the
+    /// other script uses the other pack; `lj`, `nj` and `dž` count as one letter; compounds break at
+    /// the join. With only Latin patterns a Latin word takes them, never split inside a digraph.
+    #[test]
+    fn serbian_latin_hyphenates_through_cyrillic_patterns() {
+        crate::hold_dictionary_tests();
+        set_dictionaries_folder(Some(shared_test_folder()));
+        let root = std::env::temp_dir().join(format!("wc-proof-serbian-hyphen-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        // Breaks before every letter, so each word shows where it may break.
+        let cyrillic: String = "абвгдђежзијклљмнњопрстћуфхцчџш".chars().map(|c| format!("1{c}\n")).collect();
+        let latin: String = "abcčćdđefghijklmnoprsštuvzž".chars().map(|c| format!("1{c}\n")).collect();
+        let all = hyphen::Limits { min_word: 2, after_first: 1, before_last: 1, capitalized: true };
+        let (sr, sr_latn) = (ProofLang::from_tag(Some("sr")), ProofLang::from_tag(Some("sr-Latn")));
+        let h = |w: &str, lim: &hyphen::Limits, lang: ProofLang| hyphen::hyphenate_word_in(w, lim, lang);
+        // Only the Latin pack: its patterns, never inside a one-letter digraph.
+        write_pack(&root, "sr-latn", &[("hyphenation.pat", latin.as_bytes())]);
+        packs::set_packs_dir(Some(root.clone()));
+        assert_eq!(h("konj", &all, sr_latn), "k-o-nj");
+        assert_eq!(h("prijatelj", &all, sr_latn), "p-r-i-j-a-t-e-lj");
+        // With the Cyrillic pack, Latin goes through Cyrillic.
+        write_pack(&root, "sr", &[("hyphenation.pat", cyrillic.as_bytes())]);
+        packs::reload();
+        assert_eq!(h("konjugacija", &all, sr_latn), "k-o-n-j-u-g-a-c-i-j-a", "конјугација");
+        assert_eq!(h("kanjon", &all, sr_latn), "k-a-nj-o-n", "кањон");
+        assert_eq!(h("nadživeti", &all, sr_latn), "n-a-d-ž-i-v-e-t-i", "надживети");
+        assert_eq!(h("odžak", &all, sr_latn), "o-dž-a-k", "оџак");
+        assert_eq!(h("Univerzitet", &all, sr), "U-n-i-v-e-r-z-i-t-e-t", "a Latin word in a Cyrillic run");
+        assert_eq!(h("универзитет", &all, sr_latn), "у-н-и-в-е-р-з-и-т-е-т", "a Cyrillic word in a Latin run");
+        // `lj`, `nj` and `dž` count as one letter against the limits, as љ, њ and џ do.
+        let lim = hyphen::Limits::default();
+        for (latin, cyr) in [("njive", "њиве"), ("ljudi", "људи"), ("Džaci", "Џаци"), ("NJIVE", "ЊИВЕ")] {
+            assert_eq!(h(latin, &lim, sr_latn), latin);
+            assert_eq!(h(cyr, &lim, sr), cyr);
+        }
+        // A compound breaks at the join: у alone after пред- goes with the second word.
+        assert_eq!(h("предуслов", &all, sr), "п-р-е-д-ус-л-о-в");
+        assert_eq!(h("preduslov", &all, sr_latn), "p-r-e-d-us-l-o-v");
+        // A word not in Serbian letters goes on as in any other language.
+        assert_eq!(h("keyboard", &lim, sr_latn), h("keyboard", &lim, ProofLang::En));
         packs::set_packs_dir(None);
         set_dictionaries_folder(Some(shared_test_folder()));
         let _ = std::fs::remove_dir_all(&root);

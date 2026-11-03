@@ -18,6 +18,11 @@
 //! **German**: the TeX German patterns for the reformed spelling ([`Patterns::de`]), also for
 //! Swiss text, whose `ss` the patterns split like any double consonant (`Stras-se`).
 //!
+//! **Serbian** ([`crate::sr`]): the Cyrillic patterns of an installed pack (the language's own,
+//! else the Cyrillic `sr` pack's), for a Latin word through its Cyrillic spelling, so both scripts
+//! break alike; `lj`, `nj` and `dž` count as one letter, and compounds break at the join. Without
+//! Cyrillic patterns a Latin word takes its pack's Latin patterns, never split inside a digraph.
+//!
 //! **Installed Language packs** ([`crate::packs`]): a pack's `hyphenation.pat` for the language
 //! comes first, for every language but English (embedded). The Polish, Portuguese, Italian and
 //! German patterns are embedded by default too until Language packs ship (CP4.4); a build with
@@ -129,6 +134,11 @@ fn core_breaks(core: &[char], lang: ProofLang) -> (Vec<usize>, Source) {
     if n < 2 {
         return (vec![], Source::None);
     }
+    if crate::sr::is_serbian(lang)
+        && let Some(found) = serbian_core_breaks(core, lang)
+    {
+        return found;
+    }
     // An installed Language pack's patterns come before the embedded ones and the rules, for a
     // word in the language's script; any other word goes on as before (a Latin word in a Russian
     // run is hyphenated as English).
@@ -194,6 +204,18 @@ fn core_breaks(core: &[char], lang: ProofLang) -> (Vec<usize>, Source) {
         return (p, Source::Patterns);
     }
     (heuristic_points(core), Source::Heuristic)
+}
+
+/// Serbian: the first installed Cyrillic patterns that know the word, the language's own pack's,
+/// then the Cyrillic `sr` pack's, with a Latin word through its Cyrillic spelling ([`crate::sr`]).
+/// None without such patterns, or for a word not in Serbian letters (`WordCraft`): it goes on as in
+/// any other language.
+fn serbian_core_breaks(core: &[char], lang: ProofLang) -> Option<(Vec<usize>, Source)> {
+    let (cyr, at) =
+        if core.iter().all(|&c| crate::ru::is_cyrillic(c)) { (core.to_vec(), (0..core.len()).collect()) } else { crate::sr::cyrillic(core)? };
+    let pats = [lang, crate::sr::cyrillic_lang()].into_iter().filter_map(crate::packs::hyphenation).find(|p| pack_knows(p, &cyr))?;
+    let (pts, src) = core_breaks_patterns(&pats, &cyr);
+    Some((pts.into_iter().filter_map(|p| at.get(p).copied()).collect(), src))
 }
 
 /// `core` composed (NFC), with the index in `core` where each composed character's base starts
@@ -318,7 +340,10 @@ pub fn word_breaks_in(word: &str, lang: ProofLang) -> (Vec<usize>, Source) {
             b -= 1;
         }
         let core: Vec<char> = chars[a..b].iter().map(|&c| if is_apostrophe(c) { '\'' } else { c.to_lowercase().next().unwrap_or(c) }).collect();
-        let (pts, s) = core_breaks(&core, lang);
+        let (mut pts, s) = core_breaks(&core, lang);
+        if crate::sr::is_serbian(lang) {
+            pts = crate::sr::compound_breaks(&core, pts);
+        }
         if src == Source::None {
             src = s;
         }
@@ -343,20 +368,6 @@ pub fn hyphen_points_in(word: &str, lim: &Limits, lang: ProofLang) -> Vec<usize>
     }
     let min_before = lim.after_first.max(1);
     let min_after = lim.before_last.max(1);
-    // Counted once, so each point's checks take constant time however long the word: letters and
-    // uppercase letters before each char, and the letter run (trimmed of apostrophes) of each char.
-    let (mut letters, mut upper) = (Vec::with_capacity(chars.len() + 1), Vec::with_capacity(chars.len() + 1));
-    let (mut l, mut u) = (0usize, 0usize);
-    for c in &chars {
-        letters.push(l);
-        upper.push(u);
-        if c.is_alphabetic() {
-            l += 1;
-            u += usize::from(c.is_uppercase());
-        }
-    }
-    letters.push(l);
-    upper.push(u);
     let mut run_of: Vec<(usize, usize)> = vec![(0, 0); chars.len()];
     let mut i = 0;
     while i < chars.len() {
@@ -376,6 +387,33 @@ pub fn hyphen_points_in(word: &str, lim: &Limits, lang: ProofLang) -> Vec<usize>
         }
         i = j.max(i + 1);
     }
+    // Serbian `lj`, `nj` and `dž` are one letter each (Pravopis, §186г): their second char isn't
+    // counted.
+    let mut second = vec![false; chars.len()];
+    if crate::sr::is_serbian(lang) {
+        let mut start = 0;
+        while let Some(&(a, b)) = run_of.get(start) {
+            let core: Vec<char> = chars.get(a..b).unwrap_or_default().iter().map(|c| c.to_lowercase().next().unwrap_or(*c)).collect();
+            for (s, is) in second.get_mut(a..b).into_iter().flatten().zip(crate::sr::second_letters(&core)) {
+                *s = is;
+            }
+            start = b.max(start + 1);
+        }
+    }
+    // Counted once, so each point's checks take constant time however long the word: letters and
+    // uppercase letters before each char, and the letter run (trimmed of apostrophes) of each char.
+    let (mut letters, mut upper) = (Vec::with_capacity(chars.len() + 1), Vec::with_capacity(chars.len() + 1));
+    let (mut l, mut u) = (0usize, 0usize);
+    for (c, second) in chars.iter().zip(&second) {
+        letters.push(l);
+        upper.push(u);
+        if c.is_alphabetic() && !second {
+            l += 1;
+            u += usize::from(c.is_uppercase());
+        }
+    }
+    letters.push(l);
+    upper.push(u);
     let count = |v: &[usize], a: usize, b: usize| v.get(b).zip(v.get(a)).map_or(0, |(y, x)| y.saturating_sub(*x));
     pts.into_iter()
         .filter(|&p| {
