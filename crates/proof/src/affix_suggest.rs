@@ -426,6 +426,18 @@ pub(crate) fn suggest_in(d: &AffixDict, word: &str, max: usize, t: &Tuning) -> V
             _ => vec![text.clone()],
         };
         for t in recased {
+            let eligible = |candidate: &str| {
+                let original: Vec<_> = text.split(' ').collect();
+                let changed: Vec<_> = candidate.split(' ').collect();
+                original.len() == changed.len() && original.iter().zip(changed).all(|(a, b)| d.can_suggest_cased(a, b))
+            };
+            let t = if eligible(&t) {
+                t
+            } else if eligible(&text) {
+                text.clone()
+            } else {
+                continue;
+            };
             // Shown as the dictionary's OCONV table writes it (`'` → `’` in French).
             let t = d.output(&t).into_owned();
             if t != word && !out.contains(&t) {
@@ -761,6 +773,24 @@ mod tests {
         }
         assert_eq!(suggest_in(&d, "Pies", 4, &Tuning::DEFAULT), Vec::<String>::new());
         assert_eq!(suggest_in(&d, "Piesx", 4, &Tuning::DEFAULT).first().map(String::as_str), Some("Pies"));
+    }
+
+    #[test]
+    fn recasing_keeps_valid_original_when_exact_target_is_excluded() {
+        for flag in ["N", "F", "S"] {
+            let aff = "SET UTF-8\nNOSUGGEST N\nFORBIDDENWORD F\nSUBSTANDARD S\nTRY normal\n";
+            let d = AffixDict::from_hunspell(aff, &format!("2\nnormal\nNORMAL/{flag}\n"), &[]).unwrap();
+            let got = suggest_in(&d, "NORMALL", 4, &Tuning::DEFAULT);
+            assert!(got.iter().any(|w| w == "normal"), "{flag}: {got:?}");
+            assert!(!got.iter().any(|w| w == "NORMAL"), "{flag}: {got:?}");
+            let split = AffixDict::from_hunspell(aff, &format!("3\nnormal\nNORMAL/{flag}\npour\n"), &[]).unwrap();
+            let got = suggest_in(&split, "NORMALPOUR", 4, &Tuning::DEFAULT);
+            assert!(got.iter().any(|w| w == "normal pour"), "{flag}: {got:?}");
+            assert!(!got.iter().any(|w| w == "NORMAL POUR"), "{flag}: {got:?}");
+        }
+        let d = AffixDict::from_hunspell("NOSUGGEST N\n", "3\nnormal\nNORMAL/N\npour\n", &[]).unwrap();
+        assert!(!d.can_suggest_cased("normal", "NORMAL"));
+        assert!(!d.can_suggest_cased("normal", "pour"));
     }
 
     /// A language's tables come after its dictionary's, a TRY alphabet stands in for a missing TRY
