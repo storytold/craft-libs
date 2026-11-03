@@ -44,3 +44,7 @@ mod java_linkage_references;
 #[cfg(test)]
 #[path="regressions/java_truncated_attributes.rs"]
 mod java_truncated_attributes;
+
+#[cfg(test)]
+#[path="regressions/java_wide_opcodes.rs"]
+mod java_wide_opcodes;
