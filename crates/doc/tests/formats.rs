@@ -257,6 +257,47 @@ fn pcraft_previews_stored_and_deflated_with_the_manifest_last() {
 }
 
 #[test]
+fn pcraft_prefers_the_full_size_composite_without_reading_the_preview() {
+    let full = png(80, 60, 30);
+    let small_preview = png(4, 3, 20);
+    for preview in [false, true] {
+        let manifest = pcraft_manifest(1, "[]", r#", "full_composite":"composite/full.png", "composite":"composite/preview.png""#);
+        let mut entries = vec![store("manifest.json", manifest.as_bytes()), deflated("composite/full.png", &full)];
+        if preview {
+            entries.push(store("composite/preview.png", &small_preview));
+        }
+        let r = renditions(&zip(&entries), &limits()).unwrap();
+        assert_eq!(r.len(), 1);
+        assert_eq!((r[0].kind, r[0].mime.as_str(), &r[0].bytes), (RenditionKind::Composite, "image/png", &full));
+    }
+    let manifest = pcraft_manifest(1, "[]", r#", "full_composite":"composite/full.png""#);
+    let pc = zip(&[store("manifest.json", manifest.as_bytes()), store("composite/full.png", &full)]);
+    assert_eq!(renditions(&pc, &limits()).unwrap()[0].bytes, full);
+    let mut small = limits();
+    small.max_entry = manifest.len() as u64;
+    // Keep the manifest under the limit while bounding the image independently.
+    let large = vec![0; manifest.len() + full.len()];
+    let pc = zip(&[store("manifest.json", manifest.as_bytes()), store("composite/full.png", &large)]);
+    assert!(matches!(renditions(&pc, &small), Err(Error::LimitExceeded(_))));
+}
+
+#[test]
+fn pcraft_refuses_invalid_or_missing_full_size_composites() {
+    for field in [r#""../full.png""#, r#""composite/preview.png""#, "12", r#""composite/full.png", "full_composite":null"#] {
+        let manifest = pcraft_manifest(1, "[]", &format!(r#", "full_composite":{field}"#));
+        let pc = zip(&[store("manifest.json", manifest.as_bytes()), store("composite/preview.png", &png(4, 3, 20))]);
+        assert!(matches!(renditions(&pc, &limits()), Err(Error::Malformed(_))), "{field}");
+    }
+    let manifest = pcraft_manifest(1, "[]", r#", "full_composite":"composite/full.png", "composite":"composite/preview.png""#);
+    let pc = zip(&[store("manifest.json", manifest.as_bytes()), store("composite/preview.png", &png(4, 3, 20))]);
+    assert!(matches!(renditions(&pc, &limits()), Err(Error::Malformed(_))));
+    let manifest = pcraft_manifest(1, "[]", r#", "full_composite":null, "composite":"composite/preview.png""#);
+    let preview = png(4, 3, 20);
+    let pc = zip(&[store("manifest.json", manifest.as_bytes()), store("composite/preview.png", &preview)]);
+    assert_eq!(renditions(&pc, &limits()).unwrap()[0].bytes, preview);
+}
+
+#[test]
 fn pcraft_without_previews_has_none() {
     let pc = zip(&[store("manifest.json", pcraft_manifest(1, "[]", "").as_bytes())]);
     assert_eq!(renditions(&pc, &limits()).unwrap(), vec![]);

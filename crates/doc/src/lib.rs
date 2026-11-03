@@ -168,7 +168,7 @@ pub enum RenditionKind {
     /// A small preview image: VectorCraft's `preview` (the first artboard) or PhotoCraft's
     /// `thumbnail`.
     Thumbnail,
-    /// PhotoCraft's flattened `composite` preview.
+    /// PhotoCraft's full-canvas flattened image, or its composite preview when absent.
     Composite,
 }
 
@@ -288,7 +288,7 @@ pub fn info(bytes: &[u8], limits: &Limits) -> Result<Info, Error> {
 
 /// The previews and the PDF the document carries, the thumbnail first. A
 /// `.vectorcraft` file has a `preview` only when saved with one and a `pdf` only when saved with
-/// Create PDF-Compatible File; a `.pcraft` bundle has the `thumbnail` and `composite` its
+/// Create PDF-Compatible File; a `.pcraft` bundle has the `thumbnail` and flattened composite its
 /// manifest names; an `.ecproj` project has none.
 pub fn renditions(bytes: &[u8], limits: &Limits) -> Result<Vec<Rendition>, Error> {
     let mut budget = Budget::new(limits);

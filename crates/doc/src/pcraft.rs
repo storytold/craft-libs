@@ -1,12 +1,12 @@
 //! PhotoCraft `.pcraft` bundles: a ZIP archive holding `manifest.json` (the document tree, with
 //! `format_version`), tiles and blobs, and optionally the previews the manifest names
-//! (`thumbnail`, `composite`). Only the ZIP form is read; a bundle saved as a folder is not. The
+//! (`thumbnail`, `composite`, `full_composite`). Only the ZIP form is read; a bundle saved as a folder is not. The
 //! manifest's envelope is [`craft_pcraft_format::Manifest`]'s.
 
 use std::fmt;
 use std::marker::PhantomData;
 
-use craft_pcraft_format::{self as format, COMPOSITE, FORMAT_VERSION, MANIFEST, MAX_GROUP_DEPTH, THUMB, manifest_depth};
+use craft_pcraft_format::{self as format, COMPOSITE, FORMAT_VERSION, FULL_COMPOSITE, MANIFEST, MAX_GROUP_DEPTH, THUMB, manifest_depth};
 use serde::Deserialize;
 use serde::de::value::MapAccessDeserializer;
 use serde::de::{DeserializeOwned, Deserializer, IgnoredAny, MapAccess, Visitor};
@@ -96,13 +96,16 @@ struct Envelope<D> {
     thumbnail: Option<String>,
     #[serde(default)]
     composite: Option<String>,
+    #[serde(default)]
+    full_composite: Option<String>,
 }
 
 /// The manifest's envelope, checked as [`craft_pcraft_format::read_manifest`] checks it: the
 /// size, nesting and item count with [`craft_pcraft_format::check_manifest`] and PhotoCraft's
 /// own nesting limit, a manifest that is not a JSON object refused, the version read first (0 or
 /// newer than [`FORMAT_VERSION`] refused), and a preview that names an entry other than [`THUMB`]
-/// or [`COMPOSITE`] refused. A member that appears twice is refused.
+/// or [`COMPOSITE`] refused. `full_composite` may name only [`FULL_COMPOSITE`]. A member that
+/// appears twice is refused.
 fn read<D: DeserializeOwned>(json: &[u8], budget: &Budget) -> Result<Envelope<D>, Error> {
     let mut limits = format::Limits::default();
     limits.max_manifest_bytes = json.len();
@@ -116,7 +119,9 @@ fn read<D: DeserializeOwned>(json: &[u8], budget: &Budget) -> Result<Envelope<D>
         return Err(too_new(Kind::PhotoCraft, version));
     }
     let Object(m) = parse::<Object<Envelope<D>>>(json, budget.limits)?;
-    for (member, entry, expected) in [("thumbnail", &m.thumbnail, THUMB), ("composite", &m.composite, COMPOSITE)] {
+    for (member, entry, expected) in
+        [("thumbnail", &m.thumbnail, THUMB), ("composite", &m.composite, COMPOSITE), ("full_composite", &m.full_composite, FULL_COMPOSITE)]
+    {
         if let Some(entry) = entry
             && entry != expected
         {
@@ -135,7 +140,7 @@ pub(crate) fn renditions(bytes: &[u8], budget: &mut Budget) -> Result<Vec<Rendit
     let (zip, json) = manifest(bytes, budget)?;
     let m: Envelope<IgnoredAny> = read(&json, budget)?;
     let mut out = vec![];
-    for (kind, path) in [(RenditionKind::Thumbnail, m.thumbnail), (RenditionKind::Composite, m.composite)] {
+    for (kind, path) in [(RenditionKind::Thumbnail, m.thumbnail), (RenditionKind::Composite, m.full_composite.or(m.composite))] {
         let Some(path) = path else { continue };
         let entry = zip.find(&path).ok_or_else(|| malformed(format!("the manifest names `{path}`, which the bundle does not have")))?;
         let max = budget.limits.max_entry;

@@ -55,7 +55,7 @@ let outline = craft_doc::outline(&bytes, &limits)?;
 | Container | JSON, plain or gzip; since version 4, large members after the JSON (`\n\0VCBLOBS\0`) | ZIP of STORE or DEFLATE entries | JSON |
 | Version read | `version` up to 4 (`"format": "vectorcraft"` or `"drawcraft"`) | `format_version` 1 | `schema` up to 2 |
 | Writer | `generator` | `generator` | `savedBy` |
-| Renditions | `preview` (Thumbnail) and `pdf` (Pdf), when the file was saved with them | the `thumbnail` and `composite` the manifest names | none |
+| Renditions | `preview` (Thumbnail) and `pdf` (Pdf), when the file was saved with them | the `thumbnail` and flattened composite the manifest names | none |
 | Pages | artboards, in points | none | compositions by item id, in pixels, with frame rate and duration |
 | Layers | top-level layers | the layer tree with groups | each composition's layers |
 
@@ -66,6 +66,12 @@ EffectCraft layers have no `opacity`, because opacity is an animated property th
 
 A `.pcraft` bundle saved as a folder, ZIP64 archives and encrypted entries are not read. The
 `.ecprojx` XML copies are not read.
+
+For PhotoCraft, `Composite` prefers `full_composite` (`composite/full.png`) when declared,
+otherwise `composite` (`composite/preview.png`). The unused preview payload is not read. A
+declared full-canvas image that is missing or exceeds the limits is an error. The reader does
+not silently substitute the smaller preview. Returned PNG bytes retain any embedded color profile;
+the reader does not decode pixels or convert colors.
 
 ## PhotoCraft layer pixels
 
