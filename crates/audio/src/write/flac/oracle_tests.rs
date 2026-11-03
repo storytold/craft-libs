@@ -209,10 +209,10 @@ fn full_scale_32_bit_stereo_round_trips() {
     assert!(enc.encode(&[&[i32::MIN, i32::MAX], &[0, -1]]).is_ok());
 }
 
-/// A layout FLAC's channel assignment does not name is recorded as a channel mask comment, which
-/// ffmpeg reads: the usual 7-channel layout (backs and a back centre) differs from FLAC's 6.1.
+/// A layout decoders would not assume for the channel count is recorded as a channel mask comment,
+/// which ffmpeg reads: they read 6 channels with side surrounds, and 7 as 6.1 with sides.
 #[test]
-fn layouts_other_than_flacs_are_recorded() {
+fn layouts_decoders_would_not_assume_are_recorded() {
     use crate::{AudioBuffer, ChannelLayout, EncodeFormat, EncodeOptions};
     let Some(ffprobe) = common::ffprobe() else { return };
     let cases = [
@@ -220,6 +220,8 @@ fn layouts_other_than_flacs_are_recorded() {
         ("layout-7-default", 7, None, "6.1(back)"),
         ("layout-6.1-side", 7, Some(ChannelLayout::SURROUND_6_1), "6.1"),
         ("layout-5.1-side", 6, Some(ChannelLayout::SURROUND_5_1_SIDE), "5.1(side)"),
+        ("layout-5.1-back", 6, Some(ChannelLayout::SURROUND_5_1), "5.1"),
+        ("layout-6-default", 6, None, "5.1"),
     ];
     for (name, channels, layout, expected) in cases {
         let buf = AudioBuffer::new(48_000, channels, 100);
@@ -232,4 +234,48 @@ fn layouts_other_than_flacs_are_recorded() {
             Command::new(&ffprobe).args(["-v", "error", "-show_entries", "stream=channel_layout", "-of", "csv=p=0"]).arg(&path).output().unwrap();
         assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), expected, "{name}");
     }
+}
+
+#[test]
+fn the_mask_comment_is_written_only_when_decoders_would_assume_otherwise() {
+    use super::mask_comment;
+    let comment = |m: &str| Some(format!("WAVEFORMATEXTENSIBLE_CHANNEL_MASK={m}"));
+    for channels in [1, 2, 3, 4, 8] {
+        assert_eq!(mask_comment(channels, None), None, "{channels}");
+    }
+    assert_eq!(mask_comment(5, None), comment("0x0037"));
+    assert_eq!(mask_comment(5, Some(0x607)), None);
+    assert_eq!(mask_comment(6, None), comment("0x003F"));
+    assert_eq!(mask_comment(6, Some(0x60F)), None);
+    assert_eq!(mask_comment(7, None), comment("0x013F"));
+    assert_eq!(mask_comment(7, Some(0x70F)), None);
+    // no speaker assignment
+    assert_eq!(mask_comment(2, Some(0)), comment("0x0000"));
+}
+
+/// Left and right at opposite full scale: the side channel needs its extra bit at every depth.
+#[test]
+fn opposite_polarity_stereo_round_trips() {
+    for bps in [16u8, 24] {
+        let left = signal("square", 9_000, bps, 1);
+        let right: Vec<i32> = left.iter().map(|&v| !v).collect();
+        let planar = vec![left, right];
+        if round_trip(&format!("opposite-{bps}"), &planar, EncoderConfig::new(48_000, 2, bps), 4096).is_none() {
+            return;
+        }
+    }
+}
+
+#[test]
+fn streaminfo_states_the_block_and_frame_sizes() {
+    let planar = [signal("music", 10_000, 16, 21), signal("noise", 10_000, 16, 22)];
+    let mut enc = Encoder::new(EncoderConfig::new(48_000, 2, 16)).unwrap();
+    let parts: Vec<&[i32]> = planar.iter().map(Vec::as_slice).collect();
+    let mut sizes: Vec<usize> = enc.encode_frames(&parts).unwrap().iter().map(Vec::len).collect();
+    sizes.push(enc.finish().len());
+    let si = enc.streaminfo();
+    let u24 = |b: &[u8]| usize::from(b[0]) << 16 | usize::from(b[1]) << 8 | usize::from(b[2]);
+    assert_eq!(&si[..4], &[0x10, 0x00, 0x10, 0x00]);
+    assert_eq!(u24(&si[4..7]), sizes.iter().copied().min().unwrap());
+    assert_eq!(u24(&si[7..10]), sizes.iter().copied().max().unwrap());
 }

@@ -26,7 +26,7 @@ use std::io::{Seek, Write};
 /// # }
 /// ```
 pub fn encode(buf: &AudioBuffer, opts: &EncodeOptions) -> Result<Vec<u8>> {
-    // Checked for every format; only a WAV records it.
+    // Checked for every format; WAV and FLAC record it.
     let mask = opts.layout.map(|l| wav_mask(&l, buf.channels.len())).transpose()?;
     match opts.format {
         #[cfg(feature = "pcm-encode")]
