@@ -6,7 +6,7 @@ use crate::page::Pages;
 use crate::page::cached::CachedPages;
 use crate::reader::Reader;
 use crate::sync::Arc;
-use crate::xref::{XRef, XRefError, fallback, root_xref};
+use crate::xref::{XRef, XRefError};
 
 pub use crate::crypto::DecryptionError;
 use crate::metadata::Metadata;
@@ -65,6 +65,15 @@ pub enum LoadPdfError {
     Invalid,
 }
 
+/// Failure of a cancellable open. Existing loading errors retain their original type.
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum CancellableLoadError {
+    /// The caller requested cancellation while opening the document.
+    Cancelled,
+    /// The document could not be loaded.
+    Load(LoadPdfError),
+}
+
 #[allow(clippy::len_without_is_empty)]
 impl Pdf {
     /// Try to read the given PDF file.
@@ -89,18 +98,47 @@ impl Pdf {
     /// Try to read a PDF with a password and document-local stream expansion limits.
     /// The same immutable limits apply during initial xref parsing, repair and later reads.
     pub fn new_with_password_and_limits(data: impl Into<PdfData>, password: &str, limits: DecodeLimits) -> Result<Self, LoadPdfError> {
-        let data = data.into();
+        Self::load(data.into(), password, limits, None)
+    }
+
+    /// Open with cooperative cancellation, retaining the existing password and decode policies.
+    /// The callback is owned by `cancel`, runs on this thread, and is not retained by a loaded
+    /// PDF. A true result stays latched for this open and never starts a repair pass.
+    pub fn new_with_password_limits_and_cancel(
+        data: impl Into<PdfData>,
+        password: &str,
+        limits: DecodeLimits,
+        cancel: &crate::Cancellation,
+    ) -> Result<Self, CancellableLoadError> {
+        let control = crate::cancel::Control::new(cancel);
+        let _scope = crate::cancel::Scope(control.clone());
+        if control.check().is_none() {
+            return Err(CancellableLoadError::Cancelled);
+        }
+        let result = Self::load(data.into(), password, limits, Some(control.clone()));
+        if control.check().is_none() {
+            Err(CancellableLoadError::Cancelled)
+        } else {
+            result.map_err(CancellableLoadError::Load)
+        }
+    }
+
+    fn load(data: PdfData, password: &str, limits: DecodeLimits, control: Option<crate::cancel::Control>) -> Result<Self, LoadPdfError> {
         let password = password.as_bytes();
         let version = find_version(data.as_ref()).unwrap_or(PdfVersion::Pdf10);
-        let xref = match root_xref(data.clone(), password, limits) {
+        let xref = match crate::xref::root_xref_controlled(data.clone(), password, limits, control.clone()) {
             Ok(x) => x,
             Err(e) => match e {
-                XRefError::Unknown => fallback(data.clone(), password, limits).ok_or(LoadPdfError::Invalid)?,
+                XRefError::Unknown => {
+                    crate::cancel::check(control.as_ref()).ok_or(LoadPdfError::Invalid)?;
+                    crate::xref::fallback_controlled(data.clone(), password, limits, control.clone()).ok_or(LoadPdfError::Invalid)?
+                }
                 XRefError::Encryption(e) => return Err(LoadPdfError::Decryption(e)),
             },
         };
         let xref = Arc::new(xref);
 
+        crate::cancel::check(control.as_ref()).ok_or(LoadPdfError::Invalid)?;
         let pages = CachedPages::new(xref.clone()).ok_or(LoadPdfError::Invalid)?;
 
         Ok(Self { xref, header_version: version, pages, data })

@@ -214,6 +214,7 @@ impl<'a> Stream<'a> {
         image_params: &ImageDecodeParams,
         max: usize,
     ) -> Result<FilterResult<'a>, DecodeFailure> {
+        crate::cancel::check(self.dict.ctx().control()).ok_or(DecodeFailure::StreamDecode)?;
         self.decode_raw_within(self.raw_data(), image_params, max)
     }
 
@@ -233,7 +234,10 @@ impl<'a> Stream<'a> {
         image_params: &ImageDecodeParams,
         max: usize,
     ) -> Result<FilterResult<'a>, DecodeFailure> {
+        let control = self.dict.ctx().control();
+        crate::cancel::check(control).ok_or(DecodeFailure::StreamDecode)?;
         let filters_and_params = self.filters_and_params();
+        crate::cancel::check(control).ok_or(DecodeFailure::StreamDecode)?;
         let count = filters_and_params.filters.len();
 
         let mut current: Option<FilterResult<'a>> = None;
@@ -246,10 +250,11 @@ impl<'a> Stream<'a> {
         {
             // PdfCraft patch: see `filter::decode_limit`.
             let limit = crate::filter::decode_limit(image_params, i + 1 == count, self.dict.ctx().decode_limits()).min(max);
-            let new = filter.apply(current.as_ref().map(|c| c.data.as_ref()).unwrap_or(&data), params, image_params, limit)?;
+            let new = filter.apply(current.as_ref().map(|c| c.data.as_ref()).unwrap_or(&data), params, image_params, limit, self.dict.ctx().control())?;
             current = Some(new);
         }
 
+        crate::cancel::check(control).ok_or(DecodeFailure::StreamDecode)?;
         Ok(current.unwrap_or(FilterResult {
             data,
             image_data: None,
@@ -285,6 +290,7 @@ impl<'a> Readable<'a> for Stream<'a> {
         let offset = r.offset();
         parse_proper(r, &dict)
             .or_else(|| {
+                crate::cancel::check(ctx.control())?;
                 warn!("failed to parse stream, trying to parse it manually");
 
                 r.jump(offset);
