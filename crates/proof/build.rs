@@ -153,8 +153,18 @@ fn main() {
             files.sort();
             for f in files {
                 println!("cargo::rerun-if-changed={}", f.display());
+                // `include_str!` fails the whole build on a file that isn't UTF-8 (a Latin-1
+                // licence text) and can't name a path that isn't either: leave such a file out.
+                let Some(path) = f.to_str() else {
+                    println!("cargo::{level}=CRAFT_I18N_DIR: the path {} is not UTF-8; its licence text is not embedded", f.display());
+                    continue;
+                };
+                if let Err(e) = std::fs::read_to_string(&f) {
+                    println!("cargo::{level}=CRAFT_I18N_DIR: {path} can't be read as text ({e}); its licence text is not embedded");
+                    continue;
+                }
                 let title = format!("{locale}: {}", f.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default());
-                let _ = write!(licences, "({title:?}, include_str!({:?})), ", f.display().to_string());
+                let _ = write!(licences, "({title:?}, include_str!({path:?})), ");
             }
         }
     }

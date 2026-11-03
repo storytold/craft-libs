@@ -128,8 +128,10 @@ const ABBREVIATIONS: &[&str] = &[
 /// Conjunctions that must not be preceded by a comma.
 const CONJUNCTIONS_NO_PRE_COMMA: &[&str] = &["ve", "veya", "yahut", "velev", "veyahut", "de", "da"];
 
-/// Conjunctions that must not be followed by a comma.
-const CONJUNCTIONS_NO_POST_COMMA: &[&str] = &["ve", "veya", "yahut", "veyahut", "hem", "gerek", "ister"];
+/// Conjunctions that must not be followed by a comma. Not `ister` and `gerek`: they are
+/// conjunctions only in `ister … ister` / `gerek … gerek`; otherwise `ister` is the verb
+/// (`Kim ister, gelsin.`) and `gerek` a noun or adjective, and a comma after them is correct.
+const CONJUNCTIONS_NO_POST_COMMA: &[&str] = &["ve", "veya", "yahut", "veyahut", "hem"];
 
 /// Check grammar and punctuation in a Turkish text block.
 pub fn check(text: &str) -> Vec<Issue> {
@@ -405,7 +407,15 @@ mod tests {
     /// (craft-libs#488 review).
     #[test]
     fn a_comma_after_de_ne_or_ya_is_fine() {
-        for text in ["Ali de, Veli de geldi.", "Ne, sen mi geldin?", "Ya, bilmiyorum.", "Bu mesele de, haklı olan bizdik."] {
+        for text in [
+            "Ali de, Veli de geldi.",
+            "Ne, sen mi geldin?",
+            "Ya, bilmiyorum.",
+            "Bu mesele de, haklı olan bizdik.",
+            "Kim ister, gelsin.",
+            "Ali ister, Veli istemez.",
+            "Gerek, yok.",
+        ] {
             assert!(check(text).is_empty(), "{text}: {:?}", check(text));
         }
     }
