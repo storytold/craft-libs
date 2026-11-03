@@ -196,6 +196,21 @@ pub fn launch_binary(exe: &Path, args: &[&str]) -> Result<(), String> {
     spawn_detached(cmd)
 }
 
+/// Opens `url` in the browser at `browser`, an absolute path to its executable (a `.app` bundle on
+/// macOS). A relative path is refused: it would resolve against the working directory or `PATH`.
+/// The URL is one argument, never passed through a shell.
+pub fn open_url_in_browser(browser: &Path, url: &str) -> Result<(), String> {
+    if !browser.is_absolute() {
+        return Err(format!("the browser path {} is not absolute", browser.display()));
+    }
+    if cfg!(target_os = "macos") && browser.is_dir() && browser.extension().is_some_and(|e| e == "app") {
+        let mut cmd = command("open");
+        cmd.arg("-a").arg(browser).arg(url);
+        return spawn_detached(cmd);
+    }
+    launch_binary(browser, &[url])
+}
+
 /// Opens a file, folder or URL with the system's default handler.
 pub fn open(target: &std::ffi::OsStr) -> Result<(), String> {
     spawn_detached(opener(target)?)
@@ -615,5 +630,15 @@ mod inherited_pipe_tests {
             // The guard stops the finite descendant and waits for its completion marker on failures too.
             break;
         }
+    }
+}
+
+#[cfg(test)]
+mod browser_tests {
+    use super::*;
+
+    #[test]
+    fn a_relative_browser_path_is_refused() {
+        assert!(open_url_in_browser(Path::new("browser.exe"), "https://example.com/").is_err());
     }
 }
