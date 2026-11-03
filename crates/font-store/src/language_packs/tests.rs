@@ -667,7 +667,7 @@ fn residual_one_bad_receipt_preserves_valid_metadata_and_cleanup() {
     std::fs::create_dir_all(parent.join("11-12")).unwrap();
     std::fs::write(parent.join("11-12/keep"), b"committed").unwrap();
     let mut raw = serde_json::to_value(&original).unwrap();
-    raw["committed_removals"] = serde_json::json!(["11-12", "../outside"]);
+    raw["committed_removals"] = serde_json::json!(["11-12", "../outside", null, 42, true, {}, ["99-99"]]);
     std::fs::write(store.dir().join(INSTALLED), serde_json::to_vec(&raw).unwrap()).unwrap();
     let record = store.read_record().expect("one invalid receipt must not invalidate the whole record");
     assert_eq!(record.committed_removals, ["11-12"]);

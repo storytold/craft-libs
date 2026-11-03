@@ -126,8 +126,20 @@ struct Installed {
     version: u32,
     packs: Vec<InstalledLanguagePack>,
     /// Committed backup IDs, recorded atomically with removing their pack entries.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, deserialize_with = "read_receipts", skip_serializing_if = "Vec::is_empty")]
     committed_removals: Vec<String>,
+}
+
+/// Decode optional receipt entries independently from the readable pack metadata. Record size
+/// and JSON nesting remain bounded by the existing reader and serde_json's recursion limit.
+fn read_receipts<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Vec<String>, D::Error> {
+    let entries = serde_json::Value::deserialize(deserializer)?;
+    Ok(match entries {
+        serde_json::Value::Array(entries) => {
+            entries.into_iter().filter_map(|entry| if let serde_json::Value::String(id) = entry { Some(id) } else { None }).collect()
+        }
+        _ => Vec::new(),
+    })
 }
 
 impl PackIndex {
