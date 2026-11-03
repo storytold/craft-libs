@@ -184,9 +184,10 @@ fn all(file: &OggFile, s: usize) -> Vec<(usize, usize)> {
     (0..file.streams[s].packets.len()).map(|i| (s, i)).collect()
 }
 
-/// `OpusTiming` against ffmpeg: the starts are its pts (both count from the first packet), the
-/// durations its packet durations except the last, which ffmpeg trims by the discard padding, the
-/// pre-skip its first packet's skip, and the total its playable length.
+/// `OpusTiming` against ffmpeg: the starts are its pts (both on the same clock: a stream that starts
+/// at granule 0 starts at `-pre_skip`), the durations its packet durations except the last, which
+/// ffmpeg trims by the discard padding, the pre-skip its first packet's skip, and the total its
+/// playable length.
 fn assert_opus_timing_matches(name: &str, file: &OggFile, s: usize, json: &Value, ff: usize) {
     let stream = &file.streams[s];
     let pre_skip = stream.headers.first().and_then(|h| h.get(10..12)).map_or(0, |b| u32::from(u16::from_le_bytes([b[0], b[1]])));
@@ -194,14 +195,16 @@ fn assert_opus_timing_matches(name: &str, file: &OggFile, s: usize, json: &Value
     let theirs = ff_packets(json, ff);
     let context = format!("{name}: Opus stream {ff}");
     assert_eq!(timing.starts.len(), theirs.len(), "{context}: packet count");
-    let offset = theirs[0].pts.unwrap() - timing.starts[0];
     let last = theirs.len() - 1;
     for (k, p) in theirs.iter().enumerate() {
-        assert_eq!(p.pts.map(|pts| pts - offset), Some(timing.starts[k]), "{context}: start of packet {k}");
+        assert_eq!(p.pts, Some(timing.starts[k]), "{context}: start of packet {k}");
         let duration = p.duration.unwrap() + if k == last { p.discard } else { 0 };
         assert_eq!(duration, i64::from(timing.durations[k]), "{context}: duration of packet {k}");
     }
     assert_eq!(i64::from(timing.pre_skip), theirs[0].skip, "{context}: pre-skip");
+    if stream.packets.first().and_then(|p| p.granule).is_some_and(|g| g >= 0) {
+        assert_eq!(timing.starts[0], -i64::from(timing.pre_skip), "{context}: first start");
+    }
     let playable: i64 = theirs.iter().map(|p| p.duration.unwrap()).sum::<i64>() - theirs[0].skip;
     assert_eq!(timing.total, playable, "{context}: total");
     eprintln!("{context}: timing of {} packets matches, {} samples", theirs.len(), timing.total);
