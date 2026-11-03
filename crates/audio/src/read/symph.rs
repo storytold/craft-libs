@@ -656,7 +656,7 @@ impl Symph {
                         self.interleaved.resize(needed, 0.0);
                     }
                     decoded.copy_to_slice_interleaved(&mut self.interleaved[..needed]);
-                    let mut planar = vec![Vec::with_capacity(n); ch];
+                    let mut planar = crate::pcm::planar(ch, n)?;
                     for frame in self.interleaved[..needed].chunks_exact(ch) {
                         for (dst, &s) in planar.iter_mut().zip(frame) {
                             dst.push(if s.is_finite() { s } else { 0.0 });

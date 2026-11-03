@@ -121,8 +121,13 @@ pub(crate) fn planar(channels: usize, frames: usize) -> Result<Vec<Vec<f32>>> {
     Ok(out)
 }
 
-/// `channels` channels of `frames` samples of silence, allocated fallibly.
+/// `channels` channels of `frames` samples of silence, allocated fallibly and held to the decode
+/// limit like decoded audio.
 pub(crate) fn silence(channels: usize, frames: usize) -> Result<Vec<Vec<f32>>> {
+    let total = (frames as u64).saturating_mul(channels as u64);
+    if total > MAX_DECODE_SAMPLES {
+        return Err(AudioError::TooLarge(format!("{total} samples of concealment exceed the {MAX_DECODE_SAMPLES}-sample decode limit")));
+    }
     let mut out = planar(channels, frames)?;
     for ch in &mut out {
         ch.resize(frames, 0.0);

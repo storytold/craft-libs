@@ -460,7 +460,7 @@ fn audio_track(kinds: impl Iterator<Item = bool>, n: Option<usize>) -> Option<Re
 /// An MP4 / QuickTime file's audio track, if its codec is native. Samples that claim to lie
 /// beyond the end of the file are refused rather than read leniently.
 fn open_mp4<'a>(src: &Src<'a>, container: Container, track: Option<usize>) -> Option<Result<Native<'a>>> {
-    let file = match demuxed(isobmff::open(src), mp4_io)? {
+    let file = match demuxed(isobmff::open(src), mp4_failure)? {
         Ok(file) => file,
         Err(e) => return Some(Err(e)),
     };
@@ -505,7 +505,7 @@ fn open_mp4<'a>(src: &Src<'a>, container: Container, track: Option<usize>) -> Op
 
 /// A Matroska / WebM file's audio track, if its codec is native.
 fn open_mkv<'a>(src: &Src<'a>, container: Container, track: Option<usize>) -> Option<Result<Native<'a>>> {
-    let demux = match demuxed(matroska::Demuxer::new(src.clone()), mkv_io)? {
+    let demux = match demuxed(matroska::Demuxer::new(src.clone()), mkv_failure)? {
         Ok(demux) => demux,
         Err(e) => return Some(Err(e)),
     };
@@ -567,36 +567,65 @@ pub(crate) fn tracks(src: &Src<'_>, detected: Option<Container>) -> Option<Resul
         Err(e) => return Some(Err(e)),
     };
     match super::detect_container(&head, None).or(detected) {
-        Some(Container::Mp4 | Container::QuickTime) => demuxed(isobmff::open(src), mp4_io)
+        Some(Container::Mp4 | Container::QuickTime) => demuxed(isobmff::open(src), mp4_failure)
             .map(|r| r.map(|file| file.tracks.iter().filter(|t| t.kind == isobmff::TrackKind::Audio).map(isobmff::Track::codec_params).collect())),
-        Some(Container::Matroska | Container::WebM) => demuxed(matroska::open(src.clone()), mkv_io)
+        Some(Container::Matroska | Container::WebM) => demuxed(matroska::open(src.clone()), mkv_failure)
             .map(|r| r.map(|file| file.tracks.iter().filter(|t| t.kind == matroska::TrackKind::Audio).map(matroska::Track::codec_params).collect())),
-        Some(Container::Ogg) => demuxed(ogg::open(src), ogg_io)
+        Some(Container::Ogg) => demuxed(ogg::open(src), ogg_failure)
             .map(|r| r.map(|file| file.streams.iter().filter(|s| s.codec.codec_id().is_audio()).map(ogg::Stream::codec_params).collect())),
         _ => None,
     }
 }
 
-/// A craft-media demuxer's result for the native path: `None` when it does not read the file (the
-/// other path tries it), and the source's failure to read as [`AudioError::Io`]. A file that ends
-/// early is not a read failure: the other path names what is wrong with it.
-fn demuxed<T, E>(r: std::result::Result<T, E>, io: fn(E) -> Option<std::io::Error>) -> Option<Result<T>> {
-    match r {
-        Ok(v) => Some(Ok(v)),
-        Err(e) => io(e).filter(|e| e.kind() != std::io::ErrorKind::UnexpectedEof).map(|e| Err(AudioError::Io(e))),
+/// Why a craft-media demuxer could not read a file.
+enum Failure {
+    /// The source failed to read.
+    Io(std::io::Error),
+    /// The file is damaged: truncated, or structurally invalid.
+    Damaged(String),
+    /// Anything else: not this container, or a feature the demuxer does not read.
+    Other,
+}
+
+/// A craft-media demuxer's result for the native path: the source's failure to read as
+/// [`AudioError::Io`], and `None` when the demuxer does not read the file, so the other path
+/// tries it. Without symphonia there is no other path, so a damaged file is
+/// [`AudioError::Malformed`].
+fn demuxed<T, E>(r: std::result::Result<T, E>, why: fn(E) -> Failure) -> Option<Result<T>> {
+    let e = match r {
+        Ok(v) => return Some(Ok(v)),
+        Err(e) => why(e),
+    };
+    match e {
+        Failure::Io(e) if e.kind() != std::io::ErrorKind::UnexpectedEof => Some(Err(AudioError::Io(e))),
+        Failure::Io(e) if cfg!(not(feature = "symphonia")) => Some(Err(AudioError::Malformed(e.to_string()))),
+        Failure::Damaged(m) if cfg!(not(feature = "symphonia")) => Some(Err(AudioError::Malformed(m))),
+        _ => None,
     }
 }
 
-fn mp4_io(e: isobmff::Error) -> Option<std::io::Error> {
-    if let isobmff::Error::Io(e) = e { Some(e) } else { None }
+fn mp4_failure(e: isobmff::Error) -> Failure {
+    match e {
+        isobmff::Error::Io(e) => Failure::Io(e),
+        e @ (isobmff::Error::Truncated(_) | isobmff::Error::Invalid(_) | isobmff::Error::NoMoov) => Failure::Damaged(e.to_string()),
+        _ => Failure::Other,
+    }
 }
 
-fn mkv_io(e: matroska::Error) -> Option<std::io::Error> {
-    if let matroska::Error::Io(e) = e { Some(e) } else { None }
+fn mkv_failure(e: matroska::Error) -> Failure {
+    match e {
+        matroska::Error::Io(e) => Failure::Io(e),
+        e @ matroska::Error::Invalid(_) => Failure::Damaged(e.to_string()),
+        _ => Failure::Other,
+    }
 }
 
-fn ogg_io(e: ogg::Error) -> Option<std::io::Error> {
-    if let ogg::Error::Io(e) = e { Some(e) } else { None }
+fn ogg_failure(e: ogg::Error) -> Failure {
+    match e {
+        ogg::Error::Io(e) => Failure::Io(e),
+        e @ ogg::Error::Invalid(_) => Failure::Damaged(e.to_string()),
+        _ => Failure::Other,
+    }
 }
 
 /// `v` in units of `from` per second, in units of `to` per second (truncated).

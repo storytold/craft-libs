@@ -141,15 +141,7 @@ impl TrackDecoder {
             Inner::Pcm { kind, channels } => Some(data.len() / (kind.bytes() * *channels).max(1)),
         };
         let frames = frames.filter(|&n| n > 0).unwrap_or(self.last_frames);
-        let channels = usize::from(self.layout.channels());
-        let total = (frames as u64).saturating_mul(channels as u64);
-        if total > crate::pcm::MAX_DECODE_SAMPLES {
-            return Err(AudioError::TooLarge(format!(
-                "{total} samples of concealment exceed the {}-sample decode limit",
-                crate::pcm::MAX_DECODE_SAMPLES
-            )));
-        }
-        Ok(AudioBuffer { sample_rate: self.sample_rate, channels: crate::pcm::silence(channels, frames)? })
+        Ok(AudioBuffer { sample_rate: self.sample_rate, channels: crate::pcm::silence(usize::from(self.layout.channels()), frames)? })
     }
 
     /// The frames every packet decodes to, for codecs whose packets all have one length; `None`
@@ -171,6 +163,8 @@ impl TrackDecoder {
     /// Forget the decoder state, for a seek: the next packet decodes as if it were the first
     /// (codecs with overlap need [`TrackDecoder::preroll`] frames to settle).
     pub fn reset(&mut self) {
+        // the packet before a seek says nothing about the length of a packet lost after it
+        self.last_frames = 0;
         match &mut self.inner {
             Inner::Pcm { .. } => {}
         }
@@ -217,6 +211,12 @@ mod tests {
         let block = dec.decode(&[0x00, 0x40, 0x00, 0xC0]).unwrap();
         assert_eq!(block.channels, vec![vec![0.5], vec![-0.5]]);
         assert_eq!(dec.conceal(None).unwrap().frames(), 1);
+        // a reset forgets the last packet's length
+        dec.reset();
+        assert_eq!(dec.conceal(None).unwrap().frames(), 0);
+        // silence past the decode limit is an error, not shorter silence
+        dec.last_frames = usize::try_from(crate::pcm::MAX_DECODE_SAMPLES / 2 + 1).unwrap();
+        assert!(matches!(dec.conceal(None), Err(AudioError::TooLarge(_))));
     }
 
     #[test]
