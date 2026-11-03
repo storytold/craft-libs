@@ -39,7 +39,7 @@ fn the_transform_cache_is_shared_safely_between_threads() {
     // Each transform's size and result, built one at a time.
     clear_cache();
     set_cache_budget(usize::MAX);
-    let alone: Vec<(usize, Vec<f32>)> = keys.iter().map(|k| eval(k)).map(|(t, out)| (t.table_bytes(), out)).collect();
+    let alone: Vec<(usize, Vec<f32>)> = keys.iter().map(eval).map(|(t, out)| (t.table_bytes(), out)).collect();
     let total: usize = alone.iter().map(|(b, _)| b).sum();
     assert_eq!(cache_usage(), (keys.len(), total), "built one at a time, every transform is counted once");
 
