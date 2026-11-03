@@ -183,16 +183,28 @@ fn which_on_path(name: &str) -> Option<std::path::PathBuf> {
 /// Starts an app binary from its own folder.
 pub fn launch_binary(exe: &Path, args: &[&str]) -> Result<(), String> {
     let mut cmd = if in_sandbox() {
+        // The folder is on the host, which the sandbox mostly can't see: have `flatpak-spawn`
+        // change to it on the host side instead of setting it for the sandbox-side process.
+        // With a directory the host resolves a relative `exe` against it (`bin/app` would become
+        // `bin/bin/app`), so both the directory and the command are made absolute first.
+        let exe = std::path::absolute(exe).unwrap_or_else(|_| exe.to_path_buf());
         let mut c = command("flatpak-spawn");
-        c.arg("--host").arg(exe);
+        c.arg("--host");
+        if let Some(dir) = exe.parent() {
+            let mut option = std::ffi::OsString::from("--directory=");
+            option.push(dir);
+            c.arg(option);
+        }
+        c.arg(&exe);
         c
     } else {
-        command(exe)
+        let mut c = command(exe);
+        if let Some(dir) = exe.parent() {
+            c.current_dir(dir);
+        }
+        c
     };
     cmd.args(args);
-    if let Some(dir) = exe.parent() {
-        cmd.current_dir(dir);
-    }
     spawn_detached(cmd)
 }
 
