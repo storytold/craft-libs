@@ -97,8 +97,9 @@ craft-doc = { git = "https://github.com/storytold/craft-libs", rev = "<commit>",
   allocated. A tile that several references name is read and decoded once per call. A tile is
   decoded only up to its size, 256 × 256 pixels, and its samples must match the BLAKE3 hash that
   names them. A tile's zstd frame larger than the tile plus an eighth and 4 KiB, or one that
-  declares a window larger than 8 MiB, is refused. Every tile reference in the manifest, those of
-  other layers included, counts against `max_items`.
+  declares a window larger than 8 MiB, or has bytes after its frame, is refused. Tile references
+  in parsed surfaces, rendered caches and masks throughout the layer tree count against
+  `max_items`, including other layers. Video frames and other unrecognized members are skipped.
 
 `tests/pixels.rs` builds bundles with tiles compressed by `ruzstd` and runs with
 `cargo test -p craft-doc --all-features`: 8, 16 and 32-bit tiles, the default pixel, negative

@@ -108,8 +108,9 @@ pub struct LayerMask {
 /// The decoded layer and the decoded mask each count as one entry against
 /// [`Limits::max_entry`], and together with each distinct tile read and decompressed against
 /// [`Limits::max_total`]. A tile that several references name is read and decoded once per call.
-/// Each is checked before it is allocated. Every tile reference in the manifest, those of other
-/// layers included, counts against [`Limits::max_items`].
+/// Each is checked before it is allocated. Tile references in parsed surfaces, rendered caches
+/// and masks throughout the layer tree count against [`Limits::max_items`], including other
+/// layers. Video frames and other unrecognized members are skipped.
 pub fn pcraft_layer_rgba(bytes: &[u8], layer: &[usize], limits: &Limits) -> Result<Option<LayerPixels>, Error> {
     match sniff(bytes).ok_or(Error::Unrecognized)? {
         Kind::PhotoCraft => {}
@@ -289,13 +290,22 @@ trait Sample: Copy {
     const SIZE: usize;
     const OPAQUE: Self;
     fn read(bytes: &[u8]) -> Vec<Self>;
+    fn at(bytes: &[u8], index: usize) -> Option<Self>;
 }
+
+#[cfg(test)]
+thread_local! { static SAMPLE_BUFFER_BYTES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
 
 impl Sample for u8 {
     const SIZE: usize = 1;
     const OPAQUE: u8 = u8::MAX;
     fn read(bytes: &[u8]) -> Vec<u8> {
+        #[cfg(test)]
+        SAMPLE_BUFFER_BYTES.with(|n| n.set(n.get() + bytes.len()));
         bytes.to_vec()
+    }
+    fn at(bytes: &[u8], index: usize) -> Option<u8> {
+        bytes.get(index).copied()
     }
 }
 
@@ -303,7 +313,12 @@ impl Sample for u16 {
     const SIZE: usize = 2;
     const OPAQUE: u16 = u16::MAX;
     fn read(bytes: &[u8]) -> Vec<u16> {
+        #[cfg(test)]
+        SAMPLE_BUFFER_BYTES.with(|n| n.set(n.get() + bytes.len()));
         bytes.as_chunks::<2>().0.iter().map(|b| u16::from_le_bytes(*b)).collect()
+    }
+    fn at(bytes: &[u8], index: usize) -> Option<u16> {
+        Some(u16::from_le_bytes(*bytes.get(index.checked_mul(2)?..)?.first_chunk::<2>()?))
     }
 }
 
@@ -311,7 +326,12 @@ impl Sample for f32 {
     const SIZE: usize = 4;
     const OPAQUE: f32 = 1.0;
     fn read(bytes: &[u8]) -> Vec<f32> {
+        #[cfg(test)]
+        SAMPLE_BUFFER_BYTES.with(|n| n.set(n.get() + bytes.len()));
         bytes.as_chunks::<4>().0.iter().map(|b| f32::from_le_bytes(*b)).collect()
+    }
+    fn at(bytes: &[u8], index: usize) -> Option<f32> {
+        Some(f32::from_le_bytes(*bytes.get(index.checked_mul(4)?..)?.first_chunk::<4>()?))
     }
 }
 
@@ -394,13 +414,17 @@ fn decode_as<S: Sample>(tiles: &mut Tiles, surface: &SurfaceP, canvas: Canvas, o
         if x0 >= w || y0 >= h {
             continue;
         }
-        let tile = S::read(tiles.get(t, tile_bytes, budget)?);
+        let tile = tiles.get(t, tile_bytes, budget)?;
         for y in y0..(y0 + TILE).min(h) {
             for x in x0..(x0 + TILE).min(w) {
                 let s = ((y - y0) * TILE + (x - x0)) * channels;
                 let d = (y * w + x) * oc;
-                if let (Some(src), Some(dst)) = (tile.get(s..s + channels), pixels.get_mut(d..d + oc)) {
-                    put(src, gray, format.alpha, out, dst);
+                let mut src = [S::OPAQUE; 4];
+                for (c, sample) in src.iter_mut().enumerate().take(channels) {
+                    *sample = S::at(tile, s + c).ok_or_else(|| malformed("tile pixel is incomplete"))?;
+                }
+                if let Some(dst) = pixels.get_mut(d..d + oc) {
+                    put(src.get(..channels).ok_or_else(|| malformed("too many pixel channels"))?, gray, format.alpha, out, dst);
                 }
             }
         }
@@ -420,6 +444,9 @@ fn unzstd(frame: &[u8], len: usize, what: &str) -> Result<Vec<u8>, Error> {
     }
     if out.len() < len {
         return Err(malformed(format!("{what} decodes to {} bytes, not {len}", out.len())));
+    }
+    if !dec.get_ref().is_empty() {
+        return Err(malformed(format!("{what} has bytes after its zstd frame")));
     }
     Ok(out)
 }
@@ -459,6 +486,16 @@ mod tests {
         assert_eq!(unzstd(&frame, 100, "t").ok(), Some(vec![7u8; 100]));
         assert!(matches!(unzstd(&frame, 99, "t"), Err(Error::Malformed(m)) if m.contains("more than 99 bytes")));
         assert!(matches!(unzstd(&frame, 101, "t"), Err(Error::Malformed(_))));
+    }
+
+    #[test]
+    fn bytes_after_a_zstd_frame_are_malformed() {
+        let frame = ruzstd::encoding::compress_to_vec(&[7u8; 100][..], ruzstd::encoding::CompressionLevel::Fastest);
+        for extra in [&b"junk"[..], frame.as_slice()] {
+            let mut trailing = frame.clone();
+            trailing.extend_from_slice(extra);
+            assert!(matches!(unzstd(&trailing, 100, "t"), Err(Error::Malformed(_))));
+        }
     }
 
     /// A ZIP archive of STORE entries.
@@ -518,6 +555,27 @@ mod tests {
         let Samples::U8(rgba) = &pixels.rgba else { panic!("not 8-bit") };
         assert_eq!(rgba.get((39 * TILE + 5) * 4), Some(&39));
         assert!(scans <= 4, "{scans} walks of the central directory");
+    }
+
+    #[test]
+    fn shared_tiles_do_not_allocate_a_converted_tile_for_each_reference() {
+        let tile = vec![7u8; TILE * TILE];
+        let hash = blake3::hash(&tile).to_hex().to_string();
+        let refs: Vec<String> = (0..64).map(|i| format!(r#"{{"tx":{i},"ty":0,"hash":"{hash}"}}"#)).collect();
+        let manifest = format!(
+            r#"{{"format_version":1,"generator":"test","document":{{"size":{{"width":{},"height":1}},"layers":[{{"content":{{"kind":"raster","surface":{{"format":{{"mode":"Grayscale","sample":"U8","alpha":false}},"default":"00","tiles":[{}]}}}}}}]}}}}"#,
+            64 * TILE,
+            refs.join(",")
+        );
+        let file = stored(&[
+            ("manifest.json".into(), manifest.into_bytes()),
+            (format!("tiles/{hash}.zst"), ruzstd::encoding::compress_to_vec(&tile[..], ruzstd::encoding::CompressionLevel::Fastest)),
+        ]);
+        let before = SAMPLE_BUFFER_BYTES.with(|n| n.get());
+        let p = pcraft_layer_rgba(&file, &[0], &Limits::default()).unwrap().unwrap();
+        assert!(matches!(p.rgba, Samples::U8(ref rgba) if rgba.len() == 64 * TILE * 4 && rgba[7 * 4] == 7));
+        let allocated = SAMPLE_BUFFER_BYTES.with(|n| n.get()) - before;
+        assert!(allocated <= 64 * TILE + 1, "{allocated} bytes allocated as converted samples");
     }
 
     #[test]

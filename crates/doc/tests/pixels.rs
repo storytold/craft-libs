@@ -215,7 +215,7 @@ fn a_tile_that_several_references_name_is_decoded_once() {
     let s = surface("Grayscale", "U8", false, &[0], &refs);
     let file = bundle(64 * TILE as u32, 1, "Grayscale", &[layer(&raster(&s), None)], &[&tile]);
     let mut limits = Limits::default();
-    limits.max_total = 1 << 20;
+    limits.max_total = 160 << 10;
     let p = pcraft_layer_rgba(&file, &[0], &limits).unwrap().unwrap();
     let px = u8s(&p.rgba);
     assert_eq!(px.len(), 64 * TILE * 4);
