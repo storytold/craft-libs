@@ -8,6 +8,7 @@
 
 mod assets;
 mod lexicon;
+mod refine;
 mod tagger;
 
 /// Upstream notice for apps' language-data attribution views.
@@ -242,7 +243,7 @@ pub fn word_ranges(text: &str) -> Vec<Range<usize>> {
             segment(run, from, &mut out);
         }
     }
-    out
+    refine::words(text, out)
 }
 /// Safe Khmer inter-word breaks and explicit ZWSP opportunities; never inserts text.
 pub fn line_breaks(text: &str) -> Vec<usize> {

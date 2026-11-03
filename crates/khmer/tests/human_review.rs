@@ -28,10 +28,41 @@ fn human_rejected_boundaries_are_not_line_opportunities() {
 
 #[test]
 fn human_accepted_finer_phrase_breaks_remain_available() {
-    // The reviewer explicitly accepted this complete candidate row. Retain its
-    // useful opportunities without prescribing all valid Khmer segmentations.
-    let text = "ក្នុងគោលដៅបង្កើនការយល់ដឹង";
-    assert_eq!(line_breaks(text), [15, 24, 30, 48, 57, 66]);
+    // Explicitly accepted rows, including the grouping which differs from ICU.
+    for parts in [&["ក្នុង", "គោល", "ដៅ", "បង្កើន", "ការ", "យល់", "ដឹង"][..], &["ពណ៌", "សម្ដេច", "ថា", "ខ្មៅ"]]
+    {
+        let mut at = 0;
+        let expected: Vec<_> = parts
+            .iter()
+            .take(parts.len() - 1)
+            .map(|part| {
+                at += part.len();
+                at
+            })
+            .collect();
+        assert_eq!(line_breaks(&parts.concat()), expected);
+    }
+}
+
+#[test]
+fn short_word_repair_preserves_known_words_and_correctable_misspellings() {
+    let cases: &[(&str, &[&str])] = &[
+        ("សណ្ដូកកបណ្ដែតខ្លួន", &["សណ្ដូក", "ក", "បណ្ដែត", "ខ្លួន"]),
+        // A different suffix from the existing public synthetic corpus: the
+        // rule is dictionary-driven, not an exception for the reviewed phrase.
+        ("ជជែកលា", &["ជជែក", "លា"]),
+        ("អភិវឌ្ឍន៍", &["អភិវឌ្ឍន៍"]),         // known whole word
+        ("កសីករ", &["កសីករ"]),             // rare frequency entry, spelling correction remains possible
+        ("សុន្ទរក", &["សុន្ទរក"]),             // competing one-edit spelling
+        ("គហបតីករ័តន៍", &["គហបតីក", "រ័តន៍"]), // insertion into a longer dictionary word
+    ];
+    for &(text, expected) in cases {
+        let actual: Vec<_> = craft_khmer::word_ranges(text).into_iter().map(|r| &text[r]).collect();
+        assert_eq!(actual, expected, "{text}");
+    }
+    let text = "Latin 🦀 សណ្ដូកកបណ្ដែតខ្លួន!";
+    assert!(line_breaks(text).contains(&"Latin 🦀 សណ្ដូក".len()));
+    assert!(!line_breaks("សណ្ដូក\u{2060}កបណ្ដែតខ្លួន").contains(&"សណ្ដូក\u{2060}".len()));
 }
 
 #[test]

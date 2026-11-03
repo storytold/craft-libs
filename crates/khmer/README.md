@@ -20,6 +20,26 @@ fixtures were produced by running the upstream TypeScript with its production
 lexicon and model; the Rust test compares exact word spans for those fixtures.
 The original protected-phrase list is empty at this revision.
 
+The local short-word refinement in `src/refine.rs` can add a boundary inside an
+unknown model token when a prefix of at least three Khmer clusters and a
+one-cluster suffix are independently present in both dictionaries. It keeps
+whole frequency entries (including rare misspellings), valid spelling entries,
+variants and recognized fused compounds intact. Competing dictionary partitions
+or one-edit spelling corrections cause it to abstain; the same protection checks
+the adjacent original tokens. The proposed prefix is excluded from the one-edit
+veto because deleting the short suffix necessarily produces that prefix.
+Decisions use original model spans, never recurse, and retain every existing
+boundary. Manual controls and structural safety still apply. There are no word
+exceptions or changes to the model weights or language data.
+
+This is a conservative heuristic, not a contextual language model. An accidental
+extra letter can sometimes form a valid short word, and dictionaries alone
+cannot resolve that ambiguity. Additional divisions need native-reader review.
+One-edit searches are limited to short candidates and cache at most 64 borrowed
+text pairs per call; the spelling index is shared with the proofing code. The
+focused regression covers the requested split, a different suffix, and known
+words/typos which must remain intact.
+
 The additive frequency fallback retains the best score per cluster position
 using dynamic programming rather than a width-12 whole-path beam. It ports
 frequency penalties and bounded unknown chunks, and includes productive fused
@@ -65,3 +85,13 @@ test demonstrates `កសីករ` remaining whole inside unspaced text, being 
 receiving `កសិករ` as its first suggestion, and checking cleanly after correction.
 These selected examples are not a representative accuracy estimate; unmarked
 rows are not endorsements and candidate breaks are not necessarily rendered wraps.
+
+## Real-document validation
+
+Evaluation includes real Khmer book prose extracted from InDesign files: 302,428
+original model-counted Khmer word occurrences across 3,331 paragraphs, alongside
+focused synthetic word-pair, typo and boundary fixtures. In the short-word
+refinement comparison, 302,427 original word spans remain identical; one joined
+span becomes two, adding one opportunity without removing any. These are
+segmentation-derived counts and preservation results, not 302,428 independently
+annotated correctness judgments. The private book text is not redistributed.
