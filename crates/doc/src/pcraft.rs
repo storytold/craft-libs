@@ -203,3 +203,11 @@ pub(crate) fn outline(bytes: &[u8], budget: &mut Budget) -> Result<Outline, Erro
         layers: d.layers.into_iter().map(Layer::from).collect(),
     })
 }
+
+/// The archive and the manifest's document read as `D`, checked as [`outline`] reads it.
+#[cfg(feature = "pcraft-pixels")]
+pub(crate) fn document<'a, D: DeserializeOwned>(bytes: &'a [u8], budget: &mut Budget) -> Result<(Zip<'a>, D), Error> {
+    let (zip, json) = manifest(bytes, budget)?;
+    let document = read::<D>(&json, budget)?.document;
+    Ok((zip, document))
+}
