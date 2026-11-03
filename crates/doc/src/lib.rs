@@ -6,6 +6,7 @@
 //! - [`info`] reads the format version and the writer the file names.
 //! - [`renditions`] returns the previews and the PDF a file carries.
 //! - [`outline`] returns the canvas, the pages (artboards or compositions) and the layers.
+//! - [`pcraft_document`] reads a caller-defined PhotoCraft document head without its payloads.
 //! - `pcraft_layer_rgba`, with the feature `pcraft-pixels`, decodes a PhotoCraft layer's pixels
 //!   and its layer mask.
 //!
@@ -306,6 +307,37 @@ pub fn outline(bytes: &[u8], limits: &Limits) -> Result<Outline, Error> {
         Kind::PhotoCraft => pcraft::outline(bytes, &mut budget),
         Kind::VectorCraft => vectorcraft::outline(bytes, &mut budget),
         Kind::EffectCraft => ecproj::outline(bytes, &mut budget),
+    }
+}
+
+/// A PhotoCraft manifest's `document` read as the caller's `D`, without reading its previews,
+/// tiles or blobs. `D` may describe only the metadata the caller needs; other members are
+/// skipped by serde. This does not validate the document against PhotoCraft's complete model
+/// or check that its referenced payload entries exist.
+///
+/// The manifest and envelope checks are the same as [`outline`]. Before `D` is deserialized,
+/// [`Limits::max_items`] additionally bounds structural JSON items throughout the manifest,
+/// including members `D` skips, as [`craft_pcraft_format::check_manifest`] counts them; the
+/// count is opening array/object brackets and commas outside strings. The shared format's
+/// own item ceiling still applies. Byte and nesting limits apply as usual.
+/// `D`'s deserializer is caller code: its own allocations and behavior remain the caller's
+/// responsibility. No pixel feature is required.
+///
+/// A recognized document of another kind gives [`Error::Unsupported`].
+///
+/// ```
+/// #[derive(serde::Deserialize)]
+/// struct Head { mode: String }
+/// # fn read(bytes: &[u8]) -> Result<(), craft_doc::Error> {
+/// let head: Head = craft_doc::pcraft_document(bytes, &craft_doc::Limits::default())?;
+/// assert_eq!(head.mode, "Rgb");
+/// # Ok(())
+/// # }
+/// ```
+pub fn pcraft_document<D: DeserializeOwned>(bytes: &[u8], limits: &Limits) -> Result<D, Error> {
+    match sniff(bytes).ok_or(Error::Unrecognized)? {
+        Kind::PhotoCraft => pcraft::head(bytes, &mut Budget::new(limits)),
+        kind => Err(Error::Unsupported(format!("document metadata is read from .pcraft bundles, not .{}", kind.extension()))),
     }
 }
 
