@@ -192,7 +192,7 @@ mod tests {
         let issues = crate::check_text(mixed, &[]);
         assert!(issues.iter().any(|i| i.kind == IssueKind::Grammar && i.start == 0 && i.end == 5 && i.suggestions == ["Hello"]));
         assert!(!issues.iter().any(|i| i.message == "Extra space"), "Khmer-adjacent spacing stays untouched");
-        for separate_lines in ["ខ្មែរ\nhello  world", "hello  world\nខ្មែរ"] {
+        for separate_lines in ["ខ្មែរ\n  Hello", "Hello  \nខ្មែរ"] {
             let issues = crate::check_text(separate_lines, &[]);
             assert!(issues.iter().any(|i| i.message == "Extra space"), "a line break ends Khmer adjacency: {issues:?}");
         }
