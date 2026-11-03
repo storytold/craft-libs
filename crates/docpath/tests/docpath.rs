@@ -425,6 +425,15 @@ fn a_non_unicode_document_path_keeps_the_namespace_rules() {
     assert_eq!(resolve("x.png", Some(folder)).unwrap(), Path::new(OsStr::from_bytes(b"/home/u/a\\b/x.png")));
     let name = Path::new(OsStr::from_bytes(b"/home/u/a\xff\\b.doc"));
     assert_eq!(resolve("x.png", Some(name)), Err(Refused::Invalid));
+    // `.` and `..` in the document's folder are folded as for a Unicode document path.
+    let dotted = Path::new(OsStr::from_bytes(b"/home/./x/../u/\xff/a.doc"));
+    assert_eq!(resolve("../y/x.png", Some(dotted)).unwrap(), Path::new("/home/u/y/x.png"));
+    assert_eq!(resolve("../../../../x.png", Some(dotted)), Err(Refused::Invalid));
+    let relative = Path::new(OsStr::from_bytes(b"\xff/a.doc"));
+    assert_eq!(resolve("../../x.png", Some(relative)).unwrap(), Path::new("../x.png"));
+    // A `..` that climbs out of a name holding a `\` on Unix does not leave the share unnoticed.
+    let climb = Path::new(OsStr::from_bytes(b"//server/share/a\\b/../../\xff/a.doc"));
+    assert_eq!(resolve("x.png", Some(climb)), Err(Refused::Invalid));
 }
 
 #[cfg(windows)]
@@ -443,6 +452,10 @@ fn a_non_unicode_document_path_keeps_the_namespace_rules() {
     let share = native(r"\\server\share\docs\a.doc");
     assert_eq!(resolve("x.png", Some(share.as_path())).unwrap(), native(r"\\server\share\docs\x.png"));
     assert_eq!(resolve(r"..\..\x.png", Some(share.as_path())), Err(Refused::Invalid));
+    let dotted = native(r"C:\a\..\.\docs\a.doc");
+    assert_eq!(resolve("x.png", Some(dotted.as_path())).unwrap(), native(r"C:\docs\x.png"));
+    assert_eq!(resolve(r"..\y\x.png", Some(dotted.as_path())).unwrap(), Path::new(r"C:\y\x.png"));
+    assert_eq!(resolve(r"..\..\x.png", Some(dotted.as_path())), Err(Refused::Invalid));
     for doc in [r"\\.\COM1\docs\a.doc", r"\\?\GLOBALROOT\Device\docs\a.doc", r"\??\C:\docs\a.doc"] {
         assert_eq!(resolve("x.png", Some(native(doc).as_path())), Err(Refused::Device), "{doc}");
     }

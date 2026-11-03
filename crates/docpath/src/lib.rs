@@ -75,8 +75,9 @@
 //! assert_eq!(resolve_absolute("img/logo.png", None), Err(Refused::Invalid));
 //! ```
 
+use std::ffi::OsStr;
 use std::fmt;
-use std::path::{MAIN_SEPARATOR, Path, PathBuf};
+use std::path::{Component, MAIN_SEPARATOR, Path, PathBuf};
 
 /// What a stored path refers to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -619,18 +620,32 @@ fn resolve_native(raw: &str, doc: &Path, comps: &[String]) -> Result<PathBuf, Re
     if parts(&native) == parts(&expected) { Ok(native) } else { Err(Refused::Invalid) }
 }
 
+/// Join a relative link's components to a non-Unicode document's folder with the platform's own
+/// path rules, folding `.` and `..` as [`normalize`] does: a folder with a root (`/`, `C:\`, a
+/// share) may not be climbed above, and a relative one keeps leading `..`.
 fn join_native(doc: &Path, comps: &[String]) -> Result<PathBuf, Refused> {
-    let mut p = doc.parent().map(Path::to_path_buf).unwrap_or_default();
-    for c in comps {
-        match c.as_str() {
-            "." => {}
-            ".." => {
-                if !p.pop() {
-                    return Err(Refused::Invalid);
+    let folder = doc.parent().unwrap_or_else(|| Path::new(""));
+    let link = comps.iter().map(|c| match c.as_str() {
+        "." => Component::CurDir,
+        ".." => Component::ParentDir,
+        name => Component::Normal(OsStr::new(name)),
+    });
+    let mut root = PathBuf::new();
+    let mut names: Vec<&OsStr> = Vec::new();
+    for c in folder.components().chain(link) {
+        match c {
+            Component::Prefix(_) | Component::RootDir => root.push(c),
+            Component::CurDir => {}
+            Component::ParentDir => match names.last() {
+                Some(last) if *last != OsStr::new("..") => {
+                    names.pop();
                 }
-            }
-            _ => p.push(c),
+                _ if root.has_root() => return Err(Refused::Invalid),
+                _ => names.push(c.as_os_str()),
+            },
+            Component::Normal(name) => names.push(name),
         }
     }
-    Ok(p)
+    root.extend(names);
+    Ok(root)
 }
