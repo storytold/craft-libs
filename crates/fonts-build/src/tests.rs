@@ -384,6 +384,62 @@ fn cmap_reads_each_subtable_within_its_declared_length() {
     assert!(cmap.covers('A') && !cmap.covers('\u{20000}'));
 }
 
+/// A font whose cmap has one Windows full-repertoire encoding record per item of `records`, each
+/// naming that index of `subtables`: format 12 subtables of `(first, last)` groups.
+fn shared_cmap_font(records: &[usize], subtables: &[&[(u32, u32)]]) -> Vec<u8> {
+    let be32 = |v: &mut Vec<u8>, x: u32| v.extend_from_slice(&x.to_be_bytes());
+    let mut tables: Vec<Vec<u8>> = Vec::new();
+    for groups in subtables {
+        let mut t = vec![0, 12, 0, 0];
+        be32(&mut t, 16 + 12 * u32::try_from(groups.len()).unwrap());
+        be32(&mut t, 0);
+        be32(&mut t, u32::try_from(groups.len()).unwrap());
+        for &(first, last) in *groups {
+            [first, last, 1].into_iter().for_each(|x| be32(&mut t, x));
+        }
+        tables.push(t);
+    }
+    let mut cmap = vec![0, 0];
+    cmap.extend_from_slice(&u16::try_from(records.len()).unwrap().to_be_bytes());
+    let mut offsets = Vec::new();
+    let mut at = 4 + 8 * u32::try_from(records.len()).unwrap();
+    for t in &tables {
+        offsets.push(at);
+        at += u32::try_from(t.len()).unwrap();
+    }
+    for &r in records {
+        cmap.extend_from_slice(&[0, 3, 0, 10]);
+        be32(&mut cmap, offsets[r]);
+    }
+    tables.iter().for_each(|t| cmap.extend(t));
+    let mut font = vec![0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0];
+    font.extend_from_slice(b"cmap");
+    for x in [0, 28, u32::try_from(cmap.len()).unwrap()] {
+        be32(&mut font, x);
+    }
+    font.extend(cmap);
+    font
+}
+
+#[test]
+fn cmap_reads_a_shared_subtable_once() {
+    // 65535 encoding records naming one subtable of 2000 one-character groups: read once, not
+    // 131 million spans.
+    let groups: Vec<(u32, u32)> = (0..2000).map(|i| (0x1_0000 + 2 * i, 0x1_0000 + 2 * i)).collect();
+    let font = shared_cmap_font(&vec![0; usize::from(u16::MAX)], &[&groups]);
+    let started = std::time::Instant::now();
+    let cmap = Cmap::read(&font, 0).unwrap();
+    assert_eq!(cmap.ranges(), groups);
+    assert!(cmap.covers('\u{10000}') && !cmap.covers('\u{10001}'));
+    assert!(started.elapsed() < std::time::Duration::from_secs(10), "{:?}", started.elapsed());
+
+    // Past MAX_SUBTABLES distinct subtables, the rest are not read.
+    let one: Vec<[(u32, u32); 1]> = (0..20).map(|i| [(0x4E00 + i, 0x4E00 + i)]).collect();
+    let subtables: Vec<&[(u32, u32)]> = one.iter().map(|g| &g[..]).collect();
+    let font = shared_cmap_font(&(0..20).collect::<Vec<_>>(), &subtables);
+    assert_eq!(Cmap::read(&font, 0).unwrap().ranges(), [(0x4E00, 0x4E0F)]);
+}
+
 /// A craft-fonts checkout in `scratch` with these `(family, scripts, role, font)` faces, all
 /// Regular.
 fn checkout(scratch: &Scratch, faces: &[(&str, &str, &str, Vec<u8>)]) -> PathBuf {

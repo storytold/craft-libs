@@ -1,6 +1,11 @@
 //! Just enough of an OpenType reader to ask which characters a face maps: the `cmap` table's
 //! Unicode subtables in formats 4 and 12, in a single font or one face of a collection.
 
+/// The most distinct Unicode subtables read from one face. Real fonts have one to three; a cmap
+/// may list 65535 encoding records, and each would make [`Cmap::ranges`] and [`Cmap::covers`] walk
+/// its subtable again.
+const MAX_SUBTABLES: usize = 16;
+
 /// The Unicode character maps of one face.
 pub(crate) struct Cmap<'a> {
     subtables: Vec<&'a [u8]>,
@@ -38,8 +43,15 @@ impl<'a> Cmap<'a> {
                 Some(12) => u32_at(rest, 4).and_then(|len| usize::try_from(len).ok()),
                 _ => None,
             };
-            if let Some(subtable) = len.and_then(|len| rest.get(..len)) {
+            // Encoding records often share one subtable (Unicode and Windows naming the same
+            // format 4 table); each is read once.
+            if let Some(subtable) = len.and_then(|len| rest.get(..len))
+                && !subtables.iter().any(|t: &&[u8]| t.as_ptr() == subtable.as_ptr() && t.len() == subtable.len())
+            {
                 subtables.push(subtable);
+                if subtables.len() == MAX_SUBTABLES {
+                    break;
+                }
             }
         }
         (!subtables.is_empty()).then_some(Self { subtables })
