@@ -122,10 +122,15 @@ impl<'a> Resources<'a> {
     }
 }
 
+/// How deep forms, patterns and soft masks may reference each other's resources. Each level is
+/// a recursive `Walk::content`, so this bounds the native stack a crafted PDF can use.
+const MAX_RESOURCE_DEPTH: usize = 16;
+
 #[derive(Default)]
 struct Walk {
     summary: Summary,
     seen: HashSet<ObjectIdentifier>,
+    depth: usize,
 }
 
 impl Walk {
@@ -271,8 +276,13 @@ impl Walk {
         if let Ok(data) = stream.decoded() {
             self.operators(&mut UntypedIter::new(&data));
         }
+        if self.depth >= MAX_RESOURCE_DEPTH {
+            return;
+        }
         if let Some(res) = stream.dict().get::<Dict<'_>>(b"Resources".as_slice()) {
+            self.depth += 1;
             self.resources(&Resources::of(&res));
+            self.depth -= 1;
         }
     }
 }
