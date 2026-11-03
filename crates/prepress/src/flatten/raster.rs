@@ -323,8 +323,11 @@ impl Grid {
             return Some((grid, false));
         }
         // Scaling both sides down once is not enough for a thin region, whose short side stays
-        // at its minimum pixels: the second pass scales by the pixel ratio itself.
-        for linear in [false, true] {
+        // at its minimum pixels: later passes scale by the pixel ratio itself. A grid whose
+        // coordinates hit the clamp reports fewer pixels than it spans, so a few passes may be
+        // needed; each shrinks the scale, and 8 bound the work.
+        for pass in 0..8 {
+            let linear = pass > 0;
             let ratio = MAX_RASTER_PIXELS as f64 / grid.pixels() as f64;
             scale *= if linear { ratio } else { ratio.sqrt() } * 0.999;
             grid = Self::new(bounds, page, scale);
@@ -423,5 +426,13 @@ mod tests {
         // The full page at that resolution: scaled down once, both ways.
         let (grid, _) = Grid::within_budget(page, page, 600.0 / 72.0).unwrap();
         assert!(grid.pixels() <= MAX_RASTER_PIXELS && grid.pixels() > MAX_RASTER_PIXELS / 2, "{} × {}", grid.width(), grid.height());
+    }
+
+    #[test]
+    fn a_clamped_grid_still_fits_the_pixel_budget() {
+        // Both sides past the coordinate clamp: the pixel count saturates, so one pass is not enough.
+        let page = Rect::new(0.0, 0.0, 1e15, 1e15);
+        let (grid, lowered) = Grid::within_budget(page, page, 600.0 / 72.0).unwrap();
+        assert!(lowered && grid.pixels() <= MAX_RASTER_PIXELS, "{} × {}", grid.width(), grid.height());
     }
 }

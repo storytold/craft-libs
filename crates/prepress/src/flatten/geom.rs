@@ -113,6 +113,13 @@ pub fn regions_with(shapes: &[Shape], clips: &[ClipPath], sliver: f64) -> Result
     Ok(Arrangement::new(shapes, clips, sliver)?.regions())
 }
 
+/// The finiteness check [`regions_with`] makes: every point of every shape path and of every clip
+/// path a shape names. For callers that skip the arrangement but must still reject bad input.
+pub fn check_finite(shapes: &[Shape], clips: &[ClipPath]) -> Result<(), GeomError> {
+    let used = shapes.iter().flat_map(|s| &s.clips).filter_map(|&c| clips.get(c)).map(|c| &c.path);
+    eps_for(shapes.iter().map(|s| &s.path).chain(used)).map(|_| ())
+}
+
 /// Box comparisons [`overlap_groups`] makes before it folds the boxes still open into one group:
 /// many boxes sharing a horizontal span would otherwise cost one comparison per pair.
 const MAX_OVERLAP_COMPARISONS: usize = 4_000_000;

@@ -189,6 +189,7 @@ fn flatten_group(
     let segments =
         b.shapes.iter().map(|s| s.path.elements().len()).chain(b.clips.iter().map(|c| c.path.elements().len())).fold(0_usize, usize::saturating_add);
     if segments > MAX_GROUP_SEGMENTS {
+        geom::check_finite(&b.shapes, &b.clips)?;
         let mut path = BezPath::new();
         for &i in members {
             if !bounds[i].is_nan() {
@@ -1126,6 +1127,25 @@ mod tests {
         assert_eq!(f.report.complex_groups.len(), 1);
         assert!(matches!(f.report.complex_groups[0].reason, ComplexReason::TooManySegments(n) if n > MAX_GROUP_SEGMENTS), "{:?}", f.report);
         assert_eq!(f.report.regions, 0, "the arrangement was not built");
+    }
+
+    #[test]
+    fn a_group_with_too_many_segments_still_rejects_non_finite_points() {
+        let mut path = BezPath::new();
+        path.move_to(Point::new(0.0, 0.0));
+        for i in 0..=MAX_GROUP_SEGMENTS {
+            path.line_to(Point::new((i % 100) as f64, (i / 100) as f64));
+        }
+        path.line_to(Point::new(f64::NAN, 0.0));
+        path.close_path();
+        let crowded = Item::Fill(FillItem {
+            path,
+            rule: FillRule::NonZero,
+            paint: Paint::Solid(InkColor::Tints(vec![(C, 1.0)])),
+            overprint: Overprint::default(),
+        });
+        let l = list(InkSet::new(), vec![Item::Group(group(0.5, BlendMode::Normal, vec![crowded]))]);
+        assert!(flatten(&l, &FlattenOptions::default()).is_err());
     }
 
     #[test]
