@@ -33,7 +33,34 @@ use crate::{
 const CHUNK: u64 = 64 << 10;
 
 pub(crate) fn sniff(head: &[u8]) -> bool {
-    craft_vectorcraft_format::sniff(head)
+    if craft_vectorcraft_format::sniff(head) {
+        return true;
+    }
+    if !is_compressed(head) {
+        return false;
+    }
+    // A decoder can inspect broken compressed data past the requested output. Retry the
+    // bounded sniff with one compressed byte at a time, retaining any intact prefix.
+    let mut unpacked = Vec::new();
+    let head = head.get(..64 * 1024).unwrap_or(head);
+    let _ = gzip_decoder(head, 1).take(256).read_to_end(&mut unpacked);
+    !is_compressed(&unpacked) && craft_vectorcraft_format::sniff(&unpacked)
+}
+
+struct GzipInput<'a> {
+    bytes: &'a [u8],
+    step: usize,
+}
+
+impl Read for GzipInput<'_> {
+    fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
+        let len = out.len().min(self.step);
+        self.bytes.read(&mut out[..len])
+    }
+}
+
+fn gzip_decoder(bytes: &[u8], step: usize) -> GzDecoder<GzipInput<'_>> {
+    GzDecoder::new(GzipInput { bytes, step })
 }
 
 /// Where the JSON ends and the data after the marker starts, when `text` holds a NUL. JSON holds
@@ -60,7 +87,7 @@ enum Tail<'a> {
     Slice(&'a [u8]),
     /// Still in the gzip stream: `read` holds what was decompressed past the marker already, not
     /// yet counted against the budget.
-    Stream { dec: Box<GzDecoder<&'a [u8]>>, read: Vec<u8> },
+    Stream { dec: Box<GzDecoder<GzipInput<'a>>>, read: Vec<u8> },
 }
 
 impl Tail<'_> {
@@ -137,14 +164,31 @@ fn unpack<'a>(bytes: &'a [u8], budget: &mut Budget) -> Result<Unpacked<'a>, Erro
         budget.check_json(json.len() as u64, JSON)?;
         return Ok(Unpacked { json: Cow::Borrowed(json), tail: Tail::Slice(tail) });
     }
-    let mut dec = Box::new(GzDecoder::new(bytes));
+    let mut dec = Box::new(gzip_decoder(bytes, usize::MAX));
+    let mut step = CHUNK;
     let mut buf = Vec::new();
     let mut split: Option<(usize, usize)> = None;
     let mut nul: Option<usize> = None;
     loop {
         let start = buf.len();
-        let want = CHUNK.min(budget.left().saturating_add(1));
-        let n = (&mut *dec).take(want).read_to_end(&mut buf).map_err(damaged)?;
+        let want = step.min(budget.left().saturating_add(1));
+        let n = match (&mut *dec).take(want).read_to_end(&mut buf) {
+            Ok(n) => n,
+            Err(_) if step > 1 => {
+                // Keep the fast path for intact files. On damage, replay the already-counted
+                // prefix and read only through the marker, with no compressed read-ahead.
+                let mut retry = Box::new(gzip_decoder(bytes, 1));
+                let skipped = std::io::copy(&mut (&mut *retry).take(start as u64), &mut std::io::sink()).map_err(damaged)?;
+                if skipped != start as u64 {
+                    return Err(malformed("the compressed document ends before its previously read prefix"));
+                }
+                dec = retry;
+                buf.truncate(start);
+                step = 1;
+                continue;
+            }
+            Err(e) => return Err(damaged(e)),
+        };
         // The JSON ends before the first NUL: until there is one, all of it is JSON. The marker
         // may end in a later chunk than its first NUL.
         if nul.is_none() {

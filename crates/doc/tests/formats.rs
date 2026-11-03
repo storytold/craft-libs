@@ -34,6 +34,54 @@ fn selected_rendition_ignores_other_payloads() {
     }
 }
 
+/// Stored DEFLATE blocks contain the intact prefix; the next block has reserved BTYPE=3.
+fn gzip_with_broken_tail(prefix: &[u8]) -> Vec<u8> {
+    let mut bytes = vec![0x1f, 0x8b, 8, 0, 0, 0, 0, 0, 0, 255];
+    for chunk in prefix.chunks(u16::MAX as usize) {
+        let length = chunk.len() as u16;
+        bytes.push(0); // Non-final stored block.
+        bytes.extend(length.to_le_bytes());
+        bytes.extend((!length).to_le_bytes());
+        bytes.extend(chunk);
+    }
+    bytes.push(7); // Final block with an invalid block type.
+    bytes.extend([0; 8]);
+    bytes
+}
+
+#[test]
+fn selected_inline_pdf_ignores_gzip_damage_after_its_json_marker() {
+    for padding in [0, 128 * 1024] {
+        let json = vectorcraft_json(
+            4,
+            &format!(r#""padding":"{}","preview":{},"pdf":{}"#, "x".repeat(padding), blob("image/png", 0, 100), inline("application/pdf", PDF)),
+        );
+        let mut prefix = json.as_bytes().to_vec();
+        prefix.extend(BLOB_MAGIC);
+        let bytes = gzip_with_broken_tail(&prefix);
+        let mut exact = limits();
+        exact.max_json = json.len() as u64;
+        exact.max_total = (prefix.len() + PDF.len()) as u64;
+        exact.max_entry = PDF.len() as u64;
+        assert_eq!(rendition(&bytes, RenditionKind::Pdf, &exact).unwrap().unwrap().bytes, PDF);
+        assert!(matches!(rendition(&bytes, RenditionKind::Thumbnail, &limits()), Err(Error::Malformed(_))));
+        assert!(matches!(renditions(&bytes, &limits()), Err(Error::Malformed(_))));
+        exact.max_total -= 1;
+        assert!(matches!(rendition(&bytes, RenditionKind::Pdf, &exact), Err(Error::LimitExceeded(_))));
+        exact.max_total += 1;
+        exact.max_json -= 1;
+        assert!(matches!(rendition(&bytes, RenditionKind::Pdf, &exact), Err(Error::LimitExceeded(_))));
+        // A broken stream without a complete marker still fails, even after a complete JSON.
+        assert!(matches!(rendition(&gzip_with_broken_tail(json.as_bytes()), RenditionKind::Pdf, &limits()), Err(Error::Malformed(_))));
+    }
+}
+
+#[test]
+fn vectorcraft_sniff_does_not_unwrap_nested_gzip() {
+    let json = vectorcraft_json(4, "");
+    assert_eq!(sniff(&gzip(&gzip(json.as_bytes()))), None);
+}
+
 #[test]
 fn selected_rendition_skips_missing_zip_payloads_and_enforces_its_own_limits() {
     let manifest = pcraft_manifest(1, "[]", r#", "thumbnail":"thumb.png", "composite":"composite/preview.png""#);
