@@ -289,9 +289,13 @@ impl Embed {
             let file = dir.join(&entry.file);
             // `include_bytes!` resolves relative paths from the including source file.
             let path = file.canonicalize().map_err(|source| Error::Read { path: file, source })?;
-            // A symlink in the checkout must not pull a file from elsewhere on the build host.
+            // A symlink in the checkout must not pull a file from elsewhere on the build host. A
+            // missing licence is only warned about when serving; one that exists must be inside.
             if !path.starts_with(&root) {
                 return Err(Error::OutsideCheckout { manifest, file: entry.file });
+            }
+            if !entry.licence_file.is_empty() && dir.join(&entry.licence_file).canonicalize().is_ok_and(|licence| !licence.starts_with(&root)) {
+                return Err(Error::OutsideCheckout { manifest, file: entry.licence_file });
             }
             cargo.push(format!("cargo::rerun-if-changed={}", path.display()));
             let (index, sha256) = (entry.index, entry.sha256.clone());
@@ -382,7 +386,20 @@ impl Embed {
         for family in self.elsewhere.iter().filter(|f| !entries.iter().any(|e| &e.family == *f)) {
             cargo.push(format!("cargo::warning=craft-fonts: embedded_elsewhere names {family}, which {} lacks", manifest.display()));
         }
-        entries.into_iter().filter(|e| self.elsewhere.contains(&e.family) && is_checkout_relative(&e.file)).collect()
+        let root = dir.canonicalize().ok();
+        let inside = |file: &str| {
+            is_checkout_relative(file) && root.as_ref().is_some_and(|root| dir.join(file).canonicalize().is_ok_and(|path| path.starts_with(root)))
+        };
+        let mut kept = Vec::new();
+        for entry in entries.into_iter().filter(|e| self.elsewhere.contains(&e.family)) {
+            // A face outside the checkout is not read, so it covers no characters.
+            if !dir.join(&entry.file).exists() || inside(&entry.file) {
+                kept.push(entry);
+            } else {
+                cargo.push(format!("cargo::warning=craft-fonts: {}: {:?} is not a file inside the checkout", manifest.display(), entry.file));
+            }
+        }
+        kept
     }
 
     /// Warn about each catalog's and [`Embed::check_text`] file's characters that neither an
@@ -504,6 +521,11 @@ impl Serve {
                     if !name.is_empty() && !is_checkout_relative(name) {
                         return Err(Error::OutsideCheckout { manifest, file: name.to_owned() });
                     }
+                    // Writing follows a symlink, so one in the served directory could redirect it.
+                    let to = self.dir.join(name);
+                    if !name.is_empty() && has_symlink(&self.dir, &to) {
+                        return Err(Error::Write { path: to, source: io::Error::other("a symlink is in the way") });
+                    }
                 }
                 copy_file(path, &self.dir.join(&served), cargo)?;
                 let licence = (!entry.licence_file.is_empty())
@@ -579,6 +601,17 @@ fn served_file(face: &Face) -> String {
 /// root or a drive prefix.
 fn is_checkout_relative(file: &str) -> bool {
     !file.is_empty() && Path::new(file).components().all(|c| matches!(c, Component::Normal(_) | Component::CurDir))
+}
+
+/// Whether `to`, or a directory between `dir` and `to`, is a symlink. `symlink_metadata` doesn't
+/// follow one.
+fn has_symlink(dir: &Path, to: &Path) -> bool {
+    let Ok(rest) = to.strip_prefix(dir) else { return true };
+    let mut current = dir.to_path_buf();
+    rest.components().any(|component| {
+        current.push(component);
+        std::fs::symlink_metadata(&current).is_ok_and(|m| m.file_type().is_symlink())
+    })
 }
 
 /// A checkout path relative to the served directory: `fonts/a/A.ttf` → `a/A.ttf`.

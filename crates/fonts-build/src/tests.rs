@@ -731,8 +731,27 @@ fn manifest_paths_stay_inside_the_checkout() {
         std::fs::write(dir.join("fonts/manifest.txt"), line("fonts/link.ttf", "fonts/OFL.txt")).unwrap();
         assert!(outside(&run(Embed::new(), Some(&dir), Some("1"))));
         std::fs::write(dir.join("fonts/manifest.txt"), line("fonts/a.ttf", "fonts/LINK.txt")).unwrap();
+        assert!(outside(&run(Embed::new(), Some(&dir), Some("1"))));
         assert!(outside(&run(Embed::new().serve(&served, "fonts/"), Some(&dir), Some("1"))));
         assert!(!served.join("LINK.txt").exists());
+
+        // An embedded_elsewhere face behind such a symlink is not read for coverage.
+        let text = scratch.0.join("text.ftl");
+        std::fs::write(&text, "x = a\n").unwrap();
+        let manifest =
+            format!("{}Mono | Regular | fonts/link.ttf | Latn | OFL-1.1 | fonts/OFL.txt | 00 | src\n", line("fonts/a.ttf", "fonts/OFL.txt"));
+        std::fs::write(dir.join("fonts/manifest.txt"), manifest).unwrap();
+        let r = run(Embed::documents(&["Sans"]).embedded_elsewhere(&["Mono"]).check_text([&text]), Some(&dir), None);
+        assert!(warnings(&r).iter().any(|w| w.contains("\"fonts/link.ttf\" is not a file inside the checkout")), "{:?}", r.cargo);
+
+        // A symlink in the served directory doesn't redirect the copy.
+        std::fs::write(dir.join("fonts/manifest.txt"), line("fonts/a.ttf", "fonts/OFL.txt")).unwrap();
+        std::fs::create_dir_all(&served).unwrap();
+        std::os::unix::fs::symlink(&secret, served.join("OFL.txt")).unwrap();
+        let r = run(Embed::new().serve(&served, "fonts/"), Some(&dir), Some("1"));
+        assert!(matches!(r.result, Err(Error::Write { .. })), "{:?}", r.result);
+        assert_eq!(std::fs::read(&secret).unwrap(), b"host file");
+        std::fs::remove_file(served.join("OFL.txt")).unwrap();
     }
 
     // A plain checkout path still embeds and serves.
