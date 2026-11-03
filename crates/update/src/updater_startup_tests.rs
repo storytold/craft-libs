@@ -23,6 +23,7 @@ fn run(v: &str) -> Option<&OsStr> {
     Some(OsStr::new(v))
 }
 
+/// Every spelling of off and on, at run time and at build time; unset leaves the check on.
 #[test]
 fn the_variable_turns_the_startup_check_off_and_on() {
     for off in ["0", "false", "off", "no", "OFF", " No ", "False\n"] {
@@ -37,6 +38,7 @@ fn the_variable_turns_the_startup_check_off_and_on() {
     assert!(startup_check_from(None, None));
 }
 
+/// The run-time value overrides the build's both ways; an empty or unknown one decides nothing.
 #[test]
 fn the_run_time_value_wins_over_the_build_and_an_unusable_one_falls_through() {
     // A packager's build turns it off; the user turns it back on for one run, and the reverse.
@@ -69,6 +71,7 @@ fn a_value_that_is_not_unicode_is_ignored() {
     assert!(!startup_check_from(Some(&value), Some("0")));
 }
 
+/// Off: the check at start asks nothing and shows nothing, but a requested check still offers.
 #[test]
 fn with_the_startup_check_off_nothing_asks_the_network_until_the_user_does() {
     let ctx = egui::Context::default();
@@ -91,6 +94,7 @@ fn with_the_startup_check_off_nothing_asks_the_network_until_the_user_does() {
     assert!(u.prompt_open(), "a requested check offers the newer release");
 }
 
+/// On: the check at start asks once, however often it is called, and offers the release.
 #[test]
 fn with_the_startup_check_on_the_check_at_start_asks_once() {
     let ctx = egui::Context::default();
@@ -103,17 +107,19 @@ fn with_the_startup_check_on_the_check_at_start_asks_once() {
     assert!(u.prompt_open());
 }
 
-// Child processes isolate environment overrides from parallel tests without unsafe set_var.
+/// A new updater follows the run-time value. Child processes isolate environment overrides from
+/// parallel tests without unsafe set_var; an unusable value is left to the unit tests above, as
+/// its outcome depends on the build's value.
 #[test]
 fn a_new_updater_reads_the_variable_from_its_environment() {
     const CHILD: &str = "CRAFT_UPDATE_STARTUP_TEST_EXPECT";
     if let Ok(expect) = std::env::var(CHILD) {
         let expect = expect == "on";
         assert_eq!(startup_check_enabled(), expect);
-        assert_eq!(updater(Ok(None)).startup_check, expect);
+        assert_eq!(Updater::new(&crate::suite::PHOTOCRAFT, "0.1.0").startup_check, expect);
         return;
     }
-    for (value, expect) in [("off", "off"), ("0", "off"), ("on", "on"), ("bogus", "on")] {
+    for (value, expect) in [("off", "off"), ("0", "off"), ("on", "on"), ("1", "on")] {
         let status = std::process::Command::new(std::env::current_exe().unwrap())
             .args(["--exact", "updater::startup_tests::a_new_updater_reads_the_variable_from_its_environment", "--nocapture"])
             .env(CHILD, expect)
@@ -122,4 +128,27 @@ fn a_new_updater_reads_the_variable_from_its_environment() {
             .unwrap();
         assert!(status.success(), "{STARTUP_VAR}={value} should leave the check at start {expect}");
     }
+}
+
+/// A build made with `CRAFT_UPDATE_STARTUP=off` leaves the check at start off when the run sets
+/// nothing. Only that build tests anything here (the update workflow runs it); the child process
+/// has the run-time variable removed, so it sees only the compiled value.
+#[test]
+fn a_build_time_off_value_turns_the_startup_check_off() {
+    const CHILD: &str = "CRAFT_UPDATE_STARTUP_TEST_BUILD_OFF";
+    if option_env!("CRAFT_UPDATE_STARTUP") != Some("off") {
+        return;
+    }
+    if std::env::var_os(CHILD).is_some() {
+        assert!(!startup_check_enabled());
+        assert!(!Updater::new(&crate::suite::PHOTOCRAFT, "0.1.0").startup_check);
+        return;
+    }
+    let status = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "updater::startup_tests::a_build_time_off_value_turns_the_startup_check_off", "--nocapture"])
+        .env(CHILD, "1")
+        .env_remove(STARTUP_VAR)
+        .status()
+        .unwrap();
+    assert!(status.success(), "a build made with {STARTUP_VAR}=off should leave the check at start off");
 }

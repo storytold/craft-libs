@@ -493,9 +493,12 @@ mod tests {
     use super::*;
     use crate::suite::PHOTOCRAFT;
 
-    /// An updater that never reads the real version-choice file.
+    /// An updater that never reads the real version-choice file, and checks at start whatever
+    /// [`STARTUP_VAR`] says in the environment or the build.
     pub(super) fn updater(answer: Checked) -> Updater {
-        Updater::new(&PHOTOCRAFT, "0.1.0").with_source(Arc::new(move || answer.clone())).with_pins_path(no_pins())
+        let mut u = Updater::new(&PHOTOCRAFT, "0.1.0").with_source(Arc::new(move || answer.clone())).with_pins_path(no_pins());
+        u.startup_check = true;
+        u
     }
 
     pub(super) fn no_pins() -> PathBuf {
@@ -588,6 +591,8 @@ mod tests {
                 .env(CHILD, app.id)
                 .env(format!("{}_PRETEND_VERSION", app.id.to_uppercase()), "0.0.1")
                 .env_remove(self_update::PRETEND_VAR)
+                // The prompt comes from the check at start; a run-time value wins over the build's.
+                .env(STARTUP_VAR, "on")
                 .status()
                 .unwrap();
             assert!(status.success(), "{} pretend-version regression failed", app.id);
