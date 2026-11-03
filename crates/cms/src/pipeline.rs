@@ -77,6 +77,16 @@ impl Stage {
         Stage::Matrix { rows: 3, cols: 3, m: m.iter().flatten().copied().collect(), offset: vec![0.0; 3] }
     }
 
+    /// Returns the approximate memory footprint in bytes of lookup tables and buffers owned by this stage.
+    pub fn table_bytes(&self) -> usize {
+        match self {
+            Stage::Curves(cs) | Stage::InvCurves(cs) => cs.iter().map(Curve::table_bytes).sum(),
+            Stage::Matrix { m, offset, .. } => (m.len() + offset.len()) * std::mem::size_of::<f64>(),
+            Stage::Clut(c) => c.table_bytes(),
+            _ => 0,
+        }
+    }
+
     #[inline]
     fn run(&self, v: &mut [f32; MAX], n: usize) -> usize {
         match self {
@@ -196,6 +206,11 @@ impl Pipeline {
     }
     pub fn stages(&self) -> &[Stage] {
         &self.stages
+    }
+
+    /// Returns the approximate memory footprint in bytes of lookup tables and buffers in the pipeline stages.
+    pub fn table_bytes(&self) -> usize {
+        self.stages.iter().map(Stage::table_bytes).sum()
     }
 
     /// Appends stages, checked as in [`Pipeline::new`]; on error the pipeline is unchanged.

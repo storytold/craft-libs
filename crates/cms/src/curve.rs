@@ -50,6 +50,14 @@ impl Curve {
         }
     }
 
+    /// Approximate memory footprint in bytes of any sampled lookup table.
+    pub fn table_bytes(&self) -> usize {
+        match self {
+            Curve::Table(t) => t.len() * std::mem::size_of::<f32>(),
+            _ => 0,
+        }
+    }
+
     /// Evaluates the curve at `x` (f64 reference path).
     pub fn eval64(&self, x: f64) -> f64 {
         match self {
