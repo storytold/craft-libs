@@ -76,26 +76,35 @@ craft-doc = { git = "https://github.com/storytold/craft-libs", rev = "<commit>",
 - `layer` is a path of indexes through `Outline::layers` and each group's `children`, bottom
   first: `&[1, 0]` is the bottom layer inside the second layer from the bottom.
 - A raster layer gives its surface; a text, shape or smart object layer gives the rendered copy
-  PhotoCraft saves with it. A group, an adjustment or fill layer, a layer saved without a rendered
-  copy, or a path that names no layer gives `Ok(None)`.
+  PhotoCraft saves with it. A video layer is a raster layer whose frames are in its `video`
+  member; it gives its surface, which holds the frame at the playhead, and the other frames are
+  not read. A group, an adjustment or fill layer, a layer saved
+  without a rendered copy, or a path that names no layer gives `Ok(None)`, and the mask of such a
+  layer is not returned.
 - `LayerPixels::rgba` holds `width` × `height` RGBA pixels, row by row, in the layer's sample
   type: `Samples::U8`, `U16` or `F32`. Grayscale repeats the gray value in red, green and blue,
   and a surface without alpha is opaque. Pixels without a tile hold the surface's default pixel.
   Tiles outside the canvas, at negative columns and rows among them, are not read.
 - `LayerPixels::mask` holds the layer mask, one sample per pixel, with its `enabled`, `density`
-  and `feather` as saved. Density and feather are not applied.
-- RGB and grayscale documents are read at 8, 16 and 32 bits. Other color modes give
-  `Error::Unsupported`.
+  and `feather` as saved. Density and feather are not applied. A mask stored as RGB gives its
+  first channel.
+- Surfaces stored as RGB or grayscale are read at 8, 16 and 32 bits; PhotoCraft stores the layers
+  of bitmap, duotone, indexed and multichannel documents that way too. A layer or mask stored in
+  another color mode, such as CMYK or Lab, gives `Error::Unsupported`. A canvas of zero width or
+  height gives `Error::Malformed`.
 - The decoded layer and the decoded mask each count as one entry against `max_entry`, and with
-  every tile read and decompressed against `max_total`, checked before they are allocated. A tile
-  is decoded only up to its size, 256 × 256 pixels, and its samples must match the BLAKE3 hash
-  that names them. A tile's zstd frame larger than the tile plus an eighth and 4 KiB, or one that
-  declares a window larger than 8 MiB, is refused.
+  each distinct tile read and decompressed against `max_total`, checked before they are
+  allocated. A tile that several references name is read and decoded once per call. A tile is
+  decoded only up to its size, 256 × 256 pixels, and its samples must match the BLAKE3 hash that
+  names them. A tile's zstd frame larger than the tile plus an eighth and 4 KiB, or one that
+  declares a window larger than 8 MiB, is refused. Every tile reference in the manifest, those of
+  other layers included, counts against `max_items`.
 
 `tests/pixels.rs` builds bundles with tiles compressed by `ruzstd` and runs with
 `cargo test -p craft-doc --all-features`: 8, 16 and 32-bit tiles, the default pixel, negative
-tile coordinates, a mask, layers in groups and layers without pixels, a CMYK document, a zstd
-bomb, and the limits.
+tile coordinates, a mask, layers in groups and layers without pixels, text, shape and smart
+object copies, bitmap and indexed documents, a CMYK document, a zstd bomb, a tile shared by many
+references, and the limits.
 
 ## Limits
 

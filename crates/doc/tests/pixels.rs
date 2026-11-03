@@ -181,9 +181,55 @@ fn a_layer_mask_comes_back_as_its_own_plane() {
     assert_eq!(mask.alpha, Samples::U8(vec![255, 0, 255]));
     assert!(!mask.enabled);
     assert_eq!((mask.density, mask.feather), (0.5, 2.0));
-    // A mask that is not grayscale is malformed.
-    let m = surface("Rgb", "U8", false, &[0, 0, 0], &[]);
-    malformed(&bundle(3, 1, "Rgb", &[layer(&raster(&s), Some(&m))], &[]));
+    // A mask stored as RGB gives its first channel.
+    let m = surface("Rgb", "U8", false, &[7, 8, 9], &[]);
+    assert_eq!(read(&bundle(3, 1, "Rgb", &[layer(&raster(&s), Some(&m))], &[]), &[0]).mask.unwrap().alpha, Samples::U8(vec![7; 3]));
+    // A mask stored as CMYK is unsupported.
+    let m = surface("Cmyk", "U8", false, &[0; 4], &[]);
+    let file = bundle(3, 1, "Rgb", &[layer(&raster(&s), Some(&m))], &[]);
+    assert!(matches!(pcraft_layer_rgba(&file, &[0], &Limits::default()), Err(Error::Unsupported(m)) if m.contains("Cmyk")));
+}
+
+#[test]
+fn bitmap_and_indexed_documents_are_read_from_their_expanded_layers() {
+    let gray = surface("Grayscale", "U8", false, &[9], &[]);
+    assert_eq!(read(&bundle(1, 1, "Bitmap", &[layer(&raster(&gray), None)], &[]), &[0]).rgba, Samples::U8(vec![9, 9, 9, 255]));
+    let rgb = surface("Rgb", "U8", false, &[1, 2, 3], &[]);
+    assert_eq!(read(&bundle(1, 1, "Indexed", &[layer(&raster(&rgb), None)], &[]), &[0]).rgba, Samples::U8(vec![1, 2, 3, 255]));
+}
+
+#[test]
+fn an_empty_canvas_is_malformed() {
+    let s = surface("Rgb", "U8", true, &[0; 4], &[]);
+    for (w, h) in [(0, 4), (4, 0)] {
+        assert!(malformed(&bundle(w, h, "Rgb", &[layer(&raster(&s), None)], &[])).contains("empty"));
+    }
+}
+
+#[test]
+fn a_tile_that_several_references_name_is_decoded_once() {
+    // 64 references to one grayscale tile of 64 KiB: 4 MiB if each were decoded.
+    let tile: Vec<u8> = (0..TILE * TILE).map(|i| i as u8).collect();
+    let h = hash(&tile);
+    let refs: Vec<(i32, i32, &str)> = (0..64).map(|i| (i, 0, h.as_str())).collect();
+    let s = surface("Grayscale", "U8", false, &[0], &refs);
+    let file = bundle(64 * TILE as u32, 1, "Grayscale", &[layer(&raster(&s), None)], &[&tile]);
+    let mut limits = Limits::default();
+    limits.max_total = 1 << 20;
+    let p = pcraft_layer_rgba(&file, &[0], &limits).unwrap().unwrap();
+    let px = u8s(&p.rgba);
+    assert_eq!(px.len(), 64 * TILE * 4);
+    assert!((0..64).all(|t| px[(t * TILE + 7) * 4..(t * TILE + 8) * 4] == [7, 7, 7, 255]));
+}
+
+#[test]
+fn a_tile_referenced_at_two_pixel_sizes_is_malformed() {
+    // The layer reads the tile as RGBA (256 KiB), the mask as gray (64 KiB).
+    let tile = solid(&[1, 2, 3, 4]);
+    let h = hash(&tile);
+    let s = surface("Rgb", "U8", true, &[0; 4], &[(0, 0, &h)]);
+    let m = surface("Grayscale", "U8", false, &[255], &[(0, 0, &h)]);
+    assert!(malformed(&bundle(2, 2, "Rgb", &[layer(&raster(&s), Some(&m))], &[&tile])).contains("different sizes"));
 }
 
 #[test]
@@ -213,11 +259,12 @@ fn a_zstd_bomb_is_refused() {
 
 #[test]
 fn decoded_tiles_and_the_canvas_count_against_the_limits() {
-    // Four tiles of 256 KiB each, 1 MiB together, over a 512 × 512 canvas of 1 MiB.
-    let tile = solid(&[1, 2, 3, 4]);
-    let h = hash(&tile);
-    let s = surface("Rgb", "U8", true, &[0; 4], &[(0, 0, &h), (1, 0, &h), (0, 1, &h), (1, 1, &h)]);
-    let file = bundle(512, 512, "Rgb", &[layer(&raster(&s), None)], &[&tile]);
+    // Four distinct tiles of 256 KiB each, 1 MiB together, over a 512 × 512 canvas of 1 MiB.
+    let tiles: Vec<Vec<u8>> = (1..=4).map(|v| solid(&[v, 2, 3, 4])).collect();
+    let h: Vec<String> = tiles.iter().map(|t| hash(t)).collect();
+    let s = surface("Rgb", "U8", true, &[0; 4], &[(0, 0, &h[0]), (1, 0, &h[1]), (0, 1, &h[2]), (1, 1, &h[3])]);
+    let refs: Vec<&[u8]> = tiles.iter().map(Vec::as_slice).collect();
+    let file = bundle(512, 512, "Rgb", &[layer(&raster(&s), None)], &refs);
     assert!(pcraft_layer_rgba(&file, &[0], &Limits::default()).is_ok());
     // The canvas and the decoded tiles take 2 MiB, and the manifest and the frames read take more.
     let mut limits = Limits::default();
@@ -239,13 +286,32 @@ fn layers_are_found_by_path_and_layers_without_pixels_give_none() {
         s(3)
     );
     let uncached = r#"{"kind":"shape","fill":null,"cache":null,"psd_raw":null}"#;
+    let shape = format!(r#"{{"kind":"shape","fill":null,"cache":{},"psd_raw":null}}"#, s(4));
+    let smart = format!(r#"{{"kind":"smart","source":{{}},"transform":[1,0,0,1,0,0],"smart_filters":[],"cache":{},"psd_raw":null}}"#, s(5));
     let group = format!(r#"{{"kind":"group","expanded":true,"children":[{},{}]}}"#, layer(&raster(&s(1)), None), layer(&text, None));
     let adjustment = r#"{"kind":"adjustment","adjustment":{}}"#;
-    let file = bundle(1, 1, "Rgb", &[layer(&raster(&s(0)), None), layer(&group, None), layer(uncached, None), layer(adjustment, None)], &[]);
+    // A group with a mask gives no pixels and no mask.
+    let masked_group = r#"{"kind":"group","expanded":true,"children":[]}"#;
+    let layers = [
+        layer(&raster(&s(0)), None),
+        layer(&group, None),
+        layer(uncached, None),
+        layer(adjustment, None),
+        layer(&shape, None),
+        layer(&smart, None),
+        layer(masked_group, Some(&surface("Grayscale", "U8", false, &[0], &[]))),
+        // A video layer: a raster layer with its frames in `video`.
+        layer(&raster(&s(6)), None)
+            .replace(r#""fill_cache":null"#, &format!(r#""fill_cache":null,"video":{{"frames":[{}],"source":"Blank","fps":30.0}}"#, s(7))),
+    ];
+    let file = bundle(1, 1, "Rgb", &layers, &[]);
     assert_eq!(read(&file, &[0]).rgba, Samples::U8(vec![0, 0, 0, 255]));
     assert_eq!(read(&file, &[1, 0]).rgba, Samples::U8(vec![1, 1, 1, 255]));
     assert_eq!(read(&file, &[1, 1]).rgba, Samples::U8(vec![3, 3, 3, 255]));
-    for path in [&[][..], &[1], &[2], &[3], &[4], &[1, 2], &[0, 0]] {
+    assert_eq!(read(&file, &[4]).rgba, Samples::U8(vec![4, 4, 4, 255]));
+    assert_eq!(read(&file, &[5]).rgba, Samples::U8(vec![5, 5, 5, 255]));
+    assert_eq!(read(&file, &[7]).rgba, Samples::U8(vec![6, 6, 6, 255]));
+    for path in [&[][..], &[1], &[2], &[3], &[6], &[8], &[1, 2], &[0, 0]] {
         assert_eq!(pcraft_layer_rgba(&file, path, &Limits::default()), Ok(None), "{path:?}");
     }
 }

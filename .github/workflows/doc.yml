@@ -31,5 +31,6 @@ jobs:
       - run: cargo fmt --check
       - run: cargo clippy -p craft-doc --all-targets --locked -- -D warnings
       - run: cargo clippy -p craft-doc --all-targets --all-features --locked -- -D warnings
+      - run: cargo test -p craft-doc --locked -- --nocapture
       - run: cargo test -p craft-doc --all-features --locked -- --nocapture
       - run: cargo check -p craft-doc --all-features --locked --target wasm32-unknown-unknown
