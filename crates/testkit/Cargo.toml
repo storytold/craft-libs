@@ -12,3 +12,5 @@ publish = false
 workspace = true
 
 [dependencies]
+craft-media-testkit = { workspace = true }
+

@@ -1151,6 +1151,9 @@ dependencies = [
 [[package]]
 name = "craft-testkit"
 version = "0.1.0"
+dependencies = [
+ "craft-media-testkit",
+]
 
 [[package]]
 name = "craft-text"

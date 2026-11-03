@@ -4,10 +4,7 @@
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use craft_prores::{
-    ChromaFormat, DecodeOptions, Encoder, EncoderConfig, Frame, Profile, decode_frame,
-    decode_frame_with, probe,
-};
+use craft_prores::{ChromaFormat, DecodeOptions, Encoder, EncoderConfig, Frame, Profile, decode_frame, decode_frame_with, probe};
 
 struct Rng(u64);
 impl Rng {
@@ -44,10 +41,7 @@ fn run_one(data: &[u8], label: &str) {
         let opts = DecodeOptions { bit_depth: Some(10), threads: false };
         let _ = decode_frame_with(data, &opts);
     }));
-    assert!(
-        res.is_ok() && PANICS.load(Ordering::SeqCst) == before,
-        "panic on input: {label}"
-    );
+    assert!(res.is_ok() && PANICS.load(Ordering::SeqCst) == before, "panic on input: {label}");
 }
 
 fn make_seeds() -> Vec<(&'static str, Vec<u8>)> {
@@ -108,21 +102,18 @@ fn sweep() {
             for v in [0u8, 0xff, 0x80, 0x01, 0x7f, 0x55] {
                 let mut mutated = seed.clone();
                 mutated[p] = v;
-                run_one(&mut mutated, &format!("{name} byte {p}={v:#x}"));
+                run_one(&mutated, &format!("{name} byte {p}={v:#x}"));
             }
             for b in 0..8 {
                 let mut mutated = seed.clone();
                 mutated[p] ^= 1 << b;
-                run_one(&mut mutated, &format!("{name} flip {p}.{b}"));
+                run_one(&mutated, &format!("{name} flip {p}.{b}"));
             }
         }
 
         // 3. Random mutations
         let mut rng = Rng(0xdeadbeef ^ name.len() as u64);
-        let iters = std::env::var("FILMCRAFT_FUZZ_ITERS")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(200);
+        let iters = std::env::var("FILMCRAFT_FUZZ_ITERS").ok().and_then(|s| s.parse().ok()).unwrap_or(200);
 
         for i in 0..iters {
             let mut mutated = seed.clone();
@@ -135,7 +126,7 @@ fn sweep() {
                     mutated[p] = rng.next() as u8;
                 }
             }
-            run_one(&mut mutated, &format!("{name} random {i}"));
+            run_one(&mutated, &format!("{name} random {i}"));
         }
     }
 

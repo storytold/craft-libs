@@ -18,19 +18,28 @@ concurrency:
 jobs:
   check:
     timeout-minutes: 15
-    name: VP8 decoder lint, tests, WASM
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
+          toolchain: "1.95"
           components: rustfmt, clippy
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          key: craft-vp8
+          key: craft-vp8-${{ matrix.os }}
+      - name: Install ffmpeg (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo rm -f /var/lib/man-db/auto-update
+          sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends ffmpeg
       - run: cargo fmt -p craft-vp8 --check
       - run: cargo clippy -p craft-vp8 --all-targets --locked -- -D warnings
       - run: cargo test -p craft-vp8 --locked
