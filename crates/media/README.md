@@ -407,8 +407,10 @@ I Ogg mapping). `open` reads every page (CRC-32 checked; damage is skipped by se
 `OggS`), groups pages by logical stream and assembles packets across pages; codec headers are kept
 apart from audio packets. A gap in a stream's page sequence numbers drops the packet the lost page
 continued, and a beginning-of-stream page for a serial already seen starts a new stream (the next
-link of a chained file). The damage scan, the packets kept and the FLAC metadata of a stream
-that does not state its header count are bounded, with a warning when a bound is reached.
+link of a chained file), unless it carries on the page sequence of a stream with no end-of-stream
+page yet. Damage recovery may read bytes again up to twice the file's length plus 1 MiB, so a file
+is read at most about three times over; the packets kept and the header packets of a stream are
+bounded too, with a warning when a bound is reached.
 `OpusTiming` gives each Opus packet's start, the pre-skip and the end trimming of the final page.
 No muxer.
 
@@ -452,8 +454,8 @@ custom source (a web `Blob`, a network range reader) to use every container with
   hand-built file (unknown-size Segment and Clusters, header stripping, BlockGroups, block
   additions, color and mastering metadata, Chapters, Tags, Attachments, CRC-32, Cue-less seek,
   hostile cluster timestamps) and mux-demux round trips. For Ogg (`src/ogg`): page parsing, CRC,
-  packets across pages, damage resync, lost pages, chained links, the packet and FLAC metadata
-  caps, Opus timing (end trimming, hostile granules) and the codec parameters of each codec.
+  packets across pages, damage resync and its read budget, lost pages, chained links and stray
+  beginning-of-stream flags, the packet and header caps, Opus timing (end trimming, hostile granules) and the codec parameters of each codec.
 - `tests/roundtrip.rs`: property tests that write random multi-track files (progressive and
   fragmented) and read them back.
 - `tests/oracle_demux.rs` and `tests/oracle_mux.rs` compare the demuxer and muxer with ffprobe and

@@ -148,9 +148,9 @@ impl Codec {
     }
 }
 
-/// The most header bytes kept for an Ogg FLAC stream that does not state its header count: room
-/// for the largest metadata block (2^24 bytes, such as a picture) twice over.
-const MAX_UNSTATED_HEADER_BYTES: usize = 32 << 20;
+/// The most header bytes kept for one stream: room for the largest FLAC metadata block (2^24
+/// bytes, such as a picture) twice over.
+const MAX_HEADER_BYTES: usize = 32 << 20;
 
 /// Header packets of an Ogg FLAC stream, from its first packet (0x7F "FLAC", version, a 16-bit
 /// big-endian count of the header packets after it, then `fLaC` and STREAMINFO): that count plus
@@ -259,7 +259,14 @@ impl Stream {
                 let channels = if info == 0 { 0 } else { ((info >> 1) & 7) as u16 + 1 };
                 crate::CodecParams::new(Id::Flac).with_extradata(extradata).with_sample_rate(info >> 4).with_channels(channels)
             }
-            Codec::Theora => crate::CodecParams::new(Id::Theora).with_extradata(crate::xiph_lace(&self.headers).unwrap_or_default()),
+            // the identification header: version, the frame size in macroblocks, then the 24-bit
+            // big-endian picture width and height at offsets 14 and 17
+            Codec::Theora => {
+                let be_u24 = |at: usize| first.get(at..at + 3).map_or(0, |b| (u32::from(b[0]) << 16) | (u32::from(b[1]) << 8) | u32::from(b[2]));
+                crate::CodecParams::new(Id::Theora)
+                    .with_extradata(crate::xiph_lace(&self.headers).unwrap_or_default())
+                    .with_size(be_u24(14), be_u24(17))
+            }
             // the Speex header: rate at offset 36 and channels at 48, 32-bit little-endian
             Codec::Speex => crate::CodecParams::new(Id::Speex)
                 .with_extradata(first)
@@ -288,20 +295,19 @@ impl Stream {
             return Ok(());
         }
         let data = read_parts(src, &pk.parts)?;
+        // a count the file states (FLAC, Speex) or leaves open is capped, so a hostile first
+        // packet cannot turn the audio into headers
+        if self.headers.len() >= MAX_HEADERS || self.header_bytes.saturating_add(data.len()) > MAX_HEADER_BYTES {
+            warnings.push(format!("stream {}: header packets beyond {MAX_HEADERS} or {MAX_HEADER_BYTES} bytes read as data", self.serial));
+            self.header_count = self.headers.len();
+            self.packets.push(pk);
+            return Ok(());
+        }
         if self.header_count == usize::MAX && !self.headers.is_empty() {
             // FLAC with an unstated count: metadata packets run to the one flagged last. A packet
-            // that is no metadata block (an audio frame starts with 0xFF) ends them, and so do the
-            // caps, so audio is never held as headers.
+            // that is no metadata block (an audio frame starts with 0xFF) ends them, so audio is
+            // never held as headers.
             if !is_flac_metadata_block(&data) {
-                self.header_count = self.headers.len();
-                self.packets.push(pk);
-                return Ok(());
-            }
-            if self.headers.len() >= MAX_UNSTATED_HEADERS || self.header_bytes.saturating_add(data.len()) > MAX_UNSTATED_HEADER_BYTES {
-                warnings.push(format!(
-                    "stream {}: FLAC metadata beyond {MAX_UNSTATED_HEADERS} blocks or {MAX_UNSTATED_HEADER_BYTES} bytes read as audio",
-                    self.serial
-                ));
                 self.header_count = self.headers.len();
                 self.packets.push(pk);
                 return Ok(());
@@ -334,8 +340,8 @@ struct Partial {
 
 /// Bytes the damage-recovery scan may read in one call.
 const SCAN_CHUNK: usize = 64 << 10;
-/// Bytes the damage-recovery scans of one file may examine in all.
-const RECOVERY_BUDGET: usize = 64 << 20;
+/// Bytes damage recovery may read again beyond twice the file's length (see [`Recovery`]).
+const RECOVERY_ALLOWANCE: u64 = 1 << 20;
 /// Cap on the packets kept from one file, all streams and headers together.
 const MAX_PACKETS: usize = 1 << 26;
 /// Bytes of file each kept packet needs beyond the first `MIN_PACKET_ALLOWANCE`. A kept packet
@@ -344,8 +350,8 @@ const MAX_PACKETS: usize = 1 << 26;
 const FILE_BYTES_PER_PACKET: u64 = 8;
 /// Packets any file may keep, however short.
 const MIN_PACKET_ALLOWANCE: usize = 1 << 20;
-/// The most metadata packets kept for an Ogg FLAC stream that does not state its header count.
-const MAX_UNSTATED_HEADERS: usize = 1024;
+/// The most header packets kept for one stream, whatever count its first packet states.
+const MAX_HEADERS: usize = 1024;
 /// Warnings kept about damaged pages; the rest are counted in one closing warning.
 const MAX_DAMAGE_WARNINGS: usize = 1024;
 
@@ -375,6 +381,38 @@ impl Warnings {
     }
 }
 
+/// The cost of damage recovery. Every read of [`open`] is charged here: the first read of a byte is
+/// free, and bytes read again (scanning through the body of a page that failed its CRC, a scan's
+/// read past the pattern it found, the overlapping bodies of fake page headers) are charged to a
+/// budget of twice the file's length plus `RECOVERY_ALLOWANCE`. A file is then read at most about
+/// three times over, and damage costs a large file no more, in proportion, than a small one.
+struct Recovery {
+    budget: u64,
+    /// Bytes before this offset have been read.
+    seen: u64,
+}
+
+impl Recovery {
+    fn new(len: u64) -> Recovery {
+        Recovery { budget: len.saturating_mul(2).saturating_add(RECOVERY_ALLOWANCE), seen: 0 }
+    }
+    /// Charge reading `start..end`; false when the budget does not cover it.
+    fn charge(&mut self, start: u64, end: u64) -> bool {
+        let again = self.seen.min(end).saturating_sub(start);
+        self.seen = self.seen.max(end);
+        match self.budget.checked_sub(again) {
+            Some(left) => {
+                self.budget = left;
+                true
+            }
+            None => {
+                self.budget = 0;
+                false
+            }
+        }
+    }
+}
+
 /// Where a damage-recovery scan stopped.
 #[derive(Debug, PartialEq, Eq)]
 enum Capture {
@@ -395,13 +433,17 @@ pub fn open(src: &(impl ByteSource + ?Sized)) -> Result<OggFile> {
     let mut warnings = Warnings::default();
     let mut pos = 0u64;
     let mut found_any = false;
-    let mut recovery_budget = RECOVERY_BUDGET;
+    let mut recovery = Recovery::new(len);
     let mut packet_budget = usize::try_from(len / FILE_BYTES_PER_PACKET).unwrap_or(usize::MAX).clamp(MIN_PACKET_ALLOWANCE, MAX_PACKETS);
     let mut hdr = [0u8; 27 + 255];
     while pos + 27 <= len {
         src.read_at(pos, &mut hdr[..27])?;
+        if !recovery.charge(pos, pos + 27) {
+            warnings.push(past_budget(pos));
+            break;
+        }
         if &hdr[..4] != b"OggS" || hdr[4] != 0 {
-            match find_capture(src, pos + 1, len, &mut recovery_budget)? {
+            match find_capture(src, pos + 1, len, &mut recovery)? {
                 Capture::At(p) => {
                     if found_any {
                         warnings.damage(|| format!("lost sync at byte {pos}; resumed at {p}"));
@@ -411,36 +453,39 @@ pub fn open(src: &(impl ByteSource + ?Sized)) -> Result<OggFile> {
                 }
                 Capture::End => break,
                 Capture::BudgetSpent => {
-                    warnings.push(format!("lost sync at byte {pos}; the rest of the file is past the recovery budget"));
+                    warnings.push(past_budget(pos));
                     break;
                 }
             }
         }
         let nseg = hdr[26] as usize;
-        let page_len = if pos + 27 + nseg as u64 <= len {
-            src.read_at(pos + 27, &mut hdr[27..27 + nseg])?;
-            27 + nseg as u64 + hdr[27..27 + nseg].iter().map(|&b| b as u64).sum::<u64>()
+        let head = 27 + nseg;
+        let page_len = if pos + head as u64 <= len {
+            src.read_at(pos + 27, &mut hdr[27..head])?;
+            head as u64 + hdr[27..head].iter().map(|&b| b as u64).sum::<u64>()
         } else {
             u64::MAX
         };
-        if pos.saturating_add(page_len) > len {
+        let fits = pos.saturating_add(page_len) <= len;
+        // the lacing values and the body: fake page headers a few bytes apart would otherwise
+        // each have their overlapping bodies read and hashed for free
+        if !recovery.charge(pos + 27, if fits { pos + page_len } else { (pos + head as u64).min(len) }) {
+            warnings.push(past_budget(pos));
+            break;
+        }
+        if !fits {
             // truncated, or a damaged lacing value: look for a page further on
             warnings.damage(|| format!("page at byte {pos} runs past the end of the file"));
             pos += 1;
             continue;
         }
         let mut page = vec![0u8; page_len as usize];
-        src.read_at(pos, &mut page)?;
+        page[..head].copy_from_slice(&hdr[..head]);
+        src.read_at(pos + head as u64, &mut page[head..])?;
         let stored_crc = u32::from_le_bytes([page[22], page[23], page[24], page[25]]);
         page[22..26].fill(0);
         if crc32(&page) != stored_crc {
             warnings.damage(|| format!("bad CRC on page at byte {pos}"));
-            // reading and hashing a page that turns out damaged is recovery work too
-            recovery_budget = recovery_budget.saturating_sub(page.len());
-            if recovery_budget == 0 {
-                warnings.push(format!("bad CRC at byte {pos}; the rest of the file is past the recovery budget"));
-                break;
-            }
             pos += 1;
             continue;
         }
@@ -452,11 +497,22 @@ pub fn open(src: &(impl ByteSource + ?Sized)) -> Result<OggFile> {
         let lacing = page[27..27 + nseg].to_vec();
         let body_off = pos + 27 + nseg as u64;
         // a beginning-of-stream page for a serial already seen starts the next link of a chained
-        // file (RFC 3533 §4), which may reuse the serial
-        if flags & 0x02 != 0 && by_serial.contains_key(&serial) {
-            by_serial.remove(&serial);
-            if partial.remove(&serial).is_some() {
-                warnings.damage(|| format!("incomplete packet before page at byte {pos}"));
+        // file (RFC 3533 §4), which may reuse the serial; one that carries on the page sequence of
+        // a stream with no end-of-stream page yet is a stray flag in that stream
+        if flags & 0x02 != 0
+            && let Some(&si) = by_serial.get(&serial)
+        {
+            let st = &streams[si];
+            if !st.saw_eos && st.next_seq == Some(seq) {
+                warnings.damage(|| format!("stray beginning-of-stream flag on page at byte {pos}, read as part of stream {serial}"));
+            } else {
+                if !st.saw_eos {
+                    warnings.damage(|| format!("stream {serial} starts again at byte {pos} before its end-of-stream page"));
+                }
+                by_serial.remove(&serial);
+                if partial.remove(&serial).is_some() {
+                    warnings.damage(|| format!("incomplete packet before page at byte {pos}"));
+                }
             }
         }
         let si = *by_serial.entry(serial).or_insert_with(|| {
@@ -486,7 +542,7 @@ pub fn open(src: &(impl ByteSource + ?Sized)) -> Result<OggFile> {
         if flags & 0x04 != 0 {
             st.saw_eos = true;
         }
-        // a continued page without a pending packet (lost a page): drop the fragment
+        // a page that does not continue a pending packet (a page was lost): drop the packet
         let continued = flags & 0x01 != 0;
         if !continued && partial.remove(&serial).is_some() {
             warnings.damage(|| format!("incomplete packet before page at byte {pos}"));
@@ -494,6 +550,7 @@ pub fn open(src: &(impl ByteSource + ?Sized)) -> Result<OggFile> {
         let mut completed: Vec<Packet> = Vec::new();
         let mut off = 0u64;
         let mut seg_start = 0u64;
+        // a continued page without a pending packet (a page was lost): drop the fragment
         let mut skip_fragment = continued && !partial.contains_key(&serial);
         for (k, &l) in lacing.iter().enumerate() {
             off += l as u64;
@@ -554,34 +611,37 @@ pub fn open(src: &(impl ByteSource + ?Sized)) -> Result<OggFile> {
     Ok(OggFile { streams, warnings: warnings.finish() })
 }
 
-/// A FLAC metadata block: a defined block type (0–6) and as many bytes as its 4-byte header says.
+fn past_budget(pos: u64) -> String {
+    format!("damage at byte {pos}; the rest of the file is past the recovery budget")
+}
+
+/// A FLAC metadata block: a block type other than the invalid 127 (which an audio frame's 0xFF sync
+/// byte would read as; types 7–126 are reserved but allowed) and as many bytes as its 4-byte
+/// header says.
 fn is_flac_metadata_block(data: &[u8]) -> bool {
     match data {
-        [kind, a, b, c, body @ ..] => kind & 0x7F <= 6 && body.len() == (usize::from(*a) << 16 | usize::from(*b) << 8 | usize::from(*c)),
+        [kind, a, b, c, body @ ..] => kind & 0x7F != 0x7F && body.len() == (usize::from(*a) << 16 | usize::from(*b) << 8 | usize::from(*c)),
         _ => false,
     }
 }
 
-/// Scan for the next capture pattern from `from`, examining at most `budget` positions and
-/// charging the positions examined. Reads start small and double up to `SCAN_CHUNK`, so a
-/// nearby pattern costs a small read.
-fn find_capture(src: &(impl ByteSource + ?Sized), from: u64, len: u64, budget: &mut usize) -> Result<Capture> {
+/// Scan for the next capture pattern from `from`, charging the bytes read to `recovery`. Reads start small and double up to `SCAN_CHUNK`, so a nearby pattern costs a
+/// small read.
+fn find_capture(src: &(impl ByteSource + ?Sized), from: u64, len: u64, recovery: &mut Recovery) -> Result<Capture> {
     let mut at = from;
     let mut chunk = 256;
     let mut buf = Vec::new();
     while at + 4 <= len {
-        if *budget == 0 {
-            return Ok(Capture::BudgetSpent);
-        }
-        let positions = ((len - at - 3) as usize).min(chunk).min(*budget);
+        let positions = ((len - at - 3) as usize).min(chunk);
         let n = positions + 3;
         buf.resize(n, 0);
         src.read_at(at, &mut buf[..n])?;
+        if !recovery.charge(at, at + n as u64) {
+            return Ok(Capture::BudgetSpent);
+        }
         if let Some(i) = buf[..n].windows(4).position(|w| w == b"OggS") {
-            *budget -= i + 1;
             return Ok(Capture::At(at + i as u64));
         }
-        *budget -= positions;
         at += positions as u64;
         chunk = (chunk * 2).min(SCAN_CHUNK);
     }

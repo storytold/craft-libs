@@ -3,22 +3,38 @@
 use super::*;
 
 #[test]
-fn recovery_scan_charges_what_it_examines_and_says_why_it_stopped() {
+fn recovery_charges_only_bytes_read_again() {
+    let mut r = Recovery { budget: 10, seen: 0 };
+    assert!(r.charge(0, 100));
+    assert_eq!(r.budget, 10, "a first read is free");
+    assert!(r.charge(95, 105));
+    assert_eq!((r.budget, r.seen), (5, 105));
+    assert!(!r.charge(0, 6));
+    assert_eq!(r.budget, 0);
+    // a scan of bytes not read before costs nothing; one over bytes already read is charged and
+    // says when the budget ran out
     let source = b"junkOggS".to_vec();
-    let len = source.len() as u64;
-    let mut budget = 3;
-    assert_eq!(find_capture(&source, 0, len, &mut budget).unwrap(), Capture::BudgetSpent);
-    assert_eq!(budget, 0);
-    // found on the last position the budget allows: a capture, not a spent budget
-    let mut budget = 5;
-    assert_eq!(find_capture(&source, 0, len, &mut budget).unwrap(), Capture::At(4));
-    assert_eq!(budget, 0);
-    // a nearby capture costs the positions up to it, not a whole read
-    let mut budget = 1000;
-    assert_eq!(find_capture(&source, 0, len, &mut budget).unwrap(), Capture::At(4));
-    assert_eq!(budget, 995);
-    let mut budget = 1000;
-    assert_eq!(find_capture(&b"junk, no pattern".to_vec(), 0, 16, &mut budget).unwrap(), Capture::End);
+    let mut r = Recovery { budget: 0, seen: 0 };
+    assert_eq!(find_capture(&source, 0, 8, &mut r).unwrap(), Capture::At(4));
+    let mut r = Recovery { budget: 7, seen: 8 };
+    assert_eq!(find_capture(&source, 0, 8, &mut r).unwrap(), Capture::BudgetSpent);
+    let mut r = Recovery { budget: 8, seen: 8 };
+    assert_eq!(find_capture(&source, 0, 8, &mut r).unwrap(), Capture::At(4));
+    let mut r = Recovery::new(16);
+    assert_eq!(find_capture(&b"junk, no pattern".to_vec(), 0, 16, &mut r).unwrap(), Capture::End);
+}
+
+/// A source that counts the bytes read from it.
+struct Counted(Vec<u8>, std::cell::Cell<u64>);
+
+impl ByteSource for Counted {
+    fn len(&self) -> u64 {
+        self.0.len() as u64
+    }
+    fn read_at(&self, offset: u64, buf: &mut [u8]) -> io::Result<()> {
+        self.1.set(self.1.get() + buf.len() as u64);
+        self.0.read_at(offset, buf)
+    }
 }
 
 /// Write one page holding `segments` (lacing already computed by `lace`).
@@ -255,12 +271,15 @@ fn flac_codec_params_carry_rate_channels_and_every_metadata_block() {
     };
     let ogg = open(&flac_file(&[vec![&[0x04][..], &[0x04, 0, 0, 0][..]]])[..]).unwrap();
     assert_eq!((ogg.streams[0].headers.len(), ogg.streams[0].packets.len()), (1, 2));
-    // Many small valid blocks: the first MAX_UNSTATED_HEADERS are kept, the rest read as audio.
+    // Reserved block types (7–126) are metadata blocks too.
+    let ogg = open(&flac_file(&[vec![&[0x07, 0, 0, 1, 9][..], &[0x84, 0, 0, 0][..]]])[..]).unwrap();
+    assert_eq!((ogg.streams[0].headers.len(), ogg.streams[0].packets.len()), (3, 0));
+    // Many small valid blocks: the first MAX_HEADERS are kept, the rest read as audio.
     let empty_padding = [0x01u8, 0, 0, 0];
     let pages: Vec<Vec<&[u8]>> = (0..200).map(|_| vec![&empty_padding[..]; 250]).collect();
     let ogg = open(&flac_file(&pages)[..]).unwrap();
-    assert_eq!((ogg.streams[0].headers.len(), ogg.streams[0].packets.len()), (MAX_UNSTATED_HEADERS, 200 * 250 + 1 - MAX_UNSTATED_HEADERS));
-    assert!(ogg.warnings.iter().any(|w| w.contains("FLAC metadata beyond")), "{:?}", ogg.warnings);
+    assert_eq!((ogg.streams[0].headers.len(), ogg.streams[0].packets.len()), (MAX_HEADERS, 200 * 250 + 1 - MAX_HEADERS));
+    assert!(ogg.warnings.iter().any(|w| w.contains("header packets beyond")), "{:?}", ogg.warnings);
     // STREAMINFO alone, flagged last: the next packet is audio.
     let ogg = open(&ogg_flac(0, true, 0xFF)[..]).unwrap();
     assert_eq!((ogg.streams[0].headers.len(), ogg.streams[0].packets.len()), (1, 2));
@@ -464,8 +483,8 @@ fn flac_extradata_flags_exactly_the_last_block() {
 #[test]
 fn pages_that_fail_their_crc_are_charged_to_the_recovery_budget() {
     // after one good page, fake page headers every 282 bytes, each claiming a 64 KB body: every
-    // one is read and hashed before it fails its CRC, so without charging that work the file
-    // would cost gigabytes of hashing
+    // one is read and hashed before it fails its CRC, so without charging the overlapping reads
+    // the file would cost gigabytes of hashing
     let mut f = Vec::new();
     let (l, b) = lace(&[&opus_head(0)], false);
     page(&mut f, 0x02, 0, 1, 0, &l, &b);
@@ -479,7 +498,8 @@ fn pages_that_fail_their_crc_are_charged_to_the_recovery_budget() {
     let o = open(&f).unwrap();
     assert!(o.warnings.iter().any(|w| w.contains("past the recovery budget")), "{:?}", o.warnings.last());
     let bad = o.warnings.iter().filter(|w| w.contains("bad CRC on page")).count();
-    assert!(bad <= RECOVERY_BUDGET / (27 + 255 + 255 * 255) + 1, "{bad}");
+    let budget = 2 * f.len() + RECOVERY_ALLOWANCE as usize;
+    assert!(bad <= budget / (255 * 255 - 282) + 1, "{bad}");
     assert!(o.warnings.len() <= MAX_DAMAGE_WARNINGS + 2, "{}", o.warnings.len());
 }
 
@@ -494,4 +514,106 @@ fn damage_warnings_are_capped() {
     assert_eq!(list.len(), MAX_DAMAGE_WARNINGS + 2);
     assert_eq!(list[MAX_DAMAGE_WARNINGS], "budget");
     assert_eq!(list.last().unwrap(), "10 more damaged regions not listed");
+}
+
+#[test]
+fn damage_in_a_large_file_costs_no_more_than_in_a_small_one() {
+    // 1200 pages of 60 KB, every other one with a bad CRC: 72 MB, more than any fixed budget of
+    // 64 MiB covers once each damaged page has been read and scanned through
+    let mut f = Vec::new();
+    opus_pages(&mut f, 3, 1200, 60_000, true);
+    let starts = page_starts(&f);
+    for k in (2..1202).step_by(2) {
+        f[starts[k] + 300] ^= 0xFF;
+    }
+    let o = open(&f).unwrap();
+    assert_eq!(o.streams[0].packets.len(), 600);
+    assert!(!o.warnings.iter().any(|w| w.contains("recovery budget")), "{:?}", o.warnings.last());
+    // a partial download: 65 MiB of zeros between two runs of pages
+    let mut f = Vec::new();
+    opus_pages(&mut f, 3, 20, 40, true);
+    let cut = page_starts(&f)[12];
+    f.splice(cut..cut, std::iter::repeat_n(0, 65 << 20));
+    let o = open(&f).unwrap();
+    assert_eq!(o.streams[0].packets.len(), 20, "{:?}", o.warnings);
+}
+
+#[test]
+fn recovery_reads_stay_in_proportion_to_the_file() {
+    // 100 KB of fake capture patterns every 5 bytes after one good page: each claims a page whose
+    // body overlaps the next ones'
+    let mut f = Vec::new();
+    let (l, b) = lace(&[&opus_head(0)], false);
+    page(&mut f, 0x02, 0, 1, 0, &l, &b);
+    for _ in 0..20_000 {
+        f.extend_from_slice(b"OggS\0");
+    }
+    let src = Counted(f, Default::default());
+    open(&src).unwrap();
+    let read = src.1.get();
+    assert!(read <= 3 * src.len() + RECOVERY_ALLOWANCE + (64 << 10), "{read} bytes read from {}", src.len());
+}
+
+#[test]
+fn a_stray_beginning_of_stream_flag_does_not_split_a_stream() {
+    let mut f = Vec::new();
+    opus_pages(&mut f, 3, 0, 0, false);
+    for i in 0..6u32 {
+        let p = pkt(i as usize, 40);
+        let (l, b) = lace(&[&p], false);
+        let flags = match i {
+            2 => 0x02,
+            5 => 0x04,
+            _ => 0,
+        };
+        page(&mut f, flags, (i64::from(i) + 1) * 960, 3, i + 2, &l, &b);
+    }
+    let o = open(&f).unwrap();
+    assert_eq!(o.streams.len(), 1);
+    assert_eq!((o.streams[0].headers.len(), o.streams[0].packets.len()), (2, 6));
+    assert!(o.warnings.iter().any(|w| w.contains("stray beginning-of-stream")), "{:?}", o.warnings);
+    // a link that ends without its end-of-stream page, then the next link with the same serial:
+    // two streams, and a warning
+    let mut f = Vec::new();
+    opus_pages(&mut f, 0, 3, 40, false);
+    opus_pages(&mut f, 0, 3, 40, true);
+    let o = open(&f).unwrap();
+    assert_eq!(o.streams.len(), 2);
+    assert!(o.warnings.iter().any(|w| w.contains("starts again")), "{:?}", o.warnings);
+}
+
+#[test]
+fn stated_header_counts_are_capped() {
+    // Speex stating u32::MAX extra headers, then 1100 short packets
+    let mut first = b"Speex   1.2".to_vec();
+    first.resize(80, 0);
+    first[68..72].copy_from_slice(&u32::MAX.to_le_bytes());
+    let mut f = Vec::new();
+    let (l, b) = lace(&[&first], false);
+    page(&mut f, 0x02, 0, 4, 0, &l, &b);
+    for seq in 1..=5 {
+        let (l, b) = lace(&[&b"pk"[..]; 220], false);
+        page(&mut f, 0, 0, 4, seq, &l, &b);
+    }
+    let o = open(&f).unwrap();
+    assert_eq!((o.streams[0].headers.len(), o.streams[0].packets.len()), (MAX_HEADERS, 1101 - MAX_HEADERS));
+    assert!(o.warnings.iter().any(|w| w.contains("header packets beyond")), "{:?}", o.warnings);
+}
+
+#[test]
+fn theora_codec_params_carry_the_picture_size() {
+    // identification header: version 3.2.1, 120×68 macroblocks, a 1920×1080 picture
+    let mut id = b"\x80theora\x03\x02\x01".to_vec();
+    id.extend_from_slice(&120u16.to_be_bytes());
+    id.extend_from_slice(&68u16.to_be_bytes());
+    id.extend_from_slice(&1920u32.to_be_bytes()[1..]);
+    id.extend_from_slice(&1080u32.to_be_bytes()[1..]);
+    id.resize(42, 0);
+    let mut f = Vec::new();
+    for (seq, h) in [&id[..], b"\x81theora", b"\x82theora"].into_iter().enumerate() {
+        let (l, b) = lace(&[h], false);
+        page(&mut f, if seq == 0 { 0x02 } else { 0 }, 0, 6, seq as u32, &l, &b);
+    }
+    let p = open(&f).unwrap().streams[0].codec_params();
+    assert_eq!((p.width, p.height), (Some(1920), Some(1080)));
 }
