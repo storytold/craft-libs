@@ -2,7 +2,43 @@
 //! Never removes model boundaries, recursively splits, or changes source data.
 use std::{collections::HashMap, ops::Range};
 
-type Neighbors<'a> = HashMap<(&'a str, &'a str), bool>;
+// A paragraph may contain arbitrarily many distinct unknown words. Share one
+// dictionary-comparison budget across every span and its adjacent contexts.
+const NEIGHBOR_COMPARISONS: usize = 160_000;
+
+struct Neighbors<'a> {
+    found: HashMap<(&'a str, &'a str), bool>,
+    remaining: usize,
+}
+
+impl<'a> Neighbors<'a> {
+    fn new() -> Self {
+        Self { found: HashMap::new(), remaining: NEIGHBOR_COMPARISONS }
+    }
+
+    /// Conservatively report a possible correction when the paragraph budget runs out.
+    /// This retains the original model span instead of introducing an unchecked split.
+    fn nearby(&mut self, text: &'a str, except: &'a str, words: impl Iterator<Item = &'static str>) -> bool {
+        if let Some(&found) = self.found.get(&(text, except)) {
+            return found;
+        }
+        let mut found = false;
+        for word in words {
+            if self.remaining == 0 {
+                return true;
+            }
+            self.remaining -= 1;
+            if word != except && word.len().abs_diff(text.len()) <= 4 && one_edit(text, word) {
+                found = true;
+                break;
+            }
+        }
+        if self.found.len() < 64 {
+            self.found.insert((text, except), found);
+        }
+        found
+    }
+}
 
 use super::{frequency, is_correct, kcc_edges, safe, spellings, standard_form};
 
@@ -22,16 +58,7 @@ fn one_edit(a: &str, b: &str) -> bool {
 }
 
 fn nearby_spelling<'a>(text: &'a str, except: &'a str, cache: &mut Neighbors<'a>) -> bool {
-    if let Some(&found) = cache.get(&(text, except)) {
-        return found;
-    }
-    let found = spellings().iter().any(|(word, _)| word != except && word.len().abs_diff(text.len()) <= 4 && one_edit(text, word));
-    // Repeated words and adjacent contexts share work within this paragraph.
-    // No persistent text cache or dictionary expansion; retain at most 64 keys.
-    if cache.len() < 64 {
-        cache.insert((text, except), found);
-    }
-    found
+    cache.nearby(text, except, spellings().iter().map(|(word, _)| word))
 }
 
 fn known(word: &str) -> bool {
@@ -107,4 +134,35 @@ pub(super) fn words(text: &str, spans: Vec<Range<usize>>) -> Vec<Range<usize>> {
         }
     }
     refined.unwrap_or(spans)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn distinct_queries_and_adjacent_contexts_share_one_work_budget() {
+        let mut cache = Neighbors { found: HashMap::new(), remaining: 3 };
+        assert!(!cache.nearby("abc", "", ["xyz", "uvw"].into_iter()));
+        assert_eq!(cache.remaining, 1);
+        // A cached negative answer is safe and consumes no more dictionary work.
+        assert!(!cache.nearby("abc", "", ["xyz", "uvw"].into_iter()));
+        assert_eq!(cache.remaining, 1);
+        assert!(cache.nearby("def", "", ["xyz", "uvw"].into_iter()), "abstain on an incomplete scan");
+        assert_eq!(cache.remaining, 0);
+        for query in ["ghi", "jkl", "mno", "pqr"] {
+            assert!(cache.nearby(query, "", ["xyz"].into_iter()));
+        }
+        assert_eq!(cache.remaining, 0);
+        assert_eq!(cache.found.len(), 1, "incomplete scans are never cached as negatives");
+    }
+
+    #[test]
+    fn exclusions_and_unicode_edits_keep_their_correction_guard() {
+        let mut cache = Neighbors::new();
+        assert!(!cache.nearby("ខ្មែរX", "ខ្មែរ", ["ខ្មែរ"].into_iter()));
+        assert!(cache.nearby("ខ្មែរY", "", ["ខ្មែរ"].into_iter()));
+        assert!(cache.nearby("ខ្មែ", "", ["ខ្មែរ"].into_iter()));
+        assert!(cache.nearby("ខ្មែរ", "", ["ខ្មែX"].into_iter()));
+    }
 }

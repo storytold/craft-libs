@@ -36,7 +36,10 @@ This is a conservative heuristic, not a contextual language model. An accidental
 extra letter can sometimes form a valid short word, and dictionaries alone
 cannot resolve that ambiguity. Additional divisions need native-reader review.
 One-edit searches are limited to short candidates and cache at most 64 borrowed
-text pairs per call; the spelling index is shared with the proofing code. The
+text pairs per call. All spans and adjacent contexts share a 160,000-entry
+comparison budget per call; on exhaustion the original model span is retained,
+so many distinct candidate words cannot trigger an unbounded series of full
+dictionary scans. The spelling index is shared with the proofing code. The
 focused regression covers the requested split, a different suffix, and known
 words/typos which must remain intact.
 
@@ -95,3 +98,18 @@ refinement comparison, 302,427 original word spans remain identical; one joined
 span becomes two, adding one opportunity without removing any. These are
 segmentation-derived counts and preservation results, not 302,428 independently
 annotated correctness judgments. The private book text is not redistributed.
+
+## Resource provenance
+
+SBBIC contributor @sungkhum identified SBBIC internal work,
+[SEAlang frequency lists](http://sealang.net/project/list/) and
+[SIL NRSI khmerlbdict](https://github.com/silnrsi/khmerlbdict) as sources for
+Aksara's resources on 2026-11-03. SBBIC contributed to khmerlbdict; its README
+also records SEAlang and other source lists. SIL publishes an MIT license,
+Copyright (c) 2015 SIL NRSI. The contributor supplied SEAlang's MIT notice,
+Copyright (c) 2010, Doug Cooper, with a screenshot of its License page.
+These notices accompany Aksara's SBBIC MIT notice in `LICENSE-AKSARA`.
+This identifies the reported resource lineage, not a source-by-source manifest
+of the tagger's training corpus; its exact composition has not been separately
+identified. Raw artifacts remain pinned by `source-pins.json`; no private
+training text is redistributed here.
