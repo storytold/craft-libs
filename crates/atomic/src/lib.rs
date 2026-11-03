@@ -387,8 +387,11 @@ fn stage(
                             }
                             // The group bits belong to the replaced file's group, which a new
                             // inode need not be in (setgid directory, another primary group).
+                            // A stage already in that group needs no fchown, which some
+                            // filesystems reject even as a no-op.
                             if let Some(replaced) = replaced
                                 && p.mode() & 0o070 != 0
+                                && std::os::unix::fs::MetadataExt::gid(&file.metadata()?) != std::os::unix::fs::MetadataExt::gid(replaced)
                                 && std::os::unix::fs::fchown(&file, None, Some(std::os::unix::fs::MetadataExt::gid(replaced))).is_err()
                             {
                                 let mut p = p;
