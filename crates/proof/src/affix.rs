@@ -74,6 +74,14 @@ const MAX_ALIAS_BYTES: usize = 4 << 20;
 /// Most flags all distinct flag sets (stems' and continuation classes') may hold together: a lookup
 /// tests each distinct continuation set it meets at most once, so this bounds its cost.
 const MAX_SET_DATA: usize = 1 << 23;
+/// Most flags all stems may carry together before their sets are merged and interned (the same
+/// set on many stems counts each time; an `AF` alias counts once). Checked while reading, so a
+/// huge `.dic` is refused before its flags fill memory, not after (#495: a 760 MB `.dic` once
+/// held 3 GB before [`MAX_SET_DATA`] refused it).
+const MAX_STEM_FLAGS: usize = 4 * MAX_SET_DATA;
+/// Most bytes of flag text per flag of [`MAX_STEM_FLAGS`] the stem lines may hold in all while
+/// they are read (`FLAG num`: `65535,` is six).
+const FLAG_TEXT_PER_FLAG: usize = 6;
 
 /// Most distinct flags a dictionary may use: each gets a `u16` id.
 const MAX_DISTINCT_FLAGS: usize = 1 << 16;
@@ -972,12 +980,19 @@ impl AffixDict {
     }
 
     fn from_hunspell_in(aff: &str, dic: &str, comments: &[&str], english: bool) -> Result<AffixDict, String> {
+        AffixDict::from_hunspell_capped(aff, dic, comments, english, MAX_STEM_FLAGS)
+    }
+
+    /// [`AffixDict::from_hunspell_in`] with at most `max_flags` stem flags in all
+    /// ([`MAX_STEM_FLAGS`]; tests lower it).
+    fn from_hunspell_capped(aff: &str, dic: &str, comments: &[&str], english: bool, max_flags: usize) -> Result<AffixDict, String> {
         // Some dictionaries open with a UTF-8 BOM; it must not glue itself to the first
         // directive or turn the `.dic` count line into a stem.
         let aff = aff.strip_prefix('\u{feff}').unwrap_or(aff);
         let dic = dic.strip_prefix('\u{feff}').unwrap_or(dic);
         let rules = parse_aff(aff, english)?;
         let mut stems: Vec<(String, String)> = Vec::new();
+        let mut flag_text = FlagText::new(max_flags);
         for (n, line) in dic.lines().enumerate() {
             // The entry may hold spaces (`ad hoc/B\tpo:adv`); it ends where Hunspell ends it.
             // Leading blanks belong to it, as in Hunspell (`  lab` is no `lab`).
@@ -1013,14 +1028,16 @@ impl AffixDict {
             }
             // With an `AF` table the field stays an alias number here: build() reads each alias
             // once, and every stem using it shares those flags.
+            flag_text.add(&flags)?;
             stems.push((word, flags));
         }
-        AffixDict::build(rules, stems, comments.iter().map(ToString::to_string).collect(), MAX_FLAGS_PER_ENTRY)
+        AffixDict::build(rules, stems, comments.iter().map(ToString::to_string).collect(), MAX_FLAGS_PER_ENTRY, max_flags)
     }
 
     /// Build from parsed rules and stems whose flag fields carry at most `entry_cap` flags each
     /// ([`MAX_FLAGS_PER_ENTRY`] for `.dic` entries, [`MAX_FLAGS_PER_STEM`] for compact data).
-    fn build(rules: Rules, stems: Vec<(String, String)>, comments: Vec<String>, entry_cap: usize) -> Result<AffixDict, String> {
+    /// The stems' flags may number `max_flags` in all ([`MAX_STEM_FLAGS`]), counted as they are read.
+    fn build(rules: Rules, stems: Vec<(String, String)>, comments: Vec<String>, entry_cap: usize, max_flags: usize) -> Result<AffixDict, String> {
         let mode = rules.mode;
         // A `.dic` entry's malformed flag items read as Hunspell reads them ([`FlagMode`]); an
         // entry with more than MAX_FLAGS_PER_STEM flags, or compact data whose flags don't read,
@@ -1049,20 +1066,24 @@ impl AffixDict {
             }
             Some((start, stem_keys.len(), word))
         };
-        let mut stems: Vec<(String, usize, usize, bool)> = stems
-            .into_iter()
-            .filter_map(|(w, f)| {
-                let range = match rules.alias_index(&f) {
-                    Some(i) => *alias_ranges.entry(i).or_insert_with(|| read(rules.aliases.get(i).map_or("", String::as_str), &mut stem_keys)),
-                    None if rules.aliases_on => Some((0, 0, true)),
-                    None => read(&f, &mut stem_keys),
-                };
-                if range.is_none_or(|r| !r.2) {
-                    skipped += 1;
-                }
-                range.map(|(a, b, word)| (w, a, b, word))
-            })
-            .collect();
+        let mut read_stems: Vec<(String, usize, usize, bool)> = Vec::with_capacity(stems.len());
+        for (w, f) in stems {
+            let range = match rules.alias_index(&f) {
+                Some(i) => *alias_ranges.entry(i).or_insert_with(|| read(rules.aliases.get(i).map_or("", String::as_str), &mut stem_keys)),
+                None if rules.aliases_on => Some((0, 0, true)),
+                None => read(&f, &mut stem_keys),
+            };
+            if stem_keys.len() > max_flags {
+                return Err(format!("the stems carry more than {max_flags} flags in all"));
+            }
+            if range.is_none_or(|r| !r.2) {
+                skipped += 1;
+            }
+            if let Some((a, b, word)) = range {
+                read_stems.push((w, a, b, word));
+            }
+        }
+        let mut stems = read_stems;
         if skipped > 0 {
             log::debug!("affix dictionary: {skipped} entries with unreadable or too many flags skipped");
         }
@@ -2059,6 +2080,7 @@ impl AffixDict {
         }
         let body = raw.get(words_at + 7..).unwrap_or_default();
         let mut stems: Vec<(String, String)> = Vec::new();
+        let mut flag_text = FlagText::new(MAX_STEM_FLAGS);
         let mut cur: Vec<u8> = Vec::new();
         let mut i = 0;
         while let Some(&p) = body.get(i) {
@@ -2081,9 +2103,32 @@ impl AffixDict {
             if word.is_empty() || word.len() > MAX_WORD_BYTES {
                 return Err("affix dictionary: bad stem".into());
             }
+            flag_text.add(flags).map_err(|e| format!("affix dictionary: {e}"))?;
             stems.push((word.to_string(), flags.to_string()));
         }
-        AffixDict::build(rules, stems, comments, MAX_FLAGS_PER_STEM)
+        AffixDict::build(rules, stems, comments, MAX_FLAGS_PER_STEM, MAX_STEM_FLAGS)
+    }
+}
+
+/// A running count of the stems' flag text while a dictionary is read: past
+/// [`FLAG_TEXT_PER_FLAG`] bytes for each of `max_flags` flags, reading stops with an error, before
+/// the rest of a huge `.dic` is held ([`MAX_STEM_FLAGS`]).
+struct FlagText {
+    bytes: usize,
+    cap: usize,
+}
+
+impl FlagText {
+    fn new(max_flags: usize) -> Self {
+        FlagText { bytes: 0, cap: max_flags.saturating_mul(FLAG_TEXT_PER_FLAG) }
+    }
+
+    fn add(&mut self, flags: &str) -> Result<(), String> {
+        self.bytes = self.bytes.saturating_add(flags.len());
+        if self.bytes > self.cap {
+            return Err(format!("the stems' flags take more than {} bytes", self.cap));
+        }
+        Ok(())
     }
 }
 
@@ -2131,6 +2176,30 @@ pub(crate) mod tests {
 
     fn dict() -> AffixDict {
         AffixDict::from_hunspell(AFF, DIC, &["test data"]).unwrap()
+    }
+
+    /// #495 review: the stems' flags are counted as they are read, so a `.dic` whose flags pass
+    /// the budget is refused while reading (its flag text) or while its flags are read (the
+    /// keys), before they are all held; one within it loads.
+    #[test]
+    fn stem_flags_are_budgeted_while_reading() {
+        let aff = "SET UTF-8\nSFX A Y 1\nSFX A 0 s .\nSFX B Y 1\nSFX B 0 x .\n";
+        let many: String = (0..100).map(|i| format!("w{i}/AB\n")).collect();
+        let dic = format!("100\n{many}");
+        // 200 flags: over a budget of 50 keys (whose flag text, 300 bytes, still fits).
+        let e = AffixDict::from_hunspell_capped(aff, &dic, &[], false, 50).unwrap_err();
+        assert!(e.contains("more than 50 flags"), "{e}");
+        let d = AffixDict::from_hunspell_capped(aff, &dic, &[], false, 200).unwrap();
+        assert!(d.check("w7s") && d.check("w99x"));
+        // Flag text past the budget (entries over the per-entry cap hold no keys, but their text
+        // still counts): refused while reading the `.dic`.
+        let long = "A".repeat(MAX_FLAGS_PER_ENTRY + 1);
+        let dic = format!("3\na/{long}\nb/{long}\nc/{long}\n");
+        let e = AffixDict::from_hunspell_capped(aff, &dic, &[], false, 2000).unwrap_err();
+        assert!(e.contains("more than 12000 bytes"), "{e}");
+        assert!(AffixDict::from_hunspell(aff, &dic, &[]).is_ok(), "within the real budget: skipped entries, no error");
+        let mut text = FlagText::new(1);
+        assert!(text.add("ABCDEF").is_ok() && text.add("G").is_err());
     }
 
     #[test]

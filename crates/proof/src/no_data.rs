@@ -7,9 +7,10 @@
 use crate::hyphen::{self, Limits, Source};
 use crate::{EnglishSource, Options, ProofLang, dict, en_variants, patterns};
 
-const LANGS: [ProofLang; 18] = [
+const LANGS: [ProofLang; 19] = [
     ProofLang::En,
     ProofLang::EnGb,
+    ProofLang::EnAu,
     ProofLang::EnCa,
     ProofLang::Pl,
     ProofLang::Bg,
@@ -45,9 +46,14 @@ const SAMPLES: [&str; 10] = [
 #[test]
 fn nothing_is_embedded() {
     assert!(crate::data::EN_US_DIC.is_empty());
-    assert!(crate::data::EN_US_SPELLING.is_empty() && crate::data::EN_GB_SPELLING.is_empty() && crate::data::EN_CA_SPELLING.is_empty());
+    assert!(
+        crate::data::EN_US_SPELLING.is_empty()
+            && crate::data::EN_GB_SPELLING.is_empty()
+            && crate::data::EN_CA_SPELLING.is_empty()
+            && crate::data::EN_AU_SPELLING.is_empty()
+    );
     assert!(crate::scowl::notice().is_none());
-    for l in [ProofLang::En, ProofLang::EnGb, ProofLang::EnCa] {
+    for l in [ProofLang::En, ProofLang::EnGb, ProofLang::EnAu, ProofLang::EnCa] {
         assert!(crate::scowl::dict(l).is_none() && crate::scowl::load_error(l).is_none());
     }
     assert!(dict::Dictionary::en_us().is_empty());
@@ -63,7 +69,7 @@ fn nothing_is_embedded() {
 #[test]
 fn english_spelling_still_marks_misspellings() {
     crate::hold_dictionary_tests();
-    for l in [ProofLang::En, ProofLang::EnGb, ProofLang::EnCa] {
+    for l in [ProofLang::En, ProofLang::EnGb, ProofLang::EnAu, ProofLang::EnCa] {
         let source = crate::english_source(l);
         assert!(matches!(source, Some(EnglishSource::Hunspell(_) | EnglishSource::CoreList)), "{l:?}");
         // Any English dictionary marks junk and knows `the`; the word-by-word results below are

@@ -150,10 +150,12 @@ fn abbreviation_or_number(prev: &str) -> bool {
         || ABBREVIATIONS.contains(&prev.to_lowercase().as_str())
 }
 
+const CLOSING: [char; 8] = ['"', '”', '’', '\'', ')', '»', ']', '\u{1}'];
+
 /// Does the gap between two words end a sentence: a `.`, `!` or `?` (not an ellipsis, not after
 /// an abbreviation), then space, with nothing but quotes and brackets around?
 fn ends_sentence(gap: &str, prev: &str) -> bool {
-    let t = gap.trim_start_matches(['"', '”', '’', '\'', ')', '»', ']', '\u{1}']);
+    let t = gap.trim_start_matches(CLOSING);
     let Some(end) = t.chars().next() else { return false };
     if !matches!(end, '.' | '!' | '?') || t.starts_with("..") {
         return false;
@@ -161,8 +163,16 @@ fn ends_sentence(gap: &str, prev: &str) -> bool {
     if end == '.' && abbreviation_or_number(prev) {
         return false;
     }
-    let rest = t.trim_start_matches(['.', '!', '?']).trim_start_matches(['"', '”', '’', '\'', ')', '»', ']']);
-    rest.starts_with(char::is_whitespace) && rest.trim_start().chars().all(|c| matches!(c, '"' | '“' | '«' | '(' | '[' | '\'' | '—'))
+    let after_marks = t.trim_start_matches(['.', '!', '?']);
+    let rest = after_marks.trim_start_matches(CLOSING);
+    // (Not the object placeholder `\u{1}`: `Chi era?\u{1} era Marco.` still starts a sentence.)
+    // `«Vai?» disse lui.` and `—Vai? —disse lui.`: the narration after a quoted question or
+    // exclamation (not after a period: `Finì. —domani` starts a sentence), or after a dialogue dash, goes on in lower case.
+    if end != '.' && (rest.contains('—') || after_marks.trim_start_matches('\u{1}').starts_with(CLOSING)) {
+        return false;
+    }
+    rest.starts_with(char::is_whitespace)
+        && rest.trim_start().chars().all(|c| c.is_whitespace() || matches!(c, '"' | '“' | '«' | '(' | '[' | '\'' | '—'))
 }
 
 fn repeated_words(text: &str, ws: &[(usize, usize)], v: &mut Vec<Issue>) {
@@ -203,11 +213,8 @@ fn spaces(text: &str, v: &mut Vec<Issue>) {
             v.push(issue(i, i + 1 + p.len_utf8(), "Spazio prima della punteggiatura".into(), vec![p.to_string()]));
         }
     }
-    for (i, _) in text.match_indices("  ") {
-        if i > 0 && text.get(..i).is_some_and(|t| t.ends_with(' ')) {
-            continue;
-        }
-        v.push(issue(i, i + 2, "Spazio doppio".into(), vec![" ".into()]));
+    for run in crate::space_runs(text) {
+        v.push(issue(run.start, run.end, "Spazio doppio".into(), vec![" ".into()]));
     }
 }
 
@@ -401,6 +408,23 @@ mod tests {
                 "after an abbreviation: {t}"
             );
         }
+    }
+
+    /// craft-libs#496 review: narration after a quoted or dashed question or exclamation goes on in
+    /// lower case.
+    #[test]
+    fn narration_after_a_quoted_question_is_not_a_new_sentence() {
+        for t in ["«Vai?» disse lui.", "«Vieni!» gridò Anna.", "\"Vai?\" disse lui.", "—Vai? —disse lui.", "— Vai! — disse lui."] {
+            assert!(fixes(t).is_empty(), "{t}: {:?}", fixes(t));
+        }
+        assert!(fixes("Vado a Roma? sì.").contains(&pair("sì", "Sì")), "a bare question still ends the sentence");
+        // After a period the dash opens the next line of speech: a sentence starts.
+        assert!(fixes("Finì. —domani partiamo.").contains(&pair("domani", "Domani")), "{:?}", fixes("Finì. —domani partiamo."));
+        assert!(fixes("Finì. — domani partiamo.").contains(&pair("domani", "Domani")), "{:?}", fixes("Finì. — domani partiamo."));
+        // An inline object (`\u{1}`) before a real closing quote is skipped.
+        assert!(fixes("«Vai?\u{1}» disse lui.").is_empty(), "{:?}", fixes("«Vai?\u{1}» disse lui."));
+        // An inline object (`\u{1}`) is not a closing quote.
+        assert!(fixes("Chi era?\u{1} era Marco.").contains(&pair("era", "Era")), "{:?}", fixes("Chi era?\u{1} era Marco."));
     }
 
     #[test]

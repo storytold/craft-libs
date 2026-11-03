@@ -5,7 +5,7 @@
 /// A language WordCraft can proof, or [`ProofLang::Other`] for one it can't.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum ProofLang {
-    /// American English (`en`, `en-US`, and every region not listed for [`ProofLang::EnGb`] or
+    /// American English (`en`, `en-US`, and every region not listed for [`ProofLang::EnGb`], [`ProofLang::EnAu`] or
     /// [`ProofLang::EnCa`]): SCOWL's en-US dictionary ([`crate::scowl`]), the English grammar rules and the
     /// English hyphenation dictionary and patterns. British spellings (`colour`, `centre`,
     /// `organise`) are flagged, with the American form suggested ([`crate::en_variants`]). Also
@@ -13,10 +13,14 @@ pub enum ProofLang {
     /// Word's).
     #[default]
     En,
-    /// English with British spelling (`en-GB`, `en-AU`, `en-NZ`, `en-IE`, `en-ZA`, `en-IN`…):
+    /// English with British spelling (`en-GB`, `en-NZ`, `en-IE`, `en-ZA`, `en-IN`…):
     /// [`ProofLang::En`]'s tools, but American spellings (`color`, `center`, `analyze`) are
     /// flagged and `-ize` and `-ise` are both right, as in Oxford spelling.
     EnGb,
+    /// Australian English (`en-AU`): [`ProofLang::EnGb`]'s spelling policy, against SCOWL's own
+    /// en-AU dictionary, which knows Australian words (`billabong`, `brumby`, `larrikin`) and
+    /// spells some words the Australian way (`program`, `inquiry`).
+    EnAu,
     /// Canadian English (`en-CA`): British `-our`, `-re` and `-ence` (`colour`, `centre`,
     /// `defence`) with American `-ize` (`organize`), `tire` and `program`.
     EnCa,
@@ -86,9 +90,10 @@ pub enum ProofLang {
 
 impl ProofLang {
     /// Every language with a spelling dictionary, in display order.
-    pub const PROOFED: [ProofLang; 15] = [
+    pub const PROOFED: [ProofLang; 16] = [
         ProofLang::En,
         ProofLang::EnGb,
+        ProofLang::EnAu,
         ProofLang::EnCa,
         ProofLang::Pl,
         ProofLang::Pt,
@@ -155,12 +160,13 @@ impl ProofLang {
         }
     }
 
-    /// The English of an English tag, by its [`region`]: Canada is [`ProofLang::EnCa`], regions
-    /// that spell the British way are [`ProofLang::EnGb`], and the United States, any other
+    /// The English of an English tag, by its [`region`]: Canada is [`ProofLang::EnCa`], Australia
+    /// [`ProofLang::EnAu`], other regions that spell the British way are [`ProofLang::EnGb`], and the United States, any other
     /// region and no region are [`ProofLang::En`].
     fn english(tag: &str) -> ProofLang {
         match region(tag) {
             Some(r) if r.eq_ignore_ascii_case("CA") => ProofLang::EnCa,
+            Some(r) if r.eq_ignore_ascii_case("AU") => ProofLang::EnAu,
             Some(r) if BRITISH_SPELLING.iter().any(|b| b.eq_ignore_ascii_case(r)) => ProofLang::EnGb,
             _ => ProofLang::En,
         }
@@ -189,9 +195,10 @@ impl ProofLang {
         }
     }
 
-    /// Is this one of the Englishes ([`ProofLang::En`], [`ProofLang::EnGb`], [`ProofLang::EnCa`])?
+    /// Is this one of the Englishes ([`ProofLang::En`], [`ProofLang::EnGb`], [`ProofLang::EnAu`],
+    /// [`ProofLang::EnCa`])?
     pub fn is_english(self) -> bool {
-        matches!(self, ProofLang::En | ProofLang::EnGb | ProofLang::EnCa)
+        matches!(self, ProofLang::En | ProofLang::EnGb | ProofLang::EnAu | ProofLang::EnCa)
     }
 
     /// Is this one of the Spanishes ([`ProofLang::Es`], [`ProofLang::EsMx`], [`ProofLang::Es419`],
@@ -208,7 +215,7 @@ impl ProofLang {
     pub fn code(self) -> &'static str {
         match self {
             ProofLang::Pack(_) => "",
-            ProofLang::En | ProofLang::EnGb | ProofLang::EnCa => "en",
+            ProofLang::En | ProofLang::EnGb | ProofLang::EnAu | ProofLang::EnCa => "en",
             ProofLang::Pl => "pl",
             ProofLang::Bg => "bg",
             ProofLang::Pt => "pt",
@@ -371,12 +378,12 @@ pub(crate) fn region(tag: &str) -> Option<&str> {
 const LATIN_AMERICA: [&str; 22] =
     ["419", "005", "013", "029", "AR", "BO", "CL", "CO", "CR", "CU", "DO", "EC", "GT", "HN", "NI", "PA", "PE", "PR", "PY", "SV", "US", "VE"];
 
-/// Regions whose English uses British spelling ([`ProofLang::EnGb`]): the United Kingdom (and
-/// the non-standard `UK`), Ireland, Australia, New Zealand, South Africa, India and other
+/// Regions whose English uses British spelling ([`ProofLang::EnGb`]; Australia has its own,
+/// [`ProofLang::EnAu`]): the United Kingdom (and the non-standard `UK`), Ireland, New Zealand, South Africa, India and other
 /// Commonwealth countries, the Crown dependencies and Europe (`150`).
-const BRITISH_SPELLING: [&str; 26] = [
-    "GB", "UK", "IE", "AU", "NZ", "ZA", "IN", "SG", "HK", "MY", "MT", "CY", "GI", "IM", "JE", "GG", "JM", "TT", "BS", "BB", "BZ", "KE", "NG", "GH",
-    "PK", "150",
+const BRITISH_SPELLING: [&str; 25] = [
+    "GB", "UK", "IE", "NZ", "ZA", "IN", "SG", "HK", "MY", "MT", "CY", "GI", "IM", "JE", "GG", "JM", "TT", "BS", "BB", "BZ", "KE", "NG", "GH", "PK",
+    "150",
 ];
 
 /// A BCP 47 tag in canonical case (`pl-PL`, `en-GB`, `zh-Hant-TW`, `x-none`), or `None` when
@@ -469,26 +476,12 @@ mod tests {
     fn tags_resolve_english_regions() {
         assert_tags(&["en", "en-US", "EN_us", "en-Latn-US", "en-PH", "en-001", "eng", "en_US.UTF-8", "en-x-gb"], ProofLang::En);
         assert_tags(
-            &[
-                "en-GB",
-                "EN_gb",
-                "en_GB.UTF-8",
-                "en-AU",
-                "en_AU",
-                "en-NZ",
-                "en-IE",
-                "en-ZA",
-                "en-IN",
-                "en-Latn-GB",
-                "en-UK",
-                "en-150",
-                "eng-GB",
-                "en_GB@euro",
-            ],
+            &["en-GB", "EN_gb", "en_GB.UTF-8", "en-NZ", "en-IE", "en-ZA", "en-IN", "en-Latn-GB", "en-UK", "en-150", "eng-GB", "en_GB@euro"],
             ProofLang::EnGb,
         );
         assert_tags(&["en-CA", "en_CA", "EN-ca", "en_CA.UTF-8", "en-Latn-CA"], ProofLang::EnCa);
-        for language in [ProofLang::En, ProofLang::EnGb, ProofLang::EnCa] {
+        assert_tags(&["en-AU", "en_AU", "EN-au", "en_AU.UTF-8", "en-Latn-AU"], ProofLang::EnAu);
+        for language in [ProofLang::En, ProofLang::EnGb, ProofLang::EnAu, ProofLang::EnCa] {
             assert!(language.is_english() && language.is_proofed() && ProofLang::PROOFED.contains(&language), "{language:?}");
             assert_eq!(language.code(), "en");
         }
