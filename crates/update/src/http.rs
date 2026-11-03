@@ -163,7 +163,7 @@ impl Http {
         {
             req = req.header("Authorization", &format!("Bearer {token}"));
         }
-        let mut resp = req.call().map_err(|e| format!("couldn't reach GitHub ({e})"))?;
+        let mut resp = req.call().map_err(|e| format!("couldn't reach GitHub ({})", call_failed(&e)))?;
         let header = |name: &str| resp.headers().get(name).and_then(|v| v.to_str().ok()).map(str::to_string);
         let status = resp.status().as_u16();
         match status {
@@ -191,8 +191,11 @@ impl Http {
     pub fn get_feed(&self, url: &str) -> Result<String, FeedError> {
         let failed = |why: String| FeedError { why, throttled: false, retry_after: None };
         let agent = if is_loopback(url) { &self.direct } else { &self.feed };
-        let mut resp =
-            agent.get(url).header("Accept", "application/json").call().map_err(|e| failed(format!("couldn't reach {} ({e})", host(url))))?;
+        let mut resp = agent
+            .get(url)
+            .header("Accept", "application/json")
+            .call()
+            .map_err(|e| failed(format!("couldn't reach {} ({})", host(url), call_failed(&e))))?;
         // Seconds only; an HTTP date falls back to our own backoff.
         let retry_after = resp.headers().get("retry-after").and_then(|v| v.to_str().ok()).and_then(|r| r.trim().parse::<i64>().ok());
         match resp.status().as_u16() {
@@ -204,7 +207,7 @@ impl Http {
     /// GET a small text file (following redirects).
     pub fn get_text(&self, url: &str) -> Result<Option<String>, String> {
         let agent = if is_loopback(url) { &self.direct } else { &self.small };
-        let mut resp = agent.get(url).call().map_err(|e| format!("couldn't reach {} ({e})", host(url)))?;
+        let mut resp = agent.get(url).call().map_err(|e| format!("couldn't reach {} ({})", host(url), call_failed(&e)))?;
         match resp.status().as_u16() {
             200 => read_text_capped(&mut resp, MAX_SMALL).map(Some).map_err(|e| format!("unreadable answer ({e})")),
             404 => Ok(None),
@@ -217,7 +220,7 @@ impl Http {
     /// on the body when the length wasn't announced or was wrong.
     pub fn get_bytes(&self, url: &str, max: usize) -> Result<Option<Vec<u8>>, String> {
         let agent = if is_loopback(url) { &self.direct } else { &self.small };
-        let mut resp = agent.get(url).call().map_err(|e| format!("couldn't reach {} ({e})", host(url)))?;
+        let mut resp = agent.get(url).call().map_err(|e| format!("couldn't reach {} ({})", host(url), call_failed(&e)))?;
         match resp.status().as_u16() {
             200 => {
                 let announced = resp.headers().get("content-length").and_then(|v| v.to_str().ok()).and_then(|v| v.parse::<u64>().ok());
@@ -236,7 +239,7 @@ impl Http {
 
     /// Where `url` redirects to, without following it.
     pub fn redirect_target(&self, url: &str) -> Result<Option<String>, String> {
-        let resp = self.no_redirect.head(url).call().map_err(|e| format!("couldn't reach {} ({e})", host(url)))?;
+        let resp = self.no_redirect.head(url).call().map_err(|e| format!("couldn't reach {} ({})", host(url), call_failed(&e)))?;
         match resp.status().as_u16() {
             300..=399 => Ok(resp.headers().get("location").and_then(|v| v.to_str().ok()).map(str::to_string)),
             404 => Ok(None),
@@ -351,7 +354,7 @@ impl Http {
             Ok(r) => r,
             // Asking again gets the same answer.
             Err(ureq::Error::RequireHttpsOnly(to)) => {
-                return Err(AttemptError::Fatal(format!("the download led to plain HTTP ({to}), so it wasn't fetched")));
+                return Err(AttemptError::Fatal(format!("the download led to plain HTTP at {}, so it wasn't fetched", host(&to))));
             }
             Err(e) => return Err(retry(format!("couldn't connect: {e}"), false)),
         };
@@ -618,7 +621,19 @@ fn refused_until(status: u16, remaining: Option<&str>, reset: Option<i64>, retry
 
 /// The host of `url` for error messages, or all of it when it has no scheme.
 fn host(url: &str) -> &str {
-    url.split_once("://").and_then(|(_, rest)| rest.split('/').next()).unwrap_or(url)
+    let Some((_, rest)) = url.split_once("://") else { return url };
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    // Never `user:password@`.
+    authority.rsplit_once('@').map_or(authority, |(_, host)| host)
+}
+
+/// Why a request failed, for a message. A hop refused for plain HTTP names only its host:
+/// ureq's own message holds the whole link, and a redirect's link can carry a signed query.
+fn call_failed(e: &ureq::Error) -> String {
+    match e {
+        ureq::Error::RequireHttpsOnly(to) => format!("refused plain HTTP to {}", host(to)),
+        e => e.to_string(),
+    }
 }
 
 /// Reads a text body, rejecting one whose *decoded* size exceeds `max`.
@@ -661,6 +676,8 @@ pub(crate) mod tests {
         assert_eq!(host("https://api.github.com/repos/storytold/wordcraft"), "api.github.com");
         assert_eq!(host("http://127.0.0.1:8080"), "127.0.0.1:8080");
         assert_eq!(host("not a url"), "not a url");
+        assert_eq!(host("http://objects.example.com?X-Amz-Signature=abc"), "objects.example.com");
+        assert_eq!(host("http://user:secret@example.com/x"), "example.com");
     }
 
     #[test]
@@ -1138,17 +1155,19 @@ pub(crate) mod tests {
         // ureq checks every hop, redirects included, before it connects; `.invalid` never
         // resolves, so an agent that tried would fail on DNS instead.
         let http = Http::build(crate::TEST_AGENT, true).unwrap();
-        let refused = |r: Result<_, String>| r.is_err_and(|e| e.contains("https only"));
-        assert!(refused(http.get_api("http://api.example.invalid/repos/x/y/releases", None).map(|_| ())));
-        assert!(refused(http.get_text("http://example.invalid/SHA256SUMS.txt").map(|_| ())));
+        let refused = |r: Result<_, String>| r.is_err_and(|e| e.contains("refused plain HTTP to example.invalid") && !e.contains("secret"));
+        assert!(refused(http.get_api("http://example.invalid/repos/x/y/releases?secret", None).map(|_| ())));
+        assert!(refused(http.get_text("http://example.invalid/SHA256SUMS.txt?secret").map(|_| ())));
+        // The scheme is case-insensitive, and an upper-case one isn't a loopback link either.
+        assert!(refused(http.get_text("HTTP://example.invalid/SHA256SUMS.txt").map(|_| ())));
         assert!(refused(http.get_bytes("http://example.invalid/icon.png", 100).map(|_| ())));
         assert!(refused(http.redirect_target("http://example.invalid/releases/latest").map(|_| ())));
-        assert!(http.get_feed("http://example.invalid/feed.json").is_err_and(|e| e.why.contains("https only")));
+        assert!(http.get_feed("http://example.invalid/feed.json").is_err_and(|e| e.why.contains("refused plain HTTP")));
         // A download fails at once rather than retrying until it pauses.
         let dir = tempfile::tempdir().unwrap();
         let (_, sha) = body();
-        let result = http.download("http://example.invalid/file.bin", &dir.path().join("file.bin"), 10, &sha, &Stop::default(), &mut |_| {});
-        assert!(result.is_err_and(|e| e.contains("led to plain HTTP")));
+        let result = http.download("http://example.invalid/file.bin?secret", &dir.path().join("file.bin"), 10, &sha, &Stop::default(), &mut |_| {});
+        assert_eq!(result.unwrap_err(), "the download led to plain HTTP at example.invalid, so it wasn't fetched");
     }
 
     #[test]
