@@ -233,6 +233,19 @@ fn a_matroska_track_that_starts_late_counts_only_its_own_frames() {
 }
 
 #[test]
+fn a_matroska_codec_delay_is_taken_off_the_length() {
+    use craft_audio::{decode, probe};
+    // `probe` reports the length the container gives, before anything is decoded; `decode`
+    // reports what it presented. 100 ms are decoded and the 20 ms of codec delay dropped, wherever
+    // the first block is stored.
+    for first_ns in [-20_000_000, 0, 50_000_000] {
+        let file = pcm_mkv(first_ns, true, 20_000_000);
+        let (_, buf) = decode(&file, None).unwrap();
+        assert_eq!((probe(&file, None).unwrap().frames, buf.frames()), (3840, 3840), "first block at {first_ns} ns");
+    }
+}
+
+#[test]
 fn seeking_far_past_an_unknown_end_does_not_overflow() {
     use craft_audio::{DecodeOptions, Decoder};
     let file = pcm_mkv(0, false, 1_000_000);
@@ -240,4 +253,7 @@ fn seeking_far_past_an_unknown_end_does_not_overflow() {
     assert!(!dec.length_known());
     dec.seek(u64::MAX).unwrap();
     assert!(dec.next_block().unwrap().is_none());
+    // and back to the start
+    assert_eq!(dec.seek(0).unwrap(), 0);
+    assert!(dec.next_block().unwrap().is_some_and(|b| b.frames() > 0));
 }

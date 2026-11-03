@@ -218,7 +218,10 @@ impl<'a> Native<'a> {
     /// Open the audio track `track` (the first when `None`) of the file in `src`; `None` when the
     /// native path does not decode it.
     pub(crate) fn open(src: &Src<'a>, detected: Option<Container>, track: Option<usize>) -> Option<Result<Native<'a>>> {
-        let head = src.head();
+        let head = match src.head_checked() {
+            Ok(head) => head,
+            Err(e) => return Some(Err(e)),
+        };
         let at = after_id3(&head);
         let body = head.get(at..).unwrap_or_default();
         // The bytes decide the container when they say; the detection (which may come from the
@@ -457,7 +460,10 @@ fn audio_track(kinds: impl Iterator<Item = bool>, n: Option<usize>) -> Option<Re
 /// An MP4 / QuickTime file's audio track, if its codec is native. Samples that claim to lie
 /// beyond the end of the file are refused rather than read leniently.
 fn open_mp4<'a>(src: &Src<'a>, container: Container, track: Option<usize>) -> Option<Result<Native<'a>>> {
-    let file = isobmff::open(src).ok()?;
+    let file = match demuxed(isobmff::open(src), mp4_io)? {
+        Ok(file) => file,
+        Err(e) => return Some(Err(e)),
+    };
     let track = match audio_track(file.tracks.iter().map(|t| t.kind == isobmff::TrackKind::Audio), track)? {
         Ok(t) => t,
         Err(e) => return Some(Err(e)),
@@ -499,7 +505,10 @@ fn open_mp4<'a>(src: &Src<'a>, container: Container, track: Option<usize>) -> Op
 
 /// A Matroska / WebM file's audio track, if its codec is native.
 fn open_mkv<'a>(src: &Src<'a>, container: Container, track: Option<usize>) -> Option<Result<Native<'a>>> {
-    let demux = matroska::Demuxer::new(src.clone()).ok()?;
+    let demux = match demuxed(matroska::Demuxer::new(src.clone()), mkv_io)? {
+        Ok(demux) => demux,
+        Err(e) => return Some(Err(e)),
+    };
     let file = demux.file();
     let track = match audio_track(file.tracks.iter().map(|t| t.kind == matroska::TrackKind::Audio), track)? {
         Ok(t) => t,
@@ -526,12 +535,16 @@ fn open_mkv<'a>(src: &Src<'a>, container: Container, track: Option<usize>) -> Op
     let skip = rescale_round(t.codec_delay_ns, 1_000_000_000, u64::from(rate));
     // The presentation ends with the last frame (timestamps, with `CodecDelay` already taken off,
     // are in ticks of `timebase` seconds); known only when the last frame has a duration.
-    // The decoded timeline starts at the first frame, so the length is measured from there.
+    // The decoded timeline starts at the first frame (negative when `CodecDelay` was taken off),
+    // and the presentation starts `CodecDelay` later. Both are counted in timestamp ticks, the
+    // delay rounded to one, so a file whose first frame is stored at 0 presents from exactly 0
+    // although its timestamps are rounded (AAC's 1024-frame priming is 21.33 ms, stored as -21).
     let (num, den) = t.timebase;
     let last = t.samples.iter().max_by_key(|s| s.pts);
-    let origin = t.samples.iter().map(|s| s.pts).min().unwrap_or(0).max(0);
+    let delay_ticks = i64::try_from(rescale_round(t.codec_delay_ns.saturating_mul(den), num.saturating_mul(1_000_000_000), 1)).unwrap_or(i64::MAX);
+    let start = t.samples.iter().map(|s| s.pts).min().unwrap_or(0).saturating_add(delay_ticks);
     let frames = last.filter(|s| s.duration > 0).and_then(|s| {
-        let end = u64::try_from(s.pts.saturating_add(i64::try_from(s.duration).ok()?).saturating_sub(origin)).ok()?;
+        let end = u64::try_from(s.pts.saturating_add(i64::try_from(s.duration).ok()?).saturating_sub(start)).ok()?;
         Some(rescale_round(end.saturating_mul(num), den, u64::from(rate)))
     });
     let mut demux = demux;
@@ -548,23 +561,42 @@ fn open_mkv<'a>(src: &Src<'a>, container: Container, track: Option<usize>) -> Op
 
 /// The audio tracks of `src` the native path reads, described for a track list; `None` when it
 /// does not read the container.
-pub(crate) fn tracks(src: &Src<'_>, detected: Option<Container>) -> Option<Vec<CodecParams>> {
-    let head = src.head();
+pub(crate) fn tracks(src: &Src<'_>, detected: Option<Container>) -> Option<Result<Vec<CodecParams>>> {
+    let head = match src.head_checked() {
+        Ok(head) => head,
+        Err(e) => return Some(Err(e)),
+    };
     match super::detect_container(&head, None).or(detected) {
-        Some(Container::Mp4 | Container::QuickTime) => {
-            let file = isobmff::open(src).ok()?;
-            Some(file.tracks.iter().filter(|t| t.kind == isobmff::TrackKind::Audio).map(isobmff::Track::codec_params).collect())
-        }
-        Some(Container::Matroska | Container::WebM) => {
-            let file = matroska::open(src.clone()).ok()?;
-            Some(file.tracks.iter().filter(|t| t.kind == matroska::TrackKind::Audio).map(matroska::Track::codec_params).collect())
-        }
-        Some(Container::Ogg) => {
-            let file = ogg::open(src).ok()?;
-            Some(file.streams.iter().filter(|s| s.codec.codec_id().is_audio()).map(ogg::Stream::codec_params).collect())
-        }
+        Some(Container::Mp4 | Container::QuickTime) => demuxed(isobmff::open(src), mp4_io)
+            .map(|r| r.map(|file| file.tracks.iter().filter(|t| t.kind == isobmff::TrackKind::Audio).map(isobmff::Track::codec_params).collect())),
+        Some(Container::Matroska | Container::WebM) => demuxed(matroska::open(src.clone()), mkv_io)
+            .map(|r| r.map(|file| file.tracks.iter().filter(|t| t.kind == matroska::TrackKind::Audio).map(matroska::Track::codec_params).collect())),
+        Some(Container::Ogg) => demuxed(ogg::open(src), ogg_io)
+            .map(|r| r.map(|file| file.streams.iter().filter(|s| s.codec.codec_id().is_audio()).map(ogg::Stream::codec_params).collect())),
         _ => None,
     }
+}
+
+/// A craft-media demuxer's result for the native path: `None` when it does not read the file (the
+/// other path tries it), and the source's failure to read as [`AudioError::Io`]. A file that ends
+/// early is not a read failure: the other path names what is wrong with it.
+fn demuxed<T, E>(r: std::result::Result<T, E>, io: fn(E) -> Option<std::io::Error>) -> Option<Result<T>> {
+    match r {
+        Ok(v) => Some(Ok(v)),
+        Err(e) => io(e).filter(|e| e.kind() != std::io::ErrorKind::UnexpectedEof).map(|e| Err(AudioError::Io(e))),
+    }
+}
+
+fn mp4_io(e: isobmff::Error) -> Option<std::io::Error> {
+    if let isobmff::Error::Io(e) = e { Some(e) } else { None }
+}
+
+fn mkv_io(e: matroska::Error) -> Option<std::io::Error> {
+    if let matroska::Error::Io(e) = e { Some(e) } else { None }
+}
+
+fn ogg_io(e: ogg::Error) -> Option<std::io::Error> {
+    if let ogg::Error::Io(e) = e { Some(e) } else { None }
 }
 
 /// `v` in units of `from` per second, in units of `to` per second (truncated).

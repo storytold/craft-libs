@@ -223,7 +223,8 @@ mod tests {
         let x = [1e20f32, -1e20, 3e38, 0.5];
         let p = Peaks::build(&x);
         let rms = p.rms_spans(&x, 0.0, 4.0, 0.0, 1)[0].unwrap();
-        assert!(rms.is_finite(), "{rms}");
+        let want = (x.iter().map(|&v| f64::from(v) * f64::from(v)).sum::<f64>() / 4.0).sqrt() as f32;
+        assert!(rms.is_finite() && (rms / want - 1.0).abs() < 1e-6, "{rms} vs {want}");
     }
 
     #[test]

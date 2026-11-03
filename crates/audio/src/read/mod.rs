@@ -478,6 +478,7 @@ fn tracks_in(src: &Src<'_>, ext_hint: Option<&str>) -> Result<Vec<TrackInfo>> {
         v.into_iter().enumerate().map(|(index, (codec, sample_rate, channels))| TrackInfo { index, codec, sample_rate, channels }).collect()
     };
     if let Some(params) = native::tracks(src, container) {
+        let params = params?;
         return Ok(list(params.into_iter().map(|p| (p.codec, p.sample_rate, p.channels)).collect()));
     }
     match Native::open(src, container, None) {
@@ -500,7 +501,11 @@ fn tracks_in(src: &Src<'_>, ext_hint: Option<&str>) -> Result<Vec<TrackInfo>> {
 /// is blamed only when the bytes name a format.
 #[cfg(not(feature = "symphonia"))]
 fn not_built(src: &Src<'_>) -> AudioError {
-    match detect_container(&src.head(), None) {
+    let head = match src.head_checked() {
+        Ok(head) => head,
+        Err(e) => return e,
+    };
+    match detect_container(&head, None) {
         Some(c) => AudioError::Unsupported(format!("{} needs a decoder this build leaves out (the `decode` feature adds symphonia)", c.name())),
         None => AudioError::Unsupported("not a recognized audio format".into()),
     }
@@ -536,5 +541,34 @@ mod native_only_tests {
         }
         assert!(matches!(tracks_of(Failing, None), Err(AudioError::Io(_))));
         assert!(matches!(Decoder::open(Failing, None, &DecodeOptions::default()), Err(AudioError::Io(_))));
+    }
+
+    /// A source that fails past its first 64 KiB fails inside the demuxer: still an I/O error.
+    #[test]
+    fn a_failed_read_inside_the_demuxer_is_an_io_error() {
+        use craft_media::matroska::{LacingMode, MkvWriter, MuxOptions, TrackKind, TrackSpec};
+        struct FailsLate(Vec<u8>);
+        impl craft_media::ByteSource for FailsLate {
+            fn len(&self) -> u64 {
+                self.0.len() as u64
+            }
+            fn read_at(&self, offset: u64, buf: &mut [u8]) -> std::io::Result<()> {
+                if offset + buf.len() as u64 > 64 * 1024 {
+                    return Err(std::io::Error::other("disk gone"));
+                }
+                self.0.read_at(offset, buf)
+            }
+        }
+        // a Matroska PCM file of about 400 KB, whose cues and later clusters lie past 64 KiB
+        let mut spec = TrackSpec::new(TrackKind::Audio, "A_PCM/FLOAT/IEEE");
+        spec.audio = Some((48_000.0, 1, Some(32)));
+        let opts = MuxOptions { lacing: LacingMode::None, ..MuxOptions::default() };
+        let mut w = MkvWriter::new(std::io::Cursor::new(Vec::new()), vec![spec], opts).unwrap();
+        for k in 0..100i64 {
+            w.write_frame(0, k * 20_000_000, true, &[0; 960 * 4], Some(20_000_000)).unwrap();
+        }
+        let file = w.finish().unwrap().into_inner();
+        assert!(matches!(tracks_of(FailsLate(file.clone()), None), Err(AudioError::Io(_))));
+        assert!(matches!(Decoder::open(FailsLate(file), None, &DecodeOptions::default()), Err(AudioError::Io(_))));
     }
 }

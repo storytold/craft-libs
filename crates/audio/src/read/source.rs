@@ -111,11 +111,6 @@ impl Src<'_> {
         self.read_upto(0, 64 * 1024)
     }
 
-    /// The first bytes of the source, enough to detect its format.
-    pub(crate) fn head(&self) -> Vec<u8> {
-        self.bytes_upto(0, 64 * 1024)
-    }
-
     /// The whole source in memory: borrowed for a buffer, read once for a shared source.
     #[cfg(feature = "symphonia")]
     pub(crate) fn whole(&self) -> Result<Cow<'_, [u8]>> {

@@ -108,6 +108,29 @@ fn decode_sample(s: &[u8], kind: PcmKind) -> f32 {
     }
 }
 
+/// `channels` empty channels with room for `frames` samples each, allocated fallibly.
+pub(crate) fn planar(channels: usize, frames: usize) -> Result<Vec<Vec<f32>>> {
+    let too_large = || AudioError::TooLarge("cannot allocate decoded audio".into());
+    let mut out = Vec::new();
+    out.try_reserve_exact(channels).map_err(|_| too_large())?;
+    for _ in 0..channels {
+        let mut ch = Vec::new();
+        ch.try_reserve_exact(frames).map_err(|_| too_large())?;
+        out.push(ch);
+    }
+    Ok(out)
+}
+
+/// `channels` channels of `frames` samples of silence, allocated fallibly.
+#[cfg(feature = "symphonia")]
+pub(crate) fn silence(channels: usize, frames: usize) -> Result<Vec<Vec<f32>>> {
+    let mut out = planar(channels, frames)?;
+    for ch in &mut out {
+        ch.resize(frames, 0.0);
+    }
+    Ok(out)
+}
+
 /// Deinterleave `frames` frames of `channels`-channel PCM from `data` into planar `f32`.
 pub(crate) fn deinterleave(data: &[u8], kind: PcmKind, channels: usize, frames: u64) -> Result<Vec<Vec<f32>>> {
     let bytes = kind.bytes();
@@ -119,12 +142,7 @@ pub(crate) fn deinterleave(data: &[u8], kind: PcmKind, channels: usize, frames: 
         return Err(AudioError::TooLarge(format!("{total} samples exceeds the {MAX_DECODE_SAMPLES}-sample decode limit")));
     }
     let frames = usize::try_from(frames).map_err(|_| AudioError::TooLarge("frame count exceeds address space".into()))?;
-    let mut out: Vec<Vec<f32>> = Vec::with_capacity(channels);
-    for _ in 0..channels {
-        let mut ch = Vec::new();
-        ch.try_reserve_exact(frames).map_err(|_| AudioError::TooLarge("cannot allocate decoded audio".into()))?;
-        out.push(ch);
-    }
+    let mut out = planar(channels, frames)?;
     for frame in data.chunks_exact(block).take(frames) {
         for (ch, s) in out.iter_mut().zip(frame.chunks_exact(bytes)) {
             ch.push(decode_sample(s, kind));

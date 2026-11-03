@@ -132,7 +132,8 @@ impl TrackDecoder {
 
     /// What stands in for a lost or undecodable packet (`packet` when its bytes are at hand):
     /// silence as long as the packet would have been (from its size, or the last packet). Empty
-    /// when the length is unknown.
+    /// when the length is unknown. A packet past the decode limit ([`decode`](Self::decode)'s
+    /// `TooLarge`, over 2^30 samples) is concealed with silence of that limit's length.
     pub fn conceal(&mut self, packet: Option<&[u8]>) -> AudioBuffer {
         let data = packet.unwrap_or_default();
         let frames = match &mut self.inner {

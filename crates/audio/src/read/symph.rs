@@ -531,7 +531,7 @@ pub(crate) struct Symph {
     errors: usize,
     /// Frames of the last decoded packet: the length of the silence that replaces a packet that
     /// fails to decode when the demuxer gives no duration for it, so the audio after it keeps its
-    /// timing.
+    /// timing (0 before the first packet decodes).
     last_frames: usize,
     /// Frames still to drop after a seek landed before its target.
     discard: u64,
@@ -676,7 +676,8 @@ impl Symph {
                     self.info.damaged += 1;
                     corrupt_packet(self.errors, self.decoded, m)?;
                     // the packet's own duration when the demuxer gives one (Vorbis packets vary in
-                    // length), otherwise the last packet's
+                    // length; it leaves out priming), otherwise the last packet's: a damaged first
+                    // packet is concealed only when its duration is known
                     let rate = u64::from(self.info.sample_rate.max(1));
                     let (numer, denom) = self.time_base.map_or((1, rate), |tb| (u64::from(tb.numer.get()), u64::from(tb.denom.get())));
                     let own = u128::from(packet.dur.get()) * u128::from(numer) * u128::from(rate) / u128::from(denom);
@@ -684,10 +685,10 @@ impl Symph {
                         Ok(n) if n > 0 && n as u64 <= MAX_PACKET_FRAMES => n,
                         _ => self.last_frames,
                     };
-                    if self.decoded == 0 || frames == 0 {
+                    if frames == 0 || self.info.channels == 0 {
                         continue;
                     }
-                    vec![vec![0.0; frames]; usize::from(self.info.channels)]
+                    crate::pcm::silence(usize::from(self.info.channels), frames)?
                 }
                 Err(SymError::IoError(_)) => {
                     self.ended = true;
