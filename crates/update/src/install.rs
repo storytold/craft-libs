@@ -197,15 +197,21 @@ pub(crate) fn bind_artifact_version(app: &App, release: &Release, asset: &Asset)
 }
 
 /// The last check before any bytes are fetched (storytold/craft-launcher#764): the link must be
-/// exactly the app's own GitHub download for this release's tag and this asset's name, whichever
-/// converter (API, feed or `SHA256SUMS.txt`) built the asset, and so must the link of the
-/// release's `SHA256SUMS.txt` that the download is checked against. A `local-mirror` build also
-/// accepts the developer's loopback mirror, whose links the feed parser has already confined; so
-/// do this crate's tests, whose downloads come from a server on 127.0.0.1.
+/// exactly the GitHub download for this release's tag and this asset's name in the release's
+/// repository ([`Release::repo`], else the app's own), whichever converter (API, feed or
+/// `SHA256SUMS.txt`) built the asset, and so must the link of the release's `SHA256SUMS.txt` that
+/// the download is checked against. A `+` may be written plainly or as `%2B`
+/// ([`release::same_download_url`]).
+///
+/// With this crate's `local-mirror` feature, the developer's loopback mirror is accepted too. The
+/// consumer confines those links (the launcher's feed parser does) and must turn the feature on
+/// itself (`craft-update/local-mirror`): its own feature of that name doesn't. This crate's tests
+/// accept loopback as well, as their downloads come from a server on 127.0.0.1.
 pub fn check_download_link(app: &App, release: &Release, asset: &Asset) -> Result<(), String> {
+    let repo = if release.repo.is_empty() { app.repo } else { release.repo.as_str() };
     let own = |a: &Asset| {
         ((cfg!(feature = "local-mirror") || cfg!(test)) && crate::http::is_loopback(&a.url))
-            || release::expected_download_url(app.repo, &release.tag, &a.name).as_deref() == Some(a.url.as_str())
+            || release::expected_download_url(repo, &release.tag, &a.name).is_some_and(|expected| release::same_download_url(&a.url, &expected))
     };
     if own(asset) && release.sums_asset().is_none_or(own) {
         return Ok(());
@@ -3031,6 +3037,22 @@ esac
             ..Asset::default()
         });
         assert!(check_download_link(app, &foreign_sums, &good).is_err());
+
+        // A release the feed reads from a renamed repository records it, and its links are
+        // checked against that one; the same links are refused for a release that doesn't.
+        let renamed =
+            release::release_from_sums("storytold/photocraft-next", "v0.5.0", &[("a".repeat(64), "photocraft-0.5.0-linux-x86_64.AppImage".into())]);
+        assert!(check_download_link(app, &renamed, &renamed.assets[0]).is_ok());
+        let unrecorded = Release { repo: String::new(), ..renamed.clone() };
+        assert!(check_download_link(app, &unrecorded, &unrecorded.assets[0]).is_err());
+
+        // A `+` written plainly, as an older launcher's feed and saved releases have it, passes.
+        let plus = release::release_from_sums(app.repo, "v1.0.0+b.1", &[("a".repeat(64), "photocraft-1.0.0+b.1-linux-x86_64.AppImage".into())]);
+        let mut plain = plus.clone();
+        for a in &mut plain.assets {
+            a.url = a.url.replace("%2B", "+");
+        }
+        assert!(check_download_link(app, &plain, &plain.assets[0]).is_ok());
     }
 
     /// A release whose tag has a `+` (semver build metadata) has `%2B` in its links. Both checks
