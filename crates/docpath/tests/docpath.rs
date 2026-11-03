@@ -412,6 +412,19 @@ fn a_non_unicode_document_path_keeps_the_namespace_rules() {
     let device = Path::new(OsStr::from_bytes(b"/??/\xff/a.doc"));
     assert_eq!(resolve("x.png", Some(device)), Err(Refused::Device));
     assert_eq!(resolve("x.png", Some(Path::new("/??/u/a.doc"))), Err(Refused::Device));
+    for doc in [&b"\\??\\C:\\\xff\\a.doc"[..], b"\\\\.\\COM1\\\xff\\a.doc", b"//./COM1/\xff/a.doc"] {
+        assert_eq!(resolve("x.png", Some(Path::new(OsStr::from_bytes(doc)))), Err(Refused::Device), "{doc:?}");
+    }
+    // A share is the link's boundary, as for a Unicode document path.
+    let share = Path::new(OsStr::from_bytes(b"//server/share/\xff/a.doc"));
+    assert_eq!(resolve("../x.png", Some(share)).unwrap(), Path::new("//server/share/x.png"));
+    assert_eq!(resolve("../../x.png", Some(share)), Err(Refused::Invalid));
+    // A `\\` inside a native name splits the Unicode path but not the native one: a folder that
+    // the two agree on is kept, a document name they split differently is refused.
+    let folder = Path::new(OsStr::from_bytes(b"/home/u/a\\b/\xff.doc"));
+    assert_eq!(resolve("x.png", Some(folder)).unwrap(), Path::new(OsStr::from_bytes(b"/home/u/a\\b/x.png")));
+    let name = Path::new(OsStr::from_bytes(b"/home/u/a\xff\\b.doc"));
+    assert_eq!(resolve("x.png", Some(name)), Err(Refused::Invalid));
 }
 
 #[cfg(windows)]
@@ -426,8 +439,10 @@ fn a_non_unicode_document_path_keeps_the_namespace_rules() {
         w.insert(at, 0xD800);
         std::path::PathBuf::from(OsString::from_wide(&w))
     };
-    assert!(resolve("x.png", Some(native(r"C:\docs\a.doc").as_path())).is_ok());
-    assert!(resolve("x.png", Some(native(r"\\server\share\docs\a.doc").as_path())).is_ok());
+    assert_eq!(resolve("x.png", Some(native(r"C:\docs\a.doc").as_path())).unwrap(), native(r"C:\docs\x.png"));
+    let share = native(r"\\server\share\docs\a.doc");
+    assert_eq!(resolve("x.png", Some(share.as_path())).unwrap(), native(r"\\server\share\docs\x.png"));
+    assert_eq!(resolve(r"..\..\x.png", Some(share.as_path())), Err(Refused::Invalid));
     for doc in [r"\\.\COM1\docs\a.doc", r"\\?\GLOBALROOT\Device\docs\a.doc", r"\??\C:\docs\a.doc"] {
         assert_eq!(resolve("x.png", Some(native(doc).as_path())), Err(Refused::Device), "{doc}");
     }
