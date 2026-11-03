@@ -2,7 +2,7 @@
 //! These grammar marks recommend standardized spellings; they do not infer sentence grammar.
 use crate::{Issue, IssueKind, Options, ProofLang};
 
-fn khmer(c: char) -> bool {
+pub(crate) fn khmer(c: char) -> bool {
     ('\u{1780}'..='\u{17ff}').contains(&c)
 }
 
@@ -111,11 +111,14 @@ pub(crate) fn follows_title(text: &str, start: usize) -> bool {
     false
 }
 
-/// English capitalization/spacing rules must not mark Khmer or its surrounding spaces.
+/// English rules must not mark Khmer or impose English spacing beside it. A Latin
+/// word still gets its own grammar checks even when a Khmer word is adjacent.
 pub(crate) fn touches_khmer(text: &str, start: usize, end: usize) -> bool {
-    text.get(start..end).is_some_and(|s| s.chars().any(khmer))
-        || text.get(..start).and_then(|s| s.chars().rev().find(|c| !c.is_whitespace())).is_some_and(khmer)
-        || text.get(end..).and_then(|s| s.chars().find(|c| !c.is_whitespace())).is_some_and(khmer)
+    let Some(marked) = text.get(start..end) else { return false };
+    marked.chars().any(khmer)
+        || (!marked.chars().any(char::is_alphabetic)
+            && (text.get(..start).and_then(|s| s.chars().rev().find(|c| !c.is_whitespace())).is_some_and(khmer)
+                || text.get(end..).and_then(|s| s.chars().find(|c| !c.is_whitespace())).is_some_and(khmer)))
 }
 
 #[cfg(test)]
@@ -182,6 +185,22 @@ mod tests {
         assert!(crate::check_text(text, &[(0..text.len(), ProofLang::Other)]).is_empty());
         assert!(!crate::check_text("សំដី", &[(0.."សំដី".len(), ProofLang::Pl)]).iter().any(|i| i.lang == ProofLang::Km));
         assert!(!crate::check_text_with(text, &[], &Options::default(), false, false).iter().any(|i| i.kind == IssueKind::Grammar));
+        let mixed = "hello  ខ្មែរ";
+        let issues = crate::check_text(mixed, &[]);
+        assert!(issues.iter().any(|i| i.kind == IssueKind::Grammar && i.start == 0 && i.end == 5 && i.suggestions == ["Hello"]));
+        assert!(!issues.iter().any(|i| i.message == "Extra space"), "Khmer-adjacent spacing stays untouched");
+        let mixed = "Tôi yêu tiếng Việt ពាក្យសំដី";
+        assert!(crate::vi::looks_vietnamese(mixed));
+        for spans in [vec![], vec![(0..mixed.len(), ProofLang::En)]] {
+            let issues = crate::check_text(mixed, &spans);
+            assert!(issues.iter().any(|i| i.lang == ProofLang::Km && i.suggestions == ["ពាក្យសម្ដី"]), "{issues:?}");
+            assert!(!issues.iter().any(|i| i.lang.is_english()));
+        }
+        assert!(crate::check_text(mixed, &[(0..mixed.len(), ProofLang::Other)]).is_empty());
+        let disabled = mixed.find("សំដី").unwrap()..mixed.len();
+        assert!(
+            !crate::check_text(mixed, &[(disabled.clone(), ProofLang::Other)]).iter().any(|i| i.start < disabled.start && i.end > disabled.start)
+        );
     }
 
     #[test]

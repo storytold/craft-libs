@@ -158,6 +158,45 @@ mod tests {
     }
 
     #[test]
+    #[cfg(craft_khmer_data)]
+    fn words_share_the_neighbor_budget_across_distinct_model_spans() {
+        // Keep only independently repairable joins, so leaving a later span
+        // intact demonstrates budget exhaustion rather than another guard.
+        let candidates: Vec<_> = ["ជជែក", "សណ្ដូក", "បណ្ដែត", "សន្ទនា"]
+            .into_iter()
+            .flat_map(|left| ["ក", "លា", "ថា", "ខ្មៅ"].map(|right| format!("{left}{right}")))
+            .filter(|word| split(word, std::slice::from_ref(&(0..word.len())), 0, &mut Neighbors::new()).is_some())
+            .take(4)
+            .collect();
+        let scans_before_exhaustion = NEIGHBOR_COMPARISONS / spellings().iter().count();
+        assert!(scans_before_exhaustion > 0 && candidates.len() > scans_before_exhaustion);
+        let text = candidates.join(" ");
+        let mut offset = 0;
+        let spans: Vec<_> = candidates
+            .iter()
+            .map(|word| {
+                let span = offset..offset + word.len();
+                offset = span.end + 1;
+                span
+            })
+            .collect();
+        let expected: Vec<_> = spans
+            .iter()
+            .enumerate()
+            .flat_map(|(index, span)| {
+                if index < scans_before_exhaustion {
+                    let edges = kcc_edges(&text[span.clone()]);
+                    let at = span.start + edges[edges.len() - 2];
+                    vec![span.start..at, at..span.end]
+                } else {
+                    vec![span.clone()]
+                }
+            })
+            .collect();
+        assert_eq!(words(&text, spans), expected);
+    }
+
+    #[test]
     fn exclusions_and_unicode_edits_keep_their_correction_guard() {
         let mut cache = Neighbors::new();
         assert!(!cache.nearby("ខ្មែរX", "ខ្មែរ", ["ខ្មែរ"].into_iter()));

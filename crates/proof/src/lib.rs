@@ -1042,19 +1042,18 @@ fn check_text_once(text: &str, spans: &[(Range<usize>, ProofLang)], opts: &Optio
             _ => merged.push((r.clone(), *l)),
         }
     }
-    // A paragraph typed in Vietnamese under the default English language is Vietnamese, which
-    // has no proofing tools: no marks (Word detects the language the same way).
-    let default = if vi::looks_vietnamese(text) {
-        for (_, l) in merged.iter_mut().filter(|(_, l)| l.is_english()) {
-            *l = ProofLang::Other;
-        }
-        ProofLang::Other
-    } else {
-        ProofLang::En
+    // Vietnamese detection suppresses default English checks, but not Khmer-script
+    // words. Keep authored language choices separate: explicit Other/noProof must
+    // still disable Khmer, including phrases that cross a formatting boundary.
+    let vietnamese = vi::looks_vietnamese(text);
+    let default = if vietnamese { ProofLang::Other } else { ProofLang::En };
+    let authored_lang_at = |i: usize| -> ProofLang {
+        let k = merged.partition_point(|(r, _)| r.end <= i);
+        merged.get(k).filter(|(r, _)| r.start <= i).map_or(ProofLang::En, |s| s.1)
     };
     let lang_at = |i: usize| -> ProofLang {
-        let k = merged.partition_point(|(r, _)| r.end <= i);
-        merged.get(k).filter(|(r, _)| r.start <= i).map_or(default, |s| s.1)
+        let lang = authored_lang_at(i);
+        if vietnamese && lang.is_english() && !text.get(i..).and_then(|s| s.chars().next()).is_some_and(km::khmer) { ProofLang::Other } else { lang }
     };
     // A single Khmer word/phrase can cross formatting runs. Never offer a replacement
     // that also edits a run whose language disables Khmer proofing (including noProof).
@@ -1062,7 +1061,7 @@ fn check_text_once(text: &str, spans: &[(Range<usize>, ProofLang)], opts: &Optio
         issue.lang != ProofLang::Km
             || text.get(issue.start..issue.end).is_some_and(|word| {
                 word.char_indices().all(|(offset, _)| {
-                    let lang = lang_at(issue.start + offset);
+                    let lang = authored_lang_at(issue.start + offset);
                     lang == ProofLang::Km || lang.is_english()
                 })
             })

@@ -128,6 +128,13 @@ whether all assets loaded. An unavailable spelling dictionary fails open rather
 than flagging every word; unavailable grammar/model rules make no corrections.
 Each asset initializes once through `OnceLock<String>`.
 
-Verified `cargo test -p wordcraft-khmer`, Clippy on all targets with `-D warnings`,
-formatting, and an actual `wasm32-unknown-unknown` compilation. Reproduce full API
-samples with `cargo run --release -p wordcraft-khmer --example benchmark`.
+Verified tests, Clippy on all targets with `-D warnings`, formatting, and an
+actual `wasm32-unknown-unknown` compilation. After staging the pack as described
+in [DATA.md](DATA.md), reproduce the data-enabled checks and API benchmark:
+
+```sh
+export CRAFT_KHMER_DIR=/absolute/khmer-pack
+export CRAFT_KHMER_REQUIRED=1
+cargo test -p craft-khmer
+cargo run --release -p craft-khmer --example benchmark
+```

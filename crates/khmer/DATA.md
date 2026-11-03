@@ -2,7 +2,10 @@
 
 `craft-khmer` builds offline without data by default. For a Khmer language build,
 stage the hidden `km` sources from the craft-i18n manifest using its existing
-`language-packs` tool:
+`language-packs` tool. Run the staging command from a craft-i18n checkout with
+[Khmer data #122](https://github.com/storytold/craft-i18n/pull/122)
+(revision `305a53fc197cce0e7b2c90b86c9c37083ae216bd`); run the test command
+from this craft-libs checkout:
 
 ```sh
 cargo run --bin language-packs -- stage --locale km --out /absolute/khmer-pack \
@@ -31,3 +34,8 @@ fails regardless of that flag. Cargo reruns on source or environment changes.
 Only hashes and provenance are committed here. Raw Khmer data remains outside
 repositories. Runtime installation of these custom source kinds is pending
 craft-libs#223, so craft-i18n keeps the pack hidden from published indexes.
+
+The proofing workflow has a separate Khmer job that fetches the same pinned raw
+sources and licence, verifies their SHA256 hashes, and runs all `craft-khmer`
+tests plus `craft-proof`'s Khmer integration tests with `CRAFT_KHMER_REQUIRED=1`.
+It does not rely on the optional pack being present in the general proofing job.

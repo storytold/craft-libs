@@ -3,9 +3,9 @@ name: Proofing
 on:
   push:
     branches: [main]
-    paths: ["crates/proof/**", "Cargo.toml", "Cargo.lock", ".github/workflows/proof.yml"]
+    paths: ["crates/proof/**", "crates/khmer/**", "Cargo.toml", "Cargo.lock", ".github/workflows/proof.yml"]
   pull_request:
-    paths: ["crates/proof/**", "Cargo.toml", "Cargo.lock", ".github/workflows/proof.yml"]
+    paths: ["crates/proof/**", "crates/khmer/**", "Cargo.toml", "Cargo.lock", ".github/workflows/proof.yml"]
   workflow_dispatch:
 
 permissions:
@@ -66,3 +66,49 @@ jobs:
           CRAFT_I18N_REQUIRED: "1"
           CRAFT_PROOF_EMBED: en
         run: cargo test -p craft-proof --locked
+
+  khmer:
+    timeout-minutes: 15
+    name: Khmer segmentation and proofing with pinned data
+    runs-on: ubuntu-latest
+    env:
+      CRAFT_KHMER_DIR: ${{ runner.temp }}/khmer-pack
+      CRAFT_KHMER_REQUIRED: "1"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: craft-proof-khmer
+      # Read the same source pins as build.rs, without depending on an unmerged
+      # craft-i18n staging CLI. build.rs also verifies converted canonical bytes.
+      - name: Fetch verified Khmer sources
+        run: |
+          python3 - <<'PYTHON'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          from urllib.request import urlopen
+
+          pins = json.loads(Path("crates/khmer/source-pins.json").read_text())
+          repo = pins["repository"].removeprefix("https://github.com/")
+          base = f"https://raw.githubusercontent.com/{repo}/{pins['revision']}"
+          sources = [(p["source"], Path(p["source"]).name, p["source_sha256"]) for p in pins["files"]]
+          sources.append(("LICENSE", "LICENCES/LICENSE", pins["licence_sha256"]))
+          root = Path(os.environ["CRAFT_KHMER_DIR"])
+          for source, name, expected in sources:
+              with urlopen(f"{base}/{source}", timeout=60) as response:
+                  data = response.read()
+              if hashlib.sha256(data).hexdigest() != expected:
+                  raise SystemExit(f"SHA256 mismatch: {source}")
+              dest = root / name
+              dest.parent.mkdir(parents=True, exist_ok=True)
+              dest.write_bytes(data)
+          PYTHON
+      - name: Run data-enabled Khmer checks
+        run: |
+          cargo test -p craft-khmer --locked
+          cargo test -p craft-proof --locked km::tests
