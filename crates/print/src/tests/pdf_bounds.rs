@@ -284,6 +284,18 @@ fn an_oversized_inherited_media_box_is_not_copied_for_every_page() {
     assert_eq!(sheets.sheets.len(), pages);
 }
 
+#[test]
+fn a_comment_before_a_shared_annotation_is_not_rescanned_outside_the_budget() {
+    // One annotation behind a 600 KB comment, referenced 20,000 times: 12 GB of scanning if
+    // every reference re-reads the comment for nothing.
+    let refs = vec!["6 0 R"; 20_000].join(" ");
+    let mut objects = three_page_objects(&format!("/Annots [{refs}]"));
+    objects[5] = format!("%{}\n<< /Type /Annot /F 4 >>", "x".repeat(600_000));
+    let started = std::time::Instant::now();
+    let _ = read(&classic(&objects));
+    assert!(started.elapsed() < std::time::Duration::from_secs(10), "{:?}", started.elapsed());
+}
+
 /// A classic-xref PDF of these objects, numbered from 1.
 fn classic(objects: &[String]) -> Vec<u8> {
     let mut pdf = b"%PDF-1.7\n".to_vec();

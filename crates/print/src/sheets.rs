@@ -138,13 +138,22 @@ impl<'a> Lexer<'a> {
         self.s.get(self.pos..).unwrap_or(&[])
     }
 
+    /// Skips whitespace and comments, charged to the token budget like the tokens they sit
+    /// between: an object behind a long comment is otherwise scanned again for every reference
+    /// to it, outside every budget.
     fn skip_ws(&mut self) {
+        let start = self.pos;
+        let end = self.pos.saturating_add(self.max_tokens.saturating_sub(self.tokens));
         while let Some(b) = self.peek() {
+            if self.pos >= end {
+                self.exhausted = true;
+                break;
+            }
             if is_white(b) {
                 self.pos += 1;
             } else if b == b'%' {
                 while let Some(b) = self.peek() {
-                    if b == b'\n' || b == b'\r' {
+                    if b == b'\n' || b == b'\r' || self.pos >= end {
                         break;
                     }
                     self.pos += 1;
@@ -153,6 +162,7 @@ impl<'a> Lexer<'a> {
                 break;
             }
         }
+        self.tokens = self.tokens.saturating_add(self.pos - start);
     }
 
     /// A run of regular characters (a number, keyword or name body).
