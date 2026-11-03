@@ -235,6 +235,9 @@ precision of the indices; an image without a palette keeps its own. Tests:
 PdfCraft's raster test `a_jp2_palette_keeps_its_colours_whatever_the_index_precision` is not
 ported: the unit tests show the same behavior.
 
+The JPX reader drops an unused `alloc::vec` import; its test macros already use
+`alloc::vec!`. The local source hash records this build-only cleanup.
+
 From [PdfCraft revision 0b670caf4a090e9d83a7f41a84b4cb2144a2d33e](https://github.com/storytold/pdfcraft/tree/0b670caf4a090e9d83a7f41a84b4cb2144a2d33e/vendor),
 unledgered and marked `PdfCraft patch` in the source: hayro-syntax #3438 (issue #3107), with
 its look-ahead bound from 01af6cba3. An inline image without a filter ends at the byte
