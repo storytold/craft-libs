@@ -577,6 +577,24 @@ pub(crate) fn tracks(src: &Src<'_>, detected: Option<Container>) -> Option<Resul
     }
 }
 
+/// What is damaged in `src`, when it is in a container the native demuxers read and they find it
+/// truncated or structurally invalid: the error to return when symphonia cannot read it either.
+#[cfg(feature = "symphonia")]
+pub(crate) fn damage(src: &Src<'_>, detected: Option<Container>) -> Option<String> {
+    let head = src.head_checked().ok()?;
+    let failure = match super::detect_container(&head, None).or(detected) {
+        Some(Container::Mp4 | Container::QuickTime) => mp4_failure(isobmff::open(src).err()?),
+        Some(Container::Matroska | Container::WebM) => mkv_failure(matroska::open(src.clone()).err()?),
+        Some(Container::Ogg) => ogg_failure(ogg::open(src).err()?),
+        _ => return None,
+    };
+    match failure {
+        Failure::Damaged(m) => Some(m),
+        Failure::Io(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => Some(e.to_string()),
+        _ => None,
+    }
+}
+
 /// Why a craft-media demuxer could not read a file.
 enum Failure {
     /// The source failed to read.
@@ -590,7 +608,8 @@ enum Failure {
 /// A craft-media demuxer's result for the native path: the source's failure to read as
 /// [`AudioError::Io`], and `None` when the demuxer does not read the file, so the other path
 /// tries it. Without symphonia there is no other path, so a damaged file is
-/// [`AudioError::Malformed`].
+/// [`AudioError::Malformed`]; with it, the file is malformed when symphonia cannot read it either
+/// ([`damage`]).
 fn demuxed<T, E>(r: std::result::Result<T, E>, why: fn(E) -> Failure) -> Option<Result<T>> {
     let e = match r {
         Ok(v) => return Some(Ok(v)),

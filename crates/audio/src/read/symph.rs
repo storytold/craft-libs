@@ -20,7 +20,7 @@ use symphonia::core::meta::MetadataOptions;
 use symphonia::core::units::{TimeBase, Timestamp};
 
 use super::id3v2_len;
-use crate::pcm::be_u32;
+use crate::pcm::{MAX_DECODE_SAMPLES, be_u32};
 use crate::{AudioBuffer, AudioError, AudioInfo, ChannelLayout, CodecId, Container, Result, SampleFormat};
 
 /// The most frames a packet may declare: decoders allocate a packet's frames up front, and ALAC
@@ -648,7 +648,10 @@ impl Symph {
                         continue;
                     }
                     let n = decoded.frames();
-                    let needed = n.checked_mul(ch).ok_or_else(|| AudioError::TooLarge("decoded audio exceeds the 4 GiB limit".into()))?;
+                    let needed = n
+                        .checked_mul(ch)
+                        .filter(|&t| t as u64 <= MAX_DECODE_SAMPLES)
+                        .ok_or_else(|| AudioError::TooLarge(format!("a decoded block exceeds the {MAX_DECODE_SAMPLES}-sample decode limit")))?;
                     if self.interleaved.len() < needed {
                         self.interleaved
                             .try_reserve(needed - self.interleaved.len())
@@ -741,6 +744,8 @@ impl Symph {
                 Err(e) => return Err(map_err(e)),
             };
             decoder.reset();
+            // the packet before the seek says nothing about the length of one lost after it
+            self.last_frames = 0;
             let actual = u64::try_from(seeked.actual_ts.get()).unwrap_or(0);
             let actual = u64::try_from(u128::from(actual) * u128::from(numer) * u128::from(rate) / u128::from(denom)).unwrap_or(u64::MAX);
             self.discard = frame.saturating_sub(actual);

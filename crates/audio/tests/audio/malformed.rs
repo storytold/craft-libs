@@ -682,3 +682,13 @@ fn an_empty_flac_has_one_track() {
     let e = decode_with(&f, None, &DecodeOptions::default().with_track(1)).unwrap_err();
     assert!(matches!(e, AudioError::Unsupported(_)), "{e}");
 }
+
+/// A damaged MP4 is malformed when symphonia cannot read it either, as it is without symphonia.
+#[test]
+fn a_damaged_mp4_is_malformed() {
+    // an `ftyp` box and nothing after it: no `moov`
+    let mp4 = [&16u32.to_be_bytes()[..], b"ftypisom", &[0, 0, 2, 0]].concat();
+    assert!(matches!(decode(&mp4, None), Err(AudioError::Malformed(_))));
+    assert!(matches!(probe(&mp4, None), Err(AudioError::Malformed(_))));
+    assert!(matches!(craft_audio::tracks(&mp4, None), Err(AudioError::Malformed(_))));
+}

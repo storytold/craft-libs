@@ -239,7 +239,7 @@ impl<'a> Decoder<'a> {
     /// A file the native path does not read: symphonia's.
     #[cfg(feature = "symphonia")]
     fn fallback(src: Src<'a>, container: Option<Container>, opts: &DecodeOptions) -> Result<Decoder<'a>> {
-        let mut s = Symph::open(src.whole()?, container, opts.track)?;
+        let mut s = Symph::open(src.whole()?, container, opts.track).map_err(|e| damaged_or(&src, container, e))?;
         // A WAV with a codec symphonia reads (ADPCM, A-law, ...) keeps its BWF metadata.
         if container == Some(Container::Wav)
             && let Ok(wav::WavParse::Foreign { bwf }) = wav::parse(&src)
@@ -489,12 +489,29 @@ fn tracks_in(src: &Src<'_>, ext_hint: Option<&str>) -> Result<Vec<TrackInfo>> {
             Ok(list(vec![(i.codec, (i.sample_rate > 0).then_some(i.sample_rate), (i.channels > 0).then_some(i.channels))]))
         }
         #[cfg(feature = "symphonia")]
-        None => {
-            Ok(list(symph::tracks(src.whole()?, container)?.into_iter().map(|(c, r, n)| (c, (r > 0).then_some(r), (n > 0).then_some(n))).collect()))
-        }
+        None => Ok(list(
+            symph::tracks(src.whole()?, container)
+                .map_err(|e| damaged_or(src, container, e))?
+                .into_iter()
+                .map(|(c, r, n)| (c, (r > 0).then_some(r), (n > 0).then_some(n)))
+                .collect(),
+        )),
         #[cfg(not(feature = "symphonia"))]
         None => Err(not_built(src)),
     }
+}
+
+/// symphonia's error for a file it cannot read, or the native demuxer's finding when symphonia
+/// calls unsupported a file the native path found damaged: a damaged file is malformed whichever
+/// path last tried it.
+#[cfg(feature = "symphonia")]
+fn damaged_or(src: &Src<'_>, container: Option<Container>, e: AudioError) -> AudioError {
+    if matches!(e, AudioError::Unsupported(_))
+        && let Some(m) = native::damage(src, container)
+    {
+        return AudioError::Malformed(m);
+    }
+    e
 }
 
 /// The error for a file the native path does not read, in a build without symphonia: the build
