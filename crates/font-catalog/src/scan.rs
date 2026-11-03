@@ -170,9 +170,29 @@ fn name(font: &skrifa::FontRef<'_>, ids: &[StringId]) -> Option<String> {
     ids.iter().find_map(|id| font.localized_strings(*id).english_or_first().map(|s| s.to_string()).filter(|s| !s.is_empty()))
 }
 
-/// Every string of `id`, with its language.
+/// Name records read per name ID. A font has one per platform and language, a few dozen at most;
+/// a damaged or hostile `name` table can repeat a record tens of thousands of times.
+const MAX_NAME_RECORDS: usize = 512;
+/// Distinct strings, with their language, kept per name ID.
+const MAX_NAMES: usize = 128;
+/// Legacy family and style pairs kept per face. The pairs are a product of two name lists, so
+/// they get a budget of their own.
+const MAX_LEGACY_PAIRS: usize = 256;
+
+/// Every distinct string of `id`, with its language, in the order the font lists them (at most
+/// [`MAX_NAMES`], from the first [`MAX_NAME_RECORDS`] records).
 fn localized(font: &skrifa::FontRef<'_>, id: StringId) -> Vec<(Option<String>, String)> {
-    font.localized_strings(id).map(|s| (s.language().map(str::to_owned), s.to_string())).filter(|(_, s)| !s.is_empty()).collect()
+    let mut out: Vec<(Option<String>, String)> = Vec::new();
+    for s in font.localized_strings(id).take(MAX_NAME_RECORDS) {
+        let entry = (s.language().map(str::to_owned), s.to_string());
+        if !entry.1.is_empty() && !out.contains(&entry) {
+            out.push(entry);
+            if out.len() == MAX_NAMES {
+                break;
+            }
+        }
+    }
+    out
 }
 
 fn all_names(font: &skrifa::FontRef<'_>, id: StringId) -> Vec<String> {
@@ -214,6 +234,7 @@ pub(crate) fn font_faces(font: &skrifa::FontRef<'_>, index: u32, path: Option<&P
             .iter()
             .flat_map(|(lf, f)| legacy_style.iter().filter(move |(ls, _)| ls == lf).map(move |(_, s)| (norm(f), norm(s))))
             .filter(|(f, s)| !f.is_empty() && !s.is_empty())
+            .take(MAX_LEGACY_PAIRS)
             .collect()
     };
     legacy.sort();

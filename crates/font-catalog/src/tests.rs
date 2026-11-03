@@ -498,3 +498,44 @@ fn fork_of(fonts: &[Vec<u8>]) -> Vec<u8> {
     fork.extend(map);
     fork
 }
+
+#[test]
+fn repeated_name_records_are_bounded_before_pairing() {
+    // Thousands of legacy family and style records in one language: pairing them all would
+    // allocate millions of strings. write-fonts refuses unsorted or repeated records, so the
+    // `name` table is written by hand.
+    let mut names: Vec<(u16, String)> = Vec::new();
+    for i in 0..2000 {
+        names.push((1, format!("Family {}", i % 1000)));
+        names.push((2, format!("Style {}", i % 1000)));
+    }
+    names.push((16, "Typo Family".into()));
+    names.push((17, "Regular".into()));
+    let mut records = Vec::new();
+    let mut strings = Vec::new();
+    let mut stored: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    for (id, text) in &names {
+        let utf16: Vec<u8> = text.encode_utf16().flat_map(u16::to_be_bytes).collect();
+        let offset = *stored.entry(text.as_str()).or_insert_with(|| {
+            strings.extend_from_slice(&utf16);
+            strings.len() - utf16.len()
+        });
+        for v in [3u16, 1, 0x409, *id, utf16.len() as u16, offset as u16] {
+            records.extend_from_slice(&v.to_be_bytes());
+        }
+    }
+    let mut name = Vec::new();
+    for v in [0u16, names.len() as u16, (6 + records.len()) as u16] {
+        name.extend_from_slice(&v.to_be_bytes());
+    }
+    name.extend(records);
+    name.extend(strings);
+    let mut builder = FontBuilder::new();
+    builder.add_raw(Tag::new(b"name"), name);
+    builder.add_raw(Tag::new(b"glyf"), vec![0u8; 4]);
+    let faces = crate::scan::data_faces(&builder.build(), 1, None, Source::User);
+    let face = faces.first().expect("a face");
+    assert_eq!(face.info.family, "Typo Family");
+    assert!(!face.keys.legacy.is_empty());
+    assert!(face.keys.legacy.len() <= 256, "{} legacy pairs", face.keys.legacy.len());
+}
