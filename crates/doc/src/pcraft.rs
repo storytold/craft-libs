@@ -107,6 +107,7 @@ fn read<D: DeserializeOwned>(json: &[u8], budget: &Budget) -> Result<Envelope<D>
     read_with_items(json, budget, format::MAX_MANIFEST_ITEMS)
 }
 
+/// Check the envelope with a caller-supplied structural item cap before deserializing `D`.
 fn read_with_items<D: DeserializeOwned>(json: &[u8], budget: &Budget, max_items: usize) -> Result<Envelope<D>, Error> {
     let mut limits = format::Limits::default();
     limits.max_manifest_bytes = json.len();

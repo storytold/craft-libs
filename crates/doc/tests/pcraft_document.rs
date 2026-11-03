@@ -19,6 +19,7 @@ struct Layer {
     fill_opacity: f32,
 }
 
+/// A document head whose optional previews and raster payload deliberately do not exist.
 fn manifest() -> String {
     pcraft_manifest(
         1,
@@ -27,11 +28,13 @@ fn manifest() -> String {
     )
 }
 
+/// Exercise both supported ZIP storage methods with the same manifest bytes.
 fn bundle(json: &str, compressed: bool) -> Vec<u8> {
     zip(&[if compressed { deflated("manifest.json", json.as_bytes()) } else { store("manifest.json", json.as_bytes()) }])
 }
 
 #[test]
+/// Caller-selected metadata must agree with the shared format reader without requiring pixels.
 fn reads_the_callers_document_head_without_requiring_declared_payloads() {
     let json = manifest();
     for compressed in [false, true] {
@@ -49,6 +52,7 @@ fn reads_the_callers_document_head_without_requiring_declared_payloads() {
 }
 
 #[test]
+/// Unrequested image entries must not consume the manifest-only reader's byte budget.
 fn skips_oversized_and_unreadable_unrequested_entries() {
     let json = manifest();
     let mut bytes =
@@ -66,6 +70,7 @@ fn skips_oversized_and_unreadable_unrequested_entries() {
 }
 
 #[test]
+/// Envelope validity, supported versions and the caller's schema are separate requirements.
 fn checks_the_manifest_and_the_callers_json_types() {
     let json = manifest();
     for broken in [
@@ -88,10 +93,12 @@ fn checks_the_manifest_and_the_callers_json_types() {
 }
 
 #[test]
+/// Limits must reject the manifest before invoking potentially allocating caller code.
 fn checks_byte_depth_and_item_limits_before_the_document_is_deserialized() {
     #[derive(Debug)]
     struct Never;
     impl<'de> Deserialize<'de> for Never {
+        /// Fail if a limit check lets control reach the caller's deserializer.
         fn deserialize<D: serde::Deserializer<'de>>(_: D) -> Result<Self, D::Error> {
             panic!("document deserialization must follow limit checks")
         }
@@ -115,6 +122,7 @@ fn checks_byte_depth_and_item_limits_before_the_document_is_deserialized() {
 }
 
 #[test]
+/// Ignoring a field must not let an oversized manifest bypass the structural item cap.
 fn the_item_budget_also_bounds_a_callers_vec_and_ignored_fields() {
     #[derive(Debug, Deserialize)]
     struct Small {
