@@ -231,14 +231,9 @@ WordCraft maintainers: echelon, dylanmtaylor, aiongg.
 MIT OR Apache-2.0. The Language data carries its own licences, recorded in craft-i18n's
 `ATTRIBUTION.md`.
 
-## Romanian exclusion qualification
+## Romanian against a real dictionary
 
-This follow-up to @vioreltus's storytold/craft-libs#550 carries the whole-compound
-exclusion and KEEPCASE regressions adapted from @ro-legal-docx's WordCraft#4743
-and @VladMcj's ro-legal-docx/wordcraft#1 (41fdb5ea), preserving @Moogabe's
-original WordCraft#2565 credit. It changes no Romanian grammar rules.
-
-Optional external-dictionary qualification (no dictionary data is committed):
+Optional check against an installed Romanian Hunspell dictionary (no dictionary data is committed):
 `CRAFT_ROMANIAN_TEST_DICT=/absolute/dictionaries cargo test -p craft-proof --test romanian_dictionary -- --ignored`.
 The synthetic pack test also checks folder precedence, reload, script isolation
 and installed-pack hyphenation.

@@ -365,8 +365,6 @@ pub fn suggest_in(d: &AffixDict, word: &str, max: usize) -> Vec<String> {
     out
 }
 
-/// Round 6: rank the stems starting with the word's first letter (or a MAP relative of it, either
-/// case) by shared letter pairs, then keep the forms of the best within two typos.
 /// Match the input's casing except where a KEEPCASE entry fixes the spelling.
 fn recase(d: &AffixDict, text: String, case: Casing, n: usize) -> String {
     let recased = match case {
@@ -377,6 +375,8 @@ fn recase(d: &AffixDict, text: String, case: Casing, n: usize) -> String {
     if recased != text && text.split(' ').any(|p| d.case_locked(p)) { text } else { recased }
 }
 
+/// Round 6: rank the stems starting with the word's first letter (or a MAP relative of it, either
+/// case) by shared letter pairs, then keep the forms of the best within two typos.
 fn scan(col: &mut Collector, chars: &[char]) {
     let d = col.d;
     let map = d.map();
@@ -434,7 +434,6 @@ fn scan(col: &mut Collector, chars: &[char]) {
 
 #[cfg(test)]
 mod tests {
-    /// A whole-compound exclusion must not be bypassed by checking its allowed parts.
     /// A whole compound's KEEPCASE restriction must not be bypassed by splitting it.
     #[test]
     fn keepcase_compounds_do_not_fall_back_to_unrestricted_parts() {

@@ -19,7 +19,8 @@ mod suggest;
 #[cfg(test)]
 pub(crate) mod test_dict;
 
-use std::sync::Arc;
+use std::collections::HashSet;
+use std::sync::{Arc, PoisonError, RwLock};
 
 use crate::affix::AffixDict;
 use crate::slot::DictSlot;
@@ -109,7 +110,25 @@ fn known(d: &AffixDict, w: &str) -> bool {
         || crate::in_user_dictionary(&lower)
         || crate::in_user_dictionary(&cedilla(&lower))
         // An entry mixing the two spellings (`zqșcoalăţx`) matches every typing of it.
-        || (lower.contains(['ș', 'ț']) && crate::in_user_dictionary_as(&lower, comma_below))
+        || (lower.contains(['ș', 'ț']) && canonical_user_words().contains(&comma_below(&lower)))
+}
+
+/// The user-dictionary and Ignore All entries with cedillas read as comma-below, kept until the
+/// user dictionary changes ([`crate::dictionary_generation`]), so a check looks a word up instead
+/// of walking every entry.
+fn canonical_user_words() -> Arc<HashSet<String>> {
+    static CACHE: RwLock<Option<(u64, Arc<HashSet<String>>)>> = RwLock::new(None);
+    // Read before the entries: a change while they are read leaves an older number, and the next
+    // call rebuilds.
+    let generation = crate::dictionary_generation();
+    if let Some((g, set)) = CACHE.read().unwrap_or_else(PoisonError::into_inner).as_ref()
+        && *g == generation
+    {
+        return Arc::clone(set);
+    }
+    let set: Arc<HashSet<String>> = Arc::new(crate::user_and_ignored_words().iter().map(|e| comma_below(e)).collect());
+    *CACHE.write().unwrap_or_else(PoisonError::into_inner) = Some((generation, Arc::clone(&set)));
+    set
 }
 
 /// `word` with the comma-below `ș`/`ț` written with cedillas (`ş`/`ţ`): the other spelling a user
@@ -175,7 +194,7 @@ mod tests {
             assert!(is_correct(w), "{w}");
         }
         crate::remove_word("zqșcoalăţx");
-        assert!(!is_correct("zqșcoalățx"));
+        assert!(!is_correct("zqșcoalățx"), "a removed word stops counting (the index follows)");
     }
 
     #[test]
