@@ -197,6 +197,63 @@ pub(crate) mod flate {
             }
         }
 
+        #[cfg(test)]
+        mod cancellation_tests {
+            use super::*;
+            use core::sync::atomic::Ordering;
+
+            fn fixed_block(invalid_distance: bool) -> Vec<u8> {
+                let mut data = Vec::new();
+                let mut bit = 0;
+                let mut write = |value: u16, count: usize| {
+                    for i in 0..count {
+                        if bit % 8 == 0 {
+                            data.push(0);
+                        }
+                        let last = data.last_mut().unwrap();
+                        *last |= (((value >> i) & 1) as u8) << (bit % 8);
+                        bit += 1;
+                    }
+                };
+                write(3, 3); // Final block, fixed Huffman tables.
+                for _ in 0..200_000 {
+                    if invalid_distance {
+                        write(0x40, 7); // Length 3, followed by distance 1 with no history.
+                        write(0, 5);
+                    } else {
+                        write(0x8e, 8); // Fixed Huffman code for the literal 'A'.
+                    }
+                }
+                write(0, 7); // End of block.
+                data.extend_from_slice(&[0, 0]);
+                data
+            }
+
+            #[test]
+            fn huffman_blocks_cancel_before_consuming_all_codes() {
+                for invalid_distance in [false, true] {
+                    let data = fixed_block(invalid_distance);
+                    let mut out = Vec::new();
+                    let mut baseline = FlateState::new(&data);
+                    baseline.decode_into(&data, &mut out, usize::MAX);
+                    if invalid_distance {
+                        assert!(out.is_empty());
+                        assert!(!baseline.complete());
+                    } else {
+                        assert_eq!(out, vec![b'A'; 200_000]);
+                        assert!(baseline.complete());
+                    }
+                    let (control, polls) = crate::cancel::stop_at(4);
+                    let mut state = FlateState::new(&data);
+                    let mut out = Vec::new();
+                    state.decode_into_controlled(&data, &mut out, usize::MAX, Some(&control));
+                    assert_eq!(polls.load(Ordering::Relaxed), 4);
+                    assert!(state.pos < data.len() / 2, "cancellation must stop inside the coded block; invalid distance: {invalid_distance}");
+                    assert!(!state.complete());
+                }
+            }
+        }
+
         /// PdfCraft patch: the working state of one [`FlateState::decode_into`] call.
         struct FlateStream<'a> {
             data: &'a [u8],
@@ -480,6 +537,7 @@ pub(crate) mod flate {
             /// the data.
             fn read_codes(&mut self) {
                 let mut checks = crate::cancel::Checkpoints::new(self.control);
+                let mut codes = 0_usize;
                 let Block::Coded {
                     lit: lit_code_table,
                     dist: dist_code_table,
@@ -491,7 +549,9 @@ pub(crate) mod flate {
                 };
 
                 loop {
-                    if checks.at(self.output.len()).is_none() {
+                    // Malformed back-references can consume codes without emitting bytes.
+                    codes = codes.saturating_add(1);
+                    if checks.at(self.output.len().saturating_add(codes)).is_none() {
                         self.eof = true;
                         self.failed = true;
                         return;
