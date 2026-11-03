@@ -98,7 +98,7 @@ pub fn is_correct_with(d: &AffixDict, word: &str) -> bool {
     }
     // `într-o`, `s-a`, `dă-mi-l`, `nord-est`: every part is a word (or a one-letter clitic).
     // An empty part (`casă--câine`) is no word.
-    w.contains('-') && w.split('-').all(|p| p.chars().count() == 1 || (!p.is_empty() && known(d, p)))
+    w.contains('-') && !d.excludes_spelling(&w) && w.split('-').all(|p| p.chars().count() == 1 || (!p.is_empty() && known(d, p)))
 }
 
 /// Is one word (comma-below already) in the dictionary or the user dictionary? A user word is
@@ -298,5 +298,23 @@ mod tests {
         assert!(!is_correct("zxqcuvântromânesc"));
         crate::add_word("Zxqcuvântromânesc");
         assert!(is_correct("zxqcuvântromânesc"));
+    }
+    #[test]
+    fn user_dictionary_keeps_legacy_cedilla_spellings() {
+        let d = AffixDict::from_hunspell(test_dict::AFF, test_dict::DIC, &[]).expect("synthetic dictionary");
+        let added = "zxqşţcuvânt";
+        let ignored = "zxqşţignorat";
+        for w in [added, ignored] {
+            assert!(!is_correct_with(&d, w), "unknown before adding: {w}");
+            assert!(!is_correct_with(&d, &format!("{w}-casă")), "unknown compound: {w}");
+        }
+        crate::add_word("ZxqŞŢcuvânt");
+        crate::ignore_word("ZxqŞŢignorat");
+        for w in [added, ignored] {
+            assert!(is_correct_with(&d, w), "original cedilla entry: {w}");
+            assert!(is_correct_with(&d, &format!("{w}-casă")), "cedilla compound part: {w}");
+        }
+        crate::add_word("zxqșțmodern");
+        assert!(is_correct_with(&d, "zxqşţmodern"), "modern entry also accepts a legacy spelling");
     }
 }

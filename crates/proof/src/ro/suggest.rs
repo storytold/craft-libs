@@ -61,20 +61,26 @@ struct Collector<'a> {
     d: &'a AffixDict,
     /// The word, lower case.
     input: String,
-    /// Candidates offered so far, with the lowest cost each was offered at.
     tested: HashMap<String, u32>,
     /// Suggestion → (cost, order found).
     found: HashMap<String, (u32, usize)>,
     seq: usize,
 }
 
+/// A phrase is eligible only if every word (or hyphenated part) may be suggested.
+fn can_suggest_phrase(d: &AffixDict, text: &str) -> bool {
+    text.split(' ').all(|word| {
+        !word.is_empty()
+            && (d.can_suggest(word)
+                || (word.contains('-') && !d.excludes_suggestions(word) && word.split('-').all(|part| !part.is_empty() && d.can_suggest(part))))
+    })
+}
+
 impl Collector<'_> {
     /// Check a lower-case candidate (a word, or words joined by a space or hyphen) and keep it
     /// if every word is in the dictionary, as written or capitalized (names).
     fn offer(&mut self, cand: &str, cost: u32) {
-        // A candidate offered again more cheaply (a REP route after a MAP one) is looked at
-        // again, so it keeps the lower cost.
-        if cand.is_empty() || cand == self.input || self.tested.get(cand).is_some_and(|&c| c <= cost) {
+        if cand.is_empty() || cand == self.input || self.tested.get(cand).is_some_and(|previous| *previous <= cost) {
             return;
         }
         self.tested.insert(cand.to_string(), cost);
@@ -101,6 +107,9 @@ impl Collector<'_> {
 
     /// Keep a suggestion known to be correct.
     fn keep(&mut self, text: String, cost: u32) {
+        if !can_suggest_phrase(self.d, &text) {
+            return;
+        }
         self.seq += 1;
         let seq = self.seq;
         let e = self.found.entry(text).or_insert((cost, seq));
@@ -345,12 +354,8 @@ pub fn suggest_in(d: &AffixDict, word: &str, max: usize) -> Vec<String> {
     found.sort_by_key(|(text, (cost, seq))| (*cost, diff_at(text), *seq));
     let mut out: Vec<String> = Vec::new();
     for (text, _) in found {
-        let t = match case {
-            Casing::Initial => capitalize(&text),
-            Casing::Upper if n > 1 => text.to_uppercase(),
-            _ => text,
-        };
-        if t != word && !out.contains(&t) {
+        let t = recase(d, text, case, n);
+        if t != word && can_suggest_phrase(d, &t) && !out.contains(&t) {
             out.push(t);
         }
         if out.len() >= max {
@@ -362,6 +367,16 @@ pub fn suggest_in(d: &AffixDict, word: &str, max: usize) -> Vec<String> {
 
 /// Round 6: rank the stems starting with the word's first letter (or a MAP relative of it, either
 /// case) by shared letter pairs, then keep the forms of the best within two typos.
+/// Match the input's casing except where a KEEPCASE entry fixes the spelling.
+fn recase(d: &AffixDict, text: String, case: Casing, n: usize) -> String {
+    let recased = match case {
+        Casing::Initial => capitalize(&text),
+        Casing::Upper if n > 1 => text.to_uppercase(),
+        _ => text.clone(),
+    };
+    if recased != text && text.split(' ').any(|p| d.case_locked(p)) { text } else { recased }
+}
+
 fn scan(col: &mut Collector, chars: &[char]) {
     let d = col.d;
     let map = d.map();
@@ -410,8 +425,6 @@ fn scan(col: &mut Collector, chars: &[char]) {
                 continue;
             }
             let dist = weighted_distance(&lf, chars, &related, limit);
-            // `forms` keeps the forms of NOSUGGEST stems and forms FORBIDDENWORD bars: only a
-            // form the dictionary would suggest is offered.
             if dist <= limit && lf.as_slice() != chars && d.contains_suggestible(&form) {
                 col.keep(form, COST_SCAN + dist * 3);
             }
@@ -421,39 +434,77 @@ fn scan(col: &mut Collector, chars: &[char]) {
 
 #[cfg(test)]
 mod tests {
+    /// A whole-compound exclusion must not be bypassed by checking its allowed parts.
+    /// A whole compound's KEEPCASE restriction must not be bypassed by splitting it.
+    #[test]
+    fn keepcase_compounds_do_not_fall_back_to_unrestricted_parts() {
+        let d = AffixDict::from_hunspell("KEEPCASE K\n", "3\ncasă\ncaz\ncasă-caz/K\n", &[]).unwrap();
+        assert!(crate::ro::is_correct_with(&d, "casă-caz"));
+        for word in ["Casă-caz", "CASĂ-CAZ", "CaSă-CaZ"] {
+            assert!(!crate::ro::is_correct_with(&d, word), "{word}");
+        }
+        let found = suggest_in(&d, "CASĂCAZ", 8);
+        assert!(found.iter().any(|s| s == "casă-caz"), "{found:?}");
+        assert!(!found.iter().any(|s| s == "CASĂ-CAZ"), "{found:?}");
+    }
+
+    /// The 0.14 parser's aliases, conversions and KEEPCASE reach Romanian too.
+    #[test]
+    fn shared_dictionary_directives_preserve_romanian_suggestions() {
+        let d = AffixDict::from_hunspell(
+            "SET UTF-8\nFLAG UTF-8\nAF 2\nAF KA\nAF A\nKEEPCASE K\nSFX A Y 1\nSFX A 0 s .\nICONV 1\nICONV ﬁ fi\nIGNORE \u{00ad}\n",
+            "3\nkm/1\nfier/2\ncasă/2\n",
+            &[],
+        )
+        .unwrap();
+        assert!(crate::ro::is_correct_with(&d, "ﬁer"), "ICONV reaches spelling");
+        assert!(crate::ro::is_correct_with(&d, "ca\u{00ad}să"), "IGNORE reaches spelling");
+        assert!(crate::ro::is_correct_with(&d, "kms"), "AF alias carries the suffix flag");
+        assert!(!crate::ro::is_correct_with(&d, "KM"), "KEEPCASE is enforced");
+        for word in ["KMM", "Kmm"] {
+            let found = suggest_in(&d, word, 8);
+            assert!(found.iter().any(|s| s == "km"), "{word}: {found:?}");
+            assert!(found.iter().all(|s| can_suggest_phrase(&d, s)), "{found:?}");
+            assert!(!found.iter().any(|s| s == "KM" || s == "Km"), "{found:?}");
+        }
+    }
+
+    #[test]
+    fn romanian_compound_exclusions_are_not_bypassed() {
+        let d = crate::affix::AffixDict::from_hunspell(
+            "SET UTF-8\nNOSUGGEST N\nFORBIDDENWORD F\nMAP 1\nMAP aă\nSFX A Y 1\nSFX A 0 uri .\nREP 2\nREP xyz Casă-Casă\nREP zyx Caz-Casă\n",
+            "7\ncasă\ncaz/A\nCasă\nCaz\ncasă-casă/N\ncasă-caz/F\ncaz-casă\n",
+            &[],
+        )
+        .unwrap();
+        assert!(crate::ro::is_correct_with(&d, "casă-casă"));
+        assert!(!crate::ro::is_correct_with(&d, "casă-caz"));
+        assert!(!crate::ro::is_correct_with(&d, "Casă-Caz"));
+        assert!(crate::ro::is_correct_with(&d, "Caz-Casă"));
+        assert!(suggest_in(&d, "zyx", 12).contains(&"Caz-Casă".to_string()));
+        assert!(crate::ro::is_correct_with(&d, "caz-caz"));
+        for input in ["casa-casă", "casă-casax", "casa-caz", "CASA-CASĂ", "xyz"] {
+            let found = suggest_in(&d, input, 12);
+            assert!(found.iter().all(|w| !["casă-casă", "casă-caz"].contains(&w.to_lowercase().as_str())), "{input}: {found:?}");
+        }
+    }
+
+    /// The active dictionary controls words excluded from suggestions, including inflections.
+    #[test]
+    fn romanian_suggestions_respect_nosuggest() {
+        let d = crate::affix::AffixDict::from_hunspell("SET UTF-8\nNOSUGGEST N\nSFX A Y 1\nSFX A 0 uri .\n", "2\ncaz/NA\ncasă\n", &[]).unwrap();
+        assert!(d.check("caz") && d.check("cazuri"));
+        for input in ["cazz", "cazurii", "CAZ", "Cazuri"] {
+            let got = suggest_in(&d, input, 12);
+            assert!(got.iter().all(|w| !w.eq_ignore_ascii_case("caz") && !w.eq_ignore_ascii_case("cazuri")), "{input}: {got:?}");
+        }
+    }
+
     use super::*;
 
     fn has(word: &str, want: &str) {
         let s = suggest(word, 8);
         assert!(s.iter().any(|x| x == want), "{word} → {s:?}, want {want}");
-    }
-
-    #[test]
-    fn the_rep_table_is_tried() {
-        // `qqqq` → `a` is three letters shorter: no typo route or stem scan reaches it, only REP.
-        let with = crate::affix::AffixDict::from_hunspell("REP 1\nREP qqqq a\n", "1\ncasa\n", &[]).unwrap_or_default();
-        let without = crate::affix::AffixDict::from_hunspell("", "1\ncasa\n", &[]).unwrap_or_default();
-        assert_eq!(suggest_in(&with, "cqqqqsa", 5), ["casa"]);
-        assert!(suggest_in(&without, "cqqqqsa", 5).is_empty());
-    }
-
-    #[test]
-    fn nosuggest_forms_are_never_offered() {
-        let d = crate::affix::AffixDict::from_hunspell("NOSUGGEST N\n", "2\ncasa\ncasx/N\n", &[]).unwrap_or_default();
-        let s = suggest_in(&d, "casz", 5);
-        assert!(s.iter().any(|w| w == "casa") && !s.iter().any(|w| w == "casx"), "{s:?}");
-    }
-
-    #[test]
-    fn a_cheaper_route_to_a_candidate_lowers_its_cost() {
-        // CodeRabbit on craft-libs#550: a candidate first reached at a dearer cost (MAP) and then
-        // more cheaply (REP) keeps the cheaper cost.
-        let d = crate::affix::AffixDict::from_hunspell("", "2\ncasă\ncasa\n", &[]).unwrap_or_default();
-        let mut col = Collector { d: &d, input: "csaă".into(), tested: HashMap::new(), found: HashMap::new(), seq: 0 };
-        col.offer("casă", COST_DROP_DIACRITIC);
-        col.offer("casă", COST_REP);
-        col.offer("casă", COST_DROP_OR_ADD);
-        assert_eq!(col.found.get("casă").map(|f| f.0), Some(COST_REP));
     }
 
     #[test]
@@ -539,5 +590,31 @@ mod tests {
         let ms = t.elapsed().as_secs_f64() * 1000.0;
         eprintln!("3 suggestion calls: {ms:.0} ms");
         assert!(ms < 20_000.0, "{ms} ms");
+    }
+    #[test]
+    fn a_cheaper_route_to_a_candidate_lowers_its_cost() {
+        // CodeRabbit on craft-libs#550: a candidate first reached at a dearer cost (MAP) and then
+        // more cheaply (REP) keeps the cheaper cost.
+        let d = crate::affix::AffixDict::from_hunspell("", "2\ncasă\ncasa\n", &[]).unwrap_or_default();
+        let mut col = Collector { d: &d, input: "csaă".into(), tested: HashMap::new(), found: HashMap::new(), seq: 0 };
+        col.offer("casă", COST_DROP_DIACRITIC);
+        col.offer("casă", COST_REP);
+        col.offer("casă", COST_DROP_OR_ADD);
+        assert_eq!(col.found.get("casă").map(|f| f.0), Some(COST_REP));
+    }
+    #[test]
+    fn the_rep_table_is_tried() {
+        // `qqqq` → `a` is three letters shorter: no typo route or stem scan reaches it, only REP.
+        let with = crate::affix::AffixDict::from_hunspell("REP 1\nREP qqqq a\n", "1\ncasa\n", &[]).unwrap_or_default();
+        let without = crate::affix::AffixDict::from_hunspell("", "1\ncasa\n", &[]).unwrap_or_default();
+        assert_eq!(suggest_in(&with, "cqqqqsa", 5), ["casa"]);
+        assert!(suggest_in(&without, "cqqqqsa", 5).is_empty());
+    }
+
+    #[test]
+    fn nosuggest_forms_are_never_offered() {
+        let d = crate::affix::AffixDict::from_hunspell("NOSUGGEST N\n", "2\ncasa\ncasx/N\n", &[]).unwrap_or_default();
+        let s = suggest_in(&d, "casz", 5);
+        assert!(s.iter().any(|w| w == "casa") && !s.iter().any(|w| w == "casx"), "{s:?}");
     }
 }
