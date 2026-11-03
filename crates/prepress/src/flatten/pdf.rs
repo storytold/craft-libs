@@ -768,15 +768,15 @@ impl<'s, 'a> Reader<'s, 'a> {
             return;
         };
         let Some((inks, channels)) = self.space_inks(&im.space, &im.color_space) else { return };
-        self.shared.report.images += 1;
-        if matches!(im.space, InkSpace::Cmyk { converted: true }) {
-            self.shared.report.converted_images += 1;
-        }
         let (w, h) = (im.width as usize, im.height as usize);
         let Some(samples) = channels.apply(im.samples, im.space.len()) else {
             self.shared.report.unreadable_images += 1;
             return;
         };
+        self.shared.report.images += 1;
+        if matches!(im.space, InkSpace::Cmyk { converted: true }) {
+            self.shared.report.converted_images += 1;
+        }
         let smask = im.alpha.map(|a| {
             if (a.width as usize, a.height as usize) == (w, h) {
                 a.data
