@@ -3214,7 +3214,8 @@ mod tests {
         assert_eq!((v[0].lang, v[0].message.as_str()), (ProofLang::Ro, "Posibilă greșeală de ortografie"));
         assert!(check_spelling_in("Ştiinţă şi ţară.", ProofLang::Ro).is_empty());
         assert!(suggest_in("cîine", 5, ProofLang::Ro).contains(&"câine".to_string()));
-        assert!(check_grammar_in("nici un test", ProofLang::Ro).iter().any(|i| i.message == "Se scrie legat: „niciun”"));
+        assert!(check_grammar_in("Instanta de judecată.", ProofLang::Ro).iter().any(|i| i.suggestions == ["Instanța"]));
+        assert!(check_grammar_in("Nu este nici un calculator, nici un telefon.", ProofLang::Ro).is_empty());
         assert_eq!(ProofLang::from_tag(Some("ro-RO")), ProofLang::Ro);
     }
 
@@ -3236,7 +3237,7 @@ mod tests {
         // Romanian grammar speaks Romanian and has no English a/an rule.
         let g = check_grammar_in("acesta acesta este a apple, nici un test", ProofLang::Ro);
         assert!(g.iter().any(|i| i.message == "Cuvânt repetat: „acesta”"), "{g:?}");
-        assert!(g.iter().any(|i| i.message == "Se scrie legat: „niciun”"), "{g:?}");
+        assert!(!g.iter().any(|i| i.message.starts_with("Se scrie legat:")), "context-dependent wording: {g:?}");
         assert!(!g.iter().any(|i| i.message.contains("\"an\"")), "{g:?}");
     }
 
