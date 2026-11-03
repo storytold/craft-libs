@@ -1976,11 +1976,21 @@ mod tests {
         let all = hyphen::Limits { min_word: 2, after_first: 1, before_last: 1, capitalized: true };
         let (sr, sr_latn) = (ProofLang::from_tag(Some("sr")), ProofLang::from_tag(Some("sr-Latn")));
         let h = |w: &str, lim: &hyphen::Limits, lang: ProofLang| hyphen::hyphenate_word_in(w, lim, lang);
-        // Only the Latin pack: its patterns, never inside a one-letter digraph.
-        write_pack(&root, "sr-latn", &[("hyphenation.pat", latin.as_bytes())]);
+        // No packs: no Serbian hyphenation, not even at a compound's join.
+        std::fs::create_dir_all(&root).unwrap();
         packs::set_packs_dir(Some(root.clone()));
+        assert_eq!(hyphen::word_breaks_in("пододбор", sr), (vec![], hyphen::Source::None));
+        // Only the Latin pack: its patterns in either script, never inside a one-letter digraph,
+        // and its exception words.
+        let latin_pack = format!("\\patterns{{\n{latin}}}\n\\hyphenation{{\nbudž-et\n}}\n");
+        write_pack(&root, "sr-latn", &[("hyphenation.pat", latin_pack.as_bytes())]);
+        packs::reload();
         assert_eq!(h("konj", &all, sr_latn), "k-o-nj");
         assert_eq!(h("prijatelj", &all, sr_latn), "p-r-i-j-a-t-e-lj");
+        assert_eq!(h("konj", &all, ProofLang::from_tag(Some("srp-Latn"))), "k-o-nj", "ISO 639-2 srp-Latn uses the sr-latn pack");
+        assert_eq!(h("konjugacija", &all, sr), "k-o-n-j-u-g-a-c-i-j-a", "a Latin word in a Cyrillic run");
+        assert_eq!(h("коњ", &all, sr_latn), "к-о-њ", "a Cyrillic word through its Latin spelling");
+        assert_eq!(h("budžet", &all, sr_latn), "budž-et", "an exception word");
         // With the Cyrillic pack, Latin goes through Cyrillic.
         write_pack(&root, "sr", &[("hyphenation.pat", cyrillic.as_bytes())]);
         packs::reload();
@@ -1991,9 +2001,11 @@ mod tests {
         assert_eq!(h("Univerzitet", &all, sr), "U-n-i-v-e-r-z-i-t-e-t", "a Latin word in a Cyrillic run");
         assert_eq!(h("универзитет", &all, sr_latn), "у-н-и-в-е-р-з-и-т-е-т", "a Cyrillic word in a Latin run");
         assert_eq!(h("универзитет", &all, ProofLang::from_tag(Some("srp"))), "у-н-и-в-е-р-з-и-т-е-т", "ISO 639-2 srp is Serbian");
+        assert_eq!(h("budžet", &all, sr_latn), "budž-et", "the language's own exception words come first");
         // `lj`, `nj` and `dž` count as one letter against the limits, as љ, њ and џ do.
         let lim = hyphen::Limits::default();
-        for (latin, cyr) in [("njive", "њиве"), ("ljudi", "људи"), ("Džaci", "Џаци"), ("NJIVE", "ЊИВЕ")] {
+        for (latin, cyr) in [("njive", "њиве"), ("ljudi", "људи"), ("Džaci", "Џаци"), ("Njive", "Њиве"), ("Dz\u{30C}aci", "Џаци")]
+        {
             assert_eq!(h(latin, &lim, sr_latn), latin);
             assert_eq!(h(cyr, &lim, sr), cyr);
         }

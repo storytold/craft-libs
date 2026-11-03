@@ -206,16 +206,38 @@ fn core_breaks(core: &[char], lang: ProofLang) -> (Vec<usize>, Source) {
     (heuristic_points(core), Source::Heuristic)
 }
 
-/// Serbian: the first installed Cyrillic patterns that know the word, the language's own pack's,
-/// then the Cyrillic `sr` pack's, with a Latin word through its Cyrillic spelling ([`crate::sr`]).
-/// None without such patterns, or for a word not in Serbian letters (`WordCraft`): it goes on as in
-/// any other language.
+/// Serbian ([`crate::sr`]): a word in either script, with installed patterns that know it. An
+/// exception word of the language's own pack comes first; then Cyrillic patterns (the language's
+/// pack's, then the `sr` pack's), a Latin word through its Cyrillic spelling; then Latin patterns
+/// (the language's pack's, then the `sr-latn` pack's), a Cyrillic word through its Latin spelling.
+/// None when no installed patterns know the word, or it isn't in Serbian letters (`WordCraft`):
+/// it goes on as in any other language.
 fn serbian_core_breaks(core: &[char], lang: ProofLang) -> Option<(Vec<usize>, Source)> {
-    let (cyr, at) =
-        if core.iter().all(|&c| crate::ru::is_cyrillic(c)) { (core.to_vec(), (0..core.len()).collect()) } else { crate::sr::cyrillic(core)? };
-    let pats = [lang, crate::sr::cyrillic_lang()].into_iter().filter_map(crate::packs::hyphenation).find(|p| pack_knows(p, &cyr))?;
-    let (pts, src) = core_breaks_patterns(&pats, &cyr);
-    Some((pts.into_iter().filter_map(|p| at.get(p).copied()).collect(), src))
+    // The word in each script, with the char of `core` each of its chars' breaks maps to.
+    let same = || (core.to_vec(), (0..core.len()).map(Some).collect::<Vec<_>>());
+    let (cyr, lat) = if core.iter().all(|&c| crate::ru::is_cyrillic(c)) {
+        (Some(same()), crate::sr::latin(core))
+    } else {
+        let (cyr, at) = crate::sr::cyrillic(core)?;
+        (Some((cyr, at.into_iter().map(Some).collect())), Some(same()))
+    };
+    let back = |pts: &[usize], map: &[Option<usize>]| pts.iter().filter_map(|&p| map.get(p).copied().flatten()).collect::<Vec<_>>();
+    let own = crate::packs::hyphenation(lang);
+    if let Some(p) = own.as_deref() {
+        for (word, map) in [&cyr, &lat].into_iter().flatten() {
+            if let Some(e) = p.exception(&word.iter().collect::<String>()) {
+                return Some((back(e, map), Source::Dictionary));
+            }
+        }
+    }
+    for (spelling, other) in [(&cyr, crate::sr::cyrillic_lang()), (&lat, crate::sr::latin_lang())] {
+        let Some((word, map)) = spelling else { continue };
+        if let Some(p) = [own.clone(), crate::packs::hyphenation(other)].into_iter().flatten().find(|p| pack_knows(p, word)) {
+            let (pts, src) = core_breaks_patterns(&p, word);
+            return Some((back(&pts, map), src));
+        }
+    }
+    None
 }
 
 /// `core` composed (NFC), with the index in `core` where each composed character's base starts
@@ -341,7 +363,9 @@ pub fn word_breaks_in(word: &str, lang: ProofLang) -> (Vec<usize>, Source) {
         }
         let core: Vec<char> = chars[a..b].iter().map(|&c| if is_apostrophe(c) { '\'' } else { c.to_lowercase().next().unwrap_or(c) }).collect();
         let (mut pts, s) = core_breaks(&core, lang);
-        if crate::sr::is_serbian(lang) {
+        // Serbian compounds and digraphs adjust what patterns or the heuristic found, never an
+        // exception word, and add nothing where hyphenation is off.
+        if crate::sr::is_serbian(lang) && matches!(s, Source::Patterns | Source::Heuristic) {
             pts = crate::sr::compound_breaks(&core, pts);
         }
         if src == Source::None {
@@ -394,8 +418,12 @@ pub fn hyphen_points_in(word: &str, lim: &Limits, lang: ProofLang) -> Vec<usize>
         let mut start = 0;
         while let Some(&(a, b)) = run_of.get(start) {
             let core: Vec<char> = chars.get(a..b).unwrap_or_default().iter().map(|c| c.to_lowercase().next().unwrap_or(*c)).collect();
-            for (s, is) in second.get_mut(a..b).into_iter().flatten().zip(crate::sr::second_letters(&core)) {
-                *s = is;
+            // A decomposed run (`dz` + U+030C) is read composed, as its breaks are.
+            let (nfc, starts) = composed_chars(&core);
+            for (is, s) in crate::sr::second_letters(&nfc).into_iter().zip(starts) {
+                if let Some(flag) = s.and_then(|i| second.get_mut(a + i)) {
+                    *flag = is;
+                }
             }
             // Past the run, its apostrophes too (they share its bounds).
             start = b.max(start + 1);

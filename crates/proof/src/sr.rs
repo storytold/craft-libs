@@ -16,15 +16,20 @@
 
 use crate::lang::ProofLang;
 
-/// Is `lang` Serbian, in either script (`sr`, `sr-latn`, `sr-me`; `sh`, the code Hunspell's
-/// Serbian Latin files use; ISO 639-2 `srp`)?
+/// Is `lang` Serbian, in either script (`sr`, `sr-latn`, `sr-me`, and ISO 639-2 `srp`, which
+/// [`ProofLang::from_tag`] reads as `sr`; `sh`, the code Hunspell's Serbian Latin files use)?
 pub(crate) fn is_serbian(lang: ProofLang) -> bool {
-    lang.pack_locale().is_some_and(|l| matches!(l.primary(), "sr" | "sh" | "srp"))
+    lang.pack_locale().is_some_and(|l| matches!(l.primary(), "sr" | "sh"))
 }
 
 /// The Cyrillic Serbian language, whose pack holds the Cyrillic patterns.
 pub(crate) fn cyrillic_lang() -> ProofLang {
     ProofLang::from_tag(Some("sr"))
+}
+
+/// The Latin Serbian language, whose pack holds the Latin patterns.
+pub(crate) fn latin_lang() -> ProofLang {
+    ProofLang::from_tag(Some("sr-Latn"))
 }
 
 /// Roots of Serbian Latin words where `nj` or `dž` is two letters, not one. `|` marks the pair.
@@ -68,13 +73,19 @@ const TWO_LETTERS_AT_START: &[&str] = &[
 /// The same, anywhere in a word (`mikroin|jekcija`, `hiperkon|jugacija`).
 const TWO_LETTERS_ANYWHERE: &[&str] = &["in|jek", "in|junk", "kon|jekt", "kon|jug", "kon|juk", "kon|junk", "kon|junt"];
 
-/// The index of the second letter of each such pair in a lowercase Serbian Latin word.
-pub(crate) fn two_letters(word: &[char]) -> Vec<usize> {
+/// For each char of a lowercase Serbian Latin word: is it the second letter of such a pair?
+pub(crate) fn two_letters(word: &[char]) -> Vec<bool> {
     let is_at = |root: &str, at: usize| root.chars().filter(|&c| c != '|').enumerate().all(|(i, c)| word.get(at + i) == Some(&c));
     let mark = |root: &str| root.chars().position(|c| c == '|').unwrap_or(0);
-    let mut out: Vec<usize> = TWO_LETTERS_AT_START.iter().filter(|r| is_at(r, 0)).map(|r| mark(r)).collect();
+    let mut out = vec![false; word.len()];
+    let mut set = |i: usize| {
+        if let Some(two) = out.get_mut(i) {
+            *two = true;
+        }
+    };
+    TWO_LETTERS_AT_START.iter().filter(|r| is_at(r, 0)).for_each(|r| set(mark(r)));
     for at in 0..word.len() {
-        out.extend(TWO_LETTERS_ANYWHERE.iter().filter(|r| is_at(r, at)).map(|r| at + mark(r)));
+        TWO_LETTERS_ANYWHERE.iter().filter(|r| is_at(r, at)).for_each(|r| set(at + mark(r)));
     }
     out
 }
@@ -95,7 +106,7 @@ pub(crate) fn cyrillic(word: &[char]) -> Option<(Vec<char>, Vec<usize>)> {
     let mut i = 0;
     while let Some(&c) = word.get(i) {
         let next = word.get(i + 1).copied();
-        let one_letter = !two.contains(&(i + 1));
+        let one_letter = !two.get(i + 1).copied().unwrap_or(false);
         let (cyr, len) = match (c, next) {
             ('l', Some('j')) if one_letter => ('љ', 2),
             ('n', Some('j')) if one_letter => ('њ', 2),
@@ -139,6 +150,54 @@ pub(crate) fn cyrillic(word: &[char]) -> Option<(Vec<char>, Vec<usize>)> {
         i += len;
     }
     Some((out, at))
+}
+
+/// A lowercase Serbian Cyrillic word in Latin, letter for letter (љ, њ, џ are `lj`, `nj`, `dž`),
+/// with, for each Latin char, the Cyrillic letter it starts (None for the second char of a
+/// digraph). None when the word has a letter outside the Serbian Cyrillic alphabet.
+pub(crate) fn latin(word: &[char]) -> Option<(Vec<char>, Vec<Option<usize>>)> {
+    let mut out = Vec::with_capacity(word.len() + 2);
+    let mut from = Vec::with_capacity(word.len() + 2);
+    for (k, &c) in word.iter().enumerate() {
+        let lat: &[char] = match c {
+            'а' => &['a'],
+            'б' => &['b'],
+            'в' => &['v'],
+            'г' => &['g'],
+            'д' => &['d'],
+            'ђ' => &['đ'],
+            'е' => &['e'],
+            'ж' => &['ž'],
+            'з' => &['z'],
+            'и' => &['i'],
+            'ј' => &['j'],
+            'к' => &['k'],
+            'л' => &['l'],
+            'љ' => &['l', 'j'],
+            'м' => &['m'],
+            'н' => &['n'],
+            'њ' => &['n', 'j'],
+            'о' => &['o'],
+            'п' => &['p'],
+            'р' => &['r'],
+            'с' => &['s'],
+            'т' => &['t'],
+            'ћ' => &['ć'],
+            'у' => &['u'],
+            'ф' => &['f'],
+            'х' => &['h'],
+            'ц' => &['c'],
+            'ч' => &['č'],
+            'џ' => &['d', 'ž'],
+            'ш' => &['š'],
+            _ => return None,
+        };
+        for (i, &l) in lat.iter().enumerate() {
+            out.push(l);
+            from.push((i == 0).then_some(k));
+        }
+    }
+    Some((out, from))
 }
 
 /// For each char of a lowercase Serbian `core`: is it the second char of a one-letter `lj`, `nj`
@@ -254,6 +313,24 @@ mod tests {
         ] {
             assert_eq!(cyrillic(&chars(latin)).unwrap().0.iter().collect::<String>(), cyr, "{latin}");
         }
+    }
+
+    #[test]
+    fn cyrillic_spells_in_latin() {
+        let (lat, from) = latin(&chars("коњџеп")).unwrap();
+        assert_eq!(lat.iter().collect::<String>(), "konjdžep");
+        assert_eq!(from, [Some(0), Some(1), Some(2), None, Some(3), None, Some(4), Some(5)]);
+        assert!(latin(&chars("ы")).is_none());
+    }
+
+    /// A word that repeats a root takes time linear in its length.
+    #[test]
+    fn a_long_word_of_roots_is_quick() {
+        let word = chars(&"injek".repeat(8_000));
+        let start = std::time::Instant::now();
+        let (cyr, _) = cyrillic(&word).unwrap();
+        assert_eq!(cyr.len(), word.len(), "every nj is two letters here");
+        assert!(start.elapsed() < std::time::Duration::from_secs(2), "{:?}", start.elapsed());
     }
 
     #[test]

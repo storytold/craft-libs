@@ -152,8 +152,12 @@ impl ProofLang {
             } else {
                 ProofLang::De
             }
-        } else if tag.split_once('@').is_some_and(|(_, m)| m.eq_ignore_ascii_case("latin")) {
-            // POSIX `sr_RS@latin`: the Latin-script language (`sr-latn`).
+        } else if primary.eq_ignore_ascii_case("srp") {
+            // ISO 639-2 Serbian is the packs' `sr` (`srp-Latn` is `sr-latn`).
+            ProofLang::from_tag(Some(&format!("sr{}", tag.get(primary.len()..).unwrap_or_default())))
+        } else if tag.split_once('@').is_some_and(|(_, m)| m.to_ascii_lowercase().ends_with("latin")) {
+            // POSIX `sr_RS@latin` (KDE's `sr@ijekavianlatin` too): the Latin-script language
+            // (`sr-latn`).
             PackLocale::new(&format!("{primary}-latn")).map_or(ProofLang::Other, ProofLang::Pack)
         } else {
             PackLocale::new(tag).map_or(ProofLang::Other, ProofLang::Pack)
@@ -457,8 +461,9 @@ mod tests {
         assert_tags(&["en.UTF-8", "en@euro"], ProofLang::En);
         assert_tags(&["de.UTF-8"], ProofLang::De);
         let sr_latn = ProofLang::Pack(PackLocale::new("sr-latn").unwrap());
-        assert_tags(&["sr@latin", "sr_RS@latin", "sr_RS.UTF-8@latin", "sr-Latn"], sr_latn);
-        assert_tags(&["sr", "sr@cyrillic"], ProofLang::Pack(PackLocale::new("sr").unwrap()));
+        assert_tags(&["sr@latin", "sr_RS@latin", "sr_RS.UTF-8@latin", "sr-Latn", "srp-Latn", "srp_RS@latin", "sr@ijekavianlatin"], sr_latn);
+        assert_tags(&["sr", "sr@cyrillic", "srp"], ProofLang::Pack(PackLocale::new("sr").unwrap()));
+        assert_eq!(ProofLang::from_tag(Some("srp-Cyrl-RS")), ProofLang::Pack(PackLocale::new("sr-Cyrl-RS").unwrap()));
         assert_tags(&["pt", "pt-BR", "PT_br", "pt-BR.UTF-8", "pt-AO", "por"], ProofLang::Pt);
         let pt_pt = ProofLang::Pack(PackLocale::new("pt-pt").unwrap());
         assert_tags(&[" pt-PT ", "pt_PT.UTF-8", "por-PT"], pt_pt);
