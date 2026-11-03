@@ -212,6 +212,37 @@ fn width_only_resize_preserves_content_fitting_and_explicit_height() {
     }
 }
 
+/// A smaller viewport only constrains the displayed height: a horizontal resize must
+/// preserve the saved height so it returns when the viewport grows again.
+#[test]
+fn width_only_resize_keeps_saved_height_in_a_constrained_viewport() {
+    let mut d = DockDriver::new(docked(&[&[1]], true), Content);
+    d.layout.apply(Action::ResizeGroup { panel: 1, height: Some(480.0) }).unwrap();
+    let full = d.screen;
+    d.screen = Rect::from_min_size(full.min, vec2(full.width(), 300.0));
+    d.area = d.screen;
+    d.settle();
+    d.click(hit(&d, Hit::Icon(1)).center());
+    d.settle();
+    let rect = |d: &Driver| d.ctx.memory(|m| m.area_rect(d.id.with("flyout"))).unwrap();
+    let before = rect(&d);
+    assert!(before.height() <= 300.0 && before.height() < 480.0, "the window constrains the displayed height: {before:?}");
+    let edge = before.right_center() - vec2(2.0, 0.0);
+    d.drag(edge, edge + vec2(60.0, 0.0));
+    d.settle();
+    assert!((rect(&d).width() - before.width() - 60.0).abs() < 1.0, "the width drag actually resized the flyout");
+    assert_eq!(first_column(&d.layout).groups[0].height, Some(480.0), "width-only resizing must not replace the saved height with its clamped value");
+    d.screen = full;
+    d.area = full;
+    d.settle();
+    assert_eq!(rect(&d).height(), 480.0, "the saved height returns when the window grows");
+    let icon = hit(&d, Hit::Icon(1)).center();
+    d.click(icon);
+    d.click(icon);
+    d.settle();
+    assert_eq!(rect(&d).height(), 480.0, "reopening also retains the saved height");
+}
+
 #[test]
 fn collapsed_column_shows_one_icon_per_panel_with_group_separators() {
     let d = DockDriver::new(docked(&[&[1, 2], &[3]], true), Content);
