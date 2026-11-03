@@ -353,7 +353,10 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
                 Edge::Right => request.column.left() - resized.width(),
             };
             ctx.data_mut(|data| data.insert_temp(offset_key, resized.min - pos2(anchor_x, request.icons.top())));
-            self.output.actions.push(Action::ResizeGroup { panel: active.clone(), height: Some(resized.height()) });
+            let height_changed = resized.min.y != response.rect.min.y || resized.max.y != response.rect.max.y;
+            if group.height.is_some() || height_changed {
+                self.output.actions.push(Action::ResizeGroup { panel: active.clone(), height: Some(resized.height()) });
+            }
             if resized.width() != width {
                 self.output.actions.push(Action::ResizeColumn { panel: active, width: resized.width() });
             }

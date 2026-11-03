@@ -102,6 +102,8 @@ fn flyout_resize_keeps_its_size_after_release_and_reopening() {
     assert!((rect(&d).height() - grown.height() + 60.0).abs() < 1.0);
 }
 
+/// Width and top-edge drags keep the opposite edge anchored in either dock orientation;
+/// locking the layout disables subsequent resizes.
 #[test]
 fn flyout_width_and_top_resizes_work_on_both_dock_edges() {
     for right in [false, true] {
@@ -144,6 +146,7 @@ fn flyout_width_and_top_resizes_work_on_both_dock_edges() {
     }
 }
 
+/// Content that fills the available height must not shrink due to resize-band fitting.
 #[test]
 fn a_height_filling_flyout_stays_stable_before_its_first_resize() {
     struct Fill;
@@ -163,6 +166,50 @@ fn a_height_filling_flyout_stays_stable_before_its_first_resize() {
         d.settle();
     }
     assert_eq!(d.ctx.memory(|m| m.area_rect(d.id.with("flyout"))), Some(rect));
+}
+
+/// Changing only width leaves automatic height fitting intact, while an explicit height
+/// remains fixed across width changes and tabs with different content heights.
+#[test]
+fn width_only_resize_preserves_content_fitting_and_explicit_height() {
+    struct Heights;
+    impl DockContent<u32> for Heights {
+        /// Give the two tabs different natural heights to exercise automatic fitting.
+        fn body(&mut self, ui: &mut egui::Ui, panel: &u32) {
+            ui.allocate_space(vec2(80.0, if *panel == 1 { 40.0 } else { 200.0 }));
+        }
+        fn logical_label(&self, panel: &u32) -> String {
+            format!("Panel {panel}")
+        }
+    }
+    for explicit in [false, true] {
+        let mut d = DockDriver::new(docked(&[&[1, 2]], true), Heights);
+        if explicit {
+            d.layout.apply(Action::ResizeGroup { panel: 1, height: Some(260.0) }).unwrap();
+        }
+        d.click(d.hit(&Hit::Icon(1)).unwrap().center());
+        d.settle();
+        let rect = |d: &DockDriver<u32, Heights>| d.ctx.memory(|m| m.area_rect(d.id.with("flyout"))).unwrap();
+        let before = rect(&d);
+        let edge = before.right_center() - vec2(2.0, 0.0);
+        d.drag(edge, edge + vec2(60.0, 0.0));
+        d.settle();
+        let wider = rect(&d);
+        assert!((wider.width() - before.width() - 60.0).abs() < 1.0);
+        assert_eq!(first_column(&d.layout).groups[0].height, explicit.then_some(260.0), "a width-only drag must not fix an automatic height");
+        d.click(d.hit(&Hit::Icon(2)).unwrap().center());
+        d.settle();
+        let tall = rect(&d);
+        assert_eq!(tall.width(), wider.width());
+        if explicit {
+            assert_eq!(tall.height(), before.height(), "an explicit height remains fixed");
+        } else {
+            assert!(tall.height() > before.height() + 60.0, "the taller tab fits its content: {before:?} -> {tall:?}");
+        }
+        d.click(d.hit(&Hit::Icon(1)).unwrap().center());
+        d.settle();
+        assert_eq!(rect(&d).height(), before.height(), "switching back restores the short tab's height");
+    }
 }
 
 #[test]
