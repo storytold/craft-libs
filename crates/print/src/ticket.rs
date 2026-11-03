@@ -577,6 +577,24 @@ mod tests {
     }
 
     #[test]
+    fn a_custom_media_parameter_must_match_its_namespace() {
+        let custom = (1_067_000, 480_000);
+        let xml = custom_validated(custom, "Portrait").replace(
+            "<psf:ParameterInit name=\"media:PageMediaSizeMediaSizeWidth\">",
+            "<psf:ParameterInit name=\"other:PageMediaSizeMediaSizeWidth\" xmlns:other=\"urn:other\"><psf:Value xsi:type=\"xsd:integer\">1</psf:Value></psf:ParameterInit>\n<psf:ParameterInit name=\"media:PageMediaSizeMediaSizeWidth\">",
+        );
+        assert_eq!(verify_ticket(&xml, Some(custom), false), Ok(custom));
+    }
+
+    #[test]
+    fn a_driver_rounding_the_custom_size_is_accepted() {
+        let requested = (1_067_000, 480_000);
+        let returned = (1_067_100, 480_100);
+        let xml = custom_validated(returned, "Landscape");
+        assert_eq!(verify_ticket(&xml, Some(requested), true), Ok(returned));
+    }
+
+    #[test]
     fn a_custom_media_ticket_resolves_its_parameters() {
         let custom = (1_067_000, 480_000);
         let xml = custom_validated(custom, "Portrait");

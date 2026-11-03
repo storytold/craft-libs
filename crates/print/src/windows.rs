@@ -90,14 +90,11 @@ fn select_device(devices: Vec<PrinterDevice>, requested: Option<&str>, default: 
 /// driver changed the paper, the orientation or the scaling: then nothing is sent, rather than a
 /// job at the wrong size.
 fn driver_ticket(device: &PrinterDevice, job: &Job, sheet: (f64, f64), landscape: bool) -> Result<(PrintTicket, (u32, u32)), Error> {
-    let (capabilities, capabilities_xml) = {
+    let capabilities = {
         let _provider = print_ticket_provider();
-        let capabilities = PrintCapabilities::fetch(device).map_err(spool_error)?;
-        let capabilities_xml = PrintCapabilities::fetch_xml(device).map_err(spool_error)?;
-        (capabilities, capabilities_xml)
-    };
-    let capabilities_xml = std::str::from_utf8(&capabilities_xml).map_err(spool_error)?;
-    let custom = ticket::custom_media(capabilities_xml);
+        PrintCapabilities::fetch(device)
+    }
+    .map_err(spool_error)?;
     let medias: Vec<PageMediaSize> = capabilities.page_media_sizes().collect();
     let papers: Vec<Paper<'_>> = medias
         .iter()
@@ -114,6 +111,13 @@ fn driver_ticket(device: &PrinterDevice, job: &Job, sheet: (f64, f64), landscape
         (Some(m), _) => Some((m.size().width_in_micron(), m.size().height_in_micron())),
         (None, Scaling::ShrinkToFit) => None,
         (None, Scaling::Exact) => {
+            let capabilities_xml = {
+                let _provider = print_ticket_provider();
+                PrintCapabilities::fetch_xml(device)
+            }
+            .map_err(spool_error)?;
+            let capabilities_xml = std::str::from_utf8(&capabilities_xml).map_err(spool_error)?;
+            let custom = ticket::custom_media(capabilities_xml);
             let width = ticket::micrometres(sheet.0).ok_or_else(|| spool_error("the PDF sheet size is not usable"))?;
             let height = ticket::micrometres(sheet.1).ok_or_else(|| spool_error("the PDF sheet size is not usable"))?;
             let Some((width, height)) = custom.and_then(|range| range.fit(width, height)) else {
@@ -161,15 +165,28 @@ fn driver_ticket(device: &PrinterDevice, job: &Job, sheet: (f64, f64), landscape
         // The HP PCL3 driver reads the custom media dimensions from the option's direct scored
         // properties; with the capability's parameter references it emits PAPERLENGTH=width
         // (a square page). Put the two integers in the option itself.
+        let (mut width_props, mut height_props) = (0, 0);
         for property in &mut custom.option_mut().scored_properties {
             let Some(name) = property.name.as_ref() else { continue };
+            if name.namespace_ref() != Some(NS_PSK) {
+                continue;
+            }
             let value = match name.local_name.as_str() {
-                "MediaSizeWidth" => width,
-                "MediaSizeHeight" => height,
+                "MediaSizeWidth" => {
+                    width_props += 1;
+                    width
+                }
+                "MediaSizeHeight" => {
+                    height_props += 1;
+                    height
+                }
                 _ => continue,
             };
             property.parameter_ref = None;
             property.value = Some(PropertyValue::Integer(value as i32));
+        }
+        if width_props == 0 || height_props == 0 {
+            return Err(spool_error("the printer does not report the custom size scored properties; nothing was sent"));
         }
         custom.parameters_mut().clear();
         let media_ticket: PrintTicket = custom.into();
@@ -187,8 +204,13 @@ fn driver_ticket(device: &PrinterDevice, job: &Job, sheet: (f64, f64), landscape
     // "rotate 0" setting it emits a square paper length (PJL PAPERLENGTH = PAPERWIDTH) and the
     // printer cuts the page at its width. A named paper or the driver's PrintTicket preview
     // still looks right. Let the printer manage the roll orientation, as Affinity does.
-    if let Some(autorotate) = capabilities.document.features.iter().find(|f| f.name.local_name == "PageAutorotate")
-        && let Some(option) = autorotate.options.iter().find(|o| o.name.as_ref().is_some_and(|n| n.local_name == "Printer" || n.local_name == "On"))
+    if custom_size.is_some()
+        && let Some(autorotate) = capabilities.document.features.iter().find(|f| f.name.local_name == "PageAutorotate")
+        && let Some(option) = autorotate
+            .options
+            .iter()
+            .find(|o| o.name.as_ref().is_some_and(|n| n.local_name == "Printer"))
+            .or_else(|| autorotate.options.iter().find(|o| o.name.as_ref().is_some_and(|n| n.local_name == "On")))
     {
         document.features.retain(|f| f.name.local_name != "PageAutorotate");
         document.features.push(PrintFeature {
@@ -454,8 +476,16 @@ mod tests {
             Err(e) => panic!("{e}"),
         };
         let ticket_xml = std::str::from_utf8(ticket.get_xml()).unwrap();
-        assert!(ticket_xml.contains("PageAutorotate"), "missing PageAutorotate: {ticket_xml}");
-        assert!(ticket_xml.contains("Printer"), "missing Printer autorotate: {ticket_xml}");
+        let parsed = roxmltree::Document::parse(ticket_xml).unwrap();
+        let autorotate = parsed
+            .descendants()
+            .find(|n| {
+                n.tag_name().name() == "Feature" && n.attribute("name").is_some_and(|v| v == "PageAutorotate" || v.ends_with(":PageAutorotate"))
+            })
+            .expect("missing PageAutorotate");
+        let option =
+            autorotate.children().find(|n| n.tag_name().name() == "Option").and_then(|n| n.attribute("name")).expect("missing PageAutorotate option");
+        assert_eq!(option.rsplit(':').next(), Some("Printer"), "driver kept {option}");
         let expected = (1_067_000, 480_000);
         assert!(paper == expected || paper == (expected.1, expected.0), "driver paper {paper:?}");
         if let Ok(path) = std::env::var("CRAFT_PRINT_TEST_TICKET_OUTPUT") {
