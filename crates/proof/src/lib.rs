@@ -1990,6 +1990,7 @@ mod tests {
         assert_eq!(h("odžak", &all, sr_latn), "o-dž-a-k", "оџак");
         assert_eq!(h("Univerzitet", &all, sr), "U-n-i-v-e-r-z-i-t-e-t", "a Latin word in a Cyrillic run");
         assert_eq!(h("универзитет", &all, sr_latn), "у-н-и-в-е-р-з-и-т-е-т", "a Cyrillic word in a Latin run");
+        assert_eq!(h("универзитет", &all, ProofLang::from_tag(Some("srp"))), "у-н-и-в-е-р-з-и-т-е-т", "ISO 639-2 srp is Serbian");
         // `lj`, `nj` and `dž` count as one letter against the limits, as љ, њ and џ do.
         let lim = hyphen::Limits::default();
         for (latin, cyr) in [("njive", "њиве"), ("ljudi", "људи"), ("Džaci", "Џаци"), ("NJIVE", "ЊИВЕ")] {

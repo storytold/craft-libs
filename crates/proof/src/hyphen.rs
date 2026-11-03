@@ -397,7 +397,11 @@ pub fn hyphen_points_in(word: &str, lim: &Limits, lang: ProofLang) -> Vec<usize>
             for (s, is) in second.get_mut(a..b).into_iter().flatten().zip(crate::sr::second_letters(&core)) {
                 *s = is;
             }
+            // Past the run, its apostrophes too (they share its bounds).
             start = b.max(start + 1);
+            while run_of.get(start) == Some(&(a, b)) {
+                start += 1;
+            }
         }
     }
     // Counted once, so each point's checks take constant time however long the word: letters and

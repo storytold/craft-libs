@@ -18,7 +18,7 @@ craft-proof = { git = "https://github.com/storytold/craft-libs", rev = "<commit>
 | Croatian, Turkish, Russian, Czech, Indonesian, Spanish (es, es-MX, es-419, es-UY) | the installed Hunspell dictionary (Russian also `ru-extra.txt`) | yes | Turkish and Russian rules; English fallback otherwise |
 | German | — | — | TeX patterns (embedded, or a Language pack) |
 | Bulgarian | — | — | syllable rules |
-| Serbian (sr, sr-latn) | its Language pack (any pack language) | — | the Cyrillic TeX patterns of a pack, a Latin word through its Cyrillic spelling; `lj`, `nj`, `dž` one letter; compounds at the join ([`sr`](src/sr.rs)) |
+| Serbian (sr, sr-latn) | the installed Hunspell dictionary (dictionaries folder, Language pack or system) | — | the Cyrillic TeX patterns of a pack, a Latin word through its Cyrillic spelling; without them, a Latin word takes its pack's Latin patterns; `lj`, `nj`, `dž` one letter; compounds at the join ([`sr`](src/sr.rs)) |
 
 Grammar rules, suggestion tuning and the rule-based hyphenation are code: they work in every
 build.

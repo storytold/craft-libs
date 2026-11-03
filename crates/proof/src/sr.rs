@@ -17,9 +17,9 @@
 use crate::lang::ProofLang;
 
 /// Is `lang` Serbian, in either script (`sr`, `sr-latn`, `sr-me`; `sh`, the code Hunspell's
-/// Serbian Latin files use)?
+/// Serbian Latin files use; ISO 639-2 `srp`)?
 pub(crate) fn is_serbian(lang: ProofLang) -> bool {
-    lang.pack_locale().is_some_and(|l| matches!(l.primary(), "sr" | "sh"))
+    lang.pack_locale().is_some_and(|l| matches!(l.primary(), "sr" | "sh" | "srp"))
 }
 
 /// The Cyrillic Serbian language, whose pack holds the Cyrillic patterns.
@@ -174,7 +174,14 @@ pub(crate) fn compound_breaks(core: &[char], pts: Vec<usize>) -> Vec<usize> {
     } else {
         (core.to_vec(), (0..core.len()).collect())
     };
-    let mut marks: Vec<usize> = pts.iter().filter_map(|p| at.iter().position(|a| a == p)).collect();
+    // The letter starting at each char of `core`, so each break is looked up once.
+    let mut letter = vec![None; core.len()];
+    for (k, &a) in at.iter().enumerate() {
+        if let Some(l) = letter.get_mut(a) {
+            *l = Some(k);
+        }
+    }
+    let mut marks: Vec<usize> = pts.iter().filter_map(|&p| letter.get(p).copied().flatten()).collect();
     let starts = |s: &str, from: usize| s.chars().enumerate().all(|(i, c)| word.get(from + i) == Some(&c));
     for root in COMPOUNDS {
         let (prefix, rest) = root.split_once('|').unwrap_or((root, ""));
