@@ -105,6 +105,12 @@ impl Src<'_> {
         self.array(pos).map(u32::from_be_bytes)
     }
 
+    /// The first bytes of the source, enough to detect its format; a source that fails to read
+    /// them is [`AudioError::Io`], so the failure is not taken for an unknown format.
+    pub(crate) fn head_checked(&self) -> Result<Vec<u8>> {
+        self.read_upto(0, 64 * 1024)
+    }
+
     /// The first bytes of the source, enough to detect its format.
     pub(crate) fn head(&self) -> Vec<u8> {
         self.bytes_upto(0, 64 * 1024)

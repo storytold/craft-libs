@@ -240,3 +240,35 @@ fn float_wav_header_rejects_a_frame_count_whose_total_size_overflows() {
     let frames = u64::MAX / 4;
     assert!(matches!(wav_float_header(48_000, 1, frames), Err(craft_audio::AudioError::TooLarge(_))));
 }
+
+#[test]
+fn dither_changes_integer_output() {
+    // a quiet signal whose samples fall between the integer levels
+    let mut src = AudioBuffer::new(48_000, 1, 4800);
+    for (i, s) in src.channels[0].iter_mut().enumerate() {
+        *s = 0.001 * (i as f32 * 0.01).sin();
+    }
+    for depth in [BitDepth::Int16, BitDepth::Int24, BitDepth::Int32] {
+        let opts = EncodeOptions::new(EncodeFormat::Wav).with_bit_depth(depth);
+        let plain = encode(&src, &opts.clone().with_dither(false)).unwrap();
+        let dithered = encode(&src, &opts.with_dither(true)).unwrap();
+        assert_ne!(plain, dithered, "{depth:?}");
+    }
+}
+
+#[test]
+fn bwf_text_is_cut_at_a_character_boundary() {
+    // 255 ASCII bytes then a 2-byte character: the 256-byte description field cannot hold it
+    let description = format!("{}é", "a".repeat(255));
+    let bwf = BwfInfo::default().with_description(&description);
+    let opts = EncodeOptions::new(EncodeFormat::Wav).with_bwf(bwf);
+    let info = probe(&encode(&sine(48_000, 1, 100), &opts).unwrap(), None).unwrap();
+    assert_eq!(info.bwf.unwrap().description, "a".repeat(255));
+}
+
+#[test]
+fn a_byte_rate_past_32_bits_is_an_error() {
+    // 4 GHz × 8 bytes per frame does not fit the 32-bit nAvgBytesPerSec field
+    assert!(matches!(wav_float_header(4_000_000_000, 2, 0), Err(craft_audio::AudioError::Encode(_))));
+    assert!(wav_float_header(4_000_000_000 / 8, 2, 0).is_ok());
+}

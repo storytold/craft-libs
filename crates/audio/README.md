@@ -185,7 +185,7 @@ let aiff: Vec<u8> = encode(&buf, &opts)?;
 // 5.1 with side surrounds: a layout other than the default for 6 channels, recorded in the WAV.
 let wav = encode(&surround, &EncodeOptions::default().with_layout(ChannelLayout::SURROUND_5_1_SIDE))?;
 
-// Block by block into any Write + Seek; the same bytes as `encode`.
+// Block by block into any Write + Seek with nothing after its position; the same bytes as `encode`.
 let mut enc = FileEncoder::new(std::fs::File::create("take.wav")?, &EncodeOptions::default(), 48_000, 2)?;
 enc.write(&buf.channels, buf.frames())?;   // one slice (or Vec) per channel
 enc.finish()?;
@@ -258,8 +258,11 @@ match craft_audio::decode(&bytes, None) {
 ## Limits
 
 - AIFF with more than four channels decodes with an unordered layout, in the file's order.
-- Not decoded at all: AC-3, E-AC-3, Opus and Speex. `TrackDecoder` returns `Unsupported` for every
-  codec but PCM; `decode` and `Decoder` read those through symphonia.
+- Not decoded at all: AC-3, E-AC-3, Opus and Speex.
+- `TrackDecoder` returns `Unsupported` for every codec but PCM; `decode` and `Decoder` read the
+  other codecs in the table above through symphonia.
+- MP4 edit lists: a single leading media edit (encoder priming) is applied. Empty edits and lists
+  of more than one edit are not; the media plays as it is stored.
 
 ## Codecs
 

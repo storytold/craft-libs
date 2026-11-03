@@ -119,7 +119,13 @@ pub(crate) fn parse(src: &Src<'_>) -> Result<AiffParse> {
         b"fl64" | b"FL64" => (PcmKind::Float { bytes: 8, big_endian: true }, SampleFormat::Float64),
         _ => return Ok(AiffParse::Foreign),
     };
-    let (data_start, data_len) = ssnd.unwrap_or((total, 0));
+    // SSND is required when COMM declares frames (AIFF 1.3); a file that ends before it is
+    // truncated, not empty
+    let (data_start, data_len) = match ssnd {
+        Some(ssnd) => ssnd,
+        None if frames > 0 => return Err(AudioError::Malformed(format!("AIFF declares {frames} frames but has no SSND chunk"))),
+        None => (total, 0),
+    };
     let block = kind.bytes().saturating_mul(channels as usize).max(1);
     let frames = u64::from(frames).min(data_len / block as u64);
     Ok(AiffParse::Native(AiffLayout {

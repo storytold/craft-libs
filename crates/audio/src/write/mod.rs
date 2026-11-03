@@ -28,10 +28,11 @@ pub fn encode(buf: &AudioBuffer, opts: &EncodeOptions) -> Result<Vec<u8>> {
 }
 
 /// The file extensions of the formats [`encode`] can write.
-pub const ENCODE_EXTENSIONS: &[&str] = &["wav", "wave", "bwf", "aif", "aiff"];
+pub const ENCODE_EXTENSIONS: &[&str] = &["wav", "wave", "bwf", "aif", "aiff", "aifc"];
 
 /// The format [`encode`] writes for a file extension or format name (`wav`, `aiff`, case-insensitive,
-/// with or without the dot), or `None` when it cannot write it.
+/// with or without the dot), or `None` when it cannot write it. `aifc` is AIFF: float AIFF is
+/// written as AIFF-C.
 ///
 /// ```
 /// use craft_audio::{EncodeFormat, encode_format_for};
@@ -42,7 +43,7 @@ pub const ENCODE_EXTENSIONS: &[&str] = &["wav", "wave", "bwf", "aif", "aiff"];
 pub fn encode_format_for(name: &str) -> Option<EncodeFormat> {
     match name.trim_start_matches('.').to_ascii_lowercase().as_str() {
         "wav" | "wave" | "bwf" => Some(EncodeFormat::Wav),
-        "aif" | "aiff" => Some(EncodeFormat::Aiff),
+        "aif" | "aiff" | "aifc" => Some(EncodeFormat::Aiff),
         _ => None,
     }
 }
@@ -65,7 +66,9 @@ fn failed_write_error() -> AudioError {
 
 /// Writes WAV/BWF (RF64 above 4 GiB) or AIFF / AIFF-C `fl32` block by block, producing
 /// the same bytes [`encode`] would for the whole buffer: a file of any length never
-/// has to fit in memory.
+/// has to fit in memory. The file starts at the sink's position, and nothing may follow that
+/// position (a new file, or one truncated there): the encoder cannot truncate a `Write + Seek`,
+/// so the bytes of a longer file already there would stay after the new one.
 ///
 /// ```
 /// use craft_audio::{EncodeFormat, EncodeOptions, FileEncoder};

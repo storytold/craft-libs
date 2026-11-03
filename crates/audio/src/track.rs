@@ -139,7 +139,10 @@ impl TrackDecoder {
             Inner::Pcm { kind, channels } => Some(data.len() / (kind.bytes() * *channels).max(1)),
         };
         let frames = frames.filter(|&n| n > 0).unwrap_or(self.last_frames);
-        AudioBuffer { sample_rate: self.sample_rate, channels: vec![vec![0.0; frames]; usize::from(self.layout.channels())] }
+        // bounded like a decoded packet: a packet too large to decode is not too large to conceal
+        let channels = usize::from(self.layout.channels());
+        let frames = frames.min(usize::try_from(crate::pcm::MAX_DECODE_SAMPLES).unwrap_or(usize::MAX) / channels.max(1));
+        AudioBuffer { sample_rate: self.sample_rate, channels: vec![vec![0.0; frames]; channels] }
     }
 
     /// The frames every packet decodes to, for codecs whose packets all have one length; `None`

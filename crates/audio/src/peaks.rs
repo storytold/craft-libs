@@ -26,14 +26,15 @@ pub struct Peaks {
 struct Block {
     min: f32,
     max: f32,
-    squares: f32,
+    /// In f64: the square of a loud float sample, or the sum of many, can overflow f32.
+    squares: f64,
 }
 
 impl Block {
     const EMPTY: Block = Block { min: f32::INFINITY, max: f32::NEG_INFINITY, squares: 0.0 };
 
     fn point(s: f32) -> Block {
-        Block { min: s, max: s, squares: if s.is_finite() { s * s } else { 0.0 } }
+        Block { min: s, max: s, squares: if s.is_finite() { f64::from(s) * f64::from(s) } else { 0.0 } }
     }
 
     fn of(samples: &[f32]) -> Block {
@@ -148,7 +149,7 @@ impl Peaks {
             .map(|w| {
                 w.map(|(a, b)| {
                     let (s, e) = (a.floor() as usize, (b.ceil() as usize).saturating_add(1).min(self.len).min(samples.len()));
-                    (self.sum(samples, s, e).squares / e.saturating_sub(s).max(1) as f32).sqrt()
+                    (self.sum(samples, s, e).squares / e.saturating_sub(s).max(1) as f64).sqrt() as f32
                 })
             })
             .collect()
@@ -215,6 +216,14 @@ mod tests {
         assert_eq!(p.minmax(&x, 0, 2), (1.0, 1.0));
         assert_eq!(p.spans(&x, 0.0, 1.0, 0.0, 1), vec![Some((1.0, 1.0))]);
         assert!(p.rms_spans(&x, 0.0, 1.0, 0.0, 1)[0].is_some_and(f32::is_finite));
+    }
+
+    #[test]
+    fn loud_finite_samples_give_a_finite_rms() {
+        let x = [1e20f32, -1e20, 3e38, 0.5];
+        let p = Peaks::build(&x);
+        let rms = p.rms_spans(&x, 0.0, 4.0, 0.0, 1)[0].unwrap();
+        assert!(rms.is_finite(), "{rms}");
     }
 
     #[test]

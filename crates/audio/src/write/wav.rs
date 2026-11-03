@@ -18,9 +18,10 @@ fn channel_mask(channels: usize) -> u32 {
     }
 }
 
+/// `s` in a field of `len` bytes, cut at a character boundary so a reader finds valid UTF-8.
 fn put_fixed_str(out: &mut Vec<u8>, s: &str, len: usize) {
     let bytes = s.as_bytes();
-    let n = bytes.len().min(len);
+    let n = (0..=bytes.len().min(len)).rev().find(|&n| s.is_char_boundary(n)).unwrap_or(0);
     out.extend_from_slice(bytes.get(..n).unwrap_or_default());
     out.resize(out.len() + (len - n), 0);
 }
@@ -186,7 +187,10 @@ pub(crate) fn header(
     fmt.extend_from_slice(&(if extensible { WAVE_FORMAT_EXTENSIBLE } else { fmt_tag }).to_le_bytes());
     fmt.extend_from_slice(&(channels as u16).to_le_bytes());
     fmt.extend_from_slice(&sample_rate.to_le_bytes());
-    fmt.extend_from_slice(&sample_rate.saturating_mul(u32::from(block_align)).to_le_bytes());
+    let byte_rate = sample_rate
+        .checked_mul(u32::from(block_align))
+        .ok_or_else(|| AudioError::Encode("sample rate × block size overflows the WAV byte rate".into()))?;
+    fmt.extend_from_slice(&byte_rate.to_le_bytes());
     fmt.extend_from_slice(&block_align.to_le_bytes());
     fmt.extend_from_slice(&bits.to_le_bytes());
     if extensible {

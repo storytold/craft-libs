@@ -530,7 +530,8 @@ pub(crate) struct Symph {
     decoded: u64,
     errors: usize,
     /// Frames of the last decoded packet: the length of the silence that replaces a packet that
-    /// fails to decode, so the audio after it keeps its timing.
+    /// fails to decode when the demuxer gives no duration for it, so the audio after it keeps its
+    /// timing.
     last_frames: usize,
     /// Frames still to drop after a seek landed before its target.
     discard: u64,
@@ -545,6 +546,10 @@ impl Symph {
             let reader = match open(bytes, detected)? {
                 Opened::Reader(reader) => reader,
                 Opened::Empty(info) => {
+                    // a stream with no audio still has one track, as WAV and AIFF do
+                    if let Some(n) = track.filter(|&n| n > 0) {
+                        return Err(AudioError::Unsupported(format!("no audio track {n}: the file has one")));
+                    }
                     return Ok(Symph {
                         reader: None,
                         decoder: None,
@@ -670,10 +675,19 @@ impl Symph {
                     self.errors += 1;
                     self.info.damaged += 1;
                     corrupt_packet(self.errors, self.decoded, m)?;
-                    if self.decoded == 0 || self.last_frames == 0 {
+                    // the packet's own duration when the demuxer gives one (Vorbis packets vary in
+                    // length), otherwise the last packet's
+                    let rate = u64::from(self.info.sample_rate.max(1));
+                    let (numer, denom) = self.time_base.map_or((1, rate), |tb| (u64::from(tb.numer.get()), u64::from(tb.denom.get())));
+                    let own = u128::from(packet.dur.get()) * u128::from(numer) * u128::from(rate) / u128::from(denom);
+                    let frames = match usize::try_from(own) {
+                        Ok(n) if n > 0 && n as u64 <= MAX_PACKET_FRAMES => n,
+                        _ => self.last_frames,
+                    };
+                    if self.decoded == 0 || frames == 0 {
                         continue;
                     }
-                    vec![vec![0.0; self.last_frames]; usize::from(self.info.channels)]
+                    vec![vec![0.0; frames]; usize::from(self.info.channels)]
                 }
                 Err(SymError::IoError(_)) => {
                     self.ended = true;

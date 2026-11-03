@@ -344,7 +344,7 @@ impl<'a> Native<'a> {
         };
         let frame = if self.frames_known { frame.min(self.info.frames) } else { frame };
         self.seeked = true;
-        let target = frame + self.skip;
+        let target = frame.saturating_add(self.skip);
         let start = self.packets.seek(target.saturating_sub(self.dec.preroll() as u64))?;
         self.dec.reset();
         self.pos = start;
@@ -526,10 +526,12 @@ fn open_mkv<'a>(src: &Src<'a>, container: Container, track: Option<usize>) -> Op
     let skip = rescale_round(t.codec_delay_ns, 1_000_000_000, u64::from(rate));
     // The presentation ends with the last frame (timestamps, with `CodecDelay` already taken off,
     // are in ticks of `timebase` seconds); known only when the last frame has a duration.
+    // The decoded timeline starts at the first frame, so the length is measured from there.
     let (num, den) = t.timebase;
     let last = t.samples.iter().max_by_key(|s| s.pts);
+    let origin = t.samples.iter().map(|s| s.pts).min().unwrap_or(0).max(0);
     let frames = last.filter(|s| s.duration > 0).and_then(|s| {
-        let end = u64::try_from(s.pts.saturating_add(i64::try_from(s.duration).ok()?)).ok()?;
+        let end = u64::try_from(s.pts.saturating_add(i64::try_from(s.duration).ok()?).saturating_sub(origin)).ok()?;
         Some(rescale_round(end.saturating_mul(num), den, u64::from(rate)))
     });
     let mut demux = demux;

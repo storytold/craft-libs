@@ -119,7 +119,12 @@ pub(crate) fn deinterleave(data: &[u8], kind: PcmKind, channels: usize, frames: 
         return Err(AudioError::TooLarge(format!("{total} samples exceeds the {MAX_DECODE_SAMPLES}-sample decode limit")));
     }
     let frames = usize::try_from(frames).map_err(|_| AudioError::TooLarge("frame count exceeds address space".into()))?;
-    let mut out: Vec<Vec<f32>> = (0..channels).map(|_| Vec::with_capacity(frames)).collect();
+    let mut out: Vec<Vec<f32>> = Vec::with_capacity(channels);
+    for _ in 0..channels {
+        let mut ch = Vec::new();
+        ch.try_reserve_exact(frames).map_err(|_| AudioError::TooLarge("cannot allocate decoded audio".into()))?;
+        out.push(ch);
+    }
     for frame in data.chunks_exact(block).take(frames) {
         for (ch, s) in out.iter_mut().zip(frame.chunks_exact(bytes)) {
             ch.push(decode_sample(s, kind));

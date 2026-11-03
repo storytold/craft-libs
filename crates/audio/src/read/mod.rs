@@ -228,7 +228,7 @@ impl<'a> Decoder<'a> {
     }
 
     fn from_src(src: Src<'a>, ext_hint: Option<&str>, opts: &DecodeOptions) -> Result<Decoder<'a>> {
-        let head = src.head();
+        let head = src.head_checked()?;
         let container = detect_container(&head, ext_hint);
         if let Some(n) = Native::open(&src, container, opts.track) {
             return Ok(Decoder { inner: Inner::Native(Box::new(n?)) });
@@ -473,7 +473,7 @@ pub fn tracks_of(source: impl SharedSource, ext_hint: Option<&str>) -> Result<Ve
 }
 
 fn tracks_in(src: &Src<'_>, ext_hint: Option<&str>) -> Result<Vec<TrackInfo>> {
-    let container = detect_container(&src.head(), ext_hint);
+    let container = detect_container(&src.head_checked()?, ext_hint);
     let list = |v: Vec<(CodecId, Option<u32>, Option<u16>)>| -> Vec<TrackInfo> {
         v.into_iter().enumerate().map(|(index, (codec, sample_rate, channels))| TrackInfo { index, codec, sample_rate, channels }).collect()
     };
@@ -520,5 +520,21 @@ mod native_only_tests {
         assert!(matches!(tracks(&flac_header, None), Err(AudioError::Unsupported(m)) if m.contains("FLAC")));
         // Bytes that name no format are not blamed on the build.
         assert!(matches!(tracks(&[7u8; 64], None), Err(AudioError::Unsupported(m)) if m.contains("not a recognized")));
+    }
+
+    /// A source that cannot be read is an I/O error, not an unrecognized format.
+    #[test]
+    fn a_failed_header_read_is_an_io_error() {
+        struct Failing;
+        impl craft_media::ByteSource for Failing {
+            fn len(&self) -> u64 {
+                1000
+            }
+            fn read_at(&self, _: u64, _: &mut [u8]) -> std::io::Result<()> {
+                Err(std::io::Error::other("disk gone"))
+            }
+        }
+        assert!(matches!(tracks_of(Failing, None), Err(AudioError::Io(_))));
+        assert!(matches!(Decoder::open(Failing, None, &DecodeOptions::default()), Err(AudioError::Io(_))));
     }
 }

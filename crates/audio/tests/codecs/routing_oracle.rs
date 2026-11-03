@@ -1,6 +1,6 @@
-//! `craft_audio::decode` routes each container and codec to the home-grown demuxers and
-//! decoders: every pair decodes, sample-aligned, to its presentation length, within an SNR of
-//! ffmpeg's decode; truncated and corrupted copies never panic. Fixtures are written by ffmpeg
+//! `craft_audio::decode` routes each container and codec below to the home-grown demuxers and
+//! decoders, or to symphonia (FLAC): each pair decodes, sample-aligned, to its presentation
+//! length, within an SNR of ffmpeg's decode; truncated and corrupted copies never panic. Fixtures are written by ffmpeg
 //! (skipped without it).
 
 use craft_audio::{ChannelLayout, CodecId, Container, decode, probe};
@@ -31,6 +31,19 @@ struct Case {
 }
 
 const CASES: &[Case] = &[
+    Case {
+        name: "flac.flac",
+        surround: false,
+        mono: false,
+        rate: 48_000,
+        args: &["-c:a", "flac", "-sample_fmt", "s16"],
+        container: Container::Flac,
+        codec: CodecId::Flac,
+        layout: ChannelLayout::STEREO,
+        channels: 2,
+        frames: Some(240_000),
+        min_snr: 140.0,
+    },
     Case {
         name: "pcm-s24be.mov",
         surround: false,

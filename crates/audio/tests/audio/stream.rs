@@ -204,3 +204,40 @@ fn short_or_missing_channels_are_refused_without_writing() {
     let wav = enc.finish().unwrap().into_inner();
     assert_eq!(craft_audio::probe(&wav, None).unwrap().frames, 4);
 }
+
+/// A 48 kHz mono float PCM Matroska file: ten 10 ms blocks from `first_ns`, with block durations
+/// when `durations` is set (otherwise its length is unknown), and a `CodecDelay` of `delay_ns`.
+fn pcm_mkv(first_ns: i64, durations: bool, delay_ns: u64) -> Vec<u8> {
+    use craft_media::matroska::{LacingMode, MkvWriter, MuxOptions, TrackKind, TrackSpec};
+    let mut spec = TrackSpec::new(TrackKind::Audio, "A_PCM/FLOAT/IEEE");
+    spec.audio = Some((48_000.0, 1, Some(32)));
+    spec.codec_delay_ns = delay_ns;
+    let opts = MuxOptions { lacing: LacingMode::None, ..MuxOptions::default() };
+    let mut w = MkvWriter::new(Cursor::new(Vec::new()), vec![spec], opts).unwrap();
+    for k in 0..10i64 {
+        let data: Vec<u8> = (0..480).flat_map(|i| ((k * 480 + i) as f32 * 0.001).sin().to_le_bytes()).collect();
+        w.write_frame(0, first_ns + k * 10_000_000, true, &data, durations.then_some(10_000_000)).unwrap();
+    }
+    w.finish().unwrap().into_inner()
+}
+
+#[test]
+fn a_matroska_track_that_starts_late_counts_only_its_own_frames() {
+    use craft_audio::{DecodeOptions, Decoder};
+    let file = pcm_mkv(1_000_000_000, true, 0);
+    let dec = Decoder::from_bytes(&file, None, &DecodeOptions::default()).unwrap();
+    assert!(dec.length_known());
+    assert_eq!(dec.info().frames, 4800);
+    let decoded: usize = dec.probe().map(|i| i.frames as usize).unwrap();
+    assert_eq!(decoded, 4800);
+}
+
+#[test]
+fn seeking_far_past_an_unknown_end_does_not_overflow() {
+    use craft_audio::{DecodeOptions, Decoder};
+    let file = pcm_mkv(0, false, 1_000_000);
+    let mut dec = Decoder::from_bytes(&file, None, &DecodeOptions::default()).unwrap();
+    assert!(!dec.length_known());
+    dec.seek(u64::MAX).unwrap();
+    assert!(dec.next_block().unwrap().is_none());
+}

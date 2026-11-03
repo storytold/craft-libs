@@ -653,3 +653,32 @@ fn extensible_fmt_is_checked_in_full() {
     let ambi = riff(&[(b"fmt ", extensible_fmt(22, 16, &ambi)), (b"data", vec![0u8; 8])]);
     assert_eq!(probe(&ambi, None).unwrap().sample_format, SampleFormat::Int16);
 }
+
+#[test]
+fn aiff_frames_without_sound_data_are_malformed() {
+    // COMM declares 300 frames, and the file ends before any SSND chunk
+    let full = small(EncodeFormat::Aiff, BitDepth::Int16, 1);
+    let ssnd = full.windows(4).position(|w| w == b"SSND").unwrap();
+    let mut f = full[..ssnd].to_vec();
+    let size = (f.len() - 8) as u32;
+    f[4..8].copy_from_slice(&size.to_be_bytes());
+    assert!(matches!(probe(&f, None), Err(AudioError::Malformed(_))));
+    // with no frames declared, no SSND is needed (AIFF 1.3)
+    let comm = f.windows(4).position(|w| w == b"COMM").unwrap();
+    f[comm + 10..comm + 14].fill(0);
+    assert_eq!(probe(&f, None).unwrap().frames, 0);
+}
+
+#[test]
+fn an_empty_flac_has_one_track() {
+    use craft_audio::{DecodeOptions, decode_with};
+    // STREAMINFO: 4096-frame blocks, 44.1 kHz, 2 channels, 16 bits, no samples
+    let mut f = b"fLaC".to_vec();
+    f.extend_from_slice(&[0x80, 0, 0, 34]);
+    f.extend_from_slice(&[0x10, 0x00, 0x10, 0x00, 0, 0, 0, 0, 0, 0]);
+    f.extend_from_slice(&((44_100u64 << 44) | (1 << 41) | (15 << 36)).to_be_bytes());
+    f.extend_from_slice(&[0; 16]);
+    assert_eq!(decode_with(&f, None, &DecodeOptions::default().with_track(0)).unwrap().1.frames(), 0);
+    let e = decode_with(&f, None, &DecodeOptions::default().with_track(1)).unwrap_err();
+    assert!(matches!(e, AudioError::Unsupported(_)), "{e}");
+}
