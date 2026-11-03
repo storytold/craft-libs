@@ -49,7 +49,8 @@ impl Dictionary {
 
     /// Deserialize data written by `Dictionary::to_bytes`.
     pub(crate) fn decode(data: &[u8]) -> Result<Dictionary, String> {
-        let raw = miniz_oxide::inflate::decompress_to_vec(data).map_err(|e| format!("hyphenation dictionary: inflate failed: {e:?}"))?;
+        let raw = miniz_oxide::inflate::decompress_to_vec_with_limit(data, MAX_INFLATED)
+            .map_err(|e| format!("hyphenation dictionary: inflate failed: {e:?}"))?;
         let body = raw.strip_prefix(MAGIC).ok_or("hyphenation dictionary: bad header")?;
         let mut d = Dictionary { words: String::with_capacity(body.len()), offs: vec![0], masks: Vec::new() };
         let mut cur: Vec<u8> = Vec::new();
@@ -110,6 +111,11 @@ impl Dictionary {
     }
 }
 
+/// The most bytes a dictionary may inflate to. The bundled US English dictionary inflates to
+/// under 2 MiB; a small stream must not be able to ask for the whole of memory before the
+/// header is checked.
+const MAX_INFLATED: usize = 64 << 20;
+
 /// `word` with `-` before every char whose bit is set in `mask`.
 #[cfg(any(test, feature = "generator"))]
 pub fn hyphenated(word: &str, mask: u64) -> String {
@@ -155,5 +161,12 @@ mod tests {
         assert_eq!(back.get("cat"), Some(0));
         assert_eq!(back.get("naïveté").map(|m| hyphenated("naïveté", m)), Some("naïve-té".to_string()));
         assert!(back.get("dog").is_none());
+    }
+
+    #[test]
+    fn an_oversized_stream_is_refused_before_parsing() {
+        let bomb = miniz_oxide::deflate::compress_to_vec(&vec![b'a'; MAX_INFLATED + 1], 10);
+        assert!(bomb.len() < 1 << 20, "{} bytes compressed", bomb.len());
+        assert!(Dictionary::from_bytes(&bomb).unwrap_err().contains("inflate failed"));
     }
 }
