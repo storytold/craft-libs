@@ -1,0 +1,269 @@
+//! Random-access byte sources: what the demuxers read from. One trait for every container, so a
+//! file, buffer or custom source implements it once.
+
+#![warn(missing_docs)]
+
+use std::io::{self, Read, Seek, SeekFrom};
+use std::sync::{Arc, Mutex};
+
+/// Random-access, read-only byte source (file, in-memory buffer, web Blob…).
+///
+/// Implementations serve reads at arbitrary offsets through `&self`. `isobmff::ByteSource` and
+/// `matroska::ByteSource` are this trait.
+pub trait ByteSource {
+    /// Total length in bytes.
+    fn len(&self) -> u64;
+    /// Fill `buf` entirely with bytes starting at `offset`; fail with `UnexpectedEof` if past the end.
+    fn read_at(&self, offset: u64, buf: &mut [u8]) -> io::Result<()>;
+    /// True if the source holds no bytes.
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
+fn eof() -> io::Error {
+    io::Error::new(io::ErrorKind::UnexpectedEof, "read past end of byte source")
+}
+
+impl ByteSource for [u8] {
+    fn len(&self) -> u64 {
+        <[u8]>::len(self) as u64
+    }
+    fn read_at(&self, offset: u64, buf: &mut [u8]) -> io::Result<()> {
+        let start = usize::try_from(offset).map_err(|_| eof())?;
+        let end = start.checked_add(buf.len()).ok_or_else(eof)?;
+        let src = self.get(start..end).ok_or_else(eof)?;
+        buf.copy_from_slice(src);
+        Ok(())
+    }
+}
+
+impl ByteSource for Vec<u8> {
+    fn len(&self) -> u64 {
+        self.as_slice().len() as u64
+    }
+    fn read_at(&self, offset: u64, buf: &mut [u8]) -> io::Result<()> {
+        self.as_slice().read_at(offset, buf)
+    }
+}
+
+impl<T: ByteSource + ?Sized> ByteSource for &T {
+    fn len(&self) -> u64 {
+        (**self).len()
+    }
+    fn read_at(&self, offset: u64, buf: &mut [u8]) -> io::Result<()> {
+        (**self).read_at(offset, buf)
+    }
+}
+
+impl<T: ByteSource + ?Sized> ByteSource for Arc<T> {
+    fn len(&self) -> u64 {
+        (**self).len()
+    }
+    fn read_at(&self, offset: u64, buf: &mut [u8]) -> io::Result<()> {
+        (**self).read_at(offset, buf)
+    }
+}
+
+impl<T: ByteSource + ?Sized> ByteSource for Box<T> {
+    fn len(&self) -> u64 {
+        (**self).len()
+    }
+    fn read_at(&self, offset: u64, buf: &mut [u8]) -> io::Result<()> {
+        (**self).read_at(offset, buf)
+    }
+}
+
+/// Past the largest offset a file can have (`i64::MAX`), where the OS would fail with
+/// `InvalidInput` instead of reporting the end of the file.
+#[cfg(not(target_arch = "wasm32"))]
+fn past_file_offsets(offset: u64, len: usize) -> bool {
+    offset.checked_add(len as u64).is_none_or(|e| e > i64::MAX as u64)
+}
+
+/// A file read in place. `len` asks the file system each time, and a failure there reads as an
+/// empty file; [`ReadSeekSource`] takes the length once and reports a failure when it is made.
+#[cfg(not(target_arch = "wasm32"))]
+impl ByteSource for std::fs::File {
+    fn len(&self) -> u64 {
+        self.metadata().map(|m| m.len()).unwrap_or(0)
+    }
+    #[cfg(unix)]
+    fn read_at(&self, offset: u64, buf: &mut [u8]) -> io::Result<()> {
+        if past_file_offsets(offset, buf.len()) {
+            return Err(eof());
+        }
+        std::os::unix::fs::FileExt::read_exact_at(self, buf, offset)
+    }
+    #[cfg(windows)]
+    fn read_at(&self, mut offset: u64, mut buf: &mut [u8]) -> io::Result<()> {
+        use std::os::windows::fs::FileExt;
+        if past_file_offsets(offset, buf.len()) {
+            return Err(eof());
+        }
+        while !buf.is_empty() {
+            let n = self.seek_read(buf, offset)?;
+            if n == 0 {
+                return Err(eof());
+            }
+            offset += n as u64;
+            buf = &mut buf[n..];
+        }
+        Ok(())
+    }
+    #[cfg(not(any(unix, windows)))]
+    fn read_at(&self, offset: u64, buf: &mut [u8]) -> io::Result<()> {
+        if past_file_offsets(offset, buf.len()) {
+            return Err(eof());
+        }
+        let mut f = self;
+        f.seek(SeekFrom::Start(offset))?;
+        f.read_exact(buf)
+    }
+}
+
+/// Adapts any `Read + Seek` (e.g. `BufReader<File>`, `Cursor<Vec<u8>>`) into a [`ByteSource`].
+///
+/// The length is taken once at construction; the stream position is tracked so sequential reads
+/// do not issue redundant seeks. The reader sits behind a mutex, so the source is `Send + Sync`
+/// whenever `R` is `Send` and can be shared across threads.
+pub struct ReadSeekSource<R> {
+    inner: Mutex<(R, u64)>,
+    len: u64,
+}
+
+impl<R: Read + Seek> ReadSeekSource<R> {
+    /// Wrap a reader; seeks to the end once to learn the length.
+    pub fn new(mut r: R) -> io::Result<Self> {
+        let len = r.seek(SeekFrom::End(0))?;
+        Ok(Self { inner: Mutex::new((r, len)), len })
+    }
+    /// Unwrap the reader.
+    pub fn into_inner(self) -> R {
+        // A poisoned lock only means a read panicked in another thread; the reader is still usable.
+        self.inner.into_inner().unwrap_or_else(|e| e.into_inner()).0
+    }
+}
+
+impl<R: Read + Seek> ByteSource for ReadSeekSource<R> {
+    fn len(&self) -> u64 {
+        self.len
+    }
+    fn read_at(&self, offset: u64, buf: &mut [u8]) -> io::Result<()> {
+        if offset.checked_add(buf.len() as u64).is_none_or(|e| e > self.len) {
+            return Err(eof());
+        }
+        let mut g = self.inner.lock().unwrap_or_else(|e| {
+            // a read panicked in another thread and may have moved the reader; force a seek
+            let mut g = e.into_inner();
+            g.1 = u64::MAX;
+            self.inner.clear_poison();
+            g
+        });
+        let (r, pos) = &mut *g;
+        if *pos != offset {
+            *pos = u64::MAX; // unknown until the seek succeeds
+            r.seek(SeekFrom::Start(offset))?;
+            *pos = offset;
+        }
+        let res = r.read_exact(buf);
+        match res {
+            Ok(()) => {
+                *pos = offset + buf.len() as u64;
+                Ok(())
+            }
+            Err(e) => {
+                *pos = u64::MAX; // unknown; force a seek next time
+                Err(e)
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn slice_and_reader_sources() {
+        let v = vec![1u8, 2, 3, 4];
+        let mut b = [0u8; 2];
+        v.read_at(1, &mut b).unwrap();
+        assert_eq!(b, [2, 3]);
+        assert!(v.read_at(3, &mut b).is_err());
+        assert!(v.read_at(u64::MAX, &mut b).is_err());
+        let r = ReadSeekSource::new(io::Cursor::new(v.clone())).unwrap();
+        assert_eq!(r.len(), 4);
+        r.read_at(2, &mut b).unwrap();
+        assert_eq!(b, [3, 4]);
+        r.read_at(0, &mut b).unwrap();
+        assert_eq!(b, [1, 2]);
+        assert!(r.read_at(3, &mut b).is_err());
+        let a: Arc<[u8]> = Arc::from(v.clone());
+        a.read_at(2, &mut b).unwrap();
+        assert_eq!(b, [3, 4]);
+        assert_eq!(ByteSource::len(&a), 4);
+        let s: &[u8] = &v;
+        assert_eq!(ByteSource::len(&s), 4);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn file_sources_read_like_a_buffer() {
+        let v: Vec<u8> = (0..=255).collect();
+        let path = std::env::temp_dir().join(format!("craft-media-source-{}.bin", std::process::id()));
+        std::fs::write(&path, &v).unwrap();
+        let f = std::fs::File::open(&path).unwrap();
+        let r = ReadSeekSource::new(std::fs::File::open(&path).unwrap()).unwrap();
+        let sources: [&dyn ByteSource; 3] = [&v, &f, &r];
+        for s in sources {
+            assert_eq!(s.len(), 256);
+            // out of order, so ReadSeekSource has to seek back
+            for (offset, n) in [(0, 0), (10, 16), (0, 256), (200, 56), (255, 1), (3, 7)] {
+                let mut b = vec![0u8; n];
+                s.read_at(offset as u64, &mut b).unwrap();
+                assert_eq!(b, v[offset..offset + n], "offset {offset}, {n} bytes");
+            }
+            for (offset, n) in [(200, 57), (256, 1), (300, 1), (u64::MAX, 1), (u64::MAX - 1, 4)] {
+                let err = s.read_at(offset, &mut vec![0u8; n]).unwrap_err();
+                assert_eq!(err.kind(), io::ErrorKind::UnexpectedEof, "offset {offset}, {n} bytes");
+            }
+        }
+        drop((f, r)); // Windows deletes no open file
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn read_seek_source_seeks_after_a_panicked_read() {
+        struct PanicOnce(io::Cursor<Vec<u8>>, bool);
+        impl Read for PanicOnce {
+            fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+                let n = self.0.read(&mut buf[..1])?;
+                if std::mem::take(&mut self.1) {
+                    panic!("read failed halfway");
+                }
+                Ok(n)
+            }
+        }
+        impl Seek for PanicOnce {
+            fn seek(&mut self, to: SeekFrom) -> io::Result<u64> {
+                self.0.seek(to)
+            }
+        }
+        let r = ReadSeekSource::new(PanicOnce(io::Cursor::new(vec![1, 2, 3, 4]), false)).unwrap();
+        let mut b = [0u8; 2];
+        r.read_at(0, &mut b).unwrap();
+        r.inner.lock().unwrap().0.1 = true;
+        // the reader moves one byte, then panics with the tracked position at 2
+        assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| r.read_at(2, &mut b))).is_err());
+        r.read_at(2, &mut b).unwrap();
+        assert_eq!(b, [3, 4]);
+        assert!(!r.inner.is_poisoned(), "recovered once, not on every read");
+    }
+
+    #[test]
+    fn read_seek_source_is_send_and_sync() {
+        fn shareable<T: ByteSource + Send + Sync + 'static>(_: &T) {}
+        shareable(&ReadSeekSource::new(io::Cursor::new(vec![0u8; 4])).unwrap());
+    }
+}

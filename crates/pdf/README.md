@@ -56,7 +56,7 @@ Cancellation is polled between operators, so a decoder may finish before noticin
 ## Backend provenance and consumer pins
 
 The shared reader vendors the current patched Hayro trees from PdfCraft revision
-`7437bde378f43856eada40af25b983812e615e8a`. See
+`ec0a965074f376a5bf610435948e4e5184bf3299`. See
 [`vendor/README.craft-reader.md`](../../vendor/README.craft-reader.md) for the transfer and
 local patches. Lopdf, COS editing, inspection fallback and application caches remain app-owned.
 
@@ -103,7 +103,7 @@ that supply shaped glyphs do not need that shaper. Adapters that call `draw_text
 DeckCraft, also need `write-simple-text` when adopting this revision. `write-pdf` adds
 embedded-PDF support independently of text shaping.
 
-The writer pins Krilla 0.8.2, with a local unwind-cleanup patch documented in
+The writer pins Krilla 0.8.2, with local unwind-cleanup, print color and optional content patches documented in
 [`vendor/krilla/README.craft.md`](../../vendor/krilla/README.craft.md). Successful
 serialization uses the same backend version as before extraction. It provides:
 
@@ -119,6 +119,49 @@ serialization uses the same backend version as before extraction. It provides:
   postprocessing. App errors pass through; serialization errors retain backend diagnostics.
   Caught panic messages retain up to 1024 Unicode scalar values; the installed panic hook
   remains responsible for logging source locations and full diagnostics.
+- `write::uri_target`: the Krilla link target for a URI link, or `None` when `safe_url`
+  refuses it. Apps build URI links with it instead of `backend::action::LinkAction`, so a
+  link target from someone else's document becomes a PDF link only when it is an `http`/`https`
+  URL with a host or a `mailto` address. A refused target writes no link annotation.
+- `safe_url` (crate root, any feature): the same rule, for apps that open links themselves,
+  such as a slide show.
+
+### Print color
+
+`write::print::cmyk_blending(profile)` returns `Result<SerializeSettings, WriteError>`
+with the settings for a plain CMYK print PDF: DeviceCMYK color and transparency blending in
+CMYK (`GroupColorSpace::Cmyk`), with no output intent. `write::print::settings` adds the
+document's CMYK profile as a `GTS_PDFX` output intent and `/Trapped /False`, for PDF/X. Both
+fail with `WriteError::InvalidProfile` when the profile is not a readable CMYK ICC profile.
+The profile is the document's working space. craft-pdf takes the profile bytes and does not
+depend on craft-cms. Its CC0 `builtin::COATED_FOGRA39_ICC` is the default working space, described by
+`PrintColor::fogra39`:
+
+```rust
+use craft_pdf::write::print::{self, PrintColor};
+
+let settings = print::settings(PrintColor::fogra39(craft_cms::builtin::COATED_FOGRA39_ICC))?;
+let writer = Writer::new(SerializeSettings { configuration, ..settings }, metadata);
+```
+
+For another profile, fill `PrintColor` with its condition identifier (`Custom` when it is
+not registered) and `info`. The settings claim no PDF/X version and are not checked against
+PDF/X; apps that claim conformance set `pdfx_version` (and `pdfx_conformance` for PDF/X-1a
+and X-3) and keep their own checks. Writing these
+settings needs the patched Krilla (`CRAFT_PRINT_COLOR`, see
+[`vendor/krilla/README.craft.md`](../../vendor/krilla/README.craft.md)).
+
+### Optional content
+
+Drawing layers are written as optional content groups. `Document::add_optional_content_group(name,
+visible)` returns an `OcgId`; `Surface::start_optional_content(id)` and
+`Surface::end_optional_content()` mark the content between them, and nest independently of
+tagged sections. Both return `KrillaError` on misuse instead of panicking, and a mark left open
+when its stream finishes fails `Writer::finish`. The catalog lists every group in
+`/OCProperties`, hidden ones in `/OFF`; `Document::set_optional_content_page_mode(true)` adds
+`/PageMode /UseOC`. Optional content needs PDF 1.5 and fails PDF/A-1 validation (patch 12 in
+[`vendor/krilla/README.craft.md`](../../vendor/krilla/README.craft.md), marker
+`CRAFT_OPTIONAL_CONTENT`).
 
 `Writer::document_mut` and `write::backend` deliberately expose Krilla's page, resource and
 painting APIs. The apps keep their document walks, pagination, font selection/licensing,
