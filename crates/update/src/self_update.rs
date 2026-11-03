@@ -418,7 +418,7 @@ pub fn update(
             }
             #[cfg(unix)]
             Install::Standalone(exe) => {
-                let result = replace_standalone(app, &file, exe);
+                let result = replace_standalone(app, paths, &file, exe);
                 let _ = std::fs::remove_file(&file);
                 result?;
                 relaunch_after_exit(app, pid, &[exe.as_os_str()])
@@ -465,42 +465,124 @@ fn replace_appimage(new: &Path, path: &Path) -> Result<(), String> {
     })
 }
 
-/// Extracts the app's binary from a release tarball and atomically renames it over the running
-/// standalone executable.
+/// Replaces a standalone copy from a release tarball, along with what the tarball install put
+/// beside it: the release's other programs that are already in the executable's folder, and,
+/// when that folder is a prefix's `bin` with the app's `share/<id>` folder next to it, everything
+/// under the tarball's `share` (data, desktop entry, icons). A copy on its own in some folder gets
+/// only its executable. Files the release doesn't ship are never touched. Every file is copied
+/// next to its destination before any is renamed over it, so a copy that fails (full disk,
+/// unwritable folder) changes nothing; the executable is renamed last.
 #[cfg(unix)]
-fn replace_standalone(app: &App, tarball: &Path, exe: &Path) -> Result<(), String> {
-    use std::os::unix::fs::PermissionsExt;
-    let dir = exe.parent().ok_or_else(|| "executable isn't in a folder".to_string())?;
-    let f = std::fs::File::open(tarball).map_err(|e| format!("could not open {}: {e}", tarball.display()))?;
-    let gz = flate2::read::GzDecoder::new(f);
-    let mut archive = tar::Archive::new(gz);
-    let staged = dir.join(format!(".{}.update", exe.file_name().and_then(|n| n.to_str()).unwrap_or("app")));
-    let bin_suffix = format!("/{}", app.id);
-    let bin_rel = format!("bin/{}", app.id);
-    let mut found = false;
-    for entry in archive.entries().map_err(|e| format!("could not read archive entries: {e}"))? {
-        let mut entry = entry.map_err(|e| format!("archive entry error: {e}"))?;
-        if !entry.header().entry_type().is_file() {
-            continue;
-        }
-        let path = entry.path().map_err(|e| format!("archive path error: {e}"))?;
-        let path_str = path.to_string_lossy();
-        if path_str == bin_rel || path_str.ends_with(&bin_suffix) || path.file_name().is_some_and(|n| n == app.id) {
-            let mut out = std::fs::File::create(&staged).map_err(|e| format!("could not create {}: {e}", staged.display()))?;
-            std::io::copy(&mut entry, &mut out).map_err(|e| format!("could not extract binary: {e}"))?;
-            found = true;
-            break;
-        }
-    }
-    if !found {
-        let _ = std::fs::remove_file(&staged);
+fn replace_standalone(app: &App, paths: &Paths, tarball: &Path, exe: &Path) -> Result<(), String> {
+    // Per-process names, so two updates running at once can't remove each other's files.
+    let staging = paths.cache.join(format!("{}.standalone.{}", app.id, std::process::id()));
+    let result = install::tree::unpack(app, tarball, &staging).and_then(|tree| replace_from_tree(app, &tree, exe));
+    let _ = std::fs::remove_dir_all(&staging);
+    result
+}
+
+#[cfg(unix)]
+fn replace_from_tree(app: &App, tree: &Path, exe: &Path) -> Result<(), String> {
+    let new_exe = tree.join("bin").join(app.id);
+    if !is_plain_file(&new_exe) {
         return Err(format!("release archive did not contain binary for {}", app.id));
     }
-    std::fs::set_permissions(&staged, std::fs::Permissions::from_mode(0o755)).map_err(|e| e.to_string())?;
-    std::fs::rename(&staged, exe).map_err(|e| {
-        let _ = std::fs::remove_file(&staged);
-        format!("could not replace {}: {e}", exe.display())
-    })
+    let bin = exe.parent().ok_or_else(|| "executable isn't in a folder".to_string())?;
+    let mut moves = Vec::new();
+    for entry in std::fs::read_dir(tree.join("bin")).map_err(|e| format!("couldn't read the release's programs ({e})"))?.flatten() {
+        let name = entry.file_name();
+        if name != app.id && is_plain_file(&entry.path()) && bin.join(&name).is_file() {
+            moves.push((entry.path(), bin.join(&name)));
+        }
+    }
+    let prefix = bin.parent().filter(|_| bin.file_name().is_some_and(|n| n == "bin"));
+    if let Some(prefix) = prefix
+        && prefix.join("share").join(app.id).is_dir()
+    {
+        for file in plain_files(&tree.join("share"))? {
+            let relative = file.strip_prefix(tree).map_err(|_| "staged file escapes the release".to_string())?;
+            moves.push((file.clone(), prefix.join(relative)));
+        }
+    }
+    moves.push((new_exe, exe.to_path_buf()));
+    // A folder where a file goes would fail its rename after earlier files were replaced.
+    if let Some((_, to)) = moves.iter().find(|(_, to)| to.symlink_metadata().is_ok_and(|m| m.is_dir())) {
+        return Err(format!("couldn't replace {} (it's a folder)", to.display()));
+    }
+    // Copy everything next to its destination first, so a full disk or an unwritable folder
+    // stops the update before any installed file changes. Renames within a folder don't fail
+    // for those reasons, and the executable is renamed last.
+    let mut staged = Vec::new();
+    for (i, (from, to)) in moves.iter().enumerate() {
+        match stage(from, to, i == moves.len() - 1) {
+            Ok(s) => staged.push((s, to)),
+            Err(e) => {
+                for (s, _) in &staged {
+                    let _ = std::fs::remove_file(s);
+                }
+                return Err(e);
+            }
+        }
+    }
+    let mut result = Ok(());
+    for (s, to) in &staged {
+        if result.is_ok() {
+            result = std::fs::rename(s, to).map_err(|e| format!("couldn't replace {} ({e})", to.display()));
+        }
+        if result.is_err() {
+            let _ = std::fs::remove_file(s);
+        }
+    }
+    result
+}
+
+/// Copies `from` to a hidden file next to `to` and returns its path. Group and world write and
+/// the set-id bits are never carried over from the archive; the executable is always 0755.
+#[cfg(unix)]
+fn stage(from: &Path, to: &Path, executable: bool) -> Result<PathBuf, String> {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = to.parent().ok_or_else(|| format!("{} isn't in a folder", to.display()))?;
+    std::fs::create_dir_all(dir).map_err(|e| format!("couldn't create {} ({e})", dir.display()))?;
+    let name = to.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let staged = dir.join(format!(".{name}.{}.update", std::process::id()));
+    let done = std::fs::copy(from, &staged).map_err(|e| format!("couldn't write next to {} ({e})", to.display())).and_then(|_| {
+        let mode = std::fs::metadata(from).map(|m| m.permissions().mode()).unwrap_or(0o644);
+        let mode = if executable { 0o755 } else { mode & 0o755 };
+        std::fs::set_permissions(&staged, std::fs::Permissions::from_mode(mode)).map_err(|e| e.to_string())
+    });
+    match done {
+        Ok(()) => Ok(staged),
+        Err(e) => {
+            let _ = std::fs::remove_file(&staged);
+            Err(e)
+        }
+    }
+}
+
+/// A regular file, not a link to one.
+#[cfg(unix)]
+fn is_plain_file(path: &Path) -> bool {
+    std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_file())
+}
+
+/// The regular files under `dir`, without following links; none when `dir` doesn't exist.
+#[cfg(unix)]
+fn plain_files(dir: &Path) -> Result<Vec<PathBuf>, String> {
+    let mut files = Vec::new();
+    let mut pending = vec![dir.to_path_buf()];
+    while let Some(dir) = pending.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+        for entry in entries {
+            let entry = entry.map_err(|e| format!("couldn't read {} ({e})", dir.display()))?;
+            let kind = entry.file_type().map_err(|e| e.to_string())?;
+            if kind.is_dir() {
+                pending.push(entry.path());
+            } else if kind.is_file() {
+                files.push(entry.path());
+            }
+        }
+    }
+    Ok(files)
 }
 
 /// Starts `sh`, which waits for `pid` to exit and then runs `command`. Detached, so it outlives us.
@@ -1908,5 +1990,206 @@ mod tests {
         assert!(!is_bundle_origin(&crate::suite::LAUNCHER, "photocraft-origin"));
         assert!(is_bundle_origin(&crate::suite::PHOTOCRAFT, "photocraft-origin"));
         assert!(!is_bundle_origin(&crate::suite::LAUNCHER, ""));
+    }
+
+    /// A release tarball like `package.sh` makes: everything under one `<app>-<ver>-<platform>/`.
+    #[cfg(unix)]
+    fn release_tarball(path: &Path, files: &[(&str, &[u8])]) {
+        let f = std::fs::File::create(path).unwrap();
+        let mut b = tar::Builder::new(flate2::write::GzEncoder::new(f, flate2::Compression::fast()));
+        for (name, bytes) in files {
+            let mut h = tar::Header::new_gnu();
+            h.set_size(bytes.len() as u64);
+            h.set_mode(0o755);
+            h.set_cksum();
+            b.append_data(&mut h, format!("pdfcraft-9.9.9-linux-x86_64/{name}"), *bytes).unwrap();
+        }
+        b.into_inner().unwrap().finish().unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_standalone_update_in_a_prefix_replaces_the_cli_and_shared_files_too() {
+        let dir = tempfile::tempdir().unwrap();
+        let prefix = dir.path().join("local");
+        std::fs::create_dir_all(prefix.join("bin")).unwrap();
+        std::fs::create_dir_all(prefix.join("share/pdfcraft/models")).unwrap();
+        let exe = prefix.join("bin/pdfcraft");
+        std::fs::write(&exe, b"old app").unwrap();
+        std::fs::write(prefix.join("bin/pdfcraft-cli"), b"old cli").unwrap();
+        std::fs::write(prefix.join("bin/unrelated"), b"mine").unwrap();
+        std::fs::write(prefix.join("share/pdfcraft/models/a.rten"), b"old model").unwrap();
+        let tarball = dir.path().join("new.tar.gz");
+        release_tarball(
+            &tarball,
+            &[
+                ("bin/pdfcraft", b"new app"),
+                ("bin/pdfcraft-cli", b"new cli"),
+                ("share/pdfcraft/models/a.rten", b"new model"),
+                ("share/pdfcraft/models/b.rten", b"added model"),
+                ("share/applications/ai.storyteller.pdfcraft.desktop", b"desktop"),
+            ],
+        );
+        let paths = Paths::under(&dir.path().join("data"));
+        replace_standalone(&crate::suite::PDFCRAFT, &paths, &tarball, &exe).unwrap();
+        let read = |p: &str| std::fs::read(prefix.join(p)).unwrap();
+        assert_eq!(read("bin/pdfcraft"), b"new app");
+        assert_eq!(read("bin/pdfcraft-cli"), b"new cli");
+        assert_eq!(read("bin/unrelated"), b"mine", "files the release doesn't ship are left alone");
+        assert_eq!(read("share/pdfcraft/models/a.rten"), b"new model");
+        assert_eq!(read("share/pdfcraft/models/b.rten"), b"added model");
+        assert_eq!(read("share/applications/ai.storyteller.pdfcraft.desktop"), b"desktop");
+        let leftovers: Vec<_> = walk(&prefix).into_iter().filter(|p| p.to_string_lossy().contains(".update")).collect();
+        assert!(leftovers.is_empty(), "no staged files left behind: {leftovers:?}");
+        use std::os::unix::fs::PermissionsExt;
+        let mode = |p: &str| std::fs::metadata(prefix.join(p)).unwrap().permissions().mode() & 0o7777;
+        assert_eq!(mode("bin/pdfcraft"), 0o755);
+        assert_eq!(mode("share/pdfcraft/models/a.rten") & 0o022, 0, "no group or world write from the archive");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_unwritable_folder_stops_the_update_before_anything_changes() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let prefix = dir.path().join("local");
+        let models = prefix.join("share/pdfcraft/models");
+        std::fs::create_dir_all(prefix.join("bin")).unwrap();
+        std::fs::create_dir_all(&models).unwrap();
+        let exe = prefix.join("bin/pdfcraft");
+        std::fs::write(&exe, b"old app").unwrap();
+        std::fs::write(prefix.join("bin/pdfcraft-cli"), b"old cli").unwrap();
+        std::fs::write(prefix.join("share/pdfcraft/a.txt"), b"old data").unwrap();
+        std::fs::write(models.join("a.rten"), b"old model").unwrap();
+        std::fs::set_permissions(&models, std::fs::Permissions::from_mode(0o555)).unwrap();
+        if std::fs::write(models.join("probe"), b"").is_ok() {
+            return; // running as root: permissions don't stop writes, so there's nothing to test
+        }
+        let tarball = dir.path().join("new.tar.gz");
+        release_tarball(
+            &tarball,
+            &[
+                ("bin/pdfcraft", b"new app"),
+                ("bin/pdfcraft-cli", b"new cli"),
+                ("share/pdfcraft/a.txt", b"new data"),
+                ("share/pdfcraft/models/a.rten", b"new model"),
+            ],
+        );
+        let paths = Paths::under(&dir.path().join("data"));
+        let result = replace_standalone(&crate::suite::PDFCRAFT, &paths, &tarball, &exe);
+        std::fs::set_permissions(&models, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(result.is_err());
+        let read = |p: &str| std::fs::read(prefix.join(p)).unwrap();
+        assert_eq!(read("bin/pdfcraft"), b"old app");
+        assert_eq!(read("bin/pdfcraft-cli"), b"old cli");
+        assert_eq!(read("share/pdfcraft/a.txt"), b"old data", "files staged before the failure aren't put in place");
+        assert_eq!(read("share/pdfcraft/models/a.rten"), b"old model");
+        let leftovers: Vec<_> = walk(&prefix).into_iter().filter(|p| p.to_string_lossy().contains(".update")).collect();
+        assert!(leftovers.is_empty(), "staged files are removed: {leftovers:?}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_folder_where_a_shipped_file_goes_stops_the_update_before_anything_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let prefix = dir.path().join("local");
+        std::fs::create_dir_all(prefix.join("bin")).unwrap();
+        std::fs::create_dir_all(prefix.join("share/pdfcraft/b.txt")).unwrap();
+        let exe = prefix.join("bin/pdfcraft");
+        std::fs::write(&exe, b"old app").unwrap();
+        std::fs::write(prefix.join("share/pdfcraft/a.txt"), b"old a").unwrap();
+        std::fs::write(prefix.join("share/pdfcraft/c.txt"), b"old c").unwrap();
+        let tarball = dir.path().join("new.tar.gz");
+        release_tarball(
+            &tarball,
+            &[
+                ("bin/pdfcraft", b"new app"),
+                ("share/pdfcraft/a.txt", b"new a"),
+                ("share/pdfcraft/b.txt", b"new b"),
+                ("share/pdfcraft/c.txt", b"new c"),
+            ],
+        );
+        let paths = Paths::under(&dir.path().join("data"));
+        let result = replace_standalone(&crate::suite::PDFCRAFT, &paths, &tarball, &exe);
+        assert!(result.is_err());
+        let read = |p: &str| std::fs::read(prefix.join(p)).unwrap();
+        assert_eq!(read("bin/pdfcraft"), b"old app");
+        assert_eq!(read("share/pdfcraft/a.txt"), b"old a", "no file is replaced when one can't be");
+        assert_eq!(read("share/pdfcraft/c.txt"), b"old c", "no file is replaced when one can't be");
+        assert!(prefix.join("share/pdfcraft/b.txt").is_dir());
+        let leftovers: Vec<_> = walk(&prefix).into_iter().filter(|p| p.to_string_lossy().contains(".update")).collect();
+        assert!(leftovers.is_empty(), "staged files are removed: {leftovers:?}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_standalone_update_leaves_another_updates_staged_files_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let prefix = dir.path().join("local");
+        std::fs::create_dir_all(prefix.join("bin")).unwrap();
+        let exe = prefix.join("bin/pdfcraft");
+        std::fs::write(&exe, b"old app").unwrap();
+        // What a concurrent update would have staged under the shared names.
+        let other_file = prefix.join("bin/.pdfcraft.update");
+        std::fs::write(&other_file, b"other update").unwrap();
+        let paths = Paths::under(&dir.path().join("data"));
+        let other_dir = paths.cache.join("pdfcraft.standalone");
+        std::fs::create_dir_all(&other_dir).unwrap();
+        std::fs::write(other_dir.join("marker"), b"other update").unwrap();
+        let tarball = dir.path().join("new.tar.gz");
+        release_tarball(&tarball, &[("bin/pdfcraft", b"new app")]);
+        replace_standalone(&crate::suite::PDFCRAFT, &paths, &tarball, &exe).unwrap();
+        assert_eq!(std::fs::read(&exe).unwrap(), b"new app");
+        assert_eq!(std::fs::read(&other_file).unwrap(), b"other update");
+        assert_eq!(std::fs::read(other_dir.join("marker")).unwrap(), b"other update");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_lone_standalone_binary_gets_only_what_sits_beside_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let tools = dir.path().join("tools");
+        std::fs::create_dir_all(&tools).unwrap();
+        let exe = tools.join("pdfcraft");
+        std::fs::write(&exe, b"old app").unwrap();
+        let tarball = dir.path().join("new.tar.gz");
+        release_tarball(&tarball, &[("bin/pdfcraft", b"new app"), ("bin/pdfcraft-cli", b"new cli"), ("share/pdfcraft/models/a.rten", b"model")]);
+        let paths = Paths::under(&dir.path().join("data"));
+        replace_standalone(&crate::suite::PDFCRAFT, &paths, &tarball, &exe).unwrap();
+        assert_eq!(std::fs::read(&exe).unwrap(), b"new app");
+        assert!(!tools.join("pdfcraft-cli").exists(), "a program that wasn't installed isn't added");
+        assert!(!dir.path().join("share").exists(), "no prefix, so no shared files");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_standalone_update_without_the_app_binary_changes_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let prefix = dir.path().join("local");
+        std::fs::create_dir_all(prefix.join("bin")).unwrap();
+        std::fs::create_dir_all(prefix.join("share/pdfcraft")).unwrap();
+        let exe = prefix.join("bin/pdfcraft");
+        std::fs::write(&exe, b"old app").unwrap();
+        std::fs::write(prefix.join("bin/pdfcraft-cli"), b"old cli").unwrap();
+        let tarball = dir.path().join("new.tar.gz");
+        release_tarball(&tarball, &[("bin/pdfcraft-cli", b"new cli")]);
+        let paths = Paths::under(&dir.path().join("data"));
+        assert!(replace_standalone(&crate::suite::PDFCRAFT, &paths, &tarball, &exe).is_err());
+        assert_eq!(std::fs::read(&exe).unwrap(), b"old app");
+        assert_eq!(std::fs::read(prefix.join("bin/pdfcraft-cli")).unwrap(), b"old cli");
+    }
+
+    #[cfg(unix)]
+    fn walk(dir: &Path) -> Vec<PathBuf> {
+        let mut out = Vec::new();
+        for e in std::fs::read_dir(dir).unwrap().flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                out.extend(walk(&p));
+            } else {
+                out.push(p);
+            }
+        }
+        out
     }
 }
