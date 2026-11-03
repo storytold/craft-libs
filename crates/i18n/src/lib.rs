@@ -471,18 +471,24 @@ fn wrap(initiator: char, value: &str) -> String {
     out.push(initiator);
     // One entry per open initiator: true for an isolate, false for an embedding or override.
     let mut open: Vec<bool> = Vec::new();
+    // How many of `open` are isolates, so a PDI needn't search the stack for one.
+    let mut isolates = 0usize;
     for c in value.chars() {
         match c {
-            LRI | RLI | FSI => open.push(true),
+            LRI | RLI | FSI => {
+                open.push(true);
+                isolates += 1;
+            }
             LRE | RLE | LRO | RLO => open.push(false),
             PDF if open.last() == Some(&false) => {
                 open.pop();
             }
             PDF => continue,
-            PDI if open.contains(&true) => {
+            PDI if isolates > 0 => {
                 while open.pop() == Some(false) {
                     out.push(PDF);
                 }
+                isolates -= 1;
             }
             PDI => continue,
             _ => {}
@@ -580,8 +586,17 @@ fn fill(template: &str, args: &[(&str, &str)], isolated: bool) -> String {
 /// script, so Latin Serbian never picks Cyrillic `sr`, while `sr-Cyrl-RS` does. A region that
 /// implies a script (CLDR likely subtags) counts as that script after the tag as written:
 /// `pa-PK` → `pa-pk`, `pa-arab-pk`, `pa-arab`.
+/// A locale tag is no longer than this: a language, script, region and a few variants or a
+/// glibc encoding and modifier fit with room to spare. A longer one is no locale, and isn't
+/// split into a fallback for every subtag.
+const MAX_TAG_LEN: usize = 128;
+
 fn candidates(tag: &str) -> Vec<String> {
-    let tag = tag.trim().to_ascii_lowercase();
+    let tag = tag.trim();
+    if tag.len() > MAX_TAG_LEN {
+        return Vec::new();
+    }
+    let tag = tag.to_ascii_lowercase();
     let base = tag.split(['.', '@']).next().unwrap_or("").replace('_', "-");
     let mut parts: Vec<&str> = base.split('-').filter(|p| !p.is_empty()).collect();
     let Some(&primary) = parts.first() else {
@@ -843,6 +858,12 @@ mod tests {
         assert_eq!(fmt("ש {n}", &[("n", &one)]), format!("ש {one}"));
         // Two isolates side by side are not one, so they get wrapped.
         assert_eq!(fmt("ש{v}", &[("v", "\u{2066}a\u{2069}\u{2066}b\u{2069}")]), "ש\u{2068}\u{2066}a\u{2069}\u{2066}b\u{2069}\u{2069}");
+        // A PDI closes the embeddings opened after its isolate, and one with no isolate open is
+        // dropped, however many embeddings are open.
+        assert_eq!(isolate("\u{2066}\u{202A}a\u{2069}b"), "\u{2068}\u{2066}\u{202A}a\u{202C}\u{2069}b\u{2069}");
+        let embeddings = "\u{202A}".repeat(50_000);
+        let wrapped = isolate(&format!("{embeddings}{}", "\u{2069}".repeat(50_000)));
+        assert_eq!(wrapped, format!("\u{2068}{embeddings}{}\u{2069}", "\u{202C}".repeat(50_000)));
     }
 
     /// `text` in display order, as one line in a left-to-right paragraph, without bidi controls.
@@ -1033,6 +1054,9 @@ mod tests {
         assert_eq!(candidates("kk-CN"), ["kk-cn", "kk-arab-cn", "kk-arab"]);
         assert_eq!(candidates("kk-KZ"), ["kk-kz", "kk"]);
         assert_eq!(candidates("ug-KZ"), ["ug-kz", "ug-cyrl-kz", "ug-cyrl"]);
+        // A tag too long to be a locale has no fallbacks, rather than one per subtag.
+        assert!(candidates(&"x-".repeat(500_000)).is_empty());
+        assert_eq!(candidates(&format!("en-{}", "x-".repeat(60))).len(), 61);
     }
 
     #[test]
