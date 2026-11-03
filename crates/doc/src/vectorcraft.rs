@@ -18,13 +18,16 @@
 use std::borrow::Cow;
 use std::fmt;
 use std::io::Read;
+use std::marker::PhantomData;
 
 use craft_vectorcraft_format::{BLOB_MAGIC, Image, entry, is_compressed, marker_at};
 use flate2::read::GzDecoder;
 use serde::Deserialize;
-use serde::de::{self, Deserializer, IgnoredAny, MapAccess, Visitor};
+use serde::de::{self, Deserializer, IgnoredAny, MapAccess, SeqAccess, Visitor};
 
-use crate::{Budget, Error, Kind, Layer, Lenient, Outline, Page, Rendition, RenditionKind, counted, malformed, parse, parse_versioned, too_new};
+use crate::{
+    Budget, Error, Kind, Layer, Lenient, Outline, Page, Rendition, RenditionKind, Scalar, Shaped, counted, malformed, parse, parse_versioned, too_new,
+};
 
 /// Bytes decompressed at a time.
 const CHUNK: u64 = 64 << 10;
@@ -88,6 +91,11 @@ impl Tail<'_> {
                 _ => merged.push([start, end]),
             }
         }
+        // Each range is returned as its own copy: bytes that more than one range names are
+        // decompressed once and counted again here for each further copy.
+        let stated = ranges.iter().fold(0u64, |n, &[_, len]| n.saturating_add(len));
+        let spanned = merged.iter().fold(0u64, |n, &[start, end]| n.saturating_add(end - start));
+        budget.take(stated.saturating_sub(spanned), WHAT)?;
         let mut src = read.as_slice().chain(&mut *dec);
         let (mut at, mut kept) = (0u64, Vec::<(u64, Vec<u8>)>::new());
         for [start, end] in merged {
@@ -171,11 +179,173 @@ fn unpack<'a>(bytes: &'a [u8], budget: &mut Budget) -> Result<Unpacked<'a>, Erro
     Ok(Unpacked { json: Cow::Owned(buf), tail: Tail::Stream { dec, read } })
 }
 
+/// A value of type `Self` that is a JSON array or object, read by [`ContainerVisitor`] as it is
+/// parsed; any other value has the wrong shape, apart from `null` where [`Container::null`] takes
+/// it.
+trait Container: Sized {
+    fn seq<'de, A: SeqAccess<'de>>(seq: A) -> Result<Option<Self>, A::Error>;
+    fn map<'de, A: MapAccess<'de>>(map: A) -> Result<Option<Self>, A::Error>;
+    fn null() -> Option<Self> {
+        None
+    }
+}
+
+/// Reads a [`Container`], or `None` when the value has the wrong shape.
+struct ContainerVisitor<T>(PhantomData<T>);
+
+impl<'de, T: Container> Visitor<'de> for ContainerVisitor<T> {
+    type Value = Option<T>;
+
+    fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("a JSON value")
+    }
+
+    fn visit_bool<E: de::Error>(self, _: bool) -> Result<Option<T>, E> {
+        Ok(None)
+    }
+
+    fn visit_i64<E: de::Error>(self, _: i64) -> Result<Option<T>, E> {
+        Ok(None)
+    }
+
+    fn visit_u64<E: de::Error>(self, _: u64) -> Result<Option<T>, E> {
+        Ok(None)
+    }
+
+    fn visit_f64<E: de::Error>(self, _: f64) -> Result<Option<T>, E> {
+        Ok(None)
+    }
+
+    fn visit_str<E: de::Error>(self, _: &str) -> Result<Option<T>, E> {
+        Ok(None)
+    }
+
+    fn visit_unit<E: de::Error>(self) -> Result<Option<T>, E> {
+        Ok(T::null())
+    }
+
+    fn visit_seq<A: SeqAccess<'de>>(self, seq: A) -> Result<Option<T>, A::Error> {
+        T::seq(seq)
+    }
+
+    fn visit_map<A: MapAccess<'de>>(self, map: A) -> Result<Option<T>, A::Error> {
+        T::map(map)
+    }
+}
+
+/// Sets `slot` to `value`; `false` when `value` is `None` (the wrong shape) or `slot` is already
+/// set (a repeated member).
+fn fill<T>(slot: &mut Option<T>, value: Option<T>) -> bool {
+    match value {
+        Some(v) if slot.is_none() => {
+            *slot = Some(v);
+            true
+        }
+        _ => false,
+    }
+}
+
+/// Skips the rest of `seq`; `true` when nothing was left.
+fn ended<'de, A: SeqAccess<'de>>(mut seq: A) -> Result<bool, A::Error> {
+    let mut ended = true;
+    while seq.next_element::<IgnoredAny>()?.is_some() {
+        ended = false;
+    }
+    Ok(ended)
+}
+
+/// [`Image::blob`]: `null`, or an array of two non-negative integers.
+struct Blob(Option<[u64; 2]>);
+
+impl Container for Blob {
+    fn seq<'de, A: SeqAccess<'de>>(mut seq: A) -> Result<Option<Blob>, A::Error> {
+        let (mut range, mut n, mut ok) = ([0u64; 2], 0usize, true);
+        while let Some(v) = seq.next_element::<Scalar>()? {
+            match (range.get_mut(n), v.unsigned()) {
+                (Some(slot), Some(v)) => *slot = v,
+                _ => ok = false,
+            }
+            n += 1;
+        }
+        Ok((ok && n == 2).then_some(Blob(Some(range))))
+    }
+
+    fn map<'de, A: MapAccess<'de>>(mut map: A) -> Result<Option<Blob>, A::Error> {
+        while map.next_entry::<IgnoredAny, IgnoredAny>()?.is_some() {}
+        Ok(None)
+    }
+
+    fn null() -> Option<Blob> {
+        Some(Blob(None))
+    }
+}
+
+/// An [`Image`] read as its derived `Deserialize` reads it, from a JSON object or from an array of
+/// its fields in order, without keeping a value of the wrong shape: an unknown member is skipped,
+/// and a missing `mime`, a repeated member or a member of the wrong type gives `None`.
+impl Container for Image {
+    fn seq<'de, A: SeqAccess<'de>>(mut seq: A) -> Result<Option<Image>, A::Error> {
+        let mut image = Image::default();
+        let Some(mime) = seq.next_element::<Scalar>()? else { return Ok(None) };
+        let mut ok = mime.string().map(|m| image.mime = m).is_some();
+        let Some(data) = seq.next_element::<Scalar>()? else { return Ok(ok.then_some(image)) };
+        ok &= data.string().map(|d| image.data = d).is_some();
+        let Some(blob) = seq.next_element_seed(Contained::<Blob>(PhantomData))? else { return Ok(ok.then_some(image)) };
+        ok &= blob.map(|b| image.blob = b.0).is_some();
+        let Some(proxy) = seq.next_element::<Scalar>()? else { return Ok(ok.then_some(image)) };
+        ok &= proxy.bool().map(|p| image.proxy = p).is_some();
+        ok &= ended(seq)?;
+        Ok(ok.then_some(image))
+    }
+
+    fn map<'de, A: MapAccess<'de>>(mut map: A) -> Result<Option<Image>, A::Error> {
+        let (mut mime, mut data, mut blob, mut proxy) = (None, None, None, None);
+        let mut ok = true;
+        while let Some(key) = map.next_key::<String>()? {
+            ok &= match key.as_str() {
+                "mime" => fill(&mut mime, map.next_value::<Scalar>()?.string()),
+                "data" => fill(&mut data, map.next_value::<Scalar>()?.string()),
+                "blob" => fill(&mut blob, map.next_value_seed(Contained::<Blob>(PhantomData))?),
+                "proxy" => fill(&mut proxy, map.next_value::<Scalar>()?.bool()),
+                _ => {
+                    map.next_value::<IgnoredAny>()?;
+                    true
+                }
+            };
+        }
+        let (Some(mime), true) = (mime, ok) else { return Ok(None) };
+        let mut image = Image::default();
+        image.mime = mime;
+        image.data = data.unwrap_or_default();
+        image.blob = blob.and_then(|b| b.0);
+        image.proxy = proxy.unwrap_or_default();
+        Ok(Some(image))
+    }
+}
+
+impl Shaped for Image {
+    fn read<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Image>, D::Error> {
+        d.deserialize_any(ContainerVisitor(PhantomData))
+    }
+}
+
+/// Reads a [`Container`] as an element or member value.
+struct Contained<T>(PhantomData<T>);
+
+impl<'de, T: Container> de::DeserializeSeed<'de> for Contained<T> {
+    type Value = Option<T>;
+
+    fn deserialize<D: Deserializer<'de>>(self, d: D) -> Result<Option<T>, D::Error> {
+        d.deserialize_any(ContainerVisitor(PhantomData))
+    }
+}
+
 /// The format name, the version, the writer and, when `IMAGES` is true, the preview and the PDF,
 /// read without the rest of the file, so that a file of a newer version still reports them. The
 /// members are read as [`craft_vectorcraft_format::File::read`] reads them: a missing or repeated
 /// `format` or `version` is refused, and a `generator`, `preview` or `pdf` of the wrong shape
-/// reads as `None` and a repeated one as its last value.
+/// reads as `None` and a repeated one as its last value. When `IMAGES` is true, a missing or
+/// repeated `document` is refused too; its value is skipped.
 struct Stamp<const IMAGES: bool> {
     format: String,
     version: u32,
@@ -205,10 +375,12 @@ impl<'de, const IMAGES: bool> Deserialize<'de> for Stamp<IMAGES> {
 
             fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Stamp<IMAGES>, A::Error> {
                 let (mut format, mut version, mut generator, mut preview, mut pdf) = (None, None, None, None, None);
+                let mut document: Option<IgnoredAny> = None;
                 while let Some(key) = map.next_key::<String>()? {
                     match key.as_str() {
                         "format" => once(&mut map, &mut format, "format")?,
                         "version" => once(&mut map, &mut version, "version")?,
+                        "document" if IMAGES => once(&mut map, &mut document, "document")?,
                         "generator" => generator = map.next_value::<Lenient<String>>()?.0,
                         "preview" if IMAGES => preview = map.next_value::<Lenient<Image>>()?.0,
                         "pdf" if IMAGES => pdf = map.next_value::<Lenient<Image>>()?.0,
@@ -216,6 +388,9 @@ impl<'de, const IMAGES: bool> Deserialize<'de> for Stamp<IMAGES> {
                             map.next_value::<IgnoredAny>()?;
                         }
                     }
+                }
+                if IMAGES && document.is_none() {
+                    return Err(de::Error::missing_field("document"));
                 }
                 Ok(Stamp {
                     format: format.ok_or_else(|| de::Error::missing_field("format"))?,
@@ -257,9 +432,16 @@ pub(crate) fn renditions(bytes: &[u8], budget: &mut Budget) -> Result<Vec<Rendit
         .into_iter()
         .filter_map(|(kind, m, what)| Some((kind, m.filter(|m| !m.mime.is_empty())?, what)))
         .collect();
-    // Every size is checked before any data after the JSON is decompressed.
+    // Every size is checked before any data after the JSON is decompressed. A member after the
+    // JSON of a compressed file is counted against max_total as it is decompressed; any other
+    // member is counted here.
+    let compressed = matches!(tail, Tail::Stream { .. });
     for (_, m, what) in &members {
-        budget.take_entry(m.len(), what)?;
+        if compressed && m.blob.is_some() {
+            budget.check_entry(m.len(), what)?;
+        } else {
+            budget.take_entry(m.len(), what)?;
+        }
     }
     let ranges: Vec<[u64; 2]> = members.iter().filter_map(|(_, m, _)| m.blob).collect();
     let mut blobs = if ranges.is_empty() { vec![] } else { tail.ranges(&ranges, budget)? }.into_iter();
@@ -364,4 +546,74 @@ pub(crate) fn outline(bytes: &[u8], budget: &mut Budget) -> Result<Outline, Erro
         })
         .collect();
     Ok(Outline { canvas: None, pages, layers })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tests::{unread_array, unread_object};
+    use serde::de::value::{Error as ValueError, MapDeserializer, SeqDeserializer, StrDeserializer};
+
+    #[test]
+    fn an_image_of_the_wrong_shape_is_skipped_without_reading_it_whole() {
+        assert!(Lenient::<Image>::deserialize(unread_object(1000)).unwrap().0.is_none());
+        // A `mime` that is an array, in the array form and in an object, and a `blob` that is an
+        // object.
+        let array_form = SeqDeserializer::<_, ValueError>::new([unread_array(1000), unread_array(1000)].into_iter());
+        assert!(Lenient::<Image>::deserialize(array_form).unwrap().0.is_none());
+        let mime_array = MapDeserializer::<_, ValueError>::new([("mime", unread_array(1000))].into_iter());
+        assert!(Lenient::<Image>::deserialize(mime_array).unwrap().0.is_none());
+        let blob_object = MapDeserializer::<_, ValueError>::new([("blob", unread_object(1000))].into_iter());
+        assert!(Lenient::<Image>::deserialize(blob_object).unwrap().0.is_none());
+        let fine: Lenient<Image> =
+            Lenient::deserialize(MapDeserializer::<_, ValueError>::new([("mime", StrDeserializer::<ValueError>::new("image/png"))].into_iter()))
+                .unwrap();
+        assert_eq!(fine.0.map(|i| i.mime).as_deref(), Some("image/png"));
+    }
+
+    #[test]
+    fn the_preview_and_pdf_read_as_file_read_reads_them() {
+        let shapes = [
+            r#"{"mime":"image/png","data":"AAAA"}"#,
+            r#"{"mime":"image/png","data":"AAAA","extra":[1,{"a":2}]}"#,
+            r#"{"mime":"image/png","blob":[1,2],"proxy":true}"#,
+            r#"{"mime":"image/png","blob":null}"#,
+            r#"{"mime":"","data":""}"#,
+            r#"{"data":"AAAA"}"#,
+            r#"{"mime":7}"#,
+            r#"{"mime":"image/png","data":null}"#,
+            r#"{"mime":"image/png","proxy":1}"#,
+            r#"{"mime":"image/png","proxy":null}"#,
+            r#"{"mime":"image/png","blob":[1,2,3]}"#,
+            r#"{"mime":"image/png","blob":[1]}"#,
+            r#"{"mime":"image/png","blob":[-1,2]}"#,
+            r#"{"mime":"image/png","blob":[1.0,2]}"#,
+            r#"{"mime":"image/png","blob":[1,18446744073709551616]}"#,
+            r#"{"mime":"image/png","blob":{"0":1}}"#,
+            r#"{"mime":"image/png","blob":"1,2"}"#,
+            r#"{"mime":"image/png","mime":"image/jpeg"}"#,
+            r#"{"mime":"image/png","blob":[1,2],"blob":[1,2]}"#,
+            r#"["image/png"]"#,
+            r#"["image/png","AAAA"]"#,
+            r#"["image/png","",[3,4]]"#,
+            r#"["image/png","",null,true]"#,
+            r#"["image/png","",null,true,0]"#,
+            r#"["image/png",[0,0]]"#,
+            r#"[7]"#,
+            r#"[]"#,
+            r#"[[0,0,0]]"#,
+            r#""image/png""#,
+            r#"7"#,
+            r#"-7"#,
+            r#"1.5"#,
+            r#"true"#,
+            r#"null"#,
+        ];
+        for shape in shapes {
+            let json = format!(r#"{{"format":"vectorcraft","version":4,"generator":{shape},"preview":{shape},"pdf":{shape},"document":0}}"#);
+            let file = craft_vectorcraft_format::File::<IgnoredAny>::read(json.as_bytes()).unwrap();
+            let stamp: Stamp<true> = crate::parse(json.as_bytes(), &crate::Limits::default()).unwrap();
+            assert_eq!((&stamp.generator, &stamp.preview, &stamp.pdf), (&file.generator, &file.preview, &file.pdf), "{shape}");
+        }
+    }
 }

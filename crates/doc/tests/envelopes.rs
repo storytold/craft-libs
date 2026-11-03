@@ -178,6 +178,23 @@ fn a_repeated_vectorcraft_member_reads_as_its_last_value() {
     let twice = vectorcraft_json(4, r#""version":4"#);
     assert!(craft_vectorcraft_format::File::<serde_json::Value>::read(twice.as_bytes()).is_err());
     assert!(matches!(info(twice.as_bytes(), &limits()), Err(Error::Malformed(_))));
+    // A repeated version is malformed, not too new, when the second one is newer.
+    let newer = vectorcraft_json(4, r#""version":9"#);
+    assert!(craft_vectorcraft_format::File::<serde_json::Value>::read(newer.as_bytes()).is_err());
+    assert!(matches!(renditions(newer.as_bytes(), &limits()), Err(Error::Malformed(_))));
+    assert!(matches!(outline(newer.as_bytes(), &limits()), Err(Error::Malformed(_))));
+}
+
+#[test]
+fn a_vectorcraft_file_without_one_document_gives_no_renditions() {
+    let preview = vectorcraft_json(4, &format!(r#""preview":{}"#, inline("image/png", &png(1, 1, 0))));
+    let missing = preview.replacen(r#""document":"#, r#""elsewhere":"#, 1);
+    let repeated = preview.replacen(r#""images":{}"#, r#""document":{}"#, 1);
+    for file in [missing, repeated] {
+        assert!(craft_vectorcraft_format::File::<serde_json::Value>::read(file.as_bytes()).is_err());
+        assert!(matches!(renditions(file.as_bytes(), &limits()), Err(Error::Malformed(_))), "{file}");
+    }
+    assert_eq!(renditions(preview.as_bytes(), &limits()).unwrap().len(), 1);
 }
 
 #[test]

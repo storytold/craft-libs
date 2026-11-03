@@ -128,7 +128,8 @@ pub struct Limits {
     /// Most bytes of one rendition or one ZIP entry. Default 256 MiB.
     pub max_entry: u64,
     /// Most bytes one call decompresses from gzip, reads out of ZIP entries and returns as
-    /// renditions, together. Default 1 GiB.
+    /// renditions, together; a rendition decompressed from gzip is counted once, and a second
+    /// rendition of the same bytes as another copy. Default 1 GiB.
     pub max_total: u64,
     /// Deepest nesting of JSON arrays and objects, at most [`MAX_DEPTH`] (a larger value counts
     /// as [`MAX_DEPTH`]). Default [`MAX_DEPTH`]. [`renditions`] and [`outline`] also refuse a
@@ -330,11 +331,17 @@ impl<'a> Budget<'a> {
         Ok(())
     }
 
-    /// Check one rendition or ZIP entry of `n` bytes against `max_entry`, then count it.
-    pub(crate) fn take_entry(&mut self, n: u64, what: &str) -> Result<(), Error> {
+    /// Check one rendition or ZIP entry of `n` bytes against `max_entry`.
+    pub(crate) fn check_entry(&self, n: u64, what: &str) -> Result<(), Error> {
         if n > self.limits.max_entry {
             return Err(Error::LimitExceeded(format!("{what} is {n} bytes, more than max_entry ({})", self.limits.max_entry)));
         }
+        Ok(())
+    }
+
+    /// Check one rendition or ZIP entry of `n` bytes against `max_entry`, then count it.
+    pub(crate) fn take_entry(&mut self, n: u64, what: &str) -> Result<(), Error> {
+        self.check_entry(n, what)?;
         self.take(n, what)
     }
 
@@ -502,7 +509,7 @@ fn version_member(kind: Kind) -> &'static str {
 }
 
 /// The version number in the member a [`Visitor`] is given, read from the top-level JSON object;
-/// the other members are skipped, and a repeated one reads as its last value.
+/// the other members are skipped, and a repeated version member is refused.
 struct VersionIn(&'static str);
 
 impl<'de> Visitor<'de> for VersionIn {
@@ -516,6 +523,9 @@ impl<'de> Visitor<'de> for VersionIn {
         let mut version = None;
         while let Some(key) = map.next_key::<String>()? {
             if key == self.0 {
+                if version.is_some() {
+                    return Err(de::Error::duplicate_field(self.0));
+                }
                 version = Some(map.next_value()?);
             } else {
                 map.next_value::<de::IgnoredAny>()?;
@@ -544,27 +554,117 @@ pub(crate) fn parse_versioned<T: DeserializeOwned>(json: &[u8], limits: &Limits,
 }
 
 /// A member read as `None` when its value has the wrong shape, as the format crates read a
-/// file's optional members.
+/// file's optional members. The value is read as it is parsed: the elements of an array or
+/// object of the wrong shape are skipped one at a time with [`de::IgnoredAny`], and none of the
+/// value is kept.
 pub(crate) struct Lenient<T>(pub(crate) Option<T>);
 
-impl<'de, T: Deserialize<'de>> Deserialize<'de> for Lenient<T> {
+/// A type [`Lenient`] reads.
+pub(crate) trait Shaped: Sized {
+    /// The value, or `None` when it has the wrong shape.
+    fn read<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Self>, D::Error>;
+}
+
+impl<'de, T: Shaped> Deserialize<'de> for Lenient<T> {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(untagged)]
-        enum Shape<T> {
-            Value(T),
-            Other(de::IgnoredAny),
-        }
-        Ok(Lenient(match Shape::deserialize(d)? {
-            Shape::Value(v) => Some(v),
-            Shape::Other(_) => None,
-        }))
+        T::read(d).map(Lenient)
+    }
+}
+
+impl Shaped for String {
+    fn read<'de, D: Deserializer<'de>>(d: D) -> Result<Option<String>, D::Error> {
+        Ok(Scalar::deserialize(d)?.string())
     }
 }
 
 /// [`Lenient`] as a `deserialize_with` function.
-pub(crate) fn lenient<'de, D: Deserializer<'de>, T: Deserialize<'de>>(d: D) -> Result<Option<T>, D::Error> {
+pub(crate) fn lenient<'de, D: Deserializer<'de>, T: Shaped>(d: D) -> Result<Option<T>, D::Error> {
     Lenient::deserialize(d).map(|l| l.0)
+}
+
+/// One JSON value: a string, a non-negative integer or a boolean is kept, and an array or object
+/// is skipped one element at a time with [`de::IgnoredAny`].
+pub(crate) enum Scalar {
+    Str(String),
+    Unsigned(u64),
+    Bool(bool),
+    Null,
+    Other,
+}
+
+impl Scalar {
+    pub(crate) fn string(self) -> Option<String> {
+        match self {
+            Scalar::Str(s) => Some(s),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn unsigned(self) -> Option<u64> {
+        match self {
+            Scalar::Unsigned(n) => Some(n),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn bool(self) -> Option<bool> {
+        match self {
+            Scalar::Bool(b) => Some(b),
+            _ => None,
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for Scalar {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        struct ScalarVisitor;
+        impl<'de> Visitor<'de> for ScalarVisitor {
+            type Value = Scalar;
+
+            fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                f.write_str("a JSON value")
+            }
+
+            fn visit_bool<E: de::Error>(self, v: bool) -> Result<Scalar, E> {
+                Ok(Scalar::Bool(v))
+            }
+
+            fn visit_i64<E: de::Error>(self, v: i64) -> Result<Scalar, E> {
+                Ok(u64::try_from(v).map_or(Scalar::Other, Scalar::Unsigned))
+            }
+
+            fn visit_u64<E: de::Error>(self, v: u64) -> Result<Scalar, E> {
+                Ok(Scalar::Unsigned(v))
+            }
+
+            fn visit_f64<E: de::Error>(self, _: f64) -> Result<Scalar, E> {
+                Ok(Scalar::Other)
+            }
+
+            fn visit_str<E: de::Error>(self, v: &str) -> Result<Scalar, E> {
+                Ok(Scalar::Str(v.to_owned()))
+            }
+
+            fn visit_string<E: de::Error>(self, v: String) -> Result<Scalar, E> {
+                Ok(Scalar::Str(v))
+            }
+
+            fn visit_unit<E: de::Error>(self) -> Result<Scalar, E> {
+                Ok(Scalar::Null)
+            }
+
+            fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Scalar, A::Error> {
+                while seq.next_element::<de::IgnoredAny>()?.is_some() {}
+                Ok(Scalar::Other)
+            }
+
+            fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Scalar, A::Error> {
+                while map.next_entry::<de::IgnoredAny, de::IgnoredAny>()?.is_some() {}
+                Ok(Scalar::Other)
+            }
+        }
+        d.deserialize_any(ScalarVisitor)
+    }
 }
 
 pub(crate) fn too_new(kind: Kind, version: u32) -> Error {
@@ -591,5 +691,53 @@ mod tests {
         assert!(matches!(b.take_entry(4, "x"), Err(Error::LimitExceeded(_))));
         assert_eq!(b.left(), 3);
         assert!(b.check_json(11, "x").is_err() && b.check_json(10, "x").is_ok());
+    }
+
+    /// A value that can be skipped but not read: reading it whole, as a buffer of the value
+    /// would, fails.
+    #[derive(Clone)]
+    pub(crate) struct Unread;
+
+    impl<'de> Deserializer<'de> for Unread {
+        type Error = de::value::Error;
+
+        fn deserialize_any<V: Visitor<'de>>(self, _: V) -> Result<V::Value, Self::Error> {
+            Err(de::Error::custom("the value was read, not skipped"))
+        }
+
+        fn deserialize_ignored_any<V: Visitor<'de>>(self, v: V) -> Result<V::Value, Self::Error> {
+            v.visit_unit()
+        }
+
+        serde::forward_to_deserialize_any! {
+            bool i8 i16 i32 i64 i128 u8 u16 u32 u64 u128 f32 f64 char str string bytes byte_buf option unit
+            unit_struct newtype_struct seq tuple tuple_struct map struct enum identifier
+        }
+    }
+
+    impl<'de> de::IntoDeserializer<'de> for Unread {
+        type Deserializer = Unread;
+
+        fn into_deserializer(self) -> Unread {
+            self
+        }
+    }
+
+    /// An array of `n` [`Unread`] elements.
+    pub(crate) fn unread_array(n: usize) -> de::value::SeqDeserializer<std::iter::RepeatN<Unread>, de::value::Error> {
+        de::value::SeqDeserializer::new(std::iter::repeat_n(Unread, n))
+    }
+
+    /// An object whose `n` members hold [`Unread`] values.
+    pub(crate) fn unread_object(n: usize) -> de::value::MapDeserializer<'static, std::vec::IntoIter<(String, Unread)>, de::value::Error> {
+        de::value::MapDeserializer::new((0..n).map(|i| (i.to_string(), Unread)).collect::<Vec<_>>().into_iter())
+    }
+
+    #[test]
+    fn a_lenient_string_skips_an_array_or_object_without_reading_it_whole() {
+        assert!(Lenient::<String>::deserialize(unread_array(1000)).unwrap().0.is_none());
+        assert!(Lenient::<String>::deserialize(unread_object(1000)).unwrap().0.is_none());
+        let s: Lenient<String> = Lenient::deserialize(de::value::StrDeserializer::<de::value::Error>::new("VectorCraft 0.1.0")).unwrap();
+        assert_eq!(s.0.as_deref(), Some("VectorCraft 0.1.0"));
     }
 }

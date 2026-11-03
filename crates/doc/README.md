@@ -35,7 +35,9 @@ let outline = craft_doc::outline(&bytes, &limits)?;
 - `sniff(head) -> Option<Kind>` reads the first bytes. The first 64 KiB are enough for every file
   the apps write. A re-zipped `.pcraft` whose `manifest.json` entry starts after the head is
   recognized only when `head` holds the whole file. When `head` holds a whole ZIP archive, the
-  names in its central directory decide.
+  names in its central directory decide. A VectorCraft file is recognized by its top-level
+  `format` member, as `craft_vectorcraft_format::sniff` recognizes it, so a file written as a
+  JSON array, which `File::read` also reads, is not.
 - `info(bytes, &Limits) -> Result<Info, Error>`: the kind, the version the file declares, the
   writer it names, and `supported`, which is `false` when the version is newer than the crate
   reads.
@@ -74,7 +76,8 @@ A `.pcraft` bundle saved as a folder, ZIP64 archives and encrypted entries are n
 - `max_entry` (256 MiB): one rendition or one ZIP entry. The size a file states is checked before
   any of it is copied or inflated.
 - `max_total` (1 GiB): every byte one call decompresses from gzip, reads out of ZIP entries or
-  returns as a rendition, together.
+  returns as a rendition, together. A rendition decompressed from gzip is counted once, and a
+  second rendition of the same bytes is counted as another copy.
 - `max_depth` (400, also the largest value it takes, `MAX_DEPTH`): the nesting of JSON arrays and
   objects, checked before parsing. PhotoCraft nests up to 100 groups of layers, three levels each.
   `renditions` and `outline` refuse a PhotoCraft manifest nested deeper than 367 levels
@@ -108,13 +111,16 @@ limits.max_entry = 32 << 20;
 - `tests/hostile.rs`: every truncation of each sample, seeded mutations, proptest on arbitrary
   bytes, and inputs that pass each limit: a gzip bomb, a DEFLATE entry larger than its stated
   size, members longer than `max_entry`, JSON nested past `max_depth`, ZIP64, encryption, other
-  compression methods and CRC mismatches.
+  compression methods and CRC mismatches. An array of a million elements in place of a
+  `generator` or a preview is skipped.
 - `tests/envelopes.rs`: files whose envelope is written with the format crates' types read
   through each call, and envelopes those crates refuse (a manifest without `generator`, a
   manifest that is a JSON array, a preview that names another entry, a `format` member inside
   another member) are refused. A preview or PDF member without `mime` gives no rendition, and a
   VectorCraft `generator`, `preview` or `pdf` reads as `File::read` reads it: as `None` when it
-  has the wrong shape, and as its last value when it is repeated.
+  has the wrong shape, and as its last value when it is repeated. A value of the wrong shape is
+  skipped as it is parsed, and none of it is kept. A repeated `version`, and in `renditions` a
+  missing or repeated `document`, are refused, as `File::read` refuses them.
 
 `.github/workflows/doc.yml` runs fmt, clippy and the tests on Linux and Windows, and a
 `wasm32-unknown-unknown` check.

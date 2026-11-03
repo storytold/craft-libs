@@ -245,6 +245,47 @@ fn only_the_json_of_a_compressed_file_is_counted_when_no_member_follows_it() {
 }
 
 #[test]
+fn a_compressed_member_is_counted_against_max_total_once() {
+    // A 40 KiB PDF after the JSON, with max_total 64 KiB: it reads compressed as it does
+    // uncompressed.
+    let pdf: Vec<u8> = (0..40u32 << 10).map(|i| (i % 251) as u8).collect();
+    let mut file = vectorcraft_json(4, &format!(r#""pdf":{}"#, blob("application/pdf", 0, pdf.len()))).into_bytes();
+    file.extend(BLOB_MAGIC);
+    file.extend(&pdf);
+    let mut limits = small();
+    limits.max_total = 64 << 10;
+    for bytes in [file.clone(), gzip(&file)] {
+        assert_eq!(renditions(&bytes, &limits).unwrap()[0].bytes, pdf);
+    }
+    // Without room for the JSON and the PDF, the compressed file is refused.
+    limits.max_total = pdf.len() as u64;
+    assert!(limit_exceeded(renditions(&gzip(&file), &limits)));
+    // A preview naming the same bytes is a second copy, counted too.
+    let mut twice = vectorcraft_json(4, &format!(r#""preview":{0},"pdf":{0}"#, blob("image/png", 0, pdf.len()))).into_bytes();
+    twice.extend(BLOB_MAGIC);
+    twice.extend(&pdf);
+    for bytes in [twice.clone(), gzip(&twice)] {
+        limits.max_total = 64 << 10;
+        assert!(limit_exceeded(renditions(&bytes, &limits)));
+        limits.max_total = 128 << 10;
+        assert_eq!(renditions(&bytes, &limits).unwrap().len(), 2);
+    }
+}
+
+#[test]
+fn a_large_array_in_place_of_the_generator_or_a_preview_is_skipped() {
+    // A million elements, where a buffered read would keep each one.
+    let zeros = format!("[{}0]", "0,".repeat(1 << 20));
+    let members = format!(r#""generator":{zeros},"preview":{{"mime":{zeros}}},"pdf":[{zeros}]"#);
+    let vc = vectorcraft_json(4, &members).replacen(r#""generator":"VectorCraft 0.1.0","#, "", 1);
+    assert_eq!(info(vc.as_bytes(), &Limits::default()).unwrap().generator, None);
+    assert_eq!(renditions(vc.as_bytes(), &Limits::default()).unwrap(), vec![]);
+    let manifest = pcraft_manifest(1, "[]", "").replacen(r#""generator":"photocraft-format 0.1.0""#, &format!(r#""generator":{zeros}"#), 1);
+    let pc = zip(&[store("manifest.json", manifest.as_bytes())]);
+    assert_eq!(info(&pc, &Limits::default()).unwrap().generator, None);
+}
+
+#[test]
 fn a_zip_entry_past_max_entry_is_refused_before_it_is_inflated() {
     let big = vec![0u8; 1 << 20];
     let pc = zip(&[
