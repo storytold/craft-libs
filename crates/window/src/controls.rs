@@ -116,6 +116,9 @@ pub fn buttons(ui: &mut egui::Ui, buttons: &[Button], look: &Look, labels: &Labe
     if fullscreen {
         return;
     }
+    // The buttons are [`GAP`] apart, whatever the caller's item spacing; restored afterwards.
+    let spacing = ui.spacing().item_spacing.x;
+    ui.spacing_mut().item_spacing.x = 0.0;
     for (n, &button) in buttons.iter().enumerate() {
         if n > 0 {
             ui.add_space(GAP);
@@ -136,6 +139,7 @@ pub fn buttons(ui: &mut egui::Ui, buttons: &[Button], look: &Look, labels: &Labe
             ui.ctx().send_viewport_cmd(command(button, maximized));
         }
     }
+    ui.spacing_mut().item_spacing.x = spacing;
 }
 
 /// What a click on `button` asks of the window.
@@ -370,9 +374,12 @@ impl egui::Plugin for DesktopGrab {
     }
 }
 
-/// Register [`DesktopGrab`] with `ctx`. Registering it again does nothing.
+/// Register [`DesktopGrab`] with `ctx`. Once it is registered this only looks it up, so an app
+/// may call it every frame.
 pub fn install(ctx: &egui::Context) {
-    ctx.add_plugin(DesktopGrab);
+    if ctx.plugin_opt::<DesktopGrab>().is_none() {
+        ctx.add_plugin(DesktopGrab);
+    }
 }
 
 #[cfg(test)]
@@ -405,6 +412,24 @@ mod tests {
         assert_eq!(super::command(Button::Maximize, false), ViewportCommand::Maximized(true));
         assert_eq!(super::command(Button::Maximize, true), ViewportCommand::Maximized(false));
         assert_eq!(super::command(Button::Close, false), ViewportCommand::Close);
+    }
+
+    #[test]
+    fn the_buttons_are_a_gap_apart_whatever_the_item_spacing() {
+        let ctx = egui::Context::default();
+        let mut placed = Vec::new();
+        ctx.run_ui(RawInput::default(), |ui| {
+            ui.spacing_mut().item_spacing.x = 20.0;
+            ui.horizontal(|ui| {
+                let before = ui.cursor().min.x;
+                super::buttons(ui, &Layout::default().right, &super::Look::from_visuals(ui.visuals()), &super::Labels::default());
+                placed.push(ui.cursor().min.x - before);
+                placed.push(ui.spacing().item_spacing.x);
+            });
+        })
+        .textures_delta
+        .clear();
+        assert_eq!(placed, [3.0 * BUTTON + 2.0 * GAP, 20.0], "three buttons two gaps wide, and the caller's spacing back");
     }
 
     #[test]
