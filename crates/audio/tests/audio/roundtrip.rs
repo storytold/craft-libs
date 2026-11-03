@@ -73,7 +73,7 @@ fn wav_and_aiff_roundtrip_all_depths_and_layouts() {
 #[test]
 fn flac_roundtrip_is_lossless_vs_wav() {
     for depth in [BitDepth::Int16, BitDepth::Int24, BitDepth::Int32] {
-        for channels in [1, 2, 6] {
+        for channels in [1, 2, 3, 4, 5, 6, 7, 8] {
             // Spans several blocks plus a short final block.
             let src = sine(44_100, channels, 4096 * 2 + 17);
             let wav = encode(&src, &EncodeOptions::new(EncodeFormat::Wav).with_bit_depth(depth).with_dither(false)).unwrap();

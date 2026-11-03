@@ -175,7 +175,7 @@ impl<W: Write + Seek> FileEncoder<W> {
     }
 
     /// Fails, without writing anything, when `frames` more frames would not fit the format (an
-    /// AIFF holds 4 GiB, a FLAC 2^36 frames).
+    /// AIFF holds 4 GiB, a FLAC 2^36 - 1 frames).
     pub fn check_room(&self, frames: u64) -> Result<()> {
         match &self.writer {
             #[cfg(feature = "pcm-encode")]

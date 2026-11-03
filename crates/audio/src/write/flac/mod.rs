@@ -75,7 +75,7 @@ impl<W: Write + Seek> Writer<W> {
         })
     }
 
-    /// The frame count after `frames` more, or an error past what FLAC can count (2^36 frames).
+    /// The frame count after `frames` more, or an error past what FLAC can count (2^36 - 1 frames).
     pub(crate) fn check_room(&self, frames: u64) -> Result<u64> {
         let total = self.frames.saturating_add(frames);
         if total >= 1u64 << 36 {
