@@ -566,6 +566,16 @@ mod tests {
         }
     }
 
+    /// English never elides: a missing apostrophe ranks after the one-letter fixes (`neer` → `near`
+    /// before `ne'er`), which only [`TUNING`]'s `elision: false` gives.
+    #[test]
+    fn english_ranks_a_missing_apostrophe_after_one_letter_fixes() {
+        let d = AffixDict::from_hunspell("SET UTF-8\nTRY aenr\nWORDCHARS '\n", "3\nne'er\ner\nnear\n", &[]).unwrap();
+        let s = crate::affix_suggest::suggest_in(&d, "neer", 4, &TUNING);
+        assert_eq!(s.first().map(String::as_str), Some("near"), "{s:?}");
+        assert!(s.contains(&"ne'er".to_string()), "{s:?}");
+    }
+
     #[test]
     fn built_in_list_is_the_whole_moby_list() {
         let d = words();

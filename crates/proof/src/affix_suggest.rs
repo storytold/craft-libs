@@ -7,8 +7,9 @@
 //!    writer typed ranks after the known confusions;
 //! 3. the REP table of common confusions (`żeka` → `rzeka`);
 //! 4. a missing space (`napewno` → `na pewno`), or a missing apostrophe where the dictionary
-//!    knows the elided form (`jadore` → `j'adore`, `lacqua` → `l'acqua`); an elision ranks just before
-//!    the missing space, so after the accent, MAP and REP fixes above;
+//!    knows the elided form (`jadore` → `j'adore`, `lacqua` → `l'acqua`); an elision ranks just
+//!    before the missing space, so after accent-adding, MAP and REP fixes (tying with dropping a
+//!    typed accent);
 //! 5. keyboard neighbours from the KEY rows, then one typo: a letter left out, added, swapped with
 //!    the next or mistyped (TRY letters);
 //! 6. when that finds fewer than asked for: the stems that start like the word (MAP relatives
@@ -82,7 +83,7 @@ pub(crate) struct Tuning {
     /// when the word itself is capitalized, and never as half of a missing space (`Che Que`).
     pub strict_case: bool,
     /// Offer a missing apostrophe before a suggestible word of 2+ letters as an elision (French
-    /// `j'adore`, Italian `l'acqua`), ranked at [`COST_ELISION`]: after the accent, MAP and REP fixes,
+    /// `j'adore`, Italian `l'acqua`), ranked at [`COST_ELISION`]: after accent-adding, MAP and REP fixes (a tie with dropping a typed accent),
     /// before the missing space (`j adore`) and the typos. On by default ([`Tuning::DEFAULT`]) because
     /// the pack languages share it, so it does not mean "this language elides": the dictionary check
     /// gates it, and a dictionary without such forms never offers one. A language that never elides
@@ -498,14 +499,14 @@ fn add_confusions(col: &mut Collector, input: &str, t: &Tuning) {
 /// apostrophe: the dictionary's own check says whether `a'b` is right, so no language list is
 /// needed and a dictionary without such forms never offers one. A true elision, whose second part
 /// is a word itself (French `j'adore`, Italian and Catalan `l'acqua`, `dell'anno`), ranks before
-/// the space (`j adore`) and every typo while [`Tuning::elision`] is on; any other
-/// form after the one-letter fixes ([`COST_APOSTROPHE`]). At most two lookups per split, and only after a short first part
-/// ([`MAX_ELIDED`]).
+/// the space (`j adore`) and every typo while [`Tuning::elision`] is on; any other form ranks
+/// after the one-letter fixes ([`COST_APOSTROPHE`]). At most two lookups per split, and only after
+/// a short first part ([`MAX_ELIDED`]).
 fn add_splits(col: &mut Collector, input: &str, t: &Tuning) {
-    let elides = !input.contains(['\'', '’']);
+    let no_apostrophe = !input.contains(['\'', '’']);
     for (n, (i, _)) in input.char_indices().enumerate().skip(1) {
         let (Some(a), Some(b)) = (input.get(..i), input.get(i..)) else { continue };
-        if elides && n <= MAX_ELIDED {
+        if no_apostrophe && n <= MAX_ELIDED {
             let word = t.elision && b.chars().nth(1).is_some() && col.d.contains_suggestible_with(b, false);
             col.offer(&format!("{a}'{b}"), if word { COST_ELISION } else { COST_APOSTROPHE });
         }
