@@ -1340,7 +1340,8 @@ mod tests {
         }
         // Text in a language without proofing is never checked with English.
         assert!(check_spelling_in("hous teh zxqv", ProofLang::Other).is_empty());
-        assert!(check_text("hous teh", &[(0..8, ProofLang::De)]).is_empty());
+        // `Other` has no dictionary on any machine (German may: a system `de_DE` Hunspell).
+        assert!(check_text("hous teh", &[(0..8, ProofLang::Other)]).is_empty());
         assert_eq!(english_source(ProofLang::Pl), None);
         drop_english_files(&dir, english);
         assert_ne!(english_source(ProofLang::En), Some(EnglishSource::Hunspell(dir.join("en_US.dic"))));

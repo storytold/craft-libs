@@ -926,6 +926,8 @@ impl SuggestSteps {
     }
 }
 
+// Dropping restores the outer budget as it was: the steps a nested call took are not charged to
+// it. Harmless while suggestion calls don't nest; a nested call would have to charge the outer one.
 impl Drop for SuggestSteps {
     fn drop(&mut self) {
         SUGGEST_STEPS.with(|s| s.set(self.0));
