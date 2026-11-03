@@ -193,7 +193,8 @@ const MAX_SAVED_STATE_BYTES: usize = 64 << 20;
 
 /// Roughly what a saved copy of `state` holds.
 /// PdfCraft patch (51): the sums saturate, so a huge dash array or clip list counts as over the
-/// bound rather than wrapping on a 32-bit target.
+/// bound rather than wrapping on a 32-bit target. The pending text-clip outlines (text render
+/// modes 4–7) are copied with the state too, so they count.
 fn state_bytes(state: &State<'_>) -> usize {
     size_of::<State<'_>>()
         .saturating_add(
@@ -205,6 +206,7 @@ fn state_bytes(state: &State<'_>) -> usize {
                 .saturating_mul(size_of::<f32>()),
         )
         .saturating_add(state.clips.len().saturating_mul(size_of::<ClipType>()))
+        .saturating_add(state.text_state.clip_paths.elements().len().saturating_mul(size_of::<PathEl>()))
 }
 
 impl<'a> Context<'a> {
@@ -688,6 +690,22 @@ mod saved_state_tests {
         }
         assert_eq!(ctx.states.len(), 1);
         assert_eq!(ctx.saved_bytes, 0);
+    }
+
+    #[test]
+    fn pending_text_clip_outlines_count_toward_the_saved_bytes() {
+        let pdf = pdf();
+        let cache = InterpreterCache::new();
+        let mut ctx = Context::new(Affine::IDENTITY, Rect::new(0.0, 0.0, 100.0, 100.0), &cache, pdf.xref(), InterpreterSettings::default());
+        let empty = state_bytes(ctx.get());
+        for i in 0..100_000 {
+            ctx.get_mut().text_state.clip_paths.line_to((f64::from(i), 1.0));
+        }
+        assert!(state_bytes(ctx.get()) >= empty + 100_000 * size_of::<PathEl>());
+        for _ in 0..20_000 {
+            ctx.save_state();
+        }
+        assert!(ctx.saved_bytes <= MAX_SAVED_STATE_BYTES);
     }
 
     #[test]
