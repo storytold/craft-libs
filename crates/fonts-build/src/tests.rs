@@ -438,6 +438,11 @@ fn cmap_reads_a_shared_subtable_once() {
     let subtables: Vec<&[(u32, u32)]> = one.iter().map(|g| &g[..]).collect();
     let font = shared_cmap_font(&(0..20).collect::<Vec<_>>(), &subtables);
     assert_eq!(Cmap::read(&font, 0).unwrap().ranges(), [(0x4E00, 0x4E0F)]);
+
+    // Duplicate records count once toward that cap: a distinct subtable after 16 records that
+    // share one is still read.
+    let font = shared_cmap_font(&[vec![0; 16], vec![1]].concat(), &[&[(0x4E00, 0x4E00)], &[(0x5000, 0x5000)]]);
+    assert_eq!(Cmap::read(&font, 0).unwrap().ranges(), [(0x4E00, 0x4E00), (0x5000, 0x5000)]);
 }
 
 /// A craft-fonts checkout in `scratch` with these `(family, scripts, role, font)` faces, all
