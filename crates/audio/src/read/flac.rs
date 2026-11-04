@@ -124,15 +124,16 @@ fn comment_mask(key: &[u8], value: &[u8]) -> Option<u32> {
     u32::from_str_radix(std::str::from_utf8(hex).ok()?, 16).ok()
 }
 
-/// The channel mask comment of each FLAC stream that has one in the Ogg file `b`, by serial.
-pub(crate) fn ogg_channel_masks(b: &[u8]) -> Vec<(u32, u32)> {
+/// The audio streams of the Ogg file `b` in file order, as `tracks` lists them: each one's serial
+/// and, for FLAC, its channel mask comment. Empty when the demuxer cannot read the file.
+pub(crate) fn ogg_audio_streams(b: &[u8]) -> Vec<(u32, Option<u32>)> {
     let Ok(file) = ogg::open(b) else { return Vec::new() };
-    let comments = |s: &ogg::Stream| {
+    let mask = |s: &ogg::Stream| {
         // After the first packet, each header packet is a metadata block with its 4-byte header.
         let block = s.headers.iter().skip(1).find(|h| h.first().is_some_and(|t| t & 0x7f == 4))?;
         comments_mask(block.get(4..)?)
     };
-    file.streams.iter().filter(|s| s.codec == ogg::Codec::Flac).filter_map(|s| Some((s.serial, comments(s)?))).collect()
+    file.streams.iter().filter(|s| s.codec.codec_id().is_audio()).map(|s| (s.serial, mask(s).filter(|_| s.codec == ogg::Codec::Flac))).collect()
 }
 
 /// The channel mask in a Vorbis comment block's body.

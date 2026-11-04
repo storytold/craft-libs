@@ -266,31 +266,57 @@ fn ogg_flac_reads_the_mask_comment() {
     }
 }
 
-/// Each track of an Ogg file has its own mask comment. The tracks are told apart by their audio,
-/// because the track order follows the serial numbers ffmpeg picks at random.
+/// Two streams in an Ogg file written by ffmpeg, which picks their serial numbers at random. The
+/// tests below write each file a few times, so that both serial orders occur.
 #[cfg(feature = "symphonia")]
-#[test]
-fn ogg_flac_tracks_read_their_own_mask_comments() {
-    use crate::{ChannelLayout, DecodeOptions};
-    let Some(ff) = ffmpeg() else { return };
-    let path = common::fixture_subdir("flac").join("ogg-two-masks.oga");
-    let status = Command::new(&ff)
-        .args(["-v", "error", "-y", "-f", "lavfi", "-i", "aevalsrc=0.5|0.5|0.5|0.5:c=4c:d=0.1:s=48000"])
-        .args(["-f", "lavfi", "-i", "aevalsrc=0.25|0.25|0.25|0.25:c=4c:d=0.1:s=48000"])
-        .args(["-map", "0", "-map", "1", "-c:a", "flac", "-f", "ogg"])
-        .args(["-metadata:s:a:0", "WAVEFORMATEXTENSIBLE_CHANNEL_MASK=0x0107", "-metadata:s:a:1", "WAVEFORMATEXTENSIBLE_CHANNEL_MASK=0x000F"])
+fn two_ogg_streams(ff: &Path, name: &str, args: &[&str]) -> Option<Vec<u8>> {
+    let path = common::fixture_subdir("flac").join(format!("{name}.ogg"));
+    let status = Command::new(ff)
+        .args(["-v", "error", "-y", "-f", "lavfi", "-i", "aevalsrc=0|0|0|0:c=4c:d=0.1:s=48000"])
+        .args(["-f", "lavfi", "-i", "aevalsrc=0|0|0|0:c=4c:d=0.1:s=44100"])
+        .args(["-map", "0", "-map", "1"])
+        .args(args)
+        .args(["-f", "ogg"])
         .arg(&path)
         .status()
         .unwrap();
-    assert!(status.success());
-    let bytes = std::fs::read(&path).unwrap();
-    for track in [0, 1] {
-        let opts = DecodeOptions::default().with_track(track);
-        let (info, buf) = crate::decode_with(&bytes, None, &opts).unwrap();
-        let mask = if buf.channels[0][0] > 0.4 { 0x107 } else { 0xF };
-        let expected = ChannelLayout::from_mask_and_channels(mask, 4);
-        assert_eq!(info.layout, expected, "decode track {track}");
-        assert_eq!(crate::probe_with(&bytes, None, &opts).unwrap().layout, expected, "probe track {track}");
+    status.success().then(|| std::fs::read(&path).unwrap())
+}
+
+/// A track index means the same stream in `tracks`, `probe` and `decode`: the file's order. Each
+/// track has its own mask comment, or else the layout decoders assume for the count.
+#[cfg(feature = "symphonia")]
+#[test]
+fn ogg_flac_tracks_are_in_file_order_with_their_own_mask_comments() {
+    use crate::{ChannelLayout, DecodeOptions};
+    let Some(ff) = ffmpeg() else { return };
+    let args = ["-c:a", "flac", "-metadata:s:a:0", "WAVEFORMATEXTENSIBLE_CHANNEL_MASK=0x0107"];
+    for _ in 0..8 {
+        let bytes = two_ogg_streams(&ff, "ogg-one-mask", &args).unwrap();
+        let rates: Vec<_> = crate::tracks(&bytes, None).unwrap().iter().map(|t| t.sample_rate).collect();
+        assert_eq!(rates, [Some(48_000), Some(44_100)]);
+        for (track, rate, layout) in [(0, 48_000, ChannelLayout::from_mask(0x107)), (1, 44_100, ChannelLayout::default_for(4))] {
+            let opts = DecodeOptions::default().with_track(track);
+            let info = crate::probe_with(&bytes, None, &opts).unwrap();
+            assert_eq!((info.sample_rate, info.layout), (rate, layout), "probe track {track}");
+            let info = crate::decode_with(&bytes, None, &opts).unwrap().0;
+            assert_eq!((info.sample_rate, info.layout), (rate, layout), "decode track {track}");
+        }
+        assert_eq!(crate::decode(&bytes, None).unwrap().0.sample_rate, 48_000, "the first track");
+    }
+}
+
+/// A FLAC stream before a stream symphonia cannot decode is still the first track.
+#[cfg(feature = "symphonia")]
+#[test]
+fn ogg_flac_before_opus_is_the_first_track() {
+    use crate::CodecId;
+    let Some(ff) = ffmpeg() else { return };
+    let args = ["-c:a:0", "flac", "-c:a:1", "libopus", "-ac:a:1", "2"];
+    for _ in 0..8 {
+        let Some(bytes) = two_ogg_streams(&ff, "ogg-flac-opus", &args) else { return };
+        assert_eq!(crate::tracks(&bytes, None).unwrap()[0].codec, CodecId::Flac);
+        assert_eq!(crate::decode(&bytes, None).unwrap().0.codec, CodecId::Flac);
     }
 }
 

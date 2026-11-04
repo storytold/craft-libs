@@ -81,20 +81,21 @@ fn guarded<T>(f: impl FnOnce() -> Result<T>) -> Result<T> {
     catch_unwind(AssertUnwindSafe(f)).unwrap_or_else(|_| Err(AudioError::Malformed("decoder failed on malformed input".into())))
 }
 
-/// What symphonia's FLAC and Ogg readers leave out about a file's layout.
-enum FlacLayouts {
+/// What [`open`] read from the file for what symphonia's FLAC and Ogg readers leave out.
+enum Preread {
     /// Not a FLAC file or an Ogg file.
-    Unknown,
+    Nothing,
     /// A FLAC file's layout.
-    File(ChannelLayout),
-    /// The channel masks of an Ogg file's FLAC streams, by serial (symphonia's track ID). The tags
-    /// its reader collects do not say which track they are from.
-    Ogg(Vec<(u32, u32)>),
+    Flac(ChannelLayout),
+    /// An Ogg file's audio streams in file order: each one's serial, which is symphonia's track ID,
+    /// and its FLAC channel mask. Symphonia orders the tracks by serial, and the tags its reader
+    /// collects do not say which track they are from.
+    Ogg(Vec<(u32, Option<u32>)>),
 }
 
 /// What [`open`] found: a reader, or a stream that holds no audio frames and has no reader.
 enum Opened {
-    Reader(Box<dyn FormatReader>, FlacLayouts),
+    Reader(Box<dyn FormatReader>, Preread),
     Empty(AudioInfo),
 }
 
@@ -375,7 +376,7 @@ fn open(bytes: Cow<'_, [u8]>, detected: Option<Container>) -> Result<Opened> {
         checked => (checked, None),
     };
     let body = bytes.get(start..).unwrap_or_default();
-    let ogg_masks = craft_media::ogg::sniff(body).then(|| super::flac::ogg_channel_masks(body));
+    let ogg_streams = craft_media::ogg::sniff(body).then(|| super::flac::ogg_audio_streams(body));
     // symphonia reads from an owned stream: a borrowed buffer is copied once, a buffer read from
     // a shared source is moved in.
     let mut mss = MediaSourceStream::new(Box::new(Cursor::new(bytes.into_owned())), MediaSourceStreamOptions::default());
@@ -397,12 +398,12 @@ fn open(bytes: Cow<'_, [u8]>, detected: Option<Container>) -> Result<Opened> {
         }
         _ => {}
     }
-    let layouts = match (flac_layout.filter(|_| probed == "flac"), ogg_masks) {
-        (Some(layout), _) => FlacLayouts::File(layout),
-        (None, Some(masks)) => FlacLayouts::Ogg(masks),
-        _ => FlacLayouts::Unknown,
+    let preread = match (flac_layout.filter(|_| probed == "flac"), ogg_streams.filter(|_| probed == "ogg")) {
+        (Some(layout), _) => Preread::Flac(layout),
+        (None, Some(streams)) => Preread::Ogg(streams),
+        _ => Preread::Nothing,
     };
-    Ok(Opened::Reader(reader, layouts))
+    Ok(Opened::Reader(reader, preread))
 }
 
 /// The codec symphonia reports, as a [`CodecId`].
@@ -509,10 +510,22 @@ fn audio_tracks(reader: &dyn FormatReader) -> impl Iterator<Item = &Track> {
     reader.tracks().iter().filter(|t| audio_params(t).is_some_and(|p| p.codec != CODEC_ID_NULL_AUDIO))
 }
 
-/// The `n`-th audio track (the first when `None`), with the stream information the UI shows.
-fn info_of(reader: &dyn FormatReader, detected: Option<Container>, n: Option<usize>) -> Result<(u32, AudioInfo)> {
+/// The `n`-th audio track (the first when `None`), counting an Ogg file's `streams` in file order
+/// when they are known. With no `n`, the first stream symphonia has a track for: it has none for
+/// some of the codecs `tracks` lists.
+fn pick_track<'a>(reader: &'a dyn FormatReader, streams: &[(u32, Option<u32>)], n: Option<usize>) -> Option<&'a Track> {
+    let with_serial = |serial: u32| audio_tracks(reader).find(|t| t.id == serial);
+    match n {
+        _ if streams.is_empty() => audio_tracks(reader).nth(n.unwrap_or(0)),
+        Some(n) => with_serial(streams.get(n)?.0),
+        None => streams.iter().find_map(|s| with_serial(s.0)),
+    }
+}
+
+/// The `n`-th audio track (see [`pick_track`]), with the stream information the UI shows.
+fn info_of(reader: &dyn FormatReader, detected: Option<Container>, ogg_streams: &[(u32, Option<u32>)], n: Option<usize>) -> Result<(u32, AudioInfo)> {
     let container = container_of(reader.format_info().short_name, detected);
-    let track = audio_tracks(reader).nth(n.unwrap_or(0)).ok_or_else(|| AudioError::Unsupported("no decodable audio track".into()))?;
+    let track = pick_track(reader, ogg_streams, n).ok_or_else(|| AudioError::Unsupported("no decodable audio track".into()))?;
     let p = audio_params(track).ok_or_else(|| AudioError::Unsupported("no decodable audio track".into()))?;
     let sample_rate = p.sample_rate.filter(|&r| r > 0).ok_or_else(|| AudioError::Malformed("unknown sample rate".into()))?;
     let layout = layout_of(p.channels.as_ref());
@@ -564,8 +577,8 @@ impl Symph {
     /// Open audio track `track` (the first when `None`) of the file in `bytes`.
     pub(crate) fn open(bytes: Cow<'_, [u8]>, detected: Option<Container>, track: Option<usize>) -> Result<Symph> {
         guarded(move || {
-            let (reader, flac_layouts) = match open(bytes, detected)? {
-                Opened::Reader(reader, layouts) => (reader, layouts),
+            let (reader, preread) = match open(bytes, detected)? {
+                Opened::Reader(reader, preread) => (reader, preread),
                 Opened::Empty(info) => {
                     // a stream with no audio still has one track, as WAV and AIFF do
                     if let Some(n) = track.filter(|&n| n > 0) {
@@ -587,11 +600,12 @@ impl Symph {
                     });
                 }
             };
-            let (track_id, mut info) = info_of(reader.as_ref(), detected, track)?;
-            match flac_layouts {
-                FlacLayouts::File(layout) if layout.channels() == info.channels => info.layout = layout,
-                FlacLayouts::Ogg(masks) if info.codec == CodecId::Flac => {
-                    let mask = masks.iter().find(|(serial, _)| *serial == track_id).map(|&(_, mask)| mask);
+            let ogg_streams = if let Preread::Ogg(streams) = &preread { streams.as_slice() } else { &[] };
+            let (track_id, mut info) = info_of(reader.as_ref(), detected, ogg_streams, track)?;
+            match &preread {
+                Preread::Flac(layout) if layout.channels() == info.channels => info.layout = *layout,
+                Preread::Ogg(streams) if info.codec == CodecId::Flac => {
+                    let mask = streams.iter().find(|(serial, _)| *serial == track_id).and_then(|&(_, mask)| mask);
                     info.layout = super::flac::layout_from(mask, info.channels);
                 }
                 _ => {}
