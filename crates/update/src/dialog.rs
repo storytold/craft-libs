@@ -1044,6 +1044,25 @@ pub(crate) mod tests {
         }
     }
 
+    /// The second click of a double click lands where Save and Update was: it must not dismiss.
+    #[test]
+    fn a_second_click_during_the_save_leaves_the_prompt_open() {
+        let ctx = dark_context();
+        let mut prompt = StartupPrompt { offer_save: true, ..prompt_for(true) };
+        frame(&ctx, &mut prompt, Vec::new());
+        let (_, output) = frame(&ctx, &mut prompt, Vec::new());
+        // Right of the label's centre, where a right-aligned Dismiss would sit.
+        let at = text_pos(&output, "SAVE AND UPDATE").expect("SAVE AND UPDATE is painted") + egui::vec2(40.0, 0.0);
+        prompt.is_saving = true;
+        let button = |pressed| Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+        frame(&ctx, &mut prompt, Vec::new());
+        frame(&ctx, &mut prompt, vec![Event::PointerMoved(at)]);
+        frame(&ctx, &mut prompt, vec![button(true)]);
+        let (response, _) = frame(&ctx, &mut prompt, vec![button(false)]);
+        assert_eq!(response, StartupPromptResponse::Pending);
+        assert!(prompt.open);
+    }
+
     #[test]
     fn installing_prompt_paints_status_and_dismiss() {
         let ctx = dark_context();
