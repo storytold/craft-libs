@@ -9,13 +9,7 @@ use craft_crdt::value::Value;
 use std::sync::Arc;
 
 fn create(id: u64, parent: u64, pos: &str) -> Change {
-    Change::Create {
-        id: NodeId(id),
-        kind: Arc::from("rect"),
-        parent: NodeId(parent),
-        position: pos.into(),
-        props: vec![],
-    }
+    Change::Create { id: NodeId(id), kind: Arc::from("rect"), parent: NodeId(parent), position: pos.into(), props: vec![] }
 }
 
 fn apply(r: &mut Replica, changes: Vec<Change>) {
@@ -27,11 +21,7 @@ fn a_branch_only_move_lands() {
     let mut base = Replica::new();
     apply(&mut base, vec![create(1, 0, "a0"), create(2, 0, "a1")]);
     let main = base.clone();
-    let branch_changes = vec![Change::Set {
-        id: NodeId(2),
-        prop: Arc::from("parent"),
-        value: Value::Json(serde_json::Value::Number(1.into())),
-    }];
+    let branch_changes = vec![Change::Set { id: NodeId(2), prop: Arc::from("parent"), value: Value::Json(serde_json::Value::Number(1.into())) }];
     let plan = three_way(&base, &branch_changes, &main, 0);
     assert!(plan.conflicts.is_empty(), "main never moved it: {plan:?}");
     assert!(
@@ -46,11 +36,8 @@ fn a_branch_only_reorder_lands() {
     let mut base = Replica::new();
     apply(&mut base, vec![create(1, 0, "a0"), create(2, 0, "a1")]);
     let main = base.clone();
-    let branch_changes = vec![Change::Set {
-        id: NodeId(2),
-        prop: Arc::from("position"),
-        value: Value::Json(serde_json::Value::String("a0V".into())),
-    }];
+    let branch_changes =
+        vec![Change::Set { id: NodeId(2), prop: Arc::from("position"), value: Value::Json(serde_json::Value::String("a0V".into())) }];
     let plan = three_way(&base, &branch_changes, &main, 0);
     assert!(plan.conflicts.is_empty());
     assert!(plan.auto.iter().any(|c| matches!(c, Change::Set { id: NodeId(2), prop, .. } if prop.as_ref() == "position")));
@@ -80,19 +67,8 @@ fn both_sides_moving_to_different_parents_conflict() {
     let mut base = Replica::new();
     apply(&mut base, vec![create(1, 0, "a0"), create(2, 0, "a1"), create(3, 0, "a2")]);
     let mut main = base.clone();
-    apply(
-        &mut main,
-        vec![Change::Set {
-            id: NodeId(3),
-            prop: Arc::from("parent"),
-            value: Value::Json(serde_json::Value::Number(1.into())),
-        }],
-    );
-    let branch_changes = vec![Change::Set {
-        id: NodeId(3),
-        prop: Arc::from("parent"),
-        value: Value::Json(serde_json::Value::Number(2.into())),
-    }];
+    apply(&mut main, vec![Change::Set { id: NodeId(3), prop: Arc::from("parent"), value: Value::Json(serde_json::Value::Number(1.into())) }]);
+    let branch_changes = vec![Change::Set { id: NodeId(3), prop: Arc::from("parent"), value: Value::Json(serde_json::Value::Number(2.into())) }];
     let plan = three_way(&base, &branch_changes, &main, 0);
     assert!(plan.conflicts.iter().any(|c| c.prop.as_deref() == Some("parent")));
 }
@@ -108,14 +84,8 @@ fn a_move_into_a_new_group_creates_the_group_first() {
     let mut base = Replica::new();
     apply(&mut base, vec![create(2, 0, "a0")]);
     let main = base.clone();
-    let branch_changes = vec![
-        create(5, 0, "a1"),
-        Change::Set {
-            id: NodeId(2),
-            prop: Arc::from("parent"),
-            value: Value::Json(serde_json::Value::Number(5.into())),
-        },
-    ];
+    let branch_changes =
+        vec![create(5, 0, "a1"), Change::Set { id: NodeId(2), prop: Arc::from("parent"), value: Value::Json(serde_json::Value::Number(5.into())) }];
     let plan = three_way(&base, &branch_changes, &main, 0);
     assert!(plan.conflicts.is_empty(), "{plan:?}");
     let create_at = plan.auto.iter().position(|c| matches!(c, Change::Create { id: NodeId(5), .. }));
@@ -132,11 +102,7 @@ fn a_move_out_lands_before_the_old_parent_is_deleted() {
     apply(&mut base, vec![create(1, 0, "a0"), create(2, 1, "a0")]);
     let main = base.clone();
     let branch_changes = vec![
-        Change::Set {
-            id: NodeId(2),
-            prop: Arc::from("parent"),
-            value: Value::Json(serde_json::Value::Number(0.into())),
-        },
+        Change::Set { id: NodeId(2), prop: Arc::from("parent"), value: Value::Json(serde_json::Value::Number(0.into())) },
         Change::Delete { id: NodeId(1) },
     ];
     let plan = three_way(&base, &branch_changes, &main, 0);
@@ -155,16 +121,8 @@ fn parent_moves_that_would_cycle_in_id_order_are_unblocked() {
     apply(&mut base, vec![create(1, 0, "a0"), create(2, 1, "a0")]);
     let main = base.clone();
     let branch_changes = vec![
-        Change::Set {
-            id: NodeId(2),
-            prop: Arc::from("parent"),
-            value: Value::Json(serde_json::Value::Number(0.into())),
-        },
-        Change::Set {
-            id: NodeId(1),
-            prop: Arc::from("parent"),
-            value: Value::Json(serde_json::Value::Number(2.into())),
-        },
+        Change::Set { id: NodeId(2), prop: Arc::from("parent"), value: Value::Json(serde_json::Value::Number(0.into())) },
+        Change::Set { id: NodeId(1), prop: Arc::from("parent"), value: Value::Json(serde_json::Value::Number(2.into())) },
     ];
     let plan = three_way(&base, &branch_changes, &main, 0);
     assert!(plan.conflicts.is_empty(), "{plan:?}");

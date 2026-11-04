@@ -320,11 +320,7 @@ impl Replica {
         }
         let changes = pairs
             .into_iter()
-            .map(|(owner, new)| Change::Set {
-                id: NodeId(owner),
-                prop: Arc::from("position"),
-                value: Value::Json(serde_json::Value::String(new)),
-            })
+            .map(|(owner, new)| Change::Set { id: NodeId(owner), prop: Arc::from("position"), value: Value::Json(serde_json::Value::String(new)) })
             .collect::<Vec<_>>();
         if changes.is_empty() {
             return None;
