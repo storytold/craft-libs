@@ -762,13 +762,15 @@ pub struct Reference {
 }
 
 /// Every instruction in `cf` that refers to the internal class `owner` (optionally only calls to
-/// its methods named `method`). Stops after `max` hits; the bool is true when it stopped early.
+/// its methods named `method`). The bool is true when decoding or the reference limit stops a scan early.
 pub fn references(cf: &ClassFile, owner: &str, method: Option<&str>, max: usize) -> (Vec<Reference>, bool) {
     let mut out = Vec::new();
+    let mut incomplete = false;
     for m in &cf.methods {
         let Some(code) = &m.code else { continue };
         let caller = Ref { owner: cf.this_class.clone(), name: m.name.clone(), descriptor: m.descriptor.clone() }.display();
-        let (insns, _) = java_ops::decode(&code.bytecode, 200_000);
+        let (insns, complete) = java_ops::decode(&code.bytecode, 200_000);
+        incomplete |= !complete;
         for i in &insns {
             let Some(cp) = i.cp_index else { continue };
             let hit = match i.opcode {
@@ -793,7 +795,7 @@ pub fn references(cf: &ClassFile, owner: &str, method: Option<&str>, max: usize)
             }
         }
     }
-    (out, false)
+    (out, incomplete)
 }
 
 #[cfg(test)]
