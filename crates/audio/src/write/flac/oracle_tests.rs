@@ -342,3 +342,23 @@ fn a_full_scale_click_at_32_bits_is_still_predicted() {
     let Some(size) = round_trip("click-32", &planar, EncoderConfig::new(48_000, 1, 32), 4096) else { return };
     assert!(size < 4_096 * 4 / 2, "{size}");
 }
+
+/// Signals that reach the format's limits, which a decoder refuses when they are passed: a Rice
+/// parameter of 31 is the escape code, and an LPC shift above 15 reads as negative.
+#[test]
+fn rice_parameter_and_lpc_shift_stay_in_range() {
+    let mut r = Rng(71);
+    let bursts: Vec<i32> =
+        (0..9_000).map(|i| if i % 1024 < 128 { if i % 2 == 0 { i32::MAX } else { -i32::MAX } } else { (r.next() * 100.0) as i32 }).collect();
+    if round_trip("limit-rice", &[bursts], EncoderConfig::new(48_000, 1, 32), 4096).is_none() {
+        return;
+    }
+    let mut y = 0.0;
+    let correlated: Vec<i32> = (0..9_000)
+        .map(|_| {
+            y = 0.24 * y + r.next() * 8000.0;
+            y as i32
+        })
+        .collect();
+    round_trip("limit-shift", &[correlated], EncoderConfig::new(48_000, 1, 16), 4096);
+}

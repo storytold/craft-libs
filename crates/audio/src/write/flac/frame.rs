@@ -232,6 +232,14 @@ mod tests {
     }
 
     #[test]
+    fn sample_rates_in_the_table_have_their_codes() {
+        let table = [88_200, 176_400, 192_000, 8_000, 16_000, 22_050, 24_000, 32_000, 44_100, 48_000, 96_000];
+        for (rate, code) in table.into_iter().zip(1..) {
+            assert_eq!(sample_rate_code(rate), (code, None), "{rate}");
+        }
+    }
+
+    #[test]
     fn sample_rates_outside_the_table_are_named_in_the_header() {
         assert_eq!(sample_rate_code(48_000), (10, None));
         assert_eq!(sample_rate_code(64_000), (12, Some((64, 8))));
