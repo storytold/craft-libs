@@ -227,6 +227,46 @@ fn the_actions_keep_their_place_from_one_issue_to_the_next() {
     assert_eq!(h.get_by_label("Ignore Once").rect(), place);
 }
 
+/// No gap above the actions, and a list too long for the room scrolls inside itself.
+#[test]
+fn the_suggestion_list_fills_the_room_and_scrolls_inside_itself() {
+    let height = 420.0;
+    let panel_of = |many: usize| {
+        let mut doc = Doc::new(TEXT);
+        doc.many = Some((0..many).map(|i| format!("jump{i}")).collect());
+        let mut review = Review::default();
+        review.start(&mut doc);
+        let mut h = Harness::builder()
+            .with_size(egui::vec2(320.0, height))
+            .build_ui_state(|ui, (review, doc): &mut State| panel(ui, review, doc, &English, &COLORS), (review, doc));
+        h.run_steps(2);
+        h
+    };
+    let long = panel_of(40);
+    let change = long.get_by_label("Change").rect();
+    assert!(long.get_by_label("Change to:").rect().min.y >= 0.0, "the field above the list isn't scrolled away");
+    let last_row = (0..40).map(|i| long.get_by_label(&format!("jump{i}")).rect()).find(|row| row.max.y >= change.min.y - 12.0);
+    assert!(last_row.is_some_and(|row| row.min.y < change.min.y), "rows reach the actions");
+    assert!(long.get_by_label("jump39").rect().min.y > height, "the rest is scrolled, not squeezed");
+    assert_eq!(panel_of(2).get_by_label("Change").rect(), change, "the actions don't move with the list");
+    let mut long = long;
+    let field = long.get_by_label("Change to:").rect();
+    let row = long.get_by_label("jump0").rect();
+    long.hover_at(row.center());
+    long.step();
+    long.event(egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: egui::vec2(0.0, -60.0),
+        phase: egui::TouchPhase::Move,
+        modifiers: egui::Modifiers::NONE,
+        source: egui::MouseWheelSource::Unknown,
+    });
+    long.run_steps(4);
+    assert!(long.get_by_label("jump0").rect().min.y < row.min.y, "the list scrolled");
+    assert_eq!(long.get_by_label("Change to:").rect(), field, "and only the list");
+    assert_eq!(long.get_by_label("Change").rect(), change);
+}
+
 /// Going through issues, a click on Ignore Once must not land on Add to Dictionary.
 #[test]
 fn a_preferred_form_keeps_ignore_once_in_its_place() {

@@ -76,6 +76,10 @@ const BUTTON: f32 = 24.0;
 const BUTTON_GAP: f32 = 6.0;
 /// The least of the review left to scroll above actions kept in view.
 const MIN_BODY: f32 = 48.0;
+/// A row of the suggestion list.
+const ROW: f32 = 25.0;
+/// The suggestion list's least height, when the panel is too short to give it more.
+const MIN_LIST: f32 = 2.0 * ROW;
 /// Below actions kept in view, clear of the host's frame.
 const BOTTOM_MARGIN: f32 = 2.0;
 
@@ -114,7 +118,7 @@ fn context(ui: &mut Ui, review: &Review, issue: &Issue, colors: &Colors) {
 
 /// A full-width row of the suggestion list.
 fn suggestion_row(ui: &mut Ui, suggestion: &str, selected: bool, colors: &Colors) -> egui::Response {
-    let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), 25.0), Sense::click());
+    let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), ROW), Sense::click());
     response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, suggestion));
     if selected {
         ui.painter().rect_filled(rect, 0.0, colors.selected);
@@ -206,6 +210,10 @@ fn body(ui: &mut Ui, review: &mut Review, host: &dyn Host, text: &dyn Text, colo
         ui.label(RichText::new(notice).size(11.0).color(colors.dim));
         ui.add_space(8.0);
     }
+    if !review.message().is_empty() && !must_check_again(review, host) {
+        label(ui, text, review.message(), 12.0, colors.error);
+        ui.add_space(8.0);
+    }
     let mut after = None;
     match review.current().cloned() {
         Some(issue) => after = current_issue(ui, review, &issue, host, text, colors),
@@ -219,10 +227,6 @@ fn body(ui: &mut Ui, review: &mut Review, host: &dyn Host, text: &dyn Text, colo
                 after = Some(After::Act(Action::Check));
             }
         }
-    }
-    if !review.message().is_empty() && !must_check_again(review, host) {
-        ui.add_space(8.0);
-        label(ui, text, review.message(), 12.0, colors.error);
     }
     after
 }
@@ -257,22 +261,33 @@ fn current_issue(ui: &mut Ui, review: &mut Review, issue: &Issue, host: &dyn Hos
     }
     ui.add_space(8.0);
     label(ui, text, "Suggestions", 11.0, colors.dim);
-    if issue.suggestions.is_empty() {
-        ui.label(RichText::new(tr(text, "(no suggestions)")).italics().color(colors.text));
-    } else {
-        egui::Frame::NONE.fill(colors.field).stroke(Stroke::new(1.0, colors.field_border)).corner_radius(2.0).show(ui, |ui| {
-            ui.spacing_mut().item_spacing.y = 0.0;
-            for suggestion in &issue.suggestions {
-                let row = suggestion_row(ui, suggestion, *suggestion == review.replacement, colors);
-                if row.clicked() {
-                    review.replacement.clone_from(suggestion);
+    // Down to the actions, scrolling inside itself: nothing between the list and them.
+    let room = ui.available_height();
+    let natural = ROW * issue.suggestions.len().max(1) as f32;
+    // Short of the very bottom, or the area scrolling this would clip the list's own border.
+    let height = if room.is_finite() { (room - 2.0).max(MIN_LIST) } else { natural };
+    egui::Frame::NONE.fill(colors.field).stroke(Stroke::new(1.0, colors.field_border)).corner_radius(2.0).show(ui, |ui| {
+        ui.spacing_mut().item_spacing.y = 0.0;
+        egui::ScrollArea::vertical().id_salt("suggestions").auto_shrink([false, false]).max_height(height).min_scrolled_height(height).show(
+            ui,
+            |ui| {
+                if issue.suggestions.is_empty() {
+                    egui::Frame::NONE.inner_margin(8).show(ui, |ui| {
+                        ui.label(RichText::new(tr(text, "(no suggestions)")).italics().color(colors.text));
+                    });
                 }
-                if row.double_clicked() {
-                    after = Some(After::Act(Action::Change(Some(suggestion.clone()))));
+                for suggestion in &issue.suggestions {
+                    let row = suggestion_row(ui, suggestion, *suggestion == review.replacement, colors);
+                    if row.clicked() {
+                        review.replacement.clone_from(suggestion);
+                    }
+                    if row.double_clicked() {
+                        after = Some(After::Act(Action::Change(Some(suggestion.clone()))));
+                    }
                 }
-            }
-        });
-    }
+            },
+        );
+    });
     after
 }
 
