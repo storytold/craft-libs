@@ -418,14 +418,14 @@ impl I18n {
 /// Other text gets no marks, and a value's own isolate is taken off. Unknown placeholders stay as written,
 /// and inserted values are never read as templates, so a file name containing `{n}` stays intact.
 pub fn fmt(template: &str, args: &[(&str, &str)]) -> String {
-    fill(template, args, true)
+    fill_bidi(template, args, true)
 }
 
 /// [`fmt`] without isolates, for text that goes where the marks would get in the way: file
 /// names, logs, terminals, text compared or parsed later. Every isolate mark is taken off, in
 /// the template and in the values.
 pub fn fmt_plain(template: &str, args: &[(&str, &str)]) -> String {
-    strip_isolates(&fill(template, args, false))
+    strip_isolates(&fill_bidi(template, args, false))
 }
 
 const LRI: char = '\u{2066}';
@@ -538,23 +538,59 @@ fn is_one_isolate(value: &str) -> bool {
     false
 }
 
-fn fill(template: &str, args: &[(&str, &str)], isolated: bool) -> String {
-    let mut pieces: Vec<(&str, bool)> = Vec::new();
+/// A piece of a template taken apart by [`holes`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Piece<'t> {
+    /// Text as written.
+    Text(&'t str),
+    /// A placeholder: `raw` with its braces (`{name}`), `name` without them.
+    Hole { raw: &'t str, name: &'t str },
+}
+
+/// `template` taken apart into text and placeholders: the one brace scan behind [`fmt`] and
+/// [`fmt_plain`]. A placeholder runs from a `{` to the next `}`; braces don't nest, so `{{p}}`
+/// is the placeholder named `{p` and then the text `}`. `{}` is a placeholder with an empty
+/// name, and a `{` with no `}` after it is text.
+fn holes(template: &str) -> impl Iterator<Item = Piece<'_>> {
     let mut rest = template;
-    while let Some((before, after_open)) = rest.split_once('{') {
-        pieces.push((before, false));
-        let Some((name, after_close)) = after_open.split_once('}') else {
-            pieces.push(("{", false));
-            rest = after_open;
-            break;
-        };
-        match args.iter().find(|(k, _)| *k == name) {
-            Some((_, value)) => pieces.push((value, true)),
-            None => pieces.extend([("{", false), (name, false), ("}", false)]),
+    std::iter::from_fn(move || {
+        if rest.is_empty() {
+            return None;
         }
-        rest = after_close;
-    }
-    pieces.push((rest, false));
+        // Where the text before the next placeholder ends.
+        let end = match rest.find('{') {
+            Some(0) => match rest.find('}') {
+                // `{` and `}` are one byte each, so `close + 1` and `1..close` are char boundaries.
+                Some(close) => {
+                    let (raw, after) = rest.split_at(close + 1);
+                    rest = after;
+                    return Some(Piece::Hole { raw, name: raw.get(1..close).unwrap_or_default() });
+                }
+                // An unclosed brace: the rest is text.
+                None => rest.len(),
+            },
+            Some(open) if rest.get(open..).is_some_and(|from| from.contains('}')) => open,
+            _ => rest.len(),
+        };
+        let (text, after) = rest.split_at(end);
+        rest = after;
+        Some(Piece::Text(text))
+    })
+}
+
+/// [`fmt`] and [`fmt_plain`]: `args` filled in; with `isolated`, each value as an isolate when
+/// the text needs them, else without its own isolate.
+fn fill_bidi(template: &str, args: &[(&str, &str)], isolated: bool) -> String {
+    // (text, whether it is an inserted value)
+    let pieces: Vec<(&str, bool)> = holes(template)
+        .map(|piece| match piece {
+            Piece::Text(text) => (text, false),
+            Piece::Hole { raw, name } => match args.iter().find(|(k, _)| *k == name) {
+                Some((_, value)) => (*value, true),
+                None => (raw, false),
+            },
+        })
+        .collect();
     let isolated = isolated && pieces.iter().any(|(text, value)| has_rtl(text) || (*value && has_bidi_control(text)));
     let mut out = String::with_capacity(template.len());
     for (text, value) in pieces {
@@ -812,6 +848,17 @@ mod tests {
     fn fmt_fills_once() {
         assert_eq!(fmt("{a} to {b}", &[("a", "x"), ("b", "{a}")]), "x to {a}");
         assert_eq!(fmt("{z} {", &[]), "{z} {");
+    }
+
+    /// The brace scan: a placeholder runs to the next `}`, `{}` has an empty name, and an unclosed
+    /// brace is text.
+    #[test]
+    fn holes_split_text_and_placeholders() {
+        let hole = |raw| Piece::Hole { raw, name: raw.get(1..raw.len() - 1).unwrap_or_default() };
+        assert_eq!(holes("").collect::<Vec<_>>(), []);
+        assert_eq!(holes("é {p}{} {").collect::<Vec<_>>(), [Piece::Text("é "), hole("{p}"), hole("{}"), Piece::Text(" {")]);
+        assert_eq!(holes("{{p}}").collect::<Vec<_>>(), [hole("{{p}"), Piece::Text("}")]);
+        assert_eq!(holes("a{b").collect::<Vec<_>>(), [Piece::Text("a{b")]);
     }
 
     #[test]
