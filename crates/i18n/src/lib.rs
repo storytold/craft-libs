@@ -428,6 +428,35 @@ pub fn fmt_plain(template: &str, args: &[(&str, &str)]) -> String {
     strip_isolates(&fill_bidi(template, args, false))
 }
 
+/// Fill `{name}` placeholders from `args` in one pass, each value exactly as given: unlike
+/// [`fmt`] no isolates are added, and unlike [`fmt_plain`] none are taken off, in the template or
+/// in the values. For callers that place text themselves (a renderer that orders bidi runs, an
+/// accessibility label, a report that keeps a document's own marks).
+///
+/// A placeholder runs from a `{` to the next `}`, so braces don't nest: `{{p}}` is the
+/// placeholder named `{p` followed by `}`. `{}` is the placeholder with the empty name. A
+/// placeholder not in `args` stays as written, a `{` with no `}` after it is text, and inserted
+/// values are never read as templates, so a value containing `{n}` stays intact. When a name is
+/// in `args` twice, the first wins.
+pub fn fill(template: &str, args: &[(&str, &str)]) -> String {
+    fill_with(template, |name| args.iter().find(|(k, _)| *k == name).map(|(_, v)| *v))
+}
+
+/// [`fill`] with each value from `lookup`, for values that are borrowed or keyed another way, so
+/// no table is built first. `lookup` gets the placeholder's name without its braces (`p` for
+/// `{p}`, `""` for `{}`), once per placeholder in template order, and returns `None` to leave
+/// the placeholder as written.
+pub fn fill_with<'v>(template: &str, mut lookup: impl FnMut(&str) -> Option<&'v str>) -> String {
+    let mut out = String::with_capacity(template.len() + 16);
+    for piece in holes(template) {
+        match piece {
+            Piece::Text(text) => out.push_str(text),
+            Piece::Hole { raw, name } => out.push_str(lookup(name).unwrap_or(raw)),
+        }
+    }
+    out
+}
+
 const LRI: char = '\u{2066}';
 const RLI: char = '\u{2067}';
 const FSI: char = '\u{2068}';
@@ -547,10 +576,10 @@ enum Piece<'t> {
     Hole { raw: &'t str, name: &'t str },
 }
 
-/// `template` taken apart into text and placeholders: the one brace scan behind [`fmt`] and
-/// [`fmt_plain`]. A placeholder runs from a `{` to the next `}`; braces don't nest, so `{{p}}`
-/// is the placeholder named `{p` and then the text `}`. `{}` is a placeholder with an empty
-/// name, and a `{` with no `}` after it is text.
+/// `template` taken apart into text and placeholders: the one brace scan behind [`fmt`],
+/// [`fmt_plain`] and [`fill`]. A placeholder runs from a `{` to the next `}`; braces don't nest,
+/// so `{{p}}` is the placeholder named `{p` and then the text `}`. `{}` is a placeholder with an
+/// empty name, and a `{` with no `}` after it is text.
 fn holes(template: &str) -> impl Iterator<Item = Piece<'_>> {
     let mut rest = template;
     std::iter::from_fn(move || {
@@ -859,6 +888,66 @@ mod tests {
         assert_eq!(holes("é {p}{} {").collect::<Vec<_>>(), [Piece::Text("é "), hole("{p}"), hole("{}"), Piece::Text(" {")]);
         assert_eq!(holes("{{p}}").collect::<Vec<_>>(), [hole("{{p}"), Piece::Text("}")]);
         assert_eq!(holes("a{b").collect::<Vec<_>>(), [Piece::Text("a{b")]);
+    }
+
+    /// `fill` puts each value in once and never reads it as a placeholder; what it has nothing for
+    /// stays as written. The cases of pdfcraft's `say`, with bare names.
+    #[test]
+    fn fill_fills_once() {
+        let values = [("p", "7"), ("", "{p} {n}")];
+        assert_eq!(
+            fill("Font {} on page {p} doesn't map its characters to Unicode", &values),
+            "Font {p} {n} on page 7 doesn't map its characters to Unicode"
+        );
+        assert_eq!(fill("{a} {p} {", &values), "{a} 7 {");
+        assert_eq!(fill("open {p", &values), "open {p");
+        assert_eq!(fill("é {p} ü", &values), "é 7 ü");
+        assert_eq!(fill("שלום {p} مرحبا", &values), "שלום 7 مرحبا", "no isolates around a value in RTL text");
+        assert_eq!(fill("", &values), "");
+        assert_eq!(fill("no placeholders", &[]), "no placeholders");
+        // A placeholder runs from a `{` to the next `}`: `{{p}}` names `{p`, `{a{p}}` names `a{p`.
+        assert_eq!(fill("{{p}} {a{p}}", &values), "{{p}} {a{p}}");
+        assert_eq!(fill("{{p}}", &[("{p", "x")]), "x}");
+        assert_eq!(fill("{a}{a}", &[("a", "1"), ("a", "2")]), "11", "the first of a name wins");
+    }
+
+    /// Unlike `fmt` and `fmt_plain`, `fill` leaves every mark where it is: none added, none taken
+    /// off the template or a value, and a value that is one isolate keeps it.
+    #[test]
+    fn fill_keeps_marks_as_given() {
+        let marked = "\u{2066}x\u{2069}";
+        assert_eq!(fmt_plain("{x}", &[("x", marked)]), "x");
+        assert_eq!(fill("{x}", &[("x", marked)]), marked);
+        assert_eq!(fill("{x}", &[("x", &ltr("y"))]), ltr("y"));
+        assert_eq!(fill("\u{2068}{a}\u{2069} \u{200F}", &[("a", "a\u{202E}b")]), "\u{2068}a\u{202E}b\u{2069} \u{200F}");
+        assert_eq!(fill("ש {n}", &[("n", "12")]), "ש 12");
+    }
+
+    /// `fill_with` asks for each placeholder by its bare name, in order, and takes values borrowed
+    /// from anywhere.
+    #[test]
+    fn fill_with_asks_by_bare_name() {
+        let page = String::from("7");
+        let names = std::cell::RefCell::new(Vec::new());
+        let lookup = |name: &str| {
+            names.borrow_mut().push(name.to_owned());
+            match name {
+                "p" => Some(page.as_str()),
+                "name" => Some("{p}"),
+                _ => None,
+            }
+        };
+        assert_eq!(fill_with("{name} on page {p}, {other}, {}", lookup), "{p} on page 7, {other}, {}");
+        assert_eq!(names.into_inner(), ["name", "p", "other", ""]);
+        let mut calls = 0;
+        assert_eq!(
+            fill_with("{a}{b}", |_| {
+                calls += 1;
+                None
+            }),
+            "{a}{b}"
+        );
+        assert_eq!(calls, 2, "an FnMut lookup works");
     }
 
     #[test]
