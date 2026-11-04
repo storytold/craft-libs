@@ -350,13 +350,33 @@ impl Updater {
     /// `false` while it holds unsaved work: the restart helper is scheduled before the app closes,
     /// and a close that the user then cancels would leave it waiting for an exit that never comes.
     pub fn show_if(&mut self, ctx: &egui::Context, can_start: bool) -> Action {
+        self.show_with_save(ctx, can_start, false)
+    }
+
+    /// Like [`Self::show_if`], and offers Save and Update while `can_save` is true. It is true only
+    /// when a successful save alone makes `can_start` true: every piece of unsaved work is in a
+    /// document the app can save without asking the user, and nothing else holds the install back
+    /// (a print job, a comment draft). It stays true during the save. After a click,
+    /// [`Self::take_save_request`] tells the app to save, the install starts once `can_start` is
+    /// true, and [`Self::save_stopped`] reports a save that did not get there.
+    pub fn show_with_save(&mut self, ctx: &egui::Context, can_start: bool, can_save: bool) -> Action {
         // The close waits for the app to hold no unsaved work: the user may have edited while the
         // update installed, and a close they cancel is asked again once the work is saved.
         if self.restart && can_start {
             self.restart = false;
+            self.stop_saving();
             return Action::Close;
         }
+        if self.prompt.as_ref().is_some_and(|p| p.is_saving) {
+            if can_start {
+                self.stop_saving();
+                self.start_install(ctx);
+            } else if !can_save {
+                self.save_stopped(None);
+            }
+        }
         let Some(prompt) = &mut self.prompt else { return Action::None };
+        prompt.offer_save = can_save && !can_start;
         match prompt.show(ctx) {
             StartupPromptResponse::Pending => Action::None,
             StartupPromptResponse::UpdateAndRestart => {
@@ -376,11 +396,51 @@ impl Updater {
         }
     }
 
+    /// True once after the user chose Save and Update: the app then saves its work.
+    #[must_use]
+    pub fn take_save_request(&mut self) -> bool {
+        self.prompt.as_mut().is_some_and(|p| std::mem::take(&mut p.save_wanted))
+    }
+
+    /// The save ended and the work is still not all saved: it failed, was cancelled, or more was
+    /// typed meanwhile. The prompt says why (`error`) or goes back to asking for the work to be
+    /// saved, and nothing installs by itself. An update that had already finished installing still
+    /// closes the app once the work is saved. A save that leaves nothing unsaved needs no call.
+    /// A call while the prompt isn't saving (after Dismiss, or after `can_save` fell) changes
+    /// nothing, so the app also reports a failed save the way it always does.
+    pub fn save_stopped(&mut self, error: Option<String>) {
+        if !self.prompt.as_ref().is_some_and(|p| p.is_saving) {
+            return;
+        }
+        self.stop_saving();
+        let note = if self.installed { self.installed_note() } else { save_first_note() };
+        if let Some(prompt) = &mut self.prompt {
+            match error {
+                Some(error) => prompt.set_message(error),
+                None => prompt.set_note(note),
+            }
+        }
+    }
+
+    /// The prompt no longer waits for a save.
+    fn stop_saving(&mut self) {
+        if let Some(prompt) = &mut self.prompt {
+            prompt.is_saving = false;
+            prompt.save_wanted = false;
+        }
+    }
+
     fn request_install(&mut self, ctx: &egui::Context, can_start: bool) {
         if can_start {
             self.start_install(ctx);
         } else if let Some(prompt) = &mut self.prompt {
-            prompt.set_note(Note::new("Save or close your open work first; the update restarts the app.", &[]));
+            if prompt.offer_save {
+                prompt.is_saving = true;
+                prompt.save_wanted = true;
+                prompt.clear_message();
+            } else {
+                prompt.set_note(save_first_note());
+            }
         }
     }
 
@@ -419,6 +479,11 @@ impl Updater {
             }
         }
     }
+}
+
+/// The prompt's answer to Update and Restart while the app holds unsaved work.
+fn save_first_note() -> Note {
+    Note::new("Save or close your open work first; the update restarts the app.", &[])
 }
 
 fn install(app: &'static App, installed: &self_update::Install, mut release: Release, version: &str) -> Result<(), String> {
@@ -780,6 +845,218 @@ mod tests {
         u.tick(&ctx);
         assert_eq!(u.show(&ctx), Action::Close);
         assert_eq!(u.show(&ctx), Action::None);
+    }
+
+    /// One frame of [`Updater::show_with_save`] on the screen the dialog tests use.
+    fn frame_saving(u: &mut Updater, ctx: &egui::Context, can_start: bool, can_save: bool, events: Vec<egui::Event>) -> (Action, egui::FullOutput) {
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(640.0, 480.0));
+        let mut action = Action::None;
+        let input = egui::RawInput { screen_rect: Some(screen), events, ..egui::RawInput::default() };
+        let mut output = ctx.run_ui(input, |ui| action = u.show_with_save(ui.ctx(), can_start, can_save));
+        output.textures_delta.clear();
+        (action, output)
+    }
+
+    /// Makes the open prompt a self-updating one: the test exe is not an install, so
+    /// [`StartupPrompt::new`] says it isn't.
+    fn self_updating(u: &mut Updater) {
+        if let Some(prompt) = &mut u.prompt {
+            prompt.is_self_updating = true;
+        }
+    }
+
+    /// The real button, clicked with unsaved work the app can save.
+    fn click_save(u: &mut Updater, ctx: &egui::Context) {
+        self_updating(u);
+        frame_saving(u, ctx, false, true, Vec::new());
+        let (_, output) = frame_saving(u, ctx, false, true, Vec::new());
+        let at = crate::dialog::tests::text_pos(&output, "SAVE AND UPDATE").expect("SAVE AND UPDATE is painted");
+        let button =
+            |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+        frame_saving(u, ctx, false, true, vec![egui::Event::PointerMoved(at)]);
+        frame_saving(u, ctx, false, true, vec![button(true)]);
+        frame_saving(u, ctx, false, true, vec![button(false)]);
+    }
+
+    /// Whether the open prompt shows the app saving.
+    fn saving(u: &Updater) -> bool {
+        u.prompt.as_ref().is_some_and(|p| p.is_saving)
+    }
+
+    /// The open prompt's message, or nothing.
+    fn prompt_message(u: &Updater) -> String {
+        u.prompt.as_ref().and_then(StartupPrompt::message).unwrap_or_default()
+    }
+
+    /// An updater whose install has finished and waits for the app to close.
+    fn installed(ctx: &egui::Context) -> Updater {
+        let mut u = updater(Ok(None));
+        u.offer(newer());
+        let (tx, rx) = channel();
+        u.install = Some((rx, newer()));
+        assert!(tx.send(Ok(())).is_ok());
+        u.tick(ctx);
+        u
+    }
+
+    /// The whole promise: one click asks the app to save, and the install starts on its own once
+    /// nothing is left unsaved. The test exe is no install, so `start_install` ends in its note.
+    #[test]
+    fn save_and_update_saves_first_and_then_installs() {
+        let ctx = egui::Context::default();
+        let mut u = updater(Ok(None));
+        u.offer(newer());
+        click_save(&mut u, &ctx);
+        assert!(u.take_save_request(), "the click asks the app to save");
+        assert!(!u.take_save_request(), "once");
+        assert!(saving(&u));
+        assert!(u.install.is_none(), "nothing is scheduled over unsaved work");
+        frame_saving(&mut u, &ctx, false, true, Vec::new());
+        assert!(u.install.is_none() && saving(&u), "the save is still running");
+        frame_saving(&mut u, &ctx, true, false, Vec::new());
+        assert!(!saving(&u));
+        assert!(u.install.is_some() || prompt_message(&u).starts_with("Cannot auto-update"), "{}", prompt_message(&u));
+    }
+
+    /// The hint from a click before the app could save doesn't stay beside the spinner.
+    #[test]
+    fn a_note_from_an_earlier_click_goes_when_the_save_starts() {
+        let ctx = egui::Context::default();
+        let mut u = updater(Ok(None));
+        u.offer(newer());
+        u.request_install(&ctx, false);
+        assert!(prompt_message(&u).starts_with("Save or close"));
+        click_save(&mut u, &ctx);
+        assert_eq!(prompt_message(&u), "");
+    }
+
+    /// A save that failed says why, and nothing installs when the work is saved some other way.
+    #[test]
+    fn a_failed_save_says_why_and_calls_the_install_off() {
+        let ctx = egui::Context::default();
+        let mut u = updater(Ok(None));
+        u.offer(newer());
+        click_save(&mut u, &ctx);
+        u.save_stopped(Some("disk full".into()));
+        assert!(!saving(&u));
+        assert_eq!(prompt_message(&u), "disk full");
+        frame_saving(&mut u, &ctx, true, false, Vec::new());
+        assert_eq!(prompt_message(&u), "disk full");
+        assert!(u.install.is_none());
+    }
+
+    /// A save that ended with work still unsaved (more was typed, a lossy format) doesn't leave the
+    /// spinner up: the prompt goes back to the hint and the button can be clicked again.
+    #[test]
+    fn a_save_that_leaves_work_unsaved_goes_back_to_the_note() {
+        let ctx = egui::Context::default();
+        let mut u = updater(Ok(None));
+        u.offer(newer());
+        click_save(&mut u, &ctx);
+        assert!(u.take_save_request());
+        u.save_stopped(None);
+        assert!(!saving(&u));
+        assert!(prompt_message(&u).starts_with("Save or close"), "{}", prompt_message(&u));
+        let (_, output) = frame_saving(&mut u, &ctx, false, true, Vec::new());
+        assert!(crate::dialog::tests::text_pos(&output, "SAVE AND UPDATE").is_some());
+    }
+
+    /// The app can no longer save its way out (an untitled document appeared): no endless spinner.
+    #[test]
+    fn work_that_can_no_longer_be_saved_stops_the_saving() {
+        let ctx = egui::Context::default();
+        let mut u = updater(Ok(None));
+        u.offer(newer());
+        click_save(&mut u, &ctx);
+        frame_saving(&mut u, &ctx, false, false, Vec::new());
+        assert!(!saving(&u));
+        assert!(prompt_message(&u).starts_with("Save or close"), "{}", prompt_message(&u));
+    }
+
+    /// A report that arrives when the prompt isn't saving (after Dismiss) changes nothing.
+    #[test]
+    fn a_late_save_stopped_changes_nothing() {
+        let mut u = updater(Ok(None));
+        u.offer(newer());
+        u.save_stopped(Some("disk full".into()));
+        assert_eq!(prompt_message(&u), "");
+    }
+
+    /// Dismiss takes the wish to install with it: a later offer doesn't install without a click.
+    #[test]
+    fn dismissing_during_the_save_forgets_the_install() {
+        let ctx = egui::Context::default();
+        let mut u = updater(Ok(None));
+        u.offer(newer());
+        click_save(&mut u, &ctx);
+        let escape = egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE };
+        frame_saving(&mut u, &ctx, false, true, vec![escape]);
+        assert!(!u.prompt_open());
+        assert!(!u.take_save_request());
+        u.offer(newer());
+        self_updating(&mut u);
+        frame_saving(&mut u, &ctx, true, false, Vec::new());
+        assert!(u.prompt.as_ref().is_some_and(|p| !p.is_installing));
+        assert_eq!(prompt_message(&u), "");
+    }
+
+    /// A newer release offered during the save is a new question: it installs nothing by itself.
+    #[test]
+    fn a_new_offer_during_the_save_installs_nothing() {
+        let ctx = egui::Context::default();
+        let mut u = updater(Ok(None));
+        u.offer(newer());
+        click_save(&mut u, &ctx);
+        u.offer(newer());
+        self_updating(&mut u);
+        frame_saving(&mut u, &ctx, true, false, Vec::new());
+        assert!(u.prompt.as_ref().is_some_and(|p| !p.is_installing));
+        assert_eq!(prompt_message(&u), "");
+        assert!(!u.take_save_request());
+    }
+
+    /// The button only shows with unsaved work, in an app that can save it. `show_if` never offers it.
+    #[test]
+    fn the_button_needs_both_unsaved_work_and_an_app_that_can_save() {
+        let ctx = egui::Context::default();
+        let mut u = updater(Ok(None));
+        u.offer(newer());
+        self_updating(&mut u);
+        let offered = |u: &Updater| u.prompt.as_ref().is_some_and(|p| p.offer_save);
+        frame_saving(&mut u, &ctx, false, true, Vec::new());
+        assert!(offered(&u), "unsaved work the app can save");
+        frame(&mut u, &ctx, false);
+        assert!(!offered(&u), "show_if");
+        frame_saving(&mut u, &ctx, false, true, Vec::new());
+        frame_saving(&mut u, &ctx, true, true, Vec::new());
+        assert!(!offered(&u), "nothing to save");
+        frame_saving(&mut u, &ctx, false, true, Vec::new());
+        frame_saving(&mut u, &ctx, false, false, Vec::new());
+        assert!(!offered(&u), "the app can't save it");
+    }
+
+    /// With the update already installed, the save leads to the close, once, and no second install.
+    #[test]
+    fn save_and_update_on_a_finished_install_closes_the_app_once() {
+        let ctx = egui::Context::default();
+        let mut u = installed(&ctx);
+        click_save(&mut u, &ctx);
+        assert!(u.take_save_request());
+        assert_eq!(frame_saving(&mut u, &ctx, false, true, Vec::new()).0, Action::None);
+        assert_eq!(frame_saving(&mut u, &ctx, true, false, Vec::new()).0, Action::Close);
+        assert!(!saving(&u), "a close the user cancels leaves no spinner");
+        assert_eq!(frame_saving(&mut u, &ctx, true, false, Vec::new()).0, Action::None);
+        assert!(u.install.is_none());
+    }
+
+    /// A stopped save on a finished install keeps saying the update is ready.
+    #[test]
+    fn a_stopped_save_on_a_finished_install_keeps_its_note() {
+        let ctx = egui::Context::default();
+        let mut u = installed(&ctx);
+        click_save(&mut u, &ctx);
+        u.save_stopped(None);
+        assert!(prompt_message(&u).starts_with("The update is installed"), "{}", prompt_message(&u));
     }
 }
 
