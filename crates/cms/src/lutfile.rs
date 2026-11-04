@@ -230,6 +230,12 @@ pub fn write_cube(l: &LutFile) -> String {
     if !l.title.is_empty() {
         s.push_str(&format!("TITLE \"{}\"\n", l.title.replace('"', "'")));
     }
+    // The domain is what every row means: a table read with a non-default one must not be
+    // written back as if it expected inputs in 0..1. `parse_cube` accepts these anywhere.
+    if !l.domain_is_default() {
+        s.push_str(&format!("DOMAIN_MIN {} {} {}\n", l.domain_min[0], l.domain_min[1], l.domain_min[2]));
+        s.push_str(&format!("DOMAIN_MAX {} {} {}\n", l.domain_max[0], l.domain_max[1], l.domain_max[2]));
+    }
     s.push_str(&format!("LUT_3D_SIZE {}\n", l.size));
     for c in l.data.as_chunks::<3>().0 {
         s.push_str(&format!("{:.6} {:.6} {:.6}\n", c[0], c[1], c[2]));
@@ -443,5 +449,26 @@ DOMAIN_MAX 0.5 1 1
             assert!(l.data.iter().all(|v| (0.0..=1.0).contains(v)), "{id}");
         }
         assert!(builtin("nope").is_none());
+    }
+
+    #[test]
+    fn cube_domain_survives_a_write() {
+        let cube = "DOMAIN_MIN 0.25 0.25 0.25
+DOMAIN_MAX 0.75 0.75 0.75
+LUT_3D_SIZE 2
+0 0 0
+0 0 1
+0 1 0
+0 1 1
+1 0 0
+1 0 1
+1 1 0
+1 1 1
+";
+        let l = parse_cube(cube).expect("a cube with a non-default domain");
+        assert!(!l.domain_is_default());
+        let back = parse_cube(&write_cube(&l)).expect("roundtrip");
+        assert_eq!(back.domain_min, l.domain_min, "the written table must mean the same");
+        assert_eq!(back.domain_max, l.domain_max);
     }
 }
