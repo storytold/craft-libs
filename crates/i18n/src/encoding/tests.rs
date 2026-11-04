@@ -131,10 +131,10 @@ fn test_hinh_dang_unicode() {
 
 #[test]
 fn test_generic_font_transcodes_when_vietnamese_detected() {
-    assert_eq!(transcode_vietnamese("THOÂNG SOÁ", Some("Standard")), "THÔNG SỐ");
+    assert_eq!(transcode_vietnamese("THOÂNG SOÁ KYÕ THUAÄT", Some("Standard")), "THÔNG SỐ KỸ THUẬT");
     assert_eq!(transcode_vietnamese("NHOÂM 3003 DAØY 2MM", Some("simplex.shx")), "NHÔM 3003 DÀY 2MM");
     assert_eq!(transcode_vietnamese("TOÅNG KHOÁI LÖÔÏNG", Some("Arial")), "TỔNG KHỐI LƯỢNG");
-    assert_eq!(transcode_vietnamese("QUY CAÙCH", None), "QUY CÁCH");
+    assert_eq!(transcode_vietnamese("QUY CAÙCH TOÅNG THEÅ", None), "QUY CÁCH TỔNG THỂ");
 }
 
 #[test]
@@ -219,7 +219,8 @@ fn test_adversarial_unicode_diphthongs_never_corrupted() {
 
 #[test]
 fn test_adversarial_genuine_vni_still_transcodes() {
-    let tests = [
+    // 1. Short strings (< 16 bytes) transcode cleanly when font hint is provided
+    let short_hinted = [
         ("SOÁ LIEÄU", "SỐ LIỆU"),
         ("PHOÁ COÅ", "PHỐ CỔ"),
         ("MOÃI NGAØY", "MỖI NGÀY"),
@@ -227,9 +228,21 @@ fn test_adversarial_genuine_vni_still_transcodes() {
         ("TOÅNG COÄNG", "TỔNG CỘNG"),
         ("QUY CAÙCH", "QUY CÁCH"),
     ];
-    for (input, expected) in tests {
-        assert_eq!(transcode_vietnamese(input, Some("VNI-Helve")), expected, "Failed on {input}");
-        assert_eq!(transcode_vietnamese(input, None), expected, "Failed on {input}");
+    for (input, expected) in short_hinted {
+        assert_eq!(transcode_vietnamese(input, Some("VNI-Helve")), expected, "Failed on hinted {input}");
+    }
+
+    // 2. Unhinted text must meet the Short-String Invariant (>= 16 bytes) to activate heuristics
+    let unhinted_long = [
+        ("SOÁ LIEÄU TOÅNG HOÏP", "SỐ LIỆU TỔNG HỌP"),
+        ("PHOÁ COÅ HAØ NOÄI", "PHỐ CỔ HÀ NỘI"),
+        ("MOÃI NGAØY MOÄT NIEÀM VUI", "MỖI NGÀY MỘT NIỀM VUI"),
+        ("NHOÂM 6063 DAØY 2MM", "NHÔM 6063 DÀY 2MM"),
+        ("TOÅNG COÄNG KHOÁI LÖÔÏNG", "TỔNG CỘNG KHỐI LƯỢNG"),
+        ("QUY CAÙCH TOÅNG THEÅ", "QUY CÁCH TỔNG THỂ"),
+    ];
+    for (input, expected) in unhinted_long {
+        assert_eq!(transcode_vietnamese(input, None), expected, "Failed on unhinted long {input}");
     }
 }
 
@@ -441,7 +454,7 @@ fn test_vni_streaming_chunk_boundaries() {
     assert_eq!(out, "Ban ve so 1");
 
     decoder.decode_chunk(b"\xf9 va chi tiet", &mut out).expect("Chunk 2");
-    decoder.finish(&mut out);
+    decoder.finish(&mut out).expect("finish");
 
     // 'a' and '\xf9' seamlessly composed into 'á'
     assert_eq!(out, "Ban ve so 1á va chi tiet");
@@ -521,7 +534,7 @@ fn test_fixture_vni_contract_1998() {
     for chunk in vni_bytes.chunks(7) {
         streaming_decoder.decode_chunk(chunk, &mut streamed_out).expect("Streaming VNI chunk");
     }
-    streaming_decoder.finish(&mut streamed_out);
+    streaming_decoder.finish(&mut streamed_out).expect("finish");
     assert_eq!(streamed_out, vni_practical.as_ref(), "Streaming output must match whole-file decoding");
 }
 
@@ -633,4 +646,54 @@ fn test_font_hint_case_insensitive_and_stems() {
             "Font hint '{font}' must match Vni"
         );
     }
+}
+
+#[test]
+fn test_coderabbit_review_invariants() {
+    // 1. VNI multi-chunk streaming for "VIỆT"
+    // Case A: 2 chunks split right at the mark byte: [b"VI\xCF", b"T"]
+    let mut dec_2 = VniDecoder::new(DecodeMode::Practical);
+    let mut out_2 = String::new();
+    dec_2.decode_chunk(b"VI\xCF", &mut out_2).expect("chunk 1");
+    dec_2.decode_chunk(b"T", &mut out_2).expect("chunk 2");
+    dec_2.finish(&mut out_2).expect("finish");
+    assert_eq!(out_2, "VIỆT", "2-chunk split at mark byte must yield VIỆT");
+
+    // Case B: 3 chunks split across base, mark, and follower: [b"VI", b"\xCF", b"T"]
+    let mut dec_3 = VniDecoder::new(DecodeMode::Practical);
+    let mut out_3 = String::new();
+    dec_3.decode_chunk(b"VI", &mut out_3).expect("chunk 1");
+    dec_3.decode_chunk(b"\xCF", &mut out_3).expect("chunk 2");
+    dec_3.decode_chunk(b"T", &mut out_3).expect("chunk 3");
+    dec_3.finish(&mut out_3).expect("finish");
+    assert_eq!(out_3, "VIỆT", "3-chunk split across base, mark, and follower must yield VIỆT");
+
+    // Case C: EOF without 'T' flushes 'Ị'
+    let mut dec_eof = VniDecoder::new(DecodeMode::Practical);
+    let mut out_eof = String::new();
+    dec_eof.decode_chunk(b"VI\xCF", &mut out_eof).expect("chunk 1");
+    dec_eof.finish(&mut out_eof).expect("finish");
+    assert_eq!(out_eof, "VỊ", "EOF without trailing T must flush standalone Ị");
+
+    // 2. Genuine UTF-8 text with .VnTime font hint must never be corrupted
+    let cat_utf8 = "cát vàng".as_bytes();
+    let meta_tcvn = EncodingMetadata { font_name: Some(".VnTime"), codepage_hint: None };
+    let cat_res =
+        decode_text(cat_utf8, &DecodeOptions { metadata: Some(&meta_tcvn), ..Default::default() }).expect("genuine UTF-8 must decode cleanly");
+    assert_eq!(cat_res, "cát vàng", "Valid UTF-8 must never be corrupted by font hint");
+
+    // 3. Metadata codepage precedence over font hint (Codepage > FontHint)
+    let conflicting_meta = EncodingMetadata { font_name: Some("VNI-Times"), codepage_hint: Some(1258) };
+    let det_res = detect_encoding(b"Any payload >= 16 bytes", Some(&conflicting_meta));
+    assert_eq!(
+        det_res,
+        DetectionResult::HighConfidence { encoding: LegacyEncoding::Windows1258, evidence: EncodingEvidence::Metadata },
+        "Codepage 1258 metadata must override VNI font name in evidence hierarchy"
+    );
+
+    // 4. transcode_explicit bypasses is_already_unicode_vietnamese guard
+    // Byte 0xC3 in CP1258 is 'Ă' (U+0102). In Latin-1 it is 'Ã' (U+00C3).
+    let latin1_c3 = "\u{00C3}";
+    let explicit_res = transcode_explicit(latin1_c3, LegacyEncoding::Windows1258);
+    assert_eq!(explicit_res, "Ă", "transcode_explicit must bypass guard and decode 0xC3 to Ă");
 }

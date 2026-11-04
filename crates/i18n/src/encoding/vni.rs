@@ -550,6 +550,8 @@ pub(crate) fn decode_vni_single_byte(byte: u8, offset: usize, mode: DecodeMode) 
 pub struct VniDecoder {
     mode: DecodeMode,
     pending_base_byte: Option<u8>,
+    pending_base_offset: usize,
+    pending_iet: Option<(bool, usize)>,
 }
 
 impl Default for VniDecoder {
@@ -561,7 +563,7 @@ impl Default for VniDecoder {
 impl VniDecoder {
     /// Create a new streaming VNI decoder.
     pub const fn new(mode: DecodeMode) -> Self {
-        Self { mode, pending_base_byte: None }
+        Self { mode, pending_base_byte: None, pending_base_offset: 0, pending_iet: None }
     }
 
     /// Decode a chunk of bytes, appending the decoded Unicode characters to `out`.
@@ -570,62 +572,89 @@ impl VniDecoder {
         let len = chunk.len();
 
         while i < len {
+            // Check if we are waiting for a trailing 'T' / 't' to complete "IỆ" / "iệ" across chunks
+            if let Some((is_upper, _)) = self.pending_iet.take() {
+                let byte = chunk[i];
+                if byte == b'T' || byte == b't' {
+                    out.push_str(if is_upper { "IỆ" } else { "iệ" });
+                } else {
+                    out.push(if is_upper { 'Ị' } else { 'ị' });
+                }
+                // Do not increment i; process `byte` ('T' or other) in the loop below
+            }
+
             let byte = chunk[i];
 
             // If we have a pending base byte from the previous chunk
-            if let Some(prev_byte) = self.pending_base_byte {
+            if let Some(prev_byte) = self.pending_base_byte.take() {
                 let mark_char = byte as char;
                 let base_char = byte_to_vni_base(prev_byte);
-                if base_char == 'I' && (mark_char == 'Ï' || mark_char == 'ï') && i + 1 < len && (chunk[i + 1] == b'T' || chunk[i + 1] == b't') {
-                    out.push_str("IỆ");
-                    self.pending_base_byte = None;
-                    i += 1;
-                    continue;
-                } else if base_char == 'i' && (mark_char == 'ï' || mark_char == 'Ï') && i + 1 < len && (chunk[i + 1] == b'T' || chunk[i + 1] == b't')
-                {
-                    out.push_str("iệ");
-                    self.pending_base_byte = None;
-                    i += 1;
-                    continue;
+
+                let is_iet_prefix = (base_char == 'I' || base_char == 'i') && (mark_char == 'Ï' || mark_char == 'ï');
+                if is_iet_prefix {
+                    if i + 1 < len {
+                        if chunk[i + 1] == b'T' || chunk[i + 1] == b't' {
+                            out.push_str(if base_char == 'I' { "IỆ" } else { "iệ" });
+                            // Consume the mark byte at i, leave chunk[i + 1] ('T') for next iteration
+                            i += 1;
+                            continue;
+                        } else {
+                            out.push(if base_char == 'I' { 'Ị' } else { 'ị' });
+                            i += 1;
+                            continue;
+                        }
+                    } else {
+                        // Mark byte is the last byte in this chunk; defer 'T' check to next chunk
+                        self.pending_iet = Some((base_char == 'I', self.pending_base_offset));
+                        break;
+                    }
                 } else if let Some(comp) = match_vni_composite(base_char, mark_char) {
                     out.push(comp);
-                    self.pending_base_byte = None;
                     i += 1;
                     continue;
                 } else {
-                    let ch = decode_vni_single_byte(prev_byte, 0, self.mode)?;
+                    let ch = decode_vni_single_byte(prev_byte, self.pending_base_offset, self.mode)?;
                     out.push(ch);
-                    self.pending_base_byte = None;
+                    // Do not increment i, process `byte` in current iteration
                     continue;
                 }
             }
 
-            // If byte could be a base character and this is the last byte of the chunk:
-            let is_last_byte = i + 1 == len;
-            if is_last_byte && is_vni_base_candidate(byte) {
-                self.pending_base_byte = Some(byte);
-                break;
-            }
-
             // Lookahead within chunk
-            if i + 1 < len && is_vni_base_candidate(byte) {
-                let next_byte = chunk[i + 1];
-                let base_char = byte_to_vni_base(byte);
-                let mark_char = next_byte as char;
+            if is_vni_base_candidate(byte) {
+                if i + 1 < len {
+                    let next_byte = chunk[i + 1];
+                    let base_char = byte_to_vni_base(byte);
+                    let mark_char = next_byte as char;
 
-                if base_char == 'I' && (mark_char == 'Ï' || mark_char == 'ï') && i + 2 < len && (chunk[i + 2] == b'T' || chunk[i + 2] == b't') {
-                    out.push_str("IỆ");
-                    i += 2;
-                    continue;
-                } else if base_char == 'i' && (mark_char == 'ï' || mark_char == 'Ï') && i + 2 < len && (chunk[i + 2] == b'T' || chunk[i + 2] == b't')
-                {
-                    out.push_str("iệ");
-                    i += 2;
-                    continue;
-                } else if let Some(comp) = match_vni_composite(base_char, mark_char) {
-                    out.push(comp);
-                    i += 2;
-                    continue;
+                    let is_iet_prefix = (base_char == 'I' || base_char == 'i') && (mark_char == 'Ï' || mark_char == 'ï');
+                    if is_iet_prefix {
+                        if i + 2 < len {
+                            if chunk[i + 2] == b'T' || chunk[i + 2] == b't' {
+                                out.push_str(if base_char == 'I' { "IỆ" } else { "iệ" });
+                                // Consume base and mark (i and i + 1), leave chunk[i + 2] ('T') for next iteration
+                                i += 2;
+                                continue;
+                            } else {
+                                out.push(if base_char == 'I' { 'Ị' } else { 'ị' });
+                                i += 2;
+                                continue;
+                            }
+                        } else {
+                            // Mark byte is the last byte of the chunk; defer 'T' check
+                            self.pending_iet = Some((base_char == 'I', i));
+                            break;
+                        }
+                    } else if let Some(comp) = match_vni_composite(base_char, mark_char) {
+                        out.push(comp);
+                        i += 2;
+                        continue;
+                    }
+                } else {
+                    // Last byte of chunk is a base candidate
+                    self.pending_base_byte = Some(byte);
+                    self.pending_base_offset = i;
+                    break;
                 }
             }
 
@@ -639,12 +668,15 @@ impl VniDecoder {
     }
 
     /// Flush any remaining pending base character to `out`.
-    pub fn finish(mut self, out: &mut String) {
-        if let Some(byte) = self.pending_base_byte.take()
-            && let Ok(ch) = decode_vni_single_byte(byte, 0, self.mode)
-        {
+    pub fn finish(mut self, out: &mut String) -> Result<(), DecodeError> {
+        if let Some((is_upper, _)) = self.pending_iet.take() {
+            out.push(if is_upper { 'Ị' } else { 'ị' });
+        }
+        if let Some(byte) = self.pending_base_byte.take() {
+            let ch = decode_vni_single_byte(byte, self.pending_base_offset, self.mode)?;
             out.push(ch);
         }
+        Ok(())
     }
 }
 
@@ -660,7 +692,7 @@ pub fn decode_vni(input: &[u8], mode: DecodeMode) -> Result<Cow<'_, str>, Decode
     let mut out = String::with_capacity(input.len());
     let mut decoder = VniDecoder::new(mode);
     decoder.decode_chunk(input, &mut out)?;
-    decoder.finish(&mut out);
+    decoder.finish(&mut out)?;
 
     Ok(Cow::Owned(out))
 }

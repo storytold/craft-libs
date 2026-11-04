@@ -70,14 +70,19 @@ fn bench_vni_decode() {
 #[test]
 #[ignore]
 fn bench_cp1258_decode() {
-    // CP1258 sample: "Cộng hòa Xã hội Chủ nghĩa Việt Nam"
-    let cp1258_line = b"C\xF4\x88ng h\xF2a X\xE3 h\xF4\x88i Ch\xF7 ngh\xEFa Vi\xEA\x88t Nam - \xD0\xF4\x88c l\xE2\x88p T\xF7 do H\x1Bnh ph\xFAc.\n";
+    // CP1258 sample: "Cộng hòa Xã hội Chủ nghĩa Việt Nam - Độc lập Tự do Hạnh phúc.\n"
+    let cp1258_line =
+        b"C\xF4\xF2ng ho\xCCa Xa\xDE h\xF4\xF2i Chu\xD2 nghi\xDEa Vi\xEA\xF2t Nam - \xD0\xF4\xF2c l\xE2\xF2p T\xFD\xF2 do Ha\xF2nh ph\xFAc.\n";
+
+    let opts = DecodeOptions { force_encoding: Some(LegacyEncoding::Windows1258), ..DecodeOptions::default() };
+    let sample_decoded = decode_text(cp1258_line, &opts).expect("CP1258 sample line must decode cleanly");
+    assert_eq!(sample_decoded, "Cộng hòa Xã hội Chủ nghĩa Việt Nam - Độc lập Tự do Hạnh phúc.\n");
+
     let bytes: Vec<u8> = cp1258_line.repeat(20_000);
     let size_mb = bytes.len() as f64 / (1024.0 * 1024.0);
 
     let t0 = Instant::now();
     let iters = 50;
-    let opts = DecodeOptions { force_encoding: Some(LegacyEncoding::Windows1258), ..DecodeOptions::default() };
     for _ in 0..iters {
         let res = decode_text(&bytes, &opts).expect("CP1258 must decode cleanly");
         assert!(matches!(res, Cow::Owned(_)));

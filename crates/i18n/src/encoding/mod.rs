@@ -243,23 +243,9 @@ pub fn decode_text<'a>(input: &'a [u8], options: &DecodeOptions<'a>) -> Result<C
     }
 
     // 2. Fast path: check valid UTF-8
+    // Genuine UTF-8: never apply heuristic or metadata legacy decoding to valid UTF-8
+    // when force_encoding is None. This preserves modern UTF-8 text from accidental corruption.
     if let Ok(s) = std::str::from_utf8(input) {
-        // If metadata explicitly provides font name or codepage hint
-        if let Some(meta) = options.metadata {
-            let detection = detect_encoding(input, Some(meta));
-            if let DetectionResult::HighConfidence { encoding, evidence } = detection
-                && matches!(evidence, EncodingEvidence::FontHint | EncodingEvidence::Metadata)
-                && !is_already_unicode_vietnamese(s)
-            {
-                let decoded = decode_with_mode(input, encoding, options.mode)?;
-                if options.normalize_nfc {
-                    return Ok(apply_nfc_cow(decoded));
-                }
-                return Ok(decoded);
-            }
-        }
-
-        // Genuine UTF-8: never apply heuristic legacy decoding to valid UTF-8
         if options.normalize_nfc {
             return Ok(normalize_nfc(s));
         }
@@ -300,11 +286,21 @@ fn apply_nfc_cow<'a>(cow: Cow<'a, str>) -> Cow<'a, str> {
 /// Use this in `pdfcraft` or strict pipelines when metadata (such as a known PDF font name)
 /// guarantees the encoding, eliminating heuristic detection false positives.
 pub fn transcode_explicit<'a>(text: &'a str, encoding: LegacyEncoding) -> Cow<'a, str> {
-    match encoding {
-        LegacyEncoding::Tcvn3 => transcode_tcvn3(text),
-        LegacyEncoding::Tcvn3H => transcode_tcvn3_h(text),
-        LegacyEncoding::Vni => transcode_vni(text),
-        LegacyEncoding::Windows1258 => transcode_windows1258(text),
+    let mut bytes = Vec::with_capacity(text.len());
+    for ch in text.chars() {
+        let code = ch as u32;
+        if code > 0xFF {
+            return Cow::Borrowed(text);
+        }
+        bytes.push(code as u8);
+    }
+
+    match decode_with_mode(&bytes, encoding, DecodeMode::Practical) {
+        Ok(decoded) => {
+            let nfc = normalize_nfc(&decoded);
+            if nfc.as_ref() == text { Cow::Borrowed(text) } else { Cow::Owned(nfc.into_owned()) }
+        }
+        Err(_) => Cow::Borrowed(text),
     }
 }
 
@@ -341,9 +337,11 @@ pub fn transcode_with_summary<'a>(text: &'a str, font_hint: Option<&str>) -> (Co
 }
 
 /// Strict normalization and validation. Returns `Err` with the detected encoding display name
-/// if the text contains unidentifiable legacy patterns, preventing silent data corruption.
+/// if a legacy Vietnamese encoding is detected in the text, preventing silent data corruption.
+/// Returns `Ok` with the NFC-normalized text when no legacy encoding is detected. This does not
+/// confirm that the text is Unicode. Legacy text that detection does not match, such as `B¶n`, is returned as `Ok`.
 ///
-/// Use this in `pdfcraft` or strict pipelines when you want to guarantee the output is verified Unicode.
+/// Use this in `pdfcraft` or strict pipelines to reject text that contains a detected legacy encoding.
 pub fn validate_and_normalize(text: &str) -> Result<Cow<'_, str>, &'static str> {
     if let Some(enc) = detect_legacy_encoding(text, None) {
         return Err(enc.display_name());

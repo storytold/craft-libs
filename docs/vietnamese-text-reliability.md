@@ -244,14 +244,14 @@ Consumers may configure the decoding pipeline with one of two behavioral modes:
   $$\text{Legacy Bytes (TCVN3 / VNI / CP1258)} \xrightarrow{\text{Decode}} \text{Canonical UTF-8 NFC}$$
 * **Lossy-Tolerant Invariant (Non-goal):** 
   * Reverse transcoding ($E(D(B)) = B$) is explicitly out of scope and non-deterministic due to NFC diacritic composition and lossy punctuation normalization.
-  * Every string returned by `decode_text` is guaranteed to be in **Unicode Normalization Form C (NFC)** via `icu_normalizer`. Downstream text shapers, search indices, and layout engines will never receive decomposed combining marks or legacy control bytes from decoded legacy text.
+  * Every string returned by `decode_text` is guaranteed to be in **Unicode Normalization Form C (NFC)** via `icu_normalizer` when `normalize_nfc` is enabled (the default). When `normalize_nfc` is set to `false`, raw decoded codepoints (such as CP1258 combining diacritics) are returned without composition. Downstream text shapers, search indices, and layout engines will never receive decomposed combining marks or legacy control bytes from legacy text under the default configuration.
 
 ##### 3. Contract 2: Pending-at-EOF Policy & Truncated Sequence
 VNI is a multi-byte composite encoding (Base character + Diacritic mark byte). When the data stream terminates (EOF) or encounters an anomalous sequence, the decoder follows a deterministic two-mode matrix:
 
 | Situation at EOF | Mode: `Strict` | Mode: `Practical` (Default for Craft Apps) |
 | :--- | :--- | :--- |
-| **Pending base vowel at EOF**<br>*(e.g., stream terminates with byte `'a'`)* | Returns `Err(DecodeError::TruncatedSequence { offset, base })` | **Flushes pending base vowel to output** safely as regular character (`'a'`). |
+| **Pending base vowel at EOF**<br>*(e.g., stream terminates with byte `'a'`)* | **Flushes pending base vowel to output** safely as regular character (`'a'`). | **Flushes pending base vowel to output** safely as regular character (`'a'`). |
 | **Orphan diacritic mark**<br>*(e.g., mark byte `0xF8` following a space or consonant `k`)* | Returns `Err(DecodeError::OrphanDiacritic { byte, offset })` | **Emits standalone spacing accent** (e.g. `0xF8` $\to$ `` ` `` `U+0060`), never panics or drops bytes. |
 | **DOS control bytes (`0x01..=0x1F`)**<br>*(Legacy VSCII-1 vestiges in old CAD files)* | Returns `Err(DecodeError::StrictRejection { byte, offset })` | Emits non-fatal diagnostic warning via `tracing::warn!` and sanitizes as whitespace. |
 

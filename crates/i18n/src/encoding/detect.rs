@@ -308,7 +308,8 @@ fn score_vietnamese_encodings(s: &str) -> (bool, bool, usize, usize) {
 
 /// Detect the legacy Vietnamese encoding of a string slice with evidence categorization.
 pub fn detect_encoding_from_str(s: &str) -> DetectionResult {
-    if s.is_ascii() || is_already_unicode_vietnamese(s) {
+    // Short-String Invariant: strings shorter than 16 bytes disable statistical heuristics
+    if s.len() < 16 || s.is_ascii() || is_already_unicode_vietnamese(s) {
         return DetectionResult::Unknown;
     }
 
@@ -330,13 +331,15 @@ pub fn detect_encoding_from_str(s: &str) -> DetectionResult {
 /// Detect the legacy Vietnamese encoding of raw input bytes using metadata hints and content heuristics.
 pub fn detect_encoding(input: &[u8], metadata: Option<&EncodingMetadata<'_>>) -> DetectionResult {
     if let Some(meta) = metadata {
+        // 1. Container metadata (codepage hint) takes precedence over font name
+        if meta.codepage_hint == Some(1258) {
+            return DetectionResult::HighConfidence { encoding: LegacyEncoding::Windows1258, evidence: EncodingEvidence::Metadata };
+        }
+        // 2. Font name hint (advisory)
         if let Some(font) = meta.font_name
             && let Some(enc) = is_vietnamese_font(font)
         {
             return DetectionResult::HighConfidence { encoding: enc, evidence: EncodingEvidence::FontHint };
-        }
-        if meta.codepage_hint == Some(1258) {
-            return DetectionResult::HighConfidence { encoding: LegacyEncoding::Windows1258, evidence: EncodingEvidence::Metadata };
         }
     }
 
