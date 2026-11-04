@@ -60,6 +60,13 @@ The app keeps its `tl!` macro, its language setting (`"auto"` → `I18N.system_l
   without marks, as if `fmt` didn't isolate at all. egui draws the marks as nothing. For text
   that leaves the interface (file names, logs, terminals, text parsed later), use `fmt_plain` or
   `strip_isolates`.
+- **Filling as given:** `fill(template, &[("name", value)])` fills placeholders in the same one
+  pass as `fmt` but puts each value in exactly as given: no isolates added, none taken off the
+  template or a value. It is for callers that order bidi runs themselves or must keep a
+  document's own marks. `fill_with(template, |name| …)` takes the values from a lookup that gets
+  the bare name (`p` for `{p}`, `""` for `{}`), so borrowed values need no table. A placeholder
+  runs from a `{` to the next `}` (`{{p}}` names `{p`); unknown placeholders and an unclosed `{`
+  stay as written.
 - **Bad rows** (malformed, an unknown `@` context, a wrong plural form count, a row defined twice,
   of which the first is kept) and bad locales (`en`, `pseudo`, a code embedded twice in any case)
   are skipped; craft-i18n's CI rejects them before they ship. `I18n::new` parses nothing: it
