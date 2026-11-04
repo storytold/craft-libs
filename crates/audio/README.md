@@ -281,13 +281,20 @@ match craft_audio::decode(&bytes, None) {
 - HE-AAC: the AAC-LC core is decoded. `decode`, `Decoder` and `TrackDecoder` upsample it 2×;
   `aac::Decoder` alone outputs the core rate. SBR is not reconstructed, so there is no content
   above the core's Nyquist frequency.
+- HE-AAC v2: parametric stereo is not reconstructed either, so the mono core decodes as mono.
 - AAC: Main, SSR and LTP profiles, coupling channels and 960-sample frames are unsupported.
+- Raw ADTS: frames with several raw data blocks are unsupported. A frame that changes the stream's
+  sample rate, profile or channel configuration decodes as silence and counts as damaged.
+- MP4 gapless information outside an edit list is not read: a file from Apple's encoders with
+  `iTunSMPB` and no `elst` decodes with its priming and padding.
 - AAC channel configuration 7 and program-config layouts, and AIFF with more than four channels,
   decode with an unordered layout, in the codec's order.
 - A Matroska track with no block durations (AAC from ffmpeg 6) ends at its `DURATION` tag, when
   that ends inside the last packet. Otherwise all its audio is presented, including any padding.
 - ffmpeg before 9 ends some codecs' tracks in MP4 and Matroska up to 11 ms early. The audio past
   the end a file declares is not presented.
+- A Matroska track's end comes from its timestamps, so it is known to one timestamp tick (usually
+  1 ms) unless the last block has `DiscardPadding`.
 - A FLAC layout that decoders would not assume for the channel count depends on its
   `WAVEFORMATEXTENSIBLE_CHANNEL_MASK` comment. This includes the usual layouts for 5 and 6 channels:
   without the comment, back surrounds are read as side surrounds. It includes the usual 7-channel
@@ -328,6 +335,8 @@ Notes while symphonia is in use:
   streams through `Decoder`.
 - symphonia allocates sizes taken from the file. Container size fields of WAV, FLAC, MP4 and CAF
   files are checked against the file length before symphonia reads them.
+- AAC in CAF: the priming is not trimmed and `Decoder::seek` is not sample-exact, as CAF goes
+  through symphonia.
 - A panic inside symphonia is caught and returned as `AudioError::Malformed` only where panics
   unwind: native builds with the default `panic = "unwind"`. On `wasm32-unknown-unknown`, and in
   an app built with `panic = "abort"`, such a panic aborts. The native decoders do not panic.

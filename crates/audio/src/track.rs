@@ -97,7 +97,7 @@ impl TrackDecoder {
                     let h = lookahead.first().and_then(|p| aac::AdtsHeader::parse(p).ok()).ok_or_else(|| {
                         AudioError::Malformed("AAC track without an AudioSpecificConfig (extradata), and its packets are not ADTS".into())
                     })?;
-                    h.to_asc().to_bytes()
+                    adts_config(&h, &payloads)?
                 } else {
                     params.extradata.clone()
                 };
@@ -195,7 +195,10 @@ impl TrackDecoder {
         let data = packet.unwrap_or_default();
         let frames = match &mut self.inner {
             #[cfg(feature = "aac-decode")]
-            Inner::Aac { up, .. } => Some(aac::FRAME_LEN * if up.is_some() { 2 } else { 1 }),
+            Inner::Aac { up, .. } => {
+                let units = adts_frames(data).map_or(1, |f| f.iter().map(|(h, _)| usize::from(h.raw_data_blocks)).sum::<usize>());
+                Some(units.min(MAX_ADTS_FRAMES_PER_PACKET) * aac::FRAME_LEN * if up.is_some() { 2 } else { 1 })
+            }
             Inner::Pcm { kind, channels } => Some(data.len() / (kind.bytes() * *channels).max(1)),
         };
         let frames = frames.filter(|&n| n > 0).unwrap_or(self.last_frames);
@@ -203,7 +206,8 @@ impl TrackDecoder {
     }
 
     /// The frames every packet decodes to, for codecs whose packets all have one length: AAC
-    /// (1024, 2048 for HE-AAC); `None` for PCM.
+    /// (1024, 2048 for HE-AAC; a packet of several ADTS frames decodes to that many times this);
+    /// `None` for PCM.
     pub fn frames_per_packet(&self) -> Option<usize> {
         match &self.inner {
             #[cfg(feature = "aac-decode")]
@@ -278,17 +282,47 @@ fn append(out: &mut Vec<Vec<f32>>, more: Vec<Vec<f32>>) {
     }
 }
 
-/// The raw access units of an ADTS-framed packet (one or more whole frames, nothing else), or
-/// `None` when the packet is not ADTS. Frames with several raw data blocks are unsupported.
+/// The most ADTS frames a packet may hold: its audio is decoded and held in memory before any
+/// decode limit applies. 1024 frames is the 2^20 frames the demuxers allow a packet.
 #[cfg(feature = "aac-decode")]
-fn adts_payloads(packet: &[u8]) -> Option<Result<Vec<&[u8]>>> {
+const MAX_ADTS_FRAMES_PER_PACKET: usize = 1024;
+
+/// The configuration of an AAC stream from its first ADTS header. Channel configuration 0 leaves
+/// the layout to a program config element in the stream, looked for in `first_units`.
+#[cfg(feature = "aac-decode")]
+fn adts_config(header: &aac::AdtsHeader, first_units: &[&[u8]]) -> Result<Vec<u8>> {
+    if header.channel_config != 0 {
+        return Ok(header.to_asc().to_bytes());
+    }
+    let mut dec = aac::Decoder::from_adts(header)?;
+    for unit in first_units {
+        let _ = dec.decode(unit);
+        if dec.config().pce.is_some() {
+            return Ok(dec.config().to_bytes());
+        }
+    }
+    Err(AudioError::Malformed("ADTS stream with channel configuration 0, and no program config element in its first packets".into()))
+}
+
+/// The frames of an ADTS-framed packet (one or more whole frames, nothing else), or `None` when
+/// the packet is not ADTS.
+#[cfg(feature = "aac-decode")]
+fn adts_frames(packet: &[u8]) -> Option<Vec<(aac::AdtsHeader, &[u8])>> {
     if packet.len() < 7 || packet[0] != 0xFF || packet[1] & 0xF6 != 0xF0 {
         return None;
     }
     let frames = aac::split_adts(packet).ok()?;
     let whole: usize = frames.iter().map(|(h, _)| h.frame_length).sum();
-    if whole != packet.len() {
-        return None;
+    (whole == packet.len()).then_some(frames)
+}
+
+/// The raw access units of an ADTS-framed packet, or `None` when the packet is not ADTS. Frames
+/// with several raw data blocks are unsupported.
+#[cfg(feature = "aac-decode")]
+fn adts_payloads(packet: &[u8]) -> Option<Result<Vec<&[u8]>>> {
+    let frames = adts_frames(packet)?;
+    if frames.len() > MAX_ADTS_FRAMES_PER_PACKET {
+        return Some(Err(AudioError::Malformed(format!("a packet of {} ADTS frames", frames.len()))));
     }
     if frames.iter().any(|(h, _)| h.raw_data_blocks > 1) {
         return Some(Err(AudioError::Unsupported("ADTS frames with several raw data blocks".into())));
@@ -351,6 +385,71 @@ mod tests {
         // silence past the decode limit is an error, not shorter silence
         dec.last_frames = usize::try_from(crate::pcm::MAX_DECODE_SAMPLES / 2 + 1).unwrap();
         assert!(matches!(dec.conceal(None), Err(AudioError::TooLarge(_))));
+    }
+
+    /// One ADTS frame (stereo, 48 kHz, or channel configuration 0 with a PCE) of silence.
+    #[cfg(feature = "aac-decode")]
+    fn adts_frame(channel_config: u8) -> Vec<u8> {
+        use craft_media::bitstream::BitWriter;
+        let mut bw = BitWriter::new();
+        if channel_config == 0 {
+            bw.write_bits(5, 3); // ID_PCE
+            aac::ProgramConfig { front: vec![(false, 0), (true, 0)], ..Default::default() }.write(&mut bw);
+            bw.write_bits(0, 3); // ID_SCE
+            bw.write_bits(0, 4);
+            bw.write_bits(0, 22); // global_gain, ics_info, no pulse, TNS or gain control data
+        }
+        bw.write_bits(1, 3); // ID_CPE
+        bw.write_bits(0, 5); // tag, common_window
+        bw.write_bits(0, 44); // two such channel streams
+        bw.write_bits(7, 3); // ID_END
+        let au = bw.finish();
+        [&aac::AdtsHeader::write(2, 3, channel_config, au.len(), 0x7FF)[..], &au].concat()
+    }
+
+    #[cfg(feature = "aac-decode")]
+    fn aac_params() -> CodecParams {
+        CodecParams::new(CodecId::Aac)
+    }
+
+    #[cfg(feature = "aac-decode")]
+    #[test]
+    fn adts_packets_conceal_to_the_length_of_all_their_frames() {
+        let frame = adts_frame(2);
+        let mut dec = TrackDecoder::new(&aac_params(), &[&frame]).unwrap();
+        let packet = frame.repeat(3);
+        assert_eq!(dec.decode(&packet).unwrap().frames(), 3072);
+        // the middle frame's payload is damaged: its element id is ID_CCE, which is unsupported
+        let mut damaged = packet.clone();
+        damaged[frame.len() + 7] = 0b0100_0000;
+        assert!(dec.decode(&damaged).is_err());
+        assert_eq!(dec.conceal(Some(&damaged)).unwrap().frames(), 3072);
+        assert_eq!(dec.conceal(Some(&frame)).unwrap().frames(), 1024);
+        assert_eq!(dec.conceal(None).unwrap().frames(), 1024);
+    }
+
+    #[cfg(feature = "aac-decode")]
+    #[test]
+    fn a_packet_of_too_many_adts_frames_is_refused() {
+        let frame = adts_frame(2);
+        let mut dec = TrackDecoder::new(&aac_params(), &[&frame]).unwrap();
+        assert_eq!(dec.decode(&frame.repeat(MAX_ADTS_FRAMES_PER_PACKET)).unwrap().frames(), MAX_ADTS_FRAMES_PER_PACKET * 1024);
+        let packet = frame.repeat(MAX_ADTS_FRAMES_PER_PACKET + 1);
+        assert!(matches!(dec.decode(&packet), Err(AudioError::Malformed(_))));
+        assert_eq!(dec.conceal(Some(&packet)).unwrap().frames(), MAX_ADTS_FRAMES_PER_PACKET * 1024);
+    }
+
+    #[cfg(feature = "aac-decode")]
+    #[test]
+    fn adts_channel_configuration_0_takes_its_layout_from_the_stream() {
+        let frame = adts_frame(0);
+        let mut dec = TrackDecoder::new(&aac_params(), &[&frame]).unwrap();
+        assert_eq!(dec.channels(), 3);
+        assert_eq!(dec.decode(&frame).unwrap().channels.len(), 3);
+        // no program config element where one is needed
+        let bare = aac::AdtsHeader::write(2, 3, 0, 1, 0x7FF);
+        let bare = [&bare[..], &[0xE0]].concat();
+        assert!(matches!(TrackDecoder::new(&aac_params(), &[&bare]), Err(AudioError::Malformed(_))));
     }
 
     #[test]

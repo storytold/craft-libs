@@ -129,7 +129,8 @@ fn run(ff: &Path, args: &[&str]) -> bool {
     Command::new(ff).args(["-v", "error", "-y"]).args(args).output().is_ok_and(|o| o.status.success())
 }
 
-/// The fixture for `c`, written by ffmpeg (cached), or `None` when this ffmpeg lacks an encoder.
+/// The fixture for `c`, written by ffmpeg (cached), or `None` when this ffmpeg lacks an encoder
+/// (a failure with `CRAFT_MEDIA_REQUIRE_ORACLES=1`).
 fn fixture(ff: &Path, c: &Case) -> Option<PathBuf> {
     let out = crate::testkit::fixtures_dir("routing").join(c.name);
     let source = match (c.mono, c.surround) {
@@ -138,13 +139,15 @@ fn fixture(ff: &Path, c: &Case) -> Option<PathBuf> {
         _ => STEREO.to_string(),
     };
     let input = format!("{source}:s={}", c.rate);
-    crate::testkit::fixtures::generate(&out, |tmp| {
+    let made = crate::testkit::fixtures::generate(&out, |tmp| {
         let tmp = tmp.to_string_lossy();
         let mut args = vec!["-f", "lavfi", "-i", &input, "-t", "5"];
         args.extend_from_slice(c.args);
         args.push(&tmp);
         run(ff, &args)
-    })
+    });
+    assert!(made.is_some() || !craft_media_testkit::oracles_required(), "{}: ffmpeg could not write this fixture", c.name);
+    made
 }
 
 /// ffmpeg's decode of `file` as interleaved f32.
@@ -440,4 +443,59 @@ fn matroska_aac_without_block_durations_ends_at_its_duration_tag() {
     assert_eq!(frames(Some("00:00:03.000000000")), all, "ends before the last packet");
     assert_eq!(frames(Some("00:00:09.000000000")), all, "ends after the last packet");
     assert_eq!(frames(Some("not a duration")), all);
+}
+
+/// ADTS with channel configuration 0 takes its layout from the program config element in the stream.
+#[test]
+fn adts_with_a_program_config_element_decodes() {
+    let ff = require_ffmpeg!();
+    let c = Case {
+        name: "aac-pce.aac",
+        surround: true,
+        mono: false,
+        rate: 48_000,
+        args: &["-c:a", "aac", "-b:a", "384k", "-aac_pns", "0", "-aac_pce", "1"],
+        container: Container::Adts,
+        codec: CodecId::Aac,
+        layout: ChannelLayout::unordered(6),
+        channels: 6,
+        frames: None,
+        min_snr: 100.0,
+    };
+    let Some(path) = fixture(&ff, &c) else { return };
+    let bytes = std::fs::read(&path).unwrap();
+    assert_eq!(bytes[3] >> 6 | (bytes[2] & 1) << 2, 0, "the fixture signals its layout in a PCE");
+    let (info, buf) = decode(&bytes, None).unwrap();
+    assert_eq!((info.container, info.codec, buf.channels.len()), (c.container, c.codec, c.channels));
+    assert_eq!(info.layout, c.layout);
+    // Decoded order (C, L, R, surrounds, LFE) against ffmpeg's (L, R, C, LFE, surrounds).
+    let wav: Vec<Vec<f32>> = [1, 2, 0, 5, 3, 4].iter().map(|&i| buf.channels[i].clone()).collect();
+    let s = snr(&wav, &reference(&ff, &path));
+    assert!(s >= c.min_snr, "SNR {s:.1} dB");
+}
+
+/// `probe` and `decode` agree on an MP4's length when no single edit gives it: the samples'
+/// durations end the track, as they do for ffmpeg.
+#[test]
+fn mp4_without_an_edit_list_ends_with_its_sample_durations() {
+    let ff = require_ffmpeg!();
+    let c = Case {
+        name: "aac-no-edits.m4a",
+        surround: false,
+        mono: false,
+        rate: 44_100,
+        args: &["-c:a", "aac", "-b:a", "128k", "-aac_pns", "0", "-use_editlist", "0"],
+        container: Container::Mp4,
+        codec: CodecId::Aac,
+        layout: ChannelLayout::STEREO,
+        channels: 2,
+        frames: None,
+        min_snr: 100.0,
+    };
+    let Some(path) = fixture(&ff, &c) else { return };
+    let bytes = std::fs::read(&path).unwrap();
+    let (info, buf) = decode(&bytes, None).unwrap();
+    assert_eq!(probe(&bytes, None).unwrap().frames, buf.frames() as u64);
+    assert_eq!(info.frames, buf.frames() as u64);
+    assert_eq!(buf.frames(), reference(&ff, &path).len() / c.channels);
 }

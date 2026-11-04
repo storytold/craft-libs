@@ -242,8 +242,11 @@ impl<'a> Native<'a> {
             Ok(head) => head,
             Err(e) => return Some(Err(e)),
         };
-        let at = after_id3(&head);
-        let body = head.get(at..).unwrap_or_default();
+        let at = after_id3(src);
+        // A tag longer than the head (cover art) hides what follows it, so look there.
+        let past_tag = usize::try_from(at).is_ok_and(|at| at >= head.len() && at > 0);
+        let sniffed = if past_tag { super::detect_container(&src.bytes_upto(at, 64 * 1024), None) } else { super::detect_container(&head, None) };
+        let body = usize::try_from(at).ok().and_then(|at| head.get(at..)).unwrap_or_default();
         // The bytes decide the container when they say; the detection (which may come from the
         // extension) only picks among raw streams.
         // Formats with one track: any other track index is an error, as for a multi-track file.
@@ -251,13 +254,12 @@ impl<'a> Native<'a> {
             (Some(n), Some(Ok(_))) if n > 0 => Some(Err(AudioError::Unsupported(format!("no audio track {n}: the file has one")))),
             (_, opened) => opened,
         };
-        match super::detect_container(&head, None).or(detected) {
+        match sniffed.or(detected) {
             Some(Container::Wav) if wav::is_wav(&head) => single(open_wav(src)),
             Some(Container::Aiff) if aiff::is_aiff(&head) => single(open_aiff(src)),
             Some(c @ (Container::Mp4 | Container::QuickTime)) if head.get(4..8) == Some(b"ftyp") => open_mp4(src, c, track),
             Some(c @ (Container::Matroska | Container::WebM)) if body.starts_with(&[0x1A, 0x45, 0xDF, 0xA3]) => open_mkv(src, c, track),
-            Some(Container::Adts) => single(open_adts(src, &head).map(Ok)),
-            None => single(open_adts(src, &head).map(Ok)),
+            Some(Container::Adts) | None => single(open_adts(src, at)),
             _ => None,
         }
     }
@@ -378,11 +380,11 @@ impl<'a> Native<'a> {
     }
 }
 
-/// Where a stream starts: after any ID3v2 tags.
-fn after_id3(b: &[u8]) -> usize {
-    let mut at = 0;
-    while let Some(len) = b.get(at..).and_then(id3v2_len) {
-        at = at.saturating_add(len);
+/// Where a stream starts: after any ID3v2 tags, which may be longer than the head of the file.
+fn after_id3(src: &Src<'_>) -> u64 {
+    let mut at = 0u64;
+    while let Some(len) = id3v2_len(&src.bytes_upto(at, 10)) {
+        at = at.saturating_add(len as u64);
     }
     at
 }
@@ -476,6 +478,8 @@ struct Scanner<'s, 'a, F> {
     frame_len: F,
     /// The window's start and bytes.
     window: (u64, Vec<u8>),
+    /// The source failed to read: the scan is over.
+    failed: Option<AudioError>,
 }
 
 impl<F: Fn(&[u8]) -> Option<(usize, u32)>> Scanner<'_, '_, F> {
@@ -485,11 +489,17 @@ impl<F: Fn(&[u8]) -> Option<(usize, u32)>> Scanner<'_, '_, F> {
 
     /// The length and decoded frames of the frame at `p`, if one starts there and fits.
     fn len_at(&mut self, p: u64) -> Option<(usize, u32)> {
-        if p >= self.total {
+        if p >= self.total || self.failed.is_some() {
             return None;
         }
         if p < self.window.0 || p + Self::HEADER > self.window.0 + self.window.1.len() as u64 {
-            self.window = (p, self.src.bytes_upto(p, Self::WINDOW));
+            match self.src.read_upto(p, Self::WINDOW) {
+                Ok(bytes) => self.window = (p, bytes),
+                Err(e) => {
+                    self.failed = Some(e);
+                    return None;
+                }
+            }
         }
         let off = usize::try_from(p - self.window.0).ok()?;
         let (n, frames) = self.window.1.get(off..).and_then(&self.frame_len)?;
@@ -508,11 +518,15 @@ impl<F: Fn(&[u8]) -> Option<(usize, u32)>> Scanner<'_, '_, F> {
 /// Frame lengths of a raw stream of self-delimiting frames from `at`: `frame_len(rest)` gives the
 /// length and decoded frames of a frame starting at `rest`, or `None`. The first frame must be
 /// followed by a second (or the end of the data), so a stray sync word does not make a stream;
-/// damage later is skipped by scanning for the next pair. Reads the stream in windows.
-fn raw_frames(src: &Src<'_>, at: u64, frame_len: impl Fn(&[u8]) -> Option<(usize, u32)>) -> Option<Vec<(u64, u32, u32)>> {
+/// damage later is skipped by scanning for the next pair. Reads the stream in windows. `None` when
+/// no first frame is found; a source that fails to read is an error, not the end of the stream.
+fn raw_frames(src: &Src<'_>, at: u64, frame_len: impl Fn(&[u8]) -> Option<(usize, u32)>) -> Result<Option<Vec<(u64, u32, u32)>>> {
     let total = src.size();
-    let mut sc = Scanner { src, total, frame_len, window: (u64::MAX, Vec::new()) };
-    let first = (at..total.min(at.saturating_add(MAX_SYNC_SCAN))).find(|&p| sc.paired(p))?;
+    let mut sc = Scanner { src, total, frame_len, window: (u64::MAX, Vec::new()), failed: None };
+    let first = (at..total.min(at.saturating_add(MAX_SYNC_SCAN))).find(|&p| sc.failed.is_some() || sc.paired(p));
+    let Some(first) = first.filter(|_| sc.failed.is_none()) else {
+        return sc.failed.map_or(Ok(None), Err);
+    };
     let mut frames = Vec::new();
     let mut p = first;
     while p < total {
@@ -521,13 +535,13 @@ fn raw_frames(src: &Src<'_>, at: u64, frame_len: impl Fn(&[u8]) -> Option<(usize
                 frames.push((p, n as u32, f));
                 p += n as u64;
             }
-            None => match (p + 1..total).find(|&q| sc.paired(q)) {
-                Some(q) => p = q,
-                None => break,
+            None => match (p + 1..total).find(|&q| sc.failed.is_some() || sc.paired(q)) {
+                Some(q) if sc.failed.is_none() => p = q,
+                _ => break,
             },
         }
     }
-    Some(frames)
+    sc.failed.map_or(Ok(Some(frames)), Err)
 }
 
 /// The first `n` frames of a raw stream.
@@ -535,25 +549,44 @@ fn raw_lookahead(src: &Src<'_>, frames: &[(u64, u32, u32)], n: usize) -> Vec<Vec
     frames.iter().take(n).filter_map(|&(at, len, _)| src.bytes(at, len as usize)).collect()
 }
 
-/// A raw ADTS AAC stream: its frames' payloads (without the ADTS header) are the packets.
-/// `head` is the start of the file, as [`Native::open`] read it.
-fn open_adts<'a>(src: &Src<'a>, head: &[u8]) -> Option<Native<'a>> {
-    let frames = raw_frames(src, after_id3(head) as u64, |rest| {
-        aac::AdtsHeader::parse(rest).ok().filter(|h| h.frame_length > h.header_length).map(|h| (h.frame_length, aac::FRAME_LEN as u32))
-    })?;
-    let &(at, _, _) = frames.first()?;
-    let h = aac::AdtsHeader::parse(&src.bytes_upto(at, 16)).ok()?;
-    let core = h.to_asc().sample_rate;
-    let params = CodecParams::new(CodecId::Aac).with_extradata(h.to_asc().to_bytes()).with_sample_rate(core);
+/// A raw ADTS AAC stream from `at`: its frames' payloads (without the ADTS header) are the packets.
+/// Frames with several raw data blocks do not count as frames: their audio would be lost, so a
+/// stream of them is not opened here. A frame that changes the stream's sample rate, profile or
+/// channel configuration is damage: it decodes as silence of its length, not at the wrong speed.
+fn open_adts<'a>(src: &Src<'a>, at: u64) -> Option<Result<Native<'a>>> {
+    let frames = raw_frames(src, at, |rest| {
+        aac::AdtsHeader::parse(rest)
+            .ok()
+            .filter(|h| h.frame_length > h.header_length && h.raw_data_blocks == 1)
+            .map(|h| (h.frame_length, aac::FRAME_LEN as u32))
+    });
+    let frames = match frames {
+        Ok(frames) => frames?,
+        Err(e) => return Some(Err(e)),
+    };
+    let header_at = |p: u64| src.read_upto(p, 16).map(|b| aac::AdtsHeader::parse(&b).ok());
+    let &(start, _, _) = frames.first()?;
+    let first = match header_at(start) {
+        Ok(first) => first?,
+        Err(e) => return Some(Err(e)),
+    };
+    let core = first.to_asc().sample_rate;
+    // Without extradata the configuration comes from the first header (and, for channel
+    // configuration 0, a program config element in the stream).
+    let params = CodecParams::new(CodecId::Aac).with_sample_rate(core);
+    let lookahead = raw_lookahead(src, &frames, crate::track::LOOKAHEAD_PACKETS);
     // The payloads: each frame less its own header.
-    let payloads: Vec<(u64, u32, u32)> = frames
-        .iter()
-        .filter_map(|&(p, n, f)| {
-            let hl = aac::AdtsHeader::parse(&src.bytes_upto(p, 16)).ok()?.header_length as u32;
-            (n > hl).then_some((p + u64::from(hl), n - hl, f))
-        })
-        .collect();
-    let lookahead = raw_lookahead(src, &payloads, crate::track::LOOKAHEAD_PACKETS);
+    let mut payloads = Vec::with_capacity(frames.len());
+    for &(p, n, f) in &frames {
+        let h = match header_at(p) {
+            Ok(h) => h,
+            Err(e) => return Some(Err(e)),
+        };
+        let Some(h) = h else { continue };
+        let same = (h.object_type, h.sf_index, h.channel_config) == (first.object_type, first.sf_index, first.channel_config);
+        let skip = if same { h.header_length as u32 } else { n };
+        payloads.push((p + u64::from(skip), n - skip, f));
+    }
     let mut n = native(Container::Adts, Packets::Raw { frames: payloads, src: src.clone(), next: 0 }, &params, &lookahead, 0, None, None)?;
     // HE-AAC decodes twice the core frame length.
     let per_frame = rescale(aac::FRAME_LEN as u64, u64::from(core), u64::from(n.info.sample_rate));
@@ -564,7 +597,7 @@ fn open_adts<'a>(src: &Src<'a>, head: &[u8]) -> Option<Native<'a>> {
         n.info.frames = frames.len() as u64 * per_frame;
         n.frames_known = true;
     }
-    Some(n)
+    Some(Ok(n))
 }
 
 /// The `n`-th audio track (the first when `None`) among `kinds`, as an index into them.
@@ -617,8 +650,11 @@ fn open_mp4<'a>(src: &Src<'a>, container: Container, track: Option<usize>) -> Op
         }
         _ => (0, None),
     };
+    // The samples' durations end the track when no edit does, and an edit cannot outlast the media.
     let media: u64 = t.samples.iter().map(|s| u64::from(s.duration)).sum();
-    let frames = limit.unwrap_or_else(|| rescale(media, u64::from(timescale), u64::from(rate)).saturating_sub(skip));
+    let stored = rescale(media, u64::from(timescale), u64::from(rate)).saturating_sub(skip);
+    let frames = limit.map_or(stored, |l| l.min(stored));
+    let limit = if media > 0 { Some(frames) } else { limit };
     let packets = Packets::Mp4 { file: Box::new(file), src: src.clone(), track, next: 0, timescale, rate };
     native(container, packets, &params, &lookahead, skip, limit, Some(frames)).map(Ok)
 }
@@ -842,5 +878,84 @@ mod tag_tests {
         assert_eq!(last(5035), None, "past the packet");
         assert_eq!(last(5013), None, "at its start");
         assert_eq!(last(3000), None, "far before it");
+    }
+}
+
+#[cfg(test)]
+mod adts_tests {
+    use crate::{AudioError, Container, DecodeOptions, Decoder, decode};
+    use craft_media::ByteSource;
+
+    /// A frame of mono silence at sampling frequency index `sf_index`.
+    fn frame(sf_index: u8) -> Vec<u8> {
+        // ID_SCE, tag 0, an empty channel stream, ID_END
+        let au = [0x00, 0x00, 0x00, 0x07];
+        [&crate::aac::AdtsHeader::write(2, sf_index, 1, au.len(), 0x7FF)[..], &au].concat()
+    }
+
+    #[test]
+    fn a_stream_decodes_past_damage_between_frames() {
+        let good = frame(3).repeat(4);
+        let file = [&good[..], &[0x12; 100], &good].concat();
+        let (info, buf) = decode(&file, None).unwrap();
+        assert_eq!((info.container, buf.frames()), (Container::Adts, 8 * 1024));
+    }
+
+    #[test]
+    fn frames_with_several_raw_data_blocks_do_not_lose_audio_silently() {
+        let mut one = frame(3);
+        one[6] |= 1; // two raw data blocks
+        let file = one.repeat(8);
+        // No native frames: the file is refused, not decoded at half its length.
+        assert!(
+            !matches!(decode(&file, Some("aac")), Ok((info, _)) if info.codec == crate::CodecId::Aac && info.container == Container::Adts && info.damaged == 0)
+        );
+    }
+
+    #[test]
+    fn a_frame_that_changes_the_stream_format_is_damage() {
+        let file = [frame(3).repeat(4), frame(4).repeat(3)].concat();
+        let (info, buf) = decode(&file, None).unwrap();
+        assert_eq!((info.sample_rate, info.damaged, buf.frames()), (48_000, 3, 7 * 1024));
+    }
+
+    #[test]
+    fn a_stream_is_found_after_an_id3_tag_longer_than_the_head() {
+        let size = 300_000u32;
+        let tag = [
+            b"ID3\x03\x00\x00".to_vec(),
+            [size >> 21, size >> 14, size >> 7, size].iter().map(|v| (v & 0x7F) as u8).collect(),
+            vec![0; size as usize],
+        ]
+        .concat();
+        let file = [tag, frame(3).repeat(4)].concat();
+        let (info, buf) = decode(&file, None).unwrap();
+        assert_eq!((info.container, buf.frames()), (Container::Adts, 4 * 1024));
+    }
+
+    /// Bytes that fail to read past `good`.
+    struct Failing {
+        bytes: Vec<u8>,
+        good: u64,
+    }
+
+    impl ByteSource for Failing {
+        fn len(&self) -> u64 {
+            self.bytes.len() as u64
+        }
+        fn read_at(&self, offset: u64, buf: &mut [u8]) -> std::io::Result<()> {
+            if offset + buf.len() as u64 > self.good {
+                return Err(std::io::Error::other("the source failed"));
+            }
+            self.bytes.as_slice().read_at(offset, buf)
+        }
+    }
+
+    #[test]
+    fn a_source_failing_during_the_frame_scan_is_an_io_error() {
+        let bytes = frame(3).repeat(100_000);
+        // Past the head, so the failure comes during the scan rather than format detection.
+        let opened = Decoder::open(Failing { bytes, good: 300_000 }, Some("aac"), &DecodeOptions::default());
+        assert!(matches!(opened, Err(AudioError::Io(_))), "{:?}", opened.err());
     }
 }

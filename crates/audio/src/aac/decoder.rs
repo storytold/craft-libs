@@ -60,7 +60,8 @@ impl Decoder {
     }
 
     /// Create a decoder for an ADTS stream from its first header. With channel configuration 0 the
-    /// channel layout is taken from the program config element carried in the first frame.
+    /// channel layout is taken from the program config element carried in the first frame that
+    /// decodes with it.
     pub fn from_adts(header: &crate::aac::config::AdtsHeader) -> Result<Decoder> {
         Self::from_config(header.to_asc())
     }
@@ -178,9 +179,17 @@ impl Decoder {
                     if allow_reconfig && !saw_element && self.asc.channel_config == 0 && self.asc.pce.as_ref() != Some(&pce) {
                         let layout = pce.layout();
                         if !layout.is_empty() && layout.iter().map(|e| e.0.channels()).sum::<usize>() <= 64 {
-                            self.asc.pce = Some(pce);
+                            // A damaged PCE must not outlive its access unit: the layout changes
+                            // only when the access unit decodes with it.
+                            let pce_before = self.asc.pce.replace(pce);
+                            let before = (std::mem::take(&mut self.layout), std::mem::take(&mut self.offsets), std::mem::take(&mut self.channels));
                             self.set_layout(layout);
-                            return self.decode_block(au, false);
+                            let decoded = self.decode_block(au, false);
+                            if decoded.is_err() {
+                                self.asc.pce = pce_before;
+                                (self.layout, self.offsets, self.channels) = before;
+                            }
+                            return decoded;
                         }
                     }
                 }
@@ -214,7 +223,11 @@ impl Decoder {
 
     fn find_slot(&self, ty: ElementType, tag: u8, used: &[bool]) -> Result<usize> {
         let compatible = |t: ElementType| t == ty || (ty != ElementType::Cpe && t != ElementType::Cpe);
-        if let Some(i) = self.layout.iter().enumerate().position(|(i, &(t, g))| t == ty && g == tag && !used[i]) {
+        // A program config names its elements' tags. An indexed configuration does not: its elements
+        // are placed by the order they arrive in, whatever their tags.
+        if self.asc.channel_config == 0
+            && let Some(i) = self.layout.iter().enumerate().position(|(i, &(t, g))| t == ty && g == tag && !used[i])
+        {
             return Ok(i);
         }
         if let Some(i) = self.layout.iter().enumerate().position(|(i, &(t, _))| t == ty && !used[i]) {
@@ -557,6 +570,11 @@ fn synth(state: &mut ChannelState, info: &IcsInfo, spec: &[f32]) -> Vec<f32> {
             }
         }
     }
+    // A hostile stream can overflow f32 (PNS at full energy through a resonant TNS filter); that must
+    // not reach the output or the next frame's overlap.
+    for s in buf.iter_mut().filter(|s| !s.is_finite()) {
+        *s = 0.0;
+    }
     let out: Vec<f32> = (0..1024).map(|n| state.overlap[n] + buf[n]).collect();
     state.overlap.copy_from_slice(&buf[1024..]);
     state.prev_shape = cur;
@@ -566,6 +584,7 @@ fn synth(state: &mut ChannelState, info: &IcsInfo, spec: &[f32]) -> Vec<f32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use craft_media::bitstream::BitWriter;
 
     /// Implicitly signalled HE-AAC (an AAC-LC config) is recognised from the SBR fill element.
     #[test]
@@ -584,5 +603,71 @@ mod tests {
         let dec = Decoder::new(&[0x2B, 0x92, 0x08, 0x00]).unwrap();
         assert!(dec.sbr());
         assert_eq!(dec.sample_rate(), 22_050);
+    }
+
+    /// An access unit whose elements are all empty: `elements` are (id, tag), then ID_END.
+    fn silent_au(pce: Option<&ProgramConfig>, elements: &[(u32, u32)]) -> Vec<u8> {
+        let mut bw = BitWriter::new();
+        if let Some(pce) = pce {
+            bw.write_bits(ID_PCE, 3);
+            pce.write(&mut bw);
+        }
+        for &(id, tag) in elements {
+            bw.write_bits(id, 3);
+            bw.write_bits(tag, 4);
+            if id == ID_CPE {
+                bw.write_bits(0, 1); // common_window
+            }
+            for _ in 0..if id == ID_CPE { 2 } else { 1 } {
+                bw.write_bits(0, 8); // global_gain
+                bw.write_bits(0, 11); // ics_info: long window, max_sfb 0, no predictor
+                bw.write_bits(0, 3); // no pulse, TNS or gain control data
+            }
+        }
+        bw.write_bits(ID_END, 3);
+        bw.finish()
+    }
+
+    /// Indexed configurations place elements by arrival order, whatever their tags (as ffmpeg does).
+    #[test]
+    fn indexed_configurations_ignore_element_tags() {
+        let dec = Decoder::from_config(AudioSpecificConfig::lc(4, 5)).unwrap();
+        // SCE, CPE, CPE: the first CPE to arrive is L/R even when tagged 1
+        assert_eq!(dec.find_slot(ElementType::Cpe, 1, &[true, false, false]), Ok(1));
+        assert_eq!(dec.find_slot(ElementType::Cpe, 0, &[true, true, false]), Ok(2));
+    }
+
+    #[test]
+    fn program_configs_place_elements_by_tag() {
+        let pce = ProgramConfig { front: vec![(true, 3), (true, 5)], ..Default::default() };
+        let asc = AudioSpecificConfig { pce: Some(pce), ..AudioSpecificConfig::lc(4, 0) };
+        let dec = Decoder::from_config(asc).unwrap();
+        assert_eq!(dec.find_slot(ElementType::Cpe, 5, &[false, false]), Ok(1));
+    }
+
+    /// A PCE in an access unit that then fails leaves the layout as it was.
+    #[test]
+    fn a_damaged_in_band_pce_does_not_change_the_layout() {
+        let two = ProgramConfig { front: vec![(true, 0)], ..Default::default() };
+        let six = ProgramConfig { front: vec![(false, 0), (true, 0)], back: vec![(true, 1)], lfe: vec![0], ..Default::default() };
+        let mut dec = Decoder::from_config(AudioSpecificConfig { pce: Some(two.clone()), ..AudioSpecificConfig::lc(4, 0) }).unwrap();
+        let good = silent_au(None, &[(ID_CPE, 0)]);
+        assert_eq!(dec.decode(&good).unwrap().len(), 2);
+        // the new layout's elements are missing from this access unit
+        assert!(dec.decode(&silent_au(Some(&six), &[(ID_CPE, 0)])).is_err());
+        assert_eq!((dec.channels(), dec.config().pce.as_ref()), (2, Some(&two)));
+        assert_eq!(dec.decode(&good).unwrap().len(), 2);
+        // one that decodes does change it
+        let full = silent_au(Some(&six), &[(ID_SCE, 0), (ID_CPE, 0), (ID_CPE, 1), (ID_LFE, 0)]);
+        assert_eq!(dec.decode(&full).unwrap().len(), 6);
+        assert_eq!(dec.channels(), 6);
+    }
+
+    #[test]
+    fn non_finite_spectra_do_not_reach_the_output_or_the_overlap() {
+        let mut state = ChannelState { overlap: vec![0.0; 1024], prev_shape: WindowShape::Sine };
+        let info = IcsInfo::parse(&mut BitReader::new(&[0; 2]), 4).unwrap();
+        let out = synth(&mut state, &info, &vec![f32::INFINITY; 1024]);
+        assert!(out.iter().chain(&state.overlap).all(|s| s.is_finite()));
     }
 }
