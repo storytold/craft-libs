@@ -5,8 +5,8 @@ clean-room ISO BMFF (MP4), QuickTime (MOV) and Matroska (MKV, WebM) demuxers and
 demuxer, written from the public specifications. No `unsafe`, no panics on malformed input, builds
 for `wasm32-unknown-unknown`. Dependencies: `thiserror` (for `isobmff`), `serde` (optional).
 
-Codecs go in separate crates that depend on this one: `craft-audio` for audio (in a follow-up),
-and a video codec crate later. What both need lives here: the containers, the
+Codecs are in separate crates that depend on this one: [`craft-audio`](../audio/README.md) for
+audio; video codecs will go in a separate crate. What both need lives here: the containers, the
 bit I/O, one `ByteSource` trait, and the [shared identifiers](#containers-codecs-and-codec-parameters)
 that codec crates use to describe a file and configure a decoder.
 

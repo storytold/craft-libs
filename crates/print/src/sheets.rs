@@ -138,13 +138,22 @@ impl<'a> Lexer<'a> {
         self.s.get(self.pos..).unwrap_or(&[])
     }
 
+    /// Skips whitespace and comments, charged to the token budget like the tokens they sit
+    /// between: an object behind a long comment is otherwise scanned again for every reference
+    /// to it, outside every budget.
     fn skip_ws(&mut self) {
+        let start = self.pos;
+        let end = self.pos.saturating_add(self.max_tokens.saturating_sub(self.tokens));
         while let Some(b) = self.peek() {
+            if self.pos >= end {
+                self.exhausted = true;
+                break;
+            }
             if is_white(b) {
                 self.pos += 1;
             } else if b == b'%' {
                 while let Some(b) = self.peek() {
-                    if b == b'\n' || b == b'\r' {
+                    if b == b'\n' || b == b'\r' || self.pos >= end {
                         break;
                     }
                     self.pos += 1;
@@ -153,6 +162,7 @@ impl<'a> Lexer<'a> {
                 break;
             }
         }
+        self.tokens = self.tokens.saturating_add(self.pos - start);
     }
 
     /// A run of regular characters (a number, keyword or name body).
@@ -328,14 +338,15 @@ impl<'a> Lexer<'a> {
             return None;
         }
         if word.iter().all(u8::is_ascii_digit) {
-            let after = self.pos;
+            let (after, tokens, exhausted) = (self.pos, self.tokens, self.exhausted);
             if let (Some(num), Some(generation)) = (std::str::from_utf8(word).ok().and_then(|w| w.parse::<u32>().ok()), self.unsigned())
                 && let Ok(generation) = u16::try_from(generation)
                 && self.keyword(b"R")
             {
                 return Some(Obj::Ref(num, generation));
             }
-            self.pos = after;
+            // The caller rescans what the lookahead skipped: it must not be charged twice.
+            (self.pos, self.tokens, self.exhausted) = (after, tokens, exhausted);
         }
         self.tokens = self.tokens.checked_add(word.len())?;
         if self.tokens > self.max_tokens {
@@ -818,6 +829,7 @@ impl Reader<'_> {
             let (Ok(num), Some(at)) = (u32::try_from(num), usize::try_from(at).ok().and_then(|a| a.checked_add(first))) else { break };
             objects.push((num, at));
         }
+        self.budget.parsed(&lx)?;
         Some(ObjStm { data, objects })
     }
 
