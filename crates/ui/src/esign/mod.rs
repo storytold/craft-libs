@@ -316,9 +316,7 @@ impl EsignDialog {
 
         if self.backend.is_some() && self.caps_seq.is_none() {
             let first = self.capabilities.is_none() && self.asked_caps_at.is_none();
-            let retry = self
-                .asked_caps_at
-                .is_some_and(|asked| !self.available() && now - asked >= RETRY);
+            let retry = self.asked_caps_at.is_some_and(|asked| !self.available() && now - asked >= RETRY);
             if first || retry {
                 self.asked_caps_at = Some(now);
                 self.caps_seq = Some(self.submit(Request::Capabilities));

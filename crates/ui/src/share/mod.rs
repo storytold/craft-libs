@@ -520,11 +520,7 @@ impl ShareDialog {
     /// Generation of the sheet currently open, for callers that track their
     /// own save epoch. Zero when the dialog is closed.
     pub fn sheet_generation(&self) -> u64 {
-        if self.open.is_some() {
-            self.sheet_generation
-        } else {
-            0
-        }
+        if self.open.is_some() { self.sheet_generation } else { 0 }
     }
 
     fn save_completion_applies(&self) -> bool {
@@ -808,11 +804,7 @@ impl ShareDialog {
                     // it can turn the open document into bytes, and a share
                     // transport is the wrong place to pass a workbook through.
                     // `generation` is filled when taken; zero here is a placeholder.
-                    self.wants_save = Some(SaveRequest {
-                        destination,
-                        name,
-                        generation: 0,
-                    });
+                    self.wants_save = Some(SaveRequest { destination, name, generation: 0 });
                     if let Some(sheet) = &mut self.open {
                         sheet.saving = Some(0);
                         sheet.save_error = None;

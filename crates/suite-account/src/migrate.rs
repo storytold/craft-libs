@@ -133,11 +133,7 @@ pub fn adopt<S: TokenStore>(store: &Store<S>, path: &Path, now: i64) -> Result<A
     }
     let service = accounts::normalise(&legacy.service);
     let id = accounts::handle(&service, &legacy.user);
-    let existing = if store.has_token(&id)? {
-        store.accounts()?.get(&id).cloned()
-    } else {
-        None
-    };
+    let existing = if store.has_token(&id)? { store.accounts()?.get(&id).cloned() } else { None };
     if let Some(account) = existing {
         match std::fs::remove_file(path) {
             Ok(()) => {}

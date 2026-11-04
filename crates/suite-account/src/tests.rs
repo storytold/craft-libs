@@ -55,13 +55,7 @@ impl Service for Canned {
     }
 
     fn identity(&self, _base: &str, _token: &Secret) -> Result<Option<Identity>, String> {
-        Ok(Some(Identity {
-            user: USER.to_owned(),
-            display: "Ada Lovelace".to_owned(),
-            email: None,
-            linked: true,
-            conversation: None,
-        }))
+        Ok(Some(Identity { user: USER.to_owned(), display: "Ada Lovelace".to_owned(), email: None, linked: true, conversation: None }))
     }
 
     fn revoke(&self, base: &str, _token: &Secret) -> Result<(), String> {
@@ -356,11 +350,7 @@ fn migration_repairs_an_orphan_keychain_token_with_the_legacy_file() {
     let id = accounts::handle(SERVICE, USER);
     keychain.put(&id, &Secret::new("orphan-token")).unwrap();
     let path = legacy_file(app.path());
-    std::fs::write(
-        &path,
-        format!(r#"{{"service":"{SERVICE}","token":"{LEGACY}","user":"{USER}","display":"Ada Lovelace"}}"#).as_bytes(),
-    )
-    .unwrap();
+    std::fs::write(&path, format!(r#"{{"service":"{SERVICE}","token":"{LEGACY}","user":"{USER}","display":"Ada Lovelace"}}"#).as_bytes()).unwrap();
 
     match crate::migrate::adopt(&store, &path, NOW).unwrap() {
         Adopted::Taken(account) => assert_eq!(account.id, id),

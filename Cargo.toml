@@ -73,9 +73,6 @@ chrono = { version = "0.4.45", default-features = false, features = ["std"] }
 
 # Foundation crates. The versions match the ones the app repos already pin.
 log = "0.4"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-thiserror = "2"
 pollster = "0.4"
 wgpu = { version = "30", default-features = false, features = ["std", "wgsl"] }
 

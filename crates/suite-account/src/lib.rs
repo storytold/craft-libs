@@ -190,15 +190,7 @@ impl<S: TokenStore> Store<S> {
         self.tokens.put(&id, token).map_err(Error::Keychain)?;
         let mut list = accounts::read(&path)?;
         let added = list.get(&id).map_or(now, |a| a.added);
-        let account = Account {
-            id,
-            service,
-            user: new.user.clone(),
-            display: new.display.clone(),
-            email: new.email.clone(),
-            added,
-            last_used: now,
-        };
+        let account = Account { id, service, user: new.user.clone(), display: new.display.clone(), email: new.email.clone(), added, last_used: now };
         list.put(account.clone());
         accounts::write(&path, &list)?;
         Ok(account)
