@@ -32,3 +32,7 @@ mod java_attribute_names;
 #[cfg(test)]
 #[path="regressions/java_constant_pool_slots.rs"]
 mod java_constant_pool_slots;
+
+#[cfg(test)]
+#[path="regressions/java_invoke_operands.rs"]
+mod java_invoke_operands;
