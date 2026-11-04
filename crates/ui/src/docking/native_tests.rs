@@ -2050,6 +2050,18 @@ fn a_drag_in_the_main_window_keeps_the_pointer_over_a_palette() {
         d.step(vec![]);
         assert_eq!(main_pointer(&d), None, "the pointer is the palette's (palette moves: {palette_moves})");
     }
+    // A drag whose release never comes, because the main window lost focus during it, holds
+    // nothing after that.
+    let mut d = driver(layout(true));
+    let id = window(&d, 5).id;
+    let viewport = d.viewport(id);
+    d.step(vec![]);
+    let rect = d.host().windows[&viewport].rect;
+    d.press(pos2(50.0, 50.0));
+    d.step(vec![Event::WindowFocused(false)]);
+    d.window_pointer(id, rect.center());
+    d.step(vec![]);
+    assert_eq!(main_pointer(&d), None, "the drag ended with the main window's focus");
 }
 
 /// AppKit's resize area reaches a few points past a palette's frame, over the main window:

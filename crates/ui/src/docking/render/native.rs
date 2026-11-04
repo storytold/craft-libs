@@ -1167,13 +1167,19 @@ impl egui::Plugin for NativeInput {
                 let pass = body.pass;
                 body.resize_bands.retain(|_, (at, _)| *at + 1 >= pass);
                 for event in &input.events {
-                    if let Event::PointerButton { button, pressed, .. } = event {
-                        let bit = 1 << (*button as u8);
-                        if *pressed {
-                            body.root_held |= bit;
-                        } else {
-                            body.root_held &= !bit;
+                    match event {
+                        Event::PointerButton { button, pressed, .. } => {
+                            let bit = 1 << (*button as u8);
+                            if *pressed {
+                                body.root_held |= bit;
+                            } else {
+                                body.root_held &= !bit;
+                            }
                         }
+                        // A window that loses focus may never see its buttons' release (Windows
+                        // sends none once another window takes the mouse capture): none is held.
+                        Event::WindowFocused(false) => body.root_held = 0,
+                        _ => {}
                     }
                 }
                 let origin = input.viewports.get(&ViewportId::ROOT).and_then(|info| info.inner_rect).map(|r| r.min.to_vec2());
