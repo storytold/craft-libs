@@ -16,7 +16,7 @@ use symphonia::core::errors::Error as SymError;
 use symphonia::core::formats::probe::{Hint, ProbeOptions, ProbeableFormat, Score, Scoreable};
 use symphonia::core::formats::{FormatOptions, FormatReader, SeekMode, SeekTo, Track};
 use symphonia::core::io::{MediaSourceStream, MediaSourceStreamOptions, ScopedStream};
-use symphonia::core::meta::MetadataOptions;
+use symphonia::core::meta::{MetadataOptions, RawValue};
 use symphonia::core::units::{TimeBase, Timestamp};
 
 use super::id3v2_len;
@@ -446,6 +446,21 @@ fn layout_of(channels: Option<&Channels>) -> ChannelLayout {
     }
 }
 
+/// The channel mask comment among the tags the reader has read.
+fn metadata_channel_mask(reader: &mut dyn FormatReader) -> Option<u32> {
+    let mut metadata = reader.metadata();
+    loop {
+        let mask = metadata.current()?.media.tags.iter().find_map(|t| match &t.raw.value {
+            RawValue::String(value) => super::flac::comment_mask(t.raw.key.as_bytes(), value.as_bytes()),
+            _ => None,
+        });
+        if mask.is_some() {
+            return mask;
+        }
+        metadata.pop()?;
+    }
+}
+
 /// The stored sample format, using the codec and its declared bit depth. Lossy and unusual
 /// codecs decode to `Compressed`.
 fn sample_format_of(p: &AudioCodecParameters) -> SampleFormat {
@@ -547,7 +562,7 @@ impl Symph {
     /// Open audio track `track` (the first when `None`) of the file in `bytes`.
     pub(crate) fn open(bytes: Cow<'_, [u8]>, detected: Option<Container>, track: Option<usize>) -> Result<Symph> {
         guarded(move || {
-            let (reader, flac_layout) = match open(bytes, detected)? {
+            let (mut reader, flac_layout) = match open(bytes, detected)? {
                 Opened::Reader(reader, layout) => (reader, layout),
                 Opened::Empty(info) => {
                     // a stream with no audio still has one track, as WAV and AIFF do
@@ -573,6 +588,8 @@ impl Symph {
             let (track_id, mut info) = info_of(reader.as_ref(), detected, track)?;
             if let Some(layout) = flac_layout.filter(|l| l.channels() == info.channels) {
                 info.layout = layout;
+            } else if info.codec == CodecId::Flac && info.container == Container::Ogg {
+                info.layout = super::flac::layout_from(metadata_channel_mask(reader.as_mut()), info.channels);
             }
             let t = reader.tracks().iter().find(|t| t.id == track_id).ok_or_else(|| AudioError::Malformed("track vanished".into()))?;
             let params = audio_params(t).cloned().ok_or_else(|| AudioError::Malformed("track vanished".into()))?;

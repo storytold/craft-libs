@@ -85,8 +85,23 @@ pub(crate) fn layout(b: &[u8], at: usize) -> Option<ChannelLayout> {
 /// `channels` channels described by the channel mask comment of the stream at `at`, or else in
 /// the layout decoders assume for the count (RFC 9639 §8.6.2, §9.1.3).
 fn layout_of(b: &[u8], at: usize, channels: u16) -> ChannelLayout {
-    let mask = channel_mask(b, at).unwrap_or_else(|| crate::layout::flac_assumed_mask(usize::from(channels)));
+    layout_from(channel_mask(b, at), channels)
+}
+
+/// `channels` channels described by a channel mask comment's value, or else in the layout decoders
+/// assume for the count.
+pub(crate) fn layout_from(mask: Option<u32>, channels: u16) -> ChannelLayout {
+    let mask = mask.unwrap_or_else(|| crate::layout::flac_assumed_mask(usize::from(channels)));
     ChannelLayout::from_mask_and_channels(mask, channels)
+}
+
+/// The mask in a comment, when its key is the channel mask's and its value a `0x` hexadecimal number.
+pub(crate) fn comment_mask(key: &[u8], value: &[u8]) -> Option<u32> {
+    if !key.eq_ignore_ascii_case(b"WAVEFORMATEXTENSIBLE_CHANNEL_MASK") {
+        return None;
+    }
+    let hex = value.strip_prefix(b"0x").or_else(|| value.strip_prefix(b"0X"))?;
+    u32::from_str_radix(std::str::from_utf8(hex).ok()?, 16).ok()
 }
 
 /// The value of the first `WAVEFORMATEXTENSIBLE_CHANNEL_MASK` comment that holds a `0x` hexadecimal
@@ -118,11 +133,7 @@ fn comments_mask(block: &[u8]) -> Option<u32> {
         let comment = block.get(at + 4..(at + 4).checked_add(len)?)?;
         at += 4 + len;
         let Some(eq) = comment.iter().position(|&c| c == b'=') else { continue };
-        if !comment[..eq].eq_ignore_ascii_case(b"WAVEFORMATEXTENSIBLE_CHANNEL_MASK") {
-            continue;
-        }
-        let hex = comment[eq + 1..].strip_prefix(b"0x").or_else(|| comment[eq + 1..].strip_prefix(b"0X"));
-        if let Some(mask) = hex.and_then(|h| std::str::from_utf8(h).ok()).and_then(|h| u32::from_str_radix(h, 16).ok()) {
+        if let Some(mask) = comment_mask(&comment[..eq], &comment[eq + 1..]) {
             return Some(mask);
         }
     }

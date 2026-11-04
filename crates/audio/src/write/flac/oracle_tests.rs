@@ -236,6 +236,34 @@ fn layouts_decoders_would_not_assume_are_recorded() {
     }
 }
 
+/// FLAC in Ogg reads its layout as a FLAC file does: from the mask comment, or else the one
+/// decoders assume for the count.
+#[cfg(feature = "symphonia")]
+#[test]
+fn ogg_flac_reads_the_mask_comment() {
+    use crate::ChannelLayout;
+    let Some(ff) = ffmpeg() else { return };
+    let cases: [(&str, &str, &[&str], u16, u32); 3] = [
+        ("ogg-mask", "aevalsrc=0|0|0|0:c=4c:d=0.1:s=48000", &["-metadata", "WAVEFORMATEXTENSIBLE_CHANNEL_MASK=0x0107"], 4, 0x107),
+        ("ogg-5.1", "aevalsrc=0|0|0|0|0|0:c=5.1:d=0.1:s=48000", &[], 6, 0x60F),
+        ("ogg-stereo", "aevalsrc=0|0:c=stereo:d=0.1:s=48000", &["-metadata", "TITLE=x"], 2, 0x3),
+    ];
+    for (name, source, extra, channels, mask) in cases {
+        let path = common::fixture_subdir("flac").join(format!("{name}.oga"));
+        let status = Command::new(&ff)
+            .args(["-v", "error", "-y", "-f", "lavfi", "-i", source, "-c:a", "flac", "-f", "ogg"])
+            .args(extra)
+            .arg(&path)
+            .status()
+            .unwrap();
+        assert!(status.success(), "{name}");
+        let bytes = std::fs::read(&path).unwrap();
+        let expected = ChannelLayout::from_mask_and_channels(mask, channels);
+        assert_eq!(crate::probe(&bytes, None).unwrap().layout, expected, "probe {name}");
+        assert_eq!(crate::decode(&bytes, None).unwrap().0.layout, expected, "decode {name}");
+    }
+}
+
 #[test]
 fn the_mask_comment_is_written_only_when_decoders_would_assume_otherwise() {
     use super::mask_comment;
