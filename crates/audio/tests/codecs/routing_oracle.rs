@@ -469,14 +469,28 @@ fn adts_with_a_program_config_element_decodes() {
     assert_eq!((info.container, info.codec, buf.channels.len()), (c.container, c.codec, c.channels));
     assert_eq!(info.layout, c.layout);
     assert_eq!(buf.frames(), reference(&ff, &path).len() / c.channels);
-    // Decoded order (C, L, R, surrounds, LFE) against ffmpeg's (L, R, C, LFE, surrounds).
-    let wav: Vec<Vec<f32>> = [1, 2, 0, 5, 3, 4].iter().map(|&i| buf.channels[i].clone()).collect();
-    let s = snr(&wav, &reference(&ff, &path));
-    assert!(s >= c.min_snr, "SNR {s:.1} dB");
+    // A program config's channels come in its own order, and which order ffmpeg writes differs by
+    // version: each of ours must match a different one of ffmpeg's.
+    let refr = reference(&ff, &path);
+    let mut matched = Vec::new();
+    for plane in &buf.channels {
+        let (best, s) = (0..c.channels)
+            .map(|r| {
+                let other: Vec<f32> = refr.iter().skip(r).step_by(c.channels).copied().collect();
+                (r, snr(std::slice::from_ref(plane), &other))
+            })
+            .max_by(|a, b| a.1.total_cmp(&b.1))
+            .unwrap();
+        assert!(s >= c.min_snr, "channel {} matches ffmpeg's {best} at only {s:.1} dB", matched.len());
+        matched.push(best);
+    }
+    matched.sort_unstable();
+    assert_eq!(matched, (0..c.channels).collect::<Vec<_>>());
 }
 
 /// `probe` and `decode` agree on an MP4's length when no single edit gives it: the samples'
-/// durations end the track, as they do for ffmpeg.
+/// durations end the track. ffmpeg 9 does the same, but earlier versions present the whole last
+/// packet, so the length is not compared with its decode.
 #[test]
 fn mp4_without_an_edit_list_ends_with_its_sample_durations() {
     let ff = require_ffmpeg!();
@@ -498,7 +512,8 @@ fn mp4_without_an_edit_list_ends_with_its_sample_durations() {
     let (info, buf) = decode(&bytes, None).unwrap();
     assert_eq!(probe(&bytes, None).unwrap().frames, buf.frames() as u64);
     assert_eq!(info.frames, buf.frames() as u64);
-    assert_eq!(buf.frames(), reference(&ff, &path).len() / c.channels);
+    // 5 s, and 1024 frames of priming with no edit list to skip them.
+    assert_eq!(buf.frames(), 5 * 44_100 + 1024);
 }
 
 /// The big-endian `u32` at each of `offsets` after the first `box_name` in `file`, changed by `edit`.
