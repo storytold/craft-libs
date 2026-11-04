@@ -691,6 +691,12 @@ fn test_coderabbit_review_invariants() {
         "Codepage 1258 metadata must override VNI font name in evidence hierarchy"
     );
 
+    // Verify decode_text respects CP1258 codepage metadata over VNI font hint
+    let cp1258_non_utf8 = [b'T', b'i', 0xEA, 0xEC, b't']; // "Tiê" + sắc (0xEC) + "t" in CP1258
+    let options = DecodeOptions { force_encoding: None, metadata: Some(&conflicting_meta), mode: DecodeMode::Practical, normalize_nfc: true };
+    let decoded = decode_text(&cp1258_non_utf8, &options).expect("CP1258 takes precedence over VNI font name");
+    assert_eq!(decoded.as_ref(), "Tiết", "CP1258 metadata must override VNI font hint and compose ê + 0xEC into ế");
+
     // 4. transcode_explicit bypasses is_already_unicode_vietnamese guard
     // Byte 0xC3 in CP1258 is 'Ă' (U+0102). In Latin-1 it is 'Ã' (U+00C3).
     let latin1_c3 = "\u{00C3}";
