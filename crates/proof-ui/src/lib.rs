@@ -50,7 +50,7 @@ pub trait Host {
     fn document(&self) -> Option<u64>;
     /// Show the issue in the document, usually by selecting it.
     fn reveal(&mut self, issue: &Issue);
-    /// Replace the issue's text, as one undoable edit.
+    /// Replace the issue's text with exactly `to`, as one undoable edit.
     fn change(&mut self, issue: &Issue, to: &str) -> Result<(), String>;
     /// Accept the word from now on.
     fn add_word(&mut self, word: &str) -> Result<(), String>;

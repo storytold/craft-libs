@@ -1,7 +1,10 @@
 use std::borrow::Cow;
 use std::collections::HashSet;
 
-use egui_kittest::{Harness, kittest::Queryable};
+use egui_kittest::{
+    Harness,
+    kittest::{NodeT, Queryable},
+};
 
 use super::*;
 use crate::review::SAME_REPLACEMENT;
@@ -20,6 +23,8 @@ struct Doc {
     edits: u32,
     notice: Option<String>,
     preferred: bool,
+    many: Option<Vec<String>>,
+    fail_check: bool,
 }
 
 impl Doc {
@@ -34,6 +39,9 @@ impl Doc {
 
 impl Host for Doc {
     fn check(&mut self) -> Result<Vec<Issue>, String> {
+        if self.fail_check {
+            return Err("the dictionary could not be read".into());
+        }
         let mut found = Vec::new();
         for word in ["jumpd", "wrng"] {
             if self.known.contains(word) {
@@ -49,6 +57,9 @@ impl Host for Doc {
     }
     fn suggestions(&mut self, issue: &Issue) -> Result<Vec<String>, String> {
         self.asked.push(issue.word.clone());
+        if let Some(many) = self.many.clone().filter(|_| issue.word == "jumpd") {
+            return Ok(many);
+        }
         Ok(match issue.word.as_str() {
             "jumpd" => vec!["jumped".into(), "jumps".into()],
             "wrng" => vec!["wrong".into()],
@@ -95,6 +106,9 @@ const COLORS: Colors = Colors {
     field: egui::Color32::BLACK,
     field_border: egui::Color32::GRAY,
     hover: egui::Color32::DARK_GRAY,
+    selected: egui::Color32::DARK_BLUE,
+    accent: egui::Color32::BLUE,
+    on_accent: egui::Color32::WHITE,
     spelling: egui::Color32::RED,
     grammar: egui::Color32::BLUE,
     error: egui::Color32::RED,
@@ -137,13 +151,104 @@ fn the_panel_starts_a_review_from_its_button() {
 }
 
 #[test]
-fn clicking_a_suggestion_corrects_the_word_and_moves_on() {
+fn the_first_suggestion_is_ready_to_apply_and_a_click_chooses_another() {
     let mut h = harness(started(TEXT));
+    assert_eq!(h.state().0.replacement, "jumped");
     h.get_by_label("jumps").click();
+    h.run_steps(2);
+    assert_eq!(h.state().0.replacement, "jumps");
+    assert_eq!(h.state().1.edits, 0, "a click only chooses");
+    h.get_by_label("Change").click();
     h.run_steps(2);
     assert_eq!(h.state().1.text, "The jumps fox. A jumpd dog. The wrng cat.");
     assert_eq!(h.state().1.edits, 1);
     assert_eq!(h.state().0.current().unwrap().start, 17);
+}
+
+#[test]
+fn a_double_click_applies_a_suggestion() {
+    // Frames 1 ms apart, so two clicks make a double-click.
+    let mut h = Harness::builder()
+        .with_size(egui::vec2(320.0, 800.0))
+        .with_step_dt(0.001)
+        .build_ui_state(|ui, (review, doc): &mut State| panel(ui, review, doc, &English, &COLORS), started(TEXT));
+    h.run_steps(2);
+    let at = h.get_by_label("jumps").rect().center();
+    h.hover_at(at);
+    h.step();
+    for pressed in [true, false, true, false] {
+        h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE });
+        h.step();
+    }
+    h.run_steps(2);
+    assert_eq!(h.state().1.text, "The jumps fox. A jumpd dog. The wrng cat.");
+    assert_eq!(h.state().1.edits, 1);
+}
+
+#[test]
+fn nothing_to_change_to_disables_change() {
+    let mut h = harness(started("An unknownword jumpd."));
+    h.state_mut().0.replacement.clear();
+    h.run_steps(1);
+    assert!(h.get_by_label("Change").accesskit_node().is_disabled());
+    h.state_mut().0.replacement = "jumpd".into();
+    h.run_steps(1);
+    assert!(h.get_by_label("Change").accesskit_node().is_disabled(), "the same word changes nothing");
+}
+
+/// A docked panel can be short, and a long list must not push the actions out of reach.
+#[test]
+fn the_actions_stay_in_view_in_a_short_panel() {
+    let (mut review, mut doc) = started(TEXT);
+    let many = (0..30).map(|i| format!("jump{i}")).collect();
+    doc.many = Some(many);
+    review.start(&mut doc);
+    let height = 240.0;
+    let mut h = Harness::builder()
+        .with_size(egui::vec2(320.0, height))
+        .build_ui_state(|ui, (review, doc): &mut State| panel(ui, review, doc, &English, &COLORS), (review, doc));
+    h.run_steps(2);
+    for action in ["Change", "Ignore Once", "Ignore All", "Add to Dictionary"] {
+        let bottom = h.get_by_label(action).rect().max.y;
+        assert!(bottom <= height, "{action} ends at {bottom}");
+    }
+    h.get_by_label("Ignore All").click();
+    h.run_steps(2);
+    assert_eq!(h.state().0.current().unwrap().word, "wrng");
+}
+
+#[test]
+fn the_actions_keep_their_place_from_one_issue_to_the_next() {
+    let mut h = harness(started(TEXT));
+    let place = h.get_by_label("Ignore Once").rect();
+    h.get_by_label("Ignore All").click();
+    h.run_steps(2);
+    assert_eq!(h.state().0.current().unwrap().suggestions.len(), 1, "a shorter list than the last");
+    assert_eq!(h.get_by_label("Ignore Once").rect(), place);
+}
+
+/// Going through issues, a click on Ignore Once must not land on Add to Dictionary.
+#[test]
+fn a_preferred_form_keeps_ignore_once_in_its_place() {
+    let place = harness(started(TEXT)).get_by_label("Ignore Once").rect().min;
+    let mut doc = Doc::new(TEXT);
+    doc.preferred = true;
+    let mut review = Review::default();
+    review.start(&mut doc);
+    assert_eq!(harness((review, doc)).get_by_label("Ignore Once").rect().min, place);
+}
+
+#[test]
+fn a_narrow_panel_stacks_the_ignore_buttons() {
+    let mut h = Harness::builder()
+        .with_size(egui::vec2(110.0, 600.0))
+        .build_ui_state(|ui, (review, doc): &mut State| panel(ui, review, doc, &English, &COLORS), started(TEXT));
+    h.run_steps(2);
+    let (once, all) = (h.get_by_label("Ignore Once").rect(), h.get_by_label("Ignore All").rect());
+    assert!(once.max.y <= all.min.y, "{once:?} above {all:?}");
+    let wide = harness(started(TEXT));
+    let (once, all) = (wide.get_by_label("Ignore Once").rect(), wide.get_by_label("Ignore All").rect());
+    assert_eq!(once.min.y, all.min.y);
 }
 
 #[test]
@@ -193,9 +298,7 @@ fn a_preferred_form_cant_join_the_dictionary() {
 #[test]
 fn a_typed_replacement_is_applied_from_the_change_field() {
     let mut h = harness(started(TEXT));
-    assert!(h.query_by_label("Change to:").is_none(), "out of the way until asked for");
-    h.get_by_label("Change…").click();
-    h.run_steps(2);
+    assert!(h.query_by_label("Change to:").is_some());
     h.state_mut().0.replacement = "typed".into();
     h.run_steps(1);
     h.get_by_label("Change").click();
@@ -288,13 +391,89 @@ fn a_notice_and_a_failure_are_shown() {
     let _ = review.act(&mut doc, Action::Change(Some("jumped".into())));
     let h = harness((review, doc));
     assert!(h.query_by_label("Khmer text has not been checked.").is_some());
-    assert_eq!(h.query_all_by_label("The text changed. Check again to continue.").count(), 2, "the state and the failure");
+    assert_eq!(h.query_all_by_label("The text changed. Check again to continue.").count(), 1, "said once");
+}
+
+#[test]
+fn a_check_that_fails_doesnt_say_the_document_is_clean() {
+    let mut doc = Doc::new(TEXT);
+    doc.fail_check = true;
+    let mut review = Review::default();
+    review.start(&mut doc);
+    let mut h = harness((review, doc));
+    assert!(h.query_by_label("No issues found.").is_none());
+    assert!(h.query_by_label("the dictionary could not be read").is_some());
+    h.state_mut().1.fail_check = false;
+    h.get_by_label("Check Again").click();
+    h.run_steps(2);
+    assert_eq!(h.state().0.current().unwrap().word, "jumpd");
+}
+
+/// A dictionary or language change leaves the text and its version alone: only the failure says so.
+#[test]
+fn an_issue_a_fresh_check_lost_offers_check_again() {
+    let (mut review, mut doc) = started(TEXT);
+    doc.known.insert("jumpd".into());
+    let _ = review.act(&mut doc, Action::IgnoreOnce);
+    let mut h = harness((review, doc));
+    assert_eq!(h.query_all_by_label("The text changed. Check again to continue.").count(), 1);
+    assert!(h.query_by_label("Ignore Once").is_none());
+    h.get_by_label("Check Again").click();
+    h.run_steps(2);
+    assert_eq!(h.state().0.current().unwrap().word, "wrng");
+}
+
+/// A dictionary or language change can add findings without touching the text.
+#[test]
+fn ignoring_takes_in_what_a_fresh_check_found() {
+    let mut doc = Doc::new(TEXT);
+    doc.known.insert("wrng".into());
+    let mut review = Review::default();
+    review.start(&mut doc);
+    assert_eq!(review.remaining(), 2);
+    doc.known.clear();
+    review.act(&mut doc, Action::IgnoreAll).unwrap();
+    assert_eq!(review.current().unwrap().word, "wrng");
+}
+
+#[test]
+fn checking_starts_a_review_that_wasnt_started() {
+    let mut doc = Doc::new(TEXT);
+    let mut review = Review::default();
+    review.act(&mut doc, Action::Check).unwrap();
+    assert!(review.started());
+    assert_eq!(review.current().unwrap().word, "jumpd");
+    assert!(!review.other_document(&doc));
+}
+
+#[test]
+fn marks_are_the_issues_left_in_unchanged_stories() {
+    let (mut review, mut doc) = started(TEXT);
+    let words =
+        |review: &Review, doc: &Doc| -> Vec<String> { review.marks(doc.document(), |story| doc.version(story)).map(|i| i.word.clone()).collect() };
+    assert_eq!(words(&review, &doc), ["jumpd", "jumpd", "wrng"]);
+    review.act(&mut doc, Action::IgnoreOnce).unwrap();
+    assert_eq!(words(&review, &doc), ["jumpd", "wrng"], "an ignored occurrence isn't marked");
+    review.act(&mut doc, Action::IgnoreAll).unwrap();
+    assert_eq!(words(&review, &doc), ["wrng"]);
+    review.act(&mut doc, Action::IgnoreAll).unwrap();
+    assert!(words(&review, &doc).is_empty());
+    assert!(review.covers(doc.document(), 7, doc.version(7)), "it still speaks for a story of ignored words");
+    assert!(!review.covers(doc.document(), 8, doc.version(8)), "not for one it hasn't seen");
+    review.act(&mut doc, Action::Check).unwrap();
+    doc.edit(0, "A ");
+    assert!(!review.covers(doc.document(), 7, doc.version(7)));
+    assert!(words(&review, &doc).is_empty(), "offsets into changed text aren't drawn");
+    review.act(&mut doc, Action::Check).unwrap();
+    doc.id = 2;
+    assert!(words(&review, &doc).is_empty(), "nor into another document");
+    assert_eq!(Review::default().marks(None, |_| None).count(), 0);
 }
 
 #[test]
 fn every_string_is_listed_once() {
     for source in
-        ["Spelling", "Preferred Form", "Suggestions", "Ignore Once", "Ignore All", "Add to Dictionary", "Change…", "Change to:", "Check Again"]
+        ["Spelling", "Preferred Form", "Suggestions", "Ignore Once", "Ignore All", "Add to Dictionary", "{count} left", "Change to:", "Check Again"]
     {
         assert!(STRINGS.contains(&source), "{source}");
     }

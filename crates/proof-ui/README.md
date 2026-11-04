@@ -23,8 +23,10 @@ use craft_proof_ui::{Colors, Host, Review, context_section, panel};
 // Keep a `Review` while the panel is open. `start` checks the document from the top.
 let mut review = Review::default();
 review.start(&mut host);
-// Each frame, inside the app's dock:
+// Each frame, inside the app's dock. It fills the height it's given and scrolls its own content:
 panel(ui, &mut review, &mut host, &text, &colors);
+// While the panel shows, the app can underline what's left in the document:
+for issue in review.marks(document, |story| version(story)) { /* draw it */ }
 // On a right-click the app finds the issue under the caret, once. Then, in its menu:
 if let Some(chosen) = context_section(ui, &issue, &text) { /* act on it, close the menu */ }
 ```

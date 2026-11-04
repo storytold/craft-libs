@@ -35,9 +35,8 @@ pub struct Review {
     versions: HashMap<u64, u64>,
     pub(crate) before: String,
     pub(crate) after: String,
-    /// The Change… field's text.
+    /// The Change to field's text.
     pub replacement: String,
-    pub(crate) manual: bool,
     message: String,
     started: bool,
 }
@@ -60,6 +59,19 @@ impl Review {
 
     pub fn remaining(&self) -> usize {
         self.issues.len()
+    }
+
+    /// The pass still speaks for a story: `document` and `version` are the answers of
+    /// [`Host::document`] and [`Host::version`] now, and neither has changed since it was checked.
+    /// Even a story with nothing left to mark may hold ignored words.
+    pub fn covers(&self, document: Option<u64>, story: u64, version: Option<u64>) -> bool {
+        self.started && document == self.document && version.is_some_and(|v| self.versions.get(&story) == Some(&v))
+    }
+
+    /// The issues left that can be marked in the document, the current one first: only in stories
+    /// the pass [covers](Self::covers), as other offsets can't be trusted.
+    pub fn marks(&self, document: Option<u64>, version: impl Fn(u64) -> Option<u64>) -> impl Iterator<Item = &Issue> {
+        self.issues.iter().filter(move |issue| self.covers(document, issue.story, version(issue.story)))
     }
 
     pub fn ignored_any(&self) -> bool {
@@ -100,12 +112,14 @@ impl Review {
             return Err(OTHER_DOCUMENT.into());
         }
         if action == Action::Check {
+            self.started = true;
+            self.document = host.document();
             self.skipped.clear();
             self.ignored.clear();
             return self.refresh(host);
         }
         let issue = self.current().cloned().ok_or(NO_ISSUE)?;
-        self.validate(host, &issue)?;
+        let found = self.validate(host, &issue)?;
         match action {
             Action::Change(to) => {
                 let to = to.unwrap_or_else(|| self.replacement.clone());
@@ -117,13 +131,11 @@ impl Review {
             }
             Action::IgnoreOnce => {
                 self.skipped.push(issue);
-                self.issues.remove(0);
-                return self.load_current(host);
+                return self.update(host, found);
             }
             Action::IgnoreAll => {
-                self.issues.retain(|i| i.word != issue.word);
                 self.ignored.insert(issue.word);
-                return self.load_current(host);
+                return self.update(host, found);
             }
             Action::AddToDictionary => {
                 if issue.kind != IssueKind::Spelling {
@@ -138,11 +150,15 @@ impl Review {
 
     /// The text must not have changed, and a fresh check must still find the issue: language,
     /// style and dictionary edits leave the text alone.
-    fn validate(&self, host: &mut dyn Host, issue: &Issue) -> Result<(), String> {
-        if self.stale(host) || !host.check()?.iter().any(|found| found.same_finding(issue)) {
+    fn validate(&self, host: &mut dyn Host, issue: &Issue) -> Result<Vec<Issue>, String> {
+        if self.stale(host) {
             return Err(CHANGED.into());
         }
-        Ok(())
+        let found = host.check()?;
+        if !found.iter().any(|found| found.same_finding(issue)) {
+            return Err(CHANGED.into());
+        }
+        Ok(found)
     }
 
     /// A correction moves later offsets in its story; ignored occurrences follow them.
@@ -166,18 +182,22 @@ impl Review {
     /// Check again, keeping this pass's ignored occurrences while their text is unchanged.
     fn refresh(&mut self, host: &mut dyn Host) -> Result<(), String> {
         let found = host.check()?;
+        self.update(host, found)
+    }
+
+    /// Take `found`, a check of the document as it is now, as the issues left.
+    fn update(&mut self, host: &mut dyn Host, found: Vec<Issue>) -> Result<(), String> {
         let versions = &self.versions;
         self.skipped.retain(|skip| versions.get(&skip.story).is_none_or(|v| host.version(skip.story) == Some(*v)));
+        let stories: HashSet<u64> = found.iter().chain(&self.skipped).map(|i| i.story).collect();
         let (skipped, ignored) = (&self.skipped, &self.ignored);
         self.issues = found.into_iter().filter(|i| !skipped.iter().any(|skip| skip.same_finding(i)) && !ignored.contains(&i.word)).collect();
-        let stories: HashSet<u64> = self.issues.iter().chain(&self.skipped).map(|i| i.story).collect();
         self.versions = stories.into_iter().filter_map(|story| Some((story, host.version(story)?))).collect();
         self.load_current(host)
     }
 
     /// Suggestions for the current issue, its surroundings, and showing it in the document.
     fn load_current(&mut self, host: &mut dyn Host) -> Result<(), String> {
-        self.manual = false;
         self.replacement.clear();
         self.before.clear();
         self.after.clear();
