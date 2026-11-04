@@ -297,6 +297,17 @@ fn load(locale: PackLocale) -> (Arc<AffixDict>, Option<PathBuf>, u64) {
     let refs: Vec<&str> = names.iter().map(String::as_str).collect();
     let key = names.first().map_or("", String::as_str);
     let Some((aff, dic)) = crate::hunspell::find(&refs) else {
+        if let Some(pack) = crate::packs::embedded(&names).filter(|p| !p.aff.is_empty() && !p.dic.is_empty()) {
+            let read = crate::hunspell::decode(pack.aff, pack.dic).and_then(|(a, d)| AffixDict::from_hunspell(&a, &d, &[]));
+            let source = PathBuf::from(format!("<embedded Language pack {}>", pack.locale));
+            return match crate::hunspell::note_load(key, &source, read) {
+                Ok(d) => (Arc::new(d), None, (pack.aff.len() as u64).saturating_add(pack.dic.len() as u64).saturating_mul(BYTES_PER_FILE_BYTE)),
+                Err(e) => {
+                    log::warn!("{} spelling: {e}", pack.locale);
+                    (Arc::default(), None, 0)
+                }
+            };
+        }
         crate::hunspell::clear_load_error(key);
         return (Arc::default(), None, 0);
     };

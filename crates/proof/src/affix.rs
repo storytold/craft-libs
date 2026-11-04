@@ -833,7 +833,9 @@ impl FlagMode {
 /// search gets a small budget ([`compound::MAX_SUGGEST_WORK`]); the fourth: `KEEPCASE`, kept
 /// apart since it holds for a compound's first part only (and may share its id with another).
 #[derive(Clone, Copy, Debug, Default)]
-struct Excluded([Option<u16>; 5], bool, bool, Option<u16>);
+// The final bit permits a forbidden stem only while analysing a COMPOUNDRULE
+// terminal suffix (the CLI accepts 28-ok, although 8-ok is forbidden on its own).
+struct Excluded([Option<u16>; 5], bool, bool, Option<u16>, bool);
 
 impl Excluded {
     /// Does the flag set `set` carry an excluded flag?
@@ -2064,7 +2066,7 @@ impl AffixDict {
         false
     }
 
-    /// Is `w` a compound of two or more stems (no affixes) whose flags spell out one of the
+    /// Is `w` a compound of two or more stems, with optional final suffixes, whose flags spell out one of the
     /// `COMPOUNDRULE` patterns, each part at least `COMPOUNDMIN` characters? `21st` is `2/m` +
     /// `1st/p` under `n*mp`. A dynamic programme over (byte offset, token, parts so far), so a
     /// hostile pattern costs at most a few thousand lookups. A forbidden word is never rebuilt
@@ -2088,9 +2090,17 @@ impl AffixDict {
         // after a cut a rule reaches are looked up, so a word with no first part costs `n`.
         let mut parts: Vec<Option<Option<&[u16]>>> = vec![None; n * n];
         let min = self.compound_min;
+        // A number such as 2026-ban is 2/0 + 0/0 + 2/0 + 6/1 with a suffix
+        // licensed by the final digit's flags. Share a bounded analysis budget.
+        let mut work = 0;
+        let final_parts: Vec<Vec<u16>> =
+            cuts.iter().map(|&at| w.get(at..).map_or_else(Vec::new, |p| self.rule_final_flags(p, excluded, &mut work))).collect();
         let mut part = |a: usize, b: usize| -> Option<&[u16]> {
             if b < a.saturating_add(min) {
                 return None;
+            }
+            if b + 1 == n {
+                return final_parts.get(a).map(Vec::as_slice);
             }
             let slot = parts.get_mut(a * n + b)?;
             *slot.get_or_insert_with(|| {

@@ -720,6 +720,43 @@ impl AffixDict {
         Some(Info { pos, marks, unmodified: an.sfx.is_none(), force, stem: an.stem, words, tail })
     }
 
+    /// Flags of a final COMPOUNDRULE part, including a licensed suffix chain. Earlier
+    /// parts still have to be bare stems; a forbidden stem is never reconstructed.
+    pub(super) fn rule_final_flags(&self, part: &str, excluded: Excluded, work: &mut usize) -> Vec<u16> {
+        let mut flags = Vec::new();
+        if *work >= MAX_WORK || self.is_forbidden(part) {
+            return flags;
+        }
+        let rule_flags: crate::patterns::FxMap<u16, ()> = self.compound_rules.iter().flatten().filter_map(|(f, _)| f.map(|f| (f, ()))).collect();
+        let mut seen = crate::patterns::FxMap::default();
+        let mut analyses = 0usize;
+        let mut derived = excluded;
+        for slot in &mut derived.0 {
+            if *slot == self.forbidden {
+                *slot = None;
+            }
+        }
+        derived.4 = true;
+        self.analyses(part, derived, work, &mut |an| {
+            analyses += 1;
+            if analyses > MAX_INFOS
+                || an.pfx.is_some()
+                || (an.sfx.is_none() && excluded.hits(an.set))
+                || an.sfx.is_some_and(|r| self.cont_holds(r, self.only_in_compound) || excluded.hits(self.set(r.cont)))
+            {
+                return;
+            }
+            for &flag in an.set {
+                if rule_flags.contains_key(&flag) && seen.insert(flag, ()).is_none() {
+                    flags.push(flag);
+                }
+            }
+        });
+        flags.sort_unstable();
+        flags.dedup();
+        flags
+    }
+
     /// Every way `p` is a stem, or a stem with a prefix, one or two suffixes, or a prefix and a
     /// suffix, as a compound part may be (`ONLYINCOMPOUND` affixes and stems included).
     fn analyses<'a>(&'a self, p: &str, excluded: Excluded, work: &mut usize, emit: &mut impl FnMut(Analysis<'a>)) {
@@ -872,7 +909,10 @@ impl AffixDict {
         let main = found.filter(|_| apart.is_none());
         let each = apart.into_iter().flat_map(move |(stem, h)| h.iter().map(move |&id| (stem, self.set(id))));
         let only = found.and_then(|(stem, _)| self.cpd_sets.get(&stem).map(|&c| (stem, self.set(c))));
-        main.into_iter().chain(each).chain(only).filter(move |(_, set)| !excluded.hits(set) && !self.forbidden.is_some_and(|f| has(set, f)))
+        main.into_iter()
+            .chain(each)
+            .chain(only)
+            .filter(move |(_, set)| !excluded.hits(set) && (excluded.4 || !self.forbidden.is_some_and(|f| has(set, f))))
     }
 
     /// May a part with `info` start at char `start`, after the last part of `s.path`

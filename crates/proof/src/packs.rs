@@ -32,6 +32,19 @@ use crate::patterns::Patterns;
 pub(crate) const SPELLING: &str = "spelling";
 /// A pack's hyphenation patterns.
 const HYPHENATION: &str = "hyphenation.pat";
+const NONSTANDARD: &str = "hyphenation.nonstandard";
+
+/// Data supplied by explicitly selected Language packs at build time (also on WASM).
+pub(crate) struct EmbeddedPack {
+    pub locale: &'static str,
+    pub aff: &'static [u8],
+    pub dic: &'static [u8],
+    pub patterns: &'static str,
+}
+pub(crate) fn embedded(names: &[String]) -> Option<&'static EmbeddedPack> {
+    names.iter().find_map(|n| crate::data::PACKS.iter().find(|p| p.locale == n.replace('_', "-").to_ascii_lowercase()))
+}
+
 /// Most languages whose pack patterns are remembered (a document may tag thousands).
 const MAX_HYPHENATION_LOOKUPS: usize = 256;
 /// The memory budget of the remembered pack patterns, in estimated bytes ([`pattern_bytes`]):
@@ -274,7 +287,7 @@ fn read_pack(path: &Path, folder: &str) -> Result<(InstalledPack, Holds), String
     }
     let holds = Holds {
         spelling: is_regular_file(&path.join(format!("{SPELLING}.aff"))) && is_regular_file(&path.join(format!("{SPELLING}.dic"))),
-        hyphenation: is_regular_file(&path.join(HYPHENATION)),
+        hyphenation: is_regular_file(&path.join(HYPHENATION)) || is_regular_file(&path.join(NONSTANDARD)),
     };
     let name = info.name.unwrap_or_else(|| info.locale.clone());
     Ok((InstalledPack { locale: info.locale, name, licence: info.licence, path: path.to_path_buf() }, holds))
@@ -562,7 +575,9 @@ fn hyphenation_locales(lang: ProofLang) -> Vec<String> {
 pub(crate) fn hyphenation(lang: ProofLang) -> Option<Arc<Patterns>> {
     let changes = {
         let s = read();
-        s.dir.as_ref()?;
+        if s.dir.is_none() && embedded(&hyphenation_locales(lang)).is_none() {
+            return None;
+        }
         if let Some(p) = s.hyphenation.get(&lang) {
             return p.clone();
         }
@@ -571,7 +586,9 @@ pub(crate) fn hyphenation(lang: ProofLang) -> Option<Arc<Patterns>> {
     let mut errors = Vec::new();
     let mut found = None;
     for dir in packs_for(&hyphenation_locales(lang), |h| h.hyphenation) {
-        match load_patterns(&dir.join(HYPHENATION)) {
+        let extended = dir.join(NONSTANDARD);
+        let path = if is_regular_file(&extended) { extended } else { dir.join(HYPHENATION) };
+        match load_patterns(&path) {
             Ok(p) => {
                 found = Some(Arc::new(p));
                 break;
@@ -581,6 +598,14 @@ pub(crate) fn hyphenation(lang: ProofLang) -> Option<Arc<Patterns>> {
                 log::warn!("Language pack {locale}: {e}");
                 errors.push((locale, e));
             }
+        }
+    }
+    if found.is_none()
+        && let Some(pack) = embedded(&hyphenation_locales(lang)).filter(|p| !p.patterns.is_empty())
+    {
+        let p = Patterns::parse(pack.patterns);
+        if !p.is_empty() {
+            found = Some(Arc::new(p));
         }
     }
     let mut s = write();
@@ -599,7 +624,7 @@ pub(crate) fn hyphenation(lang: ProofLang) -> Option<Arc<Patterns>> {
 
 /// Estimated memory of `p`.
 fn pattern_bytes(p: &Patterns) -> u64 {
-    (p.len() as u64).saturating_add(p.exception_count() as u64).saturating_mul(BYTES_PER_PATTERN)
+    (p.len() as u64).saturating_add(p.exception_count() as u64).saturating_mul(BYTES_PER_PATTERN).saturating_add(p.extra_memory())
 }
 
 /// Remember `lang`'s pack patterns (`bytes` of them): over [`MAX_HYPHENATION_LOOKUPS`] languages
@@ -737,7 +762,13 @@ mod tests {
         let embed = option_env!("CRAFT_PROOF_EMBED").unwrap_or_default().trim().to_ascii_lowercase();
         let named: Vec<&str> = if embed.is_empty() { vec!["de", "pl", "pt", "it", "ru"] } else { embed.split(',').map(str::trim).collect() };
         for l in embedded_locales() {
-            assert!(l.starts_with("en-") || *l == "ru" || named.iter().any(|e| e == l || *e == "all"), "{l} is embedded");
+            assert!(
+                l.starts_with("en-")
+                    || *l == "ru"
+                    || named.iter().any(|e| e == l || *e == "all")
+                    || crate::data::PACKS.iter().any(|p| p.locale == *l),
+                "{l} is embedded"
+            );
         }
         if cfg!(craft_proof_data) && embed.is_empty() {
             for l in ["de", "pl", "pt", "it"] {

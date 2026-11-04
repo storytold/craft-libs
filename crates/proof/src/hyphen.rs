@@ -33,7 +33,9 @@ use std::sync::OnceLock;
 
 pub use crate::lang::ProofLang;
 pub use dict::Dictionary;
-pub use patterns::Patterns;
+pub use patterns::{Opportunity, Patterns};
+mod nonstandard;
+pub use nonstandard::hyphen_opportunities_in;
 
 // The embedded Language data (`language-data/` of craft-i18n, see `build.rs`); each is empty when
 // it isn't embedded. The TeX files are hyph-utf8's `hyph-pl.tex`, `hyph-pt.tex`, `hyph-it.tex` and
@@ -403,14 +405,19 @@ pub fn hyphenate_word(word: &str, lim: &Limits) -> String {
 
 /// `word`, a word in `lang`, with `-` at every hyphenation point (tests and diagnostics).
 pub fn hyphenate_word_in(word: &str, lim: &Limits, lang: ProofLang) -> String {
-    let mut pts = hyphen_points_in(word, lim, lang);
-    pts.sort_unstable();
+    let mut pts = hyphen_opportunities_in(word, lim, lang);
+    pts.sort_unstable_by_key(|p| p.at);
     // Walk the points alongside the chars rather than searching them for each char.
     let mut next = pts.into_iter().peekable();
     let mut s = String::with_capacity(word.len() + 8);
     for (i, ch) in word.chars().enumerate() {
-        if next.next_if_eq(&i).is_some() {
-            while next.next_if_eq(&i).is_some() {}
+        if next.peek().is_some_and(|p| p.at == i) {
+            if let Some(p) = next.next() {
+                s.push_str(&p.suffix);
+            }
+            while next.peek().is_some_and(|p| p.at == i) {
+                next.next();
+            }
             s.push('-');
         }
         s.push(ch);

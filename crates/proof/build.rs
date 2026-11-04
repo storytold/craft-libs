@@ -19,6 +19,8 @@
 //! English: SCOWL's en-US, en-GB (-ise), en-CA and en-AU dictionaries. The SCOWL notice is
 //! embedded once (the four upstream READMEs differ only in their title and build line).
 
+mod build_packs;
+
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
@@ -137,10 +139,20 @@ fn main() {
     } else if embedded == 0 {
         println!("cargo::rustc-cfg=craft_proof_no_data");
     }
+    let (packs, pack_locales, pack_licences) = build_packs::generate().unwrap_or_else(|e| {
+        println!("cargo::error=Language pack: {e}");
+        ("pub(crate) static PACKS: &[crate::packs::EmbeddedPack] = &[];\n".into(), Vec::new(), String::new())
+    });
+    o.push_str(&packs);
+    for locale in pack_locales {
+        if !locales.contains(&locale) {
+            locales.push(locale);
+        }
+    }
     let _ = writeln!(o, "/// The locales whose Language data is embedded.\npub(crate) static EMBEDDED_LOCALES: &[&str] = &{locales:?};");
     // The licence texts of the embedded locales (`language-data/<locale>/LICENCE*`), for About ›
     // Language data.
-    let mut licences = String::new();
+    let mut licences = pack_licences;
     if let Some(d) = &dir {
         for locale in &locales {
             let mut files: Vec<PathBuf> = std::fs::read_dir(d.join(locale))
