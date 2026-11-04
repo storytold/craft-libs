@@ -266,21 +266,35 @@ fn ogg_flac_reads_the_mask_comment() {
     }
 }
 
-/// Two streams in an Ogg file written by ffmpeg, which picks their serial numbers at random. The
-/// tests below write each file a few times, so that both serial orders occur.
+/// Two streams in an Ogg file written by ffmpeg, whose serial numbers are in file order or in
+/// `reversed` order. ffmpeg picks them at random, so this writes the file until the order occurs;
+/// symphonia orders tracks by serial, so the reversed order is the one that tells them apart.
+/// `None` after `skip` when this ffmpeg cannot write the file.
 #[cfg(feature = "symphonia")]
-fn two_ogg_streams(ff: &Path, name: &str, args: &[&str]) -> Option<Vec<u8>> {
+fn two_ogg_streams(ff: &Path, name: &str, args: &[&str], reversed: bool) -> Option<Vec<u8>> {
     let path = common::fixture_subdir("flac").join(format!("{name}.ogg"));
-    let status = Command::new(ff)
-        .args(["-v", "error", "-y", "-f", "lavfi", "-i", "aevalsrc=0|0|0|0:c=4c:d=0.1:s=48000"])
-        .args(["-f", "lavfi", "-i", "aevalsrc=0|0|0|0:c=4c:d=0.1:s=44100"])
-        .args(["-map", "0", "-map", "1"])
-        .args(args)
-        .args(["-f", "ogg"])
-        .arg(&path)
-        .status()
-        .unwrap();
-    status.success().then(|| std::fs::read(&path).unwrap())
+    for attempt in 0..64 {
+        let status = Command::new(ff)
+            .args(["-v", "error", "-y", "-f", "lavfi", "-i", "aevalsrc=0|0|0|0:c=4c:d=0.1:s=48000"])
+            .args(["-f", "lavfi", "-i", "aevalsrc=0|0|0|0:c=4c:d=0.1:s=44100"])
+            .args(["-map", "0", "-map", "1"])
+            .args(args)
+            .args(["-f", "ogg"])
+            .arg(&path)
+            .status()
+            .unwrap();
+        if !status.success() {
+            return common::skip(&format!("this ffmpeg cannot write {name}"));
+        }
+        let bytes = std::fs::read(&path).unwrap();
+        let file = craft_media::ogg::open(bytes.as_slice()).unwrap();
+        assert_eq!(file.streams.len(), 2, "{name}");
+        if (file.streams[0].serial > file.streams[1].serial) == reversed {
+            return Some(bytes);
+        }
+        assert!(attempt < 63, "{name}: 64 files with their serial numbers in one order");
+    }
+    None
 }
 
 /// A track index means the same stream in `tracks`, `probe` and `decode`: the file's order. Each
@@ -291,8 +305,8 @@ fn ogg_flac_tracks_are_in_file_order_with_their_own_mask_comments() {
     use crate::{ChannelLayout, DecodeOptions};
     let Some(ff) = ffmpeg() else { return };
     let args = ["-c:a", "flac", "-metadata:s:a:0", "WAVEFORMATEXTENSIBLE_CHANNEL_MASK=0x0107"];
-    for _ in 0..8 {
-        let bytes = two_ogg_streams(&ff, "ogg-one-mask", &args).unwrap();
+    for reversed in [false, true] {
+        let Some(bytes) = two_ogg_streams(&ff, "ogg-one-mask", &args, reversed) else { return };
         let rates: Vec<_> = crate::tracks(&bytes, None).unwrap().iter().map(|t| t.sample_rate).collect();
         assert_eq!(rates, [Some(48_000), Some(44_100)]);
         for (track, rate, layout) in [(0, 48_000, ChannelLayout::from_mask(0x107)), (1, 44_100, ChannelLayout::default_for(4))] {
@@ -313,8 +327,8 @@ fn ogg_flac_before_opus_is_the_first_track() {
     use crate::CodecId;
     let Some(ff) = ffmpeg() else { return };
     let args = ["-c:a:0", "flac", "-c:a:1", "libopus", "-ac:a:1", "2"];
-    for _ in 0..8 {
-        let Some(bytes) = two_ogg_streams(&ff, "ogg-flac-opus", &args) else { return };
+    for reversed in [false, true] {
+        let Some(bytes) = two_ogg_streams(&ff, "ogg-flac-opus", &args, reversed) else { return };
         assert_eq!(crate::tracks(&bytes, None).unwrap()[0].codec, CodecId::Flac);
         assert_eq!(crate::decode(&bytes, None).unwrap().0.codec, CodecId::Flac);
     }
