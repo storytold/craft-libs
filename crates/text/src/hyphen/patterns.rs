@@ -7,6 +7,10 @@
 use std::collections::HashMap;
 use std::hash::{BuildHasherDefault, Hasher};
 
+/// The most patterns one set holds; later ones are ignored. The bundled US English set has
+/// about 7,000.
+pub(crate) const MAX_PATTERNS: usize = 1 << 20;
+
 /// Word-boundary marker in patterns.
 pub(crate) const DOT: char = '.';
 /// Longest pattern the packed key supports.
@@ -17,9 +21,6 @@ pub(crate) const MAX_PATTERN_LEN: usize = 9;
 pub(crate) struct FxHasher(u64);
 
 impl Hasher for FxHasher {
-    fn finish(&self) -> u64 {
-        self.0
-    }
     fn write(&mut self, bytes: &[u8]) {
         for &b in bytes {
             self.write_u64(b as u64);
@@ -27,6 +28,12 @@ impl Hasher for FxHasher {
     }
     fn write_u64(&mut self, i: u64) {
         self.0 = (self.0.rotate_left(5) ^ i).wrapping_mul(0x51_7c_c1_b7_27_22_0a_95);
+    }
+    fn finish(&self) -> u64 {
+        // The table indexes by the low bits, which a multiplication leaves depending on the
+        // low bits of the key alone: packed patterns that share their first letters would
+        // share a bucket. Rotating brings the well-mixed high bits down (as rustc-hash 2 does).
+        self.0.rotate_left(26)
     }
 }
 
@@ -123,8 +130,12 @@ impl Patterns {
         if codes.is_empty() || codes.len() > MAX_PATTERN_LEN {
             return false;
         }
+        let key = pack(&codes);
+        if self.map.len() >= MAX_PATTERNS && !self.map.contains_key(&key) {
+            return false;
+        }
         self.max_len = self.max_len.max(codes.len());
-        self.map.insert(pack(&codes), vals.into_boxed_slice());
+        self.map.insert(key, vals.into_boxed_slice());
         true
     }
 
@@ -237,5 +248,28 @@ mod tests {
         tex.sort();
         assert!(tex.contains(&"hen5at".to_string()));
         assert!(p.values(&['h', 'é']).is_none());
+    }
+
+    #[test]
+    fn packed_keys_sharing_a_prefix_spread_over_the_buckets() {
+        // 100,000 patterns whose packed keys differ in the last letter codes only. With the low
+        // bits of a multiplicative hash left as they are, they probe the same buckets.
+        let letters: Vec<char> = ('a'..='z').collect();
+        let mut text = String::new();
+        for i in 0..100_000u32 {
+            let mut n = i;
+            text.push_str("p1r");
+            for _ in 0..4 {
+                text.push(letters[(n % 26) as usize]);
+                n /= 26;
+            }
+            text.push(' ');
+        }
+        let started = std::time::Instant::now();
+        let p = Patterns::parse(&text);
+        assert_eq!(p.map.len(), 100_000);
+        assert!(started.elapsed() < std::time::Duration::from_secs(5), "{:?}", started.elapsed());
+        let w: Vec<char> = "praaaa".chars().collect();
+        assert_eq!(p.points(&w).unwrap(), vec![1]);
     }
 }
