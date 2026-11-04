@@ -250,3 +250,10 @@ see crates/khmer/LICENSE-AKSARA and source-pins.json. The compact spelling
 index is inspired by touchde's WordCraft PR #3110 contiguous dictionary storage;
 its parser and frequency-preserving index are implemented here. Language data
 is optional, pinned, and unchanged at source. No ICU dictionary data is copied.
+
+The optional Khmer frequency input includes modified CLDR-derived names,
+Copyright © 1991-2015 Unicode, Inc. The original SIL place list matches CLDR 28
+values. Keep the full historical Unicode-DFS-2015 text in
+crates/khmer/LICENSE-UNICODE-CLDR and modification statement in
+crates/khmer/NOTICE-CLDR; both also appear in craft_khmer::LICENSE for consumers.
+Data embedding remains disabled pending maintainer classification/ADR review.

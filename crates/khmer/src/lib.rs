@@ -11,8 +11,9 @@ mod lexicon;
 mod refine;
 mod tagger;
 
-/// Upstream notice for apps' language-data attribution views.
-pub const LICENSE: &str = include_str!("../LICENSE-AKSARA");
+/// Upstream notices and modification statement for apps' language-data attribution views.
+pub const LICENSE: &str =
+    concat!(include_str!("../LICENSE-AKSARA"), "\n", include_str!("../NOTICE-CLDR"), "\n", include_str!("../LICENSE-UNICODE-CLDR"));
 
 use std::{
     collections::{HashMap, HashSet},

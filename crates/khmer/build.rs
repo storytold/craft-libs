@@ -15,7 +15,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
     let pins: Value = serde_json::from_str(include_str!("source-pins.json"))?;
     if dir.is_some() && pins["licence_class"].as_str() != Some("Embeddable") {
-        return Err("Khmer data embedding is disabled: Download-only pending inherited frequency-source notices and maintainer Embeddable sign-off (PROVENANCE.md; craft-i18n ADR 0004). Omit CRAFT_KHMER_DIR for a build without Khmer data.".into());
+        return Err("Khmer data embedding is disabled: Download-only pending maintainer Embeddable/model-config ADR sign-off (PROVENANCE.md; craft-i18n ADR 0004). Omit CRAFT_KHMER_DIR for a build without Khmer data.".into());
     }
     if let Some(dir) = &dir {
         let path = dir.join("LICENCES/LICENSE");

@@ -41,5 +41,5 @@
   ],
   "licence_sha256": "b017745ab6702816195c73987a7ce0dc3660db31328583252afdf3bcfc5f43e8",
   "licence_class": "Download-only",
-  "licence_review": "Pending maintainer Embeddable sign-off and inherited frequency-source notices; see PROVENANCE.md."
+  "licence_review": "Exact SIL input and contributor permissions confirmed; CLDR 28 content and full historical notices retained. Pending maintainer Embeddable/model-config ADR sign-off; see PROVENANCE.md."
 }

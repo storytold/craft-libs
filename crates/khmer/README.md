@@ -5,7 +5,9 @@ Shared offline Khmer segmentation and proofing primitives. The default build con
 Derived from SBBIC Khmer's MIT-licensed Aksara at commit
 `31740e9d51d38171ae6119fc2d18a4a18fbfb2f1`:
 https://github.com/sbbic-khmer/aksara-khmer-word-processor
-The upstream copyright and permission notice is retained in `LICENSE-AKSARA`.
+The three MIT notices are retained in `LICENSE-AKSARA`. The frequency input also
+contains modified CLDR-derived names; the matching CLDR 28 historical notice is
+in `LICENSE-UNICODE-CLDR`, with changes identified in `NOTICE-CLDR`.
 All source data transformations are textual: JSON frequency objects and model
 weights become TSV; title arrays become newline-delimited text; affix definitions
 become TSV. No records or numeric precision are intentionally discarded.
@@ -104,10 +106,11 @@ annotated correctness judgments. The private book text is not redistributed.
 Nathan Wells (@sungkhum), working as SBBIC, identifies the frequency dictionary as
 SIL khmerlbdict combined with his own work, and the other five inputs as his original
 SBBIC work. The per-file quotations, pinned source evidence, SEAlang notice and
-unresolved inherited CLDR lineage are recorded in [PROVENANCE.md](PROVENANCE.md).
-The three MIT holders remain in `LICENSE-AKSARA`. Training used internal documents
+the exact CLDR 28 content match and contributor-confirmed source permissions are recorded in [PROVENANCE.md](PROVENANCE.md).
+The public `LICENSE` attribution text includes all three MIT holders, the
+historical Unicode notice and a modification statement. Training used internal documents
 SBBIC reports permission to train with; no private training text is redistributed.
 
 The data pack is **Download-only pending maintainer sign-off**. Explicit data
-embedding is disabled until the inherited source evidence and the model/config
-policy are settled. Default builds contain no data and remain available.
+embedding is disabled until maintainer classification and the model/config
+policy are approved. Default builds contain no data and remain available.

@@ -1,15 +1,15 @@
 # Explicit Khmer data builds
 
 `craft-khmer` builds offline without data by default. Data embedding is currently
-**disabled**, pending inherited frequency-source notices, maintainer Embeddable
+**disabled**, pending maintainer Embeddable
 sign-off and the policy decision for trained models and converted configuration.
 See [PROVENANCE.md](PROVENANCE.md). Any supplied `CRAFT_KHMER_DIR` fails the build;
 there is no bypass. Run ordinary tests with both `CRAFT_KHMER_DIR` and
 `CRAFT_KHMER_REQUIRED` unset.
 
 The proposed staging integration is [craft-i18n #122](https://github.com/storytold/craft-i18n/pull/122),
-also unmerged. It pins the six raw sources and the SBBIC/SIL notices, and preserves
-the supplied SEAlang notice. `language-packs stage --locale km` currently rejects
+also unmerged. It pins the six raw sources, SBBIC/SIL notices and the historical CLDR 28
+Unicode notice, and preserves the independently retrieved SEAlang notice. `language-packs stage --locale km` currently rejects
 the Download-only pack before fetching or writing it. For source inspection use
 the pinned upstream URLs in that manifest or its verified cache.
 
