@@ -18,13 +18,7 @@ pub fn generate() -> Result<(String, Vec<String>, String), String> {
         validate_directory(dir.as_deref().ok_or("CRAFT_PROOF_EMBED_PACKS needs CRAFT_PROOF_PACKS_DIR")?)?;
     }
     for locale in names {
-        if locale.len() > 35
-            || locale.starts_with('-')
-            || locale.ends_with('-')
-            || !locale.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
-        {
-            return Err(format!("invalid embedded pack locale: {locale:?}"));
-        }
+        validate_locale(locale)?;
         let base = dir.as_ref().ok_or("CRAFT_PROOF_EMBED_PACKS needs CRAFT_PROOF_PACKS_DIR")?.join(locale);
         // Track the folder too: a hyphenation-only pack can gain spelling files or notices.
         println!("cargo::rerun-if-changed={}", base.display());
@@ -78,6 +72,21 @@ fn include(path: &Path, bytes: bool) -> Result<String, String> {
     Ok(format!("{}!({path:?})", if bytes { "include_bytes" } else { "include_str" }))
 }
 
+// Accept only canonical tags that PackLocale::new can select without truncation.
+fn validate_locale(locale: &str) -> Result<(), String> {
+    let mut parts = locale.split('-');
+    let primary = parts.next().unwrap_or("");
+    if locale.len() > 15
+        || !(2..=8).contains(&primary.len())
+        || !primary.bytes().all(|b| b.is_ascii_lowercase())
+        || ["und", "zxx", "mul", "mis"].contains(&primary)
+        || parts.any(|p| !(2..=8).contains(&p.len()) || !p.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit()))
+    {
+        return Err(format!("invalid embedded pack locale: {locale:?}"));
+    }
+    Ok(())
+}
+
 fn validate_directory(dir: &Path) -> Result<(), String> {
     if !dir.is_absolute() {
         return Err(format!("{} is not an absolute path", dir.display()));
@@ -98,6 +107,15 @@ fn validate_pack_locale(text: &str, folder: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn embedded_locale_must_survive_runtime_selection_unchanged() {
+        for tag in ["hu", "hu-hu", "sr-latn-rs", "abcdefgh-123456"] {
+            assert!(validate_locale(tag).is_ok(), "{tag}");
+        }
+        for tag in ["abcdefghi", "hu-abcdefghi", "hu--hu", "hu-", "h", "hu-x-data", "hu-abcdefgh-abcd", "und", "HU", "12"] {
+            assert!(validate_locale(tag).is_err(), "{tag}");
+        }
+    }
     #[test]
     fn embedded_pack_metadata_must_name_its_folder() {
         assert!(validate_pack_locale("locale = \"hu\"", "hu").is_ok());

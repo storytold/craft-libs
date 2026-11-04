@@ -44,11 +44,18 @@ fn opportunities_with(word: &str, lim: &Limits, lang: ProofLang, patterns: &supe
         }
         let run = &chars[a..b];
         let letters = run.iter().filter(|c| c.is_alphabetic()).count();
-        if run.iter().map(|c| c.len_utf8()).sum::<usize>() <= 1024
-            && letters >= lim.min_word.max(2)
+        if letters >= lim.min_word.max(2)
             && (all_caps || letters < 2 || !run.iter().filter(|c| c.is_alphabetic()).all(|c| c.is_uppercase()))
             && (lim.capitalized || run.first().is_none_or(|c| !c.is_uppercase()))
         {
+            // Bound replacement processing, while keeping the legacy safe point
+            // fallback available for longer runs (including source offsets).
+            if run.iter().map(|c| c.len_utf8()).sum::<usize>() > 1024 {
+                let text: String = run.iter().collect();
+                out.extend(hyphen_points_in(&text, lim, lang).into_iter().map(|at| Opportunity { at: a + at, suffix: "".into() }));
+                i = end;
+                continue;
+            }
             let (nfc, starts) = composed_chars(run);
             let lower: Vec<char> = nfc.iter().map(|c| c.to_lowercase().next().unwrap_or(*c)).collect();
             if let Some(points) = super::pack_patterns_fit(lang, patterns, &lower).then(|| patterns.opportunities(&lower)).flatten() {
@@ -80,6 +87,19 @@ fn opportunities_with(word: &str, lim: &Limits, lang: ProofLang, patterns: &supe
 mod tests {
     use super::super::Patterns;
     use super::*;
+    #[test]
+    fn over_limit_runs_keep_point_fallback_with_source_offsets() {
+        let patterns = Patterns::from_huhyphn("UTF-8\nas5szon2y/sz=,2,1\n").unwrap();
+        let word = "kitaplar".repeat(150);
+        let lim = Limits::default();
+        let expected = hyphen_points_in(&word, &lim, ProofLang::Tr);
+        assert!(!expected.is_empty());
+        let text = format!("..{word}");
+        let actual = opportunities_with(&text, &lim, ProofLang::Tr, &patterns, false);
+        assert_eq!(actual.iter().map(|p| p.at).collect::<Vec<_>>(), expected.iter().map(|at| at + 2).collect::<Vec<_>>());
+        assert!(actual.iter().all(|p| p.suffix.is_empty()));
+        assert!(opportunities_with(&word.to_uppercase(), &lim, ProofLang::Tr, &patterns, false).is_empty());
+    }
     #[test]
     fn all_caps_require_the_explicit_layout_opt_in() {
         let patterns = Patterns::from_huhyphn("UTF-8\nas5szon2y/sz=,2,1\n").unwrap();

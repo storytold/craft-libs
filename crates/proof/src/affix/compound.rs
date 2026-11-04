@@ -736,17 +736,24 @@ impl AffixDict {
         }
         derived.4 = true;
         let mut found = false;
-        self.analyses(part, derived, work, &mut |an| {
+        let mut emit = |an: Analysis<'_>| {
             if found
                 || !has(an.set, flag)
-                || an.pfx.is_some()
                 || (an.sfx.is_none() && excluded.hits(an.set))
                 || an.sfx.is_some_and(|r| self.cont_holds(r, self.only_in_compound) || excluded.hits(self.set(r.cont)))
             {
                 return;
             }
             found = true;
-        });
+        };
+        for (stem, set) in self.part_stems(part, derived) {
+            if !self.need_affix.is_some_and(|n| has(set, n)) {
+                emit(Analysis { stem, set, pfx: None, sfx: None, inner: None });
+            }
+        }
+        // Prefixes cannot license this terminal rule. Do not spend its shared
+        // budget on analyses that would be discarded before checking the flag.
+        self.suffix_analyses(part, None, derived, work, &mut emit);
         found
     }
 
@@ -2030,4 +2037,23 @@ mod tests {
             listed: "fahr rad verkehr fahrrad fahrverkehr fahrradverkehr",
         },
     ];
+}
+
+#[cfg(test)]
+mod terminal_rule_review_tests {
+    use super::*;
+    #[test]
+    fn terminal_flag_queries_do_not_spend_budget_on_prefixes() {
+        let count = 100;
+        let mut aff = format!("SET UTF-8\nFLAG num\nPFX 9 Y {count}\n");
+        for _ in 0..count {
+            aff.push_str("PFX 9 0 p .\n");
+        }
+        aff.push_str("SFX 10 Y 1\nSFX 10 0 s .\n");
+        let dict = AffixDict::from_hunspell(&aff, "2\nroot/9,10,2\npword/3\n", &[]).unwrap();
+        let mut work = MAX_WORK - 10;
+        assert!(!dict.rule_final_has_flag("proots", Excluded::default(), 3, &mut work));
+        assert!(work < MAX_WORK, "irrelevant prefixes must not consume the remaining work");
+        assert!(dict.rule_final_has_flag("roots", Excluded::default(), 2, &mut work));
+    }
 }
