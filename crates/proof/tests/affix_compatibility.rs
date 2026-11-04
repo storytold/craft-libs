@@ -60,7 +60,8 @@ fn non_french_affix_outputs_match_pre_french_baseline() {
     // chain (native test affix::tests::a_prefix_with_a_suffix_chain). The old Indonesian
     // fixture's bermain + kan + lah therefore became a word, in these three cases only.
     // Keep the frozen historical file untouched and assert every explicit transition once.
-    let mut expected = expected.to_string();
+    // Normalize only checkout line endings; the frozen fixture and its observations stay unchanged.
+    let mut expected = expected.replace("\r\n", "\n");
     let mut transitions = 0;
     for word in ["BERMAINKANLAH", "Bermainkanlah", "bermainkanlah"] {
         let before = format!("{word:?}: contains=false check=false suggest=false raw_suggest=false\n");

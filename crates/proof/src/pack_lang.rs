@@ -203,15 +203,32 @@ pub(crate) fn names(locale: PackLocale) -> Vec<String> {
     let default = crate::lang::default_script(primary);
     // Each shorter prefix too (`sr-latn-rs` → `sr-latn`), never dropping the script subtag.
     let keep = script.map_or(1, |s| s + 1);
+    // The region subtag, when one follows the language (and script): a variant after it
+    // (`ca-ES-valencia`) is also looked up without it (`ca-valencia`), before the region alone,
+    // as packs and dictionaries name a variant by the language and the variant.
+    let region = crate::lang::region_index(&parts);
     for n in (keep..=cased.len()).rev() {
-        push(cased.get(..n).unwrap_or_default());
+        let prefix = cased.get(..n).unwrap_or_default();
+        push(prefix);
+        if let Some(r) = region
+            && r + 1 < n
+        {
+            push(&crate::lang::without_index(prefix, r));
+        }
     }
     match script {
         // The language's default script: its script-less names are in that script too.
         Some(s) if parts.get(s).is_some_and(|p| Some(*p) == default) => {
-            let without: Vec<String> = cased.iter().enumerate().filter(|(i, _)| *i != s).map(|(_, p)| p.clone()).collect();
+            let without = crate::lang::without_index(&cased, s);
+            let region = crate::lang::region_index(&without);
             for n in (1..=without.len()).rev() {
-                push(without.get(..n).unwrap_or_default());
+                let prefix = without.get(..n).unwrap_or_default();
+                push(prefix);
+                if let Some(r) = region
+                    && r + 1 < n
+                {
+                    push(&crate::lang::without_index(prefix, r));
+                }
             }
         }
         Some(_) => {}
@@ -424,6 +441,25 @@ mod tests {
         assert_eq!(names(l("sr")), ["sr", "sr_Cyrl", "sr-Cyrl"]);
         // A four-character subtag that isn't letters is no script.
         assert_eq!(names(l("de-1996")), ["de_1996", "de-1996", "de"]);
+        // A variant after the region is looked up without the region before the region alone
+        // (`ca-ES-valencia` is the `ca-valencia` pack's), and the region alone still is `ca-ES`.
+        assert_eq!(names(l("ca-ES-valencia")), ["ca_ES_valencia", "ca-ES-valencia", "ca_valencia", "ca-valencia", "ca_ES", "ca-ES", "ca"]);
+        assert_eq!(names(l("ca-ES")), ["ca_ES", "ca-ES", "ca"]);
+        // Any variant within the length limit counts, known or not: `sr-RS-ijekavsk` (14 bytes)
+        // keeps it, so its names are the full one, without the region, the region alone, the bare one, then the default script's.
+        assert_eq!(l("sr-RS-ijekavsk").as_str(), "sr-rs-ijekavsk");
+        assert_eq!(
+            names(l("sr-RS-ijekavsk")),
+            ["sr_RS_ijekavsk", "sr-RS-ijekavsk", "sr_ijekavsk", "sr-ijekavsk", "sr_RS", "sr-RS", "sr", "sr_Cyrl", "sr-Cyrl"]
+        );
+        // With a script the same variant passes the length limit (15 bytes), and is cut by it.
+        assert_eq!(l("sr-Cyrl-RS-ijekavsk").as_str(), "sr-cyrl-rs");
+        // A variant that fits with the default script is looked up without the region too, script-less as well.
+        let n = names(l("sr-Cyrl-RS-1994"));
+        assert!(n.contains(&"sr_Cyrl_1994".to_string()), "{n:?}");
+        assert!(n.contains(&"sr_1994".to_string()), "{n:?}");
+        assert!(n.iter().position(|x| x == "sr_1994") < n.iter().position(|x| x == "sr_RS"), "{n:?}");
+        assert_eq!(hyphenation_locales(l("ca-ES-valencia")), ["ca-es-valencia", "ca-valencia", "ca-es", "ca"]);
         assert_eq!(hyphenation_locales(l("fr-CA")), ["fr-ca", "fr"]);
         assert_eq!(hyphenation_locales(l("sr-Latn")), ["sr-latn"]);
         assert_eq!(hyphenation_locales(l("sr-Cyrl")), ["sr-cyrl", "sr"]);
