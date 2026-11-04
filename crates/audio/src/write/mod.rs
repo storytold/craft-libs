@@ -26,6 +26,7 @@ use std::io::{Seek, Write};
 /// # }
 /// ```
 pub fn encode(buf: &AudioBuffer, opts: &EncodeOptions) -> Result<Vec<u8>> {
+    check_built(opts.format)?;
     // Checked for every format; WAV and FLAC record it.
     let mask = opts.layout.map(|l| wav_mask(&l, buf.channels.len())).transpose()?;
     match opts.format {
@@ -36,15 +37,15 @@ pub fn encode(buf: &AudioBuffer, opts: &EncodeOptions) -> Result<Vec<u8>> {
         #[cfg(feature = "flac-encode")]
         EncodeFormat::Flac => flac::encode(buf, opts.bit_depth, opts.dither, mask),
         #[allow(unreachable_patterns)]
-        f => Err(not_built(f)),
+        f => Err(AudioError::Unsupported(format!("writing {f:?}"))),
     }
 }
 
-/// The error for a format whose writer is not built.
-#[allow(dead_code)]
-fn not_built(format: EncodeFormat) -> AudioError {
-    let feature = if format == EncodeFormat::Flac { "flac-encode" } else { "pcm-encode" };
-    AudioError::Unsupported(format!("writing {format:?} needs the `{feature}` feature"))
+/// Refuses a format whose writer is not built, before anything else about the request is checked.
+fn check_built(format: EncodeFormat) -> Result<()> {
+    let (built, feature) =
+        if format == EncodeFormat::Flac { (cfg!(feature = "flac-encode"), "flac-encode") } else { (cfg!(feature = "pcm-encode"), "pcm-encode") };
+    if built { Ok(()) } else { Err(AudioError::Unsupported(format!("writing {format:?} needs the `{feature}` feature"))) }
 }
 
 /// The file extensions of the formats [`encode`] can write (those whose features are on).
@@ -150,6 +151,7 @@ impl<W: Write + Seek> FileEncoder<W> {
     /// Starts a file of `channels` channels at `sample_rate` at the current position of `out`.
     /// `opts.layout`, when set, must have `channels` channels.
     pub fn new(out: W, opts: &EncodeOptions, sample_rate: u32, channels: u16) -> Result<Self> {
+        check_built(opts.format)?;
         let (depth, dither, channels) = (opts.bit_depth, opts.dither, usize::from(channels));
         let mask = opts.layout.map(|l| wav_mask(&l, channels)).transpose()?;
         let writer = match opts.format {
@@ -167,7 +169,7 @@ impl<W: Write + Seek> FileEncoder<W> {
             #[cfg(feature = "flac-encode")]
             EncodeFormat::Flac => Writer::Flac(flac::Writer::new(out, channels, sample_rate, depth, dither, mask)?),
             #[allow(unreachable_patterns)]
-            f => return Err(not_built(f)),
+            f => return Err(AudioError::Unsupported(format!("writing {f:?}"))),
         };
         Ok(FileEncoder { writer, channels })
     }
@@ -259,5 +261,29 @@ mod tests {
         let enc = FileEncoder::new(std::io::Cursor::new(Vec::new()), &opts, 48_000, 1);
         assert!(matches!(enc, Err(AudioError::Unsupported(_))));
         assert_eq!(encode_format_for(name), None);
+        // Also with a layout it could not use.
+        let opts = opts.with_layout(ChannelLayout::STEREO);
+        assert!(matches!(encode(&buf, &opts), Err(AudioError::Unsupported(_))));
+        let enc = FileEncoder::new(std::io::Cursor::new(Vec::new()), &opts, 48_000, 1);
+        assert!(matches!(enc, Err(AudioError::Unsupported(_))));
+    }
+
+    /// Streaming in any block sizes writes the bytes `encode` writes.
+    #[cfg(feature = "flac-encode")]
+    #[test]
+    fn streamed_flac_matches_encode() {
+        let channels: Vec<Vec<f32>> = (0..2).map(|c| (0..20_000).map(|i| ((i * (c + 3)) as f32 * 0.01).sin() * 0.5).collect()).collect();
+        let buf = AudioBuffer { sample_rate: 48_000, channels };
+        let opts = EncodeOptions::new(EncodeFormat::Flac);
+        let whole = encode(&buf, &opts).unwrap();
+        let mut enc = FileEncoder::new(std::io::Cursor::new(Vec::new()), &opts, 48_000, 2).unwrap();
+        let mut at = 0;
+        for n in [1000, 4096, 1, 9000, 5903] {
+            let block: Vec<&[f32]> = buf.channels.iter().map(|c| &c[at..at + n]).collect();
+            enc.write(&block, n).unwrap();
+            at += n;
+        }
+        assert_eq!(at, buf.frames());
+        assert_eq!(enc.finish().unwrap().into_inner(), whole);
     }
 }

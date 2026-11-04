@@ -182,8 +182,16 @@ fn seeking_to_or_past_the_end_ends_the_stream() {
             assert!(dec.next_block().unwrap().is_none(), "{format:?} seek({target})");
             // Seeking back still works.
             assert_eq!(dec.seek(4000).unwrap(), 4000, "{format:?}");
-            let left: usize = std::iter::from_fn(|| dec.next_block().unwrap()).map(|b| b.frames()).sum();
-            assert_eq!(left, 800, "{format:?}");
+            let mut left = vec![Vec::new(); buf.channels.len()];
+            while let Some(b) = dec.next_block().unwrap() {
+                for (l, c) in left.iter_mut().zip(b.channels) {
+                    l.extend(c);
+                }
+            }
+            for (l, source) in left.iter().zip(&buf.channels) {
+                assert_eq!(l.len(), 800, "{format:?}");
+                assert!(l.iter().zip(&source[4000..]).all(|(a, b)| (a - b.clamp(-1.0, 1.0)).abs() <= 2.0 / 32768.0), "{format:?}");
+            }
         }
     }
 }

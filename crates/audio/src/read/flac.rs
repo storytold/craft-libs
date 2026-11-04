@@ -67,16 +67,66 @@ pub(crate) fn empty_stream_info(b: &[u8], at: usize) -> Option<AudioInfo> {
         17..=24 => SampleFormat::Int24,
         _ => SampleFormat::Int32,
     };
-    Some(AudioInfo::new(Container::Flac, CodecId::Flac, sample_format, sample_rate, flac_layout(usize::from(channels)), 0))
+    Some(AudioInfo::new(Container::Flac, CodecId::Flac, sample_format, sample_rate, layout_of(b, at, channels), 0))
 }
 
-/// The FLAC channel assignment for a channel count (RFC 9639 §9.1.3).
-pub(crate) fn flac_layout(channels: usize) -> ChannelLayout {
-    match channels {
-        7 => ChannelLayout::SURROUND_6_1,
-        1..=8 => ChannelLayout::default_for(crate::layout::count(channels)),
-        n => ChannelLayout::unordered(crate::layout::count(n)),
+/// The layout of the FLAC stream at `at`, from its STREAMINFO channel count and its channel mask
+/// comment, or `None` when it does not start with a STREAMINFO block.
+pub(crate) fn layout(b: &[u8], at: usize) -> Option<ChannelLayout> {
+    let head = be_u32(b, at.checked_add(4)?)?;
+    if (head >> 24) & 0x7f != 0 {
+        return None;
     }
+    // In STREAMINFO: 3 bits of channels - 1 after the 20 bits of rate.
+    let channels = u16::from((b.get(at.checked_add(4 + 4 + 10 + 2)?)? >> 1) & 0x7) + 1;
+    Some(layout_of(b, at, channels))
+}
+
+/// `channels` channels described by the channel mask comment of the stream at `at`, or else in
+/// the layout decoders assume for the count (RFC 9639 §8.6.2, §9.1.3).
+fn layout_of(b: &[u8], at: usize, channels: u16) -> ChannelLayout {
+    let mask = channel_mask(b, at).unwrap_or_else(|| crate::layout::flac_assumed_mask(usize::from(channels)));
+    ChannelLayout::from_mask_and_channels(mask, channels)
+}
+
+/// The value of the first `WAVEFORMATEXTENSIBLE_CHANNEL_MASK` comment that holds a `0x` hexadecimal
+/// number, in the stream at `at`.
+fn channel_mask(b: &[u8], at: usize) -> Option<u32> {
+    let mut pos = at.checked_add(4)?;
+    loop {
+        let head = be_u32(b, pos)?;
+        let (body, len) = (pos.checked_add(4)?, (head & 0x00ff_ffff) as usize);
+        let end = body.checked_add(len)?.min(b.len());
+        if (head >> 24) & 0x7f == 4 {
+            return comments_mask(b.get(body..end)?);
+        }
+        if head >> 31 == 1 {
+            return None;
+        }
+        pos = body.checked_add(len)?;
+    }
+}
+
+/// The channel mask in a Vorbis comment block's body.
+fn comments_mask(block: &[u8]) -> Option<u32> {
+    let vendor = le_u32(block, 0)? as usize;
+    let mut at = 4usize.checked_add(vendor)?;
+    let count = le_u32(block, at)?;
+    at += 4;
+    for _ in 0..count {
+        let len = le_u32(block, at)? as usize;
+        let comment = block.get(at + 4..(at + 4).checked_add(len)?)?;
+        at += 4 + len;
+        let Some(eq) = comment.iter().position(|&c| c == b'=') else { continue };
+        if !comment[..eq].eq_ignore_ascii_case(b"WAVEFORMATEXTENSIBLE_CHANNEL_MASK") {
+            continue;
+        }
+        let hex = comment[eq + 1..].strip_prefix(b"0x").or_else(|| comment[eq + 1..].strip_prefix(b"0X"));
+        if let Some(mask) = hex.and_then(|h| std::str::from_utf8(h).ok()).and_then(|h| u32::from_str_radix(h, 16).ok()) {
+            return Some(mask);
+        }
+    }
+    None
 }
 
 /// Whether a comment in a (little-endian) Vorbis comment block claims more than the block holds.
@@ -101,4 +151,43 @@ fn overruns(b: &[u8], mut at: usize, end: usize, read: fn(&[u8], usize) -> Optio
         at += n as usize;
     }
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::comments_mask;
+
+    fn block(comments: &[&str]) -> Vec<u8> {
+        let mut b = 3u32.to_le_bytes().to_vec();
+        b.extend_from_slice(b"abc");
+        b.extend_from_slice(&(comments.len() as u32).to_le_bytes());
+        for c in comments {
+            b.extend_from_slice(&(c.len() as u32).to_le_bytes());
+            b.extend_from_slice(c.as_bytes());
+        }
+        b
+    }
+
+    #[test]
+    fn the_channel_mask_comment_is_found_in_any_case() {
+        assert_eq!(comments_mask(&block(&["TITLE=x", "WAVEFORMATEXTENSIBLE_CHANNEL_MASK=0x0107"])), Some(0x107));
+        assert_eq!(comments_mask(&block(&["waveformatextensible_channel_mask=0X3f"])), Some(0x3F));
+        assert_eq!(comments_mask(&block(&["TITLE=x"])), None);
+    }
+
+    #[test]
+    fn a_bad_channel_mask_comment_is_ignored() {
+        for value in ["63", "0x", "0xZZ", "0x1FFFFFFFF"] {
+            assert_eq!(comments_mask(&block(&[&format!("WAVEFORMATEXTENSIBLE_CHANNEL_MASK={value}")])), None, "{value}");
+        }
+        assert_eq!(comments_mask(&block(&["WAVEFORMATEXTENSIBLE_CHANNEL_MASK=bad", "WAVEFORMATEXTENSIBLE_CHANNEL_MASK=0x3"])), Some(3));
+    }
+
+    #[test]
+    fn a_truncated_comment_block_has_no_mask() {
+        let whole = block(&["WAVEFORMATEXTENSIBLE_CHANNEL_MASK=0x3"]);
+        for cut in 0..whole.len() {
+            assert_eq!(comments_mask(&whole[..cut]), None, "{cut}");
+        }
+    }
 }

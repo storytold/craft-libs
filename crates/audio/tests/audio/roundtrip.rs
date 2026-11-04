@@ -386,3 +386,29 @@ fn a_byte_rate_past_32_bits_is_an_error() {
     assert!(matches!(wav_float_header(4_000_000_000, 2, 0), Err(craft_audio::AudioError::Encode(_))));
     assert!(wav_float_header(4_000_000_000 / 8, 2, 0).is_ok());
 }
+
+/// The channel mask comment of a FLAC file is its layout, for `probe`, `decode` and `Decoder`, and
+/// for a file with no audio frames.
+#[test]
+fn flac_layouts_read_back_from_the_mask_comment() {
+    use craft_audio::{DecodeOptions, Decoder};
+    let cases = [
+        (6, Some(ChannelLayout::SURROUND_5_1_SIDE), ChannelLayout::SURROUND_5_1_SIDE),
+        (6, None, ChannelLayout::SURROUND_5_1),
+        (7, Some(ChannelLayout::SURROUND_6_1), ChannelLayout::SURROUND_6_1),
+        (7, None, ChannelLayout::default_for(7)),
+        (4, Some(ChannelLayout::from_mask(0x107)), ChannelLayout::from_mask(0x107)),
+        (2, Some(ChannelLayout::unordered(2)), ChannelLayout::unordered(2)),
+    ];
+    for (channels, layout, expected) in cases {
+        for frames in [4096, 0] {
+            let mut opts = EncodeOptions::new(EncodeFormat::Flac);
+            opts.layout = layout;
+            let file = craft_audio::encode(&AudioBuffer::new(48_000, channels, frames), &opts).unwrap();
+            assert_eq!(probe(&file, None).unwrap().layout, expected, "probe {channels} {layout:?} {frames}");
+            assert_eq!(decode(&file, None).unwrap().0.layout, expected, "decode {channels} {layout:?} {frames}");
+            let dec = Decoder::from_bytes(&file, None, &DecodeOptions::default()).unwrap();
+            assert_eq!(dec.info().layout, expected, "Decoder {channels} {layout:?} {frames}");
+        }
+    }
+}

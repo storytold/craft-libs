@@ -264,7 +264,7 @@ match craft_audio::decode(&bytes, None) {
   `WAVEFORMATEXTENSIBLE_CHANNEL_MASK` comment. This includes the usual layouts for 5 and 6 channels:
   without the comment, back surrounds are read as side surrounds. It includes the usual 7-channel
   layout too: without the comment, its back left, back right and back centre are read as back
-  centre, side left and side right.
+  centre, side left and side right. craft-audio reads the comment in FLAC files, not in FLAC in Ogg.
 - FLAC at 32 bits codes stereo channels independently, because a side channel would need 33 bits.
 - Outside RFC 9639's streamable subset (§7), which some decoders require: FLAC at 32 bits, at a
   sample rate the frame header cannot name, or with a layout that needs the mask comment.

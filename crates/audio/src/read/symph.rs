@@ -81,9 +81,10 @@ fn guarded<T>(f: impl FnOnce() -> Result<T>) -> Result<T> {
     catch_unwind(AssertUnwindSafe(f)).unwrap_or_else(|_| Err(AudioError::Malformed("decoder failed on malformed input".into())))
 }
 
-/// What [`open`] found: a reader, or a stream that holds no audio frames and has no reader.
+/// What [`open`] found: a reader (with the layout of a FLAC stream), or a stream that holds no
+/// audio frames and has no reader.
 enum Opened {
-    Reader(Box<dyn FormatReader>),
+    Reader(Box<dyn FormatReader>, Option<ChannelLayout>),
     Empty(AudioInfo),
 }
 
@@ -124,6 +125,8 @@ enum Precheck {
     Empty(AudioInfo),
     /// The size checks ran for the container the probe reports under this short name.
     Checked(&'static str),
+    /// As `Checked`, for a FLAC stream with this layout, which symphonia's reader does not parse.
+    Flac(&'static str, Option<ChannelLayout>),
     /// No container size check was needed.
     Unchecked,
 }
@@ -330,7 +333,7 @@ fn precheck(b: &[u8], start: usize, detected: Option<Container>) -> Result<Prech
             if let Some(info) = super::flac::empty_stream_info(b, at) {
                 return Ok(Precheck::Empty(info));
             }
-            Ok(Precheck::Checked(expected))
+            Ok(Precheck::Flac(expected, super::flac::layout(b, at)))
         }
         FirstMarker::Caf(at) => {
             super::caf::check(b, at)?;
@@ -356,10 +359,11 @@ fn open(bytes: Cow<'_, [u8]>, detected: Option<Container>) -> Result<Opened> {
     if start > 0 && start >= bytes.len() {
         return Err(AudioError::Malformed("ID3v2 tag extends past the end of the file".into()));
     }
-    let checked = precheck(&bytes, start, detected)?;
-    if let Precheck::Empty(info) = checked {
-        return Ok(Opened::Empty(info));
-    }
+    let (checked, flac_layout) = match precheck(&bytes, start, detected)? {
+        Precheck::Empty(info) => return Ok(Opened::Empty(info)),
+        Precheck::Flac(expected, layout) => (Precheck::Checked(expected), layout),
+        checked => (checked, None),
+    };
     // symphonia reads from an owned stream: a borrowed buffer is copied once, a buffer read from
     // a shared source is moved in.
     let mut mss = MediaSourceStream::new(Box::new(Cursor::new(bytes.into_owned())), MediaSourceStreamOptions::default());
@@ -381,7 +385,7 @@ fn open(bytes: Cow<'_, [u8]>, detected: Option<Container>) -> Result<Opened> {
         }
         _ => {}
     }
-    Ok(Opened::Reader(reader))
+    Ok(Opened::Reader(reader, flac_layout.filter(|_| probed == "flac")))
 }
 
 /// The codec symphonia reports, as a [`CodecId`].
@@ -543,8 +547,8 @@ impl Symph {
     /// Open audio track `track` (the first when `None`) of the file in `bytes`.
     pub(crate) fn open(bytes: Cow<'_, [u8]>, detected: Option<Container>, track: Option<usize>) -> Result<Symph> {
         guarded(move || {
-            let reader = match open(bytes, detected)? {
-                Opened::Reader(reader) => reader,
+            let (reader, flac_layout) = match open(bytes, detected)? {
+                Opened::Reader(reader, layout) => (reader, layout),
                 Opened::Empty(info) => {
                     // a stream with no audio still has one track, as WAV and AIFF do
                     if let Some(n) = track.filter(|&n| n > 0) {
@@ -566,7 +570,10 @@ impl Symph {
                     });
                 }
             };
-            let (track_id, info) = info_of(reader.as_ref(), detected, track)?;
+            let (track_id, mut info) = info_of(reader.as_ref(), detected, track)?;
+            if let Some(layout) = flac_layout.filter(|l| l.channels() == info.channels) {
+                info.layout = layout;
+            }
             let t = reader.tracks().iter().find(|t| t.id == track_id).ok_or_else(|| AudioError::Malformed("track vanished".into()))?;
             let params = audio_params(t).cloned().ok_or_else(|| AudioError::Malformed("track vanished".into()))?;
             let alac = params.extra_data.as_deref().filter(|_| params.codec == CODEC_ID_ALAC).and_then(|d| be_u32(d, 0));
@@ -759,7 +766,7 @@ impl Symph {
 pub(crate) fn tracks(bytes: Cow<'_, [u8]>, detected: Option<Container>) -> Result<Vec<(CodecId, u32, u16)>> {
     guarded(move || {
         let reader = match open(bytes, detected)? {
-            Opened::Reader(reader) => reader,
+            Opened::Reader(reader, _) => reader,
             Opened::Empty(info) => return Ok(vec![(info.codec, info.sample_rate, info.channels)]),
         };
         Ok(audio_tracks(reader.as_ref())

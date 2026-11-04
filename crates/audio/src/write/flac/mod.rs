@@ -39,23 +39,11 @@ fn check(channels: usize, sample_rate: u32, depth: BitDepth) -> Result<u8> {
 /// Frames quantized and handed to the encoder at a time: its block size.
 const CHUNK: usize = 4096;
 
-/// The layout decoders assume for 1–8 channels with no channel mask comment, as a WAV mask. RFC
-/// 9639 §9.1.3 leaves "back/surround" open for 5 and 6 channels; libFLAC and ffmpeg read side
-/// surrounds. 7 channels are 6.1 with sides (FL FR FC LFE BC SL SR).
-fn assumed_mask(channels: usize) -> u32 {
-    match channels {
-        5 => 0x607,
-        6 => 0x60F,
-        7 => 0x70F,
-        n => ChannelLayout::default_for(n as u16).mask().unwrap_or(0),
-    }
-}
-
 /// The `WAVEFORMATEXTENSIBLE_CHANNEL_MASK` comment (RFC 9639 §8.6.2) for a layout decoders would
 /// not assume: `mask` (the usual layout for the count when `None`).
 fn mask_comment(channels: usize, mask: Option<u32>) -> Option<String> {
     let mask = mask.unwrap_or_else(|| ChannelLayout::default_for(channels as u16).mask().unwrap_or(0));
-    (mask != assumed_mask(channels)).then(|| format!("WAVEFORMATEXTENSIBLE_CHANNEL_MASK=0x{mask:04X}"))
+    (mask != crate::layout::flac_assumed_mask(channels)).then(|| format!("WAVEFORMATEXTENSIBLE_CHANNEL_MASK=0x{mask:04X}"))
 }
 
 fn encoder_error(e: encoder::Error) -> AudioError {
@@ -150,12 +138,9 @@ impl<W: Write + Seek> Writer<W> {
 
 pub(crate) fn encode(buf: &AudioBuffer, depth: BitDepth, dither: bool, mask: Option<u32>) -> Result<Vec<u8>> {
     validate_buffer(buf)?;
-    let bps = check(buf.channels.len(), buf.sample_rate, depth)?;
+    check(buf.channels.len(), buf.sample_rate, depth)?;
     let frames = buf.frames();
-    let mut out = Vec::new();
-    out.try_reserve(frames.saturating_mul(buf.channels.len()).saturating_mul(usize::from(bps) / 8) / 2)
-        .map_err(|_| AudioError::TooLarge("cannot allocate FLAC output".into()))?;
-    let mut w = Writer::new(Cursor::new(out), buf.channels.len(), buf.sample_rate, depth, dither, mask)?;
+    let mut w = Writer::new(Cursor::new(Vec::new()), buf.channels.len(), buf.sample_rate, depth, dither, mask)?;
     w.write(&buf.channels, frames)?;
     Ok(w.finish()?.into_inner())
 }
