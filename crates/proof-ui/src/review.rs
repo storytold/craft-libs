@@ -38,6 +38,8 @@ pub struct Review {
     /// The Change to field's text.
     pub replacement: String,
     message: String,
+    /// [`Host::notice`] at the last check: asked once, as it may read a whole document.
+    pub(crate) notice: Option<String>,
     started: bool,
 }
 
@@ -191,6 +193,7 @@ impl Review {
 
     /// Take `found`, a check of the document as it is now, as the issues left.
     fn update(&mut self, host: &mut dyn Host, found: Vec<Issue>) -> Result<(), String> {
+        self.notice = host.notice();
         let versions = &self.versions;
         self.skipped.retain(|skip| versions.get(&skip.story).is_none_or(|v| host.version(skip.story) == Some(*v)));
         let stories: HashSet<u64> = found.iter().chain(&self.skipped).map(|i| i.story).collect();

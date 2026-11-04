@@ -207,7 +207,7 @@ fn body(ui: &mut Ui, review: &mut Review, host: &dyn Host, text: &dyn Text, colo
         ui.add_space(8.0);
         return primary(ui, &tr(text, "Check This Document"), true, colors).then_some(After::Start);
     }
-    if let Some(notice) = host.notice() {
+    if let Some(notice) = &review.notice {
         ui.label(RichText::new(notice).size(11.0).color(colors.dim));
         ui.add_space(8.0);
     }

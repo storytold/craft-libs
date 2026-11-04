@@ -55,6 +55,7 @@ pub trait Host {
     /// Accept the word from now on.
     fn add_word(&mut self, word: &str) -> Result<(), String>;
     /// A line above the review about what it can't cover (a language with no data), if any.
+    /// Asked at each check, not each frame.
     fn notice(&self) -> Option<String> {
         None
     }
