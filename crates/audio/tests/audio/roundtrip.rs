@@ -117,6 +117,25 @@ fn flac_handles_silence_noise_full_scale_and_odd_rates() {
     }
 }
 
+/// 16-bit audio exported at a larger depth costs no more: the padding is not coded.
+#[test]
+fn flac_does_not_store_padding() {
+    let mut src = sine(48_000, 2, 20_000);
+    for s in src.channels.iter_mut().flatten() {
+        *s = (*s * 32768.0).round() / 32768.0;
+    }
+    let size = |depth| {
+        let opts = EncodeOptions::new(EncodeFormat::Flac).with_bit_depth(depth).with_dither(false);
+        let flac = encode(&src, &opts).unwrap();
+        let (_, wav) = decode(&encode(&src, &opts.clone().with_format(EncodeFormat::Wav)).unwrap(), None).unwrap();
+        assert_eq!(decode(&flac, None).unwrap().1, wav, "{depth:?}");
+        flac.len()
+    };
+    let base = size(BitDepth::Int16);
+    assert!(size(BitDepth::Int24) < base * 11 / 10);
+    assert!(size(BitDepth::Int32) < base * 11 / 10);
+}
+
 #[test]
 fn flac_rejects_unsupported_layouts() {
     let opts = EncodeOptions::new(EncodeFormat::Flac).with_bit_depth(BitDepth::Float32).with_dither(false);

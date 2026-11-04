@@ -315,3 +315,30 @@ fn the_frame_limit_stops_a_write_before_it_reaches_the_sink() {
     assert!(w.write(&[[0.0f32; 1]], 1).is_ok());
     assert!(matches!(w.write(&[[0.0f32; 1]], 1), Err(AudioError::TooLarge(_))));
 }
+
+/// Samples with unused low bits, on every kind of subframe and stereo mode: the decoder must put
+/// the bits back before it undoes the stereo decorrelation.
+#[test]
+fn wasted_bits_round_trip() {
+    for (bps, shift) in [(16u8, 3u32), (24, 8), (32, 16), (32, 8)] {
+        let source = 16.min(bps - shift as u8);
+        let pad = |kind, seed| -> Vec<i32> { signal(kind, 9_000, source, seed).iter().map(|&v| v << shift).collect() };
+        for (kind, other) in [("music", "music"), ("noise", "noise"), ("square", "music"), ("click", "sweep")] {
+            let planar = [pad(kind, 51), pad(other, 52)];
+            if round_trip(&format!("wasted-{bps}-{shift}-{kind}"), &planar, EncoderConfig::new(48_000, 2, bps), 4096).is_none() {
+                return;
+            }
+        }
+    }
+    // only the top bit can vary: one bit per sample remains
+    let lowest: Vec<i32> = (0..9_000).map(|i| if i % 3 == 0 { -(1 << 23) } else { 0 }).collect();
+    round_trip("wasted-to-one-bit", &[lowest], EncoderConfig::new(48_000, 1, 24), 4096);
+}
+
+/// A click at full scale needs a residual near the limit; a block is not stored verbatim for it.
+#[test]
+fn a_full_scale_click_at_32_bits_is_still_predicted() {
+    let planar = [signal("click", 4_096, 32, 61)];
+    let Some(size) = round_trip("click-32", &planar, EncoderConfig::new(48_000, 1, 32), 4096) else { return };
+    assert!(size < 4_096 * 4 / 2, "{size}");
+}

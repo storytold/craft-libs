@@ -265,6 +265,7 @@ match craft_audio::decode(&bytes, None) {
   without the comment, back surrounds are read as side surrounds. It includes the usual 7-channel
   layout too: without the comment, its back left, back right and back centre are read as back
   centre, side left and side right.
+- FLAC at 32 bits codes stereo channels independently, because a side channel would need 33 bits.
 - Outside RFC 9639's streamable subset (§7), which some decoders require: FLAC at 32 bits, at a
   sample rate the frame header cannot name, or with a layout that needs the mask comment.
 - `ChannelLayout::unordered` is written to FLAC as mask `0x0000`, as RFC 9639 §8.6.2 allows, but
@@ -280,7 +281,7 @@ match craft_audio::decode(&bytes, None) {
 | Codec | Spec | Scope | Verified against |
 |---|---|---|---|
 | WAV, AIFF | Microsoft RIFF, Apple AIFF/AIFF-C | read: integer 8–32-bit, float 32/64-bit, `WAVE_FORMAT_EXTENSIBLE` masks, RF64/BW64, BWF `bext`, truncated files; write: 16/24/32-bit integer and 32-bit float, RF64 above 4 GiB, any layout, TPDF dither | round trips; hostile-input tests |
-| FLAC encoder | RFC 9639 | 16, 24, 32 bits; 1–8 channels, layouts decoders would not assume for the count as a `WAVEFORMATEXTENSIBLE_CHANNEL_MASK` comment; up to 655,350 Hz; LPC, stereo decorrelation, STREAMINFO MD5 | bit-exact through ffmpeg, STREAMINFO MD5 checked against ffmpeg |
+| FLAC encoder | RFC 9639 | 16, 24, 32 bits; 1–8 channels, layouts decoders would not assume for the count as a `WAVEFORMATEXTENSIBLE_CHANNEL_MASK` comment; up to 655,350 Hz; LPC, stereo decorrelation, wasted bits, STREAMINFO MD5 | bit-exact through ffmpeg, STREAMINFO MD5 checked against ffmpeg |
 
 ## symphonia
 

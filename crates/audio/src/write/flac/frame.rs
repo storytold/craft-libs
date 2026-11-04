@@ -120,23 +120,37 @@ fn write_residual(w: &mut BitWriter, residual: &Residual, r: &[i64], block: usiz
 }
 
 fn write_subframe(w: &mut BitWriter, x: &[i32], sub: &Subframe, bps: u8) {
+    if let Subframe::Wasted { bits, coded } = sub {
+        let shifted: Vec<i32> = x.iter().map(|&v| v >> bits).collect();
+        return write_coded(w, &shifted, coded, bps - bits, *bits);
+    }
+    write_coded(w, x, sub, bps, 0);
+}
+
+/// Subframe header (§9.2.1) and body of samples already without their `wasted` low bits.
+fn write_coded(w: &mut BitWriter, x: &[i32], sub: &Subframe, bps: u8, wasted: u8) {
     let b = u32::from(bps);
     let sample = |w: &mut BitWriter, v: i32| w.write_bits(v as u32, b);
-    w.write_bit(false);
+    // the flag, then the count minus 1 in unary
+    let header = |w: &mut BitWriter, kind: u32| {
+        w.write_bit(false);
+        w.write_bits(kind, 6);
+        w.write_bit(wasted > 0);
+        if wasted > 0 {
+            w.write_bits(1, u32::from(wasted));
+        }
+    };
     match sub {
         Subframe::Constant(v) => {
-            w.write_bits(0, 6);
-            w.write_bit(false);
+            header(w, 0);
             sample(w, *v);
         }
         Subframe::Verbatim => {
-            w.write_bits(1, 6);
-            w.write_bit(false);
+            header(w, 1);
             x.iter().for_each(|&v| sample(w, v));
         }
         Subframe::Fixed { order, residual } => {
-            w.write_bits(0b001000 | u32::from(*order), 6);
-            w.write_bit(false);
+            header(w, 0b001000 | u32::from(*order));
             let o = usize::from(*order);
             x.iter().take(o).for_each(|&v| sample(w, v));
             let r = super::predict::fixed_residual(x, o).unwrap_or_default();
@@ -144,8 +158,7 @@ fn write_subframe(w: &mut BitWriter, x: &[i32], sub: &Subframe, bps: u8) {
         }
         Subframe::Lpc { coefs, precision, shift, residual } => {
             let o = coefs.len();
-            w.write_bits(0b100000 | (o as u32 - 1), 6);
-            w.write_bit(false);
+            header(w, 0b100000 | (o as u32 - 1));
             x.iter().take(o).for_each(|&v| sample(w, v));
             w.write_bits(u32::from(*precision) - 1, 4);
             w.write_bits(u32::from(*shift), 5);
@@ -153,6 +166,8 @@ fn write_subframe(w: &mut BitWriter, x: &[i32], sub: &Subframe, bps: u8) {
             let r = super::predict::lpc_residual(x, coefs, *shift).unwrap_or_default();
             write_residual(w, residual, &r, x.len(), o);
         }
+        // `choose` does not nest them
+        Subframe::Wasted { coded, .. } => write_coded(w, x, coded, bps, wasted),
     }
 }
 
