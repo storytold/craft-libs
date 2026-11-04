@@ -97,6 +97,14 @@ fn an_embedded_truetype_subset_keeps_the_os2_table_and_its_fstype() {
     assert_eq!(checksum(sub), 0xB1B0_AFBA, "whole-font checksum");
     // And it still reads as a font with the glyphs it was given.
     let reread = ttf_parser::Face::parse(sub, 0).unwrap();
-    assert!(reread.number_of_glyphs() >= 2);
+    // A subset, not the source font embedded whole: of the fixture's 11 glyphs, .notdef and the
+    // ones the text uses, and only their outlines.
+    assert!(
+        2 <= reread.number_of_glyphs() && reread.number_of_glyphs() < face.number_of_glyphs(),
+        "{} of {} glyphs",
+        reread.number_of_glyphs(),
+        face.number_of_glyphs()
+    );
+    assert!(table(sub, b"glyf").unwrap().len() < table(TINY_GLYF, b"glyf").unwrap().len(), "only the used glyphs' outlines");
     assert_eq!(reread.permissions(), face.permissions());
 }
