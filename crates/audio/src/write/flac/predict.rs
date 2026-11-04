@@ -141,7 +141,10 @@ pub fn lpc_residual(x: &[i32], coefs: &[i32], shift: u8) -> Option<Vec<i64>> {
         let hist = x.get(i - order..i)?;
         // coefs[0] weighs the previous sample
         let pred: i64 = coefs.iter().zip(hist.iter().rev()).map(|(&c, &s)| i64::from(c) * i64::from(s)).sum();
-        let r = i64::from(*x.get(i)?) - (pred >> shift);
+        // Valid past the i32 range too, but symphonia adds it to the residual as an i32, which
+        // panics in a debug build: its overflow checks are on in apps without our profile override.
+        let pred = i32::try_from(pred >> shift).ok()?;
+        let r = i64::from(*x.get(i)?) - i64::from(pred);
         if r.abs() > MAX_RESIDUAL {
             return None;
         }
@@ -320,6 +323,16 @@ mod tests {
         assert!(fixed_residual(&[i32::MIN], 0).is_none());
         assert!(fixed_residual(&[0, 1 << 30, -(1 << 30)], 1).is_none());
         assert!(lpc_residual(&[0, i32::MAX], &[1], 0).is_some());
+    }
+
+    #[test]
+    fn linear_predictions_stay_in_the_range_of_a_32_bit_integer() {
+        let x = [1 << 30, 1 << 30];
+        assert!(lpc_residual(&x, &[1], 0).is_some());
+        // predicts 2^31, and the residual would be small
+        assert!(lpc_residual(&x, &[2], 0).is_none());
+        assert!(lpc_residual(&x, &[4], 1).is_none());
+        assert!(lpc_residual(&x, &[3], 1).is_some());
     }
 
     #[test]
