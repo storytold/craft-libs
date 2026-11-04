@@ -25,6 +25,8 @@ struct Doc {
     preferred: bool,
     many: Option<Vec<String>>,
     fail_check: bool,
+    /// `check` fails after this many more successes.
+    checks_left: Option<u32>,
 }
 
 impl Doc {
@@ -39,6 +41,10 @@ impl Doc {
 
 impl Host for Doc {
     fn check(&mut self) -> Result<Vec<Issue>, String> {
+        if let Some(left) = &mut self.checks_left {
+            self.fail_check = *left == 0;
+            *left = left.saturating_sub(1);
+        }
         if self.fail_check {
             return Err("the dictionary could not be read".into());
         }
@@ -474,6 +480,86 @@ fn ignoring_takes_in_what_a_fresh_check_found() {
     doc.known.clear();
     review.act(&mut doc, Action::IgnoreAll).unwrap();
     assert_eq!(review.current().unwrap().word, "wrng");
+}
+
+#[test]
+fn a_failed_check_again_keeps_what_was_ignored() {
+    let (mut review, mut doc) = started(TEXT);
+    review.act(&mut doc, Action::IgnoreAll).unwrap();
+    assert_eq!(review.current().unwrap().word, "wrng");
+    doc.fail_check = true;
+    review.act(&mut doc, Action::Check).unwrap_err();
+    doc.fail_check = false;
+    review.act(&mut doc, Action::IgnoreOnce).unwrap();
+    assert!(review.current().is_none(), "jumpd stays ignored");
+}
+
+/// The word is in the dictionary, so its issue must not be offered again.
+#[test]
+fn a_failed_check_after_adding_a_word_only_offers_check_again() {
+    let (mut review, mut doc) = started(TEXT);
+    doc.checks_left = Some(1);
+    assert!(review.act(&mut doc, Action::AddToDictionary).unwrap_err().contains("text changed"));
+    assert!(doc.known.contains("jumpd"));
+    doc.checks_left = None;
+    doc.fail_check = false;
+    let mut h = harness((review, doc));
+    assert!(h.query_by_label("Add to Dictionary").is_none());
+    h.get_by_label("Check Again").click();
+    h.run_steps(2);
+    assert_eq!(h.state().0.current().unwrap().word, "wrng");
+}
+
+#[test]
+fn each_issue_opens_its_list_at_the_top() {
+    let mut doc = Doc::new(TEXT);
+    doc.many = Some((0..40).map(|i| format!("jump{i}")).collect());
+    let mut review = Review::default();
+    review.start(&mut doc);
+    let mut h = Harness::builder()
+        .with_size(egui::vec2(320.0, 420.0))
+        .build_ui_state(|ui, (review, doc): &mut State| panel(ui, review, doc, &English, &COLORS), (review, doc));
+    h.run_steps(2);
+    let row = h.get_by_label("jump0").rect();
+    h.hover_at(row.center());
+    h.step();
+    h.event(egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: egui::vec2(0.0, -60.0),
+        phase: egui::TouchPhase::Move,
+        modifiers: egui::Modifiers::NONE,
+        source: egui::MouseWheelSource::Unknown,
+    });
+    h.run_steps(4);
+    assert!(h.get_by_label("jump0").rect().min.y < row.min.y);
+    h.get_by_label("Ignore Once").click();
+    h.run_steps(3);
+    assert_eq!(h.state().0.current().unwrap().start, 17);
+    assert_eq!(h.get_by_label("jump0").rect(), row);
+}
+
+/// Too short to keep the actions in view: they scroll with the rest, and are still there.
+#[test]
+fn a_very_short_panel_still_has_its_actions() {
+    let mut h = Harness::builder()
+        .with_size(egui::vec2(320.0, 110.0))
+        .build_ui_state(|ui, (review, doc): &mut State| panel(ui, review, doc, &English, &COLORS), started(TEXT));
+    h.run_steps(2);
+    assert!(h.get_by_label("Add to Dictionary").rect().min.y > 110.0);
+    h.hover_at(egui::pos2(160.0, 20.0));
+    h.step();
+    h.event(egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: egui::vec2(0.0, -2000.0),
+        phase: egui::TouchPhase::Move,
+        modifiers: egui::Modifiers::NONE,
+        source: egui::MouseWheelSource::Unknown,
+    });
+    h.run_steps(4);
+    assert!(h.get_by_label("Add to Dictionary").rect().max.y <= 110.0);
+    h.get_by_label("Ignore All").click();
+    h.run_steps(2);
+    assert_eq!(h.state().0.current().unwrap().word, "wrng");
 }
 
 #[test]

@@ -144,7 +144,8 @@ enum After {
 /// Draws the review. Starts one from its own button if there is none yet. The current issue's
 /// actions keep their place at the bottom, so that they stay in view when a short panel has to
 /// scroll the rest, and don't move from one issue to the next under a pointer going through them.
-/// Give it the height to fill, not a scrolling parent.
+/// A panel too short for that scrolls the actions with the rest. Give it the height to fill, not a
+/// scrolling parent.
 pub fn panel(ui: &mut Ui, review: &mut Review, host: &mut dyn Host, text: &dyn Text, colors: &Colors) {
     let actionable = actionable_issue(review, &*host);
     let height = ui.available_height();
@@ -268,9 +269,12 @@ fn current_issue(ui: &mut Ui, review: &mut Review, issue: &Issue, host: &dyn Hos
     let height = if room.is_finite() { (room - 2.0).max(MIN_LIST) } else { natural };
     egui::Frame::NONE.fill(colors.field).stroke(Stroke::new(1.0, colors.field_border)).corner_radius(2.0).show(ui, |ui| {
         ui.spacing_mut().item_spacing.y = 0.0;
-        egui::ScrollArea::vertical().id_salt("suggestions").auto_shrink([false, false]).max_height(height).min_scrolled_height(height).show(
-            ui,
-            |ui| {
+        egui::ScrollArea::vertical()
+            .id_salt(("suggestions", issue.story, issue.start, &issue.word))
+            .auto_shrink([false, false])
+            .max_height(height)
+            .min_scrolled_height(height)
+            .show(ui, |ui| {
                 if issue.suggestions.is_empty() {
                     egui::Frame::NONE.inner_margin(8).show(ui, |ui| {
                         ui.label(RichText::new(tr(text, "(no suggestions)")).italics().color(colors.text));
@@ -285,8 +289,7 @@ fn current_issue(ui: &mut Ui, review: &mut Review, issue: &Issue, host: &dyn Hos
                         after = Some(After::Act(Action::Change(Some(suggestion.clone()))));
                     }
                 }
-            },
-        );
+            });
     });
     after
 }

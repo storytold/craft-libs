@@ -112,11 +112,13 @@ impl Review {
             return Err(OTHER_DOCUMENT.into());
         }
         if action == Action::Check {
+            // A failed check leaves this pass as it was.
+            let found = host.check()?;
             self.started = true;
             self.document = host.document();
             self.skipped.clear();
             self.ignored.clear();
-            return self.refresh(host);
+            return self.update(host, found);
         }
         let issue = self.current().cloned().ok_or(NO_ISSUE)?;
         let found = self.validate(host, &issue)?;
@@ -142,6 +144,8 @@ impl Review {
                     return Err(NOT_SPELLING.into());
                 }
                 host.add_word(&issue.word)?;
+                // The word is accepted, so its issue can't be acted on again: only checking is left.
+                return self.refresh(host).map_err(|_| CHANGED.to_string());
             }
             Action::Check => {}
         }
