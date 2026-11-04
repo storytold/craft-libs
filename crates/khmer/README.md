@@ -104,12 +104,13 @@ annotated correctness judgments. The private book text is not redistributed.
 ## Resource provenance
 
 Nathan Wells (@sungkhum), working as SBBIC, identifies the frequency dictionary as
-SIL khmerlbdict combined with his own work, and the other five inputs as his original
-SBBIC work. The per-file quotations, pinned source evidence, SEAlang notice and
-the exact CLDR 28 content match and contributor-confirmed source permissions are recorded in [PROVENANCE.md](PROVENANCE.md).
-The public `LICENSE` attribution text includes all three MIT holders, the
-historical Unicode notice and a modification statement. Training used internal documents
-SBBIC reports permission to train with; no private training text is redistributed.
+SIL khmerlbdict combined with his work. The published Aksara notice identifies the
+SymSpell word list as the SBBIC checker's `km_KH.dic` and explicitly offers it under
+MIT; it also records its Chuon Nath/Headley/KhmerOS/SBBIC origins. The multiple-
+spellings list has Wells's explicit MIT grant. Per-file evidence and links to the
+public Aksara/tiptap notices are in [PROVENANCE.md](PROVENANCE.md).
+The public `LICENSE` attribution text retains the three MIT holders, the historical
+Unicode notice and modification statement. No private training text is distributed.
 
 The data pack is **Download-only pending maintainer sign-off**. Explicit data
 embedding is disabled until maintainer classification and the model/config
