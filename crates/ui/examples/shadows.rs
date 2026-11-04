@@ -1,10 +1,14 @@
 //! Manual comparison gallery: cargo run -p craft-ui --example shadows -- /tmp/craft-shadows
 //! Generates PNGs for human review; there are no approved pixel goldens.
 
+#[cfg(not(target_arch = "wasm32"))]
 use craft_ui::theme::shadow::{self, Elevation};
+#[cfg(not(target_arch = "wasm32"))]
 use egui::{Color32, CornerRadius, FontId, Pos2, RawInput, Rect, Shadow, Stroke, StrokeKind, pos2, vec2};
+#[cfg(not(target_arch = "wasm32"))]
 use egui_kittest::{TestRenderer, wgpu::WgpuTestRenderer};
 
+#[cfg(not(target_arch = "wasm32"))]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let directory = std::env::args_os().nth(1).map(std::path::PathBuf::from).unwrap_or_else(|| std::env::temp_dir().join("craft-shadows"));
     std::fs::create_dir_all(&directory)?;
@@ -37,11 +41,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                     }
                     let source = Shadow { offset: [0, 4], blur: 16, spread: 0, color };
-                    let recipes: [(&str, Vec<Shadow>); 3] = [
-                        ("Single layer", vec![source]),
-                        ("PhotoCraft / Medium", Elevation::Medium.layers(color).into()),
-                        ("Floating toolbar", shadow::floating_toolbar(color).into()),
-                    ];
+                    let raised = Elevation::Raised.shadow(color);
+                    let floating = Elevation::Floating.shadow(color);
+                    let recipes: [(&str, &[Shadow]); 3] =
+                        [("Single layer", std::slice::from_ref(&source)), ("Raised", raised.as_slice()), ("Floating toolbar", floating.as_slice())];
                     for (column, (label, layers)) in recipes.iter().enumerate() {
                         let x = 36.0 + column as f32 * 310.0;
                         painter.text(pos2(x, 24.0), egui::Align2::LEFT_TOP, label, FontId::proportional(16.0), ink);
@@ -65,3 +68,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     Ok(())
 }
+
+#[cfg(target_arch = "wasm32")]
+fn main() {}

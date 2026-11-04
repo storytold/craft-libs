@@ -17,6 +17,19 @@ fn original(rect: Rect) -> Shape {
     Frame::NONE.fill(Color32::WHITE).stroke(Stroke::new(1.0, Color32::GRAY)).corner_radius(6).shadow(source()).paint(rect.shrink(1.0))
 }
 
+fn faded_original(source: Shadow, opacity: f32) -> Shape {
+    let mut shape =
+        Frame::NONE.fill(Color32::WHITE).stroke(Stroke::new(1.0, Color32::GRAY)).corner_radius(6).shadow(source).paint(rect().shrink(1.0));
+    let Shape::Vec(pair) = &mut shape else { panic!("expected frame and shadow") };
+    for shape in pair {
+        if let Shape::Rect(rect) = shape {
+            rect.fill = rect.fill.gamma_multiply(opacity);
+            rect.stroke.color = rect.stroke.color.gamma_multiply(opacity);
+        }
+    }
+    shape
+}
+
 fn rects(shape: &Shape, out: &mut Vec<egui::epaint::RectShape>) {
     match shape {
         Shape::Rect(rect) => out.push(rect.clone()),
@@ -27,6 +40,25 @@ fn rects(shape: &Shape, out: &mut Vec<egui::epaint::RectShape>) {
         }
         _ => {}
     }
+}
+
+#[test]
+fn semantic_tokens_preserve_reference_recipes_and_support_flat_and_floating() {
+    let color = Color32::from_rgba_unmultiplied(40, 100, 160, 100);
+    for (semantic, compatibility) in
+        [(Elevation::Subtle, Elevation::Low), (Elevation::Raised, Elevation::Medium), (Elevation::Overlay, Elevation::High)]
+    {
+        assert_eq!(semantic.shadow(color).as_slice(), compatibility.layers(color));
+    }
+    let flat = Elevation::Flat.shadow(color);
+    assert_eq!(flat, ElevationShadow::NONE);
+    assert_eq!(flat, ElevationShadow::default());
+    assert!(shapes(rect(), CornerRadius::ZERO, flat.as_ref()).is_empty());
+    let [far, near] = floating_toolbar(color);
+    assert_eq!(Elevation::Floating.shadow(color), ElevationShadow::new([far, near, ShadowLayer::NONE, ShadowLayer::NONE]));
+    assert_eq!(shapes(rect(), CornerRadius::ZERO, Elevation::Floating.shadow(color).as_ref()).len(), 2);
+    let elevations = [Elevation::Subtle, Elevation::Raised, Elevation::Overlay, Elevation::Modal];
+    assert!(elevations.windows(2).all(|pair| pair[0].layers(color)[0].blur < pair[1].layers(color)[0].blur));
 }
 
 #[test]
@@ -90,24 +122,137 @@ fn adapter_requires_complete_registered_signature_and_exact_caster() {
 
 #[test]
 fn adapter_preserves_fade_and_removes_only_the_owned_shadow() {
-    let mut original = original(rect());
-    let Shape::Vec(pair) = &mut original else { panic!() };
-    for shape in pair {
-        if let Shape::Rect(rect) = shape {
-            rect.fill = rect.fill.gamma_multiply(0.5);
-            rect.stroke.color = rect.stroke.color.gamma_multiply(0.5);
-        }
-    }
+    let original = faded_original(source(), 0.5);
     let converted = replacement_shape(&original, rect(), &[rule()], None).unwrap();
     let Shape::Vec(layers) = converted else { panic!() };
-    let Shape::Rect(shadow) = layers.first().unwrap() else { panic!() };
-    assert_eq!(shadow.fill, rule().layers[0].color.gamma_multiply(0.5));
+    for (shape, layer) in layers.iter().zip(rule().layers) {
+        let Shape::Rect(shadow) = shape else { panic!() };
+        assert_eq!(shadow.fill, layer.color.gamma_multiply(0.5));
+    }
     assert!(replacement_shape(&Shape::Vec(layers), rect(), &[rule()], None).is_none(), "must not repeatedly append shadows");
-    let removed = replacement_shape(&original, rect(), &[rule()], Some(&[])).unwrap();
+    let removed = replacement_shape(&original, rect(), &[rule()], Some(&LayerOverride { source: None, layers: vec![] })).unwrap();
     let Shape::Vec(remaining) = removed else { panic!() };
     assert_eq!(remaining.len(), 1);
     let Shape::Vec(original) = original else { panic!() };
     assert_eq!(remaining.last(), original.last());
+}
+
+#[test]
+fn alpha_only_signatures_require_equivalent_results_or_an_explicit_source() {
+    let source = source();
+    let rules = [40, 100].map(|alpha| {
+        let source = Shadow { color: Color32::from_black_alpha(alpha), ..source };
+        FrameShadow::new(source, Elevation::Raised.layers(source.color))
+    });
+    let original = faded_original(source, 0.4);
+    let mut override_ = LayerOverride { source: None, layers: vec![Shadow { color: Color32::from_black_alpha(90), ..source }] };
+    let equivalent = replacement_shape(&original, rect(), &rules, None).unwrap();
+    let reversed = [rules[1].clone(), rules[0].clone()];
+    assert_eq!(replacement_shape(&original, rect(), &reversed, None), Some(equivalent));
+    assert!(replacement_shape(&original, rect(), &rules, Some(&override_)).is_none());
+    assert!(replacement_shape(&original, rect(), &reversed, Some(&override_)).is_none());
+
+    override_.source = Some(source);
+    let converted = replacement_shape(&original, rect(), &rules, Some(&override_)).unwrap();
+    assert_eq!(replacement_shape(&original, rect(), &reversed, Some(&override_)), Some(converted.clone()));
+    let Shape::Vec(pair) = converted else { panic!() };
+    let Shape::Rect(shadow) = &pair[0] else { panic!() };
+    assert_eq!(shadow.fill, Color32::from_black_alpha(36));
+
+    override_.source = Some(Shadow { blur: source.blur + 1, ..source });
+    assert!(replacement_shape(&original, rect(), &rules, Some(&override_)).is_none(), "the selected source must be registered");
+}
+
+#[test]
+fn conflicting_recipes_do_not_depend_on_registration_order() {
+    let original = original(rect());
+    let rules = [rule(), FrameShadow::new(source(), Elevation::Modal.layers(source().color))];
+    assert!(replacement_shape(&original, rect(), &rules, None).is_none());
+    assert!(replacement_shape(&original, rect(), &[rules[1].clone(), rules[0].clone()], None).is_none());
+}
+
+#[test]
+fn quantization_uncertainty_is_not_amplified_by_dense_replacements() {
+    for alpha in [0, 1, 3, 4, 5, 255] {
+        let source = Shadow { color: Color32::from_black_alpha(alpha), ..source() };
+        let normal = FrameShadow::new(source, Elevation::Raised.layers(source.color));
+        let dense = FrameShadow::new(source, [Shadow { color: Color32::BLACK, ..source }]);
+        for opacity in [0.0, 0.005, 0.1, 0.5, 0.9, 1.0] {
+            let original = faded_original(source, opacity);
+            assert_eq!(
+                replacement_shape(&original, rect(), std::slice::from_ref(&normal), None).is_some(),
+                alpha != 0,
+                "alpha={alpha}, opacity={opacity}"
+            );
+            let converted = replacement_shape(&original, rect(), std::slice::from_ref(&dense), None);
+            assert_eq!(converted.is_some(), alpha == 255, "dense alpha={alpha}, opacity={opacity}");
+            if let Some(Shape::Vec(shapes)) = converted {
+                let alpha = match shapes.first() {
+                    Some(Shape::Rect(shadow)) if shadow.blur_width > 0.0 => shadow.fill.a(),
+                    _ => 0,
+                };
+                assert!(alpha.abs_diff(Color32::BLACK.gamma_multiply(opacity).a()) <= 1);
+            }
+        }
+    }
+}
+
+#[test]
+fn registered_colored_shadows_match_through_quantized_fades() {
+    let source = Shadow { color: Color32::from_rgba_premultiplied(10, 40, 99, 100), ..source() };
+    let rule = FrameShadow::new(source, Elevation::Raised.layers(source.color));
+    for tick in 0..=1000 {
+        let fade = tick as f32 / 1000.0;
+        let opacity = Opacity::infer(source.color, source.color.gamma_multiply(fade)).unwrap();
+        assert!(opacity.precise_for(&rule.layers));
+        for layer in &rule.layers {
+            assert!(
+                layer
+                    .color
+                    .gamma_multiply(opacity.value)
+                    .to_array()
+                    .into_iter()
+                    .zip(layer.color.gamma_multiply(fade).to_array())
+                    .all(|(actual, expected)| actual.abs_diff(expected) <= 1)
+            );
+        }
+        let original = faded_original(source, fade);
+        let converted = replacement_shape(&original, rect(), std::slice::from_ref(&rule), None).unwrap();
+        let (Shape::Vec(original), Shape::Vec(converted)) = (original, converted) else { panic!() };
+        assert_eq!(converted.last(), original.last(), "the surface and border must remain untouched");
+    }
+    let mut tinted = faded_original(source, 0.5);
+    let Shape::Vec(pair) = &mut tinted else { panic!() };
+    let Shape::Rect(shadow) = &mut pair[0] else { panic!() };
+    shadow.fill = Color32::from_rgba_premultiplied(20, shadow.fill.g(), shadow.fill.b(), shadow.fill.a());
+    assert!(replacement_shape(&tinted, rect(), &[rule], None).is_none());
+}
+
+#[test]
+fn adapter_tolerates_single_unit_alpha_quantization_jitter() {
+    let mut candidate = original(rect());
+    let original_alpha = {
+        let Shape::Vec(pair) = &mut candidate else { panic!() };
+        let Shape::Rect(shadow) = &mut pair[0] else { panic!() };
+        let alpha = shadow.fill.a();
+        shadow.fill = Color32::from_rgba_premultiplied(shadow.fill.r(), shadow.fill.g(), shadow.fill.b(), alpha.saturating_add(1));
+        alpha
+    };
+    assert!(replacement_shape(&candidate, rect(), &[rule()], None).is_some(), "+1 alpha jitter must be tolerated");
+
+    {
+        let Shape::Vec(pair) = &mut candidate else { panic!() };
+        let Shape::Rect(shadow) = &mut pair[0] else { panic!() };
+        shadow.fill = Color32::from_rgba_premultiplied(shadow.fill.r(), shadow.fill.g(), shadow.fill.b(), original_alpha.saturating_sub(1));
+    }
+    assert!(replacement_shape(&candidate, rect(), &[rule()], None).is_some(), "-1 alpha jitter must be tolerated");
+
+    {
+        let Shape::Vec(pair) = &mut candidate else { panic!() };
+        let Shape::Rect(shadow) = &mut pair[0] else { panic!() };
+        shadow.fill = Color32::from_rgba_premultiplied(shadow.fill.r(), shadow.fill.g(), shadow.fill.b(), original_alpha.saturating_add(2));
+    }
+    assert!(replacement_shape(&candidate, rect(), &[rule()], None).is_none(), "two-unit alpha overshoot must be rejected as distinct shadow");
 }
 
 fn render(ctx: &Context, mut content: impl FnMut(&mut Ui)) -> Vec<egui::epaint::RectShape> {
@@ -166,14 +311,93 @@ fn real_window_popup_and_modal_use_the_adapter_without_touching_the_scrim() {
 #[test]
 fn owned_frame_preserves_layout_and_allows_no_shadow() {
     let ctx = Context::default();
+    let mut recorded_response_rect = Rect::NOTHING;
+    let mut faded_response_rect = Rect::NOTHING;
+    let layers = Elevation::Raised.layers(source().color);
     let rectangles = render(&ctx, |ui| {
         let frame = Frame::NONE.fill(Color32::GREEN).inner_margin(7).outer_margin(3).stroke(Stroke::new(2.0, Color32::RED)).shadow(source());
-        let expected = frame.show(ui, |ui| ui.allocate_exact_size(vec2(60.0, 20.0), egui::Sense::hover())).response.rect.size();
+        let expected_size = frame.show(ui, |ui| ui.allocate_exact_size(vec2(60.0, 20.0), egui::Sense::hover())).response.rect.size();
         let response = show_frame(ui, frame, &[], |ui| ui.allocate_exact_size(vec2(60.0, 20.0), egui::Sense::hover()));
-        assert_eq!(response.response.rect.size(), expected);
+        assert_eq!(response.response.rect.size(), expected_size);
+        recorded_response_rect = response.response.rect;
+
+        ui.multiply_opacity(0.5);
+        let response = show_frame(ui, frame, &layers, |ui| ui.allocate_exact_size(vec2(60.0, 20.0), egui::Sense::hover()));
+        assert_eq!(response.response.rect.size(), expected_size);
+        faded_response_rect = response.response.rect;
     });
-    assert_eq!(rectangles.iter().filter(|r| r.blur_width > 0.0).count(), 1);
-    assert_eq!(rectangles.iter().filter(|r| r.fill == Color32::GREEN && r.stroke_kind == StrokeKind::Inside).count(), 2);
+    let shadows: Vec<_> = rectangles.iter().filter(|r| r.blur_width > 0.0).collect();
+    assert_eq!(shadows.len(), 5);
+    assert_eq!(shadows[0].fill, source().color);
+    for (shadow, layer) in shadows[1..].iter().zip(layers) {
+        assert_eq!(shadow.fill, layer.color.gamma_multiply(0.5));
+    }
+    let frames: Vec<_> = rectangles.iter().filter(|r| r.fill.g() > 0 && r.stroke_kind == StrokeKind::Inside).collect();
+    assert_eq!(frames.len(), 3);
+    assert_eq!(frames[1].rect, recorded_response_rect.shrink(3.0));
+    assert_eq!(frames[2].rect, faded_response_rect.shrink(3.0));
+    assert_eq!(frames[2].fill, Color32::GREEN.gamma_multiply(0.5));
+    assert_eq!(frames[2].stroke.color, Color32::RED.gamma_multiply(0.5));
+    assert_eq!(frames[2].stroke.width, 2.0);
+}
+
+#[test]
+fn source_bound_layer_override_preserves_fade_and_expires() {
+    let ctx = Context::default();
+    let id = egui::Id::unique("source-bound-override");
+    let layer = LayerId::new(egui::Order::Foreground, id);
+    let rules = [40, 100].map(|alpha| {
+        let source = Shadow { color: Color32::from_black_alpha(alpha), ..source() };
+        FrameShadow::new(source, Elevation::Raised.layers(source.color))
+    });
+    let replacement = [Shadow { color: Color32::from_black_alpha(90), ..source() }];
+    assert!(!set_layer_shadows_for_source(&ctx, layer, source(), replacement));
+    install(&ctx, rules.into());
+    for bound in [false, true] {
+        let rectangles = render(&ctx, |ui| {
+            egui::Area::new(id).order(layer.order).fade_in(false).show(ui.ctx(), |ui| {
+                ui.multiply_opacity(0.4);
+                Frame::NONE.fill(Color32::WHITE).shadow(source()).show(ui, |ui| ui.set_min_size(vec2(120.0, 80.0)));
+            });
+            if bound {
+                assert!(set_layer_shadows_for_source(ui.ctx(), layer, source(), replacement));
+            } else {
+                assert!(set_layer_shadows(ui.ctx(), layer, replacement));
+            }
+        });
+        let shadows: Vec<_> = rectangles.iter().filter(|r| r.blur_width > 0.0).collect();
+        assert_eq!(shadows.len(), 1);
+        assert_eq!(shadows[0].fill.a(), if bound { 36 } else { 40 });
+        assert_eq!(frame_status(&ctx, layer), Some(if bound { FrameStatus::Applied } else { FrameStatus::Unchanged }));
+    }
+    let rectangles = render(&ctx, |ui| {
+        egui::Area::new(id).order(layer.order).fade_in(false).show(ui.ctx(), |ui| {
+            ui.multiply_opacity(0.4);
+            Frame::NONE.fill(Color32::WHITE).shadow(source()).show(ui, |ui| ui.set_min_size(vec2(120.0, 80.0)));
+        });
+    });
+    assert_eq!(rectangles.iter().filter(|r| r.blur_width > 0.0).count(), 4);
+    assert_eq!(frame_status(&ctx, layer), Some(FrameStatus::Applied));
+}
+
+#[test]
+fn empty_rules_preserve_original_frames_even_with_an_override() {
+    let ctx = Context::default();
+    ctx.all_styles_mut(|style| {
+        style.animation_time = 0.0;
+        style.visuals.window_shadow = source();
+    });
+    install(&ctx, vec![]);
+    let mut layer = LayerId::background();
+    let rectangles = render(&ctx, |ui| {
+        let response = egui::Window::new("empty rules").show(ui.ctx(), |ui| ui.label("content")).unwrap();
+        layer = response.response.layer_id;
+        assert!(set_layer_shadows_for_source(ui.ctx(), layer, source(), vec![]));
+    });
+    let shadows: Vec<_> = rectangles.iter().filter(|r| r.blur_width > 0.0).collect();
+    assert_eq!(shadows.len(), 1);
+    assert_eq!(shadows[0].fill, source().color);
+    assert_eq!(frame_status(&ctx, layer), Some(FrameStatus::Unchanged));
 }
 
 #[test]

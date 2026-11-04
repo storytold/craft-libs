@@ -262,11 +262,16 @@ application; fonts are installed by `fonts`, below. See the
 [eight-app comparison](../../docs/theme-infrastructure.md) for the exact common operation and the
 differences preserved by the adapters.
 
-`theme::shadow` paints explicit shadow layers, supplies optional PhotoCraft and floating-toolbar
-recipes, and offers an owned frame helper. Hosts can opt into a constrained egui 0.37 frame
-adapter for built-in menus, ComboBoxes and windows. See [shadow integration and manual
-acceptance](../../docs/shadows.md) for contracts, supported consumers, fallback cases and the
-comparison-gallery command. Canvas shadows and document effects remain application-owned.
+`theme::shadow` supplies allocation-free `ElevationShadow` recipes for Flat, Subtle, Raised,
+Overlay, Floating and Modal surfaces. `ShadowLayer` uses egui's shadow geometry directly;
+`Elevation::Raised.shadow(color).as_slice()` works with the explicit painting and owned-frame
+helpers. The earlier Low/Medium/High recipes remain compatible names for Subtle/Raised/Overlay.
+Hosts can opt into a constrained egui 0.37 frame adapter for built-in menus, ComboBoxes and
+windows. Source-specific layer overrides disambiguate light/dark signatures during fades;
+ambiguous matches and insufficient color precision retain the original shadow. See
+[shadow integration and manual acceptance](../../docs/shadows.md) for contracts, supported
+consumers, fallback cases and the comparison-gallery command. Canvas shadows and document
+effects remain application-owned.
 
 ## UI fonts
 
