@@ -1197,9 +1197,11 @@ impl egui::Plugin for NativeInput {
                     body.root_pointer_gone = true;
                 }
             } else {
+                // Not while a button is held in the main window: a drag there keeps the pointer
+                // over a native window, should that window's own input tell of the move too.
                 for event in &input.events {
                     match event {
-                        Event::PointerMoved(_) if body.pointer_window != Some(viewport) => {
+                        Event::PointerMoved(_) if body.pointer_window != Some(viewport) && body.root_held == 0 => {
                             body.pointer_window = Some(viewport);
                             body.root_pointer_gone = false;
                             body.pointer_returned = false;

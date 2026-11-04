@@ -2024,6 +2024,34 @@ fn the_main_window_loses_the_pointer_while_a_native_window_has_it() {
     assert_eq!(main_pointer(&d), None, "the pointer moved over the native window");
 }
 
+#[test]
+fn a_drag_in_the_main_window_keeps_the_pointer_over_a_palette() {
+    // The OS sends a drag's moves to the window it started in, so the palette's own input has
+    // none; should it tell of a move all the same, the drag keeps the pointer.
+    let main_pointer = |d: &DockDriver<u32, Content>| d.ctx.input_for(egui::ViewportId::ROOT, |i| i.pointer.hover_pos());
+    for palette_moves in [false, true] {
+        let mut d = driver(layout(true));
+        let id = window(&d, 5).id;
+        let viewport = d.viewport(id);
+        d.step(vec![]);
+        let rect = d.host().windows[&viewport].rect;
+        let over = rect.center() - ORIGIN.to_vec2();
+        d.press(pos2(50.0, 50.0));
+        d.move_to(over);
+        if palette_moves {
+            d.window_pointer(id, rect.center());
+        }
+        d.step(vec![]);
+        d.step(vec![]);
+        assert_eq!(main_pointer(&d), Some(over), "the drag holds the pointer (palette moves: {palette_moves})");
+        d.release(over);
+        // Once the button is up, the palette's moves take the pointer again.
+        d.window_pointer(id, rect.center());
+        d.step(vec![]);
+        assert_eq!(main_pointer(&d), None, "the pointer is the palette's (palette moves: {palette_moves})");
+    }
+}
+
 /// AppKit's resize area reaches a few points past a palette's frame, over the main window:
 /// there AppKit shows its resize cursor and takes a press, so the main window is told the
 /// pointer left, as over the palette itself, except while a drag in the main window holds it.

@@ -589,7 +589,8 @@ windows from the first frame. `DockArea::native_windows(bool)` overrides the cho
   window gets `Event::PointerGone` at the start of its next pass, until the pointer moves or
   presses in the main window again. On macOS the same holds within 3.5 pt outside an edge of a
   palette AppKit resizes: its resize area reaches past the frame there, and the main window,
-  which gets those moves, drops them, unless a button is held in it.
+  which gets those moves, drops them, unless a button is held in it. While a button is held in
+  the main window, a drag there keeps the pointer, over a native window too.
 - **Input methods.** egui's IME descriptor (`PlatformOutput::ime`) goes out from the pass of
   the window whose editor has the keyboard. A `craft_ui::ime::Composer` in a panel body of a
   native window records its descriptor while the window draws, and the dock area publishes it
