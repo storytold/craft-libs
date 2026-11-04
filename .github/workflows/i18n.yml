@@ -28,3 +28,6 @@ jobs:
       - run: cargo fmt --check
       - run: cargo clippy -p craft-i18n --all-targets --features collate --locked -- -D warnings
       - run: cargo test -p craft-i18n --features collate --locked -- --nocapture
+      # The formatter alone, without ICU4X (`default-features = false`).
+      - run: cargo clippy -p craft-i18n --all-targets --no-default-features --locked -- -D warnings
+      - run: cargo test -p craft-i18n --no-default-features --locked

@@ -8,19 +8,34 @@
 //! [`Region`] does ([`I18n::format`]): grouped (`1.234`, `12,34,567`) and in the region's digits
 //! (`١٬٢٣٤`). Text that goes into documents or file names should use [`I18n::trn_plain`], which
 //! writes `0`–`9` without grouping.
+//!
+//! All of that is the default feature `locale`, on ICU4X and CLDR data. Without it
+//! (`default-features = false`), the crate is only `{name}` placeholder filling: [`fill`],
+//! [`fill_with`], [`fmt`], [`fmt_plain`], [`isolate`], [`ltr`] and [`strip_isolates`], with no
+//! ICU4X, for crates that fill wordings but don't look translations up.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
+// The docs link the `locale` API, which isn't there without the feature.
+#![cfg_attr(not(feature = "locale"), allow(rustdoc::broken_intra_doc_links))]
 
+#[cfg(feature = "locale")]
 mod catalog;
 #[cfg(feature = "collate")]
 mod collate;
+#[cfg(feature = "locale")]
 mod fold;
+#[cfg(feature = "locale")]
 mod format;
+#[cfg(feature = "locale")]
 mod number;
+#[cfg(feature = "locale")]
 mod region;
+#[cfg(feature = "locale")]
 mod scripts;
+#[cfg(feature = "locale")]
 mod size;
 
 /// The CLDR number and plural data for every CLDR locale, from `data/generate.sh`.
+#[cfg(feature = "locale")]
 mod data {
     use std::sync::OnceLock;
 
@@ -42,30 +57,43 @@ mod data {
     }
 }
 
+#[cfg(feature = "locale")]
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+#[cfg(feature = "locale")]
 use std::sync::{Arc, Mutex, OnceLock, PoisonError, RwLock};
 
+#[cfg(feature = "locale")]
 use icu_locale_core::Locale as IcuLocale;
+#[cfg(feature = "locale")]
 use icu_plurals::{PluralCategory, PluralOperands, PluralRules};
 use unicode_bidi::{BidiClass, bidi_class};
 
 #[cfg(feature = "collate")]
 pub use collate::Collator;
+#[cfg(feature = "locale")]
 pub use fold::{Folded, Folder};
+#[cfg(feature = "locale")]
 pub use format::{Digits, Format};
+#[cfg(feature = "locale")]
 pub use number::{NumberError, parse_number};
+#[cfg(feature = "locale")]
 pub use region::{HourCycle, Measurement, Paper, Region};
+#[cfg(feature = "locale")]
 pub use scripts::{Direction, Han, Script, base_direction, direction, han, scripts};
+#[cfg(feature = "locale")]
 pub use size::{FileSize, SizeUnit};
 
 /// The catalogs an app embeds, one entry per locale: (locale, shared catalog, the app's catalog).
 /// A missing catalog is `""`.
+#[cfg(feature = "locale")]
 pub type Embedded = [(&'static str, &'static str, &'static str)];
 
 /// A language the interface can be shown in: English, the pseudo locale, or an embedded locale.
+#[cfg(feature = "locale")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Lang(usize);
 
+#[cfg(feature = "locale")]
 impl Lang {
     /// English: the source text itself.
     pub const EN: Lang = Lang(0);
@@ -74,6 +102,7 @@ impl Lang {
 }
 
 /// One locale's translations: context → source text → translation, app rows over shared ones.
+#[cfg(feature = "locale")]
 struct Locale {
     code: String,
     /// The shared and the app's catalog text, parsed on first use.
@@ -95,11 +124,13 @@ struct Locale {
 }
 
 /// A locale's rows, app over shared, and what was wrong with the catalogs it came from.
+#[cfg(feature = "locale")]
 struct Parsed {
     rows: HashMap<String, HashMap<String, String>>,
     problems: Vec<String>,
 }
 
+#[cfg(feature = "locale")]
 impl Locale {
     /// The rows; the catalogs are parsed on the first call and any problems logged then.
     fn parsed(&self) -> &Parsed {
@@ -137,6 +168,7 @@ impl Locale {
 
 /// The embedded catalogs, ready for lookups. Build it once, at start-up. Each locale is parsed on
 /// its first lookup, which is also when its bad rows are logged.
+#[cfg(feature = "locale")]
 pub struct I18n {
     locales: Vec<Locale>,
     /// Marked strings for the pseudo locale by source text, leaked so lookups can hand out `&str`.
@@ -150,6 +182,7 @@ pub struct I18n {
     format: RwLock<Option<Arc<Format>>>,
 }
 
+#[cfg(feature = "locale")]
 impl I18n {
     /// Index `embedded` without parsing it, offering the locales in `offered` (any case; the app's
     /// own language list), so an app never offers a language its interface isn't ready for (right
@@ -645,6 +678,7 @@ fn fill_bidi(template: &str, args: &[(&str, &str)], isolated: bool) -> String {
 /// script, so Latin Serbian never picks Cyrillic `sr`, while `sr-Cyrl-RS` does. A region that
 /// implies a script (CLDR likely subtags) counts as that script after the tag as written:
 /// `pa-PK` → `pa-pk`, `pa-arab-pk`, `pa-arab`.
+#[cfg(feature = "locale")]
 fn candidates(tag: &str) -> Vec<String> {
     let tag = tag.trim().to_ascii_lowercase();
     let base = tag.split(['.', '@']).next().unwrap_or("").replace('_', "-");
@@ -690,7 +724,7 @@ fn candidates(tag: &str) -> Vec<String> {
 
 /// The locale variables sys-locale reads on Unix, in its order (`LANGUAGE`'s `:` list, then
 /// `LC_ALL`, `LC_MESSAGES`, `LANG`), but unconverted, so `@latin` survives.
-#[cfg(all(unix, not(any(target_vendor = "apple", target_os = "android"))))]
+#[cfg(all(feature = "locale", unix, not(any(target_vendor = "apple", target_os = "android"))))]
 fn posix_env_tags(var: impl Fn(&str) -> Option<String>) -> Vec<String> {
     let mut tags: Vec<String> = var("LANGUAGE").map(|v| v.split(':').map(str::to_owned).collect()).unwrap_or_default();
     tags.extend(["LC_ALL", "LC_MESSAGES", "LANG"].into_iter().filter_map(&var));
@@ -699,6 +733,7 @@ fn posix_env_tags(var: impl Fn(&str) -> Option<String>) -> Vec<String> {
 }
 
 /// `⟦text⟧`, each line marked on its own, since multi-line labels are often drawn a line at a time.
+#[cfg(feature = "locale")]
 fn marked(text: &str) -> String {
     format!("⟦{}⟧", text.replace('\n', "⟧\n⟦"))
 }
@@ -706,6 +741,7 @@ fn marked(text: &str) -> String {
 /// The script a code without one means, for languages written in more than one (CLDR likely
 /// subtags). Any other language is taken to have one script.
 // ponytail: the multi-script languages a Craft app could plausibly ship; add a row with the locale.
+#[cfg(feature = "locale")]
 fn usual_script(language: &str) -> Option<&'static str> {
     Some(match language {
         "be" | "kk" | "ky" | "mn" | "sr" | "tg" => "cyrl",
@@ -718,11 +754,13 @@ fn usual_script(language: &str) -> Option<&'static str> {
 }
 
 /// A BCP 47 region subtag: two letters or three digits.
+#[cfg(feature = "locale")]
 fn is_region(subtag: &str) -> bool {
     (subtag.len() == 2 && subtag.bytes().all(|b| b.is_ascii_alphabetic())) || (subtag.len() == 3 && subtag.bytes().all(|b| b.is_ascii_digit()))
 }
 
 /// A locale with no catalogs (English, the pseudo locale).
+#[cfg(feature = "locale")]
 fn bare(code: &str) -> Locale {
     Locale {
         code: code.to_owned(),
@@ -742,6 +780,7 @@ fn bare(code: &str) -> Locale {
 /// language alone: CLDR's parent of `sr-Latn` and `zh-Hant` is the root, whose only category is
 /// `other`. CLDR's `pt` is Brazilian (0 is singular), so Portuguese other than `pt-br` takes
 /// `pt-PT`'s. `None` for a language CLDR has no plural rules for.
+#[cfg(feature = "locale")]
 fn plural_rules(code: &str) -> Option<(PluralRules, Vec<PluralCategory>)> {
     let id = IcuLocale::try_from_str(code).ok()?.id;
     let language = id.language.as_str();
@@ -762,6 +801,7 @@ fn plural_rules(code: &str) -> Option<(PluralRules, Vec<PluralCategory>)> {
     Some((rules, categories))
 }
 
+#[cfg(feature = "locale")]
 fn rank(c: &PluralCategory) -> u8 {
     match c {
         PluralCategory::Zero => 0,
@@ -773,7 +813,101 @@ fn rank(c: &PluralCategory) -> u8 {
     }
 }
 
+/// The placeholder fill, which builds without the `locale` feature.
 #[cfg(test)]
+mod fill_tests {
+    use super::*;
+
+    #[test]
+    fn fmt_fills_once() {
+        assert_eq!(fmt("{a} to {b}", &[("a", "x"), ("b", "{a}")]), "x to {a}");
+        assert_eq!(fmt("{z} {", &[]), "{z} {");
+    }
+
+    /// The brace scan: a placeholder runs to the next `}`, `{}` has an empty name, and an unclosed
+    /// brace is text.
+    #[test]
+    fn holes_split_text_and_placeholders() {
+        let hole = |raw| Piece::Hole { raw, name: raw.get(1..raw.len() - 1).unwrap_or_default() };
+        assert_eq!(holes("").collect::<Vec<_>>(), []);
+        assert_eq!(holes("é {p}{} {").collect::<Vec<_>>(), [Piece::Text("é "), hole("{p}"), hole("{}"), Piece::Text(" {")]);
+        assert_eq!(holes("{{p}}").collect::<Vec<_>>(), [hole("{{p}"), Piece::Text("}")]);
+        assert_eq!(holes("a{b").collect::<Vec<_>>(), [Piece::Text("a{b")]);
+    }
+
+    /// `fill` puts each value in once and never reads it as a placeholder; what it has nothing for
+    /// stays as written. The cases of pdfcraft's `say`, with bare names.
+    #[test]
+    fn fill_fills_once() {
+        let values = [("p", "7"), ("", "{p} {n}")];
+        assert_eq!(
+            fill("Font {} on page {p} doesn't map its characters to Unicode", &values),
+            "Font {p} {n} on page 7 doesn't map its characters to Unicode"
+        );
+        assert_eq!(fill("{a} {p} {", &values), "{a} 7 {");
+        assert_eq!(fill("open {p", &values), "open {p");
+        assert_eq!(fill("é {p} ü", &values), "é 7 ü");
+        assert_eq!(fill("שלום {p} مرحبا", &values), "שלום 7 مرحبا", "no isolates around a value in RTL text");
+        assert_eq!(fill("", &values), "");
+        assert_eq!(fill("no placeholders", &[]), "no placeholders");
+        // A placeholder runs from a `{` to the next `}`: `{{p}}` names `{p`, `{a{p}}` names `a{p`.
+        assert_eq!(fill("{{p}} {a{p}}", &values), "{{p}} {a{p}}");
+        assert_eq!(fill("{{p}}", &[("{p", "x")]), "x}");
+        assert_eq!(fill("{a}{a}", &[("a", "1"), ("a", "2")]), "11", "the first of a name wins");
+    }
+
+    /// Unlike `fmt` and `fmt_plain`, `fill` leaves every mark where it is: none added, none taken
+    /// off the template or a value, and a value that is one isolate keeps it.
+    #[test]
+    fn fill_keeps_marks_as_given() {
+        let marked = "\u{2066}x\u{2069}";
+        assert_eq!(fmt_plain("{x}", &[("x", marked)]), "x");
+        assert_eq!(fill("{x}", &[("x", marked)]), marked);
+        assert_eq!(fill("{x}", &[("x", &ltr("y"))]), ltr("y"));
+        assert_eq!(fill("\u{2068}{a}\u{2069} \u{200F}", &[("a", "a\u{202E}b")]), "\u{2068}a\u{202E}b\u{2069} \u{200F}");
+        assert_eq!(fill("ש {n}", &[("n", "12")]), "ש 12");
+    }
+
+    /// `fill_with` asks for each placeholder by its bare name, in order, and takes values borrowed
+    /// from anywhere.
+    #[test]
+    fn fill_with_asks_by_bare_name() {
+        let page = String::from("7");
+        let names = std::cell::RefCell::new(Vec::new());
+        let lookup = |name: &str| {
+            names.borrow_mut().push(name.to_owned());
+            match name {
+                "p" => Some(page.as_str()),
+                "name" => Some("{p}"),
+                _ => None,
+            }
+        };
+        assert_eq!(fill_with("{name} on page {p}, {other}, {}", lookup), "{p} on page 7, {other}, {}");
+        assert_eq!(names.into_inner(), ["name", "p", "other", ""]);
+        let mut calls = 0;
+        assert_eq!(
+            fill_with("{a}{b}", |_| {
+                calls += 1;
+                None
+            }),
+            "{a}{b}"
+        );
+        assert_eq!(calls, 2, "an FnMut lookup works");
+    }
+
+    #[test]
+    fn a_value_cannot_escape_its_isolate() {
+        assert_eq!(isolate("a\u{2069}b"), "\u{2068}ab\u{2069}");
+        assert_eq!(isolate("a\u{2067}b"), "\u{2068}a\u{2067}b\u{2069}\u{2069}");
+        let one = ltr("12");
+        assert_eq!(fmt("ש {n}", &[("n", &one)]), format!("ש {one}"));
+        // Two isolates side by side are not one, so they get wrapped.
+        assert_eq!(fmt("ש{v}", &[("v", "\u{2066}a\u{2069}\u{2066}b\u{2069}")]), "ש\u{2068}\u{2066}a\u{2069}\u{2066}b\u{2069}\u{2069}");
+    }
+}
+
+#[cfg(test)]
+#[cfg(feature = "locale")]
 mod tests {
     use super::*;
 
@@ -874,83 +1008,6 @@ mod tests {
     ];
 
     #[test]
-    fn fmt_fills_once() {
-        assert_eq!(fmt("{a} to {b}", &[("a", "x"), ("b", "{a}")]), "x to {a}");
-        assert_eq!(fmt("{z} {", &[]), "{z} {");
-    }
-
-    /// The brace scan: a placeholder runs to the next `}`, `{}` has an empty name, and an unclosed
-    /// brace is text.
-    #[test]
-    fn holes_split_text_and_placeholders() {
-        let hole = |raw| Piece::Hole { raw, name: raw.get(1..raw.len() - 1).unwrap_or_default() };
-        assert_eq!(holes("").collect::<Vec<_>>(), []);
-        assert_eq!(holes("é {p}{} {").collect::<Vec<_>>(), [Piece::Text("é "), hole("{p}"), hole("{}"), Piece::Text(" {")]);
-        assert_eq!(holes("{{p}}").collect::<Vec<_>>(), [hole("{{p}"), Piece::Text("}")]);
-        assert_eq!(holes("a{b").collect::<Vec<_>>(), [Piece::Text("a{b")]);
-    }
-
-    /// `fill` puts each value in once and never reads it as a placeholder; what it has nothing for
-    /// stays as written. The cases of pdfcraft's `say`, with bare names.
-    #[test]
-    fn fill_fills_once() {
-        let values = [("p", "7"), ("", "{p} {n}")];
-        assert_eq!(
-            fill("Font {} on page {p} doesn't map its characters to Unicode", &values),
-            "Font {p} {n} on page 7 doesn't map its characters to Unicode"
-        );
-        assert_eq!(fill("{a} {p} {", &values), "{a} 7 {");
-        assert_eq!(fill("open {p", &values), "open {p");
-        assert_eq!(fill("é {p} ü", &values), "é 7 ü");
-        assert_eq!(fill("שלום {p} مرحبا", &values), "שלום 7 مرحبا", "no isolates around a value in RTL text");
-        assert_eq!(fill("", &values), "");
-        assert_eq!(fill("no placeholders", &[]), "no placeholders");
-        // A placeholder runs from a `{` to the next `}`: `{{p}}` names `{p`, `{a{p}}` names `a{p`.
-        assert_eq!(fill("{{p}} {a{p}}", &values), "{{p}} {a{p}}");
-        assert_eq!(fill("{{p}}", &[("{p", "x")]), "x}");
-        assert_eq!(fill("{a}{a}", &[("a", "1"), ("a", "2")]), "11", "the first of a name wins");
-    }
-
-    /// Unlike `fmt` and `fmt_plain`, `fill` leaves every mark where it is: none added, none taken
-    /// off the template or a value, and a value that is one isolate keeps it.
-    #[test]
-    fn fill_keeps_marks_as_given() {
-        let marked = "\u{2066}x\u{2069}";
-        assert_eq!(fmt_plain("{x}", &[("x", marked)]), "x");
-        assert_eq!(fill("{x}", &[("x", marked)]), marked);
-        assert_eq!(fill("{x}", &[("x", &ltr("y"))]), ltr("y"));
-        assert_eq!(fill("\u{2068}{a}\u{2069} \u{200F}", &[("a", "a\u{202E}b")]), "\u{2068}a\u{202E}b\u{2069} \u{200F}");
-        assert_eq!(fill("ש {n}", &[("n", "12")]), "ש 12");
-    }
-
-    /// `fill_with` asks for each placeholder by its bare name, in order, and takes values borrowed
-    /// from anywhere.
-    #[test]
-    fn fill_with_asks_by_bare_name() {
-        let page = String::from("7");
-        let names = std::cell::RefCell::new(Vec::new());
-        let lookup = |name: &str| {
-            names.borrow_mut().push(name.to_owned());
-            match name {
-                "p" => Some(page.as_str()),
-                "name" => Some("{p}"),
-                _ => None,
-            }
-        };
-        assert_eq!(fill_with("{name} on page {p}, {other}, {}", lookup), "{p} on page 7, {other}, {}");
-        assert_eq!(names.into_inner(), ["name", "p", "other", ""]);
-        let mut calls = 0;
-        assert_eq!(
-            fill_with("{a}{b}", |_| {
-                calls += 1;
-                None
-            }),
-            "{a}{b}"
-        );
-        assert_eq!(calls, 2, "an FnMut lookup works");
-    }
-
-    #[test]
     fn left_to_right_text_gets_no_marks() {
         assert_eq!(fmt("Saved {name} in {dir}.", &[("name", "Report 2.pdf"), ("dir", &ltr("/home/sara"))]), "Saved Report 2.pdf in /home/sara.");
         assert_eq!(fmt("{a}", &[("a", "x"), ("b", "שלום")]), "x", "an unused value doesn't count");
@@ -969,16 +1026,6 @@ mod tests {
         assert_eq!(fmt("[{a}] {b}", &[("a", ""), ("b", "ש")]), "[] \u{2068}ש\u{2069}");
         let i = all(P).0;
         assert_eq!(i.trn(lang(&i, "fa"), 3, "{n} page", "{n} pages"), "\u{2066}3\u{2069} صفحه");
-    }
-
-    #[test]
-    fn a_value_cannot_escape_its_isolate() {
-        assert_eq!(isolate("a\u{2069}b"), "\u{2068}ab\u{2069}");
-        assert_eq!(isolate("a\u{2067}b"), "\u{2068}a\u{2067}b\u{2069}\u{2069}");
-        let one = ltr("12");
-        assert_eq!(fmt("ש {n}", &[("n", &one)]), format!("ש {one}"));
-        // Two isolates side by side are not one, so they get wrapped.
-        assert_eq!(fmt("ש{v}", &[("v", "\u{2066}a\u{2069}\u{2066}b\u{2069}")]), "ש\u{2068}\u{2066}a\u{2069}\u{2066}b\u{2069}\u{2069}");
     }
 
     /// `text` in display order, as one line in a left-to-right paragraph, without bidi controls.
