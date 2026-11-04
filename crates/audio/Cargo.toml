@@ -38,11 +38,11 @@ peaks = []
 serde = ["dep:serde", "craft-media/serde"]
 
 [dependencies]
-# symphonia keeps its AAC decoder for AAC in CAF, a container craft-media does not read.
 craft-media = { workspace = true }
 thiserror = { workspace = true }
 serde = { workspace = true, optional = true }
 log = { version = "0.4", optional = true }
+# symphonia keeps its AAC decoder for AAC in CAF, a container craft-media does not read.
 symphonia = { version = "0.6.1", optional = true, default-features = false, features = ["mp1", "mp2", "mp3", "flac", "vorbis", "ogg", "wav", "pcm", "aiff", "isomp4", "aac", "alac", "adpcm", "caf", "mkv"] }
 
 [dev-dependencies]

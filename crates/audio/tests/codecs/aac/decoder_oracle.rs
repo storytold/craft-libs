@@ -79,15 +79,15 @@ fn matches_ffmpeg_decoder() {
     for c in &cases {
         let (err, n) = compare(c).unwrap();
         println!("{:<28} {:>10} {:>12.3e}", c.name, n, err);
-        if err >= 1e-3 {
+        if err >= 1e-5 {
             fails.push((c.name, err));
         }
     }
     assert!(fails.is_empty(), "decoder mismatches: {fails:?}");
 }
 
-/// PNS output is random by design, and ffmpeg's encoder does not emit it: build noise-substituted
-/// access units by hand (mono, and a common-window pair with M/S = correlated noise) and compare
+/// PNS output is random by design, so samples cannot be compared: build noise-substituted access
+/// units by hand (mono, and a common-window pair with M/S = correlated noise) and compare
 /// per-frame energies and the L/R correlation with ffmpeg's decode.
 #[test]
 fn pns_matches_ffmpeg() {

@@ -499,3 +499,43 @@ fn mp4_without_an_edit_list_ends_with_its_sample_durations() {
     assert_eq!(info.frames, buf.frames() as u64);
     assert_eq!(buf.frames(), reference(&ff, &path).len() / c.channels);
 }
+
+/// The big-endian `u32` at each of `offsets` after the first `box_name` in `file`, changed by `edit`.
+fn patched(file: &[u8], box_name: &[u8; 4], offsets: &[usize], edit: impl Fn(u32) -> u32) -> Vec<u8> {
+    let mut out = file.to_vec();
+    let at = file.windows(4).position(|w| w == box_name).unwrap();
+    for &o in offsets {
+        let p = at + o;
+        let v: [u8; 4] = out[p..p + 4].try_into().unwrap();
+        out[p..p + 4].copy_from_slice(&edit(u32::from_be_bytes(v)).to_be_bytes());
+    }
+    out
+}
+
+/// Wrong sample durations or edits don't cut audio or disagree with `probe`: durations only trim the
+/// last packet, and an edit can't outlast the media.
+#[test]
+fn mp4_with_wrong_durations_or_edits_presents_its_audio() {
+    let ff = require_ffmpeg!();
+    let c = CASES.iter().find(|c| c.name == "aac.m4a").unwrap();
+    let Some(path) = fixture(&ff, c) else { return };
+    let bytes = std::fs::read(path).unwrap();
+    let (_, whole) = decode(&bytes, None).unwrap();
+    // After the name: version and flags (4), entries (4); stts: count (4), delta (4) of the first
+    // run; elst v0: duration (4).
+    let stts_delta = 4 + 4 + 4 + 4 + 4;
+    let elst_duration = 4 + 4 + 4;
+    for (name, file) in [
+        ("durations halved", patched(&bytes, b"stts", &[stts_delta], |v| v / 2)),
+        ("durations of one", patched(&bytes, b"stts", &[stts_delta], |_| 1)),
+        ("durations doubled", patched(&bytes, b"stts", &[stts_delta], |v| v * 2)),
+    ] {
+        let (info, buf) = decode(&file, None).unwrap();
+        assert!(buf.frames().abs_diff(whole.frames()) <= 1024, "{name}: {} frames", buf.frames());
+        assert_eq!((probe(&file, None).unwrap().frames, info.frames), (buf.frames() as u64, buf.frames() as u64), "{name}");
+    }
+    let file = patched(&bytes, b"elst", &[elst_duration], |v| v * 2);
+    let (info, buf) = decode(&file, None).unwrap();
+    assert!(buf.frames() < whole.frames() + 2048, "edit doubled: {} frames", buf.frames());
+    assert_eq!((probe(&file, None).unwrap().frames, info.frames), (buf.frames() as u64, buf.frames() as u64), "edit doubled");
+}

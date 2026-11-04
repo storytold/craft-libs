@@ -349,8 +349,8 @@ impl AdtsHeader {
         Ok(AdtsHeader { object_type, sf_index, channel_config, frame_length, buffer_fullness, header_length, raw_data_blocks })
     }
 
-    /// The equivalent `AudioSpecificConfig`. Channel configuration 0 (PCE in-band) is resolved by the
-    /// decoder from the first frame; this returns stereo-less layout in that case.
+    /// The equivalent `AudioSpecificConfig`. With channel configuration 0 it has no layout: the
+    /// decoder takes that from the program config element in the stream.
     pub fn to_asc(&self) -> AudioSpecificConfig {
         AudioSpecificConfig { object_type: self.object_type, ..AudioSpecificConfig::lc(self.sf_index, self.channel_config) }
     }
@@ -380,9 +380,15 @@ impl AdtsHeader {
 
 /// Split an ADTS stream into `(header, raw payload)` frames. Stops at the first malformed or
 /// truncated frame (returning what was parsed so far); errors only if nothing parses.
-pub fn split_adts(mut data: &[u8]) -> Result<Vec<(AdtsHeader, &[u8])>> {
+pub fn split_adts(data: &[u8]) -> Result<Vec<(AdtsHeader, &[u8])>> {
+    split_adts_upto(data, usize::MAX)
+}
+
+/// [`split_adts`], stopping after `max` frames.
+#[cfg(feature = "aac-decode")]
+pub(crate) fn split_adts_upto(mut data: &[u8], max: usize) -> Result<Vec<(AdtsHeader, &[u8])>> {
     let mut out = Vec::new();
-    while data.len() >= 7 {
+    while data.len() >= 7 && out.len() < max {
         let h = match AdtsHeader::parse(data) {
             Ok(h) => h,
             Err(e) => {

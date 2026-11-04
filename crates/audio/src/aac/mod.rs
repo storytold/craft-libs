@@ -26,6 +26,8 @@ mod mdct;
 mod tables;
 mod tns;
 
+#[cfg(feature = "aac-decode")]
+pub(crate) use config::split_adts_upto;
 pub use config::{AdtsHeader, AudioSpecificConfig, ElementType, ProgramConfig, config_layout, split_adts};
 pub use decoder::Decoder;
 pub use mdct::WindowShape;
@@ -105,20 +107,29 @@ pub fn output_rate<'a>(asc: &[u8], first_units: impl IntoIterator<Item = &'a [u8
 #[cfg(feature = "aac-decode")]
 const UPSAMPLE_HALF: usize = 12;
 
+/// Input samples [`Upsample2x`] delays its output by: 481, the delay of the SBR filterbanks (962
+/// output samples), which HE-AAC encoders and the container's priming count on.
+#[cfg(feature = "aac-decode")]
+const UPSAMPLE_DELAY: usize = 481;
+
+/// Input samples [`Upsample2x`] keeps per channel.
+#[cfg(feature = "aac-decode")]
+const UPSAMPLE_HISTORY: usize = UPSAMPLE_DELAY + UPSAMPLE_HALF;
+
 /// 2× upsampler for HE-AAC. The decoder reconstructs the AAC-LC core at half the output rate and
 /// not yet the SBR high band, so the core is interpolated to the output rate: timing and pitch are
 /// right and the band above the core's Nyquist stays empty. Even outputs are the input samples,
 /// odd ones a Blackman-windowed sinc half-band interpolation over 2 × `UPSAMPLE_HALF` inputs.
-/// The look-ahead delays the output by `UPSAMPLE_HALF` input samples (0.5 ms at 24 kHz); the
-/// state carries across packets, so a seek primed with the preceding packet gives the same
-/// samples as continuous decoding. From FilmCraft's `filmcraft-codecs`.
+/// The output is delayed by `UPSAMPLE_DELAY` input samples, as an SBR decoder's is; the state
+/// carries across packets, so a seek primed with the preceding packet gives the same samples as
+/// continuous decoding. From FilmCraft's `filmcraft-codecs`.
 #[cfg(feature = "aac-decode")]
 #[derive(Clone)]
 // Internal to HE-AAC output; public only so FilmCraft can re-export this module.
 #[doc(hidden)]
 pub struct Upsample2x {
     taps: [f32; 2 * UPSAMPLE_HALF],
-    /// The last `2 × UPSAMPLE_HALF` input samples per channel.
+    /// The last `UPSAMPLE_HISTORY` input samples per channel.
     hist: Vec<Vec<f32>>,
 }
 
@@ -140,7 +151,7 @@ impl Upsample2x {
         for t in &mut taps {
             *t = (*t as f64 / sum) as f32;
         }
-        Self { taps, hist: vec![vec![0.0; 2 * UPSAMPLE_HALF]; channels] }
+        Self { taps, hist: vec![vec![0.0; UPSAMPLE_HISTORY]; channels] }
     }
 
     /// Clear the history (e.g. after a seek).
@@ -153,7 +164,7 @@ impl Upsample2x {
     /// Upsample planar channels by two: each output channel has twice the input samples.
     pub fn process(&mut self, input: Vec<Vec<f32>>) -> Vec<Vec<f32>> {
         if self.hist.len() < input.len() {
-            self.hist.resize(input.len(), vec![0.0; 2 * UPSAMPLE_HALF]);
+            self.hist.resize(input.len(), vec![0.0; UPSAMPLE_HISTORY]);
         }
         let m = UPSAMPLE_HALF;
         input
@@ -169,9 +180,32 @@ impl Upsample2x {
                     out.push(w.get(m).copied().unwrap_or(0.0));
                     out.push(w.get(1..).unwrap_or_default().iter().zip(&self.taps).map(|(a, b)| a * b).sum());
                 }
-                *hist = buf.split_off(buf.len().saturating_sub(2 * m));
+                *hist = buf.split_off(buf.len().saturating_sub(UPSAMPLE_HISTORY));
                 out
             })
             .collect()
+    }
+}
+
+#[cfg(all(test, feature = "aac-decode"))]
+mod tests {
+    use super::*;
+
+    /// The output lags the input by the SBR filterbanks' delay, whatever the block size.
+    #[test]
+    fn the_upsampler_delays_by_the_sbr_filterbanks() {
+        let mut impulse = vec![0.0; 2000];
+        impulse[100] = 1.0;
+        let mut up = Upsample2x::new(1);
+        let mut out = Vec::new();
+        for block in impulse.chunks(300) {
+            out.extend(up.process(vec![block.to_vec()]).remove(0));
+        }
+        assert_eq!(out.len(), 4000);
+        assert_eq!(out[(100 + UPSAMPLE_DELAY) * 2], 1.0);
+        assert!(out[..(100 + UPSAMPLE_DELAY - UPSAMPLE_HALF) * 2].iter().all(|&s| s == 0.0));
+        // a reset forgets the history
+        up.reset();
+        assert!(up.process(vec![vec![0.0; 600]]).remove(0).iter().all(|&s| s == 0.0));
     }
 }

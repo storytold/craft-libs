@@ -283,8 +283,11 @@ match craft_audio::decode(&bytes, None) {
   above the core's Nyquist frequency.
 - HE-AAC v2: parametric stereo is not reconstructed either, so the mono core decodes as mono.
 - AAC: Main, SSR and LTP profiles, coupling channels and 960-sample frames are unsupported.
-- Raw ADTS: frames with several raw data blocks are unsupported. A frame that changes the stream's
-  sample rate, profile or channel configuration decodes as silence and counts as damaged.
+- Raw ADTS: frames with several raw data blocks are unsupported: a stream of them is refused, and
+  one among other frames decodes as silence of its length and counts as damaged, as does a frame
+  that changes the stream's sample rate, profile or channel configuration.
+- A seek into AAC with PNS gives the same samples each time, but its noise differs from a continuous
+  decode's, at the same band energy.
 - MP4 gapless information outside an edit list is not read: a file from Apple's encoders with
   `iTunSMPB` and no `elst` decodes with its priming and padding.
 - AAC channel configuration 7 and program-config layouts, and AIFF with more than four channels,

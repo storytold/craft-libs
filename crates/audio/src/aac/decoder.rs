@@ -23,6 +23,9 @@ const ID_END: u32 = 7;
 const EXT_SBR_DATA: u32 = 13;
 const EXT_SBR_DATA_CRC: u32 = 14;
 
+/// The noise generator's state at the start of a stream and after [`Decoder::reset`].
+const NOISE_SEED: u32 = 0x2545_F491;
+
 /// One decoded `individual_channel_stream` before stereo processing and synthesis.
 struct Ics {
     info: IcsInfo,
@@ -75,7 +78,7 @@ impl Decoder {
         if layout.is_empty() && asc.channel_config != 0 {
             return Err(Error::InvalidConfig("unsupported channel configuration"));
         }
-        let mut d = Decoder { asc, layout: Vec::new(), offsets: Vec::new(), channels: Vec::new(), noise_state: 0x2545_F491, sbr_seen: false };
+        let mut d = Decoder { asc, layout: Vec::new(), offsets: Vec::new(), channels: Vec::new(), noise_state: NOISE_SEED, sbr_seen: false };
         d.set_layout(layout);
         Ok(d)
     }
@@ -115,8 +118,10 @@ impl Decoder {
         &self.layout
     }
 
-    /// Clear the overlap state (e.g. after a seek).
+    /// Clear the overlap and noise state (e.g. after a seek), so a seek to the same place always
+    /// gives the same samples.
     pub fn reset(&mut self) {
+        self.noise_state = NOISE_SEED;
         for c in &mut self.channels {
             c.overlap.fill(0.0);
             c.prev_shape = WindowShape::Sine;
@@ -127,9 +132,16 @@ impl Decoder {
         self.asc.sf_index
     }
 
-    /// Decode one access unit (one `raw_data_block`) into 1024 samples per channel.
+    /// Decode one access unit (one `raw_data_block`) into 1024 samples per channel. An access unit
+    /// that fails leaves the decoder as it was: its damage, including a damaged program config
+    /// element, does not reach the access units after it.
     pub fn decode(&mut self, au: &[u8]) -> Result<Vec<Vec<f32>>> {
-        self.decode_block(au, true)
+        let before = (self.asc.pce.clone(), self.layout.clone(), self.offsets.clone(), self.channels.clone(), self.noise_state);
+        let decoded = self.decode_block(au, true);
+        if decoded.is_err() {
+            (self.asc.pce, self.layout, self.offsets, self.channels, self.noise_state) = before;
+        }
+        decoded
     }
 
     fn decode_block(&mut self, au: &[u8], allow_reconfig: bool) -> Result<Vec<Vec<f32>>> {
@@ -179,17 +191,9 @@ impl Decoder {
                     if allow_reconfig && !saw_element && self.asc.channel_config == 0 && self.asc.pce.as_ref() != Some(&pce) {
                         let layout = pce.layout();
                         if !layout.is_empty() && layout.iter().map(|e| e.0.channels()).sum::<usize>() <= 64 {
-                            // A damaged PCE must not outlive its access unit: the layout changes
-                            // only when the access unit decodes with it.
-                            let pce_before = self.asc.pce.replace(pce);
-                            let before = (std::mem::take(&mut self.layout), std::mem::take(&mut self.offsets), std::mem::take(&mut self.channels));
+                            self.asc.pce = Some(pce);
                             self.set_layout(layout);
-                            let decoded = self.decode_block(au, false);
-                            if decoded.is_err() {
-                                self.asc.pce = pce_before;
-                                (self.layout, self.offsets, self.channels) = before;
-                            }
-                            return decoded;
+                            return self.decode_block(au, false);
                         }
                     }
                 }
@@ -661,6 +665,29 @@ mod tests {
         let full = silent_au(Some(&six), &[(ID_SCE, 0), (ID_CPE, 0), (ID_CPE, 1), (ID_LFE, 0)]);
         assert_eq!(dec.decode(&full).unwrap().len(), 6);
         assert_eq!(dec.channels(), 6);
+    }
+
+    /// A failed access unit leaves no trace: the next one decodes as if it had not been there.
+    #[test]
+    fn a_failed_access_unit_leaves_the_state_as_it_was() {
+        let mut dec = Decoder::from_config(AudioSpecificConfig::lc(4, 1)).unwrap();
+        dec.channels[0].overlap.fill(0.5);
+        dec.channels[0].prev_shape = WindowShape::Kbd;
+        let noise = dec.noise_state;
+        // a complete channel element, then the access unit ends without ID_END
+        let au = silent_au(None, &[(ID_SCE, 0)]);
+        assert!(dec.decode(&au[..au.len() - 1]).is_err());
+        assert!(dec.channels[0].overlap.iter().all(|&s| s == 0.5));
+        assert_eq!((dec.channels[0].prev_shape, dec.noise_state), (WindowShape::Kbd, noise));
+    }
+
+    #[test]
+    fn a_reset_restarts_the_noise_generator() {
+        let mut dec = Decoder::from_config(AudioSpecificConfig::lc(4, 1)).unwrap();
+        let first = dec.next_random();
+        dec.next_random();
+        dec.reset();
+        assert_eq!(dec.next_random(), first);
     }
 
     #[test]
