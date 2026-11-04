@@ -26,6 +26,7 @@ mod mdct;
 mod tables;
 mod tns;
 
+#[cfg(feature = "aac-decode")]
 pub(crate) use config::split_adts_upto;
 pub use config::{AdtsHeader, AudioSpecificConfig, ElementType, ProgramConfig, config_layout, split_adts};
 pub use decoder::Decoder;

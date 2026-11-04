@@ -17,7 +17,7 @@ enum Inner {
         dec: Box<aac::Decoder>,
         up: Option<aac::Upsample2x>,
         order: Option<&'static [usize]>,
-        /// The format ADTS packets must keep, when the first ADTS header gave the configuration.
+        /// The format ADTS packets must keep, when their headers gave the configuration.
         adts_format: Option<AdtsFormat>,
     },
     Pcm {
@@ -92,7 +92,7 @@ impl TrackDecoder {
             #[cfg(feature = "aac-decode")]
             CodecId::Aac | CodecId::HeAac => {
                 // ADTS-framed packets (MPEG-TS, raw `.aac`) carry their configuration in each
-                // header: without extradata, the first header gives it.
+                // header: without extradata, the headers of the lookahead give it.
                 let payloads: Vec<&[u8]> =
                     lookahead.iter().map(|p| adts_frames(p).and_then(|f| f.first().map(|(_, unit)| *unit)).unwrap_or(p)).collect();
                 let mut adts_format = None;
@@ -347,7 +347,7 @@ pub(crate) fn adts_format_of(h: &aac::AdtsHeader) -> AdtsFormat {
     (h.object_type, h.sf_index, h.channel_config)
 }
 
-/// The raw access units of an ADTS-framed packet. In a stream whose first header gave its `format`,
+/// The raw access units of an ADTS-framed packet. In a stream whose headers gave its `format`,
 /// a frame that changes it would play wrongly, so it is malformed; with extradata, that decides the
 /// format and headers are not compared with it. Frames with several raw data blocks are
 /// unsupported.

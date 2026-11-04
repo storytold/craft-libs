@@ -409,7 +409,8 @@ What else an app adjusts:
   `AudioBuffer::from_interleaved` and `num_channels`, and the `ChannelLayout` constructors and
   `channels()`.
 - `AudioInfo`, `AudioError`, `EncodeOptions`, `BwfInfo`, `SampleFormat`, `BitDepth`, the codec
-  `Error` enums and the codec modules' header, frame and config structs are `#[non_exhaustive]`.
+  `Error` enums and the codec modules' header, frame and config structs (but for
+  `aac::ProgramConfig`) are `#[non_exhaustive]`.
   `Speaker::ALL` is a slice.
 - `TrackInfo::sample_rate` and `channels` are `Option`s.
 - Features are per codec. SoundCraft's `encode` (WAV, AIFF, FLAC) is now `lossless-encode`, made
@@ -419,6 +420,6 @@ What else an app adjusts:
   short slices instead of filling them with silence.
 - `DecodeOptions` is not `Copy`.
 - The FLAC encoder's vendor string is `craft-audio <version>`.
-- `decode` tries native decoders first. AAC no longer goes through symphonia.
+- `decode` tries native decoders first. AAC no longer goes through symphonia, except in CAF.
   MP4 and Matroska files decode to presentation length. A packet that fails is concealed, not
   dropped. A failed source read is `AudioError::Io`.

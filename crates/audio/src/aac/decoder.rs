@@ -17,6 +17,7 @@ const ID_LFE: u32 = 3;
 const ID_DSE: u32 = 4;
 const ID_PCE: u32 = 5;
 const ID_FIL: u32 = 6;
+#[cfg(test)]
 const ID_END: u32 = 7;
 
 /// `extension_type` of a fill element carrying SBR data (ISO/IEC 14496-3 §4.5.2.8.2, Table 4.121).
