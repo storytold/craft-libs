@@ -720,31 +720,54 @@ enum Finish {
 }
 
 /// The helper's arguments: [`FINISH_FLAG`], the process id to wait for, the exe to start
-/// afterwards, then the step.
+/// afterwards, then the step. When `relaunch` is not empty, a `--` and those arguments follow,
+/// and the new process is started with them. They are a list of arguments, never one script string.
 #[cfg_attr(not(windows), allow(dead_code))]
-fn helper_args(pid: u32, exe: &Path, finish: &Finish) -> Vec<OsString> {
+fn helper_args(pid: u32, exe: &Path, finish: &Finish, relaunch: &[OsString]) -> Vec<OsString> {
     let mut args: Vec<OsString> = vec![FINISH_FLAG.into(), pid.to_string().into(), exe.into()];
     match finish {
         Finish::Msi(msi) => args.extend(["msi".into(), msi.into()]),
         Finish::Portable { zip, tmp } => args.extend(["portable".into(), zip.into(), tmp.into()]),
     }
+    if !relaunch.is_empty() {
+        args.push("--".into());
+        args.extend(relaunch.iter().cloned());
+    }
     args
 }
 
-/// Reads [`helper_args`] back.
+/// The arguments this process was started with, minus the helper's own flag and `--update-apply`.
+/// A file a double-click opened is one of them. Kept as `OsString`s so a path that is not Unicode
+/// and a path with an apostrophe stay one argument each.
 #[cfg_attr(not(windows), allow(dead_code))]
-fn parse_helper_args(args: &[OsString]) -> Option<(u32, PathBuf, Finish)> {
+fn relaunch_args_from(args: impl IntoIterator<Item = OsString>) -> Vec<OsString> {
+    args.into_iter()
+        .filter(|arg| {
+            let arg = arg.as_os_str();
+            arg != std::ffi::OsStr::new(FINISH_FLAG) && arg != std::ffi::OsStr::new("--update-apply")
+        })
+        .collect()
+}
+
+/// Reads [`helper_args`] back. Arguments after `--` are what the new process is started with.
+/// Anything else trailing the step is refused, so a stray word cannot become part of the install.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn parse_helper_args(args: &[OsString]) -> Option<(u32, PathBuf, Finish, Vec<OsString>)> {
     let [flag, pid, exe, step @ ..] = args else { return None };
     if flag != FINISH_FLAG {
         return None;
     }
     let pid = pid.to_str()?.parse().ok()?;
+    let (step, relaunch) = match step.iter().position(|arg| arg == "--") {
+        Some(at) => (&step[..at], step[at + 1..].to_vec()),
+        None => (step, Vec::new()),
+    };
     let finish = match step {
         [kind, msi] if kind == "msi" => Finish::Msi(msi.into()),
         [kind, zip, tmp] if kind == "portable" => Finish::Portable { zip: zip.into(), tmp: tmp.into() },
         _ => return None,
     };
-    Some((pid, exe.into(), finish))
+    Some((pid, exe.into(), finish, relaunch))
 }
 
 #[cfg_attr(not(windows), allow(dead_code))]
@@ -772,7 +795,7 @@ fn windows_helper(app: &App, paths: &Paths, pid: u32, exe: &Path, finish: &Finis
     let helper = dir.join(program.file_name().ok_or("this program has no file name")?);
     std::fs::copy(&program, &helper).map_err(|e| format!("couldn't schedule the update ({e})"))?;
     let mut cmd = process::command(&helper);
-    cmd.args(helper_args(pid, exe, finish));
+    cmd.args(helper_args(pid, exe, finish, &relaunch_args_from(std::env::args_os().skip(1))));
     clear_pretend_version(&mut cmd, app);
     process::spawn_detached(cmd).map_err(|e| format!("couldn't schedule the update ({e})"))
 }
@@ -785,7 +808,7 @@ pub fn finish(app: &App, args: &[OsString]) -> Option<Result<(), String>> {
     if args.first().is_none_or(|a| a != FINISH_FLAG) {
         return None;
     }
-    let Some((pid, exe, step)) = parse_helper_args(args) else { return Some(Err("the update helper's arguments are incomplete".into())) };
+    let Some((pid, exe, step, relaunch)) = parse_helper_args(args) else { return Some(Err("the update helper's arguments are incomplete".into())) };
     let Ok(me) = std::env::current_exe() else { return Some(Err("the update helper couldn't find itself".into())) };
     let paths = match Paths::for_exe(app, &exe) {
         Ok(paths) => paths,
@@ -810,8 +833,13 @@ pub fn finish(app: &App, args: &[OsString]) -> Option<Result<(), String>> {
     if !restarts(done.is_ok(), exe.is_file()) {
         return Some(done);
     }
-    let started = signed_like(app, &me, &exe)
-        .and_then(|()| process::spawn_detached(std::process::Command::new(&exe)).map_err(|e| format!("couldn't start {} ({e})", exe.display())));
+    let started = signed_like(app, &me, &exe).and_then(|()| {
+        let mut cmd = std::process::Command::new(&exe);
+        // After the old process has exited (see `run_step`), so a single-instance lock is free
+        // and these arguments open the file the user double-clicked.
+        cmd.args(&relaunch);
+        process::spawn_detached(cmd).map_err(|e| format!("couldn't start {} ({e})", exe.display()))
+    });
     if let Err(e) = &started {
         record_failure(&paths, e);
     }
@@ -1123,9 +1151,9 @@ mod tests {
         let portable =
             Finish::Portable { zip: PathBuf::from(r"D:\Tools\x 1.zip"), tmp: PathBuf::from(r"D:\Tools\ArtCraftLauncherData\cache\launcher-update") };
         for finish in [msi, portable] {
-            let args = helper_args(4242, exe, &finish);
+            let args = helper_args(4242, exe, &finish, &[]);
             assert_eq!(args.first().map(OsString::as_os_str), Some(std::ffi::OsStr::new(FINISH_FLAG)));
-            assert_eq!(parse_helper_args(&args), Some((4242, exe.to_path_buf(), finish)));
+            assert_eq!(parse_helper_args(&args), Some((4242, exe.to_path_buf(), finish, Vec::new())));
         }
         let os = |args: &[&str]| args.iter().map(OsString::from).collect::<Vec<_>>();
         for bad in [
@@ -1141,6 +1169,28 @@ mod tests {
         ] {
             assert_eq!(parse_helper_args(&bad), None, "{bad:?}");
         }
+    }
+
+    /// A double-clicked file is one argument of the restarted program. Updater flags are not.
+    /// A space or an apostrophe stays inside that argument.
+    #[test]
+    fn a_relaunch_keeps_the_opened_file_and_drops_updater_flags() {
+        let opened = OsString::from("Bericht.docx");
+        let spaced = OsString::from("Haus Anschluss.xlsx");
+        let apostrophe = OsString::from("O'Brien.xlsm");
+        let kept =
+            relaunch_args_from([opened.clone(), OsString::from("--update-apply"), spaced.clone(), apostrophe.clone(), OsString::from(FINISH_FLAG)]);
+        assert_eq!(kept, vec![opened, spaced.clone(), apostrophe.clone()]);
+        assert!(kept.iter().all(|arg| !arg.to_string_lossy().contains("Bericht.docx Haus")));
+
+        let exe = Path::new(r"C:\Program Files\GridCraft\gridcraft.exe");
+        let finish = Finish::Msi(PathBuf::from(r"C:\Users\O'Brien\AppData\Local\cache\gridcraft.msi"));
+        let args = helper_args(7, exe, &finish, &kept);
+        let (_pid, _exe, parsed, again) = parse_helper_args(&args).expect("helper args with a file");
+        assert_eq!(parsed, finish);
+        assert_eq!(again, kept);
+        assert_eq!(again[1], spaced);
+        assert_eq!(again[2], apostrophe);
     }
 
     /// Arguments that aren't the helper's leave the launcher to start as usual.
