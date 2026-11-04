@@ -107,7 +107,7 @@ jobs:
             for attempt in 1 2 3; do
               timeout -k 10 180 sudo sh -c 'apt-get update -qq && apt-get install -y -qq --no-install-recommends ffmpeg' && return 0
               echo "apt: attempt $attempt failed with exit code $?"
-              sudo dpkg --configure -a || true
+              timeout -k 10 60 sudo dpkg --configure -a || true
             done
             return 1
           }
