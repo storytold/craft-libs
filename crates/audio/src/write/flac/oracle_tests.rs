@@ -1,4 +1,4 @@
-//! ffmpeg as an external decoder oracle (skipped when absent, see `tests/common`): every stream must
+//! ffmpeg as an external decoder oracle (skipped when absent, see `craft_media_testkit`): every stream must
 //! decode without an error to exactly the samples that went in, with the STREAMINFO MD5 matching
 //! ffmpeg's hash of the decoded audio. From FilmCraft's `filmcraft-flac` tests.
 

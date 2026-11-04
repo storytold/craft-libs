@@ -234,3 +234,20 @@ impl Encoder {
         data
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn streaminfo_holds_a_36_bit_total_and_leaves_a_larger_one_unknown() {
+        let enc = Encoder::new(EncoderConfig::new(48_000, 1, 16)).unwrap();
+        let total = |t| {
+            let si = enc.streaminfo_with(0, 0, t, [0; 16]);
+            (u64::from(si[13] & 0x0F) << 32) | u64::from(u32::from_be_bytes([si[14], si[15], si[16], si[17]]))
+        };
+        assert_eq!(total((1 << 36) - 1), (1 << 36) - 1);
+        assert_eq!(total((1 << 35) + 5), (1 << 35) + 5);
+        assert_eq!(total(1 << 36), 0);
+    }
+}

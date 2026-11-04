@@ -261,9 +261,12 @@ match craft_audio::decode(&bytes, None) {
 
 - AIFF with more than four channels decodes with an unordered layout, in the file's order.
 - A FLAC layout that decoders would not assume for the channel count depends on its
-  `WAVEFORMATEXTENSIBLE_CHANNEL_MASK` comment, and RFC 9639 §8.6.2 calls such a file not
-  streamable. This includes the usual 7-channel layout: without the comment, its back left, back
-  right and back centre are read as back centre, side left and side right.
+  `WAVEFORMATEXTENSIBLE_CHANNEL_MASK` comment. This includes the usual layouts for 5 and 6 channels:
+  without the comment, back surrounds are read as side surrounds. It includes the usual 7-channel
+  layout too: without the comment, its back left, back right and back centre are read as back
+  centre, side left and side right.
+- Outside RFC 9639's streamable subset (§7), which some decoders require: FLAC at 32 bits, at a
+  sample rate the frame header cannot name, or with a layout that needs the mask comment.
 - `ChannelLayout::unordered` is written to FLAC as mask `0x0000`, as RFC 9639 §8.6.2 allows, but
   ffmpeg and `flac -d` ignore that mask and use their default layout for the channel count.
 - Not decoded at all: AC-3, E-AC-3, Opus and Speex.
