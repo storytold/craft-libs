@@ -266,35 +266,58 @@ fn ogg_flac_reads_the_mask_comment() {
     }
 }
 
-/// Two streams in an Ogg file written by ffmpeg, whose serial numbers are in file order or in
-/// `reversed` order. ffmpeg picks them at random, so this writes the file until the order occurs;
-/// symphonia orders tracks by serial, so the reversed order is the one that tells them apart.
-/// `None` after `skip` when this ffmpeg cannot write the file.
+/// `file`, an Ogg file of two streams, with its streams' serial numbers replaced by `serials`, in
+/// the order the streams start.
+#[cfg(feature = "symphonia")]
+fn set_ogg_serials(mut file: Vec<u8>, serials: [u32; 2]) -> Vec<u8> {
+    let mut seen = Vec::new();
+    let mut at = 0;
+    while at < file.len() {
+        assert_eq!(&file[at..at + 4], b"OggS");
+        let segments = usize::from(file[at + 26]);
+        let body: usize = file[at + 27..at + 27 + segments].iter().map(|&n| usize::from(n)).sum();
+        let end = at + 27 + segments + body;
+        let old: [u8; 4] = file[at + 14..at + 18].try_into().unwrap();
+        let stream = seen.iter().position(|s| *s == old).unwrap_or_else(|| {
+            seen.push(old);
+            seen.len() - 1
+        });
+        file[at + 14..at + 18].copy_from_slice(&serials[stream].to_le_bytes());
+        // The page's checksum covers its serial number, and is computed with its own field zero.
+        file[at + 22..at + 26].fill(0);
+        let crc = craft_media::ogg::crc32(&file[at..end]);
+        file[at + 22..at + 26].copy_from_slice(&crc.to_le_bytes());
+        at = end;
+    }
+    assert_eq!(seen.len(), 2);
+    file
+}
+
+/// Two streams in an Ogg file written by ffmpeg, with serial numbers in file order or in `reversed`
+/// order. ffmpeg picks them at random, and symphonia orders tracks by serial, so the reversed order
+/// is the one that tells the two orders apart. `None` after `skip` when this ffmpeg cannot write the
+/// file.
 #[cfg(feature = "symphonia")]
 fn two_ogg_streams(ff: &Path, name: &str, args: &[&str], reversed: bool) -> Option<Vec<u8>> {
     let path = common::fixture_subdir("flac").join(format!("{name}.ogg"));
-    for attempt in 0..64 {
-        let status = Command::new(ff)
-            .args(["-v", "error", "-y", "-f", "lavfi", "-i", "aevalsrc=0|0|0|0:c=4c:d=0.1:s=48000"])
-            .args(["-f", "lavfi", "-i", "aevalsrc=0|0|0|0:c=4c:d=0.1:s=44100"])
-            .args(["-map", "0", "-map", "1"])
-            .args(args)
-            .args(["-f", "ogg"])
-            .arg(&path)
-            .status()
-            .unwrap();
-        if !status.success() {
-            return common::skip(&format!("this ffmpeg cannot write {name}"));
-        }
-        let bytes = std::fs::read(&path).unwrap();
-        let file = craft_media::ogg::open(bytes.as_slice()).unwrap();
-        assert_eq!(file.streams.len(), 2, "{name}");
-        if (file.streams[0].serial > file.streams[1].serial) == reversed {
-            return Some(bytes);
-        }
-        assert!(attempt < 63, "{name}: 64 files with their serial numbers in one order");
+    let status = Command::new(ff)
+        .args(["-v", "error", "-y", "-f", "lavfi", "-i", "aevalsrc=0|0|0|0:c=4c:d=0.1:s=48000"])
+        .args(["-f", "lavfi", "-i", "aevalsrc=0|0|0|0:c=4c:d=0.1:s=44100"])
+        .args(["-map", "0", "-map", "1"])
+        .args(args)
+        .args(["-f", "ogg"])
+        .arg(&path)
+        .status()
+        .unwrap();
+    if !status.success() {
+        return common::skip(&format!("this ffmpeg cannot write {name}"));
     }
-    None
+    let serials = if reversed { [2, 1] } else { [1, 2] };
+    let bytes = set_ogg_serials(std::fs::read(&path).unwrap(), serials);
+    let file = craft_media::ogg::open(bytes.as_slice()).unwrap();
+    assert_eq!(file.streams.iter().map(|s| s.serial).collect::<Vec<_>>(), serials, "{name}");
+    assert!(file.warnings.is_empty(), "{name}: {:?}", file.warnings);
+    Some(bytes)
 }
 
 /// A track index means the same stream in `tracks`, `probe` and `decode`: the file's order. Each
