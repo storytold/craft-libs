@@ -629,7 +629,7 @@ fn browsing(press_and_browse: bool) -> Harness<'static, Browsing> {
     )
 }
 
-fn pointer_button(h: &mut Harness<'_, Browsing>, at: egui::Pos2, pressed: bool) {
+fn pointer_button<S>(h: &mut Harness<'_, S>, at: egui::Pos2, pressed: bool) {
     if pressed {
         h.event(egui::Event::PointerMoved(at));
         h.step();
@@ -706,4 +706,55 @@ fn without_press_and_browse_the_menu_opens_and_chooses_on_release() {
     pointer_button(&mut h, entry, false);
     assert_eq!(h.state().selected, 2, "a click on an entry still chooses it");
     assert!(!is_open(&h), "and closes the menu");
+}
+
+/// Two combo boxes drawn one after the other: the first stays closed while the second's menu
+/// browses with the row helpers.
+struct Pair {
+    selected: usize,
+    second_button: egui::Rect,
+    rows: Vec<egui::Rect>,
+    popup: egui::Id,
+}
+
+fn pair() -> Harness<'static, Pair> {
+    Harness::builder().with_size(egui::vec2(400.0, 400.0)).build_ui_state(
+        |ui, s: &mut Pair| {
+            // Drawn first: closed, so its end-of-pass cleanup runs before the second's entries.
+            let _ = ComboBox::new("first", "First").selected_text("First").show_ui(ui, |_| {});
+            s.rows.clear();
+            let inner = ComboBox::new("second", "Second").selected_text(SIZES[s.selected]).show_ui(ui, |ui| {
+                for (i, name) in SIZES.iter().enumerate() {
+                    let row = ui.selectable_label(i == s.selected, *name);
+                    let row = super::browse_hover(ui, row);
+                    s.rows.push(row.rect);
+                    if row.clicked() || super::browse_pick(ui, &row) {
+                        s.selected = i;
+                    }
+                }
+            });
+            s.second_button = inner.response.rect;
+            s.popup = super::popup_id(inner.response.id);
+        },
+        Pair { selected: 0, second_button: egui::Rect::NOTHING, rows: Vec::new(), popup: egui::Id::NULL },
+    )
+}
+
+/// The first combo box of a pass is closed while the second browses: its end-of-pass cleanup must
+/// leave the second one's browse state alone, or the release over an entry of the second would
+/// choose nothing — its entries are evaluated after the first one's cleanup.
+#[test]
+fn a_closed_combo_drawn_first_leaves_the_browsed_ones_release_to_choose() {
+    let mut h = pair();
+    h.run();
+    let button = h.state().second_button.center();
+    pointer_button(&mut h, button, true);
+    assert!(egui::Popup::is_id_open(&h.ctx, h.state().popup), "the press opens the second menu");
+    // Let the menu settle where it will stay, as it does before the user moves.
+    h.run();
+    let entry = h.state().rows[2].center();
+    h.event(egui::Event::PointerMoved(entry));
+    h.step();
+    pointer_button(&mut h, entry, false);
+    assert_eq!(h.state().selected, 2, "the release over the third entry chooses it");
 }
