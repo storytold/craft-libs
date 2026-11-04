@@ -1,21 +1,22 @@
-//! Translations for the Craft apps.
+//! Translations for the Craft apps, and the `{name}` placeholder filling they use.
 //!
-//! An app embeds the [craft-i18n](https://github.com/benandez/craft-i18n) catalogs at build time
-//! as an [`Embedded`] static, builds one [`I18n`] from it, and looks English source text up in a
-//! [`Lang`]. A missing translation is the English itself; nothing here fails.
-//!
-//! Counts ([`I18n::trn`]), file sizes and measures write their numbers as the formatting
-//! [`Region`] does ([`I18n::format`]): grouped (`1.234`, `12,34,567`) and in the region's digits
-//! (`١٬٢٣٤`). Text that goes into documents or file names should use [`I18n::trn_plain`], which
-//! writes `0`–`9` without grouping.
-//!
-//! All of that is the default feature `locale`, on ICU4X and CLDR data. Without it
-//! (`default-features = false`), the crate is only `{name}` placeholder filling: [`fill`],
-//! [`fill_with`], [`fmt`], [`fmt_plain`], [`isolate`], [`ltr`] and [`strip_isolates`], with no
-//! ICU4X, for crates that fill wordings but don't look translations up.
+//! Placeholder filling is always here: [`fill`], [`fill_with`], [`fmt`], [`fmt_plain`],
+//! [`isolate`], [`ltr`] and [`strip_isolates`]. Everything else is the default feature `locale`,
+//! on ICU4X and CLDR data. Without it (`default-features = false`) the crate is only the
+//! formatter, with no ICU4X, for crates that fill wordings but don't look translations up.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
-// The docs link the `locale` API, which isn't there without the feature.
-#![cfg_attr(not(feature = "locale"), allow(rustdoc::broken_intra_doc_links))]
+#![cfg_attr(
+    feature = "locale",
+    doc = r#"
+An app embeds the [craft-i18n](https://github.com/benandez/craft-i18n) catalogs at build time
+as an [`Embedded`] static, builds one [`I18n`] from it, and looks English source text up in a
+[`Lang`]. A missing translation is the English itself; nothing here fails.
+
+Counts ([`I18n::trn`]), file sizes and measures write their numbers as the formatting
+[`Region`] does ([`I18n::format`]): grouped (`1.234`, `12,34,567`) and in the region's digits
+(`١٬٢٣٤`). Text that goes into documents or file names should use [`I18n::trn_plain`], which
+writes `0`–`9` without grouping."#
+)]
 
 #[cfg(feature = "locale")]
 mod catalog;
@@ -518,7 +519,7 @@ pub fn ltr(value: &str) -> String {
     wrap(LRI, value)
 }
 
-/// `text` without isolate marks (LRI, RLI, FSI, PDI): a [`fmt`] or [`I18n::trn`] result made fit
+/// `text` without isolate marks (LRI, RLI, FSI, PDI): a [`fmt`] result, or `I18n::trn`'s, made fit
 /// for a file name, a log or a comparison.
 pub fn strip_isolates(text: &str) -> String {
     text.chars().filter(|c| !matches!(*c, LRI | RLI | FSI | PDI)).collect()

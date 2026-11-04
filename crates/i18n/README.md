@@ -10,10 +10,35 @@ variable is unset; the recipe is in craft-i18n's
 [`docs/integration.md`](https://github.com/benandez/craft-i18n/blob/main/docs/integration.md).
 This crate never reads files.
 
-Everything below except placeholder filling is the default feature `locale`, on ICU4X. A crate
-that only fills wordings can depend on `craft-i18n = { workspace = true, default-features = false }`
-and get `fill`, `fill_with`, `fmt`, `fmt_plain`, `isolate`, `ltr` and `strip_isolates` with no
-ICU4X (its one dependency is `unicode-bidi`). `collate` turns `locale` on.
+Everything below except placeholder filling is the default feature `locale`, on ICU4X. Without
+it the crate is `fill`, `fill_with`, `fmt`, `fmt_plain`, `isolate`, `ltr` and `strip_isolates`,
+and its one dependency is `unicode-bidi`. `collate` turns `locale` on.
+
+In a workspace, turn the default off where the dependency is declared, because before Cargo 1.99 a
+member can't turn off a default that `[workspace.dependencies]` leaves on. The workspace's
+`Cargo.toml`:
+
+```toml
+[workspace.dependencies]
+craft-i18n = { git = "…", rev = "…", default-features = false }
+```
+
+A member that only fills wordings:
+
+```toml
+[dependencies]
+craft-i18n = { workspace = true }
+```
+
+A member that looks translations up:
+
+```toml
+[dependencies]
+craft-i18n = { workspace = true, features = ["locale"] }
+```
+
+Features unify. A build that also includes a translating crate compiles ICU4X once for all of
+them; the formatter-only crate stays ICU-free on its own, in its tests and for wasm.
 
 ## Wiring an app
 
