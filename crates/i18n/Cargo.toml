@@ -1,6 +1,6 @@
 [package]
 name = "craft-i18n"
-description = "Translations for the Craft apps: the embedded craft-i18n catalogs, lookup with fallback, plurals, numbers for a region, language names, the system locale, search folding and locale sorting."
+description = "Translations for the Craft apps: the embedded craft-i18n catalogs, lookup with fallback, plurals, numbers for a region, language names, the system locale, search folding and locale sorting. Without default features, only `{name}` placeholder filling, with no ICU4X."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -10,37 +10,60 @@ repository.workspace = true
 [dependencies]
 # Numbers and plural rules, on CLDR data (data/numbers.postcard) generated for one ICU4X minor
 # version, hence `~2.3`.
-fixed_decimal = { version = "0.7.2", default-features = false }
-icu_decimal = { version = "~2.3", default-features = false, features = ["serde"] }
-icu_locale_core = { version = "~2.3", default-features = false }
-icu_locale_fallback = { version = "~2.3", default-features = false, features = ["compiled_data"] }
-icu_plurals = { version = "~2.3", default-features = false, features = ["serde"] }
-icu_provider = { version = "~2.3", default-features = false, features = ["sync"] }
-icu_provider_adapters = { version = "~2.3", default-features = false }
-icu_provider_blob = { version = "~2.3", default-features = false }
-writeable = "0.6"
-log = "0.4"
-sys-locale = "0.3"
-icu_normalizer = "~2.3"
-icu_properties = "~2.3"
+fixed_decimal = { version = "0.7.2", default-features = false, optional = true }
+icu_decimal = { version = "~2.3", default-features = false, features = ["serde"], optional = true }
+icu_locale_core = { version = "~2.3", default-features = false, optional = true }
+icu_locale_fallback = { version = "~2.3", default-features = false, features = ["compiled_data"], optional = true }
+icu_plurals = { version = "~2.3", default-features = false, features = ["serde"], optional = true }
+icu_provider = { version = "~2.3", default-features = false, features = ["sync"], optional = true }
+icu_provider_adapters = { version = "~2.3", default-features = false, optional = true }
+icu_provider_blob = { version = "~2.3", default-features = false, optional = true }
+writeable = { version = "0.6", optional = true }
+log = { version = "0.4", optional = true }
+sys-locale = { version = "0.3", optional = true }
+icu_normalizer = { version = "~2.3", optional = true }
+icu_properties = { version = "~2.3", optional = true }
 # Generated data fits one ICU4X minor version; data/generate-collation.sh names its datagen.
 icu_collator = { version = "~2.3.1", default-features = false, features = ["serde"], optional = true }
+# Placeholder filling (`fmt`): whether text has a right-to-left letter. Always on.
 unicode-bidi = "0.3"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-sys-locale = { version = "0.3", features = ["js"] }
+sys-locale = { version = "0.3", features = ["js"], optional = true }
 
 # The regional format (Region::system); safe registry reads, MIT OR Apache-2.0.
 [target.'cfg(windows)'.dependencies]
-windows-registry = "0.6"
+windows-registry = { version = "0.6", optional = true }
 
 # The current locale (Region::system); already in the apps' Cargo.lock through eframe.
 [target.'cfg(target_vendor = "apple")'.dependencies]
-objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSDateFormatter", "NSFormatter", "NSLocale", "NSString"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSDateFormatter", "NSFormatter", "NSLocale", "NSString"], optional = true }
 
 [features]
+default = ["locale"]
+# Everything but placeholder filling: catalogs and lookups, plurals, numbers and regions, the
+# system locale, scripts and direction, search folding, on ICU4X and CLDR data. Without it
+# (`default-features = false`), the crate is `fill`, `fill_with`, `fmt`, `fmt_plain`, `isolate`,
+# `ltr` and `strip_isolates`, with no ICU4X.
+locale = [
+    "dep:fixed_decimal",
+    "dep:icu_decimal",
+    "dep:icu_locale_core",
+    "dep:icu_locale_fallback",
+    "dep:icu_plurals",
+    "dep:icu_provider",
+    "dep:icu_provider_adapters",
+    "dep:icu_provider_blob",
+    "dep:writeable",
+    "dep:log",
+    "dep:sys-locale",
+    "dep:icu_normalizer",
+    "dep:icu_properties",
+    "dep:windows-registry",
+    "dep:objc2-foundation",
+]
 # Locale sorting (`collate`), with ICU4X collation data for the suite's locales embedded.
-collate = ["dep:icu_collator", "icu_provider/serde", "icu_provider_blob/alloc"]
+collate = ["locale", "dep:icu_collator", "icu_provider/serde", "icu_provider_blob/alloc"]
 
 [lints]
 workspace = true
