@@ -452,13 +452,9 @@ pub(crate) fn suggest_in(d: &AffixDict, word: &str, max: usize, t: &Tuning) -> V
                 let changed: Vec<_> = candidate.split(' ').collect();
                 original.len() == changed.len() && original.iter().zip(changed).all(|(a, b)| d.can_suggest_cased(a, b))
             };
-            let t = if eligible(&t) {
-                t
-            } else if eligible(&text) {
-                text.clone()
-            } else {
-                continue;
-            };
+            // Collector::keep already accepted text. Collection may have exhausted the shared
+            // affix budget, so recheck only a changed case and otherwise retain that accepted form.
+            let t = if t == text || eligible(&t) { t } else { text.clone() };
             // Shown as the dictionary's OCONV table writes it (`'` → `’` in French).
             let t = d.output(&t).into_owned();
             if t != word && !out.contains(&t) {
@@ -903,5 +899,35 @@ mod tests {
         assert_eq!(suggest_in(&d, "neer", 4, &english).first().map(String::as_str), Some("near"));
         assert!(suggest_in(&d, "neer", 4, &english).contains(&"ne'er".to_string()));
         assert_eq!(suggest_in(&d, "neer", 4, &Tuning::DEFAULT).first().map(String::as_str), Some("ne'er"), "an elision");
+    }
+    /// A REP candidate is admitted before costly TRY checks consume the normal shared budget.
+    /// Finalization must retain that accepted affixed word, including a conservative case fallback.
+    #[test]
+    fn accepted_affixed_suggestions_survive_exhausted_collection_budget() {
+        let input = format!("{}x{}", "a".repeat(20), "a".repeat(19));
+        let mut aff = String::from("SET UTF-8\nFLAG num\nTRY ");
+        aff.extend(('a'..='z').chain((0x100..0x166).filter_map(char::from_u32)));
+        aff.push_str(&format!("\nREP 1\nREP {input} kots\n"));
+        // The bounded adversarial rule shape of the existing shared-budget regression.
+        for f in 1..=1000u32 {
+            let c = char::from_u32(0x4e00 + f).unwrap();
+            aff.push_str(&format!("PFX {f} Y 1\nPFX {f} {c} 0 .\n"));
+        }
+        let conts: Vec<String> = (0..286).map(|k| (5000 + k * 7).to_string()).collect();
+        for len in 1..=40 {
+            for k in 0..50 {
+                let f = 5000 + (len - 1) * 50 + k;
+                aff.push_str(&format!("SFX {f} Y 1\nSFX {f} 0 {}/{} .\n", "a".repeat(len), conts.join(",")));
+            }
+        }
+        aff.push_str("SFX 9000 Y 1\nSFX 9000 0 s .\n");
+        let d = AffixDict::from_hunspell(&aff, "3\nb/1,5000\nab/2\nkot/9000\n", &[]).unwrap();
+        assert!(!d.stems().any(|s| s == "kots") && d.can_suggest("kots"));
+        for word in [input.clone(), input.to_uppercase()] {
+            let got = suggest_in(&d, &word, 1, &Tuning::DEFAULT);
+            assert_eq!(got.len(), 1, "accepted affixed candidate lost: {word}: {got:?}");
+            assert!(got[0].eq_ignore_ascii_case("kots"), "{word}: {got:?}");
+            assert!(d.can_suggest(&got[0]));
+        }
     }
 }
