@@ -14,6 +14,9 @@ fn main() -> Result<(), Box<dyn Error>> {
         return Err("CRAFT_KHMER_REQUIRED=1 requires CRAFT_KHMER_DIR containing the pinned raw Aksara pack".into());
     }
     let pins: Value = serde_json::from_str(include_str!("source-pins.json"))?;
+    if dir.is_some() && pins["licence_class"].as_str() != Some("Embeddable") {
+        return Err("Khmer data embedding is disabled: Download-only pending inherited frequency-source notices and maintainer Embeddable sign-off (PROVENANCE.md; craft-i18n ADR 0004). Omit CRAFT_KHMER_DIR for a build without Khmer data.".into());
+    }
     if let Some(dir) = &dir {
         let path = dir.join("LICENCES/LICENSE");
         println!("cargo:rerun-if-changed={}", path.display());

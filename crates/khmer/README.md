@@ -101,15 +101,13 @@ annotated correctness judgments. The private book text is not redistributed.
 
 ## Resource provenance
 
-SBBIC contributor @sungkhum identified SBBIC internal work,
-[SEAlang frequency lists](http://sealang.net/project/list/) and
-[SIL NRSI khmerlbdict](https://github.com/silnrsi/khmerlbdict) as sources for
-Aksara's resources on 2026-11-03. SBBIC contributed to khmerlbdict; its README
-also records SEAlang and other source lists. SIL publishes an MIT license,
-Copyright (c) 2015 SIL NRSI. The contributor supplied SEAlang's MIT notice,
-Copyright (c) 2010, Doug Cooper, with a screenshot of its License page.
-These notices accompany Aksara's SBBIC MIT notice in `LICENSE-AKSARA`.
-SBBIC also confirmed that the tagger was trained on internal documents it has
-permission to train with. This identifies the reported resource lineage, not a
-source-by-source manifest of those documents. Raw artifacts remain pinned by
-`source-pins.json`; no private training text is redistributed here.
+Nathan Wells (@sungkhum), working as SBBIC, identifies the frequency dictionary as
+SIL khmerlbdict combined with his own work, and the other five inputs as his original
+SBBIC work. The per-file quotations, pinned source evidence, SEAlang notice and
+unresolved inherited CLDR lineage are recorded in [PROVENANCE.md](PROVENANCE.md).
+The three MIT holders remain in `LICENSE-AKSARA`. Training used internal documents
+SBBIC reports permission to train with; no private training text is redistributed.
+
+The data pack is **Download-only pending maintainer sign-off**. Explicit data
+embedding is disabled until the inherited source evidence and the model/config
+policy are settled. Default builds contain no data and remain available.
