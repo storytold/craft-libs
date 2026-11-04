@@ -27,6 +27,7 @@ thiserror = "2"
 craft-atomic = { path = "crates/atomic" }
 craft-cms = { path = "crates/cms" }
 craft-cloud = { path = "crates/cloud" }
+craft-cloud-local = { path = "crates/cloud-local" }
 craft-crw = { path = "crates/crw" }
 craft-dialogs = { path = "crates/dialogs" }
 craft-doc = { path = "crates/doc" }
