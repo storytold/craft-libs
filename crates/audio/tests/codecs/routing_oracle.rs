@@ -468,6 +468,7 @@ fn adts_with_a_program_config_element_decodes() {
     let (info, buf) = decode(&bytes, None).unwrap();
     assert_eq!((info.container, info.codec, buf.channels.len()), (c.container, c.codec, c.channels));
     assert_eq!(info.layout, c.layout);
+    assert_eq!(buf.frames(), reference(&ff, &path).len() / c.channels);
     // Decoded order (C, L, R, surrounds, LFE) against ffmpeg's (L, R, C, LFE, surrounds).
     let wav: Vec<Vec<f32>> = [1, 2, 0, 5, 3, 4].iter().map(|&i| buf.channels[i].clone()).collect();
     let s = snr(&wav, &reference(&ff, &path));
@@ -521,18 +522,27 @@ fn mp4_with_wrong_durations_or_edits_presents_its_audio() {
     let Some(path) = fixture(&ff, c) else { return };
     let bytes = std::fs::read(path).unwrap();
     let (_, whole) = decode(&bytes, None).unwrap();
-    // After the name: version and flags (4), entries (4); stts: count (4), delta (4) of the first
-    // run; elst v0: duration (4).
-    let stts_delta = 4 + 4 + 4 + 4 + 4;
+    // From the name's start: the name (4), version and flags (4), entries (4), then stts's first
+    // run's count (4) and delta, or elst v0's first duration.
+    let stts_delta = 4 + 4 + 4 + 4;
     let elst_duration = 4 + 4 + 4;
     for (name, file) in [
         ("durations halved", patched(&bytes, b"stts", &[stts_delta], |v| v / 2)),
         ("durations of one", patched(&bytes, b"stts", &[stts_delta], |_| 1)),
         ("durations doubled", patched(&bytes, b"stts", &[stts_delta], |v| v * 2)),
+        ("durations of zero", patched(&bytes, b"stts", &[stts_delta], |_| 0)),
     ] {
+        assert_ne!(file, bytes, "{name}");
         let (info, buf) = decode(&file, None).unwrap();
         assert!(buf.frames().abs_diff(whole.frames()) <= 1024, "{name}: {} frames", buf.frames());
         assert_eq!((probe(&file, None).unwrap().frames, info.frames), (buf.frames() as u64, buf.frames() as u64), "{name}");
+        // A seek lands on the same audio: a packet's place comes from its index, not the durations.
+        let mut d = craft_audio::Decoder::from_bytes(&file, None, &craft_audio::DecodeOptions::default()).unwrap();
+        assert_eq!(d.seek(50_000).unwrap(), 50_000, "{name}");
+        let block = d.next_block().unwrap().unwrap();
+        for (a, b) in block.channels[0].iter().zip(&buf.channels[0][50_000..]) {
+            assert!((a - b).abs() < 1e-4, "{name}: seek");
+        }
     }
     let file = patched(&bytes, b"elst", &[elst_duration], |v| v * 2);
     let (info, buf) = decode(&file, None).unwrap();

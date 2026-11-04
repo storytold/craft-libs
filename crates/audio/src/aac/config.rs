@@ -307,7 +307,7 @@ pub struct AdtsHeader {
     pub object_type: u8,
     /// `sampling_frequency_index` (4 bits).
     pub sf_index: u8,
-    /// `channel_configuration` (3 bits; 0 = program config element in the first frame).
+    /// `channel_configuration` (3 bits; 0 = program config element in the stream).
     pub channel_config: u8,
     /// Whole frame length including the header.
     pub frame_length: usize,

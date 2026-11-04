@@ -149,8 +149,8 @@ known stops at the end, and the next `next_block` returns `None`. When `length_k
 of the file to count them. `Decoder::probe` is also how to probe a file on disk.
 
 Native formats read their samples from the source packet by packet. The container's packet index
-stays in memory (tens of bytes per packet), and opening a Matroska file reads through the whole
-file to build it. Formats symphonia decodes are read whole first.
+stays in memory (tens of bytes per packet), and opening a Matroska file or a raw ADTS stream reads
+through the whole file to build it. Formats symphonia decodes are read whole first.
 
 A damaged packet is concealed and counted in `info().damaged`. A source that fails a read (a
 network drop) returns `AudioError::Io` from `next_block` instead, and that packet is skipped. To

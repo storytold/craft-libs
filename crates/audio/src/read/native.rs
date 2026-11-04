@@ -44,6 +44,9 @@ enum Packets<'a> {
         /// Media timescale and output rate, for packet start times.
         timescale: u32,
         rate: u32,
+        /// Frames every packet decodes to, when the codec says: then a packet's place on the
+        /// decoded timeline is its index, whatever the sample table's durations claim.
+        per_packet: Option<u64>,
     },
     /// Matroska is read packet by packet, which carries each block's `DiscardPadding`.
     Mkv {
@@ -114,8 +117,13 @@ impl Packets<'_> {
             found
         }
         match self {
-            Packets::Mp4 { file, track, next, timescale, rate, .. } => {
+            Packets::Mp4 { file, track, next, timescale, rate, per_packet, .. } => {
                 let samples = file.tracks.get(*track).map(|t| t.samples.as_slice()).unwrap_or_default();
+                if let Some(n) = per_packet.filter(|&n| n > 0) {
+                    let i = (frame / n).min((samples.len() as u64).saturating_sub(1));
+                    *next = i as usize;
+                    return Ok(i * n);
+                }
                 let first = samples.first().map_or(0, |s| s.dts);
                 let starts =
                     samples.iter().map(|s| rescale(u64::try_from(s.dts.saturating_sub(first)).unwrap_or(0), u64::from(*timescale), u64::from(*rate)));
@@ -568,15 +576,19 @@ fn open_adts<'a>(src: &Src<'a>, at: u64) -> Option<Result<Native<'a>>> {
     let format = |h: &aac::AdtsHeader| (h.object_type, h.sf_index, h.channel_config);
     let first = &frames[..frames.len().min(crate::track::LOOKAHEAD_PACKETS)];
     let &(_, _, stream) = first.iter().max_by_key(|(_, _, h)| first.iter().filter(|(_, _, o)| format(o) == format(h)).count())?;
-    let usable: Vec<_> = first.iter().filter(|(_, _, h)| format(h) == format(&stream) && h.raw_data_blocks == 1).copied().collect();
-    if usable.len() * 2 <= first.len() {
+    let usable = |h: &aac::AdtsHeader| format(h) == format(&stream) && h.raw_data_blocks == 1;
+    if first.iter().filter(|(_, _, h)| usable(h)).count() * 2 <= first.len() {
         return None;
     }
+    // The stream's own frames first: the first of them gives the configuration. The others can
+    // still hold the stream's only program config element.
+    let (mut ordered, others): (Vec<_>, Vec<_>) = first.iter().copied().partition(|(_, _, h)| usable(h));
+    ordered.extend(others);
     let core = stream.to_asc().sample_rate;
     // Without extradata the configuration comes from the first header (and, for channel
     // configuration 0, a program config element in the stream).
     let params = CodecParams::new(CodecId::Aac).with_sample_rate(core);
-    let lookahead = raw_lookahead(src, &usable, crate::track::LOOKAHEAD_PACKETS);
+    let lookahead = raw_lookahead(src, &ordered, crate::track::LOOKAHEAD_PACKETS);
     // Decoded frames are set below, when the decoder has said what a frame decodes to.
     let packets: Vec<(u64, u32, u32)> = frames.iter().map(|&(p, n, h)| (p, n, u32::from(h.raw_data_blocks))).collect();
     let mut n = native(Container::Adts, Packets::Raw { frames: packets, src: src.clone(), next: 0 }, &params, &lookahead, 0, None, None)?;
@@ -648,15 +660,16 @@ fn open_mp4<'a>(src: &Src<'a>, container: Container, track: Option<usize>) -> Op
     let mut stored = rescale(media, u64::from(timescale), u64::from(rate)).saturating_sub(skip);
     // Durations only trim the last packet: ones that end anywhere else are wrong (some count a
     // HE-AAC packet's core frames) and can't cut audio off.
-    if let Some(n) = probe.frames_per_packet().map(|n| n as u64) {
+    let per_packet = probe.frames_per_packet().map(|n| n as u64);
+    if let Some(n) = per_packet {
         let decoded = (t.samples.len() as u64).saturating_mul(n).saturating_sub(skip);
-        if stored.abs_diff(decoded) > n {
+        if stored.abs_diff(decoded) >= n {
             stored = decoded;
         }
     }
     let frames = if stored > 0 { limit.map_or(stored, |l| l.min(stored)) } else { limit.unwrap_or(0) };
     let limit = (stored > 0).then_some(frames).or(limit);
-    let packets = Packets::Mp4 { file: Box::new(file), src: src.clone(), track, next: 0, timescale, rate };
+    let packets = Packets::Mp4 { file: Box::new(file), src: src.clone(), track, next: 0, timescale, rate, per_packet };
     native(container, packets, &params, &lookahead, skip, limit, Some(frames)).map(Ok)
 }
 
@@ -908,9 +921,7 @@ mod adts_tests {
         one[6] |= 1; // two raw data blocks
         let file = one.repeat(8);
         // The file is refused, not decoded at half its length.
-        assert!(
-            !matches!(decode(&file, Some("aac")), Ok((info, _)) if info.codec == crate::CodecId::Aac && info.container == Container::Adts && info.damaged == 0)
-        );
+        assert!(decode(&file, Some("aac")).is_err());
     }
 
     /// Frames of several blocks after the stream has started are concealed at their whole length,
@@ -922,6 +933,7 @@ mod adts_tests {
         let file = [frame(3).repeat(8), two, frame(3).repeat(2)].concat();
         let (info, buf) = decode(&file, None).unwrap();
         assert_eq!((info.damaged, info.frames, buf.frames()), (1, 12 * 1024, 12 * 1024));
+        assert_eq!(crate::probe(&file, None).unwrap().frames, 12 * 1024);
     }
 
     /// One flipped bit in the first header does not silence the stream.

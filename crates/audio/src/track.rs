@@ -17,6 +17,8 @@ enum Inner {
         dec: Box<aac::Decoder>,
         up: Option<aac::Upsample2x>,
         order: Option<&'static [usize]>,
+        /// The format ADTS packets must keep, when the first ADTS header gave the configuration.
+        adts_format: Option<AdtsFormat>,
     },
     Pcm {
         kind: PcmKind,
@@ -80,8 +82,8 @@ impl TrackDecoder {
     /// raw `.aac`), and ADTS headers are stripped from every packet. Other missing configuration is
     /// [`AudioError::Malformed`].
     ///
-    /// Codecs without a native packet decoder yet (MP3, FLAC, ALAC, Vorbis, Opus) are
-    /// [`AudioError::Unsupported`]; `craft_audio::decode` decodes them through symphonia when the
+    /// Codecs without a native packet decoder yet are [`AudioError::Unsupported`];
+    /// `craft_audio::decode` decodes MP3, FLAC, ALAC and Vorbis through symphonia when the
     /// `symphonia` feature is on.
     pub fn new(params: &CodecParams, lookahead: &[&[u8]]) -> Result<TrackDecoder> {
         let rate = params.sample_rate.unwrap_or(0);
@@ -93,10 +95,12 @@ impl TrackDecoder {
                 // header: without extradata, the first header gives it.
                 let payloads: Vec<&[u8]> =
                     lookahead.iter().map(|p| adts_frames(p).and_then(|f| f.first().map(|(_, unit)| *unit)).unwrap_or(p)).collect();
+                let mut adts_format = None;
                 let asc = if params.extradata.is_empty() {
                     let h = lookahead.first().and_then(|p| aac::AdtsHeader::parse(p).ok()).ok_or_else(|| {
                         AudioError::Malformed("AAC track without an AudioSpecificConfig (extradata), and its packets are not ADTS".into())
                     })?;
+                    adts_format = Some(adts_format_of(&h));
                     adts_config(&h, &payloads)?
                 } else {
                     params.extradata.clone()
@@ -111,7 +115,7 @@ impl TrackDecoder {
                 let cfg = dec.config().channel_config;
                 let layout = aac_layout(cfg, dec.channels());
                 let order = layout.is_ordered().then(|| aac::wav_order(cfg)).flatten();
-                (Inner::Aac { dec: Box::new(dec), up, order }, codec, out, layout, SampleFormat::Compressed)
+                (Inner::Aac { dec: Box::new(dec), up, order, adts_format }, codec, out, layout, SampleFormat::Compressed)
             }
             CodecId::Pcm => {
                 let pcm = params.pcm.ok_or_else(|| AudioError::Malformed("PCM track without a sample format".into()))?;
@@ -158,10 +162,10 @@ impl TrackDecoder {
     pub fn decode(&mut self, packet: &[u8]) -> Result<AudioBuffer> {
         let channels = match &mut self.inner {
             #[cfg(feature = "aac-decode")]
-            Inner::Aac { dec, up, order } => {
+            Inner::Aac { dec, up, order, adts_format } => {
                 let mut out: Vec<Vec<f32>> = Vec::new();
                 let units = match adts_frames(packet) {
-                    Some(frames) => adts_units(frames, dec.config())?,
+                    Some(frames) => adts_units(frames, *adts_format)?,
                     None => vec![packet],
                 };
                 for unit in units {
@@ -255,7 +259,7 @@ fn unsupported(codec: CodecId) -> AudioError {
     match feature {
         // A codec this crate decodes, in a build without its feature.
         Some(f) => AudioError::Unsupported(format!("decoding {} needs the `{f}` feature", codec.name())),
-        None if cfg!(feature = "symphonia") => {
+        None if cfg!(feature = "symphonia") && matches!(codec, CodecId::Mp3 | CodecId::Flac | CodecId::Alac | CodecId::Vorbis) => {
             AudioError::Unsupported(format!("no native {} packet decoder yet (craft_audio::decode reads it through symphonia)", codec.name()))
         }
         None => AudioError::Unsupported(format!("no native {} packet decoder yet", codec.name())),
@@ -319,18 +323,29 @@ fn adts_frames(packet: &[u8]) -> Option<Vec<(aac::AdtsHeader, &[u8])>> {
     (whole == packet.len() || frames.len() > MAX_ADTS_FRAMES_PER_PACKET).then_some(frames)
 }
 
-/// The raw access units of an ADTS-framed packet of a stream configured as `config`. A frame that
-/// changes the sample rate, profile or channel configuration would play wrongly, so it is
-/// malformed; frames with several raw data blocks are unsupported.
+/// What an ADTS frame says the stream's format is: profile, sampling frequency index and channel
+/// configuration.
 #[cfg(feature = "aac-decode")]
-fn adts_units<'a>(frames: Vec<(aac::AdtsHeader, &'a [u8])>, config: &aac::AudioSpecificConfig) -> Result<Vec<&'a [u8]>> {
+type AdtsFormat = (u8, u8, u8);
+
+#[cfg(feature = "aac-decode")]
+fn adts_format_of(h: &aac::AdtsHeader) -> AdtsFormat {
+    (h.object_type, h.sf_index, h.channel_config)
+}
+
+/// The raw access units of an ADTS-framed packet. In a stream whose first header gave its `format`,
+/// a frame that changes it would play wrongly, so it is malformed; with extradata, that decides the
+/// format and headers are not compared with it. Frames with several raw data blocks are
+/// unsupported.
+#[cfg(feature = "aac-decode")]
+fn adts_units(frames: Vec<(aac::AdtsHeader, &[u8])>, format: Option<AdtsFormat>) -> Result<Vec<&[u8]>> {
     if frames.len() > MAX_ADTS_FRAMES_PER_PACKET {
         return Err(AudioError::Malformed(format!("a packet of more than {MAX_ADTS_FRAMES_PER_PACKET} ADTS frames")));
     }
     if frames.iter().any(|(h, _)| h.raw_data_blocks > 1) {
         return Err(AudioError::Unsupported("ADTS frames with several raw data blocks".into()));
     }
-    if frames.iter().any(|(h, _)| (h.object_type, h.sf_index, h.channel_config) != (config.object_type, config.sf_index, config.channel_config)) {
+    if format.is_some_and(|f| frames.iter().any(|(h, _)| adts_format_of(h) != f)) {
         return Err(AudioError::Malformed("an ADTS frame changes the stream's format".into()));
     }
     Ok(frames.into_iter().map(|(_, unit)| unit).collect())
@@ -495,6 +510,29 @@ mod tests {
         blocks[6] |= 2; // three raw data blocks
         assert!(matches!(dec.decode(&blocks), Err(AudioError::Unsupported(_))));
         assert_eq!(dec.conceal(Some(&blocks)).unwrap().frames(), 3072);
+        // the profile and the channel configuration are part of the format too
+        let mut main = frame.clone();
+        main[2] &= 0x3F; // profile 0: Main
+        assert!(matches!(dec.decode(&main), Err(AudioError::Malformed(_))));
+        let mut mono = frame.clone();
+        mono[3] = (mono[3] & 0x3F) | (1 << 6);
+        assert!(matches!(dec.decode(&mono), Err(AudioError::Malformed(_))));
+    }
+
+    /// With extradata, a header's differing fields are not a format change (ADTS in MP4 with a
+    /// program config element in its AudioSpecificConfig, or channel configuration 0 in its headers).
+    #[cfg(feature = "aac-decode")]
+    #[test]
+    fn extradata_decides_the_format_of_adts_packets() {
+        let frame = adts_frame(0);
+        let mut stereo = adts_frame(2);
+        let params = aac_params().with_extradata(aac::AudioSpecificConfig::lc(3, 2).to_bytes());
+        let mut dec = TrackDecoder::new(&params, &[]).unwrap();
+        assert_eq!(dec.decode(&stereo).unwrap().channels.len(), 2);
+        stereo[3] &= 0x3F; // channel configuration 0 in the header
+        stereo[2] &= 0xFE;
+        assert_eq!(dec.decode(&stereo).unwrap().channels.len(), 2);
+        assert!(dec.decode(&frame).is_err(), "elements the configuration does not have");
     }
 
     #[cfg(feature = "aac-decode")]

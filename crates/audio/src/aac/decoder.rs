@@ -133,8 +133,8 @@ impl Decoder {
     }
 
     /// Decode one access unit (one `raw_data_block`) into 1024 samples per channel. An access unit
-    /// that fails leaves the decoder as it was: its damage, including a damaged program config
-    /// element, does not reach the access units after it.
+    /// that fails leaves the decoder as it was, but for [`Self::sbr`]: its damage, including a damaged
+    /// program config element, does not reach the access units after it.
     pub fn decode(&mut self, au: &[u8]) -> Result<Vec<Vec<f32>>> {
         let before = (self.asc.pce.clone(), self.layout.clone(), self.offsets.clone(), self.channels.clone(), self.noise_state);
         let decoded = self.decode_block(au, true);

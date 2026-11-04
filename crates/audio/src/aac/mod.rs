@@ -202,8 +202,9 @@ mod tests {
             out.extend(up.process(vec![block.to_vec()]).remove(0));
         }
         assert_eq!(out.len(), 4000);
-        assert_eq!(out[(100 + UPSAMPLE_DELAY) * 2], 1.0);
-        assert!(out[..(100 + UPSAMPLE_DELAY - UPSAMPLE_HALF) * 2].iter().all(|&s| s == 0.0));
+        assert_eq!(UPSAMPLE_DELAY, 481);
+        assert_eq!(out[(100 + 481) * 2], 1.0);
+        assert!(out[..(100 + 481 - UPSAMPLE_HALF) * 2].iter().all(|&s| s == 0.0));
         // a reset forgets the history
         up.reset();
         assert!(up.process(vec![vec![0.0; 600]]).remove(0).iter().all(|&s| s == 0.0));
