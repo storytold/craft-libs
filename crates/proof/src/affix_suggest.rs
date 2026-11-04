@@ -248,7 +248,8 @@ impl Collector<'_> {
 
     /// Keep a suggestion known to be correct, unless the dictionary says never to offer it.
     fn keep(&mut self, text: String, cost: u32) {
-        if !text.split(' ').all(|part| self.d.can_suggest(part)) {
+        // Reject exact excluded spellings at admission, before later candidates spend the budget.
+        if !text.split(' ').all(|part| self.d.can_suggest_cased(part, part)) {
             return;
         }
         self.seq += 1;
