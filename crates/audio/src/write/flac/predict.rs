@@ -45,7 +45,7 @@ pub enum Subframe {
 }
 
 /// Folded residual: 0, -1, 1, -2, 2 … → 0, 1, 2, 3, 4 ….
-fn fold(r: i64) -> u64 {
+pub(super) fn fold(r: i64) -> u64 {
     if r >= 0 { (r as u64) << 1 } else { ((-r - 1) as u64) << 1 | 1 }
 }
 

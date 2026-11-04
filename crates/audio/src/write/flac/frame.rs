@@ -106,7 +106,7 @@ fn write_residual(w: &mut BitWriter, residual: &Residual, r: &[i64], block: usiz
         w.write_bits(u32::from(k), if wide { 5 } else { 4 });
         let n = if p == 0 { len.saturating_sub(order) } else { len };
         for &v in r.get(start..start + n).unwrap_or_default() {
-            let u = if v >= 0 { (v as u64) << 1 } else { ((-v - 1) as u64) << 1 | 1 };
+            let u = super::predict::fold(v);
             let mut q = u >> k;
             while q >= 32 {
                 w.write_bits(0, 32);
@@ -119,16 +119,8 @@ fn write_residual(w: &mut BitWriter, residual: &Residual, r: &[i64], block: usiz
     }
 }
 
-fn write_subframe(w: &mut BitWriter, x: &[i32], sub: &Subframe, bps: u8) {
-    if let Subframe::Wasted { bits, coded } = sub {
-        let shifted: Vec<i32> = x.iter().map(|&v| v >> bits).collect();
-        return write_coded(w, &shifted, coded, bps - bits, *bits);
-    }
-    write_coded(w, x, sub, bps, 0);
-}
-
 /// Subframe header (§9.2.1) and body of samples already without their `wasted` low bits.
-fn write_coded(w: &mut BitWriter, x: &[i32], sub: &Subframe, bps: u8, wasted: u8) {
+fn write_subframe(w: &mut BitWriter, x: &[i32], sub: &Subframe, bps: u8, wasted: u8) {
     let b = u32::from(bps);
     let sample = |w: &mut BitWriter, v: i32| w.write_bits(v as u32, b);
     // the flag, then the count minus 1 in unary
@@ -166,8 +158,10 @@ fn write_coded(w: &mut BitWriter, x: &[i32], sub: &Subframe, bps: u8, wasted: u8
             let r = super::predict::lpc_residual(x, coefs, *shift).unwrap_or_default();
             write_residual(w, residual, &r, x.len(), o);
         }
-        // `choose` does not nest them
-        Subframe::Wasted { coded, .. } => write_coded(w, x, coded, bps, wasted),
+        Subframe::Wasted { bits, coded } => {
+            let shifted: Vec<i32> = x.iter().map(|&v| v >> bits).collect();
+            write_subframe(w, &shifted, coded, bps - bits, *bits);
+        }
     }
 }
 
@@ -196,7 +190,7 @@ pub fn write(spec: &FrameSpec) -> Vec<u8> {
     let mut w = BitWriter::new();
     w.write_bytes(&h);
     for (x, sub, bps) in spec.channels {
-        write_subframe(&mut w, x, sub, *bps);
+        write_subframe(&mut w, x, sub, *bps, 0);
     }
     let mut out = w.finish();
     let crc = crc16(&out);
