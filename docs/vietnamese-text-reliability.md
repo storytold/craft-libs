@@ -97,6 +97,9 @@ Heuristic algorithms must never silently guess or mutate valid text. Evidence pr
 | **`FontHint`** | Inferred from font name prefixes (`.Vn*` $\to$ TCVN3, `VNI-*` $\to$ VNI). | Advisory only. Conflicting font hints return `DetectionResult::Ambiguous`. |
 | **`Heuristic`** | Statistical analysis of byte frequency distribution. | **Never overrides valid UTF-8.** If confidence is below threshold, returns `DetectionResult::Unknown`. |
 
+**Font Hint Normalization:**
+All `FontHint` string matching MUST be case-insensitive (`to_ascii_lowercase()`) and recognize historical legacy stems (e.g., `.vn*` $\to$ TCVN3, `.vnh` / `*h` $\to$ TCVN3H, `vni-` $\to$ VNI-Windows).
+
 ```rust
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum LegacyEncoding {
@@ -255,6 +258,10 @@ VNI is a multi-byte composite encoding (Base character + Diacritic mark byte). W
 ##### 4. Contract 3: Ambiguity Rejection & Heuristic Threshold
 To prevent autonomous detectors from over-confident false transcoding on short or ambiguous byte sequences:
 * **Heuristic Activation Threshold:** Autonomous encoding detection requires an input length $\ge 16$ bytes and at least 2 distinct signature distributions (e.g., TCVN3 via pairs `0xA7`/`0xAE` or double vowels `0xCA`, `0xD4`; VNI via postfix byte pairs `0xF8`, `0xF9`, `0xEF`).
+* **Short-String Invariant (< 16 bytes):** Strings shorter than 16 bytes automatically disable statistical byte-frequency heuristics to prevent false positives. Short strings rely strictly on the Evidence Hierarchy:
+  1. Valid UTF-8 check (preserved as UTF-8).
+  2. `FontHint` presence (e.g., `.VnTime`, `VNI-Times`) implies immediate decoding.
+  3. If neither is present, return `DetectionResult::Unknown` (or fallback to CP1252 in Practical Mode) rather than speculative guessing.
 * **Conflict & Safety Rules:** If candidate encodings (e.g., TCVN3 vs. VNI-Windows / CP1258) yield conflicting confidence scores differing by less than $30\%$, detection yields `DetectionResult::Ambiguous { candidates }`. The system must prompt caller intervention rather than executing speculative transcoding.
 
 ##### 5. Contract 4: Explicit Error Model (`DecodeError`)
@@ -378,6 +385,8 @@ The behavior of `prev` and `next` across cluster boundaries is strictly specifie
    * `PreeditCancel`: Discard transient composition cleanly.
    * `Commit`: Append finalized text to document buffer and trigger Tier 1 fast-path normalization.
    * `ReplaceRange`: Replace specified committed document range when requested by advanced IME engines.
+4. **Composition Inhibition Invariant:**
+   When the platform window backend signals an active composition context or receives simulated backspaces within an uncommitted text sequence, Tier 2 grapheme cluster deletion MUST be inhibited. Backspace semantics are deferred entirely to the active IME driver to prevent destroying transient composition states (e.g., Unikey sending fake backspaces to transform `a` into `á`).
 
 #### Verification
 * Synthetic mock event stream tests simulating rapid Telex/VNI key sequences.
