@@ -567,3 +567,55 @@ fn test_real_world_corpora_fixtures() {
     test_fixture_vni_contract_1998();
     test_fixture_cp1258_accounting();
 }
+
+#[test]
+fn test_short_string_invariant() {
+    // 1. Short legacy string (< 16 bytes) without FontHint disables heuristics -> Unknown
+    let short_legacy = b"T\xC7NG 1"; // 6 bytes: legacy TCVN3 for "TẦNG 1"
+    let unhinted_res = detect_encoding(short_legacy, None);
+    assert_eq!(unhinted_res, DetectionResult::Unknown);
+
+    // decode_text on unhinted non-UTF8 short string returns InvalidUtf8
+    let decode_unhinted = decode_text(short_legacy, &DecodeOptions::default());
+    assert!(decode_unhinted.is_err());
+
+    // 2. Short legacy string WITH FontHint -> HighConfidence via FontHint
+    let meta_tcvn = EncodingMetadata { font_name: Some(".VnTime"), codepage_hint: None };
+    let hinted_res = detect_encoding(short_legacy, Some(&meta_tcvn));
+    assert_eq!(hinted_res, DetectionResult::HighConfidence { encoding: LegacyEncoding::Tcvn3, evidence: EncodingEvidence::FontHint });
+
+    let decode_hinted = decode_text(short_legacy, &DecodeOptions { metadata: Some(&meta_tcvn), ..Default::default() });
+    assert_eq!(decode_hinted.as_deref(), Ok("TẦNG 1"));
+
+    // 3. Short valid UTF-8 string (< 16 bytes) is preserved as UTF-8
+    let short_utf8 = "TẦNG 1".as_bytes();
+    let decode_utf8 = decode_text(short_utf8, &DecodeOptions::default());
+    assert_eq!(decode_utf8.as_deref(), Ok("TẦNG 1"));
+    assert!(matches!(decode_utf8, Ok(Cow::Borrowed(_))));
+}
+
+#[test]
+fn test_font_hint_case_insensitive_normalization() {
+    let variants = [
+        (".vntime", LegacyEncoding::Tcvn3),
+        (".VNTIME", LegacyEncoding::Tcvn3),
+        (".VnTime.ttf", LegacyEncoding::Tcvn3),
+        (".vntimeh", LegacyEncoding::Tcvn3H),
+        (".VNTIMEH.SHX", LegacyEncoding::Tcvn3H),
+        ("vni-times", LegacyEncoding::Vni),
+        ("VNI-TIMES", LegacyEncoding::Vni),
+        ("vni-helve.otf", LegacyEncoding::Vni),
+        ("vtime", LegacyEncoding::Vni),
+        ("vhelv", LegacyEncoding::Vni),
+    ];
+    for (font, expected) in variants {
+        assert_eq!(is_vietnamese_font(font), Some(expected), "failed for font: {font}");
+        let meta = EncodingMetadata { font_name: Some(font), codepage_hint: None };
+        let res = detect_encoding(b"dummy text", Some(&meta));
+        assert_eq!(
+            res,
+            DetectionResult::HighConfidence { encoding: expected, evidence: EncodingEvidence::FontHint },
+            "failed detection for font: {font}"
+        );
+    }
+}

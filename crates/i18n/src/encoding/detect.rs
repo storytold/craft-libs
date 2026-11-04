@@ -340,6 +340,13 @@ pub fn detect_encoding(input: &[u8], metadata: Option<&EncodingMetadata<'_>>) ->
         }
     }
 
+    // Short-String Invariant (< 16 bytes): strings shorter than 16 bytes automatically disable
+    // statistical byte-frequency heuristics to prevent false-positive guessing. Short strings rely
+    // strictly on the Evidence Hierarchy (Valid UTF-8 or FontHint / Metadata).
+    if input.len() < 16 {
+        return DetectionResult::Unknown;
+    }
+
     if let Ok(s) = std::str::from_utf8(input) {
         detect_encoding_from_str(s)
     } else {
