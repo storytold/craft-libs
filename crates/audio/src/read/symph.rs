@@ -16,7 +16,7 @@ use symphonia::core::errors::Error as SymError;
 use symphonia::core::formats::probe::{Hint, ProbeOptions, ProbeableFormat, Score, Scoreable};
 use symphonia::core::formats::{FormatOptions, FormatReader, SeekMode, SeekTo, Track};
 use symphonia::core::io::{MediaSourceStream, MediaSourceStreamOptions, ScopedStream};
-use symphonia::core::meta::{MetadataOptions, RawValue};
+use symphonia::core::meta::MetadataOptions;
 use symphonia::core::units::{TimeBase, Timestamp};
 
 use super::id3v2_len;
@@ -81,10 +81,20 @@ fn guarded<T>(f: impl FnOnce() -> Result<T>) -> Result<T> {
     catch_unwind(AssertUnwindSafe(f)).unwrap_or_else(|_| Err(AudioError::Malformed("decoder failed on malformed input".into())))
 }
 
-/// What [`open`] found: a reader (with the layout of a FLAC stream), or a stream that holds no
-/// audio frames and has no reader.
+/// What symphonia's FLAC and Ogg readers leave out about a file's layout.
+enum FlacLayouts {
+    /// Not a FLAC file or an Ogg file.
+    Unknown,
+    /// A FLAC file's layout.
+    File(ChannelLayout),
+    /// The channel masks of an Ogg file's FLAC streams, by serial (symphonia's track ID). The tags
+    /// its reader collects do not say which track they are from.
+    Ogg(Vec<(u32, u32)>),
+}
+
+/// What [`open`] found: a reader, or a stream that holds no audio frames and has no reader.
 enum Opened {
-    Reader(Box<dyn FormatReader>, Option<ChannelLayout>),
+    Reader(Box<dyn FormatReader>, FlacLayouts),
     Empty(AudioInfo),
 }
 
@@ -364,6 +374,8 @@ fn open(bytes: Cow<'_, [u8]>, detected: Option<Container>) -> Result<Opened> {
         Precheck::Flac(expected, layout) => (Precheck::Checked(expected), layout),
         checked => (checked, None),
     };
+    let body = bytes.get(start..).unwrap_or_default();
+    let ogg_masks = craft_media::ogg::sniff(body).then(|| super::flac::ogg_channel_masks(body));
     // symphonia reads from an owned stream: a borrowed buffer is copied once, a buffer read from
     // a shared source is moved in.
     let mut mss = MediaSourceStream::new(Box::new(Cursor::new(bytes.into_owned())), MediaSourceStreamOptions::default());
@@ -385,7 +397,12 @@ fn open(bytes: Cow<'_, [u8]>, detected: Option<Container>) -> Result<Opened> {
         }
         _ => {}
     }
-    Ok(Opened::Reader(reader, flac_layout.filter(|_| probed == "flac")))
+    let layouts = match (flac_layout.filter(|_| probed == "flac"), ogg_masks) {
+        (Some(layout), _) => FlacLayouts::File(layout),
+        (None, Some(masks)) => FlacLayouts::Ogg(masks),
+        _ => FlacLayouts::Unknown,
+    };
+    Ok(Opened::Reader(reader, layouts))
 }
 
 /// The codec symphonia reports, as a [`CodecId`].
@@ -443,21 +460,6 @@ fn layout_of(channels: Option<&Channels>) -> ChannelLayout {
         }
         Some(c) => ChannelLayout::unordered(crate::layout::count(c.count())),
         None => ChannelLayout::unordered(0),
-    }
-}
-
-/// The channel mask comment among the tags the reader has read.
-fn metadata_channel_mask(reader: &mut dyn FormatReader) -> Option<u32> {
-    let mut metadata = reader.metadata();
-    loop {
-        let mask = metadata.current()?.media.tags.iter().find_map(|t| match &t.raw.value {
-            RawValue::String(value) => super::flac::comment_mask(t.raw.key.as_bytes(), value.as_bytes()),
-            _ => None,
-        });
-        if mask.is_some() {
-            return mask;
-        }
-        metadata.pop()?;
     }
 }
 
@@ -562,8 +564,8 @@ impl Symph {
     /// Open audio track `track` (the first when `None`) of the file in `bytes`.
     pub(crate) fn open(bytes: Cow<'_, [u8]>, detected: Option<Container>, track: Option<usize>) -> Result<Symph> {
         guarded(move || {
-            let (mut reader, flac_layout) = match open(bytes, detected)? {
-                Opened::Reader(reader, layout) => (reader, layout),
+            let (reader, flac_layouts) = match open(bytes, detected)? {
+                Opened::Reader(reader, layouts) => (reader, layouts),
                 Opened::Empty(info) => {
                     // a stream with no audio still has one track, as WAV and AIFF do
                     if let Some(n) = track.filter(|&n| n > 0) {
@@ -586,10 +588,13 @@ impl Symph {
                 }
             };
             let (track_id, mut info) = info_of(reader.as_ref(), detected, track)?;
-            if let Some(layout) = flac_layout.filter(|l| l.channels() == info.channels) {
-                info.layout = layout;
-            } else if info.codec == CodecId::Flac && info.container == Container::Ogg {
-                info.layout = super::flac::layout_from(metadata_channel_mask(reader.as_mut()), info.channels);
+            match flac_layouts {
+                FlacLayouts::File(layout) if layout.channels() == info.channels => info.layout = layout,
+                FlacLayouts::Ogg(masks) if info.codec == CodecId::Flac => {
+                    let mask = masks.iter().find(|(serial, _)| *serial == track_id).map(|&(_, mask)| mask);
+                    info.layout = super::flac::layout_from(mask, info.channels);
+                }
+                _ => {}
             }
             let t = reader.tracks().iter().find(|t| t.id == track_id).ok_or_else(|| AudioError::Malformed("track vanished".into()))?;
             let params = audio_params(t).cloned().ok_or_else(|| AudioError::Malformed("track vanished".into()))?;

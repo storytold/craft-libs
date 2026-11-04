@@ -243,10 +243,12 @@ fn layouts_decoders_would_not_assume_are_recorded() {
 fn ogg_flac_reads_the_mask_comment() {
     use crate::ChannelLayout;
     let Some(ff) = ffmpeg() else { return };
-    let cases: [(&str, &str, &[&str], u16, u32); 3] = [
+    let cases: [(&str, &str, &[&str], u16, u32); 5] = [
         ("ogg-mask", "aevalsrc=0|0|0|0:c=4c:d=0.1:s=48000", &["-metadata", "WAVEFORMATEXTENSIBLE_CHANNEL_MASK=0x0107"], 4, 0x107),
         ("ogg-5.1", "aevalsrc=0|0|0|0|0|0:c=5.1:d=0.1:s=48000", &[], 6, 0x60F),
         ("ogg-stereo", "aevalsrc=0|0:c=stereo:d=0.1:s=48000", &["-metadata", "TITLE=x"], 2, 0x3),
+        ("ogg-6.1", "aevalsrc=0|0|0|0|0|0|0:c=6.1:d=0.1:s=48000", &[], 7, 0x70F),
+        ("ogg-zero-mask", "aevalsrc=0|0|0|0|0|0:c=5.1:d=0.1:s=48000", &["-metadata", "WAVEFORMATEXTENSIBLE_CHANNEL_MASK=0x0"], 6, 0),
     ];
     for (name, source, extra, channels, mask) in cases {
         let path = common::fixture_subdir("flac").join(format!("{name}.oga"));
@@ -261,6 +263,34 @@ fn ogg_flac_reads_the_mask_comment() {
         let expected = ChannelLayout::from_mask_and_channels(mask, channels);
         assert_eq!(crate::probe(&bytes, None).unwrap().layout, expected, "probe {name}");
         assert_eq!(crate::decode(&bytes, None).unwrap().0.layout, expected, "decode {name}");
+    }
+}
+
+/// Each track of an Ogg file has its own mask comment. The tracks are told apart by their audio,
+/// because the track order follows the serial numbers ffmpeg picks at random.
+#[cfg(feature = "symphonia")]
+#[test]
+fn ogg_flac_tracks_read_their_own_mask_comments() {
+    use crate::{ChannelLayout, DecodeOptions};
+    let Some(ff) = ffmpeg() else { return };
+    let path = common::fixture_subdir("flac").join("ogg-two-masks.oga");
+    let status = Command::new(&ff)
+        .args(["-v", "error", "-y", "-f", "lavfi", "-i", "aevalsrc=0.5|0.5|0.5|0.5:c=4c:d=0.1:s=48000"])
+        .args(["-f", "lavfi", "-i", "aevalsrc=0.25|0.25|0.25|0.25:c=4c:d=0.1:s=48000"])
+        .args(["-map", "0", "-map", "1", "-c:a", "flac", "-f", "ogg"])
+        .args(["-metadata:s:a:0", "WAVEFORMATEXTENSIBLE_CHANNEL_MASK=0x0107", "-metadata:s:a:1", "WAVEFORMATEXTENSIBLE_CHANNEL_MASK=0x000F"])
+        .arg(&path)
+        .status()
+        .unwrap();
+    assert!(status.success());
+    let bytes = std::fs::read(&path).unwrap();
+    for track in [0, 1] {
+        let opts = DecodeOptions::default().with_track(track);
+        let (info, buf) = crate::decode_with(&bytes, None, &opts).unwrap();
+        let mask = if buf.channels[0][0] > 0.4 { 0x107 } else { 0xF };
+        let expected = ChannelLayout::from_mask_and_channels(mask, 4);
+        assert_eq!(info.layout, expected, "decode track {track}");
+        assert_eq!(crate::probe_with(&bytes, None, &opts).unwrap().layout, expected, "probe track {track}");
     }
 }
 

@@ -1,5 +1,7 @@
 //! FLAC metadata checks run before symphonia decodes a stream (RFC 9639 metadata blocks).
 
+use craft_media::ogg;
+
 use crate::pcm::{be_u32, le_u32};
 use crate::{AudioError, AudioInfo, ChannelLayout, CodecId, Container, Result, SampleFormat};
 
@@ -95,15 +97,6 @@ pub(crate) fn layout_from(mask: Option<u32>, channels: u16) -> ChannelLayout {
     ChannelLayout::from_mask_and_channels(mask, channels)
 }
 
-/// The mask in a comment, when its key is the channel mask's and its value a `0x` hexadecimal number.
-pub(crate) fn comment_mask(key: &[u8], value: &[u8]) -> Option<u32> {
-    if !key.eq_ignore_ascii_case(b"WAVEFORMATEXTENSIBLE_CHANNEL_MASK") {
-        return None;
-    }
-    let hex = value.strip_prefix(b"0x").or_else(|| value.strip_prefix(b"0X"))?;
-    u32::from_str_radix(std::str::from_utf8(hex).ok()?, 16).ok()
-}
-
 /// The value of the first `WAVEFORMATEXTENSIBLE_CHANNEL_MASK` comment that holds a `0x` hexadecimal
 /// number, in the stream at `at`.
 fn channel_mask(b: &[u8], at: usize) -> Option<u32> {
@@ -120,6 +113,26 @@ fn channel_mask(b: &[u8], at: usize) -> Option<u32> {
         }
         pos = body.checked_add(len)?;
     }
+}
+
+/// The mask in a comment, when its key is the channel mask's and its value a `0x` hexadecimal number.
+fn comment_mask(key: &[u8], value: &[u8]) -> Option<u32> {
+    if !key.eq_ignore_ascii_case(b"WAVEFORMATEXTENSIBLE_CHANNEL_MASK") {
+        return None;
+    }
+    let hex = value.strip_prefix(b"0x").or_else(|| value.strip_prefix(b"0X"))?;
+    u32::from_str_radix(std::str::from_utf8(hex).ok()?, 16).ok()
+}
+
+/// The channel mask comment of each FLAC stream that has one in the Ogg file `b`, by serial.
+pub(crate) fn ogg_channel_masks(b: &[u8]) -> Vec<(u32, u32)> {
+    let Ok(file) = ogg::open(b) else { return Vec::new() };
+    let comments = |s: &ogg::Stream| {
+        // After the first packet, each header packet is a metadata block with its 4-byte header.
+        let block = s.headers.iter().skip(1).find(|h| h.first().is_some_and(|t| t & 0x7f == 4))?;
+        comments_mask(block.get(4..)?)
+    };
+    file.streams.iter().filter(|s| s.codec == ogg::Codec::Flac).filter_map(|s| Some((s.serial, comments(s)?))).collect()
 }
 
 /// The channel mask in a Vorbis comment block's body.
