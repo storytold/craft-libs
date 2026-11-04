@@ -86,7 +86,9 @@ jobs:
   test:
     timeout-minutes: 20
     name: Audio tests with ffmpeg oracles
-    runs-on: ubuntu-latest
+    # Pinned for the ffmpeg its apt ships (8.0): the oracle's files come from this ffmpeg, and
+    # ffmpeg 6, on ubuntu-24.04, writes MP2 and E-AC-3 in Matroska with early ends.
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
