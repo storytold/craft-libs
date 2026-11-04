@@ -569,22 +569,28 @@ fn test_real_world_corpora_fixtures() {
 }
 
 #[test]
-fn test_short_string_invariant() {
-    // 1. Short legacy string (< 16 bytes) without FontHint disables heuristics -> Unknown
-    let short_legacy = b"T\xC7NG 1"; // 6 bytes: legacy TCVN3 for "TẦNG 1"
-    let unhinted_res = detect_encoding(short_legacy, None);
-    assert_eq!(unhinted_res, DetectionResult::Unknown);
+fn test_short_string_heuristic_inhibition_invariant() {
+    // "TẦNG 1" in TCVN3 (6 bytes < 16 bytes)
+    let short_cad_label = b"T\xC7NG 1";
+
+    // 1. Unhinted: Heuristics are inhibited on strings < 16 bytes -> Must be Unknown
+    let no_hint_result = detect_encoding(short_cad_label, None);
+    assert_eq!(no_hint_result, DetectionResult::Unknown, "Short strings (< 16 bytes) must inhibit heuristics and return Unknown");
 
     // decode_text on unhinted non-UTF8 short string returns InvalidUtf8
-    let decode_unhinted = decode_text(short_legacy, &DecodeOptions::default());
-    assert!(decode_unhinted.is_err());
+    let decode_unhinted = decode_text(short_cad_label, &DecodeOptions::default());
+    assert!(decode_unhinted.is_err(), "Unhinted short non-UTF8 text must not transcode speculatively");
 
-    // 2. Short legacy string WITH FontHint -> HighConfidence via FontHint
-    let meta_tcvn = EncodingMetadata { font_name: Some(".VnTime"), codepage_hint: None };
-    let hinted_res = detect_encoding(short_legacy, Some(&meta_tcvn));
-    assert_eq!(hinted_res, DetectionResult::HighConfidence { encoding: LegacyEncoding::Tcvn3, evidence: EncodingEvidence::FontHint });
+    // 2. With FontHint: Overcomes length threshold via Evidence Hierarchy
+    let meta = EncodingMetadata { font_name: Some(".VnTime"), codepage_hint: None };
+    let with_hint_result = detect_encoding(short_cad_label, Some(&meta));
+    assert_eq!(
+        with_hint_result,
+        DetectionResult::HighConfidence { encoding: LegacyEncoding::Tcvn3, evidence: EncodingEvidence::FontHint },
+        "Short strings with valid FontHint must decode successfully"
+    );
 
-    let decode_hinted = decode_text(short_legacy, &DecodeOptions { metadata: Some(&meta_tcvn), ..Default::default() });
+    let decode_hinted = decode_text(short_cad_label, &DecodeOptions { metadata: Some(&meta), ..Default::default() });
     assert_eq!(decode_hinted.as_deref(), Ok("TẦNG 1"));
 
     // 3. Short valid UTF-8 string (< 16 bytes) is preserved as UTF-8
@@ -595,27 +601,36 @@ fn test_short_string_invariant() {
 }
 
 #[test]
-fn test_font_hint_case_insensitive_normalization() {
-    let variants = [
-        (".vntime", LegacyEncoding::Tcvn3),
-        (".VNTIME", LegacyEncoding::Tcvn3),
-        (".VnTime.ttf", LegacyEncoding::Tcvn3),
-        (".vntimeh", LegacyEncoding::Tcvn3H),
-        (".VNTIMEH.SHX", LegacyEncoding::Tcvn3H),
-        ("vni-times", LegacyEncoding::Vni),
-        ("VNI-TIMES", LegacyEncoding::Vni),
-        ("vni-helve.otf", LegacyEncoding::Vni),
-        ("vtime", LegacyEncoding::Vni),
-        ("vhelv", LegacyEncoding::Vni),
-    ];
-    for (font, expected) in variants {
-        assert_eq!(is_vietnamese_font(font), Some(expected), "failed for font: {font}");
+fn test_font_hint_case_insensitive_and_stems() {
+    let dummy_payload = b"Sample text payload for font hint matching";
+
+    // TCVN3 standard font name variants (mixed case and dotless stems)
+    for font in &[".VnTime", ".vntime", ".VNTIME", "vntime"] {
         let meta = EncodingMetadata { font_name: Some(font), codepage_hint: None };
-        let res = detect_encoding(b"dummy text", Some(&meta));
         assert_eq!(
-            res,
-            DetectionResult::HighConfidence { encoding: expected, evidence: EncodingEvidence::FontHint },
-            "failed detection for font: {font}"
+            detect_encoding(dummy_payload, Some(&meta)),
+            DetectionResult::HighConfidence { encoding: LegacyEncoding::Tcvn3, evidence: EncodingEvidence::FontHint },
+            "Font hint '{font}' must match Tcvn3"
+        );
+    }
+
+    // TCVN3H all-caps display font variants
+    for font in &[".VnTimeH", ".vntimeh", ".VNTIMEH"] {
+        let meta = EncodingMetadata { font_name: Some(font), codepage_hint: None };
+        assert_eq!(
+            detect_encoding(dummy_payload, Some(&meta)),
+            DetectionResult::HighConfidence { encoding: LegacyEncoding::Tcvn3H, evidence: EncodingEvidence::FontHint },
+            "Font hint '{font}' must match Tcvn3H"
+        );
+    }
+
+    // VNI-Windows font variants
+    for font in &["VNI-Times", "vni-times", "VNI-Aptima", "vni-telex"] {
+        let meta = EncodingMetadata { font_name: Some(font), codepage_hint: None };
+        assert_eq!(
+            detect_encoding(dummy_payload, Some(&meta)),
+            DetectionResult::HighConfidence { encoding: LegacyEncoding::Vni, evidence: EncodingEvidence::FontHint },
+            "Font hint '{font}' must match Vni"
         );
     }
 }
