@@ -1,0 +1,69 @@
+[package]
+name = "craft-audio"
+description = "Audio file I/O and codecs: WAV/AIFF read and write."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
+
+[lints]
+workspace = true
+
+[features]
+# Probe and decode files: WAV and AIFF natively; PCM in MP4 and Matroska through craft-media's
+# demuxers; AAC, MP1/MP2/MP3, FLAC, ALAC, Vorbis, CAF, ADPCM, A-law and µ-law through symphonia.
+decode = ["decode-native", "symphonia"]
+# `decode` without symphonia: only the formats with a native decoder (others are Unsupported).
+decode-native = ["craft-media/isobmff", "craft-media/matroska", "craft-media/ogg", "dep:log"]
+# The symphonia fallback for the formats with no native decoder yet.
+symphonia = ["decode-native", "dep:symphonia"]
+# Every encoder: the lossless file writers.
+encode = ["lossless-encode"]
+# Encode WAV/BWF/RF64 and AIFF/AIFF-C files.
+lossless-encode = ["pcm-encode"]
+# Encode WAV/BWF/RF64 and AIFF/AIFF-C files.
+pcm-encode = []
+# Multi-resolution waveform overviews (`peaks`).
+peaks = []
+# Serialize and Deserialize for the shared types.
+serde = ["dep:serde", "craft-media/serde"]
+
+[dependencies]
+craft-media = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true, optional = true }
+log = { version = "0.4", optional = true }
+symphonia = { version = "0.6.1", optional = true, default-features = false, features = ["mp1", "mp2", "mp3", "flac", "vorbis", "ogg", "wav", "pcm", "aiff", "isomp4", "aac", "alac", "adpcm", "caf", "mkv"] }
+
+[dev-dependencies]
+craft-media-testkit = { workspace = true }
+proptest = { workspace = true }
+serde_json = { workspace = true }
+
+[[test]]
+name = "audio"
+required-features = ["decode", "lossless-encode", "peaks"]
+
+[[test]]
+name = "codecs"
+required-features = ["decode", "encode"]
+
+[[example]]
+name = "info"
+required-features = ["decode"]
+
+[[example]]
+name = "stream"
+required-features = ["decode"]
+
+[[example]]
+name = "packets"
+required-features = ["decode"]
+
+[[example]]
+name = "encode"
+required-features = ["lossless-encode"]
