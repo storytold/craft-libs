@@ -20,7 +20,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let wav = encode(&surround, &EncodeOptions::default().with_layout(ChannelLayout::SURROUND_5_1_SIDE))?;
     std::fs::write(dir.join("tone-5.1.wav"), wav)?;
 
-    // Streamed: the same bytes, block by block into a file.
+    // Streamed: the bytes `encode` would give, block by block into a file.
     let opts = EncodeOptions::new(EncodeFormat::Flac);
     let mut enc = FileEncoder::new(std::fs::File::create(dir.join("tone.flac"))?, &opts, rate as u32, 2)?;
     for chunk in tone.chunks(4096) {

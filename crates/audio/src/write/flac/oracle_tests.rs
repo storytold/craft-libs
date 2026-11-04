@@ -164,8 +164,8 @@ fn levels_and_block_sizes_trade_time_for_size() {
         let Some(size) = round_trip(&format!("level{level}"), &planar, cfg, 48_000) else { return };
         sizes.push(size);
     }
-    // the effortful levels are never larger than the fastest, and all beat PCM
-    assert!(sizes[8] <= sizes[0] && sizes[5] <= sizes[0], "{sizes:?}");
+    // linear prediction beats the fastest level by a wide margin, and all beat PCM
+    assert!(sizes[8] <= sizes[5] && sizes[5] < sizes[0] * 4 / 5, "{sizes:?}");
     assert!(sizes.iter().all(|&s| s < 48_000 * 4), "{sizes:?}");
     for bs in [16u16, 192, 1152, 4608, 65_535] {
         let cfg = EncoderConfig { block_size: bs, ..EncoderConfig::new(48_000, 2, 16) };
@@ -268,7 +268,9 @@ fn opposite_polarity_stereo_round_trips() {
 
 #[test]
 fn streaminfo_states_the_block_and_frame_sizes() {
-    let planar = [signal("music", 10_000, 16, 21), signal("noise", 10_000, 16, 22)];
+    // silence in the middle: the smallest frame is neither the first nor the last
+    let channel = |seed| [signal("noise", 4096, 16, seed), signal("silence", 4096, 16, seed), signal("noise", 1000, 16, seed)].concat();
+    let planar = [channel(21), channel(22)];
     let mut enc = Encoder::new(EncoderConfig::new(48_000, 2, 16)).unwrap();
     let parts: Vec<&[i32]> = planar.iter().map(Vec::as_slice).collect();
     let mut sizes: Vec<usize> = enc.encode_frames(&parts).unwrap().iter().map(Vec::len).collect();
@@ -278,4 +280,38 @@ fn streaminfo_states_the_block_and_frame_sizes() {
     assert_eq!(&si[..4], &[0x10, 0x00, 0x10, 0x00]);
     assert_eq!(u24(&si[4..7]), sizes.iter().copied().min().unwrap());
     assert_eq!(u24(&si[7..10]), sizes.iter().copied().max().unwrap());
+}
+
+/// Frame numbers count up from 0; a decoder that seeks depends on them, though one that reads from
+/// the start does not.
+#[test]
+fn frames_are_numbered_in_order() {
+    let planar = [signal("music", 4096 * 10, 16, 31)];
+    let mut enc = Encoder::new(EncoderConfig::new(48_000, 1, 16)).unwrap();
+    let frames = enc.encode_frames(&[&planar[0]]).unwrap();
+    let numbers: Vec<u8> = frames.iter().map(|f| f[4]).collect();
+    assert_eq!(numbers, (0..10).collect::<Vec<u8>>());
+}
+
+/// Two equal channels cost little more than one: the side channel is all zeros.
+#[test]
+fn stereo_decorrelation_removes_a_duplicated_channel() {
+    let x = signal("music", 20_000, 16, 41);
+    let mono = encode(std::slice::from_ref(&x), EncoderConfig::new(48_000, 1, 16), 4096).unwrap();
+    let stereo = encode(&[x.clone(), x], EncoderConfig::new(48_000, 2, 16), 4096).unwrap();
+    assert!(stereo.len() < mono.len() * 11 / 10, "stereo {} mono {}", stereo.len(), mono.len());
+}
+
+#[test]
+fn the_frame_limit_stops_a_write_before_it_reaches_the_sink() {
+    use super::Writer;
+    use crate::{AudioError, BitDepth};
+    let mut w = Writer::new(std::io::Cursor::new(Vec::new()), 1, 48_000, BitDepth::Int16, false, None).unwrap();
+    let header = w.out.get_ref().len();
+    w.frames = (1 << 36) - 2;
+    assert!(matches!(w.write(&[[0.0f32; 4096]], 4096), Err(AudioError::TooLarge(_))));
+    assert_eq!(w.out.get_ref().len(), header);
+    // refused, not failed: what fits can still be written
+    assert!(w.write(&[[0.0f32; 1]], 1).is_ok());
+    assert!(matches!(w.write(&[[0.0f32; 1]], 1), Err(AudioError::TooLarge(_))));
 }

@@ -271,8 +271,8 @@ pub struct EncodeOptions {
     /// the usual layout for the channel count. WAV stores it as `dwChannelMask`, FLAC as a
     /// `WAVEFORMATEXTENSIBLE_CHANNEL_MASK` comment when decoders would assume another layout for
     /// the count (they read 5 and 6 channels with side surrounds and 7 as 6.1 with sides, so the
-    /// usual layouts for those counts get one); AIFF has a fixed channel order and ignores it. It
-    /// must have as many channels as the audio.
+    /// usual layouts for those counts get one; see the README's limits); AIFF has a fixed channel
+    /// order and ignores it. It must have as many channels as the audio.
     pub layout: Option<ChannelLayout>,
     /// Write WAV in the RF64 layout even below 4 GiB (WAV only; ignored for other formats).
     pub force_rf64: bool,

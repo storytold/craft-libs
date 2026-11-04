@@ -292,6 +292,38 @@ mod tests {
         assert_eq!(choose(&[7; 100], 16, Effort::level(5)), (Subframe::Constant(7), 24));
     }
 
+    /// Two tones and a little noise, from a fixed seed.
+    fn tones(n: usize) -> Vec<i32> {
+        let mut seed = 1u32;
+        (0..n)
+            .map(|i| {
+                seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                let t = i as f64;
+                let noise = f64::from(seed >> 24) - 128.0;
+                ((t * 0.31).sin() * 9000.0 + (t * 0.77).sin() * 6000.0 + noise * 0.2) as i32
+            })
+            .collect()
+    }
+
+    #[test]
+    fn linear_prediction_beats_the_fixed_predictors() {
+        let x = tones(4096);
+        let effort = Effort::level(5);
+        let (_, lpc) = choose(&x, 16, effort);
+        let (_, fixed) = choose(&x, 16, Effort { max_lpc_order: 0, ..effort });
+        assert!(lpc < fixed * 4 / 5, "lpc {lpc} fixed {fixed}");
+    }
+
+    #[test]
+    fn rice_partitions_follow_a_change_in_loudness() {
+        // quiet, then loud: one Rice parameter cannot suit both
+        let x: Vec<i32> = tones(4096).iter().enumerate().map(|(i, &s)| if i < 2048 { s / 256 } else { s }).collect();
+        let effort = Effort::level(5);
+        let (_, partitioned) = choose(&x, 16, effort);
+        let (_, whole) = choose(&x, 16, Effort { max_partition_order: 0, ..effort });
+        assert!(partitioned < whole * 19 / 20, "partitioned {partitioned} whole {whole}");
+    }
+
     #[test]
     fn lpc_residual_inverts() {
         let x: Vec<i32> = (0..500).map(|i| ((i as f64 * 0.1).sin() * 1000.0) as i32).collect();

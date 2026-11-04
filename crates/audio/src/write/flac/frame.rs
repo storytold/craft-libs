@@ -211,6 +211,11 @@ mod tests {
     }
 
     #[test]
+    fn sample_sizes_are_named_in_the_header_except_32_bits() {
+        assert_eq!([8, 12, 16, 20, 24, 32].map(sample_size_code), [1, 2, 4, 5, 6, 0]);
+    }
+
+    #[test]
     fn sample_rates_outside_the_table_are_named_in_the_header() {
         assert_eq!(sample_rate_code(48_000), (10, None));
         assert_eq!(sample_rate_code(64_000), (12, Some((64, 8))));

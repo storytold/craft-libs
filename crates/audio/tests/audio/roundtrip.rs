@@ -123,7 +123,8 @@ fn flac_rejects_unsupported_layouts() {
     assert!(encode(&sine(48_000, 2, 10), &opts).is_err());
     let opts = opts.clone().with_bit_depth(BitDepth::Int16);
     assert!(encode(&sine(48_000, 9, 10), &opts).is_err());
-    assert!(encode(&sine(700_000, 1, 10), &opts).is_err());
+    assert!(encode(&sine(655_351, 1, 10), &opts).is_err());
+    assert!(encode(&sine(655_350, 1, 10), &opts).is_ok());
     // Tiny buffers still encode and decode.
     let one = sine(48_000, 2, 1);
     let (_, out) = decode(&encode(&one, &opts).unwrap(), None).unwrap();

@@ -21,7 +21,10 @@ fn streamed(buf: &AudioBuffer, opts: &EncodeOptions) -> Vec<u8> {
         enc.write(&block, len).unwrap();
         start += len;
     }
-    enc.finish().unwrap().into_inner()
+    let out = enc.finish().unwrap();
+    // the sink is left at the end of the file
+    assert_eq!(out.position(), out.get_ref().len() as u64);
+    out.into_inner()
 }
 
 #[test]
@@ -35,6 +38,7 @@ fn streamed_files_match_whole_buffer_encodes() {
         (EncodeFormat::Aiff, BitDepth::Float32, false, None, None),
         (EncodeFormat::Flac, BitDepth::Int16, true, None, None),
         (EncodeFormat::Flac, BitDepth::Int24, false, None, None),
+        (EncodeFormat::Flac, BitDepth::Int16, false, None, Some(ChannelLayout::SURROUND_5_1_SIDE)),
     ];
     for (format, bit_depth, dither, bwf, layout) in cases {
         let base = EncodeOptions::new(format).with_bit_depth(bit_depth).with_dither(dither);
