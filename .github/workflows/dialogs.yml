@@ -1,0 +1,31 @@
+name: Dialogs
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['crates/dialogs/**', 'Cargo.toml', 'Cargo.lock', '.github/workflows/dialogs.yml']
+  pull_request:
+    paths: ['crates/dialogs/**', 'Cargo.toml', 'Cargo.lock', '.github/workflows/dialogs.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  dialogs:
+    timeout-minutes: 15
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # The token isn't needed after checkout; cargo runs build scripts and proc macros from
+          # dependencies, so don't leave it in .git/config for that third-party code to read.
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          components: clippy
+          # The macOS code is linted on Linux: it compiles for the target without the SDK.
+          targets: aarch64-apple-darwin
+      - run: cargo clippy -p craft-dialogs --all-targets --locked -- -D warnings
+      - run: cargo clippy -p craft-dialogs --target aarch64-apple-darwin --locked -- -D warnings
+      - run: cargo test -p craft-dialogs --locked

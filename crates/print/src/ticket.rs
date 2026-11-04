@@ -304,6 +304,202 @@ pub(crate) fn verify_job_options(xml: &str, job: &Job, pages: usize, offered: Of
     Ok(())
 }
 
+/// XML Schema instance namespace (`xsi:type`).
+const NS_XSI: &str = "http://www.w3.org/2001/XMLSchema-instance";
+/// XML Schema datatypes namespace (`xsd:integer`, `xsd:QName`).
+const NS_XSD: &str = "http://www.w3.org/2001/XMLSchema";
+/// The namespace XML itself binds to the `xml` prefix.
+const NS_XML: &str = "http://www.w3.org/XML/1998/namespace";
+
+/// A PrintTicket that sets nothing. Merged and validated by a driver it comes back as the
+/// driver's own default ticket, which spells the driver's vendor namespaces the way the driver does.
+pub(crate) fn empty_ticket() -> String {
+    format!(r#"<psf:PrintTicket version="1" xmlns:psf="{NS_PSF}" xmlns:psk="{NS_PSK}" xmlns:xsi="{NS_XSI}" xmlns:xsd="{NS_XSD}"/>"#)
+}
+
+/// The (prefix, namespace) pairs the root element declares for namespaces other than the Print
+/// Schema's: the driver's vendor namespaces.
+fn vendor_prefixes(document: &roxmltree::Document<'_>) -> Vec<(String, String)> {
+    document
+        .root_element()
+        .namespaces()
+        .filter_map(|n| n.name().map(|prefix| (prefix.to_string(), n.uri().to_string())))
+        .filter(|(_, uri)| ![NS_PSF, NS_PSK, NS_XSI, NS_XSD, NS_XML].contains(&uri.as_str()))
+        .collect()
+}
+
+/// Whether every prefix in a `name` or `constrained` attribute or a QName value of the ticket is
+/// declared: the XML parser does not check a prefix inside an attribute value.
+fn prefixes_resolve(document: &roxmltree::Document<'_>) -> bool {
+    let unresolved = |element: roxmltree::Node<'_, '_>, value: &str| {
+        value.split_once(':').is_some_and(|(prefix, _)| element.lookup_namespace_uri(Some(prefix)).is_none())
+    };
+    !document.descendants().any(|node| {
+        if node.is_element() {
+            node.attributes().any(|a| a.namespace().is_none() && matches!(a.name(), "name" | "constrained") && unresolved(node, a.value()))
+        } else {
+            node.is_text() && node.parent().is_some_and(|p| is_qname_value(p) && node.text().is_some_and(|t| unresolved(p, t.trim())))
+        }
+    })
+}
+
+/// A `Value` whose text is a qualified name (`xsi:type="xsd:QName"`): its prefix is a namespace's.
+fn is_qname_value(node: roxmltree::Node<'_, '_>) -> bool {
+    node.attribute((NS_XSI, "type")).is_some_and(|t| t.rsplit(':').next() == Some("QName"))
+}
+
+/// The start of every `xmlns:prefix` declaration's prefix in the start tag that begins at
+/// `start`, with the prefix.
+fn declared_prefixes(xml: &str, start: usize) -> Vec<(usize, String)> {
+    let mut found = Vec::new();
+    let mut quote = None;
+    let mut at = start;
+    let mut previous = None;
+    for c in xml.get(start..).unwrap_or_default().chars() {
+        match quote {
+            Some(q) if c == q => quote = None,
+            Some(_) => {}
+            None if c == '"' || c == '\'' => quote = Some(c),
+            None if c == '>' => break,
+            None => {}
+        }
+        if quote.is_none()
+            && c == 'x'
+            && previous.is_some_and(char::is_whitespace)
+            && let Some(name) = xml.get(at..).and_then(|rest| rest.strip_prefix("xmlns:"))
+        {
+            let prefix: String = name.chars().take_while(|c| !c.is_whitespace() && *c != '=').collect();
+            found.push((at + "xmlns:".len(), prefix));
+        }
+        previous = Some(c);
+        at += c.len_utf8();
+    }
+    found
+}
+
+/// `ticket` with the driver's own prefix for each of the driver's vendor namespaces, where the
+/// ticket spells one differently; `None` when nothing needs changing, or when it can't be done
+/// safely (then the ticket stays as it is). `driver` is the driver's own ticket
+/// ([`empty_ticket`] validated).
+///
+/// Windows' ticket merge names a vendor namespace with a prefix of its own (`ns0000`) as soon as the
+/// merged ticket uses a name from it, such as the driver's own paper option from its capabilities.
+/// The prefix means nothing in XML, but some drivers' print pipelines read it as text: the job is
+/// accepted, then every page fails in the XPS print API (`0x80040003`, "No such interface
+/// supported"). A Brother driver names its namespace `brpsk` and fails with `ns0000`. Only the
+/// declarations and the vendor names in `name`/`constrained` attributes and QName values change.
+/// A ticket is left as it is when it redeclares one of the prefixes below its root, or has an
+/// element or attribute named in a namespace whose prefix would change.
+pub(crate) fn respell(ticket: &str, driver: &str) -> Option<String> {
+    let document = roxmltree::Document::parse(ticket).ok()?;
+    let own = vendor_prefixes(&roxmltree::Document::parse(driver).ok()?);
+    let declared = vendor_prefixes(&document);
+    let renames: Vec<(&str, &str)> = declared
+        .iter()
+        .filter_map(|(old, uri)| own.iter().find(|(_, u)| u == uri).map(|(new, _)| (old.as_str(), new.as_str())))
+        .filter(|(old, new)| old != new)
+        .collect();
+    if renames.is_empty() {
+        return None;
+    }
+    let renamed = |old: &str| renames.iter().find(|(o, _)| *o == old).map(|(_, new)| *new);
+    // Each prefix must still name one namespace; a swap of two (ns0000 and ns0001) is fine.
+    let mut after: Vec<&str> = document.root_element().namespaces().filter_map(|n| n.name()).map(|p| renamed(p).unwrap_or(p)).collect();
+    let declared_count = after.len();
+    after.sort_unstable();
+    after.dedup();
+    if after.len() != declared_count {
+        return None;
+    }
+    // Only the root's declarations are rewritten: an element below it that declares either prefix
+    // again would make a name mean something else once the prefixes change.
+    let touched = |prefix: &str| renames.iter().any(|(old, new)| prefix == *old || prefix == *new);
+    let redeclared = document
+        .descendants()
+        .filter(|n| n.is_element() && *n != document.root_element())
+        .any(|n| declared_prefixes(ticket, n.range().start).iter().any(|(_, prefix)| touched(prefix)));
+    if redeclared {
+        return None;
+    }
+    // Changing the root's declarations moves every name written with one of these prefixes, and only
+    // the `name`/`constrained` values and QName values are rewritten to follow. An element or attribute
+    // name (`<ns0000:Feature/>`, `ns0000:flag="1"`) would not follow: it would be left with an undeclared
+    // prefix, or, when two namespaces trade prefixes, quietly resolve to the other namespace. Names
+    // in a namespace whose prefix stays as it is are not affected.
+    let moved: Vec<&str> = document.root_element().namespaces().filter(|n| n.name().is_some_and(touched)).map(|n| n.uri()).collect();
+    let names_moved = document.descendants().filter(|n| n.is_element()).any(|n| {
+        n.tag_name().namespace().is_some_and(|uri| moved.contains(&uri))
+            || n.attributes().any(|a| a.namespace().is_some_and(|uri| moved.contains(&uri)))
+    });
+    if names_moved {
+        return None;
+    }
+    let respelled = |at: usize| {
+        let rest = ticket.get(at..)?;
+        renames.iter().find(|(old, _)| rest.strip_prefix(old).is_some_and(|r| r.starts_with(':'))).map(|(old, new)| (at, at + old.len(), *new))
+    };
+    let mut edits: Vec<(usize, usize, &str)> = Vec::new();
+    for (at, prefix) in declared_prefixes(ticket, document.root_element().range().start) {
+        if let Some(new) = renamed(&prefix) {
+            edits.push((at, at + prefix.len(), new));
+        }
+    }
+    for node in document.descendants() {
+        if node.is_element() {
+            for a in
+                node.attributes().filter(|a| (a.namespace().is_none() && matches!(a.name(), "name" | "constrained")) || a.namespace() == Some(NS_XSI))
+            {
+                edits.extend(respelled(a.range_value().start));
+            }
+        } else if node.is_text() && node.parent().is_some_and(is_qname_value) {
+            // A pretty-printed ticket puts whitespace before the value; the prefix starts after it.
+            let start = node.range().start;
+            let lead = ticket.get(start..).map_or(0, |t| t.len() - t.trim_start().len());
+            edits.extend(respelled(start + lead));
+        }
+    }
+    edits.sort_unstable_by_key(|(start, ..)| *start);
+    let mut out = String::with_capacity(ticket.len());
+    let mut copied = 0;
+    for (start, end, new) in edits {
+        out.push_str(ticket.get(copied..start)?);
+        out.push_str(new);
+        copied = end;
+    }
+    out.push_str(ticket.get(copied..)?);
+    // A last check on the result: it must parse, declare each namespace under the prefix wanted and
+    // resolve every prefix.
+    let check = roxmltree::Document::parse(&out).ok()?;
+    let mut now = vendor_prefixes(&check);
+    let mut wanted: Vec<(String, String)> = declared.iter().map(|(old, uri)| (renamed(old).unwrap_or(old).to_string(), uri.clone())).collect();
+    now.sort_unstable();
+    wanted.sort_unstable();
+    (now == wanted && prefixes_resolve(&check)).then_some(out)
+}
+
+/// Each vendor namespace that `ticket` declares under a prefix the driver does not declare it with,
+/// as (namespace, prefix in the ticket, prefix of the driver); empty when the ticket is spelled the
+/// way the driver spells it. `driver` is the driver's own ticket ([`empty_ticket`] validated).
+/// `None` when either does not parse.
+///
+/// For checking the ticket a job ends up with. [`respell`] returning `None` for it does not: that
+/// is also what it returns when it refused to change a ticket, which then stays as it is.
+#[cfg(test)]
+pub(crate) fn prefixes_unlike_the_drivers(ticket: &str, driver: &str) -> Option<Vec<(String, String, String)>> {
+    let own = vendor_prefixes(&roxmltree::Document::parse(driver).ok()?);
+    let declared = vendor_prefixes(&roxmltree::Document::parse(ticket).ok()?);
+    Some(
+        declared
+            .into_iter()
+            .filter(|pair| !own.contains(pair))
+            .filter_map(|(prefix, uri)| {
+                let (theirs, _) = own.iter().find(|(_, u)| *u == uri)?;
+                Some((uri, prefix, theirs.clone()))
+            })
+            .collect(),
+    )
+}
+
 /// The widest unprintable margin of the paper, in micrometres, from PrintCapabilities computed
 /// for the job's ticket (`PageImageableSize`). The largest of the four, so content centred inside
 /// it is clear of every edge whichever way the driver measures. `None` when the driver doesn't say.
@@ -394,6 +590,179 @@ mod tests {
         assert!(verify_ticket(&validated(letter, "Portrait", None), Some(letter), false).is_ok(), "a driver without scaling");
         assert!(verify_ticket(&validated((0, 279_400), "Portrait", None), None, false).is_err(), "a roll has no length");
         assert!(verify_ticket("<not xml", Some(letter), false).is_err());
+    }
+
+    /// The namespace of the Brother driver's own keywords.
+    const BROTHER: &str = "http://schemas.brother.info/mfc/printing/2006/11/printschemakeywords";
+
+    /// A Brother driver's ticket with its vendor namespace declared as `prefix`. The driver's own
+    /// spelling is `brpsk`; Windows' ticket merge returned `ns0000` for the same ticket, and the
+    /// printer then failed every page (`0x80040003`).
+    fn brother(prefix: &str) -> String {
+        format!(
+            r#"<psf:PrintTicket xmlns:psf="{NS_PSF}" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema" version="1" xmlns:psk="{NS_PSK}" xmlns:{prefix}="{BROTHER}"><psf:Feature name="psk:PageMediaSize"><psf:Option name="psk:NorthAmericaLetter"><psf:ScoredProperty name="psk:MediaSizeWidth"><psf:Value xsi:type="xsd:integer">215900</psf:Value></psf:ScoredProperty><psf:ScoredProperty name="psk:MediaSizeHeight"><psf:Value xsi:type="xsd:integer">279400</psf:Value></psf:ScoredProperty></psf:Option></psf:Feature><psf:Feature name="psk:PageOrientation"><psf:Option name="psk:Portrait"/></psf:Feature><psf:Property name="{prefix}:PageMediaSizeData"><psf:Property name="{prefix}:CustomUnitType"><psf:Value xsi:type="xsd:string">mm</psf:Value></psf:Property></psf:Property><psf:Feature name="{prefix}:JobPrintSpeed"><psf:Option name="{prefix}:PrinterDefault"/></psf:Feature><psf:ParameterInit name="{prefix}:Mode"><psf:Value xsi:type="xsd:QName">{prefix}:Fast</psf:Value></psf:ParameterInit><psf:ParameterInit name="{prefix}:Label"><psf:Value xsi:type="xsd:string">ns0000:text, not a name</psf:Value></psf:ParameterInit></psf:PrintTicket>"#
+        )
+    }
+
+    /// A QName value written after whitespace (a pretty-printed ticket) is respelled too.
+    #[test]
+    fn a_qname_value_after_whitespace_is_respelled() {
+        let spaced = |prefix: &str| brother(prefix).replace(&format!(">{prefix}:Fast<"), &format!(">\n  {prefix}:Fast\n<"));
+        assert_eq!(respell(&spaced("ns0000"), &brother("brpsk")), Some(spaced("brpsk")));
+    }
+
+    /// The ticket Windows returns (`ns0000`) gets the driver's own `brpsk` back, in the declaration, the names and the QName values, but not in text.
+    #[test]
+    fn a_vendor_namespace_gets_the_prefix_the_driver_declares_it_with() {
+        let merged = brother("ns0000");
+        assert_eq!(respell(&merged, &brother("brpsk")), Some(brother("brpsk")), "declaration, names and QName values; not the text");
+        assert_eq!(respell(&brother("brpsk"), &brother("brpsk")), None, "already the driver's");
+        assert_eq!(respell(&brother("brpsk"), &merged), Some(merged.clone()), "whatever the driver calls it");
+        // What the job's checks read is the same either way.
+        let letter = (215_900, 279_400);
+        assert_eq!(verify_ticket(&merged, Some(letter), false), Ok(letter));
+        assert_eq!(verify_ticket(&respell(&merged, &brother("brpsk")).unwrap(), Some(letter), false), Ok(letter));
+    }
+
+    /// A second vendor namespace, next to [`BROTHER`].
+    const OTHER: &str = "http://example.com/other";
+
+    /// A ticket that names [`BROTHER`] with the prefix `a` and [`OTHER`] with `b` in its root, uses
+    /// each in a `name`, and ends with `extra`.
+    fn two_namespaces(a: &str, b: &str, extra: &str) -> String {
+        format!(
+            r#"<psf:PrintTicket xmlns:psf="{NS_PSF}" xmlns:psk="{NS_PSK}" xmlns:{a}="{BROTHER}" xmlns:{b}="{OTHER}"><psf:Feature name="{a}:One"/><psf:Feature name="{b}:Two"/>{extra}</psf:PrintTicket>"#
+        )
+    }
+
+    /// Prefixes are renamed together, so two namespaces that swap prefixes still end up distinct.
+    #[test]
+    fn two_vendor_namespaces_can_trade_prefixes() {
+        let ticket = |a: &str, b: &str| two_namespaces(a, b, "");
+        assert_eq!(respell(&ticket("ns0000", "ns0001"), &ticket("ns0001", "ns0000")), Some(ticket("ns0001", "ns0000")));
+    }
+
+    /// When two namespaces trade prefixes both prefixes stay declared, so a name that is only
+    /// written with a prefix (an element or an attribute, unlike a `name` value) would still parse and
+    /// resolve, but to the other namespace. Each ticket here is well-formed and has every prefix
+    /// declared, so `respell` leaves it alone for the name, not because the result didn't parse.
+    #[test]
+    fn a_swap_does_not_move_an_element_or_attribute_name_to_the_other_namespace() {
+        let driver = two_namespaces("ns0001", "ns0000", "");
+        let refused = |extra: &str| {
+            let ticket = two_namespaces("ns0000", "ns0001", extra);
+            let document = roxmltree::Document::parse(&ticket).expect("the fixture must stay well-formed");
+            assert!(prefixes_resolve(&document));
+            respell(&ticket, &driver)
+        };
+        assert!(refused("").is_some(), "control: the same ticket without such a name is respelled");
+
+        // An element: `ns0000:Feature` is BROTHER's until the declarations swap, then OTHER's.
+        assert_eq!(refused("<ns0000:Feature/>"), None, "element in the first namespace");
+        assert_eq!(refused("<ns0001:Feature/>"), None, "element in the second namespace");
+        assert_eq!(refused("<psf:Property name=\"ns0001:Three\"><ns0000:Child/></psf:Property>"), None, "nested element");
+
+        // An attribute, whichever element carries it.
+        assert_eq!(refused("<psf:Feature name=\"ns0000:Three\" ns0000:flag=\"1\"/>"), None, "attribute in the first namespace");
+        assert_eq!(refused("<psf:Feature name=\"ns0000:Three\" ns0001:flag=\"1\"/>"), None, "attribute in the second namespace");
+        assert_eq!(refused("<ns0001:Feature ns0000:flag=\"1\"/>"), None, "both at once");
+    }
+
+    /// The same when the prefixes form a chain rather than a swap: `brpsk` is OTHER's, is about to
+    /// become BROTHER's, and OTHER moves on to `ns0005`.
+    #[test]
+    fn a_name_in_a_namespace_whose_prefix_is_taken_over_is_not_respelled() {
+        let driver = two_namespaces("brpsk", "ns0005", "");
+        let refused = |extra: &str| {
+            let ticket = two_namespaces("ns0000", "brpsk", extra);
+            let document = roxmltree::Document::parse(&ticket).expect("the fixture must stay well-formed");
+            assert!(prefixes_resolve(&document));
+            respell(&ticket, &driver)
+        };
+        assert!(refused("").is_some(), "control");
+        assert_eq!(refused("<brpsk:Feature/>"), None, "element: OTHER's now, BROTHER's after");
+        assert_eq!(refused("<psf:Feature brpsk:flag=\"1\"/>"), None, "attribute");
+    }
+
+    /// What the live driver test checks. A ticket `respell` refused keeps the prefix the merge gave
+    /// it, but `respell` says `None` for it, as it does for a ticket that is already right: only the
+    /// prefixes tell the two apart.
+    #[test]
+    fn the_prefixes_tell_a_refused_ticket_from_one_in_the_drivers_spelling() {
+        let driver = brother("brpsk");
+        let unlike = |ticket: &str| prefixes_unlike_the_drivers(ticket, &driver).expect("both tickets parse");
+        let merged = brother("ns0000");
+        let mismatch = (BROTHER.to_string(), "ns0000".to_string(), "brpsk".to_string());
+
+        assert_eq!(unlike(&merged), std::slice::from_ref(&mismatch), "as the merge returns it");
+        assert_eq!(unlike(&respell(&merged, &driver).unwrap()), [], "respelled");
+        assert_eq!(unlike(&driver), [], "already the driver's");
+
+        // `respell` refuses this one (`ns0000` is declared again below the root), so it stays as the
+        // merge left it, and `respell` says `None` for it just as it does for the driver's own.
+        let refused = merged.replace(
+            "<psf:Feature name=\"ns0000:JobPrintSpeed\">",
+            "<psf:Feature name=\"ns0000:JobPrintSpeed\" xmlns:ns0000=\"http://example.com/nested\">",
+        );
+        assert_ne!(refused, merged);
+        assert_eq!(respell(&refused, &driver), None);
+        assert_eq!(respell(&driver, &driver), None);
+        assert_eq!(unlike(&refused), [mismatch], "refused, and still wrong");
+
+        // Two namespaces that trade prefixes are both reported.
+        let traded = prefixes_unlike_the_drivers(&two_namespaces("ns0000", "ns0001", ""), &two_namespaces("ns0001", "ns0000", "")).unwrap();
+        assert_eq!(traded.len(), 2, "{traded:?}");
+        // A namespace the driver doesn't declare has no prefix of the driver's to differ from.
+        assert_eq!(unlike(&empty_ticket()), [], "no vendor namespace to compare");
+        assert_eq!(unlike(&two_namespaces("ns0000", "ns0001", "")).len(), 1, "only BROTHER is the driver's");
+        assert_eq!(prefixes_unlike_the_drivers("<not xml", &driver), None);
+        assert_eq!(prefixes_unlike_the_drivers(&merged, "<not xml"), None);
+    }
+
+    /// Only names in a namespace whose prefix changes block the respelling.
+    #[test]
+    fn names_in_a_namespace_that_keeps_its_prefix_do_not_block_the_respelling() {
+        let keep = "http://example.com/keep";
+        let ticket = |prefix: &str| {
+            format!(
+                r#"<psf:PrintTicket xmlns:psf="{NS_PSF}" xmlns:psk="{NS_PSK}" xmlns:{prefix}="{BROTHER}" xmlns:keep="{keep}"><psf:Feature name="{prefix}:One" keep:flag="1"><keep:Child keep:flag="2"/></psf:Feature><psf:Feature xmlns:own="http://example.com/own" own:flag="3"/></psf:PrintTicket>"#
+            )
+        };
+        assert_eq!(respell(&ticket("ns0000"), &ticket("brpsk")), Some(ticket("brpsk")));
+    }
+
+    /// Each ticket here is well-formed XML, so `respell` leaves it alone for the reason named, not
+    /// because it didn't parse.
+    #[test]
+    fn a_ticket_that_cannot_be_respelled_safely_is_left_alone() {
+        let merged = brother("ns0000");
+        let driver = brother("brpsk");
+        let refused = |ticket: &str| {
+            assert!(roxmltree::Document::parse(ticket).is_ok(), "the fixture must stay well-formed");
+            respell(ticket, &driver)
+        };
+        assert_eq!(respell(&merged, &empty_ticket()), None, "the driver has no such namespace");
+        assert_eq!(respell("<not xml", &driver), None);
+        assert_eq!(respell(&merged, "<not xml"), None);
+        // `brpsk` is already another namespace's prefix in the ticket.
+        assert_eq!(refused(&merged.replace("xmlns:psk=", "xmlns:brpsk=\"http://example.com/other\" xmlns:psk=")), None);
+        // A vendor element can't be renamed by changing attributes and declarations.
+        let feature = "<psf:Feature name=\"ns0000:JobPrintSpeed\"><psf:Option name=\"ns0000:PrinterDefault\"/></psf:Feature>";
+        assert!(merged.contains(feature));
+        assert_eq!(refused(&merged.replace(feature, "<ns0000:Feature/>")), None);
+        // A name whose prefix is not declared stays refused after the change.
+        assert_eq!(refused(&merged.replace("name=\"ns0000:Mode\"", "name=\"ns0001:Mode\"")), None);
+        // A nested element that declares either prefix again would change what a name resolves to.
+        for redeclared in ["ns0000", "brpsk"] {
+            let nested = merged.replace(
+                "<psf:Feature name=\"ns0000:JobPrintSpeed\">",
+                &format!("<psf:Feature name=\"ns0000:JobPrintSpeed\" xmlns:{redeclared}=\"http://example.com/nested\">"),
+            );
+            assert_ne!(nested, merged);
+            assert_eq!(refused(&nested), None, "{redeclared} declared again below the root");
+        }
+        // Control: the same ticket without the nested declaration is respelled.
+        assert!(refused(&merged).is_some());
     }
 
     #[test]

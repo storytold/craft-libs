@@ -11,6 +11,45 @@ The current delivery covers nine creative apps (DesignCraft, VectorCraft, PhotoC
 records their scope and acceptance limits. Assets (font files included), complete themes, localization
 and command handling remain in each application. No icons, fonts or application engines are bundled.
 
+## Host-owned docking chrome
+
+`DockContent` can replace an iconic column or a complete tab group without a
+second layout tree. `column_rect` reports the fitted column before painting;
+`owns_iconic_column`/`iconic_column` and `custom_group` suppress the corresponding
+stock chrome, body and input when the host takes ownership. Docked custom groups
+also skip stock body top/bottom drop bands; column-edge targets remain available.
+These hooks are also
+forwarded by `show_customized`'s label/permissions/limits adapter.
+
+`resize_handle_style` and `split_separator` let the host paint one seam while
+retaining stock resize input. `owns_floating_width` delegates horizontal floating
+frame-edge handles to the host; internal dividers and vertical handles remain available.
+`owns_floating_split_width` separately delegates internal horizontal dividers when
+the host supplies their replacement input. Presentation-only
+`group_collapsed` does not change the selected tab in the shared model.
+
+All ownership hooks default to false/no-op. `DockStyle::dock_gap` defaults to
+`None`, preserving the ordinary split gap; setting it affects side-dock seams
+only. `FloatingFrame::resize_axes` defaults to both axes and preserves an enabled
+axis at corners when the other is disabled. A host with its own title bar can
+disable the separate top gutter through `reserve_top_resize_band(false)`.
+
+Compatibility and target-size audit: before these hooks, resizable frames already
+reserved a 4 pt top band. That remains the default; `false` is the new host opt-out.
+The unchanged stock edge hit bands are 4 pt thick; corners are at most 12 pt.
+They do **not** meet a 24-by-24 logical-pixel target at 1x. This PR preserves
+those hit rectangles and does not claim accessibility compliance. Focused
+resize handles also support arrow keys (8 pt steps). Enlarging pointer targets
+needs separate overlap, title-bar and viewport-edge acceptance checks.
+
+`chrome::compatibility_tests::defaults_preserve_pre_host_hook_frame_geometry`
+locks down the pre-hook hit rectangles/defaults. `host_hooks_tests` exercises all
+four axis settings with actual corner and side pointer drags, minimum/maximum
+sizes, the viewport edge, and top-gutter opt-out geometry.
+
+Exhaustive `DockStyle` struct literals need `dock_gap: None`; constructors such
+as `from_ui` and `from_visuals` supply the compatible default.
+
 ## SVG catalogs
 
 ```rust

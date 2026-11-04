@@ -35,8 +35,8 @@ impl From<OperatingSystem> for Platform {
 macro_rules! egui_keys {
     ($($ours:ident = $theirs:ident),* ; $($same:ident),* $(,)?) => {
         impl Key {
-            /// The key for an egui key. `None` for modifier keys, Copy, Cut, Paste, BrowserBack
-            /// and IntlBackslash.
+            /// The key for an egui key. `None` for modifier keys, Copy, Cut, Paste and
+            /// BrowserBack.
             pub fn from_egui(key: EguiKey) -> Option<Key> {
                 match key {
                     $(EguiKey::$theirs => Some(Key::$ours),)*
@@ -63,7 +63,7 @@ egui_keys! {
     F21, F22, F23, F24, F25, F26, F27, F28, F29, F30, F31, F32, F33, F34, F35,
     Escape, Tab, Backspace, Enter, Space, Insert, Delete, Home, End, PageUp, PageDown,
     Minus, Equals, Plus, OpenBracket, CloseBracket, Backslash, Semicolon, Quote, Backtick,
-    Comma, Period, Slash, Colon, Pipe, Questionmark, Exclamationmark, OpenCurlyBracket, CloseCurlyBracket,
+    Comma, Period, Slash, IntlBackslash, Colon, Pipe, Questionmark, Exclamationmark, OpenCurlyBracket, CloseCurlyBracket,
 }
 
 impl Mods {
