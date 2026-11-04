@@ -907,7 +907,7 @@ fn verifiable_path(path: &Path) -> std::path::PathBuf {
 /// `reference` itself isn't signed.
 #[cfg(windows)]
 fn signed_like(app: &App, reference: &Path, file: &Path) -> Result<(), String> {
-    let publisher = |path: &Path| verifysign::verify_file(&verifiable_path(path)).map(|signature| signature.subject_name());
+    let publisher = |path: &Path| verifysign::verify_file(verifiable_path(path)).map(|signature| signature.subject_name());
     let ours = publisher(reference).map_err(|e| format!("this copy of {} isn't signed ({e}), so it doesn't install updates", app.name))?;
     let theirs = publisher(file).map_err(|e| format!("{} isn't signed ({e})", file.display()))?;
     if ours == theirs { Ok(()) } else { Err(format!("{} isn't signed by {}'s publisher", file.display(), app.name)) }
