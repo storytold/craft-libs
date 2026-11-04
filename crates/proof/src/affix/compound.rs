@@ -724,6 +724,7 @@ impl AffixDict {
     /// parts still have to be bare stems; a forbidden stem is never reconstructed.
     pub(super) fn rule_final_flags(&self, part: &str, excluded: Excluded, work: &mut usize) -> Vec<u16> {
         let mut flags = Vec::new();
+        let excluded = excluded.without_keep();
         if *work >= MAX_WORK || self.is_forbidden(part) {
             return flags;
         }
@@ -732,20 +733,22 @@ impl AffixDict {
         let mut analyses = 0usize;
         let mut derived = excluded;
         for slot in &mut derived.0 {
-            if *slot == self.forbidden {
+            let shared_suggestion_exclusion = excluded.suggesting() && (*slot == self.no_suggest || *slot == self.substandard);
+            if *slot == self.forbidden && !shared_suggestion_exclusion {
                 *slot = None;
             }
         }
         derived.4 = true;
         self.analyses(part, derived, work, &mut |an| {
-            analyses += 1;
-            if analyses > MAX_INFOS
+            if analyses >= MAX_INFOS
+                || !an.set.iter().any(|flag| rule_flags.contains_key(flag))
                 || an.pfx.is_some()
                 || (an.sfx.is_none() && excluded.hits(an.set))
                 || an.sfx.is_some_and(|r| self.cont_holds(r, self.only_in_compound) || excluded.hits(self.set(r.cont)))
             {
                 return;
             }
+            analyses += 1;
             for &flag in an.set {
                 if rule_flags.contains_key(&flag) && seen.insert(flag, ()).is_none() {
                     flags.push(flag);

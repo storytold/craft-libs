@@ -101,3 +101,47 @@ fn agrees_with_recorded_native_hyphenation() {
     }
     craft_proof::packs::set_packs_dir(None);
 }
+
+#[test]
+fn review_rule_compounds_preserve_shared_suggestion_exclusions() {
+    for directive in ["NOSUGGEST", "SUBSTANDARD"] {
+        let aff = format!("SET UTF-8\nCOMPOUNDMIN 1\nCOMPOUNDRULE 1\nCOMPOUNDRULE AB\nFORBIDDENWORD X\n{directive} X\nSFX S Y 1\nSFX S 0 -ok .\n");
+        let d = AffixDict::from_hunspell(&aff, "2\n2/A\n6/BSX\n", &[]).unwrap();
+        assert!(d.check("26-ok"), "{directive}: ordinary compound checking");
+        assert!(!d.can_suggest("26-ok"), "{directive}: the shared exclusion must survive");
+    }
+}
+
+#[test]
+fn review_keepcase_applies_only_to_the_first_rule_compound_part() {
+    let aff = "SET UTF-8\nCOMPOUNDMIN 1\nCOMPOUNDRULE 1\nCOMPOUNDRULE AB\nKEEPCASE K\nSFX S Y 1\nSFX S 0 s .\n";
+    let d = AffixDict::from_hunspell(aff, "2\nfoo/A\nbar/BKS\n", &[]).unwrap();
+    assert!(d.check("Foobars"));
+    let first_kept = AffixDict::from_hunspell(aff, "2\nfoo/AK\nbar/BS\n", &[]).unwrap();
+    assert!(!first_kept.check("Foobars"));
+}
+
+#[test]
+fn review_irrelevant_suffix_analyses_do_not_hide_the_rule_flag() {
+    let count = 280;
+    let mut aff = format!("SET UTF-8\nCOMPOUNDMIN 1\nCOMPOUNDRULE 1\nCOMPOUNDRULE AB\nSFX S Y {count}\n");
+    let mut dic = format!("{}\nab/A\n", count + 1);
+    for i in 0..count {
+        aff.push_str(&format!("SFX S x{i} s .\n"));
+        dic.push_str(&format!("basex{i}/{}\n", if i + 1 == count { "BS" } else { "S" }));
+    }
+    let d = AffixDict::from_hunspell(&aff, &dic, &[]).unwrap();
+    assert!(d.check("abbases"));
+}
+
+#[test]
+fn review_unreachable_tails_do_not_exhaust_rule_compound_analysis() {
+    let count = 800;
+    let mut aff = format!("SET UTF-8\nCOMPOUNDMIN 1\nCOMPOUNDRULE 1\nCOMPOUNDRULE AB\nSFX S Y 1\nSFX S 0 -s .\nSFX Z Y {count}\n");
+    for i in 0..count {
+        aff.push_str(&format!("SFX Z z{i} 0 .\n"));
+    }
+    let first = "a".repeat(35);
+    let d = AffixDict::from_hunspell(&aff, &format!("2\n{first}/A\nend/BS\n"), &[]).unwrap();
+    assert!(d.check(&format!("{first}end-s")));
+}

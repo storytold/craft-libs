@@ -33,7 +33,7 @@ impl Patterns {
     /// Malformed replacements are an error; headers and comments are not patterns.
     pub fn from_huhyphn(text: &str) -> Result<Self, String> {
         let mut out = Self::default();
-        for (line_no, line) in text.lines().enumerate() {
+        for (line_no, line) in text.strip_prefix('\u{feff}').unwrap_or(text).lines().enumerate() {
             let line = line.trim();
             if line.is_empty()
                 || line.starts_with(['%', '#'])
@@ -171,6 +171,13 @@ fn parse_change(raw: &str, replacement: &str) -> Result<Change, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn utf8_bom_keeps_inserted_letter_rules_and_line_errors() {
+        let p = Patterns::parse_checked("\u{feff}UTF-8\nas5szon2y/sz=,2,1\n").unwrap();
+        assert_eq!(p.opportunities(&"asszony".chars().collect::<Vec<_>>()).unwrap(), vec![Opportunity { at: 2, suffix: "z".into() }]);
+        let e = Patterns::parse_checked("\u{feff}UTF-8\nas5szony/sz=,0,1").unwrap_err();
+        assert!(e.contains("line 2"), "{e}");
+    }
     #[test]
     fn inserted_letters_are_not_ordinary_points() {
         let p = Patterns::from_huhyphn("UTF-8\nas5szon2y/sz=,2,1\n").unwrap();

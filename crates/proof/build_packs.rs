@@ -14,6 +14,9 @@ pub fn generate() -> Result<(String, Vec<String>, String), String> {
     let mut locales = Vec::new();
     let mut licences = String::new();
     let dir = std::env::var_os("CRAFT_PROOF_PACKS_DIR").map(PathBuf::from);
+    if !names.is_empty() {
+        validate_directory(dir.as_deref().ok_or("CRAFT_PROOF_EMBED_PACKS needs CRAFT_PROOF_PACKS_DIR")?)?;
+    }
     for locale in names {
         if locale.len() > 35
             || locale.starts_with('-')
@@ -69,4 +72,24 @@ fn include(path: &Path, bytes: bool) -> Result<String, String> {
     let path = path.to_str().ok_or("Language pack path is not UTF-8")?;
     println!("cargo::rerun-if-changed={path}");
     Ok(format!("{}!({path:?})", if bytes { "include_bytes" } else { "include_str" }))
+}
+
+fn validate_directory(dir: &Path) -> Result<(), String> {
+    if !dir.is_absolute() {
+        return Err(format!("{} is not an absolute path", dir.display()));
+    }
+    if dir.to_str().is_none() {
+        return Err(format!("{} is not valid UTF-8", dir.display()));
+    }
+    Ok(())
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn embedding_rejects_paths_that_change_meaning_inside_out_dir() {
+        assert!(validate_directory(Path::new("packs/hu")).unwrap_err().contains("absolute"));
+        assert!(validate_directory(Path::new("")).is_err());
+        assert!(validate_directory(&std::env::temp_dir()).is_ok());
+    }
 }

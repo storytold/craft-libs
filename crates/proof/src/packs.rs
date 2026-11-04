@@ -41,8 +41,11 @@ pub(crate) struct EmbeddedPack {
     pub dic: &'static [u8],
     pub patterns: &'static str,
 }
-pub(crate) fn embedded(names: &[String]) -> Option<&'static EmbeddedPack> {
-    names.iter().find_map(|n| crate::data::PACKS.iter().find(|p| p.locale == n.replace('_', "-").to_ascii_lowercase()))
+pub(crate) fn embedded(names: &[String], accepts: impl Fn(&EmbeddedPack) -> bool) -> Option<&'static EmbeddedPack> {
+    embedded_in(crate::data::PACKS, names, accepts)
+}
+fn embedded_in<'a>(packs: &'a [EmbeddedPack], names: &[String], accepts: impl Fn(&EmbeddedPack) -> bool) -> Option<&'a EmbeddedPack> {
+    names.iter().find_map(|n| packs.iter().find(|p| p.locale == n.replace('_', "-").to_ascii_lowercase() && accepts(p)))
 }
 
 /// Most languages whose pack patterns are remembered (a document may tag thousands).
@@ -575,7 +578,7 @@ fn hyphenation_locales(lang: ProofLang) -> Vec<String> {
 pub(crate) fn hyphenation(lang: ProofLang) -> Option<Arc<Patterns>> {
     let changes = {
         let s = read();
-        if s.dir.is_none() && embedded(&hyphenation_locales(lang)).is_none() {
+        if s.dir.is_none() && embedded(&hyphenation_locales(lang), |p| !p.patterns.is_empty()).is_none() {
             return None;
         }
         if let Some(p) = s.hyphenation.get(&lang) {
@@ -601,7 +604,7 @@ pub(crate) fn hyphenation(lang: ProofLang) -> Option<Arc<Patterns>> {
         }
     }
     if found.is_none()
-        && let Some(pack) = embedded(&hyphenation_locales(lang)).filter(|p| !p.patterns.is_empty())
+        && let Some(pack) = embedded(&hyphenation_locales(lang), |p| !p.patterns.is_empty())
     {
         let p = Patterns::parse(pack.patterns);
         if !p.is_empty() {
@@ -649,7 +652,7 @@ pub(crate) fn hyphenation_lookups() -> usize {
 fn load_patterns(path: &Path) -> Result<Patterns, String> {
     let bytes = read_capped(path, crate::hunspell::MAX_FILE)?;
     let text = String::from_utf8(bytes).map_err(|_| format!("{}: not UTF-8", path.display()))?;
-    let p = Patterns::parse(&text);
+    let p = Patterns::parse_checked(&text).map_err(|e| format!("{}: {e}", path.display()))?;
     if p.is_empty() {
         return Err(format!("{}: no patterns", path.display()));
     }
@@ -660,6 +663,35 @@ fn load_patterns(path: &Path) -> Result<Patterns, String> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn embedded_fallback_skips_locales_without_the_requested_resource() {
+        let packs = [
+            EmbeddedPack { locale: "hu-hu", aff: b"aff", dic: b"dic", patterns: "" },
+            EmbeddedPack { locale: "hu", aff: b"", dic: b"", patterns: "a1b" },
+        ];
+        let names = vec!["hu_HU".to_string(), "hu".to_string()];
+        assert_eq!(embedded_in(&packs, &names, |p| !p.patterns.is_empty()).unwrap().locale, "hu");
+        assert_eq!(embedded_in(&packs, &names, |p| !p.aff.is_empty() && !p.dic.is_empty()).unwrap().locale, "hu-hu");
+        let packs = [
+            EmbeddedPack { locale: "hu-hu", aff: b"", dic: b"", patterns: "a1b" },
+            EmbeddedPack { locale: "hu", aff: b"aff", dic: b"dic", patterns: "" },
+        ];
+        assert_eq!(embedded_in(&packs, &names, |p| !p.aff.is_empty() && !p.dic.is_empty()).unwrap().locale, "hu");
+    }
+    #[test]
+    fn embedded_packs_do_not_have_the_no_data_contract() {
+        #[cfg(craft_proof_no_data)]
+        assert!(crate::data::PACKS.is_empty(), "embedded packs are Language data");
+    }
+    #[test]
+    fn malformed_pack_patterns_keep_their_line_number() {
+        let path = std::env::temp_dir().join(format!("craft-proof-pattern-error-{}.pat", std::process::id()));
+        std::fs::write(&path, "UTF-8\nas5szony/sz=,0,1\n").unwrap();
+        let error = load_patterns(&path).unwrap_err();
+        std::fs::remove_file(&path).unwrap();
+        assert!(error.contains("line 2"), "{error}");
+        assert!(error.contains("invalid start"), "{error}");
+    }
     /// Review follow-up (craft-libs#485): the remembered pack patterns have a memory budget, not
     /// only a count, so 256 languages of large patterns can't each stay in memory.
     #[test]

@@ -134,15 +134,15 @@ fn main() {
         };
         let _ = writeln!(o, "/// `language-data/{rel}` (empty when it isn't embedded).\npub(crate) static {name}: {ty} = {value};");
     }
-    if embedded > 0 && embedded == wanted_files {
-        println!("cargo::rustc-cfg=craft_proof_data");
-    } else if embedded == 0 {
-        println!("cargo::rustc-cfg=craft_proof_no_data");
-    }
     let (packs, pack_locales, pack_licences) = build_packs::generate().unwrap_or_else(|e| {
         println!("cargo::error=Language pack: {e}");
         ("pub(crate) static PACKS: &[crate::packs::EmbeddedPack] = &[];\n".into(), Vec::new(), String::new())
     });
+    if embedded > 0 && embedded == wanted_files {
+        println!("cargo::rustc-cfg=craft_proof_data");
+    } else if embedded == 0 && pack_locales.is_empty() {
+        println!("cargo::rustc-cfg=craft_proof_no_data");
+    }
     o.push_str(&packs);
     for locale in pack_locales {
         if !locales.contains(&locale) {

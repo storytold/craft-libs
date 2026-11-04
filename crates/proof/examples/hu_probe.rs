@@ -1,5 +1,6 @@
 //! Local compatibility probe for the pinned hu Language pack. No bundled dictionary.
 use std::{error::Error, path::PathBuf};
+use unicode_normalization::UnicodeNormalization;
 fn main() -> Result<(), Box<dyn Error>> {
     let packs = PathBuf::from(std::env::var("CRAFT_HU_TEST_PACKS")?);
     let start = std::time::Instant::now();
@@ -11,9 +12,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut total = 0;
     let mut raw = 0;
     let mut api = 0;
-    for corpus in
-        [include_str!("../tests/data/hu/main.tsv"), include_str!("../tests/data/hu/focused.tsv"), include_str!("../tests/data/hu/extended.tsv")]
-    {
+    let corpora =
+        [include_str!("../tests/data/hu/main.tsv"), include_str!("../tests/data/hu/focused.tsv"), include_str!("../tests/data/hu/extended.tsv")];
+    for corpus in corpora {
         for line in corpus.lines() {
             let (w, want) = line.split_once('\t').ok_or("invalid fixture")?;
             let expected = want == "1";
@@ -24,9 +25,21 @@ fn main() -> Result<(), Box<dyn Error>> {
                 println!("SPELL_RAW\t{w}\t{expected}\t{actual}");
             }
             let actual = craft_proof::is_correct_in_with(w, lang, &opts);
-            if actual != expected {
+            let composed: String = w.nfc().collect();
+            let api_expected = if composed == w {
+                expected
+            } else {
+                corpora
+                    .iter()
+                    .flat_map(|text| text.lines())
+                    .filter_map(|line| line.split_once('\t'))
+                    .find(|(word, _)| *word == composed)
+                    .map(|(_, verdict)| verdict == "1")
+                    .ok_or("decomposed row has no composed oracle row")?
+            };
+            if actual != api_expected {
                 api += 1;
-                println!("SPELL_API\t{w}\t{expected}\t{actual}");
+                println!("SPELL_API\t{w}\t{api_expected}\t{actual}");
             }
         }
     }

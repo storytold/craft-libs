@@ -133,12 +133,22 @@ impl Patterns {
     /// commands' arguments (`\message{…}`) are skipped; outside any block, a token with a hyphen
     /// is an exception and anything else a pattern.
     pub fn parse(text: &str) -> Patterns {
+        Self::parse_checked(text).unwrap_or_else(|e| {
+            log::warn!("hyphenation patterns: {e}");
+            Self::default()
+        })
+    }
+
+    /// Parse patterns, retaining line-numbered errors for malformed Libhyphen replacements.
+    pub fn parse_checked(text: &str) -> Result<Patterns, String> {
+        let text = text.strip_prefix('\u{feff}').unwrap_or(text);
         if text.lines().map(str::trim).find(|l| !l.is_empty() && !l.starts_with(['%', '#'])) == Some("UTF-8") {
-            return Self::from_huhyphn(text).unwrap_or_else(|e| {
-                log::warn!("hyphenation patterns: {e}");
-                Self::default()
-            });
+            return Self::from_huhyphn(text);
         }
+        Ok(Self::parse_tex(text))
+    }
+
+    fn parse_tex(text: &str) -> Patterns {
         let mut p = Patterns::default();
         let mut block = Block::Patterns;
         for line in text.lines() {
