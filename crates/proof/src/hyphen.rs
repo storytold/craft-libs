@@ -35,7 +35,7 @@ pub use crate::lang::ProofLang;
 pub use dict::Dictionary;
 pub use patterns::{Opportunity, Patterns};
 mod nonstandard;
-pub use nonstandard::hyphen_opportunities_in;
+pub use nonstandard::{hyphen_opportunities_in, hyphen_opportunities_including_all_caps};
 
 // The embedded Language data (`language-data/` of craft-i18n, see `build.rs`); each is empty when
 // it isn't embedded. The TeX files are hyph-utf8's `hyph-pl.tex`, `hyph-pt.tex`, `hyph-it.tex` and

@@ -26,10 +26,14 @@ pub fn generate() -> Result<(String, Vec<String>, String), String> {
             return Err(format!("invalid embedded pack locale: {locale:?}"));
         }
         let base = dir.as_ref().ok_or("CRAFT_PROOF_EMBED_PACKS needs CRAFT_PROOF_PACKS_DIR")?.join(locale);
+        // Track the folder too: a hyphenation-only pack can gain spelling files or notices.
+        println!("cargo::rerun-if-changed={}", base.display());
         if !base.join("pack.toml").is_file() {
             return Err(format!("{}: no pack.toml", base.display()));
         }
         println!("cargo::rerun-if-changed={}", base.join("pack.toml").display());
+        let metadata = std::fs::read_to_string(base.join("pack.toml")).map_err(|e| format!("{locale}: pack.toml: {e}"))?;
+        validate_pack_locale(&metadata, locale)?;
         let aff = base.join("spelling.aff");
         let dic = base.join("spelling.dic");
         if aff.is_file() != dic.is_file() {
@@ -83,9 +87,25 @@ fn validate_directory(dir: &Path) -> Result<(), String> {
     }
     Ok(())
 }
+fn validate_pack_locale(text: &str, folder: &str) -> Result<(), String> {
+    let metadata: toml::Table = toml::from_str(text).map_err(|e| format!("pack.toml: {e}"))?;
+    let locale = metadata.get("locale").and_then(toml::Value::as_str).ok_or("pack.toml: missing locale string")?;
+    if locale != folder {
+        return Err(format!("pack.toml names locale {locale:?}, not {folder:?}"));
+    }
+    Ok(())
+}
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn embedded_pack_metadata_must_name_its_folder() {
+        assert!(validate_pack_locale("locale = \"hu\"", "hu").is_ok());
+        assert!(validate_pack_locale("locale = \"hu-hu\"", "hu").unwrap_err().contains("not \"hu\""));
+        for text in ["[", "name = \"Hungarian\"", "locale = 42"] {
+            assert!(validate_pack_locale(text, "hu").is_err());
+        }
+    }
     #[test]
     fn embedding_rejects_paths_that_change_meaning_inside_out_dir() {
         assert!(validate_directory(Path::new("packs/hu")).unwrap_err().contains("absolute"));

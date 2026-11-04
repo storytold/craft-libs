@@ -41,11 +41,11 @@ pub(crate) struct EmbeddedPack {
     pub dic: &'static [u8],
     pub patterns: &'static str,
 }
-pub(crate) fn embedded(names: &[String], accepts: impl Fn(&EmbeddedPack) -> bool) -> Option<&'static EmbeddedPack> {
+pub(crate) fn embedded(names: &[String], accepts: impl Fn(&EmbeddedPack) -> bool) -> Vec<&'static EmbeddedPack> {
     embedded_in(crate::data::PACKS, names, accepts)
 }
-fn embedded_in<'a>(packs: &'a [EmbeddedPack], names: &[String], accepts: impl Fn(&EmbeddedPack) -> bool) -> Option<&'a EmbeddedPack> {
-    names.iter().find_map(|n| packs.iter().find(|p| p.locale == n.replace('_', "-").to_ascii_lowercase() && accepts(p)))
+fn embedded_in<'a>(packs: &'a [EmbeddedPack], names: &[String], accepts: impl Fn(&EmbeddedPack) -> bool) -> Vec<&'a EmbeddedPack> {
+    names.iter().filter_map(|n| packs.iter().find(|p| p.locale == n.replace('_', "-").to_ascii_lowercase() && accepts(p))).collect()
 }
 
 /// Most languages whose pack patterns are remembered (a document may tag thousands).
@@ -578,7 +578,7 @@ fn hyphenation_locales(lang: ProofLang) -> Vec<String> {
 pub(crate) fn hyphenation(lang: ProofLang) -> Option<Arc<Patterns>> {
     let changes = {
         let s = read();
-        if s.dir.is_none() && embedded(&hyphenation_locales(lang), |p| !p.patterns.is_empty()).is_none() {
+        if s.dir.is_none() && embedded(&hyphenation_locales(lang), |p| !p.patterns.is_empty()).is_empty() {
             return None;
         }
         if let Some(p) = s.hyphenation.get(&lang) {
@@ -603,13 +603,8 @@ pub(crate) fn hyphenation(lang: ProofLang) -> Option<Arc<Patterns>> {
             }
         }
     }
-    if found.is_none()
-        && let Some(pack) = embedded(&hyphenation_locales(lang), |p| !p.patterns.is_empty())
-    {
-        let p = Patterns::parse(pack.patterns);
-        if !p.is_empty() {
-            found = Some(Arc::new(p));
-        }
+    if found.is_none() {
+        found = patterns_from_embedded(&embedded(&hyphenation_locales(lang), |p| !p.patterns.is_empty()), &mut errors).map(Arc::new);
     }
     let mut s = write();
     if s.changes == changes && !s.hyphenation.contains_key(&lang) {
@@ -623,6 +618,19 @@ pub(crate) fn hyphenation(lang: ProofLang) -> Option<Arc<Patterns>> {
         }
     }
     found
+}
+
+fn patterns_from_embedded(packs: &[&EmbeddedPack], errors: &mut Vec<(String, String)>) -> Option<Patterns> {
+    for pack in packs {
+        match Patterns::parse_checked(pack.patterns).and_then(|p| if p.is_empty() { Err("no patterns".into()) } else { Ok(p) }) {
+            Ok(patterns) => return Some(patterns),
+            Err(error) => {
+                log::warn!("embedded Language pack {}: {error}", pack.locale);
+                errors.push((pack.locale.to_string(), error));
+            }
+        }
+    }
+    None
 }
 
 /// Estimated memory of `p`.
@@ -664,19 +672,32 @@ mod tests {
     use super::*;
 
     #[test]
+    fn malformed_embedded_regional_patterns_fall_back_to_generic() {
+        let packs = [
+            EmbeddedPack { locale: "hu-hu", aff: b"", dic: b"", patterns: "UTF-8\nas5szony/sz=,0,1" },
+            EmbeddedPack { locale: "hu", aff: b"", dic: b"", patterns: "UTF-8\nas5szon2y/sz=,2,1" },
+        ];
+        let names = vec!["hu-hu".to_string(), "hu".to_string()];
+        let mut errors = Vec::new();
+        let p = patterns_from_embedded(&embedded_in(&packs, &names, |p| !p.patterns.is_empty()), &mut errors).unwrap();
+        assert_eq!(p.opportunities(&"asszony".chars().collect::<Vec<_>>()).unwrap()[0].suffix.as_ref(), "z");
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].1.contains("line 2"));
+    }
+    #[test]
     fn embedded_fallback_skips_locales_without_the_requested_resource() {
         let packs = [
             EmbeddedPack { locale: "hu-hu", aff: b"aff", dic: b"dic", patterns: "" },
             EmbeddedPack { locale: "hu", aff: b"", dic: b"", patterns: "a1b" },
         ];
         let names = vec!["hu_HU".to_string(), "hu".to_string()];
-        assert_eq!(embedded_in(&packs, &names, |p| !p.patterns.is_empty()).unwrap().locale, "hu");
-        assert_eq!(embedded_in(&packs, &names, |p| !p.aff.is_empty() && !p.dic.is_empty()).unwrap().locale, "hu-hu");
+        assert_eq!(embedded_in(&packs, &names, |p| !p.patterns.is_empty()).first().unwrap().locale, "hu");
+        assert_eq!(embedded_in(&packs, &names, |p| !p.aff.is_empty() && !p.dic.is_empty()).first().unwrap().locale, "hu-hu");
         let packs = [
             EmbeddedPack { locale: "hu-hu", aff: b"", dic: b"", patterns: "a1b" },
             EmbeddedPack { locale: "hu", aff: b"aff", dic: b"dic", patterns: "" },
         ];
-        assert_eq!(embedded_in(&packs, &names, |p| !p.aff.is_empty() && !p.dic.is_empty()).unwrap().locale, "hu");
+        assert_eq!(embedded_in(&packs, &names, |p| !p.aff.is_empty() && !p.dic.is_empty()).first().unwrap().locale, "hu");
     }
     #[test]
     fn embedded_packs_do_not_have_the_no_data_contract() {

@@ -2093,18 +2093,18 @@ impl AffixDict {
         // A number such as 2026-ban is 2/0 + 0/0 + 2/0 + 6/1 with a suffix
         // licensed by the final digit's flags. Share a bounded analysis budget.
         let mut work = 0;
-        let mut final_parts: Vec<Option<Vec<u16>>> = vec![None; n];
-        let mut part = |a: usize, b: usize| -> Option<std::borrow::Cow<'_, [u16]>> {
+        let mut final_parts: Vec<FxMap<u16, bool>> = vec![FxMap::default(); n];
+        let mut part = |a: usize, b: usize, flag: u16| -> bool {
             if b < a.saturating_add(min) {
-                return None;
+                return false;
             }
             if b + 1 == n {
-                let flags = final_parts.get_mut(a)?.get_or_insert_with(|| {
-                    cuts.get(a).and_then(|&at| w.get(at..)).map_or_else(Vec::new, |p| self.rule_final_flags(p, excluded, &mut work))
+                let Some(flags) = final_parts.get_mut(a) else { return false };
+                return *flags.entry(flag).or_insert_with(|| {
+                    cuts.get(a).and_then(|&at| w.get(at..)).is_some_and(|p| self.rule_final_has_flag(p, excluded, flag, &mut work))
                 });
-                return Some(std::borrow::Cow::Owned(flags.clone()));
             }
-            let slot = parts.get_mut(a * n + b)?;
+            let Some(slot) = parts.get_mut(a * n + b) else { return false };
             let set = *slot.get_or_insert_with(|| {
                 let (Some(&x), Some(&y)) = (cuts.get(a), cuts.get(b)) else { return None };
                 w.get(x..y)
@@ -2112,7 +2112,7 @@ impl AffixDict {
                     .map(|(stem, set)| self.rule_sets.get(&stem).map_or(set, |&s| self.set(s)))
                     .filter(|set| !excluded.hits(set) && bare(set))
             });
-            set.map(std::borrow::Cow::Borrowed)
+            set.is_some_and(|set| has(set, flag))
         };
         self.compound_rules.iter().any(|rule| compound_matches(rule, &mut part, n))
     }
@@ -2763,14 +2763,10 @@ impl FlagText {
     }
 }
 
-/// Does a compound rule's token list match a split of the word into two or more parts? `part(a,
-/// b)` is the flags of the stem between char cuts `a` and `b` (`None`: not a stem). States are
+/// Does a compound rule's token list match a split of the word into two or more parts?
+/// `part(a, b, flag)` checks the required flag between char cuts `a` and `b`. States are
 /// (cut, token, parts so far capped at 2), each visited once.
-fn compound_matches<'a>(
-    rule: &[(Option<u16>, Repeat)],
-    part: &mut impl FnMut(usize, usize) -> Option<std::borrow::Cow<'a, [u16]>>,
-    n: usize,
-) -> bool {
+fn compound_matches(rule: &[(Option<u16>, Repeat)], part: &mut impl FnMut(usize, usize, u16) -> bool, n: usize) -> bool {
     let t = rule.len();
     let idx = |cut: usize, tok: usize, k: usize| (cut * (t + 1) + tok) * 3 + k;
     let mut seen = vec![false; n * (t + 1) * 3];
@@ -2796,7 +2792,7 @@ fn compound_matches<'a>(
                 continue;
             }
             if let Some(flag) = flag
-                && part(cut, next).is_some_and(|set| has(&set, flag))
+                && part(cut, next, flag)
             {
                 let k = (k + 1).min(2);
                 stack.push((next, if repeat == Repeat::Any { tok } else { tok + 1 }, k));

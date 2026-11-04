@@ -94,11 +94,14 @@ fn agrees_with_recorded_native_hyphenation() {
     }
     assert_eq!(count, 857);
     assert!(differences.is_empty(), "{} differences: {differences:?}", differences.len());
-    for (word, want) in
-        [("asszony", "asz-szony"), ("könnyen", "köny-nyen"), ("hosszú", "hosz-szú"), ("ASSZONY", "ASZ-SZONY"), ("ko\u{308}nnyen", "ko\u{308}ny-nyen")]
-    {
+    for (word, want) in [("asszony", "asz-szony"), ("könnyen", "köny-nyen"), ("hosszú", "hosz-szú"), ("ko\u{308}nnyen", "ko\u{308}ny-nyen")] {
         assert_eq!(craft_proof::hyphen::hyphenate_word_in(word, &limits, lang), want);
     }
+    assert_eq!(craft_proof::hyphen::hyphenate_word_in("ASSZONY", &limits, lang), "ASSZONY");
+    assert_eq!(
+        craft_proof::hyphen::hyphen_opportunities_including_all_caps("ASSZONY", &limits, lang),
+        vec![craft_proof::hyphen::Opportunity { at: 2, suffix: "Z".into() }]
+    );
     craft_proof::packs::set_packs_dir(None);
 }
 
@@ -144,4 +147,18 @@ fn review_unreachable_tails_do_not_exhaust_rule_compound_analysis() {
     let first = "a".repeat(35);
     let d = AffixDict::from_hunspell(&aff, &format!("2\n{first}/A\nend/BS\n"), &[]).unwrap();
     assert!(d.check(&format!("{first}end-s")));
+}
+
+#[test]
+fn review_other_rule_flags_cannot_hide_the_requested_terminal_flag() {
+    let count = 280;
+    let mut aff =
+        format!("SET UTF-8\nFLAG num\nCOMPOUNDMIN 1\nCOMPOUNDRULE 2\nCOMPOUNDRULE (1)(2)\nCOMPOUNDRULE (4)(3)\nSFX 30000 Y {}\n", count + 1);
+    let mut dic = format!("{}\nab/1\n", count + 2);
+    for i in 0..=count {
+        aff.push_str(&format!("SFX 30000 x{i} s .\n"));
+        dic.push_str(&format!("basex{i}/30000,{}\n", if i == count { 2 } else { 3 }));
+    }
+    let d = AffixDict::from_hunspell(&aff, &dic, &[]).unwrap();
+    assert!(d.check("abbases"));
 }

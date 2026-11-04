@@ -5,13 +5,23 @@ use super::{Limits, Opportunity, ProofLang, composed_chars, hyphen_points_in, is
 /// Point-only clients keep using `hyphen_points_in`, which omits insertions it cannot render.
 /// Installed nonstandard patterns preserve source normalization, casing, punctuation and limits.
 pub fn hyphen_opportunities_in(word: &str, lim: &Limits, lang: ProofLang) -> Vec<Opportunity> {
+    opportunities_in(word, lim, lang, false)
+}
+
+/// Nonstandard layout breaks may also hyphenate all-capital words. Capitalized
+/// words still require `lim.capitalized`; ordinary fallback policies are unchanged.
+pub fn hyphen_opportunities_including_all_caps(word: &str, lim: &Limits, lang: ProofLang) -> Vec<Opportunity> {
+    opportunities_in(word, lim, lang, true)
+}
+
+fn opportunities_in(word: &str, lim: &Limits, lang: ProofLang, all_caps: bool) -> Vec<Opportunity> {
     let Some(patterns) = crate::packs::hyphenation(lang).filter(|p| p.has_nonstandard()) else {
         return hyphen_points_in(word, lim, lang).into_iter().map(|at| Opportunity { at, suffix: "".into() }).collect();
     };
-    opportunities_with(word, lim, lang, &patterns)
+    opportunities_with(word, lim, lang, &patterns, all_caps)
 }
 
-fn opportunities_with(word: &str, lim: &Limits, lang: ProofLang, patterns: &super::Patterns) -> Vec<Opportunity> {
+fn opportunities_with(word: &str, lim: &Limits, lang: ProofLang, patterns: &super::Patterns, all_caps: bool) -> Vec<Opportunity> {
     let chars: Vec<char> = word.chars().collect();
     let belongs = |c: char| is_word_char(c) || unicode_normalization::char::is_combining_mark(c);
     let mut out = Vec::new();
@@ -36,6 +46,7 @@ fn opportunities_with(word: &str, lim: &Limits, lang: ProofLang, patterns: &supe
         let letters = run.iter().filter(|c| c.is_alphabetic()).count();
         if run.iter().map(|c| c.len_utf8()).sum::<usize>() <= 1024
             && letters >= lim.min_word.max(2)
+            && (all_caps || letters < 2 || !run.iter().filter(|c| c.is_alphabetic()).all(|c| c.is_uppercase()))
             && (lim.capitalized || run.first().is_none_or(|c| !c.is_uppercase()))
         {
             let (nfc, starts) = composed_chars(run);
@@ -70,6 +81,16 @@ mod tests {
     use super::super::Patterns;
     use super::*;
     #[test]
+    fn all_caps_require_the_explicit_layout_opt_in() {
+        let patterns = Patterns::from_huhyphn("UTF-8\nas5szon2y/sz=,2,1\n").unwrap();
+        let lim = Limits::default();
+        let lang = ProofLang::from_tag(Some("hu"));
+        assert!(opportunities_with("ASSZONY", &lim, lang, &patterns, false).is_empty());
+        assert_eq!(opportunities_with("ASSZONY", &lim, lang, &patterns, true), vec![Opportunity { at: 2, suffix: "Z".into() }]);
+        assert!(opportunities_with("ASSZONY", &Limits { capitalized: false, ..lim }, lang, &patterns, true).is_empty());
+        assert!(!opportunities_with("Asszony", &lim, lang, &patterns, false).is_empty());
+    }
+    #[test]
     fn unknown_pack_letters_retain_builtin_language_breaks() {
         let patterns = Patterns::from_huhyphn("UTF-8\nas5szon2y/sz=,2,1\n").unwrap();
         let lim = Limits { min_word: 2, after_first: 1, before_last: 1, capitalized: true };
@@ -77,7 +98,7 @@ mod tests {
         {
             let expected = hyphen_points_in(word, &lim, lang);
             assert!(!expected.is_empty(), "positive fallback control: {word}");
-            let actual = opportunities_with(word, &lim, lang, &patterns);
+            let actual = opportunities_with(word, &lim, lang, &patterns, false);
             assert_eq!(actual.iter().map(|p| p.at).collect::<Vec<_>>(), expected, "{word}");
             assert!(actual.iter().all(|p| p.suffix.is_empty()));
         }
@@ -86,7 +107,7 @@ mod tests {
     fn soft_hyphens_separate_automatic_pattern_runs() {
         let patterns = Patterns::from_huhyphn("UTF-8\nas5szon2y/sz=,2,1\n").unwrap();
         let lim = Limits { min_word: 2, ..Default::default() };
-        let actual = opportunities_with("asszony\u{ad}asszony", &lim, ProofLang::from_tag(Some("hu")), &patterns);
+        let actual = opportunities_with("asszony\u{ad}asszony", &lim, ProofLang::from_tag(Some("hu")), &patterns, false);
         assert_eq!(actual, vec![Opportunity { at: 2, suffix: "z".into() }, Opportunity { at: 10, suffix: "z".into() }]);
     }
 }
