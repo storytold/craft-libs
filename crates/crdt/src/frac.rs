@@ -382,7 +382,8 @@ pub fn respace(keys: &[(String, NodeKeyOwner)]) -> Result<Vec<(NodeKeyOwner, Str
             last_kept = Some(k);
         }
     }
-    let mut effective: Vec<Option<String>> = keep.iter().enumerate().map(|(i, keep_i)| if *keep_i { Some(keys[i].0.clone()) } else { None }).collect();
+    let mut effective: Vec<Option<String>> =
+        keep.iter().enumerate().map(|(i, keep_i)| if *keep_i { Some(keys[i].0.clone()) } else { None }).collect();
     let mut i = 0usize;
     while i < n {
         if effective[i].is_some() {

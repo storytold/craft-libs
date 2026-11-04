@@ -91,20 +91,13 @@ fn deletes_collapse_per_subtree() {
 #[test]
 fn a_move_into_a_new_parent_creates_first() {
     let mut before = Replica::new();
-    apply_changes(
-        &mut before,
-        &[Change::Create { id: NodeId(1), kind: Arc::from("r"), parent: NodeId(0), position: "a0".into(), props: vec![] }],
-    );
+    apply_changes(&mut before, &[Change::Create { id: NodeId(1), kind: Arc::from("r"), parent: NodeId(0), position: "a0".into(), props: vec![] }]);
     let mut after = before.clone();
     apply_changes(
         &mut after,
         &[
             Change::Create { id: NodeId(2), kind: Arc::from("g"), parent: NodeId(0), position: "a1".into(), props: vec![] },
-            Change::Set {
-                id: NodeId(1),
-                prop: Arc::from("parent"),
-                value: craft_crdt::value::Value::Json(serde_json::Value::Number(2.into())),
-            },
+            Change::Set { id: NodeId(1), prop: Arc::from("parent"), value: craft_crdt::value::Value::Json(serde_json::Value::Number(2.into())) },
         ],
     );
     let batch = craft_crdt::diff::diff(&before, &after, 0, 1, before.seq());

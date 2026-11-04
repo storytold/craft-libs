@@ -238,11 +238,7 @@ fn three_way_parent(plan: &mut MergePlan, id: NodeId, base: NodeId, branch: Node
         return;
     }
     if main == base {
-        plan.auto.push(Change::Set {
-            id,
-            prop: Arc::from("parent"),
-            value: Value::Json(serde_json::Value::Number(branch.0.into())),
-        });
+        plan.auto.push(Change::Set { id, prop: Arc::from("parent"), value: Value::Json(serde_json::Value::Number(branch.0.into())) });
     } else if main != branch {
         plan.conflicts.push(Conflict {
             target: Target::Node(id),
@@ -258,11 +254,7 @@ fn three_way_position(plan: &mut MergePlan, id: NodeId, base: &str, branch: &str
         return;
     }
     if main == base {
-        plan.auto.push(Change::Set {
-            id,
-            prop: Arc::from("position"),
-            value: Value::Json(serde_json::Value::String(branch.to_owned())),
-        });
+        plan.auto.push(Change::Set { id, prop: Arc::from("position"), value: Value::Json(serde_json::Value::String(branch.to_owned())) });
     } else if main != branch {
         plan.conflicts.push(Conflict {
             target: Target::Node(id),
