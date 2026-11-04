@@ -211,9 +211,6 @@ impl Decoder {
                 }
                 _ => break, // ID_END
             }
-            if id == ID_END {
-                break;
-            }
         }
         if nch == 0 && !saw_element {
             return Err(Error::InvalidConfig("channel configuration 0 without a program config element"));

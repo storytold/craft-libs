@@ -531,6 +531,7 @@ fn mp4_with_wrong_durations_or_edits_presents_its_audio() {
         ("durations of one", patched(&bytes, b"stts", &[stts_delta], |_| 1)),
         ("durations doubled", patched(&bytes, b"stts", &[stts_delta], |v| v * 2)),
         ("durations of zero", patched(&bytes, b"stts", &[stts_delta], |_| 0)),
+        ("last delta longer than a packet", patched(&bytes, b"stts", &[stts_delta + 8], |_| 1500)),
     ] {
         assert_ne!(file, bytes, "{name}");
         let (info, buf) = decode(&file, None).unwrap();

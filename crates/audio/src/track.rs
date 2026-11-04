@@ -78,8 +78,8 @@ impl TrackDecoder {
     /// inside the stream is found in them.
     ///
     /// Streams without codec configuration are accepted where the packets carry it: AAC with
-    /// empty `extradata` takes its configuration from the first packet's ADTS header (MPEG-TS,
-    /// raw `.aac`), and ADTS headers are stripped from every packet. Other missing configuration is
+    /// empty `extradata` takes its configuration from the ADTS headers of the lookahead (MPEG-TS,
+    /// raw `.aac`), the one most of them share, and ADTS headers are stripped from every packet. Other missing configuration is
     /// [`AudioError::Malformed`].
     ///
     /// Codecs without a native packet decoder yet are [`AudioError::Unsupported`];
@@ -97,7 +97,8 @@ impl TrackDecoder {
                     lookahead.iter().map(|p| adts_frames(p).and_then(|f| f.first().map(|(_, unit)| *unit)).unwrap_or(p)).collect();
                 let mut adts_format = None;
                 let asc = if params.extradata.is_empty() {
-                    let h = lookahead.first().and_then(|p| aac::AdtsHeader::parse(p).ok()).ok_or_else(|| {
+                    let headers: Vec<aac::AdtsHeader> = lookahead.iter().filter_map(|p| aac::AdtsHeader::parse(p).ok()).collect();
+                    let h = adts_stream_header(&headers).ok_or_else(|| {
                         AudioError::Malformed("AAC track without an AudioSpecificConfig (extradata), and its packets are not ADTS".into())
                     })?;
                     adts_format = Some(adts_format_of(&h));
@@ -293,7 +294,20 @@ fn append(out: &mut Vec<Vec<f32>>, more: Vec<Vec<f32>>) {
 #[cfg(feature = "aac-decode")]
 const MAX_ADTS_FRAMES_PER_PACKET: usize = 1024;
 
-/// The configuration of an AAC stream from its first ADTS header. Channel configuration 0 leaves
+/// The header of the format most of `headers` share, the earliest on a tie, so one damaged header
+/// does not decide a stream's format.
+#[cfg(feature = "aac-decode")]
+pub(crate) fn adts_stream_header(headers: &[aac::AdtsHeader]) -> Option<aac::AdtsHeader> {
+    headers.iter().rev().max_by_key(|h| headers.iter().filter(|o| adts_format_of(o) == adts_format_of(h)).count()).copied()
+}
+
+/// Whether `packet` is several ADTS frames, which decode to more than one packet's length.
+#[cfg(feature = "decode-native")]
+pub(crate) fn several_adts_frames(packet: &[u8]) -> bool {
+    adts_frames(packet).is_some_and(|frames| frames.len() > 1)
+}
+
+/// The configuration of an AAC stream from its ADTS `header`. Channel configuration 0 leaves
 /// the layout to a program config element in the stream, looked for in `first_units`.
 #[cfg(feature = "aac-decode")]
 fn adts_config(header: &aac::AdtsHeader, first_units: &[&[u8]]) -> Result<Vec<u8>> {
@@ -326,10 +340,10 @@ fn adts_frames(packet: &[u8]) -> Option<Vec<(aac::AdtsHeader, &[u8])>> {
 /// What an ADTS frame says the stream's format is: profile, sampling frequency index and channel
 /// configuration.
 #[cfg(feature = "aac-decode")]
-type AdtsFormat = (u8, u8, u8);
+pub(crate) type AdtsFormat = (u8, u8, u8);
 
 #[cfg(feature = "aac-decode")]
-fn adts_format_of(h: &aac::AdtsHeader) -> AdtsFormat {
+pub(crate) fn adts_format_of(h: &aac::AdtsHeader) -> AdtsFormat {
     (h.object_type, h.sf_index, h.channel_config)
 }
 
@@ -533,6 +547,25 @@ mod tests {
         stereo[2] &= 0xFE;
         assert_eq!(dec.decode(&stereo).unwrap().channels.len(), 2);
         assert!(dec.decode(&frame).is_err(), "elements the configuration does not have");
+    }
+
+    /// One damaged header at the start of a stream does not decide its format.
+    #[cfg(feature = "aac-decode")]
+    #[test]
+    fn the_adts_format_is_the_one_most_of_the_lookahead_shares() {
+        let good = adts_frame(2);
+        let mut damaged = good.clone();
+        damaged[2] = (damaged[2] & 0xC3) | (4 << 2); // sampling frequency index 4 where the rest have 3
+        let lookahead: [&[u8]; 4] = [&damaged, &good, &good, &good];
+        let mut dec = TrackDecoder::new(&aac_params(), &lookahead).unwrap();
+        assert_eq!(dec.sample_rate(), 48_000);
+        assert!(dec.decode(&damaged).is_err());
+        assert_eq!(dec.decode(&good).unwrap().frames(), 1024);
+        // on a tie, the earlier one
+        let tied: [&[u8]; 2] = [&good, &damaged];
+        assert_eq!(TrackDecoder::new(&aac_params(), &tied).unwrap().sample_rate(), 48_000);
+        #[cfg(feature = "decode-native")]
+        assert!(several_adts_frames(&good.repeat(2)) && !several_adts_frames(&good) && !several_adts_frames(&[0; 8]));
     }
 
     #[cfg(feature = "aac-decode")]

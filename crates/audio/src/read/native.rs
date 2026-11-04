@@ -11,7 +11,7 @@ use super::aiff::{self, AiffParse};
 use super::id3v2_len;
 use super::source::{Src, io_error};
 use super::wav::{self, WavParse};
-use crate::track::TrackDecoder;
+use crate::track::{TrackDecoder, adts_format_of, adts_stream_header, several_adts_frames};
 use crate::{AudioBuffer, AudioError, AudioInfo, CodecId, CodecParams, Container, PcmFormat, Result, aac};
 use craft_media::{isobmff, matroska, ogg};
 
@@ -573,27 +573,19 @@ fn open_adts<'a>(src: &Src<'a>, at: u64) -> Option<Result<Native<'a>>> {
             Ok(frames) => frames?,
             Err(e) => return Some(Err(e)),
         };
-    let format = |h: &aac::AdtsHeader| (h.object_type, h.sf_index, h.channel_config);
     let first = &frames[..frames.len().min(crate::track::LOOKAHEAD_PACKETS)];
-    let &(_, _, stream) = first.iter().max_by_key(|(_, _, h)| first.iter().filter(|(_, _, o)| format(o) == format(h)).count())?;
-    let usable = |h: &aac::AdtsHeader| format(h) == format(&stream) && h.raw_data_blocks == 1;
-    if first.iter().filter(|(_, _, h)| usable(h)).count() * 2 <= first.len() {
+    let headers: Vec<aac::AdtsHeader> = first.iter().map(|&(_, _, h)| h).collect();
+    let stream = adts_format_of(&adts_stream_header(&headers)?);
+    if headers.iter().filter(|h| adts_format_of(h) == stream && h.raw_data_blocks == 1).count() * 2 <= first.len() {
         return None;
     }
-    // The stream's own frames first: the first of them gives the configuration. The others can
-    // still hold the stream's only program config element.
-    let (mut ordered, others): (Vec<_>, Vec<_>) = first.iter().copied().partition(|(_, _, h)| usable(h));
-    ordered.extend(others);
-    let core = stream.to_asc().sample_rate;
-    // Without extradata the configuration comes from the first header (and, for channel
-    // configuration 0, a program config element in the stream).
-    let params = CodecParams::new(CodecId::Aac).with_sample_rate(core);
-    let lookahead = raw_lookahead(src, &ordered, crate::track::LOOKAHEAD_PACKETS);
+    // Without extradata the configuration comes from the frames themselves.
+    let params = CodecParams::new(CodecId::Aac);
+    let lookahead = raw_lookahead(src, &frames, crate::track::LOOKAHEAD_PACKETS);
     // Decoded frames are set below, when the decoder has said what a frame decodes to.
     let packets: Vec<(u64, u32, u32)> = frames.iter().map(|&(p, n, h)| (p, n, u32::from(h.raw_data_blocks))).collect();
     let mut n = native(Container::Adts, Packets::Raw { frames: packets, src: src.clone(), next: 0 }, &params, &lookahead, 0, None, None)?;
-    // HE-AAC decodes twice the core frame length.
-    let per_block = rescale(aac::FRAME_LEN as u64, u64::from(core), u64::from(n.info.sample_rate)) as u32;
+    let per_block = n.dec.frames_per_packet()? as u32;
     if let Packets::Raw { frames, .. } = &mut n.packets {
         for f in frames.iter_mut() {
             f.2 *= per_block;
@@ -660,10 +652,11 @@ fn open_mp4<'a>(src: &Src<'a>, container: Container, track: Option<usize>) -> Op
     let mut stored = rescale(media, u64::from(timescale), u64::from(rate)).saturating_sub(skip);
     // Durations only trim the last packet: ones that end anywhere else are wrong (some count a
     // HE-AAC packet's core frames) and can't cut audio off.
-    let per_packet = probe.frames_per_packet().map(|n| n as u64);
+    // Samples of several ADTS frames (not standard, but they decode) have no one length.
+    let per_packet = probe.frames_per_packet().map(|n| n as u64).filter(|_| !lookahead.iter().any(|p| several_adts_frames(p)));
     if let Some(n) = per_packet {
         let decoded = (t.samples.len() as u64).saturating_mul(n).saturating_sub(skip);
-        if stored.abs_diff(decoded) >= n {
+        if stored > decoded || decoded - stored >= n {
             stored = decoded;
         }
     }

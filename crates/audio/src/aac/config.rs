@@ -385,7 +385,6 @@ pub fn split_adts(data: &[u8]) -> Result<Vec<(AdtsHeader, &[u8])>> {
 }
 
 /// [`split_adts`], stopping after `max` frames.
-#[cfg(feature = "aac-decode")]
 pub(crate) fn split_adts_upto(mut data: &[u8], max: usize) -> Result<Vec<(AdtsHeader, &[u8])>> {
     let mut out = Vec::new();
     while data.len() >= 7 && out.len() < max {
