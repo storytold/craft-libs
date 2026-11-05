@@ -747,8 +747,8 @@ what the handle moves: the logical label of the panel the group shows, or of the
 column's groups show, joined by ", " (fixed, not localized). An untitled panel is left out. With
 no title at all, the placeholder goes with the brackets or quotes around it, a separator right
 after it and one of the spaces beside it ("Move the tab group", "Move tab group ({name})" gives
-"Move tab group", "移动{name}标签组" gives "移动标签组"); a label left with no letter falls back
-to the English default. Two groups showing panels of the same title still get the same name.
+"Move tab group", "移动{name}标签组" gives "移动标签组"); a label left with no letter or digit falls
+back to the English default. Two groups showing panels of the same title still get the same name.
 
 ## Testing
 

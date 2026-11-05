@@ -177,6 +177,9 @@ fn a_label_that_is_only_the_placeholder_falls_back_to_the_default() {
     assert_eq!(labels::named("{name}", labels::MOVE_GROUP, String::new), "Move tab group");
     assert_eq!(labels::named("{name}", labels::MOVE_GROUP, || "Layers".into()), "Layers");
     assert_eq!(labels::named("Move the {name} column", labels::MOVE_COLUMN, || " \t".into()), "Move the column");
+    // A digit is enough to keep the label's own text.
+    assert_eq!(labels::named("{name} 2", labels::MOVE_GROUP, String::new), "2");
+    assert_eq!(labels::named("({name})", labels::MOVE_GROUP, String::new), "Move tab group");
 }
 
 #[test]

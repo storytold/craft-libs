@@ -103,8 +103,8 @@ impl DockStyle {
 
 /// `label` with every `{name}` replaced by `name()`, which only runs when there is one. A blank
 /// name leaves each placeholder out with what only made sense around it (see [`unnamed`]); a
-/// label with no letter left gives `fallback`, so no handle is announced with a hole in its name
-/// or without one.
+/// label with no letter or digit left gives `fallback`, so no handle is announced with a hole in
+/// its name or without one.
 pub(super) fn named(label: &str, fallback: &str, name: impl FnOnce() -> String) -> String {
     if !label.contains(NAME) {
         return label.to_owned();
