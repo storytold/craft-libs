@@ -409,9 +409,15 @@ fn windows_jobs_reach_the_spooler() {
         eprintln!("skipping the real print: the test printer could not be prepared: {why}");
         return;
     }
+    let queries = || crate::windows::CAPABILITY_QUERIES.with(std::cell::Cell::get);
+    let start = queries();
     let listed = spool::printers().into_iter().find(|p| p.name == name);
-    // The list a Print dialog shows first: the same queue, named without asking its driver.
+    let probed = queries().saturating_sub(start);
+    // The list a Print dialog shows first: the same queue, named without asking its driver (a
+    // networked printer in power save can hold that query, storytold/wordcraft#5710).
+    let start = queries();
     let queue = spool::printer_queues().into_iter().find(|p| p.name == name);
+    let unprobed = queries().saturating_sub(start);
     let mixed = test_pdf(&[LETTER, LETTER_LANDSCAPE, LETTER], true);
     let job = Job { printer: Some(name.into()), title: "mixed.pdf".into(), ..Job::default() };
     let caller = std::thread::current().id();
@@ -452,7 +458,9 @@ fn windows_jobs_reach_the_spooler() {
         name,
     );
     assert!(listed.as_ref().is_some_and(|p| p.two_sided.is_some()), "the new printer is listed, its duplex support known: {listed:?}");
-    assert!(queue.as_ref().is_some_and(|p| p.two_sided.is_none()), "the new printer is listed with no driver query: {queue:?}");
+    assert!(queue.as_ref().is_some_and(|p| p.two_sided.is_none()), "the new printer is listed, its duplex support unknown: {queue:?}");
+    assert!(probed > 0, "printers() asks each driver, so the count sees driver queries: {probed}");
+    assert_eq!(unprobed, 0, "printer_queues() asks no driver");
     assert_eq!(sent.as_deref(), Ok("spooled 3 sheet(s)"), "{sent:?}");
     if let Some(refused) = duplex_refused {
         assert!(matches!(refused, Err(Error::Spool(ref m)) if m.contains("simplex/duplex") && m.contains("nothing was sent")), "{refused:?}");
