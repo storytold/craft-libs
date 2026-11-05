@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use craft_ui::direction;
+use craft_ui::{browse_hover, browse_pick, direction};
 use egui::{CornerRadius, FontFamily, FontId, Id, Rect, Role, Sense, StrokeKind, Ui, UiBuilder, WidgetInfo, pos2, vec2};
 
 use crate::index::{Category, Index, script_name, source_label};
@@ -249,7 +249,11 @@ impl FontsPanel {
             let settings = &mut self.settings;
             widgets::select(ui, "craft-fonts.preset", tl!("Sample"), preset_name(preset), 128.0, |ui| {
                 for p in [Preset::Sentence, Preset::Alphabet, Preset::Numerals] {
-                    if ui.selectable_label(preset == p && settings.sample.is_empty(), preset_name(p)).clicked() {
+                    // Press-and-browse: the row under a held press highlights and the release over
+                    // it chooses, as a combo box's own entries do.
+                    let row = ui.selectable_label(preset == p && settings.sample.is_empty(), preset_name(p));
+                    let row = browse_hover(ui, row);
+                    if row.clicked() || browse_pick(ui, &row) {
                         settings.preset = p;
                         settings.sample.clear();
                     }

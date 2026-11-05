@@ -299,9 +299,10 @@ fn popup_id(button_id: Id) -> Id {
 
 /// The key of the browse state: the id of the button whose press opened the menu being browsed
 /// while that button is down, so the entries highlight under the pointer and the one it releases
-/// over is chosen (After Effects). The button id doubles as the owner: only the combo box it
-/// names clears the state, so a closed one drawn first on the release pass cannot take the browse
-/// away before the browsed one's entries see the release.
+/// over is chosen (After Effects). The button id doubles as the owner: while the gesture runs only
+/// the combo box it names clears the state, so a closed one drawn first on the release pass cannot
+/// take the browse away before the browsed one's entries see the release; afterwards any combo
+/// box may clear it, so state owned by a button that stopped being drawn cannot linger.
 fn browse_id() -> Id {
     Id::unique("craft-ui-combo-browsing")
 }
@@ -322,7 +323,7 @@ fn browsing(ctx: &Context) -> bool {
 /// press-and-browse: [`ComboBox::show_index`] uses them, and a custom row in
 /// [`ComboBox::show_ui`]'s menu pairs them instead of a plain `.clicked()`.
 pub fn browse_hover(ui: &Ui, row: Response) -> Response {
-    if browsing(ui.ctx()) && row.contains_pointer() { row.highlight() } else { row }
+    if browsing(ui.ctx()) && row.enabled() && row.contains_pointer() { row.highlight() } else { row }
 }
 
 /// Whether a held press browses the menu and releases over `row`, which then chooses it as a click
@@ -431,9 +432,14 @@ fn show<R>(ui: &mut Ui, button_id: Id, mut combo: ComboBox<'_>, open: impl FnOnc
     }
     let inner = open(menu);
     // The entries have drawn: a press that opened the menu is over, so the next one browses afresh.
-    // Only the combo box whose button started the browse clears it — a closed one drawn before it
-    // on this pass would otherwise take the browse away before its entries see the release.
-    if !ui.input(|i| i.pointer.primary_down()) && ui.data(|d| d.get_temp::<Id>(browse_id())) == Some(button_id) {
+    // Only the combo box whose button started the browse clears it on the release pass — a closed
+    // one drawn before it would otherwise take the browse away before its entries see the release.
+    // Once the gesture is entirely over (neither down nor released this pass) that risk is gone, so
+    // any combo box clears a browse whose owner has stopped being drawn, instead of the state
+    // naming a button that no longer exists.
+    let browse_owner = ui.data(|d| d.get_temp::<Id>(browse_id()));
+    let gesture_over = !ui.input(|i| i.pointer.primary_down() || i.pointer.primary_released());
+    if browse_owner.is_some_and(|owner| if owner == button_id { !ui.input(|i| i.pointer.primary_down()) } else { gesture_over }) {
         ui.data_mut(|d| d.remove::<Id>(browse_id()));
     }
 

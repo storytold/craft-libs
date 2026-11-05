@@ -811,6 +811,27 @@ fn picking_a_suggestion_replans_and_is_remembered() {
     assert!(h.query_by_label("Command for File > Sve Az").is_none());
 }
 
+/// The suggestion's command list browses like every other combo box menu (#469): the press opens
+/// it and the release over a candidate chooses it, so the candidate never has to be clicked.
+#[test]
+fn a_held_press_over_a_suggestion_list_picks_the_candidate_it_lands_on() {
+    let mut h = with_sets(Profiles::default());
+    review(&mut h);
+    assert!(h.query_by_label_contains("3 commands will change").is_some());
+    let combo = h.get_by_label("Command for File > Sve Az").rect().center();
+    h.event(Event::PointerMoved(combo));
+    h.run();
+    h.event(Event::PointerButton { pos: combo, button: egui::PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.run();
+    assert!(h.query_by_label("Save As…").is_some(), "the press opens the candidates at once");
+    let row = h.get_all_by_label("Save As…").last().expect("the Save As… candidate").rect().center();
+    h.event(Event::PointerMoved(row));
+    h.run();
+    h.event(Event::PointerButton { pos: row, button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    h.run();
+    assert!(h.query_by_label_contains("4 commands will change").is_some(), "the release over the candidate chooses it");
+}
+
 // ---- Summary ----
 
 #[test]

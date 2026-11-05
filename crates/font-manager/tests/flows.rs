@@ -175,6 +175,35 @@ fn language_filter_finds_languages_by_their_own_name() {
     assert_eq!(h.state().results(), ["Noto Sans JP"]);
 }
 
+/// The sample choice browses like every other combo box menu (#469): the press opens it and the
+/// release over a row chooses it, changing the preset without the row ever being clicked.
+#[test]
+fn a_held_press_over_the_sample_menu_picks_the_row_it_lands_on() {
+    let (mut h, _) = setup("sample_browse", Settings::default());
+    assert_eq!(
+        h.get_by_role_and_label(Role::ComboBox, "Sample").accesskit_node().value().as_deref(),
+        Some("Sentence"),
+        "the preset starts at Sentence"
+    );
+
+    let combo = h.get_by_role_and_label(Role::ComboBox, "Sample").rect().center();
+    h.event(egui::Event::PointerMoved(combo));
+    h.run();
+    h.event(egui::Event::PointerButton { pos: combo, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE });
+    h.run();
+    assert!(h.query_by_label("Alphabet").is_some(), "the press opens the choices at once");
+    let row = h.get_by_label("Alphabet").rect().center();
+    h.event(egui::Event::PointerMoved(row));
+    h.run();
+    h.event(egui::Event::PointerButton { pos: row, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE });
+    settle(&mut h);
+    assert_eq!(
+        h.get_by_role_and_label(Role::ComboBox, "Sample").accesskit_node().value().as_deref(),
+        Some("Alphabet"),
+        "the release over the Alphabet row chooses it"
+    );
+}
+
 #[test]
 fn install_a_family_then_remove_it_from_its_card() {
     let (mut h, store) = setup("install", Settings::default());
