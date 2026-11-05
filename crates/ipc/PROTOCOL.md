@@ -142,7 +142,8 @@ unknown `format`, a missing field, a relative `path` or a bad `asset` moniker ge
 and the app never sees the request. `params` that is not an object stays `bad_params`. The server
 checks shape, and for `otio-json` it also opens every `ExternalReference` whose `target_url` is a
 `file://` URL or an absolute path. A file that does not open gets `media_missing` with
-`data.missing` (the paths) and the app never sees the request. Relative targets are left to the app.
+`data.missing` (the paths) and the app never sees the request. A `file://` URL whose path has a bad
+percent escape, or does not decode to UTF-8, gets `payload_invalid`. Relative targets are left to the app.
 
 Path rules. `result_path`, `payload.path` and every absolute media `target_url` must
 be absolute, hold no NUL byte and no `..` component, or the request gets `payload_invalid`. The
