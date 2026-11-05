@@ -738,6 +738,17 @@ Keys are `dock.close`, `dock.float`, `dock.collapseToIcons` and so on; the rustd
 lists them all. `DockContent::label` and `action_label` can shape panel and action text further;
 the logical label stays the accessibility name.
 
+Each group and each column has one move handle in the accessibility tree: the drag bar, and
+the column bar (a group's top border band only drags and is not announced). By default these
+share one name per kind. Naming them is opt-in: an app puts `{name}` in `move_group_label` or
+`move_column_label`, and in each of its translations ("Move the {name} tab group"). It stands for
+what the handle moves: the logical label of the panel the group shows, or of the panels a
+column's groups show, joined by ", " (fixed, not localized). An untitled panel is left out. With
+no title at all, the placeholder goes with the brackets or quotes around it, a separator right
+after it and one of the spaces beside it ("Move the tab group", "Move tab group ({name})" gives
+"Move tab group", "移动{name}标签组" gives "移动标签组"); a label left with no letter falls back
+to the English default. Two groups showing panels of the same title still get the same name.
+
 ## Testing
 
 `DockArea::hit_rects(ctx, id)` lists every gesture source drawn last frame as a `Hit` with its
