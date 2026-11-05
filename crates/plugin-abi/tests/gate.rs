@@ -211,6 +211,48 @@ fn rejects_oversized_tables_and_too_many_tables() {
 }
 
 #[test]
+fn a_table_without_a_declared_maximum_is_rejected() {
+    // `table.grow` is allowed (bulk memory and reference types), so an open table is unbounded.
+    let wat = r#"(module
+        (import "craft_host" "call" (func (param i32 i32 i32 i32 i32) (result i64)))
+        (memory (export "memory") 1 16)
+        (table 1 funcref)
+        (func (export "craft_abi") (result i32) i32.const 1)
+        (func (export "craft_alloc") (param i32 i32) (result i32) i32.const 0)
+        (func (export "craft_free") (param i32 i32 i32))
+        (func (export "craft_invoke") (param i32 i32 i32 i32 i32) (result i64) i64.const 0))"#;
+    let bytes = with_section(wat::parse_str(wat).unwrap(), "craft.manifest", &serde_json::to_vec(&manifest_json()).unwrap());
+    assert_only(&gate(&bytes), &[Violation::TableMaxMissing { index: 0 }]);
+    let report = gate(&bytes);
+    assert!(report.violations[0].to_string().contains("no declared maximum"), "{report:#?}");
+}
+
+#[test]
+fn violation_messages_never_show_plugin_controlled_control_or_bidi_text() {
+    use craft_plugin_abi::text::has_unsafe;
+    let nasty = "a\u{202e}b\nc\u{200b}d\u{1b}[2J";
+    let violations = [
+        Violation::ExtraImport { module: nasty.into(), name: nasty.into() },
+        Violation::UnknownOp(nasty.into()),
+        Violation::Malformed(nasty.into()),
+        Violation::InvalidModule(nasty.into()),
+    ];
+    for v in violations {
+        let shown = v.to_string();
+        assert!(!has_unsafe(&shown), "unsafe character in {shown:?}");
+        assert!(shown.contains('a') && shown.contains('d'), "text was dropped instead of cleaned: {shown:?}");
+    }
+    // A manifest error carries serde text that repeats the rejected value.
+    let mut m = manifest_json();
+    m["permissions"] = json!({ "required": [nasty] });
+    let report = gate(&package("accept", &m));
+    assert!(!report.violations.is_empty(), "{report:#?}");
+    for v in &report.violations {
+        assert!(!has_unsafe(&v.to_string()), "unsafe character in {:?}", v.to_string());
+    }
+}
+
+#[test]
 fn lists_every_violation_not_just_the_first() {
     // Start function + extra import + a bad manifest op, in one package.
     let wat = r#"(module
@@ -331,12 +373,15 @@ fn legacy_modules_still_meet_the_size_table_and_memory_caps() {
         let legacy =
             |extra: &str| gate(&wat::parse_str(format!(r#"(module (memory (export "memory") 1) {extra} (func (export "{prefix}run")))"#)).unwrap());
         // Control: a small module within the caps loads.
-        let ok = legacy("(table 10 funcref)");
+        let ok = legacy("(table 10 10 funcref)");
         assert!(ok.legacy.is_some() && ok.is_accepted(), "{prefix}: {ok:#?}");
-        let big_table = legacy("(table 200000000 funcref)");
+        let big_table = legacy("(table 200000000 200000000 funcref)");
         assert!(big_table.violations.contains(&Violation::TableTooLarge { index: 0, elements: 200_000_000 }), "{prefix}: {big_table:#?}");
-        let many = legacy("(table 1 funcref) (table 1 funcref) (table 1 funcref) (table 1 funcref) (table 1 funcref)");
+        let many = legacy("(table 1 1 funcref) (table 1 1 funcref) (table 1 1 funcref) (table 1 1 funcref) (table 1 1 funcref)");
         assert!(many.violations.contains(&Violation::TooManyTables { count: 5 }), "{prefix}: {many:#?}");
+        // A table with no declared maximum can grow past the cap with `table.grow`.
+        let open = legacy("(table 1 funcref)");
+        assert!(open.violations.contains(&Violation::TableMaxMissing { index: 0 }), "{prefix}: {open:#?}");
         let two_mem = legacy("(memory 1)");
         assert!(two_mem.violations.contains(&Violation::MemoryCount { count: 2 }), "{prefix}: {two_mem:#?}");
         // The size cap runs before the legacy return.
