@@ -3,20 +3,26 @@
 //! The launcher finds an app binary through `CRAFT_<APP>_BIN`, `installed.json`, `PATH` and a few
 //! fixed directories. A same-user process can write most of those places, so a name that resolves
 //! is not proof that the file is the app. These checks do not stop a process of the same user,
-//! which can do anything the user can. They stop two mistakes: running a file that another local
+//! which can do anything the user can. They stop two mistakes: running a file that any local
 //! user can replace, and running a file that a relative path or an empty `PATH` entry picked from
 //! the current directory.
+//!
+//! Group write is not checked. A file or directory that is group-writable passes, so every other
+//! member of its group can replace the program. The check accepts that because most Linux
+//! distributions give each user a private group with no other members, and the check cannot see
+//! who is in a group.
 
 use std::path::Path;
 
 use crate::error::LinkError;
 
-/// `Ok` when `path` is an absolute path to a regular, executable file that only this user or root
-/// can change, in a directory that only this user or root can change.
+/// `Ok` when `path` is an absolute path to a regular, executable file, owned by this user or root
+/// and not writable by every user, in a directory with the same owner and mode rules.
 ///
 /// Symlinks are followed, and both the link's directory and the target's directory are checked.
-/// A group-writable file passes: most Linux distributions give each user a private group, and the
-/// check cannot see group members. A file or directory that any user can write fails.
+/// A group-writable file or directory passes, and the other members of its group can replace it.
+/// Most Linux distributions give each user a private group, and the check cannot see group
+/// members. A file or directory that every user can write fails.
 ///
 /// Non-Unix targets only check that the path is an absolute regular file. The Windows ACL on the
 /// install directory is the user's check there.

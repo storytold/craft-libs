@@ -92,7 +92,11 @@ impl LineReader {
                 if self.buf.is_empty() {
                     return Ok(None);
                 }
-                return Ok(Some(self.finish()));
+                let line = self.finish();
+                if line.len() > self.max {
+                    return Err(LinkError::TooLarge);
+                }
+                return Ok(Some(line));
             }
             let newline = available.iter().position(|byte| *byte == b'\n');
             let take = newline.map_or(available.len(), |at| at + 1);
@@ -185,6 +189,25 @@ pub fn push_event(event: &str, seq: u64, data: Value) -> Value {
     json!({"event": event, "seq": seq, "data": data})
 }
 
+/// Write a reply line that a peer will read with the [`MAX_LINE`] limit. A value longer than the
+/// limit is replaced by a `payload_too_large` reply that keeps the request `id`. When even that
+/// does not fit, or the value has no `id` to answer, nothing is written and the result is
+/// `Err(TooLarge)`. The limit counts the content without the newline, as the readers do.
+pub fn write_reply_line(writer: &mut impl Write, value: &Value) -> Result<(), LinkError> {
+    let mut bytes = serde_json::to_vec(value)?;
+    if bytes.len() > MAX_LINE {
+        let id = value.get("id").ok_or(LinkError::TooLarge)?;
+        bytes = serde_json::to_vec(&reply_err(id, &LinkError::TooLarge))?;
+        if bytes.len() > MAX_LINE {
+            return Err(LinkError::TooLarge);
+        }
+    }
+    bytes.push(b'\n');
+    writer.write_all(&bytes)?;
+    writer.flush()?;
+    Ok(())
+}
+
 pub fn write_line(writer: &mut impl Write, value: &Value) -> Result<(), LinkError> {
     let mut bytes = serde_json::to_vec(value)?;
     bytes.push(b'\n');
@@ -206,12 +229,25 @@ pub fn read_cfrq(reader: &mut impl Read) -> Result<Value, LinkError> {
     read_magic(reader, CFRQ)
 }
 
-pub fn write_cfrm(writer: &mut impl Write, header: &Value, payload: &[u8]) -> Result<(), LinkError> {
+/// The checks that [`write_cfrm`] makes before it writes a byte: the header is an object that fits
+/// `BULK_HEADER_MAX`, and the payload fits `FRAME_PAYLOAD_MAX`. A record that fails them has put
+/// nothing on the wire, so a caller may still send a different record. An error from `write_cfrm`
+/// after this check passed came from the stream and may have left part of a record on it.
+pub fn check_cfrm(header: &Value, payload: &[u8]) -> Result<(), LinkError> {
+    cfrm_parts(header, payload).map(|_| ())
+}
+
+fn cfrm_parts(header: &Value, payload: &[u8]) -> Result<(Vec<u8>, u64), LinkError> {
     let header_bytes = header_bytes(header)?;
     let payload_len = u64::try_from(payload.len()).map_err(|_| LinkError::TooLarge)?;
     if payload_len > FRAME_PAYLOAD_MAX {
         return Err(LinkError::TooLarge);
     }
+    Ok((header_bytes, payload_len))
+}
+
+pub fn write_cfrm(writer: &mut impl Write, header: &Value, payload: &[u8]) -> Result<(), LinkError> {
+    let (header_bytes, payload_len) = cfrm_parts(header, payload)?;
     writer.write_all(CFRM)?;
     writer.write_all(&u32_len(&header_bytes)?.to_le_bytes())?;
     writer.write_all(&payload_len.to_le_bytes())?;
@@ -314,6 +350,54 @@ mod tests {
         assert_eq!(req.id, json!(1));
         assert!(parse_request(b"[]").is_err());
         assert!(parse_request(b"{").is_err());
+    }
+
+    #[test]
+    fn a_reply_over_the_line_limit_becomes_a_too_large_error_with_the_same_id() {
+        let mut out = Vec::new();
+        let small = reply_ok(&json!(3), json!({"a": 1}));
+        write_reply_line(&mut out, &small).unwrap();
+        assert_eq!(out, [serde_json::to_vec(&small).unwrap(), b"\n".to_vec()].concat(), "a reply inside the limit is written as it is");
+
+        // The content is exactly MAX_LINE bytes: still inside.
+        let overhead = serde_json::to_vec(&reply_ok(&json!(3), json!(""))).unwrap().len();
+        let exact = reply_ok(&json!(3), json!("x".repeat(MAX_LINE - overhead)));
+        assert_eq!(serde_json::to_vec(&exact).unwrap().len(), MAX_LINE);
+        let mut out = Vec::new();
+        write_reply_line(&mut out, &exact).unwrap();
+        assert_eq!(out.len(), MAX_LINE + 1);
+
+        let big = reply_ok(&json!(3), json!("x".repeat(MAX_LINE - overhead + 1)));
+        let mut out = Vec::new();
+        write_reply_line(&mut out, &big).unwrap();
+        let line = read_line(&mut Cursor::new(out), MAX_LINE).unwrap().unwrap();
+        let reply: Value = serde_json::from_slice(&line).unwrap();
+        assert_eq!(reply["id"], json!(3));
+        assert_eq!(reply["ok"], json!(false));
+        assert_eq!(reply["error"]["code"], json!("payload_too_large"));
+
+        // No id to answer: nothing is written.
+        let mut out = Vec::new();
+        let anonymous = json!({"ok": true, "result": "x".repeat(MAX_LINE)});
+        assert!(matches!(write_reply_line(&mut out, &anonymous), Err(LinkError::TooLarge)));
+        assert!(out.is_empty());
+        // An id so long that the error reply does not fit either.
+        let huge_id = json!({"id": "i".repeat(MAX_LINE + 1), "ok": true});
+        assert!(matches!(write_reply_line(&mut out, &huge_id), Err(LinkError::TooLarge)));
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn a_last_line_without_a_newline_obeys_the_limit() {
+        let at_limit = vec![b'a'; 8];
+        let line = read_line(&mut Cursor::new(at_limit.clone()), 8).unwrap().unwrap();
+        assert_eq!(line, at_limit);
+        let over = vec![b'a'; 9];
+        assert!(matches!(read_line(&mut Cursor::new(over), 8), Err(LinkError::TooLarge)));
+        // The same bytes with a newline are refused too, so the two paths agree.
+        let mut with_newline = vec![b'a'; 9];
+        with_newline.push(b'\n');
+        assert!(matches!(read_line(&mut Cursor::new(with_newline), 8), Err(LinkError::TooLarge)));
     }
 
     #[test]

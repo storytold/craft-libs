@@ -100,16 +100,28 @@ pub fn write_private(dir: &Path, name: &str, bytes: &[u8]) -> Result<(), LinkErr
 }
 
 /// Read `<dir>/<name>` when it is a regular file (not a symlink) that this user owns and no one
-/// else can access. Anything else is `Refused`.
+/// else can access. Anything else is `Refused`. A missing file is an I/O error.
+///
+/// On Unix the open refuses a symlink and does not wait on a FIFO, and the checks and the read use
+/// that one handle, so the entry cannot change between the check and the read.
 pub fn read_private(dir: &Path, name: &str) -> Result<Vec<u8>, LinkError> {
     let path = dir.join(name);
-    let meta = std::fs::symlink_metadata(&path)?;
-    if !meta.file_type().is_file() {
-        return Err(refused(&path, "not a regular file (a symlink is not followed)"));
-    }
     #[cfg(unix)]
     {
+        use std::io::Read;
         use std::os::unix::fs::MetadataExt;
+        let mut file = match crate::fsopen::open_read(&path, false) {
+            Ok(file) => file,
+            // The errno for a symlink in the last component differs between Unix systems.
+            Err(_) if std::fs::symlink_metadata(&path).is_ok_and(|meta| meta.file_type().is_symlink()) => {
+                return Err(refused(&path, "not a regular file (a symlink is not followed)"));
+            }
+            Err(err) => return Err(err.into()),
+        };
+        let meta = file.metadata()?;
+        if !meta.file_type().is_file() {
+            return Err(refused(&path, "not a regular file"));
+        }
         let euid = crate::discovery::current_euid()?;
         if meta.uid() != euid {
             return Err(refused(&path, &format!("owner is {}, euid is {euid}", meta.uid())));
@@ -117,8 +129,18 @@ pub fn read_private(dir: &Path, name: &str) -> Result<Vec<u8>, LinkError> {
         if meta.mode() & 0o077 != 0 {
             return Err(refused(&path, &format!("mode is {:o}, group and others must have no access", meta.mode() & 0o777)));
         }
+        let mut bytes = Vec::with_capacity(usize::try_from(meta.len()).unwrap_or(0));
+        file.read_to_end(&mut bytes)?;
+        Ok(bytes)
     }
-    Ok(std::fs::read(&path)?)
+    #[cfg(not(unix))]
+    {
+        let meta = std::fs::symlink_metadata(&path)?;
+        if !meta.file_type().is_file() {
+            return Err(refused(&path, "not a regular file (a symlink is not followed)"));
+        }
+        Ok(std::fs::read(&path)?)
+    }
 }
 
 fn refused(path: &Path, reason: &str) -> LinkError {
@@ -199,6 +221,26 @@ mod tests {
     }
 
     #[test]
+    fn a_fifo_or_a_missing_file_is_not_read_and_does_not_block() {
+        // Forking `mkfifo` while another test holds a discovery lock would hand the child a copy of the lock fd.
+        let _spawning = crate::SPAWN_GUARD.write().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let home = scratch("fifo");
+        std::fs::create_dir_all(&home).unwrap();
+        let dir = cache_dir_with(&env(&[("HOME", &home)]), "prepared").unwrap();
+        let made = std::process::Command::new("mkfifo").arg("-m").arg("600").arg(dir.join("pipe.bin")).status().map(|s| s.success()).unwrap_or(false);
+        assert!(made, "mkfifo failed");
+        let (tx, rx) = std::sync::mpsc::channel();
+        let reading = dir.clone();
+        std::thread::spawn(move || {
+            let _ = tx.send((read_private(&reading, "pipe.bin"), read_private(&reading, "absent.bin")));
+        });
+        let (fifo, absent) = rx.recv_timeout(std::time::Duration::from_secs(5)).expect("a FIFO blocked the read");
+        assert!(matches!(fifo, Err(LinkError::Refused { .. })), "{fifo:?}");
+        assert!(matches!(absent, Err(LinkError::Io(_))), "{absent:?}");
+        std::fs::remove_dir_all(&home).unwrap();
+    }
+
+    #[test]
     fn bad_names_are_refused() {
         let home = scratch("names");
         std::fs::create_dir_all(&home).unwrap();
@@ -221,7 +263,7 @@ mod tests {
         std::fs::write(&victim, b"keep").unwrap();
         let planted = dir.join("b.bin");
         symlink(&victim, &planted).unwrap();
-        assert!(read_private(&dir, "b.bin").is_err(), "a symlink is not read");
+        assert!(matches!(read_private(&dir, "b.bin"), Err(LinkError::Refused { .. })), "a symlink is refused, not read");
         write_private(&dir, "b.bin", b"two").unwrap();
         assert_eq!(std::fs::read(&victim).unwrap(), b"keep");
         assert_eq!(read_private(&dir, "b.bin").unwrap(), b"two");

@@ -117,7 +117,11 @@ impl Walk {
         match value {
             Value::Object(map) => {
                 let external = map.get("OTIO_SCHEMA").and_then(Value::as_str).is_some_and(|schema| schema.starts_with("ExternalReference"));
-                if external && let Some(path) = map.get("target_url").and_then(Value::as_str).and_then(local_path) {
+                let local = match map.get("target_url").and_then(Value::as_str) {
+                    Some(url) if external => local_path(url)?,
+                    _ => None,
+                };
+                if let Some(path) = local {
                     check_peer_path(&path, "target_url")?;
                     if !self.seen.contains(&path) {
                         if self.seen.len() >= MAX_MEDIA_REFS {
@@ -142,15 +146,16 @@ impl Walk {
 }
 
 /// The local path a `target_url` names: a `file://` URL (percent-decoded, host empty or
-/// `localhost`) or an absolute path. `None` for anything else.
-fn local_path(url: &str) -> Option<String> {
+/// `localhost`) or an absolute path. `Ok(None)` for anything else. `Err` for a `file://` URL
+/// whose path does not percent-decode to UTF-8: it names a local file, so it cannot be skipped.
+fn local_path(url: &str) -> Result<Option<String>, LinkError> {
     let path = match url.strip_prefix("file://") {
         Some(rest) => {
             let rest = rest.strip_prefix("localhost").unwrap_or(rest);
             if !rest.starts_with('/') {
-                return None;
+                return Ok(None);
             }
-            percent_decode(rest)?
+            percent_decode(rest).ok_or_else(|| LinkError::PayloadInvalid("target_url is a file:// URL with a bad percent escape".into()))?
         }
         None => url.to_string(),
     };
@@ -159,7 +164,7 @@ fn local_path(url: &str) -> Option<String> {
         [b'/', drive, b':', ..] if drive.is_ascii_alphabetic() && cfg!(windows) => path[1..].to_string(),
         _ => path,
     };
-    std::path::Path::new(&path).is_absolute().then_some(path)
+    Ok(std::path::Path::new(&path).is_absolute().then_some(path))
 }
 
 fn percent_decode(text: &str) -> Option<String> {
@@ -268,6 +273,21 @@ mod tests {
         assert!(matches!(err, LinkError::PayloadInvalid(_)), "{err:?}");
         // A relative target is the app's business, `..` or not.
         assert!(OpenPayload::from_value(&payload_with("clips/../a.mov")).is_ok());
+    }
+
+    #[test]
+    fn a_file_url_that_does_not_decode_is_payload_invalid() {
+        for bad in
+            ["file:///tmp/clip%GG.mov", "file:///tmp/clip%4", "file:///tmp/clip%", "file://localhost/tmp/clip%zz.mov", "file:///tmp/clip%FF.mov"]
+        {
+            let err = OpenPayload::from_value(&payload_with(bad)).unwrap_err();
+            assert!(matches!(err, LinkError::PayloadInvalid(_)), "{bad:?}: {err:?}");
+            assert!(matches!(missing_media(&otio_with(bad)), Err(LinkError::PayloadInvalid(_))), "{bad:?}");
+        }
+        // A reference that names no local file stays the app's business.
+        for skipped in ["file://remote-host/tmp/clip%GG.mov", "http://example.com/clip%GG.mov", "clips/clip%GG.mov"] {
+            assert!(OpenPayload::from_value(&payload_with(skipped)).is_ok(), "{skipped:?}");
+        }
     }
 
     #[cfg(unix)]
