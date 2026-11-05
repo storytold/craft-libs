@@ -182,6 +182,25 @@ fn legacy_command_keeps_the_request_id() {
     drop(harness.tmp);
 }
 
+/// A sink reply longer than `MAX_LINE` cannot be read by a client. The server answers that request
+/// with `payload_too_large` and the same id, and the connection keeps working.
+#[test]
+fn a_reply_over_the_line_limit_is_answered_with_an_error_and_the_connection_survives() {
+    let harness = boot();
+    let mut client = Client::connect(&harness.socket, &harness.token);
+    *harness.sink.result.lock().unwrap() = json!({"blob": "x".repeat(MAX_LINE + 16)});
+    let reply = client.call(5, "engine.commands", json!({}));
+    assert_eq!(reply["id"], json!(5), "{reply}");
+    assert_eq!(reply["ok"], json!(false), "{reply}");
+    assert_eq!(reply["error"]["code"], json!("payload_too_large"), "{reply}");
+    *harness.sink.result.lock().unwrap() = json!({"commands": ["cut"]});
+    let next = client.call(6, "engine.commands", json!({}));
+    assert_eq!(next["ok"], json!(true), "the connection must still work: {next}");
+    assert_eq!(next["id"], json!(6), "{next}");
+    harness.server.shutdown().unwrap();
+    drop(harness.tmp);
+}
+
 /// The server polls each connection with a 250 ms read timeout. On Linux that timeout surfaces as
 /// `WouldBlock` ("Resource temporarily unavailable"), which must mean "idle, keep waiting". A
 /// connection that stays quiet for longer than one poll must still answer the next request.

@@ -475,7 +475,7 @@ fn overlong() -> String {
 
 fn write_value(writer: &Arc<std::sync::Mutex<Box<dyn Write + Send>>>, value: &Value) -> Result<(), LinkError> {
     let mut guard = lock(writer);
-    wire::write_line(&mut *guard, value)
+    wire::write_reply_line(&mut *guard, value)
 }
 
 /// Retries reads that time out until `deadline`, so a record split across the read poll is whole.
