@@ -75,8 +75,8 @@ impl Services for Spy {
     fn unix_millis(&self) -> u64 {
         self.inner.unix_millis()
     }
-    fn fill_random(&self, buf: &mut [u8]) {
-        self.inner.fill_random(buf);
+    fn fill_random(&self, buf: &mut [u8]) -> Result<(), EntropyUnavailable> {
+        self.inner.fill_random(buf)
     }
     fn notify(&self, notice: UserNotice) {
         self.inner.notify(notice);

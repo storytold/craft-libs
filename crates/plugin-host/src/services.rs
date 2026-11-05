@@ -85,6 +85,10 @@ pub enum LinkFailure {
     Cancelled,
 }
 
+/// The app could not get entropy from the system. The message is for the log.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EntropyUnavailable(pub String);
+
 /// A message the user must see, such as a plugin fault or a tripped circuit.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct UserNotice {
@@ -137,8 +141,10 @@ pub trait Services: MaybeSendSync {
     /// Wall clock, milliseconds since the Unix epoch. For `time.now` with the `clock` permission
     /// and for grant time stamps.
     fn unix_millis(&self) -> u64;
-    /// Fill `buf` with entropy. For `random.bytes` with the `random` permission.
-    fn fill_random(&self, buf: &mut [u8]);
+    /// Fill `buf` with entropy. For `random.bytes` with the `random` permission. If the system has no
+    /// entropy, return `Err`. The plugin host then fails the call with `E_UNSUPPORTED`. Never fill `buf`
+    /// with a fixed pattern and return `Ok`: the guest would take it for random bytes.
+    fn fill_random(&self, buf: &mut [u8]) -> Result<(), EntropyUnavailable>;
     /// Tell the user something.
     fn notify(&self, notice: UserNotice);
     /// Every app with a live Craft Link instance. The plugin host filters the list by the plugin's

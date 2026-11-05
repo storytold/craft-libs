@@ -476,7 +476,7 @@ impl HostDispatcher {
         }
         let mut buf = vec![0u8; len];
         if self.has(|g| matches!(g, Permission::Random)) {
-            self.services.fill_random(&mut buf);
+            self.services.fill_random(&mut buf).map_err(|_| status(Status::Unsupported))?;
         } else {
             let mut m = lock(&self.inner);
             for chunk in buf.chunks_mut(8) {

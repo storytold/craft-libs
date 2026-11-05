@@ -58,6 +58,8 @@ pub struct TestServices {
     pub require_lend: AtomicBool,
     /// How many times the plugin host lent the session.
     pub lends: AtomicU64,
+    /// When set, `fill_random` reports that the system has no entropy.
+    pub entropy_fails: AtomicBool,
 }
 
 thread_local! {
@@ -104,6 +106,7 @@ impl TestServices {
             now_ms: AtomicU64::new(1_700_000_000_000),
             require_lend: AtomicBool::new(false),
             lends: AtomicU64::new(0),
+            entropy_fails: AtomicBool::new(false),
         })
     }
 
@@ -154,8 +157,12 @@ impl Services for TestServices {
         self.now_ms.load(Ordering::Relaxed)
     }
 
-    fn fill_random(&self, buf: &mut [u8]) {
+    fn fill_random(&self, buf: &mut [u8]) -> Result<(), EntropyUnavailable> {
+        if self.entropy_fails.load(Ordering::Relaxed) {
+            return Err(EntropyUnavailable("the test has no entropy".into()));
+        }
         buf.fill(0xAB);
+        Ok(())
     }
 
     fn notify(&self, notice: UserNotice) {

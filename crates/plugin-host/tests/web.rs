@@ -519,8 +519,9 @@ impl Services for NullServices {
     fn unix_millis(&self) -> u64 {
         0
     }
-    fn fill_random(&self, buf: &mut [u8]) {
+    fn fill_random(&self, buf: &mut [u8]) -> Result<(), EntropyUnavailable> {
         buf.fill(0xAB);
+        Ok(())
     }
     fn notify(&self, _notice: UserNotice) {}
     fn link_apps(&self, _owner: &Owner) -> Result<Vec<LinkApp>, LinkFailure> {
