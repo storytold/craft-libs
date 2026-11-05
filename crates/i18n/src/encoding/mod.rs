@@ -92,11 +92,26 @@ impl LegacyEncoding {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DecodeError {
     /// Invalid UTF-8 sequence encountered at byte offset.
-    InvalidUtf8 { offset: usize },
+    InvalidUtf8 {
+        /// Byte offset in the input where invalid UTF-8 sequence begins.
+        offset: usize,
+    },
     /// Unmapped byte in legacy encoding table encountered at byte offset.
-    UnmappedByte { byte: u8, offset: usize, encoding: LegacyEncoding },
+    UnmappedByte {
+        /// Raw byte value that could not be mapped.
+        byte: u8,
+        /// Byte offset in the input where unmapped byte occurred.
+        offset: usize,
+        /// Legacy encoding table being used for decoding.
+        encoding: LegacyEncoding,
+    },
     /// Malformed composite byte sequence encountered at byte offset.
-    MalformedSequence { offset: usize, encoding: LegacyEncoding },
+    MalformedSequence {
+        /// Byte offset where malformed composite sequence began.
+        offset: usize,
+        /// Legacy encoding table being used for decoding.
+        encoding: LegacyEncoding,
+    },
 }
 
 impl std::fmt::Display for DecodeError {

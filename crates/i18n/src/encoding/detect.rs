@@ -184,7 +184,12 @@ pub enum EncodingEvidence {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DetectionResult {
     /// High-confidence detection backed by explicit evidence or verified signatures.
-    HighConfidence { encoding: LegacyEncoding, evidence: EncodingEvidence },
+    HighConfidence {
+        /// Detected legacy encoding.
+        encoding: LegacyEncoding,
+        /// Source of evidence backing the detection result.
+        evidence: EncodingEvidence,
+    },
     /// Multiple candidate encodings match valid byte distributions equally, or metadata conflicts.
     Ambiguous(&'static [LegacyEncoding]),
     /// Byte patterns match no known Vietnamese encoding profile.
