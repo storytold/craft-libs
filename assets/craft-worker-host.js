@@ -1,0 +1,41 @@
+// SharedWorker bootstrap for craft-runtime (craft-libs#5).
+// Routes HostMessage JSON on each MessagePort via craft-worker-host-routing.js.
+const connections = new Set();
+
+try {
+  importScripts('craft-worker-host-routing.js');
+} catch {
+  // Node protocol smoke tests load routing directly without importScripts.
+}
+
+try {
+  importScripts('opfs-flush.js');
+} catch {
+  // Optional warm-tier flush hook; tests may assign craftRuntimeFlushPending manually.
+}
+
+try {
+  importScripts('fs-access-host.js');
+} catch {
+  // Optional cold-tier FS Access host; browser-only.
+}
+
+self.onconnect = (event) => {
+  const port = event.ports[0];
+  connections.add(port);
+  const route =
+    typeof handleHostMessage === 'function'
+      ? handleHostMessage
+      : globalThis.craftWorkerHostHandleMessage;
+  port.onmessage = (ev) => {
+    if (typeof route !== 'function') {
+      port.postMessage({
+        type: 'error',
+        message: 'craft-worker-host: routing not loaded; message dropped',
+      });
+      return;
+    }
+    route(port, ev.data);
+  };
+  port.start();
+};
