@@ -32,16 +32,42 @@ pub(crate) fn word_to_check_in<'a>(d: &AffixDict, word: &'a str, opts: &Options)
     if n <= 1 || (opts.ignore_numbers && w.chars().any(|c| c.is_ascii_digit())) || !w.chars().any(char::is_alphabetic) {
         return None;
     }
-    // Only a word with a cased letter can be in capitals: Hebrew, Arabic, Thai… words have none.
-    if opts.ignore_uppercase && w.chars().any(char::is_uppercase) && w.chars().all(|c| !c.is_lowercase()) && n <= 6 {
+    if opts.ignore_uppercase && in_capitals(w) && n <= 6 {
         return None;
     }
     Some(w)
 }
 
+/// Is `w` in capitals: a cased letter and no lower-case one? Only a word with a cased letter can
+/// be: Hebrew, Arabic, Thai, Chinese… words have none, so they are never taken for acronyms.
+pub(crate) fn in_capitals(w: &str) -> bool {
+    w.chars().any(char::is_uppercase) && w.chars().all(|c| !c.is_lowercase())
+}
+
+/// Is `part` of a hyphenated word an abbreviation Ignore words in UPPERCASE skips: at most `max`
+/// characters, [`in_capitals`] or without letters (`SMS` in `SMS-ка`, `19` in `COVID-19`)? A
+/// part in a caseless script is no abbreviation.
+pub(crate) fn capitals_part(part: &str, max: usize) -> bool {
+    part.chars().count() <= max && (in_capitals(part) || !part.chars().any(char::is_alphabetic))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// craft-libs#485's cased-letter rule, shared by every language: a word or part is in
+    /// capitals only with a cased letter; a part without letters counts as an abbreviation.
+    #[test]
+    fn capitals_need_a_cased_letter() {
+        for w in ["PKO", "SMS", "ÉTÉ", "ВКП", "B2B"] {
+            assert!(in_capitals(w) && capitals_part(w, 6), "{w}");
+        }
+        for w in ["日本", "שלום", "ไทย", "Pko", "pko", "123", ""] {
+            assert!(!in_capitals(w), "{w}");
+        }
+        assert!(capitals_part("19", 6) && capitals_part("", 6));
+        assert!(!capitals_part("日本", 6) && !capitals_part("ไทย", 6) && !capitals_part("ABCDEFG", 6));
+    }
 
     #[test]
     fn words_needing_no_lookup() {

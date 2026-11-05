@@ -75,4 +75,13 @@ mod tests {
         assert!(!suggest("město", 4).contains(&"město".into()));
         assert!(!suggest("zqzakázane", 8).contains(&"zqzakázané".into()));
     }
+
+    #[test]
+    fn a_letter_that_lowercases_to_two_chars_is_still_suggested_for() {
+        // wordcraft#4683: "İx" lowercases to three chars ("i", U+0307, "x") but has two typed
+        // letters; the one-letter edits stay in range and dropping the dot still finds "ix".
+        let d = AffixDict::from_hunspell("", "1\nix\n", &[]).unwrap();
+        let suggestions = suggest_in(&d, "İx", 4);
+        assert!(suggestions.contains(&"Ix".into()), "{suggestions:?}");
+    }
 }

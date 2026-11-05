@@ -1,6 +1,6 @@
 [package]
 name = "craft-media"
-description = "Bit-level I/O and clean-room ISO BMFF (MP4), QuickTime (MOV) and Matroska (MKV, WebM) demuxers and muxers."
+description = "Bit-level I/O, clean-room ISO BMFF (MP4), QuickTime (MOV) and Matroska (MKV, WebM) demuxers and muxers, and an Ogg demuxer."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -18,6 +18,8 @@ default = ["isobmff"]
 bitstream = []
 isobmff = ["bitstream", "dep:thiserror"]
 matroska = []
+# Ogg demuxer (Ogg Opus and Vorbis mapping, `craft_media::ogg`).
+ogg = []
 # Serialize and Deserialize for `Container`, `CodecId`, `CodecParams` and `PcmFormat`.
 serde = ["dep:serde"]
 

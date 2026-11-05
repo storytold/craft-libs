@@ -200,7 +200,8 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
         let height = group.height.filter(|h| h.is_finite()).unwrap_or(FLYOUT_HEIGHT);
         let source = Rect::from_min_size(pos2(grip.left(), top), vec2(width.max(self.style.min_pane), height.max(self.style.tab_height)));
         self.record_float(&group.panels, vec2(grip.width(), self.row_height()), source.size());
-        response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), &self.style.move_group_label));
+        let shown = group.active_panel().unwrap_or(first);
+        response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), self.move_group_name(shown)));
         if movable && response.drag_started() {
             let origin = ui.input(|i| i.pointer.press_origin()).or_else(|| ui.ctx().pointer_interact_pos()).unwrap_or(grip.center());
             let drag = GroupDrag {
