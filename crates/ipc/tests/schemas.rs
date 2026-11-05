@@ -125,6 +125,13 @@ fn schema_and_rust_agree_on_edge_cases() {
         ),
         (edit(&legacy, &|d| d["result_epoch"] = json!(0)), true, "epoch 0"),
         (edit(&legacy, &|d| d["created"] = json!("yesterday")), false, "bad date"),
+        (edit(&legacy, &|d| d["created"] = json!("2026-02-31T09:30:00Z")), false, "31 February"),
+        (edit(&legacy, &|d| d["created"] = json!("2026-02-29T09:30:00Z")), false, "29 February in a common year"),
+        (edit(&legacy, &|d| d["created"] = json!("2026-04-31T09:30:00+02:00")), false, "31 April"),
+        (edit(&legacy, &|d| d["created"] = json!("1900-02-29T00:00:00Z")), false, "29 February in a century year"),
+        (edit(&legacy, &|d| d["created"] = json!("2024-02-29T09:30:00Z")), true, "29 February in a leap year"),
+        (edit(&legacy, &|d| d["created"] = json!("2000-02-29T09:30:00.250Z")), true, "29 February in a 400 year"),
+        (edit(&legacy, &|d| d["created"] = json!("2026-12-31T23:59:59-05:30")), true, "last day of the year"),
         (edit(&legacy, &|d| d["link_id"] = json!("nope")), false, "bad link id"),
         (
             edit(&legacy, &|d| {
