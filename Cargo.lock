@@ -991,6 +991,7 @@ dependencies = [
  "getrandom 0.2.17",
  "interprocess",
  "jsonschema",
+ "libc",
  "serde",
  "serde_json",
  "sha2",

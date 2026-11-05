@@ -178,7 +178,7 @@ impl Tracker {
 
 /// Fingerprint `path`. A missing file is an error.
 pub fn fingerprint(path: &Path) -> Result<Fingerprint, LinkError> {
-    let mut file = File::open(path)?;
+    let mut file = crate::fsopen::open_read(path, true)?;
     let (size, mtime_ms) = stat(&file, path)?;
     Ok(Fingerprint { size, mtime_ms, hash: hash_reader(&mut file)? })
 }
@@ -195,7 +195,8 @@ pub fn fingerprint_if_present(path: &Path) -> Result<Option<Fingerprint>, LinkEr
 }
 
 fn open_if_present(path: &Path) -> Result<Option<File>, LinkError> {
-    match File::open(path) {
+    // `stat` checks the type on this handle. An open that waits for a FIFO writer would stall the caller.
+    match crate::fsopen::open_read(path, true) {
         Ok(file) => Ok(Some(file)),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(err) => Err(LinkError::Io(format!("{}: {err}", path.display()))),
@@ -418,6 +419,33 @@ mod tests {
         let path = tmp.0.join("a.png");
         std::fs::create_dir(&path).unwrap();
         assert!(Tracker::new(&path, 0).is_err(), "a directory is not a result file");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_fifo_at_the_path_is_an_error_and_never_blocks() {
+        // Forking `mkfifo` while another test holds a discovery lock would hand the child a copy of the lock fd.
+        let _spawning = crate::SPAWN_GUARD.write().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let tmp = Tmp::new("fifo");
+        let path = tmp.0.join("a.png");
+        std::fs::write(&path, b"one").unwrap();
+        let mut tracker = Tracker::new(&path, 3).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        let made = std::process::Command::new("mkfifo").arg(&path).status().map(|s| s.success()).unwrap_or(false);
+        assert!(made, "mkfifo failed");
+        // The open of a FIFO with no writer waits for one. Run each call where a hang fails the test instead of the run.
+        let (tx, rx) = std::sync::mpsc::channel();
+        let watched = path.clone();
+        std::thread::spawn(move || {
+            let polled = tracker.poll(true);
+            let kept = (tracker.state(), tracker.epoch());
+            let _ = tx.send((polled, kept, Tracker::new(&watched, 0).map(|_| ()), fingerprint(&watched).map(|_| ())));
+        });
+        let (polled, kept, created, printed) = rx.recv_timeout(Duration::from_secs(5)).expect("a FIFO blocked the open");
+        assert!(matches!(polled, Err(LinkError::Invalid(_))), "{polled:?}");
+        assert_eq!(kept, (FileState::Current, 3), "a failed poll leaves the state as it was");
+        assert!(matches!(created, Err(LinkError::Invalid(_))), "{created:?}");
+        assert!(matches!(printed, Err(LinkError::Invalid(_))), "{printed:?}");
     }
 
     #[test]

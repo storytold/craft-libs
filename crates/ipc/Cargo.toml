@@ -17,6 +17,10 @@ serde.workspace = true
 serde_json.workspace = true
 sha2 = "0.10.9"
 
+[target.'cfg(unix)'.dependencies]
+# O_NONBLOCK and O_NOFOLLOW for opens that must not wait on a FIFO or follow a symlink. Constants only.
+libc = "0.2"
+
 [target.'cfg(windows)'.dependencies]
 widestring = "1"
 
