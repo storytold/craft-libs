@@ -5,6 +5,7 @@ use std::time::{Duration, Instant};
 use serde_json::{Map, Value, json};
 
 use super::events::{self, Subscription};
+use super::provider;
 use super::{Activation, Assets, Hub, lock};
 use crate::error::LinkError;
 use crate::moniker::Moniker;
@@ -31,9 +32,9 @@ pub(super) fn dispatch(hub: &Hub, conn_id: u64, sub: &Subscription, first: bool,
             Outcome::Close(Some(wire::reply_ok(&req.id, json!({}))))
         }
         "app.activate" => continue_result(&req.id, activate(hub, &req.params)),
-        "link.resolve" if hub.assets.is_some() => continue_result(&req.id, with_assets(hub, |assets| resolve(assets, &req.params))),
-        "asset.describe" if hub.assets.is_some() => continue_result(&req.id, with_assets(hub, |assets| describe(assets, &req.params))),
-        "link.refresh" if hub.assets.is_some() => continue_result(&req.id, with_assets(hub, |assets| refresh(assets, &req.params))),
+        "link.resolve" if hub.assets.is_some() => continue_result(&req.id, with_assets(hub, "link.resolve", &req.params, resolve)),
+        "asset.describe" if hub.assets.is_some() => continue_result(&req.id, with_assets(hub, "asset.describe", &req.params, describe)),
+        "link.refresh" if hub.assets.is_some() => continue_result(&req.id, with_assets(hub, "link.refresh", &req.params, refresh)),
         "link.open" => match validate_open(&req.params) {
             Ok(()) => forward(hub, &req.method, &req.id, req.params.clone()),
             Err(err) => Outcome::Continue(wire::reply_err(&req.id, &err)),
@@ -119,7 +120,8 @@ fn activate(hub: &Hub, params: &Value) -> Result<Value, LinkError> {
         }
         Some(_) => return Err(LinkError::BadParams("open must be an object".into())),
     };
-    let activated = match hub.activate.activate(token, from_pid, open) {
+    let provider = std::sync::Arc::clone(&hub.activate);
+    let activated = match provider::call(hub, "app.activate", move || provider.activate(token, from_pid, open))? {
         Activation::Yes => Value::Bool(true),
         Activation::No => Value::Bool(false),
         Activation::Requested => Value::String("requested".into()),
@@ -127,11 +129,14 @@ fn activate(hub: &Hub, params: &Value) -> Result<Value, LinkError> {
     Ok(json!({"activated": activated}))
 }
 
-fn with_assets(hub: &Hub, run: impl FnOnce(&dyn Assets) -> Result<Value, LinkError>) -> Result<Value, LinkError> {
-    match &hub.assets {
-        Some(assets) => run(assets.as_ref()),
-        None => Err(LinkError::NotReady("this app has no asset provider".into())),
-    }
+/// Run an asset method on a helper thread, with the deadline and the stop check of [`provider::call`].
+fn with_assets(hub: &Hub, what: &str, params: &Value, run: fn(&dyn Assets, &Value) -> Result<Value, LinkError>) -> Result<Value, LinkError> {
+    let Some(assets) = &hub.assets else {
+        return Err(LinkError::NotReady("this app has no asset provider".into()));
+    };
+    let assets = std::sync::Arc::clone(assets);
+    let params = params.clone();
+    provider::call(hub, what, move || run(assets.as_ref(), &params))?
 }
 
 fn asset_param(params: &Value) -> Result<Moniker, LinkError> {

@@ -2,10 +2,23 @@
 //!
 //! One accept thread, then a read thread and a write thread per connection.
 //! There is no tokio runtime here.
+//!
+//! Shutdown. [`Server::shutdown`] and drop set the stop flag, then join the accept thread and every
+//! connection thread. A connection thread leaves its loop within one read poll (250 ms) of the
+//! flag. Calls into app code differ in what they can delay that:
+//!
+//! - [`ControlSink`], [`Assets`] and [`Activate`] calls never delay it for longer than a stop poll
+//!   (at most 200 ms). The server waits for a sink reply, or for an `Assets` or `Activate` answer, in
+//!   short slices and gives up when the flag is set. An `Assets` or `Activate` call runs on a helper
+//!   thread that the server detaches when it gives up, so a provider that never returns leaves one
+//!   idle thread behind and delays nothing. See [`Limits::provider_deadline`].
+//! - [`Frames`] calls run on the connection thread. The flag is checked before each request, but a
+//!   call that is already running is waited for. A `Frames` method that never returns blocks shutdown.
 
 mod dispatch;
 mod events;
 mod listener;
+mod provider;
 mod tcp;
 
 use std::collections::HashMap;
@@ -48,6 +61,11 @@ pub enum Activation {
 }
 
 /// Raises or focuses the app. There is no default success.
+///
+/// A call runs on a helper thread with a time limit of [`Limits::provider_deadline`]. On timeout the
+/// caller gets a timeout reply and the server detaches the thread. The thread keeps running until
+/// `activate` returns, possibly after the server is gone, so an implementation must not rely on the
+/// server being alive when it returns.
 pub trait Activate: Send + Sync {
     fn activate(&self, token: Option<String>, from_pid: Option<u32>, open: Option<Value>) -> Activation;
 }
@@ -64,23 +82,31 @@ pub struct FrameOpen {
 
 /// Frame tickets and rendered payloads. The server registers the ticket on the
 /// control connection that called `frames.open`.
+///
+/// Every method runs on a connection thread, one call per frame, with no helper thread and no
+/// time limit. The server checks its stop flag before it reads each request, so shutdown takes
+/// effect between frames. It cannot interrupt a call that is running: [`Server::shutdown`] and
+/// drop wait for it, and `close_ticket` runs when the connection ends. Each method must return in
+/// bounded time, for example by putting a timeout on any I/O it does.
 pub trait Frames: Send + Sync {
     fn open(&self, params: &serde_json::Map<String, Value>) -> Result<FrameOpen, LinkError>;
     fn render(&self, ticket: &str, header: &Value) -> Result<(Value, Vec<u8>), LinkError>;
     fn close_ticket(&self, ticket: &str);
 }
 
-/// Answers asset questions on the connection thread, with no UI frame
-/// (`link.resolve`, `asset.describe`, `link.refresh`). Pass one in
-/// [`Extensions::assets`]. Without it these three methods go to the
-/// [`ControlSink`] like any other link method.
+/// Answers asset questions without a UI frame (`link.resolve`, `asset.describe`,
+/// `link.refresh`). Pass one in [`Extensions::assets`]. Without it these three
+/// methods go to the [`ControlSink`] like any other link method.
 ///
-/// Every method runs on a connection thread, so an implementation must be
-/// thread safe and must not wait on the UI thread. The server sets no time
-/// limit on a call, and a method cannot see the server stop flag. A call that
-/// never returns keeps its connection thread, and [`Server::shutdown`] and
-/// dropping the server wait for that thread. Each method must return in bounded
-/// time, for example by putting a timeout on any I/O it does.
+/// Methods do not run on the UI thread, so an implementation must be thread safe
+/// and must not wait on the UI thread.
+///
+/// A call runs on a helper thread with a time limit of [`Limits::provider_deadline`]. On timeout the
+/// caller gets a timeout reply and the server detaches the thread. A call that never returns
+/// leaves one thread behind and does not hold up [`Server::shutdown`]. The server keeps at most
+/// 32 such threads, and a call past that gets a `busy` error. The thread keeps running until the
+/// method returns, possibly after the server is gone, so an implementation must not rely on the
+/// server being alive when it returns.
 pub trait Assets: Send + Sync {
     /// Where the last-known result of `asset` is. `Err(LinkError::Unknown)` when
     /// the asset or its result file does not exist.
@@ -94,7 +120,7 @@ pub trait Assets: Send + Sync {
 /// Optional parts for [`Server::start_with`]. The default adds nothing.
 #[derive(Default)]
 pub struct Extensions {
-    /// Answers asset methods on the connection thread. Adds the `assets` cap.
+    /// Answers asset methods. Adds the `assets` cap.
     pub assets: Option<Arc<dyn Assets>>,
     /// Extra caps for the instance record and `link.hello`, such as `hub`.
     pub caps: Vec<String>,
@@ -126,6 +152,9 @@ pub struct Limits {
     /// Connections that have not authenticated yet. At most `MAX_CONNECTIONS` minus this many
     /// slots can be held by them.
     pub max_unauthenticated: usize,
+    /// How long an `Assets` or `Activate` call may run before the caller gets a timeout reply and
+    /// the server detaches the helper thread that runs it.
+    pub provider_deadline: Duration,
 }
 
 impl Default for Limits {
@@ -135,6 +164,7 @@ impl Default for Limits {
             partial_line: Duration::from_secs(10),
             idle: Duration::from_secs(60 * 60),
             max_unauthenticated: crate::wire::MAX_UNAUTHENTICATED,
+            provider_deadline: Duration::from_secs(crate::wire::REPLY_DEADLINE_SECS),
         }
     }
 }
@@ -149,6 +179,8 @@ pub(super) struct Hub {
     pub(super) assets: Option<Arc<dyn Assets>>,
     pub(super) stop: AtomicBool,
     pub(super) open: AtomicUsize,
+    /// Live `Assets` and `Activate` helper threads, stuck ones included. See `provider`.
+    pub(super) providers: Arc<AtomicUsize>,
     pub(super) next_id: AtomicU64,
     pub(super) tickets: Mutex<HashMap<String, u64>>,
     pub(in crate::server) subs: Mutex<Vec<Arc<events::Subscription>>>,
@@ -156,7 +188,8 @@ pub(super) struct Hub {
 }
 
 /// A running link endpoint. [`Server::shutdown`] removes the instance record.
-/// Drop only joins the accept thread and the connection threads.
+/// Drop only joins the accept thread and the connection threads. A helper thread that runs a
+/// stuck `Assets` or `Activate` call is detached and not joined.
 pub struct Server {
     discovery: Option<Discovery>,
     hub: Arc<Hub>,
@@ -267,6 +300,7 @@ impl Server {
             assets,
             stop: AtomicBool::new(false),
             open: AtomicUsize::new(0),
+            providers: Arc::new(AtomicUsize::new(0)),
             next_id: AtomicU64::new(1),
             tickets: Mutex::new(HashMap::new()),
             subs: Mutex::new(Vec::new()),
@@ -300,7 +334,8 @@ impl Server {
         Ok(())
     }
 
-    /// Stop accept, join connection threads, and delete the instance record.
+    /// Stop accept, join connection threads, and delete the instance record. A stuck `Assets` or
+    /// `Activate` call does not delay this. A running `Frames` call does.
     pub fn shutdown(mut self) -> Result<(), LinkError> {
         self.stop_threads();
         match self.discovery.take() {
