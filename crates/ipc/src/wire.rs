@@ -92,7 +92,11 @@ impl LineReader {
                 if self.buf.is_empty() {
                     return Ok(None);
                 }
-                return Ok(Some(self.finish()));
+                let line = self.finish();
+                if line.len() > self.max {
+                    return Err(LinkError::TooLarge);
+                }
+                return Ok(Some(line));
             }
             let newline = available.iter().position(|byte| *byte == b'\n');
             let take = newline.map_or(available.len(), |at| at + 1);
@@ -327,6 +331,19 @@ mod tests {
         assert_eq!(req.id, json!(1));
         assert!(parse_request(b"[]").is_err());
         assert!(parse_request(b"{").is_err());
+    }
+
+    #[test]
+    fn a_last_line_without_a_newline_obeys_the_limit() {
+        let at_limit = vec![b'a'; 8];
+        let line = read_line(&mut Cursor::new(at_limit.clone()), 8).unwrap().unwrap();
+        assert_eq!(line, at_limit);
+        let over = vec![b'a'; 9];
+        assert!(matches!(read_line(&mut Cursor::new(over), 8), Err(LinkError::TooLarge)));
+        // The same bytes with a newline are refused too, so the two paths agree.
+        let mut with_newline = vec![b'a'; 9];
+        with_newline.push(b'\n');
+        assert!(matches!(read_line(&mut Cursor::new(with_newline), 8), Err(LinkError::TooLarge)));
     }
 
     #[test]
