@@ -1182,6 +1182,52 @@ mod tests {
         assert_eq!(f.chpl_chapters, vec![ch(1500, "Later"), ch(3000, "End")]);
     }
 
+    /// The media time (chapter track timescale) of `movie` ticks.
+    fn chapter_media_time(f: &crate::isobmff::Mp4File, movie: u64) -> i64 {
+        (u128::from(movie) * u128::from(f.tracks[1].timescale) / u128::from(f.timescale)) as i64
+    }
+
+    #[test]
+    fn chapters_are_clipped_to_the_chapter_tracks_edit() {
+        let out = chaptered(Brand::Mp4, vec![ch(0, "A"), ch(1000, "B"), ch(2000, "C"), ch(3000, "D")], false);
+        let mut f = crate::isobmff::open(out.as_slice()).unwrap();
+        // the edit starts inside B and ends inside C: A and D are outside, B begins at zero
+        let from = chapter_media_time(&f, 1500);
+        f.tracks[1].edits = vec![crate::isobmff::Edit { segment_duration: 1000, media_time: from, media_rate: 0x0001_0000 }];
+        f.tracks[1].edit_offset = -from;
+        assert_eq!(f.read_chapters(out.as_slice()).unwrap(), vec![ch(0, "B"), ch(500, "C")]);
+    }
+
+    #[test]
+    fn chapters_come_from_an_enabled_track_only() {
+        let out = chaptered(Brand::Mp4, vec![ch(0, "Track"), ch(1000, "Two")], false);
+        let mut f = crate::isobmff::open(out.as_slice()).unwrap();
+        f.chpl_chapters = vec![ch(0, "Nero")];
+        assert_eq!(f.read_chapters(out.as_slice()).unwrap()[0].title, "Track");
+        for t in f.tracks.iter_mut().filter(|t| t.references.iter().any(|(k, _)| k == b"chap")) {
+            t.enabled = false;
+        }
+        assert_eq!(f.read_chapters(out.as_slice()).unwrap(), vec![ch(0, "Nero")]);
+    }
+
+    #[test]
+    fn a_hostile_chapter_sample_is_cut_and_read_only_in_part() {
+        let mut out = chaptered(Brand::Mp4, vec![ch(0, "A"), ch(1000, "B")], false);
+        let mut f = crate::isobmff::open(out.as_slice()).unwrap();
+        let offset = out.len() as u64;
+        out.extend_from_slice(&3000u16.to_be_bytes());
+        out.extend_from_slice(&[b'x'; 3000]);
+        // a long title is cut, and a declared size past the end of the file reads only what is needed
+        f.tracks[1].samples[0].offset = offset;
+        f.tracks[1].samples[0].size = 3002;
+        f.tracks[1].samples[1].offset = offset;
+        f.tracks[1].samples[1].size = u32::MAX;
+        out.extend_from_slice(&[0; 4098]);
+        let v = f.read_chapters(out.as_slice()).unwrap();
+        assert_eq!(v.len(), 2);
+        assert!(v.iter().all(|c| c.title.len() == crate::isobmff::MAX_CHAPTER_TITLE_BYTES), "{:?}", v[0].title.len());
+    }
+
     #[test]
     fn hostile_chapters_do_not_break_the_file() {
         let long = "x".repeat(10_000);
