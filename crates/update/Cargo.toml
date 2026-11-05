@@ -47,6 +47,11 @@ plist = "1"
 [target.'cfg(target_os = "windows")'.dependencies]
 winreg = "0.55"
 dunce = "1"
-zip = { version = "9", default-features = false, features = ["deflate"] }
+# `deflate-flate2` with flate2's default miniz_oxide backend, not zip's `deflate` (zopfli and
+# zlib-rs): Cargo unifies flate2's features across an app, and zlib-rs would switch the whole
+# app's flate2 to it, where level 1 is a static-Huffman mode that can make output larger than
+# its input (Lightcraft's 16-bit ZIP TIFFs on Windows).
+zip = { version = "9", default-features = false, features = ["deflate-flate2"] }
+flate2 = "1"
 winsafe = { version = "0.0.29", features = ["advapi", "kernel", "shell", "version"] }
 verifysign = "1"
