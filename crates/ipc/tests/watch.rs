@@ -265,7 +265,9 @@ fn the_native_ticker_drives_a_watcher_without_a_manual_clock() {
     watcher.watch("link-1", Tracker::new(&file, 0).unwrap()).unwrap();
     write_atomic(&file, b"two!").unwrap();
     let got = notices.recv_timeout(LIMIT).expect("a notice within the limit");
-    assert_eq!(got, changed("link-1", FileState::Modified, 1, true, false));
+    // The first poll that sees the edit is shallow or deep, depending on when the 50 ms deep deadline falls.
+    let deep = matches!(got, Notice::Changed { deep: true, .. });
+    assert_eq!(got, changed("link-1", FileState::Modified, 1, true, deep));
     drop(watcher);
 }
 
