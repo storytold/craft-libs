@@ -6,7 +6,7 @@
   (type $unary (func (param i32)))
   (type $other (func (result i32)))
   (memory (export "memory") 1 16)
-  (table 2 funcref)
+  (table 2 2 funcref)
   (elem (i32.const 0) $f0)
   (func $f0 (param i32))
   (func (export "craft_abi") (result i32) i32.const 1)
