@@ -157,6 +157,14 @@ fn reference(ff: &Path, file: &Path) -> Vec<f32> {
     out.stdout.as_chunks::<4>().0.iter().map(|c| f32::from_le_bytes(*c)).collect()
 }
 
+/// The major version of this ffmpeg, or `None` for one that does not say (a git build).
+fn ffmpeg_major(ff: &Path) -> Option<u32> {
+    let out = Command::new(ff).arg("-version").output().ok()?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    let version = text.strip_prefix("ffmpeg version ")?.trim_start_matches('n');
+    version.split(|c: char| !c.is_ascii_digit()).next()?.parse().ok()
+}
+
 /// How many frames of priming ffmpeg before 9 decodes as audio at the start of `name`, which
 /// `decode` drops; ffmpeg 9 drops them too.
 fn reference_lead(name: &str) -> usize {
@@ -186,6 +194,7 @@ fn snr(ours: &[Vec<f32>], reference: &[f32]) -> f64 {
 #[test]
 fn every_container_and_codec_decodes_home_grown() {
     let ff = require_ffmpeg!();
+    let major = ffmpeg_major(&ff);
     for c in CASES {
         let Some(path) = fixture(&ff, c) else {
             eprintln!("SKIPPED {}: this ffmpeg cannot write it", c.name);
@@ -198,8 +207,13 @@ fn every_container_and_codec_decodes_home_grown() {
         assert_eq!(info.layout, c.layout, "{}: layout", c.name);
         let expected = c.frames.unwrap_or(reference.len() / c.channels);
         assert_eq!(buf.frames(), expected, "{}: presented frames", c.name);
-        let mut s = snr(&buf.channels, &reference);
-        s = s.max(snr(&buf.channels, &reference[reference_lead(c.name) * c.channels..]));
+        // One alignment, so audio that keeps the priming, or loses more than it, cannot pass.
+        let lead = reference_lead(c.name) * c.channels;
+        let s = match major {
+            Some(9..) => snr(&buf.channels, &reference),
+            Some(_) => snr(&buf.channels, &reference[lead..]),
+            None => snr(&buf.channels, &reference).max(snr(&buf.channels, &reference[lead..])),
+        };
         assert!(s >= c.min_snr, "{}: SNR {s:.1} dB < {}", c.name, c.min_snr);
         let p = probe(&bytes, None).unwrap();
         assert_eq!(

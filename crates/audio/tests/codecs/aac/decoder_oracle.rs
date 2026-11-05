@@ -132,7 +132,7 @@ fn pns_matches_ffmpeg() {
             }
             bw.write_bits(7, 3);
             let au = bw.finish();
-            stream.extend_from_slice(&AdtsHeader::write(2, 4, channels as u8, au.len(), 0x7FF));
+            stream.extend_from_slice(&AdtsHeader::write(2, 4, channels as u8, au.len(), 0x7FF).unwrap());
             stream.extend_from_slice(&au);
         }
         let path = fixtures().join(format!("handmade_pns_{channels}.aac"));

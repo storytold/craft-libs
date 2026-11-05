@@ -376,7 +376,9 @@ fn open(bytes: Cow<'_, [u8]>, detected: Option<Container>) -> Result<Opened> {
         checked => (checked, None),
     };
     let body = bytes.get(start..).unwrap_or_default();
-    let ogg_streams = craft_media::ogg::sniff(body).then(|| super::flac::ogg_audio_streams(body));
+    // symphonia finds the first page past leading bytes, so look for it the same way.
+    let first_page = body.windows(4).take(MAX_PREFIX_SCAN).position(|w| w == b"OggS");
+    let ogg_streams = first_page.map(|at| super::flac::ogg_audio_streams(&body[at..]));
     // symphonia reads from an owned stream: a borrowed buffer is copied once, a buffer read from
     // a shared source is moved in.
     let mut mss = MediaSourceStream::new(Box::new(Cursor::new(bytes.into_owned())), MediaSourceStreamOptions::default());

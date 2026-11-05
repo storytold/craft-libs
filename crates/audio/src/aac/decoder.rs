@@ -46,6 +46,7 @@ struct ChannelState {
 }
 
 /// AAC-LC decoder.
+#[derive(Clone)]
 pub struct Decoder {
     asc: AudioSpecificConfig,
     layout: Vec<(ElementType, u8)>,
@@ -224,22 +225,16 @@ impl Decoder {
     }
 
     fn find_slot(&self, ty: ElementType, tag: u8, used: &[bool]) -> Result<usize> {
-        let compatible = |t: ElementType| t == ty || (ty != ElementType::Cpe && t != ElementType::Cpe);
-        // A program config names its elements' tags. An indexed configuration does not: its elements
-        // are placed by the order they arrive in, whatever their tags.
-        if self.asc.channel_config == 0
-            && let Some(i) = self.layout.iter().enumerate().position(|(i, &(t, g))| t == ty && g == tag && !used[i])
-        {
-            return Ok(i);
-        }
-        if let Some(i) = self.layout.iter().enumerate().position(|(i, &(t, _))| t == ty && !used[i]) {
-            return Ok(i);
-        }
-        self.layout
-            .iter()
-            .enumerate()
-            .position(|(i, &(t, _))| compatible(t) && !used[i])
-            .ok_or(Error::Bitstream("unexpected channel element for the channel configuration"))
+        let free = |want: &dyn Fn(ElementType, u8) -> bool| self.layout.iter().enumerate().position(|(i, &(t, g))| want(t, g) && !used[i]);
+        let slot = if self.asc.channel_config == 0 {
+            // A program config names its elements' tags.
+            free(&|t, g| t == ty && g == tag)
+        } else {
+            // An indexed configuration does not: its elements are placed by the order they arrive
+            // in, whatever their tags. Some encoders code an LFE as an SCE, as ffmpeg allows.
+            free(&|t, _| t == ty).or_else(|| free(&|t, _| ty == ElementType::Sce && t == ElementType::Lfe))
+        };
+        slot.ok_or(Error::Bitstream("unexpected channel element for the channel configuration"))
     }
 
     fn decode_cpe(&mut self, br: &mut BitReader, ch: usize) -> Result<[Vec<f32>; 2]> {
@@ -612,7 +607,7 @@ mod tests {
         let mut bw = BitWriter::new();
         if let Some(pce) = pce {
             bw.write_bits(ID_PCE, 3);
-            pce.write(&mut bw);
+            pce.write(&mut bw).unwrap();
         }
         for &(id, tag) in elements {
             bw.write_bits(id, 3);
@@ -645,6 +640,27 @@ mod tests {
         let asc = AudioSpecificConfig { pce: Some(pce), ..AudioSpecificConfig::lc(4, 0) };
         let dec = Decoder::from_config(asc).unwrap();
         assert_eq!(dec.find_slot(ElementType::Cpe, 5, &[false, false]), Ok(1));
+    }
+
+    /// A program config lists its elements: one it does not list has no place.
+    #[test]
+    fn program_configs_refuse_unlisted_tags() {
+        let pce = ProgramConfig { front: vec![(true, 3), (true, 5)], ..Default::default() };
+        let asc = AudioSpecificConfig { pce: Some(pce), ..AudioSpecificConfig::lc(4, 0) };
+        let dec = Decoder::from_config(asc).unwrap();
+        assert!(dec.find_slot(ElementType::Cpe, 9, &[false, false]).is_err());
+        assert!(dec.find_slot(ElementType::Sce, 3, &[false, false]).is_err());
+    }
+
+    /// Some encoders code 5.1's LFE as an SCE, as ffmpeg allows. Nothing else changes type: an LFE
+    /// is not written to the centre channel.
+    #[test]
+    fn indexed_configurations_refuse_elements_of_another_type() {
+        let dec = Decoder::from_config(AudioSpecificConfig::lc(4, 6)).unwrap();
+        // SCE, CPE, CPE, LFE
+        assert_eq!(dec.find_slot(ElementType::Sce, 1, &[true, false, false, false]), Ok(3));
+        assert!(dec.find_slot(ElementType::Lfe, 1, &[false, false, false, true]).is_err());
+        assert!(dec.find_slot(ElementType::Cpe, 2, &[false, true, true, false]).is_err());
     }
 
     /// A PCE in an access unit that then fails leaves the layout as it was.

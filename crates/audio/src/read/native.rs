@@ -11,7 +11,7 @@ use super::aiff::{self, AiffParse};
 use super::id3v2_len;
 use super::source::{Src, io_error};
 use super::wav::{self, WavParse};
-use crate::track::{TrackDecoder, adts_format_of, adts_stream_header, several_adts_frames};
+use crate::track::{TrackDecoder, adts_format_of, adts_framed, adts_stream_header, several_adts_frames};
 use crate::{AudioBuffer, AudioError, AudioInfo, CodecId, CodecParams, Container, PcmFormat, Result, aac};
 use craft_media::{isobmff, matroska, ogg};
 
@@ -558,8 +558,8 @@ fn raw_frames<T>(src: &Src<'_>, at: u64, frame_len: impl Fn(&[u8]) -> Option<(us
 }
 
 /// The first `n` frames of a raw stream.
-fn raw_lookahead<T>(src: &Src<'_>, frames: &[(u64, u32, T)], n: usize) -> Vec<Vec<u8>> {
-    frames.iter().take(n).filter_map(|&(at, len, _)| src.bytes(at, len as usize)).collect()
+fn raw_lookahead<T>(src: &Src<'_>, frames: &[(u64, u32, T)], n: usize) -> Result<Vec<Vec<u8>>> {
+    frames.iter().take(n).map(|&(at, len, _)| src.read(at, len as usize)).collect()
 }
 
 /// A raw ADTS AAC stream from `at`: its frames, headers included, are the packets. The stream's
@@ -581,7 +581,10 @@ fn open_adts<'a>(src: &Src<'a>, at: u64) -> Option<Result<Native<'a>>> {
     }
     // Without extradata the configuration comes from the frames themselves.
     let params = CodecParams::new(CodecId::Aac);
-    let lookahead = raw_lookahead(src, &frames, crate::track::LOOKAHEAD_PACKETS);
+    let lookahead = match raw_lookahead(src, &frames, crate::track::LOOKAHEAD_PACKETS) {
+        Ok(lookahead) => lookahead,
+        Err(e) => return Some(Err(e)),
+    };
     // Decoded frames are set below, when the decoder has said what a frame decodes to.
     let packets: Vec<(u64, u32, u32)> = frames.iter().map(|&(p, n, h)| (p, n, u32::from(h.raw_data_blocks))).collect();
     let mut n = native(Container::Adts, Packets::Raw { frames: packets, src: src.clone(), next: 0 }, &params, &lookahead, 0, None, None)?;
@@ -652,8 +655,11 @@ fn open_mp4<'a>(src: &Src<'a>, container: Container, track: Option<usize>) -> Op
     let mut stored = rescale(media, u64::from(timescale), u64::from(rate)).saturating_sub(skip);
     // Durations only trim the last packet: ones that end anywhere else are wrong (some count a
     // HE-AAC packet's core frames) and can't cut audio off.
-    // Samples of several ADTS frames (not standard, but they decode) have no one length.
-    let per_packet = probe.frames_per_packet().map(|n| n as u64).filter(|_| !lookahead.iter().any(|p| several_adts_frames(p)));
+    // Samples of several ADTS frames (not standard, but they decode) have no one length. Only a
+    // file of ADTS-framed samples, which is rare, has its samples read to look for them.
+    let several_frames = lookahead.iter().any(|p| adts_framed(p))
+        && (0..t.samples.len()).any(|i| file.read_sample(src, track, i).is_ok_and(|p| several_adts_frames(&p)));
+    let per_packet = probe.frames_per_packet().map(|n| n as u64).filter(|_| !several_frames);
     if let Some(n) = per_packet {
         let decoded = (t.samples.len() as u64).saturating_mul(n).saturating_sub(skip);
         if stored > decoded || decoded - stored >= n {
@@ -897,7 +903,7 @@ mod adts_tests {
     fn frame(sf_index: u8) -> Vec<u8> {
         // ID_SCE, tag 0, an empty channel stream, ID_END
         let au = [0x00, 0x00, 0x00, 0x07];
-        [&crate::aac::AdtsHeader::write(2, sf_index, 1, au.len(), 0x7FF)[..], &au].concat()
+        [&crate::aac::AdtsHeader::write(2, sf_index, 1, au.len(), 0x7FF).unwrap()[..], &au].concat()
     }
 
     #[test]
@@ -974,6 +980,42 @@ mod adts_tests {
             }
             self.bytes.as_slice().read_at(offset, buf)
         }
+    }
+
+    /// A frame that reads in the scan and fails when read again.
+    #[test]
+    fn a_source_failing_during_the_lookahead_is_an_io_error() {
+        struct FailsFrames(Vec<u8>);
+        impl ByteSource for FailsFrames {
+            fn len(&self) -> u64 {
+                self.0.len() as u64
+            }
+            fn read_at(&self, offset: u64, buf: &mut [u8]) -> std::io::Result<()> {
+                // A whole frame in the middle: the scan reads windows, to the end of the file.
+                if buf.len() == 11 && offset + 11 < self.len() {
+                    return Err(std::io::Error::other("the source failed"));
+                }
+                self.0.as_slice().read_at(offset, buf)
+            }
+        }
+        let opened = Decoder::open(FailsFrames(frame(3).repeat(64)), Some("aac"), &DecodeOptions::default());
+        assert!(matches!(opened, Err(AudioError::Io(_))), "{:?}", opened.err());
+    }
+
+    /// A sample of several ADTS frames past the lookahead still counts them all.
+    #[test]
+    fn a_later_mp4_sample_of_several_adts_frames_keeps_its_length() {
+        use craft_media::isobmff::{Brand, Mp4Writer, SampleEntry, TrackConfig, WriteSample, WriterOptions};
+        let asc = crate::aac::AudioSpecificConfig::lc(3, 1).to_bytes().unwrap();
+        let mut w = Mp4Writer::new(std::io::Cursor::new(Vec::new()), WriterOptions::new(Brand::Mp4)).unwrap();
+        let track = w.add_track(TrackConfig::new(SampleEntry::aac(asc, 1, 48_000), 48_000)).unwrap();
+        for i in 0..12 {
+            let (data, duration) = if i == 10 { (frame(3).repeat(2), 2048) } else { (frame(3), 1024) };
+            w.write_sample(track, WriteSample { data: &data, duration, composition_offset: 0, is_sync: true }).unwrap();
+        }
+        let file = w.finish().unwrap().into_inner();
+        let (_, buf) = decode(&file, None).unwrap();
+        assert_eq!(buf.frames(), 13 * 1024);
     }
 
     #[test]

@@ -98,8 +98,15 @@ impl ProgramConfig {
         Ok(p)
     }
 
-    /// Serialise the element (no mixdown signalling; comment truncated to 255 bytes).
-    pub fn write(&self, bw: &mut BitWriter) {
+    /// Serialise the element (no mixdown signalling; comment truncated to 255 bytes). More elements
+    /// than its count fields hold are refused, with nothing written.
+    pub fn write(&self, bw: &mut BitWriter) -> Result<()> {
+        if [self.front.len(), self.side.len(), self.back.len(), self.cc.len()].iter().any(|&n| n > 15)
+            || self.lfe.len() > 3
+            || self.assoc_data.len() > 7
+        {
+            return Err(Error::InvalidConfig("more elements than a program config element can list"));
+        }
         bw.write_bits(self.element_instance_tag as u32, 4);
         bw.write_bits(self.object_type as u32, 2);
         bw.write_bits(self.sf_index as u32, 4);
@@ -131,6 +138,7 @@ impl ProgramConfig {
         for &b in self.comment.iter().take(255) {
             bw.write_bits(b as u32, 8);
         }
+        Ok(())
     }
 
     /// Elements in output channel order (front, side, back, LFE).
@@ -200,6 +208,9 @@ fn read_rate(br: &mut BitReader) -> Result<(u8, u32)> {
     let i = br.read_bits(4)? as u8;
     if i == 15 {
         let r = br.read_bits(24)?;
+        if r == 0 {
+            return Err(Error::InvalidConfig("sampling rate of 0"));
+        }
         return Ok((table_index_for_rate(r), r));
     }
     let r = *SAMPLE_RATES.get(i as usize).ok_or(Error::InvalidConfig("reserved sampling frequency index"))?;
@@ -265,7 +276,7 @@ impl AudioSpecificConfig {
     }
 
     /// Serialise (AAC-LC, no SBR signalling).
-    pub fn to_bytes(&self) -> Vec<u8> {
+    pub fn to_bytes(&self) -> Result<Vec<u8>> {
         let mut bw = BitWriter::new();
         bw.write_bits(self.object_type as u32, 5);
         match crate::aac::tables::sample_rate_index(self.sample_rate) {
@@ -280,9 +291,9 @@ impl AudioSpecificConfig {
         if self.channel_config == 0
             && let Some(p) = &self.pce
         {
-            p.write(&mut bw);
+            p.write(&mut bw)?;
         }
-        bw.finish()
+        Ok(bw.finish())
     }
 
     /// Elements in output channel order.
@@ -355,8 +366,12 @@ impl AdtsHeader {
         AudioSpecificConfig { object_type: self.object_type, ..AudioSpecificConfig::lc(self.sf_index, self.channel_config) }
     }
 
-    /// Write a 7-byte header (no CRC) for a frame whose raw payload is `payload_len` bytes.
-    pub fn write(object_type: u8, sf_index: u8, channel_config: u8, payload_len: usize, buffer_fullness: u16) -> [u8; 7] {
+    /// Write a 7-byte header (no CRC) for a frame whose raw payload is `payload_len` bytes. A frame
+    /// too long for the header's 13-bit length is refused.
+    pub fn write(object_type: u8, sf_index: u8, channel_config: u8, payload_len: usize, buffer_fullness: u16) -> Result<[u8; 7]> {
+        if payload_len > 0x1FFF - 7 {
+            return Err(Error::InvalidConfig("an ADTS frame longer than its 13-bit length"));
+        }
         let len = (payload_len + 7) as u32;
         let mut bw = BitWriter::new();
         bw.write_bits(0xFFF, 12);
@@ -374,7 +389,7 @@ impl AdtsHeader {
         let v = bw.finish();
         let mut out = [0u8; 7];
         out.copy_from_slice(&v);
-        out
+        Ok(out)
     }
 }
 
@@ -414,20 +429,59 @@ mod tests {
     use super::*;
 
     #[test]
+    fn program_configs_refuse_more_elements_than_their_counts_hold() {
+        let fits = ProgramConfig { front: vec![(false, 0); 15], lfe: vec![0; 3], assoc_data: vec![0; 7], ..Default::default() };
+        assert!(fits.write(&mut BitWriter::new()).is_ok());
+        for pce in [
+            ProgramConfig { front: vec![(false, 0); 16], ..Default::default() },
+            ProgramConfig { side: vec![(false, 0); 16], ..Default::default() },
+            ProgramConfig { back: vec![(false, 0); 16], ..Default::default() },
+            ProgramConfig { lfe: vec![0; 4], ..Default::default() },
+            ProgramConfig { assoc_data: vec![0; 8], ..Default::default() },
+            ProgramConfig { cc: vec![(false, 0); 16], ..Default::default() },
+        ] {
+            assert!(pce.write(&mut BitWriter::new()).is_err(), "{pce:?}");
+            let asc = AudioSpecificConfig { pce: Some(pce), ..AudioSpecificConfig::lc(4, 0) };
+            assert!(asc.to_bytes().is_err());
+        }
+    }
+
+    #[test]
+    fn adts_headers_refuse_frames_too_long_for_their_length() {
+        let longest = AdtsHeader::write(2, 4, 2, 0x1FFF - 7, 0x7FF).unwrap();
+        assert_eq!(AdtsHeader::parse(&longest).unwrap().frame_length, 0x1FFF);
+        for payload in [0x1FFF - 6, 0x1FFF, usize::MAX] {
+            assert!(AdtsHeader::write(2, 4, 2, payload, 0x7FF).is_err(), "{payload}");
+        }
+    }
+
+    /// An explicit sampling rate of 0 is not a rate.
+    #[test]
+    fn a_zero_explicit_rate_is_refused() {
+        let mut bw = BitWriter::new();
+        bw.write_bits(2, 5);
+        bw.write_bits(15, 4);
+        bw.write_bits(0, 24);
+        bw.write_bits(2, 4);
+        bw.write_bits(0, 3);
+        assert!(AudioSpecificConfig::parse(&bw.finish()).is_err());
+    }
+
+    #[test]
     fn asc_roundtrip() {
         let a = AudioSpecificConfig::lc(4, 2);
-        let b = a.to_bytes();
+        let b = a.to_bytes().unwrap();
         assert_eq!(b, vec![0x12, 0x10]);
         assert_eq!(AudioSpecificConfig::parse(&b).unwrap(), a);
         // 48 kHz 5.1
         let a = AudioSpecificConfig::lc(3, 6);
-        assert_eq!(AudioSpecificConfig::parse(&a.to_bytes()).unwrap().channels(), 6);
+        assert_eq!(AudioSpecificConfig::parse(&a.to_bytes().unwrap()).unwrap().channels(), 6);
     }
 
     #[test]
     fn amd4_channel_configurations() {
         // 6.1 and 7.1 back (#922); 22.2 and 7.1 with heights stay unsupported
-        let channels = |c| AudioSpecificConfig::parse(&AudioSpecificConfig::lc(3, c).to_bytes()).map(|a| a.channels()).ok();
+        let channels = |c| AudioSpecificConfig::parse(&AudioSpecificConfig::lc(3, c).to_bytes().unwrap()).map(|a| a.channels()).ok();
         assert_eq!([7, 11, 12].map(channels), [Some(8), Some(7), Some(8)]);
         assert_eq!([13, 14].map(config_layout), [None, None]);
     }
@@ -444,7 +498,7 @@ mod tests {
             ..Default::default()
         };
         let a = AudioSpecificConfig { pce: Some(pce), ..AudioSpecificConfig::lc(3, 0) };
-        let p = AudioSpecificConfig::parse(&a.to_bytes()).unwrap();
+        let p = AudioSpecificConfig::parse(&a.to_bytes().unwrap()).unwrap();
         assert_eq!(p.channels(), 7);
         assert_eq!(p, a);
     }
@@ -467,7 +521,7 @@ mod tests {
 
     #[test]
     fn adts_roundtrip() {
-        let h = AdtsHeader::write(2, 4, 2, 100, 0x7FF);
+        let h = AdtsHeader::write(2, 4, 2, 100, 0x7FF).unwrap();
         let mut frame = h.to_vec();
         frame.extend(std::iter::repeat_n(0u8, 100));
         let p = AdtsHeader::parse(&frame).unwrap();
