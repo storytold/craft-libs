@@ -589,7 +589,9 @@ mod tests {
         }
     }
 
-    fn rig(room: usize) -> (Arc<std::sync::Mutex<Box<dyn Write + Send>>>, Arc<Mutex<Vec<u8>>>) {
+    type Writer = Arc<std::sync::Mutex<Box<dyn Write + Send>>>;
+
+    fn rig(room: usize) -> (Writer, Arc<Mutex<Vec<u8>>>) {
         let seen = Arc::new(Mutex::new(Vec::new()));
         let writer: Box<dyn Write + Send> = Box::new(Choked { seen: Arc::clone(&seen), room, failed: false });
         (Arc::new(Mutex::new(writer)), seen)
