@@ -109,7 +109,9 @@ impl Tracker {
     /// An edit that keeps size and mtime is invisible to a shallow poll.
     ///
     /// A missing file gives `Missing` and no epoch bump. Any other read error
-    /// is returned and leaves the state as it was.
+    /// is returned and leaves the state as it was. So does a change that needs
+    /// a bump at epoch `u64::MAX`: that is `Err(Invalid)`, because an epoch that
+    /// cannot go up would let a cached frame pass for the new content.
     pub fn poll(&mut self, deep: bool) -> Result<Change, LinkError> {
         let Some(mut file) = open_if_present(&self.path)? else {
             self.seen = None;
@@ -127,7 +129,7 @@ impl Tracker {
         let now = Fingerprint { size, mtime_ms, hash: hash_reader(&mut file)? };
         let changed = self.seen.as_ref().is_none_or(|prev| prev.hash != now.hash);
         let bumped = changed && self.differs_from_loaded_or_was_seen(&now);
-        self.apply(now, bumped);
+        self.apply(now, bumped)?;
         Ok(self.change(bumped))
     }
 
@@ -140,15 +142,15 @@ impl Tracker {
     /// Point the link at `new_path`. The new file is read at once. Its hash
     /// equal to what the consumer loaded gives `Current` with no bump. A
     /// different hash gives `Modified` and one bump. A missing `new_path` is an
-    /// error and the old path stays.
+    /// error and the old path stays. So it does when the bump would pass `u64::MAX`.
     pub fn relink(&mut self, new_path: impl Into<PathBuf>) -> Result<Change, LinkError> {
         let new_path = new_path.into();
         let Some(now) = fingerprint_if_present(&new_path)? else {
             return Err(LinkError::Unknown(format!("{} does not exist", new_path.display())));
         };
         let same = self.loaded.as_ref().is_some_and(|loaded| loaded.hash == now.hash);
+        self.apply(now, !same)?;
         self.path = new_path;
-        self.apply(now, !same);
         Ok(self.change(!same))
     }
 
@@ -162,13 +164,15 @@ impl Tracker {
         }
     }
 
-    fn apply(&mut self, now: Fingerprint, bumped: bool) {
+    /// Record `now`. A bump adds 1 to the epoch, or fails with the tracker untouched.
+    fn apply(&mut self, now: Fingerprint, bumped: bool) -> Result<(), LinkError> {
         if bumped {
-            self.epoch = self.epoch.saturating_add(1);
+            self.epoch = self.epoch.checked_add(1).ok_or_else(|| LinkError::Invalid("the epoch is at its maximum and cannot go up".into()))?;
         }
         let current = self.loaded.as_ref().is_some_and(|loaded| loaded.hash == now.hash);
         self.seen = Some(now);
         self.state = if current { FileState::Current } else { FileState::Modified };
+        Ok(())
     }
 
     fn change(&self, bumped: bool) -> Change {
@@ -466,6 +470,26 @@ mod tests {
         assert_eq!(tracker.relink(&same).unwrap(), Change { state: FileState::Current, epoch: 7, bumped: false });
         assert_eq!(tracker.path(), same.as_path());
         assert_eq!(tracker.relink(&other).unwrap(), Change { state: FileState::Modified, epoch: 8, bumped: true });
+    }
+
+    #[test]
+    fn a_bump_at_the_largest_epoch_is_an_error_and_changes_nothing() {
+        let tmp = Tmp::new("maxepoch");
+        let path = tmp.0.join("a.png");
+        std::fs::write(&path, b"one").unwrap();
+        let other = tmp.0.join("other.png");
+        std::fs::write(&other, b"two").unwrap();
+        let mut tracker = Tracker::new(&path, u64::MAX).unwrap();
+        // No bump needed, no error.
+        assert_eq!(tracker.poll(true).unwrap(), Change { state: FileState::Current, epoch: u64::MAX, bumped: false });
+        write_atomic(&path, b"changed").unwrap();
+        for _ in 0..2 {
+            assert!(matches!(tracker.poll(true), Err(LinkError::Invalid(_))));
+            assert_eq!((tracker.state(), tracker.epoch()), (FileState::Current, u64::MAX));
+        }
+        assert!(matches!(tracker.relink(&other), Err(LinkError::Invalid(_))));
+        assert_eq!(tracker.path(), path.as_path(), "the old path stays");
+        assert_eq!((tracker.state(), tracker.epoch()), (FileState::Current, u64::MAX));
     }
 
     #[test]
