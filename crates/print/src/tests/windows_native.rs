@@ -31,6 +31,27 @@ fn windows_printers_are_sorted_once_with_their_default() {
     assert!(spool::printer_list([("Office".to_string(), None)], None).iter().all(|p| !p.default));
 }
 
+/// The driver's paper sizes come from its capabilities (Windows: the in-box PDF printer offers
+/// Letter and A4, keyed by Print Schema names, in points, as the driver has them); an unknown
+/// printer and the other platforms list none.
+#[test]
+fn printer_papers_come_from_the_drivers_capabilities() {
+    assert!(spool::printer_papers("No Such Printer (craft-print test)").is_empty());
+    assert!(spool::printer_papers("").is_empty());
+    #[cfg(windows)]
+    {
+        let Some(printer) = spool::printers().into_iter().find(|p| p.name == "Microsoft Print to PDF") else { return };
+        let papers = spool::printer_papers(&printer.name);
+        assert!(papers.len() > 1, "{papers:?}");
+        let letter = papers.iter().find(|p| p.key == "NorthAmericaLetter").expect("Letter by its Print Schema name");
+        assert!((letter.size.0 - 612.0).abs() < 1.0 && (letter.size.1 - 792.0).abs() < 1.0 && !letter.label.is_empty(), "{letter:?}");
+        assert!(papers.iter().all(|p| !p.key.is_empty() && p.size.0 >= 1.0 && p.size.1 >= 1.0), "no roll media");
+        let keys: std::collections::BTreeSet<&str> = papers.iter().map(|p| p.key.as_str()).collect();
+        assert_eq!(keys.len(), papers.len(), "no repeated keyword");
+        assert_eq!(papers.iter().filter(|p| p.default).count(), 1, "the driver's default paper is marked, once: {papers:?}");
+    }
+}
+
 /// One page of a test PDF: its MediaBox (`None` = inherited from the page tree's root, which is
 /// Letter), CropBox and `/Rotate`.
 #[derive(Clone, Copy)]
