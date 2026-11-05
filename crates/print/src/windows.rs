@@ -53,6 +53,9 @@ pub(crate) fn printer_queues() -> Vec<Printer> {
     spooler_list(|_| None)
 }
 
+/// The spooler's queues (`EnumPrinters`, local queues and connections) with the default marked,
+/// each given the two-sided support `two_sided` reports for it; empty when the spooler can't list
+/// them.
 fn spooler_list(two_sided: impl Fn(&PrinterDevice) -> Option<bool>) -> Vec<Printer> {
     match PrinterDevice::all() {
         Ok(devices) => crate::printer_list(devices.iter().map(|d| (d.name().to_string(), two_sided(d))), default_printer().as_deref()),
