@@ -2156,6 +2156,19 @@ fn a_palette_hands_the_keyboard_back_when_the_pointer_comes_back_to_the_main_win
     d.move_to(pos2(290.0, 200.0));
     d.step(vec![]);
     assert_eq!(focus_main(&d), 0, "the pointer never left the main window");
+    // A press in the main window whose release went with its focus holds nothing back.
+    let mut d = driver(layout(true));
+    let id = window(&d, 5).id;
+    let viewport = d.viewport(id);
+    d.host().focus = Some(egui::ViewportId::ROOT);
+    d.press(pos2(50.0, 50.0));
+    d.host().focus = Some(viewport);
+    d.step(vec![Event::WindowFocused(false)]);
+    d.window_pointer(id, ORIGIN + vec2(400.0, 200.0));
+    d.step(vec![]);
+    d.move_to(pos2(50.0, 50.0));
+    d.step(vec![]);
+    assert_eq!(focus_main(&d), 1, "the lost press is not held");
 }
 
 #[test]

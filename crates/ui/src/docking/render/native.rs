@@ -673,16 +673,20 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
             // palette's frame over the main window, focuses the palette with the pointer still the
             // main window's, and handing the keyboard back then kept the palette from redrawing
             // while it resized. While a text field has the keyboard, a button is held or a menu of
-            // the palette is open, the hand-back waits. A viewer is an ordinary window: it keeps
-            // the keyboard.
+            // the palette is open, the hand-back waits. A button of the main window counts as the
+            // input hook counts it, not as egui does: egui keeps a press whose release went with
+            // the main window's focus. A viewer is an ordinary window: it keeps the keyboard.
             if own
                 && !normal
                 && !blocked
                 && ui.input(|i| i.viewport().focused == Some(true) && !i.pointer.any_down())
                 && !ui.ctx().text_edit_focused()
                 && !egui::Popup::is_any_open(ui.ctx())
-                && !ui.ctx().input_for(ViewportId::ROOT, |i| i.pointer.any_down())
-                && std::mem::take(&mut body_input(ui.ctx()).lock().pointer_returned)
+                && {
+                    let body = body_input(ui.ctx());
+                    let mut body = body.lock();
+                    body.root_held == 0 && std::mem::take(&mut body.pointer_returned)
+                }
             {
                 ui.ctx().send_viewport_cmd_to(ViewportId::ROOT, ViewportCommand::Focus);
             }
