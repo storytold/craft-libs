@@ -14,6 +14,7 @@ pub mod client;
 pub mod discovery;
 pub mod error;
 pub mod fetch;
+mod fsopen;
 pub mod ids;
 pub mod launch;
 pub mod moniker;

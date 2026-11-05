@@ -109,7 +109,9 @@ impl Tracker {
     /// An edit that keeps size and mtime is invisible to a shallow poll.
     ///
     /// A missing file gives `Missing` and no epoch bump. Any other read error
-    /// is returned and leaves the state as it was.
+    /// is returned and leaves the state as it was. So does a change that needs
+    /// a bump at epoch `u64::MAX`: that is `Err(Invalid)`, because an epoch that
+    /// cannot go up would let a cached frame pass for the new content.
     pub fn poll(&mut self, deep: bool) -> Result<Change, LinkError> {
         let Some(mut file) = open_if_present(&self.path)? else {
             self.seen = None;
@@ -127,7 +129,7 @@ impl Tracker {
         let now = Fingerprint { size, mtime_ms, hash: hash_reader(&mut file)? };
         let changed = self.seen.as_ref().is_none_or(|prev| prev.hash != now.hash);
         let bumped = changed && self.differs_from_loaded_or_was_seen(&now);
-        self.apply(now, bumped);
+        self.apply(now, bumped)?;
         Ok(self.change(bumped))
     }
 
@@ -140,15 +142,15 @@ impl Tracker {
     /// Point the link at `new_path`. The new file is read at once. Its hash
     /// equal to what the consumer loaded gives `Current` with no bump. A
     /// different hash gives `Modified` and one bump. A missing `new_path` is an
-    /// error and the old path stays.
+    /// error and the old path stays. So it does when the bump would pass `u64::MAX`.
     pub fn relink(&mut self, new_path: impl Into<PathBuf>) -> Result<Change, LinkError> {
         let new_path = new_path.into();
         let Some(now) = fingerprint_if_present(&new_path)? else {
             return Err(LinkError::Unknown(format!("{} does not exist", new_path.display())));
         };
         let same = self.loaded.as_ref().is_some_and(|loaded| loaded.hash == now.hash);
+        self.apply(now, !same)?;
         self.path = new_path;
-        self.apply(now, !same);
         Ok(self.change(!same))
     }
 
@@ -162,13 +164,15 @@ impl Tracker {
         }
     }
 
-    fn apply(&mut self, now: Fingerprint, bumped: bool) {
+    /// Record `now`. A bump adds 1 to the epoch, or fails with the tracker untouched.
+    fn apply(&mut self, now: Fingerprint, bumped: bool) -> Result<(), LinkError> {
         if bumped {
-            self.epoch = self.epoch.saturating_add(1);
+            self.epoch = self.epoch.checked_add(1).ok_or_else(|| LinkError::Invalid("the epoch is at its maximum and cannot go up".into()))?;
         }
         let current = self.loaded.as_ref().is_some_and(|loaded| loaded.hash == now.hash);
         self.seen = Some(now);
         self.state = if current { FileState::Current } else { FileState::Modified };
+        Ok(())
     }
 
     fn change(&self, bumped: bool) -> Change {
@@ -178,7 +182,7 @@ impl Tracker {
 
 /// Fingerprint `path`. A missing file is an error.
 pub fn fingerprint(path: &Path) -> Result<Fingerprint, LinkError> {
-    let mut file = File::open(path)?;
+    let mut file = crate::fsopen::open_read(path, true)?;
     let (size, mtime_ms) = stat(&file, path)?;
     Ok(Fingerprint { size, mtime_ms, hash: hash_reader(&mut file)? })
 }
@@ -195,7 +199,8 @@ pub fn fingerprint_if_present(path: &Path) -> Result<Option<Fingerprint>, LinkEr
 }
 
 fn open_if_present(path: &Path) -> Result<Option<File>, LinkError> {
-    match File::open(path) {
+    // `stat` checks the type on this handle. An open that waits for a FIFO writer would stall the caller.
+    match crate::fsopen::open_read(path, true) {
         Ok(file) => Ok(Some(file)),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(err) => Err(LinkError::Io(format!("{}: {err}", path.display()))),
@@ -236,8 +241,12 @@ static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 /// Write `bytes` to `path` so a reader sees the old file or the new file.
 ///
 /// The bytes go to `.<name>.<pid>.<n>.tmp` in the same directory, are flushed,
-/// and are renamed over `path`. The directory is flushed on Unix. A failure
-/// removes the temporary file and leaves `path` as it was.
+/// and are renamed over `path`. The directory is flushed on Unix.
+///
+/// An error before the rename removes the temporary file and leaves `path` as it was. The
+/// directory flush and the final fingerprint run after the rename, so an error from either can
+/// come back while `path` already holds the new bytes. Such an error means the write is not
+/// confirmed durable or not fingerprinted, not that `path` is unchanged.
 pub fn write_atomic(path: &Path, bytes: &[u8]) -> Result<Fingerprint, LinkError> {
     let name = path.file_name().and_then(|n| n.to_str()).ok_or_else(|| LinkError::Invalid(format!("{} has no file name", path.display())))?;
     let dir = match path.parent() {
@@ -420,6 +429,33 @@ mod tests {
         assert!(Tracker::new(&path, 0).is_err(), "a directory is not a result file");
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn a_fifo_at_the_path_is_an_error_and_never_blocks() {
+        // Forking `mkfifo` while another test holds a discovery lock would hand the child a copy of the lock fd.
+        let _spawning = crate::SPAWN_GUARD.write().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let tmp = Tmp::new("fifo");
+        let path = tmp.0.join("a.png");
+        std::fs::write(&path, b"one").unwrap();
+        let mut tracker = Tracker::new(&path, 3).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        let made = std::process::Command::new("mkfifo").arg(&path).status().map(|s| s.success()).unwrap_or(false);
+        assert!(made, "mkfifo failed");
+        // The open of a FIFO with no writer waits for one. Run each call where a hang fails the test instead of the run.
+        let (tx, rx) = std::sync::mpsc::channel();
+        let watched = path.clone();
+        std::thread::spawn(move || {
+            let polled = tracker.poll(true);
+            let kept = (tracker.state(), tracker.epoch());
+            let _ = tx.send((polled, kept, Tracker::new(&watched, 0).map(|_| ()), fingerprint(&watched).map(|_| ())));
+        });
+        let (polled, kept, created, printed) = rx.recv_timeout(Duration::from_secs(5)).expect("a FIFO blocked the open");
+        assert!(matches!(polled, Err(LinkError::Invalid(_))), "{polled:?}");
+        assert_eq!(kept, (FileState::Current, 3), "a failed poll leaves the state as it was");
+        assert!(matches!(created, Err(LinkError::Invalid(_))), "{created:?}");
+        assert!(matches!(printed, Err(LinkError::Invalid(_))), "{printed:?}");
+    }
+
     #[test]
     fn relink_compares_hashes_and_rejects_a_missing_target() {
         let tmp = Tmp::new("relink");
@@ -438,6 +474,26 @@ mod tests {
         assert_eq!(tracker.relink(&same).unwrap(), Change { state: FileState::Current, epoch: 7, bumped: false });
         assert_eq!(tracker.path(), same.as_path());
         assert_eq!(tracker.relink(&other).unwrap(), Change { state: FileState::Modified, epoch: 8, bumped: true });
+    }
+
+    #[test]
+    fn a_bump_at_the_largest_epoch_is_an_error_and_changes_nothing() {
+        let tmp = Tmp::new("maxepoch");
+        let path = tmp.0.join("a.png");
+        std::fs::write(&path, b"one").unwrap();
+        let other = tmp.0.join("other.png");
+        std::fs::write(&other, b"two").unwrap();
+        let mut tracker = Tracker::new(&path, u64::MAX).unwrap();
+        // No bump needed, no error.
+        assert_eq!(tracker.poll(true).unwrap(), Change { state: FileState::Current, epoch: u64::MAX, bumped: false });
+        write_atomic(&path, b"changed").unwrap();
+        for _ in 0..2 {
+            assert!(matches!(tracker.poll(true), Err(LinkError::Invalid(_))));
+            assert_eq!((tracker.state(), tracker.epoch()), (FileState::Current, u64::MAX));
+        }
+        assert!(matches!(tracker.relink(&other), Err(LinkError::Invalid(_))));
+        assert_eq!(tracker.path(), path.as_path(), "the old path stays");
+        assert_eq!((tracker.state(), tracker.epoch()), (FileState::Current, u64::MAX));
     }
 
     #[test]

@@ -9,8 +9,9 @@
 //! - A miss goes to a worker. Asks for one key share one render.
 //! - A caller that runs out of time gets [`Fetched::TimedOut`]. The render goes on, and its frame
 //!   lands in the cache for the next ask. The caller never waits for the socket.
-//! - A queued ask older than [`FetchOptions::max_age`] is dropped when a worker reaches it,
-//!   because the caller has moved on.
+//! - A queued ask older than [`FetchOptions::max_age`] is dropped when a worker reaches it, unless
+//!   a caller is still waiting for it. The queue holds at most [`QUEUE_MAX`] asks: a new miss past
+//!   that drops the oldest.
 //! - A connection error ends that worker. When the last worker ends the fetcher is down and every
 //!   ask that misses the cache returns [`Fetched::Down`] at once.
 
@@ -26,6 +27,9 @@ use crate::error::LinkError;
 
 /// Most bulk connections one fetcher opens.
 pub const CONNECTIONS_MAX: usize = 8;
+
+/// Most asks that wait for a worker at once. A new miss past this drops the oldest queued ask.
+pub const QUEUE_MAX: usize = 256;
 
 /// What identifies a frame for the cache: the caller's frame number and scale (in thousandths).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -43,7 +47,7 @@ pub struct FetchOptions {
     pub io_timeout: Duration,
     /// Cache size in bytes of pixel data.
     pub cache_bytes: usize,
-    /// A queued ask older than this is skipped.
+    /// A queued ask older than this is skipped, unless a caller is still waiting for it.
     pub max_age: Duration,
 }
 
@@ -77,7 +81,7 @@ pub struct FetchStats {
     pub renders: u64,
     pub timeouts: u64,
     pub failures: u64,
-    /// Queued asks dropped for age.
+    /// Queued asks dropped for age or for a full queue.
     pub skipped: u64,
 }
 
@@ -86,6 +90,8 @@ struct Job {
     time_s: f64,
     epoch: u64,
     queued: Instant,
+    /// The latest deadline of a caller that is waiting for this job.
+    wanted_until: Instant,
 }
 
 struct Cached {
@@ -206,7 +212,13 @@ impl FrameFetcher {
 
     /// The frame for `key` at an epoch of at least `min_epoch`, waiting at most `wait`.
     /// `time_s` is the comp time the peer renders.
+    ///
+    /// A `time_s` that is not finite is answered with [`Fetched::Failed`] and is never queued: the
+    /// request would fail before it reaches the socket, and a worker reads that as a dead connection.
     pub fn fetch(&self, key: FrameKey, time_s: f64, min_epoch: u64, wait: Duration) -> Fetched {
+        if !time_s.is_finite() {
+            return Fetched::Failed("time_s must be finite".into());
+        }
         let deadline = Instant::now() + wait;
         let shared = &self.shared;
         let mut state = shared.lock();
@@ -229,9 +241,21 @@ impl FrameFetcher {
             if shared.alive.load(Ordering::SeqCst) == 0 || state.stop {
                 return Fetched::Down;
             }
-            if !state.inflight.contains(&key) {
+            if state.inflight.contains(&key) {
+                // Still waiting for a worker: this caller keeps the job alive until its own deadline.
+                if let Some(job) = state.queue.iter_mut().find(|job| job.key == key) {
+                    job.wanted_until = job.wanted_until.max(deadline);
+                }
+            } else {
+                if state.queue.len() >= QUEUE_MAX
+                    && let Some(oldest) = state.queue.pop_front()
+                {
+                    state.inflight.remove(&oldest.key);
+                    state.stats.skipped += 1;
+                    shared.done.notify_all();
+                }
                 state.inflight.insert(key);
-                state.queue.push_back(Job { key, time_s, epoch: min_epoch, queued: Instant::now() });
+                state.queue.push_back(Job { key, time_s, epoch: min_epoch, queued: Instant::now(), wanted_until: deadline });
                 shared.work.notify_one();
             }
             let left = deadline.saturating_duration_since(Instant::now());
@@ -314,7 +338,7 @@ fn next_job(shared: &Shared) -> Option<Job> {
             return None;
         }
         while let Some(job) = state.queue.pop_front() {
-            if job.queued.elapsed() > shared.options.max_age {
+            if job.queued.elapsed() > shared.options.max_age && job.wanted_until <= Instant::now() {
                 state.inflight.remove(&job.key);
                 state.stats.skipped += 1;
                 shared.done.notify_all();

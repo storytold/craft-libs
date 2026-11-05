@@ -142,7 +142,8 @@ unknown `format`, a missing field, a relative `path` or a bad `asset` moniker ge
 and the app never sees the request. `params` that is not an object stays `bad_params`. The server
 checks shape, and for `otio-json` it also opens every `ExternalReference` whose `target_url` is a
 `file://` URL or an absolute path. A file that does not open gets `media_missing` with
-`data.missing` (the paths) and the app never sees the request. Relative targets are left to the app.
+`data.missing` (the paths) and the app never sees the request. A `file://` URL whose path has a bad
+percent escape, or does not decode to UTF-8, gets `payload_invalid`. Relative targets are left to the app.
 
 Path rules. `result_path`, `payload.path` and every absolute media `target_url` must
 be absolute, hold no NUL byte and no `..` component, or the request gets `payload_invalid`. The
@@ -220,7 +221,10 @@ contracts. `engine.commands` now also lists plugin commands and carries a `schem
    `{"req":<u64>,"time_s":<f64>,"epoch":<u64>,"region":[x,y,w,h]|null}`.
 4. Server reply record: `'CFRM' | u32 header_len | u64 payload_len | header JSON | payload`, header
    `{"req","epoch","w","h","stride","format","render_ms"}`. `epoch` is the epoch the frame was
-   rendered at; a client that asked for an older epoch may get a newer one.
+   rendered at; a client that asked for an older epoch may get a newer one. `payload_len` is
+   `stride * h`, and `stride` is at least one row: `w` times 4 bytes for `rgba8_premul`, `w` times 8
+   bytes for `rgba16f_premul`. A layout that breaks this is refused at `frames.open`, and a reply
+   that breaks it is refused by the server and by the client.
 5. Errors: header `{"req","error":"..."}` with `payload_len` 0.
 All integers little endian. Tickets expire when the control connection closes.
 
@@ -252,6 +256,9 @@ craft://<app>/<doc>/<kind>/<id>
 | `doc` | The document id, a UUID in 8-4-4-4-12 hex form. Parsers accept either hex case and keep the text as written. |
 | `kind` | `^[a-z][a-z0-9-]{0,31}$`. Known values: `comp`, `image`, `vector`, `sequence`, `layer`. An unknown value is valid and is kept. |
 | `id` | Non-empty, at most 512 bytes after decoding, valid UTF-8. Characters other than `A-Z a-z 0-9 - . _ ~` are percent-encoded as `%XX` (uppercase hex) by the formatter. The parser accepts either hex case. A raw `/`, `?`, `#` or `%` not followed by two hex digits is invalid. |
+
+The `asset.moniker` pattern in `schemas/link-record.schema.json` states the same `id` rules, so a
+record that the schema accepts also parses in Rust.
 
 A moniker has no query and no fragment. It names an asset, not a state: the state is the epoch.
 A moniker can outlive its asset. Resolving a dead moniker gives `link_unknown`. Parsing then

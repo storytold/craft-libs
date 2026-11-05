@@ -125,6 +125,13 @@ fn schema_and_rust_agree_on_edge_cases() {
         ),
         (edit(&legacy, &|d| d["result_epoch"] = json!(0)), true, "epoch 0"),
         (edit(&legacy, &|d| d["created"] = json!("yesterday")), false, "bad date"),
+        (edit(&legacy, &|d| d["created"] = json!("2026-02-31T09:30:00Z")), false, "31 February"),
+        (edit(&legacy, &|d| d["created"] = json!("2026-02-29T09:30:00Z")), false, "29 February in a common year"),
+        (edit(&legacy, &|d| d["created"] = json!("2026-04-31T09:30:00+02:00")), false, "31 April"),
+        (edit(&legacy, &|d| d["created"] = json!("1900-02-29T00:00:00Z")), false, "29 February in a century year"),
+        (edit(&legacy, &|d| d["created"] = json!("2024-02-29T09:30:00Z")), true, "29 February in a leap year"),
+        (edit(&legacy, &|d| d["created"] = json!("2000-02-29T09:30:00.250Z")), true, "29 February in a 400 year"),
+        (edit(&legacy, &|d| d["created"] = json!("2026-12-31T23:59:59-05:30")), true, "last day of the year"),
         (edit(&legacy, &|d| d["link_id"] = json!("nope")), false, "bad link id"),
         (
             edit(&legacy, &|d| {
@@ -171,6 +178,86 @@ fn schema_and_rust_agree_on_edge_cases() {
     for (doc, want, why) in &cases {
         check_link(&schema, doc, *want, why);
     }
+}
+
+const MONIKER_BASE: &str = "craft://photocraft/9f8e7d6c-5b4a-4c3d-8e2f-1a0b9c8d7e6f/image/";
+
+fn with_moniker(still: &Value, id: &str) -> Value {
+    let mut doc = still.clone();
+    doc["asset"]["moniker"] = json!(format!("{MONIKER_BASE}{id}"));
+    doc
+}
+
+/// The moniker id rules of `Moniker::parse` as the schema states them: unreserved characters and
+/// two-digit escapes only, 1 to 512 decoded bytes, and decoded bytes that are valid UTF-8.
+#[test]
+fn schema_and_rust_agree_on_moniker_ids() {
+    let schema = validator("link-record.schema.json");
+    let still = fixture("link-record-still.json");
+    let escaped = |count: usize| "%41".repeat(count);
+    let cases: Vec<(String, bool, &str)> = vec![
+        ("layer-3".into(), true, "plain"),
+        ("~._-AZaz09".into(), true, "every unreserved class"),
+        ("a%20b".into(), true, "escaped space"),
+        ("a%2fb".into(), true, "lowercase escape"),
+        ("%C3%A9".into(), true, "two byte character"),
+        ("%c3%a9".into(), true, "two byte character in lowercase hex"),
+        ("%E2%82%AC".into(), true, "three byte character"),
+        ("%F0%9F%98%80".into(), true, "four byte character"),
+        ("%F4%8F%BF%BF".into(), true, "highest scalar"),
+        ("%ED%9F%BF".into(), true, "just below the surrogates"),
+        ("%00".into(), true, "escaped NUL is a byte like any other"),
+        ("%GG".into(), false, "bad escape"),
+        ("%4".into(), false, "truncated escape"),
+        ("%".into(), false, "lone percent"),
+        ("a b".into(), false, "raw space"),
+        ("caf\u{e9}".into(), false, "raw non-ASCII"),
+        ("a:b".into(), false, "raw colon"),
+        ("a%2".into(), false, "truncated escape after text"),
+        ("".into(), false, "empty id"),
+        ("%FF".into(), false, "invalid UTF-8 byte"),
+        ("%C3".into(), false, "truncated two byte character"),
+        ("%80".into(), false, "lone continuation byte"),
+        ("%C0%80".into(), false, "overlong two byte form"),
+        ("%E0%80%80".into(), false, "overlong three byte form"),
+        ("%ED%A0%80".into(), false, "surrogate"),
+        ("%F0%80%80%80".into(), false, "overlong four byte form"),
+        ("%F4%90%80%80".into(), false, "above U+10FFFF"),
+        ("%F5%80%80%80".into(), false, "lead byte F5"),
+        ("a/b".into(), false, "raw slash"),
+        ("a?b".into(), false, "raw query"),
+        ("a#b".into(), false, "raw fragment"),
+        ("a".repeat(512), true, "512 raw bytes"),
+        ("a".repeat(513), false, "513 raw bytes"),
+        (escaped(512), true, "512 escaped bytes"),
+        (escaped(513), false, "513 escaped bytes"),
+        (format!("{}%C3%A9", "a".repeat(510)), true, "512 decoded bytes ending in a two byte character"),
+        (format!("{}%C3%A9", "a".repeat(511)), false, "513 decoded bytes ending in a two byte character"),
+        ("%C3%A9".repeat(256), true, "256 two byte characters make 512 bytes"),
+        ("%C3%A9".repeat(257), false, "257 two byte characters make 514 bytes"),
+    ];
+    for (id, want, why) in &cases {
+        check_link(&schema, &with_moniker(&still, id), *want, why);
+    }
+
+    // Every lead byte against a spread of second and third bytes: the two verdicts must match.
+    let probes = [0x00u8, 0x41, 0x7F, 0x80, 0x8F, 0x90, 0x9F, 0xA0, 0xBF, 0xC0];
+    let mut seen_valid = 0;
+    for lead in 0u8..=0xFF {
+        for second in probes {
+            for tail in [&[][..], &[0x80][..], &[0x80, 0x80][..]] {
+                for hex in [|b: u8| format!("%{b:02X}"), |b: u8| format!("%{b:02x}")] {
+                    let id: String = [lead, second].iter().chain(tail).map(|byte| hex(*byte)).collect();
+                    let doc = with_moniker(&still, &id);
+                    let by_schema = schema.is_valid(&doc);
+                    let by_rust = serde_json::from_value::<LinkRecord>(doc.clone()).is_ok_and(|r| r.validate().is_ok());
+                    assert_eq!(by_schema, by_rust, "bytes {lead:02X} {second:02X} {tail:02X?} as {id}");
+                    seen_valid += usize::from(by_schema);
+                }
+            }
+        }
+    }
+    assert!(seen_valid > 100, "the probe must reach valid sequences too, got {seen_valid}");
 }
 
 fn instance_doc() -> Value {
