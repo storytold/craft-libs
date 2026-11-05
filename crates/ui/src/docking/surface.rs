@@ -157,6 +157,14 @@ pub struct DockStyle {
     pub wheel_selects_tabs: bool,
     /// A middle click on a tab closes its panel when the panel is closable.
     pub middle_click_closes_tabs: bool,
+    /// A tab of a panel whose [`DockContent::tab_icon`] is true shows its icon (painted by
+    /// [`DockContent::paint_icon`]) in place of its label, which becomes the tab's hover text.
+    pub tab_icons: bool,
+    /// Some: a group in a dock column with a single panel shows no tab, only a band this high that still drags
+    /// the group, and the panel's name as the band's hover text. None: its one tab shows.
+    pub lone_tab_strip: Option<f32>,
+    /// Outline the drag bar (the strip's empty part) while the pointer is over it or it has focus.
+    pub drag_bar_outline: bool,
 }
 
 impl Default for DockStyle {
@@ -201,6 +209,9 @@ impl DockStyle {
             float_group_label: "Float Tab Group".into(),
             move_group_to_label: "Move Group To".into(),
             drag_bar_width: 40.0,
+            tab_icons: false,
+            lone_tab_strip: None,
+            drag_bar_outline: true,
             floating_background: visuals.window_fill,
             floating_stroke: visuals.window_stroke,
             blocked_dim: visuals.panel_fill.gamma_multiply(0.6),
@@ -918,6 +929,11 @@ pub trait DockContent<P> {
     fn paint_icon(&mut self, _painter: &egui::Painter, _rect: Rect, _panel: &P, _color: Color32) -> bool {
         false
     }
+    /// Whether the panel's tab shows [`Self::paint_icon`] in place of its label, when
+    /// [`DockStyle::tab_icons`] is on.
+    fn tab_icon(&self, _panel: &P) -> bool {
+        false
+    }
     /// Whether the panel's floating window may be its own OS window (feature
     /// `native-windows`). A panel that returns false keeps its window in-window.
     fn allow_native(&self, _panel: &P) -> bool {
@@ -1055,6 +1071,9 @@ impl<P, C: DockContent<P> + ?Sized> DockContent<P> for Overrides<'_, P, C> {
     }
     fn icon(&self, panel: &P) -> Option<egui::ImageSource<'static>> {
         self.inner.icon(panel)
+    }
+    fn tab_icon(&self, panel: &P) -> bool {
+        self.inner.tab_icon(panel)
     }
     fn paint_icon(&mut self, painter: &egui::Painter, rect: Rect, panel: &P, color: Color32) -> bool {
         self.inner.paint_icon(painter, rect, panel, color)
