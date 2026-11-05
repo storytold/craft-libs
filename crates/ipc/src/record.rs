@@ -187,6 +187,12 @@ fn valid_rfc3339(text: &str) -> bool {
     if !(1..=12).contains(&month) || !(1..=31).contains(&day) || hour > 23 || minute > 59 || second > 60 {
         return false;
     }
+    let (Some(century), Some(year_in_century)) = (two_digits(bytes, 0), two_digits(bytes, 2)) else {
+        return false;
+    };
+    if chrono::NaiveDate::from_ymd_opt(i32::from(century * 100 + year_in_century), u32::from(month), u32::from(day)).is_none() {
+        return false;
+    }
     let mut index = 19;
     if byte_at(bytes, index) == Some(b'.') {
         index += 1;

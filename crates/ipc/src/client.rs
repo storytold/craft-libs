@@ -43,13 +43,15 @@ pub struct Client {
     next_id: u64,
     events: VecDeque<Event>,
     hello: Option<HelloClient>,
+    /// Bytes of a reply line read before a timeout, kept so the next read resumes the line.
+    partial: Vec<u8>,
 }
 
 impl Client {
     /// Connect to `record.endpoint`. Every transport sends auth id 0 with the record token first.
     pub fn connect(record: &InstanceRecord) -> Result<Self, LinkError> {
         let reader = open_reader(record)?;
-        Ok(Self { record: record.clone(), reader, next_id: 1, events: VecDeque::new(), hello: None })
+        Ok(Self { record: record.clone(), reader, next_id: 1, events: VecDeque::new(), hello: None, partial: Vec::new() })
     }
 
     /// Connect to the loopback TCP control port published in `record` (`record.tcp_port()`),
@@ -72,7 +74,7 @@ impl Client {
         write_json(&mut self.reader, &msg)?;
         let deadline = Instant::now() + Duration::from_secs(wire::REPLY_DEADLINE_SECS);
         loop {
-            let value = match read_json(&mut self.reader, deadline)? {
+            let value = match read_json(&mut self.reader, &mut self.partial, deadline)? {
                 Some(value) => value,
                 None => return Err(LinkError::Closed),
             };
@@ -125,7 +127,7 @@ impl Client {
         if Instant::now() >= deadline {
             return Ok(None);
         }
-        match read_json(&mut self.reader, deadline) {
+        match read_json(&mut self.reader, &mut self.partial, deadline) {
             Ok(None) => Err(LinkError::Closed),
             Ok(Some(value)) => {
                 if value.get("event").is_some() {
@@ -144,6 +146,7 @@ impl Client {
     pub fn reconnect(&mut self) -> Result<(), LinkError> {
         let reader = open_reader(&self.record)?;
         self.reader = reader;
+        self.partial.clear();
         self.events.clear();
         self.next_id = 1;
         if let Some(identity) = self.hello.clone() {
@@ -249,8 +252,9 @@ fn authenticate(reader: &mut BufReader<Transport>, token: &str) -> Result<(), Li
     write_json(reader, &request)?;
     let deadline = Instant::now() + Duration::from_secs(wire::REPLY_DEADLINE_SECS);
     let expected = wire::auth_success(&json!(0));
+    let mut partial = Vec::new();
     loop {
-        let line = match pull_line(reader, deadline) {
+        let line = match pull_line(reader, &mut partial, deadline) {
             Ok(Some(bytes)) => bytes,
             Ok(None) => return Err(LinkError::Auth),
             Err(LinkError::Timeout) => return Err(LinkError::Timeout),
@@ -280,9 +284,11 @@ pub(crate) fn write_json(reader: &mut BufReader<Transport>, value: &Value) -> Re
     wire::write_line(reader.get_mut(), value)
 }
 
-pub(crate) fn read_json(reader: &mut BufReader<Transport>, deadline: Instant) -> Result<Option<Value>, LinkError> {
+/// Reads one JSON line. `partial` holds the bytes of a line that a timeout cut short, so a caller
+/// that keeps the connection after `Err(Timeout)` passes the same buffer again and gets the whole line.
+pub(crate) fn read_json(reader: &mut BufReader<Transport>, partial: &mut Vec<u8>, deadline: Instant) -> Result<Option<Value>, LinkError> {
     loop {
-        let Some(bytes) = pull_line(reader, deadline)? else {
+        let Some(bytes) = pull_line(reader, partial, deadline)? else {
             return Ok(None);
         };
         let text = std::str::from_utf8(&bytes).map_err(|err| LinkError::Invalid(err.to_string()))?;
@@ -296,7 +302,9 @@ pub(crate) fn read_json(reader: &mut BufReader<Transport>, deadline: Instant) ->
 
 /// Same line limit as [`wire::read_line`]. The io error kind is kept so a
 /// socket timeout becomes [`LinkError::Timeout`] instead of a generic io string.
-fn pull_line(reader: &mut BufReader<Transport>, deadline: Instant) -> Result<Option<Vec<u8>>, LinkError> {
+///
+/// Bytes read before a timeout stay in `partial` and the next call continues that line.
+fn pull_line(reader: &mut BufReader<Transport>, partial: &mut Vec<u8>, deadline: Instant) -> Result<Option<Vec<u8>>, LinkError> {
     let max = wire::MAX_LINE;
     let limit = u64::try_from(max).map_err(|_| LinkError::TooLarge)?.saturating_add(1);
     loop {
@@ -305,10 +313,10 @@ fn pull_line(reader: &mut BufReader<Transport>, deadline: Instant) -> Result<Opt
             return Err(LinkError::Timeout);
         }
         reader.get_ref().arm_recv_timeout(Some(remaining))?;
-        let mut buf = Vec::new();
-        match reader.take(limit).read_until(b'\n', &mut buf) {
-            Ok(0) if buf.is_empty() => return Ok(None),
-            Ok(_) => return finish_line(buf, max),
+        let left = limit.saturating_sub(u64::try_from(partial.len()).unwrap_or(u64::MAX));
+        match reader.take(left).read_until(b'\n', partial) {
+            Ok(0) if partial.is_empty() => return Ok(None),
+            Ok(_) => return finish_line(std::mem::take(partial), max),
             Err(err) if err.kind() == std::io::ErrorKind::Interrupted => continue,
             Err(err) if is_timeout(&err) => return Err(LinkError::Timeout),
             Err(err) => return Err(err.into()),
@@ -687,6 +695,27 @@ mod tests {
             LinkError::BadParams(text) => assert_eq!(text, "missing command"),
             other => panic!("{other}"),
         }
+    }
+
+    #[test]
+    fn next_event_resumes_a_line_cut_short_by_a_timeout() {
+        let server = peer("split", |stream, record| {
+            let mut reader = BufReader::new(stream);
+            accept_auth(&mut reader, &record.token);
+            let out = reader.get_mut();
+            out.write_all(b"{\"event\":\"doc.changed\",\"seq\":9,").unwrap();
+            out.flush().unwrap();
+            std::thread::sleep(Duration::from_millis(600));
+            out.write_all(b"\"data\":{\"doc_id\":\"abc\"}}\n").unwrap();
+            out.flush().unwrap();
+            std::thread::sleep(Duration::from_millis(300));
+        });
+        let mut client = Client::connect(&server.record).unwrap();
+        assert!(client.next_event(Some(Duration::from_millis(200))).unwrap().is_none());
+        let event = client.next_event(Some(Duration::from_secs(5))).unwrap().expect("the whole event");
+        assert_eq!(event.event, "doc.changed");
+        assert_eq!(event.seq, 9);
+        assert_eq!(event.data, json!({"doc_id": "abc"}));
     }
 
     #[test]

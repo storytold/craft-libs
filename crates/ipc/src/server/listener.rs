@@ -407,6 +407,11 @@ fn authenticate(
                 let _ = write_value(writer, &wire::auth_failure());
                 return Err(());
             }
+            // A line that completes after the deadline is too late, even when the read poll has not run since.
+            Incoming::Line(_) if Instant::now() >= deadline => {
+                let _ = write_value(writer, &wire::auth_failure());
+                return Err(());
+            }
             Incoming::Line(bytes) => bytes,
         };
         match wire::parse_request(&line) {
@@ -470,7 +475,7 @@ fn overlong() -> String {
 
 fn write_value(writer: &Arc<std::sync::Mutex<Box<dyn Write + Send>>>, value: &Value) -> Result<(), LinkError> {
     let mut guard = lock(writer);
-    wire::write_line(&mut *guard, value)
+    wire::write_reply_line(&mut *guard, value)
 }
 
 /// Retries reads that time out until `deadline`, so a record split across the read poll is whole.
@@ -526,15 +531,17 @@ fn bulk_loop(reader: &mut BufReader<Box<dyn Read + Send>>, writer: &Arc<std::syn
     }
 }
 
+/// Send one frame record. A record that cannot be built (bad header, payload over the limit) has
+/// written nothing, so an error record takes its place. A failure while writing may leave part of a
+/// record on the stream, and a second record would read as its tail: that error is returned alone
+/// and the caller closes the connection.
 fn send_frame(writer: &Arc<std::sync::Mutex<Box<dyn Write + Send>>>, request: &Value, header: &Value, payload: &[u8]) -> Result<(), LinkError> {
-    match write_frame(writer, header, payload) {
-        Ok(()) => Ok(()),
-        Err(err) => {
-            let fail = error_header(request, &err.to_string());
-            write_frame(writer, &fail, &[])?;
-            Err(err)
-        }
+    if let Err(err) = wire::check_cfrm(header, payload) {
+        let fail = error_header(request, &err.to_string());
+        write_frame(writer, &fail, &[])?;
+        return Err(err);
     }
+    write_frame(writer, header, payload)
 }
 
 fn error_header(request: &Value, message: &str) -> Value {
@@ -545,4 +552,73 @@ fn error_header(request: &Value, message: &str) -> Value {
 fn write_frame(writer: &Arc<std::sync::Mutex<Box<dyn Write + Send>>>, header: &Value, payload: &[u8]) -> Result<(), LinkError> {
     let mut guard = lock(writer);
     wire::write_cfrm(&mut *guard, header, payload)
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+mod tests {
+    use std::sync::Mutex;
+
+    use serde_json::json;
+
+    use super::*;
+
+    /// Takes `room` bytes, fails one write, then takes everything: a socket whose send timeout
+    /// fired mid-record and whose peer then drained the buffer.
+    struct Choked {
+        seen: Arc<Mutex<Vec<u8>>>,
+        room: usize,
+        failed: bool,
+    }
+
+    impl Write for Choked {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            if self.room == 0 && !self.failed {
+                self.failed = true;
+                self.room = usize::MAX;
+                return Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "choked"));
+            }
+            let take = buf.len().min(self.room);
+            self.seen.lock().unwrap().extend_from_slice(&buf[..take]);
+            self.room = self.room.saturating_sub(take);
+            Ok(take)
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    type Writer = Arc<std::sync::Mutex<Box<dyn Write + Send>>>;
+
+    fn rig(room: usize) -> (Writer, Arc<Mutex<Vec<u8>>>) {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let writer: Box<dyn Write + Send> = Box::new(Choked { seen: Arc::clone(&seen), room, failed: false });
+        (Arc::new(Mutex::new(writer)), seen)
+    }
+
+    #[test]
+    fn a_failed_write_is_not_followed_by_an_error_record() {
+        let (writer, seen) = rig(10);
+        let request = json!({"req": 7});
+        let header = json!({"req": 7, "w": 1});
+        let payload = vec![1u8; 64];
+        assert!(send_frame(&writer, &request, &header, &payload).is_err());
+        let mut whole = Vec::new();
+        wire::write_cfrm(&mut whole, &header, &payload).unwrap();
+        assert_eq!(*seen.lock().unwrap(), whole[..10].to_vec(), "only the bytes of the first record, and no error record after them");
+    }
+
+    #[test]
+    fn a_record_that_cannot_be_built_gets_an_error_record() {
+        let (writer, seen) = rig(usize::MAX);
+        let request = json!({"req": 7});
+        // A header that is not an object is refused before any byte is written.
+        assert!(matches!(send_frame(&writer, &request, &json!("no"), b"x"), Err(LinkError::BadParams(_))));
+        let written = seen.lock().unwrap().clone();
+        let (header, payload) = wire::read_cfrm(&mut std::io::Cursor::new(written)).unwrap();
+        assert_eq!(header["req"], json!(7));
+        assert!(header["error"].as_str().is_some_and(|text| text.contains("object")), "{header}");
+        assert!(payload.is_empty());
+    }
 }

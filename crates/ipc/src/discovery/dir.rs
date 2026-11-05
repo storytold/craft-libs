@@ -101,10 +101,8 @@ fn runtime_path() -> Result<PathBuf, LinkError> {
     }
     #[cfg(target_os = "macos")]
     {
-        match std::env::var_os("TMPDIR") {
-            Some(value) if !value.is_empty() && Path::new(&value).is_absolute() => Ok(PathBuf::from(value).join("craft")),
-            _ => Ok(PathBuf::from("/tmp/craft")),
-        }
+        let tmpdir = std::env::var_os("TMPDIR");
+        Ok(macos_runtime_path(tmpdir.as_deref(), current_euid()?))
     }
     #[cfg(windows)]
     {
@@ -129,6 +127,19 @@ fn linux_runtime_path(xdg: Option<&std::ffi::OsStr>, euid: u32) -> PathBuf {
     if let Some(xdg) = xdg {
         let path = PathBuf::from(xdg);
         if !xdg.is_empty() && path.is_absolute() {
+            return path.join("craft");
+        }
+    }
+    PathBuf::from(format!("/tmp/craft-{euid}"))
+}
+
+/// `$TMPDIR/craft` when `TMPDIR` is absolute. Otherwise `/tmp/craft-<euid>`, because a shared
+/// `/tmp/craft` belongs to the first user who creates it and refuses everyone else.
+#[cfg(any(target_os = "macos", test))]
+fn macos_runtime_path(tmpdir: Option<&std::ffi::OsStr>, euid: u32) -> PathBuf {
+    if let Some(tmpdir) = tmpdir {
+        let path = PathBuf::from(tmpdir);
+        if !tmpdir.is_empty() && path.is_absolute() {
             return path.join("craft");
         }
     }
@@ -252,6 +263,16 @@ mod tests {
         assert_eq!(linux_runtime_path(Some(std::ffi::OsStr::new("")), 5), PathBuf::from("/tmp/craft-5"));
         assert_eq!(linux_runtime_path(Some(std::ffi::OsStr::new("relative")), 5), PathBuf::from("/tmp/craft-5"));
         assert_eq!(linux_runtime_path(None, 9), PathBuf::from("/tmp/craft-9"));
+    }
+
+    #[test]
+    fn macos_fallback_is_per_user() {
+        use std::ffi::OsStr;
+        assert_eq!(macos_runtime_path(Some(OsStr::new("/var/folders/ab/T")), 5), PathBuf::from("/var/folders/ab/T/craft"));
+        assert_eq!(macos_runtime_path(Some(OsStr::new("")), 5), PathBuf::from("/tmp/craft-5"));
+        assert_eq!(macos_runtime_path(Some(OsStr::new("relative")), 5), PathBuf::from("/tmp/craft-5"));
+        assert_eq!(macos_runtime_path(None, 9), PathBuf::from("/tmp/craft-9"));
+        assert_ne!(macos_runtime_path(None, 5), macos_runtime_path(None, 6));
     }
 
     #[test]
