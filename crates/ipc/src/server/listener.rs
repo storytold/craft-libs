@@ -407,6 +407,11 @@ fn authenticate(
                 let _ = write_value(writer, &wire::auth_failure());
                 return Err(());
             }
+            // A line that completes after the deadline is too late, even when the read poll has not run since.
+            Incoming::Line(_) if Instant::now() >= deadline => {
+                let _ = write_value(writer, &wire::auth_failure());
+                return Err(());
+            }
             Incoming::Line(bytes) => bytes,
         };
         match wire::parse_request(&line) {

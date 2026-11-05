@@ -167,6 +167,22 @@ fn silent_connection_is_closed_at_the_auth_deadline() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+/// an auth line that completes after the deadline does not authenticate, even when it lands
+/// between two read polls (250 ms apart) and the poll has not yet seen the deadline pass.
+#[test]
+fn an_auth_line_that_completes_after_the_deadline_is_refused() {
+    let limits = Limits { auth_deadline: Duration::from_millis(300), ..Limits::default() };
+    let (server, socket, token, dir) = boot_with("lateauth", limits);
+    let mut s = UnixStream::connect(&socket).unwrap();
+    std::thread::sleep(Duration::from_millis(400));
+    s.write_all(auth_line(&token).as_bytes()).unwrap();
+    let text = read_text(&mut s, 6);
+    assert!(text.contains("authentication required"), "{text:?}");
+    assert!(!text.contains("\"authenticated\""), "{text:?}");
+    drop(server);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 /// a peer that starts a line and stalls is cut at the partial-line deadline.
 #[test]
 fn a_stalled_partial_line_is_closed() {
