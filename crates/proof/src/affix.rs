@@ -872,6 +872,17 @@ impl Excluded {
         self.2
     }
 
+    /// Allow forbidden stems while analysing a COMPOUNDRULE terminal suffix.
+    fn allowing_forbidden(mut self) -> Self {
+        self.4 = true;
+        self
+    }
+
+    /// Whether a terminal-suffix analysis may inspect a forbidden stem.
+    fn forbidden_allowed(self) -> bool {
+        self.4
+    }
+
     /// These exclusions and `KEEPCASE` (`flag`): a case variant of the word is being checked.
     fn keeping(mut self, flag: Option<u16>) -> Excluded {
         self.3 = flag;

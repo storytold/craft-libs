@@ -439,7 +439,11 @@ pub fn hyphenate_word(word: &str, lim: &Limits) -> String {
 
 /// `word`, a word in `lang`, with `-` at every hyphenation point (tests and diagnostics).
 pub fn hyphenate_word_in(word: &str, lim: &Limits, lang: ProofLang) -> String {
-    let mut pts = hyphen_opportunities_in(word, lim, lang);
+    hyphenated_output(word, hyphen_opportunities_in(word, lim, lang))
+}
+
+/// Render ordered break opportunities without repeatedly searching earlier points.
+fn hyphenated_output(word: &str, mut pts: Vec<Opportunity>) -> String {
     pts.sort_unstable_by_key(|p| p.at);
     // Walk the points alongside the chars rather than searching them for each char.
     let mut next = pts.into_iter().peekable();
@@ -864,7 +868,7 @@ mod tests {
             .into_iter()
             .map(|(word, repeat)| {
                 let (small, big) = (word(400), word(8 * 400));
-                let time = |w: &str| (0..repeat).for_each(|_| drop(hyphen_points(w, &Limits::default())));
+                let time = |w: &str| (0..repeat).for_each(|_| drop(points_for_run(w, &Limits::default(), ProofLang::En, false)));
                 let (t1, t8, ratio) = cost_ratio(8, || time(&small), || time(&big));
                 let what = format!("{}…: t(n) {t1:.4} s, t(8n) {t8:.4} s, ratio {ratio:.1}", word(1).chars().take(10).collect::<String>());
                 eprintln!("{what}");
@@ -885,8 +889,12 @@ mod tests {
         assert_eq!(hyphenate_word_in(&word(2), &Limits::default(), ProofLang::Ru), "ма-ма-ма-ма");
         // The breaks' rescan is a cheap one per break: it takes longer words to stand out.
         for (what, k, repeat, f) in [
-            ("points", 1000, 3, (|w: &str| drop(hyphen_points_in(w, &Limits::default(), ProofLang::Ru))) as fn(&str)),
-            ("hyphenated", 400, 20, |w: &str| drop(hyphenate_word_in(w, &Limits::default(), ProofLang::Ru))),
+            ("points", 1000, 3, (|w: &str| drop(points_for_run(w, &Limits::default(), ProofLang::Ru, false))) as fn(&str)),
+            ("hyphenated", 400, 20, |w: &str| {
+                let points = points_for_run(w, &Limits::default(), ProofLang::Ru, false);
+                assert!(!points.is_empty(), "the timing case must exercise actual breaks");
+                drop(hyphenated_output(w, points.into_iter().map(|at| Opportunity { at, suffix: Default::default() }).collect()));
+            }),
         ] {
             let (small, big) = (word(k), word(8 * k));
             let time = |w: &str| (0..repeat).for_each(|_| f(w));

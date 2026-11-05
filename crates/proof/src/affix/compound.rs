@@ -739,7 +739,7 @@ impl AffixDict {
                 *slot = None;
             }
         }
-        derived.4 = true;
+        derived = derived.allowing_forbidden();
         let mut found = false;
         let mut emit = |an: Analysis<'_>| {
             if found
@@ -920,7 +920,7 @@ impl AffixDict {
         main.into_iter()
             .chain(each)
             .chain(only)
-            .filter(move |(_, set)| !excluded.hits(set) && (excluded.4 || !self.forbidden.is_some_and(|f| has(set, f))))
+            .filter(move |(_, set)| !excluded.hits(set) && (excluded.forbidden_allowed() || !self.forbidden.is_some_and(|f| has(set, f))))
     }
 
     /// May a part with `info` start at char `start`, after the last part of `s.path`
@@ -2076,9 +2076,12 @@ mod terminal_rule_review_tests {
         }
         aff.push_str("SFX 10 Y 1\nSFX 10 0 s .\n");
         let dict = AffixDict::from_hunspell(&aff, "2\nroot/9,10,2\npword/3\n", &[]).unwrap();
+        // Source keys are interned; use IDs resolved from stems carrying each key.
+        let other_flag = dict.stem_lookup("pword").unwrap().1[0];
+        let terminal_flag = dict.stem_lookup("root").unwrap().1[0];
         let mut work = MAX_WORK - 10;
-        assert!(!dict.rule_final_has_flag("proots", Excluded::default(), 3, &mut work));
+        assert!(!dict.rule_final_has_flag("proots", Excluded::default(), other_flag, &mut work));
         assert!(work < MAX_WORK, "irrelevant prefixes must not consume the remaining work");
-        assert!(dict.rule_final_has_flag("roots", Excluded::default(), 2, &mut work));
+        assert!(dict.rule_final_has_flag("roots", Excluded::default(), terminal_flag, &mut work));
     }
 }

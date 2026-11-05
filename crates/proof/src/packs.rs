@@ -614,7 +614,7 @@ pub(crate) fn hyphenation(lang: ProofLang) -> Option<Arc<Patterns>> {
 fn patterns_from_directory(dir: &Path, errors: &mut Vec<(String, String)>) -> Option<Patterns> {
     for name in [NONSTANDARD, HYPHENATION] {
         let path = dir.join(name);
-        if name == NONSTANDARD && !is_regular_file(&path) {
+        if !is_regular_file(&path) {
             continue;
         }
         match load_patterns(&path) {
@@ -724,7 +724,14 @@ mod tests {
         assert_eq!(p.points(&"banana".chars().collect::<Vec<_>>()).unwrap(), vec![2]);
         assert_eq!(errors.len(), 1);
         assert!(errors[0].1.contains("line 2"));
+        std::fs::remove_file(dir.join(HYPHENATION)).unwrap();
+        errors.clear();
+        assert!(patterns_from_directory(&dir, &mut errors).is_none());
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].1.contains("line 2"));
+        assert!(!errors[0].1.contains("not a regular file"));
         std::fs::remove_file(dir.join(NONSTANDARD)).unwrap();
+        std::fs::write(dir.join(HYPHENATION), "ba1na").unwrap();
         errors.clear();
         assert!(patterns_from_directory(&dir, &mut errors).is_some());
         assert!(errors.is_empty());
