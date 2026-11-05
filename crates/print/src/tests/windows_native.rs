@@ -410,6 +410,8 @@ fn windows_jobs_reach_the_spooler() {
         return;
     }
     let listed = spool::printers().into_iter().find(|p| p.name == name);
+    // The list a Print dialog shows first: the same queue, named without asking its driver.
+    let queue = spool::printer_queues().into_iter().find(|p| p.name == name);
     let mixed = test_pdf(&[LETTER, LETTER_LANDSCAPE, LETTER], true);
     let job = Job { printer: Some(name.into()), title: "mixed.pdf".into(), ..Job::default() };
     let caller = std::thread::current().id();
@@ -450,6 +452,7 @@ fn windows_jobs_reach_the_spooler() {
         name,
     );
     assert!(listed.as_ref().is_some_and(|p| p.two_sided.is_some()), "the new printer is listed, its duplex support known: {listed:?}");
+    assert!(queue.as_ref().is_some_and(|p| p.two_sided.is_none()), "the new printer is listed with no driver query: {queue:?}");
     assert_eq!(sent.as_deref(), Ok("spooled 3 sheet(s)"), "{sent:?}");
     if let Some(refused) = duplex_refused {
         assert!(matches!(refused, Err(Error::Spool(ref m)) if m.contains("simplex/duplex") && m.contains("nothing was sent")), "{refused:?}");

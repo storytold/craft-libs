@@ -43,6 +43,17 @@ fn print_ticket_provider() -> MutexGuard<'static, ()> {
 }
 
 pub(crate) fn printers() -> Vec<Printer> {
+    spooler_list(two_sided)
+}
+
+/// The queues and the default without asking any driver: a networked printer asleep in power
+/// save can hold its driver's PrintCapabilities query for a long time, and the Print dialog
+/// must not wait on it to show the queue (or any other).
+pub(crate) fn printer_queues() -> Vec<Printer> {
+    spooler_list(|_| None)
+}
+
+fn spooler_list(two_sided: impl Fn(&PrinterDevice) -> Option<bool>) -> Vec<Printer> {
     match PrinterDevice::all() {
         Ok(devices) => crate::printer_list(devices.iter().map(|d| (d.name().to_string(), two_sided(d))), default_printer().as_deref()),
         Err(_) => Vec::new(),
