@@ -76,7 +76,11 @@ pub trait Frames: Send + Sync {
 /// [`ControlSink`] like any other link method.
 ///
 /// Every method runs on a connection thread, so an implementation must be
-/// thread safe and must not wait on the UI thread.
+/// thread safe and must not wait on the UI thread. The server sets no time
+/// limit on a call, and a method cannot see the server stop flag. A call that
+/// never returns keeps its connection thread, and [`Server::shutdown`] and
+/// dropping the server wait for that thread. Each method must return in bounded
+/// time, for example by putting a timeout on any I/O it does.
 pub trait Assets: Send + Sync {
     /// Where the last-known result of `asset` is. `Err(LinkError::Unknown)` when
     /// the asset or its result file does not exist.
