@@ -148,6 +148,7 @@ pub(crate) fn match_vni_single(c: char) -> Option<char> {
     if (0x80..=0xFF).contains(&code) { VNI_SINGLE_MAP[(code - 0x80) as usize] } else { None }
 }
 
+/// Match a 2-byte composite sequence in VNI-Windows (e.g. 'a' + 0xF8 -> 'à', 'a' + 0xF9 -> 'á').
 pub(crate) fn match_vni_composite(c1: char, c2: char) -> Option<char> {
     match (c1, c2) {
         ('a', 'ø') => Some('à'),
@@ -548,9 +549,13 @@ pub(crate) fn decode_vni_single_byte(byte: u8, offset: usize, mode: DecodeMode) 
 /// Streaming state machine for VNI-Windows decoding across chunk boundaries.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct VniDecoder {
+    /// Decoding mode: Strict specification vs Practical real-world tolerance.
     mode: DecodeMode,
+    /// Pending base vowel byte awaiting a potential diacritical accent byte.
     pending_base_byte: Option<u8>,
+    /// Byte stream offset of the pending base vowel.
     pending_base_offset: usize,
+    /// Pending VNI "I" / "i" + 0xCF composite awaiting potential trailing "T" / "t" for "IỆ" / "iệ".
     pending_iet: Option<(bool, usize)>,
 }
 

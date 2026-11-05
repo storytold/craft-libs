@@ -221,6 +221,7 @@ mod tests {
 
     use super::*;
 
+    /// Verifies that WINDOWS_1258_HIGH_BYTES contains exactly 9 undefined positions matching CP1258.TXT.
     #[test]
     fn windows1258_table_has_exact_undefined_count() {
         let undefined_count = WINDOWS_1258_HIGH_BYTES.iter().filter(|entry| entry.is_none()).count();
@@ -232,6 +233,7 @@ mod tests {
         }
     }
 
+    /// Verifies that all 9 undefined CP1258 bytes return DecodeError::UnmappedByte in strict decoding.
     #[test]
     fn windows1258_undefined_bytes_return_error() {
         let undefined_bytes = [0x81, 0x8A, 0x8D, 0x8E, 0x8F, 0x90, 0x9A, 0x9D, 0x9E];
@@ -246,6 +248,7 @@ mod tests {
         }
     }
 
+    /// Verifies that pure ASCII slices take the fast path returning borrowed Cow.
     #[test]
     fn windows1258_ascii_is_borrowed_fast_path() {
         let sample = b"Hello, World! 12345 (pure ASCII)";
@@ -256,6 +259,7 @@ mod tests {
         }
     }
 
+    /// Verifies that the 5 combining diacritical marks in CP1258 are preserved without NFC composition.
     #[test]
     fn windows1258_combining_marks_are_preserved_without_nfc() {
         // Test 5 combining diacritical marks in CP1258:
@@ -276,6 +280,7 @@ mod tests {
         assert!(res.contains('\u{0323}'));
     }
 
+    /// Verifies decoding of a real-world CP1258 sentence and subsequent canonical NFC normalization.
     #[test]
     fn windows1258_vietnamese_real_world_sentence_without_nfc() {
         // "Tiếng Việt 100.000₫" in CP1258:
@@ -291,6 +296,7 @@ mod tests {
         assert_eq!(nfc.as_ref(), "Tiếng Việt 100.000₫");
     }
 
+    /// Verifies decoding of unique Vietnamese base letters (Ă, Â, Đ, Ơ, Ư) in CP1258.
     #[test]
     fn windows1258_special_vietnamese_letters() {
         // 0xC3: Ă (U+0102), 0xE3: ă (U+0103)
@@ -302,9 +308,10 @@ mod tests {
         assert_eq!(res.as_ref(), "Ăă Đđ Ơơ Ưư");
     }
 
+    /// Performs an independent byte-by-byte audit against official CP1258.TXT reference table.
     #[test]
     fn windows1258_full_high_byte_audit() {
-        // Ground-truth reference table derived independently from official Unicode Consortium CP1258.TXT
+        /// Ground-truth reference table derived independently from official Unicode Consortium CP1258.TXT.
         const INDEPENDENT_CP1258_REF: [Option<char>; 128] = [
             /* 0x80 */ Some('\u{20AC}'),
             /* 0x81 */ None,

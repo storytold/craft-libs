@@ -5,11 +5,13 @@ use super::LegacyEncoding;
 use super::tcvn3::{match_tcvn3_composite, match_tcvn3_single};
 use super::vni::{match_vni_composite, match_vni_single};
 
+/// Known font family name prefixes indicating VNI-Windows encoding.
 const VNI_PREFIXES: &[&str] = &[
     "vni", "vhelv", "vtime", "vavon", "vapto", "vcomm", "vkorin", "vpres", "vrevu", "vsouv", "vtekn", "vuniv", "vbaham", "vbook", "vcent", "vcoop",
     "vcour", "vfree", "vgoud", "vpark", "vscri",
 ];
 
+/// Known font family name prefixes indicating dotless TCVN3 encoding.
 const TCVN3_DOTLESS_PREFIXES: &[&str] = &[
     "vntime",
     "vnarial",
@@ -70,6 +72,7 @@ pub fn is_vietnamese_font(font: &str) -> Option<LegacyEncoding> {
     }
 }
 
+/// Checks whether a character is a precomposed Vietnamese vowel in the Latin-1 Supplement block (0xC0..=0xFF).
 #[inline]
 fn is_latin1_vietnamese_vowel(c: char) -> bool {
     matches!(
@@ -209,7 +212,9 @@ impl DetectionResult {
 /// External metadata hints for encoding detection.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct EncodingMetadata<'a> {
+    /// Font name hint (e.g. ".VnTime", "VNI-Helve").
     pub font_name: Option<&'a str>,
+    /// Codepage hint (e.g. 1258).
     pub codepage_hint: Option<u32>,
 }
 

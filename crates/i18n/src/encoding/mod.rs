@@ -270,6 +270,7 @@ pub fn decode_text<'a>(input: &'a [u8], options: &DecodeOptions<'a>) -> Result<C
     Err(DecodeError::InvalidUtf8 { offset: valid_up_to })
 }
 
+/// Canonical Unicode Normalization Form C (NFC) helper preserving borrowed Cow where possible.
 #[inline]
 fn apply_nfc_cow<'a>(cow: Cow<'a, str>) -> Cow<'a, str> {
     match cow {
