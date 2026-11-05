@@ -19,6 +19,13 @@ One SQLite commit publishes changed heads, immutable revision rows, history stac
 
 Blob publication precedes metadata references. Crash leftovers can be unreferenced blobs; no garbage collector is included. Reads verify SHA-256 and bound individual blobs to 128 MiB. The store requires a private, trusted-user project directory: canonicalization and link checks do not defend against a malicious same-user process changing filesystem names between checks. Hardware/power-loss guarantees are limited by SQLite, craft-atomic and the underlying storage device.
 
+History preparation reads the prior operation, object head and undo/redo stack
+from one SQLite snapshot; writer-lock receipt/revision checks still arbitrate
+the eventual commit. Stale history requests appear in `conflicts()` with an
+object-shaped request `{operation, object, expected, redo}`. Ordinary commit
+conflicts retain the existing `[mode, transaction]` shape; consumers must accept
+both rejected-intent forms. There is no storage schema or public API change.
+
 These transactions **do not atomically edit two native applications**. Consumers project committed semantic state asynchronously, persist their applied baseline and replay events after reconnect. Unsupported editing stays a capability error; arbitrary native data stays opaque. Native application authentication, conditional writes and unsaved edit hooks belong to their adapters/engines.
 
 Not included: an application, daemon, transport, command registry, renderer, media exchange ABI, native placed-file format, lifecycle discovery, per-app credential grants, retention or a complete semantic schema registry. `bindings` is opaque adapter-owned persistence. The native history API currently operates per canonical object, not a multi-object transaction undo command. This is not a universal lossless interchange format.

@@ -104,6 +104,67 @@ fn undo_redo_are_monotonic_idempotent_and_guarded() {
     assert_eq!(s.object(c.object).unwrap().value["name"], "after");
 }
 #[test]
+fn concurrent_history_retries_share_one_receipt_and_one_stack_transition() {
+    let d = tempfile::tempdir().unwrap();
+    let mut store = Store::open(d.path()).unwrap();
+    store.register(manifest()).unwrap();
+    let mut c = change();
+    commit(&mut store, c.clone());
+    c.expected = 1;
+    c.value = json!({"name":"after","opacity":1.0});
+    commit(&mut store, c.clone());
+    let mut revision = 2;
+    for _ in 0..4 {
+        for redo in [false, true] {
+            let operation = Uuid::new_v4();
+            let gate = std::sync::Arc::new(std::sync::Barrier::new(8));
+            let workers: Vec<_> = (0..8)
+                .map(|_| {
+                    let mut peer = Store::open(d.path()).unwrap();
+                    let gate = gate.clone();
+                    let object = c.object;
+                    std::thread::spawn(move || {
+                        gate.wait();
+                        peer.history(operation, object, revision, redo)
+                    })
+                })
+                .collect();
+            let receipts: Vec<_> = workers.into_iter().map(|w| w.join().unwrap()).collect();
+            let receipt = receipts[0].as_ref().unwrap();
+            for result in &receipts {
+                assert_eq!(result.as_ref().unwrap(), receipt);
+            }
+            revision += 1;
+            assert_eq!(receipt.revisions[&c.object], revision);
+            assert_eq!(store.object(c.object).unwrap().value["name"], if redo { "after" } else { "before" });
+        }
+    }
+    assert_eq!(store.events(0).unwrap().len(), revision as usize);
+    assert!(store.conflicts().unwrap().is_empty());
+}
+
+#[test]
+fn stale_history_retains_rejected_intent_without_changing_head() {
+    let d = tempfile::tempdir().unwrap();
+    let mut store = Store::open(d.path()).unwrap();
+    store.register(manifest()).unwrap();
+    let c = change();
+    commit(&mut store, c.clone());
+    for redo in [false, true] {
+        let operation = Uuid::new_v4();
+        assert!(matches!(store.history(operation, c.object, 0, redo), Err(Error::Conflict(_))));
+        let conflicts = store.conflicts().unwrap();
+        let rejected = &conflicts.last().unwrap()["request"];
+        assert_eq!(rejected["operation"], operation.to_string());
+        assert_eq!(rejected["object"], c.object.to_string());
+        assert_eq!(rejected["expected"], 0);
+        assert_eq!(rejected["redo"], redo);
+        assert_eq!(store.object(c.object).unwrap().revision, 1);
+    }
+    assert_eq!(store.events(0).unwrap().len(), 1);
+}
+
+#[test]
 fn capabilities_and_missing_snapshots_fail_closed() {
     let d = tempfile::tempdir().unwrap();
     let mut s = Store::open(d.path()).unwrap();

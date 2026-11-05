@@ -338,24 +338,39 @@ impl Store {
     }
     pub fn history(&mut self, operation: Id, object: Id, expected: u64, redo: bool) -> Result<Receipt> {
         let mode = if redo { "redo" } else { "undo" };
+        // Receipt, head and stack must come from one read snapshot. Otherwise a
+        // peer can commit this very operation between the receipt lookup and the
+        // head/stack reads, producing a false conflict or a different retry body.
+        // Release the read transaction before commit_mode acquires the writer;
+        // its locked receipt/revision checks still arbitrate concurrent writes.
+        let read = self.db.transaction().map_err(storage)?;
         // History retries use the original committed request, not the now-moved stack.
         let saved: Option<String> =
-            self.db.query_row("SELECT request FROM operations WHERE id=?", [operation.to_string()], |r| r.get(0)).optional().map_err(storage)?;
+            read.query_row("SELECT request FROM operations WHERE id=?", [operation.to_string()], |r| r.get(0)).optional().map_err(storage)?;
         if let Some(s) = saved {
             let (prior_mode, request): (String, Transaction) = decode(&s)?;
             if prior_mode != mode || request.changes.first().is_none_or(|c| c.object != object || c.expected != expected) {
                 return Err(Error::Conflict("history operation id reused".into()));
             }
+            drop(read);
             return self.commit_mode(request, mode);
         }
-        let current = self.object(object)?;
+        let current: Option<String> =
+            read.query_row("SELECT data FROM objects WHERE id=?", [object.to_string()], |r| r.get(0)).optional().map_err(storage)?;
+        let current: Object = decode(&current.ok_or_else(|| Error::Missing(object.to_string()))?)?;
         if current.revision != expected {
+            drop(read);
+            self.record_conflict(
+                &serde_json::json!({"operation":operation,"object":object,"expected":expected,"redo":redo}),
+                "history head changed",
+            )?;
             return Err(Error::Conflict("history head changed".into()));
         }
         let sql = if redo { "SELECT redo FROM objects WHERE id=?" } else { "SELECT undo FROM objects WHERE id=?" };
-        let s: String = self.db.query_row(sql, [object.to_string()], |r| r.get(0)).map_err(storage)?;
+        let s: String = read.query_row(sql, [object.to_string()], |r| r.get(0)).map_err(storage)?;
         let stack: Vec<Object> = decode(&s)?;
         let target = stack.last().ok_or_else(|| Error::Invalid(format!("nothing to {mode}")))?;
+        drop(read);
         self.commit_mode(
             Transaction {
                 operation,
