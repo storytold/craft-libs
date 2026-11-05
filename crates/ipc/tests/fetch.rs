@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 use serde_json::Value;
 
 use craft_ipc::bulk::{FrameFormat, FrameLayout, FrameRequest, FrameSource, FrameSpec, FrameTickets, RenderedFrame};
-use craft_ipc::fetch::{FetchOptions, Fetched, FrameFetcher, FrameKey};
+use craft_ipc::fetch::{FetchOptions, Fetched, FrameFetcher, FrameKey, QUEUE_MAX};
 use craft_ipc::server::{Activate, Activation, ControlSink, Frames, Server, ServerConfig};
 use craft_ipc::{InstanceRecord, LinkError, RuntimeDir};
 
@@ -273,4 +273,57 @@ fn queued_asks_nobody_waits_for_are_dropped_when_old() {
     std::thread::sleep(Duration::from_millis(900));
     let renders = rig.fake.renders.load(Ordering::SeqCst);
     assert!(renders < 5, "frames that waited longer than max_age must be skipped, got {renders} renders");
+}
+
+#[test]
+fn a_time_that_is_not_finite_fails_the_ask_and_keeps_the_workers() {
+    let rig = boot();
+    let fetcher = connect(&rig, 1);
+    for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        match fetcher.fetch(key(1), bad, 1, WAIT) {
+            Fetched::Failed(message) => assert!(message.contains("finite"), "{message}"),
+            other => panic!("expected Failed for {bad}, got {other:?}"),
+        }
+    }
+    assert!(!fetcher.is_down(), "a bad time must not end the worker");
+    assert_eq!(rig.fake.renders.load(Ordering::SeqCst), 0, "nothing was queued");
+    assert!(matches!(fetcher.fetch(key(2), 2.0, 1, WAIT), Fetched::Frame(_)));
+}
+
+#[test]
+fn an_ask_with_a_waiting_caller_is_not_dropped_for_age() {
+    let rig = boot();
+    rig.fake.delay_ms.store(300, Ordering::SeqCst);
+    let options = FetchOptions { connections: 1, max_age: Duration::from_millis(100), ..FetchOptions::default() };
+    let fetcher = Arc::new(FrameFetcher::connect(&rig.record, "link-a", FrameFormat::Rgba8Premul, 1.0, options).unwrap());
+    // Frame 0 keeps the only worker busy for 300 ms. Frame 1 waits in the queue past max_age,
+    // and its caller is still there when the worker reaches it.
+    assert!(matches!(fetcher.fetch(key(0), 0.0, 1, Duration::from_millis(1)), Fetched::TimedOut));
+    let waiter = {
+        let fetcher = Arc::clone(&fetcher);
+        std::thread::spawn(move || fetcher.fetch(key(1), 1.0, 1, WAIT))
+    };
+    // A second caller for the same key joins the queued job and shares its render.
+    std::thread::sleep(Duration::from_millis(20));
+    assert!(matches!(fetcher.fetch(key(1), 1.0, 1, Duration::from_millis(1)), Fetched::TimedOut));
+    assert!(matches!(waiter.join().unwrap(), Fetched::Frame(_)));
+    let stats = fetcher.stats();
+    assert_eq!(stats.skipped, 0, "a job a caller waits for is not skipped");
+    assert_eq!(rig.fake.renders.load(Ordering::SeqCst), 2, "each frame renders once");
+}
+
+#[test]
+fn the_queue_holds_at_most_queue_max_asks() {
+    let rig = boot();
+    rig.fake.delay_ms.store(500, Ordering::SeqCst);
+    let options = FetchOptions { connections: 1, max_age: Duration::from_secs(60), ..FetchOptions::default() };
+    let fetcher = FrameFetcher::connect(&rig.record, "link-a", FrameFormat::Rgba8Premul, 1.0, options).unwrap();
+    // Frame 0 holds the only worker. The asks after it only queue.
+    assert!(matches!(fetcher.fetch(key(0), 0.0, 1, Duration::from_millis(1)), Fetched::TimedOut));
+    std::thread::sleep(Duration::from_millis(100));
+    let extra = 40;
+    for n in 1..=i64::try_from(QUEUE_MAX + extra).unwrap() {
+        assert!(matches!(fetcher.fetch(key(n), 1.0, 1, Duration::ZERO), Fetched::TimedOut));
+    }
+    assert_eq!(fetcher.stats().skipped, u64::try_from(extra).unwrap(), "the oldest asks past the cap are dropped");
 }
