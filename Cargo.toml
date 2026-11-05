@@ -24,6 +24,7 @@ bytemuck = "1"
 kurbo = "0.13"
 thiserror = "2"
 craft-atomic = { path = "crates/atomic" }
+craft-cli = { path = "crates/cli" }
 craft-cms = { path = "crates/cms" }
 craft-command = { path = "crates/command" }
 craft-command-derive = { path = "crates/command-derive" }
@@ -46,6 +47,7 @@ craft-media = { path = "crates/media", default-features = false }
 craft-media-testkit = { path = "crates/media-testkit" }
 craft-menu = { path = "crates/menu" }
 craft-plugin-abi = { path = "crates/plugin-abi" }
+craft-plugin-host = { path = "crates/plugin-host" }
 craft-plugin-sdk = { path = "crates/plugin-sdk" }
 craft-plugin-sdk-macros = { path = "crates/plugin-sdk-macros" }
 craft-pcraft-format = { path = "crates/pcraft-format" }

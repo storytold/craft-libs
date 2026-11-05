@@ -1,0 +1,38 @@
+name: CLI
+
+on:
+  push:
+    branches: [main]
+    paths: ["crates/cli/**", "crates/plugin-sdk/**", "crates/plugin-sdk-macros/**", "crates/plugin-host/**", "crates/plugin-abi/**", "crates/command/**", "Cargo.toml", "Cargo.lock", ".github/workflows/cli.yml"]
+  pull_request:
+    paths: ["crates/cli/**", "crates/plugin-sdk/**", "crates/plugin-sdk-macros/**", "crates/plugin-host/**", "crates/plugin-abi/**", "crates/command/**", "Cargo.toml", "Cargo.lock", ".github/workflows/cli.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cli-${{ github.ref }}
+  cancel-in-progress: true
+
+# craft-cli is native only (file watching and cargo), so there is no WASM check of the crate itself.
+# Its tests build plugins for wasm32, so the job installs that target.
+jobs:
+  linux:
+    timeout-minutes: 30
+    name: CLI (Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          components: rustfmt, clippy
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: craft-cli
+      - run: cargo fmt -p craft-cli --check
+      - run: cargo clippy -p craft-cli --all-targets --locked -- -D warnings
+      - run: cargo test -p craft-cli --locked
