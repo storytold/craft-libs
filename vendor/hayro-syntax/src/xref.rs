@@ -91,8 +91,9 @@ fn fallback_xref_map_inner<'a>(
                 let mut cloned = r.clone();
                 // Check that the object following it is actually valid before inserting it.
                 cloned.skip_white_spaces_and_comments();
-                if cloned.skip::<Object<'_>>(false).is_some() {
-                    xref_map.insert(obj_id, EntryType::Normal(cur_pos));
+                if cloned.skip::<Object<'_>>(false).is_some()
+                    && insert_entry(&mut xref_map, obj_id, EntryType::Normal(cur_pos)).is_some()
+                {
                     last_obj_num = Some(obj_id);
                     dummy_ctx.set_obj_number(obj_id);
                 }
@@ -139,13 +140,10 @@ fn fallback_xref_map_inner<'a>(
                                     .get(&id)
                                     .is_none_or(|e| !matches!(e, &EntryType::Normal(_)))
                                 {
-                                    xref_map.insert(
-                                        id,
-                                        EntryType::ObjStream(
-                                            last_obj_num.obj_number as u32,
-                                            idx as u32,
-                                        ),
-                                    );
+                                    let entry = EntryType::ObjStream(last_obj_num.obj_number as u32, idx as u32);
+                                    if insert_entry(&mut xref_map, id, entry).is_none() {
+                                        break;
+                                    }
                                 }
                             }
                         }
@@ -671,6 +669,33 @@ enum EntryType {
 
 type XrefMap = FxHashMap<ObjectIdentifier, EntryType>;
 
+/// PdfCraft patch: the most entries one document's xref map may hold, the PDF 32000-1 (Annex C)
+/// limit on indirect objects. An xref-stream entry can be one decoded byte, so a stream at the
+/// decode limit could otherwise become hundreds of millions of map entries (gigabytes of map).
+const MAX_XREF_ENTRIES: usize = 8_388_607;
+
+/// PdfCraft patch: insert an entry unless that would take `map` past [`MAX_XREF_ENTRIES`].
+fn insert_entry(map: &mut XrefMap, id: ObjectIdentifier, entry: EntryType) -> Option<()> {
+    if map.len() >= MAX_XREF_ENTRIES && !map.contains_key(&id) {
+        warn!("xref holds more than {MAX_XREF_ENTRIES} entries");
+
+        return None;
+    }
+    map.insert(id, entry);
+
+    Some(())
+}
+
+/// PdfCraft patch: merge a section's entries into `map`, refusing a result past
+/// [`MAX_XREF_ENTRIES`].
+fn merge_entries(map: &mut XrefMap, own: XrefMap) -> Option<()> {
+    for (id, entry) in own {
+        insert_entry(map, id, entry)?;
+    }
+
+    Some(())
+}
+
 /// Representation of a proper xref table.
 #[derive(Debug)]
 struct MapRepr {
@@ -877,10 +902,11 @@ fn populate_from_xref_table<'a>(
             // Specification says we should ignore any object number > SIZE, but probably
             // not important?
             if entry.used {
-                own.insert(
+                insert_entry(
+                    &mut own,
                     ObjectIdentifier::new(obj_number as i32, entry.gen_number),
                     EntryType::Normal(entry.offset),
-                );
+                )?;
             }
         }
     }
@@ -896,7 +922,7 @@ fn populate_from_xref_table<'a>(
         populate_xref_impl_inner(data, xref_stm as usize, insert_map, visited, limits)?;
     }
 
-    insert_map.extend(own);
+    merge_entries(insert_map, own)?;
 
     Some(trailer.data())
 }
@@ -949,7 +975,7 @@ fn populate_from_xref_stream<'a>(
         let _ = populate_xref_impl_inner(data, prev, insert_map, visited, limits)?;
     }
 
-    insert_map.extend(own);
+    merge_entries(insert_map, own)?;
 
     Some(stream.dict().data())
 }
@@ -1036,10 +1062,11 @@ fn xref_stream_subsection<'a>(
                     0
                 };
 
-                insert_map.insert(
+                insert_entry(
+                    insert_map,
                     ObjectIdentifier::new(obj_number, gen_number as i32),
                     EntryType::Normal(offset as usize),
-                );
+                )?;
             }
             2 => {
                 let obj_stream_number = {
@@ -1054,10 +1081,11 @@ fn xref_stream_subsection<'a>(
                     0
                 };
 
-                insert_map.insert(
+                insert_entry(
+                    insert_map,
                     ObjectIdentifier::new(obj_number, gen_number),
                     EntryType::ObjStream(obj_stream_number, index),
-                );
+                )?;
             }
             _ => {
                 warn!("xref has unknown field type {f_type}");
@@ -1214,6 +1242,30 @@ mod tests {
             assert!(xref_stream_subsection(&mut wrap, start, 2, 1, 1, 1, &mut past_end).is_none());
             assert!(past_end.keys().all(|id| id.obj_number >= 0));
         }
+    }
+
+    #[test]
+    fn xref_entries_stop_at_the_document_limit() {
+        // One-byte entries (type 1, offset and generation zero): the cheapest a stream can encode.
+        let data = vec![1u8; MAX_XREF_ENTRIES + 1];
+        let mut map = XrefMap::default();
+        let mut full = Reader::new(&data[..MAX_XREF_ENTRIES]);
+        assert!(xref_stream_subsection(&mut full, 0, MAX_XREF_ENTRIES as u32, 1, 0, 0, &mut map).is_some());
+        assert_eq!(map.len(), MAX_XREF_ENTRIES);
+
+        // A new object past the limit is refused, from a stream, a table section or a merge.
+        let mut over = Reader::new(&data[..1]);
+        assert!(xref_stream_subsection(&mut over, MAX_XREF_ENTRIES as u32, 1, 1, 0, 0, &mut map).is_none());
+        let mut other = XrefMap::default();
+        other.insert(ObjectIdentifier::new(i32::MAX, 0), EntryType::Normal(0));
+        assert!(merge_entries(&mut map, other).is_none());
+        assert_eq!(map.len(), MAX_XREF_ENTRIES);
+
+        // Replacing an existing object (an incremental update) still works at the limit.
+        let mut update = XrefMap::default();
+        update.insert(ObjectIdentifier::new(0, 0), EntryType::Normal(42));
+        assert!(merge_entries(&mut map, update).is_some());
+        assert_eq!(map.get(&ObjectIdentifier::new(0, 0)), Some(&EntryType::Normal(42)));
     }
 
     #[test]

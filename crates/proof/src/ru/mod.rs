@@ -105,7 +105,7 @@ fn check(d: &AffixDict, word: &str, opts: &crate::Options) -> bool {
     if n <= 1 || (opts.ignore_numbers && w.chars().any(char::is_numeric)) || !w.chars().any(char::is_alphabetic) {
         return true;
     }
-    if opts.ignore_uppercase && w.chars().all(|c| !c.is_lowercase()) && n <= ABBREVIATION_LETTERS {
+    if opts.ignore_uppercase && crate::spelling::in_capitals(w) && n <= ABBREVIATION_LETTERS {
         return true;
     }
     // Camel case (`ВКонтакте`, `МирКрасок`): a brand or an identifier, not a dictionary word.
@@ -321,7 +321,7 @@ fn hyphenated(d: &AffixDict, w: &str, opts: &crate::Options) -> bool {
     }
     match lp.as_slice() {
         // `кое-кто`, `кой-какой`.
-        [prefix, rest] if PRONOUN_PREFIXES.contains(prefix) => return parts.get(1).is_some_and(|r| known(d, r)),
+        [prefix, _] if PRONOUN_PREFIXES.contains(prefix) => return parts.get(1).is_some_and(|r| known(d, r)),
         // `по-русски` (from `русский`), `по-новому`, `по-моему`.
         ["по", rest] => {
             let Some(r) = parts.get(1) else { return false };
@@ -333,7 +333,7 @@ fn hyphenated(d: &AffixDict, w: &str, opts: &crate::Options) -> bool {
     let last = parts.len() - 1;
     parts.iter().enumerate().all(|(i, p)| {
         // An abbreviation part (`ИИ-консультант`, `SMS-рассылка`) or a known word.
-        if known(d, p) || (opts.ignore_uppercase && p.chars().all(|c| !c.is_lowercase()) && p.chars().count() <= ABBREVIATION_LETTERS) {
+        if known(d, p) || (opts.ignore_uppercase && crate::spelling::capitals_part(p, ABBREVIATION_LETTERS)) {
             return true;
         }
         // A first part with a linking vowel: the stem (`северо` → `север`) or its adjective
@@ -485,5 +485,7 @@ mod tests {
         assert!(!crate::is_correct_in_with("м²", lang, &check_digits), "a superscript is a number too");
         assert!(crate::is_correct_in_with("2026", lang, &check_digits), "numbers alone stay correct");
         assert!(is_correct("ПРЕВЕТ"), "direct checks keep the defaults");
+        // The cased-letter rule (craft-libs#485): capitals and letterless parts are abbreviations.
+        assert!(crate::is_correct_in_with("ИИ-2", lang, &check_digits) && crate::is_correct_in_with("ТУ-154М", lang, &check_digits));
     }
 }

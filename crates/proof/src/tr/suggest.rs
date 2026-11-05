@@ -97,8 +97,8 @@ pub fn suggest_with(d: &TrDict, word: &str, max: usize) -> Vec<String> {
         }
     }
 
-    // 3. Detached suffix check: `-de`, `-da`, `-mi`, `-mı`, `-mu`, `-mü`
-    for suffix in ["de", "da", "te", "ta", "mi", "mı", "mu", "mü"] {
+    // 3. Detached particle check: `-de`, `-da`, `-mi`, `-mı`, `-mu`, `-mü`
+    for suffix in ["de", "da", "mi", "mı", "mu", "mü"] {
         if lower.ends_with(suffix) && lower.len() > suffix.len() + 1 {
             let stem = &lower[..lower.len() - suffix.len()];
             if d.is_empty() || d.contains(stem) {
@@ -331,6 +331,19 @@ mod tests {
     fn detached_suffix_is_suggested() {
         let sugs = suggest("geldinmi", 3);
         assert!(sugs.contains(&"geldin mi".to_string()));
+    }
+
+    /// craft-libs#496 review: the particle is `de`/`da` whatever consonant comes before it. `te`
+    /// and `ta` are only the locative suffix after a voiceless consonant (`kitapta`), written
+    /// attached, so `kitapte` is never offered as `kitap te`.
+    #[test]
+    fn the_detached_particle_is_never_te_or_ta() {
+        let d = TrDict::from_hunspell("SET UTF-8\n", "2\nkitap\nsonra\n").unwrap();
+        assert!(suggest_with(&d, "kitapde", 8).contains(&"kitap de".to_string()));
+        for w in ["kitapte", "kitapta"] {
+            let sugs = suggest_with(&d, w, 8);
+            assert!(!sugs.iter().any(|s| s == "kitap te" || s == "kitap ta"), "{w}: {sugs:?}");
+        }
     }
 
     #[test]

@@ -33,8 +33,18 @@ pub struct Op {
     /// Path from the document root. Empty replaces the whole document.
     pub path: Vec<Step>,
     /// New value, or `None` to remove an object member.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "present_value")]
     pub value: Option<Value>,
+}
+
+/// A present `value` member is `Some`, even when it is `null`. `Option<Value>` alone would read
+/// `"value": null` as `None`, and a set to null would come back as a removal. An absent member
+/// takes the `default`, which is `None`.
+fn present_value<'de, De>(deserializer: De) -> Result<Option<Value>, De::Error>
+where
+    De: serde::Deserializer<'de>,
+{
+    Value::deserialize(deserializer).map(Some)
 }
 
 /// The op list that turns one JSON value into another.
@@ -124,8 +134,17 @@ fn diff_into(old: &Value, new: &Value, path: &mut Vec<Step>, ops: &mut Vec<Op>) 
     }
 }
 
-/// Apply `changes` to `doc`.
+/// Apply `changes` to `doc`. When an op fails, `doc` is left as it was.
+///
+/// The ops run on a copy of `doc`. The copy replaces `doc` only after every op succeeds.
 pub fn patch(doc: &mut Value, changes: &Patch) -> Result<(), PatchError> {
+    let mut staged = doc.clone();
+    apply(&mut staged, changes)?;
+    *doc = staged;
+    Ok(())
+}
+
+fn apply(doc: &mut Value, changes: &Patch) -> Result<(), PatchError> {
     for op in &changes.ops {
         let Some((last, parents)) = op.path.split_last() else {
             *doc = op.value.clone().ok_or_else(|| PatchError::new("cannot remove the document"))?;

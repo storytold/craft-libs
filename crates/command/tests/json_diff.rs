@@ -131,3 +131,26 @@ fn patch_reports_a_path_that_does_not_match() {
     let err = patch(&mut json!(1), &root).expect_err("remove root");
     assert_eq!(err.message(), "cannot remove the document");
 }
+
+#[test]
+fn null_value_survives_a_serde_round_trip() {
+    let ops = diff(&json!({"a": 1}), &json!({"a": null}));
+    assert_eq!(ops.ops(), &[set(vec![key("a")], Value::Null)]);
+    let text = serde_json::to_string(&ops).expect("serialize");
+    let back: Patch = serde_json::from_str(&text).expect("deserialize");
+    assert_eq!(back, ops, "a set to null stays a set");
+    let mut doc = json!({"a": 1});
+    patch(&mut doc, &back).expect("patch");
+    assert_eq!(doc, json!({"a": null}));
+    let absent: Op = serde_json::from_str(r#"{"path":["a"]}"#).expect("absent value");
+    assert_eq!(absent.value, None, "an absent value is a removal");
+}
+
+#[test]
+fn a_failed_patch_leaves_the_document_unchanged() {
+    let mut doc = json!({"a": 1});
+    let before = doc.clone();
+    let ops = Patch::new(vec![set(vec![key("a")], json!(2)), set(vec![key("missing"), key("x")], json!(3))]);
+    assert!(patch(&mut doc, &ops).is_err());
+    assert_eq!(doc, before);
+}

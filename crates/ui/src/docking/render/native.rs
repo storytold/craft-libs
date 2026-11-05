@@ -780,7 +780,8 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
         Some(key)
     }
 
-    /// The bar at the top of a native window: its title and ×. Dragging it moves the window.
+    /// The bar at the top of a native window: its ×, but no title, as the tab names the panel.
+    /// Dragging it moves the window.
     /// Returns the rects of its buttons.
     fn native_bar(&mut self, ui: &mut Ui, window: &Floating<P>) -> Vec<Rect> {
         let Some(first) = window.panels().next().cloned() else { return Vec::new() };
@@ -792,10 +793,9 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
         let movable = window.panels().all(|p| self.permissions(p).movable);
         let closable = self.style.close_button && window.panels().all(|p| self.permissions(p).closable);
         let (move_label, close_label) = (self.style.move_window_label.clone(), self.style.close_window_label.clone());
-        let title = crate::docking::dock_model::first_active(&window.root).map(|p| self.label_of(p)).unwrap_or_default();
         // On macOS the bar keeps the arrow, as native title bars do: AppKit's resize areas
         // cover its ends and top edge, and a cursor set over them flickers with AppKit's.
-        let mut bar = TitleBar::new(self.id.with(("native-bar", window.id)), &move_label).title(title).movable(movable && !OS_RESIZES);
+        let mut bar = TitleBar::new(self.id.with(("native-bar", window.id)), &move_label).movable(movable && !OS_RESIZES);
         if closable {
             bar = bar.close(&close_label).close_at(close_hit, close_glyph);
         }

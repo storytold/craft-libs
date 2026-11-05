@@ -75,11 +75,8 @@ fn spaces(text: &str, lang: ProofLang, v: &mut Vec<Issue>) {
             v.push(issue(i, i + 1 + p.len_utf8(), "Espacio antes de un signo de puntuación".into(), vec![p.to_string()], lang));
         }
     }
-    for (i, _) in text.match_indices("  ") {
-        if i > 0 && text.get(..i).is_some_and(|t| t.ends_with(' ')) {
-            continue;
-        }
-        v.push(issue(i, i + 2, "Espacio doble".into(), vec![" ".into()], lang));
+    for run in crate::space_runs(text) {
+        v.push(issue(run.start, run.end, "Espacio doble".into(), vec![" ".into()], lang));
     }
 }
 
@@ -192,6 +189,16 @@ mod tests {
             .filter(|i| i.message.starts_with("Falta"))
             .map(|i| (text[i.start..i.end].to_string(), i.suggestions))
             .collect()
+    }
+
+    /// craft-libs#496 review: a run of spaces is one issue over the whole run.
+    #[test]
+    fn a_run_of_spaces_is_reported_whole() {
+        for (text, run) in [("casa  roja", "  "), ("casa   roja", "   "), ("casa    roja", "    "), ("casa     roja", "     ")] {
+            let m: Vec<_> = messages(text).into_iter().filter(|(_, msg)| msg == "Espacio doble").collect();
+            assert_eq!(m, [(run.to_string(), "Espacio doble".to_string())], "{text}");
+        }
+        assert!(messages("casa roja").is_empty());
     }
 
     #[test]

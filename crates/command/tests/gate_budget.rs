@@ -21,7 +21,7 @@ impl Interceptor<()> for Burner {
     fn interest(&self) -> &Interest {
         &self.1
     }
-    fn before(&self, _s: &mut (), _c: &mut Call) -> Verdict {
+    fn before(&self, _s: &mut (), _c: &Call) -> Verdict {
         self.0.0.fetch_add(2, Ordering::SeqCst);
         Verdict::Pass
     }
@@ -33,7 +33,7 @@ impl Interceptor<()> for Policy {
     fn interest(&self) -> &Interest {
         &self.0
     }
-    fn before(&self, _s: &mut (), _c: &mut Call) -> Verdict {
+    fn before(&self, _s: &mut (), _c: &Call) -> Verdict {
         Verdict::Veto { reason: "policy".into(), by: "honest".into() }
     }
 }

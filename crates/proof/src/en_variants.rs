@@ -1,5 +1,5 @@
 //! American and British spellings of the same English word (#1281, #1045): which forms each
-//! English ([`ProofLang::En`], [`ProofLang::EnCa`], [`ProofLang::EnGb`]) accepts, which it flags,
+//! English ([`ProofLang::En`], [`ProofLang::EnCa`], [`ProofLang::EnGb`] and [`ProofLang::EnAu`]) accepts, which it flags,
 //! and what it suggests instead (`colour` → `color` in American English).
 //!
 //! The pairs come from craft-i18n's `language-data/en-us/en-variants.txt`, our own list of base forms with a
@@ -77,7 +77,8 @@ fn column(lang: ProofLang) -> Option<usize> {
     match lang {
         ProofLang::En => Some(0),
         ProofLang::EnCa => Some(1),
-        ProofLang::EnGb => Some(2),
+        // Australian English follows the British policy (`colour`, `centre`, `organise`).
+        ProofLang::EnGb | ProofLang::EnAu => Some(2),
         _ => None,
     }
 }
