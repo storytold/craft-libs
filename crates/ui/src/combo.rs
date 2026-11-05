@@ -536,7 +536,7 @@ impl<'a> Menu<'a> {
         let remeasures = ctx.data(|d| d.get_temp::<u8>(count_id)).unwrap_or(0);
         // Until the side is settled, the menu is measured against the whole screen.
         let room = match popup.get_anchor_rect() {
-            Some(anchor) if settled => room(align, anchor, ctx.content_rect()),
+            Some(anchor) if settled => room(align, anchor, visible_area(&ctx)),
             _ => ctx.content_rect().height(),
         };
         let mut popup_style = (*ctx.global_style()).clone();
@@ -642,7 +642,7 @@ fn side(popup: &Popup<'_>, remeasure: bool) -> (RectAlign, bool) {
     // Outside the data lock: these read the popup's state from memory.
     let mut align = popup.get_best_align();
     if let (Some(size), Some(anchor)) = (popup.get_expected_size(), popup.get_anchor_rect()) {
-        let screen = ctx.content_rect();
+        let screen = visible_area(ctx);
         let flipped = align.flipped_y();
         if room(align, anchor, screen) < size.y && room(flipped, anchor, screen) > room(align, anchor, screen) {
             align = flipped;
@@ -650,6 +650,37 @@ fn side(popup: &Popup<'_>, remeasure: bool) -> (RectAlign, bool) {
     }
     ctx.data_mut(|d| d.insert_temp(key, align));
     (align, true)
+}
+
+/// What a window that doesn't fill its monitor leaves free at the monitor's foot: egui doesn't
+/// report a taskbar or dock.
+const MONITOR_FOOT: f32 = 48.0;
+
+/// The part of the window a menu or a dialog can be seen in: a window moved down its monitor runs
+/// off it, and a menu that only keeps to the window runs off with it, out of reach and with no
+/// scroll bar.
+pub fn visible_area(ctx: &Context) -> Rect {
+    let screen = ctx.content_rect();
+    let (inner, monitor, filling) = ctx.input(|i| {
+        let v = i.viewport();
+        (v.inner_rect, v.monitor_size, v.maximized == Some(true) || v.fullscreen == Some(true))
+    });
+    match (inner, monitor) {
+        // A maximized or full-screen window is already kept clear of the taskbar by the system.
+        (Some(inner), Some(monitor)) if !filling => above_monitor_foot(screen, inner, monitor),
+        _ => screen,
+    }
+}
+
+/// `screen` (the window's content, in its own coordinates), cut off at the foot of `monitor` for a
+/// window at `inner` on the desktop. egui doesn't say where a monitor is on the desktop, only that
+/// the main one starts at the origin, so a window on another monitor keeps all of `screen`.
+fn above_monitor_foot(screen: Rect, inner: Rect, monitor: Vec2) -> Rect {
+    if !(0.0..=monitor.x).contains(&inner.center().x) || inner.top() >= monitor.y {
+        return screen;
+    }
+    let foot = screen.top() + monitor.y - MONITOR_FOOT - inner.top();
+    Rect::from_min_max(screen.min, egui::pos2(screen.right(), screen.bottom().min(foot).max(screen.top())))
 }
 
 /// The height a menu on the `align` side of `anchor` has inside `screen`.
