@@ -1251,6 +1251,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-plugin-ui"
+version = "0.1.0"
+dependencies = [
+ "craft-plugin-abi",
+ "craft-plugin-host",
+ "craft-ui",
+ "egui",
+ "egui_kittest",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "craft-prepress"
 version = "0.1.0"
 dependencies = [
