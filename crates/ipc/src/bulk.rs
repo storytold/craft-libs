@@ -41,6 +41,14 @@ impl FrameFormat {
         }
     }
 
+    /// Bytes one pixel takes in a row.
+    pub(crate) const fn bytes_per_pixel(self) -> u32 {
+        match self {
+            Self::Rgba8Premul => 4,
+            Self::Rgba16fPremul => 8,
+        }
+    }
+
     pub fn parse(text: &str) -> Result<Self, LinkError> {
         match text {
             "rgba8_premul" => Ok(Self::Rgba8Premul),
@@ -86,6 +94,15 @@ pub struct FrameLayout {
     pub h: u32,
     pub stride: u32,
     pub len: u64,
+}
+
+/// A row of `w` pixels in `format` must fit in `stride` bytes, or a reader that splits the payload
+/// into rows of `stride` bytes cannot decode the frame.
+fn check_row(w: u32, stride: u32, format: FrameFormat) -> Result<(), LinkError> {
+    if u64::from(stride) < u64::from(w) * u64::from(format.bytes_per_pixel()) {
+        return Err(LinkError::Invalid("frame layout: stride is smaller than one row of w pixels".into()));
+    }
+    Ok(())
 }
 
 impl FrameLayout {
@@ -195,6 +212,7 @@ impl Frames for FrameTickets {
         let spec = FrameSpec::from_params(params)?;
         let layout = self.source.open(&spec)?;
         layout.check()?;
+        check_row(layout.w, layout.stride, spec.format)?;
         let ticket = new_ticket()?;
         crate::server::lock(&self.open).insert(ticket.clone(), spec);
         Ok(FrameOpen { ticket, w: layout.w, h: layout.h, stride: layout.stride, len: layout.len })
@@ -207,6 +225,7 @@ impl Frames for FrameTickets {
         if frame.epoch < request.epoch {
             return Err(LinkError::NotReady(format!("source is at epoch {}, request wants {}", frame.epoch, request.epoch)));
         }
+        check_row(frame.w, frame.stride, frame.format)?;
         let expect = u64::from(frame.stride) * u64::from(frame.h);
         if u64::try_from(frame.pixels.len()).ok() != Some(expect) {
             return Err(LinkError::Invalid("rendered payload is not stride * h bytes".into()));
@@ -349,6 +368,7 @@ fn parse_reply(req: u64, reply: &Value, pixels: Vec<u8>) -> Result<Frame, LinkEr
     let (w, h, stride) = (small("w")?, small("h")?, small("stride")?);
     let format =
         FrameFormat::parse(reply.get("format").and_then(Value::as_str).ok_or_else(|| LinkError::Invalid("frame header has no format".into()))?)?;
+    check_row(w, stride, format)?;
     if u64::try_from(pixels.len()).ok() != Some(u64::from(stride) * u64::from(h)) {
         return Err(LinkError::Invalid("payload is not stride * h bytes".into()));
     }
@@ -394,6 +414,66 @@ mod tests {
         ] {
             assert!(FrameSpec::from_params(bad.as_object().unwrap()).is_err(), "{bad}");
         }
+    }
+
+    struct OneLayout {
+        w: u32,
+        stride: u32,
+        h: u32,
+    }
+
+    impl FrameSource for OneLayout {
+        fn open(&self, _spec: &FrameSpec) -> Result<FrameLayout, LinkError> {
+            Ok(FrameLayout { w: self.w, h: self.h, stride: self.stride, len: u64::from(self.stride) * u64::from(self.h) })
+        }
+
+        fn render(&self, spec: &FrameSpec, _request: &FrameRequest) -> Result<RenderedFrame, LinkError> {
+            let len = usize::try_from(u64::from(self.stride) * u64::from(self.h)).unwrap();
+            Ok(RenderedFrame { epoch: 1, w: self.w, h: self.h, stride: self.stride, format: spec.format, render_ms: 0.0, pixels: vec![0; len] })
+        }
+
+        fn close(&self, _spec: &FrameSpec) {}
+    }
+
+    fn open_params(format: &str) -> Map<String, Value> {
+        json!({"link_id": "a", "format": format}).as_object().unwrap().clone()
+    }
+
+    #[test]
+    fn a_stride_that_cannot_hold_one_row_is_refused_before_a_ticket_exists() {
+        // (w, stride, format, accepted): one row is w * 4 bytes for rgba8 and w * 8 for rgba16f.
+        for (w, stride, format, accepted) in [
+            (4, 16, "rgba8_premul", true),
+            (4, 17, "rgba8_premul", true),
+            (4, 15, "rgba8_premul", false),
+            (4, 1, "rgba8_premul", false),
+            (4, 32, "rgba16f_premul", true),
+            (4, 16, "rgba16f_premul", false),
+            (0, 0, "rgba8_premul", true),
+            (u32::MAX, u32::MAX, "rgba16f_premul", false),
+        ] {
+            let tickets = FrameTickets::new(Arc::new(OneLayout { w, stride, h: 3 }));
+            let got = tickets.open(&open_params(format));
+            assert_eq!(got.is_ok(), accepted, "w {w} stride {stride} {format}: {got:?}");
+            assert_eq!(tickets.open_tickets(), usize::from(accepted), "a refused layout leaves no ticket");
+        }
+    }
+
+    #[test]
+    fn a_rendered_frame_with_a_short_stride_is_refused_and_the_client_refuses_it_too() {
+        let render = json!({"req": 1, "time_s": 0.0, "epoch": 0});
+        let tickets = FrameTickets::new(Arc::new(OneLayout { w: 4, stride: 16, h: 3 }));
+        let ticket = tickets.open(&open_params("rgba8_premul")).unwrap().ticket;
+        assert!(tickets.render(&ticket, &render).is_ok());
+        // A source that reports a narrower stride than it promised at open.
+        let lying = FrameTickets::new(Arc::new(OneLayout { w: 4, stride: 2, h: 3 }));
+        lying.open.lock().unwrap().insert(ticket.clone(), FrameSpec { link_id: "a".into(), format: FrameFormat::Rgba8Premul, scale: 1.0 });
+        assert!(matches!(lying.render(&ticket, &render), Err(LinkError::Invalid(_))));
+
+        let reply = json!({"req": 1, "epoch": 1, "w": 4, "h": 3, "stride": 1, "format": "rgba8_premul", "render_ms": 1.0});
+        assert!(matches!(parse_reply(1, &reply, vec![0; 3]), Err(LinkError::Invalid(_))));
+        let fine = json!({"req": 1, "epoch": 1, "w": 4, "h": 3, "stride": 16, "format": "rgba8_premul", "render_ms": 1.0});
+        assert!(parse_reply(1, &fine, vec![0; 48]).is_ok());
     }
 
     #[test]

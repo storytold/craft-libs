@@ -50,6 +50,14 @@ struct FakeSource {
     closed: Mutex<Vec<String>>,
 }
 
+/// One row holds `W` pixels: 4 bytes each in rgba8, 8 bytes each in rgba16f.
+fn stride_for(format: FrameFormat) -> u32 {
+    match format {
+        FrameFormat::Rgba8Premul => STRIDE,
+        FrameFormat::Rgba16fPremul => W * 8,
+    }
+}
+
 fn pixels_for(link_id: &str, time_s: f64, region: Option<[u32; 4]>) -> Vec<u8> {
     let seed =
         link_id.bytes().fold(0u8, |acc, b| acc.wrapping_add(b)).wrapping_add((time_s * 10.0) as u8).wrapping_add(region.map_or(0, |r| r[0] as u8));
@@ -61,19 +69,15 @@ impl FrameSource for FakeSource {
         if spec.link_id == "missing" {
             return Err(LinkError::NotReady("link_unknown".into()));
         }
-        Ok(FrameLayout { w: W, h: H, stride: STRIDE, len: u64::from(STRIDE * H) })
+        let stride = stride_for(spec.format);
+        Ok(FrameLayout { w: W, h: H, stride, len: u64::from(stride * H) })
     }
 
     fn render(&self, spec: &FrameSpec, request: &FrameRequest) -> Result<RenderedFrame, LinkError> {
-        Ok(RenderedFrame {
-            epoch: self.epoch.load(Ordering::SeqCst),
-            w: W,
-            h: H,
-            stride: STRIDE,
-            format: spec.format,
-            render_ms: 0.25,
-            pixels: pixels_for(&spec.link_id, request.time_s, request.region),
-        })
+        let stride = stride_for(spec.format);
+        let mut pixels = pixels_for(&spec.link_id, request.time_s, request.region);
+        pixels.resize((stride * H) as usize, 0);
+        Ok(RenderedFrame { epoch: self.epoch.load(Ordering::SeqCst), w: W, h: H, stride, format: spec.format, render_ms: 0.25, pixels })
     }
 
     fn close(&self, spec: &FrameSpec) {
@@ -309,10 +313,15 @@ fn oversized_or_inconsistent_replies_are_rejected_by_the_client() {
     huge_header.extend(0u64.to_le_bytes());
     let huge_payload = cfrm(&good, wire::FRAME_PAYLOAD_MAX + 1, &[]);
     let short_payload = cfrm(&good, 47, &[1u8; 47]);
+    let narrow = cfrm(&json!({"req": 1, "epoch": 1, "w": 4, "h": 3, "stride": 1, "format": "rgba8_premul", "render_ms": 1.0}), 3, &[1u8; 3]);
     let wrong_req = cfrm(&json!({"req": 99, "epoch": 1, "w": 4, "h": 3, "stride": 16, "format": "rgba8_premul", "render_ms": 1.0}), 48, &[1u8; 48]);
-    for (name, bytes, want_too_large) in
-        [("header", huge_header, true), ("payload", huge_payload, true), ("short", short_payload, false), ("req", wrong_req, false)]
-    {
+    for (name, bytes, want_too_large) in [
+        ("header", huge_header, true),
+        ("payload", huge_payload, true),
+        ("short", short_payload, false),
+        ("narrow", narrow, false),
+        ("req", wrong_req, false),
+    ] {
         let (record, handle, _tmp) = fake_server(bytes);
         let mut bulk = BulkClient::attach(&record, &"b".repeat(32)).unwrap();
         let err = bulk.request(0.0, 0, None).unwrap_err();

@@ -221,7 +221,10 @@ contracts. `engine.commands` now also lists plugin commands and carries a `schem
    `{"req":<u64>,"time_s":<f64>,"epoch":<u64>,"region":[x,y,w,h]|null}`.
 4. Server reply record: `'CFRM' | u32 header_len | u64 payload_len | header JSON | payload`, header
    `{"req","epoch","w","h","stride","format","render_ms"}`. `epoch` is the epoch the frame was
-   rendered at; a client that asked for an older epoch may get a newer one.
+   rendered at; a client that asked for an older epoch may get a newer one. `payload_len` is
+   `stride * h`, and `stride` is at least one row: `w` times 4 bytes for `rgba8_premul`, `w` times 8
+   bytes for `rgba16f_premul`. A layout that breaks this is refused at `frames.open`, and a reply
+   that breaks it is refused by the server and by the client.
 5. Errors: header `{"req","error":"..."}` with `payload_len` 0.
 All integers little endian. Tickets expire when the control connection closes.
 
