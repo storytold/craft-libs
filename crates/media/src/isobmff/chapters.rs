@@ -151,7 +151,16 @@ pub(crate) fn text_sample(title: &str) -> Vec<u8> {
 pub fn parse_text_sample(data: &[u8]) -> Option<String> {
     let mut c = Cur::labeled(data, "text sample");
     let n = c.u16().ok()? as usize;
-    let t = c.bytes(n).ok()?;
+    decode_title(c.bytes(n).ok()?)
+}
+
+/// [`parse_text_sample`] of the start of a longer sample: as much of the title as `data` holds.
+pub(crate) fn parse_text_sample_prefix(data: &[u8]) -> Option<String> {
+    let (declared, rest) = data.split_first_chunk::<2>()?;
+    decode_title(rest.get(..usize::from(u16::from_be_bytes(*declared))).unwrap_or(rest))
+}
+
+fn decode_title(t: &[u8]) -> Option<String> {
     if let Some(rest) = t.strip_prefix(&[0xFE, 0xFF]) {
         let units: Vec<u16> = rest.as_chunks::<2>().0.iter().map(|u| u16::from_be_bytes(*u)).collect();
         return Some(String::from_utf16_lossy(&units));
@@ -222,5 +231,9 @@ mod tests {
         assert_eq!(parse_text_sample(&[0, 4, 0xFE, 0xFF, 0, b'A']).as_deref(), Some("A"));
         assert_eq!(parse_text_sample(&[0, 9, b'a']), None);
         assert_eq!(parse_text_sample(&[]), None);
+        // The start of a longer sample: what it holds of the title, and no further than the title.
+        assert_eq!(parse_text_sample_prefix(&[0, 9, b'a']).as_deref(), Some("a"));
+        assert_eq!(parse_text_sample_prefix(&[0, 1, b'a', b'b']).as_deref(), Some("a"));
+        assert_eq!(parse_text_sample_prefix(&[0]), None);
     }
 }

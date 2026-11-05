@@ -336,7 +336,12 @@ impl Mp4File {
                 continue;
             }
             let data = read_range(src, s.offset, u64::from(s.size).min(MAX_CHAPTER_SAMPLE_BYTES))?;
-            let title = crate::isobmff::chapters::parse_text_sample(&data).unwrap_or_default();
+            let title = if u64::from(s.size) > MAX_CHAPTER_SAMPLE_BYTES {
+                crate::isobmff::chapters::parse_text_sample_prefix(&data)
+            } else {
+                crate::isobmff::chapters::parse_text_sample(&data)
+            };
+            let title = title.unwrap_or_default();
             let title = crate::isobmff::chapters::truncate_utf8(&title, crate::isobmff::MAX_CHAPTER_TITLE_BYTES).to_string();
             let pts = s.pts.max(media_start).saturating_add(t.edit_offset).max(0) as u64;
             let start = if t.timescale == 0 {
@@ -355,6 +360,7 @@ impl Mp4File {
 }
 
 /// Most of a chapter sample read for its title: its 16-bit length and far more title than is kept.
+/// A longer title is decoded from what this holds of it.
 const MAX_CHAPTER_SAMPLE_BYTES: u64 = 4098;
 
 fn read_range<S: ByteSource + ?Sized>(src: &S, offset: u64, size: u64) -> Result<Vec<u8>> {

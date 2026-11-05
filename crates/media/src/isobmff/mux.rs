@@ -1228,6 +1228,47 @@ mod tests {
         assert!(v.iter().all(|c| c.title.len() == crate::isobmff::MAX_CHAPTER_TITLE_BYTES), "{:?}", v[0].title.len());
     }
 
+    /// A title longer than the part of the sample that is read keeps its first bytes, in either encoding.
+    #[test]
+    fn a_title_longer_than_the_sample_read_keeps_its_start() {
+        let declared = |title: &[u8]| {
+            let mut sample = (title.len() as u16).to_be_bytes().to_vec();
+            sample.extend_from_slice(title);
+            sample
+        };
+        let utf16 = |bom: [u8; 2], unit: fn(u16) -> [u8; 2]| {
+            let mut t = bom.to_vec();
+            t.extend(std::iter::repeat_n(unit(0x00E9), 3000).flatten());
+            t
+        };
+        let cases = [
+            (declared(&vec![b'x'; 4097]), "x".repeat(crate::isobmff::MAX_CHAPTER_TITLE_BYTES)),
+            // 255 bytes of two-byte characters is cut back to a whole character
+            (declared("é".repeat(10_000).as_bytes()), "é".repeat(127)),
+            (declared(&utf16([0xFE, 0xFF], u16::to_be_bytes)), "é".repeat(127)),
+            (declared(&utf16([0xFF, 0xFE], u16::to_le_bytes)), "é".repeat(127)),
+        ];
+        for (sample, want) in cases {
+            let mut out = chaptered(Brand::Mp4, vec![ch(0, "A"), ch(1000, "B")], false);
+            let mut f = crate::isobmff::open(out.as_slice()).unwrap();
+            f.tracks[1].samples[0].offset = out.len() as u64;
+            f.tracks[1].samples[0].size = sample.len() as u32;
+            out.extend_from_slice(&sample);
+            assert_eq!(f.read_chapters(out.as_slice()).unwrap()[0].title, want);
+        }
+    }
+
+    /// A sample whose whole length was read but declares more than it holds is still no title.
+    #[test]
+    fn a_short_sample_declaring_a_longer_title_has_no_title() {
+        let mut out = chaptered(Brand::Mp4, vec![ch(0, "A"), ch(1000, "B")], false);
+        let mut f = crate::isobmff::open(out.as_slice()).unwrap();
+        f.tracks[1].samples[0].offset = out.len() as u64;
+        f.tracks[1].samples[0].size = 3;
+        out.extend_from_slice(&[0, 9, b'a']);
+        assert_eq!(f.read_chapters(out.as_slice()).unwrap()[0].title, "");
+    }
+
     #[test]
     fn hostile_chapters_do_not_break_the_file() {
         let long = "x".repeat(10_000);
