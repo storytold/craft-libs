@@ -1,0 +1,32 @@
+[package]
+name = "craft-plugin-ui"
+description = "Declarative plugin panels, the plug-in manager window and the permission prompt, drawn by the host with egui."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[features]
+# The plug-in manager window and the permission prompt window (`manager`). They show the types of the
+# plugin host lifecycle, which is native only, so this feature does not build for wasm32.
+host = ["dep:craft-plugin-host"]
+
+[dependencies]
+craft-plugin-abi.workspace = true
+craft-plugin-host = { workspace = true, optional = true }
+craft-ui.workspace = true
+egui.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+egui = { workspace = true, features = ["default_fonts"] }
+egui_kittest = "0.37"
+
+[lints]
+workspace = true
+
+[[test]]
+name = "manager"
+required-features = ["host"]

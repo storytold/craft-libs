@@ -92,6 +92,7 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   stay in each app.
 - [`craft-plugin-abi`](crates/plugin-abi/README.md): "craft-abi 1" for WebAssembly plugins: the manifest, permission names, host call numbers and the install-time policy gate that checks a package before any guest code runs. No engine. Builds for `wasm32`.
 - [`craft-plugin-host`](crates/plugin-host/README.md): runs craft-abi 1 plugins. Engines (wasmi on every target, optional wasmtime on native, browser engines on wasm32), the checks on each host call, install and reload, and the command, hook, panel and format contributions an app receives. Optional features `link` (Craft Link client) and `legacy-v1` (adapters for the v1 plugin ABIs of EffectCraft, PhotoCraft and VectorCraft).
+- [`craft-plugin-ui`](crates/plugin-ui/README.md): egui views for craft-abi 1 plugins. A validated widget tree that plugins return and the host draws, the permission prompt and grants review, and with feature `host` the plug-in manager and panel windows. The crate builds for `wasm32` without feature `host`.
 - [`craft-pcraft-format`](crates/pcraft-format/README.md): the envelope of PhotoCraft's `.pcraft`
   bundle: `Manifest<D>` with the document as a type parameter, `TileRef`, the entry paths, the
   manifest decode limits and the migration runner. The document model stays in PhotoCraft.
