@@ -24,6 +24,13 @@ struct Host {
     shortcuts: BTreeSet<String>,
     dirty: bool,
     bad_flush: bool,
+    /// The plugin's own gate is installed. It records every id it sees. It matches all ids.
+    plugin_gate: bool,
+    plugin_seen: Vec<String>,
+    /// `unregister_owner` removes the command and the menu entry but keeps the gate.
+    leak_gate: bool,
+    /// The plugin gate is installed but the host never reports what it saw.
+    gate_deaf: bool,
 }
 
 impl Host {
@@ -56,6 +63,10 @@ impl Host {
             shortcuts: BTreeSet::from([plugin]),
             dirty: false,
             bad_flush: false,
+            plugin_gate: false,
+            plugin_seen: Vec::new(),
+            leak_gate: false,
+            gate_deaf: false,
         }
     }
 
@@ -86,6 +97,9 @@ impl CommandHost for Host {
     fn execute(&mut self, id: &str, _params: &Value) -> OutcomeClass {
         if !self.commands.iter().any(|got| got == id) {
             return OutcomeClass::Failure;
+        }
+        if self.plugin_gate {
+            self.plugin_seen.push(id.to_string());
         }
         if self.record_before {
             self.before.push(id.to_string());
@@ -123,6 +137,11 @@ impl CommandHost for Host {
 
     fn take_before_ids(&mut self) -> Vec<String> {
         std::mem::take(&mut self.before)
+    }
+
+    fn take_plugin_gate_ids(&mut self) -> Vec<String> {
+        let seen = std::mem::take(&mut self.plugin_seen);
+        if self.gate_deaf { Vec::new() } else { seen }
     }
 
     fn take_after(&mut self) -> Vec<OutcomeClass> {
@@ -183,6 +202,7 @@ impl CommandHost for Host {
             self.menu.push(id.clone());
         }
         self.shortcuts.insert(id.clone());
+        self.plugin_gate = true;
         ("demo".to_string(), id)
     }
 
@@ -193,6 +213,7 @@ impl CommandHost for Host {
         let id = "plugin.demo.flip";
         self.commands.retain(|got| got != id);
         self.menu.retain(|got| got != id);
+        self.plugin_gate = self.leak_gate;
     }
 
     fn resolves(&self, id: &str) -> bool {
@@ -229,4 +250,22 @@ fn t4_fails_when_flush_does_not_emit_exactly_one_untracked() {
     let err = run_with(&mut host).expect_err("bad flush");
     assert_eq!(err.test, "T4");
     assert!(err.detail.contains("Untracked"), "{}", err.detail);
+}
+
+#[test]
+fn t6_fails_when_the_plugin_gate_survives_unregister() {
+    let mut host = Host::demo();
+    host.leak_gate = true;
+    let err = run_with(&mut host).expect_err("leaked gate");
+    assert_eq!(err.test, "T6");
+    assert!(err.detail.contains("plugin gate"), "{}", err.detail);
+}
+
+#[test]
+fn t6_fails_when_the_plugin_gate_never_runs() {
+    let mut host = Host::demo();
+    host.gate_deaf = true;
+    let err = run_with(&mut host).expect_err("gate never ran");
+    assert_eq!(err.test, "T6");
+    assert!(err.detail.contains("plugin gate"), "{}", err.detail);
 }

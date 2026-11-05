@@ -82,6 +82,11 @@ pub trait CommandHost {
     /// Ids passed to `before` since the last take, in call order.
     fn take_before_ids(&mut self) -> Vec<String>;
 
+    /// Ids the plugin's own gate (the one `prepare_unregister` installs) saw since the last take,
+    /// in call order. This is not the `set_veto_all` gate. The plugin gate must match every
+    /// command id and must pass the call on.
+    fn take_plugin_gate_ids(&mut self) -> Vec<String>;
+
     /// Outcome classes passed to `after` since the last take, in call order.
     fn take_after(&mut self) -> Vec<OutcomeClass>;
 
@@ -100,7 +105,8 @@ pub trait CommandHost {
     /// Flush pending writes. A dirty unbumped write emits one `Untracked`.
     fn flush(&mut self) -> Vec<ChangeCause>;
 
-    /// Register one dynamic command, its gate, and a user shortcut.
+    /// Register one dynamic command, its gate, and a user shortcut. The gate matches every command
+    /// id, passes every call, and records the ids it sees for [`CommandHost::take_plugin_gate_ids`].
     /// Returns `(owner, command_id)`.
     fn prepare_unregister(&mut self) -> (String, String);
 
@@ -279,15 +285,20 @@ fn t6<H: CommandHost>(host: &mut H) -> Result<(), ConformanceError> {
     if !host.user_shortcut_kept(&id) {
         return Err(fail("T6", format!("{id} had no user shortcut before unregister")));
     }
-    host.set_veto_all(true);
-    let _ = host.take_before_ids();
-    let class = host.execute(&id, &Value::Null);
-    if class != OutcomeClass::Vetoed {
-        return Err(fail("T6", format!("gate did not veto {id} before unregister (got {class:?})")));
-    }
-    let seen = host.take_before_ids();
-    if !seen.iter().any(|got| got == &id) {
-        return Err(fail("T6", format!("gate was not called for {id} before unregister")));
+    // The plugin's own gate matches every id. A command other than the plugin's own tells a gate
+    // that was removed from one that stayed, because only a leftover gate still sees it.
+    host.set_veto_all(false);
+    let Some(probe) = host.command_ids().into_iter().find(|got| got != &id) else {
+        return Err(fail("T6", "no registered command other than the plugin command to probe the plugin gate with"));
+    };
+    let _ = host.take_plugin_gate_ids();
+    let _ = host.execute(&probe, &Value::Null);
+    let _ = host.execute(&id, &Value::Null);
+    let seen = host.take_plugin_gate_ids();
+    for want in [&probe, &id] {
+        if !seen.iter().any(|got| got == want) {
+            return Err(fail("T6", format!("plugin gate was not called for {want} before unregister")));
+        }
     }
 
     host.unregister_owner(&owner);
@@ -300,15 +311,12 @@ fn t6<H: CommandHost>(host: &mut H) -> Result<(), ConformanceError> {
     if !host.user_shortcut_kept(&id) {
         return Err(fail("T6", format!("user shortcut for {id} was removed with the plugin")));
     }
-    let _ = host.take_before_ids();
-    let class = host.execute(&id, &Value::Null);
-    if class == OutcomeClass::Vetoed {
-        return Err(fail("T6", format!("gate still vetoed {id} after unregister")));
+    let _ = host.take_plugin_gate_ids();
+    let _ = host.execute(&probe, &Value::Null);
+    let _ = host.execute(&id, &Value::Null);
+    let seen = host.take_plugin_gate_ids();
+    if let Some(got) = seen.first() {
+        return Err(fail("T6", format!("plugin gate still ran for {got} after unregister")));
     }
-    let seen = host.take_before_ids();
-    if seen.iter().any(|got| got == &id) {
-        return Err(fail("T6", format!("gate was called for {id} after unregister")));
-    }
-    host.set_veto_all(false);
     Ok(())
 }

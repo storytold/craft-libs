@@ -44,6 +44,8 @@ struct ObsCall {
 struct Subscriber {
     coalesce_ms: Option<u64>,
     calls: VecDeque<ObsCall>,
+    /// Last recorded time per id. `drain` does not clear it. `push` removes entries older than the window.
+    last_at: HashMap<Arc<str>, u64>,
     /// Lost count kept beside the call deque and updated in place.
     lost: u64,
 }
@@ -68,7 +70,7 @@ impl ObserverQueue {
         let mut state = mutex_guard(&self.state);
         let id = state.next_id;
         state.next_id = state.next_id.saturating_add(1);
-        state.subs.insert(id, Subscriber { coalesce_ms, calls: VecDeque::new(), lost: 0 });
+        state.subs.insert(id, Subscriber { coalesce_ms, calls: VecDeque::new(), last_at: HashMap::new(), lost: 0 });
         self.subscribers.fetch_add(1, Ordering::Release);
         id
     }
@@ -92,11 +94,12 @@ impl ObserverQueue {
         let now = clock.now_ms();
         let mut state = mutex_guard(&self.state);
         for sub in state.subs.values_mut() {
-            if let Some(window) = sub.coalesce_ms
-                && let Some(prev) = sub.calls.iter().rev().find(|call| &*call.id == id)
-                && now.saturating_sub(prev.at_ms) < window
-            {
-                continue;
+            if let Some(window) = sub.coalesce_ms {
+                sub.last_at.retain(|_, at| now.saturating_sub(*at) < window);
+                if sub.last_at.contains_key(id) {
+                    continue;
+                }
+                sub.last_at.insert(Arc::from(id), now);
             }
             if sub.calls.len() == CAPACITY {
                 sub.calls.pop_front();
