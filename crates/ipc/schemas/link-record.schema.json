@@ -23,7 +23,14 @@
       "additionalProperties": true,
       "properties": {
         "kind": { "enum": ["still", "vector", "sequence", "comp"] },
-        "moniker": { "type": "string", "pattern": "^craft://[a-z][a-z0-9-]{1,31}/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/[a-z][a-z0-9-]{0,31}/[^/?#]+$" }
+        "moniker": {
+          "type": "string",
+          "description": "craft://app/doc/kind/id. The id is 1 to 512 bytes. Each byte is an unreserved character (A-Z a-z 0-9 . _ ~ -) or a percent escape of two hex digits, and the bytes the escapes decode to must be valid UTF-8. The first pattern checks the shape and the byte count (one character or one escape is one byte). The second checks the UTF-8.",
+          "allOf": [
+            { "pattern": "^craft://[a-z][a-z0-9-]{1,31}/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/[a-z][a-z0-9-]{0,31}/(?:[A-Za-z0-9._~-]|%[0-9A-Fa-f]{2}){1,512}$" },
+            { "pattern": "^craft://[^/]+/[^/]+/[^/]+/(?:[A-Za-z0-9._~-]|%[0-7][0-9A-Fa-f]|%(?:[Cc][2-9A-Fa-f]|[Dd][0-9A-Fa-f])%[89ABab][0-9A-Fa-f]|%[Ee]0%[ABab][0-9A-Fa-f]%[89ABab][0-9A-Fa-f]|%[Ee](?:[1-9A-Ca-c]|[EeFf])%[89ABab][0-9A-Fa-f]%[89ABab][0-9A-Fa-f]|%[Ee][Dd]%[89][0-9A-Fa-f]%[89ABab][0-9A-Fa-f]|%[Ff]0%(?:9|[ABab])[0-9A-Fa-f]%[89ABab][0-9A-Fa-f]%[89ABab][0-9A-Fa-f]|%[Ff][1-3]%[89ABab][0-9A-Fa-f]%[89ABab][0-9A-Fa-f]%[89ABab][0-9A-Fa-f]|%[Ff]4%8[0-9A-Fa-f]%[89ABab][0-9A-Fa-f]%[89ABab][0-9A-Fa-f])+$" }
+          ]
+        }
       }
     },
     "producer": {

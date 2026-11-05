@@ -257,6 +257,9 @@ craft://<app>/<doc>/<kind>/<id>
 | `kind` | `^[a-z][a-z0-9-]{0,31}$`. Known values: `comp`, `image`, `vector`, `sequence`, `layer`. An unknown value is valid and is kept. |
 | `id` | Non-empty, at most 512 bytes after decoding, valid UTF-8. Characters other than `A-Z a-z 0-9 - . _ ~` are percent-encoded as `%XX` (uppercase hex) by the formatter. The parser accepts either hex case. A raw `/`, `?`, `#` or `%` not followed by two hex digits is invalid. |
 
+The `asset.moniker` pattern in `schemas/link-record.schema.json` states the same `id` rules, so a
+record that the schema accepts also parses in Rust.
+
 A moniker has no query and no fragment. It names an asset, not a state: the state is the epoch.
 A moniker can outlive its asset. Resolving a dead moniker gives `link_unknown`. Parsing then
 formatting a moniker gives the canonical text (uppercase `%XX`). Formatting then parsing gives back
