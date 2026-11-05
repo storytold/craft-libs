@@ -1251,6 +1251,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-plugin-sdk"
+version = "0.1.0"
+dependencies = [
+ "craft-plugin-abi",
+ "craft-plugin-sdk-macros",
+ "serde",
+ "serde_json",
+ "wasmi",
+]
+
+[[package]]
+name = "craft-plugin-sdk-macros"
+version = "0.1.0"
+dependencies = [
+ "craft-plugin-abi",
+ "proc-macro2",
+ "quote",
+ "serde_json",
+ "syn 2.0.119",
+ "toml",
+]
+
+[[package]]
 name = "craft-prepress"
 version = "0.1.0"
 dependencies = [
