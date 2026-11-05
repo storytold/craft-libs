@@ -241,8 +241,12 @@ static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 /// Write `bytes` to `path` so a reader sees the old file or the new file.
 ///
 /// The bytes go to `.<name>.<pid>.<n>.tmp` in the same directory, are flushed,
-/// and are renamed over `path`. The directory is flushed on Unix. A failure
-/// removes the temporary file and leaves `path` as it was.
+/// and are renamed over `path`. The directory is flushed on Unix.
+///
+/// An error before the rename removes the temporary file and leaves `path` as it was. The
+/// directory flush and the final fingerprint run after the rename, so an error from either can
+/// come back while `path` already holds the new bytes. Such an error means the write is not
+/// confirmed durable or not fingerprinted, not that `path` is unchanged.
 pub fn write_atomic(path: &Path, bytes: &[u8]) -> Result<Fingerprint, LinkError> {
     let name = path.file_name().and_then(|n| n.to_str()).ok_or_else(|| LinkError::Invalid(format!("{} has no file name", path.display())))?;
     let dir = match path.parent() {
