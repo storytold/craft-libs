@@ -25,6 +25,11 @@ thiserror = { workspace = true }
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 craft-atomic = { workspace = true }
 craft-font-catalog = { workspace = true }
+log = "0.4"
+# Language packs (`language_packs`): `<locale>.tar.zst` archives, unpacked in pure Rust.
+ruzstd = { version = "0.9", default-features = false, features = ["std"] }
+toml = { version = "1", default-features = false, features = ["parse", "serde", "std"] }
+tar = { version = "0.4", default-features = false }
 # Blocking HTTPS with rustls and webpki roots: no async runtime, no OpenSSL.
 ureq = { version = "3", default-features = false, features = ["rustls", "gzip"] }
 

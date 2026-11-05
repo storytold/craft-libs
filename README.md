@@ -43,6 +43,9 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   the event loop: queued requests shown at the end of the frame and answered on a later frame,
   free-standing Open and Folder panels and Save sheets on macOS, case-insensitive filters. What
   to do with the answer stays in each app.
+- [`craft-doc`](crates/doc/README.md): reads PhotoCraft `.pcraft`, VectorCraft `.vectorcraft`
+  and EffectCraft `.ecproj` documents without the apps: the kind and version, the previews and
+  PDF they carry, and their pages and layers. Rendering and editing stay in each app.
 - [`craft-docpath`](crates/docpath/src/lib.rs): decides whether a path or `file:` URL stored in a
   document may be opened. Paths stored in documents are followed only when they are local or on the
   document's own network share; other network paths, device paths and non-file URLs are refused.
@@ -76,15 +79,26 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   scopes, conflicts, user overrides stored through craft-settings and import of other
   applications' shortcut sets. Command catalogs, file readers and the shortcut editor UI stay
   in each app.
+- [`craft-audio`](crates/audio/README.md): audio file I/O and codecs (WAV, AIFF, FLAC), streaming
+  and seeking, and packet decoding for any demuxer. See its README for formats and features.
 - [`craft-media`](crates/media/README.md): bit-level I/O (`bitstream`), clean-room MP4/MOV
-  (`isobmff`) and Matroska/WebM (`matroska`) demuxers and muxers, from FilmCraft, and an ISO BMFF
-  box reader. Containers only; codecs stay in each app.
+  (`isobmff`) and Matroska/WebM (`matroska`) demuxers and muxers, an Ogg demuxer (`ogg`), from
+  FilmCraft, and an ISO BMFF box reader. Containers only; codecs are in `craft-audio`, and
+  video codecs will go in a separate crate.
 - [`craft-menu`](crates/menu/README.md): an app's menus as a macOS menu bar: the Mac layout
   (app menu, Window, Help, system-key clashes), a platform backend trait, and key equivalents
   fed back to egui as the input egui-winit would have made. Commands and their enabled state
   stay in each app.
+- [`craft-pcraft-format`](crates/pcraft-format/README.md): the envelope of PhotoCraft's `.pcraft`
+  bundle: `Manifest<D>` with the document as a type parameter, `TileRef`, the entry paths, the
+  manifest decode limits and the migration runner. The document model stays in PhotoCraft.
 - [`craft-print`](crates/print/README.md): PDF submission to CUPS and Windows, printer discovery,
   duplex/copies/colour and driver preferences. PDF generation stays in each app.
+- [`craft-proof`](crates/proof/README.md): proofing per language (spelling, suggestions, grammar,
+  hyphenation, a Hunspell reader, user words, Language packs). The word lists and patterns are
+  craft-i18n's `language-data/`, embedded at build time from `CRAFT_I18N_DIR`: English and the
+  carry-over locales by default, the set `CRAFT_PROOF_EMBED` names otherwise (`en` for English
+  only); other languages come from installed Language packs.
 
 - [`craft-quit`](crates/quit/src/lib.rs): native macOS quit, egui close handling and an optional
   app menu. Unsaved-document decisions and save prompts stay in each app.
@@ -98,6 +112,10 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
 - [`craft-vectorcraft-format`](crates/vectorcraft-format/README.md): the envelope of VectorCraft's
   `.vectorcraft` file: its members, versions, embedded images and the data after the JSON, with the
   document as a type parameter. The document and its migrations stay in VectorCraft.
+- [`craft-web-api`](crates/web-api/README.md): the page command API every Craft web build offers its page — one
+  `window.<app>` shape (`request`, `execute`, `commands`, `docInspect`, `uiInspect`, `screenshot`) over the app's
+  JSON control channel.
+- [`craft-web-host`](crates/web-host/README.md): the host messages between a Craft app's web build and the page that hosts it (`?host=parent` or `data-host="page"`): one contract and one bridge for every app.
 - [Shared UI component audit](docs/ui-components-audit.md): source inventory, extraction priorities
   and compatibility boundaries across the Craft suite.
 - [Theme infrastructure](docs/theme-infrastructure.md): eight-app comparison and the small shared
