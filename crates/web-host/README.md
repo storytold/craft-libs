@@ -48,4 +48,4 @@ if let Some(host) = craft_web_host::web::Host::connect("pdfcraft", &canvas) {
 }
 ```
 
-The page side of the same contract is `@craft/app` (storytold/craft-libs#413), which mounts a web build and speaks these messages.
+The page command API is [`craft-web-api`](../web-api/README.md) (storytold/craft-libs#413): `window.<app>.request` and the command functions. It sits beside these messages. Opening, saving, the document name and the dirty flag stay here.
