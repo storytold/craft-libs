@@ -673,8 +673,10 @@ pub fn visible_area(ctx: &Context) -> Rect {
 }
 
 /// `screen` (the window's content, in its own coordinates), cut off at the foot of `monitor` for a
-/// window at `inner` on the desktop. egui doesn't say where a monitor is on the desktop, only that
-/// the main one starts at the origin, so a window on another monitor keeps all of `screen`.
+/// window at `inner` on the desktop. egui doesn't say where a monitor is on the desktop, so it is
+/// taken to start at the origin, as the main one does. A window past that size keeps all of
+/// `screen`. One on a taller monitor below the main one can be cut too early, which egui's data
+/// cannot tell apart from a window running off the main monitor.
 fn above_monitor_foot(screen: Rect, inner: Rect, monitor: Vec2) -> Rect {
     if !(0.0..=monitor.x).contains(&inner.center().x) || inner.top() >= monitor.y {
         return screen;
