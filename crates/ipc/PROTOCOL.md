@@ -87,9 +87,18 @@ A client that does not know a cap ignores it.
 {"id":3,"method":"app.activate","params":{"token":"<xdg activation token or null>","from_pid":4242,"open":{"link_id":"<uuid>"}}}
 -> {"id":3,"ok":true,"result":{"activated":"requested"}}
 ```
-`activated` is `true`, `false` or `"requested"` (Wayland cannot confirm synchronously). On `false`
-the app has requested user attention instead. This is distinct from the existing `ui.focus`
-method, which never steals focus by design.
+`activated` has three values:
+
+| Value | Meaning |
+|---|---|
+| `true` | The window has focus now. |
+| `"requested"` | The app asked the OS to focus the window. The OS decides later. Nobody confirmed it, and the reply does not say it will happen. |
+| `false` | Focus was not taken. The app asked for user attention instead (taskbar flash, dock bounce). |
+
+On Linux, `"requested"` needs a token that the app could apply to its existing window. An app whose
+toolkit can mint a token but cannot apply one (stock winit 0.30 on Wayland) answers `false`. The
+sender can still pass `token`. Old senders and receivers keep working: the three values did not change.
+`activated` is distinct from the existing `ui.focus` method, which never steals focus by design.
 
 `open` is an object that names what to show. It carries `link_id` (open a link), `asset` (a moniker,
 section 9: open that asset in its document) or both. A hub or launcher uses `asset` to send the user
