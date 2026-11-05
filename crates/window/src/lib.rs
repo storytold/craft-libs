@@ -138,7 +138,7 @@ mod viewports;
 
 pub use list::{Closed, WindowId, WindowList};
 pub use menu::{Document, MenuEntry, WindowMenu};
-pub use place::{CASCADE_STEP, Rect, cascade};
+pub use place::{CASCADE_STEP, Rect, cascade, monitor_of};
 #[cfg(feature = "egui")]
 pub use viewports::{Viewports, WindowEvent, child_viewport_id};
 

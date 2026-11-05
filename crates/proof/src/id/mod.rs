@@ -76,7 +76,7 @@ fn check(d: &AffixDict, word: &str, opts: &crate::Options) -> bool {
             || w.split('-').all(|p| {
                 p.chars().count() <= 1
                     || CLITICS.iter().any(|c| p.eq_ignore_ascii_case(c))
-                    || (opts.ignore_uppercase && p.chars().all(|c| !c.is_lowercase()) && p.chars().count() <= 6)
+                    || (opts.ignore_uppercase && crate::spelling::capitals_part(p, 6))
                     || known(d, p)
             });
     }
@@ -139,6 +139,19 @@ mod tests {
         for w in ["rumha", "makanann", "skolah", "jakarta", "kupu", "anak-anka", "mAkan", "bukunya-xyz"] {
             assert!(!is_correct(w), "{w}");
         }
+    }
+
+    /// Review follow-up (craft-libs#485's cased-letter rule): a part in a caseless script is no
+    /// abbreviation, so `buku-日本` is checked part by part; a part in capitals or without letters
+    /// still is one (`KTP-nya`, `COVID-19` with numbers checked).
+    #[test]
+    fn caseless_parts_are_not_abbreviations() {
+        test_dict::install();
+        let d = dictionary();
+        let defaults = crate::Options::default();
+        assert!(!check(&d, "buku-日本", &defaults) && !check(&d, "buku-ไทย", &defaults));
+        let numbers = crate::Options { ignore_numbers: false, ..defaults };
+        assert!(check(&d, "KTP-nya", &defaults) && check(&d, "buku-19", &numbers));
     }
 
     #[test]
