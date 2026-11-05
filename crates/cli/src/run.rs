@@ -24,7 +24,8 @@ use craft_plugin_host::engine::{Clock, SystemClock, Trust};
 use craft_plugin_host::invoke::CallError;
 use craft_plugin_host::lifecycle::{Decision, GrantRequest, InstallOutcome, LifecycleError, ManagerConfig, PluginManager};
 use craft_plugin_host::services::{
-    CallOutcome, CallScope, CommandFailure, CommandInfo, HostInfo, LinkApp, LinkFailure, LogLevel, QueryFailure, Services, UserNotice,
+    CallOutcome, CallScope, CommandFailure, CommandInfo, EntropyUnavailable, HostInfo, LinkApp, LinkFailure, LogLevel, QueryFailure, Services,
+    UserNotice,
 };
 use craft_plugin_host::store::{MemoryStore, Source};
 use serde_json::{Value, json};
@@ -134,17 +135,9 @@ impl Services for HeadlessServices {
         std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
     }
 
-    fn fill_random(&self, buf: &mut [u8]) {
-        if let Err(e) = getrandom::getrandom(buf) {
-            // The OS has no entropy source. Say so, and fall back to the std hasher's per-process random keys.
-            eprintln!("craft: getrandom failed ({e}); random.bytes uses std RandomState instead");
-            use std::hash::{BuildHasher, Hasher};
-            for (i, byte) in buf.iter_mut().enumerate() {
-                let mut h = std::collections::hash_map::RandomState::new().build_hasher();
-                h.write_usize(i);
-                *byte = h.finish().to_le_bytes()[0];
-            }
-        }
+    fn fill_random(&self, buf: &mut [u8]) -> std::result::Result<(), EntropyUnavailable> {
+        // The OS has no entropy source. The guest gets `E_UNSUPPORTED`, not weaker bytes.
+        getrandom::getrandom(buf).map_err(|e| EntropyUnavailable(e.to_string()))
     }
 
     fn notify(&self, notice: UserNotice) {
