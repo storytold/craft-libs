@@ -73,7 +73,7 @@ fn an_ec_prefixed_module_no_longer_skips_the_gate_or_gets_an_800_mb_table() {
     use craft_plugin_abi::{HostPolicy, check_package};
     let text = common::gain::gain_module("org.evil.gain", "");
     // 200 million funcref slots = about 800 MB. The gate allows 100,000.
-    let with_table = text.replacen("(memory (export \"memory\") 2)", "(memory (export \"memory\") 2) (table 200000000 funcref)", 1);
+    let with_table = text.replacen("(memory (export \"memory\") 2)", "(memory (export \"memory\") 2) (table 200000000 200000000 funcref)", 1);
     assert_ne!(with_table, text);
     let wasm = wat::parse_str(&with_table).unwrap();
     // The gate still says "legacy", and now lists the table violation, as it does for the renamed control.
