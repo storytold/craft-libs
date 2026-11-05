@@ -15,7 +15,7 @@ The gate runs before any guest code and gives the same answer on every engine. I
 
 - Size is at most 32 MiB. The manifest is present and valid. `abi.craft == 1`. Every `requires.ops` entry and every permission name is known to this crate.
 - The module has exactly one memory, exported as `memory`, with a declared maximum at or below the host cap (`HostPolicy::memory_cap_mb`) and at or below `limits.memory_mb` if set.
-- At most 4 tables, each with at most 100,000 elements. At most 10,000 functions. No start function.
+- At most 4 tables. Each declares a maximum of at most 100,000 elements (a table with no maximum is rejected, because `table.grow` is allowed). At most 10,000 functions. No start function.
 - The only import is `craft_host.call : (i32, i32, i32, i32, i32) -> i64`, or there is no import.
 - The exports in section 3 are present with these exact signatures.
 - Features are limited to MVP, bulk-memory, sign-ext, multi-value, non-trapping float-to-int, mutable globals and reference types. `simd128` is allowed only when `requires.features` lists it and the host policy reports `SIMD128` (off by default). Relaxed-simd, threads, memory64, GC, exceptions, tail calls and multi-memory are rejected.
@@ -24,7 +24,7 @@ The gate lists every violation, not only the first.
 
 Unknown contribution kinds. A `kind` this crate does not know is not a rejection. The manifest parser keeps the entry with its exact name and every other field, a host loads the entries it knows, and the plugin is shown as "partly supported". The entry gets every common check (`id`, `entry`, enum fields such as `phase`, `params`, `process`). Only the kind specific rules (a `hook` needs `phase`, a `before` hook needs `match`) bind the kinds that define them. The name must match `[a-z][a-z0-9-]{0,31}`. An unknown kind needs neither `craft_invoke` nor `craft_process`. A host never runs, registers or rewrites an unknown entry, and saving the plugin keeps the manifest bytes whole so a newer host can run them. Kinds listed as reserved (`function`, `provider`, `tool`) take this path until a release defines them.
 
-Legacy v1 modules (exports prefixed `ec_`, `pc_`, `vc_`) skip the export, manifest and import checks of this section. A host loads them through a v1 shim. They keep the resource caps: the size cap, at most one memory, at most 4 tables of 100,000 elements and at most 10,000 functions. The shim refuses imports itself. A start function is allowed for them, because the shim runs it under the module's fuel and wall clock.
+Legacy v1 modules (exports prefixed `ec_`, `pc_`, `vc_`) skip the export, manifest and import checks of this section, and need no `craft.manifest` or memory maximum. A host loads them through a v1 shim. They keep the resource caps and the feature allow list (no `simd128`, because a legacy module has no manifest to ask for it): the size cap, at most one memory, at most 4 tables with a declared maximum of 100,000 elements and at most 10,000 functions. The shim refuses imports itself. A start function is allowed for them, because the shim runs it under the module's fuel and wall clock.
 
 ## 3. Exports
 
@@ -102,7 +102,7 @@ Default deny. A plugin holds only the permissions its manifest lists and the use
 
 ## 6. Format contributions
 
-A `format` contribution reads or writes one file type. It needs `extensions` (1 to 16 lower case letters or digits each) and the `fs.picked` permission. The host gives it bytes, never a path. A response is JSON, so bytes in it are base64. Pixels are straight alpha RGBA8, top row first. The `format` module holds the request and response shapes.
+A `format` contribution reads or writes one file type. It needs `extensions` (1 to 16 lower case letters or digits each) and the `fs.picked` permission in `permissions.required` or `permissions.optional`. `Manifest::validate` refuses a manifest with a `format` and no such entry. The host still checks the grant before it registers the format and on every call. The host gives it bytes, never a path. A response is JSON, so bytes in it are base64. Pixels are straight alpha RGBA8, top row first. The `format` module holds the request and response shapes.
 
 ## 7. Data plane descriptor
 

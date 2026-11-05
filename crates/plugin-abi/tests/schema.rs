@@ -86,6 +86,14 @@ fn schema_and_types_reject_the_same_bad_documents() {
         ("before hook without match", Box::new(|d| d["contributions"] = json!([{ "kind": "hook", "id": "h", "entry": 0, "phase": "before" }]))),
         ("hook without phase", Box::new(|d| d["contributions"] = json!([{ "kind": "hook", "id": "h", "entry": 0, "match": ["*"] }]))),
         ("format without extensions", Box::new(|d| d["contributions"] = json!([{ "kind": "format", "id": "f", "entry": 0 }]))),
+        ("format without fs.picked", Box::new(|d| d["contributions"] = json!([{ "kind": "format", "id": "f", "entry": 0, "extensions": ["xyz"] }]))),
+        (
+            "format with other permissions only",
+            Box::new(|d| {
+                d["permissions"]["optional"] = json!(["clock"]);
+                d["contributions"] = json!([{ "kind": "format", "id": "f", "entry": 0, "extensions": ["xyz"] }]);
+            }),
+        ),
         (
             "format with a dotted extension",
             Box::new(|d| d["contributions"] = json!([{ "kind": "format", "id": "f", "entry": 0, "extensions": [".xyz"] }])),
@@ -142,8 +150,18 @@ fn schema_and_types_accept_the_same_edge_documents() {
             Box::new(|d| d["contributions"] = json!([{ "kind": "hook", "id": "h", "entry": 0, "phase": "before", "match": [] }])),
         ),
         (
-            "format with extensions",
-            Box::new(|d| d["contributions"] = json!([{ "kind": "format", "id": "f", "entry": 0, "extensions": ["xyz", "x1"] }])),
+            "format with extensions and fs.picked required",
+            Box::new(|d| {
+                d["permissions"]["required"] = json!(["fs.picked"]);
+                d["contributions"] = json!([{ "kind": "format", "id": "f", "entry": 0, "extensions": ["xyz", "x1"] }]);
+            }),
+        ),
+        (
+            "format with extensions and fs.picked optional",
+            Box::new(|d| {
+                d["permissions"]["optional"] = json!(["fs.picked"]);
+                d["contributions"] = json!([{ "kind": "format", "id": "f", "entry": 0, "extensions": ["xyz", "x1"] }]);
+            }),
         ),
         ("memory_mb 4096", Box::new(|d| d["limits"]["memory_mb"] = json!(4096))),
         ("overlap 256", Box::new(|d| d["contributions"][0]["process"]["overlap"] = json!(256))),

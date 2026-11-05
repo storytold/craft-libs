@@ -6,6 +6,18 @@
   "type": "object",
   "required": ["schema", "id", "name", "version", "abi", "contributions"],
   "additionalProperties": true,
+  "if": { "properties": { "contributions": { "contains": { "properties": { "kind": { "const": "format" } }, "required": ["kind"] } } } },
+  "then": {
+    "required": ["permissions"],
+    "properties": {
+      "permissions": {
+        "anyOf": [
+          { "required": ["required"], "properties": { "required": { "contains": { "const": "fs.picked" } } } },
+          { "required": ["optional"], "properties": { "optional": { "contains": { "const": "fs.picked" } } } }
+        ]
+      }
+    }
+  },
   "properties": {
     "schema": { "const": 1 },
     "id": {

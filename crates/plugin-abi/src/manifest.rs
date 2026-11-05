@@ -500,9 +500,13 @@ impl Manifest {
             return Err(ManifestError::invalid("contributions", format!("must hold 1 to {MAX_CONTRIBUTIONS} items")));
         }
         let asks_link = self.permissions.as_ref().is_some_and(|p| p.required.iter().chain(&p.optional).any(|s| s.starts_with("link.call:")));
+        let asks_fs = self.permissions.as_ref().is_some_and(|p| p.required.iter().chain(&p.optional).any(|s| s == "fs.picked"));
         for (i, c) in self.contributions.iter().enumerate() {
             let at = format!("contributions[{i}]");
             c.validate(&at)?;
+            if c.kind == Kind::Format && !asks_fs {
+                return Err(ManifestError::invalid("permissions", format!("{at} is a format: it needs \"fs.picked\" (required or optional)")));
+            }
             if c.budget == Some(Budget::Batch) && !c.kind.may_run_batch(asks_link) {
                 return Err(ManifestError::invalid(
                     format!("{at}.budget"),
@@ -674,9 +678,10 @@ mod tests {
             assert!(err.contains("batch"), "{kind}: {err}");
         }
         // Off the UI thread, or a link call: allowed.
-        for kind in ["format", "filter", "object-filter"] {
+        for kind in ["filter", "object-filter"] {
             assert!(with(kind, None).is_ok(), "{kind}: {:?}", with(kind, None));
         }
+        assert!(with("format", Some(json!({ "required": ["fs.picked"] }))).is_ok());
         assert!(with("command", None).expect_err("command").to_string().contains("batch"), "a command needs link.call");
         assert!(with("command", Some(json!({ "required": ["link.call:filmcraft"] }))).is_ok());
         assert!(with("command", Some(json!({ "optional": ["link.call:filmcraft"] }))).is_ok());
@@ -828,8 +833,26 @@ mod tests {
             let err = at(&v);
             assert!(matches!(&err, ManifestError::Invalid { path, .. } if path == "contributions[0].extensions"), "{ext}: {err:?}");
         }
+        v["permissions"]["optional"] = json!(["fs.picked"]);
         v["contributions"] = json!([{ "kind": "format", "id": "f", "entry": 0, "extensions": ["xyz", "x1"] }]);
         parse(&v).unwrap();
+    }
+
+    #[test]
+    fn a_format_needs_the_fs_picked_permission() {
+        let mut v = good();
+        v["contributions"] = json!([{ "kind": "format", "id": "f", "entry": 0, "extensions": ["xyz"] }]);
+        let err = parse(&v).unwrap_err();
+        assert!(matches!(&err, ManifestError::Invalid { path, .. } if path == "permissions"), "{err:?}");
+        assert!(err.to_string().contains("fs.picked"), "{err}");
+        // Required and optional both count. The user may still refuse an optional grant.
+        for group in ["required", "optional"] {
+            v["permissions"] = json!({ group: ["fs.picked"] });
+            parse(&v).unwrap_or_else(|e| panic!("{group}: {e}"));
+        }
+        // No permissions block at all is the same refusal.
+        v.as_object_mut().unwrap().remove("permissions");
+        assert!(parse(&v).is_err());
     }
 
     #[test]

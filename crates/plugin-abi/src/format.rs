@@ -48,7 +48,7 @@ impl fmt::Display for FormatDocError {
         match self {
             FormatDocError::Empty => f.write_str("the image has no pixels"),
             FormatDocError::SizeMismatch { width, height, bytes } => {
-                write!(f, "{width}x{height} RGBA8 needs {} bytes, got {bytes}", u64::from(*width) * u64::from(*height) * 4)
+                write!(f, "{width}x{height} RGBA8 needs {} bytes, got {bytes}", u128::from(*width) * u128::from(*height) * 4)
             }
             FormatDocError::Field(name) => write!(f, "missing or wrong type: {name}"),
             FormatDocError::Base64(m) => write!(f, "bad base64: {m}"),
@@ -184,6 +184,15 @@ pub mod base64 {
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
+
+    /// `width * height * 4` of two `u32::MAX` values does not fit `u64`. The message must not panic.
+    #[test]
+    fn size_mismatch_message_survives_extreme_dimensions() {
+        let err = ImageDoc::new(u32::MAX, u32::MAX, vec![0; 4]).unwrap_err();
+        assert!(matches!(err, FormatDocError::SizeMismatch { .. }), "{err:?}");
+        let text = err.to_string();
+        assert!(text.contains("73786976260478468100"), "the byte count is exact: {text}");
+    }
 
     #[test]
     fn base64_matches_the_rfc_vectors() {
