@@ -289,6 +289,17 @@ fn state_round_trips_and_the_quota_is_per_plugin_and_counts_overwrites_once() {
 }
 
 #[test]
+fn random_bytes_fail_when_the_app_has_no_entropy() {
+    let r = rig(&[Op::RandomBytes], &["random"]);
+    r.services.entropy_fails.store(true, Ordering::Relaxed);
+    // The guest must see an error. It must not see a buffer of zeros that looks random.
+    assert_eq!(status_of(call(&r, Op::RandomBytes, &json!({"len": 4})).unwrap_err()), Status::Unsupported);
+    // Control: without the failure the same call answers.
+    r.services.entropy_fails.store(false, Ordering::Relaxed);
+    assert_eq!(call(&r, Op::RandomBytes, &json!({"len": 4})).unwrap(), json!({"hex": "abababab"}));
+}
+
+#[test]
 fn time_and_random_degrade_without_their_permission() {
     let none = rig(&[Op::TimeNow, Op::RandomBytes], &[]);
     assert_eq!(call(&none, Op::TimeNow, &json!({})).unwrap(), json!({"unix_ms": 0}));
