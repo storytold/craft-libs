@@ -589,18 +589,9 @@ pub(crate) fn hyphenation(lang: ProofLang) -> Option<Arc<Patterns>> {
     let mut errors = Vec::new();
     let mut found = None;
     for dir in packs_for(&hyphenation_locales(lang), |h| h.hyphenation) {
-        let extended = dir.join(NONSTANDARD);
-        let path = if is_regular_file(&extended) { extended } else { dir.join(HYPHENATION) };
-        match load_patterns(&path) {
-            Ok(p) => {
-                found = Some(Arc::new(p));
-                break;
-            }
-            Err(e) => {
-                let locale = dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-                log::warn!("Language pack {locale}: {e}");
-                errors.push((locale, e));
-            }
+        if let Some(p) = patterns_from_directory(&dir, &mut errors) {
+            found = Some(Arc::new(p));
+            break;
         }
     }
     if found.is_none() {
@@ -618,6 +609,24 @@ pub(crate) fn hyphenation(lang: ProofLang) -> Option<Arc<Patterns>> {
         }
     }
     found
+}
+
+fn patterns_from_directory(dir: &Path, errors: &mut Vec<(String, String)>) -> Option<Patterns> {
+    for name in [NONSTANDARD, HYPHENATION] {
+        let path = dir.join(name);
+        if name == NONSTANDARD && !is_regular_file(&path) {
+            continue;
+        }
+        match load_patterns(&path) {
+            Ok(p) => return Some(p),
+            Err(error) => {
+                let locale = dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                log::warn!("Language pack {locale}: {error}");
+                errors.push((locale, error));
+            }
+        }
+    }
+    None
 }
 
 fn patterns_from_embedded(packs: &[&EmbeddedPack], errors: &mut Vec<(String, String)>) -> Option<Patterns> {
@@ -703,6 +712,23 @@ mod tests {
     fn embedded_packs_do_not_have_the_no_data_contract() {
         #[cfg(craft_proof_no_data)]
         assert!(crate::data::PACKS.is_empty(), "embedded packs are Language data");
+    }
+    #[test]
+    fn broken_nonstandard_file_retains_regular_patterns_and_the_error() {
+        let dir = std::env::temp_dir().join(format!("craft-proof-pattern-fallback-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(NONSTANDARD), "UTF-8\nas5szony/sz=,0,1\n").unwrap();
+        std::fs::write(dir.join(HYPHENATION), "ba1na").unwrap();
+        let mut errors = Vec::new();
+        let p = patterns_from_directory(&dir, &mut errors).unwrap();
+        assert_eq!(p.points(&"banana".chars().collect::<Vec<_>>()).unwrap(), vec![2]);
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].1.contains("line 2"));
+        std::fs::remove_file(dir.join(NONSTANDARD)).unwrap();
+        errors.clear();
+        assert!(patterns_from_directory(&dir, &mut errors).is_some());
+        assert!(errors.is_empty());
+        std::fs::remove_dir_all(&dir).unwrap();
     }
     #[test]
     fn malformed_pack_patterns_keep_their_line_number() {

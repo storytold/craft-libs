@@ -1,5 +1,5 @@
 //! Insertions are returned separately from source offsets, never written to the text.
-use super::{Limits, Opportunity, ProofLang, composed_chars, hyphen_points_in, is_apostrophe, is_word_char};
+use super::{Limits, MAX_HYPHENATION_RUN_BYTES, Opportunity, ProofLang, composed_chars, is_apostrophe, points_with_caps, word_runs};
 
 /// Allowed source-character breaks plus display-only letters before the hyphen.
 /// Point-only clients keep using `hyphen_points_in`, which omits insertions it cannot render.
@@ -9,33 +9,26 @@ pub fn hyphen_opportunities_in(word: &str, lim: &Limits, lang: ProofLang) -> Vec
 }
 
 /// Nonstandard layout breaks may also hyphenate all-capital words. Capitalized
-/// words still require `lim.capitalized`; ordinary fallback policies are unchanged.
+/// words still require `lim.capitalized`; the opt-in also applies to point-only fallbacks.
 pub fn hyphen_opportunities_including_all_caps(word: &str, lim: &Limits, lang: ProofLang) -> Vec<Opportunity> {
     opportunities_in(word, lim, lang, true)
 }
 
 fn opportunities_in(word: &str, lim: &Limits, lang: ProofLang, all_caps: bool) -> Vec<Opportunity> {
     let Some(patterns) = crate::packs::hyphenation(lang).filter(|p| p.has_nonstandard()) else {
-        return hyphen_points_in(word, lim, lang).into_iter().map(|at| Opportunity { at, suffix: "".into() }).collect();
+        return points_with_caps(word, lim, lang, all_caps).into_iter().map(|at| Opportunity { at, suffix: "".into() }).collect();
     };
     opportunities_with(word, lim, lang, &patterns, all_caps)
 }
 
 fn opportunities_with(word: &str, lim: &Limits, lang: ProofLang, patterns: &super::Patterns, all_caps: bool) -> Vec<Opportunity> {
-    let chars: Vec<char> = word.chars().collect();
-    let belongs = |c: char| is_word_char(c) || unicode_normalization::char::is_combining_mark(c);
     let mut out = Vec::new();
-    let mut i = 0;
-    while i < chars.len() {
-        if !belongs(chars[i]) {
-            i += 1;
+    for (offset, text) in word_runs(word) {
+        if text.len() > MAX_HYPHENATION_RUN_BYTES {
             continue;
         }
-        let mut end = i;
-        while chars.get(end).is_some_and(|&c| belongs(c)) {
-            end += 1;
-        }
-        let (mut a, mut b) = (i, end);
+        let chars: Vec<char> = text.chars().collect();
+        let (mut a, mut b) = (0, chars.len());
         while a < b && is_apostrophe(chars[a]) {
             a += 1;
         }
@@ -52,8 +45,7 @@ fn opportunities_with(word: &str, lim: &Limits, lang: ProofLang, patterns: &supe
             // fallback available for longer runs (including source offsets).
             if run.iter().map(|c| c.len_utf8()).sum::<usize>() > 1024 {
                 let text: String = run.iter().collect();
-                out.extend(hyphen_points_in(&text, lim, lang).into_iter().map(|at| Opportunity { at: a + at, suffix: "".into() }));
-                i = end;
+                out.extend(points_with_caps(&text, lim, lang, all_caps).into_iter().map(|at| Opportunity { at: offset + a + at, suffix: "".into() }));
                 continue;
             }
             let (nfc, starts) = composed_chars(run);
@@ -70,15 +62,14 @@ fn opportunities_with(word: &str, lim: &Limits, lang: ProofLang, patterns: &supe
                     if left.iter().rev().find(|c| c.is_alphabetic()).is_some_and(|c| c.is_uppercase()) {
                         point.suffix = point.suffix.to_uppercase().into_boxed_str();
                     }
-                    point.at = a + at;
+                    point.at = offset + a + at;
                     out.push(point);
                 }
             } else {
                 let text: String = run.iter().collect();
-                out.extend(hyphen_points_in(&text, lim, lang).into_iter().map(|at| Opportunity { at: a + at, suffix: "".into() }));
+                out.extend(points_with_caps(&text, lim, lang, all_caps).into_iter().map(|at| Opportunity { at: offset + a + at, suffix: "".into() }));
             }
         }
-        i = end;
     }
     out
 }
@@ -86,7 +77,29 @@ fn opportunities_with(word: &str, lim: &Limits, lang: ProofLang, patterns: &supe
 #[cfg(test)]
 mod tests {
     use super::super::Patterns;
+    use super::super::hyphen_points_in;
     use super::*;
+    #[test]
+    fn huge_runs_are_skipped_without_losing_neighbours() {
+        let patterns = Patterns::from_huhyphn("UTF-8\nas5szon2y/sz=,2,1\n").unwrap();
+        let giant = "á".repeat(MAX_HYPHENATION_RUN_BYTES * 4);
+        let text = format!("asszony {giant} asszony");
+        let lang = ProofLang::from_tag(Some("hu"));
+        let actual = opportunities_with(&text, &Limits::default(), lang, &patterns, false);
+        assert_eq!(actual.iter().map(|p| p.at).collect::<Vec<_>>(), vec![2, 8 + giant.chars().count() + 1 + 2]);
+        assert!(hyphen_points_in(&giant, &Limits::default(), lang).is_empty());
+        let normal = "asszony ".repeat(1000);
+        assert_eq!(opportunities_with(&normal, &Limits::default(), lang, &patterns, false).len(), 1000);
+    }
+    #[test]
+    fn point_only_fallback_honours_explicit_all_caps_and_limits() {
+        let lim = Limits::default();
+        let expected = hyphen_points_in("typography", &lim, ProofLang::En);
+        assert!(!expected.is_empty());
+        assert!(hyphen_opportunities_in("TYPOGRAPHY", &lim, ProofLang::En).is_empty());
+        assert_eq!(hyphen_opportunities_including_all_caps("TYPOGRAPHY", &lim, ProofLang::En).iter().map(|p| p.at).collect::<Vec<_>>(), expected);
+        assert!(hyphen_opportunities_including_all_caps("TYPOGRAPHY", &Limits { capitalized: false, ..lim }, ProofLang::En).is_empty());
+    }
     #[test]
     fn over_limit_runs_keep_point_fallback_with_source_offsets() {
         let patterns = Patterns::from_huhyphn("UTF-8\nas5szon2y/sz=,2,1\n").unwrap();

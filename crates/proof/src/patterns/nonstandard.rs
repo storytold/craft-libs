@@ -67,6 +67,9 @@ impl Patterns {
     /// Breaks including display-only insertions. Replacements that would alter or
     /// delete source letters are conservatively left unbroken by this insertion API.
     pub fn opportunities(&self, word: &[char]) -> Option<Vec<Opportunity>> {
+        if word.len() > super::MAX_WORD_CHARS {
+            return None;
+        }
         if let Some(points) = self.exception(&word.iter().collect::<String>()) {
             return Some(points.iter().map(|&at| Opportunity { at, suffix: "".into() }).collect());
         }
@@ -171,6 +174,14 @@ fn parse_change(raw: &str, replacement: &str) -> Result<Change, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn oversized_match_inputs_are_refused_before_allocating_tables() {
+        let p = Patterns::from_huhyphn("UTF-8\na1a\nas5szon2y/sz=,2,1\n").unwrap();
+        let word = vec!['a'; super::super::MAX_WORD_CHARS + 1];
+        assert!(p.opportunities(&word).is_none());
+        assert!(p.points(&word).is_none());
+        assert!(p.values(&word).is_none());
+    }
     #[test]
     fn utf8_bom_keeps_inserted_letter_rules_and_line_errors() {
         let p = Patterns::parse_checked("\u{feff}UTF-8\nas5szon2y/sz=,2,1\n").unwrap();

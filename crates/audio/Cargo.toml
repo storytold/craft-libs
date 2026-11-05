@@ -1,6 +1,6 @@
 [package]
 name = "craft-audio"
-description = "Audio file I/O and codecs: WAV/AIFF read and write."
+description = "Audio file I/O and codecs: WAV/AIFF read and write, FLAC encoder."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -23,10 +23,12 @@ decode-native = ["craft-media/isobmff", "craft-media/matroska", "craft-media/ogg
 symphonia = ["decode-native", "dep:symphonia"]
 # Every encoder: the lossless file writers.
 encode = ["lossless-encode"]
-# Encode WAV/BWF/RF64 and AIFF/AIFF-C files.
-lossless-encode = ["pcm-encode"]
+# Encode WAV/BWF/RF64, AIFF/AIFF-C and FLAC files.
+lossless-encode = ["pcm-encode", "flac-encode"]
 # Encode WAV/BWF/RF64 and AIFF/AIFF-C files.
 pcm-encode = []
+# Encode FLAC files.
+flac-encode = ["craft-media/bitstream"]
 # Multi-resolution waveform overviews (`peaks`).
 peaks = []
 # Serialize and Deserialize for the shared types.

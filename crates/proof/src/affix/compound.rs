@@ -727,6 +727,11 @@ impl AffixDict {
         if *work >= MAX_WORK || self.is_forbidden(part) {
             return false;
         }
+        if self.stem_lookup(part).map(|(stem, set)| self.rule_sets.get(&stem).map_or(set, |&id| self.set(id))).is_some_and(|set| {
+            has(set, flag) && !excluded.hits(set) && !self.need_affix.is_some_and(|f| has(set, f)) && !self.forbidden.is_some_and(|f| has(set, f))
+        }) {
+            return true;
+        }
         let mut derived = excluded;
         for slot in &mut derived.0 {
             let shared_suggestion_exclusion = excluded.suggesting() && (*slot == self.no_suggest || *slot == self.substandard);
@@ -746,11 +751,6 @@ impl AffixDict {
             }
             found = true;
         };
-        for (stem, set) in self.part_stems(part, derived) {
-            if !self.need_affix.is_some_and(|n| has(set, n)) {
-                emit(Analysis { stem, set, pfx: None, sfx: None, inner: None });
-            }
-        }
         // Prefixes cannot license this terminal rule. Do not spend its shared
         // budget on analyses that would be discarded before checking the flag.
         self.suffix_analyses(part, None, derived, work, &mut emit);
@@ -2042,6 +2042,31 @@ mod tests {
 #[cfg(test)]
 mod terminal_rule_review_tests {
     use super::*;
+    #[test]
+    fn bare_terminal_homonyms_use_merged_rule_flags() {
+        let aff = "SET UTF-8\nNEEDAFFIX N\nCOMPOUNDMIN 1\nCOMPOUNDRULE 1\nCOMPOUNDRULE AB\n";
+        let dict = AffixDict::from_hunspell(aff, "3\nx/A\ny/BN\ny/C\n", &[]).unwrap();
+        assert!(dict.check("xy"));
+        let only_needs_affix = AffixDict::from_hunspell(aff, "2\nx/A\ny/BN\n", &[]).unwrap();
+        assert!(!only_needs_affix.check("xy"));
+    }
+    #[test]
+    fn bare_terminal_match_leaves_work_for_later_rule_flags() {
+        let mut aff = String::from("SET UTF-8\nFLAG num\nCOMPOUNDMIN 1\nCOMPOUNDRULE 2\nCOMPOUNDRULE (1)(2)(4)\nCOMPOUNDRULE (1)(3)\nSFX 9 Y 100\n");
+        for _ in 0..100 {
+            aff.push_str("SFX 9 0 s .\n");
+        }
+        let dict = AffixDict::from_hunspell(&aff, "3\nx/1\nys/2,3\ny/9\n", &[]).unwrap();
+        // The reader interns written flag names; query its actual IDs.
+        let (_, flags) = dict.stem_lookup("ys").unwrap();
+        assert_eq!(flags.len(), 2);
+        let mut work = MAX_WORK - 1;
+        for &flag in flags {
+            assert!(dict.rule_final_has_flag("ys", Excluded::default(), flag, &mut work));
+            assert_eq!(work, MAX_WORK - 1);
+        }
+    }
+
     #[test]
     fn terminal_flag_queries_do_not_spend_budget_on_prefixes() {
         let count = 100;

@@ -38,6 +38,9 @@ pub fn generate() -> Result<(String, Vec<String>, String), String> {
         if !aff.is_file() && !patterns.is_file() {
             return Err(format!("{locale}: no language data"));
         }
+        if patterns.is_file() {
+            validate_hyphenation_locale(locale)?;
+        }
         let aff = include(&aff, true)?;
         let dic = include(&dic, true)?;
         let patterns = include(&patterns, false)?;
@@ -87,6 +90,28 @@ fn validate_locale(locale: &str) -> Result<(), String> {
     Ok(())
 }
 
+fn validate_hyphenation_locale(locale: &str) -> Result<(), String> {
+    let primary = locale.split('-').next().unwrap_or_default();
+    // These languages collapse to built-in ProofLang variants. Match the names
+    // packs::hyphenation_locales actually requests, rather than accepting dead aliases.
+    let reachable = match primary {
+        "pl" | "pol" => locale == "pl",
+        "bg" | "bul" => locale == "bg",
+        "it" | "ita" => locale == "it",
+        "hr" | "hrv" => locale == "hr",
+        "tr" | "tur" => locale == "tr",
+        "ru" | "rus" => locale == "ru",
+        "cs" | "ces" | "cze" => locale == "cs",
+        "id" | "ind" | "in" => locale == "id",
+        "pt" | "por" => matches!(locale, "pt" | "pt-pt"),
+        "de" | "deu" | "ger" => matches!(locale, "de" | "de-de" | "de-1996" | "de-ch"),
+        "es" | "spa" => matches!(locale, "es" | "es-es" | "es-mx" | "es-419" | "es-uy"),
+        "en" | "eng" => false, // English uses its bundled patterns.
+        _ => true,
+    };
+    if reachable { Ok(()) } else { Err(format!("hyphenation locale {locale:?} cannot be selected by runtime lookup")) }
+}
+
 fn validate_directory(dir: &Path) -> Result<(), String> {
     if !dir.is_absolute() {
         return Err(format!("{} is not an absolute path", dir.display()));
@@ -107,6 +132,15 @@ fn validate_pack_locale(text: &str, folder: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn embedded_patterns_reject_unreachable_builtin_aliases() {
+        for tag in ["pl", "hu", "hu-hu", "pt-pt", "de-ch", "de-1996", "es-419", "sr-latn-rs"] {
+            assert!(validate_hyphenation_locale(tag).is_ok(), "{tag}");
+        }
+        for tag in ["pl-pl", "pol", "pt-br", "de-li", "es-ar", "en-us", "ru-ru"] {
+            assert!(validate_hyphenation_locale(tag).is_err(), "{tag}");
+        }
+    }
     #[test]
     fn embedded_locale_must_survive_runtime_selection_unchanged() {
         for tag in ["hu", "hu-hu", "sr-latn-rs", "abcdefgh-123456"] {

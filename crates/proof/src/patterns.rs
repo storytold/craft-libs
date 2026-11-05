@@ -18,6 +18,8 @@ pub const DOT: char = '.';
 /// Longest pattern the packed key supports (6 bits a letter in a `u128`; the Polish set's longest
 /// is 14 including the dots).
 pub const MAX_PATTERN_LEN: usize = 20;
+/// Maximum input characters processed by one pattern match. Longer inputs return None.
+pub const MAX_WORD_CHARS: usize = 4096;
 
 /// Small, fast multiplicative hasher for packed integer keys and short strings (FxHash-style).
 #[derive(Default, Clone, Copy)]
@@ -262,6 +264,9 @@ impl Patterns {
     /// Inter-letter values for a lowercase word: `out[i]` is the value *before* char `i`
     /// (`out.len() == word.len() + 1`). None if a char is outside the pattern alphabet.
     pub fn values(&self, word: &[char]) -> Option<Vec<u8>> {
+        if word.len() > MAX_WORD_CHARS {
+            return None;
+        }
         let mut codes = Vec::with_capacity(word.len() + 2);
         codes.push(1);
         for &c in word {
