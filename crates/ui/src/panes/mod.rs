@@ -716,7 +716,7 @@ impl PaneHost {
             Side::Right => (SplitAxis::Horizontal, Rect::from_x_y_ranges(rect.left() - 2.0..=rect.left() + 2.0, rect.y_range())),
             Side::Bottom => (SplitAxis::Vertical, Rect::from_x_y_ranges(rect.x_range(), rect.top() - 2.0..=rect.top() + 2.0)),
         };
-        let handle_style = ResizeHandleStyle { hovered: style.accent.gamma_multiply(0.5), dragged: style.accent, focused: style.accent };
+        let handle_style = ResizeHandleStyle { hovered: style.accent.gamma_multiply(0.5), dragged: style.accent, focused: style.accent, rest: None };
         // The edge's hit strip reaches over the document, whose widgets register after the host
         // and would take presses there on the host's layer. A sublayer sits directly above it:
         // over the document, under floating windows.

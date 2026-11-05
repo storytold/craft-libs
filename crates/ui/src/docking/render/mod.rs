@@ -242,6 +242,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
                         hovered: self.style.accent,
                         dragged: self.style.accent,
                         focused: self.style.accent,
+                        rest: self.style.divider_line,
                     }),
                 )
                 .value(split.first_size(), (split.first_size() + lo)..=(split.first_size() + hi))
@@ -348,7 +349,12 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
                         SplitAxis::Vertical,
                         divider,
                         &self.style.resize_label,
-                        ResizeHandleStyle { hovered: self.style.accent, dragged: self.style.accent, focused: self.style.accent },
+                        ResizeHandleStyle {
+                            hovered: self.style.accent,
+                            dragged: self.style.accent,
+                            focused: self.style.accent,
+                            rest: self.style.divider_line,
+                        },
                     )
                     .value(first_size, (first_size + lo)..=(first_size + hi))
                     .show(ui);

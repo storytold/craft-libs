@@ -94,7 +94,7 @@ fn resizing_retains_sizing_mode_and_bounded_minima() {
 }
 
 fn handle_style() -> ResizeHandleStyle {
-    ResizeHandleStyle { hovered: Color32::GREEN, dragged: Color32::RED, focused: Color32::BLUE }
+    ResizeHandleStyle { hovered: Color32::GREEN, dragged: Color32::RED, focused: Color32::BLUE, rest: None }
 }
 
 struct HandleTest {

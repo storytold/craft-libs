@@ -417,7 +417,12 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
     }
 
     fn handle_style(&self) -> ResizeHandleStyle {
-        self.content.resize_handle_style(ResizeHandleStyle { hovered: self.style.accent, dragged: self.style.accent, focused: self.style.accent })
+        self.content.resize_handle_style(ResizeHandleStyle {
+            hovered: self.style.accent,
+            dragged: self.style.accent,
+            focused: self.style.accent,
+            rest: self.style.divider_line,
+        })
     }
 
     /// Width bounds of an expanded column from its panels' limits.
@@ -644,7 +649,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
         if response.double_clicked() {
             self.output.actions.push(Action::SetIconic { panel: first.clone(), iconic: !column.iconic });
         }
-        if response.has_focus() || response.hovered() {
+        if self.style.drag_bar_outline && (response.has_focus() || response.hovered()) {
             ui.painter().with_clip_rect(grip).rect_stroke(
                 grip.shrink(1.0),
                 0.0,

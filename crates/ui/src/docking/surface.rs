@@ -163,6 +163,8 @@ pub struct DockStyle {
     /// Some: a group in a dock column with a single panel shows no tab, only a band this high that still drags
     /// the group, and the panel's name as the band's hover text. None: its one tab shows.
     pub lone_tab_strip: Option<f32>,
+    /// Some: the color of a 2-point line along every resize divider (between panes, and beside docks) while idle.
+    pub divider_line: Option<Color32>,
     /// Outline the drag bar (the strip's empty part) while the pointer is over it or it has focus.
     pub drag_bar_outline: bool,
 }
@@ -211,6 +213,7 @@ impl DockStyle {
             drag_bar_width: 40.0,
             tab_icons: false,
             lone_tab_strip: None,
+            divider_line: None,
             drag_bar_outline: true,
             floating_background: visuals.window_fill,
             floating_stroke: visuals.window_stroke,
