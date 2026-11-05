@@ -65,6 +65,9 @@ pub enum Fetched {
     /// The time limit passed. The render may still finish and fill the cache.
     TimedOut,
     /// The peer answered this frame with an error. The fetcher still works.
+    ///
+    /// Also the answer to a caller whose ask was dropped from a full queue (see [`QUEUE_MAX`]). That
+    /// caller is not re-queued: it asks again if it still wants the frame.
     Failed(String),
     /// The connections are gone and the cache has no answer.
     Down,
@@ -142,6 +145,22 @@ struct State {
     fail_seq: u64,
     stats: FetchStats,
     stop: bool,
+}
+
+/// Most failure records kept. Callers only look for a record newer than their own ask, so old
+/// ones go first.
+const FAILED_MAX: usize = 4 * QUEUE_MAX;
+
+impl State {
+    /// Record a failure of `key` that callers waiting for it will see.
+    fn note_failed(&mut self, key: FrameKey, message: String) {
+        self.fail_seq += 1;
+        self.failed.insert(key, (self.fail_seq, message));
+        if self.failed.len() > FAILED_MAX {
+            let keep_from = self.fail_seq.saturating_sub(u64::try_from(FAILED_MAX).unwrap_or(u64::MAX));
+            self.failed.retain(|_, (seq, _)| *seq > keep_from);
+        }
+    }
 }
 
 struct Shared {
@@ -252,6 +271,8 @@ impl FrameFetcher {
                 {
                     state.inflight.remove(&oldest.key);
                     state.stats.skipped += 1;
+                    // Callers waiting for the dropped key see this before they could queue it again.
+                    state.note_failed(oldest.key, "dropped: the fetch queue is full".into());
                     shared.done.notify_all();
                 }
                 state.inflight.insert(key);
@@ -310,9 +331,7 @@ fn run_worker(shared: &Shared, mut client: BulkClient) {
             }
             Ok(Err(message)) => {
                 state.stats.failures += 1;
-                state.fail_seq += 1;
-                let seq = state.fail_seq;
-                state.failed.insert(job.key, (seq, message));
+                state.note_failed(job.key, message);
             }
             Err(_) => {
                 drop(state);
