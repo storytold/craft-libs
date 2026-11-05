@@ -75,7 +75,7 @@ Op numbers are stable. New ops are additive.
 | 0x0062 | `fs.write` | `fs.picked` |
 | 0x0070 | `net.fetch` | `net.fetch:<origin>` |
 | 0x0080 | `time.now` | `clock` (else returns 0) |
-| 0x0090 | `random.bytes` | `random` (else a deterministic stream) |
+| 0x0090 | `random.bytes` | `random` (else a deterministic stream). `E_UNSUPPORTED` if the app has no entropy. |
 
 Link calls. `link.call:<app>` forwards only the methods in `permissions::LINK_CALL_METHODS` (`link.resolve`, `asset.describe`, `link.refresh`, `link.focus`). The list is closed and exact, with no case folding. `engine.execute` (`LINK_EXEC_METHOD`) also needs `link.exec:<app>:<glob>`, where the glob matches the command.
 
