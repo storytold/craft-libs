@@ -327,3 +327,38 @@ fn the_queue_holds_at_most_queue_max_asks() {
     }
     assert_eq!(fetcher.stats().skipped, u64::try_from(extra).unwrap(), "the oldest asks past the cap are dropped");
 }
+
+#[test]
+fn a_caller_waiting_on_a_dropped_ask_gets_failed_and_does_not_queue_it_again() {
+    let rig = boot();
+    rig.fake.delay_ms.store(1500, Ordering::SeqCst);
+    let options = FetchOptions { connections: 1, max_age: Duration::from_secs(60), ..FetchOptions::default() };
+    let fetcher = Arc::new(FrameFetcher::connect(&rig.record, "link-a", FrameFormat::Rgba8Premul, 1.0, options).unwrap());
+    // Frame 0 holds the only worker. Frame 1 queues behind it with a caller that waits.
+    assert!(matches!(fetcher.fetch(key(0), 0.0, 1, Duration::from_millis(1)), Fetched::TimedOut));
+    std::thread::sleep(Duration::from_millis(100));
+    let (done, finished) = std::sync::mpsc::channel();
+    let waiter = {
+        let fetcher = Arc::clone(&fetcher);
+        std::thread::spawn(move || {
+            let started = Instant::now();
+            let _ = done.send((fetcher.fetch(key(1), 1.0, 1, Duration::from_secs(20)), started.elapsed()));
+        })
+    };
+    std::thread::sleep(Duration::from_millis(100));
+    // Fill the queue past its cap: frame 1 is the oldest, so it goes first.
+    let extra = 5;
+    for n in 2..=i64::try_from(QUEUE_MAX + extra).unwrap() {
+        assert!(matches!(fetcher.fetch(key(n), 1.0, 1, Duration::ZERO), Fetched::TimedOut));
+    }
+    let (outcome, waited) = finished.recv_timeout(Duration::from_secs(1)).expect("the dropped caller must return at once");
+    assert!(matches!(&outcome, Fetched::Failed(message) if message.contains("dropped")), "{outcome:?}");
+    assert!(waited < Duration::from_secs(5), "{waited:?}");
+    waiter.join().unwrap();
+    std::thread::sleep(Duration::from_millis(100));
+    // Frame 1 plus the others make QUEUE_MAX + extra asks for QUEUE_MAX places. A caller that queued
+    // frame 1 again would evict more.
+    assert_eq!(fetcher.stats().skipped, u64::try_from(extra).unwrap());
+    // A new ask for the dropped frame is a new ask, not a repeat of the failure.
+    assert!(matches!(fetcher.fetch(key(1), 1.0, 1, Duration::ZERO), Fetched::TimedOut));
+}
