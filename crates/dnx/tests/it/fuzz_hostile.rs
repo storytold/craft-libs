@@ -140,9 +140,8 @@ const VALUES: [u8; 5] = [0, 0xff, 0x80, 0x01, 0x7f];
 /// points spread over each seed, every header byte, overwrite value and bit flip) plus N random
 /// rounds per seed: 1500 is the full depth, more hunts longer. Unset, CI runs a third of the
 /// truncation points and of the full depth's random rounds and, for each header byte, one value
-/// and two bits. A rotation offset shifts which share runs (`FILMCRAFT_FUZZ_SEED`, else the UTC
-/// day number), so every case of the full sweep runs within a few days, and a random round's
-/// mutations match the same round of a full run.
+/// and two bits. The subset is reproducible; set `FILMCRAFT_FUZZ_SEED` to choose another share.
+/// A random round's mutations match the same round of a full run.
 struct Depth {
     full: bool,
     truncations: usize,
@@ -178,10 +177,7 @@ impl Depth {
     }
 }
 
-/// The default subset's rotation offset: `FILMCRAFT_FUZZ_SEED`, else days since the Unix epoch (UTC).
+/// The default subset's rotation offset: `FILMCRAFT_FUZZ_SEED`, or zero for reproducible CI runs.
 fn rotation() -> usize {
-    std::env::var("FILMCRAFT_FUZZ_SEED").ok().and_then(|s| s.parse().ok()).unwrap_or_else(|| {
-        let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
-        usize::try_from(secs / 86_400).unwrap_or(0)
-    })
+    std::env::var("FILMCRAFT_FUZZ_SEED").ok().and_then(|s| s.parse().ok()).unwrap_or(0)
 }

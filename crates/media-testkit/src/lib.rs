@@ -193,12 +193,20 @@ pub fn set_progress(label: &str) {
 /// Run closure with an execution deadline, terminating with a panic if the limit is exceeded.
 #[allow(clippy::panic)]
 pub fn with_deadline<F: FnOnce() + Send + 'static>(secs: u64, f: F) {
-    let timeout_secs = std::env::var("CRAFT_TEST_TIMEOUT_SECS")
-        .or_else(|_| std::env::var("FILMCRAFT_HOSTILE_TIMEOUT_SECS"))
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(secs);
+    let timeout_secs = timeout_from_env(
+        secs,
+        std::env::var("CRAFT_TEST_TIMEOUT_SECS").ok().as_deref(),
+        std::env::var("FILMCRAFT_HOSTILE_TIMEOUT_SECS").ok().as_deref(),
+    );
+    with_timeout(timeout_secs, f);
+}
 
+fn timeout_from_env(secs: u64, craft_timeout: Option<&str>, legacy_timeout: Option<&str>) -> u64 {
+    craft_timeout.or(legacy_timeout).and_then(|s| s.parse().ok()).unwrap_or(secs)
+}
+
+#[allow(clippy::panic)]
+fn with_timeout<F: FnOnce() + Send + 'static>(timeout_secs: u64, f: F) {
     let (tx, rx) = std::sync::mpsc::channel();
     let handle = std::thread::spawn(move || {
         f();
@@ -287,8 +295,16 @@ Encoders:
     #[test]
     #[should_panic(expected = "test exceeded execution deadline")]
     fn with_deadline_times_out() {
-        with_deadline(1, || {
+        with_timeout(1, || {
             std::thread::sleep(std::time::Duration::from_secs(3));
         });
+    }
+
+    #[test]
+    fn timeout_environment_overrides_are_selected_separately() {
+        assert_eq!(timeout_from_env(300, Some("4"), Some("5")), 4);
+        assert_eq!(timeout_from_env(300, None, Some("5")), 5);
+        assert_eq!(timeout_from_env(300, Some("invalid"), Some("5")), 300);
+        assert_eq!(timeout_from_env(300, None, None), 300);
     }
 }
