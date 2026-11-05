@@ -47,6 +47,11 @@ plist = "1"
 [target.'cfg(target_os = "windows")'.dependencies]
 winreg = "0.55"
 dunce = "1"
-zip = { version = "9", default-features = false, features = ["deflate"] }
+# Deflate through flate2's default (miniz_oxide) backend, as on the other platforms. zip's `deflate`
+# feature adds `flate2/zlib-rs`, and features unify: that would switch flate2's backend for the
+# whole app on Windows (zlib-rs's level 1 compresses far worse, so an app's fast-deflate TIFF or PNG
+# export grows), and adds zopfli, which only writes archives.
+zip = { version = "9", default-features = false, features = ["deflate-flate2"] }
+flate2 = "1"
 winsafe = { version = "0.0.29", features = ["advapi", "kernel", "shell", "version"] }
 verifysign = "1"
