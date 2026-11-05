@@ -295,7 +295,7 @@ impl BulkClient {
         let mut reader = open_reader(record)?;
         write_json(&mut reader, &json!({"id": 1, "method": "bulk.attach", "params": {"ticket": ticket}}))?;
         let deadline = std::time::Instant::now() + Duration::from_secs(wire::REPLY_DEADLINE_SECS);
-        let reply = read_json(&mut reader, deadline)?.ok_or(LinkError::Closed)?;
+        let reply = read_json(&mut reader, &mut Vec::new(), deadline)?.ok_or(LinkError::Closed)?;
         map_reply(&reply)?;
         Ok(Self { reader, next_req: 1, io_timeout: Duration::from_secs(wire::REPLY_DEADLINE_SECS) })
     }
