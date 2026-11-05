@@ -50,8 +50,9 @@ page.install()?; // window.vectorcraft
 ## Beside the host messages
 
 Opening a document, handing a saved or exported file to the host, the document name and the dirty
-flag stay with the app's own host messages (`<app>:open`, `<app>:save`, `<app>:dirty`, …) and its
-own control methods; a page reaches any control method through `request(method, params)`.
+flag stay with the host messages in [`craft-web-host`](../web-host/README.md) (`<app>:open`,
+`<app>:save`, `<app>:dirty`, …) and the app's own control methods. A page reaches any control
+method through `request(method, params)`.
 
 ## Tests
 
