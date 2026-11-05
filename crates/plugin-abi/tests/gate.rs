@@ -211,6 +211,48 @@ fn rejects_oversized_tables_and_too_many_tables() {
 }
 
 #[test]
+fn a_table_without_a_declared_maximum_is_rejected() {
+    // `table.grow` is allowed (bulk memory and reference types), so an open table is unbounded.
+    let wat = r#"(module
+        (import "craft_host" "call" (func (param i32 i32 i32 i32 i32) (result i64)))
+        (memory (export "memory") 1 16)
+        (table 1 funcref)
+        (func (export "craft_abi") (result i32) i32.const 1)
+        (func (export "craft_alloc") (param i32 i32) (result i32) i32.const 0)
+        (func (export "craft_free") (param i32 i32 i32))
+        (func (export "craft_invoke") (param i32 i32 i32 i32 i32) (result i64) i64.const 0))"#;
+    let bytes = with_section(wat::parse_str(wat).unwrap(), "craft.manifest", &serde_json::to_vec(&manifest_json()).unwrap());
+    assert_only(&gate(&bytes), &[Violation::TableMaxMissing { index: 0 }]);
+    let report = gate(&bytes);
+    assert!(report.violations[0].to_string().contains("no declared maximum"), "{report:#?}");
+}
+
+#[test]
+fn violation_messages_never_show_plugin_controlled_control_or_bidi_text() {
+    use craft_plugin_abi::text::has_unsafe;
+    let nasty = "a\u{202e}b\nc\u{200b}d\u{1b}[2J";
+    let violations = [
+        Violation::ExtraImport { module: nasty.into(), name: nasty.into() },
+        Violation::UnknownOp(nasty.into()),
+        Violation::Malformed(nasty.into()),
+        Violation::InvalidModule(nasty.into()),
+    ];
+    for v in violations {
+        let shown = v.to_string();
+        assert!(!has_unsafe(&shown), "unsafe character in {shown:?}");
+        assert!(shown.contains('a') && shown.contains('d'), "text was dropped instead of cleaned: {shown:?}");
+    }
+    // A manifest error carries serde text that repeats the rejected value.
+    let mut m = manifest_json();
+    m["permissions"] = json!({ "required": [nasty] });
+    let report = gate(&package("accept", &m));
+    assert!(!report.violations.is_empty(), "{report:#?}");
+    for v in &report.violations {
+        assert!(!has_unsafe(&v.to_string()), "unsafe character in {:?}", v.to_string());
+    }
+}
+
+#[test]
 fn lists_every_violation_not_just_the_first() {
     // Start function + extra import + a bad manifest op, in one package.
     let wat = r#"(module
@@ -331,12 +373,15 @@ fn legacy_modules_still_meet_the_size_table_and_memory_caps() {
         let legacy =
             |extra: &str| gate(&wat::parse_str(format!(r#"(module (memory (export "memory") 1) {extra} (func (export "{prefix}run")))"#)).unwrap());
         // Control: a small module within the caps loads.
-        let ok = legacy("(table 10 funcref)");
+        let ok = legacy("(table 10 10 funcref)");
         assert!(ok.legacy.is_some() && ok.is_accepted(), "{prefix}: {ok:#?}");
-        let big_table = legacy("(table 200000000 funcref)");
+        let big_table = legacy("(table 200000000 200000000 funcref)");
         assert!(big_table.violations.contains(&Violation::TableTooLarge { index: 0, elements: 200_000_000 }), "{prefix}: {big_table:#?}");
-        let many = legacy("(table 1 funcref) (table 1 funcref) (table 1 funcref) (table 1 funcref) (table 1 funcref)");
+        let many = legacy("(table 1 1 funcref) (table 1 1 funcref) (table 1 1 funcref) (table 1 1 funcref) (table 1 1 funcref)");
         assert!(many.violations.contains(&Violation::TooManyTables { count: 5 }), "{prefix}: {many:#?}");
+        // A table with no declared maximum can grow past the cap with `table.grow`.
+        let open = legacy("(table 1 funcref)");
+        assert!(open.violations.contains(&Violation::TableMaxMissing { index: 0 }), "{prefix}: {open:#?}");
         let two_mem = legacy("(memory 1)");
         assert!(two_mem.violations.contains(&Violation::MemoryCount { count: 2 }), "{prefix}: {two_mem:#?}");
         // The size cap runs before the legacy return.
@@ -356,4 +401,48 @@ fn native_module_is_not_mistaken_for_legacy() {
     let report = gate(&wat::parse_str(wat).unwrap());
     assert_eq!(report.legacy, None);
     assert!(!report.is_accepted());
+}
+
+/// A module with one memory whose custom page size exponent is `log2` and whose maximum is `max`.
+/// `wat` cannot write an exponent the engine would refuse, so the bytes are written by hand.
+fn memory_with_page_size(log2: u32, max: u8) -> Vec<u8> {
+    let mut exp = Vec::new();
+    leb(log2 as usize, &mut exp);
+    // flags 0x09: has maximum (bit 0) and custom page size (bit 3).
+    let mut body = vec![1u8, 0x09, 1, max];
+    body.extend_from_slice(&exp);
+    let mut wasm = b"\0asm\x01\0\0\0".to_vec();
+    wasm.push(5);
+    leb(body.len(), &mut wasm);
+    wasm.extend_from_slice(&body);
+    wasm
+}
+
+/// The page size exponent comes from the module. The reader refuses 64 and up. Below that the
+/// product with the maximum still fits `u128`. Neither path may panic.
+#[test]
+fn hostile_memory_page_size_exponents_never_panic() {
+    for log2 in [200u32, 128, 127, 64] {
+        let report = gate(&memory_with_page_size(log2, 4));
+        assert!(report.violations.iter().any(|v| matches!(v, Violation::Malformed(_))), "log2 {log2}: {report:#?}");
+    }
+    let report = gate(&memory_with_page_size(63, 4));
+    assert!(report.violations.iter().any(|v| matches!(v, Violation::MemoryMaxTooLarge { .. })), "{report:#?}");
+}
+
+/// Legacy modules have no manifest, but the feature allow list still binds them.
+#[test]
+fn legacy_modules_still_meet_the_feature_allow_list() {
+    for prefix in ["ec_", "pc_", "vc_"] {
+        let src = |body: &str| format!(r#"(module (memory (export "memory") 1) {body} (func (export "{prefix}run")))"#);
+        // Control: plain legacy module loads.
+        assert!(gate(&wat::parse_str(src("")).unwrap()).is_accepted(), "{prefix}");
+        let simd = gate(&wat::parse_str(src("(func (result v128) v128.const i64x2 0 0)")).unwrap());
+        assert!(simd.violations.contains(&Violation::Feature(F::Simd128)), "{prefix}: {simd:#?}");
+        let mem64 = gate(&wat::parse_str(format!(r#"(module (memory (export "memory") i64 1 2) (func (export "{prefix}run")))"#)).unwrap());
+        assert!(mem64.violations.contains(&Violation::Feature(F::Memory64)), "{prefix}: {mem64:#?}");
+        // A body that does not validate is reported, not shipped to the shim.
+        let bad = gate(&wat::parse_str(src("(func (result i32) i32.const 1 i32.const 2)")).unwrap());
+        assert!(bad.violations.iter().any(|v| matches!(v, Violation::InvalidModule(_))), "{prefix}: {bad:#?}");
+    }
 }

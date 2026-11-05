@@ -102,6 +102,10 @@ pub enum Violation {
     TooManyTables {
         count: usize,
     },
+    /// A table declares no maximum, so `table.grow` could take it past the cap.
+    TableMaxMissing {
+        index: usize,
+    },
     TableTooLarge {
         index: usize,
         elements: u64,
@@ -132,9 +136,12 @@ pub enum Violation {
     MixedLegacyPrefixes,
 }
 
-impl fmt::Display for Violation {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
+impl Violation {
+    /// The message before cleaning. Import names, op names and serde text come from the package.
+    fn raw_message(&self) -> String {
+        use std::fmt::Write as _;
+        let mut f = String::new();
+        let _ = match self {
             Violation::PackageTooLarge { bytes } => write!(f, "package is {bytes} bytes, cap is {MAX_PACKAGE_BYTES}"),
             Violation::Malformed(m) => write!(f, "malformed module: {m}"),
             Violation::InvalidModule(m) => write!(f, "invalid module: {m}"),
@@ -151,6 +158,9 @@ impl fmt::Display for Violation {
                 write!(f, "memory maximum {max_bytes} bytes exceeds the limit {limit_bytes} bytes")
             }
             Violation::TooManyTables { count } => write!(f, "module has {count} tables, at most {MAX_TABLES} allowed"),
+            Violation::TableMaxMissing { index } => {
+                write!(f, "table {index} has no declared maximum, so table.grow could pass the {MAX_TABLE_ELEMENTS} element cap")
+            }
             Violation::TableTooLarge { index, elements } => write!(f, "table {index} has {elements} elements, at most {MAX_TABLE_ELEMENTS} allowed"),
             Violation::TooManyFunctions { count } => write!(f, "module has {count} functions, at most {MAX_FUNCTIONS} allowed"),
             Violation::StartFunction => f.write_str("module has a start function"),
@@ -160,7 +170,16 @@ impl fmt::Display for Violation {
             Violation::WrongExportKind { name } => write!(f, "export {name} has the wrong kind"),
             Violation::WrongExportSignature { name, found, expected } => write!(f, "export {name} has signature {found}, expected {expected}"),
             Violation::MixedLegacyPrefixes => f.write_str("exports mix ec_, pc_ and vc_ prefixes"),
-        }
+        };
+        f
+    }
+}
+
+impl fmt::Display for Violation {
+    /// Plugin bytes reach these messages, so they get the same rule as manifest text: no control,
+    /// bidi or zero-width character, one line, bounded length.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&crate::text::clean_notice(&self.raw_message()))
     }
 }
 
@@ -324,7 +343,12 @@ fn check_resource_caps(facts: &Facts<'_>, legacy: bool, out: &mut Vec<Violation>
         out.push(Violation::TooManyTables { count: facts.tables.len() });
     }
     for (index, t) in facts.tables.iter().enumerate() {
-        let elements = t.maximum.map_or(t.initial, |m| m.max(t.initial));
+        // `table.grow` is allowed, so a table with no maximum has no bound. Memory has the same rule.
+        let Some(maximum) = t.maximum else {
+            out.push(Violation::TableMaxMissing { index });
+            continue;
+        };
+        let elements = maximum.max(t.initial);
         if elements > MAX_TABLE_ELEMENTS {
             out.push(Violation::TableTooLarge { index, elements });
         }
@@ -352,8 +376,10 @@ fn check_structure(facts: &Facts<'_>, manifest: Option<&Manifest>, host: &HostPo
         match mem.maximum {
             None => out.push(Violation::MemoryMaxMissing),
             Some(max_pages) => {
-                let page = 1u128 << mem.page_size_log2.unwrap_or(16);
-                let max_bytes = u128::from(max_pages) * page;
+                // The reader limits the exponent today. The gate does not rely on that: a shift or a
+                // product that does not fit `u128` counts as larger than any cap.
+                let page = 1u128.checked_shl(mem.page_size_log2.unwrap_or(16)).unwrap_or(u128::MAX);
+                let max_bytes = u128::from(max_pages).saturating_mul(page);
                 if max_bytes > limit_bytes {
                     out.push(Violation::MemoryMaxTooLarge { max_bytes, limit_bytes });
                 }
@@ -487,14 +513,18 @@ pub fn check_package(bytes: &[u8], host: &HostPolicy) -> PolicyReport {
     };
     match legacy_of(&facts) {
         Ok(Some(abi)) => {
-            // A legacy prefix changes the export names the shim wants, not the resource caps.
-            // The size, memory count, table and function caps still apply. Imports are refused by the
-            // shim itself. A start function runs under the shim's fuel and wall clock.
+            // A legacy prefix changes the export names the shim wants, not the resource caps or the
+            // feature allow list. The size, memory count, table, function and feature rules still apply.
+            // Imports are refused by the shim itself. A start function runs under the shim's fuel and
+            // wall clock.
             report.legacy = Some(abi);
             if bytes.len() > MAX_PACKAGE_BYTES {
                 report.violations.push(Violation::PackageTooLarge { bytes: bytes.len() });
             }
             check_resource_caps(&facts, true, &mut report.violations);
+            // The feature allow list keeps the answer the same on every engine. A legacy module has no
+            // manifest to ask for `simd128`, so it gets the base set.
+            check_features(bytes, allowed_features(None, host), &mut report.violations);
             return report;
         }
         Ok(None) => {}
