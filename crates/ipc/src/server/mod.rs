@@ -38,8 +38,12 @@ pub trait ControlSink: Send + Sync {
 /// `true`, `false`, or the string `"requested"`. It does not rewrite the value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Activation {
+    /// The window has focus. JSON `true`.
     Yes,
+    /// Focus was not taken. The app asked for user attention instead. JSON `false`.
     No,
+    /// The app asked the OS to focus the window. The OS decides later and
+    /// nobody confirmed it. JSON `"requested"`.
     Requested,
 }
 

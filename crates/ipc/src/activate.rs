@@ -7,13 +7,22 @@
 //!
 //! | Platform | Sender | Receiver |
 //! |---|---|---|
-//! | Linux | mint a token from the focused window | set the pending token, then `Focus` |
+//! | Linux | mint a token from the focused window | apply the token if the backend can, then `Focus`; else ask for attention |
 //! | Windows | none | `Focus` (winit's foreground path) |
 //! | macOS | yield activation to the target bundle | `activate`, then `Focus` |
 //!
-//! Wayland cannot confirm an activation synchronously, so the answer there is
-//! [`Activated::Requested`]. When the platform refuses, the receiver asks for
-//! user attention and answers [`Activated::No`].
+//! The three answers mean:
+//!
+//! - [`Activated::Yes`]: the window has focus.
+//! - [`Activated::Requested`]: the app asked the OS to focus the window. The OS
+//!   decides later. Nobody confirmed it.
+//! - [`Activated::No`]: focus was not taken. The app asked for user attention
+//!   instead (taskbar flash, dock bounce).
+//!
+//! On Linux, a token only counts when the backend can apply it to an existing
+//! window ([`ActivationBackend::can_apply_token`]). Stock winit 0.30 cannot on
+//! Wayland: the app can mint a token but has no call to use one. In that case
+//! the answer is [`Activated::No`], never `Requested`.
 
 use crate::server::Activation;
 
@@ -36,9 +45,10 @@ pub enum FocusResult {
 /// Every method is called on the thread that owns the UI. The adapter maps
 /// them to winit and egui:
 ///
-/// - `mint_token`: `request_token_for_focused_window`, then the token from
-///   `WindowEvent::ActivationTokenDone`. Return the last token or `None`.
-/// - `set_pending_token`: `set_activation_token_env(ActivationToken::from_raw(..))`.
+/// - `mint_token`: egui's `Frame::request_activation_token` on an earlier
+///   frame, then `Frame::take_activation_token`. Return the token or `None`.
+/// - `can_apply_token`: true only if the winit in use can activate an existing window with a token.
+/// - `set_pending_token`: the winit call that stores the token for that window.
 /// - `focus`: `ViewportCommand::Focus`.
 /// - `request_user_attention`: `ViewportCommand::RequestUserAttention`.
 /// - `yield_activation_to` and `activate_application`: the `objc2-app-kit`
@@ -46,7 +56,15 @@ pub enum FocusResult {
 pub trait ActivationBackend {
     /// A fresh activation token, or `None` when the platform cannot mint one.
     fn mint_token(&self) -> Option<String>;
-    /// Store `token` so the next `focus` call applies it.
+    /// True when `set_pending_token` followed by `focus` really hands the token
+    /// to the compositor for an existing window. The default is false: no
+    /// default success. An adapter returns true only when its winit has a call
+    /// that applies a token to a live window.
+    fn can_apply_token(&self) -> bool {
+        false
+    }
+    /// Store `token` so the next `focus` call applies it. Called only when
+    /// `can_apply_token` is true.
     fn set_pending_token(&self, token: &str);
     /// Ask the window to take focus.
     fn focus(&self) -> FocusResult;
@@ -118,13 +136,17 @@ pub fn apply_activation_on(platform: Platform, backend: &dyn ActivationBackend, 
     match platform {
         Platform::Linux => {
             let token = token.filter(|text| !text.is_empty());
-            if let Some(token) = token {
-                backend.set_pending_token(token);
-            }
+            let applied = match token {
+                Some(token) if backend.can_apply_token() => {
+                    backend.set_pending_token(token);
+                    true
+                }
+                _ => false,
+            };
             let result = backend.focus();
-            // Without a token Wayland ignores focus. Pending would claim success we cannot back.
-            let result = match (result, token) {
-                (FocusResult::Pending, None) => FocusResult::Refused,
+            // Pending means "the compositor may act". Without an applied token it will not.
+            let result = match (result, applied) {
+                (FocusResult::Pending, false) => FocusResult::Refused,
                 (other, _) => other,
             };
             settle(backend, result)
@@ -167,6 +189,7 @@ mod tests {
         focus: Option<FocusResult>,
         yield_ok: bool,
         activate_ok: bool,
+        can_apply: bool,
         calls: RefCell<Vec<String>>,
     }
 
@@ -183,6 +206,9 @@ mod tests {
         fn mint_token(&self) -> Option<String> {
             self.log("mint");
             self.minted.clone()
+        }
+        fn can_apply_token(&self) -> bool {
+            self.can_apply
         }
         fn set_pending_token(&self, token: &str) {
             self.log(format!("pending:{token}"));
@@ -206,10 +232,48 @@ mod tests {
 
     #[test]
     fn linux_sets_the_token_before_focus_and_reports_requested() {
-        let fake = Fake { focus: Some(FocusResult::Pending), ..Fake::default() };
+        let fake = Fake { focus: Some(FocusResult::Pending), can_apply: true, ..Fake::default() };
         let got = apply_activation_on(Platform::Linux, &fake, Some("tok"));
         assert_eq!(got, Activated::Requested);
         assert_eq!(fake.calls(), ["pending:tok", "focus"]);
+    }
+
+    #[test]
+    fn linux_token_the_backend_cannot_apply_is_not_a_request() {
+        // Stock winit on Wayland: a token can be minted but not applied to an existing window.
+        let fake = Fake { focus: Some(FocusResult::Pending), can_apply: false, ..Fake::default() };
+        let got = apply_activation_on(Platform::Linux, &fake, Some("tok"));
+        assert_eq!(got, Activated::No);
+        assert_eq!(fake.calls(), ["focus", "attention"]);
+    }
+
+    #[test]
+    fn linux_token_the_backend_cannot_apply_still_reports_real_focus() {
+        let fake = Fake { focus: Some(FocusResult::Focused), can_apply: false, ..Fake::default() };
+        assert_eq!(apply_activation_on(Platform::Linux, &fake, Some("tok")), Activated::Yes);
+        assert_eq!(fake.calls(), ["focus"]);
+    }
+
+    #[test]
+    fn can_apply_token_defaults_to_false() {
+        struct Bare;
+        impl ActivationBackend for Bare {
+            fn mint_token(&self) -> Option<String> {
+                None
+            }
+            fn set_pending_token(&self, _: &str) {}
+            fn focus(&self) -> FocusResult {
+                FocusResult::Pending
+            }
+            fn request_user_attention(&self) {}
+            fn yield_activation_to(&self, _: &str) -> bool {
+                true
+            }
+            fn activate_application(&self) -> bool {
+                true
+            }
+        }
+        assert!(!Bare.can_apply_token());
     }
 
     #[test]
