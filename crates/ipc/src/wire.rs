@@ -206,12 +206,25 @@ pub fn read_cfrq(reader: &mut impl Read) -> Result<Value, LinkError> {
     read_magic(reader, CFRQ)
 }
 
-pub fn write_cfrm(writer: &mut impl Write, header: &Value, payload: &[u8]) -> Result<(), LinkError> {
+/// The checks that [`write_cfrm`] makes before it writes a byte: the header is an object that fits
+/// `BULK_HEADER_MAX`, and the payload fits `FRAME_PAYLOAD_MAX`. A record that fails them has put
+/// nothing on the wire, so a caller may still send a different record. An error from `write_cfrm`
+/// after this check passed came from the stream and may have left part of a record on it.
+pub fn check_cfrm(header: &Value, payload: &[u8]) -> Result<(), LinkError> {
+    cfrm_parts(header, payload).map(|_| ())
+}
+
+fn cfrm_parts(header: &Value, payload: &[u8]) -> Result<(Vec<u8>, u64), LinkError> {
     let header_bytes = header_bytes(header)?;
     let payload_len = u64::try_from(payload.len()).map_err(|_| LinkError::TooLarge)?;
     if payload_len > FRAME_PAYLOAD_MAX {
         return Err(LinkError::TooLarge);
     }
+    Ok((header_bytes, payload_len))
+}
+
+pub fn write_cfrm(writer: &mut impl Write, header: &Value, payload: &[u8]) -> Result<(), LinkError> {
+    let (header_bytes, payload_len) = cfrm_parts(header, payload)?;
     writer.write_all(CFRM)?;
     writer.write_all(&u32_len(&header_bytes)?.to_le_bytes())?;
     writer.write_all(&payload_len.to_le_bytes())?;
