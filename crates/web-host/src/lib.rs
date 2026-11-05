@@ -28,7 +28,7 @@
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 
 #[cfg(target_arch = "wasm32")]
@@ -135,6 +135,20 @@ pub fn file_name(raw: Option<&str>, fallback: &str) -> String {
     trimmed.chars().take(MAX_NAME_CHARS).collect()
 }
 
+/// Remember `next` before the send. A page host can, while that send is still
+/// running, report a different state; that later report must win. A failed send
+/// restores the previous state only when nothing else recorded one.
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+pub(crate) fn note_dirty(dirty: &Cell<Option<bool>>, next: bool, post: impl FnOnce() -> bool) {
+    if dirty.get() == Some(next) {
+        return;
+    }
+    let previous = dirty.replace(Some(next));
+    if !post() && dirty.get() == Some(next) {
+        dirty.set(previous);
+    }
+}
+
 /// Hands the host's messages to the app's handler one at a time. A page host dispatches its events
 /// synchronously, so it can answer while the handler runs (a `saved` for the `save` the handler
 /// just posted): that message waits here and is handled as soon as the running call returns, never
@@ -205,6 +219,29 @@ mod tests {
         assert_eq!(file_name(Some(".."), "x"), "x");
         assert_eq!(file_name(None, "Document.pdf"), "Document.pdf");
         assert_eq!(file_name(Some(&"é".repeat(300)), "x").chars().count(), MAX_NAME_CHARS);
+    }
+
+    #[test]
+    fn a_dirty_report_during_the_send_wins_and_a_failed_send_is_forgotten() {
+        let dirty = Cell::new(Some(false));
+        note_dirty(&dirty, true, || {
+            note_dirty(&dirty, false, || true);
+            true
+        });
+        assert_eq!(dirty.get(), Some(false));
+
+        let dirty = Cell::new(None);
+        note_dirty(&dirty, true, || false);
+        assert_eq!(dirty.get(), None);
+
+        let dirty = Cell::new(Some(true));
+        let mut sent = false;
+        note_dirty(&dirty, true, || {
+            sent = true;
+            true
+        });
+        assert!(!sent);
+        assert_eq!(dirty.get(), Some(true));
     }
 
     #[test]

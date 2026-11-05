@@ -140,10 +140,10 @@ impl Host {
     }
 
     /// Unsaved changes appeared or went away. Repeats of the last state reported are not sent.
+    /// The new state is recorded before the send: a page host can report another state while the
+    /// event is still dispatching, and that later report wins. A failed send is forgotten.
     pub fn post_dirty(&self, dirty: bool) {
-        if self.dirty.get() != Some(dirty) && self.post(Outgoing::Dirty, &[("dirty", dirty.into())], None).is_ok() {
-            self.dirty.set(Some(dirty));
-        }
+        crate::note_dirty(&self.dirty, dirty, || self.post(Outgoing::Dirty, &[("dirty", dirty.into())], None).is_ok());
     }
 
     /// Hand the host a file the app would otherwise download: Save, Save As, Export. With an
