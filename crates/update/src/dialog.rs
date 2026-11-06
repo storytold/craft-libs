@@ -35,6 +35,13 @@ pub struct StartupPrompt {
     /// [`StartupPrompt::set_note`] and [`StartupPrompt::set_message`] keep only one.
     pub status_note: Option<Note>,
     pub is_installing: bool,
+    /// The app holds unsaved work it can save: the update button reads Save and Update and asks
+    /// for that save first.
+    pub offer_save: bool,
+    /// The app is saving the work; the update starts once it is done.
+    pub is_saving: bool,
+    /// The user chose Save and Update and the app has not taken the request yet.
+    pub save_wanted: bool,
     /// Puts the card's words in the interface language ([`crate::translate`]); English by default.
     pub translate: Translate,
 }
@@ -52,6 +59,9 @@ impl StartupPrompt {
             status_message: None,
             status_note: None,
             is_installing: false,
+            offer_save: false,
+            is_saving: false,
+            save_wanted: false,
             translate: english,
         }
     }
@@ -140,10 +150,12 @@ impl StartupPrompt {
                             ui.add_space(4.0);
                         }
 
-                        if self.is_installing {
+                        if self.is_installing || self.is_saving {
+                            // Plain dots: the save's words add no new non-ASCII glyph to the card (#343).
+                            let status = if self.is_saving { t("Saving your work...", &[]) } else { t("Downloading and installing update…", &[]) };
                             ui.horizontal(|ui| {
                                 ui.spinner();
-                                ui.label(RichText::new(t("Downloading and installing update…", &[])).size(12.0).color(text_primary));
+                                ui.label(RichText::new(status).size(12.0).color(text_primary));
                             });
                         } else {
                             let desc = t(
@@ -182,6 +194,11 @@ impl StartupPrompt {
                             }
 
                             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                // Nothing in the button's place: the second click of a double click
+                                // must not dismiss the update. Esc and the close button still do.
+                                if self.is_saving {
+                                    return;
+                                }
                                 if self.is_installing {
                                     let dismiss_btn = egui::Button::new(RichText::new(button(t, "Dismiss")).size(10.5).monospace().color(text_muted))
                                         .corner_radius(egui::CornerRadius::ZERO)
@@ -191,12 +208,12 @@ impl StartupPrompt {
                                     }
                                 } else {
                                     if self.is_self_updating {
-                                        let update_btn = egui::Button::new(
-                                            RichText::new(button(t, "Update and Restart")).size(10.5).strong().monospace().color(on_fill),
-                                        )
-                                        .fill(fill)
-                                        .corner_radius(egui::CornerRadius::ZERO)
-                                        .min_size(Vec2::new(140.0, 26.0));
+                                        let label = if self.offer_save { "Save and Update" } else { "Update and Restart" };
+                                        let update_btn =
+                                            egui::Button::new(RichText::new(button(t, label)).size(10.5).strong().monospace().color(on_fill))
+                                                .fill(fill)
+                                                .corner_radius(egui::CornerRadius::ZERO)
+                                                .min_size(Vec2::new(140.0, 26.0));
                                         if ui.add(update_btn).clicked() {
                                             response = StartupPromptResponse::UpdateAndRestart;
                                         }
@@ -541,7 +558,7 @@ fn decode_icon(png: &[u8], max_side: u32) -> Option<egui::ColorImage> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::suite::PHOTOCRAFT;
     use egui::{Context, Event, FullOutput, Key, Modifiers, RawInput, Rect};
@@ -573,6 +590,9 @@ mod tests {
             status_message: None,
             status_note: None,
             is_installing: false,
+            offer_save: false,
+            is_saving: false,
+            save_wanted: false,
             translate: english,
         }
     }
@@ -861,7 +881,7 @@ mod tests {
     }
 
     /// Where the frame painted `text` (inside its galley, so a pointer there is over it).
-    fn text_pos(output: &FullOutput, text: &str) -> Option<egui::Pos2> {
+    pub(crate) fn text_pos(output: &FullOutput, text: &str) -> Option<egui::Pos2> {
         fn find(shape: &egui::Shape, text: &str) -> Option<egui::Pos2> {
             match shape {
                 egui::Shape::Vec(shapes) => shapes.iter().find_map(|s| find(s, text)),
@@ -961,6 +981,86 @@ mod tests {
         assert!(!painted.contains("DOWNLOAD"), "self-updating copy must not offer the manual download button: {painted:?}");
         let card = rect_fills(&output).iter().any(|(_, fill)| *fill == DARK_CARD);
         assert!(card, "dialog card missing");
+    }
+
+    /// Work the app can save: the main button says so, and a click answers as the update button does.
+    #[test]
+    fn a_prompt_with_work_to_save_offers_save_and_update() {
+        let ctx = dark_context();
+        let mut prompt = StartupPrompt { offer_save: true, ..prompt_for(true) };
+        frame(&ctx, &mut prompt, Vec::new());
+        let (_, output) = frame(&ctx, &mut prompt, Vec::new());
+        let painted = painted_text(&output);
+        assert!(painted.contains("SAVE AND UPDATE") && painted.contains("LATER"), "{painted}");
+        assert!(!painted.contains("UPDATE AND RESTART"), "{painted}");
+        let at = text_pos(&output, "SAVE AND UPDATE").expect("SAVE AND UPDATE is painted");
+        let button = |pressed| Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+        frame(&ctx, &mut prompt, vec![Event::PointerMoved(at)]);
+        frame(&ctx, &mut prompt, vec![button(true)]);
+        let (response, _) = frame(&ctx, &mut prompt, vec![button(false)]);
+        assert_eq!(response, StartupPromptResponse::UpdateAndRestart);
+    }
+
+    /// A copy that can't update itself keeps its Download button, whatever the app can save.
+    #[test]
+    fn a_download_prompt_never_offers_save_and_update() {
+        let ctx = dark_context();
+        let mut prompt = StartupPrompt { offer_save: true, ..prompt_for(false) };
+        frame(&ctx, &mut prompt, Vec::new());
+        let (_, output) = frame(&ctx, &mut prompt, Vec::new());
+        let painted = painted_text(&output);
+        assert!(painted.contains("DOWNLOAD") && !painted.contains("SAVE AND UPDATE"), "{painted}");
+    }
+
+    /// While the app saves, the card says that and stays ASCII (#343). No button takes the place
+    /// of Save and Update, where the second click of a double click would land; Esc and the
+    /// close button still dismiss.
+    #[test]
+    fn a_saving_prompt_says_so_and_offers_no_second_click() {
+        let ctx = dark_context();
+        let mut prompt = StartupPrompt { is_saving: true, offer_save: true, ..prompt_for(true) };
+        frame(&ctx, &mut prompt, Vec::new());
+        let (_, output) = frame(&ctx, &mut prompt, Vec::new());
+        let painted = painted_text(&output);
+        assert!(painted.contains("Saving your work..."), "{painted}");
+        for absent in ["Downloading", "SAVE AND UPDATE", "DISMISS", "LATER"] {
+            assert!(!painted.contains(absent), "{absent} in {painted}");
+        }
+        assert!(painted.is_ascii(), "the prompt paints a non-ASCII character: {painted:?}");
+    }
+
+    /// The new button and status words are the app's to translate.
+    #[test]
+    fn the_save_button_and_status_go_through_the_translator() {
+        for (offer_save, is_saving) in [(true, false), (false, true)] {
+            let ctx = dark_context();
+            let mut prompt = StartupPrompt { offer_save, is_saving, ..prompt_for(true) }.with_translator(pseudo);
+            frame(&ctx, &mut prompt, Vec::new());
+            let (_, output) = frame(&ctx, &mut prompt, Vec::new());
+            let painted = painted_text(&output);
+            assert_all_translated(&painted, &["P", "PhotoCraft"]);
+            assert!(!offer_save || painted.contains("[ | SAVE AND UPDATE]"), "{painted}");
+            assert!(!is_saving || painted.contains("[ | Saving your work...]"), "{painted}");
+        }
+    }
+
+    /// The second click of a double click lands where Save and Update was: it must not dismiss.
+    #[test]
+    fn a_second_click_during_the_save_leaves_the_prompt_open() {
+        let ctx = dark_context();
+        let mut prompt = StartupPrompt { offer_save: true, ..prompt_for(true) };
+        frame(&ctx, &mut prompt, Vec::new());
+        let (_, output) = frame(&ctx, &mut prompt, Vec::new());
+        // Right of the label's centre, where a right-aligned Dismiss would sit.
+        let at = text_pos(&output, "SAVE AND UPDATE").expect("SAVE AND UPDATE is painted") + egui::vec2(40.0, 0.0);
+        prompt.is_saving = true;
+        let button = |pressed| Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+        frame(&ctx, &mut prompt, Vec::new());
+        frame(&ctx, &mut prompt, vec![Event::PointerMoved(at)]);
+        frame(&ctx, &mut prompt, vec![button(true)]);
+        let (response, _) = frame(&ctx, &mut prompt, vec![button(false)]);
+        assert_eq!(response, StartupPromptResponse::Pending);
+        assert!(prompt.open);
     }
 
     #[test]
