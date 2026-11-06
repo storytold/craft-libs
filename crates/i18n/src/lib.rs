@@ -8,11 +8,13 @@
 //! [`Region`] does ([`I18n::format`]): grouped (`1.234`, `12,34,567`) and in the region's digits
 //! (`١٬٢٣٤`). Text that goes into documents or file names should use [`I18n::trn_plain`], which
 //! writes `0`–`9` without grouping.
+#![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 mod catalog;
 #[cfg(feature = "collate")]
 mod collate;
+pub mod encoding;
 mod fold;
 mod format;
 mod number;

@@ -1,2 +1,5 @@
 # Copies of the vendored krilla source diff, one per patch (see vendor/krilla/README.craft.md).
 vendor/krilla/patches/*.patch linguist-generated=true
+
+# Binary test fixtures for legacy character encoding (preserve exact bytes, do not convert line endings)
+crates/i18n/src/encoding/fixtures/* -text
