@@ -102,6 +102,8 @@ pub struct Joined {
     pub docs: BTreeMap<String, String>,
     /// Fragment paths the join consumed (the fold deletes them).
     pub consumed: Vec<String>,
+    /// What is wrong but doesn't stop the join: items that share a number.
+    pub warnings: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -327,11 +329,7 @@ fn check_rows(lines: &[&str], (header, first, end): (usize, usize, usize), name:
     for (n, line) in lines.get(first..end).unwrap_or_default().iter().enumerate() {
         let got = row_cells(line).len();
         if got != width {
-            return Err(format!(
-                "{name} row {}: {got} cells, {width} columns: {:?}; a table runs to the first blank line",
-                n + 1,
-                line.trim_end()
-            ));
+            return Err(format!("{name} row {}: {got} cells, {width} columns: {:?}; a table runs to the first blank line", n + 1, line.trim_end()));
         }
     }
     Ok(())
@@ -552,7 +550,10 @@ fn item<'a>(f: &'a File, table: &Table, allowed: &[&str]) -> Result<Item<'a>, St
     Ok(Item { path: &f.path, number, rank, closed, time: f.time, fields })
 }
 
-fn items<'a>(files: &'a [File], table: &Table, errors: &mut Vec<String>) -> Vec<Item<'a>> {
+/// A table's items, in table order. Two items with the same number (two pull requests that took the
+/// same next number, both merged) are a warning, not an error: an error would stop every fold and
+/// fail every pull request's check until someone renumbers one.
+fn items<'a>(files: &'a [File], table: &Table, errors: &mut Vec<String>, warnings: &mut Vec<String>) -> Vec<Item<'a>> {
     let found = in_dir(files, table.dir);
     if found.len() > MAX_FILES {
         errors.push(format!("{}: more than {MAX_FILES} items", table.dir));
@@ -564,17 +565,20 @@ fn items<'a>(files: &'a [File], table: &Table, errors: &mut Vec<String>) -> Vec<
         match item(f, table, &allowed) {
             Ok(item) => {
                 if let Some(other) = out.iter().find(|i| i.number == item.number) {
-                    errors.push(format!("{} and {} have the same number {}; take the next free one", other.path, item.path, item.number));
-                } else {
-                    out.push(item);
+                    warnings.push(same_number(other.path, item.path, item.number));
                 }
+                out.push(item);
             }
             Err(e) => errors.push(e),
         }
     }
-    // Ranked first, by rank; then unranked, by number.
-    out.sort_by_key(|i| (i.rank.is_none(), i.rank, i.number));
+    // Ranked first, by rank; then unranked, by number; a shared number by slug (the path).
+    out.sort_by_key(|i| (i.rank.is_none(), i.rank, i.number, i.path));
     out
+}
+
+fn same_number(a: &str, b: &str, n: u32) -> String {
+    format!("{a} and {b} have the same number {n}; give one the next free number")
 }
 
 /// `\` before a `|` is doubled, then the `|` escaped, so [`cells`] reads the value back.
@@ -738,7 +742,7 @@ fn join_doc(cfg: &Config, files: &[File], file: &File, today: NaiveDate, out: &m
         }
     }
     for table in cfg.tables.iter().filter(|t| t.doc == doc) {
-        let found = items(files, table, errors);
+        let found = items(files, table, errors, &mut out.warnings);
         match place(&lines, table) {
             Ok((first, end)) => {
                 let (rows, time) = table_rows(table, &found, lines.get(first..end).unwrap_or_default());
@@ -787,6 +791,12 @@ fn docs_of(cfg: &Config) -> BTreeSet<&'static str> {
 /// Every configured doc with its fragments and items joined in. Errors list every bad file. No
 /// status date is written after `today`.
 pub fn join(cfg: &Config, files: &[File], today: NaiveDate) -> Result<Joined, Vec<String>> {
+    let (out, errors) = join_all(cfg, files, today);
+    if errors.is_empty() { Ok(out) } else { Err(errors) }
+}
+
+/// [`join`] as far as it gets, and its errors: bad files are left out.
+fn join_all(cfg: &Config, files: &[File], today: NaiveDate) -> (Joined, Vec<String>) {
     let mut errors = Vec::new();
     let by_path: BTreeMap<&str, &File> = files.iter().map(|f| (f.path.as_str(), f)).collect();
     let mut out = Joined::default();
@@ -796,7 +806,7 @@ pub fn join(cfg: &Config, files: &[File], today: NaiveDate) -> Result<Joined, Ve
             None => errors.push(format!("{doc}: not found")),
         }
     }
-    if errors.is_empty() { Ok(out) } else { Err(errors) }
+    (out, errors)
 }
 
 const HAND: &str = "was edited by hand. Only the fold writes it: add a fragment or edit the item file instead";
@@ -871,8 +881,7 @@ fn check_log(doc: &str, base: &[&str], head: &[&str], log: &Log, consumed: &[Fra
     let (pre, post) = b.split_at(at);
     let blocks: Vec<&[&str]> = consumed.iter().map(|f| f.lines.as_slice()).collect();
     let fits = h.len() >= pre.len() + post.len() && h.starts_with(pre) && h.ends_with(post) && {
-        let mid: Vec<&str> =
-            h.get(pre.len()..h.len() - post.len()).unwrap_or_default().iter().copied().filter(|l| !l.trim().is_empty()).collect();
+        let mid: Vec<&str> = h.get(pre.len()..h.len() - post.len()).unwrap_or_default().iter().copied().filter(|l| !l.trim().is_empty()).collect();
         is_blocks(&mid, &blocks)
     };
     if fits {
@@ -925,7 +934,7 @@ fn tables_folded(cfg: &Config, doc: &str, base_text: &str, head: &[File], today:
     let in_logs = |f: &File| cfg.logs.iter().any(|l| f.path.starts_with(&format!("{}/", l.dir)));
     let mut from: Vec<File> = head.iter().filter(|f| !in_logs(f) && f.path != doc).cloned().collect();
     from.push(File { path: doc.to_string(), text: base_text.to_string(), time: 0 });
-    join(&Config { logs: &[], tables: cfg.tables }, &from, today).ok().and_then(|j| j.docs.get(doc).cloned())
+    join_all(&Config { logs: &[], tables: cfg.tables }, &from, today).0.docs.get(doc).cloned()
 }
 
 fn rows_of(lines: &[&str], table: &Table) -> Option<Vec<String>> {
@@ -982,13 +991,57 @@ fn check_doc(cfg: &Config, base: &[File], head: &[File], doc: &str, today: Naive
     }
 }
 
-/// What CI runs on a pull request: `base` is the merge base's files, `head` the pull request's.
-/// Fails on any bad fragment or item; on a deleted item, folder README or unfolded fragment; and
-/// on a joined region the pull request changed unless it now reads as the fold would write it
-/// (the fold's own pull request). `today` bounds the status dates a pull request may write.
+/// What [`check_report`] found.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Report {
+    /// What fails the pull request.
+    pub errors: Vec<String>,
+    /// What was already wrong on the base, which the pull request didn't cause.
+    pub warnings: Vec<String>,
+}
+
+/// [`check_report`]'s errors.
 pub fn check(cfg: &Config, base: &[File], head: &[File], today: NaiveDate) -> Vec<String> {
-    if let Err(e) = join(cfg, head, today) {
-        return e;
+    check_report(cfg, base, head, today).errors
+}
+
+/// The item numbers each of a table's item files takes, by number.
+fn numbers<'a>(files: &'a [File], table: &Table) -> BTreeMap<u32, Vec<&'a str>> {
+    let mut out: BTreeMap<u32, Vec<&str>> = BTreeMap::new();
+    for f in in_dir(files, table.dir) {
+        let stem = file_name(&f.path).split('-').next().unwrap_or_default();
+        if let Some(n) = parse_number(stem) {
+            out.entry(n).or_default().push(&f.path);
+        }
+    }
+    out
+}
+
+/// What CI runs on a pull request: `base` is the merge base's files, `head` the pull request's.
+/// Fails on any bad fragment or item the pull request added or changed (what was already wrong on
+/// the base is a warning); on a number it gave a second item; on a deleted item, folder README or
+/// unfolded fragment; and on a joined region the pull request changed unless it now reads as the
+/// fold would write it (the fold's own pull request). `today` bounds the status dates a pull
+/// request may write.
+pub fn check_report(cfg: &Config, base: &[File], head: &[File], today: NaiveDate) -> Report {
+    let (_, head_errors) = join_all(cfg, head, today);
+    let (_, base_errors) = join_all(cfg, base, today);
+    // An error the base has too, about no file the pull request added or changed, isn't its own.
+    let changed: Vec<&str> = head.iter().filter(|h| !base.iter().any(|b| b.path == h.path && b.text == h.text)).map(|h| h.path.as_str()).collect();
+    let (old, new): (Vec<String>, Vec<String>) =
+        head_errors.into_iter().partition(|e| base_errors.contains(e) && !changed.iter().any(|p| e.contains(p)));
+    let mut report = Report { errors: new, warnings: old };
+    for table in cfg.tables {
+        let before = numbers(base, table);
+        for (n, paths) in numbers(head, table) {
+            let [a, b, ..] = paths.as_slice() else { continue };
+            // Only a number the pull request gave one more item fails it.
+            let to = if paths.len() > before.get(&n).map_or(0, Vec::len) { &mut report.errors } else { &mut report.warnings };
+            to.push(same_number(a, b, n));
+        }
+    }
+    if !report.errors.is_empty() {
+        return report;
     }
     // Commit times are not used here: CI's checkout is shallow, so they aren't known.
     let mut errors = Vec::new();
@@ -1015,7 +1068,8 @@ pub fn check(cfg: &Config, base: &[File], head: &[File], today: NaiveDate) -> Ve
     for doc in docs_of(cfg) {
         check_doc(cfg, base, head, doc, today, &mut errors);
     }
-    errors
+    report.errors = errors;
+    report
 }
 
 fn slug(text: &str) -> String {
@@ -1197,7 +1251,7 @@ fn migrate_table(table: &Table, files: &[File], old: &[&str], pr: &[&str], out: 
     };
     let (before, after) = (rows(old), rows(pr));
     let mut errs = Vec::new();
-    let current = items(files, table, &mut errs);
+    let current = items(files, table, &mut errs, &mut Vec::new());
     let current_keys: Vec<Option<String>> = current.iter().map(|i| row_key(table, &cells(&render(table, i)).unwrap_or_default())).collect();
     let mut next = current.iter().map(|i| i.number).max().unwrap_or(0).checked_add(1);
     for row in after.iter().filter(|r| !before.contains(r)) {

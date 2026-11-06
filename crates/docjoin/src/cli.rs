@@ -13,7 +13,7 @@
 //!   merge base, `<pr>` its head; the new fragment is `<name>.md`. Run on the PR's branch, merged
 //!   with the current `main`.
 
-use crate::{Config, File, MAX_DOC, MAX_FILE, MAX_FILES, NaiveDate, Table, check, in_dir, items_from_tables, join, migrate};
+use crate::{Config, File, MAX_DOC, MAX_FILE, MAX_FILES, NaiveDate, Table, check_report, in_dir, items_from_tables, join, migrate};
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::process::Command;
@@ -152,8 +152,15 @@ fn write_all(root: &Path, files: &[File]) -> Result<(), String> {
     Ok(())
 }
 
+fn warn(warnings: &[String]) {
+    for w in warnings {
+        eprintln!("warning: {w}");
+    }
+}
+
 fn fold(root: &Path, cfg: &Config, files: &[File]) -> Result<usize, String> {
     let joined = join(cfg, files, today()).map_err(|e| e.join("\n"))?;
+    warn(&joined.warnings);
     let changed: Vec<File> = joined
         .docs
         .iter()
@@ -174,6 +181,7 @@ pub fn run(root: &Path, cfg: &Config, args: &[String]) -> Result<(), String> {
         [] => {
             let files = working(root, cfg)?;
             let joined = join(cfg, &files, today()).map_err(|e| e.join("\n"))?;
+            warn(&joined.warnings);
             for (doc, text) in &joined.docs {
                 println!("==> {doc} <==");
                 print!("{text}");
@@ -204,7 +212,9 @@ pub fn run(root: &Path, cfg: &Config, args: &[String]) -> Result<(), String> {
                 _ => return Err("usage: progress --check [--base <rev>]".into()),
             };
             let mb = base;
-            let errors = check(cfg, &at_rev(root, cfg, mb.trim())?, &working(root, cfg)?, today());
+            let report = check_report(cfg, &at_rev(root, cfg, mb.trim())?, &working(root, cfg)?, today());
+            warn(&report.warnings);
+            let errors = report.errors;
             if errors.is_empty() {
                 eprintln!("progress: fragments, items and joined regions are fine");
                 Ok(())

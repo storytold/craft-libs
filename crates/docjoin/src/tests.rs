@@ -145,7 +145,6 @@ fn bad_files_are_all_reported() {
     files.push(f("docs/progress.d/Bad Name.md", "- x", 0));
     files.push(f("docs/gaps.d/9-typo.md", "---\nstaus: open\ngap: x\n---\n", 0));
     files.push(f("docs/gaps.d/8-nogap.md", "---\nrank: 1\n---\nbody", 0));
-    files.push(f("docs/gaps.d/1-dupe.md", "---\ngap: dupe\n---\n", 0));
     files.push(f("docs/progress.d/3-x.md", "---\nkind: minor\n- no closing fence", 0));
     let errors = join(&CFG, &files).unwrap_err();
     for want in [
@@ -154,7 +153,6 @@ fn bad_files_are_all_reported() {
         "Bad Name.md: a fragment is",
         "unknown front matter key `staus`",
         "has no `gap:`",
-        "the same number 1",
         "isn't `key: value`",
     ] {
         assert!(errors.iter().any(|e| e.contains(want)), "missing {want:?} in {errors:#?}");
@@ -737,14 +735,54 @@ fn a_hand_fold_keeps_each_entry_whole() {
     base.push(f("docs/progress.d/13-b.md", "- 2026-11-06: b\n  b-more\n", NOV6));
     let good = fold_of(&CFG, &base);
     let mut head = good.clone();
-    set(&mut head, "ROADMAP.md", |t| t.replace("- 2026-11-06: b\n  b-more\n- 2026-11-05: a\n  a-more\n", "- 2026-11-06: b\n  a-more\n- 2026-11-05: a\n  b-more\n"));
+    set(&mut head, "ROADMAP.md", |t| {
+        t.replace("- 2026-11-06: b\n  b-more\n- 2026-11-05: a\n  a-more\n", "- 2026-11-06: b\n  a-more\n- 2026-11-05: a\n  b-more\n")
+    });
     assert_ne!(head, good);
     has(&check(&CFG, &zero(&base), &zero(&head)), "`## Progress log` was edited by hand");
     // The entries swapped, each whole, is fine.
     let mut swapped = good.clone();
-    set(&mut swapped, "ROADMAP.md", |t| t.replace("- 2026-11-06: b\n  b-more\n- 2026-11-05: a\n  a-more\n", "- 2026-11-05: a\n  a-more\n- 2026-11-06: b\n  b-more\n"));
+    set(&mut swapped, "ROADMAP.md", |t| {
+        t.replace("- 2026-11-06: b\n  b-more\n- 2026-11-05: a\n  a-more\n", "- 2026-11-05: a\n  a-more\n- 2026-11-06: b\n  b-more\n")
+    });
     assert_eq!(check(&CFG, &zero(&base), &zero(&swapped)), Vec::<String>::new());
     // One entry that starts like another still matches.
     assert!(is_blocks(&["- x", "- x", "y"], &[&["- x"], &["- x", "y"]]));
     assert!(!is_blocks(&["- x", "y", "- x", "z"], &[&["- x"], &["- x", "y", "z"]]));
+}
+
+#[test]
+fn a_number_two_merged_prs_both_took_doesnt_stop_the_fold() {
+    let base = docs();
+    let mut a = base.clone();
+    a.push(f("docs/gaps.d/4-alpha.md", "---\ngap: Alpha\n---\nea", 0));
+    let mut main = a.clone();
+    main.push(f("docs/gaps.d/4-beta.md", "---\ngap: Beta\n---\neb", 0));
+    // The pull request that adds the second 4 fails.
+    has(&check(&CFG, &a, &main), "docs/gaps.d/4-alpha.md and docs/gaps.d/4-beta.md have the same number 4");
+    // Once both are on main, the fold goes on, by slug, and warns.
+    let j = join(&CFG, &main).unwrap();
+    has(&j.warnings, "have the same number 4");
+    assert!(j.docs.get("docs/gaps.md").unwrap().contains("| 4 | Alpha | ea |\n| 4 | Beta | eb |\n"), "{:?}", j.docs);
+    // And an unrelated pull request passes, with the warning.
+    let mut unrelated = main.clone();
+    unrelated.push(f("docs/progress.d/50-x.md", "- 2026-11-07: x\n", 0));
+    let r = check_report(&CFG, &main, &unrelated, today());
+    assert_eq!(r.errors, Vec::<String>::new());
+    has(&r.warnings, "have the same number 4");
+}
+
+#[test]
+fn what_was_already_broken_on_the_base_is_a_warning() {
+    let mut base = docs();
+    base.push(f("docs/gaps.d/9-typo.md", "---\nstaus: open\ngap: x\n---\n", 0));
+    let mut head = base.clone();
+    head.push(f("docs/progress.d/50-x.md", "- 2026-11-07: x\n", 0));
+    let r = check_report(&CFG, &base, &head, today());
+    assert_eq!(r.errors, Vec::<String>::new());
+    has(&r.warnings, "9-typo.md: unknown front matter key `staus`");
+    // Touching the broken file makes it the pull request's.
+    let mut touched = head.clone();
+    set(&mut touched, "docs/gaps.d/9-typo.md", |t| t.replace("gap: x", "gap: y"));
+    has(&check(&CFG, &base, &touched), "9-typo.md: unknown front matter key `staus`");
 }
