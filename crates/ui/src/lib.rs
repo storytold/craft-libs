@@ -5,6 +5,7 @@
 //! Applications own their assets, themes, layouts, commands and document semantics. Components
 //! accept focused style values and return egui responses; no application engine is required.
 
+pub mod anchor;
 pub mod buttons;
 pub mod capture;
 pub mod combo;
@@ -17,6 +18,7 @@ pub mod ime;
 pub mod layout;
 pub mod localized;
 pub mod panes;
+pub mod pick;
 pub mod printing;
 pub mod tabs;
 #[cfg(all(feature = "screen-testing", not(target_arch = "wasm32")))]
