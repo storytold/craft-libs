@@ -57,6 +57,7 @@ const MAX_NAME_BUDGET: usize = 1 << 18;
 
 /// A variation axis of the face, from its `fvar` table.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct AxisDetail {
     /// Four-character tag (`wght`, `GRAD`).
     pub tag: String,
@@ -72,6 +73,7 @@ pub struct AxisDetail {
 
 /// A named instance ("Bold Condensed"): a full set of axis coordinates.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct InstanceDetail {
     /// Cut at 256 characters, like every name (see [`FaceDetails::names_partial`]).
     pub name: String,
@@ -84,6 +86,7 @@ pub struct InstanceDetail {
 
 /// An OpenType layout feature the face has (in `GSUB` or `GPOS`).
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct FeatureDetail {
     pub tag: String,
     /// The font's UI name for a stylistic set or character variant (`ss01`–`ss20`,
@@ -106,6 +109,7 @@ pub struct FeatureDetail {
 /// A design axis of the face's style attributes (`STAT`), which may be one `fvar` lacks (Inter
 /// Variable's `ital`: its upright and italic are two files).
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct StatAxisDetail {
     pub tag: String,
     /// This face's value on the axis: its first single-axis value record (formats 1–3), if any.
@@ -114,6 +118,7 @@ pub struct StatAxisDetail {
 
 /// Everything [`read`] reads from one face.
 #[derive(Clone, Debug, Default, PartialEq)]
+#[non_exhaustive]
 pub struct FaceDetails {
     pub axes: Vec<AxisDetail>,
     pub instances: Vec<InstanceDetail>,
