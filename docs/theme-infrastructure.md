@@ -1,5 +1,9 @@
 # Shared theme infrastructure
 
+The layered UI shadow pilot is documented separately in [UI shadows](shadows.md). It adds
+explicit painting and optional recipes while retaining application-owned theme policy.
+The comparison and migration notes below describe the earlier widget-palette extraction.
+
 The first shared mechanism is `craft-ui::theme::WidgetPalette`: it applies colors to egui's five
 widget states, with a supplied foreground stroke and corner radius. VectorCraft, DesignCraft and
 LightCraft use the same operation. Their complete palettes, theme choices, fonts and preferences
