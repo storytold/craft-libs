@@ -710,6 +710,30 @@ fn right_to_left_mirrors_docks_their_edges_and_new_docks() {
     assert_eq!(d.rect("column-collapse", 5).left(), 0.0);
 }
 
+#[cfg(feature = "serde")]
+#[test]
+fn a_saved_layout_round_trips_byte_identical_across_directions_and_only_mirrors_on_screen() {
+    let layout = with_floating(docked(Side::Start, &[&[&[2], &[3]]]), &[(5, [100.0, 300.0, 150.0, 150.0])]);
+    // Persisted state carries logical sides and physical points only: saving under one
+    // direction and loading under the other is byte-identical, so no layout migration is
+    // needed when the language changes.
+    let saved = serde_json::to_string(&layout).unwrap();
+    let loaded: Layout<u32> = serde_json::from_str(&saved).unwrap();
+    assert_eq!(loaded, layout);
+    assert_eq!(serde_json::to_string(&loaded).unwrap(), saved);
+
+    // Rendered LTR the start dock's column bar is at the left window edge (collapse button
+    // outermost)…
+    let ltr = Driver::with(layout.clone(), TestContent::default(), false);
+    let bar = ltr.rect("column-bar", 2);
+    assert_eq!((bar.left(), bar.right()), (18.0, 240.0));
+
+    // …and the same bytes rendered RTL put it at the right edge.
+    let rtl = Driver::with(layout, TestContent::default(), true);
+    let bar = rtl.rect("column-bar", 2);
+    assert_eq!((bar.left(), bar.right()), (360.0, 600.0 - 18.0));
+}
+
 #[test]
 /// Dropping a column's first tab just past its own edge anchors it after the
 /// other column's panel; a panel alone in its column stays in place.

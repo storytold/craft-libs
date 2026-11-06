@@ -26,6 +26,12 @@ drag bar are at the left, and drop insertion slots follow. Accordion headers and
 bars (`chrome::TitleBar`, through `ChromeStyle::right_to_left`) mirror too. Frame splits keep
 their sides.
 
+Persisted layouts carry no mirrored data: sides and column order stay logical and floating
+rects stay physical points, so a layout saved under one direction loads byte-identical under
+the other and only its on-screen placement mirrors — no migration is needed when the language
+changes (covered by
+`docking::dock_tests::a_saved_layout_round_trips_byte_identical_across_directions_and_only_mirrors_on_screen`).
+
 ## Model
 
 `Layout<P>` holds an optional root `Node<P>` and a list of `Floating` windows.
