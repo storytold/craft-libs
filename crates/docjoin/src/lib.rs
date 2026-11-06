@@ -1049,9 +1049,10 @@ fn check_doc(cfg: &Config, base: &[File], head: &[File], doc: &str, today: Naive
     for table in cfg.tables.iter().filter(|t| t.doc == doc) {
         let (b, h) = (rows_of(&bl, table), rows_of(&hl, table));
         let changed = b != h;
+        // The fold writes the status line only when it changes the rows: an item edit the pull
+        // request didn't fold leaves both alone.
         if table.status {
-            let edited = in_dir(head, table.dir).iter().any(|h| !base.iter().any(|b| b.path == h.path && b.text == h.text));
-            table_moved |= changed || edited;
+            table_moved |= changed;
         }
         // A table added to the section, or one taken out, moves which one is joined.
         if started(table.dir) && table_count(&bl, table) != table_count(&hl, table) {

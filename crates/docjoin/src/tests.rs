@@ -664,15 +664,19 @@ fn a_pr_cannot_write_a_status_date_after_today() {
     let mut head = fold_of(&CFG, &base);
     set(&mut head, "ROADMAP.md", |t| t.replace("**Last updated:** 2026-11-05", "**Last updated:** 2099-12-31"));
     has(&check(&CFG, &zero(&base), &zero(&head)), "**Last updated:** is 2099-12-31, after today (2026-11-30)");
-    // Nor by editing an item of a table that writes the status line.
+    // Nor in a pull request that edits an item and rebuilds its table's rows.
     let base = sdocs();
-    let mut head = base.clone();
-    set(&mut head, "docs/gaps.d/2-second.md", |t| t.replace("e2", "e2 better"));
-    set(&mut head, "docs/gaps.md", |t| t.replace("2026-11-01 · **Change:** trivial (x); previously minor", "2099-01-01 · **Change:** minor"));
-    has(&check(&SCFG, &base, &head), "after today");
+    let mut edited = base.clone();
+    for i in edited.iter_mut().filter(|i| i.path == "docs/gaps.d/2-second.md") {
+        i.text = i.text.replace("e2", "e2 better");
+        i.time = NOV6;
+    }
+    let mut head = fold_of(&SCFG, &edited);
+    set(&mut head, "docs/gaps.md", |t| t.replace("**Last updated:** 2026-11-06", "**Last updated:** 2099-01-01"));
+    has(&check(&SCFG, &zero(&base), &zero(&head)), "after today");
     // Today itself is fine.
     set(&mut head, "docs/gaps.md", |t| t.replace("2099-01-01", "2026-11-30"));
-    assert_eq!(check(&SCFG, &base, &head), Vec::<String>::new());
+    assert_eq!(check(&SCFG, &zero(&base), &zero(&head)), Vec::<String>::new());
 }
 
 #[test]
@@ -1100,4 +1104,16 @@ fn migrate_notes_a_log_it_cannot_read() {
     // An unreadable log the pull request left alone is no note.
     let (out, notes) = migrate(&CFG, &main, &f("ROADMAP.md", &pr, 0), &f("ROADMAP.md", &pr, 0), "9-x");
     assert_eq!((out, notes), (Vec::new(), Vec::<String>::new()));
+}
+
+/// An item edit the pull request didn't fold leaves the doc's rows alone, so the status line
+/// can't move in it either: only the fold moves it, when it rebuilds the rows.
+#[test]
+fn an_item_edit_doesnt_let_the_status_line_move_by_hand() {
+    let base = sdocs();
+    let mut head = base.clone();
+    set(&mut head, "docs/gaps.d/2-second.md", |t| t.replace("e2", "e2 better"));
+    assert_eq!(check(&SCFG, &base, &head), Vec::<String>::new());
+    set(&mut head, "docs/gaps.md", |t| t.replace("2026-11-01 · **Change:** trivial (x); previously minor", "2026-11-07 · **Change:** minor"));
+    has(&check(&SCFG, &base, &head), "the status line's **Last updated:** was edited by hand");
 }
