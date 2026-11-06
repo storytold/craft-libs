@@ -342,6 +342,18 @@ fonts without Encoding) and #1499 (byte-aligned packed TIFF predictor rows).
 Synthetic tests cover 1/2/4/8-bit RGB rows and rendering, plus embedded TrueType
 text with absent or partial ToUnicode maps and explicit encoding precedence.
 
+## Cooperative opening cancellation
+
+The syntax reader also supports cooperative cancellation scoped to one open operation through
+`Cancellation` and `Pdf::new_with_password_limits_and_cancel`. Checks cover xref searches and
+recovery, object/byte scans, ordinary ASCIIHex/ASCII85/RunLength/LZW/Flate decoding and predictors,
+and initial page-tree construction. A cancellation request stays latched and prevents repair or
+partial success. The operation releases callback captures when it returns, including unwinding;
+deferred reads on a loaded PDF do not poll the completed operation. Existing loading errors and
+constructors, decode limits, and object sizes are preserved. Cryptographic and image-codec calls
+run to completion between checkpoints. Synthetic API and backend tests cover interruption inside
+the supported stages.
+
 ## Craft patches for the flattener
 
 Local changes for craft-prepress's PDF-in adapter (`craft_prepress::flatten::pdf`), which reads
