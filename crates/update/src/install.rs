@@ -1553,18 +1553,61 @@ pub mod macos {
 #[cfg(unix)]
 #[allow(dead_code)]
 pub(crate) mod tree {
+    use std::io::Read;
+
     use super::{App, Path, PathBuf, single_top_folder};
+
+    // Bound entry count and cumulative unpacked bytes to prevent decompression bombs (CWE-409).
+    const MAX_ENTRIES: usize = 50_000;
+    const MAX_UNPACKED_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+    /// The most decompressed tar stream either pass reads: the unpacked bytes plus room for
+    /// headers, padding and metadata records.
+    const MAX_TAR_BYTES: u64 = MAX_UNPACKED_BYTES + (1 << 30);
+    /// The most a PAX or GNU long-name record may hold. The tar crate buffers such a record
+    /// whole while the iterator advances, before the loop below sees any entry size.
+    const MAX_METADATA_BYTES: u64 = 1 << 20;
+
+    /// Walks the headers of the tarball `file` without unpacking anything, and refuses a
+    /// metadata record (PAX `x`/`g`, GNU `L`/`K`) past [`MAX_METADATA_BYTES`]. A damaged
+    /// archive passes: unpacking reports it.
+    fn check_metadata(file: &Path) -> Result<(), String> {
+        let gz = std::fs::File::open(file).map_err(|e| e.to_string())?;
+        let mut tar = flate2::read::GzDecoder::new(gz).take(MAX_TAR_BYTES);
+        let mut header = [0u8; 512];
+        while tar.read_exact(&mut header).is_ok() && header.iter().any(|b| *b != 0) {
+            let size = header_size(&header[124..136]).ok_or("invalid tar header")?;
+            if matches!(header[156], b'x' | b'g' | b'L' | b'K') && size > MAX_METADATA_BYTES {
+                return Err("archive has an oversized metadata record".into());
+            }
+            let padded = size.div_ceil(512).saturating_mul(512);
+            if std::io::copy(&mut (&mut tar).take(padded), &mut std::io::sink()).map_err(|e| e.to_string())? < padded {
+                break;
+            }
+        }
+        Ok(())
+    }
+
+    /// A tar header's size field: octal digits, or big-endian base-256 after a set top bit.
+    fn header_size(field: &[u8]) -> Option<u64> {
+        if field.first()? & 0x80 != 0 {
+            return field
+                .iter()
+                .enumerate()
+                .try_fold(0u64, |n, (i, b)| n.checked_mul(256)?.checked_add(u64::from(if i == 0 { b & 0x7f } else { *b })));
+        }
+        let digits = std::str::from_utf8(field).ok()?.trim_matches(|c: char| c == '\0' || c == ' ');
+        if digits.is_empty() { Some(0) } else { u64::from_str_radix(digits, 8).ok() }
+    }
 
     /// Unpacks `file` and returns a staging folder laid out like `/usr/local`.
     pub fn unpack(app: &App, file: &Path, staging: &Path) -> Result<PathBuf, String> {
+        check_metadata(file)?;
         let _ = std::fs::remove_dir_all(staging);
         std::fs::create_dir_all(staging).map_err(|e| format!("couldn't create {} ({e})", staging.display()))?;
         let gz = std::fs::File::open(file).map_err(|e| e.to_string())?;
-        let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(gz));
+        // Never past what `check_metadata` read.
+        let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(gz).take(MAX_TAR_BYTES));
         archive.set_preserve_permissions(true);
-        // Bound entry count and cumulative unpacked bytes to prevent decompression bombs (CWE-409).
-        const MAX_ENTRIES: usize = 50_000;
-        const MAX_UNPACKED_BYTES: u64 = 2 * 1024 * 1024 * 1024;
         let mut entry_count = 0;
         let mut total_unpacked = 0u64;
         let mut directories = Vec::new();
@@ -1590,6 +1633,10 @@ pub(crate) mod tree {
         directories.sort_by(|a, b| b.path_bytes().cmp(&a.path_bytes()));
         for mut dir in directories {
             dir.unpack_in(staging).map_err(|e| format!("couldn't unpack archive directory ({e})"))?;
+        }
+        // tar reads a limit-truncated stream as a clean end of archive, so an exhausted limit is refused here.
+        if archive.into_inner().limit() == 0 {
+            return Err("archive exceeds maximum size".into());
         }
         let top = single_top_folder(staging)?;
         if top.join("bin").join(app.id).is_file() {
@@ -2351,6 +2398,26 @@ mod tests {
         let bad = dir.path().join("bad.tar.gz");
         tarball(&bad, &["x/README.md"]);
         assert!(tree::unpack(app, &bad, &dir.path().join("staging")).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_oversized_pax_record_is_refused_before_tar_buffers_it() {
+        use std::io::Write;
+        let dir = tempfile::tempdir().unwrap();
+        // A PAX header claiming 1 MiB + 1 byte of records, compressed to almost nothing.
+        let mut header = tar::Header::new_ustar();
+        header.set_entry_type(tar::EntryType::XHeader);
+        header.set_size((1 << 20) + 1);
+        header.set_path("pax").unwrap();
+        header.set_cksum();
+        let file = dir.path().join("pax.tar.gz");
+        let mut gz = flate2::write::GzEncoder::new(std::fs::File::create(&file).unwrap(), flate2::Compression::best());
+        gz.write_all(header.as_bytes()).unwrap();
+        gz.write_all(&vec![b'a'; (1 << 20) + 512]).unwrap();
+        gz.finish().unwrap();
+        let err = tree::unpack(App::by_id("wordcraft").unwrap(), &file, &dir.path().join("staging")).unwrap_err();
+        assert!(err.contains("oversized metadata"), "{err}");
     }
 
     #[cfg(unix)]
