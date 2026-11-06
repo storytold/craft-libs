@@ -956,3 +956,30 @@ fn a_fragment_cannot_open_an_html_block() {
     head.push(f("docs/progress.d/99-x.md", "- 2026-11-06: x\n  <3 and <= 4\n", NOV6));
     assert_eq!(check(&CFG, &base, &head), Vec::<String>::new());
 }
+
+/// The old doc can hold a key twice (WordCraft's two gap 20s). An edit of either copy isn't
+/// applied to any item; it is a note with the row.
+#[test]
+fn migrate_leaves_a_repeated_key_to_a_person() {
+    let old_gaps = "# Gaps\n\n## Every known gap, ranked\n\n| # | Gap | Evidence |\n|---|---|---|\n| 1 | First | e1 |\n| 2 | Perf | old evidence A |\n| 2 | Perf | newer evidence B |\n\n## Revision history\n";
+    let (items, _) = items_from_doc(&CFG, &[f("docs/gaps.md", old_gaps, 0)]).unwrap();
+    let mut main = vec![f("docs/gaps.md", old_gaps, 0), f("ROADMAP.md", ROADMAP, 0)];
+    main.extend(items);
+    let main_doc = join(&CFG, &main).unwrap().docs.get("docs/gaps.md").unwrap().clone();
+    set(&mut main, "docs/gaps.md", |_| main_doc.clone());
+    let pr_gaps = old_gaps.replace("| 2 | Perf | newer evidence B |", "| 2 | Perf | newer evidence B, now measured |");
+    let (out, notes) = migrate(&CFG, &main, &f("docs/gaps.md", old_gaps, 0), &f("docs/gaps.md", &pr_gaps, 0), "9-x");
+    assert_eq!(out, Vec::<File>::new(), "{notes:?}");
+    has(&notes, "row 2 is in the old doc more than once");
+    assert!(notes.iter().any(|n| n.contains("newer evidence B, now measured")), "{notes:?}");
+}
+
+/// A pull request's table that can't be read (here a line glued under it) is a note, not a skip.
+#[test]
+fn migrate_notes_a_table_it_cannot_read() {
+    let main = fold_of(&CFG, &docs());
+    let pr = GAPS.replace("| 2 | Second | e2 |\n", "| 2 | Second | e2 |\n| 4 | New | e4 |\nglued\n");
+    let (out, notes) = migrate(&CFG, &main, &f("docs/gaps.md", GAPS, 0), &f("docs/gaps.md", &pr, 0), "9-x");
+    assert_eq!(out, Vec::<File>::new());
+    has(&notes, "the line under the table must be blank");
+}

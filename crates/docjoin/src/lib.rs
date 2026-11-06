@@ -1301,10 +1301,17 @@ fn migrate_edit(table: &Table, item: &Item, old: &[String], pr: &[String], out: 
 }
 
 fn migrate_table(table: &Table, files: &[File], old: &[&str], pr: &[&str], out: &mut Vec<File>, notes: &mut Vec<String>) {
-    let rows = |lines: &[&str]| -> Vec<Vec<String>> {
-        locate(lines, table).ok().map(|(_, f, e)| lines.get(f..e).unwrap_or_default().iter().map(|l| row_cells(l)).collect()).unwrap_or_default()
+    let rows = |lines: &[&str]| -> Result<Vec<Vec<String>>, String> {
+        locate(lines, table).map(|(_, f, e)| lines.get(f..e).unwrap_or_default().iter().map(|l| row_cells(l)).collect())
     };
-    let (before, after) = (rows(old), rows(pr));
+    // A table the crate can't read in either doc is a note, never a silent skip.
+    let (before, after) = match (rows(old), rows(pr)) {
+        (Ok(b), Ok(a)) => (b, a),
+        (Err(e), _) | (_, Err(e)) => {
+            notes.push(format!("{} {e}; move the pull request's edits to {} by hand", table.doc, table_name(table)));
+            return;
+        }
+    };
     let mut errs = Vec::new();
     let current = items(files, table, &mut errs, &mut Vec::new());
     let current_keys: Vec<Option<String>> = current.iter().map(|i| row_key(table, &cells(&render(table, i)).unwrap_or_default())).collect();
@@ -1320,6 +1327,11 @@ fn migrate_table(table: &Table, files: &[File], old: &[&str], pr: &[&str], out: 
             continue;
         }
         let key = row_key(table, row);
+        // A key the old doc holds twice (two gap 20s) can't say which item the edit is for.
+        if let Some(k) = key.as_ref().filter(|k| before.iter().filter(|b| row_key(table, b).as_ref() == Some(*k)).count() > 1) {
+            notes.push(format!("{}: row {k} is in the old doc more than once; its edit isn't moved, make it by hand: {row:?}", table.doc));
+            continue;
+        }
         let old_row = key.as_ref().and_then(|k| before.iter().find(|b| row_key(table, b).as_ref() == Some(k)));
         if let (Some(old_row), Some(k)) = (old_row, key.as_ref()) {
             match current.iter().zip(&current_keys).find(|(_, ck)| ck.as_ref() == Some(k)) {
