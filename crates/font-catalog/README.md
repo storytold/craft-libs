@@ -11,6 +11,7 @@ A `Catalog` reads, in this order:
 | The platform's font folders (`font_dirs`) | `System` | all |
 | The suite's font store (`font_store_dir`) | `Store` | all |
 | The app's own folders (`Catalog::set_app_dirs`, for example `office_font_dirs`) | `App` | all |
+| Folders the user or an automation caller picked (`Catalog::set_confined_dirs`) | `User` | all |
 | Files the platform's font service knows (`system` feature, through fontique) | `System` | macOS, Windows, Linux, FreeBSD |
 | The registry's font list | `System` | Windows |
 | Files from injected listers (`Catalog::with_lister`) | `System` | all |
@@ -44,7 +45,7 @@ The font service covers fonts outside those folders:
 
 ## Scanning
 
-The scan reads each file's table directory and its `name`, `OS/2` and `fvar` tables, at most 1 MiB per table, never the whole file. Faces without outline tables (`glyf`, `CFF `, `CFF2`, `VARC`) are left out. Files in folders count when they have a font extension (`.ttf`, `.otf`, `.ttc`, `.otc`); files a font service or lister names count whatever their name. Mac suitcase fonts are read from their resource fork. Damaged files give no faces, never a panic.
+The scan reads each file's table directory and its `name`, `OS/2` and `fvar` tables, at most 1 MiB per table, never the whole file. Faces without outline tables (`glyf`, `CFF `, `CFF2`, `VARC`) are left out. Files in folders count when they have a font extension (`.ttf`, `.otf`, `.ttc`, `.otc`); files a font service or lister names count whatever their name. Only regular files are read (after following links), and on Unix the open doesn't wait, so a FIFO or device named `x.ttf` can't block the scan. The scan follows links, except in the folders given to `set_confined_dirs`: there a link whose target is outside the folder is skipped. Mac suitcase fonts are read from their resource fork. Damaged files give no faces, never a panic.
 
 Each face (`FaceInfo`) has its family and style, legacy family and style, family names in other languages, full name, PostScript name, weight, width, italic, a named instance's axis settings, `fsType`, the OS/2 code page bits, its file and index, and its source. Each named instance of a variable font is a face of its own.
 
@@ -60,7 +61,17 @@ Each face (`FaceInfo`) has its family and style, legacy family and style, family
 - The first scan runs on first use, or on a background thread after `scan_in_background`. Lookups wait for it.
 - Lookups read an immutable snapshot, so a rescan never blocks them.
 - `load_family` reads a family's files once. Other threads asking for the same family wait and share the result; other families load at the same time. Faces of one file share its bytes (`Arc<[u8]>`).
-- `add_bytes` and `add_file` add fonts from documents, downloads or the app's bundle, within `Limits`. Added faces win over installed faces of the same family and style. `remove_added` removes a source's faces, for example when a document closes.
+- `add_bytes` and `add_file` add fonts from downloads, the user or the app's bundle, within `Limits`, for every lookup. Added faces win over installed faces of the same family and style. `remove_added` removes a source's faces. `add_file` refuses a path that isn't a regular file.
+
+## Document scopes
+
+A document's own fonts (embedded, or in a folder beside it) go into a scope, so they change only that document's lookups.
+
+- `new_scope()` returns a `Scope`. `add_bytes_in(scope, …)` and `add_file_in(scope, …)` add faces to it.
+- `resolve_in`, `by_postscript_name_in`, `family_in`, `styles_in`, `families_in` and `load_family_in` look up in a scope. Inside a scope, its own faces come first, then the faces added without a scope, then the installed faces. A family the scope has faces of keeps its other styles from the installed fonts.
+- Other scopes and the unscoped lookups never see a scope's faces.
+- `remove_scope(scope)` removes its faces when the document closes. Other scopes keep theirs, and `remove_added` doesn't touch scoped faces.
+- `Limits::max_added_faces` counts the added faces of every scope together.
 
 ## Changes
 
@@ -68,7 +79,7 @@ Each face (`FaceInfo`) has its family and style, legacy family and style, family
 - `installed_fonts_changed` compares the modification times of every folder the scan read (and the folders of files a font service named) and, on Windows, the registry's font list. It costs a few hundred `stat` calls, not a scan.
 - `rescan_if_changed` does both; apps call it when their window is activated.
 - `watch(interval, on_change)` polls on a background thread.
-- `generation` counts the catalog's changes.
+- `generation` counts the changes unscoped lookups see: scans, and faces added or removed without a scope. A scope's changes leave it alone, so other documents don't lay out again. `generation_in(scope)` adds the scope's own changes and never repeats a value, even after `remove_scope`; a document lays out again when it changes.
 
 ## One enumeration for the UI and documents
 
