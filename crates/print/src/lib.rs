@@ -422,6 +422,22 @@ pub fn printers() -> Vec<Printer> {
     }
 }
 
+/// The printers the system knows, without asking their drivers anything: [`printers`] with
+/// `two_sided` unknown. On Windows [`printers`] reads each driver's PrintCapabilities, which can
+/// wait on the device (a networked printer in power save), so a Print dialog that only needs
+/// names lists them from this without that wait. Submission still checks the job's options with
+/// the driver. Elsewhere it is [`printers`], whose `two_sided` is already unknown.
+pub fn printer_queues() -> Vec<Printer> {
+    #[cfg(windows)]
+    {
+        windows::printer_queues()
+    }
+    #[cfg(not(windows))]
+    {
+        printers()
+    }
+}
+
 /// The Print dialog's printers from lpstat's two answers: the spooler's queues (`-p -d`), then
 /// the driverless destinations of `available` (`-e`) that have no queue — CUPS builds a temporary
 /// queue when `lp` sends them a job. Each destination once, queues first; the default still comes

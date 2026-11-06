@@ -43,16 +43,39 @@ fn print_ticket_provider() -> MutexGuard<'static, ()> {
 }
 
 pub(crate) fn printers() -> Vec<Printer> {
+    spooler_list(two_sided)
+}
+
+/// The queues and the default without asking any driver: a networked printer asleep in power
+/// save can hold its driver's PrintCapabilities query for a long time, and the Print dialog
+/// must not wait on it to show the queue (or any other).
+pub(crate) fn printer_queues() -> Vec<Printer> {
+    spooler_list(|_| None)
+}
+
+/// The spooler's queues (`EnumPrinters`, local queues and connections) with the default marked,
+/// each given the two-sided support `two_sided` reports for it; empty when the spooler can't list
+/// them.
+fn spooler_list(two_sided: impl Fn(&PrinterDevice) -> Option<bool>) -> Vec<Printer> {
     match PrinterDevice::all() {
         Ok(devices) => crate::printer_list(devices.iter().map(|d| (d.name().to_string(), two_sided(d))), default_printer().as_deref()),
         Err(_) => Vec::new(),
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    /// The driver capability queries printer discovery made on this thread, so a test can show
+    /// that [`printer_queues`] makes none.
+    pub(crate) static CAPABILITY_QUERIES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// Whether the printer's driver takes two-sided settings: its PrintCapabilities offer a two-sided
 /// option for the feature the job's ticket sets. `None` when the capabilities can't be read. A
 /// driver without one cannot confirm an explicit two-sided request, which is refused before submission.
 fn two_sided(device: &PrinterDevice) -> Option<bool> {
+    #[cfg(test)]
+    CAPABILITY_QUERIES.with(|n| n.set(n.get().saturating_add(1)));
     let capabilities = {
         let _provider = print_ticket_provider();
         PrintCapabilities::fetch(device)
