@@ -1,0 +1,38 @@
+name: Suite themes
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['crates/theme/**', 'crates/theme-store/**', 'crates/atomic/**', 'Cargo.toml', 'Cargo.lock', '.github/workflows/theme.yml']
+  pull_request:
+    paths: ['crates/theme/**', 'crates/theme-store/**', 'crates/atomic/**', 'Cargo.toml', 'Cargo.lock', '.github/workflows/theme.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  theme:
+    timeout-minutes: 15
+    name: Theme lint, tests, WASM
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # The token isn't needed after checkout; cargo runs build scripts and proc macros from
+          # dependencies, so don't leave it in .git/config for that third-party code to read.
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          components: rustfmt, clippy
+          targets: wasm32-unknown-unknown
+      - run: cargo fmt -p craft-theme --check
+      - run: cargo clippy -p craft-theme --all-targets --all-features --locked -- -D warnings
+      - run: cargo clippy -p craft-theme --all-targets --locked -- -D warnings
+      - run: cargo test -p craft-theme --all-features --locked
+      - run: cargo check -p craft-theme --all-features --locked --target wasm32-unknown-unknown
+      - run: cargo check -p craft-ui --lib --locked
+      - run: cargo fmt -p craft-theme-store --check
+      - run: cargo clippy -p craft-theme-store --all-targets --all-features --locked -- -D warnings
+      - run: cargo test -p craft-theme-store --all-features --locked
+      - run: cargo check -p craft-theme-store --all-features --locked --target wasm32-unknown-unknown
