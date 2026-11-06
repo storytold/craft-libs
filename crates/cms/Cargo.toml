@@ -12,8 +12,16 @@ exclude = ["tests/data", "tests/fogra39.rs"]
 [lints]
 workspace = true
 
+[dependencies]
+serde = { workspace = true, optional = true }
+
+[features]
+# Serialize and deserialize `Intent` and `TransformOptions`, for documents and settings.
+serde = ["dep:serde"]
+
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 rayon = { workspace = true }
 
 [dev-dependencies]
 moxcms = "0.8"
+serde_json = { workspace = true }
