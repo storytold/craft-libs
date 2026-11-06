@@ -14,6 +14,10 @@ craft-winprint-gdi = { git = "https://github.com/storytold/winprint.rs", rev = "
 [lints]
 workspace = true
 
+[target.'cfg(unix)'.dependencies]
+# Says why the printer list is empty when lpstat can't run (e.g. a Flatpak without CUPS tools).
+log = "0.4"
+
 [target.'cfg(windows)'.dependencies]
 # Printing without starting anything (storytold/pdfcraft#1107): the printer list (EnumPrinters)
 # and the job (Windows.Data.Pdf drawn with Direct2D into the XPS print API, options as a
@@ -27,11 +31,11 @@ winsafe = { version = "0.0.29", default-features = false, features = ["winspool"
 # The job file's private folder.
 tempfile = "3"
 # Reading the PrintTicket and PrintCapabilities the driver hands back.
-roxmltree = "0.20"
+roxmltree = "0.21"
 # Inflating the print-ready PDF's cross-reference and object streams (src/sheets.rs).
-miniz_oxide = "0.8"
+miniz_oxide = "0.9"
 
 [dev-dependencies]
 tempfile = "3"
-roxmltree = "0.20"
-miniz_oxide = "0.8"
+roxmltree = "0.21"
+miniz_oxide = "0.9"

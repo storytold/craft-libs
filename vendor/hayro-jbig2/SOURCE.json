@@ -1,7 +1,7 @@
 {
   "crate": "hayro-jbig2",
   "source_repository": "https://github.com/storytold/pdfcraft",
-  "source_revision": "7437bde378f43856eada40af25b983812e615e8a",
+  "source_revision": "ec0a965074f376a5bf610435948e4e5184bf3299",
   "source_directory": "vendor/hayro-jbig2",
   "files": [
     {
