@@ -174,19 +174,18 @@ fn a_job_cancels_until_it_starts_reaching_the_spooler() {
 
 #[test]
 fn a_cancelled_job_never_starts_lp() {
-    // Cancelled before it was sent (as the UI does while a job waits): `lp` never runs, so nothing
-    // reaches the spooler, and the caller learns why.
-    static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
-    let record =
-        std::env::temp_dir().join(format!("craft-print-cancel-{}-{}", std::process::id(), N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)));
-    std::fs::create_dir(&record).unwrap();
+    // Cancelled before it was sent (as the UI does while a job waits): `lp` never starts, so
+    // nothing reaches the spooler, and the caller learns why. The spooler given can't be started,
+    // so any attempt to start it would answer with that failure instead.
     let cancel = Cancel::new();
     assert!(cancel.cancel());
-    let sent = spool::submit_via(stand_in_lp(record.as_os_str()), b"%PDF-1.7 cancelled", &Job::default(), &cancel);
-    let ran = record.join("args").exists();
-    let _ = std::fs::remove_dir_all(&record);
-    assert_eq!(sent, Err(Error::Spool(CANCELLED_MESSAGE.into())));
-    assert!(!ran, "the stand-in lp never started");
+    let lp = std::process::Command::new(std::env::temp_dir().join("craft-print-no-such-lp").join("lp"));
+    let sent = spool::submit_via(lp, b"%PDF-1.7 cancelled", &Job::default(), &cancel);
+    assert_eq!(sent, Err(Error::Spool(CANCELLED_MESSAGE.into())), "lp was never started");
+    // The control: the same spooler, not cancelled, is tried and fails to start.
+    let lp = std::process::Command::new(std::env::temp_dir().join("craft-print-no-such-lp").join("lp"));
+    let tried = spool::submit_via(lp, b"%PDF-1.7", &Job::default(), &Cancel::new());
+    assert!(matches!(tried, Err(Error::Spool(ref m)) if m.starts_with("the print spooler is not available")), "{tried:?}");
 }
 
 #[test]

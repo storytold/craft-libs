@@ -364,36 +364,44 @@ fn windows_lists_the_printers_the_system_knows() {
     assert!(printers.iter().filter(|p| p.default).count() <= 1, "{printers:?}");
 }
 
-/// Two jobs for the paused test queue, cancelled: one before it was sent, and one while its
-/// driver doesn't answer (a sleeping printer, storytold/wordcraft#5710), where the cancel must win
-/// and the job stop once the driver answers. The first job's result, and whether the held one
-/// behaved.
+/// Jobs for the paused test queue, cancelled: one before it was sent, then one held in each
+/// driver call before sending, its capability query and its DEVMODE conversion, as when the driver
+/// doesn't answer (a sleeping printer, storytold/wordcraft#5710). The cancel must win and the job
+/// stop once the driver answers. The first job's result, and whether the held ones behaved.
 #[cfg(windows)]
 fn cancelled_jobs(pdf: &[u8], job: &Job) -> (Result<String, Error>, Result<(), String>) {
     let cancel = Cancel::new();
     assert!(cancel.cancel());
     let cancelled = spool::submit_cancellable(pdf, &Job { title: "cancelled".into(), ..job.clone() }, &mut |_, _| {}, &cancel);
+    let outcome =
+        [crate::windows::HELD_TITLE, crate::windows::HELD_CONVERSION_TITLE].iter().try_for_each(|title| cancelled_while_held(pdf, job, title));
+    (cancelled, outcome)
+}
+
+/// A job titled `title`, held in that driver call by the test hook, cancelled there and released.
+#[cfg(windows)]
+fn cancelled_while_held(pdf: &[u8], job: &Job, title: &str) -> Result<(), String> {
     let (entered, reached_driver) = std::sync::mpsc::channel();
     let (release, released) = std::sync::mpsc::channel();
     *crate::windows::HELD_DRIVER.lock().unwrap() = Some((entered, released));
     let held_cancel = Cancel::new();
     let worker_cancel = held_cancel.clone();
-    let (held_pdf, held_job) = (pdf.to_vec(), Job { title: crate::windows::HELD_TITLE.into(), ..job.clone() });
+    let (held_pdf, held_job) = (pdf.to_vec(), Job { title: title.into(), ..job.clone() });
     let held = std::thread::spawn(move || spool::submit_cancellable(&held_pdf, &held_job, &mut |_, _| {}, &worker_cancel));
     let waited = reached_driver.recv_timeout(std::time::Duration::from_secs(60));
     let cancelled_while_held = held_cancel.cancel();
     let _ = release.send(());
     let held = held.join().unwrap();
-    let outcome = if waited.is_err() {
-        Err("the held job never reached its driver call".to_string())
+    crate::windows::HELD_DRIVER.lock().unwrap().take();
+    if waited.is_err() {
+        Err(format!("{title}: the job never reached that driver call"))
     } else if !cancelled_while_held {
-        Err("a job waiting on its driver couldn't be cancelled".to_string())
+        Err(format!("{title}: a job waiting on its driver couldn't be cancelled"))
     } else if held != Err(Error::Spool(CANCELLED_MESSAGE.into())) {
-        Err(format!("the job was not stopped once the driver answered: {held:?}"))
+        Err(format!("{title}: the job was not stopped once the driver answered: {held:?}"))
     } else {
         Ok(())
-    };
-    (cancelled, outcome)
+    }
 }
 
 /// Run a PowerShell script for the Windows test's printer setup: its stdout, or everything it
