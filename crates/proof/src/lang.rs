@@ -30,8 +30,9 @@ pub enum ProofLang {
     /// Bulgarian (`bg`, `bg-BG`): hyphenation by the Bulgarian syllable rules ([`crate::bg`]), and
     /// spelling when a Bulgarian Hunspell dictionary or `bg` pack is found. No grammar rules yet.
     Bg,
-    /// Portuguese (`pt`, `pt-BR`; `pt-PT` is [`ProofLang::Pack`] `pt-pt`, with its own dictionary
-    /// and these grammar rules and patterns): the installed Hunspell dictionary (VERO and
+    /// Portuguese (`pt`, `pt-BR`; `pt-PT` and the regions that write like Portugal, `pt-AO`,
+    /// `pt-MZ`…, are [`ProofLang::Pack`] `pt-pt`, with its own dictionary and these grammar rules
+    /// and patterns): the installed Hunspell dictionary (VERO and
     /// friends, when there is one), the Portuguese grammar rules and the Portuguese hyphenation
     /// patterns.
     Pt,
@@ -125,7 +126,7 @@ impl ProofLang {
             ProofLang::Bg
         } else if primary.eq_ignore_ascii_case("pt") || primary.eq_ignore_ascii_case("por") {
             // European Portuguese spells differently: its own dictionary (`pt_PT`, a `pt-pt` pack).
-            if region(tag).is_some_and(|r| r.eq_ignore_ascii_case("PT")) {
+            if region(tag).is_some_and(|r| EUROPEAN_PORTUGUESE.iter().any(|e| e.eq_ignore_ascii_case(r))) {
                 PackLocale::new("pt-PT").map_or(ProofLang::Pt, ProofLang::Pack)
             } else {
                 ProofLang::Pt
@@ -391,6 +392,12 @@ pub(crate) fn region(tag: &str) -> Option<&str> {
 const LATIN_AMERICA: [&str; 22] =
     ["419", "005", "013", "029", "AR", "BO", "CL", "CO", "CR", "CU", "DO", "EC", "GT", "HN", "NI", "PA", "PE", "PR", "PY", "SV", "US", "VE"];
 
+/// Regions whose Portuguese is Portugal's (the `pt-pt` [`ProofLang::Pack`]): Portugal and the
+/// regions CLDR gives `pt_PT` as their parent locale: Angola, Cape Verde, Equatorial Guinea,
+/// Guinea-Bissau, Macao, Mozambique, São Tomé and Príncipe and Timor-Leste, and Portuguese
+/// written in Switzerland, France and Luxembourg.
+const EUROPEAN_PORTUGUESE: [&str; 12] = ["PT", "AO", "CH", "CV", "FR", "GQ", "GW", "LU", "MO", "MZ", "ST", "TL"];
+
 /// Regions whose English uses British spelling ([`ProofLang::EnGb`]; Australia has its own,
 /// [`ProofLang::EnAu`]): the United Kingdom (and the non-standard `UK`), Ireland, New Zealand, South Africa, India and other
 /// Commonwealth countries, the Crown dependencies and Europe (`150`).
@@ -472,9 +479,11 @@ mod tests {
         let sr_latn = ProofLang::Pack(PackLocale::new("sr-latn").unwrap());
         assert_tags(&["sr@latin", "sr_RS@latin", "sr_RS.UTF-8@latin", "sr-Latn"], sr_latn);
         assert_tags(&["sr", "sr@cyrillic"], ProofLang::Pack(PackLocale::new("sr").unwrap()));
-        assert_tags(&["pt", "pt-BR", "PT_br", "pt-BR.UTF-8", "pt-AO", "por"], ProofLang::Pt);
+        assert_tags(&["pt", "pt-BR", "PT_br", "pt-BR.UTF-8", "por", "pt-Latn-BR", "pt-US", "pt-x-ao"], ProofLang::Pt);
         let pt_pt = ProofLang::Pack(PackLocale::new("pt-pt").unwrap());
-        assert_tags(&[" pt-PT ", "pt_PT.UTF-8", "por-PT"], pt_pt);
+        assert_tags(&[" pt-PT ", "pt_PT.UTF-8", "por-PT", "pt_PT@euro", "pt-Latn-PT"], pt_pt);
+        // The regions CLDR gives pt_PT as parent write like Portugal.
+        assert_tags(&["pt-AO", "pt_MZ", "PT-cv", "pt-GW", "pt-ST", "pt-TL", "pt-MO", "pt-GQ", "pt-CH", "pt-FR", "pt-LU", "pt_AO.UTF-8"], pt_pt);
         assert_eq!((pt_pt.built_in(), ProofLang::Pt.built_in()), (ProofLang::Pt, ProofLang::Pt));
         assert_tags(&["it", "it-IT", "IT_it", "it-CH", "it-CH.UTF-8", " it-IT ", "ita"], ProofLang::It);
         assert_tags(&["cs", "cs-CZ", "CS-cz", "cs_CZ", " ces ", "CES", "cze", "CZE"], ProofLang::Cs);

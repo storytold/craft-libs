@@ -14,7 +14,7 @@ craft-proof = { git = "https://github.com/storytold/craft-libs", rev = "<commit>
 | Language | Spelling | Grammar | Hyphenation |
 |---|---|---|---|
 | English (en-US, en-CA, en-AU, en-GB and the British-spelling Englishes such as en-NZ) | SCOWL 2026 Hunspell dictionary per English + `en-extra.txt`, dialect policy (`en-variants.txt`); a dictionaries-folder English first; without SCOWL the installed Hunspell English, else the built-in Moby list ([below](#english-is-always-checked)) | yes | Moby list, our patterns, heuristic |
-| Polish, Portuguese, Italian | the installed Hunspell dictionary | yes | TeX patterns (embedded, or a Language pack) |
+| Polish, Portuguese (pt-BR; pt-PT and the regions that write like Portugal, such as pt-AO and pt-MZ, read `pt_PT`), Italian | the installed Hunspell dictionary | yes | TeX patterns (embedded, or a Language pack) |
 | Croatian, Turkish, Russian, Czech, Indonesian, Spanish (es, es-MX, es-419, es-UY) | the installed Hunspell dictionary (Russian also `ru-extra.txt`) | yes | Turkish and Russian rules; English fallback otherwise |
 | German | — | — | TeX patterns (embedded, or a Language pack) |
 | Bulgarian | — | — | syllable rules |
