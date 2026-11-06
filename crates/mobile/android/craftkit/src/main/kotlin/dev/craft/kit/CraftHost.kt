@@ -159,20 +159,34 @@ class CraftHost(context: Context, library: String) : CraftNative.Handler {
     }
 
     /**
-     * Stop the app and stop hearing it. Only the newest host does: an activity that finishes
-     * after its replacement started (a relaunch, a recreation) leaves the app to the new one.
+     * Stop the app and stop hearing it, when this host is still the app's: an activity that
+     * finishes after its replacement started (a relaunch, a recreation) leaves the app, and any
+     * background-work hold, to the new one.
      */
     fun close() {
-        scope.cancel()
-        app.unregisterComponentCallbacks(memory)
-        if (Build.VERSION.SDK_INT >= 29) power.removeThermalStatusListener(thermal)
-        app.unregisterReceiver(powerSave)
-        CraftWorkService.release()
+        release()
         if (current !== this) return
         current = null
         CraftNative.setHandler(null)
         CraftNative.stop()
+        CraftWorkService.release()
     }
+
+    /**
+     * Stop hearing the system for this host: its coroutines, memory and thermal callbacks and the
+     * power-save receiver. Call on every destruction (a recreated activity's old host would keep them
+     * registered); the app keeps running. Idempotent; [close] calls it too.
+     */
+    fun release() {
+        if (released) return
+        released = true
+        scope.cancel()
+        app.unregisterComponentCallbacks(memory)
+        if (Build.VERSION.SDK_INT >= 29) power.removeThermalStatusListener(thermal)
+        app.unregisterReceiver(powerSave)
+    }
+
+    private var released = false
 
     override fun onRequest(kind: Int, text: String, data: ByteArray?) {
         // The render thread: only thread-safe hand-offs here.
