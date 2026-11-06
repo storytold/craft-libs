@@ -60,6 +60,15 @@ impl ManifestEntry {
 /// The `role` of an interface face.
 pub const UI_ROLE: &str = "ui";
 
+/// Default manifest file relative to a `craft-fonts` checkout.
+pub const DEFAULT_MANIFEST: &str = "fonts/manifest.txt";
+
+/// Opt-in Latin presentation manifest relative to a `craft-fonts` checkout.
+pub const LATIN_MANIFEST: &str = "fonts/latin-manifest.txt";
+
+/// Opt-in Hebrew presentation and document manifest relative to a `craft-fonts` checkout.
+pub const HEBREW_MANIFEST: &str = "fonts/hebrew-manifest.txt";
+
 /// Script tags of the CJK faces, which craft-fonts also ships as interface faces. `Hant` covers
 /// `Hant-HK`.
 pub const CJK_SCRIPTS: &[&str] = &["Hans", "Hant", "Jpan", "Kore", "Hani"];
