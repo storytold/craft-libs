@@ -1,0 +1,54 @@
+[package]
+name = "craft-plugin-host"
+description = "Plugin engines for craft-abi 1: a wasmi engine, an optional wasmtime engine and browser engines."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[features]
+default = ["wasmi", "deterministic"]
+# The wasmi engine (src/engine/wasmi.rs). Builds on wasm32-unknown-unknown.
+wasmi = ["dep:wasmi", "dep:wasmi_core"]
+# Wasm 3.0 deterministic profile: canonical NaN results. Reports Caps::CANON_NAN.
+deterministic = ["wasmi?/deterministic"]
+# Switch wasmi from portable dispatch alone to portable plus indirect dispatch.
+indirect-dispatch = ["wasmi?/indirect-dispatch"]
+
+# The browser engines (src/engine/browser.rs): the page's own WebAssembly through js-sys, and a
+# killable Worker for pure kernels. Only compiles on wasm32-unknown-unknown; web apps turn it on.
+browser = ["dep:js-sys", "dep:wasm-bindgen", "dep:wasm-bindgen-futures", "dep:web-sys", "dep:web-time"]
+
+# The wasmtime engine (src/engine/wasmtime.rs). Native only. Fuel, epoch deadlines, pooling allocator.
+wasmtime = ["dep:wasmtime"]
+
+[dependencies]
+craft-plugin-abi.workspace = true
+bitflags = "2"
+wasmi = { version = "=2.0.0", default-features = false, features = ["std", "validate", "portable-dispatch"], optional = true }
+# wasmi does not re-export LimiterError, which ResourceLimiter needs. Same version as wasmi.
+wasmi_core = { version = "=2.0.0", default-features = false, optional = true }
+# wasmtime 48.x is the LTS line with MSRV 1.95, the workspace rust-version. 49 needs 1.96.
+# No default features: no WASI, no component model, no profiler.
+wasmtime = { version = "=48.0.7", default-features = false, features = ["runtime", "cranelift", "std", "pooling-allocator"], optional = true }
+
+[dev-dependencies]
+serde_json.workspace = true
+wat = "1.262.0"
+
+# Browser engines.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+js-sys = { version = "0.3", optional = true }
+wasm-bindgen = { version = "0.2", optional = true }
+wasm-bindgen-futures = { version = "0.4", optional = true }
+web-sys = { version = "0.3", optional = true, features = ["Worker", "Blob", "BlobPropertyBag", "Url", "MessageEvent", "ErrorEvent"] }
+web-time = { version = "1", optional = true }
+
+[lints]
+workspace = true
+
+# Compares the engines on a 1080p pixel kernel. Run with `cargo run --release --example engines_bench --features wasmtime`.
+[[example]]
+name = "engines_bench"
+required-features = ["wasmi", "wasmtime"]

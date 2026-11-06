@@ -1,0 +1,40 @@
+name: Plugin host
+
+on:
+  push:
+    branches: [main]
+    paths: ["crates/plugin-host/**", "crates/plugin-abi/**", "Cargo.toml", "Cargo.lock", ".github/workflows/plugin-host.yml"]
+  pull_request:
+    paths: ["crates/plugin-host/**", "crates/plugin-abi/**", "Cargo.toml", "Cargo.lock", ".github/workflows/plugin-host.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: plugin-host-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    timeout-minutes: 30
+    name: Plugin host lint, tests, WASM
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          components: rustfmt, clippy
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: craft-plugin-host
+      - run: cargo fmt -p craft-plugin-host --check
+      - run: cargo clippy -p craft-plugin-host --all-targets --locked -- -D warnings
+      - run: cargo clippy -p craft-plugin-host --all-targets --features wasmtime --locked -- -D warnings
+      - run: cargo test -p craft-plugin-host --locked
+      - run: cargo test -p craft-plugin-host --features wasmtime --locked
+      - run: cargo check -p craft-plugin-host --locked --target wasm32-unknown-unknown
+      - run: cargo check -p craft-plugin-host --features browser --locked --target wasm32-unknown-unknown
