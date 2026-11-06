@@ -27,7 +27,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Checkout test fonts
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: storytold/craft-fonts
           ref: b076417b5880bd4154bd22f00695b1d28c6bea83
@@ -65,7 +65,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Checkout test fonts
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: storytold/craft-fonts
           ref: b076417b5880bd4154bd22f00695b1d28c6bea83

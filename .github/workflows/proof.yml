@@ -21,13 +21,13 @@ jobs:
     name: Proofing lint, tests with and without Language data, WASM
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
       # The Language data (craft-i18n `language-data/`), embedded by crates/proof/build.rs.
       # Pinned to storytold/craft-i18n#114's head (#109's SCOWL dictionaries + judgment/judgement,
       # CP2.1); TODO(CP2.1): move to #114's merge commit once it merges.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           repository: storytold/craft-i18n
           ref: c239f934ace90b7939afaceb23b472ceeafd6b8a
