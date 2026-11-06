@@ -13,7 +13,7 @@
 //!   merge base, `<pr>` its head; the new fragment is `<name>.md`. Run on the PR's branch, merged
 //!   with the current `main`.
 
-use crate::{Config, File, MAX_DOC, MAX_FILE, MAX_FILES, Table, check, in_dir, items_from_tables, join, migrate};
+use crate::{Config, File, MAX_DOC, MAX_FILE, MAX_FILES, NaiveDate, Table, check, in_dir, items_from_tables, join, migrate};
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::process::Command;
@@ -24,6 +24,15 @@ fn git(root: &Path, args: &[&str]) -> Result<String, String> {
         return Err(format!("git {}: {}", args.join(" "), String::from_utf8_lossy(&out.stderr).trim()));
     }
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+fn now() -> i64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(0))
+}
+
+/// Today in UTC, from the system clock: no status date goes past it.
+fn today() -> NaiveDate {
+    chrono::DateTime::from_timestamp(now(), 0).map_or(NaiveDate::MIN, |t| t.date_naive())
 }
 
 fn paths(cfg: &Config) -> Vec<&'static str> {
@@ -75,7 +84,7 @@ fn kind(path: &Path) -> Option<std::fs::FileType> {
 /// are skipped.
 fn working(root: &Path, cfg: &Config) -> Result<Vec<File>, String> {
     let known = known_times(root, cfg, "HEAD").unwrap_or_default();
-    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(0));
+    let now = now();
     let mut names = Vec::new();
     for p in paths(cfg) {
         let full = root.join(p);
@@ -144,7 +153,7 @@ fn write_all(root: &Path, files: &[File]) -> Result<(), String> {
 }
 
 fn fold(root: &Path, cfg: &Config, files: &[File]) -> Result<usize, String> {
-    let joined = join(cfg, files).map_err(|e| e.join("\n"))?;
+    let joined = join(cfg, files, today()).map_err(|e| e.join("\n"))?;
     let changed: Vec<File> = joined
         .docs
         .iter()
@@ -164,7 +173,7 @@ pub fn run(root: &Path, cfg: &Config, args: &[String]) -> Result<(), String> {
     match args.as_slice() {
         [] => {
             let files = working(root, cfg)?;
-            let joined = join(cfg, &files).map_err(|e| e.join("\n"))?;
+            let joined = join(cfg, &files, today()).map_err(|e| e.join("\n"))?;
             for (doc, text) in &joined.docs {
                 println!("==> {doc} <==");
                 print!("{text}");
@@ -195,7 +204,7 @@ pub fn run(root: &Path, cfg: &Config, args: &[String]) -> Result<(), String> {
                 _ => return Err("usage: progress --check [--base <rev>]".into()),
             };
             let mb = base;
-            let errors = check(cfg, &at_rev(root, cfg, mb.trim())?, &working(root, cfg)?);
+            let errors = check(cfg, &at_rev(root, cfg, mb.trim())?, &working(root, cfg)?, today());
             if errors.is_empty() {
                 eprintln!("progress: fragments, items and joined regions are fine");
                 Ok(())

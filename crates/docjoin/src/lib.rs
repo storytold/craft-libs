@@ -20,6 +20,7 @@
 pub mod cli;
 mod front;
 
+pub use chrono::NaiveDate;
 use std::collections::{BTreeMap, BTreeSet};
 
 /// The longest fragment or item read, in bytes.
@@ -403,7 +404,7 @@ impl Status {
         let parts: Vec<String> = line.split(" · ").map(str::to_string).collect();
         let date = parts.iter().position(|p| lead(p).starts_with(STATUS_KEY)).ok_or_else(shape)?;
         let value = parts.get(date).and_then(|p| lead(p).strip_prefix(STATUS_KEY)).unwrap_or_default().trim();
-        if line.matches(STATUS_KEY).count() != 1 || value.len() != 10 || chrono::NaiveDate::parse_from_str(value, "%Y-%m-%d").is_err() {
+        if line.matches(STATUS_KEY).count() != 1 || parse_date(value).is_none() {
             return Err(shape());
         }
         let change = parts.iter().position(|p| lead(p).starts_with("**Change:**")).map(|c| {
@@ -423,10 +424,11 @@ impl Status {
         lead(&value).strip_prefix("**Change:**").unwrap_or_default().trim().to_string()
     }
 
-    /// The line with `date` (unless that is older than the line's) and `kind` written in.
-    fn written(&self, date: &str, kind: Kind) -> String {
+    /// The line with `date` (unless that is older than the line's) and `kind` written in. The date
+    /// is never after `today`: a commit time can be in the future, and a PR could have put one there.
+    fn written(&self, date: NaiveDate, kind: Kind, today: NaiveDate) -> String {
         let keep = |i: usize, key: &str| self.parts.get(i).and_then(|p| p.find(key).and_then(|at| p.get(..at))).unwrap_or_default().to_string();
-        let date = if date < self.date() { self.date().to_string() } else { date.to_string() };
+        let date = parse_date(self.date()).map_or(date, |old| old.max(date)).min(today).format("%Y-%m-%d").to_string();
         let mut parts = self.parts.clone();
         let change = format!("**Change:** {}", kind.word());
         match self.change {
@@ -450,8 +452,12 @@ fn stamp(a: Stamp, time: i64, kind: Kind) -> Stamp {
     Some(a.map_or((time, kind), |(t, k)| (t.max(time), k.max(kind))))
 }
 
-fn date_of(time: i64) -> Result<String, String> {
-    Ok(chrono::DateTime::from_timestamp(time, 0).ok_or("a commit time is out of range")?.format("%Y-%m-%d").to_string())
+fn date_of(time: i64) -> Result<NaiveDate, String> {
+    Ok(chrono::DateTime::from_timestamp(time, 0).ok_or("a commit time is out of range")?.date_naive())
+}
+
+fn parse_date(s: &str) -> Option<NaiveDate> {
+    NaiveDate::parse_from_str(s, "%Y-%m-%d").ok().filter(|_| s.len() == 10)
 }
 
 fn item_fields(table: &Table) -> Vec<&'static str> {
@@ -642,7 +648,7 @@ fn table_rows(table: &Table, found: &[Item], current: &[&str]) -> (Vec<String>, 
     (rows, Some(time))
 }
 
-fn join_doc(cfg: &Config, files: &[File], file: &File, out: &mut Joined, errors: &mut Vec<String>) {
+fn join_doc(cfg: &Config, files: &[File], file: &File, today: NaiveDate, out: &mut Joined, errors: &mut Vec<String>) {
     let doc = file.path.as_str();
     let mut lines: Vec<&str> = file.text.lines().collect();
     let mut owned_rows: Vec<(usize, usize, Vec<String>)> = Vec::new();
@@ -682,7 +688,7 @@ fn join_doc(cfg: &Config, files: &[File], file: &File, out: &mut Joined, errors:
     }
     if writes_status(cfg, doc) {
         let written = Status::find(&joined).and_then(|s| match changed {
-            Some((time, kind)) => Ok((s.at, s.written(&date_of(time)?, kind))),
+            Some((time, kind)) => Ok((s.at, s.written(date_of(time)?, kind, today))),
             None => Ok((s.at, String::new())),
         });
         match written {
@@ -706,14 +712,15 @@ fn docs_of(cfg: &Config) -> BTreeSet<&'static str> {
     cfg.logs.iter().map(|l| l.doc).chain(cfg.tables.iter().map(|t| t.doc)).collect()
 }
 
-/// Every configured doc with its fragments and items joined in. Errors list every bad file.
-pub fn join(cfg: &Config, files: &[File]) -> Result<Joined, Vec<String>> {
+/// Every configured doc with its fragments and items joined in. Errors list every bad file. No
+/// status date is written after `today`.
+pub fn join(cfg: &Config, files: &[File], today: NaiveDate) -> Result<Joined, Vec<String>> {
     let mut errors = Vec::new();
     let by_path: BTreeMap<&str, &File> = files.iter().map(|f| (f.path.as_str(), f)).collect();
     let mut out = Joined::default();
     for doc in docs_of(cfg) {
         match by_path.get(doc) {
-            Some(file) => join_doc(cfg, files, file, &mut out, &mut errors),
+            Some(file) => join_doc(cfg, files, file, today, &mut out, &mut errors),
             None => errors.push(format!("{doc}: not found")),
         }
     }
@@ -773,8 +780,10 @@ fn check_log(doc: &str, base: &[&str], head: &[&str], log: &Log, consumed: &[Fra
 }
 
 /// The status line may move only in a pull request that folded fragments into the doc or changed
-/// (or rebuilt) a table the line follows, and only to the `Change` the fold writes, never back.
-fn check_status(doc: &str, base: &[&str], head: &[&str], want: Option<Kind>, errors: &mut Vec<String>) {
+/// (or rebuilt) a table the line follows, and only to the `Change` the fold writes. Its date never
+/// goes back and is never after `today`: the fold never moves a date back, so a future one would
+/// stick.
+fn check_status(doc: &str, base: &[&str], head: &[&str], want: Option<Kind>, today: NaiveDate, errors: &mut Vec<String>) {
     let Ok(h) = Status::find(head) else { return };
     let (bd, bc) = Status::find(base).map(|b| (b.date().to_string(), b.change())).unwrap_or_default();
     let (hd, hc) = (h.date(), h.change());
@@ -792,24 +801,30 @@ fn check_status(doc: &str, base: &[&str], head: &[&str], want: Option<Kind>, err
     if hc != want.word() {
         errors.push(format!("{doc}: the status line's **Change:** is `{hc}`; the fold writes `{}`", want.word()));
     }
-    if hd < bd.as_str() {
+    if hd == bd {
+        return;
+    }
+    let (Some(new), old) = (parse_date(hd), parse_date(&bd)) else { return };
+    if new > today {
+        errors.push(format!("{doc}: the status line's **Last updated:** is {hd}, after today ({today})"));
+    } else if old.is_some_and(|old| new < old.min(today)) {
         errors.push(format!("{doc}: the status line's **Last updated:** went back from {bd} to {hd}"));
     }
 }
 
 /// `doc` with its tables as the fold would write them from the head's items.
-fn tables_folded(cfg: &Config, doc: &str, base_text: &str, head: &[File]) -> Option<String> {
+fn tables_folded(cfg: &Config, doc: &str, base_text: &str, head: &[File], today: NaiveDate) -> Option<String> {
     let in_logs = |f: &File| cfg.logs.iter().any(|l| f.path.starts_with(&format!("{}/", l.dir)));
     let mut from: Vec<File> = head.iter().filter(|f| !in_logs(f) && f.path != doc).cloned().collect();
     from.push(File { path: doc.to_string(), text: base_text.to_string(), time: 0 });
-    join(&Config { logs: &[], tables: cfg.tables }, &from).ok().and_then(|j| j.docs.get(doc).cloned())
+    join(&Config { logs: &[], tables: cfg.tables }, &from, today).ok().and_then(|j| j.docs.get(doc).cloned())
 }
 
 fn rows_of(lines: &[&str], table: &Table) -> Option<Vec<String>> {
     place(lines, table).ok().map(|r| trimmed(lines, r).into_iter().map(str::to_string).collect())
 }
 
-fn check_doc(cfg: &Config, base: &[File], head: &[File], doc: &str, errors: &mut Vec<String>) {
+fn check_doc(cfg: &Config, base: &[File], head: &[File], doc: &str, today: NaiveDate, errors: &mut Vec<String>) {
     let text_of = |files: &[File]| files.iter().find(|f| f.path == doc).map(|f| f.text.clone());
     let (Some(base_text), Some(head_text)) = (text_of(base), text_of(head)) else { return };
     let (bl, hl): (Vec<&str>, Vec<&str>) = (base_text.lines().collect(), head_text.lines().collect());
@@ -829,7 +844,7 @@ fn check_doc(cfg: &Config, base: &[File], head: &[File], doc: &str, errors: &mut
             check_log(doc, &bl, &hl, log, &gone, errors);
         }
     }
-    let want = tables_folded(cfg, doc, &base_text, head);
+    let want = tables_folded(cfg, doc, &base_text, head, today);
     let want_lines: Vec<&str> = want.as_deref().unwrap_or_default().lines().collect();
     let mut table_moved = false;
     for table in cfg.tables.iter().filter(|t| t.doc == doc) {
@@ -846,16 +861,16 @@ fn check_doc(cfg: &Config, base: &[File], head: &[File], doc: &str, errors: &mut
     }
     if writes_status(cfg, doc) && !exempt {
         let want = if table_moved { kinds.max(Some(Kind::Minor)) } else { kinds };
-        check_status(doc, &bl, &hl, want, errors);
+        check_status(doc, &bl, &hl, want, today, errors);
     }
 }
 
 /// What CI runs on a pull request: `base` is the merge base's files, `head` the pull request's.
 /// Fails on any bad fragment or item; on a deleted item, folder README or unfolded fragment; and
 /// on a joined region the pull request changed unless it now reads as the fold would write it
-/// (the fold's own pull request).
-pub fn check(cfg: &Config, base: &[File], head: &[File]) -> Vec<String> {
-    if let Err(e) = join(cfg, head) {
+/// (the fold's own pull request). `today` bounds the status dates a pull request may write.
+pub fn check(cfg: &Config, base: &[File], head: &[File], today: NaiveDate) -> Vec<String> {
+    if let Err(e) = join(cfg, head, today) {
         return e;
     }
     // Commit times are not used here: CI's checkout is shallow, so they aren't known.
@@ -881,7 +896,7 @@ pub fn check(cfg: &Config, base: &[File], head: &[File]) -> Vec<String> {
         }
     }
     for doc in docs_of(cfg) {
-        check_doc(cfg, base, head, doc, &mut errors);
+        check_doc(cfg, base, head, doc, today, &mut errors);
     }
     errors
 }

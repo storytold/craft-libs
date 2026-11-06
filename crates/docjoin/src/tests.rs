@@ -2,6 +2,19 @@
 
 use super::*;
 
+/// The tests' today: after every fixture date.
+fn today() -> NaiveDate {
+    NaiveDate::from_ymd_opt(2026, 11, 30).unwrap()
+}
+
+fn join(cfg: &Config, files: &[File]) -> Result<Joined, Vec<String>> {
+    super::join(cfg, files, today())
+}
+
+fn check(cfg: &Config, base: &[File], head: &[File]) -> Vec<String> {
+    super::check(cfg, base, head, today())
+}
+
 const ROADMAP: &str = "# App roadmap\n\n> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-01 · **Change:** trivial (old thing); previously minor (older) · **Target:** Word 16\n\nIntro.\n\n## Progress log\n\n- 2026-11-01: old entry\n  wrapped.\n- 2026-10-30: older entry\n\n## Next\n\nStuff.\n";
 
 const GAPS: &str = "# Gaps\n\n## Every known gap, ranked\n\nProse above.\n\n| # | Gap | Evidence |\n|---|---|---|\n| 1 | First | e1 |\n| 3 | Third | e3 |\n| 2 | Second | e2 |\n\nProse below.\n\n## Revision history\n\n| Date | Change | Summary |\n|---|---|---|\n| 2026-11-01 | minor | x |\n";
@@ -639,4 +652,36 @@ fn a_log_folder_needs_its_readme() {
     let head = base.clone();
     let errors = check(&CFG, &base, &head);
     assert!(errors.iter().any(|e| e.contains("docs/progress.d/README.md: missing")), "{errors:?}");
+}
+
+// ---- second review ----
+
+#[test]
+fn a_pr_cannot_write_a_status_date_after_today() {
+    let mut base = docs();
+    base.push(f("docs/progress.d/12-a.md", "- 2026-11-05: a\n", NOV5));
+    let mut head = fold_of(&CFG, &base);
+    set(&mut head, "ROADMAP.md", |t| t.replace("**Last updated:** 2026-11-05", "**Last updated:** 2099-12-31"));
+    has(&check(&CFG, &zero(&base), &zero(&head)), "**Last updated:** is 2099-12-31, after today (2026-11-30)");
+    // Nor by editing an item of a table that writes the status line.
+    let base = sdocs();
+    let mut head = base.clone();
+    set(&mut head, "docs/gaps.d/2-second.md", |t| t.replace("e2", "e2 better"));
+    set(&mut head, "docs/gaps.md", |t| t.replace("2026-11-01 · **Change:** trivial (x); previously minor", "2099-01-01 · **Change:** minor"));
+    has(&check(&SCFG, &base, &head), "after today");
+    // Today itself is fine.
+    set(&mut head, "docs/gaps.md", |t| t.replace("2099-01-01", "2026-11-30"));
+    assert_eq!(check(&SCFG, &base, &head), Vec::<String>::new());
+}
+
+#[test]
+fn the_fold_never_writes_a_date_after_today() {
+    let mut files = docs();
+    files.push(f("docs/progress.d/12-a.md", "- a\n", 4_102_444_800)); // 2100-01-01
+    assert!(joined(&files, "ROADMAP.md").contains("**Last updated:** 2026-11-30 ·"));
+    // A future date already on main comes back to today at the next fold.
+    set(&mut files, "ROADMAP.md", |t| t.replace("**Last updated:** 2026-11-01", "**Last updated:** 2099-12-31"));
+    let head = fold_of(&CFG, &files);
+    assert!(head.iter().any(|f| f.path == "ROADMAP.md" && f.text.contains("**Last updated:** 2026-11-30 ·")));
+    assert_eq!(check(&CFG, &zero(&files), &zero(&head)), Vec::<String>::new());
 }
