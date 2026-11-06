@@ -53,6 +53,8 @@ craft-proof Language data, embedded at build time from craft-i18n's language-dat
   OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
   POSSIBILITY OF SUCH DAMAGE.
 crates/text/assets/hyphen/en-us.pat: CC0-1.0, trained from en-us.dic by DesignCraft's trainer.
+crates/mobile/android/craftkit/src/main/res/drawable/craft_ic_*.xml: Apache-2.0, Material Icons
+  by Google, https://github.com/google/material-design-icons (colour set to white).
 Hyphenation patterns for other languages, embedded through the hypher crate only when the
   matching craft-text feature is enabled (none are by default). They come from hyph-utf8,
   https://github.com/hyphenation/tex-hyphen, as packaged in https://github.com/typst/hypher
