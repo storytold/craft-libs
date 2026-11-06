@@ -2227,6 +2227,31 @@ impl AffixDict {
         self.check_except(w, self.excluded(true))
     }
 
+    /// Does a listed spelling block a language-specific compound fallback?
+    pub(crate) fn excludes_spelling(&self, word: &str) -> bool {
+        self.excludes_variant(word, false)
+    }
+
+    /// Does a listed spelling block suggestion fallback, including case variants?
+    pub(crate) fn excludes_suggestions(&self, word: &str) -> bool {
+        self.excludes_variant(word, true)
+    }
+
+    /// Probe listed forms without relaxing the public spelling/suggestion exclusions.
+    fn excludes_variant(&self, word: &str, suggesting: bool) -> bool {
+        let excluded = self.excluded(suggesting).keeping(self.keepcase);
+        let blocked = |form: &str| {
+            let normalized = self.normalize(form);
+            // A form listed only as a NEEDAFFIX stem (`casă-caz/NA`) is no word on its own, so its
+            // parts can't make it one either.
+            let needs_affix = self.need_affix.is_some_and(|f| self.stem_set(&normalized).is_some_and(|set| has(set, f)))
+                && !self.check_except(form, Excluded::default());
+            self.is_forbidden(&normalized) || needs_affix || (self.check_except(form, Excluded::default()) && !self.check_except(form, excluded))
+        };
+        let lower = word.to_lowercase();
+        blocked(word) || blocked(&lower) || blocked(&capitalize(&lower))
+    }
+
     /// Whether `w` is a word only through a `KEEPCASE` stem, so it is correct in this letter case
     /// alone (`km` from `km/K`, which `Km` and `KM` are not).
     pub(crate) fn case_locked(&self, w: &str) -> bool {
@@ -2235,6 +2260,10 @@ impl AffixDict {
 
     fn check_except(&self, w: &str, excluded: Excluded) -> bool {
         let w = self.normalize(w);
+        // An explicitly forbidden spelling wins over every case/compound fallback.
+        if self.is_forbidden(&w) {
+            return false;
+        }
         if self.contains_except(&w, excluded) {
             return true;
         }
@@ -2243,7 +2272,13 @@ impl AffixDict {
             return false;
         }
         let keep = excluded.keeping(self.keepcase);
-        match casing(&w) {
+        let case = casing(&w);
+        // A listed spelling excluded from suggestions must not return through its
+        // allowed lower-case homograph (CAZ/N versus caz). Unlisted capitals still fall back.
+        if case != Casing::Lower && self.contains_except(&w, Excluded::default()) {
+            return false;
+        }
+        match case {
             Casing::Lower => false,
             // A compound may join a capitalized stem to others, and the word start with a
             // capital (`FooQux` from `foo` and `Qux`: right in the CLI).
@@ -2905,6 +2940,58 @@ pub(crate) mod tests {
         for aff in ["", "NOSUGGEST N\n"] {
             let ordinary = AffixDict::from_hunspell(aff, "2\nmixCase\nhidden/N\n", &[]).unwrap();
             assert!(suggest(&ordinary, "MIXCASX", 8).contains(&"MIXCASE".into()));
+        }
+    }
+
+    /// A compound listed only as a NEEDAFFIX stem is excluded; with its affix it is a word.
+    #[test]
+    fn a_needaffix_listing_blocks_the_bare_compound() {
+        let d = AffixDict::from_hunspell("NEEDAFFIX N\nSFX A Y 1\nSFX A 0 uri .\n", "3\ncasă\ncaz\ncasă-caz/NA\n", &[]).unwrap();
+        assert!(!d.check("casă-caz") && d.check("casă-cazuri"));
+        assert!(d.excludes_spelling("casă-caz") && d.excludes_suggestions("casă-caz"));
+        assert!(!d.excludes_spelling("casă-cazuri"), "the affixed form is a word");
+        let plain = AffixDict::from_hunspell("", "2\ncasă\ncaz\n", &[]).unwrap();
+        assert!(!plain.excludes_spelling("casă-caz"), "an unlisted compound is not excluded");
+    }
+
+    /// Exact excluded spellings take precedence over an allowed case fallback.
+    #[test]
+    fn case_fallback_does_not_revive_excluded_exact_spellings() {
+        for flag in ["N", "S", "F"] {
+            let d =
+                AffixDict::from_hunspell("NOSUGGEST N\nSUBSTANDARD S\nFORBIDDENWORD F\n", &format!("3\ncaz\nCaz/{flag}\nCAZ/{flag}\n"), &[]).unwrap();
+            assert!(d.check("caz") && d.can_suggest("caz"));
+            for word in ["Caz", "CAZ"] {
+                assert_eq!(d.check(word), flag != "F", "{word}/{flag}");
+                assert!(!d.can_suggest(word), "{word}/{flag}");
+            }
+        }
+        let ordinary = AffixDict::from_hunspell("", "1\ncaz\n", &[]).unwrap();
+        for word in ["caz", "Caz", "CAZ"] {
+            assert!(ordinary.check(word) && ordinary.can_suggest(word), "unlisted case variants: {word}");
+        }
+    }
+
+    /// Compound guards honor exclusions in mixed case without rejecting ordinary words.
+    #[test]
+    fn excluded_listing_includes_case_and_affixed_forms() {
+        let d = AffixDict::from_hunspell(
+            "NOSUGGEST N\nSUBSTANDARD S\nFORBIDDENWORD F\nSFX A Y 1\nSFX A 0 s .\n",
+            "4\nsecret/NA\nbanned/FA\nordinary/A\nsubstandard/SA\n",
+            &[],
+        )
+        .unwrap();
+        for word in ["secret", "Secrets", "SeCrEt", "substandard", "Substandards", "SuBsTaNdArD"] {
+            assert!(!d.excludes_spelling(word), "NOSUGGEST is correct: {word}");
+            assert!(d.excludes_suggestions(word), "{word}");
+        }
+        for word in ["banned", "BANNEDS", "BanNeD"] {
+            assert!(d.excludes_spelling(word), "{word}");
+            assert!(d.excludes_suggestions(word), "{word}");
+        }
+        for word in ["unknown", "ordinary", "OrDiNaRy"] {
+            assert!(!d.excludes_spelling(word), "{word}");
+            assert!(!d.excludes_suggestions(word), "{word}");
         }
     }
 

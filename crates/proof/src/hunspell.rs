@@ -65,6 +65,18 @@ fn lo_ext_dirs(name: &str) -> Vec<String> {
     if full == first { vec![first] } else { vec![first, full] }
 }
 
+/// The LibreOffice extension directories for every one of `names`, without repeats
+/// (`ro_RO`, `ro_MD` → `dict-ro`, `dict-ro-RO`, `dict-ro-MD`), or `None` for no names.
+fn lo_ext_dirs_all(names: &[&str]) -> Option<Vec<String>> {
+    let mut out: Vec<String> = Vec::new();
+    for ext in names.iter().flat_map(|n| lo_ext_dirs(n)) {
+        if !out.contains(&ext) {
+            out.push(ext);
+        }
+    }
+    (!out.is_empty()).then_some(out)
+}
+
 /// Directories that may hold Hunspell dictionaries, most specific first. `lo_exts`, when a
 /// language is being searched for, adds LibreOffice's extension folders for it (`dict-pt-BR`).
 pub fn search_dirs(lo_exts: Option<&[String]>) -> Vec<PathBuf> {
@@ -178,7 +190,7 @@ pub fn find(names: &[&str]) -> Option<(PathBuf, PathBuf)> {
 /// 4. any other installed pack of the language (another region: `pt-pt`, the bare `pt`);
 /// 5. the system's folders, the other names (`pt`).
 pub fn candidates(names: &[&str]) -> Vec<(PathBuf, PathBuf)> {
-    let lo = names.first().copied().map(lo_ext_dirs);
+    let lo = lo_ext_dirs_all(names);
     let (dirs, system) = search_tiers(lo.as_deref());
     let (region_packs, other_packs) = crate::packs::spelling_dirs(names);
     ordered(names, &dirs, &region_packs, &system, &other_packs)
@@ -223,7 +235,7 @@ pub(crate) fn ordered(
 /// then an installed pack named exactly by one of `names` (`en_GB` → `en-gb`), then the system's
 /// folders, `names` only. English uses it: en-GB never falls back to an `en_US` file or pack.
 pub fn candidates_exact(names: &[&str]) -> Vec<(PathBuf, PathBuf)> {
-    let lo = names.first().copied().map(lo_ext_dirs);
+    let lo = lo_ext_dirs_all(names);
     let (dirs, system) = search_tiers(lo.as_deref());
     ordered(names, &dirs, &crate::packs::exact_spelling_dirs(names), &system, &[])
 }
@@ -958,6 +970,12 @@ mod tests {
         assert_eq!(super::lo_ext_dirs("pl_PL"), ["dict-pl", "dict-pl-PL"]);
         assert_eq!(super::lo_ext_dirs("pt_BR"), ["dict-pt", "dict-pt-BR"]);
         assert_eq!(super::lo_ext_dirs("de-DE"), ["dict-de", "dict-de-DE"]);
+        // Every name's folders are searched, once each: a Moldovan `ro_MD` lives in `dict-ro-MD`.
+        assert_eq!(
+            super::lo_ext_dirs_all(&["ro_RO", "ro-RO", "ro_MD", "ro"]).as_deref(),
+            Some(["dict-ro", "dict-ro-RO", "dict-ro-MD"].map(String::from).as_slice())
+        );
+        assert_eq!(super::lo_ext_dirs_all(&[]), None);
         let dirs = search_dirs(Some(&super::lo_ext_dirs("pt_BR")));
         assert!(dirs.iter().any(|d| d.ends_with("dict-pt-BR")), "{dirs:?}");
         assert!(search_dirs(None).iter().all(|d| !d.to_string_lossy().contains("dict-")), "no language: no LibreOffice guess");
