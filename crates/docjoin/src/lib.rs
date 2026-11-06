@@ -270,26 +270,71 @@ fn is_row(line: &str) -> bool {
     line.trim_start().starts_with('|')
 }
 
-/// Table `nth` (from 0) in a section: (header line, first row, end of rows).
-fn table_in(lines: &[&str], start: usize, end: usize, nth: usize) -> Option<(usize, usize, usize)> {
-    let row = |i: usize| lines.get(i).is_some_and(|l| is_row(l));
+/// A list item's marker: `-`, `*` or `+`, or up to nine digits and `.` or `)`, then a space or the
+/// line's end.
+fn is_list_item(t: &str) -> bool {
+    let digits = t.bytes().take_while(u8::is_ascii_digit).count();
+    let rest = match digits {
+        0 => t.strip_prefix(['-', '*', '+']),
+        1..=9 => t.get(digits..).and_then(|r| r.strip_prefix(['.', ')'])),
+        _ => None,
+    };
+    rest.is_some_and(|r| r.is_empty() || r.starts_with([' ', '\t']))
+}
+
+/// A line that starts a block other than a paragraph, and so ends a table (GFM): a heading, a code
+/// fence, a block quote, an HTML block or a list item, up to three spaces in.
+fn starts_block(line: &str) -> bool {
+    let t = line.trim_start_matches(' ');
+    line.len() - t.len() <= 3 && (is_heading(line) || t.starts_with("```") || t.starts_with("~~~") || t.starts_with(['>', '<']) || is_list_item(t))
+}
+
+/// A table line's cells. GFM reads a line with no leading `|` inside a table as a row too.
+fn row_cells(line: &str) -> Vec<String> {
+    if is_row(line) { cells(line).unwrap_or_default() } else { cells(&format!("|{line}")).unwrap_or_default() }
+}
+
+/// The tables in a section, each (header line, first row, end of rows). A table starts at a line
+/// that starts with `|` and runs, as in GFM, to the first blank line or line that starts another
+/// block: every line before that renders as a row, with or without a leading `|`.
+fn tables_in(lines: &[&str], start: usize, end: usize) -> Vec<(usize, usize, usize)> {
+    let mut out = Vec::new();
     let mut i = start;
-    let mut seen = 0;
     while i < end {
-        if !row(i) {
+        if !lines.get(i).is_some_and(|l| is_row(l)) {
             i += 1;
             continue;
         }
         let header = i;
-        while i < end && row(i) {
+        i += 1;
+        while i < end && lines.get(i).is_some_and(|l| !l.trim().is_empty() && !starts_block(l)) {
             i += 1;
         }
-        if seen == nth {
-            return Some((header, (header + 2).min(i), i));
-        }
-        seen += 1;
+        out.push((header, (header + 2).min(i), i));
     }
-    None
+    out
+}
+
+/// Table `nth` (from 0) in a section: (header line, first row, end of rows).
+fn table_in(lines: &[&str], start: usize, end: usize, nth: usize) -> Option<(usize, usize, usize)> {
+    tables_in(lines, start, end).get(nth).copied()
+}
+
+/// Every line in a joined table's rows is a row of the header's width: GFM renders a line that
+/// follows a table as one of its rows, so a stray line would be a row nobody joined.
+fn check_rows(lines: &[&str], (header, first, end): (usize, usize, usize), name: &str) -> Result<(), String> {
+    let width = lines.get(header).map_or(0, |l| row_cells(l).len());
+    for (n, line) in lines.get(first..end).unwrap_or_default().iter().enumerate() {
+        let got = row_cells(line).len();
+        if got != width {
+            return Err(format!(
+                "{name} row {}: {got} cells, {width} columns: {:?}; a table runs to the first blank line",
+                n + 1,
+                line.trim_end()
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn is_entry(line: &str) -> bool {
@@ -315,7 +360,9 @@ fn log_insert(lines: &[&str], log: &Log) -> Result<Insert, String> {
     let (start, end) = section(lines, log.heading)?;
     let first = (start..end).find(|&i| lines.get(i).is_some_and(|l| is_entry(l)));
     if first.and_then(|i| lines.get(i)).is_some_and(|l| is_row(l)) {
-        let (header, first_row, rows_end) = table_in(lines, start, end, 0).ok_or("log table vanished")?;
+        let table = table_in(lines, start, end, 0).ok_or("log table vanished")?;
+        check_rows(lines, table, &format!("`{}`", log.heading))?;
+        let (header, first_row, rows_end) = table;
         let width = lines.get(header).and_then(|l| cells(l)).map_or(0, |c| c.len());
         let at = if log.newest_first { first_row } else { rows_end };
         return Ok(Insert { at, width: Some(width), pad_before: false, pad_after: false });
@@ -615,13 +662,20 @@ fn check_header(lines: &[&str], header: usize, table: &Table) -> Result<(), Stri
 
 /// The configured table in `lines`: (first row, end of rows).
 fn place(lines: &[&str], table: &Table) -> Result<(usize, usize), String> {
+    let (h, first, end) = locate(lines, table)?;
+    check_rows(lines, (h, first, end), &format!("`{}`", table.heading))?;
+    Ok((first, end))
+}
+
+/// [`place`], with rows of any width (a pull request's rows that `migrate` reports on).
+fn locate(lines: &[&str], table: &Table) -> Result<(usize, usize, usize), String> {
     let (s, e) = section(lines, table.heading)?;
     let (h, first, end) = table_in(lines, s, e, table.nth).ok_or_else(|| match table.nth {
         0 => format!("has no table under `{}`", table.heading),
         n => format!("has no table {} under `{}`", n + 1, table.heading),
     })?;
     check_header(lines, h, table)?;
-    Ok((first, end))
+    Ok((h, first, end))
 }
 
 fn table_name(table: &Table) -> String {
@@ -981,9 +1035,8 @@ fn item_text(table: &Table, row: &[String], rank: Option<i32>, closed: bool) -> 
 fn table_items(table: &Table, doc: &File, out: &mut Vec<File>, notes: &mut Vec<String>) -> Result<(), Vec<String>> {
     let lines: Vec<&str> = doc.text.lines().collect();
     let (first, end) = place(&lines, table).map_err(|e| vec![format!("{} {e}", table.doc)])?;
-    // Every line in the range starts with `|`, so each is a row; a row of the wrong width is an
-    // error, never dropped.
-    let rows: Vec<Vec<String>> = lines.get(first..end).unwrap_or_default().iter().map(|l| cells(l).unwrap_or_default()).collect();
+    // Every line in the range is a row; a row of the wrong width is an error, never dropped.
+    let rows: Vec<Vec<String>> = lines.get(first..end).unwrap_or_default().iter().map(|l| row_cells(l)).collect();
     let mut errors = Vec::new();
     let mut numbers = Vec::new();
     for (i, row) in rows.iter().enumerate() {
@@ -1077,7 +1130,7 @@ fn migrate_edit(table: &Table, item: &Item, old: &[String], pr: &[String], out: 
 
 fn migrate_table(table: &Table, files: &[File], old: &[&str], pr: &[&str], out: &mut Vec<File>, notes: &mut Vec<String>) {
     let rows = |lines: &[&str]| -> Vec<Vec<String>> {
-        place(lines, table).ok().map(|(f, e)| lines.get(f..e).unwrap_or_default().iter().filter_map(|l| cells(l)).collect()).unwrap_or_default()
+        locate(lines, table).ok().map(|(_, f, e)| lines.get(f..e).unwrap_or_default().iter().map(|l| row_cells(l)).collect()).unwrap_or_default()
     };
     let (before, after) = (rows(old), rows(pr));
     let mut errs = Vec::new();

@@ -685,3 +685,25 @@ fn the_fold_never_writes_a_date_after_today() {
     assert!(head.iter().any(|f| f.path == "ROADMAP.md" && f.text.contains("**Last updated:** 2026-11-30 ·")));
     assert_eq!(check(&CFG, &zero(&files), &zero(&head)), Vec::<String>::new());
 }
+
+#[test]
+fn a_line_right_after_a_table_is_one_of_its_rows() {
+    // GFM continues a table with a line that has no leading pipe: it's a row nobody joined.
+    let base = docs();
+    let mut head = base.clone();
+    set(&mut head, "docs/gaps.md", |t| t.replace("| 2 | Second | e2 |\n", "| 2 | Second | e2 |\n99 | Fake gap | made up\n"));
+    has(&check(&CFG, &base, &head), "table under `## Every known gap, ranked` was edited by hand");
+    assert!(!joined(&head, "docs/gaps.md").contains("Fake gap"), "the fold drops it");
+    // A line that isn't a row of the table's width is an error, not prose.
+    let mut prose = base.clone();
+    set(&mut prose, "docs/gaps.md", |t| t.replace("| 2 | Second | e2 |\n", "| 2 | Second | e2 |\nProse glued on.\n"));
+    has(&join(&CFG, &prose).unwrap_err(), "row 4: 1 cells, 3 columns: \"Prose glued on.\"");
+    has(&check(&CFG, &base, &prose), "1 cells, 3 columns");
+    // A block that isn't a paragraph ends the table.
+    for block in ["## Next", "- a list", "1. a list", "> quote", "<details>", "```", "~~~"] {
+        let mut ended = base.clone();
+        set(&mut ended, "docs/gaps.md", |t| t.replace("| 2 | Second | e2 |\n", &format!("| 2 | Second | e2 |\n{block}\n")));
+        let j = join(&CFG, &ended);
+        assert!(j.as_ref().is_ok_and(|j| j.docs.get("docs/gaps.md").is_some_and(|d| d.contains(&format!("e2 |\n{block}\n")))), "{block}: {j:?}");
+    }
+}
