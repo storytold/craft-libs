@@ -25,6 +25,8 @@ kurbo = "0.13"
 thiserror = "2"
 craft-atomic = { path = "crates/atomic" }
 craft-cms = { path = "crates/cms" }
+craft-command = { path = "crates/command" }
+craft-command-derive = { path = "crates/command-derive" }
 craft-crw = { path = "crates/crw" }
 craft-dialogs = { path = "crates/dialogs" }
 craft-doc = { path = "crates/doc" }

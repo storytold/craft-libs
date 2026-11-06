@@ -34,6 +34,7 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
 - [`craft-cms`](crates/cms/README.md): pure-Rust ICC v2/v4 colour management: profile parsing
   and writing, transforms, rendering intents, black point compensation, soft proofing, gamut
   checks, 3D LUTs and built-in profiles (sRGB, Display P3, synthetic coated CMYK and others).
+- [`craft-command`](crates/command/README.md): command registry for the Craft apps: commands added at run time, a gate on each call (`before` and `after` hooks with time budgets), a document change feed and a JSON Schema per command. Its `#[command]` macro is in [`craft-command-derive`](crates/command-derive/README.md). Builds for `wasm32`.
 - [`craft-crw`](crates/crw/README.md): clean-room Canon CRW (CIFF) raw decoder, from LightCraft:
   the heap container, the entropy coding derived by black-box analysis (frozen code tables), sensor
   black and white levels and as-shot white balance. The complete derivation record (plan, sources
