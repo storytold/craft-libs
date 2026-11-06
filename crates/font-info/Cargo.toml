@@ -11,7 +11,7 @@ description = "What a font face offers for fine typography: variation axes, name
 workspace = true
 
 [dependencies]
-skrifa = "0.44"
+skrifa = { version = "0.48", default-features = false, features = ["std"] }
 
 [dev-dependencies]
 write-fonts = "0.54"

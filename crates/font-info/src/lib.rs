@@ -73,8 +73,10 @@ pub struct AxisDetail {
 /// A named instance ("Bold Condensed"): a full set of axis coordinates.
 #[derive(Clone, Debug, PartialEq)]
 pub struct InstanceDetail {
+    /// Cut at 256 characters, like every name (see [`FaceDetails::names_partial`]).
     pub name: String,
-    /// The instance's own PostScript name (`InterVariable-Bold`), if the font gives one.
+    /// The instance's own PostScript name (`InterVariable-Bold`), if the font gives one. Cut at
+    /// 256 characters.
     pub postscript_name: Option<String>,
     /// User-space coordinates, one per axis in [`FaceDetails::axes`] order: (tag, value).
     pub coords: Vec<(String, f32)>,
@@ -85,7 +87,8 @@ pub struct InstanceDetail {
 pub struct FeatureDetail {
     pub tag: String,
     /// The font's UI name for a stylistic set or character variant (`ss01`–`ss20`,
-    /// `cv01`–`cv99` feature parameters), if it gives one.
+    /// `cv01`–`cv99` feature parameters), if it gives one. Cut at 256 characters (see
+    /// [`FaceDetails::names_partial`]).
     pub name: Option<String>,
     /// Up to 24 of the characters the feature substitutes, a few of each kind in turn (figures,
     /// capitals, lower case, other letters, the rest: `012ABCabc345DEF…`), so any prefix of it
@@ -174,7 +177,7 @@ pub fn read(data: &[u8], index: u32) -> Result<FaceDetails, NotAFont> {
 /// shared, the strings are.
 fn read_names<'a>(font: &FontRef<'a>, wanted: &BTreeSet<u16>) -> BTreeMap<u16, LocalizedString<'a>> {
     let Ok(table) = font.name() else { return BTreeMap::new() };
-    // The ranking of `english_or_first` (skrifa 0.44, `string.rs`), kept in step with it: en-US,
+    // The ranking of `english_or_first` (skrifa 0.48, `string.rs`), kept in step with it: en-US,
     // then en, then a string with no language, then whatever comes first.
     let mut out: BTreeMap<u16, (u8, LocalizedString<'a>)> = BTreeMap::new();
     for record in table.name_record() {
@@ -240,15 +243,15 @@ fn read_face(font: &FontRef) -> FaceDetails {
     // The axes that are kept, and where each sits in an instance's coordinates.
     let fvar: Vec<Axis> = font.axes().iter().collect();
     let kept: Vec<usize> = fvar.iter().enumerate().filter(|(_, a)| has_usable_range(a)).map(|(i, _)| i).collect();
-    // Each instance's name IDs and its coordinates: one per kept axis, in `kept` order, so a
-    // malformed axis left out of `axes` is left out here too and pairing the two lists by index
-    // stays right. (`fvar` stores coordinates as `Fixed`, so none of them can be non-finite.)
-    let raw_instances: Vec<(StringId, Option<StringId>, Vec<f32>)> = font
+    // Each instance's name IDs and its coordinates, each value written down with its axis's tag
+    // as it's read, one per kept axis in `axes` order: a malformed axis left out of `axes` is left
+    // out here too. (`fvar` stores coordinates as `Fixed`, so none of them can be non-finite.)
+    let raw_instances: Vec<_> = font
         .named_instances()
         .iter()
         .map(|inst| {
             let user: Vec<f32> = inst.user_coords().collect();
-            let coords = kept.iter().filter_map(|&i| user.get(i).copied()).collect();
+            let coords: Vec<(String, f32)> = kept.iter().filter_map(|&i| Some((fvar.get(i)?.tag().to_string(), *user.get(i)?))).collect();
             (inst.subfamily_name_id(), inst.postscript_name_id(), coords)
         })
         .collect();
@@ -302,14 +305,8 @@ fn read_face(font: &FontRef) -> FaceDetails {
     }
     let mut instances = Vec::new();
     for (name_id, ps_id, coords) in raw_instances {
-        let Some(name) = names.take(name_id) else {
-            // A font that names no instance here leaves it out; a budget that ran out says so.
-            if names.left == 0 && names.strings.contains_key(&name_id.to_u16()) {
-                names.partial = true;
-            }
-            continue;
-        };
-        let coords = axes.iter().zip(coords).map(|(axis, v)| (axis.tag.clone(), v)).collect();
+        // An instance without a name is left out (a budget that ran out has already said so).
+        let Some(name) = names.take(name_id) else { continue };
         instances.push(InstanceDetail { name, postscript_name: ps_id.and_then(|id| names.take(id)), coords });
     }
     FaceDetails {
