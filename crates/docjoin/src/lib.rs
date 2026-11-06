@@ -667,15 +667,33 @@ fn place(lines: &[&str], table: &Table) -> Result<(usize, usize), String> {
     Ok((first, end))
 }
 
-/// [`place`], with rows of any width (a pull request's rows that `migrate` reports on).
+/// [`place`], with rows of any width (a pull request's rows that `migrate` reports on). The
+/// table's header may head only one table in its section: a copy above it would take its place.
 fn locate(lines: &[&str], table: &Table) -> Result<(usize, usize, usize), String> {
     let (s, e) = section(lines, table.heading)?;
-    let (h, first, end) = table_in(lines, s, e, table.nth).ok_or_else(|| match table.nth {
+    let all = tables_in(lines, s, e);
+    let want: Vec<&str> = table.columns.iter().map(|(h, _)| *h).collect();
+    let same: Vec<usize> = all.iter().map(|t| t.0).filter(|h| lines.get(*h).is_some_and(|l| row_cells(l) == want)).collect();
+    if let [a, b, ..] = same.as_slice() {
+        return Err(format!(
+            "has {} tables headed {want:?} under `{}` (lines {} and {}); keep only the joined one",
+            same.len(),
+            table.heading,
+            a + 1,
+            b + 1
+        ));
+    }
+    let (h, first, end) = all.get(table.nth).copied().ok_or_else(|| match table.nth {
         0 => format!("has no table under `{}`", table.heading),
         n => format!("has no table {} under `{}`", n + 1, table.heading),
     })?;
     check_header(lines, h, table)?;
     Ok((h, first, end))
+}
+
+/// How many tables the section of `table` holds.
+fn table_count(lines: &[&str], table: &Table) -> Option<usize> {
+    section(lines, table.heading).ok().map(|(s, e)| tables_in(lines, s, e).len())
 }
 
 fn table_name(table: &Table) -> String {
@@ -908,6 +926,15 @@ fn check_doc(cfg: &Config, base: &[File], head: &[File], doc: &str, today: Naive
             exempt |= !started(table.dir);
             let edited = in_dir(head, table.dir).iter().any(|h| !base.iter().any(|b| b.path == h.path && b.text == h.text));
             table_moved |= changed || edited;
+        }
+        // A table added to the section, or one taken out, moves which one is joined.
+        if started(table.dir) && table_count(&bl, table) != table_count(&hl, table) {
+            errors.push(format!(
+                "{doc}: the section `{}` has {} table(s), it had {}; the joined table must stay where it is",
+                table.heading,
+                table_count(&hl, table).unwrap_or(0),
+                table_count(&bl, table).unwrap_or(0)
+            ));
         }
         if started(table.dir) && changed && (want.is_none() || h != rows_of(&want_lines, table)) {
             errors.push(format!("{doc}: {} {HAND}", table_name(table)));

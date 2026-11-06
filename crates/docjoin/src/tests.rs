@@ -707,3 +707,25 @@ fn a_line_right_after_a_table_is_one_of_its_rows() {
         assert!(j.as_ref().is_ok_and(|j| j.docs.get("docs/gaps.md").is_some_and(|d| d.contains(&format!("e2 |\n{block}\n")))), "{block}: {j:?}");
     }
 }
+
+#[test]
+fn a_decoy_table_cannot_take_the_joined_ones_place() {
+    let base = docs();
+    let decoy = "| # | Gap | Evidence |\n|---|---|---|\n| 1 | First | e1 |\n| 3 | Third | e3 |\n| 2 | Second | e2 |\n";
+    let mut head = base.clone();
+    set(&mut head, "docs/gaps.md", |t| {
+        t.replace("| 3 | Third | e3 |\n", "| 3 | Third | e3, hand edit |\n| 77 | Hand-added | x |\n")
+            .replace("Prose above.\n", &format!("Prose above.\n\n<details><summary>old</summary>\n\n{decoy}\n</details>\n"))
+    });
+    has(&join(&CFG, &head).unwrap_err(), "has 2 tables headed [\"#\", \"Gap\", \"Evidence\"] under `## Every known gap, ranked`");
+    has(&check(&CFG, &base, &head), "2 tables headed");
+    // Another table in the section, of other columns, is a change the check sees.
+    let mut other = base.clone();
+    set(&mut other, "docs/gaps.md", |t| t.replace("Prose below.\n", "Prose below.\n\n| A | B |\n|---|---|\n| x | y |\n"));
+    has(&check(&CFG, &base, &other), "has 2 table(s), it had 1");
+    // Not at the cutover, before the folder is started.
+    let pre = vec![f("ROADMAP.md", ROADMAP, 0), f("docs/gaps.md", GAPS, 0)];
+    let mut cut = docs();
+    set(&mut cut, "docs/gaps.md", |t| t.replace("Prose below.\n", "Prose below.\n\n| A | B |\n|---|---|\n| x | y |\n"));
+    assert_eq!(check(&CFG, &pre, &cut), Vec::<String>::new());
+}
