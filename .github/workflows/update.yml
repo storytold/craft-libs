@@ -35,3 +35,8 @@ jobs:
       - run: cargo clippy -p craft-update --all-targets --locked --features egui -- -D warnings
       - run: cargo test -p craft-update --locked -- --nocapture
       - run: cargo test -p craft-update --locked --features egui -- --nocapture
+      # A packager's build that turns the check at start off (#492). Only this test: the others
+      # assume no build-time value. `env:` rather than a shell prefix, which PowerShell lacks.
+      - run: cargo test -p craft-update --locked --features egui --lib -- --exact updater::startup_tests::a_build_time_off_value_turns_the_startup_check_off
+        env:
+          CRAFT_UPDATE_STARTUP: 'off'

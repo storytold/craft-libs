@@ -6,7 +6,11 @@
 //! An app the launcher keeps on another version (see [`crate::pins`]) offers nothing itself: the
 //! check reads the shared choice first, and a requested check reports [`Status::UpToDate`] while
 //! [`Updater::managed`] says why.
+//!
+//! A copy that a package manager updates (Nix, Flatpak, Homebrew, a distro package) can leave the
+//! check at start out with [`STARTUP_VAR`]; Help ▸ Check for Updates still checks when asked.
 
+use std::ffi::OsStr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, TryRecvError, channel};
@@ -21,6 +25,35 @@ use crate::{App, Http, Paths, Platform, Stop, check_for_update, self_update};
 /// Asks for the newest release (blocking; it runs on its own thread). Tests stand in for the network
 /// with one; without it the check asks GitHub.
 pub type CheckSource = Arc<dyn Fn() -> Result<Option<Release>, String> + Send + Sync>;
+
+/// Turns the check at start off (`0`, `false`, `off`, `no`) or on (`1`, `true`, `on`, `yes`), for
+/// copies a package manager updates. A packager can set it in the app's environment, or while
+/// building (a fresh build of craft-update reads it then); the value at run time wins. Other values
+/// are logged and ignored. A requested check (Help ▸ Check for Updates) runs either way.
+pub const STARTUP_VAR: &str = "CRAFT_UPDATE_STARTUP";
+
+/// Whether the check at start runs: [`STARTUP_VAR`] as this run sees it, else as the build saw it,
+/// else yes. An app that checks at start itself, then hands the release to [`Updater::offer`],
+/// asks this first.
+pub fn startup_check_enabled() -> bool {
+    // `option_env!` takes a literal only: the same name as `STARTUP_VAR`.
+    startup_check_from(std::env::var_os(STARTUP_VAR).as_deref(), option_env!("CRAFT_UPDATE_STARTUP"))
+}
+
+/// [`startup_check_enabled`] for a given run-time and build-time value. An empty or unrecognised
+/// value counts as unset, so the next one decides.
+fn startup_check_from(run: Option<&OsStr>, built: Option<&str>) -> bool {
+    let read = |value: &str, when: &str| match value.trim().to_ascii_lowercase().as_str() {
+        "" => None,
+        "0" | "false" | "off" | "no" => Some(false),
+        "1" | "true" | "on" | "yes" => Some(true),
+        _ => {
+            log::warn!("{STARTUP_VAR}={value:?} ({when}) is neither on nor off; ignored");
+            None
+        }
+    };
+    run.and_then(|v| read(&v.to_string_lossy(), "environment")).or_else(|| built.and_then(|v| read(v, "build"))).unwrap_or(true)
+}
 
 /// What a requested check came to, for a window that answers Help ▸ Check for Updates.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -88,6 +121,8 @@ pub struct Updater {
     /// The check running (or queued behind it) was asked for by the user.
     requested: bool,
     started: bool,
+    /// [`check_at_start`](Self::check_at_start) asks the network ([`startup_check_enabled`]).
+    startup_check: bool,
     check: Option<Receiver<Checked>>,
     install: Option<(Receiver<Result<(), Failure>>, Release)>,
     prompt: Option<StartupPrompt>,
@@ -113,6 +148,7 @@ impl Updater {
             status: Status::Idle,
             requested: false,
             started: false,
+            startup_check: startup_check_enabled(),
             check: None,
             install: None,
             prompt: None,
@@ -183,10 +219,16 @@ impl Updater {
         self.managed.is_some()
     }
 
-    /// The check at start, once. Later calls do nothing.
+    /// The check at start, once. Later calls do nothing, and so does the first when
+    /// [`STARTUP_VAR`] turns it off.
     pub fn check_at_start(&mut self, ctx: &egui::Context) {
-        if !std::mem::replace(&mut self.started, true) {
+        if std::mem::replace(&mut self.started, true) {
+            return;
+        }
+        if self.startup_check {
             self.begin(ctx, false);
+        } else {
+            log::info!("{} skips the update check at start ({STARTUP_VAR} is off)", self.app.name);
         }
     }
 
@@ -451,9 +493,12 @@ mod tests {
     use super::*;
     use crate::suite::PHOTOCRAFT;
 
-    /// An updater that never reads the real version-choice file.
-    fn updater(answer: Checked) -> Updater {
-        Updater::new(&PHOTOCRAFT, "0.1.0").with_source(Arc::new(move || answer.clone())).with_pins_path(no_pins())
+    /// An updater that never reads the real version-choice file, and checks at start whatever
+    /// [`STARTUP_VAR`] says in the environment or the build.
+    pub(super) fn updater(answer: Checked) -> Updater {
+        let mut u = Updater::new(&PHOTOCRAFT, "0.1.0").with_source(Arc::new(move || answer.clone())).with_pins_path(no_pins());
+        u.startup_check = true;
+        u
     }
 
     pub(super) fn no_pins() -> PathBuf {
@@ -546,6 +591,8 @@ mod tests {
                 .env(CHILD, app.id)
                 .env(format!("{}_PRETEND_VERSION", app.id.to_uppercase()), "0.0.1")
                 .env_remove(self_update::PRETEND_VAR)
+                // The prompt comes from the check at start; a run-time value wins over the build's.
+                .env(STARTUP_VAR, "on")
                 .status()
                 .unwrap();
             assert!(status.success(), "{} pretend-version regression failed", app.id);
@@ -786,3 +833,7 @@ mod tests {
 #[cfg(test)]
 #[path = "updater_pin_tests.rs"]
 mod pin_tests;
+
+#[cfg(test)]
+#[path = "updater_startup_tests.rs"]
+mod startup_tests;
