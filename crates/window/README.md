@@ -8,53 +8,65 @@ window per document.
 
 ## Why
 
-egui apps either keep the desktop's window frame (titlebar, borders, window buttons) or turn it off
-and draw their own. Across the suite this had drifted:
-
-- some apps always drew their own frame on Linux (so KDE's titlebar was replaced by the app's),
-- some always kept the desktop's,
-- some probed the compositor and only drew their own on GNOME.
-
-So two Craft apps open side by side on KDE could wear different titlebars. This crate makes the
-decision in one place, matching each desktop.
+egui apps either keep the desktop's window frame (title bar, borders, window buttons) or turn it
+off and draw their own. This crate makes that decision in one place, so every Craft app wears the
+same title bar on a given desktop.
 
 ## The rule
 
-| Platform | Frame |
-| --- | --- |
-| macOS, Windows | desktop (the OS) |
-| Linux/BSD on X11 | desktop (the window manager) |
-| Linux/BSD on Wayland **with** `zxdg_decoration_manager_v1` (KDE, Sway, Hyprland, COSMIC) | desktop (the compositor) |
-| Linux/BSD on Wayland **without** it (GNOME's Mutter) | the app |
+The app's own bar is the title bar by default (`Frame::Integrated`). The user setting "Use system
+title bar" (`TitleBarPref::System`) gives the frame to the OS, window manager or compositor
+(`Frame::Native`).
 
-When the app draws the frame, the decision carries the window-button `Layout` the desktop names
-(GNOME's `button-layout`), so the app's header bar puts minimize/maximize/close where that desktop
-puts them. This crate decides *whether* and *where*; drawing the buttons stays in each app, whose
-title bars differ.
+| Platform, desktop, backend | Default | With "Use system title bar" |
+| --- | --- | --- |
+| macOS | `Inset`: full-size content view, hidden title, traffic lights over the app's bar | `Native` |
+| Windows | `Integrated(Windows)`: minimize, maximize, close at the right | `Native` |
+| GNOME, Wayland or XWayland | `Integrated(Adwaita)`, in the order of `button-layout` | `Native` |
+| KDE, Wayland or X11 | `Integrated(Breeze)`, in the order of KWin's `ButtonsOnLeft` and `ButtonsOnRight` | `Native` |
+| COSMIC, Xfce, Cinnamon, MATE, other floating desktops | `Integrated(Generic)` in the order of `gtk-decoration-layout`; Adwaita or Breeze when the GTK theme is one of those | `Native` |
+| Tiling compositors and window managers (Sway, Hyprland, i3, niri, river, from `XDG_CURRENT_DESKTOP`) | `Native` | `Native` |
+| Wayland without server-side decorations, not GNOME | `Integrated(Generic)` | `Native` |
+| Web | `Native`; no frame code runs | `Native` |
+
+The backend is the one the app opens its window on: an app that forces XWayland on a Wayland
+session passes `Backend::X11`. The Wayland registry is probed (500 ms at most) only for
+`Backend::Wayland`.
+
+`policy::decide` is pure and takes the OS, backend, desktop, setting and override. `decide_for`
+reads the platform once and calls it.
 
 ### Override
 
-`<PREFIX>_TITLEBAR` forces the choice. With the default prefix `CRAFT`: `CRAFT_TITLEBAR=app` forces
-the app frame, `=system` (or `=desktop`) forces the desktop frame. Apps pass their own prefix
-(`Prefix::new("PDFCRAFT")` → `PDFCRAFT_TITLEBAR`) so each keeps its own variable name.
+`<PREFIX>_TITLEBAR` wins over the setting. With the default prefix `CRAFT`: `CRAFT_TITLEBAR=app`
+forces the app's bar (also on tiling compositors), `=system` or `=desktop` forces the native frame.
+Apps pass their own prefix (`Prefix::new("PDFCRAFT")` reads `PDFCRAFT_TITLEBAR`).
+When `<PREFIX>_TITLEBAR` is unset, `CRAFT_TITLEBAR` applies, so one variable covers every app. `Decision::overridden` reports `Some(true)` or `Some(false)` when the variable decided.
 
 ## Use
 
 ```rust,ignore
-use craft_window::{Choice, Prefix, decorate};
+use craft_window::Prefix;
+use craft_window::policy::{Backend, Frame, TitleBarPref, apply, decide_for};
 
 // Once at startup, before the window is created:
-let choice = Choice::probe(Prefix::new("PHOTOCRAFT"));
-let viewport = decorate(egui::ViewportBuilder::default().with_title("PhotoCraft"), choice.frame());
+let pref = if settings.system_title_bar { TitleBarPref::System } else { TitleBarPref::Integrated };
+// Backend::from_env() is what winit opens; an app that forces XWayland passes Backend::X11.
+let decision = decide_for(Prefix::new("PHOTOCRAFT"), Backend::from_env(), pref);
+let viewport = apply(egui::ViewportBuilder::default().with_title("PhotoCraft"), &decision.frame);
 
-// If the app draws the frame, lay the header-bar buttons out by the desktop's order:
-if let Some(layout) = choice.frame().layout() {
-    // layout.left / layout.right -> draw Minimize/Maximize/Close there
+if let Frame::Integrated(captions) = &decision.frame {
+    // captions.family picks the button look; captions.layout.left / .right place the buttons.
 }
 ```
 
-An app that offers a "System title bar" preference checks `choice.overridden()` and its own setting,
-and can override the probe by setting the frame to `Frame::Desktop`.
+This crate decides *whether* and *where*; drawing the buttons stays in each app.
+
+## Older API
+
+`Choice::probe`, the root `Frame::{Desktop, App}` and `decorate` follow the earlier two-way rule
+(the desktop draws the frame, except on Wayland without server-side decorations). They still work;
+`policy` supersedes them.
 
 The `egui` feature adds [`decorate`], the [`title_bar`](#the-apps-own-title-bar) module and
 `Viewports`. Without it, the crate is pure decision and bookkeeping logic with no egui dependency.
