@@ -18,6 +18,23 @@ pub enum StartupPromptResponse {
     Download,
     /// User dismissed the dialog for now.
     Later,
+    /// User chose not to be offered this release again at start.
+    SkipVersion,
+}
+
+/// "Skip this version", drawn like "What's new" beside it. True when clicked.
+fn skip_link(ui: &mut egui::Ui, t: Translate, pal: &Palette) -> bool {
+    ui.add_space(14.0);
+    let text = t("Skip this version", &[]);
+    let link = ui.add(egui::Label::new(RichText::new(&text).size(11.5).color(pal.text_muted)).sense(egui::Sense::click()));
+    link.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Link, true, &text));
+    let y = link.rect.bottom() - 0.5;
+    ui.painter().line_segment([egui::pos2(link.rect.left(), y), egui::pos2(link.rect.right(), y)], egui::Stroke::new(1.0, pal.border_color));
+    if link.has_focus() {
+        let ring = egui::Stroke::new(2.0, pal.text_primary);
+        ui.painter().rect_stroke(link.rect.expand(2.0), egui::CornerRadius::ZERO, ring, egui::StrokeKind::Outside);
+    }
+    link.on_hover_cursor(egui::CursorIcon::PointingHand).clicked()
 }
 
 /// State for the startup update prompt dialog.
@@ -180,6 +197,9 @@ impl StartupPrompt {
                             {
                                 ui.ctx().open_url(egui::OpenUrl::new_tab(&self.release.html_url));
                             }
+                            if !self.is_installing && skip_link(ui, t, &pal) {
+                                response = StartupPromptResponse::SkipVersion;
+                            }
 
                             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                                 if self.is_installing {
@@ -223,7 +243,7 @@ impl StartupPrompt {
                     });
             });
 
-        if response == StartupPromptResponse::Later {
+        if matches!(response, StartupPromptResponse::Later | StartupPromptResponse::SkipVersion) {
             self.open = false;
         }
 
@@ -828,6 +848,31 @@ mod tests {
         frame(&ctx, &mut prompt, vec![button(true)]);
         let (response, _) = frame(&ctx, &mut prompt, vec![button(false)]);
         assert_eq!(response, StartupPromptResponse::Download);
+    }
+
+    #[test]
+    fn clicking_skip_this_version_answers_skip_version_and_closes() {
+        let ctx = dark_context();
+        let mut prompt = prompt_for(false);
+        frame(&ctx, &mut prompt, Vec::new());
+        let (_, output) = frame(&ctx, &mut prompt, Vec::new());
+        let at = text_pos(&output, "Skip this version").expect("the link is painted");
+        let button = |pressed| Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+        frame(&ctx, &mut prompt, vec![Event::PointerMoved(at)]);
+        frame(&ctx, &mut prompt, vec![button(true)]);
+        let (response, _) = frame(&ctx, &mut prompt, vec![button(false)]);
+        assert_eq!(response, StartupPromptResponse::SkipVersion);
+        assert!(!prompt.open);
+    }
+
+    #[test]
+    fn an_installing_prompt_offers_no_skip() {
+        let ctx = dark_context();
+        let mut prompt = prompt_for(true);
+        prompt.is_installing = true;
+        frame(&ctx, &mut prompt, Vec::new());
+        let (_, output) = frame(&ctx, &mut prompt, Vec::new());
+        assert!(text_pos(&output, "Skip this version").is_none());
     }
 
     /// The colours of the line segments painted this frame.
