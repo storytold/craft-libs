@@ -491,10 +491,17 @@ pub fn check(cfg: &Config, base: &[File], head: &[File]) -> Vec<String> {
         tables_from.push(File { path: doc.to_string(), text: base_text.clone(), time: 0 });
         let want = join(&Config { logs: &[], tables: cfg.tables }, &tables_from).ok().and_then(|j| j.docs.get(doc).cloned()).unwrap_or_default();
         let (b, w) = (regions(cfg, doc, &base_text), regions(cfg, doc, &want));
+        // The cutover pull request itself: the base has no folder yet, so nothing was folded there.
+        let started = |dir: &str| base.iter().any(|f| f.path.starts_with(&format!("{dir}/")));
+        let log_started = cfg.logs.iter().filter(|l| l.doc == doc).all(|l| started(l.dir));
         for (name, value) in regions(cfg, doc, &head_text) {
             let in_region = |r: &[(String, String)]| r.iter().find(|(n, _)| *n == name).map(|(_, v)| v.clone());
             let before = in_region(&b).unwrap_or_default();
+            let table_started =
+                cfg.tables.iter().filter(|t| t.doc == doc && name == format!("the table under `{}`", t.heading)).all(|t| started(t.dir));
+            let cutover = if name.starts_with("the table") { !table_started } else { !log_started };
             let ok = value == before
+                || cutover
                 || if name.starts_with("the status line") {
                     !consumed.is_empty()
                 } else if name.starts_with("the table") {

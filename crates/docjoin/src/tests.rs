@@ -26,7 +26,7 @@ const NOV6: i64 = 1_793_966_400;
 
 fn docs() -> Vec<File> {
     let (items, _) = items_from_doc(&CFG, &[f("docs/gaps.md", GAPS, 0)]).unwrap();
-    let mut out = vec![f("ROADMAP.md", ROADMAP, 0), f("docs/gaps.md", GAPS, 0)];
+    let mut out = vec![f("ROADMAP.md", ROADMAP, 0), f("docs/gaps.md", GAPS, 0), f("docs/progress.d/README.md", "how", 0)];
     out.extend(items);
     out
 }
@@ -260,4 +260,15 @@ fn migrate_reports_what_it_cannot_move() {
 #[test]
 fn unclosed_front_matter_is_an_error() {
     assert!(front::parse("---\nkind: minor\n", &["kind"]).unwrap_err().contains("no closing"));
+}
+
+#[test]
+fn check_lets_the_cutover_pr_through() {
+    // Before the cutover there are no folders; the cutover PR adds them and may rewrite the regions.
+    let base = vec![f("ROADMAP.md", ROADMAP, 0), f("docs/gaps.md", GAPS, 0)];
+    let mut head = docs();
+    for d in head.iter_mut().filter(|d| d.path == "ROADMAP.md") {
+        d.text = d.text.replace("**Change:** trivial (old thing); previously minor (older)", "**Change:** trivial");
+    }
+    assert_eq!(check(&CFG, &base, &head), Vec::<String>::new());
 }
