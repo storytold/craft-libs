@@ -29,6 +29,8 @@ jobs:
       - run: cargo fmt --check
       - run: cargo clippy -p craft-font-store --all-targets --locked -- -D warnings
       - run: cargo test -p craft-font-store --locked
+      - run: cargo clippy -p craft-font-catalog --all-targets --locked -- -D warnings
+      - run: cargo test -p craft-font-catalog --locked
       - name: Check the web build
         if: runner.os == 'Linux'
         run: cargo check -p craft-font-store --target wasm32-unknown-unknown --locked
