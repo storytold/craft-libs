@@ -894,9 +894,14 @@ impl AffixDict {
                         {
                             continue;
                         }
-                        for &outer in outers.iter().filter(|o| self.cont_holds(r, Some(o.flag))) {
+                        for &outer in outers {
+                            if *work >= MAX_WORK {
+                                return;
+                            }
                             *work += 1;
-                            emit(Analysis { stem, set, pfx: None, sfx: Some(outer), inner: Some(r) });
+                            if self.cont_holds(r, Some(outer.flag)) {
+                                emit(Analysis { stem, set, pfx: None, sfx: Some(outer), inner: Some(r) });
+                            }
                         }
                     }
                 }
@@ -2042,6 +2047,43 @@ mod tests {
 #[cfg(test)]
 mod terminal_rule_review_tests {
     use super::*;
+    /// A tiny suffix chain supplies both matching and nonmatching outer candidates.
+    fn suffix_budget_fixture() -> AffixDict {
+        AffixDict::from_hunspell(
+            "SET UTF-8\nFLAG num\nSFX 1 Y 1\nSFX 1 0 s/2 .\nSFX 2 Y 1\nSFX 2 0 t .\nSFX 3 Y 1\nSFX 3 0 t .\n",
+            "2\nroot/1\nother/3\n",
+            &[],
+        )
+        .unwrap()
+    }
+
+    /// Nonmatching outer candidates still consume the shared work budget.
+    #[test]
+    fn inner_suffix_comparisons_charge_nonmatching_outer_rules() {
+        let dict = suffix_budget_fixture();
+        let flag = dict.stem_lookup("other").unwrap().1[0];
+        let outer = dict.suffixes.iter().find(|r| r.flag == flag).unwrap();
+        let outers = vec![outer; 32];
+        let (mut work, mut emitted) = (0, 0);
+        dict.inner_analyses("roots", &outers, Excluded::default(), &mut work, &mut |_| emitted += 1);
+        assert_eq!(emitted, 0);
+        assert_eq!(work, outers.len() + 2);
+    }
+
+    /// Matching candidates stop at the budget before any additional result is emitted.
+    #[test]
+    fn inner_suffix_comparisons_stop_before_over_budget_emissions() {
+        let dict = suffix_budget_fixture();
+        let inner = dict.suffixes.iter().find(|r| !dict.set(r.cont).is_empty()).unwrap();
+        let outer = dict.suffixes.iter().find(|r| dict.cont_holds(inner, Some(r.flag))).unwrap();
+        let outers = vec![outer; 32];
+        let (mut work, mut emitted) = (MAX_WORK - 3, 0);
+        dict.inner_analyses("roots", &outers, Excluded::default(), &mut work, &mut |_| emitted += 1);
+        assert_eq!(work, MAX_WORK);
+        assert_eq!(emitted, 1);
+    }
+
+    /// Regression: bare terminal homonyms use merged rule flags.
     #[test]
     fn bare_terminal_homonyms_use_merged_rule_flags() {
         let aff = "SET UTF-8\nNEEDAFFIX N\nCOMPOUNDMIN 1\nCOMPOUNDRULE 1\nCOMPOUNDRULE AB\n";
@@ -2050,6 +2092,7 @@ mod terminal_rule_review_tests {
         let only_needs_affix = AffixDict::from_hunspell(aff, "2\nx/A\ny/BN\n", &[]).unwrap();
         assert!(!only_needs_affix.check("xy"));
     }
+    /// Regression: bare terminal match leaves work for later rule flags.
     #[test]
     fn bare_terminal_match_leaves_work_for_later_rule_flags() {
         let mut aff = String::from("SET UTF-8\nFLAG num\nCOMPOUNDMIN 1\nCOMPOUNDRULE 2\nCOMPOUNDRULE (1)(2)(4)\nCOMPOUNDRULE (1)(3)\nSFX 9 Y 100\n");
@@ -2067,6 +2110,7 @@ mod terminal_rule_review_tests {
         }
     }
 
+    /// Regression: terminal flag queries do not spend budget on prefixes.
     #[test]
     fn terminal_flag_queries_do_not_spend_budget_on_prefixes() {
         let count = 100;

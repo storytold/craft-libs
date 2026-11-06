@@ -150,6 +150,7 @@ impl Patterns {
         Ok(Self::parse_tex(text))
     }
 
+    /// Compile TeX patterns and exceptions without changing the source data.
     fn parse_tex(text: &str) -> Patterns {
         let mut p = Patterns::default();
         let mut block = Block::Patterns;
@@ -253,10 +254,12 @@ impl Patterns {
         }
     }
 
+    /// Return the number of stored pattern keys.
     pub fn len(&self) -> usize {
         self.map.len() + self.long.len()
     }
 
+    /// Report whether any usable pattern keys are stored.
     pub fn is_empty(&self) -> bool {
         self.map.is_empty() && self.long.is_empty()
     }

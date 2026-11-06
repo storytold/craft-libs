@@ -5,6 +5,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+/// Generate embedded-pack source after validating every explicitly selected locale and file.
 pub fn generate() -> Result<(String, Vec<String>, String), String> {
     println!("cargo::rerun-if-env-changed=CRAFT_PROOF_PACKS_DIR");
     println!("cargo::rerun-if-env-changed=CRAFT_PROOF_EMBED_PACKS");
@@ -66,6 +67,7 @@ pub fn generate() -> Result<(String, Vec<String>, String), String> {
     code.push_str("];\n");
     Ok((code, locales, licences))
 }
+/// Emit an include for a verified pack file and its Cargo rebuild dependency.
 fn include(path: &Path, bytes: bool) -> Result<String, String> {
     if !path.is_file() {
         return Ok(if bytes { "b\"\"" } else { "\"\"" }.into());
@@ -76,6 +78,7 @@ fn include(path: &Path, bytes: bool) -> Result<String, String> {
 }
 
 // Accept only canonical tags that PackLocale::new can select without truncation.
+/// Reject locale names whose filesystem or runtime selection semantics would change.
 fn validate_locale(locale: &str) -> Result<(), String> {
     let mut parts = locale.split('-');
     let primary = parts.next().unwrap_or("");
@@ -90,6 +93,7 @@ fn validate_locale(locale: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Reject aliases that cannot be reached by runtime hyphenation selection.
 fn validate_hyphenation_locale(locale: &str) -> Result<(), String> {
     let primary = locale.split('-').next().unwrap_or_default();
     // These languages collapse to built-in ProofLang variants. Match the names
@@ -112,6 +116,7 @@ fn validate_hyphenation_locale(locale: &str) -> Result<(), String> {
     if reachable { Ok(()) } else { Err(format!("hyphenation locale {locale:?} cannot be selected by runtime lookup")) }
 }
 
+/// Reject pack paths that change meaning when included from Cargo OUT_DIR.
 fn validate_directory(dir: &Path) -> Result<(), String> {
     if !dir.is_absolute() {
         return Err(format!("{} is not an absolute path", dir.display()));
@@ -121,6 +126,7 @@ fn validate_directory(dir: &Path) -> Result<(), String> {
     }
     Ok(())
 }
+/// Require pack metadata to identify the locale selected by its folder.
 fn validate_pack_locale(text: &str, folder: &str) -> Result<(), String> {
     let metadata: toml::Table = toml::from_str(text).map_err(|e| format!("pack.toml: {e}"))?;
     let locale = metadata.get("locale").and_then(toml::Value::as_str).ok_or("pack.toml: missing locale string")?;
@@ -132,6 +138,7 @@ fn validate_pack_locale(text: &str, folder: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// Regression: embedded patterns reject unreachable builtin aliases.
     #[test]
     fn embedded_patterns_reject_unreachable_builtin_aliases() {
         for tag in ["pl", "hu", "hu-hu", "pt-pt", "de-ch", "de-1996", "es-419", "sr-latn-rs"] {
@@ -141,6 +148,7 @@ mod tests {
             assert!(validate_hyphenation_locale(tag).is_err(), "{tag}");
         }
     }
+    /// Regression: embedded locale must survive runtime selection unchanged.
     #[test]
     fn embedded_locale_must_survive_runtime_selection_unchanged() {
         for tag in ["hu", "hu-hu", "sr-latn-rs", "abcdefgh-123456"] {
@@ -150,6 +158,7 @@ mod tests {
             assert!(validate_locale(tag).is_err(), "{tag}");
         }
     }
+    /// Regression: embedded pack metadata must name its folder.
     #[test]
     fn embedded_pack_metadata_must_name_its_folder() {
         assert!(validate_pack_locale("locale = \"hu\"", "hu").is_ok());
@@ -158,6 +167,7 @@ mod tests {
             assert!(validate_pack_locale(text, "hu").is_err());
         }
     }
+    /// Regression: embedding rejects paths that change meaning inside out dir.
     #[test]
     fn embedding_rejects_paths_that_change_meaning_inside_out_dir() {
         assert!(validate_directory(Path::new("packs/hu")).unwrap_err().contains("absolute"));

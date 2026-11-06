@@ -41,9 +41,11 @@ pub(crate) struct EmbeddedPack {
     pub dic: &'static [u8],
     pub patterns: &'static str,
 }
+/// Look up an embedded resource for the requested locale and its fallback.
 pub(crate) fn embedded(names: &[String], accepts: impl Fn(&EmbeddedPack) -> bool) -> Vec<&'static EmbeddedPack> {
     embedded_in(crate::data::PACKS, names, accepts)
 }
+/// Find an embedded resource in a supplied pack table using locale fallback.
 fn embedded_in<'a>(packs: &'a [EmbeddedPack], names: &[String], accepts: impl Fn(&EmbeddedPack) -> bool) -> Vec<&'a EmbeddedPack> {
     names.iter().filter_map(|n| packs.iter().find(|p| p.locale == n.replace('_', "-").to_ascii_lowercase() && accepts(p))).collect()
 }
@@ -611,6 +613,7 @@ pub(crate) fn hyphenation(lang: ProofLang) -> Option<Arc<Patterns>> {
     found
 }
 
+/// Read installed optional replacement patterns, retaining standard fallback and diagnostics.
 fn patterns_from_directory(dir: &Path, errors: &mut Vec<(String, String)>) -> Option<Patterns> {
     for name in [NONSTANDARD, HYPHENATION] {
         let path = dir.join(name);
@@ -629,6 +632,7 @@ fn patterns_from_directory(dir: &Path, errors: &mut Vec<(String, String)>) -> Op
     None
 }
 
+/// Read embedded replacement patterns with the same fallback as installed packs.
 fn patterns_from_embedded(packs: &[&EmbeddedPack], errors: &mut Vec<(String, String)>) -> Option<Patterns> {
     for pack in packs {
         match Patterns::parse_checked(pack.patterns).and_then(|p| if p.is_empty() { Err("no patterns".into()) } else { Ok(p) }) {
@@ -680,6 +684,7 @@ fn load_patterns(path: &Path) -> Result<Patterns, String> {
 mod tests {
     use super::*;
 
+    /// Regression: malformed embedded regional patterns fall back to generic.
     #[test]
     fn malformed_embedded_regional_patterns_fall_back_to_generic() {
         let packs = [
@@ -693,6 +698,7 @@ mod tests {
         assert_eq!(errors.len(), 1);
         assert!(errors[0].1.contains("line 2"));
     }
+    /// Regression: embedded fallback skips locales without the requested resource.
     #[test]
     fn embedded_fallback_skips_locales_without_the_requested_resource() {
         let packs = [
@@ -708,11 +714,13 @@ mod tests {
         ];
         assert_eq!(embedded_in(&packs, &names, |p| !p.aff.is_empty() && !p.dic.is_empty()).first().unwrap().locale, "hu");
     }
+    /// Regression: embedded packs do not have the no data contract.
     #[test]
     fn embedded_packs_do_not_have_the_no_data_contract() {
         #[cfg(craft_proof_no_data)]
         assert!(crate::data::PACKS.is_empty(), "embedded packs are Language data");
     }
+    /// Regression: broken nonstandard file retains regular patterns and the error.
     #[test]
     fn broken_nonstandard_file_retains_regular_patterns_and_the_error() {
         let dir = std::env::temp_dir().join(format!("craft-proof-pattern-fallback-{}", std::process::id()));
@@ -737,6 +745,7 @@ mod tests {
         assert!(errors.is_empty());
         std::fs::remove_dir_all(&dir).unwrap();
     }
+    /// Regression: malformed pack patterns keep their line number.
     #[test]
     fn malformed_pack_patterns_keep_their_line_number() {
         let path = std::env::temp_dir().join(format!("craft-proof-pattern-error-{}.pat", std::process::id()));

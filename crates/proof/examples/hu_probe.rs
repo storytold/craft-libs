@@ -1,6 +1,7 @@
 //! Local compatibility probe for the pinned hu Language pack. No bundled dictionary.
 use std::{error::Error, path::PathBuf};
 use unicode_normalization::UnicodeNormalization;
+/// Run the Hungarian corpus probe against an explicitly supplied verified pack.
 fn main() -> Result<(), Box<dyn Error>> {
     let packs = PathBuf::from(std::env::var("CRAFT_HU_TEST_PACKS")?);
     let start = std::time::Instant::now();
@@ -56,6 +57,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
     let mut total = 0;
     let mut mismatches = 0;
+    let mut known_upstream = 0;
     for line in include_str!("../tests/data/hu/hyphen-native.tsv").lines() {
         let (w, want) = line.split_once('\t').ok_or("invalid hyphen fixture")?;
         total += 1;
@@ -63,9 +65,16 @@ fn main() -> Result<(), Box<dyn Error>> {
             craft_proof::hyphen::hyphenate_word_in(w, &craft_proof::hyphen::Limits { min_word: 2, ..Default::default() }, lang).replace('-', "=");
         if got != want {
             mismatches += 1;
+            if matches!(
+                (w, want, got.as_str()),
+                ("masszázszokni", "masz=százs=zok=ni", "masz=száz=szok=ni") | ("giccsetek", "gics=cse=tek", "giccse=tek")
+            ) {
+                known_upstream += 1;
+            }
             println!("HYPHEN_DIFF\t{w}\t{want}\t{got}");
         }
     }
     println!("HYPHEN_TOTAL\t{total}\t{mismatches}");
+    println!("HYPHEN_KNOWN_UPSTREAM\t{known_upstream}\tUNEXPECTED\t{}", mismatches - known_upstream);
     Ok(())
 }

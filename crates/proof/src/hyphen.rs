@@ -120,6 +120,7 @@ pub enum Source {
 /// neighbouring words, source offsets and explicit soft hyphens are unaffected.
 pub const MAX_HYPHENATION_RUN_BYTES: usize = patterns::MAX_WORD_CHARS;
 
+/// Stream letter runs with source-character offsets without retaining the whole input.
 fn word_runs(word: &str) -> impl Iterator<Item = (usize, &str)> {
     let mut chars = word.char_indices().enumerate().peekable();
     std::iter::from_fn(move || {
@@ -361,6 +362,7 @@ pub fn hyphen_points_in(word: &str, lim: &Limits, lang: ProofLang) -> Vec<usize>
     points_with_caps(word, lim, lang, false)
 }
 
+/// Collect bounded per-run points, with the requested all-caps policy.
 fn points_with_caps(word: &str, lim: &Limits, lang: ProofLang, all_caps: bool) -> Vec<usize> {
     let mut out = Vec::new();
     for (offset, run) in word_runs(word) {
@@ -371,6 +373,7 @@ fn points_with_caps(word: &str, lim: &Limits, lang: ProofLang, all_caps: bool) -
     out
 }
 
+/// Map a bounded run through normalization and pattern matching to source offsets.
 fn points_for_run(word: &str, lim: &Limits, lang: ProofLang, all_caps: bool) -> Vec<usize> {
     let chars: Vec<char> = word.chars().collect();
     let (pts, _) = word_breaks_in(word, lang);
@@ -855,6 +858,7 @@ mod tests {
         }
     }
 
+    /// Regression: hyphenating a long word is linear.
     #[cfg_attr(not(craft_proof_data), ignore = "needs the Language data (CRAFT_I18N_DIR)")]
     #[test]
     fn hyphenating_a_long_word_is_linear() {
@@ -880,6 +884,7 @@ mod tests {
         }
     }
 
+    /// Regression: russian hyphenation and hyphenated output are linear.
     #[test]
     fn russian_hyphenation_and_hyphenated_output_are_linear() {
         // A Russian word breaks at every syllable: each break used to be checked against all the

@@ -72,6 +72,7 @@ fn embeds(rel: &str, locale: &str, opted: &[String]) -> bool {
     is_ours(rel) || locale.starts_with("en-") || opted.iter().any(|o| o == locale || o == "all")
 }
 
+/// Generate built-in language data and explicitly selected pack resources.
 fn main() {
     println!("cargo::rerun-if-changed=build.rs");
     println!("cargo::rerun-if-env-changed=CRAFT_I18N_DIR");

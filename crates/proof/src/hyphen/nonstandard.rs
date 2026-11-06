@@ -14,6 +14,7 @@ pub fn hyphen_opportunities_including_all_caps(word: &str, lim: &Limits, lang: P
     opportunities_in(word, lim, lang, true)
 }
 
+/// Select patterns for the language and return source-relative insertion opportunities.
 fn opportunities_in(word: &str, lim: &Limits, lang: ProofLang, all_caps: bool) -> Vec<Opportunity> {
     let Some(patterns) = crate::packs::hyphenation(lang).filter(|p| p.has_nonstandard()) else {
         return points_with_caps(word, lim, lang, all_caps).into_iter().map(|at| Opportunity { at, suffix: "".into() }).collect();
@@ -21,6 +22,7 @@ fn opportunities_in(word: &str, lim: &Limits, lang: ProofLang, all_caps: bool) -
     opportunities_with(word, lim, lang, &patterns, all_caps)
 }
 
+/// Collect bounded replacement opportunities while preserving source offsets and limits.
 fn opportunities_with(word: &str, lim: &Limits, lang: ProofLang, patterns: &super::Patterns, all_caps: bool) -> Vec<Opportunity> {
     let mut out = Vec::new();
     for (offset, text) in word_runs(word) {
@@ -79,6 +81,7 @@ mod tests {
     use super::super::Patterns;
     use super::super::hyphen_points_in;
     use super::*;
+    /// Regression: huge runs are skipped without losing neighbours.
     #[test]
     fn huge_runs_are_skipped_without_losing_neighbours() {
         let patterns = Patterns::from_huhyphn("UTF-8\nas5szon2y/sz=,2,1\n").unwrap();
@@ -91,6 +94,7 @@ mod tests {
         let normal = "asszony ".repeat(1000);
         assert_eq!(opportunities_with(&normal, &Limits::default(), lang, &patterns, false).len(), 1000);
     }
+    /// Regression: point only fallback honours explicit all caps and limits.
     #[test]
     fn point_only_fallback_honours_explicit_all_caps_and_limits() {
         let lim = Limits::default();
@@ -100,6 +104,7 @@ mod tests {
         assert_eq!(hyphen_opportunities_including_all_caps("TYPOGRAPHY", &lim, ProofLang::En).iter().map(|p| p.at).collect::<Vec<_>>(), expected);
         assert!(hyphen_opportunities_including_all_caps("TYPOGRAPHY", &Limits { capitalized: false, ..lim }, ProofLang::En).is_empty());
     }
+    /// Regression: over limit runs keep point fallback with source offsets.
     #[test]
     fn over_limit_runs_keep_point_fallback_with_source_offsets() {
         let patterns = Patterns::from_huhyphn("UTF-8\nas5szon2y/sz=,2,1\n").unwrap();
@@ -113,6 +118,7 @@ mod tests {
         assert!(actual.iter().all(|p| p.suffix.is_empty()));
         assert!(opportunities_with(&word.to_uppercase(), &lim, ProofLang::Tr, &patterns, false).is_empty());
     }
+    /// Regression: all caps require the explicit layout opt in.
     #[test]
     fn all_caps_require_the_explicit_layout_opt_in() {
         let patterns = Patterns::from_huhyphn("UTF-8\nas5szon2y/sz=,2,1\n").unwrap();
@@ -123,6 +129,7 @@ mod tests {
         assert!(opportunities_with("ASSZONY", &Limits { capitalized: false, ..lim }, lang, &patterns, true).is_empty());
         assert!(!opportunities_with("Asszony", &lim, lang, &patterns, false).is_empty());
     }
+    /// Regression: unknown pack letters retain builtin language breaks.
     #[test]
     fn unknown_pack_letters_retain_builtin_language_breaks() {
         let patterns = Patterns::from_huhyphn("UTF-8\nas5szon2y/sz=,2,1\n").unwrap();
@@ -136,6 +143,7 @@ mod tests {
             assert!(actual.iter().all(|p| p.suffix.is_empty()));
         }
     }
+    /// Regression: soft hyphens separate automatic pattern runs.
     #[test]
     fn soft_hyphens_separate_automatic_pattern_runs() {
         let patterns = Patterns::from_huhyphn("UTF-8\nas5szon2y/sz=,2,1\n").unwrap();

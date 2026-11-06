@@ -314,6 +314,7 @@ fn load(locale: PackLocale) -> (Arc<AffixDict>, Option<PathBuf>, u64) {
     }
 }
 
+/// Select an embedded dictionary with regional-to-language fallback.
 fn embedded_dictionary(packs: &[&crate::packs::EmbeddedPack], key: &str) -> Option<(Arc<AffixDict>, Option<PathBuf>, u64)> {
     for pack in packs {
         let read = crate::hunspell::decode(pack.aff, pack.dic).and_then(|(a, d)| AffixDict::from_hunspell(&a, &d, &[]));
@@ -384,6 +385,7 @@ mod tests {
         PackLocale::new(t).unwrap()
     }
 
+    /// Regression: malformed embedded regional spelling falls back to generic.
     #[test]
     fn malformed_embedded_regional_spelling_falls_back_to_generic() {
         crate::hold_dictionary_tests();
