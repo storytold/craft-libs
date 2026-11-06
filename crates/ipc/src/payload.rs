@@ -174,6 +174,10 @@ fn percent_decode(text: &str) -> Option<String> {
     while let Some(&byte) = bytes.get(index) {
         if byte == b'%' {
             let pair = bytes.get(index + 1..index + 3)?;
+            // `from_str_radix` also takes a leading `+`, so the two digits are checked first.
+            if !pair.iter().all(u8::is_ascii_hexdigit) {
+                return None;
+            }
             out.push(u8::from_str_radix(std::str::from_utf8(pair).ok()?, 16).ok()?);
             index += 3;
         } else {
@@ -277,9 +281,18 @@ mod tests {
 
     #[test]
     fn a_file_url_that_does_not_decode_is_payload_invalid() {
-        for bad in
-            ["file:///tmp/clip%GG.mov", "file:///tmp/clip%4", "file:///tmp/clip%", "file://localhost/tmp/clip%zz.mov", "file:///tmp/clip%FF.mov"]
-        {
+        for bad in [
+            "file:///tmp/clip%GG.mov",
+            "file:///tmp/clip%4",
+            "file:///tmp/clip%",
+            "file://localhost/tmp/clip%zz.mov",
+            "file:///tmp/clip%FF.mov",
+            // A sign or a space is not a hex digit, although `from_str_radix` takes `+`.
+            "file:///tmp/a%+fb",
+            "file:///tmp/a%-fb",
+            "file:///tmp/a% fb",
+            "file:///tmp/a%f",
+        ] {
             let err = OpenPayload::from_value(&payload_with(bad)).unwrap_err();
             assert!(matches!(err, LinkError::PayloadInvalid(_)), "{bad:?}: {err:?}");
             assert!(matches!(missing_media(&otio_with(bad)), Err(LinkError::PayloadInvalid(_))), "{bad:?}");
