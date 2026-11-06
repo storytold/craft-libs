@@ -1,0 +1,21 @@
+[package]
+name = "craft-job"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Shared job vocabulary for the Craft apps: native codes, namespaced ids and retry advice"
+
+[dependencies]
+serde = { version = "1", features = ["derive"], optional = true }
+
+[features]
+# Derive Serialize and Deserialize on the plain data types (see the README, "Wire format").
+serde = ["dep:serde"]
+
+[dev-dependencies]
+serde_json = "1"
+
+[lints]
+workspace = true
