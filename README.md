@@ -88,6 +88,10 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   (app menu, Window, Help, system-key clashes), a platform backend trait, and key equivalents
   fed back to egui as the input egui-winit would have made. Commands and their enabled state
   stay in each app.
+- [`craft-mobile`](crates/mobile/README.md): hosts a Craft app (egui + wgpu) in a native iPadOS
+  (SwiftUI, `swift/CraftKit`) or Android (Compose, `android/craftkit`) shell: files, commands and
+  panel state bridged to native chrome, touch and stylus input, power and memory events. The one
+  crate that needs `unsafe` (the C and JNI interfaces and wgpu surfaces); see its README.
 - [`craft-pcraft-format`](crates/pcraft-format/README.md): the envelope of PhotoCraft's `.pcraft`
   bundle: `Manifest<D>` with the document as a type parameter, `TileRef`, the entry paths, the
   manifest decode limits and the migration runner. The document model stays in PhotoCraft.

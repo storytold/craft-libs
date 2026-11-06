@@ -27,6 +27,7 @@ author, source and license. Library code and original assets are under the repos
 | `crates/crw/tests/samples.json` (manifest only; the 11 raw files are not bundled, `scripts/fetch-crw-samples.py` downloads them outside the checkout) | The photographers who contributed each file to raw.pixls.us (Canon EOS D30, D60, 10D ×3, 300D ×2, Digital Rebel, PowerShot G1, G5, G6) | [raw.pixls.us](https://raw.pixls.us/), each file's `getfile.php` URL and SHA-256 in the manifest | CC0-1.0 (as published by raw.pixls.us for each file) |
 | `crates/crw/src/tables.rs`, `crates/crw/clean-room/logs/table_sel*.json` | craft-crw contributors (derived in LightCraft, 2026-10, by known-plaintext alignment of the sample files' entropy streams; `crates/crw/clean-room/02-crw-format.md`) | this repository | MIT OR Apache-2.0 |
 | `crates/crw/clean-room/logs/private-corpus.tsv` (file names, sizes and SHA-256 of the maintainer's own EOS D60 files; no image content) | craft-crw contributors (LightCraft derivation record) | this repository | MIT OR Apache-2.0 |
+| `crates/mobile/android/craftkit/src/main/res/drawable/craft_ic_*.xml` (Material Icons, filled: `add`, `content_paste`, `folder_open`, `layers`, `redo`, `save`, `undo`, `visibility`, `visibility_off`; colour set to white) | Google | [google/material-design-icons](https://github.com/google/material-design-icons) | Apache-2.0 |
 
 Original assets are covered by the repository licence.
 
