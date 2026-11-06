@@ -1011,3 +1011,17 @@ fn renumbering_a_shared_number_passes() {
         has(&renamed(to, text), "docs/gaps.d/4-beta.md: was deleted; items are never deleted");
     }
 }
+
+/// An empty table folder exempts the status line only when every folder writing into the doc is
+/// unstarted: here the log is started, so a hand-edited date fails.
+#[test]
+fn an_empty_table_folder_doesnt_exempt_a_started_doc() {
+    const L: &[Log] = &[Log { dir: "p", doc: "R.md", heading: "## Progress log", status: true, ..Log::DEFAULT }];
+    const T: &[Table] = &[Table { dir: "t", doc: "R.md", heading: "## Things", columns: &[("A", "a")], status: true, ..Table::DEFAULT }];
+    let cfg = Config { logs: L, tables: T };
+    let doc = "# R\n\n**Last updated:** 2026-11-01 · **Change:** minor\n\n## Progress log\n\n- old\n\n## Things\n\n| A |\n|---|\n| x |\n";
+    let base = vec![f("R.md", doc, 0), f("p/README.md", "x", 0)];
+    let mut head = base.clone();
+    set(&mut head, "R.md", |t| t.replace("2026-11-01", "2026-11-02"));
+    has(&check(&cfg, &base, &head), "R.md: the status line's **Last updated:** was edited by hand");
+}

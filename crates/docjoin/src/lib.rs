@@ -997,12 +997,14 @@ fn check_doc(cfg: &Config, base: &[File], head: &[File], doc: &str, today: Naive
     // README is never deleted and an item never is, so a started folder stays started.
     let started = |dir: &str| base.iter().any(|f| f.path.starts_with(&format!("{dir}/")));
     let mut kinds: Option<Kind> = None;
-    let mut exempt = false;
+    // The cutover pull request writes the status line by hand: only while no folder that writes
+    // into this doc is started, or one empty table folder would exempt a doc already folded.
+    let exempt =
+        cfg.logs.iter().filter(|l| l.doc == doc).map(|l| l.dir).chain(cfg.tables.iter().filter(|t| t.doc == doc).map(|t| t.dir)).all(|d| !started(d));
     for log in cfg.logs.iter().filter(|l| l.doc == doc) {
         let gone = consumed(base, &head_paths, log, errors);
         if log.status {
             kinds = gone.iter().map(|f| f.kind).chain(kinds).max();
-            exempt |= !started(log.dir);
         }
         if started(log.dir) {
             check_log(doc, &bl, &hl, log, &gone, errors);
@@ -1015,7 +1017,6 @@ fn check_doc(cfg: &Config, base: &[File], head: &[File], doc: &str, today: Naive
         let (b, h) = (rows_of(&bl, table), rows_of(&hl, table));
         let changed = b != h;
         if table.status {
-            exempt |= !started(table.dir);
             let edited = in_dir(head, table.dir).iter().any(|h| !base.iter().any(|b| b.path == h.path && b.text == h.text));
             table_moved |= changed || edited;
         }
