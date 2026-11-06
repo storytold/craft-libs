@@ -104,9 +104,15 @@ struct Envelope<D> {
 /// newer than [`FORMAT_VERSION`] refused), and a preview that names an entry other than [`THUMB`]
 /// or [`COMPOSITE`] refused. A member that appears twice is refused.
 fn read<D: DeserializeOwned>(json: &[u8], budget: &Budget) -> Result<Envelope<D>, Error> {
+    read_with_items(json, budget, format::MAX_MANIFEST_ITEMS)
+}
+
+/// Check the envelope with a caller-supplied structural item cap before deserializing `D`.
+fn read_with_items<D: DeserializeOwned>(json: &[u8], budget: &Budget, max_items: usize) -> Result<Envelope<D>, Error> {
     let mut limits = format::Limits::default();
     limits.max_manifest_bytes = json.len();
     limits.max_depth = (budget.limits.max_depth as usize).min(manifest_depth(MAX_GROUP_DEPTH));
+    limits.max_items = max_items.min(format::MAX_MANIFEST_ITEMS);
     format::check_manifest(json, &limits).map_err(|e| match e {
         format::Error::LimitExceeded(m) => Error::LimitExceeded(m),
         e => malformed(e),
@@ -207,4 +213,11 @@ pub(crate) fn document<'a, D: DeserializeOwned>(bytes: &'a [u8], budget: &mut Bu
     let (zip, json) = manifest(bytes, budget)?;
     let document = read::<D>(&json, budget)?.document;
     Ok((zip, document))
+}
+
+/// The caller's document head, with its structural item limit checked before deserialization.
+pub(crate) fn head<D: DeserializeOwned>(bytes: &[u8], budget: &mut Budget) -> Result<D, Error> {
+    let (_, json) = manifest(bytes, budget)?;
+    let max_items = usize::try_from(budget.limits.max_items).unwrap_or(usize::MAX);
+    Ok(read_with_items::<D>(&json, budget, max_items)?.document)
 }

@@ -44,6 +44,16 @@ let outline = craft_doc::outline(&bytes, &limits)?;
 - `renditions(bytes, &Limits) -> Result<Vec<Rendition>, Error>`: each `Rendition` has a `kind`
   (`Pdf`, `Thumbnail`, `Composite`), a `mime` and the `bytes`.
 - `outline(bytes, &Limits) -> Result<Outline, Error>`: `canvas`, `pages` and `layers`.
+- `pcraft_document::<D>(bytes, &Limits) -> Result<D, Error>`: a PhotoCraft manifest's `document`
+  deserialized directly into the caller's metadata type. It reads no previews, tiles or blobs
+  and does not check that referenced payload entries exist. Envelope, version, JSON byte and
+  nesting checks still apply. Before the caller's deserializer runs, `max_items` bounds the
+  whole manifest's structural JSON items, including skipped fields, as the shared format's
+  `check_manifest` counts them (opening array/object brackets and commas outside strings),
+  capped at that format's own ceiling. The caller owns its type's
+  allocations and behavior. No pixel feature is required. A cancellation variant can follow
+  after the cooperative document-read APIs in [#571](https://github.com/storytold/craft-libs/pull/571)
+  merge.
 - `Error` is `Unrecognized`, `Malformed`, `TooNew`, `Unsupported` or `LimitExceeded`. A file
   whose version is newer than the crate reads gives `TooNew` from `renditions` and `outline`. A
   ZIP archive whose `manifest.json` has no `format_version` gives `Unrecognized`.
