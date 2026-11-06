@@ -565,7 +565,7 @@ impl FontsPanel {
 
         let name_galley = ui.painter().layout_no_wrap(name.to_owned(), FontId::new(16.0, s.look.strong.clone()), p.ink_strong);
         let name_w = name_galley.size().x.min((header.width() - end_w - 24.0).max(0.0));
-        let start = direction::start_x(ui, header);
+        let start = direction::start_x(ui, header, 0.0);
         let f = direction::forward(ui);
         let name_x = if rtl { start - name_w } else { start };
         ui.painter().with_clip_rect(header).galley(pos2(name_x, header.center().y - name_galley.size().y / 2.0), name_galley, p.ink_strong);

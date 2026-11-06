@@ -140,7 +140,7 @@ impl FontsPanel {
             };
             if let crate::panel::faces::Shown::Ready(family) = self.faces.family(ui.ctx(), &catalog, owner, &face) {
                 let top = ui.cursor().top();
-                let end = direction::end_x(ui, ui.max_rect()) - direction::forward(ui) * (s.h() + 24.0);
+                let end = direction::end_x(ui, ui.max_rect(), 0.0) - direction::forward(ui) * (s.h() + 24.0);
                 let anchor = if direction::is_rtl(ui) { egui::Align2::LEFT_TOP } else { egui::Align2::RIGHT_TOP };
                 ui.painter().text(egui::pos2(end, top - 14.0), anchor, "Aa", FontId::new(96.0, family), s.p.ink_strong);
             }
