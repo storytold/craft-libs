@@ -99,4 +99,22 @@ mod tests {
         assert_eq!(chords, ["Cmd+E", "Tab", "Cmd+C", "Cmd+V"]);
         assert_eq!(left, 1, "only the pointer event stays");
     }
+
+    #[test]
+    fn records_the_iso_key_next_to_left_shift() {
+        // Turkish Q: the key types `<`, and `>` with Shift.
+        let release = |modifiers| Event::Key { key: EguiKey::IntlBackslash, physical_key: None, pressed: false, repeat: false, modifiers };
+        let events = vec![
+            press(EguiKey::IntlBackslash, Modifiers::NONE),
+            Event::Text("<".into()),
+            release(Modifiers::NONE),
+            press(EguiKey::IntlBackslash, Modifiers::SHIFT),
+            Event::Text(">".into()),
+            release(Modifiers::SHIFT),
+            press(EguiKey::IntlBackslash, Modifiers::MAC_CMD),
+        ];
+        let (chords, left) = run(events);
+        assert_eq!(chords, ["IntlBackslash", "Shift+IntlBackslash", "Cmd+IntlBackslash"]);
+        assert_eq!(left, 0);
+    }
 }

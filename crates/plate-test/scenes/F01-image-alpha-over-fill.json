@@ -1,0 +1,48 @@
+{
+  "id": "F01",
+  "title": "Semi-transparent image over a flat process fill: where the image's alpha is 0, the fill prints unchanged",
+  "source": "vectorcraft#2160 (X-1a flattening washed out a fill behind a transparent PNG)",
+  "page": [360, 216],
+  "settings": {"group_cs": "cmyk"},
+  "objects": [
+    {"type": "rect", "rect": [20, 20, 320, 176], "fill": {"cmyk": [100, 6, 41, 3]}},
+    {
+      "type": "image",
+      "rect": [60, 48, 290, 120],
+      "image": {
+        "px": [290, 120],
+        "split": [{"cmyk": [0, 100, 0, 0]}, {"cmyk": [0, 0, 0, 100]}],
+        "alpha": {"rect": [100, 78, 160, 60], "opacity": 0.6}
+      },
+      "note": "image alpha 0.6 inside x 100–260, y 78–138; 0 in the rest of the image, which reaches past the fill on the right"
+    }
+  ],
+  "expect": {
+    "plates": ["Cyan", "Magenta", "Yellow", "Black"],
+    "points": [
+      {"at": [40, 108], "inks": {"Cyan": 100, "Magenta": 6, "Yellow": 41, "Black": 3}, "tol": 0.5, "note": "fill clear of the image"},
+      {"at": [80, 108], "inks": {"Cyan": 100, "Magenta": 6, "Yellow": 41, "Black": 3}, "tol": 0.5, "note": "image alpha 0 over the fill"},
+      {"at": [180, 60], "inks": {"Cyan": 100, "Magenta": 6, "Yellow": 41, "Black": 3}, "tol": 0.5, "note": "image alpha 0 over the fill"},
+      {"at": [300, 150], "inks": {"Cyan": 100, "Magenta": 6, "Yellow": 41, "Black": 3}, "tol": 0.5, "note": "image alpha 0 over the fill"},
+      {"at": [345, 108], "inks": {}, "tol": 0.5, "note": "image alpha 0 over paper"},
+      {
+        "at": [150, 108],
+        "inks": {"Cyan": 40, "Magenta": 62.4, "Yellow": 16.4, "Black": 1.2},
+        "tol": 6,
+        "note": "M100 at 60% over the fill, CMYK blending"
+      },
+      {
+        "at": [230, 108],
+        "inks": {"Cyan": 40, "Magenta": 2.4, "Yellow": 16.4, "Black": 61.2},
+        "tol": 6,
+        "note": "K100 at 60% over the fill, CMYK blending"
+      }
+    ]
+  },
+  "structure": {
+    "page_group": "DeviceCMYK",
+    "color_spaces": ["DeviceCMYK"],
+    "device_rgb": false,
+    "output_intents": []
+  }
+}

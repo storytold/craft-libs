@@ -1,6 +1,6 @@
 [package]
 name = "craft-window"
-description = "Decide who draws the window frame on Linux (the compositor or the app) and apply it, so every Craft app gets the same native titlebar and borders per desktop."
+description = "Decide who draws the window frame (the desktop or the app) so every Craft app gets the same titlebar and borders per desktop, make an app-drawn strip act as the title bar, and keep the window list, cascade placement and Window menu for apps with one window per document."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -8,8 +8,9 @@ rust-version.workspace = true
 repository.workspace = true
 
 [features]
-# `apply`/`decorations`: decide decorations and set them on an `egui::ViewportBuilder`.
-egui = ["dep:egui"]
+# `decorate`: set the decision on an `egui::ViewportBuilder`. `title_bar`: an app-drawn strip as
+# the title bar (on macOS with AppKit's `movable` flag). `Viewports`: one immediate viewport per window.
+egui = ["dep:egui", "dep:objc2", "dep:objc2-app-kit"]
 
 [dependencies]
 egui = { workspace = true, optional = true }
@@ -17,6 +18,11 @@ egui = { workspace = true, optional = true }
 # Only Linux and the BSDs probe a Wayland compositor; everywhere else the frame is the OS's.
 [target.'cfg(any(target_os = "linux", target_os = "freebsd", target_os = "openbsd", target_os = "netbsd"))'.dependencies]
 wayland-client = "0.31"
+
+# `title_bar::sync_movable` (`NSWindow.movable`); eframe's winit already uses these.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = { version = "0.6.4", default-features = false, features = ["std"], optional = true }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSApplication", "NSButton", "NSControl", "NSResponder", "NSView", "NSWindow"], optional = true }
 
 [lints]
 workspace = true

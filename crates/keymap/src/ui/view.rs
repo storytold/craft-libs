@@ -8,6 +8,7 @@
 use std::ops::Range;
 use std::sync::Arc;
 
+use craft_ui::ComboBox;
 use craft_ui::buttons::{IconButton, IconButtonStyle};
 use craft_ui::layout::{ResizeHandle, SplitAxis, SplitSize, split_rect};
 use craft_ui::tabs::{self, Tab};
@@ -15,8 +16,8 @@ use egui::Galley;
 use egui::accesskit::Live;
 use egui::text::{LayoutJob, TextFormat, TextWrapping};
 use egui::{
-    Align, Button, Color32, ComboBox, EventFilter, Id, Key as EguiKey, Label, Layout, Modifiers, Painter, Rect, Response, RichText, ScrollArea,
-    Sense, Stroke, StrokeKind, TextEdit, TextStyle, Ui, UiBuilder, Vec2, WidgetInfo, WidgetText, WidgetType, pos2, vec2,
+    Align, Button, Color32, EventFilter, Id, Key as EguiKey, Label, Layout, Modifiers, Painter, Rect, Response, RichText, Role, ScrollArea, Sense,
+    Stroke, StrokeKind, TextEdit, TextStyle, Ui, UiBuilder, Vec2, WidgetInfo, WidgetText, pos2, vec2,
 };
 
 use crate::chord::Trigger;
@@ -58,7 +59,7 @@ pub(crate) fn body(ui: &mut Ui, env: &mut Env, state: &mut DialogState) {
     let style = env.options.style.unwrap_or_else(|| DialogStyle::from_visuals(ui.visuals()));
     let icons = style::icon_buttons(ui.visuals());
     let row_h = ui.text_style_height(&TextStyle::Body) + 6.0;
-    let base = ui.id().with("craft_keymap_shortcuts");
+    let base = ui.scope_id().with("craft_keymap_shortcuts");
     let mut d = Draw { env, state, style, icons, base, row_h };
     d.keys(ui);
     d.layout(ui);
@@ -250,7 +251,7 @@ impl Draw<'_, '_> {
     /// A row control: clickable and labeled but not a Tab stop (the table is one).
     fn row_button(&self, ui: &mut Ui, rect: Rect, id: Id, label: &str, enabled: bool, paint: fn(&Painter, Rect, Color32)) -> Response {
         let resp = ui.interact(rect, id, if enabled { Sense::CLICK } else { Sense::hover() });
-        resp.widget_info(|| WidgetInfo::labeled(WidgetType::Button, enabled, label));
+        resp.widget_info(|| WidgetInfo::labeled(Role::Button, enabled, label));
         let v = if !enabled {
             self.icons.normal
         } else if resp.is_pointer_button_down_on() {
@@ -620,12 +621,21 @@ impl Draw<'_, '_> {
         (chips + ICON + CHIP_GAP).max(110.0).min(width * 0.4)
     }
 
+    /// Draw the command table and own its keyboard focus and row navigation.
+    ///
+    /// The table is a focusable non-interactive region. While focused and not recording, arrow,
+    /// Home/End, Enter and Delete are consumed by `table_keys`; while a shortcut cell is recording,
+    /// focus uses `FOCUS_LOCK` so the recording receives keys, and losing focus stops recording.
+    /// Rows are built from the cached lines, reveal scrolling centers the selected row when needed,
+    /// and the selected rendered row becomes the active accessibility descendant. Dispatched row
+    /// actions select, record, reset or toggle a group; group toggles keep focus, other actions
+    /// refocus the table.
     fn table(&mut self, ui: &mut Ui) {
         let rect = ui.max_rect();
         let table_id = self.base.with("table");
         let focus = ui.interact(rect, table_id, Sense::focusable_noninteractive());
         let commands = self.ui("Commands");
-        focus.widget_info(|| WidgetInfo::labeled(WidgetType::Other, true, &commands));
+        focus.widget_info(|| WidgetInfo::labeled(Role::Unknown, true, &commands));
         let has_focus = focus.has_focus();
         if has_focus && !self.state.is_recording() {
             self.table_keys(ui);
@@ -803,7 +813,7 @@ impl Draw<'_, '_> {
     /// A group's header; a Tab stop, toggled with Enter or Space.
     fn group_header(&self, ui: &mut Ui, rect: Rect, name: &str, collapsed: bool) -> Option<RowAction> {
         let resp = ui.interact(rect, self.base.with(("group", name)), Sense::click());
-        resp.widget_info(|| WidgetInfo::labeled(WidgetType::CollapsingHeader, true, name));
+        resp.widget_info(|| WidgetInfo::labeled(Role::DisclosureTriangle, true, name));
         ui.ctx().accesskit_node_builder(resp.id, |node| node.set_expanded(!collapsed));
         if resp.has_focus() {
             ui.painter().rect_stroke(rect, 2.0, ui.visuals().selection.stroke, StrokeKind::Inside);
@@ -828,6 +838,15 @@ impl Draw<'_, '_> {
         clicked.then(|| RowAction::Toggle(name.to_string()))
     }
 
+    /// Draw one command row and return at most one action.
+    ///
+    /// The row always senses clicks and can be selected even when the dialog is read-only;
+    /// `editable` additionally enables shortcut-cell hit testing and the add/reset controls. The
+    /// accessibility label gains "(cycles)" and "(Changed)" suffixes, and the visual row uses
+    /// selected/focused and RTL-mirrored styling. A recording cell for this command shows the
+    /// recording text; clicking a chip records that binding, clicking an empty cell records the
+    /// first binding, and the plus button records an appended binding. The final fallback action is
+    /// selecting the clicked row.
     fn row(&self, ui: &mut Ui, rect: Rect, r: &Row, shortcut_w: f32, focused: bool) -> Option<RowAction> {
         let editable = self.env.options.editable;
         let selected = self.state.selected.as_ref() == Some(&r.command);
@@ -839,7 +858,7 @@ impl Draw<'_, '_> {
         if r.changed {
             a11y = fill(self.ui("{label} (Changed)"), &[("label", &a11y)]);
         }
-        resp.widget_info(|| WidgetInfo::selected(WidgetType::SelectableLabel, true, selected, &a11y));
+        resp.widget_info(|| WidgetInfo::selected(Role::Button, true, selected, &a11y));
         ui.ctx().accesskit_node_builder(resp.id, |node| node.set_selected(selected));
         self.tag(|| format!("shortcuts.row.{}", r.key), rect, &r.label);
         let v = ui.visuals();
@@ -875,84 +894,8 @@ impl Draw<'_, '_> {
         let (g, _) = self.one_line(ui.painter(), &self.ordered(parts), label_w);
         ui.painter().galley(pos2(m.x(rect.min.x + 8.0, g.size().x), rect.center().y - g.size().y / 2.0), g, text_color);
 
-        // Shortcut column: chips, then "+".
-        let mut action = None;
-        let col = Rect::from_min_max(pos2(rect.max.x - shortcut_w - ICON - 4.0, rect.min.y), pos2(rect.max.x - ICON - 4.0, rect.max.y));
-        let painter = ui.painter_at(m.rect(col));
-        let mut x = col.min.x;
-        let rec = match self.recording_target() {
-            Some(Target::Cell { command, old }) if *command == r.command => Some(old.clone()),
-            _ => None,
-        };
-        let chip_h = rect.height() - 4.0;
-        let mut cells: Vec<(Option<Binding>, String, bool)> =
-            r.chips.iter().map(|c| (Some(c.binding.clone()), c.text.clone(), rec.as_ref() == Some(&Some(c.binding.clone())))).collect();
-        if rec == Some(None) {
-            cells.push((None, String::new(), true));
-        }
-        for (n, (binding, text, recording)) in cells.iter().enumerate() {
-            let shown = if *recording { self.recording_text() } else { text.clone() };
-            let g = painter.layout_no_wrap(shown.clone(), font.clone(), text_color);
-            let w = g.size().x + 2.0 * CHIP_PAD;
-            let chip = m.rect(Rect::from_min_size(pos2(x, rect.min.y + 2.0), vec2(w, chip_h)));
-            x += w + CHIP_GAP;
-            let changed = r.chips.get(n).is_some_and(|c| c.changed);
-            let stroke = if *recording {
-                Stroke::new(1.5, self.style.accent)
-            } else if changed {
-                Stroke::new(1.0, self.style.changed)
-            } else {
-                v.widgets.inactive.bg_stroke
-            };
-            let current_chip = selected && focused && n == self.state.chip;
-            painter.rect(chip, 3.0, v.widgets.inactive.weak_bg_fill, if current_chip { v.selection.stroke } else { stroke }, StrokeKind::Inside);
-            painter.galley(pos2(chip.min.x + CHIP_PAD, chip.center().y - g.size().y / 2.0), g, v.text_color());
-            let waiting = self.state.recording.as_ref().is_some_and(|r| r.waiting.is_some());
-            let label = if *recording && waiting {
-                fill(self.ui("{label}: {chord}"), &[("label", &r.label), ("chord", &shown)])
-            } else if *recording {
-                fill(self.ui("{label}: press keys"), &[("label", &r.label)])
-            } else {
-                fill(self.ui("{label}: {chord}"), &[("label", &r.label), ("chord", text)])
-            };
-            let resp =
-                ui.interact(chip.intersect(m.rect(col)), self.base.with(("cell", &r.key, n)), if editable { Sense::CLICK } else { Sense::hover() });
-            resp.widget_info(|| WidgetInfo::labeled(WidgetType::Button, editable, &label));
-            self.tag(|| format!("shortcuts.cell.{}.{n}", r.key), chip, &label);
-            if resp.clicked() {
-                action = Some(RowAction::Record(r.command.clone(), binding.clone(), n));
-            }
-        }
-        if cells.is_empty() {
-            // An empty cell to click for the first shortcut.
-            let cell = m.rect(Rect::from_min_max(pos2(col.min.x, rect.min.y), pos2(col.max.x - ICON - CHIP_GAP, rect.max.y)));
-            let label = fill(self.ui("{label}: {chord}"), &[("label", &r.label), ("chord", &self.ui("None"))]);
-            let resp = ui.interact(cell, self.base.with(("cell", &r.key, 0)), if editable { Sense::CLICK } else { Sense::hover() });
-            resp.widget_info(|| WidgetInfo::labeled(WidgetType::Button, editable, &label));
-            self.tag(|| format!("shortcuts.cell.{}.0", r.key), cell, &label);
-            if resp.clicked() {
-                action = Some(RowAction::Record(r.command.clone(), None, 0));
-            }
-            x = col.min.x;
-        }
-        if editable && r.chips.len() < MAX_BINDINGS && rec != Some(None) {
-            let plus = m.rect(Rect::from_min_size(pos2(x.min(col.max.x - ICON), rect.center().y - ICON / 2.0), Vec2::splat(ICON)));
-            let label = fill(self.ui("Add a shortcut to {label}"), &[("label", &r.label)]);
-            let resp = self.row_button(ui, plus, self.base.with(("add", &r.key)), &label, true, paint_plus);
-            self.tag(|| format!("shortcuts.add.{}", r.key), plus, &label);
-            if resp.clicked() {
-                action = Some(RowAction::Record(r.command.clone(), None, r.chips.len()));
-            }
-        }
-        if editable {
-            let reset = m.rect(Rect::from_min_size(pos2(rect.max.x - ICON - 2.0, rect.center().y - ICON / 2.0), Vec2::splat(ICON)));
-            let label = fill(self.ui("Restore the default for {label}"), &[("label", &r.label)]);
-            let resp = self.row_button(ui, reset, self.base.with(("reset", &r.key)), &label, r.changed, paint_reset);
-            self.tag(|| format!("shortcuts.reset.{}", r.key), reset, &label);
-            if resp.clicked() {
-                action = Some(RowAction::Reset(r.command.clone()));
-            }
-        }
+        let action =
+            self.shortcut_column(ui, RowShortcutLayout { row: r, rect, shortcut_w, mirror: m, editable, selected, focused, font, text_color });
 
         let clicked = resp.clicked();
         let mut tip = vec![self.vis(&r.label)];
@@ -966,6 +909,107 @@ impl Draw<'_, '_> {
         }
         resp.on_hover_text(tip.join("\n"));
         action.or_else(|| clicked.then(|| RowAction::Select(r.command.clone())))
+    }
+
+    fn shortcut_column(&self, ui: &mut Ui, layout: RowShortcutLayout<'_>) -> Option<RowAction> {
+        let RowShortcutLayout { row, rect, shortcut_w, mirror, editable, selected, focused, font, text_color } = layout;
+        let col = Rect::from_min_max(pos2(rect.max.x - shortcut_w - ICON - 4.0, rect.min.y), pos2(rect.max.x - ICON - 4.0, rect.max.y));
+        let painter = ui.painter_at(mirror.rect(col));
+        let mut x = col.min.x;
+        let rec = match self.recording_target() {
+            Some(Target::Cell { command, old }) if *command == row.command => Some(old.clone()),
+            _ => None,
+        };
+        let mut cells: Vec<(Option<Binding>, String, bool)> =
+            row.chips.iter().map(|chip| (Some(chip.binding.clone()), chip.text.clone(), rec.as_ref() == Some(&Some(chip.binding.clone())))).collect();
+        if rec == Some(None) {
+            cells.push((None, String::new(), true));
+        }
+        let mut action = self.draw_shortcut_chips(
+            ui,
+            ShortcutChipsLayout { painter: &painter, mirror, col, rect, row, cells: &cells, editable, selected, focused, font: &font, text_color },
+            &mut x,
+        );
+        if cells.is_empty() {
+            action = self.draw_empty_shortcut_cell(ui, mirror, col, rect, row, editable).or(action);
+            x = col.min.x;
+        }
+        if editable && row.chips.len() < MAX_BINDINGS && rec != Some(None) {
+            let plus = mirror.rect(Rect::from_min_size(pos2(x.min(col.max.x - ICON), rect.center().y - ICON / 2.0), Vec2::splat(ICON)));
+            let label = fill(self.ui("Add a shortcut to {label}"), &[("label", &row.label)]);
+            let resp = self.row_button(ui, plus, self.base.with(("add", &row.key)), &label, true, paint_plus);
+            self.tag(|| format!("shortcuts.add.{}", row.key), plus, &label);
+            if resp.clicked() {
+                action = Some(RowAction::Record(row.command.clone(), None, row.chips.len()));
+            }
+        }
+        if editable {
+            let reset = mirror.rect(Rect::from_min_size(pos2(rect.max.x - ICON - 2.0, rect.center().y - ICON / 2.0), Vec2::splat(ICON)));
+            let label = fill(self.ui("Restore the default for {label}"), &[("label", &row.label)]);
+            let resp = self.row_button(ui, reset, self.base.with(("reset", &row.key)), &label, row.changed, paint_reset);
+            self.tag(|| format!("shortcuts.reset.{}", row.key), reset, &label);
+            if resp.clicked() {
+                action = Some(RowAction::Reset(row.command.clone()));
+            }
+        }
+        action
+    }
+
+    fn draw_shortcut_chips(&self, ui: &mut Ui, layout: ShortcutChipsLayout<'_>, x: &mut f32) -> Option<RowAction> {
+        let ShortcutChipsLayout { painter, mirror, col, rect, row, cells, editable, selected, focused, font, text_color } = layout;
+        let v = ui.visuals();
+        let mut action = None;
+        for (n, (binding, text, recording)) in cells.iter().enumerate() {
+            let shown = if *recording { self.recording_text() } else { text.clone() };
+            let g = painter.layout_no_wrap(shown.clone(), font.clone(), text_color);
+            let w = g.size().x + 2.0 * CHIP_PAD;
+            let chip = mirror.rect(Rect::from_min_size(pos2(*x, rect.min.y + 2.0), vec2(w, rect.height() - 4.0)));
+            *x += w + CHIP_GAP;
+            let changed = row.chips.get(n).is_some_and(|c| c.changed);
+            let stroke = if *recording {
+                Stroke::new(1.5, self.style.accent)
+            } else if changed {
+                Stroke::new(1.0, self.style.changed)
+            } else {
+                v.widgets.inactive.bg_stroke
+            };
+            let current_chip = selected && focused && n == self.state.chip;
+            painter.rect(chip, 3.0, v.widgets.inactive.weak_bg_fill, if current_chip { v.selection.stroke } else { stroke }, StrokeKind::Inside);
+            painter.galley(pos2(chip.min.x + CHIP_PAD, chip.center().y - g.size().y / 2.0), g, v.text_color());
+            let waiting = self.state.recording.as_ref().is_some_and(|r| r.waiting.is_some());
+            let label = self.shortcut_accessibility_label(row, text, &shown, *recording, waiting);
+            let resp = ui.interact(
+                chip.intersect(mirror.rect(col)),
+                self.base.with(("cell", &row.key, n)),
+                if editable { Sense::CLICK } else { Sense::hover() },
+            );
+            resp.widget_info(|| WidgetInfo::labeled(Role::Button, editable, &label));
+            self.tag(|| format!("shortcuts.cell.{}.{n}", row.key), chip, &label);
+            if resp.clicked() {
+                action = Some(RowAction::Record(row.command.clone(), binding.clone(), n));
+            }
+        }
+        action
+    }
+
+    fn shortcut_accessibility_label(&self, row: &Row, text: &str, shown: &str, recording: bool, waiting: bool) -> String {
+        if recording && waiting {
+            fill(self.ui("{label}: {chord}"), &[("label", &row.label), ("chord", shown)])
+        } else if recording {
+            fill(self.ui("{label}: press keys"), &[("label", &row.label)])
+        } else {
+            fill(self.ui("{label}: {chord}"), &[("label", &row.label), ("chord", text)])
+        }
+    }
+
+    fn draw_empty_shortcut_cell(&self, ui: &mut Ui, mirror: Mirror, col: Rect, rect: Rect, row: &Row, editable: bool) -> Option<RowAction> {
+        let cell = mirror.rect(Rect::from_min_max(pos2(col.min.x, rect.min.y), pos2(col.max.x - ICON - CHIP_GAP, rect.max.y)));
+        let none = self.ui("None");
+        let label = fill(self.ui("{label}: {chord}"), &[("label", &row.label), ("chord", &none)]);
+        let resp = ui.interact(cell, self.base.with(("cell", &row.key, 0)), if editable { Sense::CLICK } else { Sense::hover() });
+        resp.widget_info(|| WidgetInfo::labeled(Role::Button, editable, &label));
+        self.tag(|| format!("shortcuts.cell.{}.0", row.key), cell, &label);
+        resp.clicked().then(|| RowAction::Record(row.command.clone(), None, 0))
     }
 
     /// A read-only row from `Options::fixed`, struck through when a command took its chord.
@@ -991,12 +1035,12 @@ impl Draw<'_, '_> {
         match &f.now_used_by {
             Some(by) => {
                 let label = fill(self.ui("{label}: {chord} (Now used by {holder})"), &[("label", &f.label), ("chord", &f.keys), ("holder", by)]);
-                resp.widget_info(|| WidgetInfo::labeled(WidgetType::Label, true, &label));
+                resp.widget_info(|| WidgetInfo::labeled(Role::Label, true, &label));
                 tip.push(self.vis(&fill(self.ui("Now used by {label}"), &[("label", by)])));
             }
             None => {
                 let label = fill(self.ui("{label}: {chord}"), &[("label", &f.label), ("chord", &f.keys)]);
-                resp.widget_info(|| WidgetInfo::labeled(WidgetType::Label, true, &label));
+                resp.widget_info(|| WidgetInfo::labeled(Role::Label, true, &label));
             }
         }
         if !tip.is_empty() {
@@ -1131,7 +1175,7 @@ impl Draw<'_, '_> {
             let resp = ui.interact(rect, field_id, Sense::click());
             let value = if shown.is_empty() { self.ui("None") } else { shown.clone() };
             let a11y = fill(self.ui("New shortcut: {chord}"), &[("chord", &value)]);
-            resp.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, &a11y));
+            resp.widget_info(|| WidgetInfo::labeled(Role::Button, true, &a11y));
             let v = ui.visuals();
             let stroke = if recording || resp.has_focus() { v.selection.stroke } else { v.widgets.inactive.bg_stroke };
             ui.painter().rect(rect, 3.0, v.extreme_bg_color, stroke, StrokeKind::Inside);
@@ -1436,6 +1480,32 @@ struct Mirror {
     on: bool,
     /// The span's left plus right edge.
     sum: f32,
+}
+
+struct RowShortcutLayout<'a> {
+    row: &'a Row,
+    rect: Rect,
+    shortcut_w: f32,
+    mirror: Mirror,
+    editable: bool,
+    selected: bool,
+    focused: bool,
+    font: egui::FontId,
+    text_color: Color32,
+}
+
+struct ShortcutChipsLayout<'a> {
+    painter: &'a Painter,
+    mirror: Mirror,
+    col: Rect,
+    rect: Rect,
+    row: &'a Row,
+    cells: &'a [(Option<Binding>, String, bool)],
+    editable: bool,
+    selected: bool,
+    focused: bool,
+    font: &'a egui::FontId,
+    text_color: Color32,
 }
 
 impl Mirror {

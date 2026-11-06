@@ -1,0 +1,43 @@
+{
+  "id": "S15",
+  "title": "S06, S02 and D01 placed as PDF pages at half size",
+  "source": "research S15",
+  "page": [360, 216],
+  "settings": {"group_cs": "cmyk"},
+  "objects": [
+    {"type": "pdf", "scene": "S06", "rect": [0, 0, 180, 108]},
+    {"type": "pdf", "scene": "S02", "rect": [180, 0, 180, 108]},
+    {"type": "pdf", "scene": "D01", "rect": [0, 108, 180, 108]}
+  ],
+  "expect": {
+    "plates": ["Cyan", "Magenta", "Yellow", "Black", "Gold"],
+    "points": [
+      {"at": [30, 54], "inks": {"Cyan": 100}, "tol": 2, "note": "S06 cyan only"},
+      {
+        "at": [85, 54],
+        "inks": {"Cyan": 50, "Black": 50},
+        "tol": 6,
+        "note": "S06 K50% over cyan"
+      },
+      {"at": [225, 35], "inks": {"Black": 100}, "tol": 2, "note": "S02 K rect"},
+      {
+        "at": [235, 70],
+        "kind": "text",
+        "region": [200, 58, 67, 22],
+        "inks": {"Black": 100},
+        "tol": 2,
+        "note": "S02 K text"
+      },
+      {"at": [45, 162], "inks": {"Gold": 100}, "tol": 2, "note": "D01 spot"},
+      {"at": [270, 162], "inks": {}, "tol": 2, "note": "paper"}
+    ]
+  },
+  "structure": {
+    "page_group": "DeviceCMYK",
+    "group_cs": ["none"],
+    "color_spaces_include": ["DeviceCMYK", "Separation(Gold, alt DeviceCMYK)"],
+    "device_rgb": false,
+    "output_intents": []
+  },
+  "note": "The placed pages must separate like their sources: K-only text stays K, the spot stays a spot."
+}
