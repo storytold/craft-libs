@@ -1,0 +1,639 @@
+diff --git a/src/configure/PDF_A1.md b/src/configure/PDF_A1.md
+index 2ade327..c525953 100644
+--- a/src/configure/PDF_A1.md
++++ b/src/configure/PDF_A1.md
+@@ -54,7 +54,8 @@ with an even number of characters and without whitespaces. 🟢
+ - krilla does check the maximum entries of a dictionary. 🟢
+ - krilla fails export if more than 8388607 indirect objects exist. 🟢
+ - krilla fails export if a higher nesting-level than 28 exists. 🔵
+-- krilla does not use the DeviceN color space. 🟢
++- krilla fails export if a DeviceN color space is used (see 6.2.3.4), so the limit of 8
++  DeviceN colorants is never reached. 🟢
+ - krilla only uses u16 for CIDs. 🟢
+ 
+ 6.1.13: krilla does not support optional content. 🔵
+@@ -81,7 +82,8 @@ in case CMYK is used but no profile was provided, export fails. 🟢
+ 6.2.3.4:
+ - krilla ensures the Alternate space in Separation color spaces obeys the restrictions
+   in the applicable clauses 🟢
+-- krilla does not support DeviceN color spaces. 🔵
++- krilla fails export if a DeviceN color space is used: its tint transform is a PostScript
++  calculator function (`ValidationError::ContainsPostScript`). 🟢
+ 
+ 6.2.4: 
+ - krilla does not use the `Alternates`/`Intent` keys for images. 🔵
+diff --git a/src/configure/PDF_A2.md b/src/configure/PDF_A2.md
+index 6157896..9ff3593 100644
+--- a/src/configure/PDF_A2.md
++++ b/src/configure/PDF_A2.md
+@@ -80,7 +80,8 @@ in case CMYK is used but no profile was provided, export fails.
+ 6.2.4.4:
+ - krilla ensures the Alternate space in Separation color spaces obeys the restrictions
+   in the applicable clauses 🟢
+-- krilla does not support DeviceN color spaces. 🔵
++- krilla fails export if a DeviceN color space is used: its tint transform is a PostScript
++  calculator function (`ValidationError::ContainsPostScript`). 🟢
+ - krilla fails export if a Separation colorant is associated with multiple different
+   fallback color spaces 🟢
+ - krilla manages the `tintTransform` function and will always write the same function for
+diff --git a/src/configure/PDF_A4.md b/src/configure/PDF_A4.md
+index 91727cb..7cd5df3 100644
+--- a/src/configure/PDF_A4.md
++++ b/src/configure/PDF_A4.md
+@@ -72,9 +72,12 @@ See `README.md` for the meaning of each color.
+ - krilla does not use device color spaces in this mode. 🟢
+ - krilla ensures the Alternate space in Separation color spaces obeys the restrictions
+   in the applicable clauses 🟢
+-- krilla does not support DeviceN color spaces. 🔵
++- krilla writes DeviceN color spaces with the CMYK ICC profile as their alternate in this
++  mode. Each spot colorant is also listed under `/Colorants` as a Separation space with the
++  same alternate, and a space mixing spot and process colorants is `/Subtype /NChannel`.
++  The tint transform is a PostScript calculator function, which PDF/A-4 allows. 🟢
+ - krilla fails export if a Separation colorant is associated with multiple different
+-  fallback color spaces 🟢
++  fallback color spaces, a DeviceN spot colorant's alternate included 🟢
+ - krilla manages the `tintTransform` function and will always write the same function for
+   the same color space 🟢
+ 
+diff --git a/src/configure/validate.rs b/src/configure/validate.rs
+index 91996ee..273f292 100644
+--- a/src/configure/validate.rs
++++ b/src/configure/validate.rs
+@@ -83,7 +83,8 @@ pub enum ValidationError {
+     MissingCMYKProfile,
+     /// The same Separation colorant was used with multiple different fallback colors.
+     ///
+-    /// Occurs if the user specified multiple Separation color spaces with the same colorant but a different fallback color.
++    /// Occurs if the user specified multiple Separation color spaces with the same colorant but a different fallback color,
++    /// or a DeviceN spot colorant whose CMYK alternate differs from the fallback used elsewhere for that name.
+     InconsistentSeparationFallback(SeparationColorant),
+     /// The `.notdef` glyph was used, which is forbidden by some export formats.
+     ///
+@@ -1234,17 +1235,28 @@ impl ValidationStore {
+     pub(crate) fn validate_separation(
+         &mut self,
+         separation: &SeparationSpace,
++    ) -> Result<(), ValidationError> {
++        self.validate_colorant(&separation.colorant, separation.fallback)
++    }
++
++    /// Register a colorant used by a Separation or DeviceN color space with its
++    /// fallback (the DeviceN spot's CMYK alternate) and raise an error if the name
++    /// already has another one.
++    pub(crate) fn validate_colorant(
++        &mut self,
++        colorant: &SeparationColorant,
++        fallback: RegularColor,
+     ) -> Result<(), ValidationError> {
+         if self
+             .separation_fallback_map
+-            .entry(separation.colorant.clone())
+-            .or_insert(separation.fallback)
+-            == &separation.fallback
++            .entry(colorant.clone())
++            .or_insert(fallback)
++            == &fallback
+         {
+             Ok(())
+         } else {
+             Err(ValidationError::InconsistentSeparationFallback(
+-                separation.colorant.clone(),
++                colorant.clone(),
+             ))
+         }
+     }
+diff --git a/src/graphics/color.rs b/src/graphics/color.rs
+index 559305c..6fb0618 100644
+--- a/src/graphics/color.rs
++++ b/src/graphics/color.rs
+@@ -2,11 +2,12 @@
+ //!
+ //! # Color spaces
+ //!
+-//! krilla currently supports four color models:
++//! krilla currently supports five color models:
+ //! - RGB
+ //! - Luma
+ //! - CMYK
+ //! - Separation (also known as Spot)
++//! - DeviceN (several process and spot colorants at once)
+ //!
+ //! Each color space is associated with its specific color type, which you can use to create new
+ //! instances of a specific color in that color space.
+@@ -54,7 +55,16 @@
+ //! given colorant should not be referred to by multiple, slightly different names. Just the same
+ //! for fallback colors: For a given colorant, there should be only one fallback color. Using multiple
+ //! Separation color spaces with the same colorant and distinct fallback colors is considered a bad
+-//! practice and forbidden in PDF/A-2 and later.
++//! practice and forbidden in PDF/A-2 and later. DeviceN spot colorants count too: a spot's
++//! CMYK alternate in a DeviceN color space must match its Separation fallback.
++//!
++//! # DeviceN
++//!
++//! A [`device_n::DeviceNSpace`] paints several colorants with one color, for example
++//! 60% Cyan and 40% Black without touching Magenta and Yellow, or a process ink mixed
++//! with a spot. Its alternate space is DeviceCMYK, or the `cmyk_profile` ICC space with
++//! `no_device_cs`. The tint transform is a PostScript calculator (Type 4) function, which
++//! some export formats forbid.
+ //!
+ //! [`SerializeSettings`]: crate::SerializeSettings
+ 
+@@ -97,6 +107,8 @@ pub enum RegularColor {
+ pub enum SpecialColor {
+     /// A separation color.
+     Separation(separation::Color),
++    /// A DeviceN color.
++    DeviceN(device_n::Color),
+ }
+ 
+ impl Color {
+@@ -106,6 +118,7 @@ impl Color {
+             Color::Regular(RegularColor::Luma(l)) => vec![l.to_pdf_color()],
+             Color::Regular(RegularColor::Cmyk(cmyk)) => cmyk.to_pdf_color().to_vec(),
+             Color::Special(SpecialColor::Separation(spot)) => vec![spot.to_pdf_color()],
++            Color::Special(SpecialColor::DeviceN(c)) => c.to_pdf_color(),
+         }
+     }
+ 
+@@ -122,6 +135,7 @@ impl Color {
+         match self {
+             Color::Regular(c) => *c,
+             Color::Special(SpecialColor::Separation(c)) => c.space.fallback,
++            Color::Special(SpecialColor::DeviceN(c)) => c.alternate().into(),
+         }
+     }
+ }
+@@ -162,6 +176,7 @@ impl SpecialColor {
+     pub(crate) fn color_space(&self) -> SpecialColorSpace {
+         match self {
+             Self::Separation(spot) => spot.color_space().into(),
++            Self::DeviceN(c) => SpecialColorSpace::DeviceN(c.space.clone()),
+         }
+     }
+ }
+@@ -479,6 +494,208 @@ pub mod separation {
+     }
+ }
+ 
++/// DeviceN colors: several process and spot colorants painted by one color.
++pub mod device_n {
++    use std::sync::Arc;
++
++    use crate::color::cmyk;
++
++    /// A process colorant.
++    #[derive(Debug, Eq, PartialEq, Hash, Clone, Copy)]
++    pub enum Process {
++        /// Cyan.
++        Cyan,
++        /// Magenta.
++        Magenta,
++        /// Yellow.
++        Yellow,
++        /// Black.
++        Black,
++    }
++
++    impl Process {
++        /// The process colorants in DeviceCMYK order.
++        pub const ALL: [Process; 4] = [Self::Cyan, Self::Magenta, Self::Yellow, Self::Black];
++
++        /// The PDF colorant name.
++        pub fn name(self) -> &'static str {
++            match self {
++                Self::Cyan => "Cyan",
++                Self::Magenta => "Magenta",
++                Self::Yellow => "Yellow",
++                Self::Black => "Black",
++            }
++        }
++
++        fn index(self) -> usize {
++            self as usize
++        }
++    }
++
++    /// One colorant of a DeviceN color space.
++    #[derive(Debug, Eq, PartialEq, Hash, Clone)]
++    pub enum Colorant {
++        /// A process colorant, painted on its own CMYK plate.
++        Process(Process),
++        /// A spot colorant with the CMYK color that stands in for it at 100% tint.
++        ///
++        /// To export PDF/A-2 and later, use the same alternate wherever the name appears,
++        /// including as a Separation fallback.
++        Spot {
++            /// The colorant name.
++            name: String,
++            /// The CMYK color of a 100% tint.
++            alternate: cmyk::Color,
++        },
++    }
++
++    impl Colorant {
++        /// The PDF colorant name.
++        pub fn name(&self) -> &str {
++            match self {
++                Self::Process(p) => p.name(),
++                Self::Spot { name, .. } => name,
++            }
++        }
++
++        /// The CMYK components (0–1) a 100% tint of this colorant contributes.
++        pub(crate) fn alternate(&self) -> [f32; 4] {
++            match self {
++                Self::Process(p) => {
++                    let mut out = [0.0; 4];
++                    out[p.index()] = 1.0;
++                    out
++                }
++                Self::Spot { alternate, .. } => alternate.to_pdf_color(),
++            }
++        }
++    }
++
++    /// A DeviceN color space: an ordered list of colorants.
++    ///
++    /// A color's tints map to the alternate CMYK space component by component: each
++    /// colorant contributes its tint times its CMYK alternate, and the contributions
++    /// combine as `1 - (1 - a)(1 - b)…`. Process colorants contribute only to their own
++    /// component, so a space of process colorants alone maps tints directly.
++    #[derive(Debug, Eq, PartialEq, Hash, Clone)]
++    pub struct DeviceNSpace {
++        pub(crate) colorants: Arc<[Colorant]>,
++    }
++
++    impl DeviceNSpace {
++        /// The largest number of colorants PDF allows in a DeviceN color space.
++        pub const MAX_COLORANTS: usize = 32;
++
++        /// Create a DeviceN color space with the colorants in this order.
++        ///
++        /// Returns `None` without colorants, with more than [`Self::MAX_COLORANTS`], with
++        /// a name used twice, or with a spot named like a process colorant, `All`, `None`
++        /// or the empty string.
++        pub fn new(colorants: impl IntoIterator<Item = Colorant>) -> Option<Self> {
++            let colorants: Arc<[Colorant]> = colorants.into_iter().collect();
++            if colorants.is_empty() || colorants.len() > Self::MAX_COLORANTS {
++                return None;
++            }
++            for (i, colorant) in colorants.iter().enumerate() {
++                let name = colorant.name();
++                if let Colorant::Spot { .. } = colorant {
++                    let reserved = ["", "All", "None"].contains(&name)
++                        || Process::ALL.iter().any(|p| p.name() == name);
++                    if reserved {
++                        return None;
++                    }
++                }
++                if colorants[..i].iter().any(|c| c.name() == name) {
++                    return None;
++                }
++            }
++            Some(Self { colorants })
++        }
++
++        /// The colorants in color component order.
++        pub fn colorants(&self) -> &[Colorant] {
++            &self.colorants
++        }
++
++        pub(crate) fn has_process(&self) -> bool {
++            self.colorants
++                .iter()
++                .any(|c| matches!(c, Colorant::Process(_)))
++        }
++
++        pub(crate) fn spots(&self) -> impl Iterator<Item = (&str, cmyk::Color)> {
++            self.colorants.iter().filter_map(|c| match c {
++                Colorant::Spot { name, alternate } => Some((name.as_str(), *alternate)),
++                Colorant::Process(_) => None,
++            })
++        }
++
++        /// The alternate CMYK components (0–1) for tints (0–1), as the tint transform
++        /// computes them.
++        pub(crate) fn alternate(&self, tints: &[f32]) -> [f32; 4] {
++            let mut out = [0.0; 4];
++            for (component, value) in out.iter_mut().enumerate() {
++                let blank: f32 = self
++                    .colorants
++                    .iter()
++                    .zip(tints)
++                    .map(|(c, t)| 1.0 - t * c.alternate()[component])
++                    .product();
++                *value = 1.0 - blank;
++            }
++            out
++        }
++    }
++
++    impl From<DeviceNSpace> for super::SpecialColorSpace {
++        fn from(value: DeviceNSpace) -> Self {
++            Self::DeviceN(value)
++        }
++    }
++
++    /// A DeviceN color: one tint per colorant of its space.
++    #[derive(Debug, Hash, Eq, PartialEq, Clone)]
++    pub struct Color {
++        pub(crate) tints: Vec<u8>,
++        pub(crate) space: DeviceNSpace,
++    }
++
++    impl Color {
++        /// Create a DeviceN color, with the tints (0 = no ink, 255 = full ink) in the
++        /// order of the space's colorants.
++        ///
++        /// Returns `None` unless there is one tint per colorant.
++        pub fn new(tints: Vec<u8>, space: DeviceNSpace) -> Option<Self> {
++            (tints.len() == space.colorants.len()).then_some(Self { tints, space })
++        }
++
++        pub(crate) fn to_pdf_color(&self) -> Vec<f32> {
++            self.tints.iter().map(|t| *t as f32 / 255.0).collect()
++        }
++
++        /// The color in the alternate CMYK space.
++        pub(crate) fn alternate(&self) -> cmyk::Color {
++            let [c, m, y, k] = self
++                .space
++                .alternate(&self.to_pdf_color())
++                .map(|v| (v * 255.0).round().clamp(0.0, 255.0) as u8);
++            cmyk::Color::new(c, m, y, k)
++        }
++    }
++
++    impl From<Color> for super::SpecialColor {
++        fn from(val: Color) -> Self {
++            super::SpecialColor::DeviceN(val)
++        }
++    }
++
++    impl From<Color> for super::Color {
++        fn from(val: Color) -> Self {
++            super::SpecialColor::from(val).into()
++        }
++    }
++}
++
+ #[derive(Debug, Eq, PartialEq, Hash, Clone)]
+ pub(crate) enum ColorSpace {
+     Device(DeviceColorSpace),
+@@ -543,6 +760,8 @@ impl From<CieBasedColorSpace> for RegularColorSpace {
+ pub(crate) enum SpecialColorSpace {
+     /// A Separation color space with its colorant and fallback.
+     Separation(separation::SeparationSpace),
++    /// A DeviceN color space with its colorants.
++    DeviceN(device_n::DeviceNSpace),
+ }
+ 
+ impl From<SpecialColorSpace> for ColorSpace {
+diff --git a/src/graphics/device_n.rs b/src/graphics/device_n.rs
+new file mode 100644
+index 0000000..8ee7064
+--- /dev/null
++++ b/src/graphics/device_n.rs
+@@ -0,0 +1,194 @@
++use std::ops::DerefMut;
++
++use pdf_writer::types::PostScriptOp;
++use pdf_writer::{Finish, Name, Ref};
++
++use crate::chunk_container::ChunkContainer;
++use crate::color::device_n::DeviceNSpace;
++use crate::color::separation::{SeparationColorant, SeparationSpace};
++use crate::color::{cmyk, ColorSpace, RegularColor, SpecialColorSpace};
++use crate::color::{DEVICE_CMYK, DEVICE_GRAY, DEVICE_RGB};
++use crate::configure::{PdfVersion, ValidationError};
++use crate::resource::{self, Resource, Resourceable};
++use crate::serialize::{Cacheable, MaybeDeviceColorSpace, SerializeContext};
++use crate::stream::FilterStreamBuilder;
++
++/// A DeviceN color space, written as
++/// `[/DeviceN [names] alternate tintTransform attributes?]`.
++///
++/// The alternate is DeviceCMYK, or the `cmyk_profile` ICC space with `no_device_cs`. The
++/// attributes dictionary (PDF 1.6+) lists each spot's Separation color space under
++/// `/Colorants`; when spots and process colorants mix, it is an `NChannel` space whose
++/// `/Process` names the CMYK space and components.
++#[derive(Debug, Eq, PartialEq, Hash, Clone)]
++pub(crate) struct DeviceNColorSpace {
++    space: DeviceNSpace,
++}
++
++impl DeviceNColorSpace {
++    pub fn new(space: DeviceNSpace) -> Self {
++        Self { space }
++    }
++}
++
++impl Cacheable for DeviceNColorSpace {
++    fn serialize(
++        self,
++        sc: &mut SerializeContext,
++        chunk_container: &mut ChunkContainer,
++        root_ref: Ref,
++    ) {
++        let space = self.space;
++        let alternate_cs = RegularColor::from(cmyk::Color::default()).color_space(sc);
++        let alternate = sc.register_colorspace(chunk_container, alternate_cs.into());
++
++        for (name, cmyk) in space.spots() {
++            let colorant = SeparationColorant::Custom(name.to_owned());
++            if let Err(e) = sc
++                .validation_store()
++                .validate_colorant(&colorant, cmyk.into())
++            {
++                sc.register_validation_error(e);
++            }
++        }
++
++        let tint_ref = tint_transform(&space, sc, chunk_container);
++
++        let with_attrs = sc.serialize_settings().pdf_version() >= PdfVersion::Pdf16;
++        let mut separations = Vec::new();
++        if with_attrs {
++            for (name, cmyk) in space.spots() {
++                let separation =
++                    SeparationSpace::new(SeparationColorant::Custom(name.to_owned()), cmyk.into());
++                let cs = ColorSpace::Special(SpecialColorSpace::Separation(separation));
++                if let MaybeDeviceColorSpace::ColorSpace(cs) =
++                    sc.register_colorspace(chunk_container, cs)
++                {
++                    separations.push((name.to_owned(), cs.get_ref()));
++                }
++            }
++        }
++        let nchannel = with_attrs && space.has_process() && !separations.is_empty();
++
++        let chunk = &mut chunk_container.non_stream.color_spaces;
++        let mut array = chunk.indirect(root_ref).array();
++        array.item(Name(b"DeviceN"));
++        array
++            .push()
++            .array()
++            .items(space.colorants().iter().map(|c| Name(c.name().as_bytes())));
++        write_color_space(&mut array, &alternate);
++        array.item(tint_ref);
++
++        if !separations.is_empty() {
++            let mut attrs = array.push().dict();
++            if nchannel {
++                attrs.pair(Name(b"Subtype"), Name(b"NChannel"));
++            }
++            let mut colorants = attrs.insert(Name(b"Colorants")).dict();
++            for (name, separation) in &separations {
++                colorants.pair(Name(name.as_bytes()), *separation);
++            }
++            colorants.finish();
++            if nchannel {
++                let mut process = attrs.insert(Name(b"Process")).dict();
++                match &alternate {
++                    MaybeDeviceColorSpace::ColorSpace(cs) => {
++                        process.pair(Name(b"ColorSpace"), cs.get_ref());
++                    }
++                    _ => {
++                        process.pair(Name(b"ColorSpace"), Name(DEVICE_CMYK.as_bytes()));
++                    }
++                }
++                process
++                    .insert(Name(b"Components"))
++                    .array()
++                    .items(PROCESS_NAMES.map(|n| Name(n.as_bytes())));
++            }
++        }
++
++        array.finish();
++    }
++}
++
++impl Resourceable for DeviceNColorSpace {
++    type Resource = resource::ColorSpace;
++}
++
++const PROCESS_NAMES: [&str; 4] = ["Cyan", "Magenta", "Yellow", "Black"];
++
++fn write_color_space(array: &mut pdf_writer::Array<'_>, cs: &MaybeDeviceColorSpace) {
++    match cs {
++        MaybeDeviceColorSpace::DeviceRgb => array.item(Name(DEVICE_RGB.as_bytes())),
++        MaybeDeviceColorSpace::DeviceGray => array.item(Name(DEVICE_GRAY.as_bytes())),
++        MaybeDeviceColorSpace::DeviceCMYK => array.item(Name(DEVICE_CMYK.as_bytes())),
++        MaybeDeviceColorSpace::ColorSpace(cs) => array.item(cs.get_ref()),
++    };
++}
++
++/// Write the Type 4 tint transform from the space's tints to CMYK and return its
++/// reference. It computes [`DeviceNSpace::alternate`].
++fn tint_transform(
++    space: &DeviceNSpace,
++    sc: &mut SerializeContext,
++    chunk_container: &mut ChunkContainer,
++) -> Ref {
++    use PostScriptOp::*;
++
++    sc.register_validation_error(ValidationError::ContainsPostScript(sc.location));
++
++    let n = space.colorants().len();
++    let mut code = Vec::new();
++    // The stack holds the n tints; each pass pushes one CMYK component on top.
++    for component in 0..4 {
++        let terms: Vec<(usize, f32)> = space
++            .colorants()
++            .iter()
++            .enumerate()
++            .map(|(i, c)| (i, c.alternate()[component]))
++            .filter(|(_, a)| *a > 0.0)
++            .collect();
++        // Depth of tint `i` below the top, with `extra` values pushed above the tints.
++        let depth = |i: usize, extra: usize| (n - 1 - i + extra) as i32;
++        let scale = |code: &mut Vec<PostScriptOp<'static>>, a: f32| {
++            if a < 1.0 {
++                code.extend([Real(a), Mul]);
++            }
++        };
++        match terms.as_slice() {
++            [] => code.push(Real(0.0)),
++            [(i, a)] => {
++                code.extend([Integer(depth(*i, component)), Index]);
++                scale(&mut code, *a);
++            }
++            _ => {
++                // Product of (1 - tint × alternate), then 1 minus the product.
++                code.push(Real(1.0));
++                for (i, a) in &terms {
++                    code.extend([Integer(depth(*i, component + 1)), Index]);
++                    scale(&mut code, *a);
++                    code.extend([Real(1.0), Exch, Sub, Mul]);
++                }
++                code.extend([Real(1.0), Exch, Sub]);
++            }
++        }
++    }
++    // Move the four components below the tints, then drop the tints.
++    code.extend([Integer(n as i32 + 4), Integer(4), Roll]);
++    code.extend((0..n).map(|_| Pop));
++
++    let encoded = PostScriptOp::encode(&code);
++    sc.register_limits(encoded.limits());
++    let encoded = FilterStreamBuilder::new_from_content_stream(&encoded, &sc.serialize_settings())
++        .finish(&sc.serialize_settings());
++
++    let tint_ref = sc.new_ref();
++    let mut chunk = sc.new_chunk();
++    let mut function = chunk.post_script_function(tint_ref, encoded.encoded_data());
++    encoded.write_filters(function.deref_mut().deref_mut());
++    function.domain([0.0, 1.0].repeat(n));
++    function.range([0.0, 1.0].repeat(4));
++    function.finish();
++    chunk_container.streams.shading_functions.push(chunk);
++    tint_ref
++}
+diff --git a/src/graphics/mod.rs b/src/graphics/mod.rs
+index fa15fda..57e9406 100644
+--- a/src/graphics/mod.rs
++++ b/src/graphics/mod.rs
+@@ -7,6 +7,7 @@ pub mod icc;
+ pub mod image;
+ pub mod mask;
+ pub mod paint;
++pub(crate) mod device_n;
+ pub(crate) mod separation;
+ pub(crate) mod shading_function;
+ pub(crate) mod shading_pattern;
+diff --git a/src/graphics/paint.rs b/src/graphics/paint.rs
+index cd4413c..d964ac0 100644
+--- a/src/graphics/paint.rs
++++ b/src/graphics/paint.rs
+@@ -186,6 +186,7 @@ impl Paint {
+             InnerPaint::Color(c) => match c {
+                 Color::Regular(c) => c.as_rgb(),
+                 Color::Special(SpecialColor::Separation(c)) => c.space.fallback.as_rgb(),
++                Color::Special(SpecialColor::DeviceN(_)) => None,
+             },
+             _ => None,
+         }
+diff --git a/src/serialize.rs b/src/serialize.rs
+index 58c0090..d16261c 100644
+--- a/src/serialize.rs
++++ b/src/serialize.rs
+@@ -17,6 +17,7 @@ use crate::configure::{Configuration, PdfVersion, ValidationError, Validators};
+ use crate::error::{KrillaError, KrillaResult, LimitError};
+ use crate::geom::Size;
+ use crate::graphics::color::{cmyk, luma, rgb, ColorSpace};
++use crate::graphics::device_n::DeviceNColorSpace;
+ use crate::graphics::icc::{ICCBasedColorSpace, ICCProfile};
+ #[cfg(feature = "raster-images")]
+ use crate::graphics::image::Image;
+@@ -766,6 +767,11 @@ impl SerializeContext {
+                     self.register_resourceable(chunk_container, SeparationColorSpace::new(s)),
+                 )
+             }
++            ColorSpace::Special(SpecialColorSpace::DeviceN(s)) => {
++                MaybeDeviceColorSpace::ColorSpace(
++                    self.register_resourceable(chunk_container, DeviceNColorSpace::new(s)),
++                )
++            }
+         }
+     }
+ }

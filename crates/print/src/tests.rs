@@ -9,8 +9,8 @@ fn spooler_arguments_and_printer_list() {
     assert_eq!(
         parse_lpstat(out),
         [
-            spool::Printer { name: "Office_Laser".into(), default: true, two_sided: None },
-            spool::Printer { name: "Label_Writer".into(), default: false, two_sided: None }
+            spool::Printer { name: "Office_Laser".into(), description: String::new(), default: true, two_sided: None },
+            spool::Printer { name: "Label_Writer".into(), description: String::new(), default: false, two_sided: None }
         ]
     );
     assert!(parse_lpstat("lpstat: No destinations added.\nno system default destination\n").is_empty());
@@ -45,6 +45,32 @@ fn lpstat_output_is_untranslated() {
 }
 
 #[test]
+fn a_queue_keeps_its_human_name() {
+    // A CUPS queue name can't hold dots, so macOS adds the printer at 192.0.2.15 as the queue
+    // `_192_0_2_15`. The dialog showed that underscored name; `lpstat -l` also gives the name the
+    // user knows, as the queue's Description.
+    let out = "printer _192_0_2_15 is idle.  enabled since Thu Oct  1 09:00:00 2026\n\tForm mounted:\n\tDescription: 192.0.2.15\n\tAlerts: none\n\tLocation: Description: not this one\nprinter Label_Writer disabled since Thu Oct  1 09:00:00 2026 -\n\treason unknown\n\tDescription:\nprinter Office_Laser is idle.\r\n\tDescription: Office Laser, 2nd floor\r\n\tDescription: a second one is ignored\nDescription: not indented, not a detail\nsystem default destination: _192_0_2_15\n";
+    assert_eq!(
+        parse_lpstat(out),
+        [
+            spool::Printer { name: "_192_0_2_15".into(), description: "192.0.2.15".into(), default: true, two_sided: None },
+            spool::Printer { name: "Label_Writer".into(), description: String::new(), default: false, two_sided: None },
+            spool::Printer { name: "Office_Laser".into(), description: "Office Laser, 2nd floor".into(), default: false, two_sided: None },
+        ],
+        "each queue takes its own first Description; an empty one stays empty"
+    );
+    // A description before any queue belongs to none, and a huge one is cut to a name's length.
+    assert!(parse_lpstat("\tDescription: orphan\n").is_empty());
+    // An empty first description is still the first: a later one doesn't replace it.
+    assert_eq!(parse_lpstat("printer Q is idle.\n\tDescription:\n\tDescription: Office\n")[0].description, "");
+    let long = format!("printer Q is idle.\n\tDescription: {}\n", "é".repeat(10_000));
+    assert_eq!(parse_lpstat(&long)[0].description.chars().count(), 256);
+    // The queues come from `lpstat -l`, so the descriptions are there to read.
+    let args: Vec<_> = spool::lpstat_command().get_args().map(|a| a.to_string_lossy().into_owned()).collect();
+    assert_eq!(args, ["-l", "-p", "-d"]);
+}
+
+#[test]
 fn driverless_printers_join_the_list_without_a_queue() {
     // A driverless network printer (IPP, discovered on the LAN) has no queue, so `lpstat -p`
     // never lists it — yet GTK's print dialog shows it and `lp` prints to it through a temporary
@@ -53,18 +79,21 @@ fn driverless_printers_join_the_list_without_a_queue() {
     assert_eq!(
         spool::printers_parsed(queues, Some("Basement_Color\nOffice_Laser\n")),
         [
-            spool::Printer { name: "Office_Laser".into(), default: true, two_sided: None },
-            spool::Printer { name: "Basement_Color".into(), default: false, two_sided: None },
+            spool::Printer { name: "Office_Laser".into(), description: String::new(), default: true, two_sided: None },
+            spool::Printer { name: "Basement_Color".into(), description: String::new(), default: false, two_sided: None },
         ],
         "queues first, then the driverless destination; the queue listed twice is not doubled"
     );
     // An old spooler without `-e` (CUPS < 1.7) keeps its queues; only the driverless names are lost.
-    assert_eq!(spool::printers_parsed(queues, None), [spool::Printer { name: "Office_Laser".into(), default: true, two_sided: None }]);
+    assert_eq!(
+        spool::printers_parsed(queues, None),
+        [spool::Printer { name: "Office_Laser".into(), description: String::new(), default: true, two_sided: None }]
+    );
     // The default can itself be driverless (`lpoptions -d` names a destination no queue exists
     // for): it keeps its marker, so the dialog preselects the user's default, not the first queue.
     assert_eq!(
         spool::printers_parsed("system default destination: Basement_Color\n", Some("Basement_Color\n")),
-        [spool::Printer { name: "Basement_Color".into(), default: true, two_sided: None }],
+        [spool::Printer { name: "Basement_Color".into(), description: String::new(), default: true, two_sided: None }],
         "a default destination without a queue is still the default"
     );
     assert!(spool::parse_lpstat_e("\n \n").is_empty(), "no destinations is empty, not [\"\"]");
@@ -113,7 +142,7 @@ fn print_jobs_reach_lp_on_stdin_never_through_a_shared_temp_folder() {
     // Bigger than any pipe buffer, so the spooler must read while the job is still being written.
     let pdf: Vec<u8> = b"%PDF-1.7 synthetic print job\n".iter().copied().cycle().take(3 << 20).collect();
     let job = Job { title: "memo.pdf".into(), ..Job::default() };
-    let sent = spool::submit_via(stand_in_lp(record.as_os_str()), &pdf, &job);
+    let sent = spool::submit_via(stand_in_lp(record.as_os_str()), &pdf, &job, &Cancel::new());
     let args = std::fs::read_to_string(record.join("args"));
     let stdin = std::fs::read(record.join("stdin"));
     let _ = std::fs::remove_dir_all(&record);
@@ -125,10 +154,45 @@ fn print_jobs_reach_lp_on_stdin_never_through_a_shared_temp_folder() {
 }
 
 #[test]
+fn a_job_cancels_until_it_starts_reaching_the_spooler() {
+    // Pending: cancelling wins, and the job refuses to start sending; cancelling again agrees.
+    let pending = Cancel::new();
+    assert!(pending.cancel(), "a pending job is never sent");
+    assert_eq!(pending.start_sending(), Err(Error::Spool(CANCELLED_MESSAGE.into())));
+    assert!(pending.cancel(), "still cancelled");
+    // Sending: too late to cancel; a job sent as several copies keeps sending.
+    let sending = Cancel::new();
+    assert_eq!(sending.start_sending(), Ok(()));
+    assert!(!sending.cancel(), "a job being sent completes; the system's queue cancels it");
+    assert_eq!(sending.start_sending(), Ok(()), "the next copy of the same job");
+    // A clone is the same token: the UI keeps one while the worker submits with the other.
+    let worker = Cancel::new();
+    let ui = worker.clone();
+    assert!(ui.cancel());
+    assert!(worker.start_sending().is_err());
+}
+
+#[test]
+fn a_cancelled_job_never_starts_lp() {
+    // Cancelled before it was sent (as the UI does while a job waits): `lp` never starts, so
+    // nothing reaches the spooler, and the caller learns why. The spooler given can't be started,
+    // so any attempt to start it would answer with that failure instead.
+    let cancel = Cancel::new();
+    assert!(cancel.cancel());
+    let lp = std::process::Command::new(std::env::temp_dir().join("craft-print-no-such-lp").join("lp"));
+    let sent = spool::submit_via(lp, b"%PDF-1.7 cancelled", &Job::default(), &cancel);
+    assert_eq!(sent, Err(Error::Spool(CANCELLED_MESSAGE.into())), "lp was never started");
+    // The control: the same spooler, not cancelled, is tried and fails to start.
+    let lp = std::process::Command::new(std::env::temp_dir().join("craft-print-no-such-lp").join("lp"));
+    let tried = spool::submit_via(lp, b"%PDF-1.7", &Job::default(), &Cancel::new());
+    assert!(matches!(tried, Err(Error::Spool(ref m)) if m.starts_with("the print spooler is not available")), "{tried:?}");
+}
+
+#[test]
 fn a_refused_print_job_reports_the_spoolers_message() {
     // `lp` refuses an unknown printer without reading the job; the user sees why, not a broken pipe.
     let pdf = vec![b'%'; 3 << 20];
-    let err = spool::submit_via(stand_in_lp("refuse".as_ref()), &pdf, &Job::default());
+    let err = spool::submit_via(stand_in_lp("refuse".as_ref()), &pdf, &Job::default(), &Cancel::new());
     assert_eq!(err, Err(Error::Spool("lp: The printer or class does not exist.".into())));
 }
 
@@ -156,16 +220,16 @@ fn windows_printers_carry_one_default_and_keep_their_names() {
     // Windows marks the system default with a `*` no queue name may contain; names hold spaces,
     // parentheses and non-ASCII letters, and the lines end with CRLF.
     let printers = parse_windows_printers("*Microsoft Print to PDF\r\nHP LaserJet 400 (Copy 2)\r\nКопир Canon iR\r\n\r\n*XPS via USB\r\n");
-    assert_eq!(printers[0], Printer { name: "Microsoft Print to PDF".into(), default: true, two_sided: None });
-    assert_eq!(printers[1], Printer { name: "HP LaserJet 400 (Copy 2)".into(), default: false, two_sided: None });
-    assert_eq!(printers[2], Printer { name: "Копир Canon iR".into(), default: false, two_sided: None });
+    assert_eq!(printers[0], Printer { name: "Microsoft Print to PDF".into(), description: String::new(), default: true, two_sided: None });
+    assert_eq!(printers[1], Printer { name: "HP LaserJet 400 (Copy 2)".into(), description: String::new(), default: false, two_sided: None });
+    assert_eq!(printers[2], Printer { name: "Копир Canon iR".into(), description: String::new(), default: false, two_sided: None });
     // A spooler marking two defaults: the first still wins, so the dialog has one to preselect.
-    assert_eq!(printers[3], Printer { name: "XPS via USB".into(), default: false, two_sided: None });
+    assert_eq!(printers[3], Printer { name: "XPS via USB".into(), description: String::new(), default: false, two_sided: None });
     assert_eq!(parse_windows_printers("\r\n"), Vec::new());
     let sided = parse_windows_printers("*Office PCL\t2\r\nOffice PS\t1\r\nTab\tName\t2\r\n");
-    assert_eq!(sided[0], Printer { name: "Office PCL".into(), default: true, two_sided: Some(true) });
-    assert_eq!(sided[1], Printer { name: "Office PS".into(), default: false, two_sided: Some(false) });
-    assert_eq!(sided[2], Printer { name: "Tab\tName".into(), default: false, two_sided: Some(true) });
+    assert_eq!(sided[0], Printer { name: "Office PCL".into(), description: String::new(), default: true, two_sided: Some(true) });
+    assert_eq!(sided[1], Printer { name: "Office PS".into(), description: String::new(), default: false, two_sided: Some(false) });
+    assert_eq!(sided[2], Printer { name: "Tab\tName".into(), description: String::new(), default: false, two_sided: Some(true) });
 }
 
 /// A PPD shaped like a Fiery's: installable options, multi-line PostScript in the choices, Latin-1
@@ -228,6 +292,29 @@ fn printer_options_come_from_the_ppd() {
 }
 
 #[test]
+fn ppd_labels_are_capped_before_every_option_copies_its_group() {
+    let long = "G".repeat(100_000);
+    let mut ppd = format!("*OpenGroup: Big/{long}\n");
+    for i in 0..300 {
+        ppd += &format!("*OpenUI *Opt{i}/{long}: PickOne\n*Opt{i} A/{long}: \"\"\n*CloseUI: *Opt{i}\n");
+    }
+    let options = spool::parse_ppd(&ppd);
+    assert_eq!(options.len(), 300);
+    assert!(options.iter().all(|o| o.group.len() <= 256 && o.label.len() <= 256 && o.choices[0].1.len() <= 256));
+    assert_eq!(options[0].group, "G".repeat(256));
+}
+
+#[test]
+fn many_driverless_destinations_merge_in_linear_time() {
+    let names: String = (0..200_000).map(|i| format!("dest_{i}\n")).collect();
+    let started = std::time::Instant::now();
+    let printers = spool::printers_parsed("printer Office is idle.\n", Some(&format!("Office\n{names}dest_7\n")));
+    assert!(started.elapsed() < std::time::Duration::from_secs(10), "{:?}", started.elapsed());
+    assert_eq!(printers.len(), 200_001, "each destination once, queues first");
+    assert_eq!(printers[0].name, "Office");
+}
+
+#[test]
 fn printer_option_defaults_and_job_arguments() {
     let current =
         spool::parse_lpoptions("InputSlot/Paper tray: AutoSelect *Tray2 ManualFeed\nEFRaster/Print queue action: *False Hold\nbroken line\n");
@@ -257,7 +344,7 @@ fn command_previews_do_not_require_pdf_files() {
     } else {
         assert_eq!(
             preview,
-            ["xps-print", "printer=Office (east)", "copies=2", "collate=true", "duplex=(queue default)", "scaling=exact", "color=color"]
+            ["xps-print", "printer=Office (east)", "copies=2", "collate=true", "duplex=(queue default)", "scaling=exact", "color=(driver default)"]
         );
     }
 }

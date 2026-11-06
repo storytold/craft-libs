@@ -1,0 +1,30 @@
+name: Translations
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['crates/i18n/**', 'Cargo.toml', 'Cargo.lock', '.github/workflows/i18n.yml']
+  pull_request:
+    paths: ['crates/i18n/**', 'Cargo.toml', 'Cargo.lock', '.github/workflows/i18n.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  i18n:
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        # macOS runners are kept for releases: macOS runs only when started by hand.
+        os: ${{ github.event_name == 'workflow_dispatch' && fromJSON('["ubuntu-latest","windows-latest","macos-latest"]') || fromJSON('["ubuntu-latest","windows-latest"]') }}
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          components: rustfmt, clippy
+      - run: cargo fmt --check
+      - run: cargo clippy -p craft-i18n --all-targets --features collate --locked -- -D warnings
+      - run: cargo test -p craft-i18n --features collate --locked -- --nocapture

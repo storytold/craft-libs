@@ -65,3 +65,15 @@ fn a_slot_with_no_value_is_an_error_not_an_empty_string() {
     let why = render_text("/jobs/{job_id}", &v).unwrap_err();
     assert!(why.contains("{job_id} is not available"), "{why}");
 }
+
+#[test]
+fn repeated_slots_share_one_rendered_budget() {
+    let prompt = "x".repeat(64 * 1024);
+    let v = Values { prompt: Some(&prompt), ..values() };
+    let slots = vec![json!("{prompt}"); 16];
+    assert!(render_value(&json!({ "a": slots }), &v).is_ok());
+    let slots = vec![json!("{prompt}{prompt}{prompt}{prompt}"); 32];
+    let why = render_value(&json!({ "a": slots }), &v).unwrap_err();
+    assert!(why.contains("at most"), "{why}");
+    assert!(render_text(&"{prompt}".repeat(128), &v).is_err());
+}

@@ -1,0 +1,43 @@
+{
+  "id": "S02",
+  "title": "[Black] rect and text over C100, overprint off",
+  "source": "research S2",
+  "page": [360, 216],
+  "objects": [
+    {"type": "rect", "rect": [20, 20, 300, 176], "fill": {"cmyk": [100, 0, 0, 0]}},
+    {"type": "rect", "rect": [40, 40, 100, 60], "fill": {"cmyk": [0, 0, 0, 100]}},
+    {
+      "type": "text",
+      "at": [40, 160],
+      "size": 60,
+      "text": "HHH",
+      "fill": {"cmyk": [0, 0, 0, 100]}
+    }
+  ],
+  "expect": {
+    "plates": ["Cyan", "Magenta", "Yellow", "Black"],
+    "points": [
+      {"at": [90, 70], "inks": {"Black": 100}, "tol": 2, "note": "K rect"},
+      {
+        "at": [110, 140],
+        "kind": "text",
+        "region": [40, 116.2, 133.2, 43.8],
+        "inks": {"Black": 100},
+        "tol": 2,
+        "note": "K text"
+      },
+      {"at": [250, 70], "inks": {"Cyan": 100}, "tol": 2, "note": "cyan only"},
+      {"at": [340, 108], "inks": {}, "tol": 2, "note": "paper"}
+    ]
+  },
+  "structure": {
+    "page_group": "none",
+    "group_cs": [],
+    "overprint": false,
+    "smask": false,
+    "blend_modes": [],
+    "color_spaces": ["DeviceCMYK"],
+    "device_rgb": false,
+    "output_intents": []
+  }
+}

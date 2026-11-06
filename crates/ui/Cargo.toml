@@ -11,15 +11,73 @@ description = "Reusable egui controls and icon catalogs for Craft frontends"
 workspace = true
 
 [dependencies]
+craft-fonts-build = { workspace = true }
+craft-i18n = { workspace = true }
 egui = { workspace = true }
+epaint = { version = "0.37", default-features = false }
+log = "0.4"
 serde = { version = "1", features = ["derive"], optional = true }
+# Same version as epaint's, for reading a face's character map.
+skrifa = { version = "0.44", default-features = false, features = ["std"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# Screenshot and input tests of an app's screens (the screen-testing feature).
+egui_kittest = { version = "0.37", features = ["snapshot", "wgpu"], optional = true }
+# The versions egui_system_font_provider 0.37 uses.
+fontique = { version = "0.11.1", default-features = false, features = ["system", "fontconfig-dlopen"], optional = true }
+unicode-script = { version = "0.5.8", optional = true }
+
+# Fetching served fonts (`fonts::UiFonts::served_faces`); already in every eframe web build.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+js-sys = "0.3"
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+web-sys = { version = "0.3", features = ["Window", "RequestInit", "Response", "console"] }
+
+# Fading a native window while it is dragged (`NSWindow.alphaValue`); winit already uses these.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "objc2-core-foundation", "NSApplication", "NSEvent", "NSResponder", "NSScreen", "NSWindow"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSEnumerator", "NSString"] }
 
 [features]
+default = []
 serde = ["dep:serde"]
+# Floating windows may move to their own OS windows (desktop egui backends with viewports).
+native-windows = []
+# Draw colour glyphs (COLR, sbix, CBDT), e.g. colour emoji.
+color_fonts = ["epaint/color_fonts"]
+# Find installed fonts for characters the app's faces lack (desktop only).
+system_fonts = ["dep:fontique", "dep:unicode-script"]
+# `docking::testing`: a headless driver for application docking tests.
+testing = []
+# craft_ui::testing: per-language screenshot tests and IME smoke tests with egui_kittest
+# (desktop only).
+screen-testing = ["dep:egui_kittest"]
 
 [dev-dependencies]
-egui = { workspace = true, features = ["default_fonts"] }
+# serde: the IME tests read events that only the suite's egui fork has from JSON.
+egui = { workspace = true, features = ["default_fonts", "serde"] }
 serde_json = "1"
-egui_extras = { version = "0.36", default-features = false, features = ["svg"] }
-egui_kittest = { version = "0.36", features = ["wgpu"] }
+egui_extras = { version = "0.37", default-features = false, features = ["svg"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
+
+[[example]]
+name = "docking_native"
+required-features = ["native-windows"]
+
+[[test]]
+name = "screens"
+required-features = ["screen-testing"]
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+egui_kittest = { version = "0.37", features = ["wgpu"] }
+eframe = { version = "0.37", default-features = false, features = ["wgpu", "x11", "default_fonts"] }
+
+# The browser test (tests/web_fonts.rs).
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+js-sys = "0.3"
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+wasm-bindgen-test = "0.3"
+web-sys = { version = "0.3", features = ["Window", "Response"] }
