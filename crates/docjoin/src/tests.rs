@@ -729,3 +729,22 @@ fn a_decoy_table_cannot_take_the_joined_ones_place() {
     set(&mut cut, "docs/gaps.md", |t| t.replace("Prose below.\n", "Prose below.\n\n| A | B |\n|---|---|\n| x | y |\n"));
     assert_eq!(check(&CFG, &pre, &cut), Vec::<String>::new());
 }
+
+#[test]
+fn a_hand_fold_keeps_each_entry_whole() {
+    let mut base = docs();
+    base.push(f("docs/progress.d/12-a.md", "- 2026-11-05: a\n  a-more\n", NOV5));
+    base.push(f("docs/progress.d/13-b.md", "- 2026-11-06: b\n  b-more\n", NOV6));
+    let good = fold_of(&CFG, &base);
+    let mut head = good.clone();
+    set(&mut head, "ROADMAP.md", |t| t.replace("- 2026-11-06: b\n  b-more\n- 2026-11-05: a\n  a-more\n", "- 2026-11-06: b\n  a-more\n- 2026-11-05: a\n  b-more\n"));
+    assert_ne!(head, good);
+    has(&check(&CFG, &zero(&base), &zero(&head)), "`## Progress log` was edited by hand");
+    // The entries swapped, each whole, is fine.
+    let mut swapped = good.clone();
+    set(&mut swapped, "ROADMAP.md", |t| t.replace("- 2026-11-06: b\n  b-more\n- 2026-11-05: a\n  a-more\n", "- 2026-11-05: a\n  a-more\n- 2026-11-06: b\n  b-more\n"));
+    assert_eq!(check(&CFG, &zero(&base), &zero(&swapped)), Vec::<String>::new());
+    // One entry that starts like another still matches.
+    assert!(is_blocks(&["- x", "- x", "y"], &[&["- x"], &["- x", "y"]]));
+    assert!(!is_blocks(&["- x", "y", "- x", "z"], &[&["- x"], &["- x", "y", "z"]]));
+}

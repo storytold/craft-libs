@@ -817,8 +817,46 @@ fn trimmed<'a>(lines: &[&'a str], range: (usize, usize)) -> Vec<&'a str> {
     lines.get(range.0..range.1).unwrap_or_default().iter().map(|l| l.trim_end()).collect()
 }
 
-/// The log in the head must be the base's with the deleted fragments' lines put in as one block
-/// where the fold puts them (in any order, as commit times aren't known on CI's shallow checkout).
+/// Whether `mid` is `blocks` one after another, each whole and in its own order, the blocks in any
+/// order. A search with backtracking (one block can start like another), bounded in steps.
+fn is_blocks(mid: &[&str], blocks: &[&[&str]]) -> bool {
+    if blocks.iter().map(|b| b.len()).sum::<usize>() != mid.len() {
+        return false;
+    }
+    let mut used = vec![false; blocks.len()];
+    let mut chosen: Vec<usize> = Vec::new();
+    let (mut pos, mut from) = (0, 0);
+    for _ in 0..100_000 {
+        if pos == mid.len() {
+            return true;
+        }
+        let rest = mid.get(pos..).unwrap_or_default();
+        let next = (from..blocks.len()).find(|&j| !used.get(j).copied().unwrap_or(true) && blocks.get(j).is_some_and(|b| rest.starts_with(b)));
+        match next {
+            Some(j) => {
+                if let Some(u) = used.get_mut(j) {
+                    *u = true;
+                }
+                chosen.push(j);
+                pos += blocks.get(j).map_or(0, |b| b.len());
+                from = 0;
+            }
+            None => {
+                let Some(j) = chosen.pop() else { return false };
+                if let Some(u) = used.get_mut(j) {
+                    *u = false;
+                }
+                pos -= blocks.get(j).map_or(0, |b| b.len());
+                from = j + 1;
+            }
+        }
+    }
+    false
+}
+
+/// The log in the head must be the base's with the deleted fragments' entries put in as one block
+/// where the fold puts them: each entry whole, the entries in any order, as commit times aren't
+/// known on CI's shallow checkout.
 fn check_log(doc: &str, base: &[&str], head: &[&str], log: &Log, consumed: &[Fragment], errors: &mut Vec<String>) {
     let (Ok(bs), Ok(hs)) = (section(base, log.heading), section(head, log.heading)) else { return };
     let (b, h) = (trimmed(base, bs), trimmed(head, hs));
@@ -831,13 +869,11 @@ fn check_log(doc: &str, base: &[&str], head: &[&str], log: &Log, consumed: &[Fra
     }
     let at = log_insert(base, log).map_or(b.len(), |i| i.at.saturating_sub(bs.0).min(b.len()));
     let (pre, post) = b.split_at(at);
-    let mut want: Vec<&str> = consumed.iter().flat_map(|f| f.lines.iter().copied()).collect();
-    want.sort_unstable();
+    let blocks: Vec<&[&str]> = consumed.iter().map(|f| f.lines.as_slice()).collect();
     let fits = h.len() >= pre.len() + post.len() && h.starts_with(pre) && h.ends_with(post) && {
-        let mut mid: Vec<&str> =
+        let mid: Vec<&str> =
             h.get(pre.len()..h.len() - post.len()).unwrap_or_default().iter().copied().filter(|l| !l.trim().is_empty()).collect();
-        mid.sort_unstable();
-        mid == want
+        is_blocks(&mid, &blocks)
     };
     if fits {
         return;
