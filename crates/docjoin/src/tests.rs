@@ -803,3 +803,22 @@ fn closing_an_item_strikes_its_row() {
     let (items, _) = items_from_doc(&CFG, &[f("docs/gaps.md", &text, 0)]).unwrap();
     assert!(items.iter().any(|i| i.text.contains("status: closed\ngap: ~~Third~~ done\n")), "{items:?}");
 }
+
+#[test]
+fn migrate_notes_a_log_line_the_pr_edited_or_removed() {
+    let old = f("ROADMAP.md", ROADMAP, 0);
+    let pr = f("ROADMAP.md", &ROADMAP.replace("- 2026-10-30: older entry", "- 2026-10-30: older entry, typo fixed"), 0);
+    let (out, notes) = migrate(&CFG, &docs(), &old, &pr, "7-fix");
+    assert!(out.is_empty(), "no second entry: {out:?}");
+    has(&notes, "edited or removed the log line \"- 2026-10-30: older entry\"");
+    has(&notes, "\"- 2026-10-30: older entry, typo fixed\" replaces one");
+    let removed = f("ROADMAP.md", &ROADMAP.replace("- 2026-10-30: older entry\n", ""), 0);
+    let (out, notes) = migrate(&CFG, &docs(), &old, &removed, "7-rm");
+    assert!(out.is_empty());
+    has(&notes, "edited or removed the log line \"- 2026-10-30: older entry\"");
+    // A new entry whose second line repeats an old one keeps it.
+    let pr = f("ROADMAP.md", &ROADMAP.replace("- 2026-11-01: old entry", "- 2026-11-04: new\n  wrapped.\n- 2026-11-01: old entry"), 0);
+    let (out, notes) = migrate(&CFG, &docs(), &old, &pr, "7-new");
+    assert_eq!(out, [f("docs/progress.d/7-new.md", "- 2026-11-04: new\n  wrapped.\n", 0)], "{notes:?}");
+    assert!(notes.is_empty(), "{notes:?}");
+}

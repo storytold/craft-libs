@@ -1310,21 +1310,120 @@ fn migrate_table(table: &Table, files: &[File], old: &[&str], pr: &[&str], out: 
     }
 }
 
+enum Op<'a> {
+    Keep,
+    Del(&'a str),
+    Add(&'a str),
+}
+
+/// The most cells the log diff's table may have; a longer log is matched line by line.
+const MAX_DIFF: usize = 4_000_000;
+
+/// `a` to `b` as kept, deleted and added lines (a longest common subsequence).
+fn diff<'a>(a: &[&'a str], b: &[&'a str]) -> Option<Vec<Op<'a>>> {
+    let (n, m) = (a.len(), b.len());
+    if (n + 1).saturating_mul(m + 1) > MAX_DIFF {
+        return None;
+    }
+    let w = m + 1;
+    let mut dp = vec![0u32; (n + 1) * w];
+    let at = |dp: &[u32], i: usize, j: usize| dp.get(i * w + j).copied().unwrap_or(0);
+    for i in (0..n).rev() {
+        for j in (0..m).rev() {
+            let v = if a.get(i) == b.get(j) { at(&dp, i + 1, j + 1) + 1 } else { at(&dp, i + 1, j).max(at(&dp, i, j + 1)) };
+            if let Some(slot) = dp.get_mut(i * w + j) {
+                *slot = v;
+            }
+        }
+    }
+    let (mut i, mut j, mut ops) = (0, 0, Vec::new());
+    while i < n || j < m {
+        match (a.get(i), b.get(j)) {
+            (Some(x), Some(y)) if x == y => {
+                ops.push(Op::Keep);
+                i += 1;
+                j += 1;
+            }
+            (Some(x), Some(_)) if at(&dp, i + 1, j) >= at(&dp, i, j + 1) => {
+                ops.push(Op::Del(x));
+                i += 1;
+            }
+            (_, Some(y)) => {
+                ops.push(Op::Add(y));
+                j += 1;
+            }
+            (Some(x), None) => {
+                ops.push(Op::Del(x));
+                i += 1;
+            }
+            (None, None) => break,
+        }
+    }
+    Some(ops)
+}
+
+/// The log lines a pull request added, for its fragment. A line it edited or removed is a note,
+/// never a second entry or a silent loss: main keeps its copy, and the edit is made by hand.
+fn migrate_log<'a>(log: &Log, before: &[&'a str], after: &[&'a str], notes: &mut Vec<String>) -> Vec<&'a str> {
+    let Some(ops) = diff(before, after) else {
+        // Too long to diff: a line counts as added once the old log's copies of it are used up.
+        let mut left: BTreeMap<&str, usize> = BTreeMap::new();
+        for l in before {
+            *left.entry(l).or_default() += 1;
+        }
+        let mut added = Vec::new();
+        for l in after {
+            match left.get_mut(l) {
+                Some(n) if *n > 0 => *n -= 1,
+                _ => added.push(*l),
+            }
+        }
+        for (l, n) in left.into_iter().filter(|(_, n)| *n > 0) {
+            notes.push(format!("{}: the pull request edited or removed the log line {l:?} ({n}x); main keeps it, change it by hand", log.doc));
+        }
+        return added;
+    };
+    let mut added = Vec::new();
+    let mut hunk: (Vec<&str>, Vec<&str>) = (Vec::new(), Vec::new());
+    let mut flush = |hunk: &mut (Vec<&'a str>, Vec<&'a str>), added: &mut Vec<&'a str>| {
+        let (dels, adds) = std::mem::take(hunk);
+        if dels.is_empty() {
+            added.extend(adds);
+            return;
+        }
+        for d in &dels {
+            notes.push(format!("{}: the pull request edited or removed the log line {d:?}; main keeps it, change it by hand", log.doc));
+        }
+        for a in adds {
+            notes.push(format!("{}: the log line {a:?} replaces one the pull request edited; it isn't moved, add it by hand", log.doc));
+        }
+    };
+    for op in ops {
+        match op {
+            Op::Keep => flush(&mut hunk, &mut added),
+            Op::Del(l) => hunk.0.push(l),
+            Op::Add(l) => hunk.1.push(l),
+        }
+    }
+    flush(&mut hunk, &mut added);
+    added
+}
+
 /// Rewrites a pull request opened before the cutover: `old` is the doc at its merge base, `pr` the
 /// doc at its head, `files` the current `main` (docs, fragments and items). Rows are matched by
 /// their number, or by their first cell in a table without one. Returns the files to write on the
 /// pull request's branch, and notes on what couldn't be moved (never silently dropped).
-pub fn migrate(cfg: &Config, files: &[File], old: &File, pr: &File, name: &str) -> (Vec<File>, Vec<String>) {
+pub fn migrate<'a>(cfg: &Config, files: &[File], old: &'a File, pr: &'a File, name: &str) -> (Vec<File>, Vec<String>) {
     let mut out = Vec::new();
     let mut notes = Vec::new();
-    let (old_lines, pr_lines): (Vec<&str>, Vec<&str>) = (old.text.lines().collect(), pr.text.lines().collect());
+    let (old_lines, pr_lines): (Vec<&'a str>, Vec<&'a str>) = (old.text.lines().collect(), pr.text.lines().collect());
     for log in cfg.logs.iter().filter(|l| l.doc == old.path) {
         let (Ok((os, oe)), Ok((ps, pe))) = (section(&old_lines, log.heading), section(&pr_lines, log.heading)) else {
             continue;
         };
-        let before: BTreeSet<&str> = old_lines.get(os..oe).unwrap_or_default().iter().copied().collect();
-        let added: Vec<&str> =
-            pr_lines.get(ps..pe).unwrap_or_default().iter().copied().filter(|l| !l.trim().is_empty() && !before.contains(l)).collect();
+        let lines = |l: &[&'a str]| -> Vec<&'a str> { l.iter().map(|l| l.trim_end()).filter(|l| !l.is_empty()).collect() };
+        let (before, after) = (lines(old_lines.get(os..oe).unwrap_or_default()), lines(pr_lines.get(ps..pe).unwrap_or_default()));
+        let added = migrate_log(log, &before, &after, &mut notes);
         if !added.is_empty() {
             out.push(File { path: format!("{}/{name}.md", log.dir), text: format!("{}\n", added.join("\n")), time: 0 });
         }
