@@ -34,6 +34,58 @@ fn answer(text: &str) -> Reply<'_> {
 }
 
 #[test]
+fn connection_owns_only_working_requests_and_progress_keeps_ownership() {
+    let hub = AgentHub::default();
+    assert!(!hub.owns_work(1));
+    let id = hub.ask(request("Work in progress")).unwrap();
+    assert!(!hub.owns_work(1), "queued work has no connection owner");
+    take(&hub, 1);
+    assert!(hub.owns_work(1));
+    assert!(!hub.owns_work(2));
+    for text in ["Still working", "More progress"] {
+        hub.reply(1, id, Reply { text, done: false, ..Reply::default() }, Some(&target(1))).unwrap();
+        assert!(hub.owns_work(1), "progress must not release a working connection");
+    }
+}
+
+#[test]
+fn completed_failed_released_disconnected_and_closed_work_has_no_owner() {
+    for transition in ["done", "failed", "invalidate", "disconnect", "close"] {
+        let hub = AgentHub::default();
+        let id = hub.ask(request("Release this work")).unwrap();
+        take(&hub, 1);
+        assert!(hub.owns_work(1));
+        match transition {
+            "done" => hub.reply(1, id, answer("Done"), Some(&target(1))).unwrap(),
+            "failed" => hub.reply(1, id, Reply { error: Some("Agent failed"), ..Reply::default() }, Some(&target(1))).unwrap(),
+            "invalidate" => hub.invalidate(&target(2)),
+            "disconnect" => hub.disconnect(1),
+            _ => hub.close(id),
+        }
+        assert!(!hub.owns_work(1), "{transition} must release ownership");
+        assert!(!hub.owns_work(2));
+        if transition == "disconnect" {
+            assert_eq!(take(&hub, 2).id, id);
+            assert!(hub.owns_work(2), "requeued work belongs to its new connection");
+            assert!(!hub.owns_work(1));
+        }
+    }
+}
+
+#[test]
+fn finishing_one_request_does_not_hide_another_request_owned_by_the_same_connection() {
+    let hub = AgentHub::default();
+    let first = hub.ask(request("First")).unwrap();
+    let second = hub.ask(request("Second")).unwrap();
+    take(&hub, 1);
+    take(&hub, 1);
+    hub.reply(1, first, answer("Done"), Some(&target(1))).unwrap();
+    assert!(hub.owns_work(1));
+    hub.close(second);
+    assert!(!hub.owns_work(1));
+}
+
+#[test]
 /// Checks that queue is fifo and a request is assigned only once.
 fn queue_is_fifo_and_a_request_is_assigned_only_once() {
     let hub = AgentHub::default();
