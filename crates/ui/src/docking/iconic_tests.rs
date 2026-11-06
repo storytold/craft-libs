@@ -70,6 +70,185 @@ fn texts(d: &Driver) -> Vec<String> {
 
 const CANVAS: Pos2 = pos2(600.0, 400.0);
 
+fn flyout_rect<C: DockContent<u32>>(d: &DockDriver<u32, C>) -> Rect {
+    d.ctx.memory(|m| m.area_rect(d.id.with("flyout"))).unwrap()
+}
+
+fn iconic_on_side(right: bool) -> Layout<u32> {
+    let mut layout = docked(&[&[1, 2], &[3]], true);
+    if right {
+        let Some(Node::Split { first, second, size, .. }) = &mut layout.root else { panic!("split") };
+        std::mem::swap(first, second);
+        *size = SplitSize::FixedSecond(240.0);
+        let Node::Dock { side, .. } = second.as_mut() else { panic!("dock") };
+        *side = Side::End;
+    }
+    layout
+}
+
+/// Flyouts expose only the canvas edge, bottom, and their shared corner on either dock side.
+#[test]
+fn flyout_free_edges_resize_and_keep_the_column_anchor() {
+    for right in [false, true] {
+        let mut d = DockDriver::new(iconic_on_side(right), Content);
+        d.click(hit(&d, Hit::Icon(1)).center());
+        d.settle();
+        let id = d.id.with("flyout");
+        let enabled = if right { ["resize-left", "resize-bottom", "resize-bottom-left"] } else { ["resize-right", "resize-bottom", "resize"] };
+        for name in chrome::RESIZE_HANDLES {
+            assert_eq!(d.ctx.read_response(id.with(name)).is_some(), enabled.contains(&name), "{name}, right={right}");
+        }
+        d.ctx.memory_mut(|m| m.request_focus(id.with("resize-bottom")));
+        assert!(DockArea::<u32>::new(d.id).chrome_has_focus(&d.ctx, &d.layout));
+        let before = flyout_rect(&d);
+        let from = if right { before.left_bottom() + vec2(2.0, -2.0) } else { before.right_bottom() - vec2(2.0, 2.0) };
+        d.drag(from, from + vec2(if right { -90.0 } else { 90.0 }, 100.0));
+        d.settle();
+        let after = flyout_rect(&d);
+        assert!((after.width() - before.width() - 90.0).abs() < 1.0, "{before:?} -> {after:?}");
+        assert!((after.height() - before.height() - 100.0).abs() < 1.0, "{before:?} -> {after:?}");
+        assert_eq!(after.top(), before.top());
+        assert_eq!(if right { after.right() } else { after.left() }, if right { before.right() } else { before.left() });
+        assert_eq!(open(&d), Some(1));
+        assert!(d.layout.floating.is_empty());
+    }
+}
+
+/// User heights override both a host floating-size hint and the last short content height;
+/// group height and width survive tab switches, closing, and a workspace round trip.
+#[test]
+fn resized_flyout_survives_reopening_and_workspace_restore() {
+    struct Short;
+    impl DockContent<u32> for Short {
+        fn body(&mut self, ui: &mut egui::Ui, _: &u32) {
+            ui.label("Short");
+        }
+        fn logical_label(&self, panel: &u32) -> String {
+            format!("Panel {panel}")
+        }
+        fn floating_size(&self, _: &u32) -> Option<egui::Vec2> {
+            Some(vec2(200.0, 160.0))
+        }
+    }
+    let mut d = DockDriver::new(docked(&[&[1, 2], &[3]], true), Short);
+    let icon = d.hit(&Hit::Icon(1)).unwrap().center();
+    d.click(icon);
+    d.settle();
+    let before = flyout_rect(&d);
+    assert!(before.height() <= 160.0);
+    let from = before.right_bottom() - vec2(2.0, 2.0);
+    d.drag(from, from + vec2(80.0, 170.0));
+    d.settle();
+    let grown = flyout_rect(&d);
+    assert!(grown.height() > 160.0);
+    assert_eq!(first_column(&d.layout).groups[0].height, Some(grown.height()));
+    assert_eq!(first_column(&d.layout).groups[0].flyout_width, Some(grown.width()));
+    assert_eq!(first_column(&d.layout).width, 240.0);
+    assert_eq!(first_column(&d.layout).groups[1].flyout_width, None);
+    assert_eq!(first_column(&d.layout).groups[1].height, None);
+    d.click(d.hit(&Hit::Icon(2)).unwrap().center());
+    d.settle();
+    assert_eq!(flyout_rect(&d).size(), grown.size());
+    d.click(d.hit(&Hit::Icon(3)).unwrap().center());
+    d.settle();
+    assert_eq!(flyout_rect(&d).width(), before.width(), "another group keeps its own width");
+    let from = flyout_rect(&d).right_center() - vec2(2.0, 0.0);
+    d.drag(from, from + vec2(20.0, 0.0));
+    d.click(icon);
+    d.settle();
+    assert_eq!(flyout_rect(&d).size(), grown.size(), "resizing another group leaves this one intact");
+    d.click(d.hit(&Hit::Icon(2)).unwrap().center());
+    d.click(icon);
+    d.settle();
+    assert_eq!(flyout_rect(&d).size(), grown.size());
+    #[cfg(feature = "serde")]
+    {
+        let saved = serde_json::to_string(&d.layout).unwrap();
+        let mut restored = DockDriver::new(serde_json::from_str(&saved).unwrap(), Short);
+        restored.click(restored.hit(&Hit::Icon(1)).unwrap().center());
+        restored.settle();
+        assert_eq!(flyout_rect(&restored).size(), grown.size());
+    }
+}
+
+/// Horizontal dragging must not pin an automatic height or overwrite a saved height
+/// temporarily clamped by a smaller viewport. Minimums, float bounds and locks still apply.
+#[test]
+fn flyout_resize_respects_limits_and_preserves_height_on_width_only_drags() {
+    for height in [None, Some(480.0)] {
+        let mut d = DockDriver::new(docked(&[&[1]], true), Content);
+        d.layout.apply(Action::ResizeGroup { panel: 1, height }).unwrap();
+        d.float_bounds = Some(Rect::from_min_max(pos2(0.0, 30.0), pos2(800.0, 330.0)));
+        d.click(hit(&d, Hit::Icon(1)).center());
+        d.settle();
+        let before = flyout_rect(&d);
+        let from = before.right_center() - vec2(2.0, 0.0);
+        d.drag(from, from + vec2(70.0, 0.0));
+        d.settle();
+        assert!((flyout_rect(&d).width() - before.width() - 70.0).abs() < 1.0);
+        assert_eq!(first_column(&d.layout).groups[0].height, height);
+        d.float_bounds = None;
+        d.settle();
+        if let Some(height) = height {
+            assert_eq!(flyout_rect(&d).height(), height);
+        }
+        let from = flyout_rect(&d).right_bottom() - vec2(2.0, 2.0);
+        d.drag(from, from - vec2(800.0, 800.0));
+        d.settle();
+        let small = flyout_rect(&d);
+        let style = DockStyle::default();
+        assert_eq!(small.width(), style.min_pane);
+        assert_eq!(small.height(), style.tab_height + style.min_pane);
+        let from = small.right_bottom() - vec2(2.0, 2.0);
+        d.drag(from, from + vec2(1600.0, 1600.0));
+        d.settle();
+        assert!(d.screen.contains_rect(flyout_rect(&d)));
+        let saved = d.layout.clone();
+        d.locked = true;
+        d.settle();
+        let from = flyout_rect(&d).center_bottom() - vec2(0.0, 2.0);
+        d.drag(from, from - vec2(0.0, 60.0));
+        assert_eq!(d.layout, saved);
+    }
+}
+
+/// Persisted widths use the same finite geometry validation as column widths.
+#[test]
+fn flyout_width_rejects_invalid_geometry_without_mutating_the_layout() {
+    let mut layout = docked(&[&[1]], true);
+    let original = layout.clone();
+    for width in [0.0, -1.0, f32::NAN, f32::INFINITY, 2_000_000.0] {
+        assert_eq!(layout.apply(Action::ResizeFlyoutWidth { panel: 1, width: Some(width) }), Err(DockError::InvalidGeometry));
+        assert_eq!(layout, original);
+    }
+    layout.apply(Action::ResizeFlyoutWidth { panel: 1, width: Some(400.0) }).unwrap();
+    let location = layout.location(&1).unwrap();
+    layout.apply(Action::Close { panel: 1 }).unwrap();
+    layout.restore(1, &location).unwrap();
+    assert_eq!(first_column(&layout).groups[0].flyout_width, Some(400.0));
+    layout.apply(Action::ResizeFlyoutWidth { panel: 1, width: None }).unwrap();
+    assert_eq!(layout, original);
+}
+
+/// Float bounds can be shorter than the normal minimum; that must not disable width drags.
+#[test]
+fn a_flyout_constrained_below_minimum_height_can_still_resize_its_width() {
+    for height in [20.0, 50.0] {
+        let mut d = DockDriver::new(docked(&[&[1]], true), Content);
+        d.float_bounds = Some(Rect::from_min_size(Pos2::ZERO, vec2(800.0, height)));
+        d.click(hit(&d, Hit::Icon(1)).center());
+        d.settle();
+        let before = d.ctx.read_response(d.id.with("flyout").with("resize")).unwrap().rect.right_bottom();
+        // The side handle needs room above and below its corners, so the bottom-right
+        // corner exercises both axes in the shortest viewport as well.
+        let from = before - vec2(2.0, 2.0);
+        d.drag(from, from + vec2(60.0, 0.0));
+        d.settle();
+        assert_eq!(first_column(&d.layout).groups[0].flyout_width, Some(300.0));
+        assert_eq!(first_column(&d.layout).groups[0].height, None);
+    }
+}
+
 #[test]
 fn collapsed_column_shows_one_icon_per_panel_with_group_separators() {
     let d = DockDriver::new(docked(&[&[1, 2], &[3]], true), Content);
