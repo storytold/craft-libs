@@ -1,5 +1,7 @@
 //! Startup update prompt dialog for egui frontends.
 
+use std::path::PathBuf;
+
 use egui::{Align, Align2, Color32, Layout, RichText, Vec2};
 
 use crate::app::App;
@@ -37,6 +39,27 @@ pub struct StartupPrompt {
     pub is_installing: bool,
     /// Puts the card's words in the interface language ([`crate::translate`]); English by default.
     pub translate: Translate,
+    /// Browser for the "What's new" link: absolute path; `None` = system default.
+    pub browser: Option<PathBuf>,
+}
+
+/// Opens `url` in `browser` (an absolute path to its executable, a `.app` bundle on macOS), or in
+/// the default browser through egui when `browser` is `None`. Only a safe web link is opened.
+/// If the browser can't be started, the default browser gets the link instead.
+pub fn open_url(ctx: &egui::Context, url: &str, browser: Option<PathBuf>) {
+    // `Release`'s fields are public: an app may build one from its own feed or cache, so the
+    // link is checked here, not only when parsed from GitHub.
+    if !crate::release::safe_web_link(url) {
+        log::warn!("not opening {url:?}: it is not a safe web link");
+        return;
+    }
+    if let Some(path) = browser {
+        match crate::process::open_url_in_browser(&path, url) {
+            Ok(()) => return,
+            Err(error) => log::warn!("couldn't open {url} in {}: {error}; using the default browser", path.display()),
+        }
+    }
+    ctx.open_url(egui::OpenUrl::new_tab(url));
 }
 
 impl StartupPrompt {
@@ -53,7 +76,16 @@ impl StartupPrompt {
             status_note: None,
             is_installing: false,
             translate: english,
+            browser: None,
         }
+    }
+
+    /// The prompt with its "What's new" link opening in `browser` (an absolute path to its
+    /// executable); `None` is the system default.
+    #[must_use]
+    pub fn with_browser(mut self, browser: Option<PathBuf>) -> Self {
+        self.browser = browser;
+        self
     }
 
     /// Shows one of the crate's own messages, in the interface language whenever it draws.
@@ -174,11 +206,8 @@ impl StartupPrompt {
                                 let ring = egui::Stroke::new(2.0, text_primary);
                                 ui.painter().rect_stroke(link.rect.expand(2.0), egui::CornerRadius::ZERO, ring, egui::StrokeKind::Outside);
                             }
-                            // `Release`'s fields are public: an app may build one from its own feed or
-                            // cache, so the link is checked here too, not only when parsed from GitHub.
-                            if link.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() && crate::release::safe_web_link(&self.release.html_url)
-                            {
-                                ui.ctx().open_url(egui::OpenUrl::new_tab(&self.release.html_url));
+                            if link.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
+                                open_url(ui.ctx(), &self.release.html_url, self.browser.clone());
                             }
 
                             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -574,6 +603,7 @@ mod tests {
             status_note: None,
             is_installing: false,
             translate: english,
+            browser: None,
         }
     }
 
@@ -787,6 +817,40 @@ mod tests {
         let link = text_pos(&output, "What's new").expect("the link is painted");
         let button = text_pos(&output, "DOWNLOAD").expect("the button is painted");
         assert!((link.y - button.y).abs() <= 1.0, "link centred at {} but the button at {}", link.y, button.y);
+    }
+
+    /// Clicks "What's new" on a prompt for `url` using `browser`; the URL egui was asked to open.
+    fn click_whats_new(url: &str, browser: Option<PathBuf>) -> Option<String> {
+        let ctx = dark_context();
+        let mut prompt = prompt_for(false).with_browser(browser);
+        prompt.release.html_url = url.to_string();
+        frame(&ctx, &mut prompt, Vec::new());
+        let (_, output) = frame(&ctx, &mut prompt, Vec::new());
+        let at = text_pos(&output, "What's new").expect("the link is painted");
+        let button = |pressed| Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+        frame(&ctx, &mut prompt, vec![Event::PointerMoved(at)]);
+        frame(&ctx, &mut prompt, vec![button(true)]);
+        let (_, output) = frame(&ctx, &mut prompt, vec![button(false)]);
+        output.platform_output.commands.iter().find_map(|c| match c {
+            egui::OutputCommand::OpenUrl(u) => Some(u.url.clone()),
+            _ => None,
+        })
+    }
+
+    #[test]
+    fn whats_new_uses_the_chosen_browser_and_falls_back_to_the_default() {
+        let page = "https://github.com/storytold/photocraft/releases/tag/v0.2.0";
+        let missing = std::env::temp_dir().join("craft-update-no-such-browser").join("browser");
+        assert!(missing.is_absolute());
+        assert_eq!(click_whats_new(page, Some(missing.clone())).as_deref(), Some(page), "an unusable browser falls back");
+        let harmless = if cfg!(windows) {
+            PathBuf::from(std::env::var_os("SystemRoot").unwrap_or_else(|| "C:\\Windows".into())).join("System32").join("where.exe")
+        } else {
+            PathBuf::from("/usr/bin/true")
+        };
+        assert_eq!(click_whats_new(page, Some(harmless.clone())), None, "the chosen browser opens it, not egui");
+        assert_eq!(click_whats_new("file:///etc/passwd", Some(harmless)), None, "an unsafe link opens nothing");
+        assert_eq!(click_whats_new("file:///etc/passwd", Some(missing)), None, "nor through the fallback");
     }
 
     /// #391: the "What's new" link opens the release page only when it is a safe web link; an app
