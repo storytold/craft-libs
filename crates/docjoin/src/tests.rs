@@ -938,3 +938,21 @@ fn the_separator_is_joined() {
     set(&mut head, "docs/gaps.md", |t| t.replace("|---|---|---|\n| 1 |", "|--:|---|---|\n| 1 |"));
     has(&check(&CFG, &base, &head), "the table under `## Every known gap, ranked` was edited by hand");
 }
+
+/// An HTML block start in a fragment (`<pre>`, `<details>`, `<?`, `<!`) runs on past the entry
+/// on GitHub, as a fence or a comment would.
+#[test]
+fn a_fragment_cannot_open_an_html_block() {
+    let base = docs();
+    for opener in ["<pre>", "<textarea>", "<details>", "</div>", "<?php", "<![CDATA["] {
+        let mut head = base.clone();
+        head.push(f("docs/progress.d/99-x.md", &format!("- 2026-11-06: x\n{opener}\n"), NOV6));
+        let errors = check(&CFG, &base, &head);
+        assert!(errors.iter().any(|e| e.contains("HTML block")), "{opener}: {errors:?}");
+        assert!(join(&CFG, &head).is_err(), "{opener}");
+    }
+    // `<` that starts no block is fine.
+    let mut head = base.clone();
+    head.push(f("docs/progress.d/99-x.md", "- 2026-11-06: x\n  <3 and <= 4\n", NOV6));
+    assert_eq!(check(&CFG, &base, &head), Vec::<String>::new());
+}

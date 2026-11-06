@@ -202,6 +202,13 @@ fn fragment<'a>(f: &'a File) -> Result<Fragment<'a>, String> {
     }) {
         return Err(format!("{}: {bad:?} opens a code fence or an HTML comment; a fragment is only its log entry", f.path));
     }
+    // So would an HTML block (`<pre>` runs to its close tag, `<div>` to the next blank line).
+    if let Some(bad) = lines.iter().find(|l| {
+        let t = l.trim().as_bytes();
+        t.first() == Some(&b'<') && t.get(1).is_some_and(|b| b.is_ascii_alphabetic() || matches!(b, b'/' | b'!' | b'?'))
+    }) {
+        return Err(format!("{}: {bad:?} starts an HTML block; a fragment is only its log entry", f.path));
+    }
     Ok(Fragment { path: &f.path, name: stem, time: f.time, kind, lines })
 }
 
