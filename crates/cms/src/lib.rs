@@ -39,6 +39,8 @@ pub use transform::{SampleKind, Transform, TransformOptions, black_point, cached
 
 /// ICC rendering intent.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "kebab-case"))]
 pub enum Intent {
     Perceptual = 0,
     #[default]
