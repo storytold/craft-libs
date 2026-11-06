@@ -83,16 +83,23 @@ pub(super) fn enqueue(sub: &Subscription, event: &str, data: &Value) {
         if sub.closed.load(Ordering::SeqCst) || outbox.latched {
             return;
         }
-        if outbox.items.len() >= EVENT_QUEUE {
-            let since = outbox.items.pop_back().map(|item| item_seq(&item)).unwrap_or(outbox.next_seq);
+        let line = wire::push_event(event, outbox.next_seq, data.clone());
+        let oversize = serde_json::to_vec(&line).map(|bytes| bytes.len() > wire::MAX_LINE).unwrap_or(true);
+        if oversize || outbox.items.len() >= EVENT_QUEUE {
+            // A full queue gives up its newest slot. An event that is too large for one line
+            // is dropped alone: everything queued before it is still delivered.
+            let since = if outbox.items.len() >= EVENT_QUEUE {
+                outbox.items.pop_back().map(|item| item_seq(&item)).unwrap_or(outbox.next_seq)
+            } else {
+                outbox.items.back().map(item_seq).unwrap_or(outbox.next_seq.saturating_sub(1))
+            };
             let seq = outbox.next_seq;
             outbox.next_seq = outbox.next_seq.saturating_add(1);
             outbox.items.push_back(Queued { overflow: true, line: wire::push_event("events.overflow", seq, json!({"since": since})) });
             outbox.latched = true;
         } else {
-            let seq = outbox.next_seq;
             outbox.next_seq = outbox.next_seq.saturating_add(1);
-            outbox.items.push_back(Queued { overflow: false, line: wire::push_event(event, seq, data.clone()) });
+            outbox.items.push_back(Queued { overflow: false, line });
         }
     }
     sub.cv.notify_one();
@@ -167,6 +174,20 @@ pub(super) fn write_loop(sub: Arc<Subscription>, writer: Arc<Mutex<Box<dyn std::
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_event_over_the_line_limit_becomes_an_overflow_marker() {
+        let sub = Subscription::new(8);
+        subscribe(&sub, vec!["doc.changed".into()]);
+        enqueue(&sub, "doc.changed", &json!({"n": 1}));
+        enqueue(&sub, "doc.changed", &json!({"blob": "x".repeat(wire::MAX_LINE)}));
+        let outbox = lock(&sub.outbox);
+        assert_eq!(outbox.items.len(), 2, "the earlier event stays queued");
+        assert_eq!(outbox.items[0].line["event"], "doc.changed");
+        assert_eq!(outbox.items[1].line["event"], "events.overflow");
+        assert_eq!(outbox.items[1].line["data"]["since"], 1);
+        assert!(outbox.items.iter().all(|item| serde_json::to_vec(&item.line).unwrap().len() <= wire::MAX_LINE));
+    }
 
     #[test]
     fn overflow_occupies_one_queue_slot() {
