@@ -346,9 +346,12 @@ fn stale_or_oversized_proposals_do_not_survive_as_review_notes() {
     let reply = Reply { text: "1234", proposal: Some("56789"), ..Reply::default() };
     assert_eq!(hub.reply(1, id, reply, Some(&target(1))).unwrap_err().code, LIMIT_EXCEEDED);
     assert!(hub.snapshot(id).unwrap().proposal.is_none());
+    assert!(hub.snapshot(id).unwrap().review_text().is_empty());
     let reply = Reply { proposal: Some("123"), ..Reply::default() };
     assert_eq!(hub.reply(1, id, reply, Some(&target(2))).unwrap_err().code, STALE_REQUEST);
-    assert!(hub.snapshot(id).unwrap().review_text().is_empty());
+    let snapshot = hub.snapshot(id).unwrap();
+    assert!(snapshot.answer.is_none() && snapshot.proposal.is_none() && snapshot.comment.is_none());
+    assert_eq!(snapshot.review_text(), format!("Error: {}", snapshot.error.as_deref().unwrap()));
 }
 
 #[test]
