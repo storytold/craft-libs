@@ -1,6 +1,6 @@
 //! Group related settings without taking ownership of a dialog or its contents.
 
-use egui::{Frame, InnerResponse, Label, Stroke, Ui, WidgetText};
+use egui::{Frame, InnerResponse, Label, Role, Stroke, Ui, WidgetInfo, WidgetText};
 
 const MAX_WIDTH: f32 = 1_000_000.0;
 const MAX_DECORATION: f32 = 64.0;
@@ -71,7 +71,9 @@ impl Section {
                     }
                 }
                 if let Some(heading) = self.heading {
-                    ui.add(Label::new(heading));
+                    let name = heading.text().to_owned();
+                    let label = ui.add(Label::new(heading));
+                    label.widget_info(|| WidgetInfo::labeled(Role::Heading, ui.is_enabled(), &name));
                     ui.add_space(self.heading_gap);
                 }
                 add_contents(ui)
@@ -89,7 +91,7 @@ fn decoration(value: f32) -> f32 {
 mod tests {
     use super::*;
     use egui::{Color32, Context, CornerRadius, Event, Margin, Modifiers, PointerButton, RawInput, RichText, Vec2};
-    use egui_kittest::kittest::Queryable;
+    use egui_kittest::kittest::{NodeT, Queryable};
 
     fn style() -> Frame {
         Frame::new()
@@ -129,6 +131,7 @@ mod tests {
         );
         h.run_steps(2);
         h.get_by_label("Display");
+        assert_eq!(h.get_by_label("Display").accesskit_node().role(), egui::accesskit::Role::Heading);
         h.get_by_label("Apply").click();
         h.run_steps(2);
         assert!(*h.state());
