@@ -822,3 +822,14 @@ fn migrate_notes_a_log_line_the_pr_edited_or_removed() {
     assert_eq!(out, [f("docs/progress.d/7-new.md", "- 2026-11-04: new\n  wrapped.\n", 0)], "{notes:?}");
     assert!(notes.is_empty(), "{notes:?}");
 }
+
+#[test]
+fn a_table_docs_status_date_is_capped_at_today() {
+    let mut files = sdocs();
+    for i in files.iter_mut().filter(|i| i.path == "docs/gaps.d/2-second.md") {
+        i.text = i.text.replace("e2", "e2 better");
+        i.time = 4_102_444_800; // 2100-01-01
+    }
+    let text = join(&SCFG, &files).unwrap().docs.get("docs/gaps.md").unwrap().clone();
+    assert!(text.contains("> **Last updated:** 2026-11-30 · **Change:** minor · **Owner:** y\n"), "{text}");
+}
