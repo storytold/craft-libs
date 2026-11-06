@@ -87,8 +87,10 @@ copies and duplex; the events describe sheet processing, and do not confirm phys
 The callback runs on the thread calling submission, can capture non-`Send` state, and should
 return promptly. It is never retained. Keep waiting for the final `Result` even at full progress:
 the job can still fail. `submit_cancellable` can cancel a job only until it starts reaching
-the spooler (on Windows after its driver calls, including the DEVMODE conversion; with CUPS
-before `lp` starts); a job already being sent completes. CUPS reports no progress.
+the spooler (on Windows after craft-print's driver queries and preflight DEVMODE conversion;
+with CUPS before `lp` starts); a job already being sent completes. On Windows, winprint repeats
+the DEVMODE conversion after that boundary. Cancellation is already unavailable during this
+repeat, so a driver that stalls there can still block submission. CUPS reports no progress.
 UI callers must forward events to their own progress state; adopting the API alone does not
 change an application's UI.
 Receipts are backend messages, not portable job IDs. `Job::duplex = None` preserves the queue's
