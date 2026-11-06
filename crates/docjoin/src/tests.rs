@@ -1037,3 +1037,15 @@ fn a_table_under_a_sub_heading_is_not_counted() {
     set(&mut head, "R.md", |t| format!("{t}\n| B |\n|---|\n| y |\n"));
     assert_eq!(check(&cfg, &base, &head), Vec::<String>::new());
 }
+
+/// An empty header is written `| |`, as an empty cell is.
+#[test]
+fn an_empty_header_is_one_space() {
+    const T: &[Table] = &[Table { dir: "t", doc: "R.md", heading: "## Fonts", columns: &[("", "a"), ("Figma", "body")], ..Table::DEFAULT }];
+    let cfg = Config { logs: &[], tables: T };
+    let doc = "## Fonts\n\n| | Figma |\n|---|---|\n| x | y |\n";
+    let (items, _) = items_from_doc(&cfg, &[f("R.md", doc, 0)]).unwrap();
+    let mut files = vec![f("R.md", doc, 0)];
+    files.extend(items);
+    assert_eq!(join(&cfg, &files).unwrap().docs.get("R.md").unwrap(), doc);
+}

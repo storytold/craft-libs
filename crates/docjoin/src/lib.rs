@@ -687,10 +687,10 @@ fn is_separator(line: &str, width: usize) -> bool {
     line.starts_with('|') && cells(line).is_some_and(|c| c.len() == width && c.iter().all(delimiter))
 }
 
-/// The header line the fold writes: `| # | Gap | Evidence |`.
+/// The header line the fold writes: `| # | Gap | Evidence |`, an empty header `| |` as in [`render`].
 fn header_line(table: &Table) -> String {
-    let heads: Vec<&str> = table.columns.iter().map(|(h, _)| *h).collect();
-    format!("| {} |", heads.join(" | "))
+    let heads: Vec<String> = table.columns.iter().map(|(h, _)| if h.is_empty() { " ".to_string() } else { format!(" {h} ") }).collect();
+    format!("|{}|", heads.join("|"))
 }
 
 /// The header is exactly the line the fold writes, and the separator under it a valid one of the
