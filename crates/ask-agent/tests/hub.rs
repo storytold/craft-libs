@@ -174,6 +174,22 @@ fn disconnect_requeues_work_and_rejects_the_previous_owners_reply() {
 }
 
 #[test]
+/// Checks that a new attempt does not inherit the previous owner's progress or limits.
+fn requeued_work_gets_fresh_progress_notes_and_budgets() {
+    for (progress_bytes, progress_notes) in [(1, 2), (2, 1)] {
+        let hub = AgentHub::with_limits(Limits { progress_bytes, progress_notes, ..Limits::default() });
+        let id = hub.ask(request("Try again")).unwrap();
+        take(&hub, 1);
+        hub.reply(1, id, Reply { text: "x", done: false, ..Reply::default() }, Some(&target(1))).unwrap();
+        hub.disconnect(1);
+        assert!(hub.snapshot(id).unwrap().notes.is_empty());
+        take(&hub, 2);
+        hub.reply(2, id, Reply { text: "y", done: false, ..Reply::default() }, Some(&target(1))).unwrap();
+        assert_eq!(hub.snapshot(id).unwrap().notes, ["y"]);
+    }
+}
+
+#[test]
 /// Checks that a dead connection does not take queued work or register itself.
 fn a_dead_connection_does_not_take_queued_work_or_register_itself() {
     let hub = AgentHub::default();

@@ -22,3 +22,8 @@ egui = { workspace = true, features = ["default_fonts"] }
 
 [lints]
 workspace = true
+
+[[test]]
+name = "wasm_poll"
+path = "tests/wasm_poll.rs"
+harness = false

@@ -47,3 +47,5 @@ jobs:
         with:
           targets: wasm32-unknown-unknown
       - run: cargo check -p craft-ask-agent --all-features --target wasm32-unknown-unknown --locked
+      - run: cargo test -p craft-ask-agent --test wasm_poll --target wasm32-unknown-unknown --no-default-features --no-run --locked
+      - run: node crates/ask-agent/tests/run-wasm.cjs target/wasm32-unknown-unknown/debug/deps/wasm_poll-*.wasm
