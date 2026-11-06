@@ -96,7 +96,7 @@ pub struct Updater {
     installed: bool,
     /// The version-choice file to read in place of [`Pins::default_path`] (tests).
     pins_path: Option<PathBuf>,
-    /// The skipped-release file to use in place of [`skipped::default_path`] (tests).
+    /// This app's skipped-release file, in place of [`skipped::default_path`] (tests).
     skipped_path: Option<PathBuf>,
     /// The launcher's choice for this app when it is not stable, as of the last check or offer.
     managed: Option<Choice>,
@@ -168,7 +168,12 @@ impl Updater {
     }
 
     fn skipped_file(&self) -> Option<PathBuf> {
-        self.skipped_path.clone().or_else(skipped::default_path)
+        self.skipped_path.clone().or_else(|| skipped::default_path(self.app.id))
+    }
+
+    /// Whether the person skipped `release` at an earlier prompt.
+    fn skipped(&self, release: &Release) -> bool {
+        self.skipped_file().is_some_and(|path| skipped::is_skipped(&path, &release.tag))
     }
 
     /// The launcher's choice for this app when it keeps it off stable releases (a pinned version,
@@ -212,6 +217,10 @@ impl Updater {
 
     /// Opens the startup prompt for a release the app found itself.
     pub fn offer(&mut self, release: Release) {
+        if self.skipped(&release) {
+            log::info!("{} {} was skipped at an earlier prompt; not offered", self.app.name, release.tag);
+            return;
+        }
         if self.install.is_none() && !self.installed && !self.read_choice() {
             self.prompt = Some(self.prompt_for(release));
         }
@@ -281,7 +290,7 @@ impl Updater {
         match answer {
             // The check at start offers nothing for a release the person chose to skip; one they
             // asked for still does.
-            Ok(Some(release)) if !requested && self.skipped_file().is_some_and(|path| skipped::is_skipped(&path, self.app.id, &release.tag)) => {
+            Ok(Some(release)) if !requested && self.skipped(&release) => {
                 log::info!("{} {} was skipped at an earlier prompt; not offered at start", self.app.name, release.tag);
                 self.status = Status::Idle;
             }
@@ -401,16 +410,22 @@ impl Updater {
 
     /// Closes the prompt and remembers its release as skipped, so the check at start doesn't offer
     /// it again.
+    /// When that fails the prompt stays open and says so, as the release would come back.
     fn skip_offered(&mut self) {
-        let Some(prompt) = self.prompt.take() else { return };
-        let tag = prompt.release.tag;
-        match self.skipped_file() {
-            Some(path) => {
-                if let Err(e) = skipped::skip(&path, self.app.id, &tag) {
-                    log::warn!("{} couldn't remember skipping {tag}: {e}", self.app.name);
+        let Some(tag) = self.prompt.as_ref().map(|p| p.release.tag.clone()) else { return };
+        let saved = match self.skipped_file() {
+            Some(path) => skipped::skip(&path, &tag),
+            None => Err("there is no per-user data folder".to_string()),
+        };
+        match saved {
+            Ok(()) => self.prompt = None,
+            Err(e) => {
+                log::warn!("{} couldn't remember skipping {tag}: {e}", self.app.name);
+                if let Some(prompt) = &mut self.prompt {
+                    prompt.open = true;
+                    prompt.set_note(Note::new("This version couldn't be skipped: {reason}", &[("reason", &e)]));
                 }
             }
-            None => log::warn!("{} has no data folder to remember skipping {tag} in", self.app.name),
         }
     }
 

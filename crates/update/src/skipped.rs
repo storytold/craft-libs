@@ -1,52 +1,35 @@
 //! The release a person chose to skip at the startup prompt, per app.
 //!
-//! "Skip this version" on the startup prompt writes the release's tag here, and the check at start
-//! offers nothing more for that release: the next one is offered as usual, and Help ▸ Check for
-//! Updates still shows it. The file is the app's own, in the per-user data folder, apart from the
-//! launcher's version choices ([`crate::pins`]), which apps only read.
+//! "Skip this version" on the startup prompt writes the release's tag here, and startup offers
+//! nothing more for that release: the next one is offered as usual, and Help ▸ Check for Updates
+//! still shows it. Each app has a file of its own, `ArtCraft/updates/<app id>.skipped` in the
+//! per-user data folder, so apps skipping at the same time never write over each other. The files
+//! are apart from the launcher's version choices ([`crate::pins`]), which apps only read.
 //!
 //! Invariants:
-//! - A missing, unreadable or damaged file skips nothing.
-//! - Each app has one entry at most; skipping another release replaces it, and other apps' entries
-//!   are kept.
+//! - A missing or unreadable file skips nothing.
+//! - Skipping another release replaces the one skipped before.
 
-use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use serde::{Deserialize, Serialize};
-
-#[derive(Default, Serialize, Deserialize)]
-struct Skipped {
-    /// App id to the tag of the release skipped.
-    #[serde(default)]
-    apps: BTreeMap<String, String>,
+/// `ArtCraft/updates/<app_id>.skipped` in the per-user data folder, if there is one.
+pub fn default_path(app_id: &str) -> Option<PathBuf> {
+    crate::folders::data_local_dir().map(|dir| dir.join("ArtCraft").join("updates").join(format!("{app_id}.skipped")))
 }
 
-/// `ArtCraft/updates/skipped.json` in the per-user data folder, if there is one.
-pub fn default_path() -> Option<PathBuf> {
-    crate::folders::data_local_dir().map(|dir| dir.join("ArtCraft").join("updates").join("skipped.json"))
+/// Whether `tag` is the release skipped in the file at `path`.
+pub fn is_skipped(path: &Path, tag: &str) -> bool {
+    std::fs::read_to_string(path).is_ok_and(|skipped| skipped.trim() == tag)
 }
 
-fn load(path: &Path) -> Skipped {
-    std::fs::read(path).ok().and_then(|bytes| serde_json::from_slice(&bytes).ok()).unwrap_or_default()
-}
-
-/// Whether `tag` is the release skipped for `app_id`.
-pub fn is_skipped(path: &Path, app_id: &str, tag: &str) -> bool {
-    load(path).apps.get(app_id).is_some_and(|skipped| skipped == tag)
-}
-
-/// Remembers `tag` as the release skipped for `app_id`, in place of any earlier one.
-pub fn skip(path: &Path, app_id: &str, tag: &str) -> Result<(), String> {
-    let mut skipped = load(path);
-    skipped.apps.insert(app_id.to_string(), tag.to_string());
+/// Remembers `tag` as the release skipped, in place of any earlier one.
+pub fn skip(path: &Path, tag: &str) -> Result<(), String> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     }
-    let json = serde_json::to_vec_pretty(&skipped).map_err(|e| e.to_string())?;
     // Written beside and renamed over it, so a crash halfway leaves the old file, not half a new one.
-    let partial = path.with_extension("json.partial");
-    std::fs::write(&partial, json).map_err(|e| format!("{}: {e}", partial.display()))?;
+    let partial = path.with_extension("partial");
+    std::fs::write(&partial, tag).map_err(|e| format!("{}: {e}", partial.display()))?;
     std::fs::rename(&partial, path).map_err(|e| format!("{}: {e}", path.display()))
 }
 
@@ -55,27 +38,31 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_skipped_release_is_remembered_per_app() {
+    fn a_skipped_release_is_remembered_and_replaced() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("updates").join("skipped.json");
-        assert!(!is_skipped(&path, "photocraft", "v1.2.0"), "nothing is skipped without a file");
-        skip(&path, "photocraft", "v1.2.0").unwrap();
-        skip(&path, "pdfcraft", "v0.3.0").unwrap();
-        assert!(is_skipped(&path, "photocraft", "v1.2.0"));
-        assert!(!is_skipped(&path, "photocraft", "v1.3.0"), "the next release is offered");
-        assert!(is_skipped(&path, "pdfcraft", "v0.3.0"), "another app's entry is kept");
-        skip(&path, "photocraft", "v1.3.0").unwrap();
-        assert!(!is_skipped(&path, "photocraft", "v1.2.0"), "one entry per app");
-        assert!(is_skipped(&path, "photocraft", "v1.3.0"));
+        let path = dir.path().join("updates").join("photocraft.skipped");
+        assert!(!is_skipped(&path, "v1.2.0"), "nothing is skipped without a file");
+        skip(&path, "v1.2.0").unwrap();
+        assert!(is_skipped(&path, "v1.2.0"));
+        assert!(!is_skipped(&path, "v1.3.0"), "the next release is offered");
+        skip(&path, "v1.3.0").unwrap();
+        assert!(!is_skipped(&path, "v1.2.0"), "one release at a time");
+        assert!(is_skipped(&path, "v1.3.0"));
     }
 
     #[test]
-    fn a_damaged_file_skips_nothing_and_is_replaced() {
+    fn each_app_has_its_own_file() {
+        let (a, b) = (default_path("photocraft"), default_path("pdfcraft"));
+        assert_ne!(a, b);
+        assert!(a.is_none_or(|p| p.ends_with("ArtCraft/updates/photocraft.skipped")));
+    }
+
+    #[test]
+    fn a_file_that_cant_be_written_says_so() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("skipped.json");
-        std::fs::write(&path, b"{not json").unwrap();
-        assert!(!is_skipped(&path, "photocraft", "v1.2.0"));
-        skip(&path, "photocraft", "v1.2.0").unwrap();
-        assert!(is_skipped(&path, "photocraft", "v1.2.0"));
+        // A folder where the file should be.
+        let path = dir.path().join("photocraft.skipped");
+        std::fs::create_dir_all(&path).unwrap();
+        assert!(skip(&path, "v1.2.0").is_err());
     }
 }
