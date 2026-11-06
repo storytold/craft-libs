@@ -94,6 +94,10 @@ let pdf = file.pdf.map(|p| entries.bytes(&p)).transpose()?.flatten();
   for version 4 and entries of at least `INLINE_MAX` bytes, inline otherwise. `Tail::write_to`
   writes the marker and the entries.
 - `base64::encode`, `decode` and `decoded_len` handle the `data` members.
+- `Image::len_with_check` and `bytes_at_most_with_check` accept a fallible checkpoint called
+  during bounded scans, base64 decoding and blob copying. The checkpoint error is returned
+  unchanged; `Ok(None)` keeps `bytes_at_most`'s meaning. `base64::decoded_len_with_check` and
+  `decode_with_check` expose the same checkpoints for standalone base64 data.
 
 Size limits on the JSON and on decompression stay with each reader.
 
