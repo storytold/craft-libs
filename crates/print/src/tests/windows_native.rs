@@ -364,6 +364,38 @@ fn windows_lists_the_printers_the_system_knows() {
     assert!(printers.iter().filter(|p| p.default).count() <= 1, "{printers:?}");
 }
 
+/// Two jobs for the paused test queue, cancelled: one before it was sent, and one while its
+/// driver doesn't answer (a sleeping printer, storytold/wordcraft#5710), where the cancel must win
+/// and the job stop once the driver answers. The first job's result, and whether the held one
+/// behaved.
+#[cfg(windows)]
+fn cancelled_jobs(pdf: &[u8], job: &Job) -> (Result<String, Error>, Result<(), String>) {
+    let cancel = Cancel::new();
+    assert!(cancel.cancel());
+    let cancelled = spool::submit_cancellable(pdf, &Job { title: "cancelled".into(), ..job.clone() }, &mut |_, _| {}, &cancel);
+    let (entered, reached_driver) = std::sync::mpsc::channel();
+    let (release, released) = std::sync::mpsc::channel();
+    *crate::windows::HELD_DRIVER.lock().unwrap() = Some((entered, released));
+    let held_cancel = Cancel::new();
+    let worker_cancel = held_cancel.clone();
+    let (held_pdf, held_job) = (pdf.to_vec(), Job { title: crate::windows::HELD_TITLE.into(), ..job.clone() });
+    let held = std::thread::spawn(move || spool::submit_cancellable(&held_pdf, &held_job, &mut |_, _| {}, &worker_cancel));
+    let waited = reached_driver.recv_timeout(std::time::Duration::from_secs(60));
+    let cancelled_while_held = held_cancel.cancel();
+    let _ = release.send(());
+    let held = held.join().unwrap();
+    let outcome = if waited.is_err() {
+        Err("the held job never reached its driver call".to_string())
+    } else if !cancelled_while_held {
+        Err("a job waiting on its driver couldn't be cancelled".to_string())
+    } else if held != Err(Error::Spool(CANCELLED_MESSAGE.into())) {
+        Err(format!("the job was not stopped once the driver answered: {held:?}"))
+    } else {
+        Ok(())
+    };
+    (cancelled, outcome)
+}
+
 /// Run a PowerShell script for the Windows test's printer setup: its stdout, or everything it
 /// said when it failed (the test prints that as the skip reason). Any error stops the script and
 /// fails it: `-Command` otherwise exits 0 after a failed command, such as a parameter the cmdlet
@@ -447,11 +479,8 @@ fn windows_jobs_reach_the_spooler() {
     let exact_refused = spool::submit_with_progress(&tabloid, &Job { printer: Some(name.into()), ..Job::default() }, &mut |done, total| {
         refused_progress.push((done, total));
     });
-    // Cancelled while it waited (on a sleeping printer's driver, say): it never reaches the queue,
-    // which the exact list of queued jobs below shows.
-    let cancel = Cancel::new();
-    assert!(cancel.cancel());
-    let cancelled = spool::submit_cancellable(&mixed, &Job { title: "cancelled".into(), ..job.clone() }, &mut |_, _| {}, &cancel);
+    // Two cancelled jobs, which the exact list of queued jobs below shows never reached it.
+    let (cancelled, cancelled_while_held) = cancelled_jobs(&mixed, &job);
     let queued = windows_powershell(
         "@(Get-PrintJob -PrinterName $name | Sort-Object Id | ForEach-Object { $_.DocumentName + ' ' + $_.TotalPages }) -join '|'",
         name,
@@ -482,6 +511,7 @@ fn windows_jobs_reach_the_spooler() {
     assert_eq!(queued.as_deref().map(str::trim), Ok(expected), "one job each, all sheets, in the paused queue: {queued:?}");
     assert!(cleaned.is_ok(), "the test printer is removed again: {cleaned:?}");
     assert_eq!(cancelled, Err(Error::Spool(CANCELLED_MESSAGE.into())), "a cancelled job is refused, not queued");
+    assert_eq!(cancelled_while_held, Ok(()), "a job cancelled while its driver doesn't answer is never sent");
     // Asking for a printer that isn't there is an error, never a job on another one.
     let missing = spool::submit(&mixed, &Job { printer: Some(name.into()), ..Job::default() });
     assert!(matches!(missing, Err(Error::Spool(ref m)) if m.contains(name)), "{missing:?}");

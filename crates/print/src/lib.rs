@@ -565,8 +565,9 @@ pub fn submit_with_progress(pdf: &[u8], job: &Job, progress: &mut dyn FnMut(usiz
 }
 
 /// [`submit_with_progress`] that [`Cancel::cancel`] can stop until the job starts reaching the
-/// spooler: on Windows after the driver has been asked about the job, on macOS and Linux before
-/// `lp` starts. A cancelled job returns an error and nothing is sent.
+/// spooler: on Windows once the driver has been asked about the job and the job holds the
+/// PrintTicket provider, on macOS and Linux before `lp` starts. A cancelled job returns an error
+/// and nothing is sent.
 pub fn submit_cancellable(pdf: &[u8], job: &Job, progress: &mut dyn FnMut(usize, usize), cancel: &Cancel) -> Result<String, Error> {
     #[cfg(all(unix, not(target_arch = "wasm32")))]
     {
