@@ -1,0 +1,18 @@
+
+[[contributions]]
+kind = "effect"
+id = "invert"
+label = "Invert"
+category = "Color"
+handler = "invert"
+
+[contributions.process]
+sample = ["u8"]
+alpha = "straight"
+
+[contributions.params.amount]
+type = "number"
+label = "Amount"
+default = 1.0
+min = 0.0
+max = 1.0

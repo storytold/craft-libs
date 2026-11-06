@@ -1,0 +1,7 @@
+# The policy gate rejects a wasm memory with no declared maximum (ABI.md section 2). The linker
+# only writes one when asked. 64 MiB matches `limits.memory_mb` in craft.toml.
+[target.wasm32-unknown-unknown]
+rustflags = [
+    "-C", "link-arg=--max-memory=67108864",
+    "-C", "link-arg=-zstack-size=262144",
+]

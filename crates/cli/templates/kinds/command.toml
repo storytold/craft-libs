@@ -1,0 +1,6 @@
+
+[[contributions]]
+kind = "command"
+id = "say"
+label = "Say hello"
+handler = "say"
