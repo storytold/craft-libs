@@ -126,7 +126,17 @@ pub fn download_prefix(repo: &str) -> String {
 /// segments with no traversal (`.`/`..`), no additional slashes, no query or fragment, and no
 /// backslash or percent-encoded separators that a client could later re-interpret.
 pub fn download_url_under(url: &str, prefix: &str) -> bool {
-    let Some(rest) = url.strip_prefix(prefix) else { return false };
+    // GitHub repository identities are case-insensitive, but tags, asset names and route
+    // segments are not. Compare only owner/repo without changing the URL we will download.
+    let Some(expected) = prefix.strip_prefix("https://github.com/").and_then(|p| p.strip_suffix("/releases/download/")) else { return false };
+    let Some((expected_owner, expected_repo)) = expected.split_once('/') else { return false };
+    let Some(path) = url.strip_prefix("https://github.com/") else { return false };
+    let Some((owner, path)) = path.split_once('/') else { return false };
+    let Some((repo, path)) = path.split_once('/') else { return false };
+    if !owner.eq_ignore_ascii_case(expected_owner) || !repo.eq_ignore_ascii_case(expected_repo) {
+        return false;
+    }
+    let Some(rest) = path.strip_prefix("releases/download/") else { return false };
     download_suffix_ok(rest)
 }
 
@@ -424,6 +434,36 @@ mod tests {
         // A plain, confined download still passes.
         let prefix = download_prefix(REPO);
         assert!(download_url_under("https://github.com/storytold/photocraft/releases/download/v0.5.0/photocraft-0.5.0-macos-universal.dmg", &prefix));
+    }
+
+    #[test]
+    fn repository_casing_preserves_assets_without_weakening_confinement() {
+        let prefix = download_prefix("StoryTold/PhotoCraft");
+        let asset = "https://github.com/storytold/photocraft/releases/download/v0.5.0/PhotoCraft-Linux.tar.gz";
+        assert!(download_url_under(asset, &prefix));
+        let release = parse_github_release(&api_json(asset), "StoryTold/PhotoCraft").unwrap();
+        assert_eq!(release.assets.len(), 1);
+        assert_eq!(release.assets[0].url, asset, "tag and filename spelling is preserved");
+        assert!(download_url_under(
+            "https://github.com/StoryTold/PhotoCraft/releases/download/V1/Artifact.ZIP",
+            &download_prefix("storytold/photocraft")
+        ));
+        for bad in [
+            "https://github.com/storytold/photocraft-other/releases/download/v1/a.zip",
+            "https://github.com/other/photocraft/releases/download/v1/a.zip",
+            "https://github.com.evil.example/storytold/photocraft/releases/download/v1/a.zip",
+            "http://github.com/storytold/photocraft/releases/download/v1/a.zip",
+            "https://github.com/storytold/photocraft/releases/download/../a.zip",
+            "https://github.com/storytold/photocraft/releases/download/v1/../../../other/repo/a.zip",
+            "https://github.com/storytold/photocraft/releases/download/v1/a%2f.zip",
+            "https://github.com/storytold/photocraft/releases/download/v1/a.zip?x=1",
+            "https://github.com/storytold/photocraft/releases/download/v1/a.zip#fragment",
+            "https://github.com/storytold/photocraft/RELEASES/download/v1/a.zip",
+        ] {
+            assert!(!download_url_under(bad, &prefix), "{bad}");
+        }
+        // Local mirrors retain their filesystem's case-sensitive path semantics.
+        assert!(!download_url_under_mirror("https://mirror.example/Repo/v1/a.zip", "https://mirror.example/repo/"));
     }
 
     #[test]
