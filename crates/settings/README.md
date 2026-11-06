@@ -146,6 +146,12 @@ Values are merged into the document that was loaded: tables merge key by key, ar
 scalars are replaced whole, comments, key order, unknown keys and each replaced line's trailing
 comment stay. Each write goes through `craft-atomic`, so a failed save leaves the old file intact.
 
+For an explicit removal from a map, use `SettingsStore::update_and_flush_with`. Update the
+typed candidate and remove the same key in the document callback. The callback sees the
+latest disk document after the ordinary merge, so it can remove just the intended key or
+map while preserving unrelated hand edits. The store publishes the candidate only after
+the write succeeds. In memory-only mode it applies the typed update directly.
+
 Just before each write the store reads the file and compares its **contents** (not its mtime,
 which can stay the same on FAT, HFS+ or network shares) with what it last read or wrote:
 
