@@ -85,8 +85,11 @@ pub fn summarize(pdf: &[u8]) -> Result<Summary, Error> {
         if let Some(group) = raw.get::<Dict<'_>>(b"Group".as_slice()) {
             walk.group(&format!("page {}", index + 1), &group);
         }
-        let mut ops = page.operations();
-        walk.operators(&mut ops);
+        // Read and dropped page by page: `page.operations()` keeps every page's decoded content
+        // for as long as the document, so pages sharing one stream would each hold a copy.
+        let mut content = Vec::new();
+        page.content_reader().read_into(&mut content, usize::MAX);
+        walk.operators(&mut UntypedIter::new(&content));
         let res = page.resources();
         walk.resources(&Resources {
             ext_g_states: res.ext_g_states.clone(),
