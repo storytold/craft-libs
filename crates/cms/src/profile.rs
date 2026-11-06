@@ -182,6 +182,119 @@ pub struct Profile {
 }
 
 impl Profile {
+    /// Builds a matrix/TRC display profile from an already PCS D50-adapted colorant matrix,
+    /// a white point, and per-channel tone reproduction curves.
+    ///
+    /// # Matrix Coordinate Space
+    /// In accordance with ICC.1:2010 §9.2.35–37, the colorant matrix tags (`rXYZ`, `gXYZ`, `bXYZ`)
+    /// stored in an ICC profile must be chromatically adapted to the D50 Profile Connection Space (PCS).
+    /// `pcs_matrix` must therefore be expressed relative to D50 (e.g. as read directly from ICC profile tags).
+    ///
+    /// If `white` is not D50, the profile's `chad` tag is populated with the Bradford chromatic adaptation
+    /// matrix mapping `white` to D50.
+    pub fn matrix_shaper(white: [f64; 3], pcs_matrix: Mat3, trc: [Curve; 3]) -> Result<Profile, CmsError> {
+        if !white.iter().all(|&c| c.is_finite() && c > 0.0) {
+            return Err(CmsError::InvalidArgument("white point must be positive and finite".into()));
+        }
+        if !pcs_matrix.iter().flatten().all(|&v| v.is_finite()) {
+            return Err(CmsError::InvalidArgument("matrix elements must be finite".into()));
+        }
+        if math::invert(&pcs_matrix).is_none() {
+            return Err(CmsError::InvalidArgument("colorant matrix must be invertible".into()));
+        }
+
+        let d50 = math::d50_quantized();
+        let is_d50 = (white[0] - math::D50[0]).abs() < 1e-4 && (white[1] - math::D50[1]).abs() < 1e-4 && (white[2] - math::D50[2]).abs() < 1e-4;
+
+        let chad = if is_d50 { None } else { Some(math::bradford(white, math::D50)) };
+
+        // Quantize and normalize to ensure (1, 1, 1) maps exactly to PCS D50
+        let mut q = pcs_matrix.map(|row| row.map(math::s15f16_round));
+        for (i, row) in q.iter_mut().enumerate() {
+            let err = d50[i] - row.iter().sum::<f64>();
+            let k = (0..3).max_by(|a, b| row[*a].abs().total_cmp(&row[*b].abs())).unwrap_or(0);
+            row[k] = math::s15f16_round(row[k] + err);
+        }
+        if math::invert(&q).is_none() {
+            return Err(CmsError::InvalidArgument("colorant matrix became singular after quantization/normalization".into()));
+        }
+        let chad_quantized = chad.map(|a| a.map(|row| row.map(math::s15f16_round)));
+
+        Ok(Profile {
+            version: (4, 0x30),
+            class: ProfileClass::Display,
+            color_space: ColorSpace::Rgb,
+            pcs: Pcs::Xyz,
+            rendering_intent: Intent::RelativeColorimetric,
+            description: "Parametric Matrix/TRC".into(),
+            copyright: "".into(),
+            white_point: if is_d50 { d50 } else { white },
+            black_point: None,
+            chad: chad_quantized,
+            matrix: Some(q),
+            trc: Some(trc),
+            gray_trc: None,
+            a2b: [None, None, None],
+            b2a: [None, None, None],
+            bytes: None,
+            hash: Default::default(),
+        })
+    }
+
+    /// Builds a matrix/TRC display profile from unadapted source primaries relative to `white`.
+    ///
+    /// The unadapted `source_matrix` (whose columns sum to `white`) is chromatically adapted to PCS D50
+    /// using the Bradford transform before storage in the profile's matrix tags.
+    pub fn from_source_matrix(white: [f64; 3], source_matrix: Mat3, trc: [Curve; 3]) -> Result<Profile, CmsError> {
+        if !white.iter().all(|&c| c.is_finite() && c > 0.0) {
+            return Err(CmsError::InvalidArgument("white point must be positive and finite".into()));
+        }
+        if !source_matrix.iter().flatten().all(|&v| v.is_finite()) {
+            return Err(CmsError::InvalidArgument("matrix elements must be finite".into()));
+        }
+        if math::invert(&source_matrix).is_none() {
+            return Err(CmsError::InvalidArgument("colorant matrix must be invertible".into()));
+        }
+
+        let is_d50 = (white[0] - math::D50[0]).abs() < 1e-4 && (white[1] - math::D50[1]).abs() < 1e-4 && (white[2] - math::D50[2]).abs() < 1e-4;
+        let pcs_matrix = if is_d50 {
+            source_matrix
+        } else {
+            let adapt = math::bradford(white, math::D50);
+            math::mul(&adapt, &source_matrix)
+        };
+
+        Self::matrix_shaper(white, pcs_matrix, trc)
+    }
+
+    /// Builds a monochrome profile from a white point and tone reproduction curve.
+    pub fn gray(white: [f64; 3], trc: Curve) -> Result<Profile, CmsError> {
+        if !white.iter().all(|&c| c.is_finite() && c > 0.0) {
+            return Err(CmsError::InvalidArgument("white point must be positive and finite".into()));
+        }
+        let is_d50 = (white[0] - math::D50[0]).abs() < 1e-4 && (white[1] - math::D50[1]).abs() < 1e-4 && (white[2] - math::D50[2]).abs() < 1e-4;
+
+        Ok(Profile {
+            version: (4, 0x30),
+            class: ProfileClass::Display,
+            color_space: ColorSpace::Gray,
+            pcs: Pcs::Xyz,
+            rendering_intent: Intent::RelativeColorimetric,
+            description: "Parametric Gray".into(),
+            copyright: "".into(),
+            white_point: if is_d50 { math::d50_quantized() } else { white },
+            black_point: None,
+            chad: None,
+            matrix: None,
+            trc: None,
+            gray_trc: Some(trc),
+            a2b: [None, None, None],
+            b2a: [None, None, None],
+            bytes: None,
+            hash: Default::default(),
+        })
+    }
+
     /// Parses ICC profile bytes.
     pub fn parse(bytes: &[u8]) -> Result<Profile, CmsError> {
         let mut p = parse_profile(bytes)?;
