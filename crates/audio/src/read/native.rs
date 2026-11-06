@@ -1,22 +1,27 @@
-//! The native decode path: craft-media's demuxers (ISO BMFF / QuickTime, Matroska / WebM) and
-//! WAV / AIFF PCM, feeding [`TrackDecoder`].
-//! [`Native::open`] answers `None` for a stream with no native codec (AAC, MP1/MP2/MP3, FLAC,
-//! ALAC, Vorbis, Opus, ...) or a container these demuxers do not read; the caller then uses symphonia.
+//! The native decode path: craft-media's demuxers (ISO BMFF / QuickTime, Matroska / WebM, Ogg),
+//! raw ADTS and AC-3 streams, and WAV / AIFF PCM, feeding [`TrackDecoder`].
+//! [`Native::open`] answers `None` for a stream with no native codec (MP1/MP2/MP3, FLAC, ALAC,
+//! Vorbis, ...) or a container these demuxers do not read; the caller then uses symphonia.
 //!
 //! Every container is a [`Packets`] source over a [`Src`], read packet by packet, so a decode
-//! streams. Timing follows the containers: MP4 edit lists (AAC priming) and Matroska `CodecDelay` and
-//! per-block `DiscardPadding` are applied, so a file decodes to exactly its presentation length.
+//! streams. Timing follows the containers: MP4 edit lists (AAC priming, Opus pre-skip), Matroska
+//! `CodecDelay` and per-block `DiscardPadding`, and Ogg Opus pre-skip and end trimming (RFC 7845
+//! §4) are applied, so a file decodes to exactly its presentation length.
 
 use super::aiff::{self, AiffParse};
 use super::id3v2_len;
 use super::source::{Src, io_error};
 use super::wav::{self, WavParse};
-use crate::track::TrackDecoder;
-use crate::{AudioBuffer, AudioError, AudioInfo, CodecId, CodecParams, Container, PcmFormat, Result};
+use crate::track::{TrackDecoder, adts_format_of, adts_framed, adts_stream_header, several_adts_frames};
+use crate::{AudioBuffer, AudioError, AudioInfo, CodecId, CodecParams, Container, PcmFormat, Result, aac, ac3};
 use craft_media::{isobmff, matroska, ogg};
 
 /// Corrupt packets tolerated before a stream that has produced nothing is an error.
 const MAX_ERRORS: usize = 1000;
+/// ID3v2 tags skipped at the start of a stream; real files have one.
+const MAX_ID3_TAGS: usize = 16;
+/// How far into a raw stream a first frame is looked for.
+const MAX_SYNC_SCAN: u64 = 64 * 1024;
 /// The most frames a packet may declare (as on the symphonia path): decoders allocate a packet's
 /// frames up front.
 const MAX_PACKET_FRAMES: u64 = 1 << 20;
@@ -40,6 +45,9 @@ enum Packets<'a> {
         /// Media timescale and output rate, for packet start times.
         timescale: u32,
         rate: u32,
+        /// Frames every packet decodes to, when the codec says: then a packet's place on the
+        /// decoded timeline is its index, whatever the sample table's durations claim.
+        per_packet: Option<u64>,
     },
     /// Matroska is read packet by packet, which carries each block's `DiscardPadding`.
     Mkv {
@@ -51,9 +59,20 @@ enum Packets<'a> {
         first_ns: i64,
         /// How a packet's place on the decoded timeline is found after a seek.
         frames: MkvFrames,
+        src: Src<'a>,
         /// A packet read ahead by a seek, returned next.
         pending: Option<Packet>,
     },
+    Ogg {
+        file: Box<ogg::OggFile>,
+        src: Src<'a>,
+        stream: usize,
+        next: usize,
+        /// Output frame of each packet's first decoded sample (the pre-skip negative).
+        starts: Vec<i64>,
+    },
+    /// Frames of a raw stream: `(offset, length, decoded frames)`.
+    Raw { frames: Vec<(u64, u32, u32)>, src: Src<'a>, next: usize },
     /// Interleaved PCM in `start..start + frames * frame_bytes` (WAV, AIFF).
     Pcm { src: Src<'a>, start: u64, frames: u64, frame_bytes: u64, next_frame: u64 },
 }
@@ -69,6 +88,18 @@ impl Packets<'_> {
                     *next += 1;
                     file.read_sample(src, *track, i).map(whole).map_err(mp4_error)
                 })
+            }
+            Packets::Ogg { file, src, stream, next, .. } => {
+                let i = *next;
+                (i < file.streams.get(*stream).map_or(0, |s| s.packets.len())).then(|| {
+                    *next += 1;
+                    file.read_packet(src, *stream, i).map(whole).map_err(ogg_error)
+                })
+            }
+            Packets::Raw { frames, src, next } => {
+                let &(at, len, _) = frames.get(*next)?;
+                *next += 1;
+                Some(src.read(at, len as usize).map(whole))
             }
             Packets::Pcm { src, start, frames, frame_bytes, next_frame } => {
                 let n = (*frames - *next_frame).min(PCM_PACKET_FRAMES);
@@ -103,11 +134,33 @@ impl Packets<'_> {
             found
         }
         match self {
-            Packets::Mp4 { file, track, next, timescale, rate, .. } => {
+            Packets::Mp4 { file, track, next, timescale, rate, per_packet, .. } => {
                 let samples = file.tracks.get(*track).map(|t| t.samples.as_slice()).unwrap_or_default();
+                if let Some(n) = per_packet.filter(|&n| n > 0) {
+                    let i = (frame / n).min((samples.len() as u64).saturating_sub(1));
+                    *next = i as usize;
+                    return Ok(i * n);
+                }
                 let first = samples.first().map_or(0, |s| s.dts);
                 let starts =
                     samples.iter().map(|s| rescale(u64::try_from(s.dts.saturating_sub(first)).unwrap_or(0), u64::from(*timescale), u64::from(*rate)));
+                let (i, s) = at_or_before(starts, frame);
+                *next = i;
+                Ok(s)
+            }
+            Packets::Ogg { next, starts, .. } => {
+                let base = starts.first().copied().unwrap_or(0);
+                let (i, s) = at_or_before(starts.iter().map(|&s| u64::try_from(s.saturating_sub(base)).unwrap_or(0)), frame);
+                *next = i;
+                Ok(s)
+            }
+            Packets::Raw { frames, next, .. } => {
+                let mut acc = 0u64;
+                let starts = frames.iter().map(|&(_, _, n)| {
+                    let s = acc;
+                    acc += u64::from(n);
+                    s
+                });
                 let (i, s) = at_or_before(starts, frame);
                 *next = i;
                 Ok(s)
@@ -116,7 +169,7 @@ impl Packets<'_> {
                 *next_frame = frame.min(*frames);
                 Ok(*next_frame)
             }
-            Packets::Mkv { demux, track, rate, first_ns, frames, pending } => {
+            Packets::Mkv { demux, track, rate, first_ns, frames, pending, src } => {
                 let ns = i64::try_from(rescale(frame, u64::from(*rate), 1_000_000_000)).unwrap_or(i64::MAX).saturating_add(*first_ns);
                 let point = demux.seek(*track, ns).map_err(mkv_error)?;
                 match mkv_next(demux, *track, *rate) {
@@ -124,7 +177,7 @@ impl Packets<'_> {
                         *pending = Some(p);
                         // Timestamps are rounded to the file's timestamp scale (often 1 ms), so the
                         // packet's index places it exactly where packets have a known length.
-                        let by_index = point.sample.and_then(|k| frames.start(k));
+                        let by_index = point.sample.and_then(|k| frames.start(src, k));
                         Ok(by_index.unwrap_or_else(|| {
                             rescale_round(u64::try_from(pts_ns.saturating_sub(*first_ns)).unwrap_or(0), 1_000_000_000, u64::from(*rate))
                         }))
@@ -143,16 +196,34 @@ enum MkvFrames {
     Constant(u64),
     /// PCM: the stored sizes of the track's packets, and the bytes per frame.
     Pcm { sizes: Vec<u32>, frame_bytes: u64 },
+    /// Opus: each packet's length is in its first bytes (RFC 6716 §3.1); the packets' places and
+    /// sizes, and their starts once read.
+    Opus { samples: Vec<(u64, u32)>, starts: Option<Vec<u64>> },
     /// From the timestamps.
     Timestamps,
 }
 
 impl MkvFrames {
     /// The decoded-timeline start of packet `k`, when the packets say.
-    fn start(&self, k: usize) -> Option<u64> {
+    fn start(&mut self, src: &Src<'_>, k: usize) -> Option<u64> {
         match self {
             MkvFrames::Constant(n) => Some(k as u64 * *n),
             MkvFrames::Pcm { sizes, frame_bytes } => Some(sizes.iter().take(k).map(|&s| u64::from(s)).sum::<u64>() / *frame_bytes),
+            MkvFrames::Opus { samples, starts } => {
+                let starts = starts.get_or_insert_with(|| {
+                    let mut acc = 0u64;
+                    samples
+                        .iter()
+                        .map(|&(at, size)| {
+                            let s = acc;
+                            let prefix = src.bytes(at, 2).and_then(|b| <[u8; 2]>::try_from(b).ok()).unwrap_or([0, 0]);
+                            acc += u64::from(ogg::opus_packet_samples(prefix, size).unwrap_or(0));
+                            s
+                        })
+                        .collect()
+                });
+                starts.get(k).copied()
+            }
             MkvFrames::Timestamps => None,
         }
     }
@@ -190,6 +261,13 @@ fn mkv_error(e: matroska::Error) -> AudioError {
     }
 }
 
+fn ogg_error(e: ogg::Error) -> AudioError {
+    match e {
+        ogg::Error::Io(e) => io_error(e),
+        e => AudioError::Malformed(e.to_string()),
+    }
+}
+
 /// A track the native path decodes: its packets, its decoder and its container timing.
 pub(crate) struct Native<'a> {
     packets: Packets<'a>,
@@ -197,7 +275,7 @@ pub(crate) struct Native<'a> {
     info: AudioInfo,
     /// Whether `info.frames` came from the container (else it is 0 until decoded).
     frames_known: bool,
-    /// Decoded frames at the start that are not presented (AAC priming).
+    /// Decoded frames at the start that are not presented (AAC priming, Opus pre-skip).
     skip: u64,
     /// Presented frames, when the container says.
     limit: Option<u64>,
@@ -222,8 +300,11 @@ impl<'a> Native<'a> {
             Ok(head) => head,
             Err(e) => return Some(Err(e)),
         };
-        let at = after_id3(&head);
-        let body = head.get(at..).unwrap_or_default();
+        let at = after_id3(src);
+        // A tag longer than the head (cover art) hides what follows it, so look there.
+        let past_tag = usize::try_from(at).is_ok_and(|at| at >= head.len() && at > 0);
+        let sniffed = if past_tag { super::detect_container(&src.bytes_upto(at, 64 * 1024), None) } else { super::detect_container(&head, None) };
+        let body = usize::try_from(at).ok().and_then(|at| head.get(at..)).unwrap_or_default();
         // The bytes decide the container when they say; the detection (which may come from the
         // extension) only picks among raw streams.
         // Formats with one track: any other track index is an error, as for a multi-track file.
@@ -231,11 +312,15 @@ impl<'a> Native<'a> {
             (Some(n), Some(Ok(_))) if n > 0 => Some(Err(AudioError::Unsupported(format!("no audio track {n}: the file has one")))),
             (_, opened) => opened,
         };
-        match super::detect_container(&head, None).or(detected) {
+        match sniffed.or(detected) {
             Some(Container::Wav) if wav::is_wav(&head) => single(open_wav(src)),
             Some(Container::Aiff) if aiff::is_aiff(&head) => single(open_aiff(src)),
+            Some(Container::Ogg) if ogg::sniff(body) => open_ogg(src, track),
             Some(c @ (Container::Mp4 | Container::QuickTime)) if head.get(4..8) == Some(b"ftyp") => open_mp4(src, c, track),
             Some(c @ (Container::Matroska | Container::WebM)) if body.starts_with(&[0x1A, 0x45, 0xDF, 0xA3]) => open_mkv(src, c, track),
+            Some(Container::Adts) => single(open_adts(src, at)),
+            Some(Container::Ac3) => single(open_ac3(src, at)),
+            None => single(open_ac3(src, at).or_else(|| open_adts(src, at))),
             _ => None,
         }
     }
@@ -356,11 +441,14 @@ impl<'a> Native<'a> {
     }
 }
 
-/// Where a stream starts: after any ID3v2 tags.
-fn after_id3(b: &[u8]) -> usize {
-    let mut at = 0;
-    while let Some(len) = b.get(at..).and_then(id3v2_len) {
-        at = at.saturating_add(len);
+/// Where a stream starts: after any ID3v2 tags, which may be longer than the head of the file.
+fn after_id3(src: &Src<'_>) -> u64 {
+    let mut at = 0u64;
+    for _ in 0..MAX_ID3_TAGS {
+        match id3v2_len(&src.bytes_upto(at, 10)) {
+            Some(len) => at = at.saturating_add(len as u64),
+            None => break,
+        }
     }
     at
 }
@@ -447,6 +535,138 @@ fn pcm_track<'a>(
     Some(Ok(n))
 }
 
+/// Reads a raw stream in windows, for [`raw_frames`].
+struct Scanner<'s, 'a, F> {
+    src: &'s Src<'a>,
+    total: u64,
+    frame_len: F,
+    /// The window's start and bytes.
+    window: (u64, Vec<u8>),
+    /// The source failed to read: the scan is over.
+    failed: Option<AudioError>,
+}
+
+impl<T, F: Fn(&[u8]) -> Option<(usize, T)>> Scanner<'_, '_, F> {
+    const WINDOW: usize = 1 << 16;
+    /// The most header bytes a frame-length function reads.
+    const HEADER: u64 = 16;
+
+    /// The length and description of the frame at `p`, if one starts there and fits.
+    fn len_at(&mut self, p: u64) -> Option<(usize, T)> {
+        if p >= self.total || self.failed.is_some() {
+            return None;
+        }
+        if p < self.window.0 || p + Self::HEADER > self.window.0 + self.window.1.len() as u64 {
+            match self.src.read_upto(p, Self::WINDOW) {
+                Ok(bytes) => self.window = (p, bytes),
+                Err(e) => {
+                    self.failed = Some(e);
+                    return None;
+                }
+            }
+        }
+        let off = usize::try_from(p - self.window.0).ok()?;
+        let (n, frames) = self.window.1.get(off..).and_then(&self.frame_len)?;
+        (n > 0 && p + n as u64 <= self.total).then_some((n, frames))
+    }
+
+    /// Whether a frame at `p` is followed by another (or by the end of the stream).
+    fn paired(&mut self, p: u64) -> bool {
+        match self.len_at(p) {
+            Some((n, _)) => p + n as u64 == self.total || self.len_at(p + n as u64).is_some(),
+            None => false,
+        }
+    }
+}
+
+/// Frame lengths of a raw stream of self-delimiting frames from `at`: `frame_len(rest)` gives the
+/// length and a description of a frame starting at `rest`, or `None`. The first frame must be
+/// followed by a second (or the end of the data), so a stray sync word does not make a stream;
+/// damage later is skipped by scanning for the next pair. Reads the stream in windows. `None` when
+/// no first frame is found; a source that fails to read is an error, not the end of the stream.
+fn raw_frames<T>(src: &Src<'_>, at: u64, frame_len: impl Fn(&[u8]) -> Option<(usize, T)>) -> Result<Option<Vec<(u64, u32, T)>>> {
+    let total = src.size();
+    let mut sc = Scanner { src, total, frame_len, window: (u64::MAX, Vec::new()), failed: None };
+    let first = (at..total.min(at.saturating_add(MAX_SYNC_SCAN))).find(|&p| sc.failed.is_some() || sc.paired(p));
+    let Some(first) = first.filter(|_| sc.failed.is_none()) else {
+        return sc.failed.map_or(Ok(None), Err);
+    };
+    let mut frames = Vec::new();
+    let mut p = first;
+    while p < total {
+        match sc.len_at(p) {
+            Some((n, f)) => {
+                frames.push((p, n as u32, f));
+                p += n as u64;
+            }
+            None => match (p + 1..total).find(|&q| sc.failed.is_some() || sc.paired(q)) {
+                Some(q) if sc.failed.is_none() => p = q,
+                _ => break,
+            },
+        }
+    }
+    sc.failed.map_or(Ok(Some(frames)), Err)
+}
+
+/// The first `n` frames of a raw stream.
+fn raw_lookahead<T>(src: &Src<'_>, frames: &[(u64, u32, T)], n: usize) -> Result<Vec<Vec<u8>>> {
+    frames.iter().take(n).map(|&(at, len, _)| src.read(at, len as usize)).collect()
+}
+
+/// A raw ADTS AAC stream from `at`: its frames, headers included, are the packets. The stream's
+/// format is the one most of its first frames share, so one damaged header does not decide it.
+/// [`TrackDecoder`] conceals the frames that differ from it or have several raw data blocks; a
+/// stream that starts with those is not opened here.
+fn open_adts<'a>(src: &Src<'a>, at: u64) -> Option<Result<Native<'a>>> {
+    let frames =
+        match raw_frames(src, at, |rest| aac::AdtsHeader::parse(rest).ok().filter(|h| h.frame_length > h.header_length).map(|h| (h.frame_length, h)))
+        {
+            Ok(frames) => frames?,
+            Err(e) => return Some(Err(e)),
+        };
+    let first = &frames[..frames.len().min(crate::track::LOOKAHEAD_PACKETS)];
+    let headers: Vec<aac::AdtsHeader> = first.iter().map(|&(_, _, h)| h).collect();
+    let stream = adts_format_of(&adts_stream_header(&headers)?);
+    if headers.iter().filter(|h| adts_format_of(h) == stream && h.raw_data_blocks == 1).count() * 2 <= first.len() {
+        return None;
+    }
+    // Without extradata the configuration comes from the frames themselves.
+    let params = CodecParams::new(CodecId::Aac);
+    let lookahead = match raw_lookahead(src, &frames, crate::track::LOOKAHEAD_PACKETS) {
+        Ok(lookahead) => lookahead,
+        Err(e) => return Some(Err(e)),
+    };
+    // Decoded frames are set below, when the decoder has said what a frame decodes to.
+    let packets: Vec<(u64, u32, u32)> = frames.iter().map(|&(p, n, h)| (p, n, u32::from(h.raw_data_blocks))).collect();
+    let mut n = native(Container::Adts, Packets::Raw { frames: packets, src: src.clone(), next: 0 }, &params, &lookahead, 0, None, None)?;
+    let per_block = n.dec.frames_per_packet()? as u32;
+    if let Packets::Raw { frames, .. } = &mut n.packets {
+        for f in frames.iter_mut() {
+            f.2 *= per_block;
+        }
+        n.info.frames = frames.iter().map(|f| u64::from(f.2)).sum();
+        n.frames_known = true;
+    }
+    Some(Ok(n))
+}
+
+/// A raw AC-3 or E-AC-3 stream; E-AC-3 dependent substreams decode to nothing and count no frames.
+fn open_ac3<'a>(src: &Src<'a>, at: u64) -> Option<Result<Native<'a>>> {
+    let frames = match raw_frames(src, at, |rest| {
+        ac3::parse_header(rest).ok().map(|h| (h.frame_bytes, if h.is_primary() { h.samples() as u32 } else { 0 }))
+    }) {
+        Ok(frames) => frames?,
+        Err(e) => return Some(Err(e)),
+    };
+    let total = frames.iter().map(|&(_, _, f)| u64::from(f)).sum();
+    let lookahead = match raw_lookahead(src, &frames, 1) {
+        Ok(lookahead) => lookahead,
+        Err(e) => return Some(Err(e)),
+    };
+    native(Container::Ac3, Packets::Raw { frames, src: src.clone(), next: 0 }, &CodecParams::new(CodecId::Ac3), &lookahead, 0, None, Some(total))
+        .map(Ok)
+}
+
 /// The `n`-th audio track (the first when `None`) among `kinds`, as an index into them.
 fn audio_track(kinds: impl Iterator<Item = bool>, n: Option<usize>) -> Option<Result<usize>> {
     let audio: Vec<usize> = kinds.enumerate().filter(|&(_, audio)| audio).map(|(i, _)| i).collect();
@@ -486,8 +706,9 @@ fn open_mp4<'a>(src: &Src<'a>, container: Container, track: Option<usize>) -> Op
         (0..t.samples.len().min(crate::track::LOOKAHEAD_PACKETS)).filter_map(|i| file.read_sample(src, track, i).ok()).collect();
     let timescale = t.timescale;
     // Probe the decoder for the output rate before the timing is worked out.
-    let rate = TrackDecoder::new(&params, &lookahead.iter().map(Vec::as_slice).collect::<Vec<_>>()).ok()?.sample_rate();
-    // A leading media edit (AAC priming) is skipped, and the edit's duration is the
+    let probe = TrackDecoder::new(&params, &lookahead.iter().map(Vec::as_slice).collect::<Vec<_>>()).ok()?;
+    let rate = probe.sample_rate();
+    // A leading media edit (AAC priming, Opus pre-skip) is skipped, and the edit's duration is the
     // presentation length. Empty edits and multi-segment lists play the media as it is.
     let (skip, limit) = match t.edits.as_slice() {
         [e] if e.media_time >= 0 && e.media_rate == 0x0001_0000 => {
@@ -497,9 +718,25 @@ fn open_mp4<'a>(src: &Src<'a>, container: Container, track: Option<usize>) -> Op
         }
         _ => (0, None),
     };
+    // The samples' durations end the track when no edit does, and an edit cannot outlast the media.
     let media: u64 = t.samples.iter().map(|s| u64::from(s.duration)).sum();
-    let frames = limit.unwrap_or_else(|| rescale(media, u64::from(timescale), u64::from(rate)).saturating_sub(skip));
-    let packets = Packets::Mp4 { file: Box::new(file), src: src.clone(), track, next: 0, timescale, rate };
+    let mut stored = rescale(media, u64::from(timescale), u64::from(rate)).saturating_sub(skip);
+    // Durations only trim the last packet: ones that end anywhere else are wrong (some count a
+    // HE-AAC packet's core frames) and can't cut audio off.
+    // Samples of several ADTS frames (not standard, but they decode) have no one length. Only a
+    // file of ADTS-framed samples, which is rare, has its samples read to look for them.
+    let several_frames = lookahead.iter().any(|p| adts_framed(p))
+        && (0..t.samples.len()).any(|i| file.read_sample(src, track, i).is_ok_and(|p| several_adts_frames(&p)));
+    let per_packet = probe.frames_per_packet().map(|n| n as u64).filter(|_| !several_frames);
+    if let Some(n) = per_packet {
+        let decoded = (t.samples.len() as u64).saturating_mul(n).saturating_sub(skip);
+        if stored > decoded || decoded - stored >= n {
+            stored = decoded;
+        }
+    }
+    let frames = if stored > 0 { limit.map_or(stored, |l| l.min(stored)) } else { limit.unwrap_or(0) };
+    let limit = (stored > 0).then_some(frames).or(limit);
+    let packets = Packets::Mp4 { file: Box::new(file), src: src.clone(), track, next: 0, timescale, rate, per_packet };
     native(container, packets, &params, &lookahead, skip, limit, Some(frames)).map(Ok)
 }
 
@@ -529,9 +766,10 @@ fn open_mkv<'a>(src: &Src<'a>, container: Container, track: Option<usize>) -> Op
             let frame_bytes = u64::from(pcm.bits.div_ceil(8)) * u64::from(params.channels.unwrap_or(1).max(1));
             MkvFrames::Pcm { sizes: t.samples.iter().map(|s| s.size).collect(), frame_bytes: frame_bytes.max(1) }
         }
+        _ if params.codec == CodecId::Opus => MkvFrames::Opus { samples: t.samples.iter().map(|s| (s.offset, s.size)).collect(), starts: None },
         _ => MkvFrames::Timestamps,
     };
-    // `CodecDelay` (AAC priming) is decoded audio that is not presented.
+    // `CodecDelay` (AAC priming, Opus pre-skip) is decoded audio that is not presented.
     let skip = rescale_round(t.codec_delay_ns, 1_000_000_000, u64::from(rate));
     // The presentation ends with the last frame (timestamps, with `CodecDelay` already taken off,
     // are in ticks of `timebase` seconds); known only when the last frame has a duration.
@@ -543,8 +781,16 @@ fn open_mkv<'a>(src: &Src<'a>, container: Container, track: Option<usize>) -> Op
     let last = t.samples.iter().max_by_key(|s| s.pts);
     let delay_ticks = i64::try_from(rescale_round(t.codec_delay_ns.saturating_mul(den), num.saturating_mul(1_000_000_000), 1)).unwrap_or(i64::MAX);
     let start = t.samples.iter().map(|s| s.pts).min().unwrap_or(0).saturating_add(delay_ticks);
-    let frames = last.filter(|s| s.duration > 0).and_then(|s| {
-        let end = u64::try_from(s.pts.saturating_add(i64::try_from(s.duration).ok()?).saturating_sub(start)).ok()?;
+    let frames = last.and_then(|s| {
+        let duration = if s.duration > 0 {
+            s.duration
+        } else {
+            // ffmpeg 6 writes AAC without block durations, and records the end in a tag.
+            let MkvFrames::Constant(n) = frames_of else { return None };
+            let packet = rescale_round(n.saturating_mul(den), u64::from(rate).saturating_mul(num), 1);
+            tagged_last_duration(track_duration_tag(&file.tags, t.uid)?, s.pts, delay_ticks, packet, t.timebase)?
+        };
+        let end = u64::try_from(s.pts.saturating_add(i64::try_from(duration).ok()?).saturating_sub(start)).ok()?;
         Some(rescale_round(end.saturating_mul(num), den, u64::from(rate)))
     });
     let mut demux = demux;
@@ -555,8 +801,63 @@ fn open_mkv<'a>(src: &Src<'a>, container: Container, track: Option<usize>) -> Op
         _ => 0,
     };
     demux.seek(track, i64::MIN).ok()?;
-    let packets = Packets::Mkv { demux: Box::new(demux), track, rate, first_ns, frames: frames_of, pending: None };
+    let packets = Packets::Mkv { demux: Box::new(demux), track, rate, first_ns, frames: frames_of, src: src.clone(), pending: None };
     native(container, packets, &params, &lookahead, skip, frames, frames).map(Ok)
+}
+
+/// The `DURATION` tag of the track with UID `uid`, in nanoseconds. ffmpeg and mkvmerge write it
+/// as `HH:MM:SS.nnnnnnnnn`.
+fn track_duration_tag(tags: &[matroska::Tag], uid: u64) -> Option<u64> {
+    tags.iter()
+        .filter(|tag| tag.targets.track_uids.contains(&uid))
+        .flat_map(|tag| &tag.simple)
+        .find(|simple| simple.name.eq_ignore_ascii_case("DURATION"))
+        .and_then(|simple| parse_tag_duration(simple.string.as_deref()?))
+}
+
+/// `HH:MM:SS.nnnnnnnnn` in nanoseconds.
+fn parse_tag_duration(text: &str) -> Option<u64> {
+    let (clock, fraction) = text.split_once('.').unwrap_or((text, ""));
+    let mut parts = clock.split(':').map(|p| p.parse::<u64>().ok());
+    let (hours, minutes, seconds) = (parts.next()??, parts.next()??, parts.next()??);
+    if parts.next().is_some() || fraction.len() > 9 || !fraction.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let nanos = if fraction.is_empty() { 0 } else { fraction.parse::<u64>().ok()? * 10u64.pow(9 - fraction.len() as u32) };
+    hours.checked_mul(3600)?.checked_add(minutes.checked_mul(60)?)?.checked_add(seconds)?.checked_mul(1_000_000_000)?.checked_add(nanos)
+}
+
+/// The duration in ticks of a track's last packet, when `tag_ns` (which counts `CodecDelay`, as the
+/// stored block timestamps do) ends inside that packet. A tag can go stale when a file is edited,
+/// so one that ends anywhere else is ignored and can't cut audio off.
+fn tagged_last_duration(tag_ns: u64, last_pts: i64, delay_ticks: i64, packet_ticks: u64, (num, den): (u64, u64)) -> Option<u64> {
+    let tag_ticks = i64::try_from(rescale_round(tag_ns.saturating_mul(den), num.saturating_mul(1_000_000_000), 1)).ok()?;
+    let duration = u64::try_from(tag_ticks.saturating_sub(delay_ticks).saturating_sub(last_pts)).ok()?;
+    (duration > 0 && duration <= packet_ticks).then_some(duration)
+}
+
+/// An Ogg file's Opus stream (RFC 7845: pre-skip and end trimming applied).
+fn open_ogg<'a>(src: &Src<'a>, track: Option<usize>) -> Option<Result<Native<'a>>> {
+    let file = match demuxed(ogg::open(src), ogg_failure)? {
+        Ok(file) => file,
+        Err(e) => return Some(Err(e)),
+    };
+    let stream = match audio_track(file.streams.iter().map(|s| s.codec.codec_id().is_audio()), track)? {
+        Ok(s) => s,
+        Err(e) => return Some(Err(e)),
+    };
+    let s = file.streams.get(stream)?;
+    if s.codec != ogg::Codec::Opus {
+        return None;
+    }
+    let params = s.codec_params();
+    let head = crate::opus::OpusHead::parse(&params.extradata).ok()?;
+    let timing = ogg::OpusTiming::of(s, u32::from(head.pre_skip));
+    let limit = u64::try_from(timing.total).ok();
+    let skip = u64::from(timing.pre_skip);
+    let starts = timing.starts.clone();
+    let packets = Packets::Ogg { file: Box::new(file), src: src.clone(), stream, next: 0, starts };
+    native(Container::Ogg, packets, &params, &[], skip, limit, limit).map(Ok)
 }
 
 /// The audio tracks of `src` the native path reads, described for a track list; `None` when it
@@ -657,4 +958,164 @@ fn rescale(v: u64, from: u64, to: u64) -> u64 {
 /// (Matroska's nanoseconds hold 1024 samples at 48 kHz as 21 333 333 ns).
 fn rescale_round(v: u64, from: u64, to: u64) -> u64 {
     if from == 0 { 0 } else { u64::try_from((u128::from(v) * u128::from(to) + u128::from(from) / 2) / u128::from(from)).unwrap_or(u64::MAX) }
+}
+
+#[cfg(test)]
+mod tag_tests {
+    use super::{parse_tag_duration, tagged_last_duration};
+
+    #[test]
+    fn tag_durations_parse_and_nonsense_does_not() {
+        assert_eq!(parse_tag_duration("00:00:05.021000000"), Some(5_021_000_000));
+        assert_eq!(parse_tag_duration("01:02:03.5"), Some(3_723_500_000_000));
+        assert_eq!(parse_tag_duration("00:00:05"), Some(5_000_000_000));
+        for bad in ["", "5.021", "00:05.0", "00:00:00:05.0", "00:00:0x.0", "00:00:05.-1", "00:00:05.0000000001", "99999999999:00:00.0"] {
+            assert_eq!(parse_tag_duration(bad), None, "{bad}");
+        }
+    }
+
+    #[test]
+    fn only_a_tag_ending_inside_the_last_packet_counts() {
+        // 5 s of 48 kHz AAC at millisecond ticks: priming 21, last packet stored at 4992 (5013 with
+        // the delay), 21 ticks long
+        let last = |ms: u64| tagged_last_duration(ms * 1_000_000, 4992, 21, 21, (1, 1000));
+        assert_eq!(last(5021), Some(8));
+        assert_eq!(last(5034), Some(21));
+        assert_eq!(last(5035), None, "past the packet");
+        assert_eq!(last(5013), None, "at its start");
+        assert_eq!(last(3000), None, "far before it");
+    }
+}
+
+#[cfg(test)]
+mod adts_tests {
+    use crate::{AudioError, Container, DecodeOptions, Decoder, decode};
+    use craft_media::ByteSource;
+
+    /// A frame of mono silence at sampling frequency index `sf_index`.
+    fn frame(sf_index: u8) -> Vec<u8> {
+        // ID_SCE, tag 0, an empty channel stream, ID_END
+        let au = [0x00, 0x00, 0x00, 0x07];
+        [&crate::aac::AdtsHeader::write(2, sf_index, 1, au.len(), 0x7FF).unwrap()[..], &au].concat()
+    }
+
+    #[test]
+    fn a_stream_decodes_past_damage_between_frames() {
+        let good = frame(3).repeat(4);
+        let file = [&good[..], &[0x12; 100], &good].concat();
+        let (info, buf) = decode(&file, None).unwrap();
+        assert_eq!((info.container, buf.frames()), (Container::Adts, 8 * 1024));
+    }
+
+    #[test]
+    fn frames_with_several_raw_data_blocks_do_not_lose_audio_silently() {
+        let mut one = frame(3);
+        one[6] |= 1; // two raw data blocks
+        let file = one.repeat(8);
+        // The file is refused, not decoded at half its length.
+        assert!(decode(&file, Some("aac")).is_err());
+    }
+
+    /// Frames of several blocks after the stream has started are concealed at their whole length,
+    /// not skipped.
+    #[test]
+    fn several_raw_data_blocks_mid_stream_keep_the_timing() {
+        let mut two = frame(3);
+        two[6] |= 1;
+        let file = [frame(3).repeat(8), two, frame(3).repeat(2)].concat();
+        let (info, buf) = decode(&file, None).unwrap();
+        assert_eq!((info.damaged, info.frames, buf.frames()), (1, 12 * 1024, 12 * 1024));
+        assert_eq!(crate::probe(&file, None).unwrap().frames, 12 * 1024);
+    }
+
+    /// One flipped bit in the first header does not silence the stream.
+    #[test]
+    fn a_damaged_first_header_does_not_decide_the_format() {
+        let file = [frame(4), frame(3).repeat(9)].concat();
+        let (info, buf) = decode(&file, None).unwrap();
+        assert_eq!((info.sample_rate, info.damaged, buf.frames()), (48_000, 1, 10 * 1024));
+    }
+
+    #[test]
+    fn a_frame_that_changes_the_stream_format_is_damage() {
+        let file = [frame(3).repeat(4), frame(4).repeat(3)].concat();
+        let (info, buf) = decode(&file, None).unwrap();
+        assert_eq!((info.sample_rate, info.damaged, buf.frames()), (48_000, 3, 7 * 1024));
+    }
+
+    #[test]
+    fn a_stream_is_found_after_an_id3_tag_longer_than_the_head() {
+        let size = 300_000u32;
+        let tag = [
+            b"ID3\x03\x00\x00".to_vec(),
+            [size >> 21, size >> 14, size >> 7, size].iter().map(|v| (v & 0x7F) as u8).collect(),
+            vec![0; size as usize],
+        ]
+        .concat();
+        let file = [tag, frame(3).repeat(4)].concat();
+        let (info, buf) = decode(&file, None).unwrap();
+        assert_eq!((info.container, buf.frames()), (Container::Adts, 4 * 1024));
+    }
+
+    /// Bytes that fail to read past `good`.
+    struct Failing {
+        bytes: Vec<u8>,
+        good: u64,
+    }
+
+    impl ByteSource for Failing {
+        fn len(&self) -> u64 {
+            self.bytes.len() as u64
+        }
+        fn read_at(&self, offset: u64, buf: &mut [u8]) -> std::io::Result<()> {
+            if offset + buf.len() as u64 > self.good {
+                return Err(std::io::Error::other("the source failed"));
+            }
+            self.bytes.as_slice().read_at(offset, buf)
+        }
+    }
+
+    /// A frame that reads in the scan and fails when read again.
+    #[test]
+    fn a_source_failing_during_the_lookahead_is_an_io_error() {
+        struct FailsFrames(Vec<u8>);
+        impl ByteSource for FailsFrames {
+            fn len(&self) -> u64 {
+                self.0.len() as u64
+            }
+            fn read_at(&self, offset: u64, buf: &mut [u8]) -> std::io::Result<()> {
+                // A whole frame in the middle: the scan reads windows, to the end of the file.
+                if buf.len() == 11 && offset + 11 < self.len() {
+                    return Err(std::io::Error::other("the source failed"));
+                }
+                self.0.as_slice().read_at(offset, buf)
+            }
+        }
+        let opened = Decoder::open(FailsFrames(frame(3).repeat(64)), Some("aac"), &DecodeOptions::default());
+        assert!(matches!(opened, Err(AudioError::Io(_))), "{:?}", opened.err());
+    }
+
+    /// A sample of several ADTS frames past the lookahead still counts them all.
+    #[test]
+    fn a_later_mp4_sample_of_several_adts_frames_keeps_its_length() {
+        use craft_media::isobmff::{Brand, Mp4Writer, SampleEntry, TrackConfig, WriteSample, WriterOptions};
+        let asc = crate::aac::AudioSpecificConfig::lc(3, 1).to_bytes().unwrap();
+        let mut w = Mp4Writer::new(std::io::Cursor::new(Vec::new()), WriterOptions::new(Brand::Mp4)).unwrap();
+        let track = w.add_track(TrackConfig::new(SampleEntry::aac(asc, 1, 48_000), 48_000)).unwrap();
+        for i in 0..12 {
+            let (data, duration) = if i == 10 { (frame(3).repeat(2), 2048) } else { (frame(3), 1024) };
+            w.write_sample(track, WriteSample { data: &data, duration, composition_offset: 0, is_sync: true }).unwrap();
+        }
+        let file = w.finish().unwrap().into_inner();
+        let (_, buf) = decode(&file, None).unwrap();
+        assert_eq!(buf.frames(), 13 * 1024);
+    }
+
+    #[test]
+    fn a_source_failing_during_the_frame_scan_is_an_io_error() {
+        let bytes = frame(3).repeat(100_000);
+        // Past the head, so the failure comes during the scan rather than format detection.
+        let opened = Decoder::open(Failing { bytes, good: 300_000 }, Some("aac"), &DecodeOptions::default());
+        assert!(matches!(opened, Err(AudioError::Io(_))), "{:?}", opened.err());
+    }
 }
