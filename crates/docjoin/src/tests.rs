@@ -884,3 +884,24 @@ fn a_started_table_folder_needs_its_readme() {
     let pre = vec![f("ROADMAP.md", ROADMAP, 0), f("docs/gaps.md", GAPS, 0), f("docs/progress.d/README.md", "how", 0)];
     assert!(!check(&CFG, &pre, &none).iter().any(|e| e.contains("docs/gaps.d/README.md")));
 }
+
+#[test]
+fn the_fold_pr_passes_on_odd_logs() {
+    let shapes: &[(&str, bool)] = &[
+        ("# R\n\n**Last updated:** 2026-11-01 · **Change:** minor\n\n## Progress log\n\n## Next\n", true),
+        ("# R\n\n**Last updated:** 2026-11-01 · **Change:** minor\n\n## Progress log\nIntro text.\n## Next\n", true),
+        ("# R\n\n**Last updated:** 2026-11-01 · **Change:** minor\n\n## Progress log\n\n- old\n\nTrailing prose.\n", false),
+        ("# R\r\n\r\n**Last updated:** 2026-11-01 · **Change:** minor\r\n\r\n## Progress log\r\n\r\n- old\r\n", true),
+        ("# R\n\n**Last updated:** 2026-11-01 · **Change:** minor\n\n## Progress log\n\n- old", false),
+        ("# R\n\n**Last updated:** 2026-11-01 · **Change:** minor\n\n## Progress log (2026)\n\nIntro:\n\n- old\n- older\n", true),
+    ];
+    for (doc, newest) in shapes {
+        let logs: &'static [Log] =
+            Box::leak(Box::new([Log { dir: "p", doc: "R.md", heading: "## Progress log", newest_first: *newest, status: true }]));
+        let cfg = Config { logs, tables: &[] };
+        let base = vec![f("R.md", doc, 0), f("p/README.md", "x", 0), f("p/1-a.md", "- new a\n  more a\n", NOV5), f("p/2-b.md", "- new b\n", NOV6)];
+        let head = fold_of(&cfg, &base);
+        assert_eq!(check(&cfg, &zero(&base), &zero(&head)), Vec::<String>::new(), "{doc:?}\n{}", head[0].text);
+        assert_eq!(fold_of(&cfg, &head), head, "second fold not a no-op for {doc:?}");
+    }
+}
