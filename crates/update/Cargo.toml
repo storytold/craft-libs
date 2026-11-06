@@ -24,7 +24,7 @@ image = { version = "0.25", default-features = false, features = ["png"], option
 serde = { workspace = true }
 serde_json = { workspace = true }
 log = "0.4"
-getrandom = "0.3"
+getrandom = "0.4"
 tempfile = "3"
 sha2 = "0.10"
 ureq = { version = "3.4", default-features = false, features = ["rustls-no-provider", "_ring", "gzip", "platform-verifier"] }
@@ -45,7 +45,7 @@ tar = { version = "0.4", default-features = false }
 plist = "1"
 
 [target.'cfg(target_os = "windows")'.dependencies]
-winreg = "0.55"
+winreg = "0.56"
 dunce = "1"
 # `deflate-flate2` with flate2's default miniz_oxide backend, not zip's `deflate` (zopfli and
 # zlib-rs): Cargo unifies flate2's features across an app, and zlib-rs would switch the whole
