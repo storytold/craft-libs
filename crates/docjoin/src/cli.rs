@@ -183,8 +183,11 @@ pub fn run(root: &Path, cfg: &Config, args: &[String]) -> Result<(), String> {
                 // CI checks out the commit being tested alone; its first parent is the base it
                 // merges into (a pull request's merge commit, or the previous `main`).
                 [] if std::env::var_os("GITHUB_ACTIONS").is_some() => {
+                    // `actions/checkout` fetches the merge commit alone, by its sha, with no
+                    // branch; `--deepen` would deepen nothing. Fetch that commit two deep.
                     if git(root, &["rev-parse", "--verify", "-q", "HEAD^1"]).is_err() {
-                        git(root, &["fetch", "-q", "--no-tags", "--deepen=1", "origin"])?;
+                        let head = git(root, &["rev-parse", "--verify", "HEAD"])?;
+                        git(root, &["fetch", "-q", "--no-tags", "--depth=2", "origin", head.trim()])?;
                     }
                     "HEAD^1".to_string()
                 }
