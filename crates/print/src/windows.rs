@@ -19,7 +19,7 @@ use winprint::ticket::{FeatureOptionPack as _, PageMediaSize, PrintCapabilities,
 
 use crate::sheets::{self, Fit, SAME};
 use crate::ticket::{self, Paper};
-use crate::{Error, Job, Printer, Scaling};
+use crate::{Cancel, Error, Job, Printer, Scaling};
 
 fn spool_error(e: impl std::fmt::Display) -> Error {
     Error::Spool(e.to_string())
@@ -199,7 +199,7 @@ fn imageable_margin(device: &PrinterDevice, ticket: &PrintTicket) -> f64 {
 /// temporary folder (an unpredictable name, only this user's) for as long as the spooler takes
 /// it, and the folder is removed however the job ended. Windows answers once the job is in the
 /// queue: a paused queue or an offline printer keeps the job there, as with any program.
-pub(crate) fn submit_with_progress(pdf: &[u8], job: &Job, progress: &mut dyn FnMut(usize, usize)) -> Result<String, Error> {
+pub(crate) fn submit_with_progress(pdf: &[u8], job: &Job, progress: &mut dyn FnMut(usize, usize), cancel: &Cancel) -> Result<String, Error> {
     let read = sheets::read(pdf)?;
     read.check_print_annotations()?;
     let count = read.sheets.len();
@@ -261,6 +261,9 @@ pub(crate) fn submit_with_progress(pdf: &[u8], job: &Job, progress: &mut dyn FnM
         if updated.is_none() && !edits.is_empty() {
             updated = Some(read.update(&edits)?);
         }
+        // The driver has answered (a sleeping printer can hold that for long): a job cancelled
+        // meanwhile stops here, before its file is written or anything reaches the spooler.
+        cancel.start_sending()?;
         let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(&path).map_err(written)?;
         file.write_all(updated.as_deref().unwrap_or(pdf)).map_err(written)?;
         drop(file);

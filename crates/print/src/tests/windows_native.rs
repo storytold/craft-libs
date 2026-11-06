@@ -447,6 +447,11 @@ fn windows_jobs_reach_the_spooler() {
     let exact_refused = spool::submit_with_progress(&tabloid, &Job { printer: Some(name.into()), ..Job::default() }, &mut |done, total| {
         refused_progress.push((done, total));
     });
+    // Cancelled while it waited (on a sleeping printer's driver, say): it never reaches the queue,
+    // which the exact list of queued jobs below shows.
+    let cancel = Cancel::new();
+    assert!(cancel.cancel());
+    let cancelled = spool::submit_cancellable(&mixed, &Job { title: "cancelled".into(), ..job.clone() }, &mut |_, _| {}, &cancel);
     let queued = windows_powershell(
         "@(Get-PrintJob -PrinterName $name | Sort-Object Id | ForEach-Object { $_.DocumentName + ' ' + $_.TotalPages }) -join '|'",
         name,
@@ -476,6 +481,7 @@ fn windows_jobs_reach_the_spooler() {
     let expected = if simplex_only { "mixed.pdf 3|simplex.pdf 3|shrink.pdf 2" } else { "mixed.pdf 3|shrink.pdf 2" };
     assert_eq!(queued.as_deref().map(str::trim), Ok(expected), "one job each, all sheets, in the paused queue: {queued:?}");
     assert!(cleaned.is_ok(), "the test printer is removed again: {cleaned:?}");
+    assert_eq!(cancelled, Err(Error::Spool(CANCELLED_MESSAGE.into())), "a cancelled job is refused, not queued");
     // Asking for a printer that isn't there is an error, never a job on another one.
     let missing = spool::submit(&mixed, &Job { printer: Some(name.into()), ..Job::default() });
     assert!(matches!(missing, Err(Error::Spool(ref m)) if m.contains(name)), "{missing:?}");

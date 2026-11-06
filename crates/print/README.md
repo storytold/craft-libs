@@ -40,7 +40,9 @@ opens Windows printer preferences and submits jobs with copies, collation, duple
   `GetDefaultPrinter`. `printers` also reads each driver's PrintCapabilities to report two-sided
   support, which can wait on the device (a networked printer in power save); `printer_queues`
   lists the same queues without asking any driver, so a Print dialog's list never waits on a
-  device. A job is drawn as vectors by the in-box `Windows.Data.Pdf` with Direct2D
+  device. A job asks the driver too before it is sent; `submit_cancellable` with a
+  `Cancel` token lets the app stop a job still waiting on it, and a cancelled job is never
+  sent. A job is drawn as vectors by the in-box `Windows.Data.Pdf` with Direct2D
   into the XPS print API (the `winprint` crate), and copies, collation, duplex, colour, paper,
   orientation and "no scaling" travel in a PrintTicket that the driver validates first; a
   driver that would change the paper, orientation or scaling is refused before anything is

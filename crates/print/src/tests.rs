@@ -142,7 +142,7 @@ fn print_jobs_reach_lp_on_stdin_never_through_a_shared_temp_folder() {
     // Bigger than any pipe buffer, so the spooler must read while the job is still being written.
     let pdf: Vec<u8> = b"%PDF-1.7 synthetic print job\n".iter().copied().cycle().take(3 << 20).collect();
     let job = Job { title: "memo.pdf".into(), ..Job::default() };
-    let sent = spool::submit_via(stand_in_lp(record.as_os_str()), &pdf, &job);
+    let sent = spool::submit_via(stand_in_lp(record.as_os_str()), &pdf, &job, &Cancel::new());
     let args = std::fs::read_to_string(record.join("args"));
     let stdin = std::fs::read(record.join("stdin"));
     let _ = std::fs::remove_dir_all(&record);
@@ -154,10 +154,46 @@ fn print_jobs_reach_lp_on_stdin_never_through_a_shared_temp_folder() {
 }
 
 #[test]
+fn a_job_cancels_until_it_starts_reaching_the_spooler() {
+    // Pending: cancelling wins, and the job refuses to start sending; cancelling again agrees.
+    let pending = Cancel::new();
+    assert!(pending.cancel(), "a pending job is never sent");
+    assert_eq!(pending.start_sending(), Err(Error::Spool(CANCELLED_MESSAGE.into())));
+    assert!(pending.cancel(), "still cancelled");
+    // Sending: too late to cancel; a job sent as several copies keeps sending.
+    let sending = Cancel::new();
+    assert_eq!(sending.start_sending(), Ok(()));
+    assert!(!sending.cancel(), "a job being sent completes; the system's queue cancels it");
+    assert_eq!(sending.start_sending(), Ok(()), "the next copy of the same job");
+    // A clone is the same token: the UI keeps one while the worker submits with the other.
+    let worker = Cancel::new();
+    let ui = worker.clone();
+    assert!(ui.cancel());
+    assert!(worker.start_sending().is_err());
+}
+
+#[test]
+fn a_cancelled_job_never_starts_lp() {
+    // Cancelled before it was sent (as the UI does while a job waits): `lp` never runs, so nothing
+    // reaches the spooler, and the caller learns why.
+    static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    let record =
+        std::env::temp_dir().join(format!("craft-print-cancel-{}-{}", std::process::id(), N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)));
+    std::fs::create_dir(&record).unwrap();
+    let cancel = Cancel::new();
+    assert!(cancel.cancel());
+    let sent = spool::submit_via(stand_in_lp(record.as_os_str()), b"%PDF-1.7 cancelled", &Job::default(), &cancel);
+    let ran = record.join("args").exists();
+    let _ = std::fs::remove_dir_all(&record);
+    assert_eq!(sent, Err(Error::Spool(CANCELLED_MESSAGE.into())));
+    assert!(!ran, "the stand-in lp never started");
+}
+
+#[test]
 fn a_refused_print_job_reports_the_spoolers_message() {
     // `lp` refuses an unknown printer without reading the job; the user sees why, not a broken pipe.
     let pdf = vec![b'%'; 3 << 20];
-    let err = spool::submit_via(stand_in_lp("refuse".as_ref()), &pdf, &Job::default());
+    let err = spool::submit_via(stand_in_lp("refuse".as_ref()), &pdf, &Job::default(), &Cancel::new());
     assert_eq!(err, Err(Error::Spool("lp: The printer or class does not exist.".into())));
 }
 
