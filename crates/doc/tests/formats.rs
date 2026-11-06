@@ -247,6 +247,7 @@ fn vectorcraft_outline_has_artboards_and_top_level_layers() {
     }
 }
 
+/// Thumbnail and legacy composite previews never claim a full-size source.
 #[test]
 fn pcraft_previews_stored_and_deflated_with_the_manifest_last() {
     let (thumb, composite) = (png(4, 3, 10), png(40, 30, 20));
@@ -254,6 +255,134 @@ fn pcraft_previews_stored_and_deflated_with_the_manifest_last() {
     assert_eq!(r.len(), 2);
     assert_eq!((r[0].kind, r[0].mime.as_str(), &r[0].bytes), (RenditionKind::Thumbnail, "image/png", &thumb));
     assert_eq!((r[1].kind, r[1].mime.as_str(), &r[1].bytes), (RenditionKind::Composite, "image/png", &composite));
+    assert!(r.iter().all(|rendition| !rendition.is_full_composite));
+}
+
+/// Full-member identity is retained even when its dimensions differ from the document canvas.
+#[test]
+fn pcraft_prefers_the_full_size_composite_without_reading_the_preview() {
+    let full = png(80, 60, 30);
+    let small_preview = png(4, 3, 20);
+    for preview in [false, true] {
+        let manifest = pcraft_manifest(1, "[]", r#", "full_composite":"composite/full.png", "composite":"composite/preview.png""#);
+        let mut entries = vec![store("manifest.json", manifest.as_bytes()), deflated("composite/full.png", &full)];
+        if preview {
+            entries.push(store("composite/preview.png", &small_preview));
+        }
+        let r = renditions(&zip(&entries), &limits()).unwrap();
+        assert_eq!(r.len(), 1);
+        assert_eq!((r[0].kind, r[0].mime.as_str(), &r[0].bytes), (RenditionKind::Composite, "image/png", &full));
+        assert!(r[0].is_full_composite);
+        let canvas = outline(&zip(&entries), &limits()).unwrap().canvas.unwrap();
+        assert_eq!((canvas.width, canvas.height), (640, 480), "the flag does not validate the 80 by 60 PNG against this canvas");
+    }
+    let manifest = pcraft_manifest(1, "[]", r#", "full_composite":"composite/full.png", "composite":"composite/preview.png""#);
+    let mut tight = limits();
+    tight.max_entry = manifest.len().max(full.len()) as u64;
+    let oversized = vec![0; tight.max_entry as usize + 1];
+    for preview in [store("composite/preview.png", &oversized), deflated("composite/preview.png", &oversized)] {
+        let pc = zip(&[store("manifest.json", manifest.as_bytes()), deflated("composite/full.png", &full), preview]);
+        assert_eq!(renditions(&pc, &tight).unwrap()[0].bytes, full);
+    }
+    let manifest = pcraft_manifest(1, "[]", r#", "full_composite":"composite/full.png""#);
+    let pc = zip(&[store("manifest.json", manifest.as_bytes()), store("composite/full.png", &full)]);
+    let selected = renditions(&pc, &limits()).unwrap().pop().unwrap();
+    assert_eq!(selected.bytes, full);
+    assert!(selected.is_full_composite);
+    let mut small = limits();
+    small.max_entry = manifest.len() as u64;
+    // Keep the manifest under the limit while bounding the image independently.
+    let large = vec![0; manifest.len() + full.len()];
+    let pc = zip(&[store("manifest.json", manifest.as_bytes()), store("composite/full.png", &large)]);
+    assert!(matches!(renditions(&pc, &small), Err(Error::LimitExceeded(_))));
+}
+
+/// The source flag distinguishes identical payloads selected from different manifest members.
+#[test]
+fn pcraft_identical_images_keep_their_composite_source() {
+    let image = png(4, 3, 30);
+    let mut variants = Vec::new();
+    for declared in [false, true] {
+        let fields = if declared {
+            r#", "full_composite":"composite/full.png", "composite":"composite/preview.png""#
+        } else {
+            r#", "composite":"composite/preview.png""#
+        };
+        let manifest = pcraft_manifest(1, "[]", fields);
+        let bundle = zip(&[store("manifest.json", manifest.as_bytes()), store("composite/full.png", &image), store("composite/preview.png", &image)]);
+        let rendition = renditions(&bundle, &limits()).unwrap().pop().unwrap();
+        assert_eq!(rendition.is_full_composite, declared);
+        variants.push(rendition);
+    }
+    assert_eq!((variants[0].kind, &variants[0].mime, &variants[0].bytes), (variants[1].kind, &variants[1].mime, &variants[1].bytes));
+    assert_ne!(variants[0], variants[1], "equality includes the selected source");
+}
+
+/// Missing and null full declarations ignore an undeclared full entry; thumbnails stay false.
+#[test]
+fn pcraft_legacy_and_thumbnail_sources_are_not_full_composites() {
+    let image = png(4, 3, 30);
+    for declaration in ["", r#", "full_composite":null"#, r#", "full_composite":"composite/full.png""#] {
+        let manifest = pcraft_manifest(1, "[]", &format!(r#", "thumbnail":"thumb.png", "composite":"composite/preview.png"{declaration}"#));
+        let bundle = zip(&[
+            store("manifest.json", manifest.as_bytes()),
+            store("thumb.png", &image),
+            store("composite/preview.png", &image),
+            store("composite/full.png", &image),
+        ]);
+        let renditions = renditions(&bundle, &limits()).unwrap();
+        assert_eq!(renditions.len(), 2);
+        assert_eq!(renditions[0].kind, RenditionKind::Thumbnail);
+        assert!(!renditions[0].is_full_composite);
+        assert_eq!(renditions[1].kind, RenditionKind::Composite);
+        assert_eq!(renditions[1].is_full_composite, declaration.contains("composite/full.png"));
+    }
+}
+
+/// VectorCraft thumbnails and PDFs retain false provenance for plain and gzip documents.
+#[test]
+fn vectorcraft_renditions_are_not_full_composites() {
+    let document = vectorcraft_json(3, &format!(r#""preview":{}, "pdf":{}"#, inline("image/png", &png(4, 3, 30)), inline("application/pdf", PDF)));
+    for bytes in [document.as_bytes().to_vec(), gzip(document.as_bytes())] {
+        let renditions = renditions(&bytes, &limits()).unwrap();
+        assert_eq!(renditions.iter().map(|rendition| rendition.kind).collect::<Vec<_>>(), [RenditionKind::Thumbnail, RenditionKind::Pdf]);
+        assert!(renditions.iter().all(|rendition| !rendition.is_full_composite));
+    }
+}
+
+/// A checksum failure in the declared full entry remains an error despite a valid preview.
+#[test]
+fn a_damaged_declared_full_composite_does_not_fall_back() {
+    let image = png(4, 3, 30);
+    let manifest = pcraft_manifest(1, "[]", r#", "full_composite":"composite/full.png", "composite":"composite/preview.png""#);
+    let mut bundle = zip(&[store("manifest.json", manifest.as_bytes()), store("composite/preview.png", &image), store("composite/full.png", &image)]);
+    let central = bundle
+        .windows(4)
+        .enumerate()
+        .find(|(at, magic)| *magic == b"PK\x01\x02" && bundle.get(at + 46..at + 46 + b"composite/full.png".len()) == Some(b"composite/full.png"))
+        .unwrap()
+        .0;
+    bundle[central + 16] ^= 1;
+    assert!(matches!(renditions(&bundle, &limits()), Err(Error::Malformed(_))));
+}
+
+/// Invalid declarations and missing full entries never silently fall back to the preview.
+#[test]
+fn pcraft_refuses_invalid_or_missing_full_size_composites() {
+    for field in [r#""../full.png""#, r#""composite/preview.png""#, "12", r#""composite/full.png", "full_composite":null"#] {
+        let manifest = pcraft_manifest(1, "[]", &format!(r#", "full_composite":{field}"#));
+        let pc = zip(&[store("manifest.json", manifest.as_bytes()), store("composite/preview.png", &png(4, 3, 20))]);
+        assert!(matches!(renditions(&pc, &limits()), Err(Error::Malformed(_))), "{field}");
+    }
+    let manifest = pcraft_manifest(1, "[]", r#", "full_composite":"composite/full.png", "composite":"composite/preview.png""#);
+    let pc = zip(&[store("manifest.json", manifest.as_bytes()), store("composite/preview.png", &png(4, 3, 20))]);
+    assert!(matches!(renditions(&pc, &limits()), Err(Error::Malformed(_))));
+    let manifest = pcraft_manifest(1, "[]", r#", "full_composite":null, "composite":"composite/preview.png""#);
+    let preview = png(4, 3, 20);
+    let pc = zip(&[store("manifest.json", manifest.as_bytes()), store("composite/preview.png", &preview)]);
+    let selected = renditions(&pc, &limits()).unwrap().pop().unwrap();
+    assert_eq!(selected.bytes, preview);
+    assert!(!selected.is_full_composite);
 }
 
 #[test]

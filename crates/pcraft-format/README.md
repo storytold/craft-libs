@@ -22,6 +22,7 @@ A bundle is a ZIP archive or a directory with these entries:
 | `blobs/<blake3>.zst` | `blob_path(hash)` | binary data, zstd |
 | `thumb.png` | `THUMB` | optional thumbnail |
 | `composite/preview.png` | `COMPOSITE` | optional flattened preview |
+| `composite/full.png` | `FULL_COMPOSITE` | optional full-canvas flattened image |
 | `save.lock` | `SAVE_LOCK` | directory bundles only: held while a save runs (empty) |
 
 `<blake3>` is the BLAKE3 hash of the uncompressed bytes as 64 lowercase hex digits.
@@ -51,6 +52,9 @@ let manifest: Manifest<MyDocument> = craft_pcraft_format::read_manifest(&manifes
   than `thumb.png` or a `composite` other than `composite/preview.png` gives `Corrupt`.
   `Manifest` has no `Deserialize` and is `#[non_exhaustive]`: `Manifest::new(generator,
   document)` builds one at `FORMAT_VERSION` without previews.
+- `Manifest::full_composite` optionally names `composite/full.png`. A missing or null member
+  reads as `None`; any other path gives `Corrupt`. When absent, serialization omits this member,
+  preserving the bytes of manifests without a full-canvas image. It does not change the format version.
 - `TileRef` has `tx`, `ty` and `hash`, and is `#[non_exhaustive]`: `TileRef::new(tx, ty, hash)`
   builds one. `TileRef::path` gives its entry, or `None` when the hash is not valid.
 - `check_manifest(json, &Limits)` checks the size, the nesting and the item count in one pass
