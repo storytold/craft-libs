@@ -191,6 +191,13 @@ The writer adds no font files. Its four existing ICC profiles are retained under
 Krilla is vendored with the local patches in vendor/krilla/patches; see vendor/krilla/README.craft.md
 and vendor/krilla/SOURCE.json. Its upstream MIT/Apache-2.0 licences and CC0 profiles are unchanged.
 
+Optional Windows graphics patch
+
+wgpu-hal 30.0.1 (https://github.com/gfx-rs/wgpu), MIT OR Apache-2.0, is retained in
+vendor/wgpu-hal with one Direct3D 12 window-presentation patch. Its upstream licence files
+remain beside the source. See vendor/wgpu-hal/CRAFT-PATCH.md for the archive checksum,
+exact patch, verification command and removal condition.
+
 Optional PDF reader
 
 Hayro 0.7.1, hayro-interpret 0.7.0, hayro-syntax 0.7.2, hayro-jbig2 0.3.0, hayro-cmap 0.1.0
