@@ -8,6 +8,9 @@
 //! string, so applying them to a word costs `O(len × max_pattern_len)` lookups.
 
 use std::collections::HashMap;
+
+mod nonstandard;
+pub use nonstandard::Opportunity;
 use std::hash::{BuildHasherDefault, Hasher};
 
 /// Word-boundary marker in patterns.
@@ -15,6 +18,8 @@ pub const DOT: char = '.';
 /// Longest pattern the packed key supports (6 bits a letter in a `u128`; the Polish set's longest
 /// is 14 including the dots).
 pub const MAX_PATTERN_LEN: usize = 20;
+/// Maximum input characters processed by one pattern match. Longer inputs return None.
+pub const MAX_WORD_CHARS: usize = 4096;
 
 /// Small, fast multiplicative hasher for packed integer keys and short strings (FxHash-style).
 #[derive(Default, Clone, Copy)]
@@ -107,6 +112,9 @@ pub struct Patterns {
     /// Packed letters → inter-letter values (`len + 1` entries).
     map: FxMap<u128, Box<[u8]>>,
     max_len: usize,
+    /// Unusually long Huhyphn patterns do not fit the packed integer key.
+    long: FxMap<Box<[u8]>, Box<[u8]>>,
+    changes: FxMap<Box<[u8]>, nonstandard::Change>,
     /// Lowercase word → its break points (char indices), overriding the patterns.
     exceptions: HashMap<String, Box<[usize]>>,
 }
@@ -127,6 +135,23 @@ impl Patterns {
     /// commands' arguments (`\message{…}`) are skipped; outside any block, a token with a hyphen
     /// is an exception and anything else a pattern.
     pub fn parse(text: &str) -> Patterns {
+        Self::parse_checked(text).unwrap_or_else(|e| {
+            log::warn!("hyphenation patterns: {e}");
+            Self::default()
+        })
+    }
+
+    /// Parse patterns, retaining line-numbered errors for malformed Libhyphen replacements.
+    pub fn parse_checked(text: &str) -> Result<Patterns, String> {
+        let text = text.strip_prefix('\u{feff}').unwrap_or(text);
+        if text.lines().map(str::trim).find(|l| !l.is_empty() && !l.starts_with(['%', '#'])) == Some("UTF-8") {
+            return Self::from_huhyphn(text);
+        }
+        Ok(Self::parse_tex(text))
+    }
+
+    /// Compile TeX patterns and exceptions without changing the source data.
+    fn parse_tex(text: &str) -> Patterns {
         let mut p = Patterns::default();
         let mut block = Block::Patterns;
         for line in text.lines() {
@@ -178,11 +203,16 @@ impl Patterns {
                 vals.push(0);
             }
         }
-        if codes.is_empty() || codes.len() > MAX_PATTERN_LEN {
+        if codes.is_empty() || codes.len() > 64 {
             return false;
         }
         self.max_len = self.max_len.max(codes.len());
-        self.map.insert(pack(&codes), vals.into_boxed_slice());
+        self.changes.remove(codes.as_slice());
+        if codes.len() <= MAX_PATTERN_LEN {
+            self.map.insert(pack(&codes), vals.into_boxed_slice());
+        } else {
+            self.long.insert(codes.into_boxed_slice(), vals.into_boxed_slice());
+        }
         true
     }
 
@@ -224,17 +254,22 @@ impl Patterns {
         }
     }
 
+    /// Return the number of stored pattern keys.
     pub fn len(&self) -> usize {
-        self.map.len()
+        self.map.len() + self.long.len()
     }
 
+    /// Report whether any usable pattern keys are stored.
     pub fn is_empty(&self) -> bool {
-        self.map.is_empty()
+        self.map.is_empty() && self.long.is_empty()
     }
 
     /// Inter-letter values for a lowercase word: `out[i]` is the value *before* char `i`
     /// (`out.len() == word.len() + 1`). None if a char is outside the pattern alphabet.
     pub fn values(&self, word: &[char]) -> Option<Vec<u8>> {
+        if word.len() > MAX_WORD_CHARS {
+            return None;
+        }
         let mut codes = Vec::with_capacity(word.len() + 2);
         codes.push(1);
         for &c in word {
@@ -247,36 +282,61 @@ impl Patterns {
         codes.push(1);
         let mut vals = vec![0u8; codes.len() + 1];
         apply(&self.map, self.max_len, &codes, &mut vals);
+        for start in 0..codes.len() {
+            for len in MAX_PATTERN_LEN + 1..=self.max_len.min(codes.len() - start) {
+                if let Some(values) = self.long.get(&codes[start..start + len]) {
+                    for (j, &value) in values.iter().enumerate() {
+                        if let Some(slot) = vals.get_mut(start + j) {
+                            *slot = (*slot).max(value);
+                        }
+                    }
+                }
+            }
+        }
         // Padded position p sits before padded char p; word char i is padded char i + 1.
         vals.get(1..codes.len()).map(<[u8]>::to_vec)
     }
 
     /// Break points (char indices, a hyphen goes before that char) of a lowercase word.
     pub fn points(&self, word: &[char]) -> Option<Vec<usize>> {
-        let v = self.values(word)?;
-        Some((1..word.len()).filter(|&i| v.get(i).is_some_and(|x| x % 2 == 1)).collect())
+        if self.changes.is_empty() {
+            let v = self.values(word)?;
+            return Some((1..word.len()).filter(|&i| v.get(i).is_some_and(|x| x % 2 == 1)).collect());
+        }
+        // A point-only consumer cannot render inserted letters. Leave those words
+        // unbroken rather than returning a misspelled division such as as-szony.
+        self.opportunities(word).map(|p| p.into_iter().filter(|p| p.suffix.is_empty()).map(|p| p.at).collect())
     }
 
     /// The patterns in TeX notation (sorted by letters), e.g. for writing a pattern file.
     pub fn to_tex(&self) -> Vec<String> {
+        // Plain TeX cannot express insertions. Never export them as misspelled breaks.
+        if self.has_nonstandard() {
+            log::warn!("nonstandard patterns cannot be exported as plain TeX");
+            return Vec::new();
+        }
         let mut rev: Vec<(u8, char)> =
             (0u8..128).filter(|&c| self.alpha.ascii[c as usize] != 0).map(|c| (self.alpha.ascii[c as usize], c as char)).collect();
         rev.extend(self.alpha.other.iter().map(|&(c, k)| (k, c)));
         let ch = |k: u8| rev.iter().find(|x| x.0 == k).map_or('?', |x| x.1);
-        let mut out: Vec<(String, String)> = self
-            .map
-            .iter()
-            .map(|(&key, vals)| {
-                let n = ((key >> 120) as usize).min(MAX_PATTERN_LEN);
-                let letters: Vec<char> = (0..n).map(|i| ch(((key >> (6 * (n - 1 - i))) & 63) as u8)).collect();
+        let packed = self.map.iter().map(|(&key, vals)| {
+            let n = ((key >> 120) as usize).min(MAX_PATTERN_LEN);
+            let codes: Vec<u8> = (0..n).map(|i| ((key >> (6 * (n - 1 - i))) & 63) as u8).collect();
+            (codes, vals.as_ref())
+        });
+        let long = self.long.iter().map(|(codes, vals)| (codes.to_vec(), vals.as_ref()));
+        let mut out: Vec<(String, String)> = packed
+            .chain(long)
+            .map(|(codes, vals)| {
+                let letters: Vec<char> = codes.into_iter().map(ch).collect();
                 let mut s = String::new();
-                for (i, l) in letters.iter().enumerate() {
+                for (i, &letter) in letters.iter().enumerate() {
                     if let Some(&v) = vals.get(i).filter(|v| **v > 0) {
                         s.push(char::from(b'0' + v.min(9)));
                     }
-                    s.push(*l);
+                    s.push(letter);
                 }
-                if let Some(&v) = vals.get(n).filter(|v| **v > 0) {
+                if let Some(&v) = vals.get(letters.len()).filter(|v| **v > 0) {
                     s.push(char::from(b'0' + v.min(9)));
                 }
                 (letters.into_iter().collect(), s)

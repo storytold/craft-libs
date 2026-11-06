@@ -720,6 +720,43 @@ impl AffixDict {
         Some(Info { pos, marks, unmodified: an.sfx.is_none(), force, stem: an.stem, words, tail })
     }
 
+    /// Whether a reached terminal part can supply the rule's required flag. No
+    /// analysis-count cap can hide a later match; the shared work budget bounds scanning.
+    pub(super) fn rule_final_has_flag(&self, part: &str, excluded: Excluded, flag: u16, work: &mut usize) -> bool {
+        let excluded = excluded.without_keep();
+        if *work >= MAX_WORK || self.is_forbidden(part) {
+            return false;
+        }
+        if self.stem_lookup(part).map(|(stem, set)| self.rule_sets.get(&stem).map_or(set, |&id| self.set(id))).is_some_and(|set| {
+            has(set, flag) && !excluded.hits(set) && !self.need_affix.is_some_and(|f| has(set, f)) && !self.forbidden.is_some_and(|f| has(set, f))
+        }) {
+            return true;
+        }
+        let mut derived = excluded;
+        for slot in &mut derived.0 {
+            let shared_suggestion_exclusion = excluded.suggesting() && (*slot == self.no_suggest || *slot == self.substandard);
+            if *slot == self.forbidden && !shared_suggestion_exclusion {
+                *slot = None;
+            }
+        }
+        derived = derived.allowing_forbidden();
+        let mut found = false;
+        let mut emit = |an: Analysis<'_>| {
+            if found
+                || !has(an.set, flag)
+                || (an.sfx.is_none() && excluded.hits(an.set))
+                || an.sfx.is_some_and(|r| self.cont_holds(r, self.only_in_compound) || excluded.hits(self.set(r.cont)))
+            {
+                return;
+            }
+            found = true;
+        };
+        // Prefixes cannot license this terminal rule. Do not spend its shared
+        // budget on analyses that would be discarded before checking the flag.
+        self.suffix_analyses(part, None, derived, work, &mut emit);
+        found
+    }
+
     /// Every way `p` is a stem, or a stem with a prefix, one or two suffixes, or a prefix and a
     /// suffix, as a compound part may be (`ONLYINCOMPOUND` affixes and stems included).
     fn analyses<'a>(&'a self, p: &str, excluded: Excluded, work: &mut usize, emit: &mut impl FnMut(Analysis<'a>)) {
@@ -772,6 +809,10 @@ impl AffixDict {
             let (Some(base), Some(add)) = (p.get(..b), p.get(b..)) else { continue };
             let Some(groups) = self.sfx_index.get(add) else { continue };
             for g in groups {
+                *work += 1;
+                if *work > MAX_WORK {
+                    return;
+                }
                 root.clear();
                 root.push_str(base);
                 root.push_str(&g.strip);
@@ -833,6 +874,10 @@ impl AffixDict {
             let (Some(base), Some(add)) = (form.get(..b), form.get(b..)) else { continue };
             let Some(groups) = self.sfx_index.get(add) else { continue };
             for g in groups.iter().filter(|g| !g.cont_rules.is_empty()) {
+                *work += 1;
+                if *work > MAX_WORK {
+                    return;
+                }
                 root.clear();
                 root.push_str(base);
                 root.push_str(&g.strip);
@@ -849,9 +894,14 @@ impl AffixDict {
                         {
                             continue;
                         }
-                        for &outer in outers.iter().filter(|o| self.cont_holds(r, Some(o.flag))) {
+                        for &outer in outers {
+                            if *work >= MAX_WORK {
+                                return;
+                            }
                             *work += 1;
-                            emit(Analysis { stem, set, pfx: None, sfx: Some(outer), inner: Some(r) });
+                            if self.cont_holds(r, Some(outer.flag)) {
+                                emit(Analysis { stem, set, pfx: None, sfx: Some(outer), inner: Some(r) });
+                            }
                         }
                     }
                 }
@@ -872,7 +922,10 @@ impl AffixDict {
         let main = found.filter(|_| apart.is_none());
         let each = apart.into_iter().flat_map(move |(stem, h)| h.iter().map(move |&id| (stem, self.set(id))));
         let only = found.and_then(|(stem, _)| self.cpd_sets.get(&stem).map(|&c| (stem, self.set(c))));
-        main.into_iter().chain(each).chain(only).filter(move |(_, set)| !excluded.hits(set) && !self.forbidden.is_some_and(|f| has(set, f)))
+        main.into_iter()
+            .chain(each)
+            .chain(only)
+            .filter(move |(_, set)| !excluded.hits(set) && (excluded.forbidden_allowed() || !self.forbidden.is_some_and(|f| has(set, f))))
     }
 
     /// May a part with `info` start at char `start`, after the last part of `s.path`
@@ -1989,4 +2042,90 @@ mod tests {
             listed: "fahr rad verkehr fahrrad fahrverkehr fahrradverkehr",
         },
     ];
+}
+
+#[cfg(test)]
+mod terminal_rule_review_tests {
+    use super::*;
+    /// A tiny suffix chain supplies both matching and nonmatching outer candidates.
+    fn suffix_budget_fixture() -> AffixDict {
+        AffixDict::from_hunspell(
+            "SET UTF-8\nFLAG num\nSFX 1 Y 1\nSFX 1 0 s/2 .\nSFX 2 Y 1\nSFX 2 0 t .\nSFX 3 Y 1\nSFX 3 0 t .\n",
+            "2\nroot/1\nother/3\n",
+            &[],
+        )
+        .unwrap()
+    }
+
+    /// Nonmatching outer candidates still consume the shared work budget.
+    #[test]
+    fn inner_suffix_comparisons_charge_nonmatching_outer_rules() {
+        let dict = suffix_budget_fixture();
+        let flag = dict.stem_lookup("other").unwrap().1[0];
+        let outer = dict.suffixes.iter().find(|r| r.flag == flag).unwrap();
+        let outers = vec![outer; 32];
+        let (mut work, mut emitted) = (0, 0);
+        dict.inner_analyses("roots", &outers, Excluded::default(), &mut work, &mut |_| emitted += 1);
+        assert_eq!(emitted, 0);
+        assert_eq!(work, outers.len() + 2);
+    }
+
+    /// Matching candidates stop at the budget before any additional result is emitted.
+    #[test]
+    fn inner_suffix_comparisons_stop_before_over_budget_emissions() {
+        let dict = suffix_budget_fixture();
+        let inner = dict.suffixes.iter().find(|r| !dict.set(r.cont).is_empty()).unwrap();
+        let outer = dict.suffixes.iter().find(|r| dict.cont_holds(inner, Some(r.flag))).unwrap();
+        let outers = vec![outer; 32];
+        let (mut work, mut emitted) = (MAX_WORK - 3, 0);
+        dict.inner_analyses("roots", &outers, Excluded::default(), &mut work, &mut |_| emitted += 1);
+        assert_eq!(work, MAX_WORK);
+        assert_eq!(emitted, 1);
+    }
+
+    /// Regression: bare terminal homonyms use merged rule flags.
+    #[test]
+    fn bare_terminal_homonyms_use_merged_rule_flags() {
+        let aff = "SET UTF-8\nNEEDAFFIX N\nCOMPOUNDMIN 1\nCOMPOUNDRULE 1\nCOMPOUNDRULE AB\n";
+        let dict = AffixDict::from_hunspell(aff, "3\nx/A\ny/BN\ny/C\n", &[]).unwrap();
+        assert!(dict.check("xy"));
+        let only_needs_affix = AffixDict::from_hunspell(aff, "2\nx/A\ny/BN\n", &[]).unwrap();
+        assert!(!only_needs_affix.check("xy"));
+    }
+    /// Regression: bare terminal match leaves work for later rule flags.
+    #[test]
+    fn bare_terminal_match_leaves_work_for_later_rule_flags() {
+        let mut aff = String::from("SET UTF-8\nFLAG num\nCOMPOUNDMIN 1\nCOMPOUNDRULE 2\nCOMPOUNDRULE (1)(2)(4)\nCOMPOUNDRULE (1)(3)\nSFX 9 Y 100\n");
+        for _ in 0..100 {
+            aff.push_str("SFX 9 0 s .\n");
+        }
+        let dict = AffixDict::from_hunspell(&aff, "3\nx/1\nys/2,3\ny/9\n", &[]).unwrap();
+        // The reader interns written flag names; query its actual IDs.
+        let (_, flags) = dict.stem_lookup("ys").unwrap();
+        assert_eq!(flags.len(), 2);
+        let mut work = MAX_WORK - 1;
+        for &flag in flags {
+            assert!(dict.rule_final_has_flag("ys", Excluded::default(), flag, &mut work));
+            assert_eq!(work, MAX_WORK - 1);
+        }
+    }
+
+    /// Regression: terminal flag queries do not spend budget on prefixes.
+    #[test]
+    fn terminal_flag_queries_do_not_spend_budget_on_prefixes() {
+        let count = 100;
+        let mut aff = format!("SET UTF-8\nFLAG num\nPFX 9 Y {count}\n");
+        for _ in 0..count {
+            aff.push_str("PFX 9 0 p .\n");
+        }
+        aff.push_str("SFX 10 Y 1\nSFX 10 0 s .\n");
+        let dict = AffixDict::from_hunspell(&aff, "2\nroot/9,10,2\npword/3\n", &[]).unwrap();
+        // Source keys are interned; use IDs resolved from stems carrying each key.
+        let other_flag = dict.stem_lookup("pword").unwrap().1[0];
+        let terminal_flag = dict.stem_lookup("root").unwrap().1[0];
+        let mut work = MAX_WORK - 10;
+        assert!(!dict.rule_final_has_flag("proots", Excluded::default(), other_flag, &mut work));
+        assert!(work < MAX_WORK, "irrelevant prefixes must not consume the remaining work");
+        assert!(dict.rule_final_has_flag("roots", Excluded::default(), terminal_flag, &mut work));
+    }
 }
