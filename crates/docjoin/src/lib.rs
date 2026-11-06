@@ -868,6 +868,13 @@ pub fn check(cfg: &Config, base: &[File], head: &[File]) -> Vec<String> {
             errors.push(format!("{readme}: was deleted; it keeps the folder started, put it back"));
         }
     }
+    // A log folder empties at every fold; its README keeps it started (see `check_doc`).
+    for log in cfg.logs {
+        let readme = format!("{}/README.md", log.dir);
+        if !head_paths.contains(readme.as_str()) {
+            errors.push(format!("{readme}: missing; every log folder keeps a README so a fold can't empty it"));
+        }
+    }
     for dir in cfg.tables.iter().map(|t| t.dir).collect::<BTreeSet<_>>() {
         for f in in_dir(base, dir).into_iter().filter(|f| !head_paths.contains(f.path.as_str())) {
             errors.push(format!("{}: was deleted; items are never deleted, set `status: closed` instead", f.path));

@@ -631,3 +631,12 @@ fn check_guards_a_table_docs_status_line() {
     set(&mut moved, "docs/gaps.md", |t| t.replace("2026-11-06", "2026-11-08"));
     has(&check(&SCFG, &fold, &moved), "**Last updated:** was edited by hand");
 }
+
+#[test]
+fn a_log_folder_needs_its_readme() {
+    let mut base = docs();
+    base.retain(|f| f.path != "docs/progress.d/README.md");
+    let head = base.clone();
+    let errors = check(&CFG, &base, &head);
+    assert!(errors.iter().any(|e| e.contains("docs/progress.d/README.md: missing")), "{errors:?}");
+}

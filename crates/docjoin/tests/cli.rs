@@ -53,6 +53,7 @@ fn check_then_fold_in_a_real_repo() {
     write(root, "ROADMAP.md", "# R\n\n> **Last updated:** 2026-01-01 · **Change:** minor\n\n## Progress log\n\n- 2026-01-01: start\n");
     write(root, "docs/gaps.md", "## Ranked\n\n| # | Gap |\n|---|---|\n| 1 | One |\n");
     write(root, "docs/gaps.d/1-one.md", "---\ngap: One\n---\n");
+    write(root, "docs/progress.d/README.md", "how\n");
     git(root, &["add", "-A"]);
     git(root, &["commit", "-q", "-m", "base"]);
     git(root, &["checkout", "-q", "-b", "pr"]);
@@ -122,6 +123,7 @@ fn symlinks_are_skipped() {
     let root = dir.as_path();
     write(root, "ROADMAP.md", ROADMAP);
     write(root, "docs/gaps.md", "## Ranked\n\n| # | Gap |\n|---|---|\n");
+    write(root, "docs/progress.d/README.md", "how\n");
     write(root, "elsewhere.md", "- from a link\n");
     std::fs::create_dir_all(root.join("docs/progress.d")).unwrap();
     std::os::unix::fs::symlink(root.join("elsewhere.md"), root.join("docs/progress.d/1-link.md")).unwrap();
