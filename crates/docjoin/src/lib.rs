@@ -76,7 +76,8 @@ pub struct Table {
     pub show_closed: bool,
     /// The fold also writes this doc's status line when the table's items change.
     pub status: bool,
-    /// Which table under the heading, from 0, when the section has more than one.
+    /// Which table under the heading, from 0, when it has more than one. The table is under the
+    /// heading itself, before any sub-heading.
     pub nth: usize,
 }
 
@@ -717,7 +718,7 @@ fn place(lines: &[&str], table: &Table) -> Result<(usize, usize), String> {
 /// [`place`], with rows of any width (a pull request's rows that `migrate` reports on). The
 /// table's header may head only one table in its section: a copy above it would take its place.
 fn locate(lines: &[&str], table: &Table) -> Result<(usize, usize, usize), String> {
-    let (s, e) = section(lines, table.heading)?;
+    let (s, e) = own_section(lines, table.heading)?;
     let all = tables_in(lines, s, e);
     let want: Vec<&str> = table.columns.iter().map(|(h, _)| *h).collect();
     let same: Vec<usize> = all.iter().map(|t| t.0).filter(|h| lines.get(*h).is_some_and(|l| row_cells(l) == want)).collect();
@@ -739,9 +740,16 @@ fn locate(lines: &[&str], table: &Table) -> Result<(usize, usize, usize), String
     Ok((h, first, end))
 }
 
-/// How many tables the section of `table` holds.
+/// The lines under a table's heading itself, before any sub-heading: a table under `## Notes` of
+/// a `# Parity` section isn't one of the section's own.
+fn own_section(lines: &[&str], heading: &str) -> Result<(usize, usize), String> {
+    let (s, e) = section(lines, heading)?;
+    Ok((s, (s..e).find(|&i| lines.get(i).is_some_and(|l| heading_level(l).is_some())).unwrap_or(e)))
+}
+
+/// How many tables the heading of `table` holds.
 fn table_count(lines: &[&str], table: &Table) -> Option<usize> {
-    section(lines, table.heading).ok().map(|(s, e)| tables_in(lines, s, e).len())
+    own_section(lines, table.heading).ok().map(|(s, e)| tables_in(lines, s, e).len())
 }
 
 fn table_name(table: &Table) -> String {

@@ -1025,3 +1025,15 @@ fn an_empty_table_folder_doesnt_exempt_a_started_doc() {
     set(&mut head, "R.md", |t| t.replace("2026-11-01", "2026-11-02"));
     has(&check(&cfg, &base, &head), "R.md: the status line's **Last updated:** was edited by hand");
 }
+
+/// A table added under a sub-heading of a level-1 section is outside that section's own tables.
+#[test]
+fn a_table_under_a_sub_heading_is_not_counted() {
+    const T: &[Table] = &[Table { dir: "t", doc: "R.md", heading: "# Parity", columns: &[("A", "a")], ..Table::DEFAULT }];
+    let cfg = Config { logs: &[], tables: T };
+    let doc = "# Parity\n\n| A |\n|---|\n| x |\n\n## Notes\n\nText.\n";
+    let base = vec![f("R.md", doc, 0), f("t/1-x.md", "---\na: x\n---\n", 0)];
+    let mut head = base.clone();
+    set(&mut head, "R.md", |t| format!("{t}\n| B |\n|---|\n| y |\n"));
+    assert_eq!(check(&cfg, &base, &head), Vec::<String>::new());
+}
