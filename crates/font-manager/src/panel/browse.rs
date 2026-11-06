@@ -147,13 +147,32 @@ impl FontsPanel {
         ui.add_space(12.0);
         widgets::label(ui, s, tl!("Script"), s.p.faint);
         let any = tl!("Any script");
-        let selected = self.query.script.as_deref().and_then(|id| script_name(&index, id)).unwrap_or(any).to_owned();
+        let selected = self.query.script.as_deref().map_or_else(|| any.to_owned(), |id| script_label(&index, id));
+        let (common, more) = script_menu(&index, c.search.scripts(), &self.ui_script());
+        let more_id = ui.make_persistent_id("craft-fonts.script.more");
         let query = &mut self.query;
-        widgets::select(ui, "craft-fonts.script", tl!("Script"), &selected, width, |ui| {
-            ui.selectable_value(&mut query.script, None, any);
-            for &i in c.search.scripts() {
-                if let Some(script) = index.scripts().get(i) {
-                    ui.selectable_value(&mut query.script, Some(script.id.clone()), &script.name);
+        let in_more = query.script.as_ref().is_some_and(|id| more.iter().any(|m| m == id));
+        let name_of = |id: &str| script_label(&index, id);
+        widgets::select_closing(ui, "craft-fonts.script", tl!("Script"), &selected, width, egui::PopupCloseBehavior::CloseOnClickOutside, |ui| {
+            let mut pick = |ui: &mut Ui, value: Option<String>, label: &str| {
+                if ui.selectable_label(query.script == value, label).clicked() {
+                    query.script = value;
+                    ui.close();
+                }
+            };
+            pick(ui, None, any);
+            for id in &common {
+                pick(ui, Some(id.clone()), &name_of(id));
+            }
+            if !more.is_empty() {
+                let expanded = in_more || ui.data_mut(|d| d.get_temp::<bool>(more_id)).unwrap_or(false);
+                if !expanded && ui.selectable_label(false, tl!("Additional scripts…")).clicked() {
+                    ui.data_mut(|d| d.insert_temp(more_id, true));
+                }
+                if expanded {
+                    for id in &more {
+                        pick(ui, Some(id.clone()), &name_of(id));
+                    }
                 }
             }
         });
@@ -193,6 +212,26 @@ impl FontsPanel {
                 self.clear_filters();
             }
         }
+    }
+
+    /// The script of the interface language.
+    fn ui_script(&self) -> String {
+        let tag = self.ui_tag.clone().unwrap_or_else(|| i18n::I18N.code(i18n::current()).to_owned());
+        locale_script(&tag)
+    }
+
+    /// Sets Language and Script to the interface language's, once, when the catalogue is there.
+    pub(crate) fn apply_default_filters(&mut self) {
+        if self.filters_defaulted {
+            return;
+        }
+        let Ok(c) = &self.catalogue else { return };
+        self.filters_defaulted = true;
+        let tag = self.ui_tag.clone().unwrap_or_else(|| i18n::I18N.code(i18n::current()).to_owned());
+        let (language, script) = default_filters(&tag, |id| c.index.languages().iter().any(|l| l.id == id));
+        self.query.language = c.index.languages().iter().position(|l| l.id == language);
+        self.default_language = self.query.language;
+        self.query.script = c.index.scripts().iter().any(|s| s.id == script).then_some(script);
     }
 
     fn clear_filters(&mut self) {
@@ -671,5 +710,111 @@ impl FontsPanel {
         let x = if craft_i18n::base_direction(text) == Some(craft_i18n::Direction::Rtl) { rect.right() - galley.size().x } else { rect.left() };
         let y = rect.center().y - galley.size().y / 2.0;
         ui.painter().with_clip_rect(rect.expand2(vec2(0.0, 6.0))).galley(pos2(x, y), galley, color);
+    }
+}
+
+/// The scripts the Script menu lists before "Additional scripts", in this order.
+const COMMON_SCRIPTS: [&str; 11] = ["Latn", "Cyrl", "Grek", "Arab", "Hebr", "Deva", "Hans", "Hant", "Jpan", "Kore", "Thai"];
+
+/// The ISO 15924 script a locale tag is written in: an explicit script subtag, else by language
+/// (and region for Chinese), else Latin.
+pub(crate) fn locale_script(tag: &str) -> String {
+    let tag = tag.split(['.', '@']).next().unwrap_or("");
+    let parts: Vec<String> = tag.split(['-', '_']).map(str::to_lowercase).collect();
+    let primary = parts.first().map_or("", String::as_str);
+    if let Some(s) = parts.iter().skip(1).find(|p| p.len() == 4 && p.chars().all(|c| c.is_ascii_alphabetic())) {
+        let mut s = s.clone();
+        s[..1].make_ascii_uppercase();
+        return s;
+    }
+    let region = parts.iter().skip(1).find(|p| p.len() == 2).map_or("", String::as_str);
+    match primary {
+        "ja" => "Jpan",
+        "ko" => "Kore",
+        "zh" if matches!(region, "tw" | "hk" | "mo") => "Hant",
+        "zh" => "Hans",
+        "ru" | "uk" | "bg" | "sr" | "be" | "mk" | "kk" => "Cyrl",
+        "el" => "Grek",
+        "ar" | "fa" | "ur" => "Arab",
+        "he" => "Hebr",
+        "hi" | "mr" | "ne" => "Deva",
+        "th" => "Thai",
+        _ => "Latn",
+    }
+    .to_owned()
+}
+
+/// The (language ID, script ID) the filters start at for a locale tag: `{language}_{Script}` when
+/// the index has it (`has_language`), else English and Latin.
+pub(crate) fn default_filters(tag: &str, has_language: impl Fn(&str) -> bool) -> (String, String) {
+    let script = locale_script(tag);
+    let primary = tag.split(['.', '@', '-', '_']).next().unwrap_or("").to_lowercase();
+    let id = format!("{primary}_{script}");
+    if has_language(&id) { (id, script) } else { ("en_Latn".to_owned(), "Latn".to_owned()) }
+}
+
+/// A script's name in its main language, when CLDR has one in that script (never Latin).
+pub(crate) fn script_autonym(id: &str) -> Option<&'static str> {
+    crate::script_autonyms::SCRIPT_AUTONYMS.binary_search_by_key(&id, |(i, _)| i).ok().map(|n| crate::script_autonyms::SCRIPT_AUTONYMS[n].1)
+}
+
+/// The Script menu text: `autonym · name`, or the name alone when there is no autonym or it is the name.
+pub(crate) fn script_label(index: &Index, id: &str) -> String {
+    let name = script_name(index, id).unwrap_or(id);
+    match script_autonym(id) {
+        Some(autonym) if autonym != name => format!("{autonym} · {name}"),
+        _ => name.to_owned(),
+    }
+}
+
+/// The Script menu: the scripts listed up front (the interface language's first when it is not a
+/// common one), then the rest by name. `by_name` is [`Search::scripts`].
+pub(crate) fn script_menu(index: &Index, by_name: &[usize], ui_script: &str) -> (Vec<String>, Vec<String>) {
+    let has: Vec<&str> = index.scripts().iter().map(|s| s.id.as_str()).collect();
+    let mut common = Vec::new();
+    if !COMMON_SCRIPTS.contains(&ui_script) && has.contains(&ui_script) {
+        common.push(ui_script.to_owned());
+    }
+    common.extend(COMMON_SCRIPTS.iter().filter(|s| has.contains(s)).map(|s| (*s).to_owned()));
+    let more = by_name.iter().filter_map(|&i| index.scripts().get(i)).filter(|s| !common.contains(&s.id)).map(|s| s.id.clone()).collect();
+    (common, more)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn filters_default_to_the_interface_language() {
+        let index = ["en_Latn", "ja_Jpan", "zh_Hant", "zh_Hans"];
+        let has = |id: &str| index.contains(&id);
+        assert_eq!(default_filters("en", has), ("en_Latn".into(), "Latn".into()));
+        assert_eq!(default_filters("ja-JP", has), ("ja_Jpan".into(), "Jpan".into()));
+        assert_eq!(default_filters("zh-Hant", has), ("zh_Hant".into(), "Hant".into()));
+        assert_eq!(default_filters("zh_TW", has), ("zh_Hant".into(), "Hant".into()));
+        assert_eq!(default_filters("zh-CN", has), ("zh_Hans".into(), "Hans".into()));
+        assert_eq!(default_filters("zh-Hans-SG", has), ("zh_Hans".into(), "Hans".into()));
+        assert_eq!(default_filters("xx", has), ("en_Latn".into(), "Latn".into()));
+        assert_eq!(locale_script("sr-Latn"), "Latn");
+        assert_eq!(locale_script("ru"), "Cyrl");
+        assert_eq!(locale_script("hi_IN.UTF-8"), "Deva");
+    }
+
+    #[test]
+    fn script_menu_lists_common_scripts_first() {
+        let index = crate::index::bundled().expect("bundled index");
+        let search = crate::filter::Search::new(&index);
+        let (common, more) = script_menu(&index, search.scripts(), "Latn");
+        assert_eq!(common.first().map(String::as_str), Some("Latn"));
+        assert!(common.iter().all(|s| COMMON_SCRIPTS.contains(&s.as_str())));
+        assert!(more.iter().all(|s| !COMMON_SCRIPTS.contains(&s.as_str())));
+        assert!(more.iter().any(|s| s == "Hira"));
+        let (common, more) = script_menu(&index, search.scripts(), "Hira");
+        assert_eq!(common.first().map(String::as_str), Some("Hira"));
+        assert!(!more.iter().any(|s| s == "Hira"));
+        assert_eq!(script_autonym("Cyrl"), Some("кириллица"));
+        assert_eq!(script_autonym("Latn"), None);
+        assert_eq!(script_label(&index, "Cyrl"), "кириллица · Cyrillic");
+        assert_eq!(script_label(&index, "Latn"), "Latin");
     }
 }

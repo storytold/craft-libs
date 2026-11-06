@@ -167,9 +167,16 @@ pub struct FontsPanel {
     pub(crate) source_url: String,
     pub(crate) source_message: Option<(bool, String)>,
     /// Families per category (all first) and per install state, for the other filters as set.
-    pub(crate) category_counts: [usize; 6],
+    pub(crate) category_counts: [usize; 7],
     pub(crate) show_counts: [usize; 3],
     pub(crate) language_text: String,
+    /// The host's interface language tag, as passed to [`FontsPanel::set_language`].
+    pub(crate) ui_tag: Option<String>,
+    /// The language filter set from the interface language. Rows keep their own samples under
+    /// it; only a language the user picks shows its sample text instead.
+    pub(crate) default_language: Option<usize>,
+    /// The Language and Script filters have been set to the interface language's.
+    pub(crate) filters_defaulted: bool,
     pub(crate) installed: Vec<InstalledFamily>,
     /// Installed faces by lower-case family name, every source together.
     pub(crate) installed_by_name: HashMap<String, Vec<FaceInfo>>,
@@ -220,6 +227,7 @@ pub(crate) fn category_name(c: Category) -> &'static str {
         Category::Serif => tl!("Serif"),
         Category::Display => tl!("Display"),
         Category::Handwriting => tl!("Handwriting"),
+        Category::Script => tl!("Formal script"),
         Category::Monospace => tl!("Monospace"),
     }
 }
@@ -280,9 +288,12 @@ impl FontsPanel {
             sources_job: None,
             source_url: String::new(),
             source_message: None,
-            category_counts: [0; 6],
+            category_counts: [0; 7],
             show_counts: [0; 3],
             language_text: String::new(),
+            ui_tag: None,
+            default_language: None,
+            filters_defaulted: false,
             installed: Vec::new(),
             installed_by_name: HashMap::new(),
             installed_generation: None,
@@ -420,6 +431,7 @@ impl FontsPanel {
     /// Shows the interface in `language` (a tag such as `de` or `pt-BR`), the host's interface
     /// language, when its catalog is embedded; English otherwise.
     pub fn set_language(&mut self, language: &str) {
+        self.ui_tag = Some(language.to_owned());
         i18n::set_current(I18N.match_tag(language).unwrap_or(craft_i18n::Lang::EN));
     }
 
@@ -465,6 +477,7 @@ impl FontsPanel {
         }
         self.focused = focused;
         self.refresh_installed();
+        self.apply_default_filters();
         self.refresh_results();
         self.keys(&ctx);
 
@@ -561,7 +574,7 @@ impl FontsPanel {
             Show::NotInstalled => !installed(i),
         };
         let any_category = Query { category: None, ..self.query.clone() };
-        let mut by_category = [0usize; 6];
+        let mut by_category = [0usize; 7];
         let mut by_state = [0usize; 3];
         let mut by_source: Vec<usize> = vec![0; c.index.sources().len()];
         for i in c.search.families(&c.index, &any_category) {
@@ -626,7 +639,8 @@ impl FontsPanel {
             Preset::Alphabet => samples::ALPHABET.to_owned(),
             Preset::Numerals => samples::NUMERALS.to_owned(),
             Preset::Sentence => {
-                let language = self.catalogue.as_ref().ok().zip(self.query.language).and_then(|(c, l)| c.index.languages().get(l));
+                let chosen = self.query.language.filter(|l| Some(*l) != self.default_language);
+                let language = self.catalogue.as_ref().ok().zip(chosen).and_then(|(c, l)| c.index.languages().get(l));
                 language.and_then(|l| samples::for_language(&l.id)).unwrap_or_else(|| samples::for_scripts(scripts)).to_owned()
             }
         }
