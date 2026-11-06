@@ -1,0 +1,12 @@
+id = "org.example.t"
+name = "T"
+version = "1.0.0"
+
+[permissions]
+required = ["fs.picked"]
+
+[[contributions]]
+kind = "format"
+id = "f"
+extensions = ["xyz"]
+handler = "f"

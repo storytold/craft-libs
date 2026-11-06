@@ -1,0 +1,25 @@
+[package]
+name = "craft-command-derive"
+description = "The #[command] attribute macro for craft-command: a command row, its schema and its run wrapper from one function."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lib]
+proc-macro = true
+
+[dependencies]
+proc-macro2 = "1"
+quote = "1"
+syn = { version = "2", features = ["full"] }
+
+[dev-dependencies]
+craft-command = { workspace = true }
+schemars = "1"
+serde.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true
