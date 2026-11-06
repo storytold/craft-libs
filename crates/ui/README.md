@@ -52,6 +52,8 @@ as `from_ui` and `from_visuals` supply the compatible default.
 
 ## SVG catalogs
 
+For common Insert Shapes choices and previews, see [the shared shape gallery](docs/shape-gallery.md).
+
 ```rust
 use std::sync::OnceLock;
 use craft_ui::icons::{SvgIconSet, SvgStyle};
