@@ -1052,3 +1052,28 @@ fn an_empty_header_is_one_space() {
     files.extend(items);
     assert_eq!(join(&cfg, &files).unwrap().docs.get("R.md").unwrap(), doc);
 }
+
+#[test]
+fn a_fragment_cannot_hold_a_lone_cr_or_a_definition() {
+    let base = docs();
+    for body in ["- 2026-11-07: fixed\r```\n", "- 2026-11-07: a\n- [MS-ODRAW]: https://example.com\n", "- 2026-11-07: a\n[^9]: note\n"] {
+        let mut head = base.clone();
+        head.push(f("docs/progress.d/9-x.md", body, NOV6));
+        assert!(!check(&CFG, &base, &head).is_empty(), "{body:?}");
+    }
+    // A reference in an entry is fine; only a definition isn't.
+    let mut head = base.clone();
+    head.push(f("docs/progress.d/9-x.md", "- 2026-11-07: see [MS-ODRAW] for the format\r\n", NOV6));
+    assert_eq!(check(&CFG, &base, &head), Vec::<String>::new());
+}
+
+#[test]
+fn identical_fragments_dont_stall_the_fold() {
+    let mut base = docs();
+    for i in 1..=9 {
+        base.push(f(&format!("docs/progress.d/{i}-typo.md"), "- 2026-11-07: typo fixes\n", NOV6));
+    }
+    base.push(f("docs/progress.d/99-typos.md", &format!("{}- 2026-11-07: and one more\n", "- 2026-11-07: typo fixes\n".repeat(9)), NOV6));
+    let head = fold_of(&CFG, &base);
+    assert_eq!(check(&CFG, &zero(&base), &zero(&head)), Vec::<String>::new());
+}

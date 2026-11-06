@@ -188,6 +188,10 @@ fn fragment<'a>(f: &'a File) -> Result<Fragment<'a>, String> {
         .ok_or_else(|| format!("{}: a fragment is `<issue>-<branch-slug>.md`, lower case, digits and `-`", f.path))?;
     let p = front::parse(&f.text, &["kind"]).map_err(|e| format!("{}: {e}", f.path))?;
     let kind = Kind::parse(p.get("kind")).map_err(|e| format!("{}: {e}", f.path))?;
+    // CommonMark ends a line at a lone CR too; the guards below read `\n` lines only.
+    if p.body.replace("\r\n", "").contains('\r') {
+        return Err(format!("{}: has a carriage return that isn't part of a line end", f.path));
+    }
     let lines: Vec<&str> = p.body.lines().map(str::trim_end).filter(|l| !l.trim().is_empty()).collect();
     if lines.is_empty() {
         return Err(format!("{}: is empty", f.path));
@@ -202,6 +206,16 @@ fn fragment<'a>(f: &'a File) -> Result<Fragment<'a>, String> {
         t.starts_with("```") || t.starts_with("~~~") || l.contains("<!--")
     }) {
         return Err(format!("{}: {bad:?} opens a code fence or an HTML comment; a fragment is only its log entry", f.path));
+    }
+    // A link or footnote definition would relink other entries' `[label]` text.
+    if let Some(bad) = lines.iter().find(|l| {
+        let t = l.trim_start();
+        let t = t.strip_prefix(['-', '*', '+']).map_or(t, str::trim_start);
+        let t = t.trim_start_matches(|c: char| c.is_ascii_digit());
+        let t = t.strip_prefix(['.', ')']).map_or(t, str::trim_start);
+        t.starts_with('[') && t.find("]:").is_some()
+    }) {
+        return Err(format!("{}: {bad:?} is a link or footnote definition; a fragment is only its log entry", f.path));
     }
     // So would an HTML block (`<pre>` runs to its close tag, `<div>` to the next blank line).
     if let Some(bad) = lines.iter().find(|l| {
@@ -880,12 +894,19 @@ fn trimmed<'a>(lines: &[&'a str], range: (usize, usize)) -> Vec<&'a str> {
 }
 
 /// Whether `mid` is `blocks` one after another, each whole and in its own order, the blocks in any
-/// order. A search with backtracking (one block can start like another), bounded in steps.
+/// order. A search with backtracking (one block can start like another), bounded in steps; identical
+/// blocks are one choice with a count, so repeats can't blow the bound.
 fn is_blocks(mid: &[&str], blocks: &[&[&str]]) -> bool {
     if blocks.iter().map(|b| b.len()).sum::<usize>() != mid.len() {
         return false;
     }
-    let mut used = vec![false; blocks.len()];
+    let mut kinds: Vec<(&[&str], usize)> = Vec::new();
+    for b in blocks {
+        match kinds.iter_mut().find(|(k, _)| k == b) {
+            Some((_, n)) => *n += 1,
+            None => kinds.push((b, 1)),
+        }
+    }
     let mut chosen: Vec<usize> = Vec::new();
     let (mut pos, mut from) = (0, 0);
     for _ in 0..100_000 {
@@ -893,22 +914,22 @@ fn is_blocks(mid: &[&str], blocks: &[&[&str]]) -> bool {
             return true;
         }
         let rest = mid.get(pos..).unwrap_or_default();
-        let next = (from..blocks.len()).find(|&j| !used.get(j).copied().unwrap_or(true) && blocks.get(j).is_some_and(|b| rest.starts_with(b)));
+        let next = (from..kinds.len()).find(|&j| kinds.get(j).is_some_and(|(b, n)| *n > 0 && rest.starts_with(b)));
         match next {
             Some(j) => {
-                if let Some(u) = used.get_mut(j) {
-                    *u = true;
+                if let Some((b, n)) = kinds.get_mut(j) {
+                    *n -= 1;
+                    pos += b.len();
                 }
                 chosen.push(j);
-                pos += blocks.get(j).map_or(0, |b| b.len());
                 from = 0;
             }
             None => {
                 let Some(j) = chosen.pop() else { return false };
-                if let Some(u) = used.get_mut(j) {
-                    *u = false;
+                if let Some((b, n)) = kinds.get_mut(j) {
+                    *n += 1;
+                    pos -= b.len();
                 }
-                pos -= blocks.get(j).map_or(0, |b| b.len());
                 from = j + 1;
             }
         }
