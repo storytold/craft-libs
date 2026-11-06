@@ -321,6 +321,9 @@ products match its vertices (moving the points alone skewed barycentric coordina
 `restore_state` doesn't when the saved-state bound skipped the save; and a resolved JP2
 palette decodes to 8 bits whatever `/BitsPerComponent` the dictionary gives.
 
+`hayro-syntax` compiles `filter::ccitt_max_rows` and its unit tests only with the
+`images` feature, matching `filter::ccitt`.
+
 This remains the patched 0.7 backend. It retains the existing Bradford Lab conversion,
 floating component precision and codec versions, rather than claiming full 0.8
 equivalence. The independent color oracles, backend tests and facade contracts cover

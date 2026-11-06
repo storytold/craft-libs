@@ -176,13 +176,14 @@ const MAX_CCITT_PIXELS: u64 = 1 << 28;
 
 /// PdfCraft patch: the most rows of `columns` pixels, `row_bytes` bytes each once decoded, that fit
 /// both `limit` bytes and the pixel cap; at least one when one row fits.
+#[cfg(feature = "images")]
 pub(crate) fn ccitt_max_rows(columns: u32, row_bytes: u32, limit: usize) -> u32 {
     let by_pixels = MAX_CCITT_PIXELS / u64::from(columns.max(1));
     let by_bytes = u64::try_from(limit).unwrap_or(u64::MAX) / u64::from(row_bytes.max(1));
     u32::try_from(by_pixels.min(by_bytes)).unwrap_or(u32::MAX)
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "images"))]
 mod ccitt_tests {
     use super::ccitt_max_rows;
 

@@ -176,7 +176,7 @@
       "path": "src/filter/mod.rs",
       "source_sha256": "0af7145ab16b15b7a60c4b57efecb9bd5fd0cfdc9bb5f9388abb695386e63e49",
       "source_git_blob": "06bda29487d62c25dc39c1ee109091cb17e3867f",
-      "sha256": "727fd21fe968d0ce9de54ea0c50658af43658289f9b38b27fbc74596e48d0d4b"
+      "sha256": "a3bf1dbe731aca35808ec7f22f1d58bb5f0f4e3ce9087260d1e38800baf33bd8"
     },
     {
       "path": "src/filter/run_length.rs",
