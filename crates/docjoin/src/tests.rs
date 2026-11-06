@@ -1077,3 +1077,27 @@ fn identical_fragments_dont_stall_the_fold() {
     let head = fold_of(&CFG, &base);
     assert_eq!(check(&CFG, &zero(&base), &zero(&head)), Vec::<String>::new());
 }
+
+/// A blank line in a table log ends the table: rows under it no longer render as rows.
+#[test]
+fn a_hand_fold_cannot_split_a_table_log() {
+    let mut base = sdocs();
+    base.push(f("docs/gaps-log.d/1-x.md", "| 2026-11-05 | minor | z |", NOV5));
+    let fold = fold_of(&SCFG, &base);
+    assert_eq!(check(&SCFG, &zero(&base), &zero(&fold)), Vec::<String>::new());
+    let mut split = fold.clone();
+    set(&mut split, "docs/gaps.md", |t| t.replace("| 2026-11-05 | minor | z |\n", "| 2026-11-05 | minor | z |\n\n"));
+    has(&check(&SCFG, &zero(&base), &zero(&split)), "`## Revision history` was edited by hand");
+}
+
+#[test]
+fn migrate_notes_a_log_it_cannot_read() {
+    let main = fold_of(&CFG, &docs());
+    let pr = ROADMAP.replace("## Progress log\n\n", "## Progress\n\n- 2026-11-07: new\n");
+    let (out, notes) = migrate(&CFG, &main, &f("ROADMAP.md", ROADMAP, 0), &f("ROADMAP.md", &pr, 0), "9-x");
+    assert_eq!(out, Vec::<File>::new());
+    has(&notes, "ROADMAP.md has no `## Progress log` heading");
+    // An unreadable log the pull request left alone is no note.
+    let (out, notes) = migrate(&CFG, &main, &f("ROADMAP.md", &pr, 0), &f("ROADMAP.md", &pr, 0), "9-x");
+    assert_eq!((out, notes), (Vec::new(), Vec::<String>::new()));
+}

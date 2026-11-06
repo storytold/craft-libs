@@ -950,11 +950,15 @@ fn check_log(doc: &str, base: &[&str], head: &[&str], log: &Log, consumed: &[Fra
         }
         return;
     }
-    let at = log_insert(base, log).map_or(b.len(), |i| i.at.saturating_sub(bs.0).min(b.len()));
+    let insert = log_insert(base, log).ok();
+    let at = insert.as_ref().map_or(b.len(), |i| i.at.saturating_sub(bs.0).min(b.len()));
+    // A blank line among a table log's rows ends the table; the fold never puts one there.
+    let table = insert.as_ref().is_some_and(|i| i.width.is_some());
     let (pre, post) = b.split_at(at);
     let blocks: Vec<&[&str]> = consumed.iter().map(|f| f.lines.as_slice()).collect();
     let fits = h.len() >= pre.len() + post.len() && h.starts_with(pre) && h.ends_with(post) && {
-        let mid: Vec<&str> = h.get(pre.len()..h.len() - post.len()).unwrap_or_default().iter().copied().filter(|l| !l.trim().is_empty()).collect();
+        let mid: Vec<&str> =
+            h.get(pre.len()..h.len() - post.len()).unwrap_or_default().iter().copied().filter(|l| table || !l.trim().is_empty()).collect();
         is_blocks(&mid, &blocks)
     };
     if fits {
@@ -1519,8 +1523,15 @@ pub fn migrate<'a>(cfg: &Config, files: &[File], old: &'a File, pr: &'a File, na
     let mut notes = Vec::new();
     let (old_lines, pr_lines): (Vec<&'a str>, Vec<&'a str>) = (old.text.lines().collect(), pr.text.lines().collect());
     for log in cfg.logs.iter().filter(|l| l.doc == old.path) {
-        let (Ok((os, oe)), Ok((ps, pe))) = (section(&old_lines, log.heading), section(&pr_lines, log.heading)) else {
-            continue;
+        // A log that can't be read on either side is a note when the pull request changed the doc
+        // (its entries could be in the change), never a silent skip.
+        let ((os, oe), (ps, pe)) = match (section(&old_lines, log.heading), section(&pr_lines, log.heading)) {
+            (Ok(o), Ok(p)) => (o, p),
+            (Err(_), _) | (_, Err(_)) if old_lines == pr_lines => continue,
+            (Err(e), _) | (_, Err(e)) => {
+                notes.push(format!("{} {e}; move the pull request's edits to `{}` by hand", log.doc, log.heading));
+                continue;
+            }
         };
         let lines = |l: &[&'a str]| -> Vec<&'a str> { l.iter().map(|l| l.trim_end()).filter(|l| !l.is_empty()).collect() };
         let (before, after) = (lines(old_lines.get(os..oe).unwrap_or_default()), lines(pr_lines.get(ps..pe).unwrap_or_default()));

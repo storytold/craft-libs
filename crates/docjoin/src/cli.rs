@@ -141,13 +141,44 @@ fn at_rev(root: &Path, cfg: &Config, rev: &str) -> Result<Vec<File>, String> {
     Ok(out)
 }
 
+/// Writes `text` to `path` whole or not at all: into a file beside it, then renamed over it, so a
+/// failed write never leaves a doc cut short. A read-only file is refused, as a plain write would.
+fn write_file(root: &Path, path: &str, text: &str) -> Result<(), String> {
+    let full = root.join(path);
+    let err = |e: std::io::Error| format!("{path}: {e}");
+    if let Some(dir) = full.parent() {
+        std::fs::create_dir_all(dir).map_err(err)?;
+    }
+    if std::fs::metadata(&full).is_ok_and(|m| m.permissions().readonly()) {
+        return Err(format!("{path}: is read-only"));
+    }
+    let mut tmp = full.clone().into_os_string();
+    tmp.push(".docjoin-tmp");
+    let tmp = std::path::PathBuf::from(tmp);
+    let done = std::fs::write(&tmp, text).and_then(|()| std::fs::rename(&tmp, &full));
+    if done.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    done.map_err(err)
+}
+
 fn write_all(root: &Path, files: &[File]) -> Result<(), String> {
     for f in files {
-        let full = root.join(&f.path);
-        if let Some(dir) = full.parent() {
-            std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", f.path))?;
+        write_file(root, &f.path, &f.text)?;
+    }
+    Ok(())
+}
+
+/// Writes files that weren't there before, all or none: if one fails, those already written are
+/// removed again.
+fn write_new(root: &Path, files: &[File]) -> Result<(), String> {
+    for (i, f) in files.iter().enumerate() {
+        if let Err(e) = write_file(root, &f.path, &f.text) {
+            for done in files.iter().take(i) {
+                let _ = std::fs::remove_file(root.join(&done.path));
+            }
+            return Err(e);
         }
-        std::fs::write(&full, &f.text).map_err(|e| format!("{}: {e}", f.path))?;
     }
     Ok(())
 }
@@ -161,18 +192,31 @@ fn warn(warnings: &[String]) {
 fn fold(root: &Path, cfg: &Config, files: &[File]) -> Result<usize, String> {
     let joined = join(cfg, files, today()).map_err(|e| e.join("\n"))?;
     warn(&joined.warnings);
-    let changed: Vec<File> = joined
-        .docs
-        .iter()
-        .filter(|(p, t)| files.iter().find(|f| &f.path == *p).is_none_or(|f| &f.text != *t))
-        .map(|(p, t)| File { path: p.clone(), text: t.clone(), time: 0 })
-        .collect();
-    // Fragments first: if a doc write then fails, a rerun can't fold them in twice (git still has
-    // them; restore and rerun).
-    for path in &joined.consumed {
-        std::fs::remove_file(root.join(path)).map_err(|e| format!("{path}: {e}"))?;
+    // The docs that fold a fragment: those of the logs whose folder holds it.
+    let docs_of = |path: &str| -> Vec<&str> {
+        cfg.logs
+            .iter()
+            .filter(|l| path.strip_prefix(l.dir).and_then(|r| r.strip_prefix('/')).is_some_and(|r| !r.contains('/')))
+            .map(|l| l.doc)
+            .collect()
+    };
+    // A fragment is deleted once every doc it went into is written. If a doc write fails, the
+    // docs written before it have lost their fragments and the rest keep theirs: a rerun folds
+    // each once, and a fragment git doesn't have yet is never lost.
+    let mut written: Vec<&str> = Vec::new();
+    let mut deleted: Vec<&str> = Vec::new();
+    for (doc, text) in &joined.docs {
+        if files.iter().find(|f| &f.path == doc).is_none_or(|f| &f.text != text) {
+            write_file(root, doc, text)?;
+        }
+        written.push(doc);
+        for path in &joined.consumed {
+            if !deleted.contains(&path.as_str()) && docs_of(path).iter().all(|d| written.contains(d)) {
+                std::fs::remove_file(root.join(path)).map_err(|e| format!("{path}: {e}"))?;
+                deleted.push(path);
+            }
+        }
     }
-    write_all(root, &changed)?;
     Ok(joined.consumed.len())
 }
 
@@ -231,7 +275,8 @@ pub fn run(root: &Path, cfg: &Config, args: &[String]) -> Result<(), String> {
                 eprintln!("progress: skipped `{}` in {}: {} already has items", t.heading, t.doc, t.dir);
             }
             let (items, notes) = items_from_tables(&fresh, &files).map_err(|e| e.join("\n"))?;
-            write_all(root, &items)?;
+            // All of a table's items or none: one left behind would make the table look started.
+            write_new(root, &items)?;
             for n in &notes {
                 eprintln!("note: {n}");
             }
@@ -245,17 +290,27 @@ pub fn run(root: &Path, cfg: &Config, args: &[String]) -> Result<(), String> {
             }
             let files = working(root, cfg)?;
             let (old_files, pr_files) = (at_rev(root, cfg, old)?, at_rev(root, cfg, pr)?);
-            let mut written = 0;
+            let mut out: Vec<File> = Vec::new();
             for doc in old_files.iter().filter(|f| cfg.logs.iter().any(|l| l.doc == f.path) || cfg.tables.iter().any(|t| t.doc == f.path)) {
                 let Some(head) = pr_files.iter().find(|f| f.path == doc.path) else { continue };
-                let (out, notes) = migrate(cfg, &files, doc, head, name);
-                write_all(root, &out)?;
-                written += out.len();
+                let (files_out, notes) = migrate(cfg, &files, doc, head, name);
+                out.extend(files_out);
                 for n in notes {
                     eprintln!("note: {n}");
                 }
             }
-            eprintln!("progress: {written} file(s) written; restore the docs themselves to main's copy");
+            // A new fragment never replaces a different one of its name (another pull request's,
+            // or this one's edited since the last run). Item files are meant to be updated.
+            for f in out.iter().filter(|f| cfg.logs.iter().any(|l| f.path.strip_prefix(l.dir).is_some_and(|r| r.starts_with('/')))) {
+                let full = root.join(&f.path);
+                let clash = kind(&full).is_some() && std::fs::read_to_string(&full).ok().as_deref() != Some(f.text.as_str())
+                    || out.iter().any(|g| g.path == f.path && g.text != f.text);
+                if clash {
+                    return Err(format!("migrate: {} already holds a different fragment; pick another name", f.path));
+                }
+            }
+            write_all(root, &out)?;
+            eprintln!("progress: {} file(s) written; restore the docs themselves to main's copy", out.len());
             Ok(())
         }
         _ => Err("usage: progress [--write | --check [--base <rev>] | --cutover | migrate <old> <pr> <name>]".into()),

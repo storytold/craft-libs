@@ -10,6 +10,7 @@ const CFG: Config =
     Config { logs: &[Log { dir: "docs/progress.d", doc: "ROADMAP.md", heading: "## Progress log", status: true, ..Log::DEFAULT }], tables: &[] };
 
 const CI_DIR: &str = "DOCJOIN_TEST_CI_DIR";
+const CI_HAND: &str = "DOCJOIN_TEST_CI_HAND";
 
 fn git(root: &Path, args: &[&str]) -> String {
     let out = Command::new("git")
@@ -30,8 +31,8 @@ fn write(root: &Path, path: &str, text: &str) {
 }
 
 /// An upstream repo with a pull request merged into a `main` that moved on, and a CI checkout of
-/// its merge commit.
-fn ci_checkout(top: &Path) -> PathBuf {
+/// its merge commit. With `hand`, the pull request also edits the log by hand.
+fn ci_checkout(top: &Path, hand: bool) -> PathBuf {
     let _ = std::fs::remove_dir_all(top);
     let (up, ci) = (top.join("up"), top.join("ci"));
     std::fs::create_dir_all(&up).unwrap();
@@ -44,6 +45,9 @@ fn ci_checkout(top: &Path) -> PathBuf {
     git(&up, &["commit", "-q", "--allow-empty", "-m", "main moves on"]);
     git(&up, &["checkout", "-q", "-b", "pr", "HEAD~1"]);
     write(&up, "docs/progress.d/7-thing.md", "- 2026-02-02: thing\n");
+    if hand {
+        write(&up, "ROADMAP.md", "# R\n\n> **Last updated:** 2026-01-01 · **Change:** minor\n\n## Progress log\n\n- 2026-01-01: started\n");
+    }
     git(&up, &["add", "-A"]);
     git(&up, &["commit", "-q", "-m", "pr"]);
     git(&up, &["checkout", "-q", "main"]);
@@ -65,20 +69,36 @@ fn ci_checkout(top: &Path) -> PathBuf {
 #[ignore = "run by check_on_a_pull_request_merge_commit_checkout"]
 fn check_in_ci_child() {
     let Some(ci) = std::env::var_os(CI_DIR) else { return };
-    cli::run(Path::new(&ci), &CFG, &["--check".to_string()]).unwrap();
+    let result = cli::run(Path::new(&ci), &CFG, &["--check".to_string()]);
+    if std::env::var_os(CI_HAND).is_some() {
+        assert!(result.unwrap_err().contains("edited by hand"));
+    } else {
+        result.unwrap();
+    }
+}
+
+fn check_in_ci(hand: bool) -> String {
+    let top = std::env::temp_dir().join(format!("docjoin-ci-shallow-{}-{hand}", std::process::id()));
+    let ci = ci_checkout(&top, hand);
+    let mut child = Command::new(std::env::current_exe().unwrap());
+    child.args(["--exact", "check_in_ci_child", "--include-ignored", "--nocapture"]).env("GITHUB_ACTIONS", "true").env(CI_DIR, &ci);
+    if hand {
+        child.env(CI_HAND, "1");
+    }
+    let out = child.output().unwrap();
+    let _ = std::fs::remove_dir_all(&top);
+    let log = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    assert!(out.status.success() && log.contains("1 passed"), "{log}");
+    log
 }
 
 #[test]
 fn check_on_a_pull_request_merge_commit_checkout() {
-    let top = std::env::temp_dir().join(format!("docjoin-ci-shallow-{}", std::process::id()));
-    let ci = ci_checkout(&top);
-    let out = Command::new(std::env::current_exe().unwrap())
-        .args(["--exact", "check_in_ci_child", "--include-ignored", "--nocapture"])
-        .env("GITHUB_ACTIONS", "true")
-        .env(CI_DIR, &ci)
-        .output()
-        .unwrap();
-    let log = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
-    assert!(out.status.success() && log.contains("1 passed"), "an ordinary pull request fails CI:\n{log}");
-    let _ = std::fs::remove_dir_all(&top);
+    check_in_ci(false);
+}
+
+/// The base really is fetched and compared: a hand edit on the same shallow checkout fails.
+#[test]
+fn check_on_a_merge_commit_checkout_fails_a_hand_edit() {
+    check_in_ci(true);
 }
