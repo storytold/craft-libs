@@ -265,10 +265,13 @@ fn font_store_folder() {
     assert_eq!(font_store_dir(&env), Some(PathBuf::from("/data/craft-fonts")));
 }
 
+/// The store override wins with or without platform defaults; unsupported platforms have no default store.
 #[test]
 fn font_store_override_and_no_store() {
     for os in [Os::Unix, Os::MacOs, Os::Windows, Os::Haiku, Os::None] {
         let env = FontEnv { os, font_store: Some("portable/fonts".into()), ..Default::default() };
+        assert_eq!(font_store_dir(&env), Some(PathBuf::from("portable/fonts")));
+        let env = FontEnv { home: Some("home".into()), local_app_data: Some("local".into()), ..env };
         assert_eq!(font_store_dir(&env), Some(PathBuf::from("portable/fonts")));
     }
     assert_eq!(font_store_dir(&FontEnv { os: Os::None, home: Some("h".into()), ..Default::default() }), None);
