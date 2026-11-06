@@ -982,6 +982,9 @@ fn migrate_notes_a_table_it_cannot_read() {
     let (out, notes) = migrate(&CFG, &main, &f("docs/gaps.md", GAPS, 0), &f("docs/gaps.md", &pr, 0), "9-x");
     assert_eq!(out, Vec::<File>::new());
     has(&notes, "the line under the table must be blank");
+    // An unreadable table the pull request left alone is no note.
+    let (out, notes) = migrate(&CFG, &main, &f("docs/gaps.md", &pr, 0), &f("docs/gaps.md", &pr, 0), "9-x");
+    assert_eq!((out, notes), (Vec::new(), Vec::<String>::new()));
 }
 
 /// Renumbering one of two items that share a number (what the warning asks for) passes: same

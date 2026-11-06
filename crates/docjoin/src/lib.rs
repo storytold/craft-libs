@@ -1330,9 +1330,11 @@ fn migrate_table(table: &Table, files: &[File], old: &[&str], pr: &[&str], out: 
     let rows = |lines: &[&str]| -> Result<Vec<Vec<String>>, String> {
         locate(lines, table).map(|(_, f, e)| lines.get(f..e).unwrap_or_default().iter().map(|l| row_cells(l)).collect())
     };
-    // A table the crate can't read in either doc is a note, never a silent skip.
+    // A table the crate can't read in either doc is a note when the pull request changed the doc,
+    // never a silent skip.
     let (before, after) = match (rows(old), rows(pr)) {
         (Ok(b), Ok(a)) => (b, a),
+        (Err(_), _) | (_, Err(_)) if old == pr => return,
         (Err(e), _) | (_, Err(e)) => {
             notes.push(format!("{} {e}; move the pull request's edits to {} by hand", table.doc, table_name(table)));
             return;
