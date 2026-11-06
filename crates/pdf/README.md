@@ -53,6 +53,15 @@ Native unwinding panics become errors; discard partial devices, buffers, parsers
 after backend failure. WASM aborts and process-wide allocation failure cannot be caught.
 Cancellation is polled between operators, so a decoder may finish before noticing it.
 
+`InterpreterSettings::cancellation_check` optionally accepts a `CancellationCheck`, a synchronous
+caller-owned checkpoint for cancellation or work budgets. Clones share a sticky cancellation latch,
+so one run can keep its budget across pages without clocks or threads, including on WebAssembly.
+Checks also occur within long text strings and arrays, between stream windows and annotations,
+and around rasterization. A stopped raster returns `Cancelled`; callers must discard partial
+Device or buffer output. The default remains flag-only behavior. A checkpoint cannot preempt an
+individual codec or graphics operation already in progress. Callback panics become guarded native
+errors at facade entry points; WebAssembly retains its existing abort limitation.
+
 ## Backend provenance and consumer pins
 
 The shared reader vendors the current patched Hayro trees from PdfCraft revision
@@ -72,8 +81,9 @@ revision until they explicitly adopt a new one.
 
 Consumers pin `craft-pdf` and their required root `[patch.crates-io]` entries to the same full
 `https://github.com/storytold/craft-libs` revision. Cargo ignores dependency-local patches.
-Reader consumers patch `hayro-syntax`, `hayro-interpret` and `hayro-jbig2`; raster consumers
-also patch `hayro`. Writer consumers patch `krilla`. A plain `write` consumer does not need
+Reader consumers patch `hayro-syntax`, `hayro-interpret`, `hayro-jbig2`, `hayro-cmap` and
+`hayro-postscript`; raster consumers also patch `hayro`. The CMap/PostScript pins retain the
+patched parser's stack-safety guarantees. Writer consumers patch `krilla`. A plain `write` consumer does not need
 reader patches. Keep unrelated craft-ui/craft-print versions unchanged when adopting PDF.
 A pinned commit must be available remotely before a fresh public checkout can resolve it.
 
@@ -88,7 +98,7 @@ stay outside this repository; dependency assets and licences are in the root att
 The Shared PDF workflow runs native and WebAssembly facade contracts, an independent
 `read-only-contract` consumer, and the transferred backend tests. The independent consumer
 keeps interpreter-bearing dev-dependencies out of the shipping `read` feature graph.
-Run `bash scripts/test-pdf-backends.sh` from the repository root to test all four vendored
+Run `bash scripts/test-pdf-backends.sh` from the repository root to test all six vendored
 backends, the syntax doctest and the syntax-only configuration. The script uses temporary
 source copies and the complete local patch set, preserving the vendored lockfiles.
 Run `cargo test --manifest-path crates/pdf/read-only-contract/Cargo.toml --locked` for the

@@ -25,6 +25,9 @@ pub(crate) fn show_text_array<'a>(
 ) {
     show_text_run(ctx, |ctx, pass| {
         for item in text.iter::<object::Object<'_>>() {
+            if ctx.settings.is_cancelled() {
+                break;
+            }
             match item {
                 object::Object::Number(number) => ctx.get_mut().text_state.apply_adjustment(number.as_f32()),
                 object::Object::String(text) => show_string_pass(ctx, device, resources, &text, pass),
@@ -51,6 +54,9 @@ fn show_text_run<'a>(ctx: &mut Context<'a>, mut draw: impl FnMut(&mut Context<'a
     ) {
         let start = ctx.get().text_state.text_matrix;
         draw(ctx, TextPass::Fill);
+        if ctx.settings.is_cancelled() {
+            return;
+        }
         let end = ctx.get().text_state.text_matrix;
         ctx.get_mut().text_state.text_matrix = start;
         draw(ctx, TextPass::Stroke);
@@ -84,6 +90,9 @@ fn show_string_pass<'a>(
     let mut cur_idx = 0;
 
     while cur_idx < bytes.len() {
+        if ctx.settings.is_cancelled() {
+            break;
+        }
         let (code, adv) = font.read_code(bytes, cur_idx);
         cur_idx += adv;
 

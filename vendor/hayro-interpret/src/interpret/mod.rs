@@ -45,6 +45,43 @@ pub type CMapResolverFn =
 /// A callback function for resolving warnings during interpretation.
 pub type WarningSinkFn = Arc<dyn Fn(InterpreterWarning) + Send + Sync>;
 
+/// A caller-owned, synchronous cancellation checkpoint, shared by clones.
+///
+/// The callback can inspect a cancellation signal or spend a caller's work budget, without
+/// requiring a clock or another thread. It must return quickly. Once it requests cancellation,
+/// the result is latched so a later callback response cannot make partial output look complete.
+/// Checkpoints run between operators, content windows, text-array items and glyphs. They cannot
+/// interrupt an individual codec or graphics operation that has already started.
+#[derive(Clone)]
+pub struct CancellationCheck(Arc<CancellationState>);
+
+struct CancellationState {
+    check: Box<dyn Fn() -> bool + Send + Sync>,
+    stopped: AtomicBool,
+}
+
+impl CancellationCheck {
+    /// Creates a checkpoint whose callback returns true when the output must be discarded.
+    pub fn new(check: impl Fn() -> bool + Send + Sync + 'static) -> Self {
+        Self(Arc::new(CancellationState {
+            check: Box::new(check),
+            stopped: AtomicBool::new(false),
+        }))
+    }
+
+    /// Polls the callback, or returns the latched cancellation without calling it again.
+    #[inline]
+    pub fn is_cancelled(&self) -> bool {
+        if self.0.stopped.load(Ordering::Acquire) {
+            return true;
+        }
+        if (self.0.check)() {
+            self.0.stopped.store(true, Ordering::Release);
+        }
+        self.0.stopped.load(Ordering::Acquire)
+    }
+}
+
 #[derive(Clone)]
 /// Settings that should be applied during the interpretation process.
 pub struct InterpreterSettings {
@@ -115,6 +152,9 @@ pub struct InterpreterSettings {
     /// operator. What was drawn is then incomplete, so only set it when the output will be
     /// thrown away (a viewer's render whose result nobody can receive any more).
     pub cancelled: Option<Arc<AtomicBool>>,
+    /// A synchronous cooperative checkpoint, combined with `cancelled`. Clones share its
+    /// cancellation latch. The default is absent, preserving the existing flag-only behavior.
+    pub cancellation_check: Option<CancellationCheck>,
     /// PdfCraft patch: a low-detail render for previews (page backdrops, thumbnails). Images
     /// that would cover only a few device pixels are skipped: redrawing them at full detail
     /// costs a decode and a resample each for pixels nobody can see. Never set it for a final
@@ -129,6 +169,15 @@ pub struct InterpreterSettings {
     /// PdfCraft patch (35): told about each spot ink a paint uses (colours, images, shadings
     /// and uncoloured patterns), whether or not `plate` is set.
     pub ink_sink: Option<crate::color::InkSinkFn>,
+}
+
+impl InterpreterSettings {
+    /// Polls the caller's flag and optional synchronous checkpoint.
+    #[inline]
+    pub fn is_cancelled(&self) -> bool {
+        self.cancelled.as_ref().is_some_and(|c| c.load(Ordering::Relaxed))
+            || self.cancellation_check.as_ref().is_some_and(CancellationCheck::is_cancelled)
+    }
 }
 
 impl Default for InterpreterSettings {
@@ -150,6 +199,7 @@ impl Default for InterpreterSettings {
             hide_comments: false,
             ocg_overrides: Arc::new(Vec::new()),
             cancelled: None,
+            cancellation_check: None,
             preview: false,
             plate: None,
             ink_sink: None,
@@ -176,6 +226,9 @@ pub fn interpret_page<'a>(
     context: &mut Context<'a>,
     device: &mut impl Device<'a>,
 ) {
+    if context.settings.is_cancelled() {
+        return;
+    }
     let resources = page.resources();
     let mut content = page.content_reader();
     // PdfCraft patch: the page's own contents count against its content budget too, where they
@@ -190,6 +243,9 @@ pub fn interpret_page<'a>(
         // the document's own (the reading-colours setting recolours the document, not comments).
         device.begin_annotations();
         for annot in annot_arr.iter::<Dict<'_>>() {
+            if context.settings.is_cancelled() {
+                break;
+            }
             let flags = annot.get::<u32>(F).unwrap_or(0);
 
             // Annotation should be hidden (Hidden = bit 2, NoView = bit 6).
@@ -380,18 +436,18 @@ fn interpret_window<'a>(
     context: &mut Context<'a>,
     device: &mut impl Device<'a>,
 ) {
-    // PdfCraft patch (#3018): the resources' DefaultGray, DefaultRGB and DefaultCMYK replace the
-    // device spaces that color operators and images select (ISO 32000-2 §8.6.5.6).
+    // PdfCraft patch (#3018): keep the resource defaults alongside the cooperative
+    // checkpoint, which must run before parsing the next operator.
     let defaults = DefaultColorSpaces::new(
         resources,
         &context.interpreter_cache.object_cache,
         context.settings.plate.is_some(),
     );
-    while let Some(op) = ops.next() {
-        // PdfCraft patch: stop when the caller cancelled (see `InterpreterSettings::cancelled`).
-        if context.settings.cancelled.as_ref().is_some_and(|c| c.load(Ordering::Relaxed)) {
+    loop {
+        if context.settings.is_cancelled() {
             break;
         }
+        let Some(op) = ops.next() else { break };
         match op {
             TypedInstruction::SaveState(_) => context.save_state(),
             TypedInstruction::StrokeColorDeviceRgb(s) => {
@@ -971,11 +1027,7 @@ fn interpret_content<'a>(
         };
         window.drain(..committed);
 
-        let cancelled = context
-            .settings
-            .cancelled
-            .as_ref()
-            .is_some_and(|c| c.load(Ordering::Relaxed));
+        let cancelled = context.settings.is_cancelled();
         if !needs_more || cancelled || exhausted {
             break;
         }
