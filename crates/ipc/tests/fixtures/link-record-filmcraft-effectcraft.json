@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "link_id": "550e8400-e29b-41d4-a716-446655440000",
+  "target_app": "effectcraft",
+  "target_project": "links/shot.ecproj",
+  "target_comp": "comp-1",
+  "nested_sequence": "item-9",
+  "result_path": "Project Links/550e8400-e29b-41d4-a716-446655440000.mov",
+  "result_epoch": 7,
+  "format": { "w": 1920, "h": 1080, "rate_num": 24, "rate_den": 1, "duration_ticks": 240, "alpha": true, "tint": "warm" },
+  "created": "2026-10-11T15:04:05Z",
+  "badge": "kept"
+}
