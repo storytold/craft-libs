@@ -28,6 +28,8 @@ pub const MAX_FILE: usize = 256 * 1024;
 pub const MAX_DOC: usize = 16 * 1024 * 1024;
 /// The most fragments or items read for one target.
 pub const MAX_FILES: usize = 10_000;
+/// The highest item number. Numbers stay small, so deriving the next one can't overflow.
+pub const MAX_NUMBER: u32 = 1_000_000;
 
 /// An app's doc layout: its progress logs and its item tables.
 #[derive(Debug, Clone, Copy)]
@@ -43,12 +45,18 @@ pub struct Log {
     pub dir: &'static str,
     /// The doc, `ROADMAP.md`.
     pub doc: &'static str,
-    /// The heading line the log is under, exactly, `## Progress log`.
+    /// The heading line the log is under, `## Progress log`. A doc line matches it exactly, or
+    /// followed by ` (…)`; it appears once in the doc.
     pub heading: &'static str,
     /// New entries go at the top (true) or the bottom.
     pub newest_first: bool,
     /// The fold also writes this doc's status line (`**Last updated:**`, `**Change:**`).
     pub status: bool,
+}
+
+impl Log {
+    /// Newest first, no status line. Fill the rest: `Log { dir, doc, heading, ..Log::DEFAULT }`.
+    pub const DEFAULT: Self = Self { dir: "", doc: "", heading: "", newest_first: true, status: false };
 }
 
 /// A table fed by items.
@@ -58,13 +66,23 @@ pub struct Table {
     pub dir: &'static str,
     /// The doc, `docs/gaps.md`.
     pub doc: &'static str,
-    /// The heading line the table is under, exactly.
+    /// The heading line the table is under, matched as [`Log::heading`] is.
     pub heading: &'static str,
     /// Each column: its header as the doc has it, and the item field that fills it. The field
     /// `number` is the item's number (from its file name); `body` is the item's body.
     pub columns: &'static [(&'static str, &'static str)],
     /// Items with `status: closed` stay in the table (true) or are left out.
     pub show_closed: bool,
+    /// The fold also writes this doc's status line when the table's items change.
+    pub status: bool,
+    /// Which table under the heading, from 0, when the section has more than one.
+    pub nth: usize,
+}
+
+impl Table {
+    /// Closed items shown, no status line, the first table under the heading. Fill the rest:
+    /// `Table { dir, doc, heading, columns, ..Table::DEFAULT }`.
+    pub const DEFAULT: Self = Self { dir: "", doc: "", heading: "", columns: &[], show_closed: true, status: false, nth: 0 };
 }
 
 /// A file handed to the core: path from the repo root, text, and the Unix time of the last
@@ -121,10 +139,14 @@ struct Fragment<'a> {
 struct Item<'a> {
     path: &'a str,
     number: u32,
-    rank: Option<i64>,
+    rank: Option<i32>,
     closed: bool,
+    time: i64,
     fields: front::Parsed<'a>,
 }
+
+/// The key of the status line. A doc whose status the fold writes has it on exactly one line.
+const STATUS_KEY: &str = "**Last updated:**";
 
 /// The files directly in `dir` (a `README.md` there is not one), sorted by path.
 fn in_dir<'a>(files: &'a [File], dir: &str) -> Vec<&'a File> {
@@ -147,6 +169,32 @@ fn guard(f: &File) -> Result<(), String> {
     Ok(())
 }
 
+/// A line that would start a heading (and so end the log's section), up to three spaces in.
+fn is_heading(line: &str) -> bool {
+    let t = line.trim_start_matches(' ');
+    line.len() - t.len() <= 3 && t.starts_with('#') && (heading_level(t).is_some() || t.trim_end().bytes().all(|b| b == b'#'))
+}
+
+fn fragment<'a>(f: &'a File) -> Result<Fragment<'a>, String> {
+    guard(f)?;
+    let name = file_name(&f.path);
+    let stem = name
+        .strip_suffix(".md")
+        .filter(|s| !s.is_empty() && s.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-'))
+        .ok_or_else(|| format!("{}: a fragment is `<issue>-<branch-slug>.md`, lower case, digits and `-`", f.path))?;
+    let p = front::parse(&f.text, &["kind"]).map_err(|e| format!("{}: {e}", f.path))?;
+    let kind = Kind::parse(p.get("kind")).map_err(|e| format!("{}: {e}", f.path))?;
+    let lines: Vec<&str> = p.body.lines().map(str::trim_end).filter(|l| !l.trim().is_empty()).collect();
+    if lines.is_empty() {
+        return Err(format!("{}: is empty", f.path));
+    }
+    // A heading would end the log's section; a status line would be a second one.
+    if let Some(bad) = lines.iter().find(|l| is_heading(l) || l.contains(STATUS_KEY)) {
+        return Err(format!("{}: {bad:?} is a heading or a status line; a fragment is only its log entry", f.path));
+    }
+    Ok(Fragment { path: &f.path, name: stem, time: f.time, kind, lines })
+}
+
 fn fragments<'a>(files: &'a [File], log: &Log, errors: &mut Vec<String>) -> Vec<Fragment<'a>> {
     let found = in_dir(files, log.dir);
     if found.len() > MAX_FILES {
@@ -155,24 +203,7 @@ fn fragments<'a>(files: &'a [File], log: &Log, errors: &mut Vec<String>) -> Vec<
     }
     let mut out = Vec::new();
     for f in found {
-        let name = file_name(&f.path);
-        let parsed = guard(f)
-            .and_then(|()| {
-                let stem = name
-                    .strip_suffix(".md")
-                    .filter(|s| !s.is_empty() && s.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-'));
-                stem.ok_or_else(|| format!("{}: a fragment is `<issue>-<branch-slug>.md`, lower case, digits and `-`", f.path))
-            })
-            .and_then(|stem| front::parse(&f.text, &["kind"]).map(|p| (stem, p)).map_err(|e| format!("{}: {e}", f.path)))
-            .and_then(|(stem, p)| {
-                let kind = Kind::parse(p.get("kind")).map_err(|e| format!("{}: {e}", f.path))?;
-                let lines: Vec<&str> = p.body.lines().map(str::trim_end).filter(|l| !l.trim().is_empty()).collect();
-                if lines.is_empty() {
-                    return Err(format!("{}: is empty", f.path));
-                }
-                Ok(Fragment { path: &f.path, name: stem, time: f.time, kind, lines })
-            });
-        match parsed {
+        match fragment(f) {
             Ok(fragment) => out.push(fragment),
             Err(e) => errors.push(e),
         }
@@ -180,14 +211,18 @@ fn fragments<'a>(files: &'a [File], log: &Log, errors: &mut Vec<String>) -> Vec<
     out
 }
 
-/// A table row's cells, trimmed; `None` when the line isn't a row. `\|` stays inside a cell.
+/// A table row's cells, trimmed; `None` when the line isn't a row. A `|` after an odd number of
+/// backslashes stays inside its cell (`\|`); `\\|` is a backslash, then the separator. The trailing
+/// `|` is optional, as in GFM.
 pub fn cells(row: &str) -> Option<Vec<String>> {
-    let inner = row.trim().strip_prefix('|')?.strip_suffix('|')?;
+    let inner = row.trim().strip_prefix('|')?;
     let mut out = Vec::new();
     let mut cell = String::new();
     let mut escaped = false;
+    let mut closed = false;
     for c in inner.chars() {
-        if c == '|' && !escaped {
+        closed = c == '|' && !escaped;
+        if closed {
             out.push(cell.trim().to_string());
             cell.clear();
         } else {
@@ -195,7 +230,9 @@ pub fn cells(row: &str) -> Option<Vec<String>> {
         }
         escaped = c == '\\' && !escaped;
     }
-    out.push(cell.trim().to_string());
+    if !closed {
+        out.push(cell.trim().to_string());
+    }
     Some(out)
 }
 
@@ -204,21 +241,54 @@ fn heading_level(line: &str) -> Option<usize> {
     (hashes > 0 && line.as_bytes().get(hashes) == Some(&b' ')).then_some(hashes)
 }
 
+/// A doc line is the configured heading when it equals it, or equals it followed by ` (…)`
+/// (`## Point entry (≈ 45%)` for `## Point entry`).
+fn heading_matches(line: &str, heading: &str) -> bool {
+    let l = line.trim_end();
+    l == heading || l.strip_prefix(heading).is_some_and(|r| r.starts_with(" (") && r.ends_with(')'))
+}
+
 /// The lines under `heading`, up to the next heading of its level or above: (first line after the
-/// heading, end).
+/// heading, end). The heading must appear once: with two, the fold and the check could each guard
+/// a different copy.
 fn section(lines: &[&str], heading: &str) -> Result<(usize, usize), String> {
-    let at = lines.iter().position(|l| l.trim_end() == heading).ok_or_else(|| format!("has no `{heading}` heading"))?;
+    let found: Vec<usize> = lines.iter().enumerate().filter(|(_, l)| heading_matches(l, heading)).map(|(i, _)| i).collect();
+    let at = match found.as_slice() {
+        [] => return Err(format!("has no `{heading}` heading")),
+        [at] => *at,
+        [a, b, ..] => {
+            return Err(format!("has `{heading}` {} times (lines {} and {}); a configured heading appears once", found.len(), a + 1, b + 1));
+        }
+    };
     let level = heading_level(heading).unwrap_or(usize::MAX);
     let end = lines.iter().enumerate().skip(at + 1).find(|(_, l)| heading_level(l).is_some_and(|n| n <= level)).map_or(lines.len(), |(i, _)| i);
     Ok((at + 1, end))
 }
 
-/// The table in a section: (header line, first row, end of rows).
-fn table_in(lines: &[&str], start: usize, end: usize) -> Option<(usize, usize, usize)> {
-    let header = (start..end).find(|&i| lines.get(i).is_some_and(|l| l.trim_start().starts_with('|')))?;
-    let first = header + 2;
-    let rows_end = (first..end).find(|&i| !lines.get(i).is_some_and(|l| l.trim_start().starts_with('|'))).unwrap_or(end);
-    Some((header, first.min(rows_end.max(first)), rows_end.max(first)))
+fn is_row(line: &str) -> bool {
+    line.trim_start().starts_with('|')
+}
+
+/// Table `nth` (from 0) in a section: (header line, first row, end of rows).
+fn table_in(lines: &[&str], start: usize, end: usize, nth: usize) -> Option<(usize, usize, usize)> {
+    let row = |i: usize| lines.get(i).is_some_and(|l| is_row(l));
+    let mut i = start;
+    let mut seen = 0;
+    while i < end {
+        if !row(i) {
+            i += 1;
+            continue;
+        }
+        let header = i;
+        while i < end && row(i) {
+            i += 1;
+        }
+        if seen == nth {
+            return Some((header, (header + 2).min(i), i));
+        }
+        seen += 1;
+    }
+    None
 }
 
 fn is_entry(line: &str) -> bool {
@@ -226,74 +296,207 @@ fn is_entry(line: &str) -> bool {
     t.starts_with('|') || t.starts_with("- ") || t.starts_with("* ")
 }
 
-fn join_log<'a>(lines: &mut Vec<&'a str>, log: &Log, frags: &[Fragment<'a>]) -> Result<(), String> {
+/// Where the fold puts a log's new entries.
+struct Insert {
+    at: usize,
+    /// The log is a table of this many columns.
+    width: Option<usize>,
+    /// A blank line goes before / after the new entries (a log with no entries yet).
+    pad_before: bool,
+    pad_after: bool,
+}
+
+fn blank_at(lines: &[&str], i: usize) -> bool {
+    lines.get(i).is_some_and(|l| l.trim().is_empty())
+}
+
+fn log_insert(lines: &[&str], log: &Log) -> Result<Insert, String> {
     let (start, end) = section(lines, log.heading)?;
     let first = (start..end).find(|&i| lines.get(i).is_some_and(|l| is_entry(l)));
-    let is_table = first.and_then(|i| lines.get(i)).is_some_and(|l| l.trim_start().starts_with('|'));
+    if first.and_then(|i| lines.get(i)).is_some_and(|l| is_row(l)) {
+        let (header, first_row, rows_end) = table_in(lines, start, end, 0).ok_or("log table vanished")?;
+        let width = lines.get(header).and_then(|l| cells(l)).map_or(0, |c| c.len());
+        let at = if log.newest_first { first_row } else { rows_end };
+        return Ok(Insert { at, width: Some(width), pad_before: false, pad_after: false });
+    }
+    let at = match (log.newest_first, first) {
+        (true, Some(i)) => i,
+        _ => {
+            let mut e = end;
+            while e > start && blank_at(lines, e - 1) {
+                e -= 1;
+            }
+            e
+        }
+    };
+    let pad_before = first.is_none() && at.checked_sub(1).is_some_and(|p| !blank_at(lines, p));
+    let pad_after = lines.get(at).is_some_and(|l| !l.trim().is_empty() && !is_entry(l));
+    Ok(Insert { at, width: None, pad_before, pad_after })
+}
+
+fn join_log<'a>(lines: &mut Vec<&'a str>, log: &Log, frags: &[Fragment<'a>]) -> Result<(), String> {
+    let insert = log_insert(lines, log)?;
+    if frags.is_empty() {
+        return Ok(());
+    }
     let mut order: Vec<&Fragment> = frags.iter().collect();
     order.sort_by(|a, b| a.time.cmp(&b.time).then_with(|| a.name.cmp(b.name)));
     if log.newest_first {
         order.reverse();
     }
-    let new: Vec<&str> = order.iter().flat_map(|f| f.lines.iter().copied()).collect();
-    if is_table {
-        let (header, first_row, rows_end) = table_in(lines, start, end).ok_or("log table vanished")?;
-        let width = lines.get(header).and_then(|l| cells(l)).map_or(0, |c| c.len());
-        for f in &order {
-            if let Some(bad) = f.lines.iter().find(|l| cells(l).map(|c| c.len()) != Some(width)) {
-                return Err(format!("{}: {bad:?} isn't a row of the log's {width} columns", f.path));
-            }
-        }
-        let at = if log.newest_first { first_row } else { rows_end };
-        lines.splice(at..at, new);
-    } else {
-        for f in &order {
-            if f.lines.first().is_some_and(|l| !is_entry(l)) {
-                return Err(format!("{}: the entry starts with {:?}, not a `- ` bullet", f.path, f.lines.first().copied().unwrap_or_default()));
-            }
-        }
-        let at = match (log.newest_first, first) {
-            (true, Some(i)) => i,
-            _ => {
-                let mut e = end;
-                while e > start && lines.get(e - 1).is_some_and(|l| l.trim().is_empty()) {
-                    e -= 1;
+    for f in &order {
+        match insert.width {
+            Some(width) => {
+                if let Some(bad) = f.lines.iter().find(|l| cells(l).map(|c| c.len()) != Some(width)) {
+                    return Err(format!("{}: {bad:?} isn't a row of the log's {width} columns", f.path));
                 }
-                e
             }
-        };
-        lines.splice(at..at, new);
+            None => {
+                if f.lines.first().is_some_and(|l| !is_entry(l)) {
+                    return Err(format!("{}: the entry starts with {:?}, not a `- ` bullet", f.path, f.lines.first().copied().unwrap_or_default()));
+                }
+            }
+        }
     }
+    let mut new: Vec<&str> = Vec::new();
+    if insert.pad_before {
+        new.push("");
+    }
+    new.extend(order.iter().flat_map(|f| f.lines.iter().copied()));
+    if insert.pad_after {
+        new.push("");
+    }
+    let at = insert.at.min(lines.len());
+    lines.splice(at..at, new);
     Ok(())
 }
 
-/// Replaces `**<field>:** <value>` (value up to ` · ` or the line's end) in `line`.
-fn set_field(line: &str, field: &str, value: &str) -> Option<String> {
-    let key = format!("**{field}:**");
-    let at = line.find(&key)? + key.len();
-    let rest = line.get(at..)?;
-    let end = rest.find(" · ").unwrap_or(rest.len());
-    Some(format!("{}{key} {value}{}", line.get(..at - key.len())?, rest.get(end..)?))
+/// A doc's status line: `**Last updated:** YYYY-MM-DD · **Change:** …`, fields separated by ` · `.
+struct Status {
+    at: usize,
+    parts: Vec<String>,
+    /// The part holding `**Last updated:**`.
+    date: usize,
+    /// The parts holding `**Change:**` and its value (which may itself hold ` · `).
+    change: Option<(usize, usize)>,
 }
 
-fn status_line(lines: &mut [String], frags: &[Fragment]) -> Result<(), String> {
-    let (Some(time), Some(kind)) = (frags.iter().map(|f| f.time).max(), frags.iter().map(|f| f.kind).max()) else {
-        return Ok(());
-    };
-    let date = chrono::DateTime::from_timestamp(time, 0).ok_or("a fragment's commit time is out of range")?.format("%Y-%m-%d").to_string();
-    let line = lines.iter_mut().find(|l| l.contains("**Last updated:**")).ok_or("has no `**Last updated:**` status line")?;
-    let dated = set_field(line, "Last updated", &date).ok_or("status line")?;
-    *line = set_field(&dated, "Change", kind.word()).unwrap_or_else(|| {
-        let at = dated.find("**Last updated:**").unwrap_or(0) + "**Last updated:** ".len() + date.len();
-        format!("{} · **Change:** {}{}", dated.get(..at).unwrap_or(&dated), kind.word(), dated.get(at..).unwrap_or_default())
-    });
-    Ok(())
+fn lead(part: &str) -> &str {
+    part.trim_start_matches(['>', ' '])
+}
+
+fn is_field(part: &str) -> bool {
+    let t = lead(part);
+    t.starts_with("**") && t.contains(":**")
+}
+
+impl Status {
+    fn find<S: AsRef<str>>(lines: &[S]) -> Result<Self, String> {
+        let found: Vec<usize> = lines.iter().enumerate().filter(|(_, l)| l.as_ref().contains(STATUS_KEY)).map(|(i, _)| i).collect();
+        let at = match found.as_slice() {
+            [] => return Err(format!("has no `{STATUS_KEY}` status line")),
+            [at] => *at,
+            [a, b, ..] => return Err(format!("has `{STATUS_KEY}` on lines {} and {}; keep one status line", a + 1, b + 1)),
+        };
+        let line = lines.get(at).map(AsRef::as_ref).unwrap_or_default();
+        let shape = || format!("line {}: the status line isn't `{STATUS_KEY} YYYY-MM-DD · **Change:** …` with ` · ` between its fields", at + 1);
+        let parts: Vec<String> = line.split(" · ").map(str::to_string).collect();
+        let date = parts.iter().position(|p| lead(p).starts_with(STATUS_KEY)).ok_or_else(shape)?;
+        let value = parts.get(date).and_then(|p| lead(p).strip_prefix(STATUS_KEY)).unwrap_or_default().trim();
+        if line.matches(STATUS_KEY).count() != 1 || value.len() != 10 || chrono::NaiveDate::parse_from_str(value, "%Y-%m-%d").is_err() {
+            return Err(shape());
+        }
+        let change = parts.iter().position(|p| lead(p).starts_with("**Change:**")).map(|c| {
+            let end = parts.iter().enumerate().skip(c + 1).find(|(_, p)| is_field(p)).map_or(parts.len(), |(i, _)| i);
+            (c, end)
+        });
+        Ok(Self { at, parts, date, change })
+    }
+
+    fn date(&self) -> &str {
+        self.parts.get(self.date).and_then(|p| lead(p).strip_prefix(STATUS_KEY)).unwrap_or_default().trim()
+    }
+
+    fn change(&self) -> String {
+        let Some((c, e)) = self.change else { return String::new() };
+        let value = self.parts.get(c..e).unwrap_or_default().join(" · ");
+        lead(&value).strip_prefix("**Change:**").unwrap_or_default().trim().to_string()
+    }
+
+    /// The line with `date` (unless that is older than the line's) and `kind` written in.
+    fn written(&self, date: &str, kind: Kind) -> String {
+        let keep = |i: usize, key: &str| self.parts.get(i).and_then(|p| p.find(key).and_then(|at| p.get(..at))).unwrap_or_default().to_string();
+        let date = if date < self.date() { self.date().to_string() } else { date.to_string() };
+        let mut parts = self.parts.clone();
+        let change = format!("**Change:** {}", kind.word());
+        match self.change {
+            Some((c, e)) => {
+                let prefix = keep(c, "**Change:**");
+                parts.splice(c..e.min(parts.len()), [format!("{prefix}{change}")]);
+            }
+            None => parts.insert((self.date + 1).min(parts.len()), change),
+        }
+        if let Some(p) = parts.get_mut(self.date) {
+            *p = format!("{}{STATUS_KEY} {date}", keep(self.date, STATUS_KEY));
+        }
+        parts.join(" · ")
+    }
+}
+
+/// The newest commit time and the highest kind of what changed a doc.
+type Stamp = Option<(i64, Kind)>;
+
+fn stamp(a: Stamp, time: i64, kind: Kind) -> Stamp {
+    Some(a.map_or((time, kind), |(t, k)| (t.max(time), k.max(kind))))
+}
+
+fn date_of(time: i64) -> Result<String, String> {
+    Ok(chrono::DateTime::from_timestamp(time, 0).ok_or("a commit time is out of range")?.format("%Y-%m-%d").to_string())
 }
 
 fn item_fields(table: &Table) -> Vec<&'static str> {
     let mut keys = vec!["rank", "status"];
     keys.extend(table.columns.iter().map(|(_, f)| *f).filter(|f| *f != "number" && *f != "body"));
     keys
+}
+
+/// An item number: 1 to [`MAX_NUMBER`], plain digits, no sign or leading zero.
+fn parse_number(s: &str) -> Option<u32> {
+    if s.is_empty() || s.starts_with('0') || !s.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    s.parse::<u32>().ok().filter(|n| *n <= MAX_NUMBER)
+}
+
+fn item<'a>(f: &'a File, table: &Table, allowed: &[&str]) -> Result<Item<'a>, String> {
+    guard(f)?;
+    let name = file_name(&f.path);
+    let stem = name.strip_suffix(".md").ok_or_else(|| format!("{}: an item is a `.md` file", f.path))?;
+    let (num, slug) = stem.split_once('-').unwrap_or((stem, ""));
+    let number = parse_number(num).ok_or_else(|| format!("{}: an item's number is 1 to {MAX_NUMBER}, with no sign or leading zero", f.path))?;
+    if slug.is_empty() || !slug.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-') {
+        return Err(format!("{}: an item is `<number>-<slug>.md`, slug in lower case, digits and `-`", f.path));
+    }
+    let fields = front::parse(&f.text, allowed).map_err(|e| format!("{}: {e}", f.path))?;
+    if fields.fields.is_empty() && fields.body.is_empty() {
+        return Err(format!("{}: is empty", f.path));
+    }
+    if let Some(missing) = allowed.iter().skip(2).find(|k| fields.get(k).is_none()) {
+        return Err(format!("{}: has no `{missing}:` for its column", f.path));
+    }
+    if !table.columns.iter().any(|(_, f)| *f == "body") && !fields.body.is_empty() {
+        return Err(format!("{}: has a body, but its table has no body column", f.path));
+    }
+    if fields.body.contains(STATUS_KEY) || fields.fields.iter().any(|(_, v)| v.contains(STATUS_KEY)) {
+        return Err(format!("{}: holds `{STATUS_KEY}`, which only the status line may", f.path));
+    }
+    let rank = fields.get("rank").map(|r| r.parse::<i32>().map_err(|_| format!("{}: `rank: {r}` isn't a whole number", f.path))).transpose()?;
+    let closed = match fields.get("status") {
+        None | Some("open") => false,
+        Some("closed") => true,
+        Some(other) => return Err(format!("{}: `status: {other}` isn't open or closed", f.path)),
+    };
+    Ok(Item { path: &f.path, number, rank, closed, time: f.time, fields })
 }
 
 fn items<'a>(files: &'a [File], table: &Table, errors: &mut Vec<String>) -> Vec<Item<'a>> {
@@ -303,37 +506,9 @@ fn items<'a>(files: &'a [File], table: &Table, errors: &mut Vec<String>) -> Vec<
         return Vec::new();
     }
     let allowed = item_fields(table);
-    let has_body = table.columns.iter().any(|(_, f)| *f == "body");
     let mut out: Vec<Item> = Vec::new();
     for f in found {
-        let name = file_name(&f.path);
-        let parsed = guard(f).and_then(|()| {
-            let stem = name.strip_suffix(".md").ok_or_else(|| format!("{}: an item is a `.md` file", f.path))?;
-            let (num, slug) = stem.split_once('-').unwrap_or((stem, ""));
-            let number: u32 = num.parse().map_err(|_| format!("{}: an item is `<number>-<slug>.md`", f.path))?;
-            if slug.is_empty() || !slug.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-') {
-                return Err(format!("{}: an item is `<number>-<slug>.md`, slug in lower case, digits and `-`", f.path));
-            }
-            let fields = front::parse(&f.text, &allowed).map_err(|e| format!("{}: {e}", f.path))?;
-            if fields.fields.is_empty() && fields.body.is_empty() {
-                return Err(format!("{}: is empty", f.path));
-            }
-            if let Some(missing) = allowed.iter().skip(2).find(|k| fields.get(k).is_none()) {
-                return Err(format!("{}: has no `{missing}:` for its column", f.path));
-            }
-            if !has_body && !fields.body.is_empty() {
-                return Err(format!("{}: has a body, but its table has no body column", f.path));
-            }
-            let rank =
-                fields.get("rank").map(|r| r.parse::<i64>().map_err(|_| format!("{}: `rank: {r}` isn't a whole number", f.path))).transpose()?;
-            let closed = match fields.get("status") {
-                None | Some("open") => false,
-                Some("closed") => true,
-                Some(other) => return Err(format!("{}: `status: {other}` isn't open or closed", f.path)),
-            };
-            Ok(Item { path: &f.path, number, rank, closed, fields })
-        });
-        match parsed {
+        match item(f, table, &allowed) {
             Ok(item) => {
                 if let Some(other) = out.iter().find(|i| i.number == item.number) {
                     errors.push(format!("{} and {} have the same number {}; take the next free one", other.path, item.path, item.number));
@@ -344,12 +519,61 @@ fn items<'a>(files: &'a [File], table: &Table, errors: &mut Vec<String>) -> Vec<
             Err(e) => errors.push(e),
         }
     }
-    out.sort_by_key(|i| (i.rank.unwrap_or(i64::MAX), i.number));
+    // Ranked first, by rank; then unranked, by number.
+    out.sort_by_key(|i| (i.rank.is_none(), i.rank, i.number));
+    out
+}
+
+/// `\` before a `|` is doubled, then the `|` escaped, so [`cells`] reads the value back.
+fn escape_pipes(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut run = 0usize;
+    for c in s.chars() {
+        match c {
+            '\\' => {
+                run += 1;
+                out.push(c);
+            }
+            '|' => {
+                out.extend(std::iter::repeat_n('\\', run));
+                out.push_str("\\|");
+                run = 0;
+            }
+            _ => {
+                run = 0;
+                out.push(c);
+            }
+        }
+    }
+    out
+}
+
+/// The reverse of [`escape_pipes`] on a cell [`cells`] read.
+fn unescape_pipes(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut run = 0usize;
+    for c in s.chars() {
+        match c {
+            '\\' => run += 1,
+            '|' => {
+                out.extend(std::iter::repeat_n('\\', run / 2));
+                out.push('|');
+                run = 0;
+            }
+            _ => {
+                out.extend(std::iter::repeat_n('\\', run));
+                run = 0;
+                out.push(c);
+            }
+        }
+    }
+    out.extend(std::iter::repeat_n('\\', run));
     out
 }
 
 fn escape(cell: &str) -> String {
-    cell.trim().replace('|', "\\|").replace("\r\n", "\n").split('\n').map(str::trim_end).collect::<Vec<_>>().join("<br>")
+    let text = cell.trim().replace("\r\n", "\n").replace('\r', "\n");
+    text.split('\n').map(|l| escape_pipes(l.trim_end())).collect::<Vec<_>>().join("<br>")
 }
 
 fn render(table: &Table, item: &Item) -> String {
@@ -367,155 +591,290 @@ fn render(table: &Table, item: &Item) -> String {
     format!("|{}|", cells.join("|"))
 }
 
+fn is_separator(line: &str) -> bool {
+    cells(line).is_some_and(|c| !c.is_empty() && c.iter().all(|c| c.contains('-') && c.bytes().all(|b| matches!(b, b'-' | b':' | b' '))))
+}
+
 fn check_header(lines: &[&str], header: usize, table: &Table) -> Result<(), String> {
     let have = lines.get(header).and_then(|l| cells(l)).unwrap_or_default();
     let want: Vec<&str> = table.columns.iter().map(|(h, _)| *h).collect();
     if have != want {
         return Err(format!("`{}`: the table's columns are {:?}, the config says {:?}", table.heading, have, want));
     }
+    if !lines.get(header + 1).is_some_and(|l| is_separator(l)) {
+        return Err(format!("`{}`: the table's header has no `|---|` line under it", table.heading));
+    }
     Ok(())
+}
+
+/// The configured table in `lines`: (first row, end of rows).
+fn place(lines: &[&str], table: &Table) -> Result<(usize, usize), String> {
+    let (s, e) = section(lines, table.heading)?;
+    let (h, first, end) = table_in(lines, s, e, table.nth).ok_or_else(|| match table.nth {
+        0 => format!("has no table under `{}`", table.heading),
+        n => format!("has no table {} under `{}`", n + 1, table.heading),
+    })?;
+    check_header(lines, h, table)?;
+    Ok((first, end))
+}
+
+fn table_name(table: &Table) -> String {
+    match table.nth {
+        0 => format!("the table under `{}`", table.heading),
+        n => format!("table {} under `{}`", n + 1, table.heading),
+    }
+}
+
+fn writes_status(cfg: &Config, doc: &str) -> bool {
+    cfg.logs.iter().any(|l| l.doc == doc && l.status) || cfg.tables.iter().any(|t| t.doc == doc && t.status)
+}
+
+/// The rows the fold writes for `table`, and, when the table has a status line and the rows
+/// differ from the doc's, the newest commit time among the items that changed them.
+fn table_rows(table: &Table, found: &[Item], current: &[&str]) -> (Vec<String>, Option<i64>) {
+    let shown: Vec<&Item> = found.iter().filter(|i| table.show_closed || !i.closed).collect();
+    let rows: Vec<String> = shown.iter().map(|i| render(table, i)).collect();
+    if !table.status || rows.iter().map(String::as_str).eq(current.iter().map(|l| l.trim_end())) {
+        return (rows, None);
+    }
+    let changed = shown.iter().zip(&rows).filter(|(_, r)| !current.iter().any(|c| c.trim_end() == r.as_str())).map(|(i, _)| i.time).max();
+    let time = changed.or_else(|| found.iter().map(|i| i.time).max()).unwrap_or(0);
+    (rows, Some(time))
+}
+
+fn join_doc(cfg: &Config, files: &[File], file: &File, out: &mut Joined, errors: &mut Vec<String>) {
+    let doc = file.path.as_str();
+    let mut lines: Vec<&str> = file.text.lines().collect();
+    let mut owned_rows: Vec<(usize, usize, Vec<String>)> = Vec::new();
+    let mut changed: Stamp = None;
+    for log in cfg.logs.iter().filter(|l| l.doc == doc) {
+        let frags = fragments(files, log, errors);
+        if let Err(e) = join_log(&mut lines, log, &frags) {
+            errors.push(format!("{doc} {e}"));
+        }
+        out.consumed.extend(frags.iter().map(|f| f.path.to_string()));
+        if log.status {
+            for f in &frags {
+                changed = stamp(changed, f.time, f.kind);
+            }
+        }
+    }
+    for table in cfg.tables.iter().filter(|t| t.doc == doc) {
+        let found = items(files, table, errors);
+        match place(&lines, table) {
+            Ok((first, end)) => {
+                let (rows, time) = table_rows(table, &found, lines.get(first..end).unwrap_or_default());
+                if let Some(time) = time {
+                    changed = stamp(changed, time, Kind::Minor);
+                }
+                owned_rows.push((first, end, rows));
+            }
+            Err(e) => errors.push(format!("{doc} {e}")),
+        }
+    }
+    // Tables are replaced bottom-up, so earlier line numbers stay right.
+    owned_rows.sort_by_key(|r| std::cmp::Reverse(r.0));
+    let mut joined: Vec<String> = lines.iter().map(|l| l.to_string()).collect();
+    for (first, end, rows) in owned_rows {
+        if joined.get(first..end).is_some() {
+            joined.splice(first..end, rows);
+        }
+    }
+    if writes_status(cfg, doc) {
+        let written = Status::find(&joined).and_then(|s| match changed {
+            Some((time, kind)) => Ok((s.at, s.written(&date_of(time)?, kind))),
+            None => Ok((s.at, String::new())),
+        });
+        match written {
+            Ok((at, line)) if !line.is_empty() => {
+                if let Some(l) = joined.get_mut(at) {
+                    *l = line;
+                }
+            }
+            Ok(_) => {}
+            Err(e) => errors.push(format!("{doc} {e}")),
+        }
+    }
+    let mut text = joined.join("\n");
+    if file.text.ends_with('\n') {
+        text.push('\n');
+    }
+    out.docs.insert(doc.to_string(), text);
+}
+
+fn docs_of(cfg: &Config) -> BTreeSet<&'static str> {
+    cfg.logs.iter().map(|l| l.doc).chain(cfg.tables.iter().map(|t| t.doc)).collect()
 }
 
 /// Every configured doc with its fragments and items joined in. Errors list every bad file.
 pub fn join(cfg: &Config, files: &[File]) -> Result<Joined, Vec<String>> {
     let mut errors = Vec::new();
     let by_path: BTreeMap<&str, &File> = files.iter().map(|f| (f.path.as_str(), f)).collect();
-    let docs: BTreeSet<&str> = cfg.logs.iter().map(|l| l.doc).chain(cfg.tables.iter().map(|t| t.doc)).collect();
     let mut out = Joined::default();
-    for doc in docs {
-        let Some(file) = by_path.get(doc) else {
-            errors.push(format!("{doc}: not found"));
-            continue;
-        };
-        let mut lines: Vec<&str> = file.text.lines().collect();
-        let mut owned_rows: Vec<(usize, usize, Vec<String>)> = Vec::new();
-        let mut status_frags: Vec<Fragment> = Vec::new();
-        for log in cfg.logs.iter().filter(|l| l.doc == doc) {
-            let frags = fragments(files, log, &mut errors);
-            if let Err(e) = join_log(&mut lines, log, &frags) {
-                errors.push(format!("{doc} {e}"));
-            }
-            out.consumed.extend(frags.iter().map(|f| f.path.to_string()));
-            if log.status {
-                status_frags.extend(frags);
-            }
+    for doc in docs_of(cfg) {
+        match by_path.get(doc) {
+            Some(file) => join_doc(cfg, files, file, &mut out, &mut errors),
+            None => errors.push(format!("{doc}: not found")),
         }
-        for table in cfg.tables.iter().filter(|t| t.doc == doc) {
-            let found = items(files, table, &mut errors);
-            let place = section(&lines, table.heading)
-                .and_then(|(s, e)| table_in(&lines, s, e).ok_or_else(|| format!("has no table under `{}`", table.heading)))
-                .and_then(|(h, first, end)| check_header(&lines, h, table).map(|()| (first, end)));
-            match place {
-                Ok((first, end)) => {
-                    owned_rows.push((first, end, found.iter().filter(|i| table.show_closed || !i.closed).map(|i| render(table, i)).collect()))
-                }
-                Err(e) => errors.push(format!("{doc} {e}")),
-            }
-        }
-        // Tables are replaced bottom-up, so earlier line numbers stay right.
-        owned_rows.sort_by_key(|r| std::cmp::Reverse(r.0));
-        let mut joined: Vec<String> = lines.iter().map(|l| l.to_string()).collect();
-        for (first, end, rows) in owned_rows {
-            if let Some(range) = joined.get(first..end).map(|_| first..end) {
-                joined.splice(range, rows);
-            }
-        }
-        if let Err(e) = status_line(&mut joined, &status_frags) {
-            errors.push(format!("{doc} {e}"));
-        }
-        let mut text = joined.join("\n");
-        if file.text.ends_with('\n') {
-            text.push('\n');
-        }
-        out.docs.insert(doc.to_string(), text);
     }
     if errors.is_empty() { Ok(out) } else { Err(errors) }
 }
 
-/// The joined regions of `text` (the doc at `doc`), each with a name for errors.
-fn regions(cfg: &Config, doc: &str, text: &str) -> Vec<(String, String)> {
-    let lines: Vec<&str> = text.lines().collect();
+const HAND: &str = "was edited by hand. Only the fold writes it: add a fragment or edit the item file instead";
+
+/// The fragments of `log` in `base` that the pull request deleted: only the fold does that.
+fn consumed<'a>(base: &'a [File], head: &BTreeSet<&str>, log: &Log, errors: &mut Vec<String>) -> Vec<Fragment<'a>> {
     let mut out = Vec::new();
-    for log in cfg.logs.iter().filter(|l| l.doc == doc) {
-        if let Ok((s, e)) = section(&lines, log.heading) {
-            out.push((format!("`{}`", log.heading), lines.get(s..e).unwrap_or_default().join("\n")));
-        }
-        if log.status {
-            let line = lines.iter().find(|l| l.contains("**Last updated:**")).copied().unwrap_or_default();
-            for field in ["Last updated", "Change"] {
-                let key = format!("**{field}:**");
-                let value =
-                    line.find(&key).and_then(|at| line.get(at + key.len()..)).map(|r| r.split(" · ").next().unwrap_or(r).trim()).unwrap_or_default();
-                out.push((format!("the status line's {key}"), value.to_string()));
-            }
-        }
-    }
-    for table in cfg.tables.iter().filter(|t| t.doc == doc) {
-        if let Some((_, first, end)) = section(&lines, table.heading).ok().and_then(|(s, e)| table_in(&lines, s, e)) {
-            out.push((format!("the table under `{}`", table.heading), lines.get(first..end).unwrap_or_default().join("\n")));
+    for f in in_dir(base, log.dir).into_iter().filter(|f| !head.contains(f.path.as_str())) {
+        match fragment(f) {
+            Ok(fragment) => out.push(fragment),
+            Err(e) => errors.push(format!("{} was deleted, but the fold couldn't have folded it: {e}", f.path)),
         }
     }
     out
 }
 
-/// What CI runs on a pull request: `base` is the merge base's files, `head` the pull request's.
-/// Fails on any bad fragment or item, and on a joined region the pull request changed unless it
-/// now reads as the fold would write it (the fold's own pull request).
-pub fn check(cfg: &Config, base: &[File], head: &[File]) -> Vec<String> {
-    let mut errors = match join(cfg, head) {
-        Ok(_) => Vec::new(),
-        Err(e) => return e,
-    };
-    // Commit times are not used here: CI's checkout is shallow, so they aren't known.
-    let head_paths: BTreeSet<&str> = head.iter().map(|f| f.path.as_str()).collect();
-    let in_logs = |f: &File| cfg.logs.iter().any(|l| f.path.starts_with(&format!("{}/", l.dir)));
-    // The fragments this pull request removed: only the fold does that.
-    let consumed: Vec<&File> = base.iter().filter(|f| in_logs(f) && !head_paths.contains(f.path.as_str())).collect();
-    let mut consumed_lines: Vec<String> = Vec::new();
-    for f in &consumed {
-        if let Ok(p) = front::parse(&f.text, &["kind"]) {
-            consumed_lines.extend(p.body.lines().map(str::trim_end).filter(|l| !l.trim().is_empty()).map(str::to_string));
+fn trimmed<'a>(lines: &[&'a str], range: (usize, usize)) -> Vec<&'a str> {
+    lines.get(range.0..range.1).unwrap_or_default().iter().map(|l| l.trim_end()).collect()
+}
+
+/// The log in the head must be the base's with the deleted fragments' lines put in as one block
+/// where the fold puts them (in any order, as commit times aren't known on CI's shallow checkout).
+fn check_log(doc: &str, base: &[&str], head: &[&str], log: &Log, consumed: &[Fragment], errors: &mut Vec<String>) {
+    let (Ok(bs), Ok(hs)) = (section(base, log.heading), section(head, log.heading)) else { return };
+    let (b, h) = (trimmed(base, bs), trimmed(head, hs));
+    let hand = format!("{doc}: `{}` {HAND}", log.heading);
+    if consumed.is_empty() {
+        if b != h {
+            errors.push(hand);
         }
+        return;
     }
-    let entry_lines = |text: &str| -> Vec<String> {
-        let mut v: Vec<String> = text.lines().map(str::trim_end).filter(|l| !l.trim().is_empty()).map(str::to_string).collect();
-        v.sort_unstable();
-        v
+    let at = log_insert(base, log).map_or(b.len(), |i| i.at.saturating_sub(bs.0).min(b.len()));
+    let (pre, post) = b.split_at(at);
+    let mut want: Vec<&str> = consumed.iter().flat_map(|f| f.lines.iter().copied()).collect();
+    want.sort_unstable();
+    let fits = h.len() >= pre.len() + post.len() && h.starts_with(pre) && h.ends_with(post) && {
+        let mut mid: Vec<&str> =
+            h.get(pre.len()..h.len() - post.len()).unwrap_or_default().iter().copied().filter(|l| !l.trim().is_empty()).collect();
+        mid.sort_unstable();
+        mid == want
     };
-    let items_only: Vec<File> = head.iter().filter(|f| !in_logs(f)).cloned().collect();
-    for doc in cfg.logs.iter().map(|l| l.doc).chain(cfg.tables.iter().map(|t| t.doc)).collect::<BTreeSet<_>>() {
-        let text_of = |files: &[File]| files.iter().find(|f| f.path == doc).map(|f| f.text.clone());
-        let (Some(base_text), Some(head_text)) = (text_of(base), text_of(head)) else { continue };
-        // The tables as the fold would write them from this pull request's items.
-        let mut tables_from: Vec<File> = items_only.iter().filter(|f| f.path != doc).cloned().collect();
-        tables_from.push(File { path: doc.to_string(), text: base_text.clone(), time: 0 });
-        let want = join(&Config { logs: &[], tables: cfg.tables }, &tables_from).ok().and_then(|j| j.docs.get(doc).cloned()).unwrap_or_default();
-        let (b, w) = (regions(cfg, doc, &base_text), regions(cfg, doc, &want));
-        // The cutover pull request itself: the base has no folder yet, so nothing was folded there.
-        let started = |dir: &str| base.iter().any(|f| f.path.starts_with(&format!("{dir}/")));
-        let log_started = cfg.logs.iter().filter(|l| l.doc == doc).all(|l| started(l.dir));
-        for (name, value) in regions(cfg, doc, &head_text) {
-            let in_region = |r: &[(String, String)]| r.iter().find(|(n, _)| *n == name).map(|(_, v)| v.clone());
-            let before = in_region(&b).unwrap_or_default();
-            let table_started =
-                cfg.tables.iter().filter(|t| t.doc == doc && name == format!("the table under `{}`", t.heading)).all(|t| started(t.dir));
-            let cutover = if name.starts_with("the table") { !table_started } else { !log_started };
-            let ok = value == before
-                || cutover
-                || if name.starts_with("the status line") {
-                    !consumed.is_empty()
-                } else if name.starts_with("the table") {
-                    in_region(&w).is_some_and(|v| v == value)
-                } else {
-                    let mut expected = entry_lines(&before);
-                    expected.extend(consumed_lines.iter().cloned());
-                    expected.sort_unstable();
-                    !consumed.is_empty() && entry_lines(&value) == expected
-                };
-            if !ok {
-                errors.push(format!("{doc}: {name} was edited by hand. Only the fold writes it: add a fragment or edit the item file instead"));
+    if fits {
+        return;
+    }
+    let missing: Vec<&Fragment> = consumed.iter().filter(|f| !f.lines.iter().all(|l| h.contains(l))).collect();
+    if missing.is_empty() {
+        errors.push(hand);
+    }
+    for f in missing {
+        errors.push(format!("{} was deleted but its entry isn't in `{}` of {doc}; only the fold removes a fragment", f.path, log.heading));
+    }
+}
+
+/// The status line may move only in a pull request that folded fragments into the doc or changed
+/// (or rebuilt) a table the line follows, and only to the `Change` the fold writes, never back.
+fn check_status(doc: &str, base: &[&str], head: &[&str], want: Option<Kind>, errors: &mut Vec<String>) {
+    let Ok(h) = Status::find(head) else { return };
+    let (bd, bc) = Status::find(base).map(|b| (b.date().to_string(), b.change())).unwrap_or_default();
+    let (hd, hc) = (h.date(), h.change());
+    if bd == hd && bc == hc {
+        return;
+    }
+    let Some(want) = want else {
+        for (field, same) in [("**Last updated:**", bd == hd), ("**Change:**", bc == hc)] {
+            if !same {
+                errors.push(format!("{doc}: the status line's {field} {HAND}"));
             }
         }
+        return;
+    };
+    if hc != want.word() {
+        errors.push(format!("{doc}: the status line's **Change:** is `{hc}`; the fold writes `{}`", want.word()));
+    }
+    if hd < bd.as_str() {
+        errors.push(format!("{doc}: the status line's **Last updated:** went back from {bd} to {hd}"));
+    }
+}
+
+/// `doc` with its tables as the fold would write them from the head's items.
+fn tables_folded(cfg: &Config, doc: &str, base_text: &str, head: &[File]) -> Option<String> {
+    let in_logs = |f: &File| cfg.logs.iter().any(|l| f.path.starts_with(&format!("{}/", l.dir)));
+    let mut from: Vec<File> = head.iter().filter(|f| !in_logs(f) && f.path != doc).cloned().collect();
+    from.push(File { path: doc.to_string(), text: base_text.to_string(), time: 0 });
+    join(&Config { logs: &[], tables: cfg.tables }, &from).ok().and_then(|j| j.docs.get(doc).cloned())
+}
+
+fn rows_of(lines: &[&str], table: &Table) -> Option<Vec<String>> {
+    place(lines, table).ok().map(|r| trimmed(lines, r).into_iter().map(str::to_string).collect())
+}
+
+fn check_doc(cfg: &Config, base: &[File], head: &[File], doc: &str, errors: &mut Vec<String>) {
+    let text_of = |files: &[File]| files.iter().find(|f| f.path == doc).map(|f| f.text.clone());
+    let (Some(base_text), Some(head_text)) = (text_of(base), text_of(head)) else { return };
+    let (bl, hl): (Vec<&str>, Vec<&str>) = (base_text.lines().collect(), head_text.lines().collect());
+    let head_paths: BTreeSet<&str> = head.iter().map(|f| f.path.as_str()).collect();
+    // The cutover pull request: the base has no folder yet, so nothing was folded there. A
+    // README is never deleted and an item never is, so a started folder stays started.
+    let started = |dir: &str| base.iter().any(|f| f.path.starts_with(&format!("{dir}/")));
+    let mut kinds: Option<Kind> = None;
+    let mut exempt = false;
+    for log in cfg.logs.iter().filter(|l| l.doc == doc) {
+        let gone = consumed(base, &head_paths, log, errors);
+        if log.status {
+            kinds = gone.iter().map(|f| f.kind).chain(kinds).max();
+            exempt |= !started(log.dir);
+        }
+        if started(log.dir) {
+            check_log(doc, &bl, &hl, log, &gone, errors);
+        }
+    }
+    let want = tables_folded(cfg, doc, &base_text, head);
+    let want_lines: Vec<&str> = want.as_deref().unwrap_or_default().lines().collect();
+    let mut table_moved = false;
+    for table in cfg.tables.iter().filter(|t| t.doc == doc) {
+        let (b, h) = (rows_of(&bl, table), rows_of(&hl, table));
+        let changed = b != h;
+        if table.status {
+            exempt |= !started(table.dir);
+            let edited = in_dir(head, table.dir).iter().any(|h| !base.iter().any(|b| b.path == h.path && b.text == h.text));
+            table_moved |= changed || edited;
+        }
+        if started(table.dir) && changed && (want.is_none() || h != rows_of(&want_lines, table)) {
+            errors.push(format!("{doc}: {} {HAND}", table_name(table)));
+        }
+    }
+    if writes_status(cfg, doc) && !exempt {
+        let want = if table_moved { kinds.max(Some(Kind::Minor)) } else { kinds };
+        check_status(doc, &bl, &hl, want, errors);
+    }
+}
+
+/// What CI runs on a pull request: `base` is the merge base's files, `head` the pull request's.
+/// Fails on any bad fragment or item; on a deleted item, folder README or unfolded fragment; and
+/// on a joined region the pull request changed unless it now reads as the fold would write it
+/// (the fold's own pull request).
+pub fn check(cfg: &Config, base: &[File], head: &[File]) -> Vec<String> {
+    if let Err(e) = join(cfg, head) {
+        return e;
+    }
+    // Commit times are not used here: CI's checkout is shallow, so they aren't known.
+    let mut errors = Vec::new();
+    let head_paths: BTreeSet<&str> = head.iter().map(|f| f.path.as_str()).collect();
+    let dirs: BTreeSet<&str> = cfg.logs.iter().map(|l| l.dir).chain(cfg.tables.iter().map(|t| t.dir)).collect();
+    for dir in dirs {
+        let readme = format!("{dir}/README.md");
+        if base.iter().any(|f| f.path == readme) && !head_paths.contains(readme.as_str()) {
+            errors.push(format!("{readme}: was deleted; it keeps the folder started, put it back"));
+        }
+    }
+    for dir in cfg.tables.iter().map(|t| t.dir).collect::<BTreeSet<_>>() {
+        for f in in_dir(base, dir).into_iter().filter(|f| !head_paths.contains(f.path.as_str())) {
+            errors.push(format!("{}: was deleted; items are never deleted, set `status: closed` instead", f.path));
+        }
+    }
+    for doc in docs_of(cfg) {
+        check_doc(cfg, base, head, doc, &mut errors);
     }
     errors
 }
@@ -536,40 +895,57 @@ fn slug(text: &str) -> String {
     if out.is_empty() { "item".into() } else { out }
 }
 
-fn unescape(cell: &str) -> String {
-    cell.replace("<br>", "\n").replace("\\|", "|")
+fn number_column(table: &Table) -> Option<usize> {
+    table.columns.iter().position(|(_, f)| *f == "number")
 }
 
-/// One item file from a table row: `rank` keeps the row's place, `number` is the row's number or
-/// `fallback` when it has none.
-fn item_from_row(table: &Table, row: &[String], rank: Option<i64>, fallback: u32) -> (u32, String, String) {
-    let mut number = None;
-    let mut fields = Vec::new();
-    let mut body = String::new();
-    let mut title = String::new();
-    for ((_, field), cell) in table.columns.iter().zip(row) {
-        match *field {
-            "number" => number = cell.chars().filter(char::is_ascii_digit).collect::<String>().parse::<u32>().ok(),
-            "body" => body = unescape(cell),
-            other => {
-                if title.is_empty() && !cell.is_empty() {
-                    title = cell.clone();
-                }
-                fields.push(format!("{other}: {}", cell.replace("\\|", "|")));
-            }
-        }
+/// The number in a row's number column; `None` when it has none.
+fn row_number(table: &Table, row: &[String]) -> Result<Option<u32>, String> {
+    let Some(cell) = number_column(table).and_then(|i| row.get(i)) else { return Ok(None) };
+    let digits: String = cell.chars().filter(char::is_ascii_digit).collect();
+    let digits = digits.trim_start_matches('0');
+    if digits.is_empty() {
+        return Ok(None);
     }
-    let number = number.unwrap_or(fallback);
+    digits.parse::<u32>().ok().filter(|n| *n <= MAX_NUMBER).map(Some).ok_or_else(|| format!("number {cell} is above {MAX_NUMBER}"))
+}
+
+/// How a row is matched across versions: its number, or, in a table without one, its first cell.
+fn row_key(table: &Table, row: &[String]) -> Option<String> {
+    if number_column(table).is_some() {
+        return row_number(table, row).ok().flatten().map(|n| n.to_string());
+    }
+    row.first().filter(|c| !c.is_empty()).cloned()
+}
+
+fn row_title(table: &Table, row: &[String]) -> String {
+    table.columns.iter().zip(row).find(|((_, f), c)| *f != "number" && *f != "body" && !c.is_empty()).map(|(_, c)| c.clone()).unwrap_or_default()
+}
+
+fn row_closed(table: &Table, row: &[String]) -> bool {
+    row_title(table, row).trim_start().starts_with("~~")
+}
+
+fn item_path(table: &Table, number: u32, row: &[String]) -> String {
+    format!("{}/{number}-{}.md", table.dir, slug(&row_title(table, row).replace('~', "")))
+}
+
+/// An item file's text from a table row's cells.
+fn item_text(table: &Table, row: &[String], rank: Option<i32>, closed: bool) -> String {
     let mut text = String::from("---\n");
     if let Some(rank) = rank {
         text.push_str(&format!("rank: {rank}\n"));
     }
-    if title.trim_start().starts_with("~~") {
+    if closed {
         text.push_str("status: closed\n");
     }
-    for f in fields {
-        text.push_str(&f);
-        text.push('\n');
+    let mut body = String::new();
+    for ((_, field), cell) in table.columns.iter().zip(row) {
+        match *field {
+            "number" => {}
+            "body" => body = unescape_pipes(&cell.replace("<br>", "\n")),
+            other => text.push_str(&format!("{other}: {}\n", unescape_pipes(cell))),
+        }
     }
     text.push_str("---\n");
     if !body.is_empty() {
@@ -577,71 +953,160 @@ fn item_from_row(table: &Table, row: &[String], rank: Option<i64>, fallback: u32
         text.push_str(&body);
         text.push('\n');
     }
-    (number, format!("{}/{number}-{}.md", table.dir, slug(&title.replace('~', ""))), text)
+    text
+}
+
+fn table_items(table: &Table, doc: &File, out: &mut Vec<File>, notes: &mut Vec<String>) -> Result<(), Vec<String>> {
+    let lines: Vec<&str> = doc.text.lines().collect();
+    let (first, end) = place(&lines, table).map_err(|e| vec![format!("{} {e}", table.doc)])?;
+    // Every line in the range starts with `|`, so each is a row; a row of the wrong width is an
+    // error, never dropped.
+    let rows: Vec<Vec<String>> = lines.get(first..end).unwrap_or_default().iter().map(|l| cells(l).unwrap_or_default()).collect();
+    let mut errors = Vec::new();
+    let mut numbers = Vec::new();
+    for (i, row) in rows.iter().enumerate() {
+        if row.len() != table.columns.len() {
+            errors.push(format!("{} `{}` row {}: {} cells, {} columns", table.doc, table.heading, i + 1, row.len(), table.columns.len()));
+        }
+        match row_number(table, row) {
+            Ok(n) => numbers.push(n),
+            Err(e) => errors.push(format!("{} `{}` row {}: {e}", table.doc, table.heading, i + 1)),
+        }
+    }
+    if !errors.is_empty() {
+        return Err(errors);
+    }
+    let mut next = numbers.iter().flatten().max().copied().unwrap_or(0).checked_add(1);
+    let mut used: BTreeSet<u32> = BTreeSet::new();
+    for (i, (row, own)) in rows.iter().zip(numbers).enumerate() {
+        let number = match own.filter(|n| !used.contains(n)) {
+            Some(n) => n,
+            None => {
+                let Some(n) = next.filter(|n| *n <= MAX_NUMBER) else {
+                    return Err(vec![format!("{} `{}` row {}: no free number up to {MAX_NUMBER}", table.doc, table.heading, i + 1)]);
+                };
+                if number_column(table).is_some() {
+                    let why = if own.is_some() { "repeated" } else { "missing" };
+                    notes.push(format!("{} `{}` row {}: number {} is {why}; it becomes {n}", table.doc, table.heading, i + 1, own.unwrap_or(0)));
+                }
+                next = n.checked_add(1);
+                n
+            }
+        };
+        used.insert(number);
+        let rank = i32::try_from(i + 1).ok();
+        out.push(File { path: item_path(table, number, row), text: item_text(table, row, rank, row_closed(table, row)), time: doc.time });
+    }
+    Ok(())
 }
 
 /// The cutover: an item file for every row of every configured table in `docs`, keeping each row's
 /// place as its `rank`. A repeated number, or a row with none, takes the next free number; each
 /// such change is in the returned notes.
 pub fn items_from_doc(cfg: &Config, docs: &[File]) -> Result<(Vec<File>, Vec<String>), Vec<String>> {
+    items_from_tables(cfg.tables, docs)
+}
+
+/// [`items_from_doc`] for some of the configured tables.
+pub fn items_from_tables(tables: &[Table], docs: &[File]) -> Result<(Vec<File>, Vec<String>), Vec<String>> {
     let mut out = Vec::new();
     let mut notes = Vec::new();
     let mut errors = Vec::new();
-    for table in cfg.tables {
-        let Some(doc) = docs.iter().find(|d| d.path == table.doc) else {
-            errors.push(format!("{}: not found", table.doc));
-            continue;
-        };
-        let lines: Vec<&str> = doc.text.lines().collect();
-        let place = section(&lines, table.heading)
-            .and_then(|(s, e)| table_in(&lines, s, e).ok_or_else(|| format!("has no table under `{}`", table.heading)))
-            .and_then(|(h, first, end)| check_header(&lines, h, table).map(|()| (first, end)));
-        let (first, end) = match place {
-            Ok(p) => p,
-            Err(e) => {
-                errors.push(format!("{} {e}", table.doc));
-                continue;
-            }
-        };
-        let rows: Vec<Vec<String>> = lines.get(first..end).unwrap_or_default().iter().filter_map(|l| cells(l)).collect();
-        let mut used: BTreeSet<u32> = BTreeSet::new();
-        let taken: BTreeSet<u32> = rows.iter().filter_map(|r| item_from_row(table, r, None, 0).0.checked_sub(0).filter(|n| *n > 0)).collect();
-        let mut next = taken.iter().max().copied().unwrap_or(0) + 1;
-        for (i, row) in rows.iter().enumerate() {
-            if row.len() != table.columns.len() {
-                errors.push(format!("{} `{}` row {}: {} cells, {} columns", table.doc, table.heading, i + 1, row.len(), table.columns.len()));
-                continue;
-            }
-            let rank = i64::try_from(i + 1).ok();
-            let (mut number, mut path, mut text) = item_from_row(table, row, rank, 0);
-            if number == 0 || used.contains(&number) {
-                let numbered = table.columns.iter().any(|(_, f)| *f == "number");
-                if numbered {
-                    notes.push(format!(
-                        "{} `{}` row {}: number {} is {}; it becomes {next}",
-                        table.doc,
-                        table.heading,
-                        i + 1,
-                        number,
-                        if number == 0 { "missing" } else { "repeated" }
-                    ));
+    for table in tables {
+        match docs.iter().find(|d| d.path == table.doc) {
+            Some(doc) => {
+                if let Err(e) = table_items(table, doc, &mut out, &mut notes) {
+                    errors.extend(e);
                 }
-                (number, path, text) = item_from_row(table, row, rank, next);
-                // The row's own number cell is replaced by the new number.
-                path = path.replacen(&format!("/{}-", number), &format!("/{next}-"), 1);
-                number = next;
-                next += 1;
             }
-            used.insert(number);
-            out.push(File { path, text, time: doc.time });
+            None => errors.push(format!("{}: not found", table.doc)),
         }
     }
     if errors.is_empty() { Ok((out, notes)) } else { Err(errors) }
 }
 
+/// A row the pull request edited, applied to main's item: only the cells the pull request changed,
+/// and of those only where main still has the old value.
+fn migrate_edit(table: &Table, item: &Item, old: &[String], pr: &[String], out: &mut Vec<File>, notes: &mut Vec<String>) {
+    let cur = cells(&render(table, item)).unwrap_or_default();
+    let mut new = cur.clone();
+    for (i, (header, _)) in table.columns.iter().enumerate() {
+        let (o, p, c) = (old.get(i), pr.get(i), cur.get(i));
+        if o == p {
+            continue;
+        }
+        if c != o && c != p {
+            notes.push(format!(
+                "{}: conflict in `{header}` of {}: main has {:?}, the pull request {:?}; main's is kept, merge it by hand",
+                table.doc,
+                item.path,
+                c.cloned().unwrap_or_default(),
+                p.cloned().unwrap_or_default()
+            ));
+        } else if let (Some(slot), Some(p)) = (new.get_mut(i), p) {
+            slot.clone_from(p);
+        }
+    }
+    if new != cur {
+        let closed = item.closed || (row_closed(table, &new) && !row_closed(table, &cur));
+        out.push(File { path: item.path.to_string(), text: item_text(table, &new, item.rank, closed), time: 0 });
+    }
+}
+
+fn migrate_table(table: &Table, files: &[File], old: &[&str], pr: &[&str], out: &mut Vec<File>, notes: &mut Vec<String>) {
+    let rows = |lines: &[&str]| -> Vec<Vec<String>> {
+        place(lines, table).ok().map(|(f, e)| lines.get(f..e).unwrap_or_default().iter().filter_map(|l| cells(l)).collect()).unwrap_or_default()
+    };
+    let (before, after) = (rows(old), rows(pr));
+    let mut errs = Vec::new();
+    let current = items(files, table, &mut errs);
+    let current_keys: Vec<Option<String>> = current.iter().map(|i| row_key(table, &cells(&render(table, i)).unwrap_or_default())).collect();
+    let mut next = current.iter().map(|i| i.number).max().unwrap_or(0).checked_add(1);
+    for row in after.iter().filter(|r| !before.contains(r)) {
+        if row.len() != table.columns.len() {
+            notes.push(format!(
+                "{}: a changed row has {} cells, the table {} columns; move it by hand: {row:?}",
+                table.doc,
+                row.len(),
+                table.columns.len()
+            ));
+            continue;
+        }
+        let key = row_key(table, row);
+        let old_row = key.as_ref().and_then(|k| before.iter().find(|b| row_key(table, b).as_ref() == Some(k)));
+        if let (Some(old_row), Some(k)) = (old_row, key.as_ref()) {
+            match current.iter().zip(&current_keys).find(|(_, ck)| ck.as_ref() == Some(k)) {
+                Some((item, _)) => migrate_edit(table, item, old_row, row, out, notes),
+                None => notes.push(format!("{}: the pull request edited row {k}, which main no longer has; move it by hand: {row:?}", table.doc)),
+            }
+            continue;
+        }
+        let Some(n) = next.filter(|n| *n <= MAX_NUMBER) else {
+            notes.push(format!("{}: no free number up to {MAX_NUMBER} for a new row; move it by hand: {row:?}", table.doc));
+            continue;
+        };
+        if let Ok(Some(own)) = row_number(table, row).map(|o| o.filter(|o| *o != n)) {
+            notes.push(format!("{}: new row numbered {own} becomes {n}", table.doc));
+        }
+        out.push(File { path: item_path(table, n, row), text: item_text(table, row, None, row_closed(table, row)), time: 0 });
+        next = n.checked_add(1);
+    }
+    for row in before.iter().filter(|r| !after.contains(r)) {
+        let key = row_key(table, row);
+        if !after.iter().any(|a| row_key(table, a) == key) {
+            notes.push(format!(
+                "{}: the pull request removed row {}; set `status: closed` on its item by hand if that was meant",
+                table.doc,
+                key.unwrap_or_default()
+            ));
+        }
+    }
+}
+
 /// Rewrites a pull request opened before the cutover: `old` is the doc at its merge base, `pr` the
-/// doc at its head, `files` the current `main` (docs, fragments and items). Returns the files to
-/// write on the pull request's branch, and notes on what couldn't be moved (never silently dropped).
+/// doc at its head, `files` the current `main` (docs, fragments and items). Rows are matched by
+/// their number, or by their first cell in a table without one. Returns the files to write on the
+/// pull request's branch, and notes on what couldn't be moved (never silently dropped).
 pub fn migrate(cfg: &Config, files: &[File], old: &File, pr: &File, name: &str) -> (Vec<File>, Vec<String>) {
     let mut out = Vec::new();
     let mut notes = Vec::new();
@@ -658,57 +1123,7 @@ pub fn migrate(cfg: &Config, files: &[File], old: &File, pr: &File, name: &str) 
         }
     }
     for table in cfg.tables.iter().filter(|t| t.doc == old.path) {
-        let rows_of = |lines: &[&str]| -> Vec<Vec<String>> {
-            section(lines, table.heading)
-                .ok()
-                .and_then(|(s, e)| table_in(lines, s, e))
-                .map(|(_, first, end)| lines.get(first..end).unwrap_or_default().iter().filter_map(|l| cells(l)).collect())
-                .unwrap_or_default()
-        };
-        let (before, after) = (rows_of(&old_lines), rows_of(&pr_lines));
-        let mut errs = Vec::new();
-        let current = items(files, table, &mut errs);
-        let mut next = current.iter().map(|i| i.number).max().unwrap_or(0) + 1;
-        for row in after.iter().filter(|r| !before.contains(r)) {
-            if row.len() != table.columns.len() {
-                notes.push(format!(
-                    "{}: a changed row has {} cells, the table {} columns; move it by hand: {row:?}",
-                    table.doc,
-                    row.len(),
-                    table.columns.len()
-                ));
-                continue;
-            }
-            let (number, _, _) = item_from_row(table, row, None, 0);
-            let was = before.iter().any(|b| item_from_row(table, b, None, 0).0 == number && number > 0);
-            match current.iter().find(|i| i.number == number).filter(|_| was) {
-                Some(item) => {
-                    let (_, _, text) = item_from_row(table, row, item.rank, number);
-                    let keep_status =
-                        if item.closed && !text.contains("status: closed") { text.replacen("---\n", "---\nstatus: closed\n", 1) } else { text };
-                    out.push(File { path: item.path.to_string(), text: keep_status, time: 0 });
-                }
-                None => {
-                    let (_, path, text) = item_from_row(table, row, None, next);
-                    let fixed =
-                        path.rsplit_once('/').and_then(|(dir, f)| f.split_once('-').map(|(_, s)| format!("{dir}/{next}-{s}"))).unwrap_or(path);
-                    if number != next {
-                        notes.push(format!("{}: new row numbered {number} becomes {next}", table.doc));
-                    }
-                    out.push(File { path: fixed, text, time: 0 });
-                    next += 1;
-                }
-            }
-        }
-        for row in before.iter().filter(|r| !after.contains(r)) {
-            let (number, _, _) = item_from_row(table, row, None, 0);
-            if !after.iter().any(|a| item_from_row(table, a, None, 0).0 == number) {
-                notes.push(format!(
-                    "{}: the pull request removed row {number}; set `status: closed` on its item by hand if that was meant",
-                    table.doc
-                ));
-            }
-        }
+        migrate_table(table, files, &old_lines, &pr_lines, &mut out, &mut notes);
     }
     (out, notes)
 }

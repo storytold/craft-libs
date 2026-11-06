@@ -7,13 +7,7 @@ use std::process::Command;
 
 const CFG: Config = Config {
     logs: &[Log { dir: "docs/progress.d", doc: "ROADMAP.md", heading: "## Progress log", newest_first: true, status: true }],
-    tables: &[Table {
-        dir: "docs/gaps.d",
-        doc: "docs/gaps.md",
-        heading: "## Ranked",
-        columns: &[("#", "number"), ("Gap", "gap")],
-        show_closed: true,
-    }],
+    tables: &[Table { dir: "docs/gaps.d", doc: "docs/gaps.md", heading: "## Ranked", columns: &[("#", "number"), ("Gap", "gap")], ..Table::DEFAULT }],
 };
 
 fn git(root: &Path, args: &[&str]) {

@@ -6,13 +6,13 @@ const ROADMAP: &str = "# App roadmap\n\n> **Last reviewed:** 2026-10-10 · **Las
 
 const GAPS: &str = "# Gaps\n\n## Every known gap, ranked\n\nProse above.\n\n| # | Gap | Evidence |\n|---|---|---|\n| 1 | First | e1 |\n| 3 | Third | e3 |\n| 2 | Second | e2 |\n\nProse below.\n\n## Revision history\n\n| Date | Change | Summary |\n|---|---|---|\n| 2026-11-01 | minor | x |\n";
 
-const LOGS: &[Log] = &[Log { dir: "docs/progress.d", doc: "ROADMAP.md", heading: "## Progress log", newest_first: true, status: true }];
+const LOGS: &[Log] = &[Log { dir: "docs/progress.d", doc: "ROADMAP.md", heading: "## Progress log", status: true, ..Log::DEFAULT }];
 const TABLES: &[Table] = &[Table {
     dir: "docs/gaps.d",
     doc: "docs/gaps.md",
     heading: "## Every known gap, ranked",
     columns: &[("#", "number"), ("Gap", "gap"), ("Evidence", "body")],
-    show_closed: true,
+    ..Table::DEFAULT
 }];
 const CFG: Config = Config { logs: LOGS, tables: TABLES };
 
@@ -62,7 +62,7 @@ fn status_line_gets_date_and_highest_kind_and_drops_the_chain() {
 
 #[test]
 fn table_log_rows_go_under_the_separator_and_must_fit() {
-    const L: &[Log] = &[Log { dir: "d", doc: "R.md", heading: "## Progress log", newest_first: true, status: false }];
+    const L: &[Log] = &[Log { dir: "d", doc: "R.md", heading: "## Progress log", ..Log::DEFAULT }];
     let cfg = Config { logs: L, tables: &[] };
     let doc = "## Progress log\n\n| Date | Entry |\n|---|---|\n| 2026-11-01 | old |\n";
     let ok = join(&cfg, &[f("R.md", doc, 0), f("d/1-x.md", "| 2026-11-06 | new |", NOV6)]).unwrap();
@@ -73,7 +73,7 @@ fn table_log_rows_go_under_the_separator_and_must_fit() {
 
 #[test]
 fn oldest_first_log_appends() {
-    const L: &[Log] = &[Log { dir: "d", doc: "R.md", heading: "## Change log", newest_first: false, status: false }];
+    const L: &[Log] = &[Log { dir: "d", doc: "R.md", heading: "## Change log", newest_first: false, ..Log::DEFAULT }];
     let cfg = Config { logs: L, tables: &[] };
     let doc = "## Change log\n\n| Date | Change |\n|---|---|\n| 2026-11-01 | old |\n\n## Next\n";
     let j = join(&cfg, &[f("R.md", doc, 0), f("d/1-x.md", "| 2026-11-06 | new |", NOV6)]).unwrap();
@@ -271,4 +271,363 @@ fn check_lets_the_cutover_pr_through() {
         d.text = d.text.replace("**Change:** trivial (old thing); previously minor (older)", "**Change:** trivial");
     }
     assert_eq!(check(&CFG, &base, &head), Vec::<String>::new());
+}
+
+// ---- review findings ----
+
+fn set(files: &mut [File], path: &str, edit: impl Fn(&str) -> String) {
+    for d in files.iter_mut().filter(|d| d.path == path) {
+        d.text = edit(&d.text);
+    }
+}
+
+fn fold_of(cfg: &Config, base: &[File]) -> Vec<File> {
+    let j = join(cfg, base).unwrap();
+    let mut head: Vec<File> = base.iter().filter(|f| !j.consumed.contains(&f.path)).cloned().collect();
+    for d in head.iter_mut() {
+        if let Some(t) = j.docs.get(&d.path) {
+            d.text = t.clone();
+        }
+    }
+    head
+}
+
+fn zero(v: &[File]) -> Vec<File> {
+    v.iter().map(|f| File { time: 0, ..f.clone() }).collect()
+}
+
+#[track_caller]
+fn has(errors: &[String], want: &str) {
+    assert!(errors.iter().any(|e| e.contains(want)), "missing {want:?} in {errors:#?}");
+}
+
+#[test]
+fn readme_is_never_consumed_and_cannot_be_deleted() {
+    let base = docs();
+    let mut head = base.clone();
+    head.retain(|f| f.path != "docs/progress.d/README.md");
+    set(&mut head, "ROADMAP.md", |t| {
+        t.replace(
+            "**Last updated:** 2026-11-01 · **Change:** trivial (old thing); previously minor (older)",
+            "**Last updated:** 2099-01-01 · **Change:** major",
+        )
+    });
+    let errors = check(&CFG, &base, &head);
+    has(&errors, "docs/progress.d/README.md: was deleted");
+    has(&errors, "**Last updated:** was edited by hand");
+}
+
+#[test]
+fn a_pending_fragment_cannot_be_dropped() {
+    let mut base = docs();
+    base.push(f("docs/progress.d/12-a.md", "- 2026-11-05: someone's entry\n", NOV5));
+    let mut head = base.clone();
+    head.retain(|f| f.path != "docs/progress.d/12-a.md");
+    has(&check(&CFG, &base, &head), "docs/progress.d/12-a.md was deleted but its entry isn't in `## Progress log`");
+}
+
+#[test]
+fn folding_cannot_reorder_the_log() {
+    let mut base = docs();
+    base.push(f("docs/progress.d/12-a.md", "- 2026-11-05: a\n", NOV5));
+    let mut head = base.clone();
+    head.retain(|f| f.path != "docs/progress.d/12-a.md");
+    set(&mut head, "ROADMAP.md", |t| {
+        t.replace(
+            "- 2026-11-01: old entry\n  wrapped.\n- 2026-10-30: older entry\n",
+            "  wrapped.\n- 2026-10-30: older entry\n- 2026-11-05: a\n- 2026-11-01: old entry\n",
+        )
+    });
+    has(&check(&CFG, &base, &head), "`## Progress log` was edited by hand");
+}
+
+#[test]
+fn the_fold_block_may_hold_fragments_in_any_order() {
+    let mut base = docs();
+    base.push(f("docs/progress.d/12-z.md", "- 2026-11-05: a\n", NOV6));
+    base.push(f("docs/progress.d/13-a.md", "- 2026-11-06: b\n  more\n", NOV5));
+    let head = fold_of(&CFG, &base);
+    assert_eq!(check(&CFG, &zero(&base), &zero(&head)), Vec::<String>::new());
+}
+
+#[test]
+fn a_repeated_heading_is_an_error() {
+    let mut files = docs();
+    set(&mut files, "docs/gaps.md", |t| {
+        t.replacen(
+            "# Gaps\n",
+            "# Gaps\n\n<details>\n\n## Every known gap, ranked\n\n| # | Gap | Evidence |\n|---|---|---|\n| 1 | First | e1 |\n\n</details>\n",
+            1,
+        )
+    });
+    has(&join(&CFG, &files).unwrap_err(), "has `## Every known gap, ranked` 2 times");
+    has(&check(&CFG, &docs(), &files), "2 times");
+}
+
+#[test]
+fn fragment_lines_cannot_be_headings_or_status_lines() {
+    for text in ["- 2026-11-05: a\n## Next\n", "- a\n#\n", "- a\n  > **Last updated:** 2026-01-01"] {
+        let mut files = docs();
+        files.push(f("docs/progress.d/12-a.md", text, NOV5));
+        has(&join(&CFG, &files).unwrap_err(), "a fragment is only its log entry");
+        has(&check(&CFG, &docs(), &files), "12-a.md");
+    }
+}
+
+#[test]
+fn a_backslash_before_a_pipe_stays_in_its_cell() {
+    let mut files = docs();
+    set(&mut files, "docs/gaps.d/1-first.md", |_| "---\nrank: 1\ngap: C:\\|D \\\\ E\n---\ne1".into());
+    let text = joined(&files, "docs/gaps.md");
+    let row = text.lines().find(|l| l.starts_with("| 1 |")).unwrap();
+    assert_eq!(cells(row).unwrap().len(), 3, "{row}");
+    let (items, _) = items_from_doc(&CFG, &[f("docs/gaps.md", &text, 0)]).unwrap();
+    assert!(items[0].text.contains("gap: C:\\|D \\\\ E\n"), "{}", items[0].text);
+    assert_eq!(cells("| a\\\\| b |").unwrap(), ["a\\\\", "b"]);
+}
+
+#[test]
+fn carriage_returns_become_breaks() {
+    let mut files = docs();
+    set(&mut files, "docs/gaps.d/1-first.md", |_| "---\nrank: 1\ngap: a\rb\n---\ne1\r\nmore\rlast".into());
+    let text = joined(&files, "docs/gaps.md");
+    assert!(text.contains("| 1 | a<br>b | e1<br>more<br>last |"), "{text:?}");
+}
+
+#[test]
+fn escaped_and_struck_rows_round_trip() {
+    let doc = GAPS.replace("| 3 | Third | e3 |", "| 3 | ~~Third~~ | a \\| b<br>c |");
+    let (items, _) = items_from_doc(&CFG, &[f("docs/gaps.md", &doc, 0)]).unwrap();
+    let mut files = vec![f("docs/gaps.md", &doc, 0), f("ROADMAP.md", ROADMAP, 0)];
+    files.extend(items);
+    assert_eq!(joined(&files, "docs/gaps.md"), doc);
+}
+
+#[test]
+fn deleting_an_item_fails() {
+    let base = docs();
+    let mut head = base.clone();
+    head.retain(|f| f.path != "docs/gaps.d/3-third.md");
+    has(&check(&CFG, &base, &head), "docs/gaps.d/3-third.md: was deleted; items are never deleted");
+    let mut all = base.clone();
+    all.retain(|f| !f.path.starts_with("docs/gaps.d/"));
+    set(&mut all, "docs/gaps.md", |t| t.replace("| 1 | First | e1 |", "| 1 | anything | x |"));
+    let errors = check(&CFG, &base, &all);
+    has(&errors, "docs/gaps.d/1-first.md: was deleted");
+}
+
+#[test]
+fn a_status_line_of_another_shape_is_an_error() {
+    let mut files = docs();
+    set(&mut files, "ROADMAP.md", |t| {
+        t.replace(
+            "**Last updated:** 2026-11-01 · **Change:** trivial (old thing); previously minor (older) · **Target:** Word 16",
+            "**Last updated:** 2026-11-01 | **Change:** trivial | **Target:** Word 16",
+        )
+    });
+    has(&join(&CFG, &files).unwrap_err(), "ROADMAP.md line 3: the status line isn't");
+}
+
+#[test]
+fn a_second_status_line_is_an_error() {
+    let base = docs();
+    let mut head = base.clone();
+    set(&mut head, "ROADMAP.md", |t| {
+        t.replacen("# App roadmap\n", "# App roadmap\n<!-- **Last updated:** 2026-11-01 · **Change:** trivial · -->\n", 1).replace(
+            "**Last updated:** 2026-11-01 · **Change:** trivial (old thing); previously minor (older) · **Target",
+            "**Last updated:** 2099-12-31 · **Change:** major · **Target",
+        )
+    });
+    has(&join(&CFG, &head).unwrap_err(), "ROADMAP.md has `**Last updated:**` on lines 2 and 4");
+    assert!(!check(&CFG, &base, &head).is_empty());
+}
+
+#[test]
+fn change_list_is_not_change() {
+    let mut files = docs();
+    set(&mut files, "ROADMAP.md", |t| t.replace("· **Change:** trivial (old thing); previously minor (older) ·", "· **Change list:** x ·"));
+    files.push(f("docs/progress.d/12-a.md", "- 2026-11-06: a\n", NOV6));
+    let text = joined(&files, "ROADMAP.md");
+    assert!(text.contains("**Last updated:** 2026-11-06 · **Change:** minor · **Change list:** x · **Target"), "{text}");
+}
+
+#[test]
+fn the_status_date_never_goes_back() {
+    let mut files = docs();
+    files.push(f("docs/progress.d/12-a.md", "- a\n", 0));
+    assert!(joined(&files, "ROADMAP.md").contains("**Last updated:** 2026-11-01 · **Change:** minor ·"));
+}
+
+#[test]
+fn item_numbers_are_bounded_and_plain() {
+    let mut files = docs();
+    for (name, text) in [
+        ("1000001-big.md", "---\ngap: x\n---\n"),
+        ("+4-plus.md", "---\ngap: x\n---\n"),
+        ("04-zero.md", "---\ngap: x\n---\n"),
+        ("0-zero.md", "---\ngap: x\n---\n"),
+        ("5-rank.md", "---\nrank: 3000000000\ngap: x\n---\n"),
+    ] {
+        files.push(f(&format!("docs/gaps.d/{name}"), text, 0));
+    }
+    let errors = join(&CFG, &files).unwrap_err();
+    for want in [
+        "1000001-big.md: an item's number",
+        "+4-plus.md: an item's number",
+        "04-zero.md: an item's number",
+        "0-zero.md: an item's number",
+        "isn't a whole number",
+    ] {
+        has(&errors, want);
+    }
+    let (items, _) = items_from_doc(&CFG, &[f("docs/gaps.md", &GAPS.replace("| 2 | Second |", "| 2000000 | Second |"), 0)]).unwrap_or_default();
+    assert!(items.is_empty());
+    has(&items_from_doc(&CFG, &[f("docs/gaps.md", &GAPS.replace("| 2 | Second |", "| 99999999999 | Second |"), 0)]).unwrap_err(), "above 1000000");
+}
+
+#[test]
+fn migrate_survives_the_largest_number() {
+    let mut main = docs();
+    main.push(f("docs/gaps.d/1000000-big.md", "---\ngap: big\n---\nx", 0));
+    let old = f("docs/gaps.md", GAPS, 0);
+    let pr = f("docs/gaps.md", &GAPS.replace("| 2 | Second | e2 |", "| 2 | Second | e2 |\n| 9 | New | e9 |"), 0);
+    let (out, notes) = migrate(&CFG, &main, &old, &pr, "77-x");
+    assert!(out.is_empty());
+    has(&notes, "no free number");
+}
+
+#[test]
+fn an_empty_log_gets_blank_lines_around_its_entry() {
+    const L: &[Log] = &[Log { dir: "d", doc: "R.md", heading: "## Progress log", ..Log::DEFAULT }];
+    let cfg = Config { logs: L, tables: &[] };
+    let doc = "## Progress log\n\n## Next\n";
+    let j = join(&cfg, &[f("R.md", doc, 0), f("d/1-x.md", "- new", NOV6)]).unwrap();
+    assert_eq!(j.docs.get("R.md").unwrap(), "## Progress log\n\n- new\n\n## Next\n");
+    let j = join(&cfg, &[f("R.md", "## Progress log\n## Next\n", 0), f("d/1-x.md", "- new", NOV6)]).unwrap();
+    assert_eq!(j.docs.get("R.md").unwrap(), "## Progress log\n\n- new\n\n## Next\n");
+    // and the check accepts that fold
+    let base = vec![f("R.md", doc, 0), f("d/1-x.md", "- new", 0), f("d/README.md", "how", 0)];
+    assert_eq!(check(&cfg, &base, &fold_of(&cfg, &base)), Vec::<String>::new());
+}
+
+#[test]
+fn a_row_without_a_trailing_pipe_is_read() {
+    assert_eq!(cells("| a | b").unwrap(), ["a", "b"]);
+    let doc = GAPS.replace("| 3 | Third | e3 |", "| 3 | Third | e3");
+    let (items, notes) = items_from_doc(&CFG, &[f("docs/gaps.md", &doc, 0)]).unwrap();
+    assert_eq!(items.len(), 3, "{notes:?}");
+    has(
+        &items_from_doc(&CFG, &[f("docs/gaps.md", &GAPS.replace("| 3 | Third | e3 |", "| 3 | Third |"), 0)]).unwrap_err(),
+        "row 2: 2 cells, 3 columns",
+    );
+}
+
+const UI: &[Table] =
+    &[Table { dir: "docs/ui.d", doc: "docs/ui.md", heading: "# UI", columns: &[("Area", "area"), ("Parity", "parity")], ..Table::DEFAULT }];
+const UICFG: Config = Config { logs: &[], tables: UI };
+const UIDOC: &str = "# UI\n\n| Area | Parity |\n|---|---|\n| Ribbon | 50% |\n| Find | 80% |\n";
+
+#[test]
+fn migrate_edits_an_unnumbered_row_in_place() {
+    let (items, _) = items_from_doc(&UICFG, &[f("docs/ui.md", UIDOC, 0)]).unwrap();
+    let mut main = vec![f("docs/ui.md", UIDOC, 0)];
+    main.extend(items);
+    let pr = f("docs/ui.md", &UIDOC.replace("| Find | 80% |", "| Find | 90% |"), 0);
+    let (out, notes) = migrate(&UICFG, &main, &f("docs/ui.md", UIDOC, 0), &pr, "9-x");
+    for o in &out {
+        main.retain(|m| m.path != o.path);
+        main.push(o.clone());
+    }
+    let text = join(&UICFG, &main).unwrap().docs.get("docs/ui.md").unwrap().clone();
+    assert_eq!(text, "# UI\n\n| Area | Parity |\n|---|---|\n| Ribbon | 50% |\n| Find | 90% |\n", "notes {notes:?}");
+}
+
+#[test]
+fn migrate_keeps_cells_main_changed() {
+    let mut main = docs();
+    set(&mut main, "docs/gaps.d/3-third.md", |t| t.replace("e3", "e3 updated on main"));
+    let old = f("docs/gaps.md", GAPS, 0);
+    let pr = f("docs/gaps.md", &GAPS.replace("| 3 | Third | e3 |", "| 3 | Third renamed | e3 |"), 0);
+    let (out, notes) = migrate(&CFG, &main, &old, &pr, "77-x");
+    assert!(out[0].text.contains("e3 updated on main") && out[0].text.contains("gap: Third renamed"), "{}", out[0].text);
+    assert!(notes.is_empty(), "{notes:?}");
+    let pr = f("docs/gaps.md", &GAPS.replace("| 3 | Third | e3 |", "| 3 | Third | e3 from the pr |"), 0);
+    let (out, notes) = migrate(&CFG, &main, &old, &pr, "77-x");
+    assert!(out.is_empty(), "{out:?}");
+    has(&notes, "conflict");
+}
+
+const TWO: &str = "## Tools\n\n| A | B |\n|---|---|\n| x | 1 |\n\nToolbar:\n\n| Tool | Key |\n|---|---|\n| Pen | P |\n";
+
+#[test]
+fn nth_picks_a_later_table_under_the_heading() {
+    const T: &[Table] =
+        &[Table { dir: "t.d", doc: "t.md", heading: "## Tools", columns: &[("Tool", "tool"), ("Key", "key")], nth: 1, ..Table::DEFAULT }];
+    let cfg = Config { logs: &[], tables: T };
+    let (items, _) = items_from_doc(&cfg, &[f("t.md", TWO, 0)]).unwrap();
+    assert_eq!(items.len(), 1);
+    assert!(items[0].text.contains("tool: Pen"));
+    let mut files = vec![f("t.md", TWO, 0)];
+    files.extend(items);
+    assert_eq!(join(&cfg, &files).unwrap().docs.get("t.md").unwrap(), TWO);
+    set(&mut files, "t.d/1-pen.md", |t| t.replace("key: P", "key: Q"));
+    assert_eq!(join(&cfg, &files).unwrap().docs.get("t.md").unwrap(), &TWO.replace("| Pen | P |", "| Pen | Q |"));
+}
+
+#[test]
+fn a_heading_matches_with_a_bracketed_suffix() {
+    let doc = UIDOC.replace("# UI\n", "# UI (≈ 45%)\n");
+    let (items, _) = items_from_doc(&UICFG, &[f("docs/ui.md", &doc, 0)]).unwrap();
+    assert_eq!(items.len(), 2);
+    has(&items_from_doc(&UICFG, &[f("docs/ui.md", &UIDOC.replace("# UI\n", "# UI parity\n"), 0)]).unwrap_err(), "has no `# UI` heading");
+}
+
+const SGAPS: &str = "# Gaps\n\n> **Last updated:** 2026-11-01 · **Change:** trivial (x); previously minor · **Owner:** y\n\n## Every known gap, ranked\n\n| # | Gap | Evidence |\n|---|---|---|\n| 1 | First | e1 |\n| 2 | Second | e2 |\n\n## Revision history\n\n| Date | Change | Summary |\n|---|---|---|\n| 2026-11-01 | minor | x |\n";
+const SLOGS: &[Log] = &[Log { dir: "docs/gaps-log.d", doc: "docs/gaps.md", heading: "## Revision history", status: true, ..Log::DEFAULT }];
+const STABLES: &[Table] = &[Table { status: true, ..TABLES[0] }];
+const SCFG: Config = Config { logs: SLOGS, tables: STABLES };
+
+fn sdocs() -> Vec<File> {
+    let (items, _) = items_from_doc(&SCFG, &[f("docs/gaps.md", SGAPS, 0)]).unwrap();
+    let mut out = vec![f("docs/gaps.md", SGAPS, 0), f("docs/gaps-log.d/README.md", "how", 0)];
+    out.extend(items);
+    out
+}
+
+#[test]
+fn a_table_docs_status_line_follows_its_items() {
+    let mut files = sdocs();
+    assert_eq!(join(&SCFG, &files).unwrap().docs.get("docs/gaps.md").unwrap(), SGAPS);
+    for i in files.iter_mut().filter(|i| i.path == "docs/gaps.d/2-second.md") {
+        i.text = i.text.replace("e2", "e2 better");
+        i.time = NOV6;
+    }
+    let text = join(&SCFG, &files).unwrap().docs.get("docs/gaps.md").unwrap().clone();
+    assert!(text.contains("> **Last updated:** 2026-11-06 · **Change:** minor · **Owner:** y\n"), "{text}");
+    files.push(f("docs/gaps-log.d/1-x.md", "---\nkind: major\n---\n| 2026-11-05 | major | z |", NOV5));
+    let text = join(&SCFG, &files).unwrap().docs.get("docs/gaps.md").unwrap().clone();
+    assert!(text.contains("> **Last updated:** 2026-11-06 · **Change:** major · **Owner:** y\n"), "{text}");
+}
+
+#[test]
+fn check_guards_a_table_docs_status_line() {
+    let base = sdocs();
+    let mut hand = base.clone();
+    set(&mut hand, "docs/gaps.md", |t| t.replace("2026-11-01 · **Change:** trivial (x); previously minor", "2026-11-07 · **Change:** minor"));
+    has(&check(&SCFG, &base, &hand), "docs/gaps.md: the status line's **Last updated:** was edited by hand");
+    // The fold after an item edit passes, with the fold's own Change only.
+    let mut edited = base.clone();
+    for i in edited.iter_mut().filter(|i| i.path == "docs/gaps.d/2-second.md") {
+        i.text = i.text.replace("e2", "e2 better");
+        i.time = NOV6;
+    }
+    let fold = fold_of(&SCFG, &edited);
+    assert_eq!(check(&SCFG, &zero(&edited), &zero(&fold)), Vec::<String>::new());
+    let mut wrong = fold.clone();
+    set(&mut wrong, "docs/gaps.md", |t| t.replace("**Change:** minor", "**Change:** major"));
+    has(&check(&SCFG, &edited, &wrong), "**Change:** is `major`; the fold writes `minor`");
+    // No item changes, no fragments: the status line can't move.
+    let mut moved = fold.clone();
+    set(&mut moved, "docs/gaps.md", |t| t.replace("2026-11-06", "2026-11-08"));
+    has(&check(&SCFG, &fold, &moved), "**Last updated:** was edited by hand");
 }
