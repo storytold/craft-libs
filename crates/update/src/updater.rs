@@ -16,7 +16,7 @@ use crate::dialog::{StartupPrompt, StartupPromptResponse};
 use crate::pins::{Choice, Pins};
 use crate::release::Release;
 use crate::translate::{Note, Translate, english};
-use crate::{App, Http, Paths, Platform, Stop, check_for_update, self_update};
+use crate::{App, Http, Paths, Platform, Stop, check_for_update, self_update, skipped};
 
 /// Asks for the newest release (blocking; it runs on its own thread). Tests stand in for the network
 /// with one; without it the check asks GitHub.
@@ -96,6 +96,8 @@ pub struct Updater {
     installed: bool,
     /// The version-choice file to read in place of [`Pins::default_path`] (tests).
     pins_path: Option<PathBuf>,
+    /// The skipped-release file to use in place of [`skipped::default_path`] (tests).
+    skipped_path: Option<PathBuf>,
     /// The launcher's choice for this app when it is not stable, as of the last check or offer.
     managed: Option<Choice>,
     /// Puts the prompt and its messages in the interface language ([`crate::translate`]).
@@ -119,6 +121,7 @@ impl Updater {
             restart: false,
             installed: false,
             pins_path: None,
+            skipped_path: None,
             managed: None,
             translate: english,
         }
@@ -156,6 +159,16 @@ impl Updater {
     pub fn with_pins_path(mut self, path: impl Into<PathBuf>) -> Self {
         self.pins_path = Some(path.into());
         self
+    }
+
+    /// Keeps the skipped release in `path` instead of the per-user file (tests).
+    pub fn with_skipped_path(mut self, path: impl Into<PathBuf>) -> Self {
+        self.skipped_path = Some(path.into());
+        self
+    }
+
+    fn skipped_file(&self) -> Option<PathBuf> {
+        self.skipped_path.clone().or_else(skipped::default_path)
     }
 
     /// The launcher's choice for this app when it keeps it off stable releases (a pinned version,
@@ -266,6 +279,12 @@ impl Updater {
             return;
         }
         match answer {
+            // The check at start offers nothing for a release the person chose to skip; one they
+            // asked for still does.
+            Ok(Some(release)) if !requested && self.skipped_file().is_some_and(|path| skipped::is_skipped(&path, self.app.id, &release.tag)) => {
+                log::info!("{} {} was skipped at an earlier prompt; not offered at start", self.app.name, release.tag);
+                self.status = Status::Idle;
+            }
             Ok(Some(release)) => {
                 self.status = Status::Idle;
                 if self.prompt.is_none() && self.install.is_none() && !self.installed {
@@ -373,6 +392,25 @@ impl Updater {
                 self.prompt = None;
                 Action::None
             }
+            StartupPromptResponse::SkipVersion => {
+                self.skip_offered();
+                Action::None
+            }
+        }
+    }
+
+    /// Closes the prompt and remembers its release as skipped, so the check at start doesn't offer
+    /// it again.
+    fn skip_offered(&mut self) {
+        let Some(prompt) = self.prompt.take() else { return };
+        let tag = prompt.release.tag;
+        match self.skipped_file() {
+            Some(path) => {
+                if let Err(e) = skipped::skip(&path, self.app.id, &tag) {
+                    log::warn!("{} couldn't remember skipping {tag}: {e}", self.app.name);
+                }
+            }
+            None => log::warn!("{} has no data folder to remember skipping {tag} in", self.app.name),
         }
     }
 
@@ -786,3 +824,7 @@ mod tests {
 #[cfg(test)]
 #[path = "updater_pin_tests.rs"]
 mod pin_tests;
+
+#[cfg(test)]
+#[path = "updater_skip_tests.rs"]
+mod skip_tests;

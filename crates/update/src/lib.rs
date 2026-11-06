@@ -25,6 +25,7 @@ pub mod proxy;
 pub mod queue;
 pub mod release;
 pub mod self_update;
+pub mod skipped;
 pub mod source;
 pub mod status;
 pub mod suite;
