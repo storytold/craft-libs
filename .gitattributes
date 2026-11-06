@@ -1,2 +1,4 @@
 # Copies of the vendored krilla source diff, one per patch (see vendor/krilla/README.craft.md).
 vendor/krilla/patches/*.patch linguist-generated=true
+# The BMP test fixtures and their expected pictures are byte-exact: no line-ending conversion on checkout.
+crates/scan/tests/fixtures/** binary
