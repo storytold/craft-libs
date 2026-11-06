@@ -12,6 +12,7 @@ build = "build.rs"
 workspace = true
 
 [dependencies]
+craft-khmer.workspace = true
 log = "0.4"
 miniz_oxide = "0.9"
 toml = { version = "1", default-features = false, features = ["parse", "serde", "std"] }
