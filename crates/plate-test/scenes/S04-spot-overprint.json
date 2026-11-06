@@ -1,0 +1,34 @@
+{
+  "id": "S04",
+  "title": "Gold 50 over C100, overprint on",
+  "source": "research S4 (GWG 2.0 idea)",
+  "page": [360, 216],
+  "inks": [{"name": "Gold", "cmyk": [0, 20, 60, 20]}],
+  "objects": [
+    {"type": "rect", "rect": [20, 20, 320, 176], "fill": {"cmyk": [100, 0, 0, 0]}},
+    {
+      "type": "rect",
+      "rect": [100, 60, 160, 96],
+      "fill": {"spot": "Gold", "tint": 50},
+      "overprint": {"fill": true}
+    }
+  ],
+  "expect": {
+    "plates": ["Cyan", "Magenta", "Yellow", "Black", "Gold"],
+    "points": [
+      {"at": [180, 108], "inks": {"Cyan": 100, "Gold": 50}, "tol": 2, "note": "spot over cyan"},
+      {"at": [40, 108], "inks": {"Cyan": 100}, "tol": 2, "note": "cyan only"}
+    ]
+  },
+  "structure": {
+    "page_group": "none",
+    "group_cs": [],
+    "overprint": true,
+    "smask": false,
+    "blend_modes": [],
+    "color_spaces": ["DeviceCMYK", "Separation(Gold, alt DeviceCMYK)"],
+    "ext_g_states": [{"op": true}],
+    "device_rgb": false,
+    "output_intents": []
+  }
+}

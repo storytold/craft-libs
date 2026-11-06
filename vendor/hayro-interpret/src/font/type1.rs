@@ -105,6 +105,15 @@ impl Type1Font {
         }
     }
 
+    /// Craft patch (flatten): the bare CFF bytes of a `FontFile3/Type1C` font, which the glyph
+    /// ids index. Type 1 and standard fonts have none.
+    pub(crate) fn font_data(&self) -> Option<crate::font::FontData> {
+        match &self.1 {
+            Kind::Cff(c) => Some(c.font.font_data()),
+            Kind::Standard(_) | Kind::Type1(_) => None,
+        }
+    }
+
     pub(crate) fn char_code_to_unicode(&self, char_code: u32) -> Option<BfString> {
         if let Some(to_unicode) = &self.2
             && let Some(c) = to_unicode.lookup_bf_string(char_code)

@@ -8,7 +8,7 @@ use crate::matroska::error::Error;
 use crate::matroska::ids::*;
 use crate::matroska::mux::{el, el_float, el_str, el_uint};
 use crate::matroska::track::ContentEncoding;
-use crate::matroska::{ByteSource, Demuxer, OpenOptions, Packet, open_with};
+use crate::matroska::{ByteSource, Demuxer, MkvFile, OpenOptions, Packet, open_with};
 
 fn block(track: u8, rel: i16, flags: u8, data: &[u8]) -> Vec<u8> {
     let mut b = vec![0x80 | track];
@@ -149,71 +149,81 @@ fn synthetic() -> Vec<u8> {
     f
 }
 
-#[test]
-fn synthetic_file() {
-    let bytes = synthetic();
-    let f = open_with(&bytes[..], &OpenOptions { index: true, verify_crc: true }).unwrap();
+fn assert_synthetic_metadata(f: &MkvFile, bytes: &[u8]) {
     assert!(f.live);
     assert!(f.warnings.is_empty(), "{:?}", f.warnings);
     assert_eq!((f.crc_checked, f.crc_errors.len()), (1, 0));
     assert_eq!(f.info.title.as_deref(), Some("Synthetic"));
-    let v = &f.tracks[0];
-    assert!(matches!(&v.codec, Codec::Avc { avcc } if avcc[1] == 0x64));
-    let vi = v.video.as_ref().unwrap();
-    assert_eq!(vi.pixel_aspect(), (4, 3));
-    assert_eq!(vi.projection.as_ref().map(|p| p.roll), Some(-90.0));
-    assert_eq!(vi.display_rotation(), Some(1));
-    let c = vi.color.as_ref().unwrap();
-    assert!(c.full_range());
+    let video = &f.tracks[0];
+    assert!(matches!(&video.codec, Codec::Avc { avcc } if avcc[1] == 0x64));
+    let info = video.video.as_ref().unwrap();
+    assert_eq!(info.pixel_aspect(), (4, 3));
+    assert_eq!(info.projection.as_ref().map(|projection| projection.roll), Some(-90.0));
+    assert_eq!(info.display_rotation(), Some(1));
+    let color = info.color.as_ref().unwrap();
+    assert!(color.full_range());
     assert_eq!(
-        (c.matrix_coefficients, c.transfer_characteristics, c.primaries, c.max_cll, c.max_fall),
+        (color.matrix_coefficients, color.transfer_characteristics, color.primaries, color.max_cll, color.max_fall),
         (Some(9), Some(16), Some(9), Some(1000), Some(400))
     );
-    let m = c.mastering.as_ref().unwrap();
-    assert_eq!(m.primaries[1], (0.17, 0.797));
-    assert_eq!(m.white_point, (0.3127, 0.329));
-    assert_eq!((m.luminance_max, m.luminance_min), (1000.0, 0.0001));
-    assert_eq!(v.encodings, vec![ContentEncoding::HeaderStripping { bytes: vec![0, 0, 0, 1], scope: 1 }]);
-    // legacy AAC ID: ASC synthesized with explicit SBR signaling (LC, 24 kHz, stereo → 48 kHz)
+    let mastering = color.mastering.as_ref().unwrap();
+    assert_eq!(mastering.primaries[1], (0.17, 0.797));
+    assert_eq!(mastering.white_point, (0.3127, 0.329));
+    assert_eq!((mastering.luminance_max, mastering.luminance_min), (1000.0, 0.0001));
+    assert_eq!(video.encodings, vec![ContentEncoding::HeaderStripping { bytes: vec![0, 0, 0, 1], scope: 1 }]);
+    // Legacy AAC ID synthesizes explicit SBR signaling (LC, 24 kHz, stereo to 48 kHz).
     assert_eq!(f.tracks[1].codec, Codec::Aac { asc: vec![0x13, 0x10, 0x56, 0xE5, 0x98] });
     assert_eq!(f.tracks[1].language, "ger");
     assert_eq!(f.chapters[0].chapters[0].title(), Some("Intro"));
     assert_eq!(f.chapters[0].chapters[0].end_ns, Some(40_000_000));
     assert_eq!(f.attachments.len(), 1);
-    let at = &f.attachments[0];
-    assert_eq!((at.name.as_str(), at.media_type.as_str(), at.uid), ("font.ttf", "font/ttf", 77));
-    assert_eq!(&bytes[at.data_offset as usize..][..100], &[9; 100]);
+    let attachment = &f.attachments[0];
+    assert_eq!((attachment.name.as_str(), attachment.media_type.as_str(), attachment.uid), ("font.ttf", "font/ttf", 77));
+    assert_eq!(&bytes[attachment.data_offset as usize..][..100], &[9; 100]);
     assert_eq!(f.tags[0].targets.track_uids, vec![11]);
     assert_eq!(f.tags[0].simple[0].string.as_deref(), Some("Nobody"));
     assert_eq!(f.clusters.len(), 2);
-    assert_eq!(v.samples.len(), 3);
-    assert_eq!(v.keyframes(), &[0, 2]);
+    assert_eq!(video.samples.len(), 3);
+    assert_eq!(video.keyframes(), &[0, 2]);
+}
 
-    let d = Demuxer::from_slice(&bytes).unwrap();
-    let p: Vec<Packet> = d.map(|p| p.unwrap()).collect();
-    assert_eq!(p.len(), 4);
-    assert_eq!((p[0].track, p[0].pts, p[0].keyframe, p[0].duration), (0, 1000, true, 40));
-    assert_eq!(p[0].data, [0, 0, 0, 1, 0x65, 1, 2]);
-    assert_eq!((p[1].track, p[1].pts, p[1].data.len()), (1, 1005, 10));
-    assert_eq!((p[2].pts, p[2].keyframe, p[2].duration), (1040, false, 80));
-    assert_eq!(p[2].data, [0, 0, 0, 1, 0x41, 3]);
-    assert_eq!((p[3].pts, p[3].pts_ns), (1120, 1_120_000_000));
-    assert_eq!(f.read_sample(&bytes[..], 0, 1).unwrap(), p[2].data);
+fn assert_synthetic_packets(f: &MkvFile, bytes: &[u8]) {
+    let packets: Vec<Packet> = Demuxer::from_slice(bytes).unwrap().map(|packet| packet.unwrap()).collect();
+    assert_eq!(packets.len(), 4);
+    assert_eq!((packets[0].track, packets[0].pts, packets[0].keyframe, packets[0].duration), (0, 1000, true, 40));
+    assert_eq!(packets[0].data, [0, 0, 0, 1, 0x65, 1, 2]);
+    assert_eq!((packets[1].track, packets[1].pts, packets[1].data.len()), (1, 1005, 10));
+    assert_eq!((packets[2].pts, packets[2].keyframe, packets[2].duration), (1040, false, 80));
+    assert_eq!(packets[2].data, [0, 0, 0, 1, 0x41, 3]);
+    assert_eq!((packets[3].pts, packets[3].pts_ns), (1120, 1_120_000_000));
+    assert_eq!(f.read_sample(bytes, 0, 1).unwrap(), packets[2].data);
+}
 
-    // CRC mismatch is reported, not fatal
-    let mut bad = bytes.clone();
-    let title = bad.windows(9).position(|w| w == b"Synthetic").unwrap();
-    bad[title] = b's';
-    let f = open_with(&bad[..], &OpenOptions { index: true, verify_crc: true }).unwrap();
-    assert_eq!(f.crc_errors.len(), 1);
+fn assert_crc_mismatch_is_reported(bytes: &[u8]) {
+    let mut corrupted = bytes.to_vec();
+    let title = corrupted.windows(9).position(|window| window == b"Synthetic").unwrap();
+    corrupted[title] = b's';
+    let file = open_with(&corrupted[..], &OpenOptions { index: true, verify_crc: true }).unwrap();
+    assert_eq!(file.crc_errors.len(), 1);
+}
 
-    // seeking without index or cues builds the index
-    let mut d = Demuxer::with_options(&bytes[..], OpenOptions { index: false, verify_crc: false }).unwrap();
-    assert_eq!(d.file().tracks.len(), 2);
-    assert_eq!(d.seek(0, 1_100_000_000).unwrap().pts, 1000);
-    assert_eq!(d.seek(0, 1_130_000_000).unwrap().pts, 1120);
-    assert_eq!(d.next_packet().unwrap().unwrap().pts, 1120);
-    assert!(d.file().indexed);
+fn assert_seek_builds_an_index(bytes: &[u8]) {
+    let mut demuxer = Demuxer::with_options(bytes, OpenOptions { index: false, verify_crc: false }).unwrap();
+    assert_eq!(demuxer.file().tracks.len(), 2);
+    assert_eq!(demuxer.seek(0, 1_100_000_000).unwrap().pts, 1000);
+    assert_eq!(demuxer.seek(0, 1_130_000_000).unwrap().pts, 1120);
+    assert_eq!(demuxer.next_packet().unwrap().unwrap().pts, 1120);
+    assert!(demuxer.file().indexed);
+}
+
+#[test]
+fn synthetic_file() {
+    let bytes = synthetic();
+    let file = open_with(&bytes[..], &OpenOptions { index: true, verify_crc: true }).unwrap();
+    assert_synthetic_metadata(&file, &bytes);
+    assert_synthetic_packets(&file, &bytes);
+    assert_crc_mismatch_is_reported(&bytes);
+    assert_seek_builds_an_index(&bytes);
 }
 
 /// One video track and one cluster at timestamp `ts` holding `content`.
@@ -317,7 +327,7 @@ fn cue_position_past_the_file_falls_back_to_the_index() {
         let mut el_cues = Vec::new();
         el(&mut el_cues, CUES, &cues);
         bytes.splice(at..at, el_cues);
-        let mut d = Demuxer::with_options(&bytes[..], OpenOptions { index: false, verify_crc: false }).unwrap();
+        let mut d = Demuxer::with_options(bytes, OpenOptions { index: false, verify_crc: false }).unwrap();
         assert_eq!(d.file().cues.len(), 1);
         assert_eq!(d.seek(0, 0).unwrap().pts, 1000);
     }

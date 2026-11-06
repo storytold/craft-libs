@@ -1,6 +1,11 @@
 //! Just enough of an OpenType reader to ask which characters a face maps: the `cmap` table's
 //! Unicode subtables in formats 4 and 12, in a single font or one face of a collection.
 
+/// The most distinct Unicode subtables read from one face. Real fonts have one to three; a cmap
+/// may list 65535 encoding records, and each would make [`Cmap::ranges`] and [`Cmap::covers`] walk
+/// its subtable again.
+const MAX_SUBTABLES: usize = 16;
+
 /// The Unicode character maps of one face.
 pub(crate) struct Cmap<'a> {
     subtables: Vec<&'a [u8]>,
@@ -38,8 +43,15 @@ impl<'a> Cmap<'a> {
                 Some(12) => u32_at(rest, 4).and_then(|len| usize::try_from(len).ok()),
                 _ => None,
             };
-            if let Some(subtable) = len.and_then(|len| rest.get(..len)) {
+            // Encoding records often share one subtable (Unicode and Windows naming the same
+            // format 4 table); each is read once.
+            if let Some(subtable) = len.and_then(|len| rest.get(..len))
+                && !subtables.iter().any(|t: &&[u8]| t.as_ptr() == subtable.as_ptr() && t.len() == subtable.len())
+            {
                 subtables.push(subtable);
+                if subtables.len() == MAX_SUBTABLES {
+                    break;
+                }
             }
         }
         (!subtables.is_empty()).then_some(Self { subtables })
@@ -49,6 +61,53 @@ impl<'a> Cmap<'a> {
     pub(crate) fn covers(&self, c: char) -> bool {
         self.subtables.iter().any(|t| glyph(t, u32::from(c)).is_some_and(|g| g != 0))
     }
+
+    /// Every character [`Self::covers`], as sorted, disjoint, non-adjacent inclusive ranges.
+    pub(crate) fn ranges(&self) -> Vec<(u32, u32)> {
+        let mut spans: Vec<(u32, u32)> = self.subtables.iter().flat_map(|t| spans(t)).collect();
+        spans.sort_unstable();
+        let mut ranges: Vec<(u32, u32)> = Vec::new();
+        let mut next = 0;
+        for (start, end) in spans {
+            for c in start.max(next)..=end {
+                if !char::from_u32(c).is_some_and(|c| self.covers(c)) {
+                    continue;
+                }
+                match ranges.last_mut() {
+                    Some(last) if last.1 + 1 == c => last.1 = c,
+                    _ => ranges.push((c, c)),
+                }
+            }
+            next = next.max(end.saturating_add(1));
+        }
+        ranges
+    }
+}
+
+/// The code point spans a subtable lists, mapped or not.
+fn spans(t: &[u8]) -> Vec<(u32, u32)> {
+    let mut spans = Vec::new();
+    match u16_at(t, 0) {
+        Some(4) => {
+            let seg_x2 = u16_at(t, 6).map_or(0, usize::from);
+            for i in 0..seg_x2 / 2 {
+                let (Some(end), Some(start)) = (u16_at(t, 14 + 2 * i), u16_at(t, 16 + seg_x2 + 2 * i)) else { break };
+                if start <= end {
+                    spans.push((u32::from(start), u32::from(end)));
+                }
+            }
+        }
+        Some(12) => {
+            for i in 0..u32_at(t, 12).and_then(|n| usize::try_from(n).ok()).unwrap_or(0) {
+                let (Some(start), Some(end)) = (u32_at(t, 16 + 12 * i), u32_at(t, 20 + 12 * i)) else { break };
+                if start <= end {
+                    spans.push((start, end.min(u32::from(char::MAX))));
+                }
+            }
+        }
+        _ => {}
+    }
+    spans
 }
 
 fn glyph(subtable: &[u8], c: u32) -> Option<u32> {

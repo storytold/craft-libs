@@ -1,7 +1,7 @@
 {
   "crate": "hayro",
   "source_repository": "https://github.com/storytold/pdfcraft",
-  "source_revision": "7437bde378f43856eada40af25b983812e615e8a",
+  "source_revision": "ec0a965074f376a5bf610435948e4e5184bf3299",
   "source_directory": "vendor/hayro",
   "files": [
     {
@@ -60,15 +60,15 @@
     },
     {
       "path": "src/lib.rs",
-      "source_sha256": "1ce3e02072acb639c33476618446af80fca29b960a3ca764168c1c2d348d5e5d",
-      "source_git_blob": "def102b4291b1fe99f2c8975477e5d294c4f955f",
-      "sha256": "1ce3e02072acb639c33476618446af80fca29b960a3ca764168c1c2d348d5e5d"
+      "source_sha256": "682db2a32fbf4d875c0e9dd7ac5dc875a6b09ade375efbce6f104de9197de078",
+      "source_git_blob": "6333ed5808ae0cf9cf158e4730e973c1d7089bab",
+      "sha256": "8b17f78900e6f15b0d458629d69c954e436a3e8b97c01563c884456b87379d9f"
     },
     {
       "path": "src/renderer.rs",
-      "source_sha256": "b74b630b73e86b69b26ef433ee6aabbb684def133e4ae46f0cbf8f9f1fbd4484",
-      "source_git_blob": "23fc2e36cae7368e1a508bb246f3a1a15bb60a67",
-      "sha256": "b74b630b73e86b69b26ef433ee6aabbb684def133e4ae46f0cbf8f9f1fbd4484"
+      "source_sha256": "f7ff7bd088ceb43823ede33151138384af331cf71403f7d23f7b2937212efc3b",
+      "source_git_blob": "6aa53716ad2d0203a8058b2f7271515b4fc1db22",
+      "sha256": "02d256f43d9b8bceb68cee9f9f9ed0bcb48bb70d7068f2d1c6d6a9d85e3f4e64"
     }
   ]
 }

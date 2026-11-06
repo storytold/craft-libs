@@ -1,0 +1,36 @@
+{
+  "id": "S06",
+  "title": "K100 at 50% opacity over C100",
+  "source": "research S6 (the krilla RGB-group regression)",
+  "page": [360, 216],
+  "settings": {"group_cs": "cmyk"},
+  "objects": [
+    {"type": "rect", "rect": [20, 20, 200, 176], "fill": {"cmyk": [100, 0, 0, 0]}},
+    {
+      "type": "rect",
+      "rect": [120, 20, 220, 176],
+      "fill": {"cmyk": [0, 0, 0, 100]},
+      "opacity": 0.5
+    }
+  ],
+  "expect": {
+    "plates": ["Cyan", "Magenta", "Yellow", "Black"],
+    "points": [
+      {"at": [60, 108], "inks": {"Cyan": 100}, "tol": 2, "note": "cyan only"},
+      {
+        "at": [170, 108],
+        "inks": {"Cyan": 50, "Black": 50},
+        "tol": 6,
+        "note": "CMYK blending: C50 K50, no M or Y"
+      },
+      {"at": [300, 108], "inks": {"Black": 50}, "tol": 6, "note": "K 50% over paper"}
+    ]
+  },
+  "structure": {
+    "page_group": "DeviceCMYK",
+    "group_cs": ["none"],
+    "color_spaces": ["DeviceCMYK"],
+    "device_rgb": false,
+    "output_intents": []
+  }
+}
