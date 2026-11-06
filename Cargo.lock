@@ -801,11 +801,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-av1enc"
+version = "0.1.0"
+
+[[package]]
 name = "craft-cms"
 version = "0.1.0"
 dependencies = [
  "moxcms",
  "rayon",
+]
+
+[[package]]
+name = "craft-codecs"
+version = "0.1.0"
+dependencies = [
+ "craft-av1enc",
+ "craft-dnx",
+ "craft-h264enc",
+ "craft-hevcenc",
+ "craft-prores",
+ "craft-vp8",
+ "craft-vp9enc",
 ]
 
 [[package]]
@@ -829,6 +846,15 @@ dependencies = [
  "objc2-foundation 0.3.2",
  "raw-window-handle",
  "rfd",
+]
+
+[[package]]
+name = "craft-dnx"
+version = "0.1.0"
+dependencies = [
+ "craft-testkit",
+ "rayon",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -923,6 +949,19 @@ version = "0.1.0"
 dependencies = [
  "craft-fonts-build",
 ]
+
+[[package]]
+name = "craft-h264enc"
+version = "0.1.0"
+dependencies = [
+ "craft-media",
+ "rayon",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "craft-hevcenc"
+version = "0.1.0"
 
 [[package]]
 name = "craft-i18n"
@@ -1092,6 +1131,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-prores"
+version = "0.1.0"
+dependencies = [
+ "craft-media",
+ "craft-testkit",
+ "rayon",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-quit"
 version = "0.1.0"
 dependencies = [
@@ -1111,6 +1160,13 @@ dependencies = [
  "serde",
  "tempfile",
  "toml_edit",
+]
+
+[[package]]
+name = "craft-testkit"
+version = "0.1.0"
+dependencies = [
+ "craft-media-testkit",
 ]
 
 [[package]]
@@ -1191,6 +1247,18 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.21",
 ]
+
+[[package]]
+name = "craft-vp8"
+version = "0.1.0"
+dependencies = [
+ "craft-testkit",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "craft-vp9enc"
+version = "0.1.0"
 
 [[package]]
 name = "craft-web-api"

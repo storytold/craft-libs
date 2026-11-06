@@ -1,0 +1,31 @@
+[package]
+name = "craft-codecs"
+description = "Umbrella crate re-exporting pure-Rust video codecs (H.264, ProRes, DNx, HEVC, AV1, VP9, VP8)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+default = ["all"]
+all = ["h264", "prores", "dnx", "hevc", "av1", "vp9", "vp8"]
+h264 = ["dep:craft-h264enc"]
+prores = ["dep:craft-prores"]
+dnx = ["dep:craft-dnx"]
+hevc = ["dep:craft-hevcenc"]
+av1 = ["dep:craft-av1enc"]
+vp9 = ["dep:craft-vp9enc"]
+vp8 = ["dep:craft-vp8"]
+
+[dependencies]
+craft-h264enc = { workspace = true, optional = true }
+craft-prores = { workspace = true, optional = true }
+craft-dnx = { workspace = true, optional = true }
+craft-hevcenc = { workspace = true, optional = true }
+craft-av1enc = { workspace = true, optional = true }
+craft-vp9enc = { workspace = true, optional = true }
+craft-vp8 = { workspace = true, optional = true }

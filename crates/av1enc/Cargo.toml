@@ -1,0 +1,13 @@
+[package]
+name = "craft-av1enc"
+description = "Clean-room pure-Rust AV1 encoder for the Craft ecosystem"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
