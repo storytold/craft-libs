@@ -7,12 +7,13 @@
 //! - `--check`: CI. Bad fragments or items, or a joined region edited by hand, fail. The base is
 //!   the merge base with `--base <rev>`; in GitHub Actions, `HEAD^1`; else the merge base with
 //!   `origin/main`.
-//! - `--cutover`: once per repo. Turn every table row into an item file, then fold.
+//! - `--cutover`: once per repo (and again for a table added to the config). Turn every row of each
+//!   table whose folder has no items yet into an item file, then fold. Started tables are skipped.
 //! - `migrate <old> <pr> <name>`: rewrite a pull request opened before the cutover. `<old>` is its
 //!   merge base, `<pr>` its head; the new fragment is `<name>.md`. Run on the PR's branch, merged
 //!   with the current `main`.
 
-use crate::{Config, File, MAX_DOC, MAX_FILE, MAX_FILES, check, items_from_doc, join, migrate};
+use crate::{Config, File, MAX_DOC, MAX_FILE, MAX_FILES, Table, check, in_dir, items_from_tables, join, migrate};
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::process::Command;
@@ -32,9 +33,15 @@ fn paths(cfg: &Config) -> Vec<&'static str> {
     p
 }
 
-/// The last commit time of each path under `paths`, at `rev`.
-fn times(root: &Path, rev: &str, paths: &[&str]) -> Result<BTreeMap<String, i64>, String> {
-    let mut args = vec!["log", "--format=%x01%ct", "--name-only", rev, "--"];
+/// The last commit time of each path under `paths`, at `rev`; with `added`, the time of the commit
+/// that added it (a fragment edited later keeps its place in the log).
+fn times(root: &Path, rev: &str, paths: &[&str], added: bool) -> Result<BTreeMap<String, i64>, String> {
+    let mut args = vec!["log", "--format=%x01%ct", "--name-only"];
+    if added {
+        args.push("--diff-filter=A");
+    }
+    // A rev that starts with `-` is still a rev, never an option.
+    args.extend(["--end-of-options", rev, "--"]);
     args.extend(paths);
     let mut out = BTreeMap::new();
     let mut now = 0;
@@ -48,16 +55,34 @@ fn times(root: &Path, rev: &str, paths: &[&str]) -> Result<BTreeMap<String, i64>
     Ok(out)
 }
 
-/// The configured docs and every file in the configured folders, from the working tree.
+/// Commit times for the files at `rev`: fragments by the commit that added them, the rest by the
+/// last commit that touched them.
+fn known_times(root: &Path, cfg: &Config, rev: &str) -> Result<BTreeMap<String, i64>, String> {
+    let mut known = times(root, rev, &paths(cfg), false)?;
+    let logs: Vec<&str> = cfg.logs.iter().map(|l| l.dir).collect();
+    if !logs.is_empty() {
+        known.extend(times(root, rev, &logs, true)?);
+    }
+    Ok(known)
+}
+
+/// Not following a symlink: one could point anywhere on the machine.
+fn kind(path: &Path) -> Option<std::fs::FileType> {
+    std::fs::symlink_metadata(path).ok().map(|m| m.file_type())
+}
+
+/// The configured docs and every file in the configured folders, from the working tree. Symlinks
+/// are skipped.
 fn working(root: &Path, cfg: &Config) -> Result<Vec<File>, String> {
-    let known = times(root, "HEAD", &paths(cfg)).unwrap_or_default();
+    let known = known_times(root, cfg, "HEAD").unwrap_or_default();
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(0));
     let mut names = Vec::new();
     for p in paths(cfg) {
         let full = root.join(p);
-        if full.is_file() {
+        let t = kind(&full);
+        if t.is_some_and(|t| t.is_file()) {
             names.push(p.to_string());
-        } else if full.is_dir() {
+        } else if t.is_some_and(|t| t.is_dir()) {
             for entry in std::fs::read_dir(&full).map_err(|e| format!("{p}: {e}"))? {
                 let entry = entry.map_err(|e| format!("{p}: {e}"))?;
                 if entry.file_type().map_err(|e| format!("{p}: {e}"))?.is_file() {
@@ -83,14 +108,17 @@ fn working(root: &Path, cfg: &Config) -> Result<Vec<File>, String> {
     Ok(out)
 }
 
-/// The same files at `rev`, from git.
+/// The same files at `rev`, from git. Symlinks are skipped.
 fn at_rev(root: &Path, cfg: &Config, rev: &str) -> Result<Vec<File>, String> {
     let ps = paths(cfg);
-    let known = times(root, rev, &ps)?;
-    let mut args = vec!["ls-tree", "-r", "--name-only", rev, "--"];
+    let known = known_times(root, cfg, rev)?;
+    let mut args = vec!["ls-tree", "-r", "--end-of-options", rev, "--"];
     args.extend(&ps);
     let mut out = Vec::new();
-    for name in git(root, &args)?.lines().filter(|l| !l.is_empty()) {
+    let listing = git(root, &args)?;
+    // `<mode> <type> <object>\t<path>`; a symlink's mode is 120000.
+    let entries = listing.lines().filter_map(|l| l.split_once('\t')).filter(|(meta, _)| !meta.starts_with("120000") && meta.contains(" blob "));
+    for (_, name) in entries {
         // Only the configured docs and the files directly in a configured folder.
         if !ps.iter().any(|p| name == *p || name.strip_prefix(p).and_then(|r| r.strip_prefix('/')).is_some_and(|r| !r.contains('/'))) {
             continue;
@@ -98,7 +126,7 @@ fn at_rev(root: &Path, cfg: &Config, rev: &str) -> Result<Vec<File>, String> {
         if out.len() > MAX_FILES * 4 {
             return Err(format!("{rev}: too many files"));
         }
-        let text = git(root, &["show", &format!("{rev}:{name}")])?;
+        let text = git(root, &["show", "--end-of-options", &format!("{rev}:{name}")])?;
         out.push(File { path: name.to_string(), time: known.get(name).copied().unwrap_or(0), text });
     }
     Ok(out)
@@ -151,13 +179,12 @@ pub fn run(root: &Path, cfg: &Config, args: &[String]) -> Result<(), String> {
         }
         ["--check", rest @ ..] => {
             let base = match rest {
-                ["--base", rev] => git(root, &["merge-base", "HEAD", rev])?.trim().to_string(),
+                ["--base", rev] => git(root, &["merge-base", "--end-of-options", "HEAD", rev])?.trim().to_string(),
                 // CI checks out the commit being tested alone; its first parent is the base it
                 // merges into (a pull request's merge commit, or the previous `main`).
                 [] if std::env::var_os("GITHUB_ACTIONS").is_some() => {
                     if git(root, &["rev-parse", "--verify", "-q", "HEAD^1"]).is_err() {
-                        let head = git(root, &["rev-parse", "HEAD"])?;
-                        git(root, &["fetch", "-q", "--no-tags", "--depth=2", "origin", head.trim()])?;
+                        git(root, &["fetch", "-q", "--no-tags", "--deepen=1", "origin"])?;
                     }
                     "HEAD^1".to_string()
                 }
@@ -175,7 +202,12 @@ pub fn run(root: &Path, cfg: &Config, args: &[String]) -> Result<(), String> {
         }
         ["--cutover"] => {
             let files = working(root, cfg)?;
-            let (items, notes) = items_from_doc(cfg, &files).map_err(|e| e.join("\n"))?;
+            // A table that already has items is the fold's: its rows are not read again.
+            let (fresh, started): (Vec<Table>, Vec<Table>) = cfg.tables.iter().partition(|t| in_dir(&files, t.dir).is_empty());
+            for t in &started {
+                eprintln!("progress: skipped `{}` in {}: {} already has items", t.heading, t.doc, t.dir);
+            }
+            let (items, notes) = items_from_tables(&fresh, &files).map_err(|e| e.join("\n"))?;
             write_all(root, &items)?;
             for n in &notes {
                 eprintln!("note: {n}");
@@ -185,6 +217,9 @@ pub fn run(root: &Path, cfg: &Config, args: &[String]) -> Result<(), String> {
             Ok(())
         }
         ["migrate", old, pr, name] => {
+            if name.is_empty() || !name.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-') {
+                return Err(format!("migrate: the fragment name {name:?} must be [a-z0-9-]+, like `123-my-branch`"));
+            }
             let files = working(root, cfg)?;
             let (old_files, pr_files) = (at_rev(root, cfg, old)?, at_rev(root, cfg, pr)?);
             let mut written = 0;
