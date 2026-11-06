@@ -83,14 +83,26 @@ pub(crate) fn current_euid() -> Result<u32, LinkError> {
     }
     #[cfg(all(unix, not(target_os = "linux")))]
     {
-        use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
-        let path = std::env::temp_dir().join(format!(".craft-uid-{}", std::process::id()));
-        let file = std::fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(&path)?;
-        let uid = file.metadata()?.uid();
-        drop(file);
-        let _ = std::fs::remove_file(&path);
-        Ok(uid)
+        probe_euid(&std::env::temp_dir())
     }
+}
+
+/// The effective uid, read from the owner of a file this process creates in `dir`. The std library
+/// has no safe call for the euid and this crate forbids `unsafe`. The file has a random name and is
+/// made with `create_new`, which fails on an existing path (a planted file or symlink) instead of
+/// opening it, so the probe only ever touches a file it made. The file is removed before the
+/// function returns.
+#[cfg(any(all(unix, not(target_os = "linux")), all(test, unix)))]
+fn probe_euid(dir: &Path) -> Result<u32, LinkError> {
+    use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+    let mut rand = [0u8; 8];
+    getrandom::getrandom(&mut rand).map_err(LinkError::io)?;
+    let path = dir.join(format!(".craft-uid-{}-{}", std::process::id(), crate::auth::encode_hex(&rand)));
+    let file = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&path)?;
+    let uid = file.metadata().map(|meta| meta.uid());
+    drop(file);
+    let _ = std::fs::remove_file(&path);
+    Ok(uid?)
 }
 
 fn runtime_path() -> Result<PathBuf, LinkError> {
@@ -135,7 +147,7 @@ fn linux_runtime_path(xdg: Option<&std::ffi::OsStr>, euid: u32) -> PathBuf {
 
 /// `$TMPDIR/craft` when `TMPDIR` is absolute. Otherwise `/tmp/craft-<euid>`, because a shared
 /// `/tmp/craft` belongs to the first user who creates it and refuses everyone else.
-#[cfg(any(target_os = "macos", test))]
+#[cfg(any(target_os = "macos", all(test, unix)))]
 fn macos_runtime_path(tmpdir: Option<&std::ffi::OsStr>, euid: u32) -> PathBuf {
     if let Some(tmpdir) = tmpdir {
         let path = PathBuf::from(tmpdir);
@@ -265,6 +277,7 @@ mod tests {
         assert_eq!(linux_runtime_path(None, 9), PathBuf::from("/tmp/craft-9"));
     }
 
+    #[cfg(unix)]
     #[test]
     fn macos_fallback_is_per_user() {
         use std::ffi::OsStr;
@@ -273,6 +286,33 @@ mod tests {
         assert_eq!(macos_runtime_path(Some(OsStr::new("relative")), 5), PathBuf::from("/tmp/craft-5"));
         assert_eq!(macos_runtime_path(None, 9), PathBuf::from("/tmp/craft-9"));
         assert_ne!(macos_runtime_path(None, 5), macos_runtime_path(None, 6));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_uid_probe_leaves_a_planted_file_alone_and_cleans_up() {
+        use std::os::unix::fs::symlink;
+        let dir = scratch("probe");
+        std::fs::create_dir_all(&dir).unwrap();
+        // The names the probe used to pick: a planted file and a planted symlink must not be opened.
+        let planted = dir.join(format!(".craft-uid-{}", std::process::id()));
+        std::fs::write(&planted, b"keep me").unwrap();
+        let victim = dir.join("victim");
+        std::fs::write(&victim, b"keep me too").unwrap();
+        let link = dir.join(format!(".craft-uid-{}-0000000000000000", std::process::id()));
+        symlink(&victim, &link).unwrap();
+        let uid = probe_euid(&dir).unwrap();
+        assert_eq!(uid, current_euid().unwrap());
+        assert_eq!(std::fs::read(&planted).unwrap(), b"keep me");
+        assert_eq!(std::fs::read(&victim).unwrap(), b"keep me too");
+        let mut names: Vec<String> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().file_name().into_string().unwrap()).collect();
+        names.sort();
+        assert_eq!(names.len(), 3, "the probe file is gone: {names:?}");
+        // Two probes do not collide.
+        assert_eq!(probe_euid(&dir).unwrap(), uid);
+        // A directory that cannot be written is an error, not a guess.
+        assert!(probe_euid(&dir.join("missing")).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
