@@ -213,8 +213,7 @@ pub fn run(root: &Path, cfg: &Config, args: &[String]) -> Result<(), String> {
                 [] => git(root, &["merge-base", "HEAD", "origin/main"])?.trim().to_string(),
                 _ => return Err("usage: progress --check [--base <rev>]".into()),
             };
-            let mb = base;
-            let report = check_report(cfg, &at_rev(root, cfg, mb.trim())?, &working(root, cfg)?, today());
+            let report = check_report(cfg, &at_rev(root, cfg, &base)?, &working(root, cfg)?, today());
             warn(&report.warnings);
             let errors = report.errors;
             if errors.is_empty() {
