@@ -7,7 +7,7 @@
 //! }
 //! ```
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use wasm_bindgen::closure::Closure;
@@ -59,11 +59,11 @@ enum Transport {
 pub struct Host {
     app: &'static str,
     transport: Transport,
-    dirty: Cell<Option<bool>>,
+    dirty: Rc<Cell<Option<bool>>>,
     commands: Rc<RefCell<Vec<(String, String, Option<String>)>>>,
-    queued_bytes: Cell<usize>,
-    queued_id_bytes: Cell<usize>,
-    repaint: Rc<Cell<Option<Rc<dyn Fn()>>>>,
+    queued_bytes: Rc<Cell<usize>>,
+    queued_id_bytes: Rc<Cell<usize>>,
+    repaint: Rc<RefCell<Option<Rc<dyn Fn()>>>>,
 }
 
 impl Host {
@@ -88,7 +88,15 @@ impl Host {
             }
             Mode::Page => Transport::Page { canvas: canvas.clone().into() },
         };
-        Some(Self { app, transport, dirty: Cell::new(None), commands: Rc::default(), queued_bytes: Cell::new(0), queued_id_bytes: Cell::new(0), repaint: Rc::default() })
+        Some(Self {
+            app,
+            transport,
+            dirty: Rc::default(),
+            commands: Rc::default(),
+            queued_bytes: Rc::new(Cell::new(0)),
+            queued_id_bytes: Rc::new(Cell::new(0)),
+            repaint: Rc::default(),
+        })
     }
 
     pub fn mode(&self) -> Mode {
@@ -112,8 +120,16 @@ impl Host {
         let repaint = self.repaint.clone();
         match &self.transport {
             Transport::Parent { window, parent, origin } => {
-                let (parent, origin, inbox, host, commands, queued_bytes, queued_id_bytes, repaint) =
-                    (parent.clone(), origin.clone(), inbox.clone(), host.clone(), commands.clone(), queued_bytes.clone(), queued_id_bytes.clone(), repaint.clone());
+                let (parent, origin, inbox, host, commands, queued_bytes, queued_id_bytes, repaint) = (
+                    parent.clone(),
+                    origin.clone(),
+                    inbox.clone(),
+                    host.clone(),
+                    commands.clone(),
+                    queued_bytes.clone(),
+                    queued_id_bytes.clone(),
+                    repaint.clone(),
+                );
                 let on_message = Closure::<dyn Fn(web_sys::MessageEvent)>::new(move |event: web_sys::MessageEvent| {
                     if event.origin() != origin || !event.source().is_some_and(|s| js_sys::Object::is(&s, &parent)) {
                         return;
@@ -125,39 +141,73 @@ impl Host {
                         let request_id = string(&data, "requestId").filter(|r| !r.is_empty());
                         if id_raw.as_ref().map(|s| s.len()).unwrap_or(0) > crate::MAX_ID_BYTES {
                             host.post_response("", request_id.as_deref(), false, Some(&format!("id is larger than {} bytes", crate::MAX_ID_BYTES)));
-                            if let Some(f) = repaint.borrow().clone() { f(); }
+                            let _repaint_cb = repaint.borrow().clone();
+                            if let Some(f) = _repaint_cb {
+                                f();
+                            }
                             return;
                         }
                         let Some(id) = id_raw.filter(|i| !i.trim().is_empty()) else {
                             host.post_response("", request_id.as_deref(), false, Some("a command needs an id"));
-                            if let Some(f) = repaint.borrow().clone() { f(); }
+                            let _repaint_cb = repaint.borrow().clone();
+                            if let Some(f) = _repaint_cb {
+                                f();
+                            }
                             return;
                         };
-                        if request_id.as_ref().map(str::len).unwrap_or(0) > crate::MAX_ID_BYTES {
-                            host.post_response(&id, request_id.as_deref(), false, Some(&format!("requestId is larger than {} bytes", crate::MAX_ID_BYTES)));
-                            if let Some(f) = repaint.borrow().clone() { f(); }
+                        if request_id.as_ref().map(|s: &String| s.len()).unwrap_or(0) > crate::MAX_ID_BYTES {
+                            host.post_response(
+                                &id,
+                                request_id.as_deref(),
+                                false,
+                                Some(&format!("requestId is larger than {} bytes", crate::MAX_ID_BYTES)),
+                            );
+                            let _repaint_cb = repaint.borrow().clone();
+                            if let Some(f) = _repaint_cb {
+                                f();
+                            }
                             return;
                         }
-                        let params_value = js_sys::Reflect::get(&data, &JsValue::from_str("params")).ok().filter(|v| !v.is_undefined() && !v.is_null());
+                        let params_value =
+                            js_sys::Reflect::get(&data, &JsValue::from_str("params")).ok().filter(|v| !v.is_undefined() && !v.is_null());
                         let params = match params_value {
                             None => "{}".to_string(),
                             Some(v) => {
                                 let js_len = v.dyn_ref::<js_sys::JsString>().map(|s| s.length() as usize);
                                 if js_len.unwrap_or(usize::MAX) > crate::MAX_PARAMS_BYTES {
-                                    host.post_response(&id, request_id.as_deref(), false, Some(&format!("params are larger than {} bytes", crate::MAX_PARAMS_BYTES)));
-                                    if let Some(f) = repaint.borrow().clone() { f(); }
+                                    host.post_response(
+                                        &id,
+                                        request_id.as_deref(),
+                                        false,
+                                        Some(&format!("params are larger than {} bytes", crate::MAX_PARAMS_BYTES)),
+                                    );
+                                    let _repaint_cb = repaint.borrow().clone();
+                                    if let Some(f) = _repaint_cb {
+                                        f();
+                                    }
                                     return;
                                 }
                                 match v.as_string() {
                                     Some(text) if text.len() <= crate::MAX_PARAMS_BYTES => text,
                                     Some(_) => {
-                                        host.post_response(&id, request_id.as_deref(), false, Some(&format!("params are larger than {} bytes", crate::MAX_PARAMS_BYTES)));
-                                        if let Some(f) = repaint.borrow().clone() { f(); }
+                                        host.post_response(
+                                            &id,
+                                            request_id.as_deref(),
+                                            false,
+                                            Some(&format!("params are larger than {} bytes", crate::MAX_PARAMS_BYTES)),
+                                        );
+                                        let _repaint_cb = repaint.borrow().clone();
+                                        if let Some(f) = _repaint_cb {
+                                            f();
+                                        }
                                         return;
                                     }
                                     None => {
                                         host.post_response(&id, request_id.as_deref(), false, Some("params must be a string of valid JSON"));
-                                        if let Some(f) = repaint.borrow().clone() { f(); }
+                                        let _repaint_cb = repaint.borrow().clone();
+                                        if let Some(f) = _repaint_cb {
+                                            f();
+                                        }
                                         return;
                                     }
                                 }
@@ -169,13 +219,19 @@ impl Host {
                             || queued_id_bytes.get().saturating_add(id_bytes) > crate::MAX_PENDING_PARAMS_BYTES
                         {
                             host.post_response(&id, request_id.as_deref(), false, Some("too many commands are waiting; try again"));
-                            if let Some(f) = repaint.borrow().clone() { f(); }
+                            let _repaint_cb = repaint.borrow().clone();
+                            if let Some(f) = _repaint_cb {
+                                f();
+                            }
                             return;
                         }
                         queued_bytes.set(queued_bytes.get().saturating_add(params.len()));
                         queued_id_bytes.set(queued_id_bytes.get().saturating_add(id_bytes));
                         commands.borrow_mut().push((id, params, request_id));
-                        if let Some(f) = repaint.borrow().clone() { f(); }
+                        let _repaint_cb = repaint.borrow().clone();
+                        if let Some(f) = _repaint_cb {
+                            f();
+                        }
                         return;
                     }
                     if let Some(message) = read(kind, &data) {
@@ -200,40 +256,79 @@ impl Host {
                             let id_raw = string(&data, "id");
                             let request_id = string(&data, "requestId").filter(|r| !r.is_empty());
                             if id_raw.as_ref().map(|s| s.len()).unwrap_or(0) > crate::MAX_ID_BYTES {
-                                host.post_response("", request_id.as_deref(), false, Some(&format!("id is larger than {} bytes", crate::MAX_ID_BYTES)));
-                                if let Some(f) = repaint.borrow().clone() { f(); }
+                                host.post_response(
+                                    "",
+                                    request_id.as_deref(),
+                                    false,
+                                    Some(&format!("id is larger than {} bytes", crate::MAX_ID_BYTES)),
+                                );
+                                let _repaint_cb = repaint.borrow().clone();
+                                if let Some(f) = _repaint_cb {
+                                    f();
+                                }
                                 return;
                             }
                             let Some(id) = id_raw.filter(|i| !i.trim().is_empty()) else {
                                 host.post_response("", request_id.as_deref(), false, Some("a command needs an id"));
-                                if let Some(f) = repaint.borrow().clone() { f(); }
+                                let _repaint_cb = repaint.borrow().clone();
+                                if let Some(f) = _repaint_cb {
+                                    f();
+                                }
                                 return;
                             };
-                            if request_id.as_ref().map(str::len).unwrap_or(0) > crate::MAX_ID_BYTES {
-                                host.post_response(&id, request_id.as_deref(), false, Some(&format!("requestId is larger than {} bytes", crate::MAX_ID_BYTES)));
-                                if let Some(f) = repaint.borrow().clone() { f(); }
+                            if request_id.as_ref().map(|s: &String| s.len()).unwrap_or(0) > crate::MAX_ID_BYTES {
+                                host.post_response(
+                                    &id,
+                                    request_id.as_deref(),
+                                    false,
+                                    Some(&format!("requestId is larger than {} bytes", crate::MAX_ID_BYTES)),
+                                );
+                                let _repaint_cb = repaint.borrow().clone();
+                                if let Some(f) = _repaint_cb {
+                                    f();
+                                }
                                 return;
                             }
-                            let params_value = js_sys::Reflect::get(&data, &JsValue::from_str("params")).ok().filter(|v| !v.is_undefined() && !v.is_null());
+                            let params_value =
+                                js_sys::Reflect::get(&data, &JsValue::from_str("params")).ok().filter(|v| !v.is_undefined() && !v.is_null());
                             let params = match params_value {
                                 None => "{}".to_string(),
                                 Some(v) => {
                                     let js_len = v.dyn_ref::<js_sys::JsString>().map(|s| s.length() as usize);
                                     if js_len.unwrap_or(usize::MAX) > crate::MAX_PARAMS_BYTES {
-                                        host.post_response(&id, request_id.as_deref(), false, Some(&format!("params are larger than {} bytes", crate::MAX_PARAMS_BYTES)));
-                                        if let Some(f) = repaint.borrow().clone() { f(); }
+                                        host.post_response(
+                                            &id,
+                                            request_id.as_deref(),
+                                            false,
+                                            Some(&format!("params are larger than {} bytes", crate::MAX_PARAMS_BYTES)),
+                                        );
+                                        let _repaint_cb = repaint.borrow().clone();
+                                        if let Some(f) = _repaint_cb {
+                                            f();
+                                        }
                                         return;
                                     }
                                     match v.as_string() {
                                         Some(text) if text.len() <= crate::MAX_PARAMS_BYTES => text,
                                         Some(_) => {
-                                            host.post_response(&id, request_id.as_deref(), false, Some(&format!("params are larger than {} bytes", crate::MAX_PARAMS_BYTES)));
-                                            if let Some(f) = repaint.borrow().clone() { f(); }
+                                            host.post_response(
+                                                &id,
+                                                request_id.as_deref(),
+                                                false,
+                                                Some(&format!("params are larger than {} bytes", crate::MAX_PARAMS_BYTES)),
+                                            );
+                                            let _repaint_cb = repaint.borrow().clone();
+                                            if let Some(f) = _repaint_cb {
+                                                f();
+                                            }
                                             return;
                                         }
                                         None => {
                                             host.post_response(&id, request_id.as_deref(), false, Some("params must be a string of valid JSON"));
-                                            if let Some(f) = repaint.borrow().clone() { f(); }
+                                            let _repaint_cb = repaint.borrow().clone();
+                                            if let Some(f) = _repaint_cb {
+                                                f();
+                                            }
                                             return;
                                         }
                                     }
@@ -245,13 +340,19 @@ impl Host {
                                 || queued_id_bytes.get().saturating_add(id_bytes) > crate::MAX_PENDING_PARAMS_BYTES
                             {
                                 host.post_response(&id, request_id.as_deref(), false, Some("too many commands are waiting; try again"));
-                                if let Some(f) = repaint.borrow().clone() { f(); }
+                                let _repaint_cb = repaint.borrow().clone();
+                                if let Some(f) = _repaint_cb {
+                                    f();
+                                }
                                 return;
                             }
                             queued_bytes.set(queued_bytes.get().saturating_add(params.len()));
                             queued_id_bytes.set(queued_id_bytes.get().saturating_add(id_bytes));
                             commands.borrow_mut().push((id, params, request_id));
-                            if let Some(f) = repaint.borrow().clone() { f(); }
+                            let _repaint_cb = repaint.borrow().clone();
+                            if let Some(f) = _repaint_cb {
+                                f();
+                            }
                             return;
                         }
                         if let Some(message) = read(kind, &event.detail()) {
@@ -277,7 +378,7 @@ impl Host {
     /// The new state is recorded before the send: a page host can report another state while the
     /// event is still dispatching, and that later report wins. A failed send is forgotten.
     pub fn post_dirty(&self, dirty: bool) {
-        crate::note_dirty(&self.dirty, dirty, || self.post(Outgoing::Dirty, &[("dirty", dirty.into())], None).is_ok());
+        crate::note_dirty(self.dirty.as_ref(), dirty, || self.post(Outgoing::Dirty, &[("dirty", dirty.into())], None).is_ok());
     }
 
     /// Hand the host a file the app would otherwise download: Save, Save As, Export. With an
@@ -302,12 +403,6 @@ impl Host {
         self.post(Outgoing::Failed, &fields, None)
     }
 
-    pub fn take_commands(&self) -> Vec<(String, String, Option<String>)> {
-        self.queued_bytes.set(0);
-        self.queued_id_bytes.set(0);
-        std::mem::take(&mut *self.commands.borrow_mut())
-    }
-
     pub fn post_response(&self, id: &str, request_id: Option<&str>, ok: bool, text: Option<&str>) {
         let mut fields: Vec<(&str, JsValue)> = vec![("id", JsValue::from(id))];
         if let Some(request_id) = request_id {
@@ -329,7 +424,7 @@ impl Host {
     }
 
     pub fn set_repaint(&self, f: Rc<dyn Fn()>) {
-        self.repaint.set(Some(f));
+        *self.repaint.borrow_mut() = Some(f);
     }
 
     /// Commands the host sent since the last frame, oldest first: (id, params JSON, request id).
@@ -340,31 +435,10 @@ impl Host {
     }
 
     /// Tell the host how a command (`<app>:cmd`) ended.
-    pub fn post_response(&self, id: &str, request_id: Option<&str>, ok: bool, text: Option<&str>) {
-        let mut fields: Vec<(&str, JsValue)> = vec![("id", JsValue::from(id))];
-        if let Some(request_id) = request_id {
-            fields.push(("requestId", JsValue::from(request_id)));
-        }
-        fields.push(("ok", JsValue::from(ok)));
-        if ok {
-            if let Some(value) = text {
-                fields.push(("value", JsValue::from(value)));
-            }
-        } else {
-            fields.push(("error", JsValue::from(text.unwrap_or("unknown failure"))));
-        }
-        let _ = self.post(Outgoing::Response, &fields, None);
-    }
 
     /// Tell the host the document it opened has closed.
-    pub fn post_doc_closed(&self) {
-        let _ = self.post(Outgoing::DocClosed, &[], None);
-    }
 
     /// Let the host wake the frame loop when a command is queued.
-    pub fn set_repaint(&self, f: Rc<dyn Fn()>) {
-        self.repaint.set(Some(f));
-    }
 
     /// Pass the host a file another app edits; it answers [`Message::HandoffDone`] or, when no
     /// app it hosts takes the type, `failed`. Without a host, tell the user which app the file
@@ -411,6 +485,7 @@ fn read(kind: Incoming, data: &JsValue) -> Option<Message> {
         Incoming::HandoffDone => {
             Message::HandoffDone { name: string(data, "name").unwrap_or_default(), app: string(data, "app").unwrap_or_default() }
         }
+        Incoming::Cmd => return None,
     })
 }
 
