@@ -983,3 +983,31 @@ fn migrate_notes_a_table_it_cannot_read() {
     assert_eq!(out, Vec::<File>::new());
     has(&notes, "the line under the table must be blank");
 }
+
+/// Renumbering one of two items that share a number (what the warning asks for) passes: same
+/// slug, same text, a number the table doesn't use.
+#[test]
+fn renumbering_a_shared_number_passes() {
+    let mut main = docs();
+    main.push(f("docs/gaps.d/4-alpha.md", "---\ngap: Alpha\n---\nea", 0));
+    main.push(f("docs/gaps.d/4-beta.md", "---\ngap: Beta\n---\neb", 0));
+    let main = fold_of(&CFG, &main);
+    let w = join(&CFG, &main).unwrap().warnings;
+    assert!(w.iter().any(|w| w.contains("rename one")), "{w:?}");
+    let renamed = |to: &str, text: Option<&str>| {
+        let mut fix = main.clone();
+        for f in fix.iter_mut().filter(|f| f.path == "docs/gaps.d/4-beta.md") {
+            f.path = to.into();
+            if let Some(t) = text {
+                f.text = t.into();
+            }
+        }
+        check_report(&CFG, &main, &fix, today()).errors
+    };
+    assert_eq!(renamed("docs/gaps.d/5-beta.md", None), Vec::<String>::new());
+    // A number in use is a clash; a new slug or new text is still a deleted item.
+    has(&renamed("docs/gaps.d/3-beta.md", None), "have the same number 3");
+    for (to, text) in [("docs/gaps.d/5-gamma.md", None), ("docs/gaps.d/5-beta.md", Some("---\ngap: Beta\n---\nnew"))] {
+        has(&renamed(to, text), "docs/gaps.d/4-beta.md: was deleted; items are never deleted");
+    }
+}

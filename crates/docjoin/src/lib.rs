@@ -597,7 +597,7 @@ fn items<'a>(files: &'a [File], table: &Table, errors: &mut Vec<String>, warning
 }
 
 fn same_number(a: &str, b: &str, n: u32) -> String {
-    format!("{a} and {b} have the same number {n}; give one the next free number")
+    format!("{a} and {b} have the same number {n}; rename one to the next free number, keeping its slug and text")
 }
 
 /// `\` before a `|` is doubled, then the `|` escaped, so [`cells`] reads the value back.
@@ -1107,10 +1107,14 @@ pub fn check_report(cfg: &Config, base: &[File], head: &[File], today: NaiveDate
             errors.push(format!("{readme}: missing; every log folder keeps a README so a fold can't empty it"));
         }
     }
-    // ponytail: no README needed in table folders; items are never deleted, so a started one stays started.
-    for dir in cfg.tables.iter().map(|t| t.dir).collect::<BTreeSet<_>>() {
-        for f in in_dir(base, dir).into_iter().filter(|f| !head_paths.contains(f.path.as_str())) {
-            errors.push(format!("{}: was deleted; items are never deleted, set `status: closed` instead", f.path));
+    // Items are never deleted, so a started table folder stays started without a README. The one
+    // exception is a renumbering (see `renumbered`).
+    let mut seen = BTreeSet::new();
+    for table in cfg.tables.iter().filter(|t| seen.insert(t.dir)) {
+        for f in in_dir(base, table.dir).into_iter().filter(|f| !head_paths.contains(f.path.as_str())) {
+            if !renumbered(base, head, table, f) {
+                errors.push(format!("{}: was deleted; items are never deleted, set `status: closed` instead", f.path));
+            }
         }
     }
     for doc in docs_of(cfg) {
@@ -1118,6 +1122,19 @@ pub fn check_report(cfg: &Config, base: &[File], head: &[File], today: NaiveDate
     }
     report.errors = errors;
     report
+}
+
+/// Whether the base item `gone` was renamed to a new number: the head has an item with its slug
+/// and text, at a number the base's table doesn't use and no other head item takes. That is how
+/// one of two items sharing a number is given a free one.
+fn renumbered(base: &[File], head: &[File], table: &Table, gone: &File) -> bool {
+    let slug_of = |f: &File| file_name(&f.path).split_once('-').map(|(n, s)| (parse_number(n), s.to_string()));
+    let Some((_, slug)) = slug_of(gone) else { return false };
+    let (before, after) = (numbers(base, table), numbers(head, table));
+    in_dir(head, table.dir).into_iter().any(|h| {
+        h.text == gone.text
+            && slug_of(h).is_some_and(|(n, s)| s == slug && n.is_some_and(|n| !before.contains_key(&n) && after.get(&n).map_or(0, Vec::len) == 1))
+    })
 }
 
 fn slug(text: &str) -> String {
