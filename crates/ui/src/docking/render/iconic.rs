@@ -307,7 +307,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
         if !usable(bounds) {
             return;
         }
-        let width = request.width.max(self.style.min_pane).min(bounds.width());
+        let width = request.group.flyout_width.unwrap_or(request.width).max(self.style.min_pane).min(bounds.width());
         let max = self
             .content
             .floating_size(&active)
@@ -362,7 +362,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
                 self.output.actions.push(Action::ResizeGroup { panel: active.clone(), height: Some(resized.height()) });
             }
             if resized.width() != response.rect.width() {
-                self.output.actions.push(Action::ResizeColumn { panel: active, width: resized.width() });
+                self.output.actions.push(Action::ResizeFlyoutWidth { panel: active, width: Some(resized.width()) });
             }
         }
         self.iconic.rect = Some(response.rect);

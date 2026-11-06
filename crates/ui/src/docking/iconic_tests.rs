@@ -98,6 +98,8 @@ fn flyout_free_edges_resize_and_keep_the_column_anchor() {
         for name in chrome::RESIZE_HANDLES {
             assert_eq!(d.ctx.read_response(id.with(name)).is_some(), enabled.contains(&name), "{name}, right={right}");
         }
+        d.ctx.memory_mut(|m| m.request_focus(id.with("resize-bottom")));
+        assert!(DockArea::<u32>::new(d.id).chrome_has_focus(&d.ctx, &d.layout));
         let before = flyout_rect(&d);
         let from = if right { before.left_bottom() + vec2(2.0, -2.0) } else { before.right_bottom() - vec2(2.0, 2.0) };
         d.drag(from, from + vec2(if right { -90.0 } else { 90.0 }, 100.0));
@@ -113,7 +115,7 @@ fn flyout_free_edges_resize_and_keep_the_column_anchor() {
 }
 
 /// User heights override both a host floating-size hint and the last short content height;
-/// group height and column width survive tab switches, closing, and a workspace round trip.
+/// group height and width survive tab switches, closing, and a workspace round trip.
 #[test]
 fn resized_flyout_survives_reopening_and_workspace_restore() {
     struct Short;
@@ -140,11 +142,21 @@ fn resized_flyout_survives_reopening_and_workspace_restore() {
     let grown = flyout_rect(&d);
     assert!(grown.height() > 160.0);
     assert_eq!(first_column(&d.layout).groups[0].height, Some(grown.height()));
-    assert_eq!(first_column(&d.layout).width, grown.width());
+    assert_eq!(first_column(&d.layout).groups[0].flyout_width, Some(grown.width()));
+    assert_eq!(first_column(&d.layout).width, 240.0);
+    assert_eq!(first_column(&d.layout).groups[1].flyout_width, None);
     assert_eq!(first_column(&d.layout).groups[1].height, None);
     d.click(d.hit(&Hit::Icon(2)).unwrap().center());
     d.settle();
     assert_eq!(flyout_rect(&d).size(), grown.size());
+    d.click(d.hit(&Hit::Icon(3)).unwrap().center());
+    d.settle();
+    assert_eq!(flyout_rect(&d).width(), before.width(), "another group keeps its own width");
+    let from = flyout_rect(&d).right_center() - vec2(2.0, 0.0);
+    d.drag(from, from + vec2(20.0, 0.0));
+    d.click(icon);
+    d.settle();
+    assert_eq!(flyout_rect(&d).size(), grown.size(), "resizing another group leaves this one intact");
     d.click(d.hit(&Hit::Icon(2)).unwrap().center());
     d.click(icon);
     d.settle();
@@ -198,6 +210,24 @@ fn flyout_resize_respects_limits_and_preserves_height_on_width_only_drags() {
         d.drag(from, from - vec2(0.0, 60.0));
         assert_eq!(d.layout, saved);
     }
+}
+
+/// Persisted widths use the same finite geometry validation as column widths.
+#[test]
+fn flyout_width_rejects_invalid_geometry_without_mutating_the_layout() {
+    let mut layout = docked(&[&[1]], true);
+    let original = layout.clone();
+    for width in [0.0, -1.0, f32::NAN, f32::INFINITY, 2_000_000.0] {
+        assert_eq!(layout.apply(Action::ResizeFlyoutWidth { panel: 1, width: Some(width) }), Err(DockError::InvalidGeometry));
+        assert_eq!(layout, original);
+    }
+    layout.apply(Action::ResizeFlyoutWidth { panel: 1, width: Some(400.0) }).unwrap();
+    let location = layout.location(&1).unwrap();
+    layout.apply(Action::Close { panel: 1 }).unwrap();
+    layout.restore(1, &location).unwrap();
+    assert_eq!(first_column(&layout).groups[0].flyout_width, Some(400.0));
+    layout.apply(Action::ResizeFlyoutWidth { panel: 1, width: None }).unwrap();
+    assert_eq!(layout, original);
 }
 
 #[test]
