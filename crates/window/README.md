@@ -29,8 +29,10 @@ decision in one place, matching each desktop.
 
 When the app draws the frame, the decision carries the window-button `Layout` the desktop names
 (GNOME's `button-layout`), so the app's header bar puts minimize/maximize/close where that desktop
-puts them. This crate decides *whether* and *where*; drawing the buttons stays in each app, whose
-title bars differ.
+puts them. This crate decides *whether* and *where*. With the `egui` feature it also draws the
+buttons and the resize edges ([below](#window-buttons-and-resize-edges)), so they look and behave
+the same in every app; where they sit in the header bar stays with each app, whose title bars
+differ.
 
 ### Override
 
@@ -56,8 +58,8 @@ if let Some(layout) = choice.frame().layout() {
 An app that offers a "System title bar" preference checks `choice.overridden()` and its own setting,
 and can override the probe by setting the frame to `Frame::Desktop`.
 
-The `egui` feature adds [`decorate`], the [`title_bar`](#the-apps-own-title-bar) module and
-`Viewports`. Without it, the crate is pure decision and bookkeeping logic with no egui dependency.
+The `egui` feature adds [`decorate`], the [`title_bar`](#the-apps-own-title-bar) and
+[`controls`](#window-buttons-and-resize-edges) modules and `Viewports`. Without it, the crate is pure decision and bookkeeping logic with no egui dependency.
 
 ## The app's own title bar
 
@@ -88,6 +90,48 @@ app's controls and panels included, unless `NSWindow.movable` is false. `sync_mo
 flag from `title_bar::window_movable`, which is false while the pointer is on a control or a panel
 over the strip. It leaves windows with hidden window buttons alone, such as floating panels in
 their own windows.
+
+## Window buttons and resize edges
+
+Where the app draws the frame (`Frame::App`), `craft_window::controls` (`egui` feature) gives the
+window back what the desktop's frame did:
+
+| Item | What it does |
+| --- | --- |
+| `buttons(ui, &[Button], &Look, &Labels)` | Minimize, maximize/restore and close in Adwaita's style: round, with symbolic glyphs drawn in code (no icon files). Each sends its command to the window it is drawn in; Close sends `ViewportCommand::Close`, so the app's unsaved-changes check runs as for the desktop's close. Hidden in full screen. |
+| `width(&[Button])` | The width one end of the header bar needs for its buttons, including the gap to the rest of the bar. |
+| `resize_edges(ctx, &Look)` | Resize zones along the edges, with L-shaped corners, above the rest of the UI (so a press there resizes instead of reaching a scrollbar), and a hairline outline. Only while the window is neither maximized nor full screen. |
+| `Look::from_visuals` | The buttons' and outline's colours from the app's `egui::Visuals`; an app may fill `Look` from its own theme instead. |
+| `Labels` | The buttons' tooltips and screen-reader labels. English by default; the app passes its translations. |
+| `install(ctx)` / `DesktopGrab` | See below. Install once at startup. |
+| `desktop_grab(ctx, command)` | Send `StartDrag` or `BeginResize` through this, so the plugin can clean up after it. `resize_edges` and `title_bar::empty_area` already do. |
+
+**After a move or resize.** `StartDrag` and `BeginResize` hand the pointer to the desktop, which
+keeps the button's release (on Wayland the compositor grabs the pointer; emilk/egui#7959). egui
+then still thinks the button is held, so the next press on an edge or the title bar does nothing
+until a click inside the window. The press has also taken the keyboard from the page. The
+`DesktopGrab` plugin gives the release back on that window's next input, and the keyboard back once
+the desktop lets go. It works in every window: eframe runs `App::raw_input_hook` for the root
+window only, but egui runs plugins for every viewport.
+
+```rust,ignore
+use craft_window::controls::{self, Labels, Look};
+
+// Once, at startup:
+controls::install(&cc.egui_ctx);
+
+// In each window's header bar, where the app draws the frame:
+if let Some(layout) = frame.layout() {
+    let look = Look::from_visuals(ui.visuals());
+    let labels = Labels { minimize: tr("Minimize"), maximize: tr("Maximize"), restore: tr("Restore"), close: tr("Close") };
+    ui.horizontal(|ui| {
+        controls::buttons(ui, &layout.left, &look, &labels);
+        // ... the bar's own content, leaving `controls::width(&layout.right)` at the end ...
+        controls::buttons(ui, &layout.right, &look, &labels);
+    });
+    controls::resize_edges(ui.ctx(), &look);
+}
+```
 
 ## One window per document
 
@@ -151,6 +195,8 @@ Immediate viewports repaint every window when one repaints, so cache expensive p
 - It never touches the connection winit inherits: when `WAYLAND_SOCKET` is set (a compositor handed
   the app an open descriptor), the probe skips connecting and keeps the desktop frame, so it can't
   consume the socket winit needs.
-- The GNOME `button-layout` lookup (`gsettings`) runs behind the same bounded worker, so a stalled
-  `gsettings` can't block startup either.
+- GNOME's `button-layout` is read from the XDG Desktop Portal (`org.freedesktop.portal.Settings`)
+  first, which answers inside a Flatpak sandbox too, then from `gsettings`. Both run on bounded
+  workers (1 s for the portal, which may be starting on demand right after login; 500 ms for
+  `gsettings`), so neither can block startup for long.
 - `#![forbid(unsafe_code)]`, and the never-crash lints the workspace requires.

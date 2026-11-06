@@ -9,7 +9,8 @@ repository.workspace = true
 
 [features]
 # `decorate`: set the decision on an `egui::ViewportBuilder`. `title_bar`: an app-drawn strip as
-# the title bar (on macOS with AppKit's `movable` flag). `Viewports`: one immediate viewport per window.
+# the title bar (on macOS with AppKit's `movable` flag). `controls`: the window buttons, resize
+# edges and the button release after a move or resize. `Viewports`: one immediate viewport per window.
 egui = ["dep:egui", "dep:objc2", "dep:objc2-app-kit"]
 
 [dependencies]
@@ -18,6 +19,8 @@ egui = { workspace = true, optional = true }
 # Only Linux and the BSDs probe a Wayland compositor; everywhere else the frame is the OS's.
 [target.'cfg(any(target_os = "linux", target_os = "freebsd", target_os = "openbsd", target_os = "netbsd"))'.dependencies]
 wayland-client = "0.31"
+# GNOME's `button-layout` through the XDG Desktop Portal (answers inside Flatpak, unlike `gsettings`).
+zbus = { version = "5", default-features = false, features = ["async-io", "blocking-api"] }
 
 # `title_bar::sync_movable` (`NSWindow.movable`); eframe's winit already uses these.
 [target.'cfg(target_os = "macos")'.dependencies]
