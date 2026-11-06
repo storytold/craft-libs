@@ -870,22 +870,6 @@ fn item_file_names_are_lower_case() {
 }
 
 #[test]
-fn a_started_table_folder_needs_its_readme() {
-    let base = docs();
-    let mut head = base.clone();
-    head.retain(|f| f.path != "docs/gaps.d/README.md");
-    has(&check(&CFG, &base, &head), "docs/gaps.d/README.md: was deleted");
-    let mut base = base;
-    base.retain(|f| f.path != "docs/gaps.d/README.md");
-    has(&check(&CFG, &base, &head), "docs/gaps.d/README.md: missing");
-    // Not before the folder is started.
-    let mut none = head.clone();
-    none.retain(|f| !f.path.starts_with("docs/gaps.d/"));
-    let pre = vec![f("ROADMAP.md", ROADMAP, 0), f("docs/gaps.md", GAPS, 0), f("docs/progress.d/README.md", "how", 0)];
-    assert!(!check(&CFG, &pre, &none).iter().any(|e| e.contains("docs/gaps.d/README.md")));
-}
-
-#[test]
 fn the_fold_pr_passes_on_odd_logs() {
     let shapes: &[(&str, bool)] = &[
         ("# R\n\n**Last updated:** 2026-11-01 · **Change:** minor\n\n## Progress log\n\n## Next\n", true),

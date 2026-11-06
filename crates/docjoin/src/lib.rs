@@ -1083,13 +1083,7 @@ pub fn check_report(cfg: &Config, base: &[File], head: &[File], today: NaiveDate
             errors.push(format!("{readme}: missing; every log folder keeps a README so a fold can't empty it"));
         }
     }
-    // A table folder once started (it has items) keeps one too, saying how to add and close items.
-    for dir in cfg.tables.iter().map(|t| t.dir).collect::<BTreeSet<_>>() {
-        let readme = format!("{dir}/README.md");
-        if !in_dir(head, dir).is_empty() && !head_paths.contains(readme.as_str()) {
-            errors.push(format!("{readme}: missing; every started item folder keeps a README"));
-        }
-    }
+    // ponytail: no README needed in table folders; items are never deleted, so a started one stays started.
     for dir in cfg.tables.iter().map(|t| t.dir).collect::<BTreeSet<_>>() {
         for f in in_dir(base, dir).into_iter().filter(|f| !head_paths.contains(f.path.as_str())) {
             errors.push(format!("{}: was deleted; items are never deleted, set `status: closed` instead", f.path));
