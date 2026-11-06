@@ -364,16 +364,17 @@ fn pgrep_pattern(path: &str) -> String {
 
 #[cfg(test)]
 #[cfg(unix)]
-mod tests {
+pub(crate) mod tests {
     use std::io::{BufRead, BufReader};
     use std::process::Child;
 
     use super::*;
 
-    struct RunningProbe(Child);
+    /// A process whose command line is `path`, as `pgrep -f` sees it, until dropped.
+    pub(crate) struct RunningProbe(Child);
 
     impl RunningProbe {
-        fn start(path: &str) -> Self {
+        pub(crate) fn start(path: &str) -> Self {
             let child = command("/bin/sh")
                 .args(["-c", "printf 'ready\\n'; read line", path])
                 .stdin(Stdio::piped())
