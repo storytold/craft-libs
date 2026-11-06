@@ -91,7 +91,7 @@ mod tests {
             |ui, selected: &mut usize| {
                 for index in 0..2 {
                     let (_, rect) = ui.allocate_space(Vec2::new(100.0, 26.0));
-                    let response = Tab::new(Id::new(("dialog", index)), "Options", *selected == index).show_dialog_at(ui, rect, &style());
+                    let response = Tab::new(Id::unique(("dialog", index)), "Options", *selected == index).show_dialog_at(ui, rect, &style());
                     if response.clicked() {
                         *selected = index;
                     }
@@ -115,7 +115,7 @@ mod tests {
         style.font.size = f32::INFINITY;
         let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
             let (_, rect) = ui.allocate_space(Vec2::new(5.0, 3.0));
-            Tab::new(Id::new("small"), "A long localized label", true).show_dialog_at(ui, rect, &style);
+            Tab::new(Id::unique("small"), "A long localized label", true).show_dialog_at(ui, rect, &style);
         });
         out.textures_delta.clear();
         let _ = ctx.tessellate(out.shapes, out.pixels_per_point);
@@ -129,7 +129,7 @@ mod tests {
             let mut style = style();
             style.border = Stroke::new(2.0, Color32::BLACK);
             ui.painter().line_segment([rect.left_bottom(), rect.right_bottom()], style.border);
-            Tab::new(Id::new("joined"), "Options", true).show_dialog_at(ui, rect, &style);
+            Tab::new(Id::unique("joined"), "Options", true).show_dialog_at(ui, rect, &style);
         });
         h.ctx.set_pixels_per_point(1.0);
         h.run_steps(3);
