@@ -117,6 +117,7 @@ pub struct FloatingFrame<'a> {
     limits: PanelLimits,
     resizable: bool,
     resize_axes: [bool; 2],
+    resize_edges: [bool; 4],
     resize_label: &'a str,
     opacity: f32,
     reserve_top_resize_band: bool,
@@ -146,6 +147,7 @@ impl<'a> FloatingFrame<'a> {
             limits: PanelLimits::default(),
             resizable: true,
             resize_axes: [true, true],
+            resize_edges: [true; 4],
             resize_label: "Resize window",
             opacity: 1.0,
             reserve_top_resize_band: true,
@@ -179,6 +181,13 @@ impl<'a> FloatingFrame<'a> {
     /// Restrict the stock edge handles when a host owns resizing on one axis.
     pub fn resize_axes(mut self, axes: [bool; 2]) -> Self {
         self.resize_axes = axes;
+        self
+    }
+
+    /// Enable the left, right, top and bottom edges. A corner requires both its edges.
+    /// Hosts anchored to a dock can expose only the edges facing away from it.
+    pub fn resize_edges(mut self, edges: [bool; 4]) -> Self {
+        self.resize_edges = edges;
         self
     }
 
@@ -245,6 +254,13 @@ impl<'a> FloatingFrame<'a> {
         let limits = PanelLimits { min: self.limits.min.max(vec2(40.0, RESIZE_BAND + TITLE_HEIGHT + 20.0)).min(self.limits.max), ..self.limits };
         let canceled = ui.input(|input| input.key_pressed(Key::Escape)) || crate::focus::lost(ui.ctx());
         for (name, mut handle, mut direction) in handles(rect) {
+            if (direction.x < 0.0 && !self.resize_edges[0])
+                || (direction.x > 0.0 && !self.resize_edges[1])
+                || (direction.y < 0.0 && !self.resize_edges[2])
+                || (direction.y > 0.0 && !self.resize_edges[3])
+            {
+                continue;
+            }
             if !self.reserve_top_resize_band && direction.y < 0.0 {
                 handle.max.y = (rect.top() + ui.ctx().pixels_per_point().recip()).min(rect.bottom());
             }
