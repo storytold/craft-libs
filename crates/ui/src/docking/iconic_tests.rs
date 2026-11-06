@@ -230,6 +230,25 @@ fn flyout_width_rejects_invalid_geometry_without_mutating_the_layout() {
     assert_eq!(layout, original);
 }
 
+/// Float bounds can be shorter than the normal minimum; that must not disable width drags.
+#[test]
+fn a_flyout_constrained_below_minimum_height_can_still_resize_its_width() {
+    for height in [20.0, 50.0] {
+        let mut d = DockDriver::new(docked(&[&[1]], true), Content);
+        d.float_bounds = Some(Rect::from_min_size(Pos2::ZERO, vec2(800.0, height)));
+        d.click(hit(&d, Hit::Icon(1)).center());
+        d.settle();
+        let before = d.ctx.read_response(d.id.with("flyout").with("resize")).unwrap().rect.right_bottom();
+        // The side handle needs room above and below its corners, so the bottom-right
+        // corner exercises both axes in the shortest viewport as well.
+        let from = before - vec2(2.0, 2.0);
+        d.drag(from, from + vec2(60.0, 0.0));
+        d.settle();
+        assert_eq!(first_column(&d.layout).groups[0].flyout_width, Some(300.0));
+        assert_eq!(first_column(&d.layout).groups[0].height, None);
+    }
+}
+
 #[test]
 fn collapsed_column_shows_one_icon_per_panel_with_group_separators() {
     let d = DockDriver::new(docked(&[&[1, 2], &[3]], true), Content);

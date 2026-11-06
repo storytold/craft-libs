@@ -332,7 +332,10 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
         let style = ChromeStyle::from_dock(self.style);
         let group = request.group;
         let movable = group.panels.iter().all(|panel| self.permissions(panel).movable);
-        let limits = PanelLimits { min: vec2(self.style.min_pane, self.style.tab_height + self.style.min_pane), ..PanelLimits::default() };
+        // In a viewport smaller than the minimum, keep the other axis resizable instead
+        // of asking AnchoredResize to reject an already-constrained starting rectangle.
+        let limits =
+            PanelLimits { min: vec2(self.style.min_pane, self.style.tab_height + self.style.min_pane).min(bounds.size()), max: bounds.size() };
         let label = self.style.resize_window_label.clone();
         let response = FloatingFrame::new(id, rect)
             .bounds(bounds)
