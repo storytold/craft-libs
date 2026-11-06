@@ -125,3 +125,71 @@ fn enter_sends_without_inserting_a_newline_and_shift_enter_only_inserts_one() {
         }
     }
 }
+
+#[test]
+fn a_failed_request_keeps_literal_error_and_exposes_both_review_actions() {
+    use craft_ask_agent::{AgentHub, Reply, Request, Target};
+    use serde_json::json;
+    let hub = AgentHub::default();
+    let target = Target { document: "synthetic:1".into(), revision: 2 };
+    let id = hub
+        .ask(Request {
+            id: 0,
+            instruction: "Review partial tool edits".into(),
+            history: vec![],
+            selection: json!({"pages":[1]}),
+            document: json!({"id":"synthetic:1"}),
+            agent: None,
+            target: target.clone(),
+        })
+        .unwrap();
+    hub.listen(1, Some("worker"), std::time::Duration::ZERO, || true).unwrap().unwrap();
+    let error = "Partial edit failed: <script>literal error</script>";
+    let proposal = "{\"tool\":\"delete_document\"}";
+    hub.reply(1, id, Reply { error: Some(error), proposal: Some(proposal), format: Some("json"), ..Default::default() }, Some(&target)).unwrap();
+    let snapshot = hub.snapshot(id).unwrap();
+    assert_eq!(snapshot.status, Status::Failed);
+    assert!(snapshot.review_text().contains(error));
+    assert!(snapshot.review_text().contains(proposal));
+    assert!(snapshot.review_text().contains("Proposal (not applied)"));
+    for (label, expected) in [("Keep", ui::Action::Keep), ("Undo", ui::Action::Undo)] {
+        let ctx = Context::default();
+        let view = ui::View { snapshot: Some(&snapshot), agents: &[], actions: &[], history: &[], instruction: "" };
+        let mut draft = String::new();
+        let mut picked = None;
+        let mut button = None;
+        for _ in 0..3 {
+            let output = ctx.run_pass(RawInput::default(), |ctx| {
+                ui::bubble(ctx, anchor(), &view, &mut draft, &mut picked, &str::to_string);
+            });
+            for shape in &output.shapes {
+                if let egui::epaint::Shape::Text(text) = &shape.shape
+                    && text.galley.job.text == label
+                {
+                    button = Some(text.pos + text.galley.size() * 0.5);
+                }
+            }
+            assert!(output.platform_output.commands.is_empty(), "an error/proposal must not execute a command");
+            output.drop_without_applying_deltas();
+        }
+        let position = button.unwrap();
+        let mut actual = None;
+        for pressed in [true, false] {
+            let input = RawInput {
+                events: vec![
+                    egui::Event::PointerMoved(position),
+                    egui::Event::PointerButton { pos: position, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE },
+                ],
+                ..Default::default()
+            };
+            ctx.run_pass(input, |ctx| {
+                if let Some(action) = ui::bubble(ctx, anchor(), &view, &mut draft, &mut picked, &str::to_string) {
+                    actual = Some(action);
+                }
+            })
+            .drop_without_applying_deltas();
+        }
+        assert_eq!(actual, Some(expected), "{label} must dispatch its review action on Failed");
+    }
+    assert_eq!(hub.snapshot(id).unwrap().status, Status::Failed, "rendering/choosing an action does not execute any proposal in the hub");
+}
