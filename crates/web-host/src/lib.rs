@@ -41,6 +41,27 @@ pub const VERSION: &str = "1";
 /// Longest file name taken from a host or put in a message, in characters.
 pub const MAX_NAME_CHARS: usize = 255;
 
+/// Largest `id`/`requestId` accepted from the host.
+pub const MAX_ID_BYTES: usize = 1024;
+
+/// Largest `params` string accepted from the host.
+pub const MAX_PARAMS_BYTES: usize = 1 << 20;
+
+/// Most commands waiting for the next frame.
+pub const MAX_PENDING_COMMANDS: usize = 256;
+
+/// Most `params` text waiting for the next frame, all commands together.
+pub const MAX_PENDING_PARAMS_BYTES: usize = 8 << 20;
+
+/// Whether a command whose `params` text is `incoming_bytes` long fits in a queue that already
+/// holds `pending` commands with `pending_bytes` of `params` text and `pending_id_bytes` of
+/// identifier text.
+pub fn has_room(pending: usize, pending_bytes: usize, pending_id_bytes: usize, incoming_bytes: usize, incoming_id_bytes: usize) -> bool {
+    pending < MAX_PENDING_COMMANDS
+        && pending_bytes.saturating_add(incoming_bytes) <= MAX_PENDING_PARAMS_BYTES
+        && pending_id_bytes.saturating_add(incoming_id_bytes) <= MAX_PENDING_PARAMS_BYTES
+}
+
 /// How a page hosts the app.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
@@ -74,6 +95,8 @@ pub enum Outgoing {
     Dirty,
     Failed,
     Handoff,
+    Response,
+    DocClosed,
 }
 
 /// What a host sends to an app.
@@ -83,6 +106,7 @@ pub enum Incoming {
     Open,
     Saved,
     HandoffDone,
+    Cmd,
 }
 
 impl Outgoing {
@@ -93,12 +117,14 @@ impl Outgoing {
             Self::Dirty => "dirty",
             Self::Failed => "failed",
             Self::Handoff => "handoff",
+            Self::Response => "response",
+            Self::DocClosed => "docClosed",
         }
     }
 }
 
 impl Incoming {
-    pub const ALL: [Self; 4] = [Self::Host, Self::Open, Self::Saved, Self::HandoffDone];
+    pub const ALL: [Self; 5] = [Self::Host, Self::Open, Self::Saved, Self::HandoffDone, Self::Cmd];
 
     pub const fn kind(self) -> &'static str {
         match self {
@@ -106,6 +132,7 @@ impl Incoming {
             Self::Open => "open",
             Self::Saved => "saved",
             Self::HandoffDone => "handoff-done",
+            Self::Cmd => "cmd",
         }
     }
 
@@ -268,6 +295,21 @@ mod tests {
         assert_eq!(file_name(Some(&"a".repeat(MAX_NAME_CHARS)), "x").chars().count(), MAX_NAME_CHARS);
         assert_eq!(file_name(Some(&"a".repeat(MAX_NAME_CHARS + 1)), "x").chars().count(), MAX_NAME_CHARS);
         assert_eq!(file_name(Some(&"\u{1F4C4}".repeat(300)), "x"), "\u{1F4C4}".repeat(MAX_NAME_CHARS));
+    }
+
+    #[test]
+    fn cmd_is_an_incoming_kind() {
+        assert_eq!(Incoming::parse("pdfcraft", "pdfcraft:cmd"), Some(Incoming::Cmd));
+        assert!(Incoming::ALL.contains(&Incoming::Cmd));
+    }
+
+    #[test]
+    fn has_room_enforces_count_and_byte_budgets() {
+        assert!(has_room(0, 0, 0, 10, 5));
+        assert!(!has_room(MAX_PENDING_COMMANDS, 0, 0, 1, 1));
+        assert!(!has_room(0, MAX_PENDING_PARAMS_BYTES, 0, 1, 1));
+        assert!(!has_room(0, 0, MAX_PENDING_PARAMS_BYTES, 1, 1));
+        assert!(has_room(255, MAX_PENDING_PARAMS_BYTES - 10, 0, 10, 0));
     }
 
     #[test]
