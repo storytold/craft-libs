@@ -203,6 +203,8 @@ impl Inner {
         for e in self.entries.iter_mut().filter(|e| e.shown.status == Status::Working { conn }) {
             (e.shown.status, e.shown.agent) = (Status::Queued, None);
             (e.shown.proposal, e.shown.format, e.shown.comment) = (None, None, None);
+            e.shown.notes.clear();
+            e.progress_bytes = 0;
         }
     }
 }
@@ -270,8 +272,13 @@ impl AgentHub {
     pub fn listen(&self, conn: u64, name: Option<&str>, wait: Duration, alive: impl Fn() -> bool) -> Result<Option<Request>, HubError> {
         let name = name.map(str::trim).filter(|n| !n.is_empty()).unwrap_or("Agent").to_string();
         check_name(&name)?;
-        // Counted down in short steps rather than read from a clock, which wasm builds lack.
-        let mut left = wait.min(MAX_LISTEN);
+        // Single-threaded browser builds cannot block on a condition variable.
+        // Other targets count down without reading a clock, which wasm builds lack.
+        let mut left = if cfg!(all(target_arch = "wasm32", target_os = "unknown", not(target_feature = "atomics"))) {
+            Duration::ZERO
+        } else {
+            wait.min(MAX_LISTEN)
+        };
         let mut inner = self.lock();
         if !alive() {
             inner.disconnect(conn);
@@ -418,6 +425,12 @@ impl AgentHub {
     /// Return bounded display state without exposing the request's document payload.
     pub fn snapshot(&self, id: u64) -> Option<Snapshot> {
         self.lock().entries.iter().find(|e| e.request.id == id).map(|e| e.shown.clone())
+    }
+
+    /// Resolve a request's document for routing, including its latest authorized revision.
+    /// This is not current app state or authorization; edits still require [`Self::may_edit`].
+    pub fn request_target(&self, id: u64) -> Option<Target> {
+        self.lock().entries.iter().find(|e| e.request.id == id).map(|e| e.request.target.clone())
     }
 
     /// The person is done with the request: it leaves the queue.
