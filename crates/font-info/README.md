@@ -16,8 +16,6 @@ font controls, OpenType feature toggles and their previews:
   that a set changes letters as well as figures. The read is bounded, so a feature too large to
   read whole is marked `partial`: its count is then a lower bound.
 
-Extracted from PhotoCraft (`photocraft-text`, storytold/photocraft#218).
-
 ```rust
 let bytes = std::fs::read("Inter.ttf")?;
 let details = craft_font_info::read(&bytes, 0)?; // face 0; the face index in a .ttc
