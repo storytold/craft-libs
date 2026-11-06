@@ -166,7 +166,7 @@ fn table_columns_must_match_the_config() {
     files.retain(|f| f.path != "docs/gaps.md");
     files.push(f("docs/gaps.md", &GAPS.replace("| # | Gap | Evidence |", "| # | Gap | Proof |"), 0));
     let errors = join(&CFG, &files).unwrap_err();
-    assert!(errors[0].contains("the config says"), "{errors:?}");
+    assert!(errors[0].contains("the config makes it \"| # | Gap | Evidence |\""), "{errors:?}");
 }
 
 #[test]
@@ -689,23 +689,15 @@ fn the_fold_never_writes_a_date_after_today() {
 
 #[test]
 fn a_line_right_after_a_table_is_one_of_its_rows() {
-    // GFM continues a table with a line that has no leading pipe: it's a row nobody joined.
+    // GFM continues a table with a line that has no leading pipe, and some lines that start
+    // another block: the line under the table must be blank, whatever it holds.
     let base = docs();
-    let mut head = base.clone();
-    set(&mut head, "docs/gaps.md", |t| t.replace("| 2 | Second | e2 |\n", "| 2 | Second | e2 |\n99 | Fake gap | made up\n"));
-    has(&check(&CFG, &base, &head), "table under `## Every known gap, ranked` was edited by hand");
-    assert!(!joined(&head, "docs/gaps.md").contains("Fake gap"), "the fold drops it");
-    // A line that isn't a row of the table's width is an error, not prose.
-    let mut prose = base.clone();
-    set(&mut prose, "docs/gaps.md", |t| t.replace("| 2 | Second | e2 |\n", "| 2 | Second | e2 |\nProse glued on.\n"));
-    has(&join(&CFG, &prose).unwrap_err(), "row 4: 1 cells, 3 columns: \"Prose glued on.\"");
-    has(&check(&CFG, &base, &prose), "1 cells, 3 columns");
-    // A block that isn't a paragraph ends the table.
-    for block in ["## Next", "- a list", "1. a list", "> quote", "<details>", "```", "~~~"] {
-        let mut ended = base.clone();
-        set(&mut ended, "docs/gaps.md", |t| t.replace("| 2 | Second | e2 |\n", &format!("| 2 | Second | e2 |\n{block}\n")));
-        let j = join(&CFG, &ended);
-        assert!(j.as_ref().is_ok_and(|j| j.docs.get("docs/gaps.md").is_some_and(|d| d.contains(&format!("e2 |\n{block}\n")))), "{block}: {j:?}");
+    for glued in ["99 | Fake gap | made up", "Prose glued on.", "## Next", "- a list", "1. a list", "> quote", "<details>", "```", "~~~"] {
+        let mut head = base.clone();
+        set(&mut head, "docs/gaps.md", |t| t.replace("| 2 | Second | e2 |\n", &format!("| 2 | Second | e2 |\n{glued}\n")));
+        let want = format!("the line under the table must be blank, not {glued:?}");
+        has(&join(&CFG, &head).unwrap_err(), &want);
+        has(&check(&CFG, &base, &head), &want);
     }
 }
 
@@ -888,4 +880,61 @@ fn the_fold_pr_passes_on_odd_logs() {
         assert_eq!(check(&cfg, &zero(&base), &zero(&head)), Vec::<String>::new(), "{doc:?}\n{}", head[0].text);
         assert_eq!(fold_of(&cfg, &head), head, "second fold not a no-op for {doc:?}");
     }
+}
+
+// ---- third review ----
+
+/// A line after the joined table that GitHub renders as one more row (`<b>9</b> | …`, an invalid
+/// fence, `<3 | …`) used to end the table for the crate. The line after the rows must be blank.
+#[test]
+fn a_line_glued_under_the_table_fails() {
+    let base = docs();
+    for forged in ["<b>9</b> | Forged gap | forged evidence |", "```x`y | Forged gap | forged evidence |", "<3 | Forged | e |"] {
+        let mut head = base.clone();
+        set(&mut head, "docs/gaps.md", |t| t.replace("| 2 | Second | e2 |\n", &format!("| 2 | Second | e2 |\n{forged}\n")));
+        let errors = check(&CFG, &base, &head);
+        assert!(errors.iter().any(|e| e.contains("must be blank")), "{forged}: {errors:?}");
+        assert!(join(&CFG, &head).is_err(), "{forged}");
+    }
+}
+
+/// The header and separator are joined: a wrong separator, an indented table or a line glued above
+/// the header (each of which GitHub renders as no table) fails.
+#[test]
+fn a_pr_cannot_unrender_the_joined_table() {
+    let base = docs();
+    let edits: [(&str, &str); 6] = [
+        ("|---|---|---|\n", "|---|\n"),
+        ("|---|---|---|\n", "|- -|---|---|\n"),
+        ("| # | Gap | Evidence |\n|---|---|---|\n", "    | # | Gap | Evidence |\n    |---|---|---|\n"),
+        ("| # | Gap | Evidence |\n", "> note\n| # | Gap | Evidence |\n"),
+        ("| # | Gap | Evidence |\n", "- note\n| # | Gap | Evidence |\n"),
+        ("| # | Gap | Evidence |\n", "|  # | Gap | Evidence |\n"),
+    ];
+    for (from, to) in edits {
+        let mut head = base.clone();
+        set(&mut head, "docs/gaps.md", |t| t.replacen(from, to, 1));
+        assert_ne!(check(&CFG, &base, &head), Vec::<String>::new(), "{to}");
+        assert!(join(&CFG, &head).is_err(), "{to}");
+    }
+}
+
+/// An aligned separator is kept, and a table straight under its heading or at the end of the
+/// file is fine.
+#[test]
+fn table_bounds_that_render_are_kept() {
+    let doc = "# Gaps\n\n## Every known gap, ranked\n| # | Gap | Evidence |\n|--:|:---|:-:|\n| 1 | First | e1 |";
+    let (items, _) = items_from_doc(&CFG, &[f("docs/gaps.md", doc, 0)]).unwrap();
+    let mut files = vec![f("docs/gaps.md", doc, 0), f("ROADMAP.md", ROADMAP, 0)];
+    files.extend(items);
+    assert_eq!(joined(&files, "docs/gaps.md"), doc);
+}
+
+/// The separator is part of the joined region: realigning it by hand is an edit the fold didn't make.
+#[test]
+fn the_separator_is_joined() {
+    let base = docs();
+    let mut head = base.clone();
+    set(&mut head, "docs/gaps.md", |t| t.replace("|---|---|---|\n| 1 |", "|--:|---|---|\n| 1 |"));
+    has(&check(&CFG, &base, &head), "the table under `## Every known gap, ranked` was edited by hand");
 }

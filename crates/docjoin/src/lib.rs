@@ -279,33 +279,14 @@ fn is_row(line: &str) -> bool {
     line.trim_start().starts_with('|')
 }
 
-/// A list item's marker: `-`, `*` or `+`, or up to nine digits and `.` or `)`, then a space or the
-/// line's end.
-fn is_list_item(t: &str) -> bool {
-    let digits = t.bytes().take_while(u8::is_ascii_digit).count();
-    let rest = match digits {
-        0 => t.strip_prefix(['-', '*', '+']),
-        1..=9 => t.get(digits..).and_then(|r| r.strip_prefix(['.', ')'])),
-        _ => None,
-    };
-    rest.is_some_and(|r| r.is_empty() || r.starts_with([' ', '\t']))
-}
-
-/// A line that starts a block other than a paragraph, and so ends a table (GFM): a heading, a code
-/// fence, a block quote, an HTML block or a list item, up to three spaces in.
-fn starts_block(line: &str) -> bool {
-    let t = line.trim_start_matches(' ');
-    line.len() - t.len() <= 3 && (is_heading(line) || t.starts_with("```") || t.starts_with("~~~") || t.starts_with(['>', '<']) || is_list_item(t))
-}
-
-/// A table line's cells. GFM reads a line with no leading `|` inside a table as a row too.
+/// A table line's cells.
 fn row_cells(line: &str) -> Vec<String> {
-    if is_row(line) { cells(line).unwrap_or_default() } else { cells(&format!("|{line}")).unwrap_or_default() }
+    cells(line).unwrap_or_default()
 }
 
 /// The tables in a section, each (header line, first row, end of rows). A table starts at a line
-/// that starts with `|` and runs, as in GFM, to the first blank line or line that starts another
-/// block: every line before that renders as a row, with or without a leading `|`.
+/// that starts with `|` and its rows run to the first line that doesn't. [`check_bounds`] makes
+/// that line blank, so where the crate ends a table is where GitHub does.
 fn tables_in(lines: &[&str], start: usize, end: usize) -> Vec<(usize, usize, usize)> {
     let mut out = Vec::new();
     let mut i = start;
@@ -316,7 +297,7 @@ fn tables_in(lines: &[&str], start: usize, end: usize) -> Vec<(usize, usize, usi
         }
         let header = i;
         i += 1;
-        while i < end && lines.get(i).is_some_and(|l| !l.trim().is_empty() && !starts_block(l)) {
+        while i < end && lines.get(i).is_some_and(|l| is_row(l)) {
             i += 1;
         }
         out.push((header, (header + 2).min(i), i));
@@ -329,14 +310,28 @@ fn table_in(lines: &[&str], start: usize, end: usize, nth: usize) -> Option<(usi
     tables_in(lines, start, end).get(nth).copied()
 }
 
-/// Every line in a joined table's rows is a row of the header's width: GFM renders a line that
-/// follows a table as one of its rows, so a stray line would be a row nobody joined.
+/// A joined table stands alone: the line above its header is blank or is the section's heading
+/// (`start` is the line after it), and the line under its last row is blank or the end of the doc.
+/// Anything else glued on (a quote, a list item, a line GitHub renders as one more row) would make
+/// GitHub read a different table, or none, from the one that was joined and checked.
+fn check_bounds(lines: &[&str], start: usize, (header, _, end): (usize, usize, usize), name: &str) -> Result<(), String> {
+    if header > start && !blank_at(lines, header - 1) {
+        let above = lines.get(header - 1).copied().unwrap_or_default();
+        return Err(format!("{name}: the line above the table must be blank, not {above:?}"));
+    }
+    if let Some(under) = lines.get(end).filter(|l| !l.trim().is_empty()) {
+        return Err(format!("{name}: the line under the table must be blank, not {under:?}; GitHub renders it as one more row"));
+    }
+    Ok(())
+}
+
+/// Every line in a joined table's rows is a row of the header's width: GFM renders each as a row.
 fn check_rows(lines: &[&str], (header, first, end): (usize, usize, usize), name: &str) -> Result<(), String> {
     let width = lines.get(header).map_or(0, |l| row_cells(l).len());
     for (n, line) in lines.get(first..end).unwrap_or_default().iter().enumerate() {
         let got = row_cells(line).len();
         if got != width {
-            return Err(format!("{name} row {}: {got} cells, {width} columns: {:?}; a table runs to the first blank line", n + 1, line.trim_end()));
+            return Err(format!("{name} row {}: {got} cells, {width} columns: {:?}", n + 1, line.trim_end()));
         }
     }
     Ok(())
@@ -366,7 +361,9 @@ fn log_insert(lines: &[&str], log: &Log) -> Result<Insert, String> {
     let first = (start..end).find(|&i| lines.get(i).is_some_and(|l| is_entry(l)));
     if first.and_then(|i| lines.get(i)).is_some_and(|l| is_row(l)) {
         let table = table_in(lines, start, end, 0).ok_or("log table vanished")?;
-        check_rows(lines, table, &format!("`{}`", log.heading))?;
+        let name = format!("`{}`", log.heading);
+        check_bounds(lines, start, table, &name)?;
+        check_rows(lines, table, &name)?;
         let (header, first_row, rows_end) = table;
         let width = lines.get(header).and_then(|l| cells(l)).map_or(0, |c| c.len());
         let at = if log.newest_first { first_row } else { rows_end };
@@ -671,18 +668,34 @@ fn render(table: &Table, item: &Item) -> String {
     format!("|{}|", cells.join("|"))
 }
 
-fn is_separator(line: &str) -> bool {
-    cells(line).is_some_and(|c| !c.is_empty() && c.iter().all(|c| c.contains('-') && c.bytes().all(|b| matches!(b, b'-' | b':' | b' '))))
+/// A GFM delimiter row of `width` cells, starting at the line's start: each cell `-`s with an
+/// optional `:` at either end.
+fn is_separator(line: &str, width: usize) -> bool {
+    let delimiter = |c: &String| {
+        let d = c.strip_prefix(':').unwrap_or(c);
+        let d = d.strip_suffix(':').unwrap_or(d);
+        !d.is_empty() && d.bytes().all(|b| b == b'-')
+    };
+    line.starts_with('|') && cells(line).is_some_and(|c| c.len() == width && c.iter().all(delimiter))
 }
 
+/// The header line the fold writes: `| # | Gap | Evidence |`.
+fn header_line(table: &Table) -> String {
+    let heads: Vec<&str> = table.columns.iter().map(|(h, _)| *h).collect();
+    format!("| {} |", heads.join(" | "))
+}
+
+/// The header is exactly the line the fold writes, and the separator under it a valid one of the
+/// right width (the fold keeps it, so its alignment stays). Anything else may render differently,
+/// or not as a table at all.
 fn check_header(lines: &[&str], header: usize, table: &Table) -> Result<(), String> {
-    let have = lines.get(header).and_then(|l| cells(l)).unwrap_or_default();
-    let want: Vec<&str> = table.columns.iter().map(|(h, _)| *h).collect();
+    let (have, want) = (lines.get(header).copied().unwrap_or_default(), header_line(table));
     if have != want {
-        return Err(format!("`{}`: the table's columns are {:?}, the config says {:?}", table.heading, have, want));
+        return Err(format!("`{}`: the table's header is {have:?}; the config makes it {want:?}", table.heading));
     }
-    if !lines.get(header + 1).is_some_and(|l| is_separator(l)) {
-        return Err(format!("`{}`: the table's header has no `|---|` line under it", table.heading));
+    if !lines.get(header + 1).is_some_and(|l| is_separator(l, table.columns.len())) {
+        let n = table.columns.len();
+        return Err(format!("`{}`: the line under the table's header isn't a `|---|` line of {n} cells", table.heading));
     }
     Ok(())
 }
@@ -715,6 +728,7 @@ fn locate(lines: &[&str], table: &Table) -> Result<(usize, usize, usize), String
         n => format!("has no table {} under `{}`", n + 1, table.heading),
     })?;
     check_header(lines, h, table)?;
+    check_bounds(lines, s, (h, first, end), &format!("`{}`", table.heading))?;
     Ok((h, first, end))
 }
 
@@ -960,8 +974,11 @@ fn tables_folded(cfg: &Config, doc: &str, base_text: &str, head: &[File], today:
     join_all(&Config { logs: &[], tables: cfg.tables }, &from, today).0.docs.get(doc).cloned()
 }
 
+/// A table's joined region: its header, separator and rows.
 fn rows_of(lines: &[&str], table: &Table) -> Option<Vec<String>> {
-    place(lines, table).ok().map(|r| trimmed(lines, r).into_iter().map(str::to_string).collect())
+    let (h, _, end) = locate(lines, table).ok()?;
+    check_rows(lines, (h, h + 2, end), "").ok()?;
+    Some(trimmed(lines, (h, end)).into_iter().map(str::to_string).collect())
 }
 
 fn check_doc(cfg: &Config, base: &[File], head: &[File], doc: &str, today: NaiveDate, errors: &mut Vec<String>) {
