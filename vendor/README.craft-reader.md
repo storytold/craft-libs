@@ -342,6 +342,17 @@ fonts without Encoding) and #1499 (byte-aligned packed TIFF predictor rows).
 Synthetic tests cover 1/2/4/8-bit RGB rows and rendering, plus embedded TrueType
 text with absent or partial ToUnicode maps and explicit encoding precedence.
 
+## Craft patch for the reader snapshot
+
+Local change in `hayro-jbig2`, marked `Craft patch (reader)` in the source: a page's retained
+intermediate regions are capped in total at `MAX_RETAINED_PIXELS` (2^30 pixels) in
+`PageState::store_region`, closing the gap the inherited per-region cap (`bitmap::MAX_PIXELS`)
+leaves when a hostile stream keeps many maximal regions alive behind ~30-byte segment headers,
+with the page itself staying tiny (upstream
+[hayro #1695](https://github.com/LaurenzV/hayro/issues/1695)). Tests:
+`retained_region_tests::retained_regions_are_capped` and
+`retained_region_tests::store_region_counts_and_refuses_past_the_cap`.
+
 ## Craft patches for the flattener
 
 Local changes for craft-prepress's PDF-in adapter (`craft_prepress::flatten::pdf`), which reads
