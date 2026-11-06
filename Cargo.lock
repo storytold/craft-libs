@@ -993,6 +993,7 @@ version = "0.1.0"
 dependencies = [
  "craft-keymap",
  "craft-quit",
+ "craft-ui",
  "egui",
  "muda",
  "objc2 0.6.5",

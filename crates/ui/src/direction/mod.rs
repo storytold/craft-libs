@@ -27,7 +27,7 @@
 //! sets it on every theme's style; with crates.io egui, egui's own chrome stays left to right.
 //! Installing a whole new [`egui::Style`] resets the field, so call [`apply`] after changing theme.
 
-use egui::{Align, Align2, AsIdSalt, Context, Id, InnerResponse, Key, Layout, Panel, Rect, RectAlign, Ui, pos2, vec2};
+use egui::{Align, Align2, AsIdSalt, Context, Id, InnerResponse, Key, Layout, Panel, Rect, RectAlign, Ui, UiBuilder, pos2, vec2};
 
 pub use craft_i18n::Direction;
 
@@ -221,6 +221,37 @@ pub fn above(d: &impl HasDirection) -> RectAlign {
 /// hand-made submenu.
 pub fn beside(d: &impl HasDirection) -> RectAlign {
     popup(d, RectAlign::RIGHT_START)
+}
+
+/// The body of an open menu popup. egui pins popup bodies to
+/// `Layout::top_down_justified(Align::Min)` whatever the direction flag, so in a right-to-left
+/// interface every popup body scopes itself through this helper. The cross align stays `Min`:
+/// rows fill the width (justified), and a `Max` align would seed the scope's `min_rect` at the
+/// far edge of the pinned `max_rect`, so the sizing pass would measure the popup at the full
+/// default area width instead of the rows' width. The sizing pass itself runs in a left-to-right
+/// scope: rows anchored to the reading end would measure against the wide default area and lock
+/// in that full width. Left-to-right the popup's own layout is used unchanged, sizing pass
+/// included.
+pub fn popup_body<R>(ui: &mut Ui, add_contents: impl FnOnce(&mut Ui) -> R) -> R {
+    if is_rtl(ui) {
+        if ui.is_sizing_pass() {
+            let ctx = ui.ctx().clone();
+            let prev = ctx.data(|d| d.get_temp::<Direction>(key()));
+            ctx.data_mut(|d| d.insert_temp(key(), Direction::Ltr));
+            let out = add_contents(ui);
+            ctx.data_mut(|d| match prev {
+                Some(dir) => {
+                    d.insert_temp(key(), dir);
+                }
+                None => d.remove::<Direction>(key()),
+            });
+            out
+        } else {
+            ui.scope_builder(UiBuilder::new().max_rect(ui.max_rect()).layout(Layout::top_down_justified(Align::Min)), add_contents).inner
+        }
+    } else {
+        add_contents(ui)
+    }
 }
 
 // Arrow keys.
