@@ -96,7 +96,15 @@ change an application's UI.
 Receipts are backend messages, not portable job IDs. `Job::duplex = None` preserves the queue's
 duplex default; `Some(Duplex::Off)` forces simplex. `Job::scaling` defaults to `Scaling::Exact`;
 callers exporting arbitrary document sizes can choose `Scaling::ShrinkToFit`. Exact mode reports
-a driver paper-size mismatch. On Windows `command_preview` describes the in-process job
+a driver paper-size mismatch.
+
+`Scaling::ActualSize` is shrink-to-fit, except that a sheet that fits on the paper (the paper's
+own size, or a little smaller, such as a document set to 209 × 296 mm printed on A4) prints at
+100%, centred. The printer's hardware margins then clip its edges, as when a word processor
+prints, instead of the whole page shrinking into the printable area. Only sheets larger than the
+paper shrink. Callers opt in to it; on CUPS it behaves as shrink-to-fit.
+
+On Windows `command_preview` describes the in-process job
 (`xps-print`, then the printer and options as `key=value`) instead of a command line. The crate
 does not provide PostScript output, separations, trapping or colour-managed device rendering.
 
