@@ -98,6 +98,8 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   craft-i18n's `language-data/`, embedded at build time from `CRAFT_I18N_DIR`: English and the
   carry-over locales by default, the set `CRAFT_PROOF_EMBED` names otherwise (`en` for English
   only); other languages come from installed Language packs.
+- [`craft-proof-ui`](crates/proof-ui/README.md): the spelling review: a panel that steps through a
+  document's issues, and a section for the right-click menu.
 
 - [`craft-quit`](crates/quit/src/lib.rs): native macOS quit, egui close handling and an optional
   app menu. Unsaved-document decisions and save prompts stay in each app.
