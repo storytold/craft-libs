@@ -37,7 +37,9 @@ source strings: each app translates them in its own catalogs, as it does the nam
 
 Fonts are untrusted input. Data that isn't a font (or has no face at the index) is an error; any
 malformed table is left out of the result, never a panic. Features, lookups per feature and
-glyphs per coverage table are capped. Takes bytes, so callers don't share a `skrifa` version with
+glyphs per coverage table are capped, and the `GSUB` read has a budget per face. Names are decoded
+only when something refers to them, each is cut at 256 characters, and all the names a face hands
+out share one budget; `names_partial` says when a name was cut or left out. Takes bytes, so callers don't share a `skrifa` version with
 it. Pure Rust, no `unsafe`, builds for `wasm32-unknown-unknown`.
 
 Tests build their font with `write-fonts` in code; no font file is committed.
