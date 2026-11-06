@@ -131,11 +131,14 @@ pub(crate) fn info(bytes: &[u8], budget: &mut Budget) -> Result<(u32, Option<Str
     stamp(&json, budget)
 }
 
-pub(crate) fn renditions(bytes: &[u8], budget: &mut Budget) -> Result<Vec<Rendition>, Error> {
+pub(crate) fn renditions(bytes: &[u8], wanted: Option<RenditionKind>, budget: &mut Budget) -> Result<Vec<Rendition>, Error> {
     let (zip, json) = manifest(bytes, budget)?;
     let m: Envelope<IgnoredAny> = read(&json, budget)?;
     let mut out = vec![];
     for (kind, path) in [(RenditionKind::Thumbnail, m.thumbnail), (RenditionKind::Composite, m.composite)] {
+        if wanted.is_some_and(|wanted| wanted != kind) {
+            continue;
+        }
         let Some(path) = path else { continue };
         let entry = zip.find(&path).ok_or_else(|| malformed(format!("the manifest names `{path}`, which the bundle does not have")))?;
         let max = budget.limits.max_entry;
