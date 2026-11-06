@@ -6,3 +6,4 @@ plans/
 /.claude/
 .idea/
 /vendor/*/target
+/.project-map/
