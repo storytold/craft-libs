@@ -505,3 +505,122 @@ fn a_feature_list_pointing_past_its_end_is_left_out() {
     let changed: Vec<(&str, usize)> = d.features.iter().map(|f| (f.tag.as_str(), f.changed)).collect();
     assert_eq!(changed, [("cv11", 1), ("kern", 0), ("ss01", 0)], "ss01's first record is skipped, its tag kept");
 }
+
+/// A `name` table of Windows English records, each distinct string stored once: records with the
+/// same string point at the same bytes, as a hostile font's would.
+fn shared_name_table(records: &[(u16, &str)]) -> Vec<u8> {
+    let mut storage: Vec<u8> = Vec::new();
+    let mut placed: Vec<(&str, u16, u16)> = Vec::new();
+    let mut out = Vec::new();
+    out.extend(0u16.to_be_bytes());
+    out.extend((records.len() as u16).to_be_bytes());
+    out.extend(((6 + 12 * records.len()) as u16).to_be_bytes());
+    for &(id, s) in records {
+        let (offset, length) = match placed.iter().find(|(p, _, _)| *p == s) {
+            Some(&(_, offset, length)) => (offset, length),
+            None => {
+                let offset = storage.len() as u16;
+                storage.extend(s.encode_utf16().flat_map(u16::to_be_bytes));
+                let length = storage.len() as u16 - offset;
+                placed.push((s, offset, length));
+                (offset, length)
+            }
+        };
+        out.extend([3u16, 1, 0x409, id, length, offset].iter().flat_map(|v| v.to_be_bytes()));
+    }
+    out.extend(storage);
+    out
+}
+
+/// A font with one axis named by ID 256 and an instance for each (name ID, PostScript name ID),
+/// with `names` as its `name` table.
+fn named_instances_font(instances: &[(u16, Option<u16>)], names: &[u8]) -> Vec<u8> {
+    let cmap = Cmap::from_mappings([('a', GlyphId::new(1))]).unwrap();
+    let axes = vec![VariationAxisRecord::new(
+        Tag::new(b"wght"),
+        Fixed::from_f64(100.0),
+        Fixed::from_f64(400.0),
+        Fixed::from_f64(900.0),
+        0,
+        NameId::new(256),
+    )];
+    let inst: Vec<InstanceRecord> = instances
+        .iter()
+        .map(|&(name, ps)| InstanceRecord {
+            subfamily_name_id: NameId::new(name),
+            flags: 0,
+            coordinates: vec![Fixed::from_f64(400.0)],
+            post_script_name_id: ps.map(NameId::new),
+        })
+        .collect();
+    let mut b = FontBuilder::new();
+    b.add_table(&cmap).unwrap().add_table(&Fvar::new(AxisInstanceArrays::new(axes, inst))).unwrap();
+    with_table(&b.build(), b"name", names)
+}
+
+/// Every character handed out as a name.
+fn name_chars(d: &craft_font_info::FaceDetails) -> usize {
+    let count = |s: &Option<String>| s.as_ref().map_or(0, |s| s.chars().count());
+    count(&d.variations_prefix)
+        + d.axes.iter().map(|a| count(&a.name)).sum::<usize>()
+        + d.features.iter().map(|f| count(&f.name)).sum::<usize>()
+        + d.instances.iter().map(|i| i.name.chars().count() + count(&i.postscript_name)).sum::<usize>()
+}
+
+/// What one face may hand out as names, all together (`MAX_NAME_BUDGET`).
+const NAME_BUDGET: usize = 1 << 18;
+
+/// An overlong name is cut, not dropped: the instance it names is still there.
+#[test]
+fn an_overlong_name_is_cut_and_its_instance_kept() {
+    let long = "x".repeat(20_000);
+    let d = craft_font_info::read(&named_instances_font(&[(300, Some(300))], &shared_name_table(&[(256, "Weight"), (300, &long)])), 0).unwrap();
+    assert_eq!(d.instances.len(), 1);
+    assert_eq!(d.instances[0].name.chars().count(), 256);
+    assert_eq!(d.instances[0].postscript_name.as_ref().map(|s| s.chars().count()), Some(256));
+    assert!(d.names_partial);
+}
+
+/// 2,000 instances sharing one 20,000-character name and PostScript name: a font of about 60 KB
+/// that, copying the name into each, returned 80 MB of strings. The names handed out stay within
+/// the face's budget, the prefix and axis names come first, and the flag says names were cut.
+#[test]
+fn a_name_shared_by_thousands_of_instances_stays_within_budget() {
+    let long = "x".repeat(20_000);
+    let names = shared_name_table(&[(25, "TestVF"), (256, "Weight"), (300, &long)]);
+    let bytes = named_instances_font(&vec![(300, Some(300)); 2_000], &names);
+    assert!(bytes.len() < 64 * 1024, "{} bytes", bytes.len());
+    let d = craft_font_info::read(&bytes, 0).unwrap();
+    assert_eq!(d.variations_prefix.as_deref(), Some("TestVF"));
+    assert_eq!(d.axes[0].name.as_deref(), Some("Weight"));
+    assert!(d.names_partial);
+    assert!(name_chars(&d) <= NAME_BUDGET, "{} name characters", name_chars(&d));
+    assert!(!d.instances.is_empty() && d.instances.len() < 2_000, "{} instances", d.instances.len());
+    assert!(d.instances.iter().all(|i| i.name.chars().count() == 256));
+}
+
+/// 5,460 records (as many as a `name` table's 16-bit storage offset allows), each under its own
+/// ID and all pointing at one 32,767-character string, every one of them naming an instance.
+/// Decoding every record up front took 179 million characters and as many bytes; only what's
+/// handed out is decoded now.
+#[test]
+fn many_records_sharing_one_long_string_stay_within_budget() {
+    let long = "x".repeat(32_767);
+    let ids: Vec<u16> = (300..300 + 5_460).collect();
+    let records: Vec<(u16, &str)> = ids.iter().map(|&id| (id, long.as_str())).collect();
+    let instances: Vec<(u16, Option<u16>)> = ids.iter().map(|&id| (id, Some(id))).collect();
+    let bytes = named_instances_font(&instances, &shared_name_table(&records));
+    let started = std::time::Instant::now();
+    let d = craft_font_info::read(&bytes, 0).unwrap();
+    let took = started.elapsed();
+    assert!(took < std::time::Duration::from_secs(1), "{took:?} for {} bytes", bytes.len());
+    assert!(d.names_partial);
+    assert!(name_chars(&d) <= NAME_BUDGET, "{} name characters", name_chars(&d));
+    assert!(!d.instances.is_empty());
+}
+
+/// A face whose names fit is not marked: the flag means something was cut.
+#[test]
+fn names_that_fit_are_not_partial() {
+    assert!(!craft_font_info::read(&font(), 0).unwrap().names_partial);
+}

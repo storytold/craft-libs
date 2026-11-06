@@ -9,7 +9,8 @@
 //!
 //! [`read`] takes the font file's bytes and the face's index in it (0 for a single font; the
 //! face in a `.ttc` collection). Fonts are untrusted input: a malformed table is left out, never a
-//! panic, and every list read from the file is capped.
+//! panic, every list read from the file is capped or bounded by its table's size, and the names
+//! handed out share one budget per face.
 //!
 //! ```no_run
 //! let bytes = std::fs::read("Inter.ttf")?;
@@ -47,6 +48,12 @@ const MAX_SUBTABLES: usize = 8192;
 const MAX_GLYPHS: usize = 1 << 20;
 /// Most `STAT` design axes and axis value records read.
 const MAX_STAT: usize = 256;
+/// Most characters of one name handed out: longer ones are cut (real names are a few dozen).
+const MAX_NAME_CHARS: usize = 256;
+/// Most characters decoded and handed out as names for one face, all together. A name is copied
+/// into every axis, instance and feature that refers to it, so a small font whose thousands of
+/// instances share one long name would otherwise return many megabytes of strings.
+const MAX_NAME_BUDGET: usize = 1 << 18;
 
 /// A variation axis of the face, from its `fvar` table.
 #[derive(Clone, Debug, PartialEq)]
@@ -54,7 +61,7 @@ pub struct AxisDetail {
     /// Four-character tag (`wght`, `GRAD`).
     pub tag: String,
     /// The font's own (English, else first) name for the axis ("Parametric Thick Stroke"), if it
-    /// has one.
+    /// has one. Names are cut at 256 characters (see [`FaceDetails::names_partial`]).
     pub name: Option<String>,
     pub min: f32,
     pub default: f32,
@@ -113,6 +120,11 @@ pub struct FaceDetails {
     pub stat_axes: Vec<StatAxisDetail>,
     /// Sorted by tag, each tag once.
     pub features: Vec<FeatureDetail>,
+    /// Some name isn't the font's whole name: one was cut at 256 characters, or the face's name
+    /// budget ran out, cutting a name short or leaving it out. A name left out leaves out the
+    /// instance it names; names are handed out in the order the prefix, axes, features, then
+    /// instances, so the instances are what a hostile font's names cost first.
+    pub names_partial: bool,
 }
 
 impl FaceDetails {
@@ -152,17 +164,24 @@ pub fn read(data: &[u8], index: u32) -> Result<FaceDetails, NotAFont> {
     Ok(read_face(&font))
 }
 
-/// Every name the face gives, by ID, chosen as `skrifa`'s `english_or_first` chooses it.
+/// The record each of the names `wanted` comes from, chosen as `skrifa`'s `english_or_first`
+/// chooses it. Nothing is decoded here: [`Names::take`] decodes a name when it hands it out.
 ///
 /// Asking skrifa for a name by ID scans the whole `name` table, and a face asks for one per axis,
 /// per instance and per feature: a font with many of each, and a long `name` table, multiplies
-/// that into seconds. One pass over the table answers all of them.
-fn read_names(font: &FontRef) -> BTreeMap<u16, String> {
+/// that into seconds. One pass over the table answers all of them. Ranking a record reads only its
+/// language (a tag of at most 30 characters), so the pass costs the same however long, or however
+/// shared, the strings are.
+fn read_names<'a>(font: &FontRef<'a>, wanted: &BTreeSet<u16>) -> BTreeMap<u16, LocalizedString<'a>> {
     let Ok(table) = font.name() else { return BTreeMap::new() };
     // The ranking of `english_or_first` (skrifa 0.44, `string.rs`), kept in step with it: en-US,
     // then en, then a string with no language, then whatever comes first.
-    let mut out: BTreeMap<u16, (u8, String)> = BTreeMap::new();
+    let mut out: BTreeMap<u16, (u8, LocalizedString<'a>)> = BTreeMap::new();
     for record in table.name_record() {
+        let id = record.name_id().to_u16();
+        if !wanted.contains(&id) {
+            continue;
+        }
         let string = LocalizedString::new(&table, record);
         let rank = match string.language() {
             Some("en-US") => 3,
@@ -170,16 +189,45 @@ fn read_names(font: &FontRef) -> BTreeMap<u16, String> {
             None => 1,
             _ => 0,
         };
-        let id = record.name_id().to_u16();
         match out.get_mut(&id) {
-            Some(best) if rank > best.0 => *best = (rank, string.to_string()),
+            Some(best) if rank > best.0 => *best = (rank, string),
             Some(_) => {}
             None => {
-                out.insert(id, (rank, string.to_string()));
+                out.insert(id, (rank, string));
             }
         }
     }
     out.into_iter().map(|(id, (_, string))| (id, string)).collect()
+}
+
+/// The face's names and what may still be spent handing them out.
+struct Names<'a> {
+    strings: BTreeMap<u16, LocalizedString<'a>>,
+    /// Characters still to be decoded, over the whole face.
+    left: usize,
+    /// A name was cut or left out.
+    partial: bool,
+}
+
+impl Names<'_> {
+    /// Name `id`, decoded and charged to the face's budget: at most [`MAX_NAME_CHARS`], cut to
+    /// what the budget has left, `None` if the font has no such name, it's blank, or the budget is
+    /// spent. Every character decoded is charged, blank or not, so blank names can't be free.
+    fn take(&mut self, id: StringId) -> Option<String> {
+        let string = self.strings.get(&id.to_u16())?;
+        let limit = MAX_NAME_CHARS.min(self.left);
+        let mut chars = string.chars();
+        let name: String = chars.by_ref().take(limit).collect();
+        self.left -= name.chars().count();
+        if chars.next().is_some() {
+            self.partial = true;
+        }
+        if name.trim().is_empty() {
+            // A blank name, or a cut that left only blanks: nothing to show either way.
+            return None;
+        }
+        Some(name)
+    }
 }
 
 /// Whether an `fvar` axis has a range worth reporting: a malformed one is left out rather than
@@ -189,40 +237,25 @@ fn has_usable_range(a: &Axis) -> bool {
 }
 
 fn read_face(font: &FontRef) -> FaceDetails {
-    let names = read_names(font);
-    let name = |id: StringId| names.get(&id.to_u16()).filter(|s| !s.trim().is_empty()).cloned();
     // The axes that are kept, and where each sits in an instance's coordinates.
     let fvar: Vec<Axis> = font.axes().iter().collect();
     let kept: Vec<usize> = fvar.iter().enumerate().filter(|(_, a)| has_usable_range(a)).map(|(i, _)| i).collect();
-    let axes: Vec<AxisDetail> = kept
-        .iter()
-        .map(|&i| {
-            let a = &fvar[i];
-            AxisDetail {
-                tag: a.tag().to_string(),
-                name: name(a.name_id()),
-                min: a.min_value(),
-                default: a.default_value().clamp(a.min_value(), a.max_value()),
-                max: a.max_value(),
-                hidden: a.is_hidden(),
-            }
-        })
-        .collect();
-    let instances = font
+    // Each instance's name IDs and its coordinates: one per kept axis, in `kept` order, so a
+    // malformed axis left out of `axes` is left out here too and pairing the two lists by index
+    // stays right. (`fvar` stores coordinates as `Fixed`, so none of them can be non-finite.)
+    let raw_instances: Vec<(StringId, Option<StringId>, Vec<f32>)> = font
         .named_instances()
         .iter()
-        .filter_map(|inst| {
-            // One coordinate per kept axis, in `axes` order: a malformed axis left out above is
-            // left out here too, so pairing the two lists by index stays right. (`fvar` stores
-            // coordinates as `Fixed`, so none of them can be non-finite.)
+        .map(|inst| {
             let user: Vec<f32> = inst.user_coords().collect();
-            let coords: Vec<(String, f32)> = axes.iter().zip(&kept).filter_map(|(axis, &i)| user.get(i).map(|v| (axis.tag.clone(), *v))).collect();
-            Some(InstanceDetail { name: name(inst.subfamily_name_id())?, postscript_name: inst.postscript_name_id().and_then(name), coords })
+            let coords = kept.iter().filter_map(|&i| user.get(i).copied()).collect();
+            (inst.subfamily_name_id(), inst.postscript_name_id(), coords)
         })
         .collect();
     let mut features: BTreeMap<String, FeatureDetail> = BTreeMap::new();
+    let mut ui_names: BTreeMap<String, Vec<StringId>> = BTreeMap::new();
     if let Ok(gsub) = font.gsub() {
-        let _ = gsub_features(font, &gsub, &name, &mut features);
+        let _ = gsub_features(font, &gsub, &mut ui_names, &mut features);
     }
     if let Ok(gpos) = font.gpos()
         && let Ok(list) = gpos.feature_list()
@@ -232,12 +265,60 @@ fn read_face(font: &FontRef) -> FaceDetails {
             features.entry(tag.clone()).or_insert(FeatureDetail { tag, name: None, sample: String::new(), changed: 0, partial: false });
         }
     }
+
+    // Only the names something refers to are looked for, and each is decoded as it's handed out.
+    let prefix_id = StringId::VARIATIONS_POSTSCRIPT_NAME_PREFIX;
+    let wanted: BTreeSet<u16> = std::iter::once(prefix_id)
+        .chain(kept.iter().map(|&i| fvar[i].name_id()))
+        .chain(ui_names.values().flatten().copied())
+        .chain(raw_instances.iter().flat_map(|(name, ps, _)| std::iter::once(*name).chain(*ps)))
+        .map(|id| id.to_u16())
+        .collect();
+    let mut names = Names { strings: read_names(font, &wanted), left: MAX_NAME_BUDGET, partial: false };
+
+    // Handed out most important first: the prefix and axis names are a handful, while the
+    // instances are what a hostile font can multiply.
+    let variations_prefix = names.take(prefix_id);
+    let axes: Vec<AxisDetail> = kept
+        .iter()
+        .map(|&i| {
+            let a = &fvar[i];
+            AxisDetail {
+                tag: a.tag().to_string(),
+                name: names.take(a.name_id()),
+                min: a.min_value(),
+                default: a.default_value().clamp(a.min_value(), a.max_value()),
+                max: a.max_value(),
+                hidden: a.is_hidden(),
+            }
+        })
+        .collect();
+    for (tag, ids) in &ui_names {
+        if let Some(entry) = features.get_mut(tag) {
+            // The first record of the tag that names it, as a font with one record per script
+            // may name the feature in only some of them.
+            entry.name = ids.iter().find_map(|&id| names.take(id));
+        }
+    }
+    let mut instances = Vec::new();
+    for (name_id, ps_id, coords) in raw_instances {
+        let Some(name) = names.take(name_id) else {
+            // A font that names no instance here leaves it out; a budget that ran out says so.
+            if names.left == 0 && names.strings.contains_key(&name_id.to_u16()) {
+                names.partial = true;
+            }
+            continue;
+        };
+        let coords = axes.iter().zip(coords).map(|(axis, v)| (axis.tag.clone(), v)).collect();
+        instances.push(InstanceDetail { name, postscript_name: ps_id.and_then(|id| names.take(id)), coords });
+    }
     FaceDetails {
         axes,
         instances,
-        variations_prefix: name(StringId::VARIATIONS_POSTSCRIPT_NAME_PREFIX),
+        variations_prefix,
         stat_axes: stat_axes(font),
         features: features.into_values().collect(),
+        names_partial: names.partial,
     }
 }
 
@@ -336,11 +417,12 @@ pub fn feature_name(tag: &str) -> Option<&'static str> {
     FEATURE_NAMES.iter().find(|(t, _)| *t == tag).map(|(_, name)| *name)
 }
 
-/// Adds the `GSUB` features, their UI names and their substituted characters to `out`.
+/// Adds the `GSUB` features and their substituted characters to `out`, and the name IDs each
+/// tag's records give for its UI name to `ui_names`, in record order.
 fn gsub_features(
     font: &FontRef,
     gsub: &skrifa::raw::tables::gsub::Gsub,
-    name: &dyn Fn(StringId) -> Option<String>,
+    ui_names: &mut BTreeMap<String, Vec<StringId>>,
     out: &mut BTreeMap<String, FeatureDetail>,
 ) -> Result<(), ReadError> {
     let list = gsub.feature_list()?;
@@ -358,12 +440,13 @@ fn gsub_features(
         let entry =
             out.entry(tag.clone()).or_insert(FeatureDetail { tag: tag.clone(), name: None, sample: String::new(), changed: 0, partial: false });
         let Ok(feature) = record.feature(data) else { continue };
-        if entry.name.is_none() {
-            entry.name = match feature.feature_params() {
-                Some(Ok(FeatureParams::StylisticSet(p))) => name(p.ui_name_id()),
-                Some(Ok(FeatureParams::CharacterVariant(p))) => name(p.feat_ui_label_name_id()),
-                _ => None,
-            };
+        let ui_name = match feature.feature_params() {
+            Some(Ok(FeatureParams::StylisticSet(p))) => Some(p.ui_name_id()),
+            Some(Ok(FeatureParams::CharacterVariant(p))) => Some(p.feat_ui_label_name_id()),
+            _ => None,
+        };
+        if let Some(id) = ui_name {
+            ui_names.entry(tag.clone()).or_default().push(id);
         }
         let Some(lookups) = &lookups else { continue };
         let set = glyphs.entry(tag.clone()).or_default();
