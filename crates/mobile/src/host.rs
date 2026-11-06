@@ -534,7 +534,7 @@ impl<A: CraftApp> Host<A> {
     /// A touch, as egui touch events and, for the touch driving it, pointer events. `immediate` for a
     /// stylus, whose press is never held back as the start of a gesture.
     fn touch_as(&mut self, t: Touch, immediate: bool) {
-        self.events.push(Event::Touch { device_id: TouchDeviceId(0), id: TouchId(t.id), phase: t.phase, pos: t.pos, force: Some(t.force) });
+        self.events.push(touch_event(t));
         let pointer = self.pointer.touch(t, Instant::now(), immediate);
         self.events.extend(pointer);
         self.wake();
@@ -576,6 +576,14 @@ impl<A: CraftApp> Host<A> {
     }
 }
 
+/// A touch as an egui touch event, without its force: a stylus's pressure and tilt reach the app
+/// whole through [`CraftApp::stylus`], and apps that read pen samples from touch forces too (as
+/// desktop tablets need) would get each stylus sample twice, the second with no tilt, and would take
+/// a finger's force of 0 (screens without force sensing) for a pen pressed at pressure 0.
+fn touch_event(t: Touch) -> Event {
+    Event::Touch { device_id: TouchDeviceId(0), id: TouchId(t.id), phase: t.phase, pos: t.pos, force: None }
+}
+
 /// A touch as the shells pass it: `phase` 0 began, 1 moved, 2 ended, 3 cancelled; `force` 0..=1.
 /// `None` for an unknown phase or a position that isn't a number.
 pub(crate) fn decode_touch(id: u64, phase: u32, x: f32, y: f32, force: f32) -> Option<Touch> {
@@ -596,6 +604,14 @@ pub(crate) fn decode_touch(id: u64, phase: u32, x: f32, y: f32, force: f32) -> O
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Found on an iPad: a Pen Tilt brush ignored the tilt, because each Pencil sample also arrived
+    /// as a touch force without tilt.
+    #[test]
+    fn touches_reach_egui_without_a_force() {
+        let t = Touch { id: 3, phase: TouchPhase::Move, pos: Pos2::new(1.0, 2.0), force: 0.7 };
+        assert!(matches!(touch_event(t), Event::Touch { force: None, .. }));
+    }
 
     /// Off screen nothing draws (no GPU work in the background); a busy app still runs.
     #[test]
