@@ -39,7 +39,8 @@ const NOV6: i64 = 1_793_966_400;
 
 fn docs() -> Vec<File> {
     let (items, _) = items_from_doc(&CFG, &[f("docs/gaps.md", GAPS, 0)]).unwrap();
-    let mut out = vec![f("ROADMAP.md", ROADMAP, 0), f("docs/gaps.md", GAPS, 0), f("docs/progress.d/README.md", "how", 0)];
+    let mut out =
+        vec![f("ROADMAP.md", ROADMAP, 0), f("docs/gaps.md", GAPS, 0), f("docs/progress.d/README.md", "how", 0), f("docs/gaps.d/README.md", "how", 0)];
     out.extend(items);
     out
 }
@@ -602,7 +603,7 @@ const SCFG: Config = Config { logs: SLOGS, tables: STABLES };
 
 fn sdocs() -> Vec<File> {
     let (items, _) = items_from_doc(&SCFG, &[f("docs/gaps.md", SGAPS, 0)]).unwrap();
-    let mut out = vec![f("docs/gaps.md", SGAPS, 0), f("docs/gaps-log.d/README.md", "how", 0)];
+    let mut out = vec![f("docs/gaps.md", SGAPS, 0), f("docs/gaps-log.d/README.md", "how", 0), f("docs/gaps.d/README.md", "how", 0)];
     out.extend(items);
     out
 }
@@ -832,4 +833,54 @@ fn a_table_docs_status_date_is_capped_at_today() {
     }
     let text = join(&SCFG, &files).unwrap().docs.get("docs/gaps.md").unwrap().clone();
     assert!(text.contains("> **Last updated:** 2026-11-30 · **Change:** minor · **Owner:** y\n"), "{text}");
+}
+
+#[test]
+fn a_second_change_field_is_an_error() {
+    let base = docs();
+    let mut head = base.clone();
+    set(&mut head, "ROADMAP.md", |t| t.replace("· **Target:** Word 16", "· **Target:** Word 16 · **Change:** major"));
+    has(&check(&CFG, &base, &head), "ROADMAP.md line 3: the status line has two `**Change:**` fields");
+}
+
+#[test]
+fn a_fragment_cannot_open_a_fence_or_a_comment() {
+    for text in ["- a\n```\n", "- a\n  ~~~rust\n", "- a <!-- b\n"] {
+        let mut files = docs();
+        files.push(f("docs/progress.d/12-a.md", text, NOV5));
+        has(&join(&CFG, &files).unwrap_err(), "12-a.md: ");
+        has(&join(&CFG, &files).unwrap_err(), "opens a code fence or an HTML comment");
+    }
+}
+
+#[test]
+fn a_heading_may_have_a_tab_after_its_hashes() {
+    let mut files = docs();
+    files.push(f("docs/progress.d/12-a.md", "- a\n##\tNext\n", NOV5));
+    has(&join(&CFG, &files).unwrap_err(), "is a heading or a status line");
+}
+
+#[test]
+fn item_file_names_are_lower_case() {
+    for name in ["Readme.md", "readme.MD", "4-New.md"] {
+        let mut files = docs();
+        files.push(f(&format!("docs/gaps.d/{name}"), "---\ngap: x\n---\n", 0));
+        has(&join(&CFG, &files).unwrap_err(), &format!("{name}: an item's file name is lower case"));
+    }
+}
+
+#[test]
+fn a_started_table_folder_needs_its_readme() {
+    let base = docs();
+    let mut head = base.clone();
+    head.retain(|f| f.path != "docs/gaps.d/README.md");
+    has(&check(&CFG, &base, &head), "docs/gaps.d/README.md: was deleted");
+    let mut base = base;
+    base.retain(|f| f.path != "docs/gaps.d/README.md");
+    has(&check(&CFG, &base, &head), "docs/gaps.d/README.md: missing");
+    // Not before the folder is started.
+    let mut none = head.clone();
+    none.retain(|f| !f.path.starts_with("docs/gaps.d/"));
+    let pre = vec![f("ROADMAP.md", ROADMAP, 0), f("docs/gaps.md", GAPS, 0), f("docs/progress.d/README.md", "how", 0)];
+    assert!(!check(&CFG, &pre, &none).iter().any(|e| e.contains("docs/gaps.d/README.md")));
 }

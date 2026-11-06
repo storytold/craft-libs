@@ -53,6 +53,7 @@ fn check_then_fold_in_a_real_repo() {
     write(root, "ROADMAP.md", "# R\n\n> **Last updated:** 2026-01-01 · **Change:** minor\n\n## Progress log\n\n- 2026-01-01: start\n");
     write(root, "docs/gaps.md", "## Ranked\n\n| # | Gap |\n|---|---|\n| 1 | One |\n");
     write(root, "docs/gaps.d/1-one.md", "---\ngap: One\n---\n");
+    write(root, "docs/gaps.d/README.md", "how\n");
     write(root, "docs/progress.d/README.md", "how\n");
     git(root, &["add", "-A"]);
     git(root, &["commit", "-q", "-m", "base"]);
@@ -160,5 +161,30 @@ fn cutover_leaves_started_tables_alone() {
     assert!(root.join("docs/b.d/2-dos.md").exists());
     let t = std::fs::read_to_string(root.join("docs/t.md")).unwrap();
     assert!(t.contains("| 1 | One, from its item |") && t.contains("| 2 | Dos |"), "{t}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[cfg(unix)]
+#[test]
+fn the_fold_deletes_fragments_before_it_writes_docs() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = repo("order");
+    let root = dir.as_path();
+    write(root, "ROADMAP.md", ROADMAP);
+    write(root, "docs/gaps.md", "## Ranked\n\n| # | Gap |\n|---|---|\n");
+    write(root, "docs/progress.d/README.md", "how\n");
+    write(root, "docs/progress.d/1-a.md", "- a\n");
+    git(root, &["add", "-A"]);
+    git(root, &["commit", "-q", "-m", "base"]);
+    std::fs::set_permissions(root.join("ROADMAP.md"), std::fs::Permissions::from_mode(0o444)).unwrap();
+    let err = cli::run(root, &CFG, &args(&["--write"]));
+    std::fs::set_permissions(root.join("ROADMAP.md"), std::fs::Permissions::from_mode(0o644)).unwrap();
+    if err.is_ok() {
+        // Running as root: permissions don't stop the write.
+        let _ = std::fs::remove_dir_all(&dir);
+        return;
+    }
+    assert!(!root.join("docs/progress.d/1-a.md").exists(), "a rerun would fold it again");
+    assert_eq!(std::fs::read_to_string(root.join("ROADMAP.md")).unwrap(), ROADMAP);
     let _ = std::fs::remove_dir_all(&dir);
 }

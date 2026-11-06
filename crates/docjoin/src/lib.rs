@@ -195,6 +195,13 @@ fn fragment<'a>(f: &'a File) -> Result<Fragment<'a>, String> {
     if let Some(bad) = lines.iter().find(|l| is_heading(l) || l.contains(STATUS_KEY)) {
         return Err(format!("{}: {bad:?} is a heading or a status line; a fragment is only its log entry", f.path));
     }
+    // A code fence or an HTML comment would swallow the rest of the doc as it renders.
+    if let Some(bad) = lines.iter().find(|l| {
+        let t = l.trim_start();
+        t.starts_with("```") || t.starts_with("~~~") || l.contains("<!--")
+    }) {
+        return Err(format!("{}: {bad:?} opens a code fence or an HTML comment; a fragment is only its log entry", f.path));
+    }
     Ok(Fragment { path: &f.path, name: stem, time: f.time, kind, lines })
 }
 
@@ -241,7 +248,7 @@ pub fn cells(row: &str) -> Option<Vec<String>> {
 
 fn heading_level(line: &str) -> Option<usize> {
     let hashes = line.bytes().take_while(|b| *b == b'#').count();
-    (hashes > 0 && line.as_bytes().get(hashes) == Some(&b' ')).then_some(hashes)
+    (hashes > 0 && matches!(line.as_bytes().get(hashes), Some(b' ' | b'\t'))).then_some(hashes)
 }
 
 /// A doc line is the configured heading when it equals it, or equals it followed by ` (…)`
@@ -452,6 +459,10 @@ impl Status {
         if line.matches(STATUS_KEY).count() != 1 || parse_date(value).is_none() {
             return Err(shape());
         }
+        // With two, the fold would write one and the check read the other.
+        if parts.iter().filter(|p| lead(p).starts_with("**Change:**")).count() > 1 {
+            return Err(format!("line {}: the status line has two `**Change:**` fields; keep one", at + 1));
+        }
         let change = parts.iter().position(|p| lead(p).starts_with("**Change:**")).map(|c| {
             let end = parts.iter().enumerate().skip(c + 1).find(|(_, p)| is_field(p)).map_or(parts.len(), |(i, _)| i);
             (c, end)
@@ -522,6 +533,10 @@ fn parse_number(s: &str) -> Option<u32> {
 fn item<'a>(f: &'a File, table: &Table, allowed: &[&str]) -> Result<Item<'a>, String> {
     guard(f)?;
     let name = file_name(&f.path);
+    // Lower case only: `Readme.md` or `1-A.md` is a typo, and on a case-blind disk a clash.
+    if name.bytes().any(|b| b.is_ascii_uppercase()) {
+        return Err(format!("{}: an item's file name is lower case (only `README.md` isn't an item)", f.path));
+    }
     let stem = name.strip_suffix(".md").ok_or_else(|| format!("{}: an item is a `.md` file", f.path))?;
     let (num, slug) = stem.split_once('-').unwrap_or((stem, ""));
     let number = parse_number(num).ok_or_else(|| format!("{}: an item's number is 1 to {MAX_NUMBER}, with no sign or leading zero", f.path))?;
@@ -1066,6 +1081,13 @@ pub fn check_report(cfg: &Config, base: &[File], head: &[File], today: NaiveDate
         let readme = format!("{}/README.md", log.dir);
         if !head_paths.contains(readme.as_str()) {
             errors.push(format!("{readme}: missing; every log folder keeps a README so a fold can't empty it"));
+        }
+    }
+    // A table folder once started (it has items) keeps one too, saying how to add and close items.
+    for dir in cfg.tables.iter().map(|t| t.dir).collect::<BTreeSet<_>>() {
+        let readme = format!("{dir}/README.md");
+        if !in_dir(head, dir).is_empty() && !head_paths.contains(readme.as_str()) {
+            errors.push(format!("{readme}: missing; every started item folder keeps a README"));
         }
     }
     for dir in cfg.tables.iter().map(|t| t.dir).collect::<BTreeSet<_>>() {

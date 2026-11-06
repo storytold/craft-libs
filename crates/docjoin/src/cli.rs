@@ -167,10 +167,12 @@ fn fold(root: &Path, cfg: &Config, files: &[File]) -> Result<usize, String> {
         .filter(|(p, t)| files.iter().find(|f| &f.path == *p).is_none_or(|f| &f.text != *t))
         .map(|(p, t)| File { path: p.clone(), text: t.clone(), time: 0 })
         .collect();
-    write_all(root, &changed)?;
+    // Fragments first: if a doc write then fails, a rerun can't fold them in twice (git still has
+    // them; restore and rerun).
     for path in &joined.consumed {
         std::fs::remove_file(root.join(path)).map_err(|e| format!("{path}: {e}"))?;
     }
+    write_all(root, &changed)?;
     Ok(joined.consumed.len())
 }
 
