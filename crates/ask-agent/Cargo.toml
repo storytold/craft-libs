@@ -9,12 +9,16 @@ repository.workspace = true
 
 [features]
 # `ui`: the chip and the bubble for egui apps.
-egui = ["dep:egui"]
+egui = ["dep:egui", "dep:craft-ui"]
 
 [dependencies]
 egui = { workspace = true, optional = true }
+craft-ui = { workspace = true, optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+
+[dev-dependencies]
+egui = { workspace = true, features = ["default_fonts"] }
 
 [lints]
 workspace = true

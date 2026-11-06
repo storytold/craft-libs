@@ -1,0 +1,49 @@
+name: Ask Agent
+
+on:
+  workflow_dispatch:
+  push:
+    paths: ['crates/ask-agent/**', 'Cargo.toml', 'Cargo.lock', '.github/workflows/ask-agent.yml']
+  pull_request:
+    paths: ['crates/ask-agent/**', 'Cargo.toml', 'Cargo.lock', '.github/workflows/ask-agent.yml']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ask-agent-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ask-agent:
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: craft-ask-agent-${{ matrix.os }}
+      - run: cargo fmt -p craft-ask-agent --check
+      - run: cargo clippy -p craft-ask-agent --all-targets --all-features --no-deps --locked -- -D warnings
+      - run: cargo test -p craft-ask-agent --no-default-features --locked
+      - run: cargo test -p craft-ask-agent --all-features --locked
+  wasm:
+    timeout-minutes: 10
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          targets: wasm32-unknown-unknown
+      - run: cargo check -p craft-ask-agent --all-features --target wasm32-unknown-unknown --locked

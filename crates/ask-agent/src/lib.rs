@@ -16,4 +16,4 @@ pub mod hub;
 #[cfg(feature = "egui")]
 pub mod ui;
 
-pub use hub::{AgentHub, HubError, Request, Snapshot, Status, Turn, colour};
+pub use hub::{AgentHub, HubError, Limits, Reply, Request, Snapshot, Status, Target, Turn, colour};

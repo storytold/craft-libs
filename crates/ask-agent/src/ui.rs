@@ -46,7 +46,7 @@ const ROW: f32 = 28.0;
 
 /// The chip just under the selection, on its left edge, where the bubble opens; true when clicked.
 pub fn chip(ctx: &egui::Context, anchor: Rect, tr: Tr) -> bool {
-    egui::Area::new("ask_agent_chip".into())
+    egui::Area::new(egui::Id::unique("ask_agent_chip"))
         .order(egui::Order::Foreground)
         .fixed_pos(origin(ctx, anchor, 140.0))
         .constrain(true)
@@ -59,7 +59,7 @@ pub fn chip(ctx: &egui::Context, anchor: Rect, tr: Tr) -> bool {
                     ui.label(RichText::new(tr("Ask Agent")).strong());
                 })
             });
-            let response = ui.interact(inner.response.rect, ui.id().with("chip"), egui::Sense::click());
+            let response = ui.interact(inner.response.rect, ui.scope_id().with("chip"), egui::Sense::click());
             response.on_hover_cursor(egui::CursorIcon::PointingHand).clicked()
         })
         .inner
@@ -70,13 +70,15 @@ pub fn chip(ctx: &egui::Context, anchor: Rect, tr: Tr) -> bool {
 pub fn bubble(ctx: &egui::Context, anchor: Rect, view: &View, draft: &mut String, picked: &mut Option<String>, tr: Tr) -> Option<Action> {
     let mut action = None;
     // True on the first pass the bubble shows after at least one pass without it.
-    let (id, pass) = (egui::Id::new("ask_agent_bubble_pass"), ctx.cumulative_pass_nr());
+    let (id, pass) = (egui::Id::unique("ask_agent_bubble_pass"), ctx.cumulative_pass_nr());
     let last = ctx.data(|d| d.get_temp::<u64>(id));
     ctx.data_mut(|d| d.insert_temp(id, pass));
     let opened = last.is_none_or(|last| last + 1 < pass);
-    egui::Area::new("ask_agent_bubble".into()).order(egui::Order::Foreground).fixed_pos(origin(ctx, anchor, WIDTH + 40.0)).constrain(true).show(
-        ctx,
-        |ui| {
+    egui::Area::new(egui::Id::unique("ask_agent_bubble"))
+        .order(egui::Order::Foreground)
+        .fixed_pos(origin(ctx, anchor, WIDTH + 40.0))
+        .constrain(true)
+        .show(ctx, |ui| {
             egui::Frame::popup(ui.style()).corner_radius(12.0).inner_margin(egui::Margin::symmetric(16, 14)).show(ui, |ui| {
                 ui.set_width(WIDTH);
                 let spacing = ui.spacing_mut();
@@ -129,6 +131,7 @@ pub fn bubble(ctx: &egui::Context, anchor: Rect, view: &View, draft: &mut String
                     for note in &s.notes {
                         ui.label(RichText::new(note).weak());
                     }
+                    response_details(ui, s, tr);
                 }
                 match status {
                     Some(Status::Queued) => _ = ui.label(RichText::new(tr("Waiting for an agent…")).weak()),
@@ -146,7 +149,7 @@ pub fn bubble(ctx: &egui::Context, anchor: Rect, view: &View, draft: &mut String
                         ui.label(view.snapshot.and_then(|s| s.answer.as_deref()).unwrap_or_default());
                         // The decision on the right, primary last, like Send below.
                         row(ui, Layout::right_to_left(Align::Center), |ui| {
-                            if ui.add(primary(ui, tr("Keep"))).clicked() {
+                            if ui.add(primary(ui, tr("Keep"))).on_hover_text(tr("Keep tool edits and notes. Proposals are not applied.")).clicked() {
                                 action = Some(Action::Keep);
                             }
                             if ui.button(tr("Undo")).on_hover_text(tr("Undo all of the agent's edits")).clicked() {
@@ -187,9 +190,24 @@ pub fn bubble(ctx: &egui::Context, anchor: Rect, view: &View, draft: &mut String
                     });
                 }
             });
-        },
-    );
+        });
     action
+}
+
+/// Show proposal metadata as literal review text, never as an executable edit or markup.
+fn response_details(ui: &mut egui::Ui, snapshot: &Snapshot, tr: Tr) {
+    if let Some(comment) = &snapshot.comment {
+        ui.label(comment);
+    }
+    if let Some(format) = &snapshot.format {
+        ui.label(format!("{}: {format}", tr("Format")));
+    }
+    if let Some(proposal) = &snapshot.proposal {
+        ui.label(RichText::new(tr("Proposal (not applied)")).strong());
+        egui::ScrollArea::vertical().id_salt("ask_proposal_scroll").max_height(160.0).show(ui, |ui| {
+            ui.label(proposal);
+        });
+    }
 }
 
 /// Where the chip and the bubble open: under the selection, on its left edge, kept on screen.
@@ -239,7 +257,7 @@ fn picker(ui: &mut egui::Ui, agents: &[String], picked: &mut Option<String>, tr:
     if agents.len() < 2 {
         return;
     }
-    egui::ComboBox::from_id_salt("ask_agent_picker").selected_text(picked.clone().unwrap_or_else(|| tr("Any"))).show_ui(ui, |ui| {
+    craft_ui::ComboBox::from_id_salt("ask_agent_picker").selected_text(picked.clone().unwrap_or_else(|| tr("Any"))).show_ui(ui, |ui| {
         ui.selectable_value(picked, None, tr("Any"));
         for name in agents {
             ui.selectable_value(picked, Some(name.clone()), name);

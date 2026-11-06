@@ -783,6 +783,7 @@ dependencies = [
 name = "craft-ask-agent"
 version = "0.1.0"
 dependencies = [
+ "craft-ui",
  "egui",
  "serde",
  "serde_json",
