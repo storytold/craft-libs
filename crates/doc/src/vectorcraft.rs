@@ -64,10 +64,10 @@ enum Tail<'a> {
 }
 
 impl Tail<'_> {
-    /// The bytes each `[offset, length]` in `ranges` names, or `None` for a range the file ends
-    /// before. A compressed file is decompressed only as far as the last range ends, and that
-    /// offset is checked against the budget before anything past the marker is decompressed.
-    /// Every byte decompressed is counted; only the bytes inside the ranges are kept.
+    /// Each `[offset, length]` in `ranges` gives its bytes, or `None` if the file ends before it.
+    /// The final offset and duplicate-copy cost are checked against the remaining budget before
+    /// reading the tail. Bytes consumed from the tail and additional copies count against the
+    /// budget. Only bytes inside the ranges are kept.
     fn ranges(self, ranges: &[[u64; 2]], budget: &mut Budget) -> Result<Vec<Option<Vec<u8>>>, Error> {
         const WHAT: &str = "the decompressed document";
         let (mut dec, read) = match self {
@@ -75,12 +75,6 @@ impl Tail<'_> {
             Tail::Stream { dec, read } => (dec, read),
         };
         let end = ranges.iter().map(|&[offset, len]| offset.saturating_add(len)).max().unwrap_or(0);
-        if end > budget.left() {
-            return Err(Error::LimitExceeded(format!(
-                "the file states data up to byte {end} after its JSON, more than max_total ({} bytes) in all",
-                budget.limits.max_total
-            )));
-        }
         // The ranges in file order, overlapping ones merged.
         let mut spans: Vec<[u64; 2]> = ranges.iter().map(|&[offset, len]| [offset, offset.saturating_add(len)]).collect();
         spans.sort_unstable();
@@ -93,9 +87,14 @@ impl Tail<'_> {
         }
         // Each range is returned as its own copy: bytes that more than one range names are
         // decompressed once and counted again here for each further copy.
-        let stated = ranges.iter().fold(0u64, |n, &[_, len]| n.saturating_add(len));
+        let over_budget = || Error::LimitExceeded(format!("{WHAT}: more than max_total ({} bytes) in all", budget.limits.max_total));
+        let stated = ranges.iter().try_fold(0u64, |n, &[_, len]| n.checked_add(len)).ok_or_else(over_budget)?;
         let spanned = merged.iter().fold(0u64, |n, &[start, end]| n.saturating_add(end - start));
-        budget.take(stated.saturating_sub(spanned), WHAT)?;
+        let copies = stated.saturating_sub(spanned);
+        if end.checked_add(copies).is_none_or(|required| required > budget.left()) {
+            return Err(over_budget());
+        }
+        budget.take(copies, WHAT)?;
         let mut src = read.as_slice().chain(&mut *dec);
         let (mut at, mut kept) = (0u64, Vec::<(u64, Vec<u8>)>::new());
         for [start, end] in merged {
@@ -121,9 +120,8 @@ impl Tail<'_> {
     }
 }
 
-/// A file's JSON and where the data after it is. A compressed file is decompressed only as far
-/// as the end of the marker, every byte used counted against the budget, and its JSON is
-/// checked against `max_json` as it grows.
+/// The reader extracts a file's JSON. For gzip input, it buffers any tail bytes in the same chunk of up to 64 KiB.
+/// JSON and marker bytes count against the budget. The JSON is checked against `max_json` as it grows.
 fn unpack<'a>(bytes: &'a [u8], budget: &mut Budget) -> Result<Unpacked<'a>, Error> {
     const JSON: &str = "the document's JSON";
     let too_long = |budget: &Budget| Error::LimitExceeded(format!("{JSON} is more than max_json ({} bytes)", budget.limits.max_json));
@@ -553,6 +551,35 @@ mod tests {
     use super::*;
     use crate::tests::{unread_array, unread_object};
     use serde::de::value::{Error as ValueError, MapDeserializer, SeqDeserializer, StrDeserializer};
+
+    #[test]
+    fn duplicate_copy_cost_is_checked_before_the_stream_is_read() {
+        let limits = crate::Limits { max_total: 12, ..Default::default() };
+        let mut budget = Budget::new(&limits);
+        let tail = Tail::Stream { dec: Box::new(GzDecoder::new(&b"not a gzip stream"[..])), read: vec![] };
+        let result = tail.ranges(&[[0, 8], [0, 8]], &mut budget);
+        assert!(matches!(result, Err(Error::LimitExceeded(_))), "{result:?}");
+        assert_eq!(budget.left(), 12);
+    }
+
+    #[test]
+    fn duplicate_copies_can_use_exactly_the_remaining_budget() {
+        let limits = crate::Limits { max_total: 16, ..Default::default() };
+        let mut budget = Budget::new(&limits);
+        let tail = Tail::Stream { dec: Box::new(GzDecoder::new(&b"not a gzip stream"[..])), read: b"12345678".to_vec() };
+        let result = tail.ranges(&[[0, 8], [0, 8]], &mut budget).unwrap();
+        assert_eq!(result, [Some(b"12345678".to_vec()), Some(b"12345678".to_vec())]);
+        assert_eq!(budget.left(), 0);
+    }
+
+    #[test]
+    fn rendition_copy_size_overflow_is_rejected_before_reading() {
+        let limits = crate::Limits { max_total: u64::MAX, ..Default::default() };
+        let mut budget = Budget::new(&limits);
+        let tail = Tail::Stream { dec: Box::new(GzDecoder::new(&b"not a gzip stream"[..])), read: vec![] };
+        assert!(matches!(tail.ranges(&[[0, u64::MAX], [0, 1]], &mut budget), Err(Error::LimitExceeded(_))));
+        assert_eq!(budget.left(), u64::MAX);
+    }
 
     #[test]
     fn an_image_of_the_wrong_shape_is_skipped_without_reading_it_whole() {

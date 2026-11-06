@@ -14,9 +14,9 @@ use serde::de::{DeserializeOwned, Deserializer, IgnoredAny, MapAccess, Visitor};
 use crate::zip::{Zip, local_names_include};
 use crate::{Budget, Canvas, Error, Kind, Layer, Outline, Rendition, RenditionKind, counted, lenient, malformed, parse, too_new};
 
-/// A ZIP archive with a `manifest.json` entry. When `head` holds the whole archive, the names in
-/// its central directory decide, as [`Zip::find`] reads them; otherwise the names in the local
-/// headers that `head` holds.
+/// The reader recognizes a ZIP archive with a `manifest.json` entry. When the archive opens,
+/// [`Zip::find`] checks its central-directory names. Otherwise the reader checks the local headers
+/// that `head` holds.
 pub(crate) fn sniff(head: &[u8]) -> bool {
     head.starts_with(b"PK\x03\x04")
         && match Zip::open(head) {
