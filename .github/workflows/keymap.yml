@@ -20,9 +20,18 @@ jobs:
     timeout-minutes: 15
     name: Keymap (Linux)
     runs-on: ubuntu-latest
+    env:
+      CRAFT_FONTS_DIR: ${{ github.workspace }}/.test-inputs/craft-fonts
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
+          persist-credentials: false
+      - name: Checkout test fonts
+        uses: actions/checkout@v4
+        with:
+          repository: storytold/craft-fonts
+          ref: b076417b5880bd4154bd22f00695b1d28c6bea83
+          path: .test-inputs/craft-fonts
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
@@ -46,11 +55,21 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, windows-latest]
+        # macOS runners are kept for releases: macOS runs only when started by hand.
+        os: ${{ github.event_name == 'workflow_dispatch' && fromJSON('["macos-latest","windows-latest"]') || fromJSON('["windows-latest"]') }}
     runs-on: ${{ matrix.os }}
+    env:
+      CRAFT_FONTS_DIR: ${{ github.workspace }}/.test-inputs/craft-fonts
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
+          persist-credentials: false
+      - name: Checkout test fonts
+        uses: actions/checkout@v4
+        with:
+          repository: storytold/craft-fonts
+          ref: b076417b5880bd4154bd22f00695b1d28c6bea83
+          path: .test-inputs/craft-fonts
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
@@ -62,7 +81,7 @@ jobs:
     name: Keymap WASM
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable

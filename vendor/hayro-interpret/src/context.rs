@@ -150,6 +150,19 @@ impl<'a> InterpreterCache<'a> {
             decoded_cache: DecodedImageCache::new(),
         }
     }
+
+    /// PdfCraft patch (32): how many images were decoded through this cache (its misses, not
+    /// counting images that are never cached), for diagnostics and tests.
+    pub fn decoded_image_decodes(&self) -> usize {
+        self.decoded_cache.decodes()
+    }
+
+    /// PdfCraft patch (#3020): how many `/ICCBased` profiles were read through this cache, for
+    /// diagnostics and tests. A profile used again, by the same stream object or by a copy with
+    /// the same dictionary and bytes, is read once.
+    pub fn icc_profile_reads(&self) -> usize {
+        self.object_cache.icc_profile_reads()
+    }
 }
 
 /// A per-page interpretation context that borrows shared data from an [`InterpreterCache`].
@@ -179,10 +192,19 @@ const MAX_SAVED_STATES: usize = 4096;
 const MAX_SAVED_STATE_BYTES: usize = 64 << 20;
 
 /// Roughly what a saved copy of `state` holds.
+/// PdfCraft patch (51): the sums saturate, so a huge dash array or clip list counts as over the
+/// bound rather than wrapping on a 32-bit target.
 fn state_bytes(state: &State<'_>) -> usize {
     size_of::<State<'_>>()
-        + state.graphics_state.stroke_props.dash_array.len() * size_of::<f32>()
-        + state.clips.len() * size_of::<ClipType>()
+        .saturating_add(
+            state
+                .graphics_state
+                .stroke_props
+                .dash_array
+                .len()
+                .saturating_mul(size_of::<f32>()),
+        )
+        .saturating_add(state.clips.len().saturating_mul(size_of::<ClipType>()))
 }
 
 impl<'a> Context<'a> {
@@ -263,7 +285,7 @@ impl<'a> Context<'a> {
         }
 
         let cur = cur.clone();
-        self.saved_bytes += bytes;
+        self.saved_bytes = self.saved_bytes.saturating_add(bytes);
         self.states.push(cur);
     }
 
@@ -440,7 +462,7 @@ impl<'a> Context<'a> {
 
     pub(crate) fn num_states(&self) -> usize {
         // PdfCraft patch: saves not kept still count, so callers restore back past them.
-        self.states.len() + self.skipped_saves.len()
+        self.states.len().saturating_add(self.skipped_saves.len())
     }
 
     pub(crate) fn nesting_depth(&self) -> u32 {
@@ -499,37 +521,116 @@ pub(crate) fn path_as_rect(path: &BezPath) -> Option<Rect> {
         return None;
     }
 
-    let bbox = path.fast_bounding_box();
-    let (min_x, min_y, max_x, max_y) = (bbox.min_x(), bbox.min_y(), bbox.max_x(), bbox.max_y());
-    let mut corners = [false; 4];
-
-    let mut check_point = |p: Point| {
-        corners[0] |= p.x.is_nearly_equal(min_x) && p.y.is_nearly_equal(min_y);
-        corners[1] |= p.x.is_nearly_equal(min_x) && p.y.is_nearly_equal(max_y);
-        corners[2] |= p.x.is_nearly_equal(max_x) && p.y.is_nearly_equal(min_y);
-        corners[3] |= p.x.is_nearly_equal(max_x) && p.y.is_nearly_equal(max_y);
-    };
-
+    // PdfCraft patch (35), PdfCraft #3327: the points have to trace the rectangle, not merely
+    // reach its corners. The length check above admits one MoveTo and four LineTo as well as the
+    // intended one MoveTo, three LineTo and one ClosePath, and asking only that each corner of
+    // the bounding box was visited says nothing about the order or the steps between: a
+    // five-point polyline whose ends reached every corner of its own bounding box was painted as
+    // that box, and a clip of that shape was discarded. Four distinct points, each step along one
+    // axis, the last point back at the first: that is a rectangle and nothing else is.
+    let mut points: Vec<Point> = Vec::with_capacity(5);
+    let mut closed = false;
     for (idx, el) in path.elements().iter().enumerate() {
         match el {
             PathEl::MoveTo(p) => {
                 if idx != 0 {
                     return None;
                 }
-
-                check_point(*p);
+                points.push(*p);
             }
-            PathEl::LineTo(l) => check_point(*l),
+            PathEl::LineTo(p) => points.push(*p),
             PathEl::QuadTo(_, _) => return None,
             PathEl::CurveTo(_, _, _) => return None,
-            PathEl::ClosePath => {}
+            // A subpath that ends and starts again is more than one shape.
+            PathEl::ClosePath => {
+                if idx + 1 != path.elements().len() {
+                    return None;
+                }
+                closed = true;
+            }
         }
     }
 
-    if corners[0] && corners[1] && corners[2] && corners[3] {
-        Some(bbox)
-    } else {
-        None
+    // Exactly equal, not nearly: `is_nearly_equal` allows a 256th of a path unit, and the matrix
+    // is applied after this, so a large `cm` turns that into whole device units: a path that only
+    // nearly closes would be painted as the rectangle, with a side it does not have. A
+    // rectangle's coordinates are equal in the content stream, so nothing that is one loses the
+    // fast path by this; a path that misses takes the general route and is painted as written.
+    let same = |a: Point, b: Point| a.x == b.x && a.y == b.y;
+    // `m l l l l`: the fourth line goes back to the start, which `m l l l h` does with ClosePath.
+    if !closed {
+        match (points.first(), points.get(4)) {
+            (Some(first), Some(last)) if points.len() == 5 && same(*first, *last) => {}
+            _ => return None,
+        }
+        points.pop();
+    }
+    if points.len() != 4 {
+        return None;
+    }
+    // Distinct, so a degenerate path is not one, and each step along one axis only: the four
+    // points of an axis-aligned rectangle, in order round it.
+    for (i, p) in points.iter().enumerate() {
+        let q = points.get((i + 1) % 4)?;
+        let along_x = p.y == q.y && p.x != q.x;
+        let along_y = p.x == q.x && p.y != q.y;
+        if !(along_x || along_y) {
+            return None;
+        }
+        if points.iter().skip(i + 1).any(|o| same(*p, *o)) {
+            return None;
+        }
+    }
+
+    Some(path.fast_bounding_box())
+}
+
+/// PdfCraft patch (35) tests: only a path that traces an axis-aligned rectangle is one.
+#[cfg(test)]
+mod path_as_rect_tests {
+    use super::*;
+
+    fn path(points: &[(f64, f64)], close: bool) -> BezPath {
+        let mut path = BezPath::new();
+        for (i, p) in points.iter().enumerate() {
+            if i == 0 {
+                path.move_to(*p);
+            } else {
+                path.line_to(*p);
+            }
+        }
+        if close {
+            path.close_path();
+        }
+        path
+    }
+
+    #[test]
+    fn an_open_polyline_through_every_corner_is_not_a_rectangle() {
+        // VectorCraft #2920: the zigzag's ends reach all four corners; its peak reaches none.
+        let zigzag = [(80.0, 38.0), (80.0, 21.75), (60.571, 29.875), (40.0, 21.75), (40.0, 38.0)];
+        assert_eq!(path_as_rect(&path(&zigzag, false)), None);
+    }
+
+    #[test]
+    fn corners_visited_out_of_order_are_not_a_rectangle() {
+        let bow_tie = [(10.0, 10.0), (50.0, 40.0), (10.0, 40.0), (50.0, 10.0)];
+        assert_eq!(path_as_rect(&path(&bow_tie, true)), None);
+    }
+
+    #[test]
+    fn a_path_that_only_nearly_closes_is_not_a_rectangle() {
+        let open = [(10.0, 10.0), (50.0, 10.0), (50.0, 40.0), (10.0, 40.0), (10.0, 10.001)];
+        assert_eq!(path_as_rect(&path(&open, false)), None);
+    }
+
+    #[test]
+    fn closed_rectangles_are_rectangles() {
+        let expected = Some(Rect::new(10.0, 10.0, 50.0, 40.0));
+        let closed = [(10.0, 10.0), (50.0, 10.0), (50.0, 40.0), (10.0, 40.0)];
+        assert_eq!(path_as_rect(&path(&closed, true)), expected);
+        let back_to_start = [(10.0, 10.0), (10.0, 40.0), (50.0, 40.0), (50.0, 10.0), (10.0, 10.0)];
+        assert_eq!(path_as_rect(&path(&back_to_start, false)), expected);
     }
 }
 

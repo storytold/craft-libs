@@ -6,8 +6,10 @@
 
 #[cfg(feature = "interpret")]
 pub use hayro_interpret as interpret;
+mod link;
 #[cfg(feature = "read")]
 pub use hayro_syntax as syntax;
+pub use link::safe_url;
 
 #[cfg(feature = "read")]
 mod read;

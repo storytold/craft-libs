@@ -1,0 +1,180 @@
+{
+  "docking": {
+    "layout": {
+      "root": {
+        "Split": {
+          "axis": "Vertical",
+          "size": {
+            "FixedSecond": 348.0
+          },
+          "first": {
+            "Split": {
+              "axis": "Horizontal",
+              "size": {
+                "FixedFirst": 168.0
+              },
+              "first": {
+                "Tabs": {
+                  "panels": [
+                    "tracks"
+                  ],
+                  "active": 0
+                }
+              },
+              "second": {
+                "Split": {
+                  "axis": "Horizontal",
+                  "size": {
+                    "FixedSecond": 230.0
+                  },
+                  "first": {
+                    "Tabs": {
+                      "panels": [
+                        "canvas"
+                      ],
+                      "active": 0
+                    }
+                  },
+                  "second": {
+                    "Tabs": {
+                      "panels": [
+                        "clips"
+                      ],
+                      "active": 0
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "second": {
+            "Tabs": {
+              "panels": [
+                "midi"
+              ],
+              "active": 0
+            }
+          }
+        }
+      },
+      "floating": [
+        {
+          "panels": [
+            "memory"
+          ],
+          "active": 0,
+          "rect": [
+            160.0,
+            120.0,
+            480.0,
+            280.0
+          ]
+        },
+        {
+          "panels": [
+            "history"
+          ],
+          "active": 0,
+          "rect": [
+            680.0,
+            120.0,
+            260.0,
+            300.0
+          ]
+        }
+      ]
+    },
+    "hidden": []
+  },
+  "mix_docking": {
+    "layout": {
+      "root": {
+        "Split": {
+          "axis": "Horizontal",
+          "size": {
+            "FixedFirst": 168.0
+          },
+          "first": {
+            "Tabs": {
+              "panels": [
+                "tracks"
+              ],
+              "active": 0
+            }
+          },
+          "second": {
+            "Tabs": {
+              "panels": [
+                "canvas"
+              ],
+              "active": 0
+            }
+          }
+        }
+      },
+      "floating": [
+        {
+          "panels": [
+            "memory"
+          ],
+          "active": 0,
+          "rect": [
+            160.0,
+            120.0,
+            480.0,
+            280.0
+          ]
+        },
+        {
+          "panels": [
+            "history"
+          ],
+          "active": 0,
+          "rect": [
+            680.0,
+            120.0,
+            260.0,
+            300.0
+          ]
+        }
+      ]
+    },
+    "hidden": [
+      [
+        "clips",
+        {
+          "floating": null,
+          "anchor": "canvas",
+          "placement": {
+            "Split": "Right"
+          },
+          "size": {
+            "FixedSecond": 230.0
+          },
+          "stack": null,
+          "sibling": [
+            "canvas"
+          ]
+        }
+      ],
+      [
+        "midi",
+        {
+          "floating": null,
+          "anchor": "tracks",
+          "placement": {
+            "Split": "Bottom"
+          },
+          "size": {
+            "FixedSecond": 348.0
+          },
+          "stack": null,
+          "sibling": [
+            "tracks",
+            "canvas"
+          ]
+        }
+      ]
+    ]
+  }
+}
