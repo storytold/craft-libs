@@ -16,6 +16,7 @@ craft-proof = { git = "https://github.com/storytold/craft-libs", rev = "<commit>
 | English (en-US, en-CA, en-AU, en-GB and the British-spelling Englishes such as en-NZ) | SCOWL 2026 Hunspell dictionary per English + `en-extra.txt`, dialect policy (`en-variants.txt`); a dictionaries-folder English first; without SCOWL the installed Hunspell English, else the built-in Moby list ([below](#english-is-always-checked)) | yes | Moby list, our patterns, heuristic |
 | Polish, Portuguese, Italian | the installed Hunspell dictionary | yes | TeX patterns (embedded, or a Language pack) |
 | Croatian, Turkish, Russian, Czech, Indonesian, Spanish (es, es-MX, es-419, es-UY) | the installed Hunspell dictionary (Russian also `ru-extra.txt`) | yes | Turkish and Russian rules; English fallback otherwise |
+| French (fr-FR, fr-CA and other French pack locales) | the installed Language pack or Hunspell dictionary; dictionary-driven elisions and accent-oriented suggestions | conservative typography and basic checks, with Quebec punctuation spacing in fr-CA | the Language pack (generic fr fallback) |
 | German | — | — | TeX patterns (embedded, or a Language pack) |
 | Bulgarian | — | — | syllable rules |
 
@@ -40,6 +41,12 @@ Hunspell dictionaries are not bundled; they are read from, in order: the folder 
 application data (`%LOCALAPPDATA%\WordCraft\dictionaries` and `%APPDATA%\WordCraft\dictionaries`,
 `~/Library/Application Support/WordCraft/dictionaries`, `$XDG_DATA_HOME/wordcraft/dictionaries`),
 then the usual Hunspell and LibreOffice locations. None on the web.
+
+French remains a `ProofLang::Pack` locale: use its full `tag()` for settings and issue identity.
+The shared pack loader keeps regional dictionary overrides, fallback to `fr`, reloads and its
+memory budget; no separate French dictionary slot or embedded French patterns are added.
+Only French packs receive the French spelling tuning and typography; other pack languages
+keep their existing behavior. French agreement and conjugation are outside these checks.
 
 State is process-wide: `add_word`, `ignore_word`, `set_dictionaries_folder`,
 `load_user_dictionary`/`save_user_dictionary`. The crate reads no document model; callers pass
@@ -82,19 +89,22 @@ pub fn load_errors() -> Vec<(String, String)>;         // ＋ (locale or folder,
 pub fn embedded_locales() -> &'static [&'static str];  // ＋ locales with embedded upstream data, not our supplements ("en-us", "en-gb", "en-ca", "en-au", "pl", "pt", "it", "de" by default; the four English ones with CRAFT_PROOF_EMBED=en)
 
 // craft_proof (crate root)
-pub enum ProofLang { …, Pack(PackLocale), Other }      // ＋ Pack: any language without tools of its own (nl, fr, sr-Latn…)
+pub enum ProofLang { …, Pack(PackLocale), Other }      // ＋ Pack: a language without a dedicated built-in variant (nl, fr, sr-Latn…)
 pub struct PackLocale;                                 // ＋ Copy; PackLocale::new(tag) -> Option<Self>, .as_str() "nl-nl", .primary() "nl", Display
 impl ProofLang { pub fn pack_locale(self) -> Option<PackLocale>; } // ＋
 pub fn pack_dictionary_file(lang: ProofLang) -> Option<PathBuf>;  // ＋ the .dic a Pack language reads now; None = unchecked
 ```
 
-`ProofLang::from_tag` now gives `Pack(locale)` for every valid language tag it has no tools for
+`ProofLang::from_tag` now gives `Pack(locale)` for every valid language tag without a dedicated built-in variant
 (`nl-NL` → `Pack("nl-nl")`, `fr-FR`, `ja-JP`, `sr-Latn`…); `Other` is left for `x-none`, `und`,
 `zxx`, `mul`, `mis`, `i-…` and malformed tags. A `Pack` language is spell-checked and given
 suggestions from its Hunspell dictionary (dictionaries folder → installed pack → system Hunspell)
-through the shared affix engine with default tuning, and hyphenated from its pack's
-`hyphenation.pat`; it has no grammar rules and the generic English spelling message. Without a
-dictionary or pack it behaves exactly as `Other` did (no marks, English hyphenation fallback).
+through the shared affix engine with default tuning (French tuning for `fr` packs), and
+hyphenated from its pack's `hyphenation.pat`. Most pack languages use no dedicated grammar
+rules; regional variants can reuse a built-in language's rules. French packs use the French
+spelling message and the conservative French grammar and typography described above. Without a dictionary or pack,
+spelling has no marks and hyphenation falls back to English; French grammar and typography
+still apply independently of a spelling dictionary.
 `has_dictionary(tag)` / `ProofLang::is_proofed()` say whether a `Pack` language has a dictionary
 now (read on first use, cached). Loaded `Pack` dictionaries share a 256 MB budget (estimated from their files); the least recently used goes first, but never one used in the paragraph being checked, and languages with no dictionary take no room. Downstream `match`es on `ProofLang` need a `Pack(_)` arm; `code()` stays `&'static str`
 and is `""` for it, as for `Other`: anything that keys, saves or reports a language (settings, caches, JSON/MCP output) uses `tag()`, which is `code()` for the built-ins and the locale (`nl`, `fr-fr`) for a pack language.
@@ -220,6 +230,40 @@ CI: `.github/workflows/proof.yml`.
 ## Credits
 
 storytold/craft-libs#30/#31 by brzuchal (Michał Marcin Brzuchalski) started the shared crate.
+
+### French adaptation validation
+
+The French rules and original synthetic fixtures are adapted from
+[totoz64’s WordCraft contribution #3185](https://github.com/storytold/wordcraft/pull/3185).
+They use the shared affix reader and Language pack cache; WCAFF1 remains deliberately rejected.
+The historical text fixtures retain their original expected data. Three observations for
+Indonesian `bermainkanlah` are explicitly updated in the compatibility test because the
+shared reader already supports that prefix plus two suffixes. This is a finite regression
+check, not a universal compatibility claim.
+
+The ordinary tests cover French packs, regional overrides and reloads, options, user words,
+NFC/NFD lookup with original ranges, suggestions and pack hyphenation. The opt-in real French
+dictionary gate fails when its input is missing; it never silently skips its assertions:
+
+```sh
+WORDCRAFT_DICTIONARIES=/absolute/isolated/french-dictionary cargo test -p craft-proof --test french_dictionary -- --ignored
+```
+
+For a reproducible real-dictionary run, use Dicollecte 7.7 from LibreOffice/dictionaries
+revision `67032ee957631908098a72edf48dc81cac27e369`:
+[fr.aff](https://raw.githubusercontent.com/LibreOffice/dictionaries/67032ee957631908098a72edf48dc81cac27e369/fr_FR/dictionaries/fr.aff) and
+[fr.dic](https://raw.githubusercontent.com/LibreOffice/dictionaries/67032ee957631908098a72edf48dc81cac27e369/fr_FR/dictionaries/fr.dic).
+Verify SHA-256 before invoking the gate (the test checks location and behavior, not hashes):
+
+| File | SHA-256 |
+|---|---|
+| fr.aff | `c176610cd5dc4846806a65ddd029f422d87978bf58f224aa44222662a16a2de5` |
+| fr.dic | `b78a868e31dd6e373b6c3217969afb898a9acde828a5e7ef97308da42218c88c` |
+
+Use a dedicated directory containing only the intended `fr.aff`/`fr.dic` pair (or explicit
+regional pairs for both regions). The gate requires more than 50,000 dictionary entries and
+checks the actual source folder, spelling, accent/elision suggestions, regional dispatch,
+combining-mark ranges and hyphenated compounds. No real dictionary is committed here.
 
 ## Owners
 
