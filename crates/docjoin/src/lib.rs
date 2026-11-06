@@ -643,6 +643,14 @@ fn render(table: &Table, item: &Item) -> String {
             other => escape(item.fields.get(other).unwrap_or_default()),
         })
         .collect();
+    // A closed item shown is struck through: every cell but its number, unless empty or struck.
+    let strike = item.closed && table.show_closed;
+    let cells: Vec<String> = table
+        .columns
+        .iter()
+        .zip(cells)
+        .map(|((_, field), c)| if strike && *field != "number" && !c.is_empty() && !c.starts_with("~~") { format!("~~{c}~~") } else { c })
+        .collect();
     // An empty cell is `| |`, as people write it.
     let cells: Vec<String> = cells.iter().map(|c| if c.is_empty() { " ".to_string() } else { format!(" {c} ") }).collect();
     format!("|{}|", cells.join("|"))
@@ -1123,7 +1131,13 @@ fn item_path(table: &Table, number: u32, row: &[String]) -> String {
     format!("{}/{number}-{}.md", table.dir, slug(&row_title(table, row).replace('~', "")))
 }
 
-/// An item file's text from a table row's cells.
+/// A cell struck through whole, `~~…~~`, without the strike.
+fn unstruck(cell: &str) -> &str {
+    cell.strip_prefix("~~").and_then(|c| c.strip_suffix("~~")).filter(|c| !c.is_empty() && !c.contains("~~")).unwrap_or(cell)
+}
+
+/// An item file's text from a table row's cells. A closed row's strike-through is the fold's (see
+/// [`render`]), so it comes off the fields.
 fn item_text(table: &Table, row: &[String], rank: Option<i32>, closed: bool) -> String {
     let mut text = String::from("---\n");
     if let Some(rank) = rank {
@@ -1134,6 +1148,7 @@ fn item_text(table: &Table, row: &[String], rank: Option<i32>, closed: bool) -> 
     }
     let mut body = String::new();
     for ((_, field), cell) in table.columns.iter().zip(row) {
+        let cell = if closed { unstruck(cell) } else { cell };
         match *field {
             "number" => {}
             "body" => body = unescape_pipes(&cell.replace("<br>", "\n")),

@@ -131,8 +131,8 @@ fn closed_items_strike_or_omit() {
     const OMIT: &[Table] = &[Table { show_closed: false, ..TABLES[0] }];
     let mut files = docs();
     files.retain(|f| f.path != "docs/gaps.d/3-third.md");
-    files.push(f("docs/gaps.d/3-third.md", "---\nstatus: closed\ngap: ~~Third~~ closed\n---\ne3", 0));
-    assert!(joined(&files, "docs/gaps.md").contains("| 3 | ~~Third~~ closed | e3 |"));
+    files.push(f("docs/gaps.d/3-third.md", "---\nstatus: closed\ngap: Third\n---\ne3", 0));
+    assert!(joined(&files, "docs/gaps.md").contains("| 3 | ~~Third~~ | ~~e3~~ |"));
     let omitted = join(&Config { logs: LOGS, tables: OMIT }, &files).unwrap();
     assert!(!omitted.docs.get("docs/gaps.md").unwrap().contains("Third"));
 }
@@ -407,8 +407,10 @@ fn carriage_returns_become_breaks() {
 
 #[test]
 fn escaped_and_struck_rows_round_trip() {
-    let doc = GAPS.replace("| 3 | Third | e3 |", "| 3 | ~~Third~~ | a \\| b<br>c |");
+    let doc = GAPS.replace("| 3 | Third | e3 |", "| 3 | ~~Third~~ | ~~a \\| b<br>c~~ |");
     let (items, _) = items_from_doc(&CFG, &[f("docs/gaps.md", &doc, 0)]).unwrap();
+    let third = items.iter().find(|i| i.path == "docs/gaps.d/3-third.md").unwrap();
+    assert_eq!(third.text, "---\nrank: 2\nstatus: closed\ngap: Third\n---\n\na | b\nc\n");
     let mut files = vec![f("docs/gaps.md", &doc, 0), f("ROADMAP.md", ROADMAP, 0)];
     files.extend(items);
     assert_eq!(joined(&files, "docs/gaps.md"), doc);
@@ -785,4 +787,19 @@ fn what_was_already_broken_on_the_base_is_a_warning() {
     let mut touched = head.clone();
     set(&mut touched, "docs/gaps.d/9-typo.md", |t| t.replace("gap: x", "gap: y"));
     has(&check(&CFG, &base, &touched), "9-typo.md: unknown front matter key `staus`");
+}
+
+#[test]
+fn closing_an_item_strikes_its_row() {
+    let base = docs();
+    let mut head = base.clone();
+    set(&mut head, "docs/gaps.d/3-third.md", |t| t.replacen("---\n", "---\nstatus: closed\n", 1));
+    let text = joined(&head, "docs/gaps.md");
+    assert!(text.contains("| 3 | ~~Third~~ | ~~e3~~ |\n"), "{text}");
+    // A cell already struck in part, or empty, is left alone; the cutover reads the row back.
+    set(&mut head, "docs/gaps.d/3-third.md", |_| "---\nstatus: closed\ngap: ~~Third~~ done\n---\n".into());
+    let text = joined(&head, "docs/gaps.md");
+    assert!(text.contains("| 3 | ~~Third~~ done | |\n"), "{text}");
+    let (items, _) = items_from_doc(&CFG, &[f("docs/gaps.md", &text, 0)]).unwrap();
+    assert!(items.iter().any(|i| i.text.contains("status: closed\ngap: ~~Third~~ done\n")), "{items:?}");
 }
