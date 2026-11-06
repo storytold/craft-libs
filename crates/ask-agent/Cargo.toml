@@ -1,0 +1,29 @@
+[package]
+name = "craft-ask-agent"
+description = "Ask Agent: hand a selection and an instruction to the person's own agent (MCP / control channel), with the shared request queue and bubble."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[features]
+# `ui`: the chip and the bubble for egui apps.
+egui = ["dep:egui", "dep:craft-ui"]
+
+[dependencies]
+egui = { workspace = true, optional = true }
+craft-ui = { workspace = true, optional = true }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]
+egui = { workspace = true, features = ["default_fonts"] }
+
+[lints]
+workspace = true
+
+[[test]]
+name = "wasm_poll"
+path = "tests/wasm_poll.rs"
+harness = false
