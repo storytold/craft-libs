@@ -16,6 +16,7 @@ craft-proof = { git = "https://github.com/storytold/craft-libs", rev = "<commit>
 | English (en-US, en-CA, en-AU, en-GB and the British-spelling Englishes such as en-NZ) | SCOWL 2026 Hunspell dictionary per English + `en-extra.txt`, dialect policy (`en-variants.txt`); a dictionaries-folder English first; without SCOWL the installed Hunspell English, else the built-in Moby list ([below](#english-is-always-checked)) | yes | Moby list, our patterns, heuristic |
 | Polish, Portuguese, Italian | the installed Hunspell dictionary | yes | TeX patterns (embedded, or a Language pack) |
 | Croatian, Turkish, Russian, Czech, Indonesian, Spanish (es, es-MX, es-419, es-UY) | the installed Hunspell dictionary (Russian also `ru-extra.txt`) | yes | Turkish and Russian rules; English fallback otherwise |
+| Romanian (ro, ro-RO, ro-MD) | the installed Hunspell `ro_RO` (or `ro_MD`); cedilla ş/ţ read as ș/ț, hyphenated forms (`într-o`, `s-a`) part by part | yes | a `ro` Language pack, else the English fallback |
 | German | — | — | TeX patterns (embedded, or a Language pack) |
 | Bulgarian | — | — | syllable rules |
 
@@ -229,3 +230,22 @@ WordCraft maintainers: echelon, dylanmtaylor, aiongg.
 
 MIT OR Apache-2.0. The Language data carries its own licences, recorded in craft-i18n's
 `ATTRIBUTION.md`.
+
+## Romanian contextual extension
+
+Romanian's base is @Moogabe's storytold/wordcraft#2565, ported by @vioreltus in
+storytold/craft-libs#550. The conservative contextual extension and compound
+exclusion regressions follow @ro-legal-docx's WordCraft#4743 and @VladMcj's
+ro-legal-docx/wordcraft#1 (41fdb5ea), adapted to the current shared affix engine.
+
+Suggestions for `instanta`/`instantei` and `parat`/`paratul`/`paratului` require
+enumerated adjacent court phrases. They are manual suggestions, not general
+grammar or semantic analysis. Bare ambiguous words, the valid `parat` verb,
+identifiers and tested literals remain unchanged. Ignore All opts out.
+Broad `nici un` and comma-before-`ci`/`dar` guesses are disabled because they
+misclassify valid office wording. Typed `,,` opening quotes are left unchanged.
+Romanian Language-pack spelling and hyphenation remain supported; no dictionary
+data is bundled. NFC/NFD and cedilla normalization affect lookup, not saved text.
+
+Optional external-dictionary qualification (data stays outside the repository):
+`CRAFT_ROMANIAN_TEST_DICT=/absolute/dictionaries cargo test -p craft-proof --test romanian_dictionary -- --ignored`.
