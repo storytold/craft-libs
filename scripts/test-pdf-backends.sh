@@ -14,6 +14,7 @@ done
 for backend in hayro-syntax hayro-interpret hayro hayro-jbig2 hayro-cmap hayro-postscript; do
   cargo test --manifest-path "$test_root/$backend/Cargo.toml" --lib "${patches[@]}"
 done
+cargo test --manifest-path "$test_root/hayro-syntax/Cargo.toml" --lib --features unsafe "${patches[@]}"
 cargo test --manifest-path "$test_root/hayro-syntax/Cargo.toml" --doc "${patches[@]}"
 cargo test --manifest-path "$test_root/hayro-syntax/Cargo.toml" --lib --no-default-features --features std "${patches[@]}"
 cp -R "$root/vendor/linesweeper" "$test_root/linesweeper"
