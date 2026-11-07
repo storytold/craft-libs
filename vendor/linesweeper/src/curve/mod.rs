@@ -139,6 +139,14 @@ impl CurveOrder {
         }
     }
 
+    // Craft patch (far-apart comparison).
+    /// A curve order with the same order at all heights between `start` and `end`.
+    pub(crate) fn constant(start: f64, end: f64, order: Order) -> Self {
+        let mut ret = CurveOrder::new(start);
+        ret.push(end, order, MetricsStatus::default());
+        ret
+    }
+
     fn push(&mut self, end: f64, order: Order, status: MetricsStatus) {
         self.metrics.entries.push(MetricsEntry::new(end, status));
         if let Some(last) = self.cmps.last_mut() {
