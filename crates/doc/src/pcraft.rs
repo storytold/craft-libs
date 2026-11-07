@@ -210,6 +210,14 @@ pub(crate) fn outline(bytes: &[u8], budget: &mut Budget) -> Result<Outline, Erro
     })
 }
 
+/// The archive and a document head, with structural items checked before deserialization.
+#[cfg(feature = "pcraft-pixels")]
+pub(crate) fn document_with_items<'a, D: DeserializeOwned>(bytes: &'a [u8], budget: &mut Budget) -> Result<(Zip<'a>, D), Error> {
+    let (zip, json) = manifest(bytes, budget)?;
+    let max_items = usize::try_from(budget.limits.max_items).unwrap_or(usize::MAX);
+    Ok((zip, read_with_items::<D>(&json, budget, max_items)?.document))
+}
+
 /// The archive and the manifest's document read as `D`, checked as [`outline`] reads it.
 #[cfg(feature = "pcraft-pixels")]
 pub(crate) fn document<'a, D: DeserializeOwned>(bytes: &'a [u8], budget: &mut Budget) -> Result<(Zip<'a>, D), Error> {

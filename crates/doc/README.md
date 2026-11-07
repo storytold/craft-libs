@@ -131,6 +131,27 @@ tile coordinates, a mask, layers in groups and layers without pixels, text, shap
 object copies, bitmap and indexed documents, a CMYK document, a zstd bomb, a tile shared by many
 references, and the limits.
 
+## PhotoCraft ICC payload
+
+With `pcraft-pixels`, `pcraft_icc_profile(bytes, &limits)` returns the raw blob named by
+`document.icc_profile`. Missing or null gives `Ok(None)`; a declared missing or damaged blob
+is an error. The payload's BLAKE3 hash is checked, but its ICC semantics are not validated.
+An empty verified payload is returned as `Some`, and no pixels or colors are converted.
+Previews, tiles and unrelated blobs are not read.
+
+The manifest, the selected ZIP entry holding one zstd frame, and the decoded profile count
+against `max_total`. Each is limited by `max_entry`, and the manifest also by `max_json` and
+the normal PhotoCraft envelope/depth checks. Decoding admits only the remaining output budget,
+at most an 8 MiB window, and no bytes after the frame. Structural manifest items (objects and
+arrays opened, plus commas outside strings) count against `max_items` before metadata is read,
+including skipped fields, with PhotoCraft's structural ceiling of 4,194,304. This is different
+from the layer-pixel reader's counting of parsed layer and tile-reference lists. An absent
+profile does not bypass manifest limits. Limits apply per call; a consumer reading
+several layers and a profile must also bound its combined work and retained memory.
+
+This call takes no cancellation callback. It returns payload bytes rather than a parsed or
+validated color profile and does not promise that a renderer honors those bytes.
+
 ## Limits
 
 `Limits` (fields `max_json`, `max_entry`, `max_total`, `max_depth`) bounds each call:
