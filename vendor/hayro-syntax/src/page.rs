@@ -66,9 +66,11 @@ impl<'a> Pages<'a> {
     /// Of course this could result in the order of pages being messed up, but
     /// this is still better than nothing.
     pub(crate) fn new_brute_force(ctx: &ReaderContext<'a>, xref: &'a XRef) -> Option<Self> {
+        crate::cancel::check(ctx.control())?;
         let mut pages = vec![];
 
         for object in xref.objects() {
+            crate::cancel::check(ctx.control())?;
             if let Some(dict) = object.into_dict()
                 && let Some(page) = Page::new(
                     &dict,
@@ -81,6 +83,7 @@ impl<'a> Pages<'a> {
             }
         }
 
+        crate::cancel::check(ctx.control())?;
         if pages.is_empty() {
             return None;
         }
@@ -113,6 +116,7 @@ const MAX_PAGE_TREE_WORK: usize = 100_000;
 enum PageTreeError {
     Malformed,
     Limit,
+    Cancelled,
 }
 
 struct PageTreeFrame<'a> {
@@ -142,6 +146,7 @@ fn resolve_pages<'a>(
     reader_ctx: &ReaderContext<'a>,
     work_limit: usize,
 ) -> Result<(), PageTreeError> {
+    crate::cancel::check(reader_ctx.control()).ok_or(PageTreeError::Cancelled)?;
     let mut remaining = work_limit.checked_sub(1).ok_or(PageTreeError::Limit)?;
     let root =
         PageTreeFrame::new(pages_dict, PagesContext::new(), Resources::new(Dict::empty(), None, reader_ctx)).ok_or(PageTreeError::Malformed)?;
@@ -154,6 +159,7 @@ fn resolve_pages<'a>(
     stack.push(root);
 
     while let Some(frame) = stack.last_mut() {
+        crate::cancel::check(reader_ctx.control()).ok_or(PageTreeError::Cancelled)?;
         let Some(kid) = frame.kids.next() else {
             stack.pop();
             continue;
@@ -196,6 +202,7 @@ fn resolve_pages<'a>(
         }
     }
 
+    crate::cancel::check(reader_ctx.control()).ok_or(PageTreeError::Cancelled)?;
     Ok(())
 }
 
@@ -882,7 +889,7 @@ pub(crate) mod cached {
                     Err(PageTreeError::Malformed) => Pages::new_brute_force(&ctx, xref_reference)?,
                     // A limit is a failed load, never permission to bypass the bound
                     // or return a partially walked page tree through repair.
-                    Err(PageTreeError::Limit) => return None,
+                    Err(PageTreeError::Limit | PageTreeError::Cancelled) => return None,
                 },
                 None => Pages::new_brute_force(&ctx, xref_reference)?,
             };
@@ -923,6 +930,30 @@ mod page_tree_tests {
     fn cached_with_limit(objects: &[String], limit: usize) -> Option<cached::CachedPages> {
         let xref = crate::xref::root_xref(pdf_bytes(objects).into(), b"", DecodeLimits::default()).unwrap();
         cached::CachedPages::new_with_limit(cached::Arc::new(xref), limit)
+    }
+
+    #[test]
+    fn cancellation_interrupts_initial_page_tree_construction() {
+        use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+        let armed = alloc::sync::Arc::new(AtomicBool::new(false));
+        let polls = alloc::sync::Arc::new(AtomicUsize::new(0));
+        let flag = armed.clone();
+        let counter = polls.clone();
+        let cancellation = crate::Cancellation::new(move || {
+            flag.load(Ordering::Relaxed) && counter.fetch_add(1, Ordering::Relaxed) + 1 == 100
+        });
+        let control = crate::cancel::Control::new(&cancellation);
+        let kids = (3..1003).map(|i| format!("{i} 0 R ")).collect::<String>();
+        let mut objects = vec![
+            String::from("<< /Type /Catalog /Pages 2 0 R >>"),
+            format!("<< /Type /Pages /Kids [{kids}] /Count 1000 >>"),
+        ];
+        objects.extend((0..1000).map(|_| String::from("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 10 10] >>")));
+        let xref = crate::xref::root_xref_controlled(pdf_bytes(&objects).into(), b"", DecodeLimits::default(), Some(control)).unwrap();
+        armed.store(true, Ordering::Relaxed);
+        assert!(cached::CachedPages::new(cached::Arc::new(xref)).is_none());
+        assert_eq!(polls.load(Ordering::Relaxed), 100);
+        assert_eq!(cached_with_limit(&objects, 100_000).unwrap().get().len(), 1000);
     }
 
     fn assert_deep_tree() {
