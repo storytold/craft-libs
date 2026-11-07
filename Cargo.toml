@@ -62,6 +62,7 @@ craft-atomic = { path = "crates/atomic" }
 craft-xtask = { path = "crates/xtask" }
 craft-captions = { path = "crates/captions" }
 craft-cfb = { path = "crates/cfb" }
+craft-cloud = { path = "crates/cloud" }
 craft-codepage = { path = "crates/codepage" }
 craft-cms = { path = "crates/cms" }
 craft-cloud = { path = "crates/cloud" }
@@ -95,6 +96,7 @@ craft-dpx = { path = "crates/dpx" }
 craft-dwg = { path = "crates/dwg" }
 craft-fcproj-format = { path = "crates/fcproj-format" }
 craft-ecproj-format = { path = "crates/ecproj-format" }
+craft-esign = { path = "crates/esign" }
 craft-figma-rest = { path = "crates/figma-rest" }
 craft-exr = { path = "crates/exr" }
 craft-flags = { path = "crates/flags" }
