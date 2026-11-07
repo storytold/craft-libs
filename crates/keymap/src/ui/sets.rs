@@ -2,8 +2,8 @@
 //! Revert Set, Export, Import… and Summarize…; actions that do not fit go into a More menu. New
 //! Set… and Rename… open an inline form under the row.
 
-use craft_ui::ComboBox;
 use craft_ui::layout::fit_toolbar;
+use craft_ui::{ComboBox, browse_hover, browse_pick};
 use egui::{Key as EguiKey, RichText, TextEdit, Ui};
 
 use super::{Draw, FIELD_W};
@@ -174,11 +174,18 @@ impl Draw<'_, '_> {
                 let current = self.ui("Current shortcuts");
                 let shown = based_on.clone().unwrap_or_else(|| current.clone());
                 let combo = ComboBox::from_id_salt(self.base.with("based_on")).selected_text(self.vis(&shown)).show_ui(ui, |ui| {
-                    if ui.selectable_label(based_on.is_none(), self.vis(&current)).clicked() {
+                    // Press-and-browse: the row under a held press highlights and the release over
+                    // it chooses, as a combo box's own entries do; a plain `.clicked()` never fires
+                    // for a release away from the press, so the row picks itself (#2686).
+                    let row = ui.selectable_label(based_on.is_none(), self.vis(&current));
+                    let row = browse_hover(ui, row);
+                    if row.clicked() || browse_pick(ui, &row) {
                         *based_on = None;
                     }
                     for n in &names {
-                        if ui.selectable_label(based_on.as_ref() == Some(n), self.vis(n)).clicked() {
+                        let row = ui.selectable_label(based_on.as_ref() == Some(n), self.vis(n));
+                        let row = browse_hover(ui, row);
+                        if row.clicked() || browse_pick(ui, &row) {
                             *based_on = Some(n.clone());
                         }
                     }
