@@ -280,8 +280,13 @@ impl AudioSpecificConfig {
         if br.read_bits(1)? == 1 {
             br.skip(14)?; // coreCoderDelay
         }
-        let _extension_flag = br.read_bits(1)?;
+        let extension_flag = br.read_bits(1)? == 1;
         let pce = if channel_config == 0 { Some(ProgramConfig::parse(&mut br)?) } else { None };
+        // GASpecificConfig ends with extensionFlag3 when extensionFlag is set (AAC-LC has no other
+        // extension fields); what follows it is the sync extension.
+        if extension_flag && br.bits_left() > 0 {
+            br.skip(1)?;
+        }
         if frame_length_flag {
             return Err(Error::Unsupported("960-sample frames"));
         }
@@ -297,10 +302,13 @@ impl AudioSpecificConfig {
     }
 
     /// Serialise (AAC-LC, no SBR signalling). Channel configuration 0 needs its program config
-    /// element: without one the bytes would not parse back.
+    /// element, and the sampling rate must not be 0: otherwise the bytes would not parse back.
     pub fn to_bytes(&self) -> Result<Vec<u8>> {
         if self.channel_config == 0 && self.pce.is_none() {
             return Err(Error::InvalidConfig("channel configuration 0 without a program config element"));
+        }
+        if self.sample_rate == 0 {
+            return Err(Error::InvalidConfig("a sampling rate of 0"));
         }
         let mut bw = BitWriter::new();
         bw.write_bits(self.object_type as u32, 5);
@@ -478,6 +486,13 @@ mod tests {
         }
         let asc = AudioSpecificConfig::parse(&bw.finish()).unwrap();
         assert_eq!((asc.sbr, asc.extension_sample_rate, asc.ps), (true, Some(44_100), true));
+        // with extensionFlag set, extensionFlag3 comes first
+        let mut bw = BitWriter::new();
+        for (value, bits) in [(2, 5), (7, 4), (1, 4), (0b001, 3), (0, 1), (0x2b7, 11), (5, 5), (1, 1), (4, 4)] {
+            bw.write_bits(value, bits);
+        }
+        let asc = AudioSpecificConfig::parse(&bw.finish()).unwrap();
+        assert_eq!((asc.sbr, asc.extension_sample_rate), (true, Some(44_100)));
         // SBR flagged off, a different extension, or too few bits: plain AAC-LC
         for bytes in [&[0x13, 0x90, 0x56, 0xE5, 0x00][..], &[0x13, 0x90, 0x12, 0x34], &[0x13, 0x90, 0x56]] {
             let asc = AudioSpecificConfig::parse(bytes).unwrap();
@@ -497,6 +512,7 @@ mod tests {
     #[test]
     fn configs_that_would_not_parse_back_are_not_written() {
         assert!(AudioSpecificConfig::lc(4, 0).to_bytes().is_err());
+        assert!(AudioSpecificConfig::lc(13, 2).to_bytes().is_err(), "a sampling rate of 0");
         let pce = ProgramConfig { front: vec![(true, 0)], ..Default::default() };
         let asc = AudioSpecificConfig { pce: Some(pce), ..AudioSpecificConfig::lc(4, 0) };
         assert_eq!(AudioSpecificConfig::parse(&asc.to_bytes().unwrap()).unwrap(), asc);

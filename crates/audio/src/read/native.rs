@@ -664,19 +664,25 @@ fn open_mp4<'a>(src: &Src<'a>, container: Container, track: Option<usize>) -> Op
     // Durations only trim the last packet: ones that end anywhere else are wrong (some count a
     // HE-AAC packet's core frames) and can't cut audio off.
     // ADTS-framed samples (not standard) may hold several frames each, and finding out would mean
-    // reading every sample: their sample table's timing is kept instead.
+    // reading every sample: their sample table's timing is kept instead, unless it falls short of
+    // one frame per sample (durations counting HE-AAC's core frames). Then it can't end the track,
+    // and its length is unknown until decoded.
     let adts = lookahead.iter().any(|p| adts_framed(p));
     let per_packet = probe.frames_per_packet().map(|n| n as u64).filter(|_| !adts);
-    if let Some(n) = per_packet {
-        let decoded = (t.samples.len() as u64).saturating_mul(n).saturating_sub(skip);
-        if stored > decoded || decoded - stored >= n {
-            stored = decoded;
+    let mut length_known = true;
+    if let Some(n) = probe.frames_per_packet().map(|n| n as u64) {
+        let one_each = (t.samples.len() as u64).saturating_mul(n).saturating_sub(skip);
+        if !adts && (stored > one_each || one_each - stored >= n) {
+            stored = one_each;
+        } else if adts && one_each.saturating_sub(stored) >= n {
+            stored = 0;
+            length_known = limit.is_some();
         }
     }
     let frames = if stored > 0 { limit.map_or(stored, |l| l.min(stored)) } else { limit.unwrap_or(0) };
     let limit = (stored > 0).then_some(frames).or(limit);
     let packets = Packets::Mp4 { file: Box::new(file), src: src.clone(), track, next: 0, timescale, rate, per_packet };
-    native(container, packets, &params, &lookahead, skip, limit, Some(frames)).map(Ok)
+    native(container, packets, &params, &lookahead, skip, limit, length_known.then_some(frames)).map(Ok)
 }
 
 /// A Matroska / WebM file's audio track, if its codec is native.
@@ -1007,6 +1013,31 @@ mod adts_tests {
         }
         let opened = Decoder::open(FailsFrames(frame(3).repeat(64)), Some("aac"), &DecodeOptions::default());
         assert!(matches!(opened, Err(AudioError::Io(_))), "{:?}", opened.err());
+    }
+
+    /// ADTS-framed HE-AAC whose sample durations count core frames is not cut to the durations'
+    /// half length.
+    #[test]
+    fn adts_framed_he_aac_in_mp4_with_core_durations_keeps_its_length() {
+        use craft_media::bitstream::BitWriter;
+        use craft_media::isobmff::{Brand, Mp4Writer, SampleEntry, TrackConfig, WriteSample, WriterOptions};
+        // mono silence with SBR data in a fill element (implicit HE-AAC), at 22.05 kHz
+        let mut bw = BitWriter::new();
+        for (value, bits) in [(0, 7), (0, 22), (6, 3), (1, 4), (13, 4), (0, 4), (7, 3)] {
+            bw.write_bits(value, bits);
+        }
+        let au = bw.finish();
+        let frame = [&crate::aac::AdtsHeader::write(2, 7, 1, au.len(), 0x7FF).unwrap()[..], &au].concat();
+        let asc = crate::aac::AudioSpecificConfig::lc(7, 1).to_bytes().unwrap();
+        let mut w = Mp4Writer::new(std::io::Cursor::new(Vec::new()), WriterOptions::new(Brand::Mp4)).unwrap();
+        let track = w.add_track(TrackConfig::new(SampleEntry::aac(asc, 1, 44_100), 44_100)).unwrap();
+        for _ in 0..12 {
+            w.write_sample(track, WriteSample { data: &frame, duration: 1024, composition_offset: 0, is_sync: true }).unwrap();
+        }
+        let file = w.finish().unwrap().into_inner();
+        let (info, buf) = decode(&file, None).unwrap();
+        assert_eq!((info.codec, info.sample_rate, buf.frames()), (crate::CodecId::HeAac, 44_100, 12 * 2048));
+        assert_eq!(crate::probe(&file, None).unwrap().frames, 12 * 2048);
     }
 
     /// A sample of several ADTS frames past the lookahead still counts them all.
