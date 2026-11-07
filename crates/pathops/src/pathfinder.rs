@@ -65,7 +65,9 @@ pub struct Region {
 }
 
 impl Region {
-    /// Front-most covering shape (`None` only for an uncovered face, which regions never are).
+    /// Front-most covering shape: `None` for a face nothing fills, which [`regions`] never gives but
+    /// [`live_paint`](crate::live_paint) and [`shape_builder`](crate::shape_builder) do (the area
+    /// enclosed by paths, with an empty `sources`).
     pub fn top(&self) -> Option<usize> {
         self.sources.last().copied()
     }
@@ -176,21 +178,28 @@ fn pathfinder_unguarded(op: PathfinderOp, shapes: &[Shape], precision: f64) -> V
             paths.into_iter().zip(shapes).flat_map(|(sp, s)| one(sp, s.key)).collect()
         }
         PathfinderOp::Merge => {
+            // The distinct keys, in the order they first appear, each with a class number.
+            let mut class_of_key: HashMap<u64, usize> = HashMap::new();
             let mut keys: Vec<u64> = Vec::new();
             for s in shapes {
-                if !keys.contains(&s.key) {
+                class_of_key.entry(s.key).or_insert_with(|| {
                     keys.push(s.key);
-                }
+                    keys.len() - 1
+                });
             }
-            let mut out = Vec::new();
-            for k in keys {
-                // topmost(m) is a shape with key k
-                let c = arr.contours_where(|w| arr.covered(w).next_back().is_some_and(|t| shapes[t].key == k));
-                for g in c.grouped() {
-                    out.extend(one(contours_to_path(&c, g, p), k));
-                }
-            }
-            out
+            let class_of_shape: Vec<usize> = shapes.iter().filter_map(|s| class_of_key.get(&s.key).copied()).collect();
+            // topmost(m) is a shape with key k: one contour pass for every batch of keys whose
+            // faces share no vertex, not one for each key.
+            let mut parts: Vec<(usize, BezPath)> = Vec::new();
+            each_classified_face(
+                &arr,
+                keys.len(),
+                |w| arr.covered(w).next_back().and_then(|t| class_of_shape.get(t).copied()),
+                |k, c, group| parts.push((k, contours_to_path(c, group.iter().copied(), p))),
+            );
+            // By key, as each key's own pass gave them (a stable sort keeps a key's faces in order).
+            parts.sort_by_key(|(k, _)| *k);
+            parts.into_iter().flat_map(|(k, path)| one(path, keys[k])).collect()
         }
         PathfinderOp::Crop => {
             if n < 2 {
@@ -212,7 +221,13 @@ fn pathfinder_unguarded(op: PathfinderOp, shapes: &[Shape], precision: f64) -> V
             );
             paths.into_iter().zip(shapes).flat_map(|(sp, s)| one(sp, s.key)).collect()
         }
-        PathfinderOp::Outline => outline_edges(&arr, shapes),
+        PathfinderOp::Outline => {
+            // Open paths (but for a ring that comes back to where it started) are edges that cross
+            // others without a trace in the filled areas: the junctions come from the planar map.
+            let open = shapes.iter().any(|s| subs(&s.path).into_iter().map(crate::path::Sub::closed_if_ends_meet).any(|sp| !sp.closed));
+            let from_map = open.then(|| crate::planar::map_junctions(shapes, precision)).flatten();
+            outline_edges(from_map.unwrap_or_else(|| arr.junctions()), shapes)
+        }
     }
 }
 
@@ -472,20 +487,22 @@ pub fn merge_regions(regions: &[&Region]) -> BezPath {
     unite_all(&v)
 }
 
-/// Pathfinder Outline: split every shape's boundary at junctions of the arrangement.
-fn outline_edges(arr: &Arrangement, shapes: &[Shape]) -> Vec<Shape> {
-    // Sorted by x (then y), so a segment needs only the junctions inside its control box.
-    let junctions = arr.junctions();
+/// Pathfinder Outline: split every shape's boundary at `junctions`, the points where three or more
+/// edges meet (sorted by x, then y, so that a segment needs only the junctions inside its control
+/// box). A closed subpath comes back as the edges of its outline, an open one as the edges of the
+/// path itself, with no closing edge.
+fn outline_edges(junctions: Vec<Point>, shapes: &[Shape]) -> Vec<Shape> {
     let scale = shapes.iter().filter_map(|s| control_bounds(&s.path)).map(|r| r.width().max(r.height())).fold(1.0, f64::max);
     let tol = scale * 1e-7;
     let reach = tol.max(1e-6);
     // (chain, key, source index)
     let mut chains: Vec<(Vec<Seg>, u64)> = Vec::new();
     for s in shapes {
-        for mut sp in subs(&s.path) {
-            sp.closed = true;
+        for sp in subs(&s.path).into_iter().map(crate::path::Sub::closed_if_ends_meet) {
+            let open = !sp.closed;
             let outline = sp.chain();
-            if outline.len() < 2 {
+            // A closed subpath of one segment is no outline; an open one is the path.
+            if outline.len() < usize::from(!open) + 1 {
                 continue;
             }
             // Split each segment at junctions; record which piece starts are breaks.
@@ -526,6 +543,20 @@ fn outline_edges(arr: &Arrangement, shapes: &[Shape]) -> Vec<Shape> {
                     let seg = if line { Seg::line(sub.p0, sub.p3) } else { Seg { c: sub, line: false } };
                     pieces.push((seg, if k == 0 { start_is_junction } else { true }));
                 }
+            }
+            // An open path is chained from its start to its end, cut at the junctions.
+            if open {
+                let mut cur: Vec<Seg> = Vec::new();
+                for (seg, brk) in pieces {
+                    if brk && !cur.is_empty() {
+                        chains.push((std::mem::take(&mut cur), s.key));
+                    }
+                    cur.push(seg);
+                }
+                if !cur.is_empty() {
+                    chains.push((cur, s.key));
+                }
+                continue;
             }
             // Chain pieces between breaks.
             let first_break = pieces.iter().position(|(_, b)| *b);
@@ -960,6 +991,70 @@ mod tests {
         assert_eq!(trim_cov_actual, trim_cov_expected);
     }
 
+    /// Merge walks the arrangement once for all the keys that share no vertex, not once for each:
+    /// 300 rectangles apart, each with a key of its own, are one contour pass.
+    #[test]
+    fn merge_of_many_shapes_apart_is_a_few_contour_passes() {
+        let shapes: Vec<Shape> = (0..300u32)
+            .map(|i| Shape::new(rect(f64::from(i) * 20.0, 0.0, f64::from(i) * 20.0 + 10.0, 10.0), FillRule::NonZero, u64::from(i)))
+            .collect();
+        CONTOUR_PASSES.with(|n| n.set(0));
+        let merged = pathfinder(PathfinderOp::Merge, &shapes);
+        let passes = CONTOUR_PASSES.with(std::cell::Cell::get);
+        assert_eq!(merged.len(), 300);
+        assert!(merged.iter().enumerate().all(|(i, s)| s.key == i as u64 && (crate::area(&s.path, FillRule::NonZero) - 100.0).abs() < 1e-9));
+        assert!(passes <= 3, "{passes} passes for 300 keys");
+    }
+
+    /// Merge by batches gives what a contour pass for each key gave: the same shapes, in the same order.
+    #[test]
+    fn merge_is_what_a_pass_for_each_key_gives() {
+        let reference = |shapes: &[Shape]| -> Vec<Shape> {
+            let arr = arrangement(shapes, DEFAULT_PRECISION).expect("arrangement");
+            let mut keys: Vec<u64> = Vec::new();
+            for s in shapes {
+                if !keys.contains(&s.key) {
+                    keys.push(s.key);
+                }
+            }
+            let mut out = Vec::new();
+            for k in keys {
+                let c = arr.contours_where(|w| arr.covered(w).next_back().is_some_and(|t| shapes[t].key == k));
+                for g in c.grouped() {
+                    out.extend(one(contours_to_path(&c, g, &arr.tidy), k));
+                }
+            }
+            out
+        };
+        let mut stacks: Vec<Vec<Shape>> = Vec::new();
+        // Overlapping rectangles and circles with repeated keys, and some apart.
+        for seed in 0..40u32 {
+            let mut v = Vec::new();
+            for i in 0..(3 + seed % 5) {
+                let (x, y) = (f64::from((seed * 7 + i * 13) % 11) * 8.0, f64::from((seed * 5 + i * 3) % 7) * 8.0);
+                let path = if (seed + i) % 3 == 0 { ellipse(Rect::new(x, y, x + 30.0, y + 24.0)) } else { rect(x, y, x + 25.0, y + 20.0) };
+                v.push(Shape::new(path, FillRule::NonZero, u64::from((seed + i * 2) % 3)));
+            }
+            stacks.push(v);
+        }
+        for (n, shapes) in stacks.iter().enumerate() {
+            assert_eq!(pathfinder(PathfinderOp::Merge, shapes), reference(shapes), "stack {n}");
+        }
+    }
+
+    /// An island of a key inside the hole of its own frame is a component of its own, so a shape of its own.
+    #[test]
+    fn merge_makes_a_shape_of_each_component_also_an_island_in_a_hole() {
+        let mut frame = rect(0.0, 0.0, 100.0, 100.0);
+        frame.extend(rect(20.0, 20.0, 80.0, 80.0).reverse_subpaths().iter());
+        let shapes = [Shape::new(frame, FillRule::NonZero, 7), Shape::new(rect(40.0, 40.0, 60.0, 60.0), FillRule::NonZero, 7)];
+        let merged = pathfinder(PathfinderOp::Merge, &shapes);
+        assert_eq!(merged.len(), 2, "{:?}", merged.iter().map(|s| subpath_count(&s.path)).collect::<Vec<_>>());
+        assert!(merged.iter().all(|s| s.key == 7));
+        let areas: Vec<f64> = merged.iter().map(|s| crate::area(&s.path, FillRule::NonZero)).collect();
+        assert!(areas.iter().any(|a| (a - 6400.0).abs() < 1e-6) && areas.iter().any(|a| (a - 400.0).abs() < 1e-6), "{areas:?}");
+    }
+
     #[test]
     fn open_paths_are_the_only_input_to_outline_and_survive_it() {
         // A polyline and a rectangle crossing it: the outline cuts both where they meet.
@@ -968,7 +1063,66 @@ mod tests {
             Shape::new(polyline_pts(&[Point::new(-10.0, 50.0), Point::new(110.0, 50.0)], false), FillRule::NonZero, 2),
         ];
         let pieces = pathfinder(PathfinderOp::Outline, &shapes);
-        assert!(!pieces.is_empty());
-        assert!(pieces.iter().all(|s| length(&s.path) > 1.0));
+        let of = |key: u64| pieces.iter().filter(|s| s.key == key).collect::<Vec<_>>();
+        // The rectangle is cut at the two crossings, and so is the line: the line survives.
+        assert_eq!(of(1).len(), 2, "the rectangle is cut where the line crosses it");
+        assert_eq!(of(2).len(), 3, "the line is cut at the same two points");
+        assert_eq!(pieces.len(), 5);
+        assert!((of(1).iter().map(|s| length(&s.path)).sum::<f64>() - 400.0).abs() < 1e-6);
+        assert!((of(2).iter().map(|s| length(&s.path)).sum::<f64>() - 120.0).abs() < 1e-6);
+        // The line's pieces end at the crossings, which are the rectangle's cuts.
+        let crossing = |p: &BezPath, at: Point| {
+            let first = p.elements().first().and_then(kurbo::PathEl::end_point);
+            let last = p.elements().last().and_then(kurbo::PathEl::end_point);
+            first.is_some_and(|a| a.distance(at) < 1e-6) || last.is_some_and(|b| b.distance(at) < 1e-6)
+        };
+        for at in [Point::new(0.0, 50.0), Point::new(100.0, 50.0)] {
+            assert_eq!(of(1).iter().filter(|s| crossing(&s.path, at)).count(), 2, "{at:?}");
+            assert_eq!(of(2).iter().filter(|s| crossing(&s.path, at)).count(), 2, "{at:?}");
+        }
+    }
+
+    /// A path that comes back to where it started without closing (how a drawing program writes an
+    /// ellipse) is a ring: its outline is that of the closed path, not two open chains cut at its start.
+    #[test]
+    fn outline_of_an_open_ring_is_that_of_the_closed_one() {
+        let ring = |close: bool| {
+            let pts: Vec<Point> = (0..=8)
+                .map(|i| {
+                    let a = std::f64::consts::TAU * f64::from(i % 8) / 8.0;
+                    Point::new(50.0 + 30.0 * a.cos(), 50.0 + 30.0 * a.sin())
+                })
+                .collect();
+            let mut p = polyline_pts(&pts, false);
+            if close {
+                p.close_path();
+            }
+            p
+        };
+        let cutter = rect(40.0, 30.0, 60.0, 90.0);
+        let outline = |close: bool| {
+            pathfinder(PathfinderOp::Outline, &[Shape::new(ring(close), FillRule::NonZero, 1), Shape::new(cutter.clone(), FillRule::NonZero, 2)])
+        };
+        let (open, closed) = (outline(false), outline(true));
+        assert_eq!(open.len(), closed.len(), "{} pieces of the open ring, {} of the closed", open.len(), closed.len());
+        let total = |v: &[Shape], key: u64| v.iter().filter(|s| s.key == key).map(|s| length(&s.path)).sum::<f64>();
+        assert!((total(&open, 1) - total(&closed, 1)).abs() < 1e-6 && (total(&open, 2) - total(&closed, 2)).abs() < 1e-6);
+        // Alone, the ring is one piece, as a closed path is (not cut at the point it starts from).
+        let alone = pathfinder(PathfinderOp::Outline, &[Shape::new(ring(false), FillRule::NonZero, 1)]);
+        assert_eq!(alone.len(), 1);
+    }
+
+    /// An open path comes back as its own edges: no closing edge, cut where another path meets it.
+    #[test]
+    fn outline_of_an_open_path_has_no_closing_edge() {
+        let v = polyline_pts(&[Point::new(0.0, 0.0), Point::new(10.0, 20.0), Point::new(20.0, 0.0)], false);
+        let alone = pathfinder(PathfinderOp::Outline, &[Shape::new(v.clone(), FillRule::NonZero, 1)]);
+        assert_eq!(alone.len(), 1);
+        assert!((length(&alone[0].path) - 2.0 * 500f64.sqrt()).abs() < 1e-9, "{}", length(&alone[0].path));
+        // A second path through its corner cuts it there in two.
+        let cutter = polyline_pts(&[Point::new(10.0, 30.0), Point::new(10.0, 20.0), Point::new(10.0, 5.0)], false);
+        let cut = pathfinder(PathfinderOp::Outline, &[Shape::new(v, FillRule::NonZero, 1), Shape::new(cutter, FillRule::NonZero, 2)]);
+        assert_eq!(cut.iter().filter(|s| s.key == 1).count(), 2);
+        assert!((cut.iter().filter(|s| s.key == 1).map(|s| length(&s.path)).sum::<f64>() - 2.0 * 500f64.sqrt()).abs() < 1e-9);
     }
 }

@@ -4,10 +4,38 @@
 use super::*;
 use crate::work::{self, Work};
 
-/// The sweep's frame: y + x / 32. Only edges sloping -1/32 in the document are horizontal in it.
-pub(super) const SHEAR: Affine = Affine::new([1.0, 1.0 / 32.0, 0.0, 1.0, 0.0, 0.0]);
+/// The shears the sweep's frame may use, `y + k x`, the first that leaves no open path level in it:
+/// by default 1/32, in which only an edge sloping -1/32 in the document is horizontal. Each is a
+/// power of two, so it maps typical coordinates exactly.
+pub(super) const SHEARS: [f64; 6] = [1.0 / 32.0, 1.0 / 64.0, 1.0 / 16.0, 1.0 / 128.0, 1.0 / 8.0, 1.0 / 256.0];
 
-pub(super) const UNSHEAR: Affine = Affine::new([1.0, -1.0 / 32.0, 0.0, 1.0, 0.0, 0.0]);
+/// The shear by `k` and its inverse.
+pub(super) fn shear(k: f64) -> (Affine, Affine) {
+    (Affine::new([1.0, k, 0.0, 1.0, 0.0, 0.0]), Affine::new([1.0, -k, 0.0, 1.0, 0.0, 0.0]))
+}
+
+/// The shear for `shapes`: the first of [`SHEARS`] in whose frame no open subpath has a side (of a
+/// segment's chord or control polygon) that is level, which the sweep takes the two passes of
+/// for cancelling out. All of them level for one is not a case worth more: the first is used.
+pub(super) fn shear_for(shapes: &[Shape]) -> f64 {
+    let level = |k: f64| {
+        shapes.iter().any(|s| {
+            crate::path::subs(&s.path).iter().filter(|sp| !sp.closed).any(|sp| {
+                sp.segments().any(|seg| {
+                    let pts: Vec<Point> = match seg {
+                        PathSeg::Line(l) => vec![l.p0, l.p1],
+                        PathSeg::Quad(q) => vec![q.p0, q.p1, q.p2],
+                        PathSeg::Cubic(c) => vec![c.p0, c.p1, c.p2, c.p3],
+                    };
+                    let (first, last) = (pts.first().copied().unwrap_or(Point::ZERO), pts.last().copied().unwrap_or(Point::ZERO));
+                    let sides = pts.windows(2).map(|w| w[1] - w[0]).chain(std::iter::once(last - first));
+                    sides.into_iter().any(|d| d.hypot2() > 0.0 && (d.y + k * d.x).abs() <= 1e-6 * (d.x.abs() + d.y.abs()))
+                })
+            })
+        })
+    };
+    SHEARS.iter().copied().find(|&k| !level(k)).unwrap_or(SHEARS[0])
+}
 
 /// Boundary crossings per input, counted from the far west: slot `2i` counts input `i`'s
 /// segments running one way, slot `2i + 1` the other. An open path traced there and back adds one

@@ -91,6 +91,35 @@ impl Sub {
         if self.closed && self.end().distance(self.start) < JOIN_TOLERANCE { n - 1 } else { n }
     }
 
+    /// An open subpath of three or more anchors whose last anchor lies within 1e-6 of its first (the
+    /// test [`join`](crate::join) applies to one path) as a closed subpath: its last segment ends on
+    /// the first anchor. Any other subpath is returned unchanged. (A drawing program writes an ellipse
+    /// as a path that comes back to where it started without closing.)
+    pub(crate) fn closed_if_ends_meet(mut self) -> Self {
+        if !self.closed && self.anchors() > 2 && self.end().distance(self.start) < 1e-6 {
+            let start = self.start;
+            if let Some(last) = self.draws.last_mut() {
+                *last = with_end(*last, start);
+            }
+            self.closed = true;
+        }
+        self
+    }
+
+    /// Does the subpath draw anything? A closed one that is a single segment from its start back to
+    /// it (one anchor) draws a point or a line out and back, unless that segment is a cubic whose
+    /// handles take it round an area (`M0,0 C100,0 0,100 0,0 Z` is a loop with an inside).
+    pub(crate) fn draws_something(&self) -> bool {
+        if self.anchors() >= 2 {
+            return true;
+        }
+        let [PathEl::CurveTo(..)] = self.draws[..] else { return false };
+        let mut bp = BezPath::new();
+        self.push_closed(&mut bp);
+        let size = kurbo::Shape::bounding_box(&bp).size();
+        kurbo::Shape::area(&bp).abs() > 1e-9 * (size.width * size.width + size.height * size.height)
+    }
+
     /// The segments of the subpath as it is written ([`Sub::push_open`] or [`Sub::push_closed`]),
     /// without the closing segment of a closed one that ends on its start already.
     pub(crate) fn segments(&self) -> impl Iterator<Item = PathSeg> + '_ {
@@ -165,13 +194,13 @@ pub(crate) fn with_end(el: PathEl, p: Point) -> PathEl {
 
 /// A path to be filled: every subpath with a segment is closed (an open one implicitly, as a filled
 /// open path is painted), in the form of [`Sub::push_closed`]. A closed subpath that is one segment
-/// from its start back to it has no area and is left out, as VectorCraft's conversion left out a
-/// subpath of fewer than two anchors.
+/// from its start back to it has no area and is left out, unless that segment is a cubic that loops
+/// round one (VectorCraft's conversion left out every subpath of fewer than two anchors).
 pub(crate) fn fill_bezpath(path: &BezPath) -> BezPath {
     let mut out = BezPath::new();
     for sub in subs(path) {
         if sub.closed {
-            if sub.anchors() < 2 {
+            if !sub.draws_something() {
                 continue;
             }
             sub.push_closed(&mut out);
@@ -383,8 +412,19 @@ impl Seg {
 /// written as a line when it is one, or when neither of its handles leaves its end.
 pub(crate) fn segs_to_bezpath(segs: &[Seg], closed: bool) -> Option<BezPath> {
     let n = segs.len();
-    if n == 0 || (closed && n < 2) {
+    if n == 0 {
         return None;
+    }
+    // A closed chain of one segment is a loop, if that segment is a curve that comes back to where
+    // it starts; a line, or a curve that does not come back, is no closed chain.
+    if closed && n < 2 {
+        let looped = segs.first().is_some_and(|s| {
+            let near = 1e-6 * (1.0 + s.c.p0.x.abs().max(s.c.p0.y.abs()));
+            !s.line && s.c.p3.distance(s.c.p0) <= near
+        });
+        if !looped {
+            return None;
+        }
     }
     let mut out = BezPath::new();
     out.move_to(segs.first()?.c.p0);

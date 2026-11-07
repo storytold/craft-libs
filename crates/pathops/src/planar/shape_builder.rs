@@ -3,7 +3,7 @@
 
 use super::map::build;
 use super::*;
-use crate::path::{Sub, has_closed_subpath, has_open_subpath, subs};
+use crate::path::{has_closed_subpath, has_open_subpath, subs};
 
 /// Most segments [`shape_builder`] sweeps into its planar map (open paths as edges, the gaps closed
 /// paths enclose, outline edges); past this only the filled areas count. It is the default of
@@ -52,7 +52,7 @@ pub(crate) fn segment_count(shapes: &[Shape]) -> usize {
 /// fills, and each path with no closed subpath comes back cut wherever another path meets it, as
 /// pieces keyed by its index in `shapes`. Outlines are cut the same way. With more than
 /// [`SHAPE_BUILDER_MAX_SEGMENTS`] segments or a map that can't be built, only the filled areas
-/// count and there are no pieces.
+/// of the closed subpaths count (an open one fills nothing there either) and there are no pieces.
 pub fn shape_builder(shapes: &[Shape], edges: bool) -> BuilderArrangement {
     builder(shapes, edges, DEFAULT_PRECISION)
 }
@@ -91,16 +91,26 @@ pub(crate) fn builder(shapes: &[Shape], edges: bool, precision: f64) -> BuilderA
     }
 }
 
-/// The regions of the shapes' filled areas. A shape that fills nothing (open paths that enclose no
-/// area, such as cutting lines) is left out, so a flood of them cannot push the arrangement past its
-/// size budget and take the filled shapes down with it; the regions keep the original indices.
+/// The regions of the shapes' filled areas: those of their closed subpaths. An open subpath is a
+/// cutting edge, as in the map: it fills nothing, whatever it encloses. A shape left with no closed
+/// subpath is left out, so a flood of cutting lines cannot push the arrangement past its size budget
+/// and take the filled shapes down with it; the regions keep the original indices.
 fn filled_regions(shapes: &[Shape], precision: f64) -> Vec<crate::Region> {
-    let fills = |s: &Shape| subs(&s.path).iter().any(|sp| sp.closed || encloses_area(sp));
-    let keep: Vec<usize> = (0..shapes.len()).filter(|&i| shapes.get(i).is_some_and(fills)).collect();
-    if keep.len() == shapes.len() {
+    if !shapes.iter().any(|s| has_open_subpath(&s.path)) {
         return crate::pathfinder::regions_with(shapes, precision);
     }
-    let kept: Vec<Shape> = keep.iter().filter_map(|&i| shapes.get(i).cloned()).collect();
+    let mut keep: Vec<usize> = Vec::new();
+    let mut kept: Vec<Shape> = Vec::new();
+    for (i, s) in shapes.iter().enumerate() {
+        let mut closed = BezPath::new();
+        for sp in subs(&s.path).iter().filter(|sp| sp.closed && sp.draws_something()) {
+            sp.push_closed(&mut closed);
+        }
+        if !closed.elements().is_empty() {
+            keep.push(i);
+            kept.push(Shape::new(closed, s.rule, s.key));
+        }
+    }
     crate::pathfinder::regions_with(&kept, precision)
         .into_iter()
         .map(|mut r| {
@@ -108,13 +118,4 @@ fn filled_regions(shapes: &[Shape], precision: f64) -> Vec<crate::Region> {
             r
         })
         .collect()
-}
-
-/// Does `sp`, closed, enclose an area (rather than retrace itself)? A filled open path counts
-/// when it does.
-fn encloses_area(sp: &Sub) -> bool {
-    let mut bp = BezPath::new();
-    sp.push_closed(&mut bp);
-    let size = bp.bounding_box().size();
-    bp.area().abs() > 1e-9 * (size.width * size.width + size.height * size.height)
 }

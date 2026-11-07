@@ -42,6 +42,8 @@ fn the_defaults_are_the_constants() {
     assert_eq!(l.fit_work, FIT_WORK);
     assert_eq!(l.join_work, JOIN_WORK);
     assert_eq!(l.redundant_work, REDUNDANT_WORK);
+    assert_eq!(l.mask_work, MASK_WORK);
+    assert_eq!(l.sweep_event_work, MAX_SWEEP_EVENT_WORK);
     assert_eq!(l, Limits::DEFAULT);
 }
 
@@ -196,4 +198,44 @@ fn a_scope_ends_with_its_closure_nests_and_stays_on_its_thread() {
     assert!(unwound.is_err());
     assert_eq!(try_area(&square, FillRule::NonZero), Ok(100.0), "back to the defaults after a panic");
     assert_eq!(with_limits(none, || 7), 7, "the closure's value comes back");
+}
+
+#[test]
+fn a_lower_mask_limit_refuses_an_operation_with_many_inputs() {
+    let empty = BezPath::new();
+    let squares: Vec<BezPath> = (0..10).map(|i| rectangle(Rect::new(f64::from(i) * 20.0, 0.0, f64::from(i) * 20.0 + 10.0, 10.0))).collect();
+    let mut inputs: Vec<(&BezPath, FillRule)> = squares.iter().map(|s| (s, FillRule::NonZero)).collect();
+    inputs.extend(std::iter::repeat_n((&empty, FillRule::NonZero), 300));
+    let union = |m: &[bool]| m.iter().any(|&b| b);
+    assert!(close_area(&try_boolean_n(&inputs, union).unwrap(), 1000.0));
+    let none = with(|l| l.mask_work = 0);
+    assert_eq!(with_limits(none, || try_boolean_n(&inputs, union)), Err(PathOpsError::TooComplex));
+    assert!(with_limits(none, || boolean_n(&inputs, union)).elements().is_empty());
+    // Two inputs need only a few flags a segment, but some.
+    assert_eq!(
+        with_limits(none, || try_boolean(&squares[0], FillRule::NonZero, &squares[1], FillRule::NonZero, BoolOp::Union, DEFAULT_PRECISION)),
+        Err(PathOpsError::TooComplex)
+    );
+}
+
+fn close_area(path: &BezPath, want: f64) -> bool {
+    (area(path, FillRule::NonZero) - want).abs() < 1e-6
+}
+
+#[test]
+fn a_lower_sweep_event_limit_refuses_a_hatch_the_default_takes() {
+    // 30 strokes slanting each way: swept in a blink by default.
+    let hatch = {
+        let mut b = BezPath::new();
+        for i in 0..30 {
+            let x = f64::from(i) * 4.0;
+            b.extend(poly(&[(x, 0.0), (x + 1.0, 0.0), (x + 121.0, 120.0), (x + 120.0, 120.0)], true).iter());
+            b.extend(poly(&[(x + 120.0, 0.0), (x + 121.0, 0.0), (x + 1.0, 120.0), (x, 120.0)], true).iter());
+        }
+        b
+    };
+    assert!(try_area(&hatch, FillRule::NonZero).is_ok());
+    let none = with(|l| l.sweep_event_work = 0);
+    assert_eq!(with_limits(none, || try_area(&hatch, FillRule::NonZero)), Err(PathOpsError::TooComplex));
+    assert_eq!(with_limits(none, || try_unite_all(&[(&hatch, FillRule::NonZero)])), Err(PathOpsError::TooComplex));
 }

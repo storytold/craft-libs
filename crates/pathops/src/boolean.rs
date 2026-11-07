@@ -14,7 +14,7 @@ use kurbo::{BezPath, CubicBez, Point, Shape as _};
 use linesweeper::topology::{ContourIdx, Contours, Topology, WindingNumber};
 
 use crate::fit::{end_tangent, fit_single, sample, start_tangent};
-use crate::path::{Seg, fill_bezpath, guarded, segs_to_bezpath};
+use crate::path::{Seg, fill_bezpath, segs_to_bezpath};
 use crate::planar::index::RectIndex;
 use crate::work::{self, Work};
 use crate::{FillRule, PathOpsError};
@@ -238,6 +238,13 @@ pub(crate) struct Arrangement {
     pub(crate) tidy: Tidy,
 }
 
+/// Most flags a boolean operation sets to tell its predicate what covers the faces: 268,435,456
+/// (the default of [`crate::Limits::mask_work`]). The predicate is given one for every input each time
+/// it is asked, about four times for each segment of the sweep, so many inputs (most of them
+/// empty, say) make the work the product of their number and the sweep's, which the other limits
+/// do not count. About a quarter of a second in a release build.
+pub const MASK_WORK: usize = 1 << 28;
+
 /// Output cleanup settings: refit `precision`, and anchor positions that must survive (the
 /// inputs' own anchors — only joints the sweep introduced are merged away).
 pub(crate) struct Tidy {
@@ -317,6 +324,7 @@ impl Arrangement {
 
     pub(crate) fn mask(&self, w: &Multi) -> Vec<bool> {
         // A zero winding is outside under both rules, so only the non-zero ones can set a flag.
+        work::add(Work::MaskFlags, self.rules.len());
         let mut m = vec![false; self.rules.len()];
         for (i, k) in w.iter() {
             if let (Some(&r), Some(b)) = (self.rules.get(i), m.get_mut(i)) {
@@ -346,6 +354,12 @@ impl Arrangement {
     /// sweep itself (native builds only: on the web a panic aborts, whatever is caught here). Used by the calls that can
     /// return an error; the others catch a panic as a whole ([`guarded`]).
     pub(crate) fn try_contours(&self, pred: impl Fn(&[bool]) -> bool) -> Result<Contours, PathOpsError> {
+        // The predicate is given a flag for every input each time it is asked about a face's side,
+        // which is about four times for every segment of the sweep.
+        let segments = self.top.segment_indices().count();
+        if segments.saturating_mul(4).saturating_mul(self.rules.len()) > crate::budget::limits().mask_work {
+            return Err(PathOpsError::TooComplex);
+        }
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.contours(pred))).map_err(|_| PathOpsError::Degenerate)
     }
 
@@ -394,6 +408,21 @@ pub(crate) fn contours_to_path(c: &Contours, idx: impl IntoIterator<Item = Conto
     out
 }
 
+/// Appends the contours `c` to `all`, if `all` then holds no more than `budget` elements: the
+/// union of many inputs is made of the contours of each, kept until the last is swept, and
+/// inputs that cross themselves a lot give many more elements than they have. An error as soon as
+/// they pass `budget`, with nothing added, rather than after all of them are made.
+pub(crate) fn append_contours(all: &mut BezPath, c: &Contours, budget: usize) -> Result<(), PathOpsError> {
+    let added: usize = c.contours().map(|ct| ct.path.elements().len()).sum();
+    if all.elements().len().saturating_add(added) > budget {
+        return Err(PathOpsError::TooComplex);
+    }
+    for ct in c.contours() {
+        all.extend(ct.path.iter());
+    }
+    Ok(())
+}
+
 pub(crate) fn all_contours_to_path(c: &Contours, tidy: &Tidy) -> BezPath {
     contours_to_path(c, (0..c.contours().count()).map(ContourIdx), tidy)
 }
@@ -427,7 +456,11 @@ const MAX_CURVE_RUN: usize = 32;
 /// a run longer than [`MAX_LINE_RUN`] lines or [`MAX_CURVE_RUN`] curves is merged in parts.
 pub(crate) fn tidy_segments(segs: Vec<Seg>, closed: bool, tidy: &Tidy) -> Vec<Seg> {
     let scale = segs.iter().map(|s| s.c.p0.distance(s.c.p3)).fold(0.0, f64::max);
-    let tiny = (scale * 1e-9).max(1e-9);
+    // A piece is noise when it is a billionth of the longest chord, but never one the sweep's own
+    // tolerance (set by the size of the coordinates) could not have made: a notch of a unit beside
+    // an edge of a billion is a notch, not a speck.
+    let extent = segs.iter().flat_map(|s| [s.c.p0, s.c.p1, s.c.p2, s.c.p3]).fold(0.0_f64, |m, p| m.max(p.x.abs()).max(p.y.abs()));
+    let tiny = (scale * 1e-9).max(1e-9).min((extent * f64::EPSILON * 64.0).max(1e-6));
     let mut segs: Vec<Seg> = segs
         .into_iter()
         .filter(|s| {
@@ -477,6 +510,19 @@ pub(crate) fn tidy_segments(segs: Vec<Seg>, closed: bool, tidy: &Tidy) -> Vec<Se
     out
 }
 
+/// How near the ends and the middle of a piece must be to an input curve for the piece to be taken
+/// for a part of it, at coordinates as large as `scale - 1`: a millionth of `scale` (which is
+/// noise in a drawing's own units) up to coordinates of a thousand, then no more than the noise of
+/// the sweep itself, 16 times its tolerance. A tolerance that went on growing with the coordinates
+/// was a whole unit at a million, and took the arch beside a thin one for the thin one's own.
+fn match_tolerance(scale: f64) -> f64 {
+    if scale <= 1001.0 {
+        return 1e-6 * scale;
+    }
+    let sweep = ((scale - 1.0) * f64::EPSILON * 64.0).max(1e-6);
+    1e-3_f64.max(16.0 * sweep)
+}
+
 fn try_merge(run: &[Seg], tidy: &Tidy) -> Option<Seg> {
     work::add(Work::TidyMerge, run.len());
     let precision = tidy.precision;
@@ -511,7 +557,7 @@ fn exact_merge(run: &[Seg], tidy: &Tidy) -> Option<CubicBez> {
     let a = run[0].c.p0;
     let b = run[run.len() - 1].c.p3;
     let scale = 1.0 + a.x.abs().max(a.y.abs()).max(b.x.abs()).max(b.y.abs());
-    let tol = 1e-6 * scale;
+    let tol = match_tolerance(scale);
     for i in tidy.curve_indices_around(a, b) {
         let Some((_, c)) = tidy.curves.get(i) else { continue };
         let na = c.nearest(a, 1e-12);
@@ -570,7 +616,7 @@ impl Tidy {
                 (_, Some(raw)) => {
                     let (a, b) = (raw.p0, raw.p3);
                     let scale = 1.0 + a.x.abs().max(a.y.abs()).max(b.x.abs()).max(b.y.abs());
-                    let tol = 1e-6 * scale;
+                    let tol = match_tolerance(scale);
                     let mut subs: Vec<CubicBez> = vec![];
                     let mut follows = false;
                     for c in self.curves_around(a, b) {
@@ -656,7 +702,9 @@ pub(crate) fn normalize_bez(bp: &BezPath, rule: FillRule) -> Result<Contours, Pa
     work::add(Work::Sweeps, 1);
     let swept =
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| Topology::<i32>::from_path(&bp, eps).map(|top| top.contours(|w| inside(rule, *w)))));
-    swept.map_err(|_| PathOpsError::Degenerate)?.map_err(|_| PathOpsError::OpenPath)
+    let contours = swept.map_err(|_| PathOpsError::Degenerate)?.map_err(|_| PathOpsError::OpenPath)?;
+    work::add(Work::ContourElements, contours.contours().map(|c| c.path.elements().len()).sum());
+    Ok(contours)
 }
 
 /// Boolean operation between two filled paths. Returns an empty path on invalid (non-finite) input.
@@ -670,19 +718,25 @@ pub fn boolean(a: &BezPath, a_rule: FillRule, b: &BezPath, b_rule: FillRule, op:
 /// touches itself or has overlapping subpaths, and the result then silently gains or loses a
 /// region (VectorCraft issue 5478). So the windings are checked against each operand's own area
 /// (`windings_add_up`); when they don't add up, each operand is first resolved on its own into
-/// simple contours (`resolved`) and the operation runs again on those. When that doesn't add up
-/// either, the first result is kept (as before the check).
+/// simple contours (`resolved`) and the operation runs again on those. When that is over a limit
+/// the call is [`PathOpsError::TooComplex`], not the first result, which is known to be wrong; when
+/// it is done but its windings do not add up either (the check has a tolerance, and is off by a
+/// little for some curves), the first result is kept.
 pub fn try_boolean(a: &BezPath, a_rule: FillRule, b: &BezPath, b_rule: FillRule, op: BoolOp, precision: f64) -> Result<BezPath, PathOpsError> {
     ensure_size([a, b])?;
-    let precision = sane_precision(precision);
-    let (pa, pb) = (fill_bezpath(a), fill_bezpath(b));
-    let arr = Arrangement::new(vec![(pa.clone(), a_rule), (pb.clone(), b_rule)])?;
-    let c = arr.try_contours(|m| op.apply(m[0], m[1]))?;
-    if !arrangement_adds_up(&arr, [&pa, &pb])
-        && let Some(r) = resolved_boolean([(&pa, a_rule), (&pb, b_rule)], op, precision)
+    checked_boolean(&[(fill_bezpath(a), a_rule), (fill_bezpath(b), b_rule)], &|m| op.apply(m[0], m[1]), sane_precision(precision))
+}
+
+/// The operation `pred` over `inputs` (filled paths), its result checked ([`try_boolean`]).
+fn checked_boolean(inputs: &[(BezPath, FillRule)], pred: &dyn Fn(&[bool]) -> bool, precision: f64) -> Result<BezPath, PathOpsError> {
+    let arr = Arrangement::new(inputs.to_vec())?;
+    let paths: Vec<&BezPath> = inputs.iter().map(|(p, _)| p).collect();
+    if !arrangement_adds_up(&arr, &paths)
+        && let Some(r) = resolved_boolean(inputs, pred, precision)?
     {
         return Ok(r);
     }
+    let c = arr.try_contours(pred)?;
     let tidy = Tidy { precision, ..arr.tidy };
     Ok(all_contours_to_path(&c, &tidy))
 }
@@ -693,9 +747,16 @@ const MAX_CHECKED_WINDING: i32 = 8;
 
 /// Do the windings `arr` gave each input add up to that input's own area ([`windings_add_up`])?
 /// Also true when it can't tell.
-fn arrangement_adds_up(arr: &Arrangement, inputs: [&BezPath; 2]) -> bool {
+fn arrangement_adds_up(arr: &Arrangement, inputs: &[&BezPath]) -> bool {
+    // One check is several contour passes: of the many inputs of a large operation none is checked.
+    if inputs.len() > MAX_CHECKED_INPUTS {
+        return true;
+    }
     inputs.iter().enumerate().all(|(tag, p)| windings_add_up(&arr.top, |w: &Multi| w.get(tag), p).unwrap_or(true))
 }
+
+/// Most inputs of an operation whose windings are checked ([`arrangement_adds_up`]).
+const MAX_CHECKED_INPUTS: usize = 8;
 
 /// Does the winding `winding` that the sweep `top` gave its faces add up to the signed area of the
 /// path `input` it was made from? By Green's theorem the integral of a path's winding number over
@@ -736,66 +797,73 @@ fn windings_add_up<W: WindingNumber>(top: &Topology<W>, winding: impl Fn(&W) -> 
 }
 
 /// `input` resolved on its own under `rule` into simple contours (outer contours and holes, filled
-/// non-zero), when the windings of that sweep add up ([`windings_add_up`]).
-fn resolved(input: &BezPath, rule: FillRule) -> Option<BezPath> {
+/// non-zero), when the windings of that sweep add up ([`windings_add_up`]): `Ok(None)` when they
+/// do not or it cannot tell, and an error only when it is over a limit.
+fn resolved(input: &BezPath, rule: FillRule) -> Result<Option<BezPath>, PathOpsError> {
     if !crate::budget::fits_elements([input]) {
-        return None;
+        return Err(PathOpsError::TooComplex);
     }
-    let eps = eps_for([input]).ok()?;
+    let Ok(eps) = eps_for([input]) else { return Ok(None) };
     let mut bp = input.clone();
     snap_horizontals(&mut [&mut bp], eps);
     if !crate::budget::sweep_fits([&bp]) {
-        return None;
+        return Err(PathOpsError::TooComplex);
     }
     work::add(Work::Sweeps, 1);
-    let top = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| Topology::<i32>::from_path(&bp, eps))).ok()?.ok()?;
-    if !windings_add_up(&top, |w| *w, &bp)? {
-        return None;
+    let Ok(Ok(top)) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| Topology::<i32>::from_path(&bp, eps))) else { return Ok(None) };
+    if windings_add_up(&top, |w| *w, &bp) != Some(true) {
+        return Ok(None);
     }
-    let c = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| top.contours(|w| inside(rule, *w)))).ok()?;
+    let Ok(c) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| top.contours(|w| inside(rule, *w)))) else { return Ok(None) };
     let mut out = BezPath::new();
     for ct in c.contours() {
         out.extend(ct.path.iter());
     }
-    Some(out)
+    Ok(Some(out))
 }
 
-/// [`try_boolean`] on the operands resolved into simple contours first ([`resolved`]): the result
-/// when every sweep's windings add up, else None.
-fn resolved_boolean(inputs: [(&BezPath, FillRule); 2], op: BoolOp, precision: f64) -> Option<BezPath> {
-    let [(pa, a_rule), (pb, b_rule)] = inputs;
-    let (ra, rb) = (resolved(pa, a_rule)?, resolved(pb, b_rule)?);
-    let arr = Arrangement::new(vec![(ra.clone(), FillRule::NonZero), (rb.clone(), FillRule::NonZero)]).ok()?;
-    if !arrangement_adds_up(&arr, [&ra, &rb]) {
-        return None;
+/// The operation `pred` on `inputs` resolved into simple contours first ([`resolved`]): the result
+/// when every sweep's windings add up, `Ok(None)` when they do not, and an error when it is over a
+/// limit.
+fn resolved_boolean(inputs: &[(BezPath, FillRule)], pred: &dyn Fn(&[bool]) -> bool, precision: f64) -> Result<Option<BezPath>, PathOpsError> {
+    let mut flat: Vec<(BezPath, FillRule)> = Vec::with_capacity(inputs.len());
+    for (p, rule) in inputs {
+        let Some(r) = resolved(p, *rule)? else { return Ok(None) };
+        flat.push((r, FillRule::NonZero));
     }
-    let c = arr.try_contours(|m| op.apply(m[0], m[1])).ok()?;
+    let arr = match Arrangement::new(flat.clone()) {
+        Ok(arr) => arr,
+        Err(PathOpsError::TooComplex) => return Err(PathOpsError::TooComplex),
+        Err(_) => return Ok(None),
+    };
+    if !arrangement_adds_up(&arr, &flat.iter().map(|(p, _)| p).collect::<Vec<_>>()) {
+        return Ok(None);
+    }
+    let c = match arr.try_contours(pred) {
+        Ok(c) => c,
+        Err(PathOpsError::TooComplex) => return Err(PathOpsError::TooComplex),
+        Err(_) => return Ok(None),
+    };
     // The refit keeps the operands' own anchors, not only those of their resolved contours.
-    let tidy = Tidy::keeping(precision, [pa, pb]);
-    Some(all_contours_to_path(&c, &tidy))
+    let tidy = Tidy::keeping(precision, inputs.iter().map(|(p, _)| p));
+    Ok(Some(all_contours_to_path(&c, &tidy)))
 }
 
 /// [`boolean_n`] that reports a refused input ([`PathOpsError::TooComplex`], non-finite
-/// coordinates) instead of returning an empty path.
+/// coordinates) instead of returning an empty path. Like [`try_boolean`] it checks the windings of
+/// the sweep against the area of each input (of up to eight), and resolves the inputs first when
+/// they do not add up, as there.
 pub fn try_boolean_n(paths: &[(&BezPath, FillRule)], pred: impl Fn(&[bool]) -> bool) -> Result<BezPath, PathOpsError> {
     ensure_size(paths.iter().map(|(p, _)| *p))?;
     let bps: Vec<(BezPath, FillRule)> = paths.iter().map(|(p, r)| (fill_bezpath(p), *r)).collect();
-    let arr = Arrangement::new(bps)?;
-    Ok(all_contours_to_path(&arr.try_contours(pred)?, &arr.tidy))
+    checked_boolean(&bps, &pred, DEFAULT_PRECISION)
 }
 
 /// N-ary boolean: the area where `pred(inside_flags)` holds, `inside_flags[i]` telling whether a
 /// point is inside `paths[i]` under its fill rule. A refused input gives an empty path; callers that
 /// can report an error use [`try_boolean_n`].
 pub fn boolean_n(paths: &[(&BezPath, FillRule)], pred: impl Fn(&[bool]) -> bool) -> BezPath {
-    if ensure_size(paths.iter().map(|(p, _)| *p)).is_err() {
-        return BezPath::new();
-    }
-    let bps: Vec<(BezPath, FillRule)> = paths.iter().map(|(p, r)| (fill_bezpath(p), *r)).collect();
-    match Arrangement::new(bps) {
-        Ok(arr) => guarded(|| all_contours_to_path(&arr.contours(pred), &arr.tidy)).unwrap_or_default(),
-        Err(_) => BezPath::new(),
-    }
+    try_boolean_n(paths, pred).unwrap_or_default()
 }
 
 /// [`unite_all`] that reports a refused input instead of leaving it out of the union or returning
@@ -814,9 +882,7 @@ pub fn try_unite_all_with(paths: &[(&BezPath, FillRule)], precision: f64) -> Res
         if bp.elements().is_empty() {
             continue;
         }
-        for ct in normalize_bez(&bp, *r)?.contours() {
-            all.extend(ct.path.iter());
-        }
+        append_contours(&mut all, &normalize_bez(&bp, *r)?, crate::budget::limits().elements)?;
     }
     if all.elements().is_empty() {
         return Ok(BezPath::new());
@@ -844,8 +910,9 @@ pub fn unite_all_with(paths: &[(&BezPath, FillRule)], precision: f64) -> BezPath
             continue;
         }
         let Ok(c) = normalize_bez(&bp, *r) else { continue };
-        for ct in c.contours() {
-            all.extend(ct.path.iter());
+        // Past the limit the union would be refused as too complex when swept: it is not made.
+        if append_contours(&mut all, &c, crate::budget::limits().elements).is_err() {
+            return BezPath::new();
         }
     }
     if all.elements().is_empty() {
@@ -1175,6 +1242,173 @@ mod tests {
         assert!(small > 0 && large * 10 <= small * 25, "{small} for 512 pieces, {large} for 1,024: twice as many should take about twice as much");
     }
 
+    /// The flags a predicate is given are counted before the pass that sets them, and a pass past
+    /// the limit is not made: many inputs with nothing in them (an empty path is an input) made the
+    /// work the product of their number and the sweep's, which no other limit counted.
+    #[test]
+    fn the_flags_of_a_predicate_are_bounded_before_the_pass() {
+        let empty = BezPath::new();
+        let squares: Vec<BezPath> = (0..20).map(|i| square(f64::from(i) * 20.0, 0.0, 10.0)).collect();
+        let inputs_with = |empties: usize| -> Vec<(&BezPath, FillRule)> {
+            let mut inputs: Vec<(&BezPath, FillRule)> = squares.iter().map(|s| (s, FillRule::NonZero)).collect();
+            inputs.extend(std::iter::repeat_n((&empty, FillRule::NonZero), empties));
+            inputs
+        };
+        let flags = |empties: usize| {
+            work::reset();
+            let got = try_boolean_n(&inputs_with(empties), |m| m[0]).unwrap();
+            assert!((area(&got, FillRule::NonZero) - 100.0).abs() < 1e-9);
+            work::take(Work::MaskFlags)
+        };
+        // The flags grow with the product of the inputs and the segments, as the claim says.
+        let (few, many) = (flags(0), flags(1000));
+        assert!(many > 40 * few, "{few} flags for 20 inputs, {many} for 1,020");
+        // The limit is on that product (four for each segment of the sweep and input): at it the
+        // operation is made, one under it is refused before any flag is set.
+        let inputs = inputs_with(1000);
+        let arr = Arrangement::new(inputs.iter().map(|(p, r)| (fill_bezpath(p), *r)).collect()).unwrap();
+        let wanted = 4 * arr.top.segment_indices().count() * inputs.len();
+        let mut limits = crate::Limits { mask_work: wanted, ..crate::Limits::default() };
+        assert!(crate::with_limits(limits, || try_boolean_n(&inputs, |m| m[0])).is_ok());
+        limits.mask_work = wanted - 1;
+        work::reset();
+        assert_eq!(crate::with_limits(limits, || try_boolean_n(&inputs, |m| m[0])), Err(PathOpsError::TooComplex));
+        assert!(crate::with_limits(limits, || boolean_n(&inputs, |m| m[0])).elements().is_empty());
+        assert_eq!(work::take(Work::MaskFlags), 0, "no flag was set");
+        // Two inputs are far under it.
+        assert!(try_boolean(&squares[0], FillRule::NonZero, &squares[1], FillRule::NonZero, BoolOp::Union, DEFAULT_PRECISION).is_ok());
+    }
+
+    /// An operand whose windings do not add up and whose recovery is over a limit gives no result,
+    /// rather than the wrong one: with the pair limit between what the operation and its recovery
+    /// need, the call is `TooComplex`, and otherwise the right area or a refusal for size, never a
+    /// wrong area.
+    #[test]
+    fn a_recovery_over_a_limit_is_an_error_and_never_a_wrong_result() {
+        let poly = |pts: &[(f64, f64)]| {
+            let mut bp = BezPath::new();
+            for (i, p) in pts.iter().enumerate() {
+                if i == 0 { bp.move_to(*p) } else { bp.line_to(*p) }
+            }
+            bp.close_path();
+            bp
+        };
+        let a = poly(&[(3.0, 1.0), (3.0, 3.0), (0.0, 1.0)]);
+        let b = poly(&[(3.0, 0.0), (0.0, 2.0), (3.0, 2.0), (0.0, 0.0), (0.0, 1.0)]);
+        let (mut right, mut refused, mut window) = (0, 0, Vec::new());
+        for pairs in 0..80usize {
+            let limits = crate::Limits { segment_pairs: pairs, ..crate::Limits::default() };
+            let all = [
+                crate::with_limits(limits, || try_boolean(&a, FillRule::NonZero, &b, FillRule::NonZero, BoolOp::Union, DEFAULT_PRECISION)),
+                crate::with_limits(limits, || try_boolean_n(&[(&a, FillRule::NonZero), (&b, FillRule::NonZero)], |m| m[0] || m[1])),
+            ];
+            // The first arrangement alone fits: the operand pair is swept (Arrangement::new succeeds).
+            let swept = Arrangement::new_budgeted(vec![(fill_bezpath(&a), FillRule::NonZero), (fill_bezpath(&b), FillRule::NonZero)], pairs).is_ok();
+            for r in all {
+                match r {
+                    Ok(p) => {
+                        assert!(
+                            (area(&p, FillRule::NonZero) - 4.375).abs() < 1e-6,
+                            "a wrong area, {}, with {pairs} pairs",
+                            area(&p, FillRule::NonZero)
+                        );
+                        right += 1;
+                    }
+                    Err(PathOpsError::TooComplex) => {
+                        refused += 1;
+                        if swept {
+                            window.push(pairs);
+                        }
+                    }
+                    Err(e) => panic!("{e:?}"),
+                }
+            }
+        }
+        assert!(right > 0 && refused > 0, "{right} right, {refused} refused");
+        assert!(!window.is_empty(), "the pair limits where the sweep fits and its recovery does not are refused, not answered wrongly");
+        // The infallible forms give nothing for it.
+        let limits = crate::Limits { segment_pairs: window[0], ..crate::Limits::default() };
+        assert!(crate::with_limits(limits, || boolean(&a, FillRule::NonZero, &b, FillRule::NonZero, BoolOp::Union)).elements().is_empty());
+    }
+
+    /// A closed star polygon {n/k}: n edges, each crossing many others.
+    fn star(n: usize, k: usize, r: f64, cx: f64) -> BezPath {
+        let mut bp = BezPath::new();
+        for i in 0..n {
+            let a = std::f64::consts::TAU * ((i * k) % n) as f64 / n as f64;
+            let p = (cx + r * a.cos(), r * a.sin());
+            if i == 0 { bp.move_to(p) } else { bp.line_to(p) }
+        }
+        bp.close_path();
+        bp
+    }
+
+    /// The contours of crossing-heavy inputs are counted as they are made and the union stops once
+    /// they pass the limit: each star is small, and so are its contours alone (filled even-odd it
+    /// is a cell for each of its crossings), but the contours of a dozen are not, and were all
+    /// made (and kept) before the union was sized.
+    #[test]
+    fn the_unions_stop_once_the_contours_made_pass_the_limit() {
+        let eo = FillRule::EvenOdd;
+        let stars: Vec<BezPath> = (0..12).map(|i| star(41, 18, 50.0, f64::from(i) * 200.0)).collect();
+        let one = try_normalize(&stars[0], eo).unwrap().elements().len();
+        assert!(one > 10 * stars[0].elements().len(), "{one} elements from {}", stars[0].elements().len());
+        let inputs: Vec<(&BezPath, FillRule)> = stars.iter().map(|s| (s, eo)).collect();
+        // Room for the contours of three stars (and the input of all twelve).
+        let mut limits = crate::Limits { elements: 4 * one + 12 * stars[0].elements().len(), ..crate::Limits::default() };
+        assert!(crate::with_limits(limits, || stars.iter().all(|s| try_normalize(s, eo).is_ok())));
+        work::reset();
+        let tried = crate::with_limits(limits, || try_unite_all(&inputs));
+        assert_eq!(tried, Err(PathOpsError::TooComplex));
+        let sweeps = work::take(Work::Sweeps);
+        let made = work::take(Work::ContourElements);
+        assert!(sweeps <= 6, "{sweeps} sweeps for twelve stars when four stars' contours fill the limit");
+        assert!(made <= 6 * one, "{made} elements of contours made, {one} for each star");
+        work::reset();
+        let plain = crate::with_limits(limits, || unite_all(&inputs));
+        assert!(plain.elements().is_empty());
+        assert!(work::take(Work::Sweeps) <= 6);
+        // The same inputs with room for all of it are united.
+        limits.elements = 40 * one;
+        let all = crate::with_limits(limits, || try_unite_all(&inputs)).unwrap();
+        assert!(area(&all, FillRule::NonZero) > 0.0);
+    }
+
+    #[test]
+    fn the_match_tolerance_is_a_millionth_of_the_size_up_to_a_thousand_and_the_sweeps_noise_after() {
+        assert_eq!(match_tolerance(1.0), 1e-6);
+        assert_eq!(match_tolerance(101.0), 1.01e-4);
+        assert_eq!(match_tolerance(1001.0), 1.001e-3);
+        assert_eq!(match_tolerance(1_000_001.0), 1e-3);
+        assert!(match_tolerance(1e13) > 1e-3 && match_tolerance(1e13) < 5.0, "{}", match_tolerance(1e13));
+    }
+
+    /// A thin lens a million units from the origin: the two halves of its second arch are joined
+    /// again as that arch, not as the first (which lies a unit away, inside the matching
+    /// tolerance that grew with the coordinates).
+    #[test]
+    fn the_pieces_of_one_arch_are_not_rebuilt_from_the_arch_beside_it() {
+        use kurbo::{ParamCurve, ParamCurveNearest};
+        let x = 1_000_000.0;
+        let upper = CubicBez::new((x, 0.0), (x + 30.0, 30.0), (x + 70.0, 30.0), (x + 100.0, 0.0));
+        let lower = CubicBez::new((x + 100.0, 0.0), (x + 70.0, 31.0), (x + 30.0, 31.0), (x, 0.0));
+        let mut lens = BezPath::new();
+        lens.move_to(upper.p0);
+        lens.curve_to(upper.p1, upper.p2, upper.p3);
+        lens.curve_to(lower.p1, lower.p2, lower.p3);
+        lens.close_path();
+        let tidy = Tidy::keeping(DEFAULT_PRECISION, [&lens]);
+        let halves = [lower.subsegment(0.0..0.5), lower.subsegment(0.5..1.0)].map(|c| Seg { c, line: false });
+        let merged = tidy_segments(halves.to_vec(), false, &tidy);
+        assert_eq!(merged.len(), 1);
+        let mid = merged[0].c.eval(0.5);
+        assert!(
+            lower.nearest(mid, 1e-9).distance_sq.sqrt() < 1e-3,
+            "the joined arch is {} from its own",
+            lower.nearest(mid, 1e-9).distance_sq.sqrt()
+        );
+    }
+
     /// The inputs' own points are found exactly, also a comb of them on one vertical line (a scan
     /// of the points at one x gave up past 256 of them, and kept every joint after).
     #[test]
@@ -1241,14 +1475,14 @@ mod tests {
         let a = poly(&[(3.0, 1.0), (3.0, 3.0), (0.0, 1.0)]);
         let b = poly(&[(3.0, 0.0), (0.0, 2.0), (3.0, 2.0), (0.0, 0.0), (0.0, 1.0)]);
         let arr = Arrangement::new(vec![(a.clone(), FillRule::NonZero), (b.clone(), FillRule::NonZero)]).unwrap();
-        assert!(!arrangement_adds_up(&arr, [&a, &b]), "the sweep's windings are off");
-        let (ra, rb) = (resolved(&a, FillRule::NonZero).unwrap(), resolved(&b, FillRule::NonZero).unwrap());
+        assert!(!arrangement_adds_up(&arr, &[&a, &b]), "the sweep's windings are off");
+        let (ra, rb) = (resolved(&a, FillRule::NonZero).unwrap().unwrap(), resolved(&b, FillRule::NonZero).unwrap().unwrap());
         let arr = Arrangement::new(vec![(ra.clone(), FillRule::NonZero), (rb.clone(), FillRule::NonZero)]).unwrap();
-        assert!(arrangement_adds_up(&arr, [&ra, &rb]));
+        assert!(arrangement_adds_up(&arr, &[&ra, &rb]));
         // A plain pair adds up at once.
         let (s, t) = (poly(&[(0.0, 0.0), (4.0, 0.0), (4.0, 4.0), (0.0, 4.0)]), poly(&[(2.0, 2.0), (6.0, 2.0), (6.0, 6.0), (2.0, 6.0)]));
         let arr = Arrangement::new(vec![(s.clone(), FillRule::NonZero), (t.clone(), FillRule::EvenOdd)]).unwrap();
-        assert!(arrangement_adds_up(&arr, [&s, &t]));
+        assert!(arrangement_adds_up(&arr, &[&s, &t]));
     }
 
     #[test]

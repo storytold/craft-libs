@@ -1,7 +1,7 @@
 // Carved from VectorCraft's crates/pathops (src/planar/graph.rs) at storytold/vectorcraft ff9deee46d1c59dc9ecef0b668c25e57cd80b55e.
 // Copyright (c) 2026 ArtCraft Team and the VectorCraft contributors. MIT OR Apache-2.0.
 
-use super::index::{RectIndex, UNSHEAR, segment_footprint};
+use super::index::{RectIndex, segment_footprint};
 use super::*;
 use crate::path::subs;
 
@@ -37,20 +37,21 @@ impl Outlines {
 /// The area an input's fill covers: its closed subpaths (open ones bound no face).
 pub(super) struct Fill {
     path: BezPath,
-    bounds: kurbo::Rect,
+    pub(super) bounds: kurbo::Rect,
     rule: FillRule,
 }
 
 impl Fill {
     pub(super) fn new(s: &Shape) -> Self {
         let mut path = BezPath::new();
-        for sp in subs(&s.path).iter().filter(|sp| sp.closed && sp.anchors() >= 2) {
+        for sp in subs(&s.path).iter().filter(|sp| sp.closed && sp.draws_something()) {
             sp.push_closed(&mut path);
         }
         Self { bounds: path.bounding_box(), path, rule: s.rule }
     }
 
     pub(super) fn contains(&self, p: Point) -> bool {
+        crate::work::add(crate::work::Work::FillTests, 1);
         !self.path.elements().is_empty() && self.bounds.contains(p) && crate::boolean::inside(self.rule, self.path.winding(p))
     }
 }
@@ -262,7 +263,7 @@ pub(super) fn there_and_back(open: &BezPath, out: &mut BezPath) {
 
 /// `path` back from the sweep's frame, its on-curve points within `tol` of an input anchor (`sorted`
 /// by x) put exactly on it, the control points next to it moving along.
-pub(super) fn unshear(path: BezPath, sorted: &[Point], tol: f64) -> BezPath {
+pub(super) fn unshear(path: BezPath, sorted: &[Point], tol: f64, back: Affine) -> BezPath {
     let snap = |p: Point| -> Point {
         let lo = sorted.partition_point(|q| q.x < p.x - tol);
         sorted.get(lo..).unwrap_or_default().iter().take_while(|q| q.x <= p.x + tol).find(|q| (q.y - p.y).abs() <= tol).copied().unwrap_or(p)
@@ -273,25 +274,25 @@ pub(super) fn unshear(path: BezPath, sorted: &[Point], tol: f64) -> BezPath {
     for el in path.elements() {
         match *el {
             kurbo::PathEl::MoveTo(p) => {
-                let p = UNSHEAR * p;
+                let p = back * p;
                 let q = snap(p);
                 (shift, start_shift) = (q - p, q - p);
                 out.move_to(q);
             }
             kurbo::PathEl::LineTo(p) => {
-                let p = UNSHEAR * p;
+                let p = back * p;
                 let q = snap(p);
                 shift = q - p;
                 out.line_to(q);
             }
             kurbo::PathEl::QuadTo(c, p) => {
-                let (c, p) = (UNSHEAR * c, UNSHEAR * p);
+                let (c, p) = (back * c, back * p);
                 let q = snap(p);
                 out.quad_to(c + (shift + (q - p)) / 2.0, q);
                 shift = q - p;
             }
             kurbo::PathEl::CurveTo(c1, c2, p) => {
-                let (c1, c2, p) = (UNSHEAR * c1, UNSHEAR * c2, UNSHEAR * p);
+                let (c1, c2, p) = (back * c1, back * c2, back * p);
                 let q = snap(p);
                 out.curve_to(c1 + shift, c2 + (q - p), q);
                 shift = q - p;

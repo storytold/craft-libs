@@ -15,10 +15,11 @@
 //! geometrically (the sweep's winding numbers can't be trusted once open paths and coincident
 //! edges are in).
 //!
-//! The sweep runs in a sheared frame ([`SHEAR`]): it merges the two passes of a *horizontal* open
+//! The sweep runs in a sheared frame (`y + x / 32`): it merges the two passes of a *horizontal* open
 //! path as if they cancelled out, and in the sheared frame no edge drawn at a common angle (0°,
 //! 45°, 90°…) is horizontal. The shear is by a power of two, so it maps typical coordinates
-//! exactly and keeps exact coincidences (a corner on another shape's edge) exact.
+//! exactly and keeps exact coincidences (a corner on another shape's edge) exact. An open path that
+//! would be level in that frame (sloping -1/32) gets another power of two for its map.
 
 use std::collections::HashMap;
 
@@ -41,6 +42,15 @@ use index::{Crossings, RectIndex, segment_footprint};
 pub use live_paint::live_paint;
 pub use map::interior_point;
 pub(crate) use shape_builder::builder;
+
+/// The points where three or more edges of the planar map of `shapes` meet, if the map can be built
+/// (it is not for more than [`SHAPE_BUILDER_MAX_SEGMENTS`] segments, as for [`shape_builder`]).
+pub(crate) fn map_junctions(shapes: &[Shape], precision: f64) -> Option<Vec<Point>> {
+    if shape_builder::segment_count(shapes) > crate::budget::limits().shape_builder_segments {
+        return None;
+    }
+    map::junctions(shapes, precision)
+}
 pub use shape_builder::{BuilderArrangement, SHAPE_BUILDER_MAX_SEGMENTS, has_open_path, shape_builder};
 
 #[cfg(test)]

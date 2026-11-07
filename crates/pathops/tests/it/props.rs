@@ -124,5 +124,13 @@ proptest! {
                 prop_assert!(d <= tol * 1.01 + 1e-6, "deviation {d} > {tol}");
             }
         }
+        // And no part of the result is far from the original either.
+        for seg in s.segments() {
+            for k in 0..=4 {
+                let q = seg.eval(f64::from(k) / 4.0);
+                let d = distance_to(&p, q);
+                prop_assert!(d <= tol * 1.01 + 1e-6, "result {d} from the original, over {tol}");
+            }
+        }
     }
 }

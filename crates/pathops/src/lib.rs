@@ -37,10 +37,10 @@ mod testutil;
 mod work;
 
 pub use boolean::{
-    BoolOp, DEFAULT_PRECISION, area, boolean, boolean_n, normalize, try_area, try_boolean, try_boolean_n, try_normalize, try_unite_all,
+    BoolOp, DEFAULT_PRECISION, MASK_WORK, area, boolean, boolean_n, normalize, try_area, try_boolean, try_boolean_n, try_normalize, try_unite_all,
     try_unite_all_with, unite_all, unite_all_with,
 };
-pub use budget::{Limits, MAX_ELEMENTS, MAX_SEGMENT_PAIRS, MAX_SWEEP_LINE_PAIRS, with_limits};
+pub use budget::{Limits, MAX_ELEMENTS, MAX_SEGMENT_PAIRS, MAX_SWEEP_EVENT_WORK, MAX_SWEEP_LINE_PAIRS, with_limits};
 pub use edit::{FIT_WORK, JOIN_WORK, MAX_FIT_POINTS, REDUNDANT_WORK, SimplifyOptions, join, remove_redundant_points, simplify, simplify_with};
 pub use offset::{
     Cap, Join, MAX_OFFSET_SEGMENT_PAIRS, offset_path, outline_stroke, stroke_region, try_offset_path, try_outline_stroke, try_stroke_region,

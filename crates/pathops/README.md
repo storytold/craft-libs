@@ -67,7 +67,7 @@ Each result takes its key as follows:
 | Trim | One shape for each object that is still visible |
 | Merge | Joins touching visible parts that share a key; each connected component becomes one shape |
 | Crop | Keeps the visible parts of the lower objects inside the front-most object |
-| Outline | Returns open edge paths, split at every junction; coincident edges are de-duplicated, and each keeps the front-most key |
+| Outline | Returns open edge paths, split at every junction; coincident edges are de-duplicated, and each keeps the front-most key. A closed subpath gives the edges of its outline, an open one the edges of the path itself (no closing edge; one of three anchors or more that ends where it starts is a ring, and counts as closed), and where an open path crosses another is a junction |
 
 An operation that cannot sweep its input (see Limits) returns no shapes.
 
@@ -139,8 +139,15 @@ work of each operation is bounded before it starts, in counts the tests assert o
   (268,435,456) pairs of pieces of the input at overlapping heights. The sweep line is a list of the pieces
   it crosses and each new piece is placed by scanning it, so a row of dots on one line, whose bounds never
   touch, costs the square of its length. Pieces of no height (the collinear vertices along a rectangle's top)
-  are not on the line, and count only against the pieces that cross their height. Both are counted in
-  O(n log n) before the sweep;
+  are not on the line, and count only against the pieces that cross their height. Each crossing, and each
+  end of a segment, also scans that line, so the pairs of segments whose bounds overlap (pairs of curves
+  nine times) times the most pieces on the line at one height are held to `MAX_SWEEP_EVENT_WORK`
+  (4,294,967,296). All of them are counted in O(n log n) before the sweep;
+- a boolean operation sets a flag for each input every time its predicate is asked about a face's side, about
+  four times for each segment of the sweep, which is more than the sweep's own work when most of many inputs
+  are empty: past `MASK_WORK` (268,435,456) such flags it is `TooComplex`. The union of many inputs, and of
+  the outlines of a stroke, stops as soon as the contours made pass `MAX_ELEMENTS`, and does not make the
+  rest;
 - a stroke's outline is counted as it is made (a subpath of more than 256 segments is stroked in windows of
   256, so that a width that is huge against the tolerance cannot make millions of curves first) and the
   operation is `TooComplex` past `MAX_ELEMENTS` elements of outline;
@@ -180,7 +187,7 @@ let outline = with_limits(limits, || try_outline_stroke(&path, 3.0, Cap::Butt, J
 `with_limits` puts the limits in force on the calling thread for the closure and puts the caller's back when
 it returns, also if it unwinds; scopes nest, and another thread keeps its own. `Limits` has a field for each
 bound (`elements`, `segment_pairs`, `offset_segment_pairs`, `sweep_line_pairs`, `shape_builder_segments`,
-`fit_points`, `fit_work`, `join_work`, `redundant_work`) and is `#[non_exhaustive]`, so start from
+`fit_points`, `fit_work`, `join_work`, `redundant_work`, `mask_work`, `sweep_event_work`) and is `#[non_exhaustive]`, so start from
 `Limits::default()`. Time and memory grow with a limit raised, and a limit lowered refuses more ordinary art.
 
 ### Ordinary input the defaults refuse
@@ -194,6 +201,12 @@ sweep-line limit at its default and raised to 2^30:
 | `try_outline_stroke`, 3 wide, of a wavy open path of cubics 10 long and 3 high | 3,000 cubics: 1.0 s; 3,100 and more: `TooComplex` in 0.3 s | 4,000: 1.7 s; 6,000: 2.7 s; 8,000: `TooComplex` |
 | `pathfinder(Divide, ..)` of one comb polygon (a base with teeth 100 high and 1 wide, 10 apart) | 6,500 teeth: 0.5 s; 7,000 and more: no shapes, in 4 ms | 10,000: 0.6 s; 20,000: no shapes |
 | `unite_all` of a row of dots on one line | 5,500 dots: 3.0 s; 5,800 and more: `TooComplex` | |
+
+`MAX_SWEEP_EVENT_WORK` is also a worst case, priced at some nanoseconds a search of the sweep line: a hatch of
+400 thin strokes slanting each way across 400 others (3,200 elements, none of them level) takes 3.1 s, and
+one of 408 or more is `TooComplex`. Strokes that are curves count more than lines (a pair of curves crosses up
+to nine times), so a hatch of curves is refused at fewer. A boolean operation of more than a few thousand
+inputs, most of them empty, is `TooComplex` past `MASK_WORK`.
 
 The element limit refuses a drawing of more than 524,288 elements in one operation (a traced image of half a
 million points), and `shape_builder` gives only the filled areas for more than 65,536 segments.
@@ -253,6 +266,41 @@ bit for bit VectorCraft's), and the results are identical except where noted:
   outline): `shape_builder` in VectorCraft lists it twice, once with its fill and once as a gap, and the
   carve lists it once, with its fill; `live_paint` in VectorCraft lists it once with its fill missing, and
   the carve lists it with its fill;
+- found in review of the carve, each behaviour VectorCraft has too and now changed here:
+  - `boolean_n` and `try_boolean_n` check the sweep's windings against the area of each input, as
+    `try_boolean` does (for up to eight inputs), and resolve the inputs first when they do not add up;
+    VectorCraft did that for two operands only, and the n-ary result gained or lost a region for a
+    self-crossing one. When resolving is over a limit, `try_boolean` is `TooComplex`, where it returned the
+    result it knew to be wrong (VectorCraft had no limits to be over);
+  - `simplify_with` with `straight_lines` measures the distance of a point to the finite segment it is
+    judged against, not to the line through it, so a path that runs out past an end and back is kept;
+    `smooth` is documented to measure the tolerance from the smoothed path;
+  - `remove_redundant_points` (and so the stroke's spine) checks a merged run against the segments it
+    replaces, not only the joint it merges across: a half circle of ten thousand chords came out as its
+    diameter at a tolerance of 0.001, and is now kept; noisy points about a straight line within the
+    tolerance still merge. It costs a bounded number of checks for each point;
+  - an inset (`offset_path` with a negative delta) strokes the boundary of the area the closed subpaths
+    fill, not every subpath, so a rectangle inside another one wound the same way leaves no moat; and an
+    open subpath is outlined by its stroke for a negative delta too, as the documentation says (it gave
+    nothing);
+  - Pathfinder Outline gives an open path as its own edges, with no closing edge (but for a ring, which comes back to where it started: that is closed), and cuts at the points
+    where an open path crosses another (the filled areas' arrangement, where the way there and back
+    cancel, saw no crossing); Merge makes a shape of each connected component, so an island inside a
+    hole of the same key is a shape of its own;
+  - an open path that slopes -1/32 (level in the sweep's frame, where its two passes cancelled) is swept in
+    a frame sheared by another power of two, and keeps its loose end;
+  - `interior_point` looks at up to 64 more heights, between the heights of the path's vertices, when the
+    first nine find nothing, so it finds a part far from the others (two squares a hundred apart);
+  - the `shape_builder` fallback (more than `SHAPE_BUILDER_MAX_SEGMENTS`) fills the closed subpaths only,
+    as the map does: an open triangle that cuts fills nothing;
+  - the tidy keeps an edge as short as the sweep's tolerance (set by the coordinates) allows, beside an edge
+    a billion long (it dropped any under a billionth of the longest), and matches an input curve to a piece
+    within the sweep's noise at coordinates above a thousand (it was a millionth of the coordinates: a whole
+    unit at a million, so one arch's pieces were rebuilt from the arch beside it);
+  - `simplify` leaves a run it cannot measure, or fit within the tolerance in 40 splits, as it is (VectorCraft
+    sampled the first as a point, and took the second's last cubic as a fit);
+  - a closed subpath of one cubic that loops round an area is filled (VectorCraft dropped every closed
+    subpath of fewer than two anchors);
 - the limits and counts above, `try_outline_stroke`, `try_stroke_region`, the bounded flattening (VectorCraft's
   `pathfinder_with(Divide, ..)` with an open path and a precision of 1e-300 panicked with "capacity overflow"
   in `kurbo::flatten`) and the lookups of input curves and points by a rectangle index (a column of shapes

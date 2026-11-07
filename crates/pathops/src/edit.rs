@@ -17,14 +17,18 @@ use crate::work::{self, Work};
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct SimplifyOptions {
-    /// Maximum distance (path units) between the original and simplified path.
+    /// Maximum distance (path units) between the original and simplified path (with `smooth`, between the
+    /// smoothed and simplified path).
     pub tolerance: f64,
     /// Anchors where the path turns by more than this many degrees stay corners.
     pub corner_angle_deg: f64,
     /// Produce only straight segments.
     pub straight_lines: bool,
     /// How far (path units, the spread of a Gaussian along the path) the path is smoothed before it
-    /// is refitted, so that bumps and jags come out as one curve; 0 for none.
+    /// is refitted, so that bumps and jags come out as one curve; 0 for none. Smoothing moves the
+    /// path, and `tolerance` is measured from the smoothed path, not from the original: a curve
+    /// that bends sharply shrinks towards its inside (a spread of 30 takes a circle of radius 50
+    /// in by about 8), whatever the tolerance.
     pub smooth: f64,
 }
 
@@ -181,8 +185,12 @@ fn simplify_run(run: &[Seg], opts: &SimplifyOptions, fit: &mut Fit) -> Vec<Seg> 
         let mut pts = Vec::new();
         let mut too_many = false;
         for (k, s) in piece.iter().enumerate() {
-            // Guarded: kurbo subdivides without end on huge finite coordinates.
-            let len = measured_arclen(&PathSeg::Cubic(s.c), 1e-6);
+            // Guarded: kurbo subdivides without end on huge finite coordinates. A segment that cannot
+            // be measured cannot be sampled finely enough for the tolerance either: the run stays.
+            let Some(len) = measured_arclen(&PathSeg::Cubic(s.c), 1e-6) else {
+                too_many = true;
+                break;
+            };
             let m = ((len / (tol * 0.5)).ceil() as usize).clamp(4, 256);
             if pts.len().saturating_add(m) > fit.max_points || !fit.charge(m) {
                 too_many = true;
@@ -210,19 +218,15 @@ fn fit_piece(piece: &[Seg], pts: Vec<Point>, tol: f64, opts: &SimplifyOptions, f
         pts
     };
     if opts.straight_lines {
-        let (keep, reads) = rdp(&pts, tol);
-        if !fit.charge(reads) {
-            return false;
-        }
+        let Some(keep) = rdp(&pts, tol, fit) else { return false };
         result.extend(keep.windows(2).map(|p| Seg::line(p[0], p[1])));
         return true;
     }
     let (Some(first), Some(last)) = (piece.first(), piece.last()) else { return true };
     let (t0, t1) = (start_tangent(&first.c), end_tangent(&last.c));
-    let Some(cubics) = fit_cubics(&pts, t0, t1, tol, &mut fit.work) else {
-        fit.work = 0;
-        return false;
-    };
+    // Out of work, or no fit within the tolerance: the piece stays as it is (the work is spent only
+    // in the first case).
+    let Ok(cubics) = fit_cubics(&pts, t0, t1, tol, &mut fit.work) else { return false };
     for c in cubics {
         let line = is_straight(&c, tol * 0.02);
         result.push(if line { Seg::line(c.p0, c.p3) } else { Seg { c, line } });
@@ -275,12 +279,13 @@ fn smooth_points(pts: &[Point], sigma: f64, fit: &mut Fit) -> Option<Vec<Point>>
     Some(smoothed)
 }
 
-/// Ramer–Douglas–Peucker polyline reduction, and the number of points it read to do it.
-fn rdp(pts: &[Point], tol: f64) -> (Vec<Point>, usize) {
+/// Ramer–Douglas–Peucker polyline reduction. Each scan for the point farthest from a chord is
+/// charged to `fit` before it is made; `None` when that runs out, with the reads that were made
+/// charged and no more.
+fn rdp(pts: &[Point], tol: f64, fit: &mut Fit) -> Option<Vec<Point>> {
     if pts.len() < 3 {
-        return (pts.to_vec(), pts.len());
+        return fit.charge(pts.len()).then(|| pts.to_vec());
     }
-    let mut reads = 0usize;
     let mut keep = vec![false; pts.len()];
     keep[0] = true;
     keep[pts.len() - 1] = true;
@@ -289,7 +294,6 @@ fn rdp(pts: &[Point], tol: f64) -> (Vec<Point>, usize) {
     // the points of the parts left are kept as they are.
     let mut budget = pts.len().saturating_mul(64).saturating_add(1 << 20);
     while let Some((a, b)) = stack.pop() {
-        reads = reads.saturating_add(b - a);
         budget = match budget.checked_sub(b - a) {
             Some(left) => left,
             None => {
@@ -297,12 +301,23 @@ fn rdp(pts: &[Point], tol: f64) -> (Vec<Point>, usize) {
                 continue;
             }
         };
+        if !fit.charge(b - a) {
+            return None;
+        }
+        work::add(Work::RdpReads, b - a);
         let (pa, pb) = (pts[a], pts[b]);
         let chord = pb - pa;
         let len = chord.hypot();
         let mut best = (0.0, a);
         for (i, &p) in pts.iter().enumerate().take(b).skip(a + 1) {
-            let d = if len < 1e-12 { p.distance(pa) } else { (p - pa).cross(chord).abs() / len };
+            // The distance to the segment, not to the line through it: a path that runs out past
+            // an end and back along the line is that far from the segment.
+            let d = if len < 1e-12 {
+                p.distance(pa)
+            } else {
+                let along = ((p - pa).dot(chord) / (len * len)).clamp(0.0, 1.0);
+                p.distance(pa + chord * along)
+            };
             if d > best.0 {
                 best = (d, i);
             }
@@ -313,7 +328,7 @@ fn rdp(pts: &[Point], tol: f64) -> (Vec<Point>, usize) {
             stack.push((best.1, b));
         }
     }
-    (pts.iter().zip(keep).filter(|(_, k)| *k).map(|(p, _)| *p).collect(), reads)
+    Some(pts.iter().zip(keep).filter(|(_, k)| *k).map(|(p, _)| *p).collect())
 }
 
 /// Remove anchors that can be deleted without changing the shape by more than `tolerance`
@@ -342,41 +357,45 @@ fn remove_redundant_within(path: &BezPath, tolerance: f64, work: &mut usize) -> 
         // Drop zero-length segments.
         segs.retain(|s| !(s.c.p0.distance(s.c.p3) < 1e-9 && s.c.p1.distance(s.c.p0) < 1e-9 && s.c.p2.distance(s.c.p0) < 1e-9));
         let min_segs = if sp.closed { 2 } else { 1 };
+        // Each segment stands for the run of the original ones it replaced, and remembers how far
+        // they can be from it (see [`merge_pieces`]).
+        let origins: Vec<Point> = segs.iter().map(|s| s.c.p0).collect();
+        let mut pieces: Vec<Piece> = segs.iter().enumerate().map(|(first, &seg)| Piece { seg, dev: 0.0, first, count: 1 }).collect();
         // Joints are merged along the path in one pass (a merged segment is tried with the one
         // before it, then the next); the search below then only finds what a closed path's wrap
         // leaves. (Merging at the first joint of a dense line one at a time shifts the rest each time.)
-        let total = segs.len();
+        let total = pieces.len();
         let mut merged = 0;
-        let mut done: Vec<Seg> = Vec::with_capacity(total);
-        for s in segs.drain(..) {
-            done.push(s);
+        let mut done: Vec<Piece> = Vec::with_capacity(total);
+        for p in pieces.drain(..) {
+            done.push(p);
             while done.len() >= 2 && total - merged > min_segs {
                 let n = done.len();
-                let Some(m) = merge_pair(&done[n - 2], &done[n - 1], tol) else { break };
+                let Some(m) = merge_pieces(&done[n - 2], &done[n - 1], tol, &origins) else { break };
                 done.truncate(n - 1);
                 done[n - 2] = m;
                 merged += 1;
             }
         }
-        segs = done;
+        pieces = done;
         let mut changed = true;
         // Each pass reads every joint; past the work the rest of the wrap is left alone.
-        while changed && segs.len() > min_segs {
+        while changed && pieces.len() > min_segs {
             changed = false;
-            let n = segs.len();
+            let n = pieces.len();
             let Some(left) = work.checked_sub(n) else { break };
             *work = left;
             work::add(Work::Redundant, n);
             let joints = if sp.closed { n } else { n - 1 };
             for j in 0..joints {
                 let (i0, i1) = if sp.closed { ((j + n - 1) % n, j) } else { (j, j + 1) };
-                if let Some(m) = merge_pair(&segs[i0], &segs[i1], tol) {
-                    segs[i0] = m;
-                    segs.remove(i1);
+                if let Some(m) = merge_pieces(&pieces[i0], &pieces[i1], tol, &origins) {
+                    pieces[i0] = m;
+                    pieces.remove(i1);
                     if sp.closed && i1 == 0 {
                         // The merged segment now starts the loop.
-                        if let Some(last) = segs.pop() {
-                            segs.insert(0, last);
+                        if let Some(last) = pieces.pop() {
+                            pieces.insert(0, last);
                         }
                     }
                     changed = true;
@@ -384,6 +403,7 @@ fn remove_redundant_within(path: &BezPath, tolerance: f64, work: &mut usize) -> 
                 }
             }
         }
+        let segs: Vec<Seg> = pieces.iter().map(|p| p.seg).collect();
         if let Some(s) = segs_to_bezpath(&segs, sp.closed) {
             out.extend(s.iter());
         }
@@ -395,7 +415,57 @@ fn remove_redundant_within(path: &BezPath, tolerance: f64, work: &mut usize) -> 
 /// along a subpath left: 67,108,864 (the default of [`crate::Limits::redundant_work`]).
 pub const REDUNDANT_WORK: usize = 1 << 26;
 
-fn merge_pair(a: &Seg, b: &Seg, tol: f64) -> Option<Seg> {
+/// A segment standing for a run of the segments of the subpath it was made from.
+#[derive(Clone, Copy)]
+struct Piece {
+    seg: Seg,
+    /// A bound on how far the segments of the run lie from `seg` (0 for one that stands for itself).
+    dev: f64,
+    /// The first of the run, as an index into the subpath's own segments (counting round a closed
+    /// subpath's start), and how many it has.
+    first: usize,
+    count: usize,
+}
+
+/// Most original joints checked one by one against a line when the bound on the run has passed
+/// the tolerance; a longer run is not merged then.
+const MAX_CHECKED_RUN: usize = 512;
+
+/// `a` and `b`, next to each other, as one piece, if the one segment [`merge_pair`] makes stays within
+/// `tol` of every segment of the run both stand for: not only of the joint between them, which
+/// is all `merge_pair` sees (a run built a joint at a time can drift from a curve it was sampled
+/// from, each step within `tol` of the last: a half circle of ten thousand chords came out as its
+/// diameter). A bound is kept: the segments of `a` and `b` are within `a.dev` and `b.dev` of them, and
+/// them from the merged one by that and the step of the merge at most. For lines, when that
+/// bound passes `tol`, the joints of the run are checked against the line (up to
+/// [`MAX_CHECKED_RUN`]), which gives the real deviation. `origins` are the starts of the original
+/// segments.
+fn merge_pieces(a: &Piece, b: &Piece, tol: f64, origins: &[Point]) -> Option<Piece> {
+    let (seg, step) = merge_pair(&a.seg, &b.seg, tol)?;
+    let (first, count) = (a.first, a.count + b.count);
+    let bound = a.dev.max(b.dev) + step;
+    if bound <= tol {
+        return Some(Piece { seg, dev: bound, first, count });
+    }
+    if !seg.line || count > MAX_CHECKED_RUN {
+        return None;
+    }
+    // The joints inside the run are the starts of its segments but the first.
+    work::add(Work::RunChecks, count);
+    let chord = seg.c.p3 - seg.c.p0;
+    let len2 = chord.hypot2();
+    let mut worst: f64 = 0.0;
+    for k in 1..count {
+        let p = *origins.get((first + k) % origins.len().max(1))?;
+        let along = if len2 > 0.0 { ((p - seg.c.p0).dot(chord) / len2).clamp(0.0, 1.0) } else { 0.0 };
+        worst = worst.max(p.distance(seg.c.p0 + chord * along));
+    }
+    (worst <= tol).then_some(Piece { seg, dev: worst, first, count })
+}
+
+/// The one segment replacing `a` and `b` (next to each other), if it passes their joint within
+/// `tol`, and how far from it the joint is.
+fn merge_pair(a: &Seg, b: &Seg, tol: f64) -> Option<(Seg, f64)> {
     if a.line && b.line {
         let chord = b.c.p3 - a.c.p0;
         let len = chord.hypot();
@@ -404,7 +474,8 @@ fn merge_pair(a: &Seg, b: &Seg, tol: f64) -> Option<Seg> {
         }
         let mid = a.c.p3 - a.c.p0;
         let along = mid.dot(chord) / len;
-        return ((mid.cross(chord) / len).abs() <= tol && along >= 0.0 && along <= len).then(|| Seg::line(a.c.p0, b.c.p3));
+        let off = (mid.cross(chord) / len).abs();
+        return (off <= tol && along >= 0.0 && along <= len).then(|| (Seg::line(a.c.p0, b.c.p3), off));
     }
     // Only merge across (near-)smooth joints.
     if end_tangent(&a.c).dot(start_tangent(&b.c)) < 0.99 {
@@ -414,7 +485,7 @@ fn merge_pair(a: &Seg, b: &Seg, tol: f64) -> Option<Seg> {
     sample(&a.c, 16, &mut pts, true);
     sample(&b.c, 16, &mut pts, false);
     let (c, err, _) = fit_single(&pts, start_tangent(&a.c), end_tangent(&b.c));
-    (err <= tol).then_some(Seg { c, line: false })
+    (err <= tol).then_some((Seg { c, line: false }, err))
 }
 
 /// Join. Open subpaths of all inputs are joined nearest-endpoint-first into one open path
@@ -560,6 +631,101 @@ mod tests {
             })
             .collect();
         polyline(&pts, true)
+    }
+
+    /// The largest distance from a sample of `a` to the outline of `b`.
+    fn deviation(a: &BezPath, b: &BezPath) -> f64 {
+        use kurbo::{ParamCurve, ParamCurveNearest};
+        let mut worst: f64 = 0.0;
+        for seg in a.segments() {
+            for k in 0..=64 {
+                let p = seg.eval(f64::from(k) / 64.0);
+                let d = b.segments().map(|s| s.nearest(p, 1e-9).distance_sq).fold(f64::INFINITY, f64::min).sqrt();
+                worst = worst.max(d);
+            }
+        }
+        worst
+    }
+
+    /// A curve too big to measure the length of is not sampled as if it were a point: its run stays
+    /// as it is, rather than becoming a few chords far from it.
+    #[test]
+    fn a_curve_too_big_to_measure_stays_as_it_is() {
+        let r = 5e9;
+        let k = 0.552_284_749_830_793_6 * r;
+        let mut quarter = BezPath::new();
+        quarter.move_to((r, 0.0));
+        quarter.curve_to((r, k), (k, r), (0.0, r));
+        let opts = SimplifyOptions::default().tolerance(1.0).straight_lines(true);
+        let simpler = simplify_with(&quarter, &opts);
+        assert!(deviation(&quarter, &simpler) <= 1.1, "{} from the curve", deviation(&quarter, &simpler));
+        // One that can be measured is simplified, as ever.
+        let r = 5e5;
+        let k = 0.552_284_749_830_793_6 * r;
+        let mut small = BezPath::new();
+        small.move_to((r, 0.0));
+        small.curve_to((r, k), (k, r), (0.0, r));
+        assert!(deviation(&small, &simplify_with(&small, &opts)) <= 1.1);
+    }
+
+    /// The polyline reduction is charged before it scans: with little of the fit work left after the
+    /// sampling it reads no more than that, and the run stays as it is.
+    #[test]
+    fn the_reduction_of_a_polyline_reads_no_more_than_the_work_that_is_left() {
+        let circle = circle_polygon(3_000, 100.0);
+        let opts = SimplifyOptions::default().tolerance(0.05).straight_lines(true);
+        work::reset();
+        let full = simplify_with(&circle, &opts);
+        let samples = work::take(Work::FitSamples);
+        let free_reads = work::take(Work::RdpReads);
+        assert!(anchor_count(&full) < 3_000 && free_reads > 10_000, "{} anchors, {free_reads} reads", anchor_count(&full));
+        // Room for the samples and 200 more reads.
+        let mut limits = crate::Limits { fit_work: samples + 200, ..crate::Limits::default() };
+        work::reset();
+        let starved = crate::with_limits(limits, || simplify_with(&circle, &opts));
+        let reads = work::take(Work::RdpReads);
+        assert!(reads <= 200, "{reads} points read with 200 of the work left");
+        assert!(work::take(Work::Fit) <= limits.fit_work, "the work charged passes the limit");
+        assert_eq!(starved, circle, "the run is left as it is");
+        // And exactly enough is enough.
+        limits.fit_work = samples + free_reads;
+        assert_eq!(crate::with_limits(limits, || simplify_with(&circle, &opts)), full);
+    }
+
+    /// Points that lie about a straight line, each within the tolerance of it, are one line (the run is
+    /// checked against its line when the bound on its deviation has passed the tolerance), and a long
+    /// run of them costs a bounded number of checks for each point, not one for each of the run.
+    #[test]
+    fn a_noisy_straight_line_within_the_tolerance_is_one_line_and_costs_little() {
+        let line = |n: usize, noise: f64| {
+            let pts: Vec<(f64, f64)> = (0..=n).map(|i| (i as f64, if i % 2 == 0 { noise } else { -noise })).collect();
+            polyline(&pts, false)
+        };
+        let one = remove_redundant_points(&line(200, 0.0004), 0.001);
+        assert_eq!(anchor_count(&one), 2, "{} anchors", anchor_count(&one));
+        // Noise past the tolerance is kept.
+        assert!(anchor_count(&remove_redundant_points(&line(200, 0.004), 0.001)) > 100);
+        // A line of many points: the checks stay in proportion.
+        let checks = |n: usize| {
+            work::reset();
+            let l = remove_redundant_points(&line(n, 0.0004), 0.001);
+            assert!(anchor_count(&l) <= n / 400 + 3, "{} anchors for {n} points", anchor_count(&l));
+            work::take(Work::RunChecks)
+        };
+        let (small, large) = (checks(4_000), checks(16_000));
+        assert!(small > 0 && large <= 5 * small, "{small} checks for 4,000 points, {large} for 16,000");
+        assert!(large <= 16_000 * 512, "{large} checks");
+    }
+
+    /// The same for points that lie on a straight line exactly: the bound passes, and nothing is checked
+    /// one by one.
+    #[test]
+    fn collinear_points_are_one_line_without_checking_them_one_by_one() {
+        let pts: Vec<(f64, f64)> = (0..=20_000).map(|i| (f64::from(i), f64::from(i) * 0.5)).collect();
+        work::reset();
+        let l = remove_redundant_points(&polyline(&pts, false), 0.001);
+        assert_eq!(anchor_count(&l), 2);
+        assert_eq!(work::take(Work::RunChecks), 0);
     }
 
     /// A line of `chain` tiny steps from (0, 0) to (1, 0), and `others` short lines at either end of

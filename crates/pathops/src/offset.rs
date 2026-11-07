@@ -9,9 +9,12 @@ pub use kurbo::{Cap, Join};
 
 use linesweeper::topology::{ContourIdx, Contours};
 
-use crate::boolean::{Arrangement, DEFAULT_PRECISION, Tidy, all_contours_to_path, contours_to_path, ensure_size, eps_for, normalize_bez};
+use crate::boolean::{
+    Arrangement, DEFAULT_PRECISION, Tidy, all_contours_to_path, append_contours, contours_to_path, ensure_size, eps_for, normalize_bez,
+    try_unite_all_with,
+};
 use crate::edit::remove_redundant_points;
-use crate::path::{Sub, canonical, fill_bezpath, is_finite, subs, with_end};
+use crate::path::{Sub, canonical, fill_bezpath, is_finite, subs};
 use crate::work::{self, Work};
 use crate::{FillRule, PathOpsError};
 
@@ -73,9 +76,7 @@ fn stroke_within(bp: &BezPath, width: f64, cap: Cap, join: Join, miter_limit: f6
     }
     let mut laid = BezPath::new();
     for part in &parts {
-        for contour in normalize_bez(part, FillRule::NonZero)?.contours() {
-            laid.extend(contour.path.iter());
-        }
+        append_contours(&mut laid, &normalize_bez(part, FillRule::NonZero)?, budget)?;
     }
     Ok(laid)
 }
@@ -156,6 +157,7 @@ fn stroke_bez_without_spine_compact(bp: &BezPath, width: f64, cap: Cap, join: Jo
 
 /// kurbo's stroker may leave the outline of an open path without a final `ClosePath`.
 fn close_all(bp: &BezPath) -> BezPath {
+    work::add(Work::Visited, bp.elements().len());
     let mut out = BezPath::new();
     let mut open = false;
     for el in bp.iter() {
@@ -208,6 +210,8 @@ pub fn try_outline_stroke(path: &BezPath, width: f64, cap: Cap, join: Join, mite
 /// [`stroke_region`] that reports an outline it could not combine (non-finite or too large
 /// coordinates, too many segments) instead of leaving it out.
 pub fn try_stroke_region(outlines: &[BezPath]) -> Result<BezPath, PathOpsError> {
+    // The size first, before any outline is copied.
+    ensure_size(outlines)?;
     let tidy = Tidy::free(DEFAULT_PRECISION);
     let parts: Vec<BezPath> = outlines.iter().map(close_all).filter(|o| !o.elements().is_empty()).collect();
     if let [one] = &parts[..] {
@@ -216,9 +220,7 @@ pub fn try_stroke_region(outlines: &[BezPath]) -> Result<BezPath, PathOpsError> 
     // Each outline is normalised on its own first, as in `stroke_region`.
     let mut all = BezPath::new();
     for p in &parts {
-        for ct in normalize_bez(p, FillRule::NonZero)?.contours() {
-            all.extend(ct.path.iter());
-        }
+        append_contours(&mut all, &normalize_bez(p, FillRule::NonZero)?, crate::budget::limits().elements)?;
     }
     if all.elements().is_empty() {
         return Ok(BezPath::new());
@@ -230,6 +232,9 @@ pub fn try_stroke_region(outlines: &[BezPath]) -> Result<BezPath, PathOpsError> 
 /// closed) as one clean path: overlaps removed and the stroker's pieces refitted. An outline that
 /// cannot be combined is left out ([`try_stroke_region`] reports it).
 pub fn stroke_region(outlines: &[BezPath]) -> BezPath {
+    if ensure_size(outlines).is_err() {
+        return BezPath::new();
+    }
     let tidy = Tidy::free(DEFAULT_PRECISION);
     let parts: Vec<BezPath> = outlines.iter().map(close_all).filter(|o| !o.elements().is_empty()).collect();
     if let [one] = &parts[..] {
@@ -239,10 +244,10 @@ pub fn stroke_region(outlines: &[BezPath]) -> BezPath {
     // it overlaps, and the raw windings would cancel there under the non-zero rule.
     let mut all = BezPath::new();
     for p in &parts {
-        if let Ok(c) = normalize_bez(p, FillRule::NonZero) {
-            for ct in c.contours() {
-                all.extend(ct.path.iter());
-            }
+        if let Ok(c) = normalize_bez(p, FillRule::NonZero)
+            && append_contours(&mut all, &c, crate::budget::limits().elements).is_err()
+        {
+            return BezPath::new();
         }
     }
     if all.elements().is_empty() {
@@ -254,17 +259,44 @@ pub fn stroke_region(outlines: &[BezPath]) -> BezPath {
 /// Fallible [`offset_path`] that returns an error when the input is non-finite or exceeds
 /// the complexity bound ([`MAX_OFFSET_SEGMENT_PAIRS`]), or when planar arrangement fails.
 pub fn try_offset_path(path: &BezPath, delta: f64, join: Join, miter_limit: f64) -> Result<BezPath, PathOpsError> {
-    let src = std::cell::LazyCell::new(|| SegmentTree::new(boxed_segments(&canonical(path))));
-    offset_with_check(path, delta, join, miter_limit, |p, r| any_within(&src, p, r))
+    offset_with_check(path, delta, join, miter_limit, |bp| SegmentTree::new(boxed_segments(bp)), any_within)
 }
 
-/// [`try_offset_path`] with the test of whether some segment of `path` lies closer than a radius to a point.
-fn offset_with_check(
+/// The subpaths of `path` that are filled (closed ones, and open ones whose ends meet) and those that
+/// are only outlined, each as a path of its own.
+fn split_closed_open(path: &BezPath) -> (BezPath, BezPath) {
+    let (mut closed, mut open) = (BezPath::new(), BezPath::new());
+    for sub in subs(path).into_iter().map(Sub::closed_if_ends_meet).filter(Sub::draws_something) {
+        if sub.closed { sub.push_closed(&mut closed) } else { sub.push_open(&mut open) }
+    }
+    (closed, open)
+}
+
+/// The boundary of the area `closed` fills under the non-zero rule: `closed` itself when every edge
+/// of it is on that boundary, else the contours of its sweep. A rectangle inside another one wound
+/// the same way is a subpath of the fill but no part of its boundary, and an inset must not stroke it.
+fn filled_boundary(closed: &BezPath) -> Result<BezPath, PathOpsError> {
+    use kurbo::Shape;
+    let mut boundary = BezPath::new();
+    for contour in normalize_bez(closed, FillRule::NonZero)?.contours() {
+        boundary.extend(contour.path.iter());
+    }
+    let (kept, whole) = (boundary.perimeter(1e-6), closed.perimeter(1e-6));
+    Ok(if (whole - kept).abs() <= 1e-9 * whole { closed.clone() } else { boundary })
+}
+
+/// [`try_offset_path`] with the test of whether some segment of a path lies closer than a radius to a
+/// point: `index` makes whatever `near` searches of a path's segments. The path is `path` for an
+/// outset, and the boundary of the area the closed subpaths fill for an inset (its strokes are made
+/// of nothing else, and the open subpaths do not take part: they are outlined whichever way the
+/// offset goes).
+fn offset_with_check<W>(
     path: &BezPath,
     delta: f64,
     join: Join,
     miter_limit: f64,
-    within: impl Fn(kurbo::Point, f64) -> bool,
+    index: impl Fn(&BezPath) -> W,
+    near: impl Fn(&W, kurbo::Point, f64) -> bool,
 ) -> Result<BezPath, PathOpsError> {
     // The size first: it is one length read, and the checks after it read every element.
     ensure_size([path])?;
@@ -274,15 +306,14 @@ fn offset_with_check(
     if path.elements().is_empty() {
         return Ok(BezPath::new());
     }
-    let subpaths: Vec<Sub> = subs(path).into_iter().map(close_if_ends_meet).collect();
-    let (mut closed, mut open) = (BezPath::new(), BezPath::new());
-    for sub in subpaths.iter().filter(|s| s.anchors() > 1) {
-        if sub.closed { sub.push_closed(&mut closed) } else { sub.push_open(&mut open) }
-    }
+    let (closed, open) = split_closed_open(path);
+    let closed = if delta < 0.0 && !closed.elements().is_empty() { filled_boundary(&closed)? } else { closed };
     let d = delta.abs();
     let fill = fill_bezpath(&closed);
     let ring = if d > 0.0 { stroke_bez(&closed, 2.0 * d, Cap::Butt, join, miter_limit)? } else { BezPath::new() };
     let open_bp = if d > 0.0 && !open.elements().is_empty() { stroke_bez(&open, 2.0 * d, Cap::Butt, join, miter_limit)? } else { BezPath::new() };
+    // Kept for an inset, which adds the outlines of the open subpaths to the rest.
+    let open_outline = (delta < 0.0).then(|| open_bp.clone());
     let arr = Arrangement::new_budgeted(
         vec![(fill, FillRule::NonZero), (ring, FillRule::NonZero), (open_bp, FillRule::NonZero)],
         crate::budget::limits().offset_segment_pairs,
@@ -293,13 +324,22 @@ fn offset_with_check(
     // true offset is bounded by arrangement edges, so a contour is spurious iff a point deep inside
     // it lies closer than `d`: holes when growing, islands when insetting.
     let drop_outer = delta < 0.0;
+    let source = std::cell::LazyCell::new(|| index(&if drop_outer { closed.clone() } else { canonical(path) }));
+    let within = |p: kurbo::Point, r: f64| near(&source, p, r);
     let spurious: Vec<bool> =
         c.contours().map(|k| k.outer == drop_outer && deep_point(&k.path).is_some_and(|p| within(p, d * (1.0 - 1e-4) - 1e-6))).collect();
-    if !spurious.contains(&true) {
-        return Ok(all_contours_to_path(&c, &Tidy::free(DEFAULT_PRECISION)));
+    let result = if spurious.contains(&true) {
+        let keep = (0..spurious.len()).filter(|&i| !has_marked_ancestor(&c, i, &spurious)).map(ContourIdx);
+        contours_to_path(&c, keep, &Tidy::free(DEFAULT_PRECISION))
+    } else {
+        all_contours_to_path(&c, &Tidy::free(DEFAULT_PRECISION))
+    };
+    // An inset takes the strokes of the closed subpaths away, and an open subpath is outlined by its
+    // stroke whichever way the offset goes: the outlines are added to what is left.
+    if let Some(outline) = open_outline.filter(|o| !o.elements().is_empty()) {
+        return try_unite_all_with(&[(&result, FillRule::NonZero), (&outline, FillRule::NonZero)], DEFAULT_PRECISION);
     }
-    let keep = (0..spurious.len()).filter(|&i| !has_marked_ancestor(&c, i, &spurious)).map(ContourIdx);
-    Ok(contours_to_path(&c, keep, &Tidy::free(DEFAULT_PRECISION)))
+    Ok(result)
 }
 
 /// Offset Path. Positive `delta` grows the filled area, negative insets it.
@@ -315,20 +355,6 @@ pub fn offset_path(path: &BezPath, delta: f64, join: Join, miter_limit: f64) -> 
         PathOpsError::NonFinite => BezPath::new(),
         _ => path.clone(),
     })
-}
-
-/// An open subpath of three or more anchors whose last anchor lies within 1e-6 of its first (the
-/// test [`join`](crate::join) applies to one path) as a closed subpath: its last segment ends on
-/// the first anchor. Any other subpath is returned unchanged.
-fn close_if_ends_meet(mut sub: Sub) -> Sub {
-    if !sub.closed && sub.anchors() > 2 && sub.end().distance(sub.start) < 1e-6 {
-        let start = sub.start;
-        if let Some(last) = sub.draws.last_mut() {
-            *last = with_end(*last, start);
-        }
-        sub.closed = true;
-    }
-    sub
 }
 
 fn has_marked_ancestor(c: &Contours, mut i: usize, marked: &[bool]) -> bool {
@@ -755,12 +781,11 @@ mod tests {
     fn offsets_with_the_tree_are_identical_to_offsets_with_the_scan() {
         let (mut checks, mut hits, mut misses) = (0, 0, 0);
         for path in offset_inputs() {
-            let segs = boxed_segments(&canonical(&path));
             for delta in [0.0, 0.05, 1.0, 5.0, 60.0, -0.05, -1.0, -5.0, -60.0] {
                 for join in [Join::Round, Join::Miter, Join::Bevel] {
                     let found = std::cell::Cell::new((0, 0));
-                    let by_scan = offset_with_check(&path, delta, join, 4.0, |p, r| {
-                        let v = any_within_by_scan(&segs, p, r);
+                    let by_scan = offset_with_check(&path, delta, join, 4.0, boxed_segments, |segs, p, r| {
+                        let v = any_within_by_scan(segs, p, r);
                         found.set((found.get().0 + usize::from(v), found.get().1 + usize::from(!v)));
                         v
                     });
@@ -1001,6 +1026,24 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// Outlines past the limit together are refused before any is copied.
+    #[test]
+    fn many_outlines_past_the_limit_are_refused_before_they_are_copied() {
+        let outline = crate::testutil::ellipse(kurbo::Rect::new(0.0, 0.0, 10.0, 10.0));
+        let n = outline.elements().len();
+        let outlines: Vec<BezPath> = (0..50).map(|_| outline.clone()).collect();
+        let mut few = crate::Limits { elements: 10 * n, ..crate::Limits::default() };
+        work::reset();
+        let (tried, plain) = crate::with_limits(few, || (try_stroke_region(&outlines), stroke_region(&outlines)));
+        assert_eq!(tried, Err(PathOpsError::TooComplex));
+        assert!(plain.elements().is_empty());
+        assert_eq!(work::take(Work::Visited), 0, "no outline was read");
+        assert_eq!(work::take(Work::Sweeps), 0);
+        // Within the limit they are united.
+        few.elements = 100 * n;
+        assert!(crate::with_limits(few, || try_stroke_region(&outlines)).is_ok());
     }
 
     /// A long stroke is swept once for each window and once for the union, and refitted once: the

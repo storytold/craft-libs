@@ -30,11 +30,23 @@ pub(crate) enum Work {
     TidyMerge,
     /// Lines a curve was flattened into to find the way an edge leaves a vertex.
     FlattenLines,
+    /// Flags set to give a predicate the coverage of a face (one per input, each time).
+    MaskFlags,
+    /// Fills a point was tested against to find the inputs that cover a face.
+    FillTests,
+    /// Points a polyline reduction read.
+    RdpReads,
+    /// Elements of contours made by a sweep.
+    ContourElements,
+    /// Joints of a run checked one by one against the line that replaces it.
+    RunChecks,
+    /// Heights an interior point was looked for at.
+    InteriorHeights,
 }
 
 #[cfg(test)]
 thread_local! {
-    static COUNTS: std::cell::RefCell<[usize; 12]> = const { std::cell::RefCell::new([0; 12]) };
+    static COUNTS: std::cell::RefCell<[usize; 18]> = const { std::cell::RefCell::new([0; 18]) };
 }
 
 /// Counts `n` more of `what` on this thread (tests only).
@@ -59,5 +71,5 @@ pub(crate) fn take(what: Work) -> usize {
 /// Resets every count on this thread.
 #[cfg(test)]
 pub(crate) fn reset() {
-    COUNTS.with(|c| *c.borrow_mut() = [0; 12]);
+    COUNTS.with(|c| *c.borrow_mut() = [0; 18]);
 }

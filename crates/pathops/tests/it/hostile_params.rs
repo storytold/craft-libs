@@ -86,8 +86,15 @@ fn every_operation_survives_hostile_coordinates() {
         let _ = shape_builder(&shapes, true);
         let _ = live_paint(&shapes);
         let _ = interior_point(&bad);
-        let _ = stroke_region(&[bad.clone(), ok.clone()]);
-        let _ = try_stroke_region(&[bad.clone(), ok.clone()]);
+        let left_out = stroke_region(&[bad.clone(), ok.clone()]);
+        let stroked = try_stroke_region(&[bad.clone(), ok.clone()]);
+        if !v.is_finite() {
+            // The outline that cannot be combined is reported, or left out of the one that can.
+            assert_eq!(stroked, Err(PathOpsError::NonFinite), "{v}");
+            assert!((area(&left_out, FillRule::NonZero) - 100.0).abs() < 1e-9, "{v}: {}", area(&left_out, FillRule::NonZero));
+        } else if v.abs() > 1e15 {
+            assert!(stroked.is_err(), "{v}");
+        }
         // The edits and the stroker take the same coordinates.
         let _ = offset_path(&bad, 1.0, Join::Round, 4.0);
         let _ = try_offset_path(&bad, 1.0, Join::Miter, 4.0);

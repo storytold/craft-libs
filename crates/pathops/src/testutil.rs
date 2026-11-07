@@ -111,3 +111,27 @@ pub(crate) fn column_of_lenses(n: usize) -> BezPath {
     }
     b
 }
+
+/// `m` thin parallelograms slanting one way across `m` slanting the other: 4m² crossings, none of
+/// them level, and about 4m pieces on the sweep line at the middle.
+pub(crate) fn diagonals(m: usize) -> BezPath {
+    let mut b = BezPath::new();
+    let span = m as f64 * 4.0;
+    for i in 0..m {
+        let x = i as f64 * 4.0 - span / 2.0;
+        b.move_to((x, 0.0));
+        b.line_to((x + 1.0, 0.0));
+        b.line_to((x + span + 1.0, span));
+        b.line_to((x + span, span));
+        b.close_path();
+    }
+    for i in 0..m {
+        let x = i as f64 * 4.0 + span / 2.0 + 0.37;
+        b.move_to((x, 0.0));
+        b.line_to((x + 1.0, 0.0));
+        b.line_to((x + 1.0 - span, span));
+        b.line_to((x - span, span));
+        b.close_path();
+    }
+    b
+}

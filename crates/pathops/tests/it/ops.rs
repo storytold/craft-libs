@@ -388,12 +388,17 @@ fn max_deviation(orig: &BezPath, simp: &BezPath) -> f64 {
     worst
 }
 
+/// The deviation both ways: no point of the original far from the result, and none of the result far from the original.
+fn deviation_both_ways(orig: &BezPath, simp: &BezPath) -> f64 {
+    max_deviation(orig, simp).max(max_deviation(simp, orig))
+}
+
 #[test]
 fn simplify_dense_circle() {
     let c = dense_circle(50.0, 200);
     let s = simplify(&c, 0.5);
     assert!(anchor_count(&s) <= 12, "anchors {}", anchor_count(&s));
-    assert!(max_deviation(&c, &s) <= 0.5 + 1e-6);
+    assert!(deviation_both_ways(&c, &s) <= 0.5 + 1e-6, "{}", deviation_both_ways(&c, &s));
     assert!(all_closed(&s));
 }
 
@@ -418,7 +423,7 @@ fn simplify_straight_lines_option() {
     let s = simplify_with(&c, &SimplifyOptions::default().tolerance(1.0).straight_lines(true));
     assert!(!has_curves(&s));
     assert!(anchor_count(&s) < 40);
-    assert!(max_deviation(&c, &s) <= 1.0 + 1e-6);
+    assert!(deviation_both_ways(&c, &s) <= 1.0 + 1e-6, "{}", deviation_both_ways(&c, &s));
 }
 
 #[test]

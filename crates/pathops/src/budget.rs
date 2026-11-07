@@ -35,6 +35,20 @@ pub const MAX_SEGMENT_PAIRS: usize = 1 << 22;
 /// as [`crate::PathOpsError::TooComplex`] before it sweeps.
 pub const MAX_SWEEP_LINE_PAIRS: usize = 1 << 28;
 
+/// Most searches of the sweep line that the events of a sweep make, as counted before it: the pairs
+/// of segments whose bounds overlap (an upper bound on their crossings, and with them the ends of
+/// segments; a pair of curves may cross up to nine times, so those count nine) times the most
+/// pieces on the line at one height. 4,294,967,296. Each crossing finds two pieces on the line, and
+/// each segment's end one, by a scan of it: a diagonal hatch of 400 strokes each way, a few thousand
+/// elements, makes some billion of them and takes three seconds, and of curves it would take
+/// many times that, with nothing else refusing it. Past the limit an operation fails as
+/// [`crate::PathOpsError::TooComplex`] before it sweeps.
+pub const MAX_SWEEP_EVENT_WORK: usize = {
+    // Where `usize` is 32 bits (the web), the most it holds.
+    let wanted = 1u64 << 32;
+    if wanted > usize::MAX as u64 { usize::MAX } else { wanted as usize }
+};
+
 /// Most path elements (a move, a close, and a segment each) all the paths of one operation may
 /// hold together: 524,288 (the default of [`Limits::elements`]). Every operation reads its input a few times and keeps several copies
 /// of it (the sweep's segments cost a few hundred bytes each: a union of two paths of this size
@@ -64,6 +78,10 @@ pub struct Limits {
     pub offset_segment_pairs: usize,
     /// Most pairs of pieces at one height on the sweep line ([`MAX_SWEEP_LINE_PAIRS`]).
     pub sweep_line_pairs: usize,
+    /// Most searches of the sweep line the crossings and ends of segments make, counted as the pairs
+    /// of segments whose bounds overlap times the most pieces on the line at one height
+    /// ([`MAX_SWEEP_EVENT_WORK`]).
+    pub sweep_event_work: usize,
     /// Most segments [`crate::shape_builder`] sweeps into its map ([`crate::SHAPE_BUILDER_MAX_SEGMENTS`]).
     pub shape_builder_segments: usize,
     /// Most samples of one run of segments `simplify` fits ([`crate::MAX_FIT_POINTS`]).
@@ -74,6 +92,8 @@ pub struct Limits {
     pub join_work: usize,
     /// Most work `remove_redundant_points` does ([`crate::REDUNDANT_WORK`]).
     pub redundant_work: usize,
+    /// Most flags a boolean operation sets to tell its predicate what covers the faces ([`crate::MASK_WORK`]).
+    pub mask_work: usize,
 }
 
 impl Limits {
@@ -83,11 +103,13 @@ impl Limits {
         segment_pairs: MAX_SEGMENT_PAIRS,
         offset_segment_pairs: crate::offset::MAX_OFFSET_SEGMENT_PAIRS,
         sweep_line_pairs: MAX_SWEEP_LINE_PAIRS,
+        sweep_event_work: MAX_SWEEP_EVENT_WORK,
         shape_builder_segments: crate::planar::SHAPE_BUILDER_MAX_SEGMENTS,
         fit_points: crate::edit::MAX_FIT_POINTS,
         fit_work: crate::edit::FIT_WORK,
         join_work: crate::edit::JOIN_WORK,
         redundant_work: crate::edit::REDUNDANT_WORK,
+        mask_work: crate::boolean::MASK_WORK,
     };
 }
 
@@ -176,10 +198,16 @@ impl Counts {
     }
 }
 
-/// Do at most `cap` pairs of `boxes` overlap (touching counts)? A sweep in x keeps the open boxes
-/// in two Fenwick trees over their y extents, so this costs O(n log n) however they lie, and stops
-/// as soon as the count passes `cap`.
+/// Do at most `cap` pairs of `boxes` overlap (touching counts)?
+#[cfg(test)]
 pub(crate) fn overlaps_within(boxes: &[Rect], cap: usize) -> bool {
+    overlap_pairs(boxes, cap).is_some()
+}
+
+/// How many pairs of `boxes` overlap (touching counts), if at most `cap`. A sweep in x keeps the
+/// open boxes in two Fenwick trees over their y extents, so this costs O(n log n) however they
+/// lie, and stops as soon as the count passes `cap`.
+pub(crate) fn overlap_pairs(boxes: &[Rect], cap: usize) -> Option<usize> {
     // `f64::total_cmp` puts -0.0 before +0.0 although they are equal, which would hide an overlap
     // between a box ending at -0.0 and one starting at +0.0; adding 0.0 maps -0.0 to +0.0.
     let boxes: Vec<Rect> = boxes.iter().map(|b| Rect::new(b.x0 + 0.0, b.y0 + 0.0, b.x1 + 0.0, b.y1 + 0.0)).collect();
@@ -208,13 +236,13 @@ pub(crate) fn overlaps_within(boxes: &[Rect], cap: usize) -> bool {
         let under = by_y1.before(below(b.y0));
         overlaps = overlaps.saturating_add(usize::try_from(active - above - under).unwrap_or(0));
         if overlaps > cap {
-            return false;
+            return None;
         }
         by_y0.add(below(b.y0), 1);
         by_y1.add(below(b.y1), 1);
         active += 1;
     }
-    true
+    Some(overlaps)
 }
 
 /// The heights `(lowest y, highest y)` of the pieces `seg` is cut into where its x or y turns
@@ -264,18 +292,45 @@ pub(crate) fn heights_overlap_within(heights: &[(f64, f64)], cap: usize) -> bool
     true
 }
 
-/// Can a planar map be built of `paths` within `cap` segment pairs and
-/// [`MAX_SWEEP_LINE_PAIRS`] pairs of pieces on the sweep line?
+/// The most pieces of `heights` that rise or fall through one height (touching counts): the longest
+/// the sweep line is. Pieces of no height are not on it.
+pub(crate) fn peak_depth(heights: &[(f64, f64)]) -> usize {
+    let mut lows: Vec<f64> = heights.iter().filter(|h| h.0 < h.1).map(|h| h.0 + 0.0).collect();
+    let mut highs: Vec<f64> = heights.iter().filter(|h| h.0 < h.1).map(|h| h.1 + 0.0).collect();
+    lows.sort_by(f64::total_cmp);
+    highs.sort_by(f64::total_cmp);
+    // The line is longest just after some piece starts: those started so far, less those ended below.
+    lows.iter()
+        .enumerate()
+        .map(|(started, low)| started + 1 - highs.partition_point(|h| h.total_cmp(low).is_lt()).min(started + 1))
+        .max()
+        .unwrap_or(0)
+}
+
+/// Can a planar map be built of `paths` within `cap` segment pairs, [`MAX_SWEEP_LINE_PAIRS`] pairs of
+/// pieces on the sweep line, and [`MAX_SWEEP_EVENT_WORK`] searches of it?
 pub(crate) fn sweep_fits_within<'a>(paths: impl IntoIterator<Item = &'a BezPath>, cap: usize) -> bool {
-    let (mut boxes, mut heights) = (Vec::new(), Vec::new());
+    let (mut boxes, mut curves, mut heights) = (Vec::new(), Vec::new(), Vec::new());
     for p in paths {
         work::add(Work::Visited, p.elements().len());
         for s in p.segments() {
             boxes.push(s.bounding_box());
+            if !matches!(s, PathSeg::Line(_)) {
+                curves.push(s.bounding_box());
+            }
             piece_heights(&s, &mut heights);
         }
     }
-    overlaps_within(&boxes, cap) && heights_overlap_within(&heights, limits().sweep_line_pairs)
+    let Some(pairs) = overlap_pairs(&boxes, cap) else { return false };
+    if !heights_overlap_within(&heights, limits().sweep_line_pairs) {
+        return false;
+    }
+    // A pair of curves may cross up to nine times, a pair with a line less: the crossings are at
+    // most the pairs, with eight more for each pair of curves.
+    let Some(curve_pairs) = overlap_pairs(&curves, cap) else { return false };
+    // In 64 bits: the product passes what a 32-bit `usize` holds.
+    let crossings = (pairs as u64).saturating_add((curve_pairs as u64).saturating_mul(8));
+    crossings.saturating_mul(peak_depth(&heights) as u64) <= limits().sweep_event_work as u64
 }
 
 /// Can a planar map be built of `paths` within [`MAX_SEGMENT_PAIRS`] (and [`MAX_SWEEP_LINE_PAIRS`])?
@@ -516,6 +571,124 @@ mod tests {
         assert!(sweep_fits([&square]));
         let none = Limits { segment_pairs: 0, ..Limits::default() };
         assert!(!with_limits(none, || sweep_fits([&square])));
+    }
+
+    /// The pieces on the line at once, counted by the sorted lists, are those a count one height at
+    /// a time gives; level pieces are on no line.
+    #[test]
+    fn the_peak_depth_is_the_most_pieces_through_one_height() {
+        assert_eq!(peak_depth(&[]), 0);
+        assert_eq!(peak_depth(&[(1.0, 1.0), (2.0, 2.0)]), 0);
+        assert_eq!(peak_depth(&[(0.0, 1.0), (2.0, 3.0)]), 1);
+        assert_eq!(peak_depth(&[(0.0, 1.0), (1.0, 2.0)]), 2, "touching counts");
+        assert_eq!(peak_depth(&[(0.0, 10.0), (1.0, 2.0), (3.0, 4.0), (1.5, 3.5)]), 3);
+        assert_eq!(peak_depth(&[(-1.0, -0.0), (0.0, 1.0)]), 2, "a signed zero is no gap");
+        let mut seed = 0x2545_f491_4f6c_dd1d_u64;
+        let mut next = || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed % 1000) as f64 / 10.0
+        };
+        for _ in 0..20 {
+            let heights: Vec<(f64, f64)> = (0..120)
+                .map(|_| {
+                    let low = next();
+                    (low, low + next() / 5.0)
+                })
+                .collect();
+            // At the low of some piece, the pieces that hold it.
+            let brute = heights
+                .iter()
+                .filter(|h| h.0 < h.1)
+                .map(|h| heights.iter().filter(|g| g.0 < g.1 && g.0 <= h.0 && h.0 <= g.1).count())
+                .max()
+                .unwrap_or(0);
+            assert_eq!(peak_depth(&heights), brute);
+        }
+    }
+
+    /// Pairs of boxes are counted exactly, not only against a cap.
+    #[test]
+    fn overlap_pairs_counts_the_pairs() {
+        let bars: Vec<Rect> = (0..10)
+            .map(|i| Rect::new(0.0, f64::from(i) * 2.0, 100.0, f64::from(i) * 2.0 + 1.0))
+            .chain((0..10).map(|i| Rect::new(f64::from(i) * 2.0, 0.0, f64::from(i) * 2.0 + 1.0, 100.0)))
+            .collect();
+        assert_eq!(overlap_pairs(&bars, usize::MAX), Some(100));
+        assert_eq!(overlap_pairs(&bars, 100), Some(100));
+        assert_eq!(overlap_pairs(&bars, 99), None);
+        assert_eq!(overlap_pairs(&[], 0), Some(0));
+    }
+
+    /// The pairs of overlapping bounds, those of curves among them, and the most pieces at one height.
+    fn event_counts(path: &BezPath) -> (usize, usize, usize) {
+        let (mut boxes, mut curves, mut heights) = (Vec::new(), Vec::new(), Vec::new());
+        for s in path.segments() {
+            boxes.push(s.bounding_box());
+            if !matches!(s, PathSeg::Line(_)) {
+                curves.push(s.bounding_box());
+            }
+            piece_heights(&s, &mut heights);
+        }
+        (overlap_pairs(&boxes, usize::MAX).unwrap_or(0), overlap_pairs(&curves, usize::MAX).unwrap_or(0), peak_depth(&heights))
+    }
+
+    /// Crossings that the other budgets pass but whose searches of the sweep line are many are
+    /// refused before the sweep: 480 strokes each way slanting across each other are 3.8 thousand
+    /// elements, under four million overlapping bounds and a few million pieces at one height, yet
+    /// every crossing scans a line of thousands (some billion of those, seconds).
+    #[test]
+    fn a_dense_diagonal_hatch_is_refused_before_it_is_swept() {
+        use crate::{FillRule, PathOpsError};
+        let hatch = crate::testutil::diagonals(480);
+        let (pairs, curve_pairs, depth) = event_counts(&hatch);
+        assert!(pairs <= MAX_SEGMENT_PAIRS, "{pairs} overlapping bounds");
+        assert!(heights_overlap_within(&heights_of(&hatch), MAX_SWEEP_LINE_PAIRS), "the pieces at one height are within their limit");
+        assert_eq!(curve_pairs, 0);
+        assert!(depth > 1_500 && pairs * depth > MAX_SWEEP_EVENT_WORK, "{pairs} pairs, {depth} on the line");
+        let unlimited = Limits { sweep_event_work: usize::MAX, ..Limits::default() };
+        assert!(with_limits(unlimited, || sweep_fits([&hatch])), "only the searches of the line refuse it");
+        work::reset();
+        assert!(!sweep_fits([&hatch]));
+        assert_eq!(crate::try_area(&hatch, FillRule::NonZero), Err(PathOpsError::TooComplex));
+        assert_eq!(crate::try_unite_all(&[(&hatch, FillRule::NonZero)]), Err(PathOpsError::TooComplex));
+        assert_eq!(work::take(Work::Sweeps), 0, "refused before the sweep was built");
+        // A smaller hatch is swept, and the product is exactly the limit: one under it refuses, at it passes.
+        let small = crate::testutil::diagonals(40);
+        assert!(sweep_fits([&small]));
+        assert!(crate::try_area(&small, FillRule::NonZero).is_ok());
+        let (pairs, _, depth) = event_counts(&small);
+        assert!(pairs * depth > 0);
+        assert!(with_limits(Limits { sweep_event_work: pairs * depth, ..Limits::default() }, || sweep_fits([&small])));
+        assert!(!with_limits(Limits { sweep_event_work: pairs * depth - 1, ..Limits::default() }, || sweep_fits([&small])));
+    }
+
+    /// A pair of curves can cross nine times, a pair of lines once: curves count for more.
+    #[test]
+    fn pairs_of_curves_count_nine_crossings_and_pairs_of_lines_one() {
+        // The same strokes as lines and as cubics bowed a little: the same bounds overlapping, but for the bow.
+        let strokes = |bow: f64| {
+            let mut b = BezPath::new();
+            for i in 0..60 {
+                let x = f64::from(i) * 5.0;
+                for flip in [1.0, -1.0] {
+                    b.move_to((x, 0.0));
+                    b.curve_to((x + flip * 60.0 + bow, 100.0), (x + flip * 120.0 - bow, 200.0), (x + flip * 180.0, 300.0));
+                    b.line_to((x + flip * 180.0 + 1.0, 300.0));
+                    b.curve_to((x + flip * 120.0 - bow + 1.0, 200.0), (x + flip * 60.0 + bow + 1.0, 100.0), (x + 1.0, 0.0));
+                    b.close_path();
+                }
+            }
+            b
+        };
+        let bowed = strokes(30.0);
+        let (pairs, curve_pairs, depth) = event_counts(&bowed);
+        assert!(curve_pairs * 3 > pairs, "{curve_pairs} of {pairs} pairs are of curves");
+        let weighted = (pairs + 8 * curve_pairs) * depth;
+        assert!(weighted > 4 * pairs * depth, "{weighted} against {} unweighted", pairs * depth);
+        assert!(with_limits(Limits { sweep_event_work: weighted, ..Limits::default() }, || sweep_fits([&bowed])));
+        assert!(!with_limits(Limits { sweep_event_work: weighted - 1, ..Limits::default() }, || sweep_fits([&bowed])));
     }
 
     /// Boxes that touch at a signed zero still overlap: -0.0 and +0.0 are the same position.

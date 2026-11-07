@@ -248,7 +248,13 @@ fn nothing_or_garbage_gives_an_empty_map() {
 #[test]
 fn interior_point_of_hostile_paths_is_none() {
     assert_eq!(crate::interior_point(&BezPath::new()), None);
-    for v in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, f64::MAX, 1e300] {
+    // Points that are not numbers place nothing (not the origin, not any point).
+    for v in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        let p = polyline(&[(0.0, 0.0), (v, 0.0), (v, v), (0.0, v)], true);
+        assert_eq!(crate::interior_point(&p), None, "{v}");
+    }
+    // Finite but huge ones return, with a point or without.
+    for v in [f64::MAX, 1e300] {
         let p = polyline(&[(0.0, 0.0), (v, 0.0), (v, v), (0.0, v)], true);
         let _ = crate::interior_point(&p);
     }
@@ -1164,7 +1170,9 @@ fn the_angle_an_edge_leaves_a_vertex_at_is_read_from_the_start_of_a_huge_segment
     let diagonal = edge(kurbo::CubicBez::new((0.0, 1e8), (1e8, 1e8), (1e8, 0.0), (0.0, 0.0)));
     work::reset();
     let back = leaving_angle(&[diagonal], 1, v, r, &mut whole);
-    assert!((back - (-std::f64::consts::FRAC_PI_2)).abs() < 1e-6 || (back - std::f64::consts::FRAC_PI_2).abs() < 1e-6 || back.abs() < 1e-6, "{back}");
+    // The edge reversed is the same cubic, and leaves along +x like the first (not up or down, as a
+    // half-edge put in the wrong place would).
+    assert!(back.abs() < 1e-6, "{back}");
     assert!(work::take(Work::FlattenLines) <= 2_000);
     // A segment that is small beside r is flattened whole, as before, and gives its tangent.
     let small = edge(kurbo::CubicBez::new((0.0, 0.0), (4e-3, 4e-3), (8e-3, 4e-3), (1.2e-2, 0.0)));
@@ -1229,4 +1237,85 @@ fn the_start_of_a_segment_within_reach_of_a_vertex_reaches_r_and_stays_close() {
     let medium = kurbo::CubicBez::new((0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0));
     assert_eq!(start_within_reach(&medium, v, r, &mut allowance), (medium, 1.0));
     assert!(allowance < 1e9);
+}
+
+/// The inputs that cover a face are found among the fills whose bounds hold its interior point, not
+/// by testing the point against every fill: faces apart, each in a fill of its own, cost a few
+/// tests each, not one for every fill.
+#[test]
+fn the_fills_a_face_is_tested_against_are_those_near_it() {
+    let tests = |n: u32| {
+        let shapes: Vec<Shape> = (0..n)
+            .map(|i| Shape::new(rect_path(0.0, f64::from(i) * 20.0, 10.0, f64::from(i) * 20.0 + 10.0), FillRule::NonZero, u64::from(i)))
+            .collect();
+        work::reset();
+        let (faces, _) = live_paint(&shapes);
+        assert_eq!(faces.len(), n as usize);
+        assert!(faces.iter().enumerate().all(|(i, f)| f.sources == [i]), "sources in order");
+        work::take(Work::FillTests)
+    };
+    let (small, large) = (tests(100), tests(400));
+    assert!(small > 0 && small <= 8 * 100, "{small} tests for 100 faces");
+    assert!(large <= 8 * 400, "{large} tests for 400 faces, against {} for a scan", 400 * 400);
+}
+
+/// A path of parts far apart, each a unit high, is missed by the first heights tried; the search
+/// goes on over a bounded number of the stretches between the heights of its vertices, and so finds
+/// a part, whatever the number of parts.
+#[test]
+fn an_interior_point_is_found_among_parts_far_apart_in_a_bounded_search() {
+    let squares = |n: u32| {
+        let mut p = BezPath::new();
+        for k in 0..n {
+            let y = f64::from(k) * 100.0;
+            p.extend(polyline(&[(0.0, y), (1.0, y), (1.0, y + 1.0), (0.0, y + 1.0)], true).iter());
+        }
+        p
+    };
+    for n in [2, 50, 1_000] {
+        let p = squares(n);
+        work::reset();
+        let found = crate::interior_point(&p);
+        let heights = work::take(Work::InteriorHeights);
+        let at = found.unwrap_or_else(|| panic!("no point in {n} squares"));
+        assert!(kurbo::Shape::winding(&p, at) != 0, "{at:?} is outside the {n} squares");
+        assert!((9..=9 + 64).contains(&heights), "{heights} heights for {n} squares");
+    }
+    // One part, found at the first heights: the search goes no further.
+    work::reset();
+    assert!(crate::interior_point(&squares(1)).is_some());
+    assert_eq!(work::take(Work::InteriorHeights), 9, "the first heights are all it looks at");
+    // And a path with nothing in it (a line with many vertices) is None, in a bounded search too.
+    work::reset();
+    let diagonal: Vec<(f64, f64)> = (0..200).map(|i| (f64::from(i), f64::from(i))).collect();
+    assert_eq!(crate::interior_point(&polyline(&diagonal, false)), None);
+    assert!(work::take(Work::InteriorHeights) <= 9 + 64);
+}
+
+/// The sweep's frame is sheared by 1/32 unless an open path slopes -1/32 in the document (so would
+/// be level in it); then by the next power of two that leaves none level.
+#[test]
+fn the_shear_is_changed_only_for_an_open_path_that_would_be_level_in_it() {
+    use super::index::{SHEARS, shear_for};
+    let shape = |p: BezPath| Shape::new(p, FillRule::NonZero, 0);
+    let ordinary = [shape(line_path((0.0, 0.0), (100.0, 0.0))), shape(line_path((0.0, 0.0), (10.0, 10.0)))];
+    assert_eq!(shear_for(&ordinary), 1.0 / 32.0);
+    // A closed shape with such an edge is no trouble: only open paths are.
+    let closed = [shape(polyline(&[(0.0, 0.0), (64.0, -2.0), (64.0, 10.0)], true))];
+    assert_eq!(shear_for(&closed), 1.0 / 32.0);
+    let level = line_path((-10.0, 50.3125), (110.0, 46.5625));
+    assert_eq!(shear_for(&[shape(level.clone())]), 1.0 / 64.0);
+    // Also a curve with a side of its control polygon that slopes so.
+    let mut curve = BezPath::new();
+    curve.move_to((0.0, 0.0));
+    curve.curve_to((32.0, -1.0), (50.0, 20.0), (60.0, 10.0));
+    assert_eq!(shear_for(&[shape(curve)]), 1.0 / 64.0);
+    // And one that is level in the next too moves on to the one after.
+    let second = line_path((0.0, 0.0), (64.0, -1.0));
+    assert_eq!(shear_for(&[shape(level), shape(second)]), 1.0 / 16.0);
+    assert_eq!(SHEARS[2], 1.0 / 16.0);
+}
+
+fn line_path(a: (f64, f64), b: (f64, f64)) -> BezPath {
+    polyline(&[a, b], false)
 }

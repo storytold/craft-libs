@@ -12,16 +12,17 @@ use kurbo::{CubicBez, ParamCurve, ParamCurveDeriv, PathSeg, Point, Vec2};
 /// overflows and it subdivides without end.
 const MEASURE_LIMIT: f64 = 1e9;
 
-/// The length of `seg` to `accuracy`; 0 for a segment whose control points are not finite or past
-/// [`MEASURE_LIMIT`].
-pub(crate) fn measured_arclen(seg: &PathSeg, accuracy: f64) -> f64 {
+/// The length of `seg` to `accuracy`; `None` for a segment whose control points are not finite or
+/// past [`MEASURE_LIMIT`] (its length is not zero: it is not known, and a caller must not sample
+/// it as if it were a point).
+pub(crate) fn measured_arclen(seg: &PathSeg, accuracy: f64) -> Option<f64> {
     let ok = |p: Point| p.x.is_finite() && p.y.is_finite() && p.x.abs() <= MEASURE_LIMIT && p.y.abs() <= MEASURE_LIMIT;
     let fits = match seg {
         PathSeg::Line(l) => ok(l.p0) && ok(l.p1),
         PathSeg::Quad(q) => ok(q.p0) && ok(q.p1) && ok(q.p2),
         PathSeg::Cubic(c) => ok(c.p0) && ok(c.p1) && ok(c.p2) && ok(c.p3),
     };
-    if fits { kurbo::ParamCurveArclen::arclen(seg, accuracy) } else { 0.0 }
+    fits.then(|| kurbo::ParamCurveArclen::arclen(seg, accuracy))
 }
 
 /// Maximum Newton reparameterisation rounds per fit.
@@ -43,20 +44,41 @@ pub(crate) fn end_tangent(c: &CubicBez) -> Vec2 {
     unit(c.p3 - c.p2).or_else(|| unit(c.p3 - c.p1)).or_else(|| unit(c.p3 - c.p0)).unwrap_or(Vec2::new(1.0, 0.0))
 }
 
+/// Why a fit gave nothing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum FitStop {
+    /// The work ran out.
+    Work,
+    /// A stretch of points was split [`MAX_FIT_DEPTH`] times and still did not fit within the tolerance
+    /// (the points are too unevenly spaced for the splitting to get anywhere): no cubic of it is
+    /// within the tolerance, and one that is not is not given.
+    Depth,
+}
+
+/// Most times a stretch of points is split in two to fit it.
+const MAX_FIT_DEPTH: usize = 40;
+
 /// Fit a chain of cubics through `pts` with maximum (parametric) error `tol`.
 ///
 /// `t0` is the unit tangent leaving `pts[0]`; `t1` is the unit tangent arriving at the last point
 /// (forward direction). Consecutive output cubics are G1 continuous.
 ///
 /// Each fit of a stretch of points is charged to `work` (its points times the rounds of
-/// reparameterisation it may take); `None` when `work` runs out first.
-pub(crate) fn fit_cubics(pts: &[Point], t0: Vec2, t1: Vec2, tol: f64, work: &mut usize) -> Option<Vec<CubicBez>> {
+/// reparameterisation it may take); an error when `work` runs out first, or when no fit within
+/// `tol` is found in [`MAX_FIT_DEPTH`] splits.
+pub(crate) fn fit_cubics(pts: &[Point], t0: Vec2, t1: Vec2, tol: f64, work: &mut usize) -> Result<Vec<CubicBez>, FitStop> {
+    fit_cubics_to_depth(pts, t0, t1, tol, work, MAX_FIT_DEPTH)
+}
+
+/// [`fit_cubics`] splitting a stretch at most `max_depth` times.
+fn fit_cubics_to_depth(pts: &[Point], t0: Vec2, t1: Vec2, tol: f64, work: &mut usize, max_depth: usize) -> Result<Vec<CubicBez>, FitStop> {
     let mut out = Vec::new();
     let pts = dedup(pts);
     if pts.len() < 2 {
-        return Some(out);
+        return Ok(out);
     }
-    fit_rec(&pts, t0, t1, tol.max(1e-9), &mut out, 0, work).then_some(out)
+    fit_rec(&pts, t0, t1, tol.max(1e-9), &mut out, (0, max_depth), work)?;
+    Ok(out)
 }
 
 fn dedup(pts: &[Point]) -> Vec<Point> {
@@ -69,31 +91,37 @@ fn dedup(pts: &[Point]) -> Vec<Point> {
     v
 }
 
-/// Whether the fit was done within `work`.
-fn fit_rec(pts: &[Point], t0: Vec2, t1: Vec2, tol: f64, out: &mut Vec<CubicBez>, depth: usize, work: &mut usize) -> bool {
+/// The fit of `pts` within `work` and the depth `(so far, most)`, or why there is none.
+fn fit_rec(pts: &[Point], t0: Vec2, t1: Vec2, tol: f64, out: &mut Vec<CubicBez>, depth: (usize, usize), work: &mut usize) -> Result<(), FitStop> {
     let n = pts.len();
     if n == 2 {
         let d = pts[0].distance(pts[1]) / 3.0;
         out.push(CubicBez::new(pts[0], pts[0] + t0 * d, pts[1] - t1 * d, pts[1]));
-        return true;
+        return Ok(());
     }
     // A fit reads its points once, then again for each round of reparameterisation.
     let cost = n.saturating_mul(1 + MAX_REPARAM);
     let Some(left) = work.checked_sub(cost) else {
         *work = 0;
-        return false;
+        return Err(FitStop::Work);
     };
     *work = left;
     crate::work::add(crate::work::Work::Fit, cost);
     let (c, err, split) = fit_single(pts, t0, t1);
-    if err <= tol || depth > 40 {
+    if err <= tol {
         out.push(c);
-        return true;
+        return Ok(());
+    }
+    // Past the depth the fit is not within the tolerance: say so, rather than give it.
+    let (so_far, most) = depth;
+    if so_far >= most {
+        return Err(FitStop::Depth);
     }
     // Split at the worst point with a centre tangent estimated from its neighbours.
     let split = split.clamp(1, n - 2);
     let tc = unit(pts[split + 1] - pts[split - 1]).unwrap_or(t0);
-    fit_rec(&pts[..=split], t0, tc, tol, out, depth + 1, work) && fit_rec(&pts[split..], tc, t1, tol, out, depth + 1, work)
+    fit_rec(&pts[..=split], t0, tc, tol, out, (so_far + 1, most), work)?;
+    fit_rec(&pts[split..], tc, t1, tol, out, (so_far + 1, most), work)
 }
 
 /// Best single cubic for `pts` with the given end tangents. Returns (curve, max error, index of
@@ -252,6 +280,28 @@ mod tests {
         for w in out.windows(2) {
             assert!(w[0].p3.distance(w[1].p0) < 1e-9);
         }
+    }
+
+    /// A stretch that has not fitted when the splitting stops is no fit: the cubic that failed is not
+    /// given as if it were within the tolerance, and the work is not spent as if it had run out.
+    #[test]
+    fn a_fit_that_runs_out_of_splits_is_an_error_not_a_cubic_out_of_tolerance() {
+        let pts: Vec<Point> = (0..=40).map(|i| Point::new(f64::from(i), (f64::from(i) * 0.5).sin() * 10.0)).collect();
+        let (t0, t1) = (Vec2::new(1.0, 0.0), Vec2::new(1.0, 0.0));
+        let mut work = usize::MAX;
+        assert_eq!(fit_cubics_to_depth(&pts, t0, t1, 0.1, &mut work, 0), Err(FitStop::Depth));
+        assert!(work > usize::MAX / 2, "the work left is what the one fit tried cost: {}", usize::MAX - work);
+        // With room to split the cubics given are within the tolerance of the points.
+        let mut work = usize::MAX;
+        let out = fit_cubics(&pts, t0, t1, 0.1, &mut work).unwrap();
+        for p in &pts {
+            let near = out.iter().map(|c| kurbo::ParamCurveNearest::nearest(c, *p, 1e-9).distance_sq.sqrt()).fold(f64::INFINITY, f64::min);
+            assert!(near <= 0.1 + 1e-6, "{p:?} is {near} from the fit");
+        }
+        // Work that runs out is the other error.
+        let mut little = 100;
+        assert_eq!(fit_cubics(&pts, t0, t1, 0.1, &mut little), Err(FitStop::Work));
+        assert_eq!(little, 0);
     }
 
     #[test]
