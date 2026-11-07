@@ -814,7 +814,7 @@ fn push_two_level_quadratic_signs(
 
 /// An axis-aligned quadratic approximation to a cubic Bézier.
 ///
-/// The quadratic here gives `y` as a function of `x`.
+/// The quadratic here gives `x` as a function of `y`.
 #[derive(Clone, Copy, Debug)]
 pub struct QuadraticApprox {
     /// The quadratic approximation.
@@ -1769,6 +1769,18 @@ mod test {
         let diff = solve_x_for_y(c, y) - ep.eval(y);
         assert!(diff <= ep.dmax);
         assert!(diff >= ep.dmin);
+    }
+
+    // The curve x = y^2 for y in [0, 1]: the quadratic takes y and returns x.
+    #[test]
+    fn quad_approximation_gives_x_of_y() {
+        let c = CubicBez::new((0.0, 0.0), (0.0, 1.0 / 3.0), (1.0 / 3.0, 2.0 / 3.0), (1.0, 1.0));
+        let ep = QuadraticApprox::from_cubic(c, None);
+
+        assert!((ep.q.eval(0.5) - 0.25).abs() < 1e-9);
+        assert!((ep.q.eval(1.0) - 1.0).abs() < 1e-9);
+        assert!(ep.dmin.abs() < 1e-9);
+        assert!(ep.dmax.abs() < 1e-9);
     }
 
     // At some point, this test case looped infinitely.
