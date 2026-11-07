@@ -14,9 +14,9 @@ use serde::de::{DeserializeOwned, Deserializer, IgnoredAny, MapAccess, Visitor};
 use crate::zip::{Zip, local_names_include};
 use crate::{Budget, Canvas, Error, Kind, Layer, Outline, Rendition, RenditionKind, counted, lenient, malformed, parse, too_new};
 
-/// A ZIP archive with a `manifest.json` entry. When `head` holds the whole archive, the names in
-/// its central directory decide, as [`Zip::find`] reads them; otherwise the names in the local
-/// headers that `head` holds.
+/// The reader recognizes a ZIP archive with a `manifest.json` entry. When the archive opens,
+/// [`Zip::find`] checks its central-directory names. Otherwise the reader checks the local headers
+/// that `head` holds.
 pub(crate) fn sniff(head: &[u8]) -> bool {
     sniff_checked(head, None).unwrap_or(false)
 }
@@ -111,9 +111,15 @@ struct Envelope<D> {
 /// newer than [`FORMAT_VERSION`] refused), and a preview that names an entry other than [`THUMB`]
 /// or [`COMPOSITE`] refused. A member that appears twice is refused.
 fn read<D: DeserializeOwned>(json: &[u8], budget: &Budget) -> Result<Envelope<D>, Error> {
+    read_with_items(json, budget, format::MAX_MANIFEST_ITEMS)
+}
+
+/// Check the envelope with a caller-supplied structural item cap before deserializing `D`.
+fn read_with_items<D: DeserializeOwned>(json: &[u8], budget: &Budget, max_items: usize) -> Result<Envelope<D>, Error> {
     let mut limits = format::Limits::default();
     limits.max_manifest_bytes = json.len();
     limits.max_depth = (budget.limits.max_depth as usize).min(manifest_depth(MAX_GROUP_DEPTH));
+    limits.max_items = max_items.min(format::MAX_MANIFEST_ITEMS);
     let checked = match budget.control {
         Some(control) => format::check_manifest_with_cancel(json, &limits, &|| control.check().is_err()),
         None => format::check_manifest(json, &limits),
@@ -144,11 +150,14 @@ pub(crate) fn info(bytes: &[u8], budget: &mut Budget) -> Result<(u32, Option<Str
     stamp(&json, budget)
 }
 
-pub(crate) fn renditions(bytes: &[u8], budget: &mut Budget) -> Result<Vec<Rendition>, Error> {
+pub(crate) fn renditions(bytes: &[u8], wanted: Option<RenditionKind>, budget: &mut Budget) -> Result<Vec<Rendition>, Error> {
     let (zip, json) = manifest(bytes, budget)?;
     let m: Envelope<IgnoredAny> = read(&json, budget)?;
     let mut out = vec![];
     for (kind, path) in [(RenditionKind::Thumbnail, m.thumbnail), (RenditionKind::Composite, m.composite)] {
+        if wanted.is_some_and(|wanted| wanted != kind) {
+            continue;
+        }
         let Some(path) = path else { continue };
         let entry =
             zip.find(&path, budget.control)?.ok_or_else(|| malformed(format!("the manifest names `{path}`, which the bundle does not have")))?;
@@ -218,12 +227,27 @@ fn document_outline(d: DocM, budget: &Budget) -> Result<Outline, Error> {
     })
 }
 
+/// The archive and a document head, with structural items checked before deserialization.
+#[cfg(feature = "pcraft-pixels")]
+pub(crate) fn document_with_items<'a, D: DeserializeOwned>(bytes: &'a [u8], budget: &mut Budget) -> Result<(Zip<'a>, D), Error> {
+    let (zip, json) = manifest(bytes, budget)?;
+    let max_items = usize::try_from(budget.limits.max_items).unwrap_or(usize::MAX);
+    Ok((zip, read_with_items::<D>(&json, budget, max_items)?.document))
+}
+
 /// The archive and the manifest's document read as `D`, checked as [`outline`] reads it.
 #[cfg(feature = "pcraft-pixels")]
 pub(crate) fn document<'a, D: DeserializeOwned>(bytes: &'a [u8], budget: &mut Budget) -> Result<(Zip<'a>, D), Error> {
     let (zip, json) = manifest(bytes, budget)?;
     let document = read::<D>(&json, budget)?.document;
     Ok((zip, document))
+}
+
+/// The caller's document head, with its structural item limit checked before deserialization.
+pub(crate) fn head<D: DeserializeOwned>(bytes: &[u8], budget: &mut Budget) -> Result<D, Error> {
+    let (_, json) = manifest(bytes, budget)?;
+    let max_items = usize::try_from(budget.limits.max_items).unwrap_or(usize::MAX);
+    Ok(read_with_items::<D>(&json, budget, max_items)?.document)
 }
 
 #[cfg(test)]

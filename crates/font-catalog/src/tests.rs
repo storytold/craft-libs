@@ -145,6 +145,8 @@ fn linux_env(root: &Path) -> FontEnv {
     }
 }
 
+// Uses Unix paths, which Windows doesn't treat as absolute (#619).
+#[cfg(unix)]
 #[test]
 fn linux_font_dirs_cover_xdg_flatpak_and_fontconfig() {
     let root = temp("dirs");
@@ -167,6 +169,8 @@ fn linux_font_dirs_cover_xdg_flatpak_and_fontconfig() {
     assert_eq!(dirs, want);
 }
 
+// Uses Unix paths, which Windows doesn't treat as absolute (#619).
+#[cfg(unix)]
 #[test]
 fn fontconfig_dirs_follow_includes_prefixes_and_skip_the_rest() {
     let root = temp("conf");
@@ -210,6 +214,8 @@ fn fontconfig_dirs_follow_includes_prefixes_and_skip_the_rest() {
     );
 }
 
+// Uses Unix paths, which Windows doesn't treat as absolute (#619).
+#[cfg(unix)]
 #[test]
 fn flatpak_adds_the_hosts_font_folders() {
     let root = temp("flatpak");
@@ -249,15 +255,26 @@ fn macos_and_windows_folders() {
     assert_eq!(office_font_dirs(&env).len(), 1);
 }
 
+// Uses Unix paths, which Windows doesn't treat as absolute (#619).
+#[cfg(unix)]
 #[test]
 fn font_store_folder() {
     let env = FontEnv { os: Os::Unix, home: Some("/home/me".into()), ..Default::default() };
     assert_eq!(font_store_dir(&env), Some(PathBuf::from("/home/me/.local/share/craft-fonts")));
     let env = FontEnv { xdg_data_home: Some("/data".into()), ..env };
     assert_eq!(font_store_dir(&env), Some(PathBuf::from("/data/craft-fonts")));
-    let env = FontEnv { font_store: Some("/portable/fonts".into()), ..env };
-    assert_eq!(font_store_dir(&env), Some(PathBuf::from("/portable/fonts")));
-    assert_eq!(font_store_dir(&FontEnv { os: Os::None, home: Some("/h".into()), ..Default::default() }), None);
+}
+
+/// The store override wins with or without platform defaults; unsupported platforms have no default store.
+#[test]
+fn font_store_override_and_no_store() {
+    for os in [Os::Unix, Os::MacOs, Os::Windows, Os::Haiku, Os::None] {
+        let env = FontEnv { os, font_store: Some("portable/fonts".into()), ..Default::default() };
+        assert_eq!(font_store_dir(&env), Some(PathBuf::from("portable/fonts")));
+        let env = FontEnv { home: Some("home".into()), local_app_data: Some("local".into()), ..env };
+        assert_eq!(font_store_dir(&env), Some(PathBuf::from("portable/fonts")));
+    }
+    assert_eq!(font_store_dir(&FontEnv { os: Os::None, home: Some("h".into()), ..Default::default() }), None);
 }
 
 /// A Linux system with fonts in a system folder, the Flatpak host folder, the user's folder and
