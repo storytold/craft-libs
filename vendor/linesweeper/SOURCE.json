@@ -7,7 +7,9 @@
   "upstream_repository": null,
   "upstream_revision": "824b0791a750f7b27b8edcbb6c6244d0e629875e",
   "upstream_directory": "",
-  "local_patches": [],
+  "local_patches": [
+    "`Segment::lower` and `Segment::upper` bound a horizontal line by both of its endpoints. In the package, `local_bbox` takes both x values from `at_y`, which returns the right end of a horizontal line, and `lower` returns the right end minus `eps`."
+  ],
   "files": [
     { "path": ".cargo_vcs_info.json", "source_sha256": "47fba6a9dbdf445a5c97f783c9be62093035f9d5e5cdc2cf3216ad8259bcd8fc", "source_git_blob": null, "sha256": "47fba6a9dbdf445a5c97f783c9be62093035f9d5e5cdc2cf3216ad8259bcd8fc" },
     { "path": ".gitignore", "source_sha256": "88b59092499ae05234330eb7d0b01e953e969caf05261530e3765eef02536cf0", "source_git_blob": null, "sha256": "88b59092499ae05234330eb7d0b01e953e969caf05261530e3765eef02536cf0" },
@@ -36,7 +38,7 @@
     { "path": "src/curve/split_quad.rs", "source_sha256": "b8aae4ce7c16fa623724f667e1058130a9c7eed693b5b01e8b9e16632b8ec45f", "source_git_blob": null, "sha256": "b8aae4ce7c16fa623724f667e1058130a9c7eed693b5b01e8b9e16632b8ec45f" },
     { "path": "src/curve/transverse.rs", "source_sha256": "be9c695531f4cb0fe73af13e78040b51b9476c193d84562e701aadd07b3fd06e", "source_git_blob": null, "sha256": "be9c695531f4cb0fe73af13e78040b51b9476c193d84562e701aadd07b3fd06e" },
     { "path": "src/generators.rs", "source_sha256": "cc9f2441546db9204219294c354449809dda77dffad06fec8a30f45df01e6fef", "source_git_blob": null, "sha256": "cc9f2441546db9204219294c354449809dda77dffad06fec8a30f45df01e6fef" },
-    { "path": "src/geom.rs", "source_sha256": "9878ffa6d4a13fa2c9149741c137205ca01acb626a5b9f86a3db75cf91b63a08", "source_git_blob": null, "sha256": "9878ffa6d4a13fa2c9149741c137205ca01acb626a5b9f86a3db75cf91b63a08" },
+    { "path": "src/geom.rs", "source_sha256": "9878ffa6d4a13fa2c9149741c137205ca01acb626a5b9f86a3db75cf91b63a08", "source_git_blob": null, "sha256": "53199cf966d02002b8bfdfc03fd839903d98c852585c93529d45129d34865128" },
     { "path": "src/lib.rs", "source_sha256": "761c153c3b5c449569ff85c571344b9252ea64f7f0b0424fb4819041b03d13c6", "source_git_blob": null, "sha256": "761c153c3b5c449569ff85c571344b9252ea64f7f0b0424fb4819041b03d13c6" },
     { "path": "src/num.rs", "source_sha256": "39ff85da50c500ce91cf6dea81aedc0dcca1db5e7d0506696dde2da118e93a2a", "source_git_blob": null, "sha256": "39ff85da50c500ce91cf6dea81aedc0dcca1db5e7d0506696dde2da118e93a2a" },
     { "path": "src/order.rs", "source_sha256": "7e5b04eae8af134abb032e995f1d3c2ac473822923dfee8d463d9ade6ffeb596", "source_git_blob": null, "sha256": "7e5b04eae8af134abb032e995f1d3c2ac473822923dfee8d463d9ade6ffeb596" },
