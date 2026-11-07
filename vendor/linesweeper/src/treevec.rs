@@ -541,7 +541,7 @@ impl<T, const B: usize> TreeVec<T, B> {
             Node::Leaf { data } => IterInner::Simple(data.iter()),
             Node::Internal { .. } => {
                 let mut ret = TreeIter {
-                    stack: Vec::new(),
+                    stack: Stack::new(),
                     leaf: [].iter(),
                     remaining: self.len(),
                 };
@@ -560,7 +560,7 @@ impl<T, const B: usize> TreeVec<T, B> {
             Node::Leaf { data } => IterMutInner::Simple(data.iter_mut()),
             root @ Node::Internal { .. } => {
                 let mut ret = TreeIterMut {
-                    stack: Vec::new(),
+                    stack: Stack::new(),
                     leaf: [].iter_mut(),
                     remaining: len,
                 };
@@ -612,7 +612,7 @@ impl<T, const B: usize> TreeVec<T, B> {
                     panic!("out of bounds");
                 }
                 let mut ret = TreeIter {
-                    stack: Vec::new(),
+                    stack: Stack::new(),
                     leaf: [].iter(),
                     remaining: end - start,
                 };
@@ -635,7 +635,7 @@ impl<T, const B: usize> TreeVec<T, B> {
                     panic!("out of bounds");
                 }
                 let mut ret = TreeIterMut {
-                    stack: Vec::new(),
+                    stack: Stack::new(),
                     leaf: [].iter_mut(),
                     remaining: end - start,
                 };
@@ -687,12 +687,53 @@ enum IterInner<'a, T, const B: usize> {
     Tree(TreeIter<'a, T, B>),
 }
 
+// Craft patch (iterator stack): the tree iterators keep their stack in place.
+/// The number of tree levels whose iterators a [`Stack`] holds without
+/// allocating. Every node but the root has at least `B/2` children, so a tree
+/// with `B = 128` needs at least `2 * 64^9` elements to be taller than this.
+const INLINE_HEIGHT: usize = 8;
+
+/// The stack of child iterators in [`TreeIter`] and [`TreeIterMut`]. The first
+/// [`INLINE_HEIGHT`] entries are stored in place and the rest go in `spill`,
+/// which allocates only for a tree taller than that.
+struct Stack<I> {
+    inline: ArrayVec<I, INLINE_HEIGHT>,
+    spill: Vec<I>,
+}
+
+impl<I> Stack<I> {
+    fn new() -> Self {
+        Stack {
+            inline: ArrayVec::new(),
+            spill: Vec::new(),
+        }
+    }
+
+    fn push(&mut self, item: I) {
+        if let Err(full) = self.inline.try_push(item) {
+            self.spill.push(full.element());
+        }
+    }
+
+    fn last_mut(&mut self) -> Option<&mut I> {
+        if self.spill.is_empty() {
+            self.inline.last_mut()
+        } else {
+            self.spill.last_mut()
+        }
+    }
+
+    fn pop(&mut self) -> Option<I> {
+        self.spill.pop().or_else(|| self.inline.pop())
+    }
+}
+
 struct TreeIter<'a, T, const B: usize> {
     // If you imagine how the recursive implementation of a tree iteration
     // works, the local state at each intermediate call consists of a
     // partially-finished iteration over the children of that internal node.
     // This stores the stack of that imaginary recursive implementation.
-    stack: Vec<std::slice::Iter<'a, Box<Node<T, B>>>>,
+    stack: Stack<std::slice::Iter<'a, Box<Node<T, B>>>>,
     leaf: std::slice::Iter<'a, T>,
     // The number of remaining elements; used for iteration over ranges. The
     // full-iteration implementation doesn't need it, but it isn't worth having
@@ -795,7 +836,7 @@ enum IterMutInner<'a, T, const B: usize> {
 // turned into mut things. Right now there's only the one duplication so
 // is isn't worth trying to build an abstraction.
 struct TreeIterMut<'a, T, const B: usize> {
-    stack: Vec<std::slice::IterMut<'a, Box<Node<T, B>>>>,
+    stack: Stack<std::slice::IterMut<'a, Box<Node<T, B>>>>,
     leaf: std::slice::IterMut<'a, T>,
     remaining: usize,
 }
@@ -951,5 +992,63 @@ mod tests {
             vec.iter().cloned().collect::<Vec<_>>(),
             vec![1, 1, 1, 1, 1, 1, 2]
         );
+    }
+
+    // Craft patch (iterator stack).
+    fn internal_levels<T, const B: usize>(vec: &TreeVec<T, B>) -> usize {
+        let mut node = &*vec.root;
+        let mut levels = 0;
+        while let Node::Internal { children, .. } = node {
+            node = &children[0];
+            levels += 1;
+        }
+        levels
+    }
+
+    // Craft patch (iterator stack).
+    #[test]
+    fn iterators_on_short_and_tall_trees() {
+        for len in [100, 3_000] {
+            let mut vec: TreeVec<usize, 4> = (0..len).collect();
+            let mut expected: Vec<usize> = (0..len).collect();
+            let levels = internal_levels(&vec);
+            if len == 100 {
+                assert!(levels > 2 && levels <= INLINE_HEIGHT, "{levels} levels");
+            } else {
+                assert!(levels > INLINE_HEIGHT, "{levels} levels");
+            }
+
+            assert!(vec.iter().eq(expected.iter()), "iter, len {len}");
+            let ranges = [
+                (0, len),
+                (1, len - 1),
+                (len / 2, len / 2 + 4),
+                (len - 1, len),
+                (len, len),
+            ];
+            for (start, end) in ranges {
+                assert!(
+                    vec.range(start..end).eq(expected[start..end].iter()),
+                    "range {start}..{end}, len {len}"
+                );
+            }
+
+            for x in vec.iter_mut() {
+                *x += 1;
+            }
+            for x in &mut expected {
+                *x += 1;
+            }
+            for (start, end) in ranges {
+                for x in vec.range_mut(start..end) {
+                    *x *= 3;
+                }
+                for x in &mut expected[start..end] {
+                    *x *= 3;
+                }
+            }
+            assert!(vec.iter().eq(expected.iter()), "after edits, len {len}");
+            vec.check_invariants();
+        }
     }
 }
