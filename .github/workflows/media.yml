@@ -36,6 +36,7 @@ jobs:
       - run: cargo clippy -p craft-media --all-targets --locked --no-default-features --features bitstream -- -D warnings
       - run: cargo clippy -p craft-media --all-targets --locked -- -D warnings
       - run: cargo clippy -p craft-media --all-targets --locked --no-default-features --features matroska -- -D warnings
+      - run: cargo clippy -p craft-media --all-targets --locked --no-default-features --features ogg -- -D warnings
       - run: cargo clippy -p craft-media --all-targets --locked --all-features -- -D warnings
       - run: cargo clippy -p craft-media-testkit --all-targets --locked -- -D warnings
       - run: cargo clippy -p craft-media --all-targets --locked --no-default-features --features serde -- -D warnings

@@ -43,6 +43,24 @@ impl DockStyle {
     /// | `dock.restoreFrame` | `restore_frame_label` | Restore Frame Size |
     /// | `dock.autoCollapse` | `auto_collapse_label` | Auto-Collapse Iconic Panels |
     /// | `dock.floatHint` | `float_hint_label` | Hold {key} to undock |
+    ///
+    /// Every group's drag bar and icon grip, and every column bar, has the same default name.
+    /// Opt in to naming them, in the English label and each translation: a `{name}` in
+    /// `move_group_label` stands for the logical label of the panel the group shows, and in
+    /// `move_column_label` for those of the panels the column's groups show, joined by ", ", so a
+    /// screen reader tells the handles apart. The ", " is fixed. Untitled panels are left out;
+    /// with no title at all the placeholder goes with the brackets or quotes around it, a
+    /// separator right after it and one of the spaces beside it ("Move the tab group"). Groups
+    /// showing panels of the same title still share a name:
+    ///
+    /// ```
+    /// let style = craft_ui::docking::DockStyle::default().localized(|key| match key {
+    ///     "dock.moveGroup" => Some("Move the {name} tab group".to_owned()),
+    ///     "dock.moveColumn" => Some("Move the {name} panel column".to_owned()),
+    ///     _ => None,
+    /// });
+    /// # assert_eq!(style.move_group_label, "Move the {name} tab group");
+    /// ```
     #[must_use]
     pub fn localized(mut self, translate: impl Fn(&str) -> Option<String>) -> Self {
         for (key, label) in self.labels_mut() {
@@ -82,3 +100,90 @@ impl DockStyle {
         ]
     }
 }
+
+/// `label` with every `{name}` replaced by `name()`, which only runs when there is one. A blank
+/// name leaves each placeholder out with what only made sense around it (see [`unnamed`]); a
+/// label with no letter or digit left gives `fallback`, so no handle is announced with a hole in
+/// its name or without one.
+pub(super) fn named(label: &str, fallback: &str, name: impl FnOnce() -> String) -> String {
+    if !label.contains(NAME) {
+        return label.to_owned();
+    }
+    let name = name();
+    if !name.trim().is_empty() {
+        return label.replace(NAME, name.trim());
+    }
+    let bare = unnamed(label);
+    if bare.chars().any(char::is_alphanumeric) { bare } else { fallback.to_owned() }
+}
+
+/// `label` without its placeholders. Each goes with the brackets or quotes around it and the
+/// spaces inside them, and with a separator right after it. Where both sides were spaces, one
+/// stays; where neither was, none is added. Separators and spaces at the ends go too.
+fn unnamed(label: &str) -> String {
+    let mut text = label.to_owned();
+    // Every pass removes a placeholder, so the text gets shorter each time.
+    while let Some((before, after)) = text.split_once(NAME) {
+        let (mut head, mut tail) = (before, after);
+        let (open, close) = (head.trim_end(), tail.trim_start());
+        if let (Some(left), Some(right)) = (open.chars().next_back(), close.chars().next())
+            && PAIRS.contains(&(left, right))
+        {
+            head = open.strip_suffix(left).unwrap_or(open);
+            tail = close.strip_prefix(right).unwrap_or(close);
+        }
+        let next = tail.trim_start();
+        if let Some(separator) = next.chars().next().filter(|c| SEPARATORS.contains(c))
+            && !head.trim().is_empty()
+        {
+            tail = next.strip_prefix(separator).unwrap_or(next);
+        }
+        text = if head.ends_with(char::is_whitespace) && tail.starts_with(char::is_whitespace) {
+            format!("{} {}", head.trim_end(), tail.trim_start())
+        } else {
+            format!("{head}{tail}")
+        };
+    }
+    text.trim_matches(|c: char| c.is_whitespace() || SEPARATORS.contains(&c) || DASHES.contains(&c)).to_owned()
+}
+
+/// Brackets and quotes, opening and closing, that can wrap the placeholder.
+const PAIRS: &[(char, char)] = &[
+    ('(', ')'),
+    ('[', ']'),
+    ('<', '>'),
+    ('"', '"'),
+    ('\'', '\''),
+    ('«', '»'),
+    ('»', '«'),
+    ('‹', '›'),
+    ('›', '‹'),
+    ('“', '”'),
+    ('„', '“'),
+    ('”', '”'),
+    ('‘', '’'),
+    ('‚', '‘'),
+    ('’', '’'),
+    ('「', '」'),
+    ('『', '』'),
+    ('（', '）'),
+    ('［', '］'),
+    ('【', '】'),
+    ('〈', '〉'),
+    ('《', '》'),
+];
+
+/// Separators that go with a placeholder they follow, or that are left at an end.
+const SEPARATORS: &[char] = &[',', ';', ':', '、', '，', '；', '：'];
+
+/// Dashes left at an end.
+const DASHES: &[char] = &['-', '–', '—'];
+
+/// The default [`DockStyle::move_group_label`].
+pub(super) const MOVE_GROUP: &str = "Move tab group";
+/// The default [`DockStyle::move_column_label`].
+pub(super) const MOVE_COLUMN: &str = "Move panel column";
+
+/// What [`DockStyle::move_group_label`] and [`DockStyle::move_column_label`] put the moved
+/// group's or column's name in place of.
+const NAME: &str = "{name}";

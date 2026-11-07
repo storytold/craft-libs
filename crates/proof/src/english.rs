@@ -455,8 +455,9 @@ pub(crate) fn suggest(word: &str, max: usize, lang: ProofLang) -> Vec<String> {
 
 /// English suggestions from an affix dictionary: its own tables, a missing space only between two
 /// words of three letters or more and after every one-word candidate (`publically` → `publicly`
-/// before `public ally`), and no abbreviation or name offered for a lower-case word (`col`, `Wis`).
-const TUNING: Tuning = Tuning { split: Split::Custom(split_cost), strict_case: true, ..Tuning::DEFAULT };
+/// before `public ally`), no abbreviation or name offered for a lower-case word (`col`, `Wis`), and
+/// no elision (`churchs` → `churches` before `church's`).
+const TUNING: Tuning = Tuning { split: Split::Custom(split_cost), strict_case: true, elision: false, ..Tuning::DEFAULT };
 
 /// The cost of a missing space in English ([`TUNING`]).
 fn split_cost(a: &str, b: &str) -> Option<u32> {
@@ -563,6 +564,16 @@ mod tests {
         for w in ["reanalyze", "reanalyzed", "breathalyze", "breathalyzer", "paralyzingly", "catalyze", "Analyzer", "ANALYZE"] {
             assert_eq!(ise_spelling(w), None, "{w}");
         }
+    }
+
+    /// English never elides: a missing apostrophe ranks after the one-letter fixes (`neer` → `near`
+    /// before `ne'er`), which only [`TUNING`]'s `elision: false` gives.
+    #[test]
+    fn english_ranks_a_missing_apostrophe_after_one_letter_fixes() {
+        let d = AffixDict::from_hunspell("SET UTF-8\nTRY aenr\nWORDCHARS '\n", "3\nne'er\ner\nnear\n", &[]).unwrap();
+        let s = crate::affix_suggest::suggest_in(&d, "neer", 4, &TUNING);
+        assert_eq!(s.first().map(String::as_str), Some("near"), "{s:?}");
+        assert!(s.contains(&"ne'er".to_string()), "{s:?}");
     }
 
     #[test]

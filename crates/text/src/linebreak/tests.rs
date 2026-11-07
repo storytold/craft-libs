@@ -474,3 +474,21 @@ fn overfull_lines_keep_the_hyphen_limit() {
     assert!(lines.windows(2).all(|w| !(w[0].flagged && w[1].flagged)), "{lines:?}");
     assert_eq!(spans(&lines), [(0, 1), (2, 5)]);
 }
+
+#[test]
+fn next_start_is_the_first_box_or_forced_break_after_each_item() {
+    // Boxes, glue, penalties and forced breaks in a fixed mix; the table matches a scan.
+    let items: Vec<Item> = (0..2_000)
+        .map(|i| match i % 7 {
+            0 | 3 => Item::boxed(CHAR),
+            1 => Item::glue(SPACE, 1.0, 1.0),
+            6 if i % 3 == 0 => Item::forced(),
+            _ => Item::penalty(HYPHEN, 50.0, true),
+        })
+        .collect();
+    let s = Sums::new(&items);
+    for b in 0..=items.len() {
+        let scan = (b + 1..items.len()).find(|&i| items[i].kind == Kind::Box || items[i].is_forced()).unwrap_or(items.len());
+        assert_eq!(s.next_start(b), scan, "after {b}");
+    }
+}

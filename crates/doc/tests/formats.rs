@@ -4,10 +4,143 @@
 mod common;
 
 use common::*;
-use craft_doc::{Error, Kind, Limits, RenditionKind, info, outline, renditions, sniff};
+use craft_doc::{Error, Kind, Limits, RenditionKind, info, outline, rendition, renditions, sniff};
 
 fn limits() -> Limits {
     Limits::default()
+}
+
+/// A PDF-only importer need not decode a broken preview, for inline or blob payloads.
+#[test]
+fn selected_rendition_ignores_other_payloads() {
+    let inline = vectorcraft_json(
+        3,
+        &format!(r#""preview":{{"mime":"image/png","data":"!bad!"}}, "pdf":{{"mime":"application/pdf","data":"{}"}}"#, base64(PDF)),
+    );
+    let mut blob = vectorcraft_json(
+        4,
+        &format!(r#""preview":{{"mime":"image/png","blob":[{},100]}}, "pdf":{{"mime":"application/pdf","blob":[0,{}]}}"#, PDF.len() + 100, PDF.len()),
+    )
+    .into_bytes();
+    blob.extend(BLOB_MAGIC);
+    blob.extend(PDF);
+    for bytes in [inline.into_bytes(), blob] {
+        for bytes in [bytes.clone(), gzip(&bytes)] {
+            assert!(renditions(&bytes, &limits()).is_err());
+            let selected = rendition(&bytes, RenditionKind::Pdf, &limits()).unwrap().unwrap();
+            assert_eq!(selected.bytes, PDF);
+            assert!(rendition(&bytes, RenditionKind::Thumbnail, &limits()).is_err());
+        }
+    }
+}
+
+/// Stored DEFLATE blocks contain the intact prefix; the next block has reserved BTYPE=3.
+fn gzip_with_broken_tail(prefix: &[u8]) -> Vec<u8> {
+    let mut bytes = vec![0x1f, 0x8b, 8, 0, 0, 0, 0, 0, 0, 255];
+    for chunk in prefix.chunks(u16::MAX as usize) {
+        let length = chunk.len() as u16;
+        bytes.push(0); // Non-final stored block.
+        bytes.extend(length.to_le_bytes());
+        bytes.extend((!length).to_le_bytes());
+        bytes.extend(chunk);
+    }
+    bytes.push(7); // Final block with an invalid block type.
+    bytes.extend([0; 8]);
+    bytes
+}
+
+#[test]
+fn selected_inline_pdf_ignores_gzip_damage_after_its_json_marker() {
+    for padding in [0, 128 * 1024] {
+        let json = vectorcraft_json(
+            4,
+            &format!(r#""padding":"{}","preview":{},"pdf":{}"#, "x".repeat(padding), blob("image/png", 0, 100), inline("application/pdf", PDF)),
+        );
+        let mut prefix = json.as_bytes().to_vec();
+        prefix.extend(BLOB_MAGIC);
+        let bytes = gzip_with_broken_tail(&prefix);
+        let mut exact = limits();
+        exact.max_json = json.len() as u64;
+        exact.max_total = (prefix.len() + PDF.len()) as u64;
+        exact.max_entry = PDF.len() as u64;
+        assert_eq!(rendition(&bytes, RenditionKind::Pdf, &exact).unwrap().unwrap().bytes, PDF);
+        assert!(matches!(rendition(&bytes, RenditionKind::Thumbnail, &limits()), Err(Error::Malformed(_))));
+        assert!(matches!(renditions(&bytes, &limits()), Err(Error::Malformed(_))));
+        exact.max_total -= 1;
+        assert!(matches!(rendition(&bytes, RenditionKind::Pdf, &exact), Err(Error::LimitExceeded(_))));
+        exact.max_total += 1;
+        exact.max_json -= 1;
+        assert!(matches!(rendition(&bytes, RenditionKind::Pdf, &exact), Err(Error::LimitExceeded(_))));
+        // A broken stream without a complete marker still fails, even after a complete JSON.
+        assert!(matches!(rendition(&gzip_with_broken_tail(json.as_bytes()), RenditionKind::Pdf, &limits()), Err(Error::Malformed(_))));
+    }
+}
+
+#[test]
+fn vectorcraft_sniff_does_not_unwrap_nested_gzip() {
+    let json = vectorcraft_json(4, "");
+    assert_eq!(sniff(&gzip(&gzip(json.as_bytes()))), None);
+}
+
+#[test]
+fn selected_rendition_skips_missing_zip_payloads_and_enforces_its_own_limits() {
+    let manifest = pcraft_manifest(1, "[]", r#", "thumbnail":"thumb.png", "composite":"composite/preview.png""#);
+    let image = png(2, 2, 1);
+    let bytes = zip(&[store("manifest.json", manifest.as_bytes()), store("composite/preview.png", &image)]);
+    assert!(renditions(&bytes, &limits()).is_err());
+    assert_eq!(rendition(&bytes, RenditionKind::Composite, &limits()).unwrap().unwrap().bytes, image);
+    assert!(rendition(&bytes, RenditionKind::Thumbnail, &limits()).is_err());
+    assert_eq!(rendition(&bytes, RenditionKind::Pdf, &limits()).unwrap(), None);
+    let mut small = limits();
+    small.max_entry = PDF.len() as u64 - 1;
+    let vc = vectorcraft_json(3, &format!(r#""pdf":{{"mime":"application/pdf","data":"{}"}}"#, base64(PDF)));
+    assert!(matches!(rendition(vc.as_bytes(), RenditionKind::Pdf, &small), Err(Error::LimitExceeded(_))));
+}
+
+#[test]
+fn selected_rendition_preserves_format_and_version_checks() {
+    assert_eq!(rendition(b"not a document", RenditionKind::Pdf, &limits()), Err(Error::Unrecognized));
+    assert!(matches!(rendition(vectorcraft_json(99, "").as_bytes(), RenditionKind::Pdf, &limits()), Err(Error::TooNew { .. })));
+    for bytes in [vectorcraft_json(4, "").into_bytes(), ecproj(2).into_bytes()] {
+        assert_eq!(rendition(&bytes, RenditionKind::Pdf, &limits()).unwrap(), None);
+    }
+}
+
+/// Ignored output is not charged, but gzip still has to traverse bytes before the PDF.
+#[test]
+fn selected_rendition_counts_its_payload_and_the_compressed_prefix() {
+    let preview = vec![0; 128 * 1024];
+    for before in [false, true] {
+        let (preview_at, pdf_at) = if before { (0, preview.len()) } else { (PDF.len(), 0) };
+        let json = vectorcraft_json(
+            4,
+            &format!(
+                r#""preview":{{"mime":"image/png","blob":[{preview_at},{}]}},"pdf":{{"mime":"application/pdf","blob":[{pdf_at},{}]}}"#,
+                preview.len(),
+                PDF.len()
+            ),
+        );
+        let mut bytes = json.as_bytes().to_vec();
+        bytes.extend(BLOB_MAGIC);
+        if before {
+            bytes.extend(&preview);
+            bytes.extend(PDF);
+        } else {
+            bytes.extend(PDF);
+            bytes.extend(&preview);
+        }
+        let mut small = limits();
+        small.max_entry = PDF.len() as u64;
+        small.max_total = (json.len() + BLOB_MAGIC.len() + PDF.len()) as u64;
+        assert!(matches!(renditions(&bytes, &small), Err(Error::LimitExceeded(_))));
+        assert_eq!(rendition(&bytes, RenditionKind::Pdf, &small).unwrap().unwrap().bytes, PDF);
+        let compressed = rendition(&gzip(&bytes), RenditionKind::Pdf, &small);
+        if before {
+            assert!(matches!(compressed, Err(Error::LimitExceeded(_))));
+        } else {
+            assert_eq!(compressed.unwrap().unwrap().bytes, PDF);
+        }
+    }
 }
 
 #[test]
@@ -316,6 +449,22 @@ fn pcraft_identical_images_keep_their_composite_source() {
     }
     assert_eq!((variants[0].kind, &variants[0].mime, &variants[0].bytes), (variants[1].kind, &variants[1].mime, &variants[1].bytes));
     assert_ne!(variants[0], variants[1], "equality includes the selected source");
+}
+
+/// Selected extraction keeps full-composite precedence and provenance without reading other images.
+#[test]
+fn selected_full_composite_skips_missing_thumbnail_and_damaged_preview() {
+    let full = png(4, 3, 30);
+    let manifest =
+        pcraft_manifest(1, "[]", r#", "thumbnail":"thumb.png", "composite":"composite/preview.png", "full_composite":"composite/full.png""#);
+    let pc =
+        zip(&[store("manifest.json", manifest.as_bytes()), store("composite/full.png", &full), store("composite/preview.png", b"unused preview")]);
+    let selected = rendition(&pc, RenditionKind::Composite, &limits()).unwrap().unwrap();
+    assert_eq!(selected.bytes, full);
+    assert!(selected.is_full_composite);
+    assert!(rendition(&pc, RenditionKind::Thumbnail, &limits()).is_err());
+    let without_full = zip(&[store("manifest.json", manifest.as_bytes()), store("composite/preview.png", &full)]);
+    assert!(rendition(&without_full, RenditionKind::Composite, &limits()).is_err(), "a declared full image cannot silently fall back");
 }
 
 /// Missing and null full declarations ignore an undeclared full entry; thumbnails stay false.

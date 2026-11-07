@@ -5,9 +5,12 @@
 //! - [`sniff`] tells which app wrote a file, from its first bytes.
 //! - [`info`] reads the format version and the writer the file names.
 //! - [`renditions`] returns the previews and the PDF a file carries.
+//! - [`rendition`] reads just one kind of preview or PDF.
 //! - [`outline`] returns the canvas, the pages (artboards or compositions) and the layers.
+//! - [`pcraft_document`] reads a caller-defined PhotoCraft document head without its payloads.
 //! - `pcraft_layer_rgba`, with the feature `pcraft-pixels`, decodes a PhotoCraft layer's pixels
 //!   and its layer mask.
+//! - `pcraft_icc_profile`, with the same feature, returns a document's raw declared ICC payload.
 //!
 //! Bytes go in and plain data comes out: no file system access, no rendering and no app crate.
 //! Each format's envelope is read through its craft-libs crate: `craft-pcraft-format`,
@@ -34,7 +37,7 @@ mod vectorcraft;
 mod zip;
 
 #[cfg(feature = "pcraft-pixels")]
-pub use pcraft_pixels::{LayerMask, LayerPixels, Samples, pcraft_layer_rgba};
+pub use pcraft_pixels::{LayerMask, LayerPixels, Samples, pcraft_icc_profile, pcraft_layer_rgba};
 
 use std::cell::Cell;
 use std::collections::BTreeMap;
@@ -134,9 +137,10 @@ pub struct Limits {
     pub max_json: u64,
     /// Most bytes of one rendition or one ZIP entry. Default 256 MiB.
     pub max_entry: u64,
-    /// Most bytes one call decompresses from gzip, reads out of ZIP entries and returns as
+    /// Most bytes one call consumes from gzip, reads out of ZIP entries and returns as
     /// renditions, together; a rendition decompressed from gzip is counted once, and a second
-    /// rendition of the same bytes as another copy. Default 1 GiB.
+    /// rendition of the same bytes as another copy. Unused lookahead from initial gzip reads
+    /// (chunks of up to 64 KiB) is not counted. Default 1 GiB.
     pub max_total: u64,
     /// Deepest nesting of JSON arrays and objects, at most [`MAX_DEPTH`] (a larger value counts
     /// as [`MAX_DEPTH`]). Default [`MAX_DEPTH`]. [`renditions`] and [`outline`] also refuse a
@@ -146,6 +150,8 @@ pub struct Limits {
     /// Most list elements one call reads, together: EffectCraft project items and composition
     /// layers, VectorCraft artboards and layers, and PhotoCraft layers at every level. Each is
     /// counted before it is read. Default 1,048,576.
+    /// `pcraft_icc_profile` instead caps structural JSON items throughout the manifest,
+    /// including skipped fields, before reading its profile reference.
     pub max_items: u64,
 }
 
@@ -296,12 +302,24 @@ pub fn info(bytes: &[u8], limits: &Limits) -> Result<Info, Error> {
 /// Create PDF-Compatible File; a `.pcraft` bundle has the `thumbnail` and flattened composite its
 /// manifest names; an `.ecproj` project has none.
 pub fn renditions(bytes: &[u8], limits: &Limits) -> Result<Vec<Rendition>, Error> {
+    read_renditions(bytes, None, limits)
+}
+
+fn read_renditions(bytes: &[u8], wanted: Option<RenditionKind>, limits: &Limits) -> Result<Vec<Rendition>, Error> {
     let mut budget = Budget::new(limits);
     match sniff(bytes).ok_or(Error::Unrecognized)? {
-        Kind::PhotoCraft => pcraft::renditions(bytes, &mut budget),
-        Kind::VectorCraft => vectorcraft::renditions(bytes, &mut budget),
+        Kind::PhotoCraft => pcraft::renditions(bytes, wanted, &mut budget),
+        Kind::VectorCraft => vectorcraft::renditions(bytes, wanted, &mut budget),
         Kind::EffectCraft => ecproj::renditions(bytes, &mut budget),
     }
+}
+
+/// Read the requested rendition, or `None` when this format or document carries none of that
+/// kind. Container metadata is still validated. Other rendition payloads are not decoded,
+/// copied or charged against the entry budget; JSON and bytes traversed to reach the selected
+/// compressed member still count against the usual limits.
+pub fn rendition(bytes: &[u8], kind: RenditionKind, limits: &Limits) -> Result<Option<Rendition>, Error> {
+    Ok(read_renditions(bytes, Some(kind), limits)?.pop())
 }
 
 /// The document's canvas, pages and layers (see [`Outline`]).
@@ -314,11 +332,42 @@ pub fn outline(bytes: &[u8], limits: &Limits) -> Result<Outline, Error> {
     }
 }
 
+/// A PhotoCraft manifest's `document` read as the caller's `D`, without reading its previews,
+/// tiles or blobs. `D` may describe only the metadata the caller needs; other members are
+/// skipped by serde. This does not validate the document against PhotoCraft's complete model
+/// or check that its referenced payload entries exist.
+///
+/// The manifest and envelope checks are the same as [`outline`]. Before `D` is deserialized,
+/// [`Limits::max_items`] additionally bounds structural JSON items throughout the manifest,
+/// including members `D` skips, as [`craft_pcraft_format::check_manifest`] counts them; the
+/// count is opening array/object brackets and commas outside strings. The shared format's
+/// own item ceiling still applies. Byte and nesting limits apply as usual.
+/// `D`'s deserializer is caller code: its own allocations and behavior remain the caller's
+/// responsibility. No pixel feature is required.
+///
+/// A recognized document of another kind gives [`Error::Unsupported`].
+///
+/// ```
+/// #[derive(serde::Deserialize)]
+/// struct Head { mode: String }
+/// # fn read(bytes: &[u8]) -> Result<(), craft_doc::Error> {
+/// let head: Head = craft_doc::pcraft_document(bytes, &craft_doc::Limits::default())?;
+/// assert_eq!(head.mode, "Rgb");
+/// # Ok(())
+/// # }
+/// ```
+pub fn pcraft_document<D: DeserializeOwned>(bytes: &[u8], limits: &Limits) -> Result<D, Error> {
+    match sniff(bytes).ok_or(Error::Unrecognized)? {
+        Kind::PhotoCraft => pcraft::head(bytes, &mut Budget::new(limits)),
+        kind => Err(Error::Unsupported(format!("document metadata is read from .pcraft bundles, not .{}", kind.extension()))),
+    }
+}
+
 fn malformed(m: impl std::fmt::Display) -> Error {
     Error::Malformed(m.to_string())
 }
 
-/// The bytes one call may still decompress, read out of ZIP entries or return as renditions.
+/// The bytes one call may still consume from gzip or ZIP entries, or return as renditions.
 pub(crate) struct Budget<'a> {
     pub(crate) limits: &'a Limits,
     left: u64,
