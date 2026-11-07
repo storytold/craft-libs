@@ -19,6 +19,8 @@ pub struct Reader<'a> {
     // PdfCraft patch: bound direct-object nesting while skipping arrays and dictionaries
     // and while parsing dictionaries (`Dict::skip`, `Array::skip`, `parse_dict_with`).
     skip_depth: usize,
+    control: Option<crate::cancel::Control>,
+    next_check: Cell<usize>,
 }
 
 impl<'a> Reader<'a> {
@@ -31,7 +33,26 @@ impl<'a> Reader<'a> {
     /// Create a new reader at the given offset.
     #[inline]
     pub fn new_with(data: &'a [u8], offset: usize) -> Self {
-        Self { data, offset, past_end: Cell::new(false), skip_depth: 0 }
+        Self { data, offset, past_end: Cell::new(false), skip_depth: 0, control: None, next_check: Cell::new(0) }
+    }
+
+    pub(crate) fn set_control(&mut self, control: Option<crate::cancel::Control>) {
+        if self.control.is_none() {
+            self.control = control;
+        }
+    }
+
+    pub(crate) fn control(&self) -> Option<&crate::cancel::Control> {
+        self.control.as_ref()
+    }
+
+    fn checkpoint(&self) -> Option<()> {
+        let next = self.next_check.get();
+        if self.control.is_some() && (self.offset >= next || self.offset < next.saturating_sub(64 * 1024)) {
+            crate::cancel::check(self.control.as_ref())?;
+            self.next_check.set(self.offset.saturating_add(64 * 1024));
+        }
+        Some(())
     }
 
     /// PdfCraft patch: whether a read needed bytes past the end of the data since the flag was
@@ -62,6 +83,9 @@ impl<'a> Reader<'a> {
     /// Returns `true` if the reader has reached the end of the data.
     #[inline]
     pub fn at_end(&self) -> bool {
+        if self.checkpoint().is_none() {
+            return true;
+        }
         let at_end = self.offset >= self.data.len();
         if at_end {
             // PdfCraft patch: a parser that stops at the end decides from it (see `past_end`).
@@ -148,6 +172,7 @@ impl<'a> Reader<'a> {
     /// Peeks the specified number of bytes.
     #[inline]
     pub fn peek_bytes(&self, len: usize) -> Option<&'a [u8]> {
+        self.checkpoint()?;
         let bytes = self
             .offset
             .checked_add(len)
@@ -162,6 +187,7 @@ impl<'a> Reader<'a> {
     /// Peeks a single byte.
     #[inline]
     pub fn peek_byte(&self) -> Option<u8> {
+        self.checkpoint()?;
         let byte = self.data.get(self.offset).copied();
         if byte.is_none() {
             self.past_end.set(true);
@@ -280,6 +306,22 @@ mod tests {
     use crate::reader::ReaderExt;
     use alloc::format;
     use alloc::string::String;
+
+    #[test]
+    fn a_rewound_reader_keeps_checking_cancellation() {
+        let data = alloc::vec![0; 4 * 64 * 1024];
+        let (control, polls) = crate::cancel::stop_at(3);
+        let mut reader = Reader::new(&data);
+        reader.set_control(Some(control));
+        reader.jump(2 * 64 * 1024);
+        assert_eq!(reader.read_byte(), Some(0));
+        reader.jump(0);
+        assert_eq!(reader.read_byte(), Some(0));
+        reader.jump(64 * 1024);
+        assert!(reader.read_byte().is_none());
+        assert_eq!(polls.load(core::sync::atomic::Ordering::Relaxed), 3);
+        assert_eq!(reader.offset(), 64 * 1024);
+    }
 
     #[test]
     fn peek_bytes_rejects_overflowing_len() {

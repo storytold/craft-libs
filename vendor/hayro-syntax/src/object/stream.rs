@@ -214,6 +214,7 @@ impl<'a> Stream<'a> {
         image_params: &ImageDecodeParams,
         max: usize,
     ) -> Result<FilterResult<'a>, DecodeFailure> {
+        crate::cancel::check(self.dict.ctx().control()).ok_or(DecodeFailure::StreamDecode)?;
         self.decode_raw_within(self.raw_data(), image_params, max)
     }
 
@@ -233,7 +234,10 @@ impl<'a> Stream<'a> {
         image_params: &ImageDecodeParams,
         max: usize,
     ) -> Result<FilterResult<'a>, DecodeFailure> {
+        let control = self.dict.ctx().control();
+        crate::cancel::check(control).ok_or(DecodeFailure::StreamDecode)?;
         let filters_and_params = self.filters_and_params();
+        crate::cancel::check(control).ok_or(DecodeFailure::StreamDecode)?;
         let count = filters_and_params.filters.len();
 
         let mut current: Option<FilterResult<'a>> = None;
@@ -246,10 +250,11 @@ impl<'a> Stream<'a> {
         {
             // PdfCraft patch: see `filter::decode_limit`.
             let limit = crate::filter::decode_limit(image_params, i + 1 == count, self.dict.ctx().decode_limits()).min(max);
-            let new = filter.apply(current.as_ref().map(|c| c.data.as_ref()).unwrap_or(&data), params, image_params, limit)?;
+            let new = filter.apply(current.as_ref().map(|c| c.data.as_ref()).unwrap_or(&data), params, image_params, limit, self.dict.ctx().control())?;
             current = Some(new);
         }
 
+        crate::cancel::check(control).ok_or(DecodeFailure::StreamDecode)?;
         Ok(current.unwrap_or(FilterResult {
             data,
             image_data: None,
@@ -285,6 +290,7 @@ impl<'a> Readable<'a> for Stream<'a> {
         let offset = r.offset();
         parse_proper(r, &dict)
             .or_else(|| {
+                crate::cancel::check(ctx.control())?;
                 warn!("failed to parse stream, trying to parse it manually");
 
                 r.jump(offset);
@@ -388,8 +394,9 @@ fn parse_fallback<'a>(r: &mut Reader<'a>, dict: &Dict<'a>) -> Option<Stream<'a>>
     forward_stream_eol(r)?;
 
     let tail = r.tail()?;
-    let endstream_offset = find_needle(tail, b"endstream")?;
-    let data_end = trim_trailing_ascii_whitespace(&tail[..endstream_offset]);
+    let control = dict.ctx().control();
+    let endstream_offset = find_endstream(tail, control)?;
+    let data_end = trim_trailing_ascii_whitespace(&tail[..endstream_offset], control)?;
     let data = tail.get(..data_end)?;
 
     r.read_bytes(endstream_offset)?;
@@ -399,18 +406,36 @@ fn parse_fallback<'a>(r: &mut Reader<'a>, dict: &Dict<'a>) -> Option<Stream<'a>>
     Some(Stream::new(data, dict.clone()))
 }
 
-fn trim_trailing_ascii_whitespace(data: &[u8]) -> usize {
+fn find_endstream(data: &[u8], control: Option<&crate::cancel::Control>) -> Option<usize> {
+    const NEEDLE: &[u8] = b"endstream";
+    if control.is_none() {
+        return find_needle(data, NEEDLE);
+    }
+    for start in (0..data.len()).step_by(64 * 1024) {
+        crate::cancel::check(control)?;
+        // Look ahead past each chunk so a keyword crossing its boundary is preserved.
+        let end = start.saturating_add(64 * 1024 + NEEDLE.len() - 1).min(data.len());
+        if let Some(offset) = find_needle(data.get(start..end)?, NEEDLE) {
+            return Some(start + offset);
+        }
+    }
+    None
+}
+
+fn trim_trailing_ascii_whitespace(data: &[u8], control: Option<&crate::cancel::Control>) -> Option<usize> {
     let mut end = data.len();
+    let mut checks = crate::cancel::Checkpoints::new(control);
 
     while data
         .get(end.wrapping_sub(1))
         .copied()
         .is_some_and(is_white_space_character)
     {
+        checks.at(data.len() - end)?;
         end -= 1;
     }
 
-    end
+    Some(end)
 }
 
 impl<'a> TryFrom<Object<'a>> for Stream<'a> {
@@ -460,6 +485,47 @@ mod tests {
             .unwrap();
 
         assert_eq!(stream.data, b"abcdefghij");
+    }
+
+    #[test]
+    fn fallback_search_polls_before_reaching_a_distant_endstream() {
+        use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+        let armed = alloc::sync::Arc::new(AtomicBool::new(false));
+        let polls = alloc::sync::Arc::new(AtomicUsize::new(0));
+        let flag = armed.clone();
+        let counter = polls.clone();
+        let cancel = crate::Cancellation::new(move || flag.load(Ordering::Relaxed) && counter.fetch_add(1, Ordering::Relaxed) + 1 == 2);
+        let control = crate::cancel::Control::new(&cancel);
+        let ctx = ReaderContext::dummy_with_control(crate::DecodeLimits::default(), Some(control));
+        let dict = Reader::new(b"<< >>").read_with_context::<crate::object::Dict<'_>>(&ctx).unwrap();
+        let mut data = b"stream\n".to_vec();
+        data.extend(core::iter::repeat_n(b'x', 2 << 20));
+        data.extend_from_slice(b"\nendstream");
+        armed.store(true, Ordering::Relaxed);
+        assert!(super::parse_fallback(&mut Reader::new(&data), &dict).is_none());
+        assert_eq!(polls.load(Ordering::Relaxed), 2);
+    }
+
+    #[test]
+    fn fallback_preserves_endstream_across_search_boundaries() {
+        for length in (64 * 1024 - 9)..(64 * 1024 + 2) {
+            let (control, _) = crate::cancel::stop_at(usize::MAX);
+            let ctx = ReaderContext::dummy_with_control(crate::DecodeLimits::default(), Some(control));
+            let dict = Reader::new(b"<< >>").read_with_context::<crate::object::Dict<'_>>(&ctx).unwrap();
+            let mut data = b"stream\n".to_vec();
+            data.extend(core::iter::repeat_n(b'x', length));
+            data.extend_from_slice(b"endstream");
+            let stream = super::parse_fallback(&mut Reader::new(&data), &dict).unwrap();
+            assert_eq!(stream.data, alloc::vec![b'x'; length]);
+        }
+    }
+
+    #[test]
+    fn fallback_whitespace_trimming_is_cancellable_too() {
+        use core::sync::atomic::Ordering;
+        let (control, polls) = crate::cancel::stop_at(2);
+        assert!(super::trim_trailing_ascii_whitespace(&alloc::vec![b' '; 2 << 20], Some(&control)).is_none());
+        assert_eq!(polls.load(Ordering::Relaxed), 2);
     }
 
     /// A dictionary followed by some other object's stream is not itself a stream.
