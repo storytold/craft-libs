@@ -111,6 +111,10 @@ The implementation replays bounded source operands without allocating a glyph bu
 The existing Type 3 single-paint behavior and incomplete-content diagnostics remain.
 Raw array iteration now ends safely if validation and object parsing disagree;
 standalone sign tokens retain the reader's zero tolerance.
+`Dict::entries` and a dictionary's `Debug` output skip an entry whose value does not parse,
+as in [Hayro #1501](https://github.com/LaurenzV/hayro/pull/1501).
+The `Debug` output of an array ends with its closing bracket, and that of a dictionary
+with entries ends with its closing brace; an empty dictionary prints as `Dict`.
 Byte transfer-function samples use rounded 8-bit values; failed or non-finite evaluations
 leave the sample unchanged. Historical source hashes remain in each `SOURCE.json`,
 alongside local hashes and the compatibility reference.
@@ -298,6 +302,17 @@ patch 36 doesn't use this cache: it is built from the output intent's bytes by t
 and the digest that tells its profile from a document profile is still a hash of the
 decoded profile bytes. PdfCraft's two raster tests are adapted in `tests/upstream_raster.rs`
 (`icc_profile_cache`).
+
+From [PdfCraft #3327](https://github.com/storytold/pdfcraft/pull/3327) (merged as
+b84121e978e13168caeaf86a63824111f16cdb99), hayro-interpret (35), marked `PdfCraft patch (35)` in
+the source: `path_as_rect` takes a five-element path as a rectangle only when its four points are
+distinct, each step from one to the next runs along a single axis, and the last returns to the
+first (with ClosePath, or a fourth line back to the exact start). Before, the length test also
+admitted one MoveTo and four LineTo, and the corner test only asked that every corner of the
+bounding box was visited, so a five-point open polyline whose ends reached the corners was drawn
+as that box (VectorCraft #2920: an open zigzag in an `.ai` file opened as a closed rectangle), and
+a clip of that shape was dropped. Tests: `context::path_as_rect_tests` and the `rectangles`
+module of `crates/pdf/tests/interpretation.rs`, which fails without the change.
 
 Local fixes on top of these ports, marked `Craft patch` or in the comments of the ported
 code: an inflated patch-mesh triangle is rebuilt with `Triangle::new`, so its stored dot
