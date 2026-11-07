@@ -2228,12 +2228,12 @@ mod tests {
                         continue;
                     }
                     let expected = input.winding(p) != 0;
-                    let enclosing = contours
+                    let output_winding: i32 = contours
                         .contours()
-                        .filter(|c| c.path.winding(p) != 0)
-                        .count();
+                        .map(|c| c.path.winding(p))
+                        .sum();
                     assert_eq!(
-                        enclosing % 2 == 1,
+                        output_winding != 0,
                         expected,
                         "case {case} at {p:?}: {}",
                         input.to_svg()
