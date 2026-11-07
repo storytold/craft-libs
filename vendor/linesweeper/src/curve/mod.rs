@@ -30,6 +30,9 @@ impl CurveOrderEntry {
 
 /// Observability for the curve comparison algorithm, recording recursion
 /// depth by y-interval.
+///
+/// Entries are recorded only with the `metrics` feature. Without it,
+/// `entries` is always empty.
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct Metrics {
     /// Each interval records a single recursion depth measurement.
@@ -140,7 +143,12 @@ impl CurveOrder {
     }
 
     fn push(&mut self, end: f64, order: Order, status: MetricsStatus) {
-        self.metrics.entries.push(MetricsEntry::new(end, status));
+        // Craft patch (metrics opt-in): an entry is pushed for every interval
+        // of every comparison, and `flip` clones them, so they are recorded
+        // only with the `metrics` feature.
+        if cfg!(feature = "metrics") {
+            self.metrics.entries.push(MetricsEntry::new(end, status));
+        }
         if let Some(last) = self.cmps.last_mut() {
             match (last.order, order) {
                 (Order::Right, Order::Right)
@@ -2012,6 +2020,38 @@ mod test {
                 .entries
                 .len()
         );
+    }
+
+    // Craft patch (metrics opt-in) tests: the order is the same with and
+    // without the `metrics` feature, and entries are recorded only with it.
+    fn crossing_cubics_order() -> CurveOrder {
+        let c0 = CubicBez::new((0.0, 0.0), (0.0, 0.5), (1.0, 0.5), (1.0, 1.0));
+        let c1 = CubicBez::new((1.0, 0.0), (1.0, 0.5), (0.0, 0.5), (0.0, 1.0));
+        intersect_cubics(c0, c1, 1e-6, 1e-4)
+    }
+
+    #[test]
+    fn crossing_cubics_order_does_not_depend_on_metrics() {
+        let order = crossing_cubics_order();
+        let intervals: Vec<_> = order.iter().collect();
+        let expected = [
+            (0.0, 0.4999997495377526, Order::Left),
+            (0.4999997495377526, 0.5000002504622474, Order::Ish),
+            (0.5000002504622474, 1.0, Order::Right),
+        ];
+        assert_eq!(intervals.len(), expected.len());
+        for ((start, end, o), (exp_start, exp_end, exp_o)) in intervals.into_iter().zip(expected) {
+            assert!((start - exp_start).abs() < 1e-12);
+            assert!((end - exp_end).abs() < 1e-12);
+            assert_eq!(o, exp_o);
+        }
+    }
+
+    #[test]
+    fn crossing_cubics_metrics_follow_the_feature() {
+        let order = crossing_cubics_order();
+        assert_eq!(order.metrics.entries.is_empty(), !cfg!(feature = "metrics"));
+        assert_eq!(order.flip().metrics, order.metrics);
     }
 
     // TODO: improve this test
