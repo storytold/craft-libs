@@ -560,7 +560,7 @@ pub(crate) fn renditions(bytes: &[u8], wanted: Option<RenditionKind>, budget: &m
                 None => inline_bytes(&m, budget, what)?,
             };
             budget.check_cancelled()?;
-            Ok(Rendition { kind, mime: m.mime, bytes })
+            Ok(Rendition { kind, mime: m.mime, bytes, is_full_composite: false })
         })
         .collect()
 }
