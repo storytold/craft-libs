@@ -54,6 +54,10 @@ craft-html = { path = "crates/html" }
 craft-heif = { path = "crates/heif" }
 craft-fig = { path = "crates/fig" }
 craft-fonts-build = { path = "crates/fonts-build" }
+craft-gpu = { path = "crates/gpu" }
+craft-gpu-null = { path = "crates/gpu-null" }
+craft-gpu-providers = { path = "crates/gpu-providers" }
+craft-gpu-wgpu = { path = "crates/gpu-wgpu" }
 craft-i18n = { path = "crates/i18n" }
 craft-idml = { path = "crates/idml" }
 craft-jmap = { path = "crates/jmap" }
@@ -89,6 +93,7 @@ craft-pst = { path = "crates/pst" }
 craft-quit = { path = "crates/quit" }
 craft-rtf = { path = "crates/rtf" }
 craft-raw = { path = "crates/raw" }
+craft-runtime = { path = "crates/runtime" }
 craft-sheet = { path = "crates/sheet" }
 craft-sketch = { path = "crates/sketch" }
 craft-settings = { path = "crates/settings" }
@@ -98,6 +103,7 @@ craft-svg-paths = { path = "crates/svg-paths" }
 craft-stream-codecs = { path = "crates/stream-codecs" }
 craft-text = { path = "crates/text" }
 craft-tga = { path = "crates/tga" }
+craft-tier-store = { path = "crates/tier-store" }
 craft-timeline = { path = "crates/timeline" }
 craft-tiff = { path = "crates/tiff" }
 craft-metadata = { path = "crates/metadata" }
@@ -118,6 +124,7 @@ craft-ews = { path = "crates/ews" }
 craft-video = { path = "crates/video" }
 craft-web-api = { path = "crates/web-api" }
 craft-window = { path = "crates/window" }
+craft-worker-host = { path = "crates/worker-host" }
 craft-web-host = { path = "crates/web-host" }
 craft-webp = { path = "crates/webp" }
 egui = { version = "0.37", default-features = false }
@@ -130,6 +137,9 @@ proptest = "1"
 encoding_rs = "0.8"
 # All date/time conversion goes through chrono (no hand-rolled calendar code beyond the 400-year range extension; AGENTS.md).
 chrono = { version = "0.4.45", default-features = false, features = ["std"] }
+# Foundation crates for craft-gpu-wgpu. The versions match the ones the app repos already pin.
+pollster = "0.4"
+wgpu = { version = "30", default-features = false, features = ["std", "wgsl"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
