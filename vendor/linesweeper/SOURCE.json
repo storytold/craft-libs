@@ -7,7 +7,9 @@
   "upstream_repository": null,
   "upstream_revision": "824b0791a750f7b27b8edcbb6c6244d0e629875e",
   "upstream_directory": "",
-  "local_patches": [],
+  "local_patches": [
+    "The `visualize_op` example draws its two input paths with `fill-rule=\"evenodd\"`. Its `binary_op` call uses `FillRule::EvenOdd`, and the SVG default fill rule is nonzero."
+  ],
   "files": [
     { "path": ".cargo_vcs_info.json", "source_sha256": "47fba6a9dbdf445a5c97f783c9be62093035f9d5e5cdc2cf3216ad8259bcd8fc", "source_git_blob": null, "sha256": "47fba6a9dbdf445a5c97f783c9be62093035f9d5e5cdc2cf3216ad8259bcd8fc" },
     { "path": ".gitignore", "source_sha256": "88b59092499ae05234330eb7d0b01e953e969caf05261530e3765eef02536cf0", "source_git_blob": null, "sha256": "88b59092499ae05234330eb7d0b01e953e969caf05261530e3765eef02536cf0" },
@@ -25,7 +27,7 @@
     { "path": "examples/boolean_op.rs", "source_sha256": "3b38a1ccda7e736cce4b191a3a45ab4824c4c365190e3eb637b2fb39b5996c9f", "source_git_blob": null, "sha256": "3b38a1ccda7e736cce4b191a3a45ab4824c4c365190e3eb637b2fb39b5996c9f" },
     { "path": "examples/bus.rs", "source_sha256": "e206a08be73899f564188052c8ecc15526b54606e52ee2935a64ce6b5723da33", "source_git_blob": null, "sha256": "e206a08be73899f564188052c8ecc15526b54606e52ee2935a64ce6b5723da33" },
     { "path": "examples/curve_metrics.rs", "source_sha256": "0db6a5327fd2119a03a9a66624fea3e04b6bbb519655667ad30487aee6c787d2", "source_git_blob": null, "sha256": "0db6a5327fd2119a03a9a66624fea3e04b6bbb519655667ad30487aee6c787d2" },
-    { "path": "examples/visualize_op.rs", "source_sha256": "a5210ed389ceb1e9c43b952b992e29e65065d129d2b2f4be62fffc747376bf79", "source_git_blob": null, "sha256": "a5210ed389ceb1e9c43b952b992e29e65065d129d2b2f4be62fffc747376bf79" },
+    { "path": "examples/visualize_op.rs", "source_sha256": "a5210ed389ceb1e9c43b952b992e29e65065d129d2b2f4be62fffc747376bf79", "source_git_blob": null, "sha256": "e9343f0ab4c51796a054b0f99eb5f961365d26bcb2f62fe3c0ddaf614bbb7702" },
     { "path": "examples/winding-numbers.rs", "source_sha256": "4a756c908564703b165257001e73d2f7235476cd536580091f3a7a70d2eab242", "source_git_blob": null, "sha256": "4a756c908564703b165257001e73d2f7235476cd536580091f3a7a70d2eab242" },
     { "path": "proptest-regressions/sweep/sweep_line.txt", "source_sha256": "f5311edf1c0c4d1574bb7b24ed1d1c66106d9949214014d0a8479f685938dc98", "source_git_blob": null, "sha256": "f5311edf1c0c4d1574bb7b24ed1d1c66106d9949214014d0a8479f685938dc98" },
     { "path": "proptest-regressions/sweep/weak_ordering.txt", "source_sha256": "b5b183ab470399c15246457d8a1a35cafb49fee120d6777dfdd563bfdbadda52", "source_git_blob": null, "sha256": "b5b183ab470399c15246457d8a1a35cafb49fee120d6777dfdd563bfdbadda52" },

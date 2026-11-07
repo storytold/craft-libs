@@ -1,15 +1,25 @@
 # Local linesweeper 0.5.0 copy
 
-This is the crates.io linesweeper 0.5.0 package (MIT OR Apache-2.0) with some files left out and no
-file changed. `.cargo_vcs_info.json` names the commit it was packaged from,
+This is the crates.io linesweeper 0.5.0 package (MIT OR Apache-2.0) with some files left out and the
+changes listed under Local changes. `.cargo_vcs_info.json` names the commit it was packaged from,
 `824b0791a750f7b27b8edcbb6c6244d0e629875e`. That commit is not in the GitHub repository the manifest
 names, which is archived; its README says development moved off GitHub.
 
-Every file here except this one and `SOURCE.json` is byte for byte the file in the `.crate` archive.
-`SOURCE.json` records the hash of the `.crate` download (`source_archive_sha256`) and, for every file
-kept, the hash in the package (`source_sha256`) and the hash here (`sha256`). `upstream_repository` is
-null because no public repository this copy can name holds `upstream_revision`. `local_patches` is
-empty.
+Every file here except this one, `SOURCE.json` and the files under Local changes is byte for byte the
+file in the `.crate` archive. `SOURCE.json` records the hash of the `.crate` download
+(`source_archive_sha256`) and, for every file kept, the hash in the package (`source_sha256`) and the
+hash here (`sha256`). `upstream_repository` is null because no public repository this copy can name
+holds `upstream_revision`. `local_patches` describes each local change.
+
+## Local changes
+
+| Change | Code comment label | Touches | Tests |
+|---|---|---|---|
+| The `visualize_op` example draws its two input paths with `fill-rule="evenodd"`, the fill rule its operation uses | `Craft patch (example fill rule)` | `examples/visualize_op.rs` | `inputs_are_drawn_with_the_operation_fill_rule`, `svg_fill_rule_names` |
+
+Every change here updates this table and `SOURCE.json` in the same commit. To take a new linesweeper
+release, unpack the crates.io package, carry these changes over, regenerate `SOURCE.json`, and run the
+tests below.
 
 `omitted_files` lists the 43 files of the package left out here, with their hashes:
 
@@ -36,14 +46,15 @@ linesweeper = { git = "https://github.com/storytold/craft-libs", rev = "<rev>" }
 
 ## Tests
 
-`scripts/test-pdf-backends.sh` runs the package's unit, regression and doc tests. The `craft-prepress`
-tests with the `flatten` feature run against this copy. `pdf.yml`'s path filter does not list this
-directory, so a pull request that changes only files here does not start `pdf.yml`. Run the tests from
-this directory:
+`scripts/test-pdf-backends.sh` runs the package's unit, regression and doc tests and the tests in the
+`visualize_op` example. The `craft-prepress` tests with the `flatten` feature run against this copy.
+`pdf.yml`'s path filter does not list this directory, so a pull request that changes only files here
+does not start `pdf.yml`. Run the tests from this directory:
 
 ```sh
 cargo test --locked --lib --test regression
 cargo test --locked --doc
+cargo test --locked --example visualize_op
 ```
 
 `Cargo.toml` leaves out the `kompari`, `linesweeper_util` and `path-bool` dev-dependencies, which
