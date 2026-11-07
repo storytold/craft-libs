@@ -34,6 +34,12 @@ reads one, and `Contents::read(json)` reads `format`, `version`, `document`, `im
 `profiles` and skips `generator`, `preview` and `pdf` as the JSON is read, so their base64 is not
 buffered or kept. Both read the files VectorCraft opens:
 
+`Contents::read_with_pdf_preference(json)` returns `(contents, pdf_compatible)` in that same
+envelope pass. It reads an optional boolean `pdfCompatible`, falling back to a non-null `pdf`
+member when the preference is absent or null. It neither retains nor decodes the PDF payload.
+Repeated PDF members use their last value, and the array form returns false. A non-boolean
+preference is an error in this opt-in method; `Contents::read` keeps ignoring that field.
+
 - They return `ReadError::Envelope(Error::Format)` for another format name and
   `ReadError::Envelope(Error::TooNew)` for a version newer than `VERSION`, after the JSON reads;
   `ReadError::Json` otherwise.
