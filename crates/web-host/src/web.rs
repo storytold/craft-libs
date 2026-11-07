@@ -40,6 +40,9 @@ pub enum Message {
     Host { version: String, handoff: bool },
     /// Open a document as File › Open would. `name` is already cleaned ([`crate::file_name`]).
     Open { name: String, data: FileData },
+    /// Attach one PDF page to the current drawing without opening another document.
+    /// Bytes stay a view until the app checks their length. Page numbers start at one.
+    AttachPdf { name: String, bytes: js_sys::Uint8Array, page: u32, insertion: [f64; 3], width: f64, height: f64 },
     /// The save with this `id` is stored.
     Saved { id: String },
     /// The host gave a handed-off file to the app that edits it.
@@ -209,6 +212,31 @@ fn read(kind: Incoming, data: &JsValue) -> Option<Message> {
             let name = file_name(string(data, "name").as_deref(), "document");
             Message::Open { name, data: file_data(data)? }
         }
+        Incoming::AttachPdf => {
+            let FileData::Bytes(bytes) = file_data(data)? else { return None };
+            let page = get(data, "page").as_f64()?;
+            if !(page.is_finite() && page >= 1.0 && page <= f64::from(u32::MAX) && page.fract() == 0.0) {
+                return None;
+            }
+            let coords = get(data, "insertion").dyn_into::<js_sys::Array>().ok()?;
+            if coords.length() != 3 {
+                return None;
+            }
+            let mut insertion = [0.0; 3];
+            for (i, out) in insertion.iter_mut().enumerate() {
+                *out = coords.get(u32::try_from(i).ok()?).as_f64().filter(|v| v.is_finite())?;
+            }
+            let width = get(data, "width").as_f64().filter(|v| v.is_finite() && *v > 0.0)?;
+            let height = get(data, "height").as_f64().filter(|v| v.is_finite() && *v > 0.0)?;
+            Message::AttachPdf {
+                name: file_name(string(data, "name").as_deref(), "document.pdf"),
+                bytes,
+                page: page as u32,
+                insertion,
+                width,
+                height,
+            }
+        }
         Incoming::Saved => Message::Saved { id: string(data, "id")? },
         Incoming::HandoffDone => {
             Message::HandoffDone { name: string(data, "name").unwrap_or_default(), app: string(data, "app").unwrap_or_default() }
@@ -248,15 +276,89 @@ fn string(data: &JsValue, key: &str) -> Option<String> {
     get(data, key).as_string()
 }
 
-/// Node tests for the parsing of a host's objects: wrong shapes, missing fields, and sizes the
-/// host states against the data it sends. No browser; run with `wasm-bindgen-test-runner`.
+/// Browser tests for parsing and delivery of a host's objects, including origin/source checks.
 #[cfg(test)]
 mod tests {
     use super::*;
     use wasm_bindgen_test::wasm_bindgen_test;
 
+    wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
+
+    #[wasm_bindgen_test]
+    fn test_attach_pdf_rejects_foreign_origin() {
+        let window = web_sys::window().unwrap();
+        let origin = window.location().origin().unwrap();
+        let host = Host {
+            app: "pdf-attach-test",
+            transport: Transport::Parent { window: window.clone(), parent: window.clone(), origin: origin.clone() },
+            dirty: Cell::new(None),
+        };
+        let received = Rc::new(Cell::new(0));
+        let counter = received.clone();
+        host.listen(move |_| counter.set(counter.get() + 1));
+        let data = obj(&[
+            ("type", "pdf-attach-test:attach-pdf".into()),
+            ("name", "page.pdf".into()),
+            ("bytes", buffer(3).into()),
+            ("page", 1.into()),
+            ("insertion", js_sys::Array::of3(&10.into(), &20.into(), &3.into()).into()),
+            ("width", 100.into()),
+            ("height", 80.into()),
+        ]);
+        let send = |origin: &str, source: Option<&web_sys::Window>| {
+            let init = web_sys::MessageEventInit::new();
+            init.set_origin(origin);
+            init.set_source(source.map(|s| s.as_ref()));
+            init.set_data(&data);
+            let event = web_sys::MessageEvent::new_with_event_init_dict("message", &init).unwrap();
+            window.dispatch_event(&event).unwrap();
+        };
+        send("https://foreign.example", Some(&window));
+        assert_eq!(received.get(), 0, "a foreign origin changes nothing");
+        send(&origin, None);
+        assert_eq!(received.get(), 0, "the expected origin with another source changes nothing");
+        send(&origin, Some(&window));
+        assert_eq!(received.get(), 1, "the same payload from the authorized parent is delivered");
+    }
+
     fn obj(fields: &[(&str, JsValue)]) -> JsValue {
         object(&[], fields).expect("an object").into()
+    }
+
+    #[wasm_bindgen_test]
+    fn attach_pdf_checks_page_rectangle_and_bytes() {
+        let valid = || {
+            obj(&[
+                ("name", "../sheet.pdf".into()),
+                ("bytes", buffer(3).into()),
+                ("page", 2.into()),
+                ("insertion", js_sys::Array::of3(&10.into(), &20.into(), &3.into()).into()),
+                ("width", 100.into()),
+                ("height", 80.into()),
+            ])
+        };
+        let Some(Message::AttachPdf { name, bytes, page, insertion, width, height }) = read(Incoming::AttachPdf, &valid()) else {
+            panic!("valid attachment must be delivered");
+        };
+        assert_eq!(name, "sheet.pdf");
+        assert_eq!(bytes.length(), 3);
+        assert_eq!((page, insertion, width, height), (2, [10.0, 20.0, 3.0], 100.0, 80.0));
+        for (key, value) in [
+            ("bytes", JsValue::NULL),
+            ("page", 0.into()),
+            ("page", 1.5.into()),
+            ("page", f64::INFINITY.into()),
+            ("page", 4294967296.0.into()),
+            ("insertion", js_sys::Array::of2(&0.into(), &0.into()).into()),
+            ("insertion", js_sys::Array::of3(&0.into(), &f64::NAN.into(), &0.into()).into()),
+            ("width", 0.into()),
+            ("height", (-1).into()),
+            ("width", "100".into()),
+        ] {
+            let data = valid();
+            js_sys::Reflect::set(&data, &key.into(), &value).unwrap();
+            assert!(read(Incoming::AttachPdf, &data).is_none(), "invalid {key} must be dropped");
+        }
     }
 
     fn buffer(len: u32) -> js_sys::ArrayBuffer {
