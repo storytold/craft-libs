@@ -7,7 +7,9 @@
   "upstream_repository": null,
   "upstream_revision": "824b0791a750f7b27b8edcbb6c6244d0e629875e",
   "upstream_directory": "",
-  "local_patches": [],
+  "local_patches": [
+    "In `docs/sweep.typ`, the floating-point ratio lemma assumes `y_0 < y_1` and a finite `fl(y_1 - y_0)`, and its proof bounds `fl(y_1 - y_0)` where it wrote `fl(y + y_0)`. The ordering alone does not rule out overflow: with `y_0 = -1e308`, `y = 0` and `y_1 = 1e308` the computed ratio is 0. The x-coordinate accuracy lemma that uses it takes `M` as a floating-point number, and its proof shows both assumptions hold for a segment that is not horizontal."
+  ],
   "files": [
     { "path": ".cargo_vcs_info.json", "source_sha256": "47fba6a9dbdf445a5c97f783c9be62093035f9d5e5cdc2cf3216ad8259bcd8fc", "source_git_blob": null, "sha256": "47fba6a9dbdf445a5c97f783c9be62093035f9d5e5cdc2cf3216ad8259bcd8fc" },
     { "path": ".gitignore", "source_sha256": "88b59092499ae05234330eb7d0b01e953e969caf05261530e3765eef02536cf0", "source_git_blob": null, "sha256": "88b59092499ae05234330eb7d0b01e953e969caf05261530e3765eef02536cf0" },
@@ -21,7 +23,7 @@
     { "path": "benches/linebender_logo.rs", "source_sha256": "d10867f43439d37f0e1da5d30eaed9ab3bfbe655ed47212f65dc20ab4db65cb3", "source_git_blob": null, "sha256": "d10867f43439d37f0e1da5d30eaed9ab3bfbe655ed47212f65dc20ab4db65cb3" },
     { "path": "benches/painted_dreams.rs", "source_sha256": "073008db93840d380710e13ed3ae38e08cb823f10c12e5f838dac1ccf37eaecf", "source_git_blob": null, "sha256": "073008db93840d380710e13ed3ae38e08cb823f10c12e5f838dac1ccf37eaecf" },
     { "path": "benches/synthetic.rs", "source_sha256": "7ce59bef2e1c4f28b00cb89feb15bc71ca4b098a8d27e7b02ea699aca9bcc810", "source_git_blob": null, "sha256": "7ce59bef2e1c4f28b00cb89feb15bc71ca4b098a8d27e7b02ea699aca9bcc810" },
-    { "path": "docs/sweep.typ", "source_sha256": "4766082c8672a7bb4356b5581043489c13b4e3fb8931ba3a5f0a473fab0172f3", "source_git_blob": null, "sha256": "4766082c8672a7bb4356b5581043489c13b4e3fb8931ba3a5f0a473fab0172f3" },
+    { "path": "docs/sweep.typ", "source_sha256": "4766082c8672a7bb4356b5581043489c13b4e3fb8931ba3a5f0a473fab0172f3", "source_git_blob": null, "sha256": "dac8d5c5d0d97d796824578a29ebbf5b23f79fba76a91f3dd8e6110db4e55821" },
     { "path": "examples/boolean_op.rs", "source_sha256": "3b38a1ccda7e736cce4b191a3a45ab4824c4c365190e3eb637b2fb39b5996c9f", "source_git_blob": null, "sha256": "3b38a1ccda7e736cce4b191a3a45ab4824c4c365190e3eb637b2fb39b5996c9f" },
     { "path": "examples/bus.rs", "source_sha256": "e206a08be73899f564188052c8ecc15526b54606e52ee2935a64ce6b5723da33", "source_git_blob": null, "sha256": "e206a08be73899f564188052c8ecc15526b54606e52ee2935a64ce6b5723da33" },
     { "path": "examples/curve_metrics.rs", "source_sha256": "0db6a5327fd2119a03a9a66624fea3e04b6bbb519655667ad30487aee6c787d2", "source_git_blob": null, "sha256": "0db6a5327fd2119a03a9a66624fea3e04b6bbb519655667ad30487aee6c787d2" },

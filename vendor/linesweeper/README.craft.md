@@ -1,15 +1,23 @@
 # Local linesweeper 0.5.0 copy
 
-This is the crates.io linesweeper 0.5.0 package (MIT OR Apache-2.0) with some files left out and no
-file changed. `.cargo_vcs_info.json` names the commit it was packaged from,
+This is the crates.io linesweeper 0.5.0 package (MIT OR Apache-2.0) with some files left out and the
+changes listed under Local changes. `.cargo_vcs_info.json` names the commit it was packaged from,
 `824b0791a750f7b27b8edcbb6c6244d0e629875e`. That commit is not in the GitHub repository the manifest
 names, which is archived; its README says development moved off GitHub.
 
-Every file here except this one and `SOURCE.json` is byte for byte the file in the `.crate` archive.
-`SOURCE.json` records the hash of the `.crate` download (`source_archive_sha256`) and, for every file
-kept, the hash in the package (`source_sha256`) and the hash here (`sha256`). `upstream_repository` is
-null because no public repository this copy can name holds `upstream_revision`. `local_patches` is
-empty.
+Every file here except this one, `SOURCE.json` and the files under Local changes is byte for byte the
+file in the `.crate` archive. `SOURCE.json` records the hash of the `.crate` download
+(`source_archive_sha256`) and, for every file kept, the hash in the package (`source_sha256`) and the
+hash here (`sha256`). `upstream_repository` is null because no public repository this copy can name
+holds `upstream_revision`. `local_patches` describes each local change.
+
+## Local changes
+
+| Change | Code comment label | Touches | Tests |
+|---|---|---|---|
+| The floating-point ratio lemma assumes `fl(y_1 - y_0)` is finite and `y_0 < y_1`, and its proof bounds `fl(y_1 - y_0)` instead of `fl(y + y_0)`; the x-coordinate accuracy lemma takes `M` as a floating-point number and shows both assumptions hold | `Craft patch (ratio lemma)` | `docs/sweep.typ` | None (documentation only) |
+
+Every change here updates this table and `SOURCE.json` in the same commit.
 
 `omitted_files` lists the 43 files of the package left out here, with their hashes:
 
