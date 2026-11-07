@@ -13,6 +13,9 @@ mod jpx;
 mod lzw_flate;
 mod run_length;
 
+#[cfg(test)]
+mod cancellation_tests;
+
 // PdfCraft patch: the incremental Flate decoder that `page::ContentReader` drives.
 pub(crate) use lzw_flate::flate::{FlateState, is_plain as flate_is_plain};
 
@@ -90,21 +93,23 @@ impl Filter {
         params: &Dict<'_>,
         #[cfg_attr(not(feature = "images"), allow(unused))] image_params: &ImageDecodeParams,
         limit: usize,
+        control: Option<&crate::cancel::Control>,
     ) -> Result<FilterResult<'static>, DecodeFailure> {
+        crate::cancel::check(control).ok_or(DecodeFailure::StreamDecode)?;
         let res = match self {
-            Self::AsciiHexDecode => ascii_hex::decode(data)
+            Self::AsciiHexDecode => (if control.is_some() { ascii_hex::decode_into_controlled(data, control) } else { ascii_hex::decode(data) })
                 .map(FilterResult::from_data)
                 .ok_or(DecodeFailure::StreamDecode),
-            Self::Ascii85Decode => ascii_85::decode(data, limit)
+            Self::Ascii85Decode => (if control.is_some() { ascii_85::decode_controlled(data, limit, control) } else { ascii_85::decode(data, limit) })
                 .map(FilterResult::from_data)
                 .ok_or(DecodeFailure::StreamDecode),
-            Self::RunLengthDecode => run_length::decode(data, limit)
+            Self::RunLengthDecode => (if control.is_some() { run_length::decode_controlled(data, limit, control) } else { run_length::decode(data, limit) })
                 .map(FilterResult::from_data)
                 .ok_or(DecodeFailure::StreamDecode),
-            Self::LzwDecode => lzw_flate::lzw::decode(data, params, limit)
+            Self::LzwDecode => (if control.is_some() { lzw_flate::lzw::decode_controlled(data, params, limit, control) } else { lzw_flate::lzw::decode(data, params, limit) })
                 .map(FilterResult::from_data)
                 .ok_or(DecodeFailure::StreamDecode),
-            Self::FlateDecode => lzw_flate::flate::decode(data, params, limit)
+            Self::FlateDecode => (if control.is_some() { lzw_flate::flate::decode_controlled(data, params, limit, control) } else { lzw_flate::flate::decode(data, params, limit) })
                 .map(FilterResult::from_data)
                 .ok_or(DecodeFailure::StreamDecode),
             #[cfg(feature = "images")]
@@ -123,6 +128,7 @@ impl Filter {
             _ => Err(DecodeFailure::StreamDecode),
         };
 
+        crate::cancel::check(control).ok_or(DecodeFailure::StreamDecode)?;
         if res.is_err() {
             warn!("failed to apply filter {}", self.debug_name());
         }
