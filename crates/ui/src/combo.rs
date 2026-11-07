@@ -64,6 +64,8 @@ impl<'a> ComboBox<'a> {
     #[expect(clippy::disallowed_types, reason = "egui's class names, so themes style both alike")]
     pub const CLASS_OPEN: ClassName = egui::ComboBox::CLASS_OPEN;
 
+    /// The shared state of every constructor below: an id salt and, by default, a labelled button
+    /// with press-and-browse on.
     fn with(id_salt: IdSalt, label: Option<Atoms<'a>>) -> Self {
         let mut combo = Self {
             id_salt,
@@ -284,15 +286,18 @@ impl<'a> ComboBox<'a> {
 }
 
 impl HasClasses for ComboBox<'_> {
+    /// The classes a theme styles this combo box with.
     fn classes(&self) -> &Classes {
         &self.classes
     }
 
+    /// The classes a theme styles this combo box with, for a caller that adds one.
     fn classes_mut(&mut self) -> &mut Classes {
         &mut self.classes
     }
 }
 
+/// The popup id of a button: its own id under `"popup"`, so the menu and its button are one pair.
 fn popup_id(button_id: Id) -> Id {
     button_id.with("popup")
 }
@@ -356,7 +361,8 @@ fn press_command(ui: &Ui, button_id: Id, button: &Response, is_open: bool) -> Op
     }
 }
 
-// The button is egui 0.37's `combo_box_dyn`, so a combo box looks the same as egui's.
+/// Build the button and its menu: the button is egui 0.37's `combo_box_dyn`, so a combo box looks
+/// the same as egui's; `open` draws the popup's contents and returns the chosen value.
 fn show<R>(ui: &mut Ui, button_id: Id, mut combo: ComboBox<'_>, open: impl FnOnce(Menu<'_>) -> Option<R>) -> InnerResponse<Option<R>> {
     let is_popup_open = Popup::is_id_open(ui.ctx(), popup_id(button_id));
     let wrap_mode = combo.wrap_mode.unwrap_or_else(|| ui.wrap_mode());
