@@ -16,6 +16,7 @@ holds `upstream_revision`. `local_patches` describes each local patch.
 | File | Change |
 |---|---|
 | `src/sweep/sweep_line.rs` | `Sweeper::next_line` handles a pair of segments at most once per sweep line for each pair of positions the two segments hold. A pair queued again at the same `y` and positions is queued at the pair's next order change instead, when that comes before both segments end. Nearly coincident segments whose comparisons are not transitive used to queue the same pairs at one `y` forever while memory grew. The `repeated_intersections_at_one_y` test sweeps five circles 7e-7 apart; test builds panic after `n^4` intersection events on one sweep line. |
+| `src/sweep/sweep_line.rs` | `Sweeper::handle_intersection` queues a delayed intersection only when its `y` is before the ends of both segments, as the intersection scans do. A delayed intersection at a segment's end used to panic in `CurveOrder::entry_at`. The `delayed_intersection_at_a_segment_end` test sweeps three wide, flat contours whose sweep delayed an intersection to a segment's end. |
 
 `omitted_files` lists the 43 files of the package left out here, with their hashes:
 

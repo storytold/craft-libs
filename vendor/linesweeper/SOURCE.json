@@ -8,7 +8,8 @@
   "upstream_revision": "824b0791a750f7b27b8edcbb6c6244d0e629875e",
   "upstream_directory": "",
   "local_patches": [
-    "In `src/sweep/sweep_line.rs`, `Sweeper::next_line` handles a pair of segments at most once per sweep line for each pair of positions they hold and queues a repeat at the pair's next order change, so nearly coincident segments whose comparisons are not transitive no longer loop forever at one y."
+    "In `src/sweep/sweep_line.rs`, `Sweeper::next_line` handles a pair of segments at most once per sweep line for each pair of positions they hold and queues a repeat at the pair's next order change, so nearly coincident segments whose comparisons are not transitive no longer loop forever at one y.",
+    "In `src/sweep/sweep_line.rs`, `Sweeper::handle_intersection` queues a delayed intersection only when its y is before the ends of both segments, so a delayed intersection at a segment's end no longer panics in `CurveOrder::entry_at`."
   ],
   "files": [
     { "path": ".cargo_vcs_info.json", "source_sha256": "47fba6a9dbdf445a5c97f783c9be62093035f9d5e5cdc2cf3216ad8259bcd8fc", "source_git_blob": null, "sha256": "47fba6a9dbdf445a5c97f783c9be62093035f9d5e5cdc2cf3216ad8259bcd8fc" },
@@ -64,7 +65,7 @@
     { "path": "src/sweep/snapshots/linesweeper__sweep__sweep_line__tests__square.snap", "source_sha256": "b35c3e6a38d5ecdd8acf315ba0b0bd6485cd8b40193fdd76bd446bdfdb6eda77", "source_git_blob": null, "sha256": "b35c3e6a38d5ecdd8acf315ba0b0bd6485cd8b40193fdd76bd446bdfdb6eda77" },
     { "path": "src/sweep/snapshots/linesweeper__sweep__sweep_line__tests__square_and_diamond.snap", "source_sha256": "3f01a76fb7ff4aef0fd55fd869602d4a2b69fff1bd65632f406b275b5d6af600", "source_git_blob": null, "sha256": "3f01a76fb7ff4aef0fd55fd869602d4a2b69fff1bd65632f406b275b5d6af600" },
     { "path": "src/sweep/snapshots/linesweeper__sweep__sweep_line__tests__two_squares.snap", "source_sha256": "79e3c95e563a66c0ce244125470a106a18dfe29f276b732defd305406c873c7e", "source_git_blob": null, "sha256": "79e3c95e563a66c0ce244125470a106a18dfe29f276b732defd305406c873c7e" },
-    { "path": "src/sweep/sweep_line.rs", "source_sha256": "822b261f682911ea0c0370eaf17d9201a1e639b315359dcb6a3b877a229816e3", "source_git_blob": null, "sha256": "e9c93858dc54dad40f2c4d4965243b9fc19a5ec64eb8bcd561aedb5c7596bf08" },
+    { "path": "src/sweep/sweep_line.rs", "source_sha256": "822b261f682911ea0c0370eaf17d9201a1e639b315359dcb6a3b877a229816e3", "source_git_blob": null, "sha256": "75b56bf0262b1989ef056a851522857f97806721d1e2f2f73e4e765ff8b17da7" },
     { "path": "src/topology.rs", "source_sha256": "9c9b48bc3853884425127e2d64e8ed957ba0d27e1696e2c457e95282e52d6a5b", "source_git_blob": null, "sha256": "9c9b48bc3853884425127e2d64e8ed957ba0d27e1696e2c457e95282e52d6a5b" },
     { "path": "src/treevec.rs", "source_sha256": "d88b9fbf02fa9f318560e1d483d465555f2b696ae12c00f8e4f5b71ea6779445", "source_git_blob": null, "sha256": "d88b9fbf02fa9f318560e1d483d465555f2b696ae12c00f8e4f5b71ea6779445" },
     { "path": "src/typed_vec.rs", "source_sha256": "3e9a2675b8a40d8fc4df0575bd9d0d16b5604d18e9b78638dd5a612b28fc4c30", "source_git_blob": null, "sha256": "3e9a2675b8a40d8fc4df0575bd9d0d16b5604d18e9b78638dd5a612b28fc4c30" },

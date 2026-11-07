@@ -807,11 +807,20 @@ impl<'segs> Sweeper<'segs> {
                     let (_, y2, j_right_order) =
                         self.compare_segments(seg_j_idx, right).entry_at(self.y);
                     if j_right_order == Order::Left {
-                        self.events.push(IntersectionEvent {
-                            y: y1.min(y2),
-                            left,
-                            right,
-                        });
+                        // Craft patch (delayed intersection at an end): the
+                        // delayed event is queued only when it comes before
+                        // both ends, as in the scans that queue intersections.
+                        // An event at an end makes `entry_at` panic.
+                        let delayed_y = y1.min(y2);
+                        if delayed_y < self.segments[left].end().y
+                            && delayed_y < self.segments[right].end().y
+                        {
+                            self.events.push(IntersectionEvent {
+                                y: delayed_y,
+                                left,
+                                right,
+                            });
+                        }
                         return;
                     }
 
@@ -2120,6 +2129,30 @@ mod tests {
             lines += 1;
         }
         assert!(lines > 0);
+    }
+
+    // Wide, flat shapes (x up to 1e12, y below 1e-3) whose sweep delays an
+    // intersection to exactly the end of one of its segments. Handling the
+    // delayed event there used to panic in `CurveOrder::entry_at`.
+    #[test]
+    fn delayed_intersection_at_a_segment_end() {
+        let path = BezPath::from_svg(
+            "M501064307397.10095,0.0009848607387959033 \
+             L106201373767.89085,0.0006710749289289315 \
+             C417687393573.9515,0.0004160951440753873 304110132978.1276,0.00038371209900965467 283049238030.7473,0.000948649831345387 Z \
+             M198139564203.8839,0.00026113917505891313 \
+             Q925286056821.7639,0.0001263989183887222 706548805870.0378,0.0005146463318510499 \
+             C481577318901.41956,0.000572151300098751 38743762463.54683,0.000935423896736907 333105974166.1391,0.00039093790825889355 \
+             C838434423640.872,0.0005209836434131965 252410595074.9046,0.00021445561842374318 649987299514.814,0.0005284926072103142 Z \
+             M425570790862.5174,0.0002275798137344196 \
+             C643548474934.2626,0.00016915804040910177 896953683318.0679,0.000915403101629657 231887429918.8749,0.0004275752018309249 \
+             Q960890561259.0065,0.0005825265493017958 735584660921.8835,0.000238439768009997 \
+             Q676310419912.8419,0.00003744704696150181 803912734785.0077,0.0008084425285905149 Z",
+        )
+        .unwrap();
+        let top =
+            crate::topology::Topology::<i32>::from_path(&path, 1.3655076163260652e-2).unwrap();
+        assert_eq!(top.contours(|w| *w != 0).contours().count(), 4);
     }
 
     #[test]
