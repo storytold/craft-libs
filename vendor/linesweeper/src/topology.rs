@@ -2203,15 +2203,16 @@ impl Contours {
         }
 
         let mut ret = Vec::with_capacity(top_level.len());
+        let mut stack = Vec::new();
         for top in top_level {
             let mut tree = Vec::new();
-            fn visit(idx: ContourIdx, children: &[Vec<ContourIdx>], acc: &mut Vec<ContourIdx>) {
-                acc.push(idx);
-                for &child in &children[idx.0] {
-                    visit(child, children, acc);
-                }
+            // Walk the tree in pre-order with an explicit stack, so that deeply
+            // nested contours do not overflow the call stack.
+            stack.push(top);
+            while let Some(idx) = stack.pop() {
+                tree.push(idx);
+                stack.extend(children[idx.0].iter().rev());
             }
-            visit(top, &children, &mut tree);
             ret.push(tree);
         }
 
@@ -2270,7 +2271,7 @@ mod tests {
         },
     };
 
-    use super::{OneOfTwo, Topology};
+    use super::{Contour, ContourIdx, Contours, OneOfTwo, Topology};
 
     fn p(x: f64, y: f64) -> Point {
         Point::new(x, y)
@@ -2362,6 +2363,59 @@ mod tests {
             orders.east_neighbor_after(out_idx[0], 2.0),
             Some(out_idx[2])
         );
+    }
+
+    fn contours_with_parents(parents: &[Option<usize>]) -> Contours {
+        Contours {
+            contours: parents
+                .iter()
+                .map(|parent| Contour {
+                    parent: parent.map(ContourIdx),
+                    ..Contour::default()
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn grouped_lists_each_tree_in_pre_order() {
+        //   0        5
+        //   ├─ 1     └─ 6
+        //   │  ├─ 3
+        //   │  └─ 4
+        //   └─ 2
+        //      └─ 7
+        let contours = contours_with_parents(&[
+            None,
+            Some(0),
+            Some(0),
+            Some(1),
+            Some(1),
+            None,
+            Some(5),
+            Some(2),
+        ]);
+        let grouped = contours
+            .grouped()
+            .into_iter()
+            .map(|tree| tree.into_iter().map(|idx| idx.0).collect::<Vec<_>>())
+            .collect::<Vec<_>>();
+        assert_eq!(grouped, vec![vec![0, 1, 3, 4, 2, 7], vec![5, 6]]);
+    }
+
+    #[test]
+    fn grouped_handles_deep_nesting_on_a_small_stack() {
+        const DEPTH: usize = 30_000;
+        let parents = (0..DEPTH).map(|i| i.checked_sub(1)).collect::<Vec<_>>();
+        let contours = contours_with_parents(&parents);
+        let grouped = std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn(move || contours.grouped())
+            .unwrap()
+            .join()
+            .unwrap();
+        assert_eq!(grouped.len(), 1);
+        assert!(grouped[0].iter().map(|idx| idx.0).eq(0..DEPTH));
     }
 
     #[test]
