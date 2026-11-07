@@ -8,10 +8,10 @@
 use std::ops::Range;
 use std::sync::Arc;
 
-use craft_ui::ComboBox;
 use craft_ui::buttons::{IconButton, IconButtonStyle};
 use craft_ui::layout::{ResizeHandle, SplitAxis, SplitSize, split_rect};
 use craft_ui::tabs::{self, Tab};
+use craft_ui::{ComboBox, browse_hover, browse_pick};
 use egui::Galley;
 use egui::accesskit::Live;
 use egui::text::{LayoutJob, TextFormat, TextWrapping};
@@ -429,6 +429,8 @@ impl Draw<'_, '_> {
         if natural > width { r.on_hover_text(full) } else { r }
     }
 
+    /// The Filter: menu over the table: All, With Shortcut, Changed and Conflicts, browsed by a
+    /// held press like every other drop-down (#2686).
     fn filter_combo(&mut self, ui: &mut Ui) {
         let filter_label = self.ui("Filter:");
         let l = ui.label(self.vis(&filter_label));
@@ -437,7 +439,12 @@ impl Draw<'_, '_> {
         self.combo(ui, "filter", &l, &filter_label, &current, |ui| {
             for f in Filter::ALL {
                 let label = f.label(self.env.text);
-                if ui.selectable_label(self.state.filter == f, self.vis(&label)).clicked() {
+                // Press-and-browse: the row under a held press highlights and the release over it
+                // chooses, as a combo box's own entries do; a plain `.clicked()` never fires for a
+                // release away from the press, so the row picks itself (#2686).
+                let row = ui.selectable_label(self.state.filter == f, self.vis(&label));
+                let row = browse_hover(ui, row);
+                if row.clicked() || browse_pick(ui, &row) {
                     pick = Some(f);
                 }
             }
@@ -485,6 +492,8 @@ impl Draw<'_, '_> {
         self.keyboard_toggle(ui);
     }
 
+    /// The Show: menu of areas, or the tabs when they fit; its rows browse under a held press
+    /// like every other drop-down (#2686).
     fn area_combo(&mut self, ui: &mut Ui) {
         let show = self.ui("Show:");
         let l = ui.label(self.vis(&show));
@@ -493,9 +502,11 @@ impl Draw<'_, '_> {
         let areas = self.state.areas.clone();
         self.combo(ui, "area", &l, &show, &current, |ui| {
             for a in &areas {
+                // Press-and-browse, as the filter rows above: the release over a row chooses it.
                 let r = ui.selectable_label(a.id == self.state.area, self.vis(&a.label));
+                let r = browse_hover(ui, r);
                 self.tag(|| format!("shortcuts.area.{}", Self::area_key(&a.id)), r.rect, &a.label);
-                if r.clicked() {
+                if r.clicked() || browse_pick(ui, &r) {
                     pick = Some(a.id.clone());
                 }
             }
@@ -1205,6 +1216,8 @@ impl Draw<'_, '_> {
         });
     }
 
+    /// The detail pane's Context: menu, which scopes the assignment being made; its rows browse
+    /// under a held press like every other drop-down (#2686).
     fn context(&mut self, ui: &mut Ui, command: &CommandRef) {
         let contexts = DialogState::contexts(self.env, command);
         let name = |s: &Option<Scope>| match s {
@@ -1219,7 +1232,10 @@ impl Draw<'_, '_> {
             let l = ui.label(self.vis(&title));
             let combo = ComboBox::from_id_salt(self.base.with("context")).selected_text(self.vis(&current)).show_ui(ui, |ui| {
                 for (s, n) in contexts.iter().zip(&names) {
-                    if ui.selectable_label(*s == self.state.context, self.vis(n)).clicked() {
+                    // Press-and-browse, as every other menu row in this dialog (#2686).
+                    let row = ui.selectable_label(*s == self.state.context, self.vis(n));
+                    let row = browse_hover(ui, row);
+                    if row.clicked() || browse_pick(ui, &row) {
                         pick = Some(s.clone());
                     }
                 }

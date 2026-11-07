@@ -24,4 +24,4 @@ pub mod testing;
 pub mod text;
 pub mod theme;
 
-pub use combo::ComboBox;
+pub use combo::{ComboBox, browse_hover, browse_pick};

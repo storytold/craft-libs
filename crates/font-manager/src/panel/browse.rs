@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use craft_ui::direction;
+use craft_ui::{browse_hover, browse_pick, direction};
 use egui::{CornerRadius, FontFamily, FontId, Id, Rect, Role, Sense, StrokeKind, Ui, UiBuilder, WidgetInfo, pos2, vec2};
 
 use crate::index::{Category, Index, script_name, source_label};
@@ -40,6 +40,8 @@ enum CardState {
 }
 
 impl FontsPanel {
+    /// The row over the sidebar: the Browse/Installed tabs and the search field that filters the
+    /// current list.
     pub(crate) fn top_bar(&mut self, ui: &mut Ui) {
         let s = self.skin.clone();
         ui.allocate_ui_with_layout(vec2(ui.available_width(), s.h()), direction::row(ui), |ui| {
@@ -67,6 +69,8 @@ impl FontsPanel {
         });
     }
 
+    /// The filter column at the list's left: the current tab's filters in a scroll area, plus the
+    /// downloads switch when the app has downloads.
     pub(crate) fn sidebar(&mut self, ui: &mut Ui) {
         let s = self.skin.clone();
         egui::ScrollArea::vertical().id_salt("craft-fonts.filters").auto_shrink([false, false]).show(ui, |ui| {
@@ -93,6 +97,9 @@ impl FontsPanel {
         });
     }
 
+    /// The category, language, script, source and show filters above the font list: cells that
+    /// toggle on click, the language and script drop-downs browsed by a held press, and the
+    /// search field that narrows them (#2686).
     fn catalogue_filters(&mut self, ui: &mut Ui, s: &Skin) {
         let Ok(c) = &self.catalogue else { return };
         let index = Arc::clone(&c.index);
@@ -131,10 +138,21 @@ impl FontsPanel {
         };
         let rows = |ui: &mut Ui, range: std::ops::Range<usize>, matches: Vec<usize>| {
             for n in range {
+                // Press-and-browse: the row under a held press highlights and the release over it
+                // chooses, as a combo box's own entries do; `selectable_value` only reacts to a
+                // click, so the browse takes the choice itself (#2686).
                 if n == 0 {
-                    ui.selectable_value(&mut query.language, None, tl!("Any language"));
+                    let row = ui.selectable_value(&mut query.language, None, tl!("Any language"));
+                    let row = browse_hover(ui, row);
+                    if row.clicked() || browse_pick(ui, &row) {
+                        query.language = None;
+                    }
                 } else if let Some(&i) = matches.get(n - 1) {
-                    ui.selectable_value(&mut query.language, Some(i), language_label(i));
+                    let row = ui.selectable_value(&mut query.language, Some(i), language_label(i));
+                    let row = browse_hover(ui, row);
+                    if row.clicked() || browse_pick(ui, &row) {
+                        query.language = Some(i);
+                    }
                 }
             }
         };
@@ -150,10 +168,19 @@ impl FontsPanel {
         let selected = self.query.script.as_deref().and_then(|id| script_name(&index, id)).unwrap_or(any).to_owned();
         let query = &mut self.query;
         widgets::select(ui, "craft-fonts.script", tl!("Script"), &selected, width, |ui| {
-            ui.selectable_value(&mut query.script, None, any);
+            // Press-and-browse, as the language rows above: the release over a row chooses it.
+            let row = ui.selectable_value(&mut query.script, None, any);
+            let row = browse_hover(ui, row);
+            if row.clicked() || browse_pick(ui, &row) {
+                query.script = None;
+            }
             for &i in c.search.scripts() {
                 if let Some(script) = index.scripts().get(i) {
-                    ui.selectable_value(&mut query.script, Some(script.id.clone()), &script.name);
+                    let row = ui.selectable_value(&mut query.script, Some(script.id.clone()), &script.name);
+                    let row = browse_hover(ui, row);
+                    if row.clicked() || browse_pick(ui, &row) {
+                        query.script = Some(script.id.clone());
+                    }
                 }
             }
         });
@@ -195,6 +222,7 @@ impl FontsPanel {
         }
     }
 
+    /// Clear every filter but the search text, so the list shows everything again.
     fn clear_filters(&mut self) {
         self.query.category = None;
         self.query.language = None;
@@ -204,6 +232,8 @@ impl FontsPanel {
         self.focus_row = None;
     }
 
+    /// The Installed tab's filters: which source the fonts come from, and how system fonts are
+    /// managed outside the app.
     fn installed_filters(&mut self, ui: &mut Ui, s: &Skin) {
         widgets::label(ui, s, tl!("Source"), s.p.faint);
         let store = self.installed.iter().filter(|f| f.source == Source::Store).count();
@@ -218,6 +248,8 @@ impl FontsPanel {
         ui.add(egui::Label::new(egui::RichText::new(note).size(12.0).color(s.p.muted)).wrap());
     }
 
+    /// The panel's body: the toolbar over the list and, under it, the notice and the list of the
+    /// current tab.
     pub(crate) fn main(&mut self, ui: &mut Ui) {
         let s = self.skin.clone();
         self.toolbar(ui, &s);
@@ -237,6 +269,8 @@ impl FontsPanel {
         }
     }
 
+    /// The row of controls over the list: sample preset, sample text, size, and the right-hand
+    /// actions; the preset menu browses under a held press like every other drop-down (#2686).
     fn toolbar(&mut self, ui: &mut Ui, s: &Skin) {
         ui.allocate_ui_with_layout(vec2(ui.available_width(), s.h()), direction::row(ui), |ui| {
             ui.spacing_mut().item_spacing.x = 10.0;
@@ -249,7 +283,11 @@ impl FontsPanel {
             let settings = &mut self.settings;
             widgets::select(ui, "craft-fonts.preset", tl!("Sample"), preset_name(preset), 128.0, |ui| {
                 for p in [Preset::Sentence, Preset::Alphabet, Preset::Numerals] {
-                    if ui.selectable_label(preset == p && settings.sample.is_empty(), preset_name(p)).clicked() {
+                    // Press-and-browse: the row under a held press highlights and the release over
+                    // it chooses, as a combo box's own entries do.
+                    let row = ui.selectable_label(preset == p && settings.sample.is_empty(), preset_name(p));
+                    let row = browse_hover(ui, row);
+                    if row.clicked() || browse_pick(ui, &row) {
                         settings.preset = p;
                         settings.sample.clear();
                     }
