@@ -675,10 +675,12 @@ impl Tidy {
 
     /// For each width group, the curves whose bounds can reach `x`: those starting at most the
     /// group's widest bounds to its left. One wide curve widens only its own group's window.
+    /// The window's left edge is rounded outward, so rounding in `x - width` never drops a curve.
     fn windows(&self, x: f64) -> impl Iterator<Item = &[usize]> {
         self.by_width.iter().map(move |(width, ids)| {
             let hi = ids.partition_point(|&i| self.curves[i].0.x0 <= x);
-            let lo = ids[..hi].partition_point(|&i| self.curves[i].0.x0 < x - width);
+            let from = (x - width.next_up()).next_down();
+            let lo = ids[..hi].partition_point(|&i| self.curves[i].0.x0 < from);
             &ids[lo..hi]
         })
     }
@@ -1090,5 +1092,20 @@ mod tests {
         let scanned: usize = tidy.windows(503.0).map(<[usize]>::len).sum();
         // The wide curve, and the small curves of the one grid column within reach of x = 503.
         assert!(scanned <= 1 + 25, "{scanned}");
+    }
+
+    #[test]
+    fn curves_around_keeps_a_curve_held_just_inside_its_right_edge() {
+        // Far from the origin, `x - width` rounds above the left edge of a curve whose bounds
+        // hold `x`.
+        let (l, r) = (-16_496_801_568.892_494, 7_886_835_387.982_123);
+        let paths = [cubic((l, 0.0), (l, 1000.0), (r, 1000.0), (r, 0.0))];
+        let tidy = Tidy::keeping(DEFAULT_SLIVER, &paths);
+        let bounds = tidy.curves[0].0;
+        let a = Point::new(bounds.x1.next_down(), 0.0);
+        let b = Point::new(a.x, 1.0);
+        assert!(bounds.contains(a) && bounds.contains(b));
+        assert!(a.x - tidy.by_width[0].0 > bounds.x0, "the rounding case is not reached");
+        assert_eq!(tidy.indices_around(a, b), vec![0]);
     }
 }
