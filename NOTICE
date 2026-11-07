@@ -215,6 +215,16 @@ Their licences and per-file hashes are retained in vendor/hayro-interpret/assets
 vendor/hayro-cmap/assets, licenses/pdf-backend and ATTRIBUTION.md. These are existing reader dependency assets;
 applications retain their own document-font selection and licensing policy.
 
+craft-pathops
+The path operations in crates/pathops are carved from VectorCraft, crates/pathops
+(vectorcraft-pathops), revision ff9deee46d1c59dc9ecef0b668c25e57cd80b55e.
+https://github.com/storytold/vectorcraft
+Copyright (c) 2026 ArtCraft Team and the VectorCraft contributors. Licensed MIT OR Apache-2.0.
+The anchor-based path model is replaced by kurbo::BezPath, the add-ons, trapping, slider scales and
+tool-specific planar-map editing are left out, and the input limits are new; each source file's
+header names the VectorCraft file it comes from. crates/pathops/tests/common adapts the geometry
+helpers and proptest strategies of VectorCraft's vectorcraft-testkit crate (same revision).
+
 linesweeper
 
 linesweeper 0.5.0 (https://crates.io/crates/linesweeper/0.5.0), MIT OR Apache-2.0, is stored in

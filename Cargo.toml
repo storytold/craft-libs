@@ -22,6 +22,9 @@ hayro-interpret = { version = "=0.7.0", default-features = false, features = ["e
 hayro-syntax = { version = "=0.7.2", default-features = false, features = ["std"] }
 bytemuck = "1"
 kurbo = "0.13"
+# Robust sweep line and boolean ops on Bezier paths (MIT OR Apache-2.0). The root [patch.crates-io] entry points at
+# vendor/linesweeper; an app that depends on craft-pathops by git adds the same entry or takes the registry copy.
+linesweeper = "0.5"
 thiserror = "2"
 craft-atomic = { path = "crates/atomic" }
 craft-cms = { path = "crates/cms" }
@@ -42,6 +45,7 @@ craft-audio = { path = "crates/audio" }
 craft-media = { path = "crates/media", default-features = false }
 craft-media-testkit = { path = "crates/media-testkit" }
 craft-menu = { path = "crates/menu" }
+craft-pathops = { path = "crates/pathops" }
 craft-pcraft-format = { path = "crates/pcraft-format" }
 craft-prepress = { path = "crates/prepress" }
 craft-print = { path = "crates/print" }
@@ -106,3 +110,9 @@ winit = { git = "https://github.com/storytold/winit.git", rev = "a517b3846ee8457
 # craft-audio's `decode` need the same override in their own workspace.
 [profile.dev.package.symphonia-bundle-flac]
 overflow-checks = false
+
+# linesweeper is the sweep behind craft-pathops (and craft-prepress' `flatten` feature) and does
+# most of the work in their tests. Built at opt-level 3 the slowest craft-pathops test goes from
+# about 39 s to 25 s, and its unit tests from 36 s to 24 s.
+[profile.dev.package.linesweeper]
+opt-level = 3
