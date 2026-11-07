@@ -32,8 +32,9 @@ impl CurveOrderEntry {
 /// depth by y-interval.
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct Metrics {
+    // Craft patch (inline metrics): a `SmallVec` replaces the package's `Vec`.
     /// Each interval records a single recursion depth measurement.
-    pub entries: Vec<MetricsEntry>,
+    pub entries: SmallVec<[MetricsEntry; 2]>,
 }
 
 /// A single observability entry.
