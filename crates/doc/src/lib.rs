@@ -5,6 +5,7 @@
 //! - [`sniff`] tells which app wrote a file, from its first bytes.
 //! - [`info`] reads the format version and the writer the file names.
 //! - [`renditions`] returns the previews and the PDF a file carries.
+//! - [`rendition`] reads just one kind of preview or PDF.
 //! - [`outline`] returns the canvas, the pages (artboards or compositions) and the layers.
 //! - `pcraft_layer_rgba`, with the feature `pcraft-pixels`, decodes a PhotoCraft layer's pixels
 //!   and its layer mask.
@@ -291,12 +292,24 @@ pub fn info(bytes: &[u8], limits: &Limits) -> Result<Info, Error> {
 /// Create PDF-Compatible File; a `.pcraft` bundle has the `thumbnail` and `composite` its
 /// manifest names; an `.ecproj` project has none.
 pub fn renditions(bytes: &[u8], limits: &Limits) -> Result<Vec<Rendition>, Error> {
+    read_renditions(bytes, None, limits)
+}
+
+fn read_renditions(bytes: &[u8], wanted: Option<RenditionKind>, limits: &Limits) -> Result<Vec<Rendition>, Error> {
     let mut budget = Budget::new(limits);
     match sniff(bytes).ok_or(Error::Unrecognized)? {
-        Kind::PhotoCraft => pcraft::renditions(bytes, &mut budget),
-        Kind::VectorCraft => vectorcraft::renditions(bytes, &mut budget),
+        Kind::PhotoCraft => pcraft::renditions(bytes, wanted, &mut budget),
+        Kind::VectorCraft => vectorcraft::renditions(bytes, wanted, &mut budget),
         Kind::EffectCraft => ecproj::renditions(bytes, &mut budget),
     }
+}
+
+/// Read the requested rendition, or `None` when this format or document carries none of that
+/// kind. Container metadata is still validated. Other rendition payloads are not decoded,
+/// copied or charged against the entry budget; JSON and bytes traversed to reach the selected
+/// compressed member still count against the usual limits.
+pub fn rendition(bytes: &[u8], kind: RenditionKind, limits: &Limits) -> Result<Option<Rendition>, Error> {
+    Ok(read_renditions(bytes, Some(kind), limits)?.pop())
 }
 
 /// The document's canvas, pages and layers (see [`Outline`]).
