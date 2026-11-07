@@ -324,7 +324,9 @@ impl CurveOrder {
     /// Asserts that we satisfy our internal invariants. For testing only.
     pub fn check_invariants(&self) {
         let mut cmps = self.cmps.iter();
-        let mut last = cmps.next().unwrap();
+        let Some(mut last) = cmps.next() else {
+            return;
+        };
         for cmp in cmps {
             assert!(last.end <= cmp.end);
             assert!(last.order != cmp.order);
@@ -1910,6 +1912,7 @@ mod test {
     fn disjoint_vertical_ranges() {
         let cmp = intersect_cubics(vertical(0.0, 0.0, 1.0), vertical(1.0, 2.0, 3.0), 1e-6, 2e-6);
         assert_eq!(cmp.iter().count(), 0);
+        cmp.check_invariants();
         assert_eq!(cmp.order_after(0.5), Order::Ish);
         assert_eq!(cmp.with_y_slop(0.5).iter().count(), 0);
     }
