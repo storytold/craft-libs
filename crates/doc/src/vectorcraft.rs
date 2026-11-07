@@ -511,7 +511,7 @@ pub(crate) fn renditions(bytes: &[u8], wanted: Option<RenditionKind>, budget: &m
                 Some(_) => blobs.next().flatten().ok_or_else(|| malformed(format!("the file ends before its {what}")))?,
                 None => m.bytes_at_most(&[], u64::MAX).ok_or_else(|| malformed(format!("the {what} is not valid base64")))?,
             };
-            Ok(Rendition { kind, mime: m.mime, bytes })
+            Ok(Rendition { kind, mime: m.mime, bytes, is_full_composite: false })
         })
         .collect()
 }
@@ -632,7 +632,7 @@ mod tests {
     fn duplicate_copy_cost_is_checked_before_the_stream_is_read() {
         let limits = crate::Limits { max_total: 12, ..Default::default() };
         let mut budget = Budget::new(&limits);
-        let tail = Tail::Stream { dec: Box::new(GzDecoder::new(&b"not a gzip stream"[..])), read: vec![] };
+        let tail = Tail::Stream { dec: Box::new(gzip_decoder(&b"not a gzip stream"[..], usize::MAX)), read: vec![] };
         let result = tail.ranges(&[[0, 8], [0, 8]], &mut budget);
         assert!(matches!(result, Err(Error::LimitExceeded(_))), "{result:?}");
         assert_eq!(budget.left(), 12);
@@ -642,7 +642,7 @@ mod tests {
     fn duplicate_copies_can_use_exactly_the_remaining_budget() {
         let limits = crate::Limits { max_total: 16, ..Default::default() };
         let mut budget = Budget::new(&limits);
-        let tail = Tail::Stream { dec: Box::new(GzDecoder::new(&b"not a gzip stream"[..])), read: b"12345678".to_vec() };
+        let tail = Tail::Stream { dec: Box::new(gzip_decoder(&b"not a gzip stream"[..], usize::MAX)), read: b"12345678".to_vec() };
         let result = tail.ranges(&[[0, 8], [0, 8]], &mut budget).unwrap();
         assert_eq!(result, [Some(b"12345678".to_vec()), Some(b"12345678".to_vec())]);
         assert_eq!(budget.left(), 0);
@@ -652,7 +652,7 @@ mod tests {
     fn rendition_copy_size_overflow_is_rejected_before_reading() {
         let limits = crate::Limits { max_total: u64::MAX, ..Default::default() };
         let mut budget = Budget::new(&limits);
-        let tail = Tail::Stream { dec: Box::new(GzDecoder::new(&b"not a gzip stream"[..])), read: vec![] };
+        let tail = Tail::Stream { dec: Box::new(gzip_decoder(&b"not a gzip stream"[..], usize::MAX)), read: vec![] };
         assert!(matches!(tail.ranges(&[[0, u64::MAX], [0, 1]], &mut budget), Err(Error::LimitExceeded(_))));
         assert_eq!(budget.left(), u64::MAX);
     }
