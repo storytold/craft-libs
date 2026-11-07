@@ -263,8 +263,11 @@ impl CurveOrder {
 
         let mut ret = SmallVec::<[CurveOrderEntry; 3]>::new();
 
-        // unwrap: cmps is always non-empty
-        let last_end = self.cmps.last().unwrap().end;
+        // Craft patch (input rules): curves with disjoint vertical ranges have
+        // an empty order.
+        let Some(last_end) = self.cmps.last().map(|e| e.end) else {
+            return self;
+        };
 
         if self.start == last_end || self.cmps.len() <= 1 {
             return self;
@@ -365,8 +368,13 @@ impl CurveOrder {
     /// As a corner case, if this comparison ends exactly at `y` then we return
     /// the ordering exactly at `y`.
     pub fn order_after(&self, y: f64) -> Order {
-        if y == self.cmps.last().unwrap().end {
-            self.cmps.last().unwrap().order
+        // Craft patch (input rules): curves with disjoint vertical ranges have
+        // an empty order.
+        let Some(last) = self.cmps.last() else {
+            return Order::Ish;
+        };
+        if y == last.end {
+            last.order
         } else {
             self.iter()
                 .skip_while(|(_start, end, _order)| end <= &y)
@@ -384,7 +392,10 @@ impl CurveOrder {
 ///
 /// # Panics
 ///
-/// Debug builds panic when `c` or `y` is outside these bounds.
+/// Debug builds panic unless `c.p0.y <= y && y <= c.p3.y && c.p0.y < c.p3.y`.
+/// They do not check whether `c` is y-monotone. For a curve that is not, they
+/// return one of its crossings, or a parameter that is not a crossing, without
+/// a panic.
 pub fn solve_t_for_y(c: CubicBez, y: f64) -> f64 {
     debug_assert!(
         c.p0.y <= y && y <= c.p3.y && c.p0.y < c.p3.y,
@@ -442,7 +453,7 @@ pub fn solve_x_for_y(c: CubicBez, y: f64) -> f64 {
 /// # Panics
 ///
 /// Debug builds panic when `y0` is not less than `y1` or when `c` does not
-/// cover `y0..=y1`.
+/// cover `y0..=y1`. They do not check whether `c` is y-monotone.
 pub fn y_subsegment(c: CubicBez, y0: f64, y1: f64) -> CubicBez {
     debug_assert!(y0 < y1);
     debug_assert!(c.p0.y <= y0 && y1 <= c.p3.y);
@@ -1899,6 +1910,8 @@ mod test {
     fn disjoint_vertical_ranges() {
         let cmp = intersect_cubics(vertical(0.0, 0.0, 1.0), vertical(1.0, 2.0, 3.0), 1e-6, 2e-6);
         assert_eq!(cmp.iter().count(), 0);
+        assert_eq!(cmp.order_after(0.5), Order::Ish);
+        assert_eq!(cmp.with_y_slop(0.5).iter().count(), 0);
     }
 
     #[test]
