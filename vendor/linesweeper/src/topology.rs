@@ -896,7 +896,16 @@ impl<W: WindingNumber> Topology<W> {
                 // b and c aren't. Then merging a and d would be bad -- even if they're clockwise
                 // neighbors by going around the way that avoids b and c -- because it would mess up
                 // the winding numbers of b and c.
-                if y0 != y1 && self.scan_west[idx] != Some(cw_nbr.idx) {
+                //
+                // An earlier merge may have deleted the west neighbor, so skip deleted segments
+                // to reach the nearest live one.
+                let mut west = self.scan_west[idx];
+                while let Some(w) = west
+                    && self.deleted[w]
+                {
+                    west = self.scan_west[w];
+                }
+                if y0 != y1 && west != Some(cw_nbr.idx) {
                     continue;
                 }
                 if y0 != y1 {
@@ -2479,6 +2488,44 @@ mod tests {
 
         dbg!(&top.segments.split_from_predecessor);
         insta::assert_ron_snapshot!((top, contours));
+    }
+
+    fn rect_path(x0: f64, y0: f64, x1: f64, y1: f64, reversed: bool) -> BezPath {
+        let mut pts = [(x0, y0), (x1, y0), (x1, y1), (x0, y1)];
+        if reversed {
+            pts.reverse();
+        }
+        let mut bez = BezPath::default();
+        bez.move_to(pts[0]);
+        for pt in &pts[1..] {
+            bez.line_to(*pt);
+        }
+        bez.close_path();
+        bez
+    }
+
+    #[test]
+    fn merge_coincident_runs_longer_than_two() {
+        // Four copies of one square, two in each direction: the winding number is zero
+        // everywhere, so every edge cancels.
+        let mut bez = BezPath::default();
+        for reversed in [false, false, true, true] {
+            bez.extend(rect_path(0.0, 0.0, 10.0, 10.0, reversed));
+        }
+        let top = Topology::from_path(&bez, 1e-6).unwrap();
+        assert_eq!(top.segment_indices().count(), 0);
+        assert_eq!(top.contours(|w| *w != 0).contours().count(), 0);
+
+        // Three copies, two in one direction and one in the other: the square remains.
+        let mut bez = BezPath::default();
+        for reversed in [false, false, true] {
+            bez.extend(rect_path(0.0, 0.0, 10.0, 10.0, reversed));
+        }
+        let top = Topology::from_path(&bez, 1e-6).unwrap();
+        let contours = top.contours(|w| *w != 0);
+        assert_eq!(contours.contours().count(), 1);
+        let square = contours.contours().next().unwrap();
+        assert_eq!(kurbo::Shape::area(&square.path).abs(), 100.0);
     }
 
     #[test]
