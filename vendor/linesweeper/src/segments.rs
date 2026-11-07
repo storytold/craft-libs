@@ -253,6 +253,10 @@ impl Segments {
         }
 
         for (p, q) in pairs(&ps) {
+            // Craft patch (repeated points): skip a point equal to the one before it.
+            if p == q {
+                continue;
+            }
             let (a, b, orient) = if p < q { (p, q, true) } else { (q, p, false) };
             self.push_seg(Segment::straight(*a, *b));
             self.orientation.push(orient);
@@ -478,5 +482,22 @@ impl std::ops::Index<SegIdx> for Segments {
 
     fn index(&self, index: SegIdx) -> &Self::Output {
         &self.segs[index]
+    }
+}
+
+// Craft patch (repeated points).
+#[cfg(test)]
+mod tests {
+    use super::{SegIdx, Segments};
+
+    #[test]
+    fn add_points_skips_repeated_points() {
+        let mut segments = Segments::default();
+        segments.add_points([(0.0, 0.0), (0.0, 0.0), (1.0, 1.0), (1.0, 1.0), (2.0, 0.0)]);
+        segments.check_invariants();
+        assert_eq!(segments.segs.len(), 2);
+        assert_eq!(segments.contour_prev(SegIdx(0)), None);
+        assert_eq!(segments.contour_next(SegIdx(0)), Some(SegIdx(1)));
+        assert_eq!(segments.contour_next(SegIdx(1)), None);
     }
 }
