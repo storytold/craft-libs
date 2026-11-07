@@ -412,9 +412,12 @@ impl Arrangement {
 }
 
 /// The contours of `top`'s faces for which `inside` holds. The contour walk returns an error when the
-/// sweep left winding numbers that disagree around a point; that input is degenerate.
+/// sweep left winding numbers that disagree around a point, and can still panic on other degenerate
+/// input; either way that input is degenerate.
 fn contours(top: &Topology<Multi>, inside: impl Fn(&Multi) -> bool) -> Result<Contours, GeomError> {
-    top.try_contours(inside).map_err(|_| GeomError::Degenerate)
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| top.try_contours(inside)))
+        .map_err(|_| GeomError::Degenerate)?
+        .map_err(|_| GeomError::Degenerate)
 }
 
 /// A point as a map key (the arrangement's vertices are exact).

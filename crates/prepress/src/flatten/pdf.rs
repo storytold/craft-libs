@@ -1272,21 +1272,24 @@ fn dash_pattern(path: &BezPath, dashes: &[f32]) -> Option<Vec<f64>> {
 }
 
 /// `path` filled by `rule`, as a path filled nonzero. An even-odd path is rebuilt from its
-/// boundary; if that fails it is kept as it is.
+/// boundary; if that fails or panics it is kept as it is.
 fn nonzero(path: &BezPath, rule: FillRule) -> BezPath {
     if rule == FillRule::NonZero {
         return path.clone();
     }
     let closed = closed(path);
-    match linesweeper::binary_op(&closed, &BezPath::new(), linesweeper::FillRule::EvenOdd, linesweeper::BinaryOp::Union) {
-        Ok(contours) => {
+    let op = catch_unwind(AssertUnwindSafe(|| {
+        linesweeper::binary_op(&closed, &BezPath::new(), linesweeper::FillRule::EvenOdd, linesweeper::BinaryOp::Union)
+    }));
+    match op {
+        Ok(Ok(contours)) => {
             let mut out = BezPath::new();
             for contour in contours.contours() {
                 out.extend(contour.path.iter());
             }
             out
         }
-        Err(_) => closed,
+        Ok(Err(_)) | Err(_) => closed,
     }
 }
 
