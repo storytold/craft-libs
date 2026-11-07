@@ -7,7 +7,9 @@
   "upstream_repository": null,
   "upstream_revision": "824b0791a750f7b27b8edcbb6c6244d0e629875e",
   "upstream_directory": "",
-  "local_patches": [],
+  "local_patches": [
+    "In `examples/boolean_op.rs`, `examples/visualize_op.rs` and `examples/winding-numbers.rs`, the SVG stroke width is the larger of the bounding box's width and height divided by 512. The package computed `(max_y - min_y).max(max_x - max_y) / 512.0`, which uses `max_x - max_y` for the width: a box from (0, 1000) to (512, 1001) got a stroke width of 1/512 instead of 1. `examples/visualize_op.rs` computes it in a `stroke_width` function with the test `stroke_width_follows_the_larger_side`; the other two examples do not compile in this copy."
+  ],
   "files": [
     { "path": ".cargo_vcs_info.json", "source_sha256": "47fba6a9dbdf445a5c97f783c9be62093035f9d5e5cdc2cf3216ad8259bcd8fc", "source_git_blob": null, "sha256": "47fba6a9dbdf445a5c97f783c9be62093035f9d5e5cdc2cf3216ad8259bcd8fc" },
     { "path": ".gitignore", "source_sha256": "88b59092499ae05234330eb7d0b01e953e969caf05261530e3765eef02536cf0", "source_git_blob": null, "sha256": "88b59092499ae05234330eb7d0b01e953e969caf05261530e3765eef02536cf0" },
@@ -22,11 +24,11 @@
     { "path": "benches/painted_dreams.rs", "source_sha256": "073008db93840d380710e13ed3ae38e08cb823f10c12e5f838dac1ccf37eaecf", "source_git_blob": null, "sha256": "073008db93840d380710e13ed3ae38e08cb823f10c12e5f838dac1ccf37eaecf" },
     { "path": "benches/synthetic.rs", "source_sha256": "7ce59bef2e1c4f28b00cb89feb15bc71ca4b098a8d27e7b02ea699aca9bcc810", "source_git_blob": null, "sha256": "7ce59bef2e1c4f28b00cb89feb15bc71ca4b098a8d27e7b02ea699aca9bcc810" },
     { "path": "docs/sweep.typ", "source_sha256": "4766082c8672a7bb4356b5581043489c13b4e3fb8931ba3a5f0a473fab0172f3", "source_git_blob": null, "sha256": "4766082c8672a7bb4356b5581043489c13b4e3fb8931ba3a5f0a473fab0172f3" },
-    { "path": "examples/boolean_op.rs", "source_sha256": "3b38a1ccda7e736cce4b191a3a45ab4824c4c365190e3eb637b2fb39b5996c9f", "source_git_blob": null, "sha256": "3b38a1ccda7e736cce4b191a3a45ab4824c4c365190e3eb637b2fb39b5996c9f" },
+    { "path": "examples/boolean_op.rs", "source_sha256": "3b38a1ccda7e736cce4b191a3a45ab4824c4c365190e3eb637b2fb39b5996c9f", "source_git_blob": null, "sha256": "7b4f4fc94d3b1fd9b9ee06622b2e8c38bd6c85697d21505b09765139283df576" },
     { "path": "examples/bus.rs", "source_sha256": "e206a08be73899f564188052c8ecc15526b54606e52ee2935a64ce6b5723da33", "source_git_blob": null, "sha256": "e206a08be73899f564188052c8ecc15526b54606e52ee2935a64ce6b5723da33" },
     { "path": "examples/curve_metrics.rs", "source_sha256": "0db6a5327fd2119a03a9a66624fea3e04b6bbb519655667ad30487aee6c787d2", "source_git_blob": null, "sha256": "0db6a5327fd2119a03a9a66624fea3e04b6bbb519655667ad30487aee6c787d2" },
-    { "path": "examples/visualize_op.rs", "source_sha256": "a5210ed389ceb1e9c43b952b992e29e65065d129d2b2f4be62fffc747376bf79", "source_git_blob": null, "sha256": "a5210ed389ceb1e9c43b952b992e29e65065d129d2b2f4be62fffc747376bf79" },
-    { "path": "examples/winding-numbers.rs", "source_sha256": "4a756c908564703b165257001e73d2f7235476cd536580091f3a7a70d2eab242", "source_git_blob": null, "sha256": "4a756c908564703b165257001e73d2f7235476cd536580091f3a7a70d2eab242" },
+    { "path": "examples/visualize_op.rs", "source_sha256": "a5210ed389ceb1e9c43b952b992e29e65065d129d2b2f4be62fffc747376bf79", "source_git_blob": null, "sha256": "70f4ac0efb4117a4f22986b700c45f75b2757cacce5a8b949836ea03988b345a" },
+    { "path": "examples/winding-numbers.rs", "source_sha256": "4a756c908564703b165257001e73d2f7235476cd536580091f3a7a70d2eab242", "source_git_blob": null, "sha256": "7ed7689995b44c5c59ee5bf77eb0a5aeb00ff45de1b7e0fa8f74b88dc8d0ea95" },
     { "path": "proptest-regressions/sweep/sweep_line.txt", "source_sha256": "f5311edf1c0c4d1574bb7b24ed1d1c66106d9949214014d0a8479f685938dc98", "source_git_blob": null, "sha256": "f5311edf1c0c4d1574bb7b24ed1d1c66106d9949214014d0a8479f685938dc98" },
     { "path": "proptest-regressions/sweep/weak_ordering.txt", "source_sha256": "b5b183ab470399c15246457d8a1a35cafb49fee120d6777dfdd563bfdbadda52", "source_git_blob": null, "sha256": "b5b183ab470399c15246457d8a1a35cafb49fee120d6777dfdd563bfdbadda52" },
     { "path": "proptest-regressions/topology.txt", "source_sha256": "49ff0b5b370f082984276d5312f03b1fc96ef0dd218f9efd7b084b11abbb9d19", "source_git_blob": null, "sha256": "49ff0b5b370f082984276d5312f03b1fc96ef0dd218f9efd7b084b11abbb9d19" },

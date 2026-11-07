@@ -31,7 +31,8 @@ pub fn main() -> anyhow::Result<()> {
     let max_x = bbox.max_x();
     let max_y = bbox.max_y();
     let pad = 8.0 + eps;
-    let stroke_width = (max_y - min_y).max(max_x - max_y) / 512.0;
+    // Craft patch (example stroke width).
+    let stroke_width = (max_y - min_y).max(max_x - min_x) / 512.0;
     let dot_radius = stroke_width * 1.5;
     let mut document = svg::Document::new().set(
         "viewBox",
