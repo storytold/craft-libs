@@ -133,3 +133,20 @@ fn controlled_reads_keep_limit_and_malformed_input_errors() {
         }
     }
 }
+
+#[test]
+fn controlled_full_composites_preserve_provenance_and_selected_reads() {
+    let full = png(4, 3, 30);
+    let manifest = pcraft_manifest(1, "[]", r#", "full_composite":"composite/full.png", "composite":"composite/preview.png""#);
+    let file = zip(&[store("manifest.json", manifest.as_bytes()), store("composite/full.png", &full)]);
+    let limits = Limits::default();
+    let selected = craft_doc::rendition(&file, craft_doc::RenditionKind::Composite, &limits).unwrap().unwrap();
+    let controlled = renditions_with_cancel(&file, &limits, &|| false).unwrap();
+    assert_eq!(controlled, vec![selected]);
+    assert_eq!(controlled[0].bytes, full);
+    assert!(controlled[0].is_full_composite);
+    assert_eq!(renditions_with_cancel(&file, &limits, &|| true), Err(Error::Cancelled));
+
+    let missing_full = zip(&[store("manifest.json", manifest.as_bytes()), store("composite/preview.png", &full)]);
+    assert!(matches!(renditions_with_cancel(&missing_full, &limits, &|| false), Err(Error::Malformed(_))));
+}
