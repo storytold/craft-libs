@@ -215,6 +215,14 @@ Their licences and per-file hashes are retained in vendor/hayro-interpret/assets
 vendor/hayro-cmap/assets, licenses/pdf-backend and ATTRIBUTION.md. These are existing reader dependency assets;
 applications retain their own document-font selection and licensing policy.
 
+linesweeper
+
+linesweeper 0.5.0 (https://crates.io/crates/linesweeper/0.5.0), MIT OR Apache-2.0, is stored in
+vendor/linesweeper with its upstream license files and one local patch, to Cargo.toml. Its manifest
+names Joe Neeman as author, and its LICENSE-MIT reads "Copyright (c) 2018 Raph Levien". See
+vendor/linesweeper/README.craft.md and vendor/linesweeper/SOURCE.json for provenance, local changes
+and the files left out.
+
 Platform lifecycle source provenance
 
 The optional crates/platform services adapt the preserved local platform candidate
