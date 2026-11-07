@@ -15,7 +15,8 @@ holds `upstream_revision`. `local_patches` describes each local patch.
 
 | File | Change |
 |---|---|
-| `src/topology.rs` | `contours_for_positions` panics with "inconsistent winding numbers" when the contour walk finds no boundary segment leaving a point, or re-enters a segment it already walked. Before, a path whose winding numbers came out inconsistent around a point made `contours` loop forever in a build without debug assertions, and in one case allocate a new contour on every lap. The `contours_finish_*` tests cover both loops. |
+| `src/topology.rs` | `contours_for_positions` returns `Error::InconsistentWindingNumbers` when the contour walk finds no boundary segment leaving a point, or re-enters a segment it already walked. Its `debug_assert!` checks of the windings along the walk and its panic for a western boundary segment with no contour return the same error. The new `Topology::try_contours` returns that error, and `Topology::contours` returns no contours in that case. Before, a path whose winding numbers came out inconsistent around a point made `contours` loop forever in a build without debug assertions, and in one case allocate a new contour on every lap. The `contours_finish_*` tests cover both loops. |
+| `src/lib.rs` | `Error` has the `InconsistentWindingNumbers` variant, and `binary_op_with_eps` returns it from `Topology::try_contours`. The `inconsistent_winding_numbers_are_an_error` test covers it. |
 
 `omitted_files` lists the 43 files of the package left out here, with their hashes:
 

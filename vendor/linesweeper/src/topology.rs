@@ -8,7 +8,7 @@ use std::collections::VecDeque;
 use kurbo::{BezPath, ParamCurve, Rect, Shape};
 
 use crate::{
-    FillRule,
+    Error, FillRule,
     curve::{Order, solve_t_for_y, y_subsegment},
     geom::Point,
     order::ComparisonCache,
@@ -1280,7 +1280,17 @@ impl<W: WindingNumber> Topology<W> {
     /// if a point with that winding number should be in the resulting set. For example,
     /// to compute a boolean "and" using the non-zero winding rule, `inside` should be
     /// `|w| w.shape_a != 0 && w.shape_b != 0`.
+    ///
+    /// When the winding numbers disagree around a point, this returns no
+    /// contours. [`Topology::try_contours`] reports that case as an error.
     pub fn contours(&self, inside: impl Fn(&W) -> bool) -> Contours {
+        self.try_contours(inside).unwrap_or_default()
+    }
+
+    /// Returns the contours of some set defined by this topology, as
+    /// [`Topology::contours`] does, or [`Error::InconsistentWindingNumbers`]
+    /// when the winding numbers disagree around a point.
+    pub fn try_contours(&self, inside: impl Fn(&W) -> bool) -> Result<Contours, Error> {
 	let positions = self.compute_positions();
         self.contours_for_positions(inside, positions)
     }
@@ -1289,7 +1299,7 @@ impl<W: WindingNumber> Topology<W> {
         &self,
         inside: impl Fn(&W) -> bool,
         positions: OutputSegVec<PositionedOutputSeg>,
-    ) -> Contours {
+    ) -> Result<Contours, Error> {
         // We walk contours in sweep-line order of their smallest point. This mostly ensures
         // that we visit outer contours before we visit their children. However, when the inner
         // and outer contours share a point, we run into a problem. For example:
@@ -1358,7 +1368,9 @@ impl<W: WindingNumber> Topology<W> {
                         // That means they're our sibling.
                         contour.parent = ret.contours[west_contour.0].parent;
                         contour.outer = outside;
-                        debug_assert!(outside || contour.parent.is_some());
+                        if !outside && contour.parent.is_none() {
+                            return Err(Error::InconsistentWindingNumbers);
+                        }
                     } else {
                         // They're an outer contour, and there's interior between us and them,
                         // or they're an inner contour and there's exterior between us.
@@ -1367,7 +1379,8 @@ impl<W: WindingNumber> Topology<W> {
                         contour.outer = !ret.contours[west_contour.0].outer;
                     }
                 } else {
-                    panic!("I'm {idx:?}, west is {west:?}. Y u no have contour?");
+                    // The boundary segment to our west has no contour yet.
+                    return Err(Error::InconsistentWindingNumbers);
                 }
             };
             // Reserve a space for the unfinished outer contour, as described above.
@@ -1390,21 +1403,24 @@ impl<W: WindingNumber> Topology<W> {
             loop {
                 visited[next.idx.0] = true;
 
-                debug_assert!(inside(self.winding_counter_clockwise(next)));
-                debug_assert!(!inside(self.winding_clockwise(next)));
+                if !inside(self.winding_counter_clockwise(next))
+                    || inside(self.winding_clockwise(next))
+                {
+                    return Err(Error::InconsistentWindingNumbers);
+                }
 
                 // Walk counter-clockwise around the point until we find the next segment
                 // that's on the boundary.
                 let mut nbr = self.point_neighbors[next].counter_clockwise;
-                debug_assert!(inside(self.winding_clockwise(nbr)));
+                if !inside(self.winding_clockwise(nbr)) {
+                    return Err(Error::InconsistentWindingNumbers);
+                }
                 let first_nbr = nbr;
                 while inside(self.winding_counter_clockwise(nbr)) {
                     nbr = self.point_neighbors[nbr].counter_clockwise;
                     if nbr == first_nbr {
-                        panic!(
-                            "inconsistent winding numbers: no boundary segment leaves {:?}",
-                            self.point_idx[next]
-                        );
+                        // No boundary segment leaves this point.
+                        return Err(Error::InconsistentWindingNumbers);
                     }
                 }
 
@@ -1413,7 +1429,8 @@ impl<W: WindingNumber> Topology<W> {
                     break;
                 }
                 if visited[nbr.idx.0] {
-                    panic!("inconsistent winding numbers: contour walk re-entered {nbr:?}");
+                    // The walk re-entered a segment it already walked.
+                    return Err(Error::InconsistentWindingNumbers);
                 }
 
                 let p = self.point_idx[nbr];
@@ -1459,7 +1476,7 @@ impl<W: WindingNumber> Topology<W> {
             ret.contours[contour_idx.0].path = self.segs_to_path(&segs, &positions);
         }
 
-        ret
+        Ok(ret)
     }
 
     /// Returns a rectangle bounding all of our segments.
@@ -2272,7 +2289,7 @@ mod tests {
     use proptest::prelude::*;
 
     use crate::{
-        FillRule, SegIdx,
+        Error, FillRule, SegIdx,
         geom::Point,
         order::ComparisonCache,
         perturbation::{
@@ -2280,7 +2297,7 @@ mod tests {
         },
     };
 
-    use super::{OneOfTwo, Topology};
+    use super::{Contours, OneOfTwo, Topology};
 
     fn p(x: f64, y: f64) -> Point {
         Point::new(x, y)
@@ -2491,26 +2508,17 @@ mod tests {
         insta::assert_ron_snapshot!((top, contours));
     }
 
-    // Checks that `contours` finishes on a path whose winding numbers come out
-    // inconsistent around a point: it either returns or panics, instead of
-    // walking forever. With debug assertions on, the walk's `debug_assert!`
-    // checks panic first; without them, the panic must come from the
-    // inconsistent-winding checks in the walk.
+    // Checks that the contour walk finishes on a path whose winding numbers
+    // come out inconsistent around a point, instead of walking forever:
+    // `try_contours` returns an error and `contours` returns no contours.
     fn contours_finish(svg: &str) {
         let bez = BezPath::from_svg(svg).unwrap();
         let top = Topology::<i32>::from_path(&bez, 1e-6).unwrap();
-        let result =
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| top.contours(|w| *w != 0)));
-        if let Err(payload) = result
-            && !cfg!(debug_assertions)
-        {
-            let msg = payload
-                .downcast_ref::<String>()
-                .cloned()
-                .or_else(|| payload.downcast_ref::<&str>().map(|s| s.to_string()))
-                .unwrap_or_default();
-            assert!(msg.starts_with("inconsistent winding numbers"), "{msg}");
-        }
+        assert_eq!(
+            top.try_contours(|w| *w != 0),
+            Err(Error::InconsistentWindingNumbers)
+        );
+        assert_eq!(top.contours(|w| *w != 0), Contours::default());
     }
 
     #[test]
