@@ -1397,13 +1397,23 @@ impl<W: WindingNumber> Topology<W> {
                 // that's on the boundary.
                 let mut nbr = self.point_neighbors[next].counter_clockwise;
                 debug_assert!(inside(self.winding_clockwise(nbr)));
+                let first_nbr = nbr;
                 while inside(self.winding_counter_clockwise(nbr)) {
                     nbr = self.point_neighbors[nbr].counter_clockwise;
+                    if nbr == first_nbr {
+                        panic!(
+                            "inconsistent winding numbers: no boundary segment leaves {:?}",
+                            self.point_idx[next]
+                        );
+                    }
                 }
 
                 segs.push(next);
                 if nbr == start {
                     break;
+                }
+                if visited[nbr.idx.0] {
+                    panic!("inconsistent winding numbers: contour walk re-entered {nbr:?}");
                 }
 
                 let p = self.point_idx[nbr];
@@ -2479,6 +2489,43 @@ mod tests {
 
         dbg!(&top.segments.split_from_predecessor);
         insta::assert_ron_snapshot!((top, contours));
+    }
+
+    // Checks that `contours` finishes on a path whose winding numbers come out
+    // inconsistent around a point: it either returns or panics, instead of
+    // walking forever. With debug assertions on, the walk's `debug_assert!`
+    // checks panic first; without them, the panic must come from the
+    // inconsistent-winding checks in the walk.
+    fn contours_finish(svg: &str) {
+        let bez = BezPath::from_svg(svg).unwrap();
+        let top = Topology::<i32>::from_path(&bez, 1e-6).unwrap();
+        let result =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| top.contours(|w| *w != 0)));
+        if let Err(payload) = result
+            && !cfg!(debug_assertions)
+        {
+            let msg = payload
+                .downcast_ref::<String>()
+                .cloned()
+                .or_else(|| payload.downcast_ref::<&str>().map(|s| s.to_string()))
+                .unwrap_or_default();
+            assert!(msg.starts_with("inconsistent winding numbers"), "{msg}");
+        }
+    }
+
+    #[test]
+    fn contours_finish_with_no_boundary_segment_leaving_a_point() {
+        contours_finish("M4,-1 C8,1 -7,-2 5,8 L-4,-8 L2,1 L1,1 Z");
+    }
+
+    #[test]
+    fn contours_finish_when_the_walk_misses_its_start() {
+        contours_finish(
+            "M6,5 L3,7 L0,7 L3,6 C3,0 7,6 0,4 L4,2 C4,5 7,4 4,6 L3,3 L3,5 C6,7 2,5 3,1 L2,0 Z \
+             M6,6 L4,4 C5,6 2,5 7,6 L7,6 L7,7 Z \
+             M1,4 C5,2 3,3 5,7 L0,6 L0,7 L6,7 C4,5 3,7 2,1 Z \
+             M3,3 C1,2 3,6 5,6 C6,4 2,7 2,0 L1,6 L6,4 L3,4 L6,7 C0,0 7,1 0,7 C0,0 1,1 1,0 Z",
+        );
     }
 
     #[test]

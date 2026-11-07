@@ -110,7 +110,7 @@ pub fn regions_with(shapes: &[Shape], clips: &[ClipPath], sliver: f64) -> Result
     if shapes.is_empty() {
         return Ok(Vec::new());
     }
-    Ok(Arrangement::new(shapes, clips, sliver)?.regions())
+    Arrangement::new(shapes, clips, sliver)?.regions()
 }
 
 /// Indices of `bounds` grouped by overlap, transitively, each group in index order. Touching boxes
@@ -268,7 +268,7 @@ impl Arrangement {
     /// sets × edges. Instead the sets go into batches whose faces share no vertex (so no edge
     /// either): one pass per batch walks each face's contours as its own set's pass would, and the
     /// set a contour bounds is the one of its batch at its first point.
-    fn regions(&self) -> Vec<Region> {
+    fn regions(&self) -> Result<Vec<Region>, GeomError> {
         let top = &self.top;
         // The distinct non-empty coverage sets, numbered in the order met, and the set of each
         // side of each segment. Faces have many sides, so a set is worked out once per winding.
@@ -335,7 +335,7 @@ impl Arrangement {
         }
         let mut faces: Vec<Vec<BezPath>> = vec![Vec::new(); sets.len()];
         for b in 0..batches {
-            let c = top.contours(|w| id(w).is_some_and(|m| batch[m] == b));
+            let c = contours(top, |w| id(w).is_some_and(|m| batch[m] == b))?;
             let owner: Option<Vec<usize>> = c
                 .contours()
                 .map(|ct| {
@@ -347,7 +347,7 @@ impl Arrangement {
                 // Not expected: every contour starts at a vertex of the arrangement. Fall back to
                 // a pass per set for this batch.
                 for m in (0..sets.len()).filter(|&m| batch[m] == b) {
-                    let c = top.contours(|w| id(w) == Some(m));
+                    let c = contours(top, |w| id(w) == Some(m))?;
                     faces[m].extend(c.grouped().into_iter().map(|g| self.outline(&c, g)));
                 }
                 continue;
@@ -383,7 +383,7 @@ impl Arrangement {
                 out.push(Region { path, area, sources: sources.clone() });
             }
         }
-        out
+        Ok(out)
     }
 
     /// The contours `idx` of `c` as one path, repaired, without slivers, and with the pieces the
@@ -409,6 +409,12 @@ impl Arrangement {
         }
         out
     }
+}
+
+/// The contours of `top`'s faces for which `inside` holds. The contour walk panics when the sweep
+/// left winding numbers that disagree around a point; that input is degenerate.
+fn contours(top: &Topology<Multi>, inside: impl Fn(&Multi) -> bool) -> Result<Contours, GeomError> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| top.contours(inside))).map_err(|_| GeomError::Degenerate)
 }
 
 /// A point as a map key (the arrangement's vertices are exact).
@@ -818,6 +824,20 @@ mod tests {
 
     fn fill(path: BezPath) -> Shape {
         Shape::new(path, FillRule::NonZero)
+    }
+
+    #[test]
+    fn inconsistent_windings_are_degenerate() {
+        // The sweep gives both paths winding numbers that disagree around a point.
+        for d in [
+            "M4,-1 C8,1 -7,-2 5,8 L-4,-8 L2,1 L1,1 Z",
+            "M6,5 L3,7 L0,7 L3,6 C3,0 7,6 0,4 L4,2 C4,5 7,4 4,6 L3,3 L3,5 C6,7 2,5 3,1 L2,0 Z \
+             M6,6 L4,4 C5,6 2,5 7,6 L7,6 L7,7 Z M1,4 C5,2 3,3 5,7 L0,6 L0,7 L6,7 C4,5 3,7 2,1 Z \
+             M3,3 C1,2 3,6 5,6 C6,4 2,7 2,0 L1,6 L6,4 L3,4 L6,7 C0,0 7,1 0,7 C0,0 1,1 1,0 Z",
+        ] {
+            let shapes = [fill(BezPath::from_svg(d).unwrap())];
+            assert!(matches!(regions(&shapes, &[]), Err(GeomError::Degenerate)), "{d}");
+        }
     }
 
     /// The regions with their sources and areas rounded to 1e-6, sorted.
