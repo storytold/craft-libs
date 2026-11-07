@@ -377,6 +377,14 @@ impl CurveOrder {
 }
 
 /// Find the parameter `t` at which `c` crosses height `y`.
+///
+/// `c` must be y-monotone with `c.p0.y < c.p3.y`, and `y` must be in
+/// `c.p0.y..=c.p3.y`. For other inputs, release builds return a parameter in
+/// `0.0..=1.0` that need not be a crossing.
+///
+/// # Panics
+///
+/// Debug builds panic when `c` or `y` is outside these bounds.
 pub fn solve_t_for_y(c: CubicBez, y: f64) -> f64 {
     debug_assert!(
         c.p0.y <= y && y <= c.p3.y && c.p0.y < c.p3.y,
@@ -426,6 +434,15 @@ pub fn solve_x_for_y(c: CubicBez, y: f64) -> f64 {
 ///
 /// The input curve should be monotonic in `y`, and its range should include
 /// `y0` and `y1` (which should be ordered).
+///
+/// For other inputs, release builds return a curve that starts at height `y0`
+/// and ends at height `y1`, but whose ends need not lie on `c`. With `y0 > y1`
+/// it runs from `y0` down to `y1`.
+///
+/// # Panics
+///
+/// Debug builds panic when `y0` is not less than `y1` or when `c` does not
+/// cover `y0..=y1`.
 pub fn y_subsegment(c: CubicBez, y0: f64, y1: f64) -> CubicBez {
     debug_assert!(y0 < y1);
     debug_assert!(c.p0.y <= y0 && y1 <= c.p3.y);
@@ -1397,6 +1414,10 @@ impl AlmostHorizontalDecomposition {
     /// Decompose a cubic into almost-horizontal and not-almost-horizontal pieces.
     ///
     /// The cubic `c` must be (approximately) y-monotone and must not be completely horizontal.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `c` is completely horizontal or if `c.p3.y` is smaller than `c.p0.y`.
     pub fn from_monotone_cubic(c: CubicBez) -> Self {
         const THRESHOLD: f64 = 16.0;
         let dx = cubic_from_bez_x(c).deriv();
@@ -1538,12 +1559,27 @@ impl AlmostHorizontalDecomposition {
 /// The `ish_tolerance` parameter tells us when we're allowed to say that
 /// the two curves are close: if they're definitely within `ish_tolerance`
 /// of one another, we can say that they're close.
+///
+/// `sure_tolerance` must be positive and no larger than `ish_tolerance`, and
+/// `ish_tolerance` must be finite. Otherwise the returned order says that the
+/// curves are close over their whole common range.
+///
+/// Each curve must be y-monotone. A curve whose `p3.y` is smaller than its
+/// `p0.y` is compared as the same curve with its control points reversed.
+/// When the vertical ranges of the curves do not overlap, the returned order
+/// has no entries.
+///
+/// # Panics
+///
+/// Panics if either curve is completely horizontal.
 pub fn intersect_cubics(
     c0: CubicBez,
     c1: CubicBez,
     sure_tolerance: f64,
     ish_tolerance: f64,
 ) -> CurveOrder {
+    let c0 = increasing_in_y(c0);
+    let c1 = increasing_in_y(c1);
     intersect_cubics_with_precomputed_decomp(
         c0,
         &AlmostHorizontalDecomposition::from_monotone_cubic(c0),
@@ -1554,11 +1590,26 @@ pub fn intersect_cubics(
     )
 }
 
+// Craft patch (input rules): `intersect_cubics` compares a curve that runs
+// down in y as the same curve reversed.
+/// Returns `c`, or `c` with its control points reversed if it decreases in y.
+fn increasing_in_y(c: CubicBez) -> CubicBez {
+    if c.p3.y < c.p0.y {
+        CubicBez::new(c.p3, c.p2, c.p1, c.p0)
+    } else {
+        c
+    }
+}
+
 /// A version of [intersect_cubics] that uses a precomputed almost-horizontal
 /// decomposition.
 ///
 /// Pre-computing the almost-horizontal decomposition can be much faster, because
 /// then you can do it per-curve instead of per-comparison.
+///
+/// `c0_div` and `c1_div` must be the decompositions of `c0` and `c1`, so each
+/// curve must have `p0.y < p3.y`. The tolerances follow the same rule as in
+/// [intersect_cubics].
 pub fn intersect_cubics_with_precomputed_decomp(
     c0: CubicBez,
     c0_div: &AlmostHorizontalDecomposition,
@@ -1571,7 +1622,15 @@ pub fn intersect_cubics_with_precomputed_decomp(
     let y1 = c0.p3.y.min(c1.p3.y);
 
     let mut ret = CurveOrder::new(y0);
-    if y0 < y1 {
+    let valid_tolerances =
+        sure_tolerance > 0.0 && sure_tolerance <= ish_tolerance && ish_tolerance.is_finite();
+    if !valid_tolerances {
+        // Craft patch (input rules): with a negative `ish_tolerance`,
+        // `intersect_cubics_rec` can recurse without end.
+        if y0 <= y1 {
+            ret.push(y1, Order::Ish, MetricsStatus::default());
+        }
+    } else if y0 < y1 {
         let c0_div = c0_div
             .pieces
             .iter()
@@ -1620,7 +1679,7 @@ pub fn intersect_cubics_with_precomputed_decomp(
         ret.push(y1, order, MetricsStatus::default());
     }
     //fix_up_endpoints(&mut ret, c0, c1, eps);
-    debug_assert_eq!(ret.cmps.last().unwrap().end, y1);
+    debug_assert!(y0 > y1 || ret.cmps.last().map(|e| e.end) == Some(y1));
     ret
 }
 
@@ -1788,6 +1847,58 @@ mod test {
         };
 
         dbg!(intersect_cubics(c0, c1, 0.5e-6, 1.5e-6));
+    }
+
+    // Craft patch (input rules) tests: curves that run down in y, tolerances
+    // outside the documented rule, and curves with no common y-range.
+    fn vertical(x: f64, y0: f64, y1: f64) -> CubicBez {
+        PathSeg::Line(Line::new((x, y0), (x, y1))).to_cubic()
+    }
+
+    #[test]
+    fn curves_decreasing_in_y() {
+        let up0 = vertical(0.0, 0.0, 1.0);
+        let up1 = vertical(1.0, 0.0, 1.0);
+        let down0 = vertical(0.0, 1.0, 0.0);
+        let down1 = vertical(1.0, 1.0, 0.0);
+        for (c0, c1) in [(down0, down1), (down0, up1), (up0, down1)] {
+            let cmp = intersect_cubics(c0, c1, 1e-6, 2e-6);
+            assert_eq!(cmp.iter().collect::<Vec<_>>(), [(0.0, 1.0, Order::Left)]);
+        }
+    }
+
+    #[test]
+    fn invalid_tolerances() {
+        let c0 = vertical(0.0, 0.0, 1.0);
+        let parallel = vertical(1.0, 0.0, 1.0);
+        let crossing = CubicBez::new(
+            (1.0, 0.0),
+            (2.0 / 3.0, 1.0 / 3.0),
+            (1.0 / 3.0, 2.0 / 3.0),
+            (0.0, 1.0),
+        );
+        let tolerances = [
+            (-1.0, -1.0),
+            (-1.0, 1e-6),
+            (1e-6, -1.0),
+            (-1e-9, -1e-9),
+            (0.0, 0.0),
+            (2e-6, 1e-6),
+            (1e-6, f64::INFINITY),
+            (f64::NAN, 1e-6),
+        ];
+        for (sure, ish) in tolerances {
+            for c1 in [c0, parallel, crossing] {
+                let cmp = intersect_cubics(c0, c1, sure, ish);
+                assert_eq!(cmp.iter().collect::<Vec<_>>(), [(0.0, 1.0, Order::Ish)]);
+            }
+        }
+    }
+
+    #[test]
+    fn disjoint_vertical_ranges() {
+        let cmp = intersect_cubics(vertical(0.0, 0.0, 1.0), vertical(1.0, 2.0, 3.0), 1e-6, 2e-6);
+        assert_eq!(cmp.iter().count(), 0);
     }
 
     #[test]

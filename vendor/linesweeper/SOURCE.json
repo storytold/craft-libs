@@ -7,7 +7,9 @@
   "upstream_repository": null,
   "upstream_revision": "824b0791a750f7b27b8edcbb6c6244d0e629875e",
   "upstream_directory": "",
-  "local_patches": [],
+  "local_patches": [
+    "In `src/curve/mod.rs`, `intersect_cubics` reverses a curve whose `p3.y` is below its `p0.y` before comparing it, and `intersect_cubics_with_precomputed_decomp` returns `Ish` over the common range when `sure_tolerance` is not positive or is larger than `ish_tolerance`, or `ish_tolerance` is not finite, and an empty order for curves whose vertical ranges do not overlap; the docs of these functions, `from_monotone_cubic`, `solve_t_for_y` and `y_subsegment` state their input rules. In `src/topology.rs`, `Topology::bounding_box` returns `Rect::ZERO` when there are no segments."
+  ],
   "files": [
     { "path": ".cargo_vcs_info.json", "source_sha256": "47fba6a9dbdf445a5c97f783c9be62093035f9d5e5cdc2cf3216ad8259bcd8fc", "source_git_blob": null, "sha256": "47fba6a9dbdf445a5c97f783c9be62093035f9d5e5cdc2cf3216ad8259bcd8fc" },
     { "path": ".gitignore", "source_sha256": "88b59092499ae05234330eb7d0b01e953e969caf05261530e3765eef02536cf0", "source_git_blob": null, "sha256": "88b59092499ae05234330eb7d0b01e953e969caf05261530e3765eef02536cf0" },
@@ -32,7 +34,7 @@
     { "path": "proptest-regressions/topology.txt", "source_sha256": "49ff0b5b370f082984276d5312f03b1fc96ef0dd218f9efd7b084b11abbb9d19", "source_git_blob": null, "sha256": "49ff0b5b370f082984276d5312f03b1fc96ef0dd218f9efd7b084b11abbb9d19" },
     { "path": "src/arbitrary.rs", "source_sha256": "9c3753a40cfea2528a546295d39e0513537db5a3411a931fccea063873d95750", "source_git_blob": null, "sha256": "9c3753a40cfea2528a546295d39e0513537db5a3411a931fccea063873d95750" },
     { "path": "src/curve/line.rs", "source_sha256": "07aebead4b0050410a3f9f28b66062b6016c115df58e2b2669470263cd352f3e", "source_git_blob": null, "sha256": "07aebead4b0050410a3f9f28b66062b6016c115df58e2b2669470263cd352f3e" },
-    { "path": "src/curve/mod.rs", "source_sha256": "36a8dbe96ac1d3bec307dc63b504206ec7fdfc11d10799fbb1a8990c29b8c5f2", "source_git_blob": null, "sha256": "36a8dbe96ac1d3bec307dc63b504206ec7fdfc11d10799fbb1a8990c29b8c5f2" },
+    { "path": "src/curve/mod.rs", "source_sha256": "36a8dbe96ac1d3bec307dc63b504206ec7fdfc11d10799fbb1a8990c29b8c5f2", "source_git_blob": null, "sha256": "52cb0916966f786b2ea3c33d5d60981930014a18c202577cce8b8cebeb634afe" },
     { "path": "src/curve/split_quad.rs", "source_sha256": "b8aae4ce7c16fa623724f667e1058130a9c7eed693b5b01e8b9e16632b8ec45f", "source_git_blob": null, "sha256": "b8aae4ce7c16fa623724f667e1058130a9c7eed693b5b01e8b9e16632b8ec45f" },
     { "path": "src/curve/transverse.rs", "source_sha256": "be9c695531f4cb0fe73af13e78040b51b9476c193d84562e701aadd07b3fd06e", "source_git_blob": null, "sha256": "be9c695531f4cb0fe73af13e78040b51b9476c193d84562e701aadd07b3fd06e" },
     { "path": "src/generators.rs", "source_sha256": "cc9f2441546db9204219294c354449809dda77dffad06fec8a30f45df01e6fef", "source_git_blob": null, "sha256": "cc9f2441546db9204219294c354449809dda77dffad06fec8a30f45df01e6fef" },
@@ -63,7 +65,7 @@
     { "path": "src/sweep/snapshots/linesweeper__sweep__sweep_line__tests__square_and_diamond.snap", "source_sha256": "3f01a76fb7ff4aef0fd55fd869602d4a2b69fff1bd65632f406b275b5d6af600", "source_git_blob": null, "sha256": "3f01a76fb7ff4aef0fd55fd869602d4a2b69fff1bd65632f406b275b5d6af600" },
     { "path": "src/sweep/snapshots/linesweeper__sweep__sweep_line__tests__two_squares.snap", "source_sha256": "79e3c95e563a66c0ce244125470a106a18dfe29f276b732defd305406c873c7e", "source_git_blob": null, "sha256": "79e3c95e563a66c0ce244125470a106a18dfe29f276b732defd305406c873c7e" },
     { "path": "src/sweep/sweep_line.rs", "source_sha256": "822b261f682911ea0c0370eaf17d9201a1e639b315359dcb6a3b877a229816e3", "source_git_blob": null, "sha256": "822b261f682911ea0c0370eaf17d9201a1e639b315359dcb6a3b877a229816e3" },
-    { "path": "src/topology.rs", "source_sha256": "9c9b48bc3853884425127e2d64e8ed957ba0d27e1696e2c457e95282e52d6a5b", "source_git_blob": null, "sha256": "9c9b48bc3853884425127e2d64e8ed957ba0d27e1696e2c457e95282e52d6a5b" },
+    { "path": "src/topology.rs", "source_sha256": "9c9b48bc3853884425127e2d64e8ed957ba0d27e1696e2c457e95282e52d6a5b", "source_git_blob": null, "sha256": "d74f3ab448fba643daaac39c43a05c0578518053f68c74b218b1ba3ced7012e5" },
     { "path": "src/treevec.rs", "source_sha256": "d88b9fbf02fa9f318560e1d483d465555f2b696ae12c00f8e4f5b71ea6779445", "source_git_blob": null, "sha256": "d88b9fbf02fa9f318560e1d483d465555f2b696ae12c00f8e4f5b71ea6779445" },
     { "path": "src/typed_vec.rs", "source_sha256": "3e9a2675b8a40d8fc4df0575bd9d0d16b5604d18e9b78638dd5a612b28fc4c30", "source_git_blob": null, "sha256": "3e9a2675b8a40d8fc4df0575bd9d0d16b5604d18e9b78638dd5a612b28fc4c30" },
     { "path": "tests/fonts.rs", "source_sha256": "081604ebf560a19ff0427efd9a17eaaa0a3b46ad0bf58323fd6e21b6c0764400", "source_git_blob": null, "sha256": "081604ebf560a19ff0427efd9a17eaaa0a3b46ad0bf58323fd6e21b6c0764400" },
