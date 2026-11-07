@@ -38,7 +38,9 @@ mod read;
 
 use serde::{Deserialize, Serialize};
 
-pub use limits::{Limits, MAX_DEPTH, MAX_GROUP_DEPTH, MAX_MANIFEST_ITEMS, check_manifest, manifest_depth, parse_manifest};
+pub use limits::{
+    Limits, MAX_DEPTH, MAX_GROUP_DEPTH, MAX_MANIFEST_ITEMS, check_manifest, check_manifest_with_cancel, manifest_depth, parse_manifest,
+};
 pub use migrate::{Step, migrate};
 pub use read::{read_manifest, read_manifest_with};
 
@@ -176,6 +178,9 @@ impl TileRef {
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum Error {
+    /// A cancellation-aware validation observed the caller's request.
+    #[error("manifest check canceled")]
+    Cancelled,
     /// The manifest breaks the format.
     #[error("corrupt .pcraft bundle: {0}")]
     Corrupt(String),
