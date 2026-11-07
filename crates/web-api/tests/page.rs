@@ -221,10 +221,13 @@ async fn params_that_are_not_a_json_object_reject_and_never_reach_the_app() {
     let to_json_null = obj("{}");
     let null_fn = Closure::<dyn Fn() -> JsValue>::new(|| JsValue::NULL).into_js_value();
     js_sys::Reflect::set(&to_json_null, &"toJSON".into(), &null_fn).expect("set toJSON");
+    let to_json_undefined = obj("{}");
+    let undefined_fn = Closure::<dyn Fn() -> JsValue>::new(|| JsValue::UNDEFINED).into_js_value();
+    js_sys::Reflect::set(&to_json_undefined, &"toJSON".into(), &undefined_fn).expect("set toJSON");
     let cyclic = obj("{}");
     js_sys::Reflect::set(&cyclic, &"me".into(), &cyclic).expect("set cycle");
     let function = Closure::<dyn Fn()>::new(|| {}).into_js_value();
-    let bad: [(&str, JsValue); 8] = [
+    let bad: [(&str, JsValue); 9] = [
         ("NaN", JsValue::from_f64(f64::NAN)),
         ("a number", JsValue::from_f64(3.0)),
         ("a string", JsValue::from_str(r#"{"x": 1}"#)),
@@ -232,6 +235,7 @@ async fn params_that_are_not_a_json_object_reject_and_never_reach_the_app() {
         ("an array", obj("[1, 2]")),
         ("an invalid Date", date.into()),
         ("a toJSON returning null", to_json_null),
+        ("a toJSON returning undefined", to_json_undefined),
         ("a cyclic object", cyclic),
     ];
     for (what, params) in bad.iter().cloned().chain([("a function", function)]) {
