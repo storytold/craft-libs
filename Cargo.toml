@@ -55,6 +55,10 @@ craft-html = { path = "crates/html" }
 craft-heif = { path = "crates/heif" }
 craft-fig = { path = "crates/fig" }
 craft-fonts-build = { path = "crates/fonts-build" }
+craft-gpu = { path = "crates/gpu" }
+craft-gpu-null = { path = "crates/gpu-null" }
+craft-gpu-providers = { path = "crates/gpu-providers" }
+craft-gpu-wgpu = { path = "crates/gpu-wgpu" }
 craft-i18n = { path = "crates/i18n" }
 craft-idml = { path = "crates/idml" }
 craft-jmap = { path = "crates/jmap" }
@@ -131,6 +135,9 @@ proptest = "1"
 encoding_rs = "0.8"
 # All date/time conversion goes through chrono (no hand-rolled calendar code beyond the 400-year range extension; AGENTS.md).
 chrono = { version = "0.4.45", default-features = false, features = ["std"] }
+# Foundation crates for craft-gpu-wgpu. The versions match the ones the app repos already pin.
+pollster = "0.4"
+wgpu = { version = "30", default-features = false, features = ["std", "wgsl"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
