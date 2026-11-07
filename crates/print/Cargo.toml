@@ -9,7 +9,7 @@ description = "System PDF print spooler for the Craft apps: CUPS and Windows"
 
 [dependencies]
 # Safe API; Win32 calls are isolated in this maintained MIT OR Apache-2.0 dependency.
-craft-winprint-gdi = { git = "https://github.com/storytold/winprint.rs", rev = "64e7afd4d1483512385012c340ecaaaf0f3beb7f" }
+craft-winprint-gdi = { git = "https://github.com/storytold/winprint.rs", rev = "17f5f1e3c5038be6bd122df36fc5b5aa2672502c" }
 
 [lints]
 workspace = true
@@ -25,8 +25,10 @@ log = "0.4"
 # feature downloads PDFium at build time and is off. The maintained BSD-3-Clause fork
 # preserves terminal failures/cancellation and bounds the completion notification wait, and
 # creates the Direct2D factory multi-threaded, since Windows.Data.Pdf draws on its own worker
-# threads (storytold/pdfcraft#5006). Pinned to an immutable revision; review before bumping.
-winprint = { git = "https://github.com/storytold/winprint.rs", rev = "64e7afd4d1483512385012c340ecaaaf0f3beb7f", default-features = false }
+# threads (storytold/pdfcraft#5006). PDF jobs load through a stream to avoid StorageFile
+# access denial (storytold/winprint.rs#15). Includes the multi-threaded factory fix.
+# Pinned to an immutable revision; review before bumping.
+winprint = { git = "https://github.com/storytold/winprint.rs", rev = "17f5f1e3c5038be6bd122df36fc5b5aa2672502c", default-features = false }
 # GetDefaultPrinter (MIT).
 winsafe = { version = "0.0.29", default-features = false, features = ["winspool"] }
 # The job file's private folder.
