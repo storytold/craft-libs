@@ -10,12 +10,15 @@ pub mod capture;
 pub mod combo;
 pub mod direction;
 pub mod docking;
+#[cfg(feature = "esign")]
+pub mod esign;
 mod focus;
 pub mod fonts;
 pub mod icons;
 pub mod ime;
 pub mod layout;
 pub mod localized;
+pub mod menu;
 pub mod panes;
 pub mod printing;
 pub mod tabs;
