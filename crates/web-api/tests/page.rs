@@ -212,3 +212,48 @@ async fn screenshot_carries_the_png_as_data_whatever_the_app_calls_it() {
     let out = call("screenshot", &[]).await.expect("screenshot");
     assert_eq!(to_value(&out), json!({"base64": "UE5H", "width": 2, "data": "UE5H"}));
 }
+
+#[wasm_bindgen_test]
+async fn params_that_are_not_a_json_object_reject_and_never_reach_the_app() {
+    reset();
+    Rc::new(PageApi::new("vectorcraft", Methods::default(), recording_request(json!({"ok": true, "result": {}})))).install().expect("install");
+    let date = js_sys::Date::new(&JsValue::from_str("not a date"));
+    let to_json_null = obj("{}");
+    let null_fn = Closure::<dyn Fn() -> JsValue>::new(|| JsValue::NULL).into_js_value();
+    js_sys::Reflect::set(&to_json_null, &"toJSON".into(), &null_fn).expect("set toJSON");
+    let cyclic = obj("{}");
+    js_sys::Reflect::set(&cyclic, &"me".into(), &cyclic).expect("set cycle");
+    let function = Closure::<dyn Fn()>::new(|| {}).into_js_value();
+    let bad: [(&str, JsValue); 8] = [
+        ("NaN", JsValue::from_f64(f64::NAN)),
+        ("a number", JsValue::from_f64(3.0)),
+        ("a string", JsValue::from_str(r#"{"x": 1}"#)),
+        ("a boolean", JsValue::TRUE),
+        ("an array", obj("[1, 2]")),
+        ("an invalid Date", date.into()),
+        ("a toJSON returning null", to_json_null),
+        ("a cyclic object", cyclic),
+    ];
+    for (what, params) in bad.iter().cloned().chain([("a function", function)]) {
+        for (name, args) in [
+            ("request", vec![JsValue::from_str("custom.method"), params.clone()]),
+            ("execute", vec![JsValue::from_str("object.rectangle"), params.clone()]),
+            ("docInspect", vec![params.clone()]),
+            ("uiInspect", vec![params.clone()]),
+            ("screenshot", vec![params.clone()]),
+        ] {
+            let err = match call(name, &args).await {
+                Err(err) => err,
+                Ok(_) => panic!("{name} with {what} as params must reject"),
+            };
+            let message = String::from(err.unchecked_into::<js_sys::Error>().message());
+            assert!(message.starts_with("params "), "{name} with {what}: {message}");
+        }
+    }
+    assert_eq!(REQUESTS.with(|r| r.borrow().len()), 0, "no rejected call reaches the app");
+
+    call("request", &["custom.method".into(), JsValue::UNDEFINED]).await.expect("undefined params");
+    call("request", &["custom.method".into(), JsValue::NULL]).await.expect("null params");
+    let calls = REQUESTS.with(|r| r.borrow().clone());
+    assert_eq!(calls, [("custom.method".to_string(), json!({})), ("custom.method".to_string(), json!({}))], "absent params are {{}}");
+}

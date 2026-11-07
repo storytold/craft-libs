@@ -11,6 +11,11 @@ keeps them. Each function returns a Promise that resolves with the method's `res
 an `Error` carrying `error`. Every call has a timeout (30 s by default, `PageApi::with_timeout`);
 when the app does not answer in time, the error says so and the app's request future is dropped, so an app that releases a request when its future goes away (the desktop `ControlRequest` has `abandon`) never runs a call the page was told had failed.
 
+Params are a plain object; `undefined` and `null` mean `{}`. Anything else (a number, a string,
+`NaN`, an array, a function, an invalid `Date`, an object `JSON.stringify` can't write or writes as
+anything but an object) rejects with an `Error` and never reaches the app: as `{}` it would run the
+method with its defaults.
+
 `screenshot()` resolves with the reply the app's control method sends, plus `data` when the reply carries the PNG inline: the base64 PNG, whatever field the app names it (`pngBase64`, `png_base64`, `png` or `base64`). A reply with no inline PNG, such as one the app wrote to a `path`, has no `data` and is unchanged.
 
 Which functions are installed follows the app's `Methods` table: only the functions whose control

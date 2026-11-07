@@ -76,7 +76,8 @@ impl PageApi {
             "request",
             Closure::<dyn FnMut(String, JsValue) -> js_sys::Promise>::new(move |method: String, params: JsValue| {
                 let page = page.clone();
-                future_to_promise(async move { request_promise_outcome(&page.call(&method, from_js(&params)).await) })
+                let params = from_js(&params);
+                future_to_promise(async move { request_promise_outcome(&page.call(&method, params?).await) })
             })
             .into_js_value(),
         )?;
@@ -87,8 +88,9 @@ impl PageApi {
                 "execute",
                 Closure::<dyn FnMut(String, JsValue) -> js_sys::Promise>::new(move |command: String, params: JsValue| {
                     let page = page.clone();
+                    let params = from_js(&params);
                     future_to_promise(async move {
-                        let params = json!({"command": command, "params": from_js(&params)});
+                        let params = json!({"command": command, "params": params?});
                         request_promise_outcome(&page.call(method, params).await)
                     })
                 })
@@ -115,7 +117,8 @@ impl PageApi {
                     name,
                     Closure::<dyn FnMut(JsValue) -> js_sys::Promise>::new(move |params: JsValue| {
                         let page = page.clone();
-                        future_to_promise(async move { request_promise_outcome(&page.call(method, from_js(&params)).await) })
+                        let params = from_js(&params);
+                        future_to_promise(async move { request_promise_outcome(&page.call(method, params?).await) })
                     })
                     .into_js_value(),
                 )?;
@@ -128,8 +131,8 @@ impl PageApi {
                 "screenshot",
                 Closure::<dyn FnMut(JsValue) -> js_sys::Promise>::new(move |params: JsValue| {
                     let page = page.clone();
-                    let params = screenshot_params(from_js(&params));
-                    future_to_promise(async move { request_promise_outcome(&screenshot_data(page.call(method, params).await)) })
+                    let params = from_js(&params).map(screenshot_params);
+                    future_to_promise(async move { request_promise_outcome(&screenshot_data(page.call(method, params?).await)) })
                 })
                 .into_js_value(),
             )?;
@@ -273,10 +276,30 @@ fn to_js(v: &Value) -> JsValue {
     js_sys::JSON::parse(&v.to_string()).unwrap_or(JsValue::NULL)
 }
 
-/// JS → JSON. VectorCraft's `from_js`; absent values become an empty object.
-fn from_js(v: &JsValue) -> Value {
+/// JS → JSON params. Absent values (`undefined`, `null`) become an empty object. Anything that is not
+/// a plain JSON object rejects with an `Error` before the app is asked: a number, string or boolean,
+/// `NaN`, a function, an array, an object `JSON.stringify` can't write (a cycle, a throwing
+/// `toJSON`), and one that writes as something other than an object (an invalid `Date` and a
+/// `toJSON` returning `null` both write `null`). As `{}` those would run the method with its
+/// defaults: a typo would act on the whole selection or document.
+fn from_js(v: &JsValue) -> Result<Value, JsValue> {
     if v.is_undefined() || v.is_null() {
-        return json!({});
+        return Ok(json!({}));
     }
-    js_sys::JSON::stringify(v).ok().and_then(|s| s.as_string()).and_then(|s| serde_json::from_str(&s).ok()).unwrap_or(json!({}))
+    let reject = |why: String| -> JsValue { js_sys::Error::new(&format!("params {why}")).into() };
+    if !v.is_object() {
+        return Err(reject("must be an object".to_string()));
+    }
+    let text = js_sys::JSON::stringify(v)
+        .ok()
+        .and_then(|s| s.as_string())
+        .ok_or_else(|| reject("are not JSON (a cyclic object, or a toJSON that throws?)".to_string()))?;
+    match serde_json::from_str::<Value>(&text) {
+        Ok(params @ Value::Object(_)) => Ok(params),
+        _ => {
+            let shown: String = text.chars().take(40).collect();
+            let more = if shown.len() < text.len() { "…" } else { "" };
+            Err(reject(format!("must be a JSON object, not {shown}{more}")))
+        }
+    }
 }
