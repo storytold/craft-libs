@@ -44,11 +44,13 @@ pub(crate) enum Work {
     InteriorHeights,
     /// Curves whose length was measured.
     Measured,
+    /// Entries of the windings walked to list the inputs that cover each side of an edge.
+    MaskEntries,
 }
 
 #[cfg(test)]
 thread_local! {
-    static COUNTS: std::cell::RefCell<[usize; 19]> = const { std::cell::RefCell::new([0; 19]) };
+    static COUNTS: std::cell::RefCell<[usize; 20]> = const { std::cell::RefCell::new([0; 20]) };
 }
 
 /// Counts `n` more of `what` on this thread (tests only).
@@ -73,5 +75,5 @@ pub(crate) fn take(what: Work) -> usize {
 /// Resets every count on this thread.
 #[cfg(test)]
 pub(crate) fn reset() {
-    COUNTS.with(|c| *c.borrow_mut() = [0; 19]);
+    COUNTS.with(|c| *c.borrow_mut() = [0; 20]);
 }

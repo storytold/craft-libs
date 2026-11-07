@@ -92,7 +92,8 @@ pub struct Limits {
     pub join_work: usize,
     /// Most work `remove_redundant_points` does ([`crate::REDUNDANT_WORK`]).
     pub redundant_work: usize,
-    /// Most flags a boolean operation sets to tell its predicate what covers the faces ([`crate::MASK_WORK`]).
+    /// Most flags a boolean operation sets to tell its predicate what covers the faces, and entries Divide
+    /// and `regions` walk to list the inputs that cover each side of an edge ([`crate::MASK_WORK`]).
     pub mask_work: usize,
 }
 

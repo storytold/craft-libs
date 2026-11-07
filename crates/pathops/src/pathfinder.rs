@@ -234,17 +234,16 @@ fn pathfinder_unguarded(op: PathfinderOp, shapes: &[Shape], precision: f64) -> V
 /// The faces of `arr`, each distinct coverage mask's in turn (sorted), each face an outer contour
 /// and the holes of its mask directly inside it ([`face_groups`]).
 fn regions_of(arr: &Arrangement) -> Vec<Region> {
-    let masks = arr.distinct_masks();
-    let refs: Vec<&[bool]> = masks.iter().map(Vec::as_slice).collect();
+    // Past the limit on the entries walked there are no regions (as for an input too complex to sweep).
+    let Some(masks) = arr.distinct_masks() else { return Vec::new() };
     let mut faces: Vec<Vec<BezPath>> = vec![Vec::new(); masks.len()];
-    each_face(arr, &refs, |m, c, group| {
+    each_face(arr, &masks, |m, c, group| {
         if let Some(f) = faces.get_mut(m) {
             f.push(contours_to_path(c, group.iter().copied(), &arr.tidy));
         }
     });
     let mut out = Vec::new();
-    for (mask, paths) in masks.iter().zip(faces) {
-        let sources: Vec<usize> = mask.iter().enumerate().filter(|(_, b)| **b).map(|(i, _)| i).collect();
+    for (sources, paths) in masks.into_iter().zip(faces) {
         out.extend(paths.into_iter().filter(|p| !p.elements().is_empty()).map(|path| Region { path, sources: sources.clone() }));
     }
     out
@@ -328,7 +327,7 @@ fn each_classified_face(
     }
 }
 
-/// Calls `f` with each face of `arr` whose coverage is one of `masks` (distinct): the index of
+/// Calls `f` with each face of `arr` whose coverage is one of `masks` (distinct lists of covering inputs): the index of
 /// its mask in `masks`, the contour pass it is in, and its contours, an outer contour and the
 /// holes of its mask directly inside it ([`face_groups`]). Each mask's faces come in the order
 /// of that mask's own contour pass.
@@ -338,12 +337,12 @@ fn each_classified_face(
 /// share no vertex (so no edge either): one pass per batch walks each face's contours exactly as
 /// its own mask's pass would, and the mask a contour bounds is the one of its batch at its first
 /// point.
-fn each_face(arr: &Arrangement, masks: &[&[bool]], f: impl FnMut(usize, &Contours, &[ContourIdx])) {
+fn each_face(arr: &Arrangement, masks: &[Vec<usize>], f: impl FnMut(usize, &Contours, &[ContourIdx])) {
     if masks.is_empty() {
         return;
     }
     // Each mask is found by the inputs it covers.
-    let ids = CoverIds::new(masks.iter().map(|m| m.iter().enumerate().filter(|(_, b)| **b).map(|(k, _)| k).collect()).collect());
+    let ids = CoverIds::new(masks.to_vec());
     each_classified_face(arr, masks.len(), |w| ids.of(arr, w), f);
 }
 
@@ -646,6 +645,7 @@ mod tests {
     use super::*;
     use crate::boolean::CONTOUR_PASSES;
     use crate::testutil::{ellipse, length, line, polyline, polyline_pts, rect, subpath_count};
+    use crate::work::{self, Work};
     use kurbo::Rect;
     use proptest::prelude::*;
 
@@ -653,9 +653,8 @@ mod tests {
     /// face lies inside a hole of its own mask (`grouped` puts such an island in the frame's face).
     fn regions_one_mask_at_a_time(arr: &Arrangement) -> Vec<Region> {
         let mut out = Vec::new();
-        for mask in arr.distinct_masks() {
-            let c = arr.contours(|m| m == mask.as_slice());
-            let sources: Vec<usize> = mask.iter().enumerate().filter(|(_, b)| **b).map(|(i, _)| i).collect();
+        for sources in arr.distinct_masks().expect("within the limit") {
+            let c = arr.contours(|m| m.iter().enumerate().filter(|(_, b)| **b).map(|(i, _)| i).eq(sources.iter().copied()));
             for g in c.grouped() {
                 let path = contours_to_path(&c, g, &arr.tidy);
                 if !path.elements().is_empty() {
@@ -989,6 +988,74 @@ mod tests {
         let trim_cov_expected = old_trim(&covered, DEFAULT_PRECISION);
         assert_eq!(trim_cov_actual.len(), 1);
         assert_eq!(trim_cov_actual, trim_cov_expected);
+    }
+
+    /// Divide lists the inputs that cover each side of each edge, not a flag for every input: for shapes
+    /// that lie apart the work is in proportion to their number (it was four times the square: 80,000
+    /// flags for 100 shapes, 1,280,000 for 400).
+    #[test]
+    fn divide_of_shapes_apart_walks_entries_in_proportion_to_their_number() {
+        let walked = |n: u32| {
+            let shapes: Vec<Shape> = (0..n)
+                .map(|i| Shape::new(rect(f64::from(i) * 20.0, 0.0, f64::from(i) * 20.0 + 10.0, 10.0), FillRule::NonZero, u64::from(i)))
+                .collect();
+            work::reset();
+            let divided = pathfinder(PathfinderOp::Divide, &shapes);
+            assert_eq!(divided.len(), n as usize);
+            // In the order of the flags of every input, which puts the later shape's face first.
+            assert!(
+                divided.iter().rev().enumerate().all(|(i, s)| s.key == i as u64 && (crate::area(&s.path, FillRule::NonZero) - 100.0).abs() < 1e-9)
+            );
+            let regions = crate::regions(&shapes);
+            assert_eq!(regions.len(), n as usize);
+            assert!(regions.iter().rev().enumerate().all(|(i, r)| r.sources == [i]));
+            (work::take(Work::MaskEntries), work::take(Work::MaskFlags))
+        };
+        let ((small, small_flags), (large, large_flags)) = (walked(100), walked(400));
+        assert_eq!((small_flags, large_flags), (0, 0), "no flag is set for every input");
+        // Four times the shapes, four times the entries (not sixteen).
+        assert!(small > 0 && large == 4 * small, "{small} entries for 100 shapes, {large} for 400");
+    }
+
+    /// Past `mask_work` entries Divide and `regions` give nothing, and stop walking at the limit: with
+    /// exactly the entries it needs it divides, with one less it walks no further than that.
+    #[test]
+    fn divide_stops_at_the_mask_limit_before_walking_past_it() {
+        // Overlapping circles: faces are covered by several shapes, the entries are many.
+        let shapes: Vec<Shape> = (0..14u32)
+            .map(|i| Shape::new(ellipse(Rect::new(f64::from(i) * 7.0, 0.0, f64::from(i) * 7.0 + 40.0, 40.0)), FillRule::NonZero, u64::from(i)))
+            .collect();
+        work::reset();
+        let free = pathfinder(PathfinderOp::Divide, &shapes);
+        let needed = work::take(Work::MaskEntries);
+        assert!(free.len() > 14 && needed > 14 * 8, "{} shapes from {needed} entries", free.len());
+        let at = crate::Limits { mask_work: needed, ..crate::Limits::default() };
+        assert_eq!(crate::with_limits(at, || pathfinder(PathfinderOp::Divide, &shapes)), free);
+        let under = crate::Limits { mask_work: needed - 1, ..crate::Limits::default() };
+        work::reset();
+        assert!(crate::with_limits(under, || pathfinder(PathfinderOp::Divide, &shapes)).is_empty());
+        let walked = work::take(Work::MaskEntries);
+        assert!(walked < needed, "{walked} entries walked with a limit of {}", needed - 1);
+        assert!(crate::with_limits(under, || crate::regions(&shapes)).is_empty());
+        // Lowest: nothing at all is walked.
+        let none = crate::Limits { mask_work: 0, ..crate::Limits::default() };
+        work::reset();
+        assert!(crate::with_limits(none, || crate::regions(&shapes)).is_empty());
+        assert_eq!(work::take(Work::MaskEntries), 0);
+    }
+
+    /// Lists of covering inputs sort as the flags of every input did.
+    #[test]
+    fn lists_of_covering_inputs_sort_as_flags_did() {
+        use crate::boolean::cmp_masks;
+        let n = 6;
+        let flags = |ids: &[usize]| -> Vec<bool> { (0..n).map(|i| ids.contains(&i)).collect() };
+        let subsets: Vec<Vec<usize>> = (1u32..(1 << n)).map(|bits| (0..n).filter(|i| bits >> i & 1 == 1).collect()).collect();
+        for a in &subsets {
+            for b in &subsets {
+                assert_eq!(cmp_masks(a, b), flags(a).cmp(&flags(b)), "{a:?} against {b:?}");
+            }
+        }
     }
 
     /// Merge walks the arrangement once for all the keys that share no vertex, not once for each:

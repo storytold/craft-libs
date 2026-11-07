@@ -145,9 +145,11 @@ work of each operation is bounded before it starts, in counts the tests assert o
   (4,294,967,296). All of them are counted in O(n log n) before the sweep;
 - a boolean operation sets a flag for each input every time its predicate is asked about a face's side, about
   four times for each segment of the sweep, which is more than the sweep's own work when most of many inputs
-  are empty: past `MASK_WORK` (268,435,456) such flags it is `TooComplex`. The union of many inputs, and of
-  the outlines of a stroke, stops as soon as the contours made pass `MAX_ELEMENTS`, and does not make the
-  rest;
+  are empty: past `MASK_WORK` (268,435,456) such flags it is `TooComplex`. Divide and `regions` list the
+  inputs that cover each side of each edge, one entry for each covering input and each side, which is near
+  the number of segments when shapes lie apart (100 shapes apart walk 1,200 entries, 400 walk 4,800), and give
+  nothing past the same number of entries. The union of many inputs, and of the outlines of a stroke, stops
+  as soon as the contours made pass `MAX_ELEMENTS`, and does not make the rest;
 - a stroke's outline is counted as it is made (a subpath of more than 256 segments is stroked in windows of
   256, so that a width that is huge against the tolerance cannot make millions of curves first) and the
   operation is `TooComplex` past `MAX_ELEMENTS` elements of outline;
@@ -277,6 +279,10 @@ bit for bit VectorCraft's), and the results are identical except where noted:
     VectorCraft did that for two operands only, and the n-ary result gained or lost a region for a
     self-crossing one. When resolving is over a limit, `try_boolean` is `TooComplex`, where it returned the
     result it knew to be wrong (VectorCraft had no limits to be over);
+  - Divide and `regions` found the inputs that cover each side of each edge with a flag for every input
+    (80,000 flags for 100 shapes apart, 1,280,000 for 400: the square of their number), and now list the
+    covering inputs only, in the same order and with the same results; past `MASK_WORK` entries they give
+    nothing, as an input too complex to sweep does;
   - `simplify_with` with `straight_lines` measures the distance of a point to the finite segment it is
     judged against, not to the line through it, so a path that runs out past an end and back is kept;
     `smooth` is documented to measure the tolerance from the smoothed path;

@@ -8,8 +8,6 @@
 //! [`tidy_segments`] then re-joins pieces that came from the same smooth curve by refitting, so
 //! results have roughly as few anchors as the inputs.
 
-use std::collections::BTreeSet;
-
 use kurbo::{BezPath, CubicBez, Point, Shape as _};
 use linesweeper::topology::{ContourIdx, Contours, Topology, WindingNumber};
 
@@ -71,6 +69,10 @@ pub(crate) struct Multi(Vec<(usize, i32)>);
 impl Multi {
     fn get(&self, i: usize) -> i32 {
         self.0.binary_search_by_key(&i, |e| e.0).ok().and_then(|k| self.0.get(k)).map_or(0, |e| e.1)
+    }
+    /// How many inputs have a non-zero winding.
+    pub(crate) fn len(&self) -> usize {
+        self.0.len()
     }
     /// The non-zero windings, by input.
     pub(crate) fn iter(&self) -> impl DoubleEndedIterator<Item = (usize, i32)> + '_ {
@@ -242,8 +244,17 @@ pub(crate) struct Arrangement {
 /// (the default of [`crate::Limits::mask_work`]). The predicate is given one for every input each time
 /// it is asked, about four times for each segment of the sweep, so many inputs (most of them
 /// empty, say) make the work the product of their number and the sweep's, which the other limits
-/// do not count. About a quarter of a second in a release build.
+/// do not count. About a quarter of a second in a release build. Listing the inputs that cover each
+/// side of each edge, for the faces [`crate::pathfinder`] Divide and [`crate::regions`] give, is held
+/// to as many entries (one for each covering input and one for each side).
 pub const MASK_WORK: usize = 1 << 28;
+
+/// The order of two lists of covering inputs (ascending) that the flags of every input would give:
+/// at the first input where one has a flag and the other has none, the one with none is the smaller;
+/// a list that is the start of another is the smaller.
+pub(crate) fn cmp_masks(a: &[usize], b: &[usize]) -> std::cmp::Ordering {
+    a.iter().zip(b).find(|(x, y)| x != y).map_or_else(|| a.len().cmp(&b.len()), |(x, y)| y.cmp(x))
+}
 
 /// Output cleanup settings: refit `precision`, and anchor positions that must survive (the
 /// inputs' own anchors — only joints the sweep introduced are merged away).
@@ -363,19 +374,33 @@ impl Arrangement {
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.contours(pred))).map_err(|_| PathOpsError::Degenerate)
     }
 
-    /// All distinct non-empty coverage masks that occur next to some edge, sorted.
-    pub(crate) fn distinct_masks(&self) -> Vec<Vec<bool>> {
-        let mut set = BTreeSet::new();
+    /// All distinct non-empty sets of inputs that cover a face next to some edge, each as the list of
+    /// the inputs (ascending, [`Self::covered`]), in the order the flags of every input would sort in
+    /// (a set comes before one that has an input where it has none, at the first input they differ
+    /// at). Walks the covering inputs of each side of each edge, not a flag for every input: the
+    /// work is what the faces are covered by, near the number of segments when shapes lie apart.
+    /// `None` when that is more than [`crate::Limits::mask_work`] entries.
+    pub(crate) fn distinct_masks(&self) -> Option<Vec<Vec<usize>>> {
+        let mut budget = crate::budget::limits().mask_work;
+        let mut set: std::collections::HashSet<Vec<usize>> = std::collections::HashSet::new();
+        let mut buf: Vec<usize> = Vec::new();
         for s in self.top.segment_indices() {
             let h = s.first_half();
             for w in [self.top.winding_clockwise(h), self.top.winding_counter_clockwise(h)] {
-                let m = self.mask(w);
-                if m.iter().any(|&b| b) {
-                    set.insert(m);
+                // Charged before the entries are walked.
+                let entries = w.len().saturating_add(1);
+                budget = budget.checked_sub(entries)?;
+                work::add(Work::MaskEntries, entries);
+                buf.clear();
+                buf.extend(self.covered(w));
+                if !buf.is_empty() && !set.contains(buf.as_slice()) {
+                    set.insert(buf.clone());
                 }
             }
         }
-        set.into_iter().collect()
+        let mut masks: Vec<Vec<usize>> = set.into_iter().collect();
+        masks.sort_by(|a, b| cmp_masks(a, b));
+        Some(masks)
     }
 
     /// Vertices where three or more edges meet (true intersections / touch points).

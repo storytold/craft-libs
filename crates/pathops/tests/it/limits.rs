@@ -239,3 +239,17 @@ fn a_lower_sweep_event_limit_refuses_a_hatch_the_default_takes() {
     assert_eq!(with_limits(none, || try_area(&hatch, FillRule::NonZero)), Err(PathOpsError::TooComplex));
     assert_eq!(with_limits(none, || try_unite_all(&[(&hatch, FillRule::NonZero)])), Err(PathOpsError::TooComplex));
 }
+
+#[test]
+fn a_lower_mask_limit_gives_no_regions_and_no_division() {
+    let shapes: Vec<Shape> = (0..6)
+        .map(|i| Shape::new(rectangle(Rect::new(f64::from(i) * 20.0, 0.0, f64::from(i) * 20.0 + 10.0, 10.0)), FillRule::NonZero, u64::from(i as u32)))
+        .collect();
+    assert_eq!(pathfinder(PathfinderOp::Divide, &shapes).len(), 6);
+    assert_eq!(regions(&shapes).len(), 6);
+    let none = with(|l| l.mask_work = 0);
+    assert!(with_limits(none, || pathfinder(PathfinderOp::Divide, &shapes)).is_empty());
+    assert!(with_limits(none, || regions(&shapes)).is_empty());
+    // The other operations of the same shapes do not list covering inputs.
+    assert_eq!(with_limits(none, || pathfinder(PathfinderOp::Unite, &shapes)).len(), 1);
+}
