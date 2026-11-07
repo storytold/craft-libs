@@ -948,52 +948,6 @@ mod tests {
         assert_eq!(*vec.get(7).unwrap(), 1);
     }
 
-    #[test]
-    fn insert_remove() {
-        let mut vec = TreeVec::<i32, 4>::default();
-        vec.insert(0, 1);
-        vec.insert(0, 2);
-        vec.insert(0, 3);
-        vec.insert(0, 4);
-        vec.remove(1);
-        vec.check_invariants();
-        assert_eq!(*vec.get(0).unwrap(), 4);
-        assert_eq!(*vec.get(1).unwrap(), 2);
-        assert_eq!(*vec.get(2).unwrap(), 1);
-
-        vec.insert(0, 1);
-        vec.insert(0, 2);
-        vec.insert(0, 3);
-        vec.insert(0, 4);
-        vec.remove(5);
-        vec.check_invariants();
-        assert_eq!(*vec.get(0).unwrap(), 4);
-        assert_eq!(*vec.get(1).unwrap(), 3);
-        assert_eq!(*vec.get(2).unwrap(), 2);
-        assert_eq!(*vec.get(3).unwrap(), 1);
-        assert_eq!(*vec.get(4).unwrap(), 4);
-        assert_eq!(*vec.get(5).unwrap(), 1);
-    }
-
-    #[test]
-    fn iter() {
-        let mut vec = TreeVec::<i32, 4>::default();
-        assert_eq!(vec.iter().cloned().collect::<Vec<_>>(), Vec::<i32>::new());
-        vec.insert(0, 1);
-        assert_eq!(vec.iter().cloned().collect::<Vec<_>>(), vec![1]);
-        vec.insert(1, 2);
-        assert_eq!(vec.iter().cloned().collect::<Vec<_>>(), vec![1, 2]);
-        vec.insert(0, 1);
-        vec.insert(0, 1);
-        vec.insert(0, 1);
-        vec.insert(0, 1);
-        vec.insert(0, 1);
-        assert_eq!(
-            vec.iter().cloned().collect::<Vec<_>>(),
-            vec![1, 1, 1, 1, 1, 1, 2]
-        );
-    }
-
     // Craft patch (iterator stack).
     fn internal_levels<T, const B: usize>(vec: &TreeVec<T, B>) -> usize {
         let mut node = &*vec.root;
@@ -1050,5 +1004,51 @@ mod tests {
             assert!(vec.iter().eq(expected.iter()), "after edits, len {len}");
             vec.check_invariants();
         }
+    }
+
+    #[test]
+    fn insert_remove() {
+        let mut vec = TreeVec::<i32, 4>::default();
+        vec.insert(0, 1);
+        vec.insert(0, 2);
+        vec.insert(0, 3);
+        vec.insert(0, 4);
+        vec.remove(1);
+        vec.check_invariants();
+        assert_eq!(*vec.get(0).unwrap(), 4);
+        assert_eq!(*vec.get(1).unwrap(), 2);
+        assert_eq!(*vec.get(2).unwrap(), 1);
+
+        vec.insert(0, 1);
+        vec.insert(0, 2);
+        vec.insert(0, 3);
+        vec.insert(0, 4);
+        vec.remove(5);
+        vec.check_invariants();
+        assert_eq!(*vec.get(0).unwrap(), 4);
+        assert_eq!(*vec.get(1).unwrap(), 3);
+        assert_eq!(*vec.get(2).unwrap(), 2);
+        assert_eq!(*vec.get(3).unwrap(), 1);
+        assert_eq!(*vec.get(4).unwrap(), 4);
+        assert_eq!(*vec.get(5).unwrap(), 1);
+    }
+
+    #[test]
+    fn iter() {
+        let mut vec = TreeVec::<i32, 4>::default();
+        assert_eq!(vec.iter().cloned().collect::<Vec<_>>(), Vec::<i32>::new());
+        vec.insert(0, 1);
+        assert_eq!(vec.iter().cloned().collect::<Vec<_>>(), vec![1]);
+        vec.insert(1, 2);
+        assert_eq!(vec.iter().cloned().collect::<Vec<_>>(), vec![1, 2]);
+        vec.insert(0, 1);
+        vec.insert(0, 1);
+        vec.insert(0, 1);
+        vec.insert(0, 1);
+        vec.insert(0, 1);
+        assert_eq!(
+            vec.iter().cloned().collect::<Vec<_>>(),
+            vec![1, 1, 1, 1, 1, 1, 2]
+        );
     }
 }
