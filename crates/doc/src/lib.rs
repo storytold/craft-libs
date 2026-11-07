@@ -134,9 +134,10 @@ pub struct Limits {
     pub max_json: u64,
     /// Most bytes of one rendition or one ZIP entry. Default 256 MiB.
     pub max_entry: u64,
-    /// Most bytes one call decompresses from gzip, reads out of ZIP entries and returns as
+    /// Most bytes one call consumes from gzip, reads out of ZIP entries and returns as
     /// renditions, together; a rendition decompressed from gzip is counted once, and a second
-    /// rendition of the same bytes as another copy. Default 1 GiB.
+    /// rendition of the same bytes as another copy. Unused lookahead from initial gzip reads
+    /// (chunks of up to 64 KiB) is not counted. Default 1 GiB.
     pub max_total: u64,
     /// Deepest nesting of JSON arrays and objects, at most [`MAX_DEPTH`] (a larger value counts
     /// as [`MAX_DEPTH`]). Default [`MAX_DEPTH`]. [`renditions`] and [`outline`] also refuse a
@@ -313,7 +314,7 @@ fn malformed(m: impl std::fmt::Display) -> Error {
     Error::Malformed(m.to_string())
 }
 
-/// The bytes one call may still decompress, read out of ZIP entries or return as renditions.
+/// The bytes one call may still consume from gzip or ZIP entries, or return as renditions.
 pub(crate) struct Budget<'a> {
     pub(crate) limits: &'a Limits,
     left: u64,
