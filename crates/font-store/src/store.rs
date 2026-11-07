@@ -858,8 +858,19 @@ impl Stage {
     }
 
     pub(crate) fn in_dir_excluding(staging: &Path, excluded: &[String]) -> Result<Self, Error> {
+        Self::create_in(staging, excluded, Self::names())
+    }
+
+    fn names() -> impl Iterator<Item = String> {
         static N: AtomicU64 = AtomicU64::new(0);
-        Self::create_in(staging, excluded, std::iter::repeat_with(|| format!("{}-{}", std::process::id(), N.fetch_add(1, Ordering::Relaxed))))
+        std::iter::repeat_with(|| format!("{}-{}", std::process::id(), N.fetch_add(1, Ordering::Relaxed)))
+    }
+
+    /// A Language pack recovery stage, created and opened through the retained recovery folder.
+    /// `staging` is that folder's display path.
+    pub(crate) fn recovery_in(staging: &Path, excluded: &[String], root: crate::language_packs::PackRemovalRoot) -> Result<Self, Error> {
+        let stage = Self::create_with(staging, excluded, Self::names(), |name| root.create_stage(name))?;
+        stage.keep_for_recovery().with_recovery_cleanup(root)
     }
 
     pub(crate) fn valid_name(name: &str) -> bool {
@@ -870,6 +881,16 @@ impl Stage {
     /// Bound total iterator reads too, including repeated excluded or malformed names.
     pub(crate) fn create_in(staging: &Path, excluded: &[String], names: impl Iterator<Item = String>) -> Result<Self, Error> {
         std::fs::create_dir_all(staging).map_err(io("creating a temporary folder"))?;
+        Self::create_with(staging, excluded, names, |name| std::fs::create_dir(staging.join(name)))
+    }
+
+    /// Take the first free name that `create` makes a folder for; `staging` is the display parent.
+    fn create_with(
+        staging: &Path,
+        excluded: &[String],
+        names: impl Iterator<Item = String>,
+        mut create: impl FnMut(&str) -> std::io::Result<()>,
+    ) -> Result<Self, Error> {
         // A folder of that name may be another process's (PID namespaces in Flatpak or
         // containers repeat ids) or a stale one: never touched here, the next name is taken
         // (`sweep_staging` handles ordinary download staging, not recovery folders).
@@ -884,9 +905,8 @@ impl Stage {
                 break;
             }
             candidates += 1;
-            let dir = staging.join(name);
-            match std::fs::create_dir(&dir) {
-                Ok(()) => return Ok(Self { dir, remove_on_drop: true, recovery_cleanup: None }),
+            match create(&name) {
+                Ok(()) => return Ok(Self { dir: staging.join(name), remove_on_drop: true, recovery_cleanup: None }),
                 Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => last = Some(e),
                 Err(e) => return Err(io("creating a temporary folder")(e)),
             }

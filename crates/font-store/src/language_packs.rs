@@ -495,15 +495,17 @@ impl FontStore {
         finish_pack_removal(stage, &backup, &dest, has_folder, saved)
     }
 
-    /// Retain the move, rollback, and cleanup capabilities; preserve the stage if opening fails.
+    /// Retain the move, rollback, and cleanup capabilities; remove the empty stage if opening fails.
     fn language_pack_removal_stage(&self, excluded: &[String]) -> Result<Stage, Error> {
         // A failed rollback or interrupted removal must not lose its backup to the download
         // sweep. Locale scans ignore this hidden directory.
-        let stage = Stage::in_dir_excluding(&self.pack_removal_dir()?, excluded)?.keep_for_recovery();
-        // If opening the anchor fails, preserve the stage instead of falling back to a
-        // path-based recursive delete. Ordinary download stages keep their existing policy.
+        let parent = self.pack_removal_dir()?;
+        std::fs::create_dir_all(&parent).map_err(io("creating a temporary folder"))?;
+        // Open the anchor before creating the stage, so a failure leaves no stage behind, and
+        // create, use and remove the stage through it. Ordinary download stages keep their
+        // existing policy.
         let root = PackRemovalRoot::open(self.dir()).map_err(io("opening the Language pack recovery folder"))?;
-        stage.with_recovery_cleanup(root)
+        Stage::recovery_in(&parent, excluded, root)
     }
 
     /// Reject redirected or non-directory recovery ancestors before staging a removal.
@@ -669,10 +671,30 @@ impl PackRemovalRoot {
         Ok(Self { _store: root, packs, recovery, stage: None })
     }
 
+    /// Create a stage folder in the retained recovery directory.
+    pub(crate) fn create_stage(&self, id: &str) -> std::io::Result<()> {
+        cap_primitives::fs::create_dir(&self.recovery, Path::new(id), &cap_primitives::fs::DirOptions::new())
+    }
+
     /// Pin the new stage itself so pack moves and rollback share the same destination.
+    /// If the stage cannot be opened, remove it through the retained recovery directory. The
+    /// removal is not recursive, so it leaves a folder that holds anything.
     pub(crate) fn with_stage(mut self, id: &str) -> std::io::Result<Self> {
-        self.stage = Some(cap_primitives::fs::open_dir_nofollow(&self.recovery, Path::new(id))?);
-        Ok(self)
+        let open = || {
+            #[cfg(test)]
+            tests::fail_io(tests::IoFailure::OpenStage)?;
+            cap_primitives::fs::open_dir_nofollow(&self.recovery, Path::new(id))
+        };
+        match open() {
+            Ok(stage) => {
+                self.stage = Some(stage);
+                Ok(self)
+            }
+            Err(error) => {
+                let _ = cap_primitives::fs::remove_dir(&self.recovery, Path::new(id));
+                Err(error)
+            }
+        }
     }
 
     /// Move the locale folder into the retained stage without resolving its display path.
@@ -717,10 +739,12 @@ fn finish_pack_removal(stage: Stage, backup: &Path, dest: &Path, moved: bool, sa
             stage.recovery_root()?.restore_pack(locale)
         };
         if moved && let Err(restore) = restore() {
+            let id = stage.dir.file_name().and_then(|name| name.to_str()).unwrap_or_default().to_owned();
             stage.keep_for_recovery();
-            return Err(io(format!("saving the Language pack list failed ({error}); the original pack is preserved at {}", backup.display()))(
-                restore,
-            ));
+            return Err(io(format!(
+                "saving the Language pack list failed ({error}); the original pack is preserved in recovery stage {id}, last known at {}",
+                backup.display()
+            ))(restore));
         }
         return Err(error);
     }

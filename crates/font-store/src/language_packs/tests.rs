@@ -16,6 +16,7 @@ pub(super) enum IoFailure {
     Rename,
     RecordWrite,
     Cleanup,
+    OpenStage,
 }
 
 thread_local! {
@@ -299,6 +300,20 @@ fn removal_io_failures_preserve_the_pack_on_every_platform() {
 }
 
 #[test]
+fn a_recovery_stage_whose_capability_cannot_open_is_not_left_behind() {
+    let (store, _server, pin, _) = setup("remove-open-recovery-failure");
+    let index = store.fetch_pack_index_from(&IndexSource::Pinned(pin), &Cancel::new()).unwrap();
+    store.install_pack_from(false, &index, index.pack("nl").unwrap(), &Cancel::new(), &mut |_| {}).unwrap();
+    let injected = InjectFailure::new(IoFailure::OpenStage);
+    let result = store.language_pack_removal_stage(&[]);
+    drop(injected);
+    assert!(matches!(result, Err(Error::Io { .. })), "{:?}", result.as_ref().map(|stage| &stage.dir));
+    assert!(std::fs::read_dir(store.language_packs_dir().join(".removing")).unwrap().next().is_none());
+    assert!(store.language_packs_dir().join("nl/spelling.dic").exists());
+    std::fs::remove_dir_all(store.dir()).unwrap();
+}
+
+#[test]
 fn a_failed_removal_rollback_keeps_a_recoverable_pack_outside_download_cleanup() {
     let (store, _server, pin, _) = setup("remove-rollback-failure");
     let index = store.fetch_pack_index_from(&IndexSource::Pinned(pin), &Cancel::new()).unwrap();
@@ -320,6 +335,8 @@ fn a_failed_removal_rollback_keeps_a_recoverable_pack_outside_download_cleanup()
     assert!(matches!(result, Err(Error::Io { .. })));
     let error = result.unwrap_err().to_string();
     assert!(error.contains(&backup.display().to_string()), "{error}");
+    let id = stage_dir.file_name().unwrap().to_str().unwrap();
+    assert!(error.contains(&format!("recovery stage {id}")), "{error}");
     #[cfg(unix)]
     {
         let old = std::time::SystemTime::now() - Duration::from_secs(7200);
