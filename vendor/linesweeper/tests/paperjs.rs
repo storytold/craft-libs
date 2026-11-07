@@ -26,7 +26,27 @@ fn paperjs_tests() -> Vec<Trial> {
         }
     }
 
+    // Craft patch (image distance alpha)
+    tests.push(Trial::test(
+        "pixmap_distance_counts_coverage",
+        pixmap_distance_counts_coverage,
+    ));
+
     tests
+}
+
+// Craft patch (image distance alpha)
+/// A filled pixmap and an empty one differ only in alpha: the fill is
+/// opaque black and the empty pixmap is transparent black.
+fn pixmap_distance_counts_coverage() -> Result<(), Failed> {
+    let empty = tiny_skia::Pixmap::new(4, 4).ok_or("Failed to create pixmap")?;
+    let mut filled = empty.clone();
+    filled.fill(tiny_skia::Color::BLACK);
+    let diff = pixmap_distance(&filled, &empty);
+    if diff != 1.0 {
+        return Err(format!("pixmap distance {diff}, expected 1").into());
+    }
+    Ok(())
 }
 
 fn load_test_file(
@@ -151,7 +171,10 @@ fn pixmap_distance(a: &tiny_skia::Pixmap, b: &tiny_skia::Pixmap) -> f32 {
             let rdiff = ac.red().abs_diff(bc.red());
             let gdiff = ac.green().abs_diff(bc.green());
             let bdiff = ac.blue().abs_diff(bc.blue());
-            diff += rdiff.max(gdiff).max(bdiff) as f32 / 255.0;
+            // Craft patch (image distance alpha): the shapes are filled black, so a
+            // covered pixel and an empty one differ only in alpha.
+            let adiff = ac.alpha().abs_diff(bc.alpha());
+            diff += rdiff.max(gdiff).max(bdiff).max(adiff) as f32 / 255.0;
         }
     }
 
