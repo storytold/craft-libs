@@ -217,12 +217,29 @@ fn read_rate(br: &mut BitReader) -> Result<(u8, u32)> {
     Ok((i, r))
 }
 
+/// Backward-compatible explicit SBR signalling (ISO/IEC 14496-3 §1.6.6.2): after an AAC-LC
+/// config, a sync extension `0x2b7` with extension object type 5 names SBR and its output rate,
+/// and `0x548` after it names PS. Returns `(sbr, extension rate, ps)`, or `None` when the bits
+/// that follow are not that extension (they are then ignored, as decoders that don't know it do).
+fn sync_extension(br: &mut BitReader) -> Option<(bool, Option<u32>, bool)> {
+    if br.bits_left() < 16 || br.read_bits(11).ok()? != 0x2b7 || read_aot(br).ok()? != 5 {
+        return None;
+    }
+    if br.read_bits(1).ok()? != 1 {
+        return Some((false, None, false));
+    }
+    let (_, rate) = read_rate(br).ok()?;
+    let ps = br.bits_left() >= 12 && br.read_bits(11).ok()? == 0x548 && br.read_bits(1).ok()? == 1;
+    Some((true, Some(rate), ps))
+}
+
 impl AudioSpecificConfig {
-    /// A plain AAC-LC configuration.
+    /// A plain AAC-LC configuration. A sampling frequency index with no rate (13 and above) gives a
+    /// sample rate of 0, which [`crate::aac::Decoder`] refuses.
     pub fn lc(sf_index: u8, channel_config: u8) -> AudioSpecificConfig {
         AudioSpecificConfig {
             object_type: 2,
-            sample_rate: SAMPLE_RATES[sf_index as usize],
+            sample_rate: SAMPLE_RATES.get(usize::from(sf_index)).copied().unwrap_or(0),
             sf_index,
             channel_config,
             frame_length_flag: false,
@@ -234,7 +251,8 @@ impl AudioSpecificConfig {
     }
 
     /// Parse an `AudioSpecificConfig` (§1.6.2.1). Only AAC-LC cores are accepted; explicit SBR/PS
-    /// signalling (audio object types 5 and 29) is recorded.
+    /// signalling is recorded, both hierarchical (audio object types 5 and 29) and backward
+    /// compatible (a `0x2b7` sync extension after the config).
     pub fn parse(data: &[u8]) -> Result<AudioSpecificConfig> {
         let mut br = BitReader::new(data);
         let mut aot = read_aot(&mut br)?;
@@ -267,6 +285,9 @@ impl AudioSpecificConfig {
         if frame_length_flag {
             return Err(Error::Unsupported("960-sample frames"));
         }
+        if !sbr && let Some((s, rate, p)) = sync_extension(&mut br) {
+            (sbr, extension_sample_rate, ps) = (s, rate, p);
+        }
         let cfg =
             AudioSpecificConfig { object_type: aot, sample_rate, sf_index, channel_config, frame_length_flag, sbr, ps, extension_sample_rate, pce };
         if cfg.channels() == 0 {
@@ -275,8 +296,12 @@ impl AudioSpecificConfig {
         Ok(cfg)
     }
 
-    /// Serialise (AAC-LC, no SBR signalling).
+    /// Serialise (AAC-LC, no SBR signalling). Channel configuration 0 needs its program config
+    /// element: without one the bytes would not parse back.
     pub fn to_bytes(&self) -> Result<Vec<u8>> {
+        if self.channel_config == 0 && self.pce.is_none() {
+            return Err(Error::InvalidConfig("channel configuration 0 without a program config element"));
+        }
         let mut bw = BitWriter::new();
         bw.write_bits(self.object_type as u32, 5);
         match crate::aac::tables::sample_rate_index(self.sample_rate) {
@@ -366,11 +391,22 @@ impl AdtsHeader {
         AudioSpecificConfig { object_type: self.object_type, ..AudioSpecificConfig::lc(self.sf_index, self.channel_config) }
     }
 
-    /// Write a 7-byte header (no CRC) for a frame whose raw payload is `payload_len` bytes. A frame
-    /// too long for the header's 13-bit length is refused.
+    /// Write a 7-byte header (no CRC) for a frame whose raw payload is `payload_len` bytes. What the
+    /// header's fields cannot hold is refused: a frame too long for its 13-bit length, an object
+    /// type outside its 2-bit profile (1–4), a sampling frequency index with no rate, and channel
+    /// configurations above 7 (11 and 12 need a program config element in ADTS).
     pub fn write(object_type: u8, sf_index: u8, channel_config: u8, payload_len: usize, buffer_fullness: u16) -> Result<[u8; 7]> {
         if payload_len > 0x1FFF - 7 {
             return Err(Error::InvalidConfig("an ADTS frame longer than its 13-bit length"));
+        }
+        if !(1..=4).contains(&object_type) {
+            return Err(Error::InvalidConfig("an ADTS profile holds audio object types 1 to 4"));
+        }
+        if usize::from(sf_index) >= SAMPLE_RATES.len() {
+            return Err(Error::InvalidConfig("a sampling frequency index with no rate"));
+        }
+        if channel_config > 7 {
+            return Err(Error::InvalidConfig("an ADTS channel configuration above 7"));
         }
         let len = (payload_len + 7) as u32;
         let mut bw = BitWriter::new();
@@ -378,10 +414,10 @@ impl AdtsHeader {
         bw.write_bits(0, 1); // MPEG-4
         bw.write_bits(0, 2);
         bw.write_bits(1, 1); // protection absent
-        bw.write_bits((object_type.max(1) - 1) as u32 & 3, 2);
+        bw.write_bits(u32::from(object_type - 1), 2);
         bw.write_bits(sf_index as u32, 4);
         bw.write_bits(0, 1);
-        bw.write_bits(channel_config as u32 & 7, 3);
+        bw.write_bits(u32::from(channel_config), 3);
         bw.write_bits(0, 4);
         bw.write_bits(len & 0x1FFF, 13);
         bw.write_bits(buffer_fullness as u32 & 0x7FF, 11);
@@ -427,6 +463,55 @@ pub(crate) fn split_adts_upto(mut data: &[u8], max: usize) -> Result<Vec<(AdtsHe
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Backward-compatible signalling, as craft-media's Matroska demuxer and some MP4 muxers
+    /// write it: an AAC-LC config, then `0x2b7`, object type 5 and the output rate.
+    #[test]
+    fn a_sync_extension_after_the_config_signals_sbr_and_ps() {
+        // AAC-LC, 22.05 kHz, stereo; 0x2b7, AOT 5, SBR, 44.1 kHz
+        let asc = AudioSpecificConfig::parse(&[0x13, 0x90, 0x56, 0xE5, 0xA0]).unwrap();
+        assert_eq!((asc.object_type, asc.sample_rate, asc.sbr, asc.extension_sample_rate, asc.ps), (2, 22_050, true, Some(44_100), false));
+        // ... then 0x548 and PS
+        let mut bw = BitWriter::new();
+        for (value, bits) in [(2, 5), (7, 4), (1, 4), (0, 3), (0x2b7, 11), (5, 5), (1, 1), (4, 4), (0x548, 11), (1, 1)] {
+            bw.write_bits(value, bits);
+        }
+        let asc = AudioSpecificConfig::parse(&bw.finish()).unwrap();
+        assert_eq!((asc.sbr, asc.extension_sample_rate, asc.ps), (true, Some(44_100), true));
+        // SBR flagged off, a different extension, or too few bits: plain AAC-LC
+        for bytes in [&[0x13, 0x90, 0x56, 0xE5, 0x00][..], &[0x13, 0x90, 0x12, 0x34], &[0x13, 0x90, 0x56]] {
+            let asc = AudioSpecificConfig::parse(bytes).unwrap();
+            assert_eq!((asc.sbr, asc.extension_sample_rate), (false, None), "{bytes:02x?}");
+        }
+    }
+
+    #[test]
+    fn an_index_with_no_rate_does_not_panic_and_is_refused() {
+        for sf_index in 13..=15 {
+            let asc = AudioSpecificConfig::lc(sf_index, 2);
+            assert_eq!(asc.sample_rate, 0);
+            assert!(crate::aac::Decoder::from_config(asc).is_err());
+        }
+    }
+
+    #[test]
+    fn configs_that_would_not_parse_back_are_not_written() {
+        assert!(AudioSpecificConfig::lc(4, 0).to_bytes().is_err());
+        let pce = ProgramConfig { front: vec![(true, 0)], ..Default::default() };
+        let asc = AudioSpecificConfig { pce: Some(pce), ..AudioSpecificConfig::lc(4, 0) };
+        assert_eq!(AudioSpecificConfig::parse(&asc.to_bytes().unwrap()).unwrap(), asc);
+    }
+
+    #[test]
+    fn adts_headers_refuse_fields_they_cannot_hold() {
+        for (object_type, sf_index, channel_config) in [(0, 4, 2), (5, 4, 2), (29, 4, 2), (2, 13, 2), (2, 15, 2), (2, 4, 8), (2, 4, 11), (2, 4, 12)] {
+            assert!(AdtsHeader::write(object_type, sf_index, channel_config, 100, 0x7FF).is_err(), "{object_type} {sf_index} {channel_config}");
+        }
+        for object_type in 1..=4 {
+            let h = AdtsHeader::parse(&AdtsHeader::write(object_type, 12, 7, 100, 0x7FF).unwrap()).unwrap();
+            assert_eq!((h.object_type, h.sf_index, h.channel_config, h.frame_length), (object_type, 12, 7, 107));
+        }
+    }
 
     #[test]
     fn program_configs_refuse_more_elements_than_their_counts_hold() {

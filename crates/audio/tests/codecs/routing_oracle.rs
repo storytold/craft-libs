@@ -579,3 +579,37 @@ fn mp4_with_wrong_durations_or_edits_presents_its_audio() {
     assert!(buf.frames() < whole.frames() + 2048, "edit doubled: {} frames", buf.frames());
     assert_eq!((probe(&file, None).unwrap().frames, info.frames), (buf.frames() as u64, buf.frames() as u64), "edit doubled");
 }
+
+/// An empty edit before the media edit (QuickTime's and GPAC's delayed audio, ffmpeg's
+/// `-itsoffset`) still has the media edit applied: its priming skip and its end, as ffmpeg's
+/// decode does. ffmpeg writes such a media edit with no skip, so the test sets one.
+#[test]
+fn mp4_with_an_empty_edit_before_its_media_edit_applies_the_media_edit() {
+    let ff = require_ffmpeg!();
+    let dir = crate::testkit::fixtures_dir("routing");
+    let out = dir.join("aac-itsoffset.m4a");
+    let input = format!("{MONO}:s=44100");
+    let made = crate::testkit::fixtures::generate(&out, |tmp| {
+        let tmp = tmp.to_string_lossy();
+        run(ff.as_path(), &["-itsoffset", "0.5", "-f", "lavfi", "-i", &input, "-t", "5", "-c:a", "aac", "-aac_pns", "0", &tmp])
+    });
+    assert!(made.is_some() || !craft_media_testkit::oracles_required(), "ffmpeg could not write aac-itsoffset.m4a");
+    let Some(path) = made else { return };
+    let bytes = std::fs::read(&path).unwrap();
+    // elst v0 from the name's start: the name (4), version and flags (4), entries (4), then 12
+    // bytes per edit: duration, media time, rate.
+    let elst = bytes.windows(4).position(|w| w == b"elst").unwrap();
+    assert_eq!((bytes[elst + 4], u32::from_be_bytes(bytes[elst + 8..elst + 12].try_into().unwrap())), (0, 2), "an empty edit and a media edit");
+    assert_eq!(i32::from_be_bytes(bytes[elst + 12 + 4..elst + 12 + 8].try_into().unwrap()), -1, "the first edit is empty");
+    let media_time = elst + 12 + 12 + 4;
+    let mut file = bytes.clone();
+    file[media_time..media_time + 4].copy_from_slice(&1024i32.to_be_bytes());
+    let patched = dir.join("aac-itsoffset-priming.m4a");
+    std::fs::write(&patched, &file).unwrap();
+    let reference = reference(&ff, &patched);
+    let (info, buf) = decode(&file, None).unwrap();
+    assert_eq!(buf.frames(), reference.len(), "presented frames");
+    assert_eq!((probe(&file, None).unwrap().frames, info.frames), (buf.frames() as u64, buf.frames() as u64));
+    let s = snr(&buf.channels, &reference);
+    assert!(s >= 100.0, "SNR {s:.1} dB: the priming skip is not applied");
+}

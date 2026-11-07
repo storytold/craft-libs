@@ -11,7 +11,7 @@ use super::aiff::{self, AiffParse};
 use super::id3v2_len;
 use super::source::{Src, io_error};
 use super::wav::{self, WavParse};
-use crate::track::{TrackDecoder, adts_format_of, adts_framed, adts_stream_header, several_adts_frames};
+use crate::track::{TrackDecoder, adts_format_of, adts_framed, adts_stream_header};
 use crate::{AudioBuffer, AudioError, AudioInfo, CodecId, CodecParams, Container, PcmFormat, Result, aac};
 use craft_media::{isobmff, matroska, ogg};
 
@@ -642,8 +642,16 @@ fn open_mp4<'a>(src: &Src<'a>, container: Container, track: Option<usize>) -> Op
     let rate = probe.sample_rate();
     // A leading media edit (AAC priming) is skipped, and the edit's duration is the
     // presentation length. Empty edits and multi-segment lists play the media as it is.
-    let (skip, limit) = match t.edits.as_slice() {
-        [e] if e.media_time >= 0 && e.media_rate == 0x0001_0000 => {
+    // A leading empty edit (a delay before the track starts, ffmpeg's `-itsoffset` and muxers
+    // aligning audio to video) does not change which media is presented: the media edit after it
+    // still skips the priming and ends the track. The delay itself is not added as silence.
+    let media_edit = match t.edits.as_slice() {
+        [e] => Some(e),
+        [empty, e] if empty.media_time < 0 => Some(e),
+        _ => None,
+    };
+    let (skip, limit) = match media_edit {
+        Some(e) if e.media_time >= 0 && e.media_rate == 0x0001_0000 => {
             let skip = rescale(e.media_time.unsigned_abs(), u64::from(timescale), u64::from(rate));
             let limit = (e.segment_duration > 0).then(|| rescale(e.segment_duration, u64::from(file.timescale), u64::from(rate)));
             (skip, limit)
@@ -655,11 +663,10 @@ fn open_mp4<'a>(src: &Src<'a>, container: Container, track: Option<usize>) -> Op
     let mut stored = rescale(media, u64::from(timescale), u64::from(rate)).saturating_sub(skip);
     // Durations only trim the last packet: ones that end anywhere else are wrong (some count a
     // HE-AAC packet's core frames) and can't cut audio off.
-    // Samples of several ADTS frames (not standard, but they decode) have no one length. Only a
-    // file of ADTS-framed samples, which is rare, has its samples read to look for them.
-    let several_frames = lookahead.iter().any(|p| adts_framed(p))
-        && (0..t.samples.len()).any(|i| file.read_sample(src, track, i).is_ok_and(|p| several_adts_frames(&p)));
-    let per_packet = probe.frames_per_packet().map(|n| n as u64).filter(|_| !several_frames);
+    // ADTS-framed samples (not standard) may hold several frames each, and finding out would mean
+    // reading every sample: their sample table's timing is kept instead.
+    let adts = lookahead.iter().any(|p| adts_framed(p));
+    let per_packet = probe.frames_per_packet().map(|n| n as u64).filter(|_| !adts);
     if let Some(n) = per_packet {
         let decoded = (t.samples.len() as u64).saturating_mul(n).saturating_sub(skip);
         if stored > decoded || decoded - stored >= n {

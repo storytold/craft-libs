@@ -76,6 +76,9 @@ impl Decoder {
         if asc.object_type != 2 {
             return Err(Error::Unsupported("audio object type other than AAC LC"));
         }
+        if usize::from(asc.sf_index) >= crate::aac::SAMPLE_RATES.len() || asc.sample_rate == 0 {
+            return Err(Error::InvalidConfig("a sampling frequency index with no rate"));
+        }
         let layout = asc.layout();
         if layout.is_empty() && asc.channel_config != 0 {
             return Err(Error::InvalidConfig("unsupported channel configuration"));

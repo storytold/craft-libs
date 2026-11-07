@@ -163,8 +163,10 @@ impl Upsample2x {
 
     /// Upsample planar channels by two: each output channel has twice the input samples.
     pub fn process(&mut self, input: Vec<Vec<f32>>) -> Vec<Vec<f32>> {
-        if self.hist.len() < input.len() {
-            self.hist.resize(input.len(), vec![0.0; UPSAMPLE_HISTORY]);
+        // A changed channel count is a new layout: history of channels that were absent meanwhile
+        // (or that held other speakers) would put a step into the output.
+        if self.hist.len() != input.len() {
+            self.hist = vec![vec![0.0; UPSAMPLE_HISTORY]; input.len()];
         }
         let m = UPSAMPLE_HALF;
         input
@@ -205,6 +207,13 @@ mod tests {
         assert_eq!(UPSAMPLE_DELAY, 481);
         assert_eq!(out[(100 + 481) * 2], 1.0);
         assert!(out[..(100 + 481 - UPSAMPLE_HALF) * 2].iter().all(|&s| s == 0.0));
+        // a change of channel count starts each channel's history afresh
+        let mut fresh = Upsample2x::new(2);
+        let block = vec![vec![0.5; 1024], vec![0.25; 1024]];
+        let mut up = Upsample2x::new(2);
+        up.process(block.clone());
+        up.process(vec![vec![0.5; 1024]]);
+        assert_eq!(up.process(block.clone()), fresh.process(block));
         // a reset forgets the history
         up.reset();
         assert!(up.process(vec![vec![0.0; 600]]).remove(0).iter().all(|&s| s == 0.0));

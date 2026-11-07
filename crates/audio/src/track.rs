@@ -215,8 +215,14 @@ impl TrackDecoder {
         let frames = match &mut self.inner {
             #[cfg(feature = "aac-decode")]
             Inner::Aac { up, .. } => {
-                let units = adts_frames(data).map_or(1, |f| f.iter().map(|(h, _)| usize::from(h.raw_data_blocks)).sum::<usize>());
-                Some(units.min(MAX_ADTS_FRAMES_PER_PACKET) * aac::FRAME_LEN * if up.is_some() { 2 } else { 1 })
+                let per_unit = aac::FRAME_LEN * if up.is_some() { 2 } else { 1 };
+                match adts_frames(data) {
+                    Some(f) => Some(f.iter().map(|(h, _)| usize::from(h.raw_data_blocks)).sum::<usize>().min(MAX_ADTS_FRAMES_PER_PACKET) * per_unit),
+                    // A packet lost whole: as long as the last one, in a stream of multi-frame
+                    // packets as in any other.
+                    None if data.is_empty() && self.last_frames > 0 => Some(self.last_frames),
+                    None => Some(per_unit),
+                }
             }
             Inner::Pcm { kind, channels } => Some(data.len() / (kind.bytes() * *channels).max(1)),
         };
@@ -321,12 +327,6 @@ pub(crate) fn adts_stream_header(headers: &[aac::AdtsHeader]) -> Option<aac::Adt
 #[cfg(feature = "decode-native")]
 pub(crate) fn adts_framed(packet: &[u8]) -> bool {
     adts_frames(packet).is_some()
-}
-
-/// Whether `packet` is several ADTS frames, which decode to more than one packet's length.
-#[cfg(feature = "decode-native")]
-pub(crate) fn several_adts_frames(packet: &[u8]) -> bool {
-    adts_frames(packet).is_some_and(|frames| frames.len() > 1)
 }
 
 /// The configuration of an AAC stream from its ADTS `header`. Channel configuration 0 leaves
@@ -481,7 +481,8 @@ mod tests {
         assert!(dec.decode(&damaged).is_err());
         assert_eq!(dec.conceal(Some(&damaged)).unwrap().frames(), 3072);
         assert_eq!(dec.conceal(Some(&frame)).unwrap().frames(), 1024);
-        assert_eq!(dec.conceal(None).unwrap().frames(), 1024);
+        // a packet lost whole lasts as long as the last one decoded: here, three frames
+        assert_eq!(dec.conceal(None).unwrap().frames(), 3072);
     }
 
     /// Implicitly signalled HE-AAC: an AAC-LC configuration at 24 kHz or less, with SBR data in a
@@ -586,7 +587,7 @@ mod tests {
         let tied: [&[u8]; 2] = [&good, &damaged];
         assert_eq!(TrackDecoder::new(&aac_params(), &tied).unwrap().sample_rate(), 48_000);
         #[cfg(feature = "decode-native")]
-        assert!(several_adts_frames(&good.repeat(2)) && !several_adts_frames(&good) && !several_adts_frames(&[0; 8]));
+        assert!(adts_framed(&good) && adts_framed(&good.repeat(2)) && !adts_framed(&[0; 8]));
     }
 
     /// `au` as a stereo ADTS frame at 48 kHz (channel configuration `channel_config`).

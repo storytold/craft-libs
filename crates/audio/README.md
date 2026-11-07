@@ -311,8 +311,9 @@ match craft_audio::decode(&bytes, None) {
 - Not decoded at all: AC-3, E-AC-3, Opus and Speex.
 - `TrackDecoder` returns `Unsupported` for MP3, FLAC, ALAC and Vorbis; `decode` and `Decoder` read
   those through symphonia.
-- MP4 edit lists: a single leading media edit (encoder priming) is applied. Empty edits and lists
-  of more than one edit are not; the media plays as it is stored.
+- MP4 edit lists: a single media edit (encoder priming and the end) is applied, alone or after one
+  empty edit; the empty edit's delay is not added as silence. Other edit lists are not applied, and
+  the media plays as it is stored.
 
 ## Codecs
 
