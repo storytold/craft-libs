@@ -38,8 +38,8 @@ linesweeper = { git = "https://github.com/storytold/craft-libs", rev = "<rev>" }
 
 `scripts/test-pdf-backends.sh` runs the package's unit, regression and doc tests. The `craft-prepress`
 tests with the `flatten` feature run against this copy. `pdf.yml`'s path filter does not list this
-directory, so a pull request that changes only files here starts no workflow. Run the tests from this
-directory:
+directory, so a pull request that changes only files here does not start `pdf.yml`. Run the tests from
+this directory:
 
 ```sh
 cargo test --locked --lib --test regression
