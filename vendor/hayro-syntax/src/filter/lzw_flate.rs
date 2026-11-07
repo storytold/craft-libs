@@ -20,14 +20,20 @@ pub(crate) mod flate {
     /// PdfCraft patch: `limit` is the most bytes inflated (see `filter::decode_limit`).
     #[cfg(feature = "unsafe")]
     pub(crate) fn decode(data: &[u8], params: &Dict<'_>, limit: usize) -> Option<Vec<u8>> {
+        decode_controlled(data, params, limit, None)
+    }
+
+    #[cfg(feature = "unsafe")]
+    pub(crate) fn decode_controlled(data: &[u8], params: &Dict<'_>, limit: usize, control: Option<&crate::cancel::Control>) -> Option<Vec<u8>> {
         use flate2::read::{DeflateDecoder, ZlibDecoder};
         use std::io::Read;
 
         // Read in chunks and never past `limit`, so the buffer doesn't grow past it either.
-        fn read_up_to(mut decoder: impl Read, limit: usize) -> Option<Vec<u8>> {
+        fn read_up_to(mut decoder: impl Read, limit: usize, control: Option<&crate::cancel::Control>) -> Option<Vec<u8>> {
             let mut result = Vec::new();
             let mut chunk = vec![0; 64 * 1024];
             while result.len() < limit {
+                crate::cancel::check(control)?;
                 let n = decoder.read(&mut chunk).ok()?;
                 if n == 0 {
                     break;
@@ -37,32 +43,39 @@ pub(crate) mod flate {
             }
             Some(result)
         }
-        let zlib_stream = |data: &[u8]| read_up_to(ZlibDecoder::new(data), limit);
-        let deflate_stream = |data: &[u8]| read_up_to(DeflateDecoder::new(data), limit);
+        let zlib_stream = |data: &[u8]| read_up_to(ZlibDecoder::new(crate::cancel::Input::new(data, control)), limit, control);
+        let deflate_stream = |data: &[u8]| read_up_to(DeflateDecoder::new(crate::cancel::Input::new(data, control)), limit, control);
 
         let decoded = zlib_stream(data)
             .or_else(|| deflate_stream(data))
             .or_else(|| {
                 warn!("flate stream is broken, decoding with fallback");
 
-                fallback::decode(data, limit)
+                fallback::decode(data, limit, control)
             })?;
         // PdfCraft patch: output cut at the limit is reported, never dropped silently.
         if decoded.len() >= limit {
             warn!("flate stream stopped at its decode limit of {limit} bytes");
         }
-        let params = PredictorParams::from_params(params);
+        let mut params = PredictorParams::from_params(params);
+        params.control = control.cloned();
         apply_predictor(decoded, &params)
     }
 
     #[cfg(not(feature = "unsafe"))]
     pub(crate) fn decode(data: &[u8], params: &Dict<'_>, limit: usize) -> Option<Vec<u8>> {
-        let decoded = fallback::decode(data, limit)?;
+        decode_controlled(data, params, limit, None)
+    }
+
+    #[cfg(not(feature = "unsafe"))]
+    pub(crate) fn decode_controlled(data: &[u8], params: &Dict<'_>, limit: usize, control: Option<&crate::cancel::Control>) -> Option<Vec<u8>> {
+        let decoded = fallback::decode(data, limit, control)?;
         // PdfCraft patch: output cut at the limit is reported, never dropped silently.
         if decoded.len() >= limit {
             warn!("flate stream stopped at its decode limit of {limit} bytes");
         }
-        let params = PredictorParams::from_params(params);
+        let mut params = PredictorParams::from_params(params);
+        params.control = control.cloned();
         apply_predictor(decoded, &params)
     }
 
@@ -72,15 +85,16 @@ pub(crate) mod flate {
         use alloc::vec;
         use alloc::vec::Vec;
 
-        pub(crate) fn decode(data: &[u8], limit: usize) -> Option<Vec<u8>> {
-            flate_decode(data, limit)
+        pub(crate) fn decode(data: &[u8], limit: usize, control: Option<&crate::cancel::Control>) -> Option<Vec<u8>> {
+            flate_decode(data, limit, control)
         }
 
-        fn flate_decode(data: &[u8], limit: usize) -> Option<Vec<u8>> {
+        fn flate_decode(data: &[u8], limit: usize, control: Option<&crate::cancel::Control>) -> Option<Vec<u8>> {
             let mut state = FlateState::new(data);
             let mut output = Vec::new();
-            state.decode_into(data, &mut output, limit);
+            state.decode_into_controlled(data, &mut output, limit, control);
 
+            crate::cancel::check(control)?;
             Some(output)
         }
 
@@ -133,6 +147,10 @@ pub(crate) mod flate {
             /// Appends decoded bytes to `out` until it holds `until` bytes or the stream ends.
             /// `data` is the whole encoded stream, the same on every call.
             pub(crate) fn decode_into(&mut self, data: &[u8], out: &mut Vec<u8>, until: usize) {
+                self.decode_into_controlled(data, out, until, None);
+            }
+
+            pub(crate) fn decode_into_controlled(&mut self, data: &[u8], out: &mut Vec<u8>, until: usize, control: Option<&crate::cancel::Control>) {
                 // The working buffer is the history followed by the bytes decoded now. Only the
                 // latter go to `out`, which the caller may have drained since.
                 let base = self.history.len();
@@ -149,10 +167,21 @@ pub(crate) mod flate {
                     failed: self.failed,
                     limit: base.saturating_add(until.saturating_sub(out.len())),
                     block: core::mem::take(&mut self.block),
+                    control,
                 };
                 stream.run();
 
-                out.extend_from_slice(stream.output.get(base..).unwrap_or(&[]));
+                let bytes = stream.output.get(base..).unwrap_or(&[]);
+                if control.is_some() {
+                    for chunk in bytes.chunks(64 * 1024) {
+                        if crate::cancel::check(control).is_none() {
+                            break;
+                        }
+                        out.extend_from_slice(chunk);
+                    }
+                } else {
+                    out.extend_from_slice(bytes);
+                }
                 self.total = self.total.saturating_add(stream.output.len() - base);
                 let keep = stream.output.len().min(WINDOW);
                 stream.output.drain(..stream.output.len() - keep);
@@ -168,9 +197,67 @@ pub(crate) mod flate {
             }
         }
 
+        #[cfg(test)]
+        mod cancellation_tests {
+            use super::*;
+            use core::sync::atomic::Ordering;
+
+            fn fixed_block(invalid_distance: bool) -> Vec<u8> {
+                let mut data = Vec::new();
+                let mut bit = 0;
+                let mut write = |value: u16, count: usize| {
+                    for i in 0..count {
+                        if bit % 8 == 0 {
+                            data.push(0);
+                        }
+                        let last = data.last_mut().unwrap();
+                        *last |= (((value >> i) & 1) as u8) << (bit % 8);
+                        bit += 1;
+                    }
+                };
+                write(3, 3); // Final block, fixed Huffman tables.
+                for _ in 0..200_000 {
+                    if invalid_distance {
+                        write(0x40, 7); // Length 3, followed by distance 1 with no history.
+                        write(0, 5);
+                    } else {
+                        write(0x8e, 8); // Fixed Huffman code for the literal 'A'.
+                    }
+                }
+                write(0, 7); // End of block.
+                data.extend_from_slice(&[0, 0]);
+                data
+            }
+
+            #[test]
+            fn huffman_blocks_cancel_before_consuming_all_codes() {
+                for invalid_distance in [false, true] {
+                    let data = fixed_block(invalid_distance);
+                    let mut out = Vec::new();
+                    let mut baseline = FlateState::new(&data);
+                    baseline.decode_into(&data, &mut out, usize::MAX);
+                    if invalid_distance {
+                        assert!(out.is_empty());
+                        assert!(!baseline.complete());
+                    } else {
+                        assert_eq!(out, vec![b'A'; 200_000]);
+                        assert!(baseline.complete());
+                    }
+                    let (control, polls) = crate::cancel::stop_at(4);
+                    let mut state = FlateState::new(&data);
+                    let mut out = Vec::new();
+                    state.decode_into_controlled(&data, &mut out, usize::MAX, Some(&control));
+                    assert_eq!(polls.load(Ordering::Relaxed), 4);
+                    assert!(state.pos < data.len() / 2, "cancellation must stop inside the coded block; invalid distance: {invalid_distance}");
+                    assert!(!state.complete());
+                }
+            }
+        }
+
         /// PdfCraft patch: the working state of one [`FlateState::decode_into`] call.
         struct FlateStream<'a> {
             data: &'a [u8],
+            control: Option<&'a crate::cancel::Control>,
             pos: usize,
             code_buf: u32,
             code_size: u8,
@@ -210,6 +297,11 @@ pub(crate) mod flate {
             /// Decodes until `output` holds `limit` bytes or the stream ends.
             fn run(&mut self) {
                 loop {
+                    if crate::cancel::check(self.control).is_none() {
+                        self.eof = true;
+                        self.failed = true;
+                        return;
+                    }
                     if self.eof || self.output.len() >= self.limit {
                         return;
                     }
@@ -444,6 +536,8 @@ pub(crate) mod flate {
             /// Decodes the codes of a Huffman-coded block until its end, the limit or the end of
             /// the data.
             fn read_codes(&mut self) {
+                let mut checks = crate::cancel::Checkpoints::new(self.control);
+                let mut codes = 0_usize;
                 let Block::Coded {
                     lit: lit_code_table,
                     dist: dist_code_table,
@@ -455,6 +549,13 @@ pub(crate) mod flate {
                 };
 
                 loop {
+                    // Malformed back-references can consume codes without emitting bytes.
+                    codes = codes.saturating_add(1);
+                    if checks.at(self.output.len().saturating_add(codes)).is_none() {
+                        self.eof = true;
+                        self.failed = true;
+                        return;
+                    }
                     if let Some((valid, distance, left)) = copy {
                         let left = self.copy_back(valid, distance, left);
                         if left > 0 {
@@ -813,9 +914,14 @@ pub(crate) mod lzw {
     /// `filter::decode_limit`); with a full table every 12-bit code can repeat an entry of
     /// thousands of bytes.
     pub(crate) fn decode(data: &[u8], params: &Dict<'_>, limit: usize) -> Option<Vec<u8>> {
-        let params = PredictorParams::from_params(params);
+        decode_controlled(data, params, limit, None)
+    }
 
-        let decoded = decode_impl(data, params.early_change, limit)?;
+    pub(crate) fn decode_controlled(data: &[u8], params: &Dict<'_>, limit: usize, control: Option<&crate::cancel::Control>) -> Option<Vec<u8>> {
+        let mut params = PredictorParams::from_params(params);
+        params.control = control.cloned();
+
+        let decoded = decode_impl(data, params.early_change, limit, control)?;
         // PdfCraft patch: output cut at the limit is reported, never dropped silently.
         if decoded.len() >= limit {
             warn!("LZW stream stopped at its decode limit of {limit} bytes");
@@ -829,14 +935,21 @@ pub(crate) mod lzw {
     const MAX_ENTRIES: usize = 4096;
     const INITIAL_SIZE: u16 = 258;
 
-    fn decode_impl(data: &[u8], early_change: bool, limit: usize) -> Option<Vec<u8>> {
+    fn decode_impl(data: &[u8], early_change: bool, limit: usize, control: Option<&crate::cancel::Control>) -> Option<Vec<u8>> {
         let mut table = Table::new(early_change);
         let mut bit_size = table.code_length();
         let mut reader = BitReader::new(data);
         let mut decoded = vec![];
         let mut prev = None;
+        let mut checks = crate::cancel::Checkpoints::new(control);
+        let mut output_checks = crate::cancel::Checkpoints::new(control);
+        let mut codes = 0;
 
         loop {
+            // Count codes as well as output so repeated clear-table codes remain interruptible.
+            checks.at(codes)?;
+            output_checks.at(decoded.len())?;
+            codes += 1;
             if decoded.len() >= limit {
                 return Some(decoded);
             }
@@ -965,6 +1078,7 @@ struct PredictorParams {
     bits_per_component: u8,
     columns: usize,
     early_change: bool,
+    control: Option<crate::cancel::Control>,
 }
 
 impl PredictorParams {
@@ -985,6 +1099,7 @@ impl Default for PredictorParams {
             bits_per_component: 8,
             columns: 1,
             early_change: true,
+            control: None,
         }
     }
 }
@@ -997,11 +1112,13 @@ impl PredictorParams {
             bits_per_component: dict.get(BITS_PER_COMPONENT).unwrap_or(8),
             columns: dict.get(COLUMNS).unwrap_or(1),
             early_change: dict.get::<u8>(EARLY_CHANGE).map(|e| e != 0).unwrap_or(true),
+            control: None,
         }
     }
 }
 
 fn apply_predictor(data: Vec<u8>, params: &PredictorParams) -> Option<Vec<u8>> {
+    crate::cancel::check(params.control.as_ref())?;
     match params.predictor {
         1 => Some(data),
         i => {
@@ -1048,8 +1165,10 @@ fn apply_predictor(data: Vec<u8>, params: &PredictorParams) -> Option<Vec<u8>> {
             let zero_col = BitChunk::new(0, chunk_len);
             let mut out = vec![0; num_rows * row_len];
             let mut writer = BitWriter::new(&mut out, bit_size)?;
+            let run = PredictorRun { chunk_len, bit_size, control: params.control.as_ref() };
 
             for in_row in data.chunks_exact(total_row_len) {
+                crate::cancel::check(params.control.as_ref())?;
                 if is_png_predictor {
                     let predictor = in_row[0];
                     let in_data = &in_row[1..];
@@ -1062,8 +1181,7 @@ fn apply_predictor(data: Vec<u8>, params: &PredictorParams) -> Option<Vec<u8>> {
                             zero_col.clone(),
                             in_data_chunks,
                             &mut writer,
-                            chunk_len,
-                            bit_size,
+                            run,
                         )?,
                         2 => apply::<Up>(
                             prev_row,
@@ -1071,8 +1189,7 @@ fn apply_predictor(data: Vec<u8>, params: &PredictorParams) -> Option<Vec<u8>> {
                             zero_col.clone(),
                             in_data_chunks,
                             &mut writer,
-                            chunk_len,
-                            bit_size,
+                            run,
                         )?,
                         3 => apply::<Avg>(
                             prev_row,
@@ -1080,8 +1197,7 @@ fn apply_predictor(data: Vec<u8>, params: &PredictorParams) -> Option<Vec<u8>> {
                             zero_col.clone(),
                             in_data_chunks,
                             &mut writer,
-                            chunk_len,
-                            bit_size,
+                            run,
                         )?,
                         4 => apply::<Paeth>(
                             prev_row,
@@ -1089,14 +1205,15 @@ fn apply_predictor(data: Vec<u8>, params: &PredictorParams) -> Option<Vec<u8>> {
                             zero_col.clone(),
                             in_data_chunks,
                             &mut writer,
-                            chunk_len,
-                            bit_size,
+                            run,
                         )?,
                         _ => {
                             // Just copy the data.
                             let mut reader = BitReader::new(in_data);
+                            let mut checks = crate::cancel::Checkpoints::new(params.control.as_ref());
 
                             while let Some(data) = reader.read(bit_size) {
+                                checks.at(writer.cur_pos())?;
                                 writer.write(data);
                             }
                         }
@@ -1108,9 +1225,8 @@ fn apply_predictor(data: Vec<u8>, params: &PredictorParams) -> Option<Vec<u8>> {
                         zero_col.clone(),
                         BitChunks::new(in_row, bit_size, chunk_len)?,
                         &mut writer,
-                        chunk_len,
-                        bit_size,
-                    );
+                        run,
+                    )?;
                 } else {
                     warn!("unknown predictor {i}");
 
@@ -1130,16 +1246,25 @@ fn apply_predictor(data: Vec<u8>, params: &PredictorParams) -> Option<Vec<u8>> {
     }
 }
 
+#[derive(Clone, Copy)]
+struct PredictorRun<'a> {
+    chunk_len: usize,
+    bit_size: u8,
+    control: Option<&'a crate::cancel::Control>,
+}
+
 fn apply<'a, T: Predictor>(
     prev_row: BitChunks<'a>,
     mut prev_col: BitChunk,
     mut top_left: BitChunk,
     cur_row: BitChunks<'a>,
     writer: &mut BitWriter<'a>,
-    chunk_len: usize,
-    bit_size: u8,
+    run: PredictorRun<'_>,
 ) -> Option<()> {
+    let PredictorRun { chunk_len, bit_size, control } = run;
+    let mut checks = crate::cancel::Checkpoints::new(control);
     for (cur_row, prev_row) in cur_row.zip(prev_row) {
+        checks.at(writer.cur_pos())?;
         let old_pos = writer.cur_pos();
 
         for (((cur_row, prev_row), prev_col), top_left) in cur_row
@@ -1262,6 +1387,21 @@ mod tests {
         ]
     }
 
+    #[test]
+    fn a_wide_predictor_row_can_be_canceled_partway_through() {
+        let (control, polls) = crate::cancel::stop_at(4);
+        let params = PredictorParams {
+            predictor: 12,
+            columns: (2 << 20) - 1,
+            control: Some(control),
+            ..PredictorParams::default()
+        };
+        let mut input = vec![0; 2 << 20];
+        input[0] = 2;
+        assert!(apply_predictor(input, &params).is_none());
+        assert_eq!(polls.load(core::sync::atomic::Ordering::Relaxed), 4);
+    }
+
     fn predictor_test(predictor: u8, input: &[u8]) {
         let params = PredictorParams {
             predictor,
@@ -1269,6 +1409,7 @@ mod tests {
             bits_per_component: 8,
             columns: 3,
             early_change: false,
+            control: None,
         };
 
         let expected = predictor_expected();
