@@ -170,7 +170,7 @@ pub fn pcraft_icc_profile(bytes: &[u8], limits: &Limits) -> Result<Option<Vec<u8
     let (zip, head) = pcraft::document_with_items::<ProfileHead>(bytes, &mut budget)?;
     let Some(ProfileHash(hash)) = head.profile else { return Ok(None) };
     let path = craft_pcraft_format::blob_path(&hash).ok_or_else(|| malformed("invalid ICC blob hash"))?;
-    let entry = zip.find(&path).ok_or_else(|| malformed(format!("the manifest names `{path}`, which the bundle does not have")))?;
+    let entry = zip.find(&path, budget.control)?.ok_or_else(|| malformed(format!("the manifest names `{path}`, which the bundle does not have")))?;
     let frame = zip.read(entry, limits.max_entry, &mut budget, &path)?;
     let cap = limits.max_entry.min(budget.left());
     let cap = usize::try_from(cap).unwrap_or(usize::MAX);
