@@ -431,8 +431,19 @@ pub(crate) fn all_contours_to_path(c: &Contours, tidy: &Tidy) -> BezPath {
 /// (e.g. the lens left between two coincident curves) and are dropped.
 pub(crate) fn is_sliver(bp: &BezPath, precision: f64) -> bool {
     let a = bp.area().abs();
-    let per = bp.perimeter(1e-6);
-    per <= 0.0 || 2.0 * a / per < precision
+    // To a thousandth of the length: the width is compared with the precision, which is not that close,
+    // and a bounded measure ([`crate::fit::measured_perimeter`]) cannot be made to subdivide for long.
+    // A segment that cannot be measured (coordinates past a billion) is taken at the length of its control polygon.
+    let per = crate::fit::measured_perimeter(bp, 1e-3).unwrap_or_else(|| {
+        bp.segments()
+            .map(|s| match s {
+                kurbo::PathSeg::Line(l) => (l.p1 - l.p0).hypot(),
+                kurbo::PathSeg::Quad(q) => (q.p1 - q.p0).hypot() + (q.p2 - q.p1).hypot(),
+                kurbo::PathSeg::Cubic(c) => (c.p1 - c.p0).hypot() + (c.p2 - c.p1).hypot() + (c.p3 - c.p2).hypot(),
+            })
+            .sum()
+    });
+    per <= 0.0 || (per.is_finite() && 2.0 * a / per < precision)
 }
 
 fn tidy_bezpath(bp: &BezPath, tidy: &Tidy) -> Option<BezPath> {
@@ -792,7 +803,8 @@ fn windings_add_up<W: WindingNumber>(top: &Topology<W>, winding: impl Fn(&W) -> 
     // each edge; a misplaced face is far larger.
     let bounds = input.bounding_box();
     let eps = eps_for([input]).ok()?;
-    let tol = 1e-6 * bounds.area().abs() + 16.0 * eps * input.perimeter(1e-3) * f64::from(hi - lo).max(1.0);
+    let perimeter = crate::fit::measured_perimeter(input, 1e-3)?;
+    let tol = 1e-6 * bounds.area().abs() + 16.0 * eps * perimeter * f64::from(hi - lo).max(1.0);
     Some((integral - want).abs() <= tol || (integral + want).abs() <= tol)
 }
 

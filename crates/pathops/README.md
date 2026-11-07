@@ -153,7 +153,12 @@ work of each operation is bounded before it starts, in counts the tests assert o
   operation is `TooComplex` past `MAX_ELEMENTS` elements of outline;
 - the operations without a `Result` answer an empty path, no shapes, or the input unchanged, as their
   documentation says. `simplify` stops fitting at `MAX_FIT_POINTS` samples of one run and at `FIT_WORK` in
-  all, `remove_redundant_points` at `REDUNDANT_WORK` and `join` at `JOIN_WORK`, and leaves the rest as it is;
+  all, `remove_redundant_points` at `REDUNDANT_WORK` (the joints it reads in its search, and the points of a run it
+  checks one by one against the line that replaces it) and `join` at `JOIN_WORK`, and leaves the rest as it is;
+- lengths are measured to a relative accuracy (kurbo's takes an accuracy in the units of the path, which a cubic of
+  large coordinates meets only by subdividing the most it ever does), and an inset compares the lengths of the
+  closed subpaths and of the boundary of their fill for at most 4,096 curves: past that, or with a curve whose
+  coordinates are past a billion, it strokes the boundary, which is right for any input;
 - the tidy that merges the pieces the sweep split joins at most 1,024 pieces into one line and 32 into one
   curve at a time (each piece added tries the whole run again), so a straight run of more comes out as
   lines of that many; the work is proportional to the pieces;

@@ -14,6 +14,7 @@ use crate::boolean::{
     try_unite_all_with,
 };
 use crate::edit::remove_redundant_points;
+use crate::fit::measured_perimeter;
 use crate::path::{Sub, canonical, fill_bezpath, is_finite, subs};
 use crate::work::{self, Work};
 use crate::{FillRule, PathOpsError};
@@ -275,15 +276,28 @@ fn split_closed_open(path: &BezPath) -> (BezPath, BezPath) {
 /// The boundary of the area `closed` fills under the non-zero rule: `closed` itself when every edge
 /// of it is on that boundary, else the contours of its sweep. A rectangle inside another one wound
 /// the same way is a subpath of the fill but no part of its boundary, and an inset must not stroke it.
+///
+/// Told by the lengths of the two (the boundary is shorter by the edges that are not on it). They are
+/// measured to a relative accuracy, and only up to [`MAX_COMPARED_CURVES`] curves: past that, or with
+/// a segment that cannot be measured, the boundary is used, which is right for any input and differs
+/// from `closed` only in how it is cut.
 fn filled_boundary(closed: &BezPath) -> Result<BezPath, PathOpsError> {
-    use kurbo::Shape;
     let mut boundary = BezPath::new();
     for contour in normalize_bez(closed, FillRule::NonZero)?.contours() {
         boundary.extend(contour.path.iter());
     }
-    let (kept, whole) = (boundary.perimeter(1e-6), closed.perimeter(1e-6));
-    Ok(if (whole - kept).abs() <= 1e-9 * whole { closed.clone() } else { boundary })
+    let curves = |p: &BezPath| p.segments().filter(|s| !matches!(s, kurbo::PathSeg::Line(_))).count();
+    if curves(closed).saturating_add(curves(&boundary)) > MAX_COMPARED_CURVES {
+        return Ok(boundary);
+    }
+    Ok(match (measured_perimeter(&boundary, 1e-9), measured_perimeter(closed, 1e-9)) {
+        (Some(kept), Some(whole)) if (whole - kept).abs() <= 1e-6 * whole => closed.clone(),
+        _ => boundary,
+    })
 }
+
+/// Most curves (of the two paths together) whose lengths [`filled_boundary`] measures.
+const MAX_COMPARED_CURVES: usize = 4096;
 
 /// [`try_offset_path`] with the test of whether some segment of a path lies closer than a radius to a
 /// point: `index` makes whatever `near` searches of a path's segments. The path is `path` for an
@@ -1025,6 +1039,57 @@ mod tests {
                     "{name} {width} wide, {cap:?} caps, {join:?} joins: {in_windows} against {whole}"
                 );
             }
+        }
+    }
+
+    /// `n` circles of radius 5 apart, as one path of 4n cubics.
+    fn circles(n: usize) -> BezPath {
+        let mut p = BezPath::new();
+        for i in 0..n {
+            p.extend(kurbo::Circle::new((f64::from(i as u32) * 20.0, 0.0), 5.0).to_path(0.01).iter());
+        }
+        p
+    }
+
+    /// The boundary an inset strokes is told from the path by measuring the curves of both, and
+    /// that is limited: past [`MAX_COMPARED_CURVES`] of them, or with one that cannot be measured, nothing
+    /// is measured and the boundary is used. (Measuring to an absolute accuracy took a cubic of large
+    /// coordinates the most levels of subdivision there are.)
+    #[test]
+    fn the_curves_an_inset_measures_are_counted_and_limited() {
+        // Few curves, apart: all measured (the cubics of the path and of its boundary), the path kept.
+        let few = circles(100);
+        work::reset();
+        assert_eq!(filled_boundary(&few).unwrap(), few);
+        let measured = work::take(Work::Measured);
+        assert!((400..=2 * 8 * 100).contains(&measured), "{measured} curves measured");
+        // Too many: none measured, and the boundary (the same circles, cut) is what comes back.
+        let many = circles(1_100);
+        work::reset();
+        let boundary = filled_boundary(&many).unwrap();
+        assert_eq!(work::take(Work::Measured), 0, "past the limit nothing is measured");
+        assert!(boundary != many && (crate::area(&boundary, FillRule::NonZero) - crate::area(&many, FillRule::NonZero)).abs() < 1e-6);
+        // Lines only: the lengths are chords, no curve is counted, and a rectangle in another is told.
+        let mut nested = crate::testutil::rect(0.0, 0.0, 100.0, 100.0);
+        nested.extend(crate::testutil::rect(30.0, 30.0, 70.0, 70.0).iter());
+        work::reset();
+        assert!(filled_boundary(&nested).unwrap() != nested);
+        assert_eq!(work::take(Work::Measured), 0);
+        // A curve too big to measure: the boundary, at once.
+        let huge = {
+            let mut p = BezPath::new();
+            p.extend(kurbo::Circle::new((0.0, 0.0), 3e9).to_path(1.0).iter());
+            p
+        };
+        work::reset();
+        assert!(filled_boundary(&huge).is_ok());
+        assert_eq!(work::take(Work::Measured), 0);
+        // Nothing the measure does depends on the size of the coordinates.
+        for scale in [1.0, 1e3, 1e6, 1e8] {
+            let ring = kurbo::Circle::new((0.0, 0.0), scale).to_path(scale * 1e-4);
+            let len = crate::fit::measured_perimeter(&ring, 1e-9).unwrap();
+            let exact = kurbo::Shape::perimeter(&ring, scale * 1e-12);
+            assert!((len - exact).abs() < 1e-8 * exact, "scale {scale}: {len} against {exact}");
         }
     }
 

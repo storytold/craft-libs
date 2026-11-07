@@ -25,6 +25,35 @@ pub(crate) fn measured_arclen(seg: &PathSeg, accuracy: f64) -> Option<f64> {
     fits.then(|| kurbo::ParamCurveArclen::arclen(seg, accuracy))
 }
 
+/// The length of `path`, each cubic measured to `relative` of the length of its control polygon, or
+/// `None` when a segment cannot be measured ([`measured_arclen`]). kurbo's `perimeter(accuracy)` takes
+/// an accuracy in the units of the path, which a cubic of large coordinates can only meet by
+/// subdividing it the most it ever does (twenty levels), and a cubic cannot be told apart from one
+/// that does; a relative accuracy is met in a few levels whatever the coordinates, so the work for a
+/// segment is a small constant. The cubics measured are counted ([`Work::Measured`]).
+pub(crate) fn measured_perimeter(path: &kurbo::BezPath, relative: f64) -> Option<f64> {
+    let mut total = 0.0;
+    let mut curves = 0usize;
+    for seg in path.segments() {
+        total += match seg {
+            PathSeg::Line(l) => (l.p1 - l.p0).hypot(),
+            PathSeg::Quad(q) => {
+                curves += 1;
+                measured_arclen(&seg, (relative * ((q.p1 - q.p0).hypot() + (q.p2 - q.p1).hypot())).max(1e-300))?
+            }
+            PathSeg::Cubic(c) => {
+                curves += 1;
+                // Never an accuracy of zero: a cubic that is a point has no error, and no error is
+                // not below an accuracy of zero, so it would be subdivided to the bottom.
+                let polygon = (c.p1 - c.p0).hypot() + (c.p2 - c.p1).hypot() + (c.p3 - c.p2).hypot();
+                measured_arclen(&seg, (relative * polygon).max(1e-300))?
+            }
+        };
+    }
+    crate::work::add(crate::work::Work::Measured, curves);
+    total.is_finite().then_some(total)
+}
+
 /// Maximum Newton reparameterisation rounds per fit.
 const MAX_REPARAM: usize = 6;
 
@@ -302,6 +331,32 @@ mod tests {
         let mut little = 100;
         assert_eq!(fit_cubics(&pts, t0, t1, 0.1, &mut little), Err(FitStop::Work));
         assert_eq!(little, 0);
+    }
+
+    /// The perimeter is measured to a relative accuracy: a cubic that is a point is nothing (an accuracy
+    /// of zero takes kurbo 42 ms to subdivide it to the bottom, against 180 ns for the smallest there is;
+    /// that is a time, so no test here can fail on it), a segment past the limit or not finite cannot be
+    /// measured, and the cubics measured are counted.
+    #[test]
+    fn the_perimeter_is_measured_to_a_relative_accuracy_and_counted() {
+        let mut point = kurbo::BezPath::new();
+        point.move_to((1e5, 1e5));
+        point.curve_to((1e5, 1e5), (1e5, 1e5), (1e5, 1e5));
+        crate::work::reset();
+        assert_eq!(measured_perimeter(&point, 1e-9), Some(0.0));
+        assert_eq!(crate::work::take(crate::work::Work::Measured), 1);
+        let mut square = kurbo::BezPath::new();
+        square.move_to((0.0, 0.0));
+        square.line_to((3.0, 0.0));
+        square.line_to((3.0, 4.0));
+        assert_eq!(measured_perimeter(&square, 1e-9), Some(7.0));
+        assert_eq!(crate::work::take(crate::work::Work::Measured), 0, "lines are chords");
+        for (name, bad) in [("past the limit", 1e10), ("not a number", f64::NAN), ("infinite", f64::INFINITY)] {
+            let mut p = kurbo::BezPath::new();
+            p.move_to((0.0, 0.0));
+            p.curve_to((bad, 0.0), (0.0, bad), (1.0, 1.0));
+            assert_eq!(measured_perimeter(&p, 1e-9), None, "{name}");
+        }
     }
 
     #[test]

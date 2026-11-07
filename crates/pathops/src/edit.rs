@@ -335,8 +335,8 @@ fn rdp(pts: &[Point], tol: f64, fit: &mut Fit) -> Option<Vec<Point>> {
 /// (collinear corner points, duplicate points, and curve joints that one cubic can replace).
 ///
 /// A path of more than [`crate::MAX_ELEMENTS`] elements is returned as it is. The search for what
-/// one pass along each subpath leaves (at a closed subpath's start) is limited to [`REDUNDANT_WORK`]
-/// joints read in all.
+/// one pass along each subpath leaves (at a closed subpath's start), and the checks of a run against
+/// the line that replaces it, are limited to [`REDUNDANT_WORK`] in all.
 pub fn remove_redundant_points(path: &BezPath, tolerance: f64) -> BezPath {
     let mut work = crate::budget::limits().redundant_work;
     remove_redundant_within(path, tolerance, &mut work)
@@ -371,7 +371,7 @@ fn remove_redundant_within(path: &BezPath, tolerance: f64, work: &mut usize) -> 
             done.push(p);
             while done.len() >= 2 && total - merged > min_segs {
                 let n = done.len();
-                let Some(m) = merge_pieces(&done[n - 2], &done[n - 1], tol, &origins) else { break };
+                let Some(m) = merge_pieces(&done[n - 2], &done[n - 1], tol, &origins, work) else { break };
                 done.truncate(n - 1);
                 done[n - 2] = m;
                 merged += 1;
@@ -389,7 +389,7 @@ fn remove_redundant_within(path: &BezPath, tolerance: f64, work: &mut usize) -> 
             let joints = if sp.closed { n } else { n - 1 };
             for j in 0..joints {
                 let (i0, i1) = if sp.closed { ((j + n - 1) % n, j) } else { (j, j + 1) };
-                if let Some(m) = merge_pieces(&pieces[i0], &pieces[i1], tol, &origins) {
+                if let Some(m) = merge_pieces(&pieces[i0], &pieces[i1], tol, &origins, work) {
                     pieces[i0] = m;
                     pieces.remove(i1);
                     if sp.closed && i1 == 0 {
@@ -411,8 +411,10 @@ fn remove_redundant_within(path: &BezPath, tolerance: f64, work: &mut usize) -> 
     out
 }
 
-/// Most joints [`remove_redundant_points`] reads in all in its search for what its first pass
-/// along a subpath left: 67,108,864 (the default of [`crate::Limits::redundant_work`]).
+/// Most work [`remove_redundant_points`] does in all, besides the pass along each subpath that merges
+/// what needs no check: the joints it reads in its search for what that pass left, and the points of
+/// a run it checks one by one against the line that replaces it (a merge that needs the check and
+/// finds none left is not made): 67,108,864 (the default of [`crate::Limits::redundant_work`]).
 pub const REDUNDANT_WORK: usize = 1 << 26;
 
 /// A segment standing for a run of the segments of the subpath it was made from.
@@ -440,7 +442,7 @@ const MAX_CHECKED_RUN: usize = 512;
 /// bound passes `tol`, the joints of the run are checked against the line (up to
 /// [`MAX_CHECKED_RUN`]), which gives the real deviation. `origins` are the starts of the original
 /// segments.
-fn merge_pieces(a: &Piece, b: &Piece, tol: f64, origins: &[Point]) -> Option<Piece> {
+fn merge_pieces(a: &Piece, b: &Piece, tol: f64, origins: &[Point], work: &mut usize) -> Option<Piece> {
     let (seg, step) = merge_pair(&a.seg, &b.seg, tol)?;
     let (first, count) = (a.first, a.count + b.count);
     let bound = a.dev.max(b.dev) + step;
@@ -450,7 +452,13 @@ fn merge_pieces(a: &Piece, b: &Piece, tol: f64, origins: &[Point]) -> Option<Pie
     if !seg.line || count > MAX_CHECKED_RUN {
         return None;
     }
-    // The joints inside the run are the starts of its segments but the first.
+    // The joints inside the run are the starts of its segments but the first. They are read from the
+    // same work as the search for joints to merge; with none left the run is not merged.
+    let Some(left) = work.checked_sub(count) else {
+        *work = 0;
+        return None;
+    };
+    *work = left;
     work::add(Work::RunChecks, count);
     let chord = seg.c.p3 - seg.c.p0;
     let len2 = chord.hypot2();
@@ -715,6 +723,40 @@ mod tests {
         let (small, large) = (checks(4_000), checks(16_000));
         assert!(small > 0 && large <= 5 * small, "{small} checks for 4,000 points, {large} for 16,000");
         assert!(large <= 16_000 * 512, "{large} checks");
+    }
+
+    /// The points checked one by one against the line that replaces a run are charged to the same work
+    /// as the joints read: with 1,000 of it, the two together are at most 1,000, in the first pass and
+    /// in the search that follows (a closed noisy ring merges across its start there), and nothing is
+    /// merged that needed a check past it.
+    #[test]
+    fn the_run_checks_of_the_merges_are_charged_to_the_work() {
+        let noisy = |n: usize, closed: bool| {
+            let mut pts: Vec<(f64, f64)> = (0..=n).map(|i| (i as f64, if i % 2 == 0 { 0.0004 } else { -0.0004 })).collect();
+            if closed {
+                pts.extend([(n as f64, 100.0), (0.0, 100.0)]);
+            }
+            polyline(&pts, closed)
+        };
+        for closed in [false, true] {
+            let path = noisy(16_000, closed);
+            work::reset();
+            let free = remove_redundant_points(&path, 0.001);
+            let (free_checks, free_joints) = (work::take(Work::RunChecks), work::take(Work::Redundant));
+            assert!(free_checks > 100_000, "{free_checks} checks without a limit (closed: {closed})");
+            for limit in [0usize, 1_000, 50_000] {
+                let limits = crate::Limits { redundant_work: limit, ..crate::Limits::default() };
+                work::reset();
+                let cut = crate::with_limits(limits, || remove_redundant_points(&path, 0.001));
+                let (checks, joints) = (work::take(Work::RunChecks), work::take(Work::Redundant));
+                assert!(checks + joints <= limit, "{checks} checks and {joints} joints read with {limit} of work (closed: {closed})");
+                // What needed no check is merged all the same, and what did is left, not lost.
+                assert!(anchor_count(&cut) >= anchor_count(&free));
+            }
+            // Room for all of it gives the same result.
+            let limits = crate::Limits { redundant_work: free_checks + free_joints, ..crate::Limits::default() };
+            assert_eq!(crate::with_limits(limits, || remove_redundant_points(&path, 0.001)), free);
+        }
     }
 
     /// The same for points that lie on a straight line exactly: the bound passes, and nothing is checked

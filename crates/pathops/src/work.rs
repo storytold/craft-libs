@@ -42,11 +42,13 @@ pub(crate) enum Work {
     RunChecks,
     /// Heights an interior point was looked for at.
     InteriorHeights,
+    /// Curves whose length was measured.
+    Measured,
 }
 
 #[cfg(test)]
 thread_local! {
-    static COUNTS: std::cell::RefCell<[usize; 18]> = const { std::cell::RefCell::new([0; 18]) };
+    static COUNTS: std::cell::RefCell<[usize; 19]> = const { std::cell::RefCell::new([0; 19]) };
 }
 
 /// Counts `n` more of `what` on this thread (tests only).
@@ -71,5 +73,5 @@ pub(crate) fn take(what: Work) -> usize {
 /// Resets every count on this thread.
 #[cfg(test)]
 pub(crate) fn reset() {
-    COUNTS.with(|c| *c.borrow_mut() = [0; 18]);
+    COUNTS.with(|c| *c.borrow_mut() = [0; 19]);
 }
