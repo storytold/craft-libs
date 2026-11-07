@@ -11,8 +11,6 @@ fn main() {
 }
 
 fn paperjs_tests() -> Vec<Trial> {
-    let mut tests = Vec::new();
-
     // Load all test files
     let test_files = vec![
         ("boolean-test/data/intersection.json", "intersection"),
@@ -20,12 +18,32 @@ fn paperjs_tests() -> Vec<Trial> {
         ("boolean-test/data/subtraction.json", "subtraction"),
     ];
 
-    for (file_path, op_name) in test_files {
-        if let Ok(file_tests) = load_test_file(file_path, op_name) {
-            tests.extend(file_tests);
+    let mut tests = trials_for(&test_files);
+    tests.push(Trial::test("load_errors_are_reported", || {
+        let trials = trials_for(&[("boolean-test/data/missing.json", "missing")]);
+        let names: Vec<&str> = trials.iter().map(Trial::name).collect();
+        if names == ["missing/load"] {
+            Ok(())
+        } else {
+            Err(format!("expected one failing load trial, got {names:?}").into())
+        }
+    }));
+    tests
+}
+
+fn trials_for(test_files: &[(&str, &str)]) -> Vec<Trial> {
+    let mut tests = Vec::new();
+    for &(file_path, op_name) in test_files {
+        match load_test_file(file_path, op_name) {
+            Ok(file_tests) => tests.extend(file_tests),
+            Err(e) => {
+                let message = format!("cannot load {file_path}: {e}");
+                tests.push(Trial::test(format!("{op_name}/load"), move || {
+                    Err(message.into())
+                }));
+            }
         }
     }
-
     tests
 }
 
