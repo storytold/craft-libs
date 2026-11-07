@@ -1919,6 +1919,13 @@ mod test {
         };
         let order = intersect_cubics(c0, c1, 0.125, 0.25);
         assert_eq!(order.start, 1.0);
+        // Craft patch (metrics opt-in): a single-y comparison records one
+        // entry at depth zero.
+        #[cfg(feature = "metrics")]
+        assert_eq!(
+            order.metrics.entries,
+            vec![MetricsEntry { end: 1.0, depth: 0 }]
+        );
         assert_eq!(
             &order.cmps[..],
             &[CurveOrderEntry {
@@ -2052,6 +2059,28 @@ mod test {
         let order = crossing_cubics_order();
         assert_eq!(order.metrics.entries.is_empty(), !cfg!(feature = "metrics"));
         assert_eq!(order.flip().metrics, order.metrics);
+    }
+
+    // The comparison recurses toward the crossing at y = 0.5, and each
+    // interval records the depth it was decided at.
+    #[cfg(feature = "metrics")]
+    #[test]
+    fn crossing_cubics_metrics_record_the_recursion_depth() {
+        let order = crossing_cubics_order();
+        let expected = [
+            (0.41461454805348563, 0),
+            (0.49927444265135257, 1),
+            (0.4999997495377526, 2),
+            (0.5000002504622474, 2),
+            (0.5007255573486473, 2),
+            (0.5853854519465145, 1),
+            (1.0, 0),
+        ];
+        assert_eq!(order.metrics.entries.len(), expected.len());
+        for (entry, (end, depth)) in order.metrics.entries.iter().zip(expected) {
+            assert!((entry.end - end).abs() < 1e-12, "{entry:?}");
+            assert_eq!(entry.depth, depth, "{entry:?}");
+        }
     }
 
     // TODO: improve this test
