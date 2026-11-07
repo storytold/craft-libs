@@ -496,6 +496,18 @@ pub struct Topology<W: WindingNumber> {
     /// In principle, this is redundant with the winding numbers. But since the winding
     /// numbers are generic, that information isn't available to us.
     positively_oriented: OutputSegVec<bool>,
+    // Craft patch (coincident horizontals): a run of coincident horizontal fragments gets
+    // at most one output segment. This marks the input segments with a fragment that got
+    // none and that `has_normal_contours` rejects, judged by the winding numbers on either
+    // side of its run.
+    #[cfg_attr(test, serde(skip))]
+    folded_abnormal: SegVec<bool>,
+    // Craft patch (coincident horizontals): the fragments that got no output segment, for
+    // the continuity check, as (input segment, number of output segments created before it,
+    // start point, end point, orientation).
+    #[cfg(feature = "slow-asserts")]
+    #[cfg_attr(test, serde(skip))]
+    folded_pieces: Vec<(SegIdx, usize, PointIdx, PointIdx, bool)>,
 }
 
 impl<W: WindingNumber> Topology<W> {
@@ -556,6 +568,9 @@ impl<W: WindingNumber> Topology<W> {
             orig_seg: OutputSegVec::with_capacity(segments.len()),
             positively_oriented: OutputSegVec::with_capacity(segments.len()),
             segments: Segments::default(),
+            folded_abnormal: SegVec::with_size(segments.len()),
+            #[cfg(feature = "slow-asserts")]
+            folded_pieces: Vec::new(),
         };
         let mut sweep_state = Sweeper::new_with_correctness(&segments, eps, correctness);
         let mut range_bufs = SweepLineRangeBuffers::default();
@@ -688,10 +703,13 @@ impl<W: WindingNumber> Topology<W> {
     /// horizontal segments will be closed first, followed by segments coming
     /// from an earlier sweep-line, followed by segments extending down from
     /// this sweep-line (which won't be closed until we move on to the next
-    /// sweep-line). Therefore, we push horizontal half-segments to the front
-    /// of the queue so that they can be taken next. We push non-horizontal
-    /// half-segments to the back of the queue, so that the older ones (coming
-    /// from the previous sweep-line) will get taken before the new ones.
+    /// sweep-line). We push non-horizontal half-segments to the back of the
+    /// queue, so that the older ones (coming from the previous sweep-line) will
+    /// get taken before the new ones.
+    ///
+    /// Craft patch (coincident horizontals): horizontal half-segments are not
+    /// queued here. `process_sweep_line_range` keeps them in its own list and
+    /// closes them at the next point.
     fn new_half_seg(
         &mut self,
         idx: SegIdx,
@@ -701,9 +719,7 @@ impl<W: WindingNumber> Topology<W> {
         positively_oriented: bool,
     ) -> OutputSegIdx {
         let out_idx = OutputSegIdx(self.winding.inner.len());
-        if horizontal {
-            self.open_segs[idx].push_front(out_idx);
-        } else {
+        if !horizontal {
             self.open_segs[idx].push_back(out_idx);
         }
         self.point_idx.start.push(p);
@@ -727,6 +743,31 @@ impl<W: WindingNumber> Topology<W> {
         out_idx
     }
 
+    /// Craft patch (coincident horizontals): records the horizontal fragments of a run
+    /// that start at `p` and get no output segment, as (input segment, orientation).
+    /// `before` and `after` are the winding numbers on either side of the run.
+    fn note_folded(&mut self, folded: &[(SegIdx, bool)], before: &W, after: &W, p: PointIdx) {
+        for &(seg, positively_oriented) in folded {
+            // The winding number to the right of the fragment, as `has_normal_contours`
+            // reads it from an output segment.
+            let right = if positively_oriented { before } else { after };
+            let tag = self.tag[seg];
+            if !self.folded_abnormal[seg] && right.of_tag(tag) != W::single(tag, true) {
+                self.folded_abnormal[seg] = true;
+            }
+            #[cfg(feature = "slow-asserts")]
+            self.folded_pieces.push((
+                seg,
+                self.winding.inner.len(),
+                p,
+                PointIdx(usize::MAX),
+                positively_oriented,
+            ));
+        }
+        #[cfg(not(feature = "slow-asserts"))]
+        let _ = p;
+    }
+
     fn process_sweep_line_range(
         &mut self,
         mut pos: SweepLineRange,
@@ -745,6 +786,12 @@ impl<W: WindingNumber> Topology<W> {
         let mut connected_segs = SegmentsConnectedAtX::default();
         // The last segment we saw that points down from this sweep line.
         let mut last_connected_down_seg: Option<OutputSegIdx> = None;
+        // Craft patch (coincident horizontals): the horizontal output segments started at
+        // the previous point, which the next point closes.
+        let mut open_horizontals: Vec<OutputSegIdx> = Vec::new();
+        // Craft patch (coincident horizontals): the fragments of the current run that get
+        // no output segment.
+        let mut folded: Vec<(SegIdx, bool)> = Vec::new();
 
         while let Some(next_x) = pos.x() {
             let p = PointIdx(self.points.inner.len());
@@ -755,10 +802,18 @@ impl<W: WindingNumber> Topology<W> {
             let mut last_seg = None;
 
             // Close off the horizontal segments from the previous point in this sweep-line.
-            let hsegs = pos.active_horizontals();
             seg_buf.clear();
-            seg_buf.extend(self.second_half_segs(hsegs));
+            seg_buf.extend(open_horizontals.drain(..).map(OutputSegIdx::second_half));
             self.add_segs_clockwise(&mut first_seg, &mut last_seg, seg_buf.iter().copied(), p);
+            #[cfg(feature = "slow-asserts")]
+            for piece in self
+                .folded_pieces
+                .iter_mut()
+                .rev()
+                .take_while(|piece| piece.3 == PointIdx(usize::MAX))
+            {
+                piece.3 = p;
+            }
 
             // Find all the segments that are connected to something above this sweep-line at next_x.
             pos.update_segments_at_x(&mut connected_segs);
@@ -805,17 +860,44 @@ impl<W: WindingNumber> Topology<W> {
             // to keep track of the winding number below the current sweep line.
             let mut w = winding.clone();
             seg_buf.clear();
+            // Craft patch (coincident horizontals): every active horizontal runs from this
+            // point to the next one, so they are all coincident, and `merge_coincident`
+            // would merge their output segments. Instead of allocating an output segment per
+            // fragment, this allocates one per run of fragments: the run's first fragment,
+            // with the winding numbers before and after the run. When a run's winding
+            // numbers cancel, it gets no output segment and the next fragment starts a new
+            // run.
+            let mut run: Option<(SegIdx, bool, W)> = None;
             for (new_seg, same_orientation) in hsegs {
                 let prev_w = w.clone();
                 let orientation = same_orientation == segments.positively_oriented(new_seg);
                 w += W::single(self.tag[new_seg], !orientation);
+                match &run {
+                    None => run = Some((new_seg, orientation, prev_w)),
+                    Some((first, first_orientation, start)) => {
+                        // This fragment gets no output segment of its own.
+                        folded.push((new_seg, orientation));
+                        if *start == w {
+                            // The run cancels, so its first fragment gets none either.
+                            folded.push((*first, *first_orientation));
+                            self.note_folded(&folded, &w, &w, p);
+                            folded.clear();
+                            run = None;
+                        }
+                    }
+                }
+            }
+            if let Some((first, orientation, start)) = run {
+                self.note_folded(&folded, &start, &w, p);
+                folded.clear();
                 let windings = HalfSegmentWindingNumbers {
-                    counter_clockwise: w.clone(),
-                    clockwise: prev_w,
+                    counter_clockwise: w,
+                    clockwise: start,
                 };
-                let half_seg = self.new_half_seg(new_seg, p, windings, true, orientation);
+                let half_seg = self.new_half_seg(first, p, windings, true, orientation);
                 self.scan_west[half_seg] = scan_west;
                 seg_buf.push(half_seg.first_half());
+                open_horizontals.push(half_seg);
             }
             self.add_segs_counter_clockwise(
                 &mut first_seg,
@@ -972,6 +1054,10 @@ impl<W: WindingNumber> Topology<W> {
     /// of [`Topology::contours`] because there are approximations involved.
     /// For example, we might return `true` even when the contours are just
     /// barely overlapping.
+    ///
+    /// Craft patch (coincident horizontals): coincident horizontal pieces that run
+    /// between the same two points share one output segment, so this sees the winding
+    /// numbers on either side of all of them and not the ones between them.
     pub fn is_disjoint_tags(
         &self,
         inside1: impl Fn(&W) -> bool,
@@ -1047,7 +1133,19 @@ impl<W: WindingNumber> Topology<W> {
     /// `true`, you can decide that the intersection is just `a`. This isn't
     /// a hard guarantee that `Topology::contours` will return `a` exactly:
     /// it probably won't, because of perturbations and ordering changes.
+    ///
+    /// Craft patch (coincident horizontals): coincident horizontal pieces that run
+    /// between the same two points share at most one output segment. This checks each
+    /// of those pieces with the winding numbers on either side of all of them, not the
+    /// ones between them.
     pub fn has_normal_contours(&self, tag: W::Tag) -> bool {
+        if self
+            .folded_abnormal
+            .iter()
+            .any(|(seg, &abnormal)| abnormal && self.tag[seg] == tag)
+        {
+            return false;
+        }
         self.out_segments_of(tag).all(|out_idx| {
             let w = &self.winding[out_idx];
 
@@ -1620,9 +1718,25 @@ impl<W: WindingNumber> Topology<W> {
         }
 
         // Check the continuity of contours.
-        let mut out_segs = SegVec::<Vec<OutputSegIdx>>::with_size(self.segments.len());
+        // Craft patch (coincident horizontals): each piece is (creation order, start point,
+        // end point, orientation), from an output segment or from a fragment that got none.
+        // The pieces start out in the order they were created, as the output segments of
+        // every fragment would be.
+        let mut out_segs =
+            SegVec::<Vec<(usize, PointIdx, PointIdx, bool)>>::with_size(self.segments.len());
         for out_seg in self.winding.indices() {
-            out_segs[self.orig_seg[out_seg]].push(out_seg);
+            out_segs[self.orig_seg[out_seg]].push((
+                2 * out_seg.0 + 1,
+                self.point_idx[out_seg.first_half()],
+                self.point_idx[out_seg.second_half()],
+                self.positively_oriented[out_seg],
+            ));
+        }
+        for &(seg, created_before, start, end, positively_oriented) in &self.folded_pieces {
+            out_segs[seg].push((2 * created_before, start, end, positively_oriented));
+        }
+        for (_, out_segs) in out_segs.iter_mut() {
+            out_segs.sort_by_key(|piece| piece.0);
         }
         // For each segment, figure out the first and last points of its output-segment-polyline,
         // in that segment's natural orientation.
@@ -1642,11 +1756,11 @@ impl<W: WindingNumber> Topology<W> {
             // where there are multiple horizontal out segments on the same sweep line, we
             // need to sort those segments relative to one another depending on the direction
             // in which the input segment traverses that sweep line.
-            out_segs.sort_by(|&o1, &o2| {
-                let p11 = self.point(o1.first_half());
-                let p12 = self.point(o1.second_half());
-                let p21 = self.point(o2.first_half());
-                let p22 = self.point(o2.second_half());
+            out_segs.sort_by(|o1, o2| {
+                let p11 = &self.points[o1.1];
+                let p12 = &self.points[o1.2];
+                let p21 = &self.points[o2.1];
+                let p22 = &self.points[o2.2];
                 let horiz1 = p11.y == p12.y;
                 let horiz2 = p21.y == p22.y;
 
@@ -1658,8 +1772,8 @@ impl<W: WindingNumber> Topology<W> {
                     // We can create multiple horizontal segments for a segment in the same
                     // sweep line, but currently we don't create any backtracking: all the
                     // horizontal segments we create have the same orientation.
-                    debug_assert_eq!(self.positively_oriented[o1], self.positively_oriented[o2]);
-                    if self.positively_oriented[o1] == self.segments.positively_oriented(in_seg) {
+                    debug_assert_eq!(o1.3, o2.3);
+                    if o1.3 == self.segments.positively_oriented(in_seg) {
                         cmp
                     } else {
                         cmp.reverse()
@@ -1672,13 +1786,13 @@ impl<W: WindingNumber> Topology<W> {
             let mut first = None;
             let mut last = None;
 
-            for &out_seg in &*out_segs {
+            for &(_, start, end, positively_oriented) in &*out_segs {
                 let same_orientation =
-                    self.positively_oriented[out_seg] == self.segments.positively_oriented(in_seg);
+                    positively_oriented == self.segments.positively_oriented(in_seg);
                 let (first_endpoint, second_endpoint) = if same_orientation {
-                    (out_seg.first_half(), out_seg.second_half())
+                    (start, end)
                 } else {
-                    (out_seg.second_half(), out_seg.first_half())
+                    (end, start)
                 };
                 if first.is_none() {
                     first = Some(first_endpoint);
@@ -1687,7 +1801,7 @@ impl<W: WindingNumber> Topology<W> {
                 // When walking the output segments in sweep-line order, the last endpoint of
                 // the previous one should be the first endpoint of this one.
                 if let Some(last) = last {
-                    assert_eq!(self.point_idx[first_endpoint], self.point_idx[last]);
+                    assert_eq!(first_endpoint, last);
                 }
                 last = Some(second_endpoint);
             }
@@ -1699,7 +1813,7 @@ impl<W: WindingNumber> Topology<W> {
             } else {
                 (last, first)
             };
-            realized_endpoints.push((self.point_idx[first], self.point_idx[last]));
+            realized_endpoints.push((first, last));
         }
 
         for seg in self.segments.indices() {
@@ -2536,6 +2650,65 @@ mod tests {
             [p(0.0, 0.0), p(1.0, 0.0), p(1.0, 1.0), p(0.0, 1.0)],
             [p(0.5, 0.5), p(1.5, 0.5), p(1.5, 1.5), p(0.5, 1.5)],
         ];
+        assert!(!Topology::from_polylines_binary(s, EMPTY, 1e-5).has_normal_contours(OneOfTwo::A));
+    }
+
+    // Craft patch (coincident horizontals): n overlapping rectangles that share their top
+    // and bottom edges have n active horizontals at most points of those edges. Each run
+    // gets one output segment, so the count grows with n rather than with n * n.
+    #[test]
+    fn coincident_horizontals_get_one_output_segment_per_run() {
+        let n = 200;
+        let mut bez = BezPath::new();
+        for i in 0..n {
+            let rect = kurbo::Rect::new(i as f64, 0.0, (i + n) as f64, 10.0);
+            bez.extend(kurbo::Shape::path_elements(&rect, 0.0));
+        }
+        let top = Topology::<i32>::from_path(&bez, 1e-6).unwrap();
+        assert_eq!(top.orig_seg.len(), 6 * n - 2);
+        assert_eq!(top.segment_indices().count(), 6 * n - 2);
+
+        let area = |contours: &super::Contours| -> f64 {
+            contours
+                .contours()
+                .map(|c| kurbo::Shape::area(&c.path).abs())
+                .sum()
+        };
+        let nonzero = top.contours(|w| *w != 0);
+        assert_eq!(nonzero.contours().count(), 1);
+        assert_eq!(area(&nonzero), 10.0 * (2 * n - 1) as f64);
+        let even_odd = top.contours(|w| w % 2 != 0);
+        assert_eq!(even_odd.contours().count(), n);
+        assert_eq!(area(&even_odd), 10.0 * n as f64);
+
+        // Squares that share a horizontal edge have a normal boundary: each shared piece
+        // has winding number 1 on both sides.
+        let s = [
+            [p(0.0, 0.0), p(2.0, 0.0), p(2.0, 1.0), p(0.0, 1.0)],
+            [p(0.0, 1.0), p(2.0, 1.0), p(2.0, 2.0), p(0.0, 2.0)],
+        ];
+        assert!(Topology::from_polylines_binary(s, EMPTY, 1e-5).has_normal_contours(OneOfTwo::A));
+
+        // A horizontal spur out of a square and back has winding number 0 on both sides.
+        let s = [[
+            p(0.0, 0.0),
+            p(2.0, 0.0),
+            p(2.0, 2.0),
+            p(0.0, 2.0),
+            p(0.0, 1.0),
+            p(-1.0, 1.0),
+            p(0.0, 1.0),
+        ]];
+        assert!(!Topology::from_polylines_binary(s, EMPTY, 1e-5).has_normal_contours(OneOfTwo::A));
+        let s = [[
+            p(0.0, 0.0),
+            p(2.0, 0.0),
+            p(2.0, 1.0),
+            p(3.0, 1.0),
+            p(2.0, 1.0),
+            p(2.0, 2.0),
+            p(0.0, 2.0),
+        ]];
         assert!(!Topology::from_polylines_binary(s, EMPTY, 1e-5).has_normal_contours(OneOfTwo::A));
     }
 
