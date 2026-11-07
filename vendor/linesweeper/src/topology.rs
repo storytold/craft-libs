@@ -5,7 +5,7 @@
 
 use std::collections::VecDeque;
 
-use kurbo::{BezPath, ParamCurve, Rect, Shape};
+use kurbo::{Affine, BezPath, ParamCurve, Rect, Shape};
 
 use crate::{
     FillRule,
@@ -1384,6 +1384,8 @@ impl<W: WindingNumber> Topology<W> {
             // "endpoint" here means "as we walk the contour;" it could be either a first_half
             // or a second_half as far as `HalfOutputSegIdx` is concerned.
             let mut segs = Vec::new();
+            // The loops split off the walk at repeated points.
+            let mut loops: Vec<Vec<HalfOutputSegIdx>> = Vec::new();
             last_visit[self.point_idx[start]] = Some(0);
 
             debug_assert!(inside(self.winding_clockwise(start)));
@@ -1422,15 +1424,7 @@ impl<W: WindingNumber> Topology<W> {
                     // seg_idx should point to the end of a segment whose start is at p.
                     debug_assert_eq!(self.point_idx[segs[seg_idx].other_half()], p);
 
-                    let loop_contour_idx = ContourIdx(ret.contours.len());
-                    for &seg in &segs[seg_idx..] {
-                        seg_contour[seg.idx.0] = Some(loop_contour_idx);
-                    }
-                    ret.contours.push(Contour {
-                        path: self.segs_to_path(&segs[seg_idx..], &positions),
-                        parent: Some(contour_idx),
-                        outer: !ret.contours[contour_idx.0].outer,
-                    });
+                    loops.push(segs[seg_idx..].to_vec());
                     segs.truncate(seg_idx);
                     // In principle, we should also be unsetting `last_visit`
                     // for all points in the contour we just removed. I *think*
@@ -1443,10 +1437,76 @@ impl<W: WindingNumber> Topology<W> {
 
                 next = nbr.other_half();
             }
-            for &seg in &segs {
-                seg_contour[seg.idx.0] = Some(contour_idx);
+            if loops.is_empty() {
+                for &seg in &segs {
+                    seg_contour[seg.idx.0] = Some(contour_idx);
+                }
+                ret.contours[contour_idx.0].path = self.segs_to_path(&segs, &positions);
+                continue;
             }
-            ret.contours[contour_idx.0].path = self.segs_to_path(&segs, &positions);
+
+            // The walk split into pieces at repeated points. A piece that winds like the
+            // contour being walked (clockwise when it is outer) is a sibling of it, as when
+            // two holes touch at a point. A piece that winds the other way is a child of the
+            // same-kind piece that contains it, as when a hole touches its outer contour. The
+            // first same-kind piece takes `contour_idx`; it need not be the rest of the walk.
+            let walked_outer = ret.contours[contour_idx.0].outer;
+            let walked_parent = ret.contours[contour_idx.0].parent;
+            let mut pieces = loops;
+            pieces.insert(0, segs);
+            let paths: Vec<BezPath> = pieces
+                .iter()
+                .map(|piece| self.segs_to_path(piece, &positions))
+                .collect();
+            // The area is measured from the piece's own corner, so that large coordinates
+            // do not swamp its sign.
+            let clockwise = |path: &BezPath| {
+                let mut local = path.clone();
+                local.apply_affine(Affine::translate(-path.bounding_box().origin().to_vec2()));
+                local.area() > 0.0
+            };
+            let same_kind: Vec<bool> = paths
+                .iter()
+                .map(|path| clockwise(path) == walked_outer)
+                .collect();
+            let keep = same_kind.iter().position(|&s| s).unwrap_or(0);
+            let mut idxs = vec![contour_idx; pieces.len()];
+            for (i, idx) in idxs.iter_mut().enumerate() {
+                if i != keep {
+                    *idx = ContourIdx(ret.contours.len());
+                    ret.contours.push(Contour::default());
+                }
+            }
+            let links: Vec<(Option<ContourIdx>, bool)> = paths
+                .iter()
+                .enumerate()
+                .map(|(i, path)| {
+                    if same_kind[i] || i == keep {
+                        (walked_parent, walked_outer)
+                    } else if !same_kind[keep] {
+                        // No piece winds like the walked contour, so the loops stay
+                        // children of the rest of the walk.
+                        (Some(contour_idx), !walked_outer)
+                    } else {
+                        let probe = path.segments().next().map(|s| s.eval(0.5));
+                        let container = (0..paths.len())
+                            .filter(|&j| same_kind[j])
+                            .find(|&j| probe.is_some_and(|pt| paths[j].winding(pt) != 0))
+                            .unwrap_or(keep);
+                        (Some(idxs[container]), !walked_outer)
+                    }
+                })
+                .collect();
+            for (i, (path, (parent, outer))) in paths.into_iter().zip(links).enumerate() {
+                for &seg in &pieces[i] {
+                    seg_contour[seg.idx.0] = Some(idxs[i]);
+                }
+                ret.contours[idxs[i].0] = Contour {
+                    path,
+                    parent,
+                    outer,
+                };
+            }
         }
 
         ret
@@ -2258,7 +2318,7 @@ impl std::ops::Index<ContourIdx> for Contours {
 
 #[cfg(test)]
 mod tests {
-    use kurbo::BezPath;
+    use kurbo::{BezPath, Shape};
     use proptest::prelude::*;
 
     use crate::{
@@ -2270,7 +2330,7 @@ mod tests {
         },
     };
 
-    use super::{OneOfTwo, Topology};
+    use super::{Affine, ContourIdx, Contours, OneOfTwo, Topology};
 
     fn p(x: f64, y: f64) -> Point {
         Point::new(x, y)
@@ -2628,6 +2688,73 @@ mod tests {
         assert!(!contours[1].outer);
         assert_eq!(contours[2].parent.unwrap().0, 0);
         assert!(!contours[2].outer);
+    }
+
+    // An axis-aligned rectangle, clockwise (y down) unless `hole`.
+    fn rect_path(x0: f64, y0: f64, x1: f64, y1: f64, hole: bool) -> String {
+        if hole {
+            format!("M{x0},{y0} L{x0},{y1} L{x1},{y1} L{x1},{y0} Z ")
+        } else {
+            format!("M{x0},{y0} L{x1},{y0} L{x1},{y1} L{x0},{y1} Z ")
+        }
+    }
+
+    // The nonzero contours of `svg`, after checking that each one is outer
+    // exactly when it winds clockwise and when its parent is not outer.
+    fn consistent_contours(svg: &str, eps: f64) -> Contours {
+        let bez = BezPath::from_svg(svg).unwrap();
+        let top = Topology::<i32>::from_path(&bez, eps).unwrap();
+        let contours = top.contours(|w| *w != 0);
+        for (i, c) in contours.contours().enumerate() {
+            let parent_outer = c.parent.map(|p| contours[p].outer);
+            assert_eq!(c.outer, parent_outer != Some(true), "contour {i} of {svg}");
+            let mut local = c.path.clone();
+            local.apply_affine(Affine::translate(-c.path.bounding_box().origin().to_vec2()));
+            assert_eq!(c.outer, local.area() > 0.0, "contour {i} of {svg}");
+        }
+        contours
+    }
+
+    #[test]
+    fn holes_touching_at_a_point_are_siblings() {
+        let square = rect_path(0.0, 0.0, 100.0, 100.0, false);
+        for (a, b) in [
+            ((10.0, 30.0, 30.0, 50.0), (30.0, 50.0, 50.0, 70.0)),
+            ((10.0, 50.0, 30.0, 70.0), (30.0, 30.0, 50.0, 50.0)),
+        ] {
+            // Far from the origin, a plain signed area of these squares has the wrong sign.
+            for (o, eps) in [(0.0, 1e-6), (1e11, 1e-3)] {
+                let svg = rect_path(o, o, o + 100.0, o + 100.0, false)
+                    + &rect_path(o + a.0, o + a.1, o + a.2, o + a.3, true)
+                    + &rect_path(o + b.0, o + b.1, o + b.2, o + b.3, true);
+                let contours = consistent_contours(&svg, eps);
+                assert_eq!(contours.len(), 3);
+                for i in 1..3 {
+                    assert!(!contours[ContourIdx(i)].outer);
+                    assert_eq!(contours[ContourIdx(i)].parent, Some(ContourIdx(0)));
+                }
+            }
+        }
+
+        // Three holes in a chain, touching at (30, 50) and (50, 70).
+        let svg = square.clone()
+            + &rect_path(10.0, 30.0, 30.0, 50.0, true)
+            + &rect_path(30.0, 50.0, 50.0, 70.0, true)
+            + &rect_path(50.0, 70.0, 70.0, 90.0, true);
+        let contours = consistent_contours(&svg, 1e-6);
+        assert_eq!(contours.len(), 4);
+        for i in 1..4 {
+            assert_eq!(contours[ContourIdx(i)].parent, Some(ContourIdx(0)));
+        }
+
+        // Two touching holes in an island, inside a hole of the square.
+        let svg = square
+            + &rect_path(5.0, 5.0, 95.0, 95.0, true)
+            + &rect_path(10.0, 10.0, 90.0, 90.0, false)
+            + &rect_path(20.0, 30.0, 40.0, 50.0, true)
+            + &rect_path(40.0, 50.0, 60.0, 70.0, true);
+        let contours = consistent_contours(&svg, 1e-6);
+        assert_eq!(contours.len(), 5);
     }
 
     // Checks that all output segments intersect one another only at endpoints.
