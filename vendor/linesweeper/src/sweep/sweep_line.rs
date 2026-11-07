@@ -350,6 +350,17 @@ pub struct Sweeper<'a> {
 
     comparisons: RefCell<ComparisonCache>,
     conservative_comparisons: RefCell<ComparisonCache>,
+
+    // Craft patch (coincident touch rescan): the (segment, scans right) pairs
+    // whose touch-event scan in `handle_intersection` already ran at the
+    // current `y` with the current sweep-line order. A scan reads only the
+    // order, `y` and the segments, so running it again before the order
+    // changes pushes only events it already pushed. Exact copies of a shape
+    // queue a touch event for every pair of coincident segments, and each one
+    // used to scan the whole bundle in both directions.
+    touch_scans: rustc_hash::FxHashSet<(SegIdx, bool)>,
+    #[cfg(test)]
+    touch_scan_count: usize,
 }
 
 impl<'segs> Sweeper<'segs> {
@@ -377,6 +388,9 @@ impl<'segs> Sweeper<'segs> {
             horizontals: Vec::new(),
             comparisons: RefCell::new(ComparisonCache::new(eps, eps / 2.0)),
             conservative_comparisons: RefCell::new(ComparisonCache::new(4.0 * eps, eps / 2.0)),
+            touch_scans: rustc_hash::FxHashSet::default(),
+            #[cfg(test)]
+            touch_scan_count: 0,
         }
     }
 
@@ -469,6 +483,7 @@ impl<'segs> Sweeper<'segs> {
         self.y = y;
         self.segs_needing_positions.clear();
         self.horizontals.clear();
+        self.touch_scans.clear();
     }
 
     fn intersection_scan_right(&mut self, start_idx: usize, which: WhichTouch) {
@@ -785,6 +800,9 @@ impl<'segs> Sweeper<'segs> {
                 }
             }
 
+            // The order changes below, so earlier touch scans no longer stand.
+            self.touch_scans.clear();
+
             // Remove them in reverse to make indexing easier.
             let mut removed = Vec::with_capacity(to_move.len());
             for &j in to_move.iter().rev() {
@@ -830,9 +848,21 @@ impl<'segs> Sweeper<'segs> {
 
             // We haven't changed the order of any segments, but the "touch" event
             // we just processed might have been a witness for the crossing invariant.
-            // So we need to scan.
-            self.intersection_scan_right(right_idx, WhichTouch::Mid);
-            self.intersection_scan_left(left_idx, WhichTouch::Mid);
+            // So we need to scan, unless the same scan already ran with this order.
+            if self.touch_scans.insert((right, true)) {
+                #[cfg(test)]
+                {
+                    self.touch_scan_count += 1;
+                }
+                self.intersection_scan_right(right_idx, WhichTouch::Mid);
+            }
+            if self.touch_scans.insert((left, false)) {
+                #[cfg(test)]
+                {
+                    self.touch_scan_count += 1;
+                }
+                self.intersection_scan_left(left_idx, WhichTouch::Mid);
+            }
         }
     }
 
@@ -2082,6 +2112,135 @@ mod tests {
         )
         .unwrap();
         insta::assert_ron_snapshot!(snapshot_outputs(segs, 0.25));
+    }
+
+    fn closed_polyline(points: &[(f64, f64)]) -> BezPath {
+        let mut path = BezPath::new();
+        path.move_to(points[0]);
+        for &p in &points[1..] {
+            path.line_to(p);
+        }
+        path.close_path();
+        path
+    }
+
+    fn copies(shape: &BezPath, n: usize) -> BezPath {
+        (0..n).flat_map(|_| shape.iter()).collect()
+    }
+
+    // Exact copies of a shape queue a touch event for every pair of coincident
+    // segments. Each touch-event scan runs at most once per segment and
+    // direction for each sweep-line order, so the number of scans stays
+    // linear in the number of segments, and the output is the output for one
+    // copy.
+    #[test]
+    fn coincident_copies_scan_once_per_order() {
+        use crate::topology::Topology;
+
+        let quad = closed_polyline(&[(0.0, 0.0), (100.0, 37.0), (60.0, 90.0), (10.0, 70.0)]);
+        let rect = closed_polyline(&[(0.0, 0.0), (100.0, 0.0), (100.0, 50.0), (0.0, 50.0)]);
+        for shape in [quad, rect] {
+            let path = copies(&shape, 60);
+            let mut segs = Segments::default();
+            segs.add_bez_path(&path).unwrap();
+            let mut sweep = Sweeper::new(&segs, 1e-6);
+            let mut bufs = SweepLineBuffers::default();
+            let mut lines = 0;
+            while sweep.next_line(&mut bufs).is_some() {
+                lines += 1;
+            }
+            assert!(
+                sweep.touch_scan_count <= 2 * segs.len() * lines,
+                "{} touch scans for {} segments on {lines} sweep lines",
+                sweep.touch_scan_count,
+                segs.len()
+            );
+
+            let contour_paths = |path: &BezPath| -> Vec<BezPath> {
+                Topology::from_path(path, 1e-6)
+                    .unwrap()
+                    .contours(|w| *w != 0)
+                    .contours()
+                    .map(|c| c.path.clone())
+                    .collect()
+            };
+            assert_eq!(contour_paths(&path), contour_paths(&shape));
+        }
+    }
+
+    // Small polygons on an integer grid, with exact, reversed and
+    // midpoint-split copies of some of them. The nonzero fill of the output
+    // contours matches the nonzero fill of the input.
+    #[test]
+    fn coincident_copies_keep_the_fill() {
+        use crate::topology::Topology;
+        use kurbo::{ParamCurve, ParamCurveNearest, Shape};
+
+        let mut state = 0x9e37_79b9_7f4a_7c15_u64;
+        let mut next = |n: u64| {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state % n
+        };
+        for case in 0..200 {
+            let mut polygons: Vec<Vec<(f64, f64)>> = Vec::new();
+            for _ in 0..1 + next(3) {
+                let len = 3 + next(3);
+                let polygon = (0..len).map(|_| (next(9) as f64, next(9) as f64)).collect();
+                polygons.push(polygon);
+            }
+            for _ in 0..1 + next(3) {
+                let source = polygons[next(polygons.len() as u64) as usize].clone();
+                let copy = match next(3) {
+                    0 => source,
+                    1 => source.into_iter().rev().collect(),
+                    _ => {
+                        let mut split = Vec::new();
+                        for (i, &(x0, y0)) in source.iter().enumerate() {
+                            let (x1, y1) = source[(i + 1) % source.len()];
+                            split.push((x0, y0));
+                            split.push(((x0 + x1) / 2.0, (y0 + y1) / 2.0));
+                        }
+                        split
+                    }
+                };
+                polygons.push(copy);
+            }
+            let input: BezPath = polygons
+                .iter()
+                .flat_map(|p| closed_polyline(p).into_iter())
+                .collect();
+
+            let top = Topology::from_path(&input, 1e-6).unwrap();
+            let contours = top.contours(|w| *w != 0);
+            for i in 0..64 {
+                for j in 0..64 {
+                    let p = kurbo::Point::new(i as f64 / 8.0 + 0.0137, j as f64 / 8.0 + 0.0291);
+                    // Skip points too close to an input edge to say which
+                    // side they are on.
+                    let near_edge = input.segments().any(|seg| {
+                        let line = kurbo::Line::new(seg.start(), seg.end());
+                        let t = line.nearest(p, 0.0).t;
+                        line.eval(t).distance(p) < 1e-3
+                    });
+                    if near_edge {
+                        continue;
+                    }
+                    let expected = input.winding(p) != 0;
+                    let enclosing = contours
+                        .contours()
+                        .filter(|c| c.path.winding(p) != 0)
+                        .count();
+                    assert_eq!(
+                        enclosing % 2 == 1,
+                        expected,
+                        "case {case} at {p:?}: {}",
+                        input.to_svg()
+                    );
+                }
+            }
+        }
     }
 
     #[test]
