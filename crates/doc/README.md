@@ -35,7 +35,8 @@ let outline = craft_doc::outline(&bytes, &limits)?;
 - `sniff(head) -> Option<Kind>` reads the first bytes. The first 64 KiB are enough for every file
   the apps write. A re-zipped `.pcraft` whose `manifest.json` entry starts after the head is
   recognized only when `head` holds the whole file. When `head` holds a whole ZIP archive, the
-  names in its central directory decide. A VectorCraft file is recognized by its top-level
+  reader checks its central-directory names when the archive opens. Otherwise it checks its local
+  headers. A VectorCraft file is recognized by its top-level
   `format` member, as `craft_vectorcraft_format::sniff` recognizes it, so a file written as a
   JSON array, which `File::read` also reads, is not.
 - `info(bytes, &Limits) -> Result<Info, Error>`: the kind, the version the file declares, the
@@ -128,9 +129,10 @@ references, and the limits.
   manifest or the EffectCraft project. The names and other strings returned are parts of it.
 - `max_entry` (256 MiB): one rendition or one ZIP entry. The size a file states is checked before
   any of it is copied or inflated.
-- `max_total` (1 GiB): every byte one call decompresses from gzip, reads out of ZIP entries or
-  returns as a rendition, together. A rendition decompressed from gzip is counted once, and a
-  second rendition of the same bytes is counted as another copy.
+- `max_total` (1 GiB): the limit counts decompressed gzip bytes a call uses, bytes it reads out of
+  ZIP entries, and bytes it returns as renditions. A rendition decompressed from gzip is counted once, and a
+  second rendition of the same bytes is counted as another copy. The gzip reader may decode a
+  64 KiB chunk past the JSON or final rendition. Unused bytes in that chunk do not count.
 - `max_depth` (400, also the largest value it takes, `MAX_DEPTH`): the nesting of JSON arrays and
   objects, checked before parsing. PhotoCraft nests up to 100 groups of layers, three levels each.
   `renditions` and `outline` refuse a PhotoCraft manifest nested deeper than 367 levels
@@ -140,11 +142,12 @@ A PhotoCraft manifest with more than 4,194,304 JSON items
 (`craft_pcraft_format::MAX_MANIFEST_ITEMS`) is refused with `Error::LimitExceeded`, as PhotoCraft
 reads it.
 
-On a compressed `.vectorcraft` file, `info` and `outline` decompress only as far as the end of
-the JSON. `renditions` checks the size of each member after the JSON against `max_entry`
-before it decompresses any of that data, and the offset where the last member ends against
-`max_total`. It then decompresses only as far as the members end, and keeps only their bytes. The
-struct is `#[non_exhaustive]`: start from the defaults and set the fields you
+On a compressed `.vectorcraft` file, `info` and `outline` read the JSON from the decompressed
+stream. The reader decodes chunks of up to 64 KiB, so the chunk holding the end of the JSON may also hold
+data after its marker. `renditions` checks each member's size against `max_entry` and the last
+member's ending offset plus duplicate-copy sizes against the remaining `max_total` budget before
+reading the tail. Beyond the buffered chunk, it decompresses only as far as the members end and
+keeps only their bytes. The struct is `#[non_exhaustive]`: start from the defaults and set the fields you
 change.
 
 ```rust
