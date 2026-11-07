@@ -11,7 +11,7 @@
 //! Clips go into the same sweep as the shapes instead of being applied first: one sweep replaces
 //! a boolean per clipped shape, and a clip edge is then the same edge in every region it bounds.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use kurbo::{BezPath, CubicBez, ParamCurve, ParamCurveNearest, PathEl, PathSeg, Point, Rect, Shape as _, Vec2};
 use linesweeper::topology::{ContourIdx, Contours, Topology, WindingNumber};
@@ -619,10 +619,10 @@ struct Tidy {
     keep: Vec<Point>,
     /// Input curves with slightly inflated bounds.
     curves: Vec<(Rect, CubicBez)>,
-    /// `curves` indices by the left edge of their bounds, and the widest bounds: the curves whose
+    /// `curves` indices in groups whose bounds widths are within a factor of two, each with the
+    /// group's widest bounds and its indices by the left edge of their bounds: the curves whose
     /// bounds can hold a point, without testing them all.
-    by_x: Vec<usize>,
-    max_width: f64,
+    by_width: Vec<(f64, Vec<usize>)>,
 }
 
 impl Tidy {
@@ -639,10 +639,18 @@ impl Tidy {
             }
         }
         keep.sort_by(|a, b| a.x.total_cmp(&b.x));
-        let mut by_x: Vec<usize> = (0..curves.len()).collect();
-        by_x.sort_by(|&i, &j| curves[i].0.x0.total_cmp(&curves[j].0.x0));
-        let max_width = curves.iter().map(|(r, _)| r.width()).fold(0.0, f64::max);
-        Self { sliver, keep, curves, by_x, max_width }
+        let mut groups: BTreeMap<i32, Vec<usize>> = BTreeMap::new();
+        for (i, (r, _)) in curves.iter().enumerate() {
+            groups.entry(r.width().log2().floor() as i32).or_default().push(i);
+        }
+        let by_width = groups
+            .into_values()
+            .map(|mut ids| {
+                ids.sort_by(|&i, &j| curves[i].0.x0.total_cmp(&curves[j].0.x0));
+                (ids.iter().map(|&i| curves[i].0.width()).fold(0.0, f64::max), ids)
+            })
+            .collect();
+        Self { sliver, keep, curves, by_width }
     }
 
     fn is_kept(&self, p: Point) -> bool {
@@ -653,10 +661,26 @@ impl Tidy {
 
     /// The input curves whose bounds hold both `a` and `b`.
     fn curves_around(&self, a: Point, b: Point) -> impl Iterator<Item = &CubicBez> {
-        let x = a.x.min(b.x);
-        let hi = self.by_x.partition_point(|&i| self.curves[i].0.x0 <= x);
-        let lo = self.by_x[..hi].partition_point(|&i| self.curves[i].0.x0 < x - self.max_width);
-        self.by_x[lo..hi].iter().map(|&i| &self.curves[i]).filter(move |(r, _)| r.contains(a) && r.contains(b)).map(|(_, c)| c)
+        self.indices_around(a, b).into_iter().map(|i| &self.curves[i].1)
+    }
+
+    /// The indices of the input curves whose bounds hold both `a` and `b`, by the left edge of
+    /// their bounds and then by index.
+    fn indices_around(&self, a: Point, b: Point) -> Vec<usize> {
+        let mut out: Vec<usize> =
+            self.windows(a.x.min(b.x)).flatten().copied().filter(|&i| self.curves[i].0.contains(a) && self.curves[i].0.contains(b)).collect();
+        out.sort_by(|&i, &j| self.curves[i].0.x0.total_cmp(&self.curves[j].0.x0).then(i.cmp(&j)));
+        out
+    }
+
+    /// For each width group, the curves whose bounds can reach `x`: those starting at most the
+    /// group's widest bounds to its left. One wide curve widens only its own group's window.
+    fn windows(&self, x: f64) -> impl Iterator<Item = &[usize]> {
+        self.by_width.iter().map(move |(width, ids)| {
+            let hi = ids.partition_point(|&i| self.curves[i].0.x0 <= x);
+            let lo = ids[..hi].partition_point(|&i| self.curves[i].0.x0 < x - width);
+            &ids[lo..hi]
+        })
     }
 
     /// `bp` with each curve piece that strays from the one input curve through both its ends
@@ -1012,5 +1036,59 @@ mod tests {
         let sum: f64 = r.iter().map(|r| r.area).sum();
         // Less the slivers left out.
         assert!(sum <= union * (1.0 + 1e-9) && sum > union * (1.0 - 1e-4), "{sum} vs {union}");
+    }
+
+    /// One open cubic per path, from `p0` to `p3` through the two handles.
+    fn cubic(p0: (f64, f64), p1: (f64, f64), p2: (f64, f64), p3: (f64, f64)) -> BezPath {
+        let mut bp = BezPath::new();
+        bp.move_to(p0);
+        bp.curve_to(p1, p2, p3);
+        bp
+    }
+
+    #[test]
+    fn curves_around_finds_what_a_full_scan_finds_in_the_same_order() {
+        let mut seed: u64 = 0x9e37_79b9_7f4a_7c15;
+        let mut next = || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed >> 11) as f64 / (1u64 << 53) as f64
+        };
+        // Narrow and wide curves mixed, some sharing a left edge.
+        let paths: Vec<BezPath> = (0..400)
+            .map(|k| {
+                let size = [0.5, 3.0, 40.0, 900.0][k % 4] * (0.5 + next());
+                let x = if k % 7 == 0 { 100.0 } else { next() * 1000.0 };
+                let y = next() * 1000.0;
+                cubic((x, y), (x + size * next(), y + size), (x + size * next(), y - size), (x + size, y + size * next()))
+            })
+            .collect();
+        let tidy = Tidy::keeping(DEFAULT_SLIVER, &paths);
+        let mut by_x: Vec<usize> = (0..tidy.curves.len()).collect();
+        by_x.sort_by(|&i, &j| tidy.curves[i].0.x0.total_cmp(&tidy.curves[j].0.x0));
+        let mut found = 0;
+        for _ in 0..2000 {
+            let a = Point::new(next() * 1100.0 - 50.0, next() * 1100.0 - 50.0);
+            let b = a + Vec2::new(next() * 20.0 - 10.0, next() * 20.0 - 10.0);
+            let all: Vec<usize> = by_x.iter().copied().filter(|&i| tidy.curves[i].0.contains(a) && tidy.curves[i].0.contains(b)).collect();
+            found += all.len();
+            assert_eq!(tidy.indices_around(a, b), all, "{a:?} {b:?}");
+        }
+        assert!(found > 1000, "{found}");
+    }
+
+    #[test]
+    fn one_wide_curve_does_not_widen_the_search_for_narrow_ones() {
+        // A curve across the page, and 1,000 small curves on a grid.
+        let mut paths = vec![cubic((0.0, 0.0), (300.0, 600.0), (600.0, -600.0), (1000.0, 0.0))];
+        paths.extend((0..1000).map(|k| {
+            let (x, y) = ((k % 40) as f64 * 25.0, (k / 40) as f64 * 25.0);
+            cubic((x, y), (x + 2.0, y + 4.0), (x + 4.0, y - 4.0), (x + 6.0, y))
+        }));
+        let tidy = Tidy::keeping(DEFAULT_SLIVER, &paths);
+        let scanned: usize = tidy.windows(503.0).map(<[usize]>::len).sum();
+        // The wide curve, and the small curves of the one grid column within reach of x = 503.
+        assert!(scanned <= 1 + 25, "{scanned}");
     }
 }
