@@ -5,10 +5,17 @@ use alloc::vec::Vec;
 /// PdfCraft patch: `limit` is the most bytes produced (see `filter::decode_limit`); a run of 128
 /// copies costs two input bytes, so a few megabytes could ask for gigabytes.
 pub(crate) fn decode(data: &[u8], limit: usize) -> Option<Vec<u8>> {
+    decode_controlled(data, limit, None)
+}
+
+pub(crate) fn decode_controlled(data: &[u8], limit: usize, control: Option<&crate::cancel::Control>) -> Option<Vec<u8>> {
     let mut reader = Reader::new(data);
+    reader.set_control(control.cloned());
     let mut decoded = vec![];
+    let mut checks = crate::cancel::Checkpoints::new(control);
 
     loop {
+        checks.at(decoded.len())?;
         let left = limit.saturating_sub(decoded.len());
         if left == 0 {
             break;
