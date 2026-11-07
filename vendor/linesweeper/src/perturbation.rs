@@ -214,6 +214,9 @@ mod tests {
         assert_eq!(F64Perturbation::Ulp(-2).apply(&tiny), -tiny);
         assert_eq!(F64Perturbation::Ulp(2).apply(&-tiny), tiny);
 
+        assert_eq!(F64Perturbation::Ulp(-1).apply(&tiny).to_bits(), 0.0_f64.to_bits());
+        assert_eq!(F64Perturbation::Ulp(1).apply(&-tiny).to_bits(), (-0.0_f64).to_bits());
+
         assert_eq!(F64Perturbation::Ulp(-1).apply(&f64::from_bits(3)), f64::from_bits(2));
         assert_eq!(F64Perturbation::Ulp(1).apply(&-f64::from_bits(3)), -f64::from_bits(2));
     }
