@@ -398,10 +398,12 @@ impl<'segs> Sweeper<'segs> {
     ///
     /// Once the sweep has made more than `limit` comparisons, [`Sweeper::next_line`]
     /// returns `None` and [`Sweeper::work_limit_exceeded`] returns `true`. The sweep
-    /// checks the limit between events, so it can pass the limit by the comparisons
+    /// checks the limit between events and between the comparisons that find a
+    /// sweep line's changed intervals, so it can pass the limit by the comparisons
     /// of one event, which grow with the number of segments in the sweep line. It
-    /// stops partway through a sweep line, so its output is incomplete, and it stays
-    /// stopped if the limit is raised afterwards.
+    /// never returns a sweep line once it has passed the limit. It stops partway
+    /// through a sweep line, so its output is incomplete, and it stays stopped if
+    /// the limit is raised afterwards.
     pub fn set_work_limit(&mut self, limit: u64) {
         self.work_limit = Some(limit);
     }
@@ -493,7 +495,11 @@ impl<'segs> Sweeper<'segs> {
             self.check_invariants();
         }
 
-        self.compute_changed_intervals();
+        // Craft patch (work limit): finding the changed intervals compares
+        // segments too, so the sweep can stop before or during it.
+        if self.stop_at_work_limit() || !self.compute_changed_intervals() {
+            return None;
+        }
         Some(SweepLine {
             state: self,
             next_changed_interval: 0,
@@ -1176,7 +1182,10 @@ impl<'segs> Sweeper<'segs> {
     ///
     /// For each segment marked as needing a position, we expand it to a range of
     /// physically nearby segments, and then we deduplicate and merge those ranges.
-    fn compute_changed_intervals(&mut self) {
+    ///
+    /// Craft patch (work limit): returns `false`, leaving the changed intervals
+    /// incomplete, if the sweep passes its work limit.
+    fn compute_changed_intervals(&mut self) -> bool {
         debug_assert!(self.changed_intervals.is_empty());
         self.compute_horizontal_changed_intervals();
         self.compute_contour_adjacent_changed_intervals();
@@ -1200,6 +1209,10 @@ impl<'segs> Sweeper<'segs> {
                 // that we most recently added to the changed interval. Modulo some subtleties
                 // involving conservative/non-conservative comparisons, this will usually be
                 // `i - 1`.
+                if self.work_limit_exceeded() {
+                    self.stopped_at_work_limit = true;
+                    return false;
+                }
                 let seg_idx = self.line.seg(end_idx - 1);
                 let next_seg_idx = self.line.seg(i);
                 let strong_order = self
@@ -1226,6 +1239,10 @@ impl<'segs> Sweeper<'segs> {
             }
 
             for i in (0..start_idx).rev() {
+                if self.work_limit_exceeded() {
+                    self.stopped_at_work_limit = true;
+                    return false;
+                }
                 let prev_seg_idx = self.line.seg(i);
                 // Note that start_idx is mutated in the loop, so this points to the segment
                 // that we most recently added to the changed interval.
@@ -1259,6 +1276,7 @@ impl<'segs> Sweeper<'segs> {
         // cross as needing a position. Any collection of subranges that are crossed by
         // a horizontal segment are therefore adjacent and will be merged here.
         merge_adjacent(&mut self.changed_intervals);
+        !self.stop_at_work_limit()
     }
 }
 
@@ -2200,6 +2218,45 @@ mod tests {
         sweep.set_work_limit(u64::MAX);
         assert!(sweep.work_limit_exceeded());
         assert!(sweep.next_line(&mut bufs).is_none());
+    }
+
+    // Craft patch (work limit). Every limit below the sweep's total work stops
+    // it somewhere: in an event, or while finding a line's changed intervals.
+    // Wherever it stops, `next_line` returns no line past the limit.
+    #[test]
+    fn work_limit_returns_no_line_past_the_limit() {
+        use kurbo::{Circle, Shape};
+
+        let circle = Circle::new((100.0, 100.0), 50.0).to_path(0.1);
+        let mut circles = BezPath::new();
+        for _ in 0..3 {
+            circles.extend(circle.iter());
+        }
+        let mut segs = Segments::default();
+        segs.add_bez_path(&circles).unwrap();
+
+        let mut bufs = SweepLineBuffers::default();
+        let mut range_bufs = SweepLineRangeBuffers::default();
+        let mut sweep = Sweeper::new(&segs, 1e-6);
+        while let Some(mut line) = sweep.next_line(&mut bufs) {
+            while line.next_range(&mut range_bufs, &segs).is_some() {}
+        }
+        let total = sweep.work();
+        assert!(total > 100, "{total} comparisons");
+
+        for limit in 0..total {
+            let mut sweep = Sweeper::new(&segs, 1e-6);
+            sweep.set_work_limit(limit);
+            while let Some(mut line) = sweep.next_line(&mut bufs) {
+                let work = line.state.work();
+                assert!(
+                    work <= limit,
+                    "limit {limit}: a line came back after {work} comparisons"
+                );
+                while line.next_range(&mut range_bufs, &segs).is_some() {}
+            }
+            assert!(sweep.work_limit_exceeded(), "limit {limit}");
+        }
     }
 
     proptest! {
