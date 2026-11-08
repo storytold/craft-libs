@@ -4,7 +4,7 @@
 use super::*;
 use crate::work::{self, Work};
 
-/// The shears the sweep's frame may use, `y + k x`, in the order tried ([`frame_for`]): by default
+/// The shears the sweep's frame may use, `y + k x`, in the order tried ([`try_frame_for`]): by default
 /// 1/32, in which only an edge sloping -1/32 in the document is horizontal. Each is a power of two,
 /// so it maps typical coordinates exactly.
 pub(super) const SHEARS: [f64; 10] =
@@ -34,8 +34,11 @@ impl Frame {
 }
 
 /// The frame for `shapes`, in which the sweep is given no open subpath that is level, which it takes
-/// the two passes of for cancelling out ([`level_sides`]). `None` when the paths cannot be swept, or
-/// when no frame is found in which every side longer than [`NOISE_SIDE`] tolerances is not level.
+/// the two passes of for cancelling out ([`level_sides`]); and why there is none: `Ok(None)` when the
+/// shapes draw nothing, [`crate::PathOpsError::TooComplex`] past the element limit,
+/// [`crate::PathOpsError::NonFinite`] for a point that is not finite, and
+/// [`crate::PathOpsError::Degenerate`] when no frame is found in which every side longer than
+/// [`NOISE_SIDE`] tolerances is not level.
 ///
 /// The first of [`SHEARS`] in whose frame, after the paths are snapped to the sweep's tolerance, no
 /// side of an open subpath is level is used, at the first try for ordinary art. A shear that leaves
@@ -44,14 +47,17 @@ impl Frame {
 /// leaves none, and then the one that leaves the fewest is used: a short edge is lost from the map only
 /// where every frame loses it. When each of the ten leaves a long side level (ten lines, one level in
 /// each), one more is tried, a shear between the slopes of the long sides in which none of them is
-/// level ([`free_shear`]): eleven tries at most.
+/// level ([`free_shear`]), from 1/1024 to 1/2; and when those slopes bar every shear there (eleven
+/// short lines), one from -1/2 to -1/1024, where the frame levels the slopes the ten do not: twelve
+/// tries at most.
 ///
 /// The test is made on the snapped paths because snapping is what levels an edge: the sweep orders by
 /// its tolerance, which a shape far away widens (a shape at 1e11 makes it 1.4e-3), and an edge that
 /// rises less than that in the frame, or whose ends land on one of the heights snapping rounds to,
 /// is level whatever its slope was. A shear in which the tolerance passes its limit (the art is near
 /// the largest coordinates the sweep takes) is passed over for the next.
-pub(super) fn frame_for(shapes: &[Shape]) -> Option<Frame> {
+pub(super) fn try_frame_for(shapes: &[Shape]) -> Result<Option<Frame>, crate::PathOpsError> {
+    use crate::PathOpsError;
     // The paths as they are swept, in the document's frame, and the open subpaths among them.
     let mut plain: Vec<(BezPath, usize)> = Vec::new();
     let mut opens = BezPath::new();
@@ -71,8 +77,11 @@ pub(super) fn frame_for(shapes: &[Shape]) -> Option<Frame> {
             plain.push((bp, i));
         }
     }
-    if plain.is_empty() || !crate::budget::fits_elements(plain.iter().map(|p| &p.0)) {
-        return None;
+    if plain.is_empty() {
+        return Ok(None);
+    }
+    if !crate::budget::fits_elements(plain.iter().map(|p| &p.0)) {
+        return Err(PathOpsError::TooComplex);
     }
     // The frame that leaves the fewest short sides level (and no long one), and the widest tolerance seen.
     let mut best: Option<(usize, Frame)> = None;
@@ -81,7 +90,7 @@ pub(super) fn frame_for(shapes: &[Shape]) -> Option<Frame> {
         let (frame, open) = match sheared(&plain, &opens, k) {
             Sheared::Framed(frame, open) => (frame, open),
             Sheared::TooWide => continue,
-            Sheared::NotFinite => return None,
+            Sheared::NotFinite => return Err(PathOpsError::NonFinite),
         };
         widest = widest.max(frame.eps);
         let level = level_sides(&open, frame.eps);
@@ -89,20 +98,42 @@ pub(super) fn frame_for(shapes: &[Shape]) -> Option<Frame> {
             continue;
         }
         if level.short == 0 {
-            return Some(frame);
+            return Ok(Some(frame));
         }
         if best.as_ref().is_none_or(|(short, _)| level.short < *short) {
             best = Some((level.short, frame));
         }
     }
     if let Some((_, frame)) = best {
-        return Some(frame);
+        return Ok(Some(frame));
     }
-    // Each of the ten leaves a long side level: one more shear, where none of the long sides is.
-    match sheared(&plain, &opens, free_shear(&opens, widest)?) {
-        Sheared::Framed(frame, open) => (!level_sides(&open, frame.eps).long).then_some(frame),
-        Sheared::TooWide | Sheared::NotFinite => None,
+    // Each of the ten leaves a long side level: one more shear, where none of the long sides is, among
+    // the shears of the ten's sign, or failing that among those of the other sign. The tolerance there
+    // is no more than that of the shear of the same size and sign `x`'s, and is taken at the end of the
+    // stretch where the coordinates are largest.
+    let reach = |k: f64| {
+        let m = plain
+            .iter()
+            .flat_map(|(p, _)| p.elements().iter().flat_map(crate::boolean::el_points))
+            .fold(0.0f64, |m, p| m.max((p.y + k * p.x).abs()).max(p.x.abs()));
+        crate::boolean::sweep_tolerance(m).max(widest)
+    };
+    for (lo, hi) in [(1.0 / 1024.0, 0.5), (-0.5, -1.0 / 1024.0)] {
+        let eps = reach(lo).max(reach(hi));
+        let Some(k) = free_shear(&opens, eps, lo, hi) else { continue };
+        if let Sheared::Framed(frame, open) = sheared(&plain, &opens, k)
+            && !level_sides(&open, frame.eps).long
+        {
+            return Ok(Some(frame));
+        }
     }
+    Err(PathOpsError::Degenerate)
+}
+
+/// The frame [`try_frame_for`] finds, if any (the tests' view of it).
+#[cfg(test)]
+pub(super) fn frame_for(shapes: &[Shape]) -> Option<Frame> {
+    try_frame_for(shapes).ok().flatten()
 }
 
 /// What shearing the paths of a map gives ([`sheared`]).
@@ -146,7 +177,7 @@ fn sheared(plain: &[(BezPath, usize)], opens: &BezPath, k: f64) -> Sheared {
 /// puts them within one tolerance in the shear of 1/2 and in the one of 1/1024, and so the side is
 /// under about 5 tolerances long (4 across, 3 up); 8 leaves room. A side that short is at the noise of the
 /// sweep, which cannot tell it from a point: its two passes may cancel and the piece be lost, in every
-/// frame that levels it ([`frame_for`] looks for one that does not).
+/// frame that levels it ([`try_frame_for`] looks for one that does not).
 const NOISE_SIDE: f64 = 8.0;
 
 /// A level side no longer than this many tolerances is not counted at all: the steepest shear, of
@@ -204,7 +235,7 @@ fn level_sides(open: &BezPath, eps: f64) -> Level {
     level
 }
 
-/// A shear in `[1/1024, 1/2]` in which no long side of the open subpaths `opens` (in the document's
+/// A shear in `[lo, hi]` in which no long side of the open subpaths `opens` (in the document's
 /// frame: a chord, or a side of a control polygon) is level, the tolerance being `eps` at most. A side
 /// `d` is level in the shear `-dy / dx`, and in a shear `k` it rises by `|dy + k dx|`. Snapping
 /// ([`snap_horizontals`]) moves each anchor down by under one tolerance, so a side between two anchors
@@ -213,10 +244,9 @@ fn level_sides(open: &BezPath, eps: f64) -> Level {
 /// within about `eps / |dx|` of its own. A side to a handle may be levelled by three tolerances (the
 /// handle moves with its anchor and is levelled with one), so its stretch is three times as wide. The
 /// middle of the widest stretch of shears that levels no long side is used, a multiple of 2^-14 where
-/// the stretch holds one (so that a grid of coordinates stays exact); [`frame_for`] checks it like the
+/// the stretch holds one (so that a grid of coordinates stays exact); [`try_frame_for`] checks it like the
 /// others. `None` when the long sides level every shear in the range.
-fn free_shear(opens: &BezPath, eps: f64) -> Option<f64> {
-    let (lo, hi) = (1.0 / 1024.0, 0.5);
+fn free_shear(opens: &BezPath, eps: f64, lo: f64, hi: f64) -> Option<f64> {
     // A sixteenth of a tolerance more for the rounding of the shear itself (a unit in the last place
     // of the coordinates, which the tolerance is 64 of).
     let half_width = |d: kurbo::Vec2, tolerances: f64| tolerances * eps * (17.0 / 16.0) / d.x.abs() + 2e-6;

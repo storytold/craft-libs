@@ -50,6 +50,8 @@ pub struct Shape { pub path: BezPath, pub rule: FillRule, pub key: u64 } // key 
 pub enum PathfinderOp { Unite, MinusFront, Intersect, Exclude, Divide, Trim, Merge, Crop, Outline, MinusBack }
 pub fn pathfinder(op: PathfinderOp, shapes: &[Shape] /* back → front */) -> Vec<Shape>;
 pub fn pathfinder_with(op: PathfinderOp, shapes: &[Shape], precision: f64) -> Vec<Shape>;
+pub fn try_pathfinder(op: PathfinderOp, shapes: &[Shape]) -> Result<Vec<Shape>, PathOpsError>; // why there is no result
+pub fn try_pathfinder_with(op: PathfinderOp, shapes: &[Shape], precision: f64) -> Result<Vec<Shape>, PathOpsError>;
 
 pub struct Region { pub path: BezPath, pub sources: Vec<usize> }
 pub fn regions(shapes: &[Shape]) -> Vec<Region>;          // all faces of the arrangement
@@ -76,6 +78,7 @@ An operation that cannot sweep its input (see Limits) returns no shapes.
 ```rust
 pub fn live_paint(shapes: &[Shape]) -> (Vec<Region>, Vec<Shape>);                // (faces, edges)
 pub fn shape_builder(shapes: &[Shape], edges: bool) -> BuilderArrangement;       // regions, line pieces, edge pieces
+pub fn try_shape_builder(shapes: &[Shape], edges: bool) -> Result<BuilderArrangement, PathOpsError>; // no fallback
 pub fn has_open_path(shapes: &[Shape]) -> bool;
 pub fn interior_point(path: &BezPath) -> Option<Point>;
 ```
@@ -216,7 +219,8 @@ work of each operation is bounded before it starts, in counts the tests assert o
   it is made, and past `MAX_FILL_WORK` (67,108,864 elements) the map is not built: `live_paint` gives
   nothing, and `shape_builder` and Divide with an open path fall back to the filled areas, as past
   `SHAPE_BUILDER_MAX_SEGMENTS`: not `TooComplex` or no shapes, but an answer that is not the arrangement
-  asked for, the faces unsplit by the open paths (rectangles nested 3,300 deep pass, in 1.3 s; 3,400 do not);
+  asked for, the faces unsplit by the open paths (rectangles nested 3,300 deep pass, in 1.3 s; 3,400 do not).
+  `try_shape_builder` and `try_pathfinder` give `TooComplex` there instead, so a caller can tell;
 - a stroke's outline is counted as it is made (a subpath of more than 256 segments is stroked in windows of
   256, so that a width that is huge against the tolerance cannot make millions of curves first) and the
   operation is `TooComplex` past `MAX_ELEMENTS` elements of outline. The union of the outlines in
@@ -428,7 +432,13 @@ bit for bit VectorCraft's), and the results are identical except where noted:
   - `remove_redundant_points` (and so the stroke's spine) checks a merged run against the segments it
     replaces, not only the joint it merges across: a half circle of ten thousand chords came out as its
     diameter at a tolerance of 0.001, and is now kept; noisy points about a straight line within the
-    tolerance still merge. It costs a bounded number of checks for each point;
+    tolerance still merge. It costs a bounded number of checks for each point. Two cubics merged into one
+    are held to the tolerance between their samples too: each is sampled at 16 to 128 intervals, enough that
+    how far it can be from its samples is small beside the tolerance, and the cubic's error at them, its
+    spread from its chords and that are added up. A pair 1000 across came out 0.5005 from VectorCraft's
+    merge at a tolerance of 0.5, and is not merged here. Against the carve before, 21 to 39 of 900 random
+    simplifications a seed have more elements (0.3 to 0.7 % more in all), none further than the tolerance;
+    and most of the rest differ from VectorCraft's in their control points, as the samples do;
   - an inset (`offset_path` with a negative delta) strokes the boundary of the area the closed subpaths
     fill, not every subpath, so a rectangle inside another one wound the same way leaves no moat; and an
     open subpath is outlined by its stroke for a negative delta too, as the documentation says (it gave
@@ -479,8 +489,12 @@ bit for bit VectorCraft's), and the results are identical except where noted:
     tolerance (it was told before snapping, so a line that a distant shape's tolerance levelled was lost),
     from ten shears and, when each of them levels a side longer than 8 tolerances, one more between the slopes
     of those sides, where snapping levels none of them (it levels a side between two anchors only where the
-    side rises by under one tolerance, and a side to a handle where it rises by under three); no map is built
-    when no shear is free (it used the first, with one path lost). Ten lines 9e-6 long, one level in each of
+    side rises by under one tolerance, and a side to a handle where it rises by under three), from 1/1024 to
+    1/2, and failing that from -1/2 to -1/1024; no map is built when no shear is free in either (it used the
+    first, with one path lost), and `try_shape_builder` and `try_pathfinder` say so (`Degenerate`). Eleven
+    lines 9e-6 long, one level in each of the ten shears and one in that of 3/8, bar every shear from 1/1024
+    to 1/2 and had no map, and so no Outline of a line 100 long beside them; they are mapped in a shear below
+    0. Mirrored, sloping up as much as down, they bar both. Ten lines 9e-6 long, one level in each of
     the ten, have a map in the shear of 3/8 (the eleventh was looked for where they rise by four tolerances
     or more, which left none), though lines that short are lost from it, being under the 16 tolerances
     within which the map joins the ends of pieces (Known limits); ten lines 5e-5 long are kept whole. A side
@@ -530,7 +544,9 @@ bit for bit VectorCraft's), and the results are identical except where noted:
     edge crosses at its x exactly, and allows for no rounding (a unit square at x = 1e15 had no point: the
     allowance for each of its two crossings was 0.9); and a gap's middle is taken only where it is strictly
     between the two crossings (between sides that are adjacent numbers it rounds onto one of them, an edge,
-    which the winding can count as inside);
+    which the winding can count as inside), nor on an edge of the path at that height or one of its vertices
+    there (a rectangle 1 wide at x = 1e15 and 2 high at y = 1e16, where every height tried rounds onto its
+    bottom or top, gave a point on its bottom edge, and VectorCraft does too);
   - the fill of a face in a planar map is tested against the subpaths of each input whose bounds hold the point,
     where it was the whole path (16,000 squares in one shape: 15.6 s, now 1.6 s); and an item the index of the
     map's outlines has no room to file in pieces is filed under its bounds, where it was read at every lookup
@@ -551,13 +567,20 @@ bit for bit VectorCraft's), and the results are identical except where noted:
     (empty paths, and paths of points only, do not count), and the call is an error when a sweep or contour
     pass of the recovery panics, a contour pass of the windings check of a resolved operand or of the resolved
     operands together included (beside another operand found off too), where it went on to the first
-    arrangement;
+    arrangement; and once the operands are resolved, their result is given even where its windings do not add
+    up either, never the first result, which was found wrong (VectorCraft kept the first). The first result is
+    still given where an operand cannot be resolved and checked on its own: the check is off by a little for
+    some curves, and an error there failed a circle intersected with a rectangle and the union of a path with
+    itself. One random stack a seed, in three of the four, now matches VectorCraft's result to its tolerance
+    rather than exactly;
   - the coordinates are checked as given, before the fill leaves out a subpath that draws nothing: a closed
     loop of one cubic whose handles are not numbers, or overflow when multiplied, is `NonFinite` or
     `Degenerate` in `try_area`, `try_normalize`, `try_boolean`, `try_boolean_n` and `try_unite_all`, and
     `area` gives 0 for it, where it was left out and the answer was `Ok`, or the area of the rest of the path
     (VectorCraft left out every subpath of fewer than two anchors unread: its `area` and `try_area` of a
-    square with such a loop are 100);
+    square with such a loop are 100); and `unite_all` leaves such a path out whole, as it leaves out any it
+    cannot sweep, where it kept the square (VectorCraft's union of it and a square 4 across apart is 116,
+    the carve's 16);
   - `simplify_with` with `straight_lines` samples the intervals the chords need up to a limit, where a long
     curve was sampled in 256 and its chords were further from it than the tolerance, counts the sample at
     the start of a run in its limits, and holds the samples to the tolerance less how far the curve can be
@@ -613,10 +636,11 @@ bit for bit VectorCraft's), and the results are identical except where noted:
     the time growing with the square of the depth, and are refused in 2.4 s). Here `live_paint` gives no
     shapes, and `shape_builder` and Divide with an open path give the filled areas instead, as past
     `SHAPE_BUILDER_MAX_SEGMENTS`: an answer, not a refusal, but not the arrangement asked for (the faces are
-    not split by the open paths).
+    not split by the open paths). `try_shape_builder` and `try_pathfinder` refuse it with `TooComplex`.
   A pair of a line and a curve also counts three crossings, not one, in the sweep-event limit. Within the
   limits the results are VectorCraft's (same shape counts and areas on every input above);
-- the limits and counts above, `try_outline_stroke`, `try_stroke_region`, the bounded flattening (VectorCraft's
+- the limits and counts above, `try_outline_stroke`, `try_stroke_region`, `try_shape_builder`, `try_pathfinder`
+  and `try_pathfinder_with`, the bounded flattening (VectorCraft's
   `pathfinder_with(Divide, ..)` with an open path and a precision of 1e-300 panicked with "capacity overflow"
   in `kurbo::flatten`) and the lookups of input curves and points by a rectangle index (a column of shapes
   of one width was scanned whole at every point) are new.

@@ -4,8 +4,9 @@
 use super::graph::{
     Edge, Fill, FillWork, Outlines, cycle_bezpath, far_end, find, half_segs, leaving_angle, origin, pin_ends, twin, unshear, without_spurs,
 };
-use super::index::{Crossings, Frame, RectIndex, frame_for, mid};
+use super::index::{Crossings, Frame, RectIndex, mid, try_frame_for};
 use super::*;
+use crate::PathOpsError;
 use crate::work::{self, Work};
 
 /// The planar graph of `shapes` (in the sweep's frame) with its faces walked: what [`build`] makes
@@ -30,19 +31,21 @@ pub(crate) struct Map {
 }
 
 /// The planar map of `shapes`, whose faces and pieces are refit to `precision`, and whose slivers
-/// thinner than it are dropped.
-fn map_with(shapes: &[Shape], precision: f64) -> Option<Map> {
+/// thinner than it are dropped; and why there is none: `Ok(None)` when the shapes draw nothing, the frame's
+/// error ([`try_frame_for`]), [`PathOpsError::TooComplex`] past the element limit or the limit on pairs
+/// of segments, or [`PathOpsError::Degenerate`] when the sweep fails.
+fn try_map_with(shapes: &[Shape], precision: f64) -> Result<Option<Map>, PathOpsError> {
     if !crate::budget::fits_elements(shapes.iter().map(|s| &s.path)) {
-        return None;
+        return Err(PathOpsError::TooComplex);
     }
     // The sweep's frame: sheared so that no open path is level in it, and snapped to the sweep's tolerance.
-    let Frame { inputs, eps, back } = frame_for(shapes)?;
+    let Some(Frame { inputs, eps, back }) = try_frame_for(shapes)? else { return Ok(None) };
     // Counted on the snapped geometry, which is what the sweep sees: snapping can bring boxes into contact.
     if !crate::budget::sweep_fits(inputs.iter().map(|p| &p.0)) {
-        return None;
+        return Err(PathOpsError::TooComplex);
     }
     let tidy = Tidy::keeping(precision, inputs.iter().map(|p| &p.0));
-    let (points, edges) = sweep_graph(&inputs, eps, precision)?;
+    let (points, edges) = sweep_graph(&inputs, eps, precision).ok_or(PathOpsError::Degenerate)?;
     let nv = points.len();
 
     // Half-edges leaving each vertex, sorted by direction; walking a face, the next half-edge is
@@ -131,7 +134,7 @@ fn map_with(shapes: &[Shape], precision: f64) -> Option<Map> {
     let snap = 2.0 * eps;
     let mut anchors: Vec<Point> = shapes.iter().flat_map(|s| s.path.elements().iter().filter_map(kurbo::PathEl::end_point)).collect();
     anchors.sort_by(|a, b| a.x.total_cmp(&b.x).then(a.y.total_cmp(&b.y)));
-    Some(Map { edges, around, faces, face_piece, holes, hole_at, tidy, anchors, snap, back })
+    Ok(Some(Map { edges, around, faces, face_piece, holes, hole_at, tidy, anchors, snap, back }))
 }
 
 /// The holes of each face of `m`: each hole goes in the smallest face of another piece around it.
@@ -168,18 +171,27 @@ fn place_holes(m: &Map, work: &FillWork) -> Option<Vec<Vec<usize>>> {
 /// paths are edges of the map (traced there and back), so where one crosses another path is a
 /// junction, which it is not in the arrangement of the filled areas, where the way there and the
 /// way back cancel.
-pub(crate) fn junctions(shapes: &[Shape], precision: f64) -> Option<Vec<Point>> {
-    let m = crate::path::guarded(|| map_with(shapes, precision)).flatten()?;
+///
+/// `Ok(None)` when the shapes draw nothing, and the map's error when it is not made ([`try_map_with`];
+/// a panic of the sweep is [`PathOpsError::Degenerate`]).
+pub(crate) fn try_junctions(shapes: &[Shape], precision: f64) -> Result<Option<Vec<Point>>, PathOpsError> {
+    let Some(m) = guarded_map(shapes, precision)? else { return Ok(None) };
     let mut out: Vec<Point> = Vec::new();
     for list in m.around.iter().filter(|l| l.len() >= 3) {
         let Some(&h) = list.first() else { continue };
-        let e = m.edges.get(h / 2)?;
+        let e = m.edges.get(h / 2).ok_or(PathOpsError::Degenerate)?;
         // Every edge at a vertex starts or ends exactly on it.
-        let at = if h.is_multiple_of(2) { e.segs.first()?.c.p0 } else { e.segs.last()?.c.p3 };
-        out.push(m.back * at);
+        let end = if h.is_multiple_of(2) { e.segs.first().map(|s| s.c.p0) } else { e.segs.last().map(|s| s.c.p3) };
+        out.push(m.back * end.ok_or(PathOpsError::Degenerate)?);
     }
     out.sort_by(|a, b| a.x.total_cmp(&b.x).then(a.y.total_cmp(&b.y)));
-    Some(out)
+    Ok(Some(out))
+}
+
+/// [`try_map_with`], a panic of the sweep (on rare near-degenerate input) being
+/// [`PathOpsError::Degenerate`].
+fn guarded_map(shapes: &[Shape], precision: f64) -> Result<Option<Map>, PathOpsError> {
+    crate::path::guarded(|| try_map_with(shapes, precision)).unwrap_or(Err(PathOpsError::Degenerate))
 }
 
 /// The planar graph of the sweep of `inputs` at the tolerance `eps`: its vertices and its edges. Points
@@ -333,16 +345,26 @@ fn sweep_graph(inputs: &[(BezPath, usize)], eps: f64, precision: f64) -> Option<
     Some((points, edges))
 }
 
+/// What [`build`] gives: the faces, the edges, and the pieces of the open paths under other paths.
+pub(super) type Built = (Vec<Region>, Vec<Shape>, Vec<Shape>);
+
 /// Faces and edges of `shapes`, and the pieces of the open paths (those with no filled subpath, [`crate::path::has_filled_subpath`])
 /// that lie under another path in front of them, whose edges are that path's: under a closed
 /// path's outline, or along an open path in front.
-pub(super) fn build(shapes: &[Shape], precision: f64) -> Option<(Vec<Region>, Vec<Shape>, Vec<Shape>)> {
-    // The sweep can panic on rare near-degenerate input; that is no map.
-    let m = crate::path::guarded(|| map_with(shapes, precision)).flatten()?;
+pub(super) fn build(shapes: &[Shape], precision: f64) -> Option<Built> {
+    try_build(shapes, precision).ok().flatten()
+}
+
+/// The faces, edges and pieces under other paths of [`build`], and why there are none: `Ok(None)` when
+/// the shapes draw nothing, the map's error ([`try_map_with`]; a panic of the sweep is
+/// [`PathOpsError::Degenerate`]), and [`PathOpsError::TooComplex`] past the limit on the work of winding
+/// points against fills and faces ([`crate::Limits::fill_work`]).
+pub(super) fn try_build(shapes: &[Shape], precision: f64) -> Result<Option<Built>, PathOpsError> {
+    let Some(m) = guarded_map(shapes, precision)? else { return Ok(None) };
     // The winding of points against faces and fills, charged before each test: nested contours cost
     // the square of their depth, and past the limit there is no map.
     let work = FillWork::new();
-    let face_holes = place_holes(&m, &work)?;
+    let face_holes = place_holes(&m, &work).ok_or(PathOpsError::TooComplex)?;
     let Map { edges, around, faces, holes, tidy, anchors, snap, back, .. } = &m;
     let snap = *snap;
     let fills: Vec<Fill> = shapes.iter().map(Fill::new).collect();
@@ -365,7 +387,7 @@ pub(super) fn build(shapes: &[Shape], precision: f64) -> Option<(Vec<Region>, Ve
         let mut sources = Vec::new();
         if let Some(p) = inside {
             for &i in fill_index.at(p, 0.0) {
-                if fills.get(i)?.contains(p, &work)? {
+                if fills.get(i).ok_or(PathOpsError::Degenerate)?.contains(p, &work).ok_or(PathOpsError::TooComplex)? {
                     sources.push(i);
                 }
             }
@@ -388,7 +410,7 @@ pub(super) fn build(shapes: &[Shape], precision: f64) -> Option<(Vec<Region>, Ve
     // An edge is the front-most input's. Every other open path along it has a piece there too.
     let edge_shapes = to_shapes(chains_by(edges, around, |e| vec![e.source]));
     let under = to_shapes(chains_by(edges, around, |e| e.sources.iter().rev().copied().filter(|&i| i != e.source && is_line(i)).collect()));
-    Some((regions, edge_shapes, under))
+    Ok(Some((regions, edge_shapes, under)))
 }
 
 /// The edges that `keys` gives each input, joined into chains through the vertices where only two
@@ -537,14 +559,34 @@ fn inside_edges(bp: &BezPath, edges: &[(Point, Point)], bb: kurbo::Rect) -> Opti
             })
             .collect();
         xs.sort_by(|a, b| a.0.total_cmp(&b.0));
+        // What of the polygon lies on the line itself: its level edges at this height, and its vertices
+        // there, each as a stretch of x. A height that rounds onto an edge (2 apart at 1e16) is one.
+        let mut on_line: Vec<(f64, f64)> = edges
+            .iter()
+            .flat_map(|(a, c)| [(*a, *c), (*a, *a)])
+            .filter(|(a, c)| a.y == y && c.y == y)
+            .map(|(a, c)| (a.x.min(c.x), a.x.max(c.x)))
+            .collect();
+        on_line.sort_by(|a, b| a.0.total_cmp(&b.0));
+        // The stretches starting at or before `x`, and whether one of them reaches it (a stretch can
+        // cover the next ones, so the furthest reach of those before it is what counts).
+        let mut reach: Vec<f64> = Vec::with_capacity(on_line.len());
+        for &(_, hi) in &on_line {
+            reach.push(reach.last().map_or(hi, |&r: &f64| r.max(hi)));
+        }
+        let on_edge = |x: f64| {
+            let k = on_line.partition_point(|&(lo, _)| lo <= x);
+            k > 0 && reach.get(k - 1).is_some_and(|&r| r >= x)
+        };
         let mut winding = 0;
         for w in xs.windows(2) {
             winding += w[0].1;
             let width = w[1].0 - w[0].0;
             // The middle, where it is strictly between the two: between adjacent numbers it rounds onto
-            // one of them, an edge, which the winding can count as inside.
+            // one of them, an edge, which the winding can count as inside. Nor on an edge or a vertex
+            // along the line.
             let middle = (w[0].0 + w[1].0) / 2.0;
-            if winding != 0 && width > w[0].2 + w[1].2 && middle > w[0].0 && middle < w[1].0 {
+            if winding != 0 && width > w[0].2 + w[1].2 && middle > w[0].0 && middle < w[1].0 && !on_edge(middle) {
                 gaps.push((width, Point::new(middle, y)));
             }
         }

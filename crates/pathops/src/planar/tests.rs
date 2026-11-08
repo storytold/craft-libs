@@ -1427,7 +1427,8 @@ fn a_line_of_segments_under_sixteen_tolerances_is_lost_in_any_frame() {
 }
 
 /// Ten lines, each level in one of the ten shears, are framed by an eleventh shear between their slopes,
-/// in which none is level, and kept whole. Lines whose slopes leave no shear free give no frame and no
+/// in which none is level, and kept whole; lines whose slopes bar every shear from 1/1024 to 1/2 by
+/// one from -1/2 to -1/1024. Lines whose slopes leave no shear free in either give no frame and no
 /// map, rather than a map with one of them lost.
 #[test]
 fn open_paths_level_in_each_of_the_ten_shears_are_framed_by_one_between_their_slopes() {
@@ -1472,16 +1473,29 @@ fn open_paths_level_in_each_of_the_ten_shears_are_framed_by_one_between_their_sl
     // The middle of 0.3732 to 0.3820, to a multiple of 2^-14: 6186 of them.
     assert_eq!(frame_for(&curved).map(|f| f.k()), Some(6186.0 / 16384.0));
     // Lines that long sloping 0, -1/10, ..., -1/2: each of the ten shears levels one, and between
-    // them they level every shear from 1/1024 to 1/2, so none is free.
+    // them they level every shear from 1/1024 to 1/2; a shear from -1/2 to -1/1024 frames them.
     let level: Vec<Shape> = (0u8..6)
         .map(|i| {
             Shape::new(line_path((0.0, 100.0 * f64::from(i)), (9e-6, 100.0 * f64::from(i) - f64::from(i) * 9e-7)), FillRule::NonZero, u64::from(i))
         })
         .collect();
     work::reset();
-    assert!(frame_for(&level).is_none(), "no shear is free");
+    let k = frame_for(&level).map(|f| f.k()).expect("a frame among the shears below 0");
+    assert!(k < -1.0 / 1024.0 && k > -0.5, "k = {k}");
+    assert_eq!(work::take(Work::FrameTries), SHEARS.len() + 1);
+    // With their mirror images, sloping up as much, they bar the shears below 0 too: none is free.
+    let mirrored: Vec<Shape> = (0u8..6)
+        .flat_map(|i| {
+            let (y, rise) = (100.0 * f64::from(i), f64::from(i) * 9e-7);
+            [line_path((0.0, y), (9e-6, y - rise)), line_path((50.0, y), (50.0 + 9e-6, y + rise))]
+        })
+        .enumerate()
+        .map(|(i, p)| Shape::new(p, FillRule::NonZero, i as u64))
+        .collect();
+    work::reset();
+    assert!(frame_for(&mirrored).is_none(), "no shear is free");
     assert_eq!(work::take(Work::FrameTries), SHEARS.len(), "and none more is tried");
-    assert_eq!(live_paint(&level), (Vec::new(), Vec::new()));
+    assert_eq!(live_paint(&mirrored), (Vec::new(), Vec::new()));
     // Ordinary art is framed at the first try.
     work::reset();
     assert!(frame_for(&[Shape::new(line_path((0.0, 0.0), (10.0, 10.0)), FillRule::NonZero, 0)]).is_some());

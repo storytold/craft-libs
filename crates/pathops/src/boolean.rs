@@ -881,9 +881,11 @@ pub fn boolean(a: &BezPath, a_rule: FillRule, b: &BezPath, b_rule: FillRule, op:
 /// the call is [`PathOpsError::TooComplex`], not the first result, which is known to be wrong, and
 /// it is an error too when a sweep or a contour pass of the recovery fails (the sweep of an operand
 /// resolved on its own, or of the resolved operands together, panics, or a contour pass of the windings
-/// check of either does, or the predicate does: [`PathOpsError::Degenerate`]); when it is done but its
-/// windings do not add up either (the check has a tolerance, and is off by a little for some curves),
-/// the first result is kept.
+/// check of either does, or the predicate does: [`PathOpsError::Degenerate`]). Once the operands are
+/// resolved, the result of the resolved operands is given even where their windings do not add up
+/// either, never the first one, which was found wrong: the check has a tolerance and is off by a little
+/// for some curves (a circle and a rectangle across it), so the first result is kept only where an
+/// operand cannot be resolved and checked on its own.
 pub fn try_boolean(a: &BezPath, a_rule: FillRule, b: &BezPath, b_rule: FillRule, op: BoolOp, precision: f64) -> Result<BezPath, PathOpsError> {
     ensure_size([a, b])?;
     // The coordinates as given, before the fill leaves out a contour that draws nothing ([`eps_for`]).
@@ -1109,9 +1111,11 @@ fn resolved(input: &BezPath, rule: FillRule) -> Result<Option<BezPath>, PathOpsE
     Ok(Some(out))
 }
 
-/// The operation `pred` on `inputs` resolved into simple contours first ([`resolved`]): the result
-/// when every sweep's windings add up, `Ok(None)` when they do not, and an error when it is over a
-/// limit or when a sweep or contour pass of it panics (of a windings check too).
+/// The operation `pred` on `inputs` resolved into simple contours first ([`resolved`]): the result once
+/// every operand is resolved and checked on its own (whether the windings of the resolved operands
+/// together add up or not: not the first result, which was found wrong), `Ok(None)` when an operand
+/// is not, and an error when it is over a limit or when a sweep or contour pass of it panics (of a
+/// windings check too).
 fn resolved_boolean(inputs: &[(BezPath, FillRule)], pred: &dyn Fn(&[bool]) -> bool, precision: f64) -> Result<Option<BezPath>, PathOpsError> {
     let mut flat: Vec<(BezPath, FillRule)> = Vec::with_capacity(inputs.len());
     for (p, rule) in inputs {
@@ -1130,9 +1134,9 @@ fn resolved_boolean(inputs: &[(BezPath, FillRule)], pred: &dyn Fn(&[bool]) -> bo
     let adds_up = arrangement_adds_up(&arr, &flat.iter().map(|(p, _)| p).collect::<Vec<_>>(), Panic::Error);
     #[cfg(test)]
     CHECKING.with(|c| c.set(None));
-    if !adds_up? {
-        return Ok(None);
-    }
+    // Only a panic of the check stops the recovery here: windings that do not add up give the
+    // resolved result all the same.
+    let _adds_up = adds_up?;
     // A contour pass that fails (the sweep panics, or `pred` does) is the call's error: the first
     // arrangement is known to be wrong, and asking `pred` again of that one could answer a predicate
     // that panicked a moment ago with a result that is not the operation's.
@@ -1227,6 +1231,11 @@ pub fn unite_all_with(paths: &[(&BezPath, FillRule)], precision: f64) -> BezPath
     let precision = sane_precision(precision);
     let mut all = BezPath::new();
     for (p, r) in paths {
+        // A path refused as given is left out whole ([`eps_for`]): the fill would drop a loop of one
+        // cubic whose handle is no number and keep the rest of it.
+        if eps_for([*p]).is_err() {
+            continue;
+        }
         let bp = fill_bezpath(p);
         if bp.elements().is_empty() {
             continue;
@@ -2063,8 +2072,8 @@ mod tests {
 
     /// In the windings check of the resolved operands together, a contour pass that panics is the
     /// call's error even where another operand is found off, in either order: the recovery has no
-    /// result to give, and the first one was found wrong. With one off and none panicking, the first
-    /// result is kept, as the documentation says.
+    /// result to give, and the first one was found wrong. With one off and none panicking the resolved
+    /// result is given, not the first.
     #[test]
     fn a_panic_in_the_recovery_check_is_an_error_beside_an_operand_found_off() {
         let poly = |pts: &[(f64, f64)]| {
@@ -2091,9 +2100,12 @@ mod tests {
             assert_eq!(got.err(), Some(PathOpsError::Degenerate), "{answers:?}");
             assert_eq!(n.err(), Some(PathOpsError::Degenerate), "{answers:?}");
         }
-        // One off and the other adding up: the first result (5.5 to its refit, which is wrong), as documented.
-        let (got, n) = answering(vec![(0, off), (1, Ok(Some(true)))]);
-        let areas = (got.map(|p| p.area().abs()), n.map(|p| p.area().abs()));
-        assert!(areas.0.is_ok_and(|a| (a - 5.5).abs() < 1e-5) && areas.1.is_ok_and(|a| (a - 5.5).abs() < 1e-5), "{areas:?}");
+        // One off and the other adding up, or both adding up: the resolved union (4.375), never the first
+        // result (5.5 to its refit), which was found wrong.
+        for answers in [vec![(0, off), (1, Ok(Some(true)))], vec![(0, Ok(Some(true))), (1, Ok(Some(true)))]] {
+            let (got, n) = answering(answers.clone());
+            let areas = (got.map(|p| p.area().abs()), n.map(|p| p.area().abs()));
+            assert!(areas.0.is_ok_and(|a| (a - 4.375).abs() < 1e-6) && areas.1.is_ok_and(|a| (a - 4.375).abs() < 1e-6), "{answers:?}: {areas:?}");
+        }
     }
 }

@@ -7,7 +7,9 @@
 use kurbo::{BezPath, CubicBez, PathSeg, Point, Vec2};
 
 use crate::budget::fits_elements;
-use crate::fit::{chord_distance, end_tangent, fit_cubics, fit_single, is_straight, measured_arclen, sample, second_difference, start_tangent};
+use crate::fit::{
+    chord_distance, end_tangent, fit_cubics, fit_single_bounded, is_straight, measured_arclen, sample, second_difference, start_tangent,
+};
 use crate::path::{Seg, Sub, segs_to_bezpath, subs};
 use crate::work::{self, Work};
 
@@ -532,8 +534,9 @@ fn merge_pieces(a: &Piece, b: &Piece, tol: f64, origins: &[Point], work: &mut us
     (worst <= tol).then_some(Piece { seg, dev: worst, first, count })
 }
 
-/// The one segment replacing `a` and `b` (next to each other), if it passes their joint within
-/// `tol`, and how far from it the joint is.
+/// The one segment replacing `a` and `b` (next to each other), if it is within `tol` of them, and how
+/// far from them it can be: for lines, the joint's distance from the chord; for curves, the bound of
+/// [`fit_single_bounded`] over samples of both.
 fn merge_pair(a: &Seg, b: &Seg, tol: f64) -> Option<(Seg, f64)> {
     if a.line && b.line {
         let chord = b.c.p3 - a.c.p0;
@@ -550,11 +553,17 @@ fn merge_pair(a: &Seg, b: &Seg, tol: f64) -> Option<(Seg, f64)> {
     if end_tangent(&a.c).dot(start_tangent(&b.c)) < 0.99 {
         return None;
     }
-    let mut pts = Vec::new();
-    sample(&a.c, 16, &mut pts, true);
-    sample(&b.c, 16, &mut pts, false);
-    let (c, err, _) = fit_single(&pts, start_tangent(&a.c), end_tangent(&b.c));
-    (err <= tol).then_some((Seg { c, line: false }, err))
+    // Held to the tolerance between the samples too: the cubic's error at them, how far it can be from
+    // its chords between them, and how far `a` and `b` can be from theirs, added up. Each is sampled
+    // finely enough that the last two are small beside the tolerance, from 16 intervals to 128.
+    let intervals = |s: &Seg| ((12.0 * second_difference(&s.c) / tol).sqrt().ceil() as usize).clamp(16, 128);
+    let (ma, mb) = (intervals(a), intervals(b));
+    let mut pts = Vec::with_capacity(ma + mb + 1);
+    sample(&a.c, ma, &mut pts, true);
+    sample(&b.c, mb, &mut pts, false);
+    let between = sample_error(a, ma, tol * 0.05).max(sample_error(b, mb, tol * 0.05));
+    let (c, bound) = fit_single_bounded(&pts, start_tangent(&a.c), end_tangent(&b.c), between);
+    (bound <= tol).then_some((Seg { c, line: false }, bound))
 }
 
 /// Join. Open subpaths of all inputs are joined nearest-endpoint-first into one open path

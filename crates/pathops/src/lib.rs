@@ -48,8 +48,10 @@ pub use edit::{FIT_WORK, JOIN_WORK, MAX_FIT_POINTS, REDUNDANT_WORK, SimplifyOpti
 pub use offset::{
     Cap, Join, MAX_OFFSET_SEGMENT_PAIRS, offset_path, outline_stroke, stroke_region, try_offset_path, try_outline_stroke, try_stroke_region,
 };
-pub use pathfinder::{PathfinderOp, Region, Shape, merge_regions, pathfinder, pathfinder_with, region_at, regions};
-pub use planar::{BuilderArrangement, SHAPE_BUILDER_MAX_SEGMENTS, has_open_path, interior_point, live_paint, shape_builder};
+pub use pathfinder::{
+    PathfinderOp, Region, Shape, merge_regions, pathfinder, pathfinder_with, region_at, regions, try_pathfinder, try_pathfinder_with,
+};
+pub use planar::{BuilderArrangement, SHAPE_BUILDER_MAX_SEGMENTS, has_open_path, interior_point, live_paint, shape_builder, try_shape_builder};
 
 /// How the inside of a path is decided. These are the only two rules there are, so the enum is
 /// not `#[non_exhaustive]`.

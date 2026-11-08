@@ -1,8 +1,9 @@
 // Carved from VectorCraft's crates/pathops (src/planar/shape_builder.rs) at storytold/vectorcraft ff9deee46d1c59dc9ecef0b668c25e57cd80b55e.
 // Copyright (c) 2026 ArtCraft Team and the VectorCraft contributors. MIT OR Apache-2.0.
 
-use super::map::build;
+use super::map::try_build;
 use super::*;
+use crate::PathOpsError;
 use crate::path::{has_filled_subpath, has_open_subpath, subs};
 
 /// Most segments [`shape_builder`] sweeps into its planar map (open paths as edges, the gaps closed
@@ -55,25 +56,50 @@ pub(crate) fn segment_count(shapes: &[Shape]) -> usize {
 /// round an area is the outline of that loop, and fills as a closed one does. Outlines are cut the same
 /// way. With more than [`SHAPE_BUILDER_MAX_SEGMENTS`] segments or a map that can't be built, only the
 /// filled areas of the closed subpaths (and of such loops) count (another open one fills nothing there
-/// either) and there are no pieces.
+/// either) and there are no pieces: that is not the arrangement asked for, and [`try_shape_builder`]
+/// says so instead.
 pub fn shape_builder(shapes: &[Shape], edges: bool) -> BuilderArrangement {
     builder(shapes, edges, DEFAULT_PRECISION)
 }
 
+/// [`shape_builder`] that reports a planar map it cannot make, instead of falling back to the filled
+/// areas: [`PathOpsError::TooComplex`] past the element limit, past [`SHAPE_BUILDER_MAX_SEGMENTS`]
+/// segments ([`crate::Limits::shape_builder_segments`]), past the limit on pairs of segments or on the
+/// work of winding points against fills and faces ([`crate::Limits::fill_work`]);
+/// [`PathOpsError::NonFinite`] for a point that is not finite; and [`PathOpsError::Degenerate`] when no
+/// frame of the sweep leaves the open paths unlevelled, or the sweep fails. A map it makes is what
+/// [`shape_builder`] gives.
+pub fn try_shape_builder(shapes: &[Shape], edges: bool) -> Result<BuilderArrangement, PathOpsError> {
+    try_builder(shapes, edges, DEFAULT_PRECISION, true)
+}
+
 /// [`shape_builder`] refitting its results to `precision`.
 pub(crate) fn builder(shapes: &[Shape], edges: bool, precision: f64) -> BuilderArrangement {
+    try_builder(shapes, edges, precision, false).unwrap_or_default()
+}
+
+/// [`builder`]; with `strict`, a map that cannot be made is its error ([`try_shape_builder`]) where
+/// it would fall back to the filled areas.
+pub(crate) fn try_builder(shapes: &[Shape], edges: bool, precision: f64, strict: bool) -> Result<BuilderArrangement, PathOpsError> {
     if !crate::budget::fits_elements(shapes.iter().map(|s| &s.path)) {
-        return BuilderArrangement::default();
+        return if strict { Err(PathOpsError::TooComplex) } else { Ok(BuilderArrangement::default()) };
     }
     let has_open = has_open_path(shapes);
-    let planar = (segment_count(shapes) <= crate::budget::limits().shape_builder_segments)
-        .then(|| {
-            let keyed: Vec<Shape> = shapes.iter().enumerate().map(|(i, s)| Shape::new(s.path.clone(), s.rule, i as u64)).collect();
-            build(&keyed, precision).unwrap_or_default()
-        })
-        .filter(|(faces, pieces, _)| !faces.is_empty() || !pieces.is_empty());
+    let mapped = if segment_count(shapes) <= crate::budget::limits().shape_builder_segments {
+        let keyed: Vec<Shape> = shapes.iter().enumerate().map(|(i, s)| Shape::new(s.path.clone(), s.rule, i as u64)).collect();
+        match try_build(&keyed, precision) {
+            Ok(map) => map,
+            Err(e) if strict => return Err(e),
+            Err(_) => None,
+        }
+    } else if strict {
+        return Err(PathOpsError::TooComplex);
+    } else {
+        None
+    };
+    let planar = mapped.filter(|(faces, pieces, _)| !faces.is_empty() || !pieces.is_empty());
     let Some((faces, pieces, under)) = planar else {
-        return BuilderArrangement { regions: filled_regions(shapes, precision), ..Default::default() };
+        return Ok(BuilderArrangement { regions: filled_regions(shapes, precision), ..Default::default() });
     };
     // A shape with a filled subpath (an open loop of one cubic among them) gives outline edges, not lines.
     let lines: Vec<bool> = shapes.iter().map(|s| !has_filled_subpath(&s.path)).collect();
@@ -87,12 +113,12 @@ pub(crate) fn builder(shapes: &[Shape], edges: bool, precision: f64) -> BuilderA
         regions.extend(faces.into_iter().filter(|f| f.sources.is_empty()));
         regions
     };
-    BuilderArrangement {
+    Ok(BuilderArrangement {
         regions,
         lines: if has_open { lines } else { Vec::new() },
         edges: if edges { outline } else { Vec::new() },
         lines_under: if has_open { under } else { Vec::new() },
-    }
+    })
 }
 
 /// The regions of the shapes' filled areas: those of their closed subpaths, and of open ones of one

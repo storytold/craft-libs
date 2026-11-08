@@ -41,17 +41,19 @@ mod shape_builder;
 use index::{Crossings, RectIndex, segment_footprint};
 pub use live_paint::live_paint;
 pub use map::interior_point;
-pub(crate) use shape_builder::builder;
+pub(crate) use shape_builder::try_builder;
 
 /// The points where three or more edges of the planar map of `shapes` meet, if the map can be built
-/// (it is not for more than [`SHAPE_BUILDER_MAX_SEGMENTS`] segments, as for [`shape_builder`]).
-pub(crate) fn map_junctions(shapes: &[Shape], precision: f64) -> Option<Vec<Point>> {
+/// (it is not for more than [`SHAPE_BUILDER_MAX_SEGMENTS`] segments, as for [`shape_builder`]), and why
+/// it cannot: [`crate::PathOpsError::TooComplex`] past that many segments, or the map's error; `Ok(None)`
+/// when the shapes draw nothing.
+pub(crate) fn try_map_junctions(shapes: &[Shape], precision: f64) -> Result<Option<Vec<Point>>, crate::PathOpsError> {
     if shape_builder::segment_count(shapes) > crate::budget::limits().shape_builder_segments {
-        return None;
+        return Err(crate::PathOpsError::TooComplex);
     }
-    map::junctions(shapes, precision)
+    map::try_junctions(shapes, precision)
 }
-pub use shape_builder::{BuilderArrangement, SHAPE_BUILDER_MAX_SEGMENTS, has_open_path, shape_builder};
+pub use shape_builder::{BuilderArrangement, SHAPE_BUILDER_MAX_SEGMENTS, has_open_path, shape_builder, try_shape_builder};
 
 #[cfg(test)]
 mod tests;

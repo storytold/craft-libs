@@ -94,13 +94,19 @@ fn has_open_edges(shapes: &[Shape]) -> bool {
 
 /// The arrangement of `shapes`, its faces refit to `precision` and its slivers thinner than it dropped.
 fn arrangement(shapes: &[Shape], precision: f64) -> Option<Arrangement> {
+    try_arrangement(shapes, precision).ok()
+}
+
+/// [`arrangement`], and why there is none: [`crate::PathOpsError::TooComplex`] past the element limit,
+/// or the error of the sweep ([`Arrangement::new`]).
+fn try_arrangement(shapes: &[Shape], precision: f64) -> Result<Arrangement, crate::PathOpsError> {
     if !crate::budget::fits_elements(shapes.iter().map(|s| &s.path)) {
-        return None;
+        return Err(crate::PathOpsError::TooComplex);
     }
     let bps: Vec<(BezPath, FillRule)> = shapes.iter().map(|s| (fill_bezpath(&s.path), s.rule)).collect();
-    let mut arr = Arrangement::new(bps).ok()?;
+    let mut arr = Arrangement::new(bps)?;
     arr.tidy.precision = precision;
-    Some(arr)
+    Ok(arr)
 }
 
 /// The one item of `it`, if it has exactly one.
@@ -126,21 +132,49 @@ pub fn pathfinder(op: PathfinderOp, shapes: &[Shape]) -> Vec<Shape> {
 /// that isn't positive and finite is [`DEFAULT_PRECISION`].
 pub fn pathfinder_with(op: PathfinderOp, shapes: &[Shape], precision: f64) -> Vec<Shape> {
     // A panic in the sweep, which can happen on rare near-degenerate input, is no result.
-    guarded(|| pathfinder_unguarded(op, shapes, precision)).unwrap_or_default()
+    guarded(|| pathfinder_unguarded(op, shapes, precision, false)).and_then(Result::ok).unwrap_or_default()
 }
 
-/// [`pathfinder_with`] without the guard that turns a panic into no result.
-fn pathfinder_unguarded(op: PathfinderOp, shapes: &[Shape], precision: f64) -> Vec<Shape> {
+/// [`pathfinder`] that reports what it cannot do instead of giving no shapes, or falling back to the
+/// filled areas: [`crate::PathOpsError::TooComplex`] past the element limit, past a limit of the sweep or
+/// of the work of a contour pass ([`crate::MAX_PASS_WORK`]), or past one of the planar map's (more than
+/// [`crate::SHAPE_BUILDER_MAX_SEGMENTS`] segments, or [`crate::MAX_FILL_WORK`]) for Divide and Outline
+/// with an open path; [`crate::PathOpsError::NonFinite`] for a point that is not finite; and
+/// [`crate::PathOpsError::Degenerate`] when the sweep fails or no frame of the map leaves the open paths
+/// unlevelled. Where it gives shapes they are those [`pathfinder`] gives.
+pub fn try_pathfinder(op: PathfinderOp, shapes: &[Shape]) -> Result<Vec<Shape>, crate::PathOpsError> {
+    try_pathfinder_with(op, shapes, DEFAULT_PRECISION)
+}
+
+/// [`try_pathfinder`] with a refit `precision`, as [`pathfinder_with`].
+pub fn try_pathfinder_with(op: PathfinderOp, shapes: &[Shape], precision: f64) -> Result<Vec<Shape>, crate::PathOpsError> {
+    guarded(|| pathfinder_unguarded(op, shapes, precision, true)).unwrap_or(Err(crate::PathOpsError::Degenerate))
+}
+
+/// [`pathfinder_with`] without the guard that turns a panic into no result. With `strict`, what cannot
+/// be done is the error ([`try_pathfinder`]); without, it gives no shapes, or the filled areas where
+/// the planar map of a Divide with an open path is not made.
+fn pathfinder_unguarded(op: PathfinderOp, shapes: &[Shape], precision: f64, strict: bool) -> Result<Vec<Shape>, crate::PathOpsError> {
+    use crate::PathOpsError;
     let precision = if precision.is_finite() && precision > 0.0 { precision } else { DEFAULT_PRECISION };
     let n = shapes.len();
     // No shapes, or more segments than are read: no result.
-    if n == 0 || !crate::budget::fits_elements(shapes.iter().map(|s| &s.path)) {
-        return Vec::new();
+    if n == 0 {
+        return Ok(Vec::new());
     }
+    if !crate::budget::fits_elements(shapes.iter().map(|s| &s.path)) {
+        return if strict { Err(PathOpsError::TooComplex) } else { Ok(Vec::new()) };
+    }
+    // What cannot be done: the error, or no shapes.
+    let none = |e: PathOpsError| if strict { Err(e) } else { Ok(Vec::new()) };
     let front_key = shapes[n - 1].key;
-    let unite = || {
+    let unite = || -> Result<Vec<Shape>, PathOpsError> {
         let v: Vec<(&BezPath, FillRule)> = shapes.iter().map(|s| (&s.path, s.rule)).collect();
-        one(unite_all_with(&v, precision), front_key)
+        if strict {
+            Ok(one(crate::boolean::try_unite_all_with(&v, precision)?, front_key))
+        } else {
+            Ok(one(unite_all_with(&v, precision), front_key))
+        }
     };
     // Unite doesn't need the arrangement.
     if op == PathfinderOp::Unite {
@@ -149,14 +183,14 @@ fn pathfinder_unguarded(op: PathfinderOp, shapes: &[Shape], precision: f64) -> V
     // Open paths are cutting edges for Divide; the filled-only operations keep their
     // implicit closure. Reuse the planar map of `shape_builder` and its bound and fallback.
     if op == PathfinderOp::Divide && crate::has_open_path(shapes) {
-        return crate::planar::builder(shapes, false, precision)
+        return Ok(crate::planar::try_builder(shapes, false, precision, strict)?
             .regions
             .into_iter()
             .filter_map(|r| {
                 let key = shapes.get(r.top()?)?.key;
                 Some(Shape::new(r.path, FillRule::NonZero, key))
             })
-            .collect();
+            .collect());
     }
     // Open paths (but for a ring that comes back to where it started) are edges that cross others
     // without a trace in the filled areas, where their way there and back cancel: the crossings, and so
@@ -164,12 +198,18 @@ fn pathfinder_unguarded(op: PathfinderOp, shapes: &[Shape], precision: f64) -> V
     // lines can be over its limits while the map is not). Where the map cannot be built there are no
     // shapes: the arrangement's junctions would leave every open path uncut where it meets another.
     if op == PathfinderOp::Outline && has_open_edges(shapes) {
-        return crate::planar::map_junctions(shapes, precision).map(|junctions| outline_edges(junctions, shapes)).unwrap_or_default();
+        return match crate::planar::try_map_junctions(shapes, precision) {
+            Ok(junctions) => Ok(junctions.map(|junctions| outline_edges(junctions, shapes)).unwrap_or_default()),
+            Err(e) => none(e),
+        };
     }
-    let Some(arr) = arrangement(shapes, precision) else { return Vec::new() };
+    let arr = match try_arrangement(shapes, precision) {
+        Ok(arr) => arr,
+        Err(e) => return none(e),
+    };
     let p = &arr.tidy;
-    match op {
-        PathfinderOp::Unite => unite(),
+    Ok(match op {
+        PathfinderOp::Unite => unite()?,
         // The tests read the covering inputs straight off the windings ([`Arrangement::covered`]);
         // each is the coverage-mask test in its comment.
         // m[0] && !m[1..].any()
@@ -202,7 +242,7 @@ fn pathfinder_unguarded(op: PathfinderOp, shapes: &[Shape], precision: f64) -> V
             );
             // Past the limit on the passes there are no shapes, not the faces made before it was reached.
             if !whole {
-                return Vec::new();
+                return none(PathOpsError::TooComplex);
             }
             paths.into_iter().zip(shapes).flat_map(|(sp, s)| one(sp, s.key)).collect()
         }
@@ -227,7 +267,7 @@ fn pathfinder_unguarded(op: PathfinderOp, shapes: &[Shape], precision: f64) -> V
                 |k, c, group| parts.push((k, contours_to_path(c, group.iter().copied(), p))),
             );
             if !whole {
-                return Vec::new();
+                return none(PathOpsError::TooComplex);
             }
             // By key, as each key's own pass gave them (a stable sort keeps a key's faces in order).
             parts.sort_by_key(|(k, _)| *k);
@@ -235,7 +275,7 @@ fn pathfinder_unguarded(op: PathfinderOp, shapes: &[Shape], precision: f64) -> V
         }
         PathfinderOp::Crop => {
             if n < 2 {
-                return Vec::new();
+                return Ok(Vec::new());
             }
             let mut paths = vec![BezPath::new(); n - 1];
             let whole = each_classified_face(
@@ -252,13 +292,13 @@ fn pathfinder_unguarded(op: PathfinderOp, shapes: &[Shape], precision: f64) -> V
                 },
             );
             if !whole {
-                return Vec::new();
+                return none(PathOpsError::TooComplex);
             }
             paths.into_iter().zip(shapes).flat_map(|(sp, s)| one(sp, s.key)).collect()
         }
         // Closed shapes only: the junctions are the vertices of the filled areas' arrangement.
         PathfinderOp::Outline => outline_edges(arr.junctions(), shapes),
-    }
+    })
 }
 
 /// The faces of `arr`, each distinct coverage mask's in turn (sorted), each face an outer contour

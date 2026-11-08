@@ -205,6 +205,15 @@ pub(crate) fn fit_single(pts: &[Point], t0: Vec2, t1: Vec2) -> (CubicBez, f64, u
     fit_single_from(pts, chord_params(pts), t0, t1)
 }
 
+/// [`fit_single`] held to the path the points `pts` are samples of: the cubic, and how far it and that
+/// path can be from each other. That is its error at the points, its [`spread`], and `between`, how far
+/// the path can be from the polyline of the points, added up ([`fit_cubics`] takes a cubic by the same
+/// sum).
+pub(crate) fn fit_single_bounded(pts: &[Point], t0: Vec2, t1: Vec2, between: f64) -> (CubicBez, f64) {
+    let (c, err, _, u) = fit_with_params(pts, chord_params(pts), t0, t1);
+    (c, err + spread(&c, &u) + between)
+}
+
 /// [`fit_single`] starting from the parameters `u` (one per point, 0 to 1) instead of the
 /// chord-length ones.
 pub(crate) fn fit_single_from(pts: &[Point], u: Vec<f64>, t0: Vec2, t1: Vec2) -> (CubicBez, f64, usize) {
@@ -412,6 +421,34 @@ mod tests {
         for w in out.windows(2) {
             assert!(w[0].p3.distance(w[1].p0) < 1e-9);
         }
+    }
+
+    /// The room left for the fit is the tolerance less the sampling bound, and the bound given with
+    /// each cubic includes it: a cubic that fits in the room is given with its own bound and the
+    /// sampling bound added; one that does not is split, or no fit when no split is allowed.
+    #[test]
+    fn the_sampling_bound_is_taken_from_the_room_and_added_to_the_bound() {
+        // A gentle wave, one cubic's worth: its bound with nothing reserved is `alone`.
+        let pts: Vec<Point> =
+            (0..=200).map(|i| Point::new(f64::from(i) * 0.1, (f64::from(i) * 0.1 * std::f64::consts::PI / 20.0).sin() * 0.2)).collect();
+        let (t0, t1) = (Vec2::new(1.0, 0.0), unit(pts[200] - pts[199]).unwrap_or(Vec2::new(1.0, 0.0)));
+        let tol = 1.0;
+        let mut work = usize::MAX;
+        let one = fit_cubics_to_depth(&pts, t0, t1, (tol, 0.0), &mut work, 0).unwrap();
+        assert_eq!(one.len(), 1);
+        let alone = one[0].1;
+        assert!(alone > 0.0 && alone < tol / 4.0, "{alone}");
+        // With room for it, the same cubic, its bound the sampling bound more.
+        let between = tol - 2.0 * alone;
+        let reserved = fit_cubics_to_depth(&pts, t0, t1, (tol, between), &mut work, 0).unwrap();
+        assert_eq!(reserved.len(), 1);
+        assert!((reserved[0].1 - (alone + between)).abs() < 1e-12 && reserved[0].1 <= tol, "{} against {}", reserved[0].1, alone + between);
+        // Without room for it the cubic is no fit: split, or past the splits allowed, none.
+        assert_eq!(fit_cubics_to_depth(&pts, t0, t1, (tol, tol - alone / 2.0), &mut work, 0), Err(FitStop::Depth));
+        let split = fit_cubics(&pts, t0, t1, (tol, tol - alone / 2.0), &mut work).unwrap();
+        assert!(split.len() > 1 && split.iter().all(|piece| piece.1 <= tol));
+        // And none at all when the sampling bound is the whole tolerance.
+        assert_eq!(fit_cubics(&pts, t0, t1, (tol, tol), &mut work), Err(FitStop::Depth));
     }
 
     /// A stretch that has not fitted when the splitting stops is no fit: the cubic that failed is not

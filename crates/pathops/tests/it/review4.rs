@@ -225,6 +225,11 @@ fn the_pieces_of_an_open_loop_of_one_cubic_are_outline_edges_not_lines() {
         assert!(without.edges.is_empty());
         let with = shape_builder(&shapes, true);
         assert!(with.lines.iter().all(|l| l.key == 1));
+        // The cutter is there whole, in its pieces, in both.
+        for arrangement in [&without, &with] {
+            let kept: f64 = arrangement.lines.iter().map(|l| length(&l.path)).sum();
+            assert!(close(kept, length(&cutter), 1e-6), "the cutter's pieces: {kept} of {}", length(&cutter));
+        }
         let edged: f64 = with.edges.iter().filter(|e| e.key == 0).map(|e| length(&e.path)).sum();
         assert!(close(edged, length(&loop_path), 1e-6), "the loop's outline is its edges: {edged} of {}", length(&loop_path));
         assert_eq!(without.regions.len(), 2);
