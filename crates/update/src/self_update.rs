@@ -1112,55 +1112,6 @@ fn check_helper(app: &App, me: &Path, paths: &Paths, exe: &Path, step: &Finish) 
     if allowed { Ok(()) } else { Err(refused()) }
 }
 
-/// Lets a Windows test observe both sides of `run_step`'s wait for the old launcher. Compiled only
-/// for tests, so production behavior is unchanged.
-#[cfg(all(test, windows))]
-mod wait_watch {
-    use std::sync::mpsc::{self, Receiver, Sender};
-    use std::sync::{Mutex, PoisonError};
-
-    /// A test's two observations of one wait, keyed by the launcher's pid.
-    pub(super) struct Channels {
-        /// Sent just before `run_step` calls the wait.
-        pub(super) entered: Receiver<()>,
-        /// Sent right after the wait returns, before any extraction, and carries the wait's result.
-        pub(super) returned: Receiver<bool>,
-    }
-
-    struct Watch {
-        pid: u32,
-        entered: Option<Sender<()>>,
-        returned: Option<Sender<bool>>,
-    }
-
-    static WATCH: Mutex<Option<Watch>> = Mutex::new(None);
-
-    pub(super) fn watch(pid: u32) -> Channels {
-        let (entered, entered_rx) = mpsc::channel();
-        let (returned, returned_rx) = mpsc::channel();
-        *WATCH.lock().unwrap_or_else(PoisonError::into_inner) = Some(Watch { pid, entered: Some(entered), returned: Some(returned) });
-        Channels { entered: entered_rx, returned: returned_rx }
-    }
-
-    /// Notes that `run_step` is about to wait. Only the first call for a watched pid is kept.
-    pub(super) fn entered(pid: u32) {
-        let mut watch = WATCH.lock().unwrap_or_else(PoisonError::into_inner);
-        let sender = watch.as_mut().filter(|watch| watch.pid == pid).and_then(|watch| watch.entered.take());
-        if let Some(sender) = sender {
-            let _ = sender.send(());
-        }
-    }
-
-    /// Notes the wait's result as soon as it returns; the step hasn't run yet.
-    pub(super) fn returned(pid: u32, waited: bool) {
-        let mut watch = WATCH.lock().unwrap_or_else(PoisonError::into_inner);
-        let sender = watch.as_mut().filter(|watch| watch.pid == pid).and_then(|watch| watch.returned.take());
-        if let Some(sender) = sender {
-            let _ = sender.send(waited);
-        }
-    }
-}
-
 /// [`step_after_wait`], waiting up to `wait` for `pid` to exit.
 #[cfg(all(windows, test))]
 fn run_step(app: &App, reference: &Path, pid: u32, exe: &Path, step: &Finish, wait: std::time::Duration) -> Result<(), String> {
@@ -1180,12 +1131,7 @@ struct Stepped {
 /// `reference`.
 #[cfg(windows)]
 fn step_after_wait(app: &App, reference: &Path, pid: u32, exe: &Path, step: &Finish, wait: &dyn Fn(u32) -> bool) -> Stepped {
-    #[cfg(test)]
-    wait_watch::entered(pid);
-    // The test hook needs the result, so it is stored rather than consumed by the branch.
     let waited = wait(pid);
-    #[cfg(test)]
-    wait_watch::returned(pid, waited);
     let result = if waited {
         match step {
             Finish::Msi(msi) => {
@@ -1364,18 +1310,23 @@ mod tests {
         let tmp = dir.path().join("cache").join("launcher-update");
         let step = Finish::Portable { zip: zip.clone(), tmp: tmp.clone() };
 
-        let mut old = std::process::Command::new("ping").args(["-n", "3", "127.0.0.1"]).stdout(std::process::Stdio::null()).spawn().unwrap();
+        let mut old = BlockedLauncher::start();
         let exe = folder.join("artcraft-launcher.exe");
-        let helper = {
-            let (exe, step, pid) = (exe.clone(), step.clone(), old.id());
-            std::thread::spawn(move || {
-                run_step(&crate::suite::LAUNCHER, &system_program("cmd.exe"), pid, &exe, &step, std::time::Duration::from_secs(30))
-            })
-        };
-        std::thread::sleep(std::time::Duration::from_millis(500));
-        assert_eq!(std::fs::read_to_string(&exe).unwrap(), "0.1.0", "replaced while the old launcher was still running");
-        old.wait().unwrap();
-        helper.join().unwrap().unwrap();
+        std::thread::scope(|scope| {
+            // Inside the scope, so a failed assertion drops the gate and releases the helper
+            // before the scope joins it.
+            let (gate, wait) = WaitGate::new();
+            let (helper_exe, pid) = (exe.clone(), old.id());
+            let helper = scope.spawn(move || step_after_wait(&crate::suite::LAUNCHER, &system_program("cmd.exe"), pid, &helper_exe, &step, &wait));
+            gate.entered();
+            old.assert_running("while the helper was waiting");
+            assert_eq!(std::fs::read(&exe).unwrap(), b"0.1.0", "replaced while the old launcher was still running");
+            old.finish().expect("the stand-in launcher couldn't be reaped");
+            gate.release();
+            let stepped = helper.join().unwrap();
+            assert!(stepped.exited, "the wait reported that the launcher was still running although it had exited");
+            stepped.result.unwrap();
+        });
         assert_eq!(std::fs::read(&exe).unwrap(), signed_exe);
         assert_eq!(std::fs::read_to_string(folder.join("ArtCraftLauncherData").join("settings.json")).unwrap(), "{}");
         assert!(!folder.join("artcraft-launcher-0.2.0-windows-x64-portable").exists(), "the zip's folder must not be nested in the launcher's");
@@ -1434,20 +1385,52 @@ mod tests {
         }
     }
 
+    /// A wait for [`step_after_wait`] that the test controls: it reports when the helper has
+    /// reached its wait, blocks until the test releases it, and then asks the real
+    /// [`process::wait_for_exit`] whether the launcher has exited, without waiting.
+    #[cfg(windows)]
+    struct WaitGate {
+        entered: std::sync::mpsc::Receiver<()>,
+        release: std::sync::mpsc::Sender<()>,
+    }
+
+    #[cfg(windows)]
+    impl WaitGate {
+        /// The gate and the wait to hand to the helper. The wait holds the only sender of
+        /// `entered`, so a helper that ends without reaching its wait fails [`WaitGate::entered`]
+        /// instead of blocking it, and dropping the gate releases the wait.
+        fn new() -> (Self, impl Fn(u32) -> bool + Send) {
+            let (entered_tx, entered) = std::sync::mpsc::channel();
+            let (release, released) = std::sync::mpsc::channel::<()>();
+            let released = std::sync::Mutex::new(released);
+            let wait = move |pid| {
+                let _ = entered_tx.send(());
+                let _ = released.lock().map(|released| released.recv());
+                process::wait_for_exit(pid, std::time::Duration::ZERO)
+            };
+            (Self { entered, release }, wait)
+        }
+
+        /// Blocks until the helper has reached its wait.
+        fn entered(&self) {
+            self.entered.recv().expect("the helper never reached its wait");
+        }
+
+        /// Lets the helper's wait return.
+        fn release(&self) {
+            self.release.send(()).expect("the helper stopped before its wait was released");
+        }
+    }
+
     /// A launcher without `portable.txt` is a standalone installation, and the helper still
     /// replaces its own executable after it exits. The test holds a stand-in launcher alive
-    /// through a pipe and observes both sides of the helper's wait: the first assertion runs only
-    /// after the helper announces it is about to wait. A wait that returns while the stand-in is alive
-    /// fails the test before any extraction can replace the executable.
-    ///
-    /// The "still blocked" check is a bounded observation, not proof: a helper descheduled for the
-    /// whole window could hide a missing wait until the release below. A premature timeout longer
-    /// than this observation window is also outside this test's coverage.
+    /// through a pipe and holds the helper inside its wait until the stand-in has exited, so the
+    /// executable must still be the old one while the helper waits, and the real
+    /// [`process::wait_for_exit`] must report the live stand-in as running and the exited one as gone.
     #[cfg(windows)]
     #[test]
     fn a_standalone_update_replaces_the_launcher_after_it_exits() {
         use std::io::Write;
-        use std::sync::mpsc::RecvTimeoutError;
         let dir = tempfile::tempdir().unwrap();
         let folder = dir.path().join("ArtCraft Launcher");
         std::fs::create_dir_all(folder.join("ArtCraftLauncherData")).unwrap();
@@ -1468,49 +1451,23 @@ mod tests {
         let tmp = dir.path().join("cache").join(PORTABLE_STAGING);
         let step = Finish::Portable { zip: zip.clone(), tmp: tmp.clone() };
 
-        // Timeouts only bound the test; each failure names the observation that never arrived.
-        let entered_timeout = std::time::Duration::from_secs(10);
-        let blocked_window = std::time::Duration::from_secs(2);
-        let returned_timeout = std::time::Duration::from_secs(30);
-
+        let mut old = BlockedLauncher::start();
+        let pid = old.id();
         std::thread::scope(|scope| {
-            let mut old = BlockedLauncher::start();
-            let pid = old.id();
-            let watch = wait_watch::watch(pid);
+            // Inside the scope, so a failed assertion drops the gate and releases the helper
+            // before the scope joins it.
+            let (gate, wait) = WaitGate::new();
             let helper_exe = exe.clone();
-            let step = step.clone();
-            let helper = scope.spawn(move || {
-                run_step(&crate::suite::LAUNCHER, &system_program("cmd.exe"), pid, &helper_exe, &step, std::time::Duration::from_secs(30))
-            });
-            match watch.entered.recv_timeout(entered_timeout) {
-                Ok(()) => {}
-                Err(RecvTimeoutError::Timeout) => {
-                    panic!("the helper didn't reach its wait within {entered_timeout:?} (helper already finished: {})", helper.is_finished())
-                }
-                Err(RecvTimeoutError::Disconnected) => panic!("the entered channel disconnected before the helper reached its wait"),
-            }
-            old.assert_running("before the first replacement check");
-            assert_eq!(std::fs::read_to_string(&exe).unwrap(), "0.1.0", "replaced while the old launcher was still running");
-
-            // A correct wait can't return while the stand-in holds the pipe.
-            match watch.returned.recv_timeout(blocked_window) {
-                Err(RecvTimeoutError::Timeout) => {}
-                Ok(waited) => panic!("run_step left its wait while the old launcher was still running (waited: {waited})"),
-                Err(RecvTimeoutError::Disconnected) => panic!("the returned channel disconnected while the old launcher was still running"),
-            }
-            old.assert_running("after the wait was expected to stay blocked");
-            assert_eq!(std::fs::read_to_string(&exe).unwrap(), "0.1.0", "replaced while the old launcher was still running");
-
+            let helper = scope.spawn(move || step_after_wait(&crate::suite::LAUNCHER, &system_program("cmd.exe"), pid, &helper_exe, &step, &wait));
+            gate.entered();
+            old.assert_running("while the helper was waiting");
+            assert_eq!(std::fs::read(&exe).unwrap(), b"0.1.0", "replaced while the old launcher was still running");
+            assert!(!process::wait_for_exit(pid, std::time::Duration::ZERO), "the wait reported the running launcher as exited");
             old.finish().expect("the stand-in launcher couldn't be reaped");
-            match watch.returned.recv_timeout(returned_timeout) {
-                Ok(waited) => assert!(waited, "the wait reported that the launcher was still running although it had exited"),
-                Err(RecvTimeoutError::Timeout) => panic!(
-                    "the helper didn't leave its wait within {returned_timeout:?} after the launcher exited (helper already finished: {})",
-                    helper.is_finished()
-                ),
-                Err(RecvTimeoutError::Disconnected) => panic!("the returned channel disconnected before reporting the wait's result"),
-            }
-            helper.join().unwrap().unwrap();
+            gate.release();
+            let stepped = helper.join().unwrap();
+            assert!(stepped.exited, "the wait reported that the launcher was still running although it had exited");
+            stepped.result.unwrap();
         });
         assert_eq!(std::fs::read(&exe).unwrap(), signed_exe);
         assert_eq!(std::fs::read_to_string(folder.join("ArtCraftLauncherData").join("settings.json")).unwrap(), "{}");
@@ -1730,19 +1687,11 @@ mod tests {
         let msi = dir.path().join("artcraft-launcher-0.2.0-windows-x64.msi");
         std::fs::write(&msi, "not a package").unwrap();
         let running = std::process::id();
-        let started = std::time::Instant::now();
-        // The test process itself never exits within the wait, so the package is never run.
-        let error = run_step(
-            &crate::suite::LAUNCHER,
-            &system_program("cmd.exe"),
-            running,
-            &exe,
-            &Finish::Msi(msi.clone()),
-            std::time::Duration::from_millis(300),
-        )
-        .unwrap_err();
+        // The test process itself is still running when the wait asks, so the package is never run.
+        let error =
+            run_step(&crate::suite::LAUNCHER, &system_program("cmd.exe"), running, &exe, &Finish::Msi(msi.clone()), std::time::Duration::ZERO)
+                .unwrap_err();
         assert!(error.contains("still running"), "{error}");
-        assert!(started.elapsed() < std::time::Duration::from_secs(30));
         assert_eq!(std::fs::read_to_string(&exe).unwrap(), "0.1.0");
         assert!(!msi.exists());
     }
@@ -1977,22 +1926,56 @@ mod tests {
         }
     }
 
-    /// The helper waits for the old launcher to exit before it starts the new one.
+    /// The helper waits for the old launcher to exit before it starts the new one. The helper's
+    /// `sleep` is a script on `PATH` that reports each pause through a named pipe and pauses until
+    /// the test releases it, and the started command reports whether the old launcher was still
+    /// running. The test holds both pipes open for reading and writing, so no open blocks, and a
+    /// thread that waits for the helper to exit writes `exited`, so every read gets a line.
     #[cfg(unix)]
     #[test]
     fn the_restart_waits_for_the_old_process_to_exit() {
+        use std::io::{BufRead, Write};
+        use std::os::unix::fs::PermissionsExt;
         let dir = tempfile::tempdir().unwrap();
-        let marker = dir.path().join("started");
-        let mut old = std::process::Command::new("sleep").arg("1").spawn().unwrap();
-        relaunch_after_exit(&crate::suite::LAUNCHER, old.id(), &[std::ffi::OsStr::new("touch"), marker.as_os_str()]).unwrap();
-        std::thread::sleep(std::time::Duration::from_millis(400));
-        assert!(!marker.exists(), "started while the old launcher was still running");
-        old.wait().unwrap();
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        while !marker.exists() && std::time::Instant::now() < deadline {
-            std::thread::sleep(std::time::Duration::from_millis(50));
+        let (events, release) = (dir.path().join("events"), dir.path().join("release"));
+        for fifo in [&events, &release] {
+            assert!(std::process::Command::new("mkfifo").arg(fifo).status().unwrap().success());
         }
-        assert!(marker.exists(), "never started after the old launcher exited");
+        let bin = dir.path().join("bin");
+        std::fs::create_dir(&bin).unwrap();
+        let sleep = bin.join("sleep");
+        std::fs::write(&sleep, "#!/bin/sh\nprintf 'waiting\\n' > \"$CRAFT_TEST_EVENTS\"\nread _ < \"$CRAFT_TEST_RELEASE\"\n").unwrap();
+        std::fs::set_permissions(&sleep, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let mut path = std::ffi::OsString::from(bin.as_os_str());
+        if let Some(rest) = std::env::var_os("PATH") {
+            path.push(":");
+            path.push(rest);
+        }
+
+        let mut old = std::process::Command::new("cat").stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::null()).spawn().unwrap();
+        let pid = old.id().to_string();
+        let started = r#"if kill -0 "$1" 2>/dev/null; then s=alive; else s=gone; fi; printf 'started %s\n' "$s" > "$CRAFT_TEST_EVENTS""#;
+        let command = [std::ffi::OsStr::new("/bin/sh"), "-c".as_ref(), started.as_ref(), "sh".as_ref(), pid.as_ref()];
+        let open = |fifo: &Path| std::fs::OpenOptions::new().read(true).write(true).open(fifo).unwrap();
+        let (events_pipe, mut release_pipe) = (open(&events), open(&release));
+        let mut exited = events_pipe.try_clone().unwrap();
+        let mut lines = std::io::BufReader::new(events_pipe).lines();
+        let mut next = move || lines.next().unwrap().unwrap();
+
+        let mut helper = helper_command(&crate::suite::LAUNCHER, old.id(), &command);
+        helper.env("PATH", path).env("CRAFT_TEST_EVENTS", &events).env("CRAFT_TEST_RELEASE", &release);
+        let mut helper = helper.stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).spawn().unwrap();
+        std::thread::spawn(move || {
+            let _ = helper.wait();
+            let _ = exited.write_all(b"exited\n");
+        });
+
+        assert_eq!(next(), "waiting", "the helper didn't wait while the old launcher was still running");
+        drop(old.stdin.take());
+        old.wait().unwrap();
+        release_pipe.write_all(b"go\n").unwrap();
+        assert_eq!(next(), "started gone", "didn't start once the old launcher had exited");
+        assert_eq!(next(), "exited");
     }
 
     /// A real disk image: the new `ArtCraft Launcher.app` replaces the old one in place.
