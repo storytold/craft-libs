@@ -178,11 +178,7 @@ fn parse_has_encoder(stdout: &str, encoder: &str) -> bool {
 
 /// Find ffmpeg, or print a skip message and return None.
 pub fn ffmpeg_or_skip(reason: &str) -> Option<PathBuf> {
-    let ff = ffmpeg();
-    if ff.is_none() {
-        eprintln!("SKIPPED ({reason}): ffmpeg not found");
-    }
-    ff
+    tool("ffmpeg").or_else(|| skip(&format!("{reason}: ffmpeg not found (set {} or put ffmpeg on PATH)", env_var("ffmpeg"))))
 }
 
 /// Log progress of long tests.

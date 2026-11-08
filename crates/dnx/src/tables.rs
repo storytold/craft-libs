@@ -98,10 +98,9 @@ pub(crate) fn cid_info(cid: u32) -> Option<&'static CidInfo> {
 pub fn ri_frame_size(width: u32, height: u32, c0: u32, alpha: bool) -> u32 {
     let nw = width.div_ceil(16) as u64;
     let ns = height.div_ceil(16) as u64;
-    let mut size = c0 as u64 * nw * ns / 8160;
-    if alpha {
-        size += size / 2;
-    }
+    let num = c0 as u64 * nw * ns;
+    let num_scaled = if alpha { num + num / 2 } else { num };
+    let mut size = num_scaled / 8160;
     let rem = size % 4096;
     if rem >= 2048 {
         size += 4096 - rem;
@@ -260,6 +259,8 @@ mod tests {
         assert_eq!(ri_frame_size(1920, 1080, 917504, false), 917504);
         // tiny rasters clamp to 8192
         assert_eq!(ri_frame_size(16, 16, 188416, false), 8192);
+        // 640x544 CID 1274 with alpha scales before truncation
+        assert_eq!(ri_frame_size(640, 544, 188416, true), 49152);
     }
 
     #[test]
