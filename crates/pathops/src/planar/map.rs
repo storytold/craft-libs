@@ -152,6 +152,7 @@ fn place_holes(m: &Map, work: &FillWork) -> Option<Vec<Vec<usize>>> {
             if !work.charge(bp.elements().len()) {
                 return None;
             }
+            crate::work::add(Work::HoleWound, bp.elements().len());
             if bp.winding(p) != 0 && around_it.is_none_or(|(_, least)| area.total_cmp(&least).is_lt()) {
                 around_it = Some((i, *area));
             }
@@ -181,6 +182,9 @@ pub(crate) fn junctions(shapes: &[Shape], precision: f64) -> Option<Vec<Point>> 
     Some(out)
 }
 
+/// The planar graph of the sweep of `inputs` at the tolerance `eps`: its vertices and its edges. Points
+/// within `eps` are one vertex, and so are the ends of copies of one edge and of stubs a rounding error
+/// long (within a fraction of `precision` across). `None` when the sweep fails or panics.
 fn sweep_graph(inputs: &[(BezPath, usize)], eps: f64, precision: f64) -> Option<(Vec<Point>, Vec<Edge>)> {
     // The sweep can panic on rare near-degenerate input; that must never take the app down.
     crate::work::add(crate::work::Work::Sweeps, 1);
@@ -329,7 +333,7 @@ fn sweep_graph(inputs: &[(BezPath, usize)], eps: f64, precision: f64) -> Option<
     Some((points, edges))
 }
 
-/// Faces and edges of `shapes`, and the pieces of the open paths (those with no closed subpath)
+/// Faces and edges of `shapes`, and the pieces of the open paths (those with no filled subpath, [`crate::path::has_filled_subpath`])
 /// that lie under another path in front of them, whose edges are that path's: under a closed
 /// path's outline, or along an open path in front.
 pub(super) fn build(shapes: &[Shape], precision: f64) -> Option<(Vec<Region>, Vec<Shape>, Vec<Shape>)> {
@@ -379,7 +383,7 @@ pub(super) fn build(shapes: &[Shape], precision: f64) -> Option<(Vec<Region>, Ve
             })
             .collect()
     };
-    let lines: Vec<bool> = shapes.iter().map(|s| !crate::path::has_closed_subpath(&s.path)).collect();
+    let lines: Vec<bool> = shapes.iter().map(|s| !crate::path::has_filled_subpath(&s.path)).collect();
     let is_line = |i: usize| lines.get(i) == Some(&true);
     // An edge is the front-most input's. Every other open path along it has a piece there too.
     let edge_shapes = to_shapes(chains_by(edges, around, |e| vec![e.source]));
@@ -520,13 +524,16 @@ fn inside_edges(bp: &BezPath, edges: &[(Point, Point)], bb: kurbo::Rect) -> Opti
         // the sum of the crossings before it (one sort and one pass, not a winding per gap), and how
         // far rounding can have put it: `a.x + t (c.x - a.x)` is a few units in the last place of its
         // two terms off (of the x itself, not of the height of the path or of its widest x: two unit
-        // squares ten billion apart in height, or four hundred trillion out in x, are parts).
+        // squares ten billion apart in height, or four hundred trillion out in x, are parts). A vertical
+        // edge crosses at its x exactly (`t` times nothing is nothing), with no rounding to allow for: a
+        // unit square a quadrillion out is a part, though the allowance for a rounded crossing there is 0.9.
         let mut xs: Vec<(f64, i32, f64)> = edges
             .iter()
             .filter(|(a, c)| (a.y <= y) != (c.y <= y))
             .map(|(a, c)| {
                 let x = a.x + (y - a.y) / (c.y - a.y) * (c.x - a.x);
-                (x, if c.y > a.y { 1 } else { -1 }, 4.0 * f64::EPSILON * (x.abs() + (c.x - a.x).abs()))
+                let off = if c.x == a.x { 0.0 } else { 4.0 * f64::EPSILON * (x.abs() + (c.x - a.x).abs()) };
+                (x, if c.y > a.y { 1 } else { -1 }, off)
             })
             .collect();
         xs.sort_by(|a, b| a.0.total_cmp(&b.0));
@@ -586,11 +593,16 @@ fn inside_edges(bp: &BezPath, edges: &[(Point, Point)], bb: kurbo::Rect) -> Opti
 /// such a vertex. So a path that goes out and back along a line through other vertices than it went
 /// out by (which do not cancel as a retrace) puts no heights here but its two ends'.
 fn turning_heights(edges: &[(Point, Point)]) -> Vec<f64> {
-    // `(a, b)` then `(c, d)`: the second follows on from the first, in the same direction along one line
-    // (to a billionth of a radian: the rounding of points on a slanted line turns it by far less).
+    // `(a, b)` then `(c, d)`: the second follows on from the first, in the same direction along one line.
+    // On one line to within rounding: the vertex is no further from the line through its neighbours
+    // than a few units in the last place of its coordinates and of the two edges' lengths, which is
+    // where rounding puts points on a slanted line. An angle would not do: a vertex a tenth off the
+    // line between neighbours a billion away turns the edges by less than a billionth of a radian, and
+    // the bulge it makes encloses area that a line at no height of the search would cross.
     let straight_on = |(a, b): (Point, Point), (c, d): (Point, Point)| {
         let (u, v) = (b - a, d - c);
-        b == c && u.dot(v) > 0.0 && u.cross(v).abs() <= 1e-9 * u.hypot() * v.hypot()
+        let reach = (u + v).hypot();
+        b == c && u.dot(v) > 0.0 && u.cross(v).abs() <= 8.0 * f64::EPSILON * (b.x.abs().max(b.y.abs()) + u.hypot() + v.hypot()) * reach
     };
     let mut ys: Vec<f64> = Vec::with_capacity(edges.len());
     for (i, &edge) in edges.iter().enumerate() {

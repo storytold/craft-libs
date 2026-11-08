@@ -64,11 +64,15 @@ pub(crate) enum Work {
     FrameTries,
     /// Segments a planar map charged to wind points against, to find the fills of its faces and where its holes are.
     FillElements,
+    /// Segments of the subpaths of fills that a planar map wound points against, counted where each is wound.
+    FillWound,
+    /// Segments of the faces that a planar map wound the points of holes against, counted where each is wound.
+    HoleWound,
 }
 
 #[cfg(test)]
 thread_local! {
-    static COUNTS: std::cell::RefCell<[usize; 29]> = const { std::cell::RefCell::new([0; 29]) };
+    static COUNTS: std::cell::RefCell<[usize; 31]> = const { std::cell::RefCell::new([0; 31]) };
 }
 
 /// Counts `n` more of `what` on this thread (tests only).
@@ -93,5 +97,5 @@ pub(crate) fn take(what: Work) -> usize {
 /// Resets every count on this thread.
 #[cfg(test)]
 pub(crate) fn reset() {
-    COUNTS.with(|c| *c.borrow_mut() = [0; 29]);
+    COUNTS.with(|c| *c.borrow_mut() = [0; 31]);
 }

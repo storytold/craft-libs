@@ -81,6 +81,7 @@ impl Fill {
                 return None;
             }
             crate::work::add(crate::work::Work::FillSubpaths, 1);
+            crate::work::add(crate::work::Work::FillWound, sp.elements().len());
             winding = winding.saturating_add(sp.winding(p));
         }
         Some(crate::boolean::inside(self.rule, winding))
@@ -364,6 +365,7 @@ pub(super) fn unshear(path: BezPath, sorted: &[Point], tol: f64, back: Affine) -
     out
 }
 
+/// The root of `v` in the union-find forest `parent`, pointing each node passed at its grandparent.
 pub(super) fn find(parent: &mut [usize], mut v: usize) -> usize {
     while let Some(&p) = parent.get(v) {
         if p == v {

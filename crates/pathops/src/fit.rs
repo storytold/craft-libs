@@ -97,29 +97,48 @@ pub(crate) enum FitStop {
 /// Most times a stretch of points is split in two to fit it.
 const MAX_FIT_DEPTH: usize = 40;
 
-/// Fit a chain of cubics through `pts` with maximum (parametric) error `tol`.
+/// Fit a chain of cubics through `pts` within `tol` of the path they are samples of, which lies within
+/// `between` of their polyline (`(tol, between)`; a `between` of 0 when the polyline is the path).
 ///
 /// `t0` is the unit tangent leaving `pts[0]`; `t1` is the unit tangent arriving at the last point
 /// (forward direction). Consecutive output cubics are G1 continuous.
 ///
+/// A cubic is taken when its error at the points, how far it can be from the chords between its
+/// values at their parameters ([`spread`]), and `between` add up to `tol` at most: every point of
+/// the cubic is then within `tol` of the path, and every point of the path within `tol` of the cubic.
+///
 /// Each fit of a stretch of points is charged to `work` (its points times the rounds of
 /// reparameterisation it may take); an error when `work` runs out first, or when no fit within
 /// `tol` is found in [`MAX_FIT_DEPTH`] splits.
-pub(crate) fn fit_cubics(pts: &[Point], t0: Vec2, t1: Vec2, tol: f64, work: &mut usize) -> Result<Vec<CubicBez>, FitStop> {
+pub(crate) fn fit_cubics(pts: &[Point], t0: Vec2, t1: Vec2, tol: (f64, f64), work: &mut usize) -> Result<Vec<CubicBez>, FitStop> {
     fit_cubics_to_depth(pts, t0, t1, tol, work, MAX_FIT_DEPTH)
 }
 
 /// [`fit_cubics`] splitting a stretch at most `max_depth` times.
-fn fit_cubics_to_depth(pts: &[Point], t0: Vec2, t1: Vec2, tol: f64, work: &mut usize, max_depth: usize) -> Result<Vec<CubicBez>, FitStop> {
+fn fit_cubics_to_depth(
+    pts: &[Point],
+    t0: Vec2,
+    t1: Vec2,
+    (tol, between): (f64, f64),
+    work: &mut usize,
+    max_depth: usize,
+) -> Result<Vec<CubicBez>, FitStop> {
     let mut out = Vec::new();
     let pts = dedup(pts);
     if pts.len() < 2 {
         return Ok(out);
     }
-    fit_rec(&pts, t0, t1, tol.max(1e-9), &mut out, (0, max_depth), work)?;
+    // What is left of the tolerance for the cubic's own distance from the polyline; none, and no
+    // cubic is close enough.
+    let room = tol.max(1e-9) - between.max(0.0);
+    if room.is_nan() || room <= 0.0 {
+        return Err(FitStop::Depth);
+    }
+    fit_rec(&pts, t0, t1, room, &mut out, (0, max_depth), work)?;
     Ok(out)
 }
 
+/// `pts` without the points that lie within 1e-12 of the one kept before them.
 fn dedup(pts: &[Point]) -> Vec<Point> {
     let mut v: Vec<Point> = Vec::with_capacity(pts.len());
     for &p in pts {
@@ -130,12 +149,18 @@ fn dedup(pts: &[Point]) -> Vec<Point> {
     v
 }
 
-/// The fit of `pts` within `work` and the depth `(so far, most)`, or why there is none.
+/// The fit of `pts` within `work` and the depth `(so far, most)`, or why there is none. A cubic is
+/// taken when its error at the points and its [`spread`] add up to `tol` at most.
 fn fit_rec(pts: &[Point], t0: Vec2, t1: Vec2, tol: f64, out: &mut Vec<CubicBez>, depth: (usize, usize), work: &mut usize) -> Result<(), FitStop> {
     let n = pts.len();
     if n == 2 {
         let d = pts[0].distance(pts[1]) / 3.0;
-        out.push(CubicBez::new(pts[0], pts[0] + t0 * d, pts[1] - t1 * d, pts[1]));
+        let c = CubicBez::new(pts[0], pts[0] + t0 * d, pts[1] - t1 * d, pts[1]);
+        // Through both points, and no more points to split at: within the tolerance of their chord, or no fit.
+        if spread(&c, &[0.0, 1.0]) > tol {
+            return Err(FitStop::Depth);
+        }
+        out.push(c);
         return Ok(());
     }
     // A fit reads its points once, then again for each round of reparameterisation.
@@ -146,8 +171,8 @@ fn fit_rec(pts: &[Point], t0: Vec2, t1: Vec2, tol: f64, out: &mut Vec<CubicBez>,
     };
     *work = left;
     crate::work::add(crate::work::Work::Fit, cost);
-    let (c, err, split) = fit_single(pts, t0, t1);
-    if err <= tol {
+    let (c, err, split, u) = fit_with_params(pts, chord_params(pts), t0, t1);
+    if err + spread(&c, &u) <= tol {
         out.push(c);
         return Ok(());
     }
@@ -171,9 +196,16 @@ pub(crate) fn fit_single(pts: &[Point], t0: Vec2, t1: Vec2) -> (CubicBez, f64, u
 
 /// [`fit_single`] starting from the parameters `u` (one per point, 0 to 1) instead of the
 /// chord-length ones.
-pub(crate) fn fit_single_from(pts: &[Point], mut u: Vec<f64>, t0: Vec2, t1: Vec2) -> (CubicBez, f64, usize) {
+pub(crate) fn fit_single_from(pts: &[Point], u: Vec<f64>, t0: Vec2, t1: Vec2) -> (CubicBez, f64, usize) {
+    let (best, best_err, best_split, _) = fit_with_params(pts, u, t0, t1);
+    (best, best_err, best_split)
+}
+
+/// [`fit_single_from`], and the parameters of the points on the cubic its error is measured at.
+fn fit_with_params(pts: &[Point], mut u: Vec<f64>, t0: Vec2, t1: Vec2) -> (CubicBez, f64, usize, Vec<f64>) {
     let mut best = generate(pts, &u, t0, t1);
     let (mut best_err, mut best_split) = max_error(pts, &best, &u);
+    let mut best_u = u.clone();
     for _ in 0..MAX_REPARAM {
         for (i, ui) in u.iter_mut().enumerate() {
             *ui = newton(&best, pts[i], *ui);
@@ -184,13 +216,42 @@ pub(crate) fn fit_single_from(pts: &[Point], mut u: Vec<f64>, t0: Vec2, t1: Vec2
             best = c;
             best_err = e;
             best_split = s;
+            best_u.clone_from(&u);
         } else {
             break;
         }
     }
-    (best, best_err, best_split)
+    (best, best_err, best_split, best_u)
 }
 
+/// How far the cubic `c` can be from the polyline through its values at the parameters `u` (one per
+/// point it was fitted to, in order), with its ends at 0 and 1 added: an eighth of the bound on its
+/// second derivative times the square of the widest step between consecutive parameters.
+///
+/// A parameter `t` of `c` lies between two consecutive ones, `u_i` and `u_j`, a fraction `λ` of the way.
+/// `c(t)` is within this of the point that fraction along the chord from `c(u_i)` to `c(u_j)`; that
+/// point is within the larger of the errors at `i` and `j` of the point the same fraction along the
+/// chord between the points themselves; and a point of the points' polyline is within `between` of the
+/// path ([`fit_cubics`]). Each point of the path is near the cubic by the same steps the other way.
+fn spread(c: &CubicBez, u: &[f64]) -> f64 {
+    let mut widest: f64 = 0.0;
+    let mut last = 0.0;
+    for &t in u.iter().chain(std::iter::once(&1.0)) {
+        widest = widest.max((t - last).abs());
+        last = t;
+    }
+    0.75 * second_difference(c) * widest * widest
+}
+
+/// The larger of the two second differences of the control points of `c`: six times it bounds the
+/// second derivative of the curve.
+pub(crate) fn second_difference(c: &CubicBez) -> f64 {
+    let second = |a: Point, b: Point, c: Point| ((c - b) - (b - a)).hypot();
+    second(c.p0, c.p1, c.p2).max(second(c.p1, c.p2, c.p3))
+}
+
+/// The parameter of each of `pts` by the length of the polyline through them, from 0 at the first to 1
+/// at the last (all 0 when the polyline has no length).
 fn chord_params(pts: &[Point]) -> Vec<f64> {
     let mut u = Vec::with_capacity(pts.len());
     let mut acc = 0.0;
@@ -243,6 +304,8 @@ fn generate(pts: &[Point], u: &[f64], t0: Vec2, t1: Vec2) -> CubicBez {
     CubicBez::new(p0, p0 + t0 * al, p3 + dir_in * ar, p3)
 }
 
+/// The largest distance of `pts` from the cubic `c` at their parameters `u`, and the index of the point
+/// it is at (the middle one when all are on it).
 fn max_error(pts: &[Point], c: &CubicBez, u: &[f64]) -> (f64, usize) {
     let mut e = 0.0;
     let mut idx = pts.len() / 2;
@@ -256,6 +319,8 @@ fn max_error(pts: &[Point], c: &CubicBez, u: &[f64]) -> (f64, usize) {
     (e, idx)
 }
 
+/// One Newton step from `t` towards the parameter of the point of `c` nearest `p`, kept in `[0, 1]`
+/// (`t` itself where the step is not defined).
 fn newton(c: &CubicBez, p: Point, t: f64) -> f64 {
     let d1 = c.deriv();
     let d2 = d1.deriv();
@@ -304,17 +369,18 @@ mod tests {
         let mut pts = Vec::new();
         sample(&c, 40, &mut pts, true);
         let mut work = usize::MAX;
-        let out = fit_cubics(&pts, start_tangent(&c), end_tangent(&c), 0.05, &mut work).unwrap();
+        let out = fit_cubics(&pts, start_tangent(&c), end_tangent(&c), (0.05, 0.0), &mut work).unwrap();
         assert_eq!(out.len(), 1);
         assert!(out[0].p1.distance(c.p1) < 1.0, "{:?}", out[0]);
     }
 
     #[test]
     fn splits_when_needed() {
-        // A zig-zag cannot be fitted with one cubic.
-        let pts: Vec<Point> = (0..=40).map(|i| Point::new(i as f64, ((i as f64) * 0.5).sin() * 10.0)).collect();
+        // A zig-zag cannot be fitted with one cubic. (Its points are taken for the path, as their
+        // polyline: dense enough that cubics can follow it within the tolerance.)
+        let pts: Vec<Point> = (0..=800).map(|i| Point::new(f64::from(i) * 0.05, (f64::from(i) * 0.025).sin() * 10.0)).collect();
         let mut work = usize::MAX;
-        let out = fit_cubics(&pts, Vec2::new(1.0, 0.0), Vec2::new(1.0, 0.0), 0.1, &mut work).unwrap();
+        let out = fit_cubics(&pts, Vec2::new(1.0, 0.0), Vec2::new(1.0, 0.0), (0.1, 0.0), &mut work).unwrap();
         assert!(out.len() > 1);
         for w in out.windows(2) {
             assert!(w[0].p3.distance(w[1].p0) < 1e-9);
@@ -325,21 +391,21 @@ mod tests {
     /// given as if it were within the tolerance, and the work is not spent as if it had run out.
     #[test]
     fn a_fit_that_runs_out_of_splits_is_an_error_not_a_cubic_out_of_tolerance() {
-        let pts: Vec<Point> = (0..=40).map(|i| Point::new(f64::from(i), (f64::from(i) * 0.5).sin() * 10.0)).collect();
+        let pts: Vec<Point> = (0..=800).map(|i| Point::new(f64::from(i) * 0.05, (f64::from(i) * 0.025).sin() * 10.0)).collect();
         let (t0, t1) = (Vec2::new(1.0, 0.0), Vec2::new(1.0, 0.0));
         let mut work = usize::MAX;
-        assert_eq!(fit_cubics_to_depth(&pts, t0, t1, 0.1, &mut work, 0), Err(FitStop::Depth));
+        assert_eq!(fit_cubics_to_depth(&pts, t0, t1, (0.1, 0.0), &mut work, 0), Err(FitStop::Depth));
         assert!(work > usize::MAX / 2, "the work left is what the one fit tried cost: {}", usize::MAX - work);
         // With room to split the cubics given are within the tolerance of the points.
         let mut work = usize::MAX;
-        let out = fit_cubics(&pts, t0, t1, 0.1, &mut work).unwrap();
+        let out = fit_cubics(&pts, t0, t1, (0.1, 0.0), &mut work).unwrap();
         for p in &pts {
             let near = out.iter().map(|c| kurbo::ParamCurveNearest::nearest(c, *p, 1e-9).distance_sq.sqrt()).fold(f64::INFINITY, f64::min);
             assert!(near <= 0.1 + 1e-6, "{p:?} is {near} from the fit");
         }
         // Work that runs out is the other error.
         let mut little = 100;
-        assert_eq!(fit_cubics(&pts, t0, t1, 0.1, &mut little), Err(FitStop::Work));
+        assert_eq!(fit_cubics(&pts, t0, t1, (0.1, 0.0), &mut little), Err(FitStop::Work));
         assert_eq!(little, 0);
     }
 

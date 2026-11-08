@@ -250,6 +250,15 @@ fn outline_cuts_an_open_cubic_at_both_visits_of_the_point_where_it_crosses_itsel
     shut.close_path();
     let pieces = pathfinder(PathfinderOp::Outline, &[Shape::new(shut.clone(), NZ, 1)]);
     assert_eq!(pieces.len(), 2, "the loop, and the rest of the outline");
+    // The whole outline, each piece from the crossing to the crossing, and not the loop twice: one
+    // piece passes through (50, -50).
+    let total: f64 = pieces.iter().map(|s| length(&s.path)).sum();
+    assert!(close(total, length(&shut), 1e-6), "{total} against {}", length(&shut));
+    for s in &pieces {
+        assert!(matches!(ends(s), (Some(a), Some(b)) if a.distance(p) < 1e-6 && b.distance(p) < 1e-6), "{:?}", ends(s));
+    }
+    let corner = Point::new(50.0, -50.0);
+    assert!(pieces.iter().any(|s| s.path.elements().iter().filter_map(PathEl::end_point).any(|q| q.distance(corner) < 1e-9)));
 }
 
 #[test]

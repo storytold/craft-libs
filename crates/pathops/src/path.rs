@@ -293,6 +293,13 @@ pub(crate) fn has_open_subpath(path: &BezPath) -> bool {
     draws
 }
 
+/// Whether some subpath fills: one with a segment that is closed, or an open one of one cubic that
+/// comes back to its start round an area ([`Sub::closed_if_one_cubic_loop`]), which a planar map fills
+/// as a closed one. A path with none is a line there, whose pieces are cutting edges.
+pub(crate) fn has_filled_subpath(path: &BezPath) -> bool {
+    has_closed_subpath(path) || subs(path).into_iter().any(|sp| !sp.closed && sp.closed_if_one_cubic_loop().closed)
+}
+
 /// Whether some subpath with a segment is closed (reads the elements, copies nothing).
 pub(crate) fn has_closed_subpath(path: &BezPath) -> bool {
     let mut draws = false;

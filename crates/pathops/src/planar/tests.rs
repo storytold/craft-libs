@@ -1451,16 +1451,26 @@ fn open_paths_level_in_each_of_the_ten_shears_are_framed_by_one_between_their_sl
     assert_eq!(frame_for(&lines[..9]).map(|f| f.k()), Some(SHEARS[9]));
     assert_eq!(work::take(Work::FrameTries), SHEARS.len());
     // Lines 9e-6 long (nine tolerances), one level in each shear: each is level in the shears within
-    // about 0.44 of its own, which cover all of them.
+    // about 0.12 of its own, which leave the shears about 3/8 free.
     let short: Vec<Shape> = SHEARS
         .iter()
         .enumerate()
         .map(|(i, k)| Shape::new(line_path((0.0, 100.0 * i as f64), (9e-6, 100.0 * i as f64 - k * 9e-6)), FillRule::NonZero, i as u64))
         .collect();
     work::reset();
-    assert!(frame_for(&short).is_none(), "no shear is free");
+    assert_eq!(frame_for(&short).map(|f| f.k()), Some(3.0 / 8.0));
+    assert_eq!(work::take(Work::FrameTries), SHEARS.len() + 1);
+    // Lines that long sloping 0, -1/10, ..., -1/2: each of the ten shears levels one, and between
+    // them they level every shear from 1/1024 to 1/2, so none is free.
+    let level: Vec<Shape> = (0u8..6)
+        .map(|i| {
+            Shape::new(line_path((0.0, 100.0 * f64::from(i)), (9e-6, 100.0 * f64::from(i) - f64::from(i) * 9e-7)), FillRule::NonZero, u64::from(i))
+        })
+        .collect();
+    work::reset();
+    assert!(frame_for(&level).is_none(), "no shear is free");
     assert_eq!(work::take(Work::FrameTries), SHEARS.len(), "and none more is tried");
-    assert_eq!(live_paint(&short), (Vec::new(), Vec::new()));
+    assert_eq!(live_paint(&level), (Vec::new(), Vec::new()));
     // Ordinary art is framed at the first try.
     work::reset();
     assert!(frame_for(&[Shape::new(line_path((0.0, 0.0), (10.0, 10.0)), FillRule::NonZero, 0)]).is_some());
@@ -1560,15 +1570,29 @@ fn tall_nested(n: usize) -> Shape {
 /// cost each face the subpaths round it, and each hole the faces round it: about 6 n² elements.
 #[test]
 fn the_fill_work_of_a_map_is_charged_before_each_test_and_held_to_its_limit() {
-    let charged = |n: usize, limit: usize| {
+    // The faces, the elements charged, the subpaths of the fill wound against, and the elements wound
+    // against: of fills and of faces (for holes), counted at the windings themselves, not at the charges.
+    let measured = |n: usize, limit: usize| {
         let l = crate::Limits { fill_work: limit, ..crate::Limits::default() };
         work::reset();
         let (faces, _) = crate::with_limits(l, || live_paint(&[tall_nested(n)]));
-        (faces.len(), work::take(Work::FillElements), work::take(Work::FillSubpaths))
+        let charged = (faces.len(), work::take(Work::FillElements), work::take(Work::FillSubpaths));
+        (charged, (work::take(Work::FillWound), work::take(Work::HoleWound)))
     };
-    let (faces, w100, wound) = charged(100, usize::MAX);
+    // Every element wound was charged first, and no more than the limit is wound: of fills and of holes.
+    let charged = |n: usize, limit: usize| {
+        let (charged, (fills, holes)) = measured(n, limit);
+        assert!(fills + holes == charged.1 && charged.1 <= limit, "{fills} + {holes} wound, {} charged, of {limit}", charged.1);
+        charged
+    };
+    let ((faces, w100, wound), (fills, holes)) = measured(100, usize::MAX);
     assert_eq!(faces, 100);
     assert!((5 * 100 * 100..=7 * 100 * 100).contains(&w100), "{w100}");
+    assert!(fills > 0 && holes > 0 && fills + holes == w100, "{fills} and {holes} wound of {w100} charged");
+    // Short of the work, each winding charged before the budget ran out is made, and none after.
+    for limit in [w100 / 2, w100 / 10, 1] {
+        assert_eq!(charged(100, limit).0, 0, "{limit}");
+    }
     let (faces, w200, _) = charged(200, usize::MAX);
     assert_eq!(faces, 200);
     assert!(w200 > 39 * w100 / 10 && w200 < 41 * w100 / 10, "{w100} and {w200}: twice as deep, four times the work");

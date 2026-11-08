@@ -205,13 +205,21 @@ fn level_sides(open: &BezPath, eps: f64) -> Level {
 }
 
 /// A shear in `[1/1024, 1/2]` in which no long side of the open subpaths `opens` (in the document's
-/// frame: a chord, or a side of a control polygon) is level, the tolerance being about `eps`. A side
-/// `d` is level in the shear `-dy / dx`, and level after snapping in those within `4 eps / |dx|` of
-/// it; the middle of the widest stretch of shears that levels no long side is used, a multiple of
-/// 2^-14 where the stretch holds one (so that a grid of coordinates stays exact). `None` when the long
-/// sides level every shear in the range.
+/// frame: a chord, or a side of a control polygon) is level, the tolerance being `eps` at most. A side
+/// `d` is level in the shear `-dy / dx`, and in a shear `k` it rises by `|dy + k dx|`. Snapping
+/// ([`snap_horizontals`]) moves each anchor down by under one tolerance, so a side between two anchors
+/// is level after it only where it rose by under one tolerance (heights snapped apart are a tolerance
+/// apart or more), or by under a millionth of its length more ([`is_level`]): only in the shears
+/// within about `eps / |dx|` of its own. A side to a handle may be levelled by three tolerances (the
+/// handle moves with its anchor and is levelled with one), so its stretch is three times as wide. The
+/// middle of the widest stretch of shears that levels no long side is used, a multiple of 2^-14 where
+/// the stretch holds one (so that a grid of coordinates stays exact); [`frame_for`] checks it like the
+/// others. `None` when the long sides level every shear in the range.
 fn free_shear(opens: &BezPath, eps: f64) -> Option<f64> {
     let (lo, hi) = (1.0 / 1024.0, 0.5);
+    // A sixteenth of a tolerance more for the rounding of the shear itself (a unit in the last place
+    // of the coordinates, which the tolerance is 64 of).
+    let half_width = |d: kurbo::Vec2, tolerances: f64| tolerances * eps * (17.0 / 16.0) / d.x.abs() + 2e-6;
     let mut barred: Vec<(f64, f64)> = Vec::new();
     for seg in opens.segments() {
         let pts: Vec<Point> = match seg {
@@ -220,9 +228,11 @@ fn free_shear(opens: &BezPath, eps: f64) -> Option<f64> {
             PathSeg::Cubic(c) => vec![c.p0, c.p1, c.p2, c.p3],
         };
         let (first, last) = (pts.first().copied().unwrap_or(Point::ZERO), pts.last().copied().unwrap_or(Point::ZERO));
-        for d in pts.windows(2).map(|w| w[1] - w[0]).chain(std::iter::once(last - first)) {
+        // A line's one side is its chord, between its anchors; a curve's sides each have a handle.
+        let handles = if pts.len() > 2 { pts.windows(2).map(|w| (w[1] - w[0], 3.0)).collect() } else { Vec::new() };
+        for (d, tolerances) in handles.into_iter().chain(std::iter::once((last - first, 1.0))) {
             if d.hypot() > NOISE_SIDE * eps && d.x != 0.0 {
-                let (k, w) = (-d.y / d.x, 4.0 * eps / d.x.abs());
+                let (k, w) = (-d.y / d.x, half_width(d, tolerances));
                 barred.push((k - w, k + w));
             }
         }
@@ -276,6 +286,7 @@ impl std::ops::Add for Crossings {
 }
 
 impl std::ops::AddAssign for Crossings {
+    /// Adds `rhs`'s count of each slot to this one's, keeping the slots in order and none of zero.
     fn add_assign(&mut self, rhs: Self) {
         if rhs.0.is_empty() {
             return;
@@ -497,7 +508,7 @@ impl<T> RectIndex<T> {
 
 /// A segment's footprint in a [`RectIndex`]: the bounds of its pieces about a cell long, so a long
 /// diagonal is filed as pieces that keep to it, not as the bounds that take in everything it crosses.
-pub(super) fn segment_footprint(bounds: &kurbo::Rect, seg: &PathSeg, cell: f64) -> Vec<kurbo::Rect> {
+pub(crate) fn segment_footprint(bounds: &kurbo::Rect, seg: &PathSeg, cell: f64) -> Vec<kurbo::Rect> {
     let pieces = (bounds.width().max(bounds.height()) / cell).ceil();
     // A count past the cap gives longer pieces, each filed under more cells.
     if pieces.is_nan() || pieces <= 1.0 {

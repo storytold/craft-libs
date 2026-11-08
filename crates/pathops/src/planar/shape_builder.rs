@@ -3,7 +3,7 @@
 
 use super::map::build;
 use super::*;
-use crate::path::{has_closed_subpath, has_open_subpath, subs};
+use crate::path::{has_filled_subpath, has_open_subpath, subs};
 
 /// Most segments [`shape_builder`] sweeps into its planar map (open paths as edges, the gaps closed
 /// paths enclose, outline edges); past this only the filled areas count. It is the default of
@@ -20,12 +20,13 @@ pub const SHAPE_BUILDER_MAX_SEGMENTS: usize = 65_536;
 #[non_exhaustive]
 pub struct BuilderArrangement {
     pub regions: Vec<Region>,
-    /// The pieces of the paths with no closed subpath, keyed by input index.
+    /// The pieces of the paths with no filled subpath (none closed, nor an open loop of one cubic that
+    /// fills as a closed one), keyed by input index.
     pub lines: Vec<Shape>,
     /// The pieces of the other paths' outlines, keyed by input index (the front-most where inputs
     /// share one); only when asked for.
     pub edges: Vec<Shape>,
-    /// The pieces of the paths with no closed subpath that lie under the outline of a closed path
+    /// The pieces of the paths with no filled subpath that lie under the outline of a closed path
     /// in front of them, or along another such path in front of them, keyed by input index. No
     /// piece of theirs is in `lines`; there the edge is the path's in front (in `edges` when it is
     /// a closed path's and they were asked for, else in `lines`).
@@ -74,7 +75,8 @@ pub(crate) fn builder(shapes: &[Shape], edges: bool, precision: f64) -> BuilderA
     let Some((faces, pieces, under)) = planar else {
         return BuilderArrangement { regions: filled_regions(shapes, precision), ..Default::default() };
     };
-    let lines: Vec<bool> = shapes.iter().map(|s| !has_closed_subpath(&s.path)).collect();
+    // A shape with a filled subpath (an open loop of one cubic among them) gives outline edges, not lines.
+    let lines: Vec<bool> = shapes.iter().map(|s| !has_filled_subpath(&s.path)).collect();
     let is_line = |i: u64| usize::try_from(i).ok().and_then(|i| lines.get(i)) == Some(&true);
     let (lines, outline): (Vec<Shape>, Vec<Shape>) = pieces.into_iter().partition(|e| is_line(e.key));
     let regions = if has_open {

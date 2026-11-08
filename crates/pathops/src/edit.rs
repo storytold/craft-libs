@@ -7,7 +7,7 @@
 use kurbo::{BezPath, CubicBez, PathSeg, Point, Vec2};
 
 use crate::budget::fits_elements;
-use crate::fit::{end_tangent, fit_cubics, fit_single, is_straight, measured_arclen, sample, start_tangent};
+use crate::fit::{end_tangent, fit_cubics, fit_single, is_straight, measured_arclen, sample, second_difference, start_tangent};
 use crate::path::{Seg, Sub, segs_to_bezpath, subs};
 use crate::work::{self, Work};
 
@@ -184,13 +184,6 @@ fn chord_intervals(c: &CubicBez, within: f64) -> Option<usize> {
     (need.is_finite() && need <= MAX_CHORD_INTERVALS as f64).then_some(need as usize)
 }
 
-/// The larger of the two second differences of the control points of `c`: six times it bounds the
-/// second derivative of the curve.
-fn second_difference(c: &CubicBez) -> f64 {
-    let second = |a: Point, b: Point, c: Point| ((c - b) - (b - a)).hypot();
-    second(c.p0, c.p1, c.p2).max(second(c.p1, c.p2, c.p3))
-}
-
 /// How far the segment `s`, sampled in `m` intervals of equal parameter, can be from the polyline of
 /// its samples between two of them ([`chord_intervals`]'s bound, `0.75 d / m²`). A line is on its
 /// chords. A cubic straight to within `straight` of its chord lies, with its samples, in the strip of
@@ -289,8 +282,10 @@ fn fit_piece(piece: &[Seg], pts: Vec<Point>, (tol, between): (f64, f64), opts: &
     let (Some(first), Some(last)) = (piece.first(), piece.last()) else { return true };
     let (t0, t1) = (start_tangent(&first.c), end_tangent(&last.c));
     // Out of work, or no fit within the tolerance: the piece stays as it is (the work is spent only
-    // in the first case).
-    let Ok(cubics) = fit_cubics(&pts, t0, t1, tol, &mut fit.work) else { return false };
+    // in the first case). The fit is held to the tolerance between the samples too, which the piece
+    // can be `between` from (with smoothing, the tolerance is from the smoothed points' polyline).
+    let between = if opts.smooth > 0.0 { 0.0 } else { between };
+    let Ok(cubics) = fit_cubics(&pts, t0, t1, (tol, between), &mut fit.work) else { return false };
     for c in cubics {
         let line = is_straight(&c, tol * 0.02);
         result.push(if line { Seg::line(c.p0, c.p3) } else { Seg { c, line } });

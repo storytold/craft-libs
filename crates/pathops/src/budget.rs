@@ -96,7 +96,8 @@ pub const MAX_PASS_WORK: usize = 1 << 25;
 /// and a hole against each face whose bounds hold it, so contours nested n deep cost about the square
 /// of n: rectangles nested 4,000 deep in one shape about 64 million (each of four segments). Each
 /// test is charged before it is made; past the limit the map is not built (`live_paint` gives
-/// nothing, `shape_builder` and Divide the filled areas, as for any map that cannot be built).
+/// nothing, and `shape_builder` and Divide fall back to the filled areas, as for any map that cannot be
+/// built: an answer, but not the arrangement asked for, its faces unsplit by the open paths).
 pub const MAX_FILL_WORK: usize = 1 << 26;
 
 /// Most path elements (a move, a close, and a segment each) all the paths of one operation may
@@ -249,6 +250,7 @@ fn fenwick_step(i: usize) -> usize {
 }
 
 impl Counts {
+    /// Adds `d` to the count of `slot`.
     fn add(&mut self, slot: usize, d: isize) {
         let mut i = slot + 1;
         while let Some(c) = self.0.get_mut(i) {
@@ -571,6 +573,8 @@ struct Segments {
 }
 
 impl Segments {
+    /// Reads the segments of `p`: their bounds, kinds, ends and the heights of their pieces, which of them
+    /// follow one another, the largest coordinate, and the bounds of the whole path.
     fn add_path(&mut self, p: &BezPath) {
         work::add(Work::Visited, p.elements().len());
         for el in p.elements() {
@@ -621,6 +625,7 @@ impl Segments {
         self.inputs.extend(whole);
     }
 
+    /// Counts the segments `a` and `b` as touching where one ends and the other starts.
     fn touch(&mut self, a: usize, b: usize) {
         if let (Some(Kind::Curve(_)), Some(Kind::Curve(_))) = (self.kind.get(a), self.kind.get(b)) {
             for i in [a, b] {

@@ -109,6 +109,7 @@ fn only(mut it: impl Iterator<Item = usize>) -> Option<usize> {
     it.next().is_none().then_some(first)
 }
 
+/// `path` as the one shape of a result, keyed `key` and filled non-zero; none when it is empty.
 fn one(path: BezPath, key: u64) -> Vec<Shape> {
     if path.elements().is_empty() { Vec::new() } else { vec![Shape::new(path, FillRule::NonZero, key)] }
 }
@@ -128,6 +129,7 @@ pub fn pathfinder_with(op: PathfinderOp, shapes: &[Shape], precision: f64) -> Ve
     guarded(|| pathfinder_unguarded(op, shapes, precision)).unwrap_or_default()
 }
 
+/// [`pathfinder_with`] without the guard that turns a panic into no result.
 fn pathfinder_unguarded(op: PathfinderOp, shapes: &[Shape], precision: f64) -> Vec<Shape> {
     let precision = if precision.is_finite() && precision > 0.0 { precision } else { DEFAULT_PRECISION };
     let n = shapes.len();
@@ -405,6 +407,7 @@ struct CoverIds {
 }
 
 impl CoverIds {
+    /// The lists of covering inputs, filed by their hashes.
     fn new(lists: Vec<Vec<usize>>) -> Self {
         let mut by_hash: HashMap<u64, Vec<usize>> = HashMap::new();
         for (i, l) in lists.iter().enumerate() {
