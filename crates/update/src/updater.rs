@@ -313,10 +313,12 @@ impl Updater {
     }
 
     /// Opens the startup prompt for a release the app found itself. After a failed update the
-    /// prompt says why it failed, like the one a check opens.
+    /// prompt says why it failed, like the one a check opens. Opening the prompt sets
+    /// [`Self::status`] to [`Status::Idle`].
     pub fn offer(&mut self, release: Release) {
         if self.install.is_none() && !self.installed && !self.read_choice() {
             self.open_offer(release);
+            self.status = Status::Idle;
         }
     }
 
@@ -1503,6 +1505,7 @@ mod tests {
         assert_eq!(u.status(), &Status::InstallFailed("disk full".into()));
         u.offer(newer());
         assert_eq!(u.prompt.as_ref().and_then(StartupPrompt::message).as_deref(), Some("The update could not be installed: disk full"));
+        assert_eq!(u.status(), &Status::Idle, "the prompt carries the reason");
         u.prompt = None;
         u.offer(newer());
         assert_eq!(u.prompt.as_ref().and_then(StartupPrompt::message), None, "the reason is shown once");
