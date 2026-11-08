@@ -37,7 +37,7 @@ impl FileData {
 /// A message from the host.
 pub enum Message {
     /// What the host supports; `handoff`: it routes files the app hands off; `autosave`: it
-    /// stores every ordinary `save` in place (the same file again; not `saveAs` or an export), so the app may save by itself after
+    /// stores every `save` of the open document in place, in the order received (an export or `saveAs` is a different file, told apart by its name), so the app may save by itself after
     /// each change.
     Host { version: String, handoff: bool, autosave: bool },
     /// Open a document as File › Open would. `name` is already cleaned ([`crate::file_name`]).
