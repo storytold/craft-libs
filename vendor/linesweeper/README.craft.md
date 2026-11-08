@@ -1,15 +1,21 @@
 # Local linesweeper 0.5.0 copy
 
-This is the crates.io linesweeper 0.5.0 package (MIT OR Apache-2.0) with some files left out and no
-file changed. `.cargo_vcs_info.json` names the commit it was packaged from,
+This is the crates.io linesweeper 0.5.0 package (MIT OR Apache-2.0) with some files left out and the
+local patches listed below. `.cargo_vcs_info.json` names the commit it was packaged from,
 `824b0791a750f7b27b8edcbb6c6244d0e629875e`. That commit is not in the GitHub repository the manifest
 names, which is archived; its README says development moved off GitHub.
 
-Every file here except this one and `SOURCE.json` is byte for byte the file in the `.crate` archive.
-`SOURCE.json` records the hash of the `.crate` download (`source_archive_sha256`) and, for every file
-kept, the hash in the package (`source_sha256`) and the hash here (`sha256`). `upstream_repository` is
-null because no public repository this copy can name holds `upstream_revision`. `local_patches` is
-empty.
+Every file here except this one, `SOURCE.json` and the patched files below is byte for byte the file
+in the `.crate` archive. `SOURCE.json` records the hash of the `.crate` download
+(`source_archive_sha256`) and, for every file kept, the hash in the package (`source_sha256`) and the
+hash here (`sha256`). `upstream_repository` is null because no public repository this copy can name
+holds `upstream_revision`. `local_patches` describes each local patch.
+
+## Local patches
+
+| File | Change |
+|---|---|
+| `src/curve/mod.rs` | `intersect_cubics_rec` calls the new `order_from_control_points` after cutting both cubics to their shared y-range. It bounds the x gap between the two pieces by the smallest and largest control point x gap, widened by the largest control point y gap times a bound on `\|dx/dy\|` from the control polygon (`max_slope`). When that range stays more than `ish_tolerance` on one side of zero, the whole range gets `Left` or `Right` and the comparison does not recurse. Before, two nearly parallel cubics split their shared y-range into about `(height / ish_tolerance)^(1/3)` pieces even when they stayed more than `ish_tolerance` apart: a tall S-shaped cubic and a copy moved 10 * `ish_tolerance` sideways took 4,096 recursion leaves at height 1e6 and 16,384 at height 1e8; now each takes one. The `near_parallel_cubics_are_ordered_without_recursing` test counts the entries for that pair, `control_point_order_is_sound` checks every order the control points give against sampled gaps, and `control_point_order_keeps_band_contours` checks that the contours of a tall wavy band and a moved copy do not change. |
 
 `omitted_files` lists the 43 files of the package left out here, with their hashes:
 
