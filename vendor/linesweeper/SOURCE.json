@@ -7,7 +7,9 @@
   "upstream_repository": null,
   "upstream_revision": "824b0791a750f7b27b8edcbb6c6244d0e629875e",
   "upstream_directory": "",
-  "local_patches": [],
+  "local_patches": [
+    "In `src/lib.rs`, `binary_op` returns the new `Error::FeatureBelowTolerance { eps }` when its automatic `eps` (64 * `f64::EPSILON` times the largest coordinate magnitude) is above `MIN_AUTO_EPS` (1e-6) and an input subpath at least `4 * MIN_AUTO_EPS` wide and high is narrower than `FEATURE_EPS_RATIO * eps` (4 * eps) in x or y, measured on the subpath's exact bounding box. Without it, one far point raises `eps` for every segment and `binary_op` returns `Ok` without the small subpaths: with a triangle at 3e13 (eps 0.43) a 0.3 x 10 sliver near the origin is lost, and at 1e15 (eps 14.2) most of a 10 x 10 square is. The docs of `binary_op` and `binary_op_with_eps` state that `eps` is one absolute tolerance for every segment and that the check does not see a thin part of a larger subpath or a narrow gap between subpaths. The test `tests::far_point_eps` covers it."
+  ],
   "files": [
     { "path": ".cargo_vcs_info.json", "source_sha256": "47fba6a9dbdf445a5c97f783c9be62093035f9d5e5cdc2cf3216ad8259bcd8fc", "source_git_blob": null, "sha256": "47fba6a9dbdf445a5c97f783c9be62093035f9d5e5cdc2cf3216ad8259bcd8fc" },
     { "path": ".gitignore", "source_sha256": "88b59092499ae05234330eb7d0b01e953e969caf05261530e3765eef02536cf0", "source_git_blob": null, "sha256": "88b59092499ae05234330eb7d0b01e953e969caf05261530e3765eef02536cf0" },
@@ -37,7 +39,7 @@
     { "path": "src/curve/transverse.rs", "source_sha256": "be9c695531f4cb0fe73af13e78040b51b9476c193d84562e701aadd07b3fd06e", "source_git_blob": null, "sha256": "be9c695531f4cb0fe73af13e78040b51b9476c193d84562e701aadd07b3fd06e" },
     { "path": "src/generators.rs", "source_sha256": "cc9f2441546db9204219294c354449809dda77dffad06fec8a30f45df01e6fef", "source_git_blob": null, "sha256": "cc9f2441546db9204219294c354449809dda77dffad06fec8a30f45df01e6fef" },
     { "path": "src/geom.rs", "source_sha256": "9878ffa6d4a13fa2c9149741c137205ca01acb626a5b9f86a3db75cf91b63a08", "source_git_blob": null, "sha256": "9878ffa6d4a13fa2c9149741c137205ca01acb626a5b9f86a3db75cf91b63a08" },
-    { "path": "src/lib.rs", "source_sha256": "761c153c3b5c449569ff85c571344b9252ea64f7f0b0424fb4819041b03d13c6", "source_git_blob": null, "sha256": "761c153c3b5c449569ff85c571344b9252ea64f7f0b0424fb4819041b03d13c6" },
+    { "path": "src/lib.rs", "source_sha256": "761c153c3b5c449569ff85c571344b9252ea64f7f0b0424fb4819041b03d13c6", "source_git_blob": null, "sha256": "cded21f03af6dc57b79d0d4db361ae0ea0510b59866500069cc3e1de70e78b88" },
     { "path": "src/num.rs", "source_sha256": "39ff85da50c500ce91cf6dea81aedc0dcca1db5e7d0506696dde2da118e93a2a", "source_git_blob": null, "sha256": "39ff85da50c500ce91cf6dea81aedc0dcca1db5e7d0506696dde2da118e93a2a" },
     { "path": "src/order.rs", "source_sha256": "7e5b04eae8af134abb032e995f1d3c2ac473822923dfee8d463d9ade6ffeb596", "source_git_blob": null, "sha256": "7e5b04eae8af134abb032e995f1d3c2ac473822923dfee8d463d9ade6ffeb596" },
     { "path": "src/perturbation.rs", "source_sha256": "fa274a822bbdf65f8e53e403eef78034dd87964b3f1d3134a064df4ec8cef9c5", "source_git_blob": null, "sha256": "fa274a822bbdf65f8e53e403eef78034dd87964b3f1d3134a064df4ec8cef9c5" },
