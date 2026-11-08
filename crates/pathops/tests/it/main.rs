@@ -10,6 +10,7 @@ mod common;
 
 mod hostile_params;
 mod limits;
+mod offset_faces;
 mod ops;
 mod pathfinder_pinned;
 mod prop_pathops;

@@ -499,6 +499,14 @@ bit for bit VectorCraft's), and the results are identical except where noted:
     out a contour that encloses no more area than a strip twice the sweep's tolerance wide along it: the
     sweep keeps a cubic that goes out and back along one line as two passes a rounding apart, and an inset of a
     square 1e8 across with such a cubic 0.29 high on its edge cut a notch round it;
+  - an offset judges a contour of its arrangement spurious by a point of its face, the contour less the
+    contours directly inside it (an outer contour's holes, a hole's islands), where it took a point of the
+    contour alone, which can lie in one of them near the path, and dropped a face that was right with all
+    inside it. A 100 x 100 square with a 20 x 20 hole from x = 50, or from 50.2 or 30.1, had an inset by 0.25
+    of nothing (it is 9,480), and by 5 of nothing (7,200); so did slits through the middle, at widths from
+    0.01 to 10; a 60 x 60 hole with a 30 x 2 bar across its middle was filled by an outset of 3 (11,236, where
+    8,608 is right); and the outline of open subpaths an inset adds lost a hole round an open bar. None of the
+    random stacks of the comparison changes;
   - `interior_point` drops edges that retrace each other exactly (a zero of either sign is one coordinate),
     tries heights between the vertices where the path turns (a straight retrace through other vertices than it
     went out by used up the heights; a vertex is passed straight through when it lies within the rounding of

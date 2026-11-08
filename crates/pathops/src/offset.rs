@@ -408,7 +408,8 @@ fn offset_with_check<W>(
     // When `d` exceeds a curvature radius the stroker's inner offset inverts and its loops cancel
     // winding, leaving faces uncovered that are really within `d` of the path. Every face of the
     // true offset is bounded by arrangement edges, so a contour is spurious iff a point deep inside
-    // it lies closer than `d`: holes when growing, islands when insetting.
+    // its face (the contours directly inside it left out) lies closer than `d`: holes when growing,
+    // islands when insetting.
     let drop_outer = delta < 0.0;
     let source = std::cell::LazyCell::new(|| index(&if drop_outer { closed.clone() } else { canonical(path) }));
     let result = without_spurious(&c, drop_outer, d, |p, r| near(&source, p, r));
@@ -428,11 +429,32 @@ fn offset_with_check<W>(
 }
 
 /// The contours `c` of a stroke's arrangement, without those that are spurious: an outer contour
-/// (`drop_outer`) or a hole (not) with a point deep inside it that `within` finds closer than `d` to
-/// the path that was stroked, and everything inside such a contour.
+/// (`drop_outer`) or a hole (not) with a point deep inside its face that `within` finds closer than `d`
+/// to the path that was stroked, and everything inside such a contour.
+///
+/// The face is the contour with the contours directly inside it left out (the holes of an outer
+/// contour, the islands of a hole): a point inside the contour alone can lie in one of them, by an
+/// edge of the path, and a face that is right was dropped (a square with a hole whose edge runs
+/// through the square's middle had an inset of nothing).
 fn without_spurious(c: &Contours, drop_outer: bool, d: f64, within: impl Fn(kurbo::Point, f64) -> bool) -> BezPath {
-    let spurious: Vec<bool> =
-        c.contours().map(|k| k.outer == drop_outer && deep_point(&k.path).is_some_and(|p| within(p, d * (1.0 - 1e-4) - 1e-6))).collect();
+    let mut inside: Vec<Vec<usize>> = vec![Vec::new(); c.contours().count()];
+    for (i, k) in c.contours().enumerate() {
+        if let Some(list) = k.parent.and_then(|ContourIdx(p)| inside.get_mut(p)) {
+            list.push(i);
+        }
+    }
+    let face = |i: usize, k: &linesweeper::topology::Contour| {
+        let mut face = k.path.clone();
+        for &j in inside.get(i).into_iter().flatten() {
+            face.extend(c[ContourIdx(j)].path.iter());
+        }
+        face
+    };
+    let spurious: Vec<bool> = c
+        .contours()
+        .enumerate()
+        .map(|(i, k)| k.outer == drop_outer && deep_point(&face(i, k)).is_some_and(|p| within(p, d * (1.0 - 1e-4) - 1e-6)))
+        .collect();
     if spurious.contains(&true) {
         let keep = (0..spurious.len()).filter(|&i| !has_marked_ancestor(c, i, &spurious)).map(ContourIdx);
         contours_to_path(c, keep, &Tidy::free(DEFAULT_PRECISION))
@@ -469,8 +491,9 @@ fn has_marked_ancestor(c: &Contours, mut i: usize, marked: &[bool]) -> bool {
     }
 }
 
-/// A point well inside a closed contour: the midpoint of the widest span on the horizontal line
-/// through its vertical centre.
+/// A point well inside the area `bp` bounds by the even-odd rule (a contour, or a face: a contour with
+/// the contours directly inside it): the midpoint of the widest span inside it on one of three
+/// horizontal lines, through its vertical centre and three tenths above and below.
 fn deep_point(bp: &BezPath) -> Option<kurbo::Point> {
     use kurbo::Shape;
     let r = bp.bounding_box();
