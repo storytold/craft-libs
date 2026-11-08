@@ -87,4 +87,5 @@ The pure-Rust video codec crates derive and extract tables strictly from normati
 | `crates/dnx/tools/extract_tables.py`, `crates/dnx/src/tables.rs` | SMPTE ST 2019-1:2016 | Extracted from SMPTE ST 2019-1 document text via committed Python script | SMPTE normative constants | DNxHD / DNxHR macroblock, VLC, and quantization tables |
 | `crates/vp8/tools/extract_tables.py`, `crates/vp8/src/tables.rs` | IETF RFC 6386 (VP8) | Extracted from RFC 6386 normative specification text | RFC 6386 / IETF Trust | VP8 tree probabilities and quantizer tables |
 | `crates/hevcenc/src/tables.rs` | ITU-T H.265 | ITU-T Recommendation H.265 | ITU-T normative tables | HEVC scan orders, deblock thresholds, and scaling matrices |
+| `crates/vp9enc/src/tables.rs` | VP9 Bitstream & Decoding Process Specification | VP9 specification text | MIT OR Apache-2.0 | VP9 scan orders, intra mode contexts, and MV contexts |
 

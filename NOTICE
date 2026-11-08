@@ -264,6 +264,8 @@ pinned at revision 68919ed87aa6a097a4d21414ec7c438883f5fe22:
 - FilmCraft decoder routines mirrored in encoder reconstruction paths:
   - crates/hevcenc mirrors ITU-T H.265 intra/inter prediction, deblocking, and tables from
     FilmCraft's crates/hevc (filmcraft-hevc decoder).
+  - crates/vp9enc mirrors VP9 normative tables and boolean entropy coding from FilmCraft's
+    crates/vp9 (filmcraft-vp9 decoder).
 FilmCraft contributors to these crates include: aiongg, dylanmtaylor, earlvanze, echelon,
 g1obalworlds, jahvari, EthanSuquet, JordyUSA, MrCloudy2, Silvertree2010, Tom1tk,
 adventurelands, cirocueto2013-wq, kler, marshiyar, skylartaylor, thecyberbutler, vangel76,
@@ -275,6 +277,7 @@ Licensed under MIT OR Apache-2.0.
 EffectCraft source provenance:
 - crates/hevcenc is ported from EffectCraft's crates/hevcenc (effectcraft-hevcenc),
   pinned at revision ad7abfa5076a00b4b214811bae66ee0600828ac5.
+- crates/vp9enc is ported from EffectCraft's crates/vp9enc (effectcraft-vp9enc).
 EffectCraft contributors to these crates include: EthanSuquet, JonRC, Kaedo17, aiongg,
 bflatastic, dexterlabs1, dylanmtaylor, echelon, vangel76, and the EffectCraft contributors.
 Source: https://github.com/storytold/effectcraft

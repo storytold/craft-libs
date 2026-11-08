@@ -1265,6 +1265,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-vp9enc"
+version = "0.1.0"
+
+[[package]]
 name = "craft-web-api"
 version = "0.1.0"
 dependencies = [
