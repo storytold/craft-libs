@@ -4,8 +4,12 @@
 //! handling of failures, dropped workers, repaints and quitting.
 //!
 //! An app the launcher keeps on another version (see [`crate::pins`]) offers nothing itself: the
-//! check reads the shared choice first, and a requested check reports [`Status::UpToDate`] while
-//! [`Updater::managed`] says why.
+//! check reads the shared choice first, and a requested check reports [`Status::Managed`] while
+//! [`Updater::managed`] says which choice it is.
+//!
+//! An update ends with the app closing. On Windows the update installs only after the app has
+//! exited, so the updater says it is ready rather than installed, and the first start afterwards
+//! reports what came of it: [`Status::Updated`] or [`Status::InstallFailed`].
 
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, SendError, Sender, TryRecvError, channel};
@@ -15,7 +19,7 @@ use std::time::Duration;
 use crate::dialog::{StartupPrompt, StartupPromptResponse};
 use crate::pins::{Choice, Pins};
 use crate::release::Release;
-use crate::self_update::Restart;
+use crate::self_update::{Outcome, Restart};
 use crate::translate::{Note, Translate, english};
 use crate::{App, Http, Paths, Platform, Stop, check_for_update, self_update};
 
@@ -23,7 +27,8 @@ use crate::{App, Http, Paths, Platform, Stop, check_for_update, self_update};
 /// with one; without it the check asks GitHub.
 pub type CheckSource = Arc<dyn Fn() -> Result<Option<Release>, String> + Send + Sync>;
 
-/// What a requested check came to, for a window that answers Help ▸ Check for Updates.
+/// What a requested check came to, for a window that answers Help ▸ Check for Updates, and what
+/// the last update came to, at the first start after it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Status {
     /// Nothing to report.
@@ -34,7 +39,25 @@ pub enum Status {
     UpToDate,
     /// A requested check failed.
     Failed(String),
+    /// A requested check found an update downloading and installing; the startup prompt shows
+    /// its progress.
+    Installing,
+    /// A requested check found an update ready and waiting for the app to close
+    /// ([`READY_TEXT`]). [`Updater::restart_to_update`] asks the app to close.
+    Ready,
+    /// A requested check found that the launcher keeps this app on a version of its choosing
+    /// ([`Updater::managed`]), so it does not update itself.
+    Managed,
+    /// This start follows an update that installed this version.
+    Updated(String),
+    /// The last update could not be installed, for this reason.
+    InstallFailed(String),
 }
+
+/// What [`Status::Ready`] says: on Windows the update installs after the app exits; elsewhere it
+/// is already in place and takes effect when the app restarts.
+pub const READY_TEXT: &str =
+    if cfg!(windows) { "Update ready. Close {app} to install it." } else { "The update is installed. Close {app} to finish; it restarts by itself." };
 
 /// What the app should do after [`Updater::show`].
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -42,12 +65,13 @@ pub enum Action {
     None,
     /// Open this page in the browser.
     OpenUrl(String),
-    /// Close the app through its normal close path (which asks about unsaved work): the update is
-    /// installed and a helper restarts the app once it has exited. On Windows the helper, which
-    /// installs the update, starts when this is returned. When the app exits another way, such as
-    /// the window's close button or a quit with unsaved work, and drops the [`Updater`] as it exits,
-    /// the drop starts it. An app that ends the process in `on_exit` without dropping the `Updater` calls
-    /// [`Updater::start_pending_update`] there first.
+    /// Close the app through its normal close path (which asks about unsaved work): an update is
+    /// ready and a helper installs it and restarts the app once the app has exited. This is a
+    /// request: the user may cancel the close, and the update then stays ready, with
+    /// [`Status::Ready`] for a requested check and Restart to Update in the prompt. On Windows
+    /// the helper starts only at the exit: when the app drops the [`Updater`] as it exits, or
+    /// calls [`Updater::start_pending_update`] in `on_exit`, which an app that ends the process
+    /// there without dropping the `Updater` must do.
     Close,
 }
 
@@ -96,11 +120,17 @@ pub struct Updater {
     check: Option<Receiver<Checked>>,
     install: Option<(Receiver<Result<Restart, Failure>>, Release)>,
     prompt: Option<StartupPrompt>,
-    /// A finished installation waiting for the app to close: what still has to start then, and
-    /// the release, to offer again if it can't.
+    /// A finished installation waiting for the app to exit: what still has to start then, and
+    /// the release it installs.
     restart: Option<(Restart, Release)>,
-    /// An update is installed and waits for the app to exit; nothing starts a second one.
+    /// An update is ready and waits for the app to exit; nothing starts a second one.
     installed: bool,
+    /// [`Self::show_if`] returns [`Action::Close`] at its next frame that may close: once when an
+    /// installation finishes, and again for each [`Self::restart_to_update`].
+    close_wanted: bool,
+    /// The folders that hold the outcome records ([`self_update::take_outcome`]) in place of the
+    /// app's own (tests).
+    paths: Option<Paths>,
     /// Set when the `Updater` is dropped. An install worker sends its outcome while holding it,
     /// and starts a finished installation's helper itself once it is set.
     dropped: Arc<Mutex<bool>>,
@@ -128,6 +158,8 @@ impl Updater {
             prompt: None,
             restart: None,
             installed: false,
+            close_wanted: false,
+            paths: None,
             dropped: Arc::new(Mutex::new(false)),
             pins_path: None,
             managed: None,
@@ -152,15 +184,42 @@ impl Updater {
         StartupPrompt::new(self.app, release, self.version.clone()).with_translator(self.translate)
     }
 
-    /// "The update is installed…", translated when the prompt draws.
+    /// [`READY_TEXT`], translated when the prompt draws.
     fn installed_note(&self) -> Note {
-        Note::new("The update is installed. Close {app} to finish; it restarts by itself.", &[("app", self.app.name)])
+        Note::new(READY_TEXT, &[("app", self.app.name)])
     }
 
     /// Replaces the network with `source` (tests).
     pub fn with_source(mut self, source: CheckSource) -> Self {
         self.source = Some(source);
         self
+    }
+
+    /// Reads and writes the update's outcome records under `paths` instead of the app's own
+    /// folders (tests).
+    pub fn with_paths(mut self, paths: Paths) -> Self {
+        self.paths = Some(paths);
+        self
+    }
+
+    /// The folders of the outcome records: [`Self::with_paths`]'s, else the app's own. Unit tests
+    /// never read or write the app's own records.
+    fn outcome_paths(&self) -> Option<Paths> {
+        self.paths.clone().or_else(|| if cfg!(test) { None } else { Paths::for_app(self.app).ok() })
+    }
+
+    /// What the last update came to, once: [`Status::Updated`] when it installed the version
+    /// running now, [`Status::InstallFailed`] with the reason when it failed.
+    fn read_outcome(&mut self) {
+        let Some(paths) = self.outcome_paths() else { return };
+        match self_update::take_outcome(&paths, &self.version) {
+            Some(Outcome::Installed(version)) => self.status = Status::Updated(version.to_string()),
+            Some(Outcome::Failed(reason)) => {
+                log::warn!("{} self-update failed: {reason}", self.app.name);
+                self.status = Status::InstallFailed(reason);
+            }
+            None => {}
+        }
     }
 
     /// Reads the version choices from `path` instead of the launcher's file (tests).
@@ -194,18 +253,32 @@ impl Updater {
         self.managed.is_some()
     }
 
-    /// The check at start, once. Later calls do nothing.
+    /// The check at start, once. Later calls do nothing. It first reads what the last update came
+    /// to, once: [`Self::status`] is then [`Status::Updated`] or [`Status::InstallFailed`], and
+    /// the app shows its [`CheckResultDialog`](crate::dialog::CheckResultDialog) while the status
+    /// is not [`Status::Idle`]. The check itself stays quiet unless it finds a release.
     pub fn check_at_start(&mut self, ctx: &egui::Context) {
         if !std::mem::replace(&mut self.started, true) {
+            self.read_outcome();
             self.begin(ctx, false);
         }
     }
 
     /// Help ▸ Check for Updates: a check whose outcome [`Self::status`] reports. A check already
-    /// running becomes a requested one; nothing starts while an update installs.
+    /// running becomes a requested one. While an update installs or waits for the app to close,
+    /// nothing starts and the status says so ([`Status::Installing`], [`Status::Ready`]).
     pub fn check_now(&mut self, ctx: &egui::Context) {
         self.started = true;
         self.begin(ctx, true);
+    }
+
+    /// Asks the app to close so that a ready update installs: the next [`Self::show_if`] that may
+    /// close returns [`Action::Close`]. Restart to Update calls it after the user canceled an
+    /// earlier close. Does nothing when no update is ready.
+    pub fn restart_to_update(&mut self) {
+        if self.restart.is_some() {
+            self.close_wanted = true;
+        }
     }
 
     /// Opens the startup prompt for a release the app found itself.
@@ -233,6 +306,9 @@ impl Updater {
 
     fn begin(&mut self, ctx: &egui::Context, requested: bool) {
         if self.install.is_some() || self.installed {
+            if requested {
+                self.status = self.pending_status();
+            }
             return;
         }
         if requested {
@@ -265,28 +341,57 @@ impl Updater {
         }
     }
 
+    /// The answer to a requested check while an update installs or waits for the app to exit. A
+    /// helper that already started while the app kept running may have failed: its recorded
+    /// reason is the answer then, and the update is on offer again.
+    fn pending_status(&mut self) -> Status {
+        if self.install.is_some() {
+            return Status::Installing;
+        }
+        if self.restart.is_none()
+            && let Some(reason) = self.outcome_paths().and_then(|paths| self_update::take_failure(&paths))
+        {
+            log::warn!("{} self-update failed: {reason}", self.app.name);
+            self.installed = false;
+            return Status::InstallFailed(reason.trim().to_owned());
+        }
+        Status::Ready
+    }
+
+    /// Sets the outcome of a check. The check at start leaves the status as it is: nothing, or
+    /// the outcome of the last update ([`Self::read_outcome`]).
     fn finish_check(&mut self, answer: Checked) {
         let requested = std::mem::take(&mut self.requested);
         // The launcher may have pinned or unpinned the app while the check ran: whatever the
-        // answer, an app it manages offers nothing and reports nothing to do.
+        // answer, an app it manages offers nothing and says so.
         if self.read_choice() {
             if let Err(e) = &answer {
                 log::info!("{} update check failed ({e}), but the launcher manages its version", self.app.name);
             }
-            self.status = if requested { Status::UpToDate } else { Status::Idle };
+            if requested {
+                self.status = Status::Managed;
+            }
             return;
         }
         match answer {
             Ok(Some(release)) => {
-                self.status = Status::Idle;
                 if self.prompt.is_none() && self.install.is_none() && !self.installed {
-                    self.prompt = Some(self.prompt_for(release));
+                    let mut prompt = self.prompt_for(release);
+                    // A failed update offered again says why the last attempt failed.
+                    if let Status::InstallFailed(reason) = &self.status {
+                        prompt.set_note(Note::new("The update could not be installed: {reason}", &[("reason", reason)]));
+                    }
+                    self.prompt = Some(prompt);
                 }
+                self.status = Status::Idle;
             }
-            Ok(None) => self.status = if requested { Status::UpToDate } else { Status::Idle },
+            Ok(None) if requested => self.status = Status::UpToDate,
+            Ok(None) => {}
             Err(e) => {
                 log::warn!("{} update check failed: {e}", self.app.name);
-                self.status = if requested { Status::Failed(e) } else { Status::Idle };
+                if requested {
+                    self.status = Status::Failed(e);
+                }
             }
         }
     }
@@ -322,16 +427,25 @@ impl Updater {
                     Ok(restart) => {
                         self.installed = true;
                         self.restart = release.map(|release| (restart, release));
+                        self.close_wanted = true;
                         let note = self.installed_note();
                         if let Some(prompt) = &mut self.prompt {
                             prompt.is_installing = false;
+                            prompt.is_ready = true;
                             prompt.set_note(note);
+                        }
+                        if matches!(self.status, Status::Installing) {
+                            self.status = Status::Ready;
                         }
                     }
                     Err(failure) => {
                         match &failure {
                             Failure::Installer(e) => log::warn!("{} self-update failed: {e}", self.app.name),
                             Failure::Updater(note) => log::warn!("{} self-update failed: {}", self.app.name, note.translated(english)),
+                        }
+                        // The prompt says why; a result window showing the installation closes.
+                        if matches!(self.status, Status::Installing) {
+                            self.status = Status::Idle;
                         }
                         // The prompt may have been dismissed meanwhile: bring it back with the reason.
                         if self.prompt.is_none()
@@ -357,29 +471,15 @@ impl Updater {
         self.show_if(ctx, true)
     }
 
-    /// Like [`Self::show`], but an installation only starts when `can_start` is true. An app passes
-    /// `false` while it holds unsaved work: the restart helper is scheduled before the app closes,
-    /// and a close that the user then cancels would leave it waiting for an exit that never comes.
+    /// Like [`Self::show`], but an installation only starts, and a ready update only asks the app
+    /// to close, when `can_start` is true. An app passes `false` while it holds unsaved work.
     pub fn show_if(&mut self, ctx: &egui::Context, can_start: bool) -> Action {
         // The close waits for the app to hold no unsaved work: the user may have edited while the
-        // update installed. The Windows helper starts only now, since it waits just a minute for
-        // the app to exit.
-        if can_start && let Some((restart, release)) = self.restart.take() {
-            match restart.start() {
-                Ok(()) => return Action::Close,
-                Err(e) => {
-                    log::warn!("{} self-update failed: {e}", self.app.name);
-                    // Nothing will install it: the update is on offer again.
-                    self.installed = false;
-                    if self.prompt.is_none() {
-                        self.prompt = Some(self.prompt_for(release));
-                    }
-                    if let Some(prompt) = &mut self.prompt {
-                        prompt.is_installing = false;
-                        prompt.set_message(e);
-                    }
-                }
-            }
+        // update installed. It is only asked for: the Windows helper, which waits just a minute
+        // for the app to exit, starts at the exit itself (`start_pending_update`), so a close the
+        // user cancels leaves the update ready.
+        if can_start && self.restart.is_some() && std::mem::take(&mut self.close_wanted) {
+            return Action::Close;
         }
         let Some(prompt) = &mut self.prompt else { return Action::None };
         match prompt.show(ctx) {
@@ -401,11 +501,12 @@ impl Updater {
         }
     }
 
-    /// Starts the helper of an installed update that is still waiting for the app to close, so
-    /// that the update installs once the app has exited. Call it when the app exits by a path
-    /// that did not come through [`Action::Close`]; dropping the `Updater` calls it too. Later
-    /// calls do nothing. An installation still running when the `Updater` is dropped starts its
-    /// helper itself when it finishes.
+    /// Starts the helper of a ready update, so that the update installs once the app has exited.
+    /// Call it once the app's exit is certain (a close nothing can cancel any more, in `on_exit`),
+    /// whether or not the exit came through [`Action::Close`]; dropping the `Updater` calls it
+    /// too. Later calls do nothing. An installation still running when the `Updater` is dropped
+    /// starts its helper itself when it finishes. A helper that cannot start is recorded, and the
+    /// next start reports it ([`Status::InstallFailed`]).
     pub fn start_pending_update(&mut self) {
         // An installation that finished since the last `tick`.
         if let Some((rx, release)) = &self.install
@@ -425,6 +526,9 @@ impl Updater {
             && let Err(e) = restart.start()
         {
             log::warn!("{} self-update failed: {e}", self.app.name);
+            if let Some(paths) = self.outcome_paths() {
+                self_update::record_failure(&paths, &e);
+            }
         }
     }
 
@@ -444,7 +548,11 @@ impl Updater {
         let installed_note = self.installed_note();
         let Some(prompt) = &mut self.prompt else { return };
         if self.installed {
+            // Restart to update: the app is asked to close again.
             prompt.set_note(installed_note);
+            if self.restart.is_some() {
+                self.close_wanted = true;
+            }
             return;
         }
         let Some(installed) = self_update::current(self.app) else {
@@ -819,14 +927,35 @@ mod tests {
         assert!(message(&u).starts_with("Save or close"), "{}", message(&u));
         FRENCH.store(true, Ordering::Relaxed);
         assert!(message(&u).starts_with("FR Save or close"), "{}", message(&u));
-        // An installed update names the app, in the language of the moment.
+        // A ready update names the app, in the language of the moment.
         let (tx, rx) = channel();
         u.install = Some((rx, newer()));
         assert!(tx.send(Ok(Restart::scheduled())).is_ok());
         u.tick(&ctx);
-        assert!(message(&u).starts_with("FR The update is installed. Close PhotoCraft"), "{}", message(&u));
+        let ready = crate::translate::fill(READY_TEXT, &[("app", "PhotoCraft")]);
+        assert_eq!(message(&u), format!("FR {ready}"));
         FRENCH.store(false, Ordering::Relaxed);
-        assert!(message(&u).starts_with("The update is installed."), "{}", message(&u));
+        assert_eq!(message(&u), ready);
+    }
+
+    /// On Windows the update installs after the app exits, so a finished preparation says it is
+    /// ready, never that it is installed.
+    #[test]
+    fn a_prepared_update_says_when_it_installs() {
+        if cfg!(windows) {
+            assert_eq!(READY_TEXT, "Update ready. Close {app} to install it.");
+        } else {
+            assert!(READY_TEXT.starts_with("The update is installed."), "{READY_TEXT}");
+        }
+        let ctx = egui::Context::default();
+        let mut u = updater(Ok(None));
+        u.offer(newer());
+        let (tx, rx) = channel();
+        u.install = Some((rx, newer()));
+        assert!(tx.send(Ok(Restart::scheduled())).is_ok());
+        u.tick(&ctx);
+        let prompt = u.prompt.as_ref().map(|p| (p.is_installing, p.is_ready, p.message()));
+        assert_eq!(prompt, Some((false, true, Some(crate::translate::fill(READY_TEXT, &[("app", "PhotoCraft")])))));
     }
 
     /// One frame with the updater's prompt drawn.
@@ -862,10 +991,10 @@ mod tests {
         assert_eq!(u.show(&ctx), Action::None);
     }
 
-    /// A finished installation that still has to start its helper starts it only when the app
-    /// may close, and only once.
+    /// A finished installation that still has to start its helper asks the app to close only
+    /// when it may, and starts the helper only at the exit, once.
     #[test]
-    fn the_helper_starts_once_when_the_app_closes() {
+    fn the_helper_starts_once_when_the_app_exits() {
         use std::sync::atomic::{AtomicUsize, Ordering};
         let ctx = egui::Context::default();
         let mut u = updater(Ok(None));
@@ -884,9 +1013,60 @@ mod tests {
         assert_eq!(frame(&mut u, &ctx, false), Action::None);
         assert_eq!(starts.load(Ordering::SeqCst), 0, "unsaved work holds the helper back");
         assert_eq!(frame(&mut u, &ctx, true), Action::Close);
-        assert_eq!(starts.load(Ordering::SeqCst), 1);
+        assert_eq!(starts.load(Ordering::SeqCst), 0, "a close is a request; the helper waits for the exit");
         assert_eq!(frame(&mut u, &ctx, true), Action::None);
+        u.start_pending_update();
+        assert_eq!(starts.load(Ordering::SeqCst), 1);
+        u.start_pending_update();
+        drop(u);
         assert_eq!(starts.load(Ordering::SeqCst), 1, "the helper starts once");
+    }
+
+    /// A close the user cancels starts no helper and keeps the update ready: a requested check
+    /// says so, and Restart to Update asks for the close again, from the result window or from
+    /// the prompt.
+    #[test]
+    fn a_canceled_close_keeps_the_update_ready() {
+        use std::sync::atomic::Ordering;
+        let ctx = egui::Context::default();
+        let mut u = updater(Ok(None));
+        u.offer(newer());
+        let (starts, restart) = counted_restart();
+        let (tx, rx) = channel();
+        u.install = Some((rx, newer()));
+        assert!(tx.send(Ok(restart)).is_ok());
+        u.tick(&ctx);
+        assert_eq!(frame(&mut u, &ctx, true), Action::Close);
+        // The app's close was canceled: it keeps running and drawing.
+        for _ in 0..3 {
+            assert_eq!(frame(&mut u, &ctx, true), Action::None, "a canceled close is not asked for again by itself");
+        }
+        assert_eq!(starts.load(Ordering::SeqCst), 0, "no helper starts while the app runs");
+        u.check_now(&ctx);
+        assert_eq!(u.status(), &Status::Ready);
+        assert!(u.check.is_none(), "no check runs while an update is ready");
+        assert!(u.prompt.as_ref().is_some_and(|p| p.is_ready), "the prompt offers Restart to Update");
+
+        u.restart_to_update();
+        assert_eq!(frame(&mut u, &ctx, false), Action::None, "unsaved work still holds the close back");
+        assert_eq!(frame(&mut u, &ctx, true), Action::Close);
+        assert_eq!(frame(&mut u, &ctx, true), Action::None);
+        // The prompt's button does the same.
+        u.request_install(&ctx, true);
+        assert_eq!(frame(&mut u, &ctx, true), Action::Close);
+        assert_eq!(starts.load(Ordering::SeqCst), 0);
+
+        drop(u);
+        assert_eq!(starts.load(Ordering::SeqCst), 1, "the exit starts the helper once");
+    }
+
+    /// Restart to Update does nothing when no update is ready.
+    #[test]
+    fn restart_to_update_needs_a_ready_update() {
+        let ctx = egui::Context::default();
+        let mut u = updater(Ok(None));
+        u.restart_to_update();
+        assert_eq!(frame(&mut u, &ctx, true), Action::None);
     }
 
     /// A counter and a helper that adds one to it each time it starts.
@@ -971,9 +1151,9 @@ mod tests {
         assert!(u.restart.is_none());
     }
 
-    /// A helper started at [`Action::Close`] does not start again when the updater is dropped.
+    /// After [`Action::Close`], the app's exit (the updater dropped) starts the helper once.
     #[test]
-    fn a_helper_started_at_close_does_not_start_again_on_drop() {
+    fn the_exit_after_a_close_starts_the_helper_once() {
         use std::sync::atomic::Ordering;
         let ctx = egui::Context::default();
         let mut u = updater(Ok(None));
@@ -983,23 +1163,177 @@ mod tests {
         assert!(tx.send(Ok(restart)).is_ok());
         u.tick(&ctx);
         assert_eq!(frame(&mut u, &ctx, true), Action::Close);
+        assert_eq!(frame(&mut u, &ctx, true), Action::None, "the close is asked for once");
+        assert_eq!(starts.load(Ordering::SeqCst), 0);
         drop(u);
         assert_eq!(starts.load(Ordering::SeqCst), 1);
     }
 
-    /// A helper that can't start keeps the app open and offers the update again with the reason.
+    /// Outcome records in a fresh folder, and an updater reading them that runs `version`.
+    fn with_records(version: &str) -> (tempfile::TempDir, Paths, Updater) {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::under(dir.path());
+        let u = reading(&paths, version);
+        (dir, paths, u)
+    }
+
+    /// An updater running `version` that reads the outcome records under `paths`.
+    fn reading(paths: &Paths, version: &str) -> Updater {
+        Updater::new(&PHOTOCRAFT, version).with_source(Arc::new(|| Ok(None))).with_pins_path(no_pins()).with_paths(paths.clone())
+    }
+
+    /// The check at start, answered with `answer` without waiting on its thread.
+    fn start_answered(u: &mut Updater, ctx: &egui::Context, answer: Checked) {
+        u.check_at_start(ctx);
+        let (tx, rx) = channel();
+        u.check = Some(rx);
+        assert!(tx.send(answer).is_ok());
+        u.tick(ctx);
+    }
+
+    /// A helper that can't start at the exit is recorded, and the next start says why, once.
     #[test]
-    fn a_helper_that_cannot_start_keeps_the_app_open() {
+    fn a_helper_that_cannot_start_at_the_exit_is_reported_at_the_next_start() {
         let ctx = egui::Context::default();
-        let mut u = updater(Ok(None));
+        let (_dir, paths, mut u) = with_records("0.1.0");
         let (tx, rx) = channel();
         u.install = Some((rx, newer()));
         assert!(tx.send(Ok(Restart::later(|| Err("couldn't schedule the update (denied)".into())))).is_ok());
         u.tick(&ctx);
-        assert_eq!(frame(&mut u, &ctx, true), Action::None);
-        let prompt = u.prompt.as_ref().map(|p| (p.is_installing, p.status_message.clone()));
-        assert_eq!(prompt, Some((false, Some("couldn't schedule the update (denied)".into()))));
+        assert_eq!(frame(&mut u, &ctx, true), Action::Close);
+        drop(u);
+
+        let mut next = reading(&paths, "0.1.0");
+        start_answered(&mut next, &ctx, Ok(None));
+        assert_eq!(next.status(), &Status::InstallFailed("couldn't schedule the update (denied)".into()));
+        let mut later = reading(&paths, "0.1.0");
+        start_answered(&mut later, &ctx, Ok(None));
+        assert_eq!(later.status(), &Status::Idle, "a failure is reported once");
+    }
+
+    /// The first start after a helper failure shows the reason once, and the quiet check at start
+    /// does not replace it. A failure wins over a stale record of a finished update.
+    #[test]
+    fn a_recorded_failure_is_shown_once_at_the_next_start() {
+        let ctx = egui::Context::default();
+        let (_dir, paths, mut u) = with_records("0.1.0");
+        self_update::record_failure(&paths, "the Windows Installer stopped with error 1603");
+        crate::paths::write_atomic(&paths.data.join("self-update-done.txt"), b"v0.1.0").unwrap();
+        start_answered(&mut u, &ctx, Ok(None));
+        assert_eq!(u.status(), &Status::InstallFailed("the Windows Installer stopped with error 1603".into()));
+        u.dismiss_status();
+        assert_eq!(u.status(), &Status::Idle);
+
+        let mut next = reading(&paths, "0.1.0");
+        start_answered(&mut next, &ctx, Ok(None));
+        assert_eq!(next.status(), &Status::Idle, "neither record is read twice");
+    }
+
+    /// A failed update that the check at start offers again says in its prompt why it failed.
+    #[test]
+    fn a_failed_update_offered_again_says_why_it_failed() {
+        let ctx = egui::Context::default();
+        let (_dir, paths, mut u) = with_records("0.1.0");
+        self_update::record_failure(&paths, "disk full");
+        start_answered(&mut u, &ctx, Ok(Some(newer())));
+        assert_eq!(u.status(), &Status::Idle, "the prompt carries the reason");
+        assert_eq!(u.prompt.as_ref().and_then(StartupPrompt::message).as_deref(), Some("The update could not be installed: disk full"));
+    }
+
+    /// An unreadable record (a folder where the file goes) shows nothing and breaks nothing.
+    #[test]
+    fn an_unreadable_record_shows_nothing() {
+        let ctx = egui::Context::default();
+        let (_dir, paths, mut u) = with_records("0.2.0");
+        std::fs::create_dir_all(paths.logs().join("self-update-error.txt")).unwrap();
+        std::fs::create_dir_all(paths.data.join("self-update-done.txt")).unwrap();
+        start_answered(&mut u, &ctx, Ok(None));
+        assert_eq!(u.status(), &Status::Idle);
+    }
+
+    /// The new version's first start says it was updated, once, and only when the finished
+    /// update installed the version running now.
+    #[test]
+    fn a_finished_update_is_announced_once_by_the_version_it_installed() {
+        let ctx = egui::Context::default();
+        let (_dir, paths, mut u) = with_records("0.2.0");
+        crate::paths::write_atomic(&paths.data.join("self-update-done.txt"), b"v0.2.0").unwrap();
+        start_answered(&mut u, &ctx, Ok(None));
+        assert_eq!(u.status(), &Status::Updated("0.2.0".into()));
+        let mut next = reading(&paths, "0.2.0");
+        start_answered(&mut next, &ctx, Ok(None));
+        assert_eq!(next.status(), &Status::Idle, "announced once");
+
+        // The old version started again (the update didn't take): no claim, and the record goes.
+        crate::paths::write_atomic(&paths.data.join("self-update-done.txt"), b"v0.3.0").unwrap();
+        let mut old = reading(&paths, "0.2.0");
+        start_answered(&mut old, &ctx, Ok(None));
+        assert_eq!(old.status(), &Status::Idle);
+        assert!(!paths.data.join("self-update-done.txt").exists());
+    }
+
+    /// A requested check while an update downloads says it is installing, and while it waits for
+    /// the close says it is ready, after dismissal and on repeated clicks too, and starts nothing.
+    #[test]
+    fn a_requested_check_during_an_update_says_where_it_is() {
+        let ctx = egui::Context::default();
+        let mut u = updater(Ok(Some(newer())));
+        u.offer(newer());
+        let (tx, rx) = channel();
+        u.install = Some((rx, newer()));
+        for _ in 0..2 {
+            u.check_now(&ctx);
+            assert_eq!(u.status(), &Status::Installing);
+            assert!(u.check.is_none(), "no check starts");
+        }
+        u.dismiss_status();
+        u.check_now(&ctx);
+        assert_eq!(u.status(), &Status::Installing, "asked again after dismissal");
+        assert!(tx.send(Ok(Restart::scheduled())).is_ok());
+        u.tick(&ctx);
+        assert_eq!(u.status(), &Status::Ready, "the open window follows the update");
+        u.dismiss_status();
+        for _ in 0..2 {
+            u.check_now(&ctx);
+            assert_eq!(u.status(), &Status::Ready);
+            assert!(u.check.is_none() && u.install.is_none(), "nothing starts");
+        }
+    }
+
+    /// A failed installation closes a result window showing it; the prompt says why.
+    #[test]
+    fn a_failed_install_ends_the_installing_status() {
+        let ctx = egui::Context::default();
+        let mut u = updater(Ok(None));
+        let (tx, rx) = channel();
+        u.install = Some((rx, newer()));
+        u.check_now(&ctx);
+        assert_eq!(u.status(), &Status::Installing);
+        assert!(tx.send(Err("disk full".into())).is_ok());
+        u.tick(&ctx);
+        assert_eq!(u.status(), &Status::Idle);
+        assert_eq!(u.prompt.as_ref().and_then(|p| p.status_message.clone()).as_deref(), Some("disk full"));
+    }
+
+    /// A helper that started while the app kept running and then failed is found by the next
+    /// requested check, which offers the update again.
+    #[test]
+    fn a_requested_check_finds_a_helper_failure_while_the_app_still_runs() {
+        let ctx = egui::Context::default();
+        let (_dir, paths, mut u) = with_records("0.1.0");
+        let (tx, rx) = channel();
+        u.install = Some((rx, newer()));
+        assert!(tx.send(Ok(Restart::scheduled())).is_ok());
+        u.tick(&ctx);
+        u.start_pending_update();
+        u.check_now(&ctx);
+        assert_eq!(u.status(), &Status::Ready, "the helper is still waiting");
+        self_update::record_failure(&paths, "ArtCraft Launcher is still running");
+        u.check_now(&ctx);
+        assert_eq!(u.status(), &Status::InstallFailed("ArtCraft Launcher is still running".into()));
         assert!(!u.installed, "the update is on offer again");
+        u.check_now(&ctx);
+        assert_eq!(u.status(), &Status::Checking, "Check Again runs a check");
     }
 }
 

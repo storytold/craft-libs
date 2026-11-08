@@ -512,14 +512,89 @@ pub fn prepare_update(
             }
         }
     })();
-    unmark_unless_scheduled(paths, scheduled)
+    let scheduled = unmark_unless_scheduled(paths, scheduled);
+    // On macOS and Linux the update is in place once it is scheduled.
+    #[cfg(not(windows))]
+    if scheduled.is_ok() {
+        record_done(paths, &release.tag);
+    }
+    scheduled
 }
 
-/// Records `release` as just installed, so it isn't offered again for [`JUST_UPDATED_FOR`].
+/// Records `release` as just installed, so it isn't offered again for [`JUST_UPDATED_FOR`]. The
+/// outcome records of an earlier update are removed: this update writes its own.
 fn mark_installed(paths: &Paths, release: &Release) {
+    let _ = std::fs::remove_file(failure_file(paths));
+    let _ = std::fs::remove_file(done_file(paths));
     if let Err(e) = crate::paths::write_atomic(&marker(paths), format!("{}\n{}\n", release.tag, crate::now()).as_bytes()) {
         log::warn!("couldn't record the self-update: {e}");
     }
+}
+
+/// Where a finished update records the version it installed, for the new version's first start.
+fn done_file(paths: &Paths) -> PathBuf {
+    paths.data.join("self-update-done.txt")
+}
+
+/// Records that the update to `tag` has been installed.
+fn record_done(paths: &Paths, tag: &str) {
+    if let Err(e) = crate::paths::write_atomic(&done_file(paths), tag.as_bytes()) {
+        log::warn!("couldn't record the finished self-update: {e}");
+    }
+}
+
+/// The version the scheduled update installs, from the record [`mark_installed`] wrote.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn scheduled_tag(paths: &Paths) -> Option<String> {
+    read_record(&marker(paths)).and_then(|text| text.lines().next().map(str::to_owned)).filter(|tag| !tag.trim().is_empty())
+}
+
+/// The most of an outcome record that is read: a reason longer than this is cut short.
+const RECORD_LIMIT: usize = 4096;
+
+/// The text of the record at `path`, at most [`RECORD_LIMIT`] bytes of it. `None` when it is
+/// missing, unreadable or not a plain file.
+fn read_record(path: &Path) -> Option<String> {
+    use std::io::Read;
+    if !std::fs::metadata(path).is_ok_and(|m| m.is_file()) {
+        return None;
+    }
+    let mut bytes = Vec::new();
+    std::fs::File::open(path).ok()?.take(RECORD_LIMIT as u64 + 1).read_to_end(&mut bytes).ok()?;
+    let cut = bytes.len() > RECORD_LIMIT;
+    bytes.truncate(RECORD_LIMIT);
+    let mut text = String::from_utf8_lossy(&bytes).into_owned();
+    if cut {
+        // A multi-byte character split at the limit decodes as U+FFFD; drop it.
+        text = text.trim_end_matches('\u{FFFD}').to_owned();
+        text.push('…');
+    }
+    Some(text)
+}
+
+/// What the last self-update came to, read once by the next start ([`take_outcome`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Outcome {
+    /// The update installed this version, which is the one running now.
+    Installed(Version),
+    /// The update could not be installed, for this reason.
+    Failed(String),
+}
+
+/// What the last self-update came to, once: the records are removed as they are read. A
+/// recorded failure wins over a record of a finished update. A finished update counts only when
+/// the version it installed is `running`, the version this copy counts as.
+pub fn take_outcome(paths: &Paths, running: &str) -> Option<Outcome> {
+    let failure = take_failure(paths);
+    let done = read_record(&done_file(paths));
+    let _ = std::fs::remove_file(done_file(paths));
+    if let Some(reason) = failure {
+        let reason = reason.trim();
+        let reason = if reason.is_empty() { "no reason was recorded" } else { reason };
+        return Some(Outcome::Failed(reason.to_owned()));
+    }
+    let installed = version::parse(done?.trim())?;
+    (Some(&installed) == version::parse(running).as_ref()).then_some(Outcome::Installed(installed))
 }
 
 /// Removes the record of [`mark_installed`] when the swap couldn't be scheduled, so the update
@@ -897,6 +972,12 @@ fn finish_step(
     if !restarts(stepped.exited, done.is_ok(), exe.is_file()) {
         return done;
     }
+    // Written before the new app starts, so its first start finds it. A failed start removes it.
+    if done.is_ok()
+        && let Some(tag) = scheduled_tag(paths)
+    {
+        record_done(paths, &tag);
+    }
     let started = start(&exe);
     if let Err(e) = &started {
         record_failure(paths, e);
@@ -915,20 +996,25 @@ fn failure_file(paths: &Paths) -> PathBuf {
     paths.logs().join("self-update-error.txt")
 }
 
-/// Records a failed update: the next check offers the update again, and the next start logs `error`.
-#[cfg_attr(not(windows), allow(dead_code))]
-fn record_failure(paths: &Paths, error: &str) {
+/// Records a failed update: the next check offers the update again, and the next start shows
+/// `error`. A record of the update as finished is removed.
+#[cfg_attr(not(any(windows, feature = "egui")), allow(dead_code))]
+pub(crate) fn record_failure(paths: &Paths, error: &str) {
     let _ = std::fs::remove_file(marker(paths));
+    let _ = std::fs::remove_file(done_file(paths));
     let _ = std::fs::create_dir_all(paths.logs());
     let _ = crate::paths::write_atomic(&failure_file(paths), error.as_bytes());
 }
 
-/// The error of the last update, if it failed, once.
+/// The error of the last update, if it failed, once. A long error is cut short at
+/// [`RECORD_LIMIT`] bytes.
 pub fn take_failure(paths: &Paths) -> Option<String> {
     let file = failure_file(paths);
-    let error = std::fs::read_to_string(&file).ok()?;
-    let _ = std::fs::remove_file(&file);
-    Some(error)
+    let error = read_record(&file);
+    if std::fs::metadata(&file).is_ok_and(|m| m.is_file()) {
+        let _ = std::fs::remove_file(&file);
+    }
+    error
 }
 
 /// Whether `exe` is named like this app's own executable (case-insensitive, any of its ids).
@@ -1562,6 +1648,55 @@ mod tests {
         assert_eq!(take_failure(&paths), None);
     }
 
+    /// The outcome is read once; a failure wins over a finished update, which counts only for the
+    /// version it installed.
+    #[test]
+    fn the_outcome_of_an_update_is_read_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::under(dir.path());
+        assert_eq!(take_outcome(&paths, "0.2.0"), None);
+        record_done(&paths, "v0.2.0");
+        assert_eq!(take_outcome(&paths, "0.2.0"), Some(Outcome::Installed(Version::new(0, 2, 0))));
+        assert_eq!(take_outcome(&paths, "0.2.0"), None, "read once");
+
+        record_done(&paths, "v0.2.0");
+        assert_eq!(take_outcome(&paths, "0.1.0"), None, "the old version still runs");
+        assert!(!done_file(&paths).exists(), "a record that doesn't match is removed too");
+
+        record_done(&paths, "v0.2.0");
+        record_failure(&paths, "the Windows Installer stopped with error 1603");
+        assert!(!done_file(&paths).exists(), "a failure removes the record of a finished update");
+        record_done(&paths, "v0.2.0");
+        assert_eq!(take_outcome(&paths, "0.2.0"), Some(Outcome::Failed("the Windows Installer stopped with error 1603".into())));
+        assert_eq!(take_outcome(&paths, "0.2.0"), None);
+
+        // Damaged records: no version, an empty reason, a reason longer than the limit.
+        crate::paths::write_atomic(&done_file(&paths), b"\xff\xfe not a version").unwrap();
+        assert_eq!(take_outcome(&paths, "0.2.0"), None);
+        record_failure(&paths, "  \n");
+        assert_eq!(take_outcome(&paths, "0.2.0"), Some(Outcome::Failed("no reason was recorded".into())));
+        record_failure(&paths, &"é".repeat(RECORD_LIMIT));
+        let Some(Outcome::Failed(reason)) = take_outcome(&paths, "0.2.0") else { panic!("a long reason is still a failure") };
+        assert!(reason.len() <= RECORD_LIMIT + '…'.len_utf8() && reason.ends_with("é…"), "{}", reason.len());
+        // A folder where a record goes is not read, and not removed.
+        std::fs::create_dir_all(failure_file(&paths)).unwrap();
+        std::fs::create_dir_all(done_file(&paths)).unwrap();
+        assert_eq!(take_outcome(&paths, "0.2.0"), None);
+        assert!(failure_file(&paths).is_dir());
+    }
+
+    /// Scheduling a new update clears the outcome records of an earlier one, so a stale failure
+    /// is not reported after it.
+    #[test]
+    fn a_new_update_clears_the_last_ones_outcome() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::under(dir.path());
+        record_failure(&paths, "the Windows Installer stopped with error 1603");
+        mark_installed(&paths, &Release { tag: "v0.3.0".into(), ..Release::default() });
+        assert_eq!(take_failure(&paths), None);
+        assert_eq!(scheduled_tag(&paths).as_deref(), Some("v0.3.0"));
+    }
+
     /// A launcher that doesn't quit keeps its files, and the download is still removed.
     #[cfg(windows)]
     #[test]
@@ -2176,12 +2311,65 @@ mod tests {
             Ok(())
         };
         let exited = |_pid| true;
+        mark_installed(&paths, &Release { tag: "v0.2.0".into(), ..Release::default() });
         assert_eq!(
             finish_step(&crate::suite::LAUNCHER, &system_program("cmd.exe"), &paths, 4242, exe.clone(), &step, false, &exited, &start),
             Ok(())
         );
         assert_eq!(*started.lock().unwrap(), vec![(exe, signed_exe)], "the new app starts once");
-        assert_eq!(take_failure(&paths), None);
+        assert_eq!(take_outcome(&paths, "0.2.0"), Some(Outcome::Installed(Version::new(0, 2, 0))), "the new version's first start says so");
+    }
+
+    /// A portable update of the launcher to 0.2.0 in `dir`: its exe and the step.
+    #[cfg(windows)]
+    fn portable_update(dir: &Path) -> (PathBuf, Finish) {
+        use std::io::Write;
+        let folder = dir.join("ArtCraft Launcher");
+        std::fs::create_dir_all(&folder).unwrap();
+        let exe = folder.join("artcraft-launcher.exe");
+        std::fs::write(&exe, "0.1.0").unwrap();
+        let zip = dir.join("artcraft-launcher-0.2.0-windows-x64-portable.zip");
+        let mut writer = zip::ZipWriter::new(std::fs::File::create(&zip).unwrap());
+        writer.start_file("artcraft-launcher-0.2.0-windows-x64-portable/artcraft-launcher.exe", zip::write::SimpleFileOptions::default()).unwrap();
+        writer.write_all(&std::fs::read(system_program("cmd.exe")).unwrap()).unwrap();
+        writer.finish().unwrap();
+        (exe, Finish::Portable { zip, tmp: dir.join(PORTABLE_STAGING) })
+    }
+
+    /// A finished step whose new app can't be started is a failure at the next start, never a
+    /// finished update.
+    #[cfg(windows)]
+    #[test]
+    fn a_failed_relaunch_is_not_reported_as_a_finished_update() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::under(dir.path());
+        let (exe, step) = portable_update(dir.path());
+        mark_installed(&paths, &Release { tag: "v0.2.0".into(), ..Release::default() });
+        let start = |_: &Path| Err("couldn't start the launcher (denied)".to_owned());
+        let exited = |_pid| true;
+        let result = finish_step(&crate::suite::LAUNCHER, &system_program("cmd.exe"), &paths, 4242, exe, &step, false, &exited, &start);
+        assert_eq!(result, Err("couldn't start the launcher (denied)".into()));
+        assert_eq!(take_outcome(&paths, "0.2.0"), Some(Outcome::Failed("couldn't start the launcher (denied)".into())));
+    }
+
+    /// A helper that times out or whose step fails records no finished update.
+    #[cfg(windows)]
+    #[test]
+    fn a_timed_out_or_failed_step_is_not_reported_as_a_finished_update() {
+        for (exits, zip_ok) in [(false, true), (true, false)] {
+            let dir = tempfile::tempdir().unwrap();
+            let paths = Paths::under(dir.path());
+            let (exe, step) = portable_update(dir.path());
+            if !zip_ok && let Finish::Portable { zip, .. } = &step {
+                std::fs::write(zip, "not a zip").unwrap();
+            }
+            mark_installed(&paths, &Release { tag: "v0.2.0".into(), ..Release::default() });
+            let start = |_: &Path| Ok(());
+            let wait = |_pid| exits;
+            assert!(finish_step(&crate::suite::LAUNCHER, &system_program("cmd.exe"), &paths, 4242, exe, &step, false, &wait, &start).is_err());
+            assert!(!done_file(&paths).exists(), "exits {exits}, zip {zip_ok}");
+            assert!(matches!(take_outcome(&paths, "0.2.0"), Some(Outcome::Failed(_))), "exits {exits}, zip {zip_ok}");
+        }
     }
 
     /// A prepared Windows restart does nothing until it is started, and runs once when it is.
