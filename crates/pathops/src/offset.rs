@@ -731,6 +731,35 @@ mod tests {
     use super::*;
     use crate::boolean::normalize_bez;
 
+    /// A contour that starts at the tip of a spur has the spur's two passes at its two ends, the way
+    /// out last and the way back first: they are taken out round the end, as often as that leaves such
+    /// a pair (a spur of two pieces each way, slanted), and what is left is the contour without it.
+    #[test]
+    fn a_spur_at_the_start_of_a_contour_is_taken_out_round_its_end() {
+        let (o, mid, tip) = (Point::new(50.0, 0.0), Point::new(50.1, 0.1), Point::new(50.3, 0.3));
+        let mut contour = BezPath::new();
+        contour.move_to(tip);
+        for p in [mid, o, Point::new(100.0, 0.0), Point::new(100.0, 100.0), Point::new(0.0, 100.0), Point::new(0.0, 0.0), o, mid, tip] {
+            contour.line_to(p);
+        }
+        contour.close_path();
+        let mut square = BezPath::new();
+        square.move_to(o);
+        for p in [Point::new(100.0, 0.0), Point::new(100.0, 100.0), Point::new(0.0, 100.0), Point::new(0.0, 0.0), o] {
+            square.line_to(p);
+        }
+        square.close_path();
+        assert_eq!(without_spurs(&contour), Some(square));
+        // A contour that is nothing but a spur, starting at its tip, is nothing.
+        let mut spur = BezPath::new();
+        spur.move_to(tip);
+        for p in [mid, o, mid, tip] {
+            spur.line_to(p);
+        }
+        spur.close_path();
+        assert_eq!(without_spurs(&spur), None);
+    }
+
     /// The check as it was: the nearest distance over every segment, then compared.
     fn dist_to(bp: &BezPath, p: kurbo::Point) -> f64 {
         use kurbo::ParamCurveNearest;

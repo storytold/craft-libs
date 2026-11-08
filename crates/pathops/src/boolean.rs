@@ -543,7 +543,7 @@ pub(crate) fn all_contours_to_path(c: &Contours, tidy: &Tidy) -> BezPath {
 /// Contours whose mean width (2·area / perimeter) is below `precision` are numerical debris
 /// (e.g. the lens left between two coincident curves) and are dropped.
 pub(crate) fn is_sliver(bp: &BezPath, precision: f64) -> bool {
-    let a = bp.area().abs();
+    let a = crate::path::area_about_starts(bp).abs();
     // To a thousandth of the length: the width is compared with the precision, which is not that close,
     // and a bounded measure ([`crate::fit::measured_perimeter`]) cannot be made to subdivide for long.
     // A segment that cannot be measured (coordinates past a billion) is taken at the length of its control polygon.
@@ -1005,7 +1005,7 @@ fn windings_add_up<W: WindingNumber>(top: &Topology<W>, winding: impl Fn(&W) -> 
             top.contours(|w| pred(winding(w)))
         }));
         let c = pass.map_err(|_| PathOpsError::Degenerate)?;
-        Ok(c.contours().map(|ct| ct.path.area()).sum::<f64>().abs())
+        Ok(c.contours().map(|ct| crate::path::area_about_starts(&ct.path)).sum::<f64>().abs())
     };
     let mut integral = 0.0;
     for k in 1..=hi {
@@ -1014,7 +1014,7 @@ fn windings_add_up<W: WindingNumber>(top: &Topology<W>, winding: impl Fn(&W) -> 
     for k in 1..=-lo {
         integral -= region(&|w| w <= -k)?;
     }
-    let want = input.area();
+    let want = crate::path::area_about_starts(input);
     // The sweep moves points by up to its tolerance, which moves an area by about that much along
     // each edge; a misplaced face is far larger.
     let bounds = input.bounding_box();
@@ -1259,18 +1259,19 @@ pub fn try_area(path: &BezPath, rule: FillRule) -> Result<f64, PathOpsError> {
     // an error ([`PathOpsError::NonFinite`], [`PathOpsError::Degenerate`]), not an area of 0.
     eps_for([path])?;
     let c = normalize_bez(&fill_bezpath(path), rule)?;
-    Ok(c.contours().map(|ct| ct.path.area()).sum::<f64>().abs())
+    Ok(c.contours().map(|ct| crate::path::area_about_starts(&ct.path)).sum::<f64>().abs())
 }
 
 /// Unsigned filled area of a path under a fill rule (normalises first, so it is exact for
-/// self-overlapping input).
+/// self-overlapping input). Each contour's area is taken about a point of its own, so a small shape
+/// far from the origin has its area as near it.
 pub fn area(path: &BezPath, rule: FillRule) -> f64 {
     if ensure_size([path]).is_err() {
         return 0.0;
     }
     let bp = fill_bezpath(path);
     match normalize_bez(&bp, rule) {
-        Ok(c) => c.contours().map(|ct| ct.path.area()).sum::<f64>().abs(),
+        Ok(c) => c.contours().map(|ct| crate::path::area_about_starts(&ct.path)).sum::<f64>().abs(),
         Err(_) => 0.0,
     }
 }
@@ -2030,6 +2031,31 @@ mod tests {
             let plain = try_boolean(&s, FillRule::NonZero, &t, FillRule::NonZero, BoolOp::Union, DEFAULT_PRECISION);
             FORCE_RESOLVE_PANIC.with(|f| f.set(None));
             assert!(plain.is_ok_and(|p| (p.area().abs() - 28.0).abs() < 1e-9), "{step:?}");
+        }
+    }
+
+    /// Two plain squares far out add up at once, as near the origin, and are swept once: their areas,
+    /// and those of the regions of the check, are taken about points of their own (about the origin,
+    /// at 1e10, they were thousands off, and the check went on to resolve each operand).
+    #[test]
+    fn a_plain_pair_far_out_adds_up_at_once() {
+        let square = |x: f64| {
+            let mut p = BezPath::new();
+            p.move_to((x, x));
+            p.line_to((x + 4.0, x));
+            p.line_to((x + 4.0, x + 4.0));
+            p.line_to((x, x + 4.0));
+            p.close_path();
+            p
+        };
+        for x in [1e8, 1e10, 1e11] {
+            let (s, t) = (square(x), square(x + 2.0));
+            let arr = Arrangement::new(vec![(s.clone(), FillRule::NonZero), (t.clone(), FillRule::NonZero)]).unwrap();
+            assert_eq!(arrangement_adds_up(&arr, &[&s, &t], Panic::Unknown), Ok(true), "at {x:e}");
+            work::reset();
+            let union = try_boolean(&s, FillRule::NonZero, &t, FillRule::NonZero, BoolOp::Union, DEFAULT_PRECISION).unwrap();
+            assert_eq!(work::take(Work::Sweeps), 1, "at {x:e}: the operands were resolved");
+            assert!((area(&union, FillRule::NonZero) - 28.0).abs() < 1e-3, "at {x:e}");
         }
     }
 

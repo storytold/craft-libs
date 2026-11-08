@@ -440,7 +440,7 @@ impl CoverIds {
 /// its flag ([`Contour::outer`](linesweeper::topology::Contour::outer)), and the pass is then
 /// grouped by where the contours lie instead ([`face_groups_by_winding`]).
 fn face_groups(c: &Contours, owner: &[usize]) -> Vec<(usize, Vec<ContourIdx>)> {
-    let areas: Vec<f64> = c.contours().map(|ct| ct.path.area()).collect();
+    let areas: Vec<f64> = c.contours().map(|ct| crate::path::area_about_starts(&ct.path)).collect();
     if c.contours().zip(&areas).any(|(ct, &a)| ct.outer != (a > 0.0)) {
         return face_groups_by_winding(c, owner, &areas);
     }

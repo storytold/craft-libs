@@ -22,6 +22,42 @@ use crate::work::{self, Work};
 /// A handle closer than this to its anchor is no handle (the segment is a line).
 pub(crate) const HANDLE_EPS: f64 = 1e-9;
 
+/// The signed area of `path` as [`kurbo::Shape::area`] gives it, each subpath's taken about its own
+/// first point. The shoelace multiplies coordinates, and far from the origin their products cancel to
+/// nothing for a small shape (a square half a unit across at 1e8 read 0, and its contour was dropped
+/// as a sliver). Relative to a point of its own subpath a coordinate is exact (the difference of two
+/// numbers within a factor of two of each other), and the area a closed subpath encloses does not
+/// depend on the point it is taken about.
+pub(crate) fn area_about_starts(path: &BezPath) -> f64 {
+    use kurbo::{Line, ParamCurveArea, QuadBez};
+    let (mut total, mut origin, mut start, mut cur) = (0.0, Point::ZERO, Point::ZERO, Point::ZERO);
+    let at = |p: Point, o: Point| Point::new(p.x - o.x, p.y - o.y);
+    for el in path.elements() {
+        match *el {
+            PathEl::MoveTo(p) => (origin, start, cur) = (p, p, p),
+            PathEl::LineTo(p) => {
+                total += Line::new(at(cur, origin), at(p, origin)).signed_area();
+                cur = p;
+            }
+            PathEl::QuadTo(a, p) => {
+                total += QuadBez::new(at(cur, origin), at(a, origin), at(p, origin)).signed_area();
+                cur = p;
+            }
+            PathEl::CurveTo(a, b, p) => {
+                total += CubicBez::new(at(cur, origin), at(a, origin), at(b, origin), at(p, origin)).signed_area();
+                cur = p;
+            }
+            PathEl::ClosePath => {
+                if cur != start {
+                    total += Line::new(at(cur, origin), at(start, origin)).signed_area();
+                }
+                cur = start;
+            }
+        }
+    }
+    total
+}
+
 /// The last point of a closed subpath this close to its start is the start (the subpath's closing
 /// segment arrives there, and the duplicate point is merged into it).
 pub(crate) const JOIN_TOLERANCE: f64 = 1e-7;

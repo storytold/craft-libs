@@ -8,6 +8,7 @@
 #[path = "../common/mod.rs"]
 mod common;
 
+mod far_out;
 mod hostile_params;
 mod limits;
 mod offset_faces;

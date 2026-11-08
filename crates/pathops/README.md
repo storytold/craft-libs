@@ -533,6 +533,17 @@ bit for bit VectorCraft's), and the results are identical except where noted:
     map's outlines has no room to file in pieces is filed under its bounds, where it was read at every lookup
     (1,000 tall rectangles nested in one shape read 1.5 million candidates for 400, now 0.3 million; the same
     items are found);
+  - every area is taken with each subpath's about its own first point, where kurbo's shoelace multiplied
+    absolute coordinates, whose products cancel to nothing for a small shape far out: `try_area` of a square
+    half a unit across was 0 from 1e8 to 1e11, and `normalize` dropped it as a sliver; a unit square's inset by
+    0.25 was empty from 3e7 to 1e9 and at 3e10 and 1e11, and its outset at 3e8, 1e9 and 3e10; a square of 100
+    inset by 1 was empty at 3e10; the faces the planar map finds for two small squares far out, and Divide and
+    Merge of a square with a hole far out, came out wrong; and where a result was made its area read 16,384
+    for 0.25. VectorCraft gives the
+    same (its `try_area` of that square is 0 at 1e8, 1e9 and 1e10, the inset is empty at 1e8 and 1e9, the
+    outset at 1e9). Near the origin the areas agree with VectorCraft's to their last digits: about two thirds
+    of the comparison's random areas now differ from its in those, all by under a billionth, and no other
+    result changes;
   - `boolean_n`, `try_boolean_n` and `try_boolean` check the windings of up to eight inputs that draw something
     (empty paths, and paths of points only, do not count), and the call is an error when a sweep or contour
     pass of the recovery panics, a contour pass of the windings check of a resolved operand or of the resolved

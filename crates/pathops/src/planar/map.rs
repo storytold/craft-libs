@@ -111,7 +111,7 @@ fn map_with(shapes: &[Shape], precision: f64) -> Option<Map> {
             continue;
         }
         let bp = cycle_bezpath(&edges, &cycle);
-        let area = bp.area();
+        let area = crate::path::area_about_starts(&bp);
         // A positive cycle that is a sliver (thinner than the precision) is no face and is left out.
         if area > 0.0 && !is_sliver(&bp, tidy.precision) {
             faces.push((cycle, bp, area));
