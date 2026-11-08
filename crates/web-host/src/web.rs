@@ -36,8 +36,10 @@ impl FileData {
 
 /// A message from the host.
 pub enum Message {
-    /// What the host supports; `handoff`: it routes files the app hands off.
-    Host { version: String, handoff: bool },
+    /// What the host supports; `handoff`: it routes files the app hands off; `autosave`: it
+    /// stores every `save` in place (the same file again), so the app may save by itself after
+    /// each change.
+    Host { version: String, handoff: bool, autosave: bool },
     /// Open a document as File › Open would. `name` is already cleaned ([`crate::file_name`]).
     Open { name: String, data: FileData },
     /// The save with this `id` is stored.
@@ -204,6 +206,7 @@ fn read(kind: Incoming, data: &JsValue) -> Option<Message> {
         Incoming::Host => Message::Host {
             version: string(data, "version").unwrap_or_else(|| VERSION.to_string()),
             handoff: get(data, "handoff").as_bool() == Some(true),
+            autosave: get(data, "autosave").as_bool() == Some(true),
         },
         Incoming::Open => {
             let name = file_name(string(data, "name").as_deref(), "document");
@@ -339,13 +342,23 @@ mod tests {
 
     #[wasm_bindgen_test]
     fn a_host_message_and_a_handoff_done_read_whatever_fields_exist() {
-        // Nothing required: a missing version is the contract's, `handoff` is true only for `true`.
-        for data in [JsValue::NULL, obj(&[]), obj(&[("handoff", "yes".into())]), obj(&[("handoff", 1.into())])] {
-            let Some(Message::Host { version, handoff }) = read(Incoming::Host, &data) else { panic!("a host message is read") };
+        // Nothing required: a missing version is the contract's, `handoff` and `autosave` are
+        // true only for `true`.
+        for data in [
+            JsValue::NULL,
+            obj(&[]),
+            obj(&[("handoff", "yes".into())]),
+            obj(&[("handoff", 1.into())]),
+            obj(&[("autosave", "yes".into())]),
+            obj(&[("autosave", 1.into())]),
+        ] {
+            let Some(Message::Host { version, handoff, autosave }) = read(Incoming::Host, &data) else { panic!("a host message is read") };
             assert_eq!(version, crate::VERSION);
             assert!(!handoff);
+            assert!(!autosave);
         }
-        assert!(matches!(read(Incoming::Host, &obj(&[("handoff", true.into())])), Some(Message::Host { handoff: true, .. })));
+        assert!(matches!(read(Incoming::Host, &obj(&[("handoff", true.into())])), Some(Message::Host { handoff: true, autosave: false, .. })));
+        assert!(matches!(read(Incoming::Host, &obj(&[("autosave", true.into())])), Some(Message::Host { handoff: false, autosave: true, .. })));
         assert!(matches!(
             read(Incoming::HandoffDone, &obj(&[("name", "a.pdf".into()), ("app", "pdfcraft".into())])),
             Some(Message::HandoffDone { name, app }) if name == "a.pdf" && app == "pdfcraft"

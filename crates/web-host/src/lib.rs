@@ -7,7 +7,7 @@
 //! | Kind | Direction | Fields |
 //! |---|---|---|
 //! | `ready` | app → host | `version`, `appVersion?`, `file?` (`true`: it reads a `File`/`Blob` in slices) |
-//! | `host` | host → app | `version`, `handoff?` (`true`: the host routes hand-offs) |
+//! | `host` | host → app | `version`, `handoff?` (`true`: the host routes hand-offs), `autosave?` (`true`: the host stores each `save` in place, so the app may save by itself after changes) |
 //! | `open` | host → app | `name`, and `bytes` or `file` + `size` |
 //! | `save` | app → host | `name`, `bytes`, `id?`, `saveAs?` |
 //! | `saved` | host → app | `id` |

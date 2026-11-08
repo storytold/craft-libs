@@ -12,7 +12,7 @@ The crate has two parts:
 | Kind | Direction | Fields | Meaning |
 |---|---|---|---|
 | `ready` | app → host | `version`, `appVersion?`, `file?` | the app can take a document; `file: true` means it reads a `File`/`Blob` in slices |
-| `host` | host → app | `version`, `handoff?` | what the host supports; `handoff: true` means it routes hand-offs |
+| `host` | host → app | `version`, `handoff?`, `autosave?` | what the host supports; `handoff: true` means it routes hand-offs; `autosave: true` means it stores each `save` in place (the same file again), so the app may save by itself after changes |
 | `open` | host → app | `name`, and `bytes` or `file` + `size` | open a document as File › Open would |
 | `save` | app → host | `name`, `bytes`, `id?`, `saveAs?` | Save, Save As or Export: the host stores the file |
 | `saved` | host → app | `id` | the save with that `id` is stored; the app clears dirty |
