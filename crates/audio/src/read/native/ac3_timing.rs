@@ -111,23 +111,32 @@ pub(super) fn mkv_index(src: &Src<'_>, track: &super::matroska::Track, rate: u32
 }
 
 /// Keep an explicit final block trim without turning rounded container ticks into lost PCM.
-/// Packet starts already account for interior DiscardPadding; using the final packet's own
-/// duration avoids reintroducing timestamp rounding or counting earlier padding twice.
+/// Packet starts already account for interior DiscardPadding. Sum the final block's per-lace
+/// durations and compare from its first lace: BlockDuration describes the whole block.
 pub(super) fn mkv_presentation_frames(index: &Index, track: &super::matroska::Track, rate: u32, skip: u64) -> u64 {
     let mut total = index.total;
     let (num, den) = track.timebase;
     if den > 0
-        && let (Some(sample), Some(&start)) = (track.samples.last(), index.starts.last())
-        && sample.duration > 0
+        && let Some(last) = track.samples.last()
     {
-        let scale = u128::from(num) * u128::from(rate);
-        let declared = (u128::from(sample.duration).saturating_mul(scale).saturating_add(u128::from(den) / 2)) / u128::from(den);
-        let declared = u64::try_from(declared).unwrap_or(u64::MAX);
-        // A duration can be the difference of two rounded tick endpoints: allow one tick,
-        // rounded upward to a whole sample, rather than a fixed codec-sized tolerance.
-        let rounding = u64::try_from(scale.div_ceil(u128::from(den))).unwrap_or(u64::MAX);
-        if total.saturating_sub(start).saturating_sub(declared) > rounding {
-            total = start.saturating_add(declared).min(total);
+        let mut first = track.samples.len();
+        let mut duration = 0u128;
+        for sample in track.samples.iter().rev().take_while(|sample| sample.block_offset == last.block_offset) {
+            first -= 1;
+            duration += u128::from(sample.duration);
+        }
+        if duration > 0
+            && let Some(&start) = index.starts.get(first)
+        {
+            let scale = u128::from(num) * u128::from(rate);
+            let declared = (duration.saturating_mul(scale).saturating_add(u128::from(den) / 2)) / u128::from(den);
+            let declared = u64::try_from(declared).unwrap_or(u64::MAX);
+            // A duration can be the difference of two rounded tick endpoints: allow one tick,
+            // rounded upward to a whole sample, rather than a fixed codec-sized tolerance.
+            let rounding = u64::try_from(scale.div_ceil(u128::from(den))).unwrap_or(u64::MAX);
+            if total.saturating_sub(start).saturating_sub(declared) > rounding {
+                total = start.saturating_add(declared).min(total);
+            }
         }
     }
     total.saturating_sub(skip)

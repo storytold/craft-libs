@@ -293,6 +293,23 @@ fn final_matroska_trim_keeps_interior_padding_and_codec_delay() {
 }
 
 #[test]
+fn final_laced_matroska_duration_trims_the_whole_block() {
+    // The last block contains two 1536-sample laces. Its 48 ms BlockDuration applies
+    // to their combined 3072 samples, not just to the final lace's divided duration.
+    for (duration, final_frames) in [(64, 3072), (63, 3072), (48, 2304), (16, 768)] {
+        let bytes = stripped_matroska_with_final_duration(true, false, Some(duration));
+        let expected = 9 * 1536 + final_frames - 256;
+        let (info, full) = crate::decode(&bytes, Some("mkv")).unwrap();
+        assert_eq!(info.frames, expected, "final block duration {duration} ms");
+        assert_eq!(full.frames() as u64, expected);
+        let mut reader = super::super::open_mkv(&Src::Slice(&bytes), crate::Container::Matroska, None).unwrap().unwrap();
+        reader.seek(expected - 100).unwrap();
+        assert_eq!(reader.next_block().unwrap().unwrap().channels[0].len(), 100);
+        assert!(reader.next_block().unwrap().is_none());
+    }
+}
+
+#[test]
 fn damaged_header_still_allows_supported_matroska_padding_fallback() {
     let mut bytes = stripped_matroska(false, true);
     let file = craft_media::matroska::open(Src::Slice(&bytes)).unwrap();
