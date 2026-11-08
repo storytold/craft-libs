@@ -1259,6 +1259,41 @@ fn the_fills_a_face_is_tested_against_are_those_near_it() {
     assert!(large <= 8 * 400, "{large} tests for 400 faces, against {} for a scan", 400 * 400);
 }
 
+/// A fill of many subpaths (squares in a column, one shape) is tested for a point against the subpaths
+/// whose bounds hold it: the cost of a face is the few near it, so the cost of all the faces grows
+/// with their number, where it was the square of it (4 s for 8,000 squares, 15 s for 16,000).
+#[test]
+fn a_fill_of_many_subpaths_is_tested_against_the_few_that_hold_the_point() {
+    let column = |n: usize| {
+        let mut col = BezPath::new();
+        for j in 0..n {
+            col.extend(rect_path(5_000.0, 3.0 * j as f64, 5_001.0, 3.0 * j as f64 + 1.0).iter());
+        }
+        Shape::new(col, FillRule::NonZero, 0)
+    };
+    let mut counts = Vec::new();
+    for n in [4_000usize, 16_000] {
+        let shape = column(n);
+        let fill = super::graph::Fill::new(&shape);
+        work::reset();
+        // A point in the middle of every square is in its fill, and one between two is not.
+        for j in 0..n {
+            assert!(fill.contains(Point::new(5_000.5, 3.0 * j as f64 + 0.5)), "square {j}");
+            assert!(!fill.contains(Point::new(5_000.5, 3.0 * j as f64 + 2.0)), "gap {j}");
+        }
+        let subpaths = work::take(Work::FillSubpaths);
+        assert!(subpaths <= 2 * n, "{subpaths} subpaths wound for {n} squares and as many gaps, against {} for a scan", 2 * n * n);
+        counts.push(subpaths);
+    }
+    assert!(counts[1] <= 5 * counts[0], "4,000 squares {}, 16,000 squares {}: linear, four times as many", counts[0], counts[1]);
+    // And through the map: 2,000 squares of one shape are 2,000 faces, each in the shape.
+    work::reset();
+    let (faces, _) = live_paint(&[column(2_000)]);
+    assert_eq!(faces.len(), 2_000);
+    assert!(faces.iter().all(|f| f.sources == [0]));
+    assert!(work::take(Work::FillSubpaths) <= 2 * 2_000, "a face winds the few subpaths near it");
+}
+
 /// A path of parts far apart, each a unit high, is missed by the first heights tried; the search
 /// goes on over a bounded number of the stretches between the heights of its vertices, and so finds
 /// a part, whatever the number of parts.
@@ -1296,24 +1331,130 @@ fn an_interior_point_is_found_among_parts_far_apart_in_a_bounded_search() {
 /// be level in it); then by the next power of two that leaves none level.
 #[test]
 fn the_shear_is_changed_only_for_an_open_path_that_would_be_level_in_it() {
-    use super::index::{SHEARS, shear_for};
+    use super::index::{SHEARS, frame_for};
+    let shear_of = |shapes: &[Shape]| frame_for(shapes).map(|f| f.k());
     let shape = |p: BezPath| Shape::new(p, FillRule::NonZero, 0);
     let ordinary = [shape(line_path((0.0, 0.0), (100.0, 0.0))), shape(line_path((0.0, 0.0), (10.0, 10.0)))];
-    assert_eq!(shear_for(&ordinary), 1.0 / 32.0);
+    assert_eq!(shear_of(&ordinary), Some(1.0 / 32.0));
     // A closed shape with such an edge is no trouble: only open paths are.
     let closed = [shape(polyline(&[(0.0, 0.0), (64.0, -2.0), (64.0, 10.0)], true))];
-    assert_eq!(shear_for(&closed), 1.0 / 32.0);
+    assert_eq!(shear_of(&closed), Some(1.0 / 32.0));
     let level = line_path((-10.0, 50.3125), (110.0, 46.5625));
-    assert_eq!(shear_for(&[shape(level.clone())]), 1.0 / 64.0);
+    assert_eq!(shear_of(&[shape(level.clone())]), Some(1.0 / 64.0));
     // Also a curve with a side of its control polygon that slopes so.
     let mut curve = BezPath::new();
     curve.move_to((0.0, 0.0));
     curve.curve_to((32.0, -1.0), (50.0, 20.0), (60.0, 10.0));
-    assert_eq!(shear_for(&[shape(curve)]), 1.0 / 64.0);
+    assert_eq!(shear_of(&[shape(curve)]), Some(1.0 / 64.0));
     // And one that is level in the next too moves on to the one after.
     let second = line_path((0.0, 0.0), (64.0, -1.0));
-    assert_eq!(shear_for(&[shape(level), shape(second)]), 1.0 / 16.0);
+    assert_eq!(shear_of(&[shape(level), shape(second)]), Some(1.0 / 16.0));
     assert_eq!(SHEARS[2], 1.0 / 16.0);
+}
+
+/// The test of whether an open path is level is made on the paths as the sweep gets them, snapped to
+/// its tolerance, which a distant shape widens: a line that rises 5e-4 in the usual frame is level
+/// there once a shape at 1e11 makes the tolerance 1.5e-3, so the frame moves on.
+#[test]
+fn an_open_path_that_snapping_levels_moves_the_shear_on() {
+    use super::index::frame_for;
+    let line = line_path((0.0, 0.0), (100.0, -3.1245));
+    let shape = |p: BezPath| Shape::new(p, FillRule::NonZero, 0);
+    let alone = frame_for(&[shape(line.clone())]).expect("a frame");
+    assert_eq!(alone.k(), 1.0 / 32.0, "by itself it is not level (it rises 5e-4 in 100)");
+    let far = rect_path(1e11, 1e11, 1e11 + 1.0, 1e11 + 1.0);
+    let both = frame_for(&[shape(line), shape(far)]).expect("a frame");
+    assert!(both.eps > 1e-3, "{}", both.eps);
+    assert_eq!(both.k(), 1.0 / 64.0, "the next shear, in which the line rises 1.6");
+}
+
+/// A side of an open path no longer than a few tolerances of the sweep is level in every shear (the
+/// shear moves its far end by less than the tolerance), and is no side the level test looks at: one
+/// such feature in a drawing does not leave it with no frame. A side a little longer is looked at.
+#[test]
+fn a_side_within_a_few_tolerances_is_not_looked_at_by_the_level_test() {
+    use super::index::frame_for;
+    let shape = |p: BezPath, key: u64| Shape::new(p, FillRule::NonZero, key);
+    let square = rect_path(0.0, 0.0, 100.0, 100.0);
+    // The sweep's tolerance here is 1e-6. Stubs along the height of the frame, whichever shear it uses.
+    for len in [1e-9, 1e-7, 7e-6] {
+        for stub in [line_path((300.0, 300.0), (300.0 + len, 300.0)), line_path((300.0, 300.0), (300.0 + len, 300.0 + len))] {
+            work::reset();
+            let frame = frame_for(&[shape(square.clone(), 0), shape(line_path((-10.0, 50.0), (110.0, 50.0)), 1), shape(stub, 2)]);
+            assert_eq!(frame.map(|f| f.k()), Some(1.0 / 32.0), "a stub {len} long");
+            assert_eq!(work::take(Work::FrameTries), 1, "a stub {len} long: framed at the first try");
+        }
+    }
+    // A stub of 1e-4 along the height of the frame is a side: level in the usual shear, and the next works.
+    work::reset();
+    let stub = line_path((300.0, 300.0), (300.0 + 1e-4, 300.0 - 1e-4 / 32.0));
+    let frame = frame_for(&[shape(square, 0), shape(stub, 2)]).expect("a frame");
+    assert!(frame.k() != 1.0 / 32.0 && work::take(Work::FrameTries) > 1, "k = {}", frame.k());
+}
+
+/// Lines level in each of the ten shears together are in no frame: the map is not built, rather than built
+/// with one of them lost.
+#[test]
+fn open_paths_level_in_every_shear_give_no_frame_and_no_map() {
+    use super::index::{SHEARS, frame_for};
+    let lines: Vec<Shape> = SHEARS
+        .iter()
+        .enumerate()
+        .map(|(i, k)| Shape::new(line_path((0.0, 100.0 * i as f64), (1024.0, 100.0 * i as f64 - k * 1024.0)), FillRule::NonZero, i as u64))
+        .collect();
+    work::reset();
+    assert!(frame_for(&lines).is_none(), "a line is level in each shear");
+    assert_eq!(work::take(Work::FrameTries), SHEARS.len(), "each shear is tried once, and no other");
+    assert_eq!(live_paint(&lines), (Vec::new(), Vec::new()));
+    // Nine of them leave the tenth.
+    work::reset();
+    assert_eq!(frame_for(&lines[..9]).map(|f| f.k()), Some(SHEARS[9]));
+    assert_eq!(work::take(Work::FrameTries), SHEARS.len());
+    // Ordinary art is framed at the first try.
+    work::reset();
+    assert!(frame_for(&[Shape::new(line_path((0.0, 0.0), (10.0, 10.0)), FillRule::NonZero, 0)]).is_some());
+    assert_eq!(work::take(Work::FrameTries), 1);
+}
+
+/// Edges that run back over each other cancel in the winding, as many of each way as the difference
+/// of their numbers leaves, and the rest keep their order. Exactly: ends a hair apart are not the same edge.
+#[test]
+fn edges_that_run_back_over_each_other_cancel_and_the_rest_keep_their_order() {
+    use super::map::without_retraces;
+    let [a, b, c, d, e] = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (5.0, 5.0), (6.0, 5.0)].map(|(x, y)| Point::new(x, y));
+    // Out and back through the same points leaves nothing.
+    assert_eq!(without_retraces(vec![(a, b), (b, c), (c, b), (b, a)]), vec![]);
+    // Two one way and one the other leaves one; the others keep their order.
+    assert_eq!(without_retraces(vec![(d, e), (a, b), (e, d), (b, c), (a, b), (b, a)]), vec![(a, b), (b, c)]);
+    assert_eq!(without_retraces(vec![(b, a), (b, a), (a, b), (c, d)]), vec![(b, a), (c, d)]);
+    // An edge of no length bounds nothing.
+    assert_eq!(without_retraces(vec![(a, a), (a, b)]), vec![(a, b)]);
+    // And an edge back to a point a hair off is another edge.
+    let near = Point::new(1.0 + 1e-12, 0.0);
+    assert_eq!(without_retraces(vec![(a, b), (near, a)]).len(), 2);
+}
+
+/// A retraced stub costs the heights it would have been given: a square beside an out-and-back path
+/// with a vertex at every integer height is found at the first heights tried.
+#[test]
+fn a_retraced_path_does_not_use_up_the_heights_of_the_search() {
+    let mut p = polyline(&[(0.0, 400.3), (1.0, 400.3), (1.0, 401.3), (0.0, 401.3)], true);
+    let out: Vec<(f64, f64)> = (0..=1000).map(|y| (5.0, f64::from(y))).collect();
+    let back: Vec<(f64, f64)> = (0..1000).rev().map(|y| (5.0, f64::from(y))).collect();
+    p.extend(polyline(&[out, back].concat(), false).iter());
+    work::reset();
+    let at = crate::interior_point(&p).expect("a point in the square");
+    assert!(kurbo::Shape::winding(&p, at) != 0 && at.x < 1.0);
+    // The heights of the whole path (nine, and the sixty-four more) find nothing in 2,001 stretches of a
+    // thousand heights; those of what does not cancel, in its own bounds, find the square at the first.
+    let heights = work::take(Work::InteriorHeights);
+    assert_eq!(heights, 9 + 64 + 9, "the first search, then the second");
+    // Without the retrace it is the same square.
+    let square = polyline(&[(0.0, 400.3), (1.0, 400.3), (1.0, 401.3), (0.0, 401.3)], true);
+    assert_eq!(crate::interior_point(&p), crate::interior_point(&square));
+    // A path that is nothing but a retrace has no inside.
+    let stub = polyline(&[(0.0, 0.0), (0.0, 5.0), (0.0, 10.0), (0.0, 5.0), (0.0, 0.0)], false);
+    assert_eq!(crate::interior_point(&stub), None);
 }
 
 fn line_path(a: (f64, f64), b: (f64, f64)) -> BezPath {

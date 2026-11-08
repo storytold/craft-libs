@@ -26,6 +26,10 @@ pub(crate) const HANDLE_EPS: f64 = 1e-9;
 /// segment arrives there, and the duplicate point is merged into it).
 pub(crate) const JOIN_TOLERANCE: f64 = 1e-7;
 
+/// The sine of the angle between the handles of a loop of one cubic below which it has no inside:
+/// rounding in the cross product of two handles is about 1e-16 of the product of their lengths.
+const LOOP_SINE: f64 = 1e-12;
+
 /// One subpath of a path: where it starts, the segments that follow, and whether it was closed.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Sub {
@@ -91,12 +95,13 @@ impl Sub {
         if self.closed && self.end().distance(self.start) < JOIN_TOLERANCE { n - 1 } else { n }
     }
 
-    /// An open subpath of three or more anchors whose last anchor lies within 1e-6 of its first (the
-    /// test [`join`](crate::join) applies to one path) as a closed subpath: its last segment ends on
-    /// the first anchor. Any other subpath is returned unchanged. (A drawing program writes an ellipse
+    /// An open subpath of three or more anchors, or of one cubic that loops round an area
+    /// ([`Sub::draws_something`]), whose last anchor lies within 1e-6 of its first (the test
+    /// [`join`](crate::join) applies to one path) as a closed subpath: its last segment ends on the
+    /// first anchor. Any other subpath is returned unchanged. (A drawing program writes an ellipse
     /// as a path that comes back to where it started without closing.)
     pub(crate) fn closed_if_ends_meet(mut self) -> Self {
-        if !self.closed && self.anchors() > 2 && self.end().distance(self.start) < 1e-6 {
+        if !self.closed && self.end().distance(self.start) < 1e-6 && (self.anchors() > 2 || self.loops_round_area()) {
             let start = self.start;
             if let Some(last) = self.draws.last_mut() {
                 *last = with_end(*last, start);
@@ -110,14 +115,21 @@ impl Sub {
     /// it (one anchor) draws a point or a line out and back, unless that segment is a cubic whose
     /// handles take it round an area (`M0,0 C100,0 0,100 0,0 Z` is a loop with an inside).
     pub(crate) fn draws_something(&self) -> bool {
-        if self.anchors() >= 2 {
-            return true;
-        }
-        let [PathEl::CurveTo(..)] = self.draws[..] else { return false };
-        let mut bp = BezPath::new();
-        self.push_closed(&mut bp);
-        let size = kurbo::Shape::bounding_box(&bp).size();
-        kurbo::Shape::area(&bp).abs() > 1e-9 * (size.width * size.width + size.height * size.height)
+        self.anchors() >= 2 || self.loops_round_area()
+    }
+
+    /// Is the subpath one cubic whose handles, taken from its start, are not along one line? Such a
+    /// cubic that ends where it starts is a loop with an inside: it encloses 3/20 of the cross
+    /// product of its handles, which is nothing when they lie along a line.
+    ///
+    /// Told by the angle between the handles, not by the area against the size of the loop: a loop
+    /// of 150 million square units that is a billion long and one unit wide has an area a billionth
+    /// of the square of its length, and is as much a loop as a round one. What is nothing is a cross
+    /// product that is rounding, a trillionth of what the lengths of the handles could make of it.
+    fn loops_round_area(&self) -> bool {
+        let [PathEl::CurveTo(a, b, _)] = self.draws[..] else { return false };
+        let (h1, h2) = (a - self.start, b - self.start);
+        h1.cross(h2).abs() > LOOP_SINE * h1.hypot() * h2.hypot()
     }
 
     /// The segments of the subpath as it is written ([`Sub::push_open`] or [`Sub::push_closed`]),

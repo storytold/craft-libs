@@ -11,7 +11,7 @@ use linesweeper::topology::{ContourIdx, Contours};
 
 use crate::boolean::{
     Arrangement, DEFAULT_PRECISION, Tidy, all_contours_to_path, append_contours, contours_to_path, ensure_size, eps_for, normalize_bez,
-    try_unite_all_with,
+    normalize_bez_within, try_unite_all_with,
 };
 use crate::edit::remove_redundant_points;
 use crate::fit::measured_perimeter;
@@ -77,7 +77,10 @@ fn stroke_within(bp: &BezPath, width: f64, cap: Cap, join: Join, miter_limit: f6
     }
     let mut laid = BezPath::new();
     for part in &parts {
-        append_contours(&mut laid, &normalize_bez(part, FillRule::NonZero)?, budget)?;
+        let Some(c) = normalize_bez_within(part, FillRule::NonZero, budget.saturating_sub(laid.elements().len()))? else {
+            return Err(PathOpsError::TooComplex);
+        };
+        append_contours(&mut laid, &c, budget)?;
     }
     Ok(laid)
 }
@@ -221,7 +224,9 @@ pub fn try_stroke_region(outlines: &[BezPath]) -> Result<BezPath, PathOpsError> 
     // Each outline is normalised on its own first, as in `stroke_region`.
     let mut all = BezPath::new();
     for p in &parts {
-        append_contours(&mut all, &normalize_bez(p, FillRule::NonZero)?, crate::budget::limits().elements)?;
+        let left = crate::budget::limits().elements.saturating_sub(all.elements().len());
+        let Some(c) = normalize_bez_within(p, FillRule::NonZero, left)? else { return Err(PathOpsError::TooComplex) };
+        append_contours(&mut all, &c, crate::budget::limits().elements)?;
     }
     if all.elements().is_empty() {
         return Ok(BezPath::new());
@@ -245,10 +250,16 @@ pub fn stroke_region(outlines: &[BezPath]) -> BezPath {
     // it overlaps, and the raw windings would cancel there under the non-zero rule.
     let mut all = BezPath::new();
     for p in &parts {
-        if let Ok(c) = normalize_bez(p, FillRule::NonZero)
-            && append_contours(&mut all, &c, crate::budget::limits().elements).is_err()
-        {
-            return BezPath::new();
+        let left = crate::budget::limits().elements.saturating_sub(all.elements().len());
+        match normalize_bez_within(p, FillRule::NonZero, left) {
+            Ok(Some(c)) => {
+                if append_contours(&mut all, &c, crate::budget::limits().elements).is_err() {
+                    return BezPath::new();
+                }
+            }
+            // Over what is left: the union would be refused as too complex.
+            Ok(None) => return BezPath::new(),
+            Err(_) => {}
         }
     }
     if all.elements().is_empty() {
@@ -277,23 +288,33 @@ fn split_closed_open(path: &BezPath) -> (BezPath, BezPath) {
 /// of it is on that boundary, else the contours of its sweep. A rectangle inside another one wound
 /// the same way is a subpath of the fill but no part of its boundary, and an inset must not stroke it.
 ///
-/// Told by the lengths of the two (the boundary is shorter by the edges that are not on it). They are
-/// measured to a relative accuracy, and only up to [`MAX_COMPARED_CURVES`] curves: past that, or with
-/// a segment that cannot be measured, the boundary is used, which is right for any input and differs
-/// from `closed` only in how it is cut.
+/// Told by the contours and by the lengths of the two. There are fewer contours than subpaths when a
+/// subpath is none of them (inside another, wound the same way) or two are one (overlapping): then not
+/// all of `closed` is boundary. (A subpath that crosses itself makes more contours, and may be all
+/// boundary.) And the boundary is shorter by the edges that are not on it. The lengths are measured to a
+/// relative accuracy, and they agree to what that accuracy and the sweep's tolerance at each vertex
+/// allow and no more: a difference that is a fraction of the length of the whole, as a unit square in a
+/// square a million across is, tells of edges that are not on the boundary. Only up to
+/// [`MAX_COMPARED_CURVES`] curves are measured: past that, or with a segment that cannot be measured,
+/// the boundary is used, which is right for any input and differs from `closed` only in how it is cut.
 fn filled_boundary(closed: &BezPath) -> Result<BezPath, PathOpsError> {
     let mut boundary = BezPath::new();
+    let mut contours = 0usize;
     for contour in normalize_bez(closed, FillRule::NonZero)?.contours() {
         boundary.extend(contour.path.iter());
+        contours += 1;
     }
+    let subpaths = closed.elements().iter().filter(|el| matches!(el, PathEl::MoveTo(_))).count();
     let curves = |p: &BezPath| p.segments().filter(|s| !matches!(s, kurbo::PathSeg::Line(_))).count();
-    if curves(closed).saturating_add(curves(&boundary)) > MAX_COMPARED_CURVES {
+    if contours < subpaths || curves(closed).saturating_add(curves(&boundary)) > MAX_COMPARED_CURVES {
         return Ok(boundary);
     }
-    Ok(match (measured_perimeter(&boundary, 1e-9), measured_perimeter(closed, 1e-9)) {
-        (Some(kept), Some(whole)) if (whole - kept).abs() <= 1e-6 * whole => closed.clone(),
-        _ => boundary,
-    })
+    let (Some(kept), Some(whole)) = (measured_perimeter(&boundary, 1e-9), measured_perimeter(closed, 1e-9)) else { return Ok(boundary) };
+    // Each length is off by a billionth of the control polygons it sums (4e-9 of the whole allows both,
+    // with room), and a vertex of the sweep's output is up to its tolerance from where it was.
+    let vertices = closed.elements().len().saturating_add(boundary.elements().len());
+    let noise = 4e-9 * whole + 2.0 * eps_for([closed])? * vertices as f64;
+    Ok(if (whole - kept).abs() <= noise { closed.clone() } else { boundary })
 }
 
 /// Most curves (of the two paths together) whose lengths [`filled_boundary`] measures.
@@ -327,7 +348,7 @@ fn offset_with_check<W>(
     let ring = if d > 0.0 { stroke_bez(&closed, 2.0 * d, Cap::Butt, join, miter_limit)? } else { BezPath::new() };
     let open_bp = if d > 0.0 && !open.elements().is_empty() { stroke_bez(&open, 2.0 * d, Cap::Butt, join, miter_limit)? } else { BezPath::new() };
     // Kept for an inset, which adds the outlines of the open subpaths to the rest.
-    let open_outline = (delta < 0.0).then(|| open_bp.clone());
+    let open_outline = (delta < 0.0 && !open_bp.elements().is_empty()).then(|| open_bp.clone());
     let arr = Arrangement::new_budgeted(
         vec![(fill, FillRule::NonZero), (ring, FillRule::NonZero), (open_bp, FillRule::NonZero)],
         crate::budget::limits().offset_segment_pairs,
@@ -339,21 +360,34 @@ fn offset_with_check<W>(
     // it lies closer than `d`: holes when growing, islands when insetting.
     let drop_outer = delta < 0.0;
     let source = std::cell::LazyCell::new(|| index(&if drop_outer { closed.clone() } else { canonical(path) }));
-    let within = |p: kurbo::Point, r: f64| near(&source, p, r);
-    let spurious: Vec<bool> =
-        c.contours().map(|k| k.outer == drop_outer && deep_point(&k.path).is_some_and(|p| within(p, d * (1.0 - 1e-4) - 1e-6))).collect();
-    let result = if spurious.contains(&true) {
-        let keep = (0..spurious.len()).filter(|&i| !has_marked_ancestor(&c, i, &spurious)).map(ContourIdx);
-        contours_to_path(&c, keep, &Tidy::free(DEFAULT_PRECISION))
-    } else {
-        all_contours_to_path(&c, &Tidy::free(DEFAULT_PRECISION))
-    };
+    let result = without_spurious(&c, drop_outer, d, |p, r| near(&source, p, r));
     // An inset takes the strokes of the closed subpaths away, and an open subpath is outlined by its
-    // stroke whichever way the offset goes: the outlines are added to what is left.
-    if let Some(outline) = open_outline.filter(|o| !o.elements().is_empty()) {
-        return try_unite_all_with(&[(&result, FillRule::NonZero), (&outline, FillRule::NonZero)], DEFAULT_PRECISION);
+    // stroke whichever way the offset goes: the outlines are added to what is left. They are cleaned
+    // of the stroker's holes first, as the arrangement of a growing offset cleans them, or an open
+    // curve that turns inside the radius would leave a hole in an inset and not in an outset.
+    if let Some(raw) = open_outline {
+        let near_open = std::cell::LazyCell::new(|| index(&open));
+        let alone = Arrangement::new_budgeted(vec![(raw, FillRule::NonZero)], crate::budget::limits().offset_segment_pairs)?;
+        let outline = without_spurious(&alone.try_contours(|m| m[0])?, false, d, |p, r| near(&near_open, p, r));
+        if !outline.elements().is_empty() {
+            return try_unite_all_with(&[(&result, FillRule::NonZero), (&outline, FillRule::NonZero)], DEFAULT_PRECISION);
+        }
     }
     Ok(result)
+}
+
+/// The contours `c` of a stroke's arrangement, without those that are spurious: an outer contour
+/// (`drop_outer`) or a hole (not) with a point deep inside it that `within` finds closer than `d` to
+/// the path that was stroked, and everything inside such a contour.
+fn without_spurious(c: &Contours, drop_outer: bool, d: f64, within: impl Fn(kurbo::Point, f64) -> bool) -> BezPath {
+    let spurious: Vec<bool> =
+        c.contours().map(|k| k.outer == drop_outer && deep_point(&k.path).is_some_and(|p| within(p, d * (1.0 - 1e-4) - 1e-6))).collect();
+    if spurious.contains(&true) {
+        let keep = (0..spurious.len()).filter(|&i| !has_marked_ancestor(c, i, &spurious)).map(ContourIdx);
+        contours_to_path(c, keep, &Tidy::free(DEFAULT_PRECISION))
+    } else {
+        all_contours_to_path(c, &Tidy::free(DEFAULT_PRECISION))
+    }
 }
 
 /// Offset Path. Positive `delta` grows the filled area, negative insets it.
@@ -1019,6 +1053,46 @@ mod tests {
         assert!(made >= full && made < full + full / 20, "{made} against {full}");
     }
 
+    /// One subpath that goes back and forth across a square, first along it and then up and down it:
+    /// 2m passes joined at their ends, more than a window of segments for 70, and a stroke whose
+    /// windows each cross themselves in a lattice.
+    fn back_and_forth(m: usize) -> BezPath {
+        let side = 10.0 * m as f64;
+        let mut pts = Vec::new();
+        for i in 0..m {
+            let y = 10.0 * i as f64;
+            let (a, b) = if i % 2 == 0 { (0.0, side) } else { (side, 0.0) };
+            pts.extend([(a, y), (b, y)]);
+        }
+        for i in 0..m {
+            let x = 10.0 * i as f64 + 5.0;
+            let (a, b) = if i % 2 == 0 { (0.0, side) } else { (side, 0.0) };
+            pts.extend([(x, a), (x, b)]);
+        }
+        polyline(&pts, false)
+    }
+
+    /// The contours of a window of a stroke are counted before they are made, against the elements left
+    /// of the budget of the stroke: windows that cross themselves in a lattice make far more boundary
+    /// than outline, and a budget that fits the outline refuses them before any contour is made.
+    #[test]
+    fn the_windows_of_a_stroke_are_counted_before_their_contours_are_made() {
+        let path = back_and_forth(70);
+        assert!(subs(&path)[0].draws.len() > STROKE_WINDOW + 10);
+        work::reset();
+        assert!(stroke_outlines(&path, 1.0, Cap::Butt, Join::Miter, 4.0, usize::MAX).is_ok());
+        let outline = work::take(Work::StrokeOutput);
+        // Room for the outline of the stroke, which is made, but not for the lattice the sweep cuts it into.
+        work::reset();
+        assert_eq!(stroke_within(&path, 1.0, Cap::Butt, Join::Miter, 4.0, outline), Err(PathOpsError::TooComplex));
+        assert_eq!(work::take(Work::StrokeOutput), outline, "the whole outline was made");
+        assert_eq!(work::take(Work::ContourElements), 0, "no contour was");
+        assert!(work::take(Work::BoundarySegments) > 2 * outline, "the boundary of the first window alone is far more than the outline");
+        // With room for them they are made.
+        assert!(stroke_within(&path, 1.0, Cap::Butt, Join::Miter, 4.0, 100 * outline).is_ok());
+        assert!(work::take(Work::ContourElements) > outline);
+    }
+
     /// A subpath stroked in windows covers what the stroker covers in one piece, open or closed,
     /// for caps and joins of every kind. (Not to the last digit: where the stroker's inner joins
     /// loop, the one outline and the windows' outlines lose a different sliver, a millionth of the area.)
@@ -1049,6 +1123,76 @@ mod tests {
             p.extend(kurbo::Circle::new((f64::from(i as u32) * 20.0, 0.0), 5.0).to_path(0.01).iter());
         }
         p
+    }
+
+    /// The boundary is the art when every edge is on it, at any size, and is the sweep's contours when
+    /// some edge is not however small beside the rest: a unit square inside one a million across (its
+    /// 4 units of edge are a millionth of the perimeter), a square of a ten-thousandth inside a
+    /// thousand-unit one, one in a billion-unit square, and shapes that cross or overlap (whose edges
+    /// inside each other are no boundary).
+    #[test]
+    fn the_boundary_of_ordinary_art_is_the_art_and_an_edge_inside_it_is_not() {
+        use crate::testutil::{ellipse, rect, subpath_count};
+        let scaled = |p: &BezPath, k: f64| {
+            let mut q = p.clone();
+            q.apply_affine(kurbo::Affine::scale(k));
+            q
+        };
+        let mut ring = rect(0.0, 0.0, 100.0, 100.0);
+        // A hole, wound the other way.
+        ring.extend(polyline(&[(30.0, 30.0), (30.0, 70.0), (70.0, 70.0), (70.0, 30.0)], true).iter());
+        let mut apart = ellipse(kurbo::Rect::new(0.0, 0.0, 80.0, 50.0));
+        let mut below = circles(3);
+        below.apply_affine(kurbo::Affine::translate((0.0, -100.0)));
+        apart.extend(below.iter());
+        let blob = {
+            let mut b = BezPath::new();
+            b.move_to((0.0, 0.0));
+            b.curve_to((40.0, -30.0), (80.0, 30.0), (100.0, 0.0));
+            b.curve_to((130.0, 50.0), (70.0, 90.0), (50.0, 100.0));
+            b.curve_to((10.0, 80.0), (-30.0, 30.0), (0.0, 0.0));
+            b.close_path();
+            b
+        };
+        for k in [1.0, 1e3, 1e6, 1e8] {
+            for (name, art) in [("ring", &ring), ("ellipse and circles", &apart), ("blob", &blob)] {
+                let art = scaled(art, k);
+                let closed = crate::path::canonical(&art);
+                assert_eq!(filled_boundary(&closed).unwrap(), closed, "{name} at {k}");
+            }
+        }
+        for (outer, inner) in [(1e6, 1.0), (1e3, 1e-4), (1e8, 1.0)] {
+            let mut nested = rect(0.0, 0.0, outer, outer);
+            nested.extend(rect(outer / 3.0, outer / 3.0, outer / 3.0 + inner, outer / 3.0 + inner).iter());
+            let boundary = filled_boundary(&nested).unwrap();
+            assert!(
+                boundary != nested && subpath_count(&boundary) == 1,
+                "a square of {inner} in one of {outer}: {} subpaths",
+                subpath_count(&boundary)
+            );
+        }
+        // Told by the contours alone: a square of a thousandth in one a billion across is a few parts in a
+        // trillion of the length, under what the lengths can be told apart by.
+        let mut speck = rect(0.0, 0.0, 1e9, 1e9);
+        speck.extend(rect(4e8, 4e8, 4e8 + 1e-3, 4e8 + 1e-3).iter());
+        assert!(filled_boundary(&speck).unwrap() != speck, "a square of a thousandth in one of a billion");
+        // And told by the lengths alone, with as many contours as subpaths: a square that goes round twice
+        // in one subpath, and one that has a small loop inside it, wound the same way, in the same subpath.
+        let twice = polyline(&[(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0), (0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)], true);
+        let boundary = filled_boundary(&twice).unwrap();
+        assert!(boundary != twice && subpath_count(&boundary) == 1, "a square drawn twice");
+        let loop_inside = |s: f64| polyline(&[(0.0, 0.0), (s, 0.0), (s, s), (0.0, s), (0.0, 0.0), (5.0, 1.0), (5.0, 5.0)], true);
+        for s in [100.0, 1e7] {
+            let one = loop_inside(s);
+            assert_eq!(subpath_count(&one), 1);
+            assert!(filled_boundary(&one).unwrap() != one, "a loop of 20 square units inside a square of {s}");
+        }
+        // A rectangle across another: the edges inside are no boundary, and the contours are one.
+        let mut crossing = rect(0.0, 0.0, 100.0, 100.0);
+        crossing.extend(rect(50.0, 50.0, 150.0, 150.0).iter());
+        let boundary = filled_boundary(&crossing).unwrap();
+        assert_eq!(subpath_count(&boundary), 1);
+        assert!(boundary != crossing);
     }
 
     /// The boundary an inset strokes is told from the path by measuring the curves of both, and

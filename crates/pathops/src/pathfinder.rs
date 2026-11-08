@@ -56,7 +56,9 @@ pub enum PathfinderOp {
     Merge,
     /// Keep the visible parts of lower shapes that lie inside the front-most shape (which is removed).
     Crop,
-    /// Split every edge at intersections; returns *open* paths keyed by the shape they bound.
+    /// Split every edge at intersections; returns *open* paths keyed by the shape they bound. Where
+    /// an open path is among the shapes the intersections come from the planar map, and there are no
+    /// shapes when it cannot be built (past [`crate::SHAPE_BUILDER_MAX_SEGMENTS`] segments, say).
     Outline,
     /// Front-most minus everything behind; keeps the front-most key.
     MinusBack,
@@ -82,6 +84,12 @@ impl Region {
     pub fn contains(&self, p: Point) -> bool {
         self.path.winding(p) != 0
     }
+}
+
+/// Is some subpath of `shapes` an open one, that is not a ring (a path of three anchors or more that
+/// comes back to where it started counts as closed, as does one cubic that loops round an area)?
+fn has_open_edges(shapes: &[Shape]) -> bool {
+    shapes.iter().any(|s| subs(&s.path).into_iter().map(crate::path::Sub::closed_if_ends_meet).any(|sp| !sp.closed))
 }
 
 /// The arrangement of `shapes`, its faces refit to `precision` and its slivers thinner than it dropped.
@@ -147,6 +155,14 @@ fn pathfinder_unguarded(op: PathfinderOp, shapes: &[Shape], precision: f64) -> V
                 Some(Shape::new(r.path, FillRule::NonZero, key))
             })
             .collect();
+    }
+    // Open paths (but for a ring that comes back to where it started) are edges that cross others
+    // without a trace in the filled areas, where their way there and back cancel: the crossings, and so
+    // the cuts, come from the planar map, and the filled arrangement is not made at all (its closing
+    // lines can be over its limits while the map is not). Where the map cannot be built there are no
+    // shapes: the arrangement's junctions would leave every open path uncut where it meets another.
+    if op == PathfinderOp::Outline && has_open_edges(shapes) {
+        return crate::planar::map_junctions(shapes, precision).map(|junctions| outline_edges(junctions, shapes)).unwrap_or_default();
     }
     let Some(arr) = arrangement(shapes, precision) else { return Vec::new() };
     let p = &arr.tidy;
@@ -238,13 +254,8 @@ fn pathfinder_unguarded(op: PathfinderOp, shapes: &[Shape], precision: f64) -> V
             }
             paths.into_iter().zip(shapes).flat_map(|(sp, s)| one(sp, s.key)).collect()
         }
-        PathfinderOp::Outline => {
-            // Open paths (but for a ring that comes back to where it started) are edges that cross
-            // others without a trace in the filled areas: the junctions come from the planar map.
-            let open = shapes.iter().any(|s| subs(&s.path).into_iter().map(crate::path::Sub::closed_if_ends_meet).any(|sp| !sp.closed));
-            let from_map = open.then(|| crate::planar::map_junctions(shapes, precision)).flatten();
-            outline_edges(from_map.unwrap_or_else(|| arr.junctions()), shapes)
-        }
+        // Closed shapes only: the junctions are the vertices of the filled areas' arrangement.
+        PathfinderOp::Outline => outline_edges(arr.junctions(), shapes),
     }
 }
 
@@ -539,8 +550,9 @@ fn outline_edges(junctions: Vec<Point>, shapes: &[Shape]) -> Vec<Shape> {
         for sp in subs(&s.path).into_iter().map(crate::path::Sub::closed_if_ends_meet) {
             let open = !sp.closed;
             let outline = sp.chain();
-            // A closed subpath of one segment is no outline; an open one is the path.
-            if outline.len() < usize::from(!open) + 1 {
+            // A closed subpath of one segment is a point, or a line out and back, and no outline, unless
+            // it is a cubic that loops round an area; an open one is the path.
+            if outline.is_empty() || (outline.len() == 1 && !open && !sp.draws_something()) {
                 continue;
             }
             // Split each segment at junctions; record which piece starts are breaks.

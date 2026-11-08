@@ -56,11 +56,17 @@ pub(crate) enum Work {
     AnswerMisses,
     /// Pairs of line bounds walked to find where lines cross.
     CrossingPairs,
+    /// Subpaths of a fill whose winding a point was tested against (those whose bounds hold the point).
+    FillSubpaths,
+    /// Segments on the boundary of a sweep, counted before its contours are made.
+    BoundarySegments,
+    /// Frames tried for a planar map (the paths copied, sheared and snapped to the sweep's tolerance).
+    FrameTries,
 }
 
 #[cfg(test)]
 thread_local! {
-    static COUNTS: std::cell::RefCell<[usize; 25]> = const { std::cell::RefCell::new([0; 25]) };
+    static COUNTS: std::cell::RefCell<[usize; 28]> = const { std::cell::RefCell::new([0; 28]) };
 }
 
 /// Counts `n` more of `what` on this thread (tests only).
@@ -85,5 +91,5 @@ pub(crate) fn take(what: Work) -> usize {
 /// Resets every count on this thread.
 #[cfg(test)]
 pub(crate) fn reset() {
-    COUNTS.with(|c| *c.borrow_mut() = [0; 25]);
+    COUNTS.with(|c| *c.borrow_mut() = [0; 28]);
 }

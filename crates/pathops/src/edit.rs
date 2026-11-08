@@ -169,6 +169,23 @@ pub const MAX_FIT_POINTS: usize = 1 << 20;
 /// reparameterisation). A release build takes about 2 s for it.
 pub const FIT_WORK: usize = 1 << 28;
 
+/// Most intervals one segment is sampled in, however long it is (the default; see [`chord_intervals`]).
+const MAX_INTERVALS: usize = 256;
+
+/// Most intervals one segment is sampled in when its chords must stay within a distance of it.
+const MAX_CHORD_INTERVALS: usize = 1 << 16;
+
+/// The intervals of equal parameter that keep every chord of `c` within `within` of it, if that is
+/// at most [`MAX_CHORD_INTERVALS`]. A chord of an interval of length `h` is no further from the curve than
+/// `h² / 8` times the largest second derivative, which for a cubic is at most 6 times the larger of
+/// its two second differences of control points: `h` of `sqrt(0.75 d / within)` suffices.
+fn chord_intervals(c: &CubicBez, within: f64) -> Option<usize> {
+    let second = |a: Point, b: Point, c: Point| ((c - b) - (b - a)).hypot();
+    let d = second(c.p0, c.p1, c.p2).max(second(c.p1, c.p2, c.p3));
+    let need = (0.75 * d / within).sqrt().ceil();
+    (need.is_finite() && need <= MAX_CHORD_INTERVALS as f64).then_some(need as usize)
+}
+
 /// The refit of the consecutive segments `run`, split at its corners sharper than the threshold:
 /// it starts and ends where `run` does, leaving the same way.
 fn simplify_run(run: &[Seg], opts: &SimplifyOptions, fit: &mut Fit) -> Vec<Seg> {
@@ -191,12 +208,29 @@ fn simplify_run(run: &[Seg], opts: &SimplifyOptions, fit: &mut Fit) -> Vec<Seg> 
                 too_many = true;
                 break;
             };
-            let m = ((len / (tol * 0.5)).ceil() as usize).clamp(4, 256);
-            if pts.len().saturating_add(m) > fit.max_points || !fit.charge(m) {
+            let wanted = (len / (tol * 0.5)).ceil() as usize;
+            let mut m = wanted.clamp(4, MAX_INTERVALS);
+            // Lines are drawn between the samples, and the curve is not: where the cap on the samples
+            // is what limits them, the chords can be further from the curve than the tolerance
+            // allows (a quarter circle of radius 500,000 at a tolerance of 1 is 2.4 from its 256
+            // chords). So the samples are as many as keep the chords within a tenth of it, or the
+            // run stays as it is where that is more than a segment is sampled for.
+            if opts.straight_lines && wanted > MAX_INTERVALS && !is_straight(&s.c, tol * 0.05) {
+                match chord_intervals(&s.c, tol * 0.1) {
+                    Some(need) => m = m.max(need),
+                    None => {
+                        too_many = true;
+                        break;
+                    }
+                }
+            }
+            // The first segment of a piece has a sample at its start besides one at the end of each interval.
+            let taken = m + usize::from(k == 0);
+            if pts.len().saturating_add(taken) > fit.max_points || !fit.charge(taken) {
                 too_many = true;
                 break;
             }
-            work::add(Work::FitSamples, m);
+            work::add(Work::FitSamples, taken);
             sample(&s.c, m, &mut pts, k == 0);
         }
         // Too long to fit, or past the work: the run stays as it is.
@@ -641,13 +675,15 @@ mod tests {
         polyline(&pts, true)
     }
 
-    /// The largest distance from a sample of `a` to the outline of `b`.
+    /// The largest distance from a probe of `a` to the outline of `b`. The probes are 97 to a segment,
+    /// at parameters that are no multiple of a power of two's reciprocal (a sample of the
+    /// simplification at 1/256 of a segment is a probe of a grid of 64 or 256, and is on the outline).
     fn deviation(a: &BezPath, b: &BezPath) -> f64 {
         use kurbo::{ParamCurve, ParamCurveNearest};
         let mut worst: f64 = 0.0;
         for seg in a.segments() {
-            for k in 0..=64 {
-                let p = seg.eval(f64::from(k) / 64.0);
+            for k in 0..=97 {
+                let p = seg.eval((f64::from(k) + 0.37).min(97.0) / 97.0);
                 let d = b.segments().map(|s| s.nearest(p, 1e-9).distance_sq).fold(f64::INFINITY, f64::min).sqrt();
                 worst = worst.max(d);
             }
@@ -673,7 +709,46 @@ mod tests {
         let mut small = BezPath::new();
         small.move_to((r, 0.0));
         small.curve_to((r, k), (k, r), (0.0, r));
-        assert!(deviation(&small, &simplify_with(&small, &opts)) <= 1.1);
+        let simpler = simplify_with(&small, &opts);
+        assert!(deviation(&small, &simpler) <= 1.1, "the curve is {} from the result", deviation(&small, &simpler));
+        // The chords, between the samples they are drawn from, are as near the curve.
+        assert!(deviation(&simpler, &small) <= 1.1, "the result is {} from the curve", deviation(&simpler, &small));
+    }
+
+    /// The most chords of a curve are as far from it as `chord_intervals` says they can be, at the
+    /// number of intervals it asks for; a line, or a curve that is nearly one, needs none of the extra.
+    #[test]
+    fn the_intervals_that_keep_the_chords_of_a_curve_near_it_are_enough() {
+        use kurbo::{ParamCurve, ParamCurveNearest};
+        let quarter = |r: f64| {
+            let k = 0.552_284_749_830_793_6 * r;
+            CubicBez::new((r, 0.0), (r, k), (k, r), (0.0, r))
+        };
+        let s_curve = CubicBez::new((0.0, 0.0), (300.0, 0.0), (-200.0, 100.0), (100.0, 100.0));
+        for (c, within) in [(quarter(5e5), 0.1), (quarter(1e4), 0.01), (s_curve, 0.001)] {
+            let m = chord_intervals(&c, within).expect("within the most intervals");
+            let mut worst: f64 = 0.0;
+            for i in 0..m {
+                let (a, b) = (c.eval(i as f64 / m as f64), c.eval((i + 1) as f64 / m as f64));
+                // The point of the chord at its middle and a quarter along.
+                for f in [0.25, 0.5, 0.75] {
+                    let p = a.lerp(b, f);
+                    worst = worst.max(c.nearest(p, 1e-9).distance_sq.sqrt());
+                }
+            }
+            assert!(worst <= within, "{m} intervals leave a chord {worst} from the curve, over {within}");
+        }
+        // The largest a segment can be measured at (a coordinate of 1e9) is within the most, at a tolerance of 1.
+        assert!(chord_intervals(&quarter(1e9), 0.1).is_some_and(|m| m > MAX_INTERVALS));
+        // A curve that needs more than the most is none: the run stays.
+        assert_eq!(chord_intervals(&quarter(2e6), 1e-4), None);
+        // A line written as a cubic has second differences that are not 0 and would need more than the
+        // most, but its chords are on it: the run does not ask (a long straight run is still one line).
+        let line = Seg::line(Point::new(0.0, 0.0), Point::new(1e9, 0.0)).c;
+        assert!(is_straight(&line, 1e-3) && chord_intervals(&line, 1e-4).is_none());
+        let long = polyline(&[(0.0, 0.0), (5e8, 0.0), (1e9, 0.0)], false);
+        let opts = SimplifyOptions::default().tolerance(0.5).straight_lines(true);
+        assert_eq!(anchor_count(&simplify_with(&long, &opts)), 2);
     }
 
     /// The polyline reduction is charged before it scans: with little of the fit work left after the
@@ -913,6 +988,31 @@ mod tests {
         let starved = simplify_within(&circle, &opts, &mut Fit { work: used / 2, max_points: MAX_FIT_POINTS });
         assert_eq!(anchor_count(&starved), 300);
         assert!(work::take(Work::Fit) <= used / 2);
+    }
+
+    /// A piece of `n` segments of four intervals each has `4n + 1` samples, the one at its start included:
+    /// all are counted against the work and against the most points of a run.
+    #[test]
+    fn the_sample_at_the_start_of_a_piece_is_counted_with_the_rest() {
+        let opts = SimplifyOptions { tolerance: 5.0, ..Default::default() };
+        for n in [1usize, 2, 5] {
+            let pts: Vec<(f64, f64)> = (0..=n).map(|i| (i as f64, 0.0)).collect();
+            let line = polyline(&pts, false);
+            work::reset();
+            let free = simplify_within(&line, &opts, &mut Fit { work: usize::MAX / 2, max_points: MAX_FIT_POINTS });
+            assert_eq!(work::take(Work::FitSamples), 4 * n + 1, "{n} segments");
+            assert_eq!(anchor_count(&free), 2, "a straight line of {n} segments is one");
+            // One point fewer than the samples a run needs and the run stays.
+            let capped = simplify_within(&line, &opts, &mut Fit { work: usize::MAX / 2, max_points: 4 * n });
+            assert_eq!(capped, line, "{n} segments, room for {} points", 4 * n);
+            let roomy = simplify_within(&line, &opts, &mut Fit { work: usize::MAX / 2, max_points: 4 * n + 1 });
+            assert_eq!(anchor_count(&roomy), 2);
+            // The same for the work: the samples alone are 4n + 1 of it.
+            work::reset();
+            let starved = simplify_within(&line, &opts, &mut Fit { work: 4 * n, max_points: MAX_FIT_POINTS });
+            assert_eq!(starved, line, "{n} segments, work for {}", 4 * n);
+            assert!(work::take(Work::FitSamples) <= 4 * n, "no sample is taken that the work does not cover");
+        }
     }
 
     /// A closed path that starts in the middle of a straight side leaves its last joint to the

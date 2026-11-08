@@ -1,12 +1,9 @@
 // Carved from VectorCraft's crates/pathops (src/planar/map.rs) at storytold/vectorcraft ff9deee46d1c59dc9ecef0b668c25e57cd80b55e.
 // Copyright (c) 2026 ArtCraft Team and the VectorCraft contributors. MIT OR Apache-2.0.
 
-use super::graph::{
-    Edge, Fill, Outlines, cycle_bezpath, far_end, find, half_segs, leaving_angle, origin, pin_ends, there_and_back, twin, unshear, without_spurs,
-};
-use super::index::{Crossings, RectIndex, mid, shear, shear_for};
+use super::graph::{Edge, Fill, Outlines, cycle_bezpath, far_end, find, half_segs, leaving_angle, origin, pin_ends, twin, unshear, without_spurs};
+use super::index::{Crossings, Frame, RectIndex, frame_for, mid};
 use super::*;
-use crate::path::subs;
 use crate::work::{self, Work};
 
 /// The planar graph of `shapes` (in the sweep's frame) with its faces walked: what [`build`] makes
@@ -33,29 +30,8 @@ fn map_with(shapes: &[Shape], precision: f64) -> Option<Map> {
     if !crate::budget::fits_elements(shapes.iter().map(|s| &s.path)) {
         return None;
     }
-    let mut inputs: Vec<(BezPath, usize)> = Vec::new();
-    let (forward, back) = shear(shear_for(shapes));
-    for (i, s) in shapes.iter().enumerate() {
-        let mut bp = BezPath::new();
-        for sp in subs(&s.path).iter().filter(|sp| sp.draws_something()) {
-            if sp.closed {
-                sp.push_closed(&mut bp);
-            } else {
-                let mut open = BezPath::new();
-                sp.push_open(&mut open);
-                there_and_back(&open, &mut bp);
-            }
-        }
-        if !bp.elements().is_empty() {
-            bp.apply_affine(forward);
-            inputs.push((bp, i));
-        }
-    }
-    if inputs.is_empty() || !crate::budget::fits_elements(inputs.iter().map(|p| &p.0)) {
-        return None;
-    }
-    let eps = eps_for(inputs.iter().map(|p| &p.0)).ok()?;
-    snap_horizontals(&mut inputs.iter_mut().map(|p| &mut p.0).collect::<Vec<_>>(), eps);
+    // The sweep's frame: sheared so that no open path is level in it, and snapped to the sweep's tolerance.
+    let Frame { inputs, eps, back } = frame_for(shapes)?;
     // Counted on the snapped geometry, which is what the sweep sees: snapping can bring boxes into contact.
     if !crate::budget::sweep_fits(inputs.iter().map(|p| &p.0)) {
         return None;
@@ -461,10 +437,9 @@ fn interior_point_within(path: &BezPath, tolerance: f64) -> Option<Point> {
     if !(tolerance.is_finite() && tolerance > 0.0) {
         return None;
     }
-    let bp = path;
     let mut edges: Vec<(Point, Point)> = vec![];
     let (mut first, mut last) = (Point::ZERO, Point::ZERO);
-    crate::path::flatten(bp.iter(), tolerance, |el| match el {
+    crate::path::flatten(path.iter(), tolerance, |el| match el {
         kurbo::PathEl::MoveTo(p) => {
             if last != first {
                 edges.push((last, first));
@@ -487,6 +462,24 @@ fn interior_point_within(path: &BezPath, tolerance: f64) -> Option<Point> {
     if last != first {
         edges.push((last, first));
     }
+    if let Some(found) = inside_edges(path, &edges, bb) {
+        return Some(found);
+    }
+    // Nothing found. Edges that run back over each other cancel in the winding and bound nothing: a path
+    // that retraces itself (out and back to a stub, as an open path in a planar map is traced) puts
+    // vertices at heights where there is no crossing of use, and they use up the few heights tried,
+    // so the search is made again on what does not cancel, in its own bounds.
+    let before = edges.len();
+    let kept = without_retraces(edges);
+    if kept.len() == before {
+        return None;
+    }
+    inside_edges(path, &kept, bounds_of_edges(&kept)?)
+}
+
+/// A point inside `path` found from its flattened `edges`, whose box is `bb`: the middle of a gap
+/// of the polygon between two crossings, at a few heights, where the path winds.
+fn inside_edges(bp: &BezPath, edges: &[(Point, Point)], bb: kurbo::Rect) -> Option<Point> {
     // The gaps between consecutive crossings of the polygon with a line at each of a few heights,
     // each with the width the polygon has at its middle: the widest where the polygon winds.
     let gaps_at = |y: f64, min_width: f64, gaps: &mut Vec<(f64, Point)>| {
@@ -538,7 +531,9 @@ fn interior_point_within(path: &BezPath, tolerance: f64) -> Option<Point> {
     ys.sort_by(f64::total_cmp);
     ys.dedup();
     // A gap thinner than the rounding of the crossings is where edges retrace each other, not a part.
-    let min_width = 1e-9 * bb.width().max(bb.height());
+    // A crossing is computed to a few ulps of the largest x, not of the height of the path (two unit
+    // squares ten billion apart in height are parts, one unit wide each): 64 ulps of it.
+    let min_width = 64.0 * f64::EPSILON * bb.x0.abs().max(bb.x1.abs());
     let stretches = ys.len().saturating_sub(1);
     let tries = stretches.min(MAX_HEIGHT_TRIES);
     let mut gaps: Vec<(f64, Point)> = vec![];
@@ -550,6 +545,45 @@ fn interior_point_within(path: &BezPath, tolerance: f64) -> Option<Point> {
         }
     }
     widest_inside(gaps)
+}
+
+/// `edges` without the pairs of an edge and the same edge the other way, as many of each way as the
+/// difference of their numbers leaves, in their order; and without edges of no length.
+pub(super) fn without_retraces(edges: Vec<(Point, Point)>) -> Vec<(Point, Point)> {
+    /// A point by the bits of its coordinates.
+    type Bits = (u64, u64);
+    let key = |p: Point| (p.x.to_bits(), p.y.to_bits());
+    // Each edge by its ends in order: how many go from the lesser end to the greater, less how many go back.
+    let mut net: HashMap<(Bits, Bits), i64> = HashMap::new();
+    for &(a, c) in edges.iter().filter(|(a, c)| a != c) {
+        let (ka, kc) = (key(a), key(c));
+        if ka < kc {
+            *net.entry((ka, kc)).or_default() += 1;
+        } else {
+            *net.entry((kc, ka)).or_default() -= 1;
+        }
+    }
+    let mut kept = Vec::with_capacity(edges.len());
+    for (a, c) in edges.into_iter().filter(|(a, c)| a != c) {
+        let (ka, kc) = (key(a), key(c));
+        let (ends, forward) = if ka < kc { ((ka, kc), true) } else { ((kc, ka), false) };
+        let Some(left) = net.get_mut(&ends) else { continue };
+        if forward && *left > 0 {
+            *left -= 1;
+            kept.push((a, c));
+        } else if !forward && *left < 0 {
+            *left += 1;
+            kept.push((a, c));
+        }
+    }
+    kept
+}
+
+/// The box of the ends of `edges`, if there are any.
+fn bounds_of_edges(edges: &[(Point, Point)]) -> Option<kurbo::Rect> {
+    let mut pts = edges.iter().flat_map(|&(a, c)| [a, c]);
+    let first = pts.next()?;
+    Some(pts.fold(kurbo::Rect::from_points(first, first), |r, p| r.union_pt(p)))
 }
 
 /// Most heights besides the first few that [`interior_point_within`] looks at when they find

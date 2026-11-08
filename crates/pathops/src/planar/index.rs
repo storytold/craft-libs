@@ -4,37 +4,114 @@
 use super::*;
 use crate::work::{self, Work};
 
-/// The shears the sweep's frame may use, `y + k x`, the first that leaves no open path level in it:
-/// by default 1/32, in which only an edge sloping -1/32 in the document is horizontal. Each is a
-/// power of two, so it maps typical coordinates exactly.
-pub(super) const SHEARS: [f64; 6] = [1.0 / 32.0, 1.0 / 64.0, 1.0 / 16.0, 1.0 / 128.0, 1.0 / 8.0, 1.0 / 256.0];
+/// The shears the sweep's frame may use, `y + k x`, in the order tried: the first that leaves no open
+/// path level in the frame is used, by default 1/32, in which only an edge sloping -1/32 in the
+/// document is horizontal. Each is a power of two, so it maps typical coordinates exactly. An open
+/// path that is level in every one of them (it takes ten open paths, one level in each) gives no map.
+pub(super) const SHEARS: [f64; 10] =
+    [1.0 / 32.0, 1.0 / 64.0, 1.0 / 16.0, 1.0 / 128.0, 1.0 / 8.0, 1.0 / 256.0, 1.0 / 512.0, 1.0 / 4.0, 1.0 / 1024.0, 1.0 / 2.0];
 
 /// The shear by `k` and its inverse.
 pub(super) fn shear(k: f64) -> (Affine, Affine) {
     (Affine::new([1.0, k, 0.0, 1.0, 0.0, 0.0]), Affine::new([1.0, -k, 0.0, 1.0, 0.0, 0.0]))
 }
 
-/// The shear for `shapes`: the first of [`SHEARS`] in whose frame no open subpath has a side (of a
-/// segment's chord or control polygon) that is level, which the sweep takes the two passes of
-/// for cancelling out. All of them level for one is not a case worth more: the first is used.
-pub(super) fn shear_for(shapes: &[Shape]) -> f64 {
-    let level = |k: f64| {
-        shapes.iter().any(|s| {
-            crate::path::subs(&s.path).iter().filter(|sp| !sp.closed).any(|sp| {
-                sp.segments().any(|seg| {
-                    let pts: Vec<Point> = match seg {
-                        PathSeg::Line(l) => vec![l.p0, l.p1],
-                        PathSeg::Quad(q) => vec![q.p0, q.p1, q.p2],
-                        PathSeg::Cubic(c) => vec![c.p0, c.p1, c.p2, c.p3],
-                    };
-                    let (first, last) = (pts.first().copied().unwrap_or(Point::ZERO), pts.last().copied().unwrap_or(Point::ZERO));
-                    let sides = pts.windows(2).map(|w| w[1] - w[0]).chain(std::iter::once(last - first));
-                    sides.into_iter().any(|d| d.hypot2() > 0.0 && (d.y + k * d.x).abs() <= 1e-6 * (d.x.abs() + d.y.abs()))
-                })
-            })
-        })
-    };
-    SHEARS.iter().copied().find(|&k| !level(k)).unwrap_or(SHEARS[0])
+/// The paths of a map as the sweep is given them: sheared, and snapped to the sweep's tolerance.
+pub(super) struct Frame {
+    /// The paths in the sweep's frame, each with the index of the shape it comes from.
+    pub(super) inputs: Vec<(BezPath, usize)>,
+    /// The sweep's tolerance for them.
+    pub(super) eps: f64,
+    /// From the sweep's frame back to the document.
+    pub(super) back: Affine,
+}
+
+#[cfg(test)]
+impl Frame {
+    /// The shear, `y + k x`.
+    pub(super) fn k(&self) -> f64 {
+        -self.back.as_coeffs()[1]
+    }
+}
+
+/// The frame for `shapes`: the first of [`SHEARS`] in whose frame, after the paths are snapped to the
+/// sweep's tolerance, no open subpath has a side (of a segment's chord or control polygon) that is
+/// level, which the sweep takes the two passes of for cancelling out. `None` when the paths cannot
+/// be swept, or when every shear leaves one level.
+///
+/// The test is made on the snapped paths because snapping is what levels an edge: the sweep orders by
+/// its tolerance, which a shape far away widens (a shape at 1e11 makes it 1.4e-3), and an edge that
+/// rises less than that in the frame, or whose ends land on one of the heights snapping rounds to,
+/// is level whatever its slope was.
+pub(super) fn frame_for(shapes: &[Shape]) -> Option<Frame> {
+    // The paths as they are swept, in the document's frame, and the open subpaths among them.
+    let mut plain: Vec<(BezPath, usize)> = Vec::new();
+    let mut opens = BezPath::new();
+    for (i, s) in shapes.iter().enumerate() {
+        let mut bp = BezPath::new();
+        for sp in crate::path::subs(&s.path).iter().filter(|sp| sp.draws_something()) {
+            if sp.closed {
+                sp.push_closed(&mut bp);
+            } else {
+                let mut open = BezPath::new();
+                sp.push_open(&mut open);
+                super::graph::there_and_back(&open, &mut bp);
+                opens.extend(open.iter());
+            }
+        }
+        if !bp.elements().is_empty() {
+            plain.push((bp, i));
+        }
+    }
+    if plain.is_empty() || !crate::budget::fits_elements(plain.iter().map(|p| &p.0)) {
+        return None;
+    }
+    for k in SHEARS {
+        crate::work::add(crate::work::Work::FrameTries, 1);
+        let (forward, back) = shear(k);
+        let mut inputs = plain.clone();
+        let mut open = opens.clone();
+        open.apply_affine(forward);
+        for (p, _) in &mut inputs {
+            p.apply_affine(forward);
+        }
+        let eps = eps_for(inputs.iter().map(|p| &p.0)).ok()?;
+        // The open subpaths are snapped with the rest, to the same heights.
+        snap_horizontals(&mut inputs.iter_mut().map(|p| &mut p.0).chain(std::iter::once(&mut open)).collect::<Vec<_>>(), eps);
+        if !has_level_side(&open, eps) {
+            return Some(Frame { inputs, eps, back });
+        }
+    }
+    None
+}
+
+/// A side of a segment (of its chord or control polygon) no longer than this many tolerances of the
+/// sweep is no side the level test looks at.
+///
+/// A side whose two ends are within the sweep's tolerance in height is level in whichever shear is
+/// used: the shear moves its far end by its length times the shear, which is under the tolerance for
+/// a side this short, and the ends are snapped together. Taken as level, one such side (a separate
+/// stub, a point repeated a hair apart, a handle a nanometre long) would make every shear fail and
+/// empty the map. Where the heights of the two ends of a side level in all ten shears, snapping
+/// puts them within one tolerance in the shear of 1/2 and in the one of 1/1024, and so the side is
+/// under about 5 tolerances long (4 across, 3 up); 8 leaves room. A side that short is at the noise of the
+/// sweep, which cannot tell it from a point: its two passes may cancel and the piece be lost, as
+/// a feature of that size is whatever the frame.
+const NOISE_SIDE: f64 = 8.0;
+
+/// Does some segment of `open` have a side of its chord or control polygon, longer than [`NOISE_SIDE`]
+/// tolerances `eps`, that is level (rising by less than a millionth of its length)?
+fn has_level_side(open: &BezPath, eps: f64) -> bool {
+    open.segments().any(|seg| {
+        let pts: Vec<Point> = match seg {
+            PathSeg::Line(l) => vec![l.p0, l.p1],
+            PathSeg::Quad(q) => vec![q.p0, q.p1, q.p2],
+            PathSeg::Cubic(c) => vec![c.p0, c.p1, c.p2, c.p3],
+        };
+        let (first, last) = (pts.first().copied().unwrap_or(Point::ZERO), pts.last().copied().unwrap_or(Point::ZERO));
+        let sides = pts.windows(2).map(|w| w[1] - w[0]).chain(std::iter::once(last - first));
+        sides.into_iter().any(|d| d.hypot() > NOISE_SIDE * eps && d.y.abs() <= 1e-6 * (d.x.abs() + d.y.abs()))
+    })
 }
 
 /// Boundary crossings per input, counted from the far west: slot `2i` counts input `i`'s

@@ -38,7 +38,9 @@ pub const MAX_SWEEP_LINE_PAIRS: usize = 1 << 28;
 /// Most searches of the sweep line that the events of a sweep make, as counted before it: the pairs
 /// of segments whose bounds overlap (an upper bound on their crossings, and with them the ends of
 /// segments; a pair of curves may cross up to nine times, so those count nine) times the most
-/// pieces on the line at one height. 4,294,967,296. Each crossing finds two pieces on the line, and
+/// pieces on the line at one height. 2^32, 4,294,967,296, where `usize` holds it; on a target where
+/// `usize` is 32 bits (the web) it is the most `usize` holds, 4,294,967,295 (the count itself is
+/// made in 64 bits, so a larger one is refused there). Each crossing finds two pieces on the line, and
 /// each segment's end one, by a scan of it: a diagonal hatch of 400 strokes each way, a few thousand
 /// elements, makes some billion of them and takes three seconds, and of curves it would take
 /// many times that, with nothing else refusing it. Past the limit an operation fails as
@@ -130,7 +132,7 @@ pub struct Limits {
     pub coverage_entries: usize,
     /// Most searches of the sweep line the crossings and ends of segments make, counted as the pairs
     /// of segments whose bounds overlap times the most pieces on the line at one height
-    /// ([`MAX_SWEEP_EVENT_WORK`]).
+    /// ([`MAX_SWEEP_EVENT_WORK`]: 2^32, or the most `usize` holds where that is less).
     pub sweep_event_work: usize,
     /// Most segments [`crate::shape_builder`] sweeps into its map ([`crate::SHAPE_BUILDER_MAX_SEGMENTS`]).
     pub shape_builder_segments: usize,
@@ -1201,9 +1203,15 @@ mod tests {
         assert!(pairs <= MAX_SEGMENT_PAIRS, "{pairs} overlapping bounds");
         assert!(heights_overlap_within(&heights_of(&hatch), MAX_SWEEP_LINE_PAIRS), "the pieces at one height are within their limit");
         assert_eq!(curve_pairs, 0);
-        assert!(depth > 1_500 && pairs * depth > MAX_SWEEP_EVENT_WORK, "{pairs} pairs, {depth} on the line");
-        let unlimited = Limits { sweep_event_work: usize::MAX, ..Limits::default() };
-        assert!(with_limits(unlimited, || sweep_fits([&hatch])), "only the searches of the line refuse it");
+        // Taken in 64 bits: on a 32-bit target the limit is `usize::MAX` and the product may not fit in `usize`.
+        let estimate = pairs as u64 * depth as u64;
+        assert!(depth > 1_500 && estimate > MAX_SWEEP_EVENT_WORK as u64, "{pairs} pairs, {depth} on the line");
+        // A limit past what `usize` holds cannot be set, so there is nothing that lets the hatch through
+        // on a target where the estimate does not fit.
+        if usize::try_from(estimate).is_ok() {
+            let unlimited = Limits { sweep_event_work: usize::MAX, ..Limits::default() };
+            assert!(with_limits(unlimited, || sweep_fits([&hatch])), "only the searches of the line refuse it");
+        }
         work::reset();
         assert!(!sweep_fits([&hatch]));
         assert_eq!(crate::try_area(&hatch, FillRule::NonZero), Err(PathOpsError::TooComplex));
@@ -1217,6 +1225,13 @@ mod tests {
         assert!(pairs * depth > 0);
         assert!(with_limits(Limits { sweep_event_work: pairs * depth, ..Limits::default() }, || sweep_fits([&small])));
         assert!(!with_limits(Limits { sweep_event_work: pairs * depth - 1, ..Limits::default() }, || sweep_fits([&small])));
+    }
+
+    /// The default is 2^32, or the most `usize` holds where that is less (the web has 32 bits).
+    #[test]
+    fn the_event_limit_is_two_to_the_32_or_the_most_usize_holds() {
+        assert_eq!(MAX_SWEEP_EVENT_WORK as u64, (1u64 << 32).min(usize::MAX as u64));
+        assert_eq!(Limits::default().sweep_event_work, MAX_SWEEP_EVENT_WORK);
     }
 
     /// A pair of curves can cross nine times, a pair of lines once: curves count for more.
@@ -1335,6 +1350,19 @@ mod tests {
         // The cap is the limit: one slice more with a limit of 514, one fewer end with 513.
         assert!(with_limits(Limits { ends_at_a_point: 514, ..Limits::default() }, || sweep_fits([&over])));
         assert!(!with_limits(Limits { ends_at_a_point: 513, ..Limits::default() }, || sweep_fits([&over])));
+        // A fan of triangles with a corner at one point has two ends there for each: 256 of them are 512.
+        let fan = |n: usize| {
+            let mut b = BezPath::new();
+            for i in 0..n {
+                let angle = |k: f64| (i as f64 + k) / n as f64 * std::f64::consts::TAU;
+                b.move_to((0.0, 0.0));
+                b.line_to((100.0 * angle(0.0).cos(), 100.0 * angle(0.0).sin()));
+                b.line_to((100.0 * angle(0.5).cos(), 100.0 * angle(0.5).sin()));
+                b.close_path();
+            }
+            b
+        };
+        assert!(sweep_fits([&fan(256)]) && !sweep_fits([&fan(257)]));
         // Ends that are not at one point are no matter: the same slices side by side.
         let mut spread = BezPath::new();
         for i in 0..300 {

@@ -35,24 +35,50 @@ impl Outlines {
 }
 
 /// The area an input's fill covers: its closed subpaths (open ones bound no face).
+///
+/// The subpaths are kept apart, under an index of their bounds: the winding of a point is the sum
+/// of the windings of the subpaths, and a subpath whose bounds miss the point adds nothing, so a
+/// shape of thousands of subpaths (squares in a column, glyphs of a text) costs a face what the few
+/// near it do, and not all of them.
 pub(super) struct Fill {
-    path: BezPath,
+    subpaths: Vec<BezPath>,
+    index: RectIndex<usize>,
     pub(super) bounds: kurbo::Rect,
     rule: FillRule,
 }
 
 impl Fill {
     pub(super) fn new(s: &Shape) -> Self {
-        let mut path = BezPath::new();
-        for sp in subs(&s.path).iter().filter(|sp| sp.closed && sp.draws_something()) {
-            sp.push_closed(&mut path);
-        }
-        Self { bounds: path.bounding_box(), path, rule: s.rule }
+        let subpaths: Vec<BezPath> = subs(&s.path)
+            .iter()
+            .filter(|sp| sp.closed && sp.draws_something())
+            .map(|sp| {
+                let mut path = BezPath::new();
+                sp.push_closed(&mut path);
+                path
+            })
+            .collect();
+        let boxes: Vec<kurbo::Rect> = subpaths.iter().map(BezPath::bounding_box).collect();
+        let bounds = boxes.iter().copied().reduce(|a, b| a.union(b)).unwrap_or_default();
+        let index = RectIndex::new(boxes.into_iter().enumerate().map(|(i, r)| (r, i)).collect());
+        Self { subpaths, index, bounds, rule: s.rule }
     }
 
     pub(super) fn contains(&self, p: Point) -> bool {
         crate::work::add(crate::work::Work::FillTests, 1);
-        !self.path.elements().is_empty() && self.bounds.contains(p) && crate::boolean::inside(self.rule, self.path.winding(p))
+        if self.subpaths.is_empty() || !self.bounds.contains(p) {
+            return false;
+        }
+        let winding: i32 = self
+            .index
+            .at(p, 0.0)
+            .filter_map(|&i| self.subpaths.get(i))
+            .map(|sp| {
+                crate::work::add(crate::work::Work::FillSubpaths, 1);
+                sp.winding(p)
+            })
+            .sum();
+        crate::boolean::inside(self.rule, winding)
     }
 }
 
