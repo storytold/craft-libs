@@ -7,6 +7,7 @@
 //! |---|---|---|
 //! | `dnx` | [`dnx`] | Avid DNxHD / DNxHR (SMPTE ST 2019-1): decoder and encoder |
 //! | `vp8` | [`vp8`] | VP8 (RFC 6386): decoder |
+//! | `prores` | [`prores`] | Apple ProRes (SMPTE RDD 36): decoder and encoder |
 //!
 //! No codec is on by default. Feature `threads` spreads the work of the codecs that support it
 //! over rayon worker threads.
@@ -19,3 +20,6 @@ pub mod dnx;
 
 #[cfg(feature = "vp8")]
 pub mod vp8;
+
+#[cfg(feature = "prores")]
+pub mod prores;

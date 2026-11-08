@@ -1,6 +1,6 @@
 [package]
 name = "craft-video"
-description = "Clean-room pure-Rust video codecs, one feature per codec: DNxHD/DNxHR, VP8."
+description = "Clean-room pure-Rust video codecs, one feature per codec: DNxHD/DNxHR, VP8, ProRes."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -19,6 +19,8 @@ workspace = true
 dnx = []
 # VP8 (RFC 6386): decoder.
 vp8 = []
+# Apple ProRes (SMPTE RDD 36): decoder and encoder.
+prores = ["craft-media/bitstream"]
 # Decode and encode across worker threads (rayon) in the codecs that support it.
 threads = ["dep:rayon"]
 
@@ -45,3 +47,7 @@ required-features = ["vp8"]
 [[example]]
 name = "vp8_vp8dec"
 required-features = ["vp8"]
+
+[[test]]
+name = "prores"
+required-features = ["prores"]

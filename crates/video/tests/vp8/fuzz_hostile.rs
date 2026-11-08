@@ -91,7 +91,7 @@ fn iters() -> usize {
     std::env::var("FILMCRAFT_FUZZ_ITERS").ok().and_then(|s| s.parse().ok()).unwrap_or(300)
 }
 
-/// Seconds the whole sweep may take before it counts as a hang (override: CRAFT_TEST_TIMEOUT_SECS).
+/// Seconds the whole sweep may take before it counts as a hang (override: FILMCRAFT_HOSTILE_TIMEOUT_SECS).
 const DEADLINE_SECS: u64 = 600;
 
 #[test]

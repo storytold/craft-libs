@@ -36,7 +36,7 @@ jobs:
       # Each feature on its own, so code that needs another feature fails here.
       - name: Clippy, each feature alone
         run: |
-          for f in "" dnx vp8 threads; do
+          for f in "" dnx vp8 prores threads; do
             echo "::group::features: ${f:-none}"
             cargo clippy -p craft-video --all-targets --locked --no-default-features ${f:+--features "$f"} -- -D warnings
             echo "::endgroup::"
