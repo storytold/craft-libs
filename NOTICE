@@ -261,11 +261,24 @@ pinned at revision 68919ed87aa6a097a4d21414ec7c438883f5fe22:
 - crates/h264enc is ported from FilmCraft's crates/h264enc (filmcraft-h264enc).
 - crates/prores is ported from FilmCraft's crates/prores (filmcraft-prores).
 - crates/vp8 is ported from FilmCraft's crates/vp8 (filmcraft-vp8).
-FilmCraft contributors to this crate include: aiongg, dylanmtaylor, earlvanze, echelon,
+- FilmCraft decoder routines mirrored in encoder reconstruction paths:
+  - crates/hevcenc mirrors ITU-T H.265 intra/inter prediction, deblocking, and tables from
+    FilmCraft's crates/hevc (filmcraft-hevc decoder).
+FilmCraft contributors to these crates include: aiongg, dylanmtaylor, earlvanze, echelon,
 g1obalworlds, jahvari, EthanSuquet, JordyUSA, MrCloudy2, Silvertree2010, Tom1tk,
 adventurelands, cirocueto2013-wq, kler, marshiyar, skylartaylor, thecyberbutler, vangel76,
 and the FilmCraft contributors.
 Source: https://github.com/storytold/filmcraft
 Copyright (c) 2026 ArtCraft Team and the FilmCraft contributors.
 Licensed under MIT OR Apache-2.0.
+
+EffectCraft source provenance:
+- crates/hevcenc is ported from EffectCraft's crates/hevcenc (effectcraft-hevcenc),
+  pinned at revision ad7abfa5076a00b4b214811bae66ee0600828ac5.
+EffectCraft contributors to these crates include: EthanSuquet, JonRC, Kaedo17, aiongg,
+bflatastic, dexterlabs1, dylanmtaylor, echelon, vangel76, and the EffectCraft contributors.
+Source: https://github.com/storytold/effectcraft
+Copyright (c) 2026 ArtCraft Team and the EffectCraft contributors.
+Licensed under MIT OR Apache-2.0.
+
 

@@ -968,6 +968,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-hevcenc"
+version = "0.1.0"
+
+[[package]]
 name = "craft-i18n"
 version = "0.1.0"
 dependencies = [
