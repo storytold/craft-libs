@@ -97,9 +97,13 @@ impl Default for Labels {
     }
 }
 
-/// The width `buttons` take in the header bar, including [`SIDE_GAP`] to the rest of it; nothing
-/// for an end with no buttons.
-pub fn width(buttons: &[Button]) -> f32 {
+/// The width [`buttons`] take in the header bar of the window `ctx` is drawing, including
+/// [`SIDE_GAP`] to the rest of it; nothing for an end with no buttons, and nothing in full screen,
+/// where [`buttons`] draws none.
+pub fn width(ctx: &egui::Context, buttons: &[Button]) -> f32 {
+    if ctx.input(|i| i.viewport().fullscreen.unwrap_or(false)) {
+        return 0.0;
+    }
     match buttons.len() {
         0 => 0.0,
         n => n as f32 * BUTTON + (n - 1) as f32 * GAP + SIDE_GAP,
@@ -192,24 +196,29 @@ fn paint(painter: &egui::Painter, rect: Rect, button: Button, maximized: bool, l
 }
 
 /// The resize zones of a window filling `rect`: edges `edge` deep, and each corner an L of two
-/// strips reaching `corner` along both edges (a square would reach into the content).
+/// strips reaching `corner` along both edges (a square would reach into the content). On each
+/// axis both are held to half the window, so opposite zones meet in the middle at most instead of
+/// overlapping on a small window.
 fn zones(rect: Rect, edge: f32, corner: f32) -> Vec<(ResizeDirection, Rect)> {
     let (l, r, t, b) = (rect.left(), rect.right(), rect.top(), rect.bottom());
+    let (half_w, half_h) = ((rect.width() / 2.0).max(0.0), (rect.height() / 2.0).max(0.0));
+    // `cx`, `ex`: the corner's reach and the side edges' depth across; `cy`, `ey` the same down.
+    let (cx, ex, cy, ey) = (corner.min(half_w), edge.min(half_w), corner.min(half_h), edge.min(half_h));
     // Never inverted, however small the window.
     let zone = |x0: f32, x1: f32, y0: f32, y1: f32| Rect::from_min_max(Pos2::new(x0, y0), Pos2::new(x1.max(x0), y1.max(y0)));
     vec![
-        (ResizeDirection::NorthWest, zone(l, l + corner, t, t + edge)),
-        (ResizeDirection::NorthWest, zone(l, l + edge, t + edge, t + corner)),
-        (ResizeDirection::NorthEast, zone(r - corner, r, t, t + edge)),
-        (ResizeDirection::NorthEast, zone(r - edge, r, t + edge, t + corner)),
-        (ResizeDirection::SouthWest, zone(l, l + corner, b - edge, b)),
-        (ResizeDirection::SouthWest, zone(l, l + edge, b - corner, b - edge)),
-        (ResizeDirection::SouthEast, zone(r - corner, r, b - edge, b)),
-        (ResizeDirection::SouthEast, zone(r - edge, r, b - corner, b - edge)),
-        (ResizeDirection::North, zone(l + corner, r - corner, t, t + edge)),
-        (ResizeDirection::South, zone(l + corner, r - corner, b - edge, b)),
-        (ResizeDirection::West, zone(l, l + edge, t + corner, b - corner)),
-        (ResizeDirection::East, zone(r - edge, r, t + corner, b - corner)),
+        (ResizeDirection::NorthWest, zone(l, l + cx, t, t + ey)),
+        (ResizeDirection::NorthWest, zone(l, l + ex, t + ey, t + cy)),
+        (ResizeDirection::NorthEast, zone(r - cx, r, t, t + ey)),
+        (ResizeDirection::NorthEast, zone(r - ex, r, t + ey, t + cy)),
+        (ResizeDirection::SouthWest, zone(l, l + cx, b - ey, b)),
+        (ResizeDirection::SouthWest, zone(l, l + ex, b - cy, b - ey)),
+        (ResizeDirection::SouthEast, zone(r - cx, r, b - ey, b)),
+        (ResizeDirection::SouthEast, zone(r - ex, r, b - cy, b - ey)),
+        (ResizeDirection::North, zone(l + cx, r - cx, t, t + ey)),
+        (ResizeDirection::South, zone(l + cx, r - cx, b - ey, b)),
+        (ResizeDirection::West, zone(l, l + ex, t + cy, b - cy)),
+        (ResizeDirection::East, zone(r - ex, r, t + cy, b - cy)),
     ]
 }
 
@@ -248,8 +257,10 @@ pub fn resize_edges(ctx: &egui::Context, look: &Look) {
                     continue;
                 }
                 let response = ui.interact(rect, ui.scope_id().with(("edge", n)), Sense::drag()).on_hover_cursor(cursor(direction));
-                // Sensing only drags, a drag starts on the press itself.
-                if response.drag_started() {
+                // Sensing only drags, a drag starts on the press itself. Only the primary button
+                // resizes: `BeginResize` is a left-button resize, and the release given back
+                // afterwards is the primary button's.
+                if response.drag_started_by(egui::PointerButton::Primary) {
                     desktop_grab(ui.ctx(), egui::ViewportCommand::BeginResize(direction));
                 }
             }
@@ -349,7 +360,10 @@ pub fn focus_after_desktop_grab(ctx: &egui::Context) {
         d.remove::<egui::Id>(focus_id);
         widget
     });
-    if let Some(widget) = widget {
+    // A widget that took the keyboard since (a click in a field before this pass) keeps it.
+    if let Some(widget) = widget
+        && ctx.memory(|m| m.focused()).is_none()
+    {
         ctx.memory_mut(|m| m.request_focus(widget));
     }
 }
@@ -401,9 +415,21 @@ mod tests {
 
     #[test]
     fn widths_cover_the_buttons_and_their_gaps() {
-        assert_eq!(super::width(&[]), 0.0);
-        assert_eq!(super::width(&[Button::Close]), BUTTON + SIDE_GAP);
-        assert_eq!(super::width(&Layout::default().right), 3.0 * BUTTON + 2.0 * GAP + SIDE_GAP);
+        let ctx = egui::Context::default();
+        assert_eq!(super::width(&ctx, &[]), 0.0);
+        assert_eq!(super::width(&ctx, &[Button::Close]), BUTTON + SIDE_GAP);
+        assert_eq!(super::width(&ctx, &Layout::default().right), 3.0 * BUTTON + 2.0 * GAP + SIDE_GAP);
+    }
+
+    /// In full screen `buttons` draws nothing, so the header bar keeps no room for them.
+    #[test]
+    fn full_screen_keeps_no_room_for_the_buttons() {
+        let ctx = egui::Context::default();
+        let mut input = RawInput::default();
+        input.viewports.entry(ViewportId::ROOT).or_default().fullscreen = Some(true);
+        let mut width = None;
+        ctx.run_ui(input, |ui| width = Some(super::width(ui.ctx(), &Layout::default().right))).textures_delta.clear();
+        assert_eq!(width, Some(0.0));
     }
 
     #[test]
@@ -464,6 +490,34 @@ mod tests {
         // A window smaller than its corners gets empty (not inverted) edge zones.
         for (_, r) in zones_of(Rect::from_min_size(Pos2::ZERO, egui::vec2(20.0, 20.0))) {
             assert!(r.width() >= 0.0 && r.height() >= 0.0);
+        }
+    }
+
+    /// On a window narrower or shorter than two corners (or two edges), opposite zones meet in the
+    /// middle instead of overlapping, so each point resizes the way its own side does.
+    #[test]
+    fn a_small_windows_zones_meet_in_the_middle() {
+        for size in [egui::vec2(20.0, 20.0), egui::vec2(8.0, 30.0), egui::vec2(300.0, 6.0)] {
+            let window = Rect::from_min_size(Pos2::ZERO, size);
+            let zones = zones_of(window);
+            let at = |x: f32, y: f32| zones.iter().filter(|(_, r)| r.contains(Pos2::new(x, y))).map(|(d, _)| *d).collect::<Vec<_>>();
+            let (w, h) = (size.x, size.y);
+            for fy in [0.05, 0.3, 0.45, 0.55, 0.7, 0.95] {
+                for fx in [0.05, 0.3, 0.45, 0.55, 0.7, 0.95] {
+                    let (x, y) = (w * fx, h * fy);
+                    let found = at(x, y);
+                    assert!(found.len() <= 1, "{size:?} at ({x}, {y}): {found:?}");
+                    // Nothing on the far side of the middle resizes toward the near side.
+                    for d in found {
+                        let west = matches!(d, ResizeDirection::West | ResizeDirection::NorthWest | ResizeDirection::SouthWest);
+                        let east = matches!(d, ResizeDirection::East | ResizeDirection::NorthEast | ResizeDirection::SouthEast);
+                        let north = matches!(d, ResizeDirection::North | ResizeDirection::NorthWest | ResizeDirection::NorthEast);
+                        let south = matches!(d, ResizeDirection::South | ResizeDirection::SouthWest | ResizeDirection::SouthEast);
+                        assert!(!(west && x > w / 2.0) && !(east && x < w / 2.0), "{size:?} at ({x}, {y}): {d:?}");
+                        assert!(!(north && y > h / 2.0) && !(south && y < h / 2.0), "{size:?} at ({x}, {y}): {d:?}");
+                    }
+                }
+            }
         }
     }
 
@@ -603,5 +657,44 @@ mod tests {
         // Once the desktop has let go, the page gets the keyboard back.
         pass(vec![]);
         assert!(pass(vec![]), "typing goes on in the page");
+    }
+
+    /// A widget that takes the keyboard between the grab and the pass that would give it back
+    /// keeps it: the saved one isn't forced back on it.
+    #[test]
+    fn a_widget_focused_since_the_grab_keeps_the_keyboard() {
+        let ctx = egui::Context::default();
+        super::install(&ctx);
+        let (page, other) = (egui::Id::unique("the page"), egui::Id::unique("another field"));
+        ctx.memory_mut(|m| m.request_focus(page));
+        ctx.run_ui(RawInput::default(), |ui| super::desktop_grab(ui.ctx(), ViewportCommand::StartDrag)).textures_delta.clear();
+        ctx.memory_mut(|m| m.request_focus(other));
+        super::focus_after_desktop_grab(&ctx);
+        assert!(ctx.memory(|m| m.has_focus(other)), "the other field keeps the keyboard");
+        // Nothing is left to restore later either.
+        ctx.memory_mut(|m| m.surrender_focus(other));
+        super::focus_after_desktop_grab(&ctx);
+        assert!(!ctx.memory(|m| m.has_focus(page)));
+    }
+
+    /// Only the primary button resizes from an edge: `BeginResize` is a left-button resize.
+    #[test]
+    fn only_the_primary_button_resizes() {
+        for (button, resizes) in [(PointerButton::Primary, true), (PointerButton::Secondary, false), (PointerButton::Middle, false)] {
+            let ctx = egui::Context::default();
+            let look = super::Look::from_visuals(&egui::Visuals::light());
+            let window = Rect::from_min_size(Pos2::ZERO, egui::vec2(800.0, 600.0));
+            let edge = Pos2::new(798.0, 300.0);
+            let mut began = false;
+            for events in
+                [vec![], vec![Event::PointerMoved(edge)], vec![Event::PointerButton { pos: edge, button, pressed: true, modifiers: Modifiers::NONE }]]
+            {
+                let mut output =
+                    ctx.run_ui(RawInput { screen_rect: Some(window), events, ..Default::default() }, |ui| super::resize_edges(ui.ctx(), &look));
+                output.textures_delta.clear();
+                began |= output.viewport_output.values().flat_map(|v| &v.commands).any(|c| matches!(c, ViewportCommand::BeginResize(_)));
+            }
+            assert_eq!(began, resizes, "{button:?}");
+        }
     }
 }

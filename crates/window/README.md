@@ -141,7 +141,7 @@ if let Some(layout) = frame.layout() {
     let labels = Labels { minimize: tr("Minimize"), maximize: tr("Maximize"), restore: tr("Restore"), close: tr("Close") };
     ui.horizontal(|ui| {
         controls::buttons(ui, &layout.left, &look, &labels);
-        // ... the bar's own content, leaving `controls::width(&layout.right)` at the end ...
+        // ... the bar's own content, leaving `controls::width(ui.ctx(), &layout.right)` at the end ...
         controls::buttons(ui, &layout.right, &look, &labels);
     });
     controls::resize_edges(ui.ctx(), &look);
