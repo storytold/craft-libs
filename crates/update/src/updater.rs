@@ -148,6 +148,9 @@ pub struct Updater {
     /// The folders that hold the outcome records ([`self_update::take_outcome`]) in place of the
     /// app's own (tests).
     paths: Option<Paths>,
+    /// Why the last update could not be installed, until a prompt that offers the update again
+    /// shows it.
+    failed_reason: Option<String>,
     /// Set when the `Updater` is dropped. An install worker sends its outcome while holding it,
     /// and starts a finished installation's helper itself once it is set.
     dropped: Arc<Mutex<bool>>,
@@ -177,6 +180,7 @@ impl Updater {
             installed: false,
             close_wanted: false,
             paths: None,
+            failed_reason: None,
             dropped: Arc::new(Mutex::new(false)),
             pins_path: None,
             managed: None,
@@ -233,6 +237,7 @@ impl Updater {
             Some(Outcome::Installed(version)) => self.status = Status::Updated(version.to_string()),
             Some(Outcome::Failed(reason)) => {
                 log::warn!("{} self-update failed: {reason}", self.app.name);
+                self.failed_reason = Some(reason.clone());
                 self.status = Status::InstallFailed(reason);
             }
             None => {}
@@ -373,10 +378,14 @@ impl Updater {
             let reason = reason.trim().to_owned();
             self.installed = false;
             self.close_wanted = false;
-            if let Some(prompt) = &mut self.prompt {
-                prompt.is_installing = false;
-                prompt.is_ready = false;
-                prompt.set_note(Note::new("The update could not be installed: {reason}", &[("reason", &reason)]));
+            match &mut self.prompt {
+                Some(prompt) => {
+                    prompt.is_installing = false;
+                    prompt.is_ready = false;
+                    prompt.set_note(Note::new("The update could not be installed: {reason}", &[("reason", &reason)]));
+                }
+                // The next prompt that offers the update says why.
+                None => self.failed_reason = Some(reason.clone()),
             }
             return Status::InstallFailed(reason);
         }
@@ -403,8 +412,8 @@ impl Updater {
                 if self.prompt.is_none() && self.install.is_none() && !self.installed {
                     let mut prompt = self.prompt_for(release);
                     // A failed update offered again says why the last attempt failed.
-                    if let Status::InstallFailed(reason) = &self.status {
-                        prompt.set_note(Note::new("The update could not be installed: {reason}", &[("reason", reason)]));
+                    if let Some(reason) = self.failed_reason.take() {
+                        prompt.set_note(Note::new("The update could not be installed: {reason}", &[("reason", &reason)]));
                     }
                     self.prompt = Some(prompt);
                 }
@@ -585,6 +594,7 @@ impl Updater {
         };
         prompt.is_installing = true;
         prompt.clear_message();
+        self.failed_reason = None;
         let (tx, rx) = channel();
         let (app, version, ctx, release) = (self.app, self.version.clone(), ctx.clone(), prompt.release.clone());
         let worker_release = release.clone();
@@ -1268,6 +1278,34 @@ mod tests {
         assert_eq!(u.prompt.as_ref().and_then(StartupPrompt::message).as_deref(), Some("The update could not be installed: disk full"));
     }
 
+    /// Check Again after a failed update, with the failure already dismissed, still says in the
+    /// prompt that offers the update why it failed, and only that prompt does.
+    #[test]
+    fn check_again_after_a_failed_update_says_why_it_failed() {
+        let ctx = egui::Context::default();
+        let (_dir, paths, mut u) = with_records("0.1.0");
+        self_update::record_failure(&paths, "disk full");
+        start_answered(&mut u, &ctx, Ok(None));
+        assert_eq!(u.status(), &Status::InstallFailed("disk full".into()));
+        u.dismiss_status();
+        u.check_now(&ctx);
+        assert_eq!(u.status(), &Status::Checking);
+        let (tx, rx) = channel();
+        u.check = Some(rx);
+        assert!(tx.send(Ok(Some(newer()))).is_ok());
+        u.tick(&ctx);
+        assert_eq!(u.prompt.as_ref().and_then(StartupPrompt::message).as_deref(), Some("The update could not be installed: disk full"));
+
+        u.prompt = None;
+        u.check_now(&ctx);
+        let (tx, rx) = channel();
+        u.check = Some(rx);
+        assert!(tx.send(Ok(Some(newer()))).is_ok());
+        u.tick(&ctx);
+        assert!(u.prompt.is_some());
+        assert_eq!(u.prompt.as_ref().and_then(StartupPrompt::message), None, "the reason is shown once");
+    }
+
     /// An unreadable record (a folder where the file goes) shows nothing and breaks nothing.
     #[test]
     fn an_unreadable_record_shows_nothing() {
@@ -1369,6 +1407,14 @@ mod tests {
         assert_eq!(frame(&mut u, &ctx, true), Action::None);
         u.check_now(&ctx);
         assert_eq!(u.status(), &Status::Checking, "Check Again runs a check");
+        // The prompt showed the reason: a later prompt does not repeat it.
+        u.prompt = None;
+        let (tx, rx) = channel();
+        u.check = Some(rx);
+        assert!(tx.send(Ok(Some(newer()))).is_ok());
+        u.tick(&ctx);
+        assert!(u.prompt.is_some());
+        assert_eq!(u.prompt.as_ref().and_then(StartupPrompt::message), None, "the reason is shown once");
     }
 
     /// An installation that finishes after the updater was dropped and whose helper cannot start,
