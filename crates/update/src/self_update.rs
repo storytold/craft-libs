@@ -1012,10 +1012,23 @@ fn finish_step(
         record_done(paths, version);
     }
     let started = start(&exe);
-    if let Err(e) = &started {
+    let restarted = started.is_ok();
+    let result = with_restart(done, started);
+    if !restarted && let Err(e) = &result {
         record_failure(paths, e);
     }
-    done.and(started)
+    result
+}
+
+/// The helper's result once it has tried to start the app: when both the update step and the
+/// start fail, the error names both, the step's first.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn with_restart(done: Result<(), String>, started: Result<(), String>) -> Result<(), String> {
+    match (done, started) {
+        (done, Ok(())) => done,
+        (Ok(()), Err(restart)) => Err(restart),
+        (Err(update), Err(restart)) => Err(format!("{update}; {restart}")),
+    }
 }
 
 /// Whether `exe` has `portable.txt` beside it, which makes [`Paths::for_exe`] keep its folders
@@ -2407,6 +2420,37 @@ mod tests {
         assert!(finish_step(&crate::suite::LAUNCHER, &system_program("cmd.exe"), &paths, 4242, exe.clone(), &step, false, &exited, &start).is_err());
         assert_eq!(*started.lock().unwrap(), vec![exe.clone()]);
         assert_eq!(std::fs::read_to_string(&exe).unwrap(), "0.1.0");
+    }
+
+    /// When the update step fails and the old app can't be started again either, the error kept
+    /// for the next start names both.
+    #[cfg(windows)]
+    #[test]
+    fn a_failed_step_and_a_failed_restart_are_both_recorded() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::under(dir.path());
+        let exe = dir.path().join("artcraft-launcher.exe");
+        std::fs::write(&exe, "0.1.0").unwrap();
+        // Not a zip, so the step fails.
+        let zip = dir.path().join("artcraft-launcher-0.2.0-windows-x64-portable.zip");
+        std::fs::write(&zip, "not a zip").unwrap();
+        let step = Finish::Portable { zip, tmp: dir.path().join(PORTABLE_STAGING) };
+        let start = |_exe: &Path| Err("couldn't start artcraft-launcher.exe (denied)".to_string());
+        let exited = |_pid| true;
+        let error =
+            finish_step(&crate::suite::LAUNCHER, &system_program("cmd.exe"), &paths, 4242, exe.clone(), &step, false, &exited, &start).unwrap_err();
+        assert!(error.ends_with("; couldn't start artcraft-launcher.exe (denied)"), "{error}");
+        assert!(error.len() > "; couldn't start artcraft-launcher.exe (denied)".len(), "the step's error comes first: {error}");
+        assert_eq!(take_failure(&paths).as_deref(), Some(error.as_str()));
+    }
+
+    /// The helper's result keeps the update step's error when the start fails too.
+    #[test]
+    fn a_failed_restart_keeps_the_step_error() {
+        assert_eq!(with_restart(Ok(()), Ok(())), Ok(()));
+        assert_eq!(with_restart(Err("step".into()), Ok(())), Err("step".into()));
+        assert_eq!(with_restart(Ok(()), Err("start".into())), Err("start".into()));
+        assert_eq!(with_restart(Err("step".into()), Err("start".into())), Err("step; start".into()));
     }
 
     /// A successful step starts the new app once.

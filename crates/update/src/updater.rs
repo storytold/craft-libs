@@ -152,9 +152,10 @@ pub struct Updater {
     /// Why the last update could not be installed, until a prompt that offers the update again
     /// shows it.
     failed_reason: Option<String>,
-    /// Set when the `Updater` is dropped. An install worker sends its outcome while holding it,
-    /// and starts a finished installation's helper itself once it is set.
-    dropped: Arc<Mutex<bool>>,
+    /// Set when the app exits: the `Updater` is dropped or [`Updater::start_pending_update`] is
+    /// called. An install worker sends its outcome while holding it, and starts a finished
+    /// installation's helper itself once it is set.
+    exiting: Arc<Mutex<bool>>,
     /// The version-choice file to read in place of [`Pins::default_path`] (tests).
     pins_path: Option<PathBuf>,
     /// The launcher's choice for this app when it is not stable, as of the last check or offer.
@@ -182,7 +183,7 @@ impl Updater {
             close_wanted: false,
             paths: None,
             failed_reason: None,
-            dropped: Arc::new(Mutex::new(false)),
+            exiting: Arc::new(Mutex::new(false)),
             pins_path: None,
             managed: None,
             translate: english,
@@ -565,17 +566,17 @@ impl Updater {
     /// Call it once the app's exit is certain (a close nothing can cancel any more, in `on_exit`),
     /// whether or not the exit came through [`Action::Close`]; dropping the `Updater` calls it
     /// too. Later calls do nothing. An installation still running at the first call starts its
-    /// helper itself when it finishes, as long as the process is still running then; an app
-    /// that ends the process in `on_exit` loses an installation still in progress, since its
-    /// worker thread ends with the process. A helper that cannot start, or an installation that
-    /// failed and was not reported yet, is recorded, and the next start reports it
-    /// ([`Status::InstallFailed`]).
+    /// helper itself when it finishes, as long as the process is still running then, and no
+    /// longer reports through [`Updater::tick`]; an app that ends the process in `on_exit` loses
+    /// an installation still in progress, since its worker thread ends with the process. A
+    /// helper that cannot start, or an installation that failed and was not reported yet, is
+    /// recorded, and the next start reports it ([`Status::InstallFailed`]).
     pub fn start_pending_update(&mut self) {
         // Held while the channel is read: a worker sent its outcome before, and it is read here,
         // or it sends after and starts its helper (or records its failure) itself.
-        let dropped = Arc::clone(&self.dropped);
-        let mut dropped = dropped.lock().unwrap_or_else(PoisonError::into_inner);
-        *dropped = true;
+        let exiting = Arc::clone(&self.exiting);
+        let mut exiting = exiting.lock().unwrap_or_else(PoisonError::into_inner);
+        *exiting = true;
         // An installation that finished since the last `tick`, or whose worker ended without a word.
         // One still running is let go: it now reports through `deliver` alone.
         if let Some((rx, release)) = self.install.take()
@@ -635,11 +636,11 @@ impl Updater {
         let (tx, rx) = channel();
         let (app, version, ctx, release) = (self.app, self.version.clone(), ctx.clone(), prompt.release.clone());
         let worker_release = release.clone();
-        let dropped = handoff(&mut self.dropped);
+        let exiting = handoff(&mut self.exiting);
         let spawned = std::thread::Builder::new().name("self-update".into()).spawn(move || {
             let run = || install(app, &installed, worker_release, &version).map_err(Failure::Installer);
             let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(run)).unwrap_or_else(|_| Err(Failure::panicked()));
-            deliver(app, &tx, &dropped, paths.as_ref(), outcome);
+            deliver(app, &tx, &exiting, paths.as_ref(), outcome);
             ctx.request_repaint();
         });
         match spawned {
@@ -660,23 +661,23 @@ impl Drop for Updater {
     }
 }
 
-/// The flag a new install worker sends its outcome under (the `Updater`'s `dropped`). After
+/// The flag a new install worker sends its outcome under (the `Updater`'s `exiting`). After
 /// [`Updater::start_pending_update`] set it while the app kept running (a helper that then failed
 /// puts the update on offer again), a new flag replaces it, so that the new worker reports
 /// through `tick` instead of starting its helper at once. A worker let go before keeps the old one.
-fn handoff(dropped: &mut Arc<Mutex<bool>>) -> Arc<Mutex<bool>> {
-    if *dropped.lock().unwrap_or_else(PoisonError::into_inner) {
-        *dropped = Arc::new(Mutex::new(false));
+fn handoff(exiting: &mut Arc<Mutex<bool>>) -> Arc<Mutex<bool>> {
+    if *exiting.lock().unwrap_or_else(PoisonError::into_inner) {
+        *exiting = Arc::new(Mutex::new(false));
     }
-    Arc::clone(dropped)
+    Arc::clone(exiting)
 }
 
-/// Sends the install worker's outcome to the [`Updater`]. When the `Updater` has been dropped
-/// (the app is exiting), the worker starts a finished installation's helper itself, since
-/// nothing will start it at a close. A helper that cannot start, or a failed installation, is
-/// then recorded under `paths` for the next start.
-fn deliver(app: &App, tx: &Sender<Result<Restart, Failure>>, dropped: &Mutex<bool>, paths: Option<&Paths>, outcome: Result<Restart, Failure>) {
-    let gone = dropped.lock().unwrap_or_else(PoisonError::into_inner);
+/// Sends the install worker's outcome to the [`Updater`]. When the app is exiting (the `Updater`
+/// was dropped or [`Updater::start_pending_update`] was called), the worker starts a finished
+/// installation's helper itself, since nothing will start it at a close. A helper that cannot
+/// start, or a failed installation, is then recorded under `paths` for the next start.
+fn deliver(app: &App, tx: &Sender<Result<Restart, Failure>>, exiting: &Mutex<bool>, paths: Option<&Paths>, outcome: Result<Restart, Failure>) {
+    let gone = exiting.lock().unwrap_or_else(PoisonError::into_inner);
     let unsent = if *gone { Some(outcome) } else { tx.send(outcome).err().map(|SendError(outcome)| outcome) };
     drop(gone);
     match unsent {
@@ -1203,13 +1204,13 @@ mod tests {
     fn an_install_finishing_after_the_updater_is_dropped_starts_its_helper() {
         use std::sync::atomic::Ordering;
         let mut u = updater(Ok(None));
-        let dropped = Arc::clone(&u.dropped);
+        let exiting = Arc::clone(&u.exiting);
         let (starts, restart) = counted_restart();
         let (tx, rx) = channel();
         u.install = Some((rx, newer()));
         drop(u);
         assert_eq!(starts.load(Ordering::SeqCst), 0);
-        deliver(&crate::suite::LAUNCHER, &tx, &dropped, None, Ok(restart));
+        deliver(&crate::suite::LAUNCHER, &tx, &exiting, None, Ok(restart));
         assert_eq!(starts.load(Ordering::SeqCst), 1);
 
         // Sent while the drop has read the channel but not yet released the receiver.
@@ -1233,13 +1234,13 @@ mod tests {
         use std::sync::atomic::Ordering;
         let ctx = egui::Context::default();
         let (_dir, paths, mut u) = with_records("0.1.0");
-        let dropped = Arc::clone(&u.dropped);
+        let exiting = Arc::clone(&u.exiting);
         let (starts, restart) = counted_restart();
         let (tx, rx) = channel();
         u.install = Some((rx, newer()));
         u.start_pending_update();
         assert_eq!(starts.load(Ordering::SeqCst), 0, "nothing has finished yet");
-        deliver(&PHOTOCRAFT, &tx, &dropped, Some(&paths), Ok(restart));
+        deliver(&PHOTOCRAFT, &tx, &exiting, Some(&paths), Ok(restart));
         drop(tx);
         assert_eq!(starts.load(Ordering::SeqCst), 1, "the worker starts the helper itself");
         drop(u);
@@ -1534,11 +1535,11 @@ mod tests {
         assert_eq!(u.status(), &Status::InstallFailed("ArtCraft Launcher is still running".into()));
 
         // The retry's worker, as `start_install` starts it.
-        let dropped = handoff(&mut u.dropped);
+        let exiting = handoff(&mut u.exiting);
         let (starts, restart) = counted_restart();
         let (tx, rx) = channel();
         u.install = Some((rx, newer()));
-        deliver(&PHOTOCRAFT, &tx, &dropped, Some(&paths), Ok(restart));
+        deliver(&PHOTOCRAFT, &tx, &exiting, Some(&paths), Ok(restart));
         assert_eq!(starts.load(Ordering::SeqCst), 0, "the helper waits for the exit");
         u.tick(&ctx);
         assert!(u.installed && u.restart.is_some(), "tick picks up the retry");
@@ -1596,11 +1597,11 @@ mod tests {
         ];
         for (outcome, want) in failures {
             let (_dir, paths, mut u) = with_records("0.1.0");
-            let dropped = Arc::clone(&u.dropped);
+            let exiting = Arc::clone(&u.exiting);
             let (tx, rx) = channel();
             u.install = Some((rx, newer()));
             drop(u);
-            deliver(&PHOTOCRAFT, &tx, &dropped, Some(&paths), outcome);
+            deliver(&PHOTOCRAFT, &tx, &exiting, Some(&paths), outcome);
             let mut next = reading(&paths, "0.1.0");
             start_answered(&mut next, &ctx, Ok(None));
             assert_eq!(next.status(), &Status::InstallFailed(want.into()), "{want}");
