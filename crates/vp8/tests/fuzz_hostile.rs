@@ -103,14 +103,14 @@ fn sweep() {
     let Some(ff) = craft_testkit::ffmpeg_or_skip("VP8 fuzz") else { return };
     for &(name, args, pix) in SEEDS {
         if !craft_testkit::ffmpeg_has_encoder(&ff, "libvpx") {
-            craft_testkit::skip("VP8 fuzz", &format!("this ffmpeg has no libvpx encoder (seed {name})"));
+            craft_testkit::skip_test("VP8 fuzz", &format!("this ffmpeg has no libvpx encoder (seed {name})"));
             continue;
         }
         let Some(seed) = make(&ff, name, args, pix) else {
             panic!("ffmpeg has libvpx but could not encode the {name} seed");
         };
         if seed.is_empty() {
-            craft_testkit::skip("VP8 fuzz", &format!("the {name} seed has no frames"));
+            craft_testkit::skip_test("VP8 fuzz", &format!("the {name} seed has no frames"));
             continue;
         }
         // truncate each of the first frames at every length

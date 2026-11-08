@@ -5,7 +5,7 @@
 
 pub use craft_media_testkit::*;
 
-/// Report a skipped test.
-pub fn skip(what: &str, reason: &str) {
-    eprintln!("SKIPPED ({what}): {reason}");
+/// Report a skipped test with a context prefix.
+pub fn skip_test(what: &str, reason: &str) {
+    let _: Option<()> = craft_media_testkit::skip(&format!("{what}: {reason}"));
 }
