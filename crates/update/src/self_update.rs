@@ -553,10 +553,10 @@ fn scheduled_tag(paths: &Paths) -> Option<String> {
 const RECORD_LIMIT: usize = 4096;
 
 /// The text of the record at `path`, at most [`RECORD_LIMIT`] bytes of it. `None` when it is
-/// missing, unreadable or not a plain file.
+/// missing, unreadable or not a plain file (a link is not followed).
 fn read_record(path: &Path) -> Option<String> {
     use std::io::Read;
-    if !std::fs::metadata(path).is_ok_and(|m| m.is_file()) {
+    if !is_plain_file(path) {
         return None;
     }
     let mut bytes = Vec::new();
@@ -717,7 +717,6 @@ fn stage(from: &Path, to: &Path, executable: bool) -> Result<PathBuf, String> {
 }
 
 /// A regular file, not a link to one.
-#[cfg(unix)]
 fn is_plain_file(path: &Path) -> bool {
     std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_file())
 }
@@ -1011,7 +1010,7 @@ pub(crate) fn record_failure(paths: &Paths, error: &str) {
 pub fn take_failure(paths: &Paths) -> Option<String> {
     let file = failure_file(paths);
     let error = read_record(&file);
-    if std::fs::metadata(&file).is_ok_and(|m| m.is_file()) {
+    if is_plain_file(&file) {
         let _ = std::fs::remove_file(&file);
     }
     error
@@ -1683,6 +1682,30 @@ mod tests {
         std::fs::create_dir_all(done_file(&paths)).unwrap();
         assert_eq!(take_outcome(&paths, "0.2.0"), None);
         assert!(failure_file(&paths).is_dir());
+    }
+
+    /// A link where a record goes is not followed: neither record is read through it, and the
+    /// file it points to stays. Skipped where the system refuses to create the link (Windows
+    /// without the privilege for symbolic links).
+    #[test]
+    fn a_record_that_is_a_link_is_not_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::under(dir.path());
+        std::fs::create_dir_all(paths.logs()).unwrap();
+        std::fs::create_dir_all(&paths.data).unwrap();
+        let elsewhere = dir.path().join("elsewhere.txt");
+        std::fs::write(&elsewhere, "v0.2.0").unwrap();
+        #[cfg(unix)]
+        let link = |to: &Path, at: &Path| std::os::unix::fs::symlink(to, at);
+        #[cfg(windows)]
+        let link = |to: &Path, at: &Path| std::os::windows::fs::symlink_file(to, at);
+        if let Err(e) = link(&elsewhere, &failure_file(&paths)).and_then(|()| link(&elsewhere, &done_file(&paths))) {
+            eprintln!("skipped: couldn't create a symbolic link ({e})");
+            return;
+        }
+        assert_eq!(take_failure(&paths), None);
+        assert_eq!(take_outcome(&paths, "0.2.0"), None);
+        assert_eq!(std::fs::read_to_string(&elsewhere).unwrap(), "v0.2.0");
     }
 
     /// Scheduling a new update clears the outcome records of an earlier one, so a stale failure

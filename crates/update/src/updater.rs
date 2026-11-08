@@ -206,6 +206,16 @@ impl Updater {
         StartupPrompt::new(self.app, release, self.version.clone()).with_translator(self.translate)
     }
 
+    /// Opens the prompt offering `release`. A failed update offered again says why the last
+    /// attempt failed, once.
+    fn open_offer(&mut self, release: Release) {
+        let mut prompt = self.prompt_for(release);
+        if let Some(reason) = self.failed_reason.take() {
+            prompt.set_note(Note::new("The update could not be installed: {reason}", &[("reason", &reason)]));
+        }
+        self.prompt = Some(prompt);
+    }
+
     /// [`READY_TEXT`], translated when the prompt draws.
     fn installed_note(&self) -> Note {
         Note::new(READY_TEXT, &[("app", self.app.name)])
@@ -302,10 +312,11 @@ impl Updater {
         self.close_wanted = true;
     }
 
-    /// Opens the startup prompt for a release the app found itself.
+    /// Opens the startup prompt for a release the app found itself. After a failed update the
+    /// prompt says why it failed, like the one a check opens.
     pub fn offer(&mut self, release: Release) {
         if self.install.is_none() && !self.installed && !self.read_choice() {
-            self.prompt = Some(self.prompt_for(release));
+            self.open_offer(release);
         }
     }
 
@@ -409,12 +420,7 @@ impl Updater {
         match answer {
             Ok(Some(release)) => {
                 if self.prompt.is_none() && self.install.is_none() && !self.installed {
-                    let mut prompt = self.prompt_for(release);
-                    // A failed update offered again says why the last attempt failed.
-                    if let Some(reason) = self.failed_reason.take() {
-                        prompt.set_note(Note::new("The update could not be installed: {reason}", &[("reason", &reason)]));
-                    }
-                    self.prompt = Some(prompt);
+                    self.open_offer(release);
                 }
                 self.status = Status::Idle;
             }
@@ -608,7 +614,7 @@ impl Updater {
         let (tx, rx) = channel();
         let (app, version, ctx, release) = (self.app, self.version.clone(), ctx.clone(), prompt.release.clone());
         let worker_release = release.clone();
-        let dropped = Arc::clone(&self.dropped);
+        let dropped = handoff(&mut self.dropped);
         let spawned = std::thread::Builder::new().name("self-update".into()).spawn(move || {
             let run = || install(app, &installed, worker_release, &version).map_err(Failure::Installer);
             let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(run)).unwrap_or_else(|_| Err(Failure::panicked()));
@@ -631,6 +637,17 @@ impl Drop for Updater {
     fn drop(&mut self) {
         self.start_pending_update();
     }
+}
+
+/// The flag a new install worker sends its outcome under (the `Updater`'s `dropped`). After
+/// [`Updater::start_pending_update`] set it while the app kept running (a helper that then failed
+/// puts the update on offer again), a new flag replaces it, so that the new worker reports
+/// through `tick` instead of starting its helper at once. A worker let go before keeps the old one.
+fn handoff(dropped: &mut Arc<Mutex<bool>>) -> Arc<Mutex<bool>> {
+    if *dropped.lock().unwrap_or_else(PoisonError::into_inner) {
+        *dropped = Arc::new(Mutex::new(false));
+    }
+    Arc::clone(dropped)
 }
 
 /// Sends the install worker's outcome to the [`Updater`]. When the `Updater` has been dropped
@@ -691,13 +708,19 @@ mod tests {
         std::env::temp_dir().join("craft-update-tests-no-such-dir").join("versions.json")
     }
 
-    /// Ticks until the running check has reported.
+    /// Waits for the running check's answer on its channel (its thread always sends one, or ends
+    /// and closes the channel), then hands it to `tick` as a frame would.
     pub(super) fn settle(updater: &mut Updater, ctx: &egui::Context) {
-        let deadline = std::time::Instant::now() + Duration::from_secs(10);
-        while updater.check.is_some() && std::time::Instant::now() < deadline {
-            updater.tick(ctx);
-            std::thread::sleep(Duration::from_millis(5));
+        let Some(rx) = updater.check.take() else { return };
+        let (tx, answer) = channel();
+        if let Ok(checked) = rx.recv() {
+            assert!(tx.send(checked).is_ok());
         }
+        // Without an answer `tx` is dropped here, and `tick` sees a check that stopped.
+        drop(tx);
+        updater.check = Some(answer);
+        updater.tick(ctx);
+        assert!(updater.check.is_none(), "the check has reported");
     }
 
     /// #391: Download opens only a safe web link, whoever built the `Release`.
@@ -1432,6 +1455,56 @@ mod tests {
         assert!(tx.send(Ok(Some(newer()))).is_ok());
         u.tick(&ctx);
         assert!(u.prompt.is_some());
+        assert_eq!(u.prompt.as_ref().and_then(StartupPrompt::message), None, "the reason is shown once");
+    }
+
+    /// A retry after a helper failed while the app kept running reports through `tick` and waits
+    /// for the exit, like the first installation, instead of starting its helper at once.
+    #[test]
+    fn a_retry_after_a_helper_failure_while_the_app_runs_waits_for_the_exit() {
+        use std::sync::atomic::Ordering;
+        let ctx = egui::Context::default();
+        let (_dir, paths, mut u) = with_records("0.1.0");
+        u.offer(newer());
+        let (tx, rx) = channel();
+        u.install = Some((rx, newer()));
+        assert!(tx.send(Ok(Restart::scheduled())).is_ok());
+        u.tick(&ctx);
+        u.start_pending_update();
+        self_update::record_failure(&paths, "ArtCraft Launcher is still running");
+        u.check_now(&ctx);
+        assert_eq!(u.status(), &Status::InstallFailed("ArtCraft Launcher is still running".into()));
+
+        // The retry's worker, as `start_install` starts it.
+        let dropped = handoff(&mut u.dropped);
+        let (starts, restart) = counted_restart();
+        let (tx, rx) = channel();
+        u.install = Some((rx, newer()));
+        deliver(&PHOTOCRAFT, &tx, &dropped, Some(&paths), Ok(restart));
+        assert_eq!(starts.load(Ordering::SeqCst), 0, "the helper waits for the exit");
+        u.tick(&ctx);
+        assert!(u.installed && u.restart.is_some(), "tick picks up the retry");
+        assert_eq!(frame(&mut u, &ctx, true), Action::Close);
+        drop(u);
+        assert_eq!(starts.load(Ordering::SeqCst), 1, "the exit starts the helper once");
+        let mut next = reading(&paths, "0.1.0");
+        start_answered(&mut next, &ctx, Ok(None));
+        assert_eq!(next.status(), &Status::Idle, "the retry is not recorded as a failure");
+    }
+
+    /// A release the app offers itself after a failed update says in its prompt why it failed,
+    /// once.
+    #[test]
+    fn an_offer_after_a_failed_update_says_why_it_failed() {
+        let ctx = egui::Context::default();
+        let (_dir, paths, mut u) = with_records("0.1.0");
+        self_update::record_failure(&paths, "disk full");
+        start_answered(&mut u, &ctx, Ok(None));
+        assert_eq!(u.status(), &Status::InstallFailed("disk full".into()));
+        u.offer(newer());
+        assert_eq!(u.prompt.as_ref().and_then(StartupPrompt::message).as_deref(), Some("The update could not be installed: disk full"));
+        u.prompt = None;
+        u.offer(newer());
         assert_eq!(u.prompt.as_ref().and_then(StartupPrompt::message), None, "the reason is shown once");
     }
 
