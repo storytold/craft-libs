@@ -837,6 +837,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-codecs"
+version = "0.1.0"
+dependencies = [
+ "craft-av1enc",
+ "craft-dnx",
+ "craft-h264enc",
+ "craft-hevcenc",
+ "craft-prores",
+ "craft-vp8",
+ "craft-vp9enc",
+]
+
+[[package]]
 name = "craft-crw"
 version = "0.1.0"
 dependencies = [
