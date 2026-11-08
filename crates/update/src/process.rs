@@ -2,7 +2,8 @@
 
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 /// A `Command` that won't flash a console window on Windows, and clears AppImage-injected
@@ -115,16 +116,45 @@ fn read_all<R: std::io::Read + Send + 'static>(pipe: Option<R>) -> std::io::Resu
 }
 
 /// Starts `cmd` without waiting for it, and reaps it when it exits. The process keeps running
-/// when no thread can be started to reap it; only the wait is skipped.
+/// when no thread can be started to reap it; it is then reaped by a later call once it exits.
 pub fn spawn_detached(mut cmd: Command) -> Result<(), String> {
-    let mut child = cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn().map_err(|e| format!("couldn't start it ({e})"))?;
-    let reaper = std::thread::Builder::new().name("reap-child".into()).spawn(move || {
-        let _ = child.wait();
-    });
-    if let Err(e) = reaper {
-        log::warn!("couldn't start a thread to wait for a started process ({e})");
-    }
+    let child = cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn().map_err(|e| format!("couldn't start it ({e})"))?;
+    reap_in_background(child, "a started process");
     Ok(())
+}
+
+/// Started processes that no thread waits for, because none could be started. On Unix a process
+/// that exits stays in the process table until it is waited for.
+static UNREAPED: Mutex<Vec<Child>> = Mutex::new(Vec::new());
+
+/// Waits for `child` on its own thread. When no thread can be started, `child` is kept in
+/// [`UNREAPED`] and waited for by a later call once it has exited.
+fn reap_in_background(child: Child, what: &str) {
+    reap_in_background_with(child, what, |wait| std::thread::Builder::new().name("reap-child".into()).spawn(wait).map(drop));
+}
+
+/// [`reap_in_background`] with `start_thread` in place of starting a thread (tests).
+fn reap_in_background_with(child: Child, what: &str, start_thread: impl FnOnce(Box<dyn FnOnce() + Send>) -> std::io::Result<()>) {
+    reap_exited();
+    let slot = Arc::new(Mutex::new(Some(child)));
+    let theirs = Arc::clone(&slot);
+    let wait = Box::new(move || {
+        let child = theirs.lock().unwrap_or_else(PoisonError::into_inner).take();
+        if let Some(mut child) = child {
+            let _ = child.wait();
+        }
+    });
+    if let Err(e) = start_thread(wait) {
+        log::warn!("couldn't start a thread to wait for {what} ({e})");
+        if let Some(child) = slot.lock().unwrap_or_else(PoisonError::into_inner).take() {
+            UNREAPED.lock().unwrap_or_else(PoisonError::into_inner).push(child);
+        }
+    }
+}
+
+/// Waits for the processes in [`UNREAPED`] that have exited, without blocking on the others.
+fn reap_exited() {
+    UNREAPED.lock().unwrap_or_else(PoisonError::into_inner).retain_mut(|child| matches!(child.try_wait(), Ok(None)));
 }
 
 /// Waits up to `timeout` for the process `pid` to exit, and says whether it has. A process that
@@ -277,12 +307,7 @@ fn open_and_wait_success(target: &str, timeout: Duration) -> bool {
             Ok(Some(status)) => return status.success(),
             Ok(None) if start.elapsed() < timeout => std::thread::sleep(Duration::from_millis(25)),
             Ok(None) => {
-                let reaper = std::thread::Builder::new().name("reap-child".into()).spawn(move || {
-                    let _ = child.wait();
-                });
-                if let Err(e) = reaper {
-                    log::warn!("couldn't start a thread to wait for the opener of {target} ({e})");
-                }
+                reap_in_background(child, &format!("the opener of {target}"));
                 return true;
             }
             Err(_) => return false,
@@ -428,6 +453,24 @@ mod tests {
             let requested = format!("{root}/{requested}");
             let _probe = RunningProbe::start(&actual);
             assert_eq!(is_running(Path::new(&requested)), expected, "{requested}");
+        }
+    }
+
+    /// A process that no thread can wait for is kept, and waited for once it has exited, so it
+    /// does not stay in the process table.
+    #[test]
+    fn a_process_without_a_waiting_thread_is_reaped_later() {
+        let mut child = command("cat").stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::null()).spawn().unwrap();
+        let stdin = child.stdin.take().unwrap();
+        let pid = child.id();
+        let kept = || UNREAPED.lock().unwrap_or_else(PoisonError::into_inner).iter().any(|c| c.id() == pid);
+        reap_in_background_with(child, "a test process", |_wait| Err(std::io::Error::other("no threads")));
+        assert!(kept(), "a running process with no thread to wait for it is kept");
+        // `cat` exits when its input closes.
+        drop(stdin);
+        while kept() {
+            reap_exited();
+            std::thread::yield_now();
         }
     }
 }
