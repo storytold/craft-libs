@@ -2,8 +2,8 @@
 
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::process::{Child, Command, ExitStatus, Stdio};
+use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 /// A `Command` that won't flash a console window on Windows, and clears AppImage-injected
@@ -115,48 +115,61 @@ fn read_all<R: std::io::Read + Send + 'static>(pipe: Option<R>) -> std::io::Resu
     })
 }
 
-/// Starts `cmd` without waiting for it, and reaps it when it exits. The process keeps running
-/// when no thread can be started to reap it. It is then reaped when a later call starts another
-/// process after it has exited; until then, on Unix, it stays in the process table.
+/// Starts `cmd` without waiting for it.
+///
+/// On Unix the process is reaped when it exits: a thread that waits for the process starts
+/// first and starts the process itself. When no thread can be started, the call returns an error
+/// and does not start the process. On Windows the process starts on the calling thread, and no
+/// thread waits for it.
 pub fn spawn_detached(mut cmd: Command) -> Result<(), String> {
-    let child = cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn().map_err(|e| format!("couldn't start it ({e})"))?;
-    reap_in_background(child, "a started process");
-    Ok(())
+    cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+    if cfg!(windows) {
+        return cmd.spawn().map(drop).map_err(|e| format!("couldn't start it ({e})"));
+    }
+    spawn_detached_with(
+        move || cmd.spawn(),
+        |wait| {
+            std::thread::Builder::new()
+                .name("reap-child".into())
+                .spawn(move || {
+                    let _ = wait();
+                })
+                .map(drop)
+        },
+    )
 }
 
-/// Started processes that no thread waits for, because none could be started. On Unix a process
-/// that exits stays in the process table until it is waited for.
-static UNREAPED: Mutex<Vec<Child>> = Mutex::new(Vec::new());
-
-/// Waits for `child` on its own thread. When no thread can be started, `child` is kept in
-/// [`UNREAPED`]. Each call first waits for the kept processes that have exited, so a kept process
-/// is waited for at the first call after it exits.
-fn reap_in_background(child: Child, what: &str) {
-    reap_in_background_with(child, what, |wait| std::thread::Builder::new().name("reap-child".into()).spawn(wait).map(drop));
-}
-
-/// [`reap_in_background`] with `start_thread` in place of starting a thread (tests).
-fn reap_in_background_with(child: Child, what: &str, start_thread: impl FnOnce(Box<dyn FnOnce() + Send>) -> std::io::Result<()>) {
-    reap_exited();
-    let slot = Arc::new(Mutex::new(Some(child)));
-    let theirs = Arc::clone(&slot);
-    let wait = Box::new(move || {
-        let child = theirs.lock().unwrap_or_else(PoisonError::into_inner).take();
-        if let Some(mut child) = child {
-            let _ = child.wait();
-        }
-    });
-    if let Err(e) = start_thread(wait) {
-        log::warn!("couldn't start a thread to wait for {what} ({e})");
-        if let Some(child) = slot.lock().unwrap_or_else(PoisonError::into_inner).take() {
-            UNREAPED.lock().unwrap_or_else(PoisonError::into_inner).push(child);
-        }
+/// The thread that [`spawn_detached`] starts on Unix: `start_thread` starts a thread that runs
+/// the closure it is given, and that closure calls `spawn` and then waits for the process.
+/// `spawn` is called on that thread only, so when `start_thread` fails nothing is started.
+#[cfg_attr(windows, allow(dead_code))]
+fn spawn_detached_with(
+    spawn: impl FnOnce() -> std::io::Result<Child> + Send + 'static,
+    start_thread: impl FnOnce(Box<dyn FnOnce() -> Option<ExitStatus> + Send>) -> std::io::Result<()>,
+) -> Result<(), String> {
+    let (started, start_result) = mpsc::channel();
+    start_thread(Box::new(move || start_and_wait(spawn, &started))).map_err(|e| format!("couldn't start a thread to wait for it ({e})"))?;
+    match start_result.recv() {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(e)) => Err(format!("couldn't start it ({e})")),
+        Err(_) => Err("couldn't start it (its thread ended before starting it)".into()),
     }
 }
 
-/// Waits for the processes in [`UNREAPED`] that have exited, without blocking on the others.
-fn reap_exited() {
-    UNREAPED.lock().unwrap_or_else(PoisonError::into_inner).retain_mut(|child| matches!(child.try_wait(), Ok(None)));
+/// Calls `spawn`, sends whether that worked on `started`, and waits for the process to exit.
+/// Returns its exit status, or `None` when it didn't start or couldn't be waited for.
+#[cfg_attr(windows, allow(dead_code))]
+fn start_and_wait(spawn: impl FnOnce() -> std::io::Result<Child>, started: &mpsc::Sender<std::io::Result<()>>) -> Option<ExitStatus> {
+    match spawn() {
+        Ok(mut child) => {
+            let _ = started.send(Ok(()));
+            child.wait().ok()
+        }
+        Err(e) => {
+            let _ = started.send(Err(e));
+            None
+        }
+    }
 }
 
 /// Waits up to `timeout` for the process `pid` to exit, and says whether it has. A process that
@@ -270,18 +283,20 @@ pub fn open_url_with_fallback(primary_url: &str, fallback_url: &str) {
     let fallback = fallback_url.to_string();
     let opener = std::thread::Builder::new().name("open-url".into()).spawn(move || {
         if !open_and_wait_success(&primary, Duration::from_millis(1500)) {
-            log::warn!("couldn't open {primary}; falling back to {fallback}");
+            log::warn!("couldn't open a link; opening its fallback");
             let _ = open(std::ffi::OsStr::new(&fallback));
         }
     });
     if let Err(e) = opener {
-        log::warn!("couldn't start a thread to open {primary_url} ({e})");
+        log::warn!("couldn't start a thread to open a link ({e})");
     }
 }
 
 /// Starts the default system opener for `target` and returns `true` unless it fails to start
 /// or exits in error within `timeout`. An opener still running after `timeout` counts as
-/// success and is reaped in the background.
+/// success, and the call waits for it to exit before returning. An opener whose state can't be
+/// read is stopped and waited for, and counts as a failure. [`open_url_with_fallback`] calls this
+/// on its own `open-url` thread.
 ///
 /// `explorer` exits with an error status even when it opens the target, so on Windows only a
 /// failure to start counts; the scheme check covers the rest.
@@ -289,7 +304,7 @@ fn open_and_wait_success(target: &str, timeout: Duration) -> bool {
     let mut cmd = match opener(std::ffi::OsStr::new(target)) {
         Ok(cmd) => cmd,
         Err(error) => {
-            log::warn!("couldn't resolve the system opener for {target}: {error}");
+            log::warn!("couldn't resolve the system opener: {error}");
             return false;
         }
     };
@@ -299,7 +314,7 @@ fn open_and_wait_success(target: &str, timeout: Duration) -> bool {
     let mut child = match cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn() {
         Ok(c) => c,
         Err(e) => {
-            log::warn!("couldn't start the opener for {target}: {e}");
+            log::warn!("couldn't start the system opener: {e}");
             return false;
         }
     };
@@ -309,10 +324,14 @@ fn open_and_wait_success(target: &str, timeout: Duration) -> bool {
             Ok(Some(status)) => return status.success(),
             Ok(None) if start.elapsed() < timeout => std::thread::sleep(Duration::from_millis(25)),
             Ok(None) => {
-                reap_in_background(child, &format!("the opener of {target}"));
+                let _ = child.wait();
                 return true;
             }
-            Err(_) => return false,
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return false;
+            }
         }
     }
 }
@@ -457,38 +476,6 @@ mod tests {
             assert_eq!(is_running(Path::new(&requested)), expected, "{requested}");
         }
     }
-
-    /// A process that no thread can wait for is kept, and waited for once it has exited, so it
-    /// does not stay in the process table.
-    #[test]
-    fn a_process_without_a_waiting_thread_is_reaped_later() {
-        let mut child = command("cat").stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn().unwrap();
-        let stdin = child.stdin.take().unwrap();
-        let mut stdout = child.stdout.take().unwrap();
-        let pid = child.id();
-        let kept = || UNREAPED.lock().unwrap_or_else(PoisonError::into_inner).iter().any(|c| c.id() == pid);
-        reap_in_background_with(child, "a test process", |_wait| Err(std::io::Error::other("no threads")));
-        assert!(kept(), "a running process with no thread to wait for it is kept");
-        // `cat` exits when its input closes, and its output closes as it exits.
-        drop(stdin);
-        let _ = std::io::copy(&mut stdout, &mut std::io::sink());
-        // `ps` shows an exited process that nothing has waited for in state Z, and nothing once it
-        // has been waited for (another test's call may do that first).
-        let state = || {
-            let out = std::process::Command::new("ps").args(["-o", "stat=", "-p", &pid.to_string()]).output().unwrap();
-            String::from_utf8_lossy(&out.stdout).trim().to_owned()
-        };
-        loop {
-            let now = state();
-            if now.is_empty() || now.starts_with('Z') {
-                break;
-            }
-            std::thread::yield_now();
-        }
-        reap_exited();
-        assert!(!kept(), "an exited process is waited for by the next call");
-        assert_eq!(state(), "", "the waited-for process has left the process table");
-    }
 }
 
 #[cfg(test)]
@@ -547,6 +534,54 @@ mod run_tests {
         let err = run("yes", &[], Duration::from_millis(100)).unwrap_err();
         assert!(err.contains("didn't finish within"), "{err}");
         assert!(start.elapsed() < Duration::from_secs(5));
+    }
+
+    /// The thread that starts a detached process waits for it, so the process is reaped when it
+    /// exits: only a wait gives its exit status.
+    #[test]
+    fn a_detached_process_is_waited_for() {
+        let (program, args) = shell("exit 7");
+        let mut cmd = command(program);
+        cmd.args(args);
+        let (status_sent, status) = mpsc::channel();
+        let result = spawn_detached_with(
+            move || cmd.spawn(),
+            move |wait| {
+                std::thread::Builder::new()
+                    .spawn(move || {
+                        let _ = status_sent.send(wait());
+                    })
+                    .map(drop)
+            },
+        );
+        assert_eq!(result, Ok(()));
+        assert_eq!(status.recv().ok().flatten().and_then(|status| status.code()), Some(7), "the waiting thread gets the exit status");
+    }
+
+    /// When no thread can be started to wait for a process, the process is not started and the
+    /// call says why.
+    #[test]
+    fn no_process_starts_without_a_thread_to_wait_for_it() {
+        let (program, args) = shell("exit 0");
+        let mut cmd = command(program);
+        cmd.args(args);
+        let spawned = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let spawn_called = std::sync::Arc::clone(&spawned);
+        let result = spawn_detached_with(
+            move || {
+                spawn_called.store(true, std::sync::atomic::Ordering::SeqCst);
+                cmd.spawn()
+            },
+            |_wait| Err(std::io::Error::other("no threads")),
+        );
+        assert_eq!(result, Err("couldn't start a thread to wait for it (no threads)".into()));
+        assert!(!spawned.load(std::sync::atomic::Ordering::SeqCst), "the process was started");
+    }
+
+    #[test]
+    fn a_detached_program_that_cannot_start_says_so() {
+        let result = spawn_detached(command("craft-update-test-no-such-program"));
+        assert!(matches!(&result, Err(e) if e.starts_with("couldn't start it (")), "{result:?}");
     }
 
     #[test]
