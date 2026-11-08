@@ -15,7 +15,7 @@ holds `upstream_revision`. `local_patches` describes each local patch.
 
 | File | Change |
 |---|---|
-| `src/curve/mod.rs` | `solve_t_for_y` divides every height by 32 before it builds the cubic's coefficients when the largest height or the target has a magnitude above `f64::MAX / 32`. Before, a segment with heights above about `f64::MAX / 3` gave an infinite coefficient, and polycool's critical point search recursed until the process aborted with a stack overflow. `Topology::from_path` reached it on two overlapping rectangles near y = 1e308. The `solve_for_t_near_the_float_limit` test solves straight segments with heights from 5.5e307 up to `f64::MAX`. |
+| `src/curve/mod.rs` | `solve_t_for_y` divides every height by 32 before it builds the cubic's coefficients when the largest height or the target has a magnitude above `f64::MAX / 32`. Before, a segment with heights above about `f64::MAX / 3` gave an infinite coefficient, and polycool's critical point search recursed until the process aborted with a stack overflow. `Topology::from_path` reached it on two overlapping rectangles near y = 1e308. The `solve_for_t_near_the_float_limit` test solves straight segments with heights from 5.5e307 up to `f64::MAX`. `intersect_cubics_rec` and `AlmostHorizontalDecomposition::from_monotone_cubic` take the midpoint of two heights with `f64::midpoint` instead of `(a + b) / 2.0`. Before, two heights above about 9e307 summed to infinity, the comparison of two overlapping segments had no entries, and a release build panicked on the empty list. The `compare_near_the_float_limit` test compares two lines that start at heights up to 1.7e308. |
 
 `omitted_files` lists the 43 files of the package left out here, with their hashes:
 
