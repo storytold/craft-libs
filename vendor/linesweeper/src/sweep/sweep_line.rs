@@ -593,9 +593,18 @@ impl<'segs> Sweeper<'segs> {
     }
 
     fn scan_for_removal(&mut self, pos: usize) {
-        if pos > 0 {
-            self.intersection_scan_right(pos - 1, WhichTouch::Mid);
-            self.intersection_scan_left(pos - 1, WhichTouch::Mid);
+        // Craft patch (removal scan): segments that end at this y stay in the
+        // sweep line until `advance`, and a scan from one of them returns at
+        // once. The scans start from the nearest segment left of `pos` that
+        // does not end here, so the live segments on both sides of the gap
+        // are compared. When there is none, nothing on the left can cross.
+        let y = self.y;
+        if let Some(start) = (0..pos)
+            .rev()
+            .find(|&i| self.segments[self.line.seg(i)].end().y != y)
+        {
+            self.intersection_scan_right(start, WhichTouch::Mid);
+            self.intersection_scan_left(start, WhichTouch::Mid);
         }
     }
 
@@ -2090,6 +2099,47 @@ mod tests {
         let mut sweep = Sweeper::new(&segs, 1.0);
         let mut bufs = SweepLineBuffers::default();
         assert!(sweep.next_line(&mut bufs).is_none());
+    }
+
+    // At y = 1, removing a segment from a swap left a gap whose left
+    // neighbor ended at y = 1, so the removal scans returned at once and a's
+    // edge (0, 1)-(3, 3) and b's edge (3, 0)-(0, 2) became neighbors with no
+    // event queued for their crossing at (0.75, 1.5).
+    #[test]
+    fn removal_scan_skips_segments_that_end() {
+        use crate::{BinaryOp, FillRule, binary_op_with_eps, topology::Topology};
+        use kurbo::Shape as _;
+
+        fn poly(pts: &[(f64, f64)]) -> BezPath {
+            let mut path = BezPath::new();
+            path.move_to(pts[0]);
+            for &q in &pts[1..] {
+                path.line_to(q);
+            }
+            path.close_path();
+            path
+        }
+
+        let a = poly(&[(3.0, 1.0), (3.0, 3.0), (0.0, 1.0)]);
+        let b = poly(&[(3.0, 0.0), (0.0, 2.0), (3.0, 2.0), (0.0, 0.0), (0.0, 1.0)]);
+        let eps = 1e-6;
+
+        let top = Topology::from_paths_binary(&a, &b, eps).unwrap();
+        let has_crossing = top.segment_indices().any(|s| {
+            let h = s.first_half();
+            [top.point(h), top.point(h.other_half())]
+                .iter()
+                .any(|p| (p.x - 0.75).abs() < 1e-4 && (p.y - 1.5).abs() < 1e-4)
+        });
+        assert!(has_crossing, "no output vertex at (0.75, 1.5)");
+
+        let out =
+            binary_op_with_eps(&a, &b, FillRule::NonZero, BinaryOp::Intersection, eps).unwrap();
+        let area: f64 = out.contours().map(|c| c.path.area()).sum();
+        assert!(
+            (area.abs() - 1.125).abs() < 1e-4,
+            "intersection area {area}"
+        );
     }
 
     proptest! {
