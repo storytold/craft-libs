@@ -1,0 +1,33 @@
+[package]
+name = "craft-video"
+description = "Clean-room pure-Rust video codecs, one feature per codec: DNxHD/DNxHR."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
+
+[lints]
+workspace = true
+
+[features]
+# Every codec feature turns on one codec module; none is on by default.
+# DNxHD / DNxHR (SMPTE ST 2019-1): decoder and encoder.
+dnx = []
+# Decode and encode across worker threads (rayon) in the codecs that support it.
+threads = ["dep:rayon"]
+
+[dependencies]
+craft-media = { workspace = true }
+thiserror = { workspace = true }
+rayon = { workspace = true, optional = true }
+
+[dev-dependencies]
+craft-media-testkit = { workspace = true }
+
+[[test]]
+name = "dnx"
+required-features = ["dnx"]

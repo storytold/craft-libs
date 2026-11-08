@@ -52,6 +52,7 @@ craft-text = { path = "crates/text" }
 craft-ui = { path = "crates/ui" }
 craft-update = { path = "crates/update" }
 craft-vectorcraft-format = { path = "crates/vectorcraft-format" }
+craft-video = { path = "crates/video" }
 craft-web-api = { path = "crates/web-api" }
 craft-window = { path = "crates/window" }
 craft-web-host = { path = "crates/web-host" }
