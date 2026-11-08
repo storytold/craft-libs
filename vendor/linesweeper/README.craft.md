@@ -1,15 +1,21 @@
 # Local linesweeper 0.5.0 copy
 
-This is the crates.io linesweeper 0.5.0 package (MIT OR Apache-2.0) with some files left out and no
-file changed. `.cargo_vcs_info.json` names the commit it was packaged from,
+This is the crates.io linesweeper 0.5.0 package (MIT OR Apache-2.0) with some files left out and the
+local patches listed below. `.cargo_vcs_info.json` names the commit it was packaged from,
 `824b0791a750f7b27b8edcbb6c6244d0e629875e`. That commit is not in the GitHub repository the manifest
 names, which is archived; its README says development moved off GitHub.
 
-Every file here except this one and `SOURCE.json` is byte for byte the file in the `.crate` archive.
-`SOURCE.json` records the hash of the `.crate` download (`source_archive_sha256`) and, for every file
-kept, the hash in the package (`source_sha256`) and the hash here (`sha256`). `upstream_repository` is
-null because no public repository this copy can name holds `upstream_revision`. `local_patches` is
-empty.
+Every file here except this one, `SOURCE.json` and the patched files below is byte for byte the file
+in the `.crate` archive. `SOURCE.json` records the hash of the `.crate` download
+(`source_archive_sha256`) and, for every file kept, the hash in the package (`source_sha256`) and the
+hash here (`sha256`). `upstream_repository` is null because no public repository this copy can name
+holds `upstream_revision`. `local_patches` describes each local patch.
+
+## Local patches
+
+| File | Change |
+|---|---|
+| `src/curve/mod.rs` | `solve_t_for_y` divides every height by 32 before it builds the cubic's coefficients when the largest height or the target has a magnitude above `f64::MAX / 32`. Before, a segment with heights above about `f64::MAX / 3` gave an infinite coefficient, and polycool's critical point search recursed until the process aborted with a stack overflow. `Topology::from_path` reached it on two overlapping rectangles near y = 1e308. The `solve_for_t_near_the_float_limit` test solves straight segments with heights from 5.5e307 up to `f64::MAX`. |
 
 `omitted_files` lists the 43 files of the package left out here, with their hashes:
 

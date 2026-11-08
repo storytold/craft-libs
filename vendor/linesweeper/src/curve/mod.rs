@@ -390,10 +390,23 @@ pub fn solve_t_for_y(c: CubicBez, y: f64) -> f64 {
         return 1.0;
     }
 
-    let c3 = c.p3.y - 3.0 * c.p2.y + 3.0 * c.p1.y - c.p0.y;
-    let c2 = 3.0 * (c.p2.y - 2.0 * c.p1.y + c.p0.y);
-    let c1 = 3.0 * (c.p1.y - c.p0.y);
-    let c0 = c.p0.y - y;
+    // The coefficients below, and the derivative and sums that polycool forms from them, reach
+    // about 28 times the largest height. Above `f64::MAX / 32` they can overflow to infinity,
+    // and polycool's critical point search then recurses until the stack overflows. Dividing
+    // every height by 32 is exact and does not move the root.
+    let heights = [c.p0.y, c.p1.y, c.p2.y, c.p3.y, y];
+    let max_height = heights.iter().fold(0.0f64, |m, h| m.max(h.abs()));
+    let scale = if max_height > f64::MAX / 32.0 {
+        1.0 / 32.0
+    } else {
+        1.0
+    };
+    let [p0, p1, p2, p3, target] = heights.map(|h| h * scale);
+
+    let c3 = p3 - 3.0 * p2 + 3.0 * p1 - p0;
+    let c2 = 3.0 * (p2 - 2.0 * p1 + p0);
+    let c1 = 3.0 * (p1 - p0);
+    let c0 = p0 - target;
     let cubic = Cubic::new([c0, c1, c2, c3]);
 
     let eps = 1e-12;
@@ -1717,6 +1730,27 @@ mod test {
         let y = 0.00016929232880729566;
         let t = solve_t_for_y(c, y);
         assert!(dbg!(c.eval(t).y - y).abs() < 1e-8);
+    }
+
+    #[test]
+    fn solve_for_t_near_the_float_limit() {
+        let line = |y0: f64, y1: f64| {
+            let a = Point::new(0.0, y0);
+            let b = Point::new(10.0, y1);
+            CubicBez::new(a, a.lerp(b, 1.0 / 3.0), a.lerp(b, 2.0 / 3.0), b)
+        };
+
+        // Without scaling, `3.0 * p1` or `3.0 * p2` overflows to infinity for every line here
+        // except the one from -8e307 to 8e307, whose coefficients stay finite.
+        for (y0, y1) in [
+            (5.5e307, 6.5e307),
+            (-6.5e307, -5.5e307),
+            (-8e307, 8e307),
+            (f64::MAX / 2.0, f64::MAX),
+        ] {
+            let t = solve_t_for_y(line(y0, y1), y0 / 2.0 + y1 / 2.0);
+            assert!((t - 0.5).abs() < 1e-9, "t = {t} from {y0} to {y1}");
+        }
     }
 
     #[test]
