@@ -15,11 +15,20 @@
 //! | `failed` | app → host | `error`, `id?` |
 //! | `handoff` | app → host | `name`, and `bytes` or `file` + `size` |
 //! | `handoff-done` | host → app | `name`, `app` |
+//! | `session` | host → app | `sessionId`, `wsUrl`, `token`, `role?` |
+//! | `session-state` | app → host | `status`, `participants` |
+//! | `presence` | app → host | `participants` |
+//! | `commit` | app → host | `sessionId`, `bytes?` |
+//! | `committed` | host → app | `version`, `etag` |
 //!
 //! A host answers `saved` only for a `save` that carries an `id`; an app that sends none treats a
 //! save as done once it is posted. Fields marked `?` are optional, so the bridges shipped before
 //! this crate already speak version 1. Those bridges put the app's own release in `ready`'s
 //! `version` (`"0.14.0"`): a host treats any `version` it doesn't know as `"1"`.
+//!
+//! The collaboration messages share that version: a host that predates them never sends
+//! `session`, so the app stays in single-user mode. When it does, the token travels in that
+//! message only: it is never put in a URL, a log, an error or a DOM attribute.
 //!
 //! The app is hosted when its URL has `?host=parent` (framed by a same-origin page: messages go
 //! through `postMessage`) or its canvas has `data-host="page"` (the page runs it directly:
@@ -40,6 +49,20 @@ pub const VERSION: &str = "1";
 
 /// Longest file name taken from a host or put in a message, in characters.
 pub const MAX_NAME_CHARS: usize = 255;
+
+/// One person in a collaboration session, as the cabinet's participant list shows them.
+///
+/// The app sends these to the host in `session-state` and `presence`; the host does not send
+/// them back.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Participant {
+    /// Stable for the session: the sync server's client id.
+    pub client_id: String,
+    /// The session role: `owner`, `editor`, `commenter` or `viewer`.
+    pub role: String,
+    /// The CSS colour (`#rrggbb`) the app draws this participant's caret in, when it has one.
+    pub color: Option<String>,
+}
 
 /// How a page hosts the app.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -74,6 +97,9 @@ pub enum Outgoing {
     Dirty,
     Failed,
     Handoff,
+    SessionState,
+    Presence,
+    Commit,
 }
 
 /// What a host sends to an app.
@@ -83,6 +109,8 @@ pub enum Incoming {
     Open,
     Saved,
     HandoffDone,
+    Session,
+    Committed,
 }
 
 impl Outgoing {
@@ -93,12 +121,15 @@ impl Outgoing {
             Self::Dirty => "dirty",
             Self::Failed => "failed",
             Self::Handoff => "handoff",
+            Self::SessionState => "session-state",
+            Self::Presence => "presence",
+            Self::Commit => "commit",
         }
     }
 }
 
 impl Incoming {
-    pub const ALL: [Self; 4] = [Self::Host, Self::Open, Self::Saved, Self::HandoffDone];
+    pub const ALL: [Self; 6] = [Self::Host, Self::Open, Self::Saved, Self::HandoffDone, Self::Session, Self::Committed];
 
     pub const fn kind(self) -> &'static str {
         match self {
@@ -106,6 +137,8 @@ impl Incoming {
             Self::Open => "open",
             Self::Saved => "saved",
             Self::HandoffDone => "handoff-done",
+            Self::Session => "session",
+            Self::Committed => "committed",
         }
     }
 
@@ -195,8 +228,16 @@ mod tests {
     fn only_this_apps_incoming_kinds_parse() {
         assert_eq!(Incoming::parse("pdfcraft", "pdfcraft:open"), Some(Incoming::Open));
         assert_eq!(Incoming::parse("pdfcraft", "pdfcraft:handoff-done"), Some(Incoming::HandoffDone));
+        assert_eq!(Incoming::parse("pdfcraft", "pdfcraft:session"), Some(Incoming::Session));
+        assert_eq!(Incoming::parse("pdfcraft", "pdfcraft:committed"), Some(Incoming::Committed));
         assert_eq!(Incoming::parse("pdfcraft", "cadcraft:open"), None, "another app's message");
+        assert_eq!(Incoming::parse("pdfcraft", "cadcraft:session"), None, "another app's session");
         assert_eq!(Incoming::parse("pdfcraft", "pdfcraft:save"), None, "app-to-host kinds are not incoming");
+        assert_eq!(Incoming::parse("pdfcraft", "pdfcraft:session-state"), None, "app-to-host kinds are not incoming");
+        assert_eq!(Incoming::parse("pdfcraft", "pdfcraft:presence"), None, "app-to-host kinds are not incoming");
+        assert_eq!(Incoming::parse("pdfcraft", "pdfcraft:commit"), None, "app-to-host kinds are not incoming");
+        assert_eq!(Incoming::parse("pdfcraft", "pdfcraft:sessions"), None, "a kind must match exactly");
+        assert_eq!(Incoming::parse("pdfcraft", "pdfcraft:committedly"), None);
         assert_eq!(Incoming::parse("pdf", "pdfcraft:open"), None, "an app id that is only a prefix");
         assert_eq!(Incoming::parse("pdfcraft", "pdfcraftopen"), None);
     }
@@ -207,6 +248,9 @@ mod tests {
             assert_eq!(Incoming::parse("gridcraft", &message_type("gridcraft", kind.kind())), Some(kind));
         }
         assert_eq!(message_type("cadcraft", Outgoing::Handoff.kind()), "cadcraft:handoff");
+        assert_eq!(message_type("pdfcraft", Outgoing::SessionState.kind()), "pdfcraft:session-state");
+        assert_eq!(message_type("pdfcraft", Outgoing::Presence.kind()), "pdfcraft:presence");
+        assert_eq!(message_type("pdfcraft", Outgoing::Commit.kind()), "pdfcraft:commit");
     }
 
     #[test]

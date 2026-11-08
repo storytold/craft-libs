@@ -8,13 +8,14 @@
 //! ```
 
 use std::cell::Cell;
+use std::fmt;
 use std::rc::Rc;
 
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::{JsCast as _, JsValue};
 use web_sys::js_sys;
 
-use crate::{Inbox, Incoming, Mode, Outgoing, VERSION, file_name, message_type};
+use crate::{Inbox, Incoming, Mode, Outgoing, Participant, VERSION, file_name, message_type};
 
 /// A file the host passes in, not yet copied into the app's memory: check its size first.
 pub enum FileData {
@@ -22,6 +23,15 @@ pub enum FileData {
     Bytes(js_sys::Uint8Array),
     /// `file`: a `File` or `Blob`, for the app to read in slices.
     Blob(web_sys::Blob),
+}
+
+impl fmt::Debug for FileData {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Bytes(array) => write!(f, "Bytes({} bytes)", array.length()),
+            Self::Blob(blob) => write!(f, "Blob({} bytes)", blob.size()),
+        }
+    }
 }
 
 impl FileData {
@@ -44,6 +54,34 @@ pub enum Message {
     Saved { id: String },
     /// The host gave a handed-off file to the app that edits it.
     HandoffDone { name: String, app: String },
+    /// Join a collaboration session: dial `ws_url` with `token` and take `role`.
+    ///
+    /// The token is in this message and nowhere else: the app must not put it in the socket URL,
+    /// a log, an error or a DOM attribute.
+    Session { session_id: String, ws_url: String, token: String, role: String },
+    /// The cabinet committed the session: the stored document is now `version`, and `etag` names
+    /// that stored content.
+    Committed { version: u64, etag: String },
+}
+
+// The token is a credential: a debug print of a message must not put it in a log.
+impl fmt::Debug for Message {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Host { version, handoff } => f.debug_struct("Host").field("version", version).field("handoff", handoff).finish(),
+            Self::Open { name, data } => f.debug_struct("Open").field("name", name).field("data", data).finish(),
+            Self::Saved { id } => f.debug_struct("Saved").field("id", id).finish(),
+            Self::HandoffDone { name, app } => f.debug_struct("HandoffDone").field("name", name).field("app", app).finish(),
+            Self::Session { session_id, ws_url, role, .. } => f
+                .debug_struct("Session")
+                .field("session_id", session_id)
+                .field("ws_url", ws_url)
+                .field("token", &"<redacted>")
+                .field("role", role)
+                .finish(),
+            Self::Committed { version, etag } => f.debug_struct("Committed").field("version", version).field("etag", etag).finish(),
+        }
+    }
 }
 
 enum Transport {
@@ -176,6 +214,27 @@ impl Host {
         self.post(Outgoing::Handoff, &[("name", file_name(Some(name), "document").into()), ("bytes", buffer.clone().into())], Some(&buffer))
     }
 
+    /// The collaboration state the cabinet shows, and who is in the session. `status` is the
+    /// app's own word for the sync indicator (`synced`, `pending`, `offline`, `error`), shown as
+    /// it is. Send it when a session starts, when sync state changes and after a reconnect.
+    pub fn post_session_state(&self, status: &str, participants: &[Participant]) -> Result<(), String> {
+        self.post(Outgoing::SessionState, &session_state_fields(status, participants)?, None)
+    }
+
+    /// Who is in the session, for the cabinet's participant list. Send it at the sync server's
+    /// presence pace (a few times a second at most), not on every edit.
+    pub fn post_presence(&self, participants: &[Participant]) -> Result<(), String> {
+        self.post(Outgoing::Presence, &[("participants", participants_array(participants)?.into())], None)
+    }
+
+    /// Ask the cabinet to commit the session. `bytes` is the document the sync server assembled,
+    /// sent as a transferred `ArrayBuffer`; omit it when the host already holds that document. The
+    /// host answers [`Message::Committed`] once the commit is stored.
+    pub fn post_commit(&self, session_id: &str, bytes: Option<&[u8]>) -> Result<(), String> {
+        let (fields, buffer) = commit_fields(session_id, bytes);
+        self.post(Outgoing::Commit, &fields, buffer.as_ref())
+    }
+
     fn post(&self, kind: Outgoing, fields: &[(&str, JsValue)], transfer: Option<&js_sys::ArrayBuffer>) -> Result<(), String> {
         let message_type = message_type(self.app, kind.kind());
         let error = |e: JsValue| e.as_string().unwrap_or_else(|| format!("{e:?}"));
@@ -198,6 +257,36 @@ impl Host {
     }
 }
 
+/// The fields of a `session-state`: the app's sync status and who is in the session.
+fn session_state_fields(status: &str, participants: &[Participant]) -> Result<Vec<(&'static str, JsValue)>, String> {
+    Ok(vec![("status", JsValue::from_str(status)), ("participants", participants_array(participants)?.into())])
+}
+
+/// `participants` as objects: `clientId`, `role`, and `color` only when the app has one. An empty
+/// slice is an empty array, not a missing field.
+fn participants_array(participants: &[Participant]) -> Result<js_sys::Array, String> {
+    let array = js_sys::Array::new();
+    for participant in participants {
+        let mut fields = vec![("clientId", JsValue::from_str(&participant.client_id)), ("role", JsValue::from_str(&participant.role))];
+        if let Some(color) = &participant.color {
+            fields.push(("color", JsValue::from_str(color)));
+        }
+        let value: JsValue = object(&[], &fields)?.into();
+        array.push(&value);
+    }
+    Ok(array)
+}
+
+/// The fields of a `commit`, and the buffer to transfer: `bytes` only when the app sends them.
+fn commit_fields(session_id: &str, bytes: Option<&[u8]>) -> (Vec<(&'static str, JsValue)>, Option<js_sys::ArrayBuffer>) {
+    let mut fields = vec![("sessionId", JsValue::from_str(session_id))];
+    let buffer = bytes.map(|bytes| js_sys::Uint8Array::from(bytes).buffer());
+    if let Some(buffer) = &buffer {
+        fields.push(("bytes", buffer.clone().into()));
+    }
+    (fields, buffer)
+}
+
 /// The message a host's object describes, or `None` when a required field is missing.
 fn read(kind: Incoming, data: &JsValue) -> Option<Message> {
     Some(match kind {
@@ -213,6 +302,15 @@ fn read(kind: Incoming, data: &JsValue) -> Option<Message> {
         Incoming::HandoffDone => {
             Message::HandoffDone { name: string(data, "name").unwrap_or_default(), app: string(data, "app").unwrap_or_default() }
         }
+        Incoming::Session => Message::Session {
+            session_id: non_empty(data, "sessionId")?,
+            ws_url: non_empty(data, "wsUrl")?,
+            token: non_empty(data, "token")?,
+            // A session without a role is a viewer: the server decides anyway, and the app must
+            // not open an editor it was not given.
+            role: non_empty(data, "role").unwrap_or_else(|| "viewer".to_string()),
+        },
+        Incoming::Committed => Message::Committed { version: whole_version(data)?, etag: string(data, "etag")? },
     })
 }
 
@@ -246,6 +344,23 @@ fn get(data: &JsValue, key: &str) -> JsValue {
 
 fn string(data: &JsValue, key: &str) -> Option<String> {
     get(data, key).as_string()
+}
+
+/// A string field that must carry something: an empty id, URL or token is as good as missing.
+fn non_empty(data: &JsValue, key: &str) -> Option<String> {
+    string(data, key).filter(|value| !value.is_empty())
+}
+
+/// A version from a host: a JavaScript number (`u64`) that is a whole count, not a fraction,
+/// a negative or a value no `u64` holds. Numbers past 2^53 lose precision in JavaScript, which is
+/// far beyond a session's version count.
+fn whole_version(data: &JsValue) -> Option<u64> {
+    let value = get(data, "version").as_f64()?;
+    // `u64::MAX as f64` rounds up to 2^64, so `<` keeps every value a `u64` holds and drops that.
+    if !value.is_finite() || value < 0.0 || value.fract() != 0.0 || value >= u64::MAX as f64 {
+        return None;
+    }
+    Some(value as u64)
 }
 
 /// Node tests for the parsing of a host's objects: wrong shapes, missing fields, and sizes the
@@ -351,5 +466,150 @@ mod tests {
             Some(Message::HandoffDone { name, app }) if name == "a.pdf" && app == "pdfcraft"
         ));
         assert!(matches!(read(Incoming::HandoffDone, &JsValue::NULL), Some(Message::HandoffDone { name, app }) if name.is_empty() && app.is_empty()));
+    }
+
+    fn session(session_id: Option<&str>, ws_url: Option<&str>, token: Option<&str>, role: Option<&str>) -> JsValue {
+        let mut fields = Vec::new();
+        if let Some(value) = session_id {
+            fields.push(("sessionId", value.into()));
+        }
+        if let Some(value) = ws_url {
+            fields.push(("wsUrl", value.into()));
+        }
+        if let Some(value) = token {
+            fields.push(("token", value.into()));
+        }
+        if let Some(value) = role {
+            fields.push(("role", value.into()));
+        }
+        obj(&fields)
+    }
+
+    #[wasm_bindgen_test]
+    fn a_session_needs_an_id_a_url_and_a_token() {
+        let Some(Message::Session { session_id, ws_url, token, role }) =
+            read(Incoming::Session, &session(Some("s1"), Some("wss://collab.example/ws"), Some("jwt"), Some("editor")))
+        else {
+            panic!("a whole session is read");
+        };
+        assert_eq!(session_id, "s1");
+        assert_eq!(ws_url, "wss://collab.example/ws");
+        assert_eq!(token, "jwt");
+        assert_eq!(role, "editor");
+
+        // A session missing any of the three, or with an empty one, leaves the app single-user.
+        for data in [
+            session(None, Some("wss://x"), Some("jwt"), None),
+            session(Some("s1"), None, Some("jwt"), None),
+            session(Some("s1"), Some("wss://x"), None, None),
+            session(Some(""), Some("wss://x"), Some("jwt"), None),
+            session(Some("s1"), Some(""), Some("jwt"), None),
+            session(Some("s1"), Some("wss://x"), Some(""), None),
+            obj(&[("sessionId", 1.into()), ("wsUrl", "wss://x".into()), ("token", "jwt".into())]),
+            JsValue::NULL,
+            JsValue::from_str("pdfcraft:session"),
+        ] {
+            assert!(read(Incoming::Session, &data).is_none(), "{data:?}");
+        }
+
+        // No role is the least privilege, not an editor.
+        let Some(Message::Session { role, .. }) = read(Incoming::Session, &session(Some("s1"), Some("wss://x"), Some("jwt"), None)) else {
+            panic!("a session without a role is read");
+        };
+        assert_eq!(role, "viewer");
+        assert_eq!(crate::message_type("pdfcraft", Incoming::Session.kind()), "pdfcraft:session");
+        assert_eq!(Incoming::parse("pdfcraft", "pdfcraft:session"), Some(Incoming::Session));
+        assert_eq!(Incoming::parse("pdfcraft", "cadcraft:session"), None);
+        assert_eq!(Incoming::parse("pdfcraft", "pdfcraft:session-state"), None);
+    }
+
+    #[wasm_bindgen_test]
+    fn a_committed_needs_a_whole_version_and_an_etag() {
+        for version in [0u64, 7, 1 << 40] {
+            let data = obj(&[("version", (version as f64).into()), ("etag", "\"abc\"".into())]);
+            let Some(Message::Committed { version: read_version, etag }) = read(Incoming::Committed, &data) else {
+                panic!("committed {version} is read");
+            };
+            assert_eq!(read_version, version);
+            assert_eq!(etag, "\"abc\"");
+        }
+        // A version must be a whole number JavaScript can carry; an etag is required.
+        for data in [
+            obj(&[("version", 7.into())]),
+            obj(&[("version", "7".into()), ("etag", "\"abc\"".into())]),
+            obj(&[("version", 7.5.into()), ("etag", "\"abc\"".into())]),
+            obj(&[("version", (-1).into()), ("etag", "\"abc\"".into())]),
+            obj(&[("version", 1e300.into()), ("etag", "\"abc\"".into())]),
+            obj(&[("version", f64::NAN.into()), ("etag", "\"abc\"".into())]),
+            obj(&[("etag", "\"abc\"".into())]),
+            obj(&[("version", 7.into()), ("etag", 7.into())]),
+            JsValue::NULL,
+        ] {
+            assert!(read(Incoming::Committed, &data).is_none(), "{data:?}");
+        }
+        assert_eq!(crate::message_type("pdfcraft", Incoming::Committed.kind()), "pdfcraft:committed");
+    }
+
+    fn people() -> [Participant; 2] {
+        [
+            Participant { client_id: "c1".into(), role: "owner".into(), color: Some("#112233".into()) },
+            Participant { client_id: "c2".into(), role: "viewer".into(), color: None },
+        ]
+    }
+
+    #[wasm_bindgen_test]
+    fn participants_serialize_to_camel_case_objects_and_an_empty_list_stays_empty() {
+        let empty = participants_array(&[]).expect("an array");
+        assert_eq!(empty.length(), 0, "an empty session still sends an empty list");
+
+        let array = participants_array(&people()).expect("an array");
+        assert_eq!(array.length(), 2);
+        let first = array.get(0);
+        assert_eq!(string(&first, "clientId").as_deref(), Some("c1"));
+        assert_eq!(string(&first, "role").as_deref(), Some("owner"));
+        assert_eq!(string(&first, "color").as_deref(), Some("#112233"));
+        let second = array.get(1);
+        assert_eq!(string(&second, "clientId").as_deref(), Some("c2"));
+        assert_eq!(string(&second, "role").as_deref(), Some("viewer"));
+        assert!(get(&second, "color").is_undefined(), "no colour when the app has none");
+    }
+
+    #[wasm_bindgen_test]
+    fn session_state_and_presence_carry_the_cabinet_s_ui_state() {
+        let fields = session_state_fields("pending", &people()).expect("fields");
+        let message: JsValue = object(&[], &fields).expect("an object").into();
+        assert_eq!(string(&message, "status").as_deref(), Some("pending"));
+        let list = get(&message, "participants");
+        assert!(js_sys::Array::is_array(&list));
+        assert_eq!(string(&get(&list, "1"), "clientId").as_deref(), Some("c2"));
+
+        assert_eq!(crate::message_type("pdfcraft", Outgoing::SessionState.kind()), "pdfcraft:session-state");
+        assert_eq!(crate::message_type("pdfcraft", Outgoing::Presence.kind()), "pdfcraft:presence");
+    }
+
+    #[wasm_bindgen_test]
+    fn a_commit_carries_bytes_only_when_the_app_has_them() {
+        let (fields, transfer) = commit_fields("s1", None);
+        assert!(transfer.is_none());
+        let message: JsValue = object(&[], &fields).expect("an object").into();
+        assert_eq!(string(&message, "sessionId").as_deref(), Some("s1"));
+        assert!(get(&message, "bytes").is_undefined(), "no bytes field, not an empty one");
+
+        let (fields, transfer) = commit_fields("s1", Some(&[1, 2, 3]));
+        let buffer = transfer.expect("a buffer to transfer");
+        let message: JsValue = object(&[], &fields).expect("an object").into();
+        let view = js_sys::Uint8Array::new(&get(&message, "bytes"));
+        assert_eq!(view.length(), 3);
+        assert!(js_sys::Object::is(&view.buffer(), &buffer), "the message carries the buffer that is transferred");
+        assert_eq!(crate::message_type("pdfcraft", Outgoing::Commit.kind()), "pdfcraft:commit");
+    }
+
+    #[wasm_bindgen_test]
+    fn a_session_token_is_never_printed() {
+        let data = session(Some("s1"), Some("wss://x"), Some("secret-jwt"), None);
+        let message = read(Incoming::Session, &data).expect("a session");
+        let printed = format!("{message:?}");
+        assert!(!printed.contains("secret-jwt"), "{printed}");
+        assert!(printed.contains("s1"));
     }
 }
