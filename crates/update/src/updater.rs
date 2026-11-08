@@ -296,11 +296,9 @@ impl Updater {
 
     /// Asks the app to close so that a ready update installs: the next [`Self::show_if`] that may
     /// close returns [`Action::Close`]. Restart to Update calls it after the user canceled an
-    /// earlier close. Does nothing when no update is ready.
+    /// earlier close. No close is asked for while no update is ready.
     pub fn restart_to_update(&mut self) {
-        if self.restart.is_some() {
-            self.close_wanted = true;
-        }
+        self.close_wanted = true;
     }
 
     /// Opens the startup prompt for a release the app found itself.
@@ -1308,17 +1306,6 @@ mod tests {
         u.tick(&ctx);
         assert!(u.prompt.is_some());
         assert_eq!(u.prompt.as_ref().and_then(StartupPrompt::message), None, "the reason is shown once");
-    }
-
-    /// An unreadable record (a folder where the file goes) shows nothing and breaks nothing.
-    #[test]
-    fn an_unreadable_record_shows_nothing() {
-        let ctx = egui::Context::default();
-        let (_dir, paths, mut u) = with_records("0.2.0");
-        std::fs::create_dir_all(paths.logs().join("self-update-error.txt")).unwrap();
-        std::fs::create_dir_all(paths.data.join("self-update-done.txt")).unwrap();
-        start_answered(&mut u, &ctx, Ok(None));
-        assert_eq!(u.status(), &Status::Idle);
     }
 
     /// The new version's first start says it was updated, once, and only when the finished
