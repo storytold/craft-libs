@@ -32,19 +32,35 @@ pub struct PageApi {
     /// Each control request gets a timeout: if the app does not answer within this many
     /// milliseconds, the error says so (a hidden tab answers when it is shown again).
     timeout_ms: f64,
+    /// Calls waiting for their reply right now.
+    in_flight: Cell<usize>,
+    /// The most calls that may wait at once; one more is refused with a `busy` error.
+    max_in_flight: usize,
 }
+
+/// How many calls may wait for the app at once by default, as many as the desktop control server
+/// queues.
+const DEFAULT_MAX_IN_FLIGHT: usize = 64;
 
 impl PageApi {
     /// `app` is the global name to install (`"vectorcraft"` → `window.vectorcraft`); `methods` is
     /// the control method behind each function ([`Methods::default`] is the desktop control-server
     /// method names).
     pub fn new(app: &str, methods: Methods, request: Request) -> Self {
-        Self { app: app.to_string(), methods, request, timeout_ms: 30_000.0 }
+        Self { app: app.to_string(), methods, request, timeout_ms: 30_000.0, in_flight: Cell::new(0), max_in_flight: DEFAULT_MAX_IN_FLIGHT }
     }
 
     /// Set the timeout for every control request, in milliseconds (default 30 s).
     pub fn with_timeout(mut self, timeout_ms: u32) -> Self {
         self.timeout_ms = timeout_ms as f64;
+        self
+    }
+
+    /// Set how many calls may wait for the app at once (default 64). A call made while that many are
+    /// waiting is refused with a `busy` error before it reaches the app, so a page script that calls
+    /// in a loop without awaiting cannot grow the app's queue without bound.
+    pub fn with_max_in_flight(mut self, max: usize) -> Self {
+        self.max_in_flight = max;
         self
     }
 
@@ -144,6 +160,14 @@ impl PageApi {
     /// that releases a request when its future goes away never runs, late, a call the page was told
     /// had failed.
     async fn call(&self, method: &str, params: Value) -> Value {
+        if self.in_flight.get() >= self.max_in_flight {
+            return json!({
+                "ok": false,
+                "error": format!("{} is busy: {} calls are already waiting for an answer", self.app, self.max_in_flight),
+            });
+        }
+        self.in_flight.set(self.in_flight.get() + 1);
+        let _slot = InFlight(&self.in_flight);
         let timeout = Timeout::new(self.timeout_ms);
         let mut work = (self.request)(method.to_string(), params);
         let reply = std::future::poll_fn(|cx| {
@@ -168,6 +192,16 @@ impl PageApi {
                 ),
             })
         })
+    }
+}
+
+/// One waiting call's place in the in-flight count, given back when the call ends (answered, timed out
+/// or dropped).
+struct InFlight<'a>(&'a Cell<usize>);
+
+impl Drop for InFlight<'_> {
+    fn drop(&mut self) {
+        self.0.set(self.0.get() - 1);
     }
 }
 

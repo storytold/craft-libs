@@ -11,6 +11,12 @@ keeps them. Each function returns a Promise that resolves with the method's `res
 an `Error` carrying `error`. Every call has a timeout (30 s by default, `PageApi::with_timeout`);
 when the app does not answer in time, the error says so and the app's request future is dropped, so an app that releases a request when its future goes away (the desktop `ControlRequest` has `abandon`) never runs a call the page was told had failed.
 
+At most 64 calls may wait for the app at once (`PageApi::with_max_in_flight`); a call made while that many are waiting rejects at once with a `busy` error and never reaches the app, so a script that calls in a loop without awaiting cannot grow the app's queue without bound. The size of a call's params is not capped here: opening a file passes the file's bytes in them, and each app already limits the files it opens.
+
+## Who can call it
+
+`window.<app>` is a plain property of the page's own global object: it is not a network port and it has no key. Any script that runs in the page's origin can call every function and so has the same command control as the app's desktop control server; a page from another origin, a parent, a child or an opener cannot reach it (the host messages in `craft-web-host` check `event.origin` and `event.source` separately). Treat it as you treat the page's own scripts.
+
 `screenshot()` resolves with the reply the app's control method sends, plus `data` when the reply carries the PNG inline: the base64 PNG, whatever field the app names it (`pngBase64`, `png_base64`, `png` or `base64`). A reply with no inline PNG, such as one the app wrote to a `path`, has no `data` and is unchanged.
 
 Which functions are installed follows the app's `Methods` table: only the functions whose control
@@ -61,4 +67,4 @@ method through `request(method, params)`.
 `src/methods.rs` carries the native unit tests (the default and empty tables). `tests/page.rs` runs
 under `wasm-bindgen-test` in Node with a canned control channel: install and keeping an app's own
 functions, the table deciding which functions exist, the method and params each function sends,
-error replies as rejections, and the timeout.
+error replies as rejections, the timeout, and the in-flight limit.
