@@ -24,4 +24,5 @@ No codec feature is on by default.
 | `h264` | `h264` | ITU-T H.264 / AVC: encoder |
 | `hevc` | `hevc` | ITU-T H.265 / HEVC: encoder |
 | `vp9` | `vp9` | VP9: encoder |
+| `av1` | `av1` | AV1 (AOMedia Video 1): encoder |
 | `threads` | — | Multi-threaded slice/row parallelism via `rayon` |
