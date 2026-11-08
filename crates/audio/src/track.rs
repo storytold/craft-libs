@@ -276,8 +276,8 @@ impl TrackDecoder {
                     while !rest.is_empty() {
                         count_ac3_syncframe(&mut syncframes)?;
                         let f = dec.decode(rest)?;
-                        if candidate.is_none() && f.header.is_primary() && !ac3::frame_has_integrity(rest, f.header) {
-                            return Err(AudioError::Malformed("AC-3 metadata frame CRC mismatch".into()));
+                        if f.header.is_primary() && !ac3::frame_has_integrity(rest, f.header) {
+                            return Err(AudioError::Malformed("AC-3 primary syncframe CRC mismatch".into()));
                         }
                         rest = rest.get(f.header.frame_bytes..).ok_or_else(|| AudioError::Malformed("truncated AC-3 packet".into()))?;
                         if f.header.is_primary() {

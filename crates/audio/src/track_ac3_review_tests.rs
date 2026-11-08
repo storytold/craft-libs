@@ -193,5 +193,51 @@ fn zeroed_crc_cannot_establish_metadata_without_lookahead() {
         assert!(matches!(dec.inner, Inner::Ac3 { format: None, .. }));
         assert!(dec.decode(&good[0]).is_ok());
         assert_eq!(dec.sample_rate(), 48_000);
+        assert!(dec.decode(&bad).is_err(), "establishing metadata must not disable CRC validation");
+        assert!(dec.decode(&good[1]).is_ok(), "valid audio resumes after a rejected frame");
     }
+}
+
+fn established_track_crc_failure_is_atomic(codec: Codec) {
+    let frames = packets(codec, CodingMode::Stereo, 48_000);
+    let codec_id = if codec == Codec::Ac3 { CodecId::Ac3 } else { CodecId::Eac3 };
+    let params = CodecParams::new(codec_id);
+    let mut dec = TrackDecoder::new(&params, &[&frames[0]]).unwrap();
+    let mut reference = TrackDecoder::new(&params, &[&frames[0]]).unwrap();
+    dec.decode(&frames[0]).unwrap();
+    reference.decode(&frames[0]).unwrap();
+    let mut bad = frames[2].clone();
+    let end = bad.len();
+    bad[end - 1] ^= 1; // CRC only: payload and established format remain otherwise valid.
+    let header = ac3::parse_header(&bad).unwrap();
+    assert!(!ac3::frame_has_integrity(&bad, header));
+    assert!(matches!(dec.decode(&bad), Err(AudioError::Malformed(_))), "established {codec:?} track must reject a CRC-invalid primary");
+    assert_eq!((dec.codec(), dec.sample_rate(), dec.channels(), dec.last_frames), (codec_id, 48_000, 2, 1536));
+    let mixed = [frames[1].as_slice(), bad.as_slice()].concat();
+    assert!(dec.decode(&mixed).is_err(), "a later CRC failure must fail the complete packet");
+    assert_eq!(
+        dec.decode(&frames[1]).unwrap().channels,
+        reference.decode(&frames[1]).unwrap().channels,
+        "failed packet must restore prior overlap and dither state"
+    );
+    assert!(dec.decode(&bad).is_err());
+    let silence = dec.conceal(Some(&bad)).unwrap();
+    assert_eq!(silence.frames(), 1536);
+    assert!(silence.channels.iter().flatten().all(|&s| s == 0.0));
+    let mut fresh = TrackDecoder::new(&params, &[&frames[2]]).unwrap();
+    assert_eq!(
+        dec.decode(&frames[2]).unwrap().channels,
+        fresh.decode(&frames[2]).unwrap().channels,
+        "explicit concealment must clear lost-frame overlap before recovery"
+    );
+}
+
+#[test]
+fn established_ac3_track_rejects_crc_failure_and_recovers() {
+    established_track_crc_failure_is_atomic(Codec::Ac3);
+}
+
+#[test]
+fn established_eac3_track_rejects_crc_failure_and_recovers() {
+    established_track_crc_failure_is_atomic(Codec::Eac3);
 }

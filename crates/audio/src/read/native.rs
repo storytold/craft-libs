@@ -24,6 +24,9 @@ mod id3_tests;
 #[cfg(all(test, feature = "ac3-encode", feature = "eac3-encode"))]
 mod lookahead_tests;
 
+#[cfg(all(test, feature = "ac3-encode", feature = "eac3-encode"))]
+mod raw_ac3_tests;
+
 /// Corrupt packets tolerated before a stream that has produced nothing is an error.
 const MAX_ERRORS: usize = 1000;
 /// ID3v2 tags skipped at the start of a stream; real files have one.
@@ -695,12 +698,18 @@ fn open_ac3<'a>(src: &Src<'a>, at: u64) -> Option<Result<Native<'a>>> {
         Err(e) => return Some(Err(e)),
     };
     let total = frames.iter().map(|&(_, _, f)| u64::from(f)).sum();
-    let lookahead = match raw_lookahead(src, &frames, 1) {
+    let lookahead = match raw_lookahead(src, &frames, crate::track::LOOKAHEAD_PACKETS) {
         Ok(lookahead) => lookahead,
         Err(e) => return Some(Err(e)),
     };
-    native(Container::Ac3, Packets::Raw { frames, src: src.clone(), next: 0 }, &CodecParams::new(CodecId::Ac3), &lookahead, 0, None, Some(total))
-        .map(Ok)
+    let params = CodecParams::new(CodecId::Ac3);
+    // A corrupt first CRC must not leave cached metadata at zero while later frames decode.
+    // Require a complete, integrity-checked primary within the same bounded probe as containers.
+    let (lookahead, _) = match track_lookahead(&params, lookahead.into_iter().map(Ok))? {
+        Ok(probed) => probed,
+        Err(error) => return Some(Err(error)),
+    };
+    native(Container::Ac3, Packets::Raw { frames, src: src.clone(), next: 0 }, &params, &lookahead, 0, None, Some(total)).map(Ok)
 }
 
 /// The `n`-th audio track (the first when `None`) among `kinds`, as an index into them.
