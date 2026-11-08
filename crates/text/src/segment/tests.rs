@@ -240,3 +240,276 @@ fn emergency_breaks_keep_grapheme_clusters_whole() {
     assert!(emergency_breaks(&text, 3..b).is_empty());
     assert!(emergency_breaks("", 0..0).is_empty());
 }
+
+/// WHY: Baseline sanity check. Single-byte ASCII strings must exhibit identical 1-byte stepping behavior.
+/// DANGER: Naive underflow on cursor 0 or overflow on cursor text.len() causes panic in unchecked dec/inc.
+/// CONTRACT:
+/// - prev_grapheme_offset(text, 0) == 0
+/// - next_grapheme_offset(text, text.len()) == text.len()
+/// - For all 0 < i <= len: prev_grapheme_offset(text, i) == i - 1
+/// - For all 0 <= i < len: next_grapheme_offset(text, i) == i + 1
+#[test]
+fn grapheme_offsets_empty_and_ascii() {
+    assert_eq!(prev_grapheme_offset("", 0), 0);
+    assert_eq!(next_grapheme_offset("", 0), 0);
+
+    let text = "hello";
+    // Moving backwards from any offset
+    assert_eq!(prev_grapheme_offset(text, 0), 0);
+    assert_eq!(prev_grapheme_offset(text, 1), 0);
+    assert_eq!(prev_grapheme_offset(text, 2), 1);
+    assert_eq!(prev_grapheme_offset(text, 3), 2);
+    assert_eq!(prev_grapheme_offset(text, 4), 3);
+    assert_eq!(prev_grapheme_offset(text, 5), 4);
+
+    // Moving forwards from any offset
+    assert_eq!(next_grapheme_offset(text, 0), 1);
+    assert_eq!(next_grapheme_offset(text, 1), 2);
+    assert_eq!(next_grapheme_offset(text, 2), 3);
+    assert_eq!(next_grapheme_offset(text, 3), 4);
+    assert_eq!(next_grapheme_offset(text, 4), 5);
+    assert_eq!(next_grapheme_offset(text, 5), 5);
+}
+
+/// WHY: Precomposed Vietnamese text (NFC) contains multibyte codepoints (e.g. 'ệ' = U+1EC7, 3 bytes).
+/// DANGER: Naive byte stepping splits a 3-byte sequence into invalid UTF-8 chunks, panicking downstream code.
+/// CONTRACT: Cursor leaps across the entire 3-byte glyph in a single step (range 2..5).
+#[test]
+fn grapheme_offsets_vietnamese_nfc() {
+    // NFC string: 'v' (1B, 0..1), 'i' (1B, 1..2), 'ệ' (3B, 2..5), 'n' (1B, 5..6)
+    let nfc = "viện";
+    assert_eq!(nfc.len(), 6);
+    assert_eq!(prev_grapheme_offset(nfc, 0), 0);
+    assert_eq!(prev_grapheme_offset(nfc, 1), 0);
+    assert_eq!(prev_grapheme_offset(nfc, 2), 1);
+    assert_eq!(prev_grapheme_offset(nfc, 5), 2); // After 'ệ', backspace removes 'ệ' (range 2..5)
+    assert_eq!(prev_grapheme_offset(nfc, 6), 5); // After 'n'
+
+    assert_eq!(next_grapheme_offset(nfc, 0), 1);
+    assert_eq!(next_grapheme_offset(nfc, 1), 2);
+    assert_eq!(next_grapheme_offset(nfc, 2), 5); // Forward past 'ệ'
+    assert_eq!(next_grapheme_offset(nfc, 5), 6); // Forward past 'n'
+    assert_eq!(next_grapheme_offset(nfc, 6), 6);
+}
+
+/// WHY: Canonical decomposed Vietnamese (NFD) stacks multiple combining marks in Canonical Combining Class order:
+///      Base vowel + ccc 220 (combining dot below `\u{0323}`) + ccc 230 (combining circumflex `\u{0302}`).
+/// DANGER: Backspacing on 'e\u{0323}\u{0302}' with char-by-char deletion peels `\u{0302}`, leaving an invalid orphan tone.
+/// CONTRACT:
+/// - Backspacing from after the cluster (offset 7) returns cluster start (offset 2).
+/// - Deleting from before the cluster (offset 2) returns cluster end (offset 7).
+/// - Cursors landing inside the cluster (offsets 3 and 5) snap defensively to bounds (2 and 7).
+#[test]
+fn grapheme_offsets_vietnamese_nfd_canonical_ordering() {
+    // NFD string: 'v' (1B, 0..1), 'i' (1B, 1..2), 'e' (1B, 2..3)
+    // + Combining Dot Below (2B, U+0323, ccc 220, 3..5)
+    // + Combining Circumflex (2B, U+0302, ccc 230, 5..7)
+    // + 'n' (1B, 7..8)
+    let nfd = "vie\u{0323}\u{0302}n";
+    assert_eq!(nfd.len(), 8);
+
+    // Backward from cluster boundaries
+    assert_eq!(prev_grapheme_offset(nfd, 0), 0);
+    assert_eq!(prev_grapheme_offset(nfd, 1), 0);
+    assert_eq!(prev_grapheme_offset(nfd, 2), 1);
+    assert_eq!(prev_grapheme_offset(nfd, 7), 2); // Backspace removes the entire decomposed vowel cluster
+    assert_eq!(prev_grapheme_offset(nfd, 8), 7);
+
+    // Forward from cluster boundaries
+    assert_eq!(next_grapheme_offset(nfd, 0), 1);
+    assert_eq!(next_grapheme_offset(nfd, 1), 2);
+    assert_eq!(next_grapheme_offset(nfd, 2), 7); // Delete removes the entire decomposed vowel cluster
+    assert_eq!(next_grapheme_offset(nfd, 7), 8);
+    assert_eq!(next_grapheme_offset(nfd, 8), 8);
+
+    // Snap-to-boundary recovery for cursors landed inside the decomposed cluster:
+    // Offset 3: between base 'e' and dot below '\u{0323}'
+    assert_eq!(prev_grapheme_offset(nfd, 3), 2);
+    assert_eq!(next_grapheme_offset(nfd, 3), 7);
+    // Offset 5: between dot below '\u{0323}' and circumflex '\u{0302}'
+    assert_eq!(prev_grapheme_offset(nfd, 5), 2);
+    assert_eq!(next_grapheme_offset(nfd, 5), 7);
+}
+
+/// WHY: Verifies arbitrary combining mark sequences as specified in docs/vietnamese-text-reliability.md.
+/// DANGER: Synthetic or unusual mark combinations must not disrupt extended grapheme cluster boundaries.
+/// CONTRACT: In-cluster cursors (offsets 2, 4) snap to cluster start (1) and cluster end (6).
+#[test]
+fn grapheme_offsets_synthetic_compound_cluster() {
+    // Synthetic decomposed cluster: "vi\u{0323}\u{0302}n" (3 clusters: 'v' [0..1], 'i\u{0323}\u{0302}' [1..6], 'n' [6..7])
+    let synth = "vi\u{0323}\u{0302}n";
+    assert_eq!(synth.len(), 7);
+    assert_eq!(prev_grapheme_offset(synth, 6), 1);
+    assert_eq!(next_grapheme_offset(synth, 1), 6);
+    assert_eq!(prev_grapheme_offset(synth, 2), 1);
+    assert_eq!(next_grapheme_offset(synth, 2), 6);
+    assert_eq!(prev_grapheme_offset(synth, 4), 1);
+    assert_eq!(next_grapheme_offset(synth, 4), 6);
+}
+
+/// WHY: Core invariant of Tier 2: Backspace/Delete mutation must be isomorphic between NFC and NFD strings.
+/// DANGER: Asymmetric deletion causes desynchronized document models and ghost undo history.
+/// CONTRACT: Step-by-step backward deletion produces identical visual letters at every stage without leaving orphan marks.
+#[test]
+fn grapheme_offsets_isomorphic_atomic_deletion() {
+    let nfc = "viện";
+    let nfd = "vie\u{0323}\u{0302}n";
+
+    fn delete_backwards(text: &str) -> Vec<String> {
+        let mut cur_text = text.to_string();
+        let mut steps = Vec::new();
+        while !cur_text.is_empty() {
+            let cursor = cur_text.len();
+            let prev = prev_grapheme_offset(&cur_text, cursor);
+            cur_text.drain(prev..cursor);
+            steps.push(cur_text.clone());
+        }
+        steps
+    }
+
+    let nfc_steps = delete_backwards(nfc);
+    let nfd_steps = delete_backwards(nfd);
+
+    assert_eq!(nfc_steps.len(), 4);
+    assert_eq!(nfd_steps.len(), 4);
+
+    // Step 1: removes 'n'
+    assert_eq!(nfc_steps[0], "việ");
+    assert_eq!(nfd_steps[0], "vie\u{0323}\u{0302}");
+
+    // Step 2: removes the vowel letter atomically (never leaves orphan combining marks)
+    assert_eq!(nfc_steps[1], "vi");
+    assert_eq!(nfd_steps[1], "vi");
+
+    // Step 3: removes 'i'
+    assert_eq!(nfc_steps[2], "v");
+    assert_eq!(nfd_steps[2], "v");
+
+    // Step 4: removes 'v'
+    assert_eq!(nfc_steps[3], "");
+    assert_eq!(nfd_steps[3], "");
+}
+
+/// WHY: UAX #29 specifies that CRLF (\r\n) is a single indivisible grapheme cluster.
+/// DANGER: Splitting \r and \n corrupts newline handling and text rendering.
+/// CONTRACT: Cursor inside CRLF (between \r and \n) snaps to cluster start or end.
+#[test]
+fn grapheme_offsets_crlf_and_newlines() {
+    let text = "a\r\nb";
+    assert_eq!(text.len(), 4);
+    // CRLF is a single cluster: [1..3]
+    assert_eq!(prev_grapheme_offset(text, 3), 1);
+    assert_eq!(next_grapheme_offset(text, 1), 3);
+
+    // Cursor inside CRLF (offset 2, between \r and \n) snaps to boundaries
+    assert_eq!(prev_grapheme_offset(text, 2), 1);
+    assert_eq!(next_grapheme_offset(text, 2), 3);
+}
+
+/// WHY: Extended grapheme clusters encompass emoji ZWJ sequences, skin-tone modifiers, and Regional Indicator flag pairs.
+/// DANGER: Peeling a ZWJ modifier renders disjoint raw emojis or missing-glyph fallback boxes.
+/// CONTRACT: Entire sequences remain atomic; any interior cursor snaps to the full sequence bounds.
+#[test]
+fn grapheme_offsets_emoji_zwj_modifiers_and_flags() {
+    // Emoji ZWJ family sequence
+    let family = "👨\u{200D}👩\u{200D}👧\u{200D}👦";
+    let len = family.len();
+    assert_eq!(prev_grapheme_offset(family, len), 0);
+    assert_eq!(next_grapheme_offset(family, 0), len);
+
+    // Inside the ZWJ sequence, cursor snaps to cluster bounds
+    for (offset, _) in family.char_indices().skip(1) {
+        assert_eq!(prev_grapheme_offset(family, offset), 0);
+        assert_eq!(next_grapheme_offset(family, offset), len);
+    }
+
+    // Flag (Regional Indicator pair)
+    let flag = "🇻🇳";
+    let flag_len = flag.len();
+    assert_eq!(prev_grapheme_offset(flag, flag_len), 0);
+    assert_eq!(next_grapheme_offset(flag, 0), flag_len);
+    // Between regional indicators
+    let mid = flag.chars().next().map_or(0, |c| c.len_utf8());
+    assert_eq!(prev_grapheme_offset(flag, mid), 0);
+    assert_eq!(next_grapheme_offset(flag, mid), flag_len);
+}
+
+/// WHY: Exhaustive verification of memory safety and boundary invariants across mixed-script text.
+/// DANGER: Untrusted documents or hostile user input must never trigger panics or invalid slices.
+/// CONTRACT: Every returned offset is guaranteed to be a valid char boundary bounded within [0, text.len()].
+#[test]
+fn grapheme_offsets_defensive_invariants_and_metamorphic_sweep() {
+    let text = "vi\u{0323}\u{0302}n 🇻🇳 👍🏽 \r\n 漢字";
+    let len = text.len();
+
+    // Out-of-bounds cursors clamp safely without panicking
+    assert!(prev_grapheme_offset(text, len + 100) <= len);
+    assert_eq!(next_grapheme_offset(text, len + 100), len);
+
+    // Non-char boundary cursors snap safely without panicking
+    let multi_byte = "ệ"; // 3 bytes
+    assert_eq!(prev_grapheme_offset(multi_byte, 1), 0);
+    assert_eq!(prev_grapheme_offset(multi_byte, 2), 0);
+    assert_eq!(next_grapheme_offset(multi_byte, 1), 3);
+    assert_eq!(next_grapheme_offset(multi_byte, 2), 3);
+
+    // Metamorphic sweep: verify invariants across all valid char boundaries
+    for (offset, _) in text.char_indices().chain(std::iter::once((len, ' '))) {
+        let prev = prev_grapheme_offset(text, offset);
+        let next = next_grapheme_offset(text, offset);
+        let (start, end) = grapheme_bounds(text, offset);
+
+        assert!(prev <= offset, "prev ({prev}) must be <= offset ({offset})");
+        assert!(next >= offset, "next ({next}) must be >= offset ({offset})");
+        assert!(next <= len, "next ({next}) must be <= len ({len})");
+        assert!(start <= offset, "start ({start}) must be <= offset ({offset})");
+        assert!(offset <= end, "offset ({offset}) must be <= end ({end})");
+        assert!(end <= len, "end ({end}) must be <= len ({len})");
+        assert!(text.is_char_boundary(prev), "prev ({prev}) must be char boundary");
+        assert!(text.is_char_boundary(next), "next ({next}) must be char boundary");
+        assert!(text.is_char_boundary(start), "start ({start}) must be char boundary");
+        assert!(text.is_char_boundary(end), "end ({end}) must be char boundary");
+    }
+}
+
+/// WHY: Double-click word/character selection and block cursor rendering require the exact
+///      enclosing extended grapheme cluster bounds (start, end) around a cursor position.
+/// DANGER: Computing bounds naively via prev/next causes off-by-one errors when cursor is exactly
+///         at cluster start (where prev moves to the preceding cluster).
+/// CONTRACT:
+/// - For empty text: returns (0, 0).
+/// - For cursor inside or at start of cluster i: returns (s_i, e_i).
+/// - For cursor at text.len(): returns bounds of the last cluster (or (0, 0) if empty).
+/// - Invariant: 0 <= start <= cursor <= end <= text.len() holds for all valid cursors.
+#[test]
+fn grapheme_offsets_bounds_enclosing_cluster() {
+    assert_eq!(grapheme_bounds("", 0), (0, 0));
+    assert_eq!(grapheme_bounds("", 5), (0, 0));
+
+    let text = "hello";
+    assert_eq!(grapheme_bounds(text, 0), (0, 1));
+    assert_eq!(grapheme_bounds(text, 1), (1, 2));
+    assert_eq!(grapheme_bounds(text, 2), (2, 3));
+    assert_eq!(grapheme_bounds(text, 3), (3, 4));
+    assert_eq!(grapheme_bounds(text, 4), (4, 5));
+    assert_eq!(grapheme_bounds(text, 5), (4, 5));
+
+    // Vietnamese NFD: 'v' (0..1), 'i' (1..2), 'e\u{0323}\u{0302}' (2..7), 'n' (7..8)
+    let nfd = "vie\u{0323}\u{0302}n";
+    assert_eq!(grapheme_bounds(nfd, 0), (0, 1));
+    assert_eq!(grapheme_bounds(nfd, 1), (1, 2));
+    assert_eq!(grapheme_bounds(nfd, 2), (2, 7));
+    assert_eq!(grapheme_bounds(nfd, 3), (2, 7));
+    assert_eq!(grapheme_bounds(nfd, 5), (2, 7));
+    assert_eq!(grapheme_bounds(nfd, 6), (2, 7));
+    assert_eq!(grapheme_bounds(nfd, 7), (7, 8));
+    assert_eq!(grapheme_bounds(nfd, 8), (7, 8));
+
+    // Emoji ZWJ sequence
+    let family = "👨\u{200D}👩\u{200D}👧\u{200D}👦";
+    let flen = family.len();
+    for (offset, _) in family.char_indices() {
+        assert_eq!(grapheme_bounds(family, offset), (0, flen));
+    }
+    assert_eq!(grapheme_bounds(family, flen), (0, flen));
+}
