@@ -543,9 +543,13 @@ impl Updater {
     /// that failed and was not reported yet, is recorded, and the next start reports it
     /// ([`Status::InstallFailed`]).
     pub fn start_pending_update(&mut self) {
-        // An installation that finished since the last `tick`.
+        // An installation that finished since the last `tick`, or whose worker ended without a word.
         if let Some((rx, release)) = &self.install
-            && let Ok(outcome) = rx.try_recv()
+            && let Some(outcome) = match rx.try_recv() {
+                Ok(outcome) => Some(outcome),
+                Err(TryRecvError::Empty) => None,
+                Err(TryRecvError::Disconnected) => Some(Err(Failure::dropped())),
+            }
         {
             match outcome {
                 Ok(restart) => {
@@ -1454,6 +1458,15 @@ mod tests {
             start_answered(&mut next, &ctx, Ok(None));
             assert_eq!(next.status(), &Status::InstallFailed(want.into()), "{want}");
         }
+        // A worker that ended without sending anything.
+        let (_dir, paths, mut u) = with_records("0.1.0");
+        let (tx, rx) = channel::<Result<Restart, Failure>>();
+        u.install = Some((rx, newer()));
+        drop(tx);
+        drop(u);
+        let mut next = reading(&paths, "0.1.0");
+        start_answered(&mut next, &ctx, Ok(None));
+        assert_eq!(next.status(), &Status::InstallFailed("The update stopped unexpectedly.".into()));
     }
 }
 
