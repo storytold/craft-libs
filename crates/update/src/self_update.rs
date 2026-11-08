@@ -314,7 +314,8 @@ enum LinuxLocation {
     /// package is installed too.
     PackagePath,
     /// Anywhere else under a folder a package manager owns (`/usr` but not `/usr/local`, `/opt`,
-    /// `/bin`, `/sbin`, `/nix`, `/snap`, Guix's `/gnu`, or a Homebrew `.linuxbrew` prefix): a
+    /// `/bin`, `/sbin`, `/nix`, `/snap` or `/var/lib/snapd/snap` (Snap on Fedora and Arch), Guix's
+    /// `/gnu`, or a Homebrew `.linuxbrew` prefix): a
     /// distribution, AUR, Nix, Snap, Guix or Homebrew copy. It's theirs to update, and replacing
     /// it in place would write over a file the package manager owns (or fail on a read-only
     /// store), as on macOS ([`macos_package_manager_owns`]).
@@ -328,7 +329,7 @@ enum LinuxLocation {
 fn linux_location(app: &App, exe: &Path) -> LinuxLocation {
     if exe == Path::new("/usr/bin").join(app.id) {
         LinuxLocation::PackagePath
-    } else if (!exe.starts_with("/usr/local") && ["/usr", "/opt", "/bin", "/sbin", "/nix", "/snap", "/gnu"].iter().any(|dir| exe.starts_with(dir)))
+    } else if (!exe.starts_with("/usr/local") && ["/usr", "/opt", "/bin", "/sbin", "/nix", "/snap", "/var/lib/snapd/snap", "/gnu"].iter().any(|dir| exe.starts_with(dir)))
         // Homebrew on Linux: /home/linuxbrew/.linuxbrew, or ~/.linuxbrew for one user
         || exe.components().any(|c| c.as_os_str() == ".linuxbrew")
     {
@@ -2095,6 +2096,8 @@ mod tests {
             "/opt/artcraft-launcher/artcraft-launcher",
             "/bin/artcraft-launcher",
             "/gnu/store/abc-artcraft-launcher/bin/artcraft-launcher",
+            "/snap/artcraft-launcher/12/bin/artcraft-launcher",
+            "/var/lib/snapd/snap/artcraft-launcher/12/bin/artcraft-launcher",
             "/home/linuxbrew/.linuxbrew/Cellar/artcraft-launcher/1.0/bin/artcraft-launcher",
             "/home/me/.linuxbrew/bin/artcraft-launcher",
         ] {
@@ -2105,6 +2108,7 @@ mod tests {
             "/home/me/bin/artcraft-launcher",
             "/home/me/.local/bin/artcraft-launcher",
             "/usrlocal/artcraft-launcher",
+            "/var/lib/snapdx/artcraft-launcher",
         ] {
             assert_eq!(linux_location(app, Path::new(own)), LinuxLocation::Elsewhere, "{own}");
         }
