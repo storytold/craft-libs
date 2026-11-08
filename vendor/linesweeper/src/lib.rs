@@ -74,7 +74,8 @@ pub enum Error {
     NaN,
     /// One of the inputs had a non-closed path.
     NonClosedPath(NonClosedPath),
-    /// The sweep made more segment comparisons than its work limit allows.
+    /// The sweep did more work (segment comparisons and position checks) than its work limit
+    /// allows.
     WorkLimitExceeded,
 }
 
@@ -91,7 +92,7 @@ impl std::fmt::Display for Error {
             Error::NaN => write!(f, "one of the inputs had a NaN"),
             Error::NonClosedPath(_) => write!(f, "one of the inputs had a non-closed path"),
             Error::WorkLimitExceeded => {
-                write!(f, "the sweep made more comparisons than its work limit")
+                write!(f, "the sweep did more work than its work limit")
             }
         }
     }

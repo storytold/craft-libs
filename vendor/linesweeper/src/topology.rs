@@ -534,13 +534,15 @@ impl<W: WindingNumber> Topology<W> {
         .expect("a sweep without a work limit always finishes"))
     }
 
-    /// Construct a new topology from a collection of paths and tags, making at most
-    /// `work_limit` segment comparisons.
+    /// Construct a new topology from a collection of paths and tags, doing at most
+    /// `work_limit` units of sweep work.
     ///
     /// This is [`Topology::from_paths`], except that it returns
-    /// [`Error::WorkLimitExceeded`](crate::Error::WorkLimitExceeded) once the sweep has made
-    /// more than `work_limit` comparisons. Stacked copies of a shape and nearly coincident
-    /// segments can need billions of comparisons, and the limit bounds the time a caller waits.
+    /// [`Error::WorkLimitExceeded`](crate::Error::WorkLimitExceeded) once the sweep has done
+    /// more than `work_limit` units, counted as in
+    /// [`Sweeper::set_work_limit`](crate::sweep::Sweeper::set_work_limit): segment comparisons
+    /// plus segment position checks. Stacked copies of a shape and nearly coincident segments
+    /// can need billions of comparisons, and the limit bounds the time a caller waits.
     pub fn from_paths_with_work_limit<'a, Iter>(
         paths: Iter,
         eps: f64,
@@ -566,8 +568,8 @@ impl<W: WindingNumber> Topology<W> {
         )
     }
 
-    /// Returns [`crate::Error::WorkLimitExceeded`] if `work_limit` is given and the sweep makes
-    /// more segment comparisons than it.
+    /// Returns [`crate::Error::WorkLimitExceeded`] if `work_limit` is given and the sweep does
+    /// more work than it.
     fn from_segments(
         segments: Segments,
         tag: SegVec<W::Tag>,

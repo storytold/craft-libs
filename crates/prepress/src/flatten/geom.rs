@@ -20,10 +20,10 @@ use linesweeper::topology::{ContourIdx, Contours, Topology, WindingNumber};
 /// numerical debris, such as the lens between two nearly coincident curves.
 pub const DEFAULT_SLIVER: f64 = 0.01;
 
-/// The most segment comparisons the sweep may make before the shapes count as too degenerate
-/// to sweep. Stacked copies of a shape can need billions; a release build makes about 17 million
-/// a second.
-const MAX_SWEEP_COMPARISONS: u64 = 100_000_000;
+/// The most work the sweep may do, counted as segment comparisons plus segment position checks,
+/// before the shapes count as too degenerate to sweep. Stacked copies of a shape can need billions
+/// of comparisons; a release build makes about 17 million a second.
+const MAX_SWEEP_WORK: u64 = 100_000_000;
 
 /// How a path's winding number decides what is inside it.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -115,7 +115,7 @@ pub fn regions_with(shapes: &[Shape], clips: &[ClipPath], sliver: f64) -> Result
     if shapes.is_empty() {
         return Ok(Vec::new());
     }
-    Ok(Arrangement::new(shapes, clips, sliver, MAX_SWEEP_COMPARISONS)?.regions())
+    Ok(Arrangement::new(shapes, clips, sliver, MAX_SWEEP_WORK)?.regions())
 }
 
 /// Indices of `bounds` grouped by overlap, transitively, each group in index order. Touching boxes
