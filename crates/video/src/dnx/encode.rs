@@ -121,6 +121,15 @@ impl Encoder {
         if f.y.len() != n || f.cb.len() != cn || f.cr.len() != cn {
             return Err(Error::Input("plane sizes do not match the frame geometry".into()));
         }
+        if f.alpha.is_some() {
+            return Err(Error::Input("alpha is not supported by this encoder".into()));
+        }
+        if f.interlace != crate::dnx::Interlace::Progressive {
+            return Err(Error::Input("interlaced frames are not supported by this encoder".into()));
+        }
+        if f.rgb && f.chroma != ChromaFormat::Yuv444 {
+            return Err(Error::Input("RGB is only supported for 4:4:4 frames".into()));
+        }
         let prep = self.prepare(f);
         let vlc = vlc(self.info.vlc);
         let budget_bits = (self.frame_size as u64 - self.header_size as u64 - 4) * 8;
@@ -271,10 +280,9 @@ impl Encoder {
             let cur: Vec<u32> = (0..nmb).map(|mb| mb_bits(mb, q)).collect();
             let finer: Vec<u32> = (0..nmb).map(|mb| mb_bits(mb, q - 1)).collect();
             // spread the refinement evenly over the frame: visit macroblocks in a strided order
-            let stride = 7919usize;
+            let stride = if nmb.is_multiple_of(7919) { 1 } else { 7919 };
             let mut idx = 0usize;
             for _ in 0..nmb {
-                idx = (idx + stride) % nmb;
                 let s = idx / prep.nw;
                 let extra = finer[idx] as u64 - cur[idx].min(finer[idx]) as u64;
                 let nb = row_bits[s] + extra;
@@ -284,6 +292,7 @@ impl Encoder {
                     total = nt;
                     qs[idx] = q - 1;
                 }
+                idx = (idx + stride) % nmb;
             }
         }
         qs

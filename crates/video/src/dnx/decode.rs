@@ -46,7 +46,16 @@ pub fn decode_frame_with(data: &[u8], opts: &DecodeOptions) -> Result<Frame> {
     // field encoding: two coding units, field 1 (top) then field 2
     let off = second_unit_offset(&h1, data)?;
     let h2 = header::parse(&data[off..])?;
-    if h2.cid != h1.cid || h2.width != h1.width || h2.lines != h1.lines || h2.chroma != h1.chroma || h2.alpha != h1.alpha {
+    if h2.cid != h1.cid
+        || h2.width != h1.width
+        || h2.lines != h1.lines
+        || h2.chroma != h1.chroma
+        || h2.alpha != h1.alpha
+        || h2.bit_depth != h1.bit_depth
+        || h2.frame_encoding != h1.frame_encoding
+        || h2.interlaced != h1.interlaced
+        || !matches!((h1.field, h2.field), (FieldCode::Field1, FieldCode::Field2) | (FieldCode::Field2, FieldCode::Field1))
+    {
         return Err(Error::Invalid("field coding units differ"));
     }
     let (p1, p2) = if opts.threads {
@@ -165,6 +174,15 @@ struct Ctx<'a> {
 }
 
 fn decode_unit(h: &FrameHeader, data: &[u8], opts: &DecodeOptions) -> Result<CodedPlanes> {
+    if let Some(sz) = h.coding_unit_size() {
+        let sz = sz as usize;
+        if data.len() < sz {
+            return Err(Error::Truncated);
+        }
+        if !h.crc && data[sz - 4..sz] != header::EOF_SIGNATURE {
+            return Err(Error::Invalid("invalid EOF signature"));
+        }
+    }
     let info = cid_info(h.cid).ok_or(Error::UnknownCid(h.cid))?;
     let nw = h.mb_width() as usize;
     let ns = h.mb_rows as usize;
@@ -210,12 +228,21 @@ fn decode_unit(h: &FrameHeader, data: &[u8], opts: &DecodeOptions) -> Result<Cod
         .collect();
 
     let alpha = h.alpha;
-    let mut planes: [Vec<u16>; 4] = [
-        vec![0; strides[0] * 16 * ns],
-        vec![0; strides[1] * cmb.1 * ns],
-        vec![0; strides[2] * cmb.1 * ns],
-        if alpha { vec![0; strides[3] * 16 * ns] } else { Vec::new() },
-    ];
+    const MAX_DECODED_PLANE_BYTES: usize = 512 * 1024 * 1024;
+    let y_len = strides[0].checked_mul(16).and_then(|v| v.checked_mul(ns)).ok_or(Error::Invalid("plane dimension overflow"))?;
+    let cb_len = strides[1].checked_mul(cmb.1).and_then(|v| v.checked_mul(ns)).ok_or(Error::Invalid("plane dimension overflow"))?;
+    let cr_len = strides[2].checked_mul(cmb.1).and_then(|v| v.checked_mul(ns)).ok_or(Error::Invalid("plane dimension overflow"))?;
+    let a_len =
+        if alpha { strides[3].checked_mul(16).and_then(|v| v.checked_mul(ns)).ok_or(Error::Invalid("plane dimension overflow"))? } else { 0 };
+    let total_samples = y_len
+        .checked_add(cb_len)
+        .and_then(|v| v.checked_add(cr_len))
+        .and_then(|v| v.checked_add(a_len))
+        .ok_or(Error::Invalid("plane size overflow"))?;
+    if total_samples.checked_mul(std::mem::size_of::<u16>()).ok_or(Error::Invalid("plane size overflow"))? > MAX_DECODED_PLANE_BYTES {
+        return Err(Error::Invalid("frame exceeds decoded memory budget"));
+    }
+    let mut planes: [Vec<u16>; 4] = [vec![0; y_len], vec![0; cb_len], vec![0; cr_len], if alpha { vec![0; a_len] } else { Vec::new() }];
     let [py, pcb, pcr, pa] = &mut planes;
     let band = [strides[0] * 16, strides[1] * cmb.1, strides[2] * cmb.1, strides[3] * 16];
     let mut alpha_bands: Vec<&mut [u16]> = if alpha { pa.chunks_mut(band[3]).collect() } else { (0..ns).map(|_| &mut [][..]).collect() };
@@ -251,7 +278,10 @@ fn decode_unit(h: &FrameHeader, data: &[u8], opts: &DecodeOptions) -> Result<Cod
     // macroblock by macroblock (ConvertMacroblockColor, 8.1.1).
     let n_acf: usize = acf.iter().map(|r| r.iter().filter(|&&a| a).count()).sum();
     let ycbcr = h.rgb_planes() && n_acf == nw * ns;
-    if h.rgb_planes() && n_acf > 0 && !ycbcr && h.color_volume != crate::dnx::ColorVolume::OutOfBand {
+    if h.rgb_planes() && n_acf > 0 && !ycbcr {
+        if h.color_volume == crate::dnx::ColorVolume::OutOfBand {
+            return Err(Error::Invalid("mixed-ACF frames with OutOfBand color volume are not supported"));
+        }
         let [py, pcb, pcr, _] = &mut planes;
         for (s, row) in acf.iter().enumerate() {
             for (mb, &a) in row.iter().enumerate() {
@@ -282,6 +312,9 @@ fn decode_row(ctx: &Ctx, data: &[u8], bands: [&mut [u16]; 4]) -> Result<Vec<bool
         } else {
             (r.read(11), r.read(1) == 1, false)
         };
+        if mff && h.chroma == ChromaFormat::Yuv420 {
+            return Err(Error::Invalid("MFF field coding is invalid for 4:2:0"));
+        }
         let acf = rgb && flag;
         let wq = scaled_weights(ctx.info.weights, qsf);
         for &(plane, xo, yo) in ctx.layout {
@@ -434,10 +467,8 @@ fn store(ctx: &Ctx, band: &mut [u16], position: BlockPosition, block: &mut [f32;
 fn convert_mb_to_rgb(ctx: &Ctx, bands: [&mut [u16]; 3], mb: usize) {
     let stride = ctx.strides[0];
     let s = (1u32 << (ctx.h.bit_depth - 8)) as f32;
-    let (kr, kb) = match ctx.h.color_volume {
-        crate::dnx::ColorVolume::Bt709 => (0.2126f32, 0.0722f32),
-        _ => (0.2627, 0.0593),
-    };
+    // Section 8.1.1 ConvertMacroblockColor uses the BT.709 transform coefficients.
+    let (kr, kb) = (0.2126f32, 0.0722f32);
     let kg = 1.0 - kr - kb;
     let c = 219.0 / 224.0;
     for y in 0..16 {

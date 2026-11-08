@@ -6,7 +6,7 @@
 //! ffmpeg's decoder differs from the text of SMPTE ST 2019-1 (see the README): the quantisation
 //! weights it uses for CID 1271, and its reconstruction offset.
 //!
-//! `DNX_CID=1271 cargo test -p craft-dnx --lib ffmpeg_probe -- --ignored --nocapture`
+//! `DNX_CID=1271 cargo test -p craft-video --features dnx --lib ffmpeg_probe -- --ignored --nocapture`
 use crate::dnx::bits::Writer;
 use crate::dnx::header::{self, EOF_SIGNATURE, FieldCode, FrameHeader, SCAN_INDEX_OFFSET};
 use crate::dnx::tables::{ZIGZAG, cid_info, vlc};

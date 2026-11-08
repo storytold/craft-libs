@@ -165,6 +165,9 @@ pub fn parse(d: &[u8]) -> Result<FrameHeader> {
     if rgb && chroma != ChromaFormat::Yuv444 {
         return Err(Error::Invalid("RGB requires 4:4:4"));
     }
+    if chroma == ChromaFormat::Yuv420 && !matches!(info.kind, Kind::Ri { .. }) {
+        return Err(Error::Invalid("4:2:0 is RI only"));
+    }
     if chroma == ChromaFormat::Yuv444 && !matches!(cid, 1256 | 1270) {
         return Err(Error::Invalid("4:4:4 requires CID 1256 or 1270"));
     }
@@ -208,8 +211,11 @@ pub fn header_size_for(lines: u32) -> u32 {
 
 /// Write a header (without scan indices) for `h` into a zeroed buffer of `h.header_size` bytes.
 pub fn write(h: &FrameHeader) -> Vec<u8> {
-    let mut d = vec![0u8; h.header_size as usize];
-    d[0..4].copy_from_slice(&h.header_size.to_be_bytes());
+    let min_size = header_size_for(h.lines) as usize;
+    let size = (h.header_size as usize).max(min_size);
+    let mut d = vec![0u8; size];
+    let header_size = size as u32;
+    d[0..4].copy_from_slice(&header_size.to_be_bytes());
     d[4] = h.version;
     d[5] = (h.vbr as u8) << 4
         | match h.field {

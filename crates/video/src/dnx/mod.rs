@@ -194,9 +194,13 @@ pub struct Frame {
 impl Frame {
     /// A black (video-range) frame.
     pub fn new(width: u32, height: u32, chroma: ChromaFormat, bit_depth: u8, with_alpha: bool) -> Frame {
-        let n = width as usize * height as usize;
-        let cn = chroma.chroma_width(width) as usize * chroma.chroma_height(height) as usize;
-        let s = bit_depth.saturating_sub(8) as u32;
+        let bit_depth = bit_depth.clamp(8, 16);
+        let n = (width as usize).saturating_mul(height as usize);
+        let cw = chroma.chroma_width(width) as usize;
+        let ch = chroma.chroma_height(height) as usize;
+        let cn = cw.saturating_mul(ch);
+        let s = (bit_depth - 8) as u32;
+        let alpha_max = if bit_depth >= 16 { 0xffff } else { ((1u32 << bit_depth) - 1) as u16 };
         Frame {
             width,
             height,
@@ -206,7 +210,7 @@ impl Frame {
             y: vec![(16u32 << s) as u16; n],
             cb: vec![(128u32 << s) as u16; cn],
             cr: vec![(128u32 << s) as u16; cn],
-            alpha: with_alpha.then(|| vec![((1u32 << bit_depth) - 1) as u16; n]),
+            alpha: with_alpha.then(|| vec![alpha_max; n]),
             interlace: Interlace::Progressive,
             color_volume: ColorVolume::Bt709,
             cid: 0,

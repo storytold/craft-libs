@@ -270,6 +270,7 @@ pub fn source_frames(ff: &Path, spec: SourceFrameSpec<'_>) -> Vec<Frame> {
         (craft_video::dnx::ChromaFormat::Yuv422, 8) => "yuv422p",
         (craft_video::dnx::ChromaFormat::Yuv422, 10) => "yuv422p10le",
         (craft_video::dnx::ChromaFormat::Yuv422, _) => "yuv422p12le",
+        (craft_video::dnx::ChromaFormat::Yuv444, 8) => "yuv444p",
         (_, 10) => "yuv444p10le",
         _ => "yuv444p12le",
     };

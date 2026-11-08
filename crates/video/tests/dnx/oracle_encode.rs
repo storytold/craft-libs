@@ -37,7 +37,14 @@ fn encode_decodes_in_ffmpeg() {
         for p in &coded {
             assert_eq!(p.len() as u32, enc.frame_size(), "{}: CBR frame size", c.name);
         }
-        let mov = fixture_dir().join(format!("{}.out.mov", c.name));
+        struct TempFile(std::path::PathBuf);
+        impl Drop for TempFile {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_file(&self.0);
+            }
+        }
+        let mov = craft_media_testkit::temp_path(&fixture_dir().join(format!("{}.out.mov", c.name)));
+        let _guard = TempFile(mov.clone());
         write_mov(&mov, b"AVdh", w as u16, h as u16, 24, &coded);
         let pix = match (chroma, c.depth) {
             (ChromaFormat::Yuv444, 10) => "yuv444p10le",
