@@ -7,7 +7,9 @@
   "upstream_repository": null,
   "upstream_revision": "824b0791a750f7b27b8edcbb6c6244d0e629875e",
   "upstream_directory": "",
-  "local_patches": [],
+  "local_patches": [
+    "`ComparisonCache` in `src/order.rs` holds the comparisons of one `Segments` arena. `compare_segments` reads the arena's number, which `src/segments.rs` gives each arena and each clone, and drops the cached comparisons when the number differs from the one they were made with. Before, a cache given a second arena returned the first arena's order for the same pair of indices."
+  ],
   "files": [
     { "path": ".cargo_vcs_info.json", "source_sha256": "47fba6a9dbdf445a5c97f783c9be62093035f9d5e5cdc2cf3216ad8259bcd8fc", "source_git_blob": null, "sha256": "47fba6a9dbdf445a5c97f783c9be62093035f9d5e5cdc2cf3216ad8259bcd8fc" },
     { "path": ".gitignore", "source_sha256": "88b59092499ae05234330eb7d0b01e953e969caf05261530e3765eef02536cf0", "source_git_blob": null, "sha256": "88b59092499ae05234330eb7d0b01e953e969caf05261530e3765eef02536cf0" },
@@ -39,10 +41,10 @@
     { "path": "src/geom.rs", "source_sha256": "9878ffa6d4a13fa2c9149741c137205ca01acb626a5b9f86a3db75cf91b63a08", "source_git_blob": null, "sha256": "9878ffa6d4a13fa2c9149741c137205ca01acb626a5b9f86a3db75cf91b63a08" },
     { "path": "src/lib.rs", "source_sha256": "761c153c3b5c449569ff85c571344b9252ea64f7f0b0424fb4819041b03d13c6", "source_git_blob": null, "sha256": "761c153c3b5c449569ff85c571344b9252ea64f7f0b0424fb4819041b03d13c6" },
     { "path": "src/num.rs", "source_sha256": "39ff85da50c500ce91cf6dea81aedc0dcca1db5e7d0506696dde2da118e93a2a", "source_git_blob": null, "sha256": "39ff85da50c500ce91cf6dea81aedc0dcca1db5e7d0506696dde2da118e93a2a" },
-    { "path": "src/order.rs", "source_sha256": "7e5b04eae8af134abb032e995f1d3c2ac473822923dfee8d463d9ade6ffeb596", "source_git_blob": null, "sha256": "7e5b04eae8af134abb032e995f1d3c2ac473822923dfee8d463d9ade6ffeb596" },
+    { "path": "src/order.rs", "source_sha256": "7e5b04eae8af134abb032e995f1d3c2ac473822923dfee8d463d9ade6ffeb596", "source_git_blob": null, "sha256": "6b37a2758a971f59de05c1e747784aa5245dfa6d8cb89e48e412da50b9909d55" },
     { "path": "src/perturbation.rs", "source_sha256": "fa274a822bbdf65f8e53e403eef78034dd87964b3f1d3134a064df4ec8cef9c5", "source_git_blob": null, "sha256": "fa274a822bbdf65f8e53e403eef78034dd87964b3f1d3134a064df4ec8cef9c5" },
     { "path": "src/position.rs", "source_sha256": "dfa70840805ecccf5b7eb6122921e46ca60c24cb7b3c17f3b55ffc2549368ab0", "source_git_blob": null, "sha256": "dfa70840805ecccf5b7eb6122921e46ca60c24cb7b3c17f3b55ffc2549368ab0" },
-    { "path": "src/segments.rs", "source_sha256": "379f9455120492d237cb5a62b3fc06da018a72e2eb75bbfcd61b4cce501d9bbc", "source_git_blob": null, "sha256": "379f9455120492d237cb5a62b3fc06da018a72e2eb75bbfcd61b4cce501d9bbc" },
+    { "path": "src/segments.rs", "source_sha256": "379f9455120492d237cb5a62b3fc06da018a72e2eb75bbfcd61b4cce501d9bbc", "source_git_blob": null, "sha256": "e9cd649b07cd285d9abde07e82260c8a23031f1c5f530320f3853734ef0869de" },
     { "path": "src/snapshots/linesweeper__tests__empty_horizontals.snap", "source_sha256": "e319881853e889badf6524f19af4cd6f112e8dd71bdc516826f4463134a82244", "source_git_blob": null, "sha256": "e319881853e889badf6524f19af4cd6f112e8dd71bdc516826f4463134a82244" },
     { "path": "src/snapshots/linesweeper__tests__two_squares.snap", "source_sha256": "01961e0311a5af3b8f13eb52a2a7112560c47cf86771c04e40475dc6f15a0846", "source_git_blob": null, "sha256": "01961e0311a5af3b8f13eb52a2a7112560c47cf86771c04e40475dc6f15a0846" },
     { "path": "src/snapshots/linesweeper__topology__tests__diamond.snap", "source_sha256": "cfaefd620a0a3d1376861bca09cd7c658ef00a32635b88f1b259a9b39cd15502", "source_git_blob": null, "sha256": "cfaefd620a0a3d1376861bca09cd7c658ef00a32635b88f1b259a9b39cd15502" },
