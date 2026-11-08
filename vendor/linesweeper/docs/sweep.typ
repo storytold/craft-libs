@@ -789,7 +789,7 @@ abs(alpha(hat(y)) - beta(hat(y))) <= (2 epsilon_0 + epsilon_t) d + (epsilon_0 M)
 $
 
 If we assume that $16 (epsilon + 2 epsilon_0 M) / d <= 3$ then $epsilon_t d <= 4 epsilon + 8 epsilon_0 M$. 
-Since $d/(y_1 - y_1)$ is the difference of the inverse-slopes of $alpha$ and $beta$, it's bounded by twice
+Since $d/(y_1 - y_0)$ is the difference of the inverse-slopes of $alpha$ and $beta$, it's bounded by twice
 the maximum of these inverse-slopes.
 ]
 

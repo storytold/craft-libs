@@ -14,7 +14,8 @@ and, for every file kept, the hash in the package (`source_sha256`) and the hash
 - `docs/sweep.typ`: the crossing-height lemma (`lem-intersection-height-error`) and its proof divide
   the starting gap `beta(y_0) - alpha(y_0)` by the sum of both gaps. With the ending gap
   `alpha(y_1) - beta(y_1)` as the numerator, gaps of 1 and 3 gave `t = 0.75`, while the segments
-  cross at `t = 0.25`.
+  cross at `t = 0.25`. The proof's inverse-slope difference is `d/(y_1 - y_0)`; the package has
+  `d/(y_1 - y_1)`, whose denominator is zero.
 
 `omitted_files` lists the 43 files of the package left out here, with their hashes:
 

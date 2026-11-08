@@ -8,7 +8,7 @@
   "upstream_revision": "824b0791a750f7b27b8edcbb6c6244d0e629875e",
   "upstream_directory": "",
   "local_patches": [
-    "In `docs/sweep.typ`, the crossing-height lemma and its proof use the starting gap `beta(y_0) - alpha(y_0)` as the numerator of `t`, instead of the ending gap `alpha(y_1) - beta(y_1)`, so that `y_0 + t(y_1 - y_0)` is the height where the segments cross."
+    "In `docs/sweep.typ`, the crossing-height lemma and its proof use the starting gap `beta(y_0) - alpha(y_0)` as the numerator of `t`, instead of the ending gap `alpha(y_1) - beta(y_1)`, so that `y_0 + t(y_1 - y_0)` is the height where the segments cross, and the proof's inverse-slope difference is `d/(y_1 - y_0)` instead of `d/(y_1 - y_1)`."
   ],
   "files": [
     { "path": ".cargo_vcs_info.json", "source_sha256": "47fba6a9dbdf445a5c97f783c9be62093035f9d5e5cdc2cf3216ad8259bcd8fc", "source_git_blob": null, "sha256": "47fba6a9dbdf445a5c97f783c9be62093035f9d5e5cdc2cf3216ad8259bcd8fc" },
@@ -23,7 +23,7 @@
     { "path": "benches/linebender_logo.rs", "source_sha256": "d10867f43439d37f0e1da5d30eaed9ab3bfbe655ed47212f65dc20ab4db65cb3", "source_git_blob": null, "sha256": "d10867f43439d37f0e1da5d30eaed9ab3bfbe655ed47212f65dc20ab4db65cb3" },
     { "path": "benches/painted_dreams.rs", "source_sha256": "073008db93840d380710e13ed3ae38e08cb823f10c12e5f838dac1ccf37eaecf", "source_git_blob": null, "sha256": "073008db93840d380710e13ed3ae38e08cb823f10c12e5f838dac1ccf37eaecf" },
     { "path": "benches/synthetic.rs", "source_sha256": "7ce59bef2e1c4f28b00cb89feb15bc71ca4b098a8d27e7b02ea699aca9bcc810", "source_git_blob": null, "sha256": "7ce59bef2e1c4f28b00cb89feb15bc71ca4b098a8d27e7b02ea699aca9bcc810" },
-    { "path": "docs/sweep.typ", "source_sha256": "4766082c8672a7bb4356b5581043489c13b4e3fb8931ba3a5f0a473fab0172f3", "source_git_blob": null, "sha256": "73860d363c4a12140e1cbdf8f02d050ed6c526a6f9b3d5d537ad51bfb4962b5d" },
+    { "path": "docs/sweep.typ", "source_sha256": "4766082c8672a7bb4356b5581043489c13b4e3fb8931ba3a5f0a473fab0172f3", "source_git_blob": null, "sha256": "db1f41677594b44c5e3f3db351c525b91cd125b07f1f945ed2f0e17d35b5bad3" },
     { "path": "examples/boolean_op.rs", "source_sha256": "3b38a1ccda7e736cce4b191a3a45ab4824c4c365190e3eb637b2fb39b5996c9f", "source_git_blob": null, "sha256": "3b38a1ccda7e736cce4b191a3a45ab4824c4c365190e3eb637b2fb39b5996c9f" },
     { "path": "examples/bus.rs", "source_sha256": "e206a08be73899f564188052c8ecc15526b54606e52ee2935a64ce6b5723da33", "source_git_blob": null, "sha256": "e206a08be73899f564188052c8ecc15526b54606e52ee2935a64ce6b5723da33" },
     { "path": "examples/curve_metrics.rs", "source_sha256": "0db6a5327fd2119a03a9a66624fea3e04b6bbb519655667ad30487aee6c787d2", "source_git_blob": null, "sha256": "0db6a5327fd2119a03a9a66624fea3e04b6bbb519655667ad30487aee6c787d2" },
