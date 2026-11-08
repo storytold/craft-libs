@@ -258,6 +258,7 @@ Video codecs source provenance
 crates/dnx is ported from FilmCraft (https://github.com/storytold/filmcraft)
 pinned at revision 68919ed87aa6a097a4d21414ec7c438883f5fe22:
 - crates/dnx is ported from FilmCraft's crates/dnx (filmcraft-dnx).
+- crates/h264enc is ported from FilmCraft's crates/h264enc (filmcraft-h264enc).
 - crates/prores is ported from FilmCraft's crates/prores (filmcraft-prores).
 - crates/vp8 is ported from FilmCraft's crates/vp8 (filmcraft-vp8).
 FilmCraft contributors to this crate include: aiongg, dylanmtaylor, earlvanze, echelon,
