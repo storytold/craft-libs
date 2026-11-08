@@ -168,6 +168,7 @@ impl<'a> FloatingFrame<'a> {
     }
 
     /// Reserve a separate top resize gutter; disable when contents already supply a header.
+    /// Hosts supplying their own header also supply its minimum size through [`Self::limits`].
     pub fn reserve_top_resize_band(mut self, reserve: bool) -> Self {
         self.reserve_top_resize_band = reserve;
         self
@@ -251,7 +252,10 @@ impl<'a> FloatingFrame<'a> {
         let mut resized = None;
         let mut started = None;
         let mut responses = Vec::new();
-        let limits = PanelLimits { min: self.limits.min.max(vec2(40.0, RESIZE_BAND + TITLE_HEIGHT + 20.0)).min(self.limits.max), ..self.limits };
+        // Only stock chrome needs its title-bar minimum. Host-owned headers use the host's
+        // limits; retain a nonempty floor that cannot exceed an already-constrained rect.
+        let chrome_min = if self.reserve_top_resize_band { vec2(40.0, RESIZE_BAND + TITLE_HEIGHT + 20.0) } else { Vec2::splat(1.0).min(rect.size()) };
+        let limits = PanelLimits { min: self.limits.min.max(chrome_min).min(self.limits.max), ..self.limits };
         let canceled = ui.input(|input| input.key_pressed(Key::Escape)) || crate::focus::lost(ui.ctx());
         for (name, mut handle, mut direction) in handles(rect) {
             if (direction.x < 0.0 && !self.resize_edges[0])

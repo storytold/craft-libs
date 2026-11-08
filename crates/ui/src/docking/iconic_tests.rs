@@ -251,6 +251,63 @@ fn a_flyout_constrained_below_minimum_height_can_still_resize_its_width() {
     }
 }
 
+/// A host-owned header permits smaller flyouts than stock chrome on either dock side.
+/// Both axes can grow from that size, shrink to the configured minimum, and stay in bounds.
+#[test]
+fn custom_small_flyouts_resize_within_their_configured_limits() {
+    for right in [false, true] {
+        let mut d = DockDriver::new(iconic_on_side(right), Content).with_style(|style| {
+            style.min_pane = 20.0;
+            style.tab_height = 10.0;
+        });
+        d.layout.apply(Action::ResizeGroup { panel: 1, height: Some(30.0) }).unwrap();
+        d.layout.apply(Action::ResizeFlyoutWidth { panel: 1, width: Some(32.0) }).unwrap();
+        d.click(hit(&d, Hit::Icon(1)).center());
+        d.settle();
+        let id = d.id.with("flyout");
+        let side = if right { "resize-left" } else { "resize-right" };
+        let corner = if right { "resize-bottom-left" } else { "resize" };
+        let handle = |d: &Driver, name| d.ctx.read_response(id.with(name)).unwrap().rect;
+        let saved = |d: &Driver| d.layout.location(&1).unwrap().group.unwrap();
+        let before = handle(&d, side);
+        let anchor = if right { before.left() + 32.0 } else { before.right() - 32.0 };
+        let top = before.top() - 12.0;
+        let direction = if right { -1.0 } else { 1.0 };
+
+        d.drag(before.center(), before.center() + vec2(direction * 20.0, 0.0));
+        d.settle();
+        assert_eq!(saved(&d).flyout_width, Some(52.0), "right={right}");
+        assert_eq!(saved(&d).height, Some(30.0));
+        let after = handle(&d, side);
+        assert_eq!(if right { after.left() + 52.0 } else { after.right() - 52.0 }, anchor);
+
+        let bottom = handle(&d, "resize-bottom");
+        d.drag(bottom.center(), bottom.center() + vec2(0.0, 20.0));
+        d.settle();
+        assert_eq!(saved(&d).height, Some(50.0));
+        assert_eq!(saved(&d).flyout_width, Some(52.0));
+        assert_eq!(handle(&d, side).top() - 12.0, top);
+
+        let from = handle(&d, corner).center();
+        d.drag(from, from - vec2(direction * 1000.0, 1000.0));
+        d.settle();
+        assert_eq!(saved(&d).flyout_width, Some(20.0));
+        assert_eq!(saved(&d).height, Some(30.0));
+
+        let from = handle(&d, corner).center();
+        d.drag(from, from + vec2(direction * 2000.0, 2000.0));
+        d.settle();
+        let side = handle(&d, side);
+        let bottom = handle(&d, corner).bottom();
+        let rect = if right {
+            Rect::from_min_max(pos2(side.left(), top), pos2(anchor, bottom))
+        } else {
+            Rect::from_min_max(pos2(anchor, top), pos2(side.right(), bottom))
+        };
+        assert!(d.screen.contains_rect(rect));
+    }
+}
+
 #[test]
 fn collapsed_column_shows_one_icon_per_panel_with_group_separators() {
     let d = DockDriver::new(docked(&[&[1, 2], &[3]], true), Content);
