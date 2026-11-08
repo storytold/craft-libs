@@ -1460,6 +1460,17 @@ fn open_paths_level_in_each_of_the_ten_shears_are_framed_by_one_between_their_sl
     work::reset();
     assert_eq!(frame_for(&short).map(|f| f.k()), Some(3.0 / 8.0));
     assert_eq!(work::take(Work::FrameTries), SHEARS.len() + 1);
+    // With an open cubic whose first control side, a thousandth across, is level in the shear of 0.37:
+    // it bars the shears within three tolerances over its width of that (a side to a handle), 0.3668
+    // to 0.3732, which leaves the stretch above it to 0.382; within one it would leave a wider one
+    // below, and a shear in that.
+    let mut curved = short.clone();
+    let mut cubic = BezPath::new();
+    cubic.move_to((0.0, 2000.0));
+    cubic.curve_to((0.001, 1999.99963), (1.0, 2020.0), (2.0, 2040.0));
+    curved.push(Shape::new(cubic, FillRule::NonZero, 10));
+    // The middle of 0.3732 to 0.3820, to a multiple of 2^-14: 6186 of them.
+    assert_eq!(frame_for(&curved).map(|f| f.k()), Some(6186.0 / 16384.0));
     // Lines that long sloping 0, -1/10, ..., -1/2: each of the ten shears levels one, and between
     // them they level every shear from 1/1024 to 1/2, so none is free.
     let level: Vec<Shape> = (0u8..6)

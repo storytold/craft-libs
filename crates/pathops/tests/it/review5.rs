@@ -40,8 +40,10 @@ fn a_refit_is_within_the_tolerance_where_the_run_leaves_the_polyline_of_its_samp
                C3.121766080218643,-0.25704396490617415 4.129739087417817,-0.5475839350620679 5.6863341660939355,-0.9933120660610077 \
                C6.086929838199549,-1.1080218982196457 6.097550227321668,-0.6206005725509969 6.230265784870834,-0.5003119497805706";
     let tol = 0.25;
-    let (dev, _, simpler) = simplified_within(run, tol);
+    let (dev, path, simpler) = simplified_within(run, tol);
     assert!(dev <= tol + 1e-9, "{dev} from the run at a tolerance of {tol}: {simpler:?}");
+    // And refitted, not left as it is (which is within any tolerance).
+    assert!(simpler.elements().len() < path.elements().len(), "the run is left as it is: {simpler:?}");
 }
 
 // ---- interior points

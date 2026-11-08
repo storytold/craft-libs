@@ -298,9 +298,10 @@ fn split_closed_open(path: &BezPath) -> (BezPath, BezPath) {
 /// cancel), is no boundary: then the boundary is used, however short the piece (a loop a tenth of a
 /// unit round and its way there and back, in a square a hundred million across, is within what the
 /// lengths can tell apart). A piece the sweep cancels outright is no segment of it at all (a spur a
-/// subpath goes out and back along): so the middle of every segment of `closed`, and its points
-/// furthest in x and in y, must also lie on a segment of the boundary, within 16 tolerances of the
-/// sweep ([`lies_on`]). There are fewer contours
+/// subpath goes out and back along): so every segment of `closed` must also be covered, from end to
+/// end, by the segments of the boundary that lie along it, within 16 tolerances of the sweep
+/// ([`covered_by`]); a point of it on the boundary is not enough, as the middle of a line out and back
+/// can lie on another edge. There are fewer contours
 /// than subpaths when a subpath is none of them or two are one (overlapping). (A subpath that crosses
 /// itself makes more contours, and may be all boundary.) And the boundary is shorter by the edges that
 /// are not on it. The lengths are measured to a
@@ -331,7 +332,7 @@ fn filled_boundary(closed: &BezPath) -> Result<BezPath, PathOpsError> {
     if !all_boundary || contours < subpaths || curves(closed).saturating_add(curves(&boundary)) > MAX_COMPARED_CURVES {
         return Ok(boundary);
     }
-    if !lies_on(closed, &boundary, 16.0 * eps) {
+    if !covered_by(closed, &boundary, 16.0 * eps) {
         return Ok(boundary);
     }
     let (Some(kept), Some(whole)) = (measured_perimeter(&boundary, 1e-9), measured_perimeter(closed, 1e-9)) else { return Ok(boundary) };
@@ -342,17 +343,59 @@ fn filled_boundary(closed: &BezPath) -> Result<BezPath, PathOpsError> {
     Ok(if (whole - kept).abs() <= noise { closed.clone() } else { boundary })
 }
 
-/// Do the middle of every segment of `path`, and its points furthest in x and in y, lie within `tol`
-/// of a segment of `on`? A curve that goes out and back along a line through its middle is caught at
-/// the far points of the way out. The segments of `on` are looked up by an index of their pieces'
-/// bounds, so the test is about `n log m` for `n` segments against `m`.
-fn lies_on(path: &BezPath, on: &BezPath, tol: f64) -> bool {
+/// Is every segment of `path` covered by the segments of `on` that lie along it, to within `tol`? Each
+/// segment of `on` whose ends and middle lie within `tol` of a segment of `path` covers that segment
+/// between the points nearest its ends; a segment of `path` is covered when those stretches leave no
+/// gap of more than twice `tol` from its start to its end. A piece the sweep cancelled (a line out
+/// and back, a curve that folds onto itself) has nothing of `on` along it, wherever its middle or its
+/// far points lie. The segments of `path` are looked up by an index of their pieces' bounds, at the
+/// middle of each segment of `on`.
+///
+/// The nearest point on a curve is found to a relative accuracy (kurbo's put a point of a piece of a
+/// circle of radius 2.5e7, the same curve to a unit in the last place, 7e-5 off it), so each segment
+/// allows a ten-billionth of its control polygon besides `tol`.
+fn covered_by(path: &BezPath, on: &BezPath, tol: f64) -> bool {
     use crate::planar::index::{RectIndex, segment_footprint};
-    use kurbo::{ParamCurve, ParamCurveExtrema, ParamCurveNearest};
-    let segs: Vec<(kurbo::Rect, kurbo::PathSeg)> = on.segments().map(|s| (kurbo::Shape::bounding_box(&s), s)).collect();
-    let index = RectIndex::with_footprint(segs, segment_footprint);
-    let near = |p: Point| index.at(p, tol).any(|b| b.nearest(p, 1e-9).distance_sq <= tol * tol);
-    path.segments().all(|s| std::iter::once(0.5).chain(s.extrema()).all(|t| near(s.eval(t))))
+    use kurbo::{ParamCurve, ParamCurveNearest, PathSeg};
+    let segs: Vec<PathSeg> = path.segments().collect();
+    let allow: Vec<f64> = segs.iter().map(|&s| tol + 1e-10 * polygon_length(s)).collect();
+    let items: Vec<(kurbo::Rect, (usize, PathSeg))> = segs.iter().enumerate().map(|(i, &s)| (kurbo::Shape::bounding_box(&s), (i, s))).collect();
+    let index = RectIndex::with_footprint(items, |r, (_, s), cell| segment_footprint(r, s, cell));
+    let mut stretches: Vec<Vec<(f64, f64)>> = vec![Vec::new(); segs.len()];
+    for b in on.segments() {
+        let (start, end, middle) = (b.start(), b.end(), b.eval(0.5));
+        for &(i, s) in index.at(middle, tol) {
+            let a = allow.get(i).copied().unwrap_or(tol);
+            let a_sq = a * a;
+            let (ns, ne) = (s.nearest(start, 1e-9), s.nearest(end, 1e-9));
+            if ns.distance_sq <= a_sq
+                && ne.distance_sq <= a_sq
+                && s.nearest(middle, 1e-9).distance_sq <= a_sq
+                && let Some(list) = stretches.get_mut(i)
+            {
+                list.push((ns.t.min(ne.t), ns.t.max(ne.t)));
+            }
+        }
+    }
+    segs.iter().zip(allow).zip(stretches).all(|((s, a), mut list)| {
+        // A stretch of the segment left uncovered is a gap when the curve over it reaches further than
+        // twice the allowance: measured by the bounds of that part of it, not between its ends (a curve
+        // out and back ends where it starts).
+        let gap = |t0: f64, t1: f64| {
+            let b = kurbo::ParamCurveExtrema::bounding_box(&s.subsegment(t0..t1));
+            b.width().hypot(b.height()) > 2.0 * a
+        };
+        list.sort_by(|a, b| a.0.total_cmp(&b.0));
+        // How far along the segment the stretches so far reach, unbroken from its start.
+        let mut reach = 0.0;
+        for (t0, t1) in list {
+            if t0 > reach && gap(reach, t0) {
+                return false;
+            }
+            reach = f64::max(reach, t1);
+        }
+        reach >= 1.0 || !gap(reach, 1.0)
+    })
 }
 
 /// The closed contour `contour` without the pieces it goes straight out and back along: a piece that
@@ -388,6 +431,11 @@ fn without_spurs(contour: &BezPath) -> Option<BezPath> {
     }
     path.close_path();
     Some(path)
+}
+
+/// The length of the control polygon of the segment `s` (a line's is its length): at least its length.
+fn polygon_length(s: kurbo::PathSeg) -> f64 {
+    seg_points(s).windows(2).map(|w| w[0].distance(w[1])).sum()
 }
 
 /// The points of the segment `s`, control points too.

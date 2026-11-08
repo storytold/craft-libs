@@ -490,10 +490,11 @@ bit for bit VectorCraft's), and the results are identical except where noted:
     takes is passed over (a shape near 7e13 had no map);
   - an inset takes the boundary of the area the closed subpaths fill when a piece of them the sweep cuts out has
     the fill on both sides or on neither (a small loop of a subpath inside its own fill, which the lengths could
-    not tell from noise, cut a channel round itself), when a piece of them does not lie on that boundary at its
-    middle or at its points furthest in x and in y (a spur that its subpath goes out along and comes straight
-    back over cancels in the sweep, which then has no piece of it at all, and the inset cut a notch round it),
-    when the sweep gives fewer contours than there are
+    not tell from noise, cut a channel round itself), when a segment of them is not covered from end to end by
+    the segments of the boundary that lie along it (a spur that its subpath goes out along and comes straight
+    back over cancels in the sweep, which then has no piece of it at all, and the inset cut a notch round it;
+    a point of it on the boundary is not enough, as a line out and back can have its middle on another edge,
+    a hole's), when the sweep gives fewer contours than there are
     subpaths, or when the lengths of the two differ by more than the accuracy they are measured to and the
     sweep's tolerance at each vertex allow (it was a millionth of the length, which a unit square in one a
     million across is), and cleans the outlines of the open subpaths of the stroker's holes as a growing
@@ -527,7 +528,9 @@ bit for bit VectorCraft's), and the results are identical except where noted:
     larger of the width and the height, so two unit squares ten billion apart in height were missed; and the
     first heights took any gap, a sliver between two rounded passes of a slanted line among them); a vertical
     edge crosses at its x exactly, and allows for no rounding (a unit square at x = 1e15 had no point: the
-    allowance for each of its two crossings was 0.9);
+    allowance for each of its two crossings was 0.9); and a gap's middle is taken only where it is strictly
+    between the two crossings (between sides that are adjacent numbers it rounds onto one of them, an edge,
+    which the winding can count as inside);
   - the fill of a face in a planar map is tested against the subpaths of each input whose bounds hold the point,
     where it was the whole path (16,000 squares in one shape: 15.6 s, now 1.6 s); and an item the index of the
     map's outlines has no room to file in pieces is filed under its bounds, where it was read at every lookup
@@ -551,9 +554,10 @@ bit for bit VectorCraft's), and the results are identical except where noted:
     arrangement;
   - the coordinates are checked as given, before the fill leaves out a subpath that draws nothing: a closed
     loop of one cubic whose handles are not numbers, or overflow when multiplied, is `NonFinite` or
-    `Degenerate` in `try_area`, `try_normalize`, `try_boolean`, `try_boolean_n` and `try_unite_all`, where it
-    was left out and the answer was `Ok` (VectorCraft left out every subpath of fewer than two anchors
-    unread);
+    `Degenerate` in `try_area`, `try_normalize`, `try_boolean`, `try_boolean_n` and `try_unite_all`, and
+    `area` gives 0 for it, where it was left out and the answer was `Ok`, or the area of the rest of the path
+    (VectorCraft left out every subpath of fewer than two anchors unread: its `area` and `try_area` of a
+    square with such a loop are 100);
   - `simplify_with` with `straight_lines` samples the intervals the chords need up to a limit, where a long
     curve was sampled in 256 and its chords were further from it than the tolerance, counts the sample at
     the start of a run in its limits, and holds the samples to the tolerance less how far the curve can be

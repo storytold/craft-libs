@@ -76,14 +76,26 @@ fn the_faces_of_small_squares_far_out_are_found() {
         areas.sort_by(f64::total_cmp);
         let near = |got: &[f64], want: &[f64]| got.len() == want.len() && got.iter().zip(want).all(|(g, w)| (g - w).abs() <= 8.0 * tolerance(x));
         assert!(near(&areas, &[0.25, 0.75, 0.75]), "live_paint at {x:e}: {areas:?}");
+        // Each face where it is: the overlap, and the bounds of the rest of each square.
+        let placed = |paths: Vec<&BezPath>, what: &str| {
+            let boxes =
+                [Rect::new(x + 0.5, x + 0.5, x + 1.0, x + 1.0), Rect::new(x, x, x + 1.0, x + 1.0), Rect::new(x + 0.5, x + 0.5, x + 1.5, x + 1.5)];
+            for want in boxes {
+                let same = |b: Rect| [b.x0 - want.x0, b.y0 - want.y0, b.x1 - want.x1, b.y1 - want.y1].iter().all(|d| d.abs() <= 2.0 * tolerance(x));
+                assert!(paths.iter().any(|p| same(p.bounding_box())), "{what} at {x:e}: no face at {want:?}");
+            }
+        };
+        placed(faces.iter().map(|f| &f.path).collect(), "live_paint");
         let divided = pathfinder(PathfinderOp::Divide, &shapes);
         let mut areas: Vec<f64> = divided.iter().map(|s| area(&s.path, NZ)).collect();
         areas.sort_by(f64::total_cmp);
         assert!(near(&areas, &[0.25, 0.75, 0.75]), "Divide at {x:e}: {areas:?}");
+        placed(divided.iter().map(|s| &s.path).collect(), "Divide");
         let union = try_boolean(&a, NZ, &b, NZ, BoolOp::Union, DEFAULT_PRECISION).expect("a union");
         let bounds = union.bounding_box();
+        let edges = [bounds.x0 - x, bounds.y0 - x, bounds.x1 - (x + 1.5), bounds.y1 - (x + 1.5)];
         assert!(
-            (bounds.width() - 1.5).abs() <= 4.0 * tolerance(x) && (area(&union, NZ) - 1.75).abs() <= 8.0 * tolerance(x),
+            edges.iter().all(|d| d.abs() <= 4.0 * tolerance(x)) && (area(&union, NZ) - 1.75).abs() <= 8.0 * tolerance(x),
             "union at {x:e}: {bounds:?}"
         );
     }
@@ -111,6 +123,10 @@ fn a_square_with_a_hole_far_out_keeps_its_hole() {
                 "{op:?} at {x:e}: {} shapes, {total}",
                 out.len()
             );
+            // The hole where it was: a subpath from (x + 3, x + 3) to (x + 7, x + 7).
+            let hole = crate::common::split(&out[0].path).iter().map(BezPath::bounding_box).find(|b| b.width() < 5.0);
+            let at = |b: Rect| [b.x0 - (x + 3.0), b.y0 - (x + 3.0), b.x1 - (x + 7.0), b.y1 - (x + 7.0)].iter().all(|d| d.abs() <= 2.0 * tolerance(x));
+            assert!(hole.is_some_and(at), "{op:?} at {x:e}: the hole is at {hole:?}");
         }
     }
 }

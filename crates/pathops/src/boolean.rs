@@ -1266,7 +1266,9 @@ pub fn try_area(path: &BezPath, rule: FillRule) -> Result<f64, PathOpsError> {
 /// self-overlapping input). Each contour's area is taken about a point of its own, so a small shape
 /// far from the origin has its area as near it.
 pub fn area(path: &BezPath, rule: FillRule) -> f64 {
-    if ensure_size([path]).is_err() {
+    // What `try_area` refuses is no area, the coordinates read as given (a loop of one cubic whose
+    // handle is no number draws nothing, and the fill would leave it out, [`eps_for`]).
+    if ensure_size([path]).is_err() || eps_for([path]).is_err() {
         return 0.0;
     }
     let bp = fill_bezpath(path);

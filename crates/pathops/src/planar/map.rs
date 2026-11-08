@@ -541,8 +541,11 @@ fn inside_edges(bp: &BezPath, edges: &[(Point, Point)], bb: kurbo::Rect) -> Opti
         for w in xs.windows(2) {
             winding += w[0].1;
             let width = w[1].0 - w[0].0;
-            if winding != 0 && width > w[0].2 + w[1].2 {
-                gaps.push((width, Point::new((w[0].0 + w[1].0) / 2.0, y)));
+            // The middle, where it is strictly between the two: between adjacent numbers it rounds onto
+            // one of them, an edge, which the winding can count as inside.
+            let middle = (w[0].0 + w[1].0) / 2.0;
+            if winding != 0 && width > w[0].2 + w[1].2 && middle > w[0].0 && middle < w[1].0 {
+                gaps.push((width, Point::new(middle, y)));
             }
         }
     };
