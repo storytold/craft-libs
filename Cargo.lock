@@ -1250,7 +1250,7 @@ dependencies = [
 [[package]]
 name = "craft-winprint-gdi"
 version = "0.1.0"
-source = "git+https://github.com/storytold/winprint.rs?rev=03a4fb638734dc0f2b8e173de9e8dc895a8b1c75#03a4fb638734dc0f2b8e173de9e8dc895a8b1c75"
+source = "git+https://github.com/storytold/winprint.rs?rev=64e7afd4d1483512385012c340ecaaaf0f3beb7f#64e7afd4d1483512385012c340ecaaaf0f3beb7f"
 dependencies = [
  "windows-sys 0.61.2",
 ]

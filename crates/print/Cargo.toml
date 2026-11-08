@@ -9,7 +9,10 @@ description = "System PDF print spooler for the Craft apps: CUPS and Windows"
 
 [dependencies]
 # Safe API; Win32 calls are isolated in this maintained MIT OR Apache-2.0 dependency.
-craft-winprint-gdi = { git = "https://github.com/storytold/winprint.rs", rev = "03a4fb638734dc0f2b8e173de9e8dc895a8b1c75" }
+# Keep the public rgb re-export at main's GDI revision: a different Git rev gives
+# downstream GDI values a different Rust type identity even when the code is unchanged.
+# PDF loader updates below are independent of this public transport API.
+craft-winprint-gdi = { git = "https://github.com/storytold/winprint.rs", rev = "64e7afd4d1483512385012c340ecaaaf0f3beb7f" }
 
 [lints]
 workspace = true
