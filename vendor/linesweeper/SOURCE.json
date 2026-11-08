@@ -7,7 +7,9 @@
   "upstream_repository": null,
   "upstream_revision": "824b0791a750f7b27b8edcbb6c6244d0e629875e",
   "upstream_directory": "",
-  "local_patches": [],
+  "local_patches": [
+    "In `src/topology.rs`, `Topology::contours` with `Correctness::GoodEnough` builds paths only for the output segments on the boundary of the result, not for every output segment."
+  ],
   "files": [
     { "path": ".cargo_vcs_info.json", "source_sha256": "47fba6a9dbdf445a5c97f783c9be62093035f9d5e5cdc2cf3216ad8259bcd8fc", "source_git_blob": null, "sha256": "47fba6a9dbdf445a5c97f783c9be62093035f9d5e5cdc2cf3216ad8259bcd8fc" },
     { "path": ".gitignore", "source_sha256": "88b59092499ae05234330eb7d0b01e953e969caf05261530e3765eef02536cf0", "source_git_blob": null, "sha256": "88b59092499ae05234330eb7d0b01e953e969caf05261530e3765eef02536cf0" },
@@ -63,7 +65,7 @@
     { "path": "src/sweep/snapshots/linesweeper__sweep__sweep_line__tests__square_and_diamond.snap", "source_sha256": "3f01a76fb7ff4aef0fd55fd869602d4a2b69fff1bd65632f406b275b5d6af600", "source_git_blob": null, "sha256": "3f01a76fb7ff4aef0fd55fd869602d4a2b69fff1bd65632f406b275b5d6af600" },
     { "path": "src/sweep/snapshots/linesweeper__sweep__sweep_line__tests__two_squares.snap", "source_sha256": "79e3c95e563a66c0ce244125470a106a18dfe29f276b732defd305406c873c7e", "source_git_blob": null, "sha256": "79e3c95e563a66c0ce244125470a106a18dfe29f276b732defd305406c873c7e" },
     { "path": "src/sweep/sweep_line.rs", "source_sha256": "822b261f682911ea0c0370eaf17d9201a1e639b315359dcb6a3b877a229816e3", "source_git_blob": null, "sha256": "822b261f682911ea0c0370eaf17d9201a1e639b315359dcb6a3b877a229816e3" },
-    { "path": "src/topology.rs", "source_sha256": "9c9b48bc3853884425127e2d64e8ed957ba0d27e1696e2c457e95282e52d6a5b", "source_git_blob": null, "sha256": "9c9b48bc3853884425127e2d64e8ed957ba0d27e1696e2c457e95282e52d6a5b" },
+    { "path": "src/topology.rs", "source_sha256": "9c9b48bc3853884425127e2d64e8ed957ba0d27e1696e2c457e95282e52d6a5b", "source_git_blob": null, "sha256": "12a3a120b6bd89091387e12efbc1a408fdbaed786d98a7a115dcd4ab9f916081" },
     { "path": "src/treevec.rs", "source_sha256": "d88b9fbf02fa9f318560e1d483d465555f2b696ae12c00f8e4f5b71ea6779445", "source_git_blob": null, "sha256": "d88b9fbf02fa9f318560e1d483d465555f2b696ae12c00f8e4f5b71ea6779445" },
     { "path": "src/typed_vec.rs", "source_sha256": "3e9a2675b8a40d8fc4df0575bd9d0d16b5604d18e9b78638dd5a612b28fc4c30", "source_git_blob": null, "sha256": "3e9a2675b8a40d8fc4df0575bd9d0d16b5604d18e9b78638dd5a612b28fc4c30" },
     { "path": "tests/fonts.rs", "source_sha256": "081604ebf560a19ff0427efd9a17eaaa0a3b46ad0bf58323fd6e21b6c0764400", "source_git_blob": null, "sha256": "081604ebf560a19ff0427efd9a17eaaa0a3b46ad0bf58323fd6e21b6c0764400" },
