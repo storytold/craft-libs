@@ -44,9 +44,9 @@ pub enum Action {
     OpenUrl(String),
     /// Close the app through its normal close path (which asks about unsaved work): the update is
     /// installed and a helper restarts the app once it has exited. On Windows the helper, which
-    /// installs the update, starts when this is returned. When the app exits another way (the
-    /// window's close button, a quit with unsaved work, an OS shutdown), dropping the [`Updater`]
-    /// starts it. An app that ends the process in `on_exit` without dropping the `Updater` calls
+    /// installs the update, starts when this is returned. When the app exits another way, such as
+    /// the window's close button or a quit with unsaved work, and drops the [`Updater`] as it exits,
+    /// the drop starts it. An app that ends the process in `on_exit` without dropping the `Updater` calls
     /// [`Updater::start_pending_update`] there first.
     Close,
 }
