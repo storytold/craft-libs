@@ -9,6 +9,7 @@
 //! | `vp8` | [`vp8`] | VP8 (RFC 6386): decoder |
 //! | `prores` | [`prores`] | Apple ProRes (SMPTE RDD 36): decoder and encoder |
 //! | `h264` | [`h264`] | ITU-T H.264 / AVC: encoder |
+//! | `hevc` | [`hevc`] | ITU-T H.265 / HEVC: encoder |
 //!
 //! No codec is on by default. Feature `threads` spreads the work of the codecs that support it
 //! over rayon worker threads.
@@ -27,3 +28,6 @@ pub mod prores;
 
 #[cfg(feature = "h264")]
 pub mod h264;
+
+#[cfg(feature = "hevc")]
+pub mod hevc;
