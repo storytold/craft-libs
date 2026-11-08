@@ -72,6 +72,12 @@ fn test_vni_composites() {
 
 #[test]
 fn test_already_unicode_never_transcoded() {
+    // -------------------------------------------------------------------------
+    // WHY: Modern documents already encoded in standard UTF-8 must pass through
+    // the pipeline completely untouched with zero allocations (Cow::Borrowed).
+    // DANGER: False-positive transcoding of genuine UTF-8 text corrupts modern data.
+    // CONTRACT: Tier 1 - Fast-Path Guard Invariant (is_already_unicode_vietnamese).
+    // -------------------------------------------------------------------------
     for unicode in ["HÌNH CHIẾU ĐỨNG", "HÌNH DÁNG", "TÒA NHÀ", "CHÚNG TÔI", "BÁO CÁO"] {
         assert!(is_already_unicode_vietnamese(unicode), "failed on {unicode}");
         assert_eq!(transcode_vietnamese(unicode, Some("VNI-Helve")), unicode);
@@ -319,6 +325,15 @@ fn test_transcode_explicit_and_validate_normalize() {
 
 #[test]
 fn test_windows1258_decode_and_transcode_explicit() {
+    // -------------------------------------------------------------------------
+    // WHY: Windows-1258 uses decomposed combining diacritical marks (U+0300..=U+0323).
+    // In Unicode NFC, combining marks are only composed if a canonical precomposed character exists.
+    // Vietnamese consonants never take tone marks, so a sequence like `k` + acute (0xEC)
+    // has no precomposed representation in Latin Extended-A/B and remains `k\u{0301}`.
+    // DANGER: If a naive decoder assumes all combining marks disappear into precomposed NFC,
+    // it will panic or silently discard unpairable diacritics.
+    // CONTRACT: Tier 1 - Contract 1 (Canonical Normalization Limits).
+    // -------------------------------------------------------------------------
     assert_eq!(LegacyEncoding::Windows1258.display_name(), "Windows-1258");
 
     // Pure byte decode
@@ -395,6 +410,15 @@ fn test_vni_capslock() {
 
 #[test]
 fn test_tcvn3h_uppercase_font() {
+    // -------------------------------------------------------------------------
+    // WHY: Standard TCVN3 (.VnTime) only had 8-bit space for lowercase accented vowels.
+    // To write all-caps titles (e.g. "ỦY BAN NHÂN DÂN"), editors switched fonts to .VnTimeH.
+    // In raw bytes, the identical byte 0xD2 is lowercase 'ề' under .VnTime, but renders as uppercase 'Ề' under .VnTimeH.
+    // Decoding .VnTimeH MUST map all high bytes to their uppercase Unicode counterparts.
+    // DANGER: If TCVN3H is decoded using the standard TCVN3 table, headlines and drawing sheet
+    // titles in CAD/WordCraft will display as lowercase or mixed-case gibberish.
+    // CONTRACT: Tier 1 - Font Hint Overrides (TCVN3H).
+    // -------------------------------------------------------------------------
     // In .VnTime (lower), 0xD2 is 'ề'
     let lower_res = decode_tcvn3(b"\xd2", false, DecodeMode::Practical).expect("TCVN3 lower byte");
     assert_eq!(lower_res.as_ref(), "ề");
@@ -410,6 +434,14 @@ fn test_tcvn3h_uppercase_font() {
 
 #[test]
 fn test_cp1252_punctuation_preservation() {
+    // -------------------------------------------------------------------------
+    // WHY: 1995-2005 Vietnamese office documents heavily borrowed the 0x80..=0x9F range from Windows-1252
+    // for smart typography (curly quotes “ ”, em-dash —, and ellipsis …).
+    // Strict decoders reject these bytes as unmapped, destroying legal quotes in decrees and contracts.
+    // Practical mode must preserve these typographic marks while maintaining strict Vietnamese vowel mappings.
+    // DANGER: Rejecting or corrupting CP1252 bytes renders real-world contracts and AutoCAD title blocks unreadable.
+    // CONTRACT: Tier 1 - Operating Modes (Strict vs. Practical).
+    // -------------------------------------------------------------------------
     // b"\x93\x91" are left double quote “ and left single quote ‘
     let punct_vni = decode(b"\x93\x91", LegacyEncoding::Vni).expect("CP1252 quotes in VNI");
     assert_eq!(punct_vni.as_ref(), "“‘");
@@ -445,6 +477,14 @@ fn test_vni_orphan_diacritic_fallback() {
 
 #[test]
 fn test_vni_streaming_chunk_boundaries() {
+    // -------------------------------------------------------------------------
+    // WHY: VNI is a composite encoding where diacritics follow base vowels (e.g., 'a' + 0xF9 -> 'á').
+    // When reading from streams or I/O chunk buffers, the base vowel may arrive at the end of Chunk 1
+    // and the accent mark at the start of Chunk 2.
+    // DANGER: If the decoder is stateless or flushes immediately at chunk end, 'a' and 0xF9 are
+    // split into separate orphan characters ("a´" instead of "á").
+    // CONTRACT: Tier 1 - Contract 2 (Streaming State Machine across Chunk Boundaries).
+    // -------------------------------------------------------------------------
     // Simulate buffer split between base 'a' (chunk 1) and diacritic mark 0xF9 (chunk 2)
     let mut decoder = VniDecoder::new(DecodeMode::Practical);
     let mut out = String::new();
@@ -583,6 +623,14 @@ fn test_real_world_corpora_fixtures() {
 
 #[test]
 fn test_short_string_heuristic_inhibition_invariant() {
+    // -------------------------------------------------------------------------
+    // WHY: In CAD (.dwg) and spreadsheets (.xlsx), over 70% of text entities are short labels (< 16 bytes)
+    // such as "TẦNG 1", "CỘT C1", or "KHO". Running statistical n-gram heuristics on such short byte slices
+    // produces high rates of false-positive detections.
+    // Short strings MUST inhibit heuristics and rely strictly on explicit metadata or FontHints (.VnTime, VNI-).
+    // DANGER: Without this length gate, short French, German, or English words get erroneously transcoded.
+    // CONTRACT: Tier 1 - Contract 3 (Short-String Invariant < 16 bytes).
+    // -------------------------------------------------------------------------
     // "TẦNG 1" in TCVN3 (6 bytes < 16 bytes)
     let short_cad_label = b"T\xC7NG 1";
 
@@ -650,6 +698,15 @@ fn test_font_hint_case_insensitive_and_stems() {
 
 #[test]
 fn test_coderabbit_review_invariants() {
+    // -------------------------------------------------------------------------
+    // WHY: In VNI-Windows, typing all-caps "VIỆT" with CapsLock produces `VI\xCF` + `T`.
+    // The byte 0xCF represents both standalone 'Ị' and the decomposed mark for 'Ê' + dot-below.
+    // Without multi-chunk lookahead, splitting this sequence across chunk boundaries (e.g., [b"VI\xCF", b"T"])
+    // causes naive decoders to prematurely emit "VỊ" and then "T", corrupting "VIỆT" into "VỊT".
+    // DANGER: All-caps company and national names ("CỘNG HÒA XÃ HỘI CHỦ NGHĨA VIỆT NAM")
+    // become corrupted into "VỊT NAM" in archival documents.
+    // CONTRACT: Tier 1 - Contract 2 (Multi-chunk Lookahead Pair).
+    // -------------------------------------------------------------------------
     // 1. VNI multi-chunk streaming for "VIỆT"
     // Case A: 2 chunks split right at the mark byte: [b"VI\xCF", b"T"]
     let mut dec_2 = VniDecoder::new(DecodeMode::Practical);
