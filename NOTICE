@@ -258,24 +258,35 @@ Video codecs source provenance
 The pure-Rust video codec crates (crates/h264enc, crates/prores, crates/dnx, crates/vp8,
 crates/hevcenc, crates/vp9enc, crates/av1enc) adapt and port video codec implementations
 from FilmCraft (https://github.com/storytold/filmcraft) pinned at revision
-68919ed87aa6a097a4d21414ec7c438883f5fe22:
+68919ed87aa6a097a4d21414ec7c438883f5fe22 and EffectCraft (https://github.com/storytold/effectcraft)
+pinned at revision ad7abfa5076a00b4b214811bae66ee0600828ac5:
+
+FilmCraft source provenance:
 - crates/h264enc is ported from FilmCraft's crates/h264enc (filmcraft-h264enc).
 - crates/prores is ported from FilmCraft's crates/prores (filmcraft-prores).
 - crates/dnx is ported from FilmCraft's crates/dnx (filmcraft-dnx).
 - crates/vp8 is ported from FilmCraft's crates/vp8 (filmcraft-vp8).
-- crates/hevcenc: ITU-T H.265 intra/inter prediction, deblocking, and constant tables are
-  adapted and mirrored from FilmCraft's crates/hevc (filmcraft-hevc decoder).
-- crates/vp9enc: VP9 normative tables and boolean entropy coding are adapted and transcribed
-  from FilmCraft's crates/vp9 (filmcraft-vp9 decoder).
-- crates/av1enc: Inverse transform routines and OBU bitstream syntax are adapted and mirrored
-  from FilmCraft's crates/av1 (filmcraft-av1 decoder), alongside normative specification tables
-  from the AOMedia AV1 specification.
-
+- FilmCraft decoder routines mirrored in encoder reconstruction paths:
+  - crates/hevcenc mirrors ITU-T H.265 intra/inter prediction, deblocking, and tables from
+    FilmCraft's crates/hevc (filmcraft-hevc decoder).
+  - crates/vp9enc mirrors VP9 normative tables and boolean entropy coding from FilmCraft's
+    crates/vp9 (filmcraft-vp9 decoder).
+  - crates/av1enc mirrors inverse transform routines from FilmCraft's crates/av1 (filmcraft-av1 decoder).
 FilmCraft contributors to these crates include: aiongg, dylanmtaylor, earlvanze, echelon,
 g1obalworlds, jahvari, EthanSuquet, JordyUSA, MrCloudy2, Silvertree2010, Tom1tk,
 adventurelands, cirocueto2013-wq, kler, marshiyar, skylartaylor, thecyberbutler, vangel76,
 and the FilmCraft contributors.
 Source: https://github.com/storytold/filmcraft
 Copyright (c) 2026 ArtCraft Team and the FilmCraft contributors.
+Licensed under MIT OR Apache-2.0.
+
+EffectCraft source provenance:
+- crates/hevcenc is ported from EffectCraft's crates/hevcenc (effectcraft-hevcenc).
+- crates/av1enc is ported from EffectCraft's crates/av1enc (effectcraft-av1enc).
+- crates/vp9enc is ported from EffectCraft's crates/vp9enc (effectcraft-vp9enc).
+EffectCraft contributors to these crates include: EthanSuquet, JonRC, Kaedo17, aiongg,
+bflatastic, dexterlabs1, dylanmtaylor, echelon, vangel76, and the EffectCraft contributors.
+Source: https://github.com/storytold/effectcraft
+Copyright (c) 2026 ArtCraft Team and the EffectCraft contributors.
 Licensed under MIT OR Apache-2.0.
 
