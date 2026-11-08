@@ -314,11 +314,26 @@ match craft_audio::decode(&bytes, None) {
 - MP4 edit lists: a single media edit (encoder priming and the end) is applied, alone or after one
   empty edit; the empty edit's delay is not added as silence. Other edit lists are not applied, and
   the media plays as it is stored.
-- AAC in MP4 stored as ADTS frames (not standard), when the sample durations count fewer frames
-  than the samples hold (HE-AAC's core frames, or several frames to a sample): the track decodes in
-  full when read from the start, but `Decoder::seek` places samples by those durations, so it lands
-  later than asked, and an edit list measured in them can end the track early. Telling would mean
-  reading every sample.
+- AAC in MP4 stored as ADTS frames, when the sample durations count fewer frames than the samples
+  hold: HE-AAC durations that count only the core frames, or several frames in a sample timed as
+  one. Such a file is broken: it is outside the MP4 specification in two ways.
+  - An MP4 AAC sample is one raw access unit, with the stream's configuration in the sample
+    description (ISO/IEC 14496-14 and 14496-3). ADTS is a transport framing for streams such as
+    MPEG-TS and raw `.aac`, and its headers do not belong in an MP4 sample.
+  - A sample's duration in the time-to-sample table is the time it decodes to (ISO/IEC 14496-12).
+    Durations that count fewer frames than the samples hold do not describe the track.
+
+  ffmpeg, Apple's encoders, phones and cameras write raw AAC with matching durations, and a
+  correct remux from MPEG-TS or raw `.aac` converts the framing, so files within the specification
+  are not affected. In a file outside it:
+  - Read from the start, the track decodes in full: durations that fall short of the frames in
+    the samples read at open do not end it.
+  - `Decoder::seek` places samples by those durations, so it lands later than asked, and an edit
+    list measured in them can end the track early.
+  - These are not corrected because where each sample's audio starts is only known by counting
+    the ADTS frames in every sample before it: one read per sample, hundreds of thousands on a
+    two-hour track. Done at open, that would slow every ADTS-framed MP4 to work around files
+    that are outside the specification.
 
 ## Codecs
 
