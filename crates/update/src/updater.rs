@@ -408,6 +408,19 @@ impl Updater {
     /// the outcome of the last update ([`Self::read_outcome`]).
     fn finish_check(&mut self, answer: Checked) {
         let requested = std::mem::take(&mut self.requested);
+        // A check that was running when an installation started answers with the installation's
+        // state: the update installing, ready, or the recorded helper failure.
+        if self.install.is_some() || self.installed {
+            match &answer {
+                Ok(Some(release)) => log::info!("{} update check found {} while an update installs", self.app.name, release.tag),
+                Ok(None) => log::info!("{} update check found nothing newer while an update installs", self.app.name),
+                Err(e) => log::warn!("{} update check failed while an update installs: {e}", self.app.name),
+            }
+            if requested {
+                self.status = self.pending_status();
+            }
+            return;
+        }
         // The launcher may have pinned or unpinned the app while the check ran: whatever the
         // answer, an app it manages offers nothing and says so.
         if self.read_choice() {
@@ -1406,6 +1419,43 @@ mod tests {
             u.check_now(&ctx);
             assert_eq!(u.status(), &Status::Ready);
             assert!(u.check.is_none() && u.install.is_none(), "nothing starts");
+        }
+    }
+
+    /// A requested check that answers after an installation started reports the installation,
+    /// not its own answer, whether the update is still installing or already waits for the close.
+    #[test]
+    fn a_check_answering_during_an_update_reports_the_update() {
+        let ctx = egui::Context::default();
+        for answer in [Ok(None), Err("offline".to_owned()), Ok(Some(newer()))] {
+            let mut u = updater(Ok(None));
+            u.offer(newer());
+            u.check_now(&ctx);
+            assert_eq!(u.status(), &Status::Checking);
+            let (check_tx, check_rx) = channel();
+            u.check = Some(check_rx);
+            let (tx, rx) = channel();
+            u.install = Some((rx, newer()));
+            assert!(check_tx.send(answer.clone()).is_ok());
+            u.tick(&ctx);
+            assert_eq!(u.status(), &Status::Installing, "a check answering {answer:?} while installing");
+            assert!(tx.send(Ok(Restart::scheduled())).is_ok());
+            u.tick(&ctx);
+            assert_eq!(u.status(), &Status::Ready, "after {answer:?}");
+
+            let mut u = updater(Ok(None));
+            u.offer(newer());
+            u.check_now(&ctx);
+            let (check_tx, check_rx) = channel();
+            u.check = Some(check_rx);
+            let (tx, rx) = channel();
+            u.install = Some((rx, newer()));
+            assert!(tx.send(Ok(Restart::scheduled())).is_ok());
+            u.tick(&ctx);
+            assert!(u.check.is_some(), "the check is still running");
+            assert!(check_tx.send(answer.clone()).is_ok());
+            u.tick(&ctx);
+            assert_eq!(u.status(), &Status::Ready, "a check answering {answer:?} after the install finished");
         }
     }
 
