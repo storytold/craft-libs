@@ -11,7 +11,7 @@ use linesweeper::topology::{ContourIdx, Contours};
 
 use crate::boolean::{
     Arrangement, DEFAULT_PRECISION, Tidy, all_contours_to_path, append_contours, contours_to_path, ensure_size, eps_for, normalize_bez,
-    normalize_bez_within, try_unite_all_with,
+    normalize_bez_counted, normalize_bez_within, try_unite_all_with,
 };
 use crate::edit::remove_redundant_points;
 use crate::fit::measured_perimeter;
@@ -219,7 +219,7 @@ pub fn try_stroke_region(outlines: &[BezPath]) -> Result<BezPath, PathOpsError> 
     let tidy = Tidy::free(DEFAULT_PRECISION);
     let parts: Vec<BezPath> = outlines.iter().map(close_all).filter(|o| !o.elements().is_empty()).collect();
     if let [one] = &parts[..] {
-        return Ok(all_contours_to_path(&normalize_bez(one, FillRule::NonZero)?, &tidy));
+        return region_of_one(one, &tidy);
     }
     // Each outline is normalised on its own first, as in `stroke_region`.
     let mut all = BezPath::new();
@@ -234,6 +234,19 @@ pub fn try_stroke_region(outlines: &[BezPath]) -> Result<BezPath, PathOpsError> 
     Ok(all_contours_to_path(&normalize_bez(&all, FillRule::NonZero)?, &tidy))
 }
 
+/// The region of a single outline, held to [`crate::Limits::elements`] as each of several is: the
+/// boundary of its sweep is counted before its contours are made (a sweep whose boundary has more
+/// segments than the limit makes none), and the elements made are checked after. One outline that
+/// crosses itself a great deal can have many more of them than it has elements itself.
+fn region_of_one(one: &BezPath, tidy: &Tidy) -> Result<BezPath, PathOpsError> {
+    let limit = crate::budget::limits().elements;
+    let Some(c) = normalize_bez_within(one, FillRule::NonZero, limit)? else { return Err(PathOpsError::TooComplex) };
+    if c.contours().map(|ct| ct.path.elements().len()).sum::<usize>() > limit {
+        return Err(PathOpsError::TooComplex);
+    }
+    Ok(all_contours_to_path(&c, tidy))
+}
+
 /// The area covered by stroke outlines (each filled with the non-zero rule, open subpaths
 /// closed) as one clean path: overlaps removed and the stroker's pieces refitted. An outline that
 /// cannot be combined is left out ([`try_stroke_region`] reports it).
@@ -244,7 +257,7 @@ pub fn stroke_region(outlines: &[BezPath]) -> BezPath {
     let tidy = Tidy::free(DEFAULT_PRECISION);
     let parts: Vec<BezPath> = outlines.iter().map(close_all).filter(|o| !o.elements().is_empty()).collect();
     if let [one] = &parts[..] {
-        return normalize_bez(one, FillRule::NonZero).map(|c| all_contours_to_path(&c, &tidy)).unwrap_or_default();
+        return region_of_one(one, &tidy).unwrap_or_default();
     }
     // Each outline is normalised on its own first: a hollow arrowhead may wind against the line
     // it overlaps, and the raw windings would cancel there under the non-zero rule.
@@ -288,9 +301,13 @@ fn split_closed_open(path: &BezPath) -> (BezPath, BezPath) {
 /// of it is on that boundary, else the contours of its sweep. A rectangle inside another one wound
 /// the same way is a subpath of the fill but no part of its boundary, and an inset must not stroke it.
 ///
-/// Told by the contours and by the lengths of the two. There are fewer contours than subpaths when a
-/// subpath is none of them (inside another, wound the same way) or two are one (overlapping): then not
-/// all of `closed` is boundary. (A subpath that crosses itself makes more contours, and may be all
+/// Told by the sweep, and checked by the contours and by the lengths of the two. A piece of `closed`
+/// that the sweep cuts out of it with the area filled on both sides (a subpath inside another wound
+/// the same way, or a small loop of a subpath inside its own fill), or on neither (two passes that
+/// cancel), is no boundary: then the boundary is used, however short the piece (a loop a tenth of a
+/// unit round and its way there and back, in a square a hundred million across, is within what the
+/// lengths can tell apart). There are fewer contours than subpaths when a subpath is none of them or
+/// two are one (overlapping). (A subpath that crosses itself makes more contours, and may be all
 /// boundary.) And the boundary is shorter by the edges that are not on it. The lengths are measured to a
 /// relative accuracy, and they agree to what that accuracy and the sweep's tolerance at each vertex
 /// allow and no more: a difference that is a fraction of the length of the whole, as a unit square in a
@@ -300,13 +317,14 @@ fn split_closed_open(path: &BezPath) -> (BezPath, BezPath) {
 fn filled_boundary(closed: &BezPath) -> Result<BezPath, PathOpsError> {
     let mut boundary = BezPath::new();
     let mut contours = 0usize;
-    for contour in normalize_bez(closed, FillRule::NonZero)?.contours() {
+    let (swept, all_boundary) = normalize_bez_counted(closed, FillRule::NonZero, usize::MAX)?.ok_or(PathOpsError::TooComplex)?;
+    for contour in swept.contours() {
         boundary.extend(contour.path.iter());
         contours += 1;
     }
     let subpaths = closed.elements().iter().filter(|el| matches!(el, PathEl::MoveTo(_))).count();
     let curves = |p: &BezPath| p.segments().filter(|s| !matches!(s, kurbo::PathSeg::Line(_))).count();
-    if contours < subpaths || curves(closed).saturating_add(curves(&boundary)) > MAX_COMPARED_CURVES {
+    if !all_boundary || contours < subpaths || curves(closed).saturating_add(curves(&boundary)) > MAX_COMPARED_CURVES {
         return Ok(boundary);
     }
     let (Some(kept), Some(whole)) = (measured_perimeter(&boundary, 1e-9), measured_perimeter(closed, 1e-9)) else { return Ok(boundary) };

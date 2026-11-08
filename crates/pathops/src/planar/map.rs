@@ -1,7 +1,9 @@
 // Carved from VectorCraft's crates/pathops (src/planar/map.rs) at storytold/vectorcraft ff9deee46d1c59dc9ecef0b668c25e57cd80b55e.
 // Copyright (c) 2026 ArtCraft Team and the VectorCraft contributors. MIT OR Apache-2.0.
 
-use super::graph::{Edge, Fill, Outlines, cycle_bezpath, far_end, find, half_segs, leaving_angle, origin, pin_ends, twin, unshear, without_spurs};
+use super::graph::{
+    Edge, Fill, FillWork, Outlines, cycle_bezpath, far_end, find, half_segs, leaving_angle, origin, pin_ends, twin, unshear, without_spurs,
+};
 use super::index::{Crossings, Frame, RectIndex, frame_for, mid};
 use super::*;
 use crate::work::{self, Work};
@@ -13,9 +15,12 @@ pub(crate) struct Map {
     around: Vec<Vec<usize>>,
     /// Bounded faces: their cycle of half-edges, path and area.
     faces: Vec<(Vec<usize>, BezPath, f64)>,
-    /// Outer boundaries of connected pieces, and the face each one is a hole in.
+    /// The connected piece of the graph each face is in.
+    face_piece: Vec<Option<usize>>,
+    /// Outer boundaries of connected pieces, each with a point on it and its piece ([`place_holes`]
+    /// finds the face each one is a hole in).
     holes: Vec<(Vec<usize>, BezPath)>,
-    face_holes: Vec<Vec<usize>>,
+    hole_at: Vec<(Option<Point>, Option<usize>)>,
     tidy: Tidy,
     /// The inputs' anchors (sorted by x) and how close results snap back onto them.
     anchors: Vec<Point>,
@@ -115,28 +120,47 @@ fn map_with(shapes: &[Shape], precision: f64) -> Option<Map> {
         }
     }
 
-    // Each hole goes in the smallest face of another piece around it.
-    let face_index = RectIndex::new(faces.iter().enumerate().map(|(i, (_, bp, _))| (bp.bounding_box(), i)).collect());
-    let mut face_holes: Vec<Vec<usize>> = vec![Vec::new(); faces.len()];
-    for (k, (cycle, _)) in holes.iter().enumerate() {
-        let Some(p) = cycle.first().and_then(|&h| origin(&edges, h)).and_then(|v| points.get(v)).copied() else { continue };
-        let own = piece_of(cycle);
-        let around_it = face_index
-            .at(p, 0.0)
-            .filter_map(|&i| faces.get(i).map(|f| (i, f)))
-            .filter(|(_, (fc, bp, _))| piece_of(fc) != own && bp.winding(p) != 0)
-            .min_by(|a, b| a.1.2.total_cmp(&b.1.2))
-            .map(|(i, _)| i);
-        if let Some(list) = around_it.and_then(|i| face_holes.get_mut(i)) {
-            list.push(k);
-        }
-    }
+    // What placing the holes needs: a point on each, and the piece of each hole and face.
+    let face_piece: Vec<Option<usize>> = faces.iter().map(|(cycle, _, _)| piece_of(cycle)).collect();
+    let hole_at: Vec<(Option<Point>, Option<usize>)> = holes
+        .iter()
+        .map(|(cycle, _)| (cycle.first().and_then(|&h| origin(&edges, h)).and_then(|v| points.get(v)).copied(), piece_of(cycle)))
+        .collect();
 
     // The inputs' anchors, which results land on again up to the sweep's tolerance.
     let snap = 2.0 * eps;
     let mut anchors: Vec<Point> = shapes.iter().flat_map(|s| s.path.elements().iter().filter_map(kurbo::PathEl::end_point)).collect();
     anchors.sort_by(|a, b| a.x.total_cmp(&b.x).then(a.y.total_cmp(&b.y)));
-    Some(Map { edges, around, faces, holes, face_holes, tidy, anchors, snap, back })
+    Some(Map { edges, around, faces, face_piece, holes, hole_at, tidy, anchors, snap, back })
+}
+
+/// The holes of each face of `m`: each hole goes in the smallest face of another piece around it.
+/// Each face whose bounds hold the hole's point is wound against it, its segments charged to `work`
+/// first; `None` when that runs out (holes nested n deep cost about n² / 2 tests).
+fn place_holes(m: &Map, work: &FillWork) -> Option<Vec<Vec<usize>>> {
+    let face_index = RectIndex::new(m.faces.iter().enumerate().map(|(i, (_, bp, _))| (bp.bounding_box(), i)).collect());
+    let mut face_holes: Vec<Vec<usize>> = vec![Vec::new(); m.faces.len()];
+    for (k, &(at, own)) in m.hole_at.iter().enumerate() {
+        let Some(p) = at else { continue };
+        // The first of the smallest, as the faces are in order.
+        let mut around_it: Option<(usize, f64)> = None;
+        for &i in face_index.at(p, 0.0) {
+            let (Some((_, bp, area)), Some(&piece)) = (m.faces.get(i), m.face_piece.get(i)) else { continue };
+            if piece == own {
+                continue;
+            }
+            if !work.charge(bp.elements().len()) {
+                return None;
+            }
+            if bp.winding(p) != 0 && around_it.is_none_or(|(_, least)| area.total_cmp(&least).is_lt()) {
+                around_it = Some((i, *area));
+            }
+        }
+        if let Some(list) = around_it.and_then(|(i, _)| face_holes.get_mut(i)) {
+            list.push(k);
+        }
+    }
+    Some(face_holes)
 }
 
 /// The points where three or more edges of the planar map of `shapes` meet, by x and then y. Open
@@ -311,7 +335,11 @@ fn sweep_graph(inputs: &[(BezPath, usize)], eps: f64, precision: f64) -> Option<
 pub(super) fn build(shapes: &[Shape], precision: f64) -> Option<(Vec<Region>, Vec<Shape>, Vec<Shape>)> {
     // The sweep can panic on rare near-degenerate input; that is no map.
     let m = crate::path::guarded(|| map_with(shapes, precision)).flatten()?;
-    let Map { edges, around, faces, holes, face_holes, tidy, anchors, snap, back } = &m;
+    // The winding of points against faces and fills, charged before each test: nested contours cost
+    // the square of their depth, and past the limit there is no map.
+    let work = FillWork::new();
+    let face_holes = place_holes(&m, &work)?;
+    let Map { edges, around, faces, holes, tidy, anchors, snap, back, .. } = &m;
     let snap = *snap;
     let fills: Vec<Fill> = shapes.iter().map(Fill::new).collect();
     // The fills whose bounds hold a point, in the order of the shapes: not every fill is tested for every face.
@@ -320,24 +348,26 @@ pub(super) fn build(shapes: &[Shape], precision: f64) -> Option<(Vec<Region>, Ve
         let segs: Vec<Seg> = cycle.iter().flat_map(|&h| half_segs(edges, h)).collect();
         segs_to_bezpath(&tidy_segments(segs, true, tidy), true)
     };
-    let regions = faces
-        .iter()
-        .zip(face_holes)
-        .filter_map(|((cycle, _, _), hs)| {
-            let mut path = subpath(cycle)?;
-            for sp in hs.iter().filter_map(|&k| holes.get(k)).filter_map(|(c, _)| subpath(c)) {
-                path.extend(sp.iter());
+    let mut regions = Vec::with_capacity(faces.len());
+    for ((cycle, _, _), hs) in faces.iter().zip(&face_holes) {
+        let Some(mut path) = subpath(cycle) else { continue };
+        for sp in hs.iter().filter_map(|&k| holes.get(k)).filter_map(|(c, _)| subpath(c)) {
+            path.extend(sp.iter());
+        }
+        let path = unshear(path, anchors, snap, *back);
+        // A face finer than the default precision can need a finer outline to find a point in.
+        let inside =
+            interior_point(&path).or_else(|| (precision < DEFAULT_PRECISION).then(|| interior_point_within(&path, precision / 4.0)).flatten());
+        let mut sources = Vec::new();
+        if let Some(p) = inside {
+            for &i in fill_index.at(p, 0.0) {
+                if fills.get(i)?.contains(p, &work)? {
+                    sources.push(i);
+                }
             }
-            let path = unshear(path, anchors, snap, *back);
-            let sources =
-                // A face finer than the default precision can need a finer outline to find a point in.
-                interior_point(&path)
-                    .or_else(|| (precision < DEFAULT_PRECISION).then(|| interior_point_within(&path, precision / 4.0)).flatten())
-                    .map(|p| fill_index.at(p, 0.0).copied().filter(|&i| fills.get(i).is_some_and(|f| f.contains(p))).collect())
-                    .unwrap_or_default();
-            Some(Region { path, sources })
-        })
-        .collect();
+        }
+        regions.push(Region { path, sources });
+    }
 
     // Edges: chains of segments through vertices where nothing else meets.
     let to_shapes = |chains: Vec<(Vec<Seg>, bool, usize)>| -> Vec<Shape> {
@@ -481,22 +511,30 @@ fn interior_point_within(path: &BezPath, tolerance: f64) -> Option<Point> {
 /// of the polygon between two crossings, at a few heights, where the path winds.
 fn inside_edges(bp: &BezPath, edges: &[(Point, Point)], bb: kurbo::Rect) -> Option<Point> {
     // The gaps between consecutive crossings of the polygon with a line at each of a few heights,
-    // each with the width the polygon has at its middle: the widest where the polygon winds.
-    let gaps_at = |y: f64, min_width: f64, gaps: &mut Vec<(f64, Point)>| {
+    // each with the width the polygon has at its middle: the widest where the polygon winds. A gap
+    // must be wider than the rounding of its two crossings: one thinner is where edges retrace each
+    // other a hair apart (out and back along a slanted line, through points rounded each way), not a part.
+    let gaps_at = |y: f64, gaps: &mut Vec<(f64, Point)>| {
         work::add(Work::InteriorHeights, 1);
         // Each crossing's x and which way the edge goes, so that the winding number in a gap is
-        // the sum of the crossings before it (one sort and one pass, not a winding per gap).
-        let mut xs: Vec<(f64, i32)> = edges
+        // the sum of the crossings before it (one sort and one pass, not a winding per gap), and how
+        // far rounding can have put it: `a.x + t (c.x - a.x)` is a few units in the last place of its
+        // two terms off (of the x itself, not of the height of the path or of its widest x: two unit
+        // squares ten billion apart in height, or four hundred trillion out in x, are parts).
+        let mut xs: Vec<(f64, i32, f64)> = edges
             .iter()
             .filter(|(a, c)| (a.y <= y) != (c.y <= y))
-            .map(|(a, c)| (a.x + (y - a.y) / (c.y - a.y) * (c.x - a.x), if c.y > a.y { 1 } else { -1 }))
+            .map(|(a, c)| {
+                let x = a.x + (y - a.y) / (c.y - a.y) * (c.x - a.x);
+                (x, if c.y > a.y { 1 } else { -1 }, 4.0 * f64::EPSILON * (x.abs() + (c.x - a.x).abs()))
+            })
             .collect();
         xs.sort_by(|a, b| a.0.total_cmp(&b.0));
         let mut winding = 0;
         for w in xs.windows(2) {
             winding += w[0].1;
             let width = w[1].0 - w[0].0;
-            if winding != 0 && width > min_width {
+            if winding != 0 && width > w[0].2 + w[1].2 {
                 gaps.push((width, Point::new((w[0].0 + w[1].0) / 2.0, y)));
             }
         }
@@ -518,7 +556,7 @@ fn inside_edges(bp: &BezPath, edges: &[(Point, Point)], bb: kurbo::Rect) -> Opti
     for f in [0.5, 0.25, 0.75, 0.125, 0.375, 0.625, 0.875, 0.0625, 0.9375] {
         // A little off the round fractions, which on art drawn to a grid fall on the height of
         // some corner, where testing the point against other paths is unreliable.
-        gaps_at(bb.y0 + bb.height() * (f + 0.0061803), 0.0, &mut gaps);
+        gaps_at(bb.y0 + bb.height() * (f + 0.0061803), &mut gaps);
     }
     if let Some(p) = widest_inside(gaps) {
         return Some(p);
@@ -527,13 +565,7 @@ fn inside_edges(bp: &BezPath, edges: &[(Point, Point)], bb: kurbo::Rect) -> Opti
     // from each other, each a unit high, are missed by every one of them). Between two heights
     // that have a vertex of the polygon the same edges cross, so the middle of such a stretch
     // finds a part if there is one there; a bounded number of them, spread over the heights.
-    let mut ys: Vec<f64> = edges.iter().flat_map(|(a, c)| [a.y, c.y]).collect();
-    ys.sort_by(f64::total_cmp);
-    ys.dedup();
-    // A gap thinner than the rounding of the crossings is where edges retrace each other, not a part.
-    // A crossing is computed to a few ulps of the largest x, not of the height of the path (two unit
-    // squares ten billion apart in height are parts, one unit wide each): 64 ulps of it.
-    let min_width = 64.0 * f64::EPSILON * bb.x0.abs().max(bb.x1.abs());
+    let ys = turning_heights(edges);
     let stretches = ys.len().saturating_sub(1);
     let tries = stretches.min(MAX_HEIGHT_TRIES);
     let mut gaps: Vec<(f64, Point)> = vec![];
@@ -541,10 +573,38 @@ fn inside_edges(bp: &BezPath, edges: &[(Point, Point)], bb: kurbo::Rect) -> Opti
         // Evenly spaced among the stretches, the first and the last included.
         let at = if tries > 1 { k * (stretches - 1) / (tries - 1) } else { 0 };
         if let (Some(lo), Some(hi)) = (ys.get(at), ys.get(at + 1)) {
-            gaps_at((lo + hi) / 2.0, min_width, &mut gaps);
+            gaps_at((lo + hi) / 2.0, &mut gaps);
         }
     }
     widest_inside(gaps)
+}
+
+/// The heights of the vertices of the polygon `edges` where it turns, or where a run of edges that
+/// follow one another starts or ends, sorted and each once. Where the polygon passes straight on
+/// through a vertex, the line through the edges on either side is one, and a line at any height
+/// between the turns crosses it at an x that moves evenly with the height: no gap opens or closes at
+/// such a vertex. So a path that goes out and back along a line through other vertices than it went
+/// out by (which do not cancel as a retrace) puts no heights here but its two ends'.
+fn turning_heights(edges: &[(Point, Point)]) -> Vec<f64> {
+    // `(a, b)` then `(c, d)`: the second follows on from the first, in the same direction along one line
+    // (to a billionth of a radian: the rounding of points on a slanted line turns it by far less).
+    let straight_on = |(a, b): (Point, Point), (c, d): (Point, Point)| {
+        let (u, v) = (b - a, d - c);
+        b == c && u.dot(v) > 0.0 && u.cross(v).abs() <= 1e-9 * u.hypot() * v.hypot()
+    };
+    let mut ys: Vec<f64> = Vec::with_capacity(edges.len());
+    for (i, &edge) in edges.iter().enumerate() {
+        let before = i.checked_sub(1).and_then(|j| edges.get(j)).copied();
+        if !before.is_some_and(|e| straight_on(e, edge)) {
+            ys.push(edge.0.y);
+        }
+        if !edges.get(i + 1).copied().is_some_and(|e| straight_on(edge, e)) {
+            ys.push(edge.1.y);
+        }
+    }
+    ys.sort_by(f64::total_cmp);
+    ys.dedup();
+    ys
 }
 
 /// `edges` without the pairs of an edge and the same edge the other way, as many of each way as the
@@ -552,7 +612,7 @@ fn inside_edges(bp: &BezPath, edges: &[(Point, Point)], bb: kurbo::Rect) -> Opti
 pub(super) fn without_retraces(edges: Vec<(Point, Point)>) -> Vec<(Point, Point)> {
     /// A point by the bits of its coordinates.
     type Bits = (u64, u64);
-    let key = |p: Point| (p.x.to_bits(), p.y.to_bits());
+    let key = |p: Point| crate::path::point_bits(p);
     // Each edge by its ends in order: how many go from the lesser end to the greater, less how many go back.
     let mut net: HashMap<(Bits, Bits), i64> = HashMap::new();
     for &(a, c) in edges.iter().filter(|(a, c)| a != c) {

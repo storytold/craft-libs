@@ -812,6 +812,13 @@ pub(crate) fn normalize_bez(bp: &BezPath, rule: FillRule) -> Result<Contours, Pa
 /// curve again), and a contour adds a move and a close: so what is made is at most three times
 /// `budget`, and the caller's check of the elements made is exact.
 pub(crate) fn normalize_bez_within(bp: &BezPath, rule: FillRule, budget: usize) -> Result<Option<Contours>, PathOpsError> {
+    Ok(normalize_bez_counted(bp, rule, budget)?.map(|(contours, _)| contours))
+}
+
+/// [`normalize_bez_within`], and whether every segment of the sweep is on the boundary (its two
+/// sides differ under the rule). One that is not is a piece of `bp` inside the area it fills, or
+/// outside it (two passes that cancel): an edge that bounds nothing.
+pub(crate) fn normalize_bez_counted(bp: &BezPath, rule: FillRule, budget: usize) -> Result<Option<(Contours, bool)>, PathOpsError> {
     if !crate::budget::fits_elements([bp]) {
         return Err(PathOpsError::TooComplex);
     }
@@ -826,17 +833,19 @@ pub(crate) fn normalize_bez_within(bp: &BezPath, rule: FillRule, budget: usize) 
     work::add(Work::Sweeps, 1);
     let swept = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         Topology::<i32>::from_path(&bp, eps).map(|top| {
-            let boundary = top
-                .segment_indices()
-                .filter(|s| inside(rule, *top.winding_clockwise(s.first_half())) != inside(rule, *top.winding_counter_clockwise(s.first_half())))
-                .count();
+            let (mut boundary, mut segments) = (0usize, 0usize);
+            for s in top.segment_indices() {
+                segments += 1;
+                let h = s.first_half();
+                boundary += usize::from(inside(rule, *top.winding_clockwise(h)) != inside(rule, *top.winding_counter_clockwise(h)));
+            }
             work::add(Work::BoundarySegments, boundary);
-            (boundary <= budget).then(|| top.contours(|w| inside(rule, *w)))
+            (boundary <= budget).then(|| (top.contours(|w| inside(rule, *w)), boundary == segments))
         })
     }));
-    let Some(contours) = swept.map_err(|_| PathOpsError::Degenerate)?.map_err(|_| PathOpsError::OpenPath)? else { return Ok(None) };
+    let Some((contours, all_boundary)) = swept.map_err(|_| PathOpsError::Degenerate)?.map_err(|_| PathOpsError::OpenPath)? else { return Ok(None) };
     work::add(Work::ContourElements, contours.contours().map(|c| c.path.elements().len()).sum());
-    Ok(Some(contours))
+    Ok(Some((contours, all_boundary)))
 }
 
 /// Boolean operation between two filled paths. Returns an empty path on invalid (non-finite) input.
@@ -852,9 +861,10 @@ pub fn boolean(a: &BezPath, a_rule: FillRule, b: &BezPath, b_rule: FillRule, op:
 /// (`windings_add_up`); when they don't add up, each operand is first resolved on its own into
 /// simple contours (`resolved`) and the operation runs again on those. When that is over a limit
 /// the call is [`PathOpsError::TooComplex`], not the first result, which is known to be wrong, and
-/// so is it when the contour pass of the resolved operands fails (the sweep, or the predicate,
-/// panics: [`PathOpsError::Degenerate`]); when it is done but its windings do not add up either (the
-/// check has a tolerance, and is off by a little for some curves), the first result is kept.
+/// it is an error too when a sweep or a contour pass of the recovery fails (the sweep of an operand
+/// resolved on its own, or of the resolved operands together, panics, or the predicate does:
+/// [`PathOpsError::Degenerate`]); when it is done but its windings do not add up either (the check has
+/// a tolerance, and is off by a little for some curves), the first result is kept.
 pub fn try_boolean(a: &BezPath, a_rule: FillRule, b: &BezPath, b_rule: FillRule, op: BoolOp, precision: f64) -> Result<BezPath, PathOpsError> {
     ensure_size([a, b])?;
     checked_boolean(&[(fill_bezpath(a), a_rule), (fill_bezpath(b), b_rule)], &|m| op.apply(m[0], m[1]), sane_precision(precision))
@@ -882,8 +892,10 @@ const MAX_CHECKED_WINDING: i32 = 8;
 /// Also true when it can't tell.
 fn arrangement_adds_up(arr: &Arrangement, inputs: &[&BezPath]) -> bool {
     // An input that draws nothing has no winding to check and costs no pass, so it is not one of the
-    // inputs counted: seven empty paths beside two that are wrong must not switch the check off.
-    let drawn: Vec<(usize, &BezPath)> = inputs.iter().copied().enumerate().filter(|(_, p)| !p.elements().is_empty()).collect();
+    // inputs counted: seven empty paths beside two that are wrong must not switch the check off. Nor
+    // does one that is only points (segments of no length), which the sweep is given no segment of.
+    // Each keeps its own index, which is the input's tag in the windings.
+    let drawn: Vec<(usize, &BezPath)> = inputs.iter().copied().enumerate().filter(|(_, p)| has_length(p)).collect();
     // One check is several contour passes: of the many inputs of a large operation none is checked.
     if drawn.len() > MAX_CHECKED_INPUTS {
         return true;
@@ -893,6 +905,15 @@ fn arrangement_adds_up(arr: &Arrangement, inputs: &[&BezPath]) -> bool {
 
 /// Most inputs that draw something whose windings an operation checks ([`arrangement_adds_up`]).
 const MAX_CHECKED_INPUTS: usize = 8;
+
+/// Has `path` a segment of some length (a point, or a cubic all of whose points are one, has none)?
+fn has_length(path: &BezPath) -> bool {
+    path.segments().any(|s| match s {
+        kurbo::PathSeg::Line(l) => l.p0 != l.p1,
+        kurbo::PathSeg::Quad(q) => q.p0 != q.p1 || q.p0 != q.p2,
+        kurbo::PathSeg::Cubic(c) => c.p0 != c.p1 || c.p0 != c.p2 || c.p0 != c.p3,
+    })
+}
 
 /// Does the winding `winding` that the sweep `top` gave its faces add up to the signed area of the
 /// path `input` it was made from? By Green's theorem the integral of a path's winding number over
@@ -933,9 +954,18 @@ fn windings_add_up<W: WindingNumber>(top: &Topology<W>, winding: impl Fn(&W) -> 
     Some((integral - want).abs() <= tol || (integral + want).abs() <= tol)
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Makes the contour pass of [`resolved`] panic, which no input is known to make it do, so that a
+    /// test can see what a panic in the recovery gives.
+    static FORCE_RESOLVE_PANIC: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 /// `input` resolved on its own under `rule` into simple contours (outer contours and holes, filled
 /// non-zero), when the windings of that sweep add up ([`windings_add_up`]): `Ok(None)` when they
-/// do not or it cannot tell, and an error only when it is over a limit.
+/// do not or it cannot tell, and an error when it is over a limit, or when its sweep or contour pass
+/// panics ([`PathOpsError::Degenerate`]: the first result was found wrong, and this one is not there
+/// to put in its place).
 fn resolved(input: &BezPath, rule: FillRule) -> Result<Option<BezPath>, PathOpsError> {
     if !crate::budget::fits_elements([input]) {
         return Err(PathOpsError::TooComplex);
@@ -947,11 +977,22 @@ fn resolved(input: &BezPath, rule: FillRule) -> Result<Option<BezPath>, PathOpsE
         return Err(PathOpsError::TooComplex);
     }
     work::add(Work::Sweeps, 1);
-    let Ok(Ok(top)) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| Topology::<i32>::from_path(&bp, eps))) else { return Ok(None) };
+    let top = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| Topology::<i32>::from_path(&bp, eps))) {
+        Ok(Ok(top)) => top,
+        Ok(Err(_)) => return Ok(None),
+        Err(_) => return Err(PathOpsError::Degenerate),
+    };
     if windings_add_up(&top, |w| *w, &bp) != Some(true) {
         return Ok(None);
     }
-    let Ok(c) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| top.contours(|w| inside(rule, *w)))) else { return Ok(None) };
+    let pass = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        #[cfg(test)]
+        if FORCE_RESOLVE_PANIC.with(std::cell::Cell::get) {
+            std::panic::resume_unwind(Box::new("forced in a test"));
+        }
+        top.contours(|w| inside(rule, *w))
+    }));
+    let Ok(c) = pass else { return Err(PathOpsError::Degenerate) };
     let mut out = BezPath::new();
     for ct in c.contours() {
         out.extend(ct.path.iter());
@@ -961,16 +1002,18 @@ fn resolved(input: &BezPath, rule: FillRule) -> Result<Option<BezPath>, PathOpsE
 
 /// The operation `pred` on `inputs` resolved into simple contours first ([`resolved`]): the result
 /// when every sweep's windings add up, `Ok(None)` when they do not, and an error when it is over a
-/// limit or when its contour pass fails.
+/// limit or when a sweep or contour pass of it panics.
 fn resolved_boolean(inputs: &[(BezPath, FillRule)], pred: &dyn Fn(&[bool]) -> bool, precision: f64) -> Result<Option<BezPath>, PathOpsError> {
     let mut flat: Vec<(BezPath, FillRule)> = Vec::with_capacity(inputs.len());
     for (p, rule) in inputs {
         let Some(r) = resolved(p, *rule)? else { return Ok(None) };
         flat.push((r, FillRule::NonZero));
     }
+    // The resolved operands lie within the operands' bounds, which the first sweep took: `Degenerate`
+    // here is a panic of the sweep.
     let arr = match Arrangement::new(flat.clone()) {
         Ok(arr) => arr,
-        Err(PathOpsError::TooComplex) => return Err(PathOpsError::TooComplex),
+        Err(e @ (PathOpsError::TooComplex | PathOpsError::Degenerate)) => return Err(e),
         Err(_) => return Ok(None),
     };
     if !arrangement_adds_up(&arr, &flat.iter().map(|(p, _)| p).collect::<Vec<_>>()) {
@@ -987,8 +1030,8 @@ fn resolved_boolean(inputs: &[(BezPath, FillRule)], pred: &dyn Fn(&[bool]) -> bo
 
 /// [`boolean_n`] that reports a refused input ([`PathOpsError::TooComplex`], non-finite
 /// coordinates) instead of returning an empty path. Like [`try_boolean`] it checks the windings of
-/// the sweep against the area of each input (of up to eight that draw something: an empty path is
-/// not counted), and resolves the inputs first when they do not add up, as there. `pred` is asked
+/// the sweep against the area of each input (of up to eight that draw something: an empty path, or one
+/// of points only, is not counted), and resolves the inputs first when they do not add up, as there. `pred` is asked
 /// as [`boolean_n`] says.
 pub fn try_boolean_n(paths: &[(&BezPath, FillRule)], pred: impl Fn(&[bool]) -> bool) -> Result<BezPath, PathOpsError> {
     ensure_size(paths.iter().map(|(p, _)| *p))?;
@@ -1814,5 +1857,36 @@ mod tests {
         let arr = Arrangement::new(vec![(fill_bezpath(&square(0.0, 0.0, 10.0)), FillRule::NonZero)]).unwrap();
         assert!(arr.try_contours(|m| m[0]).is_ok());
         assert_eq!(arr.try_contours(|_| panic!("simulated panic in the sweep")).err(), Some(PathOpsError::Degenerate));
+    }
+
+    /// A panic in the recovery's resolving of an operand is the call's error, as one in its last contour
+    /// pass is: the first result was found wrong, and the recovery that would replace it is not there.
+    #[test]
+    #[cfg(panic = "unwind")]
+    fn a_panic_while_an_operand_is_resolved_is_an_error_and_not_the_first_result() {
+        let poly = |pts: &[(f64, f64)]| {
+            let mut bp = BezPath::new();
+            for (i, p) in pts.iter().enumerate() {
+                if i == 0 { bp.move_to(*p) } else { bp.line_to(*p) }
+            }
+            bp.close_path();
+            bp
+        };
+        let a = poly(&[(3.0, 1.0), (3.0, 3.0), (0.0, 1.0)]);
+        let b = poly(&[(3.0, 0.0), (0.0, 2.0), (3.0, 2.0), (0.0, 0.0), (0.0, 1.0)]);
+        let union = || try_boolean(&a, FillRule::NonZero, &b, FillRule::NonZero, BoolOp::Union, DEFAULT_PRECISION);
+        assert!(union().is_ok_and(|p| (p.area().abs() - 4.375).abs() < 1e-6), "resolved, the union is right");
+        FORCE_RESOLVE_PANIC.with(|f| f.set(true));
+        let got = union();
+        let n_ary = try_boolean_n(&[(&a, FillRule::NonZero), (&b, FillRule::NonZero)], |m| m[0] || m[1]);
+        FORCE_RESOLVE_PANIC.with(|f| f.set(false));
+        assert_eq!(got.err(), Some(PathOpsError::Degenerate), "not the first result, 5.5");
+        assert_eq!(n_ary.err(), Some(PathOpsError::Degenerate));
+        // Operands whose windings add up are not resolved, and a panic there would not be reached.
+        let (s, t) = (poly(&[(0.0, 0.0), (4.0, 0.0), (4.0, 4.0), (0.0, 4.0)]), poly(&[(2.0, 2.0), (6.0, 2.0), (6.0, 6.0), (2.0, 6.0)]));
+        FORCE_RESOLVE_PANIC.with(|f| f.set(true));
+        let plain = try_boolean(&s, FillRule::NonZero, &t, FillRule::NonZero, BoolOp::Union, DEFAULT_PRECISION);
+        FORCE_RESOLVE_PANIC.with(|f| f.set(false));
+        assert!(plain.is_ok_and(|p| (p.area().abs() - 28.0).abs() < 1e-9));
     }
 }

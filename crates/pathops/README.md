@@ -83,21 +83,28 @@ pub fn interior_point(path: &BezPath) -> Option<Point>;
 Unlike `regions`, which splits the filled areas of closed shapes, `live_paint` treats every path as an
 edge, open paths included. Three crossing lines enclose a triangle, a line across a rectangle splits it
 in two, and an area enclosed by paths becomes a face even when nothing fills it. Each face lists the inputs
-whose fill covers it (empty for an area only enclosed by paths). Each edge is a piece of a path, split
-wherever another path meets it, and keeps the key of the front-most input it lies on. `shape_builder` gives
-the regions an editor offers for a set of shapes: with closed paths only they are the `regions` (plus the
-gaps closed shapes enclose); once an open path is among them they are the planar faces, so a stroke-only
-line across a shape splits it. Inputs with more than `SHAPE_BUILDER_MAX_SEGMENTS` segments fall back to
-the filled areas.
+whose fill covers it (empty for an area only enclosed by paths); an open subpath of one cubic that comes back
+to its start round an area is the outline of that loop and fills as a closed one does, here and in the fallback
+below (other open paths fill nothing, rings of more anchors among them). Each edge is a piece of a path, split
+wherever another path meets it, and keeps the key of the front-most input it lies on.
+`shape_builder` gives the regions an editor offers for a set of shapes: with closed paths only they are the
+`regions` (plus the gaps closed shapes enclose); once an open path is among them they are the planar faces, so a
+stroke-only line across a shape splits it. Inputs with more than `SHAPE_BUILDER_MAX_SEGMENTS` segments fall back
+to the filled areas.
 
 The sweep takes an open path's two passes (there and back) for cancelling out where the path is level, so the
 map is swept in a frame sheared (`y + k x`) so that no open path is level in it after the paths are snapped to the
-sweep's tolerance, which a shape far away widens. The first of ten shears (1/32, 1/64, 1/16, ...) that leaves none
-level is used. Open paths with among them a side level in each of the ten (a side of a segment's chord or control
-polygon, longer than 8 tolerances of the sweep: it takes ten such sides, one level in each shear) give no map, as
-an input the sweep cannot take does. A side no longer than that is at the noise of the sweep, level in every shear
-and not looked at: a stub, a point repeated a hair apart or a handle a nanometre long does not empty the map, and a
-feature that small may be lost from it (the sweep cannot tell it from a point).
+sweep's tolerance, which a shape far away widens. The first of ten shears (1/32, 1/64, 1/16, ...) that leaves no
+side level is used (a side of a segment's chord or control polygon). A shear that leaves a side longer than 8
+tolerances of the sweep level is not used. A side from 2 to 8 tolerances long does not rule a shear out, but the
+shears are tried on for one that does not level it either, and where none leaves every such side unlevelled the one
+that levels the fewest is used: beside a shape at 1e11 (a tolerance of 1.5e-3), a horizontal edge 0.009 long is
+level in the usual shear and kept in the shear of 1/4. When each of the ten leaves a long side level, one more shear
+is tried, between the slopes of the long sides, where none of them is; when the long sides leave no shear free,
+there is no map, as for an input the sweep cannot take. A side of 2 tolerances or less is level in every shear and
+not looked at: a stub, a point repeated a hair apart or a handle a nanometre long does not empty the map, and a
+feature that small may be lost from it (the sweep cannot tell it from a point). A shear in which the paths pass the
+largest coordinates the sweep takes (near 7e13) is passed over for the next.
 
 ## Offset and stroke
 
@@ -202,6 +209,13 @@ work of each operation is bounded before it starts, in counts the tests assert o
   each. The batches times the segments are counted before the first pass, and past `MAX_PASS_WORK`
   (33,554,432) the operation gives no shapes (a fan of 209 shapes at a point beside 40,000 squares is refused in
   0.7 s; 208 shapes there take 2.6 s to merge and 3.5 s to divide, where the squares alone take 0.4 s);
+- a planar map (`live_paint`, `shape_builder`, Divide with an open path) finds what fills each face by
+  winding a point of it against each subpath whose bounds hold it, and the face each hole is in by winding
+  the hole against each face whose bounds hold it, so contours nested n deep in one shape cost about the
+  square of n (rectangles nested 4,000 deep, about 96 million elements wound). Each test is charged before
+  it is made, and past `MAX_FILL_WORK` (67,108,864 elements) the map is not built: `live_paint` gives
+  nothing, `shape_builder` and Divide the filled areas (rectangles nested 3,300 deep pass, in 1.3 s; 3,400
+  do not);
 - a stroke's outline is counted as it is made (a subpath of more than 256 segments is stroked in windows of
   256, so that a width that is huge against the tolerance cannot make millions of curves first) and the
   operation is `TooComplex` past `MAX_ELEMENTS` elements of outline;
@@ -247,7 +261,7 @@ let outline = with_limits(limits, || try_outline_stroke(&path, 3.0, Cap::Butt, J
 it returns, also if it unwinds; scopes nest, and another thread keeps its own. `Limits` has a field for each
 bound (`elements`, `segment_pairs`, `offset_segment_pairs`, `sweep_line_pairs`, `shape_builder_segments`,
 `fit_points`, `fit_work`, `join_work`, `redundant_work`, `mask_work`, `sweep_event_work`, `pass_work`,
-`ends_at_a_point`, `crossing_work`, `coverage_entries`) and is `#[non_exhaustive]`, so start from
+`fill_work`, `ends_at_a_point`, `crossing_work`, `coverage_entries`) and is `#[non_exhaustive]`, so start from
 `Limits::default()`. Time and memory grow with a limit raised, and a limit lowered refuses more ordinary art.
 
 ### Ordinary input the defaults refuse
@@ -268,13 +282,15 @@ one of 408 or more is `TooComplex`. Strokes that are curves count more than line
 to nine times, a line and a curve three), so a hatch of curves is refused at fewer. A boolean operation of more
 than a few thousand inputs, most of them empty, is `TooComplex` past `MASK_WORK`.
 
-Four more bounds refuse input a drawing can hold, none of it common: a pie of more than 256 slices (or any
+Five more bounds refuse input a drawing can hold, none of it common: a pie of more than 256 slices (or any
 more than 512 segment ends at one point; a fan of triangles has two at the point for each, so 257 of them) by `MAX_ENDS_AT_A_POINT`, 257 lines
 through one point by `MAX_CROSSING_WORK`, shapes nested 2,896 deep, or 202 deep and crossed by 202 bars, by
-`MAX_COVERAGE_ENTRIES`, and Merge, Divide, Trim or Crop of a fan of 209 or more shapes at a point beside 40,000
-other squares by `MAX_PASS_WORK`. Each is a worst case measured in seconds or in half a gigabyte (the pie of
-256 takes 0.5 to 0.9 s, 256 lines through a point 1.1 s, 2,895 nested squares 0.2 s and 550 MB), so an app
-that can wait or has the memory raises it in `Limits`.
+`MAX_COVERAGE_ENTRIES`, Merge, Divide, Trim or Crop of a fan of 209 or more shapes at a point beside 40,000
+other squares by `MAX_PASS_WORK`, and the planar map of thousands of contours nested in one shape (3,400
+rectangles a thousand times as tall as they are wide) by `MAX_FILL_WORK`. Each is a worst case measured in
+seconds or in half a gigabyte (the pie of 256 takes 0.5 to 0.9 s, 256 lines through a point 1.1 s, 2,895 nested
+squares 0.2 s and 550 MB, 3,300 nested rectangles in one shape 1.3 s), so an app that can wait or has the memory
+raises it in `Limits`.
 
 The element limit refuses a drawing of more than 524,288 elements in one operation (a traced image of half a
 million points), and `shape_builder` gives only the filled areas for more than 65,536 segments.
@@ -301,13 +317,24 @@ cost more than a second or so, measured once in a release build:
   2.8 s for the largest row of dots, 5.4 s for an outline stroke of cubics a thousand wide, 1.8 s and a
   gigabyte for two polygons at the element limit.
 - `interior_point` drops the edges that run back over each other exactly (an edge and the same edge the other
-  way, as an out-and-back path has) before it looks at the few heights it tries; a retrace that goes back
-  through other vertices than it went out by, or along part of the way only, is not dropped, and its vertices use
-  up the heights: a unit square beside a long stub of that kind can be missed.
-- `simplify` with `straight_lines` samples a segment in as many intervals as keep the chords within a tenth of
-  the tolerance of the curve, up to 65,536 for one segment (a quarter circle of radius 1e9 at a tolerance of
-  1), and leaves a run that needs more as it is; the segments it takes the default 256 intervals for (the
-  chords of those are as near) are as before.
+  way, as an out-and-back path has) before it looks at the few heights it tries, and takes those heights from
+  the vertices where the path turns, not those it passes straight through, so a stub out and back along a
+  line, through the same vertices or others, costs it nothing. A retrace along a curve flattened at other
+  points each way (a vertex at each turn of the flattening, and no edge the same) is not dropped, and its
+  vertices use up the heights: a unit square beside a long curved stub of that kind can be missed.
+- A planar map is built before the fills of its faces are tested, and the fill limit stops only the tests:
+  rectangles nested in one shape, each a thousand times as tall as it is wide (so that the bounds of their sides
+  overlap only at the corners, and the limits counted before the sweep admit over 8,000 of them), are refused
+  by `MAX_FILL_WORK` past 3,300, in 1.5 s at 4,000 and 2.4 s at 8,000 (answering 8,000 took 9.2 s before the limit).
+- A line of segments each shorter than 16 tolerances of the sweep (1.6e-5 at ordinary coordinates, 0.023 beside
+  a shape at 1e11) is lost from a planar map in any frame: the map takes pieces whose ends lie within that of
+  each other for copies of one edge (which the sweep cuts a little apart) and joins their ends. Its pieces are
+  under the noise the sweep can tell from a point; a line of longer segments is kept.
+- `simplify` with `straight_lines` samples a curve in as many intervals as keep the chords of its samples
+  within a tenth of the tolerance of it, up to 65,536 for one segment (a quarter circle of radius 1e9 at a
+  tolerance of 1), and leaves a run that needs more as it is; the polyline reduction then holds the samples to
+  the tolerance less how far the curve can be from them between two (the bound the intervals are chosen by),
+  so a curve that peaks between two samples is within the tolerance too.
 - The counts themselves are made before the sweep and cost time: up to 0.3 to 0.5 s on an input of 250,000
   segments (they are a few sweeps of the bounds), with 64,000 dots as separate inputs the most.
 
@@ -342,6 +369,7 @@ thread and ask first with the `try_` forms. Measured on one machine, in a releas
 | `interior_point` of a comb of 40,000 teeth (160,000 elements) | 11 ms |
 | `live_paint` of a comb of 20,000 teeth | 1.2 s |
 | `live_paint` of 4,000 / 8,000 / 16,000 squares in one shape | 0.18 / 0.51 / 1.6 s |
+| `live_paint` of 1,000 / 2,000 / 3,300 rectangles nested in one shape, each 1,000 times as tall as it is wide | 0.19 / 0.57 / 1.3 s (4,000 and 8,000: no map, in 1.5 / 2.4 s) |
 
 ## Left in VectorCraft
 
@@ -423,33 +451,60 @@ bit for bit VectorCraft's), and the results are identical except where noted:
     sampled the first as a point, and took the second's last cubic as a fit);
   - a closed subpath of one cubic that loops round an area is filled (VectorCraft dropped every closed
     subpath of fewer than two anchors), and so is an open one of one cubic that ends where it starts, as an
-    open ring of more anchors is: an offset, a Pathfinder Outline and the planar map treat both as closed. It
-    is a loop when the handles of the cubic are not along one line, to the rounding of their cross product
-    (a loop a billion long and a unit wide is one);
+    open ring of more anchors is: an offset and a Pathfinder Outline treat both as closed, and the planar map
+    and its fallback past `SHAPE_BUILDER_MAX_SEGMENTS` count the open loop of one cubic as a fill (Divide of it
+    and a line across gives its two faces with its key, where it gave none; a ring of more anchors left open
+    is a cutting edge there, as in VectorCraft). It is a loop when the handles of the cubic are not along one
+    line, told by their cross product against the rounding of its two terms (a loop a trillion long and half a
+    unit wide is one, of 75 billion square units);
+  - `join` of one open cubic that comes back within the tolerance of its start and loops round an area merges
+    its ends into one anchor, with no closing line (VectorCraft merged them only for three anchors or more);
+  - Pathfinder Outline cuts a cubic that crosses itself at both of its visits to the point (`nearest` gave one,
+    so an open curl came back in two pieces, not three), and two cuts at one point with the curve's loop
+    between them are two; and it finds the middle of a chain to a relative accuracy, where an accuracy of a
+    millionth asked kurbo's solver for 2^64 steps or more on a curve longer than about 9e12 (a panic where
+    arithmetic is checked, as in a debug build, and so no outline);
   - Pathfinder Outline of shapes with an open path takes its crossings from the planar map alone, and makes no
     filled arrangement: open paths whose implicit closing lines overlapped each other past the limit on pairs
     were refused by it and are outlined from the map; and where the map cannot be built there are no shapes,
     where the filled areas' junctions left every open path uncut where it meets another;
   - the planar map is swept in a frame in which no open path is level after the paths are snapped to the sweep's
     tolerance (it was told before snapping, so a line that a distant shape's tolerance levelled was lost),
-    from ten shears, and no map is built when open paths have a side level in each (it used the first, with one
-    path lost); sides of no more than 8 tolerances are not looked at, so a tiny feature loses only itself;
-  - an inset takes the boundary of the area the closed subpaths fill when the sweep gives fewer contours than
-    there are subpaths, or when the lengths of the two differ by more than the accuracy they are measured to and
-    the sweep's tolerance at each vertex allow (it was a millionth of the length, which a unit square in one a
+    from ten shears and, when each of them levels a side longer than 8 tolerances, one more between the slopes
+    of those sides; no map is built when no shear is free (it used the first, with one path lost). A side of
+    2 to 8 tolerances does not rule a shear out but is kept where a shear keeps it (an edge 0.009 long beside a
+    shape at 1e11 was lost, and is kept in the shear of 1/4), and one of 2 or less is not looked at, so a tiny
+    feature loses only itself. A shear in which the paths pass the largest coordinates the sweep takes is
+    passed over (a shape near 7e13 had no map);
+  - an inset takes the boundary of the area the closed subpaths fill when a piece of them the sweep cuts out has
+    the fill on both sides or on neither (a small loop of a subpath inside its own fill, which the lengths could
+    not tell from noise, cut a channel round itself), when the sweep gives fewer contours than there are
+    subpaths, or when the lengths of the two differ by more than the accuracy they are measured to and the
+    sweep's tolerance at each vertex allow (it was a millionth of the length, which a unit square in one a
     million across is), and cleans the outlines of the open subpaths of the stroker's holes as a growing
     offset does (an open curve that turns inside the radius left holes in an inset only);
-  - `interior_point` drops edges that retrace each other exactly, looks for gaps wider than 64 ulps of the
-    largest x (it was a billionth of the larger of the width and the height, so two unit squares ten
-    billion apart in height were missed);
+  - `interior_point` drops edges that retrace each other exactly (a zero of either sign is one coordinate),
+    tries heights between the vertices where the path turns (a straight retrace through other vertices than it
+    went out by used up the heights), and looks for gaps wider than the rounding of the two crossings that make
+    them, at every height (it was a billionth of the larger of the width and the height, so two unit squares
+    ten billion apart in height were missed; and the first heights took any gap, a sliver between two rounded
+    passes of a slanted line among them);
   - the fill of a face in a planar map is tested against the subpaths of each input whose bounds hold the point,
-    where it was the whole path (16,000 squares in one shape: 15.6 s, now 1.6 s);
+    where it was the whole path (16,000 squares in one shape: 15.6 s, now 1.6 s); and an item the index of the
+    map's outlines has no room to file in pieces is filed under its bounds, where it was read at every lookup
+    (1,000 tall rectangles nested in one shape read 1.5 million candidates for 400, now 0.3 million; the same
+    items are found);
   - `boolean_n`, `try_boolean_n` and `try_boolean` check the windings of up to eight inputs that draw something
-    (empty paths do not count), and the call is an error when the contour pass of the resolved operands
-    fails, where it went on to the first arrangement;
+    (empty paths, and paths of points only, do not count), and the call is an error when a sweep or contour
+    pass of the recovery panics, where it went on to the first arrangement;
   - `simplify_with` with `straight_lines` samples the intervals the chords need up to a limit, where a long
-    curve was sampled in 256 and its chords were further from it than the tolerance, and counts the sample at
-    the start of a run in its limits;
+    curve was sampled in 256 and its chords were further from it than the tolerance, counts the sample at
+    the start of a run in its limits, and holds the samples to the tolerance less how far the curve can be
+    from them between two (a curve 1.000002 high between two samples 0.99999 high came out 1.000002 from its
+    one chord at a tolerance of 1);
+  - `stroke_region` and `try_stroke_region` hold a single outline to the element limit as they do each of
+    several (the boundary of its sweep counted before its contours are made), where one outline that crossed
+    itself a great deal made all its contours;
 - the predicate of `boolean_n` and `try_boolean_n` is asked once for each distinct winding of the sweep, and the
   contour pass is given the answers by where the windings are stored, where VectorCraft asked it every time
   the pass looked at a side of a segment, and the pass scans west through every segment that is no boundary
@@ -458,8 +513,9 @@ bit for bit VectorCraft's), and the results are identical except where noted:
   0.07 s); the flags handed to the predicate were 32 billion and are 4 million. Nested squares round a column
   of small squares, each an input (the scan meets a long winding at each step), 1,000 and 1,000: 1.25 s, and
   0.12 s here. The results are the same for a predicate that depends on its flags alone; one that counts its
-  calls sees fewer of them (it is asked of each side of each segment, once, before the pass);
-- four bounds are new and refuse input VectorCraft took, in whatever time it took, with `TooComplex` (or no
+  calls sees fewer of them (it is asked once for each distinct winding, before the pass: twice for a
+  rectangle, outside and inside, not once for each of the eight sides of its segments);
+- five bounds are new and refuse input VectorCraft took, in whatever time it took, with `TooComplex` (or no
   shapes, for the operations that give none):
   - more than 512 segment ends at one point, counted at the sweep's tolerance that all the points set
     (a pie of 257 slices took VectorCraft 0.7 s, 400 slices 3.1 s, the fourth power of their number; 400
@@ -473,7 +529,10 @@ bit for bit VectorCraft's), and the results are identical except where noted:
   - Merge, Divide, Trim or Crop whose contour passes (a batch of classes each) would walk more than
     33,554,432 segments in all (a fan of 209 shapes at a point beside 40,000 squares took VectorCraft 4.4 s to
     merge and 5.5 s to divide; 208 take 2.6 s and 3.5 s here, and the time grows with the shapes at the
-    point).
+    point);
+  - a planar map that would wind its faces and holes against more than 67,108,864 elements of fills and
+    faces (rectangles nested 3,400 deep in one shape; 8,000 took the carve 9.2 s to map before this limit,
+    the time growing with the square of the depth, and are refused in 2.4 s).
   A pair of a line and a curve also counts three crossings, not one, in the sweep-event limit. Within the
   limits the results are VectorCraft's (same shape counts and areas on every input above);
 - the limits and counts above, `try_outline_stroke`, `try_stroke_region`, the bounded flattening (VectorCraft's

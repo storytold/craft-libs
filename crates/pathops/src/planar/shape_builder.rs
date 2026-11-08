@@ -50,9 +50,11 @@ pub(crate) fn segment_count(shapes: &[Shape]) -> usize {
 /// four circles that touch. Open paths (the caller closes the ones whose fill should count) are
 /// cutting edges: a line across a shape splits it, lines around an area enclose a region nothing
 /// fills, and each path with no closed subpath comes back cut wherever another path meets it, as
-/// pieces keyed by its index in `shapes`. Outlines are cut the same way. With more than
-/// [`SHAPE_BUILDER_MAX_SEGMENTS`] segments or a map that can't be built, only the filled areas
-/// of the closed subpaths count (an open one fills nothing there either) and there are no pieces.
+/// pieces keyed by its index in `shapes`. An open subpath of one cubic that comes back to its start
+/// round an area is the outline of that loop, and fills as a closed one does. Outlines are cut the same
+/// way. With more than [`SHAPE_BUILDER_MAX_SEGMENTS`] segments or a map that can't be built, only the
+/// filled areas of the closed subpaths (and of such loops) count (another open one fills nothing there
+/// either) and there are no pieces.
 pub fn shape_builder(shapes: &[Shape], edges: bool) -> BuilderArrangement {
     builder(shapes, edges, DEFAULT_PRECISION)
 }
@@ -91,10 +93,11 @@ pub(crate) fn builder(shapes: &[Shape], edges: bool, precision: f64) -> BuilderA
     }
 }
 
-/// The regions of the shapes' filled areas: those of their closed subpaths. An open subpath is a
-/// cutting edge, as in the map: it fills nothing, whatever it encloses. A shape left with no closed
-/// subpath is left out, so a flood of cutting lines cannot push the arrangement past its size budget
-/// and take the filled shapes down with it; the regions keep the original indices.
+/// The regions of the shapes' filled areas: those of their closed subpaths, and of open ones of one
+/// cubic that come back to their start round an area, as in the map. Another open subpath is a cutting
+/// edge, as in the map: it fills nothing, whatever it encloses. A shape left with no closed subpath is left out, so a
+/// flood of cutting lines cannot push the arrangement past its size budget and take the filled shapes
+/// down with it; the regions keep the original indices.
 fn filled_regions(shapes: &[Shape], precision: f64) -> Vec<crate::Region> {
     if !shapes.iter().any(|s| has_open_subpath(&s.path)) {
         return crate::pathfinder::regions_with(shapes, precision);
@@ -103,7 +106,7 @@ fn filled_regions(shapes: &[Shape], precision: f64) -> Vec<crate::Region> {
     let mut kept: Vec<Shape> = Vec::new();
     for (i, s) in shapes.iter().enumerate() {
         let mut closed = BezPath::new();
-        for sp in subs(&s.path).iter().filter(|sp| sp.closed && sp.draws_something()) {
+        for sp in subs(&s.path).into_iter().map(crate::path::Sub::closed_if_one_cubic_loop).filter(|sp| sp.closed && sp.draws_something()) {
             sp.push_closed(&mut closed);
         }
         if !closed.elements().is_empty() {

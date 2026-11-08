@@ -180,10 +180,31 @@ const MAX_CHORD_INTERVALS: usize = 1 << 16;
 /// `h² / 8` times the largest second derivative, which for a cubic is at most 6 times the larger of
 /// its two second differences of control points: `h` of `sqrt(0.75 d / within)` suffices.
 fn chord_intervals(c: &CubicBez, within: f64) -> Option<usize> {
-    let second = |a: Point, b: Point, c: Point| ((c - b) - (b - a)).hypot();
-    let d = second(c.p0, c.p1, c.p2).max(second(c.p1, c.p2, c.p3));
-    let need = (0.75 * d / within).sqrt().ceil();
+    let need = (0.75 * second_difference(c) / within).sqrt().ceil();
     (need.is_finite() && need <= MAX_CHORD_INTERVALS as f64).then_some(need as usize)
+}
+
+/// The larger of the two second differences of the control points of `c`: six times it bounds the
+/// second derivative of the curve.
+fn second_difference(c: &CubicBez) -> f64 {
+    let second = |a: Point, b: Point, c: Point| ((c - b) - (b - a)).hypot();
+    second(c.p0, c.p1, c.p2).max(second(c.p1, c.p2, c.p3))
+}
+
+/// How far the segment `s`, sampled in `m` intervals of equal parameter, can be from the polyline of
+/// its samples between two of them ([`chord_intervals`]'s bound, `0.75 d / m²`). A line is on its
+/// chords. A cubic straight to within `straight` of its chord lies, with its samples, in the strip of
+/// that half-width along the chord (its control points do, and so their hull); a point of it is then
+/// within `3 straight` of the chord of two samples on either side of where it is along the chord, a
+/// bound that does not grow with the length (handles on the ends make the second differences as
+/// long as the segment, and the chords are on it).
+fn sample_error(s: &Seg, m: usize, straight: f64) -> f64 {
+    if s.line {
+        return 0.0;
+    }
+    let m = m.max(1) as f64;
+    let bound = 0.75 * second_difference(&s.c) / (m * m);
+    if is_straight(&s.c, straight) { bound.min(3.0 * straight) } else { bound }
 }
 
 /// The refit of the consecutive segments `run`, split at its corners sharper than the threshold:
@@ -201,6 +222,8 @@ fn simplify_run(run: &[Seg], opts: &SimplifyOptions, fit: &mut Fit) -> Vec<Seg> 
         }
         let mut pts = Vec::new();
         let mut too_many = false;
+        // How far the piece can be from the polyline of its samples, between two of them.
+        let mut between: f64 = 0.0;
         for (k, s) in piece.iter().enumerate() {
             // Guarded: kurbo subdivides without end on huge finite coordinates. A segment that cannot
             // be measured cannot be sampled finely enough for the tolerance either: the run stays.
@@ -210,12 +233,13 @@ fn simplify_run(run: &[Seg], opts: &SimplifyOptions, fit: &mut Fit) -> Vec<Seg> 
             };
             let wanted = (len / (tol * 0.5)).ceil() as usize;
             let mut m = wanted.clamp(4, MAX_INTERVALS);
-            // Lines are drawn between the samples, and the curve is not: where the cap on the samples
-            // is what limits them, the chords can be further from the curve than the tolerance
-            // allows (a quarter circle of radius 500,000 at a tolerance of 1 is 2.4 from its 256
-            // chords). So the samples are as many as keep the chords within a tenth of it, or the
-            // run stays as it is where that is more than a segment is sampled for.
-            if opts.straight_lines && wanted > MAX_INTERVALS && !is_straight(&s.c, tol * 0.05) {
+            // Lines are drawn between the samples, and the curve is not: the chords can be further from
+            // the curve than the tolerance allows where too few samples are taken (a quarter circle of
+            // radius 500,000 at a tolerance of 1 is 2.4 from its 256 chords). So the samples are as
+            // many as keep the chords within a tenth of it, or the run stays as it is where that is more
+            // than a segment is sampled for. (A segment straight to within a twentieth of the tolerance
+            // is within three twentieths of the polyline of its samples, however few.)
+            if opts.straight_lines && !is_straight(&s.c, tol * 0.05) && sample_error(s, m, tol * 0.05) > tol * 0.1 {
                 match chord_intervals(&s.c, tol * 0.1) {
                     Some(need) => m = m.max(need),
                     None => {
@@ -224,6 +248,7 @@ fn simplify_run(run: &[Seg], opts: &SimplifyOptions, fit: &mut Fit) -> Vec<Seg> 
                     }
                 }
             }
+            between = between.max(sample_error(s, m, tol * 0.05));
             // The first segment of a piece has a sample at its start besides one at the end of each interval.
             let taken = m + usize::from(k == 0);
             if pts.len().saturating_add(taken) > fit.max_points || !fit.charge(taken) {
@@ -234,7 +259,7 @@ fn simplify_run(run: &[Seg], opts: &SimplifyOptions, fit: &mut Fit) -> Vec<Seg> 
             sample(&s.c, m, &mut pts, k == 0);
         }
         // Too long to fit, or past the work: the run stays as it is.
-        let done = !too_many && fit_piece(piece, pts, tol, opts, fit, &mut result);
+        let done = !too_many && fit_piece(piece, pts, (tol, between), opts, fit, &mut result);
         if !done {
             result.extend(piece.iter().copied());
         }
@@ -243,8 +268,9 @@ fn simplify_run(run: &[Seg], opts: &SimplifyOptions, fit: &mut Fit) -> Vec<Seg> 
 }
 
 /// The refit of one `piece` from its sampled points `pts`, appended to `result`; false (and
-/// nothing appended) when `fit` runs out of work first.
-fn fit_piece(piece: &[Seg], pts: Vec<Point>, tol: f64, opts: &SimplifyOptions, fit: &mut Fit, result: &mut Vec<Seg>) -> bool {
+/// nothing appended) when `fit` runs out of work first. `tol` is the tolerance and how far the piece
+/// can be from the polyline of `pts` between two of them ([`sample_error`]).
+fn fit_piece(piece: &[Seg], pts: Vec<Point>, (tol, between): (f64, f64), opts: &SimplifyOptions, fit: &mut Fit, result: &mut Vec<Seg>) -> bool {
     let pts = if opts.smooth > 0.0 {
         let Some(smoothed) = smooth_points(&pts, opts.smooth, fit) else { return false };
         smoothed
@@ -252,7 +278,11 @@ fn fit_piece(piece: &[Seg], pts: Vec<Point>, tol: f64, opts: &SimplifyOptions, f
         pts
     };
     if opts.straight_lines {
-        let Some(keep) = rdp(&pts, tol, fit) else { return false };
+        // A chord that keeps the samples within the tolerance less what the curve can be from them
+        // between two keeps the curve within the tolerance (the distance to a chord is greatest at an
+        // end of a piece of the polyline). With smoothing the tolerance is from the smoothed points.
+        let within = if opts.smooth > 0.0 { tol } else { tol - between };
+        let Some(keep) = rdp(&pts, within, fit) else { return false };
         result.extend(keep.windows(2).map(|p| Seg::line(p[0], p[1])));
         return true;
     }
@@ -532,7 +562,9 @@ fn merge_pair(a: &Seg, b: &Seg, tol: f64) -> Option<(Seg, f64)> {
 
 /// Join. Open subpaths of all inputs are joined nearest-endpoint-first into one open path
 /// (endpoints closer than `tolerance` are merged into a single anchor, otherwise a straight segment
-/// connects them). A single open subpath is closed instead. Closed subpaths pass through, in the form
+/// connects them). A single open subpath is closed instead: its ends become one anchor when they are
+/// within `tolerance` and it has two segments or more, or is one cubic that loops round an area, and
+/// otherwise a straight segment closes it. Closed subpaths pass through, in the form
 /// of a closed subpath that ends with a segment back to its start.
 ///
 /// More than [`crate::MAX_ELEMENTS`] elements are not joined: the subpaths come back as they are.
@@ -566,7 +598,12 @@ fn join_within(paths: &[BezPath], tolerance: f64, budget: usize) -> BezPath {
     if open.len() == 1
         && let Some(mut segs) = open.pop()
     {
-        let ends_meet = segs.len() >= 2 && ends(&segs).is_some_and(|(a, b)| a.distance(b) <= tolerance);
+        // A path of one segment closes onto its start only when it is a cubic whose handles take it
+        // round an area: a line, or a cubic along one, would close onto nothing (a point, or a line
+        // out and back), so it gets a line back instead.
+        let one_loop = |s: &Seg| !s.line && crate::path::handles_loop(s.c.p0, s.c.p1, s.c.p2);
+        let loops = segs.len() >= 2 || segs.first().is_some_and(one_loop);
+        let ends_meet = loops && ends(&segs).is_some_and(|(a, b)| a.distance(b) <= tolerance);
         if ends_meet {
             // The last segment arrives at the first point.
             let start = segs.first().map(|s| s.c.p0);
@@ -675,21 +712,26 @@ mod tests {
         polyline(&pts, true)
     }
 
-    /// The largest distance from a probe of `a` to the outline of `b`. The probes are 97 to a segment,
-    /// at parameters that are no multiple of a power of two's reciprocal (a sample of the
-    /// simplification at 1/256 of a segment is a probe of a grid of 64 or 256, and is on the outline).
+    /// The largest distance from a probe of `a` to the outline of `b`. The probes are the start of each
+    /// segment and 98 more, at parameters that are no multiple of a power of two's reciprocal (a sample
+    /// of the simplification at 1/256 of a segment is a probe of a grid of 64 or 256, and is on the outline).
     fn deviation(a: &BezPath, b: &BezPath) -> f64 {
         use kurbo::{ParamCurve, ParamCurveNearest};
         let mut worst: f64 = 0.0;
         for seg in a.segments() {
-            for k in 0..=97 {
-                let p = seg.eval((f64::from(k) + 0.37).min(97.0) / 97.0);
+            for t in std::iter::once(0.0).chain((0..=97).map(|k| (f64::from(k) + 0.37).min(97.0) / 97.0)) {
+                let p = seg.eval(t);
                 let d = b.segments().map(|s| s.nearest(p, 1e-9).distance_sq).fold(f64::INFINITY, f64::min).sqrt();
                 worst = worst.max(d);
             }
         }
         worst
     }
+
+    /// How far past the tolerance a measured deviation may be: the distances are computed at
+    /// coordinates of 500,000, whose rounding is 1.2e-10 (a few of those, and the nearest point found
+    /// on a curve to 1e-9 of its parameter, which moves a distance to it by the square of that).
+    const MEASURED: f64 = 1e-9;
 
     /// A curve too big to measure the length of is not sampled as if it were a point: its run stays
     /// as it is, rather than becoming a few chords far from it.
@@ -702,17 +744,20 @@ mod tests {
         quarter.curve_to((r, k), (k, r), (0.0, r));
         let opts = SimplifyOptions::default().tolerance(1.0).straight_lines(true);
         let simpler = simplify_with(&quarter, &opts);
-        assert!(deviation(&quarter, &simpler) <= 1.1, "{} from the curve", deviation(&quarter, &simpler));
-        // One that can be measured is simplified, as ever.
+        assert_eq!(simpler, quarter, "the run stays as it is");
+        // One that can be measured is simplified, as ever: to lines, within the tolerance both ways.
         let r = 5e5;
         let k = 0.552_284_749_830_793_6 * r;
         let mut small = BezPath::new();
         small.move_to((r, 0.0));
         small.curve_to((r, k), (k, r), (0.0, r));
         let simpler = simplify_with(&small, &opts);
-        assert!(deviation(&small, &simpler) <= 1.1, "the curve is {} from the result", deviation(&small, &simpler));
+        assert!(simpler.segments().count() > 1, "{simpler:?}");
+        assert!(simpler.segments().all(|s| matches!(s, PathSeg::Line(_))), "only lines: {simpler:?}");
+        let tol = opts.tolerance;
+        assert!(deviation(&small, &simpler) <= tol + MEASURED, "the curve is {} from the result", deviation(&small, &simpler));
         // The chords, between the samples they are drawn from, are as near the curve.
-        assert!(deviation(&simpler, &small) <= 1.1, "the result is {} from the curve", deviation(&simpler, &small));
+        assert!(deviation(&simpler, &small) <= tol + MEASURED, "the result is {} from the curve", deviation(&simpler, &small));
     }
 
     /// The most chords of a curve are as far from it as `chord_intervals` says they can be, at the
@@ -749,6 +794,32 @@ mod tests {
         let long = polyline(&[(0.0, 0.0), (5e8, 0.0), (1e9, 0.0)], false);
         let opts = SimplifyOptions::default().tolerance(0.5).straight_lines(true);
         assert_eq!(anchor_count(&simplify_with(&long, &opts)), 2);
+    }
+
+    /// A short curl, sampled at the intervals its length asks for (four), can be further from the chords
+    /// of its samples than a tenth of the tolerance: it is sampled more, as a long curve is, so that what
+    /// the reduction takes off the tolerance for it is small and the result is within the tolerance.
+    #[test]
+    fn a_short_curl_is_sampled_as_finely_as_its_chords_need() {
+        use kurbo::{ParamCurve, ParamCurveNearest};
+        let c = CubicBez::new((0.0, 0.0), (3.0, 2.0), (-2.0, 2.0), (1.0, 0.0));
+        let tol = 3.0;
+        let curl = Seg { c, line: false };
+        assert!(sample_error(&curl, 4, tol * 0.05) > tol * 0.1, "{}", sample_error(&curl, 4, tol * 0.05));
+        let mut path = BezPath::new();
+        path.move_to(c.p0);
+        path.curve_to(c.p1, c.p2, c.p3);
+        work::reset();
+        let simpler = simplify_with(&path, &SimplifyOptions::default().tolerance(tol).straight_lines(true));
+        let samples = work::take(Work::FitSamples);
+        assert!(samples > 5, "{samples} samples: more than the five of four intervals");
+        let worst = (0..=1000)
+            .map(|k| {
+                let p = c.eval(f64::from(k) / 1000.0);
+                simpler.segments().map(|s| s.nearest(p, 1e-12).distance_sq).fold(f64::INFINITY, f64::min).sqrt()
+            })
+            .fold(0.0, f64::max);
+        assert!(worst <= tol, "{worst} from the result");
     }
 
     /// The polyline reduction is charged before it scans: with little of the fit work left after the

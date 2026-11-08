@@ -90,6 +90,15 @@ pub const MAX_COVERAGE_ENTRIES: usize = 1 << 25;
 /// time grows with the shapes at the point). About 50 to 90 ns a segment in a pass. Counted before the first pass; past it the operation gives no shapes.
 pub const MAX_PASS_WORK: usize = 1 << 25;
 
+/// Most segments a planar map ([`crate::live_paint`], [`crate::shape_builder`], and Divide with an open
+/// path) winds points against, in all, to find what fills its faces and which face each hole is in:
+/// 67,108,864. A face is tested against each subpath of each input whose bounds hold a point of it,
+/// and a hole against each face whose bounds hold it, so contours nested n deep cost about the square
+/// of n: rectangles nested 4,000 deep in one shape about 64 million (each of four segments). Each
+/// test is charged before it is made; past the limit the map is not built (`live_paint` gives
+/// nothing, `shape_builder` and Divide the filled areas, as for any map that cannot be built).
+pub const MAX_FILL_WORK: usize = 1 << 26;
+
 /// Most path elements (a move, a close, and a segment each) all the paths of one operation may
 /// hold together: 524,288 (the default of [`Limits::elements`]). Every operation reads its input a few times and keeps several copies
 /// of it (the sweep's segments cost a few hundred bytes each: a union of two paths of this size
@@ -122,6 +131,9 @@ pub struct Limits {
     /// Most segments the contour passes of a classified walk (Merge, Divide, Trim, Crop) walk in all:
     /// batches of classes times segments ([`MAX_PASS_WORK`]).
     pub pass_work: usize,
+    /// Most segments a planar map winds points against to find the fills of its faces and the faces
+    /// its holes are in ([`MAX_FILL_WORK`]).
+    pub fill_work: usize,
     /// Most segment ends at one point ([`MAX_ENDS_AT_A_POINT`]).
     pub ends_at_a_point: usize,
     /// Most work of the lines that cross at one point: the square of the others each crosses there,
@@ -158,6 +170,7 @@ impl Limits {
         sweep_line_pairs: MAX_SWEEP_LINE_PAIRS,
         sweep_event_work: MAX_SWEEP_EVENT_WORK,
         pass_work: MAX_PASS_WORK,
+        fill_work: MAX_FILL_WORK,
         ends_at_a_point: MAX_ENDS_AT_A_POINT,
         crossing_work: MAX_CROSSING_WORK,
         coverage_entries: MAX_COVERAGE_ENTRIES,

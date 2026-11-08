@@ -59,14 +59,25 @@ fn deviation_of(a: &BezPath, b: &BezPath) -> f64 {
 
 // ---- offset
 
+/// Every subpath of `path` is closed.
+fn all_closed(path: &BezPath) -> bool {
+    subpaths(path) == path.elements().iter().filter(|e| matches!(e, PathEl::ClosePath)).count()
+}
+
 #[test]
 fn a_cubic_that_returns_to_its_start_is_offset_as_a_closed_loop() {
     let inside = Point::new(20.0, 20.0);
-    for delta in [0.5, 2.0, -0.5, -2.0] {
-        let by_open = offset_path(&loop_path(false), delta, Join::Round, 4.0);
-        let by_shut = offset_path(&loop_path(true), delta, Join::Round, 4.0);
-        assert!(by_shut.winding(inside) != 0, "the closed loop's interior is in its offset by {delta}");
-        assert!(by_open.winding(inside) != 0, "the open loop's interior is in its offset by {delta}");
+    // The offsets of the loop (area 1,500) with round joins: grown by 0.5 and 2, shrunk by 0.5 and 2.
+    for (delta, want) in [(0.5, 1572.81), (2.0, 1800.55), (-0.5, 1428.82), (-2.0, 1225.43)] {
+        // The fallible form: `offset_path` gives the input back when the offset fails, which would pass
+        // the checks below as the loop itself.
+        let by_open = try_offset_path(&loop_path(false), delta, Join::Round, 4.0).expect("an offset of the open loop");
+        let by_shut = try_offset_path(&loop_path(true), delta, Join::Round, 4.0).expect("an offset of the closed loop");
+        for offset in [&by_open, &by_shut] {
+            assert!(offset.winding(inside) != 0, "the loop's interior is in its offset by {delta}");
+            assert!(all_closed(offset), "an outline, not the open loop: {offset:?}");
+            assert!(close(area(offset, NZ), want, 1e-4), "offset {delta}: {} against {want}", area(offset, NZ));
+        }
         assert!(close(area(&by_open, NZ), area(&by_shut, NZ), 1e-6), "offset {delta}: {} against {}", area(&by_open, NZ), area(&by_shut, NZ));
     }
 }
@@ -101,8 +112,13 @@ fn tight_turns() -> Vec<(BezPath, f64)> {
 #[test]
 fn the_outline_of_an_open_curve_that_turns_inside_the_radius_has_no_holes_whichever_way_it_is_offset() {
     for (path, d) in tight_turns() {
-        let grown = offset_path(&path, d, Join::Round, 4.0);
-        let inset = offset_path(&path, -d, Join::Round, 4.0);
+        // The fallible form: `offset_path` gives the open curve back when the offset fails.
+        let grown = try_offset_path(&path, d, Join::Round, 4.0).expect("the offset");
+        let inset = try_offset_path(&path, -d, Join::Round, 4.0).expect("the inset");
+        // Each is the outline of a stroke 2d wide (of a curve longer than d): closed, and more than 2d² in area.
+        for offset in [&grown, &inset] {
+            assert!(all_closed(offset) && area(offset, NZ) > 2.0 * d * d, "{d}: {offset:?}");
+        }
         assert_eq!(subpaths(&grown), 1, "the offset by {d}");
         assert_eq!(subpaths(&inset), subpaths(&grown), "the offset by -{d} has the contours of the one by {d}");
         assert!(close(area(&grown, NZ), area(&inset, NZ), 1e-3), "{d}: {} against {}", area(&grown, NZ), area(&inset, NZ));
@@ -275,6 +291,8 @@ fn a_path_that_retraces_itself_does_not_hide_the_square_it_is_beside() {
 // ---- booleans
 
 #[test]
+// The predicate's panic is caught only where panics unwind; where they abort it ends the process.
+#[cfg(panic = "unwind")]
 fn a_panic_of_the_predicate_in_the_recovery_is_an_error_not_a_retry() {
     let (a, b) = (closed(&[(3.0, 1.0), (3.0, 3.0), (0.0, 1.0)]), closed(&[(3.0, 0.0), (0.0, 2.0), (3.0, 2.0), (0.0, 0.0), (0.0, 1.0)]));
     let asked = std::cell::Cell::new(false);
@@ -332,12 +350,16 @@ fn straight_simplification_of_a_huge_curve_stays_within_the_tolerance_between_it
     quarter.curve_to((r, KAPPA * r), (KAPPA * r, r), (0.0, r));
     let opts = SimplifyOptions::default().tolerance(1.0).straight_lines(true);
     let simpler = simplify_with(&quarter, &opts);
+    assert!(simpler.segments().count() > 1 && simpler.segments().all(|s| matches!(s, kurbo::PathSeg::Line(_))), "{simpler:?}");
+    // Within the tolerance, but for the rounding of distances measured at coordinates of 500,000
+    // (1.2e-10 each).
+    let within = opts.tolerance + 1e-9;
     // The chords of the result, probed between their ends, against the curve.
     let off = deviation_of(&simpler, &quarter);
-    assert!(off <= 1.1, "the result is {off} from the curve");
+    assert!(off <= within, "the result is {off} from the curve");
     // And the curve against the result.
     let back = deviation_of(&quarter, &simpler);
-    assert!(back <= 1.1, "the curve is {back} from the result");
+    assert!(back <= within, "the curve is {back} from the result");
 }
 
 #[test]

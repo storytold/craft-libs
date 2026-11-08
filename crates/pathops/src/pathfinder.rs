@@ -6,7 +6,7 @@
 
 use std::collections::HashMap;
 
-use kurbo::{BezPath, ParamCurve, ParamCurveNearest, Point, Shape as _};
+use kurbo::{BezPath, CubicBez, ParamCurve, ParamCurveNearest, Point, Shape as _};
 use linesweeper::topology::{ContourIdx, Contours};
 
 use crate::FillRule;
@@ -562,28 +562,37 @@ fn outline_edges(junctions: Vec<Point>, shapes: &[Shape]) -> Vec<Shape> {
                 // curve stays inside its control points' hull), so the other junctions can't match.
                 let b = kurbo::Shape::bounding_box(&c).union(kurbo::Rect::from_points(c.p1, c.p2)).inflate(reach, reach);
                 let lo = junctions.partition_point(|j| j.x < b.x0);
-                let mut ts: Vec<f64> = junctions
-                    .get(lo..)
-                    .unwrap_or_default()
-                    .iter()
-                    .take_while(|j| j.x <= b.x1)
-                    .filter(|j| j.y >= b.y0 && j.y <= b.y1)
-                    .filter_map(|&j| {
-                        let nr = c.nearest(j, 1e-9);
-                        (nr.distance_sq.sqrt() <= reach).then_some(nr.t)
-                    })
-                    .collect();
-                ts.sort_by(f64::total_cmp);
-                // Junctions are compared where they are, not by parameter: a shape's own anchor and
-                // a crossing computed a hair from it are one junction, and one within `reach` of an
-                // end of the segment is that end. Else a sliver piece is left between them (VectorCraft issue 3870).
                 let at = |t: f64| kurbo::ParamCurve::eval(&c, t);
+                // A cubic that crosses itself passes through the junction there twice, and `nearest`
+                // gives one of the two: both are cuts.
+                let twice = if line { None } else { double_point(&c).filter(|&(s, t)| at(s).distance(at(t)) <= reach) };
+                let mut ts: Vec<f64> = Vec::new();
+                for &j in junctions.get(lo..).unwrap_or_default().iter().take_while(|j| j.x <= b.x1).filter(|j| j.y >= b.y0 && j.y <= b.y1) {
+                    let nr = c.nearest(j, 1e-9);
+                    if nr.distance_sq.sqrt() <= reach {
+                        ts.push(nr.t);
+                    }
+                    if let Some((s, t)) = twice.filter(|&(s, _)| at(s).distance(j) <= reach) {
+                        ts.extend([s, t]);
+                    }
+                }
+                ts.sort_by(f64::total_cmp);
+                // Junctions are compared where they are, not by parameter alone: a shape's own anchor and
+                // a crossing computed a hair from it are one junction, and one within `reach` of an end of
+                // the segment is that end. Else a sliver piece is left between them (VectorCraft issue
+                // 3870). But two cuts at one point with the curve's loop between them are two.
+                let speck = |a: f64, z: f64| {
+                    let s = c.subsegment(a..z);
+                    s.p0.distance(s.p1) + s.p1.distance(s.p2) + s.p2.distance(s.p3) <= 2.0 * reach
+                };
                 let start_is_junction = ts.first().is_some_and(|&t| at(t).distance(c.p0) <= reach);
                 let mut cuts: Vec<f64> = vec![0.0];
                 for t in ts {
                     let p = at(t);
-                    let last = at(cuts.last().copied().unwrap_or(0.0));
-                    if p.distance(last) > reach && p.distance(c.p3) > reach {
+                    let last = cuts.last().copied().unwrap_or(0.0);
+                    let at_last = p.distance(at(last)) <= reach && speck(last, t);
+                    let at_end = p.distance(c.p3) <= reach && speck(t, 1.0);
+                    if !at_last && !at_end {
                         cuts.push(t);
                     }
                 }
@@ -677,18 +686,56 @@ fn outline_edges(junctions: Vec<Point>, shapes: &[Shape]) -> Vec<Shape> {
         .collect()
 }
 
+/// The point halfway along the chain `c`, by length.
+///
+/// Each segment is measured to a millionth, or to a billionth of its control polygon where that is
+/// coarser. kurbo's solver for where a length runs out steps by the accuracy over the length, and
+/// takes as many halvings as `log2(length / accuracy)`: a fixed 1e-6 asks it for 2^64 of them or
+/// more on a curve longer than about 9e12 (a shift past the width of its integer, a panic where
+/// arithmetic is checked), and a relative accuracy keeps them to about thirty at any size, and the
+/// measuring of each segment to a few levels (the same 1e-6 for a segment up to a thousand long).
 fn mid_point(c: &[Seg]) -> Point {
-    let lens: Vec<f64> = c.iter().map(|s| kurbo::ParamCurveArclen::arclen(&s.c, 1e-6)).collect();
+    let accuracy = |s: &CubicBez| (1e-9 * (s.p0.distance(s.p1) + s.p1.distance(s.p2) + s.p2.distance(s.p3))).max(1e-6);
+    let lens: Vec<f64> = c.iter().map(|s| kurbo::ParamCurveArclen::arclen(&s.c, accuracy(&s.c))).collect();
     let total: f64 = lens.iter().sum();
     let mut acc = 0.0;
     for (s, l) in c.iter().zip(&lens) {
         if acc + l >= total / 2.0 && *l > 0.0 {
-            let t = kurbo::ParamCurveArclen::inv_arclen(&s.c, total / 2.0 - acc, 1e-6);
+            let t = kurbo::ParamCurveArclen::inv_arclen(&s.c, total / 2.0 - acc, accuracy(&s.c));
             return s.c.eval(t);
         }
         acc += l;
     }
-    c[0].c.p0
+    c.first().map_or(Point::ZERO, |s| s.c.p0)
+}
+
+/// The two parameters, `s < t` inside `c`, at which the cubic `c` passes through one point (where it
+/// crosses itself), if it does.
+///
+/// In the power basis `B(t) = a t³ + b t² + c₁ t + d`, `B(s) = B(t)` for `s ≠ t` is, divided by
+/// `s - t`, `a (s² + s t + t²) + b (s + t) + c₁ = 0`: with `σ = s + t` and `π = s t`, `a (σ² - π) +
+/// b σ + c₁ = 0`. Crossed with `a` that is `(a × b) σ + a × c₁ = 0`, and along `a` it gives `π`; `s` and
+/// `t` are the roots of `x² - σ x + π`.
+fn double_point(c: &CubicBez) -> Option<(f64, f64)> {
+    let (p0, p1, p2, p3) = (c.p0.to_vec2(), c.p1.to_vec2(), c.p2.to_vec2(), c.p3.to_vec2());
+    let a = p3 - p2 * 3.0 + p1 * 3.0 - p0;
+    let b = (p2 - p1 * 2.0 + p0) * 3.0;
+    let c1 = (p1 - p0) * 3.0;
+    let axb = a.cross(b);
+    let aa = a.hypot2();
+    // `a` and `b` along one line (or a quadratic, `a` nothing): no single point it passes twice.
+    if !(axb.is_finite() && aa.is_finite()) || axb.abs() <= 1e-12 * aa.sqrt() * b.hypot() || aa <= 0.0 {
+        return None;
+    }
+    let sigma = -a.cross(c1) / axb;
+    let pi = sigma * sigma + (a.dot(b) * sigma + a.dot(c1)) / aa;
+    let disc = sigma * sigma - 4.0 * pi;
+    if disc.is_nan() || disc <= 0.0 {
+        return None;
+    }
+    let r = disc.sqrt();
+    let (s, t) = ((sigma - r) / 2.0, (sigma + r) / 2.0);
+    (s > 0.0 && t < 1.0).then_some((s, t))
 }
 
 #[cfg(test)]

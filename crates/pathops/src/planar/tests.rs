@@ -552,8 +552,8 @@ fn rect_index_reads_a_diagonal_hatch_only_near_the_point() {
 }
 
 /// The index's memory stays linear in the item count: a segment is filed as the bounds of its
-/// pieces, and coincident segments (each long as the whole column) go to the scanned list once the
-/// index holds its budget of rectangles, and are still all found.
+/// pieces, and coincident segments (each long as the whole column) are filed under their bounds once
+/// the index holds its budget of rectangles, and are still all found, where their bounds hold the point.
 #[test]
 fn rect_index_holds_a_bounded_number_of_references() {
     // Ten collinear horizontal lines, cut into pieces a tenth of their length.
@@ -564,17 +564,20 @@ fn rect_index_holds_a_bounded_number_of_references() {
     assert!((10..=1000).contains(&index.entries.len()), "{} rectangles", index.entries.len());
     assert_eq!(index.at(Point::new(500.0, 0.0), 0.1).count(), 10);
     // 4,096 coincident vertical segments, each of 4,096 pieces: 16 million rectangles filed whole;
-    // the budget keeps it to a few hundred thousand and scans the rest.
+    // the budget keeps it to a few hundred thousand, and the segments past it are filed as their bounds.
     let n = 4096u32;
     let seg = PathSeg::Line(kurbo::Line::new((50.0, 0.0), (50.0, 200.0)));
     let items: Vec<_> = (0..n).map(|k| (seg.bounding_box(), (seg, k))).collect();
     let index = RectIndex::with_footprint(items, |r, (s, _), cell| segment_footprint(r, s, cell));
-    assert!(index.entries.len() <= n as usize * 64 + 4096, "{} rectangles", index.entries.len());
-    assert!(!index.rest.is_empty() && index.rest.len() < n as usize, "{} scanned", index.rest.len());
+    assert!(index.entries.len() <= n as usize * 65 + 4096, "{} rectangles", index.entries.len());
+    assert!(index.rest.is_empty(), "{} scanned", index.rest.len());
     let mut got: Vec<u32> = index.at(Point::new(50.0, 100.0), 0.1).map(|(_, k)| *k).collect();
     got.sort_unstable();
     assert_eq!(got, (0..n).collect::<Vec<_>>());
+    // A point their bounds do not hold reads none of them (scanned, each was read at every lookup).
+    work::reset();
     assert_eq!(index.at(Point::new(60.0, 100.0), 0.1).count(), 0);
+    assert!(work::take(Work::IndexCandidates) < 64, "the segments past the budget are not read where they are not");
 }
 
 /// One shape far from the rest, or a second cluster far from the first, does not make a lookup
@@ -1275,11 +1278,12 @@ fn a_fill_of_many_subpaths_is_tested_against_the_few_that_hold_the_point() {
     for n in [4_000usize, 16_000] {
         let shape = column(n);
         let fill = super::graph::Fill::new(&shape);
+        let budget = super::graph::FillWork::new();
         work::reset();
         // A point in the middle of every square is in its fill, and one between two is not.
         for j in 0..n {
-            assert!(fill.contains(Point::new(5_000.5, 3.0 * j as f64 + 0.5)), "square {j}");
-            assert!(!fill.contains(Point::new(5_000.5, 3.0 * j as f64 + 2.0)), "gap {j}");
+            assert_eq!(fill.contains(Point::new(5_000.5, 3.0 * j as f64 + 0.5), &budget), Some(true), "square {j}");
+            assert_eq!(fill.contains(Point::new(5_000.5, 3.0 * j as f64 + 2.0), &budget), Some(false), "gap {j}");
         }
         let subpaths = work::take(Work::FillSubpaths);
         assert!(subpaths <= 2 * n, "{subpaths} subpaths wound for {n} squares and as many gaps, against {} for a scan", 2 * n * n);
@@ -1368,34 +1372,65 @@ fn an_open_path_that_snapping_levels_moves_the_shear_on() {
     assert_eq!(both.k(), 1.0 / 64.0, "the next shear, in which the line rises 1.6");
 }
 
-/// A side of an open path no longer than a few tolerances of the sweep is level in every shear (the
-/// shear moves its far end by less than the tolerance), and is no side the level test looks at: one
-/// such feature in a drawing does not leave it with no frame. A side a little longer is looked at.
+/// A side of an open path no longer than two tolerances of the sweep is level in every shear (the
+/// steepest raises its far end by less than one), and is not looked at: a drawing with one is framed at
+/// the first try. One of a few tolerances (up to eight) is short: it does not make a frame fail, but a
+/// frame in which it is not level is looked for, and used where there is one. A side longer is long.
 #[test]
-fn a_side_within_a_few_tolerances_is_not_looked_at_by_the_level_test() {
-    use super::index::frame_for;
+fn a_side_within_a_few_tolerances_does_not_fail_a_frame_and_is_kept_where_a_frame_can() {
+    use super::index::{SHEARS, frame_for};
     let shape = |p: BezPath, key: u64| Shape::new(p, FillRule::NonZero, key);
     let square = rect_path(0.0, 0.0, 100.0, 100.0);
-    // The sweep's tolerance here is 1e-6. Stubs along the height of the frame, whichever shear it uses.
-    for len in [1e-9, 1e-7, 7e-6] {
+    let frame_with = |stub: BezPath| {
+        work::reset();
+        let frame = frame_for(&[shape(square.clone(), 0), shape(line_path((-10.0, 50.0), (110.0, 50.0)), 1), shape(stub, 2)]);
+        (frame.map(|f| f.k()), work::take(Work::FrameTries))
+    };
+    // The sweep's tolerance here is 1e-6. Stubs along the height of the frame and across it.
+    for len in [1e-9, 1e-7, 1.9e-6] {
         for stub in [line_path((300.0, 300.0), (300.0 + len, 300.0)), line_path((300.0, 300.0), (300.0 + len, 300.0 + len))] {
-            work::reset();
-            let frame = frame_for(&[shape(square.clone(), 0), shape(line_path((-10.0, 50.0), (110.0, 50.0)), 1), shape(stub, 2)]);
-            assert_eq!(frame.map(|f| f.k()), Some(1.0 / 32.0), "a stub {len} long");
-            assert_eq!(work::take(Work::FrameTries), 1, "a stub {len} long: framed at the first try");
+            assert_eq!(frame_with(stub), (Some(1.0 / 32.0), 1), "a stub {len} long: framed at the first try");
         }
     }
-    // A stub of 1e-4 along the height of the frame is a side: level in the usual shear, and the next works.
+    // One 7e-6 long along the height of the frame rises 7e-6 k, under the tolerance in the first seven
+    // shears and over it in the eighth, 1/4: that is the frame. Across it, it is level in none.
+    assert_eq!(frame_with(line_path((300.0, 300.0), (300.0 + 7e-6, 300.0))), (Some(1.0 / 4.0), 8));
+    assert_eq!(frame_with(line_path((300.0, 300.0), (300.0 + 7e-6, 300.0 + 7e-6))), (Some(1.0 / 32.0), 1));
+    // One 3.6e-6 long sloping -1/4 is within a tolerance of level in every shear: each is tried, and
+    // the first used (the stub may be lost from the map, the rest is kept).
+    assert_eq!(frame_with(line_path((300.0, 300.0), (300.0 + 3.5e-6, 300.0 - 3.5e-6 / 4.0))), (Some(1.0 / 32.0), SHEARS.len()));
+    // A stub of 1e-4 along the height of the frame is long: level in the usual shear, and the next works.
     work::reset();
     let stub = line_path((300.0, 300.0), (300.0 + 1e-4, 300.0 - 1e-4 / 32.0));
     let frame = frame_for(&[shape(square, 0), shape(stub, 2)]).expect("a frame");
     assert!(frame.k() != 1.0 / 32.0 && work::take(Work::FrameTries) > 1, "k = {}", frame.k());
 }
 
-/// Lines level in each of the ten shears together are in no frame: the map is not built, rather than built
-/// with one of them lost.
+/// A line of segments each shorter than 16 tolerances of the sweep is lost from the map in any frame,
+/// level in it or not: the map takes pieces whose ends lie within that of each other for copies of one
+/// edge (the sweep cuts the two passes of an open path, or coincident outlines, a little apart) and
+/// joins their ends. A line of segments a little longer is kept. This is what no choice of frame changes.
 #[test]
-fn open_paths_level_in_every_shear_give_no_frame_and_no_map() {
+fn a_line_of_segments_under_sixteen_tolerances_is_lost_in_any_frame() {
+    // The sweep's tolerance is 1e-6 here; the segments are 1.4e-5 and 2.8e-5 long, on a diagonal level in no frame.
+    for (step, whole) in [(1e-5, false), (2e-5, true)] {
+        let pts: Vec<(f64, f64)> = (0..=1_000).map(|i| (f64::from(i) * step, f64::from(i) * step)).collect();
+        let line = polyline(&pts, false);
+        let (_, edges) = live_paint(&[rect(0.0, 0.0, 1.0, 1.0, 0), Shape::new(line.clone(), FillRule::NonZero, 2)]);
+        let kept: f64 = edges.iter().filter(|e| e.key == 2).map(|e| length(&e.path)).sum();
+        if whole {
+            assert!((kept - length(&line)).abs() < 1e-9, "{kept} of {}", length(&line));
+        } else {
+            assert!(kept.abs() < 1e-12, "{kept} of {}", length(&line));
+        }
+    }
+}
+
+/// Ten lines, each level in one of the ten shears, are framed by an eleventh shear between their slopes,
+/// in which none is level, and kept whole. Lines whose slopes leave no shear free give no frame and no
+/// map, rather than a map with one of them lost.
+#[test]
+fn open_paths_level_in_each_of_the_ten_shears_are_framed_by_one_between_their_slopes() {
     use super::index::{SHEARS, frame_for};
     let lines: Vec<Shape> = SHEARS
         .iter()
@@ -1403,13 +1438,29 @@ fn open_paths_level_in_every_shear_give_no_frame_and_no_map() {
         .map(|(i, k)| Shape::new(line_path((0.0, 100.0 * i as f64), (1024.0, 100.0 * i as f64 - k * 1024.0)), FillRule::NonZero, i as u64))
         .collect();
     work::reset();
-    assert!(frame_for(&lines).is_none(), "a line is level in each shear");
-    assert_eq!(work::take(Work::FrameTries), SHEARS.len(), "each shear is tried once, and no other");
-    assert_eq!(live_paint(&lines), (Vec::new(), Vec::new()));
+    let k = frame_for(&lines).map(|f| f.k()).expect("a frame between their slopes");
+    assert_eq!(work::take(Work::FrameTries), SHEARS.len() + 1, "each shear is tried once, and one more");
+    assert!(!SHEARS.contains(&k) && k > 1.0 / 1024.0 && k < 0.5, "k = {k}");
+    let (_, edges) = live_paint(&lines);
+    for (i, s) in lines.iter().enumerate() {
+        let kept: f64 = edges.iter().filter(|e| e.key == i as u64).map(|e| length(&e.path)).sum();
+        assert!((kept - length(&s.path)).abs() < 1e-6, "line {i}: {kept} of {}", length(&s.path));
+    }
     // Nine of them leave the tenth.
     work::reset();
     assert_eq!(frame_for(&lines[..9]).map(|f| f.k()), Some(SHEARS[9]));
     assert_eq!(work::take(Work::FrameTries), SHEARS.len());
+    // Lines 9e-6 long (nine tolerances), one level in each shear: each is level in the shears within
+    // about 0.44 of its own, which cover all of them.
+    let short: Vec<Shape> = SHEARS
+        .iter()
+        .enumerate()
+        .map(|(i, k)| Shape::new(line_path((0.0, 100.0 * i as f64), (9e-6, 100.0 * i as f64 - k * 9e-6)), FillRule::NonZero, i as u64))
+        .collect();
+    work::reset();
+    assert!(frame_for(&short).is_none(), "no shear is free");
+    assert_eq!(work::take(Work::FrameTries), SHEARS.len(), "and none more is tried");
+    assert_eq!(live_paint(&short), (Vec::new(), Vec::new()));
     // Ordinary art is framed at the first try.
     work::reset();
     assert!(frame_for(&[Shape::new(line_path((0.0, 0.0), (10.0, 10.0)), FillRule::NonZero, 0)]).is_some());
@@ -1434,29 +1485,106 @@ fn edges_that_run_back_over_each_other_cancel_and_the_rest_keep_their_order() {
     assert_eq!(without_retraces(vec![(a, b), (near, a)]).len(), 2);
 }
 
-/// A retraced stub costs the heights it would have been given: a square beside an out-and-back path
-/// with a vertex at every integer height is found at the first heights tried.
+/// A retraced stub costs the heights it would have been given: a square beside a zigzag that goes out
+/// and back through the same points, turning at a vertex at every integer height, is found at the first
+/// heights tried once the retrace is dropped. A stub out and back along a straight line, through the
+/// same vertices or others, puts no heights in the search but its two ends'.
 #[test]
 fn a_retraced_path_does_not_use_up_the_heights_of_the_search() {
-    let mut p = polyline(&[(0.0, 400.3), (1.0, 400.3), (1.0, 401.3), (0.0, 401.3)], true);
-    let out: Vec<(f64, f64)> = (0..=1000).map(|y| (5.0, f64::from(y))).collect();
-    let back: Vec<(f64, f64)> = (0..1000).rev().map(|y| (5.0, f64::from(y))).collect();
-    p.extend(polyline(&[out, back].concat(), false).iter());
+    let square = polyline(&[(0.0, 400.3), (1.0, 400.3), (1.0, 401.3), (0.0, 401.3)], true);
+    let zigzag: Vec<(f64, f64)> = (0..=1000).map(|y| (5.0 + 0.5 * f64::from(y % 2), f64::from(y))).collect();
+    let back: Vec<(f64, f64)> = zigzag.iter().rev().skip(1).copied().collect();
+    let mut p = square.clone();
+    p.extend(polyline(&[zigzag, back].concat(), false).iter());
     work::reset();
     let at = crate::interior_point(&p).expect("a point in the square");
     assert!(kurbo::Shape::winding(&p, at) != 0 && at.x < 1.0);
     // The heights of the whole path (nine, and the sixty-four more) find nothing in 2,001 stretches of a
     // thousand heights; those of what does not cancel, in its own bounds, find the square at the first.
-    let heights = work::take(Work::InteriorHeights);
-    assert_eq!(heights, 9 + 64 + 9, "the first search, then the second");
+    assert_eq!(work::take(Work::InteriorHeights), 9 + 64 + 9, "the first search, then the second");
     // Without the retrace it is the same square.
-    let square = polyline(&[(0.0, 400.3), (1.0, 400.3), (1.0, 401.3), (0.0, 401.3)], true);
     assert_eq!(crate::interior_point(&p), crate::interior_point(&square));
+    // Straight out and back through the same vertices: the stretches are those of its two ends and the
+    // square's, three of them, and the one in the middle finds the square.
+    let out: Vec<(f64, f64)> = (0..=1000).map(|y| (5.0, f64::from(y))).collect();
+    let back: Vec<(f64, f64)> = (0..1000).rev().map(|y| (5.0, f64::from(y))).collect();
+    let mut q = square.clone();
+    q.extend(polyline(&[out, back].concat(), false).iter());
+    work::reset();
+    let at = crate::interior_point(&q).expect("a point in the square");
+    assert!(kurbo::Shape::winding(&q, at) != 0 && at.x < 1.0);
+    assert_eq!(work::take(Work::InteriorHeights), 9 + 3);
     // A path that is nothing but a retrace has no inside.
     let stub = polyline(&[(0.0, 0.0), (0.0, 5.0), (0.0, 10.0), (0.0, 5.0), (0.0, 0.0)], false);
     assert_eq!(crate::interior_point(&stub), None);
+    // Nor one along a slanted line, whose points are rounded each way: its slivers are rounding.
+    let slant = polyline(&[(0.0, 0.0), (0.3, 1.0), (0.9, 3.0), (0.6, 2.0), (0.0, 0.0)], false);
+    assert_eq!(crate::interior_point(&slant), None);
+}
+
+/// A retrace whose way back has zeros of the other sign (`-0.0`, as a mirror or a negated coordinate
+/// gives) is the same edge the other way: the bits of a zero of either sign are one key.
+#[test]
+fn a_retrace_through_zeros_of_the_other_sign_cancels() {
+    use super::map::without_retraces;
+    let (a, b) = (Point::new(0.0, 0.0), Point::new(0.0, 1.0));
+    let (a_neg, b_neg) = (Point::new(-0.0, -0.0), Point::new(-0.0, 1.0));
+    assert_eq!(without_retraces(vec![(a, b), (b_neg, a_neg)]), vec![]);
+    assert_eq!(without_retraces(vec![(a, b), (b_neg, a_neg), (a_neg, b)]), vec![(a_neg, b)]);
+    // And through `interior_point`: a square beside a zigzag along x = 0 that comes back through -0.0.
+    let square = polyline(&[(10.0, 400.3), (11.0, 400.3), (11.0, 401.3), (10.0, 401.3)], true);
+    let zigzag: Vec<(f64, f64)> = (0..=1000).map(|y| (0.5 * f64::from(y % 2), f64::from(y))).collect();
+    let back: Vec<(f64, f64)> = zigzag.iter().rev().skip(1).map(|&(x, y)| (if x == 0.0 { -0.0 } else { x }, y)).collect();
+    let mut p = square;
+    p.extend(polyline(&[zigzag, back].concat(), false).iter());
+    let at = crate::interior_point(&p).expect("a point in the square");
+    assert!(kurbo::Shape::winding(&p, at) != 0 && at.x > 10.0, "{at:?}");
 }
 
 fn line_path(a: (f64, f64), b: (f64, f64)) -> BezPath {
     polyline(&[a, b], false)
+}
+
+/// `n` rectangles nested in one shape, each 1,000 times as tall as it is wide, as one shape.
+fn tall_nested(n: usize) -> Shape {
+    let mut one = BezPath::new();
+    for j in 0..n {
+        let (j, m) = (j as f64, (2 * n) as f64);
+        one.extend(rect_path(10.0 * j, 10_000.0 * j, 10.0 * (m - j), 10_000.0 * (m - j)).iter());
+    }
+    Shape::new(one, FillRule::NonZero, 0)
+}
+
+/// The winding of points against the fills and faces of a planar map is charged before each test,
+/// and a map that would charge more than the limit is not built. Rectangles nested n deep in one shape
+/// cost each face the subpaths round it, and each hole the faces round it: about 6 n² elements.
+#[test]
+fn the_fill_work_of_a_map_is_charged_before_each_test_and_held_to_its_limit() {
+    let charged = |n: usize, limit: usize| {
+        let l = crate::Limits { fill_work: limit, ..crate::Limits::default() };
+        work::reset();
+        let (faces, _) = crate::with_limits(l, || live_paint(&[tall_nested(n)]));
+        (faces.len(), work::take(Work::FillElements), work::take(Work::FillSubpaths))
+    };
+    let (faces, w100, wound) = charged(100, usize::MAX);
+    assert_eq!(faces, 100);
+    assert!((5 * 100 * 100..=7 * 100 * 100).contains(&w100), "{w100}");
+    let (faces, w200, _) = charged(200, usize::MAX);
+    assert_eq!(faces, 200);
+    assert!(w200 > 39 * w100 / 10 && w200 < 41 * w100 / 10, "{w100} and {w200}: twice as deep, four times the work");
+    // At the work it needs, the same map; one under it, none, and no more charged than the limit.
+    assert_eq!(charged(100, w100), (100, w100, wound));
+    let (faces, w, fewer) = charged(100, w100 - 1);
+    assert_eq!(faces, 0);
+    assert!(w < w100 && fewer < wound, "{w} charged, {fewer} subpaths wound");
+    // With none, nothing is wound.
+    assert_eq!(charged(100, 0), (0, 0, 0));
+    // Ordinary art is far from it: 2,000 squares in a column, one shape, charge each face its square.
+    let mut col = BezPath::new();
+    for j in 0..2_000 {
+        col.extend(rect_path(0.0, 3.0 * f64::from(j), 1.0, 3.0 * f64::from(j) + 1.0).iter());
+    }
+    work::reset();
+    assert_eq!(live_paint(&[Shape::new(col, FillRule::NonZero, 0)]).0.len(), 2_000);
+    assert!(work::take(Work::FillElements) <= 6 * 2_000, "a few elements a face");
 }

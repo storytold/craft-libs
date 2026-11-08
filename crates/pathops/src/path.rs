@@ -26,9 +26,27 @@ pub(crate) const HANDLE_EPS: f64 = 1e-9;
 /// segment arrives there, and the duplicate point is merged into it).
 pub(crate) const JOIN_TOLERANCE: f64 = 1e-7;
 
-/// The sine of the angle between the handles of a loop of one cubic below which it has no inside:
-/// rounding in the cross product of two handles is about 1e-16 of the product of their lengths.
-const LOOP_SINE: f64 = 1e-12;
+/// How many times its own rounding the cross product of the two handles of a loop of one cubic must
+/// pass for the loop to have an inside ([`handles_loop`]): each handle (a point less the start), the
+/// two products and their difference are each rounded once, a few units in the last place of the
+/// two terms in all.
+const LOOP_ROUNDING: f64 = 64.0;
+
+/// Do the handles `a` and `b` of a cubic from `start` that comes back to it take it round an area?
+/// Such a loop encloses 3/20 of the cross product of its handles, which is nothing when they lie
+/// along a line.
+///
+/// Told by the cross product against its own rounding, not by the area against the size of the loop,
+/// nor by the angle between the handles: a loop of 75 billion square units that is a trillion long and
+/// half a unit wide has handles 5e-13 of a radian apart, and is as much a loop as a round one. The cross
+/// product `x1 y2 - y1 x2` is rounded to a few units in the last place of its two terms, so that of
+/// handles along one line (also turned, each of them rounded) is under [`LOOP_ROUNDING`] machine epsilons
+/// of `|x1 y2| + |y1 x2|`: that much is nothing.
+pub(crate) fn handles_loop(start: Point, a: Point, b: Point) -> bool {
+    let (h1, h2) = (a - start, b - start);
+    let terms = (h1.x * h2.y).abs() + (h1.y * h2.x).abs();
+    h1.cross(h2).abs() > LOOP_ROUNDING * f64::EPSILON * terms
+}
 
 /// One subpath of a path: where it starts, the segments that follow, and whether it was closed.
 #[derive(Clone, Debug, PartialEq)]
@@ -102,13 +120,29 @@ impl Sub {
     /// as a path that comes back to where it started without closing.)
     pub(crate) fn closed_if_ends_meet(mut self) -> Self {
         if !self.closed && self.end().distance(self.start) < 1e-6 && (self.anchors() > 2 || self.loops_round_area()) {
-            let start = self.start;
-            if let Some(last) = self.draws.last_mut() {
-                *last = with_end(*last, start);
-            }
-            self.closed = true;
+            self.close_on_start();
         }
         self
+    }
+
+    /// An open subpath of one cubic that loops round an area and whose end lies within 1e-6 of its
+    /// start, as a closed subpath (as [`Sub::closed_if_ends_meet`] closes it); any other subpath
+    /// unchanged. Such a cubic draws the outline of its loop whether it is closed or not, and one that
+    /// is open is no cutting edge of anything but that loop.
+    pub(crate) fn closed_if_one_cubic_loop(mut self) -> Self {
+        if !self.closed && self.end().distance(self.start) < 1e-6 && self.loops_round_area() {
+            self.close_on_start();
+        }
+        self
+    }
+
+    /// The subpath closed, its last segment moved to end on its start.
+    fn close_on_start(&mut self) {
+        let start = self.start;
+        if let Some(last) = self.draws.last_mut() {
+            *last = with_end(*last, start);
+        }
+        self.closed = true;
     }
 
     /// Does the subpath draw anything? A closed one that is a single segment from its start back to
@@ -119,17 +153,10 @@ impl Sub {
     }
 
     /// Is the subpath one cubic whose handles, taken from its start, are not along one line? Such a
-    /// cubic that ends where it starts is a loop with an inside: it encloses 3/20 of the cross
-    /// product of its handles, which is nothing when they lie along a line.
-    ///
-    /// Told by the angle between the handles, not by the area against the size of the loop: a loop
-    /// of 150 million square units that is a billion long and one unit wide has an area a billionth
-    /// of the square of its length, and is as much a loop as a round one. What is nothing is a cross
-    /// product that is rounding, a trillionth of what the lengths of the handles could make of it.
+    /// cubic that ends where it starts is a loop with an inside ([`handles_loop`]).
     fn loops_round_area(&self) -> bool {
         let [PathEl::CurveTo(a, b, _)] = self.draws[..] else { return false };
-        let (h1, h2) = (a - self.start, b - self.start);
-        h1.cross(h2).abs() > LOOP_SINE * h1.hypot() * h2.hypot()
+        handles_loop(self.start, a, b)
     }
 
     /// The segments of the subpath as it is written ([`Sub::push_open`] or [`Sub::push_closed`]),
@@ -362,6 +389,13 @@ pub(crate) fn is_finite(path: &BezPath) -> bool {
         PathEl::CurveTo(a, b, p) => a.is_finite() && b.is_finite() && p.is_finite(),
         PathEl::ClosePath => true,
     })
+}
+
+/// A point as the bits of its coordinates, to hash or order it by: the same bits for the same point,
+/// with `-0.0` taken for `0.0` (they compare equal, and their bits do not).
+pub(crate) fn point_bits(p: Point) -> (u64, u64) {
+    let bits = |v: f64| if v == 0.0 { 0 } else { v.to_bits() };
+    (bits(p.x), bits(p.y))
 }
 
 /// One segment of a chain: a cubic plus whether it is a straight line.

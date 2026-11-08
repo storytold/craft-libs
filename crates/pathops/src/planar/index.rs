@@ -4,10 +4,9 @@
 use super::*;
 use crate::work::{self, Work};
 
-/// The shears the sweep's frame may use, `y + k x`, in the order tried: the first that leaves no open
-/// path level in the frame is used, by default 1/32, in which only an edge sloping -1/32 in the
-/// document is horizontal. Each is a power of two, so it maps typical coordinates exactly. An open
-/// path that is level in every one of them (it takes ten open paths, one level in each) gives no map.
+/// The shears the sweep's frame may use, `y + k x`, in the order tried ([`frame_for`]): by default
+/// 1/32, in which only an edge sloping -1/32 in the document is horizontal. Each is a power of two,
+/// so it maps typical coordinates exactly.
 pub(super) const SHEARS: [f64; 10] =
     [1.0 / 32.0, 1.0 / 64.0, 1.0 / 16.0, 1.0 / 128.0, 1.0 / 8.0, 1.0 / 256.0, 1.0 / 512.0, 1.0 / 4.0, 1.0 / 1024.0, 1.0 / 2.0];
 
@@ -34,15 +33,24 @@ impl Frame {
     }
 }
 
-/// The frame for `shapes`: the first of [`SHEARS`] in whose frame, after the paths are snapped to the
-/// sweep's tolerance, no open subpath has a side (of a segment's chord or control polygon) that is
-/// level, which the sweep takes the two passes of for cancelling out. `None` when the paths cannot
-/// be swept, or when every shear leaves one level.
+/// The frame for `shapes`, in which the sweep is given no open subpath that is level, which it takes
+/// the two passes of for cancelling out ([`level_sides`]). `None` when the paths cannot be swept, or
+/// when no frame is found in which every side longer than [`NOISE_SIDE`] tolerances is not level.
+///
+/// The first of [`SHEARS`] in whose frame, after the paths are snapped to the sweep's tolerance, no
+/// side of an open subpath is level is used, at the first try for ordinary art. A shear that leaves
+/// a long side level is no frame. One that leaves a short side level (from [`MIN_SIDE`] to
+/// [`NOISE_SIDE`] tolerances, which some shears level and others need not) is kept in case no shear
+/// leaves none, and then the one that leaves the fewest is used: a short edge is lost from the map only
+/// where every frame loses it. When each of the ten leaves a long side level (ten lines, one level in
+/// each), one more is tried, a shear between the slopes of the long sides in which none of them is
+/// level ([`free_shear`]): eleven tries at most.
 ///
 /// The test is made on the snapped paths because snapping is what levels an edge: the sweep orders by
 /// its tolerance, which a shape far away widens (a shape at 1e11 makes it 1.4e-3), and an edge that
 /// rises less than that in the frame, or whose ends land on one of the heights snapping rounds to,
-/// is level whatever its slope was.
+/// is level whatever its slope was. A shear in which the tolerance passes its limit (the art is near
+/// the largest coordinates the sweep takes) is passed over for the next.
 pub(super) fn frame_for(shapes: &[Shape]) -> Option<Frame> {
     // The paths as they are swept, in the document's frame, and the open subpaths among them.
     let mut plain: Vec<(BezPath, usize)> = Vec::new();
@@ -66,52 +74,183 @@ pub(super) fn frame_for(shapes: &[Shape]) -> Option<Frame> {
     if plain.is_empty() || !crate::budget::fits_elements(plain.iter().map(|p| &p.0)) {
         return None;
     }
+    // The frame that leaves the fewest short sides level (and no long one), and the widest tolerance seen.
+    let mut best: Option<(usize, Frame)> = None;
+    let mut widest: f64 = 0.0;
     for k in SHEARS {
-        crate::work::add(crate::work::Work::FrameTries, 1);
-        let (forward, back) = shear(k);
-        let mut inputs = plain.clone();
-        let mut open = opens.clone();
-        open.apply_affine(forward);
-        for (p, _) in &mut inputs {
-            p.apply_affine(forward);
+        let (frame, open) = match sheared(&plain, &opens, k) {
+            Sheared::Framed(frame, open) => (frame, open),
+            Sheared::TooWide => continue,
+            Sheared::NotFinite => return None,
+        };
+        widest = widest.max(frame.eps);
+        let level = level_sides(&open, frame.eps);
+        if level.long {
+            continue;
         }
-        let eps = eps_for(inputs.iter().map(|p| &p.0)).ok()?;
-        // The open subpaths are snapped with the rest, to the same heights.
-        snap_horizontals(&mut inputs.iter_mut().map(|p| &mut p.0).chain(std::iter::once(&mut open)).collect::<Vec<_>>(), eps);
-        if !has_level_side(&open, eps) {
-            return Some(Frame { inputs, eps, back });
+        if level.short == 0 {
+            return Some(frame);
+        }
+        if best.as_ref().is_none_or(|(short, _)| level.short < *short) {
+            best = Some((level.short, frame));
         }
     }
-    None
+    if let Some((_, frame)) = best {
+        return Some(frame);
+    }
+    // Each of the ten leaves a long side level: one more shear, where none of the long sides is.
+    match sheared(&plain, &opens, free_shear(&opens, widest)?) {
+        Sheared::Framed(frame, open) => (!level_sides(&open, frame.eps).long).then_some(frame),
+        Sheared::TooWide | Sheared::NotFinite => None,
+    }
 }
 
-/// A side of a segment (of its chord or control polygon) no longer than this many tolerances of the
-/// sweep is no side the level test looks at.
+/// What shearing the paths of a map gives ([`sheared`]).
+enum Sheared {
+    /// The frame, and the open subpaths in it, snapped with the rest.
+    Framed(Frame, BezPath),
+    /// The sweep's tolerance in this frame passes its limit; in another it may not.
+    TooWide,
+    /// A point is not finite, in any frame.
+    NotFinite,
+}
+
+/// The paths `plain` sheared by `k` and snapped to the sweep's tolerance there, and the open subpaths
+/// `opens` with them (to the same heights). Counted as a try ([`Work::FrameTries`]).
+fn sheared(plain: &[(BezPath, usize)], opens: &BezPath, k: f64) -> Sheared {
+    work::add(Work::FrameTries, 1);
+    let (forward, back) = shear(k);
+    let mut inputs = plain.to_vec();
+    let mut open = opens.clone();
+    open.apply_affine(forward);
+    for (p, _) in &mut inputs {
+        p.apply_affine(forward);
+    }
+    let eps = match eps_for(inputs.iter().map(|p| &p.0)) {
+        Ok(eps) => eps,
+        Err(crate::PathOpsError::NonFinite) => return Sheared::NotFinite,
+        Err(_) => return Sheared::TooWide,
+    };
+    snap_horizontals(&mut inputs.iter_mut().map(|p| &mut p.0).chain(std::iter::once(&mut open)).collect::<Vec<_>>(), eps);
+    Sheared::Framed(Frame { inputs, eps, back }, open)
+}
+
+/// A level side longer than this many tolerances of the sweep is long: a frame that leaves one level
+/// is not used. A side no longer is short, and does not make a frame fail.
 ///
 /// A side whose two ends are within the sweep's tolerance in height is level in whichever shear is
 /// used: the shear moves its far end by its length times the shear, which is under the tolerance for
-/// a side this short, and the ends are snapped together. Taken as level, one such side (a separate
+/// a side this short, and the ends are snapped together. Taken as long, one such side (a separate
 /// stub, a point repeated a hair apart, a handle a nanometre long) would make every shear fail and
 /// empty the map. Where the heights of the two ends of a side level in all ten shears, snapping
 /// puts them within one tolerance in the shear of 1/2 and in the one of 1/1024, and so the side is
 /// under about 5 tolerances long (4 across, 3 up); 8 leaves room. A side that short is at the noise of the
-/// sweep, which cannot tell it from a point: its two passes may cancel and the piece be lost, as
-/// a feature of that size is whatever the frame.
+/// sweep, which cannot tell it from a point: its two passes may cancel and the piece be lost, in every
+/// frame that levels it ([`frame_for`] looks for one that does not).
 const NOISE_SIDE: f64 = 8.0;
 
-/// Does some segment of `open` have a side of its chord or control polygon, longer than [`NOISE_SIDE`]
-/// tolerances `eps`, that is level (rising by less than a millionth of its length)?
-fn has_level_side(open: &BezPath, eps: f64) -> bool {
-    open.segments().any(|seg| {
+/// A level side no longer than this many tolerances is not counted at all: the steepest shear, of
+/// 1/2, raises the far end of a side this long by no more than one tolerance, so it is level in every
+/// frame, and counting it would only make every frame look as bad as the others.
+const MIN_SIDE: f64 = 2.0;
+
+/// The level sides of the open subpaths of a frame ([`level_sides`]).
+struct Level {
+    /// Some side longer than [`NOISE_SIDE`] tolerances is level.
+    long: bool,
+    /// The level sides from [`MIN_SIDE`] to [`NOISE_SIDE`] tolerances long.
+    short: usize,
+}
+
+impl Level {
+    /// Counts a level side `length` long, in a frame of tolerance `eps`, as long or short (or not at all).
+    fn count(&mut self, length: f64, eps: f64) {
+        if length > NOISE_SIDE * eps {
+            self.long = true;
+        } else if length > MIN_SIDE * eps {
+            self.short += 1;
+        }
+    }
+}
+
+/// Is `d` level (rising by less than a millionth of its length)?
+fn is_level(d: kurbo::Vec2) -> bool {
+    d.y.abs() <= 1e-6 * (d.x.abs() + d.y.abs())
+}
+
+/// The sides of the open subpaths `open`, in a frame of tolerance `eps`, that are level: of each
+/// segment, its chord and each side of its control polygon.
+///
+/// Each side is looked at by itself. A long line of segments each shorter than [`NOISE_SIDE`]
+/// tolerances is not a long side: the map takes pieces whose ends lie within 16 tolerances of each
+/// other for copies of one edge, and loses a line of such pieces in any frame, level or not.
+fn level_sides(open: &BezPath, eps: f64) -> Level {
+    let mut level = Level { long: false, short: 0 };
+    for seg in open.segments() {
         let pts: Vec<Point> = match seg {
             PathSeg::Line(l) => vec![l.p0, l.p1],
             PathSeg::Quad(q) => vec![q.p0, q.p1, q.p2],
             PathSeg::Cubic(c) => vec![c.p0, c.p1, c.p2, c.p3],
         };
         let (first, last) = (pts.first().copied().unwrap_or(Point::ZERO), pts.last().copied().unwrap_or(Point::ZERO));
-        let sides = pts.windows(2).map(|w| w[1] - w[0]).chain(std::iter::once(last - first));
-        sides.into_iter().any(|d| d.hypot() > NOISE_SIDE * eps && d.y.abs() <= 1e-6 * (d.x.abs() + d.y.abs()))
-    })
+        // A line's one side is its chord, counted once.
+        let controls = if pts.len() > 2 { pts.windows(2).map(|w| w[1] - w[0]).collect() } else { Vec::new() };
+        for d in controls.into_iter().chain(std::iter::once(last - first)) {
+            if is_level(d) {
+                level.count(d.hypot(), eps);
+            }
+        }
+    }
+    level
+}
+
+/// A shear in `[1/1024, 1/2]` in which no long side of the open subpaths `opens` (in the document's
+/// frame: a chord, or a side of a control polygon) is level, the tolerance being about `eps`. A side
+/// `d` is level in the shear `-dy / dx`, and level after snapping in those within `4 eps / |dx|` of
+/// it; the middle of the widest stretch of shears that levels no long side is used, a multiple of
+/// 2^-14 where the stretch holds one (so that a grid of coordinates stays exact). `None` when the long
+/// sides level every shear in the range.
+fn free_shear(opens: &BezPath, eps: f64) -> Option<f64> {
+    let (lo, hi) = (1.0 / 1024.0, 0.5);
+    let mut barred: Vec<(f64, f64)> = Vec::new();
+    for seg in opens.segments() {
+        let pts: Vec<Point> = match seg {
+            PathSeg::Line(l) => vec![l.p0, l.p1],
+            PathSeg::Quad(q) => vec![q.p0, q.p1, q.p2],
+            PathSeg::Cubic(c) => vec![c.p0, c.p1, c.p2, c.p3],
+        };
+        let (first, last) = (pts.first().copied().unwrap_or(Point::ZERO), pts.last().copied().unwrap_or(Point::ZERO));
+        for d in pts.windows(2).map(|w| w[1] - w[0]).chain(std::iter::once(last - first)) {
+            if d.hypot() > NOISE_SIDE * eps && d.x != 0.0 {
+                let (k, w) = (-d.y / d.x, 4.0 * eps / d.x.abs());
+                barred.push((k - w, k + w));
+            }
+        }
+    }
+    barred.sort_by(|a, b| a.0.total_cmp(&b.0));
+    // The widest stretch of `[lo, hi]` that no interval covers.
+    let mut widest: Option<(f64, f64)> = None;
+    let mut reach = lo;
+    let mut take = |a: f64, b: f64| {
+        if b > a && widest.is_none_or(|(x, y)| b - a > y - x) {
+            widest = Some((a, b));
+        }
+    };
+    for (a, b) in barred {
+        if a > reach {
+            take(reach, a.min(hi));
+        }
+        reach = reach.max(b);
+        if reach >= hi {
+            break;
+        }
+    }
+    take(reach, hi);
+    let (a, b) = widest?;
+    let middle = 0.5 * (a + b);
+    let step = 1.0 / 16384.0;
+    let round = (middle / step).round() * step;
+    Some(if round > a && round < b { round } else { middle })
 }
 
 /// Boundary crossings per input, counted from the far west: slot `2i` counts input `i`'s
@@ -186,16 +325,16 @@ pub(super) fn mid(segs: &[Seg]) -> Option<Point> {
 /// or two clusters far from each other, cost nothing (a uniform grid over their union put all of
 /// them in one cell). A rectangle that is long and thin on a diagonal, whose bounds take in most
 /// of the art (an index of the bounds alone scanned a diagonal hatch whole for every point), is
-/// filed as the bounds of its pieces instead ([`Self::with_footprint`]), or, failing that, scanned
-/// for every point. A rectangle whose coordinates are not numbers holds no point and is left out.
+/// filed as the bounds of its pieces instead ([`Self::with_footprint`]), or, past a budget of them,
+/// as its bounds. A rectangle whose coordinates are not numbers holds no point and is left out.
 pub(crate) struct RectIndex<T> {
     items: Vec<(kurbo::Rect, T)>,
     /// The rectangles filed, each with the item it is a footprint of, in the order of the leaves.
     pub(crate) entries: Vec<(kurbo::Rect, u32)>,
     nodes: Vec<Node>,
     root: Option<usize>,
-    /// Items not filed (past the entry budget, or the `u32` positions), scanned for every point.
-    /// Items with bounds that are not finite are in neither: they hold no point.
+    /// Items not filed (past the `u32` positions), scanned for every point. Items with bounds that
+    /// are not finite are in neither: they hold no point.
     pub(crate) rest: Vec<usize>,
 }
 
@@ -211,8 +350,8 @@ struct Node {
 /// Most children of a node.
 const FANOUT: usize = 16;
 
-/// Most rectangles one item may be filed as, per item and on average (past it the item is
-/// scanned): a long segment filed as its pieces costs many, coincident ones a quadratic number.
+/// Most rectangles one item may be filed as, per item and on average (past it an item is filed as
+/// its bounds): a long segment filed as its pieces costs many, coincident ones a quadratic number.
 const ENTRIES_PER_ITEM: usize = 64;
 
 /// The rectangles in the order of a sort-tile-recursive packing: by the x of their centres into
@@ -278,7 +417,11 @@ impl<T> RectIndex<T> {
                 continue;
             }
             if pieces.len() > budget {
-                rest.push(i);
+                // Past the budget the item is filed under its bounds, one rectangle: a lookup reads it
+                // where its bounds hold the point and nowhere else (scanned, it was read at every one,
+                // and a map of a thousand tall rectangles nested read most of them for every edge).
+                entries.push((*r, index));
+                budget = budget.saturating_sub(1);
                 continue;
             }
             budget -= pieces.len();

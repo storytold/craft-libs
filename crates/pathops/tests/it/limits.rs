@@ -48,7 +48,35 @@ fn the_defaults_are_the_constants() {
     assert_eq!(l.crossing_work, MAX_CROSSING_WORK);
     assert_eq!(l.pass_work, MAX_PASS_WORK);
     assert_eq!(l.coverage_entries, MAX_COVERAGE_ENTRIES);
+    assert_eq!(l.fill_work, MAX_FILL_WORK);
+    assert_eq!(MAX_FILL_WORK, 1 << 26);
     assert_eq!(l, Limits::DEFAULT);
+}
+
+/// `n` rectangles nested in one shape, each 1,000 times as tall as it is wide (the bounds of their
+/// sides never overlap but at the corners, so that every limit counted before the sweep takes thousands).
+fn tall_nested(n: usize) -> BezPath {
+    let mut one = BezPath::new();
+    for j in 0..n {
+        let (j, m) = (j as f64, (2 * n) as f64);
+        one.extend(rectangle(Rect::new(10.0 * j, 10_000.0 * j, 10.0 * (m - j), 10_000.0 * (m - j))).iter());
+    }
+    one
+}
+
+#[test]
+fn a_lower_fill_limit_gives_no_map_for_contours_nested_deep() {
+    let shapes = [Shape::new(tall_nested(200), FillRule::NonZero, 0)];
+    let (faces, _) = live_paint(&shapes);
+    assert_eq!(faces.len(), 200, "a face between each two");
+    // 200 nested in one shape: each face is wound against the subpaths round it, and each hole against
+    // the faces round it, 6 elements each: about 6 x 200² of the 67 million.
+    let low = with(|l| l.fill_work = 200_000);
+    assert_eq!(with_limits(low, || live_paint(&shapes)), (Vec::new(), Vec::new()), "no map past the limit");
+    // shape_builder then gives the filled areas, as for any map it cannot build: the outer rectangle.
+    let filled = with_limits(low, || shape_builder(&shapes, false));
+    assert_eq!(filled.regions.len(), 1);
+    assert_eq!(with_limits(low, || shape_builder(&shapes, false)).regions, shape_builder(&shapes, false).regions);
 }
 
 #[test]
@@ -197,10 +225,13 @@ fn a_scope_ends_with_its_closure_nests_and_stays_on_its_thread() {
     });
     assert_eq!(answers, (refused, Ok(100.0), refused, Ok(100.0)));
     assert_eq!(try_area(&square, FillRule::NonZero), Ok(100.0), "back to the defaults");
-    // Also when the closure unwinds.
-    let unwound = std::panic::catch_unwind(|| with_limits(none, || panic!("the closure fails")));
-    assert!(unwound.is_err());
-    assert_eq!(try_area(&square, FillRule::NonZero), Ok(100.0), "back to the defaults after a panic");
+    // Also when the closure unwinds (where panics abort, it cannot).
+    #[cfg(panic = "unwind")]
+    {
+        let unwound = std::panic::catch_unwind(|| with_limits(none, || panic!("the closure fails")));
+        assert!(unwound.is_err());
+        assert_eq!(try_area(&square, FillRule::NonZero), Ok(100.0), "back to the defaults after a panic");
+    }
     assert_eq!(with_limits(none, || 7), 7, "the closure's value comes back");
 }
 

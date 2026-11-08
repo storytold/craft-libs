@@ -34,7 +34,10 @@ impl Outlines {
     }
 }
 
-/// The area an input's fill covers: its closed subpaths (open ones bound no face).
+/// The area an input's fill covers: its closed subpaths, and an open one that is one cubic that comes
+/// back to its start round an area ([`crate::path::Sub::closed_if_one_cubic_loop`]), which is the outline
+/// of that loop whether it is closed or not. Other open subpaths bound no face, a ring of more anchors
+/// that comes back to its start among them (the caller closes the ones whose fill should count).
 ///
 /// The subpaths are kept apart, under an index of their bounds: the winding of a point is the sum
 /// of the windings of the subpaths, and a subpath whose bounds miss the point adds nothing, so a
@@ -50,7 +53,8 @@ pub(super) struct Fill {
 impl Fill {
     pub(super) fn new(s: &Shape) -> Self {
         let subpaths: Vec<BezPath> = subs(&s.path)
-            .iter()
+            .into_iter()
+            .map(crate::path::Sub::closed_if_one_cubic_loop)
             .filter(|sp| sp.closed && sp.draws_something())
             .map(|sp| {
                 let mut path = BezPath::new();
@@ -64,21 +68,49 @@ impl Fill {
         Self { subpaths, index, bounds, rule: s.rule }
     }
 
-    pub(super) fn contains(&self, p: Point) -> bool {
+    /// Does the fill cover `p`? Each subpath whose bounds hold it is wound against it, its elements
+    /// charged to `work` first: `None` when that runs out.
+    pub(super) fn contains(&self, p: Point, work: &FillWork) -> Option<bool> {
         crate::work::add(crate::work::Work::FillTests, 1);
         if self.subpaths.is_empty() || !self.bounds.contains(p) {
-            return false;
+            return Some(false);
         }
-        let winding: i32 = self
-            .index
-            .at(p, 0.0)
-            .filter_map(|&i| self.subpaths.get(i))
-            .map(|sp| {
-                crate::work::add(crate::work::Work::FillSubpaths, 1);
-                sp.winding(p)
-            })
-            .sum();
-        crate::boolean::inside(self.rule, winding)
+        let mut winding: i32 = 0;
+        for sp in self.index.at(p, 0.0).filter_map(|&i| self.subpaths.get(i)) {
+            if !work.charge(sp.elements().len()) {
+                return None;
+            }
+            crate::work::add(crate::work::Work::FillSubpaths, 1);
+            winding = winding.saturating_add(sp.winding(p));
+        }
+        Some(crate::boolean::inside(self.rule, winding))
+    }
+}
+
+/// What a planar map may still spend on winding points against the paths of its fills and faces
+/// ([`crate::Limits::fill_work`]): a fill of thousands of subpaths nested in one another, or holes
+/// nested in faces as deep, cost a point the paths round it, and all the points the square of the depth.
+pub(super) struct FillWork(std::cell::Cell<usize>);
+
+impl FillWork {
+    pub(super) fn new() -> Self {
+        Self(std::cell::Cell::new(crate::budget::limits().fill_work))
+    }
+
+    /// Takes `n` (the elements of a path about to be wound against), or empties the budget and says
+    /// there was not that much left.
+    pub(super) fn charge(&self, n: usize) -> bool {
+        match self.0.get().checked_sub(n) {
+            Some(left) => {
+                self.0.set(left);
+                crate::work::add(crate::work::Work::FillElements, n);
+                true
+            }
+            None => {
+                self.0.set(0);
+                false
+            }
+        }
     }
 }
 
