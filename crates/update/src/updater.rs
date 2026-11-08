@@ -404,11 +404,17 @@ impl Updater {
     pub fn start_pending_update(&mut self) {
         // An installation that finished since the last `tick`.
         if let Some((rx, release)) = &self.install
-            && let Ok(Ok(restart)) = rx.try_recv()
+            && let Ok(outcome) = rx.try_recv()
         {
-            self.restart = Some((restart, release.clone()));
+            match outcome {
+                Ok(restart) => {
+                    self.restart = Some((restart, release.clone()));
+                    self.installed = true;
+                }
+                Err(Failure::Installer(e)) => log::warn!("{} self-update failed: {e}", self.app.name),
+                Err(Failure::Updater(note)) => log::warn!("{} self-update failed: {}", self.app.name, note.translated(english)),
+            }
             self.install = None;
-            self.installed = true;
         }
         if let Some((restart, _)) = self.restart.take()
             && let Err(e) = restart.start()
@@ -897,6 +903,19 @@ mod tests {
         u.start_pending_update();
         drop(u);
         assert_eq!(starts.load(Ordering::SeqCst), 1, "the helper starts once");
+    }
+
+    /// A failed installation picked up at exit leaves nothing installed and nothing waiting.
+    #[test]
+    fn a_failed_install_picked_up_at_exit_leaves_nothing_waiting() {
+        let mut u = updater(Ok(None));
+        let (tx, rx) = channel::<Result<Restart, Failure>>();
+        u.install = Some((rx, newer()));
+        assert!(tx.send(Err("couldn't download the update".into())).is_ok());
+        u.start_pending_update();
+        assert!(u.install.is_none(), "the finished job is cleared");
+        assert!(!u.installed);
+        assert!(u.restart.is_none());
     }
 
     /// A helper started at [`Action::Close`] does not start again when the updater is dropped.
