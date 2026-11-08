@@ -396,7 +396,15 @@ pub fn solve_t_for_y(c: CubicBez, y: f64) -> f64 {
     let c0 = c.p0.y - y;
     let cubic = Cubic::new([c0, c1, c2, c3]);
 
-    let eps = 1e-12;
+    // Craft patch (near-parallel t tolerance): the package asked for `t` to
+    // within 1e-12. A `t` that is off by `dt` moves x by `|dx/dt| * dt`,
+    // which grows with the coordinates while the comparison tolerance does
+    // not, so near 3e7 the pieces that `y_subsegment` cuts moved by tens of
+    // tolerances and `intersect_cubics_rec` split near-parallel curves into
+    // y intervals shorter than the tolerance. With an `x_error` of zero the
+    // root finder stops when its step is zero or its bracket reaches
+    // adjacent floats.
+    let eps = 0.0;
     let roots = cubic.roots_between(0.0, 1.0, eps);
     if !roots.is_empty() {
         return roots[0];
@@ -1972,6 +1980,64 @@ mod test {
         );
 
         dbg!(intersect_cubics(c0, c1, sure_tol, ish_tol));
+    }
+
+    // With `t` found to within 1e-12, x on this curve 1e9 tall was off by up
+    // to 166 times `64 * f64::EPSILON * l`.
+    #[test]
+    fn solve_x_for_y_on_tall_curve() {
+        let l = 1e9;
+        let eps = 64.0 * f64::EPSILON * l;
+        let c = CubicBez::new(
+            (0.0, 0.0),
+            (0.8 * l, 0.33 * l),
+            (-0.8 * l, 0.66 * l),
+            (0.1 * l, l),
+        );
+        for i in 1..200 {
+            let y = l * f64::from(i) / 200.0;
+            let (mut lo, mut hi) = (0.0f64, 1.0f64);
+            loop {
+                let mid = lo + (hi - lo) / 2.0;
+                if mid <= lo || mid >= hi {
+                    break;
+                }
+                if c.eval(mid).y < y {
+                    lo = mid;
+                } else {
+                    hi = mid;
+                }
+            }
+            let exact = c.eval(lo).x;
+            let x = solve_x_for_y(c, y);
+            assert!(
+                (x - exact).abs() <= eps / 4.0,
+                "y {y}: x {x}, bisection {exact}"
+            );
+        }
+    }
+
+    // Two copies of one S-shaped curve 2e7 tall, 1.2 tolerances apart. With
+    // `t` found to within 1e-12 the comparison split them into 16,549
+    // entries; at 3e7 it took 950,130 entries and 9 s, and at 1e8 it ran for
+    // minutes.
+    #[test]
+    fn near_parallel_tall_curves() {
+        let l = 2e7;
+        let eps = (64.0 * f64::EPSILON * l).max(1e-6);
+        let c0 = CubicBez::new(
+            (0.0, 0.0),
+            (0.8 * l, 0.33 * l),
+            (-0.8 * l, 0.66 * l),
+            (0.1 * l, l),
+        );
+        let shift = kurbo::Vec2::new(1.2 * eps, 0.0);
+        let c1 = CubicBez::new(c0.p0 + shift, c0.p1 + shift, c0.p2 + shift, c0.p3 + shift);
+
+        let cmp = intersect_cubics(c0, c1, eps / 2.0, eps);
+        let entries = cmp.iter().count();
+        assert!(entries <= 64, "{entries} entries");
+        assert!(cmp.iter().all(|(_, _, order)| order != Order::Right));
     }
 
     #[test]
