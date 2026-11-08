@@ -37,7 +37,7 @@ impl FileData {
 /// A message from the host.
 pub enum Message {
     /// What the host supports; `handoff`: it routes files the app hands off; `autosave`: it
-    /// stores every `save` in place (the same file again), so the app may save by itself after
+    /// stores every ordinary `save` in place (the same file again; not `saveAs` or an export), so the app may save by itself after
     /// each change.
     Host { version: String, handoff: bool, autosave: bool },
     /// Open a document as File › Open would. `name` is already cleaned ([`crate::file_name`]).
@@ -359,6 +359,7 @@ mod tests {
         }
         assert!(matches!(read(Incoming::Host, &obj(&[("handoff", true.into())])), Some(Message::Host { handoff: true, autosave: false, .. })));
         assert!(matches!(read(Incoming::Host, &obj(&[("autosave", true.into())])), Some(Message::Host { handoff: false, autosave: true, .. })));
+        assert!(matches!(read(Incoming::Host, &obj(&[("handoff", true.into()), ("autosave", true.into())])), Some(Message::Host { handoff: true, autosave: true, .. })));
         assert!(matches!(
             read(Incoming::HandoffDone, &obj(&[("name", "a.pdf".into()), ("app", "pdfcraft".into())])),
             Some(Message::HandoffDone { name, app }) if name == "a.pdf" && app == "pdfcraft"
