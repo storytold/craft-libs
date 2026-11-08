@@ -63,6 +63,11 @@ fn spooler_list(two_sided: impl Fn(&PrinterDevice) -> Option<bool>) -> Vec<Print
     }
 }
 
+/// [`two_sided`] for the queue named `name` only; `None` when no queue has that name.
+pub(crate) fn two_sided_named(name: &str) -> Option<bool> {
+    PrinterDevice::all().ok()?.iter().find(|d| d.name() == name).and_then(two_sided)
+}
+
 #[cfg(test)]
 thread_local! {
     /// The driver capability queries printer discovery made on this thread, so a test can show
