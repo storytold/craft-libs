@@ -74,7 +74,7 @@ fn test_vni_composites() {
 fn test_already_unicode_never_transcoded() {
     // -------------------------------------------------------------------------
     // WHY: Modern documents already encoded in standard UTF-8 must pass through
-    // the pipeline completely untouched with zero allocations (Cow::Borrowed).
+    // the pipeline completely untouched with borrowed fast-path guarantee (Cow::Borrowed).
     // DANGER: False-positive transcoding of genuine UTF-8 text corrupts modern data.
     // CONTRACT: Tier 1 - Fast-Path Guard Invariant (is_already_unicode_vietnamese).
     // -------------------------------------------------------------------------
@@ -82,15 +82,15 @@ fn test_already_unicode_never_transcoded() {
         assert!(is_already_unicode_vietnamese(unicode), "failed on {unicode}");
         let res_vni = transcode_vietnamese(unicode, Some("VNI-Helve"));
         assert_eq!(res_vni, unicode);
-        assert!(matches!(res_vni, Cow::Borrowed(_)), "Must be zero-allocation Cow::Borrowed for {unicode}");
+        assert!(matches!(res_vni, Cow::Borrowed(_)), "Must satisfy Borrowed fast-path guarantee for {unicode}");
 
         let res_tcvn = transcode_vietnamese(unicode, Some(".VnTime"));
         assert_eq!(res_tcvn, unicode);
-        assert!(matches!(res_tcvn, Cow::Borrowed(_)), "Must be zero-allocation Cow::Borrowed for {unicode}");
+        assert!(matches!(res_tcvn, Cow::Borrowed(_)), "Must satisfy Borrowed fast-path guarantee for {unicode}");
 
         let res_none = transcode_vietnamese(unicode, None);
         assert_eq!(res_none, unicode);
-        assert!(matches!(res_none, Cow::Borrowed(_)), "Must be zero-allocation Cow::Borrowed for {unicode}");
+        assert!(matches!(res_none, Cow::Borrowed(_)), "Must satisfy Borrowed fast-path guarantee for {unicode}");
     }
 }
 
@@ -486,8 +486,9 @@ fn test_vni_orphan_diacritic_fallback() {
 #[test]
 fn test_vni_streaming_chunk_partition_invariance() {
     // -------------------------------------------------------------------------
-    // WHY: Streaming decoders must guarantee mathematical invariance across chunk boundaries:
-    // D(B) = D(B_1 || B_2 || ... || B_n) for any arbitrary slicing of byte sequence B.
+    // WHY: Streaming decoders must guarantee invariance across chunk boundaries:
+    // D(B) = D(B_1 || B_2 || ... || B_n), exhaustively tested over all two-way split points
+    // and selected multi-chunk partitions of the curated corpus.
     // DANGER: If chunk splits desynchronize lookahead buffers (e.g. pending base vowels,
     // multi-byte CapsLock sequences like `I` + 0xCF + `T`), the output diverges based on network
     // packet or file buffer size, corrupting text non-deterministically.
@@ -563,6 +564,157 @@ fn test_vni_streaming_chunk_boundaries() {
 
     // 'a' and '\xf9' seamlessly composed into 'á'
     assert_eq!(out, "Ban ve so 1á va chi tiet");
+}
+
+#[test]
+fn test_vni_streaming_error_stream_offset() {
+    // -------------------------------------------------------------------------
+    // WHY: Error diagnostics (e.g. UnmappedByte, MalformedSequence) must report
+    // the absolute byte offset within the entire multi-chunk stream, not a chunk-local index.
+    // DANGER: In multi-gigabyte or streaming CAD/DWG imports, reporting a local chunk index
+    // misdirects operators to the wrong file location when diagnosing corruption.
+    // CONTRACT: Tier 1 - Contract 4 (Explicit Error Model & Absolute Stream Offsets).
+    // -------------------------------------------------------------------------
+    // Test 1: Error in Chunk 2 at local index 3, following 50 bytes in Chunk 1
+    let mut dec = VniDecoder::new(DecodeMode::Strict);
+    let mut out = String::new();
+    let chunk1 = [b'A'; 50];
+    dec.decode_chunk(&chunk1, &mut out).expect("chunk 1 must succeed");
+    assert_eq!(dec.stream_offset(), 50);
+
+    // Chunk 2 contains invalid byte 0x81 at local index 3 (absolute offset: 50 + 3 = 53)
+    let chunk2 = [b'B', b'C', b'D', 0x81, b'E'];
+    let err = dec.decode_chunk(&chunk2, &mut out).expect_err("chunk 2 must fail on unmapped byte");
+    assert_eq!(err, DecodeError::UnmappedByte { byte: 0x81, offset: 53, encoding: LegacyEncoding::Vni });
+
+    // Test 2: Error across 3 chunks: Chunk 1 (40 bytes), Chunk 2 (30 bytes), Chunk 3 with error at index 5 (offset: 75)
+    let mut dec3 = VniDecoder::new(DecodeMode::Strict);
+    let mut out3 = String::new();
+    dec3.decode_chunk(&[b'X'; 40], &mut out3).expect("chunk 1");
+    dec3.decode_chunk(&[b'Y'; 30], &mut out3).expect("chunk 2");
+    assert_eq!(dec3.stream_offset(), 70);
+
+    let chunk3 = [b'Z', b'Z', b'Z', b'Z', b'Z', 0xC0]; // 0xC0 is unmapped in Strict
+    let err3 = dec3.decode_chunk(&chunk3, &mut out3).expect_err("chunk 3 must fail");
+    assert_eq!(err3, DecodeError::UnmappedByte { byte: 0xC0, offset: 75, encoding: LegacyEncoding::Vni });
+
+    // Test 3: Error on pending base byte deferred from Chunk 1 and failing in Chunk 2
+    let mut dec_base = VniDecoder::new(DecodeMode::Strict);
+    let mut out_base = String::new();
+    // 40 bytes ASCII, plus 0xCA (unmapped in Strict if not combined) at index 40
+    let mut chunk_base1 = vec![b'X'; 40];
+    chunk_base1.push(0xCA);
+    dec_base.decode_chunk(&chunk_base1, &mut out_base).expect("chunk 1 defers base byte");
+    assert_eq!(dec_base.stream_offset(), 41);
+
+    // Chunk 2 starts with space ' ' which does not combine with 0xCA
+    let chunk_base2 = b" ";
+    let err_base = dec_base.decode_chunk(chunk_base2, &mut out_base).expect_err("unmapped standalone 0xCA");
+    assert_eq!(err_base, DecodeError::UnmappedByte { byte: 0xCA, offset: 40, encoding: LegacyEncoding::Vni });
+}
+
+#[test]
+fn test_vni_streaming_eof_flush_pending_states() {
+    // -------------------------------------------------------------------------
+    // WHY: State machines holding lookahead buffers (pending_base_byte, pending_iet)
+    // must deterministically resolve remaining state when finish() is invoked at EOF.
+    // DANGER: Silent truncation drops characters at end-of-file; over-strict rejection
+    // breaks valid unaccented terminal vowels.
+    // CONTRACT: Tier 1 - Contract 2 (Pending-at-EOF Policy & Composite State Machine).
+    // -------------------------------------------------------------------------
+    // 1. Pending base vowel at EOF:
+    // Practical mode: flushes base character
+    let mut dec = VniDecoder::new(DecodeMode::Practical);
+    let mut out = String::new();
+    dec.decode_chunk(b"Ban ve so 1a", &mut out).expect("decode chunk");
+    assert_eq!(out, "Ban ve so 1"); // 'a' is held in pending_base_byte
+    dec.finish(&mut out).expect("finish must succeed");
+    assert_eq!(out, "Ban ve so 1a");
+
+    // Strict mode: flushes valid base character
+    let mut dec_s = VniDecoder::new(DecodeMode::Strict);
+    let mut out_s = String::new();
+    dec_s.decode_chunk(b"Ban ve so 1a", &mut out_s).expect("decode chunk");
+    dec_s.finish(&mut out_s).expect("finish must succeed");
+    assert_eq!(out_s, "Ban ve so 1a");
+
+    // Strict mode with unmapped candidate byte at EOF: returns UnmappedByte with absolute offset
+    let mut dec_s_err = VniDecoder::new(DecodeMode::Strict);
+    let mut out_s_err = String::new();
+    let mut payload = vec![b'B'; 20];
+    payload.push(0xCA); // 0xCA is unmapped in Strict
+    dec_s_err.decode_chunk(&payload, &mut out_s_err).expect("chunk defers base candidate");
+    let err = dec_s_err.finish(&mut out_s_err).expect_err("finish must fail on unmapped byte");
+    assert_eq!(err, DecodeError::UnmappedByte { byte: 0xCA, offset: 20, encoding: LegacyEncoding::Vni });
+
+    // 2. Pending IET lookahead at EOF:
+    // Practical mode: flushes fallback Ị
+    let mut dec_iet_p = VniDecoder::new(DecodeMode::Practical);
+    let mut out_iet_p = String::new();
+    dec_iet_p.decode_chunk(b"VI\xCF", &mut out_iet_p).expect("chunk 1");
+    dec_iet_p.finish(&mut out_iet_p).expect("practical finish flushes Ị");
+    assert_eq!(out_iet_p, "VỊ");
+
+    // Strict mode: truncated lookahead at EOF returns MalformedSequence with exact offset
+    let mut dec_iet_s = VniDecoder::new(DecodeMode::Strict);
+    let mut out_iet_s = String::new();
+    let mut payload_iet = vec![b'X'; 30];
+    payload_iet.extend_from_slice(b"VI\xCF");
+    dec_iet_s.decode_chunk(&payload_iet, &mut out_iet_s).expect("chunk 1");
+    let err_iet = dec_iet_s.finish(&mut out_iet_s).expect_err("strict finish must fail on truncated lookahead");
+    assert_eq!(err_iet, DecodeError::MalformedSequence { offset: 31, encoding: LegacyEncoding::Vni });
+}
+
+#[test]
+fn test_vni_independent_golden_fixtures() {
+    // -------------------------------------------------------------------------
+    // WHY: Partition invariance tests must be grounded in independent golden oracles
+    // (exact Unicode literals verified against VNI specifications), not circular assertions
+    // against decode_vni().
+    // DANGER: Circular test oracles hide systemic bugs shared between one-shot and streaming decoders.
+    // CONTRACT: Tier 1 - Contract 2 & Verification Fixtures.
+    // -------------------------------------------------------------------------
+    let golden_cases: &[(&[u8], &str)] = &[
+        // All-caps CapsLock sequences (I + 0xCF + T -> IỆT)
+        (b"VI\xCFT", "VIỆT"),
+        (b"CONG HOA XA HOI CHU NGHIA VI\xCFT NAM", "CONG HOA XA HOI CHU NGHIA VIỆT NAM"),
+        // Mixed-case permutations: base determines vowel pair case; follower consonant retains its case
+        (b"vi\xeft", "việt"),
+        (b"VI\xcft", "VIỆt"),
+        (b"vi\xefT", "việT"),
+        // Non-T follower flushes Ị / ị
+        (b"VI\xCF A", "VỊ A"),
+        (b"vi\xef a", "vị a"),
+        (b"VI\xCF 123", "VỊ 123"),
+        // Full VNI technical drawing label
+        (b"TO\xc5NG KHO\xc1I L\xd6\xd4\xcfNG", "TỔNG KHỐI LƯỢNG"),
+        (b"QUY CA\xd9CH", "QUY CÁCH"),
+    ];
+
+    for &(bytes, expected_unicode) in golden_cases {
+        // 1. One-shot verification
+        let one_shot = decode_vni(bytes, DecodeMode::Practical).expect("one-shot decode");
+        assert_eq!(one_shot.as_ref(), expected_unicode, "One-shot failed on {:?}", bytes);
+
+        // 2. Worst-case fragmentation: 1-byte chunks
+        let mut dec_1 = VniDecoder::new(DecodeMode::Practical);
+        let mut out_1 = String::new();
+        for &b in bytes {
+            dec_1.decode_chunk(&[b], &mut out_1).expect("1-byte chunk");
+        }
+        dec_1.finish(&mut out_1).expect("finish 1-byte");
+        assert_eq!(out_1, expected_unicode, "1-byte partition failed on {:?}", bytes);
+
+        // 3. Exhaustive two-way split points
+        for split in 0..=bytes.len() {
+            let mut dec_split = VniDecoder::new(DecodeMode::Practical);
+            let mut out_split = String::new();
+            dec_split.decode_chunk(&bytes[..split], &mut out_split).expect("chunk 1");
+            dec_split.decode_chunk(&bytes[split..], &mut out_split).expect("chunk 2");
+            dec_split.finish(&mut out_split).expect("finish split");
+            assert_eq!(out_split, expected_unicode, "Split at {split} failed on {:?}", bytes);
+        }
+    }
 }
 
 #[test]

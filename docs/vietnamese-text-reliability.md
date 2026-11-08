@@ -266,6 +266,16 @@ VNI is a multi-byte composite encoding (Base character + Diacritic mark byte). W
 | **Undefined byte in charset table**<br>*(e.g., CP1258 undefined bytes `0x81, 0x8A, ...`)* | Returns `Err(DecodeError::UnmappedByte { byte, offset, encoding })`. | Returns `Err(DecodeError::UnmappedByte { byte, offset, encoding })`. Undefined positions are never silently mapped. |
 | **DOS control bytes (`0x01..=0x1F`)**<br>*(Legacy VSCII-1 vestiges in old CAD files)* | Returns `Err(DecodeError::UnmappedByte { byte, offset, encoding })`. | Emits non-fatal diagnostic warning via `tracing::warn!` and sanitizes as whitespace. |
 
+* **Mixed-Case Lookahead Semantics (`IỆ`/`iệ` + `T`/`t`):**
+  When resolving the VNI CapsLock lookahead sequence (`I` / `i` + `0xCF` / `0xEF` + `T` / `t`):
+  - The base vowel `I`/`i` determines the casing of the composed vowel pair: `'I'` $\to$ `"IỆ"`, `'i'` $\to$ `"iệ"`.
+  - The trailing consonant `'T'` / `'t'` is processed independently in the subsequent cycle, strictly preserving its own casing:
+    - `I` + `0xCF` + `T` $\to$ `"IỆT"` (all-caps title/national names)
+    - `i` + `0xEF` + `t` $\to$ `"việt"` (all lowercase)
+    - `I` + `0xCF` + `t` $\to$ `"IỆt"` (mixed case preserved)
+    - `i` + `0xEF` + `T` $\to$ `"iệT"` (mixed case preserved)
+* **Streaming Offset Invariant:** All `DecodeError` variants (`UnmappedByte`, `MalformedSequence`) emitted during streaming decoding MUST report the absolute byte offset within the entire cumulative multi-chunk stream (`stream_offset + chunk_index`), never a chunk-local index. If an unmapped base byte is deferred across a chunk boundary, its error diagnostic reports the absolute offset where the base byte first appeared.
+
 ##### 4. Contract 3: Ambiguity Rejection & Heuristic Parameters
 To prevent autonomous detectors from over-confident false transcoding on short or ambiguous byte sequences:
 * **Evidence Hierarchy Precedence:**
@@ -297,7 +307,7 @@ pub enum DecodeError {
 ##### 6. Contract 5: Performance & Capacity Estimate
 * **Zero-Panic Policy:** `#![forbid(unsafe_code)]`. Memory safety invariants enforced across all paths; fuzz-tested with `cargo-fuzz` on arbitrary byte streams without unexpected panics.
 * **Linear Heap Capacity Estimate $O(N)$:** Decoder capacity is estimated upfront using an empirical ratio (`String::with_capacity(input.len() * 6 / 5)`) to minimize re-allocations during byte-to-multibyte expansion. Benchmark micro-suites verify minimal reallocations across typical workloads.
-* **Zero-Allocation Fast Path:** Valid UTF-8 and pure ASCII inputs return `Cow::Borrowed` with exactly 0 heap allocations.
+* **Borrowed Fast-Path Guarantee:** Valid UTF-8 and pure ASCII inputs return `Cow::Borrowed`, guaranteeing no string re-allocation on the happy path.
 
 ##### 7. Real-World Archival Test Corpora (Mandatory Fixtures)
 The implementation must pass validation against authentic, anonymized test fixtures in `crates/i18n/src/encoding/fixtures/`:

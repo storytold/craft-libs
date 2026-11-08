@@ -556,7 +556,10 @@ pub struct VniDecoder {
     /// Byte stream offset of the pending base vowel.
     pending_base_offset: usize,
     /// Pending VNI "I" / "i" + 0xCF composite awaiting potential trailing "T" / "t" for "IỆ" / "iệ".
+    /// Stores `(is_upper, offset)` where `offset` is the absolute stream offset of the base 'I'/'i'.
     pending_iet: Option<(bool, usize)>,
+    /// Cumulative stream byte offset across previous chunks.
+    stream_offset: usize,
 }
 
 impl Default for VniDecoder {
@@ -568,19 +571,34 @@ impl Default for VniDecoder {
 impl VniDecoder {
     /// Create a new streaming VNI decoder.
     pub const fn new(mode: DecodeMode) -> Self {
-        Self { mode, pending_base_byte: None, pending_base_offset: 0, pending_iet: None }
+        Self { mode, pending_base_byte: None, pending_base_offset: 0, pending_iet: None, stream_offset: 0 }
+    }
+
+    /// Cumulative byte offset of the stream processed across prior chunks.
+    #[inline]
+    pub const fn stream_offset(&self) -> usize {
+        self.stream_offset
     }
 
     /// Decode a chunk of bytes, appending the decoded Unicode characters to `out`.
+    ///
+    /// # Errors
+    /// Returns `Err(DecodeError)` if an unmapped byte or malformed sequence is encountered.
+    /// If an error is returned, the decoder is considered poisoned/errored and must not be
+    /// used for subsequent chunks.
     pub fn decode_chunk(&mut self, chunk: &[u8], out: &mut String) -> Result<(), DecodeError> {
         let mut i = 0;
         let len = chunk.len();
 
         while i < len {
-            // Check if we are waiting for a trailing 'T' / 't' to complete "IỆ" / "iệ" across chunks
+            // Check if we are waiting for a trailing 'T' / 't' to complete "IỆ" / "iệ" across chunks.
+            // In decode_chunk, non-'T' followers are valid VNI composites (resolving to 'Ị'/'ị');
+            // the stored offset is retained for finish() in case the stream terminates prematurely at EOF.
             if let Some((is_upper, _)) = self.pending_iet.take() {
                 let byte = chunk[i];
                 if byte == b'T' || byte == b't' {
+                    // Base case determines prefix ("IỆ" vs "iệ"), while follower byte ('T' vs 't')
+                    // preserves its own case when processed by the subsequent loop iteration.
                     out.push_str(if is_upper { "IỆ" } else { "iệ" });
                 } else {
                     out.push(if is_upper { 'Ị' } else { 'ị' });
@@ -647,7 +665,7 @@ impl VniDecoder {
                             }
                         } else {
                             // Mark byte is the last byte of the chunk; defer 'T' check
-                            self.pending_iet = Some((base_char == 'I', i));
+                            self.pending_iet = Some((base_char == 'I', self.stream_offset + i));
                             break;
                         }
                     } else if let Some(comp) = match_vni_composite(base_char, mark_char) {
@@ -658,23 +676,27 @@ impl VniDecoder {
                 } else {
                     // Last byte of chunk is a base candidate
                     self.pending_base_byte = Some(byte);
-                    self.pending_base_offset = i;
+                    self.pending_base_offset = self.stream_offset + i;
                     break;
                 }
             }
 
             // Single byte
-            let decoded_char = decode_vni_single_byte(byte, i, self.mode)?;
+            let decoded_char = decode_vni_single_byte(byte, self.stream_offset + i, self.mode)?;
             out.push(decoded_char);
             i += 1;
         }
 
+        self.stream_offset += len;
         Ok(())
     }
 
-    /// Flush any remaining pending base character to `out`.
+    /// Flush any remaining pending base character or lookahead state to `out`.
     pub fn finish(mut self, out: &mut String) -> Result<(), DecodeError> {
-        if let Some((is_upper, _)) = self.pending_iet.take() {
+        if let Some((is_upper, offset)) = self.pending_iet.take() {
+            if self.mode == DecodeMode::Strict {
+                return Err(DecodeError::MalformedSequence { offset, encoding: LegacyEncoding::Vni });
+            }
             out.push(if is_upper { 'Ị' } else { 'ị' });
         }
         if let Some(byte) = self.pending_base_byte.take() {
