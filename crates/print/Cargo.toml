@@ -31,7 +31,7 @@ log = "0.4"
 # threads (storytold/pdfcraft#5006). File-backed PDF loading avoids StorageFile access
 # denial without whole-job buffering; includes the #15 test cleanup and explicit WinRT
 # feature. Pinned to an immutable revision; review before bumping.
-winprint = { git = "https://github.com/storytold/winprint.rs", rev = "03a4fb638734dc0f2b8e173de9e8dc895a8b1c75", default-features = false }
+winprint = { git = "https://github.com/storytold/winprint.rs", rev = "51934db382f225454cf152a8657eb03789be63c4", default-features = false }
 # GetDefaultPrinter (MIT).
 winsafe = { version = "0.0.29", default-features = false, features = ["winspool"] }
 # The job file's private folder.
