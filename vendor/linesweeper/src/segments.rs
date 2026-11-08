@@ -471,6 +471,29 @@ impl Segments {
         debug_assert!(!self.segs[idx].is_horizontal());
         &self.horizontal_decomps[idx]
     }
+
+    /// The sweep tolerance to use for these segments when the caller asks for `eps`.
+    ///
+    /// Returns `eps` when it is at least `64 * f64::EPSILON` times the largest
+    /// coordinate magnitude (the scale [`crate::binary_op`] uses), and that
+    /// floor otherwise. The floor replaces an `eps` that is NaN, negative,
+    /// zero, or too small to tell coordinates of this size apart. It is never
+    /// below 64 times the spacing of subnormal floats.
+    pub(crate) fn usable_eps(&self, eps: f64) -> f64 {
+        let max_coord = self
+            .segs
+            .iter()
+            .map(|(_, seg)| {
+                seg.min_x()
+                    .abs()
+                    .max(seg.max_x().abs())
+                    .max(seg.start().y.abs())
+                    .max(seg.end().y.abs())
+            })
+            .fold(0.0, f64::max);
+        let floor = crate::curve::resolution_floor(max_coord);
+        if eps >= floor { eps } else { floor }
+    }
 }
 
 impl std::ops::Index<SegIdx> for Segments {

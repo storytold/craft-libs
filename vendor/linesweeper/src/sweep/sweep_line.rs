@@ -359,11 +359,15 @@ impl<'segs> Sweeper<'segs> {
     /// The really correct mode doesn't actually change any of the
     /// output orders, but it does emit extra events whenever lines
     /// touch without crossing.
+    ///
+    /// An `eps` that is NaN, not positive, or below `64 * f64::EPSILON` times
+    /// the segments' largest coordinate magnitude is raised to that value.
     pub fn new_with_correctness(
         segments: &'segs Segments,
         eps: f64,
         correctness: Correctness,
     ) -> Self {
+        let eps = segments.usable_eps(eps);
         let events = EventQueue::default();
         Sweeper {
             eps,

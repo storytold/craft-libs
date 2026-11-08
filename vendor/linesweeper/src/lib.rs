@@ -74,6 +74,8 @@ pub enum Error {
     NaN,
     /// One of the inputs had a non-closed path.
     NonClosedPath(NonClosedPath),
+    /// The accuracy parameter was NaN, infinite, zero or negative.
+    InvalidEps,
 }
 
 impl From<NonClosedPath> for Error {
@@ -88,6 +90,9 @@ impl std::fmt::Display for Error {
             Error::Infinity => write!(f, "one of the inputs was infinite"),
             Error::NaN => write!(f, "one of the inputs had a NaN"),
             Error::NonClosedPath(_) => write!(f, "one of the inputs had a non-closed path"),
+            Error::InvalidEps => {
+                write!(f, "the accuracy parameter was not a positive finite number")
+            }
         }
     }
 }
@@ -133,6 +138,10 @@ pub fn binary_op(
 ///
 /// The output paths will not exactly agree with the input paths in general.
 /// The accuracy parameter `eps` bounds how much they can differ.
+///
+/// Returns [`Error::InvalidEps`] when `eps` is NaN, infinite, zero or
+/// negative. An `eps` below `64 * f64::EPSILON` times the largest coordinate
+/// magnitude is raised to that value.
 pub fn binary_op_with_eps(
     set_a: &kurbo::BezPath,
     set_b: &kurbo::BezPath,
@@ -140,6 +149,9 @@ pub fn binary_op_with_eps(
     op: BinaryOp,
     eps: f64,
 ) -> Result<topology::Contours, Error> {
+    if !(eps.is_finite() && eps > 0.0) {
+        return Err(Error::InvalidEps);
+    }
     let top = Topology::from_paths_binary(set_a, set_b, eps)?;
     #[cfg(feature = "debug-svg")]
     {
@@ -332,5 +344,85 @@ mod tests {
                 .count(),
             4
         );
+    }
+
+    /// Two unit circles whose centers are one unit apart, at `(offset, offset)`
+    /// and `(offset + 1, offset)`.
+    fn crossing_circles(offset: f64) -> (BezPath, BezPath) {
+        (
+            kurbo::Circle::new((offset, offset), 1.0).to_path(1e-9),
+            kurbo::Circle::new((offset + 1.0, offset), 1.0).to_path(1e-9),
+        )
+    }
+
+    /// The single contour's area, measured after moving it back to the origin.
+    fn single_contour_area(contours: &topology::Contours, offset: f64) -> f64 {
+        let contours: Vec<_> = contours.contours().collect();
+        assert_eq!(contours.len(), 1);
+        (kurbo::Affine::translate((-offset, -offset)) * contours[0].path.clone())
+            .area()
+            .abs()
+    }
+
+    const UNION_AREA: f64 = 5.054816;
+
+    #[test]
+    fn binary_op_with_eps_rejects_invalid_eps() {
+        let (a, b) = crossing_circles(0.0);
+        // -inf goes last: before the check it made the sweep loop forever.
+        for eps in [
+            f64::NAN,
+            -1.0,
+            -1e-6,
+            0.0,
+            -0.0,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+        ] {
+            let result = binary_op_with_eps(&a, &b, FillRule::NonZero, BinaryOp::Union, eps);
+            assert_eq!(result.err(), Some(Error::InvalidEps), "eps = {eps}");
+        }
+    }
+
+    #[test]
+    fn topology_raises_unusable_eps() {
+        let inside = |w: &BinaryWindingNumber| w.shape_a != 0 || w.shape_b != 0;
+        // At 1.5e8 one ulp is about 3e-8, so 1e-10 used to recurse in
+        // intersect_cubics_rec until the stack overflowed.
+        for (offset, eps) in [
+            (0.0, f64::NAN),
+            (0.0, -1.0),
+            (0.0, 0.0),
+            (1.5e8, 1e-10),
+            (1.5e8, 0.0),
+            (0.0, f64::NEG_INFINITY),
+        ] {
+            let (a, b) = crossing_circles(offset);
+            for correctness in [
+                sweep::Correctness::GoodEnough,
+                sweep::Correctness::ReallyCorrect,
+            ] {
+                let top = Topology::from_paths_with_correctness(
+                    [(&a, topology::OneOfTwo::A), (&b, topology::OneOfTwo::B)],
+                    eps,
+                    correctness,
+                )
+                .unwrap();
+                let area = single_contour_area(&top.contours(inside), offset);
+                assert!(
+                    (area - UNION_AREA).abs() < 1e-3,
+                    "offset {offset}, eps {eps}, {correctness:?}: area {area}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn binary_op_with_eps_raises_eps_below_coordinate_resolution() {
+        let (a, b) = crossing_circles(1.5e8);
+        let contours =
+            binary_op_with_eps(&a, &b, FillRule::NonZero, BinaryOp::Union, 1e-10).unwrap();
+        let area = single_contour_area(&contours, 1.5e8);
+        assert!((area - UNION_AREA).abs() < 1e-3, "area {area}");
     }
 }

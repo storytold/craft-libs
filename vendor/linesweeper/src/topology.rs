@@ -512,6 +512,10 @@ impl<W: WindingNumber> Topology<W> {
     /// Construct a new topology from a collection of paths and tags.
     ///
     /// See [`WindingNumber`] about the tags are for.
+    ///
+    /// An `eps` that is NaN, not positive, or below `64 * f64::EPSILON` times
+    /// the paths' largest coordinate magnitude is raised to that value. The
+    /// other constructors pass `eps` through here, or follow the same rule.
     pub fn from_paths_with_correctness<'a, Iter>(paths: Iter, eps: f64, correctness: Correctness) -> Result<Self, NonClosedPath>
     where
         Iter: IntoIterator<Item = (&'a BezPath, W::Tag)>,
@@ -538,6 +542,7 @@ impl<W: WindingNumber> Topology<W> {
         eps: f64,
         correctness: Correctness,
     ) -> Self {
+        let eps = segments.usable_eps(eps);
         let mut ret = Self {
             eps,
             correctness,
