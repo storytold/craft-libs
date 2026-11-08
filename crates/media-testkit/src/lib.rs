@@ -246,9 +246,9 @@ pub mod fixtures {
         if f(&tmp) {
             match std::fs::rename(&tmp, out) {
                 Ok(()) => Some(out.to_path_buf()),
-                Err(_) => {
+                Err(e) => {
                     let _ = std::fs::remove_file(&tmp);
-                    None
+                    super::skip(&format!("could not move {} into place: {e}", tmp.display()))
                 }
             }
         } else {

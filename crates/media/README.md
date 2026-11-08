@@ -6,7 +6,7 @@ demuxer, written from the public specifications. No `unsafe`, no panics on malfo
 for `wasm32-unknown-unknown`. Dependencies: `thiserror` (for `isobmff`), `serde` (optional).
 
 Codecs are in separate crates that depend on this one: [`craft-audio`](../audio/README.md) for
-audio; [`craft-video`](../video/README.md) for video. What both need lives here: the containers, the
+audio; `craft-video` for video. What both need lives here: the containers, the
 bit I/O, one `ByteSource` trait, and the [shared identifiers](#containers-codecs-and-codec-parameters)
 that codec crates use to describe a file and configure a decoder.
 
