@@ -2012,8 +2012,9 @@ mod tests {
 
     /// The restart helper starts only when the restart is started, at the app's exit: a close the
     /// user cancels leaves no helper counting down its one-minute wait. The test starts the helper
-    /// the way `spawn_detached` does and keeps it, and a thread that waits for the helper to exit
-    /// writes `exited`, so a helper that exits without writing `started` fails the test.
+    /// with its standard streams set to null, as `spawn_detached` does, and a thread that waits
+    /// for the helper to exit writes `exited`, so a helper that exits without writing `started`
+    /// fails the test.
     #[cfg(unix)]
     #[test]
     fn the_restart_helper_starts_only_when_the_restart_is_started() {
