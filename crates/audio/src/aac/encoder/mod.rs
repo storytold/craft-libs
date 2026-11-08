@@ -156,6 +156,8 @@ struct ElementFrame {
 }
 
 const HISTORY: usize = 2048;
+/// Bits per channel in a silent frame, rounded up: the smallest frame the encoder writes.
+const MIN_FRAME_BITS_PER_CHANNEL: u64 = 48;
 
 /// AAC-LC encoder.
 pub struct Encoder {
@@ -249,10 +251,18 @@ impl Encoder {
             BitrateMode::Cbr(b) => b as i64 * FRAME_LEN as i64 / cfg.sample_rate as i64,
             BitrateMode::Vbr(_) => 0,
         };
-        if let BitrateMode::Cbr(b) = cfg.mode
-            && (b < 1000 * cfg.channels as u32 || mean > max_frame_bits)
-        {
-            return Err(Error::InvalidSettings("bitrate out of range for the channel count and sample rate"));
+        // Compare the exact bits per frame, `b * 1024 / rate`, against what a frame can hold: at
+        // most 6144 bits per channel (the decoder buffer), and at least the 48 bits per channel a
+        // silent frame takes. Outside that range the encoder cannot keep the requested rate.
+        if let BitrateMode::Cbr(b) = cfg.mode {
+            let per_frame = b as u64 * FRAME_LEN as u64;
+            let rate = cfg.sample_rate as u64;
+            if b < 1000 * cfg.channels as u32
+                || per_frame > max_frame_bits as u64 * rate
+                || per_frame < MIN_FRAME_BITS_PER_CHANNEL * cfg.channels as u64 * rate
+            {
+                return Err(Error::InvalidSettings("bitrate out of range for the channel count and sample rate"));
+            }
         }
         let res_max = (max_frame_bits - mean).max(0);
         let hist = vec![vec![0f32; HISTORY]; cfg.channels];
@@ -312,16 +322,23 @@ impl Encoder {
             return Vec::new();
         }
         let n = planar.iter().take(self.cfg.channels).map(|p| p.len()).min().unwrap_or(0);
-        for c in 0..self.cfg.channels {
-            match planar.get(c) {
-                Some(p) => self.hist[c].extend(p[..n].iter().map(|v| if v.is_finite() { v.clamp(-8.0, 8.0) } else { 0.0 })),
-                None => self.hist[c].extend(std::iter::repeat_n(0.0, n)),
-            }
-        }
-        self.total_in += n as u64;
         let mut out = Vec::new();
-        while self.available() >= self.needed_for(self.frames_done) {
-            out.push(self.encode_frame(false));
+        // Buffer one frame of input at a time: each encoded frame shifts the history, so buffering a
+        // long slice whole would copy the rest of it once per frame.
+        let mut start = 0;
+        while start < n {
+            let end = (start + FRAME_LEN).min(n);
+            for c in 0..self.cfg.channels {
+                match planar.get(c) {
+                    Some(p) => self.hist[c].extend(p[start..end].iter().map(|v| if v.is_finite() { v.clamp(-8.0, 8.0) } else { 0.0 })),
+                    None => self.hist[c].extend(std::iter::repeat_n(0.0, end - start)),
+                }
+            }
+            self.total_in += (end - start) as u64;
+            while self.available() >= self.needed_for(self.frames_done) {
+                out.push(self.encode_frame(false));
+            }
+            start = end;
         }
         out
     }
@@ -802,7 +819,10 @@ impl Encoder {
         }
         if let BitrateMode::Cbr(_) = self.cfg.mode {
             let projected = ((bw.bit_len() as i64 + 3 + 7) / 8) * 8;
-            let excess = self.level + mean - projected - if last { 0 } else { self.res_max };
+            // `write_fill` may write 8 bits more than asked; keep the byte-aligned unit within
+            // `max_frame_bits`.
+            let room = self.max_frame_bits - projected - 8;
+            let excess = (self.level + mean - projected - if last { 0 } else { self.res_max }).min(room);
             if excess > 0 {
                 self.stats.fill_bits += write_fill(&mut bw, excess as u64);
             }
@@ -878,4 +898,68 @@ fn interp(pts: &[(f32, f32)], x: f32) -> f32 {
         }
     }
     pts[pts.len() - 1].1
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn noise(n: usize) -> Vec<f32> {
+        let mut s = 7u32;
+        (0..n)
+            .map(|_| {
+                s = s.wrapping_mul(1664525).wrapping_add(1013904223);
+                ((s >> 8) as f32 / (1 << 24) as f32 - 0.5) * 1.6
+            })
+            .collect()
+    }
+
+    fn encode_all(cfg: EncoderConfig, input: &[f32]) -> Vec<Vec<u8>> {
+        let ch = cfg.channels;
+        let Ok(mut e) = Encoder::new(cfg) else { panic!("encoder settings rejected") };
+        let chans: Vec<&[f32]> = (0..ch).map(|_| input).collect();
+        let mut units = e.encode(&chans);
+        units.extend(e.flush());
+        units
+    }
+
+    #[test]
+    fn cbr_bitrate_limits_use_the_exact_bits_per_frame() {
+        // 288000 b/s at 48 kHz is exactly 6144 bits per frame; one more cannot fit a mono frame.
+        assert!(Encoder::new(EncoderConfig::cbr(48_000, 1, 288_000)).is_ok());
+        assert!(Encoder::new(EncoderConfig::cbr(48_000, 1, 288_001)).is_err());
+        // 4500 b/s at 96 kHz is exactly 48 bits per frame, the size of a silent mono frame.
+        assert!(Encoder::new(EncoderConfig::cbr(96_000, 1, 4_500)).is_ok());
+        assert!(Encoder::new(EncoderConfig::cbr(96_000, 1, 4_499)).is_err());
+        assert!(Encoder::new(EncoderConfig::cbr(96_000, 2, 2_000)).is_err());
+    }
+
+    #[test]
+    fn cbr_access_units_fit_the_decoder_buffer() {
+        let sil = vec![0f32; 48_000];
+        let nz = noise(48_000);
+        for (rate, ch, bps) in [(48_000, 1, 288_000), (48_000, 2, 576_000), (44_100, 1, 264_600), (8_000, 1, 1_000)] {
+            for input in [&sil, &nz] {
+                let units = encode_all(EncoderConfig::cbr(rate, ch, bps), input);
+                let max = units.iter().map(Vec::len).max().unwrap_or(0);
+                assert!(max <= 768 * ch, "{rate} Hz, {ch} ch, {bps} b/s: {max}-byte access unit");
+            }
+        }
+    }
+
+    #[test]
+    fn one_long_encode_call_buffers_one_frame_at_a_time() {
+        let input = noise(44_100 * 2);
+        let Ok(mut whole) = Encoder::new(EncoderConfig::cbr(44_100, 1, 128_000)) else { panic!("settings rejected") };
+        let mut a = whole.encode(&[&input]);
+        assert!(whole.hist[0].capacity() < 16 * FRAME_LEN, "history grew to {}", whole.hist[0].capacity());
+        a.extend(whole.flush());
+        let Ok(mut parts) = Encoder::new(EncoderConfig::cbr(44_100, 1, 128_000)) else { panic!("settings rejected") };
+        let mut b = Vec::new();
+        for chunk in input.chunks(1000) {
+            b.extend(parts.encode(&[chunk]));
+        }
+        b.extend(parts.flush());
+        assert_eq!(a, b);
+    }
 }

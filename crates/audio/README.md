@@ -233,7 +233,10 @@ let priming = enc.priming_samples();           // for the edit list (1024)
 ```
 
 The sample rate must be one of the 13 AAC rates (7350–96000 Hz). `aac_order` returns `None` for
-mono, stereo and 8 channels: pass those channels as they are.
+mono and stereo, which are already in order, and for 8 channels. Eight channels are written as AAC
+channel configuration 7 and taken in its element order: C, Lc Rc, L R, Ls Rs, LFE (front centre,
+front left and right of centre, front left and right, surrounds). A WAV 7.1 buffer (L R C LFE Lb Rb
+Ls Rs) has no equivalent in that layout; passed unchanged, its channels go to the wrong speakers.
 
 `EncoderConfig::cbr(..).with_adts(true)` makes every access unit an ADTS frame; concatenated, they
 are a playable `.aac` file. To write MP4 or Matroska, pass the access units to craft-media's
