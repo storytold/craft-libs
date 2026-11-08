@@ -835,10 +835,11 @@ impl Encoder {
             }
         }
         if let BitrateMode::Cbr(_) = self.cfg.mode {
-            // Fill up to the bits this unit should end at, never past `max_frame_bits`. `write_fill`
-            // ends at most 6 bits short and never over, so the byte-aligned unit ends within the
-            // target's byte, and exactly at `max_frame_bits` when that is the target.
-            let target_end = (self.level + mean - if last { 0 } else { self.res_max }).min(self.max_frame_bits);
+            // Fill up to the bits this unit should end at, never past `max_frame_bits`, rounded down
+            // to a whole byte since units are whole bytes. `write_fill` ends at most 6 bits short and
+            // never over, so the byte-aligned unit ends exactly there. The 0-7 bits rounded off stay
+            // in the reservoir; after the last frame they are left unspent.
+            let target_end = (self.level + mean - if last { 0 } else { self.res_max }).min(self.max_frame_bits) / 8 * 8;
             let excess = target_end - (bw.bit_len() as i64 + 3);
             if excess > 0 {
                 self.stats.fill_bits += write_fill(&mut bw, excess as u64);
@@ -992,6 +993,38 @@ mod tests {
     }
 
     #[test]
+    fn cbr_fill_never_spends_more_than_the_reservoir_holds() {
+        // Encode frame by frame, as `flush` does, so the bits each frame may spend are known: the
+        // reservoir level plus this frame's share of the rate.
+        for (rate, ch, bps) in [(48_000, 1, 5_907), (48_000, 2, 96_011), (8_000, 1, 7_919), (44_100, 2, 128_000)] {
+            for n in [1, 1500, 10_000] {
+                let Ok(mut e) = Encoder::new(EncoderConfig::cbr(rate, ch, bps)) else { panic!("settings rejected") };
+                // Silent input, buffered without encoding: `encode` would code the frames it can.
+                for h in &mut e.hist {
+                    h.extend(std::iter::repeat_n(0.0, n));
+                }
+                e.total_in = n as u64;
+                let frames = (n as u64).div_ceil(FRAME_LEN as u64) + 1;
+                while e.frames_done < frames {
+                    let (need, have) = (e.needed_for(e.frames_done), e.available());
+                    for h in &mut e.hist {
+                        h.extend(std::iter::repeat_n(0.0, (need - have).max(0) as usize));
+                    }
+                    let last = e.frames_done + 1 == frames;
+                    let mean = ((e.mean_acc + bps as u64 * FRAME_LEN as u64) / rate as u64) as i64;
+                    let available = e.level + mean;
+                    let used = e.encode_frame(last).len() as i64 * 8;
+                    let at = format!("{rate} Hz, {ch} ch, {bps} b/s, {n} samples, frame {}", e.frames_done);
+                    assert!(used <= available, "{at}: {used} bits used, {available} available");
+                    if last {
+                        assert!(used >= available.min(e.max_frame_bits) / 8 * 8, "{at}: last frame {used} bits, {available} available");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn fill_never_passes_the_request() {
         for bits in 0..3000u64 {
             let mut bw = BitWriter::new();
@@ -1004,10 +1037,12 @@ mod tests {
     #[test]
     fn vbr_quality_must_be_a_number() {
         assert!(Encoder::new(EncoderConfig::vbr(48_000, 2, f32::NAN)).is_err());
-        // Infinities and other out-of-range values are clamped, and keep frames within the limit.
+        // Infinities and other out-of-range values are clamped: they encode exactly as the nearest
+        // end of the range, within the frame limit.
         let nz = noise(48_000);
-        for q in [f32::INFINITY, f32::NEG_INFINITY, 100.0, -3.0] {
+        for (q, end) in [(f32::INFINITY, 6.0), (f32::NEG_INFINITY, 0.5), (100.0, 6.0), (-3.0, 0.5)] {
             let units = encode_all(EncoderConfig::vbr(48_000, 8, q).with_adts(true), &nz);
+            assert!(units == encode_all(EncoderConfig::vbr(48_000, 8, end).with_adts(true), &nz), "quality {q}");
             for u in &units {
                 assert!(u.len() <= 6144 + 7 && u.starts_with(&[0xFF]), "quality {q}: {}-byte unit", u.len());
             }
