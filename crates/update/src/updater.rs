@@ -15,6 +15,7 @@ use std::time::Duration;
 use crate::dialog::{StartupPrompt, StartupPromptResponse};
 use crate::pins::{Choice, Pins};
 use crate::release::Release;
+use crate::self_update::Restart;
 use crate::translate::{Note, Translate, english};
 use crate::{App, Http, Paths, Platform, Stop, check_for_update, self_update};
 
@@ -42,7 +43,8 @@ pub enum Action {
     /// Open this page in the browser.
     OpenUrl(String),
     /// Close the app through its normal close path (which asks about unsaved work): the update is
-    /// installed and a helper restarts the app once it has exited.
+    /// installed and a helper restarts the app once it has exited. On Windows the helper, which
+    /// installs the update, starts when this is returned.
     Close,
 }
 
@@ -89,9 +91,11 @@ pub struct Updater {
     requested: bool,
     started: bool,
     check: Option<Receiver<Checked>>,
-    install: Option<(Receiver<Result<(), Failure>>, Release)>,
+    install: Option<(Receiver<Result<Restart, Failure>>, Release)>,
     prompt: Option<StartupPrompt>,
-    restart: bool,
+    /// A finished installation waiting for the app to close: what still has to start then, and
+    /// the release, to offer again if it can't.
+    restart: Option<(Restart, Release)>,
     /// An update is installed and waits for the app to exit; nothing starts a second one.
     installed: bool,
     /// The version-choice file to read in place of [`Pins::default_path`] (tests).
@@ -116,7 +120,7 @@ impl Updater {
             check: None,
             install: None,
             prompt: None,
-            restart: false,
+            restart: None,
             installed: false,
             pins_path: None,
             managed: None,
@@ -308,9 +312,9 @@ impl Updater {
             if let Some(outcome) = outcome {
                 let release = self.install.take().map(|(_, release)| release);
                 match outcome {
-                    Ok(()) => {
+                    Ok(restart) => {
                         self.installed = true;
-                        self.restart = true;
+                        self.restart = release.map(|release| (restart, release));
                         let note = self.installed_note();
                         if let Some(prompt) = &mut self.prompt {
                             prompt.is_installing = false;
@@ -351,10 +355,24 @@ impl Updater {
     /// and a close that the user then cancels would leave it waiting for an exit that never comes.
     pub fn show_if(&mut self, ctx: &egui::Context, can_start: bool) -> Action {
         // The close waits for the app to hold no unsaved work: the user may have edited while the
-        // update installed, and a close they cancel is asked again once the work is saved.
-        if self.restart && can_start {
-            self.restart = false;
-            return Action::Close;
+        // update installed. The Windows helper starts only now, since it waits just a minute for
+        // the app to exit.
+        if can_start && let Some((restart, release)) = self.restart.take() {
+            match restart.start() {
+                Ok(()) => return Action::Close,
+                Err(e) => {
+                    log::warn!("{} self-update failed: {e}", self.app.name);
+                    // Nothing will install it: the update is on offer again.
+                    self.installed = false;
+                    if self.prompt.is_none() {
+                        self.prompt = Some(self.prompt_for(release));
+                    }
+                    if let Some(prompt) = &mut self.prompt {
+                        prompt.is_installing = false;
+                        prompt.set_message(e);
+                    }
+                }
+            }
         }
         let Some(prompt) = &mut self.prompt else { return Action::None };
         match prompt.show(ctx) {
@@ -421,7 +439,7 @@ impl Updater {
     }
 }
 
-fn install(app: &'static App, installed: &self_update::Install, mut release: Release, version: &str) -> Result<(), String> {
+fn install(app: &'static App, installed: &self_update::Install, mut release: Release, version: &str) -> Result<Restart, String> {
     let http = Http::new(&format!("{}/Update", app.name)).map_err(|e| format!("could not initialize HTTP: {e}"))?;
     if release.assets.is_empty()
         && let Some(full) = check_for_update(app, &http, version).map_err(|e| format!("could not fetch release assets: {e}"))?
@@ -430,7 +448,7 @@ fn install(app: &'static App, installed: &self_update::Install, mut release: Rel
     }
     let paths = Paths::for_app(app).map_err(|e| format!("could not find paths: {e}"))?;
     let platform = Platform::current().ok_or("unsupported platform for self update")?;
-    self_update::update(app, installed, &release, platform, &http, &paths, &Stop::default(), &mut |_| {}, &|| Ok(()), Some(version))
+    self_update::prepare_update(app, installed, &release, platform, &http, &paths, &Stop::default(), &mut |_| {}, &|| Ok(()), Some(version))
 }
 
 /// Download in the prompt: the release page, when it is a safe web link (an app may build its
@@ -642,7 +660,7 @@ mod tests {
     fn a_dropped_install_worker_is_an_error() {
         let ctx = egui::Context::default();
         let mut u = updater(Ok(None));
-        let (tx, rx) = channel::<Result<(), Failure>>();
+        let (tx, rx) = channel::<Result<Restart, Failure>>();
         u.install = Some((rx, newer()));
         drop(tx);
         u.tick(&ctx);
@@ -701,7 +719,7 @@ mod tests {
         let mut u = updater(Ok(Some(newer())));
         let (tx, rx) = channel();
         u.install = Some((rx, newer()));
-        assert!(tx.send(Ok(())).is_ok());
+        assert!(tx.send(Ok(Restart::scheduled())).is_ok());
         u.tick(&ctx);
         assert_eq!(u.show(&ctx), Action::Close);
         u.prompt = None;
@@ -742,7 +760,7 @@ mod tests {
         // An installed update names the app, in the language of the moment.
         let (tx, rx) = channel();
         u.install = Some((rx, newer()));
-        assert!(tx.send(Ok(())).is_ok());
+        assert!(tx.send(Ok(Restart::scheduled())).is_ok());
         u.tick(&ctx);
         assert!(message(&u).starts_with("FR The update is installed. Close PhotoCraft"), "{}", message(&u));
         FRENCH.store(false, Ordering::Relaxed);
@@ -763,7 +781,7 @@ mod tests {
         u.offer(newer());
         let (tx, rx) = channel();
         u.install = Some((rx, newer()));
-        assert!(tx.send(Ok(())).is_ok());
+        assert!(tx.send(Ok(Restart::scheduled())).is_ok());
         u.tick(&ctx);
         assert_eq!(frame(&mut u, &ctx, false), Action::None, "unsaved work holds the close back");
         assert_eq!(frame(&mut u, &ctx, true), Action::Close);
@@ -776,10 +794,52 @@ mod tests {
         let mut u = updater(Ok(None));
         let (tx, rx) = channel();
         u.install = Some((rx, newer()));
-        assert!(tx.send(Ok(())).is_ok());
+        assert!(tx.send(Ok(Restart::scheduled())).is_ok());
         u.tick(&ctx);
         assert_eq!(u.show(&ctx), Action::Close);
         assert_eq!(u.show(&ctx), Action::None);
+    }
+
+    /// A finished installation that still has to start its helper starts it only when the app
+    /// may close, and only once.
+    #[test]
+    fn the_helper_starts_once_when_the_app_closes() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let ctx = egui::Context::default();
+        let mut u = updater(Ok(None));
+        u.offer(newer());
+        let starts = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&starts);
+        let (tx, rx) = channel();
+        u.install = Some((rx, newer()));
+        let restart = Restart::later(move || {
+            counter.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        });
+        assert!(tx.send(Ok(restart)).is_ok());
+        u.tick(&ctx);
+        assert_eq!(starts.load(Ordering::SeqCst), 0, "the helper waits for the close");
+        assert_eq!(frame(&mut u, &ctx, false), Action::None);
+        assert_eq!(starts.load(Ordering::SeqCst), 0, "unsaved work holds the helper back");
+        assert_eq!(frame(&mut u, &ctx, true), Action::Close);
+        assert_eq!(starts.load(Ordering::SeqCst), 1);
+        assert_eq!(frame(&mut u, &ctx, true), Action::None);
+        assert_eq!(starts.load(Ordering::SeqCst), 1, "the helper starts once");
+    }
+
+    /// A helper that can't start keeps the app open and offers the update again with the reason.
+    #[test]
+    fn a_helper_that_cannot_start_keeps_the_app_open() {
+        let ctx = egui::Context::default();
+        let mut u = updater(Ok(None));
+        let (tx, rx) = channel();
+        u.install = Some((rx, newer()));
+        assert!(tx.send(Ok(Restart::later(|| Err("couldn't schedule the update (denied)".into())))).is_ok());
+        u.tick(&ctx);
+        assert_eq!(frame(&mut u, &ctx, true), Action::None);
+        let prompt = u.prompt.as_ref().map(|p| (p.is_installing, p.status_message.clone()));
+        assert_eq!(prompt, Some((false, Some("couldn't schedule the update (denied)".into()))));
+        assert!(!u.installed, "the update is on offer again");
     }
 }
 

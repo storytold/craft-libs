@@ -244,11 +244,12 @@ fn msi_step(app: &App, exe: &Path) -> Result<crate::msi_migrate::Step, String> {
     crate::msi_migrate::windows::step(app, exe)
 }
 
-/// Whether the helper starts the app after the update step: always after a successful one, and
-/// after a failed one only while its exe is still there.
+/// Whether the helper starts the app after the update step: never while the old app is still
+/// running (a second copy of it would open), always after a successful step, and after a failed
+/// one only while its exe is still there.
 #[cfg_attr(not(windows), allow(dead_code))]
-fn restarts(step_succeeded: bool, exe_exists: bool) -> bool {
-    step_succeeded || exe_exists
+fn restarts(app_exited: bool, step_succeeded: bool, exe_exists: bool) -> bool {
+    app_exited && (step_succeeded || exe_exists)
 }
 
 /// The exe to start after an MSI update of a registered copy: the one its registrations name now
@@ -371,6 +372,58 @@ pub fn update(
     last: &dyn Fn() -> Result<(), String>,
     running_version: Option<&str>,
 ) -> Result<(), String> {
+    prepare_update(app, install, release, platform, http, paths, stop, phase, last, running_version)?.start()
+}
+
+/// What remains of an update after [`prepare_update`]: starting the Windows helper, which waits
+/// for this process to exit and then installs the update. On macOS and Linux the update is
+/// already in place and its restart already scheduled, so [`Restart::start`] does nothing.
+#[must_use = "on Windows the update is only installed once the restart is started"]
+pub struct Restart {
+    helper: Option<Box<dyn FnOnce() -> Result<(), String> + Send>>,
+}
+
+impl Restart {
+    /// Nothing is left to start.
+    #[cfg_attr(all(windows, not(test)), allow(dead_code))]
+    pub(crate) fn scheduled() -> Self {
+        Self { helper: None }
+    }
+
+    /// `start` runs when the app closes.
+    #[cfg_attr(not(any(windows, test)), allow(dead_code))]
+    pub(crate) fn later(start: impl FnOnce() -> Result<(), String> + Send + 'static) -> Self {
+        Self { helper: Some(Box::new(start)) }
+    }
+
+    /// Starts the helper. Call it when the app closes: the helper waits only a minute for the
+    /// app to exit, and installs nothing when the app is still running after that.
+    pub fn start(self) -> Result<(), String> {
+        self.helper.map_or(Ok(()), |start| start())
+    }
+}
+
+impl std::fmt::Debug for Restart {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Restart").field("pending", &self.helper.is_some()).finish()
+    }
+}
+
+/// [`update`] without starting the Windows helper: the caller starts the returned [`Restart`]
+/// when the app closes. On macOS and Linux the result is the same as [`update`]'s.
+#[allow(clippy::too_many_arguments)]
+pub fn prepare_update(
+    app: &App,
+    install: &Install,
+    release: &Release,
+    platform: Platform,
+    http: &Http,
+    paths: &Paths,
+    stop: &Stop,
+    phase: &mut dyn FnMut(JobPhase),
+    last: &dyn Fn() -> Result<(), String>,
+    running_version: Option<&str>,
+) -> Result<Restart, String> {
     let cur_v = running_version.and_then(|v| current_version(app, v));
     if let (Some(rel_v), Some(cur_v)) = (release.version.as_ref(), cur_v.as_ref())
         && !version::offers_update(rel_v, cur_v)
@@ -390,11 +443,13 @@ pub fn update(
     // The restart ends this process: nothing else may be under way.
     last()?;
     phase(JobPhase::Installing);
-    // Written before the swap starts: the Windows helper runs alongside this process and clears
-    // it when it fails, which a write after scheduling could undo.
+    // Written before the swap starts. On Windows the helper does the swap, so the record is
+    // written when it starts (see `windows_helper`): it clears the record when it fails, which a
+    // write after it started could undo.
+    #[cfg(not(windows))]
     mark_installed(paths, release);
     let pid = std::process::id();
-    let scheduled = (|| -> Result<(), String> {
+    let scheduled = (|| -> Result<Restart, String> {
         match install {
             #[cfg(target_os = "macos")]
             Install::MacApp(bundle) => {
@@ -402,20 +457,20 @@ pub fn update(
                 let placed = install::macos::install_dmg(app, &file, Some(&existing), None, false, paths, &install::macos::Expect::release(release));
                 let _ = std::fs::remove_file(&file);
                 let placed = placed?;
-                relaunch_after_exit(app, pid, &[Path::new("/usr/bin/open").as_os_str(), placed.as_os_str()])
+                relaunch_after_exit(app, pid, &[Path::new("/usr/bin/open").as_os_str(), placed.as_os_str()]).map(|()| Restart::scheduled())
             }
             #[cfg(target_os = "linux")]
             Install::AppImage(path) => {
                 replace_appimage(&file, path)?;
                 let _ = std::fs::remove_file(&file);
-                relaunch_after_exit(app, pid, &[path.as_os_str()])
+                relaunch_after_exit(app, pid, &[path.as_os_str()]).map(|()| Restart::scheduled())
             }
             #[cfg(target_os = "linux")]
             Install::Package(kind, exe) => {
                 let result = install::linux::install_package(*kind, &file, None, stop, phase);
                 let _ = std::fs::remove_file(&file);
                 result?;
-                relaunch_after_exit(app, pid, &[exe.as_os_str()])
+                relaunch_after_exit(app, pid, &[exe.as_os_str()]).map(|()| Restart::scheduled())
             }
             #[cfg(target_os = "linux")]
             Install::Flatpak => {
@@ -429,26 +484,26 @@ pub fn update(
                 let result = install::linux::update_flatpak_bundle(&file, &app.bundle_id(), system, stop, phase);
                 let _ = std::fs::remove_file(&file);
                 result?;
-                relaunch_flatpak_after_exit(app)
+                relaunch_flatpak_after_exit(app).map(|()| Restart::scheduled())
             }
             #[cfg(windows)]
-            Install::Msi(exe) => windows_helper(app, paths, pid, exe, &msi_finish(&file)?),
+            Install::Msi(exe) => windows_helper(app, paths, release, pid, exe, &msi_finish(&file)?),
             #[cfg(windows)]
             Install::Portable(exe) => {
                 exe.parent().ok_or_else(|| format!("{} isn't in a folder", app.name))?;
-                windows_helper(app, paths, pid, exe, &Finish::Portable { zip: file, tmp: paths.cache.join(PORTABLE_STAGING) })
+                windows_helper(app, paths, release, pid, exe, &Finish::Portable { zip: file, tmp: paths.cache.join(PORTABLE_STAGING) })
             }
             #[cfg(windows)]
             Install::Standalone(exe) => {
                 exe.parent().ok_or_else(|| format!("{} isn't in a folder", app.name))?;
-                windows_helper(app, paths, pid, exe, &Finish::Portable { zip: file, tmp: paths.cache.join(PORTABLE_STAGING) })
+                windows_helper(app, paths, release, pid, exe, &Finish::Portable { zip: file, tmp: paths.cache.join(PORTABLE_STAGING) })
             }
             #[cfg(unix)]
             Install::Standalone(exe) => {
                 let result = replace_standalone(app, paths, &file, exe);
                 let _ = std::fs::remove_file(&file);
                 result?;
-                relaunch_after_exit(app, pid, &[exe.as_os_str()])
+                relaunch_after_exit(app, pid, &[exe.as_os_str()]).map(|()| Restart::scheduled())
             }
             #[allow(unreachable_patterns)]
             _ => {
@@ -469,7 +524,7 @@ fn mark_installed(paths: &Paths, release: &Release) {
 
 /// Removes the record of [`mark_installed`] when the swap couldn't be scheduled, so the update
 /// stays on offer.
-fn unmark_unless_scheduled(paths: &Paths, scheduled: Result<(), String>) -> Result<(), String> {
+fn unmark_unless_scheduled<T>(paths: &Paths, scheduled: Result<T, String>) -> Result<T, String> {
     if scheduled.is_err() {
         let _ = std::fs::remove_file(marker(paths));
     }
@@ -759,11 +814,12 @@ const HELPER_DIR: &str = "launcher-update-helper";
 #[cfg_attr(not(windows), allow(dead_code))]
 const PORTABLE_STAGING: &str = "launcher-update";
 
-/// Copies this program into the cache and starts the copy as the update helper, which waits for
-/// `pid` to exit, does `finish` and starts `exe`. Run from the cache, the helper doesn't hold the
-/// installed exe that the step replaces.
+/// Copies this program into the cache as the update helper, which waits for `pid` to exit, does
+/// `finish` and starts `exe`. Run from the cache, the helper doesn't hold the installed exe that
+/// the step replaces. The returned [`Restart`] records `release` as installed and starts the
+/// helper.
 #[cfg(windows)]
-fn windows_helper(app: &App, paths: &Paths, pid: u32, exe: &Path, finish: &Finish) -> Result<(), String> {
+fn windows_helper(app: &App, paths: &Paths, release: &Release, pid: u32, exe: &Path, finish: &Finish) -> Result<Restart, String> {
     let program = std::env::current_exe().map_err(|e| format!("couldn't find this program ({e})"))?;
     let dir = paths.cache.join(HELPER_DIR);
     // The previous update's copy, when it's still there.
@@ -774,7 +830,12 @@ fn windows_helper(app: &App, paths: &Paths, pid: u32, exe: &Path, finish: &Finis
     let mut cmd = process::command(&helper);
     cmd.args(helper_args(pid, exe, finish));
     clear_pretend_version(&mut cmd, app);
-    process::spawn_detached(cmd).map_err(|e| format!("couldn't schedule the update ({e})"))
+    let (paths, release) = (paths.clone(), release.clone());
+    Ok(Restart::later(move || {
+        mark_installed(&paths, &release);
+        let started = process::spawn_detached(cmd).map_err(|e| format!("couldn't schedule the update ({e})"));
+        unmark_unless_scheduled(&paths, started)
+    }))
 }
 
 /// Finishes an update when this program was started as the update helper; `args` are its
@@ -799,23 +860,48 @@ pub fn finish(app: &App, args: &[OsString]) -> Option<Result<(), String>> {
     // Read before the step: the update may move or replace the old exe.
     let registered =
         matches!(step, Finish::Msi(_)) && matches!(crate::msi_copy::windows::find(app, &exe), Some(crate::msi_copy::MsiCopy::Registered { .. }));
-    let done = run_step(app, &me, pid, &exe, &step, std::time::Duration::from_secs(60));
+    let wait = |pid| process::wait_for_exit(pid, std::time::Duration::from_secs(60));
+    let start = |exe: &Path| {
+        signed_like(app, &me, exe)
+            .and_then(|()| process::spawn_detached(std::process::Command::new(exe)).map_err(|e| format!("couldn't start {} ({e})", exe.display())))
+    };
+    Some(finish_step(app, &me, &paths, pid, exe, &step, registered, &wait, &start))
+}
+
+/// The helper's work once its checks have passed: waits for `pid` with `wait`, does `step`, and
+/// starts the app with `start` when [`restarts`] allows it. Every failure is recorded for the
+/// app's next start.
+#[cfg(windows)]
+#[allow(clippy::too_many_arguments)]
+fn finish_step(
+    app: &App,
+    reference: &Path,
+    paths: &Paths,
+    pid: u32,
+    exe: PathBuf,
+    step: &Finish,
+    registered: bool,
+    wait: &dyn Fn(u32) -> bool,
+    start: &dyn Fn(&Path) -> Result<(), String>,
+) -> Result<(), String> {
+    let stepped = step_after_wait(app, reference, pid, &exe, step, wait);
+    let done = stepped.result;
     if let Err(e) = &done {
-        record_failure(&paths, e);
+        record_failure(paths, e);
     }
     // The new app, or the old one when the step failed.
     let exe = if done.is_ok() { exe_after_msi(app, registered, &exe) } else { exe };
-    // A failed move can leave no program to start; its recorded error already says how to get
-    // the app back, and a restart error must not replace it.
-    if !restarts(done.is_ok(), exe.is_file()) {
-        return Some(done);
+    // An app that is still running gets no second copy. A failed move can leave no program to
+    // start; its recorded error already says how to get the app back, and a restart error must
+    // not replace it.
+    if !restarts(stepped.exited, done.is_ok(), exe.is_file()) {
+        return done;
     }
-    let started = signed_like(app, &me, &exe)
-        .and_then(|()| process::spawn_detached(std::process::Command::new(&exe)).map_err(|e| format!("couldn't start {} ({e})", exe.display())));
+    let started = start(&exe);
     if let Err(e) = &started {
-        record_failure(&paths, e);
+        record_failure(paths, e);
     }
-    Some(done.and(started))
+    done.and(started)
 }
 
 /// Finishes an update on non-Windows platforms (no-op helper).
@@ -990,14 +1076,29 @@ mod wait_watch {
     }
 }
 
-/// Waits up to `wait` for `pid` to exit, does `step` once it has, and removes the download either
-/// way. The MSI, and every program in the portable zip, must be signed like `reference`.
-#[cfg(windows)]
+/// [`step_after_wait`], waiting up to `wait` for `pid` to exit.
+#[cfg(all(windows, test))]
 fn run_step(app: &App, reference: &Path, pid: u32, exe: &Path, step: &Finish, wait: std::time::Duration) -> Result<(), String> {
+    step_after_wait(app, reference, pid, exe, step, &|pid| process::wait_for_exit(pid, wait)).result
+}
+
+/// What [`step_after_wait`] came to.
+#[cfg(windows)]
+struct Stepped {
+    /// The old app had exited when the wait returned.
+    exited: bool,
+    result: Result<(), String>,
+}
+
+/// Calls `wait`, which says whether `pid` exited in time, does `step` once it has, and removes
+/// the download either way. The MSI, and every program in the portable zip, must be signed like
+/// `reference`.
+#[cfg(windows)]
+fn step_after_wait(app: &App, reference: &Path, pid: u32, exe: &Path, step: &Finish, wait: &dyn Fn(u32) -> bool) -> Stepped {
     #[cfg(test)]
     wait_watch::entered(pid);
     // The test hook needs the result, so it is stored rather than consumed by the branch.
-    let waited = process::wait_for_exit(pid, wait);
+    let waited = wait(pid);
     #[cfg(test)]
     wait_watch::returned(pid, waited);
     let result = if waited {
@@ -1025,7 +1126,7 @@ fn run_step(app: &App, reference: &Path, pid: u32, exe: &Path, step: &Finish, wa
             let _ = std::fs::remove_file(zip);
         }
     }
-    result
+    Stepped { exited: waited, result }
 }
 
 #[cfg(test)]
@@ -1434,7 +1535,7 @@ mod tests {
         std::fs::create_dir_all(&paths.data).unwrap();
         let release = Release { tag: "v0.2.0".into(), ..Release::default() };
         mark_installed(&paths, &release);
-        assert!(unmark_unless_scheduled(&paths, Err("couldn't schedule the update".into())).is_err());
+        assert!(unmark_unless_scheduled(&paths, Err::<(), _>("couldn't schedule the update".into())).is_err());
         assert!(!just_updated_to(&paths, &release));
         mark_installed(&paths, &release);
         assert!(unmark_unless_scheduled(&paths, Ok(())).is_ok());
@@ -1986,10 +2087,118 @@ mod tests {
 
     #[test]
     fn a_failed_step_that_removed_the_app_starts_nothing_and_keeps_its_message() {
-        assert!(restarts(true, true));
-        assert!(restarts(true, false));
-        assert!(restarts(false, true));
-        assert!(!restarts(false, false));
+        assert!(restarts(true, true, true));
+        assert!(restarts(true, true, false));
+        assert!(restarts(true, false, true));
+        assert!(!restarts(true, false, false));
+    }
+
+    /// An app still running after the helper's wait never gets a second copy, whatever the step
+    /// and the exe would allow.
+    #[test]
+    fn an_app_still_running_is_never_started_again() {
+        for (step_succeeded, exe_exists) in [(true, true), (true, false), (false, true), (false, false)] {
+            assert!(!restarts(false, step_succeeded, exe_exists), "{step_succeeded} {exe_exists}");
+        }
+    }
+
+    /// A helper whose wait ends with the old app still running installs nothing, starts no
+    /// program, records why, and removes the download.
+    #[cfg(windows)]
+    #[test]
+    fn the_helper_starts_nothing_while_the_old_app_runs() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::under(dir.path());
+        let exe = dir.path().join("artcraft-launcher.exe");
+        std::fs::write(&exe, "0.1.0").unwrap();
+        let zip = dir.path().join("artcraft-launcher-0.2.0-windows-x64-portable.zip");
+        std::fs::write(&zip, "zip").unwrap();
+        let step = Finish::Portable { zip: zip.clone(), tmp: dir.path().join(PORTABLE_STAGING) };
+        let started = std::sync::Mutex::new(Vec::<PathBuf>::new());
+        let start = |exe: &Path| {
+            started.lock().unwrap().push(exe.to_path_buf());
+            Ok(())
+        };
+        let never_exits = |_pid| false;
+        let error = finish_step(&crate::suite::LAUNCHER, &system_program("cmd.exe"), &paths, 4242, exe.clone(), &step, false, &never_exits, &start)
+            .unwrap_err();
+        assert!(error.contains("still running"), "{error}");
+        assert_eq!(*started.lock().unwrap(), Vec::<PathBuf>::new(), "no copy of the app may start while it still runs");
+        assert_eq!(std::fs::read_to_string(&exe).unwrap(), "0.1.0");
+        assert!(!zip.exists(), "the download is removed");
+        assert_eq!(take_failure(&paths).as_deref(), Some(error.as_str()));
+    }
+
+    /// A step that fails after the old app exited starts the old app again, as it was.
+    #[cfg(windows)]
+    #[test]
+    fn the_helper_starts_the_old_app_after_a_failed_step() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::under(dir.path());
+        let exe = dir.path().join("artcraft-launcher.exe");
+        std::fs::write(&exe, "0.1.0").unwrap();
+        // Not a zip, so the step fails.
+        let zip = dir.path().join("artcraft-launcher-0.2.0-windows-x64-portable.zip");
+        std::fs::write(&zip, "not a zip").unwrap();
+        let step = Finish::Portable { zip, tmp: dir.path().join(PORTABLE_STAGING) };
+        let started = std::sync::Mutex::new(Vec::<PathBuf>::new());
+        let start = |exe: &Path| {
+            started.lock().unwrap().push(exe.to_path_buf());
+            Ok(())
+        };
+        let exited = |_pid| true;
+        assert!(finish_step(&crate::suite::LAUNCHER, &system_program("cmd.exe"), &paths, 4242, exe.clone(), &step, false, &exited, &start).is_err());
+        assert_eq!(*started.lock().unwrap(), vec![exe.clone()]);
+        assert_eq!(std::fs::read_to_string(&exe).unwrap(), "0.1.0");
+    }
+
+    /// A successful step starts the new app once.
+    #[cfg(windows)]
+    #[test]
+    fn the_helper_starts_the_new_app_after_the_update() {
+        use std::io::Write;
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::under(dir.path());
+        let folder = dir.path().join("ArtCraft Launcher");
+        std::fs::create_dir_all(&folder).unwrap();
+        let exe = folder.join("artcraft-launcher.exe");
+        std::fs::write(&exe, "0.1.0").unwrap();
+        let zip = dir.path().join("artcraft-launcher-0.2.0-windows-x64-portable.zip");
+        let mut writer = zip::ZipWriter::new(std::fs::File::create(&zip).unwrap());
+        let signed_exe = std::fs::read(system_program("cmd.exe")).unwrap();
+        writer.start_file("artcraft-launcher-0.2.0-windows-x64-portable/artcraft-launcher.exe", zip::write::SimpleFileOptions::default()).unwrap();
+        writer.write_all(&signed_exe).unwrap();
+        writer.finish().unwrap();
+        let step = Finish::Portable { zip, tmp: dir.path().join(PORTABLE_STAGING) };
+        let started = std::sync::Mutex::new(Vec::<(PathBuf, Vec<u8>)>::new());
+        let start = |exe: &Path| {
+            started.lock().unwrap().push((exe.to_path_buf(), std::fs::read(exe).unwrap()));
+            Ok(())
+        };
+        let exited = |_pid| true;
+        assert_eq!(
+            finish_step(&crate::suite::LAUNCHER, &system_program("cmd.exe"), &paths, 4242, exe.clone(), &step, false, &exited, &start),
+            Ok(())
+        );
+        assert_eq!(*started.lock().unwrap(), vec![(exe, signed_exe)], "the new app starts once");
+        assert_eq!(take_failure(&paths), None);
+    }
+
+    /// A prepared Windows restart does nothing until it is started, and runs once when it is.
+    #[test]
+    fn a_prepared_restart_runs_only_when_started() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let runs = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&runs);
+        let restart = Restart::later(move || {
+            counter.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        });
+        assert_eq!(runs.load(Ordering::SeqCst), 0, "nothing starts before the app closes");
+        assert_eq!(restart.start(), Ok(()));
+        assert_eq!(runs.load(Ordering::SeqCst), 1);
+        assert_eq!(Restart::scheduled().start(), Ok(()));
     }
 
     #[test]
