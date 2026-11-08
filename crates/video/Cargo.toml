@@ -1,6 +1,6 @@
 [package]
 name = "craft-video"
-description = "Clean-room pure-Rust video codecs, one feature per codec: DNxHD/DNxHR, VP8, ProRes, H.264, HEVC."
+description = "Clean-room pure-Rust video codecs, one feature per codec: DNxHD/DNxHR, VP8, ProRes, H.264, HEVC, VP9."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -25,6 +25,8 @@ prores = ["craft-media/bitstream"]
 h264 = ["craft-media/isobmff"]
 # H.265 / HEVC (ITU-T H.265): encoder.
 hevc = ["craft-media/isobmff"]
+# VP9: encoder.
+vp9 = ["craft-media/isobmff"]
 # Decode and encode across worker threads (rayon) in the codecs that support it.
 threads = ["dep:rayon"]
 
