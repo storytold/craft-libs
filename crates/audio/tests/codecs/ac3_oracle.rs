@@ -160,6 +160,22 @@ fn frames(data: &[u8]) -> Vec<&[u8]> {
     out
 }
 
+fn snr_db(signal: f64, error: f64, context: &str) -> f64 {
+    assert!(signal.is_finite() && error.is_finite(), "{context}: non-finite signal or error in SNR comparison");
+    10.0 * (signal / error.max(1e-30)).log10()
+}
+
+#[test]
+fn snr_rejects_non_finite_aggregate_values() {
+    for (signal, error) in [(1.0, f64::NAN), (f64::NAN, 1.0), (f64::INFINITY, 1.0), (1.0, f64::INFINITY)] {
+        assert!(
+            std::panic::catch_unwind(|| snr_db(signal, error, "finite-check regression")).is_err(),
+            "non-finite aggregate was accepted: signal={signal}, error={error}"
+        );
+    }
+    assert!(snr_db(1.0, 0.0, "exact match") >= 300.0, "exact finite match remains valid");
+}
+
 #[test]
 fn ffmpeg_encoded_streams_decode() {
     let ff = require_ffmpeg!();
@@ -177,6 +193,7 @@ fn ffmpeg_encoded_streams_decode() {
             }
         }
         let o = Command::new(&ff).args(["-v", "error", "-i"]).arg(&f).args(["-f", "f32le", "-"]).output().unwrap();
+        assert!(o.status.success(), "{}: FFmpeg decode failed: {}", s.name, String::from_utf8_lossy(&o.stderr));
         let want: Vec<f32> = o.stdout.as_chunks::<4>().0.iter().map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]])).collect();
         let ch = s.channels as usize;
         let n = want.len() / ch;
@@ -189,7 +206,7 @@ fn ffmpeg_encoded_streams_decode() {
                 sig += b * b;
                 err += (a - b) * (a - b);
             }
-            let snr = 10.0 * (sig / err.max(1e-30)).log10();
+            let snr = snr_db(sig, err, &format!("{} channel {c}", s.name));
             worst = worst.min(snr);
         }
         // the same stream decoded with another dither sequence: how far dither alone moves the
@@ -202,7 +219,7 @@ fn ffmpeg_encoded_streams_decode() {
             sig += (ours[0][i] as f64).powi(2);
             err += (ours[0][i] as f64 - other[i] as f64).powi(2);
         }
-        let dither_snr = 10.0 * (sig / err.max(1e-30)).log10();
+        let dither_snr = snr_db(sig, err, &format!("{} dither comparison", s.name));
         println!(
             "{}: {} Hz, {} ch, {} frames, worst channel SNR vs ffmpeg {worst:.1} dB (two dither seeds: {dither_snr:.1} dB)",
             s.name,

@@ -60,6 +60,23 @@ fn run_case(ffmpeg: &Path, config: Config) {
     let stream = check_packets(&packets, config, &label);
     let pcm = external_decode(ffmpeg, config, &label, &stream, decoded_samples);
     check_tones(&pcm, &bins, config, &label);
+    if config.mode == CodingMode::Surround71 {
+        let mut decoder = craft_audio::ac3::ProgrammeDecoder::new(craft_audio::ChannelLayout::SURROUND_7_1);
+        let mut internal = Vec::new();
+        for packet in &packets {
+            let frame = decoder.decode(&packet.data).unwrap_or_else(|e| panic!("{label}: internal programme decode: {e}"));
+            assert_eq!(frame.layout, craft_audio::ChannelLayout::SURROUND_7_1, "{label}: internal speaker layout");
+            assert_eq!(frame.sample_rate, config.sample_rate, "{label}: internal sample rate");
+            for sample in 0..1536 {
+                for channel in &frame.channels {
+                    internal.push(channel[sample]);
+                }
+            }
+        }
+        assert_eq!(internal.len(), pcm.len(), "{label}: internal sample/channel count");
+        assert!(internal.iter().all(|v| v.is_finite()), "{label}: internal non-finite PCM");
+        check_tones(&internal, &bins, config, &format!("{label}/ProgrammeDecoder"));
+    }
 }
 
 fn check_packets(packets: &[Packet], config: Config, label: &str) -> Vec<u8> {

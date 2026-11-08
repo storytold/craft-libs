@@ -209,7 +209,7 @@ fn eac3_tools_we_do_not_decode_are_refused() {
 #[test]
 fn eac3_single_block_frames_reuse_exponents_across_syncframes() {
     // mono, one block per syncframe; the first sends exponents (all 10, bandwidth code 0), the
-    // second reuses them. Zero SNR offsets allocate no bits: every coefficient is dither.
+    // subsequent frames reuse them. Zero SNR offsets allocate no bits: every coefficient is dither.
     let frame = |new_exps: bool| {
         eac3_frame(0, 0, 32, 0, 1, |w| {
             // (expstre and ahte are not sent with fewer than six blocks)
@@ -235,9 +235,25 @@ fn eac3_single_block_frames_reuse_exponents_across_syncframes() {
     let mut d = Decoder::new();
     let a = d.decode(&first).unwrap();
     assert_eq!((a.header.samples(), a.channels.len(), a.channels[0].len()), (256, 1, 256));
-    let b = d.decode(&second).unwrap();
     let peak = |c: &[f32]| c.iter().fold(0f32, |m, v| m.max(v.abs()));
-    assert!(peak(&b.channels[0]) > 1e-5 && peak(&b.channels[0]) < 0.1, "{}", peak(&b.channels[0]));
+    // A single reuse frame can sound only because the first frame left IMDCT overlap.
+    // Sustained output after that overlap is exhausted requires restored exponents.
+    for index in 1..=4 {
+        let b = d.decode(&second).unwrap();
+        assert!(b.channels[0].iter().all(|sample| sample.is_finite()));
+        let amplitude = peak(&b.channels[0]);
+        assert!(amplitude > 1e-5 && amplitude < 0.1, "reuse frame {index}: {amplitude}");
+    }
+    // Negative control: deliberately remove only exponent carry, leaving overlap intact.
+    // This passes the old one-frame non-silence check but fails on the following frame.
+    let mut without_carry = Decoder::new();
+    without_carry.decode(&first).unwrap();
+    without_carry.carry = None;
+    let overlap_only = without_carry.decode(&second).unwrap();
+    assert!(peak(&overlap_only.channels[0]) > 1e-5);
+    without_carry.carry = None;
+    let exhausted = without_carry.decode(&second).unwrap();
+    assert_eq!(peak(&exhausted.channels[0]), 0.0);
     // after a reset there are no exponents to reuse: no coefficients, silence
     d.reset();
     let c = d.decode(&second).unwrap();

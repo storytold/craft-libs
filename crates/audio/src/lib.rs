@@ -18,10 +18,10 @@
 //! - [`encode`], [`FileEncoder`]: WAV/BWF/RF64 and AIFF/AIFF-C (feature `pcm-encode`, which also
 //!   gives [`wav_float_header`]) and FLAC (feature `flac-encode`), whole-buffer or incremental into
 //!   any `Write + Seek`. Feature `lossless-encode` turns on both; feature `encode` turns on
-//!   `lossless-encode`, `aac-encode` and `opus-encode`.
+//!   `lossless-encode`, `aac-encode`, `opus-encode`, `ac3-encode` and `eac3-encode`.
 //! - [`peaks`] (feature `peaks`): min/max/RMS pyramid for waveform drawing.
 //! - Codec modules for packet-level use, each with its own features: [`aac`] (`aac-decode`,
-//!   `aac-encode`), [`ac3`] (`ac3-decode`), [`opus`] (`opus-decode`, and
+//!   `aac-encode`), [`ac3`] (`ac3-decode`, `ac3-encode`, `eac3-encode`), [`opus`] (`opus-decode`, and
 //!   [`opus::encoder`] with `opus-encode`).
 //!
 //! The shared types below build with no features.
@@ -101,6 +101,13 @@ impl From<aac::Error> for AudioError {
             aac::Error::InvalidSettings(_) => AudioError::Encode(e.to_string()),
             _ => AudioError::Malformed(e.to_string()),
         }
+    }
+}
+
+#[cfg(any(feature = "ac3-encode", feature = "eac3-encode"))]
+impl From<ac3::encoder::Error> for AudioError {
+    fn from(error: ac3::encoder::Error) -> Self {
+        AudioError::Encode(error.to_string())
     }
 }
 
@@ -392,5 +399,21 @@ mod tests {
             Ok(_) => panic!("44 kHz is not an AAC rate"),
         };
         assert!(matches!(e, AudioError::Encode(_)), "{e}");
+    }
+}
+
+#[cfg(all(test, any(feature = "ac3-encode", feature = "eac3-encode")))]
+mod ac3_encoder_errors {
+    use super::*;
+
+    #[test]
+    fn encoder_errors_propagate_through_audio_result() {
+        fn refuse_settings() -> Result<()> {
+            use ac3::encoder::{Codec, CodingMode, Config, Encoder};
+            let codec = if cfg!(feature = "ac3-encode") { Codec::Ac3 } else { Codec::Eac3 };
+            Encoder::new(Config { codec, sample_rate: 0, bitrate_kbps: 192, mode: CodingMode::Stereo, lfe: false })?;
+            Ok(())
+        }
+        assert!(matches!(refuse_settings(), Err(AudioError::Encode(_))));
     }
 }

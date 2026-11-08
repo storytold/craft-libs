@@ -14,6 +14,10 @@ use crate::{AudioBuffer, AudioError, ChannelLayout, CodecId, CodecParams, Result
 /// How many leading packets [`TrackDecoder::new`] looks at.
 pub const LOOKAHEAD_PACKETS: usize = 8;
 
+/// Bound packet work even when every syncframe is a skipped dependent programme.
+#[cfg(feature = "ac3-decode")]
+pub(crate) const MAX_AC3_PACKET_SYNCFRAMES: usize = 4096;
+
 /// The codec-specific decoder behind a [`TrackDecoder`].
 enum Inner {
     #[cfg(feature = "aac-decode")]
@@ -25,7 +29,10 @@ enum Inner {
         adts_format: Option<AdtsFormat>,
     },
     #[cfg(feature = "ac3-decode")]
-    Ac3(Box<ac3::Decoder>),
+    Ac3 {
+        dec: Box<ac3::Decoder>,
+        format: Option<Ac3Format>,
+    },
     #[cfg(feature = "opus-decode")]
     Opus {
         dec: Box<opus::Decoder>,
@@ -102,9 +109,6 @@ impl TrackDecoder {
     pub fn new(params: &CodecParams, lookahead: &[&[u8]]) -> Result<TrackDecoder> {
         let rate = params.sample_rate.unwrap_or(0);
         let channels = usize::from(params.channels.unwrap_or(0));
-        // AC-3 reads its parameters from the first frame.
-        #[cfg_attr(not(feature = "ac3-decode"), allow(unused_variables))]
-        let first = lookahead.first().copied().unwrap_or_default();
         let (inner, codec, sample_rate, layout, sample_format) = match params.codec {
             #[cfg(feature = "aac-decode")]
             CodecId::Aac | CodecId::HeAac => {
@@ -139,13 +143,18 @@ impl TrackDecoder {
                 (Inner::Aac { dec: Box::new(dec), up, order, adts_format }, codec, out, layout, SampleFormat::Compressed)
             }
             #[cfg(feature = "ac3-decode")]
-            CodecId::Ac3 | CodecId::Eac3 => match ac3::parse_header(first) {
-                Ok(h) => {
+            CodecId::Ac3 | CodecId::Eac3 => match lookahead
+                .iter()
+                .take(LOOKAHEAD_PACKETS)
+                .find_map(|p| first_ac3_primary(p).transpose())
+                .transpose()?
+            {
+                Some(h) => {
                     let codec = if h.is_eac3() { CodecId::Eac3 } else { CodecId::Ac3 };
-                    (Inner::Ac3(Box::default()), codec, h.sample_rate, ac3_layout(&h), SampleFormat::Compressed)
+                    (Inner::Ac3 { dec: Box::default(), format: Some(ac3_format(&h)) }, codec, h.sample_rate, ac3_layout(&h), SampleFormat::Compressed)
                 }
-                Err(_) => (
-                    Inner::Ac3(Box::default()),
+                None => (
+                    Inner::Ac3 { dec: Box::default(), format: None },
                     params.codec,
                     rate,
                     ChannelLayout::unordered(crate::layout::count(channels)),
@@ -180,6 +189,15 @@ impl TrackDecoder {
             other => return Err(unsupported(other)),
         };
         Ok(TrackDecoder { inner, codec, sample_rate, layout, sample_format, last_frames: 0 })
+    }
+
+    /// Native container readers must establish AC-3 metadata before caching their timeline.
+    #[cfg(feature = "decode-native")]
+    pub(crate) fn stream_format_known(&self) -> bool {
+        match &self.inner {
+            Inner::Ac3 { format, .. } => format.is_some(),
+            _ => true,
+        }
     }
 
     /// The codec, refined from the stream: [`CodecId::HeAac`] for AAC with spectral band
@@ -245,23 +263,44 @@ impl TrackDecoder {
                 reorder(out, *order)
             }
             #[cfg(feature = "ac3-decode")]
-            Inner::Ac3(d) => {
-                let mut out: Vec<Vec<f32>> = Vec::new();
-                let mut p = 0;
-                while let Some(rest) = packet.get(p..).filter(|r| !r.is_empty()) {
-                    let f = match d.decode(rest) {
-                        Ok(f) => f,
-                        Err(e) if out.is_empty() => return Err(e.into()),
-                        Err(_) => break,
-                    };
-                    p += f.header.frame_bytes.max(1);
-                    if !f.channels.is_empty() {
-                        if self.last_frames == 0 {
-                            self.sample_rate = f.header.sample_rate;
-                            self.layout = ac3_layout(&f.header);
+            Inner::Ac3 { dec, format } => {
+                // Packet delivery is atomic: the caller may retry, or explicitly conceal the
+                // failed packet. Neither earlier frames nor metadata escape a later failure.
+                let before = dec.clone();
+                let mut candidate = *format;
+                let mut metadata = None;
+                let decoded = (|| {
+                    let mut out = Vec::new();
+                    let mut rest = packet;
+                    let mut syncframes = 0;
+                    while !rest.is_empty() {
+                        count_ac3_syncframe(&mut syncframes)?;
+                        let f = dec.decode(rest)?;
+                        rest = rest.get(f.header.frame_bytes..).ok_or_else(|| AudioError::Malformed("truncated AC-3 packet".into()))?;
+                        if f.header.is_primary() {
+                            let current = ac3_format(&f.header);
+                            if candidate.is_some_and(|known| known != current) {
+                                return Err(AudioError::Malformed("AC-3 track changes codec, sample rate or speaker layout".into()));
+                            }
+                            candidate = Some(current);
+                            metadata = Some(f.header);
+                            append_ac3(&mut out, f.channels, crate::pcm::MAX_DECODE_SAMPLES)?;
                         }
-                        append(&mut out, f.channels)?;
                     }
+                    Ok(out)
+                })();
+                let out = match decoded {
+                    Ok(out) => out,
+                    Err(e) => {
+                        *dec = before;
+                        return Err(e);
+                    }
+                };
+                *format = candidate;
+                if let Some(h) = metadata {
+                    self.codec = if h.is_eac3() { CodecId::Eac3 } else { CodecId::Ac3 };
+                    self.sample_rate = h.sample_rate;
+                    self.layout = ac3_layout(&h);
                 }
                 out
             }
@@ -308,7 +347,14 @@ impl TrackDecoder {
                 }
             }
             #[cfg(feature = "ac3-decode")]
-            Inner::Ac3(_) => ac3::parse_header(data).ok().map(|h| h.samples()),
+            Inner::Ac3 { dec, .. } => {
+                dec.reset();
+                let frames = ac3_packet_frames(data)?.unwrap_or(self.last_frames);
+                return Ok(AudioBuffer {
+                    sample_rate: self.sample_rate,
+                    channels: crate::pcm::silence(usize::from(self.layout.channels()), frames)?,
+                });
+            }
             Inner::Pcm { kind, channels } => Some(data.len() / (kind.bytes() * *channels).max(1)),
         };
         let frames = frames.filter(|&n| n > 0).unwrap_or(self.last_frames);
@@ -316,14 +362,14 @@ impl TrackDecoder {
     }
 
     /// The frames every packet decodes to, for codecs whose packets all have one length: AAC
-    /// (1024, 2048 for HE-AAC; a packet of several ADTS frames decodes to that many times this) and
-    /// AC-3 (one frame per packet); `None` for Opus and PCM.
+    /// (1024, 2048 for HE-AAC; a packet of several ADTS frames decodes to that many times this);
+    /// `None` for AC-3/E-AC-3 (variable block/frame counts), Opus and PCM.
     pub fn frames_per_packet(&self) -> Option<usize> {
         match &self.inner {
             #[cfg(feature = "aac-decode")]
             Inner::Aac { up, .. } => Some(aac::FRAME_LEN * if up.is_some() { 2 } else { 1 }),
             #[cfg(feature = "ac3-decode")]
-            Inner::Ac3(_) => Some(if self.last_frames > 0 { self.last_frames } else { 1536 }),
+            Inner::Ac3 { .. } => None,
             #[cfg(feature = "opus-decode")]
             Inner::Opus { .. } => None,
             Inner::Pcm { .. } => None,
@@ -340,7 +386,7 @@ impl TrackDecoder {
             #[cfg(feature = "opus-decode")]
             Inner::Opus { .. } => 3840,
             #[cfg(feature = "ac3-decode")]
-            Inner::Ac3(_) => 1536,
+            Inner::Ac3 { .. } => 1536,
             Inner::Pcm { .. } => 0,
         }
     }
@@ -360,7 +406,7 @@ impl TrackDecoder {
                 }
             }
             #[cfg(feature = "ac3-decode")]
-            Inner::Ac3(d) => d.reset(),
+            Inner::Ac3 { dec, .. } => dec.reset(),
             #[cfg(feature = "opus-decode")]
             Inner::Opus { dec, .. } => dec.reset(),
             Inner::Pcm { .. } => {}
@@ -397,7 +443,7 @@ fn reorder(mut channels: Vec<Vec<f32>>, order: Option<&[usize]>) -> Vec<Vec<f32>
 
 /// Append `more` to `out` channel by channel. A packet whose frames differ in channel count is
 /// malformed: one buffer cannot hold them.
-#[cfg(any(feature = "aac-decode", feature = "ac3-decode"))]
+#[cfg(feature = "aac-decode")]
 fn append(out: &mut Vec<Vec<f32>>, more: Vec<Vec<f32>>) -> Result<()> {
     if out.is_empty() {
         *out = more;
@@ -407,6 +453,101 @@ fn append(out: &mut Vec<Vec<f32>>, more: Vec<Vec<f32>>) -> Result<()> {
         }
     } else {
         return Err(AudioError::Malformed("the frames of a packet change the channel count".into()));
+    }
+    Ok(())
+}
+
+#[cfg(feature = "ac3-decode")]
+type Ac3Format = (bool, u32, u8, bool);
+
+#[cfg(feature = "ac3-decode")]
+fn ac3_format(h: &ac3::Header) -> Ac3Format {
+    (h.is_eac3(), h.sample_rate, h.acmod, h.lfeon)
+}
+
+/// Metadata is taken from a primary programme, never a dependent extension's speaker set.
+#[cfg(feature = "ac3-decode")]
+fn first_ac3_primary(mut packet: &[u8]) -> Result<Option<ac3::Header>> {
+    let mut syncframes = 0;
+    while !packet.is_empty() {
+        count_ac3_syncframe(&mut syncframes)?;
+        let Ok(h) = ac3::parse_header(packet) else { return Ok(None) };
+        // A truncated header can advertise another format; wait for a complete frame.
+        let Some(rest) = packet.get(h.frame_bytes..) else { return Ok(None) };
+        if h.is_primary() {
+            return Ok(Some(h));
+        }
+        packet = rest;
+    }
+    Ok(None)
+}
+
+#[cfg(feature = "ac3-decode")]
+fn count_ac3_syncframe(count: &mut usize) -> Result<()> {
+    if *count == MAX_AC3_PACKET_SYNCFRAMES {
+        return Err(AudioError::TooLarge("AC-3 packet contains too many syncframes".into()));
+    }
+    *count += 1;
+    Ok(())
+}
+
+/// Sum primary-programme samples, excluding dependent extensions and other programmes.
+/// A readable truncated last frame still declares its concealment duration; an unreadable
+/// header leaves timing unknown rather than inventing a six-block duration.
+#[cfg(feature = "ac3-decode")]
+pub(crate) fn ac3_packet_frames(mut packet: &[u8]) -> Result<Option<usize>> {
+    if packet.is_empty() {
+        return Ok(None);
+    }
+    let mut frames = 0usize;
+    let mut syncframes = 0;
+    while !packet.is_empty() {
+        count_ac3_syncframe(&mut syncframes)?;
+        let Ok(h) = ac3::parse_header(packet) else {
+            return Ok(None);
+        };
+        if h.is_primary() {
+            frames = frames
+                .checked_add(h.samples())
+                .filter(|&n| n as u64 <= crate::pcm::MAX_DECODE_SAMPLES)
+                .ok_or_else(|| AudioError::TooLarge("AC-3 packet duration exceeds decode limit".into()))?;
+        }
+        let Some(rest) = packet.get(h.frame_bytes..) else {
+            break;
+        };
+        packet = rest;
+    }
+    Ok(Some(frames))
+}
+
+/// Validate the complete aggregate before reserving or appending any samples.
+#[cfg(feature = "ac3-decode")]
+fn append_ac3(out: &mut Vec<Vec<f32>>, more: Vec<Vec<f32>>, limit: u64) -> Result<()> {
+    let count = more.len();
+    let frames = more.first().map_or(0, Vec::len);
+    if (!out.is_empty() && out.len() != count) || more.iter().any(|c| c.len() != frames) {
+        return Err(AudioError::Malformed("AC-3 packet has inconsistent channel planes".into()));
+    }
+    let previous = out.first().map_or(0, Vec::len);
+    if out.iter().any(|c| c.len() != previous) {
+        return Err(AudioError::Malformed("AC-3 packet has inconsistent channel planes".into()));
+    }
+    let total = previous
+        .checked_add(frames)
+        .and_then(|n| n.checked_mul(count))
+        .ok_or_else(|| AudioError::TooLarge("AC-3 packet sample count overflow".into()))?;
+    if total as u64 > limit {
+        return Err(AudioError::TooLarge("AC-3 packet exceeds decode sample limit".into()));
+    }
+    if out.is_empty() {
+        *out = more;
+        return Ok(());
+    }
+    for plane in out.iter_mut() {
+        plane.try_reserve(frames).map_err(|_| AudioError::TooLarge("AC-3 packet allocation failed".into()))?;
+    }
+    for (plane, samples) in out.iter_mut().zip(more) {
+        plane.extend(samples);
     }
     Ok(())
 }
@@ -868,3 +1009,7 @@ mod tests {
         assert!(TrackDecoder::new(&CodecParams::new(CodecId::Pcm).with_channels(2).with_sample_rate(48_000), &[]).is_err());
     }
 }
+
+#[cfg(all(test, feature = "ac3-decode", feature = "ac3-encode", feature = "eac3-encode"))]
+#[path = "track_ac3_review_tests.rs"]
+mod ac3_review_tests;

@@ -253,22 +253,58 @@ mod tests {
         use super::super::encoder::{Codec, CodingMode, Config, Encoder};
         let config = Config { codec: Codec::Eac3, mode: CodingMode::Surround71, lfe: true, sample_rate: 48_000, bitrate_kbps: 640 };
         let mut encoder = Encoder::new(config)?;
-        let source: Vec<Vec<f32>> = (0..8).map(|c| (0..1536).map(|n| ((n as f32) * (0.01 + c as f32 * 0.017)).sin() * 0.2).collect()).collect();
-        let packets = encoder.push(&source.iter().map(Vec::as_slice).collect::<Vec<_>>())?;
-        let packet = packets.first().ok_or("encoder did not emit the complete frame")?;
-        let expected = ProgrammeDecoder::new(ChannelLayout::SURROUND_7_1).decode(&packet.data)?;
-        let mut alternate = packet.data.clone();
-        let offset = parse_header(&alternate)?.frame_bytes;
-        let dependent = &mut alternate[offset..];
-        // Both acmod5 and6 code four FBW channels. The explicit map overrides their default
-        // positions, so changing only acmod (with no coupling/rematrix/mix metadata) is valid.
-        dependent[4] = (dependent[4] & 0xf1) | (5 << 1);
-        let end = dependent.len() - 2;
-        let crc = crc16(&dependent[2..end]);
-        dependent[end..].copy_from_slice(&crc.to_be_bytes());
-        let actual = ProgrammeDecoder::new(ChannelLayout::SURROUND_7_1).decode(&alternate)?;
-        assert_eq!(expected.layout, actual.layout);
-        assert_eq!(expected.channels, actual.channels);
+        // Orthogonal source probes establish content independently of either decoder result.
+        // LFE's bin is below its low-pass roll-off; all other bins remain distinct.
+        const WINDOW: usize = 1024;
+        let bins = [7, 11, 17, 1, 23, 29, 37, 43];
+        let source: Vec<Vec<f32>> = bins
+            .iter()
+            .map(|&bin| (0..4096).map(|n| (std::f64::consts::TAU * bin as f64 * n as f64 / WINDOW as f64).sin() as f32 * 0.2).collect())
+            .collect();
+        let mut packets = encoder.push(&source.iter().map(Vec::as_slice).collect::<Vec<_>>())?;
+        packets.extend(encoder.finish()?.packets);
+        let mut original_decoder = ProgrammeDecoder::new(ChannelLayout::SURROUND_7_1);
+        let mut alternate_decoder = ProgrammeDecoder::new(ChannelLayout::SURROUND_7_1);
+        let mut channels = vec![Vec::new(); 8];
+        for packet in packets {
+            let expected = original_decoder.decode(&packet.data)?;
+            let mut alternate = packet.data.clone();
+            let offset = parse_header(&alternate)?.frame_bytes;
+            let dependent = &mut alternate[offset..];
+            // Both acmod5 and6 code four FBW channels. The explicit map overrides their default
+            // positions, so changing only acmod (with no coupling/rematrix/mix metadata) is valid.
+            dependent[4] = (dependent[4] & 0xf1) | (5 << 1);
+            let end = dependent.len() - 2;
+            let crc = crc16(&dependent[2..end]);
+            dependent[end..].copy_from_slice(&crc.to_be_bytes());
+            let actual = alternate_decoder.decode(&alternate)?;
+            assert_eq!(actual.layout, ChannelLayout::SURROUND_7_1);
+            assert_eq!(expected.channels, actual.channels);
+            for (joined, channel) in channels.iter_mut().zip(actual.channels) {
+                joined.extend(channel);
+            }
+        }
+        for (channel, pcm) in channels.iter().enumerate() {
+            assert!(pcm.iter().all(|v| v.is_finite()));
+            for (probe, bin) in bins.iter().enumerate() {
+                let (mut sine, mut cosine) = (0.0, 0.0);
+                for n in WINDOW..2 * WINDOW {
+                    let angle = std::f64::consts::TAU * *bin as f64 * n as f64 / WINDOW as f64;
+                    let value = f64::from(pcm[n + 256]);
+                    sine += value * angle.sin();
+                    cosine += value * angle.cos();
+                }
+                let amplitude = 2.0 * sine.hypot(cosine) / WINDOW as f64;
+                if channel == probe {
+                    assert!((0.18..=0.22).contains(&amplitude), "channel {channel}: missing/wrong source probe {amplitude}");
+                    if channel != 3 {
+                        assert!(sine > 0.0 && cosine.abs() < sine * 0.05, "channel {channel}: polarity/priming");
+                    }
+                } else {
+                    assert!(amplitude < 0.01, "channel {channel}: contains source {probe} at {amplitude}");
+                }
+            }
+        }
         Ok(())
     }
 

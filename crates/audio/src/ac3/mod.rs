@@ -76,7 +76,7 @@ pub struct Header {
     pub bitrate_kbps: u32,
     /// Bytes in the syncframe.
     pub frame_bytes: usize,
-    /// Bit stream identification (`bsid`): up to 10 for AC-3, 11-16 for E-AC-3.
+    /// Bit stream identification (`bsid`): 0-8 for AC-3, 11-16 for E-AC-3.
     pub bsid: u8,
     /// Audio coding mode (`acmod`, Table 5.8), 0-7.
     pub acmod: u8,
@@ -125,7 +125,7 @@ pub fn parse_header(b: &[u8]) -> Result<Header> {
     if (11..=16).contains(&bsid) {
         return eac3::parse_header(b, bsid);
     }
-    if bsid > 16 {
+    if matches!(bsid, 9 | 10) || bsid > 16 {
         return Err(Error::Unsupported(format!("bsid {bsid}")));
     }
     if fscod == 3 || frmsizecod >= 38 {
@@ -137,9 +137,8 @@ pub fn parse_header(b: &[u8]) -> Result<Header> {
         1 => kbps * 96_000 / 44_100 + (frmsizecod & 1) as u32,
         _ => kbps * 3,
     };
-    // bsid 9 / 10: half / quarter sample rate (A/52 Annex note on "bsid 9 and 10")
-    let shift = bsid.saturating_sub(8) as u32;
-    let sample_rate = [48_000, 44_100, 32_000][fscod as usize] >> shift;
+    // ETSI TS 102 366 §E.1.3.1.6 excludes reserved bitstream versions 9 and 10.
+    let sample_rate = [48_000, 44_100, 32_000][fscod as usize];
     let mut r = Bits::new(&b[6..]);
     let acmod = r.read(3) as u8;
     if acmod & 1 != 0 && acmod != 1 {
@@ -152,17 +151,7 @@ pub fn parse_header(b: &[u8]) -> Result<Header> {
         r.skip(2);
     }
     let lfeon = r.read(1) == 1;
-    Ok(Header {
-        sample_rate,
-        bitrate_kbps: kbps >> shift,
-        frame_bytes: words as usize * 2,
-        bsid,
-        acmod,
-        lfeon,
-        blocks: 6,
-        strmtyp: 0,
-        substreamid: 0,
-    })
+    Ok(Header { sample_rate, bitrate_kbps: kbps, frame_bytes: words as usize * 2, bsid, acmod, lfeon, blocks: 6, strmtyp: 0, substreamid: 0 })
 }
 
 /// MSB-first bit reader; reads past the end give zeros.
@@ -532,6 +521,7 @@ struct Globals {
 }
 
 /// State carried from block to block within a syncframe.
+#[derive(Clone)]
 struct FrameState {
     nfchans: usize,
     blksw: [bool; 5],
@@ -692,6 +682,7 @@ fn mantissa(r: &mut Bits, bap: u8, gr: &mut Groups) -> f32 {
 }
 
 /// A decoder: keeps the overlap of each channel between frames.
+#[derive(Clone)]
 pub struct Decoder {
     delay: [[f32; 256]; 6],
     dither: u32,
@@ -765,8 +756,17 @@ impl Decoder {
         self.dither() * (3f32.sqrt() / 0.707)
     }
 
-    /// Decode one syncframe.
+    /// Decode one syncframe. A failed frame clears overlap and exponent carry, so partially
+    /// decoded audio cannot leak into a later successful frame.
     pub fn decode(&mut self, frame: &[u8]) -> Result<Frame> {
+        let result = self.decode_inner(frame);
+        if result.is_err() {
+            self.reset();
+        }
+        result
+    }
+
+    fn decode_inner(&mut self, frame: &[u8]) -> Result<Frame> {
         let h = parse_header(frame)?;
         if frame.len() < h.frame_bytes {
             return Err(Error::Invalid("truncated syncframe"));
@@ -1237,7 +1237,6 @@ impl Decoder {
             r.skip(l * 8);
         }
         // bit allocation for every exponent set
-        let all_zero = f.csnroffst == 0 && (0..7).all(|c| f.fsnroffst[c] == 0);
         let snr = |fine: i32| (((f.csnroffst - 15) << 4) + fine) << 2;
         let mut sets: Vec<(usize, AllocParams)> = Vec::new();
         for ch in 0..nf {
@@ -1267,6 +1266,7 @@ impl Decoder {
                 AllocParams { start: 0, end: 7, fgain: FASTGAIN[f.fgaincod[LFE]], snroffset: snr(f.fsnroffst[LFE]), leak: None, dba: None },
             ));
         }
+        let all_zero = f.csnroffst == 0 && sets.iter().all(|(ch, _)| f.fsnroffst[*ch] == 0);
         for (ch, p) in &sets {
             f.bap[*ch] = [0; 256];
             if !all_zero {
@@ -1389,3 +1389,6 @@ fn wav_order(mut pcm: Vec<Vec<f32>>, acmod: usize, lfeon: bool) -> Vec<Vec<f32>>
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod review_tests;

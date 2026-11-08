@@ -356,12 +356,20 @@ match craft_audio::decode(&bytes, None) {
   that ends inside the last packet. Otherwise all its audio is presented, including any padding.
 - ffmpeg before 9 ends some codecs' tracks in MP4 and Matroska up to 11 ms early. The audio past
   the end a file declares is not presented.
-- A Matroska track's end comes from its timestamps, so it is known to one timestamp tick (usually
-  1 ms) unless the last block has `DiscardPadding`.
+- Most native Matroska track ends come from timestamps, so they are known to one timestamp
+  tick (usually 1 ms) unless the last block has `DiscardPadding`. AC-3/E-AC-3 use exact
+  syncframe sample counts, `CodecDelay` and supported end padding instead.
 - E-AC-3: `ac3::Decoder` and `TrackDecoder` retain independent-substream decoding, so a
   7.1 programme is presented as its 5.1 compatibility downmix. Use `ac3::ProgrammeDecoder`
   with an explicit expected layout for complete six-block 7.1 access units; see below.
   Adaptive hybrid transform and enhanced coupling return `Unsupported`.
+- Native AC-3/E-AC-3 container readers require a primary header within the first eight
+  packets before establishing track metadata. Variable syncframe counts are indexed for
+  exact seeking; unreadable packet timing prevents exact Matroska seeking. Matroska laced
+  AC-3 blocks carrying positive `DiscardPadding`, and negative beginning padding on any
+  AC-3 block, are explicitly unsupported.
+- AC-3 bitstream versions 9 and 10 are rejected, as required by ETSI TS 102 366
+  §E.1.3.1.6; normative E-AC-3 reduced sample rates remain supported.
 - AC-3: not bit-exact. Zero-bit mantissas are filled with decoder-specific dither (A/52 §7.3.4),
   so white noise matches ffmpeg at only 27 dB (AC-3) and 48 dB (E-AC-3) SNR.
 - WebM Opus: `probe` can over-report by up to one block (the last block's `DiscardPadding` is

@@ -16,6 +16,11 @@ use crate::track::{TrackDecoder, adts_format_of, adts_frame_count, adts_stream_h
 use crate::{AudioBuffer, AudioError, AudioInfo, CodecId, CodecParams, Container, PcmFormat, Result, aac, ac3};
 use craft_media::{isobmff, matroska, ogg};
 
+mod ac3_timing;
+
+#[cfg(all(test, feature = "ac3-encode"))]
+mod id3_tests;
+
 /// Corrupt packets tolerated before a stream that has produced nothing is an error.
 const MAX_ERRORS: usize = 1000;
 /// ID3v2 tags skipped at the start of a stream; real files have one.
@@ -48,6 +53,8 @@ enum Packets<'a> {
         /// Frames every packet decodes to, when the codec says: then a packet's place on the
         /// decoded timeline is its index, whatever the sample table's durations claim.
         per_packet: Option<u64>,
+        /// Exact AC-3/E-AC-3 primary-frame starts; one sample may contain several syncframes.
+        ac3_starts: Option<Vec<u64>>,
     },
     /// Matroska is read packet by packet, which carries each block's `DiscardPadding`.
     Mkv {
@@ -134,8 +141,13 @@ impl Packets<'_> {
             found
         }
         match self {
-            Packets::Mp4 { file, track, next, timescale, rate, per_packet, .. } => {
+            Packets::Mp4 { file, track, next, timescale, rate, per_packet, ac3_starts, .. } => {
                 let samples = file.tracks.get(*track).map(|t| t.samples.as_slice()).unwrap_or_default();
+                if let Some(starts) = ac3_starts {
+                    let (i, start) = at_or_before(starts.iter().copied(), frame);
+                    *next = i;
+                    return Ok(start);
+                }
                 if let Some(n) = per_packet.filter(|&n| n > 0) {
                     let i = (frame / n).min((samples.len() as u64).saturating_sub(1));
                     *next = i as usize;
@@ -170,8 +182,14 @@ impl Packets<'_> {
                 Ok(*next_frame)
             }
             Packets::Mkv { demux, track, rate, first_ns, frames, pending, src } => {
-                let ns = i64::try_from(rescale(frame, u64::from(*rate), 1_000_000_000)).unwrap_or(i64::MAX).saturating_add(*first_ns);
-                let point = demux.seek(*track, ns).map_err(mkv_error)?;
+                let point = if let MkvFrames::Ac3 { starts } = frames {
+                    let starts = starts.as_ref().ok_or_else(|| AudioError::Unsupported("exact seeking needs readable AC-3 packet timing".into()))?;
+                    let (index, _) = at_or_before(starts.iter().copied(), frame);
+                    demux.seek_sample(*track, index).map_err(mkv_error)?
+                } else {
+                    let ns = i64::try_from(rescale(frame, u64::from(*rate), 1_000_000_000)).unwrap_or(i64::MAX).saturating_add(*first_ns);
+                    demux.seek(*track, ns).map_err(mkv_error)?
+                };
                 match mkv_next(demux, *track, *rate) {
                     Some(Ok((p, pts_ns))) => {
                         *pending = Some(p);
@@ -199,6 +217,9 @@ enum MkvFrames {
     /// Opus: each packet's length is in its first bytes (RFC 6716 §3.1); the packets' places and
     /// sizes, and their starts once read.
     Opus { samples: Vec<(u64, u32)>, starts: Option<Vec<u64>> },
+    /// AC-3 primary sample counts, after each packet's DiscardPadding. None means a
+    /// damaged header prevents exact seeking; decoding may still conceal damaged packets.
+    Ac3 { starts: Option<Vec<u64>> },
     /// From the timestamps.
     Timestamps,
 }
@@ -224,6 +245,7 @@ impl MkvFrames {
                 });
                 starts.get(k).copied()
             }
+            MkvFrames::Ac3 { starts } => starts.as_ref().and_then(|s| s.get(k).copied()),
             MkvFrames::Timestamps => None,
         }
     }
@@ -300,10 +322,20 @@ impl<'a> Native<'a> {
             Ok(head) => head,
             Err(e) => return Some(Err(e)),
         };
-        let at = after_id3(src);
+        let at = match after_id3(src) {
+            Ok(at) => at,
+            Err(e) => return Some(Err(e)),
+        };
         // A tag longer than the head (cover art) hides what follows it, so look there.
         let past_tag = usize::try_from(at).is_ok_and(|at| at >= head.len() && at > 0);
-        let sniffed = if past_tag { super::detect_container(&src.bytes_upto(at, 64 * 1024), None) } else { super::detect_container(&head, None) };
+        let sniffed = if past_tag {
+            match src.read_upto(at, 64 * 1024) {
+                Ok(bytes) => super::detect_container(&bytes, None),
+                Err(e) => return Some(Err(e)),
+            }
+        } else {
+            super::detect_container(&head, None)
+        };
         let body = usize::try_from(at).ok().and_then(|at| head.get(at..)).unwrap_or_default();
         // The bytes decide the container when they say; the detection (which may come from the
         // extension) only picks among raw streams.
@@ -442,15 +474,16 @@ impl<'a> Native<'a> {
 }
 
 /// Where a stream starts: after any ID3v2 tags, which may be longer than the head of the file.
-fn after_id3(src: &Src<'_>) -> u64 {
+/// A failed source read is not evidence that a tag is absent.
+fn after_id3(src: &Src<'_>) -> Result<u64> {
     let mut at = 0u64;
     for _ in 0..MAX_ID3_TAGS {
-        match id3v2_len(&src.bytes_upto(at, 10)) {
+        match id3v2_len(&src.read_upto(at, 10)?) {
             Some(len) => at = at.saturating_add(len as u64),
             None => break,
         }
     }
-    at
+    Ok(at)
 }
 
 /// A native track from its parts; `None` when [`TrackDecoder`] does not decode the codec (it is
@@ -707,6 +740,9 @@ fn open_mp4<'a>(src: &Src<'a>, container: Container, track: Option<usize>) -> Op
     let timescale = t.timescale;
     // Probe the decoder for the output rate before the timing is worked out.
     let probe = TrackDecoder::new(&params, &lookahead.iter().map(Vec::as_slice).collect::<Vec<_>>()).ok()?;
+    if !probe.stream_format_known() {
+        return Some(Err(AudioError::Malformed("no primary AC-3 header within bounded track lookahead".into())));
+    }
     let rate = probe.sample_rate();
     // A leading media edit (AAC priming, Opus pre-skip) is skipped, and the edit's duration is the
     // presentation length. Empty edits and multi-segment lists play the media as it is.
@@ -739,6 +775,14 @@ fn open_mp4<'a>(src: &Src<'a>, container: Container, track: Option<usize>) -> Op
     let adts_counts: Vec<u64> = lookahead.iter().map(|p| adts_frame_count(p) as u64).collect();
     let adts = adts_counts.iter().any(|&c| c > 0);
     let per_packet = probe.frames_per_packet().map(|n| n as u64).filter(|_| !adts);
+    let ac3_index = if matches!(params.codec, CodecId::Ac3 | CodecId::Eac3) {
+        match ac3_timing::index(src, &t.samples, rate) {
+            Ok(index) => index,
+            Err(error) => return Some(Err(error)),
+        }
+    } else {
+        None
+    };
     let mut length_known = true;
     if let Some(n) = probe.frames_per_packet().map(|n| n as u64) {
         let one_each = (t.samples.len() as u64).saturating_mul(n).saturating_sub(skip);
@@ -757,9 +801,27 @@ fn open_mp4<'a>(src: &Src<'a>, container: Container, track: Option<usize>) -> Op
             length_known = limit.is_some();
         }
     }
+    if let Some(index) = &ac3_index {
+        let total = index.total.saturating_sub(skip);
+        let last = index.total.saturating_sub(index.starts.last().copied().unwrap_or(0));
+        // Container duration may trim the final packet, but may not discard whole packets
+        // merely because the sample table assumed one 1536-sample frame per packet.
+        if stored > total || total.saturating_sub(stored) >= last.max(1) {
+            stored = total;
+        }
+    }
     let frames = if stored > 0 { limit.map_or(stored, |l| l.min(stored)) } else { limit.unwrap_or(0) };
     let limit = (stored > 0).then_some(frames).or(limit);
-    let packets = Packets::Mp4 { file: Box::new(file), src: src.clone(), track, next: 0, timescale, rate, per_packet };
+    let packets = Packets::Mp4 {
+        file: Box::new(file),
+        src: src.clone(),
+        track,
+        next: 0,
+        timescale,
+        rate,
+        per_packet,
+        ac3_starts: ac3_index.map(|index| index.starts),
+    };
     native(container, packets, &params, &lookahead, skip, limit, length_known.then_some(frames)).map(Ok)
 }
 
@@ -782,7 +844,18 @@ fn open_mkv<'a>(src: &Src<'a>, container: Container, track: Option<usize>) -> Op
     let lookahead: Vec<Vec<u8>> =
         (0..t.samples.len().min(crate::track::LOOKAHEAD_PACKETS)).filter_map(|i| demux.read_sample(track, i).ok()).collect();
     let probe = TrackDecoder::new(&params, &lookahead.iter().map(Vec::as_slice).collect::<Vec<_>>()).ok()?;
+    if !probe.stream_format_known() {
+        return Some(Err(AudioError::Malformed("no primary AC-3 header within bounded track lookahead".into())));
+    }
     let rate = probe.sample_rate();
+    let ac3_index = if matches!(params.codec, CodecId::Ac3 | CodecId::Eac3) {
+        match ac3_timing::mkv_index(src, t, rate) {
+            Ok(index) => index,
+            Err(error) => return Some(Err(error)),
+        }
+    } else {
+        None
+    };
     let frames_of = match (probe.frames_per_packet(), params.pcm) {
         (Some(n), _) => MkvFrames::Constant(n as u64),
         (None, Some(pcm)) => {
@@ -790,6 +863,7 @@ fn open_mkv<'a>(src: &Src<'a>, container: Container, track: Option<usize>) -> Op
             MkvFrames::Pcm { sizes: t.samples.iter().map(|s| s.size).collect(), frame_bytes: frame_bytes.max(1) }
         }
         _ if params.codec == CodecId::Opus => MkvFrames::Opus { samples: t.samples.iter().map(|s| (s.offset, s.size)).collect(), starts: None },
+        _ if matches!(params.codec, CodecId::Ac3 | CodecId::Eac3) => MkvFrames::Ac3 { starts: None },
         _ => MkvFrames::Timestamps,
     };
     // `CodecDelay` (AAC priming, Opus pre-skip) is decoded audio that is not presented.
@@ -816,6 +890,16 @@ fn open_mkv<'a>(src: &Src<'a>, container: Container, track: Option<usize>) -> Op
         let end = u64::try_from(s.pts.saturating_add(i64::try_from(duration).ok()?).saturating_sub(start)).ok()?;
         Some(rescale_round(end.saturating_mul(num), den, u64::from(rate)))
     });
+    // Matroska block durations are rounded to container ticks, not exact audio samples.
+    // Exact primary counts, CodecDelay and DiscardPadding determine AC-3 presentation length.
+    let frames = match &ac3_index {
+        Some(index) => Some(index.total.saturating_sub(skip)),
+        None => frames,
+    };
+    let frames_of = match ac3_index {
+        Some(index) => MkvFrames::Ac3 { starts: Some(index.starts) },
+        None => frames_of,
+    };
     let mut demux = demux;
     // The first packet's own timestamp is the decoded timeline's origin; read it and rewind.
     let first = mkv_next(&mut demux, track, rate);

@@ -274,6 +274,41 @@ fn reference(ff: &Path, file: &Path) -> Vec<f32> {
     out.stdout.as_chunks::<4>().0.iter().map(|c| f32::from_le_bytes(*c)).collect()
 }
 
+/// Read the actual cached MP4 presentation duration with an independent demuxer. A fixture
+/// may have been written by a different ffmpeg version, so a version-based length tolerance
+/// cannot establish whether this particular file was fully decoded.
+fn mp4_presentation_frames(ffprobe: &Path, file: &Path, sample_rate: u32) -> usize {
+    let out = Command::new(ffprobe)
+        .args(["-v", "error", "-select_streams", "a:0", "-show_entries", "stream=duration_ts,time_base", "-of", "default=noprint_wrappers=1"])
+        .arg(file)
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "ffprobe duration of {}: {}", file.display(), String::from_utf8_lossy(&out.stderr));
+    let text = String::from_utf8(out.stdout).unwrap();
+    let value = |key: &str| text.lines().find_map(|line| line.strip_prefix(key)).unwrap_or_else(|| panic!("missing {key} in {text}"));
+    let ticks: u128 = value("duration_ts=").parse().unwrap();
+    let (num, den) = value("time_base=").split_once('/').unwrap();
+    let num: u128 = num.parse().unwrap();
+    let den: u128 = den.parse().unwrap();
+    assert!(den > 0);
+    let samples = ticks.checked_mul(num).unwrap().checked_mul(u128::from(sample_rate)).unwrap();
+    assert_eq!(samples % den, 0, "fixture duration must resolve to whole PCM frames");
+    usize::try_from(samples / den).unwrap()
+}
+
+#[test]
+fn ac3_mp4_decodes_exactly_the_independent_presentation_length() {
+    let ff = require_ffmpeg!();
+    let Some(ffprobe) = craft_media_testkit::ffprobe() else { return };
+    let case = CASES.iter().find(|case| case.name == "ac3.mp4").unwrap();
+    let Some(path) = fixture(&ff, case) else { return };
+    let expected = mp4_presentation_frames(&ffprobe, &path, case.rate);
+    let (_, decoded) = decode(&std::fs::read(&path).unwrap(), None).unwrap();
+    assert_eq!(decoded.frames(), expected, "AC-3 must present the complete declared MP4 interval");
+    let reference = reference(&ff, &path);
+    assert!(snr(&decoded.channels, &reference) >= case.min_snr);
+}
+
 /// The major version of this ffmpeg, or `None` for one that does not say (a git build).
 fn ffmpeg_major(ff: &Path) -> Option<u32> {
     let out = Command::new(ff).arg("-version").output().ok()?;
@@ -313,7 +348,6 @@ fn snr(ours: &[Vec<f32>], reference: &[f32]) -> f64 {
 /// leave out about the encoder's delay. The decoder presents what the file declares.
 fn early_end(name: &str) -> usize {
     match name {
-        "ac3.mp4" => 288,
         "eac3-5.1.mkv" => 240,
         _ => 0,
     }
@@ -333,9 +367,16 @@ fn every_container_and_codec_decodes_home_grown() {
         let reference = reference(&ff, &path);
         assert_eq!((info.container, info.codec, info.sample_rate, buf.channels.len()), (c.container, c.codec, c.rate, c.channels), "{}", c.name);
         assert_eq!(info.layout, c.layout, "{}: layout", c.name);
-        let expected = c.frames.unwrap_or(reference.len() / c.channels);
         let frames = buf.frames();
-        assert!(frames == expected || frames == expected - early_end(c.name), "{}: presented frames: {frames} of {expected}", c.name);
+        if c.name == "ac3.mp4" {
+            if let Some(ffprobe) = craft_media_testkit::ffprobe() {
+                let expected = mp4_presentation_frames(&ffprobe, &path, c.rate);
+                assert_eq!(frames, expected, "{}: declared presentation frames", c.name);
+            }
+        } else {
+            let expected = c.frames.unwrap_or(reference.len() / c.channels);
+            assert!(frames == expected || frames == expected - early_end(c.name), "{}: presented frames: {frames} of {expected}", c.name);
+        }
         // One alignment, so audio that keeps the priming, or loses more than it, cannot pass.
         let lead = reference_lead(c.name) * c.channels;
         let s = match major {
