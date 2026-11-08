@@ -13,54 +13,54 @@
 Reliable processing of Vietnamese text in high-performance desktop and WebAssembly Rust applications (`WordCraft`, `CADCraft`, `PDFCraft`, `GridCraft`, `DeckCraft`, `FigCraft`) involves navigating legacy 8-bit artifacts, Unicode canonical equivalences, input method state machines, and OpenType typographic nuances:
 
 ```
+┌─────────────────────────────────────────────────────────────┐
+│ Tier 6: Cross-Cutting Asset Guard — Font & Outline Coverage │  craft-fonts-tests
+│   - 134 Precomposed NFC Letter Coverage & Vector Outlines   │  (PR #62)
+│   - Continuous NFD Combining Mark Auditing (8 Marks)        │
+│   - Pinned Known Gaps (Caladea / Poppins 88 Codepoints)     │
+└──────────────────────────────┬──────────────────────────────┘
+                               │ (Continuous Asset Prerequisite)
+                               ▼
 [ External Documents / Clipboard / Raw Bytes / OS IME ]
-                            │
-                            ▼
+                               │
+                               ▼
 ┌─────────────────────────────────────────────────────────────┐
 │ Tier 1: Input Boundary — Ingestion & Normalization          │  craft-i18n::encoding
 │   - Decoupled Primitives: detect, decode, normalize         │  (Issue #480)
 │   - Windows-1258 Official Unicode Mapping (CP1258.TXT)      │
 │   - Explicit Evidence Hierarchy & Audited Byte Tables       │
-└─────────────────────────────────────────────────────────────┘
-                            │
-                            ▼
+└──────────────────────────────┬──────────────────────────────┘
+                               │
+                               ▼
 ┌─────────────────────────────────────────────────────────────┐
 │ Tier 2: Text Core — Grapheme Cluster & Mutation Contract    │  craft-text::segment
 │   - UAX #29 Extended Grapheme Cluster Navigation            │
 │   - UTF-8 Boundary Safe Cursor & Selection Invariants      │
 │   - Atomic Cluster Deletion (Isomorphic NFC/NFD Backspace)  │
-└─────────────────────────────────────────────────────────────┘
-                            │
-                            ▼
+└──────────────────────────────┬──────────────────────────────┘
+                               │
+                               ▼
 ┌─────────────────────────────────────────────────────────────┐
 │ Tier 3: Input Boundary — IME Composition Contract           │  craft-ui / egui & winit forks
 │   - Pre-edit vs. Committed Buffer Isolation                 │
 │   - Non-destructive Transient Composition Handling          │
 │   - Deferred Canonical Normalization on Commit Event        │
-└─────────────────────────────────────────────────────────────┘
-                            │
-                            ▼
+└──────────────────────────────┬──────────────────────────────┘
+                               │
+                               ▼
 ┌─────────────────────────────────────────────────────────────┐
 │ Tier 4: Layout & Shaping Engine Integration                 │  Downstream Layout Engines
-│   - Verified OpenType Default Shaping (ccmp / mark / mkmk)  │  (WordCraft, PDFCraft)
+│   - Uses Verified Font Assets from Tier 6                   │  (WordCraft, PDFCraft)
+│   - Verified OpenType Default Shaping (ccmp / mark / mkmk)  │
 │   - Extended Grapheme Cluster Level Font Fallback           │
-│   - Quantified Metric Compatibility & Perceptual Tolerances │
-└─────────────────────────────────────────────────────────────┘
-                            │
-                            ▼
+└──────────────────────────────┬──────────────────────────────┘
+                               │
+                               ▼
 ┌─────────────────────────────────────────────────────────────┐
 │ Tier 5: Layout — Line Breaking (UAX #14) & Metric Hygiene   │  craft-text / Layout Engine
 │   - Intra-Cluster Break Prohibition                         │
 │   - Non-Breaking Space (U+00A0) Glue Semantics              │
 │   - Typographic Orphan / Widow Decoupling                   │
-└─────────────────────────────────────────────────────────────┘
-                            │
-                            ▼
-┌─────────────────────────────────────────────────────────────┐
-│ Tier 6: Asset Verification — Font & Outline Coverage Guard  │  craft-fonts-tests
-│   - 134 Precomposed NFC Letter Coverage & Vector Outlines   │  (PR #62)
-│   - Pinned Known Gaps (Caladea / Poppins 88 Codepoints)     │
-│   - Continuous NFD Combining Mark Auditing (8 Marks)        │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -159,6 +159,13 @@ pub fn decode(
     input: &[u8],
     encoding: LegacyEncoding,
 ) -> Result<Cow<'_, str>, DecodeError>;
+
+/// Pure decoding primitive with explicit DecodeMode selection.
+pub fn decode_with_mode(
+    input: &[u8],
+    encoding: LegacyEncoding,
+    mode: DecodeMode,
+) -> Result<Cow<'_, str>, DecodeError>;
 ```
 
 **Official Windows-1258 Specification Compliance (`CP1258.TXT`):**
@@ -169,20 +176,20 @@ Windows-1258 maps Latin-1 accented vowels directly, but uses five explicit combi
 * `0xDE` $\to$ `U+0303` (Combining Tilde / Ngã)
 * `0xF2` $\to$ `U+0323` (Combining Dot Below / Nặng)
 * **9 Undefined / Unmapped Bytes:**
-  `0x81, 0x8A, 0x8D, 0x8E, 0x8F, 0x90, 0x9A, 0x9D, 0x9E` are mapped to `None` in `HighByteTable`, returning `Err(DecodeError::UnmappedByte)`.
+  `0x81, 0x8A, 0x8D, 0x8E, 0x8F, 0x90, 0x9A, 0x9D, 0x9E` are mapped to `None` in `HighByteTable`, returning `Err(DecodeError::UnmappedByte)` in both Strict and Practical modes.
 
 *Separation Invariant:* `decode(input, LegacyEncoding::Windows1258)` **does not perform implicit NFC normalization**. It outputs the exact sequence of base characters and combining marks. Canonical normalization is deferred to `normalize_nfc` or the `decode_text` facade when requested.
 
 #### Practical vs. Strict Mode Contracts
 
-To survive real-world documents (1995–2005), the decoder must support two modes:
+To survive real-world documents (1995–2005) without compromising specification integrity, the decoder provides two distinct operational modes:
 
-1. **Strict Mode (Specification Only):** Maps only canonical specification bytes (TCVN 5712:1993, VNI standard, or CP1258.TXT). Throws `DecodeError::UnmappedByte` on any non-standard byte (e.g., CP1252 punctuation).
+1. **Strict Mode (Specification Only):** Maps only canonical specification bytes (TCVN 5712:1993, VNI standard, or CP1258.TXT). Throws `DecodeError::UnmappedByte` on any non-standard byte (such as CP1252 typographic punctuation in TCVN3/VNI) and `DecodeError::MalformedSequence` on truncated lookaheads.
 2. **Practical Mode (Default for Document Ingestion):** 
-   - **CP1252 Fallback:** Maps the `0x80..=0x9F` range to Windows-1252 punctuation (curly quotes, en/em dashes, bullets, ellipses) to prevent losing punctuation in legacy Word/CAD documents.
+   - **CP1252 Typographic Fallback in TCVN3 & VNI:** Maps the `0x80..=0x9F` range to Windows-1252 punctuation (curly quotes, en/em dashes, bullets, ellipses) specifically for TCVN3 and VNI tables. *Note:* Windows-1258 has its own standard high-byte table with 9 explicitly undefined positions; CP1252 fallback does NOT alter CP1258 undefined bytes.
    - **VNI CapsLock Handling:** Recognizes uppercase VNI tone marks (`0xD8` $\to$ `Ø`, `0xD9` $\to$ `Ù`, `0xDA` $\to$ `Ú`, `0xD5` $\to$ `Õ`, `0xCF` $\to$ `Ï`) and maps them correctly to uppercase Vietnamese characters.
    - **Orphan Diacritic Fallback:** If a VNI mark byte is not preceded by a valid base vowel, it is emitted as a standalone spacing accent (e.g., `\u{00B4}` for acute) rather than being dropped or causing a panic.
-   - **Streaming State Machine:** The VNI decoder maintains a `pending_base` state to handle chunk boundaries without breaking composite characters (base + mark).
+   - **Streaming State Machine:** The VNI decoder maintains a `pending_base` state and multi-chunk lookahead (`pending_iet`) to handle chunk boundaries without breaking composite characters.
 
 #### Font Hint Overrides (TCVN3H)
 If metadata indicates an uppercase font (e.g., `.VnTimeH`), the decoder MUST use the `TCVN3_UPPER_MAP` instead of the standard lower map, ensuring legacy all-caps headers render correctly.
@@ -208,6 +215,7 @@ pub struct DecodeOptions<'a> {
     pub force_encoding: Option<LegacyEncoding>,
     pub metadata: Option<&'a EncodingMetadata<'a>>,
     pub normalize_nfc: bool,
+    pub mode: DecodeMode,
 }
 
 impl Default for DecodeOptions<'_> {
@@ -216,6 +224,7 @@ impl Default for DecodeOptions<'_> {
             force_encoding: None,
             metadata: None,
             normalize_nfc: true, // Default to canonical NFC for safe consumption across Craft apps
+            mode: DecodeMode::Practical,
         }
     }
 }
@@ -239,59 +248,56 @@ Consumers may configure the decoding pipeline with one of two behavioral modes:
   - Converts orphan combining marks into standalone spacing accents rather than discarding bytes.
   - Emits non-fatal diagnostic warnings via `tracing` when encountering legacy VSCII-1 control codes.
 
-##### 2. Contract 1: One-Way Canonical Normalization & Lossy Tolerance
+##### 2. Contract 1: One-Way Canonical Normalization & Precomposed Limits
 * **The One-Way Bridge:** Decoding is formally defined as a one-way transformation from legacy byte streams to canonical UTF-8 NFC:
   $$\text{Legacy Bytes (TCVN3 / VNI / CP1258)} \xrightarrow{\text{Decode}} \text{Canonical UTF-8 NFC}$$
 * **Lossy-Tolerant Invariant (Non-goal):** 
   * Reverse transcoding ($E(D(B)) = B$) is explicitly out of scope and non-deterministic due to NFC diacritic composition and lossy punctuation normalization.
-  * Every string returned by `decode_text` is guaranteed to be in **Unicode Normalization Form C (NFC)** via `icu_normalizer` when `normalize_nfc` is enabled (the default). When `normalize_nfc` is set to `false`, raw decoded codepoints (such as CP1258 combining diacritics) are returned without composition. When `normalize_nfc` is enabled, downstream text shapers, search indices, and layout engines will never receive decomposed combining marks that NFC can compose. Marks without a precomposed form, such as U+0301 after `k`, can remain decomposed under the default configuration.
+  * Every string returned by `decode_text` is processed through `icu_normalizer` when `normalize_nfc` is enabled (the default). The output conforms to Unicode Normalization Form C (NFC). However, canonical composition only applies to character sequences that possess a standard precomposed codepoint in Unicode. Sequences without a precomposed counterpart (e.g., tone mark on a consonant such as `k` + `U+0301`) legitimately remain as decomposed codepoints under the default configuration. When `normalize_nfc` is disabled (`false`), raw decoded codepoints (such as CP1258 combining diacritics) are returned without composition. Downstream text shapers, search indices, and layout engines will receive precomposed NFC text for all representable Vietnamese character sequences.
 
-##### 3. Contract 2: Pending-at-EOF Policy & Truncated Sequence
-VNI is a multi-byte composite encoding (Base character + Diacritic mark byte). When the data stream terminates (EOF) or encounters an anomalous sequence, the decoder follows a deterministic two-mode matrix:
+##### 3. Contract 2: Pending-at-EOF Policy & Composite State Machine
+VNI is a multi-byte composite encoding (Base character + Diacritic mark byte). When the data stream terminates (EOF) or encounters an anomalous sequence, the decoder follows a deterministic state matrix separating valid unaccented characters from truncated sequences and orphan marks:
 
-| Situation at EOF | Mode: `Strict` | Mode: `Practical` (Default for Craft Apps) |
+| Situation | Mode: `Strict` | Mode: `Practical` (Default for Craft Apps) |
 | :--- | :--- | :--- |
-| **Pending base vowel at EOF**<br>*(e.g., stream terminates with byte `'a'`)* | **Flushes pending base vowel to output** safely as regular character (`'a'`). | **Flushes pending base vowel to output** safely as regular character (`'a'`). |
-| **Orphan diacritic mark**<br>*(e.g., mark byte `0xF8` following a space or consonant `k`)* | Returns `Err(DecodeError::OrphanDiacritic { byte, offset })` | **Emits standalone spacing accent** (e.g. `0xF8` $\to$ `` ` `` `U+0060`), never panics or drops bytes. |
-| **DOS control bytes (`0x01..=0x1F`)**<br>*(Legacy VSCII-1 vestiges in old CAD files)* | Returns `Err(DecodeError::StrictRejection { byte, offset })` | Emits non-fatal diagnostic warning via `tracing::warn!` and sanitizes as whitespace. |
+| **Pending base vowel at EOF**<br>*(e.g., stream terminates with valid vowel `'a'`)* | **Flushes pending base vowel to output** safely as regular character (`'a'`). Not a truncated sequence. | **Flushes pending base vowel to output** safely as regular character (`'a'`). Not a truncated sequence. |
+| **Truncated composite lookahead at EOF**<br>*(e.g., VNI CapsLock `pending_iet` with `I` + `0xCF` cut off before `T`/`t`)* | Returns `Err(DecodeError::MalformedSequence { offset, encoding: LegacyEncoding::Vni })`. | **Flushes standalone base/accent fallback** (e.g., `0xCF` emits `'Ị'`), never dropping characters. |
+| **Orphan diacritic mark**<br>*(e.g., mark byte `0xF8` following a space or consonant `k`)* | Returns `Err(DecodeError::UnmappedByte { byte, offset, encoding: LegacyEncoding::Vni })`. | **Emits standalone spacing accent** (e.g. `0xF8` $\to$ `` ` `` `U+0060`), never panics or drops bytes. |
+| **Undefined byte in charset table**<br>*(e.g., CP1258 undefined bytes `0x81, 0x8A, ...`)* | Returns `Err(DecodeError::UnmappedByte { byte, offset, encoding })`. | Returns `Err(DecodeError::UnmappedByte { byte, offset, encoding })`. Undefined positions are never silently mapped. |
+| **DOS control bytes (`0x01..=0x1F`)**<br>*(Legacy VSCII-1 vestiges in old CAD files)* | Returns `Err(DecodeError::UnmappedByte { byte, offset, encoding })`. | Emits non-fatal diagnostic warning via `tracing::warn!` and sanitizes as whitespace. |
 
-##### 4. Contract 3: Ambiguity Rejection & Heuristic Threshold
+##### 4. Contract 3: Ambiguity Rejection & Heuristic Parameters
 To prevent autonomous detectors from over-confident false transcoding on short or ambiguous byte sequences:
-* **Heuristic Activation Threshold:** Autonomous encoding detection requires an input length $\ge 16$ bytes and at least 2 distinct signature distributions (e.g., TCVN3 via pairs `0xA7`/`0xAE` or double vowels `0xCA`, `0xD4`; VNI via postfix byte pairs `0xF8`, `0xF9`, `0xEF`).
+* **Evidence Hierarchy Precedence:**
+  1. `Explicit`: Caller explicitly commands the encoding. Absolute priority; no heuristics run.
+  2. `Metadata`: Container headers / codepage tags (e.g., DXF `$DWGCODEPAGE`, Codepage 1258).
+  3. `FontHint`: Advisory evidence with weight (e.g., `.VnTime` $\to$ TCVN3, `VNI-*` $\to$ VNI). If font hint conflicts with container metadata or validated byte signatures, detection yields `DetectionResult::Ambiguous`.
+  4. `Heuristic`: Statistical byte-distribution analysis. Only activated when `input.len() >= 16` and input is not valid UTF-8.
 * **Short-String Invariant (< 16 bytes):** Strings shorter than 16 bytes automatically disable statistical byte-frequency heuristics to prevent false positives. Short strings rely strictly on the Evidence Hierarchy:
   1. Valid UTF-8 check (preserved as UTF-8).
-  2. `FontHint` presence (e.g., `.VnTime`, `VNI-Times`) implies immediate decoding.
-  3. If neither is present, return `DetectionResult::Unknown` (or fallback to CP1252 in Practical Mode) rather than speculative guessing.
-* **Conflict & Safety Rules:** If candidate encodings (e.g., TCVN3 vs. VNI-Windows / CP1258) yield conflicting confidence scores differing by less than $30\%$, detection yields `DetectionResult::Ambiguous { candidates }`. The system must prompt caller intervention rather than executing speculative transcoding.
+  2. `FontHint` presence (e.g., `.VnTime`, `VNI-Times`) provides weighted evidence for immediate decoding.
+  3. If neither is present, return `DetectionResult::Unknown` rather than speculative guessing.
+* **Conflict & Safety Rules:** If candidate encodings (e.g., TCVN3 vs. VNI-Windows / CP1258) yield conflicting confidence scores differing by less than $30\%$, detection yields `DetectionResult::Ambiguous(&[...])`. The system prompts caller intervention rather than executing speculative transcoding.
+* *Note on Parameters:* The 16-byte threshold and 30% margin are empirical heuristic tuning parameters validated against real-world corpora (such as short CAD drawing labels `TẦNG 1`, `CỘT C1`), not axiomatic constants.
 
 ##### 5. Contract 4: Explicit Error Model (`DecodeError`)
 Eliminates generic errors, providing unambiguous context for failures:
 ```rust
-#[derive(Debug, thiserror::Error, PartialEq, Eq, Clone)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DecodeError {
-    #[error("Invalid UTF-8 sequence at offset {offset}")]
+    /// Invalid UTF-8 sequence encountered at byte offset.
     InvalidUtf8 { offset: usize },
-
-    #[error("Unmapped byte 0x{byte:02X} at offset {offset} in encoding {encoding:?}")]
+    /// Unmapped byte in legacy encoding table encountered at byte offset.
     UnmappedByte { byte: u8, offset: usize, encoding: LegacyEncoding },
-
-    #[error("Truncated composite sequence at EOF (pending base byte 0x{base:02X})")]
-    TruncatedSequence { offset: usize, base: u8 },
-
-    #[error("Orphan diacritic mark 0x{byte:02X} at offset {offset} without a preceding base vowel")]
-    OrphanDiacritic { byte: u8, offset: usize },
-
-    #[error("Ambiguous encoding detected between candidates {candidates:?}")]
-    AmbiguousEncoding { candidates: &'static [LegacyEncoding] },
-
-    #[error("Decoding mode Strict rejected non-standard byte 0x{byte:02X} at offset {offset}")]
-    StrictRejection { byte: u8, offset: usize },
+    /// Malformed composite byte sequence encountered at byte offset.
+    MalformedSequence { offset: usize, encoding: LegacyEncoding },
 }
 ```
 
-##### 6. Contract 5: Performance & Bounded Linear Allocation
+##### 6. Contract 5: Performance & Capacity Estimate
 * **Zero-Panic Policy:** `#![forbid(unsafe_code)]`. Memory safety invariants enforced across all paths; fuzz-tested with `cargo-fuzz` on arbitrary byte streams without unexpected panics.
-* **Bounded Linear Allocation $O(N)$:** Decoder capacity is estimated once upfront (`String::with_capacity(input.len() * 6 / 5)`). No re-allocations during steady-state VNI composite streaming.
+* **Linear Heap Capacity Estimate $O(N)$:** Decoder capacity is estimated upfront using an empirical ratio (`String::with_capacity(input.len() * 6 / 5)`) to minimize re-allocations during byte-to-multibyte expansion. Benchmark micro-suites verify minimal reallocations across typical workloads.
+* **Zero-Allocation Fast Path:** Valid UTF-8 and pure ASCII inputs return `Cow::Borrowed` with exactly 0 heap allocations.
 
 ##### 7. Real-World Archival Test Corpora (Mandatory Fixtures)
 The implementation must pass validation against authentic, anonymized test fixtures in `crates/i18n/src/encoding/fixtures/`:
@@ -440,7 +446,9 @@ The behavior of `prev` and `next` across cluster boundaries is strictly specifie
 
 ---
 
-### Tier 6: Asset Verification — Font & Outline Coverage Guard
+### Tier 6: Asset Verification — Font & Outline Coverage Guard (Cross-Cutting Prerequisite)
+
+* **Role in Architecture:** Tier 6 acts as a **cross-cutting asset prerequisite** rather than a post-layout stage. It audits and validates the static font assets in `craft-fonts` upfront, guaranteeing that the glyph outlines and OpenType tables required by Tier 4 (Shaping & Fallback) are present and verified before runtime document layout.
 
 * **Target Crate:** `crates/craft-fonts-tests` (in `storytold/craft-fonts`)
 * **Current Status:** PR `storytold/craft-fonts#62`
