@@ -1,7 +1,7 @@
-# craft-vp8
+# craft-video: VP8
 
 Clean-room, pure-Rust (no `unsafe`) VP8 decoder, implemented from RFC 6386, *VP8 Data Format and
-Decoding Guide*, sections 1-19. It is an L0 crate: it depends only on `thiserror`, and builds for
+Decoding Guide*, sections 1-19. Part of `craft-video` (feature `vp8`). It is an L0 module: it depends only on `thiserror`, and builds for
 `wasm32-unknown-unknown`.
 
 The constant tables (coefficient and mode probabilities and their update probabilities, the
@@ -34,7 +34,7 @@ of `tests/it/conformance.rs`.
 ## API
 
 ```rust
-use craft_vp8::Decoder;
+use craft_video::vp8::Decoder;
 
 let mut dec = Decoder::new();
 for (pts, frame) in frames {      // one IVF frame / WebM block / MP4 sample each
@@ -50,11 +50,11 @@ dec.reset(); // forget the reference frames (seek): decoding resumes at the next
 let stats = dec.stats(); // frames, key frames, hidden frames
 
 // Random access points
-let key: bool = craft_vp8::is_keyframe(frame);
-let info: Option<craft_vp8::KeyframeInfo> = craft_vp8::keyframe_info(frame);
+let key: bool = craft_video::vp8::is_keyframe(frame);
+let info: Option<craft_video::vp8::KeyframeInfo> = craft_video::vp8::keyframe_info(frame);
 ```
 
-`craft-codecs` wires the decoder into Matroska / WebM (`V_VP8`, including the alpha layer of
+`craft-video` wires the decoder into Matroska / WebM (`V_VP8`, including the alpha layer of
 transparent WebM in `BlockAdditional`) and MP4 (`vp08`). VP8 has no colour signalling: pictures are
 BT.601, studio swing (RFC 6386 9.2), unless the container's `Colour` says otherwise. VP8 has no
 superframes either: a hidden altref frame is a block of its own, and the WebM reader takes a
@@ -62,11 +62,11 @@ request for its time as a request for the shown frame that follows it.
 
 ## Tests and tools
 
-- `cargo test -p craft-vp8`: unit tests, bit-exactness against libvpx on generated fixtures
+- `cargo test -p craft-video --features vp8`: unit tests, bit-exactness against libvpx on generated fixtures
   (`target/fixtures/vp8-tests`, skipped without ffmpeg / libvpx), robustness (corrupted,
   truncated, reordered and random input), and the libvpx test vectors when present in
   `target/fixtures/vp8/conformance` (or `$VP8_TEST_VECTORS`).
-- `cargo run --release -p craft-vp8 --example vp8dec in.ivf out.yuv`: decode to raw I420.
-- `cargo run -p craft-vp8 --example fuzz -- <iterations> <seed> files.ivf...`: decode
+- `cargo run --release -p craft-video --features vp8 --example vp8_vp8dec in.ivf out.yuv`: decode to raw I420.
+- `cargo run -p craft-video --features vp8 --example vp8_fuzz -- <iterations> <seed> files.ivf...`: decode
   randomly damaged variants of IVF files (in a debug build, so overflow panics too) and report
   any panic.
