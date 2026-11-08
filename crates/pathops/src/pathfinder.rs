@@ -257,14 +257,18 @@ fn regions_of(arr: &Arrangement) -> Vec<Region> {
 /// Instead the classes go into batches whose faces share no vertex (so no edge either): one pass
 /// per batch walks each face's contours exactly as its own class's pass would, and the class a
 /// contour bounds is the one of its batch at its first point.
+///
+/// A contour pass walks every segment, so the work is the batches times the segments, and a class
+/// that meets every other (a fan of shapes at one point) makes a batch of its own: counted before the
+/// passes and held to [`crate::Limits::pass_work`]. False, with nothing called, when it is more.
 fn each_classified_face(
     arr: &Arrangement,
     num_classes: usize,
     classify: impl Fn(&Multi) -> Option<usize>,
     mut f: impl FnMut(usize, &Contours, &[ContourIdx]),
-) {
+) -> bool {
     if num_classes == 0 {
-        return;
+        return true;
     }
     let top = &arr.top;
     // The classes of the faces around each vertex.
@@ -300,6 +304,10 @@ fn each_classified_face(
         batch[m] = taken.iter().position(|t| !t).unwrap_or(batches);
         batches = batches.max(batch[m] + 1);
     }
+    let segments = top.segment_indices().count();
+    let planned = batches.saturating_mul(segments);
+    let Some(mut left) = crate::budget::limits().pass_work.checked_sub(planned) else { return false };
+    crate::work::add(crate::work::Work::PassSegments, planned);
     for b in 0..batches {
         let c = arr.contours_where(|w| classify(w).is_some_and(|m| batch[m] == b));
         let owner: Option<Vec<usize>> = c
@@ -313,6 +321,10 @@ fn each_classified_face(
             // Not expected: every contour starts at a vertex of the arrangement. Fall back to a
             // pass per class for this batch.
             for m in (0..num_classes).filter(|m| batch[*m] == b) {
+                // A pass for each class, charged as it is made.
+                let Some(rest) = left.checked_sub(segments) else { return false };
+                left = rest;
+                crate::work::add(crate::work::Work::PassSegments, segments);
                 let c = arr.contours_where(|w| classify(w) == Some(m));
                 let owner = vec![m; c.contours().count()];
                 for (_, group) in face_groups(&c, &owner) {
@@ -325,6 +337,7 @@ fn each_classified_face(
             f(m, &c, &group);
         }
     }
+    true
 }
 
 /// Calls `f` with each face of `arr` whose coverage is one of `masks` (distinct lists of covering inputs): the index of
@@ -1058,6 +1071,62 @@ mod tests {
         }
     }
 
+    /// `k` thin triangles that meet at the origin, each its own key, and `squares` squares in a column
+    /// apart from them.
+    fn fan_and_squares(k: usize, squares: usize) -> Vec<Shape> {
+        let mut shapes: Vec<Shape> = (0..k)
+            .map(|i| {
+                let a = std::f64::consts::TAU * i as f64 / k as f64;
+                let b = a + std::f64::consts::TAU / (3.0 * k as f64);
+                let p =
+                    polyline_pts(&[Point::ZERO, Point::new(100.0 * a.cos(), 100.0 * a.sin()), Point::new(100.0 * b.cos(), 100.0 * b.sin())], true);
+                Shape::new(p, FillRule::NonZero, i as u64)
+            })
+            .collect();
+        let mut col = BezPath::new();
+        for j in 0..squares {
+            let y = 3.0 * j as f64;
+            col.extend(rect(1_000.0, y, 1_001.0, y + 1.0).iter());
+        }
+        shapes.push(Shape::new(col, FillRule::NonZero, 1_000_000));
+        shapes
+    }
+
+    /// Classes that meet at one point are each a batch, and a pass walks every segment for each batch:
+    /// the batches times the segments are counted before the first pass and held to `pass_work`, in
+    /// Merge, Divide, Trim and Crop. (A fan of 208 shapes beside 40,000 squares takes 2.2 s to merge.)
+    #[test]
+    fn a_fan_of_shapes_at_a_point_is_charged_its_passes_before_the_first() {
+        let fan = fan_and_squares(30, 300);
+        // Crop keeps what is inside the front shape: one over the fan, which Merge, Divide and Trim would hide.
+        let mut covered = fan.clone();
+        covered.push(Shape::new(rect(-200.0, -200.0, 200.0, 200.0), FillRule::NonZero, 2_000_000));
+        for (op, shapes) in [(PathfinderOp::Merge, &fan), (PathfinderOp::Divide, &fan), (PathfinderOp::Trim, &fan), (PathfinderOp::Crop, &covered)] {
+            let segments = arrangement(shapes, DEFAULT_PRECISION).unwrap().top.segment_indices().count();
+            CONTOUR_PASSES.with(|n| n.set(0));
+            work::reset();
+            let free = pathfinder(op, shapes);
+            let (passes, charged) = (CONTOUR_PASSES.with(std::cell::Cell::get), work::take(Work::PassSegments));
+            assert!(!free.is_empty(), "{op:?}");
+            // One pass for each batch: the 30 shapes at the origin are 30 batches, the squares share one.
+            assert!(passes >= 30, "{op:?}: {passes} passes");
+            assert_eq!(charged, passes * segments, "{op:?}: {charged} charged for {passes} passes of {segments} segments");
+            // At the limit the operation is made, under it nothing is walked.
+            let at = crate::Limits { pass_work: charged, ..crate::Limits::default() };
+            assert_eq!(crate::with_limits(at, || pathfinder(op, shapes)), free, "{op:?}");
+            let under = crate::Limits { pass_work: charged - 1, ..crate::Limits::default() };
+            CONTOUR_PASSES.with(|n| n.set(0));
+            work::reset();
+            assert!(crate::with_limits(under, || pathfinder(op, shapes)).is_empty(), "{op:?}");
+            assert_eq!((CONTOUR_PASSES.with(std::cell::Cell::get), work::take(Work::PassSegments)), (0, 0), "{op:?}: refused before the first pass");
+        }
+        // Shapes apart are a batch whatever their number: the charge is the segments, once.
+        let apart = fan_and_squares(0, 300);
+        work::reset();
+        assert_eq!(pathfinder(PathfinderOp::Merge, &apart).len(), 300, "a shape for each component");
+        assert_eq!(work::take(Work::PassSegments), arrangement(&apart, DEFAULT_PRECISION).unwrap().top.segment_indices().count());
+    }
+
     /// Merge walks the arrangement once for all the keys that share no vertex, not once for each:
     /// 300 rectangles apart, each with a key of its own, are one contour pass.
     #[test]
@@ -1070,7 +1139,7 @@ mod tests {
         let passes = CONTOUR_PASSES.with(std::cell::Cell::get);
         assert_eq!(merged.len(), 300);
         assert!(merged.iter().enumerate().all(|(i, s)| s.key == i as u64 && (crate::area(&s.path, FillRule::NonZero) - 100.0).abs() < 1e-9));
-        assert!(passes <= 3, "{passes} passes for 300 keys");
+        assert_eq!(passes, 1, "{passes} passes for 300 keys");
     }
 
     /// Merge by batches gives what a contour pass for each key gave: the same shapes, in the same order.

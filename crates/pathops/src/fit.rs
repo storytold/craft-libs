@@ -16,7 +16,17 @@ const MEASURE_LIMIT: f64 = 1e9;
 /// past [`MEASURE_LIMIT`] (its length is not zero: it is not known, and a caller must not sample
 /// it as if it were a point).
 pub(crate) fn measured_arclen(seg: &PathSeg, accuracy: f64) -> Option<f64> {
-    let ok = |p: Point| p.x.is_finite() && p.y.is_finite() && p.x.abs() <= MEASURE_LIMIT && p.y.abs() <= MEASURE_LIMIT;
+    arclen_within(seg, accuracy, MEASURE_LIMIT)
+}
+
+/// The largest x or y a segment may have for [`measured_perimeter`] to measure it: it takes an accuracy
+/// relative to the segment, which kurbo meets in a few levels at any size, and only stops where the
+/// squares of the coordinates would overflow.
+const RELATIVE_MEASURE_LIMIT: f64 = 1e100;
+
+/// [`measured_arclen`] for segments up to `limit` in x and y.
+fn arclen_within(seg: &PathSeg, accuracy: f64, limit: f64) -> Option<f64> {
+    let ok = |p: Point| p.x.is_finite() && p.y.is_finite() && p.x.abs() <= limit && p.y.abs() <= limit;
     let fits = match seg {
         PathSeg::Line(l) => ok(l.p0) && ok(l.p1),
         PathSeg::Quad(q) => ok(q.p0) && ok(q.p1) && ok(q.p2),
@@ -26,7 +36,7 @@ pub(crate) fn measured_arclen(seg: &PathSeg, accuracy: f64) -> Option<f64> {
 }
 
 /// The length of `path`, each cubic measured to `relative` of the length of its control polygon, or
-/// `None` when a segment cannot be measured ([`measured_arclen`]). kurbo's `perimeter(accuracy)` takes
+/// `None` when a segment cannot be measured (not finite, or past 1e100 in x or y). kurbo's `perimeter(accuracy)` takes
 /// an accuracy in the units of the path, which a cubic of large coordinates can only meet by
 /// subdividing it the most it ever does (twenty levels), and a cubic cannot be told apart from one
 /// that does; a relative accuracy is met in a few levels whatever the coordinates, so the work for a
@@ -39,14 +49,14 @@ pub(crate) fn measured_perimeter(path: &kurbo::BezPath, relative: f64) -> Option
             PathSeg::Line(l) => (l.p1 - l.p0).hypot(),
             PathSeg::Quad(q) => {
                 curves += 1;
-                measured_arclen(&seg, (relative * ((q.p1 - q.p0).hypot() + (q.p2 - q.p1).hypot())).max(1e-300))?
+                arclen_within(&seg, (relative * ((q.p1 - q.p0).hypot() + (q.p2 - q.p1).hypot())).max(1e-300), RELATIVE_MEASURE_LIMIT)?
             }
             PathSeg::Cubic(c) => {
                 curves += 1;
                 // Never an accuracy of zero: a cubic that is a point has no error, and no error is
                 // not below an accuracy of zero, so it would be subdivided to the bottom.
                 let polygon = (c.p1 - c.p0).hypot() + (c.p2 - c.p1).hypot() + (c.p3 - c.p2).hypot();
-                measured_arclen(&seg, (relative * polygon).max(1e-300))?
+                arclen_within(&seg, (relative * polygon).max(1e-300), RELATIVE_MEASURE_LIMIT)?
             }
         };
     }
@@ -351,11 +361,23 @@ mod tests {
         square.line_to((3.0, 4.0));
         assert_eq!(measured_perimeter(&square, 1e-9), Some(7.0));
         assert_eq!(crate::work::take(crate::work::Work::Measured), 0, "lines are chords");
-        for (name, bad) in [("past the limit", 1e10), ("not a number", f64::NAN), ("infinite", f64::INFINITY)] {
+        for (name, bad) in [("past the limit", 1e200), ("not a number", f64::NAN), ("infinite", f64::INFINITY)] {
             let mut p = kurbo::BezPath::new();
             p.move_to((0.0, 0.0));
             p.curve_to((bad, 0.0), (0.0, bad), (1.0, 1.0));
             assert_eq!(measured_perimeter(&p, 1e-9), None, "{name}");
+        }
+    }
+
+    /// The relative accuracy needs no limit of a billion: a curve of coordinates up to the sweep's own
+    /// (about 7e13) is measured, to the same relative accuracy as one of ordinary size.
+    #[test]
+    fn large_curves_are_measured_to_the_same_relative_accuracy() {
+        for scale in [1e9, 1e10, 1e12, 5e13] {
+            let ring = kurbo::Shape::to_path(&kurbo::Circle::new((0.0, 0.0), scale), scale * 1e-4);
+            let len = measured_perimeter(&ring, 1e-9).unwrap_or_else(|| panic!("scale {scale} cannot be measured"));
+            let exact = kurbo::Shape::perimeter(&ring, scale * 1e-12);
+            assert!((len - exact).abs() < 1e-8 * exact, "scale {scale}: {len} against {exact}");
         }
     }
 

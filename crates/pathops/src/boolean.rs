@@ -63,7 +63,7 @@ pub(crate) fn inside(rule: FillRule, w: i32) -> bool {
 /// Winding numbers for an arbitrary number of input sets (tag = input index): the non-zero ones,
 /// as (tag, winding) sorted by tag. A face is covered by a few of the inputs, so this stays short
 /// where a vector of every input's winding would make each Pathfinder test cost one step per input.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub(crate) struct Multi(Vec<(usize, i32)>);
 
 impl Multi {
@@ -357,16 +357,31 @@ impl Arrangement {
         self.top.contours(pred)
     }
 
+    /// The contour pass with the answer of `pred`, which is given a flag for every input, remembered
+    /// for each distinct winding: the pass asks about the sides of a segment again and again (it
+    /// scans west through segments that are no boundary for every contour it starts, and asks twice
+    /// of each), so asked of each it would make the work the product of those scans and the inputs.
+    /// Asked once of each distinct winding, `pred` is called, and given its flags, at most twice for
+    /// each segment of the sweep in all.
     pub(crate) fn contours(&self, pred: impl Fn(&[bool]) -> bool) -> Contours {
-        self.contours_where(|w| pred(&self.mask(w)))
+        let answers: std::cell::RefCell<std::collections::HashMap<Multi, bool>> = std::cell::RefCell::new(std::collections::HashMap::new());
+        self.contours_where(|w| {
+            if let Some(&known) = answers.borrow().get(w) {
+                return known;
+            }
+            let answer = pred(&self.mask(w));
+            answers.borrow_mut().insert(w.clone(), answer);
+            answer
+        })
     }
 
     /// [`Self::contours`] with a panic in the sweep's contour pass turned into an error, as `new` does for the
     /// sweep itself (native builds only: on the web a panic aborts, whatever is caught here). Used by the calls that can
     /// return an error; the others catch a panic as a whole ([`guarded`]).
     pub(crate) fn try_contours(&self, pred: impl Fn(&[bool]) -> bool) -> Result<Contours, PathOpsError> {
-        // The predicate is given a flag for every input each time it is asked about a face's side,
-        // which is about four times for every segment of the sweep.
+        // The predicate is given a flag for every input each time it is asked about a winding, which
+        // is once of each distinct one ([`Self::contours`]): two for every segment of the sweep at
+        // most, counted here as four.
         let segments = self.top.segment_indices().count();
         if segments.saturating_mul(4).saturating_mul(self.rules.len()) > crate::budget::limits().mask_work {
             return Err(PathOpsError::TooComplex);
@@ -1314,6 +1329,66 @@ mod tests {
         assert_eq!(work::take(Work::MaskFlags), 0, "no flag was set");
         // Two inputs are far under it.
         assert!(try_boolean(&squares[0], FillRule::NonZero, &squares[1], FillRule::NonZero, BoolOp::Union, DEFAULT_PRECISION).is_ok());
+    }
+
+    /// The reviewer's input for the flags: `west` tall thin rectangles in one input, to the west of
+    /// `squares` squares in a column, each its own input. The contour pass starts a contour in the
+    /// column and scans west through every rectangle's segments, asking the predicate about both
+    /// sides of each, every time: asked of each it was `west` x `squares` x the inputs.
+    fn west_scan(west: usize, squares: usize) -> Vec<BezPath> {
+        let height = 3.0 * squares as f64;
+        let mut tall = BezPath::new();
+        for i in 0..west {
+            let x = 2.0 * i as f64;
+            tall.extend(crate::testutil::rect(x, -1.0, x + 1.0, height + 1.0).iter());
+        }
+        let mut inputs = vec![tall];
+        inputs.extend((0..squares).map(|j| crate::testutil::rect(5_000.0, 3.0 * j as f64, 5_001.0, 3.0 * j as f64 + 1.0)));
+        inputs
+    }
+
+    fn west_flags(west: usize, squares: usize) -> usize {
+        let inputs = west_scan(west, squares);
+        let refs: Vec<(&BezPath, FillRule)> = inputs.iter().map(|p| (p, FillRule::NonZero)).collect();
+        work::reset();
+        let r = try_boolean_n(&refs, |m| m.iter().skip(1).any(|&b| b)).unwrap();
+        assert!((area(&r, FillRule::NonZero) - squares as f64).abs() < 1e-6, "{}", area(&r, FillRule::NonZero));
+        work::take(Work::MaskFlags)
+    }
+
+    /// The predicate is asked once of each distinct winding, so the flags it is given do not grow with
+    /// the scans west: with the squares and the rectangles both doubled, they grow four times (the
+    /// inputs times the distinct windings, each square's own), where they grew eight times.
+    #[test]
+    fn the_flags_do_not_grow_with_the_scans_through_segments_that_are_no_boundary() {
+        let (small, large) = (west_flags(100, 100), west_flags(200, 200));
+        assert!(small > 0 && large <= 4 * small + small / 4, "{small} flags for 100 squares, {large} for 200 (eight times would be {})", 8 * small);
+        // The scans alone (more rectangles to the west, the same squares) add no flag at all.
+        assert_eq!(west_flags(100, 40), west_flags(400, 40));
+        // And the flags are at most two for each segment of the sweep and input, which the limit counts as four.
+        let inputs = west_scan(100, 100);
+        let arr = Arrangement::new(inputs.iter().map(|p| (p.clone(), FillRule::NonZero)).collect()).unwrap();
+        assert!(small <= 2 * arr.top.segment_indices().count() * inputs.len(), "{small} flags");
+        // The pass makes the same contours: the answers are remembered, not changed.
+        let direct = arr.contours_where(|w| arr.mask(w).iter().skip(1).any(|&b| b));
+        let cached = arr.contours(|m| m.iter().skip(1).any(|&b| b));
+        assert_eq!(direct.contours().count(), cached.contours().count());
+        assert_eq!(
+            direct.contours().map(|c| c.path.elements().len()).sum::<usize>(),
+            cached.contours().map(|c| c.path.elements().len()).sum::<usize>()
+        );
+    }
+
+    /// The check of the windings against an operand's area is made for curves of large coordinates too,
+    /// not skipped as "cannot tell" because their length could not be measured.
+    #[test]
+    fn the_windings_of_a_large_curved_operand_are_checked() {
+        for scale in [1e8, 1e10, 1e12] {
+            let ring = kurbo::Circle::new((0.0, 0.0), scale).to_path(scale * 1e-6);
+            let eps = eps_for([&ring]).unwrap();
+            let top = Topology::<i32>::from_path(&ring, eps).unwrap();
+            assert_eq!(windings_add_up(&top, |w| *w, &ring), Some(true), "scale {scale}");
+        }
     }
 
     /// An operand whose windings do not add up and whose recovery is over a limit gives no result,

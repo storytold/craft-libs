@@ -44,6 +44,9 @@ fn the_defaults_are_the_constants() {
     assert_eq!(l.redundant_work, REDUNDANT_WORK);
     assert_eq!(l.mask_work, MASK_WORK);
     assert_eq!(l.sweep_event_work, MAX_SWEEP_EVENT_WORK);
+    assert_eq!(l.ends_at_a_point, MAX_ENDS_AT_A_POINT);
+    assert_eq!(l.pass_work, MAX_PASS_WORK);
+    assert_eq!(l.coverage_entries, MAX_COVERAGE_ENTRIES);
     assert_eq!(l, Limits::DEFAULT);
 }
 
@@ -251,5 +254,67 @@ fn a_lower_mask_limit_gives_no_regions_and_no_division() {
     assert!(with_limits(none, || pathfinder(PathfinderOp::Divide, &shapes)).is_empty());
     assert!(with_limits(none, || regions(&shapes)).is_empty());
     // The other operations of the same shapes do not list covering inputs.
+    assert_eq!(with_limits(none, || pathfinder(PathfinderOp::Unite, &shapes)).len(), 1);
+}
+
+fn pie(k: usize) -> BezPath {
+    let mut p = BezPath::new();
+    for i in 0..k {
+        let (a, c) = (std::f64::consts::TAU * i as f64 / k as f64, std::f64::consts::TAU * (i + 1) as f64 / k as f64);
+        p.move_to((0.0, 0.0));
+        p.line_to((100.0 * a.cos(), 100.0 * a.sin()));
+        p.line_to((100.0 * c.cos(), 100.0 * c.sin()));
+        p.close_path();
+    }
+    p
+}
+
+#[test]
+fn a_lower_limit_on_ends_at_a_point_refuses_a_pie_the_default_takes() {
+    let slices = pie(30);
+    assert!(try_area(&slices, FillRule::NonZero).is_ok());
+    // 30 slices have two ends each at the centre.
+    let sixty = with(|l| l.ends_at_a_point = 60);
+    assert!(with_limits(sixty, || try_area(&slices, FillRule::NonZero)).is_ok());
+    let fewer = with(|l| l.ends_at_a_point = 59);
+    assert_eq!(with_limits(fewer, || try_area(&slices, FillRule::NonZero)), Err(PathOpsError::TooComplex));
+    // The default is 512 ends: a pie of 256 slices is within it, and of 257 is not.
+    assert!(try_area(&pie(256), FillRule::NonZero).is_ok());
+    assert_eq!(try_area(&pie(257), FillRule::NonZero), Err(PathOpsError::TooComplex));
+}
+
+#[test]
+fn a_lower_coverage_limit_refuses_nested_shapes_the_default_takes() {
+    let nested: Vec<BezPath> = (1..=10).map(|k| rectangle(Rect::new(-f64::from(k), -f64::from(k), f64::from(k), f64::from(k)))).collect();
+    let inputs: Vec<(&BezPath, FillRule)> = nested.iter().map(|p| (p, FillRule::NonZero)).collect();
+    let union = |m: &[bool]| m.iter().any(|&b| b);
+    assert!(try_boolean_n(&inputs, union).is_ok());
+    // Ten nested squares hold 4 x 10 x 11 entries.
+    let at = with(|l| l.coverage_entries = 440);
+    assert!(with_limits(at, || try_boolean_n(&inputs, union)).is_ok());
+    let under = with(|l| l.coverage_entries = 439);
+    assert_eq!(with_limits(under, || try_boolean_n(&inputs, union)), Err(PathOpsError::TooComplex));
+    let shapes: Vec<Shape> = nested.iter().enumerate().map(|(i, p)| Shape::new(p.clone(), FillRule::NonZero, i as u64)).collect();
+    assert_eq!(pathfinder(PathfinderOp::Exclude, &shapes).len(), 1);
+    assert!(with_limits(under, || pathfinder(PathfinderOp::Exclude, &shapes)).is_empty());
+    assert!(with_limits(under, || regions(&shapes)).is_empty());
+}
+
+#[test]
+fn a_lower_pass_limit_gives_no_shapes_for_a_fan() {
+    // Triangles that meet at one point, each its own key: a batch of passes each.
+    let shapes: Vec<Shape> = (0..12)
+        .map(|i| {
+            let a = std::f64::consts::TAU * f64::from(i) / 12.0;
+            let b = a + 0.2;
+            Shape::new(poly(&[(0.0, 0.0), (100.0 * a.cos(), 100.0 * a.sin()), (100.0 * b.cos(), 100.0 * b.sin())], true), FillRule::NonZero, i as u64)
+        })
+        .collect();
+    assert_eq!(pathfinder(PathfinderOp::Merge, &shapes).len(), 12);
+    let none = with(|l| l.pass_work = 0);
+    for op in [PathfinderOp::Merge, PathfinderOp::Divide, PathfinderOp::Trim] {
+        assert!(with_limits(none, || pathfinder(op, &shapes)).is_empty(), "{op:?}");
+    }
+    // Operations that make no such passes are not held to it.
     assert_eq!(with_limits(none, || pathfinder(PathfinderOp::Unite, &shapes)).len(), 1);
 }

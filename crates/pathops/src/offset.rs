@@ -1052,8 +1052,7 @@ mod tests {
     }
 
     /// The boundary an inset strokes is told from the path by measuring the curves of both, and
-    /// that is limited: past [`MAX_COMPARED_CURVES`] of them, or with one that cannot be measured, nothing
-    /// is measured and the boundary is used. (Measuring to an absolute accuracy took a cubic of large
+    /// that is limited: past [`MAX_COMPARED_CURVES`] of them nothing is measured and the boundary is used. (Measuring to an absolute accuracy took a cubic of large
     /// coordinates the most levels of subdivision there are.)
     #[test]
     fn the_curves_an_inset_measures_are_counted_and_limited() {
@@ -1075,15 +1074,15 @@ mod tests {
         work::reset();
         assert!(filled_boundary(&nested).unwrap() != nested);
         assert_eq!(work::take(Work::Measured), 0);
-        // A curve too big to measure: the boundary, at once.
+        // A curve of large coordinates is measured like any other (to a relative accuracy), up to the sweep's own limit.
         let huge = {
             let mut p = BezPath::new();
-            p.extend(kurbo::Circle::new((0.0, 0.0), 3e9).to_path(1.0).iter());
+            p.extend(kurbo::Circle::new((0.0, 0.0), 3e12).to_path(1.0).iter());
             p
         };
         work::reset();
-        assert!(filled_boundary(&huge).is_ok());
-        assert_eq!(work::take(Work::Measured), 0);
+        assert_eq!(filled_boundary(&huge).unwrap(), huge);
+        assert!(work::take(Work::Measured) > 0);
         // Nothing the measure does depends on the size of the coordinates.
         for scale in [1.0, 1e3, 1e6, 1e8] {
             let ring = kurbo::Circle::new((0.0, 0.0), scale).to_path(scale * 1e-4);

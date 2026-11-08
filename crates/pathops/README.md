@@ -141,15 +141,33 @@ work of each operation is bounded before it starts, in counts the tests assert o
   touch, costs the square of its length. Pieces of no height (the collinear vertices along a rectangle's top)
   are not on the line, and count only against the pieces that cross their height. Each crossing, and each
   end of a segment, also scans that line, so the pairs of segments whose bounds overlap (pairs of curves
-  nine times) times the most pieces on the line at one height are held to `MAX_SWEEP_EVENT_WORK`
-  (4,294,967,296). All of them are counted in O(n log n) before the sweep;
-- a boolean operation sets a flag for each input every time its predicate is asked about a face's side, about
-  four times for each segment of the sweep, which is more than the sweep's own work when most of many inputs
-  are empty: past `MASK_WORK` (268,435,456) such flags it is `TooComplex`. Divide and `regions` list the
+  nine times, a line and a curve three) times the most pieces on the line at one height are held to
+  `MAX_SWEEP_EVENT_WORK` (4,294,967,296). All of them are counted in O(n log n) before the sweep;
+- segments that meet at one point cost about the fourth power of their number, which none of those counts
+  (a pie of k slices has 2k ends at its centre): more than `MAX_ENDS_AT_A_POINT` (512) ends at one point,
+  counted in a hash of the ends at the sweep's tolerance, is `TooComplex`. A pie of 256 slices takes
+  0.5 to 0.9 s, 257 are refused in a few milliseconds;
+- a boolean operation asks its predicate once for each distinct set of inputs that cover a side of a segment
+  (the answer is kept for the rest of the pass, which looks at the same set again and again), and hands it
+  a flag for each input. There are at most two such sets for each segment, so the flags are at most twice the
+  segments times the inputs, which is more than the sweep's own work when most of many inputs are empty:
+  past `MASK_WORK` (268,435,456) of them, counted as four for each segment and input before the sweep, it is
+  `TooComplex`. Divide and `regions` list the
   inputs that cover each side of each edge, one entry for each covering input and each side, which is near
   the number of segments when shapes lie apart (100 shapes apart walk 1,200 entries, 400 walk 4,800), and give
   nothing past the same number of entries. The union of many inputs, and of the outlines of a stroke, stops
   as soon as the contours made pass `MAX_ELEMENTS`, and does not make the rest;
+- an arrangement of several inputs keeps, for each side of each segment, the inputs that cover it, which
+  for shapes nested n deep is about 4n(n + 1) entries (2,000 nested squares hold 16 million, 270 MB). The
+  entries are counted before the sweep, from the pairs of a segment's bounds and an input's bounds that
+  overlap, and past `MAX_COVERAGE_ENTRIES` (33,554,432) the operation is `TooComplex` (nested 2,896 deep or
+  more, 2,895 take 550 MB; without it the memory grows with the square, 8,000 deep needs about 4.5 GB,
+  which ends a web page);
+- Merge, Divide, Trim and Crop colour the classes of faces into batches whose faces share no vertex and
+  make one contour pass of the whole arrangement for each batch; classes that meet at one point are a batch
+  each. The batches times the segments are counted before the first pass, and past `MAX_PASS_WORK`
+  (33,554,432) the operation gives no shapes (a fan of 209 shapes at a point beside 40,000 squares is refused in
+  0.6 s; 208 shapes there take 2.2 s to merge and 3.2 s to divide, where the squares alone take 0.4 s);
 - a stroke's outline is counted as it is made (a subpath of more than 256 segments is stroked in windows of
   256, so that a width that is huge against the tolerance cannot make millions of curves first) and the
   operation is `TooComplex` past `MAX_ELEMENTS` elements of outline;
@@ -158,9 +176,9 @@ work of each operation is bounded before it starts, in counts the tests assert o
   all, `remove_redundant_points` at `REDUNDANT_WORK` (the joints it reads in its search, and the points of a run it
   checks one by one against the line that replaces it) and `join` at `JOIN_WORK`, and leaves the rest as it is;
 - lengths are measured to a relative accuracy (kurbo's takes an accuracy in the units of the path, which a cubic of
-  large coordinates meets only by subdividing the most it ever does), and an inset compares the lengths of the
-  closed subpaths and of the boundary of their fill for at most 4,096 curves: past that, or with a curve whose
-  coordinates are past a billion, it strokes the boundary, which is right for any input;
+  large coordinates meets only by subdividing the most it ever does), at any size the sweep accepts, and an
+  inset compares the lengths of the closed subpaths and of the boundary of their fill for at most 4,096
+  curves: past that it strokes the boundary, which is right for any input;
 - the tidy that merges the pieces the sweep split joins at most 1,024 pieces into one line and 32 into one
   curve at a time (each piece added tries the whole run again), so a straight run of more comes out as
   lines of that many; the work is proportional to the pieces;
@@ -194,7 +212,8 @@ let outline = with_limits(limits, || try_outline_stroke(&path, 3.0, Cap::Butt, J
 `with_limits` puts the limits in force on the calling thread for the closure and puts the caller's back when
 it returns, also if it unwinds; scopes nest, and another thread keeps its own. `Limits` has a field for each
 bound (`elements`, `segment_pairs`, `offset_segment_pairs`, `sweep_line_pairs`, `shape_builder_segments`,
-`fit_points`, `fit_work`, `join_work`, `redundant_work`, `mask_work`, `sweep_event_work`) and is `#[non_exhaustive]`, so start from
+`fit_points`, `fit_work`, `join_work`, `redundant_work`, `mask_work`, `sweep_event_work`, `pass_work`,
+`ends_at_a_point`, `coverage_entries`) and is `#[non_exhaustive]`, so start from
 `Limits::default()`. Time and memory grow with a limit raised, and a limit lowered refuses more ordinary art.
 
 ### Ordinary input the defaults refuse
@@ -212,8 +231,15 @@ sweep-line limit at its default and raised to 2^30:
 `MAX_SWEEP_EVENT_WORK` is also a worst case, priced at some nanoseconds a search of the sweep line: a hatch of
 400 thin strokes slanting each way across 400 others (3,200 elements, none of them level) takes 3.1 s, and
 one of 408 or more is `TooComplex`. Strokes that are curves count more than lines (a pair of curves crosses up
-to nine times), so a hatch of curves is refused at fewer. A boolean operation of more than a few thousand
-inputs, most of them empty, is `TooComplex` past `MASK_WORK`.
+to nine times, a line and a curve three), so a hatch of curves is refused at fewer. A boolean operation of more
+than a few thousand inputs, most of them empty, is `TooComplex` past `MASK_WORK`.
+
+Three more bounds refuse input a drawing can hold, none of it common: a pie of more than 256 slices (or any
+512 segment ends at one point, such as a fan of that many triangles) by `MAX_ENDS_AT_A_POINT`, shapes nested
+2,896 deep or more by `MAX_COVERAGE_ENTRIES`, and Merge, Divide, Trim or Crop of a fan of 209 or more shapes at
+a point beside 40,000 other squares by `MAX_PASS_WORK`. Each is a worst case measured in seconds or in half a
+gigabyte (the pie of 256 takes 0.5 to 0.9 s, 2,895 nested squares 0.2 s and 550 MB), so an app that can wait
+or has the memory raises it in `Limits`.
 
 The element limit refuses a drawing of more than 524,288 elements in one operation (a traced image of half a
 million points), and `shape_builder` gives only the filled areas for more than 65,536 segments.
@@ -229,6 +255,10 @@ thread and ask first with the `try_` forms. Measured on one machine, in a releas
 | `unite_all` of a column of 16,000 / 32,000 / 64,000 dots (64,000 / 128,000 / 256,000 elements) | 0.5 / 1.2 / 2.1 s |
 | `unite_all` of a row of 5,500 dots on one line (the sweep-line limit is at 5,800) | 2.8 s |
 | `unite_all` of a grid of 16,000 / 32,000 lenses with one more 10 million away | 0.6 / 1.4 s (as without the far one) |
+| `try_area` of a pie of 256 slices (512 segment ends at its centre, the limit) | 0.5 to 0.9 s |
+| `try_boolean_n` of 2,000 squares in a column, each an input, with one path of 2,000 tall rectangles to their west | 0.25 s (with the rectangles to the east, 0.08 s) |
+| `pathfinder(Exclude / Divide, ..)` of 2,000 / 2,895 squares nested (16 / 33 million coverage entries; 2,895 is the limit) | 0.11 / 0.25 s and 270 / 300 MB for 2,000; 0.2 s and 550 MB for 2,895 |
+| `pathfinder(Merge / Divide, ..)` of a fan of 208 shapes at a point beside 40,000 squares (the pass limit) | 2.2 / 3.2 s |
 | `try_area` of a rectangle with 20,000 collinear vertices on its top and bottom (40,000 pieces of no height) | 24 ms |
 | `try_outline_stroke` of 3,000 wavy cubics 3 wide (the default limit is at about 3,100) | 1.0 s |
 | `try_outline_stroke` of 1,000 cubics 1,000 wide (22,000 elements of outline, much of it crossing itself) | 5.4 s |
@@ -304,14 +334,37 @@ bit for bit VectorCraft's), and the results are identical except where noted:
     first nine find nothing, so it finds a part far from the others (two squares a hundred apart);
   - the `shape_builder` fallback (more than `SHAPE_BUILDER_MAX_SEGMENTS`) fills the closed subpaths only,
     as the map does: an open triangle that cuts fills nothing;
-  - the tidy keeps an edge as short as the sweep's tolerance (set by the coordinates) allows, beside an edge
-    a billion long (it dropped any under a billionth of the longest), and matches an input curve to a piece
-    within the sweep's noise at coordinates above a thousand (it was a millionth of the coordinates: a whole
-    unit at a million, so one arch's pieces were rebuilt from the arch beside it);
+  - the tidy drops a piece as a speck when its box (width plus height) is under a billionth of the longest
+    chord (at least 1e-9), as VectorCraft did, but never one over 1e-6, or over 64 ulps of the largest
+    coordinate when that is more (past coordinates of 70 million): what the sweep's own tolerance could not
+    have made is no speck. For a drawing whose longest chord is under 1,000 that is VectorCraft's threshold;
+    past it the carve keeps the pieces between that and a billionth of the chord, so an edge as short as the
+    sweep's tolerance allows is kept beside an edge a billion long (a notch of a unit in an edge of a billion
+    is a notch);
+  - an input curve is matched to a piece within the sweep's noise at coordinates above a thousand (it was a
+    millionth of the coordinates: a whole unit at a million, so one arch's pieces were rebuilt from the arch
+    beside it);
   - `simplify` leaves a run it cannot measure, or fit within the tolerance in 40 splits, as it is (VectorCraft
     sampled the first as a point, and took the second's last cubic as a fit);
   - a closed subpath of one cubic that loops round an area is filled (VectorCraft dropped every closed
     subpath of fewer than two anchors);
+- the predicate of `boolean_n` and `try_boolean_n` is asked once for each distinct winding of the sweep and the
+  answer kept, where VectorCraft asked it every time the contour pass looked at a side of a segment, and made
+  the pass scan west through every segment that is no boundary: 2,000 squares in a column, each an input,
+  beside a path of 2,000 tall rectangles to their west took it 6.5 s (1,000: 0.85 s), the cube of their
+  number, and 0.25 s here (1,000: 0.07 s); the flags handed to the predicate were 32 billion and are 4
+  million. The results are the same for a predicate that depends on its flags alone; one that counts its calls
+  sees fewer of them;
+- three more bounds are new and refuse input VectorCraft took, in whatever time it took, with `TooComplex`
+  (or no shapes, for the operations that give none): more than 512 segment ends at one point (a pie of 257
+  slices took VectorCraft 0.7 s, 400 slices 3.1 s, and the time grows with the fourth power of their number);
+  shapes nested so deep that the arrangement holds more than 33,554,432 coverage entries (2,896 deep: 0.4 s
+  there; the memory grows with the square of the depth, 270 MB at 2,000 and about 4.5 GB at 8,000); and
+  Merge, Divide, Trim or Crop whose contour passes (a batch of classes each) would walk more than
+  33,554,432 segments in all (a fan of 209 shapes at a point beside 40,000 squares took VectorCraft 4.4 s to
+  merge and 5.5 s to divide, 208 take 2.2 s and 3.3 s here, and the time grows with the shapes at the
+  point). A pair of a line and a curve also counts three crossings, not one, in the sweep-event limit.
+  Within the limits the results are VectorCraft's (same shape counts and areas on every input above);
 - the limits and counts above, `try_outline_stroke`, `try_stroke_region`, the bounded flattening (VectorCraft's
   `pathfinder_with(Divide, ..)` with an open path and a precision of 1e-300 panicked with "capacity overflow"
   in `kurbo::flatten`) and the lookups of input curves and points by a rectangle index (a column of shapes

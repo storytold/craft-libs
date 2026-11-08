@@ -20,7 +20,7 @@
 
 use std::cell::Cell;
 
-use kurbo::{BezPath, ParamCurve, ParamCurveExtrema, PathSeg, Rect};
+use kurbo::{BezPath, ParamCurve, ParamCurveExtrema, PathSeg, Point, Rect};
 
 use crate::work::{self, Work};
 
@@ -48,6 +48,30 @@ pub const MAX_SWEEP_EVENT_WORK: usize = {
     let wanted = 1u64 << 32;
     if wanted > usize::MAX as u64 { usize::MAX } else { wanted as usize }
 };
+
+/// Most ends of segments at one point (within the sweep's tolerance, a point and its neighbours
+/// counted as one): 512. The sweep takes about the fourth power of the number of segments that
+/// meet at a point, which no other limit counts (a pie of k slices has 2k ends at its centre and k
+/// segments' worth of everything else): 256 slices, 512 ends, take 0.5 to 0.9 s, 400 slices 3 s, and a
+/// thousand pass the pair and height limits and would take minutes by that growth. Past it an operation fails as
+/// [`crate::PathOpsError::TooComplex`] before it sweeps.
+pub const MAX_ENDS_AT_A_POINT: usize = 512;
+
+/// Most entries the windings of the arrangement of several inputs hold: 33,554,432 (16 bytes each,
+/// half a gigabyte, and the sweep holds them twice). A side of a segment has an entry for each input
+/// that covers it, so shapes nested n deep hold about 4n²: 2,000 nested squares 270 MB, 8,000 would
+/// need four and a half gigabytes, which ends a web page that has 32-bit addresses. Counted before the sweep, from
+/// the pairs of a segment's bounds and an input's bounds that overlap (an upper bound: an input's
+/// bounds can hold what it does not cover). Past it an operation fails as
+/// [`crate::PathOpsError::TooComplex`].
+pub const MAX_COVERAGE_ENTRIES: usize = 1 << 25;
+
+/// Most segments the contour passes of Merge, Divide, Trim and Crop walk in all: 33,554,432. The
+/// classes of faces go into batches whose faces share no vertex, one pass of the whole arrangement for
+/// each batch, and classes that meet at one point are each a batch: 208 shapes at a point beside
+/// 40,000 squares take 2.2 s to merge and 3.3 s to divide, where the squares alone take 0.4 s (the
+/// time grows with the shapes at the point). About 50 to 90 ns a segment in a pass. Counted before the first pass; past it the operation gives no shapes.
+pub const MAX_PASS_WORK: usize = 1 << 25;
 
 /// Most path elements (a move, a close, and a segment each) all the paths of one operation may
 /// hold together: 524,288 (the default of [`Limits::elements`]). Every operation reads its input a few times and keeps several copies
@@ -78,6 +102,14 @@ pub struct Limits {
     pub offset_segment_pairs: usize,
     /// Most pairs of pieces at one height on the sweep line ([`MAX_SWEEP_LINE_PAIRS`]).
     pub sweep_line_pairs: usize,
+    /// Most segments the contour passes of a classified walk (Merge, Divide, Trim, Crop) walk in all:
+    /// batches of classes times segments ([`MAX_PASS_WORK`]).
+    pub pass_work: usize,
+    /// Most segment ends at one point ([`MAX_ENDS_AT_A_POINT`]).
+    pub ends_at_a_point: usize,
+    /// Most entries the windings of an arrangement of several inputs hold, as counted before it
+    /// ([`MAX_COVERAGE_ENTRIES`]).
+    pub coverage_entries: usize,
     /// Most searches of the sweep line the crossings and ends of segments make, counted as the pairs
     /// of segments whose bounds overlap times the most pieces on the line at one height
     /// ([`MAX_SWEEP_EVENT_WORK`]).
@@ -105,6 +137,9 @@ impl Limits {
         offset_segment_pairs: crate::offset::MAX_OFFSET_SEGMENT_PAIRS,
         sweep_line_pairs: MAX_SWEEP_LINE_PAIRS,
         sweep_event_work: MAX_SWEEP_EVENT_WORK,
+        pass_work: MAX_PASS_WORK,
+        ends_at_a_point: MAX_ENDS_AT_A_POINT,
+        coverage_entries: MAX_COVERAGE_ENTRIES,
         shape_builder_segments: crate::planar::SHAPE_BUILDER_MAX_SEGMENTS,
         fit_points: crate::edit::MAX_FIT_POINTS,
         fit_work: crate::edit::FIT_WORK,
@@ -308,30 +343,92 @@ pub(crate) fn peak_depth(heights: &[(f64, f64)]) -> usize {
         .unwrap_or(0)
 }
 
+/// The most ends of segments (`ends` are the first and last points of the segments, `extent` the
+/// largest coordinate among them) that lie at one point, a point being a square of four of the
+/// sweep's tolerances and the squares round it (so that a point on the edge between two squares
+/// is not split between them).
+pub(crate) fn most_ends_at_a_point(ends: &[Point], extent: f64) -> usize {
+    let eps = (extent * f64::EPSILON * 64.0).max(1e-6);
+    let cell = 4.0 * eps;
+    let key = |p: &Point| ((p.x / cell).floor() as i64, (p.y / cell).floor() as i64);
+    let mut counts: std::collections::HashMap<(i64, i64), usize> = std::collections::HashMap::new();
+    for p in ends {
+        *counts.entry(key(p)).or_default() += 1;
+    }
+    counts
+        .keys()
+        .map(|&(x, y)| {
+            (x.saturating_sub(1)..=x.saturating_add(1))
+                .flat_map(|i| (y.saturating_sub(1)..=y.saturating_add(1)).map(move |j| (i, j)))
+                .filter_map(|c| counts.get(&c))
+                .sum::<usize>()
+        })
+        .max()
+        .unwrap_or(0)
+}
+
 /// Can a planar map be built of `paths` within `cap` segment pairs, [`MAX_SWEEP_LINE_PAIRS`] pairs of
 /// pieces on the sweep line, and [`MAX_SWEEP_EVENT_WORK`] searches of it?
 pub(crate) fn sweep_fits_within<'a>(paths: impl IntoIterator<Item = &'a BezPath>, cap: usize) -> bool {
-    let (mut boxes, mut curves, mut heights) = (Vec::new(), Vec::new(), Vec::new());
+    let (mut boxes, mut lines, mut curves, mut heights) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    let (mut ends, mut extent, mut inputs): (Vec<Point>, f64, Vec<Rect>) = (Vec::new(), 0.0, Vec::new());
     for p in paths {
         work::add(Work::Visited, p.elements().len());
+        let mut whole: Option<Rect> = None;
         for s in p.segments() {
-            boxes.push(s.bounding_box());
-            if !matches!(s, PathSeg::Line(_)) {
-                curves.push(s.bounding_box());
+            let b = s.bounding_box();
+            boxes.push(b);
+            if matches!(s, PathSeg::Line(_)) {
+                lines.push(b);
+            } else {
+                curves.push(b);
             }
+            whole = Some(whole.map_or(b, |w| w.union(b)));
+            let (first, last) = (s.start(), s.end());
+            ends.extend([first, last]);
+            extent = extent.max(first.x.abs()).max(first.y.abs()).max(last.x.abs()).max(last.y.abs());
             piece_heights(&s, &mut heights);
         }
+        inputs.extend(whole);
+    }
+    // Segments that meet at one point cost about the fourth power of their number in the sweep.
+    if most_ends_at_a_point(&ends, extent) > limits().ends_at_a_point {
+        return false;
     }
     let Some(pairs) = overlap_pairs(&boxes, cap) else { return false };
     if !heights_overlap_within(&heights, limits().sweep_line_pairs) {
         return false;
     }
-    // A pair of curves may cross up to nine times, a pair with a line less: the crossings are at
-    // most the pairs, with eight more for each pair of curves.
-    let Some(curve_pairs) = overlap_pairs(&curves, cap) else { return false };
-    // In 64 bits: the product passes what a 32-bit `usize` holds.
-    let crossings = (pairs as u64).saturating_add((curve_pairs as u64).saturating_mul(8));
-    crossings.saturating_mul(peak_depth(&heights) as u64) <= limits().sweep_event_work as u64
+    // The crossings: a pair of lines crosses once, a pair of a line and a curve up to three times, a
+    // pair of curves up to nine; each pair counts for as many (at most), so the pairs of bounds
+    // that overlap are counted by the kinds of segment in them.
+    let (Some(line_pairs), Some(curve_pairs)) = (overlap_pairs(&lines, cap), overlap_pairs(&curves, cap)) else { return false };
+    let mixed = pairs.saturating_sub(line_pairs).saturating_sub(curve_pairs);
+    // In 64 bits: the products pass what a 32-bit `usize` holds.
+    let crossings = (line_pairs as u64).saturating_add((mixed as u64).saturating_mul(3)).saturating_add((curve_pairs as u64).saturating_mul(9));
+    if crossings.saturating_mul(peak_depth(&heights) as u64) > limits().sweep_event_work as u64 {
+        return false;
+    }
+    coverage_entries_within(&boxes, pairs, &inputs, limits().coverage_entries)
+}
+
+/// Can the windings of the sweep of these inputs be held in `cap` entries? Each side of each segment
+/// has an entry for every input that covers it, and an input can only cover a segment whose bounds
+/// lie within its own, so the pairs of a segment's bounds and an input's bounds that overlap (each
+/// segment with its own input, too) bound them, two sides to a segment. Nested squares of
+/// n inputs hold about 4n² of them. `pairs` are those of the segments' bounds among themselves.
+/// Two inputs or fewer hold two at most for each segment, and are not counted.
+fn coverage_entries_within(segments: &[Rect], pairs: usize, inputs: &[Rect], cap: usize) -> bool {
+    if inputs.len() <= 2 {
+        return true;
+    }
+    let mut all = segments.to_vec();
+    all.extend_from_slice(inputs);
+    let (Some(everything), Some(among_inputs)) = (overlap_pairs(&all, usize::MAX), overlap_pairs(inputs, usize::MAX)) else { return false };
+    let across = everything.saturating_sub(pairs).saturating_sub(among_inputs);
+    let entries = (across as u64).saturating_mul(2);
+    work::add(Work::CoverageEntries, usize::try_from(entries).unwrap_or(usize::MAX));
+    entries <= cap as u64
 }
 
 /// Can a planar map be built of `paths` within [`MAX_SEGMENT_PAIRS`] (and [`MAX_SWEEP_LINE_PAIRS`])?
@@ -622,17 +719,28 @@ mod tests {
         assert_eq!(overlap_pairs(&[], 0), Some(0));
     }
 
-    /// The pairs of overlapping bounds, those of curves among them, and the most pieces at one height.
-    fn event_counts(path: &BezPath) -> (usize, usize, usize) {
-        let (mut boxes, mut curves, mut heights) = (Vec::new(), Vec::new(), Vec::new());
+    /// The pairs of overlapping bounds of two lines, of a line and a curve, and of two curves, and the
+    /// most pieces at one height.
+    fn event_counts(path: &BezPath) -> (usize, usize, usize, usize) {
+        let (mut boxes, mut lines, mut curves, mut heights) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
         for s in path.segments() {
             boxes.push(s.bounding_box());
-            if !matches!(s, PathSeg::Line(_)) {
+            if matches!(s, PathSeg::Line(_)) {
+                lines.push(s.bounding_box());
+            } else {
                 curves.push(s.bounding_box());
             }
             piece_heights(&s, &mut heights);
         }
-        (overlap_pairs(&boxes, usize::MAX).unwrap_or(0), overlap_pairs(&curves, usize::MAX).unwrap_or(0), peak_depth(&heights))
+        let all = overlap_pairs(&boxes, usize::MAX).unwrap_or(0);
+        let (ll, cc) = (overlap_pairs(&lines, usize::MAX).unwrap_or(0), overlap_pairs(&curves, usize::MAX).unwrap_or(0));
+        (ll, all - ll - cc, cc, peak_depth(&heights))
+    }
+
+    /// The crossings the budget counts: a pair of lines once, a line and a curve three times, two curves nine.
+    fn weighted(counts: (usize, usize, usize, usize)) -> usize {
+        let (lines, mixed, curves, depth) = counts;
+        (lines + 3 * mixed + 9 * curves) * depth
     }
 
     /// Crossings that the other budgets pass but whose searches of the sweep line are many are
@@ -643,7 +751,8 @@ mod tests {
     fn a_dense_diagonal_hatch_is_refused_before_it_is_swept() {
         use crate::{FillRule, PathOpsError};
         let hatch = crate::testutil::diagonals(480);
-        let (pairs, curve_pairs, depth) = event_counts(&hatch);
+        let (pairs, mixed, curve_pairs, depth) = event_counts(&hatch);
+        assert_eq!(mixed, 0);
         assert!(pairs <= MAX_SEGMENT_PAIRS, "{pairs} overlapping bounds");
         assert!(heights_overlap_within(&heights_of(&hatch), MAX_SWEEP_LINE_PAIRS), "the pieces at one height are within their limit");
         assert_eq!(curve_pairs, 0);
@@ -659,7 +768,7 @@ mod tests {
         let small = crate::testutil::diagonals(40);
         assert!(sweep_fits([&small]));
         assert!(crate::try_area(&small, FillRule::NonZero).is_ok());
-        let (pairs, _, depth) = event_counts(&small);
+        let (pairs, _, _, depth) = event_counts(&small);
         assert!(pairs * depth > 0);
         assert!(with_limits(Limits { sweep_event_work: pairs * depth, ..Limits::default() }, || sweep_fits([&small])));
         assert!(!with_limits(Limits { sweep_event_work: pairs * depth - 1, ..Limits::default() }, || sweep_fits([&small])));
@@ -684,12 +793,153 @@ mod tests {
             b
         };
         let bowed = strokes(30.0);
-        let (pairs, curve_pairs, depth) = event_counts(&bowed);
-        assert!(curve_pairs * 3 > pairs, "{curve_pairs} of {pairs} pairs are of curves");
-        let weighted = (pairs + 8 * curve_pairs) * depth;
-        assert!(weighted > 4 * pairs * depth, "{weighted} against {} unweighted", pairs * depth);
-        assert!(with_limits(Limits { sweep_event_work: weighted, ..Limits::default() }, || sweep_fits([&bowed])));
-        assert!(!with_limits(Limits { sweep_event_work: weighted - 1, ..Limits::default() }, || sweep_fits([&bowed])));
+        let counts = event_counts(&bowed);
+        let (lines, mixed, curves, _) = counts;
+        assert!(curves > lines && mixed > 0, "{lines} pairs of lines, {mixed} mixed, {curves} of curves");
+        let wanted = weighted(counts);
+        assert!(wanted > 4 * (lines + mixed + curves) * counts.3, "{wanted} against {} unweighted", (lines + mixed + curves) * counts.3);
+        assert!(with_limits(Limits { sweep_event_work: wanted, ..Limits::default() }, || sweep_fits([&bowed])));
+        assert!(!with_limits(Limits { sweep_event_work: wanted - 1, ..Limits::default() }, || sweep_fits([&bowed])));
+    }
+
+    /// A line and a curve can cross three times: those pairs count three, between a line and a line one and two curves nine.
+    #[test]
+    fn a_pair_of_a_line_and_a_curve_counts_three_crossings() {
+        // Curved strokes across straight ones: every pair of bounds overlapping is a line and a curve, but the stroke's own.
+        let mut b = BezPath::new();
+        for i in 0..40 {
+            let y = f64::from(i) * 3.0;
+            b.move_to((0.0, y));
+            b.line_to((300.0, y + 0.5));
+            b.line_to((300.0, y + 1.0));
+            b.line_to((0.0, y + 1.0));
+            b.close_path();
+        }
+        for i in 0..40 {
+            let x = f64::from(i) * 7.0;
+            b.move_to((x, -10.0));
+            b.curve_to((x + 20.0, 40.0), (x - 20.0, 80.0), (x, 130.0));
+            b.curve_to((x - 19.0, 80.0), (x + 21.0, 40.0), (x, -10.0));
+            b.close_path();
+        }
+        let counts = event_counts(&b);
+        let (lines, mixed, curves, depth) = counts;
+        assert!(mixed > lines && mixed > curves && depth > 40, "{lines} pairs of lines, {mixed} mixed, {curves} of curves, {depth} deep");
+        // Weighted three, the mixed pairs make more than counted once and less than counted nine times.
+        let wanted = weighted(counts);
+        assert!(wanted > (lines + mixed + curves) * depth && wanted < 9 * (lines + mixed + curves) * depth);
+        assert!(with_limits(Limits { sweep_event_work: wanted, ..Limits::default() }, || sweep_fits([&b])));
+        assert!(!with_limits(Limits { sweep_event_work: wanted - 1, ..Limits::default() }, || sweep_fits([&b])));
+    }
+
+    /// A pie of k slices: the segments of all the slices that meet at its centre.
+    fn pie(k: usize) -> BezPath {
+        let mut p = BezPath::new();
+        for i in 0..k {
+            let (a, c) = (std::f64::consts::TAU * i as f64 / k as f64, std::f64::consts::TAU * (i + 1) as f64 / k as f64);
+            p.move_to((0.0, 0.0));
+            p.line_to((100.0 * a.cos(), 100.0 * a.sin()));
+            p.line_to((100.0 * c.cos(), 100.0 * c.sin()));
+            p.close_path();
+        }
+        p
+    }
+
+    fn ends_of(path: &BezPath) -> (Vec<Point>, f64) {
+        let ends: Vec<Point> = path.segments().flat_map(|s| [s.start(), s.end()]).collect();
+        let extent = ends.iter().fold(0.0_f64, |m, p| m.max(p.x.abs()).max(p.y.abs()));
+        (ends, extent)
+    }
+
+    /// The most ends at one point are counted, at the sweep's tolerance and across the edge between two squares of it.
+    #[test]
+    fn the_most_ends_at_a_point_are_counted() {
+        for k in [3usize, 20, 100] {
+            let (ends, extent) = ends_of(&pie(k));
+            assert_eq!(most_ends_at_a_point(&ends, extent), 2 * k, "a pie of {k} slices");
+        }
+        // Four squares that share a corner: each has two ends there.
+        let mut four = BezPath::new();
+        for (x, y) in [(0.0, 0.0), (-1.0, 0.0), (0.0, -1.0), (-1.0, -1.0)] {
+            four.extend(crate::testutil::rect(x, y, x + 1.0, y + 1.0).iter());
+        }
+        let (ends, extent) = ends_of(&four);
+        assert_eq!(most_ends_at_a_point(&ends, extent), 8);
+        // Points a hair apart (inside the tolerance) are one point, however the squares of the hash fall.
+        let near: Vec<Point> = (0..50).map(|i| Point::new(f64::from(i) * 1e-8, f64::from(i % 3) * 1e-8)).collect();
+        assert_eq!(most_ends_at_a_point(&near, 1.0), 50);
+        let across: Vec<Point> = (0..50).map(|i| Point::new(-1e-6 + f64::from(i) * 4e-8, 0.0)).collect();
+        assert_eq!(most_ends_at_a_point(&across, 1.0), 50, "points either side of an edge of the squares");
+        // Points further apart than that are not.
+        let apart: Vec<Point> = (0..50).map(|i| Point::new(f64::from(i) * 1e-3, 0.0)).collect();
+        assert_eq!(most_ends_at_a_point(&apart, 1.0), 1);
+        assert_eq!(most_ends_at_a_point(&[], 0.0), 0);
+    }
+
+    /// 512 ends at a point pass and 514 do not (a pie of 256 slices and of 257), before the sweep.
+    #[test]
+    fn a_pie_of_many_slices_is_refused_before_the_sweep_past_the_cap() {
+        use crate::{FillRule, PathOpsError};
+        assert_eq!(MAX_ENDS_AT_A_POINT, 512);
+        let (at, over) = (pie(256), pie(257));
+        assert!(sweep_fits([&at]) && !sweep_fits([&over]));
+        work::reset();
+        assert_eq!(crate::try_area(&over, FillRule::NonZero), Err(PathOpsError::TooComplex));
+        assert_eq!(crate::try_unite_all(&[(&over, FillRule::NonZero)]), Err(PathOpsError::TooComplex));
+        assert_eq!(work::take(Work::Sweeps), 0, "refused before the sweep was built");
+        // The cap is the limit: one slice more with a limit of 514, one fewer end with 513.
+        assert!(with_limits(Limits { ends_at_a_point: 514, ..Limits::default() }, || sweep_fits([&over])));
+        assert!(!with_limits(Limits { ends_at_a_point: 513, ..Limits::default() }, || sweep_fits([&over])));
+        // Ends that are not at one point are no matter: the same slices side by side.
+        let mut spread = BezPath::new();
+        for i in 0..300 {
+            let x = f64::from(i) * 200.0;
+            spread.extend(crate::testutil::rect(x, 0.0, x + 10.0, 10.0).iter());
+        }
+        assert!(sweep_fits([&spread]));
+    }
+
+    /// Nested squares: n inputs hold 4n(n+1) entries in the windings of the arrangement, counted before the sweep.
+    #[test]
+    fn nested_squares_are_counted_in_entries_before_the_sweep() {
+        use crate::{FillRule, PathOpsError, PathfinderOp, Shape};
+        let nested = |n: usize| -> Vec<BezPath> { (1..=n).map(|k| crate::testutil::rect(-(k as f64), -(k as f64), k as f64, k as f64)).collect() };
+        for n in [20usize, 50] {
+            let squares = nested(n);
+            work::reset();
+            assert!(sweep_fits(squares.iter()));
+            let counted = work::take(Work::CoverageEntries);
+            assert_eq!(counted, 4 * n * (n + 1), "{n} nested squares");
+            // It is an upper bound on the entries the windings hold.
+            let arr = crate::boolean::Arrangement::new(squares.iter().map(|s| (s.clone(), FillRule::NonZero)).collect()).unwrap();
+            let held: usize = arr
+                .top
+                .segment_indices()
+                .map(|s| arr.top.winding_clockwise(s.first_half()).len() + arr.top.winding_counter_clockwise(s.first_half()).len())
+                .sum();
+            assert!(held <= counted && held * 2 > counted, "{held} held, {counted} counted");
+        }
+        // The limit is on that count: at it the operation is made, one under it is refused before the sweep.
+        let shapes: Vec<Shape> = nested(40).into_iter().enumerate().map(|(i, p)| Shape::new(p, FillRule::NonZero, i as u64)).collect();
+        let exact = 4 * 40 * 41;
+        let at = Limits { coverage_entries: exact, ..Limits::default() };
+        assert_eq!(with_limits(at, || crate::pathfinder(PathfinderOp::Exclude, &shapes)).len(), 1);
+        let under = Limits { coverage_entries: exact - 1, ..Limits::default() };
+        work::reset();
+        assert!(with_limits(under, || crate::pathfinder(PathfinderOp::Exclude, &shapes)).is_empty());
+        let paths: Vec<(&BezPath, FillRule)> = shapes.iter().map(|s| (&s.path, FillRule::NonZero)).collect();
+        assert_eq!(with_limits(under, || crate::try_boolean_n(&paths, |m| m[0])), Err(PathOpsError::TooComplex));
+        assert_eq!(work::take(Work::Sweeps), 0, "refused before the sweep was built");
+        // By default 2,000 nested squares (4 x 2,000 x 2,001 = 16 million) are within it, and 3,000 (36 million) are not.
+        let (some, many) = (nested(2_000), nested(3_000));
+        assert!(sweep_fits(some.iter()));
+        work::reset();
+        assert!(!sweep_fits(many.iter()));
+        assert_eq!(work::take(Work::CoverageEntries), 4 * 3_000 * 3_001);
+        // Two inputs hold two entries for each side at most: not counted.
+        work::reset();
+        assert!(sweep_fits(nested(2).iter()));
+        assert_eq!(work::take(Work::CoverageEntries), 0);
     }
 
     /// Boxes that touch at a signed zero still overlap: -0.0 and +0.0 are the same position.
