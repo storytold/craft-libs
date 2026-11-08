@@ -1,15 +1,21 @@
 # Local linesweeper 0.5.0 copy
 
-This is the crates.io linesweeper 0.5.0 package (MIT OR Apache-2.0) with some files left out and no
-file changed. `.cargo_vcs_info.json` names the commit it was packaged from,
+This is the crates.io linesweeper 0.5.0 package (MIT OR Apache-2.0) with some files left out and the
+local patches listed below. `.cargo_vcs_info.json` names the commit it was packaged from,
 `824b0791a750f7b27b8edcbb6c6244d0e629875e`. That commit is not in the GitHub repository the manifest
 names, which is archived; its README says development moved off GitHub.
 
-Every file here except this one and `SOURCE.json` is byte for byte the file in the `.crate` archive.
-`SOURCE.json` records the hash of the `.crate` download (`source_archive_sha256`) and, for every file
-kept, the hash in the package (`source_sha256`) and the hash here (`sha256`). `upstream_repository` is
-null because no public repository this copy can name holds `upstream_revision`. `local_patches` is
-empty.
+Every file here except this one, `SOURCE.json` and the patched files below is byte for byte the file
+in the `.crate` archive. `SOURCE.json` records the hash of the `.crate` download
+(`source_archive_sha256`) and, for every file kept, the hash in the package (`source_sha256`) and the
+hash here (`sha256`). `upstream_repository` is null because no public repository this copy can name
+holds `upstream_revision`. `local_patches` describes each local patch.
+
+## Local patches
+
+| File | Change |
+|---|---|
+| `src/topology.rs` | `Topology::can_merge` merges two output segments only when the neighbor at the shared point is the adjacent piece of the same input segment. Before, after coincident segments were deleted, a piece of one input curve could be merged with a piece of another, and the output rebuilt a sub-curve from the wrong curve's parameters: two arches whose right legs agree to within about 1e-6 (area about 0.00096) gave a contour of area 900 at eps 1e-6, and a path followed by its own reverse panicked in `segs_to_path`. `segs_to_path` also starts at the first segment instead of panicking when every segment looks mergeable. The `merge_only_pieces_of_one_input_curve` and `path_followed_by_its_reverse` tests cover both inputs. |
 
 `omitted_files` lists the 43 files of the package left out here, with their hashes:
 
