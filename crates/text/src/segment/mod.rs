@@ -35,7 +35,7 @@ use unicode_linebreak::{BreakClass, BreakOpportunity, break_property};
 
 pub use kinsoku::kinsoku_allows;
 use kinsoku::{is_east_asian, soft_line_start};
-use unicode_segmentation::UnicodeSegmentation;
+use unicode_segmentation::{GraphemeCursor, UnicodeSegmentation};
 
 /// Which kinsoku (line-start and line-end) rules apply.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -157,17 +157,18 @@ pub fn emergency_breaks(text: &str, range: Range<usize>) -> Vec<usize> {
 ///   2. Always returns a valid UTF-8 char boundary in range `0..=cursor`.
 ///   3. Zero panics; zero allocations.
 pub fn prev_grapheme_offset(text: &str, cursor: usize) -> usize {
-    if cursor == 0 || text.is_empty() {
+    let mut c = cursor.min(text.len());
+    while !text.is_char_boundary(c) {
+        c = c.saturating_sub(1);
+    }
+    if c == 0 || text.is_empty() {
         return 0;
     }
-    let mut prev = 0;
-    for (start, _) in text.grapheme_indices(true) {
-        if start >= cursor {
-            break;
-        }
-        prev = start;
+    let mut gc = GraphemeCursor::new(c, text.len(), true);
+    match gc.prev_boundary(text, 0) {
+        Ok(Some(boundary)) => boundary,
+        _ => 0,
     }
-    prev
 }
 
 /// Returns the end byte offset of the extended grapheme cluster following `cursor`.
@@ -187,19 +188,21 @@ pub fn prev_grapheme_offset(text: &str, cursor: usize) -> usize {
 /// - **CONTRACT:**
 ///   1. `cursor <= text.len() && text.is_char_boundary(cursor)` is expected; out-of-bounds inputs
 ///      return `text.len()`.
-///   2. Always returns a valid UTF-8 char boundary in range `cursor..=text.len()`.
+///   2. Always returns a valid UTF-8 char boundary in range `cursor.min(text.len())..=text.len()`.
 ///   3. Zero panics; zero allocations.
 pub fn next_grapheme_offset(text: &str, cursor: usize) -> usize {
-    if cursor >= text.len() {
+    let mut c = cursor.min(text.len());
+    while !text.is_char_boundary(c) {
+        c = c.saturating_sub(1);
+    }
+    if c >= text.len() {
         return text.len();
     }
-    for (start, cluster) in text.grapheme_indices(true) {
-        let end = start + cluster.len();
-        if end > cursor {
-            return end;
-        }
+    let mut gc = GraphemeCursor::new(c, text.len(), true);
+    match gc.next_boundary(text, 0) {
+        Ok(Some(boundary)) => boundary,
+        _ => text.len(),
     }
-    text.len()
 }
 
 /// Returns the `(start, end)` byte offsets of the extended grapheme cluster enclosing `cursor`.
@@ -217,23 +220,41 @@ pub fn next_grapheme_offset(text: &str, cursor: usize) -> usize {
 ///   imprecise cursor placement within combining marks must never return partial slices.
 /// - **CONTRACT:**
 ///   1. Returns `(0, 0)` for empty text.
-///   2. Always returns valid UTF-8 char boundaries with `0 <= start <= cursor <= end <= text.len()`.
+///   2. Always returns valid UTF-8 char boundaries with `0 <= start <= cursor.min(text.len()) <= end <= text.len()`.
 ///   3. Zero panics; zero allocations.
 pub fn grapheme_bounds(text: &str, cursor: usize) -> (usize, usize) {
     if text.is_empty() {
         return (0, 0);
     }
-    let mut last_start = 0;
-    let mut last_end = 0;
-    for (start, cluster) in text.grapheme_indices(true) {
-        let end = start + cluster.len();
-        if cursor < end {
-            return (start, end);
-        }
-        last_start = start;
-        last_end = end;
+    let mut c = cursor.min(text.len());
+    while !text.is_char_boundary(c) {
+        c = c.saturating_sub(1);
     }
-    (last_start, last_end)
+    if c >= text.len() {
+        return (prev_grapheme_offset(text, text.len()), text.len());
+    }
+    let mut gc = GraphemeCursor::new(c, text.len(), true);
+    match gc.is_boundary(text, 0) {
+        Ok(true) => {
+            let end = match gc.next_boundary(text, 0) {
+                Ok(Some(end)) => end,
+                _ => text.len(),
+            };
+            (c, end)
+        }
+        _ => {
+            let start = match gc.prev_boundary(text, 0) {
+                Ok(Some(start)) => start,
+                _ => 0,
+            };
+            let mut gc_end = GraphemeCursor::new(start, text.len(), true);
+            let end = match gc_end.next_boundary(text, 0) {
+                Ok(Some(end)) => end,
+                _ => text.len(),
+            };
+            (start, end)
+        }
+    }
 }
 
 /// Whether a line may break between `before` and `after`, given whether UAX #14 (or the word
