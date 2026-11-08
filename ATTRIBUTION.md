@@ -85,4 +85,5 @@ The pure-Rust video codec crates derive and extract tables strictly from normati
 | Crate / file | Specification / Author | Extraction / Source | Licence | Use |
 | --- | --- | --- | --- | --- |
 | `crates/dnx/tools/extract_tables.py`, `crates/dnx/src/tables.rs` | SMPTE ST 2019-1:2016 | Extracted from SMPTE ST 2019-1 document text via committed Python script | SMPTE normative constants | DNxHD / DNxHR macroblock, VLC, and quantization tables |
+| `crates/vp8/tools/extract_tables.py`, `crates/vp8/src/tables.rs` | IETF RFC 6386 (VP8) | Extracted from RFC 6386 normative specification text | RFC 6386 / IETF Trust | VP8 tree probabilities and quantizer tables |
 

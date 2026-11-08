@@ -1234,6 +1234,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-vp8"
+version = "0.1.0"
+dependencies = [
+ "craft-testkit",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-web-api"
 version = "0.1.0"
 dependencies = [
