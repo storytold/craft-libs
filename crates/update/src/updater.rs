@@ -405,8 +405,9 @@ impl Updater {
     /// Starts the helper of an installed update that is still waiting for the app to close, so
     /// that the update installs once the app has exited. Call it when the app exits by a path
     /// that did not come through [`Action::Close`]; dropping the `Updater` calls it too. Later
-    /// calls do nothing. An installation still running at the first call starts its helper itself
-    /// when it finishes.
+    /// calls do nothing. Call it only as the app exits: after the call, an installation that
+    /// finishes starts its helper itself and no longer reports through [`Updater::tick`]. An
+    /// installation still running when the process ends does not finish, and installs nothing.
     pub fn start_pending_update(&mut self) {
         // Held while the channel is read: a worker sent its outcome before, and it is read here,
         // or it sends after and starts its helper itself.

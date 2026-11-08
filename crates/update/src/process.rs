@@ -116,7 +116,8 @@ fn read_all<R: std::io::Read + Send + 'static>(pipe: Option<R>) -> std::io::Resu
 }
 
 /// Starts `cmd` without waiting for it, and reaps it when it exits. The process keeps running
-/// when no thread can be started to reap it; it is then reaped by a later call once it exits.
+/// when no thread can be started to reap it. It is then reaped when a later call starts another
+/// process after it has exited; until then, on Unix, it stays in the process table.
 pub fn spawn_detached(mut cmd: Command) -> Result<(), String> {
     let child = cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn().map_err(|e| format!("couldn't start it ({e})"))?;
     reap_in_background(child, "a started process");
@@ -128,7 +129,8 @@ pub fn spawn_detached(mut cmd: Command) -> Result<(), String> {
 static UNREAPED: Mutex<Vec<Child>> = Mutex::new(Vec::new());
 
 /// Waits for `child` on its own thread. When no thread can be started, `child` is kept in
-/// [`UNREAPED`] and waited for by a later call once it has exited.
+/// [`UNREAPED`]. Each call first waits for the kept processes that have exited, so a kept process
+/// is waited for at the first call after it exits.
 fn reap_in_background(child: Child, what: &str) {
     reap_in_background_with(child, what, |wait| std::thread::Builder::new().name("reap-child".into()).spawn(wait).map(drop));
 }
@@ -460,18 +462,32 @@ mod tests {
     /// does not stay in the process table.
     #[test]
     fn a_process_without_a_waiting_thread_is_reaped_later() {
-        let mut child = command("cat").stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::null()).spawn().unwrap();
+        let mut child = command("cat").stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn().unwrap();
         let stdin = child.stdin.take().unwrap();
+        let mut stdout = child.stdout.take().unwrap();
         let pid = child.id();
         let kept = || UNREAPED.lock().unwrap_or_else(PoisonError::into_inner).iter().any(|c| c.id() == pid);
         reap_in_background_with(child, "a test process", |_wait| Err(std::io::Error::other("no threads")));
         assert!(kept(), "a running process with no thread to wait for it is kept");
-        // `cat` exits when its input closes.
+        // `cat` exits when its input closes, and its output closes as it exits.
         drop(stdin);
-        while kept() {
-            reap_exited();
+        let _ = std::io::copy(&mut stdout, &mut std::io::sink());
+        // `ps` shows an exited process that nothing has waited for in state Z, and nothing once it
+        // has been waited for (another test's call may do that first).
+        let state = || {
+            let out = std::process::Command::new("ps").args(["-o", "stat=", "-p", &pid.to_string()]).output().unwrap();
+            String::from_utf8_lossy(&out.stdout).trim().to_owned()
+        };
+        loop {
+            let now = state();
+            if now.is_empty() || now.starts_with('Z') {
+                break;
+            }
             std::thread::yield_now();
         }
+        reap_exited();
+        assert!(!kept(), "an exited process is waited for by the next call");
+        assert_eq!(state(), "", "the waited-for process has left the process table");
     }
 }
 
