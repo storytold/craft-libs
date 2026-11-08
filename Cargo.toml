@@ -56,6 +56,7 @@ craft-vectorcraft-format = { path = "crates/vectorcraft-format" }
 craft-web-api = { path = "crates/web-api" }
 craft-window = { path = "crates/window" }
 craft-web-host = { path = "crates/web-host" }
+craft-dnx = { path = "crates/dnx" }
 egui = { version = "0.37", default-features = false }
 rayon = "1"
 serde = { version = "1", features = ["derive"] }

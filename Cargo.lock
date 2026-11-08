@@ -856,6 +856,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-dnx"
+version = "0.1.0"
+dependencies = [
+ "craft-testkit",
+ "rayon",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-doc"
 version = "0.1.0"
 dependencies = [
