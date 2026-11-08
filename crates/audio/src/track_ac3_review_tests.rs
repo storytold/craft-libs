@@ -113,7 +113,7 @@ fn ac3_packet_timing_distinguishes_short_blocks_and_programmes() {
     assert_eq!(ac3_packet_frames(&aggregate).unwrap(), Some(256 + 1536));
     assert_eq!(ac3_packet_frames(&short[..8]).unwrap(), Some(256));
     assert_eq!(ac3_packet_frames(&[]).unwrap(), None);
-    assert_eq!(ac3_packet_frames(&[short.as_slice(), &[0; 8]].concat()).unwrap(), None);
+    assert_eq!(ac3_packet_frames(&[short.as_slice(), &[0; 8]].concat()).unwrap(), Some(256));
 }
 
 #[test]
@@ -128,4 +128,70 @@ fn ac3_first_success_refines_unconfigured_metadata_atomically() {
     // Equal channel counts do not make dual mono and stereo the same speaker assignment.
     let dual = packets(Codec::Eac3, CodingMode::DualMono, 32_000);
     assert!(dec.decode(&dual[0]).is_err());
+}
+
+#[test]
+fn crc_damaged_eac3_rate_header_cannot_lock_track_metadata() {
+    let good = packets(Codec::Eac3, CodingMode::Stereo, 48_000);
+    let mut corrupt = good[0].clone();
+    // Same complete syncframe length but a corrupted fscod advertises 32 kHz.
+    corrupt[4] = (corrupt[4] & 0x3f) | 0x80;
+    assert_eq!(ac3::parse_header(&corrupt).unwrap().sample_rate, 32_000);
+    for lookahead in [vec![corrupt.clone(), good[0].clone()], vec![[corrupt.as_slice(), good[0].as_slice()].concat()]] {
+        let refs: Vec<&[u8]> = lookahead.iter().map(Vec::as_slice).collect();
+        let mut dec = TrackDecoder::new(&CodecParams::new(CodecId::Eac3), &refs).unwrap();
+        assert_eq!(dec.sample_rate(), 48_000, "damaged CRC must not establish the track format");
+        assert!(dec.decode(&good[0]).is_ok());
+    }
+}
+
+#[test]
+fn damaged_packet_suffix_preserves_known_primary_concealment_duration() {
+    let frames = packets(Codec::Eac3, CodingMode::Stereo, 48_000);
+    let mut dec = TrackDecoder::new(&CodecParams::new(CodecId::Eac3), &[&frames[0]]).unwrap();
+    dec.decode(&frames[0]).unwrap();
+    let broken = [frames[0].as_slice(), frames[1].as_slice(), &[0; 8]].concat();
+    assert!(dec.decode(&broken).is_err());
+    let silence = dec.conceal(Some(&broken)).unwrap();
+    assert_eq!(silence.frames(), 3072, "known prefix duration must not become the previous packet's1536");
+    assert!(silence.channels.iter().flatten().all(|&s| s == 0.0));
+    let mut dependent = frames[0].clone();
+    dependent[2] = (dependent[2] & 0x3f) | 0x40;
+    assert_eq!(dec.conceal(Some(&[dependent.as_slice(), &[0; 8]].concat())).unwrap().frames(), 0);
+    assert_eq!(dec.conceal(Some(&[0; 8])).unwrap().frames(), 1536);
+}
+
+#[test]
+fn ac3_metadata_integrity_checks_both_crc_regions() {
+    let good = packets(Codec::Ac3, CodingMode::Stereo, 44_100);
+    let h = ac3::parse_header(&good[0]).unwrap();
+    assert!(ac3::frame_has_integrity(&good[0], h));
+    for index in [6, good[0].len() - 3] {
+        let mut bad = good[0].clone();
+        bad[index] ^= 1;
+        let dec = TrackDecoder::new(&CodecParams::new(CodecId::Ac3), &[&bad]).unwrap();
+        assert!(matches!(dec.inner, Inner::Ac3 { format: None, .. }));
+        let dec = TrackDecoder::new(&CodecParams::new(CodecId::Ac3), &[&bad, &good[0]]).unwrap();
+        assert_eq!(dec.sample_rate(), 44_100);
+    }
+}
+
+#[test]
+fn zeroed_crc_cannot_establish_metadata_without_lookahead() {
+    for codec in [Codec::Ac3, Codec::Eac3] {
+        let good = packets(codec, CodingMode::Stereo, 48_000);
+        let mut bad = good[0].clone();
+        let end = bad.len();
+        bad[end - 2..].fill(0);
+        if codec == Codec::Ac3 {
+            bad[2..4].fill(0);
+        }
+        let header = ac3::parse_header(&bad).unwrap();
+        assert!(!ac3::frame_has_integrity(&bad, header));
+        let mut dec = TrackDecoder::new(&CodecParams::new(CodecId::Ac3), &[]).unwrap();
+        assert!(dec.decode(&bad).is_err(), "CRC words of zero do not disable metadata validation");
+        assert!(matches!(dec.inner, Inner::Ac3 { format: None, .. }));
+        assert!(dec.decode(&good[0]).is_ok());
+        assert_eq!(dec.sample_rate(), 48_000);
+    }
 }

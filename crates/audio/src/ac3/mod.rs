@@ -154,6 +154,24 @@ pub fn parse_header(b: &[u8]) -> Result<Header> {
     Ok(Header { sample_rate, bitrate_kbps: kbps, frame_bytes: words as usize * 2, bsid, acmod, lfeon, blocks: 6, strmtyp: 0, substreamid: 0 })
 }
 
+/// Check a complete syncframe before its metadata establishes a track's format. AC-3's
+/// first CRC covers the word-rounded 5/8 boundary (ETSI §6.10); the whole-frame CRC also
+/// protects the remainder. E-AC-3 has the single whole-frame CRC (§E.1.6).
+pub(crate) fn frame_has_integrity(bytes: &[u8], header: Header) -> bool {
+    let Some(frame) = bytes.get(..header.frame_bytes).filter(|frame| frame.len() >= 8) else { return false };
+    if program::crc16(&frame[2..]) != 0 {
+        return false;
+    }
+    if !header.is_eac3() {
+        let words = frame.len() / 2;
+        let boundary = 2 * ((words >> 1) + (words >> 3));
+        if program::crc16(&frame[2..boundary]) != 0 {
+            return false;
+        }
+    }
+    true
+}
+
 /// MSB-first bit reader; reads past the end give zeros.
 struct Bits<'a> {
     d: &'a [u8],

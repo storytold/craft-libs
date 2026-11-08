@@ -21,6 +21,9 @@ mod ac3_timing;
 #[cfg(all(test, feature = "ac3-encode"))]
 mod id3_tests;
 
+#[cfg(all(test, feature = "ac3-encode", feature = "eac3-encode"))]
+mod lookahead_tests;
+
 /// Corrupt packets tolerated before a stream that has produced nothing is an error.
 const MAX_ERRORS: usize = 1000;
 /// ID3v2 tags skipped at the start of a stream; real files have one.
@@ -710,6 +713,28 @@ fn audio_track(kinds: impl Iterator<Item = bool>, n: Option<usize>) -> Option<Re
     Some(audio.get(n).copied().ok_or_else(|| AudioError::Unsupported(format!("no audio track {n}: the file has {}", audio.len()))))
 }
 
+/// Retain source failures while probing bounded lookahead. A later readable primary may
+/// establish AC-3 metadata; otherwise report the I/O failure rather than blaming the file.
+/// Unsupported non-AC-3 codecs keep their existing fallback path.
+fn track_lookahead(params: &CodecParams, reads: impl Iterator<Item = Result<Vec<u8>>>) -> Option<Result<(Vec<Vec<u8>>, TrackDecoder)>> {
+    let mut packets = Vec::new();
+    let mut first_io = None;
+    for read in reads.take(crate::track::LOOKAHEAD_PACKETS) {
+        match read {
+            Ok(packet) => packets.push(packet),
+            Err(error @ AudioError::Io(_)) if first_io.is_none() => first_io = Some(error),
+            Err(_) => {}
+        }
+    }
+    let probe = match TrackDecoder::new(params, &packets.iter().map(Vec::as_slice).collect::<Vec<_>>()) {
+        Ok(probe) if probe.stream_format_known() => probe,
+        Ok(_) => return Some(Err(first_io.unwrap_or_else(|| AudioError::Malformed("no primary AC-3 header within bounded track lookahead".into())))),
+        Err(error) if matches!(params.codec, CodecId::Ac3 | CodecId::Eac3) => return Some(Err(first_io.unwrap_or(error))),
+        Err(_) => return None,
+    };
+    Some(Ok((packets, probe)))
+}
+
 /// An MP4 / QuickTime file's audio track, if its codec is native. Samples that claim to lie
 /// beyond the end of the file are refused rather than read leniently.
 fn open_mp4<'a>(src: &Src<'a>, container: Container, track: Option<usize>) -> Option<Result<Native<'a>>> {
@@ -735,14 +760,12 @@ fn open_mp4<'a>(src: &Src<'a>, container: Container, track: Option<usize>) -> Op
         return Some(Err(AudioError::Malformed("MP4 sample is larger than the file".into())));
     }
     let params = t.codec_params();
-    let lookahead: Vec<Vec<u8>> =
-        (0..t.samples.len().min(crate::track::LOOKAHEAD_PACKETS)).filter_map(|i| file.read_sample(src, track, i).ok()).collect();
+    let (lookahead, probe) = match track_lookahead(&params, (0..t.samples.len()).map(|i| file.read_sample(src, track, i).map_err(mp4_error)))? {
+        Ok(probed) => probed,
+        Err(error) => return Some(Err(error)),
+    };
     let timescale = t.timescale;
     // Probe the decoder for the output rate before the timing is worked out.
-    let probe = TrackDecoder::new(&params, &lookahead.iter().map(Vec::as_slice).collect::<Vec<_>>()).ok()?;
-    if !probe.stream_format_known() {
-        return Some(Err(AudioError::Malformed("no primary AC-3 header within bounded track lookahead".into())));
-    }
     let rate = probe.sample_rate();
     // A leading media edit (AAC priming, Opus pre-skip) is skipped, and the edit's duration is the
     // presentation length. Empty edits and multi-segment lists play the media as it is.
@@ -841,12 +864,10 @@ fn open_mkv<'a>(src: &Src<'a>, container: Container, track: Option<usize>) -> Op
         return None;
     }
     let params = t.codec_params();
-    let lookahead: Vec<Vec<u8>> =
-        (0..t.samples.len().min(crate::track::LOOKAHEAD_PACKETS)).filter_map(|i| demux.read_sample(track, i).ok()).collect();
-    let probe = TrackDecoder::new(&params, &lookahead.iter().map(Vec::as_slice).collect::<Vec<_>>()).ok()?;
-    if !probe.stream_format_known() {
-        return Some(Err(AudioError::Malformed("no primary AC-3 header within bounded track lookahead".into())));
-    }
+    let (lookahead, probe) = match track_lookahead(&params, (0..t.samples.len()).map(|i| demux.read_sample(track, i).map_err(mkv_error)))? {
+        Ok(probed) => probed,
+        Err(error) => return Some(Err(error)),
+    };
     let rate = probe.sample_rate();
     let ac3_index = if matches!(params.codec, CodecId::Ac3 | CodecId::Eac3) {
         match ac3_timing::mkv_index(src, t, rate) {
@@ -890,10 +911,10 @@ fn open_mkv<'a>(src: &Src<'a>, container: Container, track: Option<usize>) -> Op
         let end = u64::try_from(s.pts.saturating_add(i64::try_from(duration).ok()?).saturating_sub(start)).ok()?;
         Some(rescale_round(end.saturating_mul(num), den, u64::from(rate)))
     });
-    // Matroska block durations are rounded to container ticks, not exact audio samples.
-    // Exact primary counts, CodecDelay and DiscardPadding determine AC-3 presentation length.
+    // Exact counts preserve tick rounding; a meaningful final BlockDuration still trims
+    // the presentation after accounting for CodecDelay and interior DiscardPadding.
     let frames = match &ac3_index {
-        Some(index) => Some(index.total.saturating_sub(skip)),
+        Some(index) => Some(ac3_timing::mkv_presentation_frames(index, t, rate, skip)),
         None => frames,
     };
     let frames_of = match ac3_index {

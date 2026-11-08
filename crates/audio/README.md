@@ -363,7 +363,7 @@ match craft_audio::decode(&bytes, None) {
   7.1 programme is presented as its 5.1 compatibility downmix. Use `ac3::ProgrammeDecoder`
   with an explicit expected layout for complete six-block 7.1 access units; see below.
   Adaptive hybrid transform and enhanced coupling return `Unsupported`.
-- Native AC-3/E-AC-3 container readers require a primary header within the first eight
+- Native AC-3/E-AC-3 container readers require a complete CRC-valid primary syncframe within the first eight
   packets before establishing track metadata. Variable syncframe counts are indexed for
   exact seeking; unreadable packet timing prevents exact Matroska seeking. Matroska laced
   AC-3 blocks carrying positive `DiscardPadding`, and negative beginning padding on any

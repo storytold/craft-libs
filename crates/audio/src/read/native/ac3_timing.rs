@@ -81,9 +81,9 @@ pub(super) fn mkv_index(src: &Src<'_>, track: &super::matroska::Track, rate: u32
     let prefix = track.stripped_header().unwrap_or_default();
     let mut total = 0u64;
     let mut last_padding = None;
+    let mut exact = true;
     for sample in &track.samples {
         starts.push(total);
-        let Some(frames) = prefixed_packet_frames(src, sample.offset, u64::from(sample.size), prefix, rate)? else { return Ok(None) };
         let padding = match last_padding {
             Some((offset, padding)) if offset == sample.block_offset => padding,
             _ => {
@@ -95,10 +95,42 @@ pub(super) fn mkv_index(src: &Src<'_>, track: &super::matroska::Track, rate: u32
         if padding > 0 && sample.lace > 0 {
             return Err(AudioError::Unsupported("AC-3 Matroska laced blocks with DiscardPadding".into()));
         }
+        // Losing exact packet timing must not bypass unsupported padding in later blocks.
+        // Continue the bounded metadata scan even after falling back to container timestamps.
+        if !exact {
+            continue;
+        }
+        let Some(frames) = prefixed_packet_frames(src, sample.offset, u64::from(sample.size), prefix, rate)? else {
+            exact = false;
+            continue;
+        };
         let trim = super::rescale_round(padding, 1_000_000_000, u64::from(rate));
         total = total.checked_add(frames.saturating_sub(trim)).ok_or_else(|| AudioError::TooLarge("AC-3 timeline overflow".into()))?;
     }
-    Ok(Some(Index { starts, total }))
+    Ok(exact.then_some(Index { starts, total }))
+}
+
+/// Keep an explicit final block trim without turning rounded container ticks into lost PCM.
+/// Packet starts already account for interior DiscardPadding; using the final packet's own
+/// duration avoids reintroducing timestamp rounding or counting earlier padding twice.
+pub(super) fn mkv_presentation_frames(index: &Index, track: &super::matroska::Track, rate: u32, skip: u64) -> u64 {
+    let mut total = index.total;
+    let (num, den) = track.timebase;
+    if den > 0
+        && let (Some(sample), Some(&start)) = (track.samples.last(), index.starts.last())
+        && sample.duration > 0
+    {
+        let scale = u128::from(num) * u128::from(rate);
+        let declared = (u128::from(sample.duration).saturating_mul(scale).saturating_add(u128::from(den) / 2)) / u128::from(den);
+        let declared = u64::try_from(declared).unwrap_or(u64::MAX);
+        // A duration can be the difference of two rounded tick endpoints: allow one tick,
+        // rounded upward to a whole sample, rather than a fixed codec-sized tolerance.
+        let rounding = u64::try_from(scale.div_ceil(u128::from(den))).unwrap_or(u64::MAX);
+        if total.saturating_sub(start).saturating_sub(declared) > rounding {
+            total = start.saturating_add(declared).min(total);
+        }
+    }
+    total.saturating_sub(skip)
 }
 
 /// Parse a finite EBML element envelope with at most twelve header bytes.

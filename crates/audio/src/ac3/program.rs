@@ -153,7 +153,7 @@ fn checked_frame(bytes: &[u8]) -> Result<Header> {
 }
 
 // ETSI TS 102 366 E.1.6: polynomial x^16+x^15+x^2+1; callers exclude only the syncword.
-fn crc16(bytes: &[u8]) -> u16 {
+pub(super) fn crc16(bytes: &[u8]) -> u16 {
     let mut crc = 0u16;
     for &byte in bytes {
         crc ^= u16::from(byte) << 8;

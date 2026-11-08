@@ -276,6 +276,9 @@ impl TrackDecoder {
                     while !rest.is_empty() {
                         count_ac3_syncframe(&mut syncframes)?;
                         let f = dec.decode(rest)?;
+                        if candidate.is_none() && f.header.is_primary() && !ac3::frame_has_integrity(rest, f.header) {
+                            return Err(AudioError::Malformed("AC-3 metadata frame CRC mismatch".into()));
+                        }
                         rest = rest.get(f.header.frame_bytes..).ok_or_else(|| AudioError::Malformed("truncated AC-3 packet".into()))?;
                         if f.header.is_primary() {
                             let current = ac3_format(&f.header);
@@ -474,7 +477,7 @@ fn first_ac3_primary(mut packet: &[u8]) -> Result<Option<ac3::Header>> {
         let Ok(h) = ac3::parse_header(packet) else { return Ok(None) };
         // A truncated header can advertise another format; wait for a complete frame.
         let Some(rest) = packet.get(h.frame_bytes..) else { return Ok(None) };
-        if h.is_primary() {
+        if h.is_primary() && ac3::frame_has_integrity(packet, h) {
             return Ok(Some(h));
         }
         packet = rest;
@@ -492,8 +495,9 @@ fn count_ac3_syncframe(count: &mut usize) -> Result<()> {
 }
 
 /// Sum primary-programme samples, excluding dependent extensions and other programmes.
-/// A readable truncated last frame still declares its concealment duration; an unreadable
-/// header leaves timing unknown rather than inventing a six-block duration.
+/// A readable truncated last frame still declares its concealment duration. An unreadable
+/// suffix cannot erase a known prefix: preserve its primary count (including zero for dependent
+/// programmes), without guessing a duration for the suffix. No readable header means unknown.
 #[cfg(feature = "ac3-decode")]
 pub(crate) fn ac3_packet_frames(mut packet: &[u8]) -> Result<Option<usize>> {
     if packet.is_empty() {
@@ -501,11 +505,13 @@ pub(crate) fn ac3_packet_frames(mut packet: &[u8]) -> Result<Option<usize>> {
     }
     let mut frames = 0usize;
     let mut syncframes = 0;
+    let mut parsed_header = false;
     while !packet.is_empty() {
         count_ac3_syncframe(&mut syncframes)?;
         let Ok(h) = ac3::parse_header(packet) else {
-            return Ok(None);
+            return Ok(parsed_header.then_some(frames));
         };
+        parsed_header = true;
         if h.is_primary() {
             frames = frames
                 .checked_add(h.samples())
