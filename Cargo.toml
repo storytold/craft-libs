@@ -62,6 +62,7 @@ craft-prores = { path = "crates/prores" }
 craft-h264enc = { path = "crates/h264enc" }
 craft-hevcenc = { path = "crates/hevcenc" }
 craft-vp9enc = { path = "crates/vp9enc" }
+craft-av1enc = { path = "crates/av1enc" }
 egui = { version = "0.37", default-features = false }
 rayon = "1"
 serde = { version = "1", features = ["derive"] }

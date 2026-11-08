@@ -1,0 +1,41 @@
+name: Shared AV1 Encoder
+
+on:
+  push:
+    branches: [main]
+    paths: ["crates/av1enc/**", "Cargo.toml", "Cargo.lock", ".github/workflows/av1enc.yml"]
+  pull_request:
+    paths: ["crates/av1enc/**", "Cargo.toml", "Cargo.lock", ".github/workflows/av1enc.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: shared-av1enc-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: "1.95"
+          components: rustfmt, clippy
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: craft-av1enc-${{ matrix.os }}
+      - run: cargo fmt -p craft-av1enc --check
+      - run: cargo clippy -p craft-av1enc --all-targets --locked -- -D warnings
+      - run: cargo test -p craft-av1enc --locked
+      - run: cargo check -p craft-av1enc --locked --target wasm32-unknown-unknown

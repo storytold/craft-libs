@@ -88,4 +88,5 @@ The pure-Rust video codec crates derive and extract tables strictly from normati
 | `crates/vp8/tools/extract_tables.py`, `crates/vp8/src/tables.rs` | IETF RFC 6386 (VP8) | Extracted from RFC 6386 normative specification text | RFC 6386 / IETF Trust | VP8 tree probabilities and quantizer tables |
 | `crates/hevcenc/src/tables.rs` | ITU-T H.265 | ITU-T Recommendation H.265 | ITU-T normative tables | HEVC scan orders, deblock thresholds, and scaling matrices |
 | `crates/vp9enc/src/tables.rs` | VP9 Bitstream & Decoding Process Specification | VP9 specification text | MIT OR Apache-2.0 | VP9 scan orders, intra mode contexts, and MV contexts |
+| `crates/av1enc/src/tables.rs`, `crates/av1enc/src/cdf.rs` | Alliance for Open Media (AOMedia) | AV1 Bitstream & Decoding Process Specification v1.0.0 with Errata 1 | Alliance for Open Media Patent and Copyright License (MIT OR Apache-2.0) | Normative AV1 transform, scan, and symbol CDF tables |
 
