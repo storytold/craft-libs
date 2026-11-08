@@ -70,10 +70,12 @@ fn texts(d: &Driver) -> Vec<String> {
 
 const CANVAS: Pos2 = pos2(600.0, 400.0);
 
+/// The current flyout rectangle recorded in egui's area memory.
 fn flyout_rect<C: DockContent<u32>>(d: &DockDriver<u32, C>) -> Rect {
     d.ctx.memory(|m| m.area_rect(d.id.with("flyout"))).unwrap()
 }
 
+/// Build two iconic groups on either side of the canvas for anchored-resize tests.
 fn iconic_on_side(right: bool) -> Layout<u32> {
     let mut layout = docked(&[&[1, 2], &[3]], true);
     if right {

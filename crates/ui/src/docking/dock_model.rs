@@ -703,6 +703,8 @@ impl<P: Clone + Eq + Hash> Layout<P> {
         }
     }
 
+    /// Detach the panel's group, preserving dock dimensions and floating-window geometry.
+    /// A stack entry becomes a single-panel group with its saved height.
     fn take_group(&mut self, panel: &P) -> Result<Moving<P>, DockError> {
         let place = self.place(panel).ok_or(DockError::MissingPanel)?;
         match place {

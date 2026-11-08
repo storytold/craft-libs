@@ -1416,6 +1416,7 @@ fn check_leaf<'a, P: Eq + Hash>(node: &'a Node<P>, seen: &mut HashSet<&'a P>) ->
     }
 }
 
+/// Validate group dimensions and nonempty membership, then check the active tab and uniqueness.
 fn check_group<'a, P: Eq + Hash>(group: &'a Group<P>, seen: &mut HashSet<&'a P>) -> Result<(), DockError> {
     if group.panels.is_empty() || !valid_height(group.height) || group.flyout_width.is_some_and(|w| !valid_width(w)) {
         return Err(DockError::InvalidGeometry);
