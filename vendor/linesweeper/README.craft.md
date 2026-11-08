@@ -1,15 +1,21 @@
 # Local linesweeper 0.5.0 copy
 
-This is the crates.io linesweeper 0.5.0 package (MIT OR Apache-2.0) with some files left out and no
-file changed. `.cargo_vcs_info.json` names the commit it was packaged from,
+This is the crates.io linesweeper 0.5.0 package (MIT OR Apache-2.0) with some files left out and the
+local patches listed below. `.cargo_vcs_info.json` names the commit it was packaged from,
 `824b0791a750f7b27b8edcbb6c6244d0e629875e`. That commit is not in the GitHub repository the manifest
 names, which is archived; its README says development moved off GitHub.
 
-Every file here except this one and `SOURCE.json` is byte for byte the file in the `.crate` archive.
-`SOURCE.json` records the hash of the `.crate` download (`source_archive_sha256`) and, for every file
-kept, the hash in the package (`source_sha256`) and the hash here (`sha256`). `upstream_repository` is
-null because no public repository this copy can name holds `upstream_revision`. `local_patches` is
-empty.
+Every file here except this one, `SOURCE.json` and the patched files below is byte for byte the file
+in the `.crate` archive. `SOURCE.json` records the hash of the `.crate` download
+(`source_archive_sha256`) and, for every file kept, the hash in the package (`source_sha256`) and the
+hash here (`sha256`). `upstream_repository` is null because no public repository this copy can name
+holds `upstream_revision`. `local_patches` describes each local patch.
+
+## Local patches
+
+| File | Change |
+|---|---|
+| `src/position.rs` | `PositionedOutputSeg::from_cubic` and `from_quad`, and the copied pieces of the strict layout (`next_subsegment`), cut the input curve at the points nearest the output piece's end points, found by Newton steps from the parameters `solve_t_for_y` gives, and move the piece onto its end points: each end moves sideways with its handle (a quadratic's control point by the mean of its ends' moves), and the heights are mapped linearly, so the piece stays monotonic in `y`. `from_cubic` and `from_quad` used to move the inner control points sideways by their height's share of the gap at each end, and `next_subsegment` moved only the end points. Where a curve is almost flat at an end, a tiny error in that end's height is a large gap: the union of `M0,0 C0,1000 300,1000 1000,1000 L1000,2000 L-1000,2000 Z` with the rectangle `M998.37,500 L1500,500 L1500,1500 L998.37,1500 Z` at eps 1e-6 gave an outline 1.05 from both inputs and 815 too small in area, and with the rectangle at x = 990.37 the strict layout gave an outline 9.9e-4 from both inputs. Code comments label the changes `Craft patch (flat-end shear)`. The `flat_end_shift_stays_near_the_end` test places steep-to-flat and flat-to-steep cubics and quadratics between end points moved along their flat ends, `flat_end_pieces_stay_monotonic` places a quadratic and a cubic between end points off the curve and checks that their heights do not decrease or pass the end point, `flat_end_union_stays_on_the_inputs` checks the union of that shape with a copy moved by (-3.26e-6, -4.66e-8), and `flat_end_crossing_stays_on_the_inputs` checks the unions with the two rectangles in both layouts. |
 
 `omitted_files` lists the 43 files of the package left out here, with their hashes:
 
