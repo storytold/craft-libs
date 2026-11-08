@@ -252,15 +252,22 @@ impl Encoder {
             BitrateMode::Vbr(_) => 0,
         };
         // Compare the exact bits per frame, `b * 1024 / rate`, against what a frame can hold: at
-        // most 6144 bits per channel (the decoder buffer), and at least the 48 bits per channel a
-        // silent frame takes. Outside that range the encoder cannot keep the requested rate.
+        // most 6144 bits per channel (the decoder buffer), and at least what a silent frame takes:
+        // 48 bits per channel, plus the program config that ADTS repeats in every 7-channel frame.
+        // Outside that range the encoder cannot keep the requested rate.
         if let BitrateMode::Cbr(b) = cfg.mode {
             let per_frame = b as u64 * FRAME_LEN as u64;
             let rate = cfg.sample_rate as u64;
-            if b < 1000 * cfg.channels as u32
-                || per_frame > max_frame_bits as u64 * rate
-                || per_frame < MIN_FRAME_BITS_PER_CHANNEL * cfg.channels as u64 * rate
-            {
+            let pce_bits = match &asc.pce {
+                Some(p) if cfg.adts => {
+                    let mut bw = BitWriter::new();
+                    let _ = p.write(&mut bw); // its own program config, which fits
+                    3 + bw.bit_len() as u64
+                }
+                _ => 0,
+            };
+            let min_frame_bits = MIN_FRAME_BITS_PER_CHANNEL * cfg.channels as u64 + pce_bits;
+            if b < 1000 * cfg.channels as u32 || per_frame > max_frame_bits as u64 * rate || per_frame < min_frame_bits * rate {
                 return Err(Error::InvalidSettings("bitrate out of range for the channel count and sample rate"));
             }
         }
@@ -818,11 +825,11 @@ impl Encoder {
             }
         }
         if let BitrateMode::Cbr(_) = self.cfg.mode {
-            let projected = ((bw.bit_len() as i64 + 3 + 7) / 8) * 8;
-            // `write_fill` may write 8 bits more than asked; keep the byte-aligned unit within
-            // `max_frame_bits`.
-            let room = self.max_frame_bits - projected - 8;
-            let excess = (self.level + mean - projected - if last { 0 } else { self.res_max }).min(room);
+            // Fill up to the bits this unit should end at, never past `max_frame_bits`. `write_fill`
+            // ends at most 6 bits short and never over, so the byte-aligned unit ends within the
+            // target's byte, and exactly at `max_frame_bits` when that is the target.
+            let target_end = (self.level + mean - if last { 0 } else { self.res_max }).min(self.max_frame_bits);
+            let excess = target_end - (bw.bit_len() as i64 + 3);
             if excess > 0 {
                 self.stats.fill_bits += write_fill(&mut bw, excess as u64);
             }
@@ -858,13 +865,14 @@ impl Encoder {
     }
 }
 
-/// Write fill elements totalling at least `bits - 7` bits (at most `bits + 8`); returns bits written.
+/// Write fill elements totalling between `bits - 6` and `bits` bits; returns bits written.
 fn write_fill(bw: &mut BitWriter, bits: u64) -> u64 {
     let start = bw.bit_len() as u64;
     let mut left = bits as i64;
     while left >= 7 {
-        let n = (((left - 7) / 8) as usize).min(269);
-        let n = if n >= 15 && (left - 15) / 8 < 15 { 14 } else { n };
+        // An element of n payload bytes is 7 + 8n bits for n < 15, and 15 + 8n with the escape
+        // count. Each element is at most `left` bits, so the total never passes `bits`.
+        let n = if left >= 15 + 8 * 15 { (((left - 15) / 8) as usize).min(269) } else { (((left - 7) / 8) as usize).min(14) };
         bw.write_bits(6, 3);
         if n >= 15 {
             bw.write_bits(15, 4);
@@ -880,9 +888,6 @@ fn write_fill(bw: &mut BitWriter, bits: u64) -> u64 {
         }
         let el = 7 + if n >= 15 { 8 } else { 0 } + 8 * n as i64;
         left -= el;
-        if n == 0 {
-            break;
-        }
     }
     bw.bit_len() as u64 - start
 }
@@ -944,6 +949,45 @@ mod tests {
                 let max = units.iter().map(Vec::len).max().unwrap_or(0);
                 assert!(max <= 768 * ch, "{rate} Hz, {ch} ch, {bps} b/s: {max}-byte access unit");
             }
+        }
+    }
+
+    #[test]
+    fn the_lowest_accepted_cbr_rate_holds_a_silent_frame() {
+        // The full bandwidth makes the largest silent frames; ADTS adds the program config to every
+        // 7-channel frame.
+        let sil = vec![0f32; 96_000];
+        for ch in 1..=8 {
+            for adts in [false, true] {
+                let cfg = |b| EncoderConfig::cbr(96_000, ch, b).with_adts(adts).with_bandwidth(Some(47_040));
+                let Some(b) = (1000..20_000).map(|k| k * 10).find(|&b| Encoder::new(cfg(b)).is_ok()) else { panic!("no rate accepted") };
+                let budget = b as usize * FRAME_LEN / 96_000;
+                let header = if adts { 56 } else { 0 };
+                let units = encode_all(cfg(b), &sil);
+                let max = units[1..units.len() - 1].iter().map(|u| u.len() * 8 - header).max().unwrap_or(0);
+                assert!(max <= budget, "{ch} ch, ADTS {adts}: {b} b/s accepted, {budget} bits per frame, silent frames take {max}");
+            }
+        }
+    }
+
+    #[test]
+    fn maximum_rate_frames_are_filled_to_the_limit() {
+        let sil = vec![0f32; 48_000];
+        for bandwidth in [None, Some(1000)] {
+            let units = encode_all(EncoderConfig::cbr(48_000, 1, 288_000).with_bandwidth(bandwidth), &sil);
+            for u in &units[..units.len() - 1] {
+                assert_eq!(u.len(), 768, "bandwidth {bandwidth:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn fill_never_passes_the_request() {
+        for bits in 0..3000u64 {
+            let mut bw = BitWriter::new();
+            let n = write_fill(&mut bw, bits);
+            assert_eq!(n, bw.bit_len() as u64);
+            assert!(n <= bits && n + 6 >= bits, "asked {bits}, wrote {n}");
         }
     }
 
