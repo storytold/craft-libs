@@ -11,7 +11,7 @@ use super::aiff::{self, AiffParse};
 use super::id3v2_len;
 use super::source::{Src, io_error};
 use super::wav::{self, WavParse};
-use crate::track::{TrackDecoder, adts_format_of, adts_framed, adts_stream_header};
+use crate::track::{TrackDecoder, adts_format_of, adts_frame_count, adts_stream_header};
 use crate::{AudioBuffer, AudioError, AudioInfo, CodecId, CodecParams, Container, PcmFormat, Result, aac};
 use craft_media::{isobmff, matroska, ogg};
 
@@ -665,16 +665,24 @@ fn open_mp4<'a>(src: &Src<'a>, container: Container, track: Option<usize>) -> Op
     // HE-AAC packet's core frames) and can't cut audio off.
     // ADTS-framed samples (not standard) may hold several frames each, and finding out would mean
     // reading every sample: their sample table's timing is kept instead, unless it falls short of
-    // one frame per sample (durations counting HE-AAC's core frames). Then it can't end the track,
-    // and its length is unknown until decoded.
-    let adts = lookahead.iter().any(|p| adts_framed(p));
+    // the frames the samples hold (durations counting HE-AAC's core frames): short of one frame
+    // per sample, or of the frames in the samples already read. Then it can't end the track, and
+    // its length is unknown until decoded.
+    let adts_counts: Vec<u64> = lookahead.iter().map(|p| adts_frame_count(p) as u64).collect();
+    let adts = adts_counts.iter().any(|&c| c > 0);
     let per_packet = probe.frames_per_packet().map(|n| n as u64).filter(|_| !adts);
     let mut length_known = true;
     if let Some(n) = probe.frames_per_packet().map(|n| n as u64) {
         let one_each = (t.samples.len() as u64).saturating_mul(n).saturating_sub(skip);
+        // The samples read ahead are the first ones unless one could not be read.
+        let read_short = adts_counts.len() == t.samples.len().min(crate::track::LOOKAHEAD_PACKETS) && {
+            let held = adts_counts.iter().sum::<u64>().saturating_mul(n);
+            let timed: u64 = t.samples[..adts_counts.len()].iter().map(|s| u64::from(s.duration)).sum();
+            held.saturating_sub(rescale(timed, u64::from(timescale), u64::from(rate))) >= n
+        };
         if !adts && (stored > one_each || one_each - stored >= n) {
             stored = one_each;
-        } else if adts && one_each.saturating_sub(stored) >= n {
+        } else if adts && (one_each.saturating_sub(stored) >= n || read_short) {
             stored = 0;
             length_known = limit.is_some();
         }
@@ -1038,6 +1046,47 @@ mod adts_tests {
         let (info, buf) = decode(&file, None).unwrap();
         assert_eq!((info.codec, info.sample_rate, buf.frames()), (crate::CodecId::HeAac, 44_100, 12 * 2048));
         assert_eq!(crate::probe(&file, None).unwrap().frames, 12 * 2048);
+    }
+
+    /// Samples of two HE-AAC ADTS frames each, timed as two core frames: the durations match one
+    /// output frame per sample, and the frames in the samples read ahead show they fall short.
+    #[test]
+    fn adts_framed_he_aac_in_mp4_with_several_frames_per_sample_keeps_its_length() {
+        use craft_media::bitstream::BitWriter;
+        use craft_media::isobmff::{Brand, Mp4Writer, SampleEntry, TrackConfig, WriteSample, WriterOptions};
+        let mut bw = BitWriter::new();
+        for (value, bits) in [(0, 7), (0, 22), (6, 3), (1, 4), (13, 4), (0, 4), (7, 3)] {
+            bw.write_bits(value, bits);
+        }
+        let au = bw.finish();
+        let frame = [&crate::aac::AdtsHeader::write(2, 7, 1, au.len(), 0x7FF).unwrap()[..], &au].concat().repeat(2);
+        let asc = crate::aac::AudioSpecificConfig::lc(7, 1).to_bytes().unwrap();
+        let mut w = Mp4Writer::new(std::io::Cursor::new(Vec::new()), WriterOptions::new(Brand::Mp4)).unwrap();
+        let track = w.add_track(TrackConfig::new(SampleEntry::aac(asc, 1, 44_100), 44_100)).unwrap();
+        for _ in 0..12 {
+            w.write_sample(track, WriteSample { data: &frame, duration: 2048, composition_offset: 0, is_sync: true }).unwrap();
+        }
+        let file = w.finish().unwrap().into_inner();
+        let (info, buf) = decode(&file, None).unwrap();
+        assert_eq!((info.codec, info.sample_rate, buf.frames()), (crate::CodecId::HeAac, 44_100, 12 * 4096));
+        assert_eq!(crate::probe(&file, None).unwrap().frames, 12 * 4096);
+    }
+
+    /// AAC-LC samples of two ADTS frames each, timed correctly, still end at their durations.
+    #[test]
+    fn adts_framed_lc_in_mp4_with_several_frames_per_sample_keeps_its_trim() {
+        use craft_media::isobmff::{Brand, Mp4Writer, SampleEntry, TrackConfig, WriteSample, WriterOptions};
+        let asc = crate::aac::AudioSpecificConfig::lc(3, 1).to_bytes().unwrap();
+        let mut w = Mp4Writer::new(std::io::Cursor::new(Vec::new()), WriterOptions::new(Brand::Mp4)).unwrap();
+        let track = w.add_track(TrackConfig::new(SampleEntry::aac(asc, 1, 48_000), 48_000)).unwrap();
+        for i in 0..12 {
+            let duration = if i == 11 { 2048 - 500 } else { 2048 };
+            w.write_sample(track, WriteSample { data: &frame(3).repeat(2), duration, composition_offset: 0, is_sync: true }).unwrap();
+        }
+        let file = w.finish().unwrap().into_inner();
+        let (_, buf) = decode(&file, None).unwrap();
+        assert_eq!(buf.frames(), 12 * 2048 - 500);
+        assert_eq!(crate::probe(&file, None).unwrap().frames, 12 * 2048 - 500);
     }
 
     /// A sample of several ADTS frames past the lookahead still counts them all.

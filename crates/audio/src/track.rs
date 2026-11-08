@@ -323,10 +323,10 @@ pub(crate) fn adts_stream_header(headers: &[aac::AdtsHeader]) -> Option<aac::Adt
     headers.iter().rev().max_by_key(|h| headers.iter().filter(|o| adts_format_of(o) == adts_format_of(h)).count()).copied()
 }
 
-/// Whether `packet` is ADTS-framed.
+/// The ADTS frames `packet` holds, 0 when it is not ADTS-framed.
 #[cfg(feature = "decode-native")]
-pub(crate) fn adts_framed(packet: &[u8]) -> bool {
-    adts_frames(packet).is_some()
+pub(crate) fn adts_frame_count(packet: &[u8]) -> usize {
+    adts_frames(packet).map_or(0, |f| f.len())
 }
 
 /// The configuration of an AAC stream from its ADTS `header`. Channel configuration 0 leaves
@@ -587,7 +587,7 @@ mod tests {
         let tied: [&[u8]; 2] = [&good, &damaged];
         assert_eq!(TrackDecoder::new(&aac_params(), &tied).unwrap().sample_rate(), 48_000);
         #[cfg(feature = "decode-native")]
-        assert!(adts_framed(&good) && adts_framed(&good.repeat(2)) && !adts_framed(&[0; 8]));
+        assert_eq!((adts_frame_count(&good), adts_frame_count(&good.repeat(2)), adts_frame_count(&[0; 8])), (1, 2, 0));
     }
 
     /// `au` as a stereo ADTS frame at 48 kHz (channel configuration `channel_config`).
