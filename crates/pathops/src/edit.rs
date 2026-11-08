@@ -7,7 +7,7 @@
 use kurbo::{BezPath, CubicBez, PathSeg, Point, Vec2};
 
 use crate::budget::fits_elements;
-use crate::fit::{end_tangent, fit_cubics, fit_single, is_straight, measured_arclen, sample, second_difference, start_tangent};
+use crate::fit::{chord_distance, end_tangent, fit_cubics, fit_single, is_straight, measured_arclen, sample, second_difference, start_tangent};
 use crate::path::{Seg, Sub, segs_to_bezpath, subs};
 use crate::work::{self, Work};
 
@@ -286,8 +286,10 @@ fn fit_piece(piece: &[Seg], pts: Vec<Point>, (tol, between): (f64, f64), opts: &
     // can be `between` from (with smoothing, the tolerance is from the smoothed points' polyline).
     let between = if opts.smooth > 0.0 { 0.0 } else { between };
     let Ok(cubics) = fit_cubics(&pts, t0, t1, (tol, between), &mut fit.work) else { return false };
-    for c in cubics {
-        let line = is_straight(&c, tol * 0.02);
+    for (c, off) in cubics {
+        // A cubic that is nearly straight is its chord, where the chord is within the tolerance of the
+        // piece too: no further from the cubic than the cubic's slack under the tolerance.
+        let line = is_straight(&c, tol * 0.02) && off + chord_distance(&c) <= tol;
         result.push(if line { Seg::line(c.p0, c.p3) } else { Seg { c, line } });
     }
     true

@@ -298,8 +298,9 @@ fn split_closed_open(path: &BezPath) -> (BezPath, BezPath) {
 /// cancel), is no boundary: then the boundary is used, however short the piece (a loop a tenth of a
 /// unit round and its way there and back, in a square a hundred million across, is within what the
 /// lengths can tell apart). A piece the sweep cancels outright is no segment of it at all (a spur a
-/// subpath goes out and back along): so the middle of every segment of `closed` must also lie on a
-/// segment of the boundary, within 16 tolerances of the sweep ([`lies_on`]). There are fewer contours
+/// subpath goes out and back along): so the middle of every segment of `closed`, and its points
+/// furthest in x and in y, must also lie on a segment of the boundary, within 16 tolerances of the
+/// sweep ([`lies_on`]). There are fewer contours
 /// than subpaths when a subpath is none of them or two are one (overlapping). (A subpath that crosses
 /// itself makes more contours, and may be all boundary.) And the boundary is shorter by the edges that
 /// are not on it. The lengths are measured to a
@@ -308,11 +309,21 @@ fn split_closed_open(path: &BezPath) -> (BezPath, BezPath) {
 /// square a million across is, tells of edges that are not on the boundary. Only up to
 /// [`MAX_COMPARED_CURVES`] curves are measured: past that, or with a segment that cannot be measured,
 /// the boundary is used, which is right for any input and differs from `closed` only in how it is cut.
+/// The boundary leaves out the contours of the sweep that enclose no area to speak of (a cubic out and
+/// back along one line is two passes the sweep keeps a rounding apart, not a retrace it cancels).
 fn filled_boundary(closed: &BezPath) -> Result<BezPath, PathOpsError> {
     let mut boundary = BezPath::new();
     let mut contours = 0usize;
     let (swept, all_boundary) = normalize_bez_counted(closed, FillRule::NonZero, usize::MAX)?.ok_or(PathOpsError::TooComplex)?;
+    let eps = eps_for([closed])?;
     for contour in swept.contours() {
+        // A contour that encloses no more area than a strip as wide as twice the sweep's tolerance
+        // along it bounds nothing: two passes of one curve that the sweep keeps a rounding apart (a
+        // cubic out and back along a line, which it does not take for a retrace), whose stroke would
+        // cut a notch in the inset.
+        if kurbo::Shape::area(&contour.path).abs() <= eps * polygon_length(&contour.path) {
+            continue;
+        }
         boundary.extend(contour.path.iter());
         contours += 1;
     }
@@ -321,7 +332,6 @@ fn filled_boundary(closed: &BezPath) -> Result<BezPath, PathOpsError> {
     if !all_boundary || contours < subpaths || curves(closed).saturating_add(curves(&boundary)) > MAX_COMPARED_CURVES {
         return Ok(boundary);
     }
-    let eps = eps_for([closed])?;
     if !lies_on(closed, &boundary, 16.0 * eps) {
         return Ok(boundary);
     }
@@ -333,18 +343,29 @@ fn filled_boundary(closed: &BezPath) -> Result<BezPath, PathOpsError> {
     Ok(if (whole - kept).abs() <= noise { closed.clone() } else { boundary })
 }
 
-/// Does the middle of every segment of `path` lie within `tol` of a segment of `on`? The segments of
-/// `on` are looked up by an index of their pieces' bounds, so the test is about `n log m` for `n`
-/// segments against `m`.
+/// Do the middle of every segment of `path`, and its points furthest in x and in y, lie within `tol`
+/// of a segment of `on`? A curve that goes out and back along a line through its middle is caught at
+/// the far points of the way out. The segments of `on` are looked up by an index of their pieces'
+/// bounds, so the test is about `n log m` for `n` segments against `m`.
 fn lies_on(path: &BezPath, on: &BezPath, tol: f64) -> bool {
     use crate::planar::index::{RectIndex, segment_footprint};
-    use kurbo::{ParamCurve, ParamCurveNearest};
+    use kurbo::{ParamCurve, ParamCurveExtrema, ParamCurveNearest};
     let segs: Vec<(kurbo::Rect, kurbo::PathSeg)> = on.segments().map(|s| (kurbo::Shape::bounding_box(&s), s)).collect();
     let index = RectIndex::with_footprint(segs, segment_footprint);
-    path.segments().all(|s| {
-        let mid = s.eval(0.5);
-        index.at(mid, tol).any(|b| b.nearest(mid, 1e-9).distance_sq <= tol * tol)
-    })
+    let near = |p: Point| index.at(p, tol).any(|b| b.nearest(p, 1e-9).distance_sq <= tol * tol);
+    path.segments().all(|s| std::iter::once(0.5).chain(s.extrema()).all(|t| near(s.eval(t))))
+}
+
+/// The summed lengths of the control polygons of the segments of `path` (a line's is its length): at
+/// least the length of the path.
+fn polygon_length(path: &BezPath) -> f64 {
+    path.segments()
+        .map(|s| match s {
+            kurbo::PathSeg::Line(l) => (l.p1 - l.p0).hypot(),
+            kurbo::PathSeg::Quad(q) => (q.p1 - q.p0).hypot() + (q.p2 - q.p1).hypot(),
+            kurbo::PathSeg::Cubic(c) => (c.p1 - c.p0).hypot() + (c.p2 - c.p1).hypot() + (c.p3 - c.p2).hypot(),
+        })
+        .sum()
 }
 
 /// Most curves (of the two paths together) whose lengths [`filled_boundary`] measures.

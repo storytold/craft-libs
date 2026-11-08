@@ -87,23 +87,34 @@ fn the_union_of_several_outlines_is_held_to_the_element_limit() {
 /// A region is never more elements than the limit, however few the sides of its boundary are: the
 /// union of the two halves of a hatch is hundreds of contours, each written with a move and a close
 /// beyond its sides, and a limit of one under what it is written in is refused, not passed with a
-/// region over it.
+/// region over it. A region that is made instead is the whole one in fewer elements: its area, and no
+/// further from the full region than the refit allows.
 #[test]
 fn a_region_is_never_more_elements_than_the_limit() {
     let both = [strokes(20, false), strokes(20, true)];
     let filled = [(&both[0], NZ), (&both[1], NZ)];
-    let region = try_stroke_region(&both).expect("the region").elements().len();
-    let union = try_unite_all(&filled).expect("the union").elements().len();
-    let got = with_limits(limits(|l| l.elements = region - 1), || try_stroke_region(&both));
-    assert!(got.as_ref().is_err() || got.as_ref().is_ok_and(|p| p.elements().len() < region), "{region} elements under {}: {got:?}", region - 1);
-    let got = with_limits(limits(|l| l.elements = union - 1), || try_unite_all(&filled));
-    assert!(got.as_ref().is_err() || got.as_ref().is_ok_and(|p| p.elements().len() < union), "{union} elements under {}: {got:?}", union - 1);
+    let region = try_stroke_region(&both).expect("the region");
+    let union = try_unite_all(&filled).expect("the union");
+    let held = |full: &BezPath, got: Result<BezPath, PathOpsError>| {
+        let limit = full.elements().len() - 1;
+        match got {
+            Err(e) => assert_eq!(e, PathOpsError::TooComplex),
+            Ok(p) => {
+                assert!(!p.elements().is_empty() && p.elements().len() <= limit, "{} elements under {limit}", p.elements().len());
+                assert!(close(area(&p, NZ), area(full, NZ), 1e-9), "{} against {}", area(&p, NZ), area(full, NZ));
+                assert!(deviation(&p, full).max(deviation(full, &p)) <= DEFAULT_PRECISION, "not the full region");
+            }
+        }
+    };
+    let elements = |p: &BezPath| p.elements().len() - 1;
+    held(&region, with_limits(limits(|l| l.elements = elements(&region)), || try_stroke_region(&both)));
+    held(&union, with_limits(limits(|l| l.elements = elements(&union)), || try_unite_all(&filled)));
 }
 
 // ---- simplify
 
 /// The largest distance from a point of `from` to `to`, at 2,001 points of each segment of `from`.
-fn deviation(from: &BezPath, to: &BezPath) -> f64 {
+pub(crate) fn deviation(from: &BezPath, to: &BezPath) -> f64 {
     use kurbo::{ParamCurve, ParamCurveNearest};
     let mut dev: f64 = 0.0;
     for seg in from.segments() {

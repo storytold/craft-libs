@@ -488,23 +488,28 @@ bit for bit VectorCraft's), and the results are identical except where noted:
     the largest coordinates the sweep takes is passed over (a shape near 7e13 had no map);
   - an inset takes the boundary of the area the closed subpaths fill when a piece of them the sweep cuts out has
     the fill on both sides or on neither (a small loop of a subpath inside its own fill, which the lengths could
-    not tell from noise, cut a channel round itself), when a piece of them does not lie on that boundary (a
-    spur that its subpath goes out along and comes straight back over cancels in the sweep, which then has no
-    piece of it at all, and the inset cut a notch round it), when the sweep gives fewer contours than there are
+    not tell from noise, cut a channel round itself), when a piece of them does not lie on that boundary at its
+    middle or at its points furthest in x and in y (a spur that its subpath goes out along and comes straight
+    back over cancels in the sweep, which then has no piece of it at all, and the inset cut a notch round it),
+    when the sweep gives fewer contours than there are
     subpaths, or when the lengths of the two differ by more than the accuracy they are measured to and the
     sweep's tolerance at each vertex allow (it was a millionth of the length, which a unit square in one a
     million across is), and cleans the outlines of the open subpaths of the stroker's holes as a growing
-    offset does (an open curve that turns inside the radius left holes in an inset only);
+    offset does (an open curve that turns inside the radius left holes in an inset only). The boundary leaves
+    out a contour that encloses no more area than a strip twice the sweep's tolerance wide along it: the
+    sweep keeps a cubic that goes out and back along one line as two passes a rounding apart, and an inset of a
+    square 1e8 across with such a cubic 0.29 high on its edge cut a notch round it;
   - `interior_point` drops edges that retrace each other exactly (a zero of either sign is one coordinate),
     tries heights between the vertices where the path turns (a straight retrace through other vertices than it
     went out by used up the heights; a vertex is passed straight through when it lies within the rounding of
-    its coordinates of the line through its neighbours, not when the edges turn by under a billionth of a
-    radian, which a bulge 0.1 wide and a billion high on a line a trillion long does), and looks for gaps wider
-    than the rounding of the two crossings that make them, at every height (it was a billionth of the larger of
-    the width and the height, so two unit squares ten billion apart in height were missed; and the first heights
-    took any gap, a sliver between two rounded passes of a slanted line among them); a vertical edge crosses at
-    its x exactly, and allows for no rounding (a unit square at x = 1e15 had no point: the allowance for each of
-    its two crossings was 0.9);
+    the coordinates across the line through its neighbours, not when the edges turn by under a billionth of a
+    radian, which a bulge 0.1 wide and a billion high on a line a trillion long does, nor by the rounding of
+    its largest coordinate, which that bulge a quadrillion out along its line is within), and looks for gaps
+    wider than the rounding of the two crossings that make them, at every height (it was a billionth of the
+    larger of the width and the height, so two unit squares ten billion apart in height were missed; and the
+    first heights took any gap, a sliver between two rounded passes of a slanted line among them); a vertical
+    edge crosses at its x exactly, and allows for no rounding (a unit square at x = 1e15 had no point: the
+    allowance for each of its two crossings was 0.9);
   - the fill of a face in a planar map is tested against the subpaths of each input whose bounds hold the point,
     where it was the whole path (16,000 squares in one shape: 15.6 s, now 1.6 s); and an item the index of the
     map's outlines has no room to file in pieces is filed under its bounds, where it was read at every lookup
@@ -533,7 +538,11 @@ bit for bit VectorCraft's), and the results are identical except where noted:
     1.026 of the tolerance from their refits (3 of 3,000 random ones; none of 9,000 now). Against
     VectorCraft 7 of 3,600 random simplifications differ, all within the tolerance either way and none further
     from the path than VectorCraft's (it was up to 0.996 of the tolerance; four of the runs are now left as
-    they are, three have one element more);
+    they are, three have one element more). A refit cubic that is nearly straight becomes its chord only
+    where the chord is within the tolerance of the run too: the cubic's bound and how far its handles are from
+    the chord add up to the tolerance at most (a bump half a unit high on a run 75 long came out as one line
+    1.0026 of the tolerance from it at a tolerance of 0.5; it is a cubic now). No random simplification of the
+    comparison changes with it;
   - `stroke_region` and `try_stroke_region` hold a single outline to the element limit as they do each of
     several (the boundary of its sweep counted before its contours are made), where one outline that crossed
     itself a great deal made all its contours, and hold the union of several outlines, and `unite_all` and

@@ -106,11 +106,12 @@ const MAX_FIT_DEPTH: usize = 40;
 /// A cubic is taken when its error at the points, how far it can be from the chords between its
 /// values at their parameters ([`spread`]), and `between` add up to `tol` at most: every point of
 /// the cubic is then within `tol` of the path, and every point of the path within `tol` of the cubic.
+/// Each cubic comes with that sum, how far it and the path can be from each other.
 ///
 /// Each fit of a stretch of points is charged to `work` (its points times the rounds of
 /// reparameterisation it may take); an error when `work` runs out first, or when no fit within
 /// `tol` is found in [`MAX_FIT_DEPTH`] splits.
-pub(crate) fn fit_cubics(pts: &[Point], t0: Vec2, t1: Vec2, tol: (f64, f64), work: &mut usize) -> Result<Vec<CubicBez>, FitStop> {
+pub(crate) fn fit_cubics(pts: &[Point], t0: Vec2, t1: Vec2, tol: (f64, f64), work: &mut usize) -> Result<Vec<(CubicBez, f64)>, FitStop> {
     fit_cubics_to_depth(pts, t0, t1, tol, work, MAX_FIT_DEPTH)
 }
 
@@ -122,7 +123,7 @@ fn fit_cubics_to_depth(
     (tol, between): (f64, f64),
     work: &mut usize,
     max_depth: usize,
-) -> Result<Vec<CubicBez>, FitStop> {
+) -> Result<Vec<(CubicBez, f64)>, FitStop> {
     let mut out = Vec::new();
     let pts = dedup(pts);
     if pts.len() < 2 {
@@ -135,7 +136,7 @@ fn fit_cubics_to_depth(
         return Err(FitStop::Depth);
     }
     fit_rec(&pts, t0, t1, room, &mut out, (0, max_depth), work)?;
-    Ok(out)
+    Ok(out.into_iter().map(|(c, off)| (c, off + between.max(0.0))).collect())
 }
 
 /// `pts` without the points that lie within 1e-12 of the one kept before them.
@@ -150,17 +151,26 @@ fn dedup(pts: &[Point]) -> Vec<Point> {
 }
 
 /// The fit of `pts` within `work` and the depth `(so far, most)`, or why there is none. A cubic is
-/// taken when its error at the points and its [`spread`] add up to `tol` at most.
-fn fit_rec(pts: &[Point], t0: Vec2, t1: Vec2, tol: f64, out: &mut Vec<CubicBez>, depth: (usize, usize), work: &mut usize) -> Result<(), FitStop> {
+/// taken when its error at the points and its [`spread`] add up to `tol` at most, and given with that sum.
+fn fit_rec(
+    pts: &[Point],
+    t0: Vec2,
+    t1: Vec2,
+    tol: f64,
+    out: &mut Vec<(CubicBez, f64)>,
+    depth: (usize, usize),
+    work: &mut usize,
+) -> Result<(), FitStop> {
     let n = pts.len();
     if n == 2 {
         let d = pts[0].distance(pts[1]) / 3.0;
         let c = CubicBez::new(pts[0], pts[0] + t0 * d, pts[1] - t1 * d, pts[1]);
         // Through both points, and no more points to split at: within the tolerance of their chord, or no fit.
-        if spread(&c, &[0.0, 1.0]) > tol {
+        let off = spread(&c, &[0.0, 1.0]);
+        if off > tol {
             return Err(FitStop::Depth);
         }
-        out.push(c);
+        out.push((c, off));
         return Ok(());
     }
     // A fit reads its points once, then again for each round of reparameterisation.
@@ -172,8 +182,9 @@ fn fit_rec(pts: &[Point], t0: Vec2, t1: Vec2, tol: f64, out: &mut Vec<CubicBez>,
     *work = left;
     crate::work::add(crate::work::Work::Fit, cost);
     let (c, err, split, u) = fit_with_params(pts, chord_params(pts), t0, t1);
-    if err + spread(&c, &u) <= tol {
-        out.push(c);
+    let off = err + spread(&c, &u);
+    if off <= tol {
+        out.push((c, off));
         return Ok(());
     }
     // Past the depth the fit is not within the tolerance: say so, rather than give it.
@@ -336,6 +347,20 @@ fn newton(c: &CubicBez, p: Point, t: f64) -> f64 {
     if nt.is_finite() { nt.clamp(0.0, 1.0) } else { t }
 }
 
+/// How far the cubic `c` and its chord can be from each other: the larger distance of its two handles
+/// from the chord. The cubic lies in the hull of its control points, which are no further from the chord
+/// than that; and each point of the chord has a point of the cubic level with it along the chord, no
+/// further off it than the hull.
+pub(crate) fn chord_distance(c: &CubicBez) -> f64 {
+    let to_chord = |p: Point| {
+        let (d, h) = (c.p3 - c.p0, p - c.p0);
+        let len_sq = d.hypot2();
+        let t = if len_sq > 0.0 { (h.dot(d) / len_sq).clamp(0.0, 1.0) } else { 0.0 };
+        (h - d * t).hypot()
+    };
+    to_chord(c.p1).max(to_chord(c.p2))
+}
+
 /// Is the cubic (within `tol`) a straight line from p0 to p3 with handles inside the chord?
 pub(crate) fn is_straight(c: &CubicBez, tol: f64) -> bool {
     let chord = c.p3 - c.p0;
@@ -369,7 +394,8 @@ mod tests {
         let mut pts = Vec::new();
         sample(&c, 40, &mut pts, true);
         let mut work = usize::MAX;
-        let out = fit_cubics(&pts, start_tangent(&c), end_tangent(&c), (0.05, 0.0), &mut work).unwrap();
+        let out: Vec<CubicBez> =
+            fit_cubics(&pts, start_tangent(&c), end_tangent(&c), (0.05, 0.0), &mut work).unwrap().into_iter().map(|f| f.0).collect();
         assert_eq!(out.len(), 1);
         assert!(out[0].p1.distance(c.p1) < 1.0, "{:?}", out[0]);
     }
@@ -380,7 +406,8 @@ mod tests {
         // polyline: dense enough that cubics can follow it within the tolerance.)
         let pts: Vec<Point> = (0..=800).map(|i| Point::new(f64::from(i) * 0.05, (f64::from(i) * 0.025).sin() * 10.0)).collect();
         let mut work = usize::MAX;
-        let out = fit_cubics(&pts, Vec2::new(1.0, 0.0), Vec2::new(1.0, 0.0), (0.1, 0.0), &mut work).unwrap();
+        let out: Vec<CubicBez> =
+            fit_cubics(&pts, Vec2::new(1.0, 0.0), Vec2::new(1.0, 0.0), (0.1, 0.0), &mut work).unwrap().into_iter().map(|f| f.0).collect();
         assert!(out.len() > 1);
         for w in out.windows(2) {
             assert!(w[0].p3.distance(w[1].p0) < 1e-9);
@@ -398,7 +425,7 @@ mod tests {
         assert!(work > usize::MAX / 2, "the work left is what the one fit tried cost: {}", usize::MAX - work);
         // With room to split the cubics given are within the tolerance of the points.
         let mut work = usize::MAX;
-        let out = fit_cubics(&pts, t0, t1, (0.1, 0.0), &mut work).unwrap();
+        let out: Vec<CubicBez> = fit_cubics(&pts, t0, t1, (0.1, 0.0), &mut work).unwrap().into_iter().map(|f| f.0).collect();
         for p in &pts {
             let near = out.iter().map(|c| kurbo::ParamCurveNearest::nearest(c, *p, 1e-9).distance_sq.sqrt()).fold(f64::INFINITY, f64::min);
             assert!(near <= 0.1 + 1e-6, "{p:?} is {near} from the fit");

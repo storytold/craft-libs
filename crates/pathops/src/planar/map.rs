@@ -595,14 +595,21 @@ fn inside_edges(bp: &BezPath, edges: &[(Point, Point)], bb: kurbo::Rect) -> Opti
 fn turning_heights(edges: &[(Point, Point)]) -> Vec<f64> {
     // `(a, b)` then `(c, d)`: the second follows on from the first, in the same direction along one line.
     // On one line to within rounding: the vertex is no further from the line through its neighbours
-    // than a few units in the last place of its coordinates and of the two edges' lengths, which is
-    // where rounding puts points on a slanted line. An angle would not do: a vertex a tenth off the
-    // line between neighbours a billion away turns the edges by less than a billionth of a radian, and
-    // the bulge it makes encloses area that a line at no height of the search would cross.
+    // than a few units in the last place of the three points' coordinates across that line and of the
+    // two edges' lengths, which is where rounding puts points on a slanted line. Across the line: each
+    // coordinate weighted by how far the line's normal points along it, so that a line along y far out
+    // in y is told apart at the precision of x, which rounding of y does not move a point across. An
+    // angle would not do: a vertex a tenth off the line between neighbours a billion away turns the
+    // edges by less than a billionth of a radian, and the bulge it makes encloses area that a line at
+    // no height of the search would cross.
     let straight_on = |(a, b): (Point, Point), (c, d): (Point, Point)| {
         let (u, v) = (b - a, d - c);
-        let reach = (u + v).hypot();
-        b == c && u.dot(v) > 0.0 && u.cross(v).abs() <= 8.0 * f64::EPSILON * (b.x.abs().max(b.y.abs()) + u.hypot() + v.hypot()) * reach
+        let w = u + v;
+        let reach = w.hypot();
+        // Each point's coordinates across `w`, times its length.
+        let across = |p: Point| p.x.abs() * w.y.abs() + p.y.abs() * w.x.abs();
+        let coords = across(a).max(across(b)).max(across(d));
+        b == c && u.dot(v) > 0.0 && u.cross(v).abs() <= 8.0 * f64::EPSILON * (coords + (u.hypot() + v.hypot()) * reach)
     };
     let mut ys: Vec<f64> = Vec::with_capacity(edges.len());
     for (i, &edge) in edges.iter().enumerate() {
