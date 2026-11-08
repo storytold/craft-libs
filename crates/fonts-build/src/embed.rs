@@ -737,3 +737,23 @@ impl std::error::Error for Error {
         }
     }
 }
+
+#[cfg(all(test, unix))]
+mod path_tests {
+    use super::{Error, Face, parse_manifest, table};
+    use std::os::unix::ffi::OsStrExt;
+    use std::path::PathBuf;
+
+    #[test]
+    fn table_rejects_non_utf8_path() -> Result<(), Box<dyn std::error::Error>> {
+        // This guard must also be testable on filesystems that cannot create such a path.
+        let entry = parse_manifest("A | Regular | fonts/a.ttf | Arab | OFL-1.1 | OFL.txt | 00 | src\n")?
+            .into_iter()
+            .next()
+            .ok_or("missing test manifest entry")?;
+        let path = PathBuf::from(std::ffi::OsStr::from_bytes(b"craft-fonts-\xff/fonts/a.ttf"));
+        let face = Face { entry, path, index: 0, cut: false, sha256: String::new() };
+        assert!(matches!(table(&[face]), Err(Error::NonUtf8Path { .. })));
+        Ok(())
+    }
+}

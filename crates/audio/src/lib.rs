@@ -28,7 +28,7 @@
 
 #[cfg(any(feature = "aac-decode", feature = "aac-encode"))]
 pub mod aac;
-#[cfg(feature = "ac3-decode")]
+#[cfg(any(feature = "ac3-decode", feature = "ac3-encode", feature = "eac3-encode"))]
 pub mod ac3;
 mod buffer;
 mod layout;
