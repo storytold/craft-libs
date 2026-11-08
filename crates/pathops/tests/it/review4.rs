@@ -263,14 +263,22 @@ fn a_shallow_bend_that_encloses_area_is_a_height_of_the_search() {
 
 #[test]
 fn short_lines_level_in_each_of_the_ten_shears_are_mapped_in_one_between() {
-    // Ten lines 9e-6 long (nine tolerances), one level in each of the ten shears, beside a rectangle: a
-    // shear of 3/8 levels none of them.
+    // Ten lines 5e-5 long, one level in each of the ten shears, beside a rectangle: a shear of 3/8 levels
+    // none of them, and each rises by 6e-6 or more in it. (A line under 16 tolerances long, as 9e-6 is, is
+    // lost in any frame, the map joining the ends of pieces that close; and one that rises by under 4 in
+    // the frame and is short across is contracted as a stub.)
     let ks = [32.0, 64.0, 16.0, 128.0, 8.0, 256.0, 512.0, 4.0, 1024.0, 2.0];
     let mut shapes: Vec<Shape> =
-        ks.iter().enumerate().map(|(i, k)| Shape::new(open(&[(0.0, 100.0 * i as f64), (9e-6, 100.0 * i as f64 - 9e-6 / k)]), NZ, i as u64)).collect();
+        ks.iter().enumerate().map(|(i, k)| Shape::new(open(&[(0.0, 100.0 * i as f64), (5e-5, 100.0 * i as f64 - 5e-5 / k)]), NZ, i as u64)).collect();
     shapes.push(Shape::new(rectangle(Rect::new(-500.0, -500.0, -400.0, -400.0)), NZ, 99));
     let (faces, edges) = live_paint(&shapes);
     assert_eq!(faces.len(), 1, "the rectangle's face");
     assert_eq!(faces[0].sources, [10]);
     assert!(edges.iter().any(|e| e.key == 99));
+    // And each line is in the map whole, to the sweep's tolerance at each end (1e-6 here).
+    for (i, k) in ks.iter().enumerate() {
+        let kept: f64 = edges.iter().filter(|e| e.key == i as u64).map(|e| length(&e.path)).sum();
+        let whole = 5e-5 * (1.0 + 1.0 / (k * k)).sqrt();
+        assert!((kept - whole).abs() <= 2e-6, "line {i}: {kept} of {whole}");
+    }
 }

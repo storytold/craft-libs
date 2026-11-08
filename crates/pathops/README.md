@@ -481,11 +481,13 @@ bit for bit VectorCraft's), and the results are identical except where noted:
     of those sides, where snapping levels none of them (it levels a side between two anchors only where the
     side rises by under one tolerance, and a side to a handle where it rises by under three); no map is built
     when no shear is free (it used the first, with one path lost). Ten lines 9e-6 long, one level in each of
-    the ten, are mapped in the shear of 3/8 (the eleventh was looked for where they rise by four tolerances
-    or more, which left none). A side of 2 to 8 tolerances does not rule a shear out but is kept where a
-    shear keeps it (an edge 0.009 long beside a shape at 1e11 was lost, and is kept in the shear of 1/4), and
-    one of 2 or less is not looked at, so a tiny feature loses only itself. A shear in which the paths pass
-    the largest coordinates the sweep takes is passed over (a shape near 7e13 had no map);
+    the ten, have a map in the shear of 3/8 (the eleventh was looked for where they rise by four tolerances
+    or more, which left none), though lines that short are lost from it, being under the 16 tolerances
+    within which the map joins the ends of pieces (Known limits); ten lines 5e-5 long are kept whole. A side
+    of 2 to 8 tolerances does not rule a shear out but is kept where a shear keeps it (an edge 0.009 long
+    beside a shape at 1e11 was lost, and is kept in the shear of 1/4), and one of 2 or less is not looked at,
+    so a tiny feature loses only itself. A shear in which the paths pass the largest coordinates the sweep
+    takes is passed over (a shape near 7e13 had no map);
   - an inset takes the boundary of the area the closed subpaths fill when a piece of them the sweep cuts out has
     the fill on both sides or on neither (a small loop of a subpath inside its own fill, which the lengths could
     not tell from noise, cut a channel round itself), when a piece of them does not lie on that boundary at its
@@ -496,17 +498,25 @@ bit for bit VectorCraft's), and the results are identical except where noted:
     sweep's tolerance at each vertex allow (it was a millionth of the length, which a unit square in one a
     million across is), and cleans the outlines of the open subpaths of the stroker's holes as a growing
     offset does (an open curve that turns inside the radius left holes in an inset only). The boundary leaves
-    out a contour that encloses no more area than a strip twice the sweep's tolerance wide along it: the
-    sweep keeps a cubic that goes out and back along one line as two passes a rounding apart, and an inset of a
-    square 1e8 across with such a cubic 0.29 high on its edge cut a notch round it;
+    out the pieces of a contour that go straight out and back along one line to within 64 units in the last
+    place of their own coordinates: the sweep keeps a cubic that goes out and back along one line as two
+    passes a rounding apart, and an inset of a square 1e8 across with such a cubic 0.29 high on its edge,
+    upright or slanted, cut a notch round it. A slit is kept however narrow, its sides being its width apart
+    (left out by the area it encloses, slits up to twice the sweep's tolerance wide were lost, and a shape
+    far away widens that: 2e-3 beside a square at 1e11);
   - an offset judges a contour of its arrangement spurious by a point of its face, the contour less the
     contours directly inside it (an outer contour's holes, a hole's islands), where it took a point of the
     contour alone, which can lie in one of them near the path, and dropped a face that was right with all
     inside it. A 100 x 100 square with a 20 x 20 hole from x = 50, or from 50.2 or 30.1, had an inset by 0.25
     of nothing (it is 9,480), and by 5 of nothing (7,200); so did slits through the middle, at widths from
     0.01 to 10; a 60 x 60 hole with a 30 x 2 bar across its middle was filled by an outset of 3 (11,236, where
-    8,608 is right); and the outline of open subpaths an inset adds lost a hole round an open bar. None of the
-    random stacks of the comparison changes;
+    8,608 is right); and the outline of open subpaths an inset adds lost a hole round an open bar. The point
+    is taken only where the face's own winding is odd, the widest of the first eight spans found on the face
+    flattened to a hundredth of its size that is (a ring 0.1 wide between two circles a hundred across had
+    an inset of nothing: the middle of a span between the flattened circles lay in the hole; VectorCraft,
+    taking the outer circle alone, kept it). One random stack of the comparison changes with that check: a
+    four-lobed star of quadratics, inset by 0.5, keeps a sliver of 0.147 square units that VectorCraft and the
+    carve dropped, every point of which is in the fill and 0.5 or more from its edge;
   - `interior_point` drops edges that retrace each other exactly (a zero of either sign is one coordinate),
     tries heights between the vertices where the path turns (a straight retrace through other vertices than it
     went out by used up the heights; a vertex is passed straight through when it lies within the rounding of
@@ -526,7 +536,8 @@ bit for bit VectorCraft's), and the results are identical except where noted:
   - `boolean_n`, `try_boolean_n` and `try_boolean` check the windings of up to eight inputs that draw something
     (empty paths, and paths of points only, do not count), and the call is an error when a sweep or contour
     pass of the recovery panics, a contour pass of the windings check of a resolved operand or of the resolved
-    operands together included, where it went on to the first arrangement;
+    operands together included (beside another operand found off too), where it went on to the first
+    arrangement;
   - the coordinates are checked as given, before the fill leaves out a subpath that draws nothing: a closed
     loop of one cubic whose handles are not numbers, or overflow when multiplied, is `NonFinite` or
     `Degenerate` in `try_area`, `try_normalize`, `try_boolean`, `try_boolean_n` and `try_unite_all`, where it

@@ -896,7 +896,7 @@ fn checked_boolean(inputs: &[(BezPath, FillRule)], pred: &dyn Fn(&[bool]) -> boo
     let arr = Arrangement::new(inputs.to_vec())?;
     let paths: Vec<&BezPath> = inputs.iter().map(|(p, _)| p).collect();
     // A check that cannot be made (a contour pass of it panics) does not find this result wrong.
-    if !arrangement_adds_up(&arr, &paths).unwrap_or(true)
+    if !arrangement_adds_up(&arr, &paths, Panic::Unknown).unwrap_or(true)
         && let Some(r) = resolved_boolean(inputs, pred, precision)?
     {
         return Ok(r);
@@ -910,10 +910,23 @@ fn checked_boolean(inputs: &[(BezPath, FillRule)], pred: &dyn Fn(&[bool]) -> boo
 /// more tangled input is taken as it is.
 const MAX_CHECKED_WINDING: i32 = 8;
 
+/// What a panic in a contour pass of [`arrangement_adds_up`] is, beside an input found off.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Panic {
+    /// It cannot tell, as windings too wide to check cannot: an input found off decides, and the passes
+    /// made are the same whether the panic is an answer or not (the check of the first arrangement,
+    /// which recovers when it is off).
+    Unknown,
+    /// It is the call's error, whatever another input gives (the check of the recovery, which has no
+    /// result to give when a pass of it panics).
+    Error,
+}
+
 /// Do the windings `arr` gave each input add up to that input's own area ([`windings_add_up`])?
-/// Also true when it can't tell for some (and no other is off), and [`PathOpsError::Degenerate`]
-/// when a contour pass of the check panics (and no input checked is off).
-fn arrangement_adds_up(arr: &Arrangement, inputs: &[&BezPath]) -> Result<bool, PathOpsError> {
+/// Also true when it can't tell for some (and no other is off). A contour pass of the check that
+/// panics is [`PathOpsError::Degenerate`]: when no input checked is off ([`Panic::Unknown`]), or
+/// whatever the others give ([`Panic::Error`]).
+fn arrangement_adds_up(arr: &Arrangement, inputs: &[&BezPath], panic: Panic) -> Result<bool, PathOpsError> {
     // An input that draws nothing has no winding to check and costs no pass, so it is not one of the
     // inputs counted: seven empty paths beside two that are wrong must not switch the check off. Nor
     // does one that is only points (segments of no length), which the sweep is given no segment of.
@@ -923,17 +936,33 @@ fn arrangement_adds_up(arr: &Arrangement, inputs: &[&BezPath]) -> Result<bool, P
     if drawn.len() > MAX_CHECKED_INPUTS {
         return Ok(true);
     }
-    // The first input found off ends the check; one whose pass panicked does not, as none that cannot
-    // be told does, so the passes made are the same whether the panic is an answer or not.
-    let mut failed = Ok(true);
+    let (mut off, mut failed) = (false, None);
     for &(tag, p) in &drawn {
-        match windings_add_up(&arr.top, |w: &Multi| w.get(tag), p) {
-            Ok(Some(false)) => return Ok(false),
+        match input_adds_up(arr, tag, p) {
+            // The first input found off ends the check, unless a panic is the error whatever it finds.
+            Ok(Some(false)) if panic == Panic::Unknown => return Ok(false),
+            Ok(Some(false)) => off = true,
             Ok(_) => {}
-            Err(e) => failed = Err(e),
+            Err(e) if panic == Panic::Error => return Err(e),
+            Err(e) => failed = Some(e),
         }
     }
-    failed
+    match failed {
+        Some(e) if !off => Err(e),
+        _ => Ok(!off),
+    }
+}
+
+/// The windings check of the input tagged `tag`, `p`, in `arr` ([`windings_add_up`]); in a test, what
+/// the test has the recovery's check answer for it ([`RECHECK_ANSWERS`]).
+fn input_adds_up(arr: &Arrangement, tag: usize, p: &BezPath) -> Result<Option<bool>, PathOpsError> {
+    #[cfg(test)]
+    if CHECKING.with(std::cell::Cell::get) == Some(Step::Recheck)
+        && let Some(answer) = RECHECK_ANSWERS.with(|a| a.borrow().iter().find(|(t, _)| *t == tag).map(|(_, r)| *r))
+    {
+        return answer;
+    }
+    windings_add_up(&arr.top, |w: &Multi| w.get(tag), p)
 }
 
 /// Most inputs that draw something whose windings an operation checks ([`arrangement_adds_up`]).
@@ -1009,6 +1038,10 @@ enum Step {
     Recheck,
 }
 
+/// What a test has the recovery's windings check answer for the input of a tag ([`RECHECK_ANSWERS`]).
+#[cfg(test)]
+type Answer = (usize, Result<Option<bool>, PathOpsError>);
+
 #[cfg(test)]
 thread_local! {
     /// The step of the recovery made to panic, which no input is known to make any of them do, so
@@ -1016,6 +1049,9 @@ thread_local! {
     static FORCE_RESOLVE_PANIC: std::cell::Cell<Option<Step>> = const { std::cell::Cell::new(None) };
     /// The step of the recovery whose windings check is running, while one is.
     static CHECKING: std::cell::Cell<Option<Step>> = const { std::cell::Cell::new(None) };
+    /// What the windings check of the resolved operands together answers for each input tag, in place
+    /// of the check, so that a test can give one input off and another a panic.
+    static RECHECK_ANSWERS: std::cell::RefCell<Vec<Answer>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
 /// Panics when a test has made `step` of the recovery panic ([`FORCE_RESOLVE_PANIC`]).
@@ -1091,7 +1127,7 @@ fn resolved_boolean(inputs: &[(BezPath, FillRule)], pred: &dyn Fn(&[bool]) -> bo
     };
     #[cfg(test)]
     CHECKING.with(|c| c.set(Some(Step::Recheck)));
-    let adds_up = arrangement_adds_up(&arr, &flat.iter().map(|(p, _)| p).collect::<Vec<_>>());
+    let adds_up = arrangement_adds_up(&arr, &flat.iter().map(|(p, _)| p).collect::<Vec<_>>(), Panic::Error);
     #[cfg(test)]
     CHECKING.with(|c| c.set(None));
     if !adds_up? {
@@ -1941,14 +1977,14 @@ mod tests {
         let a = poly(&[(3.0, 1.0), (3.0, 3.0), (0.0, 1.0)]);
         let b = poly(&[(3.0, 0.0), (0.0, 2.0), (3.0, 2.0), (0.0, 0.0), (0.0, 1.0)]);
         let arr = Arrangement::new(vec![(a.clone(), FillRule::NonZero), (b.clone(), FillRule::NonZero)]).unwrap();
-        assert_eq!(arrangement_adds_up(&arr, &[&a, &b]), Ok(false), "the sweep's windings are off");
+        assert_eq!(arrangement_adds_up(&arr, &[&a, &b], Panic::Unknown), Ok(false), "the sweep's windings are off");
         let (ra, rb) = (resolved(&a, FillRule::NonZero).unwrap().unwrap(), resolved(&b, FillRule::NonZero).unwrap().unwrap());
         let arr = Arrangement::new(vec![(ra.clone(), FillRule::NonZero), (rb.clone(), FillRule::NonZero)]).unwrap();
-        assert_eq!(arrangement_adds_up(&arr, &[&ra, &rb]), Ok(true));
+        assert_eq!(arrangement_adds_up(&arr, &[&ra, &rb], Panic::Unknown), Ok(true));
         // A plain pair adds up at once.
         let (s, t) = (poly(&[(0.0, 0.0), (4.0, 0.0), (4.0, 4.0), (0.0, 4.0)]), poly(&[(2.0, 2.0), (6.0, 2.0), (6.0, 6.0), (2.0, 6.0)]));
         let arr = Arrangement::new(vec![(s.clone(), FillRule::NonZero), (t.clone(), FillRule::EvenOdd)]).unwrap();
-        assert_eq!(arrangement_adds_up(&arr, &[&s, &t]), Ok(true));
+        assert_eq!(arrangement_adds_up(&arr, &[&s, &t], Panic::Unknown), Ok(true));
     }
 
     #[test]
@@ -1995,5 +2031,41 @@ mod tests {
             FORCE_RESOLVE_PANIC.with(|f| f.set(None));
             assert!(plain.is_ok_and(|p| (p.area().abs() - 28.0).abs() < 1e-9), "{step:?}");
         }
+    }
+
+    /// In the windings check of the resolved operands together, a contour pass that panics is the
+    /// call's error even where another operand is found off, in either order: the recovery has no
+    /// result to give, and the first one was found wrong. With one off and none panicking, the first
+    /// result is kept, as the documentation says.
+    #[test]
+    fn a_panic_in_the_recovery_check_is_an_error_beside_an_operand_found_off() {
+        let poly = |pts: &[(f64, f64)]| {
+            let mut bp = BezPath::new();
+            for (i, p) in pts.iter().enumerate() {
+                if i == 0 { bp.move_to(*p) } else { bp.line_to(*p) }
+            }
+            bp.close_path();
+            bp
+        };
+        let a = poly(&[(3.0, 1.0), (3.0, 3.0), (0.0, 1.0)]);
+        let b = poly(&[(3.0, 0.0), (0.0, 2.0), (3.0, 2.0), (0.0, 0.0), (0.0, 1.0)]);
+        let union = || try_boolean(&a, FillRule::NonZero, &b, FillRule::NonZero, BoolOp::Union, DEFAULT_PRECISION);
+        let n_ary = || try_boolean_n(&[(&a, FillRule::NonZero), (&b, FillRule::NonZero)], |m| m[0] || m[1]);
+        let answering = |answers: Vec<Answer>| {
+            RECHECK_ANSWERS.with(|r| *r.borrow_mut() = answers);
+            let got = (union(), n_ary());
+            RECHECK_ANSWERS.with(|r| r.borrow_mut().clear());
+            got
+        };
+        let (off, panicked) = (Ok(Some(false)), Err(PathOpsError::Degenerate));
+        for answers in [vec![(0, off), (1, panicked)], vec![(0, panicked), (1, off)]] {
+            let (got, n) = answering(answers.clone());
+            assert_eq!(got.err(), Some(PathOpsError::Degenerate), "{answers:?}");
+            assert_eq!(n.err(), Some(PathOpsError::Degenerate), "{answers:?}");
+        }
+        // One off and the other adding up: the first result (5.5 to its refit, which is wrong), as documented.
+        let (got, n) = answering(vec![(0, off), (1, Ok(Some(true)))]);
+        let areas = (got.map(|p| p.area().abs()), n.map(|p| p.area().abs()));
+        assert!(areas.0.is_ok_and(|a| (a - 5.5).abs() < 1e-5) && areas.1.is_ok_and(|a| (a - 5.5).abs() < 1e-5), "{areas:?}");
     }
 }

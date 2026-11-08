@@ -309,22 +309,21 @@ fn split_closed_open(path: &BezPath) -> (BezPath, BezPath) {
 /// square a million across is, tells of edges that are not on the boundary. Only up to
 /// [`MAX_COMPARED_CURVES`] curves are measured: past that, or with a segment that cannot be measured,
 /// the boundary is used, which is right for any input and differs from `closed` only in how it is cut.
-/// The boundary leaves out the contours of the sweep that enclose no area to speak of (a cubic out and
-/// back along one line is two passes the sweep keeps a rounding apart, not a retrace it cancels).
+/// The boundary leaves out the pieces of the sweep's contours that go straight out and back along one
+/// line to within a rounding of their own coordinates ([`without_spurs`]): a cubic out and back along a
+/// line is two passes the sweep keeps a rounding apart, not a retrace it cancels. A slit is not one,
+/// however narrow: its sides are its width apart, whatever the sweep's tolerance.
 fn filled_boundary(closed: &BezPath) -> Result<BezPath, PathOpsError> {
     let mut boundary = BezPath::new();
     let mut contours = 0usize;
     let (swept, all_boundary) = normalize_bez_counted(closed, FillRule::NonZero, usize::MAX)?.ok_or(PathOpsError::TooComplex)?;
     let eps = eps_for([closed])?;
     for contour in swept.contours() {
-        // A contour that encloses no more area than a strip as wide as twice the sweep's tolerance
-        // along it bounds nothing: two passes of one curve that the sweep keeps a rounding apart (a
-        // cubic out and back along a line, which it does not take for a retrace), whose stroke would
-        // cut a notch in the inset.
-        if kurbo::Shape::area(&contour.path).abs() <= eps * polygon_length(&contour.path) {
-            continue;
-        }
-        boundary.extend(contour.path.iter());
+        // Without the pieces it goes out and back along: two passes of one curve that the sweep keeps a
+        // rounding apart (a cubic out and back along a line, which it does not take for a retrace),
+        // whose stroke would cut a notch in the inset. A contour that is nothing else bounds nothing.
+        let Some(path) = without_spurs(&contour.path) else { continue };
+        boundary.extend(path.iter());
         contours += 1;
     }
     let subpaths = closed.elements().iter().filter(|el| matches!(el, PathEl::MoveTo(_))).count();
@@ -356,16 +355,94 @@ fn lies_on(path: &BezPath, on: &BezPath, tol: f64) -> bool {
     path.segments().all(|s| std::iter::once(0.5).chain(s.extrema()).all(|t| near(s.eval(t))))
 }
 
-/// The summed lengths of the control polygons of the segments of `path` (a line's is its length): at
-/// least the length of the path.
-fn polygon_length(path: &BezPath) -> f64 {
-    path.segments()
-        .map(|s| match s {
-            kurbo::PathSeg::Line(l) => (l.p1 - l.p0).hypot(),
-            kurbo::PathSeg::Quad(q) => (q.p1 - q.p0).hypot() + (q.p2 - q.p1).hypot(),
-            kurbo::PathSeg::Cubic(c) => (c.p1 - c.p0).hypot() + (c.p2 - c.p1).hypot() + (c.p3 - c.p2).hypot(),
-        })
-        .sum()
+/// The closed contour `contour` without the pieces it goes straight out and back along: a piece that
+/// goes out and back by itself ([`folds`]), and a piece and the next when the next comes back over it
+/// ([`retraces`]), as often as that leaves such a pair, round the end of the contour to its start too.
+/// `None` when nothing is left. A slit, however narrow, is not one: its sides are its width apart,
+/// where the two passes of a retraced curve are a rounding of their coordinates apart.
+fn without_spurs(contour: &BezPath) -> Option<BezPath> {
+    use kurbo::ParamCurve;
+    let mut kept: std::collections::VecDeque<kurbo::PathSeg> = std::collections::VecDeque::new();
+    for seg in contour.segments() {
+        if folds(seg) {
+            continue;
+        }
+        if kept.back().is_some_and(|&last| retraces(last, seg)) {
+            kept.pop_back();
+        } else {
+            kept.push_back(seg);
+        }
+    }
+    while let (Some(&first), Some(&last)) = (kept.front(), kept.back()) {
+        if kept.len() < 2 || !retraces(last, first) {
+            break;
+        }
+        kept.pop_back();
+        kept.pop_front();
+    }
+    let start = kept.front()?.start();
+    let mut path = BezPath::new();
+    path.move_to(start);
+    for seg in &kept {
+        path.push(seg.as_path_el());
+    }
+    path.close_path();
+    Some(path)
+}
+
+/// The points of the segment `s`, control points too.
+fn seg_points(s: kurbo::PathSeg) -> Vec<Point> {
+    match s {
+        kurbo::PathSeg::Line(l) => vec![l.p0, l.p1],
+        kurbo::PathSeg::Quad(q) => vec![q.p0, q.p1, q.p2],
+        kurbo::PathSeg::Cubic(c) => vec![c.p0, c.p1, c.p2, c.p3],
+    }
+}
+
+/// A rounding of the coordinates of `points`: 64 units in the last place of the largest of them.
+fn rounding_of(points: &[Point]) -> f64 {
+    64.0 * f64::EPSILON * points.iter().fold(0.0f64, |m, p| m.max(p.x.abs()).max(p.y.abs()))
+}
+
+/// Do all of `points` lie within `tol` of the line from `a` to `b`?
+fn all_near_line(points: &[Point], a: Point, b: Point, tol: f64) -> bool {
+    let chord = b - a;
+    let len_sq = chord.hypot2();
+    points.iter().all(|&p| {
+        let t = if len_sq > 0.0 { ((p - a).dot(chord) / len_sq).clamp(0.0, 1.0) } else { 0.0 };
+        (p - (a + chord * t)).hypot() <= tol
+    })
+}
+
+/// Does the segment `s` go straight out and back by itself: end where it starts, with all its points
+/// within a rounding of their coordinates of the line from its start to the point of it furthest away?
+/// (Or is it a point.) It then encloses nothing.
+fn folds(s: kurbo::PathSeg) -> bool {
+    use kurbo::ParamCurve;
+    let pts = seg_points(s);
+    let rounding = rounding_of(&pts);
+    let a = s.start();
+    if s.end().distance(a) > rounding {
+        return false;
+    }
+    let far = pts.iter().copied().fold(a, |f, p| if p.distance(a) > f.distance(a) { p } else { f });
+    all_near_line(&pts, a, far, rounding)
+}
+
+/// Does `back` come straight back over `out`: from where `out` ends to where it starts, both within a
+/// rounding of their coordinates ([`rounding_of`]) of the line between those two points, control points
+/// too? Each curve then lies along that line from one end to the other, so the two are one curve to
+/// within twice that, and enclose nothing between them.
+fn retraces(out: kurbo::PathSeg, back: kurbo::PathSeg) -> bool {
+    use kurbo::ParamCurve;
+    let (a, b) = (out.start(), out.end());
+    let all: Vec<Point> = seg_points(out).into_iter().chain(seg_points(back)).collect();
+    let rounding = rounding_of(&all);
+    let span = a.distance(b);
+    if span.is_nan() || span <= rounding {
+        return false;
+    }
+    back.start().distance(b) <= rounding && back.end().distance(a) <= rounding && all_near_line(&all, a, b, rounding)
 }
 
 /// Most curves (of the two paths together) whose lengths [`filled_boundary`] measures.
@@ -494,13 +571,31 @@ fn has_marked_ancestor(c: &Contours, mut i: usize, marked: &[bool]) -> bool {
 /// A point well inside the area `bp` bounds by the even-odd rule (a contour, or a face: a contour with
 /// the contours directly inside it): the midpoint of the widest span inside it on one of three
 /// horizontal lines, through its vertical centre and three tenths above and below.
+///
+/// The spans are found on `bp` flattened to a hundredth of its size, which can put the middle of a
+/// span outside the area where the area is narrower than that (a ring a tenth wide round a hole a
+/// hundred across): so a middle is taken only where the winding of `bp` itself is odd, the widest of
+/// the first few spans that is. `None` when none is (and the contour is then not taken for spurious).
 fn deep_point(bp: &BezPath) -> Option<kurbo::Point> {
     use kurbo::Shape;
     let r = bp.bounding_box();
     if !(r.width() > 0.0 && r.height() > 0.0) {
         return None;
     }
-    let mut best: Option<(f64, kurbo::Point)> = None;
+    let mut spans = spans_across(bp, r, (0.01 * r.width().min(r.height())).max(1e-6));
+    // The widest first, the first found of equal ones first.
+    spans.sort_by(|a, b| b.0.total_cmp(&a.0));
+    spans.into_iter().take(MAX_DEEP_TESTS).map(|(_, p)| p).find(|&p| bp.winding(p) % 2 != 0)
+}
+
+/// Most middles of spans [`deep_point`] tests against the winding of the path.
+const MAX_DEEP_TESTS: usize = 8;
+
+/// The spans inside `bp` (even-odd) on the horizontal lines through the middle of its bounds `r` and
+/// three tenths above and below, on `bp` flattened to `tolerance`: each span's width and middle, in
+/// the order of the lines and from left to right.
+fn spans_across(bp: &BezPath, r: kurbo::Rect, tolerance: f64) -> Vec<(f64, kurbo::Point)> {
+    let mut spans = Vec::new();
     for f in [0.5, 0.3, 0.7] {
         let y = r.y0 + r.height() * f;
         let mut xs = vec![];
@@ -511,7 +606,7 @@ fn deep_point(bp: &BezPath) -> Option<kurbo::Point> {
                 xs.push(a.x + (y - a.y) / (b.y - a.y) * (b.x - a.x));
             }
         };
-        crate::path::flatten(bp.iter(), 0.01 * r.width().min(r.height()).max(1e-6), |el| match el {
+        crate::path::flatten(bp.iter(), tolerance, |el| match el {
             PathEl::MoveTo(p) => {
                 start = p;
                 prev = Some(p);
@@ -532,13 +627,10 @@ fn deep_point(bp: &BezPath) -> Option<kurbo::Point> {
         });
         xs.sort_by(f64::total_cmp);
         for w in xs.as_chunks::<2>().0 {
-            let span = w[1] - w[0];
-            if best.is_none_or(|(b, _)| span > b) {
-                best = Some((span, kurbo::Point::new((w[0] + w[1]) / 2.0, y)));
-            }
+            spans.push((w[1] - w[0], kurbo::Point::new((w[0] + w[1]) / 2.0, y)));
         }
     }
-    best.map(|(_, p)| p)
+    spans
 }
 
 /// Each segment of `bp` with its bounding box.
