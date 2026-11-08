@@ -398,6 +398,46 @@ impl<'segs> Sweeper<'segs> {
         })
     }
 
+    /// Returns true if segments `i` and `j` start at the same point and the sweep line is at
+    /// that point.
+    ///
+    /// Every pair of segments that start at one point compares "ish" there, so a scan or an
+    /// insertion search from one of them passes all the others. Comparisons of such pairs made
+    /// at that point are not stored, so that `n` segments starting at one point store `O(n)`
+    /// comparisons instead of `O(n^2)`.
+    fn start_together_here(&self, i: SegIdx, j: SegIdx, y: f64) -> bool {
+        let start = self.segments[i].start();
+        start.y == y && start == self.segments[j].start()
+    }
+
+    /// Returns the next touch of `i` and `j` after `y`, and the first interval of their
+    /// conservative order that ends after `y`.
+    fn scan_comparison(
+        &self,
+        i: SegIdx,
+        j: SegIdx,
+        y: f64,
+    ) -> (Option<CurveInteraction>, Option<(f64, f64, Order)>) {
+        if self.start_together_here(i, j, y) {
+            let touch = self
+                .comparisons
+                .borrow()
+                .with_order(self.segments, i, j, |c| c.next_touch_after(y));
+            let first =
+                self.conservative_comparisons
+                    .borrow()
+                    .with_order(self.segments, i, j, |c| c.iter().find(|(_, y1, _)| *y1 > y));
+            return (touch, first);
+        }
+
+        let touch = self.compare_segments(i, j).next_touch_after(y);
+        let first = self
+            .compare_segments_conservatively(i, j)
+            .iter()
+            .find(|(_, y1, _)| *y1 > y);
+        (touch, first)
+    }
+
     /// Moves the sweep forward, returning the next sweep line.
     ///
     /// Returns `None` when sweeping is complete.
@@ -507,9 +547,7 @@ impl<'segs> Sweeper<'segs> {
             // event queue between actual intersections and near-touches? For
             // now, no. We will distinguish them in handle_intersection
 
-            let touch = self
-                .compare_segments(seg_idx, other_idx)
-                .next_touch_after(y);
+            let (touch, first_after_y) = self.scan_comparison(seg_idx, other_idx, y);
             if let Some(int_y) = touch.and_then(|touch| choose_cross_height(touch, y, which)) {
                 let (left_idx, right_idx) = match touch {
                     Some(curve::CurveInteraction::Touch(..)) => (j, start_idx),
@@ -531,8 +569,7 @@ impl<'segs> Sweeper<'segs> {
                 }
             }
 
-            let cmp = self.compare_segments_conservatively(seg_idx, other_idx);
-            if let Some((_y0, y1, order)) = cmp.iter().find(|(_, y1, _)| *y1 > y)
+            if let Some((_y0, y1, order)) = first_after_y
                 && order == Order::Left
                 && y1 >= height_bound
             {
@@ -564,9 +601,7 @@ impl<'segs> Sweeper<'segs> {
             }
             height_bound = height_bound.min(other.end().y);
 
-            let touch = self
-                .compare_segments(other_idx, seg_idx)
-                .next_touch_after(y);
+            let (touch, first_after_y) = self.scan_comparison(other_idx, seg_idx, y);
             if let Some(int_y) = touch.and_then(|touch| choose_cross_height(touch, y, which)) {
                 let (left_idx, right_idx) = match touch {
                     Some(curve::CurveInteraction::Touch(..)) => (start_idx, j),
@@ -582,8 +617,7 @@ impl<'segs> Sweeper<'segs> {
                 }
             }
 
-            let cmp = self.compare_segments_conservatively(other_idx, seg_idx);
-            if let Some((_y0, y1, order)) = cmp.iter().find(|(_, y1, _)| *y1 > y)
+            if let Some((_y0, y1, order)) = first_after_y
                 && order == Order::Left
                 && y1 >= height_bound
             {
@@ -1305,11 +1339,31 @@ impl SegmentOrder {
             };
         }
 
-        // A predicate that tests whether `other` is definitely to the left of `seg` at `y`.
-        let lower_pred = |other: &SegmentOrderEntry| -> bool {
-            let cmp = comparer.compare_segments(segments, other.seg, seg_idx);
-            cmp.order_at(y) == Order::Left
+        // Every segment that starts where the new one starts compares "ish" to it here, so the
+        // search below can pass all of them. Comparisons with those segments are made without
+        // storing them (see `Sweeper::start_together_here`). `order` returns the order of `other`
+        // relative to the new segment at `y` and, if that is "ish", the order after `y`.
+        let start = seg.start();
+        let order = |comparer: &mut ComparisonCache, other: SegIdx| -> (Order, Order) {
+            let orders = |cmp: &CurveOrder| {
+                let at = cmp.order_at(y);
+                let after = if at == Order::Ish {
+                    cmp.order_after(y)
+                } else {
+                    at
+                };
+                (at, after)
+            };
+            if start.y == y && segments[other].start() == start {
+                comparer.with_order(segments, other, seg_idx, orders)
+            } else {
+                orders(comparer.compare_segments(segments, other, seg_idx))
+            }
         };
+
+        // A predicate that tests whether `other` is definitely to the left of `seg` at `y`.
+        let lower_pred =
+            |other: &SegmentOrderEntry| -> bool { order(comparer, other.seg).0 == Order::Left };
 
         // The rust stdlib docs say that we're not allowed to do this, because
         // our array isn't sorted with respect to `lower_pred`.
@@ -1322,8 +1376,8 @@ impl SegmentOrder {
         let search_start = self.segs.partition_point(lower_pred);
         let mut idx = search_start;
         for i in search_start..self.segs.len() {
-            let cmp = comparer.compare_segments(segments, self.segs[i].seg, seg_idx);
-            match cmp.order_at(y) {
+            let (order_at, order_after) = order(comparer, self.segs[i].seg);
+            match order_at {
                 Order::Right => {
                     // The segment at i is definitely to the right of the new one.
                     break;
@@ -1331,7 +1385,7 @@ impl SegmentOrder {
                 Order::Ish => {
                     // We could go either way, and we'll update our preference based on the
                     // future ordering.
-                    if cmp.order_after(y) == Order::Left {
+                    if order_after == Order::Left {
                         idx = i + 1;
                     }
                 }
@@ -2082,6 +2136,125 @@ mod tests {
         )
         .unwrap();
         insta::assert_ron_snapshot!(snapshot_outputs(segs, 0.25));
+    }
+
+    /// `n` thin triangles that share the apex (0, 0), with bases on y = 500, 10 apart.
+    /// No two of them cross. With `curved`, the left edge of each one bows out by 0.5.
+    fn shared_apex_triangles(n: u32, curved: bool) -> BezPath {
+        let mut path = BezPath::new();
+        for i in 0..n {
+            let x = f64::from(i) * 10.0;
+            path.move_to((0.0, 0.0));
+            if curved {
+                path.quad_to(((x - 3.0) / 2.0 - 1.0, 250.0), (x - 3.0, 500.0));
+            } else {
+                path.line_to((x - 3.0, 500.0));
+            }
+            path.line_to((x + 3.0, 500.0));
+            path.close_path();
+        }
+        path
+    }
+
+    /// Sweeps `path` and asserts that each comparison cache stores at most `max` comparisons.
+    ///
+    /// The `slow-asserts` checks compare every pair of segments on the sweep line with the
+    /// regular comparisons, so with that feature only the conservative ones are counted.
+    fn assert_stored_at_most(path: &BezPath, max: usize) {
+        let mut segs = Segments::default();
+        segs.add_bez_path(path).unwrap();
+
+        let mut sweeper = Sweeper::new(&segs, 1e-6);
+        let mut bufs = SweepLineBuffers::default();
+        while sweeper.next_line(&mut bufs).is_some() {}
+        let regular = sweeper.comparisons.borrow().len();
+        let conservative = sweeper.conservative_comparisons.borrow().len();
+        assert!(
+            (cfg!(feature = "slow-asserts") || regular <= max) && conservative <= max,
+            "{regular} regular and {conservative} conservative comparisons stored"
+        );
+    }
+
+    #[test]
+    fn segments_starting_at_one_point_are_not_stored() {
+        // Storing every pair of the 400 edges that start at the apex gives 79,800 entries.
+        let n: u32 = 200;
+        let path = shared_apex_triangles(n, false);
+        assert_stored_at_most(&path, 2 * n as usize);
+
+        let top = crate::topology::Topology::<i32>::from_path(&path, 1e-6).unwrap();
+        let contours = top.contours(|w| *w != 0);
+        assert_eq!(contours.contours().count(), n as usize);
+        let area: f64 = contours
+            .contours()
+            .map(|c| kurbo::Shape::area(&c.path).abs())
+            .sum();
+        assert!((area - f64::from(n) * 1500.0).abs() < 1e-3, "area {area}");
+    }
+
+    #[test]
+    fn segments_starting_at_one_point_sweep_as_with_stored_comparisons() {
+        // 40 overlapping triangles share the apex (0, 0); their bases cross the neighbors' edges.
+        let frac = |x: f64| x - x.floor();
+        for curved in [false, true] {
+            let mut path = BezPath::new();
+            for i in 0..40 {
+                let i = f64::from(i);
+                let left = (i * 4.0 - 6.0, 500.0 + 50.0 * frac(i * 0.618));
+                let right = (i * 4.0 + 6.0, 500.0 + 50.0 * frac(i * 0.75));
+                path.move_to((0.0, 0.0));
+                if curved {
+                    path.quad_to((left.0 / 2.0 - 3.0, left.1 / 2.0), left);
+                } else {
+                    path.line_to(left);
+                }
+                path.line_to(right);
+                path.close_path();
+            }
+            let mut segs = Segments::default();
+            segs.add_bez_path(&path).unwrap();
+
+            let sweep = |store_first: bool| {
+                let sweeper = Sweeper::new(&segs, 1e-6);
+                if store_first {
+                    // With every comparison of segments that start together already stored, the
+                    // sweep uses the stored ones, as it did when it stored all of them.
+                    for i in segs.indices() {
+                        for j in segs.indices() {
+                            if i.0 < j.0 && segs[i].start() == segs[j].start() {
+                                sweeper.compare_segments(i, j);
+                                sweeper.compare_segments_conservatively(i, j);
+                            }
+                        }
+                    }
+                }
+                let mut sweeper = sweeper;
+                let mut outputs = Vec::new();
+                let mut bufs = SweepLineBuffers::default();
+                while let Some(line) = sweeper.next_line(&mut bufs) {
+                    outputs.push(format!(
+                        "{} {:?} {:?}",
+                        line.y(),
+                        line.state.line,
+                        line.state.changed_intervals
+                    ));
+                }
+                outputs
+            };
+            assert_eq!(sweep(false), sweep(true), "curved: {curved}");
+        }
+    }
+
+    #[test]
+    fn curves_starting_at_one_point_are_not_stored() {
+        // Storing every pair of the 120 edges that start at the apex gives 7,140 entries.
+        let n: u32 = 60;
+        let path = shared_apex_triangles(n, true);
+        assert_stored_at_most(&path, 2 * n as usize);
+
+        let top = crate::topology::Topology::<i32>::from_path(&path, 1e-6).unwrap();
+        let contours = top.contours(|w| *w != 0);
+        assert_eq!(contours.contours().count(), n as usize);
     }
 
     #[test]
