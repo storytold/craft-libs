@@ -95,6 +95,23 @@ impl Failure {
     fn dropped() -> Self {
         Self::Updater(Note::new("The update stopped unexpectedly.", &[]))
     }
+
+    /// The reason in English, for the log and for the record the next start reads.
+    fn reason(&self) -> String {
+        match self {
+            Self::Installer(e) => e.clone(),
+            Self::Updater(note) => note.translated(english),
+        }
+    }
+}
+
+/// Logs a failed update and records it under `paths`, so that the next start reports it
+/// ([`Status::InstallFailed`]). Used at the exit, where no prompt can show the reason.
+fn record(app: &App, paths: Option<&Paths>, reason: &str) {
+    log::warn!("{} self-update failed: {reason}", app.name);
+    if let Some(paths) = paths {
+        self_update::record_failure(paths, reason);
+    }
 }
 
 impl From<String> for Failure {
@@ -343,7 +360,8 @@ impl Updater {
 
     /// The answer to a requested check while an update installs or waits for the app to exit. A
     /// helper that already started while the app kept running may have failed: its recorded
-    /// reason is the answer then, and the update is on offer again.
+    /// reason is the answer then, the update is on offer again, and an open prompt says why
+    /// instead of offering Restart to Update.
     fn pending_status(&mut self) -> Status {
         if self.install.is_some() {
             return Status::Installing;
@@ -352,8 +370,15 @@ impl Updater {
             && let Some(reason) = self.outcome_paths().and_then(|paths| self_update::take_failure(&paths))
         {
             log::warn!("{} self-update failed: {reason}", self.app.name);
+            let reason = reason.trim().to_owned();
             self.installed = false;
-            return Status::InstallFailed(reason.trim().to_owned());
+            self.close_wanted = false;
+            if let Some(prompt) = &mut self.prompt {
+                prompt.is_installing = false;
+                prompt.is_ready = false;
+                prompt.set_note(Note::new("The update could not be installed: {reason}", &[("reason", &reason)]));
+            }
+            return Status::InstallFailed(reason);
         }
         Status::Ready
     }
@@ -505,8 +530,9 @@ impl Updater {
     /// Call it once the app's exit is certain (a close nothing can cancel any more, in `on_exit`),
     /// whether or not the exit came through [`Action::Close`]; dropping the `Updater` calls it
     /// too. Later calls do nothing. An installation still running when the `Updater` is dropped
-    /// starts its helper itself when it finishes. A helper that cannot start is recorded, and the
-    /// next start reports it ([`Status::InstallFailed`]).
+    /// starts its helper itself when it finishes. A helper that cannot start, or an installation
+    /// that failed and was not reported yet, is recorded, and the next start reports it
+    /// ([`Status::InstallFailed`]).
     pub fn start_pending_update(&mut self) {
         // An installation that finished since the last `tick`.
         if let Some((rx, release)) = &self.install
@@ -517,18 +543,14 @@ impl Updater {
                     self.restart = Some((restart, release.clone()));
                     self.installed = true;
                 }
-                Err(Failure::Installer(e)) => log::warn!("{} self-update failed: {e}", self.app.name),
-                Err(Failure::Updater(note)) => log::warn!("{} self-update failed: {}", self.app.name, note.translated(english)),
+                Err(failure) => record(self.app, self.outcome_paths().as_ref(), &failure.reason()),
             }
             self.install = None;
         }
         if let Some((restart, _)) = self.restart.take()
             && let Err(e) = restart.start()
         {
-            log::warn!("{} self-update failed: {e}", self.app.name);
-            if let Some(paths) = self.outcome_paths() {
-                self_update::record_failure(&paths, &e);
-            }
+            record(self.app, self.outcome_paths().as_ref(), &e);
         }
     }
 
@@ -546,6 +568,7 @@ impl Updater {
             return;
         }
         let installed_note = self.installed_note();
+        let paths = self.outcome_paths();
         let Some(prompt) = &mut self.prompt else { return };
         if self.installed {
             // Restart to update: the app is asked to close again.
@@ -569,7 +592,7 @@ impl Updater {
         let spawned = std::thread::Builder::new().name("self-update".into()).spawn(move || {
             let run = || install(app, &installed, worker_release, &version).map_err(Failure::Installer);
             let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(run)).unwrap_or_else(|_| Err(Failure::panicked()));
-            deliver(app, &tx, &dropped, outcome);
+            deliver(app, &tx, &dropped, paths.as_ref(), outcome);
             ctx.request_repaint();
         });
         match spawned {
@@ -597,15 +620,20 @@ impl Drop for Updater {
 
 /// Sends the install worker's outcome to the [`Updater`]. When the `Updater` has been dropped
 /// (the app is exiting), the worker starts a finished installation's helper itself, since
-/// nothing will start it at a close.
-fn deliver(app: &App, tx: &Sender<Result<Restart, Failure>>, dropped: &Mutex<bool>, outcome: Result<Restart, Failure>) {
+/// nothing will start it at a close. A helper that cannot start, or a failed installation, is
+/// then recorded under `paths` for the next start.
+fn deliver(app: &App, tx: &Sender<Result<Restart, Failure>>, dropped: &Mutex<bool>, paths: Option<&Paths>, outcome: Result<Restart, Failure>) {
     let gone = dropped.lock().unwrap_or_else(PoisonError::into_inner);
     let unsent = if *gone { Some(outcome) } else { tx.send(outcome).err().map(|SendError(outcome)| outcome) };
     drop(gone);
-    if let Some(Ok(restart)) = unsent
-        && let Err(e) = restart.start()
-    {
-        log::warn!("{} self-update failed: {e}", app.name);
+    match unsent {
+        Some(Ok(restart)) => {
+            if let Err(e) = restart.start() {
+                record(app, paths, &e);
+            }
+        }
+        Some(Err(failure)) => record(app, paths, &failure.reason()),
+        None => {}
     }
 }
 
@@ -1122,18 +1150,18 @@ mod tests {
         u.install = Some((rx, newer()));
         drop(u);
         assert_eq!(starts.load(Ordering::SeqCst), 0);
-        deliver(&crate::suite::LAUNCHER, &tx, &dropped, Ok(restart));
+        deliver(&crate::suite::LAUNCHER, &tx, &dropped, None, Ok(restart));
         assert_eq!(starts.load(Ordering::SeqCst), 1);
 
         // Sent while the drop has read the channel but not yet released the receiver.
         let (starts, restart) = counted_restart();
         let (tx, _rx) = channel();
-        deliver(&crate::suite::LAUNCHER, &tx, &Mutex::new(true), Ok(restart));
+        deliver(&crate::suite::LAUNCHER, &tx, &Mutex::new(true), None, Ok(restart));
         assert_eq!(starts.load(Ordering::SeqCst), 1, "a receiver about to be dropped is not sent to");
 
         let (starts, restart) = counted_restart();
         let (tx, rx) = channel();
-        deliver(&crate::suite::LAUNCHER, &tx, &Mutex::new(false), Ok(restart));
+        deliver(&crate::suite::LAUNCHER, &tx, &Mutex::new(false), None, Ok(restart));
         assert_eq!(starts.load(Ordering::SeqCst), 0, "the updater starts it at the close");
         assert!(rx.try_recv().is_ok_and(|outcome| outcome.is_ok()));
     }
@@ -1321,6 +1349,7 @@ mod tests {
     fn a_requested_check_finds_a_helper_failure_while_the_app_still_runs() {
         let ctx = egui::Context::default();
         let (_dir, paths, mut u) = with_records("0.1.0");
+        u.offer(newer());
         let (tx, rx) = channel();
         u.install = Some((rx, newer()));
         assert!(tx.send(Ok(Restart::scheduled())).is_ok());
@@ -1328,12 +1357,57 @@ mod tests {
         u.start_pending_update();
         u.check_now(&ctx);
         assert_eq!(u.status(), &Status::Ready, "the helper is still waiting");
+        assert!(u.prompt.as_ref().is_some_and(|p| p.is_ready), "the prompt offers Restart to Update");
         self_update::record_failure(&paths, "ArtCraft Launcher is still running");
         u.check_now(&ctx);
         assert_eq!(u.status(), &Status::InstallFailed("ArtCraft Launcher is still running".into()));
         assert!(!u.installed, "the update is on offer again");
+        let prompt = u.prompt.as_ref().map(|p| (p.is_installing, p.is_ready, p.message()));
+        let reason = "The update could not be installed: ArtCraft Launcher is still running".to_owned();
+        assert_eq!(prompt, Some((false, false, Some(reason))), "the prompt no longer offers Restart to Update");
+        assert!(!u.close_wanted, "no close is asked for");
+        assert_eq!(frame(&mut u, &ctx, true), Action::None);
         u.check_now(&ctx);
         assert_eq!(u.status(), &Status::Checking, "Check Again runs a check");
+    }
+
+    /// An installation that finishes after the updater was dropped and whose helper cannot start,
+    /// or that failed, is recorded, and the next start says why.
+    #[test]
+    fn an_install_failing_after_the_updater_is_dropped_is_reported_at_the_next_start() {
+        let ctx = egui::Context::default();
+        let failures: [(Result<Restart, Failure>, &str); 3] = [
+            (Ok(Restart::later(|| Err("couldn't schedule the update (denied)".into()))), "couldn't schedule the update (denied)"),
+            (Err("couldn't download the update".into()), "couldn't download the update"),
+            (Err(Failure::panicked()), "The update failed unexpectedly."),
+        ];
+        for (outcome, want) in failures {
+            let (_dir, paths, mut u) = with_records("0.1.0");
+            let dropped = Arc::clone(&u.dropped);
+            let (tx, rx) = channel();
+            u.install = Some((rx, newer()));
+            drop(u);
+            deliver(&PHOTOCRAFT, &tx, &dropped, Some(&paths), outcome);
+            let mut next = reading(&paths, "0.1.0");
+            start_answered(&mut next, &ctx, Ok(None));
+            assert_eq!(next.status(), &Status::InstallFailed(want.into()), "{want}");
+        }
+    }
+
+    /// A failed installation picked up at the exit is recorded, and the next start says why.
+    #[test]
+    fn a_failed_install_picked_up_at_exit_is_reported_at_the_next_start() {
+        let ctx = egui::Context::default();
+        for (failure, want) in [(Failure::from("disk full"), "disk full"), (Failure::dropped(), "The update stopped unexpectedly.")] {
+            let (_dir, paths, mut u) = with_records("0.1.0");
+            let (tx, rx) = channel::<Result<Restart, Failure>>();
+            u.install = Some((rx, newer()));
+            assert!(tx.send(Err(failure)).is_ok());
+            drop(u);
+            let mut next = reading(&paths, "0.1.0");
+            start_answered(&mut next, &ctx, Ok(None));
+            assert_eq!(next.status(), &Status::InstallFailed(want.into()), "{want}");
+        }
     }
 }
 
