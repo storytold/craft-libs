@@ -283,12 +283,12 @@ pub fn open_url_with_fallback(primary_url: &str, fallback_url: &str) {
     let fallback = fallback_url.to_string();
     let opener = std::thread::Builder::new().name("open-url".into()).spawn(move || {
         if !open_and_wait_success(&primary, Duration::from_millis(1500)) {
-            log::warn!("couldn't open {primary}; falling back to {fallback}");
+            log::warn!("couldn't open a link; opening its fallback");
             let _ = open(std::ffi::OsStr::new(&fallback));
         }
     });
     if let Err(e) = opener {
-        log::warn!("couldn't start a thread to open {primary_url} ({e})");
+        log::warn!("couldn't start a thread to open a link ({e})");
     }
 }
 
@@ -304,7 +304,7 @@ fn open_and_wait_success(target: &str, timeout: Duration) -> bool {
     let mut cmd = match opener(std::ffi::OsStr::new(target)) {
         Ok(cmd) => cmd,
         Err(error) => {
-            log::warn!("couldn't resolve the system opener for {target}: {error}");
+            log::warn!("couldn't resolve the system opener: {error}");
             return false;
         }
     };
@@ -314,7 +314,7 @@ fn open_and_wait_success(target: &str, timeout: Duration) -> bool {
     let mut child = match cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn() {
         Ok(c) => c,
         Err(e) => {
-            log::warn!("couldn't start the opener for {target}: {e}");
+            log::warn!("couldn't start the system opener: {e}");
             return false;
         }
     };
