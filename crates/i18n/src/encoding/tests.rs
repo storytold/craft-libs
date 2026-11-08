@@ -80,9 +80,17 @@ fn test_already_unicode_never_transcoded() {
     // -------------------------------------------------------------------------
     for unicode in ["HÌNH CHIẾU ĐỨNG", "HÌNH DÁNG", "TÒA NHÀ", "CHÚNG TÔI", "BÁO CÁO"] {
         assert!(is_already_unicode_vietnamese(unicode), "failed on {unicode}");
-        assert_eq!(transcode_vietnamese(unicode, Some("VNI-Helve")), unicode);
-        assert_eq!(transcode_vietnamese(unicode, Some(".VnTime")), unicode);
-        assert_eq!(transcode_vietnamese(unicode, None), unicode);
+        let res_vni = transcode_vietnamese(unicode, Some("VNI-Helve"));
+        assert_eq!(res_vni, unicode);
+        assert!(matches!(res_vni, Cow::Borrowed(_)), "Must be zero-allocation Cow::Borrowed for {unicode}");
+
+        let res_tcvn = transcode_vietnamese(unicode, Some(".VnTime"));
+        assert_eq!(res_tcvn, unicode);
+        assert!(matches!(res_tcvn, Cow::Borrowed(_)), "Must be zero-allocation Cow::Borrowed for {unicode}");
+
+        let res_none = transcode_vietnamese(unicode, None);
+        assert_eq!(res_none, unicode);
+        assert!(matches!(res_none, Cow::Borrowed(_)), "Must be zero-allocation Cow::Borrowed for {unicode}");
     }
 }
 
@@ -476,6 +484,63 @@ fn test_vni_orphan_diacritic_fallback() {
 }
 
 #[test]
+fn test_vni_streaming_chunk_partition_invariance() {
+    // -------------------------------------------------------------------------
+    // WHY: Streaming decoders must guarantee mathematical invariance across chunk boundaries:
+    // D(B) = D(B_1 || B_2 || ... || B_n) for any arbitrary slicing of byte sequence B.
+    // DANGER: If chunk splits desynchronize lookahead buffers (e.g. pending base vowels,
+    // multi-byte CapsLock sequences like `I` + 0xCF + `T`), the output diverges based on network
+    // packet or file buffer size, corrupting text non-deterministically.
+    // CONTRACT: Tier 1 - Contract 2 (Streaming State Machine Chunk Invariance).
+    // -------------------------------------------------------------------------
+    let corpora: &[&[u8]] = &[
+        b"CONG HOA XA HOI CHU NGHIA VI\xCFT NAM",
+        b"VI\xCFT NAM DONG NAI BA RIA VUNG TAU",
+        b"Ban ve so 1a\xf9 va chi tiet gia cong k\xf8 thong so ky thuat",
+        b"TO\xc5NG KHO\xc1I L\xd6\xd4\xcfNG",
+        b"NHO\xc2M 3003 DA\xd8Y 2MM",
+        b"QUY CA\xd9CH",
+        b"VI\xCF",   // Truncated IET at EOF -> VỊ
+        b"VI\xCF A", // IET followed by non-T -> VỊ A
+        b"a\xf8 a\xf9 a\xfa a\xf5 a\xef",
+    ];
+
+    for &payload in corpora {
+        let expected = decode_vni(payload, DecodeMode::Practical).expect("one-shot decode");
+
+        // Test 1: Byte-by-byte chunking (worst-case fragmentation: chunk size = 1)
+        let mut dec_1 = VniDecoder::new(DecodeMode::Practical);
+        let mut out_1 = String::new();
+        for &byte in payload {
+            dec_1.decode_chunk(&[byte], &mut out_1).expect("1-byte chunk");
+        }
+        dec_1.finish(&mut out_1).expect("finish 1-byte");
+        assert_eq!(out_1, expected.as_ref(), "1-byte chunking must match one-shot for {:?}", payload);
+
+        // Test 2: Every single split point partition (B_1 = [0..split], B_2 = [split..len])
+        for split in 0..=payload.len() {
+            let mut dec_split = VniDecoder::new(DecodeMode::Practical);
+            let mut out_split = String::new();
+            dec_split.decode_chunk(&payload[..split], &mut out_split).expect("chunk 1");
+            dec_split.decode_chunk(&payload[split..], &mut out_split).expect("chunk 2");
+            dec_split.finish(&mut out_split).expect("finish split");
+            assert_eq!(out_split, expected.as_ref(), "Split at {split} must match one-shot for {:?}", payload);
+        }
+
+        // Test 3: Multiple chunk sizes (2, 3, 5, 7 bytes)
+        for chunk_size in [2, 3, 5, 7] {
+            let mut dec_chunk = VniDecoder::new(DecodeMode::Practical);
+            let mut out_chunk = String::new();
+            for window in payload.chunks(chunk_size) {
+                dec_chunk.decode_chunk(window, &mut out_chunk).expect("window chunk");
+            }
+            dec_chunk.finish(&mut out_chunk).expect("finish window");
+            assert_eq!(out_chunk, expected.as_ref(), "{chunk_size}-byte window must match one-shot for {:?}", payload);
+        }
+    }
+}
+
+#[test]
 fn test_vni_streaming_chunk_boundaries() {
     // -------------------------------------------------------------------------
     // WHY: VNI is a composite encoding where diacritics follow base vowels (e.g., 'a' + 0xF9 -> 'á').
@@ -624,9 +689,8 @@ fn test_real_world_corpora_fixtures() {
 #[test]
 fn test_short_string_heuristic_inhibition_invariant() {
     // -------------------------------------------------------------------------
-    // WHY: In CAD (.dwg) and spreadsheets (.xlsx), over 70% of text entities are short labels (< 16 bytes)
-    // such as "TẦNG 1", "CỘT C1", or "KHO". Running statistical n-gram heuristics on such short byte slices
-    // produces high rates of false-positive detections.
+    // WHY: Short labels are common in CAD (.dwg) and spreadsheet (.xlsx) documents (e.g. "TẦNG 1", "CỘT C1", "KHO").
+    // Running statistical n-gram heuristics on such short byte slices produces high rates of false-positive detections.
     // Short strings MUST inhibit heuristics and rely strictly on explicit metadata or FontHints (.VnTime, VNI-).
     // DANGER: Without this length gate, short French, German, or English words get erroneously transcoded.
     // CONTRACT: Tier 1 - Contract 3 (Short-String Invariant < 16 bytes).
