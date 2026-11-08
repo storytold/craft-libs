@@ -529,15 +529,52 @@ impl<W: WindingNumber> Topology<W> {
             SegVec::from_vec(tag),
             eps,
 	    correctness,
-        ))
+            None,
+        )
+        .expect("a sweep without a work limit always finishes"))
     }
 
+    /// Construct a new topology from a collection of paths and tags, making at most
+    /// `work_limit` segment comparisons.
+    ///
+    /// This is [`Topology::from_paths`], except that it returns
+    /// [`Error::WorkLimitExceeded`](crate::Error::WorkLimitExceeded) once the sweep has made
+    /// more than `work_limit` comparisons. Stacked copies of a shape and nearly coincident
+    /// segments can need billions of comparisons, and the limit bounds the time a caller waits.
+    pub fn from_paths_with_work_limit<'a, Iter>(
+        paths: Iter,
+        eps: f64,
+        work_limit: u64,
+    ) -> Result<Self, crate::Error>
+    where
+        Iter: IntoIterator<Item = (&'a BezPath, W::Tag)>,
+    {
+        let mut segments = Segments::default();
+        let mut tag = Vec::new();
+        for (p, t) in paths {
+            segments.add_path_without_updating_enter_exit(p, true)?;
+            tag.resize(segments.len(), t);
+        }
+        segments.update_enter_exit(0);
+        segments.check_invariants();
+        Self::from_segments(
+            segments,
+            SegVec::from_vec(tag),
+            eps,
+            Correctness::GoodEnough,
+            Some(work_limit),
+        )
+    }
+
+    /// Returns [`crate::Error::WorkLimitExceeded`] if `work_limit` is given and the sweep makes
+    /// more segment comparisons than it.
     fn from_segments(
         segments: Segments,
         tag: SegVec<W::Tag>,
         eps: f64,
         correctness: Correctness,
-    ) -> Self {
+        work_limit: Option<u64>,
+    ) -> Result<Self, crate::Error> {
         let mut ret = Self {
             eps,
             correctness,
@@ -558,6 +595,9 @@ impl<W: WindingNumber> Topology<W> {
             segments: Segments::default(),
         };
         let mut sweep_state = Sweeper::new_with_correctness(&segments, eps, correctness);
+        if let Some(work_limit) = work_limit {
+            sweep_state.set_work_limit(work_limit);
+        }
         let mut range_bufs = SweepLineRangeBuffers::default();
         let mut line_bufs = SweepLineBuffers::default();
         while let Some(mut line) = sweep_state.next_line(&mut line_bufs) {
@@ -573,6 +613,9 @@ impl<W: WindingNumber> Topology<W> {
                 ret.process_sweep_line_range(positions, &segments, scan_west_seg);
             }
         }
+        if sweep_state.work_limit_exceeded() {
+            return Err(crate::Error::WorkLimitExceeded);
+        }
         ret.segments = segments;
 
         #[cfg(feature = "slow-asserts")]
@@ -583,7 +626,7 @@ impl<W: WindingNumber> Topology<W> {
         #[cfg(feature = "slow-asserts")]
         ret.check_invariants();
 
-        ret
+        Ok(ret)
     }
 
     /// We're working on building up a list of half-segments that all meet at a point.
@@ -1841,7 +1884,9 @@ impl Topology<BinaryWindingNumber> {
             SegVec::from_vec(shape_a),
             eps,
             Correctness::GoodEnough,
+            None,
         )
+        .expect("a sweep without a work limit always finishes")
     }
 
     /// Creates a new `Topology` from two Bézier paths.
@@ -2660,6 +2705,30 @@ mod tests {
     //         }
     //     }
     // }
+
+    // Craft patch (work limit). Stacked copies of a circle make every segment
+    // overlap every other, and the sweep compares each segment with all of them.
+    #[test]
+    fn work_limit() {
+        use kurbo::{Circle, Shape};
+
+        let circle = Circle::new((100.0, 100.0), 50.0).to_path(1e-3);
+        let paths = vec![circle; 20];
+        let tagged = || paths.iter().map(|p| (p, ()));
+
+        let result = Topology::<i32>::from_paths_with_work_limit(tagged(), 1e-6, 1_000);
+        assert_eq!(result.err(), Some(crate::Error::WorkLimitExceeded));
+
+        let expected = Topology::<i32>::from_paths(tagged(), 1e-6)
+            .unwrap()
+            .contours(|w| *w != 0);
+        let actual = Topology::<i32>::from_paths_with_work_limit(tagged(), 1e-6, u64::MAX)
+            .unwrap()
+            .contours(|w| *w != 0);
+        let paths = |c: &super::Contours| c.contours().map(|c| c.path.clone()).collect::<Vec<_>>();
+        assert_eq!(paths(&actual), paths(&expected));
+        assert!(!paths(&actual).is_empty());
+    }
 
     fn run_perturbation(ps: Vec<Perturbation<F64Perturbation>>) {
         let base = vec![vec![

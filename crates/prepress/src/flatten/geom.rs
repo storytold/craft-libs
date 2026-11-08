@@ -20,6 +20,11 @@ use linesweeper::topology::{ContourIdx, Contours, Topology, WindingNumber};
 /// numerical debris, such as the lens between two nearly coincident curves.
 pub const DEFAULT_SLIVER: f64 = 0.01;
 
+/// The most segment comparisons the sweep may make before the shapes count as too degenerate
+/// to sweep. Stacked copies of a shape can need billions; a release build makes about 17 million
+/// a second.
+const MAX_SWEEP_COMPARISONS: u64 = 100_000_000;
+
 /// How a path's winding number decides what is inside it.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum FillRule {
@@ -110,7 +115,7 @@ pub fn regions_with(shapes: &[Shape], clips: &[ClipPath], sliver: f64) -> Result
     if shapes.is_empty() {
         return Ok(Vec::new());
     }
-    Ok(Arrangement::new(shapes, clips, sliver)?.regions())
+    Ok(Arrangement::new(shapes, clips, sliver, MAX_SWEEP_COMPARISONS)?.regions())
 }
 
 /// Indices of `bounds` grouped by overlap, transitively, each group in index order. Touching boxes
@@ -225,7 +230,7 @@ struct Arrangement {
 }
 
 impl Arrangement {
-    fn new(shapes: &[Shape], clips: &[ClipPath], sliver: f64) -> Result<Self, GeomError> {
+    fn new(shapes: &[Shape], clips: &[ClipPath], sliver: f64, work_limit: u64) -> Result<Self, GeomError> {
         let n = shapes.len();
         let mut used = vec![false; clips.len()];
         let mut shape_clips = Vec::with_capacity(n);
@@ -248,8 +253,11 @@ impl Arrangement {
         let eps = eps_for(paths.iter().map(|p| &p.0))?;
         snap_horizontals(&mut paths.iter_mut().map(|p| &mut p.0).collect::<Vec<_>>(), eps);
         // The sweep can panic on rare near-degenerate input; the flattener then rasterizes.
-        let sweep = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| Topology::<Multi>::from_paths(paths.iter().map(|(p, t)| (p, *t)), eps)));
-        // Every subpath is closed, so a path error is a degenerate input too.
+        let sweep = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            Topology::<Multi>::from_paths_with_work_limit(paths.iter().map(|(p, t)| (p, *t)), eps, work_limit)
+        }));
+        // Every subpath is closed, so a path error or a sweep past its work limit is a degenerate
+        // input too.
         let top = sweep.map_err(|_| GeomError::Degenerate)?.map_err(|_| GeomError::Degenerate)?;
         let rules = shapes.iter().map(|s| s.rule).chain(clips.iter().map(|c| c.rule)).collect();
         let tidy = Tidy::keeping(sliver, paths.iter().map(|p| &p.0));
@@ -970,6 +978,13 @@ mod tests {
         assert_eq!(summary(&regions(&[fill(open)], &[]).unwrap()), vec![(vec![0], 50.0)]);
         assert_eq!(regions(&[fill(rect(0.0, 0.0, f64::NAN, 1.0))], &[]), Err(GeomError::NonFinite));
         assert_eq!(regions(&[], &[]), Ok(vec![]));
+    }
+
+    #[test]
+    fn sweep_past_its_work_limit_is_degenerate() {
+        let shapes = vec![fill(Circle::new((50.0, 50.0), 40.0).to_path(0.01)); 20];
+        assert_eq!(Arrangement::new(&shapes, &[], DEFAULT_SLIVER, 1_000).err(), Some(GeomError::Degenerate));
+        assert_eq!(regions(&shapes, &[]).unwrap().len(), 1);
     }
 
     #[test]

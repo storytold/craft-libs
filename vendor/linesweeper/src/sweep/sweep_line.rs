@@ -350,6 +350,12 @@ pub struct Sweeper<'a> {
 
     comparisons: RefCell<ComparisonCache>,
     conservative_comparisons: RefCell<ComparisonCache>,
+
+    // Craft patch (work limit): the most segment comparisons that `next_line`
+    // lets the sweep make, and whether it stopped there. The two caches count
+    // the comparisons.
+    work_limit: Option<u64>,
+    stopped_at_work_limit: bool,
 }
 
 impl<'segs> Sweeper<'segs> {
@@ -377,6 +383,8 @@ impl<'segs> Sweeper<'segs> {
             horizontals: Vec::new(),
             comparisons: RefCell::new(ComparisonCache::new(eps, eps / 2.0)),
             conservative_comparisons: RefCell::new(ComparisonCache::new(4.0 * eps, eps / 2.0)),
+            work_limit: None,
+            stopped_at_work_limit: false,
         }
     }
 
@@ -384,6 +392,36 @@ impl<'segs> Sweeper<'segs> {
     /// given tolerance.
     pub fn new(segments: &'segs Segments, eps: f64) -> Self {
         Self::new_with_correctness(segments, eps, Correctness::GoodEnough)
+    }
+
+    /// Limits the number of segment comparisons the sweep may make.
+    ///
+    /// Once the sweep has made more than `limit` comparisons, [`Sweeper::next_line`]
+    /// returns `None` and [`Sweeper::work_limit_exceeded`] returns `true`. The sweep
+    /// checks the limit between events, so it can pass the limit by the comparisons
+    /// of one event, which grow with the number of segments in the sweep line. It
+    /// stops partway through a sweep line, so its output is incomplete, and it stays
+    /// stopped if the limit is raised afterwards.
+    pub fn set_work_limit(&mut self, limit: u64) {
+        self.work_limit = Some(limit);
+    }
+
+    /// Returns `true` if the sweep has made more segment comparisons than the
+    /// limit given to [`Sweeper::set_work_limit`], or has stopped at that limit.
+    pub fn work_limit_exceeded(&self) -> bool {
+        self.stopped_at_work_limit || self.work_limit.is_some_and(|limit| self.work() > limit)
+    }
+
+    /// Returns `true`, and keeps the sweep stopped, once the work limit is exceeded.
+    fn stop_at_work_limit(&mut self) -> bool {
+        self.stopped_at_work_limit = self.work_limit_exceeded();
+        self.stopped_at_work_limit
+    }
+
+    /// The number of segment comparisons made so far, cached or not.
+    fn work(&self) -> u64 {
+        let calls = self.comparisons.borrow().calls;
+        calls.saturating_add(self.conservative_comparisons.borrow().calls)
     }
 
     fn compare_segments(&self, i: SegIdx, j: SegIdx) -> RefMut<'_, CurveOrder> {
@@ -405,6 +443,14 @@ impl<'segs> Sweeper<'segs> {
         &'slf mut self,
         bufs: &'buf mut SweepLineBuffers,
     ) -> Option<SweepLine<'buf, 'slf, 'segs>> {
+        // Craft patch (work limit): a sweep past its work limit stops here, and
+        // also partway through a sweep line, since one line of stacked or nearly
+        // coincident segments can take billions of comparisons. The sweep's
+        // state is left half updated, so every later call returns `None` too.
+        if self.stop_at_work_limit() {
+            return None;
+        }
+
         self.check_invariants();
 
         let y = self.events.next_y(self.segments)?;
@@ -417,6 +463,9 @@ impl<'segs> Sweeper<'segs> {
             let enters = self.events.entrances_at_y(&y, self.segments);
             for (enter_y, idx) in enters {
                 debug_assert_eq!(enter_y, &y);
+                if self.stop_at_work_limit() {
+                    return None;
+                }
                 self.handle_enter(*idx);
                 self.check_invariants();
             }
@@ -427,6 +476,9 @@ impl<'segs> Sweeper<'segs> {
             let exits = self.events.exits_at_y(&y, self.segments);
             for (exit_y, idx) in exits {
                 debug_assert_eq!(exit_y, &y);
+                if self.stop_at_work_limit() {
+                    return None;
+                }
                 self.handle_exit(*idx);
                 self.check_invariants();
             }
@@ -434,6 +486,9 @@ impl<'segs> Sweeper<'segs> {
 
         // Process all the intersection events at this y.
         while let Some(intersection) = self.events.next_intersection_at_y(y) {
+            if self.stop_at_work_limit() {
+                return None;
+            }
             self.handle_intersection(intersection.left, intersection.right);
             self.check_invariants();
         }
@@ -885,6 +940,11 @@ impl<'segs> Sweeper<'segs> {
 
     #[cfg(feature = "slow-asserts")]
     fn check_invariants(&self) {
+        // Craft patch (work limit): the comparisons made by these checks do not
+        // count toward the work limit.
+        let calls = self.comparisons.borrow().calls;
+        let conservative_calls = self.conservative_comparisons.borrow().calls;
+
         for seg_entry in self.line.segs.iter() {
             let seg_idx = seg_entry.seg;
             let seg = &self.segments[seg_idx];
@@ -980,6 +1040,9 @@ impl<'segs> Sweeper<'segs> {
         }
 
         self.check_changed_interval_closeness();
+
+        self.comparisons.borrow_mut().calls = calls;
+        self.conservative_comparisons.borrow_mut().calls = conservative_calls;
     }
 
     #[cfg(not(feature = "slow-asserts"))]
@@ -2089,6 +2152,53 @@ mod tests {
         let segs = Segments::default();
         let mut sweep = Sweeper::new(&segs, 1.0);
         let mut bufs = SweepLineBuffers::default();
+        assert!(sweep.next_line(&mut bufs).is_none());
+    }
+
+    // Craft patch (work limit). The circles are stacked, so the first sweep
+    // lines handle every segment and compare it with all the others.
+    #[test]
+    fn work_limit_stops_within_a_sweep_line() {
+        use kurbo::{Circle, Shape};
+
+        let circle = Circle::new((100.0, 100.0), 50.0).to_path(1e-3);
+        let mut circles = BezPath::new();
+        for _ in 0..20 {
+            circles.extend(circle.iter());
+        }
+        let mut segs = Segments::default();
+        segs.add_bez_path(&circles).unwrap();
+
+        let mut sweep = Sweeper::new(&segs, 1e-6);
+        let mut bufs = SweepLineBuffers::default();
+        let mut range_bufs = SweepLineRangeBuffers::default();
+        let mut most_in_a_line = 0;
+        let mut prev = 0;
+        while let Some(mut line) = sweep.next_line(&mut bufs) {
+            while line.next_range(&mut range_bufs, &segs).is_some() {}
+            let now = line.state.work();
+            most_in_a_line = most_in_a_line.max(now - prev);
+            prev = now;
+        }
+        assert!(!sweep.work_limit_exceeded());
+
+        // One sweep line takes far more comparisons than the limit, so the
+        // sweep has to stop between the events of that line to stay near it.
+        let limit = 1_000;
+        assert!(most_in_a_line > 10 * limit, "{most_in_a_line} comparisons");
+        let mut sweep = Sweeper::new(&segs, 1e-6);
+        sweep.set_work_limit(limit);
+        while let Some(mut line) = sweep.next_line(&mut bufs) {
+            while line.next_range(&mut range_bufs, &segs).is_some() {}
+        }
+        assert!(sweep.work_limit_exceeded());
+        assert!(sweep.next_line(&mut bufs).is_none());
+        let work = sweep.work();
+        assert!(work <= limit + 200, "{work} comparisons");
+
+        // A sweep stopped partway through a line stays stopped.
+        sweep.set_work_limit(u64::MAX);
+        assert!(sweep.work_limit_exceeded());
         assert!(sweep.next_line(&mut bufs).is_none());
     }
 

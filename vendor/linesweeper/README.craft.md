@@ -1,15 +1,21 @@
 # Local linesweeper 0.5.0 copy
 
-This is the crates.io linesweeper 0.5.0 package (MIT OR Apache-2.0) with some files left out and no
-file changed. `.cargo_vcs_info.json` names the commit it was packaged from,
+This is the crates.io linesweeper 0.5.0 package (MIT OR Apache-2.0) with some files left out and the
+local patches listed below. `.cargo_vcs_info.json` names the commit it was packaged from,
 `824b0791a750f7b27b8edcbb6c6244d0e629875e`. That commit is not in the GitHub repository the manifest
 names, which is archived; its README says development moved off GitHub.
 
-Every file here except this one and `SOURCE.json` is byte for byte the file in the `.crate` archive.
-`SOURCE.json` records the hash of the `.crate` download (`source_archive_sha256`) and, for every file
-kept, the hash in the package (`source_sha256`) and the hash here (`sha256`). `upstream_repository` is
-null because no public repository this copy can name holds `upstream_revision`. `local_patches` is
-empty.
+Every file here except this one, `SOURCE.json` and the patched files below is byte for byte the file
+in the `.crate` archive. `SOURCE.json` records the hash of the `.crate` download
+(`source_archive_sha256`) and, for every file kept, the hash in the package (`source_sha256`) and the
+hash here (`sha256`). `upstream_repository` is null because no public repository this copy can name
+holds `upstream_revision`. `local_patches` describes each local patch.
+
+## Local patches
+
+| File | Change |
+|---|---|
+| `src/lib.rs`, `src/order.rs`, `src/sweep/sweep_line.rs`, `src/topology.rs` | `ComparisonCache` counts its calls, so `Sweeper` counts its segment comparisons. `Sweeper::set_work_limit` sets the most it may make; past it, `Sweeper::next_line` returns `None`, also between the enter, exit and intersection events of one sweep line, and keeps returning `None` if the limit is raised; `Sweeper::work_limit_exceeded` returns `true`. `Topology::from_paths_with_work_limit` returns the new `Error::WorkLimitExceeded` when its sweep passes the limit. The sweep had no limit: the union of 400 identical circles made 1.36 billion comparisons in 19 sweep lines and took 66 to 83 s and 1.3 GB in a release build. `Topology::from_paths` and the other constructors set no limit. The `work_limit` and `work_limit_stops_within_a_sweep_line` tests sweep 20 stacked circles with a limit of 1,000 comparisons. |
 
 `omitted_files` lists the 43 files of the package left out here, with their hashes:
 
