@@ -44,7 +44,10 @@ pub enum Action {
     OpenUrl(String),
     /// Close the app through its normal close path (which asks about unsaved work): the update is
     /// installed and a helper restarts the app once it has exited. On Windows the helper, which
-    /// installs the update, starts when this is returned.
+    /// installs the update, starts when this is returned. When the app exits another way (the
+    /// window's close button, a quit with unsaved work, an OS shutdown), dropping the [`Updater`]
+    /// starts it. An app that ends the process in `on_exit` without dropping the `Updater` calls
+    /// [`Updater::start_pending_update`] there first.
     Close,
 }
 
@@ -394,6 +397,26 @@ impl Updater {
         }
     }
 
+    /// Starts the helper of an installed update that is still waiting for the app to close, so
+    /// that the update installs once the app has exited. Call it when the app exits by a path
+    /// that did not come through [`Action::Close`]; dropping the `Updater` calls it too. Later
+    /// calls do nothing. An installation still running is left alone.
+    pub fn start_pending_update(&mut self) {
+        // An installation that finished since the last `tick`.
+        if let Some((rx, release)) = &self.install
+            && let Ok(Ok(restart)) = rx.try_recv()
+        {
+            self.restart = Some((restart, release.clone()));
+            self.install = None;
+            self.installed = true;
+        }
+        if let Some((restart, _)) = self.restart.take()
+            && let Err(e) = restart.start()
+        {
+            log::warn!("{} self-update failed: {e}", self.app.name);
+        }
+    }
+
     fn request_install(&mut self, ctx: &egui::Context, can_start: bool) {
         if can_start {
             self.start_install(ctx);
@@ -436,6 +459,14 @@ impl Updater {
                 prompt.set_note(Note::new("Couldn't start the update ({error})", &[("error", &e.to_string())]));
             }
         }
+    }
+}
+
+impl Drop for Updater {
+    /// The app is exiting: an installed update that is still waiting starts its helper, which
+    /// waits for this process to exit before it installs.
+    fn drop(&mut self) {
+        self.start_pending_update();
     }
 }
 
@@ -825,6 +856,63 @@ mod tests {
         assert_eq!(starts.load(Ordering::SeqCst), 1);
         assert_eq!(frame(&mut u, &ctx, true), Action::None);
         assert_eq!(starts.load(Ordering::SeqCst), 1, "the helper starts once");
+    }
+
+    /// A counter and a helper that adds one to it each time it starts.
+    fn counted_restart() -> (Arc<std::sync::atomic::AtomicUsize>, Restart) {
+        let starts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = Arc::clone(&starts);
+        let restart = Restart::later(move || {
+            counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(())
+        });
+        (starts, restart)
+    }
+
+    /// An app that exits without [`Action::Close`] still starts the waiting helper, once, when
+    /// the updater is dropped.
+    #[test]
+    fn dropping_the_updater_starts_a_waiting_helper_once() {
+        use std::sync::atomic::Ordering;
+        let ctx = egui::Context::default();
+        let mut u = updater(Ok(None));
+        let (starts, restart) = counted_restart();
+        let (tx, rx) = channel();
+        u.install = Some((rx, newer()));
+        assert!(tx.send(Ok(restart)).is_ok());
+        u.tick(&ctx);
+        assert_eq!(frame(&mut u, &ctx, false), Action::None, "unsaved work holds the close back");
+        assert_eq!(starts.load(Ordering::SeqCst), 0);
+        drop(u);
+        assert_eq!(starts.load(Ordering::SeqCst), 1);
+
+        // Picked up from the worker without a `tick` first.
+        let mut u = updater(Ok(None));
+        let (starts, restart) = counted_restart();
+        let (tx, rx) = channel();
+        u.install = Some((rx, newer()));
+        assert!(tx.send(Ok(restart)).is_ok());
+        u.start_pending_update();
+        assert_eq!(starts.load(Ordering::SeqCst), 1);
+        u.start_pending_update();
+        drop(u);
+        assert_eq!(starts.load(Ordering::SeqCst), 1, "the helper starts once");
+    }
+
+    /// A helper started at [`Action::Close`] does not start again when the updater is dropped.
+    #[test]
+    fn a_helper_started_at_close_does_not_start_again_on_drop() {
+        use std::sync::atomic::Ordering;
+        let ctx = egui::Context::default();
+        let mut u = updater(Ok(None));
+        let (starts, restart) = counted_restart();
+        let (tx, rx) = channel();
+        u.install = Some((rx, newer()));
+        assert!(tx.send(Ok(restart)).is_ok());
+        u.tick(&ctx);
+        assert_eq!(frame(&mut u, &ctx, true), Action::Close);
+        drop(u);
+        assert_eq!(starts.load(Ordering::SeqCst), 1);
     }
 
     /// A helper that can't start keeps the app open and offers the update again with the reason.
