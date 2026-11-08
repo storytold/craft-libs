@@ -1,4 +1,5 @@
-//! Clean-room AC-3 (Dolby Digital) and E-AC-3 (Dolby Digital Plus) audio decoder, written from
+//! Specification-derived AC-3 (Dolby Digital) and E-AC-3 (Dolby Digital Plus) codec tools.
+//! The syncframe decoder is written from
 //! ATSC A/52:2012 ("Digital Audio Compression Standard", §5 bit stream syntax, §6-7 decoding,
 //! Annex E for E-AC-3).
 //!
@@ -12,11 +13,17 @@
 //! - Output: planar f32 at full scale ±1, channels in WAV / SMPTE order (L R C LFE Ls Rs); no
 //!   downmix.
 //!
-//! E-AC-3 (bsid 11-16, Annex E): independent substream 0 (dependent substreams and further
+//! [`Decoder`] handles E-AC-3 (bsid 11-16, Annex E): independent substream 0 (dependent substreams and further
 //! programs are skipped), 1 / 2 / 3 / 6 blocks per syncframe, the reduced sample rates, frame-based
 //! exponent strategies and the other frame-level syntax, and spectral extension (§E3.6). The
 //! adaptive hybrid transform and enhanced coupling are refused with [`Error::Unsupported`];
 //! transient pre-noise processing data is read and not applied.
+//!
+//! [`ProgrammeDecoder`] separately assembles complete six-block E-AC-3 access units, including
+//! a supported discrete 7.1 dependent-stream topology, with an explicit expected speaker layout
+//! and full-range output. It retains the syncframe decoder's unsupported-tool limits.
+//! The optional encoder follows ETSI TS 102 366 V1.4.1; see the crate README for supported
+//! encoding tools and the distinction between raw-stream padding and container presentation.
 //!
 //! From FilmCraft's `filmcraft-ac3` (storytold/filmcraft@8fda2f2). Public items keep their names, so
 //! FilmCraft can re-export this module.
@@ -25,6 +32,10 @@
 #![allow(clippy::needless_range_loop)]
 
 mod eac3;
+mod program;
+pub use program::{ProgrammeDecoder, ProgrammeFrame};
+#[cfg(any(feature = "ac3-encode", feature = "eac3-encode"))]
+pub mod encoder;
 mod tables;
 
 use std::sync::OnceLock;
@@ -685,6 +696,11 @@ pub struct Decoder {
     delay: [[f32; 256]; 6],
     dither: u32,
     seed: u32,
+    /// Apply the legacy per-syncframe dynamic-range metadata policy.
+    apply_dynamic_range: bool,
+    /// Actual parser positions, used to validate encoder allocation-region constraints.
+    #[cfg(test)]
+    block_bit_positions: Vec<(usize, usize)>,
     /// E-AC-3: the block state of the last syncframe (acmod, lfeon, sample rate code), whose
     /// exponents a syncframe of fewer than six blocks may reuse.
     carry: Option<(usize, bool, usize, Box<FrameState>)>,
@@ -714,7 +730,15 @@ pub struct Frame {
 impl Decoder {
     /// A decoder with empty overlap state.
     pub fn new() -> Decoder {
-        Decoder { delay: [[0.0; 256]; 6], dither: 0, seed: 0x1234_5678, carry: None }
+        Decoder {
+            delay: [[0.0; 256]; 6],
+            dither: 0,
+            seed: 0x1234_5678,
+            apply_dynamic_range: true,
+            carry: None,
+            #[cfg(test)]
+            block_bit_positions: Vec::new(),
+        }
     }
 
     /// Seed the dither generator (dither is decoder-specific noise; tests compare two seeds).
@@ -726,6 +750,8 @@ impl Decoder {
     pub fn reset(&mut self) {
         self.delay = [[0.0; 256]; 6];
         self.carry = None;
+        #[cfg(test)]
+        self.block_bit_positions.clear();
     }
 
     fn dither(&mut self) -> f32 {
@@ -802,6 +828,11 @@ impl Decoder {
         if !h.is_primary() {
             return Ok(Frame { header: h, channels: Vec::new() });
         }
+        self.decode_eac3_substream(frame, h)
+    }
+
+    // The programme assembler validates the dependent topology before calling this helper.
+    fn decode_eac3_substream(&mut self, frame: &[u8], h: Header) -> Result<Frame> {
         // E-AC-3 has a single CRC, at the end (§E2.2.6): reseed the dither from the last words
         let n = frame.len();
         let tail = frame.get(n.saturating_sub(4)..).and_then(|t| <[u8; 4]>::try_from(t).ok()).unwrap_or_default();
@@ -817,7 +848,10 @@ impl Decoder {
         };
         let pcm = self.blocks(&mut r, &mut f, acmod, lfeon, nblocks, Some(&mut e))?;
         self.carry = Some((acmod, lfeon, bsi.fscod, f));
-        Ok(Frame { header: h, channels: wav_order(pcm, acmod, lfeon) })
+        // A dependent channel map assigns positions in coded order, overriding acmod's
+        // conventional speaker order. The programme assembler maps those channels once.
+        let channels = if h.strmtyp == 1 { pcm } else { wav_order(pcm, acmod, lfeon) };
+        Ok(Frame { header: h, channels })
     }
 
     /// Decode `nblocks` audio blocks and synthesize them (inverse transform, overlap-add), in coded
@@ -1241,6 +1275,8 @@ impl Decoder {
             }
         }
         // mantissas
+        #[cfg(test)]
+        let mantissa_start = r.pos;
         let mut gr = Groups::default();
         let mut cpl = [0f32; 256];
         let mut got_cpl = false;
@@ -1266,6 +1302,8 @@ impl Decoder {
                 coefs[LFE][bin] = m * 2f32.powi(-(f.exps[LFE][bin] as i32));
             }
         }
+        #[cfg(test)]
+        self.block_bit_positions.push((mantissa_start, r.pos));
         // decoupling
         if f.cplinu {
             for ch in 0..nf {
@@ -1306,6 +1344,11 @@ impl Decoder {
                     e.spx.synthesize(ch, e.spxatten[ch], &mut coefs[ch], || self.noise());
                 }
             }
+        }
+        // Programme assembly requests full-range PCM rather than applying the independent
+        // downmix's DRC to channels that will subsequently be replaced by a dependent stream.
+        if !self.apply_dynamic_range {
+            return Ok(());
         }
         // dynamic range
         for ch in 0..nf {

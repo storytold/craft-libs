@@ -1,7 +1,7 @@
 # craft-audio
 
 Audio file I/O and codecs for the Craft apps. Native implementations: WAV and AIFF read/write,
-FLAC encoder, AAC and ALAC decoders/encoders, Opus, AC-3/E-AC-3 and MP1/MP2 decoders.
+FLAC encoder, AAC and ALAC decoders/encoders, AC-3/E-AC-3 decoder/encoder, Opus and MP1/MP2 decoders.
 Formats without a native decoder are decoded by [symphonia](#symphonia), which is to be replaced
 by native decoders.
 
@@ -28,7 +28,7 @@ No default features. The shared types (`AudioBuffer`, `AudioInfo`, `ChannelLayou
 | `decode` | `decode`, `probe`, `Decoder`, `tracks`, `TrackDecoder`; every format in [Format support](#format-support) | `decode-native`, `symphonia` |
 | `decode-native` | the same, native formats only (others are `Unsupported`) | the five decoders below, craft-media `isobmff`/`matroska`/`ogg`, `log` |
 | `symphonia` | the fallback for formats with no native decoder; turning it on is the same as `decode` | `decode-native`, symphonia |
-| `encode` | every encoder: the WAV, AIFF and FLAC file writers, and the AAC and ALAC packet encoders | `lossless-encode`, `aac-encode`, `alac-encode` |
+| `encode` | every encoder: the WAV, AIFF and FLAC file writers, and the AAC, ALAC and AC-3/E-AC-3 packet encoders | `lossless-encode`, `aac-encode`, `alac-encode`, `ac3-encode`, `eac3-encode` |
 | `lossless-encode` | WAV, AIFF and FLAC writing | `pcm-encode`, `flac-encode` |
 | `pcm-encode` | `encode`, `FileEncoder` for WAV and AIFF; `wav_float_header` | none |
 | `flac-encode` | `encode`, `FileEncoder` for FLAC | craft-media `bitstream` |
@@ -36,7 +36,8 @@ No default features. The shared types (`AudioBuffer`, `AudioInfo`, `ChannelLayou
 | `alac-decode` | `alac::Decoder` | none |
 | `alac-encode` | `alac::Encoder` | none |
 | `opus-decode` | `opus::Decoder`/`StreamDecoder` | none |
-| `ac3-decode` | `ac3::Decoder` | none |
+| `ac3-decode` | `ac3::Decoder`, `ac3::ProgrammeDecoder` | none |
+| `ac3-encode`, `eac3-encode` | `ac3::encoder::Encoder` | none |
 | `mpa-decode` | `mpa::Decoder` | craft-media `bitstream` |
 | `peaks` | `peaks::Peaks` | none |
 | `rayon` | parallel AAC encoding (with `aac-encode`) | `rayon` |
@@ -302,7 +303,7 @@ match craft_audio::decode(&bytes, None) {
 | MP1, MP2 (MPEG audio Layer I/II) | native | — |
 | MP3 (Layer III) | symphonia | — |
 | Opus | native | — |
-| AC-3, E-AC-3 | native | — |
+| AC-3, E-AC-3 | native | native packet encoder |
 | Vorbis, ADPCM, A-law, µ-law | symphonia | — |
 
 | Container | Demuxer | Timing |
@@ -335,8 +336,10 @@ match craft_audio::decode(&bytes, None) {
   the end a file declares is not presented.
 - A Matroska track's end comes from its timestamps, so it is known to one timestamp tick (usually
   1 ms) unless the last block has `DiscardPadding`.
-- E-AC-3: 7.1 programs decode as their 5.1 core. Adaptive hybrid transform and enhanced coupling
-  return `Unsupported`.
+- E-AC-3: `ac3::Decoder` and `TrackDecoder` retain independent-substream decoding, so a
+  7.1 programme is presented as its 5.1 compatibility downmix. Use `ac3::ProgrammeDecoder`
+  with an explicit expected layout for complete six-block 7.1 access units; see below.
+  Adaptive hybrid transform and enhanced coupling return `Unsupported`.
 - E-AC-3 with syncframes of fewer than six blocks: a seek decodes from the start of the stream,
   because such syncframes may reuse exponents from any syncframe before them. A seek in Matroska
   E-AC-3 reads the syncframe headers of the packets before its target to find the packets' places.
@@ -401,9 +404,76 @@ Each codec module's rustdoc lists the coding tools it implements.
 | FLAC encoder | RFC 9639 | 16, 24, 32 bits; 1–8 channels, layouts decoders would not assume for the count as a `WAVEFORMATEXTENSIBLE_CHANNEL_MASK` comment; up to 655,350 Hz; LPC, stereo decorrelation, wasted bits, STREAMINFO MD5 | bit-exact through ffmpeg, STREAMINFO MD5 checked against ffmpeg |
 | AAC (`aac`) | ISO/IEC 14496-3 | AAC-LC decode and encode (CBR, VBR, ADTS), 1–8 channels; HE-AAC: see [Limits](#limits) | ffmpeg: ~135 dB SNR; PNS noise differs per sample at equal band energy |
 | Opus (`opus`) | RFC 6716, 8251, 7845 | decoder: SILK, hybrid, CELT, all frame sizes, PLC and FEC, multistream (`Decoder`) and single stream (`StreamDecoder`), 8–48 kHz output | all 36 RFC 8251 conformance cases |
-| AC-3/E-AC-3 (`ac3`) | ATSC A/52:2012 | all AC-3 channel modes and frame sizes; E-AC-3 independent substream 0 with spectral extension; output in WAV order, no downmix | ffmpeg: 65–94 dB SNR on tones, 27–48 dB on white noise (see [Limits](#limits)) |
+| AC-3/E-AC-3 (`ac3`) | decoder: ATSC A/52:2012; encoder/programme API: ETSI TS 102 366 V1.4.1 | single-syncframe and complete-programme decoding; packet encoding through discrete 7.1 (see below) | decoder comparisons and encoder output through ffmpeg, CRC/channel/timing/bit-budget regressions; synthetic quality limitations below |
 | MP1/MP2 (`mpa`) | ISO/IEC 11172-3, 13818-3 | Layer I and II, MPEG-1/2/2.5, 8–48 kHz; also the Layer II rate/mode pairs the spec disallows (ffmpeg's default mono 384 kbit/s); no free format | ffmpeg-encoded streams, 73–84 dB SNR |
 | ALAC (`alac`) | Apple's reference implementation | decode and encode, 1–8 channels, 16/20/24/32 bits (decode: any depth 1–32), fast mode, magic cookie in MP4/Matroska and CAF form | Apple's reference: same packets from the encoder, same samples from both decoders on 766 configurations; ffmpeg: bit-exact both ways |
+
+### AC-3 and E-AC-3 encoding
+
+`ac3::encoder` is implemented from **ETSI TS 102 366 V1.4.1 (September 2017)**,
+with the existing first-party decoder's normative allocation tables/math shared internally.
+No third-party codec implementation source is used. Decoder executables are interoperability
+oracles, not linked dependencies. This is a basic encoder implementation, not a Dolby-certified
+product or a claim of perceptual parity with mature commercial encoders.
+
+The public `Config` chooses `Codec`, sample rate, programme bitrate, `CodingMode` and LFE.
+`Encoder::new` validates these before taking PCM. Both codecs accept 32, 44.1 and 48 kHz,
+all eight AC-3 coding modes (including distinct dual mono), and optional LFE. AC-3 uses
+its standardized 32–640 kb/s frame-size table; this implementation requires at least
+32 kb/s per full-bandwidth channel. E-AC-3 accepts 32–1024 kb/s programme rates, subject
+to that same minimum and the per-substream 2048-word limit. E-AC-3 discrete 7.1 requires
+LFE and at least 384 kb/s. Illegal rate/layout combinations return errors rather than
+changing the requested codec or silently reducing channel count.
+
+PCM planes have equal lengths, finite values in ±1, and the explicit speaker order returned
+by `channel_layout()`. Values outside this input contract are rejected. Ordinary 5.1 uses
+**L, R, C, LFE, Ls, Rs**; discrete 7.1 uses WAVE order **L, R, C, LFE, Lrs, Rrs, Ls, Rs**.
+Dual mono is an unordered layout of programme 1, programme 2 and optional LFE. Mono surround
+and other intermediate modes retain their distinct speaker masks rather than using only a
+channel count.
+
+The encoder performs windowed long/short transforms with transient switching, adaptive
+D15/D25/D45 exponent grouping and reuse, standardized masking/bit allocation, grouped and
+asymmetric mantissa quantization, and CRC generation. Rate control enforces both AC-3
+regional bit budgets as well as the total frame size; sparse frames use bounded skip fields
+so auxiliary padding cannot violate the final-three-eighths constraint. LFE receives a
+stateful six-pole 120 Hz low-pass before analysis. The initial implementation does not use
+channel coupling, stereo rematrixing, AHT, spectral extension, enhanced coupling or VBR;
+these are optional coding tools whose absence limits efficiency, particularly at low rates.
+The emitted dialogue normalization is 31 and no dynamic-range gain processing is requested.
+
+A 7.1 E-AC-3 packet contains an independent 5.1 compatibility downmix followed by a dependent
+substream carrying the original side and rear pairs (`chanmap = 0x1a00`). The compatibility
+surrounds average side and rear inputs, **−6 dB per input**, so correlated full-scale signals
+retain headroom. This differs from the optional Annex H `dmixtyp=1` −3 dB mix; that metadata
+is not signalled. Full 7.1 decoding restores the original surrounds. The `dec3` descriptor
+reports one dependent substream and the added rear pair, not the replacement side pair.
+
+`push` accepts arbitrary chunk sizes and returns complete 1536-sample access units.
+`finish` drains overlap and returns final packets plus **256 priming samples** and exact
+trailing padding; an empty stream returns no packets and zero trimming. A muxer should use
+these counts once in its presentation timing. Raw elementary streams do not carry the
+original arbitrary sample length, so raw-file consumers cannot recover this trimming by
+inspecting the bitstream alone. `codec_configuration()` returns the `dac3` or `dec3` payload,
+without its box header, for `ac-3`/`ec-3` sample entries. Dependent syncframes are part of the
+same timed packet, not separately timestamped samples. Input validation errors consume no
+PCM; an internal encoding error terminates that encoder, and its partial stream must be
+discarded rather than retrying input with ambiguous consumption.
+
+`ac3::ProgrammeDecoder::new(expected_layout)` provides a separate, strict complete-access-unit
+path for the encoder's six-block E-AC-3 topology. It checks CRCs, bounds, substream order,
+layout, block counts and dependent channel maps before publishing PCM. Its explicit
+full-range policy does not apply metadata DRC independently to component substreams.
+Unsupported topology is rejected rather than reported as a successful reduced-channel decode.
+The older single-syncframe decoder's contract is preserved.
+
+Validation includes all sample rates/coding modes, channel isolation, CRC and actual decoder
+bit-position checks, short/long transition reconstruction, LFE response, chunk invariance,
+invalid input and exact trim accounting. Independent executable checks cover original
+impulse/tone/noise boundary stimuli and 7.1 channel identities, plus externally
+produced 7.1 programme metadata. Synthetic SNR is a diagnostic, not a perceptual quality
+certificate: broad dialogue/music listening, platform player behaviour and peak-memory
+qualification remain separate checks. Lossy ringing can exceed the source PCM peak.
 
 ## symphonia
 
@@ -508,8 +578,8 @@ The codec modules' public items keep their names, so apps can re-export them
   `Speaker::ALL` is a slice.
 - `TrackInfo::sample_rate` and `channels` are `Option`s.
 - Features are per codec. SoundCraft's `encode` (WAV, AIFF, FLAC) is now `lossless-encode`, made
-  of `pcm-encode` (WAV, AIFF) and `flac-encode`. `encode` turns on every encoder, AAC
-  included. Writing a format whose feature is off returns `AudioError::Unsupported`.
+  of `pcm-encode` (WAV, AIFF) and `flac-encode`. `encode` turns on every encoder, including AAC,
+  ALAC and AC-3/E-AC-3. Writing a format whose feature is off returns `AudioError::Unsupported`.
 - AAC encoder settings it cannot use are `aac::Error::InvalidSettings` (`AudioError::Encode`).
 - `TrackDecoder::decode` returns an error for a corrupt Opus packet, as for the other codecs;
   call `conceal`.
