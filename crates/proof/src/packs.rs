@@ -40,13 +40,14 @@ pub(crate) struct EmbeddedPack {
     pub aff: &'static [u8],
     pub dic: &'static [u8],
     pub patterns: &'static str,
+    pub nonstandard: &'static str,
 }
 /// Look up an embedded resource for the requested locale and its fallback.
 pub(crate) fn embedded(names: &[String], accepts: impl Fn(&EmbeddedPack) -> bool) -> Vec<&'static EmbeddedPack> {
     embedded_in(crate::data::PACKS, names, accepts)
 }
 /// Find an embedded resource in a supplied pack table using locale fallback.
-fn embedded_in<'a>(packs: &'a [EmbeddedPack], names: &[String], accepts: impl Fn(&EmbeddedPack) -> bool) -> Vec<&'a EmbeddedPack> {
+pub(crate) fn embedded_in<'a>(packs: &'a [EmbeddedPack], names: &[String], accepts: impl Fn(&EmbeddedPack) -> bool) -> Vec<&'a EmbeddedPack> {
     names.iter().filter_map(|n| packs.iter().find(|p| p.locale == n.replace('_', "-").to_ascii_lowercase() && accepts(p))).collect()
 }
 
@@ -580,7 +581,7 @@ fn hyphenation_locales(lang: ProofLang) -> Vec<String> {
 pub(crate) fn hyphenation(lang: ProofLang) -> Option<Arc<Patterns>> {
     let changes = {
         let s = read();
-        if s.dir.is_none() && embedded(&hyphenation_locales(lang), |p| !p.patterns.is_empty()).is_empty() {
+        if s.dir.is_none() && embedded(&hyphenation_locales(lang), |p| !p.patterns.is_empty() || !p.nonstandard.is_empty()).is_empty() {
             return None;
         }
         if let Some(p) = s.hyphenation.get(&lang) {
@@ -597,7 +598,8 @@ pub(crate) fn hyphenation(lang: ProofLang) -> Option<Arc<Patterns>> {
         }
     }
     if found.is_none() {
-        found = patterns_from_embedded(&embedded(&hyphenation_locales(lang), |p| !p.patterns.is_empty()), &mut errors).map(Arc::new);
+        found = patterns_from_embedded(&embedded(&hyphenation_locales(lang), |p| !p.patterns.is_empty() || !p.nonstandard.is_empty()), &mut errors)
+            .map(Arc::new);
     }
     let mut s = write();
     if s.changes == changes && !s.hyphenation.contains_key(&lang) {
@@ -635,11 +637,18 @@ fn patterns_from_directory(dir: &Path, errors: &mut Vec<(String, String)>) -> Op
 /// Read embedded replacement patterns with the same fallback as installed packs.
 fn patterns_from_embedded(packs: &[&EmbeddedPack], errors: &mut Vec<(String, String)>) -> Option<Patterns> {
     for pack in packs {
-        match Patterns::parse_checked(pack.patterns).and_then(|p| if p.is_empty() { Err("no patterns".into()) } else { Ok(p) }) {
-            Ok(patterns) => return Some(patterns),
-            Err(error) => {
-                log::warn!("embedded Language pack {}: {error}", pack.locale);
-                errors.push((pack.locale.to_string(), error));
+        for (name, text) in [(NONSTANDARD, pack.nonstandard), (HYPHENATION, pack.patterns)] {
+            if text.is_empty() {
+                continue;
+            }
+            let read = if name == NONSTANDARD { Patterns::from_huhyphn(text) } else { Patterns::parse_checked(text) };
+            match read.and_then(|p| if p.is_empty() { Err("no patterns".into()) } else { Ok(p) }) {
+                Ok(patterns) => return Some(patterns),
+                Err(error) => {
+                    let error = format!("{name}: {error}");
+                    log::warn!("embedded Language pack {}: {error}", pack.locale);
+                    errors.push((pack.locale.to_string(), error));
+                }
             }
         }
     }
@@ -688,29 +697,41 @@ mod tests {
     #[test]
     fn malformed_embedded_regional_patterns_fall_back_to_generic() {
         let packs = [
-            EmbeddedPack { locale: "hu-hu", aff: b"", dic: b"", patterns: "UTF-8\nas5szony/sz=,0,1" },
-            EmbeddedPack { locale: "hu", aff: b"", dic: b"", patterns: "UTF-8\nas5szon2y/sz=,2,1" },
+            EmbeddedPack { locale: "hu-hu", aff: b"", dic: b"", patterns: "", nonstandard: "UTF-8\nas5szony/sz=,0,1" },
+            EmbeddedPack { locale: "hu", aff: b"", dic: b"", patterns: "", nonstandard: "UTF-8\nas5szon2y/sz=,2,1" },
         ];
         let names = vec!["hu-hu".to_string(), "hu".to_string()];
         let mut errors = Vec::new();
-        let p = patterns_from_embedded(&embedded_in(&packs, &names, |p| !p.patterns.is_empty()), &mut errors).unwrap();
+        let p = patterns_from_embedded(&embedded_in(&packs, &names, |p| !p.patterns.is_empty() || !p.nonstandard.is_empty()), &mut errors).unwrap();
         assert_eq!(p.opportunities(&"asszony".chars().collect::<Vec<_>>()).unwrap()[0].suffix.as_ref(), "z");
         assert_eq!(errors.len(), 1);
         assert!(errors[0].1.contains("line 2"));
+    }
+    /// Invalid optional records, including unsupported two-level input, retain the same-pack standard fallback.
+    #[test]
+    fn embedded_nonstandard_failure_keeps_standard_patterns() {
+        for invalid in ["UTF-8\nas5szony/sz=,0,1", "UTF-8\na1b\nNEXTLEVEL\nc1d"] {
+            let packs = [EmbeddedPack { locale: "hu", aff: b"", dic: b"", patterns: "a1b", nonstandard: invalid }];
+            let mut errors = Vec::new();
+            let p = patterns_from_embedded(&[&packs[0]], &mut errors).unwrap();
+            assert_eq!(p.points(&['a', 'b']).unwrap(), vec![1]);
+            assert_eq!(errors.len(), 1);
+            assert!(errors[0].1.starts_with("hyphenation.nonstandard:"));
+        }
     }
     /// Regression: embedded fallback skips locales without the requested resource.
     #[test]
     fn embedded_fallback_skips_locales_without_the_requested_resource() {
         let packs = [
-            EmbeddedPack { locale: "hu-hu", aff: b"aff", dic: b"dic", patterns: "" },
-            EmbeddedPack { locale: "hu", aff: b"", dic: b"", patterns: "a1b" },
+            EmbeddedPack { locale: "hu-hu", aff: b"aff", dic: b"dic", patterns: "", nonstandard: "" },
+            EmbeddedPack { locale: "hu", aff: b"", dic: b"", patterns: "a1b", nonstandard: "" },
         ];
         let names = vec!["hu_HU".to_string(), "hu".to_string()];
-        assert_eq!(embedded_in(&packs, &names, |p| !p.patterns.is_empty()).first().unwrap().locale, "hu");
+        assert_eq!(embedded_in(&packs, &names, |p| !p.patterns.is_empty() || !p.nonstandard.is_empty()).first().unwrap().locale, "hu");
         assert_eq!(embedded_in(&packs, &names, |p| !p.aff.is_empty() && !p.dic.is_empty()).first().unwrap().locale, "hu-hu");
         let packs = [
-            EmbeddedPack { locale: "hu-hu", aff: b"", dic: b"", patterns: "a1b" },
-            EmbeddedPack { locale: "hu", aff: b"aff", dic: b"dic", patterns: "" },
+            EmbeddedPack { locale: "hu-hu", aff: b"", dic: b"", patterns: "a1b", nonstandard: "" },
+            EmbeddedPack { locale: "hu", aff: b"aff", dic: b"dic", patterns: "", nonstandard: "" },
         ];
         assert_eq!(embedded_in(&packs, &names, |p| !p.aff.is_empty() && !p.dic.is_empty()).first().unwrap().locale, "hu");
     }

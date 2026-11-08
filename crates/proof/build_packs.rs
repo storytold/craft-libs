@@ -35,7 +35,10 @@ pub fn generate() -> Result<(String, Vec<String>, String), String> {
             return Err(format!("{locale}: spelling needs both aff and dic"));
         }
         let nonstandard = base.join("hyphenation.nonstandard");
-        let patterns = if nonstandard.is_file() { nonstandard } else { base.join("hyphenation.pat") };
+        let patterns = base.join("hyphenation.pat");
+        if nonstandard.is_file() && !patterns.is_file() {
+            return Err(format!("{locale}: nonstandard patterns need the standard fallback"));
+        }
         if !aff.is_file() && !patterns.is_file() {
             return Err(format!("{locale}: no language data"));
         }
@@ -45,7 +48,8 @@ pub fn generate() -> Result<(String, Vec<String>, String), String> {
         let aff = include(&aff, true)?;
         let dic = include(&dic, true)?;
         let patterns = include(&patterns, false)?;
-        let _ = writeln!(code, "crate::packs::EmbeddedPack{{locale:{locale:?},aff:{aff},dic:{dic},patterns:{patterns}}},");
+        let nonstandard = include(&nonstandard, false)?;
+        let _ = writeln!(code, "crate::packs::EmbeddedPack{{locale:{locale:?},aff:{aff},dic:{dic},patterns:{patterns},nonstandard:{nonstandard}}},");
         locales.push(locale.to_string());
         let mut files: Vec<_> = std::fs::read_dir(base.join("LICENCES"))
             .map_err(|e| format!("{locale}: licences: {e}"))?
@@ -126,12 +130,16 @@ fn validate_directory(dir: &Path) -> Result<(), String> {
     }
     Ok(())
 }
-/// Require pack metadata to identify the locale selected by its folder.
+/// Require the selected locale and an Embeddable distribution class before including pack bytes.
 fn validate_pack_locale(text: &str, folder: &str) -> Result<(), String> {
     let metadata: toml::Table = toml::from_str(text).map_err(|e| format!("pack.toml: {e}"))?;
     let locale = metadata.get("locale").and_then(toml::Value::as_str).ok_or("pack.toml: missing locale string")?;
     if locale != folder {
         return Err(format!("pack.toml names locale {locale:?}, not {folder:?}"));
+    }
+    // Download-only data may be installed separately, but must never enter a release binary.
+    if metadata.get("class").and_then(toml::Value::as_str) != Some("Embeddable") {
+        return Err("pack.toml: embedding requires class = \"Embeddable\"".into());
     }
     Ok(())
 }
@@ -161,11 +169,20 @@ mod tests {
     /// Regression: embedded pack metadata must name its folder.
     #[test]
     fn embedded_pack_metadata_must_name_its_folder() {
-        assert!(validate_pack_locale("locale = \"hu\"", "hu").is_ok());
-        assert!(validate_pack_locale("locale = \"hu-hu\"", "hu").unwrap_err().contains("not \"hu\""));
+        assert!(validate_pack_locale("locale = \"hu\"\nclass = \"Embeddable\"", "hu").is_ok());
+        assert!(validate_pack_locale("locale = \"hu-hu\"\nclass = \"Embeddable\"", "hu").unwrap_err().contains("not \"hu\""));
         for text in ["[", "name = \"Hungarian\"", "locale = 42"] {
             assert!(validate_pack_locale(text, "hu").is_err());
         }
+    }
+    /// Only packs classified for redistribution may be embedded; missing/unknown classes fail closed.
+    #[test]
+    fn embedding_rejects_non_embeddable_classes() {
+        for class in ["Download-only", "Excluded", "unknown", ""] {
+            let text = format!("locale = \"hu\"\nclass = {class:?}\n");
+            assert!(validate_pack_locale(&text, "hu").unwrap_err().contains("Embeddable"));
+        }
+        assert!(validate_pack_locale("locale = \"hu\"", "hu").is_err());
     }
     /// Regression: embedding rejects paths that change meaning inside out dir.
     #[test]

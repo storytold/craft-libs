@@ -58,6 +58,10 @@ impl Patterns {
             {
                 continue;
             }
+            // Libhyphen's second-level rules require compound-boundary matching, which this reader does not implement.
+            if line == "NEXTLEVEL" {
+                return Err(format!("line {}: unsupported two-level patterns (NEXTLEVEL)", line_no + 1));
+            }
             records += 1;
             if records > 250_000 {
                 return Err("too many patterns".into());
@@ -209,6 +213,13 @@ fn parse_change(raw: &str, replacement: &str) -> Result<Change, String> {
 
 #[cfg(test)]
 mod tests {
+    /// Reject a complete two-level file rather than silently mixing its two dictionaries.
+    #[test]
+    fn nextlevel_is_rejected_with_a_line_diagnostic() {
+        let error = super::Patterns::from_huhyphn("UTF-8\na1b\nNEXTLEVEL\nc1d").err().unwrap();
+        assert!(error.contains("line 3") && error.contains("NEXTLEVEL"));
+    }
+
     use super::*;
     /// Regression: oversized match inputs are refused before allocating tables.
     #[test]

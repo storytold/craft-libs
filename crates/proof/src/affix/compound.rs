@@ -409,6 +409,13 @@ const MAX_CACHED_PIECES: usize = 1 << 14;
 #[derive(Default)]
 pub(crate) struct Pieces([crate::patterns::FxMap<Box<str>, Box<[Info]>>; 2], usize);
 
+/// A terminal piece's bare rule flags and suffix analyses, shared across requested rule flags.
+#[derive(Clone)]
+pub(super) struct TerminalFlags<'a> {
+    bare: Option<&'a [u16]>,
+    derived: Option<Vec<&'a [u16]>>,
+}
+
 /// One compound check: the word, its parts' analyses (each piece looked up once), the parts
 /// chosen so far and the work done.
 struct Search<'a> {
@@ -720,41 +727,56 @@ impl AffixDict {
         Some(Info { pos, marks, unmodified: an.sfx.is_none(), force, stem: an.stem, words, tail })
     }
 
-    /// Whether a reached terminal part can supply the rule's required flag. No
-    /// analysis-count cap can hide a later match; the shared work budget bounds scanning.
-    pub(super) fn rule_final_has_flag(&self, part: &str, excluded: Excluded, flag: u16, work: &mut usize) -> bool {
+    /// Query one terminal flag, retaining bare flags and computing suffix analyses at most once per piece.
+    pub(super) fn rule_final_has_flag<'a>(
+        &'a self,
+        part: &str,
+        excluded: Excluded,
+        flag: u16,
+        work: &mut usize,
+        cache: &mut Option<TerminalFlags<'a>>,
+    ) -> bool {
         let excluded = excluded.without_keep();
-        if *work >= MAX_WORK || self.is_forbidden(part) {
-            return false;
-        }
-        if self.stem_lookup(part).map(|(stem, set)| self.rule_sets.get(&stem).map_or(set, |&id| self.set(id))).is_some_and(|set| {
-            has(set, flag) && !excluded.hits(set) && !self.need_affix.is_some_and(|f| has(set, f)) && !self.forbidden.is_some_and(|f| has(set, f))
-        }) {
+        let terminal = cache.get_or_insert_with(|| {
+            if self.is_forbidden(part) {
+                return TerminalFlags { bare: None, derived: Some(Vec::new()) };
+            }
+            let bare = self
+                .stem_lookup(part)
+                .map(|(stem, set)| self.rule_sets.get(&stem).map_or(set, |&id| self.set(id)))
+                .filter(|set| !excluded.hits(set) && !self.need_affix.is_some_and(|f| has(set, f)) && !self.forbidden.is_some_and(|f| has(set, f)));
+            TerminalFlags { bare, derived: None }
+        });
+        // A suffix scan for another flag may exhaust the budget. Bare flags are already
+        // known and remain usable without doing any more analysis work.
+        if terminal.bare.is_some_and(|set| has(set, flag)) {
             return true;
         }
-        let mut derived = excluded;
-        for slot in &mut derived.0 {
-            let shared_suggestion_exclusion = excluded.suggesting() && (*slot == self.no_suggest || *slot == self.substandard);
-            if *slot == self.forbidden && !shared_suggestion_exclusion {
-                *slot = None;
+        let sets = terminal.derived.get_or_insert_with(|| {
+            if *work >= MAX_WORK {
+                return Vec::new();
             }
-        }
-        derived = derived.allowing_forbidden();
-        let mut found = false;
-        let mut emit = |an: Analysis<'_>| {
-            if found
-                || !has(an.set, flag)
-                || (an.sfx.is_none() && excluded.hits(an.set))
-                || an.sfx.is_some_and(|r| self.cont_holds(r, self.only_in_compound) || excluded.hits(self.set(r.cont)))
-            {
-                return;
+            let mut derived = excluded;
+            for slot in &mut derived.0 {
+                let shared_suggestion_exclusion = excluded.suggesting() && (*slot == self.no_suggest || *slot == self.substandard);
+                if *slot == self.forbidden && !shared_suggestion_exclusion {
+                    *slot = None;
+                }
             }
-            found = true;
-        };
-        // Prefixes cannot license this terminal rule. Do not spend its shared
-        // budget on analyses that would be discarded before checking the flag.
-        self.suffix_analyses(part, None, derived, work, &mut emit);
-        found
+            derived = derived.allowing_forbidden();
+            let mut sets = Vec::new();
+            // Prefix-only analyses cannot license a terminal COMPOUNDRULE part.
+            self.suffix_analyses(part, None, derived, work, &mut |an| {
+                if (an.sfx.is_none() && excluded.hits(an.set))
+                    || an.sfx.is_some_and(|r| self.cont_holds(r, self.only_in_compound) || excluded.hits(self.set(r.cont)))
+                {
+                    return;
+                }
+                sets.push(an.set);
+            });
+            sets
+        });
+        sets.iter().any(|set| has(set, flag))
     }
 
     /// Every way `p` is a stem, or a stem with a prefix, one or two suffixes, or a prefix and a
@@ -895,10 +917,10 @@ impl AffixDict {
                             continue;
                         }
                         for &outer in outers {
-                            if *work >= MAX_WORK {
+                            *work += 1;
+                            if *work > MAX_WORK {
                                 return;
                             }
-                            *work += 1;
                             if self.cont_holds(r, Some(outer.flag)) {
                                 emit(Analysis { stem, set, pfx: None, sfx: Some(outer), inner: Some(r) });
                             }
@@ -2079,8 +2101,70 @@ mod terminal_rule_review_tests {
         let outers = vec![outer; 32];
         let (mut work, mut emitted) = (MAX_WORK - 3, 0);
         dict.inner_analyses("roots", &outers, Excluded::default(), &mut work, &mut |_| emitted += 1);
-        assert_eq!(work, MAX_WORK);
+        assert_eq!(work, MAX_WORK + 1, "an interrupted scan must not look complete to the cache");
         assert_eq!(emitted, 1);
+    }
+
+    /// Earlier absent terminal flags must not repeatedly scan suffixes or hide a later bare match.
+    #[test]
+    fn terminal_rule_order_keeps_late_bare_and_derived_matches() {
+        let count = 1500;
+        for bare in [false, true] {
+            let mut aff = String::from("SET UTF-8\nFLAG num\nCOMPOUNDMIN 1\nCOMPOUNDRULE 64\n");
+            for flag in 100..163 {
+                aff.push_str(&format!("COMPOUNDRULE (1)({flag})\n"));
+            }
+            aff.push_str("COMPOUNDRULE (1)(3)\n");
+            aff.push_str(&format!("SFX 9 Y {count}\n"));
+            for continuation in 1000..1000 + count {
+                aff.push_str(&format!("SFX 9 0 s/{continuation} .\n"));
+            }
+            // The flags must occur on a stem, otherwise the reader correctly removes
+            // their impossible COMPOUNDRULE tokens before terminal matching.
+            let decoy = (100..163).map(|flag| flag.to_string()).collect::<Vec<_>>().join(",");
+            let words = if bare { format!("4\nx/1\nys/3\ny/9\ndecoy/{decoy}\n") } else { format!("3\nx/1\ny/9,3\ndecoy/{decoy}\n") };
+            let dict = AffixDict::from_hunspell(&aff, &words, &[]).unwrap();
+            assert!(dict.check("xys"), "bare={bare}: a later matching rule must reuse terminal work");
+            assert!(!dict.check("xz"));
+        }
+    }
+
+    /// A terminal's suffix analyses are shared, while budget exhaustion never hides a cached bare flag.
+    #[test]
+    fn terminal_analyses_are_reused_across_flag_queries() {
+        let dict = AffixDict::from_hunspell("SET UTF-8\nFLAG num\nSFX 9 Y 1\nSFX 9 0 s .\n", "3\ny/9,2\nys/3\nx/4\n", &[]).unwrap();
+        let absent = dict.stem_lookup("x").unwrap().1[0];
+        let bare_flag = dict.stem_lookup("ys").unwrap().1[0];
+        let derived_flag = *dict.stem_lookup("y").unwrap().1.iter().find(|&&f| dict.suffixes.iter().all(|r| r.flag != f)).unwrap();
+        let (mut work, mut cache) = (0, None);
+        assert!(!dict.rule_final_has_flag("ys", Excluded::default(), absent, &mut work, &mut cache));
+        let spent = work;
+        assert!(spent > 0);
+        assert!(dict.rule_final_has_flag("ys", Excluded::default(), derived_flag, &mut work, &mut cache));
+        assert_eq!(work, spent);
+        work = MAX_WORK + 1;
+        assert!(dict.rule_final_has_flag("ys", Excluded::default(), bare_flag, &mut work, &mut cache));
+        assert_eq!(work, MAX_WORK + 1);
+    }
+
+    /// An interrupted inner scan must not cache one of a piece's two valid syllable analyses.
+    #[test]
+    fn incomplete_compound_piece_analyses_are_not_cached() {
+        let aff = "SET UTF-8\nFLAG num\nCOMPOUNDMIN 1\nLANG hu_HU\nCOMPOUNDFLAG 4\nCOMPOUNDSYLLABLE 6 aeiou\nSFX 1 Y 1\nSFX 1 0 s/2,3 .\nSFX 2 Y 1\nSFX 2 0 ta .\nSFX 3 Y 1\nSFX 3 0 ta/7 .\n";
+        let dict = AffixDict::from_hunspell(aff, "2\nroot/1,4\nother/4\n", &[]).unwrap();
+        let mut complete = Pieces::default();
+        let mut full_budget = MAX_WORK;
+        assert!(dict.flag_compound_spending("otherrootsta", Excluded::default(), false, &mut full_budget, Some(&mut complete)));
+        assert_eq!(complete.0[0]["rootsta"].len(), 2, "positive control: both syllable analyses are reachable");
+        for mut budget in 1..128 {
+            let mut partial = Pieces::default();
+            let _ = dict.flag_compound_spending("otherrootsta", Excluded::default(), false, &mut budget, Some(&mut partial));
+            for (index, map) in partial.0.iter().enumerate() {
+                for (piece, infos) in map {
+                    assert_eq!(Some(infos), complete.0[index].get(piece), "incomplete cached analyses for {piece}");
+                }
+            }
+        }
     }
 
     /// Regression: bare terminal homonyms use merged rule flags.
@@ -2105,7 +2189,7 @@ mod terminal_rule_review_tests {
         assert_eq!(flags.len(), 2);
         let mut work = MAX_WORK - 1;
         for &flag in flags {
-            assert!(dict.rule_final_has_flag("ys", Excluded::default(), flag, &mut work));
+            assert!(dict.rule_final_has_flag("ys", Excluded::default(), flag, &mut work, &mut None));
             assert_eq!(work, MAX_WORK - 1);
         }
     }
@@ -2124,8 +2208,8 @@ mod terminal_rule_review_tests {
         let other_flag = dict.stem_lookup("pword").unwrap().1[0];
         let terminal_flag = dict.stem_lookup("root").unwrap().1[0];
         let mut work = MAX_WORK - 10;
-        assert!(!dict.rule_final_has_flag("proots", Excluded::default(), other_flag, &mut work));
+        assert!(!dict.rule_final_has_flag("proots", Excluded::default(), other_flag, &mut work, &mut None));
         assert!(work < MAX_WORK, "irrelevant prefixes must not consume the remaining work");
-        assert!(dict.rule_final_has_flag("roots", Excluded::default(), terminal_flag, &mut work));
+        assert!(dict.rule_final_has_flag("roots", Excluded::default(), terminal_flag, &mut work, &mut None));
     }
 }

@@ -390,8 +390,8 @@ mod tests {
     fn malformed_embedded_regional_spelling_falls_back_to_generic() {
         crate::hold_dictionary_tests();
         let packs = [
-            crate::packs::EmbeddedPack { locale: "hu-hu", aff: b"SET UTF-8\n\xff", dic: b"1\nword\n", patterns: "" },
-            crate::packs::EmbeddedPack { locale: "hu", aff: b"SET UTF-8\n", dic: b"1\nword\n", patterns: "" },
+            crate::packs::EmbeddedPack { locale: "hu-hu", aff: b"SET UTF-8\n\xff", dic: b"1\nword\n", patterns: "", nonstandard: "" },
+            crate::packs::EmbeddedPack { locale: "hu", aff: b"SET UTF-8\n", dic: b"1\nword\n", patterns: "", nonstandard: "" },
         ];
         let (dictionary, _, _) = embedded_dictionary(&[&packs[0], &packs[1]], "test-embedded-fallback").unwrap();
         assert!(dictionary.check("word"));

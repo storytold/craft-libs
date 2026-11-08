@@ -56,6 +56,9 @@ fn opportunities_with(word: &str, lim: &Limits, lang: ProofLang, patterns: &supe
                 for mut point in points {
                     let Some(at) = starts.get(point.at).copied().flatten() else { continue };
                     let (Some(left), Some(right)) = (run.get(..at), run.get(at..)) else { continue };
+                    if left.last().is_some_and(|c| is_apostrophe(*c)) || right.first().is_some_and(|c| is_apostrophe(*c)) {
+                        continue;
+                    }
                     if left.iter().filter(|c| c.is_alphabetic()).count() < lim.after_first.max(1)
                         || right.iter().filter(|c| c.is_alphabetic()).count() < lim.before_last.max(1)
                     {
@@ -98,11 +101,11 @@ mod tests {
     #[test]
     fn point_only_fallback_honours_explicit_all_caps_and_limits() {
         let lim = Limits::default();
-        let expected = hyphen_points_in("typography", &lim, ProofLang::En);
-        assert!(!expected.is_empty());
-        assert!(hyphen_opportunities_in("TYPOGRAPHY", &lim, ProofLang::En).is_empty());
-        assert_eq!(hyphen_opportunities_including_all_caps("TYPOGRAPHY", &lim, ProofLang::En).iter().map(|p| p.at).collect::<Vec<_>>(), expected);
-        assert!(hyphen_opportunities_including_all_caps("TYPOGRAPHY", &Limits { capitalized: false, ..lim }, ProofLang::En).is_empty());
+        let expected = hyphen_points_in("kitaplar", &lim, ProofLang::Tr);
+        assert_eq!(expected, vec![2, 5]);
+        assert!(hyphen_opportunities_in("KITAPLAR", &lim, ProofLang::Tr).is_empty());
+        assert_eq!(hyphen_opportunities_including_all_caps("KITAPLAR", &lim, ProofLang::Tr).iter().map(|p| p.at).collect::<Vec<_>>(), expected);
+        assert!(hyphen_opportunities_including_all_caps("KITAPLAR", &Limits { capitalized: false, ..lim }, ProofLang::Tr).is_empty());
     }
     /// Regression: over limit runs keep point fallback with source offsets.
     #[test]
@@ -141,6 +144,19 @@ mod tests {
             let actual = opportunities_with(word, &lim, lang, &patterns, false);
             assert_eq!(actual.iter().map(|p| p.at).collect::<Vec<_>>(), expected, "{word}");
             assert!(actual.iter().all(|p| p.suffix.is_empty()));
+        }
+    }
+    /// Standard and nonstandard paths both exclude breaks on either side of an apostrophe.
+    #[test]
+    fn nonstandard_opportunities_exclude_apostrophe_neighbours() {
+        let lim = Limits { min_word: 2, after_first: 1, before_last: 1, capitalized: true };
+        let lang = ProofLang::from_tag(Some("hu"));
+        for quote in ['\'', '’'] {
+            for rule in [format!("a1{quote}b"), format!("a{quote}1b")] {
+                let patterns = Patterns::from_huhyphn(&format!("UTF-8\n{rule}\nas5szon2y/sz=,2,1\n")).unwrap();
+                assert!(opportunities_with(&format!("aa{quote}bb"), &lim, lang, &patterns, false).is_empty());
+                assert_eq!(opportunities_with("asszony", &lim, lang, &patterns, false)[0].suffix.as_ref(), "z");
+            }
         }
     }
     /// Regression: soft hyphens separate automatic pattern runs.
