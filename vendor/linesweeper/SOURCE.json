@@ -7,7 +7,9 @@
   "upstream_repository": null,
   "upstream_revision": "824b0791a750f7b27b8edcbb6c6244d0e629875e",
   "upstream_directory": "",
-  "local_patches": [],
+  "local_patches": [
+    "In `src/segments.rs`, `update_enter_exit` sorts only the new entrances and exits and merges them into the sorted ones, in the order a stable sort of the whole list gives, instead of sorting the whole list on every call. `Segments::add_bez_paths` and `Segments::add_non_closed_bez_paths` add a collection of paths and merge once, as `add_closed_polylines` and `Topology::from_paths` already do, and `add_bez_paths` removes the segments of a path with an open subpath before it returns the error. Without it, adding 2,000 triangles one at a time from the top row down takes 6,006,993 entrance comparisons, and adding n paths one at a time takes time quadratic in n. The tests `segments::tests::add_bez_paths_matches_repeated_add_bez_path`, `segments::tests::add_non_closed_bez_paths_matches_repeated_add_non_closed_bez_path`, `segments::tests::add_bez_paths_stops_at_an_open_path`, `segments::tests::merged_entrances_and_exits_match_a_full_sort` and `segments::tests::paths_added_in_height_order_are_not_sorted_again` cover it."
+  ],
   "files": [
     { "path": ".cargo_vcs_info.json", "source_sha256": "47fba6a9dbdf445a5c97f783c9be62093035f9d5e5cdc2cf3216ad8259bcd8fc", "source_git_blob": null, "sha256": "47fba6a9dbdf445a5c97f783c9be62093035f9d5e5cdc2cf3216ad8259bcd8fc" },
     { "path": ".gitignore", "source_sha256": "88b59092499ae05234330eb7d0b01e953e969caf05261530e3765eef02536cf0", "source_git_blob": null, "sha256": "88b59092499ae05234330eb7d0b01e953e969caf05261530e3765eef02536cf0" },
@@ -42,7 +44,7 @@
     { "path": "src/order.rs", "source_sha256": "7e5b04eae8af134abb032e995f1d3c2ac473822923dfee8d463d9ade6ffeb596", "source_git_blob": null, "sha256": "7e5b04eae8af134abb032e995f1d3c2ac473822923dfee8d463d9ade6ffeb596" },
     { "path": "src/perturbation.rs", "source_sha256": "fa274a822bbdf65f8e53e403eef78034dd87964b3f1d3134a064df4ec8cef9c5", "source_git_blob": null, "sha256": "fa274a822bbdf65f8e53e403eef78034dd87964b3f1d3134a064df4ec8cef9c5" },
     { "path": "src/position.rs", "source_sha256": "dfa70840805ecccf5b7eb6122921e46ca60c24cb7b3c17f3b55ffc2549368ab0", "source_git_blob": null, "sha256": "dfa70840805ecccf5b7eb6122921e46ca60c24cb7b3c17f3b55ffc2549368ab0" },
-    { "path": "src/segments.rs", "source_sha256": "379f9455120492d237cb5a62b3fc06da018a72e2eb75bbfcd61b4cce501d9bbc", "source_git_blob": null, "sha256": "379f9455120492d237cb5a62b3fc06da018a72e2eb75bbfcd61b4cce501d9bbc" },
+    { "path": "src/segments.rs", "source_sha256": "379f9455120492d237cb5a62b3fc06da018a72e2eb75bbfcd61b4cce501d9bbc", "source_git_blob": null, "sha256": "717ef16f77623ae020307dff376032c9948aff2f7008bd797507b9f67095d6d0" },
     { "path": "src/snapshots/linesweeper__tests__empty_horizontals.snap", "source_sha256": "e319881853e889badf6524f19af4cd6f112e8dd71bdc516826f4463134a82244", "source_git_blob": null, "sha256": "e319881853e889badf6524f19af4cd6f112e8dd71bdc516826f4463134a82244" },
     { "path": "src/snapshots/linesweeper__tests__two_squares.snap", "source_sha256": "01961e0311a5af3b8f13eb52a2a7112560c47cf86771c04e40475dc6f15a0846", "source_git_blob": null, "sha256": "01961e0311a5af3b8f13eb52a2a7112560c47cf86771c04e40475dc6f15a0846" },
     { "path": "src/snapshots/linesweeper__topology__tests__diamond.snap", "source_sha256": "cfaefd620a0a3d1376861bca09cd7c658ef00a32635b88f1b259a9b39cd15502", "source_git_blob": null, "sha256": "cfaefd620a0a3d1376861bca09cd7c658ef00a32635b88f1b259a9b39cd15502" },
