@@ -755,8 +755,19 @@ fn plain_files(dir: &Path) -> Result<Vec<PathBuf>, String> {
 /// cancels leaves no helper counting down its wait.
 #[cfg(unix)]
 fn relaunch_after_exit(app: &App, pid: u32, command: &[&std::ffi::OsStr]) -> Restart {
+    relaunch_with(app, pid, command, process::spawn_detached)
+}
+
+/// [`relaunch_after_exit`], with `spawn` starting the helper.
+#[cfg(unix)]
+fn relaunch_with(
+    app: &App,
+    pid: u32,
+    command: &[&std::ffi::OsStr],
+    spawn: impl FnOnce(std::process::Command) -> Result<(), String> + Send + 'static,
+) -> Restart {
     let cmd = helper_command(app, pid, command);
-    Restart::later(move || process::spawn_detached(cmd).map_err(|e| format!("couldn't schedule the restart ({e})")))
+    Restart::later(move || spawn(cmd).map_err(|e| format!("couldn't schedule the restart ({e})")))
 }
 
 #[cfg(unix)]
@@ -1987,25 +1998,48 @@ mod tests {
     }
 
     /// The restart helper starts only when the restart is started, at the app's exit: a close the
-    /// user cancels leaves no helper counting down its one-minute wait.
+    /// user cancels leaves no helper counting down its one-minute wait. The test starts the helper
+    /// the way `spawn_detached` does and keeps it, and a thread that waits for the helper to exit
+    /// writes `exited`, so a helper that exits without writing `started` fails the test.
     #[cfg(unix)]
     #[test]
     fn the_restart_helper_starts_only_when_the_restart_is_started() {
-        use std::io::BufRead;
+        use std::io::{BufRead, Write};
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
         let dir = tempfile::tempdir().unwrap();
         let events = dir.path().join("events");
         assert!(std::process::Command::new("mkfifo").arg(&events).status().unwrap().success());
         // Open for reading and writing, so neither this open nor the helper's blocks.
         let pipe = std::fs::OpenOptions::new().read(true).write(true).open(&events).unwrap();
+        let mut exited = pipe.try_clone().unwrap();
         let mut lines = std::io::BufReader::new(pipe).lines();
         let mut gone = std::process::Command::new("true").spawn().unwrap();
         gone.wait().unwrap();
         let started = r#"printf 'started\n' > "$1""#;
         let command = [std::ffi::OsStr::new("/bin/sh"), "-c".as_ref(), started.as_ref(), "sh".as_ref(), events.as_os_str()];
-        let restart = relaunch_after_exit(&crate::suite::LAUNCHER, gone.id(), &command);
+        let spawned = Arc::new(AtomicBool::new(false));
+        let flag = Arc::clone(&spawned);
+        let spawn = move |mut cmd: std::process::Command| -> Result<(), String> {
+            flag.store(true, Ordering::SeqCst);
+            let mut helper = cmd
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .map_err(|e| e.to_string())?;
+            std::thread::spawn(move || {
+                let _ = helper.wait();
+                let _ = exited.write_all(b"exited\n");
+            });
+            Ok(())
+        };
+        let restart = relaunch_with(&crate::suite::LAUNCHER, gone.id(), &command, spawn);
+        assert!(!spawned.load(Ordering::SeqCst), "the helper must wait for the restart to be started");
         assert_eq!(format!("{restart:?}"), "Restart { pending: true }", "the helper must wait for the restart to be started");
         assert_eq!(restart.start(), Ok(()));
-        assert_eq!(lines.next().unwrap().unwrap(), "started");
+        assert_eq!(lines.next().unwrap().unwrap(), "started", "the helper exited without starting the command");
+        assert_eq!(lines.next().unwrap().unwrap(), "exited");
     }
 
     /// The helper waits for the old launcher to exit before it starts the new one. The helper's
