@@ -71,7 +71,8 @@ pub enum Action {
     /// [`Status::Ready`] for a requested check and Restart to Update in the prompt. On Windows
     /// the helper starts only at the exit: when the app drops the [`Updater`] as it exits, or
     /// calls [`Updater::start_pending_update`] in `on_exit`, which an app that ends the process
-    /// there without dropping the `Updater` must do.
+    /// there without dropping the `Updater` must do. An installation still in progress when
+    /// such an app ends the process is lost, since its worker thread ends with the process.
     Close,
 }
 
@@ -536,13 +537,21 @@ impl Updater {
     /// Starts the helper of a ready update, so that the update installs once the app has exited.
     /// Call it once the app's exit is certain (a close nothing can cancel any more, in `on_exit`),
     /// whether or not the exit came through [`Action::Close`]; dropping the `Updater` calls it
-    /// too. Later calls do nothing. An installation still running when the `Updater` is dropped
-    /// starts its helper itself when it finishes. A helper that cannot start, or an installation
-    /// that failed and was not reported yet, is recorded, and the next start reports it
+    /// too. Later calls do nothing. An installation still running at the first call starts its
+    /// helper itself when it finishes, as long as the process is still running then; an app
+    /// that ends the process in `on_exit` loses an installation still in progress, since its
+    /// worker thread ends with the process. A helper that cannot start, or an installation that
+    /// failed and was not reported yet, is recorded, and the next start reports it
     /// ([`Status::InstallFailed`]).
     pub fn start_pending_update(&mut self) {
+        // Held while the channel is read: a worker sent its outcome before, and it is read here,
+        // or it sends after and starts its helper (or records its failure) itself.
+        let dropped = Arc::clone(&self.dropped);
+        let mut dropped = dropped.lock().unwrap_or_else(PoisonError::into_inner);
+        *dropped = true;
         // An installation that finished since the last `tick`, or whose worker ended without a word.
-        if let Some((rx, release)) = &self.install
+        // One still running is let go: it now reports through `deliver` alone.
+        if let Some((rx, release)) = self.install.take()
             && let Some(outcome) = match rx.try_recv() {
                 Ok(outcome) => Some(outcome),
                 Err(TryRecvError::Empty) => None,
@@ -551,12 +560,11 @@ impl Updater {
         {
             match outcome {
                 Ok(restart) => {
-                    self.restart = Some((restart, release.clone()));
+                    self.restart = Some((restart, release));
                     self.installed = true;
                 }
                 Err(failure) => record(self.app, self.outcome_paths().as_ref(), &failure.reason()),
             }
-            self.install = None;
         }
         if let Some((restart, _)) = self.restart.take()
             && let Err(e) = restart.start()
@@ -621,11 +629,6 @@ impl Drop for Updater {
     /// The app is exiting: an installed update that is still waiting starts its helper, which
     /// waits for this process to exit before it installs.
     fn drop(&mut self) {
-        // Held while the channel is read: a worker sent its outcome before, and it is read here,
-        // or it sends after and starts its helper itself.
-        let dropped = Arc::clone(&self.dropped);
-        let mut dropped = dropped.lock().unwrap_or_else(PoisonError::into_inner);
-        *dropped = true;
         self.start_pending_update();
     }
 }
@@ -1176,6 +1179,30 @@ mod tests {
         deliver(&crate::suite::LAUNCHER, &tx, &Mutex::new(false), None, Ok(restart));
         assert_eq!(starts.load(Ordering::SeqCst), 0, "the updater starts it at the close");
         assert!(rx.try_recv().is_ok_and(|outcome| outcome.is_ok()));
+    }
+
+    /// An installation still running when the app calls `start_pending_update` in `on_exit`, and
+    /// that finishes before the updater is dropped, starts its helper once; the worker's end is
+    /// not then recorded as a failure.
+    #[test]
+    fn an_install_finishing_after_start_pending_update_starts_its_helper_once() {
+        use std::sync::atomic::Ordering;
+        let ctx = egui::Context::default();
+        let (_dir, paths, mut u) = with_records("0.1.0");
+        let dropped = Arc::clone(&u.dropped);
+        let (starts, restart) = counted_restart();
+        let (tx, rx) = channel();
+        u.install = Some((rx, newer()));
+        u.start_pending_update();
+        assert_eq!(starts.load(Ordering::SeqCst), 0, "nothing has finished yet");
+        deliver(&PHOTOCRAFT, &tx, &dropped, Some(&paths), Ok(restart));
+        drop(tx);
+        assert_eq!(starts.load(Ordering::SeqCst), 1, "the worker starts the helper itself");
+        drop(u);
+        assert_eq!(starts.load(Ordering::SeqCst), 1, "the helper starts once");
+        let mut next = reading(&paths, "0.1.0");
+        start_answered(&mut next, &ctx, Ok(None));
+        assert_eq!(next.status(), &Status::Idle, "a helper that started is not a failure");
     }
 
     /// A failed installation picked up at exit leaves nothing installed and nothing waiting.
