@@ -1126,6 +1126,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-prores"
+version = "0.1.0"
+dependencies = [
+ "craft-media",
+ "craft-testkit",
+ "rayon",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-quit"
 version = "0.1.0"
 dependencies = [
