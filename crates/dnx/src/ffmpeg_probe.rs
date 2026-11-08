@@ -139,7 +139,7 @@ fn probe_weights() {
                 negative: false,
                 block: blk,
             });
-            let path = dir.join("explore.dnxhd");
+            let path = craft_testkit::temp_path(&dir.join(format!("explore_weights_{cid}_{blk}_{pos}.dnxhd")));
             std::fs::write(&path, &s).unwrap();
             let out = std::process::Command::new(&ff)
                 .args(["-hide_banner", "-loglevel", "error", "-f", "dnxhd", "-i"])
@@ -147,6 +147,7 @@ fn probe_weights() {
                 .args(["-f", "rawvideo", "-pix_fmt", pix, "-"])
                 .output()
                 .unwrap();
+            let _ = std::fs::remove_file(&path);
             let px: Vec<f64> = if depth == 8 {
                 out.stdout.iter().map(|&b| b as f64).collect()
             } else {
@@ -246,7 +247,7 @@ fn probe_reconstruction() {
                 negative: false,
                 block: 0,
             });
-            let path = dir.join("explore.dnxhd");
+            let path = craft_testkit::temp_path(&dir.join(format!("explore_rec_{cid}_{q}_{amp}.dnxhd")));
             std::fs::write(&path, &s).unwrap();
             let out = std::process::Command::new(&ff)
                 .args(["-hide_banner", "-loglevel", "error", "-f", "dnxhd", "-i"])
@@ -254,6 +255,7 @@ fn probe_reconstruction() {
                 .args(["-f", "rawvideo", "-pix_fmt", pix, "-"])
                 .output()
                 .unwrap();
+            let _ = std::fs::remove_file(&path);
             let px: Vec<f64> = if depth == 8 {
                 out.stdout.iter().map(|&b| b as f64).collect()
             } else {
