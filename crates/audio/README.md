@@ -131,7 +131,7 @@ use craft_audio::{DecodeOptions, Decoder};
 
 let file = std::fs::File::open("long-recording.m4a")?;
 let mut dec = Decoder::open(file, Some("m4a"), &DecodeOptions::default())?;
-dec.seek(48_000 * 60)?;                   // sample-exact: the next block starts here
+dec.seek(48_000 * 60)?;                   // sample-exact (see Limits): the next block starts here
 while let Some(block) = dec.next_block()? {
     // block.channels: planar f32, WAV channel order
 }
@@ -314,6 +314,11 @@ match craft_audio::decode(&bytes, None) {
 - MP4 edit lists: a single media edit (encoder priming and the end) is applied, alone or after one
   empty edit; the empty edit's delay is not added as silence. Other edit lists are not applied, and
   the media plays as it is stored.
+- AAC in MP4 stored as ADTS frames (not standard), when the sample durations count fewer frames
+  than the samples hold (HE-AAC's core frames, or several frames to a sample): the track decodes in
+  full when read from the start, but `Decoder::seek` places samples by those durations, so it lands
+  later than asked, and an edit list measured in them can end the track early. Telling would mean
+  reading every sample.
 
 ## Codecs
 
