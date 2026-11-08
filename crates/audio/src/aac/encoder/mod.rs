@@ -33,6 +33,7 @@ pub enum BitrateMode {
     /// Constant bitrate in bits per second (bit reservoir + fill elements).
     Cbr(u32),
     /// Constant quality, 1.0 (small) ..= 5.0 (transparent-ish). 3.0 targets the masking threshold.
+    /// Values outside 0.5..=6.0 are clamped to it; NaN is rejected by [`Encoder::new`].
     Vbr(f32),
 }
 
@@ -185,12 +186,21 @@ pub struct Encoder {
 
 impl Encoder {
     /// Create an encoder. Fails if the sampling rate is not an AAC rate, `channels` is outside
-    /// 1..=8, or the CBR bitrate is out of range for the channel count and rate.
+    /// 1..=8, the CBR bitrate is out of range for the channel count and rate, or the VBR quality is
+    /// NaN.
     pub fn new(cfg: EncoderConfig) -> Result<Encoder> {
         let sf_index =
             sample_rate_index(cfg.sample_rate).ok_or(Error::InvalidSettings("sample rate must be one of the 13 AAC rates (7350–96000 Hz)"))?;
         if !(1..=8).contains(&cfg.channels) {
             return Err(Error::InvalidSettings("channels must be 1..=8"));
+        }
+        // A NaN quality passes `clamp` and makes the rate-distortion multiplier NaN, which turns off
+        // the frame-size limit: every band is coded at full precision, and 8-channel frames outgrow
+        // the ADTS length field.
+        if let BitrateMode::Vbr(q) = cfg.mode
+            && q.is_nan()
+        {
+            return Err(Error::InvalidSettings("VBR quality must be a number"));
         }
         use ElementType::*;
         let (channel_config, layout) = match cfg.channels {
@@ -988,6 +998,19 @@ mod tests {
             let n = write_fill(&mut bw, bits);
             assert_eq!(n, bw.bit_len() as u64);
             assert!(n <= bits && n + 6 >= bits, "asked {bits}, wrote {n}");
+        }
+    }
+
+    #[test]
+    fn vbr_quality_must_be_a_number() {
+        assert!(Encoder::new(EncoderConfig::vbr(48_000, 2, f32::NAN)).is_err());
+        // Infinities and other out-of-range values are clamped, and keep frames within the limit.
+        let nz = noise(48_000);
+        for q in [f32::INFINITY, f32::NEG_INFINITY, 100.0, -3.0] {
+            let units = encode_all(EncoderConfig::vbr(48_000, 8, q).with_adts(true), &nz);
+            for u in &units {
+                assert!(u.len() <= 6144 + 7 && u.starts_with(&[0xFF]), "quality {q}: {}-byte unit", u.len());
+            }
         }
     }
 
