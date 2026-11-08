@@ -106,7 +106,7 @@ impl StartupPrompt {
         }
 
         let pal = Palette::new(ctx, self.app);
-        let Palette { is_dark, card_bg, border_color, text_primary, text_muted, fill, on_fill } = pal;
+        let Palette { card_bg, border_color, text_primary, text_muted, fill, on_fill, alert, alert_bg, .. } = pal;
         let t = self.translate;
         let version = self.release.version_label();
 
@@ -130,16 +130,16 @@ impl StartupPrompt {
                         ui.add_space(8.0);
 
                         if let Some(msg) = self.message() {
-                            let alert_bg = if is_dark { Color32::from_rgb(50, 30, 20) } else { Color32::from_rgb(255, 242, 235) };
-                            let alert_color = Color32::from_rgb(225, 95, 30);
                             egui::Frame::new()
                                 .fill(alert_bg)
-                                .stroke(egui::Stroke::new(1.0, alert_color))
+                                .stroke(egui::Stroke::new(1.0, alert))
                                 .corner_radius(egui::CornerRadius::ZERO)
                                 .inner_margin(egui::Margin::symmetric(10, 6))
                                 .show(ui, |ui| {
                                     ui.set_width(ui.available_width());
-                                    ui.label(RichText::new(msg).size(12.0).color(alert_color));
+                                    bounded(ui, "craft_update.prompt_message", |ui| {
+                                        ui.label(RichText::new(msg).size(12.0).color(alert));
+                                    });
                                 });
                             ui.add_space(4.0);
                         }
@@ -247,6 +247,10 @@ struct Palette {
     fill: Color32,
     /// Text on `fill`.
     on_fill: Color32,
+    /// Errors and failure reasons, on the card and on `alert_bg`.
+    alert: Color32,
+    /// The box around a message in the prompt.
+    alert_bg: Color32,
 }
 
 impl Palette {
@@ -261,6 +265,8 @@ impl Palette {
             text_muted: if is_dark { Color32::from_rgb(150, 150, 160) } else { Color32::from_rgb(105, 105, 115) },
             fill,
             on_fill: ink_on(fill),
+            alert: if is_dark { Color32::from_rgb(225, 95, 30) } else { Color32::from_rgb(184, 66, 8) },
+            alert_bg: if is_dark { Color32::from_rgb(44, 26, 18) } else { Color32::from_rgb(255, 242, 235) },
         }
     }
 }
@@ -410,7 +416,7 @@ impl CheckResultDialog {
         }
 
         let pal = Palette::new(ctx, self.app);
-        let Palette { card_bg, border_color, text_primary, text_muted, fill, on_fill, .. } = pal;
+        let Palette { card_bg, border_color, text_primary, text_muted, fill, on_fill, alert, .. } = pal;
         let t = self.translate;
         egui::Area::new(egui::Id::unique("craft_update.check_result")).anchor(Align2::CENTER_CENTER, Vec2::ZERO).order(egui::Order::Foreground).show(
             ctx,
@@ -428,7 +434,6 @@ impl CheckResultDialog {
                         }
                         ui.add_space(8.0);
 
-                        let alert_color = Color32::from_rgb(225, 95, 30);
                         match status {
                             Status::Checking => {
                                 ui.horizontal(|ui| {
@@ -459,7 +464,9 @@ impl CheckResultDialog {
                             }
                             Status::InstallFailed(reason) => {
                                 let text = t("The update could not be installed: {reason}", &[("reason", reason)]);
-                                ui.add(egui::Label::new(RichText::new(text).size(12.5).color(alert_color)).selectable(true));
+                                bounded(ui, "craft_update.install_failure", |ui| {
+                                    ui.add(egui::Label::new(RichText::new(text).size(12.5).color(alert)).selectable(true));
+                                });
                             }
                             Status::UpToDate => {
                                 let text = t(
@@ -469,8 +476,10 @@ impl CheckResultDialog {
                                 ui.label(RichText::new(text).size(12.5).color(text_muted));
                             }
                             Status::Failed(error) => {
-                                ui.label(RichText::new(t("Could not check for updates.", &[])).size(12.5).strong().color(alert_color));
-                                ui.add(egui::Label::new(RichText::new(error).size(12.0).color(text_muted)).selectable(true));
+                                ui.label(RichText::new(t("Could not check for updates.", &[])).size(12.5).strong().color(alert));
+                                bounded(ui, "craft_update.check_failure", |ui| {
+                                    ui.add(egui::Label::new(RichText::new(error).size(12.0).color(text_muted)).selectable(true));
+                                });
                                 ui.label(
                                     RichText::new(t("All releases are listed at {url}", &[("url", &self.app.releases_url())]))
                                         .size(11.5)
@@ -518,6 +527,16 @@ impl CheckResultDialog {
         );
         response
     }
+}
+
+/// The tallest an error or failure reason draws in a card; a longer one scrolls, so the card's
+/// buttons stay on screen.
+const REASON_MAX_HEIGHT: f32 = 160.0;
+
+/// Draws `add_contents` (an error or a failure reason) at most [`REASON_MAX_HEIGHT`] tall,
+/// scrolling the rest.
+fn bounded(ui: &mut egui::Ui, id: &str, add_contents: impl FnOnce(&mut egui::Ui)) {
+    egui::ScrollArea::vertical().id_salt(id).max_height(REASON_MAX_HEIGHT).auto_shrink([false, true]).show(ui, add_contents);
 }
 
 /// Backgrounds of an unfilled button (LATER, DISMISS) when hovered and when pressed: a step from
@@ -592,7 +611,7 @@ mod tests {
     use egui::{Context, Event, FullOutput, Key, Modifiers, RawInput, Rect};
 
     const DARK_CARD: Color32 = Color32::from_rgb(26, 26, 28);
-    const DARK_STATUS: Color32 = Color32::from_rgb(50, 30, 20);
+    const DARK_STATUS: Color32 = Color32::from_rgb(44, 26, 18);
 
     fn screen() -> Rect {
         Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(640.0, 480.0))
@@ -903,6 +922,54 @@ mod tests {
             let fill = Color32::from_rgb((hex >> 16) as u8, (hex >> 8) as u8, hex as u8);
             let ratio = contrast(fill, ink_on(fill));
             assert!(ratio >= 4.5, "#{hex:06x}: {ratio:.2}:1");
+        }
+    }
+
+    /// Errors and failure reasons reach WCAG AA's 4.5:1 on the card and in the prompt's message
+    /// box, in both themes.
+    #[test]
+    fn failure_text_reaches_aa_in_both_themes() {
+        for theme in [egui::ThemePreference::Dark, egui::ThemePreference::Light] {
+            let ctx = Context::default();
+            ctx.set_theme(theme);
+            let pal = Palette::new(&ctx, &PHOTOCRAFT);
+            for (surface, bg) in [("card", pal.card_bg), ("message box", pal.alert_bg)] {
+                let ratio = contrast(pal.alert, bg);
+                assert!(ratio >= 4.5, "{theme:?} {surface}: {ratio:.2}:1");
+            }
+        }
+    }
+
+    /// A long error or failure reason scrolls inside the card, so the card's buttons stay on
+    /// screen.
+    #[test]
+    fn a_long_reason_keeps_the_buttons_on_screen() {
+        let long = "the installer reported an error. ".repeat(120);
+        let on_screen = |output: &FullOutput, label: &str| text_pos(output, label).is_some_and(|pos| screen().contains(pos));
+        let dialog = CheckResultDialog::new(&PHOTOCRAFT, "0.1.0");
+        for status in [Status::InstallFailed(long.clone()), Status::Failed(long.clone())] {
+            let ctx = dark_context();
+            let mut output = None;
+            // The first frame of an area only sizes it; the second paints.
+            for _ in 0..2 {
+                let mut out = ctx.run_ui(RawInput { screen_rect: Some(screen()), ..RawInput::default() }, |ui| {
+                    dialog.show(ui.ctx(), &status);
+                });
+                out.textures_delta.clear();
+                output = Some(out);
+            }
+            let output = output.unwrap();
+            for label in ["OK", "CHECK AGAIN"] {
+                assert!(on_screen(&output, label), "{label} is off screen for a long {status:?}");
+            }
+        }
+        let ctx = dark_context();
+        let mut prompt = prompt_for(true);
+        prompt.set_message(long);
+        frame(&ctx, &mut prompt, Vec::new());
+        let (_, output) = frame(&ctx, &mut prompt, Vec::new());
+        for label in ["UPDATE AND RESTART", "LATER"] {
+            assert!(on_screen(&output, label), "{label} is off screen under a long message");
         }
     }
 

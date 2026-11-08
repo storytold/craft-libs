@@ -375,29 +375,31 @@ pub fn update(
     prepare_update(app, install, release, platform, http, paths, stop, phase, last, running_version)?.start()
 }
 
-/// What remains of an update after [`prepare_update`]: starting the Windows helper, which waits
-/// for this process to exit and then installs the update. On macOS and Linux the update is
-/// already in place and its restart already scheduled, so [`Restart::start`] does nothing.
-#[must_use = "on Windows the update is only installed once the restart is started"]
+/// What remains of an update after [`prepare_update`]: starting the helper, which waits for this
+/// process to exit. On Windows the helper then installs the update and starts the new version;
+/// on macOS and Linux the update is already in place and the helper starts the new version.
+#[must_use = "the update only installs or restarts once the restart is started"]
 pub struct Restart {
     helper: Option<Box<dyn FnOnce() -> Result<(), String> + Send>>,
 }
 
 impl Restart {
     /// Nothing is left to start.
-    #[cfg_attr(all(windows, not(test)), allow(dead_code))]
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn scheduled() -> Self {
         Self { helper: None }
     }
 
     /// `start` runs when the app closes.
-    #[cfg_attr(not(any(windows, test)), allow(dead_code))]
+    #[cfg_attr(not(any(windows, unix, test)), allow(dead_code))]
     pub(crate) fn later(start: impl FnOnce() -> Result<(), String> + Send + 'static) -> Self {
         Self { helper: Some(Box::new(start)) }
     }
 
-    /// Starts the helper. Call it when the app closes: the helper waits only a minute for the
-    /// app to exit, and installs nothing when the app is still running after that.
+    /// Starts the helper. Call it when the app's exit is certain: the helper waits only a minute
+    /// for the app to exit. On Windows it installs nothing when the app is still running after
+    /// that; on macOS and Linux the Flatpak helper starts nothing then, and the other helpers
+    /// start the new version anyway.
     pub fn start(self) -> Result<(), String> {
         self.helper.map_or(Ok(()), |start| start())
     }
@@ -409,8 +411,8 @@ impl std::fmt::Debug for Restart {
     }
 }
 
-/// [`update`] without starting the Windows helper: the caller starts the returned [`Restart`]
-/// when the app closes. On macOS and Linux the result is the same as [`update`]'s.
+/// [`update`] without starting the helper: the caller starts the returned [`Restart`] when the
+/// app's exit is certain. On macOS and Linux the update is in place when this returns.
 #[allow(clippy::too_many_arguments)]
 pub fn prepare_update(
     app: &App,
@@ -457,20 +459,20 @@ pub fn prepare_update(
                 let placed = install::macos::install_dmg(app, &file, Some(&existing), None, false, paths, &install::macos::Expect::release(release));
                 let _ = std::fs::remove_file(&file);
                 let placed = placed?;
-                relaunch_after_exit(app, pid, &[Path::new("/usr/bin/open").as_os_str(), placed.as_os_str()]).map(|()| Restart::scheduled())
+                Ok(relaunch_after_exit(app, pid, &[Path::new("/usr/bin/open").as_os_str(), placed.as_os_str()]))
             }
             #[cfg(target_os = "linux")]
             Install::AppImage(path) => {
                 replace_appimage(&file, path)?;
                 let _ = std::fs::remove_file(&file);
-                relaunch_after_exit(app, pid, &[path.as_os_str()]).map(|()| Restart::scheduled())
+                Ok(relaunch_after_exit(app, pid, &[path.as_os_str()]))
             }
             #[cfg(target_os = "linux")]
             Install::Package(kind, exe) => {
                 let result = install::linux::install_package(*kind, &file, None, stop, phase);
                 let _ = std::fs::remove_file(&file);
                 result?;
-                relaunch_after_exit(app, pid, &[exe.as_os_str()]).map(|()| Restart::scheduled())
+                Ok(relaunch_after_exit(app, pid, &[exe.as_os_str()]))
             }
             #[cfg(target_os = "linux")]
             Install::Flatpak => {
@@ -484,7 +486,7 @@ pub fn prepare_update(
                 let result = install::linux::update_flatpak_bundle(&file, &app.bundle_id(), system, stop, phase);
                 let _ = std::fs::remove_file(&file);
                 result?;
-                relaunch_flatpak_after_exit(app).map(|()| Restart::scheduled())
+                relaunch_flatpak_after_exit(app)
             }
             #[cfg(windows)]
             Install::Msi(exe) => windows_helper(app, paths, release, pid, exe, &msi_finish(&file)?),
@@ -503,7 +505,7 @@ pub fn prepare_update(
                 let result = replace_standalone(app, paths, &file, exe);
                 let _ = std::fs::remove_file(&file);
                 result?;
-                relaunch_after_exit(app, pid, &[exe.as_os_str()]).map(|()| Restart::scheduled())
+                Ok(relaunch_after_exit(app, pid, &[exe.as_os_str()]))
             }
             #[allow(unreachable_patterns)]
             _ => {
@@ -513,20 +515,22 @@ pub fn prepare_update(
         }
     })();
     let scheduled = unmark_unless_scheduled(paths, scheduled);
-    // On macOS and Linux the update is in place once it is scheduled.
+    // On macOS and Linux the update is in place once it is prepared.
     #[cfg(not(windows))]
     if scheduled.is_ok() {
-        record_done(paths, &release.tag);
+        record_done(paths, &release.version_label());
     }
     scheduled
 }
 
-/// Records `release` as just installed, so it isn't offered again for [`JUST_UPDATED_FOR`]. The
-/// outcome records of an earlier update are removed: this update writes its own.
+/// Records `release` as just installed, so it isn't offered again for [`JUST_UPDATED_FOR`]: its
+/// tag, the time, and the version it installs. The outcome records of an earlier update are
+/// removed: this update writes its own.
 fn mark_installed(paths: &Paths, release: &Release) {
     let _ = std::fs::remove_file(failure_file(paths));
     let _ = std::fs::remove_file(done_file(paths));
-    if let Err(e) = crate::paths::write_atomic(&marker(paths), format!("{}\n{}\n", release.tag, crate::now()).as_bytes()) {
+    let text = format!("{}\n{}\n{}\n", release.tag, crate::now(), release.version_label());
+    if let Err(e) = crate::paths::write_atomic(&marker(paths), text.as_bytes()) {
         log::warn!("couldn't record the self-update: {e}");
     }
 }
@@ -536,17 +540,22 @@ fn done_file(paths: &Paths) -> PathBuf {
     paths.data.join("self-update-done.txt")
 }
 
-/// Records that the update to `tag` has been installed.
-fn record_done(paths: &Paths, tag: &str) {
-    if let Err(e) = crate::paths::write_atomic(&done_file(paths), tag.as_bytes()) {
+/// Records that the update to `version` has been installed.
+fn record_done(paths: &Paths, version: &str) {
+    if let Err(e) = crate::paths::write_atomic(&done_file(paths), version.as_bytes()) {
         log::warn!("couldn't record the finished self-update: {e}");
     }
 }
 
-/// The version the scheduled update installs, from the record [`mark_installed`] wrote.
+/// The version the scheduled update installs, from the record [`mark_installed`] wrote: its third
+/// line, or the tag on its first line in a record without one.
 #[cfg_attr(not(windows), allow(dead_code))]
-fn scheduled_tag(paths: &Paths) -> Option<String> {
-    read_record(&marker(paths)).and_then(|text| text.lines().next().map(str::to_owned)).filter(|tag| !tag.trim().is_empty())
+fn scheduled_version(paths: &Paths) -> Option<String> {
+    let text = read_record(&marker(paths))?;
+    let mut lines = text.lines();
+    let tag = lines.next();
+    let version = lines.nth(1).filter(|version| !version.trim().is_empty()).or(tag);
+    version.map(str::trim).filter(|version| !version.is_empty()).map(str::to_owned)
 }
 
 /// The most of an outcome record that is read: a reason longer than this is cut short.
@@ -741,10 +750,13 @@ fn plain_files(dir: &Path) -> Result<Vec<PathBuf>, String> {
     Ok(files)
 }
 
-/// Starts `sh`, which waits for `pid` to exit and then runs `command`. Detached, so it outlives us.
+/// A [`Restart`] that starts `sh`, which waits for `pid` to exit and then runs `command`.
+/// Detached, so it outlives us. Nothing starts before the app's exit is certain: a close the user
+/// cancels leaves no helper counting down its wait.
 #[cfg(unix)]
-fn relaunch_after_exit(app: &App, pid: u32, command: &[&std::ffi::OsStr]) -> Result<(), String> {
-    process::spawn_detached(helper_command(app, pid, command)).map_err(|e| format!("couldn't schedule the restart ({e})"))
+fn relaunch_after_exit(app: &App, pid: u32, command: &[&std::ffi::OsStr]) -> Restart {
+    let cmd = helper_command(app, pid, command);
+    Restart::later(move || process::spawn_detached(cmd).map_err(|e| format!("couldn't schedule the restart ({e})")))
 }
 
 #[cfg(unix)]
@@ -798,9 +810,10 @@ fn flatpak_host_pid() -> Option<u32> {
     parse_flatpak_host_pid(&out, &instance_id)
 }
 
-/// Starts a host helper that waits for this Flatpak instance to exit, then relaunches it via Flatpak on the host.
+/// A [`Restart`] that starts a host helper, which waits for this Flatpak instance to exit, then
+/// relaunches it via Flatpak on the host. Nothing starts before the app's exit is certain.
 #[cfg(target_os = "linux")]
-fn relaunch_flatpak_after_exit(app: &App) -> Result<(), String> {
+fn relaunch_flatpak_after_exit(app: &App) -> Result<Restart, String> {
     let host_pid = flatpak_host_pid();
     let instance_id = flatpak_instance_id();
     // Each wait clause polls until the old process is gone, then execs the relaunch command.
@@ -819,7 +832,8 @@ fn relaunch_flatpak_after_exit(app: &App) -> Result<(), String> {
         (None, None) => return Err(format!("{} is updated; quit and reopen it to start the new version", app.name)),
     };
     let script = format!("({wait_clause}) &");
-    process::spawn_detached(flatpak_restart_command(app, &script, &target_arg)).map_err(|e| format!("couldn't schedule the Flatpak restart ({e})"))
+    let cmd = flatpak_restart_command(app, &script, &target_arg);
+    Ok(Restart::later(move || process::spawn_detached(cmd).map_err(|e| format!("couldn't schedule the Flatpak restart ({e})"))))
 }
 
 #[cfg(target_os = "linux")]
@@ -958,6 +972,7 @@ fn finish_step(
     wait: &dyn Fn(u32) -> bool,
     start: &dyn Fn(&Path) -> Result<(), String>,
 ) -> Result<(), String> {
+    let portable_before = has_portable_marker(&exe);
     let stepped = step_after_wait(app, reference, pid, &exe, step, wait);
     let done = stepped.result;
     if let Err(e) = &done {
@@ -965,6 +980,14 @@ fn finish_step(
     }
     // The new app, or the old one when the step failed.
     let exe = if done.is_ok() { exe_after_msi(app, registered, &exe) } else { exe };
+    // A standalone copy updated from the portable zip gains `portable.txt` and keeps its folders
+    // beside it from now on: the records the new app reads go there.
+    let version = scheduled_version(paths);
+    let moved = (done.is_ok() && has_portable_marker(&exe) != portable_before).then(|| Paths::for_exe(app, &exe).ok()).flatten();
+    if let Some(after) = &moved {
+        move_marker(paths, after);
+    }
+    let paths = moved.as_ref().unwrap_or(paths);
     // An app that is still running gets no second copy. A failed move can leave no program to
     // start; its recorded error already says how to get the app back, and a restart error must
     // not replace it.
@@ -973,15 +996,35 @@ fn finish_step(
     }
     // Written before the new app starts, so its first start finds it. A failed start removes it.
     if done.is_ok()
-        && let Some(tag) = scheduled_tag(paths)
+        && let Some(version) = &version
     {
-        record_done(paths, &tag);
+        record_done(paths, version);
     }
     let started = start(&exe);
     if let Err(e) = &started {
         record_failure(paths, e);
     }
     done.and(started)
+}
+
+/// Whether `exe` has `portable.txt` beside it, which makes [`Paths::for_exe`] keep its folders
+/// there.
+#[cfg(windows)]
+fn has_portable_marker(exe: &Path) -> bool {
+    exe.parent().is_some_and(|dir| dir.join("portable.txt").is_file())
+}
+
+/// Moves the record of the scheduled update from `from` to `to`, the folders the updated app
+/// reads, and removes outcome records left in `to` by an earlier update.
+#[cfg(windows)]
+fn move_marker(from: &Paths, to: &Paths) {
+    let _ = std::fs::remove_file(failure_file(to));
+    let _ = std::fs::remove_file(done_file(to));
+    if let Some(text) = read_record(&marker(from))
+        && crate::paths::write_atomic(&marker(to), text.as_bytes()).is_ok()
+    {
+        let _ = std::fs::remove_file(marker(from));
+    }
 }
 
 /// Finishes an update on non-Windows platforms (no-op helper).
@@ -1674,7 +1717,24 @@ mod tests {
         record_failure(&paths, "the Windows Installer stopped with error 1603");
         mark_installed(&paths, &Release { tag: "v0.3.0".into(), ..Release::default() });
         assert_eq!(take_failure(&paths), None);
-        assert_eq!(scheduled_tag(&paths).as_deref(), Some("v0.3.0"));
+        assert_eq!(scheduled_version(&paths).as_deref(), Some("v0.3.0"));
+    }
+
+    /// A release whose tag is not its version (an app may build its own `Release`) is recorded
+    /// by its version, so the new version's first start still reports the update.
+    #[test]
+    fn a_finished_update_is_recorded_by_its_version_not_its_tag() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::under(dir.path());
+        let release = Release { tag: "stable".into(), version: version::parse("0.2.0"), ..Release::default() };
+        mark_installed(&paths, &release);
+        assert!(just_updated_to(&paths, &release), "the tag still guards against offering it again");
+        assert_eq!(scheduled_version(&paths).as_deref(), Some("0.2.0"));
+        record_done(&paths, &scheduled_version(&paths).unwrap());
+        assert_eq!(take_outcome(&paths, "0.2.0"), Some(Outcome::Installed(Version::new(0, 2, 0))));
+        // A record without the version line, from before it was written, names the tag.
+        crate::paths::write_atomic(&marker(&paths), format!("v0.3.0\n{}\n", crate::now()).as_bytes()).unwrap();
+        assert_eq!(scheduled_version(&paths).as_deref(), Some("v0.3.0"));
     }
 
     /// A launcher that doesn't quit keeps its files, and the download is still removed.
@@ -1924,6 +1984,28 @@ mod tests {
             ];
             assert!(args.windows(expected.len()).any(|w| w == expected), "{}: {args:?}", app.id);
         }
+    }
+
+    /// The restart helper starts only when the restart is started, at the app's exit: a close the
+    /// user cancels leaves no helper counting down its one-minute wait.
+    #[cfg(unix)]
+    #[test]
+    fn the_restart_helper_starts_only_when_the_restart_is_started() {
+        use std::io::BufRead;
+        let dir = tempfile::tempdir().unwrap();
+        let events = dir.path().join("events");
+        assert!(std::process::Command::new("mkfifo").arg(&events).status().unwrap().success());
+        // Open for reading and writing, so neither this open nor the helper's blocks.
+        let pipe = std::fs::OpenOptions::new().read(true).write(true).open(&events).unwrap();
+        let mut lines = std::io::BufReader::new(pipe).lines();
+        let mut gone = std::process::Command::new("true").spawn().unwrap();
+        gone.wait().unwrap();
+        let started = r#"printf 'started\n' > "$1""#;
+        let command = [std::ffi::OsStr::new("/bin/sh"), "-c".as_ref(), started.as_ref(), "sh".as_ref(), events.as_os_str()];
+        let restart = relaunch_after_exit(&crate::suite::LAUNCHER, gone.id(), &command);
+        assert_eq!(format!("{restart:?}"), "Restart { pending: true }", "the helper must wait for the restart to be started");
+        assert_eq!(restart.start(), Ok(()));
+        assert_eq!(lines.next().unwrap().unwrap(), "started");
     }
 
     /// The helper waits for the old launcher to exit before it starts the new one. The helper's
@@ -2324,6 +2406,60 @@ mod tests {
         );
         assert_eq!(*started.lock().unwrap(), vec![(exe, signed_exe)], "the new app starts once");
         assert_eq!(take_outcome(&paths, "0.2.0"), Some(Outcome::Installed(Version::new(0, 2, 0))), "the new version's first start says so");
+    }
+
+    /// A standalone copy updated from the portable zip becomes portable: the outcome and the
+    /// record of the update go to the folders beside it, which the new app reads.
+    #[cfg(windows)]
+    #[test]
+    fn a_standalone_copy_that_becomes_portable_finds_the_outcome_beside_it() {
+        use std::io::Write;
+        let dir = tempfile::tempdir().unwrap();
+        // The per-user folders the old, standalone copy used.
+        let paths = Paths::under(&dir.path().join("per-user"));
+        let folder = dir.path().join("ArtCraft Launcher");
+        std::fs::create_dir_all(&folder).unwrap();
+        let exe = folder.join("artcraft-launcher.exe");
+        std::fs::write(&exe, "0.1.0").unwrap();
+        let zip = dir.path().join("artcraft-launcher-0.2.0-windows-x64-portable.zip");
+        let mut writer = zip::ZipWriter::new(std::fs::File::create(&zip).unwrap());
+        writer.start_file("artcraft-launcher-0.2.0-windows-x64-portable/artcraft-launcher.exe", zip::write::SimpleFileOptions::default()).unwrap();
+        writer.write_all(&std::fs::read(system_program("cmd.exe")).unwrap()).unwrap();
+        writer.start_file("artcraft-launcher-0.2.0-windows-x64-portable/portable.txt", zip::write::SimpleFileOptions::default()).unwrap();
+        writer.finish().unwrap();
+        let step = Finish::Portable { zip, tmp: dir.path().join(PORTABLE_STAGING) };
+        let release = Release { tag: "v0.2.0".into(), version: version::parse("0.2.0"), ..Release::default() };
+        mark_installed(&paths, &release);
+        let exited = |_pid| true;
+        let start = |_: &Path| Ok(());
+        assert_eq!(
+            finish_step(&crate::suite::LAUNCHER, &system_program("cmd.exe"), &paths, 4242, exe.clone(), &step, false, &exited, &start),
+            Ok(())
+        );
+        let after = Paths::for_exe(&crate::suite::LAUNCHER, &exe).unwrap();
+        assert_eq!(after.data, folder.join("ArtCraftLauncherData").join("data"));
+        assert!(just_updated_to(&after, &release), "the new app does not offer the same update again");
+        assert_eq!(take_outcome(&after, "0.2.0"), Some(Outcome::Installed(Version::new(0, 2, 0))));
+        assert_eq!(take_outcome(&paths, "0.2.0"), None, "nothing is left where the new app no longer looks");
+
+        // A new app that cannot start is reported there too.
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::under(&dir.path().join("per-user"));
+        let (exe, step) = portable_update(dir.path());
+        if let Finish::Portable { zip, .. } = &step {
+            let mut writer = zip::ZipWriter::new(std::fs::File::create(zip).unwrap());
+            writer
+                .start_file("artcraft-launcher-0.2.0-windows-x64-portable/artcraft-launcher.exe", zip::write::SimpleFileOptions::default())
+                .unwrap();
+            writer.write_all(&std::fs::read(system_program("cmd.exe")).unwrap()).unwrap();
+            writer.start_file("artcraft-launcher-0.2.0-windows-x64-portable/portable.txt", zip::write::SimpleFileOptions::default()).unwrap();
+            writer.finish().unwrap();
+        }
+        mark_installed(&paths, &release);
+        let denied = |_: &Path| Err("couldn't start the launcher (denied)".to_owned());
+        assert!(finish_step(&crate::suite::LAUNCHER, &system_program("cmd.exe"), &paths, 4242, exe.clone(), &step, false, &exited, &denied).is_err());
+        let after = Paths::for_exe(&crate::suite::LAUNCHER, &exe).unwrap();
+        assert_eq!(take_outcome(&after, "0.2.0"), Some(Outcome::Failed("couldn't start the launcher (denied)".into())));
     }
 
     /// A portable update of the launcher to 0.2.0 in `dir`: its exe and the step.

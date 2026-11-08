@@ -68,8 +68,8 @@ pub enum Action {
     /// Close the app through its normal close path (which asks about unsaved work): an update is
     /// ready and a helper installs it and restarts the app once the app has exited. This is a
     /// request: the user may cancel the close, and the update then stays ready, with
-    /// [`Status::Ready`] for a requested check and Restart to Update in the prompt. On Windows
-    /// the helper starts only at the exit: when the app drops the [`Updater`] as it exits, or
+    /// [`Status::Ready`] for a requested check and Restart to Update in the prompt. The helper
+    /// starts only at the exit: when the app drops the [`Updater`] as it exits, or
     /// calls [`Updater::start_pending_update`] in `on_exit`, which an app that ends the process
     /// there without dropping the `Updater` must do. An installation still in progress when
     /// such an app ends the process is lost, since its worker thread ends with the process.
@@ -434,8 +434,14 @@ impl Updater {
         }
         match answer {
             Ok(Some(release)) => {
-                if self.prompt.is_none() && self.install.is_none() && !self.installed {
-                    self.open_offer(release);
+                match &mut self.prompt {
+                    None => self.open_offer(release),
+                    // A prompt the app opened before (`offer`) says why the last update failed.
+                    Some(prompt) => {
+                        if let Some(reason) = self.failed_reason.take() {
+                            prompt.set_note(Note::new("The update could not be installed: {reason}", &[("reason", &reason)]));
+                        }
+                    }
                 }
                 self.status = Status::Idle;
             }
@@ -529,9 +535,9 @@ impl Updater {
     /// to close, when `can_start` is true. An app passes `false` while it holds unsaved work.
     pub fn show_if(&mut self, ctx: &egui::Context, can_start: bool) -> Action {
         // The close waits for the app to hold no unsaved work: the user may have edited while the
-        // update installed. It is only asked for: the Windows helper, which waits just a minute
-        // for the app to exit, starts at the exit itself (`start_pending_update`), so a close the
-        // user cancels leaves the update ready.
+        // update installed. It is only asked for: the helper, which waits just a minute for the
+        // app to exit, starts at the exit itself (`start_pending_update`), so a close the user
+        // cancels leaves the update ready.
         if can_start && self.restart.is_some() && std::mem::take(&mut self.close_wanted) {
             return Action::Close;
         }
@@ -1556,6 +1562,23 @@ mod tests {
         u.offer(newer());
         assert_eq!(u.prompt.as_ref().and_then(StartupPrompt::message).as_deref(), Some("The update could not be installed: disk full"));
         assert_eq!(u.status(), &Status::Idle, "the prompt carries the reason");
+        u.prompt = None;
+        u.offer(newer());
+        assert_eq!(u.prompt.as_ref().and_then(StartupPrompt::message), None, "the reason is shown once");
+    }
+
+    /// An offer the app made before the check at start keeps its prompt; when the check finds the
+    /// release too, that prompt says why the last update failed, once.
+    #[test]
+    fn an_offer_before_the_check_at_start_says_why_the_last_update_failed() {
+        let ctx = egui::Context::default();
+        let (_dir, paths, mut u) = with_records("0.1.0");
+        self_update::record_failure(&paths, "disk full");
+        u.offer(newer());
+        assert_eq!(u.prompt.as_ref().and_then(StartupPrompt::message), None, "the failure is not read before the check at start");
+        start_answered(&mut u, &ctx, Ok(Some(newer())));
+        assert_eq!(u.status(), &Status::Idle, "the prompt carries the reason");
+        assert_eq!(u.prompt.as_ref().and_then(StartupPrompt::message).as_deref(), Some("The update could not be installed: disk full"));
         u.prompt = None;
         u.offer(newer());
         assert_eq!(u.prompt.as_ref().and_then(StartupPrompt::message), None, "the reason is shown once");
