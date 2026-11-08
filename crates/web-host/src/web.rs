@@ -359,7 +359,10 @@ mod tests {
         }
         assert!(matches!(read(Incoming::Host, &obj(&[("handoff", true.into())])), Some(Message::Host { handoff: true, autosave: false, .. })));
         assert!(matches!(read(Incoming::Host, &obj(&[("autosave", true.into())])), Some(Message::Host { handoff: false, autosave: true, .. })));
-        assert!(matches!(read(Incoming::Host, &obj(&[("handoff", true.into()), ("autosave", true.into())])), Some(Message::Host { handoff: true, autosave: true, .. })));
+        assert!(matches!(
+            read(Incoming::Host, &obj(&[("handoff", true.into()), ("autosave", true.into())])),
+            Some(Message::Host { handoff: true, autosave: true, .. })
+        ));
         assert!(matches!(
             read(Incoming::HandoffDone, &obj(&[("name", "a.pdf".into()), ("app", "pdfcraft".into())])),
             Some(Message::HandoffDone { name, app }) if name == "a.pdf" && app == "pdfcraft"
