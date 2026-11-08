@@ -430,27 +430,43 @@ mod platform {
     /// app is opened right after login.
     const PORTAL_TIMEOUT: Duration = Duration::from_secs(1);
 
-    /// GNOME's `button-layout`, read through the XDG Desktop Portal's Settings interface
-    /// (`org.freedesktop.portal.Settings.ReadOne`). `None` when there is no session bus or portal,
-    /// the portal doesn't know the key, or it doesn't answer within [`PORTAL_TIMEOUT`].
+    /// GNOME's `button-layout`, read through the XDG Desktop Portal's Settings interface:
+    /// `ReadOne`, or the older `Read` on portals before xdg-desktop-portal 1.17.1, which offer only
+    /// that (as `craft-platform`'s appearance reader does). `None` when there is no session bus or
+    /// portal, the portal doesn't know the key, or it doesn't answer within [`PORTAL_TIMEOUT`].
     pub(super) fn portal_button_layout() -> Option<String> {
         bounded(PORTAL_TIMEOUT, || {
             let connection = zbus::blocking::connection::Builder::session().ok()?.method_timeout(PORTAL_TIMEOUT).build().ok()?;
-            let reply = connection
-                .call_method(
-                    Some("org.freedesktop.portal.Desktop"),
-                    "/org/freedesktop/portal/desktop",
-                    Some("org.freedesktop.portal.Settings"),
-                    "ReadOne",
-                    &("org.gnome.desktop.wm.preferences", "button-layout"),
-                )
-                .ok()?;
-            let (value,) = reply.body().deserialize::<(zbus::zvariant::OwnedValue,)>().ok()?;
-            let value = String::try_from(value).ok()?;
-            let value = value.trim();
-            if value.is_empty() { None } else { Some(value.to_string()) }
+            [("ReadOne", false), ("Read", true)].into_iter().find_map(|(method, legacy)| {
+                let reply = connection
+                    .call_method(
+                        Some("org.freedesktop.portal.Desktop"),
+                        "/org/freedesktop/portal/desktop",
+                        Some("org.freedesktop.portal.Settings"),
+                        method,
+                        &("org.gnome.desktop.wm.preferences", "button-layout"),
+                    )
+                    .ok()?;
+                // The reply's body is the one variant itself, read as a bare value.
+                let value = reply.body().deserialize::<zbus::zvariant::OwnedValue>().ok()?;
+                portal_reply(&value, legacy)
+            })
         })
         .flatten()
+    }
+
+    /// The layout string in a Settings portal reply: `ReadOne`'s value is the setting's own, and
+    /// `Read` wraps it in one more variant. `None` for anything else, or an empty string.
+    pub(super) fn portal_reply(value: &zbus::zvariant::Value<'_>, legacy: bool) -> Option<String> {
+        use zbus::zvariant::Value;
+        let value = match (value, legacy) {
+            (Value::Value(inner), true) => &**inner,
+            (value, false) => value,
+            _ => return None,
+        };
+        let Value::Str(s) = value else { return None };
+        let s = s.as_str().trim();
+        if s.is_empty() { None } else { Some(s.to_string()) }
     }
 
     /// A fresh connection (never winit's inherited one): `None` when there is no Wayland
@@ -598,5 +614,40 @@ mod tests {
         let choice = super::Choice::probe(Prefix::new("CRAFT_WINDOW_UNSET_FOR_TEST"));
         assert_eq!(choice.frame(), &Frame::Desktop);
         assert_eq!(choice.overridden(), None);
+    }
+
+    /// `ReadOne` answers with the setting's value; the older `Read` wraps it in one more variant.
+    /// Either way the layout is the string itself, which `Layout::parse` reads.
+    #[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "openbsd", target_os = "netbsd"))]
+    #[test]
+    fn the_portal_reply_is_read_as_the_layout_string() {
+        use super::platform::portal_reply;
+        use zbus::zvariant::Value;
+        let layout = Value::from("appmenu:minimize,maximize,close");
+        let wrapped = Value::Value(Box::new(layout.try_clone().unwrap()));
+        assert_eq!(portal_reply(&layout, false).as_deref(), Some("appmenu:minimize,maximize,close"));
+        assert_eq!(portal_reply(&wrapped, true).as_deref(), Some("appmenu:minimize,maximize,close"));
+        assert!(Layout::parse(&portal_reply(&layout, false).unwrap()).is_usable());
+        // Read's reply without its wrapper, a wrapped ReadOne reply, another type or a blank: none.
+        assert_eq!(portal_reply(&layout, true), None);
+        assert_eq!(portal_reply(&Value::Value(Box::new(Value::Value(Box::new(layout.try_clone().unwrap())))), true), None);
+        assert_eq!(portal_reply(&Value::U32(1), false), None);
+        assert_eq!(portal_reply(&Value::from("  "), false), None);
+    }
+
+    /// The body of a `ReadOne` reply (signature `v`) deserializes to the setting's value itself, not
+    /// a variant of its signature, so the bare `OwnedValue` read is the right one.
+    #[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "openbsd", target_os = "netbsd"))]
+    #[test]
+    fn a_read_one_reply_body_is_the_value() {
+        use zbus::zvariant::{OwnedValue, Value};
+        let reply = zbus::message::Message::method_return(
+            &zbus::message::Message::method_call("/org/freedesktop/portal/desktop", "ReadOne").unwrap().build(&()).unwrap().header(),
+        )
+        .unwrap()
+        .build(&Value::from("close:"))
+        .unwrap();
+        let value = reply.body().deserialize::<OwnedValue>().unwrap();
+        assert_eq!(super::platform::portal_reply(&value, false).as_deref(), Some("close:"));
     }
 }
