@@ -434,6 +434,26 @@ fn grapheme_offsets_emoji_zwj_modifiers_and_flags() {
     assert_eq!(next_grapheme_offset(flag, mid), flag_len);
 }
 
+/// WHY: Emoji with Fitzpatrick skin-tone modifier (e.g. U+1F44D + U+1F3FD) forms a single
+///      extended grapheme cluster according to UAX #29 rules (\p{Extended_Pictographic} Extend*).
+/// DANGER: Treating base emoji and modifier as separate clusters allows backspace to peel
+///         off the skin tone, leaving an unstyled default yellow glyph.
+/// CONTRACT:
+/// - prev_grapheme_offset from end returns cluster start (0).
+/// - next_grapheme_offset from start returns cluster end (8).
+/// - Interior cursor (e.g. offset 4) snaps to 0 on prev and 8 on next.
+/// - grapheme_bounds from any interior cursor returns (0, 8).
+#[test]
+fn grapheme_navigation_through_skin_tone_modifier() {
+    let text = "👍🏽"; // U+1F44D (4 bytes) + U+1F3FD (4 bytes) = 8 bytes
+    assert_eq!(text.len(), 8);
+    assert_eq!(prev_grapheme_offset(text, 8), 0);
+    assert_eq!(next_grapheme_offset(text, 0), 8);
+    assert_eq!(prev_grapheme_offset(text, 4), 0);
+    assert_eq!(next_grapheme_offset(text, 4), 8);
+    assert_eq!(grapheme_bounds(text, 4), (0, 8));
+}
+
 /// WHY: Exhaustive verification of memory safety and boundary invariants across mixed-script text.
 /// DANGER: Untrusted documents or hostile user input must never trigger panics or invalid slices.
 /// CONTRACT: Every returned offset is guaranteed to be a valid char boundary bounded within [0, text.len()].
