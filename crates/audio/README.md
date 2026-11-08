@@ -1,7 +1,7 @@
 # craft-audio
 
 Audio file I/O and codecs for the Craft apps. Native implementations: WAV and AIFF read/write,
-FLAC encoder, AAC decoder.
+FLAC encoder, AAC decoder, ALAC decoder and encoder.
 Formats without a native decoder are decoded by [symphonia](#symphonia), which is to be replaced
 by native decoders.
 
@@ -11,7 +11,8 @@ by native decoders.
   per channel), in WAV channel order (L R C LFE, back, side) whenever the channel layout is known.
 - Malformed input returns an error, never a panic (see [symphonia](#symphonia) for the one
   exception). No `unsafe`. Readers and decoders are tested with corrupted and truncated input.
-- Implemented from the published specifications; tested against ffmpeg.
+- Implemented from the published specifications, except ALAC, which is ported from Apple's
+  Apache-2.0 reference implementation (see [Origin](#origin)); tested against ffmpeg.
   Builds for `wasm32-unknown-unknown`.
 - Containers (MP4/MOV, Matroska/WebM, Ogg), bit I/O and the `Container`/`CodecId`/`CodecParams`
   types come from [`craft-media`](../media/README.md). This crate never depends on video codecs.
@@ -24,17 +25,19 @@ No default features. The shared types (`AudioBuffer`, `AudioInfo`, `ChannelLayou
 | Feature | Provides | Pulls in |
 |---|---|---|
 | `decode` | `decode`, `probe`, `Decoder`, `tracks`, `TrackDecoder`; every format in [Format support](#format-support) | `decode-native`, `symphonia` |
-| `decode-native` | the same, native formats only (others are `Unsupported`) | `aac-decode`, craft-media `isobmff`/`matroska`/`ogg`, `log` |
+| `decode-native` | the same, native formats only (others are `Unsupported`) | `aac-decode`, `alac-decode`, craft-media `isobmff`/`matroska`/`ogg`, `log` |
 | `symphonia` | the fallback for formats with no native decoder; turning it on is the same as `decode` | `decode-native`, symphonia |
-| `encode` | every encoder: the WAV, AIFF and FLAC file writers | `lossless-encode` |
+| `encode` | every encoder: the WAV, AIFF and FLAC file writers, the ALAC packet encoder | `lossless-encode`, `alac-encode` |
 | `lossless-encode` | WAV, AIFF and FLAC writing | `pcm-encode`, `flac-encode` |
 | `pcm-encode` | `encode`, `FileEncoder` for WAV and AIFF; `wav_float_header` | none |
 | `flac-encode` | `encode`, `FileEncoder` for FLAC | craft-media `bitstream` |
 | `aac-decode` | `aac::Decoder` | craft-media `bitstream` |
+| `alac-decode` | `alac::Decoder` | none |
+| `alac-encode` | `alac::Encoder` | none |
 | `peaks` | `peaks::Peaks` | none |
 | `serde` | `Serialize`/`Deserialize` on the shared types | `serde` |
 
-`aac-decode` also gives `TrackDecoder`, for AAC and PCM.
+`aac-decode` and `alac-decode` also give `TrackDecoder`, for their codec and PCM.
 
 An app that decodes 32-bit FLAC with `decode` needs a profile override in its workspace; see
 [symphonia](#symphonia).
@@ -262,13 +265,14 @@ match craft_audio::decode(&bytes, None) {
 | FLAC | symphonia | native |
 | AAC-LC | native | — |
 | HE-AAC v1/v2 | native, core only (see [Limits](#limits)) | — |
+| ALAC | native | native, packets (`alac::Encoder`; no file writer) |
 | MP1, MP2, MP3 (MPEG audio Layer I/II/III) | symphonia | — |
-| ALAC, Vorbis, ADPCM, A-law, µ-law | symphonia | — |
+| Vorbis, ADPCM, A-law, µ-law | symphonia | — |
 | Opus | — | — |
 
 | Container | Demuxer | Timing |
 |---|---|---|
-| MP4, M4A, MOV | `craft_media::isobmff` for native codecs; symphonia for the others (ALAC, MP3, FLAC) | edit lists (AAC priming) |
+| MP4, M4A, MOV | `craft_media::isobmff` for native codecs; symphonia for the others (MP3, FLAC) | edit lists (AAC priming) |
 | Matroska, WebM | `craft_media::matroska` for native codecs; symphonia for the others (Vorbis, FLAC, MP3) | `CodecDelay`, `DiscardPadding` |
 | Ogg | symphonia (Vorbis, FLAC) | — |
 | Raw ADTS AAC | native frame sync | — |
@@ -309,8 +313,16 @@ match craft_audio::decode(&bytes, None) {
 - `ChannelLayout::unordered` is written to FLAC as mask `0x0000`, as RFC 9639 §8.6.2 allows, but
   ffmpeg and `flac -d` ignore that mask and use their default layout for the channel count.
 - Not decoded at all: AC-3, E-AC-3, Opus and Speex.
-- `TrackDecoder` returns `Unsupported` for MP3, FLAC, ALAC and Vorbis; `decode` and `Decoder` read
-  those through symphonia.
+- `TrackDecoder` returns `Unsupported` for MP3, FLAC and Vorbis; `decode` and `Decoder` read
+  those through symphonia. ALAC in CAF still goes through symphonia (craft-media has no CAF
+  demuxer).
+- ALAC: `EncodeFormat` has no ALAC entry; `alac::Encoder` writes packets and the configuration,
+  and the caller muxes them (MP4 `alac` box, Matroska `A_ALAC`). craft-media's MP4 muxer writes no
+  `chan` box, so an MP4 of more than two channels carries no explicit layout; decoders then use the
+  standard ALAC layout for the count.
+- ALAC 32-bit streams: ffmpeg does not decode their uncompressed (escaped) stereo frames, which
+  Apple's encoder and this one write for audio that does not compress; Apple's decoder and this
+  one do.
 - MP4 edit lists: a single media edit (encoder priming and the end) is applied, alone or after one
   empty edit; the empty edit's delay is not added as silence. Other edit lists are not applied, and
   the media plays as it is stored.
@@ -344,6 +356,7 @@ Each codec module's rustdoc lists the coding tools it implements.
 | WAV, AIFF | Microsoft RIFF, Apple AIFF/AIFF-C | read: integer 8–32-bit, float 32/64-bit, `WAVE_FORMAT_EXTENSIBLE` masks, RF64/BW64, BWF `bext`, truncated files; write: 16/24/32-bit integer and 32-bit float, RF64 above 4 GiB, any layout, TPDF dither | round trips; hostile-input tests |
 | FLAC encoder | RFC 9639 | 16, 24, 32 bits; 1–8 channels, layouts decoders would not assume for the count as a `WAVEFORMATEXTENSIBLE_CHANNEL_MASK` comment; up to 655,350 Hz; LPC, stereo decorrelation, wasted bits, STREAMINFO MD5 | bit-exact through ffmpeg, STREAMINFO MD5 checked against ffmpeg |
 | AAC (`aac`) | ISO/IEC 14496-3 | AAC-LC decode, 1–8 channels; HE-AAC: see [Limits](#limits) | ffmpeg: ~135 dB SNR; PNS noise differs per sample at equal band energy |
+| ALAC (`alac`) | Apple's reference implementation | decode and encode, 1–8 channels, 16/20/24/32 bits (decode: any depth 1–32), fast mode, magic cookie in MP4/Matroska and CAF form | Apple's reference: same packets from the encoder, same samples from both decoders on 766 configurations; ffmpeg: bit-exact both ways |
 
 ## symphonia
 
@@ -398,6 +411,7 @@ the full tests with ffmpeg required.
 |---|---|
 | WAV, AIFF, `decode`/`probe`, peaks | SoundCraft `soundcraft-audio-io` [7dc56a4](https://github.com/storytold/soundcraft/commit/7dc56a4dbeebf57eacece09536726c57844fc59d) |
 | FLAC encoder, AAC | FilmCraft [8fda2f2](https://github.com/storytold/filmcraft/commit/8fda2f232198c4c79ff9cfe5b6a347bb1375fa9e) |
+| ALAC | Apple's reference implementation [macosforge/alac@c38887c](https://github.com/macosforge/alac/tree/c38887c5c5e64a4b31108733bd79ca9b2496d987/codec), Copyright © 2011 Apple Inc., Apache-2.0; ported to Rust and modified (see the `alac` module docs and [NOTICE](../../NOTICE)) |
 
 Where apps had overlapping implementations, the one that measured better was kept, with the
 tests of both:
@@ -441,6 +455,7 @@ What else an app adjusts:
   short slices instead of filling them with silence.
 - `DecodeOptions` is not `Copy`.
 - The FLAC encoder's vendor string is `craft-audio <version>`.
-- `decode` tries native decoders first. AAC no longer goes through symphonia, except in CAF.
+- `decode` tries native decoders first. AAC and ALAC no longer go through symphonia, except in
+  CAF.
   MP4 and Matroska files decode to presentation length. A packet that fails is concealed, not
   dropped. A failed source read is `AudioError::Io`.

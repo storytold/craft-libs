@@ -305,7 +305,8 @@ fn packets_longer_than_any_codec_uses_are_refused() {
     // read, and nothing is allocated from it. symphonia read it, so SoundCraft refused the file.
     let (_, buf) = decode(&mp4(480, &lpcm(1 << 21), |_, a| a), None).unwrap();
     assert_eq!(buf.frames(), 480);
-    // ALAC still goes to symphonia, behind the same guard.
+    // ALAC: a cookie declaring such packets is refused by the native decoder and then by the
+    // symphonia path's guard.
     assert!(matches!(decode(&mp4(480, &alac(1 << 21), |_, a| a), None), Err(AudioError::Malformed(m)) if m.contains("declares packets")));
 }
 

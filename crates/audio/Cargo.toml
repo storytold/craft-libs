@@ -1,6 +1,6 @@
 [package]
 name = "craft-audio"
-description = "Audio file I/O and codecs: WAV/AIFF read and write, FLAC encoder, AAC decoder."
+description = "Audio file I/O and codecs: WAV/AIFF read and write, FLAC encoder, AAC decoder, ALAC decoder and encoder."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -14,16 +14,16 @@ all-features = true
 workspace = true
 
 [features]
-# Probe and decode files: WAV and AIFF natively; AAC and PCM through craft-media's demuxers and
-# this crate's decoders; MP1/MP2/MP3, FLAC, ALAC, Vorbis, CAF, ADPCM, A-law and µ-law through
+# Probe and decode files: WAV and AIFF natively; AAC, ALAC and PCM through craft-media's demuxers
+# and this crate's decoders; MP1/MP2/MP3, FLAC, Vorbis, CAF, ADPCM, A-law and µ-law through
 # symphonia.
 decode = ["decode-native", "symphonia"]
 # `decode` without symphonia: only the formats with a native decoder (others are Unsupported).
-decode-native = ["aac-decode", "craft-media/isobmff", "craft-media/matroska", "craft-media/ogg", "dep:log"]
+decode-native = ["aac-decode", "alac-decode", "craft-media/isobmff", "craft-media/matroska", "craft-media/ogg", "dep:log"]
 # The symphonia fallback for the formats with no native decoder yet.
 symphonia = ["decode-native", "dep:symphonia"]
-# Every encoder: the lossless file writers.
-encode = ["lossless-encode"]
+# Every encoder: the lossless file writers and the ALAC packet encoder.
+encode = ["lossless-encode", "alac-encode"]
 # Encode WAV/BWF/RF64, AIFF/AIFF-C and FLAC files.
 lossless-encode = ["pcm-encode", "flac-encode"]
 # Encode WAV/BWF/RF64 and AIFF/AIFF-C files.
@@ -32,6 +32,9 @@ pcm-encode = []
 flac-encode = ["craft-media/bitstream"]
 # Codec modules on their own, for packet-level use.
 aac-decode = ["craft-media/bitstream"]
+# ALAC packet decoder and encoder (`alac`), ported from Apple's reference implementation.
+alac-decode = []
+alac-encode = []
 # Multi-resolution waveform overviews (`peaks`).
 peaks = []
 # Serialize and Deserialize for the shared types.
