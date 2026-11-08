@@ -7,7 +7,9 @@
   "upstream_repository": null,
   "upstream_revision": "824b0791a750f7b27b8edcbb6c6244d0e629875e",
   "upstream_directory": "",
-  "local_patches": [],
+  "local_patches": [
+    "In `src/curve/mod.rs`, `fit_quadratic` multiplies the heights by the power of two that brings the largest to between 2 and 4 when one of them has a magnitude above 2^500 and scales the coefficients back, and `QuadraticApprox::from_cubic` multiplies by the `y^2` coefficient first when a product of two y coefficients is not finite, so curves taller than about 1.3e154 no longer give NaN coefficients or error bounds that make curve comparisons, and `binary_op`, return a wrong order without an error. The quadratic sign checks of curve comparisons report an unknown (or close) order for a quadratic with a NaN or infinite coefficient. In `src/curve/line.rs`, `intersect_lines` scales the x coordinates and the tolerance by 1/16 when one of them is above 2^1019 and works with half of each height for lines more than `f64::MAX` tall, so coordinates near `f64::MAX` no longer give a wrong order. In `src/geom.rs`, `Segment::at_y` and `Segment::to_kurbo_cubic` give finite results for a straight segment more than `f64::MAX` long on either axis. `src/curve/mod.rs`, `src/curve/line.rs`, `src/geom.rs` and `src/lib.rs` add tests for it."
+  ],
   "files": [
     { "path": ".cargo_vcs_info.json", "source_sha256": "47fba6a9dbdf445a5c97f783c9be62093035f9d5e5cdc2cf3216ad8259bcd8fc", "source_git_blob": null, "sha256": "47fba6a9dbdf445a5c97f783c9be62093035f9d5e5cdc2cf3216ad8259bcd8fc" },
     { "path": ".gitignore", "source_sha256": "88b59092499ae05234330eb7d0b01e953e969caf05261530e3765eef02536cf0", "source_git_blob": null, "sha256": "88b59092499ae05234330eb7d0b01e953e969caf05261530e3765eef02536cf0" },
@@ -31,13 +33,13 @@
     { "path": "proptest-regressions/sweep/weak_ordering.txt", "source_sha256": "b5b183ab470399c15246457d8a1a35cafb49fee120d6777dfdd563bfdbadda52", "source_git_blob": null, "sha256": "b5b183ab470399c15246457d8a1a35cafb49fee120d6777dfdd563bfdbadda52" },
     { "path": "proptest-regressions/topology.txt", "source_sha256": "49ff0b5b370f082984276d5312f03b1fc96ef0dd218f9efd7b084b11abbb9d19", "source_git_blob": null, "sha256": "49ff0b5b370f082984276d5312f03b1fc96ef0dd218f9efd7b084b11abbb9d19" },
     { "path": "src/arbitrary.rs", "source_sha256": "9c3753a40cfea2528a546295d39e0513537db5a3411a931fccea063873d95750", "source_git_blob": null, "sha256": "9c3753a40cfea2528a546295d39e0513537db5a3411a931fccea063873d95750" },
-    { "path": "src/curve/line.rs", "source_sha256": "07aebead4b0050410a3f9f28b66062b6016c115df58e2b2669470263cd352f3e", "source_git_blob": null, "sha256": "07aebead4b0050410a3f9f28b66062b6016c115df58e2b2669470263cd352f3e" },
-    { "path": "src/curve/mod.rs", "source_sha256": "36a8dbe96ac1d3bec307dc63b504206ec7fdfc11d10799fbb1a8990c29b8c5f2", "source_git_blob": null, "sha256": "36a8dbe96ac1d3bec307dc63b504206ec7fdfc11d10799fbb1a8990c29b8c5f2" },
+    { "path": "src/curve/line.rs", "source_sha256": "07aebead4b0050410a3f9f28b66062b6016c115df58e2b2669470263cd352f3e", "source_git_blob": null, "sha256": "6d6e10c3ecd8391bdba5b6c81806bcee2f006b301f34cb4befe1c0e6d585825c" },
+    { "path": "src/curve/mod.rs", "source_sha256": "36a8dbe96ac1d3bec307dc63b504206ec7fdfc11d10799fbb1a8990c29b8c5f2", "source_git_blob": null, "sha256": "93761e7d91f3abb4c15f5b0dd0e6fdd6dca61a89c3333e57e1806919291c87c7" },
     { "path": "src/curve/split_quad.rs", "source_sha256": "b8aae4ce7c16fa623724f667e1058130a9c7eed693b5b01e8b9e16632b8ec45f", "source_git_blob": null, "sha256": "b8aae4ce7c16fa623724f667e1058130a9c7eed693b5b01e8b9e16632b8ec45f" },
     { "path": "src/curve/transverse.rs", "source_sha256": "be9c695531f4cb0fe73af13e78040b51b9476c193d84562e701aadd07b3fd06e", "source_git_blob": null, "sha256": "be9c695531f4cb0fe73af13e78040b51b9476c193d84562e701aadd07b3fd06e" },
     { "path": "src/generators.rs", "source_sha256": "cc9f2441546db9204219294c354449809dda77dffad06fec8a30f45df01e6fef", "source_git_blob": null, "sha256": "cc9f2441546db9204219294c354449809dda77dffad06fec8a30f45df01e6fef" },
-    { "path": "src/geom.rs", "source_sha256": "9878ffa6d4a13fa2c9149741c137205ca01acb626a5b9f86a3db75cf91b63a08", "source_git_blob": null, "sha256": "9878ffa6d4a13fa2c9149741c137205ca01acb626a5b9f86a3db75cf91b63a08" },
-    { "path": "src/lib.rs", "source_sha256": "761c153c3b5c449569ff85c571344b9252ea64f7f0b0424fb4819041b03d13c6", "source_git_blob": null, "sha256": "761c153c3b5c449569ff85c571344b9252ea64f7f0b0424fb4819041b03d13c6" },
+    { "path": "src/geom.rs", "source_sha256": "9878ffa6d4a13fa2c9149741c137205ca01acb626a5b9f86a3db75cf91b63a08", "source_git_blob": null, "sha256": "edf80b2320ba371502cfef13e6fbe3e23ecfc67f254b9b7e5715776deeeffa8a" },
+    { "path": "src/lib.rs", "source_sha256": "761c153c3b5c449569ff85c571344b9252ea64f7f0b0424fb4819041b03d13c6", "source_git_blob": null, "sha256": "8a341eb0eafb16c68ddd1e51f1ad3121597825eb780b3624bd0428b5a3f87908" },
     { "path": "src/num.rs", "source_sha256": "39ff85da50c500ce91cf6dea81aedc0dcca1db5e7d0506696dde2da118e93a2a", "source_git_blob": null, "sha256": "39ff85da50c500ce91cf6dea81aedc0dcca1db5e7d0506696dde2da118e93a2a" },
     { "path": "src/order.rs", "source_sha256": "7e5b04eae8af134abb032e995f1d3c2ac473822923dfee8d463d9ade6ffeb596", "source_git_blob": null, "sha256": "7e5b04eae8af134abb032e995f1d3c2ac473822923dfee8d463d9ade6ffeb596" },
     { "path": "src/perturbation.rs", "source_sha256": "fa274a822bbdf65f8e53e403eef78034dd87964b3f1d3134a064df4ec8cef9c5", "source_git_blob": null, "sha256": "fa274a822bbdf65f8e53e403eef78034dd87964b3f1d3134a064df4ec8cef9c5" },
