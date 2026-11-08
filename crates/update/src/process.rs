@@ -62,7 +62,15 @@ pub fn run_command(mut cmd: Command, program: &str, timeout: Duration) -> Result
     let mut child =
         cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().map_err(|e| format!("couldn't start {program} ({e})"))?;
     // Read both pipes while it runs, so a chatty helper can't block on a full one.
-    let (stdout, stderr) = (read_all(child.stdout.take()), read_all(child.stderr.take()));
+    let readers = read_all(child.stdout.take()).and_then(|stdout| Ok((stdout, read_all(child.stderr.take())?)));
+    let (stdout, stderr) = match readers {
+        Ok(readers) => readers,
+        Err(e) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(format!("couldn't read the output of {program} ({e})"));
+        }
+    };
     let start = Instant::now();
     let status = loop {
         match child.try_wait() {
@@ -93,8 +101,8 @@ pub fn run_command(mut cmd: Command, program: &str, timeout: Duration) -> Result
 }
 
 /// Captures at most 8 MB of a child's pipe and drains the rest on its own thread.
-fn read_all<R: std::io::Read + Send + 'static>(pipe: Option<R>) -> std::thread::JoinHandle<Vec<u8>> {
-    std::thread::spawn(move || {
+fn read_all<R: std::io::Read + Send + 'static>(pipe: Option<R>) -> std::io::Result<std::thread::JoinHandle<Vec<u8>>> {
+    std::thread::Builder::new().name("helper-output".into()).spawn(move || {
         let mut out = Vec::new();
         if let Some(mut pipe) = pipe {
             let _ = std::io::Read::read_to_end(&mut std::io::Read::take(&mut pipe, 8 << 20), &mut out);
@@ -106,12 +114,16 @@ fn read_all<R: std::io::Read + Send + 'static>(pipe: Option<R>) -> std::thread::
     })
 }
 
-/// Starts `cmd` without waiting for it, and reaps it when it exits.
+/// Starts `cmd` without waiting for it, and reaps it when it exits. The process keeps running
+/// when no thread can be started to reap it; only the wait is skipped.
 pub fn spawn_detached(mut cmd: Command) -> Result<(), String> {
     let mut child = cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn().map_err(|e| format!("couldn't start it ({e})"))?;
-    std::thread::spawn(move || {
+    let reaper = std::thread::Builder::new().name("reap-child".into()).spawn(move || {
         let _ = child.wait();
     });
+    if let Err(e) = reaper {
+        log::warn!("couldn't start a thread to wait for a started process ({e})");
+    }
     Ok(())
 }
 
@@ -224,12 +236,15 @@ fn opener(target: &std::ffi::OsStr) -> Result<Command, String> {
 pub fn open_url_with_fallback(primary_url: &str, fallback_url: &str) {
     let primary = primary_url.to_string();
     let fallback = fallback_url.to_string();
-    std::thread::spawn(move || {
+    let opener = std::thread::Builder::new().name("open-url".into()).spawn(move || {
         if !open_and_wait_success(&primary, Duration::from_millis(1500)) {
             log::warn!("couldn't open {primary}; falling back to {fallback}");
             let _ = open(std::ffi::OsStr::new(&fallback));
         }
     });
+    if let Err(e) = opener {
+        log::warn!("couldn't start a thread to open {primary_url} ({e})");
+    }
 }
 
 /// Starts the default system opener for `target` and returns `true` unless it fails to start
@@ -262,9 +277,12 @@ fn open_and_wait_success(target: &str, timeout: Duration) -> bool {
             Ok(Some(status)) => return status.success(),
             Ok(None) if start.elapsed() < timeout => std::thread::sleep(Duration::from_millis(25)),
             Ok(None) => {
-                std::thread::spawn(move || {
+                let reaper = std::thread::Builder::new().name("reap-child".into()).spawn(move || {
                     let _ = child.wait();
                 });
+                if let Err(e) = reaper {
+                    log::warn!("couldn't start a thread to wait for the opener of {target} ({e})");
+                }
                 return true;
             }
             Err(_) => return false,
