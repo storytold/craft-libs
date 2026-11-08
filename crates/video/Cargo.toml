@@ -1,6 +1,6 @@
 [package]
 name = "craft-video"
-description = "Clean-room pure-Rust video codecs, one feature per codec: DNxHD/DNxHR."
+description = "Clean-room pure-Rust video codecs, one feature per codec: DNxHD/DNxHR, VP8."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -17,6 +17,8 @@ workspace = true
 # Every codec feature turns on one codec module; none is on by default.
 # DNxHD / DNxHR (SMPTE ST 2019-1): decoder and encoder.
 dnx = []
+# VP8 (RFC 6386): decoder.
+vp8 = []
 # Decode and encode across worker threads (rayon) in the codecs that support it.
 threads = ["dep:rayon"]
 
@@ -31,3 +33,15 @@ craft-media-testkit = { workspace = true }
 [[test]]
 name = "dnx"
 required-features = ["dnx"]
+
+[[test]]
+name = "vp8"
+required-features = ["vp8"]
+
+[[example]]
+name = "vp8_fuzz"
+required-features = ["vp8"]
+
+[[example]]
+name = "vp8_vp8dec"
+required-features = ["vp8"]

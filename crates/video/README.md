@@ -19,4 +19,5 @@ No codec feature is on by default.
 | Feature | Module | Codec |
 |---|---|---|
 | `dnx` | [`dnx`](src/dnx/README.md) | Avid DNxHD / DNxHR (SMPTE ST 2019-1 VC-3): decoder and encoder |
+| `vp8` | `vp8` | VP8 (RFC 6386): decoder |
 | `threads` | — | Multi-threaded slice/row parallelism via `rayon` |

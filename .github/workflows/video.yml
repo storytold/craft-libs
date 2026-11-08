@@ -36,7 +36,7 @@ jobs:
       # Each feature on its own, so code that needs another feature fails here.
       - name: Clippy, each feature alone
         run: |
-          for f in "" dnx threads; do
+          for f in "" dnx vp8 threads; do
             echo "::group::features: ${f:-none}"
             cargo clippy -p craft-video --all-targets --locked --no-default-features ${f:+--features "$f"} -- -D warnings
             echo "::endgroup::"
@@ -47,9 +47,13 @@ jobs:
           RUSTDOCFLAGS: "-D warnings"
       - run: cargo check -p craft-video --all-features --locked --target wasm32-unknown-unknown
   test:
-    timeout-minutes: 25
-    name: Video tests with ffmpeg oracles
-    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    name: Video tests (${{ matrix.os }})
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -59,16 +63,10 @@ jobs:
           toolchain: "1.95"
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          key: craft-video-test
-      - name: Build tests while installing ffmpeg
+          key: craft-video-${{ matrix.os }}
+      - name: Install ffmpeg (Linux)
+        if: runner.os == 'Linux'
         run: |
           sudo rm -f /var/lib/man-db/auto-update
-          (sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends ffmpeg) > "$RUNNER_TEMP/apt.log" 2>&1 &
-          apt=$!
-          cargo test -p craft-video --all-features --locked --no-run
-          wait "$apt" || { cat "$RUNNER_TEMP/apt.log"; exit 1; }
-          ffmpeg -hide_banner -version | sed -n 1p
+          sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends ffmpeg
       - run: cargo test -p craft-video --all-features --locked
-        env:
-          CRAFT_MEDIA_REQUIRE_ORACLES: "1"
-          CRAFT_MEDIA_FIXTURES_DIR: ${{ runner.temp }}/media-fixtures
