@@ -134,7 +134,7 @@ pub(crate) fn eps_for<'a>(paths: impl IntoIterator<Item = &'a BezPath>) -> Resul
             }
         }
     }
-    let eps = (m * f64::EPSILON * 64.0).max(1e-6);
+    let eps = sweep_tolerance(m);
     // Past this the sweep tolerance is wider than a unit: features thinner than it collapse and the call
     // would answer `Ok` with part of the art (or all of it) gone. Refuse instead, so callers keep the original.
     if eps > MAX_SWEEP_EPS {
@@ -143,12 +143,18 @@ pub(crate) fn eps_for<'a>(paths: impl IntoIterator<Item = &'a BezPath>) -> Resul
     Ok(eps)
 }
 
+/// The sweep's tolerance for paths whose points reach `extent` in x or y (control points too): the
+/// size of the coordinates times 64 ulps, and not under a millionth.
+pub(crate) fn sweep_tolerance(extent: f64) -> f64 {
+    (extent * f64::EPSILON * 64.0).max(1e-6)
+}
+
 /// The widest sweep tolerance [`eps_for`] accepts: one unit, reached by coordinates of about 7e13. (Applications refuse
 /// coordinates far below that, so this only guards the library's own callers; it does not follow the `precision` a caller
 /// asks for.)
 const MAX_SWEEP_EPS: f64 = 1.0;
 
-fn el_points(el: &kurbo::PathEl) -> impl Iterator<Item = Point> {
+pub(crate) fn el_points(el: &kurbo::PathEl) -> impl Iterator<Item = Point> {
     use kurbo::PathEl::*;
     let v: [Option<Point>; 3] = match *el {
         MoveTo(p) | LineTo(p) => [Some(p), None, None],
@@ -307,6 +313,56 @@ impl Tidy {
     }
 }
 
+/// The answers of a predicate for the windings a sweep stores, found by where they are: the two sides
+/// of each segment are stored in one run of memory, so a winding's address says which it is and a
+/// lookup hashes nothing (a winding of nested shapes is a long list). A reference to a winding
+/// that is not one of those stored (the sweep gives none) is answered by the predicate.
+struct SideAnswers {
+    /// The lowest address of a stored winding, and the size of one.
+    base: usize,
+    /// For the winding at `base + k * size_of::<Multi>()`: 0 not stored, 1 false, 2 true.
+    known: Vec<u8>,
+}
+
+impl SideAnswers {
+    fn new(top: &Topology<Multi>, pred: &impl Fn(&Multi) -> bool) -> Self {
+        let step = std::mem::size_of::<Multi>();
+        let mut stored: Vec<(usize, bool)> = Vec::new();
+        for s in top.segment_indices() {
+            let h = s.first_half();
+            for w in [top.winding_clockwise(h), top.winding_counter_clockwise(h)] {
+                stored.push((std::ptr::from_ref(w).addr(), pred(w)));
+            }
+        }
+        let base = stored.iter().map(|e| e.0).min().unwrap_or(0);
+        let span = stored.iter().map(|e| (e.0 - base) / step + 1).max().unwrap_or(0);
+        // Windings in one run, as the sweep keeps them; anything else is answered by the predicate.
+        let mut known = Vec::new();
+        if span <= stored.len().saturating_mul(4).saturating_add(16) && stored.iter().all(|e| (e.0 - base) % step == 0) {
+            known = vec![0u8; span];
+            for (addr, answer) in stored {
+                if let Some(slot) = known.get_mut((addr - base) / step) {
+                    *slot = 1 + u8::from(answer);
+                }
+            }
+        }
+        Self { base, known }
+    }
+
+    fn of(&self, w: &Multi, pred: &impl Fn(&Multi) -> bool) -> bool {
+        let offset = std::ptr::from_ref(w).addr().wrapping_sub(self.base);
+        let step = std::mem::size_of::<Multi>();
+        match offset.is_multiple_of(step).then(|| self.known.get(offset / step).copied()).flatten() {
+            Some(1) => false,
+            Some(2) => true,
+            _ => {
+                work::add(Work::AnswerMisses, 1);
+                pred(w)
+            }
+        }
+    }
+}
+
 impl Arrangement {
     pub(crate) fn new(paths: Vec<(BezPath, FillRule)>) -> Result<Self, PathOpsError> {
         Self::new_budgeted(paths, crate::budget::limits().segment_pairs)
@@ -351,21 +407,25 @@ impl Arrangement {
     }
 
     /// [`Arrangement::contours`] with the test on the windings themselves (see [`Self::covered`]).
+    ///
+    /// `pred` is asked once of each side of each segment before the pass, and the pass is given the
+    /// answers: it asks about the same sides again and again (it scans west through the segments that
+    /// are no boundary for every contour it starts, twice of each), so asked every time `pred` costs
+    /// the scans times what it costs to look at a winding, and a winding of nested shapes is long.
     pub(crate) fn contours_where(&self, pred: impl Fn(&Multi) -> bool) -> Contours {
         #[cfg(test)]
         CONTOUR_PASSES.with(|n| n.set(n.get() + 1));
-        self.top.contours(pred)
+        let answers = SideAnswers::new(&self.top, &pred);
+        self.top.contours(|w| answers.of(w, &pred))
     }
 
     /// The contour pass with the answer of `pred`, which is given a flag for every input, remembered
-    /// for each distinct winding: the pass asks about the sides of a segment again and again (it
-    /// scans west through segments that are no boundary for every contour it starts, and asks twice
-    /// of each), so asked of each it would make the work the product of those scans and the inputs.
-    /// Asked once of each distinct winding, `pred` is called, and given its flags, at most twice for
-    /// each segment of the sweep in all.
+    /// for each distinct winding: `pred` is called, and given its flags, at most twice for each
+    /// segment of the sweep in all (and not again for a winding it has seen).
     pub(crate) fn contours(&self, pred: impl Fn(&[bool]) -> bool) -> Contours {
         let answers: std::cell::RefCell<std::collections::HashMap<Multi, bool>> = std::cell::RefCell::new(std::collections::HashMap::new());
         self.contours_where(|w| {
+            work::add(Work::WindingKeys, w.len().max(1));
             if let Some(&known) = answers.borrow().get(w) {
                 return known;
             }
@@ -1377,6 +1437,54 @@ mod tests {
             direct.contours().map(|c| c.path.elements().len()).sum::<usize>(),
             cached.contours().map(|c| c.path.elements().len()).sum::<usize>()
         );
+    }
+
+    /// `n` nested squares, then `m` small squares in a column inside them, each its own input.
+    fn nested_around_a_column(n: usize, m: usize) -> Vec<BezPath> {
+        let r = |k: usize| 2.0 * m as f64 + k as f64;
+        let mut inputs: Vec<BezPath> = (1..=n).map(|k| crate::testutil::rect(-r(k), -r(k), r(k), r(k))).collect();
+        inputs.extend((0..m).map(|j| {
+            let y = -(m as f64) + 2.0 * j as f64;
+            crate::testutil::rect(0.0, y, 1.0, y + 1.0)
+        }));
+        inputs
+    }
+
+    /// The contour pass asks for the answer about the same side again and again: it scans west through
+    /// the segments that are no boundary for every contour it starts, and a winding of nested shapes is a
+    /// long list, so the nested squares round a column of small squares each made it hash every one (n²m
+    /// entries). The answers are found by where the windings are stored: what is hashed is each stored
+    /// winding once, which grows with the entries (four times for twice the squares and twice the column),
+    /// and the pass finds every answer stored.
+    #[test]
+    fn the_answers_to_the_predicate_are_found_without_hashing_the_windings_again() {
+        let keys = |n: usize, m: usize| -> (usize, usize) {
+            let inputs = nested_around_a_column(n, m);
+            let arr = Arrangement::new(inputs.iter().map(|p| (p.clone(), FillRule::NonZero)).collect()).unwrap();
+            work::reset();
+            let made = arr.contours(|f| f.iter().skip(n).any(|&b| b));
+            assert_eq!(made.contours().count(), m, "{n} nested, {m} in the column");
+            (work::take(Work::WindingKeys), work::take(Work::AnswerMisses))
+        };
+        let ((small, misses), (large, more)) = (keys(20, 20), keys(40, 40));
+        assert_eq!((misses, more), (0, 0), "every answer the pass asked for was stored");
+        assert!(
+            small > 0 && large <= 4 * small + small / 4,
+            "{small} entries hashed for 20 and 20, {large} for 40 and 40 (eight times would be {})",
+            8 * small
+        );
+        // The predicate is asked once of each side of each segment, at most (this one, of a distinct winding each).
+        let inputs = nested_around_a_column(15, 15);
+        let arr = Arrangement::new(inputs.iter().map(|p| (p.clone(), FillRule::NonZero)).collect()).unwrap();
+        let calls = std::cell::Cell::new(0usize);
+        work::reset();
+        let made = arr.contours_where(|w| {
+            calls.set(calls.get() + 1);
+            w.len() > 15
+        });
+        assert_eq!(made.contours().count(), 15);
+        assert_eq!(calls.get(), 2 * arr.top.segment_indices().count());
+        assert_eq!(work::take(Work::AnswerMisses), 0);
     }
 
     /// The check of the windings against an operand's area is made for curves of large coordinates too,

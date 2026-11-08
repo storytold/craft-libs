@@ -13,6 +13,13 @@ use crate::FillRule;
 use crate::boolean::{Arrangement, DEFAULT_PRECISION, Multi, all_contours_to_path, contours_to_path, unite_all, unite_all_with};
 use crate::path::{Seg, control_bounds, fill_bezpath, guarded, segs_to_bezpath, subs};
 
+#[cfg(test)]
+thread_local! {
+    /// Makes [`each_classified_face`] take its fallback (a pass for each class) for every batch, which
+    /// no input does, so that a test can see what it gives when its allowance runs out part way.
+    static FORCE_FALLBACK: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 /// A filled shape in a Pathfinder stack. `key` identifies its paint (e.g. a hashed fill colour, or
 /// the index of the caller's object); results carry the key of the object whose paint they keep.
 #[derive(Clone, Debug, PartialEq)]
@@ -165,7 +172,7 @@ fn pathfinder_unguarded(op: PathfinderOp, shapes: &[Shape], precision: f64) -> V
         // topmost(m) == Some(i)
         PathfinderOp::Trim => {
             let mut paths = vec![BezPath::new(); n];
-            each_classified_face(
+            let whole = each_classified_face(
                 &arr,
                 n,
                 |w| arr.covered(w).next_back(),
@@ -175,6 +182,10 @@ fn pathfinder_unguarded(op: PathfinderOp, shapes: &[Shape], precision: f64) -> V
                     }
                 },
             );
+            // Past the limit on the passes there are no shapes, not the faces made before it was reached.
+            if !whole {
+                return Vec::new();
+            }
             paths.into_iter().zip(shapes).flat_map(|(sp, s)| one(sp, s.key)).collect()
         }
         PathfinderOp::Merge => {
@@ -191,12 +202,15 @@ fn pathfinder_unguarded(op: PathfinderOp, shapes: &[Shape], precision: f64) -> V
             // topmost(m) is a shape with key k: one contour pass for every batch of keys whose
             // faces share no vertex, not one for each key.
             let mut parts: Vec<(usize, BezPath)> = Vec::new();
-            each_classified_face(
+            let whole = each_classified_face(
                 &arr,
                 keys.len(),
                 |w| arr.covered(w).next_back().and_then(|t| class_of_shape.get(t).copied()),
                 |k, c, group| parts.push((k, contours_to_path(c, group.iter().copied(), p))),
             );
+            if !whole {
+                return Vec::new();
+            }
             // By key, as each key's own pass gave them (a stable sort keeps a key's faces in order).
             parts.sort_by_key(|(k, _)| *k);
             parts.into_iter().flat_map(|(k, path)| one(path, keys[k])).collect()
@@ -206,7 +220,7 @@ fn pathfinder_unguarded(op: PathfinderOp, shapes: &[Shape], precision: f64) -> V
                 return Vec::new();
             }
             let mut paths = vec![BezPath::new(); n - 1];
-            each_classified_face(
+            let whole = each_classified_face(
                 &arr,
                 n - 1,
                 |w| {
@@ -219,6 +233,9 @@ fn pathfinder_unguarded(op: PathfinderOp, shapes: &[Shape], precision: f64) -> V
                     }
                 },
             );
+            if !whole {
+                return Vec::new();
+            }
             paths.into_iter().zip(shapes).flat_map(|(sp, s)| one(sp, s.key)).collect()
         }
         PathfinderOp::Outline => {
@@ -237,11 +254,14 @@ fn regions_of(arr: &Arrangement) -> Vec<Region> {
     // Past the limit on the entries walked there are no regions (as for an input too complex to sweep).
     let Some(masks) = arr.distinct_masks() else { return Vec::new() };
     let mut faces: Vec<Vec<BezPath>> = vec![Vec::new(); masks.len()];
-    each_face(arr, &masks, |m, c, group| {
+    let whole = each_face(arr, &masks, |m, c, group| {
         if let Some(f) = faces.get_mut(m) {
             f.push(contours_to_path(c, group.iter().copied(), &arr.tidy));
         }
     });
+    if !whole {
+        return Vec::new();
+    }
     let mut out = Vec::new();
     for (sources, paths) in masks.into_iter().zip(faces) {
         out.extend(paths.into_iter().filter(|p| !p.elements().is_empty()).map(|path| Region { path, sources: sources.clone() }));
@@ -260,7 +280,10 @@ fn regions_of(arr: &Arrangement) -> Vec<Region> {
 ///
 /// A contour pass walks every segment, so the work is the batches times the segments, and a class
 /// that meets every other (a fan of shapes at one point) makes a batch of its own: counted before the
-/// passes and held to [`crate::Limits::pass_work`]. False, with nothing called, when it is more.
+/// passes and held to [`crate::Limits::pass_work`]. False, with nothing called, when it is more; it
+/// is also false if a pass made by the fallback (below) finds the allowance gone, after faces were
+/// given, so a caller keeps none of them when it is false.
+#[must_use = "false: the faces given are not all of them, and a caller makes no shapes"]
 fn each_classified_face(
     arr: &Arrangement,
     num_classes: usize,
@@ -317,6 +340,8 @@ fn each_classified_face(
                 around.get(&vertex_key(*p))?.iter().copied().find(|&m| batch[m] == b)
             })
             .collect();
+        #[cfg(test)]
+        let owner = if FORCE_FALLBACK.with(std::cell::Cell::get) { None } else { owner };
         let Some(owner) = owner else {
             // Not expected: every contour starts at a vertex of the arrangement. Fall back to a
             // pass per class for this batch.
@@ -350,13 +375,14 @@ fn each_classified_face(
 /// share no vertex (so no edge either): one pass per batch walks each face's contours exactly as
 /// its own mask's pass would, and the mask a contour bounds is the one of its batch at its first
 /// point.
-fn each_face(arr: &Arrangement, masks: &[Vec<usize>], f: impl FnMut(usize, &Contours, &[ContourIdx])) {
+#[must_use = "false: the faces given are not all of them, and a caller makes no regions"]
+fn each_face(arr: &Arrangement, masks: &[Vec<usize>], f: impl FnMut(usize, &Contours, &[ContourIdx])) -> bool {
     if masks.is_empty() {
-        return;
+        return true;
     }
     // Each mask is found by the inputs it covers.
     let ids = CoverIds::new(masks.to_vec());
-    each_classified_face(arr, masks.len(), |w| ids.of(arr, w), f);
+    each_classified_face(arr, masks.len(), |w| ids.of(arr, w), f)
 }
 
 /// Lists of inputs, each ascending as [`Arrangement::covered`] gives them, found by the inputs
@@ -1125,6 +1151,46 @@ mod tests {
         work::reset();
         assert_eq!(pathfinder(PathfinderOp::Merge, &apart).len(), 300, "a shape for each component");
         assert_eq!(work::take(Work::PassSegments), arrangement(&apart, DEFAULT_PRECISION).unwrap().top.segment_indices().count());
+    }
+
+    /// A walk that finds its allowance gone part way through (the fallback, which no input needs, makes
+    /// a pass for each class and charges it) has given some faces by then, and gives no shapes: the
+    /// walk says so, and Trim, Merge, Crop and Divide keep none of what it gave.
+    #[test]
+    fn a_walk_that_runs_out_part_way_gives_no_shapes() {
+        struct Forced;
+        impl Drop for Forced {
+            fn drop(&mut self) {
+                FORCE_FALLBACK.with(|f| f.set(false));
+            }
+        }
+        let squares: Vec<Shape> = (0..3u32)
+            .map(|i| Shape::new(rect(f64::from(i) * 100.0, 0.0, f64::from(i) * 100.0 + 10.0, 10.0), FillRule::NonZero, u64::from(i)))
+            .collect();
+        let mut covered = squares.clone();
+        covered.push(Shape::new(rect(-10.0, -10.0, 300.0, 20.0), FillRule::NonZero, 9));
+        let segments = |shapes: &[Shape]| arrangement(shapes, DEFAULT_PRECISION).unwrap().top.segment_indices().count();
+        for (op, shapes, expected) in [
+            (PathfinderOp::Trim, &squares, 3),
+            (PathfinderOp::Merge, &squares, 3),
+            (PathfinderOp::Divide, &squares, 3),
+            (PathfinderOp::Crop, &covered, 3),
+        ] {
+            let s = segments(shapes);
+            // The classes share no vertex: one batch, so one pass planned, and the fallback needs one for each class.
+            let room = |passes: usize| crate::Limits { pass_work: s * (1 + passes), ..crate::Limits::default() };
+            assert_eq!(pathfinder(op, shapes).len(), expected, "{op:?} by the batches");
+            let _forced = Forced;
+            FORCE_FALLBACK.with(|f| f.set(true));
+            // Room for all three passes of the fallback: the same shapes.
+            assert_eq!(crate::with_limits(room(3), || pathfinder(op, shapes)).len(), expected, "{op:?} by the fallback");
+            // Room for one: it runs out after the first class's faces were given, and none are kept.
+            work::reset();
+            assert!(crate::with_limits(room(1), || pathfinder(op, shapes)).is_empty(), "{op:?} with room for one pass");
+            assert_eq!(work::take(Work::PassSegments), 2 * s, "the planned pass and the one the fallback made");
+            // And with room for none, nothing at all.
+            assert!(crate::with_limits(room(0), || pathfinder(op, shapes)).is_empty(), "{op:?} with room for none");
+        }
     }
 
     /// Merge walks the arrangement once for all the keys that share no vertex, not once for each:

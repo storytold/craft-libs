@@ -50,11 +50,17 @@ pub(crate) enum Work {
     CoverageEntries,
     /// Segments of the sweep that a contour pass walks, for each pass of the batches of a classified walk.
     PassSegments,
+    /// Entries of windings hashed to find the remembered answer of a predicate.
+    WindingKeys,
+    /// Lookups of the answer for a winding that found none stored (the predicate was asked).
+    AnswerMisses,
+    /// Pairs of line bounds walked to find where lines cross.
+    CrossingPairs,
 }
 
 #[cfg(test)]
 thread_local! {
-    static COUNTS: std::cell::RefCell<[usize; 22]> = const { std::cell::RefCell::new([0; 22]) };
+    static COUNTS: std::cell::RefCell<[usize; 25]> = const { std::cell::RefCell::new([0; 25]) };
 }
 
 /// Counts `n` more of `what` on this thread (tests only).
@@ -79,5 +85,5 @@ pub(crate) fn take(what: Work) -> usize {
 /// Resets every count on this thread.
 #[cfg(test)]
 pub(crate) fn reset() {
-    COUNTS.with(|c| *c.borrow_mut() = [0; 22]);
+    COUNTS.with(|c| *c.borrow_mut() = [0; 25]);
 }

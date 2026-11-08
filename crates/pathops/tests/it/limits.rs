@@ -45,6 +45,7 @@ fn the_defaults_are_the_constants() {
     assert_eq!(l.mask_work, MASK_WORK);
     assert_eq!(l.sweep_event_work, MAX_SWEEP_EVENT_WORK);
     assert_eq!(l.ends_at_a_point, MAX_ENDS_AT_A_POINT);
+    assert_eq!(l.crossing_work, MAX_CROSSING_WORK);
     assert_eq!(l.pass_work, MAX_PASS_WORK);
     assert_eq!(l.coverage_entries, MAX_COVERAGE_ENTRIES);
     assert_eq!(l, Limits::DEFAULT);
@@ -317,4 +318,112 @@ fn a_lower_pass_limit_gives_no_shapes_for_a_fan() {
     }
     // Operations that make no such passes are not held to it.
     assert_eq!(with_limits(none, || pathfinder(PathfinderOp::Unite, &shapes)).len(), 1);
+}
+
+/// `k` spikes (a triangle from an apex to two points on a circle of 100), the apexes on a ring of
+/// radius `rho`, and with `far` one cubic whose control points reach that far.
+fn spikes(k: usize, rho: f64, far: Option<f64>) -> BezPath {
+    let mut p = BezPath::new();
+    for i in 0..k {
+        let a = std::f64::consts::TAU * i as f64 / k as f64;
+        let b = a + std::f64::consts::TAU / (3.0 * k as f64);
+        let m = (a + b) / 2.0;
+        p.move_to((rho * m.cos(), rho * m.sin()));
+        p.line_to((100.0 * a.cos(), 100.0 * a.sin()));
+        p.line_to((100.0 * b.cos(), 100.0 * b.sin()));
+        p.close_path();
+    }
+    if let Some(far) = far {
+        p.move_to((200.0, 0.0));
+        p.curve_to((far, 0.0), (far, 10.0), (200.0, 10.0));
+        p.close_path();
+    }
+    p
+}
+
+#[test]
+fn a_far_control_point_widens_the_tolerance_the_ends_are_counted_at() {
+    // 300 spikes whose apexes lie within a hundredth of each other are 600 ends: to a sweep that
+    // tolerates a millionth they are 300 points, and it takes them in a few milliseconds.
+    assert!(try_area(&spikes(300, 0.004, None), FillRule::NonZero).is_ok());
+    // One cubic with control points at 1e12 sets a tolerance of 0.014, and they are one point (5 s of sweep).
+    assert_eq!(try_area(&spikes(300, 0.004, Some(1e12)), FillRule::NonZero), Err(PathOpsError::TooComplex));
+    assert_eq!(try_area(&spikes(400, 0.004, Some(1e12)), FillRule::NonZero), Err(PathOpsError::TooComplex));
+    // At 512 ends the sweep is made, as without the cubic.
+    assert!(try_area(&spikes(256, 0.004, Some(1e12)), FillRule::NonZero).is_ok());
+}
+
+/// `k` thin triangles, each with a long edge through the origin from a point on a circle of 100 to
+/// the opposite one: `k` lines that cross there, and no end of any.
+fn lines_through_a_point(k: usize) -> BezPath {
+    let mut p = BezPath::new();
+    for i in 0..k {
+        let a = std::f64::consts::PI * (i as f64 + 0.5) / k as f64;
+        let (c, s) = (100.0 * a.cos(), 100.0 * a.sin());
+        p.move_to((c, s));
+        p.line_to((-c, -s));
+        p.line_to((-c - 0.5 * s / 100.0, -s + 0.5 * c / 100.0));
+        p.close_path();
+    }
+    p
+}
+
+#[test]
+fn lines_that_cross_at_one_point_are_limited_by_their_work() {
+    let star = lines_through_a_point(40);
+    assert!(try_area(&star, FillRule::NonZero).is_ok());
+    // The work of 40 lines through a point is 40 x 39², and of the rest of the shapes next to nothing.
+    let roomy = with(|l| l.crossing_work = 100_000);
+    assert!(with_limits(roomy, || try_area(&star, FillRule::NonZero)).is_ok());
+    let tight = with(|l| l.crossing_work = 60_000);
+    assert_eq!(with_limits(tight, || try_area(&star, FillRule::NonZero)), Err(PathOpsError::TooComplex));
+    assert_eq!(with_limits(tight, || try_unite_all(&[(&star, FillRule::NonZero)])), Err(PathOpsError::TooComplex));
+    // By default 257 lines through a point are refused, at once (a thousand took a minute and a half).
+    assert_eq!(try_area(&lines_through_a_point(257), FillRule::NonZero), Err(PathOpsError::TooComplex));
+    assert_eq!(try_area(&lines_through_a_point(1_020), FillRule::NonZero), Err(PathOpsError::TooComplex));
+    // Lines that cross apart are no matter, however many.
+    let mut hatch = BezPath::new();
+    for i in 0..60 {
+        let y = 3.0 * f64::from(i);
+        hatch.move_to((0.0, y));
+        hatch.line_to((300.0, y + 100.7));
+        hatch.line_to((300.0, y + 103.7));
+        hatch.close_path();
+        hatch.move_to((0.0, 300.0 - y + 0.3));
+        hatch.line_to((300.0, 200.0 - y));
+        hatch.line_to((300.0, 203.0 - y));
+        hatch.close_path();
+    }
+    assert!(with_limits(with(|l| l.crossing_work = 100), || try_area(&hatch, FillRule::NonZero)).is_ok());
+}
+
+#[test]
+fn nested_squares_crossed_by_thin_bars_are_limited_by_the_pieces_they_are_cut_into() {
+    // n nested squares and m bars across them: the sweep cuts each side at each bar, and each piece keeps its own list.
+    let nested_and_barred = |n: i32, m: i32| -> Vec<Shape> {
+        let mut shapes: Vec<Shape> = (1..=n)
+            .map(|k| Shape::new(rectangle(Rect::new(-f64::from(k), -f64::from(k), f64::from(k), f64::from(k))), FillRule::NonZero, k as u64))
+            .collect();
+        let mut bars = BezPath::new();
+        let w = 2.0 * f64::from(n) / f64::from(m);
+        for i in 0..m {
+            let x = -f64::from(n) + w * (f64::from(i) + 0.25);
+            bars.extend(rectangle(Rect::new(x, -f64::from(n) - 1.0, x + 0.3 * w, f64::from(n) + 1.0)).iter());
+        }
+        shapes.push(Shape::new(bars, FillRule::NonZero, 0));
+        shapes
+    };
+    let small = nested_and_barred(12, 12);
+    assert_eq!(pathfinder(PathfinderOp::Exclude, &small).len(), 1);
+    // Their entries are at most 12 x 12 x 12 x 8 and not under 12 x 12 x 12 x 2: a limit between refuses them.
+    let tight = with(|l| l.coverage_entries = 1_000);
+    assert!(with_limits(tight, || pathfinder(PathfinderOp::Exclude, &small)).is_empty());
+    let loose = with(|l| l.coverage_entries = 14_000);
+    assert_eq!(with_limits(loose, || pathfinder(PathfinderOp::Exclude, &small)).len(), 1);
+    // By default 300 and 300 (1.3 GB) are refused before the sweep.
+    let big = nested_and_barred(300, 300);
+    assert!(pathfinder(PathfinderOp::Exclude, &big).is_empty());
+    assert!(pathfinder(PathfinderOp::Divide, &big).is_empty());
+    let paths: Vec<(&BezPath, FillRule)> = big.iter().map(|s| (&s.path, s.rule)).collect();
+    assert_eq!(try_boolean_n(&paths, |m| m[0]), Err(PathOpsError::TooComplex));
 }

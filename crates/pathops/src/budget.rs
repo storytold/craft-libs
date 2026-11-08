@@ -20,7 +20,7 @@
 
 use std::cell::Cell;
 
-use kurbo::{BezPath, ParamCurve, ParamCurveExtrema, PathSeg, Point, Rect};
+use kurbo::{BezPath, Line, ParamCurve, ParamCurveExtrema, PathSeg, Point, Rect};
 
 use crate::work::{self, Work};
 
@@ -57,13 +57,28 @@ pub const MAX_SWEEP_EVENT_WORK: usize = {
 /// [`crate::PathOpsError::TooComplex`] before it sweeps.
 pub const MAX_ENDS_AT_A_POINT: usize = 512;
 
-/// Most entries the windings of the arrangement of several inputs hold: 33,554,432 (16 bytes each,
-/// half a gigabyte, and the sweep holds them twice). A side of a segment has an entry for each input
-/// that covers it, so shapes nested n deep hold about 4n²: 2,000 nested squares 270 MB, 8,000 would
-/// need four and a half gigabytes, which ends a web page that has 32-bit addresses. Counted before the sweep, from
-/// the pairs of a segment's bounds and an input's bounds that overlap (an upper bound: an input's
-/// bounds can hold what it does not cover). Past it an operation fails as
-/// [`crate::PathOpsError::TooComplex`].
+/// Most lines crossing at one point, as work: 16,777,216. The sweep takes about the cube of the number
+/// of lines that cross at one point (a pie of k slices has them end there, [`MAX_ENDS_AT_A_POINT`]; these
+/// pass through with no end), which the count of crossings does not see: 150 lines through one point take
+/// 0.2 s, 300 take 1.7 s, 450 take 8 s, and a thousand pass the pair and event limits and would take a
+/// minute and a half. A line that crosses `m` others at one point counts `m`², so `c` lines through a
+/// point count `c` (`c` - 1)², and 256 is the most that pass (about a second). Found before the sweep by
+/// computing the crossings of the lines whose bounds overlap, when that many could cost more than the
+/// limit; past it an operation fails as [`crate::PathOpsError::TooComplex`]. Crossings of curves, and
+/// of lines on one line, are not looked for.
+pub const MAX_CROSSING_WORK: usize = 1 << 24;
+
+/// Most entries the windings of the arrangement of several inputs hold: 33,554,432 (about 13 bytes
+/// each, 450 MB). A side of a piece of a segment has an entry for each input that covers it. Shapes
+/// nested n deep hold about 4n²: 2,000 nested squares 270 MB, 8,000 would need four and a half
+/// gigabytes, which ends a web page that has 32-bit addresses; and the sweep cuts each segment where
+/// others cross it, each piece keeping its own list, so n nested squares crossed by m thin bars hold
+/// about 4n²m (300 and 300: 1.3 GB). An estimate made before the sweep from the bounds: the pieces
+/// of a segment are one more than the segments whose bounds overlap it (apart from those that follow
+/// it in its path), a curve three more, each piece having an entry on each side for every input whose
+/// bounds overlap the segment's. Exact for lines that cross, more than the entries for lines whose
+/// bounds overlap without crossing, and less for curves that cross each other more than once. Past it
+/// an operation fails as [`crate::PathOpsError::TooComplex`].
 pub const MAX_COVERAGE_ENTRIES: usize = 1 << 25;
 
 /// Most segments the contour passes of Merge, Divide, Trim and Crop walk in all: 33,554,432. The
@@ -107,8 +122,11 @@ pub struct Limits {
     pub pass_work: usize,
     /// Most segment ends at one point ([`MAX_ENDS_AT_A_POINT`]).
     pub ends_at_a_point: usize,
-    /// Most entries the windings of an arrangement of several inputs hold, as counted before it
-    /// ([`MAX_COVERAGE_ENTRIES`]).
+    /// Most work of the lines that cross at one point: the square of the others each crosses there,
+    /// summed over the lines and the points ([`MAX_CROSSING_WORK`]).
+    pub crossing_work: usize,
+    /// Most entries the windings of an arrangement of several inputs hold, as estimated before it
+    /// from the pieces the sweep cuts the segments into ([`MAX_COVERAGE_ENTRIES`]).
     pub coverage_entries: usize,
     /// Most searches of the sweep line the crossings and ends of segments make, counted as the pairs
     /// of segments whose bounds overlap times the most pieces on the line at one height
@@ -139,6 +157,7 @@ impl Limits {
         sweep_event_work: MAX_SWEEP_EVENT_WORK,
         pass_work: MAX_PASS_WORK,
         ends_at_a_point: MAX_ENDS_AT_A_POINT,
+        crossing_work: MAX_CROSSING_WORK,
         coverage_entries: MAX_COVERAGE_ENTRIES,
         shape_builder_segments: crate::planar::SHAPE_BUILDER_MAX_SEGMENTS,
         fit_points: crate::edit::MAX_FIT_POINTS,
@@ -344,11 +363,12 @@ pub(crate) fn peak_depth(heights: &[(f64, f64)]) -> usize {
 }
 
 /// The most ends of segments (`ends` are the first and last points of the segments, `extent` the
-/// largest coordinate among them) that lie at one point, a point being a square of four of the
-/// sweep's tolerances and the squares round it (so that a point on the edge between two squares
-/// is not split between them).
+/// largest coordinate among all the points of the paths, control points too, for those set the sweep's
+/// tolerance, [`crate::boolean::sweep_tolerance`]) that lie at one point, a point being a square of
+/// four of the sweep's tolerances and the squares round it (so that a point on the edge between two
+/// squares is not split between them).
 pub(crate) fn most_ends_at_a_point(ends: &[Point], extent: f64) -> usize {
-    let eps = (extent * f64::EPSILON * 64.0).max(1e-6);
+    let eps = crate::boolean::sweep_tolerance(extent);
     let cell = 4.0 * eps;
     let key = |p: &Point| ((p.x / cell).floor() as i64, (p.y / cell).floor() as i64);
     let mut counts: std::collections::HashMap<(i64, i64), usize> = std::collections::HashMap::new();
@@ -367,68 +387,493 @@ pub(crate) fn most_ends_at_a_point(ends: &[Point], extent: f64) -> usize {
         .unwrap_or(0)
 }
 
-/// Can a planar map be built of `paths` within `cap` segment pairs, [`MAX_SWEEP_LINE_PAIRS`] pairs of
-/// pieces on the sweep line, and [`MAX_SWEEP_EVENT_WORK`] searches of it?
-pub(crate) fn sweep_fits_within<'a>(paths: impl IntoIterator<Item = &'a BezPath>, cap: usize) -> bool {
-    let (mut boxes, mut lines, mut curves, mut heights) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
-    let (mut ends, mut extent, mut inputs): (Vec<Point>, f64, Vec<Rect>) = (Vec::new(), 0.0, Vec::new());
-    for p in paths {
-        work::add(Work::Visited, p.elements().len());
-        let mut whole: Option<Rect> = None;
-        for s in p.segments() {
-            let b = s.bounding_box();
-            boxes.push(b);
-            if matches!(s, PathSeg::Line(_)) {
-                lines.push(b);
+/// For each query `(a, b)`, how many of the points `(p, q)` have `p < a` and `q < b`. O(n log n): the
+/// points go into a Fenwick tree over their `q` in order of `p`, as the queries are met in order of `a`.
+fn dominated(points: &[(f64, f64)], queries: &[(f64, f64)]) -> Vec<usize> {
+    let mut qs: Vec<f64> = points.iter().map(|p| p.1).collect();
+    qs.sort_by(f64::total_cmp);
+    qs.dedup_by(|a, b| a.total_cmp(b).is_eq());
+    let mut by_p: Vec<(f64, usize)> = points.iter().map(|p| (p.0, qs.partition_point(|q| q.total_cmp(&p.1).is_lt()))).collect();
+    by_p.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let mut order: Vec<usize> = (0..queries.len()).collect();
+    order.sort_by(|&a, &b| queries.get(a).map(|q| q.0).unwrap_or(0.0).total_cmp(&queries.get(b).map(|q| q.0).unwrap_or(0.0)));
+    let mut tree = Counts(vec![0; qs.len() + 1]);
+    let mut out = vec![0; queries.len()];
+    let mut taken = 0;
+    for qi in order {
+        let Some(&(a, b)) = queries.get(qi) else { continue };
+        while let Some(&(p, rank)) = by_p.get(taken) {
+            if p.total_cmp(&a).is_lt() {
+                tree.add(rank, 1);
+                taken += 1;
             } else {
-                curves.push(b);
+                break;
             }
-            whole = Some(whole.map_or(b, |w| w.union(b)));
-            let (first, last) = (s.start(), s.end());
-            ends.extend([first, last]);
-            extent = extent.max(first.x.abs()).max(first.y.abs()).max(last.x.abs()).max(last.y.abs());
-            piece_heights(&s, &mut heights);
         }
-        inputs.extend(whole);
+        let below = qs.partition_point(|q| q.total_cmp(&b).is_lt());
+        if let Some(slot) = out.get_mut(qi) {
+            *slot = usize::try_from(tree.before(below)).unwrap_or(0);
+        }
     }
-    // Segments that meet at one point cost about the fourth power of their number in the sweep.
-    if most_ends_at_a_point(&ends, extent) > limits().ends_at_a_point {
+    out
+}
+
+/// For each of `queries`, how many of `targets` its bounds overlap (touching counts), in O((n + m)
+/// log (n + m)) however they lie: the targets wholly to the left, right, below or above it are
+/// subtracted from all of them, and those counted twice (left and below, and so on, each a count of
+/// the points below it in both coordinates) added back.
+pub(crate) fn overlap_degrees(queries: &[Rect], targets: &[Rect]) -> Vec<usize> {
+    // Adding 0.0 maps -0.0 to +0.0, which `total_cmp` would otherwise put before it; `0.0 - v` negates likewise.
+    let norm = |b: &Rect| Rect::new(b.x0 + 0.0, b.y0 + 0.0, b.x1 + 0.0, b.y1 + 0.0);
+    let (q, t): (Vec<Rect>, Vec<Rect>) = (queries.iter().map(norm).collect(), targets.iter().map(norm).collect());
+    let neg = |v: f64| 0.0 - v;
+    let sorted = |f: fn(&Rect) -> f64| {
+        let mut v: Vec<f64> = t.iter().map(f).collect();
+        v.sort_by(f64::total_cmp);
+        v
+    };
+    let (x1s, x0s, y1s, y0s) = (sorted(|b| b.x1), sorted(|b| b.x0), sorted(|b| b.y1), sorted(|b| b.y0));
+    // Left and below: a target's right edge before the query's left edge, its top before the query's bottom.
+    let left_below = dominated(&t.iter().map(|b| (b.x1, b.y1)).collect::<Vec<_>>(), &q.iter().map(|b| (b.x0, b.y0)).collect::<Vec<_>>());
+    let left_above = dominated(&t.iter().map(|b| (b.x1, neg(b.y0))).collect::<Vec<_>>(), &q.iter().map(|b| (b.x0, neg(b.y1))).collect::<Vec<_>>());
+    let right_below = dominated(&t.iter().map(|b| (neg(b.x0), b.y1)).collect::<Vec<_>>(), &q.iter().map(|b| (neg(b.x1), b.y0)).collect::<Vec<_>>());
+    let right_above =
+        dominated(&t.iter().map(|b| (neg(b.x0), neg(b.y0))).collect::<Vec<_>>(), &q.iter().map(|b| (neg(b.x1), neg(b.y1))).collect::<Vec<_>>());
+    let total = t.len();
+    q.iter()
+        .enumerate()
+        .map(|(i, b)| {
+            let left = x1s.partition_point(|v| v.total_cmp(&b.x0).is_lt());
+            let right = total - x0s.partition_point(|v| v.total_cmp(&b.x1).is_le());
+            let below = y1s.partition_point(|v| v.total_cmp(&b.y0).is_lt());
+            let above = total - y0s.partition_point(|v| v.total_cmp(&b.y1).is_le());
+            let corners: usize = [&left_below, &left_above, &right_below, &right_above].iter().map(|c| c.get(i).copied().unwrap_or(0)).sum();
+            (total + corners).saturating_sub(left + right + below + above)
+        })
+        .collect()
+}
+
+/// Calls `found(i, j)` for each pair of `boxes` that overlap (touching counts), `i` the one that
+/// starts later in x, and gives up (false) as soon as more than `cap` have been found. A sweep in
+/// x keeps the open boxes in a tree over their order by bottom edge, each node the highest top of
+/// those below it, so the boxes that overlap a new one in y are walked down to, and the work is
+/// O((n + pairs) log n).
+fn each_overlap(boxes: &[Rect], cap: usize, mut found: impl FnMut(usize, usize)) -> bool {
+    let boxes: Vec<Rect> = boxes.iter().map(|b| Rect::new(b.x0 + 0.0, b.y0 + 0.0, b.x1 + 0.0, b.y1 + 0.0)).collect();
+    let mut by_bottom: Vec<usize> = (0..boxes.len()).collect();
+    by_bottom.sort_by(|&a, &b| boxes.get(a).map(|r| r.y0).unwrap_or(0.0).total_cmp(&boxes.get(b).map(|r| r.y0).unwrap_or(0.0)));
+    let bottoms: Vec<f64> = by_bottom.iter().filter_map(|&i| boxes.get(i).map(|r| r.y0)).collect();
+    let mut rank = vec![0usize; boxes.len()];
+    for (r, &i) in by_bottom.iter().enumerate() {
+        if let Some(slot) = rank.get_mut(i) {
+            *slot = r;
+        }
+    }
+    let leaves = boxes.len().next_power_of_two().max(1);
+    // The highest top of the open boxes in each node's range of ranks (negative infinity: none).
+    let mut top = vec![f64::NEG_INFINITY; 2 * leaves];
+    let mut events: Vec<(f64, bool, usize)> = boxes.iter().enumerate().flat_map(|(i, b)| [(b.x0, false, i), (b.x1, true, i)]).collect();
+    events.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+    let set = |top: &mut Vec<f64>, r: usize, value: f64| {
+        let mut node = leaves + r;
+        if let Some(t) = top.get_mut(node) {
+            *t = value;
+        }
+        while node > 1 {
+            node /= 2;
+            let high = top.get(2 * node).copied().unwrap_or(f64::NEG_INFINITY).max(top.get(2 * node + 1).copied().unwrap_or(f64::NEG_INFINITY));
+            if let Some(t) = top.get_mut(node) {
+                *t = high;
+            }
+        }
+    };
+    let mut count = 0usize;
+    let mut stack: Vec<(usize, usize, usize)> = Vec::new();
+    for (_, end, i) in events {
+        let (Some(b), Some(&r)) = (boxes.get(i), rank.get(i)) else { continue };
+        if end {
+            set(&mut top, r, f64::NEG_INFINITY);
+            continue;
+        }
+        // The open boxes whose bottom is not above this one's top (a prefix of the ranks) and whose top
+        // is not below its bottom.
+        let upto = bottoms.partition_point(|y| y.total_cmp(&b.y1).is_le());
+        stack.clear();
+        stack.push((1, 0, leaves));
+        while let Some((node, lo, hi)) = stack.pop() {
+            if lo >= upto || top.get(node).is_none_or(|t| t.total_cmp(&b.y0).is_lt()) {
+                continue;
+            }
+            if hi - lo == 1 {
+                if let Some(&other) = by_bottom.get(lo) {
+                    count += 1;
+                    if count > cap {
+                        return false;
+                    }
+                    found(i, other);
+                }
+                continue;
+            }
+            let mid = (lo + hi) / 2;
+            stack.push((2 * node + 1, mid, hi));
+            stack.push((2 * node, lo, mid));
+        }
+        set(&mut top, r, b.y1);
+    }
+    true
+}
+
+/// A segment: the line (an index into `line_segs`) or the curve (into `curve_segs`) it is.
+#[derive(Clone, Copy)]
+enum Kind {
+    Line(usize),
+    Curve(usize),
+}
+
+/// What the check of a sweep reads of the segments of all its paths.
+#[derive(Default)]
+struct Segments {
+    boxes: Vec<Rect>,
+    /// The bounds of the lines, and the lines, in the same order.
+    lines: Vec<Rect>,
+    line_segs: Vec<Line>,
+    curves: Vec<Rect>,
+    curve_segs: Vec<PathSeg>,
+    /// For each segment: which line or curve it is, and for a curve how many curves of its path it
+    /// touches at an end (they share the end, so their bounds overlap without their crossing).
+    kind: Vec<Kind>,
+    touching_curves: Vec<usize>,
+    /// How many pairs of segments of a path touch at an end, which is no crossing, and how many of
+    /// them are pairs of lines.
+    touching_pairs: usize,
+    touching_lines: usize,
+    heights: Vec<(f64, f64)>,
+    ends: Vec<Point>,
+    /// The largest coordinate of any point of any element, control points too (what sets the tolerance).
+    extent: f64,
+    /// The bounds of each path.
+    inputs: Vec<Rect>,
+}
+
+impl Segments {
+    fn add_path(&mut self, p: &BezPath) {
+        work::add(Work::Visited, p.elements().len());
+        for el in p.elements() {
+            for pt in crate::boolean::el_points(el) {
+                self.extent = self.extent.max(pt.x.abs()).max(pt.y.abs());
+            }
+        }
+        let mut whole: Option<Rect> = None;
+        // The subpath being read (its first segment, where that starts, its length) and the segment before.
+        let mut sub: Option<(usize, Point, usize)> = None;
+        let mut last: Option<(usize, Point)> = None;
+        for s in p.segments() {
+            let idx = self.boxes.len();
+            let b = s.bounding_box();
+            self.boxes.push(b);
+            match s {
+                PathSeg::Line(l) => {
+                    self.kind.push(Kind::Line(self.line_segs.len()));
+                    self.lines.push(b);
+                    self.line_segs.push(l);
+                }
+                _ => {
+                    self.kind.push(Kind::Curve(self.curve_segs.len()));
+                    self.curves.push(b);
+                    self.curve_segs.push(s);
+                }
+            }
+            self.touching_curves.push(0);
+            whole = Some(whole.map_or(b, |w| w.union(b)));
+            let (first, end) = (s.start(), s.end());
+            self.ends.extend([first, end]);
+            piece_heights(&s, &mut self.heights);
+            match last {
+                Some((prev, at)) if at == first => {
+                    self.touch(prev, idx);
+                    if let Some(sub) = sub.as_mut() {
+                        sub.2 += 1;
+                    }
+                }
+                _ => {
+                    self.close(sub.take(), last);
+                    sub = Some((idx, first, 1));
+                }
+            }
+            last = Some((idx, end));
+        }
+        self.close(sub.take(), last);
+        self.inputs.extend(whole);
+    }
+
+    fn touch(&mut self, a: usize, b: usize) {
+        if let (Some(Kind::Curve(_)), Some(Kind::Curve(_))) = (self.kind.get(a), self.kind.get(b)) {
+            for i in [a, b] {
+                if let Some(t) = self.touching_curves.get_mut(i) {
+                    *t += 1;
+                }
+            }
+        }
+        self.touching_pairs += 1;
+        if let (Some(Kind::Line(_)), Some(Kind::Line(_))) = (self.kind.get(a), self.kind.get(b)) {
+            self.touching_lines += 1;
+        }
+    }
+
+    /// The pieces more than one a segment is cut into by its own turns: none for a line; a curve is cut
+    /// where its x or y turns, and where it crosses itself.
+    fn turns(&self, i: usize) -> u64 {
+        if matches!(self.kind.get(i), Some(Kind::Curve(_))) { 3 } else { 0 }
+    }
+
+    /// A subpath that comes back to where it started: its last segment touches its first.
+    fn close(&mut self, sub: Option<(usize, Point, usize)>, last: Option<(usize, Point)>) {
+        if let (Some((first, start, count)), Some((tail, at))) = (sub, last)
+            && count >= 3
+            && at == start
+        {
+            self.touch(tail, first);
+        }
+    }
+}
+
+/// Where the lines `a` and `b` cross, as distances along each from its start, if they do away from
+/// both their ends (by more than `slack`: segments that end at a point are counted as ends,
+/// [`most_ends_at_a_point`]); none when they are parallel.
+fn crossing(a: &Line, b: &Line, slack: f64) -> Option<(f64, f64)> {
+    let (d, e, w) = (a.p1 - a.p0, b.p1 - b.p0, b.p0 - a.p0);
+    let (la, lb) = (d.hypot(), e.hypot());
+    let den = d.cross(e);
+    if !parallel(den, la, lb) {
+        let (t, u) = (w.cross(e) / den, w.cross(d) / den);
+        let (s, r) = (t * la, u * lb);
+        return (s > slack && s < la - slack && r > slack && r < lb - slack).then_some((s, r));
+    }
+    None
+}
+
+/// Are two lines of lengths `la` and `lb`, whose directions cross to `den`, parallel (to within the
+/// noise of the arithmetic: a crossing found of lines nearly on one line is anywhere along it)?
+fn parallel(den: f64, la: f64, lb: f64) -> bool {
+    !den.is_finite() || den.abs() <= 1e-10 * la * lb
+}
+
+/// The work of the lines of `seg` that cross at one point: for each line, its crossings with others
+/// at (within a tolerance of) one point, `m` of them where `m` is two or more, count `m`², so a point
+/// where `c` lines cross costs about `c`³, the sweep's cost for it. The crossings are found only when
+/// all `pairs` of line bounds that overlap, were they at one point, could cost more than the limit.
+fn crossing_work_within(seg: &Segments, pairs: usize, eps: f64, cap: usize) -> bool {
+    let limit = limits().crossing_work as u64;
+    // Lines through one point: c(c - 1) / 2 pairs, and c (c - 1)² of work.
+    let c = ((1.0 + (1.0 + 8.0 * pairs as f64).sqrt()) / 2.0).ceil();
+    if c * (c - 1.0) * (c - 1.0) <= limit as f64 {
+        return true;
+    }
+    let mut at: Vec<Vec<f64>> = vec![Vec::new(); seg.line_segs.len()];
+    let slack = 2.0 * eps;
+    let within = each_overlap(&seg.lines, cap, |i, j| {
+        work::add(Work::CrossingPairs, 1);
+        if let (Some(a), Some(b)) = (seg.line_segs.get(i), seg.line_segs.get(j))
+            && let Some((s, r)) = crossing(a, b, slack)
+        {
+            if let Some(list) = at.get_mut(i) {
+                list.push(s);
+            }
+            if let Some(list) = at.get_mut(j) {
+                list.push(r);
+            }
+        }
+    });
+    if !within {
         return false;
     }
-    let Some(pairs) = overlap_pairs(&boxes, cap) else { return false };
-    if !heights_overlap_within(&heights, limits().sweep_line_pairs) {
+    let mut total = 0u64;
+    for mut list in at {
+        list.sort_by(f64::total_cmp);
+        let mut run = 1u64;
+        for (k, s) in list.iter().enumerate() {
+            let next = list.get(k + 1);
+            if next.is_some_and(|n| n - s <= slack) {
+                run += 1;
+                continue;
+            }
+            if run >= 2 {
+                total = total.saturating_add(run * run);
+            }
+            run = 1;
+        }
+        if total > limit {
+            return false;
+        }
+    }
+    true
+}
+
+/// Can the pieces the sweep cuts the segments into hold their windings in [`Limits::coverage_entries`]?
+/// A piece has, on each of its two sides, an entry for every input that covers it, and an input can
+/// only cover a piece whose segment's bounds lie within its own bounds, so the entries are at most
+/// two for each piece and each input whose bounds overlap its segment's. A segment is cut into one
+/// piece more than the segments that cross it (a curve into three more, for its turns and where it
+/// crosses itself). When the estimate by the bounds alone passes, that is all; when it does not, the
+/// segments whose bounds overlap are walked, and where lines (or a line and a curve) cross is found,
+/// so that a fan of lines that meet at a point, whose bounds overlap in thousands, cuts none. Curves
+/// count as cutting each other once if an eighth of the one lies within the bounds of an eighth of the other,
+/// apart from those that follow one another in a path, so curves that cross more than once are cut into
+/// more pieces than counted. Nested squares of
+/// n inputs hold 4n(n + 1) entries, and crossed by m thin bars cut each side of each square into 2m + 1
+/// pieces. `pairs` are those of the segments' bounds among themselves. Two inputs or fewer hold two at
+/// most for each piece, and are not counted.
+fn coverage_entries_within(seg: &Segments, pairs: usize) -> bool {
+    let inputs = &seg.inputs;
+    if inputs.len() <= 2 {
+        return true;
+    }
+    let mut all = seg.boxes.clone();
+    all.extend_from_slice(inputs);
+    let (Some(everything), Some(among_inputs)) = (overlap_pairs(&all, usize::MAX), overlap_pairs(inputs, usize::MAX)) else { return false };
+    // Pairs of a segment's bounds and an input's.
+    let across = everything.saturating_sub(pairs).saturating_sub(among_inputs) as u64;
+    let crossings = pairs.saturating_sub(seg.touching_pairs) as u64;
+    let cap = limits().coverage_entries as u64;
+    // Three estimates, each cheaper than the next and no smaller than it is: with no more known than
+    // that no segment's bounds overlap more inputs than there are; with the most inputs that any one
+    // does; and with, for each, the segments that cross it.
+    let factor = if seg.curves.is_empty() { 1 } else { 4 };
+    let coarse = across.saturating_mul(2).saturating_mul(factor).saturating_add((inputs.len() as u64).saturating_mul(crossings).saturating_mul(4));
+    let entries = if coarse <= cap {
+        coarse
+    } else {
+        let covering = overlap_degrees(&seg.boxes, inputs);
+        let most = covering.iter().copied().max().unwrap_or(0) as u64;
+        let alone: u64 = covering.iter().enumerate().map(|(i, &d)| 2 * (1 + seg.turns(i)) * d as u64).sum();
+        let middle = alone.saturating_add(most.saturating_mul(crossings).saturating_mul(4));
+        if middle <= cap { middle } else { piece_entries(seg, &covering) }
+    };
+    work::add(Work::CoverageEntries, usize::try_from(entries).unwrap_or(usize::MAX));
+    entries <= cap
+}
+
+/// The entries of the windings of the pieces of the segments, from the inputs (`covering`) and the
+/// pieces each segment is cut into ([`coverage_entries_within`]), found by looking at the segments
+/// whose bounds overlap: where lines (or a line and a curve) cross, and so cut each other, is found
+/// exactly, and curves as cutting each other once when an eighth of the one lies within the bounds of an
+/// eighth of the other.
+fn piece_entries(seg: &Segments, covering: &[usize]) -> u64 {
+    let slack = 2.0 * crate::boolean::sweep_tolerance(seg.extent);
+    // Curves can only cross where an eighth of one lies within the bounds of an eighth of the other.
+    let eighths: Vec<[Rect; 8]> =
+        seg.curve_segs.iter().map(|c| std::array::from_fn(|k| c.subsegment(k as f64 / 8.0..(k + 1) as f64 / 8.0).bounding_box())).collect();
+    let touch = |a: &Rect, b: &Rect| a.x0 <= b.x1 && b.x0 <= a.x1 && a.y0 <= b.y1 && b.y0 <= a.y1;
+    let mut cuts = vec![0usize; seg.boxes.len()];
+    // The pairs are no more than the limit on them, which was checked before.
+    let _ = each_overlap(&seg.boxes, usize::MAX, |i, j| {
+        work::add(Work::CrossingPairs, 1);
+        let (Some(&a), Some(&b)) = (seg.kind.get(i), seg.kind.get(j)) else { return };
+        let (ci, cj) = match (a, b) {
+            (Kind::Line(x), Kind::Line(y)) => match (seg.line_segs.get(x), seg.line_segs.get(y)) {
+                (Some(x), Some(y)) => line_cuts(x, y, slack),
+                _ => (0, 0),
+            },
+            (Kind::Line(x), Kind::Curve(y)) => match (seg.line_segs.get(x), seg.curve_segs.get(y)) {
+                (Some(x), Some(y)) => line_curve_cuts(x, y, slack),
+                _ => (0, 0),
+            },
+            (Kind::Curve(x), Kind::Line(y)) => match (seg.curve_segs.get(x), seg.line_segs.get(y)) {
+                (Some(x), Some(y)) => {
+                    let (line, curve) = line_curve_cuts(y, x, slack);
+                    (curve, line)
+                }
+                _ => (0, 0),
+            },
+            (Kind::Curve(x), Kind::Curve(y)) => match (eighths.get(x), eighths.get(y)) {
+                (Some(x), Some(y)) => {
+                    let near = usize::from(x.iter().any(|p| y.iter().any(|q| touch(p, q))));
+                    (near, near)
+                }
+                _ => (1, 1),
+            },
+        };
+        for (k, n) in [(i, ci), (j, cj)] {
+            if let Some(c) = cuts.get_mut(k) {
+                *c += n;
+            }
+        }
+    });
+    let mut total = 0u64;
+    for (i, &inputs) in covering.iter().enumerate() {
+        // Curves that follow one another in a path were counted as cutting each other at their shared end.
+        let cut = cuts.get(i).copied().unwrap_or(0).saturating_sub(seg.touching_curves.get(i).copied().unwrap_or(0));
+        total = total.saturating_add(2u64.saturating_mul(1 + cut as u64 + seg.turns(i)).saturating_mul(inputs as u64));
+    }
+    total
+}
+
+/// How many pieces the lines `a` and `b` cut each other into (as the pieces more than before): one
+/// each where they cross away from an end of the one cut, and where they lie on one line and overlap, two.
+fn line_cuts(a: &Line, b: &Line, slack: f64) -> (usize, usize) {
+    let (d, e, w) = (a.p1 - a.p0, b.p1 - b.p0, b.p0 - a.p0);
+    let (la, lb) = (d.hypot(), e.hypot());
+    let den = d.cross(e);
+    if parallel(den, la, lb) {
+        // Parallel: lines on one line that overlap are cut at each other's ends (end to end, they are not).
+        if la <= 0.0 || w.cross(d).abs() / la > slack {
+            return (0, 0);
+        }
+        let (t0, t1) = (w.dot(d) / la, (w + e).dot(d) / la);
+        let overlap = t0.max(t1).min(la) - t0.min(t1).max(0.0);
+        return if overlap > slack { (2, 2) } else { (0, 0) };
+    }
+    let (s, r) = (w.cross(e) / den * la, w.cross(d) / den * lb);
+    if s < -slack || s > la + slack || r < -slack || r > lb + slack {
+        return (0, 0);
+    }
+    let inside = |x: f64, length: f64| usize::from(x > slack && x < length - slack);
+    (inside(s, la), inside(r, lb))
+}
+
+/// The same for a line and a curve: the line is cut where the curve crosses it, and the curve where it
+/// crosses the line, each away from the ends.
+fn line_curve_cuts(line: &Line, curve: &PathSeg, slack: f64) -> (usize, usize) {
+    let length = (line.p1 - line.p0).hypot();
+    let (mut on_line, mut on_curve) = (0, 0);
+    for hit in curve.intersect_line(*line) {
+        on_line += usize::from(hit.line_t * length > slack && hit.line_t * length < length - slack);
+        on_curve += usize::from(hit.segment_t > 1e-9 && hit.segment_t < 1.0 - 1e-9);
+    }
+    (on_line, on_curve)
+}
+
+/// Can a sweep of `paths` be built within `cap` pairs of segments whose bounds overlap,
+/// [`MAX_SWEEP_LINE_PAIRS`] pairs of pieces on the sweep line, [`MAX_SWEEP_EVENT_WORK`] searches of it,
+/// and the limits on segment ends at one point, lines crossing at one point, and entries of windings?
+pub(crate) fn sweep_fits_within<'a>(paths: impl IntoIterator<Item = &'a BezPath>, cap: usize) -> bool {
+    let mut seg = Segments::default();
+    for p in paths {
+        seg.add_path(p);
+    }
+    // Segments that meet at one point cost about the fourth power of their number in the sweep.
+    if most_ends_at_a_point(&seg.ends, seg.extent) > limits().ends_at_a_point {
+        return false;
+    }
+    let Some(pairs) = overlap_pairs(&seg.boxes, cap) else { return false };
+    if !heights_overlap_within(&seg.heights, limits().sweep_line_pairs) {
         return false;
     }
     // The crossings: a pair of lines crosses once, a pair of a line and a curve up to three times, a
     // pair of curves up to nine; each pair counts for as many (at most), so the pairs of bounds
     // that overlap are counted by the kinds of segment in them.
-    let (Some(line_pairs), Some(curve_pairs)) = (overlap_pairs(&lines, cap), overlap_pairs(&curves, cap)) else { return false };
+    let (Some(line_pairs), Some(curve_pairs)) = (overlap_pairs(&seg.lines, cap), overlap_pairs(&seg.curves, cap)) else { return false };
     let mixed = pairs.saturating_sub(line_pairs).saturating_sub(curve_pairs);
     // In 64 bits: the products pass what a 32-bit `usize` holds.
     let crossings = (line_pairs as u64).saturating_add((mixed as u64).saturating_mul(3)).saturating_add((curve_pairs as u64).saturating_mul(9));
-    if crossings.saturating_mul(peak_depth(&heights) as u64) > limits().sweep_event_work as u64 {
+    if crossings.saturating_mul(peak_depth(&seg.heights) as u64) > limits().sweep_event_work as u64 {
         return false;
     }
-    coverage_entries_within(&boxes, pairs, &inputs, limits().coverage_entries)
-}
-
-/// Can the windings of the sweep of these inputs be held in `cap` entries? Each side of each segment
-/// has an entry for every input that covers it, and an input can only cover a segment whose bounds
-/// lie within its own, so the pairs of a segment's bounds and an input's bounds that overlap (each
-/// segment with its own input, too) bound them, two sides to a segment. Nested squares of
-/// n inputs hold about 4n² of them. `pairs` are those of the segments' bounds among themselves.
-/// Two inputs or fewer hold two at most for each segment, and are not counted.
-fn coverage_entries_within(segments: &[Rect], pairs: usize, inputs: &[Rect], cap: usize) -> bool {
-    if inputs.len() <= 2 {
-        return true;
+    // Segments that follow one another in a path touch at the end they share, and cross nowhere.
+    if !crossing_work_within(&seg, line_pairs.saturating_sub(seg.touching_lines), crate::boolean::sweep_tolerance(seg.extent), cap) {
+        return false;
     }
-    let mut all = segments.to_vec();
-    all.extend_from_slice(inputs);
-    let (Some(everything), Some(among_inputs)) = (overlap_pairs(&all, usize::MAX), overlap_pairs(inputs, usize::MAX)) else { return false };
-    let across = everything.saturating_sub(pairs).saturating_sub(among_inputs);
-    let entries = (across as u64).saturating_mul(2);
-    work::add(Work::CoverageEntries, usize::try_from(entries).unwrap_or(usize::MAX));
-    entries <= cap as u64
+    coverage_entries_within(&seg, pairs)
 }
 
 /// Can a planar map be built of `paths` within [`MAX_SEGMENT_PAIRS`] (and [`MAX_SWEEP_LINE_PAIRS`])?
@@ -910,7 +1355,7 @@ mod tests {
             assert!(sweep_fits(squares.iter()));
             let counted = work::take(Work::CoverageEntries);
             assert_eq!(counted, 4 * n * (n + 1), "{n} nested squares");
-            // It is an upper bound on the entries the windings hold.
+            // The estimate is at least the entries the windings hold, and under twice them.
             let arr = crate::boolean::Arrangement::new(squares.iter().map(|s| (s.clone(), FillRule::NonZero)).collect()).unwrap();
             let held: usize = arr
                 .top
@@ -940,6 +1385,332 @@ mod tests {
         work::reset();
         assert!(sweep_fits(nested(2).iter()));
         assert_eq!(work::take(Work::CoverageEntries), 0);
+    }
+
+    /// `k` spikes (a triangle from an apex to two points on a circle of 100), the apexes on a ring of
+    /// radius `rho`, and with `far` one cubic whose control points reach that far.
+    fn spikes(k: usize, rho: f64, far: Option<f64>) -> BezPath {
+        let mut p = BezPath::new();
+        for i in 0..k {
+            let a = std::f64::consts::TAU * i as f64 / k as f64;
+            let b = a + std::f64::consts::TAU / (3.0 * k as f64);
+            let m = (a + b) / 2.0;
+            p.move_to((rho * m.cos(), rho * m.sin()));
+            p.line_to((100.0 * a.cos(), 100.0 * a.sin()));
+            p.line_to((100.0 * b.cos(), 100.0 * b.sin()));
+            p.close_path();
+        }
+        if let Some(far) = far {
+            p.move_to((200.0, 0.0));
+            p.curve_to((far, 0.0), (far, 10.0), (200.0, 10.0));
+            p.close_path();
+        }
+        p
+    }
+
+    /// The sweep's tolerance is set by every point of every element, control points too
+    /// ([`crate::boolean::eps_for`]); the ends are hashed at that tolerance, not at the one the ends alone set.
+    /// 400 spikes whose apexes are 0.004 apart, beside one cubic with control points at 1e12 (a tolerance
+    /// of 0.014), meet at one point to the sweep, which takes 5.5 s for them.
+    #[test]
+    fn ends_are_hashed_at_the_tolerance_the_control_points_set() {
+        use crate::{FillRule, PathOpsError};
+        let (at, over) = (spikes(256, 0.004, Some(1e12)), spikes(257, 0.004, Some(1e12)));
+        let eps = crate::boolean::eps_for([&over]).unwrap();
+        assert!(eps > 0.01 && eps < 0.02, "{eps}");
+        // The ends alone would have set a tolerance of a millionth: the apexes would be 514 points.
+        let (ends, ends_only) = ends_of(&over);
+        assert!(most_ends_at_a_point(&ends, ends_only) < 20, "{}", most_ends_at_a_point(&ends, ends_only));
+        assert_eq!(most_ends_at_a_point(&ends, 1e12), 514);
+        // At the limit of 512 ends the sweep is made, one more slice and it is refused before the sweep.
+        assert!(sweep_fits([&at]) && !sweep_fits([&over]));
+        work::reset();
+        assert_eq!(crate::try_area(&over, FillRule::NonZero), Err(PathOpsError::TooComplex));
+        assert_eq!(work::take(Work::Sweeps), 0, "refused before the sweep was built");
+        assert!(with_limits(Limits { ends_at_a_point: 514, ..Limits::default() }, || sweep_fits([&over])));
+        assert!(!with_limits(Limits { ends_at_a_point: 513, ..Limits::default() }, || sweep_fits([&over])));
+        // Without the far cubic the apexes are apart, to a sweep that tolerates a millionth.
+        assert!(sweep_fits([&spikes(257, 0.004, None)]));
+    }
+
+    /// `k` lines through the origin, each from a point on a circle of 100 to the opposite one.
+    fn star_of_lines(k: usize) -> BezPath {
+        let mut p = BezPath::new();
+        for i in 0..k {
+            let a = std::f64::consts::PI * (i as f64 + 0.5) / k as f64;
+            p.move_to((100.0 * a.cos(), 100.0 * a.sin()));
+            p.line_to((-100.0 * a.cos(), -100.0 * a.sin()));
+        }
+        p
+    }
+
+    /// Lines that cross at one point cost the cube of their number in the sweep, and the pairs of
+    /// bounds do not say: a line that crosses `m` others at one point counts `m`², so `c` lines count
+    /// `c` (`c` - 1)² and the limit of 2^24 is at 256 lines. The crossings are found only when all the
+    /// pairs of line bounds could cost more than the limit, and in proportion to those pairs.
+    #[test]
+    fn lines_that_cross_at_one_point_are_counted_by_their_work() {
+        use crate::{FillRule, PathOpsError};
+        assert_eq!(MAX_CROSSING_WORK, 1 << 24);
+        assert_eq!(256 * 255 * 255, 16_646_400);
+        const { assert!(256 * 255 * 255 <= MAX_CROSSING_WORK && 257 * 256 * 256 > MAX_CROSSING_WORK) };
+        // The limit is at the work: a star of 40 lines is 40 x 39² = 60,840.
+        let star = star_of_lines(40);
+        let wanted = 40 * 39 * 39;
+        assert!(with_limits(Limits { crossing_work: wanted, ..Limits::default() }, || sweep_fits([&star])));
+        work::reset();
+        assert!(!with_limits(Limits { crossing_work: wanted - 1, ..Limits::default() }, || sweep_fits([&star])));
+        assert_eq!(work::take(Work::CrossingPairs), 40 * 39 / 2, "every pair of the lines was walked once");
+        // 256 lines pass and 257 do not, by default, and the refusal is before the sweep.
+        assert!(sweep_fits([&star_of_lines(256)]));
+        work::reset();
+        assert!(!sweep_fits([&star_of_lines(257)]));
+        assert_eq!(work::take(Work::CrossingPairs), 257 * 256 / 2);
+        assert_eq!(crate::try_area(&star_of_lines(257), FillRule::NonZero), Err(PathOpsError::TooComplex));
+        assert_eq!(work::take(Work::Sweeps), 0, "refused before the sweep was built");
+        // A thousand lines are refused after their pairs are walked, not after a minute and a half.
+        work::reset();
+        assert!(!sweep_fits([&star_of_lines(1_020)]));
+        assert_eq!(work::take(Work::CrossingPairs), 1_020 * 1_019 / 2);
+    }
+
+    /// The crossings are not looked for when the pairs of bounds are too few to cost the limit at one
+    /// point, are walked in proportion to those pairs when they are not, and not at all when there are
+    /// more than the limit on pairs.
+    #[test]
+    fn the_crossings_of_lines_are_walked_in_proportion_to_their_pairs() {
+        // Two families of lines, slanting across each other and meeting nowhere twice.
+        let hatch = |n: usize| -> BezPath {
+            let mut p = BezPath::new();
+            for i in 0..n {
+                let y = 3.0 * i as f64;
+                p.move_to((0.0, y));
+                p.line_to((300.0, y + 100.7));
+                p.move_to((0.0, 300.0 - y + 0.3));
+                p.line_to((300.0, 200.0 - y));
+            }
+            p
+        };
+        let overlapping = |p: &BezPath| overlap_pairs(&p.segments().map(|s| s.bounding_box()).collect::<Vec<_>>(), usize::MAX).unwrap();
+        // Few pairs: the bound of the work, were they all at one point, is under the limit.
+        let few = hatch(10);
+        work::reset();
+        assert!(sweep_fits([&few]));
+        assert_eq!(work::take(Work::CrossingPairs), 0);
+        // With a limit under it, they are all walked, once each, and none meet at a point.
+        let tight = Limits { crossing_work: 100, ..Limits::default() };
+        for n in [30usize, 60, 120] {
+            let p = hatch(n);
+            work::reset();
+            assert!(with_limits(tight, || sweep_fits([&p])), "{n}");
+            assert_eq!(work::take(Work::CrossingPairs), overlapping(&p), "{n}");
+        }
+        // More pairs than the limit: refused before any is walked.
+        let p = hatch(60);
+        let pairs = overlapping(&p);
+        work::reset();
+        assert!(!with_limits(Limits { segment_pairs: pairs - 1, ..tight }, || sweep_fits([&p])));
+        assert_eq!(work::take(Work::CrossingPairs), 0);
+    }
+
+    /// The walk of the overlapping pairs of bounds finds those the count does, and the degrees are
+    /// each box's pairs.
+    #[test]
+    fn the_pairs_and_degrees_of_bounds_match_a_count_one_by_one() {
+        let mut seed = 0x9e37_79b9_7f4a_7c15_u64;
+        let mut next = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            f64::from((seed % 21) as u8)
+        };
+        for n in [0usize, 1, 2, 7, 40, 120] {
+            // Small whole coordinates, so that boxes touch, repeat, and have no area.
+            let boxes: Vec<Rect> = (0..n)
+                .map(|_| {
+                    let (x, y) = (next(), next());
+                    Rect::new(x - 0.0, y, x + (next() % 4.0), y + (next() % 4.0))
+                })
+                .collect();
+            let others: Vec<Rect> = (0..n / 2 + 1)
+                .map(|_| {
+                    let (x, y) = (next(), next());
+                    Rect::new(x, y, x + next() % 11.0, y + next() % 11.0)
+                })
+                .collect();
+            let touch = |a: &Rect, b: &Rect| a.x0 <= b.x1 && b.x0 <= a.x1 && a.y0 <= b.y1 && b.y0 <= a.y1;
+            let mut brute: Vec<(usize, usize)> = Vec::new();
+            for i in 0..n {
+                for j in 0..i {
+                    if touch(&boxes[i], &boxes[j]) {
+                        brute.push((i, j));
+                    }
+                }
+            }
+            assert_eq!(overlap_pairs(&boxes, usize::MAX), Some(brute.len()), "{n} boxes");
+            let mut found: Vec<(usize, usize)> = Vec::new();
+            assert!(each_overlap(&boxes, usize::MAX, |i, j| found.push((i.max(j), i.min(j)))));
+            found.sort_unstable();
+            brute.sort_unstable();
+            assert_eq!(found, brute, "{n} boxes");
+            // Over the cap it stops, having found a cap and one more.
+            if brute.len() > 1 {
+                let mut seen = 0;
+                assert!(!each_overlap(&boxes, brute.len() - 1, |_, _| seen += 1));
+                assert_eq!(seen, brute.len() - 1);
+            }
+            let want: Vec<usize> = boxes.iter().map(|b| others.iter().filter(|o| touch(b, o)).count()).collect();
+            assert_eq!(overlap_degrees(&boxes, &others), want, "{n} boxes against others");
+            let own: Vec<usize> = boxes.iter().map(|b| boxes.iter().filter(|o| touch(b, o)).count()).collect();
+            assert_eq!(overlap_degrees(&boxes, &boxes), own, "{n} boxes against themselves");
+        }
+    }
+
+    /// n nested squares crossed by m thin bars: the sweep cuts each side of each square at each bar, and
+    /// each of the 2m + 1 pieces keeps a list of the squares round it, so the entries are about 4n²m
+    /// (300 and 300 took 1.3 GB, with the count of the segments before the cut at 4 x 300 x 301).
+    fn nested_and_barred(n: usize, m: usize) -> Vec<BezPath> {
+        let mut inputs: Vec<BezPath> = (1..=n).map(|k| crate::testutil::rect(-(k as f64), -(k as f64), k as f64, k as f64)).collect();
+        let mut bars = BezPath::new();
+        let w = 2.0 * n as f64 / m as f64;
+        for i in 0..m {
+            let x = -(n as f64) + w * (i as f64 + 0.25);
+            bars.extend(crate::testutil::rect(x, -(n as f64) - 1.0, x + 0.3 * w, n as f64 + 1.0).iter());
+        }
+        inputs.push(bars);
+        inputs
+    }
+
+    #[test]
+    fn entries_are_counted_over_the_pieces_after_the_cut() {
+        use crate::FillRule;
+        let held = |inputs: &[BezPath]| -> usize {
+            let arr = crate::boolean::Arrangement::new(inputs.iter().map(|s| (s.clone(), FillRule::NonZero)).collect()).unwrap();
+            arr.top
+                .segment_indices()
+                .map(|s| arr.top.winding_clockwise(s.first_half()).len() + arr.top.winding_counter_clockwise(s.first_half()).len())
+                .sum()
+        };
+        // The estimate from the pieces, as the last of the three that the limit is held to: with a limit
+        // under all of them it is the one counted.
+        let estimate = |inputs: &[BezPath]| -> usize {
+            work::reset();
+            assert!(!with_limits(Limits { coverage_entries: 1, ..Limits::default() }, || sweep_fits(inputs.iter())));
+            work::take(Work::CoverageEntries)
+        };
+        let mut previous = 0;
+        for (n, m) in [(10usize, 10usize), (20, 20), (20, 40), (40, 40), (80, 80)] {
+            let inputs = nested_and_barred(n, m);
+            let (counted, real) = (estimate(&inputs), held(&inputs));
+            assert!(real <= counted && counted < 2 * real, "{n} squares, {m} bars: {real} held, {counted} counted");
+            assert!(counted > previous, "{counted}");
+            previous = counted;
+        }
+        // The limit is on that estimate: at it the sweep is allowed, one under it is refused.
+        let inputs = nested_and_barred(20, 20);
+        let exact = estimate(&inputs);
+        assert!(with_limits(Limits { coverage_entries: exact, ..Limits::default() }, || sweep_fits(inputs.iter())));
+        assert!(!with_limits(Limits { coverage_entries: exact - 1, ..Limits::default() }, || sweep_fits(inputs.iter())));
+        // By default 200 nested squares and 200 bars (430 MB) are within the limit, and 300 and 300 (1.3 GB) are not.
+        let (within, over) = (nested_and_barred(200, 200), nested_and_barred(300, 300));
+        assert!(sweep_fits(within.iter()));
+        assert!(estimate(&within) <= MAX_COVERAGE_ENTRIES);
+        assert!(!sweep_fits(over.iter()));
+        assert!(estimate(&over) > 5 * MAX_COVERAGE_ENTRIES / 2, "{}", estimate(&over));
+    }
+
+    /// Rays that meet at a point, each a shape of its own, have bounds that overlap in thousands of
+    /// pairs and cross nowhere: they cut no piece, and the entries are those of the segments alone.
+    #[test]
+    fn rays_from_a_point_cut_no_pieces() {
+        let rays: Vec<BezPath> = (0..250)
+            .map(|i| {
+                let a = std::f64::consts::TAU * f64::from(i) / 250.0;
+                let b = a + std::f64::consts::TAU / 750.0;
+                crate::testutil::polyline(&[(0.0, 0.0), (100.0 * a.cos(), 100.0 * a.sin()), (100.0 * b.cos(), 100.0 * b.sin())], true)
+            })
+            .collect();
+        let boxes: Vec<Rect> = rays.iter().flat_map(|p| p.segments().map(|s| s.bounding_box())).collect();
+        assert!(overlap_pairs(&boxes, usize::MAX).unwrap() > 20_000, "the bounds of the rays overlap in many pairs");
+        work::reset();
+        assert!(with_limits(Limits { coverage_entries: 1, ..Limits::default() }, || !sweep_fits(rays.iter())));
+        let counted = work::take(Work::CoverageEntries);
+        let alone: usize = overlap_degrees(&boxes, &rays.iter().map(kurbo::Shape::bounding_box).collect::<Vec<_>>()).iter().map(|d| 2 * d).sum();
+        assert_eq!(counted, alone, "no piece was cut");
+        assert!(sweep_fits(rays.iter()));
+        // The same rays slightly crossed (each ray's tip pushed across the next) are cut.
+        let crossed: Vec<BezPath> = (0..250)
+            .map(|i| {
+                let a = std::f64::consts::TAU * f64::from(i) / 250.0;
+                let b = a + 3.0 * std::f64::consts::TAU / 250.0;
+                crate::testutil::polyline(&[(0.0, 0.0), (100.0 * a.cos(), 100.0 * a.sin()), (100.0 * b.cos(), 100.0 * b.sin())], true)
+            })
+            .collect();
+        work::reset();
+        assert!(with_limits(Limits { coverage_entries: 1, ..Limits::default() }, || !sweep_fits(crossed.iter())));
+        let cut = work::take(Work::CoverageEntries);
+        let boxes: Vec<Rect> = crossed.iter().flat_map(|p| p.segments().map(|s| s.bounding_box())).collect();
+        let alone: usize = overlap_degrees(&boxes, &crossed.iter().map(kurbo::Shape::bounding_box).collect::<Vec<_>>()).iter().map(|d| 2 * d).sum();
+        assert!(cut > 3 * alone, "{cut} entries with the crossings, {alone} without");
+    }
+
+    /// Where two lines (or a line and a curve) cut each other into pieces, away from their ends.
+    #[test]
+    fn lines_and_curves_cut_each_other_where_they_cross_away_from_their_ends() {
+        let line = |a: (f64, f64), b: (f64, f64)| Line::new(a, b);
+        let slack = 1e-6;
+        // Crossing: each is cut once. A T: the one it ends on is cut. Sharing an end, or apart: none.
+        assert_eq!(line_cuts(&line((0.0, 0.0), (10.0, 10.0)), &line((0.0, 10.0), (10.0, 0.0)), slack), (1, 1));
+        assert_eq!(line_cuts(&line((0.0, 0.0), (10.0, 0.0)), &line((5.0, 0.0), (5.0, 5.0)), slack), (1, 0));
+        assert_eq!(line_cuts(&line((0.0, 0.0), (10.0, 0.0)), &line((10.0, 0.0), (10.0, 5.0)), slack), (0, 0));
+        assert_eq!(line_cuts(&line((0.0, 0.0), (10.0, 0.0)), &line((0.0, 1.0), (10.0, 1.0)), slack), (0, 0));
+        assert_eq!(line_cuts(&line((0.0, 0.0), (10.0, 0.0)), &line((20.0, 5.0), (20.0, -5.0)), slack), (0, 0));
+        // On one line: two each if they overlap, none end to end or apart.
+        assert_eq!(line_cuts(&line((0.0, 0.0), (10.0, 0.0)), &line((5.0, 0.0), (15.0, 0.0)), slack), (2, 2));
+        assert_eq!(line_cuts(&line((0.0, 0.0), (10.0, 0.0)), &line((10.0, 0.0), (20.0, 0.0)), slack), (0, 0));
+        assert_eq!(line_cuts(&line((0.0, 0.0), (10.0, 0.0)), &line((20.0, 0.0), (10.0, 0.0)), slack), (0, 0));
+        // A curve through a line: both cut at each crossing (an arch across a bar twice).
+        let arch = PathSeg::Cubic(kurbo::CubicBez::new((0.0, 0.0), (0.0, 10.0), (10.0, 10.0), (10.0, 0.0)));
+        assert_eq!(line_curve_cuts(&line((-1.0, 5.0), (11.0, 5.0)), &arch, slack), (2, 2));
+        assert_eq!(line_curve_cuts(&line((5.0, -1.0), (5.0, 11.0)), &arch, slack), (1, 1));
+        assert_eq!(line_curve_cuts(&line((0.0, 0.0), (0.0, -5.0)), &arch, slack), (0, 0), "sharing an end");
+        assert_eq!(line_curve_cuts(&line((20.0, 5.0), (30.0, 5.0)), &arch, slack), (0, 0));
+    }
+
+    /// Nested circles crossed by thin bars: the circles are cut by the bars and the bars by the circles, and the
+    /// estimate of the entries holds what the windings hold.
+    #[test]
+    fn a_curve_across_bars_is_cut_where_it_crosses_them() {
+        use crate::FillRule;
+        let mut inputs: Vec<BezPath> =
+            (1..=12).map(|k| crate::testutil::ellipse(Rect::new(-f64::from(k), -f64::from(k), f64::from(k), f64::from(k)))).collect();
+        let mut bars = BezPath::new();
+        for i in 0..12 {
+            let x = -11.5 + 2.0 * f64::from(i);
+            bars.extend(crate::testutil::rect(x, -13.0, x + 0.6, 13.0).iter());
+        }
+        inputs.push(bars);
+        let arr = crate::boolean::Arrangement::new(inputs.iter().map(|s| (s.clone(), FillRule::NonZero)).collect()).unwrap();
+        let real: usize = arr
+            .top
+            .segment_indices()
+            .map(|s| arr.top.winding_clockwise(s.first_half()).len() + arr.top.winding_counter_clockwise(s.first_half()).len())
+            .sum();
+        work::reset();
+        assert!(!with_limits(Limits { coverage_entries: 1, ..Limits::default() }, || sweep_fits(inputs.iter())));
+        let counted = work::take(Work::CoverageEntries);
+        assert!(real <= counted && counted < 3 * real, "{real} held, {counted} counted");
+        // Concentric circles, whose bounds all overlap and which cross nowhere, are cut into few pieces: the eighths of a
+        // curve whose bounds overlap those of its neighbour's count, and only they.
+        let rings: Vec<BezPath> =
+            (1..=100).map(|k| crate::testutil::ellipse(Rect::new(-f64::from(k), -f64::from(k), f64::from(k), f64::from(k)))).collect();
+        let boxes: Vec<Rect> = rings.iter().flat_map(|p| p.segments().map(|s| s.bounding_box())).collect();
+        let wholes: Vec<Rect> = rings.iter().map(kurbo::Shape::bounding_box).collect();
+        let alone: usize = overlap_degrees(&boxes, &wholes).iter().map(|d| 2 * 4 * d).sum();
+        work::reset();
+        assert!(with_limits(Limits { coverage_entries: 1, ..Limits::default() }, || !sweep_fits(rings.iter())));
+        let counted = work::take(Work::CoverageEntries);
+        assert!(alone <= counted && counted < 6 * alone, "{counted} entries counted for a hundred concentric circles, {alone} for none cut");
     }
 
     /// Boxes that touch at a signed zero still overlap: -0.0 and +0.0 are the same position.
