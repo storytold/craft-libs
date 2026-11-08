@@ -1,13 +1,13 @@
-# craft-prores
+# craft-video: Apple ProRes
 
 Clean-room Apple ProRes decoder and encoder in pure Rust, written from the public [SMPTE RDD 36:2022](https://pub.smpte.org/doc/rdd36/20220909-pub/rdd36-2022.pdf)
-bitstream description. Layer L0: depends only on `craft-media` (with `bitstream` feature), `thiserror` and (optional,
+bitstream description. Part of `craft-video` (feature `prores`). Layer L0: depends only on `craft-media` (with `bitstream` feature), `thiserror` and (optional,
 feature `threads`, default on) `rayon`. Builds for `wasm32-unknown-unknown`; no `unsafe`.
 
 ## API
 
 ```rust
-use craft_prores::*;
+use craft_video::prores::*;
 
 // Decode one QuickTime sample (one ProRes frame).
 let frame: Frame = decode_frame(&sample)?;                 // 10-bit 4:2:2 / 12-bit 4:4:4
@@ -58,7 +58,7 @@ does), so the decoder doesn't need to know.
   rayon task directly into the output planes.
 - Robustness: every size field is validated before allocation, codewords longer than 56 bits are
   rejected, and arithmetic is overflow-safe. Mutated streams return `Err`, never panic (see
-  `tests/it/fuzz.rs`).
+  [`tests/prores/fuzz_hostile.rs`](../../tests/prores/fuzz_hostile.rs)).
 
 ## Encoder
 

@@ -83,8 +83,8 @@ impl Encoder {
 
     /// The rate-control target for one frame in bytes (excluding alpha).
     pub fn target_frame_bytes(&self) -> usize {
-        let mbs = (self.cfg.width as usize).div_ceil(16) * (self.cfg.height as usize).div_ceil(16);
-        mbs * self.bits_per_mb() as usize / 8
+        let mbs = (self.cfg.width as u64).div_ceil(16) * (self.cfg.height as u64).div_ceil(16);
+        (mbs * self.bits_per_mb() as u64 / 8) as usize
     }
 
     /// Encode one frame. Input planes may be at any bit depth 8..=16 (10 is typical); the frame's
@@ -103,6 +103,9 @@ impl Encoder {
         }
         if !(8..=16).contains(&frame.bit_depth) {
             return Err(Error::Input("bit depth must be 8..=16".into()));
+        }
+        if frame.interlace != Interlace::Progressive {
+            return Err(Error::Input("interlaced frames are not supported by this encoder".into()));
         }
         let (w, h) = (cfg.width as usize, cfg.height as usize);
         let cw = chroma.chroma_width(cfg.width) as usize;
