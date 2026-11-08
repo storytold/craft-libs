@@ -467,6 +467,12 @@ impl<'segs> Sweeper<'segs> {
             self.line.segs.remove(idx);
         }
         self.y = y;
+        // Craft patch (comparison cache size): the sweep line holds no
+        // segment that ends above `y`, so their cached pairs are dropped.
+        self.comparisons.get_mut().evict_ended(self.segments, y);
+        self.conservative_comparisons
+            .get_mut()
+            .evict_ended(self.segments, y);
         self.segs_needing_positions.clear();
         self.horizontals.clear();
     }
@@ -2090,6 +2096,108 @@ mod tests {
         let mut sweep = Sweeper::new(&segs, 1.0);
         let mut bufs = SweepLineBuffers::default();
         assert!(sweep.next_line(&mut bufs).is_none());
+    }
+
+    // A tall closed band whose sides zigzag: each segment shares heights with
+    // only a few others.
+    fn zigzag_band(rows: usize) -> Segments {
+        let left = (0..=rows).map(|k| p((k % 2) as f64, k as f64));
+        let right = (0..=rows).rev().map(|k| p(10.0 + (k % 2) as f64, k as f64));
+        let mut segs = Segments::default();
+        segs.add_closed_polyline(left.chain(right));
+        segs
+    }
+
+    // A star polygon in which every edge crosses every edge it does not share a
+    // vertex with.
+    fn star(points: usize) -> Segments {
+        let step = (points - 1) / 2;
+        let mut segs = Segments::default();
+        segs.add_closed_polyline((0..points).map(|k| {
+            let angle = std::f64::consts::TAU * ((k * step) % points) as f64 / points as f64 + 0.1;
+            p(1000.0 * angle.cos(), 1000.0 * angle.sin())
+        }));
+        segs
+    }
+
+    // Two wavy closed paths of cubics that cross each other many times.
+    fn wavy_cubics() -> Segments {
+        let mut segs = Segments::default();
+        for offset in [0.0, 0.7] {
+            let mut path = BezPath::new();
+            path.move_to((offset, 0.0));
+            for k in 0..40 {
+                let y = 4.0 * k as f64;
+                let x = offset + (k % 3) as f64 * 0.5;
+                path.curve_to(
+                    (offset + 3.0, y + 1.0),
+                    (offset - 3.0, y + 3.0),
+                    (x, y + 4.0),
+                );
+            }
+            path.line_to((offset + 5.0, 160.0));
+            path.line_to((offset + 5.0, 0.0));
+            path.close_path();
+            segs.add_bez_path(&path).unwrap();
+        }
+        segs
+    }
+
+    // Runs a sweep and records every sweep line, its changed intervals and its
+    // output events. Also returns the largest number of pairs the comparison
+    // caches held after a step.
+    fn sweep_record(segs: &Segments, eps: f64, evict: bool) -> (Vec<String>, usize) {
+        let mut record = Vec::new();
+        let mut most_pairs = 0;
+        let mut sweeper = Sweeper::new(segs, eps);
+        if !evict {
+            sweeper.comparisons.get_mut().never_evict();
+            sweeper.conservative_comparisons.get_mut().never_evict();
+        }
+        let mut line_bufs = SweepLineBuffers::default();
+        let mut range_bufs = crate::sweep::SweepLineRangeBuffers::default();
+        while let Some(mut line) = sweeper.next_line(&mut line_bufs) {
+            record.push(format!(
+                "{} {:?} {:?}",
+                line.y(),
+                line.state.line,
+                line.state.changed_intervals
+            ));
+            while let Some(mut range) = line.next_range(&mut range_bufs, segs) {
+                while let Some(events) = range.events() {
+                    record.extend(events.into_iter().map(|ev| format!("{ev:?}")));
+                }
+            }
+            most_pairs = most_pairs.max(
+                line.state.comparisons.borrow().cached_pairs()
+                    + line.state.conservative_comparisons.borrow().cached_pairs(),
+            );
+        }
+        (record, most_pairs)
+    }
+
+    #[test]
+    fn ended_pairs_leave_the_comparison_cache() {
+        let segs = zigzag_band(400);
+        let (_, kept) = sweep_record(&segs, 0.1, false);
+        let (_, evicted) = sweep_record(&segs, 0.1, true);
+        assert!(kept >= 400, "{kept}");
+        assert!(evicted * 10 < kept, "{evicted} {kept}");
+    }
+
+    #[test]
+    fn evicting_comparisons_keeps_the_sweep_lines() {
+        for (segs, eps) in [
+            (zigzag_band(400), 0.1),
+            (star(31), 1e-6),
+            (star(31), 1.0),
+            (wavy_cubics(), 0.01),
+            (wavy_cubics(), 0.25),
+        ] {
+            let (kept, _) = sweep_record(&segs, eps, false);
+            let (evicted, _) = sweep_record(&segs, eps, true);
+            assert!(kept == evicted);
+        }
     }
 
     proptest! {
