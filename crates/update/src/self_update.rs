@@ -4,7 +4,8 @@
 //! copy was installed. A small helper process waits for this launcher to exit, finishes anything
 //! that can't happen while it runs (Windows locks a running exe), and starts the new one. The
 //! launcher has to exit first anyway: it holds the single-instance lock, and a new copy started
-//! while it runs would only ask it to show its window.
+//! while it runs would only ask it to show its window. A macOS bundle, an AppImage or a Linux
+//! standalone copy that can't be replaced gets the download link.
 //!
 //! | Installed as | Swap |
 //! |---|---|
@@ -126,13 +127,14 @@ pub fn current(app: &App) -> Option<Install> {
 }
 
 /// [`current`] for a known executable and opt-in setting, without reading the ambient
-/// environment.
+/// environment. A copy the update can't replace doesn't count; [`DEV_VAR`] still counts it, to
+/// try the self-update.
 fn current_at(app: &App, exe: &Path, opted_in: bool) -> Option<Install> {
     let exe = exe.canonicalize().unwrap_or_else(|_| exe.to_path_buf());
     if is_development_build(&exe, opted_in) {
         return None;
     }
-    detect(app, &exe)
+    detect(app, &exe).filter(|install| opted_in || can_replace(install))
 }
 
 /// Cargo's cache-directory marker at the root of a target directory.
@@ -181,6 +183,73 @@ pub fn is_self_updating(app: &App) -> bool {
 fn macos_package_manager_owns(exe: &Path) -> bool {
     // Homebrew (both prefixes), MacPorts and the Nix store; component-wise, so `/opt/homebrewed` is not one
     ["/opt/homebrew", "/usr/local/Cellar", "/usr/local/Homebrew", "/usr/local/opt", "/opt/local", "/nix"].iter().any(|root| exe.starts_with(root))
+}
+
+/// Whether the update can replace `install`, for the kinds it replaces in place from this
+/// process.
+#[cfg(target_os = "macos")]
+fn can_replace(install: &Install) -> bool {
+    match install {
+        Install::MacApp(bundle) => can_replace_bundle(bundle),
+        _ => true,
+    }
+}
+
+/// Whether the update can replace `install`, for the kinds it replaces in place from this
+/// process.
+#[cfg(target_os = "linux")]
+fn can_replace(install: &Install) -> bool {
+    match install {
+        Install::AppImage(file) | Install::Standalone(file) => can_replace_file(file),
+        _ => true,
+    }
+}
+
+/// Other platforms install from the helper or a package manager, or have no self-update.
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+fn can_replace(_install: &Install) -> bool {
+    true
+}
+
+/// Whether `access(2)` refuses `wanted` on `path`. Only a clear refusal counts: a check that
+/// fails for another reason leaves the update on offer, and the install reports any failure.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn refused(path: &Path, wanted: rustix::fs::Access) -> bool {
+    use rustix::io::Errno;
+
+    matches!(rustix::fs::access(path, wanted), Err(Errno::ACCESS | Errno::PERM | Errno::ROFS))
+}
+
+/// Whether the update can replace the file at `file`. It writes the new file beside it and
+/// renames that over it, which needs permission to write and search the folder.
+#[cfg(target_os = "linux")]
+fn can_replace_file(file: &Path) -> bool {
+    use rustix::fs::Access;
+
+    file.parent().is_none_or(|folder| !refused(folder, Access::WRITE_OK | Access::EXEC_OK))
+}
+
+/// `access(2)`'s `_APPEND_OK`: on a directory, permission to add a subdirectory.
+#[cfg(target_os = "macos")]
+const ADD_SUBDIRECTORY_OK: rustix::fs::Access = rustix::fs::Access::from_bits_retain(1 << 13);
+
+/// `access(2)`'s `_DELETE_OK`: permission to remove the entry from its folder.
+#[cfg(target_os = "macos")]
+const DELETE_OK: rustix::fs::Access = rustix::fs::Access::from_bits_retain(1 << 12);
+
+/// Whether the update can replace the bundle at `bundle`. It creates a staging folder beside the
+/// bundle and renames the bundle into another folder, which needs permission to add a
+/// subdirectory to the parent and permission to move the bundle itself.
+#[cfg(target_os = "macos")]
+fn can_replace_bundle(bundle: &Path) -> bool {
+    let Some(parent) = bundle.parent() else { return true };
+    !is_translocated(bundle) && !refused(parent, ADD_SUBDIRECTORY_OK) && !refused(bundle, ADD_SUBDIRECTORY_OK | DELETE_OK)
+}
+
+/// Whether `bundle` sits in an App Translocation folder under the system's per-user folders.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn is_translocated(bundle: &Path) -> bool {
+    bundle.starts_with("/private/var/folders") && bundle.components().any(|part| part.as_os_str() == "AppTranslocation")
 }
 
 /// Whether `exe` sits in a folder a Windows package manager owns (scoop, winget, Chocolatey, the
@@ -1294,6 +1363,324 @@ mod tests {
         let loose = dir.path().join("artcraft-launcher");
         std::fs::write(&loose, b"binary").unwrap();
         assert_eq!(detect(&crate::suite::LAUNCHER, &loose), Some(Install::Standalone(loose.clone())));
+    }
+
+    /// A minimal launcher bundle in `folder`; returns its executable.
+    #[cfg(target_os = "macos")]
+    fn launcher_bundle(folder: &Path) -> PathBuf {
+        let contents = folder.join("Launcher.app/Contents");
+        std::fs::create_dir_all(contents.join("MacOS")).unwrap();
+        let mut info = plist::Dictionary::new();
+        info.insert("CFBundleIdentifier".into(), plist::Value::String(crate::suite::LAUNCHER.bundle_id()));
+        plist::Value::Dictionary(info).to_file_xml(contents.join("Info.plist")).unwrap();
+        let exe = contents.join("MacOS/artcraft-launcher");
+        std::fs::write(&exe, b"binary").unwrap();
+        exe
+    }
+
+    /// Sets a folder's mode and gives it back to `0o755` when dropped, so the temporary folder
+    /// can be removed however the test ends.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    struct ModeGuard(PathBuf);
+
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    impl ModeGuard {
+        fn set(path: &Path, mode: u32) -> Self {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
+            Self(path.to_path_buf())
+        }
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    impl Drop for ModeGuard {
+        fn drop(&mut self) {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&self.0, std::fs::Permissions::from_mode(0o755));
+        }
+    }
+
+    /// Root passes the permission checks these tests rely on.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    fn running_as_root() -> bool {
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = ModeGuard::set(dir.path(), 0o555);
+        std::fs::write(dir.path().join("probe"), b"").is_ok()
+    }
+
+    /// A copy in a folder the user can write, as in `~/Applications`, keeps the update.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_copy_it_can_write_is_replaced() {
+        let dir = tempfile::tempdir().unwrap();
+        let exe = launcher_bundle(&dir.path().join("Applications"));
+        let bundle = exe.ancestors().nth(3).unwrap().canonicalize().unwrap();
+        assert_eq!(current_at(&crate::suite::LAUNCHER, &exe, false), Some(Install::MacApp(bundle)));
+    }
+
+    /// The staging folder can't be created in a folder the user can't write. [`DEV_VAR`] still
+    /// offers the update, to try it.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_copy_in_a_folder_it_cannot_write_gets_the_download_link() {
+        if running_as_root() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let folder = dir.path().join("Applications");
+        let exe = launcher_bundle(&folder);
+        let guard = ModeGuard::set(&folder, 0o555);
+        assert_eq!(current_at(&crate::suite::LAUNCHER, &exe, false), None);
+        assert!(current_at(&crate::suite::LAUNCHER, &exe, true).is_some(), "the opt-in still offers it");
+        drop(guard);
+        assert!(current_at(&crate::suite::LAUNCHER, &exe, false).is_some(), "the answer follows the folder's permissions");
+    }
+
+    /// Renaming a directory into another folder needs write permission on the directory, so a
+    /// writable parent is not enough. Mode 555 stands in for a bundle another account owns.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_bundle_it_cannot_write_gets_the_download_link() {
+        if running_as_root() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let exe = launcher_bundle(dir.path());
+        let _guard = ModeGuard::set(exe.ancestors().nth(3).unwrap(), 0o555);
+        assert_eq!(current_at(&crate::suite::LAUNCHER, &exe, false), None);
+    }
+
+    /// A copy opened from a mounted disk image is on a read-only volume.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_copy_on_a_read_only_image_gets_the_download_link() {
+        struct Detach(PathBuf);
+        impl Drop for Detach {
+            fn drop(&mut self) {
+                let _ = std::process::Command::new("hdiutil").arg("detach").arg("-force").arg(&self.0).output();
+            }
+        }
+        /// Tries a few times, because the disk-image helper turns requests away while it is busy,
+        /// and removes what a failed `create` left at `partial` first. Returns what it last said.
+        fn hdiutil(args: &[&std::ffi::OsStr], partial: Option<&Path>) -> Result<(), String> {
+            let mut said = String::new();
+            for _ in 0..5 {
+                if let Some(partial) = partial {
+                    let _ = std::fs::remove_file(partial);
+                }
+                let output = std::process::Command::new("hdiutil").args(args).output().unwrap();
+                if output.status.success() {
+                    return Ok(());
+                }
+                said = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            }
+            Err(said)
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let (src, image, mount) = (dir.path().join("src"), dir.path().join("test.dmg"), dir.path().join("mount"));
+        launcher_bundle(&src);
+        std::fs::create_dir(&mount).unwrap();
+        let _one_at_a_time = crate::install::macos::DISK_IMAGES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let text = std::ffi::OsStr::new;
+        let created = hdiutil(
+            &[text("create"), text("-quiet"), text("-format"), text("UDZO"), text("-srcfolder"), src.as_os_str(), image.as_os_str()],
+            Some(&image),
+        );
+        let attached = created.and_then(|()| {
+            let attach = [
+                text("attach"),
+                text("-nobrowse"),
+                text("-readonly"),
+                text("-noautoopen"),
+                text("-noverify"),
+                text("-mountpoint"),
+                mount.as_os_str(),
+                image.as_os_str(),
+            ];
+            hdiutil(&attach, None)
+        });
+        if let Err(said) = attached {
+            eprintln!("skipped: the disk-image helper stayed busy: {said}");
+            return;
+        }
+        let _detach = Detach(mount.clone());
+        let exe = mount.join("Launcher.app/Contents/MacOS/artcraft-launcher");
+        assert!(exe.is_file(), "the image holds the bundle");
+        assert_eq!(current_at(&crate::suite::LAUNCHER, &exe, false), None);
+    }
+
+    /// The update replaces the bundle a symlink leads to, so that bundle's folder decides.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_symlinked_copy_is_judged_by_where_it_really_is() {
+        if running_as_root() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().join("real");
+        launcher_bundle(&real);
+        let links = dir.path().join("links");
+        std::fs::create_dir(&links).unwrap();
+        std::os::unix::fs::symlink(real.join("Launcher.app"), links.join("Launcher.app")).unwrap();
+        let exe = links.join("Launcher.app/Contents/MacOS/artcraft-launcher");
+        {
+            let _guard = ModeGuard::set(&links, 0o555);
+            let found = current_at(&crate::suite::LAUNCHER, &exe, false);
+            assert_eq!(found, Some(Install::MacApp(real.canonicalize().unwrap().join("Launcher.app"))));
+        }
+        let _guard = ModeGuard::set(&real, 0o555);
+        assert_eq!(current_at(&crate::suite::LAUNCHER, &exe, false), None);
+    }
+
+    /// A check that can't answer does not take the update away.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_check_that_cannot_answer_keeps_the_update() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(can_replace_bundle(&dir.path().join("missing/Launcher.app")));
+        assert!(can_replace_bundle(Path::new("Launcher.app")));
+    }
+
+    /// A copy under an App Translocation folder gets the download link even where the folder
+    /// allows the update.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_translocated_copy_gets_the_download_link() {
+        let output = std::process::Command::new("/usr/bin/getconf").arg("DARWIN_USER_TEMP_DIR").output().unwrap();
+        let system_temp = PathBuf::from(String::from_utf8_lossy(&output.stdout).trim()).canonicalize().unwrap();
+        let dir = tempfile::tempdir_in(system_temp).unwrap();
+        let exe = launcher_bundle(&dir.path().join("AppTranslocation/0A1B/d"));
+        assert_eq!(current_at(&crate::suite::LAUNCHER, &exe, false), None);
+    }
+
+    /// A locked bundle answers with a different refusal from a bundle without permission, and
+    /// can't be moved either.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_locked_bundle_gets_the_download_link() {
+        struct Unlock(PathBuf);
+        impl Drop for Unlock {
+            fn drop(&mut self) {
+                let _ = std::process::Command::new("/usr/bin/chflags").arg("nouchg").arg(&self.0).status();
+            }
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let exe = launcher_bundle(dir.path());
+        let bundle = dir.path().join("Launcher.app");
+        assert!(std::process::Command::new("/usr/bin/chflags").arg("uchg").arg(&bundle).status().unwrap().success());
+        let _unlock = Unlock(bundle);
+        assert_eq!(current_at(&crate::suite::LAUNCHER, &exe, false), None);
+    }
+
+    /// Only the App Translocation folder under the system's per-user folders counts.
+    #[test]
+    fn only_the_system_translocation_folder_counts() {
+        assert!(is_translocated(Path::new("/private/var/folders/ab/cd/T/AppTranslocation/0A1B/d/Launcher.app")));
+        for other in ["/Applications/Launcher.app", "/Users/ada/AppTranslocation/Launcher.app", "/private/var/folders/ab/cd/T/Launcher.app"] {
+            assert!(!is_translocated(Path::new(other)), "{other}");
+        }
+    }
+
+    /// Adds a deny entry to `path`'s access control list; the list is cleared when dropped, so
+    /// the temporary folder can be removed however the test ends.
+    #[cfg(target_os = "macos")]
+    struct DenyGuard(PathBuf);
+
+    #[cfg(target_os = "macos")]
+    impl DenyGuard {
+        fn add(path: &Path, right: &str) -> Self {
+            let status = std::process::Command::new("/bin/chmod").arg("+a").arg(format!("everyone deny {right}")).arg(path).status().unwrap();
+            assert!(status.success(), "chmod +a {right}");
+            Self(path.to_path_buf())
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    impl Drop for DenyGuard {
+        fn drop(&mut self) {
+            let _ = std::process::Command::new("/bin/chmod").arg("-N").arg(&self.0).status();
+        }
+    }
+
+    /// The update adds a subdirectory to the folder and moves the bundle, so a list that denies
+    /// only adding files keeps it, and one that denies either step does not.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn access_control_lists_are_judged_by_the_rights_the_update_uses() {
+        if running_as_root() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let folder = dir.path().join("Applications");
+        let exe = launcher_bundle(&folder);
+        let bundle = folder.join("Launcher.app");
+        let found = || current_at(&crate::suite::LAUNCHER, &exe, false);
+        for (path, right, keeps_the_update) in [
+            (&folder, "add_file", true),
+            (&bundle, "add_file", true),
+            (&folder, "add_subdirectory", false),
+            (&bundle, "add_subdirectory", false),
+            (&bundle, "delete", false),
+            (&folder, "delete_child", false),
+        ] {
+            let _guard = DenyGuard::add(path, right);
+            assert_eq!(found().is_some(), keeps_the_update, "{right} denied on {}", path.display());
+        }
+        assert!(found().is_some(), "the answer follows the list");
+    }
+
+    /// A folder with the sticky bit: its owner may still move the bundle.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_sticky_folder_keeps_the_update_for_the_bundles_owner() {
+        let dir = tempfile::tempdir().unwrap();
+        let exe = launcher_bundle(dir.path());
+        let _guard = ModeGuard::set(dir.path(), 0o1777);
+        assert!(current_at(&crate::suite::LAUNCHER, &exe, false).is_some());
+    }
+
+    /// The update writes beside an AppImage or a standalone program, so a folder the user can't
+    /// write can't take either.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_linux_copy_in_a_folder_it_cannot_write_cannot_be_replaced() {
+        if running_as_root() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("launcher.AppImage");
+        std::fs::write(&file, b"binary").unwrap();
+        let kinds = [Install::AppImage(file.clone()), Install::Standalone(file.clone())];
+        assert!(kinds.iter().all(can_replace), "a folder it can write keeps the update");
+        let guard = ModeGuard::set(dir.path(), 0o555);
+        assert!(!kinds.iter().any(can_replace));
+        drop(guard);
+        assert!(kinds.iter().all(can_replace), "the answer follows the folder's permissions");
+    }
+
+    /// A standalone copy in a folder the user can't write gets the download link; [`DEV_VAR`]
+    /// still offers the update, to try it.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_standalone_linux_copy_it_cannot_replace_gets_the_download_link() {
+        if running_as_root() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let exe = dir.path().join("artcraft-launcher");
+        std::fs::write(&exe, b"binary").unwrap();
+        let _guard = ModeGuard::set(dir.path(), 0o555);
+        assert_eq!(current_at(&crate::suite::LAUNCHER, &exe, false), None);
+        assert!(current_at(&crate::suite::LAUNCHER, &exe, true).is_some(), "the opt-in still offers it");
+    }
+
+    /// A check that can't answer does not take the update away.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_linux_check_that_cannot_answer_keeps_the_update() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(can_replace(&Install::AppImage(dir.path().join("missing/launcher.AppImage"))));
+        assert!(can_replace(&Install::AppImage(PathBuf::from("launcher.AppImage"))));
     }
 
     #[cfg(unix)]
