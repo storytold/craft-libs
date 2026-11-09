@@ -394,8 +394,19 @@ fn lpstat_e_command() -> std::process::Command {
 pub fn printers() -> Vec<Printer> {
     #[cfg(all(unix, not(target_arch = "wasm32")))]
     {
-        let Some(queues) = lpstat_command().output().ok().map(|o| String::from_utf8_lossy(&o.stdout).into_owned()) else {
-            return Vec::new();
+        let queues = match lpstat_command().output() {
+            Ok(o) => {
+                // Exits 1 with only driverless printers ("No destinations added"); `-e` still finds them.
+                if !o.status.success() {
+                    log::info!("lpstat -p -d exited with {}: {}", o.status, String::from_utf8_lossy(&o.stderr).trim());
+                }
+                String::from_utf8_lossy(&o.stdout).into_owned()
+            }
+            Err(e) => {
+                // A Flatpak needs lpstat/lp bundled plus the CUPS socket and Avahi (see README).
+                log::warn!("no printers: lpstat could not run ({e}); install the CUPS client tools");
+                return Vec::new();
+            }
         };
         // A spooler without `-e`, or one whose discovery times out, only loses the driverless names.
         let available = lpstat_e_command().output().ok().map(|o| String::from_utf8_lossy(&o.stdout).into_owned());
@@ -408,6 +419,22 @@ pub fn printers() -> Vec<Printer> {
     #[cfg(not(any(windows, all(unix, not(target_arch = "wasm32")))))]
     {
         Vec::new()
+    }
+}
+
+/// The printers the system knows, without asking their drivers anything: [`printers`] with
+/// `two_sided` unknown. On Windows [`printers`] reads each driver's PrintCapabilities, which can
+/// wait on the device (a networked printer in power save), so a Print dialog that only needs
+/// names lists them from this without that wait. Submission still checks the job's options with
+/// the driver. Elsewhere it is [`printers`], whose `two_sided` is already unknown.
+pub fn printer_queues() -> Vec<Printer> {
+    #[cfg(windows)]
+    {
+        windows::printer_queues()
+    }
+    #[cfg(not(windows))]
+    {
+        printers()
     }
 }
 
@@ -475,6 +502,47 @@ pub fn parse_windows_printers(out: &str) -> Vec<Printer> {
     printers
 }
 
+/// Stops a print job before anything reaches the spooler, from any thread. One token per job:
+/// pass it to [`submit_cancellable`] and keep a clone to cancel with.
+///
+/// On Windows a job first asks the printer's driver for its capabilities, and a networked
+/// printer in power save can hold that query for a long time; a driver call can't be
+/// interrupted, but a job cancelled meanwhile is never sent when the call returns.
+#[derive(Clone, Debug, Default)]
+pub struct Cancel(std::sync::Arc<std::sync::atomic::AtomicU8>);
+
+const PENDING: u8 = 0;
+const CANCELLED: u8 = 1;
+const SENDING: u8 = 2;
+const CANCELLED_MESSAGE: &str = "the print job was cancelled before anything was sent to the printer";
+
+impl Cancel {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Cancels the job unless it has started reaching the spooler. `true`: it will never be sent
+    /// (its submission returns an error instead). `false`: it was already being sent, which
+    /// completes as usual; a job already in the spooler is cancelled from the system's queue.
+    pub fn cancel(&self) -> bool {
+        use std::sync::atomic::Ordering::{AcqRel, Acquire};
+        match self.0.compare_exchange(PENDING, CANCELLED, AcqRel, Acquire) {
+            Ok(_) => true,
+            Err(state) => state == CANCELLED,
+        }
+    }
+
+    /// The last point before anything reaches the spooler: the job is being sent from here on,
+    /// unless it was cancelled.
+    pub(crate) fn start_sending(&self) -> Result<(), Error> {
+        use std::sync::atomic::Ordering::{AcqRel, Acquire};
+        match self.0.compare_exchange(PENDING, SENDING, AcqRel, Acquire) {
+            Ok(_) | Err(SENDING) => Ok(()),
+            Err(_) => Err(Error::Spool(CANCELLED_MESSAGE.into())),
+        }
+    }
+}
+
 /// Send a print-ready PDF to the spooler. Returns the spooler's message: CUPS includes a job id;
 /// Windows confirms submission only ("spooled 3 sheet(s)").
 pub fn submit(pdf: &[u8], job: &Job) -> Result<String, Error> {
@@ -490,20 +558,29 @@ pub fn submit(pdf: &[u8], job: &Job) -> Result<String, Error> {
 /// The callback runs synchronously on the thread calling this function, need not be `Send`,
 /// and should return promptly. It is never retained. All sheets processed is not terminal
 /// success: only the returned result confirms submission, and a later failure may follow the
-/// last progress event. This does not report physical printing or provide cancellation.
+/// last progress event. This does not report physical printing; [`submit_cancellable`] can stop
+/// the job before it is sent.
 pub fn submit_with_progress(pdf: &[u8], job: &Job, progress: &mut dyn FnMut(usize, usize)) -> Result<String, Error> {
+    submit_cancellable(pdf, job, progress, &Cancel::new())
+}
+
+/// [`submit_with_progress`] that [`Cancel::cancel`] can stop until the job starts reaching the
+/// spooler: on Windows once the driver has been asked about the job and the job holds the
+/// PrintTicket provider, on macOS and Linux before `lp` starts. A cancelled job returns an error
+/// and nothing is sent.
+pub fn submit_cancellable(pdf: &[u8], job: &Job, progress: &mut dyn FnMut(usize, usize), cancel: &Cancel) -> Result<String, Error> {
     #[cfg(all(unix, not(target_arch = "wasm32")))]
     {
         let _ = progress;
-        submit_via(std::process::Command::new("lp"), pdf, job)
+        submit_via(std::process::Command::new("lp"), pdf, job, cancel)
     }
     #[cfg(windows)]
     {
-        windows::submit_with_progress(pdf, job, progress)
+        windows::submit_with_progress(pdf, job, progress, cancel)
     }
     #[cfg(not(any(windows, all(unix, not(target_arch = "wasm32")))))]
     {
-        let _ = (pdf, job, progress);
+        let _ = (pdf, job, progress, cancel);
         Err(Error::Spool("printing to a printer isn't available on this platform yet; save the print-ready PDF instead".into()))
     }
 }
@@ -514,9 +591,10 @@ pub fn submit_with_progress(pdf: &[u8], job: &Job, progress: &mut dyn FnMut(usiz
 /// temp directory lets another local user read printed documents or swap the file before `lp`
 /// reads it.
 #[cfg(any(test, all(unix, not(target_arch = "wasm32"))))]
-pub(crate) fn submit_via(mut lp: std::process::Command, pdf: &[u8], job: &Job) -> Result<String, Error> {
+pub(crate) fn submit_via(mut lp: std::process::Command, pdf: &[u8], job: &Job, cancel: &Cancel) -> Result<String, Error> {
     use std::io::Write;
     use std::process::Stdio;
+    cancel.start_sending()?;
     let mut child = lp
         .args(lp_args(job))
         .stdin(Stdio::piped())
