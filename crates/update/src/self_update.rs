@@ -144,7 +144,9 @@ const CARGO_CACHE_MARKER: &str = "CACHEDIR.TAG";
 /// app in doesn't carry it, so this doesn't depend on the directory being called `target`. But
 /// the cache can be disabled (`CARGO_CACHE_RUSTC_INFO=0`) or a tree copied without the hidden
 /// file, so a profile output directory is also accepted when it has Cargo's `.fingerprint`,
-/// `deps` and `build` subdirectories and its target root carries `CACHEDIR.TAG`.
+/// `deps` and `build` subdirectories and its target root carries `CACHEDIR.TAG`. With
+/// `build.build-dir` set, `.rustc_info.json` and those subdirectories live elsewhere and the
+/// profile directory has only Cargo's `.cargo-lock` file, which is accepted too.
 /// `CACHEDIR.TAG` alone isn't Cargo-specific (the same signature marks any cache directory), so
 /// it only corroborates that profile layout.
 fn is_development_build(exe: &Path, opted_in: bool) -> bool {
@@ -158,7 +160,7 @@ fn is_cargo_build_dir(dir: &Path) -> bool {
         return true;
     }
     let Some(profile_parent) = dir.parent() else { return false };
-    let is_profile = [".fingerprint", "deps", "build"].into_iter().all(|name| dir.join(name).is_dir());
+    let is_profile = dir.join(".cargo-lock").is_file() || [".fingerprint", "deps", "build"].into_iter().all(|name| dir.join(name).is_dir());
     if !is_profile {
         return false;
     }
@@ -2290,6 +2292,35 @@ mod tests {
         std::fs::remove_file(root.join(CARGO_CACHE_MARKER)).unwrap();
         std::fs::create_dir(root.join(CARGO_CACHE_MARKER)).unwrap();
         assert!(!is_development_build(&exe, false), "a directory named CACHEDIR.TAG");
+    }
+
+    /// With `build.build-dir` set, the profile directory holds the program and `.cargo-lock`; the
+    /// lock file and the target root's `CACHEDIR.TAG` identify a development build, and neither
+    /// does alone.
+    #[test]
+    fn a_cargo_build_with_a_separate_build_dir_is_detected() {
+        let tree = |profile: &str, lock: bool, tag: bool| {
+            let dir = tempfile::tempdir().unwrap();
+            let profile = dir.path().join("target").join(profile);
+            std::fs::create_dir_all(&profile).unwrap();
+            let exe = profile.join("artcraft-launcher");
+            std::fs::write(&exe, "ELF").unwrap();
+            if lock {
+                std::fs::write(profile.join(".cargo-lock"), "").unwrap();
+            }
+            if tag {
+                std::fs::write(dir.path().join("target").join(CARGO_CACHE_MARKER), "Signature: 8a477f597d28d172789f06886806bc55\n").unwrap();
+            }
+            (dir, exe)
+        };
+        for profile in ["debug", "release", "x86_64-pc-windows-gnu/release"] {
+            let (_dir, exe) = tree(profile, true, true);
+            assert!(is_development_build(&exe, false), "{profile}");
+        }
+        let (_dir, exe) = tree("release", true, false);
+        assert!(!is_development_build(&exe, false), "a lock file alone");
+        let (_dir, exe) = tree("release", false, true);
+        assert!(!is_development_build(&exe, false), "a cache marker alone");
     }
 
     /// `CRAFT_UPDATE_DEV` still lets a development build try the self-update.
