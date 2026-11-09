@@ -79,7 +79,9 @@ fn a_planar_map_past_its_limit_is_an_error_to_the_try_forms() {
 /// Two smooth cubics merged into one are held to the tolerance between their samples too: a pair 1000
 /// across, at a tolerance of 0.5, came out 1.0010 of it from the one cubic that replaced them (16
 /// samples each); and a pair 40 across, at a tolerance of 0.25, 1.0013 of it, sampled as finely as a
-/// merge now is but held to the samples only.
+/// merge now is but held to the samples only. Neither is merged, so the test could not tell a merge that is
+/// held from one that is never made: the two halves of a quarter circle, which one cubic follows, are merged
+/// and within the tolerance of the pair.
 #[test]
 fn a_merge_of_two_cubics_is_within_the_tolerance_between_its_samples() {
     let pairs = [
@@ -100,6 +102,13 @@ fn a_merge_of_two_cubics_is_within_the_tolerance_between_its_samples() {
         let dev = deviation(&pair, &simpler).max(deviation(&simpler, &pair));
         assert!(dev <= tol, "{dev} from the pair at a tolerance of {tol}: {simpler:?}");
     }
+    // A pair that is merged: the two halves of a quarter circle of radius 100, which one cubic follows to
+    // within 0.03, are one cubic at a tolerance of 0.5, within it of the pair both ways.
+    let halves = cut_arc(&(100.0, (0.0, 0.0), 0.0, std::f64::consts::FRAC_PI_2), 2);
+    let merged = remove_redundant_points(&halves, 0.5);
+    assert_eq!((halves.segments().count(), merged.segments().count()), (2, 1), "{merged:?}");
+    let dev = deviation(&halves, &merged).max(deviation(&merged, &halves));
+    assert!(dev <= 0.5, "{dev} from the pair it replaces at a tolerance of 0.5");
 }
 
 // ---- remove_redundant_points on finely cut curves
@@ -253,6 +262,7 @@ fn a_stroke_of_a_finely_cut_spine_has_the_corner_of_a_coarsely_cut_one() {
         let (fine, coarse) = (two_arcs_path(&arcs, 4_000), two_arcs_path(&arcs, 8));
         for join in [Join::Miter, Join::Round] {
             let (a, b) = (outline_stroke(&fine, 2.0, Cap::Butt, join, 10.0), outline_stroke(&coarse, 2.0, Cap::Butt, join, 10.0));
+            assert!(a.segments().next().is_some() && b.segments().next().is_some(), "{turn} degrees, {join:?}: an outline is empty");
             let dev = outline_deviation(&a, &b).max(outline_deviation(&b, &a));
             assert!(dev <= 0.003, "{turn} degrees, {join:?}: the strokes are {dev} apart");
         }

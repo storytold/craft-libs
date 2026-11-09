@@ -158,6 +158,12 @@ pub(crate) fn sweep_tolerance(extent: f64) -> f64 {
 /// asks for.)
 const MAX_SWEEP_EPS: f64 = 1.0;
 
+/// The largest coordinate [`eps_for`] accepts, to a hair under for the rounding of the product: where the
+/// sweep's tolerance reaches [`MAX_SWEEP_EPS`].
+pub(crate) fn largest_extent() -> f64 {
+    MAX_SWEEP_EPS / (f64::EPSILON * 64.0) * (1.0 - 1e-9)
+}
+
 /// The points of the element `el`, control points too, in order (none for a `ClosePath`).
 pub(crate) fn el_points(el: &kurbo::PathEl) -> impl Iterator<Item = Point> {
     use kurbo::PathEl::*;
@@ -301,6 +307,7 @@ impl Tidy {
                 }
                 keep.push((kurbo::Rect::from_points(seg.c.p0, seg.c.p0), seg.c.p0));
                 if !seg.line && [seg.c.p1, seg.c.p2, seg.c.p3].iter().all(|p| p.is_finite()) {
+                    work::add(Work::TidyCurves, 1);
                     let r = seg.c.bounding_box().inflate(1e-6, 1e-6);
                     curves.push((r, seg.c));
                 }
@@ -1214,7 +1221,13 @@ pub(crate) fn held_union(all: &BezPath, tidy: &Tidy) -> Result<BezPath, PathOpsE
     if c.contours().map(|ct| ct.path.elements().len()).sum::<usize>() > limit {
         return Err(PathOpsError::TooComplex);
     }
-    Ok(all_contours_to_path(&c, tidy))
+    let path = all_contours_to_path(&c, tidy);
+    // What is written is held to the limit as well as what was swept: the elements of the contours counted
+    // above are not those the tidying makes of them, and a union is no larger than it is allowed to be.
+    if path.elements().len() > limit {
+        return Err(PathOpsError::TooComplex);
+    }
+    Ok(path)
 }
 
 /// Union of many filled paths. Each input is first normalised on its own, then all are swept
@@ -1230,6 +1243,9 @@ pub fn unite_all_with(paths: &[(&BezPath, FillRule)], precision: f64) -> BezPath
     }
     let precision = sane_precision(precision);
     let mut all = BezPath::new();
+    // The paths the union is made of, as they were filled: the tidy's index of input curves is made of these
+    // and no others, or a boundary piece near a curve of a path that was left out would be rebuilt as it.
+    let mut made: Vec<BezPath> = Vec::new();
     for (p, r) in paths {
         // A path refused as given is left out whole ([`eps_for`]): the fill would drop a loop of one
         // cubic whose handle is no number and keep the rest of it.
@@ -1251,11 +1267,12 @@ pub fn unite_all_with(paths: &[(&BezPath, FillRule)], precision: f64) -> BezPath
         if append_contours(&mut all, &c, crate::budget::limits().elements).is_err() {
             return BezPath::new();
         }
+        made.push(bp);
     }
     if all.elements().is_empty() {
         return BezPath::new();
     }
-    let tidy = Tidy::keeping(precision, paths.iter().map(|(p, _)| fill_bezpath(p)).collect::<Vec<_>>().iter());
+    let tidy = Tidy::keeping(precision, made.iter());
     // Past the limit, or an error of the sweep: no union.
     held_union(&all, &tidy).unwrap_or_default()
 }
@@ -1582,6 +1599,89 @@ mod tests {
         };
         let (small, large) = (curve_reads(512), curve_reads(1_024));
         assert!(small > 0 && large * 10 <= small * 25, "{small} for 512 pieces, {large} for 1,024: twice as many should take about twice as much");
+    }
+
+    /// A circle of radius `r` about `(1000, 0)` in two cubics, one for each half.
+    fn two_cubic_circle(r: f64) -> BezPath {
+        let k = 4.0 / 3.0 * r;
+        let mut path = BezPath::new();
+        path.move_to((1000.0 - r, 0.0));
+        path.curve_to((1000.0 - r, k), (1000.0 + r, k), (1000.0 + r, 0.0));
+        path.curve_to((1000.0 + r, -k), (1000.0 - r, -k), (1000.0 - r, 0.0));
+        path.close_path();
+        path
+    }
+
+    /// The tidy's index of input curves, which a boundary piece within a thousandth of one is rebuilt as, is
+    /// made of the paths the union is made of: a path left out whole (a circle, with a loop of one cubic
+    /// whose handle is no number) is in none of it, though its curves, a thousandth off the ones that are not
+    /// left out, would be found first. The two cubics of the circle that stays are the two in the index.
+    #[test]
+    fn a_union_is_tidied_by_the_paths_it_is_made_of_not_by_those_left_out() {
+        let (kept, mut left_out) = (two_cubic_circle(100.0), two_cubic_circle(100.0008));
+        left_out.move_to((5000.0, 0.0));
+        left_out.curve_to((f64::NAN, 0.0), (5000.0, 10.0), (5000.0, 0.0));
+        left_out.close_path();
+        let curves = |paths: &[(&BezPath, FillRule)]| {
+            work::reset();
+            let union = unite_all_with(paths, 1e-5);
+            (union, work::take(Work::TidyCurves))
+        };
+        let (alone, alone_curves) = curves(&[(&kept, FillRule::NonZero)]);
+        assert_eq!(alone_curves, 2);
+        let (with, with_curves) = curves(&[(&left_out, FillRule::NonZero), (&kept, FillRule::NonZero)]);
+        assert_eq!((with, with_curves), (alone, 2), "the circle that is left out is in the index of none");
+        // A path that is kept is in it, and so is each of those that are.
+        let (_, both) = curves(&[(&two_cubic_circle(100.0008), FillRule::NonZero), (&kept, FillRule::NonZero)]);
+        assert_eq!(both, 4);
+    }
+
+    /// A union that is given is within the element limit, whatever it is the limit of: the contours of the sweep
+    /// are counted before they are tidied and written, and the path written is counted too. Unions of 100
+    /// paths of 3 to 11 points, lines and curves, open and closed, alone and doubled, are each asked for at
+    /// the limits round the number of elements they come to.
+    #[test]
+    fn a_union_that_is_given_is_within_the_element_limit() {
+        let mut state = 0x9e37_79b9_7f4a_7c15_u64;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            (state % 1000) as f64 / 10.0
+        };
+        let mut limits_tried = 0;
+        for case in 0..100 {
+            let mut path = BezPath::new();
+            path.move_to((next(), next()));
+            for _ in 1..3 + case % 9 {
+                if case % 2 == 0 {
+                    path.curve_to((next(), next()), (next(), next()), (next(), next()));
+                } else {
+                    path.line_to((next(), next()));
+                }
+            }
+            if case % 3 != 0 {
+                path.close_path();
+            }
+            let mut doubled = path.clone();
+            if case % 4 == 0 {
+                doubled.apply_affine(kurbo::Affine::translate((next() / 3.0, next() / 3.0)));
+                doubled.extend(path.iter());
+            }
+            let paths = [(&doubled, FillRule::NonZero)];
+            let Ok(free) = try_unite_all(&paths) else { continue };
+            let size = free.elements().len();
+            for limit in size.saturating_sub(4)..size + 4 {
+                let l = crate::Limits { elements: limit, ..crate::Limits::default() };
+                limits_tried += 1;
+                if let Ok(out) = crate::with_limits(l, || try_unite_all(&paths)) {
+                    assert!(out.elements().len() <= limit, "case {case}: {} elements at a limit of {limit}", out.elements().len());
+                }
+                let loose = crate::with_limits(l, || unite_all(&paths));
+                assert!(loose.elements().len() <= limit, "case {case}: {} elements at a limit of {limit}", loose.elements().len());
+            }
+        }
+        assert!(limits_tried > 400, "{limits_tried}");
     }
 
     /// The flags a predicate is given are counted before the pass that sets them, and a pass past

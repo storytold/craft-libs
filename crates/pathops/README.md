@@ -220,7 +220,12 @@ work of each operation is bounded before it starts, in counts the tests assert o
   nothing, and `shape_builder` and Divide with an open path fall back to the filled areas, as past
   `SHAPE_BUILDER_MAX_SEGMENTS`: not `TooComplex` or no shapes, but an answer that is not the arrangement
   asked for, the faces unsplit by the open paths (rectangles nested 3,300 deep pass, in 1.3 s; 3,400 do not).
-  `try_shape_builder` and `try_pathfinder` give `TooComplex` there instead, so a caller can tell;
+  `try_shape_builder` and `try_pathfinder` give `TooComplex` there instead, so a caller can tell, and also
+  where the faces of closed shapes are past `mask_work` or `pass_work` (Divide gives no shapes and
+  `shape_builder` no regions of the filled areas there, as `regions` gives none), which they do not hide as
+  an empty drawing or a map with the filled areas missing; they check the shapes as given as well, before
+  the fill leaves out a loop of one cubic whose handle is no number (`NonFinite`, or `Degenerate` for one
+  past what the sweep takes);
 - a stroke's outline is counted as it is made (a subpath of more than 256 segments is stroked in windows of
   256, so that a width that is huge against the tolerance cannot make millions of curves first) and the
   operation is `TooComplex` past `MAX_ELEMENTS` elements of outline. The union of the outlines in
@@ -236,7 +241,7 @@ work of each operation is bounded before it starts, in counts the tests assert o
   segments at a tight tolerance), so a path of hundreds of thousands of short pieces that each need one is
   left partly merged: 450,000 cubics in arcs of 9 between corners of 30 degrees come out at 1.5 to 2.8 times
   the elements e2351f5 gave (242,013 against 150,001 for arcs of radius 1,000 turning 0.5, at a tolerance of
-  0.01, in 1.3 s), and at 100,001 (fewer than e2351f5) with `redundant_work` raised to 2^34, in 5 s. What is
+  0.01, in 1.3 s), and at 100,001 (fewer than e2351f5) with `redundant_work` raised to 2^34 (on a 64-bit target), in 5 s. What is
   merged on the way is within the tolerance all the same;
 - lengths are measured to a relative accuracy (kurbo's takes an accuracy in the units of the path, which a cubic of
   large coordinates meets only by subdividing the most it ever does), at any size the sweep accepts, and an
@@ -448,8 +453,10 @@ bit for bit VectorCraft's), and the results are identical except where noted:
     intervals of it, at its joints, or where it has fewer segments than that inside them, each cut in equal
     steps (up to 2,047 points). The cubic is held to the tolerance by its error at them, its distance from its
     chords, and the run's from the chords between the points (a stretch of the run no longer than its control
-    polygons lies in a lens about its chord, whose width is small where the run is smooth). That is a bound of
-    the run alone, whatever the number of segments or of merges that made it (the bounds of a run's merges,
+    polygons lies in a lens about its chord, whose width is small where the run is smooth; the lengths are taken
+    as long as rounding may have made them, 8 units in the last place of each, so that a shallow curve with long
+    control edges, whose edges add up to its chord to the last place, is not taken for a line). That is a bound
+    of the run alone, whatever the number of segments or of merges that made it (the bounds of a run's merges,
     added up, are far more than it has used: a finely cut curve would have none of the tolerance left after a
     few dozen). A piece of eight segments or more is extended by those after it in strides, doubled while the
     run still fits and then halved, never past a joint the merge of two cubics refuses (the tangents more than 8
@@ -520,7 +527,9 @@ bit for bit VectorCraft's), and the results are identical except where noted:
     1/2, and failing that from -1/2 to -1/1024; no map is built when no shear is free in either (it used the
     first, with one path lost), and `try_shape_builder` and `try_pathfinder` say so (`Degenerate`). Eleven
     lines 9e-6 long, one level in each of the ten shears and one in that of 3/8, bar every shear from 1/1024
-    to 1/2 and had no map, and so no Outline of a line 100 long beside them; they are mapped in a shear below
+    to 1/2 and had no map, and so no Outline of a line 100 long beside them (the shears searched are those in which
+    the art stays within the coordinates the sweep takes: near the largest, the middle of the widest stretch
+    the sides leave free could be past them, with a narrower one in range, and was no frame); they are mapped in a shear below
     0. Mirrored, sloping up as much as down, they bar both. Ten lines 9e-6 long, one level in each of
     the ten, have a map in the shear of 3/8 (the eleventh was looked for where they rise by four tolerances
     or more, which left none), though lines that short are lost from it, being under the 16 tolerances
@@ -607,7 +616,10 @@ bit for bit VectorCraft's), and the results are identical except where noted:
     (VectorCraft left out every subpath of fewer than two anchors unread: its `area` and `try_area` of a
     square with such a loop are 100); and `unite_all` leaves such a path out whole, as it leaves out any it
     cannot sweep, where it kept the square (VectorCraft's union of it and a square 4 across apart is 116,
-    the carve's 16);
+    the carve's 16). The tidy of such a union, whose index of input curves a boundary piece is rebuilt from
+    when it lies on one, is made of the paths the union is made of and not of those left out, where
+    VectorCraft's holds the curves of the ones it left out too, so a boundary piece near one could be rebuilt
+    from a curve of a path that is not in the union;
   - `simplify_with` with `straight_lines` samples the intervals the chords need up to a limit, where a long
     curve was sampled in 256 and its chords were further from it than the tolerance, counts the sample at
     the start of a run in its limits, and holds the samples to the tolerance less how far the curve can be
@@ -631,7 +643,7 @@ bit for bit VectorCraft's), and the results are identical except where noted:
     several (the boundary of its sweep counted before its contours are made), where one outline that crossed
     itself a great deal made all its contours, and hold the union of several outlines, and `unite_all` and
     `try_unite_all` the union of their paths, to it too (counted the same way, and the contours counted again
-    before they are written): outlines within the limit each that crossed each other a great deal were all
+    before they are written, and the path written counted as well): outlines within the limit each that crossed each other a great deal were all
     made into contours;
 - the predicate of `boolean_n` and `try_boolean_n` is asked once for each distinct winding of the sweep, and the
   contour pass is given the answers by where the windings are stored, where VectorCraft asked it every time

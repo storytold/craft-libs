@@ -436,21 +436,20 @@ fn remove_redundant_within(path: &BezPath, tolerance: f64, work: &mut usize) -> 
         while next < total {
             // A long piece is extended by the originals after it, as many at a time as fit.
             if let Some(&top) = done.last() {
-                // Not past a joint the pair merge refuses, which a refit would round off (within the tolerance).
-                let ahead = (total - next).min((total - merged).saturating_sub(min_segs)).min(originals.corner_from(next + 1).saturating_sub(next));
+                let ahead = (total - next).min((total - merged).saturating_sub(min_segs));
                 let smooth = pieces.get(next).is_some_and(|n| smooth_joint(&top.seg.c, &n.seg.c));
-                if top.count >= GALLOP_FROM
-                    && !top.seg.line
-                    && smooth
-                    && ahead > 0
-                    && let Some((longer, took)) = extend_run(&top, ahead, tol, &originals, work)
-                {
-                    if let Some(slot) = done.last_mut() {
-                        *slot = longer;
+                if top.count >= GALLOP_FROM && !top.seg.line && smooth && ahead > 0 {
+                    // Not past a joint the pair merge refuses, which a refit would round off (within the
+                    // tolerance). The table of the corners is made here, when a stride is first tried.
+                    let ahead = ahead.min(originals.corner_from(next + 1).saturating_sub(next));
+                    if let Some((longer, took)) = extend_run(&top, ahead, tol, &originals, work) {
+                        if let Some(slot) = done.last_mut() {
+                            *slot = longer;
+                        }
+                        next += took;
+                        merged += took;
+                        continue;
                     }
-                    next += took;
-                    merged += took;
-                    continue;
                 }
             }
             let Some(&p) = pieces.get(next) else { break };
@@ -541,6 +540,7 @@ impl<'a> Originals<'a> {
     fn corner_from(&self, from: usize) -> usize {
         let n = self.segs.len();
         let corners = self.corners.get_or_init(|| {
+            work::add(Work::CornerTables, 1);
             let mut firsts = vec![n; n + 1];
             let mut first = n;
             for j in (1..n).rev() {
@@ -608,11 +608,18 @@ const GALLOP_FROM: usize = 8;
 
 /// Half the width of the lens a path no longer than `along` lies in, from one end of a chord of length
 /// `chord` to the other (an ellipse with the ends as its foci): no point of the path is further than this
-/// from the chord. Infinite where a length is not a number, or where the width is too big to be one.
-fn lens_width(along: f64, chord: f64) -> f64 {
+/// from the chord. `along` is the sum of `terms` lengths and `chord` one, each a rounded length, and the
+/// path may be longer, and the chord shorter, by what rounding took: 8 units in the last place of each
+/// length, so that where the two come out equal (a shallow curve with long control edges, whose edges are
+/// longer than its chord by less than a unit in the last place of each, can come out as long as it) the
+/// width is the least that rounding allows and not 0. Infinite where a length is not a number, or where
+/// the width is too big to be one.
+fn lens_width(along: f64, chord: f64, terms: usize) -> f64 {
     if !along.is_finite() || !chord.is_finite() {
         return f64::INFINITY;
     }
+    let rounding = terms.saturating_add(2) as f64 * 8.0 * f64::EPSILON;
+    let (along, chord) = (along * (1.0 + rounding), chord * (1.0 - rounding));
     // The difference of the squares as a product, which does not overflow where the squares do (past 1e154).
     let width = 0.5 * ((along - chord).max(0.0) * (along + chord)).sqrt();
     if width.is_nan() { f64::INFINITY } else { width }
@@ -651,7 +658,7 @@ fn witness_points(originals: &Originals, first: usize, count: usize, steps: usiz
             let to = k.saturating_mul(count) / steps;
             let p = if to < count { originals.seg(first.checked_add(to)?)?.c.p0 } else { originals.seg(first.checked_add(count - 1)?)?.c.p3 };
             let along = originals.polygon_length(first.checked_add(from)?, to - from)?;
-            gap = gap.max(lens_width(along, pts.last()?.distance(p)));
+            gap = gap.max(lens_width(along, pts.last()?.distance(p), (to - from).saturating_mul(3)));
             pts.push(p);
             from = to;
         }
@@ -662,7 +669,7 @@ fn witness_points(originals: &Originals, first: usize, count: usize, steps: usiz
             for j in 1..=per {
                 let (from, to) = ((j - 1) as f64 / per as f64, j as f64 / per as f64);
                 let p = if j == per { c.p3 } else { c.eval(to) };
-                gap = gap.max(lens_width(polygon_length(&c.subsegment(from..to)), pts.last()?.distance(p)));
+                gap = gap.max(lens_width(polygon_length(&c.subsegment(from..to)), pts.last()?.distance(p), 3));
                 pts.push(p);
             }
         }
@@ -1012,6 +1019,9 @@ mod tests {
         }
         worst
     }
+
+    /// More work than a test spends, as a number a 32-bit `usize` holds (the work is charged to a `usize`).
+    const BIG_WORK: usize = 1 << 30;
 
     /// How far past the tolerance a measured deviation may be: the distances are computed at
     /// coordinates of 500,000, whose rounding is 1.2e-10 (a few of those, and the nearest point found
@@ -1574,16 +1584,35 @@ mod tests {
         }
         // Room for all of it gives the same result, and a little less does not: the work is the whole of what
         // was spent.
-        let mut left = 1usize << 40;
+        let mut left = BIG_WORK;
         assert_eq!(remove_redundant_within(&circle, 0.01, &mut left), free);
-        let spent = (1usize << 40) - left;
+        let spent = BIG_WORK - left;
         assert!(spent >= free_points * WITNESS_COST + free_joints, "{spent} spent for {free_points} points and {free_joints} joints");
         assert_eq!(remove_redundant_within(&circle, 0.01, &mut spent.clone()), free);
         assert_ne!(remove_redundant_within(&circle, 0.01, &mut (spent / 2)), free);
     }
 
+    /// The segments of `path` as the arrays of their points.
+    fn points_of(path: &BezPath) -> Vec<Vec<Point>> {
+        path.segments()
+            .map(|s| match s {
+                PathSeg::Line(l) => vec![l.p0, l.p1],
+                PathSeg::Quad(q) => vec![q.p0, q.p1, q.p2],
+                PathSeg::Cubic(c) => vec![c.p0, c.p1, c.p2, c.p3],
+            })
+            .collect()
+    }
+
+    /// The same point, a point that is not a number being the same as another (which `==` is not).
+    fn same_point(a: Point, b: Point) -> bool {
+        let same = |a: f64, b: f64| a == b || (a.is_nan() && b.is_nan());
+        same(a.x, b.x) && same(a.y, b.y)
+    }
+
     /// A length that is not a number, or too big to add up, leaves the run as it is: nothing is merged on
-    /// a bound that is not known, and nothing panics.
+    /// a bound that is not known, and nothing panics. The cubic it is the length of comes out as it
+    /// went in, point for point (a point that is not a number being the same as another), where the
+    /// ones round it, which are straight and level, are the ones merged.
     #[test]
     fn a_run_with_a_length_that_is_not_a_number_is_not_refitted() {
         for bad in [f64::NAN, f64::INFINITY, 1e300] {
@@ -1594,31 +1623,94 @@ mod tests {
                 let h = if i == 20 { bad } else { x + 3.0 };
                 chain.curve_to((h, 0.0), (x + 7.0, 0.0), (x + 10.0, 0.0));
             }
+            let affected = points_of(&chain).into_iter().nth(20).unwrap();
             let simpler = remove_redundant_points(&chain, 0.01);
-            assert!(!simpler.elements().is_empty());
+            let kept = points_of(&simpler);
+            assert!(
+                kept.iter().any(|seg| seg.len() == affected.len() && seg.iter().zip(&affected).all(|(a, b)| same_point(*a, *b))),
+                "{bad}: the cubic is not as it was: {kept:?}"
+            );
         }
     }
 
     /// The width of the lens is half the minor axis of the ellipse a path of the given length can reach
-    /// from one end of a chord to the other, and is still that where the squares of the lengths overflow
-    /// (past 1e154 they are infinite, and their difference was no number, and so no width at all).
+    /// from one end of a chord to the other, with what rounding may have taken of the lengths added (to a
+    /// path, and taken off the chord), and is still that where the squares of the lengths overflow (past
+    /// 1e154 they are infinite, and their difference was no number, and so no width at all).
     #[test]
     fn the_lens_width_is_the_width_where_the_squares_overflow_too() {
-        assert_eq!(lens_width(1.0, 1.0), 0.0, "a path as long as its chord is on it");
-        assert!((lens_width(5.0, 3.0) - 2.0).abs() < 1e-12, "{}", lens_width(5.0, 3.0));
-        assert_eq!(lens_width(3.0, 5.0), 0.0, "a path shorter than its chord is none: no width");
+        let near = |a: f64, b: f64| (a / b - 1.0).abs() < 1e-6;
+        assert!(near(lens_width(5.0, 3.0, 0), 2.0), "{}", lens_width(5.0, 3.0, 0));
+        assert_eq!(lens_width(3.0, 5.0, 0), 0.0, "a path shorter than its chord is none: no width");
         let (along, chord): (f64, f64) = (2e154, 1.9e154);
         assert!((along * along).is_infinite() && (along * along - chord * chord).is_nan(), "the squares overflow");
-        let width = lens_width(along, chord);
+        let width = lens_width(along, chord, 0);
         let exact = 0.5 * ((along - chord) * (along + chord)).sqrt();
-        assert!(width > 1e152 && (width / exact - 1.0).abs() < 1e-12, "{width} against {exact}");
+        assert!(width > 1e152 && near(width, exact), "{width} against {exact}");
         // A length that is not a number, or too big for a width, is an infinite one.
         for bad in [f64::NAN, f64::INFINITY] {
-            assert_eq!(lens_width(bad, 1.0), f64::INFINITY);
-            assert_eq!(lens_width(1.0, bad), f64::INFINITY);
+            assert_eq!(lens_width(bad, 1.0, 3), f64::INFINITY);
+            assert_eq!(lens_width(1.0, bad, 3), f64::INFINITY);
         }
-        assert_eq!(lens_width(f64::MAX, 1.0), f64::INFINITY);
-        assert_eq!(lens_width(f64::MAX, f64::MAX), f64::INFINITY);
+        assert_eq!(lens_width(f64::MAX, 1.0, 3), f64::INFINITY);
+        assert_eq!(lens_width(f64::MAX, f64::MAX, 3), f64::INFINITY);
+    }
+
+    /// Lengths that rounding has made equal are not a width of 0: a shallow cubic with long control edges
+    /// (three of 1e8, rising 0.75) has edges that add up to its chord, to the last place, and is 0.56 off
+    /// it. The width is that of the least the path could be longer by: more as the lengths are more, and
+    /// more as there are more of them added.
+    #[test]
+    fn lengths_that_rounding_made_equal_are_not_a_width_of_nothing() {
+        let (edge, rise): (f64, f64) = (1e8, 0.75);
+        let polygon = polygon_length(&CubicBez::new((0.0, 0.0), (edge, rise), (2.0 * edge, rise), (3.0 * edge, 0.0)));
+        let chord = Point::new(0.0, 0.0).distance(Point::new(3.0 * edge, 0.0));
+        assert_eq!(polygon, chord, "the edges add up to the chord to the last place: the width was 0");
+        let width = lens_width(polygon, chord, 3);
+        assert!(width > 5.0, "{width}: the bump is 0.5625 high");
+        // More lengths added, a wider lens; and with none the width is the ordinary one to a part in a million.
+        assert!(lens_width(polygon, chord, 300) > 5.0 * width, "{} against {width}", lens_width(polygon, chord, 300));
+        assert!(lens_width(1.0, 1.0, 0) > 0.0 && lens_width(1.0, 1.0, 0) < 1e-6);
+    }
+
+    /// A run with bumps that rounded lengths hide is not taken whole: twelve straight cubics 3e8 long, a bump
+    /// up (handles 1e8 across rising 0.75, 0.5625 at its middle) and a bump down after it, and two straight
+    /// cubics. The strides (1, 2, 4, 8 more than the eight first merged) fit up to the fourth, and the eighth
+    /// takes the points of its run at the joints 12 and 14, with the two bumps between them, whose edges
+    /// add up to their chord to the last place: it had no width between them, and the bumps were lost at a
+    /// tolerance of 0.001.
+    #[test]
+    fn bumps_that_rounded_lengths_hide_are_not_merged_away() {
+        let len = 3e8;
+        let mut chain = BezPath::new();
+        chain.move_to((0.0, 0.0));
+        // The cubic from `x` whose two handles are `rise` high.
+        let cubic = |chain: &mut BezPath, i: usize, rise: f64| {
+            let x = i as f64 * len;
+            chain.curve_to((x + len / 3.0, rise), (x + 2.0 * len / 3.0, rise), (x + len, 0.0));
+        };
+        for i in 0..16 {
+            cubic(
+                &mut chain,
+                i,
+                match i {
+                    12 => 0.75,
+                    13 => -0.75,
+                    _ => 0.0,
+                },
+            );
+        }
+        let simpler = remove_redundant_points(&chain, 0.001);
+        let bounds = kurbo::Shape::bounding_box(&simpler);
+        assert!(
+            bounds.y1 > 0.5 && bounds.y0 < -0.5,
+            "the bumps are {} high and {} low, 0.5625 before: {} segments",
+            bounds.y1,
+            -bounds.y0,
+            simpler.segments().count()
+        );
+        // What is straight is merged, up to the first bump and after the second.
+        assert!(simpler.segments().count() >= 4 && simpler.segments().count() < 16, "{} segments", simpler.segments().count());
     }
 
     /// Two arcs a quarter circle each, the second turning `turn` degrees away from where the first arrives,
@@ -1720,7 +1812,7 @@ mod tests {
         let segs = chain_of(&cut_circle(8000, 1000.0));
         let originals = Originals::new(&segs);
         let count = 3_000;
-        let big = 1usize << 40;
+        let big = BIG_WORK;
         let spent = |seed: f64| {
             work::reset();
             let mut left = big;
@@ -1753,9 +1845,9 @@ mod tests {
             Piece { seg: Seg { c, line: false }, dev, first: 30, count: 30 }
         });
         work::reset();
-        let mut left = 1usize << 40;
+        let mut left = BIG_WORK;
         let _ = merge_pieces(&a, &b, tol, &originals, &mut left);
-        let (spent, points) = (((1usize << 40) - left), work::take(Work::Witnesses));
+        let (spent, points) = ((BIG_WORK - left), work::take(Work::Witnesses));
         assert!(points > 0, "the sum of the bounds passes the tolerance: the run is refitted");
         assert_eq!(spent, points * WITNESS_COST + 60 / 4, "one round, {points} points");
     }
@@ -1775,5 +1867,48 @@ mod tests {
         let (c, err, rest) = fit_single_bounded(&pts, start_tangent(&a.c), end_tangent(&b.c), between);
         assert_eq!(seg.c, c);
         assert_eq!(step, err + rest);
+    }
+
+    /// A piece that nothing more fits to is found out by one refit: the first stride is of one segment, not
+    /// two (which is two refits, one for two and one for the one that is left to try), and no table of the
+    /// corners is made when no stride is tried.
+    #[test]
+    fn an_extension_that_fails_at_once_costs_one_refit() {
+        let tol = 1.0;
+        let segs = chain_of(&cut_circle(2000, 1000.0));
+        let originals = Originals::new(&segs[..1500]);
+        // Past the most that fit (a run of 646 does at this tolerance), so that one more does not.
+        let top = piece_of(&originals, 700, tol);
+        let sd = second_difference(&top.seg.c);
+        let ratio = 701.0 / 700.0;
+        work::reset();
+        let mut left = BIG_WORK;
+        assert!(refit_run(&originals, 0, 701, tol, sd * ratio * ratio, &mut left).is_some_and(|(_, dev)| dev > tol), "one more does not fit");
+        let (one_refit, points) = (BIG_WORK - left, work::take(Work::Witnesses));
+        let mut left = BIG_WORK;
+        assert!(extend_run(&top, 50, tol, &originals, &mut left).is_none());
+        assert_eq!((BIG_WORK - left, work::take(Work::Witnesses)), (one_refit, points), "one refit, as many points as that one");
+    }
+
+    /// The table of the corners of a subpath is made when a stride is first tried, and once: not for a path
+    /// no stride is tried on (lines, or curves in pieces of fewer than eight), and not again for each pass
+    /// of the first merge pass.
+    #[test]
+    fn the_table_of_corners_is_made_when_a_stride_first_asks_for_it_and_once() {
+        work::reset();
+        let polygon = remove_redundant_points(&circle_polygon(2_000, 100.0), 0.01);
+        assert!(anchor_count(&polygon) < 2_000);
+        // Curves, in pieces too short for a stride: two cubics, and then seven on their own.
+        let short = remove_redundant_points(&cut_circle(7, 100.0), 0.01);
+        assert!(short.segments().count() <= 7);
+        assert_eq!(work::take(Work::CornerTables), 0, "no stride, no table");
+        let circle = remove_redundant_points(&cut_circle(2_000, 100.0), 0.01);
+        assert!(circle.segments().count() < 20);
+        assert_eq!(work::take(Work::CornerTables), 1, "one table for the one subpath");
+        // Two subpaths of long pieces: a table for each.
+        let mut two = cut_circle(2_000, 100.0);
+        two.extend(cut_circle(2_000, 50.0).iter());
+        let _ = remove_redundant_points(&two, 0.01);
+        assert_eq!(work::take(Work::CornerTables), 2);
     }
 }

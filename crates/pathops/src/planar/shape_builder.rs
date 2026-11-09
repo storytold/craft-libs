@@ -65,10 +65,13 @@ pub fn shape_builder(shapes: &[Shape], edges: bool) -> BuilderArrangement {
 /// [`shape_builder`] that reports a planar map it cannot make, instead of falling back to the filled
 /// areas: [`PathOpsError::TooComplex`] past the element limit, past [`SHAPE_BUILDER_MAX_SEGMENTS`]
 /// segments ([`crate::Limits::shape_builder_segments`]), past the limit on pairs of segments or on the
-/// work of winding points against fills and faces ([`crate::Limits::fill_work`]);
-/// [`PathOpsError::NonFinite`] for a point that is not finite; and [`PathOpsError::Degenerate`] when no
-/// frame of the sweep leaves the open paths unlevelled, or the sweep fails. A map it makes is what
-/// [`shape_builder`] gives.
+/// work of winding points against fills and faces ([`crate::Limits::fill_work`]), and past the limit on
+/// the faces of the filled areas ([`crate::Limits::mask_work`], [`crate::Limits::pass_work`]), which a map
+/// that was made would be given without; [`PathOpsError::NonFinite`] for a point that is not finite, and
+/// [`PathOpsError::Degenerate`] for one so large that the sweep cannot take it, in the shapes as they are
+/// given (a closed loop of one cubic whose handle is no number is left out of the map, and is no excuse);
+/// and [`PathOpsError::Degenerate`] when no frame of the sweep leaves the open paths unlevelled, or the
+/// sweep fails. A map it makes is what [`shape_builder`] gives.
 pub fn try_shape_builder(shapes: &[Shape], edges: bool) -> Result<BuilderArrangement, PathOpsError> {
     try_builder(shapes, edges, DEFAULT_PRECISION, true)
 }
@@ -83,6 +86,11 @@ pub(crate) fn builder(shapes: &[Shape], edges: bool, precision: f64) -> BuilderA
 pub(crate) fn try_builder(shapes: &[Shape], edges: bool, precision: f64, strict: bool) -> Result<BuilderArrangement, PathOpsError> {
     if !crate::budget::fits_elements(shapes.iter().map(|s| &s.path)) {
         return if strict { Err(PathOpsError::TooComplex) } else { Ok(BuilderArrangement::default()) };
+    }
+    // Strictly, the coordinates are checked as given, before the map leaves out what draws nothing (a
+    // closed loop of one cubic whose handle is no number is one): the error, not a map without it.
+    if strict {
+        crate::boolean::eps_for(shapes.iter().map(|s| &s.path))?;
     }
     let has_open = has_open_path(shapes);
     let mapped = if segment_count(shapes) <= crate::budget::limits().shape_builder_segments {
@@ -99,7 +107,7 @@ pub(crate) fn try_builder(shapes: &[Shape], edges: bool, precision: f64, strict:
     };
     let planar = mapped.filter(|(faces, pieces, _)| !faces.is_empty() || !pieces.is_empty());
     let Some((faces, pieces, under)) = planar else {
-        return Ok(BuilderArrangement { regions: filled_regions(shapes, precision), ..Default::default() });
+        return Ok(BuilderArrangement { regions: filled_regions(shapes, precision, strict)?, ..Default::default() });
     };
     // A shape with a filled subpath (an open loop of one cubic among them) gives outline edges, not lines.
     let lines: Vec<bool> = shapes.iter().map(|s| !has_filled_subpath(&s.path)).collect();
@@ -109,7 +117,7 @@ pub(crate) fn try_builder(shapes: &[Shape], edges: bool, precision: f64, strict:
         faces
     } else {
         // The filled areas from their arrangement, whose faces merge exactly, then the gaps.
-        let mut regions = crate::pathfinder::regions_with(shapes, precision);
+        let mut regions = filled(shapes, precision, strict)?;
         regions.extend(faces.into_iter().filter(|f| f.sources.is_empty()));
         regions
     };
@@ -121,14 +129,23 @@ pub(crate) fn try_builder(shapes: &[Shape], edges: bool, precision: f64, strict:
     })
 }
 
+/// The faces of the filled areas of `shapes` ([`crate::pathfinder::try_regions_with`]); where they cannot be
+/// found (past a limit, say), none, or with `strict` the error.
+fn filled(shapes: &[Shape], precision: f64, strict: bool) -> Result<Vec<crate::Region>, PathOpsError> {
+    match crate::pathfinder::try_regions_with(shapes, precision) {
+        Err(e) if strict => Err(e),
+        found => Ok(found.unwrap_or_default()),
+    }
+}
+
 /// The regions of the shapes' filled areas: those of their closed subpaths, and of open ones of one
 /// cubic that come back to their start round an area, as in the map. Another open subpath is a cutting
 /// edge, as in the map: it fills nothing, whatever it encloses. A shape left with no closed subpath is left out, so a
 /// flood of cutting lines cannot push the arrangement past its size budget and take the filled shapes
 /// down with it; the regions keep the original indices.
-fn filled_regions(shapes: &[Shape], precision: f64) -> Vec<crate::Region> {
+fn filled_regions(shapes: &[Shape], precision: f64, strict: bool) -> Result<Vec<crate::Region>, PathOpsError> {
     if !shapes.iter().any(|s| has_open_subpath(&s.path)) {
-        return crate::pathfinder::regions_with(shapes, precision);
+        return filled(shapes, precision, strict);
     }
     let mut keep: Vec<usize> = Vec::new();
     let mut kept: Vec<Shape> = Vec::new();
@@ -142,11 +159,11 @@ fn filled_regions(shapes: &[Shape], precision: f64) -> Vec<crate::Region> {
             kept.push(Shape::new(closed, s.rule, s.key));
         }
     }
-    crate::pathfinder::regions_with(&kept, precision)
+    Ok(filled(&kept, precision, strict)?
         .into_iter()
         .map(|mut r| {
             r.sources = r.sources.iter().filter_map(|&s| keep.get(s).copied()).collect();
             r
         })
-        .collect()
+        .collect())
 }

@@ -42,6 +42,10 @@ pub(crate) enum Work {
     RunChecks,
     /// Points of a run that a cubic replacing it was refitted from.
     Witnesses,
+    /// Tables of the corners of a subpath made (for the strides of a refit).
+    CornerTables,
+    /// Curves put in the tidy's index of the input curves a result's boundary is rebuilt from.
+    TidyCurves,
     /// Heights an interior point was looked for at.
     InteriorHeights,
     /// Curves whose length was measured.
@@ -74,7 +78,7 @@ pub(crate) enum Work {
 
 #[cfg(test)]
 thread_local! {
-    static COUNTS: std::cell::RefCell<[usize; 32]> = const { std::cell::RefCell::new([0; 32]) };
+    static COUNTS: std::cell::RefCell<[usize; 34]> = const { std::cell::RefCell::new([0; 34]) };
 }
 
 /// Counts `n` more of `what` on this thread (tests only).
@@ -99,5 +103,5 @@ pub(crate) fn take(what: Work) -> usize {
 /// Resets every count on this thread.
 #[cfg(test)]
 pub(crate) fn reset() {
-    COUNTS.with(|c| *c.borrow_mut() = [0; 32]);
+    COUNTS.with(|c| *c.borrow_mut() = [0; 34]);
 }

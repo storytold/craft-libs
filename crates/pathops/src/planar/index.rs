@@ -118,7 +118,15 @@ pub(super) fn try_frame_for(shapes: &[Shape]) -> Result<Option<Frame>, crate::Pa
             .fold(0.0f64, |m, p| m.max((p.y + k * p.x).abs()).max(p.x.abs()));
         crate::boolean::sweep_tolerance(m).max(widest)
     };
-    for (lo, hi) in [(1.0 / 1024.0, 0.5), (-0.5, -1.0 / 1024.0)] {
+    // Only shears in which the coordinates stay within what the sweep takes are searched: the middle of
+    // the widest stretch free of the long sides could be one where they do not, with another stretch
+    // narrower, and in the range, that is a frame.
+    let Some((valid_lo, valid_hi)) = coordinate_valid_shears(&plain) else { return Err(PathOpsError::Degenerate) };
+    for (lo, hi) in [(1.0_f64 / 1024.0, 0.5_f64), (-0.5, -1.0 / 1024.0)] {
+        let (lo, hi) = (lo.max(valid_lo), hi.min(valid_hi));
+        if lo >= hi {
+            continue;
+        }
         let eps = reach(lo).max(reach(hi));
         let Some(k) = free_shear(&opens, eps, lo, hi) else { continue };
         if let Sheared::Framed(frame, open) = sheared(&plain, &opens, k)
@@ -128,6 +136,30 @@ pub(super) fn try_frame_for(shapes: &[Shape]) -> Result<Option<Frame>, crate::Pa
         }
     }
     Err(PathOpsError::Degenerate)
+}
+
+/// The shears `k` in which no coordinate of `plain` sheared by it (`y + k x`, and `x`) is past what the sweep
+/// takes ([`crate::boolean::largest_extent`], where its tolerance is over its limit): an interval, as the
+/// coordinates are linear in `k`; `None` when there is none (some `x` is past it, or a `y` with no `x`).
+fn coordinate_valid_shears(plain: &[(BezPath, usize)]) -> Option<(f64, f64)> {
+    let limit = crate::boolean::largest_extent();
+    let (mut lo, mut hi) = (f64::NEG_INFINITY, f64::INFINITY);
+    for p in plain.iter().flat_map(|(p, _)| p.elements().iter().flat_map(crate::boolean::el_points)) {
+        if !(p.x.abs() <= limit && p.y.is_finite()) {
+            return None;
+        }
+        // |y + k x| <= limit
+        if p.x > 0.0 {
+            lo = lo.max((-limit - p.y) / p.x);
+            hi = hi.min((limit - p.y) / p.x);
+        } else if p.x < 0.0 {
+            lo = lo.max((limit - p.y) / p.x);
+            hi = hi.min((-limit - p.y) / p.x);
+        } else if p.y.abs() > limit {
+            return None;
+        }
+    }
+    (lo <= hi).then_some((lo, hi))
 }
 
 /// The frame [`try_frame_for`] finds, if any (the tests' view of it).

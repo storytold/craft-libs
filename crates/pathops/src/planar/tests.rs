@@ -1502,6 +1502,38 @@ fn open_paths_level_in_each_of_the_ten_shears_are_framed_by_one_between_their_sl
     assert_eq!(work::take(Work::FrameTries), 1);
 }
 
+/// Where the art is near the largest coordinates the sweep takes, the shears that widen them past it are no
+/// frame, and the search for a free one is made among those that do not: the middle of the widest stretch
+/// the long sides leave free could be in the ones that do (a frame no good), where a narrower stretch of
+/// the others is. A shape at (4e13, 6e13) takes in shears to about 0.26; nine lines 40 long, each level in
+/// one of the shears 1/1024 to 1/4, leave free the stretches 0.0864 to 0.101, 0.149 to 0.226 and 0.274 on;
+/// twelve with slopes up bar the shears below 0. The frame is in the middle of 0.149 to 0.226, not of
+/// 0.274 to 0.5 where the sheared art is too far out.
+#[test]
+fn a_free_shear_is_looked_for_where_the_coordinates_are_valid() {
+    use super::index::{SHEARS, frame_for};
+    let line =
+        |i: usize, slope: f64| Shape::new(line_path((0.0, 100.0 * i as f64), (40.0, 100.0 * i as f64 + 40.0 * slope)), FillRule::NonZero, i as u64);
+    let far = Shape::new(polyline(&[(3.9e13, 5.9e13), (4.0e13, 5.9e13), (4.0e13, 6.0e13), (3.9e13, 6.0e13)], true), FillRule::NonZero, 99);
+    let mut shapes = vec![far];
+    // Level in each shear of the ten but the last (1/2 widens the art past what the sweep takes).
+    shapes.extend(SHEARS[..9].iter().enumerate().map(|(i, k)| line(i, -k)));
+    // The shears below 0, each barred by a line sloping up as much.
+    shapes.extend((0..12).map(|i| line(20 + i, 0.02 + 0.045 * i as f64)));
+    work::reset();
+    let k = frame_for(&shapes).map(|f| f.k()).expect("a frame where the coordinates are valid");
+    assert!(k > 0.149 && k < 0.226, "k = {k}");
+    assert_eq!(work::take(Work::FrameTries), SHEARS.len() + 1, "the ten, and one more");
+    // The art in that frame is within what the sweep takes: no coordinate is past where its tolerance is a unit.
+    let extent = 6.0e13 + k * 4.0e13;
+    assert!(extent <= crate::boolean::largest_extent(), "{extent}");
+    // With the stretches in the shears that the coordinates allow barred as well (lines level in 0.0925,
+    // 0.17, 0.2 and 0.215) there is no frame, as before: a shear past the coordinates is no frame.
+    let mut barred = shapes.clone();
+    barred.extend([0.0925, 0.17, 0.2, 0.215].iter().enumerate().map(|(i, k)| line(40 + i, -k)));
+    assert!(frame_for(&barred).is_none(), "no shear is free where the coordinates are valid");
+}
+
 /// Edges that run back over each other cancel in the winding, as many of each way as the difference
 /// of their numbers leaves, and the rest keep their order. Exactly: ends a hair apart are not the same edge.
 #[test]

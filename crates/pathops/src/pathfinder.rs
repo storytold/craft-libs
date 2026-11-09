@@ -93,6 +93,7 @@ fn has_open_edges(shapes: &[Shape]) -> bool {
 }
 
 /// The arrangement of `shapes`, its faces refit to `precision` and its slivers thinner than it dropped.
+#[cfg(test)]
 fn arrangement(shapes: &[Shape], precision: f64) -> Option<Arrangement> {
     try_arrangement(shapes, precision).ok()
 }
@@ -139,9 +140,13 @@ pub fn pathfinder_with(op: PathfinderOp, shapes: &[Shape], precision: f64) -> Ve
 /// filled areas: [`crate::PathOpsError::TooComplex`] past the element limit, past a limit of the sweep or
 /// of the work of a contour pass ([`crate::MAX_PASS_WORK`]), or past one of the planar map's (more than
 /// [`crate::SHAPE_BUILDER_MAX_SEGMENTS`] segments, or [`crate::MAX_FILL_WORK`]) for Divide and Outline
-/// with an open path; [`crate::PathOpsError::NonFinite`] for a point that is not finite; and
-/// [`crate::PathOpsError::Degenerate`] when the sweep fails or no frame of the map leaves the open paths
-/// unlevelled. Where it gives shapes they are those [`pathfinder`] gives.
+/// with an open path, and past the limit on the faces of closed shapes ([`crate::Limits::mask_work`], or
+/// the passes' [`crate::Limits::pass_work`]) for Divide; [`crate::PathOpsError::NonFinite`] for a point that
+/// is not finite, and [`crate::PathOpsError::Degenerate`] for one so large that the sweep cannot take it,
+/// in the shapes as they are given (a closed loop of one cubic whose handle is no number is left out when
+/// they are filled, and is no excuse); and [`crate::PathOpsError::Degenerate`] when the sweep fails or no
+/// frame of the map leaves the open paths unlevelled. Where it gives shapes they are those [`pathfinder`]
+/// gives.
 pub fn try_pathfinder(op: PathfinderOp, shapes: &[Shape]) -> Result<Vec<Shape>, crate::PathOpsError> {
     try_pathfinder_with(op, shapes, DEFAULT_PRECISION)
 }
@@ -164,6 +169,12 @@ fn pathfinder_unguarded(op: PathfinderOp, shapes: &[Shape], precision: f64, stri
     }
     if !crate::budget::fits_elements(shapes.iter().map(|s| &s.path)) {
         return if strict { Err(PathOpsError::TooComplex) } else { Ok(Vec::new()) };
+    }
+    // Strictly, the shapes are checked as given: the fill leaves out a closed loop of one cubic with a
+    // handle that is no number, or so large that it cannot be swept, and what is left would be a result
+    // without it where it is an error ([`PathOpsError::NonFinite`], [`PathOpsError::Degenerate`]).
+    if strict {
+        crate::boolean::eps_for(shapes.iter().map(|s| &s.path))?;
     }
     // What cannot be done: the error, or no shapes.
     let none = |e: PathOpsError| if strict { Err(e) } else { Ok(Vec::new()) };
@@ -220,13 +231,17 @@ fn pathfinder_unguarded(op: PathfinderOp, shapes: &[Shape], precision: f64, stri
         PathfinderOp::Intersect => one(all_contours_to_path(&arr.contours_where(|w| arr.covered(w).count() == n), p), front_key),
         // m.count() is odd
         PathfinderOp::Exclude => one(all_contours_to_path(&arr.contours_where(|w| arr.covered(w).count() % 2 == 1), p), front_key),
-        PathfinderOp::Divide => regions_of(&arr)
-            .into_iter()
-            .filter_map(|r| {
-                let key = shapes.get(r.top()?)?.key;
-                Some(Shape::new(r.path, FillRule::NonZero, key))
-            })
-            .collect(),
+        // Past the limit on the entries or the passes there are no faces: no shapes, or the error.
+        PathfinderOp::Divide => match regions_of(&arr) {
+            Some(regions) => regions
+                .into_iter()
+                .filter_map(|r| {
+                    let key = shapes.get(r.top()?)?.key;
+                    Some(Shape::new(r.path, FillRule::NonZero, key))
+                })
+                .collect(),
+            None => return none(PathOpsError::TooComplex),
+        },
         // topmost(m) == Some(i)
         PathfinderOp::Trim => {
             let mut paths = vec![BezPath::new(); n];
@@ -302,10 +317,11 @@ fn pathfinder_unguarded(op: PathfinderOp, shapes: &[Shape], precision: f64, stri
 }
 
 /// The faces of `arr`, each distinct coverage mask's in turn (sorted), each face an outer contour
-/// and the holes of its mask directly inside it ([`face_groups`]).
-fn regions_of(arr: &Arrangement) -> Vec<Region> {
-    // Past the limit on the entries walked there are no regions (as for an input too complex to sweep).
-    let Some(masks) = arr.distinct_masks() else { return Vec::new() };
+/// and the holes of its mask directly inside it ([`face_groups`]); `None` past the limit on the entries
+/// of the masks ([`crate::Limits::mask_work`]) or on the work of the contour passes
+/// ([`crate::Limits::pass_work`]), where the faces are not all of them.
+fn regions_of(arr: &Arrangement) -> Option<Vec<Region>> {
+    let masks = arr.distinct_masks()?;
     let mut faces: Vec<Vec<BezPath>> = vec![Vec::new(); masks.len()];
     let whole = each_face(arr, &masks, |m, c, group| {
         if let Some(f) = faces.get_mut(m) {
@@ -313,13 +329,13 @@ fn regions_of(arr: &Arrangement) -> Vec<Region> {
         }
     });
     if !whole {
-        return Vec::new();
+        return None;
     }
     let mut out = Vec::new();
     for (sources, paths) in masks.into_iter().zip(faces) {
         out.extend(paths.into_iter().filter(|p| !p.elements().is_empty()).map(|path| Region { path, sources: sources.clone() }));
     }
-    out
+    Some(out)
 }
 
 /// Calls `f` with each face of `arr` classified by `classify: impl Fn(&Multi) -> Option<usize>`
@@ -565,7 +581,15 @@ pub fn regions(shapes: &[Shape]) -> Vec<Region> {
 
 /// [`regions`] refit to `precision`.
 pub(crate) fn regions_with(shapes: &[Shape], precision: f64) -> Vec<Region> {
-    guarded(|| arrangement(shapes, precision).map(|a| regions_of(&a))).flatten().unwrap_or_default()
+    try_regions_with(shapes, precision).unwrap_or_default()
+}
+
+/// [`regions_with`], and why there are no faces where there are not: the error of the arrangement
+/// (past the element limit, or of the sweep), [`crate::PathOpsError::TooComplex`] past the limit on the
+/// faces ([`regions_of`]), and [`crate::PathOpsError::Degenerate`] where the sweep panics.
+pub(crate) fn try_regions_with(shapes: &[Shape], precision: f64) -> Result<Vec<Region>, crate::PathOpsError> {
+    guarded(|| regions_of(&try_arrangement(shapes, precision)?).ok_or(crate::PathOpsError::TooComplex))
+        .unwrap_or(Err(crate::PathOpsError::Degenerate))
 }
 
 /// The face under `point`, if any.
@@ -808,7 +832,7 @@ mod tests {
 
     fn same_as_one_mask_at_a_time(shapes: &[Shape]) {
         let arr = arrangement(shapes, DEFAULT_PRECISION).expect("arrangement");
-        assert_eq!(regions_of(&arr), regions_one_mask_at_a_time(&arr));
+        assert_eq!(regions_of(&arr), Some(regions_one_mask_at_a_time(&arr)));
     }
 
     /// The refit precision: pieces thinner than the precision are dropped, so a 0.5 unit strip that
