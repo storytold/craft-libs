@@ -13,7 +13,7 @@ repository.workspace = true
 subset = ["dep:skera", "dep:skrifa"]
 
 [dependencies]
-skera = { version = "0.8", optional = true }
+skera = { version = "0.9", optional = true }
 skrifa = { version = "0.48", default-features = false, features = ["std"], optional = true }
 
 [dev-dependencies]
