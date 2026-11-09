@@ -189,7 +189,8 @@ let t = Transform::new(cmyk, Builtin::Srgb.profile(), Intent::RelativeColorimetr
 ## Not implemented / approximate
 
 * v4.4 `mpet` (multiProcessElements, D2Bx/B2Dx) tags, named colour, device link and abstract
-  profiles as transform endpoints, `chad`-based adaptation of v2 absolute colorimetry.
+  profiles as transform endpoints (a named-colour table is read through `named_colors()`, but
+  the profile is not a transform endpoint), `chad`-based adaptation of v2 absolute colorimetry.
 * BPC destination black uses the BToA/AToB round trip directly (Adobe's curve fit for
   ill-behaved LUT profiles is not implemented); v2/v4 perceptual reference black mixing is not
   modelled beyond the PRMG black for v4 LUT profiles.
