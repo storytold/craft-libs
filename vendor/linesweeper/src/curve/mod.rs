@@ -166,8 +166,10 @@ impl CurveOrder {
                     // What we do is insert a zero-height "ish" interval. Then
                     // adding y-slop will turn it into a taller interval.
                     debug_assert!(end >= last.end);
+                    // Craft patch (zero-height Ish): the package ended this entry at `end`.
+                    let ish_end = last.end;
                     self.cmps.push(CurveOrderEntry {
-                        end,
+                        end: ish_end,
                         order: Order::Ish,
                     });
                     self.cmps.push(CurveOrderEntry { end, order });
@@ -2049,5 +2051,24 @@ mod test {
 
         let c0 = CubicBez::new((0.0, 0.0), (2000.0, 0.0), (-1000.0, 30.0), (1000.0, 30.0));
         dbg!(AlmostHorizontalDecomposition::from_monotone_cubic(c0));
+    }
+
+    #[test]
+    fn opposite_orders_get_a_zero_height_ish() {
+        let mut order = CurveOrder::new(0.0);
+        order.push(1.0, Order::Right, MetricsStatus::default());
+        order.push(2.0, Order::Left, MetricsStatus::default());
+        order.check_invariants();
+
+        let entries: Vec<_> = order.iter().collect();
+        assert_eq!(
+            entries,
+            vec![
+                (0.0, 1.0, Order::Right),
+                (1.0, 1.0, Order::Ish),
+                (1.0, 2.0, Order::Left)
+            ]
+        );
+        assert_eq!(order.order_at(1.5), Order::Left);
     }
 }
