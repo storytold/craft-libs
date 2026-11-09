@@ -78,8 +78,10 @@ fn a_registration_target_sits_mid_band_on_each_side() {
 
 #[test]
 fn colour_bars_fit_between_the_crop_marks_and_the_middle() {
-    let m = Marks::new(TRIM, TRIM, &only(|o| o.color_bars = true)).unwrap();
-    // Half the 200 pt width, less a mark length and the target's arm: 73.2 pt, so 6 patches of 10.8.
+    // Half the 200 pt width, less a mark length: 82 pt, so 7 patches of 10.8.
+    assert_eq!(Marks::new(TRIM, TRIM, &only(|o| o.color_bars = true)).unwrap().patches.len(), 7);
+    // Less the top target's arm too: 73.2 pt, so 6.
+    let m = Marks::new(TRIM, TRIM, &only(|o| (o.color_bars, o.registration) = (true, true))).unwrap();
     assert_eq!(m.patches.len(), 6);
     let first = m.patches.first().unwrap();
     assert_eq!(first.cmyk, BAR_PATCHES[0]);
@@ -99,6 +101,8 @@ fn the_info_line_sits_in_the_bottom_band() {
     assert!(y > TRIM.y1 + m.gap && y < m.sheet.y1);
     let ((cx, _), r) = m.circles[1];
     assert!(x + m.info.max_width <= cx - r * 1.4 + 1e-9, "the line stops short of the bottom target");
+    let crop_only = Marks::new(TRIM, TRIM, &only(|o| o.crop = true)).unwrap();
+    assert_eq!(crop_only.info.max_width, 82.0, "with no target, the line may reach the middle");
 }
 
 #[test]
@@ -110,6 +114,7 @@ fn bad_options_and_boxes_are_errors() {
         (MarkOptions { length: 0.0, ..MarkOptions::default() }, "length"),
         (MarkOptions { length: f64::NAN, ..MarkOptions::default() }, "length"),
         (MarkOptions { line_width: 145.0, ..MarkOptions::default() }, "line width"),
+        (MarkOptions { line_width: 6.5, ..MarkOptions::default() }, "line width"),
     ] {
         assert!(matches!(e(o), MarksError::Size { what: w, .. } if w == what), "{what}");
     }

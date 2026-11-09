@@ -72,7 +72,8 @@ pub struct MarkOptions {
     pub offset: f64,
     /// Length of a crop mark and the depth of the band the marks sit in. Above 0.
     pub length: f64,
-    /// Stroke width. Above 0.
+    /// Stroke width. Above 0, and at most a third of `length`, so a registration circle's stroke
+    /// stays inside its band.
     pub line_width: f64,
 }
 
@@ -178,6 +179,8 @@ impl Marks {
         let reach = (trim.x0 - bleed.x0).max(trim.y0 - bleed.y0).max(bleed.x1 - trim.x1).max(bleed.y1 - trim.y1);
         let gap = opts.offset.max(reach);
         let len = opts.length;
+        // The bars and the information line stop short of the top and bottom targets, when drawn.
+        let clear = if opts.registration { target_arm(len) } else { 0.0 };
         let sheet = trim.grow(gap + len);
         if [sheet.x0, sheet.y0, sheet.x1, sheet.y1].iter().any(|v| v.abs() > MAX_SHEET) || sheet.width() > MAX_SHEET || sheet.height() > MAX_SHEET {
             return Err(MarksError::Box("sheet"));
@@ -190,7 +193,7 @@ impl Marks {
             lines: Vec::new(),
             circles: Vec::new(),
             patches: Vec::new(),
-            info: info_line(trim, gap, len),
+            info: info_line(trim, gap, len, clear),
             line_width: opts.line_width,
         };
         if opts.crop {
@@ -203,7 +206,7 @@ impl Marks {
             m.registration_targets(len);
         }
         if opts.color_bars {
-            m.color_bars(len);
+            m.color_bars(len, clear);
         }
         Ok(m)
     }
@@ -237,11 +240,11 @@ impl Marks {
 
     /// Square patches along the top band, from a mark length in from the left trim edge (past
     /// the crop marks) up to the middle (short of the registration target); as many as fit.
-    fn color_bars(&mut self, len: f64) {
+    fn color_bars(&mut self, len: f64, clear: f64) {
         let t = self.trim;
         let size = len * 0.6;
         let y = t.y0 - self.gap - len + (len - size) / 2.0;
-        let room = t.width() / 2.0 - len - target_arm(len);
+        let room = t.width() / 2.0 - len - clear;
         let fit = if room > 0.0 { (room / size).floor() as usize } else { 0 };
         for (i, c) in BAR_PATCHES.iter().take(fit).enumerate() {
             let x = t.x0 + len + size * i as f64;
@@ -300,14 +303,17 @@ fn check(opts: &MarkOptions) -> Result<(), MarksError> {
             return Err(MarksError::Size { what, value });
         }
     }
+    if opts.line_width > opts.length / 3.0 {
+        return Err(MarksError::Size { what: "line width", value: opts.line_width });
+    }
     Ok(())
 }
 
 /// The bottom band's information line: left-aligned past the crop marks, centred in the band.
-fn info_line(trim: Rect, gap: f64, len: f64) -> InfoLine {
+fn info_line(trim: Rect, gap: f64, len: f64, clear: f64) -> InfoLine {
     let size = (len * 0.4).min(7.0);
     let baseline = trim.y1 + gap + len / 2.0 + size * 0.35;
-    InfoLine { origin: (trim.x0 + len, baseline), size, max_width: (trim.width() / 2.0 - len - target_arm(len)).max(0.0) }
+    InfoLine { origin: (trim.x0 + len, baseline), size, max_width: (trim.width() / 2.0 - len - clear).max(0.0) }
 }
 
 /// How far a registration target's cross reaches from its centre; the bars and the information
