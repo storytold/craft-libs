@@ -54,6 +54,9 @@ names, which is archived; its README says development moved off GitHub.
 `824b0791a750f7b27b8edcbb6c6244d0e629875e`. That commit is not in the GitHub repository the manifest
 names, which is archived; its README says development moved off GitHub.
 
+`824b0791a750f7b27b8edcbb6c6244d0e629875e`. That commit is not in the GitHub repository the manifest
+names, which is archived; its README says development moved off GitHub.
+
 Every file here except this one, `SOURCE.json` and the files under Local changes is byte for byte the
 file in the `.crate` archive. `SOURCE.json` records the hash of the `.crate` download
 (`source_archive_sha256`) and, for every file kept, the hash in the package (`source_sha256`) and the
@@ -76,6 +79,11 @@ and, for every file kept, the hash in the package (`source_sha256`) and the hash
 | `compute_positions` starts each output segment's `last_y` at the segment's start height instead of 0, so a segment that starts at `y < 0` is not skipped at its first queue entry and close segments there are put in order | `Craft patch (start height)` | `src/position.rs` | `position::tests::correct_positions_at_negative_y` |
 
 Every change here updates this table and `SOURCE.json` in the same commit.
+| `Segment::lower` and `Segment::upper` bound a horizontal line by both of its endpoints | `Craft patch (horizontal line bounds)` | `src/geom.rs` | `horizontal_line_bounds_cover_both_endpoints` |
+
+Every change here updates this table and `SOURCE.json` in the same commit. To take a new linesweeper
+release, unpack the crates.io package, carry these changes over, regenerate `SOURCE.json`, and run the
+tests below.
 
 `omitted_files` lists the 43 files of the package left out here, with their hashes:
 
