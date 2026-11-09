@@ -579,6 +579,20 @@ impl<'a> Bits<'a> {
         self.get(1)
     }
 
+    /// Whether whole bytes of entropy-coded data are left before the next marker: more than the
+    /// padding (under 8 bits, F.1.2.3) that ends a scan or a restart interval.
+    fn data_left(&self) -> bool {
+        if self.n.saturating_sub(self.pad) >= 8 {
+            return true;
+        }
+        let mut p = self.pos;
+        while self.d.get(p) == Some(&0xFF) {
+            p += 1;
+        }
+        // A data byte, or a stuffed `FF 00` (fill bytes before a marker are not data).
+        self.d.get(p).is_some_and(|&v| p == self.pos || v == 0x00)
+    }
+
     /// The next `n` (≤ 16) bits, left in place.
     fn peek(&mut self, n: u32) -> u32 {
         if self.n < n {

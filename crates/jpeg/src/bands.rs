@@ -43,7 +43,10 @@ struct Comp {
 /// marker; without restart intervals the rest of the scan stays at zero, as in
 /// [`decode`](crate::decode), which does not resume at restart markers. Either way
 /// [`Reader::damaged`] is set, and the result does not depend on where the decoding started.
-/// Data that fails in the first MCU of the image is an error.
+/// An interval that leaves more than its padding unread before its restart marker is damaged too
+/// (its data was cut, shifted or added to). Damaged data never makes a read fail, also in the
+/// first MCU, where [`decode`](crate::decode) reports that the stream holds no image data: a
+/// caller that must refuse a file with nothing decodable checks the scan's size itself.
 pub struct Bands<'a> {
     /// The file from the scan's entropy-coded data on.
     data: &'a [u8],
@@ -404,10 +407,7 @@ impl<'b> Reader<'b> {
                             continue;
                         }
                         let mut blk = [0i32; 64];
-                        if let Err(e) = self.dec.block(sc, &mut blk) {
-                            if i == 0 {
-                                return Err(e);
-                            }
+                        if self.dec.block(sc, &mut blk).is_err() {
                             // The rest of the restart interval (or of the scan) stays at zero;
                             // the partly decoded block is kept, as the whole-image decode keeps it.
                             self.damaged = true;
@@ -416,6 +416,12 @@ impl<'b> Reader<'b> {
                         idct_block(&blk, &c.q, &self.idct, 255.0, out, c.stride);
                     }
                 }
+            }
+            // An interval that ends with more than its padding before the restart marker decoded
+            // from data that was cut, shifted or added to: damaged, though no code was invalid.
+            let end = i + 1;
+            if b.restart > 0 && end.is_multiple_of(b.restart) && end < b.mcux * b.mcuy && i >= self.skip_to && self.dec.bits.data_left() {
+                self.damaged = true;
             }
         }
         Ok(())

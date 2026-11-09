@@ -129,8 +129,11 @@ if reader.damaged() { /* warn: part of the image is missing */ }
   line of MCUs, common in files Photoshop saved, decode on every core.
 - **Damaged data** leaves the rest of its restart interval at zero coefficients (mid grey) and
   decoding resumes at the next restart marker; without restart intervals the rest of the scan
-  stays at zero, as in `decode`. `Reader::damaged` is set either way, and the samples don't
-  depend on where reading started. Data that fails in the first MCU of the image is an error.
+  stays at zero, as in `decode`. An interval that leaves more than its padding unread before
+  its restart marker counts as damaged too. `Reader::damaged` is set either way, and the samples
+  don't depend on where reading started. Damage never makes a read fail, also in the first MCU
+  (where `decode` reports that there is no image data): a caller that must refuse a file with
+  nothing decodable checks the size of its scan data.
 
 ## Boundaries
 
@@ -158,7 +161,8 @@ if reader.damaged() { /* warn: part of the image is missing */ }
   YCCK streams from `jpeg-encoder` (4:4:4, 4:2:2, 4:2:0, 4:4:0; restart intervals of 1 and 7
   MCUs and of one and two MCU lines) and over interleaved layouts from a test-only encoder
   (factors of 3 and 4 across and down, four components), read in order and by seeking; against
-  `zune-jpeg`; and on damaged data, limits, and the files it refuses.
+  `zune-jpeg`; on damaged data (with and without restarts, in the first interval, and bytes
+  added before a restart marker), limits, and the files it refuses.
 - `tests/conformance.rs` also decodes the Huffman-coded 8-bit test images in bands.
 - `tests/mutation.rs`: a seeded mutation run (truncations, bit flips, byte and frame-header
   overwrites, deleted and repeated spans) over the test images and the fuzz seeds. Decoding must

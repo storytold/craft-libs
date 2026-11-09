@@ -407,7 +407,8 @@ fn bands_match_zune_jpeg() {
 }
 
 /// Without restart intervals, damaged data leaves the rest of the scan at zero, exactly as the
-/// whole-image decode does; data that fails in the first MCU is an error for both.
+/// whole-image decode does. Data that fails in the first MCU, which the whole-image decode
+/// refuses, is a damaged (grey) image here.
 #[test]
 fn damage_without_restarts_matches_the_whole_image_decode() {
     let s = Stream::new(61, 45, &[(2, 2), (1, 1), (1, 1)], 0, 3).encode();
@@ -419,13 +420,13 @@ fn damage_without_restarts_matches_the_whole_image_decode() {
         let t = &s[..cut];
         let reference = decode(t, &Limits::default(), None);
         let ours = Bands::new(t, &Limits::default(), None).and_then(|b| in_order(&b));
-        match (reference, ours) {
-            (Ok(r), Ok((o, damaged))) => {
+        let (o, damaged) = ours.unwrap_or_else(|e| panic!("cut at {cut}: {e}"));
+        match reference {
+            Ok(r) => {
                 assert!(o == eight(&r), "cut at {cut}");
                 assert_eq!(damaged, r.damaged, "cut at {cut}");
             }
-            (Err(_), Err(_)) => {}
-            (r, o) => panic!("cut at {cut}: whole {:?}, bands {:?}", r.map(|d| d.damaged), o.map(|o| o.1)),
+            Err(_) => assert!(damaged, "cut at {cut}"),
         }
     }
     // Corrupt data in the middle of the scan.
@@ -486,6 +487,55 @@ fn damage_with_restarts_resumes_at_the_next_interval() {
     assert!(by_seeking(&b).unwrap().0 == seq);
     assert!(seq[..31 * row] == clean[..31 * row]);
     assert!(seq[65 * row..] == clean[65 * row..]);
+}
+
+/// Data that fails in the first MCU damages only its interval: with restarts the rest of the
+/// image decodes as in the undamaged file.
+#[test]
+fn a_bad_first_interval_is_damage_not_an_error() {
+    let (w, h) = (80, 96);
+    let s = Stream { restart: 10, ..Stream::new(w, h, &[(2, 2), (1, 1), (1, 1)], 0, 9) }.encode();
+    let clean = in_order(&Bands::new(&s, &Limits::default(), None).unwrap()).unwrap().0;
+    let sos = s.windows(2).rposition(|p| p == [0xFF, 0xDA]).unwrap();
+    let mut t = s.clone();
+    for b in &mut t[sos + 14..sos + 30] {
+        *b = 0xFE;
+    }
+    assert!(decode(&t, &Limits::default(), None).is_err(), "the whole-image decode refuses it");
+    let mut b = Bands::new(&t, &Limits::default(), None).unwrap();
+    let (seq, damaged) = in_order(&b).unwrap();
+    assert!(damaged);
+    b.find_seek_points();
+    assert!(by_seeking(&b).unwrap().0 == seq);
+    let row = w * 3;
+    assert!(seq[33 * row..] == clean[33 * row..]);
+}
+
+/// Bytes added to an interval, or moved within it, leave more than its padding before the
+/// restart marker: the image is damaged, whether or not a code failed, read in order or by
+/// seeking.
+#[test]
+fn data_left_before_a_restart_marker_is_damage() {
+    let (w, h) = (64, 64);
+    let s = Stream { restart: 4, ..Stream::new(w, h, &[(1, 1), (1, 1), (1, 1)], 0, 21) }.encode();
+    let markers: Vec<usize> = s.windows(2).enumerate().filter(|(_, p)| p[0] == 0xFF && (0xD0..=0xD7).contains(&p[1])).map(|(i, _)| i).collect();
+    // Two bytes before the third marker; a stuffed FF 00 before the fifth.
+    for insert in [&[0x12u8, 0x34][..], &[0xFF, 0x00]] {
+        for k in [2, 4] {
+            let mut t = s.clone();
+            t.splice(markers[k]..markers[k], insert.iter().copied());
+            let mut b = Bands::new(&t, &Limits::default(), None).unwrap();
+            let (seq, damaged) = in_order(&b).unwrap();
+            assert!(damaged, "{insert:?} before marker {k}");
+            b.find_seek_points();
+            let (sought, hurt) = by_seeking(&b).unwrap();
+            assert!(hurt && sought == seq, "{insert:?} before marker {k}");
+        }
+    }
+    // Fill bytes before a marker are not data.
+    let mut t = s.clone();
+    t.splice(markers[2]..markers[2], [0xFF, 0xFF]);
+    assert!(!in_order(&Bands::new(&t, &Limits::default(), None).unwrap()).unwrap().1);
 }
 
 #[test]
