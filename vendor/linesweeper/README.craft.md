@@ -15,7 +15,7 @@ holds `upstream_revision`. `local_patches` describes each local patch.
 
 | File | Change |
 |---|---|
-| `src/sweep/sweep_line.rs` | `Sweeper::scan_for_removal` starts its intersection scans from the nearest segment left of the removed slot that does not end at the current `y`. Segments that end at `y` stay in the sweep line until `advance`, and a scan from one of them returns at once, so the live segments on both sides of the gap were never compared and their crossing was missed. The `removal_scan_skips_segments_that_end` test sweeps two integer polygons whose crossing at (0.75, 1.5) used to be missed; their Intersection came out with area 1.5 instead of 1.125. Both removal paths call this function: a segment's exit and the removals in `handle_intersection`. |
+| `src/sweep/sweep_line.rs` | `Sweeper::scan_for_removal` starts its intersection scans from the nearest segment left of the removed slot that does not end at the current `y`. Segments that end at `y` stay in the sweep line until `advance`, and a scan from one of them returns at once, so the live segments on both sides of the gap were never compared and their crossing was missed. The `removal_scan_skips_segments_that_end` test sweeps two integer polygons whose crossing at (0.75, 1.5) used to be missed; their Intersection came out with area 1.5 instead of 1.125. Both removal paths call this function: a segment's exit and the removals in `handle_intersection`. During the exits at one height, `EndedRun` keeps the walk to that segment, so many segments ending at one height do not each repeat it; `removal_scans_share_the_run_of_ended_segments` counts the positions visited. |
 
 `omitted_files` lists the 43 files of the package left out here, with their hashes:
 
