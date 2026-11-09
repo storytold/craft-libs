@@ -57,6 +57,9 @@ names, which is archived; its README says development moved off GitHub.
 `824b0791a750f7b27b8edcbb6c6244d0e629875e`. That commit is not in the GitHub repository the manifest
 names, which is archived; its README says development moved off GitHub.
 
+`824b0791a750f7b27b8edcbb6c6244d0e629875e`. That commit is not in the GitHub repository the manifest
+names, which is archived; its README says development moved off GitHub.
+
 Every file here except this one, `SOURCE.json` and the files under Local changes is byte for byte the
 file in the `.crate` archive. `SOURCE.json` records the hash of the `.crate` download
 (`source_archive_sha256`) and, for every file kept, the hash in the package (`source_sha256`) and the
@@ -80,6 +83,7 @@ and, for every file kept, the hash in the package (`source_sha256`) and the hash
 
 Every change here updates this table and `SOURCE.json` in the same commit.
 | `Segment::lower` and `Segment::upper` bound a horizontal line by both of its endpoints | `Craft patch (horizontal line bounds)` | `src/geom.rs` | `horizontal_line_bounds_cover_both_endpoints` |
+| The `visualize_op` example draws its two input paths with `fill-rule="evenodd"`, the fill rule its operation uses | `Craft patch (example fill rule)` | `examples/visualize_op.rs` | `inputs_are_drawn_with_the_operation_fill_rule`, `svg_fill_rule_names` |
 
 Every change here updates this table and `SOURCE.json` in the same commit. To take a new linesweeper
 release, unpack the crates.io package, carry these changes over, regenerate `SOURCE.json`, and run the
@@ -118,6 +122,10 @@ here does not start `pdf.yml`. Run the tests from this directory:
 every registered target compiles with all features. The `craft-prepress` tests with the `flatten`
 feature run against this copy. `pdf.yml`'s path filter does not list this directory, so a pull request
 that changes only files here does not start `pdf.yml`. Run the tests from this directory:
+`scripts/test-pdf-backends.sh` runs the package's unit, regression and doc tests and the tests in the
+`visualize_op` example. The `craft-prepress` tests with the `flatten` feature run against this copy.
+`pdf.yml`'s path filter does not list this directory, so a pull request that changes only files here
+does not start `pdf.yml`. Run the tests from this directory:
 
 ```sh
 cargo test --locked --lib --test regression

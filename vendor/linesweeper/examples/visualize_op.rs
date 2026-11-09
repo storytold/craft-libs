@@ -10,6 +10,8 @@ use linesweeper::{
     topology::{Contours, Topology},
 };
 
+const FILL_RULE: FillRule = FillRule::EvenOdd;
+
 #[derive(Parser)]
 struct Cli {
     #[arg(long)]
@@ -45,7 +47,7 @@ pub fn main() -> anyhow::Result<()> {
     let shape_b = BezPath::from_svg(shape_b)?;
 
     let eps = 1e-5;
-    let contours = binary_op(&shape_a, &shape_b, FillRule::EvenOdd, op)?;
+    let contours = binary_op(&shape_a, &shape_b, FILL_RULE, op)?;
     let top = Topology::from_paths_binary(&shape_a, &shape_b, eps)?;
     let bbox = top.bounding_box();
     let min_x = bbox.min_x();
@@ -65,27 +67,7 @@ pub fn main() -> anyhow::Result<()> {
 
     // Draw the original document.
     for (c, color) in [(&shape_a, "green"), (&shape_b, "blue")] {
-        let mut data = svg::node::element::path::Data::new();
-        for el in c {
-            let p = |point: kurbo::Point| (point.x, point.y);
-            data = match el {
-                kurbo::PathEl::MoveTo(p0) => data.move_to(p(p0)),
-                kurbo::PathEl::LineTo(p0) => data.line_to(p(p0)),
-                kurbo::PathEl::QuadTo(p0, p1) => data.quadratic_curve_to((p(p0), p(p1))),
-                kurbo::PathEl::CurveTo(p0, p1, p2) => data.cubic_curve_to((p(p0), p(p1), p(p2))),
-                kurbo::PathEl::ClosePath => data.close(),
-            };
-        }
-
-        let path = svg::node::element::Path::new()
-            .set("stroke", "black")
-            .set("stroke-width", stroke_width)
-            .set("stroke-linecap", "round")
-            .set("stroke-linejoin", "round")
-            .set("opacity", 0.5)
-            .set("fill", color)
-            .set("d", data);
-        document = document.add(path);
+        document = document.add(input_path(c, color, stroke_width));
     }
 
     document = add_op(document, &contours, one_width, stroke_width);
@@ -93,6 +75,38 @@ pub fn main() -> anyhow::Result<()> {
     svg::save(&args.output, &document)?;
 
     Ok(())
+}
+
+// Craft patch (example fill rule): the inputs are drawn with the fill rule the operation uses.
+fn svg_fill_rule(fill_rule: FillRule) -> &'static str {
+    match fill_rule {
+        FillRule::EvenOdd => "evenodd",
+        FillRule::NonZero => "nonzero",
+    }
+}
+
+fn input_path(shape: &BezPath, color: &str, stroke_width: f64) -> svg::node::element::Path {
+    let mut data = svg::node::element::path::Data::new();
+    for el in shape {
+        let p = |point: kurbo::Point| (point.x, point.y);
+        data = match el {
+            kurbo::PathEl::MoveTo(p0) => data.move_to(p(p0)),
+            kurbo::PathEl::LineTo(p0) => data.line_to(p(p0)),
+            kurbo::PathEl::QuadTo(p0, p1) => data.quadratic_curve_to((p(p0), p(p1))),
+            kurbo::PathEl::CurveTo(p0, p1, p2) => data.cubic_curve_to((p(p0), p(p1), p(p2))),
+            kurbo::PathEl::ClosePath => data.close(),
+        };
+    }
+
+    svg::node::element::Path::new()
+        .set("stroke", "black")
+        .set("stroke-width", stroke_width)
+        .set("stroke-linecap", "round")
+        .set("stroke-linejoin", "round")
+        .set("opacity", 0.5)
+        .set("fill", color)
+        .set("fill-rule", svg_fill_rule(FILL_RULE))
+        .set("d", data)
 }
 
 fn add_op(mut doc: Document, contours: &Contours, x_off: f64, stroke_width: f64) -> Document {
@@ -140,7 +154,7 @@ fn stroke_width(bbox: kurbo::Rect) -> f64 {
 // Craft patch (example stroke width).
 #[cfg(test)]
 mod tests {
-    use super::stroke_width;
+    use super::*;
 
     #[test]
     fn stroke_width_follows_the_larger_side() {
@@ -148,5 +162,21 @@ mod tests {
         assert_eq!(stroke_width(wide), 1.0);
         let tall = kurbo::Rect::new(100.0, 0.0, 101.0, 512.0);
         assert_eq!(stroke_width(tall), 1.0);
+    }
+
+    #[test]
+    fn inputs_are_drawn_with_the_operation_fill_rule() {
+        // Two nested squares with the same orientation. Even-odd leaves the inner square
+        // empty, and nonzero fills it.
+        let nested = BezPath::from_svg("M0,0 L10,0 L10,10 L0,10 Z M2,2 L8,2 L8,8 L2,8 Z").unwrap();
+        let drawn = input_path(&nested, "green", 0.1).to_string();
+        assert_eq!(FILL_RULE, FillRule::EvenOdd);
+        assert!(drawn.contains(r#"fill-rule="evenodd""#), "{drawn}");
+    }
+
+    #[test]
+    fn svg_fill_rule_names() {
+        assert_eq!(svg_fill_rule(FillRule::EvenOdd), "evenodd");
+        assert_eq!(svg_fill_rule(FillRule::NonZero), "nonzero");
     }
 }
