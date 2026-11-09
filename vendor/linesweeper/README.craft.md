@@ -96,6 +96,9 @@ names, which is archived; its README says development moved off GitHub.
 `824b0791a750f7b27b8edcbb6c6244d0e629875e`. That commit is not in the GitHub repository the manifest
 names, which is archived; its README says development moved off GitHub.
 
+`824b0791a750f7b27b8edcbb6c6244d0e629875e`. That commit is not in the GitHub repository the manifest
+names, which is archived; its README says development moved off GitHub.
+
 Every file here except this one, `SOURCE.json` and the files under Local changes is byte for byte the
 file in the `.crate` archive. `SOURCE.json` records the hash of the `.crate` download
 (`source_archive_sha256`) and, for every file kept, the hash in the package (`source_sha256`) and the
@@ -229,6 +232,9 @@ Every change here updates this table and `SOURCE.json` in the same commit.
 
 Every change here updates this table and `SOURCE.json` in the same commit.
 | `src/sweep/sweep_line.rs`, `src/treevec.rs` | `intersection_scan_right` and `intersection_scan_left` step over each run of sweep-line segments that end at the current height with one pass of a `TreeVec` iterator, instead of one indexed tree lookup per segment. `TreeVec::range_rev_to` iterates the elements before an index from back to front for the left scan. The scans compare the same segments and push the same events, so the output does not change; a polygon with 40,000 segments ending and 40,000 starting at one height sweeps in about 60% of the time. The `scans_step_over_segments_that_end` test checks that a segment ending at the current height does not stop the scan, `runs_of_ending_segments_keep_the_output` checks the area of such a polygon, and the `treevec` test `range_rev_to` checks the iterator. |
+| `intersect_cubics_with_precomputed_decomp` compares the precomputed approximations of two pieces with `ish_tolerance` before it cuts either cubic to their shared y-range, and when that gives one `Left` or `Right` interval it records that order without cutting them | `Craft patch (approximation first)` | `src/curve/mod.rs` | `curve::test::approximation_first_keeps_the_curve_order` |
+
+Every change here updates this table and `SOURCE.json` in the same commit.
 
 `omitted_files` lists the 43 files of the package left out here, with their hashes:
 

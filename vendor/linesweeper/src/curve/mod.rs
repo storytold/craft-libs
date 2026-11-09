@@ -1611,6 +1611,52 @@ pub fn intersect_cubics_with_precomputed_decomp(
     sure_tolerance: f64,
     ish_tolerance: f64,
 ) -> CurveOrder {
+    intersect_decompositions(c0, c0_div, c1, c1_div, sure_tolerance, ish_tolerance, true)
+}
+
+// Craft patch (approximation first): when the precomputed approximations of
+// two pieces are more than `ish_tolerance` apart over the whole shared
+// y-range, the order is decided without cutting either cubic to that range.
+// `intersect_cubics_rec` would cut both cubics first and then compare the same
+// approximations with the smaller `sure_tolerance`.
+fn order_from_precomputed_approx(
+    cubic0: &CubicParams,
+    cubic1: &CubicParams,
+    y0: f64,
+    y1: f64,
+    sure_tolerance: f64,
+    ish_tolerance: f64,
+) -> Option<Order> {
+    // `intersect_cubics_rec` uses bounding boxes for intervals this short.
+    if y1 - y0 < ish_tolerance {
+        return None;
+    }
+    let y_mid = (y0 + y1) / 2.0;
+    let orig_y_mid0 = (cubic0.c.p0.y + cubic0.c.p3.y) / 2.0;
+    let orig_y_mid1 = (cubic1.c.p0.y + cubic1.c.p3.y) / 2.0;
+    let ep0 = cubic0.approx.shift_y(orig_y_mid0 - y_mid);
+    let ep1 = cubic1.approx.shift_y(orig_y_mid1 - y_mid);
+    let tolerance = sure_tolerance.max(ish_tolerance);
+    let signs = ep0.compare(&ep1, tolerance, tolerance, y0 - y_mid, y1 - y_mid);
+    match signs.entries.as_slice() {
+        [entry] => match entry.order {
+            MaybeOrder::Left => Some(Order::Left),
+            MaybeOrder::Right => Some(Order::Right),
+            MaybeOrder::Ish | MaybeOrder::Unknown => None,
+        },
+        _ => None,
+    }
+}
+
+fn intersect_decompositions(
+    c0: CubicBez,
+    c0_div: &AlmostHorizontalDecomposition,
+    c1: CubicBez,
+    c1_div: &AlmostHorizontalDecomposition,
+    sure_tolerance: f64,
+    ish_tolerance: f64,
+    approx_first: bool,
+) -> CurveOrder {
     let y0 = c0.p0.y.max(c1.p0.y);
     let y1 = c0.p3.y.min(c1.p3.y);
 
@@ -1630,17 +1676,26 @@ pub fn intersect_cubics_with_precomputed_decomp(
             let y0 = c0.c.p0.y.max(c1.c.p0.y);
             let y1 = c0.c.p3.y.min(c1.c.p3.y);
             if y0 < y1 {
-                intersect_cubics_rec(
-                    c0,
-                    c1,
-                    true,
-                    y0,
-                    y1,
-                    sure_tolerance,
-                    ish_tolerance,
-                    &mut ret,
-                    MetricsStatus::default(),
-                );
+                let settled = if approx_first {
+                    order_from_precomputed_approx(c0, c1, y0, y1, sure_tolerance, ish_tolerance)
+                } else {
+                    None
+                };
+                if let Some(order) = settled {
+                    ret.push(y1, order, MetricsStatus::default());
+                } else {
+                    intersect_cubics_rec(
+                        c0,
+                        c1,
+                        true,
+                        y0,
+                        y1,
+                        sure_tolerance,
+                        ish_tolerance,
+                        &mut ret,
+                        MetricsStatus::default(),
+                    );
+                }
             }
         }
     } else if y0 == y1 {
@@ -1789,6 +1844,119 @@ mod test {
         let b = CubicBez::new((0.3, 0.0), (0.3, 1.0 / 3.0), (0.3, 2.0 / 3.0), (0.3, 1.0));
         let cmp = intersect_cubics(a, b, sure_tol, ish_tol);
         assert_eq!(cmp.iter().count(), 3);
+    }
+
+    // Craft patch (approximation first) test: deciding the order of two pieces
+    // from their precomputed approximations gives the same `CurveOrder` as
+    // cutting the cubics first, for curves that are far apart, close, touching
+    // and crossing, and for generated pairs.
+    #[test]
+    fn approximation_first_keeps_the_curve_order() {
+        fn orders(
+            c0: CubicBez,
+            c1: CubicBez,
+            sure: f64,
+            ish: f64,
+            approx_first: bool,
+        ) -> Vec<(f64, f64, Order)> {
+            let d0 = AlmostHorizontalDecomposition::from_monotone_cubic(c0);
+            let d1 = AlmostHorizontalDecomposition::from_monotone_cubic(c1);
+            intersect_decompositions(c0, &d0, c1, &d1, sure, ish, approx_first)
+                .iter()
+                .collect()
+        }
+
+        // Counts the pieces whose order the approximations decide.
+        fn settled(c0: CubicBez, c1: CubicBez, sure: f64, ish: f64) -> (usize, usize) {
+            let d0 = AlmostHorizontalDecomposition::from_monotone_cubic(c0);
+            let d1 = AlmostHorizontalDecomposition::from_monotone_cubic(c1);
+            let (mut hits, mut misses) = (0, 0);
+            for p0 in &d0.pieces {
+                for p1 in &d1.pieces {
+                    let y0 = p0.c.p0.y.max(p1.c.p0.y);
+                    let y1 = p0.c.p3.y.min(p1.c.p3.y);
+                    if y0 < y1 {
+                        match order_from_precomputed_approx(p0, p1, y0, y1, sure, ish) {
+                            Some(_) => hits += 1,
+                            None => misses += 1,
+                        }
+                    }
+                }
+            }
+            (hits, misses)
+        }
+
+        fn shifted(c: CubicBez, dx: f64, dy: f64) -> CubicBez {
+            let v = Vec2::new(dx, dy);
+            CubicBez::new(c.p0 + v, c.p1 + v, c.p2 + v, c.p3 + v)
+        }
+
+        let sure = 1e-4;
+        let ish = 1e-3;
+        let curves = [
+            CubicBez::new((0.0, 0.0), (1.0, 0.3), (-1.0, 0.7), (0.0, 1.0)),
+            CubicBez::new((-1.0, 0.0), (0.5, 0.6), (0.5, 0.4), (-1.0, 1.0)),
+            CubicBez::new((0.0, 0.0), (30.0, 0.01), (60.0, 0.02), (90.0, 1.0)),
+            CubicBez::new((90.0, 0.0), (60.0, 0.98), (30.0, 0.99), (0.0, 1.0)),
+            CubicBez::new((0.0, 0.0), (0.0, 1.0 / 3.0), (0.0, 2.0 / 3.0), (0.0, 1.0)),
+        ];
+        let (mut hits, mut misses) = (0, 0);
+        for c0 in curves {
+            for c1 in curves {
+                for k in [
+                    -1000.0, -10.0, -2.0, -1.0, -0.5, 0.0, 0.5, 1.0, 2.0, 10.0, 1000.0,
+                ] {
+                    for dy in [0.0, 0.25] {
+                        let c1 = shifted(c1, k * ish, dy);
+                        assert_eq!(
+                            orders(c0, c1, sure, ish, true),
+                            orders(c0, c1, sure, ish, false),
+                            "{c0:?} {c1:?}"
+                        );
+                        let (h, m) = settled(c0, c1, sure, ish);
+                        hits += h;
+                        misses += m;
+                    }
+                }
+            }
+        }
+        assert!(
+            hits > 0 && misses > 0,
+            "{hits} settled, {misses} not settled"
+        );
+
+        // Generated pairs, from a fixed sequence of bytes.
+        let mut state = 0x9e37_79b9_7f4a_7c15_u64;
+        let mut bytes = vec![0u8; 256];
+        let mut compared = 0;
+        for _ in 0..2000 {
+            for b in &mut bytes {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                *b = state as u8;
+            }
+            let mut u = arbitrary::Unstructured::new(&bytes);
+            let Ok(c0) = crate::arbitrary::monotonic_bezier(&mut u) else {
+                continue;
+            };
+            let Ok(c1) = crate::arbitrary::another_monotonic_bezier(&mut u, &c0) else {
+                continue;
+            };
+            // The curves must be y-monotone and share a y-range.
+            if c1.p0.y >= c1.p3.y || c0.p0.y.max(c1.p0.y) >= c0.p3.y.min(c1.p3.y) {
+                continue;
+            }
+            for (sure, ish) in [(1e-3, 1e-2), (0.25, 1.0), (100.0, 1000.0)] {
+                assert_eq!(
+                    orders(c0, c1, sure, ish, true),
+                    orders(c0, c1, sure, ish, false),
+                    "{c0:?} {c1:?} {sure} {ish}"
+                );
+                compared += 1;
+            }
+        }
+        assert!(compared > 3000, "{compared} generated comparisons");
     }
 
     #[test]
