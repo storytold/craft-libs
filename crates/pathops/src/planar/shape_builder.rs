@@ -1,5 +1,6 @@
 // Carved from VectorCraft's crates/pathops (src/planar/shape_builder.rs) at storytold/vectorcraft ff9deee46d1c59dc9ecef0b668c25e57cd80b55e.
 // Copyright (c) 2026 ArtCraft Team and the VectorCraft contributors. MIT OR Apache-2.0.
+// Brought up to storytold/vectorcraft 0945eaf2b3d4e93963aaa6d796b9efe53feaf624: its changes to this file (4cf4ea3, 500f74b) are covered here (see the README).
 
 use super::map::try_build;
 use super::*;

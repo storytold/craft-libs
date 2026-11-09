@@ -1,6 +1,7 @@
 // Carved from VectorCraft's crates/pathops (src/edit.rs: simplify, remove redundant points, join) at
 // storytold/vectorcraft ff9deee46d1c59dc9ecef0b668c25e57cd80b55e.
 // Copyright (c) 2026 ArtCraft Team and the VectorCraft contributors. MIT OR Apache-2.0.
+// Brought up to storytold/vectorcraft 0945eaf2b3d4e93963aaa6d796b9efe53feaf624 by porting its changes to this file (3fcd157..0945eaf; see the README).
 
 //! Path editing: Simplify, Remove redundant points and Join.
 
@@ -99,8 +100,10 @@ fn turn_deg(a: &Seg, b: &Seg) -> f64 {
 /// Least-squares Bézier refit of every subpath, keeping corners sharper than the threshold.
 ///
 /// The work is bounded: a path of more than [`crate::MAX_ELEMENTS`] elements is returned as it is, a
-/// run of segments that would take more than [`MAX_FIT_POINTS`] samples to fit stays as it is, and
-/// so does every run left when the samples taken, smoothed and fitted add up to [`FIT_WORK`].
+/// run of segments is sampled and fitted in parts of at most [`MAX_FIT_POINTS`] samples (an anchor where two meet), and
+/// every run left when the samples taken, smoothed and fitted add up to [`FIT_WORK`] stays as it is. What the fits and the
+/// lines of Convert to Straight Lines make is held to [`crate::Limits::elements`] segments in all, over every run of every subpath,
+/// charged before it is made; a piece past that stays as it was, which keeps the result within the tolerance of the path.
 pub fn simplify_with(path: &BezPath, opts: &SimplifyOptions) -> BezPath {
     let limits = crate::budget::limits();
     simplify_within(path, opts, &mut Fit::new(limits.fit_work, limits.fit_points))
@@ -187,7 +190,9 @@ fn simplify_subpath(sub: &Sub, opts: &SimplifyOptions, fit: &mut Fit) -> Option<
     Some(no_worse(sub, s, anchors))
 }
 
-/// Most points sampled from one run of segments to refit: 1,048,576 (the default of [`crate::Limits::fit_points`]).
+/// Most points sampled from one part of a run of segments to refit: 1,048,576 (the default of [`crate::Limits::fit_points`]). A longer
+/// run is fitted in parts of that many, with an anchor where two meet; a part is held to the room the call has left to make segments in
+/// ([`crate::Limits::elements`]) too.
 pub const MAX_FIT_POINTS: usize = 1 << 20;
 
 /// Most work one [`simplify_with`] does in all: 268,435,456 (the default of [`crate::Limits::fit_work`]), counting a point for each one sampled,

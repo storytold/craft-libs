@@ -6,8 +6,11 @@ regions, offset path, outline stroke, simplify and join. A path is a `BezPath`; 
 `kurbo`, `linesweeper` and `thiserror` and on no application.
 
 The crate is carved from VectorCraft's `crates/pathops` (`vectorcraft-pathops`) at
-[`storytold/vectorcraft` commit `ff9deee46d1c59dc9ecef0b668c25e57cd80b55e`](https://github.com/storytold/vectorcraft/tree/ff9deee46d1c59dc9ecef0b668c25e57cd80b55e/crates/pathops),
-and every source file says so in its header. VectorCraft keeps its anchor-based `PathData` model; here
+[`storytold/vectorcraft` commit `ff9deee46d1c59dc9ecef0b668c25e57cd80b55e`](https://github.com/storytold/vectorcraft/tree/ff9deee46d1c59dc9ecef0b668c25e57cd80b55e/crates/pathops)
+(2026-11-07), and brought up to
+[`0945eaf2b3d4e93963aaa6d796b9efe53feaf624`](https://github.com/storytold/vectorcraft/tree/0945eaf2b3d4e93963aaa6d796b9efe53feaf624/crates/pathops),
+the head of that directory on 2026-11-09, by porting each of the 15 commits since (`3fcd157..0945eaf`: see "Brought up to VectorCraft main"). Every
+source file says where it was carved from, and those the 15 commits changed say where they were brought to. VectorCraft keeps its anchor-based `PathData` model; here
 the same algorithms read and write `BezPath`. Diagram, vector and slide editors all need path booleans,
 offsets and strokes, and can share it. The crate offers the building blocks; what each app's own command
 means in terms of them is the app's to decide.
@@ -345,9 +348,28 @@ work of each operation is bounded before it starts, in counts the tests assert o
   `stroke_region`, and of the paths in `unite_all`, counts the boundary of its sweep before its contours are
   made and the contours before they are written, and is `TooComplex` (or empty) past the element limit too
   (outlines that each pass cross each other a great deal);
+- a long, low input is swept along its length. The sweep moves a horizontal line down the page and takes time at each event in
+  proportion to the segments on that line, so a row of dots, rows of a zigzag or a stroked line of type puts a whole row on
+  it at once. `stroke_region`, `try_stroke_region`, `unite_all_with` and `try_unite_all_with` (so `outline_stroke`, `unite_all` and
+  their `try_` forms) estimate the segments the sweep holds at once in each direction, from the boxes of up to 4,096 segments (one
+  from each run of them, at a position that changes from run to run, so that input that repeats is measured at every
+  position), and where the input turned a quarter turn is under two thirds of the upright estimate (2,048 segments or more)
+  they run on the turned input and turn the result back (a quarter turn swaps and negates coordinates: no point moves by
+  rounding; the result differs from the upright one only by what the sweep's snapping to its tolerance does differently, within
+  the refit precision). Offset Path is not turned. The estimate only chooses the direction: the operation runs turned from its
+  first step, so the counts of its limits and the metered dry sweep see the turned input, and the meter holds the work of the
+  sweep that really runs, whichever way it runs (a budget between the work upright and turned admits the turned sweep and
+  refuses the upright one, and one under the turned work refuses both). The estimate is made after the element limit and
+  reads each segment once (it reads nothing below 2,048). Here a row of 5,500 dots, which took 2.8 s, and one of 7,000 lenses, which
+  the pairs of pieces refused, are made, and a wavy stroke past 3,100 cubics is no longer refused: see "Ordinary input the defaults refuse";
 - the operations without a `Result` answer an empty path, no shapes, or the input unchanged, as their
-  documentation says. `simplify` stops fitting at `MAX_FIT_POINTS` samples of one run and at `FIT_WORK` in
-  all, `remove_redundant_points` at `REDUNDANT_WORK` (the joints it reads in its search, the points of a run it
+  documentation says. `simplify` samples and fits a run in parts of at most `MAX_FIT_POINTS` samples (an anchor
+  where two meet) and stops fitting at `FIT_WORK` in all, and what its fits and its lines make is held to
+  `MAX_ELEMENTS` segments over the whole call, over every run of every subpath, charged before it is made (the lines of
+  a curve too fine to sample, before they are; the samples of a part, before it is refit, with what it did not make given
+  back): a piece past that stays as it was, which keeps the result within the tolerance (VectorCraft holds it to 2^21
+  segments for each run, which many subpaths each under it add up past without bound: see Differences),
+  `remove_redundant_points` at `REDUNDANT_WORK` (the joints it reads in its search, the points of a run it
   checks one by one against the line that replaces it, and the points a run of curves is refitted from) and
   `join` at `JOIN_WORK`, and leaves the rest as it is;
 - Most of `REDUNDANT_WORK` goes to the refits (24 for each point, about a hundred points for a run of a few
@@ -469,13 +491,12 @@ bound (`elements`, `segment_pairs`, `offset_segment_pairs`, `sweep_line_pairs`, 
 
 `MAX_SWEEP_LINE_PAIRS` is a worst case: it prices a pair at 25 ns, and the sweep takes 1 to 25 ns for one,
 so some input that would finish in a few seconds is refused. Measured in a release build, with the
-sweep-line limit at its default and raised to 2^30:
+sweep-line limit at its default and raised to 2^30 (a long, low input, which this limit refused, a wavy stroke of more than 3,100
+cubics or a row of 5,500 dots, is made since the sweep runs along it, and is not in the table: see the costs):
 
 | Input | By default | With `sweep_line_pairs` = 2^30 |
 |---|---|---|
-| `try_outline_stroke`, 3 wide, of a wavy open path of cubics 10 long and 3 high | 3,000 cubics: 1.0 s; 3,100 and more: `TooComplex` in 0.3 s | 4,000: 1.7 s; 6,000: 2.7 s; 8,000: `TooComplex` |
 | `pathfinder(Divide, ..)` of one comb polygon (a base with teeth 100 high and 1 wide, 10 apart) | 6,500 teeth: 0.5 s; 7,000 and more: no shapes, in 4 ms | 10,000: 0.6 s; 20,000: no shapes |
-| `unite_all` of a row of dots on one line | 5,500 dots: 3.0 s; 5,800 and more: `TooComplex` | |
 
 `MAX_SWEEP_EVENT_WORK` is also a worst case, priced at some nanoseconds a search of the sweep line: a hatch of
 400 thin strokes slanting each way across 400 others (3,200 elements, none of them level) takes 3.1 s, and
@@ -594,7 +615,7 @@ or so, measured once in a release build:
   - closed shapes that cross themselves (random closed cubics of two or three each, mixed fill rules, 1,200 stacks; 2,400 results of Merge, 3,589 of Trim): a wrong area, by up to 463 square units,
     in 5.8 to 8.7% of the pairs for the four booleans, in 7.2% of Divide, 10% of Merge and 10.8% of Trim, whatever the size or the turn of the drawing; the cause is not known, and is not this one.
 
-  VectorCraft's `shape_builder` and `live_paint` are this code and give the same results on the same stacks (open: 924 and 372 wrong lines and edges, 512 and 6 faces; closed shapes that do
+  VectorCraft's `shape_builder` and `live_paint` are this code and give the same results on the same stacks, as of its commit `0945eaf` (the survey was repeated on it, and on this crate after the 15 commits were ported: every number in this item is as it was) (open: 924 and 372 wrong lines and edges, 512 and 6 faces; closed shapes that do
   not cross themselves: 4 faces and 3 Outlines), and its closed self-crossing results are worse (128 to 164 of 1,200 booleans, 121 of Divide, 311 of 2,400 Merge, 458 of 3,589 Trim). Its Outline of open
   paths cuts them at the vertices of the filled areas (their implicit closing lines included) and not at their crossings, so it is not compared. None of this is changed here: the map's reading of the sweep and the Outline's cuts at its
   vertices, and the self-crossing results, are left for a later change. Lines that cross lines, and a line across an arc or a circle, are cut at every crossing (`tests/it/outline_cuts.rs`).
@@ -691,8 +712,9 @@ a load of 15, it took 10.7 and 5.9 s.
 | Operation | Time |
 |---|---|
 | `try_boolean` of two polygons of 262,000 sides each (the element limit; peak memory 1.0 GB) | 1.8 s |
-| `unite_all` of a column of 16,000 / 32,000 / 64,000 dots (64,000 / 128,000 / 256,000 elements) | 0.5 / 1.2 / 2.1 s |
-| `unite_all` of a row of 5,500 dots on one line (the sweep-line limit is at 5,800) | 2.8 s |
+| `unite_all` of a column of 16,000 / 32,000 / 64,000 dots (112,000 / 224,000 / 448,000 elements; the meter on) | 1.7 / 4.8 / 8.0 s |
+| `unite_all` of a row of 5,500 / 20,000 / 64,000 dots on one line (7 elements a dot: 74,898 are the most the element limit holds; a long, low input is swept along its length, and 5,500 were refused by the sweep-line limit before) | 0.5 / 2.1 / 7.3 s |
+| `unite_all` of a row of 7,000 / 20,000 lenses 5 apart (refused by the pairs of pieces before: 7,000 were) | 0.39 / 1.3 s |
 | `unite_all` of a grid of 16,000 / 32,000 lenses with one more 10 million away | 0.6 / 1.4 s (as without the far one) |
 | `try_area` of a pie of 256 slices (512 segment ends at its centre, the limit) | 0.5 to 0.9 s |
 | `try_area` of 3 / 4 pies of 256 slices on a diagonal, so that their heights do not overlap (the work of the ends is 3.9e9 / 5.2e9 against the limit of 4e9) | 3.3 to 3.7 s, 270 MB / refused in 1 ms (8 and 30 pies, 15.7 s and 65.8 s before the limit, in 2 and 8 ms) |
@@ -719,10 +741,11 @@ a load of 15, it took 10.7 and 5.9 s.
 | `pathfinder(Exclude / Divide, ..)` of 2,000 / 2,895 squares nested (16 / 33 million coverage entries; 2,895 is the limit) | 0.11 / 0.25 s and 270 / 300 MB for 2,000; 0.2 s and 550 MB for 2,895 |
 | `pathfinder(Merge / Divide, ..)` of a fan of 208 shapes at a point beside 40,000 squares (the pass limit) | 2.6 / 3.5 s |
 | `try_area` of a rectangle with 20,000 collinear vertices on its top and bottom (40,000 pieces of no height) | 24 ms |
-| `try_outline_stroke` of 3,000 wavy cubics 3 wide (the default limit is at about 3,100) | 1.0 s |
+| `try_outline_stroke` of 3,000 / 8,000 / 100,000 wavy cubics 3 wide (a long, low path, swept along its length; 3,100 and more were refused by the sweep-line limit before, 3,000 took 0.75 s) | 0.07 / 0.18 / 2.7 s |
 | `try_outline_stroke` of 1,000 cubics 1,000 wide (22,000 elements of outline, much of it crossing itself) | 5.4 s |
 | `try_outline_stroke` of 200,000 cubics 100 million wide | refused in 0.3 s |
-| `simplify` of 100,000 segments | 1.7 s (the `FIT_WORK` limit) |
+| `simplify` of a serpentine of 100,000 / 400,000 smooth anchors (1.6 apart, 2 up and down, at a tolerance of 1: one run of 600,000 / 2.4 million samples, fitted in parts of the million the fit holds; before, it was left as it was, in 0.06 s, the fit running out of splits) | 0.18 / 0.70 s (91,078 / 361,457 elements) |
+| `simplify` with `smooth` of 30 of a traced circle of 100,000 / 400,000 sides, and the same converted to straight lines | 0.07 / 0.35 s, and 0.015 / 0.056 s (30,772 / 123,080 elements) |
 | `join` of 4,096 lines to a chain of 500,000 segments | 0.36 s |
 | `interior_point` of a comb of 40,000 teeth (160,000 elements) | 11 ms |
 | `live_paint` of a comb of 20,000 teeth | 1.2 s |
@@ -741,7 +764,9 @@ faces of a planar map for VectorCraft's Shape Builder tool. They need VectorCraf
 
 The algorithms and tolerances are VectorCraft's. The carve was compared with `vectorcraft-pathops` on
 random shapes through every operation (the pinned Pathfinder results in `tests/it/pathfinder_pinned.rs` are
-bit for bit VectorCraft's), and the results are identical except where noted:
+bit for bit VectorCraft's, and still are against VectorCraft main), and the results are identical except where noted. VectorCraft's own limits,
+which this crate keeps and adds to, are listed under "Brought up to VectorCraft main", below. The base of the list is `ff9deee`, the
+commit of the carve; where VectorCraft has since done what a difference says, the item says so, or is gone:
 
 - a subpath that is open but ends where it starts is no longer given a closing segment of no length; the
   Pathfinder Outline of one has no pieces of no length, and `join` closes a path whose ends are within the
@@ -801,14 +826,10 @@ bit for bit VectorCraft's), and the results are identical except where noted:
     `try_boolean` does (for up to eight inputs), and resolve the inputs first when they do not add up;
     VectorCraft did that for two operands only, and the n-ary result gained or lost a region for a
     self-crossing one. When resolving is over a limit, `try_boolean` is `TooComplex`, where it returned the
-    result it knew to be wrong (VectorCraft had no limits to be over);
-  - Divide and `regions` found the inputs that cover each side of each edge with a flag for every input
-    (80,000 flags for 100 shapes apart, 1,280,000 for 400: the square of their number), and now list the
-    covering inputs only, in the same order and with the same results; past `MASK_WORK` entries they give
-    nothing, as an input too complex to sweep does;
-  - `simplify_with` with `straight_lines` measures the distance of a point to the finite segment it is
-    judged against, not to the line through it, so a path that runs out past an end and back is kept;
-    `smooth` is documented to measure the tolerance from the smoothed path;
+    result it knew to be wrong (VectorCraft has `MAX_SEGMENT_PAIRS` there and gives the first result when the recovery is over it);
+  - `simplify_with` documents that `smooth` measures the tolerance from the smoothed path (that Convert to Straight Lines measures
+    a point to the finite segment it is judged against, so that a path that runs out past an end and back is kept, was a difference
+    too, until VectorCraft's bc19dd6);
   - `remove_redundant_points` (and so the stroke's spine) checks a merged run against the segments it replaces,
     not only the joint it merges across: a half circle of ten thousand chords came out as its diameter at a
     tolerance of 0.001, and a circle of radius 1,000 in 1,000 cubics as 13 elements, 20 times the tolerance
@@ -999,24 +1020,30 @@ bit for bit VectorCraft's), and the results are identical except where noted:
     VectorCraft's holds the curves of the ones it left out too, so a boundary piece near one could be rebuilt
     from a curve of a path that is not in the union;
   - `simplify_with` with `straight_lines` samples the intervals the chords need up to a limit, where a long
-    curve was sampled in 256 and its chords were further from it than the tolerance, counts the sample at
-    the start of a run in its limits, and holds the samples to the tolerance less how far the curve can be
-    from them between two (a curve 1.000002 high between two samples 0.99999 high came out 1.000002 from its
-    one chord at a tolerance of 1);
+    curve was sampled in 256 and its chords were further from it than the tolerance (VectorCraft main does since 199c4c3: its
+    `sample_steps` takes enough samples of every curve), counts the sample at the start of a run in its limits, and holds the
+    samples to the tolerance less how far the curve can be from them between two (a curve 1.000002 high between two samples
+    0.99999 high came out 1.000002 from its one chord at a tolerance of 1). A curve that needs more than 65,536 intervals for its
+    chords to be within a tenth of the tolerance is evenly spaced lines, as many as keep it within the tolerance itself, if that is
+    65,536 or fewer; where it is more, it stays a curve here (VectorCraft makes lines anyway, which can pass the tolerance);
   - `simplify` holds a refit curve to the tolerance between its samples too, where only its distance at the
-    samples was checked: a cubic is taken when its error at the samples, how far it can be from the chords
+    samples was checked (VectorCraft main does since 199c4c3, by `bulge`, which looks at a curve between two points at samples and rejects
+    it where one is over 99% of the tolerance from the line between them, and fits at 98% of the tolerance; here it is a bound that proves
+    it, and it is kept): a cubic is taken when its error at the samples, how far it can be from the chords
     between its values at their parameters (from its second differences and the widest step between the
     parameters), and how far the run can be from the polyline of its samples add up to the tolerance at most,
     and a stretch of two samples that its tangents bend too far from their chord is no fit (the run stays as
     it is). Chains of cubics each up to about five tolerances long, turning up to 1.5 rad, came out up to
-    1.026 of the tolerance from their refits (3 of 3,000 random ones; none of 9,000 now). Against
-    VectorCraft 7 of 3,600 random simplifications differ, all within the tolerance either way and none further
-    from the path than VectorCraft's (it was up to 0.996 of the tolerance; four of the runs are now left as
-    they are, three have one element more). A refit cubic that is nearly straight becomes its chord only
+    1.026 of the tolerance from their refits (3 of 3,000 random ones; none of 9,000 now). A pair of points is a cubic whose handles
+    are held under the tolerance (as VectorCraft main's are) and whose bound is the distance of its handles from the chord, so that every
+    stretch splits down to pairs and fits. Against VectorCraft main (0945eaf), on 900 random paths a seed (seeds 1, 3, 5 and 7, the tolerances
+    0.1, 0.5 and 3), 788, 772, 770 and 764 simplifications are the same, and 112, 128, 130 and 136 differ: each of them is within the tolerance
+    of the path both ways, measured on 64 samples a segment (the worst is 0.95 to 0.97 of it for VectorCraft, 0.98 to 0.99 here), with the same
+    number of elements in 109, 125, 125 and 131 of them, fewer here in 2, 3, 5 and 5, and more in 1, 0, 0 and 0; before the port 249, 274,
+    273 and 276 differed, with more elements here in 37, 46, 49 and 45 (VectorCraft had changed). A refit cubic that is nearly straight becomes its chord only
     where the chord is within the tolerance of the run too: the cubic's bound and how far its handles are from
     the chord add up to the tolerance at most (a bump half a unit high on a run 75 long came out as one line
-    1.0026 of the tolerance from it at a tolerance of 0.5; it is a cubic now). No random simplification of the
-    comparison changes with it;
+    1.0026 of the tolerance from it at a tolerance of 0.5; it is a cubic now);
   - `stroke_region` and `try_stroke_region` hold a single outline to the element limit as they do each of
     several (the boundary of its sweep counted before its contours are made), where one outline that crossed
     itself a great deal made all its contours, and hold the union of several outlines, and `unite_all` and
@@ -1044,16 +1071,15 @@ bit for bit VectorCraft's), and the results are identical except where noted:
     (the curve is inside its bounds, and a junction within the sweep's noise of it is inside them widened by that
     and the rounding of the coordinates), and looks them up by blocks that have the segment's heights, not one by one
     among those with its x: the same junctions are found;
-- the predicate of `boolean_n` and `try_boolean_n` is asked once for each distinct winding of the sweep, and the
-  contour pass is given the answers by where the windings are stored, where VectorCraft asked it every time
-  the pass looked at a side of a segment, and the pass scans west through every segment that is no boundary
-  for every contour it starts: 2,000 squares in a column, each an input, beside a path of 2,000 tall
-  rectangles to their west took it 6.5 s (1,000: 0.85 s), the cube of their number, and 0.25 s here (1,000:
-  0.07 s); the flags handed to the predicate were 32 billion and are 4 million. Nested squares round a column
-  of small squares, each an input (the scan meets a long winding at each step), 1,000 and 1,000: 1.25 s, and
-  0.12 s here. The results are the same for a predicate that depends on its flags alone; one that counts its
-  calls sees fewer of them (it is asked once for each distinct winding, before the pass: twice for a
-  rectangle, outside and inside, not once for each of the eight sides of its segments);
+- the predicate of `boolean_n` and `try_boolean_n` is given the inputs that cover a winding, as VectorCraft main's is since 72c46b8, and
+  is asked once for each distinct winding of the sweep, with the pass given the answers by where the windings are stored, where VectorCraft
+  asks it each time the pass looks at a side of a segment: a pass scans west through every segment that is no boundary for every contour
+  it starts, and 2,000 squares in a column, each an input, beside a path of 2,000 tall rectangles to their west took
+  VectorCraft at ff9deee 6.5 s (1,000: 0.85 s), the cube of their number, and 0.25 s here (1,000: 0.08 s); VectorCraft main takes 0.14 s
+  (1,000: 0.04 s), its lists being short and its pass the same. Nested squares round a column of small squares, each an input (the scan meets a long
+  winding at each step), 1,000 and 1,000: VectorCraft 1.25 s at ff9deee and 2.3 s at 0945eaf, 0.17 s here. The results are the same for a predicate
+  that depends on its list alone; one that counts its calls sees fewer of them here (it is asked once for each distinct winding, before the pass: twice
+  for a rectangle, outside and inside, not once for each of the eight sides of its segments);
 - eight bounds are new and refuse input VectorCraft took, in whatever time it took, with `TooComplex` (or no
   shapes, for the operations that give none):
   - more than 2^20 places where segments cross, whatever the pieces on the sweep line, counted as a bound that is
@@ -1092,3 +1118,45 @@ bit for bit VectorCraft's), and the results are identical except where noted:
   `pathfinder_with(Divide, ..)` with an open path and a precision of 1e-300 panicked with "capacity overflow"
   in `kurbo::flatten`) and the lookups of input curves and points by a rectangle index (a column of shapes
   of one width was scanned whole at every point) are new.
+
+## Brought up to VectorCraft main
+
+The 15 commits that changed VectorCraft's `crates/pathops` after the carve (`3fcd157..0945eaf`, 2026-11-07 and 08) were each ported, covered by a
+fix this crate already had, or not applicable. VectorCraft's pathops tree at its main today (`9dc4c33`) is that of `0945eaf`. The harness
+(`pathops-diff`, the carve against `vectorcraft-pathops` on random shapes through every operation) was moved to `0945eaf`: the 40 pinned
+Pathfinder results are still identical, and in seeds 1, 3, 5 and 7 (300 random stacks each) only the `simplify` and `simplify-lines` rows move,
+as above: nothing else, the ORACLE rows included.
+
+| VectorCraft commit | What it changes in `crates/pathops` | Here |
+|---|---|---|
+| `3fcd157`, `f74c7e8` | Region building lists the shapes covering each region (a sorted set of lists, in the order of the old flag masks) instead of a flag for every shape. | Already here (Divide and `regions`, from the review rounds: `Arrangement::distinct_masks`, `cmp_masks`, counted in `MaskEntries` and held to `MASK_WORK`). The order test of 3fcd157 is ported. |
+| `72c46b8` | The contour passes of the booleans, Offset Path and `boolean_n` test the list of the inputs covering a face, not a flag for every input; `boolean_n` takes `Fn(&[usize]) -> bool`. | Ported. `mask_work` counts the entries listed (before the pass) where it counted four flags for each segment and input; the answer is still kept for each distinct winding. Its two tests are ported. |
+| `199c4c3` | Simplify: fitted curves stay within the tolerance (`bulge`), the split moves to two fifths of a piece, `join_pieces`, a first fit to about 16 points, `sample_steps`, runs fitted in parts, a closed smoothed path fitted across its start, limits on the samples and result. | Ported where it adds to this crate's fit: the inward split, `join_pieces` (each try charged to the work), the first fit to 16 points and the give-up, the direction at a split, parts of a run (at `fit_points` samples), lines for a curve too fine to sample (up to 65,536, as VectorCraft; never past the tolerance, which VectorCraft's can), the direction across the start of a smoothed loop. Not ported, because the crate's bound is stronger: `bulge`, which looks at samples (the bound proves it), and the 98% of the tolerance. Its limits: see below. |
+| `4a7d732` | Smoothing weighs consecutive samples within a sixteenth of a spread together, through a tree of sums. | Ported (charged: the tree by its samples before it is made, with a fallible allocation, each point by the nodes it looks at). |
+| `bc19dd6` | Convert to Straight Lines measures to the segment, not the line through it. | Already here; the test is ported. |
+| `4cf4ea3`, `500f74b` | Tests count the items an index lookup reads (before the repeats are removed) where they timed. | Already counted here (`work`); the bounds on the shape builder of a ring of 65,528 segments and on `live_paint` of 60 lines, and a test that a lookup counts every entry it reads, are ported. The same commits' changes to `doc` and `run_around` are not in this crate. |
+| `8a7011a` | Stroke outlining and unions sweep long, low paths along their length (`sweep_axis.rs`, a quarter turn); the tidy's lookups search along y when the window along x is wide. | Ported on `BezPath`, with the meter reading the turned input (see the limits). The tidy's lookups need nothing: they go through a rectangle index, in both axes. |
+| `96252ed` | `regions_within(shapes, limit)`: the region build stops at the first region past a limit. | Ported (`regions_within`, `try_regions_within`). |
+| `be0e934` | Merge finds every fill's faces in a few contour passes. | Already here (the batches of a classified walk, with `pass_work`). Its tests are ported. Merge keeps a difference: an island of a fill in a hole of the same fill is a shape of its own. |
+| `62a0168`, `bc87fd1` | 3D effects; the changes to `crates/pathops` are the README's Limits section. | Not applicable: the README here has its own Limits section, fuller than those. |
+| `9f62941`, `0945eaf` | Merges. | The resolution of the first is the cover lists of `72c46b8` in the walk of `96252ed`: ported with them. The second has none. |
+
+What VectorCraft main limits (the pathops sources, not its add-ons, which are not carved): pairs of segments with overlapping bounds
+(`MAX_SEGMENT_PAIRS`, 2^22, as here), the same for an offset (`MAX_OFFSET_SEGMENT_PAIRS`, 2^19, as here), a sweep tolerance of a unit
+(`MAX_SWEEP_EPS`, as `Degenerate` here), windings up to 8 checked (`MAX_CHECKED_WINDING`; it checks two operands, where this crate checks up to eight), and, since the 15 commits: 2^20
+samples of one fit (`MAX_FIT_SAMPLES`: `fit_points` here, per part), 2^16 samples of one segment (`MAX_SEGMENT_SAMPLES`: 65,536
+intervals for the chords of a curve here), 2^24 samples of one run (`MAX_RUN_SAMPLES`: here `FIT_WORK`, for the whole call), 2^21
+segments made by one run (`MAX_RUN_RESULT`: here `Limits::elements` for the whole call), 32 joins of a curve (`MAX_JOINS`, as here), 1,024 samples to
+check a curve between two points (`MAX_BULGE_SAMPLES`, not needed here), the quarter turn's 2,048 segments, 4,096 sampled boxes and gain of 1.5 (as here),
+and the caller's limit of `regions_within`. It has none of this crate's others: its bound on the work of a sweep is the two
+limits on pairs. Its `MAX_RUN_RESULT` and `MAX_RUN_SAMPLES` are for each run, so that many subpaths each under them add up
+past any bound: 16 subpaths of 37 quarter arcs of radius 1e7 (608 anchors) converted to straight lines at a tolerance of 0.001 make 33
+million anchors (2 GB, in 1 s), and 32 abort a process held to `ulimit -v 3000000` in 8 s; here the count is for the whole call, charged
+before it is made, and the arcs stay as they were.
+
+Inputs that VectorCraft main admits and this crate refused, measured after the port beside the star of 1,291 points, which is the yardstick
+(the meter on; peak memory under `ulimit -v 3000000`): a row of 5,500 dots (one path, ellipses 2 across, 3 apart, `try_unite_all`) is made in
+0.5 s beside the star's 7.9 s (VectorCraft 0.2 s beside 4.2 s), and 8,000 wavy cubics outlined (3 wide, butt caps, miter joins) in 0.17 s
+beside 7.8 s (VectorCraft 0.08 s beside 4.2 s): neither refused now, 0.06 and 0.02 of the star, with a peak of 0.95 GB, the star's own. The star
+is as it was before the port (best of ten pairs back to back: 7.70 s both; medians 7.8 and 8.1 s under a load of 2 to 5, which the order of the
+pairs did not change).
