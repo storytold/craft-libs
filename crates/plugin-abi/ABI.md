@@ -20,7 +20,7 @@ The gate runs before any guest code and gives the same answer on every engine. I
 - The exports in section 3 are present with these exact signatures.
 - Features are limited to MVP, bulk-memory, sign-ext, multi-value, non-trapping float-to-int, mutable globals and reference types. `simd128` is allowed only when `requires.features` lists it and the host policy reports `SIMD128` (off by default). Relaxed-simd, threads, memory64, GC, exceptions, tail calls and multi-memory are rejected.
 
-The gate lists every violation, not only the first.
+The gate lists every violation, not only the first. The one exception is a package over 32 MiB. It gets `PackageTooLarge` alone, before any parsing.
 
 Unknown contribution kinds. A `kind` this crate does not know is not a rejection. The manifest parser keeps the entry with its exact name and every other field, a host loads the entries it knows, and the plugin is shown as "partly supported". The entry gets every common check (`id`, `entry`, enum fields such as `phase`, `params`, `process`). Only the kind specific rules (a `hook` needs `phase`, a `before` hook needs `match`) bind the kinds that define them. The name must match `[a-z][a-z0-9-]{0,31}`. An unknown kind needs neither `craft_invoke` nor `craft_process`. A host never runs, registers or rewrites an unknown entry, and saving the plugin keeps the manifest bytes whole so a newer host can run them. Kinds listed as reserved (`function`, `provider`, `tool`) take this path until a release defines them.
 
