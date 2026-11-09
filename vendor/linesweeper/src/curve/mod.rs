@@ -314,7 +314,7 @@ impl CurveOrder {
         CurveOrder {
             start: self.start,
             cmps: ret,
-            metrics: Metrics::default(),
+            metrics: self.metrics,
         }
     }
 
@@ -1820,6 +1820,32 @@ mod test {
         };
 
         assert_eq!(order.clone().with_y_slop(0.5).cmps, order.cmps);
+    }
+
+    // Craft patch (y-slop metrics): the recursion-depth observations survive
+    // the slop, including when it changes the entries.
+    #[test]
+    fn y_slop_keeps_metrics() {
+        let metrics = Metrics {
+            entries: vec![MetricsEntry { end: 1.0, depth: 3 }],
+        };
+        let order = CurveOrder {
+            start: 0.0,
+            cmps: [
+                CurveOrderEntry {
+                    end: 0.5,
+                    order: Order::Left,
+                },
+                CurveOrderEntry {
+                    end: 1.0,
+                    order: Order::Ish,
+                },
+            ]
+            .into_iter()
+            .collect(),
+            metrics: metrics.clone(),
+        };
+        assert_eq!(order.with_y_slop(0.1).metrics, metrics);
     }
 
     #[test]
