@@ -23,13 +23,16 @@ test oracles.
 | Coefficient tokens (1-8 partitions), dequantization (frame and segment quantizers), inverse WHT and DCT | done |
 | Normal and simple loop filters, per-macroblock levels from segments and reference / mode deltas | done |
 | Golden / altref copies, hidden (altref) frames, frame size changes at key frames | done |
-| Damaged input: errors (never panics), decoding resumes at the next key frame | done |
+| Damaged input: truncated partitions rejected before reconstruction; errors (never panics), decoding resumes at the next key frame | done |
 | Upscaling hints of the key frame header (9.1) | not applied (reported in `KeyframeInfo`) |
 
 Bit-exact with libvpx on the 62 libvpx VP8 test vectors checked (`vp80-00-comprehensive-001` to
 `018` and the `vp80-01` to `vp80-06` intra, inter, segmentation, partition, sharpness and small
 size vectors; `tests/it/vectors.rs` checks them when they are present) and on the generated fixtures
 of `tests/it/conformance.rs`.
+
+The decoder rejects frames whose padded luma plane exceeds 36,000,000 samples (slightly above
+8192×4320), before allocating reference planes.
 
 ## API
 
