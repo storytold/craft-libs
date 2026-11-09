@@ -9,7 +9,7 @@
 
 use std::collections::BinaryHeap;
 
-use kurbo::{BezPath, CubicBez, ParamCurve, ParamCurveDeriv, QuadBez};
+use kurbo::{BezPath, CubicBez, ParamCurve, ParamCurveDeriv, ParamCurveNearest, QuadBez};
 use polycool::Quadratic;
 
 use crate::{
@@ -251,13 +251,15 @@ fn next_subsegment(seg: &Segment, out: &BezPath, y1: f64, endpoint: kurbo::Point
 // no further than its ends do and stays monotonic in `y`.
 
 /// The parameter between `lo` and `hi` of the point of `c` nearest `target`, found by
-/// Newton steps from `t`. Returns `t` when the steps find no closer point.
+/// Newton steps from `t`, restarting once from the nearest point of the whole curve where a
+/// step cannot leave, such as at a repeated handle. Returns `t` when no closer point is found.
 fn settle_end(c: CubicBez, t: f64, target: kurbo::Point, lo: f64, hi: f64) -> f64 {
     let d1 = c.deriv();
     let d2 = d1.deriv();
     let mut best = t;
     let mut best_gap = (c.eval(t) - target).hypot2();
     let mut s = t;
+    let mut restarted = false;
     for _ in 0..32 {
         if best_gap == 0.0 {
             break;
@@ -267,8 +269,20 @@ fn settle_end(c: CubicBez, t: f64, target: kurbo::Point, lo: f64, hi: f64) -> f6
         let a = d2.eval(s).to_vec2();
         let slope = r.dot(v);
         let bend = v.hypot2() + r.dot(a);
-        if bend <= 0.0 || bend.is_nan() {
-            break;
+        // A Newton step cannot leave a point where the derivative is zero, such
+        // as a repeated handle at an end. Restart once from the nearest point of
+        // the whole curve, within the bounds, and keep it only if it is closer.
+        if bend <= 0.0 || bend.is_nan() || v.hypot2() == 0.0 {
+            let near = c.nearest(target, 1e-12).t.clamp(lo, hi);
+            let gap = (c.eval(near) - target).hypot2();
+            if restarted || gap >= best_gap {
+                break;
+            }
+            restarted = true;
+            best = near;
+            best_gap = gap;
+            s = near;
+            continue;
         }
         let next = (s - slope / bend).clamp(lo, hi);
         if !next.is_finite() || next == s {
@@ -749,6 +763,24 @@ mod tests {
         assert_eq!(out.path.segments().last().unwrap().end(), p1);
         let d = farthest_from(&out.path, &[seg]);
         assert!(d < tol, "{seg:?} from {p0:?} to {p1:?}: {d}");
+    }
+
+    // Craft patch (flat-end shear): a curve with a repeated handle at its flat
+    // end has zero derivative there, so a Newton step from that end cannot
+    // leave it. The end point is moved along the flat part.
+    #[test]
+    fn repeated_end_handle_stays_near_the_end() {
+        let origin = Point::new(0.0, 0.0);
+        let top_right = Point::new(1000.0, 1000.0);
+        let c = CubicBez::new(origin, Point::new(0.0, 1000.0), top_right, top_right);
+        // Moved along the flat part, the end point is 0.0127 from the curve.
+        let end = Point::new(998.37, 1000.0);
+        assert_placed_near(PathSeg::Cubic(c), origin, end, 0.02);
+
+        let start = Point::new(1.63, 0.0);
+        let corner = Point::new(1000.0, 0.0);
+        let c = CubicBez::new(origin, origin, corner, top_right);
+        assert_placed_near(PathSeg::Cubic(c), start, top_right, 0.02);
     }
 
     // Craft patch (flat-end shear): a curve that is almost flat at one end and
