@@ -166,11 +166,12 @@ work of each operation is bounded before it starts, in counts the tests assert o
   its pairs cross) and under-prices a polygon whose every edge crosses nearly every other: a star of n points,
   each joined to the one nearly opposite, crosses in n (n - 3) / 2 places, every pair of its edges overlaps, and the
   sweep scans a line of n pieces for each. 2,001 edges (2.0 million pairs, 4.0e9 searches) passed the limits above
-  and took 19 s and 3.5 GB (VectorCraft: 26 s and 3.7 GB). So where the pairs of lines whose bounds overlap
-  times the most pieces on the line could pass `MAX_CROSSED_WORK` (2^30), they are tested (no more than
-  `MAX_SEGMENT_PAIRS` of them), and the pairs of lines that really cross, away from their ends, times those
-  pieces are held to it: 1,001 edges take 2.4 s and 0.9 GB, 1,291 (the most) 4.3 s, and 1,293 or more, 2,001
-  among them (in 14 ms) and 3,001 (by the pairs, in 2 ms), are `TooComplex`;
+  and took 19 s and 3.5 GB (VectorCraft: 26 s and 3.7 GB). So where the pairs of bounds (priced as below: a pair
+  of lines one, a line and a curve six, two curves eighteen, and two for each curve) times the most pieces on the line
+  could pass `MAX_CROSSED_WORK` (2^30), they are tested (no more than `MAX_SEGMENT_PAIRS` of them), and the
+  places where segments really cross, away from their ends, times those pieces are held to it: 1,001 edges take
+  2.4 s and 0.9 GB, 1,291 (the most) 4.3 s, and 1,293 or more, 2,001 among them (in 14 ms) and 3,001 (by the pairs, in
+  2 ms), are `TooComplex`;
 - the sweep's time and memory follow its crossings themselves (about 3 microseconds and 1.2 to 1.6 KB for each place
   where lines cross), and the count above times the pieces on the sweep line is small where the shapes that cross a
   great deal are stacked so that their heights do not overlap: 206 stars of 201 points in one path, each above and
@@ -181,7 +182,14 @@ work of each operation is bounded before it starts, in counts the tests assert o
   that is never below the number there are, and is made, whenever the most it can come to (priced as below) could
   pass the limit or the limit on the crossings times the pieces on the line, by testing the pairs of bounds that
   overlap (already held to `MAX_SEGMENT_PAIRS`):
-  - two lines are tested, and cross once or not at all;
+  - two lines are tested, and two nearly parallel ones count one unless the ends of one lie on one side of the other.
+    Nearly parallel is the rounding's word and not an angle's: where the cross product of the directions is no more than
+    16 epsilon of the product of the lengths (an angle of 3.6e-15), where the lines cross, or whether, cannot be told,
+    and the pair counts one unless both ends of either lie to one side of the other by more than the rounding, or the
+    parts of them along one another are no longer than the slack (lines that touch end to end). Above
+    that the crossing is computed and its place along each line is known to within 16 epsilon of the largest distance in
+    play over the sine of the angle: a crossing that near an end counts as away from it, and in the work of lines
+    through one point crossings that near one another count as one point;
   - a line and a cubic count the changes of sign of the distances of the cubic's control points from the line
     (at most three: a cubic crosses a line no more often than its control polygon does), and none where they meet
     only at an end they share and the line leaves it outside the cone of the rays to the cubic's control points;
@@ -212,14 +220,27 @@ work of each operation is bounded before it starts, in counts the tests assert o
   `TooComplex`. The ends are counted in a hash at the sweep's tolerance, which every point of every element
   sets, control points too (one cubic with control points at 1e12 makes it 0.014, and 400 spikes whose apexes
   are 0.004 apart one point to the sweep, which took 4.4 s). A pie of 256 slices takes 0.5 to 0.9 s, 257 are
-  refused in a few milliseconds;
+  refused in a few milliseconds. Many points that each hold that many are held by `MAX_ENDS_WORK` (4e9
+  nanoseconds), the sum over the points of what the sweep takes at each (the greater of 5.6 `n`³ and 0.019 `n`⁴
+  nanoseconds for `n` ends, which is what pies of 64 to 256 slices and 100 polygons of 20 sides on one another
+  took): pies of 256 slices stacked on a diagonal took 1.3, 2.2, 4.8, 15.7 and 65.8 s for 1, 2, 4, 8 and 30, and 3 are
+  admitted, 4 and more refused in a few milliseconds;
 - lines that cross at one point, with no end there, cost about the cube of their number (150 take 0.2 s, 300
   1.7 s, 450 8 s, and about a thousand passed every other limit and would take a minute and a half). A line
   that crosses `m` others at one point counts `m`², so `c` lines through a point count `c` (`c` - 1)², and
   `MAX_CROSSING_WORK` (2^24) is at 256 lines through a point, which take about a second (257 are `TooComplex`
   in a few milliseconds). The crossings are computed, for the lines whose bounds overlap, only when that
   many pairs could reach the limit if they were at one point, and then once for each pair (in O(pairs log
-  n), the pairs being held to `MAX_SEGMENT_PAIRS` already). Lines that end at the point are ends, above;
+  n), the pairs being held to `MAX_SEGMENT_PAIRS` already). Lines that end at the point are ends, above. Where two
+  lines cross is known to the rounding of the arithmetic over the sine of their angle (a crossing of lines 1e10
+  long at 1e-13 radians is placed to within about 360 of their length), and crossings are taken as one point when they lie within
+  the tolerance and that uncertainty of each other. Lines whose angle is too small to place a crossing at all (under 16
+  epsilon of the product of their lengths) count as crossing somewhere along their length, unless both ends of one lie on
+  one side of the other, and so add to the work of every group of their lines: 450 lines through a point at angles of
+  1e-13 or 1e-16 (lines 2e7 to 1e10 long, ends a tolerance or ten apart), which took 25 to 41 s, are refused in 6 ms.
+  Lines that lie on one line and overlap are of that kind: 250 and 500 on a diagonal (subpaths each from `(i, i)` to
+  `(i + 1000, i + 1000)`) took 13 s and over a minute and a half, and are refused now, in 2 and 6 ms; level ones (the same height at
+  both ends) are not counted, for pieces of no height are not on the sweep line (250 take 16 ms, 1,000 0.3 s and 0.6 GB);
 - a boolean operation asks its predicate once for each distinct winding of a side of a segment, and hands it a
   flag for each input. That is the winding of every input, not the set of flags it gives: shapes nested and
   wound the same way are windings 1 and 2 under the non-zero rule, which are the same flags and are asked
@@ -336,7 +357,7 @@ let outline = with_limits(limits, || try_outline_stroke(&path, 3.0, Cap::Butt, J
 it returns, also if it unwinds; scopes nest, and another thread keeps its own. `Limits` has a field for each
 bound (`elements`, `segment_pairs`, `offset_segment_pairs`, `sweep_line_pairs`, `shape_builder_segments`,
 `fit_points`, `fit_work`, `join_work`, `redundant_work`, `mask_work`, `sweep_event_work`, `crossed_work`, `real_crossings`, `pass_work`,
-`fill_work`, `search_work`, `ends_at_a_point`, `crossing_work`, `coverage_entries`) and is `#[non_exhaustive]`, so start from
+`fill_work`, `search_work`, `ends_at_a_point`, `ends_work`, `crossing_work`, `coverage_entries`) and is `#[non_exhaustive]`, so start from
 `Limits::default()`. Time and memory grow with a limit raised, and a limit lowered refuses more ordinary art.
 
 ### Ordinary input the defaults refuse
@@ -357,8 +378,8 @@ one of 408 or more is `TooComplex`. Strokes that are curves count more than line
 to nine times, a line and a curve three), so a hatch of curves is refused at fewer. A boolean operation of more
 than a few thousand inputs, most of them empty, is `TooComplex` past `MASK_WORK`.
 
-Eight more bounds refuse input a drawing can hold, none of it common: a polygon of more than 1,291 edges that cross nearly every other (a star of 1,293 points, joined to the one nearly opposite) by `MAX_CROSSED_WORK`, more than a million places where segments cross, as in 53 stars of 201 points stacked (or 20 of bowed cubics) by `MAX_REAL_CROSSINGS`, a grid of 300 and 300 open lines under 200 arches whose bounds hold it (an Outline) by `MAX_SEARCH_WORK`, a pie of more than 256 slices (or any
-more than 512 segment ends at one point; a fan of triangles has two at the point for each, so 257 of them) by `MAX_ENDS_AT_A_POINT`, 257 lines
+Nine more bounds refuse input a drawing can hold, none of it common: a polygon of more than 1,291 edges that cross nearly every other (a star of 1,293 points, joined to the one nearly opposite) by `MAX_CROSSED_WORK`, more than a million places where segments cross, as in 53 stars of 201 points stacked (or 20 of bowed cubics) by `MAX_REAL_CROSSINGS`, a grid of 300 and 300 open lines under 200 arches whose bounds hold it (an Outline) by `MAX_SEARCH_WORK`, a pie of more than 256 slices (or any
+more than 512 segment ends at one point; a fan of triangles has two at the point for each, so 257 of them) by `MAX_ENDS_AT_A_POINT`, four pies of 256 slices on a diagonal (the work of the ends summed over the points) by `MAX_ENDS_WORK`, 257 lines
 through one point by `MAX_CROSSING_WORK`, shapes nested 2,896 deep, or 202 deep and crossed by 202 bars, by
 `MAX_COVERAGE_ENTRIES`, Merge, Divide, Trim or Crop of a fan of 209 or more shapes at a point beside 40,000
 other squares by `MAX_PASS_WORK`, and the planar map of thousands of contours nested in one shape (3,400
@@ -383,6 +404,9 @@ cost more than a second or so, measured once in a release build:
   200, 3.3 s for 400 and 4.1 s for 450; 500 are refused by the event limit. The cost grows with about the
   square of their number there, not the cube. Lines that pass through that point are counted, as if the curves
   were not there.
+- A Pathfinder Outline refuses after the planar map is built: `MAX_SEARCH_WORK` counts the searches for the junctions
+  on each edge once the map exists, so the refusal comes after the time the map took (about 8 s for 200 arches
+  round a grid of 300 and 300 open lines, which no limit counted before the sweep refuses).
 - The estimate of the entries of the windings counts one crossing for each pair of curves when an eighth of the
   one lies within the bounds of an eighth of the other, where two cubics may cross up to nine times, so curves
   that cross each other several times can hold more than the limit's half a gigabyte. It was at least the
@@ -451,6 +475,10 @@ thread and ask first with the `try_` forms. Measured on one machine, in a releas
 | `unite_all` of a row of 5,500 dots on one line (the sweep-line limit is at 5,800) | 2.8 s |
 | `unite_all` of a grid of 16,000 / 32,000 lenses with one more 10 million away | 0.6 / 1.4 s (as without the far one) |
 | `try_area` of a pie of 256 slices (512 segment ends at its centre, the limit) | 0.5 to 0.9 s |
+| `try_area` of 3 / 4 pies of 256 slices on a diagonal, so that their heights do not overlap (the work of the ends is 3.9e9 / 5.2e9 against the limit of 4e9) | 3.3 to 3.7 s, 270 MB / refused in 1 ms (8 and 30 pies, 15.7 s and 65.8 s before the limit, in 2 and 8 ms) |
+| `try_area` of 450 lines through one point at angles under 1e-10 (2e7 to 1e10 long, their ends 1.6 to 10 tolerances apart; counted as no crossing at all before) / of 2,040 nearly parallel lines that cross along their length (2.08 million crossings) | refused in 6 ms (31 to 41 s before the limit) / in 50 ms (14 to 21 s before) |
+| `try_area` of a bundle of 450 / 2,040 nearly parallel lines that cross nowhere | 2 / 10 ms, as before |
+| `try_area` of a circle of 100,000 cubics, radius 1,000, at the origin / at (1e12, 1e12) | 0.5 s / 0.56 s |
 | `try_area` of a star of 1,001 / 1,291 points, each joined to the one nearly opposite (0.5 / 0.83 million crossings; 1,291 is the limit on them) | 2.4 s, 0.9 GB / 4.3 s, 0.9 GB |
 | `try_area` of the star of 1,293 / 2,001 / 3,001 points | refused in 6 / 14 / 2 ms |
 | `try_area` of 52 stars of 201 points, stacked so that their heights do not overlap (1.03 million crossings, the limit on them) / of 19 stars of bowed cubics (the most the bound admits) | 3.2 s, 1.6 GB / 2.6 s, 0.5 GB |

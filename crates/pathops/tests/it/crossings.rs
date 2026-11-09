@@ -6,7 +6,7 @@
 use craft_pathops::*;
 use std::time::{Duration, Instant};
 
-use crate::common::{stacked_stars, star_at};
+use crate::common::{cubic_circle, nearly_parallel_lines, stacked_pies, stacked_stars, star_at};
 
 const NZ: FillRule = FillRule::NonZero;
 
@@ -83,4 +83,51 @@ fn with_limits_of(places: usize) -> Limits {
 fn the_default_limit_on_crossings_is_a_million() {
     assert_eq!(MAX_REAL_CROSSINGS, 1 << 20);
     assert_eq!(Limits::default().real_crossings, MAX_REAL_CROSSINGS);
+}
+
+/// Lines nearly parallel were taken for lines that cross nowhere (under 1e-10 rad), so a polygon of them passed every count and
+/// the sweep took the time of the crossings that were not counted. 450 lines through one point took 25 to 35 s at lengths from
+/// 2e7 to 1e10 (and the same where the angles straddle 1e-10: ten tolerances apart); one polygon zigzagging through 2,040 of them
+/// 1e10 long, 2.08 million crossings spread along the lines, 14 s and 3.2 GB, and 1,500 of them 1e8 long 6.4 s and 1.6 GB.
+#[test]
+fn lines_nearly_parallel_that_cross_are_counted_and_refused_before_the_sweep() {
+    for (n, l, d, spread) in
+        [(450, 2e7, 1.6, false), (450, 1e10, 1.6, false), (450, 1e10, 10.0, false), (2_040, 1e10, 1.6, true), (1_500, 1e8, 1.6, true)]
+    {
+        refused_at_once(&nearly_parallel_lines(n, l, d, spread, true), &format!("{n} lines {l} long, {d} tolerances apart, spread {spread}"));
+    }
+}
+
+/// The same lines where they cross nowhere (the ends of one lie on one side of every other) are not counted: they are admitted,
+/// as they were, in milliseconds, and the area is the polygon's.
+#[test]
+fn lines_nearly_parallel_that_do_not_cross_stay_admitted() {
+    for (n, l, d) in [(450, 1e10, 1.6), (450, 2e7, 10.0), (2_040, 1e10, 1.6)] {
+        let path = nearly_parallel_lines(n, l, d, false, false);
+        let start = Instant::now();
+        let area = try_area(&path, NZ).expect("a bundle of lines that cross nowhere");
+        assert!(area.is_finite() && area > 0.0, "{n} lines: {area}");
+        assert!(start.elapsed() < Duration::from_secs(20), "{n} lines {l} long: {:?}", start.elapsed());
+    }
+}
+
+/// Pies of 256 slices (512 ends at each centre, the limit at one point) stacked on a diagonal, so that their heights do not overlap:
+/// the limit on ends at one point holds none of them, and 1, 2, 4, 8 and 30 took 1.3, 2.2, 4.8, 15.7 and 65.8 s (30 are 30,720
+/// elements and 2.7 GB). The work of the ends, summed over the points, refuses four and more in milliseconds.
+#[test]
+fn pies_stacked_are_held_to_the_work_of_their_ends() {
+    for count in [4, 8, 30] {
+        refused_at_once(&stacked_pies(count, 256), &format!("{count} pies of 256 slices"));
+    }
+}
+
+/// A circle of 100,000 cubics, radius 1,000, is a path whose joints are exact: the neighbours cost nothing wherever it is, at 1e12
+/// (where a handle of 0.021 is of the order of the sweep's tolerance, 0.014) as at the origin. It was `TooComplex` at 1e12.
+#[test]
+fn a_circle_of_many_cubics_is_made_wherever_it_is() {
+    let exact = std::f64::consts::PI * 1e6;
+    for (x, y) in [(0.0, 0.0), (1e9, 1e9), (1e12, 1e12)] {
+        let area = try_area(&cubic_circle(100_000, 1_000.0, x, y), NZ).unwrap_or_else(|e| panic!("circle at {x}: {e:?}"));
+        assert!((area - exact).abs() < 1e-3 * exact, "circle at {x}: {area}");
+    }
 }

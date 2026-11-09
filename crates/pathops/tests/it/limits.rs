@@ -46,6 +46,7 @@ fn the_defaults_are_the_constants() {
     assert_eq!(l.sweep_event_work, MAX_SWEEP_EVENT_WORK);
     assert_eq!(l.real_crossings, MAX_REAL_CROSSINGS);
     assert_eq!(l.ends_at_a_point, MAX_ENDS_AT_A_POINT);
+    assert_eq!(l.ends_work, MAX_ENDS_WORK);
     assert_eq!(l.crossing_work, MAX_CROSSING_WORK);
     assert_eq!(l.pass_work, MAX_PASS_WORK);
     assert_eq!(l.coverage_entries, MAX_COVERAGE_ENTRIES);
@@ -316,6 +317,33 @@ fn a_lower_limit_on_ends_at_a_point_refuses_a_pie_the_default_takes() {
     assert_eq!(try_area(&pie(257), FillRule::NonZero), Err(PathOpsError::TooComplex));
 }
 
+/// `count` pies of `k` slices, their centres on a diagonal 250 apart.
+fn stacked(count: usize, k: usize) -> BezPath {
+    let mut all = BezPath::new();
+    for i in 0..count {
+        let mut one = pie(k);
+        one.apply_affine(kurbo::Affine::translate((250.0 * i as f64, 250.0 * i as f64)));
+        all.extend(one.iter());
+    }
+    all
+}
+
+/// The work of the ends is summed over the points where they meet: a pie of 30 slices (60 ends at its centre, 1.2 million
+/// nanoseconds as priced, and a little for the rim) stacked 8 deep is under ten million and 9 deep is over, though no pie has
+/// more than 60 ends at its centre.
+#[test]
+fn a_lower_limit_on_the_work_of_ends_refuses_stacked_pies_the_default_takes() {
+    let ten_million = with(|l| l.ends_work = 10_000_000);
+    for (count, made) in [(1, true), (8, true), (9, false), (30, false)] {
+        let path = stacked(count, 30);
+        assert!(try_area(&path, FillRule::NonZero).is_ok(), "{count} pies, by default");
+        assert_eq!(with_limits(ten_million, || try_area(&path, FillRule::NonZero)).is_ok(), made, "{count} pies");
+    }
+    // Nothing: no work of ends is allowed, and a pie has ends.
+    let none = with(|l| l.ends_work = 0);
+    assert_eq!(with_limits(none, || try_area(&pie(30), FillRule::NonZero)), Err(PathOpsError::TooComplex));
+}
+
 #[test]
 fn a_lower_coverage_limit_refuses_nested_shapes_the_default_takes() {
     let nested: Vec<BezPath> = (1..=10).map(|k| rectangle(Rect::new(-f64::from(k), -f64::from(k), f64::from(k), f64::from(k)))).collect();
@@ -413,7 +441,9 @@ fn lines_that_cross_at_one_point_are_limited_by_their_work() {
     // By default 257 lines through a point are refused, at once (a thousand took a minute and a half).
     assert_eq!(try_area(&lines_through_a_point(257), FillRule::NonZero), Err(PathOpsError::TooComplex));
     assert_eq!(try_area(&lines_through_a_point(1_020), FillRule::NonZero), Err(PathOpsError::TooComplex));
-    // Lines that cross apart are no matter, however many.
+    // Lines that cross apart are no matter, however many. (The short sides of one family are on x = 300 and of the other on x = 299:
+    // on one line they would overlap one another, which is work, for lines that lie on one line and overlap cannot be told from
+    // lines that cross anywhere along them.)
     let mut hatch = BezPath::new();
     for i in 0..60 {
         let y = 3.0 * f64::from(i);
@@ -422,8 +452,8 @@ fn lines_that_cross_at_one_point_are_limited_by_their_work() {
         hatch.line_to((300.0, y + 103.7));
         hatch.close_path();
         hatch.move_to((0.0, 300.0 - y + 0.3));
-        hatch.line_to((300.0, 200.0 - y));
-        hatch.line_to((300.0, 203.0 - y));
+        hatch.line_to((299.0, 200.0 - y));
+        hatch.line_to((299.0, 203.0 - y));
         hatch.close_path();
     }
     assert!(with_limits(with(|l| l.crossing_work = 100), || try_area(&hatch, FillRule::NonZero)).is_ok());

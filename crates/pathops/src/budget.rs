@@ -60,10 +60,11 @@ pub const MAX_SWEEP_EVENT_WORK: usize = {
 /// of n points joined to the ones nearly opposite crosses in about n²/2 places), the same count is about
 /// seven times as much time and a good deal more memory a unit: 2,001 edges, which pass the other limits,
 /// take 19 s and 3.5 GB. The places where segments cross, found by testing the pairs whose bounds overlap (no more than
-/// [`MAX_SEGMENT_PAIRS`]; [`MAX_REAL_CROSSINGS`] says how), times the most pieces on the sweep line, are held to this: 1,001
-/// edges take 2.4 s and 0.9 GB, and 1,285 about five seconds. Counted only when the pairs of bounds of lines, times the
-/// pieces on the line, could make more than the limit, or the pairs of bounds could make more than [`MAX_REAL_CROSSINGS`].
-/// Past it an operation fails as [`crate::PathOpsError::TooComplex`] before it sweeps. The default of
+/// [`MAX_SEGMENT_PAIRS`]; [`MAX_REAL_CROSSINGS`] says how, for lines, curves and for lines nearly parallel), times the most
+/// pieces on the sweep line, are held to this: 1,001 edges take 2.4 s and 0.9 GB, and 1,291 (the most) 4.3 s. The places are
+/// counted whenever the most the count could come to (the pairs of bounds, priced by their kinds as there, a line pair one
+/// and a curve pair eighteen) times the pieces on the line could pass the limit, or the pairs could make more than
+/// [`MAX_REAL_CROSSINGS`]. Past it an operation fails as [`crate::PathOpsError::TooComplex`] before it sweeps. The default of
 /// [`Limits::crossed_work`].
 pub const MAX_CROSSED_WORK: usize = 1 << 30;
 
@@ -76,7 +77,7 @@ pub const MAX_CROSSED_WORK: usize = 1 << 30;
 /// bounds, under the limit on those) and took 14.7 s and 6.5 GB. Curves crossed as much (100 such stars of bowed cubics
 /// took 14.8 s and 3.7 GB), for only the crossings of lines were counted. The places where segments cross are counted by
 /// testing the pairs of bounds that overlap, each pair for at most as many places as it can have, and never fewer than it
-/// has: two lines are tested, and cross once or not; a line and a cubic count the changes of sign of the distances of the
+/// has: two lines are tested, and cross once or not (two nearly parallel ones, whose crossing the rounding of the test cannot place, count one unless the ends of one lie on one side of the other, with room for the rounding); a line and a cubic count the changes of sign of the distances of the
 /// cubic's control points from the line (three at the most); two cubics count one if the directions of their tangents
 /// are apart (as lines, and by pieces of an eighth where the whole curves are not), and nine if they are not (see
 /// `crossings.rs`: two arcs that cross twice both have a tangent along the chord between the crossings), and none where
@@ -95,6 +96,18 @@ pub const MAX_REAL_CROSSINGS: usize = 1 << 20;
 /// [`crate::PathOpsError::TooComplex`] before it sweeps.
 pub const MAX_ENDS_AT_A_POINT: usize = 512;
 
+/// Most work of the ends of segments at the points where they meet, summed over the points: 4,000,000,000 (the default of
+/// [`Limits::ends_work`]), in the nanoseconds the sweep takes. [`MAX_ENDS_AT_A_POINT`] holds the ends at any one point, and the
+/// sweep takes time for each point that grows with the number of ends there (about the fourth power of it, as measured:
+/// pies of 64, 96, 128, 192 and 256 slices, each with 2 ends at its centre for each slice, take 12, 40, 76, 270 and 1,300 ms; the cost
+/// at a point of `n` ends is taken as the greater of `5.6 n^3` and `0.019 n^4` nanoseconds, which is that, and what 100
+/// polygons of 20 sides one on another take (0.9 s) too), which the limit on any one point does not add up: 8 pies of 256
+/// slices (512 ends at each centre, 8,192 elements) stacked on a diagonal took 15 s, and 30 of them 66 s and 2.7 GB. The
+/// cost of every point (the ends within a point's square and the squares round it, `most_ends_at_a_point`) is added, and
+/// past the limit an operation fails as [`crate::PathOpsError::TooComplex`] before it sweeps: 3 such pies are made in 3.3
+/// to 3.7 s, 4 are refused. A fan of 256 slices alone takes 1.3 s.
+pub const MAX_ENDS_WORK: usize = 4_000_000_000;
+
 /// Most lines crossing at one point, as work: 16,777,216. The sweep takes about the cube of the number
 /// of lines that cross at one point (a pie of k slices has them end there, [`MAX_ENDS_AT_A_POINT`]; these
 /// pass through with no end), which the count of crossings does not see: 150 lines through one point take
@@ -102,8 +115,12 @@ pub const MAX_ENDS_AT_A_POINT: usize = 512;
 /// minute and a half. A line that crosses `m` others at one point counts `m`², so `c` lines through a
 /// point count `c` (`c` - 1)², and 256 is the most that pass (about a second). Found before the sweep by
 /// computing the crossings of the lines whose bounds overlap, when that many could cost more than the
-/// limit; past it an operation fails as [`crate::PathOpsError::TooComplex`]. Crossings of curves, and
-/// of lines on one line, are not looked for.
+/// limit; past it an operation fails as [`crate::PathOpsError::TooComplex`]. Where two lines cross is known to the rounding of the
+/// arithmetic over the sine of the angle between them (crossings are taken as one point when they lie within the tolerance and
+/// that of each), and two lines too near parallel to place a crossing at all count as crossing somewhere along their length,
+/// which adds them to the work of both lines, so 450 lines through one point at angles of 1e-13 are held as the 450 they are,
+/// and so are lines that lie on one line and overlap (250 on a diagonal took 13 s, and 500 over a minute and a half), except level
+/// ones, which are not on the sweep line. Crossings of curves are not looked for.
 pub const MAX_CROSSING_WORK: usize = 1 << 24;
 
 /// Most entries the windings of the arrangement of several inputs hold: 33,554,432 (about 13 bytes
@@ -215,6 +232,9 @@ pub struct Limits {
     pub fill_work: usize,
     /// Most segment ends at one point ([`MAX_ENDS_AT_A_POINT`]).
     pub ends_at_a_point: usize,
+    /// Most work of the ends of segments at all the points where they meet, added up: nanoseconds, by the cost of a point of `n`
+    /// ends, the greater of `5.6 n^3` and `0.019 n^4` ([`MAX_ENDS_WORK`]).
+    pub ends_work: usize,
     /// Most work of the lines that cross at one point: the square of the others each crosses there,
     /// summed over the lines and the points ([`MAX_CROSSING_WORK`]).
     pub crossing_work: usize,
@@ -262,6 +282,7 @@ impl Limits {
         pass_work: MAX_PASS_WORK,
         fill_work: MAX_FILL_WORK,
         ends_at_a_point: MAX_ENDS_AT_A_POINT,
+        ends_work: MAX_ENDS_WORK,
         crossing_work: MAX_CROSSING_WORK,
         coverage_entries: MAX_COVERAGE_ENTRIES,
         shape_builder_segments: crate::planar::SHAPE_BUILDER_MAX_SEGMENTS,
@@ -474,7 +495,15 @@ pub(crate) fn peak_depth(heights: &[(f64, f64)]) -> usize {
 /// tolerance, [`crate::boolean::sweep_tolerance`]) that lie at one point, a point being a square of
 /// four of the sweep's tolerances and the squares round it (so that a point on the edge between two
 /// squares is not split between them).
+#[cfg(test)]
 pub(crate) fn most_ends_at_a_point(ends: &[Point], extent: f64) -> usize {
+    ends_at_points(ends, extent).0
+}
+
+/// The most ends at one point (`most_ends_at_a_point`), and the work of them at all the points added up, in the nanoseconds
+/// the sweep takes ([`MAX_ENDS_WORK`]): for each square that holds an end, the cost of the ends in it and the squares round it,
+/// in proportion to the ends in the square (a cluster across the edge of two squares, or of four, is counted once).
+pub(crate) fn ends_at_points(ends: &[Point], extent: f64) -> (usize, u64) {
     let eps = crate::boolean::sweep_tolerance(extent);
     let cell = 4.0 * eps;
     let key = |p: &Point| ((p.x / cell).floor() as i64, (p.y / cell).floor() as i64);
@@ -482,16 +511,20 @@ pub(crate) fn most_ends_at_a_point(ends: &[Point], extent: f64) -> usize {
     for p in ends {
         *counts.entry(key(p)).or_default() += 1;
     }
-    counts
-        .keys()
-        .map(|&(x, y)| {
-            (x.saturating_sub(1)..=x.saturating_add(1))
-                .flat_map(|i| (y.saturating_sub(1)..=y.saturating_add(1)).map(move |j| (i, j)))
-                .filter_map(|c| counts.get(&c))
-                .sum::<usize>()
-        })
-        .max()
-        .unwrap_or(0)
+    let (mut most, mut work) = (0usize, 0u64);
+    for &(x, y) in counts.keys() {
+        let n = (x.saturating_sub(1)..=x.saturating_add(1))
+            .flat_map(|i| (y.saturating_sub(1)..=y.saturating_add(1)).map(move |j| (i, j)))
+            .filter_map(|c| counts.get(&c))
+            .sum::<usize>();
+        most = most.max(n);
+        // The cost of the ends round this square, shared among the squares by their ends, so that a cluster across two or four
+        // of them is counted once, as its whole cost, and not for each.
+        let own = counts.get(&(x, y)).copied().unwrap_or(0) as f64;
+        let n = n as f64;
+        work = work.saturating_add(((5.6 * n * n * n).max(0.019 * n * n * n * n) * own / n) as u64);
+    }
+    (most, work)
 }
 
 /// For each query `(a, b)`, how many of the points `(p, q)` have `p < a` and `q < b`. O(n log n): the
@@ -747,19 +780,69 @@ impl Segments {
     }
 }
 
-/// Where the lines `a` and `b` cross, as distances along each from its start, if they do away from
-/// both their ends (by more than `slack`: segments that end at a point are counted as ends,
-/// [`most_ends_at_a_point`]); none when they are parallel.
-fn crossing(a: &Line, b: &Line, slack: f64) -> Option<(f64, f64)> {
+/// What is known of where two lines cross.
+enum Cross {
+    /// They do not cross away from their ends (or they meet at an end they share exactly, where they meet and nowhere else).
+    No,
+    /// They cross, at these distances along `a` and along `b` from the start of each, each known to within `err` (the rounding
+    /// of the arithmetic, which is large where the lines are nearly parallel).
+    At { s: f64, r: f64, err: f64 },
+    /// They may cross, and where is not known: the arithmetic cannot tell them from lines that are parallel, and neither
+    /// has both ends strictly on one side of the other.
+    Somewhere,
+}
+
+/// Where the lines `a` and `b` cross, away from both their ends (by more than `slack`: segments that end at a point are counted
+/// as ends, `most_ends_at_a_point`); a pair is never taken for one that does not cross where it may:
+///
+/// - Two lines that share an end exactly meet there and nowhere else.
+/// - Two level lines (the heights of each end equal) are parallel, and lie along the height of the sweep line and not across it:
+///   pieces of no height are not on the line, and what they cost is in the pairs of bounds and the searches ([`MAX_SWEEP_EVENT_WORK`]),
+///   as it was when 250 overlapping on one line, which the sweep takes 30 ms for, were not counted. (Lines that lie on one line
+///   at any other angle are, and 250 of them took 13 s, and 500 over a minute and a half.)
+/// - Two lines whose directions cross to more than the rounding of that product have a crossing whose distances along them are
+///   found to within `err`, `16 ε` of the largest of the lengths and the distance between their starts over the sine of the
+///   angle; a crossing as near the ends as that is counted as away from them.
+/// - Two nearly parallel lines (the product is no more than the rounding of it, so that where they cross, or whether, is not
+///   told) cross somewhere unless both ends of one lie strictly on one side of the other (by more than the rounding of the
+///   distance), which is what two lines apart are, or unless the parts of them that lie along one another are no longer than
+///   the slack, which is what two lines that touch end to end are.
+fn cross_of(a: &Line, b: &Line, slack: f64) -> Cross {
+    if a.p0 == b.p0 || a.p0 == b.p1 || a.p1 == b.p0 || a.p1 == b.p1 {
+        return Cross::No;
+    }
+    if a.p0.y == a.p1.y && b.p0.y == b.p1.y {
+        return Cross::No;
+    }
     let (d, e, w) = (a.p1 - a.p0, b.p1 - b.p0, b.p0 - a.p0);
     let (la, lb) = (d.hypot(), e.hypot());
-    let den = d.cross(e);
-    if !parallel(den, la, lb) {
-        let (t, u) = (w.cross(e) / den, w.cross(d) / den);
-        let (s, r) = (t * la, u * lb);
-        return (s > slack && s < la - slack && r > slack && r < lb - slack).then_some((s, r));
+    // A line no longer than two tolerances is an end, and has no inside to cross in.
+    if !(la > 2.0 * slack && lb > 2.0 * slack) {
+        return Cross::No;
     }
-    None
+    let den = d.cross(e);
+    if !den.is_finite() {
+        return Cross::No;
+    }
+    let reach = w.hypot().max(la).max(lb);
+    if den.abs() <= 16.0 * f64::EPSILON * la * lb {
+        let tol = 16.0 * f64::EPSILON * reach;
+        let apart = |u: f64, v: f64| (u > tol && v > tol) || (u < -tol && v < -tol);
+        let (a0, a1) = (d.cross(b.p0 - a.p0) / la, d.cross(b.p1 - a.p0) / la);
+        let (b0, b1) = (e.cross(a.p0 - b.p0) / lb, e.cross(a.p1 - b.p0) / lb);
+        if apart(a0, a1) || apart(b0, b1) {
+            return Cross::No;
+        }
+        // On one line, to the rounding, what they have in common is the part of `b` that lies along `a`: where that is no more than
+        // the slack they meet at an end (as lines that touch end to end do) and nowhere else.
+        let (t0, t1) = (w.dot(d) / la, (w + e).dot(d) / la);
+        let along = t0.max(t1).min(la) - t0.min(t1).max(0.0);
+        return if along + 2.0 * tol <= slack { Cross::No } else { Cross::Somewhere };
+    }
+    let err = 16.0 * f64::EPSILON * reach * la * lb / den.abs();
+    let (t, u) = (w.cross(e) / den, w.cross(d) / den);
+    let (s, r) = (t * la, u * lb);
+    if s > slack - err && s < la - slack + err && r > slack - err && r < lb - slack + err { Cross::At { s, r, err } } else { Cross::No }
 }
 
 /// Are two lines of lengths `la` and `lb`, whose directions cross to `den`, parallel (to within the
@@ -793,11 +876,11 @@ fn real_crossings(seg: &Segments, slack: f64, cap: usize) -> Option<u64> {
         let (Some(&ka), Some(&kb)) = (seg.kind.get(i), seg.kind.get(j)) else { return };
         crossed += match (ka, kb) {
             (Kind::Line(x), Kind::Line(y)) => match (seg.line_segs.get(x), seg.line_segs.get(y)) {
-                (Some(a), Some(b)) => u64::from(crossing(a, b, slack).is_some()),
+                (Some(a), Some(b)) => u64::from(!matches!(cross_of(a, b, slack), Cross::No)),
                 _ => 0,
             },
             (Kind::Line(x), Kind::Curve(y)) | (Kind::Curve(y), Kind::Line(x)) => match (seg.line_segs.get(x), curves.get(y)) {
-                (Some(l), Some(c)) => 2 * line_cubic_cross_at_most(l, c, slack),
+                (Some(l), Some(c)) => 2 * line_cubic_cross_at_most(l, c),
                 _ => 0,
             },
             (Kind::Curve(x), Kind::Curve(y)) => match (curves.get(x), curves.get(y)) {
@@ -820,18 +903,29 @@ fn crossing_work_within(seg: &Segments, pairs: usize, eps: f64, cap: usize) -> b
     if c * (c - 1.0) * (c - 1.0) <= limit as f64 {
         return true;
     }
-    let mut at: Vec<Vec<f64>> = vec![Vec::new(); seg.line_segs.len()];
+    // For each line, where it is crossed (and to what the position is known), and by how many lines it is not known where.
+    let mut at: Vec<Vec<(f64, f64)>> = vec![Vec::new(); seg.line_segs.len()];
+    let mut anywhere: Vec<u64> = vec![0; seg.line_segs.len()];
     let slack = 2.0 * eps;
     let within = each_overlap(&seg.lines, cap, |i, j| {
         work::add(Work::CrossingPairs, 1);
-        if let (Some(a), Some(b)) = (seg.line_segs.get(i), seg.line_segs.get(j))
-            && let Some((s, r)) = crossing(a, b, slack)
-        {
-            if let Some(list) = at.get_mut(i) {
-                list.push(s);
+        let (Some(a), Some(b)) = (seg.line_segs.get(i), seg.line_segs.get(j)) else { return };
+        match cross_of(a, b, slack) {
+            Cross::No => {}
+            Cross::At { s, r, err } => {
+                if let Some(list) = at.get_mut(i) {
+                    list.push((s, err));
+                }
+                if let Some(list) = at.get_mut(j) {
+                    list.push((r, err));
+                }
             }
-            if let Some(list) = at.get_mut(j) {
-                list.push(r);
+            Cross::Somewhere => {
+                for k in [i, j] {
+                    if let Some(n) = anywhere.get_mut(k) {
+                        *n += 1;
+                    }
+                }
             }
         }
     });
@@ -839,19 +933,27 @@ fn crossing_work_within(seg: &Segments, pairs: usize, eps: f64, cap: usize) -> b
         return false;
     }
     let mut total = 0u64;
-    for mut list in at {
-        list.sort_by(f64::total_cmp);
-        let mut run = 1u64;
-        for (k, s) in list.iter().enumerate() {
-            let next = list.get(k + 1);
-            if next.is_some_and(|n| n - s <= slack) {
-                run += 1;
-                continue;
+    for (mut list, unknown) in at.into_iter().zip(anywhere) {
+        if unknown > 0 {
+            // Where they cross is not known: all of them, and the rest, may be at one point.
+            let m = unknown.saturating_add(list.len() as u64);
+            total = total.saturating_add(m.saturating_mul(m));
+        } else {
+            list.sort_by(|x, y| x.0.total_cmp(&y.0));
+            // Crossings at one point lie within a tolerance and the uncertainty of each of one another: the position is
+            // `err` off at the most (the rounding, which is `slack` over the sine of the angle for lines nearly parallel).
+            let mut run = 1u64;
+            for (k, &(s, err)) in list.iter().enumerate() {
+                let next = list.get(k + 1);
+                if next.is_some_and(|&(n, n_err)| n - s <= slack + err + n_err) {
+                    run += 1;
+                    continue;
+                }
+                if run >= 2 {
+                    total = total.saturating_add(run * run);
+                }
+                run = 1;
             }
-            if run >= 2 {
-                total = total.saturating_add(run * run);
-            }
-            run = 1;
         }
         if total > limit {
             return false;
@@ -968,7 +1070,8 @@ fn line_cuts(a: &Line, b: &Line, slack: f64) -> (usize, usize) {
     if parallel(den, la, lb) {
         // Parallel: lines on one line that overlap are cut at each other's ends (end to end, they are not).
         if la <= 0.0 || w.cross(d).abs() / la > slack {
-            return (0, 0);
+            // Lines apart cut nothing; lines nearly parallel that may cross cut each other once.
+            return if matches!(cross_of(a, b, slack), Cross::No) { (0, 0) } else { (1, 1) };
         }
         let (t0, t1) = (w.dot(d) / la, (w + e).dot(d) / la);
         let overlap = t0.max(t1).min(la) - t0.min(t1).max(0.0);
@@ -1003,7 +1106,9 @@ pub(crate) fn sweep_fits_within<'a>(paths: impl IntoIterator<Item = &'a BezPath>
         seg.add_path(p);
     }
     // Segments that meet at one point cost about the fourth power of their number in the sweep.
-    if most_ends_at_a_point(&seg.ends, seg.extent) > limits().ends_at_a_point {
+    let (most_ends, ends_work) = ends_at_points(&seg.ends, seg.extent);
+    work::add(Work::PricedEnds, usize::try_from(ends_work).unwrap_or(usize::MAX));
+    if most_ends > limits().ends_at_a_point || ends_work > limits().ends_work as u64 {
         return false;
     }
     let Some(pairs) = overlap_pairs(&seg.boxes, cap) else { return false };
@@ -2185,6 +2290,265 @@ mod tests {
         assert!(with_limits(low, || sweep_fits([&loops(400)])));
     }
 
+    /// Lines nearly parallel were counted as not crossing at all (a pair under 1e-10 radians was taken for parallel): 450 lines
+    /// through one point, at angles of 1e-13 to 1e-16 (lines 2e7 to 1e10 long, their ends 1.6 or 10 tolerances apart) counted
+    /// no crossings and no work, and took 25 to 41 s. The pairs that cross are counted, at one point (the crossing is not known to
+    /// better than the rounding over the sine of the angle, which is more than the whole length for the most nearly parallel), and
+    /// their work, the square of the others a line crosses at a point for each line, is held to its limit.
+    #[test]
+    fn lines_through_one_point_at_angles_under_the_rounding_are_held_to_their_work() {
+        use crate::testutil::nearly_parallel_lines;
+        let lifted = Limits { crossing_work: usize::MAX, ..Limits::default() };
+        for (l, dfac) in [(2e7, 1.6), (1e8, 1.6), (1e9, 1.6), (1e10, 1.6), (2e7, 10.0), (1e9, 10.0), (1e10, 10.0)] {
+            let path = nearly_parallel_lines(450, l, dfac, false, true);
+            work::reset();
+            let start = std::time::Instant::now();
+            assert!(!sweep_fits([&path]), "{l:e} long, {dfac} tolerances apart");
+            assert!(start.elapsed() < std::time::Duration::from_secs(30), "{:?}", start.elapsed());
+            // Only the work of the lines through a point refuses them.
+            assert!(with_limits(lifted, || sweep_fits([&path])), "{l:e} long, {dfac} tolerances apart: nothing else refuses it");
+        }
+    }
+
+    /// The same lines spread (their ends jittered, so that the crossings are along them): every pair crosses, 1,500 lines 1e8 long
+    /// (1.12 million crossings) took 6.4 s and 1.6 GB, and 2,040 of them 1e10 long (2.08 million, 4,083 elements) 14 s and 3.2 GB
+    /// and were counted as 408 thousand. All the pairs are counted as crossing now.
+    #[test]
+    fn nearly_parallel_lines_that_cross_along_their_length_are_counted() {
+        use crate::testutil::nearly_parallel_lines;
+        let lifted = Limits { real_crossings: usize::MAX, crossed_work: usize::MAX, crossing_work: usize::MAX, ..Limits::default() };
+        for (n, l) in [(1500usize, 1e8), (2040, 1e10)] {
+            let path = nearly_parallel_lines(n, l, 1.6, true, true);
+            work::reset();
+            assert!(!sweep_fits([&path]), "{n} lines {l:e} long");
+            let counted = work::take(Work::Crossings) as u64;
+            let pairs = (n * (n - 1) / 2) as u64;
+            assert!(counted > MAX_REAL_CROSSINGS as u64 && counted >= pairs * 98 / 100, "{counted} counted of {pairs} pairs");
+            assert!(with_limits(lifted, || sweep_fits([&path])), "{n} lines: nothing else refuses it");
+        }
+    }
+
+    /// Lines that are nearly parallel and cross nowhere (no two have both ends of one on the line of the other, their ends
+    /// 1.6 tolerances apart) are no more than they are: not counted, cheap, and made. The pairs that were taken for parallel were
+    /// all of them, so this is what the count must not turn into.
+    #[test]
+    fn nearly_parallel_lines_that_do_not_cross_are_not_counted() {
+        use crate::testutil::nearly_parallel_lines;
+        for (n, l, spread) in [(2040usize, 1e10, true), (450, 1e10, false), (450, 2e7, false)] {
+            let path = nearly_parallel_lines(n, l, 1.6, spread, false);
+            work::reset();
+            let start = std::time::Instant::now();
+            assert!(sweep_fits([&path]), "{n} lines {l:e} long, apart");
+            assert_eq!(work::take(Work::Crossings), 0, "{n} lines {l:e} long, apart");
+            assert!(start.elapsed() < std::time::Duration::from_secs(30), "{:?}", start.elapsed());
+        }
+    }
+
+    /// Two lines are told apart by the rounding, not by an angle: crossing, nearly parallel with the ends of each across the
+    /// other, nearly parallel and apart, meeting at an end they share exactly, and a pair that is a point.
+    #[test]
+    fn two_lines_are_crossing_apart_or_unknown_by_the_rounding() {
+        let line = |a: (f64, f64), b: (f64, f64)| Line::new(a, b);
+        let slack = 1e-6;
+        let at = |a: &Line, b: &Line| match cross_of(a, b, slack) {
+            Cross::No => "no",
+            Cross::At { .. } => "at",
+            Cross::Somewhere => "somewhere",
+        };
+        // Across, and the point where: (5, 5) at 5 along each.
+        let (x, y) = (line((0.0, 0.0), (10.0, 10.0)), line((0.0, 10.0), (10.0, 0.0)));
+        assert!(matches!(cross_of(&x, &y, slack), Cross::At { s, r, .. } if (s - 50f64.sqrt()).abs() < 1e-9 && (r - 50f64.sqrt()).abs() < 1e-9));
+        // Away from the other's length, and a crossing at an end, and the end of one on the other (a T): none.
+        assert_eq!(at(&x, &line((20.0, 0.0), (30.0, -5.0))), "no");
+        assert_eq!(at(&x, &line((5.0, 5.0), (9.0, 1.0))), "no", "the end of one is on the other");
+        // Ends shared exactly meet there and nowhere else, whatever the angle.
+        assert_eq!(at(&line((0.0, 0.0), (1e10, 1.0)), &line((1e10, 1.0), (0.0, 1e-3))), "no");
+        // Nearly parallel, 1e10 long, with the ends across: somewhere or at, not none. Apart by 1e-3: none.
+        let far = line((0.0, 0.0), (1e10, 0.0));
+        assert_ne!(at(&far, &line((0.0, 1e-4), (1e10, -1e-4))), "no");
+        assert_eq!(at(&far, &line((0.0, 1.0), (1e10, 1.0 + 1e-3))), "no");
+        assert_eq!(at(&far, &line((1.0, 1.0), (1e10, 1.0))), "no", "level and apart");
+        // On one line, overlapping: not told apart, and so counted. A line no longer than two tolerances is an end.
+        let along = line((0.0, 0.0), (1e10, 1e10));
+        assert_eq!(at(&along, &line((1e5, 1e5), (2e5, 2e5))), "somewhere");
+        // Lines on one line that touch end to end (a hair of overlap, under the slack) meet at an end; more is not told apart.
+        let chain = line((0.0, 0.0), (1e3, 1e3));
+        assert_eq!(at(&chain, &line((1e3 - 1e-7, 1e3 - 1e-7), (2e3, 2e3))), "no");
+        assert_eq!(at(&chain, &line((1e3 - 1e-4, 1e3 - 1e-4), (2e3, 2e3))), "somewhere");
+        assert_eq!(at(&far, &line((1e5, 0.0), (2e5, 0.0))), "no", "level lines are not counted");
+        assert_eq!(at(&x, &line((5.0, 0.0), (5.0 + 1e-7, 10.0))), "at", "across, nearly at a right angle");
+        assert_eq!(at(&x, &line((5.0, 5.0 - 1e-7), (5.0, 5.0 + 1e-7))), "no", "no longer than two tolerances");
+    }
+
+    /// Where two lines nearly parallel cross is known to the rounding over the sine of the angle, and no better: two lines 1e10
+    /// long at 1e-12 radians whose crossing is 20 beyond the end of one of them are told to cross (the place found is the end to
+    /// within tens of millions, and the end counts as the whole of the doubt), and one 1e9 beyond is not.
+    #[test]
+    fn the_place_nearly_parallel_lines_cross_at_is_known_to_the_rounding_over_the_sine() {
+        let slack = 1e-6;
+        let level = Line::new((0.0, 0.0), (1e10, 0.0));
+        let just_past = Line::new((5e9 + 20.0, -5e-3), (1.5e10 + 20.0, 5e-3));
+        assert!(matches!(cross_of(&level, &just_past, slack), Cross::At { err, .. } if err > 1e6 && err < 1e9));
+        let far_past = Line::new((6e9, -5e-3), (1.6e10, 5e-3));
+        assert!(matches!(cross_of(&level, &far_past, slack), Cross::No));
+        // At a right angle the place is known to the rounding of the coordinates: a hair.
+        let (x, y) = (Line::new((0.0, 0.0), (10.0, 10.0)), Line::new((0.0, 10.0), (10.0, 0.0)));
+        assert!(matches!(cross_of(&x, &y, slack), Cross::At { err, .. } if err < 1e-12));
+    }
+
+    /// Lines nearly parallel that are rotated so that the arithmetic is noisy (the rounding of a cross product is a part in 1e5
+    /// of the product of the directions at 1e-11 radians, the crossings of one line are found scattered along it by far more than
+    /// the tolerance): 450 through one point, at angles of 1e-13 to 1e-11, are 450 at one point all the same, grouped by the
+    /// uncertainty of each place.
+    #[test]
+    fn rotated_lines_through_one_point_are_grouped_by_the_uncertainty_of_their_places() {
+        use crate::testutil::nearly_parallel_lines;
+        let lifted = Limits { crossing_work: usize::MAX, ..Limits::default() };
+        for turn in [0.3, 0.6, 1.1] {
+            let mut path = nearly_parallel_lines(450, 1e10, 1.6, false, true);
+            path.apply_affine(kurbo::Affine::rotate(turn));
+            assert!(!sweep_fits([&path]), "turned by {turn}");
+            assert!(with_limits(lifted, || sweep_fits([&path])), "turned by {turn}: nothing else refuses it");
+        }
+    }
+
+    /// Lines that lie on one line and overlap cannot be told from lines that cross anywhere along them, and are counted so: 300
+    /// of them (each from `(i, i)` to `(i + 1,000, i + 1,000)`, on a diagonal) are 300 at one place of unknown position, which is
+    /// 300 x 299² of work and more than the limit of 2^24; 250 are not. They are not a cost that was seen: 250 such lines, with the
+    /// segments that close their subpaths, took 13 s in the sweep, and 500 over a minute and a half, and nothing counted them.
+    #[test]
+    fn lines_on_one_line_that_overlap_count_as_crossing_somewhere() {
+        let on_the_diagonal = |n: usize| {
+            let mut path = BezPath::new();
+            for i in 0..n {
+                path.move_to((i as f64, i as f64));
+                path.line_to((i as f64 + 1000.0, i as f64 + 1000.0));
+            }
+            path
+        };
+        assert!(sweep_fits([&on_the_diagonal(250)]));
+        assert!(!sweep_fits([&on_the_diagonal(300)]));
+        let lifted = Limits { crossing_work: usize::MAX, ..Limits::default() };
+        assert!(with_limits(lifted, || sweep_fits([&on_the_diagonal(300)])), "nothing else refuses it");
+    }
+
+    /// The same on a level line is not counted: pieces of no height are not on the sweep line (the sweep takes 30 ms for 250
+    /// of them and 0.4 s for 1,000), and the stacks of bars and tiles that share a baseline are made as they were.
+    #[test]
+    fn lines_on_one_level_that_overlap_are_not_counted() {
+        let on_the_level = |n: usize| {
+            let mut path = BezPath::new();
+            for i in 0..n {
+                path.move_to((i as f64, 7.0));
+                path.line_to((i as f64 + 1000.0, 7.0));
+            }
+            path
+        };
+        assert!(sweep_fits([&on_the_level(1000)]));
+        // They are no work at one point, whatever the limit on it: a limit of a thousand holds none of them.
+        let tight = Limits { crossing_work: 1000, ..Limits::default() };
+        assert!(with_limits(tight, || sweep_fits([&on_the_level(1000)])));
+        // On a line that rises a thousandth (as many, exactly on one line), they are counted.
+        let rising = {
+            let mut path = BezPath::new();
+            for i in 0..300 {
+                path.move_to((i as f64, 7.0 + i as f64 / 1024.0));
+                path.line_to((i as f64 + 1000.0, 7.0 + (i as f64 + 1000.0) / 1024.0));
+            }
+            path
+        };
+        assert!(!sweep_fits([&rising]));
+    }
+
+    /// The class of lines too near parallel to be placed is the rounding of the product of their directions and no more: 300
+    /// lines 1e6 long at angles of 1e-8 to 1e-10 to one another (slopes evenly spread over 2e-8), through the neighbourhood of
+    /// one place (their heights there differ by up to 2e-5), cross one another in 44,850 separate places a few thousand apart
+    /// along each line, and are no work at one point; counted as unplaceable they would be 300 x 299².
+    #[test]
+    fn lines_at_a_small_angle_that_cross_in_separate_places_are_not_work_at_one_point() {
+        use crate::testutil::Rng;
+        let mut rng = Rng(0x00c0_ffee_1234_5678);
+        let mut path = BezPath::new();
+        for i in 0..300 {
+            let (height, slope) = (rng.range(-1e-5, 1e-5), (i as f64 - 149.5) / 150.0 * 1e-8);
+            path.move_to((0.0, height - slope * 5e5));
+            path.line_to((1e6, height + slope * 5e5));
+        }
+        work::reset();
+        assert!(sweep_fits([&path]));
+        // Every pair was walked and found crossing somewhere, which the counts of the gate show: the pairs are all of them.
+        assert_eq!(work::take(Work::CrossingPairs), 300 * 299 / 2);
+    }
+
+    /// The work of the ends of segments at the points where they meet is added up over the points (the most at any one point
+    /// was all that was held): pies of 256 slices, each with 512 ends at its centre and 8,192 elements for 8 of them, stacked on a
+    /// diagonal so that their heights do not overlap, took 1.3, 3.3 (three), 4.6 (four), 15 (eight) and 66 s (30, 2.7 GB). One pie
+    /// is 1.31 billion nanoseconds as priced, three 3.93, four are over the 4 billion of the limit.
+    #[test]
+    fn stacked_pies_are_held_to_the_work_of_their_ends() {
+        use crate::testutil::stacked_pies;
+        let work_of = |count: usize| {
+            let path = stacked_pies(count, 256);
+            work::reset();
+            let start = std::time::Instant::now();
+            let fits = sweep_fits([&path]);
+            (fits, work::take(Work::PricedEnds) as u64, start.elapsed())
+        };
+        let (fits, one, _) = work_of(1);
+        assert!(fits && (1_300_000_000..1_320_000_000).contains(&one), "{one}");
+        let (fits, three, _) = work_of(3);
+        assert!(fits && (3 * one..3 * one + 1_000_000).contains(&three), "{three}");
+        for count in [4, 8, 30] {
+            let (fits, charged, took) = work_of(count);
+            assert!(!fits && charged > MAX_ENDS_WORK as u64, "{count} pies: {charged}");
+            assert!(took < std::time::Duration::from_secs(10), "{took:?}");
+        }
+        // The limit is what refuses them: lifted, 30 pies are not refused by anything else, and at the work of three they fit and
+        // under it by one they do not.
+        let lifted = Limits { ends_work: usize::MAX, ..Limits::default() };
+        assert!(with_limits(lifted, || sweep_fits([&stacked_pies(30, 256)])));
+        for (limit, fits) in [(three, true), (three - 1, false)] {
+            let at = Limits { ends_work: limit as usize, ..Limits::default() };
+            assert_eq!(with_limits(at, || sweep_fits([&stacked_pies(3, 256)])), fits, "{limit}");
+        }
+        // Many small ones: 100 copies of a polygon of 20 sides one on another (200 ends at each of its 20 corners, 0.9 s) fit, and
+        // so do small pies in numbers that take as long.
+        let copies = {
+            let mut all = BezPath::new();
+            for _ in 0..100 {
+                all.extend(
+                    crate::testutil::polyline(
+                        &(0..20)
+                            .map(|i| (50.0 + 40.0 * (i as f64 * 0.3141592653589793).cos(), 50.0 + 40.0 * (i as f64 * 0.3141592653589793).sin()))
+                            .collect::<Vec<_>>(),
+                        true,
+                    )
+                    .iter(),
+                );
+            }
+            all
+        };
+        work::reset();
+        assert!(sweep_fits([&copies]));
+        let charged = work::take(Work::PricedEnds) as u64;
+        assert!((700_000_000..1_200_000_000).contains(&charged), "{charged}");
+    }
+
+    /// A circle cut into 100,000 cubics costs its neighbours nothing, wherever it is and however small: at (1e12, 1e12) with a
+    /// radius of 1,000 the handles (0.021) are about the slack (0.014), and the rays from a joint that were dropped for being
+    /// shorter than that left the cone of each every direction, so that all 100,000 joints cost 18 each (1.8 million, over the
+    /// limit) and the circle was refused; so were circles with handles under 2e-6 at ordinary coordinates.
+    #[test]
+    fn a_circle_of_many_cubics_costs_nothing_wherever_it_is() {
+        use crate::testutil::cubic_circle;
+        for (r, c) in [(1000.0, 1e12), (1000.0, 1e9), (1000.0, 0.0), (0.09, 0.0)] {
+            let circle = cubic_circle(100_000, r, c, c);
+            work::reset();
+            assert!(sweep_fits([&circle]), "radius {r} at {c:e}");
+            assert_eq!(work::take(Work::Crossings), 0, "radius {r} at {c:e}");
+        }
+    }
+
     /// Wiggles between the samples must not take a stack past the limit: 20,000 pairs of a cubic along the x axis and one
     /// whose height is `400 (t - .30)(t - .33)(t - .36)`, which cross three times in the length of a piece of eight (where the
     /// chords of a piece cross once), each pair on a diagonal of its own. The crossings as counted by the chords
@@ -2209,9 +2573,10 @@ mod tests {
         work::reset();
         assert!(!with_limits(low, || sweep_fits([&stack])), "20,000 pairs of three crossings are 120 thousand as counted");
         assert_eq!(work::take(Work::Crossings), 2 * 9 * 20_000, "nine for each pair, twice");
-        // The most the count can come to is 18 for each pair and 2 for each curve (40,000 of them, the cubics that may loop): at
-        // nine for each pair and the same for the curves, 260 thousand, a limit there is under the count and not under that, so
-        // that the stack would pass unseen if the pairs were priced at nine.
+        // The most the count can come to, which says whether it is made, is 18 for each pair and 2 for each curve (there are 40,000
+        // of them: the gate allows each for a loop whether it may loop or not, and these do not, so the count is 18 for each
+        // pair and no more). At nine for each pair and 2 for each curve, 260 thousand, a limit is under the count and not under
+        // that, so that the stack would pass unseen if the pairs were priced at nine.
         let nine = Limits { real_crossings: 9 * 20_000 + 2 * 40_000, ..Limits::default() };
         assert!(!with_limits(nine, || sweep_fits([&stack])));
         // As many as the limit allows, at nine for each (counted twice), are made.

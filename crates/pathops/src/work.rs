@@ -90,6 +90,8 @@ pub(crate) enum Work {
     /// Evaluations of the height of a piece of a cubic (Newton steps and halvings), to find where it crosses the height of a point whose
     /// winding is counted.
     WindingSteps,
+    /// Nanoseconds of the sweep priced for the ends of segments at the points where they meet (`Limits::ends_work`).
+    PricedEnds,
 }
 
 #[cfg(test)]

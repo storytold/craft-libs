@@ -190,6 +190,79 @@ pub(crate) fn stacked_stars(count: usize, n: usize, bow: f64) -> BezPath {
     all
 }
 
+/// One polygon zigzagging through `n` nearly parallel lines `l` long, line `i` from `(i dx, i d)` to `(l - i dx, -i d)` with
+/// `dx = l / 4n` and `d = dfac` sweep tolerances (so every two of them cross, in one point when they are not `spread`, which
+/// jitters the ends by up to a fifth of `d` and puts the crossings along the lines), at angles under 1e-10 where `n d` is
+/// small beside `l`. With `cross` false the right ends are at `+i d`, and no two cross.
+pub(crate) fn nearly_parallel_lines(n: usize, l: f64, dfac: f64, spread: bool, cross: bool) -> BezPath {
+    let hash01 = |i: u64, k: u64| {
+        let mut h = i.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ k.wrapping_mul(0xD1B5_4A32_D192_ED03);
+        h ^= h >> 31;
+        h = h.wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        h ^= h >> 29;
+        (h >> 11) as f64 / (1u64 << 53) as f64
+    };
+    let eps = (l * f64::EPSILON * 64.0).max(1e-6);
+    let d = dfac * eps;
+    let dx = l / (4.0 * n as f64);
+    let jitter = |i: usize, k: u64| if spread { (hash01(i as u64, k) - 0.5) * 0.4 * d } else { 0.0 };
+    let left = |i: usize| Point::new(i as f64 * dx, i as f64 * d + jitter(i, 1));
+    let flip = if cross { -1.0 } else { 1.0 };
+    let right = |i: usize| Point::new(l - i as f64 * dx, flip * (i as f64) * d + jitter(i, 2));
+    let mut bp = BezPath::new();
+    bp.move_to(left(0));
+    for i in 0..n {
+        if i.is_multiple_of(2) {
+            if i > 0 {
+                bp.line_to(left(i));
+            }
+            bp.line_to(right(i));
+        } else {
+            bp.line_to(right(i));
+            bp.line_to(left(i));
+        }
+    }
+    let last = if n.is_multiple_of(2) { left(n - 1) } else { right(n - 1) };
+    bp.line_to(Point::new(-dx, last.y));
+    bp.line_to(Point::new(-dx, left(0).y));
+    bp.close_path();
+    bp
+}
+
+/// `count` pies of `k` thin triangular slices (each a triangle from the centre, half the width of its place), the centres on a
+/// diagonal 250 apart so that the heights of the pies do not overlap: `2k` ends at each centre.
+pub(crate) fn stacked_pies(count: usize, k: usize) -> BezPath {
+    let mut bp = BezPath::new();
+    for p in 0..count {
+        let c = Point::new(p as f64 * 250.0, p as f64 * 250.0);
+        for i in 0..k {
+            let a0 = std::f64::consts::TAU * i as f64 / k as f64;
+            let a1 = std::f64::consts::TAU * (i as f64 + 0.5) / k as f64;
+            bp.move_to(c);
+            bp.line_to(c + kurbo::Vec2::new(a0.cos(), a0.sin()) * 100.0);
+            bp.line_to(c + kurbo::Vec2::new(a1.cos(), a1.sin()) * 100.0);
+            bp.close_path();
+        }
+    }
+    bp
+}
+
+/// A circle of radius `r` at `(cx, cy)` cut into `n` cubics (each the cubic that fits its arc), closed.
+pub(crate) fn cubic_circle(n: usize, r: f64, cx: f64, cy: f64) -> BezPath {
+    let da = std::f64::consts::TAU / n as f64;
+    let h = 4.0 / 3.0 * (da / 4.0).tan() * r;
+    let at = |a: f64| Point::new(cx + r * a.cos(), cy + r * a.sin());
+    let along = |a: f64| kurbo::Vec2::new(-a.sin(), a.cos());
+    let mut bp = BezPath::new();
+    bp.move_to(at(0.0));
+    for i in 0..n {
+        let (a0, a1) = (i as f64 * da, (i + 1) as f64 * da);
+        bp.curve_to(at(a0) + along(a0) * h, at(a1) - along(a1) * h, if i + 1 == n { at(0.0) } else { at(a1) });
+    }
+    bp.close_path();
+    bp
+}
+
 /// A path as the polygon of its flattening, to read the winding number of a point from, as an oracle for the winding of
 /// the curves: the crossings of a ray to the left with straight edges, found by none of the arithmetic of the cubics. It
 /// holds for a point farther from the path than the flattening's tolerance (and than the rounding of the crossing, which
