@@ -26,6 +26,13 @@ measurements below remain separate evidence; live mouse-drag resizing,
 mixed-DPI monitor transitions and composition presentation still need validation
 on an interactive Windows desktop.
 
+For an actual framebuffer/presentation regression, use the small
+[egui visual test](../../scripts/wgpu-hal-visual/README.md). It automatically
+builds the published and patched backends, captures four window states and
+marks differences with a translucent red overlay. A non-reproducing baseline
+is reported as inconclusive rather than passing. The workflow's opt-in
+`visual_check` run retains screenshots as artifacts.
+
 The DX12 swap-chain description uses `DXGI_SCALING_NONE` for HWND presentation
 to avoid resampling the windowed UI. Composition swap chains retain
 `DXGI_SCALING_STRETCH`, which Microsoft requires for

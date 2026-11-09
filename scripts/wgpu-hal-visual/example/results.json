@@ -1,0 +1,75 @@
+{
+  "adapter": {
+    "backend": "Dx12",
+    "driver": "32.0.16.1714",
+    "name": "NVIDIA GeForce RTX 3060"
+  },
+  "difference_threshold": 0,
+  "edge_margin": 40,
+  "explanation": "The unpatched restored/resized output reproduced the bug. Patched output matched its framebuffer exactly in all tested states.",
+  "red_opacity": 0.40784314274787903,
+  "renderer": "eframe/egui 0.36.2, winit 0.30.13, wgpu 30.0.1",
+  "states": [
+    {
+      "ab_different_pixels": 17954,
+      "after": 0,
+      "after_offset": [
+        0,
+        1
+      ],
+      "before": 17954,
+      "before_offset": [
+        0,
+        1
+      ],
+      "compared_pixels": 1115200,
+      "state": "restored"
+    },
+    {
+      "ab_different_pixels": 18099,
+      "after": 0,
+      "after_offset": [
+        0,
+        1
+      ],
+      "before": 18099,
+      "before_offset": [
+        0,
+        1
+      ],
+      "compared_pixels": 616400,
+      "state": "resized"
+    },
+    {
+      "ab_different_pixels": 0,
+      "after": 0,
+      "after_offset": [
+        8,
+        8
+      ],
+      "before": 0,
+      "before_offset": [
+        8,
+        8
+      ],
+      "compared_pixels": 3313280,
+      "state": "maximized"
+    },
+    {
+      "ab_different_pixels": 17954,
+      "after": 0,
+      "after_offset": [
+        0,
+        1
+      ],
+      "before": 17954,
+      "before_offset": [
+        0,
+        1
+      ],
+      "compared_pixels": 1115200,
+      "state": "restored-again"
+    }
+  ],
+  "status": "PASS"
+}

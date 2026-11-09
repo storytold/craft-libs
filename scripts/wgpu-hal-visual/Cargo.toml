@@ -1,0 +1,17 @@
+[package]
+name = "dx12-egui-smoke"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+publish = false
+
+# This test-only desktop harness is not a shared library or a shipped app.
+[workspace]
+
+[dependencies]
+eframe = { version = "=0.36.2", default-features = false, features = ["wgpu_no_default_features", "default_fonts"] }
+wgpu = { version = "=30.0.1", default-features = false, features = ["std", "dx12", "wgsl"] }
+image = { version = "0.25", default-features = false, features = ["png"] }
+raw-window-handle = "0.6"
+serde_json = "1"
+windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_Storage_Xps", "Win32_UI_WindowsAndMessaging"] }

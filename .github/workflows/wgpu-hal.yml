@@ -2,11 +2,16 @@ name: Vendored wgpu-hal source
 
 on:
   workflow_dispatch:
+    inputs:
+      visual_check:
+        description: 'Capture and compare real DX12 windows (GPU-dependent; may be inconclusive)'
+        type: boolean
+        default: false
   push:
     branches: [main]
-    paths: ['vendor/wgpu-hal/**', 'scripts/verify_wgpu_hal.py', '.github/workflows/wgpu-hal.yml']
+    paths: ['vendor/wgpu-hal/**', 'scripts/verify_wgpu_hal.py', 'scripts/wgpu-hal-visual/**', '.github/workflows/wgpu-hal.yml']
   pull_request:
-    paths: ['vendor/wgpu-hal/**', 'scripts/verify_wgpu_hal.py', '.github/workflows/wgpu-hal.yml']
+    paths: ['vendor/wgpu-hal/**', 'scripts/verify_wgpu_hal.py', 'scripts/wgpu-hal-visual/**', '.github/workflows/wgpu-hal.yml']
 
 permissions:
   contents: read
@@ -36,7 +41,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          workspaces: vendor/wgpu-hal -> target
+          workspaces: |
+            vendor/wgpu-hal -> target
+            scripts/wgpu-hal-visual -> target
           key: vendored-wgpu-hal-dx12
       # The vendor crate is excluded from the workspace and is not selected by
       # craft-ui's tests. Build it directly so this checks the patched DX12 code.
@@ -44,3 +51,24 @@ jobs:
         run: cargo test --manifest-path vendor/wgpu-hal/Cargo.toml --locked --no-default-features --features dx12 --lib
       - name: Build the DX12 window example
         run: cargo build --manifest-path vendor/wgpu-hal/Cargo.toml --locked --no-default-features --features dx12 --example halmark
+      - name: Test the visual harness and its regression verdicts
+        run: cargo test --manifest-path scripts/wgpu-hal-visual/Cargo.toml --locked
+      # Hosted display adapters need not reproduce the original driver/window
+      # behavior. Keep strict visual validation opt-in instead of turning a
+      # zero/zero capture into a misleading passing regression check.
+      - name: Capture and compare DX12 windows
+        if: github.event_name == 'workflow_dispatch' && inputs.visual_check
+        shell: pwsh
+        run: ./scripts/wgpu-hal-visual/run.ps1 -OutputDirectory "$env:RUNNER_TEMP/dx12-visual-results" -TargetDirectory "$env:GITHUB_WORKSPACE/scripts/wgpu-hal-visual/target"
+      - name: Upload screenshots and visual verdict
+        if: always() && github.event_name == 'workflow_dispatch' && inputs.visual_check
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: dx12-window-captures
+          retention-days: 14
+          path: |
+            ${{ runner.temp }}/dx12-visual-results/**/*.png
+            ${{ runner.temp }}/dx12-visual-results/**/*.json
+            ${{ runner.temp }}/dx12-visual-results/RESULTS.md
+            ${{ runner.temp }}/dx12-visual-results/*.log
+          if-no-files-found: warn
