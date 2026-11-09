@@ -237,30 +237,53 @@ pub mod fixtures {
         std::fs::rename(tmp, path)
     }
 
-    /// Generate fixture `out` using generator closure if it does not already exist.
+    /// Generate fixture `out` using generator closure if it does not already exist. A generator
+    /// that returns `false`, or whose output cannot be moved into place, skips (see
+    /// [`skip`](super::skip)): a failure with `CRAFT_MEDIA_REQUIRE_ORACLES=1`, so a required
+    /// oracle run cannot pass with a fixture missing.
     pub fn generate<F: FnOnce(&Path) -> bool>(out: &Path, f: F) -> Option<PathBuf> {
+        generate_with(out, super::oracles_required(), f)
+    }
+
+    /// [`generate`] with `required` explicit, so tests can set it without touching the process
+    /// environment.
+    pub fn generate_with<F: FnOnce(&Path) -> bool>(out: &Path, required: bool, f: F) -> Option<PathBuf> {
         if out.exists() {
             return Some(out.to_path_buf());
         }
         let tmp = temp_path(out);
-        if f(&tmp) {
+        let reason = if f(&tmp) {
             match std::fs::rename(&tmp, out) {
-                Ok(()) => Some(out.to_path_buf()),
-                Err(e) => {
-                    let _ = std::fs::remove_file(&tmp);
-                    super::skip(&format!("could not move {} into place: {e}", tmp.display()))
-                }
+                Ok(()) => return Some(out.to_path_buf()),
+                Err(e) => format!("could not move {} into place: {e}", tmp.display()),
             }
         } else {
-            let _ = std::fs::remove_file(&tmp);
-            None
-        }
+            format!("fixture generator failed for {}", out.display())
+        };
+        let _ = std::fs::remove_file(&tmp);
+        super::skip_with(required, &reason)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn failed_generator_skips_when_optional() {
+        let out = std::env::temp_dir().join(format!("craft-media-testkit-gen-opt-{}", std::process::id()));
+        let _ = std::fs::remove_file(&out);
+        assert!(fixtures::generate_with(&out, false, |_| false).is_none());
+        assert!(!out.exists());
+    }
+
+    #[test]
+    #[should_panic(expected = "forbids skipping oracle tests")]
+    fn failed_generator_fails_when_required() {
+        let out = std::env::temp_dir().join(format!("craft-media-testkit-gen-req-{}", std::process::id()));
+        let _ = std::fs::remove_file(&out);
+        let _ = fixtures::generate_with(&out, true, |_| false);
+    }
 
     #[test]
     fn parse_has_encoder_exact_match() {
