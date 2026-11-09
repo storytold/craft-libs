@@ -1577,6 +1577,11 @@ fn intersect_cubics_rec(
     }
     signs.entries.last_mut().unwrap().end = y1;
 
+    // Craft patch (end order check): re-centering rounds each interval end, and
+    // at coordinates near 1e8 the two curves at a rounded end can be on the
+    // wrong side of the interval's order by up to 69 times `ish_tolerance`.
+    // This exact check runs only with `slow-asserts`.
+    #[cfg(feature = "slow-asserts")]
     for (y0, y1, order) in signs.iter(y0) {
         match order {
             MaybeOrder::Right => {
@@ -3205,6 +3210,33 @@ mod test {
         let order = intersect_cubics(c0, c1, 1e-320, 2e-320);
         let entries: Vec<_> = order.iter().collect();
         assert_eq!(entries, vec![(0.0, 1.0, Order::Left)]);
+    }
+
+    // Craft patch (end order check): two finite curves near 1e8 that cross
+    // once. Without `slow-asserts`, a debug build compares them without a
+    // panic and gives the order on each side of the crossing.
+    #[cfg(not(feature = "slow-asserts"))]
+    #[test]
+    fn crossing_at_large_coordinates() {
+        let sure_tol = 8.993802161699384e-7;
+        let ish_tol = 1.7987604323398767e-6;
+        let c0 = CubicBez::new(
+            (125383211.83146076, 66386026.504549935),
+            (83601374.51512215, 98950975.47591528),
+            (59801634.505237974, 115174249.23969136),
+            (54096217.42598602, 115174249.23969136),
+        );
+        let c1 = CubicBez::new(
+            (73570041.209444, 57614167.78993744),
+            (90770853.19226673, 60905254.4942346),
+            (107971665.17508946, 64196341.19853177),
+            (125172477.1579122, 67487427.90282893),
+        );
+
+        let cmp = intersect_cubics(c0, c1, sure_tol, ish_tol);
+        assert_eq!(cmp.iter().last().unwrap().1, c1.p3.y);
+        assert_eq!(cmp.order_at(c0.p0.y), Order::Right);
+        assert_eq!(cmp.order_at(c1.p3.y), Order::Left);
     }
 
     #[test]
