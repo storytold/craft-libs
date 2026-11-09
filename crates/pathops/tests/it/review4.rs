@@ -252,7 +252,16 @@ fn an_interior_point_is_found_in_a_unit_square_at_a_quadrillion() {
         let square = rectangle(Rect::new(x, 0.0, x + 1.0, 1.0));
         let p = interior_point(&square).unwrap_or_else(|| panic!("no point in a unit square at x = {x}"));
         assert!(square.winding(p) != 0, "{p:?}");
+        // Strictly inside: the winding counts a point on the left side or the bottom (kurbo's takes the rays to the left).
+        assert!(p.x > x && p.x < x + 1.0 && p.y > 0.0 && p.y < 1.0, "{p:?} is on the boundary of the square, or outside it");
     }
+}
+
+/// A point strictly inside the bulge of the tests below, a triangle from (0, y + 4e11) to (0.1, y + 4.005e11) to (0, y + 4.01e11): above
+/// the first and below the third, and left of the edges that meet at its tip.
+pub(crate) fn strictly_in_the_bulge(p: kurbo::Point, y: f64) -> bool {
+    let right = 0.1 - 0.1 * (p.y - (y + 4.005e11)).abs() / 5e9;
+    p.x > 0.0 && p.y > y + 4e11 && p.y < y + 4.01e11 && p.x < right
 }
 
 #[test]
@@ -262,6 +271,7 @@ fn a_shallow_bend_that_encloses_area_is_a_height_of_the_search() {
     assert!(close(bulge.area().abs(), 5e7, 1e-9), "{}", bulge.area());
     let p = interior_point(&bulge).expect("a point in the bulge");
     assert!(bulge.winding(p) != 0, "{p:?}");
+    assert!(strictly_in_the_bulge(p, 0.0), "{p:?} is on the edge of the bulge, or outside it");
 }
 
 // ---- the frame of a planar map

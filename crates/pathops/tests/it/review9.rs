@@ -54,7 +54,13 @@ fn try_pathfinder_checks_the_shapes_as_given_before_the_fill_leaves_a_loop_out()
         }
         // The forms with no error are as they were: the loop is left out and the rest is made.
         assert!(!pathfinder(PathfinderOp::Divide, &shapes).is_empty(), "the square is divided where the loop is left out ({handle})");
-        assert!(!pathfinder(PathfinderOp::Unite, &shapes).is_empty() || handle.is_nan());
+        // The union leaves out the shape that has the loop, whole (as `unite_all` leaves out any path it cannot
+        // sweep), and is the independent square: a square 10 across, for a handle that is no number as for one
+        // that is too large to sweep.
+        let united = pathfinder(PathfinderOp::Unite, &shapes);
+        assert_eq!(united.len(), 1, "the independent square remains in the union ({handle})");
+        assert!((area(&united[0].path, NZ) - 100.0).abs() < 1e-9, "{}: the square 10 across, from (5, 5) ({handle})", area(&united[0].path, NZ));
+        assert_eq!(united[0].key, 1);
     }
     // And a loop with a handle that is a number is no trouble.
     let shapes = [Shape::new(square_and_loop(30.0), NZ, 0), Shape::new(rectangle(Rect::new(5.0, 5.0, 15.0, 15.0)), NZ, 1)];

@@ -74,11 +74,24 @@ pub(crate) enum Work {
     FillWound,
     /// Segments of the faces that a planar map wound the points of holes against, counted where each is wound.
     HoleWound,
+    /// Steps charged to the budget of the searches after a sweep (`Limits::search_work`).
+    SearchSteps,
+    /// Nearest points of a curve to a point that a search after a sweep found.
+    Nearest,
+    /// Blocks of junctions, and junctions in them, that a lookup of the junctions in a box looked at.
+    JunctionSteps,
+    /// Chains of an Outline that were compared with a chain found beside them, for edges that coincide.
+    ChainCompares,
+    /// Pairs of lines found to cross, by testing the pairs whose bounds overlap (the check of a sweep's crossings).
+    LineCrossings,
+    /// Faces of an offset whose point deep inside was looked for among the crossings of the curves themselves, the
+    /// flattened path having none.
+    ExactSpans,
 }
 
 #[cfg(test)]
 thread_local! {
-    static COUNTS: std::cell::RefCell<[usize; 34]> = const { std::cell::RefCell::new([0; 34]) };
+    static COUNTS: std::cell::RefCell<[usize; 40]> = const { std::cell::RefCell::new([0; 40]) };
 }
 
 /// Counts `n` more of `what` on this thread (tests only).
@@ -103,5 +116,5 @@ pub(crate) fn take(what: Work) -> usize {
 /// Resets every count on this thread.
 #[cfg(test)]
 pub(crate) fn reset() {
-    COUNTS.with(|c| *c.borrow_mut() = [0; 34]);
+    COUNTS.with(|c| *c.borrow_mut() = [0; 40]);
 }

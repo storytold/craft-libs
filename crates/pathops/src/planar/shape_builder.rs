@@ -95,7 +95,7 @@ pub(crate) fn try_builder(shapes: &[Shape], edges: bool, precision: f64, strict:
     let has_open = has_open_path(shapes);
     let mapped = if segment_count(shapes) <= crate::budget::limits().shape_builder_segments {
         let keyed: Vec<Shape> = shapes.iter().enumerate().map(|(i, s)| Shape::new(s.path.clone(), s.rule, i as u64)).collect();
-        match try_build(&keyed, precision) {
+        match try_build(&keyed, precision, strict) {
             Ok(map) => map,
             Err(e) if strict => return Err(e),
             Err(_) => None,

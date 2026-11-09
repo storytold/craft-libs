@@ -83,16 +83,14 @@ pub(super) fn try_frame_for(shapes: &[Shape]) -> Result<Option<Frame>, crate::Pa
     if !crate::budget::fits_elements(plain.iter().map(|p| &p.0)) {
         return Err(PathOpsError::TooComplex);
     }
-    // The frame that leaves the fewest short sides level (and no long one), and the widest tolerance seen.
+    // The frame that leaves the fewest short sides level (and no long one).
     let mut best: Option<(usize, Frame)> = None;
-    let mut widest: f64 = 0.0;
     for k in SHEARS {
         let (frame, open) = match sheared(&plain, &opens, k) {
             Sheared::Framed(frame, open) => (frame, open),
             Sheared::TooWide => continue,
             Sheared::NotFinite => return Err(PathOpsError::NonFinite),
         };
-        widest = widest.max(frame.eps);
         let level = level_sides(&open, frame.eps);
         if level.long {
             continue;
@@ -108,15 +106,17 @@ pub(super) fn try_frame_for(shapes: &[Shape]) -> Result<Option<Frame>, crate::Pa
         return Ok(Some(frame));
     }
     // Each of the ten leaves a long side level: one more shear, where none of the long sides is, among
-    // the shears of the ten's sign, or failing that among those of the other sign. The tolerance there
-    // is no more than that of the shear of the same size and sign `x`'s, and is taken at the end of the
-    // stretch where the coordinates are largest.
+    // the shears of the ten's sign, or failing that among those of the other sign. The tolerance in a
+    // range is that of the frame at the end of it where the coordinates are largest (`y + k x` is linear in
+    // `k`, so its size is greatest at an end of a range), and is not the widest that the frames of the
+    // other range had: a shape far out in x and y widens the tolerance of the shears above 0 and not in
+    // the same measure those below it, and the wider one bars stretches that are free.
     let reach = |k: f64| {
         let m = plain
             .iter()
             .flat_map(|(p, _)| p.elements().iter().flat_map(crate::boolean::el_points))
             .fold(0.0f64, |m, p| m.max((p.y + k * p.x).abs()).max(p.x.abs()));
-        crate::boolean::sweep_tolerance(m).max(widest)
+        crate::boolean::sweep_tolerance(m)
     };
     // Only shears in which the coordinates stay within what the sweep takes are searched: the middle of
     // the widest stretch free of the long sides could be one where they do not, with another stretch

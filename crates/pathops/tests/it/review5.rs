@@ -58,6 +58,7 @@ fn a_shallow_bend_far_out_along_its_line_is_a_height_of_the_search() {
     assert!(close(bulge.area().abs(), 5e7, 1e-9), "{}", bulge.area());
     let p = interior_point(&bulge).expect("a point in the bulge");
     assert!(bulge.winding(p) != 0, "{p:?}");
+    assert!(crate::review4::strictly_in_the_bulge(p, y), "{p:?} is on the edge of the bulge, or outside it");
 }
 
 // ---- offset

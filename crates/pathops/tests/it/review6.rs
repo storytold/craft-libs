@@ -33,15 +33,16 @@ fn slit(w: f64, far: bool) -> BezPath {
 
 /// A slit narrower than twice the sweep's tolerance is a hole, not two passes of one curve: its sides
 /// are its width apart, where the passes of a retraced curve are under a unit in the last place of
-/// their coordinates apart. One 1.5e-6 wide (the tolerance is 1e-6), and one 2e-3 wide beside a square
-/// at 1e11 (1.4e-3), grow by the inset all round, round joins rounding their ends; they were left out,
+/// their coordinates apart. One 1.5e-6 wide (the tolerance is 1e-6), and ones 2e-3 and 1.5e-3 wide beside a
+/// square at 1e11 (1.4e-3, which is what 64 units in the last place of the slit's own coordinates is not: that
+/// is 1.4e-12, and nothing under 1.4e-3 is kept by the sweep itself, below), grow by the inset all round, round joins rounding their ends; they were left out,
 /// and the inset was the square's. (The far square's part of the inset is taken away as made alone.)
 #[test]
 fn an_inset_widens_a_slit_narrower_than_twice_the_sweeps_tolerance() {
     let d = 0.25;
     let alone = |path: &BezPath| area(&try_offset_path(path, -d, Join::Round, 4.0).expect("an inset"), NZ);
     let far_part = alone(&slit(0.0, true)) - alone(&slit(0.0, false));
-    for (w, far) in [(1.5e-6, false), (2e-3, true)] {
+    for (w, far) in [(1.5e-6, false), (2e-3, true), (1.5e-3, true)] {
         let inset = try_offset_path(&slit(w, far), -d, Join::Round, 4.0).expect("an inset");
         // The slit grown by `d` all round.
         let hole = w * 60.0 + 2.0 * d * (w + 60.0) + std::f64::consts::PI * d * d;

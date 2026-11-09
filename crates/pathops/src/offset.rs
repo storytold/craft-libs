@@ -13,6 +13,7 @@ use crate::boolean::{
     Arrangement, DEFAULT_PRECISION, Tidy, all_contours_to_path, append_contours, contours_to_path, ensure_size, eps_for, held_union,
     normalize_bez_counted, normalize_bez_within, try_unite_all_with,
 };
+use crate::budget::{NEAREST_STEPS, SearchBudget};
 use crate::edit::remove_redundant_points;
 use crate::fit::measured_perimeter;
 use crate::path::{Sub, canonical, fill_bezpath, is_finite, subs};
@@ -362,15 +363,32 @@ fn covered_by(path: &BezPath, on: &BezPath, tol: f64) -> bool {
     let items: Vec<(kurbo::Rect, (usize, PathSeg))> = segs.iter().enumerate().map(|(i, &s)| (kurbo::Shape::bounding_box(&s), (i, s))).collect();
     let index = RectIndex::with_footprint(items, |r, (_, s), cell| segment_footprint(r, s, cell));
     let mut stretches: Vec<Vec<(f64, f64)>> = vec![Vec::new(); segs.len()];
+    // The searches below are charged before they are made: the segments of `path` within `tol` of a
+    // segment's middle are as many as lie along it (a shape drawn a thousand times over, edges packed
+    // closer than the sweep tells apart), and each costs up to three. Out of budget the answer is no
+    // ([`filled_boundary`] then takes the boundary, which is right for any input).
+    let budget = SearchBudget::new();
     for b in on.segments() {
         let (start, end, middle) = (b.start(), b.end(), b.eval(0.5));
+        if !budget.charge(1) {
+            return false;
+        }
         for &(i, s) in index.at(middle, tol) {
             let a = allow.get(i).copied().unwrap_or(tol);
             let a_sq = a * a;
+            if !budget.charge(2 * NEAREST_STEPS) {
+                return false;
+            }
+            work::add(Work::Nearest, 2);
             let (ns, ne) = (s.nearest(start, 1e-9), s.nearest(end, 1e-9));
-            if ns.distance_sq <= a_sq
-                && ne.distance_sq <= a_sq
-                && s.nearest(middle, 1e-9).distance_sq <= a_sq
+            if ns.distance_sq > a_sq || ne.distance_sq > a_sq {
+                continue;
+            }
+            if !budget.charge(NEAREST_STEPS) {
+                return false;
+            }
+            work::add(Work::Nearest, 1);
+            if s.nearest(middle, 1e-9).distance_sq <= a_sq
                 && let Some(list) = stretches.get_mut(i)
             {
                 list.push((ns.t.min(ne.t), ns.t.max(ne.t)));
@@ -633,7 +651,99 @@ fn deep_point(bp: &BezPath) -> Option<kurbo::Point> {
     let mut spans = spans_across(bp, r, (0.01 * r.width().min(r.height())).max(1e-6));
     // The widest first, the first found of equal ones first.
     spans.sort_by(|a, b| b.0.total_cmp(&a.0));
-    spans.into_iter().take(MAX_DEEP_TESTS).map(|(_, p)| p).find(|&p| bp.winding(p) % 2 != 0)
+    if let Some(p) = spans.into_iter().take(MAX_DEEP_TESTS).map(|(_, p)| p).find(|&p| bp.winding(p) % 2 != 0) {
+        return Some(p);
+    }
+    // None of the middles is in the area: it is thinner than the flattening (a ring half a unit wide round a
+    // hole a hundred across, whose circles the flattening to a hundredth of the size moves a whole unit), and
+    // the middle of a span of the flattened path is outside it. The crossings of the curves themselves with
+    // the lines are as exact as the arithmetic: the spans between them are inside, however thin.
+    work::add(Work::ExactSpans, 1);
+    widest_span(exact_spans(bp, r))
+}
+
+/// The middle of the widest of `spans` (each a width and a middle), the first found of equal ones; none where no
+/// span has a width.
+fn widest_span(spans: Vec<(f64, kurbo::Point)>) -> Option<kurbo::Point> {
+    let mut widest: Option<(f64, kurbo::Point)> = None;
+    for (width, p) in spans {
+        if width > 0.0 && widest.is_none_or(|(w, _)| width > w) {
+            widest = Some((width, p));
+        }
+    }
+    widest.map(|(_, p)| p)
+}
+
+/// The spans inside `bp` (even-odd) on the lines [`spans_across`] takes, from where the segments themselves
+/// cross them (a curve is cut where its height turns, and each piece, which rises or falls the whole way, is
+/// bisected for the height of the line): each span's width and middle, in the order of the lines and from left to
+/// right. A crossing is taken by the same rule as in the flattened path, the piece's lower end in and its upper
+/// end out, so that the crossings at a vertex are counted once.
+fn exact_spans(bp: &BezPath, r: kurbo::Rect) -> Vec<(f64, kurbo::Point)> {
+    use kurbo::{ParamCurve, PathSeg};
+    let mut spans = Vec::new();
+    for f in [0.5, 0.3, 0.7] {
+        let y = r.y0 + r.height() * f;
+        let mut xs: Vec<f64> = Vec::new();
+        for seg in bp.segments() {
+            let c = match seg {
+                PathSeg::Line(l) => {
+                    if (l.p0.y <= y) != (l.p1.y <= y) {
+                        xs.push(l.p0.x + (y - l.p0.y) / (l.p1.y - l.p0.y) * (l.p1.x - l.p0.x));
+                    }
+                    continue;
+                }
+                PathSeg::Quad(q) => q.raise(),
+                PathSeg::Cubic(c) => c,
+            };
+            // Where the height turns: `y'(t) / 3 = a (1 - t)^2 + 2 b (1 - t) t + c t^2`.
+            let (a, b, d) = (c.p1.y - c.p0.y, c.p2.y - c.p1.y, c.p3.y - c.p2.y);
+            let mut cuts = vec![0.0];
+            cuts.extend(quadratic_roots(a - 2.0 * b + d, 2.0 * (b - a), a).into_iter().filter(|t| *t > 0.0 && *t < 1.0));
+            cuts.sort_by(f64::total_cmp);
+            cuts.push(1.0);
+            for w in cuts.windows(2) {
+                let (mut lo, mut hi) = (w[0], w[1]);
+                let (ylo, yhi) = (c.eval(lo).y, c.eval(hi).y);
+                if (ylo <= y) == (yhi <= y) {
+                    continue;
+                }
+                // The height of the piece is monotone: bisect for the line.
+                for _ in 0..64 {
+                    let mid = 0.5 * (lo + hi);
+                    if (c.eval(mid).y <= y) == (ylo <= y) {
+                        lo = mid;
+                    } else {
+                        hi = mid;
+                    }
+                }
+                xs.push(c.eval(0.5 * (lo + hi)).x);
+            }
+        }
+        xs.sort_by(f64::total_cmp);
+        for w in xs.as_chunks::<2>().0 {
+            spans.push((w[1] - w[0], kurbo::Point::new((w[0] + w[1]) / 2.0, y)));
+        }
+    }
+    spans
+}
+
+/// The real roots of `a t^2 + b t + c` (none where it has none), found without the loss of the textbook formula
+/// where `a` is small beside `b`, as it is for a curve whose height turns at the middle.
+fn quadratic_roots(a: f64, b: f64, c: f64) -> Vec<f64> {
+    if !(a.is_finite() && b.is_finite() && c.is_finite()) {
+        return Vec::new();
+    }
+    if a == 0.0 {
+        return if b == 0.0 { Vec::new() } else { vec![-c / b] };
+    }
+    let disc = b * b - 4.0 * a * c;
+    if disc < 0.0 || !disc.is_finite() {
+        return Vec::new();
+    }
+    // The root that does not subtract nearly equal numbers, and the other from their product.
+    let q = -0.5 * (b + disc.sqrt().copysign(b));
+    if q == 0.0 { vec![0.0] } else { vec![q / a, c / q] }
 }
 
 /// Most middles of spans [`deep_point`] tests against the winding of the path.
@@ -1574,5 +1684,117 @@ mod tests {
         dense_non_finite.extend(polyline(&[(f64::NAN, 0.0), (10.0, 10.0)], true).iter());
         assert_eq!(try_offset_path(&dense_non_finite, 5.0, Join::Round, 4.0), Err(PathOpsError::NonFinite));
         assert!(offset_path(&dense_non_finite, 5.0, Join::Round, 4.0).elements().is_empty());
+    }
+
+    /// The searches of the check that every segment of an inset's subpaths is covered by the boundary of their fill
+    /// are charged before each is made and held to [`crate::Limits::search_work`]; past it the boundary is used,
+    /// an answer that is right for any input, where the check had no bound.
+    #[test]
+    fn the_coverage_check_of_an_inset_is_charged_before_each_search_and_held_to_its_limit() {
+        use crate::budget::NEAREST_STEPS;
+        let closed = circles(20);
+        let measured = |limit: usize| {
+            let l = crate::Limits { search_work: limit, ..crate::Limits::default() };
+            work::reset();
+            let r = crate::with_limits(l, || filled_boundary(&closed)).expect("within the limits");
+            (r, work::take(Work::SearchSteps), work::take(Work::Nearest))
+        };
+        let (kept, charged, nearest) = measured(usize::MAX);
+        assert_eq!(kept, closed, "the art is its own boundary");
+        // Each segment of the boundary is looked up (a step) and searched for on the one segment of the art it
+        // lies along, at its two ends and its middle.
+        let lookups = nearest / 3;
+        assert!(lookups >= 80 && nearest == 3 * lookups, "{nearest} searches");
+        assert_eq!(charged, lookups + NEAREST_STEPS * nearest);
+        // Short of that work the boundary is used, and what was searched for was charged first.
+        for limit in [charged - 1, charged / 2, 100, 0] {
+            let (r, c, n) = measured(limit);
+            assert_ne!(r, closed, "{limit}: the boundary of the sweep, not the art");
+            assert!(c <= limit && NEAREST_STEPS * n <= c, "{limit}: {c} charged, {n} searches made");
+        }
+        assert_eq!(measured(charged).0, closed, "at the work it needs, the check is made");
+    }
+
+    /// A point deep inside a thin ring is found, and its crossings with a line are those of the curves: the span of a
+    /// circle on a line through its middle is its width.
+    #[test]
+    fn a_point_deep_in_a_thin_ring_is_found_and_the_crossings_of_a_circle_are_its_width() {
+        let ring = |outer: f64, inner: f64| {
+            let mut p = kurbo::Circle::new((0.0, 0.0), outer).to_path(0.001);
+            p.extend(kurbo::Circle::new((0.0, 0.0), inner).to_path(0.001).iter());
+            p
+        };
+        let radius = |p: kurbo::Point| p.to_vec2().hypot();
+        for (outer, inner) in [(50.5, 50.0), (50.05, 50.0), (50.002, 50.0), (51.0, 50.0)] {
+            work::reset();
+            let p = deep_point(&ring(outer, inner)).unwrap_or_else(|| panic!("no point in a ring from {inner} to {outer}"));
+            let r = radius(p);
+            assert!(r > inner && r < outer, "{r} is not between {inner} and {outer}");
+        }
+        // A wide one is found in the flattened path, with no crossings of the curves taken.
+        work::reset();
+        let p = deep_point(&ring(50.0, 20.0)).expect("a point in a wide ring");
+        assert!(radius(p) > 20.0 && radius(p) < 50.0);
+        assert_eq!(work::take(Work::ExactSpans), 0);
+        // A circle's crossings with a line: two, and the span between is its width.
+        let circle = kurbo::Circle::new((3.0, 4.0), 5.0).to_path(0.001);
+        let spans = exact_spans(&circle, kurbo::Shape::bounding_box(&circle));
+        assert_eq!(spans.len(), 3, "a span on each of the three lines");
+        let (width, mid) = spans[0];
+        assert!((width - 10.0).abs() < 1e-3 && (mid.x - 3.0).abs() < 1e-6 && (mid.y - 4.0).abs() < 1e-9, "{width} {mid:?}");
+    }
+
+    /// The roots of the quadratic that holds where a cubic's height turns are found where its leading
+    /// coefficient is a rounding beside the others, as it is for a cubic whose handles are level (the textbook
+    /// formula subtracts two nearly equal numbers for the root near 0.5 and loses its digits).
+    #[test]
+    fn the_roots_of_a_quadratic_with_a_small_leading_coefficient_are_found_stably() {
+        let roots = quadratic_roots(1e-20, 2.0, -1.0);
+        assert!(roots.iter().any(|t| (t - 0.5).abs() < 1e-15), "{roots:?}");
+        let roots = quadratic_roots(0.0, 2.0, -1.0);
+        assert_eq!(roots, vec![0.5]);
+        assert!(quadratic_roots(1.0, 0.0, 1.0).is_empty() && quadratic_roots(0.0, 0.0, 1.0).is_empty());
+        assert!(quadratic_roots(f64::NAN, 1.0, 1.0).is_empty());
+        let mut two = quadratic_roots(1.0, -3.0, 2.0);
+        two.sort_by(f64::total_cmp);
+        assert_eq!(two, vec![1.0, 2.0]);
+    }
+
+    /// An outset by more than twice a circle's radius is a solid disk, whatever the circle is cut into: the stroker's
+    /// inner offset inverts and leaves a ring between it and the circle, a face the arrangement has and the offset must
+    /// drop as spurious. A point deep in a ring half a unit wide round a hole a hundred across is looked for on a
+    /// path flattened to a hundredth of its size, a whole unit, where it is not found; the crossings of the curves
+    /// themselves are then used ([`exact_spans`]). The circles cut in 8 cubics (a tolerance of 0.001) had the ring and
+    /// its island left (a hole of 8,012 square units and an island of 7,854 in the disk of 71,158) for outsets of
+    /// 100.001 to 100.5, and in 4 (0.01) four slivers of 0.3 and 0.6 square units for 100.0001 and 100.01.
+    #[test]
+    fn an_outset_past_the_diameter_of_a_circle_is_a_solid_disk_whatever_the_circle_is_cut_into() {
+        let mut fallbacks = 0;
+        for tolerance in [0.01, 0.001] {
+            for extra in [0.0001, 0.001, 0.01, 0.1, 0.5] {
+                let circle = kurbo::Circle::new((0.0, 0.0), 50.0).to_path(tolerance);
+                let delta = 100.0 + extra;
+                work::reset();
+                let grown = offset_path(&circle, delta, Join::Round, 4.0);
+                fallbacks += work::take(Work::ExactSpans);
+                let contours = grown.elements().iter().filter(|el| matches!(el, PathEl::MoveTo(_))).count();
+                let expected = std::f64::consts::PI * (50.0 + delta) * (50.0 + delta);
+                let area = grown.area().abs();
+                assert_eq!(contours, 1, "tolerance {tolerance}, outset {delta}: {contours} contours");
+                assert!((area / expected - 1.0).abs() < 1e-4, "tolerance {tolerance}, outset {delta}: {area} against {expected}");
+            }
+        }
+        assert!(fallbacks > 0, "the crossings of the curves themselves were used");
+    }
+
+    /// The point taken among the crossings of the curves is the middle of the widest span, the first of equal ones,
+    /// and none where there is no span of a width.
+    #[test]
+    fn the_widest_span_is_the_first_of_the_widest() {
+        let at = |x: f64| kurbo::Point::new(x, 0.0);
+        assert_eq!(widest_span(vec![(1.0, at(1.0)), (3.0, at(2.0)), (3.0, at(3.0)), (2.0, at(4.0))]), Some(at(2.0)));
+        assert_eq!(widest_span(vec![(0.0, at(1.0)), (-1.0, at(2.0)), (0.5, at(3.0))]), Some(at(3.0)));
+        assert_eq!(widest_span(vec![(0.0, at(1.0)), (f64::NAN, at(2.0))]), None);
+        assert_eq!(widest_span(Vec::new()), None);
     }
 }

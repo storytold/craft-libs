@@ -51,6 +51,20 @@ pub const MAX_SWEEP_EVENT_WORK: usize = {
     if wanted > usize::MAX as u64 { usize::MAX } else { wanted as usize }
 };
 
+/// Most searches of the sweep line that the crossings of lines make, as counted before the sweep from the
+/// pairs of lines that really cross: 2^30, 1,073,741,824. [`MAX_SWEEP_EVENT_WORK`] counts every pair of
+/// segments whose bounds overlap as crossing, which is far more than cross where strokes slant across each
+/// other (a hatch of 400 and 400 crosses in a fifth of the pairs counted), and is priced for that; where
+/// every pair of lines whose bounds overlap does cross, one polygon whose edges all cross one another (a star
+/// of n points joined to the ones nearly opposite crosses in about n²/2 places), the same count is about
+/// seven times as much time and a good deal more memory a unit: 2,001 edges, which pass the other limits,
+/// take 19 s and 3.5 GB. The lines that cross, found by testing the pairs whose bounds overlap (no more than
+/// [`MAX_SEGMENT_PAIRS`]), times the most pieces on the sweep line, are held to this: 1,001 edges take 2.4 s and 0.9 GB, and
+/// 1,285 about five seconds. Counted only when the pairs of bounds could make more than the limit.
+/// Past it an operation fails as [`crate::PathOpsError::TooComplex`] before it sweeps. The default of
+/// [`Limits::crossed_work`].
+pub const MAX_CROSSED_WORK: usize = 1 << 30;
+
 /// Most ends of segments at one point (within the sweep's tolerance, a point and its neighbours
 /// counted as one): 512. The sweep takes about the fourth power of the number of segments that
 /// meet at a point, which no other limit counts (a pie of k slices has 2k ends at its centre and k
@@ -100,6 +114,48 @@ pub const MAX_PASS_WORK: usize = 1 << 25;
 /// built: an answer, but not the arrangement asked for, its faces unsplit by the open paths).
 pub const MAX_FILL_WORK: usize = 1 << 26;
 
+/// Most steps of the searches a Pathfinder Outline and an inset make after their sweeps: 2^30,
+/// 1,073,741,824. The sweep is bounded by the limits above; what is done with its output is not by them. A
+/// Pathfinder Outline cuts each segment where junctions lie on it, and finds them among the junctions inside
+/// the segment's bounds (a grid of cutters makes a million junctions, and every long arch above it holds all
+/// of them in its bounds, where the curve is nowhere near): a junction looked at costs a step, a block of 64
+/// of them one, and the nearest point of a curve to a junction 64 (about 0.3 microseconds
+/// in a release build, against 5 nanoseconds for a step). An inset checks that every segment of its subpaths
+/// is covered by the boundary of their fill, a search of the same kind for each segment of the boundary
+/// and each segment of the subpaths near it. About 5 seconds of the slowest of them. Past it a Pathfinder
+/// Outline fails as [`crate::PathOpsError::TooComplex`] (no shapes, for [`crate::pathfinder`]), and an inset
+/// takes the boundary of the fill, which is right for any input and differs from the subpaths themselves only in
+/// how it is cut. The default of [`Limits::search_work`].
+pub const MAX_SEARCH_WORK: usize = 1 << 30;
+
+/// What the nearest point of a curve to a point costs, in the steps of [`MAX_SEARCH_WORK`].
+pub(crate) const NEAREST_STEPS: usize = 64;
+
+/// What a search after a sweep may still spend ([`Limits::search_work`]), as [`crate::planar`]'s fill
+/// work is: each step is charged before it is made, and the one that does not fit empties the budget.
+pub(crate) struct SearchBudget(Cell<usize>);
+
+impl SearchBudget {
+    pub(crate) fn new() -> Self {
+        Self(Cell::new(limits().search_work))
+    }
+
+    /// Takes `n` steps, or empties the budget and says there were not that many left.
+    pub(crate) fn charge(&self, n: usize) -> bool {
+        match self.0.get().checked_sub(n) {
+            Some(left) => {
+                self.0.set(left);
+                work::add(Work::SearchSteps, n);
+                true
+            }
+            None => {
+                self.0.set(0);
+                false
+            }
+        }
+    }
+}
+
 /// Most path elements (a move, a close, and a segment each) all the paths of one operation may
 /// hold together: 524,288 (the default of [`Limits::elements`]). Every operation reads its input a few times and keeps several copies
 /// of it (the sweep's segments cost a few hundred bytes each: a union of two paths of this size
@@ -147,6 +203,9 @@ pub struct Limits {
     /// of segments whose bounds overlap times the most pieces on the line at one height
     /// ([`MAX_SWEEP_EVENT_WORK`]: 2^32, or the most `usize` holds where that is less).
     pub sweep_event_work: usize,
+    /// Most searches of the sweep line the crossings of lines make, counted from the pairs of lines that
+    /// really cross times the most pieces on the line at one height ([`MAX_CROSSED_WORK`]).
+    pub crossed_work: usize,
     /// Most segments [`crate::shape_builder`] sweeps into its map ([`crate::SHAPE_BUILDER_MAX_SEGMENTS`]).
     pub shape_builder_segments: usize,
     /// Most samples of one run of segments `simplify` fits ([`crate::MAX_FIT_POINTS`]).
@@ -160,6 +219,9 @@ pub struct Limits {
     /// Most flags a boolean operation sets to tell its predicate what covers the faces, and entries Divide
     /// and `regions` walk to list the inputs that cover each side of an edge ([`crate::MASK_WORK`]).
     pub mask_work: usize,
+    /// Most steps of the searches a Pathfinder Outline and an inset make on curves after their sweeps
+    /// ([`MAX_SEARCH_WORK`]).
+    pub search_work: usize,
 }
 
 impl Limits {
@@ -170,6 +232,7 @@ impl Limits {
         offset_segment_pairs: crate::offset::MAX_OFFSET_SEGMENT_PAIRS,
         sweep_line_pairs: MAX_SWEEP_LINE_PAIRS,
         sweep_event_work: MAX_SWEEP_EVENT_WORK,
+        crossed_work: MAX_CROSSED_WORK,
         pass_work: MAX_PASS_WORK,
         fill_work: MAX_FILL_WORK,
         ends_at_a_point: MAX_ENDS_AT_A_POINT,
@@ -181,6 +244,7 @@ impl Limits {
         join_work: crate::edit::JOIN_WORK,
         redundant_work: crate::edit::REDUNDANT_WORK,
         mask_work: crate::boolean::MASK_WORK,
+        search_work: MAX_SEARCH_WORK,
     };
 }
 
@@ -678,6 +742,21 @@ fn parallel(den: f64, la: f64, lb: f64) -> bool {
     !den.is_finite() || den.abs() <= 1e-10 * la * lb
 }
 
+/// How many pairs of the lines of `seg` cross, away from both their ends: each pair whose bounds overlap is
+/// tested (`cap` of them at most, the limit on pairs). `None` when there are more pairs than that.
+fn real_line_crossings(seg: &Segments, slack: f64, cap: usize) -> Option<u64> {
+    let mut crossed = 0u64;
+    let within = each_overlap(&seg.lines, cap, |i, j| {
+        work::add(Work::CrossingPairs, 1);
+        if let (Some(a), Some(b)) = (seg.line_segs.get(i), seg.line_segs.get(j))
+            && crossing(a, b, slack).is_some()
+        {
+            crossed += 1;
+        }
+    });
+    within.then_some(crossed)
+}
+
 /// The work of the lines of `seg` that cross at one point: for each line, its crossings with others
 /// at (within a tolerance of) one point, `m` of them where `m` is two or more, count `m`², so a point
 /// where `c` lines cross costs about `c`³, the sweep's cost for it. The crossings are found only when
@@ -888,6 +967,16 @@ pub(crate) fn sweep_fits_within<'a>(paths: impl IntoIterator<Item = &'a BezPath>
     let crossings = (line_pairs as u64).saturating_add((mixed as u64).saturating_mul(3)).saturating_add((curve_pairs as u64).saturating_mul(9));
     if crossings.saturating_mul(peak_depth(&seg.heights) as u64) > limits().sweep_event_work as u64 {
         return false;
+    }
+    // The lines that really cross: the count above takes every pair of bounds that overlap for a crossing, and
+    // where all of them cross (a polygon whose edges cross one another) the sweep takes several times as long.
+    let depth = peak_depth(&seg.heights) as u64;
+    if (line_pairs as u64).saturating_mul(depth) > limits().crossed_work as u64 {
+        let Some(crossed) = real_line_crossings(&seg, crate::boolean::sweep_tolerance(seg.extent), cap) else { return false };
+        work::add(Work::LineCrossings, usize::try_from(crossed).unwrap_or(usize::MAX));
+        if crossed.saturating_mul(depth) > limits().crossed_work as u64 {
+            return false;
+        }
     }
     // Segments that follow one another in a path touch at the end they share, and cross nowhere.
     if !crossing_work_within(&seg, line_pairs.saturating_sub(seg.touching_lines), crate::boolean::sweep_tolerance(seg.extent), cap) {
@@ -1227,8 +1316,13 @@ mod tests {
         // A limit past what `usize` holds cannot be set, so there is nothing that lets the hatch through
         // on a target where the estimate does not fit.
         if usize::try_from(estimate).is_ok() {
-            let unlimited = Limits { sweep_event_work: usize::MAX, ..Limits::default() };
+            let unlimited = Limits { sweep_event_work: usize::MAX, crossed_work: usize::MAX, ..Limits::default() };
             assert!(with_limits(unlimited, || sweep_fits([&hatch])), "only the searches of the line refuse it");
+            // Each of the two limits on them refuses it alone: it is 3.7 million lines of crossings that count, and
+            // the ones that really cross, a fifth of them, times the depth are over the second as well.
+            let only_pairs = Limits { crossed_work: usize::MAX, ..Limits::default() };
+            let only_crossed = Limits { sweep_event_work: usize::MAX, ..Limits::default() };
+            assert!(!with_limits(only_pairs, || sweep_fits([&hatch])) && !with_limits(only_crossed, || sweep_fits([&hatch])));
         }
         work::reset();
         assert!(!sweep_fits([&hatch]));
@@ -1757,6 +1851,54 @@ mod tests {
         assert!(with_limits(Limits { coverage_entries: 1, ..Limits::default() }, || !sweep_fits(rings.iter())));
         let counted = work::take(Work::CoverageEntries);
         assert!(alone <= counted && counted < 6 * alone, "{counted} entries counted for a hundred concentric circles, {alone} for none cut");
+    }
+
+    /// Lines that really cross are counted, and held to [`Limits::crossed_work`] with the most pieces on the sweep line.
+    /// A star polygon whose every edge goes to the vertex nearly opposite crosses the other edges in `n (k - 1)`
+    /// places (`k = (n - 1) / 2`, about n²/2), and every pair of its edges has overlapping bounds: 2,001 edges are
+    /// 2.0 million pairs, under the limit on pairs (4.2 million) and, at 4.0e9 searches of the sweep line, under the
+    /// limit on those (4.3e9), and took 19 s and 3.5 GB; 1,001 take 2.4 s. 3,001 are over the limit on pairs.
+    #[test]
+    fn a_polygon_whose_edges_all_cross_is_held_to_the_work_of_its_crossings() {
+        use crate::testutil::star;
+        let check = |n: usize| {
+            let path = star(n);
+            work::reset();
+            let start = std::time::Instant::now();
+            let fits = sweep_fits([&path]);
+            (fits, work::take(Work::LineCrossings), start.elapsed())
+        };
+        // 1,001 edges fit: 500 thousand pairs of bounds, a thousand pieces on the line, 5.0e8 at most, which
+        // is under the limit with no pair tested.
+        let (fits, crossed, _) = check(1001);
+        assert!(fits && crossed == 0);
+        // 1,501 are over the limit on the pairs' count (1.7e9), and the pairs are tested: they cross in
+        // `n (k - 1)` places, one for each pair of edges that cross, and are over it.
+        let (fits, crossed, _) = check(1501);
+        assert!(!fits && crossed == 1501 * 749, "{crossed} crossings counted");
+        // So are 2,001 (4.0e9), found by testing the 2 million pairs, in well under a second in a release build
+        // (a bound of a minute here, where a build for tests is much slower, and the sweep takes minutes).
+        let (fits, crossed, took) = check(2001);
+        assert!(!fits && crossed == 2001 * 999, "{crossed} crossings counted");
+        assert!(took < std::time::Duration::from_secs(60), "{took:?}");
+        // 3,001 are over the limit on pairs, which is counted first, and no pair is tested.
+        let (fits, crossed, took) = check(3001);
+        assert!(!fits && crossed == 0 && took < std::time::Duration::from_secs(60), "{crossed} crossings counted in {took:?}");
+        // Short polygons are not counted: their pairs of bounds are too few to reach the limit.
+        assert_eq!(check(301).1, 0);
+        // At the work it needs a star fits, and under it by one it does not: the crossings times the pieces on the line.
+        let path = star(301);
+        let needed = 301 * 149 * 301;
+        for (limit, fits) in [(needed, true), (needed - 1, false)] {
+            let at = Limits { crossed_work: limit, ..Limits::default() };
+            assert_eq!(with_limits(at, || sweep_fits([&path])), fits, "{limit}");
+        }
+        // A hatch of 400 strokes each way, 640 thousand real crossings of the 2.6 million pairs of bounds that overlap, with
+        // 1,600 pieces on the line (1.0e9, just under the limit), is within it.
+        let hatch = crate::testutil::diagonals(400);
+        work::reset();
+        assert!(sweep_fits([&hatch]));
+        assert_eq!(work::take(Work::LineCrossings), 640_000);
     }
 
     /// Boxes that touch at a signed zero still overlap: -0.0 and +0.0 are the same position.

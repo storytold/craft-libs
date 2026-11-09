@@ -69,7 +69,7 @@ Each result takes its key as follows:
 | Trim | One shape for each object that is still visible |
 | Merge | Joins touching visible parts that share a key; each connected component becomes one shape |
 | Crop | Keeps the visible parts of the lower objects inside the front-most object |
-| Outline | Returns open edge paths, split at every junction; coincident edges are de-duplicated, and each keeps the front-most key. A closed subpath gives the edges of its outline, an open one the edges of the path itself (no closing edge; one of three anchors or more that ends where it starts is a ring, and counts as closed, and so does one cubic that loops round an area, closed or not), and where an open path crosses another is a junction. The crossings of open paths come from the planar map (below), which is built for up to `SHAPE_BUILDER_MAX_SEGMENTS` segments: past that, or when no map can be built, there are no shapes, since the filled areas, where an open path's way there and back cancel, do not see where it crosses another |
+| Outline | Returns open edge paths, split at every junction; coincident edges are de-duplicated, and each keeps the front-most key. A closed subpath gives the edges of its outline, an open one the edges of the path itself (no closing edge; one of three anchors or more that ends where it starts is a ring, and counts as closed, and so does one cubic that loops round an area, closed or not), and where an open path crosses another is a junction. The crossings of open paths come from the planar map (below), which is built for up to `SHAPE_BUILDER_MAX_SEGMENTS` segments: past that, or when no map can be built, or when finding the junctions on each edge takes more than `MAX_SEARCH_WORK` steps (Limits, below), there are no shapes, since the filled areas, where an open path's way there and back cancel, do not see where it crosses another |
 
 An operation that cannot sweep its input (see Limits) returns no shapes.
 
@@ -162,6 +162,23 @@ work of each operation is bounded before it starts, in counts the tests assert o
   end of a segment, also scans that line, so the pairs of segments whose bounds overlap (pairs of curves
   nine times, a line and a curve three) times the most pieces on the line at one height are held to
   `MAX_SWEEP_EVENT_WORK` (2^32, 4,294,967,296; where `usize` is 32 bits, on the web, the most it holds, 4,294,967,295). All of them are counted in O(n log n) before the sweep;
+- that count takes every pair of segments whose bounds overlap for a crossing, which prices a hatch (a fifth of
+  its pairs cross) and under-prices a polygon whose every edge crosses nearly every other: a star of n points,
+  each joined to the one nearly opposite, crosses in n (n - 3) / 2 places, every pair of its edges overlaps, and the
+  sweep scans a line of n pieces for each. 2,001 edges (2.0 million pairs, 4.0e9 searches) passed the limits above
+  and took 19 s and 3.5 GB (VectorCraft: 26 s and 3.7 GB). So where the pairs of lines whose bounds overlap
+  times the most pieces on the line could pass `MAX_CROSSED_WORK` (2^30), they are tested (no more than
+  `MAX_SEGMENT_PAIRS` of them), and the pairs of lines that really cross, away from their ends, times those
+  pieces are held to it: 1,001 edges take 2.4 s and 0.9 GB, 1,291 (the most) 4.3 s, and 1,293 or more, 2,001
+  among them (in 14 ms) and 3,001 (by the pairs, in 2 ms), are `TooComplex`. Curves count as before, by the
+  event limit alone;
+- what is done with the output of a sweep is bounded as well: a Pathfinder Outline finds the junctions on each
+  segment among those inside the bounds of the segment (a grid of 300 and 300 open lines makes 90,000 of them,
+  and every arch round it holds them all in its bounds with the curve nowhere near), and an inset checks
+  each segment of its subpaths against the boundary of their fill. Each step is charged before it is made, to
+  `MAX_SEARCH_WORK` (2^30 steps: a junction looked at is one, a block of 64 of them one, the nearest point of a
+  curve to a point 64, a third of a microsecond; about 5 s). Past it a Pathfinder Outline is `TooComplex` (no
+  shapes, for `pathfinder`), and an inset takes the boundary of the fill, which is right for any input;
 - segments that meet at one point cost about the fourth power of their number, which none of those counts
   (a pie of k slices has 2k ends at its centre): more than `MAX_ENDS_AT_A_POINT` (512) ends at one point is
   `TooComplex`. The ends are counted in a hash at the sweep's tolerance, which every point of every element
@@ -280,8 +297,8 @@ let outline = with_limits(limits, || try_outline_stroke(&path, 3.0, Cap::Butt, J
 `with_limits` puts the limits in force on the calling thread for the closure and puts the caller's back when
 it returns, also if it unwinds; scopes nest, and another thread keeps its own. `Limits` has a field for each
 bound (`elements`, `segment_pairs`, `offset_segment_pairs`, `sweep_line_pairs`, `shape_builder_segments`,
-`fit_points`, `fit_work`, `join_work`, `redundant_work`, `mask_work`, `sweep_event_work`, `pass_work`,
-`fill_work`, `ends_at_a_point`, `crossing_work`, `coverage_entries`) and is `#[non_exhaustive]`, so start from
+`fit_points`, `fit_work`, `join_work`, `redundant_work`, `mask_work`, `sweep_event_work`, `crossed_work`, `pass_work`,
+`fill_work`, `search_work`, `ends_at_a_point`, `crossing_work`, `coverage_entries`) and is `#[non_exhaustive]`, so start from
 `Limits::default()`. Time and memory grow with a limit raised, and a limit lowered refuses more ordinary art.
 
 ### Ordinary input the defaults refuse
@@ -302,15 +319,15 @@ one of 408 or more is `TooComplex`. Strokes that are curves count more than line
 to nine times, a line and a curve three), so a hatch of curves is refused at fewer. A boolean operation of more
 than a few thousand inputs, most of them empty, is `TooComplex` past `MASK_WORK`.
 
-Five more bounds refuse input a drawing can hold, none of it common: a pie of more than 256 slices (or any
+Seven more bounds refuse input a drawing can hold, none of it common: a polygon of more than 1,291 edges that cross nearly every other (a star of 1,293 points, joined to the one nearly opposite) by `MAX_CROSSED_WORK`, a grid of 300 and 300 open lines under 200 arches whose bounds hold it (an Outline) by `MAX_SEARCH_WORK`, a pie of more than 256 slices (or any
 more than 512 segment ends at one point; a fan of triangles has two at the point for each, so 257 of them) by `MAX_ENDS_AT_A_POINT`, 257 lines
 through one point by `MAX_CROSSING_WORK`, shapes nested 2,896 deep, or 202 deep and crossed by 202 bars, by
 `MAX_COVERAGE_ENTRIES`, Merge, Divide, Trim or Crop of a fan of 209 or more shapes at a point beside 40,000
 other squares by `MAX_PASS_WORK`, and the planar map of thousands of contours nested in one shape (3,400
 rectangles a thousand times as tall as they are wide) by `MAX_FILL_WORK`. Each is a worst case measured in
 seconds or in half a gigabyte (the pie of 256 takes 0.5 to 0.9 s, 256 lines through a point 1.1 s, 2,895 nested
-squares 0.2 s and 550 MB, 3,300 nested rectangles in one shape 1.3 s), so an app that can wait or has the memory
-raises it in `Limits`.
+squares 0.2 s and 550 MB, 3,300 nested rectangles in one shape 1.3 s, the star of 1,291 4.3 s, the Outline of the grid
+under 100 arches 5.2 s), so an app that can wait or has the memory raises it in `Limits`.
 
 The element limit refuses a drawing of more than 524,288 elements in one operation (a traced image of half a
 million points), and `shape_builder` gives only the filled areas for more than 65,536 segments.
@@ -334,8 +351,8 @@ cost more than a second or so, measured once in a release build:
   curves that cross several times each.
 - The event limit and the limit on pairs of pieces at overlapping heights are worst cases priced in
   nanoseconds, and the slowest rows of the Costs table are what they admit: 3.1 s for the largest hatch,
-  2.8 s for the largest row of dots, 5.4 s for an outline stroke of cubics a thousand wide, 1.8 s and a
-  gigabyte for two polygons at the element limit.
+  2.8 s for the largest row of dots, 4.3 s for the largest star, 5.4 s for an outline stroke of cubics a thousand
+  wide, 1.8 s and a gigabyte for two polygons at the element limit.
 - `interior_point` drops the edges that run back over each other exactly (an edge and the same edge the other
   way, as an out-and-back path has) before it looks at the few heights it tries, and takes those heights from
   the vertices where the path turns, not those it passes straight through, so a stub out and back along a
@@ -357,6 +374,10 @@ cost more than a second or so, measured once in a release build:
   so a curve that peaks between two samples is within the tolerance too. A refit curve is held by the same
   kind of bound, which is larger than the distances it bounds: a fit that comes close to the tolerance at the
   samples is split further, or the run left as it is, where it may in fact have been within it.
+- An inset widens a slit along its sides however narrow, but not at its closed end where that end is as short
+  as the stroker's tolerance (1e-3): a slit 0.001 wide from 20 to 100 in a square 100 across, inset by 5, is a notch
+  75 long (to y = 20, not 15), as a slit 0.002 wide is not (80). Measured, and not looked into further. Beside a shape at 1e11 a slit under the sweep's tolerance there (1.4e-3) is lost by the sweep, before the
+  inset sees it.
 - The counts themselves are made before the sweep and cost time: up to 0.3 to 0.5 s on an input of 250,000
   segments (they are a few sweeps of the bounds), with 64,000 dots as separate inputs the most.
 
@@ -376,6 +397,10 @@ thread and ask first with the `try_` forms. Measured on one machine, in a releas
 | `unite_all` of a row of 5,500 dots on one line (the sweep-line limit is at 5,800) | 2.8 s |
 | `unite_all` of a grid of 16,000 / 32,000 lenses with one more 10 million away | 0.6 / 1.4 s (as without the far one) |
 | `try_area` of a pie of 256 slices (512 segment ends at its centre, the limit) | 0.5 to 0.9 s |
+| `try_area` of a star of 1,001 / 1,291 points, each joined to the one nearly opposite (0.5 / 0.83 million crossings; 1,291 is the limit on them) | 2.4 s, 0.9 GB / 4.3 s, 0.9 GB |
+| `try_area` of the star of 1,293 / 2,001 / 3,001 points | refused in 6 / 14 / 2 ms |
+| `pathfinder(Outline, ..)` of 100 and 100 open lines across one another (one shape; 10,000 junctions) / of 300 and 300 (90,000) | 0.19 s / 2.8 s, 430 MB |
+| the same 100 / 300 lines with 100 arches round them whose bounds hold every junction | 0.9 s / 5.2 s (a search apiece: 1 and 9 million) |
 | `try_area` of 256 thin triangles whose long edges cross at one point (the limit on lines crossing at one point) | 1.1 s |
 | `try_area` of 400 / 450 lenses whose two cubics each pass through one point (curves through a point are not counted: Known limits) | 3.3 / 4.1 s |
 | `pathfinder(Exclude, ..)` of 200 squares nested and crossed by 200 bars (the estimate of the entries is at the limit) | 0.2 s, 430 MB |
@@ -454,8 +479,12 @@ bit for bit VectorCraft's), and the results are identical except where noted:
     steps (up to 2,047 points). The cubic is held to the tolerance by its error at them, its distance from its
     chords, and the run's from the chords between the points (a stretch of the run no longer than its control
     polygons lies in a lens about its chord, whose width is small where the run is smooth; the lengths are taken
-    as long as rounding may have made them, 8 units in the last place of each, so that a shallow curve with long
-    control edges, whose edges add up to its chord to the last place, is not taken for a line). That is a bound
+    as long as rounding may have made them, 4 units of rounding of each (a segment's three edges, each a rounded
+    distance, add up to three at most, and the lengths of a run are added with the rounding compensated, which
+    adds half a unit of the whole however many there are), so that a shallow curve with long control edges,
+    whose edges add up to its chord to the last place, is not taken for a line; 8 units for each edge added up,
+    as it was, were more than the tolerance for a run of 200 thousand straight cubics in eight stretches, which
+    came out as 3 elements in 0.41 s and are 2 in 15 ms). That is a bound
     of the run alone, whatever the number of segments or of merges that made it (the bounds of a run's merges,
     added up, are far more than it has used: a finely cut curve would have none of the tolerance left after a
     few dozen). A piece of eight segments or more is extended by those after it in strides, doubled while the
@@ -578,7 +607,11 @@ bit for bit VectorCraft's), and the results are identical except where noted:
     larger of the width and the height, so two unit squares ten billion apart in height were missed; and the
     first heights took any gap, a sliver between two rounded passes of a slanted line among them); a vertical
     edge crosses at its x exactly, and allows for no rounding (a unit square at x = 1e15 had no point: the
-    allowance for each of its two crossings was 0.9); and a gap's middle is taken only where it is strictly
+    allowance for each of its two crossings was 0.9), and the crossing of a slanted edge allows for the rounding
+    of its computation (half a unit in the last place of its x, and five halves of one of the edge's width in
+    x, for the product) and two more units in the last place of x, and not eight (a parallelogram a unit wide,
+    its sides slanted by 0.125, at x = 1e15, where the unit in the last place is 0.125, had no point: 0.9 for
+    each of two crossings is 1.8; a retrace along a slanted line at 1e15 still has none); and a gap's middle is taken only where it is strictly
     between the two crossings (between sides that are adjacent numbers it rounds onto one of them, an edge,
     which the winding can count as inside), nor on an edge of the path at that height or one of its vertices
     there (a rectangle 1 wide at x = 1e15 and 2 high at y = 1e16, where every height tried rounds onto its
@@ -645,6 +678,25 @@ bit for bit VectorCraft's), and the results are identical except where noted:
     `try_unite_all` the union of their paths, to it too (counted the same way, and the contours counted again
     before they are written, and the path written counted as well): outlines within the limit each that crossed each other a great deal were all
     made into contours;
+  - a face of a planar map that the first search finds no point in (it flattens the face to a thousandth of its
+    size, and a lens 0.03 wide between two curves 160 long is thinner than that: 15 of 1,219 random lenses over
+    the precision) is searched again, on an outline flattened to a quarter of the precision or an eighth of the first,
+    whatever the precision (it was so for a precision under the default only), and the face was a gap that nothing
+    fills, listed again as the filled area it is by `shape_builder`; where there is still none, `try_shape_builder`
+    and `try_pathfinder` say `Degenerate` for a face thicker than the precision (the others list it with no source);
+  - an offset judges a contour spurious by a point deep in its face, found on the face flattened to a hundredth of its
+    size; where none of the middles of the first eight spans is in the face (a ring half a unit wide round a hole a
+    hundred across, whose circles the flattening moves a unit) the widest span between the crossings of the curves
+    themselves with the lines is used, where the contour was kept: an outset by more than twice the radius of a circle
+    cut in 8 cubics (a tolerance of 0.001) left a hole of 8,012 square units and an island of 7,854 in the disk of
+    71,158, and one cut in 4 (0.01) four slivers of 0.3 to 0.6 square units;
+  - the tidy takes the pieces of a run for part of an input curve only where their middles are within the precision of
+    it as well as within ten matches (the first of two input curves that share their ends and lie nearer than ten matches
+    took the pieces of the other, up to 0.003 off at coordinates of 500 and a precision of 1e-4);
+  - the Pathfinder Outline looks for the junctions on a curve inside its bounds, not inside the box of its control points
+    (the curve is inside its bounds, and a junction within the sweep's noise of it is inside them widened by that
+    and the rounding of the coordinates), and looks them up by blocks that have the segment's heights, not one by one
+    among those with its x: the same junctions are found;
 - the predicate of `boolean_n` and `try_boolean_n` is asked once for each distinct winding of the sweep, and the
   contour pass is given the answers by where the windings are stored, where VectorCraft asked it every time
   the pass looked at a side of a segment, and the pass scans west through every segment that is no boundary
@@ -655,8 +707,13 @@ bit for bit VectorCraft's), and the results are identical except where noted:
   0.12 s here. The results are the same for a predicate that depends on its flags alone; one that counts its
   calls sees fewer of them (it is asked once for each distinct winding, before the pass: twice for a
   rectangle, outside and inside, not once for each of the eight sides of its segments);
-- five bounds are new and refuse input VectorCraft took, in whatever time it took, with `TooComplex` (or no
+- seven bounds are new and refuse input VectorCraft took, in whatever time it took, with `TooComplex` (or no
   shapes, for the operations that give none):
+  - more than 2^30 searches of the sweep line by the lines that really cross (a star polygon of 2,001 points took
+    VectorCraft 25.8 s and 3.7 GB, 1,001 points 2.9 s: the time grows with the cube of their number);
+  - a Pathfinder Outline whose junction searches pass 2^30 steps (VectorCraft looked at every junction in each
+    segment's range of x, and searched the curve for each one in its control box, which a grid of cutters under
+    a few hundred arches made tens of millions of; in the limit the results are the same);
   - more than 512 segment ends at one point, counted at the sweep's tolerance that all the points set
     (a pie of 257 slices took VectorCraft 0.7 s, 400 slices 3.1 s, the fourth power of their number; 400
     spikes with apexes 0.004 apart beside a cubic with control points at 1e12, which makes them one point,

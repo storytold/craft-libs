@@ -566,19 +566,20 @@ impl<'a> Originals<'a> {
         self.segs.get(i.checked_rem(self.segs.len())?)
     }
 
-    /// At least the length of the `count` segments from `first` (counting round the start): the lengths
-    /// of their control polygons, which a curve is no longer than. They are added up from the lengths
-    /// themselves, not taken from running totals, so that the sum is as exact as they are: it is the
-    /// length of a short stretch of a long subpath that a run is held to.
+    /// At least the length of the `count` segments from `first` (counting round the start), but for rounding
+    /// ([`LENGTH_ROUNDING`]): the lengths of their control polygons, which a curve is no longer than. They are
+    /// added up from the lengths themselves, not taken from running totals, so that the sum is as exact as they
+    /// are (it is the length of a short stretch of a long subpath that a run is held to), and with the rounding
+    /// of the additions compensated, so that it is off by the same share however many there are.
     fn polygon_length(&self, first: usize, count: usize) -> Option<f64> {
         let lens = self.polygons.get_or_init(|| self.segs.iter().map(|s| polygon_length(&s.c)).collect());
         let n = lens.len();
         let start = first.checked_rem(n)?;
         let end = start.checked_add(count)?;
         if end <= n {
-            Some(lens.get(start..end)?.iter().sum())
+            Some(compensated_sum(lens.get(start..end)?.iter().copied()))
         } else {
-            Some(lens.get(start..)?.iter().sum::<f64>() + lens.get(..end - n)?.iter().sum::<f64>())
+            Some(compensated_sum(lens.get(start..)?.iter().chain(lens.get(..end - n)?.iter()).copied()))
         }
     }
 }
@@ -608,21 +609,41 @@ const GALLOP_FROM: usize = 8;
 
 /// Half the width of the lens a path no longer than `along` lies in, from one end of a chord of length
 /// `chord` to the other (an ellipse with the ends as its foci): no point of the path is further than this
-/// from the chord. `along` is the sum of `terms` lengths and `chord` one, each a rounded length, and the
-/// path may be longer, and the chord shorter, by what rounding took: 8 units in the last place of each
-/// length, so that where the two come out equal (a shallow curve with long control edges, whose edges are
-/// longer than its chord by less than a unit in the last place of each, can come out as long as it) the
-/// width is the least that rounding allows and not 0. Infinite where a length is not a number, or where
-/// the width is too big to be one.
-fn lens_width(along: f64, chord: f64, terms: usize) -> f64 {
+/// from the chord. `along` is the sum of the lengths of control polygons ([`Originals::polygon_length`]) and
+/// `chord` one rounded length, and the path may be longer, and the chord shorter, by what rounding took
+/// ([`LENGTH_ROUNDING`] of each), so that where the two come out equal (a shallow curve with long control
+/// edges, whose edges are longer than its chord by less than a unit in the last place of each, can come out as
+/// long as it) the width is the least that rounding allows and not 0. Infinite where a length is not a number,
+/// or where the width is too big to be one.
+fn lens_width(along: f64, chord: f64) -> f64 {
     if !along.is_finite() || !chord.is_finite() {
         return f64::INFINITY;
     }
-    let rounding = terms.saturating_add(2) as f64 * 8.0 * f64::EPSILON;
-    let (along, chord) = (along * (1.0 + rounding), chord * (1.0 - rounding));
+    let (along, chord) = (along * (1.0 + LENGTH_ROUNDING), chord * (1.0 - LENGTH_ROUNDING));
     // The difference of the squares as a product, which does not overflow where the squares do (past 1e154).
     let width = 0.5 * ((along - chord).max(0.0) * (along + chord)).sqrt();
     if width.is_nan() { f64::INFINITY } else { width }
+}
+
+/// What rounding may take of the length of a polygon, and of a chord, as a share of it: four units of rounding
+/// ([`f64::EPSILON`]). The length of one segment's polygon is three distances, each a difference of coordinates
+/// (rounded) and a hypotenuse (rounded), under two units; the three added up in order are off by one more (half a unit
+/// for each addition after the first), so three at most. A run's polygon is those added up with their rounding
+/// compensated ([`compensated_sum`]), which adds half a unit of the whole however many there are, where a sum
+/// in order adds half a unit for each (a run of 200 thousand segments, whose lens was a hundred times its tolerance
+/// wide at 8 points, was never merged whole). The chord is one distance: two.
+const LENGTH_ROUNDING: f64 = 4.0 * f64::EPSILON;
+
+/// The sum of `values` with the rounding of its additions compensated (Neumaier's): off by half a unit of rounding of the
+/// sum, and a term in the square of that unit times the number of values, however many they are.
+fn compensated_sum(values: impl Iterator<Item = f64>) -> f64 {
+    let (mut sum, mut lost) = (0.0f64, 0.0f64);
+    for x in values {
+        let t = sum + x;
+        lost += if sum.abs() >= x.abs() { (sum - t) + x } else { (x - t) + sum };
+        sum = t;
+    }
+    sum + lost
 }
 
 /// How many intervals to take of a run that a cubic with the second difference `sd` is to replace: those
@@ -658,7 +679,7 @@ fn witness_points(originals: &Originals, first: usize, count: usize, steps: usiz
             let to = k.saturating_mul(count) / steps;
             let p = if to < count { originals.seg(first.checked_add(to)?)?.c.p0 } else { originals.seg(first.checked_add(count - 1)?)?.c.p3 };
             let along = originals.polygon_length(first.checked_add(from)?, to - from)?;
-            gap = gap.max(lens_width(along, pts.last()?.distance(p), (to - from).saturating_mul(3)));
+            gap = gap.max(lens_width(along, pts.last()?.distance(p)));
             pts.push(p);
             from = to;
         }
@@ -669,7 +690,7 @@ fn witness_points(originals: &Originals, first: usize, count: usize, steps: usiz
             for j in 1..=per {
                 let (from, to) = ((j - 1) as f64 / per as f64, j as f64 / per as f64);
                 let p = if j == per { c.p3 } else { c.eval(to) };
-                gap = gap.max(lens_width(polygon_length(&c.subsegment(from..to)), pts.last()?.distance(p), 3));
+                gap = gap.max(lens_width(polygon_length(&c.subsegment(from..to)), pts.last()?.distance(p)));
                 pts.push(p);
             }
         }
@@ -1640,37 +1661,51 @@ mod tests {
     #[test]
     fn the_lens_width_is_the_width_where_the_squares_overflow_too() {
         let near = |a: f64, b: f64| (a / b - 1.0).abs() < 1e-6;
-        assert!(near(lens_width(5.0, 3.0, 0), 2.0), "{}", lens_width(5.0, 3.0, 0));
-        assert_eq!(lens_width(3.0, 5.0, 0), 0.0, "a path shorter than its chord is none: no width");
+        assert!(near(lens_width(5.0, 3.0), 2.0), "{}", lens_width(5.0, 3.0));
+        assert_eq!(lens_width(3.0, 5.0), 0.0, "a path shorter than its chord is none: no width");
         let (along, chord): (f64, f64) = (2e154, 1.9e154);
         assert!((along * along).is_infinite() && (along * along - chord * chord).is_nan(), "the squares overflow");
-        let width = lens_width(along, chord, 0);
+        let width = lens_width(along, chord);
         let exact = 0.5 * ((along - chord) * (along + chord)).sqrt();
         assert!(width > 1e152 && near(width, exact), "{width} against {exact}");
         // A length that is not a number, or too big for a width, is an infinite one.
         for bad in [f64::NAN, f64::INFINITY] {
-            assert_eq!(lens_width(bad, 1.0, 3), f64::INFINITY);
-            assert_eq!(lens_width(1.0, bad, 3), f64::INFINITY);
+            assert_eq!(lens_width(bad, 1.0), f64::INFINITY);
+            assert_eq!(lens_width(1.0, bad), f64::INFINITY);
         }
-        assert_eq!(lens_width(f64::MAX, 1.0, 3), f64::INFINITY);
-        assert_eq!(lens_width(f64::MAX, f64::MAX, 3), f64::INFINITY);
+        assert_eq!(lens_width(f64::MAX, 1.0), f64::INFINITY);
+        assert_eq!(lens_width(f64::MAX, f64::MAX), f64::INFINITY);
     }
 
     /// Lengths that rounding has made equal are not a width of 0: a shallow cubic with long control edges
     /// (three of 1e8, rising 0.75) has edges that add up to its chord, to the last place, and is 0.56 off
-    /// it. The width is that of the least the path could be longer by: more as the lengths are more, and
-    /// more as there are more of them added.
+    /// it. The width is that of the least the path could be longer by, as much as its length gives.
     #[test]
     fn lengths_that_rounding_made_equal_are_not_a_width_of_nothing() {
         let (edge, rise): (f64, f64) = (1e8, 0.75);
         let polygon = polygon_length(&CubicBez::new((0.0, 0.0), (edge, rise), (2.0 * edge, rise), (3.0 * edge, 0.0)));
         let chord = Point::new(0.0, 0.0).distance(Point::new(3.0 * edge, 0.0));
         assert_eq!(polygon, chord, "the edges add up to the chord to the last place: the width was 0");
-        let width = lens_width(polygon, chord, 3);
+        let width = lens_width(polygon, chord);
         assert!(width > 5.0, "{width}: the bump is 0.5625 high");
-        // More lengths added, a wider lens; and with none the width is the ordinary one to a part in a million.
-        assert!(lens_width(polygon, chord, 300) > 5.0 * width, "{} against {width}", lens_width(polygon, chord, 300));
-        assert!(lens_width(1.0, 1.0, 0) > 0.0 && lens_width(1.0, 1.0, 0) < 1e-6);
+        // The width of equal lengths is their size times the root of the rounding: four units of it, each way.
+        let expected = 3e8 * (4.0 * f64::EPSILON).sqrt();
+        assert!((width / expected - 1.0).abs() < 0.2, "{width} against {expected}");
+        assert!(lens_width(1.0, 1.0) > 0.0 && lens_width(1.0, 1.0) < 1e-6);
+    }
+
+    /// The sum of the lengths of a run is off by the rounding of its whole, not of each addition: a million
+    /// and a half copies of a tenth (whose sum in order is far from exact) and numbers that a sum in order
+    /// loses (a unit beside 1e16) add up to what they are.
+    #[test]
+    fn a_run_of_lengths_is_added_with_its_rounding_compensated() {
+        let n = 1usize << 20;
+        assert_eq!(compensated_sum(std::iter::repeat_n(0.1, n)), 0.1 * n as f64, "a power of two copies of a tenth");
+        assert!(std::iter::repeat_n(0.1, n).sum::<f64>() != 0.1 * n as f64, "added in order they are not");
+        assert_eq!(compensated_sum([1e16, 1.0, -1e16].into_iter()), 1.0);
+        assert_eq!(compensated_sum([].into_iter()), 0.0);
+        assert!(compensated_sum([1.0, f64::NAN].into_iter()).is_nan());
+        assert!(!compensated_sum([f64::INFINITY, 1.0].into_iter()).is_finite());
     }
 
     /// A run with bumps that rounded lengths hide is not taken whole: twelve straight cubics 3e8 long, a bump
@@ -1910,5 +1945,66 @@ mod tests {
         two.extend(cut_circle(2_000, 50.0).iter());
         let _ = remove_redundant_points(&two, 0.01);
         assert_eq!(work::take(Work::CornerTables), 2);
+    }
+
+    /// The gap of a witness point is the width of the lens of its stretch, which does not grow with the number of
+    /// segments in it: the lengths of a run are added with their rounding compensated, and the allowance is
+    /// the same share of the length for two segments or two hundred thousand. On straight cubics the path is as
+    /// long as its chord and the gap is that allowance alone.
+    #[test]
+    fn the_gap_of_a_witness_point_is_the_lens_of_its_stretch_whatever_the_number_of_segments() {
+        // Straight cubics end to end (each ends where the next starts, to the bit).
+        let straight = |n: usize| -> Vec<Seg> {
+            (0..n)
+                .map(|i| {
+                    let (a, b) = (i as f64 * 0.7, (i + 1) as f64 * 0.7);
+                    Seg { c: CubicBez::new((a, 0.0), (a + (b - a) / 3.0, 0.0), (a + 2.0 * (b - a) / 3.0, 0.0), (b, 0.0)), line: false }
+                })
+                .collect()
+        };
+        let segs = straight(64);
+        let originals = Originals::new(&segs);
+        // Eight intervals of eight segments.
+        let (pts, gap) = witness_points(&originals, 0, 64, 8).unwrap();
+        let by_hand =
+            pts.windows(2).enumerate().map(|(g, w)| lens_width(originals.polygon_length(8 * g, 8).unwrap(), w[0].distance(w[1]))).fold(0.0, f64::max);
+        assert!(by_hand > 0.0 && gap == by_hand, "{gap} against {by_hand}");
+        // Four segments cut in two each: a stretch inside one segment.
+        let (pts, gap) = witness_points(&originals, 0, 4, 8).unwrap();
+        let by_hand = pts
+            .windows(2)
+            .enumerate()
+            .map(|(i, w)| {
+                let half = segs[i / 2].c.subsegment((i % 2) as f64 / 2.0..(i % 2 + 1) as f64 / 2.0);
+                lens_width(polygon_length(&half), w[0].distance(w[1]))
+            })
+            .fold(0.0, f64::max);
+        assert!(by_hand > 0.0 && gap == by_hand, "{gap} against {by_hand}");
+        // Two hundred thousand segments in eight intervals of 25,000 (140 across): the width is the length times
+        // the root of four units of rounding, 5e-4, as it is for the 8 of them. Added in order and allowed a
+        // unit for each segment's three lengths, as it was, it was 0.07, seven times the tolerance of 0.01.
+        let long = straight(200_000);
+        let originals = Originals::new(&long);
+        let (_, gap) = witness_points(&originals, 0, 200_000, 8).unwrap();
+        let interval = 25_000.0 * 0.7;
+        assert!(gap > 0.5 * interval * (4.0 * f64::EPSILON).sqrt() && gap < 2.0 * interval * (4.0 * f64::EPSILON).sqrt(), "{gap}");
+        assert!(gap < 0.01, "{gap}: a run of straight cubics is within the tolerance of its chord");
+    }
+
+    /// The length of a long run is the sum of the lengths of its segments to the last place, as the lens takes it to
+    /// be, however many there are (added in order, 65,536 copies of three tenths come out a few units in the last
+    /// place off), where the run starts and where it goes round the end of a closed subpath.
+    #[test]
+    fn the_length_of_a_long_run_is_the_sum_of_its_segments_to_the_last_place() {
+        let n = 1usize << 16;
+        let seg = Seg { c: CubicBez::new((0.0, 0.0), (0.1, 0.0), (0.2, 0.0), (0.3, 0.0)), line: false };
+        let segs = vec![seg; n];
+        let one = polygon_length(&seg.c);
+        let exact = one * n as f64;
+        assert!(std::iter::repeat_n(one, n).sum::<f64>() != exact, "added in order, the sum is off: the test would tell nothing");
+        let originals = Originals::new(&segs);
+        assert_eq!(originals.polygon_length(0, n), Some(exact));
+        assert_eq!(originals.polygon_length(n / 2, n), Some(exact), "round the end of the subpath");
+        assert_eq!(originals.polygon_length(5, 100), Some(one * 100.0));
     }
 }

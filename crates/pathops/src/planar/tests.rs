@@ -1502,6 +1502,80 @@ fn open_paths_level_in_each_of_the_ten_shears_are_framed_by_one_between_their_sl
     assert_eq!(work::take(Work::FrameTries), 1);
 }
 
+/// Two shapes under curves that rise from (0, 0) and come back to (159.7, 0) a few hundredths apart: the lens between
+/// the curves, up to 0.07 wide and 0.028 thick (over the precision of 0.01), and under the upper shape alone.
+fn lens_of_two_arches() -> [Shape; 2] {
+    let end = 159.71479927270926;
+    let under = |c1: (f64, f64), c2: (f64, f64)| {
+        let mut p = BezPath::new();
+        p.move_to((0.0, 0.0));
+        p.curve_to(c1, c2, (end, 0.0));
+        p.line_to((end, -50.0));
+        p.line_to((0.0, -50.0));
+        p.close_path();
+        p
+    };
+    let (c1, c2) = ((34.39808760979988, 8.807766709864676), (111.74858077097721, 15.954246590150165));
+    let lower = under(c1, c2);
+    let upper = under((c1.0, c1.1 + 0.03758453957627678), (c2.0, c2.1 + 0.06841421252966735));
+    [Shape::new(lower, FillRule::NonZero, 0), Shape::new(upper, FillRule::NonZero, 1)]
+}
+
+/// The point deep in a face is looked for on its outline flattened to a thousandth of its size, and a face
+/// that is thinner than that has none of the middles of its spans in it: a lens 0.03 wide between two curves a
+/// hundred and sixty long. It was then listed with no source, a gap that nothing fills (and once more, as the filled
+/// area it is, by `shape_builder`), though it is covered by the upper shape; the point is looked for again
+/// on an outline flattened finer, whatever the precision (it was so for a precision under the default only).
+#[test]
+fn a_face_thinner_than_the_first_flattening_has_its_sources_from_a_finer_one() {
+    let shapes = lens_of_two_arches();
+    let (faces, _) = live_paint(&shapes);
+    let lens = faces.iter().filter(|f| f.path.area().abs() < 10.0).collect::<Vec<_>>();
+    assert_eq!(
+        lens.len(),
+        1,
+        "the lens between the curves is a face: {:?}",
+        faces.iter().map(|f| (f.path.area().abs(), &f.sources)).collect::<Vec<_>>()
+    );
+    assert!(interior_point(&lens[0].path).is_none(), "the first search finds no point in it");
+    assert_eq!(lens[0].sources, [1], "it is under the upper curve alone");
+    assert!(faces.iter().all(|f| !f.sources.is_empty()), "no face is a gap");
+    // And `shape_builder` lists the regions of the filled areas, with no gap beside them.
+    let built = shape_builder(&shapes, false);
+    assert_eq!(
+        built.regions.len(),
+        2,
+        "the area under both, and the lens: {:?}",
+        built.regions.iter().map(|r| (r.path.area().abs(), &r.sources)).collect::<Vec<_>>()
+    );
+    assert!(built.regions.iter().all(|r| !r.sources.is_empty()));
+}
+
+/// Where no point is found in a face thicker than the precision, what covers it is not known, and it would be listed
+/// as a gap that nothing fills: `try_shape_builder` and `try_pathfinder` say so ([`crate::PathOpsError::Degenerate`]) where
+/// the others list it with no source. A face thinner than the precision is debris and no error. (A test hook
+/// makes the search find nothing: no face the flattening finer than the first leaves is without a point.)
+#[test]
+fn a_face_with_no_point_that_is_thicker_than_the_precision_is_an_error_to_the_strict_forms() {
+    let shapes = lens_of_two_arches();
+    super::map::NO_POINTS_BELOW.with(|f| f.set(10.0));
+    let strict = try_shape_builder(&shapes, false);
+    let (faces, _) = live_paint(&shapes);
+    let precision_over = crate::pathfinder::try_pathfinder(
+        crate::PathfinderOp::Divide,
+        &[shapes[0].clone(), shapes[1].clone(), Shape::new(line_path((-10.0, 5.0), (110.0, 5.0)), FillRule::NonZero, 2)],
+    );
+    // A precision above the lens's thickness (0.028) leaves it out of the map, as debris: no error.
+    let loose = crate::planar::try_builder(&shapes, false, 1.0, true);
+    super::map::NO_POINTS_BELOW.with(|f| f.set(0.0));
+    assert_eq!(strict.map(|_| ()), Err(crate::PathOpsError::Degenerate));
+    assert_eq!(precision_over.map(|_| ()), Err(crate::PathOpsError::Degenerate), "with an open path, the planar map is the Pathfinder's too");
+    assert!(faces.iter().any(|f| f.sources.is_empty()), "the infallible forms list it with no source, as they did");
+    assert!(loose.is_ok(), "a sliver is no error: {:?}", loose.map(|_| ()));
+    // With the hook off the same shapes are mapped.
+    assert!(try_shape_builder(&shapes, false).is_ok());
+}
+
 /// Where the art is near the largest coordinates the sweep takes, the shears that widen them past it are no
 /// frame, and the search for a free one is made among those that do not: the middle of the widest stretch
 /// the long sides leave free could be in the ones that do (a frame no good), where a narrower stretch of
@@ -1532,6 +1606,43 @@ fn a_free_shear_is_looked_for_where_the_coordinates_are_valid() {
     let mut barred = shapes.clone();
     barred.extend([0.0925, 0.17, 0.2, 0.215].iter().enumerate().map(|(i, k)| line(40 + i, -k)));
     assert!(frame_for(&barred).is_none(), "no shear is free where the coordinates are valid");
+}
+
+/// The search for a shear among those of one sign takes the tolerance of that range from the coordinates at its ends,
+/// not the widest the other range's frames had: a shape at 1e11 widens the sweep's tolerance in a shear of +1/2
+/// (1.5e11 in the frame) a half more than in one of -1/2 (1e11, the shape's x), and the wider tolerance bars a
+/// wider stretch of shears about each long side. Eleven lines 0.03 long (21 tolerances), level in the ten shears
+/// and in 3/8, bar every shear from 1/1024 to 1/2; five more, sloping up, each bar a stretch of the shears
+/// below 0 that is 0.1 wide at the tolerance of the shears below 0 and 0.15 at the widest of the others, and
+/// are spaced 0.105 apart: four gaps of 0.004 open between them at the first and none at the second.
+#[test]
+fn a_range_of_shears_is_searched_at_its_own_tolerance() {
+    use super::index::{SHEARS, frame_for};
+    let far = Shape::new(polyline(&[(1e11, 1e11), (1e11 + 1.0, 1e11), (1e11 + 1.0, 1e11 + 1.0), (1e11, 1e11 + 1.0)], true), FillRule::NonZero, 99);
+    let dx = 0.03;
+    let line =
+        |i: usize, slope: f64| Shape::new(line_path((0.0, 100.0 * i as f64), (dx, 100.0 * i as f64 + dx * slope)), FillRule::NonZero, i as u64);
+    let mut shapes = vec![far];
+    // Level in each of the ten shears, and in 3/8 (which the ten leave free).
+    shapes.extend(SHEARS.iter().enumerate().map(|(i, k)| line(i, -k)));
+    shapes.push(line(10, -0.375));
+    // Five that slope up by 0.05, 0.155, ...: each bars the shears within about 0.05 of its negative.
+    shapes.extend((0..5).map(|i| line(20 + i, 0.05 + 0.104_67 * i as f64)));
+    work::reset();
+    let frame = frame_for(&shapes).expect("a frame in the shears below 0, where the tolerance is narrower");
+    assert!(frame.k() < -0.1 && frame.k() > -0.5, "k = {}", frame.k());
+    assert_eq!(work::take(Work::FrameTries), SHEARS.len() + 1, "the ten, and one more");
+    // The map is made, and the lines are in it.
+    let (faces, edges) = live_paint(&shapes);
+    assert_eq!(faces.len(), 1);
+    for i in (0..=10).chain(20..25) {
+        let kept: f64 = edges.iter().filter(|e| e.key == i as u64).map(|e| length(&e.path)).sum();
+        assert!(kept > 0.9 * dx, "line {i}: {kept} of {dx}");
+    }
+    // The same lines with the gaps closed (six, spaced 0.095 apart, under the 0.1 each bars) leave no shear.
+    let mut closed: Vec<Shape> = shapes[..12].to_vec();
+    closed.extend((0..6).map(|i| line(20 + i, 0.05 + 0.095 * i as f64)));
+    assert!(frame_for(&closed).is_none(), "no shear is free with the gaps closed");
 }
 
 /// Edges that run back over each other cancel in the winding, as many of each way as the difference

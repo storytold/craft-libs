@@ -692,6 +692,12 @@ fn exact_merge(run: &[Seg], tidy: &Tidy) -> Option<CubicBez> {
     let b = run[run.len() - 1].c.p3;
     let scale = 1.0 + a.x.abs().max(a.y.abs()).max(b.x.abs()).max(b.y.abs());
     let tol = match_tolerance(scale);
+    // How far the middle of a piece may be from the curve it is taken for a part of: the noise the sweep puts a
+    // piece off its curve by (ten times the match of the ends), but no more than the precision asked for where that
+    // is more than the match itself. Two input curves that share their ends and lie nearer than that to each
+    // other (a lens between them thinner than ten matches) both pass the first, and the first of them in the
+    // input would take the pieces of the other, moving the boundary by as much as the lens is wide.
+    let middle_limit = (tol * 10.0).min(tidy.precision.max(tol));
     for i in tidy.curve_indices_around(a, b) {
         let Some((_, c)) = tidy.curves.get(i) else { continue };
         let na = c.nearest(a, 1e-12);
@@ -699,7 +705,7 @@ fn exact_merge(run: &[Seg], tidy: &Tidy) -> Option<CubicBez> {
         if na.distance_sq.sqrt() > tol || nb.distance_sq.sqrt() > tol {
             continue;
         }
-        let on_curve = run.iter().all(|s| c.nearest(s.c.eval(0.5), 1e-12).distance_sq.sqrt() <= tol * 10.0);
+        let on_curve = run.iter().all(|s| c.nearest(s.c.eval(0.5), 1e-12).distance_sq.sqrt() <= middle_limit);
         if !on_curve || (na.t - nb.t).abs() < 1e-12 {
             continue;
         }
@@ -1355,6 +1361,30 @@ mod tests {
         lens.curve_to(upper.p2, upper.p1, upper.p0);
         lens.close_path();
         assert_eq!(tidy.repair(&lens), lens);
+    }
+
+    /// Two input curves that share their ends and lie nearer to each other than ten matches (a lens thinner than
+    /// that) both pass the test of the middles of a run of pieces cut from the second, and the first in the
+    /// input took them, moving the boundary by up to the width of the lens: 0.003 here, at coordinates of 500
+    /// (the match is a millionth of them, 5e-4) and a precision of 1e-4. The pieces are the second curve's own.
+    #[test]
+    fn a_run_of_pieces_is_not_taken_for_part_of_a_curve_further_from_it_than_the_precision() {
+        let first = CubicBez::new((0.0, 0.0), (150.0, 100.0), (350.0, 100.0), (500.0, 0.0));
+        let second = CubicBez::new((0.0, 0.0), (150.0, 100.004), (350.0, 100.004), (500.0, 0.0));
+        let input = |c: CubicBez| BezPath::from_vec(vec![kurbo::PathEl::MoveTo(c.p0), kurbo::PathEl::CurveTo(c.p1, c.p2, c.p3)]);
+        let run: Vec<Seg> = [0.0..0.5, 0.5..1.0].into_iter().map(|r| Seg { c: second.subsegment(r), line: false }).collect();
+        let off = |c: &CubicBez, from: &CubicBez| {
+            (0..=20).map(|k| c.eval(f64::from(k) / 20.0).distance(from.eval(f64::from(k) / 20.0))).fold(0.0, f64::max)
+        };
+        // The curves are 0.0028 apart at most, more than the precision and less than the noise taken for a match.
+        assert!(off(&first, &second) > 2e-3 && off(&first, &second) < 5e-3, "{}", off(&first, &second));
+        let tidy = Tidy::keeping(1e-4, [&input(first), &input(second)]);
+        let merged = try_merge(&run, &tidy).expect("the pieces are one curve");
+        assert!(!merged.line && off(&merged.c, &second) < 1e-9, "{} from the curve the pieces are cut from", off(&merged.c, &second));
+        // Where the precision is the larger (the default, 0.01), the first curve is within it and may be taken.
+        let loose = Tidy::keeping(DEFAULT_PRECISION, [&input(first), &input(second)]);
+        let merged = try_merge(&run, &loose).expect("the pieces are one curve");
+        assert!(off(&merged.c, &second) < 3.1e-3, "{}", off(&merged.c, &second));
     }
 
     #[test]

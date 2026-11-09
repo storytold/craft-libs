@@ -11,7 +11,9 @@ use linesweeper::topology::{ContourIdx, Contours};
 
 use crate::FillRule;
 use crate::boolean::{Arrangement, DEFAULT_PRECISION, Multi, all_contours_to_path, contours_to_path, unite_all, unite_all_with};
+use crate::budget::{NEAREST_STEPS, SearchBudget};
 use crate::path::{Seg, control_bounds, fill_bezpath, guarded, segs_to_bezpath, subs};
+use crate::work::{self, Work};
 
 #[cfg(test)]
 thread_local! {
@@ -210,7 +212,12 @@ fn pathfinder_unguarded(op: PathfinderOp, shapes: &[Shape], precision: f64, stri
     // shapes: the arrangement's junctions would leave every open path uncut where it meets another.
     if op == PathfinderOp::Outline && has_open_edges(shapes) {
         return match crate::planar::try_map_junctions(shapes, precision) {
-            Ok(junctions) => Ok(junctions.map(|junctions| outline_edges(junctions, shapes)).unwrap_or_default()),
+            Ok(Some(junctions)) => match outline_edges(junctions, shapes) {
+                Some(edges) => Ok(edges),
+                // The searches that cut the edges ran out of their budget ([`crate::Limits::search_work`]).
+                None => none(PathOpsError::TooComplex),
+            },
+            Ok(None) => Ok(Vec::new()),
             Err(e) => none(e),
         };
     }
@@ -312,7 +319,10 @@ fn pathfinder_unguarded(op: PathfinderOp, shapes: &[Shape], precision: f64, stri
             paths.into_iter().zip(shapes).flat_map(|(sp, s)| one(sp, s.key)).collect()
         }
         // Closed shapes only: the junctions are the vertices of the filled areas' arrangement.
-        PathfinderOp::Outline => outline_edges(arr.junctions(), shapes),
+        PathfinderOp::Outline => match outline_edges(arr.junctions(), shapes) {
+            Some(edges) => edges,
+            None => return none(PathOpsError::TooComplex),
+        },
     })
 }
 
@@ -603,11 +613,69 @@ pub fn merge_regions(regions: &[&Region]) -> BezPath {
     unite_all(&v)
 }
 
+/// The junctions of an Outline, in order of x and then y, in blocks of [`JUNCTION_BLOCK`] with the heights
+/// each block spans: the junctions inside a box are the points between its sides in x, which a block
+/// whose heights miss the box's is stepped over whole (a long segment beside a grid of a million
+/// junctions would otherwise look at every one that has its x).
+struct Junctions {
+    points: Vec<Point>,
+    /// The lowest and highest y of each block.
+    blocks: Vec<(f64, f64)>,
+}
+
+/// Junctions in a block of the [`Junctions`] index.
+const JUNCTION_BLOCK: usize = 64;
+
+impl Junctions {
+    /// `points`, sorted by x and then y.
+    fn new(points: Vec<Point>) -> Self {
+        let blocks = points
+            .chunks(JUNCTION_BLOCK)
+            .map(|c| c.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), p| (lo.min(p.y), hi.max(p.y))))
+            .collect();
+        Self { points, blocks }
+    }
+
+    /// Calls `visit` for each junction inside the box `b`, edges included, in order, and says whether it
+    /// came to the end: `visit` can stop it (by answering false), and so does `budget`. A block looked at costs
+    /// a step and so does a junction in a block that has the box's heights, each charged before it is looked at.
+    fn in_box(&self, b: kurbo::Rect, budget: &SearchBudget, mut visit: impl FnMut(Point) -> bool) -> bool {
+        let lo = self.points.partition_point(|j| j.x < b.x0);
+        let hi = self.points.partition_point(|j| j.x <= b.x1);
+        let mut at = lo;
+        while at < hi {
+            let block = at / JUNCTION_BLOCK;
+            let end = ((block + 1) * JUNCTION_BLOCK).min(hi);
+            if !budget.charge(1) {
+                return false;
+            }
+            work::add(Work::JunctionSteps, 1);
+            let (low, high) = self.blocks.get(block).copied().unwrap_or((f64::INFINITY, f64::NEG_INFINITY));
+            if high >= b.y0 && low <= b.y1 {
+                for &j in self.points.get(at..end).unwrap_or_default() {
+                    if !budget.charge(1) {
+                        return false;
+                    }
+                    work::add(Work::JunctionSteps, 1);
+                    if j.y >= b.y0 && j.y <= b.y1 && !visit(j) {
+                        return false;
+                    }
+                }
+            }
+            at = end;
+        }
+        true
+    }
+}
+
 /// Pathfinder Outline: split every shape's boundary at `junctions`, the points where three or more
-/// edges meet (sorted by x, then y, so that a segment needs only the junctions inside its control
-/// box). A closed subpath comes back as the edges of its outline, an open one as the edges of the
-/// path itself, with no closing edge.
-fn outline_edges(junctions: Vec<Point>, shapes: &[Shape]) -> Vec<Shape> {
+/// edges meet (sorted by x, then y, so that a segment needs only the junctions inside its bounds). A
+/// closed subpath comes back as the edges of its outline, an open one as the edges of the path itself,
+/// with no closing edge. `None` when the searches that find the junctions on each segment, and the
+/// edges that coincide, are past their budget ([`crate::Limits::search_work`], charged before each step).
+fn outline_edges(junctions: Vec<Point>, shapes: &[Shape]) -> Option<Vec<Shape>> {
+    let budget = SearchBudget::new();
+    let junctions = Junctions::new(junctions);
     let scale = shapes.iter().filter_map(|s| control_bounds(&s.path)).map(|r| r.width().max(r.height())).fold(1.0, f64::max);
     let tol = scale * 1e-7;
     let reach = tol.max(1e-6);
@@ -625,16 +693,23 @@ fn outline_edges(junctions: Vec<Point>, shapes: &[Shape]) -> Vec<Shape> {
             // Split each segment at junctions; record which piece starts are breaks.
             let mut pieces: Vec<(Seg, bool)> = Vec::new();
             for Seg { c, line } in outline {
-                // A point within `reach` of the curve is within `reach` of its control box (the
-                // curve stays inside its control points' hull), so the other junctions can't match.
-                let b = kurbo::Shape::bounding_box(&c).union(kurbo::Rect::from_points(c.p1, c.p2)).inflate(reach, reach);
-                let lo = junctions.partition_point(|j| j.x < b.x0);
+                // A point within `reach` of the curve is within `reach` of its bounds, with a few units in
+                // the last place of its coordinates for the rounding of both, so the other junctions can't
+                // match: the box of its control points, where they lie off the curve, held junctions the
+                // curve is nowhere near.
+                let extent = [c.p0, c.p1, c.p2, c.p3].iter().fold(0.0f64, |m, p| m.max(p.x.abs()).max(p.y.abs()));
+                let slack = reach + 16.0 * f64::EPSILON * extent;
+                let b = kurbo::Shape::bounding_box(&c).inflate(slack, slack);
                 let at = |t: f64| kurbo::ParamCurve::eval(&c, t);
                 // A cubic that crosses itself passes through the junction there twice, and `nearest`
                 // gives one of the two: both are cuts.
                 let twice = if line { None } else { double_point(&c).filter(|&(s, t)| at(s).distance(at(t)) <= reach) };
                 let mut ts: Vec<f64> = Vec::new();
-                for &j in junctions.get(lo..).unwrap_or_default().iter().take_while(|j| j.x <= b.x1).filter(|j| j.y >= b.y0 && j.y <= b.y1) {
+                let done = junctions.in_box(b, &budget, |j| {
+                    if !budget.charge(NEAREST_STEPS) {
+                        return false;
+                    }
+                    work::add(Work::Nearest, 1);
                     let nr = c.nearest(j, 1e-9);
                     if nr.distance_sq.sqrt() <= reach {
                         ts.push(nr.t);
@@ -642,6 +717,10 @@ fn outline_edges(junctions: Vec<Point>, shapes: &[Shape]) -> Vec<Shape> {
                     if let Some((s, t)) = twice.filter(|&(s, _)| at(s).distance(j) <= reach) {
                         ts.extend([s, t]);
                     }
+                    true
+                });
+                if !done {
+                    return None;
                 }
                 ts.sort_by(f64::total_cmp);
                 // Junctions are compared where they are, not by parameter alone: a shape's own anchor and
@@ -725,11 +804,16 @@ fn outline_edges(junctions: Vec<Point>, shapes: &[Shape]) -> Vec<Shape> {
     for (chain, key) in chains {
         let (a, b, m) = sig(&chain);
         let (cx, cy) = cell(m);
-        let found = (cx - 1..=cx + 1)
-            .flat_map(|x| (cy - 1..=cy + 1).map(move |y| (x, y)))
-            .filter_map(|k| grid.get(&k))
-            .flatten()
-            .copied()
+        // The chains in the cells round it, each compared with this one: charged before it is, as chains
+        // with distinct ends and one midpoint (a fan of long ones) all lie in one cell.
+        let candidates: Vec<usize> =
+            (cx - 1..=cx + 1).flat_map(|x| (cy - 1..=cy + 1).map(move |y| (x, y))).filter_map(|k| grid.get(&k)).flatten().copied().collect();
+        if !budget.charge(candidates.len().saturating_mul(CHAIN_COMPARE_STEPS)) {
+            return None;
+        }
+        work::add(Work::ChainCompares, candidates.len());
+        let found = candidates
+            .into_iter()
             .filter(|&i| {
                 let (a2, b2, m2) = sigs[i];
                 near(m, m2) && ((near(a, a2) && near(b, b2)) || (near(a, b2) && near(b, a2)))
@@ -744,14 +828,20 @@ fn outline_edges(junctions: Vec<Point>, shapes: &[Shape]) -> Vec<Shape> {
             }
         }
     }
-    out.into_iter()
-        .filter_map(|(chain, key)| {
-            // Chain joints are the shapes' own anchors, so there is nothing to re-merge.
-            let sp = segs_to_bezpath(&chain, false)?;
-            Some(Shape::new(sp, FillRule::NonZero, key))
-        })
-        .collect()
+    Some(
+        out.into_iter()
+            .filter_map(|(chain, key)| {
+                // Chain joints are the shapes' own anchors, so there is nothing to re-merge.
+                let sp = segs_to_bezpath(&chain, false)?;
+                Some(Shape::new(sp, FillRule::NonZero, key))
+            })
+            .collect(),
+    )
 }
+
+/// What comparing a chain of an Outline with one found beside it costs, in the steps of
+/// [`crate::MAX_SEARCH_WORK`]: three distances and a few comparisons.
+const CHAIN_COMPARE_STEPS: usize = 4;
 
 /// The point halfway along the chain `c`, by length.
 ///
@@ -1452,5 +1542,148 @@ mod tests {
         let cut = pathfinder(PathfinderOp::Outline, &[Shape::new(v, FillRule::NonZero, 1), Shape::new(cutter, FillRule::NonZero, 2)]);
         assert_eq!(cut.iter().filter(|s| s.key == 1).count(), 2);
         assert!((cut.iter().filter(|s| s.key == 1).map(|s| length(&s.path)).sum::<f64>() - 2.0 * 500f64.sqrt()).abs() < 1e-9);
+    }
+
+    // ---- the work after the map
+
+    /// `g` horizontal and `g` vertical open lines across one another (`g` squared junctions), and `arches` open
+    /// cubics that run round the grid at 50 or more from it, whose bounds hold every junction of it.
+    fn grid_and_arches(g: usize, arches: usize) -> Vec<Shape> {
+        let span = g as f64 + 1.0;
+        let mut shapes = Vec::new();
+        for i in 1..=g {
+            let k = i as f64;
+            shapes.push(Shape::new(polyline(&[(-1.0, k), (span, k)], false), FillRule::NonZero, 1));
+            shapes.push(Shape::new(polyline(&[(k, -1.0), (k, span)], false), FillRule::NonZero, 2));
+        }
+        for a in 0..arches {
+            let mut arch = BezPath::new();
+            arch.move_to((-50.0, -50.0));
+            arch.curve_to((-50.0, 4.0 * span + a as f64), (span + 50.0, 4.0 * span + a as f64), (span + 50.0, -50.0));
+            shapes.push(Shape::new(arch, FillRule::NonZero, 3));
+        }
+        shapes
+    }
+
+    /// The searches that cut an Outline's edges at the junctions are charged before each step and held to
+    /// [`crate::Limits::search_work`]: a grid of cutters makes junctions that lie in the bounds of every arch
+    /// round it, where the curves are nowhere near, and each is a search for the nearest point.
+    #[test]
+    fn the_searches_of_an_outline_are_charged_before_they_are_made_and_held_to_the_limit() {
+        let (g, arches) = (30usize, 20usize);
+        let mut shapes = grid_and_arches(g, arches);
+        // A copy of the first line under another key: its chains coincide with that one's, and are compared with them.
+        shapes.push(Shape::new(shapes[0].path.clone(), FillRule::NonZero, 9));
+        let measured = |limit: usize| {
+            let l = crate::Limits { search_work: limit, ..crate::Limits::default() };
+            work::reset();
+            let r = crate::with_limits(l, || try_pathfinder(PathfinderOp::Outline, &shapes));
+            (r, work::take(Work::SearchSteps), work::take(Work::Nearest), work::take(Work::JunctionSteps), work::take(Work::ChainCompares))
+        };
+        let (done, charged, nearest, steps, compares) = measured(usize::MAX);
+        let done = done.expect("within the limits");
+        assert!(done.len() > 2 * g, "the lines cut at their junctions, and the arches");
+        // Each arch's bounds hold every junction of the grid: a search apiece, besides those on the lines.
+        assert!(nearest >= arches * g * g, "{nearest} searches");
+        assert!(compares > 0, "the chains of the copy are compared with those they coincide with");
+        // Every step charged was made, and every step made was charged: the junctions and blocks looked at, the
+        // searches, and the chains compared.
+        assert_eq!(charged, crate::budget::NEAREST_STEPS * nearest + steps + CHAIN_COMPARE_STEPS * compares, "{nearest} searches, {steps} steps");
+        // Short of the work, the error, and everything done was charged first: no more than the limit.
+        for limit in [charged - 1, charged / 2, charged / 100, 1, 0] {
+            let (r, c, n, s, k) = measured(limit);
+            assert_eq!(r, Err(crate::PathOpsError::TooComplex), "{limit}");
+            assert!(
+                c <= limit && crate::budget::NEAREST_STEPS * n + s + CHAIN_COMPARE_STEPS * k <= c,
+                "{limit}: {c} charged, {n} searches, {s} steps and {k} chains compared made"
+            );
+        }
+        // At the work it needs, the same edges; and the forms with no error give none past it.
+        assert_eq!(measured(charged).0, Ok(done.clone()));
+        let low = crate::Limits { search_work: charged - 1, ..crate::Limits::default() };
+        assert_eq!(crate::with_limits(low, || pathfinder(PathfinderOp::Outline, &shapes)), Vec::new());
+        assert_eq!(pathfinder(PathfinderOp::Outline, &shapes), done);
+    }
+
+    /// A segment far from a grid costs the blocks of the junctions that have its x, not each of them: the
+    /// junctions are in blocks with the heights they span, and a block that misses the segment's is stepped over.
+    #[test]
+    fn a_segment_far_from_a_grid_steps_over_its_junctions_by_blocks() {
+        let g = 40usize;
+        let near = grid_and_arches(g, 0);
+        let mut far = near.clone();
+        far.push(Shape::new(polyline(&[(-1.0, 1e4), (g as f64 + 2.0, 1e4)], false), FillRule::NonZero, 4));
+        let steps = |shapes: &[Shape]| {
+            work::reset();
+            try_pathfinder(PathfinderOp::Outline, shapes).expect("within the limits");
+            (work::take(Work::JunctionSteps), work::take(Work::Nearest))
+        };
+        let ((without, searches), (with, with_searches)) = (steps(&near), steps(&far));
+        assert_eq!(searches, with_searches, "no junction is searched for beside the far segment");
+        let blocks = (g * g).div_ceil(JUNCTION_BLOCK);
+        assert!(with - without <= blocks + 1, "{} steps for a segment over a grid of {} junctions in {blocks} blocks", with - without, g * g);
+        assert!(with > without, "the blocks are looked at");
+    }
+
+    /// The same for the Outline of closed shapes, whose junctions come from the filled arrangement.
+    #[test]
+    fn the_outline_of_closed_shapes_is_held_to_the_limit_too() {
+        let g = 8usize;
+        let side = 2.0 * g as f64 + 1.0;
+        let mut shapes = Vec::new();
+        for i in 0..g {
+            let k = 2.0 * i as f64;
+            shapes.push(Shape::new(rect(-1.0, k, side, k + 0.5), FillRule::NonZero, 1));
+            shapes.push(Shape::new(rect(k, -1.0, k + 0.5, side), FillRule::NonZero, 2));
+        }
+        for a in 0..3 {
+            let mut arch = BezPath::new();
+            arch.move_to((-50.0, -50.0));
+            arch.curve_to((-50.0, 4.0 * side + f64::from(a)), (side + 50.0, 4.0 * side + f64::from(a)), (side + 50.0, -50.0));
+            arch.close_path();
+            shapes.push(Shape::new(arch, FillRule::NonZero, 3));
+        }
+        let measured = |limit: usize| {
+            let l = crate::Limits { search_work: limit, ..crate::Limits::default() };
+            work::reset();
+            let r = crate::with_limits(l, || try_pathfinder(PathfinderOp::Outline, &shapes));
+            (r, work::take(Work::SearchSteps), work::take(Work::Nearest))
+        };
+        let (done, charged, nearest) = measured(usize::MAX);
+        let done = done.expect("within the limits");
+        assert!(nearest >= 3 * g * g, "{nearest} searches");
+        for limit in [charged - 1, charged / 2, 0] {
+            let (r, c, n) = measured(limit);
+            assert_eq!(r, Err(crate::PathOpsError::TooComplex), "{limit}");
+            assert!(c <= limit && crate::budget::NEAREST_STEPS * n <= c, "{limit}: {c} charged, {n} searches made");
+        }
+        assert_eq!(measured(charged).0, Ok(done));
+        let low = crate::Limits { search_work: charged - 1, ..crate::Limits::default() };
+        assert_eq!(crate::with_limits(low, || pathfinder(PathfinderOp::Outline, &shapes)), Vec::new());
+    }
+
+    /// A junction is searched for on a curve only where it is within the curve's own bounds (widened by the noise
+    /// of the sweep), not within the box of its control points, which a curve whose handles run out beyond it
+    /// has a good deal larger: a cross of lines between the top of an arch and its handles is no search of it.
+    #[test]
+    fn a_junction_outside_the_bounds_of_a_curve_is_not_searched_for_on_it_whatever_its_control_points_hold() {
+        let mut shapes = Vec::new();
+        // The arch from (0, 0) to (100, 0), whose handles are at 400: it rises to 300.
+        let mut arch = BezPath::new();
+        arch.move_to((0.0, 0.0));
+        arch.curve_to((0.0, 400.0), (100.0, 400.0), (100.0, 0.0));
+        shapes.push(Shape::new(arch, FillRule::NonZero, 0));
+        // Three lines across three, at a height of 350 and a little more, between its top and its handles.
+        for i in 0..3 {
+            let k = 40.0 + 10.0 * f64::from(i);
+            shapes.push(Shape::new(polyline(&[(30.0, 350.0 + k / 4.0), (80.0, 350.0 + k / 4.0)], false), FillRule::NonZero, 1));
+            shapes.push(Shape::new(polyline(&[(k, 340.0), (k, 390.0)], false), FillRule::NonZero, 2));
+        }
+        work::reset();
+        let edges = try_pathfinder(PathfinderOp::Outline, &shapes).expect("within the limits");
+        assert!(edges.len() > 6);
+        // The six lines each search for the three junctions on them: 18. The arch's control box holds all
+        // nine and its bounds none.
+        assert_eq!(work::take(Work::Nearest), 18);
     }
 }

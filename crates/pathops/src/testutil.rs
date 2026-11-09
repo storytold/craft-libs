@@ -135,3 +135,22 @@ pub(crate) fn diagonals(m: usize) -> BezPath {
     }
     b
 }
+
+/// A closed polygon of `n` edges (`n` odd), vertex `i` at the angle `2π (k i mod n) / n` on a circle of radius 100,
+/// `k = (n - 1) / 2`: each edge goes to a vertex nearly opposite, and crosses most of the others (`n (k - 1)`
+/// crossings in all, about n²/2).
+pub(crate) fn star(n: usize) -> BezPath {
+    let k = (n - 1) / 2;
+    let mut bp = BezPath::new();
+    for i in 0..n {
+        let a = std::f64::consts::TAU * ((k * i) % n) as f64 / n as f64;
+        let p = (100.0 * a.cos(), 100.0 * a.sin());
+        if i == 0 {
+            bp.move_to(p);
+        } else {
+            bp.line_to(p);
+        }
+    }
+    bp.close_path();
+    bp
+}

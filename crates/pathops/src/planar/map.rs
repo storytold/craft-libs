@@ -352,14 +352,23 @@ pub(super) type Built = (Vec<Region>, Vec<Shape>, Vec<Shape>);
 /// that lie under another path in front of them, whose edges are that path's: under a closed
 /// path's outline, or along an open path in front.
 pub(super) fn build(shapes: &[Shape], precision: f64) -> Option<Built> {
-    try_build(shapes, precision).ok().flatten()
+    try_build(shapes, precision, false).ok().flatten()
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Makes [`try_build`] find no point in a face of less area than this (0: none), which no face thicker than
+    /// the precision comes to, so that a test can see what it does when it finds none.
+    pub(super) static NO_POINTS_BELOW: std::cell::Cell<f64> = const { std::cell::Cell::new(0.0) };
 }
 
 /// The faces, edges and pieces under other paths of [`build`], and why there are none: `Ok(None)` when
 /// the shapes draw nothing, the map's error ([`try_map_with`]; a panic of the sweep is
 /// [`PathOpsError::Degenerate`]), and [`PathOpsError::TooComplex`] past the limit on the work of winding
-/// points against fills and faces ([`crate::Limits::fill_work`]).
-pub(super) fn try_build(shapes: &[Shape], precision: f64) -> Result<Option<Built>, PathOpsError> {
+/// points against fills and faces ([`crate::Limits::fill_work`]); and, with `strict`, [`PathOpsError::Degenerate`]
+/// for a face thicker than the precision that no point is found in (what covers it is not known, and it would
+/// be listed as a gap that nothing fills).
+pub(super) fn try_build(shapes: &[Shape], precision: f64, strict: bool) -> Result<Option<Built>, PathOpsError> {
     let Some(m) = guarded_map(shapes, precision)? else { return Ok(None) };
     // The winding of points against faces and fills, charged before each test: nested contours cost
     // the square of their depth, and past the limit there is no map.
@@ -381,9 +390,18 @@ pub(super) fn try_build(shapes: &[Shape], precision: f64) -> Result<Option<Built
             path.extend(sp.iter());
         }
         let path = unshear(path, anchors, snap, *back);
-        // A face finer than the default precision can need a finer outline to find a point in.
-        let inside =
-            interior_point(&path).or_else(|| (precision < DEFAULT_PRECISION).then(|| interior_point_within(&path, precision / 4.0)).flatten());
+        // A face thinner than the flattening the point is looked for in (a thousandth of its size: a lens a
+        // hundred long and 0.03 wide between two curves has none of its middles in it) needs a finer outline: the
+        // outline's flattening is made a quarter of the precision, or an eighth of what it was where that is less.
+        let inside = interior_point(&path).or_else(|| {
+            let first = flattening_of(&path)?;
+            interior_point_within(&path, (precision / 4.0).min(first / 8.0))
+        });
+        #[cfg(test)]
+        let inside = if path.area().abs() < NO_POINTS_BELOW.with(std::cell::Cell::get) { None } else { inside };
+        if inside.is_none() && strict && !crate::boolean::is_sliver(&path, precision) {
+            return Err(PathOpsError::Degenerate);
+        }
         let mut sources = Vec::new();
         if let Some(p) = inside {
             for &i in fill_index.at(p, 0.0) {
@@ -473,8 +491,14 @@ fn chains_by(edges: &[Edge], around: &[Vec<usize>], keys: impl Fn(&Edge) -> Vec<
 /// A point strictly inside a filled path, well away from its edges where it can be. None for a path
 /// with no area, or one whose points are not finite.
 pub fn interior_point(path: &BezPath) -> Option<Point> {
+    interior_point_within(path, flattening_of(path)?)
+}
+
+/// The tolerance [`interior_point`] flattens `path` to: a thousandth of its size, and not under 1e-4. `None`
+/// for a path whose points are not finite or that draws nothing.
+fn flattening_of(path: &BezPath) -> Option<f64> {
     let bb = finite_bounds(path)?;
-    interior_point_within(path, (bb.width().max(bb.height()) * 1e-3).max(1e-4))
+    Some((bb.width().max(bb.height()) * 1e-3).max(1e-4))
 }
 
 /// The bounds of `path` when its points are finite and its size is, else None.
@@ -544,17 +568,19 @@ fn inside_edges(bp: &BezPath, edges: &[(Point, Point)], bb: kurbo::Rect) -> Opti
         work::add(Work::InteriorHeights, 1);
         // Each crossing's x and which way the edge goes, so that the winding number in a gap is
         // the sum of the crossings before it (one sort and one pass, not a winding per gap), and how
-        // far rounding can have put it: `a.x + t (c.x - a.x)` is a few units in the last place of its
-        // two terms off (of the x itself, not of the height of the path or of its widest x: two unit
-        // squares ten billion apart in height, or four hundred trillion out in x, are parts). A vertical
-        // edge crosses at its x exactly (`t` times nothing is nothing), with no rounding to allow for: a
-        // unit square a quadrillion out is a part, though the allowance for a rounded crossing there is 0.9.
+        // far rounding can have put it ([`crossing_rounding`]): by the spacing of the numbers there, and not
+        // by a multiple of it that adds up to more than a part is wide. That is of the x itself, not of the
+        // height of the path or of its widest x: two unit squares ten billion apart in height, or four
+        // hundred trillion out in x, are parts. A vertical edge crosses at its x exactly (`t` times nothing
+        // is nothing), with no rounding to allow for. A slanted one at 1e15, where the spacing is 0.125,
+        // allowed 0.9 for each crossing (eight times the spacing), so a gap under 1.8 was a retrace: a
+        // parallelogram a unit wide had no point, though it holds seven numbers.
         let mut xs: Vec<(f64, i32, f64)> = edges
             .iter()
             .filter(|(a, c)| (a.y <= y) != (c.y <= y))
             .map(|(a, c)| {
                 let x = a.x + (y - a.y) / (c.y - a.y) * (c.x - a.x);
-                let off = if c.x == a.x { 0.0 } else { 4.0 * f64::EPSILON * (x.abs() + (c.x - a.x).abs()) };
+                let off = if c.x == a.x { 0.0 } else { crossing_rounding(*a, *c, x) };
                 (x, if c.y > a.y { 1 } else { -1 }, off)
             })
             .collect();
@@ -629,6 +655,22 @@ fn inside_edges(bp: &BezPath, edges: &[(Point, Point)], bb: kurbo::Rect) -> Opti
         }
     }
     widest_inside(gaps)
+}
+
+/// How far the crossing of the edge `a` to `c` with a line can be off its computed `x` (of
+/// `a.x + t (c.x - a.x)`): the rounding of the computation, half a unit in the last place of the sum and five
+/// halves of one in `dx` for the product, and the rounding of the points the edge was made from, which moves
+/// the crossing as they move: two units in the last place of the largest x the sum is made of (the x of each
+/// end, and of the crossing), and the crossing's own rate of change with y, `|dx / dy|`, times a unit in the last
+/// place of the largest y of the ends. A retrace along a slanted line, through points rounded each way, lies
+/// within that of itself; the second term is the one that tells a line steep in x, high up in y, apart from a
+/// part (its passes are a hundred times a unit in x apart at a hundred times the slope).
+fn crossing_rounding(a: Point, c: Point, x: f64) -> f64 {
+    let ulp = |v: f64| v.abs().next_up() - v.abs();
+    let (dx, dy) = (c.x - a.x, c.y - a.y);
+    let across = ulp(a.x.abs().max(c.x.abs()).max(x.abs()));
+    let along = if dy == 0.0 { 0.0 } else { (dx / dy).abs() * ulp(a.y.abs().max(c.y.abs())) };
+    0.5 * f64::EPSILON * (x.abs() + 5.0 * dx.abs()) + 2.0 * across + along
 }
 
 /// The heights of the vertices of the polygon `edges` where it turns, or where a run of edges that
