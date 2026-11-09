@@ -40,6 +40,8 @@ pub(crate) enum Work {
     ContourElements,
     /// Joints of a run checked one by one against the line that replaces it.
     RunChecks,
+    /// Points of a run that a cubic replacing it was refitted from.
+    Witnesses,
     /// Heights an interior point was looked for at.
     InteriorHeights,
     /// Curves whose length was measured.
@@ -72,7 +74,7 @@ pub(crate) enum Work {
 
 #[cfg(test)]
 thread_local! {
-    static COUNTS: std::cell::RefCell<[usize; 31]> = const { std::cell::RefCell::new([0; 31]) };
+    static COUNTS: std::cell::RefCell<[usize; 32]> = const { std::cell::RefCell::new([0; 32]) };
 }
 
 /// Counts `n` more of `what` on this thread (tests only).
@@ -97,5 +99,5 @@ pub(crate) fn take(what: Work) -> usize {
 /// Resets every count on this thread.
 #[cfg(test)]
 pub(crate) fn reset() {
-    COUNTS.with(|c| *c.borrow_mut() = [0; 31]);
+    COUNTS.with(|c| *c.borrow_mut() = [0; 32]);
 }

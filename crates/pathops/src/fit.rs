@@ -205,13 +205,13 @@ pub(crate) fn fit_single(pts: &[Point], t0: Vec2, t1: Vec2) -> (CubicBez, f64, u
     fit_single_from(pts, chord_params(pts), t0, t1)
 }
 
-/// [`fit_single`] held to the path the points `pts` are samples of: the cubic, and how far it and that
-/// path can be from each other. That is its error at the points, its [`spread`], and `between`, how far
-/// the path can be from the polyline of the points, added up ([`fit_cubics`] takes a cubic by the same
-/// sum).
-pub(crate) fn fit_single_bounded(pts: &[Point], t0: Vec2, t1: Vec2, between: f64) -> (CubicBez, f64) {
+/// [`fit_single`] held to the path the points `pts` are samples of: the cubic, its error at the points,
+/// and how much more it and that path can be from each other: its [`spread`] and `between`, how far the
+/// path can be from the polyline of the points, added up. The two are the bound ([`fit_cubics`] takes a
+/// cubic by the same sum), and are given apart for a caller that weighs the error before the rest.
+pub(crate) fn fit_single_bounded(pts: &[Point], t0: Vec2, t1: Vec2, between: f64) -> (CubicBez, f64, f64) {
     let (c, err, _, u) = fit_with_params(pts, chord_params(pts), t0, t1);
-    (c, err + spread(&c, &u) + between)
+    (c, err, spread(&c, &u) + between)
 }
 
 /// [`fit_single`] starting from the parameters `u` (one per point, 0 to 1) instead of the
@@ -261,6 +261,11 @@ fn spread(c: &CubicBez, u: &[f64]) -> f64 {
         last = t;
     }
     0.75 * second_difference(c) * widest * widest
+}
+
+/// The length of the control polygon of `c`: at least the length of the curve.
+pub(crate) fn polygon_length(c: &CubicBez) -> f64 {
+    (c.p1 - c.p0).hypot() + (c.p2 - c.p1).hypot() + (c.p3 - c.p2).hypot()
 }
 
 /// The larger of the two second differences of the control points of `c`: six times it bounds the
@@ -517,5 +522,23 @@ mod tests {
         assert!(is_straight(&c, 1e-6));
         let c = CubicBez::new((0.0, 0.0), (3.0, 1.0), (6.0, 0.0), (9.0, 0.0));
         assert!(!is_straight(&c, 1e-6));
+    }
+
+    /// A fit held to its path gives the cubic and its error at the points as a plain fit does, and apart
+    /// from them the rest of the bound: the cubic's spread from its chords, and `between`.
+    #[test]
+    fn a_bounded_fit_gives_its_error_and_the_rest_apart() {
+        let c = CubicBez::new((0.0, 0.0), (10.0, 20.0), (30.0, 20.0), (40.0, 0.0));
+        let mut pts = Vec::new();
+        sample(&c, 4, &mut pts, true);
+        let (t0, t1) = (start_tangent(&c), end_tangent(&c));
+        let (fit, err, rest) = fit_single_bounded(&pts, t0, t1, 0.25);
+        let (plain, plain_err, _) = fit_single(&pts, t0, t1);
+        assert_eq!((fit, err), (plain, plain_err));
+        // Four intervals of a cubic that bends this much are far from their chords: the spread is a part
+        // of the rest, and `between` the other.
+        let (_, _, spread_only) = fit_single_bounded(&pts, t0, t1, 0.0);
+        assert!(spread_only > 0.5, "{spread_only}");
+        assert!((rest - spread_only - 0.25).abs() < 1e-12, "{rest} against {spread_only} and 0.25");
     }
 }

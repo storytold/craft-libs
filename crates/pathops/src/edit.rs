@@ -4,11 +4,12 @@
 
 //! Path editing: Simplify, Remove redundant points and Join.
 
-use kurbo::{BezPath, CubicBez, PathSeg, Point, Vec2};
+use kurbo::{BezPath, CubicBez, ParamCurve, PathSeg, Point, Vec2};
 
 use crate::budget::fits_elements;
 use crate::fit::{
-    chord_distance, end_tangent, fit_cubics, fit_single_bounded, is_straight, measured_arclen, sample, second_difference, start_tangent,
+    chord_distance, end_tangent, fit_cubics, fit_single_bounded, is_straight, measured_arclen, polygon_length, sample, second_difference,
+    start_tangent,
 };
 use crate::path::{Seg, Sub, segs_to_bezpath, subs};
 use crate::work::{self, Work};
@@ -398,8 +399,9 @@ fn rdp(pts: &[Point], tol: f64, fit: &mut Fit) -> Option<Vec<Point>> {
 /// (collinear corner points, duplicate points, and curve joints that one cubic can replace).
 ///
 /// A path of more than [`crate::MAX_ELEMENTS`] elements is returned as it is. The search for what
-/// one pass along each subpath leaves (at a closed subpath's start), and the checks of a run against
-/// the line that replaces it, are limited to [`REDUNDANT_WORK`] in all.
+/// one pass along each subpath leaves (at a closed subpath's start), the checks of a run against
+/// the line that replaces it, and the points a run of curves is refitted from, are limited to
+/// [`REDUNDANT_WORK`] in all.
 pub fn remove_redundant_points(path: &BezPath, tolerance: f64) -> BezPath {
     let mut work = crate::budget::limits().redundant_work;
     remove_redundant_within(path, tolerance, &mut work)
@@ -422,7 +424,7 @@ fn remove_redundant_within(path: &BezPath, tolerance: f64, work: &mut usize) -> 
         let min_segs = if sp.closed { 2 } else { 1 };
         // Each segment stands for the run of the original ones it replaced, and remembers how far
         // they can be from it (see [`merge_pieces`]).
-        let origins: Vec<Point> = segs.iter().map(|s| s.c.p0).collect();
+        let originals = Originals::new(&segs);
         let mut pieces: Vec<Piece> = segs.iter().enumerate().map(|(first, &seg)| Piece { seg, dev: 0.0, first, count: 1 }).collect();
         // Joints are merged along the path in one pass (a merged segment is tried with the one
         // before it, then the next); the search below then only finds what a closed path's wrap
@@ -430,11 +432,32 @@ fn remove_redundant_within(path: &BezPath, tolerance: f64, work: &mut usize) -> 
         let total = pieces.len();
         let mut merged = 0;
         let mut done: Vec<Piece> = Vec::with_capacity(total);
-        for p in pieces.drain(..) {
+        let mut next = 0;
+        while next < total {
+            // A long piece is extended by the originals after it, as many at a time as fit.
+            if let Some(&top) = done.last() {
+                let ahead = (total - next).min((total - merged).saturating_sub(min_segs));
+                let smooth = pieces.get(next).is_some_and(|n| end_tangent(&top.seg.c).dot(start_tangent(&n.seg.c)) >= 0.99);
+                if top.count >= GALLOP_FROM
+                    && !top.seg.line
+                    && smooth
+                    && ahead > 0
+                    && let Some((longer, took)) = extend_run(&top, ahead, tol, &originals, work)
+                {
+                    if let Some(slot) = done.last_mut() {
+                        *slot = longer;
+                    }
+                    next += took;
+                    merged += took;
+                    continue;
+                }
+            }
+            let Some(&p) = pieces.get(next) else { break };
+            next += 1;
             done.push(p);
             while done.len() >= 2 && total - merged > min_segs {
                 let n = done.len();
-                let Some(m) = merge_pieces(&done[n - 2], &done[n - 1], tol, &origins, work) else { break };
+                let Some(m) = merge_pieces(&done[n - 2], &done[n - 1], tol, &originals, work) else { break };
                 done.truncate(n - 1);
                 done[n - 2] = m;
                 merged += 1;
@@ -452,7 +475,7 @@ fn remove_redundant_within(path: &BezPath, tolerance: f64, work: &mut usize) -> 
             let joints = if sp.closed { n } else { n - 1 };
             for j in 0..joints {
                 let (i0, i1) = if sp.closed { ((j + n - 1) % n, j) } else { (j, j + 1) };
-                if let Some(m) = merge_pieces(&pieces[i0], &pieces[i1], tol, &origins, work) {
+                if let Some(m) = merge_pieces(&pieces[i0], &pieces[i1], tol, &originals, work) {
                     pieces[i0] = m;
                     pieces.remove(i1);
                     if sp.closed && i1 == 0 {
@@ -475,9 +498,11 @@ fn remove_redundant_within(path: &BezPath, tolerance: f64, work: &mut usize) -> 
 }
 
 /// Most work [`remove_redundant_points`] does in all, besides the pass along each subpath that merges
-/// what needs no check: the joints it reads in its search for what that pass left, and the points of
-/// a run it checks one by one against the line that replaces it (a merge that needs the check and
-/// finds none left is not made): 67,108,864 (the default of [`crate::Limits::redundant_work`]).
+/// what needs no check: the joints it reads in its search for what that pass left, the points of
+/// a run it checks one by one against the line that replaces it, and the points a run of curves is
+/// refitted from (each as much as 24 of those, for it takes as long as that many points checked against a
+/// line); a merge that needs the check and finds none left is not made: 67,108,864 (the default of
+/// [`crate::Limits::redundant_work`]).
 pub const REDUNDANT_WORK: usize = 1 << 26;
 
 /// A segment standing for a run of the segments of the subpath it was made from.
@@ -496,23 +521,234 @@ struct Piece {
 /// the tolerance; a longer run is not merged then.
 const MAX_CHECKED_RUN: usize = 512;
 
-/// `a` and `b`, next to each other, as one piece, if the one segment [`merge_pair`] makes stays within
+/// The original segments of a subpath, and the lengths of their control polygons that a run of them
+/// is held to, made when first asked for.
+struct Originals<'a> {
+    segs: &'a [Seg],
+    polygons: std::cell::OnceCell<Vec<f64>>,
+}
+
+impl<'a> Originals<'a> {
+    fn new(segs: &'a [Seg]) -> Self {
+        Self { segs, polygons: std::cell::OnceCell::new() }
+    }
+
+    /// The segment `i` places on from the first, counting round a closed subpath's start.
+    fn seg(&self, i: usize) -> Option<&Seg> {
+        self.segs.get(i.checked_rem(self.segs.len())?)
+    }
+
+    /// At least the length of the `count` segments from `first` (counting round the start): the lengths
+    /// of their control polygons, which a curve is no longer than. They are added up from the lengths
+    /// themselves, not taken from running totals, so that the sum is as exact as they are: it is the
+    /// length of a short stretch of a long subpath that a run is held to.
+    fn polygon_length(&self, first: usize, count: usize) -> Option<f64> {
+        let lens = self.polygons.get_or_init(|| self.segs.iter().map(|s| polygon_length(&s.c)).collect());
+        let n = lens.len();
+        let start = first.checked_rem(n)?;
+        let end = start.checked_add(count)?;
+        if end <= n {
+            Some(lens.get(start..end)?.iter().sum())
+        } else {
+            Some(lens.get(start..)?.iter().sum::<f64>() + lens.get(..end - n)?.iter().sum::<f64>())
+        }
+    }
+}
+
+/// Fewest and most points a run is refitted from ([`refit_run`]).
+const MIN_WITNESSES: usize = 8;
+const MAX_WITNESSES: usize = 1 << 10;
+
+/// The share of the tolerance that the distance between those points is meant to leave, for each of the
+/// two ways a run and its cubic can be from the chords between them (the cubic's own, and the run's).
+const WITNESS_SLACK: f64 = 0.02;
+
+/// What a point of a refit is charged to the work: a fit takes as long as this many points read
+/// against a line.
+const WITNESS_COST: usize = 24;
+
+/// A piece of this many original segments or more is extended in strides ([`extend_run`]).
+const GALLOP_FROM: usize = 8;
+
+/// Half the width of the lens a path no longer than `along` lies in, from one end of a chord of length
+/// `chord` to the other (an ellipse with the ends as its foci): no point of the path is further than this
+/// from the chord. Infinite where a length is not a number.
+fn lens_width(along: f64, chord: f64) -> f64 {
+    if !along.is_finite() || !chord.is_finite() {
+        return f64::INFINITY;
+    }
+    0.5 * (along * along - chord * chord).max(0.0).sqrt()
+}
+
+/// How many intervals to take of a run that a cubic with the second difference `sd` is to replace: those
+/// for which the distance of that cubic from its chords over them is about [`WITNESS_SLACK`] of `tol`.
+fn witnesses_for(sd: f64, tol: f64) -> usize {
+    let wanted = 1.25 * (0.75 * sd / (WITNESS_SLACK * tol)).sqrt();
+    (wanted.ceil() as usize).clamp(MIN_WITNESSES, MAX_WITNESSES)
+}
+
+/// How many points [`witness_points`] takes for `steps` intervals of a run of `count` segments.
+fn points_for(count: usize, steps: usize) -> usize {
+    if count >= steps { steps } else { count.saturating_mul(steps.div_ceil(count.max(1))) }
+}
+
+/// The points taken of a run for a refit: `steps` intervals of its segments, at their joints, or where
+/// there are fewer segments than that, each segment in as many equal steps of its parameter as bring the
+/// intervals to `steps` at least. The points are in order along the run, the first at its start and the last
+/// at its end, and `gap` is how far the run can be from the chords between them: the run between two
+/// of them is no longer than the control polygons of its segments (the parts of them, for the ends of
+/// the stretch inside a segment), so none of its points is further than half the width of the lens that
+/// length allows ([`lens_width`]) from their chord, and every point of the chord has a point of the
+/// run within that. Where the run is smooth and its segments are short that width is small, whatever
+/// the length of the run.
+fn witness_points(originals: &Originals, first: usize, count: usize, steps: usize) -> Option<(Vec<Point>, f64)> {
+    if count == 0 || steps == 0 {
+        return None;
+    }
+    let mut pts = vec![originals.seg(first)?.c.p0];
+    let mut gap = 0.0f64;
+    if count >= steps {
+        let mut from = 0;
+        for k in 1..=steps {
+            let to = k.saturating_mul(count) / steps;
+            let p = if to < count { originals.seg(first.checked_add(to)?)?.c.p0 } else { originals.seg(first.checked_add(count - 1)?)?.c.p3 };
+            let along = originals.polygon_length(first.checked_add(from)?, to - from)?;
+            gap = gap.max(lens_width(along, pts.last()?.distance(p)));
+            pts.push(p);
+            from = to;
+        }
+    } else {
+        let per = steps.div_ceil(count);
+        for r in 0..count {
+            let c = originals.seg(first.checked_add(r)?)?.c;
+            for j in 1..=per {
+                let (from, to) = ((j - 1) as f64 / per as f64, j as f64 / per as f64);
+                let p = if j == per { c.p3 } else { c.eval(to) };
+                gap = gap.max(lens_width(polygon_length(&c.subsegment(from..to)), pts.last()?.distance(p)));
+                pts.push(p);
+            }
+        }
+    }
+    Some((pts, gap))
+}
+
+/// The one cubic replacing the `count` original segments from `first`, with how far it and they can be
+/// from each other, or `None` when that is not known: the work ran out, or a length was not a number.
+/// The cubic is fitted to points of the run ([`witness_points`]) with the tangents the run has at its
+/// ends, and the bound is [`fit_single_bounded`]'s: its error at them, its distance from the chords
+/// between its values there, and the run's from the chords between the points. Nothing of how the run
+/// was made comes into it, so it does not grow with the number of segments or of merges. `seed` is a
+/// guess at the second difference of the cubic, for the number of points; they are taken again when the
+/// cubic needs more. Each point is charged to `work` ([`WITNESS_COST`]) before the fit.
+fn refit_run(originals: &Originals, first: usize, count: usize, tol: f64, seed: f64, work: &mut usize) -> Option<(CubicBez, f64)> {
+    if count == 0 {
+        return None;
+    }
+    let (head, tail) = (originals.seg(first)?, originals.seg(first.checked_add(count - 1)?)?);
+    let (t0, t1) = (start_tangent(&head.c), end_tangent(&tail.c));
+    let mut sd = seed;
+    for round in 0..2 {
+        let steps = witnesses_for(sd, tol);
+        let points = points_for(count, steps);
+        let cost = points.saturating_add(1).saturating_mul(WITNESS_COST).saturating_add(count / 4);
+        let Some(left) = work.checked_sub(cost) else {
+            *work = 0;
+            return None;
+        };
+        *work = left;
+        work::add(Work::Witnesses, points + 1);
+        let (pts, gap) = witness_points(originals, first, count, steps)?;
+        let (c, err, rest) = fit_single_bounded(&pts, t0, t1, gap);
+        let bound = err + rest;
+        let wanted = witnesses_for(second_difference(&c), tol);
+        if wanted <= steps + steps / 4 || round == 1 {
+            return bound.is_finite().then_some((c, bound));
+        }
+        sd = second_difference(&c);
+    }
+    None
+}
+
+/// The piece `top` made longer by the original segments that follow its run, at most `ahead` of them, as
+/// many as it can take, and how many it took: the number is doubled while the run still fits one
+/// cubic ([`refit_run`]), and then halved between the last that fitted and the first that did not (the
+/// run is taken to fit one cubic for a length up to a point, and not past it). A piece made by merging one
+/// original at a time costs a merge for each; this costs a few for the whole stretch.
+fn extend_run(top: &Piece, ahead: usize, tol: f64, originals: &Originals, work: &mut usize) -> Option<(Piece, usize)> {
+    let sd = second_difference(&top.seg.c);
+    let mut try_extra = |extra: usize| -> Option<Piece> {
+        let count = top.count.checked_add(extra)?;
+        let ratio = count as f64 / top.count as f64;
+        let (c, dev) = refit_run(originals, top.first, count, tol, sd * ratio * ratio, work)?;
+        (dev <= tol).then_some(Piece { seg: Seg { c, line: false }, dev, first: top.first, count })
+    };
+    let (mut best, mut fits, mut stride) = (None, 0usize, 1usize);
+    let mut fails = None;
+    while stride <= ahead {
+        match try_extra(stride) {
+            Some(piece) => {
+                best = Some((piece, stride));
+                fits = stride;
+                stride = stride.saturating_mul(2);
+            }
+            None => {
+                fails = Some(stride);
+                break;
+            }
+        }
+    }
+    if fails.is_none() && fits < ahead {
+        match try_extra(ahead) {
+            Some(piece) => return Some((piece, ahead)),
+            None => fails = Some(ahead),
+        }
+    }
+    if let Some(mut fail) = fails {
+        while fail - fits > 1 {
+            let mid = fits + (fail - fits) / 2;
+            match try_extra(mid) {
+                Some(piece) => {
+                    best = Some((piece, mid));
+                    fits = mid;
+                }
+                None => fail = mid,
+            }
+        }
+    }
+    best
+}
+
+/// `a` and `b`, next to each other, as one piece, if the one segment that replaces them stays within
 /// `tol` of every segment of the run both stand for: not only of the joint between them, which
-/// is all `merge_pair` sees (a run built a joint at a time can drift from a curve it was sampled
+/// is all [`merge_pair`] sees (a run built a joint at a time can drift from a curve it was sampled
 /// from, each step within `tol` of the last: a half circle of ten thousand chords came out as its
 /// diameter). A bound is kept: the segments of `a` and `b` are within `a.dev` and `b.dev` of them, and
-/// them from the merged one by that and the step of the merge at most. For lines, when that
-/// bound passes `tol`, the joints of the run are checked against the line (up to
-/// [`MAX_CHECKED_RUN`]), which gives the real deviation. `origins` are the starts of the original
-/// segments.
-fn merge_pieces(a: &Piece, b: &Piece, tol: f64, origins: &[Point], work: &mut usize) -> Option<Piece> {
+/// them from the merged one by that and the step of the merge at most.
+///
+/// That bound is the sum of the worst case of every merge the run was made by, and a long run, made
+/// of many short segments, passes it after a few dozen (each step is a share of the tolerance, however
+/// short the segments are that it merges) though it is far from using the tolerance up. So when
+/// it passes `tol` the run itself is held to the segment that replaces it, and the distance found
+/// replaces the bound. For lines, the joints of the run are checked against the line (up to
+/// [`MAX_CHECKED_RUN`]); for curves the run is refitted from points of its original segments
+/// ([`refit_run`]), however long it is. `originals` are the segments of the subpath.
+fn merge_pieces(a: &Piece, b: &Piece, tol: f64, originals: &Originals, work: &mut usize) -> Option<Piece> {
     let (seg, step) = merge_pair(&a.seg, &b.seg, tol)?;
     let (first, count) = (a.first, a.count + b.count);
     let bound = a.dev.max(b.dev) + step;
     if bound <= tol {
         return Some(Piece { seg, dev: bound, first, count });
     }
-    if !seg.line || count > MAX_CHECKED_RUN {
+    if !seg.line {
+        // A cubic of a run is as long, so as curved, as the longer of its parts at their own scale.
+        let grown = |p: &Piece| {
+            let ratio = count as f64 / p.count as f64;
+            second_difference(&p.seg.c) * ratio * ratio
+        };
+        let (c, dev) = refit_run(originals, first, count, tol, grown(a).max(grown(b)), work)?;
+        return (dev <= tol).then_some(Piece { seg: Seg { c, line: false }, dev, first, count });
+    }
+    if count > MAX_CHECKED_RUN {
         return None;
     }
     // The joints inside the run are the starts of its segments but the first. They are read from the
@@ -527,16 +763,20 @@ fn merge_pieces(a: &Piece, b: &Piece, tol: f64, origins: &[Point], work: &mut us
     let len2 = chord.hypot2();
     let mut worst: f64 = 0.0;
     for k in 1..count {
-        let p = *origins.get((first + k) % origins.len().max(1))?;
+        let p = originals.seg(first.checked_add(k)?)?.c.p0;
         let along = if len2 > 0.0 { ((p - seg.c.p0).dot(chord) / len2).clamp(0.0, 1.0) } else { 0.0 };
         worst = worst.max(p.distance(seg.c.p0 + chord * along));
     }
     (worst <= tol).then_some(Piece { seg, dev: worst, first, count })
 }
 
-/// The one segment replacing `a` and `b` (next to each other), if it is within `tol` of them, and how
-/// far from them it can be: for lines, the joint's distance from the chord; for curves, the bound of
-/// [`fit_single_bounded`] over samples of both.
+/// Intervals each of two segments is sampled at to merge them into one cubic ([`merge_pair`]).
+const PAIR_INTERVALS: usize = 16;
+
+/// The one segment replacing `a` and `b` (next to each other) and how far from them it can be: for lines,
+/// the joint's distance from the chord (a line that is further is none); for curves, the bound of
+/// [`fit_single_bounded`] over samples of both, which can pass `tol` (a cubic whose own error at the
+/// samples passes it is none).
 fn merge_pair(a: &Seg, b: &Seg, tol: f64) -> Option<(Seg, f64)> {
     if a.line && b.line {
         let chord = b.c.p3 - a.c.p0;
@@ -554,16 +794,15 @@ fn merge_pair(a: &Seg, b: &Seg, tol: f64) -> Option<(Seg, f64)> {
         return None;
     }
     // Held to the tolerance between the samples too: the cubic's error at them, how far it can be from
-    // its chords between them, and how far `a` and `b` can be from theirs, added up. Each is sampled
-    // finely enough that the last two are small beside the tolerance, from 16 intervals to 128.
-    let intervals = |s: &Seg| ((12.0 * second_difference(&s.c) / tol).sqrt().ceil() as usize).clamp(16, 128);
-    let (ma, mb) = (intervals(a), intervals(b));
-    let mut pts = Vec::with_capacity(ma + mb + 1);
-    sample(&a.c, ma, &mut pts, true);
-    sample(&b.c, mb, &mut pts, false);
-    let between = sample_error(a, ma, tol * 0.05).max(sample_error(b, mb, tol * 0.05));
-    let (c, bound) = fit_single_bounded(&pts, start_tangent(&a.c), end_tangent(&b.c), between);
-    (bound <= tol).then_some((Seg { c, line: false }, bound))
+    // its chords between them, and how far `a` and `b` can be from theirs, added up. Each is sampled at
+    // 16 intervals, as VectorCraft samples them; where those leave more than the tolerance has room for,
+    // the run is refitted ([`merge_pieces`]) rather than sampled more finely here.
+    let mut pts = Vec::with_capacity(2 * PAIR_INTERVALS + 1);
+    sample(&a.c, PAIR_INTERVALS, &mut pts, true);
+    sample(&b.c, PAIR_INTERVALS, &mut pts, false);
+    let between = sample_error(a, PAIR_INTERVALS, tol * 0.05).max(sample_error(b, PAIR_INTERVALS, tol * 0.05));
+    let (c, err, rest) = fit_single_bounded(&pts, start_tangent(&a.c), end_tangent(&b.c), between);
+    (err <= tol).then_some((Seg { c, line: false }, err + rest))
 }
 
 /// Join. Open subpaths of all inputs are joined nearest-endpoint-first into one open path
@@ -1108,5 +1347,213 @@ mod tests {
         assert_eq!(work::take(Work::Redundant), 0);
         // And the public function has room for it.
         assert_eq!(anchor_count(&remove_redundant_points(&square, 1e-6)), 4);
+    }
+
+    /// A circle of radius `r` in `n` cubics, each the standard arc of its angle, from `(r, 0)` round.
+    fn cut_circle(n: usize, r: f64) -> BezPath {
+        let mut circle = BezPath::new();
+        for i in 0..n {
+            let (a0, a1) = (std::f64::consts::TAU * i as f64 / n as f64, std::f64::consts::TAU * (i + 1) as f64 / n as f64);
+            let k = 4.0 / 3.0 * ((a1 - a0) / 4.0).tan() * r;
+            let (p0, p3) = (Point::new(r * a0.cos(), r * a0.sin()), Point::new(r * a1.cos(), r * a1.sin()));
+            if i == 0 {
+                circle.move_to(p0);
+            }
+            circle.curve_to(p0 + Vec2::new(-a0.sin(), a0.cos()) * k, p3 - Vec2::new(-a1.sin(), a1.cos()) * k, p3);
+        }
+        circle.close_path();
+        circle
+    }
+
+    /// An open chain of `n` smooth cubics, each `step` along x, through the points of a sine wave.
+    fn wavy_chain(n: usize, step: f64, amp: f64, wave: f64) -> BezPath {
+        let at = |i: usize| {
+            let x = i as f64 * step;
+            (Point::new(x, amp * (wave * x).sin()), Vec2::new(1.0, amp * wave * (wave * x).cos()) * (step / 3.0))
+        };
+        let mut chain = BezPath::new();
+        chain.move_to(at(0).0);
+        for i in 0..n {
+            let ((p0, d0), (p3, d3)) = (at(i), at(i + 1));
+            chain.curve_to(p0 + d0, p3 - d3, p3);
+        }
+        chain
+    }
+
+    /// The segments of the first subpath of `path`, as the merges read them.
+    fn chain_of(path: &BezPath) -> Vec<Seg> {
+        subs(path).first().map(Sub::chain).unwrap_or_default()
+    }
+
+    /// The `count` segments of `segs` from `first` (counting round the end), as a path.
+    fn run_of(segs: &[Seg], first: usize, count: usize) -> BezPath {
+        let run: Vec<Seg> = (0..count).filter_map(|k| segs.get((first + k) % segs.len()).copied()).collect();
+        segs_to_bezpath(&run, false).unwrap_or_default()
+    }
+
+    /// The path of one cubic.
+    fn cubic_path(c: CubicBez) -> BezPath {
+        let mut path = BezPath::new();
+        path.move_to(c.p0);
+        path.curve_to(c.p1, c.p2, c.p3);
+        path
+    }
+
+    /// The run between two points taken of it is within the width of the lens of their chord, and every
+    /// point of the chord has a point of the run within that width (and the width is not far over what it
+    /// bounds): for runs of short segments, which the points leave a stretch of at a time, for long ones,
+    /// which they take at several places, and for runs that go round the start of a closed subpath.
+    #[test]
+    fn the_run_between_two_points_taken_of_it_is_within_the_lens_of_their_chord() {
+        use kurbo::{Line, ParamCurveNearest};
+        let near = |p: Point, lines: &[Line]| lines.iter().map(|l| l.nearest(p, 1e-12).distance_sq).fold(f64::INFINITY, f64::min).sqrt();
+        for (n, first, count, steps) in
+            [(200usize, 5usize, 100usize, 8usize), (200, 190, 30, 8), (200, 0, 150, 24), (40, 3, 3, 8), (40, 30, 20, 16), (12, 0, 12, 8)]
+        {
+            let segs = chain_of(&cut_circle(n, 50.0));
+            let originals = Originals::new(&segs);
+            let (pts, gap) = witness_points(&originals, first, count, steps).unwrap();
+            let mut dense = Vec::new();
+            for r in 0..count {
+                let c = segs[(first + r) % n].c;
+                dense.extend((0..400).map(|k| c.eval(f64::from(k) / 400.0)));
+            }
+            dense.push(segs[(first + count - 1) % n].c.p3);
+            let run: Vec<Line> = dense.windows(2).map(|w| Line::new(w[0], w[1])).collect();
+            let chords: Vec<Line> = pts.windows(2).map(|w| Line::new(w[0], w[1])).collect();
+            assert_eq!(pts.first(), dense.first(), "the first point is the start of the run");
+            assert_eq!(pts.last(), dense.last(), "the last point is the end of the run");
+            let run_from_chords = dense.iter().map(|&p| near(p, &chords)).fold(0.0, f64::max);
+            let chords_from_run =
+                chords.iter().flat_map(|l| (0..=20).map(move |k| l.eval(f64::from(k) / 20.0))).map(|p| near(p, &run)).fold(0.0, f64::max);
+            let worst = run_from_chords.max(chords_from_run);
+            assert!(worst <= gap, "n {n} first {first} count {count} steps {steps}: {worst} against the gap {gap}");
+            assert!(gap <= 2.0 * worst, "n {n} first {first} count {count} steps {steps}: the gap {gap} for {worst}");
+        }
+    }
+
+    /// The length a run is held to is the sum of the control polygons of its segments, round a closed
+    /// subpath's start as anywhere else.
+    #[test]
+    fn the_length_of_a_run_round_a_closed_start_is_the_sum_of_its_segments() {
+        let segs = chain_of(&cut_circle(200, 50.0));
+        let originals = Originals::new(&segs);
+        let direct = |first: usize, count: usize| (0..count).map(|k| polygon_length(&segs[(first + k) % 200].c)).sum::<f64>();
+        for (first, count) in [(0usize, 5usize), (190, 30), (199, 2), (150, 200), (200, 3)] {
+            let got = originals.polygon_length(first, count).unwrap();
+            assert!(
+                (got - direct(first, count)).abs() <= 1e-12 * direct(first, count),
+                "first {first} count {count}: {got} against {}",
+                direct(first, count)
+            );
+        }
+        assert_eq!(Originals::new(&[]).polygon_length(0, 1), None, "no segments, no length");
+    }
+
+    /// A refit's bound is no less than how far the cubic and the run are from each other, both ways (as
+    /// measured), however the run is cut and wherever it starts; and where the run is a smooth curve of
+    /// short segments, which one cubic can follow, it is no more than a share of the tolerance (what the
+    /// sampling takes off it is not most of it).
+    #[test]
+    fn a_refit_is_within_its_bound_of_its_run_both_ways() {
+        let circle = cut_circle(40, 50.0);
+        let wavy = wavy_chain(60, 1.0, 3.0, 0.5);
+        // (path, first, count, tolerance, the most the bound is of it, for a run one cubic follows)
+        for (path, first, count, tol, most) in [
+            (&circle, 0, 3, 0.01, Some(0.5)),
+            (&circle, 35, 12, 0.05, Some(1.0)),
+            (&circle, 5, 9, 0.5, Some(0.5)),
+            (&circle, 0, 20, 0.2, None),
+            (&wavy, 4, 20, 0.05, None),
+            (&wavy, 0, 12, 0.5, None),
+            (&wavy, 30, 6, 0.001, None),
+        ] {
+            let segs = chain_of(path);
+            let originals = Originals::new(&segs);
+            let mut work = usize::MAX;
+            let (c, bound) = refit_run(&originals, first, count, tol, 0.0, &mut work).unwrap();
+            let (run, fit) = (run_of(&segs, first, count), cubic_path(c));
+            let (from, to) = (deviation(&run, &fit), deviation(&fit, &run));
+            assert!(
+                from.max(to) <= bound + MEASURED,
+                "first {first} count {count} tol {tol}: the run is {from} from the cubic, the cubic {to} from the run, bound {bound}"
+            );
+            if let Some(most) = most {
+                assert!(bound <= most * tol, "first {first} count {count} tol {tol}: bound {bound}");
+            }
+        }
+    }
+
+    /// A refit holds the run to what the points taken of it leave: the gap between them is in the bound.
+    /// Here the cubic is on every point of the run (one cubic cut in four by its own parameter), so the
+    /// bound is the gap and the spread of the cubic from its chords, and no less than the gap.
+    #[test]
+    fn a_refit_of_a_run_the_cubic_is_on_exactly_has_the_gap_in_its_bound() {
+        let c = CubicBez::new((0.0, 0.0), (10.0, 20.0), (30.0, 20.0), (40.0, 0.0));
+        let parts: Vec<Seg> = (0..4).map(|k| Seg { c: c.subsegment(f64::from(k) / 4.0..f64::from(k + 1) / 4.0), line: false }).collect();
+        let originals = Originals::new(&parts);
+        let tol = 1.0;
+        // The points of the first try, as many as the cubic asks for.
+        let steps = witnesses_for(second_difference(&c), tol);
+        let (_, gap) = witness_points(&originals, 0, 4, steps).unwrap();
+        let mut work = usize::MAX;
+        let (_, bound) = refit_run(&originals, 0, 4, tol, second_difference(&c), &mut work).unwrap();
+        assert!(gap > 0.0 && bound >= gap, "bound {bound} gap {gap}");
+    }
+
+    /// A circle of twenty thousand short segments is taken in a few hundred refits (a hundred or so a piece),
+    /// not one for each merge, which is hundreds of thousands of the points.
+    #[test]
+    fn a_long_smooth_run_is_taken_in_a_few_refits() {
+        let circle = cut_circle(20_000, 1000.0);
+        work::reset();
+        let simpler = remove_redundant_points(&circle, 0.01);
+        let points = work::take(Work::Witnesses);
+        assert!(anchor_count(&simpler) <= 36, "{} anchors", anchor_count(&simpler));
+        assert!(points > 0 && points < 300_000, "{points} points refitted");
+    }
+
+    /// The points of a refit are charged to the work as the joints are: with little of it, no more is
+    /// taken than there is, and what the refits do not reach is left as it was, not lost.
+    #[test]
+    fn the_points_of_a_refit_are_charged_to_the_work() {
+        let circle = cut_circle(5_000, 1000.0);
+        work::reset();
+        let free = remove_redundant_points(&circle, 0.01);
+        let (free_points, free_joints) = (work::take(Work::Witnesses), work::take(Work::Redundant));
+        assert!(free_points > 100, "{free_points} points refitted without a limit");
+        for limit in [0usize, 500, 20_000, 200_000] {
+            let limits = crate::Limits { redundant_work: limit, ..crate::Limits::default() };
+            work::reset();
+            let cut = crate::with_limits(limits, || remove_redundant_points(&circle, 0.01));
+            let (points, joints) = (work::take(Work::Witnesses), work::take(Work::Redundant));
+            assert!(points * WITNESS_COST + joints <= limit, "{points} points and {joints} joints read with {limit} of work");
+            assert!(anchor_count(&cut) >= anchor_count(&free) && anchor_count(&cut) <= 5_000);
+        }
+        // Room for all of it gives the same result, and a little less does not: the work is the whole of what
+        // was spent.
+        let mut left = 1usize << 40;
+        assert_eq!(remove_redundant_within(&circle, 0.01, &mut left), free);
+        let spent = (1usize << 40) - left;
+        assert!(spent >= free_points * WITNESS_COST + free_joints, "{spent} spent for {free_points} points and {free_joints} joints");
+        assert_eq!(remove_redundant_within(&circle, 0.01, &mut spent.clone()), free);
+        assert_ne!(remove_redundant_within(&circle, 0.01, &mut (spent / 2)), free);
+    }
+
+    /// A length that is not a number, or too big to add up, leaves the run as it is: nothing is merged on
+    /// a bound that is not known, and nothing panics.
+    #[test]
+    fn a_run_with_a_length_that_is_not_a_number_is_not_refitted() {
+        for bad in [f64::NAN, f64::INFINITY, 1e300] {
+            let mut chain = BezPath::new();
+            chain.move_to((0.0, 0.0));
+            for i in 0..40 {
+                let x = f64::from(i) * 10.0;
+                let h = if i == 20 { bad } else { x + 3.0 };
+                chain.curve_to((h, 0.0), (x + 7.0, 0.0), (x + 10.0, 0.0));
+            }
+            let simpler = remove_redundant_points(&chain, 0.01);
+            assert!(!simpler.elements().is_empty());
+        }
     }
 }

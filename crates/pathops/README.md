@@ -229,8 +229,9 @@ work of each operation is bounded before it starts, in counts the tests assert o
   (outlines that each pass cross each other a great deal);
 - the operations without a `Result` answer an empty path, no shapes, or the input unchanged, as their
   documentation says. `simplify` stops fitting at `MAX_FIT_POINTS` samples of one run and at `FIT_WORK` in
-  all, `remove_redundant_points` at `REDUNDANT_WORK` (the joints it reads in its search, and the points of a run it
-  checks one by one against the line that replaces it) and `join` at `JOIN_WORK`, and leaves the rest as it is;
+  all, `remove_redundant_points` at `REDUNDANT_WORK` (the joints it reads in its search, the points of a run it
+  checks one by one against the line that replaces it, and the points a run of curves is refitted from) and
+  `join` at `JOIN_WORK`, and leaves the rest as it is;
 - lengths are measured to a relative accuracy (kurbo's takes an accuracy in the units of the path, which a cubic of
   large coordinates meets only by subdividing the most it ever does), at any size the sweep accepts, and an
   inset compares the lengths of the closed subpaths and of the boundary of their fill for at most 4,096
@@ -429,16 +430,34 @@ bit for bit VectorCraft's), and the results are identical except where noted:
   - `simplify_with` with `straight_lines` measures the distance of a point to the finite segment it is
     judged against, not to the line through it, so a path that runs out past an end and back is kept;
     `smooth` is documented to measure the tolerance from the smoothed path;
-  - `remove_redundant_points` (and so the stroke's spine) checks a merged run against the segments it
-    replaces, not only the joint it merges across: a half circle of ten thousand chords came out as its
-    diameter at a tolerance of 0.001, and is now kept; noisy points about a straight line within the
-    tolerance still merge. It costs a bounded number of checks for each point. Two cubics merged into one
-    are held to the tolerance between their samples too: each is sampled at 16 to 128 intervals, enough that
-    how far it can be from its samples is small beside the tolerance, and the cubic's error at them, its
-    spread from its chords and that are added up. A pair 1000 across came out 0.5005 from VectorCraft's
-    merge at a tolerance of 0.5, and is not merged here. Against the carve before, 21 to 39 of 900 random
-    simplifications a seed have more elements (0.3 to 0.7 % more in all), none further than the tolerance;
-    and most of the rest differ from VectorCraft's in their control points, as the samples do;
+  - `remove_redundant_points` (and so the stroke's spine) checks a merged run against the segments it replaces,
+    not only the joint it merges across: a half circle of ten thousand chords came out as its diameter at a
+    tolerance of 0.001, and a circle of radius 1,000 in 1,000 cubics as 13 elements, 20 times the tolerance
+    (0.01) from the circle, and in 100,000 as 4 elements, 9,970 times; the carve keeps them. Noisy points about
+    a straight line within the tolerance still merge. Two cubics are merged on 16 samples of each, as
+    VectorCraft does, and the cubic is taken when its error at them, how far it can be from its chords between
+    them, and how far the two can be from theirs, added to what the two had used already, are within the
+    tolerance (a pair 1000 across came out 0.5005 from VectorCraft's merge at a tolerance of 0.5, and is not
+    merged here). Where they are not, the run is refitted from points of its own segments: up to 1,024 of them,
+    at their joints or inside the segments where those are long. The cubic is held to the tolerance by its error
+    at them, its distance from its chords, and the run's from the chords between the points (a stretch of the
+    run no longer than its control polygons lies in a lens about its chord, whose width is small where the run
+    is smooth). That is a bound of the run alone, whatever the number of segments or of merges that made it (the
+    bounds of a run's merges, added up, are far more than it has used: a finely cut curve would have none of the
+    tolerance left after a few dozen). A piece of eight segments or more is extended by those after it in
+    strides, doubled while the run still fits and then halved, so a long smooth run costs a few refits, not one
+    for each segment. The points of a refit are charged to `REDUNDANT_WORK`, 24 each. A circle of radius 1,000
+    comes down to as few elements however finely it is cut: 27 elements at a tolerance of 0.01 for 100 cubics
+    and 23 for 1,000 to 100,000, 7 at 0.1 and 6 at 1 for any number, within the tolerance of the circle and the
+    circle of them (to 0.98 of it), in 0.015 s for 100,000 cubics (the carve before gave 27 and 29, 15 and 17, 6
+    to 11, in 0.36 s). Against VectorCraft, on 900 random paths a seed (seeds 1, 3, 5 and 7), the carve gives
+    the same number of elements in 894, 879, 887 and 894 runs, more in 6, 21, 13 and 6, and fewer in none
+    (5,910, 5,816, 5,833 and 5,653 elements in all, against 5,903, 5,789, 5,814 and 5,643); 141, 164, 160 and
+    168 runs differ from VectorCraft's in any way, those with the same number of elements in their control
+    points only (the cubic comes from a refit, not from the samples). VectorCraft is further than 1.05 of the
+    tolerance from the path in 17, 23, 18 and 23 of them, up to 1.8 times, the carve in none (0.99 at the most).
+    Against the carve before, 1, 7, 4 and 1 runs have more elements and 8, 6, 11 and 5 fewer (5,919, 5,814,
+    5,841 and 5,656 elements in all, now 5,910, 5,816, 5,833 and 5,653);
   - an inset (`offset_path` with a negative delta) strokes the boundary of the area the closed subpaths
     fill, not every subpath, so a rectangle inside another one wound the same way leaves no moat; and an
     open subpath is outlined by its stroke for a negative delta too, as the documentation says (it gave

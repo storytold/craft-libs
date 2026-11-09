@@ -102,6 +102,117 @@ fn a_merge_of_two_cubics_is_within_the_tolerance_between_its_samples() {
     }
 }
 
+// ---- remove_redundant_points on finely cut curves
+
+/// A circular arc: its radius, centre, the angle it starts at and how far it goes round (counter clockwise).
+type Arc = (f64, (f64, f64), f64, f64);
+
+/// The point of `arc` a fraction `t` of the way round it.
+fn arc_point(&(r, (cx, cy), from, sweep): &Arc, t: f64) -> Point {
+    let a = from + sweep * t;
+    Point::new(cx + r * a.cos(), cy + r * a.sin())
+}
+
+/// `arc` in `n` cubics, each the standard arc of its angle; closed for the whole circle.
+fn cut_arc(arc: &Arc, n: usize) -> BezPath {
+    let mut path = BezPath::new();
+    let &(r, _, from, sweep) = arc;
+    for i in 0..n {
+        let (t0, t1) = (i as f64 / n as f64, (i + 1) as f64 / n as f64);
+        let (a0, a1) = (from + sweep * t0, from + sweep * t1);
+        let k = 4.0 / 3.0 * ((a1 - a0) / 4.0).tan() * r;
+        let (p0, p3) = (arc_point(arc, t0), arc_point(arc, t1));
+        if i == 0 {
+            path.move_to(p0);
+        }
+        path.curve_to(p0 + kurbo::Vec2::new(-a0.sin(), a0.cos()) * k, p3 - kurbo::Vec2::new(-a1.sin(), a1.cos()) * k, p3);
+    }
+    if sweep >= std::f64::consts::TAU {
+        path.close_path();
+    }
+    path
+}
+
+/// How far `p` is from `arc`.
+fn distance_to_arc(arc: &Arc, p: Point) -> f64 {
+    let &(r, (cx, cy), from, sweep) = arc;
+    let along = (p.y - cy).atan2(p.x - cx) - from;
+    if along.rem_euclid(std::f64::consts::TAU) <= sweep {
+        (p.distance(Point::new(cx, cy)) - r).abs()
+    } else {
+        p.distance(arc_point(arc, 0.0)).min(p.distance(arc_point(arc, 1.0)))
+    }
+}
+
+/// How far the curves of `path` are from `arcs` (the nearest of them, at 2,000 points of each curve), and
+/// how far the arcs are from the curves (at 500 points of each arc, from the nearest curve).
+fn arcs_deviation(path: &BezPath, arcs: &[Arc]) -> (f64, f64) {
+    use kurbo::{ParamCurve, ParamCurveNearest};
+    let curves: Vec<_> = path.segments().collect();
+    let mut out: f64 = 0.0;
+    for seg in &curves {
+        for k in 0..=2_000 {
+            let p = seg.eval(f64::from(k) / 2_000.0);
+            out = out.max(arcs.iter().map(|a| distance_to_arc(a, p)).fold(f64::INFINITY, f64::min));
+        }
+    }
+    let mut back: f64 = 0.0;
+    for arc in arcs {
+        for k in 0..=500 {
+            let q = arc_point(arc, f64::from(k) / 500.0);
+            back = back.max(curves.iter().map(|s| s.nearest(q, 1e-12).distance_sq.sqrt()).fold(f64::INFINITY, f64::min));
+        }
+    }
+    (out, back)
+}
+
+/// A circle of radius 1,000 cut into many cubics comes down to a few, however finely it is cut. Merging
+/// one cubic at a time added the whole worst case of each merge to what a run had used of the tolerance,
+/// so a run of a few hundred pieces had none left: a hundred thousand cubics, at 0.01, came down to 508
+/// elements, where a hundred came down to 36 and the carve before gave 29, though each was within a
+/// hundred-thousandth of the tolerance of the circle. The elements here are no more than 5/4 of those of
+/// the carve before, which merged on the error at its samples and so was not held to the tolerance
+/// between them (it ended a run where that error passed the tolerance, this ends it where the run's own
+/// bound does), and the result is within the tolerance of the circle and the circle of it.
+#[test]
+fn a_finely_cut_circle_comes_down_to_as_few_elements_as_a_coarsely_cut_one() {
+    let circle: Arc = (1_000.0, (0.0, 0.0), 0.0, std::f64::consts::TAU);
+    // (cubics, tolerance, elements before)
+    for (n, tol, before) in [(100, 0.01, 27usize), (1_000, 0.01, 29), (100_000, 0.01, 29), (1_000, 0.1, 17), (100_000, 0.1, 17)] {
+        let simpler = remove_redundant_points(&cut_arc(&circle, n), tol);
+        let (out, back) = arcs_deviation(&simpler, &[circle]);
+        assert!(out <= tol && back <= tol, "{n} cubics at {tol}: the result is {out} from the circle and the circle {back} from it");
+        let elements = simpler.elements().len();
+        assert!(elements <= before + before / 4, "{n} cubics at {tol}: {elements} elements, where there were {before}");
+    }
+}
+
+/// A corner between two long smooth arcs stays, with each arc in a few cubics: a run is held to the
+/// tolerance by what it is made of, so one that takes in the corner is refused however many pieces it has.
+/// Two arcs of radius 500, a quarter circle each, the second turning away from the first by 60 degrees
+/// where it starts.
+#[test]
+fn a_corner_between_two_finely_cut_arcs_is_kept() {
+    let quarter = std::f64::consts::FRAC_PI_2;
+    let first: Arc = (500.0, (0.0, 0.0), 0.0, quarter);
+    // The first arrives at (0, 500) going along -x. The second leaves it 60 degrees to the left of that, and
+    // curves left too: its centre is 500 to the left of where it leaves.
+    let corner = arc_point(&first, 1.0);
+    let leaves = std::f64::consts::PI + std::f64::consts::FRAC_PI_3;
+    let centre = (corner.x + 500.0 * (leaves + quarter).cos(), corner.y + 500.0 * (leaves + quarter).sin());
+    let second: Arc = (500.0, centre, (corner.y - centre.1).atan2(corner.x - centre.0), quarter);
+    let mut both = cut_arc(&first, 4_000);
+    both.extend(cut_arc(&second, 4_000).iter().skip(1));
+    let tol = 0.1;
+    let simpler = remove_redundant_points(&both, tol);
+    let curves = simpler.segments().count();
+    assert!(curves <= 6, "{curves} curves: {simpler:?}");
+    let ends: Vec<Point> = simpler.segments().map(|s| kurbo::ParamCurve::eval(&s, 1.0)).collect();
+    assert!(ends.iter().any(|p| p.distance(corner) < 1e-9), "no curve ends at the corner: {ends:?}");
+    let (out, back) = arcs_deviation(&simpler, &[first, second]);
+    assert!(out <= tol && back <= tol, "the result is {out} from the arcs and they {back} from it");
+}
+
 // ---- interior points
 
 /// A rectangle 1 wide at x = 1e15 and 2 high at y = 1e16, where a unit in the last place of y is 2,
