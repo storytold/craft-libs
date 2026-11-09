@@ -9,7 +9,7 @@
 
 use std::collections::BinaryHeap;
 
-use kurbo::{BezPath, CubicBez, ParamCurve};
+use kurbo::{BezPath, CubicBez, ParamCurve, ParamCurveDeriv, ParamCurveNearest, QuadBez};
 use polycool::Quadratic;
 
 use crate::{
@@ -221,12 +221,150 @@ fn bez_end_y(path: &BezPath) -> f64 {
 
 fn next_subsegment(seg: &Segment, out: &BezPath, y1: f64, endpoint: kurbo::Point) -> CubicBez {
     let p0 = bez_end(out);
-    let mut c = y_subsegment(seg.to_kurbo_cubic(), p0.y, y1);
-    c.p0 = p0;
-    if endpoint.y == y1 {
-        c.p3 = endpoint;
+    let orig = seg.to_kurbo_cubic();
+    let mut c = y_subsegment(orig, p0.y, y1);
+    let p3 = if endpoint.y == y1 { endpoint } else { c.p3 };
+
+    // Craft patch (flat-end shear)
+    if (p0 != c.p0 || p3 != c.p3)
+        && let Some(piece) = settled_cubic(
+            orig,
+            solve_t_for_y(orig, p0.y),
+            solve_t_for_y(orig, y1),
+            p0,
+            p3,
+        )
+    {
+        return piece;
     }
+
+    c.p0 = p0;
+    c.p3 = p3;
     c
+}
+
+// Craft patch (flat-end shear): where a curve is almost horizontal at an end, a
+// tiny error in that end's height is a large error in the parameter that
+// `solve_t_for_y` returns, and so a large horizontal gap between the cut and
+// the end point. Moving the inner control points by their height's share of
+// that gap moves the steep part of the curve sideways, and moving only the end
+// point, as `next_subsegment` did, bends the curve near it. `settled_cubic` cuts
+// the curve at the points nearest the end points instead, moves each end
+// sideways with its handle and maps the heights linearly, so the piece moves
+// no further than its ends do and stays monotonic in `y`.
+
+/// The parameter between `lo` and `hi` of the point of `c` nearest `target`, found by
+/// Newton steps from `t`, restarting once from the nearest point of the whole curve where a
+/// step cannot leave, such as at a repeated handle. Returns `t` when no closer point is found.
+fn settle_end(c: CubicBez, t: f64, target: kurbo::Point, lo: f64, hi: f64) -> f64 {
+    let d1 = c.deriv();
+    let d2 = d1.deriv();
+    let mut best = t;
+    let mut best_gap = (c.eval(t) - target).hypot2();
+    let mut s = t;
+    let mut restarted = false;
+    for _ in 0..32 {
+        if best_gap == 0.0 {
+            break;
+        }
+        let r = c.eval(s) - target;
+        let v = d1.eval(s).to_vec2();
+        let a = d2.eval(s).to_vec2();
+        let slope = r.dot(v);
+        let bend = v.hypot2() + r.dot(a);
+        // A Newton step cannot leave a point where the derivative is zero, such
+        // as a repeated handle at an end. Restart once from the nearest point of
+        // the whole curve, within the bounds, and keep it only if it is closer.
+        if bend <= 0.0 || bend.is_nan() || v.hypot2() == 0.0 {
+            let near = c.nearest(target, 1e-12).t.clamp(lo, hi);
+            let gap = (c.eval(near) - target).hypot2();
+            if restarted || gap >= best_gap {
+                break;
+            }
+            restarted = true;
+            best = near;
+            best_gap = gap;
+            s = near;
+            continue;
+        }
+        let next = (s - slope / bend).clamp(lo, hi);
+        if !next.is_finite() || next == s {
+            break;
+        }
+        s = next;
+        let gap = (c.eval(s) - target).hypot2();
+        if gap < best_gap {
+            best = s;
+            best_gap = gap;
+        }
+    }
+    best
+}
+
+/// The parameters of the points of `c` nearest `p0` and `p3`, searching from `t0` and
+/// `t3`, or `None` when they are not in order.
+fn settled_range(
+    c: CubicBez,
+    t0: f64,
+    t3: f64,
+    p0: kurbo::Point,
+    p3: kurbo::Point,
+) -> Option<(f64, f64)> {
+    let s0 = settle_end(c, t0, p0, 0.0, t3);
+    let s3 = settle_end(c, t3, p3, s0, 1.0);
+    (s0 < s3).then_some((s0, s3))
+}
+
+/// The increasing map of heights that takes `from0` to `to0` and `from1` to `to1`, or
+/// `None` when either range is empty or the map is not finite.
+fn height_map(from0: f64, from1: f64, to0: f64, to1: f64) -> Option<impl Fn(f64) -> f64> {
+    let scale = (to1 - to0) / (from1 - from0);
+    (from0 < from1 && to0 < to1 && scale.is_finite()).then_some(move |y| to0 + (y - from0) * scale)
+}
+
+/// Cuts `c` between the points nearest `p0` and `p3`, searching from `t0` and `t3`, and
+/// moves the piece onto `p0` and `p3`: each end moves sideways together with its handle,
+/// and the heights are mapped linearly, so a curve that is monotonic in `y` stays so.
+/// Returns `None` when the two cut points are not in order.
+fn settled_cubic(
+    c: CubicBez,
+    t0: f64,
+    t3: f64,
+    p0: kurbo::Point,
+    p3: kurbo::Point,
+) -> Option<CubicBez> {
+    let (s0, s3) = settled_range(c, t0, t3, p0, p3)?;
+    let mut piece = c.subsegment(s0..s3);
+    let fit = height_map(piece.p0.y, piece.p3.y, p0.y, p3.y)?;
+    piece.p1.x += p0.x - piece.p0.x;
+    piece.p2.x += p3.x - piece.p3.x;
+    piece.p1.y = fit(piece.p1.y);
+    piece.p2.y = fit(piece.p2.y);
+    piece.p0 = p0;
+    piece.p3 = p3;
+    Some(piece)
+}
+
+/// Cuts `q` between the points nearest `p0` and `p2`, searching from `t0` and `t2`, and
+/// moves the piece onto `p0` and `p2`: its control point moves sideways by the mean of the
+/// two ends' moves, and the heights are mapped linearly, so a curve that is monotonic in
+/// `y` stays so. Returns `None` when the two cut points are not in order.
+fn settled_quad(
+    q: QuadBez,
+    t0: f64,
+    t2: f64,
+    p0: kurbo::Point,
+    p2: kurbo::Point,
+) -> Option<QuadBez> {
+    // A raised quadratic keeps its parameters.
+    let (s0, s2) = settled_range(q.raise(), t0, t2, p0, p2)?;
+    let mut piece = q.subsegment(s0..s2);
+    let fit = height_map(piece.p0.y, piece.p2.y, p0.y, p2.y)?;
+    piece.p1.x += 0.5 * ((p0.x - piece.p0.x) + (p2.x - piece.p2.x));
+    piece.p1.y = fit(piece.p1.y);
+    piece.p0 = p0;
+    piece.p2 = p2;
+    Some(piece)
 }
 
 /// A positioned output segment, possibly perturbed from the original.
@@ -277,6 +415,10 @@ impl PositionedOutputSeg {
     /// both must be in the `y`-range of the cubic. The cubic is truncated to be between
     /// the heights `p0.y` and `p3.y`, and then perturbed horizontally so that it starts
     /// exactly and at `p0` and ends exactly at `p3`.
+    ///
+    /// Craft patch (flat-end shear): when `p0` or `p3` is off the curve, the cubic is cut
+    /// at the points nearest `p0` and `p3` instead, each end of the piece moves sideways
+    /// with its handle, and its heights are mapped linearly onto `p0.y..p3.y`.
     pub fn from_cubic(c: kurbo::CubicBez, p0: kurbo::Point, p3: kurbo::Point) -> Self {
         debug_assert!(p0.y >= c.p0.y);
         debug_assert!(p3.y <= c.p3.y);
@@ -284,10 +426,24 @@ impl PositionedOutputSeg {
 
         let t0 = solve_t_for_y(c, p0.y);
         let t3 = solve_t_for_y(c, p3.y);
+        let orig = c;
         let mut c = c.subsegment(t0..t3);
 
         let dx0 = p0.x - c.p0.x;
         let dx3 = p3.x - c.p3.x;
+
+        // Craft patch (flat-end shear)
+        if (dx0 != 0.0 || dx3 != 0.0)
+            && let Some(piece) = settled_cubic(orig, t0, t3, p0, p3)
+        {
+            let mut path = BezPath::with_capacity(2);
+            path.move_to(p0);
+            path.curve_to(piece.p1, piece.p2, p3);
+            return PositionedOutputSeg {
+                path,
+                copied_idx: Some(0),
+            };
+        }
 
         let s1 = ((c.p1.y - p0.y) / (p3.y - p0.y)).clamp(0.0, 1.0);
         let s2 = ((c.p2.y - p0.y) / (p3.y - p0.y)).clamp(0.0, 1.0);
@@ -310,6 +466,11 @@ impl PositionedOutputSeg {
     /// both must be in the `y`-range of the cubic. The cubic is truncated to be between
     /// the heights `p0.y` and `p2.y`, and then perturbed horizontally so that it starts
     /// exactly and at `p0` and ends exactly at `p2`.
+    ///
+    /// Craft patch (flat-end shear): when `p0` or `p2` is off the curve, the quadratic is
+    /// cut at the points nearest `p0` and `p2` instead, its control point moves sideways
+    /// by the mean of the two ends' moves, and its heights are mapped linearly onto
+    /// `p0.y..p2.y`.
     pub fn from_quad(q: kurbo::QuadBez, p0: kurbo::Point, p2: kurbo::Point) -> Self {
         debug_assert!(p0.y >= q.p0.y);
         debug_assert!(p2.y <= q.p2.y);
@@ -337,10 +498,24 @@ impl PositionedOutputSeg {
         }
         let t0 = solve_t_for_y(q, p0.y);
         let t2 = solve_t_for_y(q, p2.y);
+        let orig = q;
         let mut q = q.subsegment(t0..t2);
 
         let dx0 = p0.x - q.p0.x;
         let dx2 = p2.x - q.p2.x;
+
+        // Craft patch (flat-end shear)
+        if (dx0 != 0.0 || dx2 != 0.0)
+            && let Some(piece) = settled_quad(orig, t0, t2, p0, p2)
+        {
+            let mut path = BezPath::with_capacity(2);
+            path.move_to(p0);
+            path.quad_to(piece.p1, p2);
+            return PositionedOutputSeg {
+                path,
+                copied_idx: Some(0),
+            };
+        }
 
         let s = ((q.p1.y - p0.y) / (p2.y - p0.y)).clamp(0.0, 1.0);
 
@@ -513,11 +688,14 @@ pub(crate) fn compute_positions(
 
 #[cfg(test)]
 mod tests {
-    use kurbo::{BezPath, CubicBez, Line, PathEl, PathSeg};
+    use kurbo::{
+        Affine, BezPath, CubicBez, Line, ParamCurve, ParamCurveNearest, PathEl, PathSeg, Point,
+        QuadBez, Shape,
+    };
 
     use crate::{Segments, sweep::Correctness, topology::Topology};
 
-    use super::horizontal_error_weight;
+    use super::{PositionedOutputSeg, horizontal_error_weight};
 
     #[test]
     fn error_weight() {
@@ -638,5 +816,165 @@ mod tests {
         let next_y0 = super::approximate(y0, y0 + 1.0, &[s0], &segs, 0.0, &mut out);
         assert!(next_y0 > y0, "next_y0 = {next_y0}");
         assert_eq!(out.len(), 1);
+    }
+
+    // The largest distance from a point of `path` to the nearest of `inputs`.
+    fn farthest_from(path: &BezPath, inputs: &[PathSeg]) -> f64 {
+        let mut worst = 0.0f64;
+        for seg in path.segments() {
+            for k in 0..=200 {
+                let p = seg.eval(k as f64 / 200.0);
+                let d = inputs
+                    .iter()
+                    .map(|c| c.nearest(p, 1e-12).distance_sq.sqrt())
+                    .fold(f64::INFINITY, f64::min);
+                worst = worst.max(d);
+            }
+        }
+        worst
+    }
+
+    // Places `seg` between `p0` and `p1` and checks that the result runs from `p0`
+    // to `p1` and stays within `tol` of `seg`.
+    fn assert_placed_near(seg: PathSeg, p0: Point, p1: Point, tol: f64) {
+        let out = PositionedOutputSeg::from_seg(seg, p0, p1);
+        let same_kind = |s: PathSeg| std::mem::discriminant(&s) == std::mem::discriminant(&seg);
+        assert!(out.path.segments().all(same_kind));
+        assert_eq!(out.path.segments().next().unwrap().start(), p0);
+        assert_eq!(out.path.segments().last().unwrap().end(), p1);
+        let d = farthest_from(&out.path, &[seg]);
+        assert!(d < tol, "{seg:?} from {p0:?} to {p1:?}: {d}");
+    }
+
+    // Craft patch (flat-end shear): a curve with a repeated handle at its flat
+    // end has zero derivative there, so a Newton step from that end cannot
+    // leave it. The end point is moved along the flat part.
+    #[test]
+    fn repeated_end_handle_stays_near_the_end() {
+        let origin = Point::new(0.0, 0.0);
+        let top_right = Point::new(1000.0, 1000.0);
+        let c = CubicBez::new(origin, Point::new(0.0, 1000.0), top_right, top_right);
+        // Moved along the flat part, the end point is 0.0127 from the curve.
+        let end = Point::new(998.37, 1000.0);
+        assert_placed_near(PathSeg::Cubic(c), origin, end, 0.02);
+
+        let start = Point::new(1.63, 0.0);
+        let corner = Point::new(1000.0, 0.0);
+        let c = CubicBez::new(origin, origin, corner, top_right);
+        assert_placed_near(PathSeg::Cubic(c), start, top_right, 0.02);
+    }
+
+    // Craft patch (flat-end shear): a curve that is almost flat at one end and
+    // steep at the other, with the flat end's point moved along the flat part,
+    // keeps its steep part in place.
+    #[test]
+    fn flat_end_shift_stays_near_the_end() {
+        // Steep start, flat end, as cubic and quadratic.
+        let origin = Point::new(0.0, 0.0);
+        let (top_left, top_right) = (Point::new(0.0, 1000.0), Point::new(1000.0, 1000.0));
+        let c = CubicBez::new(origin, top_left, Point::new(300.0, 1000.0), top_right);
+        let end = Point::new(998.37, 1000.0);
+        assert_placed_near(PathSeg::Cubic(c), origin, end, 1e-5);
+        let q = QuadBez::new(origin, top_left, top_right);
+        let end = Point::new(999.95, 1000.0);
+        assert_placed_near(PathSeg::Quad(q), origin, end, 1e-5);
+
+        // Flat start, steep end.
+        let corner = Point::new(1000.0, 0.0);
+        let c = CubicBez::new(origin, Point::new(700.0, 0.0), corner, top_right);
+        assert_placed_near(PathSeg::Cubic(c), Point::new(1.63, 0.0), top_right, 1e-5);
+        let q = QuadBez::new(origin, corner, top_right);
+        assert_placed_near(PathSeg::Quad(q), Point::new(0.05, 0.0), top_right, 1e-5);
+
+        // The end point just below the flat end, as the sweep places it: the cut
+        // from `solve_t_for_y` lies 0.75 to the left of it.
+        let c = CubicBez::new(origin, top_left, Point::new(300.0, 1000.0), top_right);
+        let end = Point::new(999.99999674, 999.9999999534);
+        assert_placed_near(PathSeg::Cubic(c), origin, end, 1e-6);
+    }
+
+    // Craft patch (flat-end shear): a piece placed between end points off its
+    // curve stays monotonic in `y`.
+    #[test]
+    fn flat_end_pieces_stay_monotonic() {
+        let (p0, p1, p2) = (
+            Point::new(0.0, 0.0),
+            Point::new(100.0, 200.0),
+            Point::new(200.0, 200.0),
+        );
+        let end = Point::new(200.0, 199.0);
+        let segs = [
+            PathSeg::Quad(QuadBez::new(p0, p1, p2)),
+            PathSeg::Cubic(QuadBez::new(p0, p1, p2).raise()),
+        ];
+        for seg in segs {
+            let out = PositionedOutputSeg::from_seg(seg, p0, end);
+            for piece in out.path.segments() {
+                let mut last = piece.start().y;
+                for k in 1..=200 {
+                    let y = piece.eval(k as f64 / 200.0).y;
+                    assert!(y >= last && y <= end.y, "{seg:?}: {y} after {last}");
+                    last = y;
+                }
+            }
+        }
+    }
+
+    // Craft patch (flat-end shear): the union of a shape with a copy moved by
+    // less than `eps` stays on the two shapes, and keeps their area.
+    #[test]
+    fn flat_end_union_stays_on_the_inputs() {
+        let svg = "M0,0 C0,1000 300,1000 1000,1000 L1000,2000 L-1000,2000 Z";
+        let a = BezPath::from_svg(svg).unwrap();
+        let mut b = a.clone();
+        b.apply_affine(Affine::translate((-3.26e-6, -4.66e-8)));
+        let inputs: Vec<PathSeg> = a.segments().chain(b.segments()).collect();
+        let (fill, op) = (crate::FillRule::NonZero, crate::BinaryOp::Union);
+        let out = crate::binary_op_with_eps(&a, &b, fill, op, 1e-6).unwrap();
+        let mut area = 0.0;
+        for contour in out.contours() {
+            area += contour.path.area().abs();
+            let d = farthest_from(&contour.path, &inputs);
+            assert!(d < 1e-5, "{d}");
+        }
+        assert!((area - 2_095_000.006_5).abs() < 1e-3, "{area}");
+    }
+
+    // Craft patch (flat-end shear): a rectangle whose left side crosses the flat
+    // end of a curve, away from its anchors, leaves the curve in place in its
+    // union, with both layouts.
+    #[test]
+    fn flat_end_crossing_stays_on_the_inputs() {
+        use crate::sweep::Correctness;
+        use crate::topology::{BinaryWindingNumber, OneOfTwo, Topology};
+
+        let svg = "M0,0 C0,1000 300,1000 1000,1000 L1000,2000 L-1000,2000 Z";
+        let a = BezPath::from_svg(svg).unwrap();
+        for xv in [998.37, 990.37] {
+            let rect = format!("M{xv},500 L1500,500 L1500,1500 L{xv},1500 Z");
+            let b = BezPath::from_svg(&rect).unwrap();
+            let inputs: Vec<PathSeg> = a.segments().chain(b.segments()).collect();
+            for correctness in [Correctness::GoodEnough, Correctness::ReallyCorrect] {
+                let paths = [(&a, OneOfTwo::A), (&b, OneOfTwo::B)];
+                let top = Topology::<BinaryWindingNumber>::from_paths_with_correctness(
+                    paths,
+                    1e-6,
+                    correctness,
+                )
+                .unwrap();
+                let out = top.contours(|w| w.shape_a != 0 || w.shape_b != 0);
+                let mut area = 0.0;
+                for contour in out.contours() {
+                    area += contour.path.area().abs();
+                    let d = farthest_from(&contour.path, &inputs);
+                    assert!(d < 1e-5, "{xv} {correctness:?}: {d}");
+                }
+                let expected = 2_595_000.0 + (1000.0 - xv) * 500.0;
+                assert!(
+                    (area - expected).abs() < 1e-2,
+                    "{xv} {correctness:?}: {area}"
+                );
+            }
+        }
     }
 }
