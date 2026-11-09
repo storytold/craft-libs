@@ -253,6 +253,49 @@ fn contents_read_the_document_images_and_profiles_without_the_preview_and_pdf() 
 }
 
 #[test]
+fn contents_read_pdf_preference_while_skipping_the_payload() {
+    for (members, expected) in [
+        ("", false),
+        (r#", "pdf":null"#, false),
+        (r#", "pdf":{"data":"not base64"}"#, true),
+        (r#", "pdf":[1,2,3]"#, true),
+        (r#", "pdfCompatible":true"#, true),
+        (r#", "pdf":{}, "pdfCompatible":false"#, false),
+        (r#", "pdfCompatible":false, "pdf":{}"#, false),
+        (r#", "pdfCompatible":true, "pdfCompatible":null, "pdf":{}"#, true),
+        (r#", "pdf":{}, "pdf":null"#, false),
+        (r#", "pdfCompatible":false, "pdfCompatible":true"#, true),
+        (r#", "unknown":{"pdf":{}}"#, false),
+    ] {
+        let json = format!(r#"{{"format":"vectorcraft","version":4,"document":{{"layers":[]}}{members}}}"#);
+        let (contents, compatible) = Contents::<Doc>::read_with_pdf_preference(json.as_bytes()).unwrap();
+        assert_eq!(compatible, expected, "{members}");
+        assert_eq!(contents, Contents::<Doc>::read(json.as_bytes()).unwrap());
+    }
+    let array = br#"["drawcraft",1,{"layers":[]}]"#;
+    assert!(!Contents::<Doc>::read_with_pdf_preference(array).unwrap().1);
+    let mut file = File::new(doc());
+    file.pdf = Some(Image::inline("application/pdf", &vec![7; 128 << 10]));
+    assert!(Contents::<Doc>::read_with_pdf_preference(&serde_json::to_vec(&file).unwrap()).unwrap().1);
+}
+
+#[test]
+fn pdf_preference_read_is_opt_in_and_preserves_envelope_validation() {
+    let invalid = br#"{"format":"vectorcraft","version":4,"document":{"layers":[]},"pdfCompatible":"invalid"}"#;
+    assert!(Contents::<Doc>::read(invalid).is_ok());
+    assert!(File::<Doc>::read(invalid).is_ok());
+    assert!(Contents::<Doc>::read_with_pdf_preference(invalid).is_err());
+    for json in [
+        br#"{"format":"other","version":4,"document":{"layers":[]}}"#.as_slice(),
+        br#"{"format":"vectorcraft","version":999,"document":{"layers":[]}}"#.as_slice(),
+        br#"{"format":"vectorcraft","version":4}"#.as_slice(),
+        br#"{"format":"vectorcraft","version":4,"version":4,"document":{"layers":[]}}"#.as_slice(),
+    ] {
+        assert_eq!(Contents::<Doc>::read(json).unwrap_err().to_string(), Contents::<Doc>::read_with_pdf_preference(json).unwrap_err().to_string());
+    }
+}
+
+#[test]
 fn reading_refuses_another_format_and_a_newer_version() {
     let newer = br#"{"format":"vectorcraft","version":5,"document":0}"#;
     let other = br#"{"format":"other","version":1,"document":0}"#;

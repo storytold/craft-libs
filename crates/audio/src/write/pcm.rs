@@ -1,4 +1,4 @@
-//! PCM helpers shared by the WAV and AIFF writers: quantization (with optional TPDF
+//! PCM helpers shared by the WAV, AIFF and FLAC writers: quantization (with optional TPDF
 //! dither), interleaving and layout checks.
 
 use crate::{AudioBuffer, AudioError, Result};

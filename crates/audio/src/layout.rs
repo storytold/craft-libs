@@ -145,7 +145,7 @@ impl TryFrom<RawLayout> for ChannelLayout {
 }
 
 /// A channel count as the API holds it, saturating at `u16::MAX`.
-#[cfg(any(feature = "decode-native", feature = "pcm-encode"))]
+#[cfg(any(feature = "aac-decode", feature = "pcm-encode"))]
 pub(crate) fn count(n: usize) -> u16 {
     u16::try_from(n).unwrap_or(u16::MAX)
 }
@@ -260,6 +260,19 @@ impl std::fmt::Display for ChannelLayout {
             None if self.channels == 1 => f.write_str("1 channel"),
             None => write!(f, "{} channels", self.channels),
         }
+    }
+}
+
+/// The layout decoders assume for 1–8 FLAC channels with no channel mask comment, as a WAV mask.
+/// RFC 9639 §9.1.3 leaves "back/surround" open for 5 and 6 channels; libFLAC and ffmpeg read side
+/// surrounds. 7 channels are 6.1 with sides (FL FR FC LFE BC SL SR).
+#[cfg(any(feature = "symphonia", feature = "flac-encode"))]
+pub(crate) fn flac_assumed_mask(channels: usize) -> u32 {
+    match channels {
+        5 => 0x607,
+        6 => 0x60F,
+        7 => 0x70F,
+        n => ChannelLayout::default_for(n as u16).mask().unwrap_or(0),
     }
 }
 

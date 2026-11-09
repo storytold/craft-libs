@@ -19,7 +19,7 @@ use winprint::ticket::{FeatureOptionPack as _, PageMediaSize, PrintCapabilities,
 
 use crate::sheets::{self, Fit, SAME};
 use crate::ticket::{self, Paper};
-use crate::{Error, Job, Printer, Scaling};
+use crate::{Cancel, Error, Job, Printer, Scaling};
 
 fn spool_error(e: impl std::fmt::Display) -> Error {
     Error::Spool(e.to_string())
@@ -43,16 +43,39 @@ fn print_ticket_provider() -> MutexGuard<'static, ()> {
 }
 
 pub(crate) fn printers() -> Vec<Printer> {
+    spooler_list(two_sided)
+}
+
+/// The queues and the default without asking any driver: a networked printer asleep in power
+/// save can hold its driver's PrintCapabilities query for a long time, and the Print dialog
+/// must not wait on it to show the queue (or any other).
+pub(crate) fn printer_queues() -> Vec<Printer> {
+    spooler_list(|_| None)
+}
+
+/// The spooler's queues (`EnumPrinters`, local queues and connections) with the default marked,
+/// each given the two-sided support `two_sided` reports for it; empty when the spooler can't list
+/// them.
+fn spooler_list(two_sided: impl Fn(&PrinterDevice) -> Option<bool>) -> Vec<Printer> {
     match PrinterDevice::all() {
         Ok(devices) => crate::printer_list(devices.iter().map(|d| (d.name().to_string(), two_sided(d))), default_printer().as_deref()),
         Err(_) => Vec::new(),
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    /// The driver capability queries printer discovery made on this thread, so a test can show
+    /// that [`printer_queues`] makes none.
+    pub(crate) static CAPABILITY_QUERIES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// Whether the printer's driver takes two-sided settings: its PrintCapabilities offer a two-sided
 /// option for the feature the job's ticket sets. `None` when the capabilities can't be read. A
 /// driver without one cannot confirm an explicit two-sided request, which is refused before submission.
 fn two_sided(device: &PrinterDevice) -> Option<bool> {
+    #[cfg(test)]
+    CAPABILITY_QUERIES.with(|n| n.set(n.get().saturating_add(1)));
     let capabilities = {
         let _provider = print_ticket_provider();
         PrintCapabilities::fetch(device)
@@ -89,9 +112,37 @@ fn select_device(devices: Vec<PrinterDevice>, requested: Option<&str>, default: 
 /// its default paper is used. Returns the ticket and its paper in micrometres. Refused when the
 /// driver changed the paper, the orientation or the scaling: then nothing is sent, rather than a
 /// job at the wrong size.
+/// The title of a test job that [`HELD_DRIVER`] holds in its capability query.
+#[cfg(test)]
+pub(crate) const HELD_TITLE: &str = "held by its driver";
+/// The title of a test job that [`HELD_DRIVER`] holds in its DEVMODE conversion, the last driver
+/// call before it is sent.
+#[cfg(test)]
+pub(crate) const HELD_CONVERSION_TITLE: &str = "held in its conversion";
+
+/// A test stands in for a driver that doesn't answer (a sleeping printer): the job titled
+/// [`HELD_TITLE`] or [`HELD_CONVERSION_TITLE`] says it has reached that driver call, then waits
+/// there, holding the provider like a real call, until released.
+#[cfg(test)]
+#[allow(clippy::type_complexity)]
+pub(crate) static HELD_DRIVER: std::sync::Mutex<Option<(std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>)>> = std::sync::Mutex::new(None);
+
+/// Holds the job titled `title` in [`HELD_DRIVER`], once, if a test set it.
+#[cfg(test)]
+fn hold(job: &Job, title: &str) {
+    if job.title == title
+        && let Some((entered, release)) = HELD_DRIVER.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take()
+    {
+        let _ = entered.send(());
+        let _ = release.recv();
+    }
+}
+
 fn driver_ticket(device: &PrinterDevice, job: &Job, sheet: (f64, f64), landscape: bool) -> Result<(PrintTicket, (u32, u32)), Error> {
     let capabilities = {
         let _provider = print_ticket_provider();
+        #[cfg(test)]
+        hold(job, HELD_TITLE);
         PrintCapabilities::fetch(device)
     }
     .map_err(spool_error)?;
@@ -176,7 +227,7 @@ fn imageable_margin(device: &PrinterDevice, ticket: &PrintTicket) -> f64 {
 /// temporary folder (an unpredictable name, only this user's) for as long as the spooler takes
 /// it, and the folder is removed however the job ended. Windows answers once the job is in the
 /// queue: a paused queue or an offline printer keeps the job there, as with any program.
-pub(crate) fn submit_with_progress(pdf: &[u8], job: &Job, progress: &mut dyn FnMut(usize, usize)) -> Result<String, Error> {
+pub(crate) fn submit_with_progress(pdf: &[u8], job: &Job, progress: &mut dyn FnMut(usize, usize), cancel: &Cancel) -> Result<String, Error> {
     let read = sheets::read(pdf)?;
     read.check_print_annotations()?;
     let count = read.sheets.len();
@@ -238,6 +289,18 @@ pub(crate) fn submit_with_progress(pdf: &[u8], job: &Job, progress: &mut dyn FnM
         if updated.is_none() && !edits.is_empty() {
             updated = Some(read.update(&edits)?);
         }
+        // The last point before anything reaches the spooler. Until then the job may wait on a
+        // driver (a sleeping printer can hold one for long), its own or another job's holding the
+        // provider, and a job cancelled meanwhile stops here and is never sent. winprint converts
+        // the ticket to a DEVMODE through the driver before it creates the native job, so that
+        // conversion is done here first, while the job can still be cancelled; the provider stays
+        // held until the first copy's own conversion has run, so no other job comes between them.
+        let mut first = Some(print_ticket_provider());
+        #[cfg(test)]
+        hold(job, HELD_CONVERSION_TITLE);
+        ticket.to_dev_mode(&device).map_err(spool_error)?;
+        cancel.start_sending()?;
+        // Written once sending: a cancelled job leaves no copy of the document behind.
         let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(&path).map_err(written)?;
         file.write_all(updated.as_deref().unwrap_or(pdf)).map_err(written)?;
         drop(file);
@@ -246,7 +309,7 @@ pub(crate) fn submit_with_progress(pdf: &[u8], job: &Job, progress: &mut dyn FnM
         for copy in 0..jobs {
             // winprint converts the ticket to a DEVMODE through the provider before each job's
             // first progress report, which releases the guard.
-            let mut provider = Some(print_ticket_provider());
+            let mut provider = first.take().or_else(|| Some(print_ticket_provider()));
             printer
                 .print_with_progress(&path, ticket.clone(), |processed, total| {
                     drop(provider.take());
