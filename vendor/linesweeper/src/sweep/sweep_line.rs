@@ -7,6 +7,8 @@ use std::cell::{RefCell, RefMut};
 #[cfg(feature = "slow-asserts")]
 use std::ops::DerefMut;
 
+use rustc_hash::FxHashSet;
+
 use crate::{
     curve::{self, CurveInteraction, CurveOrder, Order},
     geom::Segment,
@@ -455,8 +457,48 @@ impl<'segs> Sweeper<'segs> {
         }
 
         // Process all the intersection events at this y.
+        //
+        // Craft patch (repeated intersection): when nearly coincident segments
+        // do not compare transitively, handling one pair can queue another
+        // pair at this same y again, and the pairs can cycle forever through
+        // the same positions. A pair is handled at most once per y for each
+        // pair of positions it holds in the sweep line; a repeat is queued
+        // again at the pair's next order change instead, if that comes before
+        // both ends.
+        let mut handled = FxHashSet::default();
+        #[cfg(test)]
+        let mut events_at_y = 0usize;
         while let Some(intersection) = self.events.next_intersection_at_y(y) {
-            self.handle_intersection(intersection.left, intersection.right);
+            #[cfg(test)]
+            {
+                events_at_y += 1;
+                let n = self.segments.len();
+                assert!(
+                    events_at_y <= n.saturating_pow(4),
+                    "{events_at_y} intersection events at y={y:?} for {n} segments"
+                );
+            }
+            let (left, right) = (intersection.left, intersection.right);
+            let positions = (self.line.position(left), self.line.position(right));
+            if !handled.insert((left, right, positions)) {
+                let next_y = self
+                    .compare_segments(left, right)
+                    .iter()
+                    .map(|(_, end, _)| end)
+                    .find(|end| *end > y);
+                if let Some(next_y) = next_y
+                    && next_y < self.segments[left].end().y
+                    && next_y < self.segments[right].end().y
+                {
+                    self.events.push(IntersectionEvent {
+                        y: next_y,
+                        left,
+                        right,
+                    });
+                }
+                continue;
+            }
+            self.handle_intersection(left, right);
             self.check_invariants();
         }
 
@@ -2345,6 +2387,31 @@ mod tests {
         segs.add_closed_polyline(a);
         segs.add_closed_polyline(b);
         insta::assert_ron_snapshot!(snapshot_outputs(segs, 0.1));
+    }
+
+    // Five circles, each moved by (7e-7, 3.5e-7) from the one before, have
+    // nearly coincident curves whose comparisons are not transitive. Their
+    // sweep used to queue the same intersections at one y forever. The event
+    // count check in `next_line` stops a test build at n^4 events on one
+    // sweep line.
+    #[test]
+    fn repeated_intersections_at_one_y() {
+        use kurbo::{Circle, Shape};
+
+        let mut circles = BezPath::new();
+        for i in 0..5 {
+            let center = (500.0 + i as f64 * 7e-7, 500.0 + i as f64 * 3.5e-7);
+            circles.extend(Circle::new(center, 50.0).path_elements(0.1));
+        }
+        let mut segs = Segments::default();
+        segs.add_bez_path(&circles).unwrap();
+        let mut sweep = Sweeper::new(&segs, 1e-6);
+        let mut bufs = SweepLineBuffers::default();
+        let mut lines = 0;
+        while sweep.next_line(&mut bufs).is_some() {
+            lines += 1;
+        }
+        assert!(lines > 0);
     }
 
     #[test]
