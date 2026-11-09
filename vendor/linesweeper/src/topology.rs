@@ -2615,7 +2615,7 @@ mod tests {
         },
     };
 
-    use super::{Affine, Contour, ContourIdx, Contours, OneOfTwo, Topology};
+    use super::{Affine, Contour, ContourIdx, Contours, Correctness, HalfOutputSegVec, OneOfTwo, Topology};
 
     fn p(x: f64, y: f64) -> Point {
         Point::new(x, y)
@@ -3522,6 +3522,72 @@ mod tests {
         let eps = 0.1;
         let _top = Topology::from_polylines_binary(perturbed_polylines, EMPTY, eps);
         //check_intersections(&top);
+    }
+
+    // A column of shapes, each made of two closed paths whose wavy cubic sides
+    // cross each other twice.
+    fn wavy_column(rows: usize) -> BezPath {
+        let mut path = BezPath::new();
+        for k in 0..rows {
+            let y = 10.0 * k as f64;
+            for offset in [0.0, 0.7] {
+                path.move_to((offset, y));
+                path.curve_to(
+                    (offset + 3.0, y + 2.0),
+                    (offset - 3.0, y + 6.0),
+                    (offset, y + 8.0),
+                );
+                path.line_to((offset + 2.0, y + 8.0));
+                path.line_to((offset + 2.0, y));
+                path.close_path();
+            }
+        }
+        path
+    }
+
+    // The positions that `compute_positions_correct` computes, with a cache
+    // that drops ended pairs or one that keeps every pair.
+    fn correct_positions(top: &Topology<i32>, evict: bool) -> (String, usize) {
+        let mut cmp = ComparisonCache::new(top.eps, top.eps / 2.0);
+        if !evict {
+            cmp.never_evict();
+        }
+        let mut endpoints = HalfOutputSegVec::with_size(top.orig_seg.len());
+        for idx in top.orig_seg.indices() {
+            endpoints[idx.first_half()] = top.points[top.point_idx[idx.first_half()]].to_kurbo();
+            endpoints[idx.second_half()] = top.points[top.point_idx[idx.second_half()]].to_kurbo();
+        }
+        let out = crate::position::compute_positions(
+            &top.segments,
+            &top.orig_seg,
+            &mut cmp,
+            &endpoints,
+            &top.build_scan_line_orders(),
+            top.eps / 4.0,
+        );
+        (format!("{out:?}"), cmp.cached_pairs())
+    }
+
+    #[test]
+    fn evicting_comparisons_keeps_the_correct_positions() {
+        let path = wavy_column(200);
+        for eps in [0.01, 0.25] {
+            let top = Topology::<i32>::from_paths_with_correctness(
+                [(&path, ())],
+                eps,
+                Correctness::ReallyCorrect,
+            )
+            .unwrap();
+            let (kept, kept_pairs) = correct_positions(&top, false);
+            let (evicted, evicted_pairs) = correct_positions(&top, true);
+            assert!(kept == evicted);
+            assert_eq!(format!("{:?}", top.compute_positions()), evicted);
+            assert!(kept_pairs >= 400, "{kept_pairs}");
+            assert!(
+                evicted_pairs * 10 < kept_pairs,
+                "{evicted_pairs} {kept_pairs}"
+            );
+        }
     }
 
     proptest! {

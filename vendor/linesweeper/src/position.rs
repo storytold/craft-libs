@@ -398,6 +398,10 @@ pub(crate) fn compute_positions(
         if last_y[entry.idx] > y0 {
             continue;
         }
+        // Craft patch (comparison cache size): the heights popped from the
+        // queue never decrease, and every neighbor compared from here on
+        // extends below `y0`.
+        cmp.evict_ended(segs, y0);
 
         let mut y1 = endpoints[entry.idx.second_half()].y;
         let mut west_scan = vec![entry.idx];
