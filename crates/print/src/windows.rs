@@ -14,7 +14,7 @@ use std::io::Write as _;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use winprint::printer::{PrinterDevice, WinPdfPrinter};
-use winprint::ticket::document::{NS_PSK, OwnedName, PrintFeature, PrintTicketDocument, reader::ParsableXmlDocument as _};
+use winprint::ticket::document::{NS_PSK, OwnedName, PrintCapabilitiesDocument, PrintFeature, PrintTicketDocument, reader::ParsableXmlDocument as _};
 use winprint::ticket::{FeatureOptionPack as _, PageMediaSize, PrintCapabilities, PrintTicket, PrintTicketBuilder};
 
 use crate::sheets::{self, Fit, SAME};
@@ -81,13 +81,12 @@ thread_local! {
 fn two_sided(device: &PrinterDevice) -> Option<bool> {
     #[cfg(test)]
     CAPABILITY_QUERIES.with(|n| n.set(n.get().saturating_add(1)));
-    let capabilities = {
+    let xml = {
         let _provider = print_ticket_provider();
-        PrintCapabilities::fetch(device)
+        PrintCapabilities::fetch_xml_for_ticket(device, None)
     }
     .ok()?;
-    let duplex = OwnedName::qualified("JobDuplexAllDocumentsContiguously", NS_PSK, Some("psk"));
-    Some(capabilities.options_for_feature(duplex).any(|o| o.name.as_ref().is_some_and(|n| n.local_name.starts_with("TwoSided"))))
+    ticket::two_sided(std::str::from_utf8(&xml).ok()?)
 }
 
 /// What the driver's PrintCapabilities offer for the job options [`ticket::verify_job_options`]
@@ -110,7 +109,7 @@ fn select_device(devices: Vec<PrinterDevice>, requested: Option<&str>, default: 
         .ok_or_else(|| spool_error(format!("the printer is not available: {name} (reopen Print to refresh the list)")))
 }
 
-/// The ticket the driver accepted: [`ticket::ticket_xml`] with the driver's own paper option for
+/// The ticket the driver accepted: [`ticket::ticket_xml_for_duplex`] with the driver's own paper option for
 /// `sheet` (its exact option, so a vendor's sizes survive; a ticket with dimensions only can come
 /// back as Letter) and its own "no scaling" option, merged and validated against the printer's
 /// capabilities. For exact size the driver must have that paper; for shrink-to-fit without one,
@@ -144,13 +143,15 @@ fn hold(job: &Job, title: &str) {
 }
 
 fn driver_ticket(device: &PrinterDevice, job: &Job, sheet: (f64, f64), landscape: bool) -> Result<(PrintTicket, (u32, u32)), Error> {
-    let capabilities = {
+    let capabilities_xml = {
         let _provider = print_ticket_provider();
         #[cfg(test)]
         hold(job, HELD_TITLE);
-        PrintCapabilities::fetch(device)
+        PrintCapabilities::fetch_xml_for_ticket(device, None)
     }
     .map_err(spool_error)?;
+    let capabilities = PrintCapabilities { document: PrintCapabilitiesDocument::parse_from_bytes(&capabilities_xml).map_err(spool_error)? };
+    let capabilities_xml = std::str::from_utf8(&capabilities_xml).map_err(spool_error)?;
     let medias: Vec<PageMediaSize> = capabilities.page_media_sizes().collect();
     let papers: Vec<Paper<'_>> = medias
         .iter()
@@ -174,7 +175,8 @@ fn driver_ticket(device: &PrinterDevice, job: &Job, sheet: (f64, f64), landscape
             )));
         }
     };
-    let requested = PrintTicket::from_xml(ticket::ticket_xml(job, landscape));
+    let document_only = ticket::document_duplex_only(capabilities_xml, job.duplex);
+    let requested = PrintTicket::from_xml(ticket::ticket_xml_for_duplex(job, landscape, document_only));
     let mut document = PrintTicketDocument::parse_from_bytes(requested.get_xml()).map_err(spool_error)?;
     if let Some(media) = media {
         let media_ticket: PrintTicket = media.clone().into();
@@ -350,6 +352,55 @@ pub(crate) fn submit_with_progress(pdf: &[u8], job: &Job, progress: &mut dyn FnM
 mod tests {
     use super::*;
 
+    /// Exact option support determines scope, including asymmetric duplex and simplex drivers.
+    #[test]
+    fn simplex_job_feature_does_not_hide_document_duplex() {
+        for (job_option, document_option, duplex, expected) in [
+            ("OneSided", "TwoSidedLongEdge", Some(crate::Duplex::LongEdge), true),
+            ("OneSided", "TwoSidedShortEdge", Some(crate::Duplex::ShortEdge), true),
+            ("TwoSidedLongEdge", "TwoSidedShortEdge", Some(crate::Duplex::ShortEdge), true),
+            ("TwoSidedShortEdge", "TwoSidedLongEdge", Some(crate::Duplex::LongEdge), true),
+            ("TwoSidedLongEdge", "OneSided", Some(crate::Duplex::Off), true),
+            ("TwoSidedLongEdge", "TwoSidedLongEdge", Some(crate::Duplex::LongEdge), false),
+            ("OneSided", "TwoSidedLongEdge", None, false),
+            ("OneSided", "OneSided", Some(crate::Duplex::Off), false),
+        ] {
+            let xml = format!(
+                r#"<psf:PrintCapabilities version="1" xmlns:psf="http://schemas.microsoft.com/windows/2003/08/printing/printschemaframework" xmlns:psk="{NS_PSK}">
+                <psf:Feature name="psk:JobDuplexAllDocumentsContiguously"><psf:Option name="psk:{job_option}"/></psf:Feature>
+                <psf:Feature name="psk:DocumentDuplex"><psf:Option name="psk:{document_option}"/></psf:Feature>
+                </psf:PrintCapabilities>"#
+            );
+            assert_eq!(ticket::document_duplex_only(&xml, duplex), expected, "job={job_option}, document={document_option}");
+            let job = Job { duplex, ..Job::default() };
+            let ticket = ticket::ticket_xml_for_duplex(&job, false, ticket::document_duplex_only(&xml, duplex));
+            assert_eq!(ticket.contains("psk:DocumentDuplex"), expected);
+        }
+    }
+
+    /// Vendor options with standard-looking local names cannot claim Print Schema support.
+    #[test]
+    fn duplex_scope_requires_standard_option_namespaces() {
+        for (job_options, document_options, expected) in [
+            ("<psf:Option name='vendor:TwoSidedLongEdge'/>", "<psf:Option name='psk:TwoSidedLongEdge'/>", true),
+            ("<psf:Option name='psk:OneSided'/>", "<psf:Option name='vendor:TwoSidedLongEdge'/>", false),
+            (
+                "<psf:Option name='vendor:TwoSidedLongEdge'/><psf:Option name='psk:TwoSidedLongEdge'/>",
+                "<psf:Option name='psk:TwoSidedLongEdge'/>",
+                false,
+            ),
+        ] {
+            let xml = format!(
+                r#"<psf:PrintCapabilities version="1" xmlns:psf="http://schemas.microsoft.com/windows/2003/08/printing/printschemaframework" xmlns:psk="{NS_PSK}" xmlns:vendor="urn:vendor">
+                <psf:Feature name="psk:JobDuplexAllDocumentsContiguously">{job_options}</psf:Feature>
+                <psf:Feature name="psk:DocumentDuplex">{document_options}</psf:Feature>
+                </psf:PrintCapabilities>"#
+            );
+            assert_eq!(ticket::document_duplex_only(&xml, Some(crate::Duplex::LongEdge)), expected);
+        }
+    }
+
+    /// Missing queues fail instead of sending private output to a different printer.
     #[test]
     fn a_missing_printer_never_falls_back_to_another_queue() {
         assert!(select_device(Vec::new(), Some("missing"), Some("default")).is_err());
@@ -432,9 +483,15 @@ mod tests {
             let (ticket, _) = driver_ticket(&device, &requested, (612.0, 792.0), false).unwrap();
             let retained = ticket::verify_job_options(std::str::from_utf8(ticket.get_xml()).unwrap(), &requested, 3, ticket::Offered::default());
             eprintln!("{feature}={wanted}: {retained:?}");
-            let offered = capabilities
-                .options_for_feature(OwnedName::qualified(feature, NS_PSK, Some("psk")))
-                .any(|o| o.name.as_ref().is_some_and(|n| n.local_name == wanted || (feature == "PageOutputColor" && n.local_name == "Grayscale")));
+            let offered =
+                [feature, if feature == "JobDuplexAllDocumentsContiguously" { "DocumentDuplex" } else { feature }].into_iter().any(|name| {
+                    capabilities.options_for_feature(OwnedName::qualified(name, NS_PSK, Some("psk"))).any(|o| {
+                        o.name.as_ref().is_some_and(|n| {
+                            n.namespace_ref() == Some(NS_PSK) && n.local_name == wanted
+                                || (feature == "PageOutputColor" && n.local_name == "Grayscale")
+                        })
+                    })
+                });
             if !offered {
                 assert!(retained.is_err(), "unsupported explicit option must not be silently dropped");
             }
