@@ -191,6 +191,7 @@ fn macos_package_manager_owns(exe: &Path) -> bool {
 fn can_replace(install: &Install) -> bool {
     match install {
         Install::MacApp(bundle) => can_replace_bundle(bundle),
+        Install::Standalone(file) => can_replace_file(file),
         _ => true,
     }
 }
@@ -222,7 +223,7 @@ fn refused(path: &Path, wanted: rustix::fs::Access) -> bool {
 
 /// Whether the update can replace the file at `file`. It writes the new file beside it and
 /// renames that over it, which needs permission to write and search the folder.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn can_replace_file(file: &Path) -> bool {
     use rustix::fs::Access;
 
@@ -1429,6 +1430,26 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let folder = dir.path().join("Applications");
         let exe = launcher_bundle(&folder);
+        let guard = ModeGuard::set(&folder, 0o555);
+        assert_eq!(current_at(&crate::suite::LAUNCHER, &exe, false), None);
+        assert!(current_at(&crate::suite::LAUNCHER, &exe, true).is_some(), "the opt-in still offers it");
+        drop(guard);
+        assert!(current_at(&crate::suite::LAUNCHER, &exe, false).is_some(), "the answer follows the folder's permissions");
+    }
+
+    /// A standalone copy is replaced by writing beside it, so the folder has to be writable.
+    /// [`DEV_VAR`] still offers the update, to try it.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_standalone_copy_in_a_folder_it_cannot_write_gets_the_download_link() {
+        if running_as_root() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let folder = dir.path().join("bin");
+        std::fs::create_dir(&folder).unwrap();
+        let exe = folder.join("artcraft-launcher");
+        std::fs::write(&exe, b"binary").unwrap();
         let guard = ModeGuard::set(&folder, 0o555);
         assert_eq!(current_at(&crate::suite::LAUNCHER, &exe, false), None);
         assert!(current_at(&crate::suite::LAUNCHER, &exe, true).is_some(), "the opt-in still offers it");
