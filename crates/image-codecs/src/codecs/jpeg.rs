@@ -621,6 +621,17 @@ mod tests {
             crate::JpegInfo { width: 40_000, height: 30_000, layout: ChannelLayout::Gray, whole_coefficients: true, progressive_coefficients: 0 };
         assert_eq!(info(&twelve), Some(twelve_info));
         assert_eq!(info(b"not a jpeg"), None);
+        // Markers only, 200 × 100 with `n` components: four are CMYK, two no layout `decode` returns.
+        let sof0 = |n: u8| {
+            let mut b = vec![0xFF, 0xD8, 0xFF, 0xC0, 0, 8 + 3 * n, 8, 0, 100, 0, 200, n];
+            for i in 1..=n {
+                b.extend_from_slice(&[i, 0x11, 0]);
+            }
+            b.extend_from_slice(&[0xFF, 0xD9]);
+            b
+        };
+        assert_eq!(info(&sof0(4)).map(|i| (i.width, i.height, i.layout)), Some((200, 100, ChannelLayout::Cmyk)));
+        assert_eq!(info(&sof0(2)), None);
     }
 
     /// An 8-bit progressive frame (SOF2) reports every coefficient the decoder keeps through its
