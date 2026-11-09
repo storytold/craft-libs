@@ -651,6 +651,28 @@ impl<T, const B: usize> TreeVec<T, B> {
         };
         IterMut { inner }
     }
+
+    // Craft patch (scan runs): reverse iteration for `intersection_scan_left`.
+    /// Returns an iterator over the elements before index `end`, from the
+    /// last one to the first. An `end` past the length means the length.
+    pub(crate) fn range_rev_to(&self, end: usize) -> RevIter<'_, T, B> {
+        let end = end.min(self.len());
+        let inner = match &*self.root {
+            Node::Leaf { data } => RevIterInner::Simple(data[..end].iter()),
+            Node::Internal { .. } => {
+                let mut ret = RevTreeIter {
+                    stack: Vec::new(),
+                    leaf: [].iter(),
+                    remaining: end,
+                };
+                if end > 0 {
+                    ret.descend_to(&*self.root, end);
+                }
+                RevIterInner::Tree(ret)
+            }
+        };
+        RevIter { inner }
+    }
 }
 
 impl<T, const B: usize> FromIterator<T> for TreeVec<T, B> {
@@ -783,6 +805,107 @@ impl<'a, T, const B: usize> Iterator for Iter<'a, T, B> {
         match &mut self.inner {
             IterInner::Simple(it) => it.next(),
             IterInner::Tree(it) => it.next(),
+        }
+    }
+}
+
+// Craft patch (scan runs): reverse iteration for `intersection_scan_left`.
+/// An iterator over elements of a [`TreeVec`], from back to front.
+pub(crate) struct RevIter<'a, T, const B: usize> {
+    inner: RevIterInner<'a, T, B>,
+}
+
+enum RevIterInner<'a, T, const B: usize> {
+    Simple(std::slice::Iter<'a, T>),
+    Tree(RevTreeIter<'a, T, B>),
+}
+
+// The mirror image of `TreeIter`: the stack holds the children still to visit
+// on the left, and elements come off the back of each slice.
+struct RevTreeIter<'a, T, const B: usize> {
+    stack: Vec<std::slice::Iter<'a, Box<Node<T, B>>>>,
+    leaf: std::slice::Iter<'a, T>,
+    remaining: usize,
+}
+
+impl<'a, T, const B: usize> RevTreeIter<'a, T, B> {
+    // Fill out the rest of the stack and the leaf, by descending
+    // to the last descendent of `node`.
+    fn descend(&mut self, mut node: &'a Node<T, B>) {
+        loop {
+            match node {
+                Node::Leaf { data } => {
+                    self.leaf = data.iter();
+                    return;
+                }
+                Node::Internal { children, .. } => {
+                    let mut children = children.iter();
+                    // unwrap: internal nodes are always non-empty
+                    node = children.next_back().unwrap();
+                    self.stack.push(children);
+                }
+            }
+        }
+    }
+
+    // Fill out the rest of the stack and the leaf, so that the next element is
+    // the one at offset `end - 1` in the subtree rooted at `node`. `end` must
+    // be positive.
+    fn descend_to(&mut self, mut node: &'a Node<T, B>, mut end: usize) {
+        loop {
+            match node {
+                Node::Leaf { data } => {
+                    self.leaf = data[..end].iter();
+                    return;
+                }
+                Node::Internal { children, size } => {
+                    let Some((idx, child_offset)) = child_idx(size, end - 1) else {
+                        return;
+                    };
+                    end = child_offset + 1;
+                    let mut children = children[..=idx].iter();
+                    // unwrap: child_idx always returns a valid index into children
+                    node = children.next_back().unwrap();
+                    self.stack.push(children);
+                }
+            }
+        }
+    }
+
+    fn next(&mut self) -> Option<&'a T> {
+        if self.remaining == 0 {
+            None
+        } else {
+            self.remaining -= 1;
+            if let Some(ret) = self.leaf.next_back() {
+                Some(ret)
+            } else {
+                // The current leaf is exhausted. Unwind the stack until we find
+                // a non-exhausted internal node, then descend again.
+                loop {
+                    let stack_top = self.stack.last_mut()?;
+
+                    let Some(next_node) = stack_top.next_back() else {
+                        self.stack.pop();
+                        continue;
+                    };
+
+                    self.descend(next_node);
+                    return self.leaf.next_back();
+                }
+            }
+        }
+    }
+}
+
+impl<'a, T, const B: usize> Iterator for RevIter<'a, T, B> {
+    type Item = &'a T;
+
+    #[inline(always)]
+    fn next(&mut self) -> Option<Self::Item> {
+        match &mut self.inner {
+            RevIterInner::Simple(it) => it.next_back(),
+            RevIterInner::Tree(it) => it.next(),
         }
     }
 }
@@ -938,6 +1061,22 @@ mod tests {
         assert_eq!(*vec.get(3).unwrap(), 1);
         assert_eq!(*vec.get(4).unwrap(), 4);
         assert_eq!(*vec.get(5).unwrap(), 1);
+    }
+
+    // Craft patch (scan runs).
+    #[test]
+    fn range_rev_to() {
+        for len in [0, 1, 4, 5, 17, 70] {
+            let vec: TreeVec<usize, 4> = (0..len).collect();
+            for end in 0..=len + 2 {
+                let got: Vec<usize> = vec.range_rev_to(end).copied().collect();
+                let expected: Vec<usize> = (0..end.min(len)).rev().collect();
+                assert_eq!(got, expected, "len {len}, end {end}");
+            }
+            let take: Vec<usize> = vec.range_rev_to(len).take(3).copied().collect();
+            let expected: Vec<usize> = (0..len).rev().take(3).collect();
+            assert_eq!(take, expected, "len {len}");
+        }
     }
 
     #[test]

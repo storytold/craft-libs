@@ -567,12 +567,30 @@ impl<'segs> Sweeper<'segs> {
         }
         let mut height_bound = seg.end().y;
 
-        for j in (start_idx + 1)..self.line.segs.len() {
-            let other_idx = self.line.seg(j);
-            let other = &self.segments[other_idx];
-            if other.end().y == y {
-                continue;
+        // Craft patch (scan runs): when the next segment ends at `y`, the run
+        // of segments that end at `y` is stepped over with one pass of the
+        // tree iterator, instead of one indexed lookup per segment. Such a segment is not a barrier for the
+        // far-apart `break` below, because it leaves the line at `y`.
+        let len = self.line.segs.len();
+        let segments = self.segments;
+        let mut next = start_idx + 1;
+        while next < len {
+            let mut other_idx = self.line.seg(next);
+            if segments[other_idx].end().y == y {
+                next += self
+                    .line
+                    .segs
+                    .range(next..)
+                    .take_while(|entry| segments[entry.seg].end().y == y)
+                    .count();
+                if next >= len {
+                    break;
+                }
+                other_idx = self.line.seg(next);
             }
+            let j = next;
+            next += 1;
+            let other = &self.segments[other_idx];
 
             // Our basic comparisons use eps tolerance and eps/2 accuracy, so if
             // our max_x is 1.5 eps less than their min_x then we're guaranteed
@@ -631,12 +649,26 @@ impl<'segs> Sweeper<'segs> {
         }
         let mut height_bound = seg.end().y;
 
-        for j in (0..start_idx).rev() {
-            let other_idx = self.line.seg(j);
-            let other = &self.segments[other_idx];
-            if other.end().y == y {
-                continue;
+        // Craft patch (scan runs): see `intersection_scan_right`.
+        let segments = self.segments;
+        let mut next = start_idx;
+        while next > 0 {
+            let mut other_idx = self.line.seg(next - 1);
+            if segments[other_idx].end().y == y {
+                next -= self
+                    .line
+                    .segs
+                    .range_rev_to(next)
+                    .take_while(|entry| segments[entry.seg].end().y == y)
+                    .count();
+                if next == 0 {
+                    break;
+                }
+                other_idx = self.line.seg(next - 1);
             }
+            next -= 1;
+            let j = next;
+            let other = &self.segments[other_idx];
 
             if seg.min_x() - 2.0 * self.eps > other.max_x() {
                 break;
@@ -2376,6 +2408,81 @@ mod tests {
         let segs =
             Segments::from_closed_polyline([p(0.0, 0.0), p(1.0, 0.0), p(1.0, 1.0), p(0.0, 1.0)]);
         insta::assert_ron_snapshot!(snapshot_outputs(segs, 0.01));
+    }
+
+    // Craft patch (scan runs).
+    fn closed_polygon(path: &mut BezPath, points: &[(f64, f64)]) {
+        path.move_to(points[0]);
+        for &q in &points[1..] {
+            path.line_to(q);
+        }
+        path.close_path();
+    }
+
+    fn total_area(contours: &crate::topology::Contours) -> f64 {
+        use kurbo::Shape;
+        contours
+            .contours()
+            .map(|c| c.path.area())
+            .sum::<f64>()
+            .abs()
+    }
+
+    // Craft patch (scan runs): a triangle ends at y = 1 between a vertical
+    // edge that starts there and an edge that crosses that vertical lower down.
+    // The right scan from the vertical steps over the ending edges and still
+    // finds the crossing.
+    #[test]
+    fn scans_step_over_segments_that_end() {
+        let mut a = BezPath::new();
+        closed_polygon(&mut a, &[(9.0, 0.0), (11.0, 0.0), (10.0, 1.0)]);
+        closed_polygon(&mut a, &[(0.0, 1.0), (0.0, 3.0), (-1.0, 3.0)]);
+        let mut b = BezPath::new();
+        closed_polygon(&mut b, &[(11.0, 0.9), (12.0, 3.0), (-5.0, 3.0)]);
+
+        let out = crate::binary_op(
+            &a,
+            &b,
+            crate::FillRule::NonZero,
+            crate::BinaryOp::Intersection,
+        )
+        .unwrap();
+        assert_eq!(out.contours().count(), 1);
+        let area = total_area(&out);
+        assert!((area - 0.51688).abs() < 1e-4, "area {area}");
+    }
+
+    // Craft patch (scan runs): 400 edges end and 400 start at y = 1.
+    #[test]
+    fn runs_of_ending_segments_keep_the_output() {
+        let n = 200;
+        let mut points = Vec::new();
+        for i in 0..=2 * n {
+            points.push((i as f64, if i % 2 == 0 { 0.0 } else { 1.0 }));
+        }
+        for i in (0..=2 * n).rev() {
+            points.push((i as f64 + 0.5, if i % 2 == 0 { 2.0 } else { 1.0 }));
+        }
+        let mut wave = BezPath::new();
+        closed_polygon(&mut wave, &points);
+        let expected = {
+            use kurbo::Shape;
+            wave.area().abs()
+        };
+
+        let out = crate::binary_op(
+            &wave,
+            &BezPath::new(),
+            crate::FillRule::NonZero,
+            crate::BinaryOp::Union,
+        )
+        .unwrap();
+        assert_eq!(out.contours().count(), 1);
+        let area = total_area(&out);
+        assert!(
+            (area - expected).abs() < 1e-6,
+            "area {area}, expected {expected}"
+        );
     }
 
     #[test]
