@@ -309,6 +309,10 @@ local patch listed below. `.cargo_vcs_info.json` names the commit it was package
 `824b0791a750f7b27b8edcbb6c6244d0e629875e`. That commit is not in the GitHub repository the manifest
 names, which is archived; its README says development moved off GitHub.
 
+local patch listed below. `.cargo_vcs_info.json` names the commit it was packaged from,
+`824b0791a750f7b27b8edcbb6c6244d0e629875e`. That commit is not in the GitHub repository the manifest
+names, which is archived; its README says development moved off GitHub.
+
 Every file here except this one, `SOURCE.json` and the patched file below is byte for byte the file
 in the `.crate` archive. `SOURCE.json` records the hash of the `.crate` download
 (`source_archive_sha256`) and, for every file kept, the hash in the package (`source_sha256`) and the
@@ -400,6 +404,7 @@ Every change here updates this table and `SOURCE.json` in the same commit.
 | `src/curve/transverse.rs` | `transversal_after` returns `false` when either dy/dt bound it divides by is zero, negative or nan. It compared the two slope bounds by cross-multiplying, which reverses the comparison when a bound is negative. Two curves that leave a shared start point in opposite directions, with their first control points one ulp below the start, were reported as keeping their left-to-right order although they cross. `transversal_before` reflects its curves and calls `transversal_after`, so it returned the same wrong answer. The `crossing_with_negative_start_dy` test checks both functions. |
 | `src/curve/mod.rs` | `CurveOrder::with_y_slop` keeps the comparison's `metrics` when it changes the entries, instead of returning empty metrics. Code comments label the change `Craft patch (y-slop metrics)`. The `y_slop_keeps_metrics` test applies slop to an order with one metrics entry. |
 | `src/sweep/sweep_line.rs` | The doc comment of `SweepLine::line_segment` says it can return a segment that has exited, which `segment_range` leaves out. Code comments label the change `Craft patch (exited slots)`. |
+| `tests/regression.rs` | The test escapes `CARGO_MANIFEST_DIR` with `glob::Pattern::escape` and fails when it finds no inputs. A checkout path containing `[` used to match no files, so the test ran zero cases and passed. Code comments label the change `Craft patch (regression glob)`. |
 
 `omitted_files` lists the 43 files of the package left out here, with their hashes:
 

@@ -80,6 +80,7 @@
     "In `src/curve/transverse.rs`, `transversal_after` (and `transversal_before`, which calls it) returns `false` when either dy/dt bound is not positive, instead of cross-multiplying the slope bounds, which reverses the comparison for a negative bound."
     "In `src/curve/mod.rs`, `CurveOrder::with_y_slop` keeps the comparison's `metrics` when it changes the entries, instead of returning empty metrics. `y_slop_keeps_metrics` tests it."
     "In `src/sweep/sweep_line.rs`, the doc comment of `SweepLine::line_segment` says it can return a segment that has exited, which `segment_range` leaves out."
+    "In `tests/regression.rs`, the test escapes `CARGO_MANIFEST_DIR` with `glob::Pattern::escape` and fails when it finds no inputs, so a checkout path containing `[` no longer gives a passing run of zero cases."
   ],
   "files": [
     { "path": ".cargo_vcs_info.json", "source_sha256": "47fba6a9dbdf445a5c97f783c9be62093035f9d5e5cdc2cf3216ad8259bcd8fc", "source_git_blob": null, "sha256": "47fba6a9dbdf445a5c97f783c9be62093035f9d5e5cdc2cf3216ad8259bcd8fc" },
@@ -256,6 +257,8 @@
     { "path": "tests/paperjs.rs", "source_sha256": "6ff2a3178f13cde3d7304101ae592ae32b4b2734069f5fc56a532a4883d9f782", "source_git_blob": null, "sha256": "3091c6994deffd069459d8433f0bb3f7e7f7672173257cf339a3a02ef7fb6920" },
     { "path": "tests/paperjs.rs", "source_sha256": "6ff2a3178f13cde3d7304101ae592ae32b4b2734069f5fc56a532a4883d9f782", "source_git_blob": null, "sha256": "912c846f6da58f7c89431e8f4d6e771e6ebdbcb36b9c32edf8714d721fbfe200" },
     { "path": "tests/regression.rs", "source_sha256": "b2341934aa001ba26c688a1ca3a7ee55d29105d67b6036bb05bb367b69976fce", "source_git_blob": null, "sha256": "b2341934aa001ba26c688a1ca3a7ee55d29105d67b6036bb05bb367b69976fce" },
+    { "path": "tests/paperjs.rs", "source_sha256": "6ff2a3178f13cde3d7304101ae592ae32b4b2734069f5fc56a532a4883d9f782", "source_git_blob": null, "sha256": "6ff2a3178f13cde3d7304101ae592ae32b4b2734069f5fc56a532a4883d9f782" },
+    { "path": "tests/regression.rs", "source_sha256": "b2341934aa001ba26c688a1ca3a7ee55d29105d67b6036bb05bb367b69976fce", "source_git_blob": null, "sha256": "cd54aaed5ceea3e28da6cbdcf34fa9701dd2c94098c65302208862fdd5ebce09" },
     { "path": "tests/regression/awesome_0.txt", "source_sha256": "6f7dfbb7ca62463843c058617d557553fdc8d8b3add512bee8f813b37a256611", "source_git_blob": null, "sha256": "6f7dfbb7ca62463843c058617d557553fdc8d8b3add512bee8f813b37a256611" },
     { "path": "tests/regression/graphite_0.txt", "source_sha256": "f5d9e94ae6fab7d29f8a3aa0ccd9d96fc9b709c0ee3fbae8b000bec8c33628b9", "source_git_blob": null, "sha256": "f5d9e94ae6fab7d29f8a3aa0ccd9d96fc9b709c0ee3fbae8b000bec8c33628b9" },
     { "path": "tests/regression/graphite_1.txt", "source_sha256": "96f147b6fc95a71600f60541cc687598e04e9d810dd8a3c57b0f5d8220a72823", "source_git_blob": null, "sha256": "96f147b6fc95a71600f60541cc687598e04e9d810dd8a3c57b0f5d8220a72823" },
