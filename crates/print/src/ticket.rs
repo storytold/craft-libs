@@ -146,7 +146,7 @@ fn integer(node: roxmltree::Node<'_, '_>, tag: &str, name: &str) -> Option<u32> 
 /// width and height in micrometres as the driver lists it. Only those schema fields are read:
 /// some drivers return empty vendor parameters that a stricter parser would refuse.
 pub(crate) fn verify_ticket(xml: &str, paper: Option<(u32, u32)>, landscape: bool) -> Result<(u32, u32), Error> {
-    let document = roxmltree::Document::parse(xml).map_err(spool_error)?;
+    let document = crate::xml::parse(xml).map_err(spool_error)?;
     let feature = |name: &str| document.root_element().children().find(|n| n.has_tag_name((NS_PSF, "Feature")) && named(*n, name));
     let media = feature("PageMediaSize").ok_or_else(|| spool_error("the printer's driver did not confirm the paper size; nothing was sent"))?;
     let size = integer(media, "ScoredProperty", "MediaSizeWidth")
@@ -187,7 +187,7 @@ pub(crate) struct Offered {
 /// What these PrintCapabilities offer ([`Offered`]); all unknown when the document is not
 /// PrintCapabilities.
 pub(crate) fn offered(capabilities_xml: &str) -> Offered {
-    let Ok(document) = roxmltree::Document::parse(capabilities_xml) else { return Offered::default() };
+    let Ok(document) = crate::xml::parse(capabilities_xml) else { return Offered::default() };
     let root = document.root_element();
     if !root.has_tag_name((NS_PSF, "PrintCapabilities")) {
         return Offered::default();
@@ -223,7 +223,7 @@ pub(crate) fn repeats_collated(job: &Job, pages: usize, offered: Offered) -> boo
 /// sheet, binding (booklets and offset stacking included) or stapling, which would treat every
 /// copy as one document.
 pub(crate) fn one_job_sides(xml: &str) -> Option<bool> {
-    let document = roxmltree::Document::parse(xml).ok()?;
+    let document = crate::xml::parse(xml).ok()?;
     let features = |names: &'static [&'static str]| {
         document.root_element().children().filter(move |n| n.has_tag_name((NS_PSF, "Feature")) && names.iter().any(|name| named(*n, name)))
     };
@@ -263,7 +263,7 @@ pub(crate) fn one_job_sides(xml: &str) -> Option<bool> {
 /// asks for one copy and repeats the document instead ([`repeats_collated`]), in one job or a
 /// job per copy ([`one_job_sides`]). An unknown offer (`None`) is checked strictly.
 pub(crate) fn verify_job_options(xml: &str, job: &Job, pages: usize, offered: Offered) -> Result<(), Error> {
-    let document = roxmltree::Document::parse(xml).map_err(spool_error)?;
+    let document = crate::xml::parse(xml).map_err(spool_error)?;
     let root = document.root_element();
     let option = |name: &str| {
         root.children()
@@ -391,8 +391,8 @@ fn declared_prefixes(xml: &str, start: usize) -> Vec<(usize, String)> {
 /// A ticket is left as it is when it redeclares one of the prefixes below its root, or has an
 /// element or attribute named in a namespace whose prefix would change.
 pub(crate) fn respell(ticket: &str, driver: &str) -> Option<String> {
-    let document = roxmltree::Document::parse(ticket).ok()?;
-    let own = vendor_prefixes(&roxmltree::Document::parse(driver).ok()?);
+    let document = crate::xml::parse(ticket).ok()?;
+    let own = vendor_prefixes(&crate::xml::parse(driver).ok()?);
     let declared = vendor_prefixes(&document);
     let renames: Vec<(&str, &str)> = declared
         .iter()
@@ -449,7 +449,7 @@ pub(crate) fn respell(ticket: &str, driver: &str) -> Option<String> {
             for a in
                 node.attributes().filter(|a| (a.namespace().is_none() && matches!(a.name(), "name" | "constrained")) || a.namespace() == Some(NS_XSI))
             {
-                edits.extend(respelled(a.range_value().start));
+                edits.extend(value_start(ticket, a.range()).and_then(respelled));
             }
         } else if node.is_text() && node.parent().is_some_and(is_qname_value) {
             // A pretty-printed ticket puts whitespace before the value; the prefix starts after it.
@@ -469,12 +469,22 @@ pub(crate) fn respell(ticket: &str, driver: &str) -> Option<String> {
     out.push_str(ticket.get(copied..)?);
     // A last check on the result: it must parse, declare each namespace under the prefix wanted and
     // resolve every prefix.
-    let check = roxmltree::Document::parse(&out).ok()?;
+    let check = crate::xml::parse(&out).ok()?;
     let mut now = vendor_prefixes(&check);
     let mut wanted: Vec<(String, String)> = declared.iter().map(|(old, uri)| (renamed(old).unwrap_or(old).to_string(), uri.clone())).collect();
     now.sort_unstable();
     wanted.sort_unstable();
     (now == wanted && prefixes_resolve(&check)).then_some(out)
+}
+
+/// Where the value of the attribute spanning `attribute` starts: past the quote after its `=`.
+/// Not `range_value`, which roxmltree derives from a name length kept in 16 bits and a count of
+/// spaces around the `=` kept in 8, so it points elsewhere past a 64 KiB name or 255 spaces.
+fn value_start(xml: &str, attribute: std::ops::Range<usize>) -> Option<usize> {
+    let text = xml.get(attribute.clone())?;
+    let equals = text.find('=')?;
+    let quote = text.get(equals..)?.find(['"', '\''])?;
+    Some(attribute.start + equals + quote + 1)
 }
 
 /// Each vendor namespace that `ticket` declares under a prefix the driver does not declare it with,
@@ -486,8 +496,8 @@ pub(crate) fn respell(ticket: &str, driver: &str) -> Option<String> {
 /// is also what it returns when it refused to change a ticket, which then stays as it is.
 #[cfg(test)]
 pub(crate) fn prefixes_unlike_the_drivers(ticket: &str, driver: &str) -> Option<Vec<(String, String, String)>> {
-    let own = vendor_prefixes(&roxmltree::Document::parse(driver).ok()?);
-    let declared = vendor_prefixes(&roxmltree::Document::parse(ticket).ok()?);
+    let own = vendor_prefixes(&crate::xml::parse(driver).ok()?);
+    let declared = vendor_prefixes(&crate::xml::parse(ticket).ok()?);
     Some(
         declared
             .into_iter()
@@ -504,7 +514,7 @@ pub(crate) fn prefixes_unlike_the_drivers(ticket: &str, driver: &str) -> Option<
 /// for the job's ticket (`PageImageableSize`). The largest of the four, so content centred inside
 /// it is clear of every edge whichever way the driver measures. `None` when the driver doesn't say.
 pub(crate) fn imageable_margin(capabilities_xml: &str) -> Option<u32> {
-    let document = roxmltree::Document::parse(capabilities_xml).ok()?;
+    let document = crate::xml::parse(capabilities_xml).ok()?;
     let imageable = document.root_element().children().find(|n| n.has_tag_name((NS_PSF, "Property")) && named(*n, "PageImageableSize"))?;
     let width = integer(imageable, "Property", "ImageableSizeWidth")?;
     let height = integer(imageable, "Property", "ImageableSizeHeight")?;
@@ -609,6 +619,23 @@ mod tests {
     fn a_qname_value_after_whitespace_is_respelled() {
         let spaced = |prefix: &str| brother(prefix).replace(&format!(">{prefix}:Fast<"), &format!(">\n  {prefix}:Fast\n<"));
         assert_eq!(respell(&spaced("ns0000"), &brother("brpsk")), Some(spaced("brpsk")));
+    }
+
+    /// A `name` with more than 255 spaces around its `=`, and an `xsi` attribute with a name over
+    /// 64 KiB, are respelled where their values are, not where roxmltree's `range_value` says.
+    #[test]
+    fn values_past_a_long_name_or_many_spaces_are_respelled_in_place() {
+        let spaced = |prefix: &str| {
+            let pad = " ".repeat(200);
+            brother(prefix).replace(&format!(r#"name="{prefix}:JobPrintSpeed""#), &format!(r#"name{pad}={pad}"{prefix}:JobPrintSpeed""#))
+        };
+        assert_eq!(respell(&spaced("ns0000"), &brother("brpsk")), Some(spaced("brpsk")));
+        let long = |prefix: &str| {
+            let p = "x".repeat(65_536);
+            brother(prefix)
+                .replace("</psf:PrintTicket>", &format!(r#"<psf:Value xmlns:{p}="{NS_XSI}" {p}:type="{prefix}:Custom"/></psf:PrintTicket>"#))
+        };
+        assert_eq!(respell(&long("ns0000"), &brother("brpsk")), Some(long("brpsk")));
     }
 
     /// The ticket Windows returns (`ns0000`) gets the driver's own `brpsk` back, in the declaration, the names and the QName values, but not in text.
