@@ -27,9 +27,11 @@ for p in enc.flush() { /* ... */ }
 ```
 
 - Input: planar 4:2:0 8-bit (`YuvFrame` with strides); any even size, non-multiple-of-16 sizes are
-  cropped via the SPS frame cropping. `encode` returns an error (`Error::BadFrame`) instead of panicking on short planes.
+  cropped via the SPS frame cropping. `encode` returns an error (`Error::BadFrame`) instead of panicking on short or
+  inconsistent planes, including strides whose size arithmetic would overflow.
 - Output: one `Packet` per picture in decoding order with `pts` (as given), `dts` (reorder-delayed, always
-  `<= pts` and strictly increasing), `keyframe` (IDR) and the frame type/QP. Annex-B packets carry an AUD,
+  `<= pts` and strictly increasing; with `bframes > 0` the presentation times must advance by a constant positive
+  interval, otherwise `encode` returns `Error::BadTimestamp`), `keyframe` (IDR) and the frame type/QP. Annex-B packets carry an AUD,
   SPS/PPS on every IDR and an identification SEI on the first picture.
 - Two-pass: encode once with `cfg.pass = Pass::First`, take `enc.pass_stats()` (serialisable with
   `PassStats::to_text/from_text`), then encode again with `Pass::Second(stats)`.
