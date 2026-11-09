@@ -15,7 +15,8 @@
 //! | Linux `.deb` / `.rpm` | the system package manager, with the password prompt; then restart |
 //! | Linux Flatpak | reinstall the bundle on the same installation (per-user, or system-wide through `pkexec`); then restart |
 //!
-//! Anything else (FreeBSD, a development build) gets the download link instead.
+//! Anything else (FreeBSD, a development build, an unsigned Windows copy) gets the download link
+//! instead.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -173,7 +174,26 @@ fn is_cargo_build_dir(dir: &Path) -> bool {
 
 /// Whether this installed copy can update itself.
 pub fn is_self_updating(app: &App) -> bool {
-    current(app).is_some()
+    std::env::current_exe().is_ok_and(|exe| can_self_update_at(app, &exe, std::env::var_os(DEV_VAR).is_some()))
+}
+
+/// [`is_self_updating`] for a known executable and opt-in setting. On Windows the update helper
+/// installs nothing for an unsigned copy, so only a signed one is offered the update; [`DEV_VAR`]
+/// still offers it, to try the self-update.
+fn can_self_update_at(app: &App, exe: &Path, opted_in: bool) -> bool {
+    current_at(app, exe, opted_in).is_some() && (opted_in || is_signed(exe))
+}
+
+/// Whether `exe` carries a valid Authenticode signature.
+#[cfg(windows)]
+fn is_signed(exe: &Path) -> bool {
+    verifysign::verify_file(exe).is_ok()
+}
+
+/// Only Windows refuses an unsigned copy's update.
+#[cfg(not(windows))]
+fn is_signed(_exe: &Path) -> bool {
+    true
 }
 
 /// Whether `exe` sits in a folder a macOS package manager owns (Homebrew, MacPorts, Nix).
@@ -1803,6 +1823,20 @@ mod tests {
         assert_eq!(signed_like(&crate::suite::LAUNCHER, &cmd, &cmd), Ok(()));
         assert!(signed_like(&crate::suite::LAUNCHER, &cmd, &unsigned).is_err_and(|e| e.contains("isn't signed")));
         assert!(signed_like(&crate::suite::LAUNCHER, &unsigned, &cmd).is_err_and(|e| e.contains("doesn't install updates")));
+    }
+
+    /// An unsigned copy gets the download link instead of an update it cannot install, unless
+    /// [`DEV_VAR`] asks to try the self-update.
+    #[cfg(windows)]
+    #[test]
+    fn only_a_signed_copy_is_offered_the_self_update() {
+        let dir = tempfile::tempdir().unwrap();
+        let unsigned = dir.path().join("artcraft-launcher.exe");
+        std::fs::write(&unsigned, "MZ").unwrap();
+        std::fs::write(dir.path().join("portable.txt"), "").unwrap();
+        assert!(!can_self_update_at(&crate::suite::LAUNCHER, &unsigned, false));
+        assert!(can_self_update_at(&crate::suite::LAUNCHER, &unsigned, true));
+        assert!(can_self_update_at(&crate::suite::LAUNCHER, &system_program("cmd.exe"), false));
     }
 
     /// An unsigned launcher says so before it quits for an update. `cargo test` binaries are
