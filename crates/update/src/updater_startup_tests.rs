@@ -94,6 +94,24 @@ fn with_the_startup_check_off_nothing_asks_the_network_until_the_user_does() {
     assert!(u.prompt_open(), "a requested check offers the newer release");
 }
 
+/// Off: the first start after a failed update still says why it failed. Reading the outcome
+/// record asks no network, so only the check itself is left out.
+#[test]
+fn with_the_startup_check_off_the_last_update_is_still_reported() {
+    let ctx = egui::Context::default();
+    let dir = tempfile::tempdir().unwrap();
+    let paths = Paths::under(dir.path());
+    self_update::record_failure(&paths, "disk full");
+    let (u, asked) = counting_updater(false);
+    let mut u = u.with_paths(paths);
+    u.check_at_start(&ctx);
+    assert_eq!(u.status(), &Status::InstallFailed("disk full".into()));
+    assert!(u.check.is_none(), "no check started");
+    settle(&mut u, &ctx);
+    assert_eq!(asked.load(Ordering::SeqCst), 0, "the network was asked at start");
+    assert!(!u.prompt_open());
+}
+
 /// On: the check at start asks once, however often it is called, and offers the release.
 #[test]
 fn with_the_startup_check_on_the_check_at_start_asks_once() {
