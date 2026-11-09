@@ -28,3 +28,7 @@ mod java_array_operands;
 #[cfg(test)]
 #[path="regressions/java_attribute_names.rs"]
 mod java_attribute_names;
+
+#[cfg(test)]
+#[path="regressions/java_constant_pool_slots.rs"]
+mod java_constant_pool_slots;
