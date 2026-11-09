@@ -1653,7 +1653,13 @@ impl<W: WindingNumber> Topology<W> {
     }
 
     /// Returns a rectangle bounding all of our segments.
+    ///
+    /// With no segments, it returns `Rect::ZERO`, as kurbo does for an empty path.
     pub fn bounding_box(&self) -> kurbo::Rect {
+        // Craft patch (input rules): an empty topology has a zero rectangle.
+        if self.segments.segments().next().is_none() {
+            return Rect::ZERO;
+        }
         let mut rect = Rect::new(
             f64::INFINITY,
             f64::INFINITY,
@@ -2499,6 +2505,13 @@ mod tests {
         //check_intersections(&top);
 
         insta::assert_ron_snapshot!(top);
+    }
+
+    // Craft patch (input rules) test.
+    #[test]
+    fn empty_bounding_box() {
+        let top = Topology::from_polylines_binary(EMPTY, EMPTY, 0.01);
+        assert_eq!(top.bounding_box(), kurbo::Rect::ZERO);
     }
 
     #[test]

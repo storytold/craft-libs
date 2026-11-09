@@ -201,6 +201,10 @@ local patches listed below. `.cargo_vcs_info.json` names the commit it was packa
 `824b0791a750f7b27b8edcbb6c6244d0e629875e`. That commit is not in the GitHub repository the manifest
 names, which is archived; its README says development moved off GitHub.
 
+local patches listed below. `.cargo_vcs_info.json` names the commit it was packaged from,
+`824b0791a750f7b27b8edcbb6c6244d0e629875e`. That commit is not in the GitHub repository the manifest
+names, which is archived; its README says development moved off GitHub.
+
 Every file here except this one, `SOURCE.json` and the patched files below is byte for byte the file
 in the `.crate` archive. `SOURCE.json` records the hash of the `.crate` download
 (`source_archive_sha256`) and, for every file kept, the hash in the package (`source_sha256`) and the
@@ -253,6 +257,8 @@ Every change here updates this table and `SOURCE.json` in the same commit.
 Every change here updates this table and `SOURCE.json` in the same commit.
 | `src/topology.rs` | `is_disjoint_tags` no longer calls `dbg!`, which printed two lines to stderr for every output segment on every call, in release builds too. It loops over `segment_indices()` instead of every winding entry, so it skips the segments that merging coincident segments deleted. The `disjoint_skips_merged_segments` test covers the second change. |
 | `src/treevec.rs` | The iterators that `iter`, `iter_mut`, `range` and `range_mut` return on a tree with more than one level keep their stack of child iterators in a `Stack`, which holds 8 levels in place and puts any deeper level in a `Vec`. Before, the stack was a `Vec` and each of these calls allocated once. The sweep line calls `range_mut` on a `TreeVec<_, 128>`, which needs at least `2 * 64^9` elements to have more than 8 levels. The iterators visit the same elements in the same order. The `treevec` test `iterators_on_short_and_tall_trees` compares the four iterators with a `Vec` on a tree of at most 8 levels and on one with more. |
+| `src/curve/mod.rs` | `intersect_cubics` compares a curve whose `p3.y` is below its `p0.y` as the same curve reversed, instead of panicking in `clamp`. `intersect_cubics_with_precomputed_decomp` returns close (`Ish`) over the common range when `sure_tolerance` is not positive, is larger than `ish_tolerance`, or `ish_tolerance` is not finite, instead of panicking, overflowing the stack or returning a wrong order; when the curves' vertical ranges do not overlap, it returns an empty order without a debug assertion failure, and `CurveOrder::with_y_slop`, `CurveOrder::order_after` and `CurveOrder::check_invariants` accept that empty order instead of panicking on an `unwrap`. The docs of these functions, `from_monotone_cubic`, `solve_t_for_y` and `y_subsegment` state their input rules. The `curves_decreasing_in_y`, `invalid_tolerances` and `disjoint_vertical_ranges` tests cover the changes. |
+| `src/topology.rs` | `Topology::bounding_box` returns `Rect::ZERO` for a topology with no segments, as kurbo does for an empty path, instead of a rectangle from infinity to negative infinity. The `empty_bounding_box` test covers it. |
 
 `omitted_files` lists the 43 files of the package left out here, with their hashes:
 
