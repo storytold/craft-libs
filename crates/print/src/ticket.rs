@@ -138,9 +138,43 @@ pub(crate) fn matching_paper(papers: &[Paper<'_>], width: f64, height: f64) -> O
 }
 
 fn named(node: roxmltree::Node<'_, '_>, local: &str) -> bool {
-    node.attribute("name")
-        .and_then(|v| v.split_once(':'))
-        .is_some_and(|(prefix, name)| name == local && node.lookup_namespace_uri(Some(prefix)) == Some(NS_PSK))
+    node.attribute("name").is_some_and(|v| {
+        let (prefix, name) = v.split_once(':').map_or((None, v), |(p, n)| (Some(p), n));
+        name == local && node.lookup_namespace_uri(prefix) == Some(NS_PSK)
+    })
+}
+
+/// Read standard duplex options from the original XML: winprint's DOM loses the default
+/// namespace of unprefixed QNames, so it cannot safely choose a duplex scope.
+fn duplex_option(document: &roxmltree::Document<'_>, feature: &str, option: &str) -> bool {
+    document
+        .root_element()
+        .children()
+        .filter(|n| n.has_tag_name((NS_PSF, "Feature")) && named(*n, feature))
+        .flat_map(|n| n.children())
+        .any(|n| n.has_tag_name((NS_PSF, "Option")) && named(n, option))
+}
+
+/// Prefer job scope when it offers the exact binding; an unspecified request emits neither.
+pub(crate) fn document_duplex_only(xml: &str, duplex: Option<Duplex>) -> bool {
+    let wanted = match duplex {
+        None => return false,
+        Some(Duplex::Off) => "OneSided",
+        Some(Duplex::LongEdge) => "TwoSidedLongEdge",
+        Some(Duplex::ShortEdge) => "TwoSidedShortEdge",
+    };
+    let Ok(document) = roxmltree::Document::parse(xml) else { return false };
+    !duplex_option(&document, "JobDuplexAllDocumentsContiguously", wanted) && duplex_option(&document, "DocumentDuplex", wanted)
+}
+
+/// Whether either duplex scope offers a supported standard binding; unreadable stays unknown.
+pub(crate) fn two_sided(xml: &str) -> Option<bool> {
+    let document = roxmltree::Document::parse(xml).ok()?;
+    Some(
+        ["JobDuplexAllDocumentsContiguously", "DocumentDuplex"]
+            .into_iter()
+            .any(|feature| ["TwoSidedLongEdge", "TwoSidedShortEdge"].into_iter().any(|option| duplex_option(&document, feature, option))),
+    )
 }
 
 /// The integer value of the Print Schema element under `node` with this keyword name.
@@ -829,6 +863,9 @@ mod tests {
                     Duplex::LongEdge => "TwoSidedLongEdge",
                     Duplex::ShortEdge => "TwoSidedShortEdge",
                 };
+                assert!(
+                    verify_job_options(&xml.replace(&format!("psk:{wanted}"), &format!("ns0000:{wanted}")), &job, 3, Offered::default()).is_err()
+                );
                 if other != wanted {
                     assert!(verify_job_options(&xml.replace(wanted, other), &job, 3, Offered::default()).is_err());
                     let conflicting = xml.replace("</psf:PrintTicket>", &format!(
@@ -838,6 +875,39 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn duplex_qnames_resolve_their_in_scope_namespace() {
+        for prefix in ["psk:", ""] {
+            for choice in [Duplex::Off, Duplex::LongEdge, Duplex::ShortEdge] {
+                let option = match choice {
+                    Duplex::Off => "OneSided",
+                    Duplex::LongEdge => "TwoSidedLongEdge",
+                    Duplex::ShortEdge => "TwoSidedShortEdge",
+                };
+                let xml = format!(
+                    r#"<psf:PrintCapabilities xmlns:psf="{NS_PSF}" xmlns:psk="{NS_PSK}" xmlns="{NS_PSK}" xmlns:v="urn:vendor"><psf:Feature name="{prefix}DocumentDuplex"><psf:Option name="{prefix}{option}"/></psf:Feature></psf:PrintCapabilities>"#
+                );
+                assert!(document_duplex_only(&xml, Some(choice)));
+                assert!(!document_duplex_only(&xml, None));
+                assert_eq!(two_sided(&xml), Some(choice != Duplex::Off));
+                let vendor = xml.replace(&format!("name=\"{prefix}{option}\""), &format!("name=\"v:{option}\""));
+                assert!(!document_duplex_only(&vendor, Some(choice)));
+                assert_eq!(two_sided(&vendor), Some(false));
+                let default_vendor = xml.replace(&format!("xmlns=\"{NS_PSK}\""), "xmlns=\"urn:vendor\"");
+                assert_eq!(document_duplex_only(&default_vendor, Some(choice)), !prefix.is_empty());
+                let validated = ticket_xml_for_duplex(&Job { duplex: Some(choice), ..Job::default() }, false, true)
+                    .replace(&format!("xmlns:psk=\"{NS_PSK}\""), &format!("xmlns:psk=\"{NS_PSK}\" xmlns=\"{NS_PSK}\""))
+                    .replace("psk:", prefix);
+                assert!(verify_job_options(&validated, &Job { duplex: Some(choice), ..Job::default() }, 1, Offered::default()).is_ok());
+            }
+        }
+        let unknown = format!(
+            r#"<psf:PrintCapabilities xmlns:psf="{NS_PSF}" xmlns:psk="{NS_PSK}"><psf:Feature name="psk:DocumentDuplex"><psf:Option name="psk:TwoSidedVendor"/></psf:Feature></psf:PrintCapabilities>"#
+        );
+        assert_eq!(two_sided(&unknown), Some(false));
+        assert_eq!(two_sided("invalid"), None);
     }
 
     /// PrintCapabilities as a driver might write them: with or without a duplex feature, and the
