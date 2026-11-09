@@ -42,6 +42,18 @@ pub(crate) struct JpegMeta {
     pub frame: Option<(u32, u32, u8)>,
 }
 
+/// The first frame of `b` as [`crate::JpegInfo`], from its markers alone (see [`crate::jpeg_info`]).
+pub(crate) fn info(b: &[u8]) -> Option<crate::JpegInfo> {
+    let (width, height, components) = scan_metadata(b).frame?;
+    let layout = match components {
+        1 => ChannelLayout::Gray,
+        3 => ChannelLayout::Rgb,
+        4 => ChannelLayout::Cmyk,
+        _ => return None,
+    };
+    Some(crate::JpegInfo { width, height, layout, whole_coefficients: uses_craft_jpeg(b) })
+}
+
 /// Walk the marker segments up to SOS and collect metadata.
 pub(crate) fn scan_metadata(b: &[u8]) -> JpegMeta {
     let mut m = JpegMeta::default();
@@ -571,6 +583,21 @@ mod tests {
     /// Return whether the JPEG begins with a JFIF APP0 segment.
     fn has_jfif_app0(bytes: &[u8]) -> bool {
         bytes.get(2..11) == Some(b"\xff\xe0\0\x10JFIF\0")
+    }
+
+    /// `info` reads the frame from the markers, and which decoder the file goes to.
+    #[test]
+    fn info_reads_the_frame_and_the_decoder() {
+        let img = Image::from_raw(37, 21, ChannelLayout::Rgb, SampleType::U8, vec![128; 37 * 21 * 3]).unwrap();
+        let rgb = crate::encode(&img, Format::Jpeg, &EncodeOptions::default()).unwrap();
+        assert_eq!(info(&rgb), Some(crate::JpegInfo { width: 37, height: 21, layout: ChannelLayout::Rgb, whole_coefficients: false }));
+        // A 12-bit extended frame (SOF1) declaring 40,000 × 30,000 gray, markers only.
+        let mut twelve = vec![0xFF, 0xD8, 0xFF, 0xC1, 0, 11, 12];
+        twelve.extend_from_slice(&30_000u16.to_be_bytes());
+        twelve.extend_from_slice(&40_000u16.to_be_bytes());
+        twelve.extend_from_slice(&[1, 1, 0x11, 0, 0xFF, 0xD9]);
+        assert_eq!(info(&twelve), Some(crate::JpegInfo { width: 40_000, height: 30_000, layout: ChannelLayout::Gray, whole_coefficients: true }));
+        assert_eq!(info(b"not a jpeg"), None);
     }
 
     /// An APP1 Extended XMP fragment (GUID, total size, offset, data).
