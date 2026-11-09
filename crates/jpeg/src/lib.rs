@@ -201,11 +201,18 @@ struct Huffman {
     valptr: [i32; 17],
     mincode: [i32; 17],
     values: Vec<u8>,
+    /// For each value of the next [`LOOKAHEAD`] bits: `length << 8 | value` of the code they
+    /// begin with, or 0 when it is longer (or not a code). Built from the procedure of
+    /// [`Huffman::decode`] itself, so both give the same symbol.
+    fast: Vec<u16>,
 }
+
+/// Bits [`Huffman::fast`] resolves at once; nearly every code in real tables is this short.
+const LOOKAHEAD: u32 = 9;
 
 impl Huffman {
     fn new(counts: &[u8], values: &[u8]) -> Result<Self, Error> {
-        let mut h = Huffman { maxcode: [-1; 17], valptr: [0; 17], mincode: [0; 17], values: values.to_vec() };
+        let mut h = Huffman { maxcode: [-1; 17], valptr: [0; 17], mincode: [0; 17], values: values.to_vec(), fast: Vec::new() };
         let mut code: i32 = 0;
         let mut k: i32 = 0;
         for (l, &n) in (1..=16usize).zip(counts) {
@@ -222,10 +229,29 @@ impl Huffman {
             }
             code <<= 1;
         }
+        h.fast = (0..1u32 << LOOKAHEAD)
+            .map(|bits| {
+                let mut code: i32 = 0;
+                for l in 1..=LOOKAHEAD as usize {
+                    code = (code << 1) | ((bits >> (LOOKAHEAD as usize - l)) & 1) as i32;
+                    if code <= h.maxcode[l] {
+                        let value = usize::try_from(h.valptr[l] + code - h.mincode[l]).ok().and_then(|i| h.values.get(i));
+                        return value.map_or(0, |&v| (l as u16) << 8 | u16::from(v));
+                    }
+                }
+                0
+            })
+            .collect();
         Ok(h)
     }
 
     fn decode(&self, bits: &mut Bits) -> Result<u8, Error> {
+        if let Some(&e) = self.fast.get(bits.peek(LOOKAHEAD) as usize)
+            && e != 0
+        {
+            bits.get(u32::from(e >> 8));
+            return Ok(e as u8);
+        }
         let mut code: i32 = 0;
         for l in 1..=16 {
             code = (code << 1) | bits.bit() as i32;
@@ -551,6 +577,14 @@ impl<'a> Bits<'a> {
 
     fn bit(&mut self) -> u32 {
         self.get(1)
+    }
+
+    /// The next `n` (≤ 16) bits, left in place.
+    fn peek(&mut self, n: u32) -> u32 {
+        if self.n < n {
+            self.fill();
+        }
+        self.acc >> (32 - n)
     }
 
     /// The next `n` (≤ 16) bits.
@@ -1216,8 +1250,14 @@ fn decode_coefficients(b: &[u8], limits: &Limits) -> Result<(Frame, Tables, bool
 // ---------------------------------------------------------------------------------------------
 // Reconstruction
 
-/// `T[x][u] = C(u)/2 · cos((2x+1)uπ/16)`: one dimension of the inverse DCT (A.3.3).
-fn idct_basis() -> [[f32; 8]; 8] {
+/// One dimension of the inverse DCT (A.3.3): `t[x][u] = C(u)/2 · cos((2x+1)uπ/16)`, and its
+/// transpose.
+struct Idct {
+    t: [[f32; 8]; 8],
+    tt: [[f32; 8]; 8],
+}
+
+fn idct_basis() -> Idct {
     let mut t = [[0f32; 8]; 8];
     for (x, row) in t.iter_mut().enumerate() {
         for (u, v) in row.iter_mut().enumerate() {
@@ -1225,13 +1265,20 @@ fn idct_basis() -> [[f32; 8]; 8] {
             *v = c / 2.0 * (((2 * x + 1) * u) as f32 * std::f32::consts::PI / 16.0).cos();
         }
     }
-    t
+    let mut tt = [[0f32; 8]; 8];
+    for (x, row) in t.iter().enumerate() {
+        for (u, &v) in row.iter().enumerate() {
+            tt[u][x] = v;
+        }
+    }
+    Idct { t, tt }
 }
 
 /// One block's samples (A.3.3): `blk` (zigzag order) dequantized with `q`, inverse transformed,
 /// level-shifted and clamped to `0..=max`, written to the 8 rows of 8 at the start of `out`
 /// that are `stride` apart. Rows that `out` doesn't reach are left out.
-fn idct_block(blk: &[i32; 64], q: &[u16; 64], basis: &[[f32; 8]; 8], max: f32, out: &mut [f32], stride: usize) {
+fn idct_block(blk: &[i32; 64], q: &[u16; 64], idct: &Idct, max: f32, out: &mut [f32], stride: usize) {
+    let (basis, tt) = (&idct.t, &idct.tt);
     let shift = (max + 1.0) / 2.0;
     if blk[1..].iter().all(|&c| c == 0) {
         // Only DC: every sample is T[y][0] · T[x][0] · F[0][0], the same products the full
@@ -1245,22 +1292,45 @@ fn idct_block(blk: &[i32; 64], q: &[u16; 64], basis: &[[f32; 8]; 8], max: f32, o
         }
         return;
     }
-    let mut f = [0f32; 64];
-    for (k, &c) in blk.iter().enumerate() {
-        f[ZIGZAG[k]] = c as f32 * f32::from(q[k]);
-    }
-    // Rows: r[v][x] = Σu T[x][u] F[v][u]; then columns: s[y][x] = Σv T[y][v] r[v][x].
-    let mut r = [0f32; 64];
-    for v in 0..8 {
-        for x in 0..8 {
-            r[v * 8 + x] = (0..8).map(|u| basis[x][u] * f[v * 8 + u]).sum();
+    // F[v][u], dequantized, and which rows v hold a coefficient.
+    let mut f = [[0f32; 8]; 8];
+    let mut rows = 0u8;
+    for (k, (&c, &z)) in blk.iter().zip(&ZIGZAG).enumerate() {
+        if c != 0 {
+            f[z / 8][z % 8] = c as f32 * f32::from(q[k]);
+            rows |= 1 << (z / 8);
         }
     }
+    // Rows: r[v][x] = Σu T[x][u] F[v][u]; then columns: s[y][x] = Σv T[y][v] r[v][x]. Each sum is
+    // taken in order of u (of v), eight values of x at a time; a zero term changes no sum but the
+    // sign of a zero, which the level shift then removes.
+    let mut r = [[0f32; 8]; 8];
+    for (v, (fv, rv)) in f.iter().zip(r.iter_mut()).enumerate() {
+        if rows & (1 << v) == 0 {
+            continue;
+        }
+        let mut acc = [-0.0f32; 8];
+        for (&fu, tu) in fv.iter().zip(tt) {
+            if fu != 0.0 {
+                for (a, &t) in acc.iter_mut().zip(tu) {
+                    *a += t * fu;
+                }
+            }
+        }
+        *rv = acc;
+    }
     for (y, ty) in basis.iter().enumerate() {
+        let mut acc = [-0.0f32; 8];
+        for (v, (&t, rv)) in ty.iter().zip(&r).enumerate() {
+            if rows & (1 << v) != 0 {
+                for (a, &rx) in acc.iter_mut().zip(rv) {
+                    *a += t * rx;
+                }
+            }
+        }
         if let Some(row) = out.get_mut(y * stride..y * stride + 8) {
-            for (x, o) in row.iter_mut().enumerate() {
-                let s: f32 = ty.iter().enumerate().map(|(v, t)| t * r[v * 8 + x]).sum();
-                *o = (s + shift).clamp(0.0, max);
+            for (o, a) in row.iter_mut().zip(acc) {
+                *o = (a + shift).clamp(0.0, max);
             }
         }
     }
@@ -1268,13 +1338,13 @@ fn idct_block(blk: &[i32; 64], q: &[u16; 64], basis: &[[f32; 8]; 8], max: f32, o
 
 /// The component's samples (padded to whole blocks, row stride `bw * 8`), level-shifted and
 /// clamped to `0..=max`.
-fn reconstruct(comp: &Component, q: &[u16; 64], basis: &[[f32; 8]; 8], max: f32) -> Vec<f32> {
+fn reconstruct(comp: &Component, q: &[u16; 64], idct: &Idct, max: f32) -> Vec<f32> {
     let stride = comp.bw * 8;
     let mut plane = vec![0f32; stride * comp.bh * 8];
     for (n, blk) in comp.coefs.iter().enumerate() {
         let (bx, by) = (n % comp.bw, n / comp.bw);
         if let Some(out) = plane.get_mut(by * 8 * stride + bx * 8..) {
-            idct_block(blk, q, basis, max, out, stride);
+            idct_block(blk, q, idct, max, out, stride);
         }
     }
     plane
@@ -1305,16 +1375,19 @@ fn is_ycc(ids: impl Iterator<Item = u8>, adobe_transform: Option<u8>) -> bool {
     }
 }
 
+/// YCbCr → RGB (JFIF / T.871) of samples centred on `center`; for YCCK the result is the
+/// inverted CMY of Adobe's convention, i.e. the ink amounts.
+#[inline]
+fn ycc_to_rgb(yy: f32, cb: f32, cr: f32, center: f32) -> [f32; 3] {
+    let (cb, cr) = (cb - center, cr - center);
+    [yy + 1.402 * cr, yy - 0.344_136 * cb - 0.714_136 * cr, yy + 1.772 * cb]
+}
+
 /// The output colour of one pixel's `nc` reconstructed samples (`0..=max`), in place.
 fn to_color(px: &mut [f32; 4], nc: usize, ycc: bool, max: f32) {
-    let center = (max + 1.0) / 2.0;
     if ycc {
-        // YCbCr → RGB (JFIF / T.871); for YCCK the result is the inverted CMY of Adobe's
-        // convention, i.e. the ink amounts.
-        let (yy, cb, cr) = (px[0], px[1] - center, px[2] - center);
-        px[0] = yy + 1.402 * cr;
-        px[1] = yy - 0.344_136 * cb - 0.714_136 * cr;
-        px[2] = yy + 1.772 * cb;
+        let [r, g, b] = ycc_to_rgb(px[0], px[1], px[2], (max + 1.0) / 2.0);
+        (px[0], px[1], px[2]) = (r, g, b);
         if nc == 4 {
             px[3] = max - px[3];
         }
@@ -1326,22 +1399,27 @@ fn to_color(px: &mut [f32; 4], nc: usize, ycc: bool, max: f32) {
     }
 }
 
-/// An 8-bit output sample, clamped to `0..=255` (`p` is finite).
+/// An 8-bit output sample: `p` (finite) clamped to `0..=255` and rounded half away from zero.
+#[inline]
 fn to_u8(p: f32) -> u8 {
-    p.round() as u8
+    let p = p.clamp(0.0, 255.0);
+    // On `0..=255` the truncation and the fraction it leaves are exact, so this is `p.round()`
+    // without the library call `round` is on targets without SSE4.1.
+    let t = p as u8;
+    t.saturating_add(u8::from(p - f32::from(t) >= 0.5))
 }
 
 /// Turn the coefficients into interleaved output samples.
 fn render(frame: Frame, tables: &Tables, adobe_transform: Option<u8>) -> Result<(u8, Samples), Error> {
     let max = if frame.precision > 8 { 4095.0 } else { 255.0 };
-    let basis = idct_basis();
+    let idct = idct_basis();
     let (w, h) = (frame.width, frame.height);
     let mut planes = Vec::with_capacity(frame.comps.len());
     for comp in &frame.comps {
         // A component no scan reached has only zero coefficients; any defined table will do.
         let q = comp.quant.or_else(|| tables.quant.get(comp.tq).copied().flatten());
         let q = q.ok_or_else(|| err("component uses an undefined quantization table"))?;
-        let plane = reconstruct(comp, &q, &basis, max);
+        let plane = reconstruct(comp, &q, &idct, max);
         let xs = upsample_map(w, comp.cw, comp.h, frame.hmax);
         let ys = upsample_map(h, comp.ch, comp.v, frame.vmax);
         planes.push((plane, comp.bw * 8, xs, ys));

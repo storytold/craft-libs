@@ -1,8 +1,8 @@
 //! Band-at-a-time decoding of sequential Huffman-coded 8-bit JPEG: see [`Bands`].
 
 use crate::{
-    Bits, Error, Header, Huffman, HuffmanScan, Limits, ScanDecoder, Tables, be16, err, idct_basis, idct_block, is_ycc, parse_dac, parse_dht,
-    parse_dqt, parse_header, parse_scan, to_color, to_u8, unsupported, upsample_map,
+    Bits, Error, Header, Huffman, HuffmanScan, Idct, Limits, ScanDecoder, Tables, be16, err, idct_basis, idct_block, is_ycc, parse_dac, parse_dht,
+    parse_dqt, parse_header, parse_scan, to_color, to_u8, unsupported, upsample_map, ycc_to_rgb,
 };
 
 /// A component as the bands decode it.
@@ -290,7 +290,7 @@ impl<'a> Bands<'a> {
             planes: self.comps.iter().map(|c| vec![0f32; slots * c.vb * 8 * c.stride]).collect(),
             lines: self.comps.iter().map(|c| if c.xs.is_some() || c.ys.is_some() { vec![0f32; self.width] } else { Vec::new() }).collect(),
             out: vec![0u8; self.band_bytes()],
-            basis: idct_basis(),
+            idct: idct_basis(),
             bands: self,
             decoded: 0,
             next: 0,
@@ -322,7 +322,7 @@ pub struct Reader<'b> {
     /// Per subsampled component: one output row of interpolated samples.
     lines: Vec<Vec<f32>>,
     out: Vec<u8>,
-    basis: [[f32; 8]; 8],
+    idct: Idct,
     /// The next MCU line to decode and the next band to hand out.
     decoded: usize,
     next: usize,
@@ -413,7 +413,7 @@ impl<'b> Reader<'b> {
                             self.damaged = true;
                             self.skip_to = i.checked_div(b.restart).map_or(usize::MAX, |k| (k + 1) * b.restart);
                         }
-                        idct_block(&blk, &c.q, &self.basis, 255.0, out, c.stride);
+                        idct_block(&blk, &c.q, &self.idct, 255.0, out, c.stride);
                     }
                 }
             }
@@ -443,22 +443,49 @@ impl<'b> Reader<'b> {
                     *o = top + (bottom - top) * fy;
                 }
             }
-            let src: Vec<&[f32]> = b
-                .comps
-                .iter()
-                .enumerate()
-                .zip(lines.iter())
-                .map(|((c, comp), line)| if comp.xs.is_none() && comp.ys.is_none() { plane_row(b, planes, decoded, c, yy) } else { line.as_slice() })
-                .collect();
+            let mut src: [&[f32]; 4] = [&[]; 4];
+            for (((c, comp), line), s) in b.comps.iter().enumerate().zip(lines.iter()).zip(src.iter_mut()) {
+                let row = if comp.xs.is_none() && comp.ys.is_none() { plane_row(b, planes, decoded, c, yy) } else { line.as_slice() };
+                *s = row.get(..w).unwrap_or_default();
+            }
             let Some(out) = out.get_mut(r * w * nc..(r + 1) * w * nc) else { continue };
+            convert_row(&src, nc, b.ycc, out);
+        }
+    }
+}
+
+/// One output row from the components' rows `src` (`w` samples each; a short one reads as
+/// zeros): the colour conversion and rounding of [`to_color`] and [`to_u8`], with the common
+/// layouts written out so they compile to straight loops.
+fn convert_row(src: &[&[f32]; 4], nc: usize, ycc: bool, out: &mut [u8]) {
+    let w = out.len() / nc.max(1);
+    let [a, b, c, d] = src.map(|s| if s.len() == w { s } else { &[][..] });
+    match (nc, ycc, a.len() == w && (nc < 2 || b.len() == w) && (nc < 3 || c.len() == w) && (nc < 4 || d.len() == w)) {
+        (1, _, true) => {
+            for (o, &g) in out.iter_mut().zip(a) {
+                *o = to_u8(g);
+            }
+        }
+        (3, true, true) => {
+            for (o, ((&y, &cb), &cr)) in out.as_chunks_mut::<3>().0.iter_mut().zip(a.iter().zip(b).zip(c)) {
+                let [r, g, bl] = ycc_to_rgb(y, cb, cr, 128.0);
+                *o = [to_u8(r), to_u8(g), to_u8(bl)];
+            }
+        }
+        (3, false, true) => {
+            for (o, ((&r, &g), &bl)) in out.as_chunks_mut::<3>().0.iter_mut().zip(a.iter().zip(b).zip(c)) {
+                *o = [to_u8(r), to_u8(g), to_u8(bl)];
+            }
+        }
+        _ => {
             let mut px = [0f32; 4];
             for (x, o) in out.chunks_exact_mut(nc).enumerate() {
-                for (p, row) in px.iter_mut().zip(&src) {
+                for (p, row) in px.iter_mut().zip(src) {
                     *p = row.get(x).copied().unwrap_or(0.0);
                 }
-                to_color(&mut px, nc, b.ycc, 255.0);
+                to_color(&mut px, nc, ycc, 255.0);
                 for (o, &p) in o.iter_mut().zip(&px) {
-                    *o = to_u8(p.clamp(0.0, 255.0));
+                    *o = to_u8(p);
                 }
             }
         }

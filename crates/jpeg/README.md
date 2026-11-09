@@ -126,7 +126,7 @@ if reader.damaged() { /* warn: part of the image is missing */ }
   `Bands::find_seek_points` has found the restart markers (one pass over the scan data; unless
   every marker is there, in sequence, only band 0 is). Readers on separate threads can `seek` to
   seek points and decode the bands up to the next one. Files with a restart interval at every
-  line of MCUs, as Photoshop writes them, decode on every core.
+  line of MCUs, common in files Photoshop saved, decode on every core.
 - **Damaged data** leaves the rest of its restart interval at zero coefficients (mid grey) and
   decoding resumes at the next restart marker; without restart intervals the rest of the scan
   stays at zero, as in `decode`. `Reader::damaged` is set either way, and the samples don't
