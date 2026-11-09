@@ -63,7 +63,8 @@ pub fn decode_frame_with(data: &[u8], opts: &DecodeOptions) -> Result<Frame> {
     } else {
         (decode_unit(&h1, &data[..off], opts), decode_unit(&h2, &data[off..], opts))
     };
-    let (top, bottom) = if h1.field == FieldCode::Field2 { (p2?, p1?) } else { (p1?, p2?) };
+    let (mut top, mut bottom) = if h1.field == FieldCode::Field2 { (p2?, p1?) } else { (p1?, p2?) };
+    unify_field_color(&mut top, &mut bottom, h1.color_volume == crate::dnx::ColorVolume::OutOfBand)?;
     // Both field payloads must be valid before committing the full-frame
     // allocation; a damaged header alone must not allocate an output picture.
     let mut f = Frame::new_like(&h1, h1.width, h1.lines * 2);
@@ -71,6 +72,21 @@ pub fn decode_frame_with(data: &[u8], opts: &DecodeOptions) -> Result<Frame> {
     top.copy_into(&mut f, 0, 2);
     bottom.copy_into(&mut f, 1, 2);
     Ok(f)
+}
+
+/// Each field is decoded on its own, so one may come out all Y′CbCr (returned as such) while the
+/// other holds RGB macroblocks. A frame has a single colour representation: convert the Y′CbCr
+/// field to RGB, as is done for mixed macroblocks inside one field.
+fn unify_field_color(top: &mut CodedPlanes, bottom: &mut CodedPlanes, out_of_band: bool) -> Result<()> {
+    if top.ycbcr == bottom.ycbcr {
+        return Ok(());
+    }
+    if out_of_band {
+        return Err(Error::Invalid("mixed-ACF frames with OutOfBand color volume are not supported"));
+    }
+    top.convert_to_rgb();
+    bottom.convert_to_rgb();
+    Ok(())
 }
 
 #[cfg(feature = "threads")]
@@ -109,9 +125,26 @@ struct CodedPlanes {
     strides: [usize; 4],
     /// An RGB-signalled stream whose macroblocks are all coded as Y'CbCr.
     ycbcr: bool,
+    color: ColorCtx,
 }
 
 impl CodedPlanes {
+    /// Convert an all-Y′CbCr unit to RGB in place so it can share a frame with an RGB unit.
+    fn convert_to_rgb(&mut self) {
+        if !self.ycbcr {
+            return;
+        }
+        let band = self.strides[0] * 16;
+        let mbs = self.strides[0] / 16;
+        let [py, pcb, pcr, _] = &mut self.planes;
+        for ((y, cb), cr) in py.chunks_mut(band).zip(pcb.chunks_mut(band)).zip(pcr.chunks_mut(band)) {
+            for mb in 0..mbs {
+                convert_mb_to_rgb(self.color, [&mut *y, &mut *cb, &mut *cr], mb);
+            }
+        }
+        self.ycbcr = false;
+    }
+
     /// Crop into `f`, writing coded line `i` to frame line `first + i·step`.
     fn copy_into(&self, f: &mut Frame, first: usize, step: usize) {
         if self.ycbcr {
@@ -287,12 +320,12 @@ fn decode_unit(h: &FrameHeader, data: &[u8], opts: &DecodeOptions) -> Result<Cod
             for (mb, &a) in row.iter().enumerate() {
                 if a {
                     let o = s * band[0];
-                    convert_mb_to_rgb(&ctx, [&mut py[o..o + band[0]], &mut pcb[o..o + band[0]], &mut pcr[o..o + band[0]]], mb);
+                    convert_mb_to_rgb(ColorCtx::of(&ctx), [&mut py[o..o + band[0]], &mut pcb[o..o + band[0]], &mut pcr[o..o + band[0]]], mb);
                 }
             }
         }
     }
-    Ok(CodedPlanes { planes, strides, ycbcr })
+    Ok(CodedPlanes { planes, strides, ycbcr, color: ColorCtx::of(&ctx) })
 }
 
 /// Decode one macroblock scan line into the 16-line bands of each plane.
@@ -462,11 +495,25 @@ fn store(ctx: &Ctx, band: &mut [u16], position: BlockPosition, block: &mut [f32;
     }
 }
 
+/// What `convert_mb_to_rgb` needs of a coding unit.
+#[derive(Clone, Copy)]
+struct ColorCtx {
+    stride: usize,
+    bit_depth: u8,
+    max: f32,
+}
+
+impl ColorCtx {
+    fn of(ctx: &Ctx) -> Self {
+        Self { stride: ctx.strides[0], bit_depth: ctx.h.bit_depth, max: ctx.max }
+    }
+}
+
 /// `ConvertMacroblockColor` (8.1.1): BT.709 Y′CbCr → R′G′B′ on the quantised (video-range)
 /// signals, in place over the macroblock's three planes.
-fn convert_mb_to_rgb(ctx: &Ctx, bands: [&mut [u16]; 3], mb: usize) {
-    let stride = ctx.strides[0];
-    let s = (1u32 << (ctx.h.bit_depth - 8)) as f32;
+fn convert_mb_to_rgb(ctx: ColorCtx, bands: [&mut [u16]; 3], mb: usize) {
+    let stride = ctx.stride;
+    let s = (1u32 << (ctx.bit_depth - 8)) as f32;
     // Section 8.1.1 ConvertMacroblockColor uses the BT.709 transform coefficients.
     let (kr, kb) = (0.2126f32, 0.0722f32);
     let kg = 1.0 - kr - kb;
@@ -545,4 +592,50 @@ fn decode_rle_alpha(ctx: &Ctx, r: &mut Reader, band: &mut [u16], mb: usize) -> R
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// One 16x16 macroblock with every sample of the three planes set to `v`.
+    fn unit(v: [u16; 3], ycbcr: bool) -> CodedPlanes {
+        CodedPlanes {
+            planes: [vec![v[0]; 256], vec![v[1]; 256], vec![v[2]; 256], Vec::new()],
+            strides: [16; 4],
+            ycbcr,
+            color: ColorCtx { stride: 16, bit_depth: 8, max: 255.0 },
+        }
+    }
+
+    #[test]
+    fn mixed_field_representations_are_normalised_to_rgb() {
+        // Top field all Y′CbCr (mid grey, neutral chroma), bottom field RGB grey 100.
+        let (mut top, mut bottom) = (unit([100, 128, 128], true), unit([100, 100, 100], false));
+        unify_field_color(&mut top, &mut bottom, false).unwrap();
+        assert!(!top.ycbcr && !bottom.ycbcr, "one frame-wide representation");
+        for p in 0..3 {
+            assert!(top.planes[p].iter().all(|&s| s.abs_diff(100) <= 1), "plane {p} was converted to RGB");
+            assert!(bottom.planes[p].iter().all(|&s| s == 100), "the RGB field is untouched");
+        }
+        // The same pair in the other order.
+        let (mut top, mut bottom) = (unit([100, 100, 100], false), unit([100, 128, 128], true));
+        unify_field_color(&mut top, &mut bottom, false).unwrap();
+        assert!(!top.ycbcr && !bottom.ycbcr);
+        assert!(bottom.planes[1].iter().all(|&s| s.abs_diff(100) <= 1));
+    }
+
+    #[test]
+    fn matching_field_representations_are_left_alone() {
+        let (mut top, mut bottom) = (unit([100, 128, 128], true), unit([90, 128, 128], true));
+        unify_field_color(&mut top, &mut bottom, false).unwrap();
+        assert!(top.ycbcr && bottom.ycbcr);
+        assert_eq!(top.planes[1][0], 128);
+    }
+
+    #[test]
+    fn mixed_fields_with_out_of_band_color_volume_are_rejected() {
+        let (mut top, mut bottom) = (unit([100, 128, 128], true), unit([100, 100, 100], false));
+        assert!(unify_field_color(&mut top, &mut bottom, true).is_err());
+    }
 }
