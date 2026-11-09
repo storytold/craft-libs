@@ -84,6 +84,16 @@ pub enum Error {
     WorkLimitExceeded,
     /// The accuracy parameter was NaN, infinite, zero or negative.
     InvalidEps,
+    /// [`binary_op`] chose an accuracy parameter `eps` from the largest
+    /// coordinate of the inputs, and one input subpath is narrower than
+    /// [`FEATURE_EPS_RATIO`] times `eps` in x or y. The sweep could merge
+    /// that subpath away or drop it, while the smallest automatic `eps` would
+    /// keep it. Call [`binary_op_with_eps`] to choose `eps` yourself.
+    // Craft patch (far-point eps).
+    FeatureBelowTolerance {
+        /// The accuracy parameter that `binary_op` chose.
+        eps: f64,
+    },
 }
 
 /// The largest coordinate magnitude that [`Topology`] and [`binary_op`] accept.
@@ -137,6 +147,11 @@ impl std::fmt::Display for Error {
             Error::InvalidEps => {
                 write!(f, "the accuracy parameter was not a positive finite number")
             }
+            // Craft patch (far-point eps).
+            Error::FeatureBelowTolerance { eps } => write!(
+                f,
+                "one of the inputs had a subpath too small for the accuracy {eps} that its largest coordinate needs"
+            ),
         }
     }
 }
@@ -149,6 +164,18 @@ impl std::error::Error for Error {}
 /// This function calls [`binary_op_with_eps`] with an automatically-chosen
 /// accuracy parameter. The automatically-chosen accuracy is fairly
 /// conservative, so you may get better performance by choosing your own.
+///
+/// The accuracy parameter is `64 * f64::EPSILON` times the largest coordinate
+/// magnitude of either input, and at least [`MIN_AUTO_EPS`]. The sweep uses it
+/// for every segment, so one far point coarsens the result everywhere. When it
+/// is above [`MIN_AUTO_EPS`] and an input subpath that is at least
+/// [`FEATURE_EPS_RATIO`] times [`MIN_AUTO_EPS`] wide and high is narrower than
+/// [`FEATURE_EPS_RATIO`] times the accuracy parameter in x or y, this function
+/// returns [`Error::FeatureBelowTolerance`] instead of a result without that
+/// subpath. The check uses each subpath's bounding box, so a thin part of a
+/// larger subpath, or a gap narrower than the accuracy parameter between two
+/// subpaths, can still be merged without an error.
+// Craft patch (far-point eps): the doc paragraph above and the check below.
 pub fn binary_op(
     set_a: &kurbo::BezPath,
     set_b: &kurbo::BezPath,
@@ -182,10 +209,65 @@ pub fn binary_op(
     // Think more about what makes sense for curves.
     let m_2 = min.abs().max(max.abs());
     let eps = m_2 * (f64::EPSILON * 64.0);
-    let eps = eps.max(1e-6);
+    let eps = eps.max(MIN_AUTO_EPS);
 
     debug_assert!(eps.is_finite());
+    // Craft patch (far-point eps).
+    if eps > MIN_AUTO_EPS {
+        let kept = MIN_AUTO_EPS * FEATURE_EPS_RATIO;
+        let limit = eps * FEATURE_EPS_RATIO;
+        let too_small = [set_a, set_b]
+            .into_iter()
+            .flat_map(subpath_bounding_boxes)
+            .map(|rect| rect.width().min(rect.height()))
+            .any(|size| size >= kept && size < limit);
+        if too_small {
+            return Err(Error::FeatureBelowTolerance { eps });
+        }
+    }
     binary_op_with_eps(set_a, set_b, fill_rule, op, eps)
+}
+
+/// The smallest accuracy parameter that [`binary_op`] chooses.
+// Craft patch (far-point eps).
+pub const MIN_AUTO_EPS: f64 = 1e-6;
+
+/// [`binary_op`] returns [`Error::FeatureBelowTolerance`] for an input
+/// subpath narrower than this many times its accuracy parameter in x or y.
+/// The sweep widens each segment by `eps` on both sides, and the output can
+/// move by up to `eps`.
+// Craft patch (far-point eps).
+pub const FEATURE_EPS_RATIO: f64 = 4.0;
+
+/// The exact bounding box of each subpath of `path`, with its closing segment.
+// Craft patch (far-point eps).
+fn subpath_bounding_boxes(path: &kurbo::BezPath) -> Vec<kurbo::Rect> {
+    use kurbo::{CubicBez, Line, ParamCurve, ParamCurveExtrema, PathEl, PathSeg, QuadBez, Rect};
+
+    let mut boxes = Vec::new();
+    let mut current: Option<Rect> = None;
+    let mut start = kurbo::Point::ZERO;
+    let mut last = start;
+    for el in path.elements() {
+        let seg = match *el {
+            PathEl::MoveTo(p) => {
+                boxes.extend(current.take());
+                start = p;
+                last = p;
+                current = Some(Rect::from_points(p, p));
+                continue;
+            }
+            PathEl::LineTo(p) => PathSeg::Line(Line::new(last, p)),
+            PathEl::QuadTo(p1, p2) => PathSeg::Quad(QuadBez::new(last, p1, p2)),
+            PathEl::CurveTo(p1, p2, p3) => PathSeg::Cubic(CubicBez::new(last, p1, p2, p3)),
+            PathEl::ClosePath => PathSeg::Line(Line::new(last, start)),
+        };
+        last = seg.end();
+        let rect = ParamCurveExtrema::bounding_box(&seg);
+        current = Some(current.map_or(rect, |r| r.union(rect)));
+    }
+    boxes.extend(current);
+    boxes
 }
 
 /// Computes a boolean operation between two sets, each of which is described as
@@ -197,6 +279,11 @@ pub fn binary_op(
 /// Returns [`Error::InvalidEps`] when `eps` is NaN, infinite, zero or
 /// negative. An `eps` below `64 * f64::EPSILON` times the largest coordinate
 /// magnitude is raised to that value.
+///
+/// `eps` is one absolute tolerance for every segment, so a part of the input
+/// narrower than about `eps`, or a gap narrower than about `eps`, can be
+/// merged away or dropped.
+// Craft patch (far-point eps): the doc paragraph above.
 pub fn binary_op_with_eps(
     set_a: &kurbo::BezPath,
     set_b: &kurbo::BezPath,
@@ -603,5 +690,104 @@ mod tests {
             binary_op_with_eps(&a, &b, FillRule::NonZero, BinaryOp::Union, 1e-10).unwrap();
         let area = single_contour_area(&contours, 1.5e8);
         assert!((area - UNION_AREA).abs() < 1e-3, "area {area}");
+    }
+
+    // Craft patch (far-point eps).
+    #[test]
+    fn far_point_eps() {
+        let rect = |x0, y0, x1, y1| kurbo::Rect::new(x0, y0, x1, y1).to_path(0.0);
+        let far_triangle = |at: f64| {
+            let mut path = BezPath::new();
+            path.move_to((at, at));
+            path.line_to((at + 1.0e3, at));
+            path.line_to((at, at + 1.0e3));
+            path.close_path();
+            path
+        };
+        let with = |base: &BezPath, extra: &BezPath| {
+            let mut path = base.clone();
+            path.extend(extra.iter());
+            path
+        };
+        let auto_eps = |far: f64| ((far + 1.0e3) * (f64::EPSILON * 64.0)).max(MIN_AUTO_EPS);
+        let union = |a: &BezPath, b: &BezPath| binary_op(a, b, FillRule::NonZero, BinaryOp::Union);
+        let inside = |contours: &topology::Contours, p: (f64, f64)| {
+            contours
+                .contours()
+                .map(|c| c.path.winding(p.into()))
+                .sum::<i32>()
+                != 0
+        };
+
+        // A 10 x 10 square and a 0.3 x 10 sliver, united with another square.
+        let near = with(&rect(0.0, 0.0, 10.0, 10.0), &rect(40.0, 0.0, 40.3, 10.0));
+        let other = rect(5.0, 5.0, 15.0, 15.0);
+        let out = union(&near, &other).unwrap();
+        assert!(inside(&out, (40.15, 5.0)));
+        assert!(inside(&out, (2.0, 2.0)));
+
+        // A triangle at 3e13 raises eps to about 0.43, and the sliver is
+        // narrower than 4 * eps.
+        let far = 3.0e13;
+        assert_eq!(
+            union(&with(&near, &far_triangle(far)), &other).unwrap_err(),
+            Error::FeatureBelowTolerance { eps: auto_eps(far) }
+        );
+        assert_eq!(
+            union(&other, &with(&near, &far_triangle(far))).unwrap_err(),
+            Error::FeatureBelowTolerance { eps: auto_eps(far) }
+        );
+
+        // A triangle at 1e12 gives eps about 0.014, and nothing is that small.
+        let out = union(&with(&near, &far_triangle(1.0e12)), &other).unwrap();
+        assert!(inside(&out, (40.15, 5.0)));
+
+        // Every subpath at least 4 * eps wide and high: no error at eps about 14.
+        let far = 1.0e15;
+        let big = with(&rect(0.0, 0.0, 100.0, 100.0), &far_triangle(far));
+        assert!(union(&big, &rect(200.0, 0.0, 300.0, 100.0)).is_ok());
+
+        // A zero-width subpath is lost at any eps, so it is not reported.
+        let mut line_and_back = kurbo::Line::new((0.0, 50.0), (100.0, 50.0)).to_path(0.0);
+        line_and_back.close_path();
+        assert!(union(&with(&big, &line_and_back), &BezPath::new()).is_ok());
+
+        // A subpath below 4 * MIN_AUTO_EPS is lost at any eps, so it is not reported.
+        let tiny = rect(50.0, 50.0, 50.0 + 1.0e-7, 50.0 + 1.0e-7);
+        assert!(union(&with(&big, &tiny), &BezPath::new()).is_ok());
+        assert!(union(&tiny, &far_triangle(1.0e8)).is_ok());
+
+        // The check measures curves, not control points: this cubic's control
+        // points span 10 in x and the curve about 2.9, below 4 * eps (about 3.98).
+        let mut thin_curve = BezPath::new();
+        thin_curve.move_to((40.0, 0.0));
+        thin_curve.curve_to((45.0, 10.0 / 3.0), (35.0, 20.0 / 3.0), (40.0, 10.0));
+        thin_curve.close_path();
+        let width = subpath_bounding_boxes(&thin_curve)[0].width();
+        assert!(width > 2.8 && width < 2.9, "{width}");
+        let far = 7.0e13;
+        assert!(union(&thin_curve, &other).is_ok());
+        assert_eq!(
+            union(&with(&thin_curve, &far_triangle(far)), &other).unwrap_err(),
+            Error::FeatureBelowTolerance { eps: auto_eps(far) }
+        );
+
+        // One box per subpath, with the closing segment.
+        let mut open_close = BezPath::new();
+        open_close.move_to((0.0, 0.0));
+        open_close.line_to((5.0, 1.0));
+        open_close.close_path();
+        open_close.line_to((0.0, 3.0));
+        open_close.close_path();
+        open_close.move_to((10.0, 10.0));
+        open_close.line_to((12.0, 11.0));
+        open_close.close_path();
+        assert_eq!(
+            subpath_bounding_boxes(&open_close),
+            vec![
+                kurbo::Rect::new(0.0, 0.0, 5.0, 3.0),
+                kurbo::Rect::new(10.0, 10.0, 12.0, 11.0)
+            ]
+        );
     }
 }

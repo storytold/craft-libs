@@ -1272,14 +1272,17 @@ fn dash_pattern(path: &BezPath, dashes: &[f32]) -> Option<Vec<f64>> {
 }
 
 /// `path` filled by `rule`, as a path filled nonzero. An even-odd path is rebuilt from its
-/// boundary; if that fails or panics it is kept as it is.
+/// boundary; if that fails or panics it is kept as it is. A subpath too small for the tolerance
+/// that the path's largest coordinate needs is rebuilt at that tolerance, and may be dropped.
 fn nonzero(path: &BezPath, rule: FillRule) -> BezPath {
     if rule == FillRule::NonZero {
         return path.clone();
     }
     let closed = closed(path);
-    let op = catch_unwind(AssertUnwindSafe(|| {
-        linesweeper::binary_op(&closed, &BezPath::new(), linesweeper::FillRule::EvenOdd, linesweeper::BinaryOp::Union)
+    let (empty, even_odd, union) = (BezPath::new(), linesweeper::FillRule::EvenOdd, linesweeper::BinaryOp::Union);
+    let op = catch_unwind(AssertUnwindSafe(|| match linesweeper::binary_op(&closed, &empty, even_odd, union) {
+        Err(linesweeper::Error::FeatureBelowTolerance { eps }) => linesweeper::binary_op_with_eps(&closed, &empty, even_odd, union, eps),
+        other => other,
     }));
     match op {
         Ok(Ok(contours)) => {
@@ -1341,5 +1344,24 @@ mod tests {
         // The sweep gives this path winding numbers that disagree around a point.
         let path = BezPath::from_svg("M4,-1 C8,1 -7,-2 5,8 L-4,-8 L2,1 L1,1 Z").unwrap();
         assert_eq!(nonzero(&path, FillRule::EvenOdd), closed(&path));
+    }
+
+    #[test]
+    fn even_odd_holes_stay_open_beside_a_far_point() {
+        // A square with a hole drawn in the same direction, a 0.3 wide sliver and a triangle at
+        // 3e13, which makes the sweep tolerance about 0.43.
+        let mut path = Rect::new(0.0, 0.0, 100.0, 100.0).to_path(0.0);
+        path.extend(Rect::new(25.0, 25.0, 75.0, 75.0).to_path(0.0).iter());
+        path.extend(Rect::new(200.0, 0.0, 200.3, 10.0).to_path(0.0).iter());
+        path.move_to((3.0e13, 3.0e13));
+        path.line_to((3.0e13 + 1.0e3, 3.0e13));
+        path.line_to((3.0e13, 3.0e13 + 1.0e3));
+        path.close_path();
+        // linesweeper reports the sliver, and the rebuild runs again at its tolerance.
+        let swept = linesweeper::binary_op(&path, &BezPath::new(), linesweeper::FillRule::EvenOdd, linesweeper::BinaryOp::Union);
+        assert!(matches!(swept, Err(linesweeper::Error::FeatureBelowTolerance { .. })));
+        let out = nonzero(&path, FillRule::EvenOdd);
+        assert_ne!(out.winding((10.0, 10.0).into()), 0);
+        assert_eq!(out.winding((50.0, 50.0).into()), 0);
     }
 }
