@@ -228,6 +228,10 @@ local patches listed below. `.cargo_vcs_info.json` names the commit it was packa
 `824b0791a750f7b27b8edcbb6c6244d0e629875e`. That commit is not in the GitHub repository the manifest
 names, which is archived; its README says development moved off GitHub.
 
+local patches listed below. `.cargo_vcs_info.json` names the commit it was packaged from,
+`824b0791a750f7b27b8edcbb6c6244d0e629875e`. That commit is not in the GitHub repository the manifest
+names, which is archived; its README says development moved off GitHub.
+
 Every file here except this one, `SOURCE.json` and the patched files below is byte for byte the file
 in the `.crate` archive. `SOURCE.json` records the hash of the `.crate` download
 (`source_archive_sha256`) and, for every file kept, the hash in the package (`source_sha256`) and the
@@ -290,6 +294,7 @@ Every change here updates this table and `SOURCE.json` in the same commit.
 
 Every change here updates this table and `SOURCE.json` in the same commit.
 | `src/topology.rs` | `contours_for_positions` finds the nearest boundary segment west of each new contour through `Topology::west_boundary`, which remembers the answer for every segment it passes, so each link of a scan-west chain is followed once per call. A segment's boundary test runs the first time the walk asks for it, and its result is kept. Before, every contour walked its whole chain again, and `n` bars of one set west of `m` squares of the other with the test "first set and not second" called `inside` about `4nm` times: 1,024,240,000 calls for `n = m = 16,000`. The contours do not change. The `contour_starts_follow_each_west_chain_once` test counts the calls to `inside` for 200 bars and 200 squares, and `contour_starts_find_the_boundary_past_non_boundary_segments` checks the parents of squares whose chains pass non-boundary segments. `contours_of_one_polygon_test_the_boundary_only_where_needed` counts the calls to `inside` for one polygon with 1,000 edges. |
+| `src/curve/mod.rs` | `solve_t_for_y` asks the root finder for `t` to the precision of f64 (`x_error` 0) instead of to within 1e-12. The x error of a `t` that is off by 1e-12 grows with the coordinates: on a curve 1e9 tall it reached 166 times `64 * f64::EPSILON * 1e9`, and pieces that `y_subsegment` cut from curves near 3e7 tall moved by tens of tolerances. Comparing two near-parallel curves of that size recursed down to y intervals shorter than the tolerance: 950,130 entries and 9 s for a pair 3e7 tall, minutes for a pair 1e8 tall. The `solve_x_for_y_on_tall_curve` test checks x on a curve 1e9 tall against a bisection, and the `near_parallel_tall_curves` test compares two curves 2e7 tall, 1.2 tolerances apart, and allows at most 64 entries. |
 
 `omitted_files` lists the 43 files of the package left out here, with their hashes:
 
