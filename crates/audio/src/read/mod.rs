@@ -164,9 +164,10 @@ impl DecodeOptions {
 pub struct TrackInfo {
     /// The value for [`DecodeOptions::track`].
     pub index: usize,
-    /// The codec the container names (an AAC track that turns out to be HE-AAC is `Aac` here).
+    /// The codec the container names (an AAC track that turns out to be HE-AAC is `Aac` here). A
+    /// raw ADTS stream names none, so this is what decoding finds.
     pub codec: CodecId,
-    /// The sample rate the container declares, if it does.
+    /// The sample rate the container declares, if it does; for raw ADTS, the decoded rate.
     pub sample_rate: Option<u32>,
     /// The channel count the container declares, if it does.
     pub channels: Option<u16>,
@@ -182,11 +183,12 @@ enum Inner<'a> {
 /// A file's audio, decoded block by block: the streaming counterpart of [`decode`], with seeking
 /// and track choice.
 ///
-/// Native formats (WAV, AIFF, and PCM in MP4/MOV and Matroska/WebM) read their sample data from
-/// the source packet by packet. The container's packet index is held in memory (tens of bytes per
-/// packet), and opening a Matroska file reads through the whole file to build it; WAV and AIFF
-/// need no index. Formats symphonia decodes (AAC, MP1/MP2/MP3, FLAC, ALAC, Vorbis, CAF, ADPCM,
-/// A-law, µ-law) read the whole source into memory first; their decoded audio still streams.
+/// Native formats (WAV, AIFF, AAC and PCM in MP4/MOV and Matroska/WebM, and raw ADTS streams)
+/// read their sample data from the source packet by packet. The container's packet index is held
+/// in memory (tens of bytes per packet), and opening a Matroska file or a raw ADTS stream reads
+/// through the whole file to build it; WAV and AIFF need no index. Formats symphonia decodes (MP1/MP2/MP3, FLAC, ALAC,
+/// Vorbis, CAF, ADPCM, A-law, µ-law) read the whole source into memory first; their decoded audio
+/// still streams.
 ///
 /// ```no_run
 /// # fn demo() -> craft_audio::Result<()> {

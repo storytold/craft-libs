@@ -7,4 +7,5 @@ use craft_media_testkit as common;
 #[macro_use]
 mod testkit;
 
+mod aac;
 mod routing_oracle;
