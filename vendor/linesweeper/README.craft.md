@@ -162,6 +162,10 @@ local patches listed below. `.cargo_vcs_info.json` names the commit it was packa
 `824b0791a750f7b27b8edcbb6c6244d0e629875e`. That commit is not in the GitHub repository the manifest
 names, which is archived; its README says development moved off GitHub.
 
+local patches listed below. `.cargo_vcs_info.json` names the commit it was packaged from,
+`824b0791a750f7b27b8edcbb6c6244d0e629875e`. That commit is not in the GitHub repository the manifest
+names, which is archived; its README says development moved off GitHub.
+
 Every file here except this one, `SOURCE.json` and the patched files below is byte for byte the file
 in the `.crate` archive. `SOURCE.json` records the hash of the `.crate` download
 (`source_archive_sha256`) and, for every file kept, the hash in the package (`source_sha256`) and the
@@ -199,6 +203,7 @@ and, for every file kept, the hash in the package (`source_sha256`) and the hash
 | `Topology::from_path`, the other `Topology` constructors that take Bézier paths, `Segments::add_bez_path` and `binary_op` skip a `ClosePath` that comes before the first point of a path instead of panicking with "Can't start a segment on a ClosePath" | `Craft patch (leading ClosePath)` | `src/segments.rs`, `src/lib.rs` | `tests::leading_close_path` |
 
 Every change here updates this table and `SOURCE.json` in the same commit.
+| `src/topology.rs` | `Topology::merge_coincident` compares a segment with its nearest west neighbor that an earlier merge did not delete. Before, it used the west neighbor recorded when the segment was created, so a run of three or more coincident segments merged only in pairs: four copies of one square, two in each direction, left 4 segments and 2 zero-area contours instead of none. The `merge_coincident_runs_longer_than_two` test covers that input and three copies, which leave the square once. |
 
 `omitted_files` lists the 43 files of the package left out here, with their hashes:
 
