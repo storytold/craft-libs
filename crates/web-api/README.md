@@ -15,7 +15,7 @@ At most 64 calls may wait for the app at once (`PageApi::with_max_in_flight`); a
 
 ## Who can call it
 
-`window.<app>` is a plain property of the page's own global object: it is not a network port and it has no key. Any script that runs in the page's origin can call every function and so has the same command control as the app's desktop control server; a page from another origin, a parent, a child or an opener cannot reach it (the host messages in `craft-web-host` check `event.origin` and `event.source` separately). Treat it as you treat the page's own scripts.
+`window.<app>` is a plain property of the page's own global object: it is not a network port and it has no key. Any script that runs in the page's origin can call every function and so has the same command control as the app's desktop control server; a page from another origin cannot reach it, but a same-origin parent, child or opener that holds a reference to the window can call it directly, and frame or opener separation alone does not stop that (the host messages in `craft-web-host` check `event.origin` and `event.source`, and those checks do not apply to a direct call). Treat it as you treat the page's own scripts.
 
 `screenshot()` resolves with the reply the app's control method sends, plus `data` when the reply carries the PNG inline: the base64 PNG, whatever field the app names it (`pngBase64`, `png_base64`, `png` or `base64`). A reply with no inline PNG, such as one the app wrote to a `path`, has no `data` and is unchanged.
 

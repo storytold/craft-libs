@@ -92,7 +92,7 @@ impl PageApi {
             "request",
             Closure::<dyn FnMut(String, JsValue) -> js_sys::Promise>::new(move |method: String, params: JsValue| {
                 let page = page.clone();
-                future_to_promise(async move { request_promise_outcome(&page.call(&method, from_js(&params)).await) })
+                future_to_promise(async move { request_promise_outcome(&page.call(&method, || from_js(&params)).await) })
             })
             .into_js_value(),
         )?;
@@ -104,7 +104,7 @@ impl PageApi {
                 Closure::<dyn FnMut(String, JsValue) -> js_sys::Promise>::new(move |command: String, params: JsValue| {
                     let page = page.clone();
                     future_to_promise(async move {
-                        let params = json!({"command": command, "params": from_js(&params)});
+                        let params = || json!({"command": command, "params": from_js(&params)});
                         request_promise_outcome(&page.call(method, params).await)
                     })
                 })
@@ -118,7 +118,7 @@ impl PageApi {
                 "commands",
                 Closure::<dyn FnMut() -> js_sys::Promise>::new(move || {
                     let page = page.clone();
-                    future_to_promise(async move { request_promise_outcome(&page.call(method, json!({})).await) })
+                    future_to_promise(async move { request_promise_outcome(&page.call(method, || json!({})).await) })
                 })
                 .into_js_value(),
             )?;
@@ -131,7 +131,7 @@ impl PageApi {
                     name,
                     Closure::<dyn FnMut(JsValue) -> js_sys::Promise>::new(move |params: JsValue| {
                         let page = page.clone();
-                        future_to_promise(async move { request_promise_outcome(&page.call(method, from_js(&params)).await) })
+                        future_to_promise(async move { request_promise_outcome(&page.call(method, || from_js(&params)).await) })
                     })
                     .into_js_value(),
                 )?;
@@ -144,7 +144,7 @@ impl PageApi {
                 "screenshot",
                 Closure::<dyn FnMut(JsValue) -> js_sys::Promise>::new(move |params: JsValue| {
                     let page = page.clone();
-                    let params = screenshot_params(from_js(&params));
+                    let params = move || screenshot_params(from_js(&params));
                     future_to_promise(async move { request_promise_outcome(&screenshot_data(page.call(method, params).await)) })
                 })
                 .into_js_value(),
@@ -158,8 +158,8 @@ impl PageApi {
     /// with the page's timeout. If the app does not answer within the timeout, the error says so
     /// (a hidden tab answers when it is shown again) and the app's request future is dropped: an app
     /// that releases a request when its future goes away never runs, late, a call the page was told
-    /// had failed.
-    async fn call(&self, method: &str, params: Value) -> Value {
+    /// had failed. `params` is built after the in-flight check, so a call that is turned away costs no conversion.
+    async fn call(&self, method: &str, params: impl FnOnce() -> Value) -> Value {
         if self.in_flight.get() >= self.max_in_flight {
             return json!({
                 "ok": false,
@@ -169,7 +169,7 @@ impl PageApi {
         self.in_flight.set(self.in_flight.get() + 1);
         let _slot = InFlight(&self.in_flight);
         let timeout = Timeout::new(self.timeout_ms);
-        let mut work = (self.request)(method.to_string(), params);
+        let mut work = (self.request)(method.to_string(), params()); // params are built only once a slot is held
         let reply = std::future::poll_fn(|cx| {
             if let Poll::Ready(reply) = work.as_mut().poll(cx) {
                 return Poll::Ready(Some(reply));
