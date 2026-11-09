@@ -25,7 +25,7 @@
 use std::cell::OnceCell;
 use std::f64::consts::{FRAC_PI_2, PI, TAU};
 
-use kurbo::{CubicBez, Line, ParamCurve, Point, Rect, Vec2};
+use kurbo::{CubicBez, Line, ParamCurve, ParamCurveNearest, Point, Rect, Vec2};
 
 /// Pieces a curve is cut into, equal in its parameter, where the cones of the whole curve meet.
 const PIECES: usize = 8;
@@ -170,6 +170,11 @@ impl Curve {
         self.tangents.is_all()
     }
 
+    /// The cubic itself.
+    pub(crate) fn cubic(&self) -> &CubicBez {
+        &self.c
+    }
+
     fn pieces(&self) -> &[Piece] {
         self.pieces.get_or_init(|| {
             (0..PIECES)
@@ -247,6 +252,31 @@ pub(crate) fn cubics_cross_at_most(a: &Curve, b: &Curve, slack: f64) -> u64 {
         }
     }
     total.min(9)
+}
+
+/// Do two cubics run along one curve, as pieces of one cubic do (a fan of them from the start of it, windows of it)? The cones do
+/// not tell them from curves that cross at a shallow angle, and they cost the sweep as lines on one line do. A stretch of at least
+/// a quarter of the one that lies within `within` of the other: it is sampled at nine places (eighths), and the stretch is three
+/// samples in a row each within `within` of the other (by the distance to the curve, the box of the other widened by `within`
+/// ruling most of them out at once). It is tried either way round: a piece runs along the whole it is a piece of, and the whole
+/// not along the piece. A stretch shorter than a quarter of each is not seen.
+pub(crate) fn coincide(a: &Curve, b: &Curve, within: f64) -> bool {
+    runs_along(a, b, within) || runs_along(b, a, within)
+}
+
+fn runs_along(a: &Curve, b: &Curve, within: f64) -> bool {
+    let reach = hull(&points(&a.c)).inflate(within, within);
+    let mut run = 0;
+    for k in 0..=8 {
+        let x = b.c.eval(f64::from(k) / 8.0);
+        let inside = x.x >= reach.x0 && x.x <= reach.x1 && x.y >= reach.y0 && x.y <= reach.y1;
+        let near = inside && a.c.nearest(x, 1e-9).distance_sq <= within * within;
+        run = if near { run + 1 } else { 0 };
+        if run >= 3 {
+            return true;
+        }
+    }
+    false
 }
 
 /// What a pair of pieces whose boxes overlap counts: one if the directions of their tangents (as lines) are apart, since two arcs
@@ -618,5 +648,38 @@ mod tests {
         // A line from the apex along the cubic is not separated from it (the control polygon is on the line).
         assert_eq!(line_cubic_cross_at_most(&Line::new((0.0, 0.0), (20.0, 20.0)), &short), 3);
         assert_eq!(line_cubic_cross_at_most(&Line::new((0.0, 0.0), (-5.0, -5.0)), &short), 0);
+    }
+
+    /// Cubics run along one another where one lies along the other, and the count tells them: windows of one cubic that overlap by
+    /// 0.4 of it or more (any two of 500 random cubics' windows, from the first fifth to the last two fifths), and a cubic and
+    /// itself moved by 1e-5 (under the reach of 6.4e-5), are along one another; and two cubics that merely cross (500 pairs of
+    /// random ones), one moved by a tenth, and two that leave one point at 0.3 radians apart, are not.
+    #[test]
+    fn cubics_that_lie_along_one_another_are_told_from_ones_that_cross() {
+        let mut rng = Rng(0x0c01_1c1d_e5ee_d001);
+        let reach = 6.4e-5;
+        let (mut along, mut together, mut crossed, mut moved, mut apart) = (0, 0, 0, 0, 0);
+        for _ in 0..500 {
+            let c = random_cubic(&mut rng, 100.0);
+            let mut window = |lo: f64, hi: f64| {
+                let (t0, t1) = (rng.range(0.0, lo), rng.range(hi, 1.0));
+                Curve::new(c.subsegment(t0..t1))
+            };
+            let (a, b) = (window(0.2, 0.6), window(0.2, 0.6));
+            along += u32::from(coincide(&a, &b, reach));
+            let other = Curve::new(random_cubic(&mut rng, 100.0));
+            crossed += u32::from(coincide(&Curve::new(c), &other, reach));
+            let shift = |by: Vec2| Curve::new(CubicBez::new(c.p0 + by, c.p1 + by, c.p2 + by, c.p3 + by));
+            together += u32::from(coincide(&Curve::new(c), &shift(Vec2::new(1e-5, 0.0)), reach));
+            moved += u32::from(coincide(&Curve::new(c), &shift(Vec2::new(0.0, 0.1)), reach));
+            let leave = |a: f64| {
+                let (o, d) = (Point::ORIGIN, Vec2::new(a.cos(), a.sin()));
+                Curve::new(CubicBez::new(o, o + d * 30.0 + Vec2::new(0.0, 5.0), o + d * 60.0, o + d * 100.0))
+            };
+            apart += u32::from(coincide(&leave(0.3), &leave(0.6), reach));
+        }
+        assert_eq!(along, 500, "windows of one cubic");
+        assert_eq!(together, 500, "a cubic and itself moved by 1e-5");
+        assert_eq!((crossed, moved, apart), (0, 0, 0), "cubics that cross, are 0.1 apart, or leave one point apart");
     }
 }

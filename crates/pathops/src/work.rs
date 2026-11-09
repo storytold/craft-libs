@@ -92,6 +92,8 @@ pub(crate) enum Work {
     WindingSteps,
     /// Nanoseconds of the sweep priced for the ends of segments at the points where they meet (`Limits::ends_work`).
     PricedEnds,
+    /// Pairs of curves tried for running along one another (the work of curves that coincide).
+    CoincidenceTests,
 }
 
 #[cfg(test)]

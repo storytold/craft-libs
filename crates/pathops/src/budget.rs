@@ -18,11 +18,12 @@
 //! The bounds above, and those on fitting, joining and the shape builder, are the defaults of
 //! [`Limits`], which an application can choose for the operations it runs ([`with_limits`]).
 
+use std::borrow::Cow;
 use std::cell::Cell;
 
 use kurbo::{BezPath, CubicBez, Line, ParamCurve, ParamCurveExtrema, PathSeg, Point, Rect};
 
-use crate::crossings::{Curve, cubics_cross_at_most, line_cubic_cross_at_most};
+use crate::crossings::{Curve, coincide, cubics_cross_at_most, line_cubic_cross_at_most};
 use crate::work::{self, Work};
 
 /// Most pairs of segments whose bounds overlap that a planar map is built from (the default of
@@ -101,14 +102,19 @@ pub const MAX_ENDS_AT_A_POINT: usize = 512;
 /// sweep takes time for each point that grows with the number of ends there (about the fourth power of it, as measured:
 /// pies of 64, 96, 128, 192 and 256 slices, each with 2 ends at its centre for each slice, take 12, 40, 76, 270 and 1,300 ms; the cost
 /// at a point of `n` ends is taken as the greater of `5.6 n^3` and `0.019 n^4` nanoseconds, which is that, and what 100
-/// polygons of 20 sides one on another take (0.9 s) too), which the limit on any one point does not add up: 8 pies of 256
+/// pies take), which the limit on any one point does not add up: 8 pies of 256
 /// slices (512 ends at each centre, 8,192 elements) stacked on a diagonal took 15 s, and 30 of them 66 s and 2.7 GB. The
 /// cost of every point (the ends within a point's square and the squares round it, `most_ends_at_a_point`) is added, and
 /// past the limit an operation fails as [`crate::PathOpsError::TooComplex`] before it sweeps: 3 such pies are made in 3.3
-/// to 3.7 s, 4 are refused. A fan of 256 slices alone takes 1.3 s.
+/// to 3.7 s, 4 are refused. A fan of 256 slices alone takes 1.3 s. Three kinds of ends cost more than the pie of that fit, and
+/// are priced by their own: the ends of copies, a stack of one shape one on another (230 squares took 9.6 s, as the star of 1,291
+/// points took 6.4 beside it, so that they are the cube of their number at 18.5 nanoseconds, in proportion to the pairs of ends
+/// there that are of copies of one segment); the ends of long segments moved a few tolerances apart, within 64 of one another (a
+/// pie of 256 slices whose apexes are each moved by up to 10 tolerances took 1.1 GB and 4 of them 4.5 GB, so that they are the
+/// cube at 19.6, for the memory); and the ends of curves that run along one another, which the work of crossings holds.
 pub const MAX_ENDS_WORK: usize = 4_000_000_000;
 
-/// Most lines crossing at one point, as work: 16,777,216. The sweep takes about the cube of the number
+/// Most lines crossing at one point, as work (or curves that run along one another, or lines on one line): 16,777,216. The sweep takes about the cube of the number
 /// of lines that cross at one point (a pie of k slices has them end there, [`MAX_ENDS_AT_A_POINT`]; these
 /// pass through with no end), which the count of crossings does not see: 150 lines through one point take
 /// 0.2 s, 300 take 1.7 s, 450 take 8 s, and a thousand pass the pair and event limits and would take a
@@ -120,7 +126,11 @@ pub const MAX_ENDS_WORK: usize = 4_000_000_000;
 /// that of each), and two lines too near parallel to place a crossing at all count as crossing somewhere along their length,
 /// which adds them to the work of both lines, so 450 lines through one point at angles of 1e-13 are held as the 450 they are,
 /// and so are lines that lie on one line and overlap (250 on a diagonal took 13 s, and 500 over a minute and a half), except level
-/// ones, which are not on the sweep line. Crossings of curves are not looked for.
+/// ones, which are not on the sweep line. A curve that is a line to the tolerance is a line here, and the other curves count
+/// where one runs along another (256 straight cubics, or pieces of one arc, or windows of one, took 7 to 8 s as the star of 1,291
+/// points took 5 to 6 beside them, and counted nothing of work), as many as it runs along, squared and 1.5 times. Crossings
+/// within 64 tolerances of one another along a line are one point's, and within a thousand but not at one point count 1.7 times
+/// (300 lines through a point moved sideways by 10 tolerances took 2.6 GB, aborting under a limit of 3 GB).
 pub const MAX_CROSSING_WORK: usize = 1 << 24;
 
 /// Most entries the windings of the arrangement of several inputs hold: 33,554,432 (about 13 bytes
@@ -233,10 +243,11 @@ pub struct Limits {
     /// Most segment ends at one point ([`MAX_ENDS_AT_A_POINT`]).
     pub ends_at_a_point: usize,
     /// Most work of the ends of segments at all the points where they meet, added up: nanoseconds, by the cost of a point of `n`
-    /// ends, the greater of `5.6 n^3` and `0.019 n^4` ([`MAX_ENDS_WORK`]).
+    /// ends, the greater of `5.6 n^3` and `0.019 n^4`, and more for ends of copies and ends moved a few tolerances apart
+    /// ([`MAX_ENDS_WORK`]).
     pub ends_work: usize,
-    /// Most work of the lines that cross at one point: the square of the others each crosses there,
-    /// summed over the lines and the points ([`MAX_CROSSING_WORK`]).
+    /// Most work of the lines that cross at one point (or lie on one line, or curves that run along one another): the square of
+    /// the others each crosses there, summed over the lines and the points ([`MAX_CROSSING_WORK`]).
     pub crossing_work: usize,
     /// Most entries the windings of an arrangement of several inputs hold, as estimated before it
     /// from the pieces the sweep cuts the segments into ([`MAX_COVERAGE_ENTRIES`]).
@@ -497,34 +508,136 @@ pub(crate) fn peak_depth(heights: &[(f64, f64)]) -> usize {
 /// squares is not split between them).
 #[cfg(test)]
 pub(crate) fn most_ends_at_a_point(ends: &[Point], extent: f64) -> usize {
-    ends_at_points(ends, extent).0
+    ends_at_points(ends, &[], &[], extent).0
 }
+
+/// What the sweep takes at a point where `n` ends of copies of segments meet, in nanoseconds: the cube of `n` and a constant, where
+/// pies, whose segments share only their apex, take the fourth power (from 296 ends), and less. Measured on stacks of copies:
+/// 180, 200 and 230 squares took 2.7, 3.8 and 6.5 s, 255 triangles 5.9 s, 255 copies of a segment 4.6 s, 4 stacks of 200 copies
+/// 11.8 s and 21 stacks of 128 copies 15.6 s (ends at a corner `n` = twice the copies; at the load of the machine as the star
+/// of 1,291 points took 4.3 s). That is 2.6 to 4.1 times what the cube of the pie fit comes to; 18.5 is 3.3 times it.
+const COPIES_COST: f64 = 18.5;
+
+/// How wide, in sweep tolerances, a cluster of ends is to the pricing of the ends of long segments (as against the four of the
+/// squares of [`ends_at_points`], which sees ends at one point). Ends a few tolerances apart cost the sweep what ends at one
+/// point do, and more memory: a pie of 256 slices whose apexes were moved each by up to 10 tolerances took 1.5 s and 1.1 GB (the
+/// pie 0.8 s and 88 MB), 4 of them 4.5 GB and a pie of 400 slices so 4.9 GB; the memory falls past 30 tolerances (0.4 GB) and 60
+/// (0.16 GB). A pie 100 tolerances out took 0.2 s.
+const CLUSTER_REACH: f64 = 64.0;
+
+/// A segment is long, to the clusters of [`CLUSTER_REACH`], if its bounds are more than four of them across. The ends of short
+/// ones, many of them in a cluster, are a curve cut finely or a dense polyline, which cost the sweep little (100,000 cubics round a
+/// circle of radius 0.09, 5 tolerances apart, took 0.4 s), and not segments that leave a point each its own way.
+const LONG_SEGMENT: f64 = 4.0 * CLUSTER_REACH;
+
+/// The price of a cluster of `fuzz` over a cluster at one point, in the cube of its ends: ends moved a few tolerances apart took
+/// the sweep 1.5 to 3.4 times as long as at one point, and 8 bytes for each cube of the ends in memory, which at 4 billion
+/// nanoseconds of the cube would come to 4 GB (a limit of 3 GB aborts); 3.5 times the cube of the fit, 19.6, makes it 1.7 GB.
+const FUZZ_COST: f64 = 19.6;
 
 /// The most ends at one point (`most_ends_at_a_point`), and the work of them at all the points added up, in the nanoseconds
 /// the sweep takes ([`MAX_ENDS_WORK`]): for each square that holds an end, the cost of the ends in it and the squares round it,
-/// in proportion to the ends in the square (a cluster across the edge of two squares, or of four, is counted once).
-pub(crate) fn ends_at_points(ends: &[Point], extent: f64) -> (usize, u64) {
+/// in proportion to the ends in the square (a cluster across the edge of two squares, or of four, is counted once). That is of the
+/// squares of four tolerances, over every end; and again over squares of [`CLUSTER_REACH`] tolerances, over the ends of long
+/// segments only, the greater of the two being taken. Where the ends are those of copies (`copies` says of each segment how many
+/// there are of it, itself among them, and `ends` holds two for each), what the pairs of copies add is priced by [`COPIES_COST`]:
+/// in proportion to the pairs of the ends there that are of copies of one segment (twice that, to one: two edges of a corner that
+/// are each a stack of copies are half the pairs). Where the ends are not at one point but spread over the wide square, they
+/// are priced by [`FUZZ_COST`], in proportion to the ends not at the point where most are.
+pub(crate) fn ends_at_points(ends: &[Point], copies: &[u32], long: &[bool], extent: f64) -> (usize, u64) {
     let eps = crate::boolean::sweep_tolerance(extent);
-    let cell = 4.0 * eps;
+    let (most, work) = ends_cost(ends, copies, None, eps, 4.0);
+    let (wide_most, wide_work) = ends_cost(ends, copies, Some(long), eps, CLUSTER_REACH);
+    (most.max(wide_most), work.max(wide_work))
+}
+
+/// [`ends_at_points`] over squares of `cells` tolerances, of the ends of the segments that are `long` if that is given.
+fn ends_cost(ends: &[Point], copies: &[u32], long: Option<&[bool]>, eps: f64, cells: f64) -> (usize, u64) {
+    let cell = cells * eps;
     let key = |p: &Point| ((p.x / cell).floor() as i64, (p.y / cell).floor() as i64);
-    let mut counts: std::collections::HashMap<(i64, i64), usize> = std::collections::HashMap::new();
-    for p in ends {
-        *counts.entry(key(p)).or_default() += 1;
+    // Per square: the ends, and for each the other copies of its segment (which end at the same point), added.
+    let mut counts: std::collections::HashMap<(i64, i64), (usize, u64)> = std::collections::HashMap::new();
+    // Where each end lies exactly, to find where most of a square's are (for the wide squares only).
+    let mut exact: std::collections::HashMap<(u64, u64), u32> = std::collections::HashMap::new();
+    for (k, p) in ends.iter().enumerate() {
+        if long.is_some_and(|long| !long.get(k / 2).copied().unwrap_or(false)) {
+            continue;
+        }
+        let square = counts.entry(key(p)).or_default();
+        square.0 += 1;
+        square.1 += u64::from(copies.get(k / 2).copied().unwrap_or(1).saturating_sub(1));
+        if long.is_some() {
+            *exact.entry((p.x.to_bits(), p.y.to_bits())).or_default() += 1;
+        }
+    }
+    // The most ends at one exact point in each square.
+    let mut modal: std::collections::HashMap<(i64, i64), u32> = std::collections::HashMap::new();
+    for (&(x, y), &n) in &exact {
+        let square = modal.entry(key(&Point::new(f64::from_bits(x), f64::from_bits(y)))).or_default();
+        *square = (*square).max(n);
     }
     let (mut most, mut work) = (0usize, 0u64);
-    for &(x, y) in counts.keys() {
+    for (&(x, y), &(own, others)) in &counts {
         let n = (x.saturating_sub(1)..=x.saturating_add(1))
             .flat_map(|i| (y.saturating_sub(1)..=y.saturating_add(1)).map(move |j| (i, j)))
             .filter_map(|c| counts.get(&c))
+            .map(|c| c.0)
             .sum::<usize>();
         most = most.max(n);
         // The cost of the ends round this square, shared among the squares by their ends, so that a cluster across two or four
         // of them is counted once, as its whole cost, and not for each.
-        let own = counts.get(&(x, y)).copied().unwrap_or(0) as f64;
-        let n = n as f64;
-        work = work.saturating_add(((5.6 * n * n * n).max(0.019 * n * n * n * n) * own / n) as u64);
+        let (own_f, others, n) = (own as f64, others as f64, n as f64);
+        let pie = (5.6 * n * n * n).max(0.019 * n * n * n * n);
+        let of_copies = (COPIES_COST * n * n * n).max(pie);
+        let of_fuzz = (FUZZ_COST * n * n * n).max(pie);
+        let copies_share = if n > 1.0 { (2.0 * others / (own_f * (n - 1.0))).clamp(0.0, 1.0) } else { 0.0 };
+        let fuzz_share = modal.get(&(x, y)).map_or(0.0, |&m| 1.0 - f64::from(m) / own_f).clamp(0.0, 1.0);
+        let share = copies_share.max(fuzz_share);
+        let dearer = if fuzz_share > copies_share { of_fuzz } else { of_copies };
+        work = work.saturating_add((((1.0 - share) * pie + share * dearer) * own_f / n) as u64);
     }
     (most, work)
+}
+
+/// For each segment of `seg`, whether it is long ([`LONG_SEGMENT`] of [`CLUSTER_REACH`] tolerances: its bounds more than that
+/// across in either direction).
+fn long_segments(seg: &Segments) -> Vec<bool> {
+    let across = LONG_SEGMENT * crate::boolean::sweep_tolerance(seg.extent);
+    seg.boxes.iter().map(|b| b.width() > across || b.height() > across).collect()
+}
+
+/// For each segment of `seg`, how many there are of it, itself among them (the same points, either way round).
+fn copies_of(seg: &Segments) -> Vec<u32> {
+    use std::hash::{DefaultHasher, Hash, Hasher};
+    let key = |s: &PathSeg| -> u64 {
+        let b = |p: Point| (p.x.to_bits(), p.y.to_bits());
+        let (pts, n) = match s {
+            PathSeg::Line(l) => ([b(l.p0), b(l.p1), (0, 0), (0, 0)], 2),
+            PathSeg::Quad(q) => ([b(q.p0), b(q.p1), b(q.p2), (1, 1)], 3),
+            PathSeg::Cubic(c) => ([b(c.p0), b(c.p1), b(c.p2), b(c.p3)], 4),
+        };
+        let (forward, mut backward) = (pts, pts);
+        if let Some(part) = backward.get_mut(..n) {
+            part.reverse();
+        }
+        let (f, b) = (forward.get(..n).unwrap_or(&[]), backward.get(..n).unwrap_or(&[]));
+        let mut h = DefaultHasher::new();
+        (n, if f <= b { f } else { b }).hash(&mut h);
+        h.finish()
+    };
+    let keys: Vec<u64> = seg
+        .kind
+        .iter()
+        .map(|k| match k {
+            Kind::Line(i) => seg.line_segs.get(*i).map_or(0, |l| key(&PathSeg::Line(*l))),
+            Kind::Curve(i) => seg.curve_segs.get(*i).map_or(0, key),
+        })
+        .collect();
+    let mut seen: std::collections::HashMap<u64, u32> = std::collections::HashMap::new();
+    for k in &keys {
+        *seen.entry(*k).or_default() += 1;
+    }
+    keys.iter().map(|k| seen.get(k).copied().unwrap_or(1)).collect()
 }
 
 /// For each query `(a, b)`, how many of the points `(p, q)` have `p < a` and `q < b`. O(n log n): the
@@ -903,74 +1016,219 @@ fn real_crossings(seg: &Segments, slack: f64, cap: usize) -> Option<u64> {
     within.then_some(crossed)
 }
 
-/// The work of the lines of `seg` that cross at one point: for each line, its crossings with others
-/// at (within a tolerance of) one point, `m` of them where `m` is two or more, count `m`², so a point
-/// where `c` lines cross costs about `c`³, the sweep's cost for it. The crossings are found only when
-/// all `pairs` of line bounds that overlap, were they at one point, could cost more than the limit.
+/// How wide, in sweep tolerances, a point is to the work of lines that cross: crossings along one line within this (and the
+/// uncertainty of each) of one another are one point's. Crossings a few tolerances apart cost the sweep as the crossings at one
+/// point do, and in more memory, for it snaps what lies within its tolerance and goes over it again: 300 lines through a point,
+/// each moved sideways by up to 10 tolerances, took 2.6 GB and aborted under a limit of 3 GB, and a pie of 256 slices whose
+/// apexes were moved so 1.1 GB (an exact one 88 MB). The cost falls away from there: at 40 tolerances 0.6 s and 400 MB, at 100
+/// 0.2 s and 63 MB.
+const CROSSING_REACH: f64 = 64.0;
+
+/// Tenths of the work of crossings at one point that crossings a few tolerances apart count for: 256 lines through a point took
+/// 0.8 s and 58 MB, and moved sideways by 2 to 40 tolerances 3.1 s and 2.7 GB to 0.6 s and 0.4 GB (aborting under a limit of 3 GB at
+/// 300), which at 1.7 times the work keeps the most admitted (215) to 1.6 GB.
+const LOOSE_WORK: u64 = 17;
+
+/// How far apart, in tolerances, crossings are at the most to be a few tolerances apart in that: past it the crossings of a line
+/// are spread out and the memory falls (300 lines moved 200 tolerances took 62 MB).
+const LOOSE_SPREAD: f64 = 1000.0;
+
+/// What a place where curves run along one another counts for, against one where lines on one line do. The sweep takes about 5
+/// times as long over a pair of curves that run along one curve as over a pair of lines on one line at the same count (256
+/// pieces of one arc from its start took 7 s; 256 lines from a point on a line, with the segments that close them, which count 512
+/// of work, 11 s).
+const CURVE_COINCIDENCE_WEIGHT: f64 = 1.5;
+
+/// The partners of a curve (curves whose tangents may run along its own) tried for running along it: all of them when there are
+/// this many or fewer, and this many spread over the rest.
+const COINCIDENCE_TESTS: usize = 24;
+
+/// The line a curve is, if it is one to the sweep's tolerance: every control point within `tol` of the line through its ends,
+/// which are more than `2 tol` apart. It is the span of the control points along that line (the curve can run past its ends and
+/// back, but never off it).
+fn straight_hull(s: &PathSeg, tol: f64) -> Option<Line> {
+    let c = match s {
+        PathSeg::Cubic(c) => *c,
+        PathSeg::Quad(q) => q.raise(),
+        PathSeg::Line(_) => return None,
+    };
+    let d = c.p3 - c.p0;
+    let length = d.hypot();
+    if length.is_nan() || length <= 2.0 * tol || [c.p1, c.p2].iter().any(|p| (d.cross(*p - c.p0) / length).abs() > tol) {
+        return None;
+    }
+    let along = [0.0, (c.p1 - c.p0).dot(d) / length, (c.p2 - c.p0).dot(d) / length, length];
+    let (lo, hi) = (along.iter().copied().fold(f64::INFINITY, f64::min), along.iter().copied().fold(f64::NEG_INFINITY, f64::max));
+    let unit = d / length;
+    Some(Line::new(c.p0 + unit * lo, c.p0 + unit * hi))
+}
+
+/// The work of the segments of `seg` that cross, or run along one another, at one point or where it is not known: for each line,
+/// its crossings with others at (within [`CROSSING_REACH`] tolerances of) one point, `m` of them where `m` is two or more, count
+/// `m`², so a point where `c` lines cross costs about `c`³, the sweep's cost for it; lines that lie on one line and overlap, which
+/// cross anywhere along them, count all together. A curve that is a line to the sweep's tolerance is one of them. The other curves
+/// count where one runs along another (they are told by [`crate::crossings::coincide`], for each curve among a few of those whose
+/// tangents may run along its own), as many as it runs along, squared, and weighted by [`CURVE_COINCIDENCE_WEIGHT`]. The crossings
+/// are found only when all `pairs` of line bounds that overlap, were they at one point, could cost more than the limit, or the
+/// curves may.
 fn crossing_work_within(seg: &Segments, pairs: usize, eps: f64, cap: usize) -> bool {
     let limit = limits().crossing_work as u64;
-    // Lines through one point: c(c - 1) / 2 pairs, and c (c - 1)² of work.
-    let c = ((1.0 + (1.0 + 8.0 * pairs as f64).sqrt()) / 2.0).ceil();
-    if c * (c - 1.0) * (c - 1.0) <= limit as f64 {
+    let slack = 2.0 * eps;
+    // The lines, and the curves that are lines: their bounds, and the lines (the lines as they are where no curve is one).
+    let mut hulls: Vec<Line> = Vec::new();
+    let mut bent: Vec<usize> = Vec::new();
+    for (i, s) in seg.curve_segs.iter().enumerate() {
+        match straight_hull(s, slack) {
+            Some(l) => hulls.push(l),
+            None => bent.push(i),
+        }
+    }
+    let (rects, lines): (Cow<[Rect]>, Cow<[Line]>) = if hulls.is_empty() {
+        (Cow::Borrowed(&seg.lines), Cow::Borrowed(&seg.line_segs))
+    } else {
+        let mut rects = seg.lines.clone();
+        let mut lines = seg.line_segs.clone();
+        for l in &hulls {
+            rects.push(Rect::from_points(l.p0, l.p1));
+            lines.push(*l);
+        }
+        (Cow::Owned(rects), Cow::Owned(lines))
+    };
+    let clique = |pairs: usize| ((1.0 + (1.0 + 8.0 * pairs as f64).sqrt()) / 2.0).ceil();
+    let mut line_pairs = pairs;
+    if !hulls.is_empty() {
+        let Some(all) = overlap_pairs(&rects, cap) else { return false };
+        line_pairs = all.saturating_sub(seg.touching_lines);
+    }
+    let bent_rects: Vec<Rect> = bent.iter().filter_map(|&i| seg.curves.get(i).copied()).collect();
+    let bent_pairs = if bent.len() > 1 { overlap_pairs(&bent_rects, cap) } else { Some(0) };
+    let Some(bent_pairs) = bent_pairs else { return false };
+    // Lines through one point: c(c - 1) / 2 pairs, and c (c - 1)² of work; curves that run along one another, the same weighted.
+    let (c, c_bent) = (clique(line_pairs), clique(bent_pairs));
+    let lines_may = c * (c - 1.0) * (c - 1.0) > limit as f64;
+    let curves_may = CURVE_COINCIDENCE_WEIGHT * CURVE_COINCIDENCE_WEIGHT * c_bent * (c_bent - 1.0) * (c_bent - 1.0) > limit as f64;
+    if !lines_may && !curves_may {
         return true;
     }
-    // For each line, where it is crossed (and to what the position is known), and by how many lines it is not known where.
-    let mut at: Vec<Vec<(f64, f64)>> = vec![Vec::new(); seg.line_segs.len()];
-    let mut anywhere: Vec<u64> = vec![0; seg.line_segs.len()];
-    let slack = 2.0 * eps;
-    let within = each_overlap(&seg.lines, cap, |i, j| {
-        work::add(Work::CrossingPairs, 1);
-        let (Some(a), Some(b)) = (seg.line_segs.get(i), seg.line_segs.get(j)) else { return };
-        match cross_of(a, b, slack) {
-            Cross::No => {}
-            Cross::At { s, r, err } => {
-                if let Some(list) = at.get_mut(i) {
-                    list.push((s, err));
+    let mut total = 0u64;
+    if lines_may {
+        // For each line, where it is crossed (and to what the position is known), and by how many lines it is not known where.
+        let mut at: Vec<Vec<(f64, f64)>> = vec![Vec::new(); lines.len()];
+        let mut anywhere: Vec<u64> = vec![0; lines.len()];
+        let within = each_overlap(&rects, cap, |i, j| {
+            work::add(Work::CrossingPairs, 1);
+            let (Some(a), Some(b)) = (lines.get(i), lines.get(j)) else { return };
+            match cross_of(a, b, slack) {
+                Cross::No => {}
+                Cross::At { s, r, err } => {
+                    if let Some(list) = at.get_mut(i) {
+                        list.push((s, err));
+                    }
+                    if let Some(list) = at.get_mut(j) {
+                        list.push((r, err));
+                    }
                 }
-                if let Some(list) = at.get_mut(j) {
-                    list.push((r, err));
-                }
-            }
-            Cross::Somewhere => {
-                for k in [i, j] {
-                    if let Some(n) = anywhere.get_mut(k) {
-                        *n += 1;
+                Cross::Somewhere => {
+                    for k in [i, j] {
+                        if let Some(n) = anywhere.get_mut(k) {
+                            *n += 1;
+                        }
                     }
                 }
             }
+        });
+        if !within {
+            return false;
         }
-    });
-    if !within {
-        return false;
-    }
-    let mut total = 0u64;
-    for (mut list, unknown) in at.into_iter().zip(anywhere) {
-        if unknown > 0 {
-            // Where they cross is not known: all of them, and the rest, may be at one point.
-            let m = unknown.saturating_add(list.len() as u64);
-            total = total.saturating_add(m.saturating_mul(m));
-        } else {
-            list.sort_by(|x, y| x.0.total_cmp(&y.0));
-            // Crossings at one point lie within a tolerance and the uncertainty of each of one another: the position is
-            // `err` off at the most (the rounding, which is `slack` over the sine of the angle for lines nearly parallel).
-            let mut run = 1u64;
-            for (k, &(s, err)) in list.iter().enumerate() {
-                let next = list.get(k + 1);
-                if next.is_some_and(|&(n, n_err)| n - s <= slack + err + n_err) {
-                    run += 1;
-                    continue;
+        let reach = CROSSING_REACH * eps;
+        for (mut list, unknown) in at.into_iter().zip(anywhere) {
+            if unknown > 0 {
+                // Where they cross is not known: all of them, and the rest, may be at one point.
+                let m = unknown.saturating_add(list.len() as u64);
+                total = total.saturating_add(m.saturating_mul(m));
+            } else {
+                list.sort_by(|x, y| x.0.total_cmp(&y.0));
+                // Crossings at one point lie within the reach and the uncertainty of each of one another: the position is
+                // `err` off at the most (the rounding, which is `slack` over the sine of the angle for lines nearly parallel).
+                let mut run = 1u64;
+                let mut first = list.first().map_or(0.0, |x| x.0);
+                for (k, &(s, err)) in list.iter().enumerate() {
+                    let next = list.get(k + 1);
+                    if next.is_some_and(|&(n, n_err)| n - s <= reach + err + n_err) {
+                        run += 1;
+                        continue;
+                    }
+                    if run >= 2 {
+                        // Crossings that are not at one point (to the rounding) but a few tolerances apart take the sweep
+                        // more memory than ones at a point do: 256 lines moved sideways by 2 tolerances 2.7 GB.
+                        let spread = s - first;
+                        let loose = spread > slack + err && spread <= LOOSE_SPREAD * eps;
+                        total = total.saturating_add(if loose { run * run * LOOSE_WORK / 10 } else { run * run });
+                    }
+                    run = 1;
+                    first = next.map_or(0.0, |n| n.0);
                 }
-                if run >= 2 {
-                    total = total.saturating_add(run * run);
-                }
-                run = 1;
+            }
+            if total > limit {
+                return false;
             }
         }
-        if total > limit {
+    }
+    if curves_may {
+        let curves: Vec<Curve> = bent
+            .iter()
+            .filter_map(|&i| seg.curve_segs.get(i))
+            .map(|s| {
+                Curve::new(match s {
+                    PathSeg::Cubic(c) => *c,
+                    PathSeg::Quad(q) => q.raise(),
+                    PathSeg::Line(l) => CubicBez::new(l.p0, l.p0.lerp(l.p1, 1.0 / 3.0), l.p0.lerp(l.p1, 2.0 / 3.0), l.p1),
+                })
+            })
+            .collect();
+        // The curves whose tangents may run along each curve's own, apart from its twins (the same curve, which the ends price).
+        let mut partners: Vec<Vec<usize>> = vec![Vec::new(); curves.len()];
+        let within = each_overlap(&bent_rects, cap, |i, j| {
+            work::add(Work::CrossingPairs, 1);
+            let (Some(a), Some(b)) = (curves.get(i), curves.get(j)) else { return };
+            if same_curve(a.cubic(), b.cubic()) || cubics_cross_at_most(a, b, slack) < 9 {
+                return;
+            }
+            for (k, other) in [(i, j), (j, i)] {
+                if let Some(list) = partners.get_mut(k) {
+                    list.push(other);
+                }
+            }
+        });
+        if !within {
             return false;
+        }
+        let reach = CROSSING_REACH * eps;
+        for (i, list) in partners.iter().enumerate() {
+            let Some(a) = curves.get(i) else { continue };
+            let tests = list.len().min(COINCIDENCE_TESTS);
+            let mut found = 0usize;
+            for t in 0..tests {
+                let Some(b) = list.get(t * list.len() / tests).and_then(|&j| curves.get(j)) else { continue };
+                work::add(Work::CoincidenceTests, 1);
+                found += usize::from(coincide(a, b, reach));
+            }
+            if found > 0 {
+                // As many of its partners as the ones tried were, at the most.
+                let m = (found * list.len()).div_ceil(tests) as f64 * CURVE_COINCIDENCE_WEIGHT;
+                total = total.saturating_add((m * m) as u64);
+                if total > limit {
+                    return false;
+                }
+            }
         }
     }
     true
+}
+
+/// Is `b` the same curve as `a`: the same four points, or the same four the other way round?
+fn same_curve(a: &CubicBez, b: &CubicBez) -> bool {
+    (a.p0 == b.p0 && a.p1 == b.p1 && a.p2 == b.p2 && a.p3 == b.p3) || (a.p0 == b.p3 && a.p1 == b.p2 && a.p2 == b.p1 && a.p3 == b.p0)
 }
 
 /// Can the pieces the sweep cuts the segments into hold their windings in [`Limits::coverage_entries`]?
@@ -1117,7 +1375,7 @@ pub(crate) fn sweep_fits_within<'a>(paths: impl IntoIterator<Item = &'a BezPath>
         seg.add_path(p);
     }
     // Segments that meet at one point cost about the fourth power of their number in the sweep.
-    let (most_ends, ends_work) = ends_at_points(&seg.ends, seg.extent);
+    let (most_ends, ends_work) = ends_at_points(&seg.ends, &copies_of(&seg), &long_segments(&seg), seg.extent);
     work::add(Work::PricedEnds, usize::try_from(ends_work).unwrap_or(usize::MAX));
     if most_ends > limits().ends_at_a_point || ends_work > limits().ends_work as u64 {
         return false;
@@ -2527,18 +2785,210 @@ mod tests {
         assert!(sweep_fits([&fan(500, 2)]), "500 level");
     }
 
-    /// Copies of one shape one on another share both ends of every edge, and are priced by the ends at their corners (200 squares
-    /// are 4 corners of 400 ends, 2e9 nanoseconds, and took 4 s), not as lines that overlap: 200 of them are admitted by the count of
-    /// lines, as they were.
+    /// Copies of one shape one on another share both ends of every edge, and are priced by the ends at their corners, as copies
+    /// ([`COPIES_COST`]: 230 squares took 6.5 s as the star of 1,291 points took 4.3, so that the price was 2 to 3 times too low as
+    /// it was), not as lines that overlap: 185 squares are 4 corners of 370 ends, 3.7 billion nanoseconds, and are admitted, 190
+    /// are not (4.05 billion). The pairs of copies are no work of lines.
     #[test]
-    fn copies_of_a_shape_one_on_another_are_priced_by_their_ends() {
-        let mut copies = BezPath::new();
-        for _ in 0..200 {
-            copies.extend(crate::testutil::polyline(&[(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)], true).iter());
-        }
-        assert!(sweep_fits([&copies]));
+    fn copies_of_a_shape_one_on_another_are_priced_by_their_ends_as_copies() {
+        let squares = |count: usize| {
+            let mut copies = BezPath::new();
+            for _ in 0..count {
+                copies.extend(crate::testutil::polyline(&[(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)], true).iter());
+            }
+            copies
+        };
+        let charged = |count: usize| {
+            work::reset();
+            let fits = sweep_fits([&squares(count)]);
+            (fits, work::take(Work::PricedEnds) as u64)
+        };
+        let (fits, at_185) = charged(185);
+        assert!(fits && (3_700_000_000..3_800_000_000).contains(&at_185), "{at_185}");
+        let (fits, at_190) = charged(190);
+        assert!(!fits && at_190 > 4_000_000_000, "{at_190}");
+        let (fits, at_230) = charged(230);
+        assert!(!fits && at_230 > 7_000_000_000, "{at_230}");
         let tight = Limits { crossing_work: 1000, ..Limits::default() };
-        assert!(with_limits(tight, || sweep_fits([&copies])), "not one of the pairs is work");
+        assert!(with_limits(tight, || sweep_fits([&squares(150)])), "not one of the pairs is work");
+        // A wheel of triangles that share their sides is two copies of each side, not a stack of them: it costs as a pie.
+        let wheel = crate::testutil::wheel(256);
+        assert!(sweep_fits([&wheel]));
+        work::reset();
+        assert!(sweep_fits([&wheel]));
+        assert!(work::take(Work::PricedEnds) < 2_000_000_000);
+    }
+
+    /// Curves that are lines to the sweep's tolerance are lines to the work of crossings, and curves that run along one another
+    /// are told: 256 straight cubics from one point down a diagonal (each closed by a line back: 512 segments on one line) took
+    /// 7.8 s as the star of 1,291 points took 5.3 s beside them, and counted 1.016 million crossings of the 1.048 million that
+    /// are allowed and none of work; 256 pieces of one arc from its start 7.2 s as it took 5.7, and 256 windows of one arc, which
+    /// share no end, 7.3 s as it took 5.9. 128 straight cubics are 256 segments of work and take 0.8 s, 150 pieces of an arc
+    /// 0.8 s, and 160 windows 0.9 s.
+    #[test]
+    fn curves_that_run_along_one_another_are_held_to_the_work_of_lines_on_one_line() {
+        use crate::testutil::{arc_fan, arc_windows, cubic_fan};
+        let lifted = Limits { crossing_work: usize::MAX, ..Limits::default() };
+        for (name, path, big) in [
+            ("straight cubics", cubic_fan(256), true),
+            ("straight cubics", cubic_fan(129), true),
+            ("pieces of an arc", arc_fan(256), true),
+            ("pieces of an arc", arc_fan(200), true),
+            ("windows of an arc", arc_windows(256), true),
+            ("straight cubics", cubic_fan(100), false),
+            ("pieces of an arc", arc_fan(150), false),
+            ("windows of an arc", arc_windows(160), false),
+        ] {
+            let start = std::time::Instant::now();
+            assert_eq!(sweep_fits([&path]), !big, "{name}, {} segments", path.elements().len());
+            assert!(start.elapsed() < std::time::Duration::from_secs(10), "{:?}", start.elapsed());
+            // Nothing but the work of what runs along one another refuses them.
+            assert!(with_limits(lifted, || sweep_fits([&path])), "{name}: nothing else refuses them");
+        }
+    }
+
+    /// A curve is a line, to the work, if every control point is within the tolerance of the line through its ends: the span of the
+    /// control points along it (which may run past the ends).
+    #[test]
+    fn a_curve_within_the_tolerance_of_its_chord_is_a_line() {
+        let cubic = |p: [(f64, f64); 4]| PathSeg::Cubic(CubicBez::new(p[0], p[1], p[2], p[3]));
+        let straight = cubic([(0.0, 0.0), (10.0 / 3.0, 10.0 / 3.0), (20.0 / 3.0, 20.0 / 3.0), (10.0, 10.0)]);
+        let hull = straight_hull(&straight, 2e-6).expect("a straight cubic");
+        assert!((hull.p0 - Point::new(0.0, 0.0)).hypot() < 1e-9 && (hull.p1 - Point::new(10.0, 10.0)).hypot() < 1e-9);
+        // The handles run past the ends and back: the span is the whole of what the curve covers.
+        let overshoot = cubic([(0.0, 0.0), (20.0, 20.0), (-5.0, -5.0), (10.0, 10.0)]);
+        let hull = straight_hull(&overshoot, 2e-6).expect("a straight cubic that runs past its ends");
+        assert!((hull.p0 - Point::new(-5.0, -5.0)).hypot() < 1e-9 && (hull.p1 - Point::new(20.0, 20.0)).hypot() < 1e-9);
+        // A handle 1e-3 off the chord is not a line, nor is a loop whose ends are together, nor a short one.
+        assert!(straight_hull(&cubic([(0.0, 0.0), (3.0, 3.001), (7.0, 7.0), (10.0, 10.0)]), 2e-6).is_none());
+        assert!(straight_hull(&cubic([(0.0, 0.0), (5.0, 5.0), (-5.0, 5.0), (0.0, 0.0)]), 2e-6).is_none());
+        assert!(straight_hull(&cubic([(0.0, 0.0), (1e-7, 1e-7), (2e-7, 2e-7), (3e-7, 3e-7)]), 2e-6).is_none());
+        // Handles 1e-7 off, under the tolerance: a line.
+        assert!(straight_hull(&cubic([(0.0, 0.0), (3.0, 3.0 + 1e-7), (7.0, 7.0 - 1e-7), (10.0, 10.0)]), 2e-6).is_some());
+        assert!(straight_hull(&PathSeg::Line(Line::new((0.0, 0.0), (1.0, 1.0))), 2e-6).is_none());
+    }
+
+    /// The line a curve is takes in the whole of the curve: every point of 2,000 random cubics that are lines to the tolerance (their
+    /// control points within it of the chord, running past the ends or not, at lengths from 1e-3 to 1e9) lies within the tolerance of
+    /// it, and a cubic that is not within the tolerance is none.
+    #[test]
+    fn the_line_a_curve_is_covers_the_curve() {
+        use crate::testutil::Rng;
+        let mut rng = Rng(0x57a1_9e47_0001_0001);
+        let (mut lines, mut off) = (0, 0);
+        for k in 0..2000 {
+            let length = 10f64.powf(rng.range(-3.0, 9.0));
+            let tol = (length * f64::EPSILON * 64.0).max(1e-6) * 2.0;
+            let angle = rng.range(0.0, std::f64::consts::TAU);
+            let (u, n) = (kurbo::Vec2::new(angle.cos(), angle.sin()), kurbo::Vec2::new(-angle.sin(), angle.cos()));
+            let base = Point::new(rng.range(-1.0, 1.0) * length, rng.range(-1.0, 1.0) * length);
+            // Along the chord at `a` of its length and off it by up to `d` (a few tolerances if `k` is odd).
+            let spot = |a: f64, d: f64| base + u * (a * length) + n * d;
+            let d = if k % 2 == 0 { tol * 0.9 } else { tol * 3.0 };
+            let c = CubicBez::new(
+                spot(0.0, 0.0),
+                spot(rng.range(-0.5, 1.5), rng.range(-d, d)),
+                spot(rng.range(-0.5, 1.5), rng.range(-d, d)),
+                spot(1.0, 0.0),
+            );
+            match straight_hull(&PathSeg::Cubic(c), tol) {
+                Some(hull) => {
+                    lines += 1;
+                    let dir = hull.p1 - hull.p0;
+                    for i in 0..=200 {
+                        let p = c.eval(f64::from(i) / 200.0) - hull.p0;
+                        let along = p.dot(dir) / dir.dot(dir);
+                        let across = (dir.cross(p) / dir.hypot()).abs();
+                        assert!(across <= tol * 1.0001, "{k}: {across} off the line, of {tol}");
+                        assert!((-1e-9..=1.0 + 1e-9).contains(&along), "{k}: {along} along it");
+                    }
+                }
+                None => off += 1,
+            }
+        }
+        assert!(lines > 900 && off > 500, "{lines} lines and {off} that are not");
+    }
+
+    /// Crossings a few tolerances apart cost the sweep as ones at a point do, and in more memory: 300 lines through a point, each
+    /// moved sideways by up to 10 tolerances (1e-5), aborted under a limit of 3 GB, and at 40 tolerances took 0.6 s and 400 MB.
+    /// The crossings along a line within 64 tolerances of one another (and the uncertainty of each) are one point's work, and
+    /// 1.7 times that where they are not at the point but within a thousand tolerances: 300 of them, moved 10 or 40 tolerances,
+    /// are refused, and so are 256 (moved 2 tolerances they take 2.7 GB), where 215 take 1.6 GB and are not; moved 200
+    /// tolerances, 300 take 0.2 s and 62 MB and are not.
+    #[test]
+    fn lines_through_a_point_moved_a_few_tolerances_are_one_point_to_the_work() {
+        use crate::testutil::jittered_pencil;
+        for (n, jitter, refused) in
+            [(300, 1e-5, true), (300, 4e-5, true), (300, 2e-4, false), (256, 2e-6, true), (256, 1e-5, true), (215, 2e-6, false), (200, 1e-5, false)]
+        {
+            let path = jittered_pencil(n, 100.0, jitter);
+            assert_eq!(sweep_fits([&path]), !refused, "{n} lines moved up to {jitter}");
+        }
+    }
+
+    /// Ends a few tolerances apart are priced as a cluster: a pie of 256 slices whose apexes are each moved by up to 10
+    /// tolerances (1e-5) took 1.5 s and 1.1 GB, an exact one 0.8 s and 88 MB; 4 of them 4.5 GB, aborting under a limit of 3 GB, and a
+    /// pie of 400 slices so, 4.9 GB. The ends of long segments within 64 tolerances of one another are one cluster, of the cube of
+    /// their number at [`FUZZ_COST`] where they are not at one point: one pie is 2.6 billion nanoseconds, and is made; two are
+    /// not. The ends of short segments (a circle cut finely) are not.
+    #[test]
+    fn ends_a_few_tolerances_apart_are_priced_as_one_cluster() {
+        use crate::testutil::{cubic_circle, jittered_pies, stacked_pies};
+        let priced = |path: &BezPath| {
+            work::reset();
+            let fits = sweep_fits([path]);
+            (fits, work::take(Work::PricedEnds) as u64)
+        };
+        let (fits, exact) = priced(&stacked_pies(1, 256));
+        assert!(fits && (1_300_000_000..1_320_000_000).contains(&exact), "{exact}");
+        for spread in [2e-6, 1e-5, 2e-5, 4e-5] {
+            let (fits, moved) = priced(&jittered_pies(1, 256, spread));
+            assert!(fits && (2_600_000_000..2_700_000_000).contains(&moved), "moved by {spread}: {moved}");
+        }
+        for (count, k, spread) in [(2, 256, 1e-5), (4, 256, 2e-5), (1, 400, 2e-5)] {
+            let (fits, moved) = priced(&jittered_pies(count, k, spread));
+            assert!(!fits && moved > 4_000_000_000, "{count} pies of {k} moved by {spread}: {moved}");
+        }
+        // Moved by 100 tolerances the ends are out of the cluster and cost little.
+        let (fits, far) = priced(&jittered_pies(1, 256, 2e-4));
+        assert!(fits && far < 2_000_000_000, "{far}");
+        // A circle cut so finely that its joints are 5 tolerances apart, or a pie of 128 slices.
+        let (fits, fine) = priced(&cubic_circle(100_000, 0.09, 0.0, 0.0));
+        assert!(fits && fine < 100_000_000, "{fine}");
+        let (fits, small) = priced(&jittered_pies(1, 128, 1e-5));
+        assert!(fits && (3.0e8..3.5e8).contains(&(small as f64)), "{small}");
+    }
+
+    /// Stacks of copies are priced by [`COPIES_COST`], the cube of their ends, in proportion to the pairs of ends that are copies of
+    /// one segment: 230 squares took 6.5 s as the star of 1,291 points took 4.3, 255 triangles 5.9, 255 copies of a segment 4.6, 4
+    /// stacks of 200 11.8 and 21 stacks of 128 15.6. The most admitted is the one that takes as long as the star: 185 squares, 205
+    /// triangles, 220 copies of a segment; and where the copies are two of each side (a wheel) it is the price of a pie.
+    #[test]
+    fn stacks_of_copies_are_priced_by_the_cube_of_their_ends() {
+        use crate::testutil::{stacked_polygons, stacked_segments};
+        for (name, path, fits) in [
+            ("185 squares", stacked_polygons(4, 185), true),
+            ("190 squares", stacked_polygons(4, 190), false),
+            ("230 squares", stacked_polygons(4, 230), false),
+            ("205 triangles", stacked_polygons(3, 205), true),
+            ("255 triangles", stacked_polygons(3, 255), false),
+            ("220 copies of a segment", stacked_segments(1, 220), true),
+            ("255 copies of a segment", stacked_segments(1, 255), false),
+            ("6 stacks of 128", stacked_segments(6, 128), true),
+            ("21 stacks of 128", stacked_segments(21, 128), false),
+            ("4 stacks of 200", stacked_segments(4, 200), false),
+        ] {
+            assert_eq!(sweep_fits([&path]), fits, "{name}");
+        }
+    }
+
+    /// Copies of one curve one on another are the same curve, which the ends price (as copies) and the work of curves that run along
+    /// one another leaves out: 200 arcs, each with its chord back, are 2 points of 400 ends, 2.4 billion nanoseconds.
+    #[test]
+    fn copies_of_a_curve_one_on_another_are_priced_by_their_ends_and_not_as_curves_that_run_along_one_another() {
+        use crate::testutil::stacked_arcs;
+        assert!(sweep_fits([&stacked_arcs(200)]));
+        assert!(!sweep_fits([&stacked_arcs(260)]));
     }
 
     /// The class of lines too near parallel to be placed is the rounding of the product of their directions and no more: 300
@@ -2612,7 +3062,8 @@ mod tests {
         work::reset();
         assert!(sweep_fits([&copies]));
         let charged = work::take(Work::PricedEnds) as u64;
-        assert!((700_000_000..1_200_000_000).contains(&charged), "{charged}");
+        // 100 copies of a polygon of 20 sides are priced as copies: 20 corners of 200 ends.
+        assert!((2_900_000_000..3_100_000_000).contains(&charged), "{charged}");
     }
 
     /// A circle cut into 100,000 cubics costs its neighbours nothing, wherever it is and however small: at (1e12, 1e12) with a

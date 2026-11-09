@@ -328,16 +328,16 @@ fn stacked(count: usize, k: usize) -> BezPath {
     all
 }
 
-/// The work of the ends is summed over the points where they meet: a pie of 30 slices (60 ends at its centre, 1.2 million
-/// nanoseconds as priced, and a little for the rim) stacked 8 deep is under ten million and 9 deep is over, though no pie has
-/// more than 60 ends at its centre.
+/// The work of the ends is summed over the points where they meet: a pie of 30 slices (60 ends at its centre, 1.3 million
+/// nanoseconds as priced, the radii each twice for the shared sides, and a little for the rim) stacked 8 deep is under eleven
+/// million and 9 deep is over, though no pie has more than 60 ends at its centre.
 #[test]
 fn a_lower_limit_on_the_work_of_ends_refuses_stacked_pies_the_default_takes() {
-    let ten_million = with(|l| l.ends_work = 10_000_000);
+    let eleven_million = with(|l| l.ends_work = 11_000_000);
     for (count, made) in [(1, true), (8, true), (9, false), (30, false)] {
         let path = stacked(count, 30);
         assert!(try_area(&path, FillRule::NonZero).is_ok(), "{count} pies, by default");
-        assert_eq!(with_limits(ten_million, || try_area(&path, FillRule::NonZero)).is_ok(), made, "{count} pies");
+        assert_eq!(with_limits(eleven_million, || try_area(&path, FillRule::NonZero)).is_ok(), made, "{count} pies");
     }
     // Nothing: no work of ends is allowed, and a pie has ends.
     let none = with(|l| l.ends_work = 0);

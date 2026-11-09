@@ -7,7 +7,8 @@ use craft_pathops::*;
 use std::time::{Duration, Instant};
 
 use crate::common::{
-    cubic_circle, fan_along_a_line, nearly_parallel_lines, square_with_cut_sides, stacked_pies, stacked_stars, star_at, strip_with_cut_sides,
+    arc_fan, arc_windows, cubic_circle, cubic_fan, fan_along_a_line, jittered_pencil, jittered_pies, nearly_parallel_lines, square_with_cut_sides,
+    stacked_pies, stacked_polygons, stacked_segments, stacked_stars, star_at, strip_with_cut_sides,
 };
 
 const NZ: FillRule = FillRule::NonZero;
@@ -163,4 +164,83 @@ fn what_meets_at_an_end_on_one_line_without_overlapping_stays_admitted() {
     }
     let area = try_area(&copies, NZ).expect("100 squares one on another");
     assert!(area.is_finite() && area > 0.0, "{area}");
+}
+
+/// The curve forms of the fan: straight cubics from one point down a diagonal (each closed by a line back, 512 segments on one line)
+/// counted nothing of work and took 7.8 s as the star of 1,291 points took 5.3 s beside them (12.5 s at the load of the
+/// reviewer's); 256 pieces of one arc from its start 7.2 s beside 5.7, and 256 windows of one arc, which share no end, 7.3 s beside
+/// 5.9. They run along one another, and cost as lines on one line do.
+#[test]
+fn curves_that_run_along_one_another_are_refused_before_the_sweep() {
+    refused_at_once(&cubic_fan(256), "256 straight cubics from one point down a diagonal");
+    refused_at_once(&arc_fan(256), "256 pieces of one arc from its start");
+    refused_at_once(&arc_fan(200), "200 pieces of one arc from its start");
+    refused_at_once(&arc_windows(256), "256 windows of one arc");
+}
+
+/// Fewer of them are made, and what runs along nothing is: 100 straight cubics, 150 pieces of an arc, 160 windows of it (a second
+/// or less each).
+#[test]
+fn a_few_curves_that_run_along_one_another_are_made() {
+    for (name, path) in [("100 straight cubics", cubic_fan(100)), ("150 pieces of an arc", arc_fan(150)), ("160 windows of an arc", arc_windows(160))]
+    {
+        let start = Instant::now();
+        assert!(try_area(&path, NZ).is_ok(), "{name}");
+        assert!(start.elapsed() < Duration::from_secs(60), "{name}: {:?}", start.elapsed());
+    }
+}
+
+/// Lines through a point, each moved sideways by a few tolerances (10 to 40: 1e-5 to 4e-5), crossed one another within a few
+/// tolerances and slipped past the work of lines at one point (which grouped them within 2): 300 of them took 2.6 GB and aborted
+/// under a limit of 3 GB, at 40 tolerances 0.6 s and 400 MB. A pie of 256 slices whose apexes were moved so took 1.1 GB, and 4 of
+/// them 4.5 GB, a pie of 400 slices 4.9 GB (the exact pie 88 MB).
+#[test]
+fn lines_and_pies_moved_a_few_tolerances_are_refused_before_the_sweep() {
+    refused_at_once(&jittered_pencil(300, 100.0, 1e-5), "300 lines through a point, moved up to 10 tolerances");
+    refused_at_once(&jittered_pencil(300, 100.0, 4e-5), "300 lines through a point, moved up to 40 tolerances");
+    refused_at_once(&jittered_pies(4, 256, 2e-5), "4 pies of 256 slices, the apexes moved up to 20 tolerances");
+    refused_at_once(&jittered_pies(2, 256, 1e-5), "2 pies of 256 slices, the apexes moved up to 10 tolerances");
+    refused_at_once(&jittered_pies(1, 400, 2e-5), "a pie of 400 slices, the apexes moved up to 20 tolerances");
+}
+
+/// Moved far enough, or fewer, they are made: 300 lines moved 200 tolerances (0.2 s), 200 moved 10 (0.8 s and 0.8 GB), and a pie
+/// of 128 slices moved 10 (0.2 s).
+#[test]
+fn lines_and_pies_moved_a_few_tolerances_are_made_when_they_are_fewer_or_farther() {
+    for (name, path) in [
+        ("300 lines moved 200 tolerances", jittered_pencil(300, 100.0, 2e-4)),
+        ("200 lines moved 10 tolerances", jittered_pencil(200, 100.0, 1e-5)),
+        ("a pie of 128 slices moved 10 tolerances", jittered_pies(1, 128, 1e-5)),
+    ] {
+        assert!(try_area(&path, NZ).is_ok(), "{name}");
+    }
+}
+
+/// Stacks of copies cost the sweep more than the ends at their corners were priced at: 230 squares took 9.6 s as the star of 1,291
+/// points took 6.4 s beside them, 255 triangles 10 s beside 7, 255 copies of a segment 9.7 s beside 9.1, 21 stacks of 128 copies
+/// 21 s beside 5.9, 4 stacks of 200 22 s beside 8.1. Priced as copies, the cube of their ends, each is refused.
+#[test]
+fn stacks_of_copies_are_refused_before_the_sweep() {
+    refused_at_once(&stacked_polygons(4, 230), "230 squares one on another");
+    refused_at_once(&stacked_polygons(3, 255), "255 triangles one on another");
+    refused_at_once(&stacked_segments(1, 255), "255 copies of a segment");
+    refused_at_once(&stacked_segments(21, 128), "21 stacks of 128 copies of a segment");
+    refused_at_once(&stacked_segments(4, 200), "4 stacks of 200 copies of a segment");
+}
+
+/// And fewer are made, each a little under the limit and under the star: 150 squares (1.0 s as the star took 4.5), 180 (2.9 s),
+/// 200 triangles (1.5 s), 200 copies of a segment (2.0 s), 6 stacks of 128 (1.9 s).
+#[test]
+fn stacks_of_fewer_copies_are_made() {
+    for (name, path) in [
+        ("150 squares", stacked_polygons(4, 150)),
+        ("180 squares", stacked_polygons(4, 180)),
+        ("200 triangles", stacked_polygons(3, 200)),
+        ("200 copies of a segment", stacked_segments(1, 200)),
+        ("6 stacks of 128 copies", stacked_segments(6, 128)),
+    ] {
+        let start = Instant::now();
+        assert!(try_area(&path, NZ).is_ok(), "{name}");
+        assert!(start.elapsed() < Duration::from_secs(60), "{name}: {:?}", start.elapsed());
+    }
 }

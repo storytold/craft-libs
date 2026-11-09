@@ -222,9 +222,22 @@ work of each operation is bounded before it starts, in counts the tests assert o
   are 0.004 apart one point to the sweep, which took 4.4 s). A pie of 256 slices takes 0.5 to 0.9 s, 257 are
   refused in a few milliseconds. Many points that each hold that many are held by `MAX_ENDS_WORK` (4e9
   nanoseconds), the sum over the points of what the sweep takes at each (the greater of 5.6 `n`³ and 0.019 `n`⁴
-  nanoseconds for `n` ends, which is what pies of 64 to 256 slices and 100 polygons of 20 sides on one another
-  took): pies of 256 slices stacked on a diagonal took 1.3, 2.2, 4.8, 15.7 and 65.8 s for 1, 2, 4, 8 and 30, and 3 are
-  admitted, 4 and more refused in a few milliseconds;
+  nanoseconds for `n` ends, which is what pies of 64 to 256 slices took): pies of 256 slices stacked on a diagonal took 1.3,
+  2.2, 4.8, 15.7 and 65.8 s for 1, 2, 4, 8 and 30, and 3 are admitted, 4 and more refused in a few milliseconds. Three
+  things cost more than that fit, and are priced on their own:
+  - **ends of copies:** a stack of one shape one on another (every edge the same segment `c` times) costs the cube of its ends
+    at 18.5 nanoseconds, in proportion to the pairs of ends there that are copies of one segment: 230 squares took 9.6 s
+    where the star of 1,291 points took 6.4 beside it, 255 triangles 10 s beside 7, 21 stacks of 128 copies of a segment 21 s
+    beside 5.9. The most admitted are 185 squares (2.9 s beside 4.5), 205 triangles, 220 copies of a segment and 6 stacks of
+    128, none over the star; a wheel of triangles that share their sides (two copies of each) costs as a pie;
+  - **ends moved a few tolerances apart:** the ends of segments longer than 256 tolerances that lie within 64 tolerances of
+    one another (squares of 64, and the squares round them) are one cluster, priced at 19.6 `n`³ where they are not at one
+    point (the fit's 5.6, 3.5 times over, for the memory: the sweep takes about 8 bytes for the cube of the ends), so that the
+    pie of 256 slices whose apexes are each moved by up to 10 tolerances (1.5 s and 1.1 GB, an exact pie 88 MB) is made, and 2
+    of them (4 took 4.5 GB, a pie of 400 slices 4.9 GB, under a limit of 3 GB both abort) are refused. How far they must be
+    moved to cost nothing was measured: the memory of a pie of 256 slices is 650 MB at 2 tolerances, 1.2 GB at 8, 0.96 GB at
+    15, 0.41 GB at 30, 0.16 GB at 60 and 0.1 GB at 100. Short segments are left out (100,000 cubics round a circle of
+    radius 0.09, whose joints are 5 tolerances apart, took 0.4 s);
 - lines that cross at one point, with no end there, cost about the cube of their number (150 take 0.2 s, 300
   1.7 s, 450 8 s, and about a thousand passed every other limit and would take a minute and a half). A line
   that crosses `m` others at one point counts `m`², so `c` lines through a point count `c` (`c` - 1)², and
@@ -244,8 +257,21 @@ work of each operation is bounded before it starts, in counts the tests assert o
   that two lines share exactly does not make them meet only there if they lie on one line: a fan of 250 segments from one point down
   a diagonal took 11 s and down a vertical 9 s (all of them share their start and overlap), and is refused now in a few
   milliseconds, while the same fan along a level takes 11 ms. The same line twice (both ends shared, as the closing segment of a
-  subpath of one line, or stacked copies of a shape) is not counted: its cost is in the ends at its two points (200 squares one on
-  another take 4 s);
+  subpath of one line, or stacked copies of a shape) is not counted: its cost is in the ends at its two points, priced as
+  copies (above). The curves count too. A curve that is a line to the sweep's tolerance (every control point within 2 of
+  the line through its ends) is a line here, the span of its control points: 256 straight cubics from one point down a diagonal,
+  each closed by a line back, took 7.8 s where the star of 1,291 points took 5.3 beside them (12.5 s at another load) and
+  counted nothing of work, and are refused now in 2 ms. The other curves are told where one runs along another, as pieces of
+  one cubic do (a fan of them from its start, windows of it that share no end): of the curves whose tangents may run along
+  each one's own (the pairs the cones above count nine), up to 24 are tried, by sampling the one at nine places and asking
+  whether three in a row are within 64 tolerances of the other (a stretch of a quarter of it), and as many as that fraction
+  of them run along it, counted squared and 1.5 times, as many as the lines on one line: 256 pieces of an arc from its start
+  took 7.2 s beside 5.7, 256 windows of it 7.3 s beside 5.9, and are refused in 4 to 14 ms; 150 pieces, 160 windows, 100 or
+  128 straight cubics take 0.3 to 0.9 s and are made. Crossings along one line within 64 tolerances (and the uncertainty
+  of each) of one another are one point's (they were 2): 300 lines through a point, each moved sideways by up to 10
+  tolerances, took 2.6 GB and aborted under a limit of 3 GB. Where they are within a thousand tolerances but not at one point
+  (to the rounding) they count 1.7 times, for the memory: 256 lines moved 2 tolerances took 2.7 GB, 215 take 1.6 GB and
+  are made, 256 exactly through a point 0.8 s and 58 MB;
 - a boolean operation asks its predicate once for each distinct winding of a side of a segment, and hands it a
   flag for each input. That is the winding of every input, not the set of flags it gives: shapes nested and
   wound the same way are windings 1 and 2 under the non-zero rule, which are the same flags and are asked
@@ -403,6 +429,19 @@ The limits count before the sweep and stand for a time or a size; no proof ties 
 each was set from the worst input found for it (by measuring and by review). What is known to pass them and still
 cost more than a second or so, measured once in a release build:
 
+- 100,000 straight cubics round a circle of radius 1,000 at (1e12, 1e12) whose handles lie 1 or 2 units in the last place from
+  their anchors are `TooComplex` (50,000 are made; 1d3e413 made them in 0.43 s): a handle shorter than twice the rounding of
+  its point gives the cone of its joint every direction, so each of the 100,000 joints counts as crossing (18 each). Handles
+  that short are not drawn (handles of a drawn cubic are a thousandth of its chord or more).
+- Where two curves run along one another is looked for among a few of the curves whose tangents may run along each one's own, over
+  a stretch of a quarter of the one (nine samples), so a stretch shorter than a quarter of each (windows of one arc that overlap
+  by a tenth of it) is not seen, and a clique of curves that run along one another in ones and twos is counted by its tried
+  partners. The clusters of ends and of crossings are 64 tolerances wide, and crossings count more within a thousand: ends
+  and crossings moved 100 tolerances apart are priced as the separate points they nearly are (a pie moved 100 tolerances took 0.2 s,
+  300 lines moved 200 tolerances 0.2 s).
+- Stacks of copies are priced by the cube of their ends, fitted to squares, triangles and segments one on another; polygons of
+  many sides cost less for each corner (100 copies of a polygon of 20 sides are priced 3.0e9 and took 0.9 s), so a stack of those
+  is refused at fewer than it could be.
 - Curves that pass through one point with no end there are not counted, only lines are (and the event limit
   prices a pair of curves at nine crossings, a worst case, so it refuses a stack of curves before it is
   slow). Lenses whose two cubics each pass through one point (the cubics, not lines) take 0.17 s for 100, 0.7 s for
@@ -484,6 +523,13 @@ thread and ask first with the `try_` forms. Measured on one machine, in a releas
 | `try_area` of 450 lines through one point at angles under 1e-10 (2e7 to 1e10 long, their ends 1.6 to 10 tolerances apart; counted as no crossing at all before) / of 2,040 nearly parallel lines that cross along their length (2.08 million crossings) | refused in 6 ms (31 to 41 s before the limit) / in 50 ms (14 to 21 s before) |
 | `try_area` of a bundle of 450 / 2,040 nearly parallel lines that cross nowhere | 2 / 10 ms, as before |
 | `try_area` of a circle of 100,000 cubics, radius 1,000, at the origin / at (1e12, 1e12) | 0.5 s / 0.56 s |
+| `try_area` of 256 straight cubics from one point down a diagonal (each closed by a line back: 512 segments on one line) / of 256 pieces of one arc from its start / of 256 windows of one arc that share no end | refused in 2 / 17 / 7 ms (they took 7.8 / 7.2 / 7.3 s, beside the star of 1,291 points at 5.3 / 5.7 / 5.9) |
+| `try_area` of 100 / 128 straight cubics down a diagonal, 150 pieces of an arc from its start, 160 windows of an arc | 0.27 / 0.83 / 0.78 / 0.94 s |
+| `try_area` of 300 lines through a point, each moved sideways by up to 10 / 40 tolerances | refused in 3 ms (2.6 GB and aborting under a limit of 3 GB / 0.6 s and 0.4 GB) |
+| `try_area` of 215 such lines moved 2 tolerances (the most) / of 300 moved 200 tolerances / of 256 exactly through a point | 1.7 s and 1.6 GB / 0.24 s and 62 MB / 0.8 s and 58 MB |
+| `try_area` of a pie of 256 slices, each apex moved by up to 10 tolerances / of 2, and of 4 such pies, and of one of 400 slices | 1.5 s and 1.1 GB, an exact pie 0.7 s and 86 MB / refused in 1 to 3 ms (4 took 4.5 GB, the pie of 400 slices 4.9 GB) |
+| `try_area` of 150 / 185 squares one on another (4 corners of 300 / 370 ends), 200 triangles, 200 copies of a segment, 6 stacks of 128 copies of a segment | 1.0 s / 2.9 s (the star 4.5 beside it), 1.5 s, 2.0 s, 1.9 s |
+| `try_area` of 190 / 230 squares one on another, 255 triangles, 255 copies of a segment, 21 stacks of 128, 4 stacks of 200 | refused in 0.3 to 10 ms (230 squares took 9.6 s beside the star's 6.4, 255 triangles 10 s beside 7, 21 stacks of 128 21 s beside 5.9, 4 stacks of 200 22 s beside 8.1) |
 | `try_area` of a star of 1,001 / 1,291 points, each joined to the one nearly opposite (0.5 / 0.83 million crossings; 1,291 is the limit on them) | 2.4 s, 0.9 GB / 4.3 s, 0.9 GB |
 | `try_area` of the star of 1,293 / 2,001 / 3,001 points | refused in 6 / 14 / 2 ms |
 | `try_area` of 52 stars of 201 points, stacked so that their heights do not overlap (1.03 million crossings, the limit on them) / of 19 stars of bowed cubics (the most the bound admits) | 3.2 s, 1.6 GB / 2.6 s, 0.5 GB |

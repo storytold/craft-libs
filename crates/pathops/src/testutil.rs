@@ -247,6 +247,151 @@ pub(crate) fn stacked_pies(count: usize, k: usize) -> BezPath {
     bp
 }
 
+/// A number from 0 up to 1 made of two integers, the same each time.
+pub(crate) fn hash01(i: u64, k: u64) -> f64 {
+    let mut h = i.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ k.wrapping_mul(0xD1B5_4A32_D192_ED03);
+    h ^= h >> 31;
+    h = h.wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    h ^= h >> 29;
+    (h >> 11) as f64 / (1u64 << 53) as f64
+}
+
+/// A wheel of `k` triangles from one centre, whose sides are shared: each radius is twice, once for each of the two neighbours.
+pub(crate) fn wheel(k: usize) -> BezPath {
+    let mut bp = BezPath::new();
+    let at = |i: usize| {
+        let a = std::f64::consts::TAU * i as f64 / k as f64;
+        Point::new(100.0 * a.cos(), 100.0 * a.sin())
+    };
+    for i in 0..k {
+        bp.move_to((0.0, 0.0));
+        bp.line_to(at(i));
+        bp.line_to(at(i + 1));
+        bp.close_path();
+    }
+    bp
+}
+
+/// [`stacked_pies`] whose slices have their apexes moved at random, each within a square `spread` across.
+pub(crate) fn jittered_pies(count: usize, k: usize, spread: f64) -> BezPath {
+    let mut bp = BezPath::new();
+    for p in 0..count {
+        let c = Point::new(p as f64 * 250.0, p as f64 * 250.0);
+        for i in 0..k {
+            let a0 = std::f64::consts::TAU * i as f64 / k as f64;
+            let a1 = std::f64::consts::TAU * (i as f64 + 0.5) / k as f64;
+            let apex = c + kurbo::Vec2::new((hash01(i as u64, 7) - 0.5) * spread, (hash01(i as u64, 9) - 0.5) * spread);
+            bp.move_to(apex);
+            bp.line_to(c + kurbo::Vec2::new(a0.cos(), a0.sin()) * 100.0);
+            bp.line_to(c + kurbo::Vec2::new(a1.cos(), a1.sin()) * 100.0);
+            bp.close_path();
+        }
+    }
+    bp
+}
+
+/// `n` lines `len` long through the neighbourhood of (1000, 1000), at angles 0.3 + 1e-3 k, each moved sideways at random by up to
+/// `jitter` (so they cross one another within a few tolerances when `jitter` is a few), as one zigzag polygon.
+pub(crate) fn jittered_pencil(n: usize, len: f64, jitter: f64) -> BezPath {
+    let mut bp = BezPath::new();
+    for i in 0..n {
+        let a = 0.3 + 1e-3 * i as f64;
+        let v = kurbo::Vec2::new(a.cos(), a.sin()) * len;
+        let side = kurbo::Vec2::new(-a.sin(), a.cos()) * ((hash01(i as u64, 3) - 0.5) * jitter);
+        let c = Point::new(1000.0, 1000.0) + side;
+        let (s, e) = if i % 2 == 0 { (c - v, c + v) } else { (c + v, c - v) };
+        if i == 0 {
+            bp.move_to(s);
+        } else {
+            bp.line_to(s);
+        }
+        bp.line_to(e);
+    }
+    bp.close_path();
+    bp
+}
+
+/// `n` straight cubics from (0, 0) along the diagonal, the k-th to (k, k), each its own closed subpath (by the line back).
+pub(crate) fn cubic_fan(n: usize) -> BezPath {
+    let mut bp = BezPath::new();
+    for k in 1..=n {
+        let q = Point::new(k as f64, k as f64);
+        let o = Point::ORIGIN;
+        bp.move_to(o);
+        bp.curve_to(o.lerp(q, 1.0 / 3.0), o.lerp(q, 2.0 / 3.0), q);
+        bp.close_path();
+    }
+    bp
+}
+
+/// The arc the fans and windows are pieces of.
+fn the_arc() -> kurbo::CubicBez {
+    kurbo::CubicBez::new((0.0, 0.0), (100.0, 150.0), (300.0, 150.0), (400.0, 0.0))
+}
+
+/// `n` pieces of one arc from its start, the k-th to parameter k / n, each its own subpath (closed by its chord).
+pub(crate) fn arc_fan(n: usize) -> BezPath {
+    use kurbo::ParamCurve;
+    let mut bp = BezPath::new();
+    for k in 1..=n {
+        let s = the_arc().subsegment(0.0..k as f64 / n as f64);
+        bp.move_to(s.p0);
+        bp.curve_to(s.p1, s.p2, s.p3);
+        bp.close_path();
+    }
+    bp
+}
+
+/// `n` windows of one arc, the k-th from parameter k / 2n to k / 2n + 0.5: every two overlap along it and none share an end.
+pub(crate) fn arc_windows(n: usize) -> BezPath {
+    use kurbo::ParamCurve;
+    let mut bp = BezPath::new();
+    for k in 0..n {
+        let t0 = k as f64 / (2.0 * n as f64);
+        let s = the_arc().subsegment(t0..t0 + 0.5);
+        bp.move_to(s.p0);
+        bp.curve_to(s.p1, s.p2, s.p3);
+        bp.close_path();
+    }
+    bp
+}
+
+/// `m` copies of one regular polygon of `k` corners (radius 100), one exactly on another, each its own closed subpath.
+pub(crate) fn stacked_polygons(k: usize, m: usize) -> BezPath {
+    let mut bp = BezPath::new();
+    let corners: Vec<Point> = (0..k)
+        .map(|i| {
+            let a = std::f64::consts::TAU * i as f64 / k as f64 + 0.1;
+            Point::new(100.0 * a.cos() + 300.0, 100.0 * a.sin() + 300.0)
+        })
+        .collect();
+    for _ in 0..m {
+        for (i, p) in corners.iter().enumerate() {
+            if i == 0 {
+                bp.move_to(*p);
+            } else {
+                bp.line_to(*p);
+            }
+        }
+        bp.close_path();
+    }
+    bp
+}
+
+/// `s` stacks, 250 apart along a diagonal, of `m` copies of a segment (each a segment and back, its own closed subpath).
+pub(crate) fn stacked_segments(s: usize, m: usize) -> BezPath {
+    let mut bp = BezPath::new();
+    for t in 0..s {
+        let off = t as f64 * 250.0;
+        for _ in 0..m {
+            bp.move_to((off + 100.0 * 0.1f64.cos(), off + 100.0 * 0.1f64.sin()));
+            bp.line_to((off - 100.0 * 0.1f64.cos(), off - 100.0 * 0.1f64.sin()));
+            bp.close_path();
+        }
+    }
+    bp
+}
+
 /// A circle of radius `r` at `(cx, cy)` cut into `n` cubics (each the cubic that fits its arc), closed.
 pub(crate) fn cubic_circle(n: usize, r: f64, cx: f64, cy: f64) -> BezPath {
     let da = std::f64::consts::TAU / n as f64;
@@ -339,4 +484,16 @@ impl Rng {
     pub(crate) fn range(&mut self, lo: f64, hi: f64) -> f64 {
         lo + (hi - lo) * self.unit()
     }
+}
+
+/// `m` copies of one arc, one exactly on another, each its own closed subpath (closed by its chord).
+pub(crate) fn stacked_arcs(m: usize) -> BezPath {
+    let mut bp = BezPath::new();
+    let c = the_arc();
+    for _ in 0..m {
+        bp.move_to(c.p0);
+        bp.curve_to(c.p1, c.p2, c.p3);
+        bp.close_path();
+    }
+    bp
 }
