@@ -39,6 +39,7 @@
     "In `src/sweep/sweep_line.rs`, `Sweeper::next_line` handles a pair of segments at most once per sweep line for each pair of positions they hold and queues a repeat at the pair's next order change, so nearly coincident segments whose comparisons are not transitive no longer loop forever at one y.",
     "In `src/sweep/sweep_line.rs`, `Sweeper::handle_intersection` queues a delayed intersection only when its y is before the ends of both segments, so a delayed intersection at a segment's end no longer panics in `CurveOrder::entry_at`."
     "In `src/lib.rs` and `src/topology.rs`, the `Topology` constructors that take Bézier paths return `Error` instead of `NonClosedPath`, and return `Error::NaN`, `Error::Infinity` or the new `Error::TooLarge` for a coordinate that is not finite or has a magnitude above `MAX_COORDINATE` (`f64::MAX / 16`), so `Topology::from_path` and `binary_op` no longer panic on cubics with coordinates above about `f64::MAX / 3`."
+    "In `src/topology.rs`, `Contours::grouped` walks each containment tree with an explicit stack instead of one recursive call per nesting level, so deeply nested contours no longer overflow the stack. The order of the returned contours is unchanged."
   ],
   "files": [
     { "path": ".cargo_vcs_info.json", "source_sha256": "47fba6a9dbdf445a5c97f783c9be62093035f9d5e5cdc2cf3216ad8259bcd8fc", "source_git_blob": null, "sha256": "47fba6a9dbdf445a5c97f783c9be62093035f9d5e5cdc2cf3216ad8259bcd8fc" },
@@ -127,6 +128,8 @@
     { "path": "src/topology.rs", "source_sha256": "9c9b48bc3853884425127e2d64e8ed957ba0d27e1696e2c457e95282e52d6a5b", "source_git_blob": null, "sha256": "315162ea3b7c87abdce9419ee3b56278586f67efceb4440c328663e248d54945" },
     { "path": "src/sweep/sweep_line.rs", "source_sha256": "822b261f682911ea0c0370eaf17d9201a1e639b315359dcb6a3b877a229816e3", "source_git_blob": null, "sha256": "822b261f682911ea0c0370eaf17d9201a1e639b315359dcb6a3b877a229816e3" },
     { "path": "src/topology.rs", "source_sha256": "9c9b48bc3853884425127e2d64e8ed957ba0d27e1696e2c457e95282e52d6a5b", "source_git_blob": null, "sha256": "39457a6936a1636c2aaae288adf7de7d3ecc85a666f9163775044a7c6b6745d0" },
+    { "path": "src/sweep/sweep_line.rs", "source_sha256": "822b261f682911ea0c0370eaf17d9201a1e639b315359dcb6a3b877a229816e3", "source_git_blob": null, "sha256": "822b261f682911ea0c0370eaf17d9201a1e639b315359dcb6a3b877a229816e3" },
+    { "path": "src/topology.rs", "source_sha256": "9c9b48bc3853884425127e2d64e8ed957ba0d27e1696e2c457e95282e52d6a5b", "source_git_blob": null, "sha256": "e717737b04329741ec2c9e637cd764a3783030f521719278d2ea7918283fbae6" },
     { "path": "src/treevec.rs", "source_sha256": "d88b9fbf02fa9f318560e1d483d465555f2b696ae12c00f8e4f5b71ea6779445", "source_git_blob": null, "sha256": "d88b9fbf02fa9f318560e1d483d465555f2b696ae12c00f8e4f5b71ea6779445" },
     { "path": "src/typed_vec.rs", "source_sha256": "3e9a2675b8a40d8fc4df0575bd9d0d16b5604d18e9b78638dd5a612b28fc4c30", "source_git_blob": null, "sha256": "3e9a2675b8a40d8fc4df0575bd9d0d16b5604d18e9b78638dd5a612b28fc4c30" },
     { "path": "tests/fonts.rs", "source_sha256": "081604ebf560a19ff0427efd9a17eaaa0a3b46ad0bf58323fd6e21b6c0764400", "source_git_blob": null, "sha256": "081604ebf560a19ff0427efd9a17eaaa0a3b46ad0bf58323fd6e21b6c0764400" },
