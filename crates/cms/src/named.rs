@@ -37,8 +37,7 @@ pub struct NamedColors {
 }
 
 impl Profile {
-    /// The profile's named colours, or `None` when it has no `ncl2` tag (or was not parsed from
-    /// bytes).
+    /// The profile's named colours, or `None` when it has no `ncl2` tag or no stored bytes.
     pub fn named_colors(&self) -> Result<Option<NamedColors>, CmsError> {
         let Some(bytes) = self.bytes.as_deref() else {
             return Ok(None);
@@ -88,6 +87,7 @@ impl NamedColors {
         self.colors.len()
     }
 
+    /// Whether the table holds no named colours.
     pub fn is_empty(&self) -> bool {
         self.colors.is_empty()
     }
@@ -129,7 +129,8 @@ fn tag(bytes: &[u8], sig: [u8; 4]) -> Result<Option<&[u8]>, CmsError> {
     let declared = Reader { b: bytes }.u32(0)? as usize;
     let end = if (132..=bytes.len()).contains(&declared) { declared } else { bytes.len() };
     let r = Reader { b: bytes.get(..end).unwrap_or(bytes) };
-    let count = r.u32(128)? as usize;
+    // The same cap `Profile::parse` applies, so the offsets below cannot overflow on 32-bit.
+    let count = (r.u32(128)? as usize).min(1024);
     for i in 0..count {
         let o = 132 + i * 12;
         if r.u32(o)? == u32::from_be_bytes(sig) {
