@@ -84,7 +84,7 @@ impl Region {
     }
     /// Does the face contain `p`?
     pub fn contains(&self, p: Point) -> bool {
-        self.path.winding(p) != 0
+        crate::winding::winding(&self.path, p) != 0
     }
 }
 
@@ -555,7 +555,10 @@ fn face_groups_by_winding(c: &Contours, owner: &[usize], areas: &[f64]) -> Vec<(
             .contours()
             .enumerate()
             .filter(|&(j, o)| {
-                outer(j) && owner.get(j) == owner.get(i) && boxes.get(j).is_some_and(|bj| bj.union(*b) == *bj) && o.path.winding(p) != 0
+                outer(j)
+                    && owner.get(j) == owner.get(i)
+                    && boxes.get(j).is_some_and(|bj| bj.union(*b) == *bj)
+                    && crate::winding::winding(&o.path, p) != 0
             })
             .min_by(|(j, _), (k, _)| areas.get(*j).unwrap_or(&f64::INFINITY).total_cmp(areas.get(*k).unwrap_or(&f64::INFINITY)))
             .map(|(j, _)| j);

@@ -236,13 +236,18 @@ work of each operation is bounded before it starts, in counts the tests assert o
   it is made, and past `MAX_FILL_WORK` (67,108,864 elements) the map is not built: `live_paint` gives
   nothing, and `shape_builder` and Divide with an open path fall back to the filled areas, as past
   `SHAPE_BUILDER_MAX_SEGMENTS`: not `TooComplex` or no shapes, but an answer that is not the arrangement
-  asked for, the faces unsplit by the open paths (rectangles nested 3,300 deep pass, in 1.3 s; 3,400 do not).
+  asked for, the faces unsplit by the open paths (rectangles nested 3,300 deep pass, in 0.75 s; 3,400 do not).
   `try_shape_builder` and `try_pathfinder` give `TooComplex` there instead, so a caller can tell, and also
   where the faces of closed shapes are past `mask_work` or `pass_work` (Divide gives no shapes and
   `shape_builder` no regions of the filled areas there, as `regions` gives none), which they do not hide as
   an empty drawing or a map with the filled areas missing; they check the shapes as given as well, before
   the fill leaves out a loop of one cubic whose handle is no number (`NonFinite`, or `Degenerate` for one
   past what the sweep takes);
+- the winding of a point against a path is made by `src/winding.rs` (see "Differences from VectorCraft"): a segment
+  whose box the point is outside is turned away without a step, and a cubic takes at most 12 steps of Newton's method
+  and 64 halvings for each of its (at most three) pieces, so the charge stays one element for each segment wound and
+  a winding takes no more time than kurbo's did (0.07 to 0.6 of it in the cases measured there): the nested
+  rectangles above take 0.14 / 0.36 / 0.75 s where they took 0.20 / 0.58 / 1.34 s;
 - a stroke's outline is counted as it is made (a subpath of more than 256 segments is stroked in windows of
   256, so that a width that is huge against the tolerance cannot make millions of curves first) and the
   operation is `TooComplex` past `MAX_ELEMENTS` elements of outline. The union of the outlines in
@@ -326,7 +331,7 @@ through one point by `MAX_CROSSING_WORK`, shapes nested 2,896 deep, or 202 deep 
 other squares by `MAX_PASS_WORK`, and the planar map of thousands of contours nested in one shape (3,400
 rectangles a thousand times as tall as they are wide) by `MAX_FILL_WORK`. Each is a worst case measured in
 seconds or in half a gigabyte (the pie of 256 takes 0.5 to 0.9 s, 256 lines through a point 1.1 s, 2,895 nested
-squares 0.2 s and 550 MB, 3,300 nested rectangles in one shape 1.3 s, the star of 1,291 4.3 s, the Outline of the grid
+squares 0.2 s and 550 MB, 3,300 nested rectangles in one shape 0.75 s, the star of 1,291 4.3 s, the Outline of the grid
 under 100 arches 5.2 s), so an app that can wait or has the memory raises it in `Limits`.
 
 The element limit refuses a drawing of more than 524,288 elements in one operation (a traced image of half a
@@ -362,7 +367,7 @@ cost more than a second or so, measured once in a release build:
 - A planar map is built before the fills of its faces are tested, and the fill limit stops only the tests:
   rectangles nested in one shape, each a thousand times as tall as it is wide (so that the bounds of their sides
   overlap only at the corners, and the limits counted before the sweep admit over 8,000 of them), are refused
-  by `MAX_FILL_WORK` past 3,300, in 1.5 s at 4,000 and 2.4 s at 8,000 (answering 8,000 took 9.2 s before the limit).
+  by `MAX_FILL_WORK` past 3,300, in 0.95 s at 4,000 and 1.9 s at 8,000 (answering 8,000 took 9.2 s before the limit).
 - A line of segments each shorter than 16 tolerances of the sweep (1.6e-5 at ordinary coordinates, 0.023 beside
   a shape at 1e11) is lost from a planar map in any frame: the map takes pieces whose ends lie within that of
   each other for copies of one edge (which the sweep cuts a little apart) and joins their ends. Its pieces are
@@ -374,6 +379,22 @@ cost more than a second or so, measured once in a release build:
   so a curve that peaks between two samples is within the tolerance too. A refit curve is held by the same
   kind of bound, which is larger than the distances it bounds: a fit that comes close to the tolerance at the
   samples is split further, or the run left as it is, where it may in fact have been within it.
+- `remove_redundant_points` does not take a very long run of cubics whole where the rounding of lengths is wider than the
+  tolerance, however straight the run is. A run is merged when it is shown to be within the tolerance of the cubic that
+  replaces it, and the proof takes the length of each stretch of the run between two of its sample points as long as
+  rounding may have made it (4 units in the last place, `LENGTH_ROUNDING`), so that the lens it lies in is never
+  thinner than 3e-8 of the stretch (a path as long as its chord to the last place may still be off it by that much). A
+  run that is straight is sampled at eight stretches, so at a tolerance of 0.01 the longest run merged is a few million
+  long. 100,000 cubics 1e4 long along a parabola of radius 1e16 (each off its chord by 1e-9, the whole a line within
+  1e-6 over a length of 1e9) come out as 266 elements and not 2, in 0.1 s, and as 399, 109, 42, 30, 19 and 2 at
+  tolerances of 0.005, 0.02, 0.05, 0.1, 0.3 and 1: the work limit is not what stops it (the same 266 with
+  `redundant_work` raised to 2^62), and with the allowance cut to a quarter it is 56 (5 with no limit on the work, in 12
+  s). The count does not follow the radius (21, 8 and 5 elements at 1e11, 1e12 and 1e13; 161 at 1e14, where the work
+  limit ends the pass, 24 in 3.9 s without it; 362 at 1e15), because the lens only decides where the run is long enough
+  for it to exceed the tolerance. 61d528a gave 132 at 1e16 and tolerance 0.01 with an allowance of 8 units for each of the
+  three lengths of a segment and each segment of a stretch (40 for a stretch of one segment, and more for longer
+  ones), where 0bdd962 and this give 266; that was no better, for its counts did not fall as the tolerance rose (160,
+  132, 97, 104, 119, 171 and 89 at 0.005 to 1: a straight line was not found at a tolerance of 1 either).
 - An inset widens a slit along its sides however narrow, but not at its closed end where that end is as short
   as the stroker's tolerance (1e-3): a slit 0.001 wide from 20 to 100 in a square 100 across, inset by 5, is a notch
   75 long (to y = 20, not 15), as a slit 0.002 wide is not (80). Measured, and not looked into further. Beside a shape at 1e11 a slit under the sweep's tolerance there (1.4e-3) is lost by the sweep, before the
@@ -416,7 +437,7 @@ thread and ask first with the `try_` forms. Measured on one machine, in a releas
 | `interior_point` of a comb of 40,000 teeth (160,000 elements) | 11 ms |
 | `live_paint` of a comb of 20,000 teeth | 1.2 s |
 | `live_paint` of 4,000 / 8,000 / 16,000 squares in one shape | 0.18 / 0.51 / 1.6 s |
-| `live_paint` of 1,000 / 2,000 / 3,300 rectangles nested in one shape, each 1,000 times as tall as it is wide | 0.19 / 0.57 / 1.3 s (4,000 and 8,000: no map, in 1.5 / 2.4 s) |
+| `live_paint` of 1,000 / 2,000 / 3,300 rectangles nested in one shape, each 1,000 times as tall as it is wide | 0.14 / 0.36 / 0.75 s (4,000 and 8,000: no map, in 0.95 / 1.9 s) |
 
 ## Left in VectorCraft
 
@@ -454,6 +475,35 @@ bit for bit VectorCraft's), and the results are identical except where noted:
   carve lists it once, with its fill; `live_paint` in VectorCraft lists it once with its fill missing, and
   the carve lists it with its fill;
 - found in review of the carve, each behaviour VectorCraft has too and now changed here:
+  - every winding of a point against a path (the fills a planar map's faces get their sources from, the face each hole is
+    in, the groups of a Merge's faces, `Region::contains`, and the checks `interior_point` and the offset's deep point
+    make of their candidates) is made in `src/winding.rs`, not by `kurbo`'s `BezPath::winding`, which VectorCraft
+    uses. kurbo 0.13.1 cuts a cubic where its height turns and finds where each piece crosses the height of the point
+    with the cubic formula, which puts the root in the wrong place where the cubic term of the height is rounding
+    noise beside the others: for an arch whose handles are level (the control points `(0, 0)`, `(100/3, h)`,
+    `(200/3, h)`, `(100, 0)` at `h` = 10.05: the half arch's term is 1.8e-15, and the root 0.1732 comes out as 0.0578),
+    and so for the arcs at the top and the bottom of a circle cut into an even number of arcs. About a twentieth to a
+    tenth of the points over such an arch are told wrongly (596 of the 16,000 of the grid in `tests/it/winding.rs`
+    at `h` = 10.05, 617 at 10.1, none at 10.0, 9.0, 7.0 and 3.3; 1,440 to 2,083 of other grids; 228 of 400,000 random
+    points in kurbo's own circle of six cubics at a tolerance of 1e-3). A face then got the wrong sources: the lens
+    between two arches 0.03 to 0.3 apart was listed under both shapes, under the lower alone, or under none (11 of
+    11 inputs of the test, 78 of the 1,080 faces of a scan), and so was the ring between two circles cut into 6 and
+    6, 10 and 6, 6 and 10, 12 or 14 arcs (12 of 12, 29 of 720); a hole was left out of the face it is in; two holes
+    that touch were faces of their own in a Merge; and the point `interior_point` took for the middle of a crescent
+    was outside it (5 of 7 crescents, and 125 of 504 arches and crescents of a scan). In 300 random stacks of two
+    to seven shapes a seed (seeds 1, 3, 5 and 7), judged against the fills flattened to 1e-8 and the crossings
+    counted on the polygon, VectorCraft's `live_paint` has the wrong sources for 350, 261, 294 and 293 of 7,556,
+    7,625, 6,801 and 6,878 faces (`shape_builder`'s regions 310, 238, 289 and 264), and its Divide of a stack with an
+    open path is not one shape for each face a fill covers in 36, 30, 49 and 37 stacks of about 250; the carve has none
+    wrong. Here a cubic is cut where its height turns by a
+    quadratic solved without subtracting nearly equal numbers, each piece is solved for the height by Newton's method
+    from the straight line between its ends, held inside the range the heights seen leave, and then by bisection (at
+    most 12 and 64 evaluations of the height for a piece, never the cubic formula), and the crossings are counted by
+    kurbo's rules (a ray to the left, a piece's lower end in and its upper end out, a line tested as kurbo tests it),
+    so nothing changes where kurbo was right (the pinned Pathfinder results are still identical) and a point farther
+    from the path than the rounding of its coordinates is told right. A winding takes 0.07 to 0.6 of kurbo's time
+    on a release build (a circle of 8 arcs 0.18, of 1,000 arcs 0.07, a polygon of 1,000 lines 0.09, a blob of 6 to
+    100 random cubics 0.57 to 0.61: the box of a segment turns most of them away, which kurbo does not);
   - `boolean_n` and `try_boolean_n` check the sweep's windings against the area of each input, as
     `try_boolean` does (for up to eight inputs), and resolve the inputs first when they do not add up;
     VectorCraft did that for two operands only, and the n-ary result gained or lost a region for a
@@ -729,7 +779,7 @@ bit for bit VectorCraft's), and the results are identical except where noted:
     point);
   - a planar map that would wind its faces and holes against more than 67,108,864 elements of fills and
     faces (rectangles nested 3,400 deep in one shape; 8,000 took the carve 9.2 s to map before this limit,
-    the time growing with the square of the depth, and are refused in 2.4 s). Here `live_paint` gives no
+    the time growing with the square of the depth, and are refused in 1.9 s). Here `live_paint` gives no
     shapes, and `shape_builder` and Divide with an open path give the filled areas instead, as past
     `SHAPE_BUILDER_MAX_SEGMENTS`: an answer, not a refusal, but not the arrangement asked for (the faces are
     not split by the open paths). `try_shape_builder` and `try_pathfinder` refuse it with `TooComplex`.

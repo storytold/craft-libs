@@ -156,7 +156,7 @@ fn place_holes(m: &Map, work: &FillWork) -> Option<Vec<Vec<usize>>> {
                 return None;
             }
             crate::work::add(Work::HoleWound, bp.elements().len());
-            if bp.winding(p) != 0 && around_it.is_none_or(|(_, least)| area.total_cmp(&least).is_lt()) {
+            if crate::winding::winding(bp, p) != 0 && around_it.is_none_or(|(_, least)| area.total_cmp(&least).is_lt()) {
                 around_it = Some((i, *area));
             }
         }
@@ -626,7 +626,7 @@ fn inside_edges(bp: &BezPath, edges: &[(Point, Point)], bb: kurbo::Rect) -> Opti
             .take(MAX_WINDING_TESTS)
             .find(|(_, m)| {
                 work::add(Work::Winding, 1);
-                bp.winding(*m) != 0
+                crate::winding::winding(bp, *m) != 0
             })
             .map(|(_, m)| m)
     };

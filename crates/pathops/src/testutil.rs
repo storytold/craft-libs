@@ -154,3 +154,81 @@ pub(crate) fn star(n: usize) -> BezPath {
     bp.close_path();
     bp
 }
+
+/// A path as the polygon of its flattening, to read the winding number of a point from, as an oracle for the winding of
+/// the curves: the crossings of a ray to the left with straight edges, found by none of the arithmetic of the cubics. It
+/// holds for a point farther from the path than the flattening's tolerance (and than the rounding of the crossing, which
+/// the callers take care of by the distance they keep).
+pub(crate) struct Flattened {
+    edges: Vec<(Point, Point)>,
+}
+
+impl Flattened {
+    /// `path` flattened to `tolerance`, each subpath closed.
+    pub(crate) fn new(path: &BezPath, tolerance: f64) -> Self {
+        let mut edges = Vec::new();
+        let (mut last, mut start) = (Point::ZERO, Point::ZERO);
+        kurbo::flatten(path.iter(), tolerance, |el| match el {
+            kurbo::PathEl::MoveTo(p) => {
+                if last != start {
+                    edges.push((last, start));
+                }
+                (last, start) = (p, p);
+            }
+            kurbo::PathEl::LineTo(p) => {
+                edges.push((last, p));
+                last = p;
+            }
+            kurbo::PathEl::ClosePath => {
+                if last != start {
+                    edges.push((last, start));
+                }
+                last = start;
+            }
+            _ => {}
+        });
+        if last != start {
+            edges.push((last, start));
+        }
+        Self { edges }
+    }
+
+    /// The winding number at `p`: each edge that crosses the height of `p` (its lower end in, its upper out) to the left of
+    /// it counts -1 where it rises and +1 where it falls.
+    pub(crate) fn winding(&self, p: Point) -> i32 {
+        let mut w = 0;
+        for &(a, b) in &self.edges {
+            if (a.y <= p.y) != (b.y <= p.y) {
+                let x = a.x + (p.y - a.y) / (b.y - a.y) * (b.x - a.x);
+                if p.x >= x {
+                    w += if b.y > a.y { -1 } else { 1 };
+                }
+            }
+        }
+        w
+    }
+}
+
+/// How far `p` is from `path` (its segments themselves, to 1e-9).
+pub(crate) fn distance_to_path(path: &BezPath, p: Point) -> f64 {
+    use kurbo::ParamCurveNearest;
+    path.segments().map(|s| s.nearest(p, 1e-9).distance_sq).fold(f64::INFINITY, f64::min).sqrt()
+}
+
+/// A generator of numbers from a seed (xorshift), for tests that draw many shapes and want the same ones every run.
+pub(crate) struct Rng(pub(crate) u64);
+
+impl Rng {
+    /// The next number, in `0..1`.
+    pub(crate) fn unit(&mut self) -> f64 {
+        self.0 ^= self.0 << 13;
+        self.0 ^= self.0 >> 7;
+        self.0 ^= self.0 << 17;
+        (self.0 >> 11) as f64 / (1u64 << 53) as f64
+    }
+
+    /// The next number, in `lo..hi`.
+    pub(crate) fn range(&mut self, lo: f64, hi: f64) -> f64 {
+        lo + (hi - lo) * self.unit()
+    }
+}

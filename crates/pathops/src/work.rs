@@ -87,11 +87,14 @@ pub(crate) enum Work {
     /// Faces of an offset whose point deep inside was looked for among the crossings of the curves themselves, the
     /// flattened path having none.
     ExactSpans,
+    /// Evaluations of the height of a piece of a cubic (Newton steps and halvings), to find where it crosses the height of a point whose
+    /// winding is counted.
+    WindingSteps,
 }
 
 #[cfg(test)]
 thread_local! {
-    static COUNTS: std::cell::RefCell<[usize; 40]> = const { std::cell::RefCell::new([0; 40]) };
+    static COUNTS: std::cell::RefCell<[usize; 48]> = const { std::cell::RefCell::new([0; 48]) };
 }
 
 /// Counts `n` more of `what` on this thread (tests only).
@@ -116,5 +119,5 @@ pub(crate) fn take(what: Work) -> usize {
 /// Resets every count on this thread.
 #[cfg(test)]
 pub(crate) fn reset() {
-    COUNTS.with(|c| *c.borrow_mut() = [0; 40]);
+    COUNTS.with(|c| *c.borrow_mut() = [0; 48]);
 }

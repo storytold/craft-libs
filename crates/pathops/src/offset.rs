@@ -651,7 +651,7 @@ fn deep_point(bp: &BezPath) -> Option<kurbo::Point> {
     let mut spans = spans_across(bp, r, (0.01 * r.width().min(r.height())).max(1e-6));
     // The widest first, the first found of equal ones first.
     spans.sort_by(|a, b| b.0.total_cmp(&a.0));
-    if let Some(p) = spans.into_iter().take(MAX_DEEP_TESTS).map(|(_, p)| p).find(|&p| bp.winding(p) % 2 != 0) {
+    if let Some(p) = spans.into_iter().take(MAX_DEEP_TESTS).map(|(_, p)| p).find(|&p| crate::winding::winding(bp, p) % 2 != 0) {
         return Some(p);
     }
     // None of the middles is in the area: it is thinner than the flattening (a ring half a unit wide round a
@@ -676,11 +676,11 @@ fn widest_span(spans: Vec<(f64, kurbo::Point)>) -> Option<kurbo::Point> {
 
 /// The spans inside `bp` (even-odd) on the lines [`spans_across`] takes, from where the segments themselves
 /// cross them (a curve is cut where its height turns, and each piece, which rises or falls the whole way, is
-/// bisected for the height of the line): each span's width and middle, in the order of the lines and from left to
+/// solved for the height of the line, [`crate::winding::crossing_x`]): each span's width and middle, in the order of the lines and from left to
 /// right. A crossing is taken by the same rule as in the flattened path, the piece's lower end in and its upper
 /// end out, so that the crossings at a vertex are counted once.
 fn exact_spans(bp: &BezPath, r: kurbo::Rect) -> Vec<(f64, kurbo::Point)> {
-    use kurbo::{ParamCurve, PathSeg};
+    use kurbo::PathSeg;
     let mut spans = Vec::new();
     for f in [0.5, 0.3, 0.7] {
         let y = r.y0 + r.height() * f;
@@ -696,28 +696,11 @@ fn exact_spans(bp: &BezPath, r: kurbo::Rect) -> Vec<(f64, kurbo::Point)> {
                 PathSeg::Quad(q) => q.raise(),
                 PathSeg::Cubic(c) => c,
             };
-            // Where the height turns: `y'(t) / 3 = a (1 - t)^2 + 2 b (1 - t) t + c t^2`.
-            let (a, b, d) = (c.p1.y - c.p0.y, c.p2.y - c.p1.y, c.p3.y - c.p2.y);
-            let mut cuts = vec![0.0];
-            cuts.extend(quadratic_roots(a - 2.0 * b + d, 2.0 * (b - a), a).into_iter().filter(|t| *t > 0.0 && *t < 1.0));
-            cuts.sort_by(f64::total_cmp);
-            cuts.push(1.0);
-            for w in cuts.windows(2) {
-                let (mut lo, mut hi) = (w[0], w[1]);
-                let (ylo, yhi) = (c.eval(lo).y, c.eval(hi).y);
-                if (ylo <= y) == (yhi <= y) {
-                    continue;
+            // Each piece of the curve rises or falls the whole way: solve it for the line.
+            for piece in crate::winding::y_pieces(&c).iter() {
+                if (piece.y_lo <= y) != (piece.y_hi <= y) {
+                    xs.push(crate::winding::crossing_x(&c, &piece, y));
                 }
-                // The height of the piece is monotone: bisect for the line.
-                for _ in 0..64 {
-                    let mid = 0.5 * (lo + hi);
-                    if (c.eval(mid).y <= y) == (ylo <= y) {
-                        lo = mid;
-                    } else {
-                        hi = mid;
-                    }
-                }
-                xs.push(c.eval(0.5 * (lo + hi)).x);
             }
         }
         xs.sort_by(f64::total_cmp);
@@ -726,24 +709,6 @@ fn exact_spans(bp: &BezPath, r: kurbo::Rect) -> Vec<(f64, kurbo::Point)> {
         }
     }
     spans
-}
-
-/// The real roots of `a t^2 + b t + c` (none where it has none), found without the loss of the textbook formula
-/// where `a` is small beside `b`, as it is for a curve whose height turns at the middle.
-fn quadratic_roots(a: f64, b: f64, c: f64) -> Vec<f64> {
-    if !(a.is_finite() && b.is_finite() && c.is_finite()) {
-        return Vec::new();
-    }
-    if a == 0.0 {
-        return if b == 0.0 { Vec::new() } else { vec![-c / b] };
-    }
-    let disc = b * b - 4.0 * a * c;
-    if disc < 0.0 || !disc.is_finite() {
-        return Vec::new();
-    }
-    // The root that does not subtract nearly equal numbers, and the other from their product.
-    let q = -0.5 * (b + disc.sqrt().copysign(b));
-    if q == 0.0 { vec![0.0] } else { vec![q / a, c / q] }
 }
 
 /// Most middles of spans [`deep_point`] tests against the winding of the path.
@@ -1744,22 +1709,6 @@ mod tests {
         assert!((width - 10.0).abs() < 1e-3 && (mid.x - 3.0).abs() < 1e-6 && (mid.y - 4.0).abs() < 1e-9, "{width} {mid:?}");
     }
 
-    /// The roots of the quadratic that holds where a cubic's height turns are found where its leading
-    /// coefficient is a rounding beside the others, as it is for a cubic whose handles are level (the textbook
-    /// formula subtracts two nearly equal numbers for the root near 0.5 and loses its digits).
-    #[test]
-    fn the_roots_of_a_quadratic_with_a_small_leading_coefficient_are_found_stably() {
-        let roots = quadratic_roots(1e-20, 2.0, -1.0);
-        assert!(roots.iter().any(|t| (t - 0.5).abs() < 1e-15), "{roots:?}");
-        let roots = quadratic_roots(0.0, 2.0, -1.0);
-        assert_eq!(roots, vec![0.5]);
-        assert!(quadratic_roots(1.0, 0.0, 1.0).is_empty() && quadratic_roots(0.0, 0.0, 1.0).is_empty());
-        assert!(quadratic_roots(f64::NAN, 1.0, 1.0).is_empty());
-        let mut two = quadratic_roots(1.0, -3.0, 2.0);
-        two.sort_by(f64::total_cmp);
-        assert_eq!(two, vec![1.0, 2.0]);
-    }
-
     /// An outset by more than twice a circle's radius is a solid disk, whatever the circle is cut into: the stroker's
     /// inner offset inverts and leaves a ring between it and the circle, a face the arrangement has and the offset must
     /// drop as spurious. A point deep in a ring half a unit wide round a hole a hundred across is looked for on a
@@ -1785,6 +1734,36 @@ mod tests {
             }
         }
         assert!(fallbacks > 0, "the crossings of the curves themselves were used");
+    }
+
+    /// The middle of a span of the flattened path is tested against the winding of the path itself, and an arch whose handles
+    /// are level was wound wrongly where its handles are not a third of its length apart (`kurbo` put the crossing where
+    /// the cubic formula loses it): all eight of the widest middles were found outside, and the point was taken from the
+    /// crossings of the curves, as for a ring too thin to have a middle on its flattening. For the eight arches below
+    /// (a length, a height, where the handles are as shares of the length, and the height of the ends) it is found on the
+    /// flattened path, and is inside the arch.
+    #[test]
+    fn a_point_deep_in_an_arch_of_level_handles_is_found_on_its_flattened_outline() {
+        let arches = [
+            (108.14197814836086, 30.257096176208112, 0.3419434748397453, 0.6852146617659459, 0.3744118037465318),
+            (24.20376636283981, 7.167197187779601, 0.23012979046610865, 0.6574141744360932, -4.786837239033809),
+            (177.65652525700884, 27.434182122162596, 0.4273686816325571, 0.7883049188825482, -4.7890237607763355),
+            (90.25736296488823, 27.042488429214508, 0.2901760209158355, 0.8870604281620573, -1.813956681041561),
+            (109.38565243148898, 29.71364522352796, 0.3968914683373625, 0.6564857762642335, -2.5170908707285387),
+            (27.172804358292105, 28.10580083971786, 0.44784262406666564, 0.7487176964112927, 0.024799381762320216),
+            (152.06453031587856, 26.852189335279235, 0.3754282946191082, 0.8661133209456695, -2.8824769833018715),
+            (80.78987891112608, 31.874708240614193, 0.33501141682195623, 0.8855645260647974, 1.9314595371694088),
+        ];
+        for (len, h, fx1, fx2, y0) in arches {
+            let mut arch = BezPath::new();
+            arch.move_to((0.0, y0));
+            arch.curve_to((len * fx1, y0 + h), (len * fx2, y0 + h), (len, y0));
+            arch.close_path();
+            work::reset();
+            let p = deep_point(&arch).expect("a point in an arch");
+            assert_eq!(work::take(Work::ExactSpans), 0, "{} has its point from the crossings of the curves", arch.to_svg());
+            assert!(crate::testutil::Flattened::new(&arch, 1e-8).winding(p) != 0, "{p:?} is outside {}", arch.to_svg());
+        }
     }
 
     /// The point taken among the crossings of the curves is the middle of the widest span, the first of equal ones,

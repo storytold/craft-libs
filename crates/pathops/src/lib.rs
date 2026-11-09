@@ -34,6 +34,7 @@ mod pathfinder;
 mod planar;
 #[cfg(test)]
 mod testutil;
+mod winding;
 mod work;
 
 pub use boolean::{

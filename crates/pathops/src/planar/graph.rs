@@ -82,7 +82,7 @@ impl Fill {
             }
             crate::work::add(crate::work::Work::FillSubpaths, 1);
             crate::work::add(crate::work::Work::FillWound, sp.elements().len());
-            winding = winding.saturating_add(sp.winding(p));
+            winding = winding.saturating_add(crate::winding::winding(sp, p));
         }
         Some(crate::boolean::inside(self.rule, winding))
     }
