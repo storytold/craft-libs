@@ -136,6 +136,10 @@ local patches listed below. `.cargo_vcs_info.json` names the commit it was packa
 `824b0791a750f7b27b8edcbb6c6244d0e629875e`. That commit is not in the GitHub repository the manifest
 names, which is archived; its README says development moved off GitHub.
 
+local patches listed below. `.cargo_vcs_info.json` names the commit it was packaged from,
+`824b0791a750f7b27b8edcbb6c6244d0e629875e`. That commit is not in the GitHub repository the manifest
+names, which is archived; its README says development moved off GitHub.
+
 Every file here except this one, `SOURCE.json` and the patched files below is byte for byte the file
 in the `.crate` archive. `SOURCE.json` records the hash of the `.crate` download
 (`source_archive_sha256`) and, for every file kept, the hash in the package (`source_sha256`) and the
@@ -162,6 +166,7 @@ and, for every file kept, the hash in the package (`source_sha256`) and the hash
   cross at `t = 0.25`. The proof's inverse-slope difference is `d/(y_1 - y_0)`; the package has
   `d/(y_1 - y_1)`, whose denominator is zero. The lemma's bound and the later bound on the crossing
   height use the absolute values of `1/m_alpha` and `1/m_beta`, because the slopes can be negative.
+| `tests/paperjs.rs` | A test file in `boolean-test/data/` that cannot be loaded becomes a failing `<operation>/load` trial. The package does not include `boolean-test/data/`, and the packaged file skipped files it could not load, so the `paperjs` target passed with zero trials. The `load_errors_are_reported` trial covers a missing file; run it with `cargo test --locked --test paperjs load_errors_are_reported`. The full `paperjs` target fails here because the data files are not included. |
 
 `omitted_files` lists the 43 files of the package left out here, with their hashes:
 
