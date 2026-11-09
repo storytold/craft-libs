@@ -79,6 +79,9 @@ pub enum Error {
     InconsistentWindingNumbers,
     /// At least one of the inputs had a coordinate with a magnitude above [`MAX_COORDINATE`].
     TooLarge,
+    /// The sweep did more work (segment comparisons, position checks and linear searches of the
+    /// sweep line) than its work limit allows.
+    WorkLimitExceeded,
 }
 
 /// The largest coordinate magnitude that [`Topology`] and [`binary_op`] accept.
@@ -126,6 +129,9 @@ impl std::fmt::Display for Error {
                 write!(f, "the winding numbers disagree around a point")
             }
             Error::TooLarge => write!(f, "one of the inputs had a coordinate that was too large"),
+            Error::WorkLimitExceeded => {
+                write!(f, "the sweep did more work than its work limit")
+            }
         }
     }
 }
