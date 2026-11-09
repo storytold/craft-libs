@@ -78,6 +78,9 @@ names, which is archived; its README says development moved off GitHub.
 `824b0791a750f7b27b8edcbb6c6244d0e629875e`. That commit is not in the GitHub repository the manifest
 names, which is archived; its README says development moved off GitHub.
 
+`824b0791a750f7b27b8edcbb6c6244d0e629875e`. That commit is not in the GitHub repository the manifest
+names, which is archived; its README says development moved off GitHub.
+
 Every file here except this one, `SOURCE.json` and the files under Local changes is byte for byte the
 file in the `.crate` archive. `SOURCE.json` records the hash of the `.crate` download
 (`source_archive_sha256`) and, for every file kept, the hash in the package (`source_sha256`) and the
@@ -140,6 +143,9 @@ holds `upstream_revision`. `local_patches` describes each local patch.
 | File | Change |
 |---|---|
 | `src/sweep/sweep_line.rs` | `choose_cross_height` takes the midpoint of a crossing's height range with `f64::midpoint` instead of `(y0 + y1) / 2.0`. For heights above about 9e307 the sum overflowed, so a range from 1e308 to 1.5e308 gave an infinite crossing height instead of 1.25e308. The `cross_height_near_f64_max` test covers that range. |
+| `TreeVec::range` and `range_mut` panic with a message when a bound is past `usize::MAX` or the start is after the end, instead of overflowing | `Craft patch (range bounds)` | `src/treevec.rs` | `treevec::tests::range_reversed`, `range_mut_reversed`, `range_start_past_max`, `range_end_past_max` |
+
+Every change here updates this table and `SOURCE.json` in the same commit.
 
 `omitted_files` lists the 43 files of the package left out here, with their hashes:
 
