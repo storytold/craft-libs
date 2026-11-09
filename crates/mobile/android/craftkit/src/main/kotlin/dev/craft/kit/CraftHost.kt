@@ -175,7 +175,8 @@ class CraftHost(context: Context, library: String) : CraftNative.Handler {
     /**
      * Stop hearing the system for this host: its coroutines, memory and thermal callbacks and the
      * power-save receiver. Call on every destruction (a recreated activity's old host would keep them
-     * registered); the app keeps running. Idempotent; [close] calls it too.
+     * registered); the app keeps running, and so does a write in place or pick it still waits on.
+     * Idempotent; [close] calls it too.
      */
     fun release() {
         if (released) return
@@ -201,7 +202,7 @@ class CraftHost(context: Context, library: String) : CraftNative.Handler {
             5 -> parseImageSize(text)?.let { (width, height) -> data?.let { scope.launch { copyImage(it, width, height) } } }
             6 -> scope.launch { openUrl(text) }
             7 -> keyboardWanted.value = text == "1"
-            8 -> parseWriteInPlace(text)?.let { (location, name) -> scope.launch { writeInPlace(location, name, data ?: ByteArray(0)) } }
+            8 -> parseWriteInPlace(text)?.let { (location, name) -> pending.launch { writeInPlace(location, name, data ?: ByteArray(0)) } }
             9 -> scope.launch { if (text == "1") CraftWorkService.hold(app) else CraftWorkService.release() }
             10 -> scope.launch { paste() }
             11 -> fileRequests.trySend(FileRequest.Share(text, FileTypes.mimeOfName(text), data ?: ByteArray(0)))
@@ -332,7 +333,7 @@ class CraftHost(context: Context, library: String) : CraftNative.Handler {
 
     /** The open picker closed with [uris] (none: cancelled); read them and answer the app. */
     internal fun answerPick(uris: List<Uri>) {
-        scope.launch {
+        pending.launch {
             val files = withContext(Dispatchers.IO) { uris.mapNotNull(::read) }
             files.forEach { CraftNative.pickAdd(it.name, it.bytes, it.locationText) }
             CraftNative.pickDone()
@@ -350,7 +351,8 @@ class CraftHost(context: Context, library: String) : CraftNative.Handler {
         }
         if (error != null) {
             Toast.makeText(app, "Couldn't save “$name” where it came from. Choose where to save it.", Toast.LENGTH_LONG).show()
-            fileRequests.trySend(FileRequest.Export(name, FileTypes.mimeOfName(name), bytes))
+            // The host showing the app now: this one may have been replaced meanwhile.
+            (current ?: this).fileRequests.trySend(FileRequest.Export(name, FileTypes.mimeOfName(name), bytes))
         }
         CraftNative.writeDone(location, error?.let { it.message ?: it.javaClass.simpleName })
     }
@@ -466,6 +468,13 @@ class CraftHost(context: Context, library: String) : CraftNative.Handler {
 
         /** The host the app reports to: the newest one (main thread only). */
         var current: CraftHost? = null
+
+        /**
+         * Work the app waits on: a write in place until `writeDone`, a pick until `pickDone`. It
+         * outlives the host that started it, since a recreated activity (a rotation) releases the
+         * old host while the app still waits for the answer.
+         */
+        val pending = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
         fun documentsOf(intent: Intent): List<Uri> = when (intent.action) {
             Intent.ACTION_VIEW, Intent.ACTION_EDIT -> listOfNotNull(intent.data)
