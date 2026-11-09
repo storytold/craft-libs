@@ -213,15 +213,20 @@ pub fn probe_size(bytes: &[u8]) -> Result<(u32, u32), CodecError> {
 }
 
 /// A JPEG's frame as its header declares it, read without decoding pixels: the stored size, the
-/// layout [`decode`] returns, and whether [`decode`] hands the file to its whole-coefficient
+/// layout [`decode`] returns, whether [`decode`] hands the file to its whole-coefficient
 /// decoder (arithmetic-coded, lossless or 12-bit frames), whose working set is several times the
-/// decoded image.
+/// decoded image, and the coefficients it holds beside its output for an 8-bit progressive one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct JpegInfo {
     pub width: u32,
     pub height: u32,
     pub layout: ChannelLayout,
     pub whole_coefficients: bool,
+    /// Bytes of DCT coefficients [`decode`] holds at once beside its output for an 8-bit
+    /// progressive frame (SOF2): every block of every component, at its own sampling, 64
+    /// 16-bit values each, since the scans refine them in turn. 0 for the frames it decodes a
+    /// line of MCUs at a time.
+    pub progressive_coefficients: u64,
 }
 
 /// [`JpegInfo`] of `bytes`; `None` without a readable frame of 1, 3 or 4 components.
