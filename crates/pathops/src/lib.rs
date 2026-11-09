@@ -36,6 +36,7 @@ mod offset;
 mod path;
 mod pathfinder;
 mod planar;
+mod sweep_axis;
 #[cfg(test)]
 mod testutil;
 mod winding;

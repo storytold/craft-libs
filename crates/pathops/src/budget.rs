@@ -1595,8 +1595,14 @@ mod tests {
         let row = crate::testutil::row_of_lenses(7_000);
         work::reset();
         assert_eq!(crate::try_area(&row, FillRule::NonZero), Err(PathOpsError::TooComplex));
-        assert_eq!(crate::try_unite_all(&[(&row, FillRule::NonZero)]), Err(PathOpsError::TooComplex));
+        // Swept as it lies, across the page, the union is refused; the union of a long, low row turns it a quarter turn
+        // (VectorCraft 8a7011a) and sweeps it along its length, where the line holds a lens or two: made.
+        assert_eq!(crate::boolean::try_unite_all_upright(&[(&row, FillRule::NonZero)], crate::DEFAULT_PRECISION), Err(PathOpsError::TooComplex));
         assert_eq!(work::take(Work::Sweeps), 0, "refused before the sweep was built");
+        let united = crate::try_unite_all(&[(&row, FillRule::NonZero)]);
+        assert_eq!(work::take(Work::Turns), 1, "turned");
+        assert!(united.is_ok(), "{united:?}");
+        work::reset();
         // The same number of shapes stacked in a column are no trouble to the sweep line.
         let column = crate::testutil::column_of_lenses(1_000);
         assert!(crate::try_area(&column, FillRule::NonZero).is_ok());

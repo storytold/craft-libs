@@ -1221,8 +1221,21 @@ pub fn try_unite_all(paths: &[(&BezPath, FillRule)]) -> Result<BezPath, PathOpsE
     try_unite_all_with(paths, DEFAULT_PRECISION)
 }
 
-/// [`try_unite_all`] refit to `precision`, dropping slivers thinner than it.
+/// [`try_unite_all`] refit to `precision`, dropping slivers thinner than it. A long, low input is swept
+/// along its length, a quarter turn from the page (see the README), and the result turned back.
 pub fn try_unite_all_with(paths: &[(&BezPath, FillRule)], precision: f64) -> Result<BezPath, PathOpsError> {
+    ensure_size(paths.iter().map(|(p, _)| *p))?;
+    match crate::sweep_axis::turned_fills(paths) {
+        Some(turned) => {
+            let refs: Vec<(&BezPath, FillRule)> = turned.iter().map(|(p, r)| (p, *r)).collect();
+            try_unite_all_upright(&refs, precision).map(crate::sweep_axis::unturn)
+        }
+        None => try_unite_all_upright(paths, precision),
+    }
+}
+
+/// [`try_unite_all_with`] with the sweeps run on `paths` as they are.
+pub(crate) fn try_unite_all_upright(paths: &[(&BezPath, FillRule)], precision: f64) -> Result<BezPath, PathOpsError> {
     ensure_size(paths.iter().map(|(p, _)| *p))?;
     // The inputs as given, before the fill leaves out a contour that draws nothing (a handle that is no
     // number makes a loop of one cubic draw nothing, and that is an error, not an empty input).
@@ -1272,8 +1285,23 @@ pub fn unite_all(paths: &[(&BezPath, FillRule)]) -> BezPath {
     unite_all_with(paths, DEFAULT_PRECISION)
 }
 
-/// [`unite_all`] refit to `precision`, dropping slivers thinner than it.
+/// [`unite_all`] refit to `precision`, dropping slivers thinner than it. A long, low input is swept
+/// along its length, a quarter turn from the page (see the README), and the result turned back.
 pub fn unite_all_with(paths: &[(&BezPath, FillRule)], precision: f64) -> BezPath {
+    if ensure_size(paths.iter().map(|(p, _)| *p)).is_err() {
+        return BezPath::new();
+    }
+    match crate::sweep_axis::turned_fills(paths) {
+        Some(turned) => {
+            let refs: Vec<(&BezPath, FillRule)> = turned.iter().map(|(p, r)| (p, *r)).collect();
+            crate::sweep_axis::unturn(unite_all_upright(&refs, precision))
+        }
+        None => unite_all_upright(paths, precision),
+    }
+}
+
+/// [`unite_all_with`] with the sweeps run on `paths` as they are.
+pub(crate) fn unite_all_upright(paths: &[(&BezPath, FillRule)], precision: f64) -> BezPath {
     if ensure_size(paths.iter().map(|(p, _)| *p)).is_err() {
         return BezPath::new();
     }
@@ -1575,6 +1603,48 @@ mod tests {
             large <= 6 * near_far,
             "{near_far} for 1,024 lenses and one far, {large} for 4,096: four times as many should read about four times as much"
         );
+    }
+
+    /// Rows of short curves across the page, and the same stood on end (VectorCraft 8a7011a's test of
+    /// lookups that search along y): the input curves around two points and the kept points near one are
+    /// the ones a scan of every curve finds, and a lookup reads about a hundred of the entries (69 in the wide art, 101 in the tall, at the most), where
+    /// the whole of a row or a column along the narrow axis would be 200 candidates.
+    #[test]
+    fn input_curves_and_kept_points_are_found_in_wide_and_tall_art() {
+        let mut wide = BezPath::new();
+        for row in 0..4 {
+            let y = f64::from(row) * 3.0;
+            wide.move_to((0.0, y));
+            for k in 0..200 {
+                let x = f64::from(k);
+                wide.curve_to((x + 0.3, y + 1.0), (x + 0.7, y + 1.0), (x + 1.0, y));
+            }
+        }
+        let tall = kurbo::Affine::new([0.0, 1.0, 1.0, 0.0, 0.0, 0.0]) * &wide;
+        for (name, art) in [("wide", &wide), ("tall", &tall)] {
+            let tidy = Tidy::keeping(DEFAULT_PRECISION, [art]);
+            let mut most = 0;
+            for (_, c) in tidy.curves.iter().step_by(7) {
+                // A curve's start point is also held by the curve before it, whose bounds end there.
+                for (a, b) in [(c.p0, c.p3), (c.p0, c.p0), (c.eval(0.25), c.eval(0.75)), (c.p0, c.p0 + kurbo::Vec2::new(2.5, 2.5))] {
+                    let by_hand: Vec<usize> =
+                        (0..tidy.curves.len()).filter(|&i| tidy.curves[i].0.contains(a) && tidy.curves[i].0.contains(b)).collect();
+                    work::reset();
+                    let found = tidy.curve_indices_around(a, b);
+                    most = most.max(work::take(Work::IndexCandidates) + work::take(Work::IndexNodes));
+                    assert_eq!(found, by_hand, "{name}: {a:?} {b:?}");
+                }
+                for p in [c.p0, c.p0 + kurbo::Vec2::new(1e-7, -1e-7), c.p0 + kurbo::Vec2::new(0.0, 1e-3), c.p0 + kurbo::Vec2::new(1e-3, 0.0)] {
+                    let tol = 1e-6 * (1.0 + p.x.abs().max(p.y.abs()));
+                    let kept: Vec<Point> = art.segments().map(|s| kurbo::ParamCurve::eval(&s, 0.0)).collect();
+                    let by_hand = kept.iter().any(|q| (q.x - p.x).abs() <= tol && (q.y - p.y).abs() <= tol);
+                    work::reset();
+                    assert_eq!(tidy.is_kept(p), by_hand, "{name}: {p:?}");
+                    most = most.max(work::take(Work::IndexCandidates) + work::take(Work::IndexNodes));
+                }
+            }
+            assert!(most > 0 && most <= 112, "{name}: a lookup read {most} entries of 800 curves");
+        }
     }
 
     /// Kept points that lie on one vertical line but for float noise (each a hair off the last, less

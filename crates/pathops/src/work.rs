@@ -30,6 +30,12 @@ pub(crate) enum Work {
     TidyMerge,
     /// Lines a curve was flattened into to find the way an edge leaves a vertex.
     FlattenLines,
+    /// Segments the estimate of which way to sweep read (counted, and the sampled ones boxed).
+    TurnReads,
+    /// Segment boxes the estimate of which way to sweep built (at most the sample).
+    TurnBoxes,
+    /// Operations run turned a quarter turn, the estimate finding the turned sweep clearly cheaper.
+    Turns,
     /// Face outlines made into paths by a walk of the faces that may stop early (`regions_within`), the empty ones too.
     FacePaths,
     /// Entries of the windings walked to list the inputs that cover a face for a predicate (the entries of the

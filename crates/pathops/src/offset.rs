@@ -217,6 +217,16 @@ pub fn try_outline_stroke(path: &BezPath, width: f64, cap: Cap, join: Join, mite
 pub fn try_stroke_region(outlines: &[BezPath]) -> Result<BezPath, PathOpsError> {
     // The size first, before any outline is copied.
     ensure_size(outlines)?;
+    // A long, low stroke is swept along its length, a quarter turn from the page, and the result turned back.
+    match crate::sweep_axis::turned_outlines(outlines) {
+        Some(turned) => try_stroke_region_upright(&turned).map(crate::sweep_axis::unturn),
+        None => try_stroke_region_upright(outlines),
+    }
+}
+
+/// [`try_stroke_region`] with the sweeps run on `outlines` as they are.
+pub(crate) fn try_stroke_region_upright(outlines: &[BezPath]) -> Result<BezPath, PathOpsError> {
+    ensure_size(outlines)?;
     let tidy = Tidy::free(DEFAULT_PRECISION);
     let parts: Vec<BezPath> = outlines.iter().map(close_all).filter(|o| !o.elements().is_empty()).collect();
     // One outline is held to the element limit as the union of several is ([`held_union`]): one that
@@ -242,6 +252,17 @@ pub fn try_stroke_region(outlines: &[BezPath]) -> Result<BezPath, PathOpsError> 
 /// closed) as one clean path: overlaps removed and the stroker's pieces refitted. An outline that
 /// cannot be combined is left out ([`try_stroke_region`] reports it).
 pub fn stroke_region(outlines: &[BezPath]) -> BezPath {
+    if ensure_size(outlines).is_err() {
+        return BezPath::new();
+    }
+    match crate::sweep_axis::turned_outlines(outlines) {
+        Some(turned) => crate::sweep_axis::unturn(stroke_region_upright(&turned)),
+        None => stroke_region_upright(outlines),
+    }
+}
+
+/// [`stroke_region`] with the sweeps run on `outlines` as they are.
+pub(crate) fn stroke_region_upright(outlines: &[BezPath]) -> BezPath {
     if ensure_size(outlines).is_err() {
         return BezPath::new();
     }
