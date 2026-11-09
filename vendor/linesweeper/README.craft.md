@@ -150,6 +150,18 @@ holds `upstream_revision`. `local_patches` describes each local patch.
 | `TreeVec::range` and `range_mut` panic with a message when a bound is past `usize::MAX` or the start is after the end, instead of overflowing | `Craft patch (range bounds)` | `src/treevec.rs` | `treevec::tests::range_reversed`, `range_mut_reversed`, `range_start_past_max`, `range_end_past_max` |
 
 Every change here updates this table and `SOURCE.json` in the same commit.
+Every file here except this one, `SOURCE.json` and `docs/sweep.typ` is byte for byte the file in the
+`.crate` archive. `SOURCE.json` records the hash of the `.crate` download (`source_archive_sha256`)
+and, for every file kept, the hash in the package (`source_sha256`) and the hash here (`sha256`).
+`upstream_repository` is null because no public repository this copy can name holds
+`upstream_revision`. `local_patches` lists each change:
+
+- `docs/sweep.typ`: the crossing-height lemma (`lem-intersection-height-error`) and its proof divide
+  the starting gap `beta(y_0) - alpha(y_0)` by the sum of both gaps. With the ending gap
+  `alpha(y_1) - beta(y_1)` as the numerator, gaps of 1 and 3 gave `t = 0.75`, while the segments
+  cross at `t = 0.25`. The proof's inverse-slope difference is `d/(y_1 - y_0)`; the package has
+  `d/(y_1 - y_1)`, whose denominator is zero. The lemma's bound and the later bound on the crossing
+  height use the absolute values of `1/m_alpha` and `1/m_beta`, because the slopes can be negative.
 
 `omitted_files` lists the 43 files of the package left out here, with their hashes:
 

@@ -724,10 +724,10 @@ and assume that $beta(y_0) - alpha(y_0) >= 0$ and
 $
 alpha(y_1) - beta(y_1) > 16/3 (epsilon + 2 epsilon_0 M).
 $
-Define $t = (alpha(y_1) - beta(y_1)) / (alpha(y_1) - beta(y_1) + beta(y_0) - alpha(y_0)$ and set $y = y_0 + t(y_1 - y_0)$. The
+Define $t = (beta(y_0) - alpha(y_0)) / (beta(y_0) - alpha(y_0) + alpha(y_1) - beta(y_1))$ and set $y = y_0 + t(y_1 - y_0)$. The
 natural way to compute $y$ produces an approximation $hat(y)$ satisfying
 $
-|alpha(hat(y)) - beta(hat(y))| <= 4(epsilon + 2 epsilon_0 M) (1 + max(1/m_alpha, 1/m_beta)),
+|alpha(hat(y)) - beta(hat(y))| <= 4(epsilon + 2 epsilon_0 M) (1 + max(1/abs(m_alpha), 1/abs(m_beta))),
 $
 where $m_alpha$ and $m_beta$ are the slopes of $alpha$ and $beta$.
 ]<lem-intersection-height-error>
@@ -736,18 +736,18 @@ Basically, this says we can find a good approximate crossing height as long as t
 
 #proof[
 First, note that at least one of $alpha(y_0)$ or $beta(y_0)$ is calculated exactly; similarly for $alpha(y_1)$ and $beta(y_1)$.
-Therefore the absolute error in calculating $alpha(y_1) - beta(y_1)$ is at most $epsilon + epsilon_0 M$ (where the $epsilon_0 M$ comes
+Therefore the absolute error in calculating $beta(y_0) - alpha(y_0)$ is at most $epsilon + epsilon_0 M$ (where the $epsilon_0 M$ comes
 from rounding after the summation) and the absolute error in calculating
-$(alpha(y_1) - beta(y_1)) + (beta(y_0) - alpha(y_0))$ is at most $2 epsilon + 3 epsilon_0 M$.
-These errors aren't independent, though, since both terms involve a computation of $alpha(y_1) - beta(y_1)$.
-Specifically, let $c = alpha(y_1) - beta(y_1)$ and let $d = (alpha(y_1) - beta(y_1)) + (beta(y_0) - alpha(y_0))$; suppose
+$(beta(y_0) - alpha(y_0)) + (alpha(y_1) - beta(y_1))$ is at most $2 epsilon + 3 epsilon_0 M$.
+These errors aren't independent, though, since both terms involve a computation of $beta(y_0) - alpha(y_0)$.
+Specifically, let $c = beta(y_0) - alpha(y_0)$ and let $d = (beta(y_0) - alpha(y_0)) + (alpha(y_1) - beta(y_1))$; suppose
 our calculation of $c$ has error $epsilon_c$ and our calculation of $d$ has error $epsilon_d$. Then
 
 $
 |epsilon_c - epsilon_d| <= epsilon + 2 epsilon_0 M,
 $ <eq-error-cancellation>
 
-because this is the *additional* error introduced into $d$ by computing $beta(y_0) - alpha(y_0)$ and adding it to the other term.
+because this is the *additional* error introduced into $d$ by computing $alpha(y_1) - beta(y_1)$ and adding it to the other term.
 
 Now we consider the quotient
 
@@ -794,8 +794,8 @@ abs(alpha(hat(y)) - beta(hat(y))) <= (2 epsilon_0 + epsilon_t) d + (epsilon_0 M)
 $
 
 If we assume that $16 (epsilon + 2 epsilon_0 M) / d <= 3$ then $epsilon_t d <= 4 epsilon + 8 epsilon_0 M$. 
-Since $d/(y_1 - y_1)$ is the difference of the inverse-slopes of $alpha$ and $beta$, it's bounded by twice
-the maximum of these inverse-slopes.
+Since $d/(y_1 - y_0)$ is the difference of the inverse-slopes of $alpha$ and $beta$, it's bounded by twice
+the maximum absolute value of these inverse-slopes.
 ]
 
 Putting all this together (and handling the "chamfers" yet):
@@ -808,7 +808,7 @@ and take $delta = 64 epsilon_0 M$. If $epsilon_0 <= 1/4$ then
 - If $alpha$ $(3 delta)/4$-crosses $beta$, we can compute a crossing height $hat(y)$ such
   that
   $
-  |alpha(hat(y)) - beta(hat(y))| <= (9 delta) /16 (1 + max(1/m_alpha, 1/m_beta)).
+  |alpha(hat(y)) - beta(hat(y))| <= (9 delta) /16 (1 + max(1/abs(m_alpha), 1/abs(m_beta))).
   $
 ]
 
