@@ -9,6 +9,23 @@ Run `python scripts/verify_wgpu_hal.py PATH/TO/wgpu-hal-30.0.1.crate` from the
 craft-libs root to check the archive hash, every vendored archive file and the
 patch. The script tolerates Git's CRLF checkout conversion but no source changes.
 
+The `Vendored wgpu-hal source` workflow also runs the vendored library's tests
+with only the `dx12` backend enabled and builds its `halmark` window example on
+`windows-latest`. It targets this manifest directly because the vendor crate is
+excluded from the workspace; the workspace's existing Windows jobs do not test
+this copy. Reproduce the checks with:
+
+```sh
+cargo test --manifest-path vendor/wgpu-hal/Cargo.toml --locked --no-default-features --features dx12 --lib
+cargo build --manifest-path vendor/wgpu-hal/Cargo.toml --locked --no-default-features --features dx12 --example halmark
+```
+
+These checks compile the HWND and composition paths and run upstream unit tests.
+They do not launch a window or measure presentation sharpness. The consumer
+measurements below remain separate evidence; live mouse-drag resizing,
+mixed-DPI monitor transitions and composition presentation still need validation
+on an interactive Windows desktop.
+
 The DX12 swap-chain description uses `DXGI_SCALING_NONE` for HWND presentation
 to avoid resampling the windowed UI. Composition swap chains retain
 `DXGI_SCALING_STRETCH`, which Microsoft requires for

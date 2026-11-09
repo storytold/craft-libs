@@ -1,6 +1,7 @@
 name: Vendored wgpu-hal source
 
 on:
+  workflow_dispatch:
   push:
     branches: [main]
     paths: ['vendor/wgpu-hal/**', 'scripts/verify_wgpu_hal.py', '.github/workflows/wgpu-hal.yml']
@@ -22,3 +23,24 @@ jobs:
         run: curl --fail --location --silent --show-error https://static.crates.io/crates/wgpu-hal/wgpu-hal-30.0.1.crate --output wgpu-hal-30.0.1.crate
       - name: Check every source file, patch and upstream license
         run: python3 scripts/verify_wgpu_hal.py wgpu-hal-30.0.1.crate
+
+  windows-dx12:
+    name: Windows DX12 build and tests
+    needs: verify-source
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: vendor/wgpu-hal -> target
+          key: vendored-wgpu-hal-dx12
+      # The vendor crate is excluded from the workspace and is not selected by
+      # craft-ui's tests. Build it directly so this checks the patched DX12 code.
+      - name: Run the vendored DX12 library tests
+        run: cargo test --manifest-path vendor/wgpu-hal/Cargo.toml --locked --no-default-features --features dx12 --lib
+      - name: Build the DX12 window example
+        run: cargo build --manifest-path vendor/wgpu-hal/Cargo.toml --locked --no-default-features --features dx12 --example halmark
