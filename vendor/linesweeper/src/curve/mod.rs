@@ -1497,10 +1497,15 @@ impl AlmostHorizontalDecomposition {
 
             // Enforce y-monotonicity, from the previous curve to this one, and
             // also for the initial and final tangents of this subsegment.
+            //
+            // Craft patch (monotone handles): the tangents only need to point
+            // the right way, so p1.y is kept at least p0.y and p2.y at most
+            // p3.y. A monotone cubic can have handles outside its own y-range,
+            // and clamping them into that range moves the curve.
             c.p0.y = c.p0.y.clamp(last_y, orig_c.p3.y);
-            c.p1.y = c.p1.y.clamp(c.p0.y, orig_c.p3.y);
+            c.p1.y = c.p1.y.max(c.p0.y);
             c.p3.y = c.p3.y.clamp(last_y, orig_c.p3.y);
-            c.p2.y = c.p2.y.clamp(last_y, c.p3.y);
+            c.p2.y = c.p2.y.min(c.p3.y);
             last_y = c.p3.y;
             let approx_horiz = match order {
                 Right => {
@@ -2020,6 +2025,44 @@ mod test {
         );
 
         dbg!(intersect_cubics(c0, c1, sure_tol, ish_tol));
+    }
+
+    // Craft patch (monotone handles) test: after the shape is split into
+    // y-monotone pieces, some pieces have a handle outside their own y-range.
+    // The outline must still follow the input curves, for the shape and for
+    // its mirror image in y.
+    #[test]
+    fn decomposition_keeps_handles_outside_the_y_range() {
+        use kurbo::{BezPath, ParamCurve as _, ParamCurveNearest as _, Shape as _};
+
+        for svg in [
+            "M0,5 C5,0 2,0 1,1 C0,2 4,0 5,5 Z",
+            "M0,0 C5,5 2,5 1,4 C0,3 4,5 5,0 Z",
+        ] {
+            let input = BezPath::from_svg(svg).unwrap();
+            let topology = crate::topology::Topology::<i32>::from_path(&input, 1e-6).unwrap();
+            let contours = topology.contours(|w| *w != 0);
+            let mut output = BezPath::new();
+            for contour in contours.contours() {
+                output.extend(contour.path.iter());
+            }
+
+            let area = output.area().abs();
+            assert!((area - 10.9122).abs() < 1e-3, "{svg}: area {area}");
+
+            let input_segs: Vec<_> = input.segments().collect();
+            for seg in output.segments() {
+                for i in 0..=16 {
+                    let p = seg.eval(i as f64 / 16.0);
+                    let dist = input_segs
+                        .iter()
+                        .map(|s| s.nearest(p, 1e-9).distance_sq)
+                        .fold(f64::INFINITY, f64::min)
+                        .sqrt();
+                    assert!(dist < 1e-6, "{svg}: {p:?} is {dist} from the input");
+                }
+            }
+        }
     }
 
     #[test]

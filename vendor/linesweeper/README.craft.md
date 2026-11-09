@@ -84,6 +84,9 @@ names, which is archived; its README says development moved off GitHub.
 `824b0791a750f7b27b8edcbb6c6244d0e629875e`. That commit is not in the GitHub repository the manifest
 names, which is archived; its README says development moved off GitHub.
 
+`824b0791a750f7b27b8edcbb6c6244d0e629875e`. That commit is not in the GitHub repository the manifest
+names, which is archived; its README says development moved off GitHub.
+
 Every file here except this one, `SOURCE.json` and the files under Local changes is byte for byte the
 file in the `.crate` archive. `SOURCE.json` records the hash of the `.crate` download
 (`source_archive_sha256`) and, for every file kept, the hash in the package (`source_sha256`) and the
@@ -189,6 +192,9 @@ and, for every file kept, the hash in the package (`source_sha256`) and the hash
 | `src/sweep/sweep_line.rs` | `Sweeper::handle_intersection` queues a delayed intersection only when its `y` is before the ends of both segments, as the intersection scans do. A delayed intersection at a segment's end used to panic in `CurveOrder::entry_at`. The `delayed_intersection_at_a_segment_end` test sweeps three wide, flat contours whose sweep delayed an intersection to a segment's end. |
 | `src/lib.rs`, `src/topology.rs` | `Topology::from_paths`, `from_paths_with_correctness`, `from_path` and `from_paths_binary` return `Error` instead of `NonClosedPath`, and return `Error::NaN`, `Error::Infinity` or the new `Error::TooLarge` when a path has a coordinate that is not finite or has a magnitude above `MAX_COORDINATE` (`f64::MAX / 16`). `binary_op` returns `Error::TooLarge` through `from_paths_binary`. Before, both panicked on a cubic with a coordinate above about `f64::MAX / 3`. A release build panicked in `f64::clamp` with "min > max, or either was NaN", and a debug build failed the `y.is_finite()` assertion in `Point::new`. The `coordinates_above_max_coordinate` test covers 6e307, 7e307 and 1.7e308. |
 | `src/topology.rs` | `Contours::grouped` walks each containment tree with an explicit stack instead of one recursive call per nesting level, and returns the contours in the same order. Before, contours nested about 10,000 deep overflowed a 1 MiB stack, which aborts the process. The `grouped_*` tests cover the order and a 30,000-deep nesting on a 256 KiB stack. |
+| `AlmostHorizontalDecomposition::from_monotone_cubic` keeps each piece's handles on the right side of its end points instead of clamping them into the piece's y-range, so the pieces the sweep compares follow the input curve | `Craft patch (monotone handles)` | `src/curve/mod.rs` | `curve::test::decomposition_keeps_handles_outside_the_y_range` |
+
+Every change here updates this table and `SOURCE.json` in the same commit.
 
 `omitted_files` lists the 43 files of the package left out here, with their hashes:
 
