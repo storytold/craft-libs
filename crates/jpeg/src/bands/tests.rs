@@ -538,23 +538,38 @@ fn data_left_before_a_restart_marker_is_damage() {
     assert!(!in_order(&Bands::new(&t, &Limits::default(), None).unwrap()).unwrap().1);
 }
 
+/// Restart markers misnumbered, missing (the file cut short), added inside an interval or
+/// removed: seek points follow the markers in the data as a reader in order meets them, so
+/// reading from them gives the samples reading in order does.
 #[test]
-fn misnumbered_or_missing_restart_markers_leave_only_band_zero_to_seek_to() {
+fn damaged_restart_markers_seek_as_reading_in_order_does() {
     let base = Stream { restart: 4, ..Stream::new(32, 40, &[(1, 1)], 0, 5) };
     let good = base.encode();
     let mut b = Bands::new(&good, &Limits::default(), None).unwrap();
     b.find_seek_points();
     assert_eq!(b.seek_points().len(), 5);
-    let bad = Stream { rst_base: 1, ..base }.encode();
-    let mut b = Bands::new(&bad, &Limits::default(), None).unwrap();
-    b.find_seek_points();
-    assert_eq!(b.seek_points().collect::<Vec<_>>(), [0]);
-    // A missing marker (the file cut after the third interval).
-    let third = good.windows(2).enumerate().filter(|(_, p)| p[0] == 0xFF && (0xD0..=0xD7).contains(&p[1])).nth(2).unwrap().0;
-    let mut b = Bands::new(&good[..third + 10], &Limits::default(), None).unwrap();
-    b.find_seek_points();
-    assert_eq!(b.seek_points().collect::<Vec<_>>(), [0]);
-    assert!(b.reader().seek(1).is_err());
+    let markers: Vec<usize> = good.windows(2).enumerate().filter(|(_, p)| p[0] == 0xFF && (0xD0..=0xD7).contains(&p[1])).map(|(i, _)| i).collect();
+    let misnumbered = Stream { rst_base: 1, ..base }.encode();
+    let cut = good[..markers[2] + 10].to_vec();
+    let mut added = good.clone();
+    added.splice(markers[1] - 7..markers[1] - 7, [0xFF, 0xD5]);
+    let mut removed = good.clone();
+    removed.drain(markers[2]..markers[2] + 2);
+    for (what, t, points, damaged) in [
+        ("misnumbered", misnumbered, vec![0, 1, 2, 3, 4], false),
+        ("cut", cut, vec![0, 1, 2, 3], true),
+        ("added", added, vec![0, 1, 2, 3, 4], true),
+        ("removed", removed, vec![0, 1, 2, 3], true),
+    ] {
+        let mut b = Bands::new(&t, &Limits::default(), None).unwrap();
+        let (seq, hurt) = in_order(&b).unwrap();
+        assert_eq!(hurt, damaged, "{what}");
+        b.find_seek_points();
+        assert_eq!(b.seek_points().collect::<Vec<_>>(), points, "{what}");
+        let (sought, hurt) = by_seeking(&b).unwrap();
+        assert_eq!(hurt, damaged, "{what}");
+        assert!(sought == seq, "{what}: seeking changes the samples");
+    }
 }
 
 #[test]

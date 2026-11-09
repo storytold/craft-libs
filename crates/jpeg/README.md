@@ -123,10 +123,12 @@ if reader.damaged() { /* warn: part of the image is missing */ }
 - `limits.max_pixels` bounds the image; `limits.max_alloc` bounds one reader's buffers
   (`Bands::reader_bytes`) and the upsampling maps, not the image.
 - **In parallel.** A band that starts a restart interval is a seek point once
-  `Bands::find_seek_points` has found the restart markers (one pass over the scan data; unless
-  every marker is there, in sequence, only band 0 is). Readers on separate threads can `seek` to
-  seek points and decode the bands up to the next one. Files with a restart interval at every
-  line of MCUs, common in files Photoshop saved, decode on every core.
+  `Bands::find_seek_points` has found the restart marker before it (one pass over the scan
+  data). The k-th marker in the data begins interval k, as a reader that reads in order pairs
+  them, so missing, misnumbered or added markers in a damaged file change nothing but which
+  bands are seek points. Readers on separate threads can `seek` to seek points and decode the
+  bands up to the next one. Files with a restart interval at every line of MCUs, common in files
+  Photoshop saved, decode on every core.
 - **Damaged data** leaves the rest of its restart interval at zero coefficients (mid grey) and
   decoding resumes at the next restart marker; without restart intervals the rest of the scan
   stays at zero, as in `decode`. An interval that leaves more than its padding unread before

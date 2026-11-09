@@ -36,7 +36,7 @@ struct Comp {
 ///
 /// Bands can also be decoded out of order, by [`Reader`]s on separate threads: a restart
 /// interval (B.2.4.4, `DRI`) that begins with a band makes the band a seek point once
-/// [`Bands::find_seek_points`] has found its restart marker.
+/// [`Bands::find_seek_points`] has found the restart marker before it.
 ///
 /// **Damaged data.** Entropy-coded data that is cut short or corrupt leaves the rest of its
 /// restart interval at zero coefficients (mid grey), and decoding resumes at the next restart
@@ -244,39 +244,38 @@ impl<'a> Bands<'a> {
     }
 
     /// Finds the restart markers in the scan, so that every band a restart interval begins with
-    /// becomes a seek point. One pass over the entropy-coded data. Unless the markers are all
-    /// there, numbered in sequence, only band 0 is a seek point.
+    /// becomes a seek point. One pass over the entropy-coded data. The k-th restart marker in the
+    /// data begins interval k, whatever its number: as a reader that reads in order pairs them,
+    /// so that reading from a seek point gives the same samples also when markers are missing,
+    /// misnumbered or added (damaged data), and the bands past the last marker found are reached
+    /// in order from the last seek point.
     pub fn find_seek_points(&mut self) {
         self.seek.truncate(1);
         let (restart, mcux) = (self.restart, self.mcux);
         if restart == 0 {
             return;
         }
-        let expected = self.mcux.saturating_mul(self.mcuy).div_ceil(restart).saturating_sub(1);
+        let intervals = self.mcux.saturating_mul(self.mcuy).div_ceil(restart);
         let d = self.data;
         let (mut i, mut k) = (0usize, 0usize);
-        let mut found = Vec::new();
         while let Some(p) = d.get(i..).and_then(|r| r.iter().position(|&v| v == 0xFF)) {
             i += p;
             match d.get(i + 1) {
                 Some(0x00) => i += 2,
                 Some(0xFF) => i += 1,
-                Some(&m @ 0xD0..=0xD7) => {
-                    if usize::from(m - 0xD0) != k % 8 || k >= expected {
+                Some(0xD0..=0xD7) => {
+                    k += 1;
+                    if k >= intervals {
                         return;
                     }
-                    k += 1;
                     let first = k * restart;
                     if first.is_multiple_of(mcux) {
-                        found.push((first / mcux, i + 2));
+                        self.seek.push((first / mcux, i + 2));
                     }
                     i += 2;
                 }
-                _ => break,
+                _ => return,
             }
-        }
-        if k == expected {
-            self.seek.extend(found);
         }
     }
 
