@@ -44,6 +44,8 @@ fn try_map_with(shapes: &[Shape], precision: f64) -> Result<Option<Map>, PathOps
     if !crate::budget::sweep_fits(inputs.iter().map(|p| &p.0)) {
         return Err(PathOpsError::TooComplex);
     }
+    // The map is held to a part of the sweep's budget: it takes several times what the sweep does.
+    crate::meter::within_for_a_map(inputs.iter().map(|p| &p.0), eps)?;
     let tidy = Tidy::keeping(precision, inputs.iter().map(|p| &p.0));
     let (points, edges) = sweep_graph(&inputs, eps, precision).ok_or(PathOpsError::Degenerate)?;
     let nv = points.len();

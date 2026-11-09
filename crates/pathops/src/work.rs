@@ -94,6 +94,12 @@ pub(crate) enum Work {
     PricedEnds,
     /// Pairs of curves tried for running along one another (the work of curves that coincide).
     CoincidenceTests,
+    /// Nanoseconds of sweep a metered dry sweep counted, up to the point it stopped (`Limits::sweep_work`).
+    MeterNanos,
+    /// Dry sweeps run (inputs past the gate, within a limit that is not lifted).
+    MeteredSweeps,
+    /// The fourth powers of the segments that start (or end) together, summed, as the meter counts them before its sweep.
+    MeterGroups,
 }
 
 #[cfg(test)]

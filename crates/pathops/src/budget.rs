@@ -205,6 +205,14 @@ impl SearchBudget {
     }
 }
 
+/// Most work, in nanoseconds of sweep, that the metered dry sweep may count before it refuses an input: 4,200,000,000 (the default
+/// of [`Limits::sweep_work`]). Every input of more than 192 monotone pieces is swept once, step by step, before the operation
+/// sweeps it, and the work of what the sweep does (its pieces, the scan of the line for each, the clusters it is tangled in,
+/// the ends that start together) is counted as it goes, in nanoseconds of sweep or of the memory of its pieces, whichever is the
+/// more; past the limit it stops and the operation fails as [`crate::PathOpsError::TooComplex`]. The pricing above is the first
+/// filter and this is the backstop under it. A planar map is held to a quarter of it. The star of 1,291 points counts 3.8e9.
+pub const MAX_SWEEP_WORK: usize = 4_200_000_000;
+
 /// Most path elements (a move, a close, and a segment each) all the paths of one operation may
 /// hold together: 524,288 (the default of [`Limits::elements`]). Every operation reads its input a few times and keeps several copies
 /// of it (the sweep's segments cost a few hundred bytes each: a union of two paths of this size
@@ -278,6 +286,8 @@ pub struct Limits {
     /// Most steps of the searches a Pathfinder Outline and an inset make on curves after their sweeps
     /// ([`MAX_SEARCH_WORK`]).
     pub search_work: usize,
+    /// Most work the metered dry sweep counts, in nanoseconds of sweep ([`MAX_SWEEP_WORK`]); `usize::MAX` leaves the meter off.
+    pub sweep_work: usize,
 }
 
 impl Limits {
@@ -303,6 +313,7 @@ impl Limits {
         redundant_work: crate::edit::REDUNDANT_WORK,
         mask_work: crate::boolean::MASK_WORK,
         search_work: MAX_SEARCH_WORK,
+        sweep_work: MAX_SWEEP_WORK,
     };
 }
 

@@ -392,6 +392,174 @@ pub(crate) fn stacked_segments(s: usize, m: usize) -> BezPath {
     bp
 }
 
+/// The corners of the regular polygon of `k` corners of the given radius (turned 0.1, three radii from the origin) the copies below are of.
+fn polygon_corners(k: usize, radius: f64) -> Vec<Point> {
+    (0..k)
+        .map(|i| {
+            let a = std::f64::consts::TAU * i as f64 / k as f64 + 0.1;
+            Point::new(radius * a.cos() + 3.0 * radius, radius * a.sin() + 3.0 * radius)
+        })
+        .collect()
+}
+
+/// `m` copies of one regular polygon of `k` corners and the given radius, each its own closed subpath, the `c`-th with every coordinate `c`
+/// units in the last place from where the first has it: copies that are none to a count that takes the bits of their points for them.
+pub(crate) fn polygons_an_ulp_apart(k: usize, m: usize, radius: f64) -> BezPath {
+    let mut bp = BezPath::new();
+    for c in 0..m {
+        for (i, p) in polygon_corners(k, radius).iter().enumerate() {
+            let q = Point::new(f64::from_bits(p.x.to_bits() + c as u64), f64::from_bits(p.y.to_bits() + c as u64));
+            if i == 0 {
+                bp.move_to(q);
+            } else {
+                bp.line_to(q);
+            }
+        }
+        bp.close_path();
+    }
+    bp
+}
+
+/// `m` copies of one regular polygon of `k` corners and the given radius, the `c`-th moved by `(c mod 7)` by `(c mod 5)` steps of `step`
+/// tolerances of the sweep (a millionth each, at these sizes): copies a few tolerances apart.
+pub(crate) fn polygons_a_few_tolerances_apart(k: usize, m: usize, step: f64, radius: f64) -> BezPath {
+    let mut bp = BezPath::new();
+    for c in 0..m {
+        let by = kurbo::Vec2::new((c % 7) as f64 * step * 1e-6, (c % 5) as f64 * step * 1e-6);
+        for (i, p) in polygon_corners(k, radius).iter().enumerate() {
+            if i == 0 {
+                bp.move_to(*p + by);
+            } else {
+                bp.line_to(*p + by);
+            }
+        }
+        bp.close_path();
+    }
+    bp
+}
+
+/// `n` windows of the arc the fans are pieces of, the `k`-th from `0.4 - 0.4 u` to `0.5 + 0.4 u` with `u = (k + 1) / n`: every two of them
+/// lie along one another for a tenth of the arc (at least), which is under a quarter of each window, each its own closed subpath.
+pub(crate) fn windows_sharing_a_tenth(n: usize) -> BezPath {
+    use kurbo::ParamCurve;
+    let mut bp = BezPath::new();
+    for k in 0..n {
+        let u = (k as f64 + 1.0) / n as f64;
+        let s = the_arc().subsegment((0.4 - 0.4 * u)..(0.5 + 0.4 * u));
+        bp.move_to(s.p0);
+        bp.curve_to(s.p1, s.p2, s.p3);
+        bp.close_path();
+    }
+    bp
+}
+
+/// `n` segments from the point (0, 0) down the diagonal, the k-th to `(k, k)`, each its own closed subpath (a segment and back).
+pub(crate) fn fan_along_a_line(n: usize) -> BezPath {
+    let mut bp = BezPath::new();
+    for k in 1..=n {
+        bp.move_to((0.0, 0.0));
+        bp.line_to((k as f64, k as f64));
+        bp.close_path();
+    }
+    bp
+}
+
+/// `n` rings in a grid of about `sqrt(n)` by `sqrt(n)`, 25 apart: each a circle of radius 10 (four cubics) and a circle of radius `inner`
+/// the other way round (four cubics), as a closed outline of a ring.
+pub(crate) fn rings(n: usize, inner: f64) -> BezPath {
+    let k = ((n as f64).sqrt().ceil() as usize).max(1);
+    let mut bp = BezPath::new();
+    for i in 0..n {
+        let (cx, cy) = ((i % k) as f64 * 25.0, (i / k) as f64 * 25.0);
+        for (r, reversed) in [(10.0, false), (inner, true)] {
+            let q = r * KAPPA;
+            let arcs = [
+                [(cx - r, cy), (cx - r, cy - q), (cx - q, cy - r), (cx, cy - r)],
+                [(cx, cy - r), (cx + q, cy - r), (cx + r, cy - q), (cx + r, cy)],
+                [(cx + r, cy), (cx + r, cy + q), (cx + q, cy + r), (cx, cy + r)],
+                [(cx, cy + r), (cx - q, cy + r), (cx - r, cy + q), (cx - r, cy)],
+            ];
+            bp.move_to(arcs[0][0]);
+            if reversed {
+                for a in arcs.iter().rev() {
+                    bp.curve_to(a[2], a[1], a[0]);
+                }
+            } else {
+                for a in &arcs {
+                    bp.curve_to(a[1], a[2], a[3]);
+                }
+            }
+            bp.close_path();
+        }
+    }
+    bp
+}
+
+/// `n` S-shaped strokes in a grid, 30 apart: each a closed outline of two S-shaped cubics a stroke `w` apart, joined by short caps.
+pub(crate) fn s_strokes(n: usize, w: f64) -> BezPath {
+    let k = ((n as f64).sqrt().ceil() as usize).max(1);
+    let mut bp = BezPath::new();
+    for i in 0..n {
+        let (x, y) = ((i % k) as f64 * 30.0, (i / k) as f64 * 30.0);
+        let h = w / 2.0;
+        bp.move_to((x - h, y));
+        bp.curve_to((x + 15.0 - h, y + 5.0), (x - 15.0 - h, y + 15.0), (x - h, y + 20.0));
+        bp.line_to((x + h, y + 20.0));
+        bp.curve_to((x - 15.0 + h, y + 15.0), (x + 15.0 + h, y + 5.0), (x + h, y));
+        bp.close_path();
+    }
+    bp
+}
+
+/// A mesh of `n` by `n` cells of side 1, each cut into two triangles, each triangle its own closed subpath.
+pub(crate) fn mesh(n: usize) -> BezPath {
+    let mut bp = BezPath::new();
+    for i in 0..n {
+        for j in 0..n {
+            let (x, y) = (i as f64, j as f64);
+            bp.extend(polyline(&[(x, y), (x + 1.0, y), (x + 1.0, y + 1.0)], true).iter());
+            bp.extend(polyline(&[(x, y), (x + 1.0, y + 1.0), (x, y + 1.0)], true).iter());
+        }
+    }
+    bp
+}
+
+/// A grid of `n` by `n` squares of side 1, each its own closed subpath.
+pub(crate) fn grid_of_squares(n: usize) -> BezPath {
+    let mut bp = BezPath::new();
+    for i in 0..n {
+        for j in 0..n {
+            bp.extend(rect(i as f64, j as f64, i as f64 + 1.0, j as f64 + 1.0).iter());
+        }
+    }
+    bp
+}
+
+/// `n` rectangles side by side on one baseline (their bottoms on y = 0), half a unit apart so that they overlap.
+pub(crate) fn bars_on_a_baseline(n: usize) -> BezPath {
+    let mut bp = BezPath::new();
+    for i in 0..n {
+        let x = i as f64 * 0.5;
+        bp.extend(rect(x, 0.0, x + 10.0, 5.0 + i as f64 * 0.01).iter());
+    }
+    bp
+}
+
+/// `count` groups, 40 apart on a diagonal, of `g` near-identical closed loops of one cubic each (the loops 0.01 apart).
+pub(crate) fn groups_of_loops(count: usize, g: usize) -> BezPath {
+    let mut bp = BezPath::new();
+    for k in 0..count {
+        let (x0, y0) = (k as f64 * 40.0, k as f64 * 40.0);
+        for i in 0..g {
+            let p = Point::new(x0 + i as f64 * 0.01, y0);
+            bp.move_to(p);
+            bp.curve_to(p + kurbo::Vec2::new(30.0, 30.0), p + kurbo::Vec2::new(-30.0, 30.0), p);
+            bp.close_path();
+        }
+    }
+    bp
+}
+
 /// A circle of radius `r` at `(cx, cy)` cut into `n` cubics (each the cubic that fits its arc), closed.
 pub(crate) fn cubic_circle(n: usize, r: f64, cx: f64, cy: f64) -> BezPath {
     let da = std::f64::consts::TAU / n as f64;

@@ -203,13 +203,13 @@ fn lines_and_pies_moved_a_few_tolerances_are_refused_before_the_sweep() {
     refused_at_once(&jittered_pies(1, 400, 2e-5), "a pie of 400 slices, the apexes moved up to 20 tolerances");
 }
 
-/// Moved far enough, or fewer, they are made: 300 lines moved 200 tolerances (0.2 s), 200 moved 10 (0.8 s and 0.8 GB), and a pie
-/// of 128 slices moved 10 (0.2 s).
+/// Moved far enough, or fewer, they are made: 300 lines moved 200 tolerances (0.2 s), 150 moved 10 (0.1 s; 200, which took 0.8 s and
+/// 0.8 GB, hold more pieces than the budget of the metered sweep admits, the star's), and a pie of 128 slices moved 10 (0.2 s).
 #[test]
 fn lines_and_pies_moved_a_few_tolerances_are_made_when_they_are_fewer_or_farther() {
     for (name, path) in [
         ("300 lines moved 200 tolerances", jittered_pencil(300, 100.0, 2e-4)),
-        ("200 lines moved 10 tolerances", jittered_pencil(200, 100.0, 1e-5)),
+        ("150 lines moved 10 tolerances", jittered_pencil(150, 100.0, 1e-5)),
         ("a pie of 128 slices moved 10 tolerances", jittered_pies(1, 128, 1e-5)),
     ] {
         assert!(try_area(&path, NZ).is_ok(), "{name}");

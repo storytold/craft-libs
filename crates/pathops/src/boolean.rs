@@ -397,6 +397,8 @@ impl Arrangement {
         if !crate::budget::sweep_fits_within(paths.iter().map(|p| &p.0), cap) {
             return Err(PathOpsError::TooComplex);
         }
+        // The backstop under that count: the sweep itself, run step by step and stopped at its budget.
+        crate::meter::within(paths.iter().map(|p| &p.0), eps)?;
         // The sweep can panic on rare near-degenerate input; that must never take the app down,
         // so it becomes an error (callers fall back to leaving the art unchanged).
         work::add(Work::Sweeps, 1);
@@ -863,6 +865,7 @@ pub(crate) fn normalize_bez_counted(bp: &BezPath, rule: FillRule, budget: usize)
     if !crate::budget::sweep_fits([&bp]) {
         return Err(PathOpsError::TooComplex);
     }
+    crate::meter::within([&bp], eps)?;
     // As in `Sweep::new`, a panic in the sweep on near-degenerate input becomes an error.
     work::add(Work::Sweeps, 1);
     let swept = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -1095,6 +1098,7 @@ fn resolved(input: &BezPath, rule: FillRule) -> Result<Option<BezPath>, PathOpsE
     if !crate::budget::sweep_fits([&bp]) {
         return Err(PathOpsError::TooComplex);
     }
+    crate::meter::within([&bp], eps)?;
     work::add(Work::Sweeps, 1);
     let sweep = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         #[cfg(test)]

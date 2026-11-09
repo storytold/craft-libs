@@ -15,6 +15,8 @@
 //! refused with a [`PathOpsError`] (or, for the operations without a `Result`, give an empty or
 //! unchanged path) rather than panicking or running without bound. The bounds are the defaults of
 //! [`Limits`]; an app that knows its machine chooses its own with [`with_limits`].
+//! The bounds that price a sweep from its geometry are backed by a metered dry sweep: past 192 pieces the sweep itself is run step by
+//! step first, and refused past a budget ([`Limits::sweep_work`]).
 //!
 //! A panic inside the sweep (`linesweeper` panics on a few degenerate inputs) is caught with
 //! [`std::panic::catch_unwind`] at the public functions and becomes [`PathOpsError::Degenerate`] or an
@@ -29,6 +31,7 @@ mod budget;
 mod crossings;
 mod edit;
 mod fit;
+mod meter;
 mod offset;
 mod path;
 mod pathfinder;
@@ -44,7 +47,7 @@ pub use boolean::{
 };
 pub use budget::{
     Limits, MAX_COVERAGE_ENTRIES, MAX_CROSSED_WORK, MAX_CROSSING_WORK, MAX_ELEMENTS, MAX_ENDS_AT_A_POINT, MAX_ENDS_WORK, MAX_FILL_WORK,
-    MAX_PASS_WORK, MAX_REAL_CROSSINGS, MAX_SEARCH_WORK, MAX_SEGMENT_PAIRS, MAX_SWEEP_EVENT_WORK, MAX_SWEEP_LINE_PAIRS, with_limits,
+    MAX_PASS_WORK, MAX_REAL_CROSSINGS, MAX_SEARCH_WORK, MAX_SEGMENT_PAIRS, MAX_SWEEP_EVENT_WORK, MAX_SWEEP_LINE_PAIRS, MAX_SWEEP_WORK, with_limits,
 };
 pub use edit::{FIT_WORK, JOIN_WORK, MAX_FIT_POINTS, REDUNDANT_WORK, SimplifyOptions, join, remove_redundant_points, simplify, simplify_with};
 pub use offset::{

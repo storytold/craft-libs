@@ -642,3 +642,64 @@ pub fn stacked_arcs(m: usize) -> BezPath {
     }
     bp
 }
+
+/// The corners of the regular polygon of `k` corners of the given radius (turned 0.1, three radii from the origin) the copies below are of.
+fn polygon_corners(k: usize, radius: f64) -> Vec<Point> {
+    (0..k)
+        .map(|i| {
+            let a = std::f64::consts::TAU * i as f64 / k as f64 + 0.1;
+            Point::new(radius * a.cos() + 3.0 * radius, radius * a.sin() + 3.0 * radius)
+        })
+        .collect()
+}
+
+/// `m` copies of one regular polygon of `k` corners and the given radius, each its own closed subpath, the `c`-th with every coordinate `c`
+/// units in the last place from where the first has it: copies that are none to a count that takes the bits of their points for them.
+pub fn polygons_an_ulp_apart(k: usize, m: usize, radius: f64) -> BezPath {
+    let mut bp = BezPath::new();
+    for c in 0..m {
+        for (i, p) in polygon_corners(k, radius).iter().enumerate() {
+            let q = Point::new(f64::from_bits(p.x.to_bits() + c as u64), f64::from_bits(p.y.to_bits() + c as u64));
+            if i == 0 {
+                bp.move_to(q);
+            } else {
+                bp.line_to(q);
+            }
+        }
+        bp.close_path();
+    }
+    bp
+}
+
+/// `m` copies of one regular polygon of `k` corners and the given radius, the `c`-th moved by `(c mod 7)` by `(c mod 5)` steps of `step`
+/// tolerances of the sweep (a millionth each, at these sizes): copies a few tolerances apart.
+pub fn polygons_a_few_tolerances_apart(k: usize, m: usize, step: f64, radius: f64) -> BezPath {
+    let mut bp = BezPath::new();
+    for c in 0..m {
+        let by = kurbo::Vec2::new((c % 7) as f64 * step * 1e-6, (c % 5) as f64 * step * 1e-6);
+        for (i, p) in polygon_corners(k, radius).iter().enumerate() {
+            if i == 0 {
+                bp.move_to(*p + by);
+            } else {
+                bp.line_to(*p + by);
+            }
+        }
+        bp.close_path();
+    }
+    bp
+}
+
+/// `n` windows of the arc the fans are pieces of, the `k`-th from `0.4 - 0.4 u` to `0.5 + 0.4 u` with `u = (k + 1) / n`: every two of them
+/// lie along one another for a tenth of the arc (at least), which is under a quarter of each window, each its own closed subpath.
+pub fn windows_sharing_a_tenth(n: usize) -> BezPath {
+    use kurbo::ParamCurve;
+    let mut bp = BezPath::new();
+    for k in 0..n {
+        let u = (k as f64 + 1.0) / n as f64;
+        let s = the_arc().subsegment((0.4 - 0.4 * u)..(0.5 + 0.4 * u));
+        bp.move_to(s.p0);
+        bp.curve_to(s.p1, s.p2, s.p3);
+        bp.close_path();
+    }
+    bp
+}
