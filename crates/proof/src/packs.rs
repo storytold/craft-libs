@@ -51,6 +51,21 @@ pub(crate) fn embedded_in<'a>(packs: &'a [EmbeddedPack], names: &[String], accep
     names.iter().filter_map(|n| packs.iter().find(|p| p.locale == n.replace('_', "-").to_ascii_lowercase() && accepts(p))).collect()
 }
 
+/// Embedded spelling dictionaries follow installed packs' aliases, then same-language/script regions.
+pub(crate) fn embedded_spelling_in<'a>(table: &'a [EmbeddedPack], names: &[&str]) -> Vec<&'a EmbeddedPack> {
+    let locales = locales_for(names);
+    let mut out = embedded_in(table, &locales, |pack| !pack.dic.is_empty());
+    for pack in table.iter().filter(|pack| !pack.dic.is_empty()) {
+        let primary = pack.locale.split('-').next().unwrap_or_default();
+        if locales.iter().any(|locale| locale.split('-').next() == Some(primary) && same_script(locale, pack.locale))
+            && !out.iter().any(|selected| selected.locale == pack.locale)
+        {
+            out.push(pack);
+        }
+    }
+    out
+}
+
 /// Most languages whose pack patterns are remembered (a document may tag thousands).
 const MAX_HYPHENATION_LOOKUPS: usize = 256;
 /// The memory budget of the remembered pack patterns, in estimated bytes ([`pattern_bytes`]):
@@ -718,6 +733,20 @@ mod tests {
             assert_eq!(errors.len(), 1);
             assert!(errors[0].1.starts_with("hyphenation.nonstandard:"));
         }
+    }
+    /// Installed NEXTLEVEL files without replacements report the error and retain their standard fallback.
+    #[test]
+    fn installed_two_level_patterns_keep_standard_fallback() {
+        let dir = std::env::temp_dir().join(format!("craft-proof-nextlevel-fallback-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(NONSTANDARD), "UTF-8\na1b\nNEXTLEVEL\nc1d\n").unwrap();
+        std::fs::write(dir.join(HYPHENATION), "ba1na").unwrap();
+        let mut errors = Vec::new();
+        let patterns = patterns_from_directory(&dir, &mut errors).unwrap();
+        assert_eq!(patterns.points(&"banana".chars().collect::<Vec<_>>()).unwrap(), vec![2]);
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].1.contains("NEXTLEVEL"), "{:?}", errors);
+        std::fs::remove_dir_all(dir).unwrap();
     }
     /// Regression: embedded fallback skips locales without the requested resource.
     #[test]
