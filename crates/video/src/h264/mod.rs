@@ -4,7 +4,7 @@
 //! - Intra 16x16 / 4x4 / 8x8 mode decision, hexagon motion search with quarter-sample refinement,
 //!   16x16/16x8/8x16/8x8 partitions, P_Skip, B-frames with spatial direct/B_Skip, in-loop deblocking.
 //! - Rate control: constant QP, constant quality (CRF-like), 1-pass ABR with VBV, 2-pass VBR.
-//! - Slice-parallel encoding with rayon (feature `threads`, on by default).
+//! - Slice-parallel encoding with rayon (opt-in feature `threads`).
 //!
 //! ```no_run
 //! use craft_video::h264::{Encoder, EncoderConfig, RateControl, YuvFrame};
@@ -55,7 +55,7 @@ use transform::QuantTables;
 /// Encoder errors.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("invalid dimensions {0}x{1} (must be even and non-zero)")]
+    #[error("invalid dimensions {0}x{1} (must be even, non-zero, and at most 16384x16384)")]
     InvalidDimensions(u32, u32),
     #[error("invalid frame rate {0}/{1}")]
     InvalidFrameRate(u32, u32),
@@ -162,7 +162,7 @@ pub struct EncoderConfig {
     pub slices: usize,
     /// Access unit delimiters in Annex-B output.
     pub aud: bool,
-    /// HDR static metadata sent in an SEI with the first access unit: the 24-byte SMPTE ST 2086
+    /// HDR static metadata sent in an SEI with every IDR access unit: the 24-byte SMPTE ST 2086
     /// mastering display payload (payloadType 137) …
     pub mastering_display: Option<[u8; 24]>,
     /// … and (MaxCLL, MaxFALL) content light level (payloadType 144).
@@ -447,6 +447,24 @@ impl Encoder {
                     "second pass needs non-empty first-pass statistics with a positive fps and valid frame qscales".into(),
                 ));
             }
+            if (st.fps - fps).abs() > fps.max(1.0) * 1e-9 {
+                return Err(Error::InvalidConfig("second-pass frame rate must match the first pass".into()));
+            }
+        }
+        match cfg.rate {
+            RateControl::Crf(crf) if !crf.is_finite() => {
+                return Err(Error::InvalidConfig("CRF must be finite".into()));
+            }
+            RateControl::Cbr { kbps: 0 } => {
+                return Err(Error::InvalidConfig("bitrate must be non-zero".into()));
+            }
+            RateControl::Vbr { target_kbps: 0, .. } => {
+                return Err(Error::InvalidConfig("bitrate must be non-zero".into()));
+            }
+            RateControl::Vbr { target_kbps, max_kbps } if max_kbps == 0 || max_kbps < target_kbps => {
+                return Err(Error::InvalidConfig("VBR maximum bitrate must be at least the non-zero target bitrate".into()));
+            }
+            _ => {}
         }
         let (kbps_for_level, rc_kind, vbv) = match (&cfg.rate, &cfg.pass) {
             (RateControl::Qp(q), _) => (None, RcKind::Qp((*q).min(51)), (None, None)),
@@ -468,9 +486,6 @@ impl Encoder {
                 (Some(*max_kbps), RcKind::Abr { kbps: *target_kbps }, (Some(*max_kbps), Some(buffer)))
             }
         };
-        if matches!(cfg.rate, RateControl::Cbr { kbps: 0 } | RateControl::Vbr { target_kbps: 0, .. }) {
-            return Err(Error::InvalidConfig("bitrate must be non-zero".into()));
-        }
         let auto = nal::pick_level(mbw as u32, mbh as u32, fps, max_refs as u32, kbps_for_level, high)
             .ok_or_else(|| Error::InvalidConfig("configuration exceeds H.264 level 6.2 limits".into()))?;
         let level = cfg.level.map_or(auto, |l| nal::level_at_least(l, auto));
@@ -506,8 +521,20 @@ impl Encoder {
         let pps = Pps { cabac, pic_init_qp: 26, chroma_qp_offset: params.chroma_qp_offset, transform_8x8: params.t8x8, high };
         let sps_nal = nal::nal(3, NAL_SPS, &sps.rbsp());
         let pps_nal = nal::nal(3, NAL_PPS, &pps.rbsp());
+        #[cfg(feature = "threads")]
         let threads = if cfg.threads == 0 { std::thread::available_parallelism().map_or(1, |n| n.get()) } else { cfg.threads };
-        let slices = if cfg.slices > 0 { cfg.slices.min(mbh) } else { threads.min(mbh.div_ceil(4)).max(1) };
+        let slices = if cfg.slices > 0 {
+            cfg.slices.min(mbh)
+        } else {
+            #[cfg(feature = "threads")]
+            {
+                threads.min(mbh.div_ceil(4)).max(1)
+            }
+            #[cfg(not(feature = "threads"))]
+            {
+                1
+            }
+        };
         #[cfg(feature = "threads")]
         let pool = Pool { pool: if threads > 1 { rayon::ThreadPoolBuilder::new().num_threads(threads).build().ok() } else { None } };
         #[cfg(not(feature = "threads"))]
@@ -953,9 +980,9 @@ impl Encoder {
             self.sei_sent = true;
             let text = format!("craft-h264enc {} - clean-room H.264 encoder - options: {}", env!("CARGO_PKG_VERSION"), self.options());
             nals.push(nal::nal(0, NAL_SEI, &nal::sei_user_data_rbsp(&text)));
-            if self.cfg.mastering_display.is_some() || self.cfg.content_light.is_some() {
-                nals.push(nal::nal(0, NAL_SEI, &nal::sei_hdr_rbsp(self.cfg.mastering_display.as_ref(), self.cfg.content_light)));
-            }
+        }
+        if idr && (self.cfg.mastering_display.is_some() || self.cfg.content_light.is_some()) {
+            nals.push(nal::nal(0, NAL_SEI, &nal::sei_hdr_rbsp(self.cfg.mastering_display.as_ref(), self.cfg.content_light)));
         }
         for r in results {
             nals.push(r.nal);
@@ -1079,6 +1106,49 @@ mod tests {
         assert_eq!(parsed.to_bytes(), params.extradata);
     }
 
+    #[test]
+    fn invalid_dimensions_report_the_upper_limit() {
+        let error = Encoder::new(EncoderConfig::new(16386, 2, 30, 1)).err().unwrap();
+        assert!(error.to_string().contains("16384x16384"));
+    }
+
+    #[test]
+    fn non_finite_crf_is_rejected() {
+        let mut cfg = EncoderConfig::new(16, 16, 30, 1);
+        cfg.rate = RateControl::Crf(f32::NAN);
+        assert!(matches!(Encoder::new(cfg), Err(Error::InvalidConfig(message)) if message == "CRF must be finite"));
+    }
+
+    #[test]
+    fn vbr_requires_a_positive_maximum_at_least_the_target() {
+        for (target_kbps, max_kbps) in [(1000, 0), (1000, 999)] {
+            let mut cfg = EncoderConfig::new(16, 16, 30, 1);
+            cfg.rate = RateControl::Vbr { target_kbps, max_kbps };
+            assert!(matches!(Encoder::new(cfg), Err(Error::InvalidConfig(_))));
+        }
+    }
+
+    #[test]
+    fn second_pass_rejects_a_different_frame_rate() {
+        let stats = PassStats { frames: vec![FrameStat { slice_type: nal::SliceType::I, qscale: 1.0, bits: 100, cplx: 1.0 }], fps: 24.0 };
+        let mut cfg = EncoderConfig::new(16, 16, 48, 1);
+        cfg.rate = RateControl::Cbr { kbps: 100 };
+        cfg.pass = Pass::Second(stats);
+        assert!(matches!(Encoder::new(cfg), Err(Error::InvalidConfig(message)) if message.contains("frame rate")));
+    }
+
+    #[cfg(not(feature = "threads"))]
+    #[test]
+    fn automatic_slicing_is_serial_without_threads() {
+        let enc = Encoder::new(EncoderConfig::new(320, 240, 30, 1)).unwrap();
+        assert_eq!(enc.slices, 1);
+
+        let mut cfg = EncoderConfig::new(320, 240, 30, 1);
+        cfg.slices = 4;
+        let enc = Encoder::new(cfg).unwrap();
+        assert_eq!(enc.slices, 4, "explicit slice counts remain supported");
+    }
+
     fn grey(w: usize, h: usize) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
         (vec![128; w * h], vec![128; w * h / 4], vec![128; w * h / 4])
     }
@@ -1127,5 +1197,24 @@ mod tests {
         assert_eq!(pkts.len(), 8);
         assert!(pkts.iter().all(|p| p.dts <= p.pts), "dts after pts: {:?}", pkts.iter().map(|p| (p.pts, p.dts)).collect::<Vec<_>>());
         assert!(pkts.windows(2).all(|w| w[0].dts < w[1].dts), "dts must increase in decoding order");
+    }
+
+    #[test]
+    fn hdr_metadata_is_emitted_on_every_idr_but_identification_is_once() {
+        let mut cfg = EncoderConfig::new(16, 16, 30, 1);
+        cfg.keyint = 1;
+        cfg.bframes = 0;
+        cfg.scenecut = false;
+        cfg.mastering_display = Some([0; 24]);
+        let mut enc = Encoder::new(cfg).unwrap();
+        let (y, u, v) = grey(16, 16);
+        let frame = YuvFrame { y: &y, u: &u, v: &v, y_stride: 16, uv_stride: 8 };
+        let first = enc.encode(&frame, 0).unwrap();
+        let second = enc.encode(&frame, 1).unwrap();
+        let count_sei = |packet: &Packet| packet.data.windows(5).filter(|nal| nal[..4] == [0, 0, 0, 1] && nal[4] & 0x1f == NAL_SEI).count();
+        assert_eq!(first.len(), 1);
+        assert_eq!(second.len(), 1);
+        assert_eq!(count_sei(&first[0]), 2);
+        assert_eq!(count_sei(&second[0]), 1);
     }
 }

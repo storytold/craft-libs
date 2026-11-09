@@ -59,7 +59,7 @@ reaches 45.8 dB PSNR-Y at QP 22.
 
 ## Tests
 
-`cargo test -p craft-hevcenc`:
+`cargo test -p craft-video --features hevc`:
 
 - unit tests for CABAC, bitstream writer, parameter sets, transforms, intra modes, and frame coding;
 - covered: 8-bit and 10-bit, all-intra and IP, QP 0 noise (escape codes), QP 0..51, strong

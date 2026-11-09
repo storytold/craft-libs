@@ -60,7 +60,7 @@ impl<'a, 'b> SliceEnc<'a, 'b> {
         let (px, py) = (mx * 16, my * 16);
         let mut mvs = [[Mv::ZERO; 4]; 2];
         for l in 0..2 {
-            mvs[l] = self.search_part(rp[l], &PartSearch { mx, my, part, list: l, lam, seed: seeds[l] }, src).0;
+            mvs[l] = self.search_part(rp[l], &PartSearch { mx, my, part, list: l, lam, seed: seeds[l] }, src, &[]).0;
         }
         let mut preds = [([0u8; 256], [0u8; 64], [0u8; 64]), ([0u8; 256], [0u8; 64], [0u8; 64])];
         for l in 0..2 {
@@ -222,7 +222,7 @@ impl<'a, 'b> SliceEnc<'a, 'b> {
         // --- L0 / L1 16x16
         let mut res = [(Mv::ZERO, Mv::ZERO, u32::MAX); 2];
         for (l, rp) in [(0usize, r0), (1usize, r1)] {
-            let (m, p, c) = self.search_part(rp, &PartSearch { mx, my, part: Part::P16x16, list: l, lam, seed: dmv[l][0] }, src);
+            let (m, p, c) = self.search_part(rp, &PartSearch { mx, my, part: Part::P16x16, list: l, lam, seed: dmv[l][0] }, src, &[]);
             res[l] = (m[0], p[0], c);
         }
         let mut preds = [([0u8; 256], [0u8; 64], [0u8; 64]), ([0u8; 256], [0u8; 64], [0u8; 64])];

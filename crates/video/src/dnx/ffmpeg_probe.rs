@@ -11,6 +11,7 @@ use crate::dnx::bits::Writer;
 use crate::dnx::header::{self, EOF_SIGNATURE, FieldCode, FrameHeader, SCAN_INDEX_OFFSET};
 use crate::dnx::tables::{ZIGZAG, cid_info, vlc};
 use crate::dnx::{ChromaFormat, ColorVolume};
+use std::path::Path;
 
 struct ProbeStream {
     cid: u32,
@@ -101,6 +102,70 @@ fn stream_cid(input: ProbeStream) -> Vec<u8> {
     out
 }
 
+struct ReconstructionProbe<'a> {
+    ff: &'a Path,
+    dir: &'a Path,
+    cid: u32,
+    width: u32,
+    height: u32,
+    depth: u8,
+    pix_fmt: &'a str,
+    quantizer: u32,
+    scale: f64,
+}
+
+fn measure_reconstruction(probe: ReconstructionProbe<'_>) -> (f64, f64) {
+    let ReconstructionProbe { ff, dir, cid, width: w, height: h, depth, pix_fmt: pix, quantizer: q, scale: p } = probe;
+    let mut samples = Vec::new();
+    for amp in 1..=40u32 {
+        let stream = stream_cid(ProbeStream {
+            cid,
+            width: w,
+            height: h,
+            depth,
+            quantizer: q,
+            coefficient_position: 1,
+            amplitude: amp,
+            negative: false,
+            block: 0,
+        });
+        let path = craft_media_testkit::temp_path(&dir.join(format!("explore_rec_{cid}_{q}_{amp}.dnxhd")));
+        std::fs::write(&path, &stream).unwrap();
+        let out = std::process::Command::new(ff)
+            .args(["-hide_banner", "-loglevel", "error", "-f", "dnxhd", "-i"])
+            .arg(&path)
+            .args(["-f", "rawvideo", "-pix_fmt", pix, "-"])
+            .output()
+            .unwrap();
+        let _ = std::fs::remove_file(&path);
+        assert!(out.status.success(), "ffmpeg reconstruction probe failed for CID {cid}, q={q}, amp={amp}");
+        let px: Vec<f64> = if depth == 8 {
+            out.stdout.iter().map(|&b| b as f64).collect()
+        } else {
+            out.stdout.as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes([c[0], c[1]]) as f64).collect()
+        };
+        let mid = (1 << (depth - 1)) as f64;
+        let mut coefficient = 0f64;
+        for j in 0..8 {
+            for i in 0..8 {
+                coefficient += 0.25
+                    * (px[j * w as usize + i] - mid)
+                    * ((2 * i + 1) as f64 * std::f64::consts::PI / 16.0).cos()
+                    * std::f64::consts::FRAC_1_SQRT_2;
+            }
+        }
+        samples.push((amp as f64, coefficient));
+    }
+    let n = samples.len() as f64;
+    let sx: f64 = samples.iter().map(|x| x.0).sum();
+    let sy: f64 = samples.iter().map(|x| x.1).sum();
+    let sxx: f64 = samples.iter().map(|x| x.0 * x.0).sum();
+    let sxy: f64 = samples.iter().map(|x| x.0 * x.1).sum();
+    let slope = (n * sxy - sx * sy) / (n * sxx - sx * sx);
+    let intercept = (sy - slope * sx) / n;
+    (slope, intercept / (32.0 * q as f64 / p))
+}
+
 #[test]
 #[ignore]
 fn probe_weights() {
@@ -125,6 +190,18 @@ fn probe_weights() {
     let prof = cid;
     let amp = 20u32;
     let q = 4u32;
+    let offset = measure_reconstruction(ReconstructionProbe {
+        ff: &ff,
+        dir: &dir,
+        cid,
+        width: w,
+        height: h,
+        depth,
+        pix_fmt: pix,
+        quantizer: q,
+        scale: cid_info(cid).unwrap().p as f64,
+    })
+    .1;
     for blk in [0usize, 2] {
         let mut grid = [[0f64; 8]; 8];
         for pos in 1..64 {
@@ -168,7 +245,7 @@ fn probe_weights() {
                         * (((2 * j + 1) * vv) as f64 * std::f64::consts::PI / 16.0).cos();
                 }
             }
-            grid[vv][u] = sum * cid_info(cid).unwrap().p as f64 / ((amp as f64 + 0.5) * q as f64);
+            grid[vv][u] = sum * cid_info(cid).unwrap().p as f64 / ((amp as f64 + offset) * q as f64);
         }
         {
             use crate::dnx::spec_tables::*;
@@ -234,53 +311,9 @@ fn probe_reconstruction() {
     let pix = if depth == 10 { "yuv422p10le" } else { "yuv422p" };
     let p = cid_info(cid).unwrap().p as f64;
     for q in [1u32, 2, 3, 4, 8, 16] {
-        let mut xs = vec![];
-        for amp in 1..=40u32 {
-            let s = stream_cid(ProbeStream {
-                cid,
-                width: w,
-                height: h,
-                depth,
-                quantizer: q,
-                coefficient_position: 1,
-                amplitude: amp,
-                negative: false,
-                block: 0,
-            });
-            let path = craft_media_testkit::temp_path(&dir.join(format!("explore_rec_{cid}_{q}_{amp}.dnxhd")));
-            std::fs::write(&path, &s).unwrap();
-            let out = std::process::Command::new(&ff)
-                .args(["-hide_banner", "-loglevel", "error", "-f", "dnxhd", "-i"])
-                .arg(&path)
-                .args(["-f", "rawvideo", "-pix_fmt", pix, "-"])
-                .output()
-                .unwrap();
-            let _ = std::fs::remove_file(&path);
-            let px: Vec<f64> = if depth == 8 {
-                out.stdout.iter().map(|&b| b as f64).collect()
-            } else {
-                out.stdout.as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes([c[0], c[1]]) as f64).collect()
-            };
-            let mid = (1 << (depth - 1)) as f64;
-            let mut sum = 0f64;
-            for j in 0..8 {
-                for i in 0..8 {
-                    sum += 0.25
-                        * (px[j * w as usize + i] - mid)
-                        * ((2 * i + 1) as f64 * std::f64::consts::PI / 16.0).cos()
-                        * std::f64::consts::FRAC_1_SQRT_2;
-                }
-            }
-            xs.push((amp as f64, sum));
-        }
-        let n = xs.len() as f64;
-        let sx: f64 = xs.iter().map(|x| x.0).sum();
-        let sy: f64 = xs.iter().map(|x| x.1).sum();
-        let sxx: f64 = xs.iter().map(|x| x.0 * x.0).sum();
-        let sxy: f64 = xs.iter().map(|x| x.0 * x.1).sum();
-        let a = (n * sxy - sx * sy) / (n * sxx - sx * sx);
-        let b = (sy - a * sx) / n;
+        let (slope, offset) =
+            measure_reconstruction(ReconstructionProbe { ff: &ff, dir: &dir, cid, width: w, height: h, depth, pix_fmt: pix, quantizer: q, scale: p });
         let step = 32.0 * q as f64 / p;
-        println!("cid {cid} q {q}: step {step} slope {a:.4} ({:.4} steps) intercept {b:.3} ({:.4} steps)", a / step, b / step);
+        println!("cid {cid} q {q}: step {step} slope {slope:.4} ({:.4} steps) intercept {:.3} ({offset:.4} steps)", slope / step, offset * step);
     }
 }

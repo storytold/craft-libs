@@ -105,7 +105,7 @@ impl Scratch {
 
 /// Decode one ProRes frame.
 pub fn decode_frame_with(data: &[u8], opts: &DecodeOptions) -> Result<Frame> {
-    let mut f = Frame::new(0, 0, ChromaFormat::Yuv422, 10, false);
+    let mut f = Frame::new(0, 0, ChromaFormat::Yuv422, 10, false)?;
     decode_frame_into(data, opts, &mut f)?;
     Ok(f)
 }
@@ -274,6 +274,13 @@ fn qfactors(qmat: &[u8; 64], qs: u32) -> [f32; 64] {
     q
 }
 
+fn slice_quantiser(index: u8) -> std::result::Result<u32, ()> {
+    if !(1..=224).contains(&index) {
+        return Err(());
+    }
+    Ok(qscale(index))
+}
+
 /// Line stepping of the picture inside its frame: `step` is 2 for field pictures, `parity` the first line.
 #[derive(Clone, Copy)]
 struct Lines {
@@ -291,7 +298,7 @@ fn decode_slice(ctx: &Ctx, d: &[u8], mb_x: usize, mbs: usize, band: &mut Band, i
     if hsize < if has_alpha { 8 } else { 6 } || hsize > d.len() {
         return Err(());
     }
-    let qs = qscale(d[1]);
+    let qs = slice_quantiser(d[1])?;
     let ysize = be16(d, 2);
     let cbsize = be16(d, 4);
     let body = d.len() - hsize;
@@ -440,6 +447,9 @@ fn decode_component(data: &[u8], log2_blocks: u32, scan: &[u8; 64], q: &[f32; 64
 /// Decode a slice's alpha plane (raster order over the slice's 16 lines) into `out`
 /// (native 8- or 16-bit values).
 fn decode_alpha(data: &[u8], ty: AlphaType, out: &mut [u16]) -> std::result::Result<(), ()> {
+    if data.is_empty() || out.is_empty() {
+        return Err(());
+    }
     let bits = if ty == AlphaType::Bits16 { 16 } else { 8 };
     let short_bits = if bits == 16 { 7 } else { 4 };
     let mask: u32 = (1 << bits) - 1;
@@ -447,38 +457,57 @@ fn decode_alpha(data: &[u8], ty: AlphaType, out: &mut [u16]) -> std::result::Res
     let mut val: u32 = mask;
     let n = out.len();
     let mut idx = 0;
-    'outer: loop {
-        loop {
-            let d = if r.read_bit() {
-                r.read(bits)
-            } else {
-                let c = r.read(short_bits);
-                let m = (c + 2) >> 1;
-                if c & 1 == 1 { m.wrapping_neg() } else { m }
-            };
-            val = val.wrapping_add(d) & mask;
-            out[idx] = val as u16;
-            idx += 1;
-            if idx >= n {
-                break 'outer;
-            }
-            if r.bits_left() <= 0 || !r.read_bit() {
+    loop {
+        if r.bits_left() < 1 {
+            return Err(());
+        }
+        let full = r.read_bit();
+        let delta_bits = if full { bits } else { short_bits };
+        if r.bits_left() < delta_bits as isize {
+            return Err(());
+        }
+        let d = if full {
+            r.read(bits)
+        } else {
+            let c = r.read(short_bits);
+            let m = (c + 2) >> 1;
+            if c & 1 == 1 { m.wrapping_neg() } else { m }
+        };
+        val = val.wrapping_add(d) & mask;
+        out[idx] = val as u16;
+        idx += 1;
+
+        if r.bits_left() < 1 {
+            return Err(());
+        }
+        if r.read_bit() {
+            if idx == n {
                 break;
             }
+            continue;
         }
-        let mut run = r.read(4) as usize;
-        if run == 0 {
-            run = r.read(11) as usize;
+        if r.bits_left() < 4 {
+            return Err(());
         }
-        let run = run.min(n - idx);
+        let short_run = r.read(4) as usize;
+        let run = if short_run == 0 {
+            if r.bits_left() < 11 {
+                return Err(());
+            }
+            let long_run = r.read(11) as usize;
+            if long_run < 16 {
+                return Err(());
+            }
+            long_run
+        } else {
+            short_run
+        };
+        if run == 0 || run > n - idx {
+            return Err(());
+        }
         out[idx..idx + run].fill(val as u16);
         idx += run;
-        if idx >= n {
-            break;
-        }
-        if r.bits_left() <= 0 {
-            // Streams may end early; the remainder repeats the last value.
-            out[idx..].fill(val as u16);
+        if idx == n {
             break;
         }
     }
@@ -494,6 +523,7 @@ fn put_block(f: &[f32; 64], plane: &mut [u16], stride: usize, (x0, y0): (usize, 
     if x0 >= stride {
         return;
     }
+
     let xn = (stride - x0).min(8);
     if xn == 8 && (y0 + 7) * step + parity < rows {
         for yy in 0..8 {
@@ -517,5 +547,43 @@ fn put_block(f: &[f32; 64], plane: &mut [u16], stride: usize, (x0, y0): (usize, 
         for (o, &v) in row.iter_mut().zip(src) {
             *o = conv.conv(v);
         }
+    }
+}
+
+#[cfg(test)]
+mod alpha_decode_tests {
+    use super::*;
+    use crate::prores::bits::{Sink, Writer};
+    use crate::prores::encode::encode_alpha;
+
+    #[test]
+    fn slice_quantiser_rejects_reserved_indices() {
+        assert!(slice_quantiser(0).is_err());
+        assert!(slice_quantiser(225).is_err());
+        assert_eq!(slice_quantiser(1).unwrap(), qscale(1));
+        assert_eq!(slice_quantiser(224).unwrap(), qscale(224));
+    }
+
+    #[test]
+    fn alpha_decoder_requires_complete_bounded_runs() {
+        let mut out = [0u16; 1];
+        assert!(decode_alpha(&[], AlphaType::Bits16, &mut out).is_err());
+
+        let mut missing_run = Writer::new();
+        missing_run.put(1, 1);
+        missing_run.put(0, 16);
+        assert!(decode_alpha(&missing_run.finish(), AlphaType::Bits16, &mut out).is_err());
+
+        let mut oversized_run = Writer::new();
+        oversized_run.put(1, 1);
+        oversized_run.put(0, 16);
+        oversized_run.put(0, 1);
+        oversized_run.put(1, 4);
+        assert!(decode_alpha(&oversized_run.finish(), AlphaType::Bits16, &mut out).is_err());
+
+        let mut valid = Writer::new();
+        encode_alpha(&mut valid, &[u16::MAX as u32], 16);
+        assert!(decode_alpha(&valid.finish(), AlphaType::Bits16, &mut out).is_ok());
+        assert_eq!(out, [u16::MAX]);
     }
 }

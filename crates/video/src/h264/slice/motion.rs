@@ -4,6 +4,18 @@ use super::{
 };
 use crate::h264::picture::McBlock;
 
+fn search_starts(seed: Mv, neighbour: Mv, candidates: &[Mv]) -> ([Mv; 5], usize) {
+    let mut starts = [Mv::ZERO; 5];
+    starts[0] = seed;
+    starts[1] = neighbour;
+    let mut nstarts = 2;
+    for &candidate in candidates.iter().take(starts.len() - nstarts) {
+        starts[nstarts] = candidate;
+        nstarts += 1;
+    }
+    (starts, nstarts)
+}
+
 /// Motion vectors already costed in one search: one bit per point of the square of
 /// `2 * half + 1` points (`step` quarter samples apart) around `centre`. A point outside the
 /// square, off the grid or past the `W` words always counts as new.
@@ -213,7 +225,7 @@ impl<'a, 'b> SliceEnc<'a, 'b> {
     }
 
     /// Search each partition of `ps.part` for list `ps.list` sequentially (mvp depends on earlier partitions).
-    pub(super) fn search_part(&self, r: &RefPic, ps: &PartSearch, src: &Src) -> ([Mv; 4], [Mv; 4], u32) {
+    pub(super) fn search_part(&self, r: &RefPic, ps: &PartSearch, src: &Src, candidates: &[Mv]) -> ([Mv; 4], [Mv; 4], u32) {
         let PartSearch { mx, my, part, list, lam, seed } = *ps;
         let (px, py) = (mx * 16, my * 16);
         let mut info = MbInfo::default();
@@ -226,7 +238,8 @@ impl<'a, 'b> SliceEnc<'a, 'b> {
             let geom = PartGeom { x: (x / 4) as i32, y: (y / 4) as i32, w: (w / 4) as i32, shape: Self::shape_of(part, p) };
             let mvp = self.mvp(nb, geom, list, 0);
             let blk = SearchBlock { x: px + x, y: py + y, w, h, src: &src.y[y * 16 + x..], sstride: 16 };
-            let (mv, cost) = self.search(r, &blk, mvp, &[seed, mvs[0]], lam);
+            let (starts, nstarts) = search_starts(seed, mvs[0], candidates);
+            let (mv, cost) = self.search(r, &blk, mvp, &starts[..nstarts], lam);
             mvs[p] = mv;
             mvps[p] = mvp;
             total += cost;
@@ -289,10 +302,9 @@ impl<'a, 'b> SliceEnc<'a, 'b> {
             cands.push(colo.mv[0][0]);
         }
         let (mv16, mvp16, cost16) = {
-            let (m, p, c) = self.search_part(r, &PartSearch { mx, my, part: Part::P16x16, list: 0, lam, seed: skip_mv }, src);
+            let (m, p, c) = self.search_part(r, &PartSearch { mx, my, part: Part::P16x16, list: 0, lam, seed: skip_mv }, src, &cands);
             (m, p, c)
         };
-        let _ = cands;
         let mut best_part = Part::P16x16;
         let mut best_mvs = mv16;
         let mut best_mvps = mvp16;
@@ -301,7 +313,7 @@ impl<'a, 'b> SliceEnc<'a, 'b> {
             let big = cost16 as u64 > (256 * 4) as u64;
             if big {
                 for part in [Part::P16x8, Part::P8x16, Part::P8x8] {
-                    let (m, p, c) = self.search_part(r, &PartSearch { mx, my, part, list: 0, lam, seed: mv16[0] }, src);
+                    let (m, p, c) = self.search_part(r, &PartSearch { mx, my, part, list: 0, lam, seed: mv16[0] }, src, &[]);
                     let extra = match part {
                         Part::P8x8 => 10,
                         _ => 3,
@@ -382,5 +394,19 @@ impl<'a, 'b> SliceEnc<'a, 'b> {
             }
         }
         ci
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn p16_search_starts_include_skip_zero_and_colocated_vectors() {
+        let seed = Mv::new(4, 8);
+        let neighbour = Mv::new(12, 16);
+        let candidates = [Mv::new(20, 24), Mv::ZERO, Mv::new(-4, -8)];
+        let (starts, nstarts) = search_starts(seed, neighbour, &candidates);
+        assert_eq!(&starts[..nstarts], &[seed, neighbour, candidates[0], candidates[1], candidates[2]]);
     }
 }

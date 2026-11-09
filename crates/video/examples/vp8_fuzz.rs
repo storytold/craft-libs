@@ -14,10 +14,19 @@ fn frames(data: &[u8]) -> Vec<Vec<u8>> {
     out
 }
 
+fn parse_args(args: &[String]) -> Option<(usize, u64, &[String])> {
+    if args.len() < 4 {
+        return None;
+    }
+    Some((args[1].parse().unwrap_or(100), args[2].parse().unwrap_or(1), &args[3..]))
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let iterations: usize = args[1].parse().unwrap_or(100);
-    let mut seed: u64 = args[2].parse().unwrap_or(1);
+    let Some((iterations, mut seed, paths)) = parse_args(&args) else {
+        eprintln!("Usage: {} <iterations> <seed> <file.ivf>...", args.first().map_or("vp8_fuzz", String::as_str));
+        return;
+    };
     let mut rnd = move || {
         seed ^= seed << 13;
         seed ^= seed >> 7;
@@ -27,7 +36,7 @@ fn main() {
     std::panic::set_hook(Box::new(|_| {}));
     let mut panics = 0;
     let mut decoded = 0u64;
-    for path in &args[3..] {
+    for path in paths {
         let original = frames(&std::fs::read(path).unwrap_or_default());
         for it in 0..iterations {
             let mut fr = original.clone();
@@ -36,6 +45,7 @@ fn main() {
                 if f.is_empty() {
                     continue;
                 }
+
                 match mode {
                     0 => {
                         // a few bit flips per frame
