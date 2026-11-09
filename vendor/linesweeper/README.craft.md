@@ -61,6 +61,11 @@ holds `upstream_revision`. `local_patches` describes each local change.
 | The SVG stroke width is the larger of the bounding box's width and height divided by 512 | `Craft patch (example stroke width)` | `examples/boolean_op.rs`, `examples/visualize_op.rs`, `examples/winding-numbers.rs` | `stroke_width_follows_the_larger_side` in `examples/visualize_op.rs` |
 
 Every change here updates this table and `SOURCE.json` in the same commit.
+Every file here except this one, `SOURCE.json` and `Cargo.toml` is byte for byte the file in the
+`.crate` archive. `SOURCE.json` records the hash of the `.crate` download (`source_archive_sha256`)
+and, for every file kept, the hash in the package (`source_sha256`) and the hash here (`sha256`).
+`upstream_repository` is null because no public repository this copy can name holds
+`upstream_revision`. `local_patches` describes each change.
 
 `omitted_files` lists the 43 files of the package left out here, with their hashes:
 
@@ -71,8 +76,8 @@ Every change here updates this table and `SOURCE.json` in the same commit.
 - `.config/`, `.helix/`, `.typos.toml`, `.gitmodules`, `flake.nix`, `flake.lock` and `nix/`: the
   package's repository tooling.
 
-Only the targets listed under Tests read the font, the logos and the snapshot files, and those targets
-do not compile from the published package.
+Only the targets listed under Tests read the font, the logos and the snapshot files. Those targets do
+not compile from the published package, and `Cargo.toml` here does not register them.
 
 ## Using it
 
@@ -91,15 +96,22 @@ linesweeper = { git = "https://github.com/storytold/craft-libs", rev = "<rev>" }
 `visualize_op` example's test. The `craft-prepress` tests with the `flatten` feature run against this
 copy. `pdf.yml`'s path filter does not list this directory, so a pull request that changes only files
 here does not start `pdf.yml`. Run the tests from this directory:
+`scripts/test-pdf-backends.sh` runs the package's unit, regression and doc tests, and checks that
+every registered target compiles with all features. The `craft-prepress` tests with the `flatten`
+feature run against this copy. `pdf.yml`'s path filter does not list this directory, so a pull request
+that changes only files here does not start `pdf.yml`. Run the tests from this directory:
 
 ```sh
 cargo test --locked --lib --test regression
 cargo test --locked --doc
 cargo test --locked --example visualize_op
+cargo check --locked --all-targets --all-features
 ```
 
 `Cargo.toml` leaves out the `kompari`, `linesweeper_util` and `path-bool` dev-dependencies, which
 `Cargo.toml.orig` gives as git or path dependencies. The `fonts` and `snapshots` tests, the
-`winding-numbers` and `boolean_op` examples and the `linebender_logo` bench do not compile here.
+`winding-numbers` and `boolean_op` examples and the `linebender_logo` bench need them, or the
+omitted `examples/linebender.svg`, and do not compile here. The package's `Cargo.toml` registers
+these five targets; the copy's `Cargo.toml` does not, and their source files are kept unchanged.
 
 Cargo writes to `target/` in this directory, which the root `.gitignore` excludes.
