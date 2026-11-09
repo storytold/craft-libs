@@ -93,6 +93,9 @@ names, which is archived; its README says development moved off GitHub.
 `824b0791a750f7b27b8edcbb6c6244d0e629875e`. That commit is not in the GitHub repository the manifest
 names, which is archived; its README says development moved off GitHub.
 
+`824b0791a750f7b27b8edcbb6c6244d0e629875e`. That commit is not in the GitHub repository the manifest
+names, which is archived; its README says development moved off GitHub.
+
 Every file here except this one, `SOURCE.json` and the files under Local changes is byte for byte the
 file in the `.crate` archive. `SOURCE.json` records the hash of the `.crate` download
 (`source_archive_sha256`) and, for every file kept, the hash in the package (`source_sha256`) and the
@@ -218,6 +221,7 @@ Every change here updates this table and `SOURCE.json` in the same commit.
 | `src/topology.rs` | `contours_for_positions` sorts the pieces it splits off a contour walk at a repeated point by the way they wind. A piece that winds like the walked contour becomes its sibling, and a piece that winds the other way becomes a child of the piece that contains it. Before, every piece split off became a child of the walk with the opposite `outer` flag, so of two holes touching at a point, the second came out with `outer = true` and the first hole as its parent, although it winds counter-clockwise. The `holes_touching_at_a_point_are_siblings` test covers it. |
 | `src/sweep/sweep_line.rs` | The touch branch of `Sweeper::handle_intersection` runs its scan right from a segment, or left from a segment, at most once per sweep line until the sweep-line order changes. Exact copies of a shape queue a touch event for every pair of coincident segments, and each event used to scan the whole bundle in both directions, so sweeping `n` copies took time growing faster than `n^3`. The skipped scans would only push events already queued, so the output does not change. The `coincident_copies_scan_once_per_order` test counts the scans for 60 copies of two shapes, and `coincident_copies_keep_the_fill` compares the output fill with the input's nonzero fill for 200 inputs with exact, reversed and split copies. |
 | `AlmostHorizontalDecomposition` stores up to two pieces inline in a `SmallVec` instead of six in an `ArrayVec`, which takes it from 824 to 288 bytes; `Segments` keeps one for every segment | `Craft patch (inline pieces)` | `src/curve/mod.rs` | `curve::test::horizontal_decomposition_stores_two_pieces_inline`, `curve::test::horizontal_decomposition_keeps_every_piece` |
+| `Topology` allocates one output segment for each run of coincident horizontal pieces between two points instead of one per piece, and none for a run whose winding numbers cancel. n overlapping rectangles that share their top and bottom edges give 6n - 2 output segments instead of 2n² + 2n. The contours do not change. `has_normal_contours` and `is_disjoint_tags` read the winding numbers on either side of a run, not the ones between its pieces. | `Craft patch (coincident horizontals)` | `src/topology.rs` | `topology::tests::coincident_horizontals_get_one_output_segment_per_run` |
 
 Every change here updates this table and `SOURCE.json` in the same commit.
 
