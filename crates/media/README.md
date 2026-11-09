@@ -39,8 +39,8 @@ craft-media = { git = "https://github.com/storytold/craft-libs", rev = "<commit>
 
 - In scope: bit-level reading and writing, and container demuxing and muxing (boxes, sample
   tables, sample entries and codec configuration records) for audio and video tracks.
-- Out of scope: codecs. Audio codecs are in `craft-audio`; video codecs (H.264, HEVC, ProRes,
-  DNx, VP8, VP9, AV1) are in `craft-video`. Containers only FilmCraft reads (MXF,
+- Out of scope: codecs. Audio codecs are in `craft-audio`; video codecs (H.264, ProRes, DNx,
+  VP8) are in `craft-video`. Containers only FilmCraft reads (MXF,
   MPEG-TS/PS, AVI) are not here yet.
 - Anything both the audio and the video codec crates need belongs here, so the two never depend
   on each other.

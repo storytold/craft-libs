@@ -6,8 +6,8 @@
 //!   rasters and 4:4:4 RGB, and the resolution-independent DNxHR IDs 1270–1274 (LB, SQ, HQ, HQX,
 //!   444) at 8, 10 and 12 bits in 4:2:0, 4:2:2 and 4:4:4, with DCT or lossless alpha. Macroblock
 //!   scan lines decode in parallel with the `threads` feature (rayon).
-//! - **Encoder** ([`Encoder`]): DNxHR SQ / HQ (8-bit 4:2:2) and HQX (10- or 12-bit 4:2:2), CBR
-//!   at the standard's frame sizes, progressive.
+//! - **Encoder** ([`Encoder`]): DNxHR LB / SQ / HQ (8-bit 4:2:2), HQX (10- or 12-bit 4:2:2), and
+//!   444 (10- or 12-bit 4:4:4), CBR at the standard's frame sizes, progressive.
 //!
 //! See the module README (`src/dnx/README.md`) for accuracy, performance and limitations.
 
@@ -25,6 +25,16 @@ pub use decode::{DecodeOptions, decode_frame, decode_frame_with, probe};
 pub use encode::{Encoder, EncoderConfig};
 pub use header::{FieldCode, FrameHeader};
 pub use tables::ri_frame_size;
+
+/// Interpretation of the `CLF` color flag for 4:4:4 streams.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ColorInterpretation {
+    /// Follow the common FFmpeg convention, which treats 4:4:4 `CLF = 0` as RGB.
+    #[default]
+    FfmpegCompatible,
+    /// Follow the standard: `CLF = 1` is RGB and `CLF = 0` is Y′CbCr.
+    Standard,
+}
 
 /// Codec errors.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -89,6 +99,8 @@ pub enum Interlace {
     Progressive,
     /// Interlaced; field 1 (the top field, even lines) comes first.
     TopFieldFirst,
+    /// Interlaced; field 2 (the bottom field, odd lines) comes first.
+    BottomFieldFirst,
 }
 
 /// DNxHR profiles (resolution-independent compression IDs).

@@ -49,7 +49,7 @@ fn make_seeds() -> Vec<(&'static str, Vec<u8>)> {
 
     // Seed 1: ProRes Standard 422
     let (w, h) = (64, 32);
-    let mut frame = Frame::new(w, h, ChromaFormat::Yuv422, 10, false);
+    let mut frame = Frame::new(w, h, ChromaFormat::Yuv422, 10, false).unwrap();
     frame.y.fill(512);
     frame.cb.fill(512);
     frame.cr.fill(512);
@@ -60,7 +60,7 @@ fn make_seeds() -> Vec<(&'static str, Vec<u8>)> {
 
     // Seed 2: ProRes 4444 with alpha
     let (w, h) = (64, 32);
-    let mut frame = Frame::new(w, h, ChromaFormat::Yuv444, 12, true);
+    let mut frame = Frame::new(w, h, ChromaFormat::Yuv444, 12, true).unwrap();
     frame.y.fill(2048);
     frame.cb.fill(2048);
     frame.cr.fill(2048);

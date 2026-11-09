@@ -68,7 +68,8 @@ impl Encoder {
         Encoder::with_config(EncoderConfig::new(profile, width, height))
     }
 
-    pub fn with_config(cfg: EncoderConfig) -> Result<Encoder> {
+    pub fn with_config(mut cfg: EncoderConfig) -> Result<Encoder> {
+        cfg.par = normalize_par(cfg.par)?;
         if cfg.width == 0 || cfg.height == 0 || cfg.width > 16384 || cfg.height > 16384 {
             return Err(Error::Input(format!("unsupported raster {}x{}", cfg.width, cfg.height)));
         }
@@ -130,10 +131,10 @@ impl Encoder {
         if f.rgb && f.chroma != ChromaFormat::Yuv444 {
             return Err(Error::Input("RGB is only supported for 4:4:4 frames".into()));
         }
-        let prep = self.prepare(f);
+        let mut prep = self.prepare(f);
         let vlc = vlc(self.info.vlc);
         let budget_bits = (self.frame_size as u64 - self.header_size as u64 - 4) * 8;
-        let q = self.rate_control(&prep, vlc, budget_bits);
+        let q = self.rate_control(&mut prep, vlc, budget_bits)?;
         self.write(&prep, vlc, &q, f.rgb)
     }
 
@@ -205,31 +206,35 @@ impl Encoder {
         #[cfg(not(feature = "threads"))]
         let rows: Vec<Vec<[f32; 64]>> = (0..ns).map(do_row).collect();
         let t: Vec<[f32; 64]> = rows.into_iter().flatten().collect();
-        // DC bits with per-row, per-component prediction
         let v = vlc(self.info.vlc);
-        let mut dc_bits = vec![0u32; nw * ns];
-        for s in 0..ns {
-            let mut pred = [0i32; 3];
-            for mb in 0..nw {
-                let mut bits = 0;
-                for (k, &(pl, _, _)) in layout.iter().enumerate() {
-                    let dc = t[(s * nw + mb) * nblk + k][0] as i32;
-                    let e = dc - pred[pl as usize];
-                    pred[pl as usize] = dc;
-                    let eta = dc_eta(e);
-                    bits += v.dc_code[eta as usize].1 as u32 + eta;
-                }
-                dc_bits[s * nw + mb] = bits;
-            }
-        }
+        let dc_bits = dc_bit_counts(&t, nw, ns, nblk, layout, v);
         Prepared { nw, ns, nblk, t, dc_bits }
     }
 
     /// Per-macroblock qsf values whose coded frame fits `budget_bits`.
-    fn rate_control(&mut self, prep: &Prepared, vlc: &VlcSet, budget_bits: u64) -> Vec<u32> {
+    fn rate_control(&mut self, prep: &mut Prepared, vlc: &VlcSet, budget_bits: u64) -> Result<Vec<u32>> {
         let p_bits = if self.cfg.bit_depth == 8 { 4 } else { 6 };
         let max_amp = if p_bits == 4 { 1024 } else { 4096 };
         let nmb = prep.nw * prep.ns;
+        if frame_bits(prep, vlc, p_bits, max_amp, 2047) > budget_bits {
+            let original_dc: Vec<i32> = prep.t.iter().map(|t| t[0] as i32).collect();
+            let layout = self.mb_layout();
+            let mut fits = false;
+            for shift in 1..=12 {
+                let divisor = 1i32 << shift;
+                for (block, &dc) in prep.t.iter_mut().zip(&original_dc) {
+                    block[0] = (dc / divisor) as f32;
+                }
+                prep.dc_bits = dc_bit_counts(&prep.t, prep.nw, prep.ns, prep.nblk, layout, vlc);
+                if frame_bits(prep, vlc, p_bits, max_amp, 2047) <= budget_bits {
+                    fits = true;
+                    break;
+                }
+            }
+            if !fits {
+                return Err(Error::Input("rate control overflow".into()));
+            }
+        }
         let mb_bits = |mb: usize, q: u32| -> u32 {
             let mut bits = 12 + prep.dc_bits[mb];
             for k in 0..prep.nblk {
@@ -295,7 +300,7 @@ impl Encoder {
                 idx = (idx + stride) % nmb;
             }
         }
-        qs
+        Ok(qs)
     }
 
     fn write(&self, prep: &Prepared, vlc: &VlcSet, qs: &[u32], rgb: bool) -> Result<Vec<u8>> {
@@ -383,9 +388,69 @@ impl Encoder {
     }
 }
 
+fn normalize_par((num, den): (u16, u16)) -> Result<(u16, u16)> {
+    if (num, den) == (0, 0) {
+        return Ok((0, 0));
+    }
+    if num == 0 || den == 0 {
+        return Err(Error::Input("pixel aspect ratio must have two non-zero terms or be 0/0".into()));
+    }
+    let gcd = |mut a: u16, mut b: u16| {
+        while b != 0 {
+            (a, b) = (b, a % b);
+        }
+        a
+    };
+    let divisor = gcd(num, den);
+    let reduced = (num / divisor, den / divisor);
+    if reduced.0 > 1023 || reduced.1 > 1023 {
+        return Err(Error::Input("pixel aspect ratio cannot be represented in the DNx header".into()));
+    }
+    Ok(reduced)
+}
+
 #[inline]
 fn row_bytes(bits: u64) -> u64 {
     bits.div_ceil(32) * 4
+}
+
+fn dc_bit_counts(t: &[[f32; 64]], nw: usize, ns: usize, nblk: usize, layout: &[(u8, u8, u8)], vlc: &VlcSet) -> Vec<u32> {
+    let mut dc_bits = vec![0u32; nw * ns];
+    for s in 0..ns {
+        let mut pred = [0i32; 3];
+        for mb in 0..nw {
+            let mut bits = 0;
+            for (k, &(pl, _, _)) in layout.iter().enumerate() {
+                let dc = t[(s * nw + mb) * nblk + k][0] as i32;
+                let e = dc - pred[pl as usize];
+                pred[pl as usize] = dc;
+                let eta = dc_eta(e);
+                bits += vlc.dc_code[eta as usize].1 as u32 + eta;
+            }
+            dc_bits[s * nw + mb] = bits;
+        }
+    }
+    dc_bits
+}
+
+fn frame_bits(prep: &Prepared, vlc: &VlcSet, p_bits: u32, max_amp: u32, q: u32) -> u64 {
+    let mb_bits = |mb: usize| -> u64 {
+        let mut bits = 12 + prep.dc_bits[mb];
+        for k in 0..prep.nblk {
+            bits += ac_bits(&prep.t[mb * prep.nblk + k], q as f32, vlc, p_bits, max_amp);
+        }
+        bits as u64
+    };
+    let row = |s: usize| -> u64 { row_bytes((0..prep.nw).map(|m| mb_bits(s * prep.nw + m)).sum()) * 8 };
+    #[cfg(feature = "threads")]
+    {
+        use rayon::prelude::*;
+        (0..prep.ns).into_par_iter().map(row).sum()
+    }
+    #[cfg(not(feature = "threads"))]
+    {
+        (0..prep.ns).map(row).sum()
+    }
 }
 
 #[inline]
@@ -452,4 +517,42 @@ fn write_ac(w: &mut Writer, t: &[f32; 64], q: f32, v: &VlcSet, p_bits: u32, max_
         run = 0;
     }
     w.put(v.eob.0 as u32, v.eob.1 as u32);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pixel_aspect_ratio_is_reduced_and_bounded() {
+        assert_eq!(normalize_par((2048, 1024)).unwrap(), (2, 1));
+        assert_eq!(normalize_par((0, 0)).unwrap(), (0, 0));
+        assert!(normalize_par((2049, 2047)).is_err());
+        assert!(normalize_par((0, 1)).is_err());
+    }
+
+    #[test]
+    fn rate_control_reduces_dc_when_the_coarsest_ac_still_exceeds_budget() {
+        let mut encoder = Encoder::new(Profile::Lb, 16, 16).unwrap();
+        let layout = encoder.mb_layout();
+        let nblk = layout.len();
+        let mut blocks = vec![[0.0; 64]; nblk];
+        for block in &mut blocks {
+            block[0] = 1023.0;
+        }
+        let vlc = vlc(encoder.info.vlc);
+        let mut prep = Prepared { nw: 1, ns: 1, nblk, t: blocks, dc_bits: Vec::new() };
+        prep.dc_bits = dc_bit_counts(&prep.t, prep.nw, prep.ns, prep.nblk, layout, vlc);
+        let mut zeroed = Prepared { nw: 1, ns: 1, nblk, t: prep.t.clone(), dc_bits: Vec::new() };
+        for block in &mut zeroed.t {
+            block[0] = 0.0;
+        }
+        zeroed.dc_bits = dc_bit_counts(&zeroed.t, zeroed.nw, zeroed.ns, zeroed.nblk, layout, vlc);
+        let budget = frame_bits(&zeroed, vlc, 4, 1024, 2047);
+        assert!(frame_bits(&prep, vlc, 4, 1024, 2047) > budget);
+
+        let q = encoder.rate_control(&mut prep, vlc, budget).unwrap();
+        assert!(prep.t.iter().all(|block| block[0] == 0.0));
+        assert!(frame_bits(&prep, vlc, 4, 1024, q[0]) <= budget);
+    }
 }
