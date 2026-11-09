@@ -9,7 +9,9 @@ control channel.
 replacing an existing `window.<app>`: missing functions are added, an app that already has its own
 keeps them. Each function returns a Promise that resolves with the method's `result` or rejects with
 an `Error` carrying `error`. Every call has a timeout (30 s by default, `PageApi::with_timeout`);
-when the app does not answer in time, the error says so.
+when the app does not answer in time, the error says so and the app's request future is dropped, so an app that releases a request when its future goes away (the desktop `ControlRequest` has `abandon`) never runs a call the page was told had failed.
+
+`screenshot()` resolves with the reply the app's control method sends, plus `data` when the reply carries the PNG inline: the base64 PNG, whatever field the app names it (`pngBase64`, `png_base64`, `png` or `base64`). A reply with no inline PNG, such as one the app wrote to a `path`, has no `data` and is unchanged.
 
 Which functions are installed follows the app's `Methods` table: only the functions whose control
 method the table provides are installed; `request` is always there.
@@ -21,7 +23,7 @@ method the table provides are installed; `request` is always there.
 | `commands` | `commands()` | `commands` | `engine.commands {}` |
 | `docInspect` | `docInspect(params)` | `doc_inspect` | `document.inspect` |
 | `uiInspect` | `uiInspect(params)` | `ui_inspect` | `ui.inspect` |
-| `screenshot` | `screenshot(params)` | `screenshot` | `ui.screenshot` (with `data: true`) |
+| `screenshot` | `screenshot(params)` | `screenshot` | `ui.screenshot` (with `data: true`); an inline PNG is always also in `data` |
 
 `Methods::default()` is the desktop control-server method names; an app whose control channel
 names a method differently, or lacks one, says so in its table (`Methods::NONE` is the empty table).
