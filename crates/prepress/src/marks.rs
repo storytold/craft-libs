@@ -119,7 +119,7 @@ pub struct InfoLine {
     pub origin: Point,
     /// A font size that fits the band.
     pub size: f64,
-    /// The widest the line may be before it reaches the middle of the page.
+    /// The widest the line may be before it reaches the bottom registration target.
     pub max_width: f64,
 }
 
@@ -226,7 +226,7 @@ impl Marks {
     fn registration_targets(&mut self, len: f64) {
         let t = self.trim;
         let mid = self.gap + len / 2.0;
-        let (r, arm) = (len / 3.0, len / 3.0 * 1.4);
+        let (r, arm) = (len / 3.0, target_arm(len));
         let (cx, cy) = (f64::midpoint(t.x0, t.x1), f64::midpoint(t.y0, t.y1));
         for (x, y) in [(cx, t.y0 - mid), (cx, t.y1 + mid), (t.x0 - mid, cy), (t.x1 + mid, cy)] {
             self.circles.push(((x, y), r));
@@ -241,7 +241,7 @@ impl Marks {
         let t = self.trim;
         let size = len * 0.6;
         let y = t.y0 - self.gap - len + (len - size) / 2.0;
-        let room = t.width() / 2.0 - len - len / 3.0 * 1.4;
+        let room = t.width() / 2.0 - len - target_arm(len);
         let fit = if room > 0.0 { (room / size).floor() as usize } else { 0 };
         for (i, c) in BAR_PATCHES.iter().take(fit).enumerate() {
             let x = t.x0 + len + size * i as f64;
@@ -307,7 +307,13 @@ fn check(opts: &MarkOptions) -> Result<(), MarksError> {
 fn info_line(trim: Rect, gap: f64, len: f64) -> InfoLine {
     let size = (len * 0.4).min(7.0);
     let baseline = trim.y1 + gap + len / 2.0 + size * 0.35;
-    InfoLine { origin: (trim.x0 + len, baseline), size, max_width: (trim.width() / 2.0 - len).max(0.0) }
+    InfoLine { origin: (trim.x0 + len, baseline), size, max_width: (trim.width() / 2.0 - len - target_arm(len)).max(0.0) }
+}
+
+/// How far a registration target's cross reaches from its centre; the bars and the information
+/// line stop short of it.
+fn target_arm(len: f64) -> f64 {
+    len / 3.0 * 1.4
 }
 
 /// A circle of four Béziers (κ = 0.5523).

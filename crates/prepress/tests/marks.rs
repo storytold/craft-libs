@@ -97,6 +97,8 @@ fn the_info_line_sits_in_the_bottom_band() {
     let (x, y) = m.info.origin;
     assert_eq!((x, m.info.size), (118.0, 7.0));
     assert!(y > TRIM.y1 + m.gap && y < m.sheet.y1);
+    let ((cx, _), r) = m.circles[1];
+    assert!(x + m.info.max_width <= cx - r * 1.4 + 1e-9, "the line stops short of the bottom target");
 }
 
 #[test]
