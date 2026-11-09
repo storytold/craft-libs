@@ -108,6 +108,9 @@ names, which is archived; its README says development moved off GitHub.
 `824b0791a750f7b27b8edcbb6c6244d0e629875e`. That commit is not in the GitHub repository the manifest
 names, which is archived; its README says development moved off GitHub.
 
+`824b0791a750f7b27b8edcbb6c6244d0e629875e`. That commit is not in the GitHub repository the manifest
+names, which is archived; its README says development moved off GitHub.
+
 Every file here except this one, `SOURCE.json` and the files under Local changes is byte for byte the
 file in the `.crate` archive. `SOURCE.json` records the hash of the `.crate` download
 (`source_archive_sha256`) and, for every file kept, the hash in the package (`source_sha256`) and the
@@ -136,6 +139,7 @@ Every change here updates this table and `SOURCE.json` in the same commit.
 | `float_in_range` interpolates as `start * (1 - t) + end * t`, so a range such as `-1e308..1e308` gives a value in the range instead of NaN | `Craft patch (wide float range)` | `src/arbitrary.rs` | `float_in_range_handles_a_range_wider_than_f64_max` |
 | `OutputEvent`'s `Ord` breaks ties between events with the same horizontal range by segment and then by the other fields, so two events compare equal only when they are equal; the sweep line still sorts its events by horizontal range alone | `Craft patch (output event order)` | `src/sweep/output_event.rs`, `src/sweep/sweep_line.rs` | `events_on_different_segments_with_the_same_range_are_not_equal`, `events_differing_only_in_flags_are_not_equal` |
 | The `paperjs` test's image comparison counts a difference in alpha | `Craft patch (image distance alpha)` | `tests/paperjs.rs` | `pixmap_distance_counts_coverage` |
+| `checkerboard(0)` and `slanted_checkerboard(0)` return empty collections; the inner count was `n - 1`, which overflowed | `Craft patch (empty checkerboard)` | `src/generators.rs`, `scripts/test-pdf-backends.sh` | `checkerboards_of_size_zero_and_one` |
 
 Every change here updates this table and `SOURCE.json` in the same commit. To take a new linesweeper
 release, unpack the crates.io package, carry these changes over, regenerate `SOURCE.json`, and run the
@@ -346,6 +350,8 @@ this directory:
 
 ```sh
 cargo test --locked --lib --test regression --test paperjs
+cargo test --locked --lib --test regression
+cargo test --locked --lib --features generators generators::
 cargo test --locked --doc
 cargo test --locked --example visualize_op
 cargo check --locked --all-targets --all-features

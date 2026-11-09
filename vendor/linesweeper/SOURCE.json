@@ -62,6 +62,7 @@
     "In `src/topology.rs`, `contours_for_positions` finds the nearest boundary segment west of each new contour through `Topology::west_boundary`, which remembers the answer for every segment it passes, so each link of a scan-west chain is followed once per call instead of once per contour. Each segment's boundary test runs at most once, when the walk first asks for it."
     "In `src/curve/mod.rs`, `solve_t_for_y` asks for `t` to the precision of f64 instead of to within 1e-12, so comparing near-parallel curves with coordinates near 3e7 or larger no longer recurses into millions of entries."
     "In `src/curve/mod.rs`, `CurveOrder::next_touch_after(y)` walks the order once and compares each touch with `y`, so a touch that follows a touch containing `y` and a Left interval is no longer skipped, which made it return `None`."
+    "`checkerboard` and `slanted_checkerboard` count the inner squares as `n.saturating_sub(1)` instead of `n - 1`, so `n = 0` gives empty collections instead of an overflow."
   ],
   "files": [
     { "path": ".cargo_vcs_info.json", "source_sha256": "47fba6a9dbdf445a5c97f783c9be62093035f9d5e5cdc2cf3216ad8259bcd8fc", "source_git_blob": null, "sha256": "47fba6a9dbdf445a5c97f783c9be62093035f9d5e5cdc2cf3216ad8259bcd8fc" },
@@ -115,6 +116,8 @@
     { "path": "src/curve/transverse.rs", "source_sha256": "be9c695531f4cb0fe73af13e78040b51b9476c193d84562e701aadd07b3fd06e", "source_git_blob": null, "sha256": "be9c695531f4cb0fe73af13e78040b51b9476c193d84562e701aadd07b3fd06e" },
     { "path": "src/generators.rs", "source_sha256": "cc9f2441546db9204219294c354449809dda77dffad06fec8a30f45df01e6fef", "source_git_blob": null, "sha256": "cc9f2441546db9204219294c354449809dda77dffad06fec8a30f45df01e6fef" },
     { "path": "src/geom.rs", "source_sha256": "9878ffa6d4a13fa2c9149741c137205ca01acb626a5b9f86a3db75cf91b63a08", "source_git_blob": null, "sha256": "53199cf966d02002b8bfdfc03fd839903d98c852585c93529d45129d34865128" },
+    { "path": "src/generators.rs", "source_sha256": "cc9f2441546db9204219294c354449809dda77dffad06fec8a30f45df01e6fef", "source_git_blob": null, "sha256": "24b25da4c07a9361b72b324564e2aaa4c2dd9f7d9a6e27dfb1cb1b3d08104edf" },
+    { "path": "src/geom.rs", "source_sha256": "9878ffa6d4a13fa2c9149741c137205ca01acb626a5b9f86a3db75cf91b63a08", "source_git_blob": null, "sha256": "9878ffa6d4a13fa2c9149741c137205ca01acb626a5b9f86a3db75cf91b63a08" },
     { "path": "src/lib.rs", "source_sha256": "761c153c3b5c449569ff85c571344b9252ea64f7f0b0424fb4819041b03d13c6", "source_git_blob": null, "sha256": "761c153c3b5c449569ff85c571344b9252ea64f7f0b0424fb4819041b03d13c6" },
     { "path": "src/geom.rs", "source_sha256": "9878ffa6d4a13fa2c9149741c137205ca01acb626a5b9f86a3db75cf91b63a08", "source_git_blob": null, "sha256": "9878ffa6d4a13fa2c9149741c137205ca01acb626a5b9f86a3db75cf91b63a08" },
     { "path": "src/lib.rs", "source_sha256": "761c153c3b5c449569ff85c571344b9252ea64f7f0b0424fb4819041b03d13c6", "source_git_blob": null, "sha256": "e690f4ac214403c97b37b8dafce322630c90622837cbe6172e878e1c0b15112c" },
