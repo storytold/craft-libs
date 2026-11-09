@@ -45,6 +45,22 @@ and, for every file kept, the hash in the package (`source_sha256`) and the hash
 - `src/curve/mod.rs`: the `QuadraticApprox` doc says the quadratic gives `x` as a function of `y`, as
   `from_cubic`, `dmin` and `dmax` use it; the package's doc says `y` as a function of `x`. The test
   `curve::test::quad_approximation_gives_x_of_y` checks it on the curve `x = y^2`.
+`824b0791a750f7b27b8edcbb6c6244d0e629875e`. That commit is not in the GitHub repository the manifest
+names, which is archived; its README says development moved off GitHub.
+
+Every file here except this one, `SOURCE.json` and the files under Local changes is byte for byte the
+file in the `.crate` archive. `SOURCE.json` records the hash of the `.crate` download
+(`source_archive_sha256`) and, for every file kept, the hash in the package (`source_sha256`) and the
+hash here (`sha256`). `upstream_repository` is null because no public repository this copy can name
+holds `upstream_revision`. `local_patches` describes each local change.
+
+## Local changes
+
+| Change | Code comment label | Touches | Tests |
+|---|---|---|---|
+| The SVG stroke width is the larger of the bounding box's width and height divided by 512 | `Craft patch (example stroke width)` | `examples/boolean_op.rs`, `examples/visualize_op.rs`, `examples/winding-numbers.rs` | `stroke_width_follows_the_larger_side` in `examples/visualize_op.rs` |
+
+Every change here updates this table and `SOURCE.json` in the same commit.
 
 `omitted_files` lists the 43 files of the package left out here, with their hashes:
 
@@ -71,14 +87,15 @@ linesweeper = { git = "https://github.com/storytold/craft-libs", rev = "<rev>" }
 
 ## Tests
 
-`scripts/test-pdf-backends.sh` runs the package's unit, regression and doc tests. The `craft-prepress`
-tests with the `flatten` feature run against this copy. `pdf.yml`'s path filter does not list this
-directory, so a pull request that changes only files here does not start `pdf.yml`. Run the tests from
-this directory:
+`scripts/test-pdf-backends.sh` runs the package's unit, regression and doc tests and the
+`visualize_op` example's test. The `craft-prepress` tests with the `flatten` feature run against this
+copy. `pdf.yml`'s path filter does not list this directory, so a pull request that changes only files
+here does not start `pdf.yml`. Run the tests from this directory:
 
 ```sh
 cargo test --locked --lib --test regression
 cargo test --locked --doc
+cargo test --locked --example visualize_op
 ```
 
 `Cargo.toml` leaves out the `kompari`, `linesweeper_util` and `path-bool` dev-dependencies, which
