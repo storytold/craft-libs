@@ -114,6 +114,7 @@ pub struct Decoder {
     refs: [Option<Arc<Frame>>; 3],
     /// `ref_frame_sign_bias`, indexed by reference frame (0 intra, 1 last, 2 golden, 3 altref).
     sign_bias: [bool; 4],
+    color_space: u8,
     stats: DecodeStats,
 }
 
@@ -136,6 +137,7 @@ impl Decoder {
             mb_h: 0,
             refs: [None, None, None],
             sign_bias: [false; 4],
+            color_space: 0,
             stats: DecodeStats::default(),
         }
     }
@@ -143,6 +145,7 @@ impl Decoder {
     /// Forget the reference frames (after a seek): decoding resumes at the next key frame.
     pub fn reset(&mut self) {
         self.refs = [None, None, None];
+        self.color_space = 0;
     }
 
     pub fn stats(&self) -> DecodeStats {
@@ -269,6 +272,14 @@ impl Decoder {
     /// Decode one compressed frame. Returns the picture when the frame is meant to be shown
     /// (`show_frame`), `None` for a hidden frame (an altref).
     pub fn decode(&mut self, data: &[u8], pts: i64) -> Result<Option<Picture>> {
+        let result = self.decode_inner(data, pts);
+        if result.is_err() {
+            self.refs = [None, None, None];
+        }
+        result
+    }
+
+    fn decode_inner(&mut self, data: &[u8], pts: i64) -> Result<Option<Picture>> {
         let tag = FrameTag::parse(data)?;
         ensure!(tag.first_part_size > 0, "empty first partition");
         if tag.key_frame {
@@ -289,7 +300,7 @@ impl Decoder {
         }
 
         let n = hdr.partitions;
-        let mut token_decoders = split_token_partitions(data, first_end, n);
+        let mut token_decoders = split_token_partitions(data, first_end, n)?;
 
         let mut frame = Frame::new(self.mb_w * 16, self.mb_h * 16);
         let dequant = self.segment_dequant(&hdr);
@@ -358,6 +369,9 @@ impl Decoder {
 
         let frame = Arc::new(frame);
         self.update_references(&hdr, &frame);
+        if tag.key_frame {
+            self.color_space = hdr.color_space;
+        }
 
         self.stats.frames += 1;
         self.stats.key_frames += u64::from(tag.key_frame);
@@ -389,7 +403,7 @@ impl Decoder {
             v: crop(&f.v, f.w / 2, cw, ch),
             pts,
             key,
-            color_space,
+            color_space: if key { color_space } else { self.color_space },
         }
     }
 
@@ -583,24 +597,54 @@ struct InterRecon {
 }
 
 /// Token partitions (9.5): sizes of all but the last, then the data.
-fn split_token_partitions(data: &[u8], sizes_start: usize, n: usize) -> Vec<BoolDecoder<'_>> {
-    let mut pos = sizes_start.saturating_add(3 * (n - 1)).min(data.len());
+fn split_token_partitions(data: &[u8], sizes_start: usize, n: usize) -> Result<Vec<BoolDecoder<'_>>> {
+    ensure!(n > 0, "frame has no token partitions");
+    let sizes_len = 3usize.checked_mul(n - 1).ok_or_else(|| Error::Invalid("token partition size table overflow".into()))?;
+    let mut pos = sizes_start.checked_add(sizes_len).ok_or_else(|| Error::Invalid("token partition offset overflow".into()))?;
+    ensure!(pos <= data.len(), "truncated token partition size table");
     let mut parts: Vec<BoolDecoder> = Vec::with_capacity(n);
     for i in 0..n {
         let size = if i + 1 < n {
             let s = sizes_start + 3 * i;
-            match data.get(s..s + 3) {
-                Some(b) => usize::from(b[0]) | usize::from(b[1]) << 8 | usize::from(b[2]) << 16,
-                None => 0,
-            }
+            let b = data.get(s..s + 3).ok_or_else(|| Error::Invalid("truncated token partition size".into()))?;
+            usize::from(b[0]) | usize::from(b[1]) << 8 | usize::from(b[2]) << 16
         } else {
             data.len() - pos
         };
-        let end = pos.saturating_add(size).min(data.len());
+        let end = pos.checked_add(size).ok_or_else(|| Error::Invalid("token partition size overflow".into()))?;
+        ensure!(end <= data.len(), "token partition extends past the frame");
         parts.push(BoolDecoder::new(&data[pos..end]));
         pos = end;
     }
-    parts
+    Ok(parts)
+}
+
+#[cfg(test)]
+mod decode_hardening_tests {
+    use super::*;
+
+    #[test]
+    fn token_partition_table_and_payload_must_be_complete() {
+        assert!(split_token_partitions(&[0, 0], 0, 2).is_err());
+        assert!(split_token_partitions(&[3, 0, 0, 0, 0], 0, 2).is_err());
+        assert!(split_token_partitions(&[1, 0, 0, 0, 0], 0, 2).is_ok());
+    }
+
+    #[test]
+    fn failed_frame_discards_references() {
+        let mut decoder = Decoder::new();
+        decoder.refs[0] = Some(Arc::new(Frame::new(16, 16)));
+        assert!(decoder.decode(&[], 0).is_err());
+        assert!(decoder.refs.iter().all(Option::is_none));
+    }
+
+    #[test]
+    fn inter_picture_uses_the_retained_key_frame_color_space() {
+        let decoder = Decoder { color_space: 1, ..Decoder::new() };
+        let frame = Frame::new(16, 16);
+        assert_eq!(decoder.picture(&frame, 0, false, 0).color_space, 1);
+        assert_eq!(decoder.picture(&frame, 0, true, 0).color_space, 0);
+    }
 }
 
 /// Prediction record of a key frame macroblock (11.2, 11.3).

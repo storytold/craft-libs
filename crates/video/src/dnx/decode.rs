@@ -6,6 +6,16 @@ use crate::dnx::header::{self, FieldCode, FrameHeader, SCAN_INDEX_OFFSET};
 use crate::dnx::tables::{AMP_EOB, AMP_FINDEX, AMP_FRUN, CidInfo, VlcSet, ZIGZAG, cid_info, vlc};
 use crate::dnx::{ChromaFormat, Error, Frame, Interlace, Result};
 
+const DEFAULT_MAX_DECODED_PLANE_BYTES: usize = 256 * 1024 * 1024;
+
+fn check_decoded_plane_budget(total_samples: usize, maximum_bytes: usize) -> Result<()> {
+    let bytes = total_samples.checked_mul(std::mem::size_of::<u16>()).ok_or(Error::Invalid("plane size overflow"))?;
+    if bytes > maximum_bytes {
+        return Err(Error::Invalid("frame exceeds decoded memory budget"));
+    }
+    Ok(())
+}
+
 /// Decoder options.
 #[derive(Debug, Clone, Copy)]
 pub struct DecodeOptions {
@@ -14,11 +24,13 @@ pub struct DecodeOptions {
     /// Use the standard's integer inverse quantisation (equation 8.1) instead of the
     /// ffmpeg-compatible reconstruction (default false; see the README).
     pub spec_dequant: bool,
+    /// Maximum decoded plane storage per coding unit (default 256 MiB).
+    pub max_decoded_plane_bytes: usize,
 }
 
 impl Default for DecodeOptions {
     fn default() -> Self {
-        DecodeOptions { threads: true, spec_dequant: false }
+        DecodeOptions { threads: true, spec_dequant: false, max_decoded_plane_bytes: DEFAULT_MAX_DECODED_PLANE_BYTES }
     }
 }
 
@@ -68,7 +80,7 @@ pub fn decode_frame_with(data: &[u8], opts: &DecodeOptions) -> Result<Frame> {
     // Both field payloads must be valid before committing the full-frame
     // allocation; a damaged header alone must not allocate an output picture.
     let mut f = Frame::new_like(&h1, h1.width, h1.lines * 2);
-    f.interlace = Interlace::TopFieldFirst;
+    f.interlace = field_interlace(h1.field);
     top.copy_into(&mut f, 0, 2);
     bottom.copy_into(&mut f, 1, 2);
     Ok(f)
@@ -109,13 +121,19 @@ fn second_unit_offset(h: &FrameHeader, data: &[u8]) -> Result<usize> {
     }
     // VBR (or unexpected size): find the next header prefix after the first unit's scan lines
     let prefix = &data[0..5];
-    let start = h.header_size as usize;
-    data[start..]
-        .windows(5)
-        .position(|w| w == prefix)
-        .map(|p| p + start)
-        .filter(|&p| header::parse(&data[p..]).is_ok())
-        .ok_or(Error::Invalid("second field coding unit not found"))
+    let mut start = h.header_size as usize;
+    while let Some(relative) = data.get(start..).and_then(|tail| tail.windows(5).position(|w| w == prefix)) {
+        let candidate = start + relative;
+        if header::parse(&data[candidate..]).is_ok() {
+            return Ok(candidate);
+        }
+        start = candidate + 1;
+    }
+    Err(Error::Invalid("second field coding unit not found"))
+}
+
+fn field_interlace(first: FieldCode) -> Interlace {
+    if first == FieldCode::Field2 { Interlace::BottomFieldFirst } else { Interlace::TopFieldFirst }
 }
 
 /// Decoded planes of one coding unit at the coded (macroblock-aligned) size.
@@ -261,7 +279,6 @@ fn decode_unit(h: &FrameHeader, data: &[u8], opts: &DecodeOptions) -> Result<Cod
         .collect();
 
     let alpha = h.alpha;
-    const MAX_DECODED_PLANE_BYTES: usize = 512 * 1024 * 1024;
     let y_len = strides[0].checked_mul(16).and_then(|v| v.checked_mul(ns)).ok_or(Error::Invalid("plane dimension overflow"))?;
     let cb_len = strides[1].checked_mul(cmb.1).and_then(|v| v.checked_mul(ns)).ok_or(Error::Invalid("plane dimension overflow"))?;
     let cr_len = strides[2].checked_mul(cmb.1).and_then(|v| v.checked_mul(ns)).ok_or(Error::Invalid("plane dimension overflow"))?;
@@ -272,9 +289,7 @@ fn decode_unit(h: &FrameHeader, data: &[u8], opts: &DecodeOptions) -> Result<Cod
         .and_then(|v| v.checked_add(cr_len))
         .and_then(|v| v.checked_add(a_len))
         .ok_or(Error::Invalid("plane size overflow"))?;
-    if total_samples.checked_mul(std::mem::size_of::<u16>()).ok_or(Error::Invalid("plane size overflow"))? > MAX_DECODED_PLANE_BYTES {
-        return Err(Error::Invalid("frame exceeds decoded memory budget"));
-    }
+    check_decoded_plane_budget(total_samples, opts.max_decoded_plane_bytes)?;
     let mut planes: [Vec<u16>; 4] = [vec![0; y_len], vec![0; cb_len], vec![0; cr_len], if alpha { vec![0; a_len] } else { Vec::new() }];
     let [py, pcb, pcr, pa] = &mut planes;
     let band = [strides[0] * 16, strides[1] * cmb.1, strides[2] * cmb.1, strides[3] * 16];
@@ -597,6 +612,60 @@ fn decode_rle_alpha(ctx: &Ctx, r: &mut Reader, band: &mut [u16], mb: usize) -> R
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn field_header(field: FieldCode) -> FrameHeader {
+        FrameHeader {
+            header_size: 0x280,
+            version: 3,
+            cid: 1271,
+            vbr: true,
+            field,
+            macf: false,
+            crc: false,
+            alpha: false,
+            lossless_alpha: false,
+            premultiplied_alpha: false,
+            width: 16,
+            lines: 16,
+            par: (0, 0),
+            bit_depth: 10,
+            interlaced: true,
+            frame_encoding: false,
+            chroma: ChromaFormat::Yuv422,
+            rgb: false,
+            color_volume: crate::dnx::ColorVolume::Bt709,
+            timecode: None,
+            mb_rows: 1,
+        }
+    }
+
+    #[test]
+    fn second_field_search_skips_invalid_header_prefixes() {
+        let first = field_header(FieldCode::Field1);
+        let second = field_header(FieldCode::Field2);
+        let mut data = header::write(&first);
+        let prefix = data[..5].to_vec();
+        data.extend_from_slice(&prefix);
+        let second_offset = data.len();
+        data.extend_from_slice(&header::write(&second));
+
+        assert!(header::parse(&data[first.header_size as usize..]).is_err());
+        assert_eq!(header::parse(&data[second_offset..]).unwrap().field, FieldCode::Field2);
+        assert_eq!(second_unit_offset(&first, &data).unwrap(), second_offset);
+    }
+
+    #[test]
+    fn field_order_follows_the_first_coding_unit() {
+        assert_eq!(field_interlace(FieldCode::Field1), Interlace::TopFieldFirst);
+        assert_eq!(field_interlace(FieldCode::Field2), Interlace::BottomFieldFirst);
+    }
+
+    #[test]
+    fn decoded_plane_memory_budget_is_configurable() {
+        let large_frame_samples = 231usize * 1024 * 1024;
+        assert!(check_decoded_plane_budget(large_frame_samples, DEFAULT_MAX_DECODED_PLANE_BYTES).is_err());
+        assert!(check_decoded_plane_budget(large_frame_samples, 512 * 1024 * 1024).is_ok());
+    }
 
     /// One 16x16 macroblock with every sample of the three planes set to `v`.
     fn unit(v: [u16; 3], ycbcr: bool) -> CodedPlanes {

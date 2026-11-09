@@ -1,8 +1,10 @@
 //! Hostile-input robustness: truncation, header-region sweeps and random mutation of small
 //! ffmpeg-generated VP8 streams (frame by frame) must never panic or run away. Skips without ffmpeg.
 
+use std::cell::Cell;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::process::{Command, Stdio};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use craft_video::vp8::Decoder;
@@ -60,30 +62,48 @@ fn make(ff: &std::path::Path, name: &str, args: &str, pix: &str) -> Option<Vec<V
 
 static PANICS: AtomicUsize = AtomicUsize::new(0);
 
-/// Decoder worker threads may catch panics and turn them into errors; count them so they still fail the test.
-fn count_panics() {
-    static ONCE: std::sync::Once = std::sync::Once::new();
-    ONCE.call_once(|| {
-        std::panic::set_hook(Box::new(|info| {
+thread_local! {
+    static IN_FUZZ_RUN: Cell<bool> = const { Cell::new(false) };
+}
+
+fn with_panic_accounting(f: impl FnOnce()) {
+    let previous = Arc::new(std::panic::take_hook());
+    let counted_hook = Arc::clone(&previous);
+    std::panic::set_hook(Box::new(move |info| {
+        if IN_FUZZ_RUN.with(Cell::get) {
             PANICS.fetch_add(1, Ordering::SeqCst);
-            eprintln!("PANIC: {info}");
-        }));
-    });
+        }
+        counted_hook(info);
+    }));
+    let result = catch_unwind(AssertUnwindSafe(f));
+    let restored_hook = Arc::clone(&previous);
+    std::panic::set_hook(Box::new(move |info| restored_hook(info)));
+    if let Err(payload) = result {
+        std::panic::resume_unwind(payload);
+    }
+}
+
+fn count_fuzz_run_panics(f: impl FnOnce()) -> std::thread::Result<()> {
+    IN_FUZZ_RUN.with(|active| active.set(true));
+    let result = catch_unwind(AssertUnwindSafe(f));
+    IN_FUZZ_RUN.with(|active| active.set(false));
+    result
+}
+
+fn assert_no_fuzz_panics(res: std::thread::Result<()>, before: usize, label: &str) {
+    assert!(res.is_ok() && PANICS.load(Ordering::SeqCst) == before, "panic: {label}");
 }
 
 fn run_all(frames: &[Vec<u8>], label: &str) {
     craft_media_testkit::set_progress(label);
-    count_panics();
     let before = PANICS.load(Ordering::SeqCst);
-    let res = catch_unwind(AssertUnwindSafe(|| {
-        for _ in 0..1 {
-            let mut dec = Decoder::new();
-            for (i, f) in frames.iter().enumerate() {
-                let _ = dec.decode(f, i as i64);
-            }
+    let res = count_fuzz_run_panics(|| {
+        let mut dec = Decoder::new();
+        for (i, f) in frames.iter().enumerate() {
+            let _ = dec.decode(f, i as i64);
         }
-    }));
-    assert!(res.is_ok() && PANICS.load(Ordering::SeqCst) == before, "panic: {label}");
+    });
+    assert_no_fuzz_panics(res, before, label);
 }
 
 /// Random-mutation rounds per seed (raise with FILMCRAFT_FUZZ_ITERS for a long hunt).
@@ -91,12 +111,12 @@ fn iters() -> usize {
     std::env::var("FILMCRAFT_FUZZ_ITERS").ok().and_then(|s| s.parse().ok()).unwrap_or(300)
 }
 
-/// Seconds the whole sweep may take before it counts as a hang (override: FILMCRAFT_HOSTILE_TIMEOUT_SECS).
+/// Seconds the whole sweep may take before it counts as a hang (override: CRAFT_TEST_TIMEOUT_SECS).
 const DEADLINE_SECS: u64 = 600;
 
 #[test]
 fn hostile_streams_never_panic() {
-    craft_media_testkit::with_deadline(DEADLINE_SECS, sweep);
+    with_panic_accounting(|| craft_media_testkit::with_deadline(DEADLINE_SECS, sweep));
 }
 
 fn sweep() {

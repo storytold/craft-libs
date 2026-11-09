@@ -2,7 +2,10 @@
 
 Clean-room Apple ProRes decoder and encoder in pure Rust, written from the public [SMPTE RDD 36:2022](https://pub.smpte.org/doc/rdd36/20220909-pub/rdd36-2022.pdf)
 bitstream description. Part of `craft-video` (feature `prores`). Layer L0: depends only on `craft-media` (with `bitstream` feature), `thiserror` and (optional,
-feature `threads`, default on) `rayon`. Builds for `wasm32-unknown-unknown`; no `unsafe`.
+feature `threads`) `rayon`. Builds for `wasm32-unknown-unknown`; no `unsafe`.
+
+Enable the `threads` Cargo feature separately for parallel slice processing; without it, encoding
+and decoding are serial.
 
 ## API
 
@@ -71,15 +74,17 @@ does), so the decoder doesn't need to know.
 - Rate control targets Apple's published nominal rates (Mbit/s at 1920×1080, 29.97 fps: 45, 102,
   147, 220, 330, 500). These are converted to bits per macroblock (184, 417, 601, 900, 1349,
   2045), so frame targets scale with frame area (`Encoder::target_frame_bytes`). Alpha comes on
-  top of the target. Every slice is transformed once. Then a frame-level binary search finds the
-  smallest uniform quantiser index whose frame fits the budget, and as many slices as the rest of
+  top of the target. Every slice is transformed once. Then a frame-level ordered search finds
+  the smallest uniform quantiser index whose frame fits the budget, and as many slices as the rest of
   the budget allows get one finer step. Detailed content lands within 0.1% of the target. Simple
   content uses qidx 1 and comes in under the target. Every slice is kept within the 16-bit
   size fields.
 
 ## Accuracy and Conformance
 
-Decoded frames and encoders adhere strictly to SMPTE RDD 36 specifications.
+Valid decoded frames and encoder output follow SMPTE RDD 36. Truncated alpha runs are rejected
+instead of filling missing samples with the previous value. The hostile-input test checks that
+arbitrary malformed streams do not panic; it does not require every malformed stream to decode.
 Unit tests in `src/` verify header parsing, DCT/IDCT roundtrips, quantization,
 entropy coding, progressive encoding, and alpha channel lossless reconstruction.
 
