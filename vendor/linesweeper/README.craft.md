@@ -1,15 +1,21 @@
 # Local linesweeper 0.5.0 copy
 
-This is the crates.io linesweeper 0.5.0 package (MIT OR Apache-2.0) with some files left out and no
-file changed. `.cargo_vcs_info.json` names the commit it was packaged from,
+This is the crates.io linesweeper 0.5.0 package (MIT OR Apache-2.0) with some files left out and the
+local patches listed below. `.cargo_vcs_info.json` names the commit it was packaged from,
 `824b0791a750f7b27b8edcbb6c6244d0e629875e`. That commit is not in the GitHub repository the manifest
 names, which is archived; its README says development moved off GitHub.
 
-Every file here except this one and `SOURCE.json` is byte for byte the file in the `.crate` archive.
-`SOURCE.json` records the hash of the `.crate` download (`source_archive_sha256`) and, for every file
-kept, the hash in the package (`source_sha256`) and the hash here (`sha256`). `upstream_repository` is
-null because no public repository this copy can name holds `upstream_revision`. `local_patches` is
-empty.
+Every file here except this one, `SOURCE.json` and the patched files below is byte for byte the file
+in the `.crate` archive. `SOURCE.json` records the hash of the `.crate` download
+(`source_archive_sha256`) and, for every file kept, the hash in the package (`source_sha256`) and the
+hash here (`sha256`). `upstream_repository` is null because no public repository this copy can name
+holds `upstream_revision`. `local_patches` describes each local patch.
+
+## Local patches
+
+| File | Change |
+|---|---|
+| `src/topology.rs`, `src/snapshots/linesweeper__topology__tests__*.snap` | Building a `Topology` and walking its contours no longer make small allocations per segment. The open output segments of each input segment are kept in an inline queue of three (`OpenSegs`) instead of a `VecDeque`, and that state now lives only for the sweep instead of in the `Topology`, so the nine topology snapshots no longer list `open_segs`. The segment buffers are kept for the whole sweep instead of being allocated for each sweep-line range, the winding number is cloned for horizontals only when a horizontal starts at the point, `can_merge` returns early at a point that is not simple before solving for `t`, and `segs_to_path` reverses first halves into one reused buffer instead of calling `reverse_subpaths` for each one. On a stroked serpentine of 501,993 segments, building allocates 4,324,964 times instead of 6,044,487 and holds 731.2 MB instead of 764.0 MB, and `contours` allocates 632,030 times instead of 834,041; the contours are the same. The `building_a_topology_does_not_allocate_per_segment` and `contours_do_not_allocate_per_reversed_segment` tests count the allocations per extra square or wave, `reverse_path_into_matches_reverse_subpaths` checks the reversal against `reverse_subpaths`, `open_segs_pop_like_a_deque` checks the queue against a `VecDeque`, and `contours_keep_their_elements_and_direction` compares two contours with the elements the unpatched code writes. |
 
 `omitted_files` lists the 43 files of the package left out here, with their hashes:
 
