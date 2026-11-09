@@ -184,7 +184,8 @@ impl Vp9Encoder {
     pub fn vpcc(&self) -> Vec<u8> {
         VpcConfig {
             profile: 0,
-            level: 31,
+            // 0 = undefined: the encoder enforces no level limits, so none may be claimed.
+            level: 0,
             bit_depth: 8,
             chroma_subsampling: 1,
             full_range: self.cfg.full_range,
@@ -492,5 +493,18 @@ mod tests {
         assert_eq!((enc.cfg.width, enc.cfg.height), (65_536, 65_536));
         let enc = Vp9Encoder::new(EncoderConfig { width: 65_536, height: 1, ..Default::default() });
         assert_eq!((enc.cfg.width, enc.cfg.height), (65_536, 1));
+    }
+
+    /// A 1080p stream is above the 983,040 luma samples of level 3.1, so it must not claim 3.1 in
+    /// its `vpcC`; level 0 means "undefined" in the MP4 binding.
+    #[test]
+    fn vpcc_claims_no_level_the_encoder_does_not_enforce() {
+        for (w, h) in [(1920, 1080), (64, 64), (3840, 2160)] {
+            let enc = Vp9Encoder::new(EncoderConfig { width: w, height: h, ..Default::default() });
+            let rec = VpcConfig::parse(&enc.vpcc()).unwrap();
+            assert_eq!(rec.level, 0, "{w}x{h}");
+            let params = enc.codec_params();
+            assert_eq!(VpcConfig::parse(&params.extradata).unwrap().level, 0);
+        }
     }
 }

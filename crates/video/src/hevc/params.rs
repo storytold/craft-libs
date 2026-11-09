@@ -64,17 +64,18 @@ const LEVELS: [(u8, u64, u64, u64); 13] = [
     (186, 35_651_584, 4_278_190_080, 240_000),
 ];
 
-/// Lowest level whose picture size, sample rate and (when known) bitrate limits fit.
-pub fn choose_level(width: u32, height: u32, fps_num: u32, fps_den: u32, kbps: Option<u32>) -> u8 {
+/// Lowest level whose picture size, sample rate and (when known) bitrate limits fit, or `None` when
+/// even level 6.2 is too small: the stream could not claim to conform to any level.
+pub fn choose_level(width: u32, height: u32, fps_num: u32, fps_den: u32, kbps: Option<u32>) -> Option<u8> {
     let ps = width as u64 * height as u64;
     let sr = (ps as f64 * fps_num as f64 / fps_den.max(1) as f64).ceil() as u64;
     for &(idc, max_ps, max_sr, max_br) in &LEVELS {
         let max_dim = ((max_ps * 8) as f64).sqrt() as u64;
         if ps <= max_ps && (width as u64) <= max_dim && (height as u64) <= max_dim && sr <= max_sr && kbps.is_none_or(|k| k as u64 <= max_br) {
-            return idc;
+            return Some(idc);
         }
     }
-    186
+    None
 }
 
 fn profile_tier_level(w: &mut BitWriter, p: &SeqParams) {
@@ -272,11 +273,16 @@ mod tests {
 
     #[test]
     fn levels() {
-        assert_eq!(choose_level(1920, 1080, 30, 1, None), 120);
-        assert_eq!(choose_level(1920, 1080, 60, 1, None), 123);
-        assert_eq!(choose_level(3840, 2160, 30, 1, None), 150);
-        assert_eq!(choose_level(1280, 720, 30, 1, None), 93);
-        assert_eq!(choose_level(64, 64, 30, 1, None), 30);
-        assert_eq!(choose_level(1920, 1080, 30, 1, Some(15_000)), 123);
+        assert_eq!(choose_level(1920, 1080, 30, 1, None), Some(120));
+        assert_eq!(choose_level(1920, 1080, 60, 1, None), Some(123));
+        assert_eq!(choose_level(3840, 2160, 30, 1, None), Some(150));
+        assert_eq!(choose_level(1280, 720, 30, 1, None), Some(93));
+        assert_eq!(choose_level(64, 64, 30, 1, None), Some(30));
+        // 8192x8192 is 67 Mi luma samples, over the 35 Mi of level 6.x; so is a rate beyond level 6.2.
+        assert_eq!(choose_level(8192, 8192, 30, 1, None), None);
+        assert_eq!(choose_level(8192, 4320, 300, 1, None), None);
+        assert_eq!(choose_level(1920, 1080, 30, 1, Some(240_001)), None);
+        assert_eq!(choose_level(8192, 4320, 30, 1, None), Some(180));
+        assert_eq!(choose_level(1920, 1080, 30, 1, Some(15_000)), Some(123));
     }
 }
