@@ -1840,7 +1840,9 @@ impl<'segs> SweepLine<'_, '_, 'segs> {
                 });
             }
         }
-        events.sort();
+        // Craft patch (output event order): sort by horizontal range alone, as the
+        // package's `Ord` did, so events with the same range keep their order.
+        events.sort_by(OutputEvent::cmp_x);
         bufs.clear();
 
         Some(SweepLineRange::new(

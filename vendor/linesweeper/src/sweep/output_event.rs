@@ -11,6 +11,8 @@ use crate::{SegIdx, num::CheapOrderedFloat};
 ///
 /// `OutputEvent` is ordered by the smallest horizontal coordinate where
 /// it intersects the sweep-line (i.e. [`OutputEvent::smaller_x`]).
+/// Events with the same horizontal range are ordered by segment and then by
+/// their other fields, so two events compare equal only when they are equal.
 ///
 /// The two points, `x0` and `x1`, are in sweep-line order. This doesn't
 /// necessarily mean that `x0` is smaller than `x1`! Instead, it means that
@@ -85,10 +87,12 @@ impl OutputEvent {
     pub fn connected_below_at(&self, x: f64) -> bool {
         x == self.x1 && self.connected_below
     }
-}
 
-impl Ord for OutputEvent {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+    // Craft patch (output event order): the package's `Ord`, which compares the
+    // horizontal ranges only.
+    /// Compares the horizontal ranges only: [`OutputEvent::smaller_x`], then
+    /// [`OutputEvent::larger_x`].
+    pub(crate) fn cmp_x(&self, other: &Self) -> std::cmp::Ordering {
         CheapOrderedFloat::from(self.smaller_x())
             .cmp(&CheapOrderedFloat::from(other.smaller_x()))
             .then_with(|| {
@@ -98,8 +102,50 @@ impl Ord for OutputEvent {
     }
 }
 
+// Craft patch (output event order): events with the same horizontal range are
+// ordered by segment and then by the other fields, so `cmp` agrees with `==`.
+impl Ord for OutputEvent {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.cmp_x(other)
+            .then_with(|| self.seg_idx.cmp(&other.seg_idx))
+            .then_with(|| CheapOrderedFloat::from(self.x0).cmp(&CheapOrderedFloat::from(other.x0)))
+            .then_with(|| self.connected_above.cmp(&other.connected_above))
+            .then_with(|| self.connected_below.cmp(&other.connected_below))
+            .then_with(|| self.sweep_idx.cmp(&other.sweep_idx))
+            .then_with(|| self.old_sweep_idx.cmp(&other.old_sweep_idx))
+    }
+}
+
 impl PartialOrd for OutputEvent {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeSet;
+
+    use super::*;
+
+    // Craft patch (output event order)
+    #[test]
+    fn events_on_different_segments_with_the_same_range_are_not_equal() {
+        let a = OutputEvent::new(SegIdx(0), 1.0, true, 2.0, true, Some(0), Some(0));
+        let b = OutputEvent::new(SegIdx(1), 1.0, true, 2.0, true, Some(1), Some(1));
+        assert_ne!(a, b);
+        assert_ne!(a.cmp(&b), std::cmp::Ordering::Equal);
+        assert_eq!(a.cmp_x(&b), std::cmp::Ordering::Equal);
+
+        let set: BTreeSet<_> = [a.clone(), b.clone()].into_iter().collect();
+        assert_eq!(set.len(), 2);
+    }
+
+    #[test]
+    fn events_differing_only_in_flags_are_not_equal() {
+        let a = OutputEvent::new(SegIdx(0), 1.0, true, 1.0, false, None, Some(0));
+        let b = OutputEvent::new(SegIdx(0), 1.0, false, 1.0, true, Some(0), None);
+        assert_ne!(a.cmp(&b), std::cmp::Ordering::Equal);
+        assert_eq!(a.cmp(&a.clone()), std::cmp::Ordering::Equal);
     }
 }
