@@ -168,7 +168,10 @@ fn approximate(
 
             let factor = horizontal_error_weight(cubic);
 
-            let too_short = y1 <= y0 + accuracy;
+            // An interval whose midpoint rounds to one of its ends cannot be
+            // halved. Halving it anyway would leave `y1` where it is, or return
+            // `y0` and stop the caller's loop from advancing.
+            let too_short = y1 <= y0 + accuracy || y_mid <= y0 || y_mid >= y1;
             let accurate = approx.dmax.max(-approx.dmin) * factor < accuracy;
             if !too_short && !accurate {
                 // TODO: can we be smarter about this?
@@ -609,5 +612,27 @@ mod tests {
         let above = close_lens_elements(-100.0);
         assert!(below[2] > 0, "{below:?}");
         assert_eq!(below, above);
+    }
+
+    // With an accuracy that no approximation meets, the interval is halved
+    // until it is one float wide. At 1.5e8 the midpoint of such an interval
+    // rounds to its start, and `approximate` used to return the start, which
+    // left the loop in `compute_positions_correct` without progress.
+    #[test]
+    fn approx_stops_at_one_float() {
+        let y0 = 1.5e8;
+        let mut p = BezPath::new();
+        p.move_to((y0, y0));
+        p.curve_to((y0 + 1.0, y0 + 0.3), (y0 - 1.0, y0 + 0.7), (y0, y0 + 1.0));
+        p.close_path();
+
+        let mut segs = Segments::default();
+        segs.add_bez_path(&p).unwrap();
+        let s0 = segs.indices().next().unwrap();
+
+        let mut out = Vec::new();
+        let next_y0 = super::approximate(y0, y0 + 1.0, &[s0], &segs, 0.0, &mut out);
+        assert!(next_y0 > y0, "next_y0 = {next_y0}");
+        assert_eq!(out.len(), 1);
     }
 }

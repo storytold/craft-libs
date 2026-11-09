@@ -530,6 +530,10 @@ impl<W: WindingNumber> Topology<W> {
     ///
     /// Returns an error if a path is not closed, or if a coordinate is not finite or has a
     /// magnitude above [`crate::MAX_COORDINATE`].
+    ///
+    /// An `eps` that is NaN, infinite, not positive, or below `64 * f64::EPSILON`
+    /// times the paths' largest coordinate magnitude is replaced by that value. The
+    /// other constructors pass `eps` through here, or follow the same rule.
     pub fn from_paths_with_correctness<'a, Iter>(paths: Iter, eps: f64, correctness: Correctness) -> Result<Self, Error>
     where
         Iter: IntoIterator<Item = (&'a BezPath, W::Tag)>,
@@ -596,6 +600,7 @@ impl<W: WindingNumber> Topology<W> {
         correctness: Correctness,
         work_limit: Option<u64>,
     ) -> Result<Self, crate::Error> {
+        let eps = segments.usable_eps(eps);
         let mut ret = Self {
             eps,
             correctness,
