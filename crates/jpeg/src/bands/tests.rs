@@ -373,6 +373,8 @@ fn interleaved_layouts_with_any_sampling_factors() {
             let plain = Stream::new(w, h, comps, 0, n as u64 * 7 + w as u64).encode();
             let what = format!("{comps:?} {w}x{h}");
             let b = check_equal(&plain, &what).expect("decoded in bands");
+            let down = comps.len() > 1 && comps.iter().any(|c| c.1 < comps.iter().map(|c| c.1).max().unwrap_or(1));
+            assert_eq!(b.halo(), u32::from(down), "{what}");
             let row = b.mcux;
             for restart in [1, 5, row, 3 * row] {
                 let s = Stream { restart, ..Stream::new(w, h, comps, 0, n as u64 * 7 + w as u64) }.encode();

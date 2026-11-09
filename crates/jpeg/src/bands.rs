@@ -229,6 +229,14 @@ impl<'a> Bands<'a> {
         self.mcuy
     }
 
+    /// MCU lines a [`Reader`] decodes on each side of the bands it hands out: 1 when a component
+    /// is subsampled down (a band's rows interpolate with the lines above and below), else 0.
+    /// Reading `n` bands from a seek point decodes about `n + 2 × halo` lines, so a caller that
+    /// splits the work reads a few bands from each seek point when this is not 0.
+    pub fn halo(&self) -> u32 {
+        self.lag as u32
+    }
+
     /// Bytes of the samples of a full band.
     pub fn band_bytes(&self) -> usize {
         self.band_rows * self.width * self.comps.len()
