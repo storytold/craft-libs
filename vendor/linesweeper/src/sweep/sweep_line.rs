@@ -403,8 +403,9 @@ impl<'segs> Sweeper<'segs> {
     ///
     /// Every pair of segments that start at one point compares "ish" there, so a scan or an
     /// insertion search from one of them passes all the others. Comparisons of such pairs made
-    /// at that point are not stored, so that `n` segments starting at one point store `O(n)`
-    /// comparisons instead of `O(n^2)`.
+    /// at that point are not stored, so `n` segments that start at one point and do not cross
+    /// later store `O(n)` comparisons instead of `O(n^2)`. A comparison made at a later crossing
+    /// is stored as usual.
     fn start_together_here(&self, i: SegIdx, j: SegIdx, y: f64) -> bool {
         let start = self.segments[i].start();
         start.y == y && start == self.segments[j].start()
