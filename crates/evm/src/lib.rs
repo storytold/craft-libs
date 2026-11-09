@@ -298,6 +298,7 @@ fn cbor_arg(b: &[u8], pos: &mut usize, info: u8) -> Option<u64> {
     }
 }
 
+/// Decode one bounded metadata item. An incomplete or unsupported value invalidates the metadata trailer.
 fn cbor_item(b: &[u8], pos: &mut usize, depth: u32) -> Option<Value> {
     if depth > 4 {
         return None;
@@ -312,10 +313,13 @@ fn cbor_item(b: &[u8], pos: &mut usize, depth: u32) -> Option<Value> {
             let n = usize::try_from(cbor_arg(b, pos, info)?).ok()?;
             let s = b.get(*pos..pos.checked_add(n)?)?;
             *pos += n;
-            Some(if major == 3 { Value::from(String::from_utf8_lossy(s).into_owned()) } else { Value::from(bytes_value(s)) })
+            Some(if major == 3 { Value::from(std::str::from_utf8(s).ok()?) } else { Value::from(bytes_value(s)) })
         }
         4 => {
-            let n = usize::try_from(cbor_arg(b, pos, info)?).ok()?.min(64);
+            let n = usize::try_from(cbor_arg(b, pos, info)?).ok()?;
+            if n > 64 {
+                return None;
+            }
             let mut items = Vec::new();
             for _ in 0..n {
                 items.push(cbor_item(b, pos, depth + 1)?);
@@ -327,7 +331,10 @@ fn cbor_item(b: &[u8], pos: &mut usize, depth: u32) -> Option<Value> {
             Some(Value::Array(items))
         }
         5 => {
-            let n = usize::try_from(cbor_arg(b, pos, info)?).ok()?.min(32);
+            let n = usize::try_from(cbor_arg(b, pos, info)?).ok()?;
+            if n > 32 {
+                return None;
+            }
             let mut m = Map::new();
             for _ in 0..n {
                 let k = match cbor_item(b, pos, depth + 1)? {
@@ -665,6 +672,26 @@ fn reverts_soon(code: &[u8], ins: &[Ins], mut k: usize, index_of: &dyn Fn(usize)
 mod tests {
     use super::*;
     use craft_anything_testkit::formats as fx;
+
+    /// A plausible trailer length alone must not remove instructions from the analyzed bytecode.
+    #[test]
+    fn incomplete_cbor_must_not_shorten_the_analyzed_contract() {
+        // A nested array declares 65 integers but supplies just 64. The top-level map
+        // and its length suffix otherwise look complete.
+        let mut short = vec![0xa1, 0x61, b'x', 0x98, 65];
+        short.extend([0; 64]);
+        let mut short_map = vec![0xa1, 0x61, b'x', 0xb8, 33];
+        for key in 0..32 {
+            short_map.extend([0x18, key, 0]);
+        }
+        for cbor in [short, short_map, vec![0xa1, 0x61, b'x', 0x61, 0xff]] {
+            let mut code = vec![0x00];
+            code.extend(&cbor);
+            code.extend((cbor.len() as u16).to_be_bytes());
+            assert!(split_metadata(&code).1.is_none());
+            assert_eq!(analyze(&code).unwrap().analysed_size, code.len());
+        }
+    }
 
     #[test]
     fn dispatcher_selectors_and_metadata() {
