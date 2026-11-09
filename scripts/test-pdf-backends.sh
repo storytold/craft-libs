@@ -24,5 +24,5 @@ cargo test --manifest-path "$test_root/linesweeper/Cargo.toml" --locked --test p
 cargo test --manifest-path "$test_root/linesweeper/Cargo.toml" --locked --lib --features generators generators::
 cargo test --manifest-path "$test_root/linesweeper/Cargo.toml" --locked --doc
 cargo test --manifest-path "$test_root/linesweeper/Cargo.toml" --locked --example visualize_op
-cargo test --manifest-path "$test_root/linesweeper/Cargo.toml" --locked --example curve_metrics
+cargo test --manifest-path "$test_root/linesweeper/Cargo.toml" --locked --example curve_metrics --features metrics
 cargo check --manifest-path "$test_root/linesweeper/Cargo.toml" --locked --all-targets --all-features
