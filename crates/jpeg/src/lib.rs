@@ -13,6 +13,10 @@
 //! SOF11) and hierarchical (SOF5–SOF7, SOF13–SOF15) files, and DCT precisions other than 8 and
 //! 12 bits.
 //!
+//! [`Bands`] decodes the common case, a sequential Huffman-coded 8-bit frame in one scan, a band
+//! of rows at a time, into the samples [`decode`] would give for those rows, so that images too
+//! large for one buffer can be decoded straight into the caller's storage.
+//!
 //! An app that also uses a baseline decoder routes each file with [`frame`], which reports the
 //! first frame marker and its precision without decoding. For example, to send this crate the
 //! arithmetic-coded files and the Huffman-coded ones that aren't 8-bit:
@@ -362,7 +366,30 @@ fn parse_dac(seg: &[u8], t: &mut Tables) -> Result<(), Error> {
     Ok(())
 }
 
-fn parse_frame(marker: u8, seg: &[u8], limits: &Limits) -> Result<Frame, Error> {
+/// A frame header (B.2.2), validated, before any buffer is sized from it.
+struct Header {
+    arithmetic: bool,
+    progressive: bool,
+    precision: u8,
+    width: usize,
+    height: usize,
+    hmax: usize,
+    vmax: usize,
+    /// MCUs per line and MCU lines of an interleaved scan (A.2.3).
+    mcux: usize,
+    mcuy: usize,
+    /// Identifier, sampling factors (H, V) and quantization table of each component.
+    comps: Vec<(u8, usize, usize, usize)>,
+}
+
+impl Header {
+    /// Samples of a component with sampling factors `h`, `v` (B.2.2: ⌈X·H/Hmax⌉ × ⌈Y·V/Vmax⌉).
+    fn samples(&self, h: usize, v: usize) -> (usize, usize) {
+        ((self.width * h).div_ceil(self.hmax), (self.height * v).div_ceil(self.vmax))
+    }
+}
+
+fn parse_header(marker: u8, seg: &[u8]) -> Result<Header, Error> {
     let (arithmetic, progressive) = match marker {
         0xC0 | 0xC1 => (false, false),
         0xC9 => (true, false),
@@ -396,14 +423,22 @@ fn parse_frame(marker: u8, seg: &[u8], limits: &Limits) -> Result<Frame, Error> 
     }
     let hmax = raw.iter().map(|c| c.1).max().unwrap_or(1);
     let vmax = raw.iter().map(|c| c.2).max().unwrap_or(1);
-    let bytes_per_pixel = nf as u64 * if precision > 8 { 2 } else { 1 };
-    limits.check(width, height, bytes_per_pixel)?;
     let mcux = width.div_ceil(8 * hmax);
     let mcuy = height.div_ceil(8 * vmax);
+    Ok(Header { arithmetic, progressive, precision, width, height, hmax, vmax, mcux, mcuy, comps: raw })
+}
+
+/// The frame of a whole-image decode: the header checked against `limits`, with a coefficient
+/// buffer for every block of every component.
+fn parse_frame(marker: u8, seg: &[u8], limits: &Limits) -> Result<Frame, Error> {
+    let hd = parse_header(marker, seg)?;
+    let (width, height, mcux, mcuy) = (hd.width, hd.height, hd.mcux, hd.mcuy);
+    let bytes_per_pixel = hd.comps.len() as u64 * if hd.precision > 8 { 2 } else { 1 };
+    limits.check(width, height, bytes_per_pixel)?;
     // `render` holds the coefficients (4 bytes) and the reconstructed plane (4 bytes) of every
     // padded sample while it writes the output, so all three count against `max_alloc` together.
     let mut total = (width as u64 * height as u64).saturating_mul(bytes_per_pixel);
-    for &(_, h, v, _) in &raw {
+    for &(_, h, v, _) in &hd.comps {
         let samples = (mcux * h * 8) as u64 * (mcuy * v * 8) as u64;
         total = total.saturating_add(samples.saturating_mul(8));
     }
@@ -413,23 +448,14 @@ fn parse_frame(marker: u8, seg: &[u8], limits: &Limits) -> Result<Frame, Error> 
     if total > cap {
         return Err(Error::LimitExceeded(format!("{total} bytes of decoder buffers and output exceed the limit of {cap}")));
     }
-    let mut comps = Vec::with_capacity(nf);
-    for (id, h, v, tq) in raw {
+    let mut comps = Vec::with_capacity(hd.comps.len());
+    for &(id, h, v, tq) in &hd.comps {
         let (bw, bh) = (mcux * h, mcuy * v);
         let blocks = bw.checked_mul(bh).ok_or_else(|| Error::LimitExceeded("too many blocks".into()))?;
-        comps.push(Component {
-            id,
-            h,
-            v,
-            tq,
-            cw: (width * h).div_ceil(hmax),
-            ch: (height * v).div_ceil(vmax),
-            bw,
-            bh,
-            coefs: vec![[0; 64]; blocks],
-            quant: None,
-        });
+        let (cw, ch) = hd.samples(h, v);
+        comps.push(Component { id, h, v, tq, cw, ch, bw, bh, coefs: vec![[0; 64]; blocks], quant: None });
     }
+    let Header { arithmetic, progressive, precision, hmax, vmax, .. } = hd;
     Ok(Frame { arithmetic, progressive, precision, width, height, hmax, vmax, mcux, mcuy, comps })
 }
 
@@ -545,11 +571,14 @@ impl<'a> Bits<'a> {
         v
     }
 
+    /// Past the next restart marker, with nothing buffered: a fresh start, including after an
+    /// interval whose data ran out (the band decoder resumes there; [`decode`] stops at it).
     fn restart(&mut self) {
         self.pos = skip_restart(self.d, self.pos).0;
         self.acc = 0;
         self.n = 0;
         self.pad = 0;
+        self.exhausted = false;
     }
 }
 
@@ -1016,7 +1045,8 @@ fn walk_scan(frame: &mut Frame, scan: &Scan, restart: usize, dec: &mut dyn ScanD
     Ok(())
 }
 
-fn parse_scan(seg: &[u8], frame: &Frame) -> Result<Scan, Error> {
+/// A scan header (B.2.3) of a frame whose components have the identifiers `ids`.
+fn parse_scan(seg: &[u8], ids: &[u8], progressive: bool) -> Result<Scan, Error> {
     let ns = usize::from(byte(seg, 0)?);
     if !(1..=4).contains(&ns) {
         return Err(err("bad number of scan components"));
@@ -1024,7 +1054,7 @@ fn parse_scan(seg: &[u8], frame: &Frame) -> Result<Scan, Error> {
     let mut comps = Vec::with_capacity(ns);
     for s in 0..ns {
         let (cs, t) = (byte(seg, 1 + 2 * s)?, byte(seg, 2 + 2 * s)?);
-        let ci = frame.comps.iter().position(|c| c.id == cs).ok_or_else(|| err("scan names an unknown component"))?;
+        let ci = ids.iter().position(|&id| id == cs).ok_or_else(|| err("scan names an unknown component"))?;
         let (td, ta) = (usize::from(t >> 4), usize::from(t & 15));
         if td > 3 || ta > 3 {
             return Err(err("bad entropy table id"));
@@ -1034,7 +1064,7 @@ fn parse_scan(seg: &[u8], frame: &Frame) -> Result<Scan, Error> {
     let at = 1 + 2 * ns;
     let (ss, se, a) = (usize::from(byte(seg, at)?), usize::from(byte(seg, at + 1)?), byte(seg, at + 2)?);
     let (ah, al) = (a >> 4, a & 15);
-    if frame.progressive {
+    if progressive {
         let ok = ss <= se && se <= 63 && (ss != 0 || se == 0) && (ss == 0 || ns == 1) && al <= 13;
         if !ok {
             return Err(err("bad progressive scan parameters"));
@@ -1154,7 +1184,8 @@ fn decode_coefficients(b: &[u8], limits: &Limits) -> Result<(Frame, Tables, bool
             }
             0xDA => {
                 let f = frame.as_mut().ok_or_else(|| err("scan before the frame header"))?;
-                let scan = parse_scan(seg, f)?;
+                let ids: Vec<u8> = f.comps.iter().map(|c| c.id).collect();
+                let scan = parse_scan(seg, &ids, f.progressive)?;
                 let budget = f.comps.iter().map(|c| c.coefs.len()).sum::<usize>().saturating_mul(SCAN_PASSES);
                 blocks = blocks.saturating_add(scan_grid(f, &scan)?.2);
                 if blocks > budget {
@@ -1197,46 +1228,53 @@ fn idct_basis() -> [[f32; 8]; 8] {
     t
 }
 
+/// One block's samples (A.3.3): `blk` (zigzag order) dequantized with `q`, inverse transformed,
+/// level-shifted and clamped to `0..=max`, written to the 8 rows of 8 at the start of `out`
+/// that are `stride` apart. Rows that `out` doesn't reach are left out.
+fn idct_block(blk: &[i32; 64], q: &[u16; 64], basis: &[[f32; 8]; 8], max: f32, out: &mut [f32], stride: usize) {
+    let shift = (max + 1.0) / 2.0;
+    if blk[1..].iter().all(|&c| c == 0) {
+        // Only DC: every sample is T[y][0] · T[x][0] · F[0][0], the same products the full
+        // transform below sums (its other terms are zero), so the result is identical.
+        let t = basis[0][0];
+        let v = (t * (t * (blk[0] as f32 * f32::from(q[0]))) + shift).clamp(0.0, max);
+        for y in 0..8 {
+            if let Some(row) = out.get_mut(y * stride..y * stride + 8) {
+                row.fill(v);
+            }
+        }
+        return;
+    }
+    let mut f = [0f32; 64];
+    for (k, &c) in blk.iter().enumerate() {
+        f[ZIGZAG[k]] = c as f32 * f32::from(q[k]);
+    }
+    // Rows: r[v][x] = Σu T[x][u] F[v][u]; then columns: s[y][x] = Σv T[y][v] r[v][x].
+    let mut r = [0f32; 64];
+    for v in 0..8 {
+        for x in 0..8 {
+            r[v * 8 + x] = (0..8).map(|u| basis[x][u] * f[v * 8 + u]).sum();
+        }
+    }
+    for (y, ty) in basis.iter().enumerate() {
+        if let Some(row) = out.get_mut(y * stride..y * stride + 8) {
+            for (x, o) in row.iter_mut().enumerate() {
+                let s: f32 = ty.iter().enumerate().map(|(v, t)| t * r[v * 8 + x]).sum();
+                *o = (s + shift).clamp(0.0, max);
+            }
+        }
+    }
+}
+
 /// The component's samples (padded to whole blocks, row stride `bw * 8`), level-shifted and
 /// clamped to `0..=max`.
 fn reconstruct(comp: &Component, q: &[u16; 64], basis: &[[f32; 8]; 8], max: f32) -> Vec<f32> {
     let stride = comp.bw * 8;
     let mut plane = vec![0f32; stride * comp.bh * 8];
-    let shift = (max + 1.0) / 2.0;
     for (n, blk) in comp.coefs.iter().enumerate() {
         let (bx, by) = (n % comp.bw, n / comp.bw);
-        if blk[1..].iter().all(|&c| c == 0) {
-            // Only DC: every sample is T[y][0] · T[x][0] · F[0][0], the same products the full
-            // transform below sums (its other terms are zero), so the result is identical.
-            let t = basis[0][0];
-            let v = (t * (t * (blk[0] as f32 * f32::from(q[0]))) + shift).clamp(0.0, max);
-            for y in 0..8 {
-                let row = (by * 8 + y) * stride + bx * 8;
-                if let Some(out) = plane.get_mut(row..row + 8) {
-                    out.fill(v);
-                }
-            }
-            continue;
-        }
-        let mut f = [0f32; 64];
-        for (k, &c) in blk.iter().enumerate() {
-            f[ZIGZAG[k]] = c as f32 * f32::from(q[k]);
-        }
-        // Rows: r[v][x] = Σu T[x][u] F[v][u]; then columns: s[y][x] = Σv T[y][v] r[v][x].
-        let mut r = [0f32; 64];
-        for v in 0..8 {
-            for x in 0..8 {
-                r[v * 8 + x] = (0..8).map(|u| basis[x][u] * f[v * 8 + u]).sum();
-            }
-        }
-        for (y, ty) in basis.iter().enumerate() {
-            let row = (by * 8 + y) * stride + bx * 8;
-            if let Some(out) = plane.get_mut(row..row + 8) {
-                for (x, o) in out.iter_mut().enumerate() {
-                    let s: f32 = ty.iter().enumerate().map(|(v, t)| t * r[v * 8 + x]).sum();
-                    *o = (s + shift).clamp(0.0, max);
-                }
-            }
+        if let Some(out) = plane.get_mut(by * 8 * stride + bx * 8..) {
+            idct_block(blk, q, basis, max, out, stride);
         }
     }
     plane
@@ -1253,6 +1291,44 @@ fn upsample_map(out: usize, samples: usize, factor: usize, fmax: usize) -> Vec<(
             ((x0), (x0 + 1).min(last), (s - x0 as f32).clamp(0.0, 1.0))
         })
         .collect()
+}
+
+/// Whether a frame's components, with identifiers `ids`, hold YCbCr (or YCCK) to convert, as
+/// [`Decoded::components`] describes: three components unless the Adobe transform is 0 or the
+/// identifiers are `R`, `G`, `B`; four only with Adobe transform 2.
+fn is_ycc(ids: impl Iterator<Item = u8>, adobe_transform: Option<u8>) -> bool {
+    let ids: Vec<u8> = ids.collect();
+    match ids.len() {
+        3 => adobe_transform != Some(0) && ids != *b"RGB",
+        4 => adobe_transform == Some(2),
+        _ => false,
+    }
+}
+
+/// The output colour of one pixel's `nc` reconstructed samples (`0..=max`), in place.
+fn to_color(px: &mut [f32; 4], nc: usize, ycc: bool, max: f32) {
+    let center = (max + 1.0) / 2.0;
+    if ycc {
+        // YCbCr → RGB (JFIF / T.871); for YCCK the result is the inverted CMY of Adobe's
+        // convention, i.e. the ink amounts.
+        let (yy, cb, cr) = (px[0], px[1] - center, px[2] - center);
+        px[0] = yy + 1.402 * cr;
+        px[1] = yy - 0.344_136 * cb - 0.714_136 * cr;
+        px[2] = yy + 1.772 * cb;
+        if nc == 4 {
+            px[3] = max - px[3];
+        }
+    } else if nc == 4 {
+        // Adobe-style CMYK is stored inverted (max = no ink).
+        for p in px {
+            *p = max - *p;
+        }
+    }
+}
+
+/// An 8-bit output sample, clamped to `0..=255` (`p` is finite).
+fn to_u8(p: f32) -> u8 {
+    p.round() as u8
 }
 
 /// Turn the coefficients into interleaved output samples.
@@ -1272,12 +1348,7 @@ fn render(frame: Frame, tables: &Tables, adobe_transform: Option<u8>) -> Result<
     }
     let nc = planes.len();
     let sixteen = frame.precision > 8;
-    let rgb_ids = frame.comps.iter().map(|c| c.id).eq(*b"RGB");
-    let ycc = match nc {
-        3 => adobe_transform != Some(0) && !rgb_ids,
-        4 => adobe_transform == Some(2),
-        _ => false,
-    };
+    let ycc = is_ycc(frame.comps.iter().map(|c| c.id), adobe_transform);
     let (mut wide, mut narrow) = (Vec::new(), Vec::new());
     if sixteen {
         wide.reserve_exact(w * h * nc);
@@ -1285,7 +1356,6 @@ fn render(frame: Frame, tables: &Tables, adobe_transform: Option<u8>) -> Result<
         narrow.reserve_exact(w * h * nc);
     }
     let mut px = [0f32; 4];
-    let center = (max + 1.0) / 2.0;
     for y in 0..h {
         for x in 0..w {
             for (c, (plane, stride, xs, ys)) in planes.iter().enumerate() {
@@ -1299,28 +1369,13 @@ fn render(frame: Frame, tables: &Tables, adobe_transform: Option<u8>) -> Result<
                     *p = top + (bottom - top) * fy;
                 }
             }
-            if ycc {
-                // YCbCr → RGB (JFIF / T.871); for YCCK the result is the inverted CMY of Adobe's
-                // convention, i.e. the ink amounts.
-                let (yy, cb, cr) = (px[0], px[1] - center, px[2] - center);
-                px[0] = yy + 1.402 * cr;
-                px[1] = yy - 0.344_136 * cb - 0.714_136 * cr;
-                px[2] = yy + 1.772 * cb;
-                if nc == 4 {
-                    px[3] = max - px[3];
-                }
-            } else if nc == 4 {
-                // Adobe-style CMYK is stored inverted (max = no ink).
-                for p in &mut px {
-                    *p = max - *p;
-                }
-            }
+            to_color(&mut px, nc, ycc, max);
             for &p in px.iter().take(nc) {
                 let p = p.clamp(0.0, max);
                 if sixteen {
                     wide.push((p * 65535.0 / max).round() as u16);
                 } else {
-                    narrow.push(p.round() as u8);
+                    narrow.push(to_u8(p));
                 }
             }
         }
@@ -1343,6 +1398,9 @@ pub fn decode(bytes: &[u8], limits: &Limits, adobe_transform: Option<u8>) -> Res
     let (components, samples) = render(frame, &tables, adobe_transform)?;
     Ok(Decoded { width, height, components, samples, damaged })
 }
+
+mod bands;
+pub use bands::{Band, Bands, Reader};
 
 #[cfg(test)]
 mod tests;

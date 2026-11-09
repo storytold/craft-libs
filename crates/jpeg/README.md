@@ -2,6 +2,8 @@
 
 A clean-room JPEG decoder for the Craft apps, written from ITU-T T.81 (ISO/IEC 10918-1). It
 covers the processes that common Rust JPEG decoders skip: 12-bit samples and arithmetic coding.
+It also decodes the common sequential 8-bit files a band of rows at a time ([`Bands`](#decoding-in-bands)),
+for images too large to decode into one buffer.
 No `unsafe`, no panics on malformed input, and it builds for `wasm32-unknown-unknown`. The only
 dependency is `thiserror`.
 
@@ -97,6 +99,39 @@ fn use_craft_jpeg(bytes: &[u8]) -> bool {
 
 SOF11 (lossless) falls in that range and returns `Unsupported`.
 
+## Decoding in bands
+
+`Bands` decodes a sequential Huffman-coded (SOF0, SOF1) 8-bit file whose first scan holds every
+component, one line of MCUs at a time: a band is 8 rows times the largest vertical sampling
+factor. Its samples equal `decode`'s for the same rows (the same inverse transform, upsampling
+and colour conversion); only a few MCU lines are held at once. Other files return
+`Error::Unsupported`: decode them whole.
+
+```rust
+use craft_jpeg::{Bands, Limits};
+
+let mut limits = Limits::default();
+limits.max_pixels = 65_535 * 65_535; // the image is never held whole
+let bands = Bands::new(&bytes, &limits, adobe_transform)?;
+let mut reader = bands.reader();
+while let Some(band) = reader.next_band()? {
+    // band.y, band.rows, band.samples: interleaved like `Decoded::samples`
+}
+if reader.damaged() { /* warn: part of the image is missing */ }
+```
+
+- `limits.max_pixels` bounds the image; `limits.max_alloc` bounds one reader's buffers
+  (`Bands::reader_bytes`) and the upsampling maps, not the image.
+- **In parallel.** A band that starts a restart interval is a seek point once
+  `Bands::find_seek_points` has found the restart markers (one pass over the scan data; unless
+  every marker is there, in sequence, only band 0 is). Readers on separate threads can `seek` to
+  seek points and decode the bands up to the next one. Files with a restart interval at every
+  line of MCUs, as Photoshop writes them, decode on every core.
+- **Damaged data** leaves the rest of its restart interval at zero coefficients (mid grey) and
+  decoding resumes at the next restart marker; without restart intervals the rest of the scan
+  stays at zero, as in `decode`. `Reader::damaged` is set either way, and the samples don't
+  depend on where reading started. Data that fails in the first MCU of the image is an error.
+
 ## Boundaries
 
 - In scope: decoding the frames above into samples.
@@ -119,22 +154,33 @@ SOF11 (lossless) falls in that range and returns `Unsupported`.
     supplied at EOI) decodes undamaged and equal to its Huffman transcode.
   - `testorig.jpg` matches `zune-jpeg`, and `testorig12.jpg` matches libjpeg-turbo's 12-bit
     decode, within the float-against-integer IDCT difference (mean under 0.75, max 4).
+- `src/bands/tests.rs`: `Bands` against `decode`, sample for sample, over gray, YCbCr, CMYK and
+  YCCK streams from `jpeg-encoder` (4:4:4, 4:2:2, 4:2:0, 4:4:0; restart intervals of 1 and 7
+  MCUs and of one and two MCU lines) and over interleaved layouts from a test-only encoder
+  (factors of 3 and 4 across and down, four components), read in order and by seeking; against
+  `zune-jpeg`; and on damaged data, limits, and the files it refuses.
+- `tests/conformance.rs` also decodes the Huffman-coded 8-bit test images in bands.
 - `tests/mutation.rs`: a seeded mutation run (truncations, bit flips, byte and frame-header
   overwrites, deleted and repeated spans) over the test images and the fuzz seeds. Decoding must
-  not panic and must stay within small `Limits`.
+  not panic and must stay within small `Limits`. The band decoder gets the same mutations, and
+  wherever seek points survive one, reading from them must give the samples reading in order
+  does.
 
 `.github/workflows/jpeg.yml` runs fmt, clippy, the tests and a `wasm32-unknown-unknown` check on
 Linux.
 
 ### Fuzzing
 
-`fuzz/` is a cargo-fuzz crate outside the workspace, with one target, `decode`. Its seeds in
-`fuzz/corpus/decode` are the test images plus small SOF9 (with restarts), 12-bit SOF9, SOF10
-and 12-bit SOF1 streams. With nightly and `cargo install cargo-fuzz`:
+`fuzz/` is a cargo-fuzz crate outside the workspace, with two targets: `decode`, and `bands`,
+which also checks that reading from the seek points gives the samples reading in order does.
+The seeds in `fuzz/corpus/decode` are the test images plus small SOF9 (with restarts), 12-bit
+SOF9, SOF10 and 12-bit SOF1 streams; `bands` starts from them too. With nightly and
+`cargo install cargo-fuzz`:
 
 ```sh
 cd crates/jpeg/fuzz
 cargo +nightly fuzz run decode
+cargo +nightly fuzz run bands corpus/bands corpus/decode
 ```
 
 Running it adds the inputs it finds to `fuzz/corpus/decode`; commit only seeds that cover
