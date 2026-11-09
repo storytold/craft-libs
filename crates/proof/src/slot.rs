@@ -137,18 +137,28 @@ impl<D: Dictionary> DictSlot<D> {
     }
 
     fn load_installed(&self) -> D {
+        self.load_from(crate::hunspell::find(self.names), crate::data::PACKS)
+    }
+
+    /// Prefer the installed dictionary, then embedded data if the installed pair is absent or unreadable.
+    fn load_from(&self, installed: Option<(PathBuf, PathBuf)>, table: &[crate::packs::EmbeddedPack]) -> D {
         let name = self.name();
-        let Some((aff, dic)) = crate::hunspell::find(self.names) else {
-            if let Some(dictionary) = self.load_embedded(crate::data::PACKS) {
+        let Some((aff, dic)) = installed else {
+            if let Some(dictionary) = self.load_embedded(table) {
                 return dictionary;
             }
             log::info!("{} spelling: no Hunspell {name} dictionary available", self.english);
             return D::default();
         };
-        crate::hunspell::note_load(name, &dic, D::load(&aff, &dic)).unwrap_or_else(|e| {
-            log::warn!("{} spelling: {e}", self.english);
-            D::default()
-        })
+        let loaded = D::load(&aff, &dic);
+        if let Err(error) = &loaded {
+            log::warn!("{} spelling: {error}", self.english);
+            if let Some(dictionary) = self.load_embedded(table) {
+                return dictionary;
+            }
+        }
+        // A failed fallback must not erase the original installed-file diagnostic.
+        crate::hunspell::note_load(name, &dic, loaded).unwrap_or_default()
     }
 
     /// Try the selected embedded packs with the same aliases and parser as an installed dictionary.
@@ -158,7 +168,9 @@ impl<D: Dictionary> DictSlot<D> {
             crate::hunspell::clear_load_error(self.name());
         }
         for pack in packs {
-            let read = crate::hunspell::decode(pack.aff, pack.dic).and_then(|(aff, dic)| D::parse(&aff, &dic));
+            let read = crate::hunspell::decode(pack.aff, pack.dic)
+                .and_then(|(aff, dic)| D::parse(&aff, &dic))
+                .and_then(|dictionary| if dictionary.is_empty() { Err("dictionary contains no words".into()) } else { Ok(dictionary) });
             let source = PathBuf::from(format!("<embedded Language pack {}>", pack.locale));
             match crate::hunspell::note_load(self.name(), &source, read) {
                 Ok(dictionary) => return Some(dictionary),
@@ -279,6 +291,53 @@ mod tests {
         let _ = slot.keep(0, Arc::new(dictionary));
         assert!(slot.has_dictionary());
         assert!(crate::hunspell::load_error(slot.name()).is_none());
+    }
+
+    /// A parsed-empty exact pack cannot hide a usable regional/language fallback.
+    #[test]
+    fn builtin_parsed_empty_dictionary_tries_the_next_embedded_pack() {
+        crate::hold_dictionary_tests();
+        let slot: DictSlot<AffixDict> = DictSlot::new(&["pl_PL", "pl"], "Test");
+        let packs = [
+            crate::packs::EmbeddedPack { locale: "pl-pl", aff: b"SET UTF-8\n", dic: b"0\n", patterns: "", nonstandard: "" },
+            crate::packs::EmbeddedPack { locale: "pl", aff: b"", dic: b"1\nfallbackword\n", patterns: "", nonstandard: "" },
+        ];
+        assert!(slot.load_embedded(&packs[..1]).is_none());
+        assert!(crate::hunspell::load_error(slot.name()).unwrap().1.contains("no words"));
+        let dictionary = slot.load_embedded(&packs).unwrap();
+        assert!(dictionary.check("fallbackword") && !dictionary.check("wrongword"));
+        assert!(crate::hunspell::load_error(slot.name()).is_none());
+        let _ = slot.keep(0, Arc::new(dictionary));
+        assert!(slot.has_dictionary());
+    }
+
+    /// Missing or invalid native files use embedded data, while valid native files retain precedence.
+    #[test]
+    fn builtin_failed_native_load_tries_embedded_and_preserves_failure_diagnostics() {
+        crate::hold_dictionary_tests();
+        let root = std::env::temp_dir().join(format!("craft-proof-native-embedded-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let (aff, dic) = (root.join("pl_PL.aff"), root.join("pl_PL.dic"));
+        std::fs::write(&dic, "1\nnativeword\n").unwrap();
+        let packs = [crate::packs::EmbeddedPack { locale: "pl", aff: b"", dic: b"1\nembeddedword\n", patterns: "", nonstandard: "" }];
+        let slot: DictSlot<AffixDict> = DictSlot::new(&["pl_PL", "pl"], "Test");
+        for invalid in [None, Some("FLAG invalid\n")] {
+            if let Some(text) = invalid {
+                std::fs::write(&aff, text).unwrap();
+            }
+            let loaded = slot.load_from(Some((aff.clone(), dic.clone())), &packs);
+            assert!(loaded.check("embeddedword") && !loaded.check("nativeword"));
+            assert!(crate::hunspell::load_error(slot.name()).is_none());
+        }
+        assert!(slot.load_from(Some((aff.clone(), dic.clone())), &[]).is_empty());
+        let (source, error) = crate::hunspell::load_error(slot.name()).unwrap();
+        assert_eq!(source, dic);
+        assert!(!error.is_empty());
+        std::fs::write(&aff, "SET UTF-8\n").unwrap();
+        let loaded = slot.load_from(Some((aff, dic)), &packs);
+        assert!(loaded.check("nativeword") && !loaded.check("embeddedword"));
+        assert!(crate::hunspell::load_error(slot.name()).is_none());
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     /// A load that started before a dictionaries-folder change is not kept after its reload.
