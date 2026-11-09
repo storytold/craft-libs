@@ -63,6 +63,9 @@ names, which is archived; its README says development moved off GitHub.
 `824b0791a750f7b27b8edcbb6c6244d0e629875e`. That commit is not in the GitHub repository the manifest
 names, which is archived; its README says development moved off GitHub.
 
+`824b0791a750f7b27b8edcbb6c6244d0e629875e`. That commit is not in the GitHub repository the manifest
+names, which is archived; its README says development moved off GitHub.
+
 Every file here except this one, `SOURCE.json` and the files under Local changes is byte for byte the
 file in the `.crate` archive. `SOURCE.json` records the hash of the `.crate` download
 (`source_archive_sha256`) and, for every file kept, the hash in the package (`source_sha256`) and the
@@ -92,6 +95,7 @@ Every change here updates this table and `SOURCE.json` in the same commit. To ta
 release, unpack the crates.io package, carry these changes over, regenerate `SOURCE.json`, and run the
 tests below.
 | The floating-point ratio lemma assumes `fl(y_1 - y_0)` is finite and `y_0 < y_1`, and its proof bounds `fl(y_1 - y_0)` instead of `fl(y + y_0)`; the x-coordinate accuracy lemma takes `M` as a floating-point number and shows both assumptions hold | `Craft patch (ratio lemma)` | `docs/sweep.typ` | None (documentation only) |
+| `Segments::add_points` skips a point equal to the one before it, as the closed-polyline path does, so it adds no zero-length segment | `Craft patch (repeated points)` | `src/segments.rs` | `segments::tests::add_points_skips_repeated_points` |
 
 Every change here updates this table and `SOURCE.json` in the same commit.
 
