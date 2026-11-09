@@ -442,13 +442,15 @@ fn parse_pool(c: &mut Cursor<'_>, cp_count: u16, warnings: &mut Vec<String>) -> 
             }
         };
         let wide = matches!(entry, Const::Long(_) | Const::Double(_));
+        let next = i
+            .checked_add(if wide { 2 } else { 1 })
+            .filter(|next| *next <= cp_count)
+            .ok_or_else(|| FormatError::Malformed(format!("constant pool entry {i} has no reserved second slot")))?;
         pool.push(entry);
         if wide {
             pool.push(Const::Unusable);
-            i += 2;
-        } else {
-            i += 1;
         }
+        i = next;
     }
     if pool.len() > MAX_ITEMS {
         warnings.push("constant pool is unusually large".into());
