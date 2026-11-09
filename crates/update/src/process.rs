@@ -2,7 +2,8 @@
 
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, ExitStatus, Stdio};
+use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 /// A `Command` that won't flash a console window on Windows, and clears AppImage-injected
@@ -62,7 +63,15 @@ pub fn run_command(mut cmd: Command, program: &str, timeout: Duration) -> Result
     let mut child =
         cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().map_err(|e| format!("couldn't start {program} ({e})"))?;
     // Read both pipes while it runs, so a chatty helper can't block on a full one.
-    let (stdout, stderr) = (read_all(child.stdout.take()), read_all(child.stderr.take()));
+    let readers = read_all(child.stdout.take()).and_then(|stdout| Ok((stdout, read_all(child.stderr.take())?)));
+    let (stdout, stderr) = match readers {
+        Ok(readers) => readers,
+        Err(e) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(format!("couldn't read the output of {program} ({e})"));
+        }
+    };
     let start = Instant::now();
     let status = loop {
         match child.try_wait() {
@@ -93,8 +102,8 @@ pub fn run_command(mut cmd: Command, program: &str, timeout: Duration) -> Result
 }
 
 /// Captures at most 8 MB of a child's pipe and drains the rest on its own thread.
-fn read_all<R: std::io::Read + Send + 'static>(pipe: Option<R>) -> std::thread::JoinHandle<Vec<u8>> {
-    std::thread::spawn(move || {
+fn read_all<R: std::io::Read + Send + 'static>(pipe: Option<R>) -> std::io::Result<std::thread::JoinHandle<Vec<u8>>> {
+    std::thread::Builder::new().name("helper-output".into()).spawn(move || {
         let mut out = Vec::new();
         if let Some(mut pipe) = pipe {
             let _ = std::io::Read::read_to_end(&mut std::io::Read::take(&mut pipe, 8 << 20), &mut out);
@@ -106,13 +115,61 @@ fn read_all<R: std::io::Read + Send + 'static>(pipe: Option<R>) -> std::thread::
     })
 }
 
-/// Starts `cmd` without waiting for it, and reaps it when it exits.
+/// Starts `cmd` without waiting for it.
+///
+/// On Unix the process is reaped when it exits: a thread that waits for the process starts
+/// first and starts the process itself. When no thread can be started, the call returns an error
+/// and does not start the process. On Windows the process starts on the calling thread, and no
+/// thread waits for it.
 pub fn spawn_detached(mut cmd: Command) -> Result<(), String> {
-    let mut child = cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn().map_err(|e| format!("couldn't start it ({e})"))?;
-    std::thread::spawn(move || {
-        let _ = child.wait();
-    });
-    Ok(())
+    cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+    if cfg!(windows) {
+        return cmd.spawn().map(drop).map_err(|e| format!("couldn't start it ({e})"));
+    }
+    spawn_detached_with(
+        move || cmd.spawn(),
+        |wait| {
+            std::thread::Builder::new()
+                .name("reap-child".into())
+                .spawn(move || {
+                    let _ = wait();
+                })
+                .map(drop)
+        },
+    )
+}
+
+/// The thread that [`spawn_detached`] starts on Unix: `start_thread` starts a thread that runs
+/// the closure it is given, and that closure calls `spawn` and then waits for the process.
+/// `spawn` is called on that thread only, so when `start_thread` fails nothing is started.
+#[cfg_attr(windows, allow(dead_code))]
+fn spawn_detached_with(
+    spawn: impl FnOnce() -> std::io::Result<Child> + Send + 'static,
+    start_thread: impl FnOnce(Box<dyn FnOnce() -> Option<ExitStatus> + Send>) -> std::io::Result<()>,
+) -> Result<(), String> {
+    let (started, start_result) = mpsc::channel();
+    start_thread(Box::new(move || start_and_wait(spawn, &started))).map_err(|e| format!("couldn't start a thread to wait for it ({e})"))?;
+    match start_result.recv() {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(e)) => Err(format!("couldn't start it ({e})")),
+        Err(_) => Err("couldn't start it (its thread ended before starting it)".into()),
+    }
+}
+
+/// Calls `spawn`, sends whether that worked on `started`, and waits for the process to exit.
+/// Returns its exit status, or `None` when it didn't start or couldn't be waited for.
+#[cfg_attr(windows, allow(dead_code))]
+fn start_and_wait(spawn: impl FnOnce() -> std::io::Result<Child>, started: &mpsc::Sender<std::io::Result<()>>) -> Option<ExitStatus> {
+    match spawn() {
+        Ok(mut child) => {
+            let _ = started.send(Ok(()));
+            child.wait().ok()
+        }
+        Err(e) => {
+            let _ = started.send(Err(e));
+            None
+        }
+    }
 }
 
 /// Waits up to `timeout` for the process `pid` to exit, and says whether it has. A process that
@@ -139,6 +196,19 @@ pub fn flatpak_command() -> Command {
         cmd
     } else {
         command("flatpak")
+    }
+}
+
+/// [`flatpak_command`] in the C locale, for output this code reads: Flatpak translates its messages.
+pub fn flatpak_command_c() -> Command {
+    if in_sandbox() {
+        let mut cmd = command("flatpak-spawn");
+        cmd.args(["--host", "--env=LC_ALL=C", "flatpak"]);
+        cmd
+    } else {
+        let mut cmd = command("flatpak");
+        cmd.env("LC_ALL", "C");
+        cmd
     }
 }
 
@@ -211,17 +281,22 @@ fn opener(target: &std::ffi::OsStr) -> Result<Command, String> {
 pub fn open_url_with_fallback(primary_url: &str, fallback_url: &str) {
     let primary = primary_url.to_string();
     let fallback = fallback_url.to_string();
-    std::thread::spawn(move || {
+    let opener = std::thread::Builder::new().name("open-url".into()).spawn(move || {
         if !open_and_wait_success(&primary, Duration::from_millis(1500)) {
-            log::warn!("couldn't open {primary}; falling back to {fallback}");
+            log::warn!("couldn't open a link; opening its fallback");
             let _ = open(std::ffi::OsStr::new(&fallback));
         }
     });
+    if let Err(e) = opener {
+        log::warn!("couldn't start a thread to open a link ({e})");
+    }
 }
 
 /// Starts the default system opener for `target` and returns `true` unless it fails to start
 /// or exits in error within `timeout`. An opener still running after `timeout` counts as
-/// success and is reaped in the background.
+/// success, and the call waits for it to exit before returning. An opener whose state can't be
+/// read is stopped and waited for, and counts as a failure. [`open_url_with_fallback`] calls this
+/// on its own `open-url` thread.
 ///
 /// `explorer` exits with an error status even when it opens the target, so on Windows only a
 /// failure to start counts; the scheme check covers the rest.
@@ -229,7 +304,7 @@ fn open_and_wait_success(target: &str, timeout: Duration) -> bool {
     let mut cmd = match opener(std::ffi::OsStr::new(target)) {
         Ok(cmd) => cmd,
         Err(error) => {
-            log::warn!("couldn't resolve the system opener for {target}: {error}");
+            log::warn!("couldn't resolve the system opener: {error}");
             return false;
         }
     };
@@ -239,7 +314,7 @@ fn open_and_wait_success(target: &str, timeout: Duration) -> bool {
     let mut child = match cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn() {
         Ok(c) => c,
         Err(e) => {
-            log::warn!("couldn't start the opener for {target}: {e}");
+            log::warn!("couldn't start the system opener: {e}");
             return false;
         }
     };
@@ -249,12 +324,14 @@ fn open_and_wait_success(target: &str, timeout: Duration) -> bool {
             Ok(Some(status)) => return status.success(),
             Ok(None) if start.elapsed() < timeout => std::thread::sleep(Duration::from_millis(25)),
             Ok(None) => {
-                std::thread::spawn(move || {
-                    let _ = child.wait();
-                });
+                let _ = child.wait();
                 return true;
             }
-            Err(_) => return false,
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return false;
+            }
         }
     }
 }
@@ -405,6 +482,15 @@ mod tests {
 mod run_tests {
     use super::*;
 
+    #[test]
+    fn flatpak_output_this_code_reads_stays_in_english() {
+        if in_sandbox() {
+            return;
+        }
+        let cmd = flatpak_command_c();
+        assert!(cmd.get_envs().any(|(name, value)| name == "LC_ALL" && value == Some(std::ffi::OsStr::new("C"))));
+    }
+
     /// A shell command line, for the platform's shell.
     fn shell(script: &str) -> (&'static str, [&str; 2]) {
         if cfg!(windows) { ("cmd", ["/C", script]) } else { ("/bin/sh", ["-c", script]) }
@@ -448,6 +534,54 @@ mod run_tests {
         let err = run("yes", &[], Duration::from_millis(100)).unwrap_err();
         assert!(err.contains("didn't finish within"), "{err}");
         assert!(start.elapsed() < Duration::from_secs(5));
+    }
+
+    /// The thread that starts a detached process waits for it, so the process is reaped when it
+    /// exits: only a wait gives its exit status.
+    #[test]
+    fn a_detached_process_is_waited_for() {
+        let (program, args) = shell("exit 7");
+        let mut cmd = command(program);
+        cmd.args(args);
+        let (status_sent, status) = mpsc::channel();
+        let result = spawn_detached_with(
+            move || cmd.spawn(),
+            move |wait| {
+                std::thread::Builder::new()
+                    .spawn(move || {
+                        let _ = status_sent.send(wait());
+                    })
+                    .map(drop)
+            },
+        );
+        assert_eq!(result, Ok(()));
+        assert_eq!(status.recv().ok().flatten().and_then(|status| status.code()), Some(7), "the waiting thread gets the exit status");
+    }
+
+    /// When no thread can be started to wait for a process, the process is not started and the
+    /// call says why.
+    #[test]
+    fn no_process_starts_without_a_thread_to_wait_for_it() {
+        let (program, args) = shell("exit 0");
+        let mut cmd = command(program);
+        cmd.args(args);
+        let spawned = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let spawn_called = std::sync::Arc::clone(&spawned);
+        let result = spawn_detached_with(
+            move || {
+                spawn_called.store(true, std::sync::atomic::Ordering::SeqCst);
+                cmd.spawn()
+            },
+            |_wait| Err(std::io::Error::other("no threads")),
+        );
+        assert_eq!(result, Err("couldn't start a thread to wait for it (no threads)".into()));
+        assert!(!spawned.load(std::sync::atomic::Ordering::SeqCst), "the process was started");
+    }
+
+    #[test]
+    fn a_detached_program_that_cannot_start_says_so() {
+        let result = spawn_detached(command("craft-update-test-no-such-program"));
+        assert!(matches!(&result, Err(e) if e.starts_with("couldn't start it (")), "{result:?}");
     }
 
     #[test]

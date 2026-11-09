@@ -9,7 +9,12 @@ description = "System PDF print spooler for the Craft apps: CUPS and Windows"
 
 [dependencies]
 # Safe API; Win32 calls are isolated in this maintained MIT OR Apache-2.0 dependency.
-craft-winprint-gdi = { git = "https://github.com/MaxFairwinds/winprint.rs", rev = "260ba629f4e6130218f2f6b76e95f63b89c5b66a" }
+# Keep the public rgb re-export at main's GDI revision: a different Git rev gives
+# downstream GDI values a different Rust type identity even when the code is unchanged.
+# PDF loader updates below are independent of this public transport API. This rev adds
+# DEVMODE-carrying GDI jobs for label printers (storytold/winprint.rs#13); it moves to the
+# storytold merge commit, with winprint below, once that is merged.
+craft-winprint-gdi = { git = "https://github.com/MaxFairwinds/winprint.rs", rev = "d7a8d86927d1c933c859d95f713c5d5cdabf9a97" }
 
 [lints]
 workspace = true
@@ -23,11 +28,14 @@ log = "0.4"
 # and the job (Windows.Data.Pdf drawn with Direct2D into the XPS print API, options as a
 # PrintTicket) are safe wrappers over Win32 and WinRT (BSD-3-Clause). Its default `pdfium`
 # feature downloads PDFium at build time and is off. The maintained BSD-3-Clause fork
-# preserves terminal failures/cancellation and bounds the completion notification wait.
-# Pinned to an immutable revision; review before bumping.
+# preserves terminal failures/cancellation and bounds the completion notification wait, and
+# creates the Direct2D factory multi-threaded, since Windows.Data.Pdf draws on its own worker
+# threads (storytold/pdfcraft#5006). File-backed PDF loading avoids StorageFile access
+# denial without whole-job buffering; includes the #15 test cleanup and explicit WinRT
+# feature. Pinned to an immutable revision; review before bumping.
 # storytold/winprint.rs main plus PrintTicket::user_default and PrintCapabilities::fetch_for_ticket
 # (MaxFairwinds/winprint.rs feat/user-default-ticket; to move to storytold/winprint.rs once merged).
-winprint = { git = "https://github.com/MaxFairwinds/winprint.rs", rev = "260ba629f4e6130218f2f6b76e95f63b89c5b66a", default-features = false }
+winprint = { git = "https://github.com/MaxFairwinds/winprint.rs", rev = "d7a8d86927d1c933c859d95f713c5d5cdabf9a97", default-features = false }
 # GetDefaultPrinter (MIT).
 winsafe = { version = "0.0.29", default-features = false, features = ["winspool"] }
 # The job file's private folder.
