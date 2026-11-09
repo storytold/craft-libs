@@ -259,6 +259,10 @@ vendor/linesweeper with its upstream license files and two local patches. Its ma
 Neeman as author, and its LICENSE-MIT reads "Copyright (c) 2018 Raph Levien". See
 vendor/linesweeper/README.craft.md and vendor/linesweeper/SOURCE.json for provenance, the local
 changes and the files left out.
+vendor/linesweeper with its upstream license files and one local patch. Its manifest names Joe Neeman
+as author, and its LICENSE-MIT reads "Copyright (c) 2018 Raph Levien". See
+vendor/linesweeper/README.craft.md and vendor/linesweeper/SOURCE.json for provenance, the local
+change and the files left out.
 
 Platform lifecycle source provenance
 

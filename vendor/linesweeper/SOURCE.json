@@ -38,6 +38,7 @@
     "In `src/lib.rs`, `Error` has the `InconsistentWindingNumbers` variant, and `binary_op_with_eps` returns it from `Topology::try_contours`."
     "In `src/sweep/sweep_line.rs`, `Sweeper::next_line` handles a pair of segments at most once per sweep line for each pair of positions they hold and queues a repeat at the pair's next order change, so nearly coincident segments whose comparisons are not transitive no longer loop forever at one y.",
     "In `src/sweep/sweep_line.rs`, `Sweeper::handle_intersection` queues a delayed intersection only when its y is before the ends of both segments, so a delayed intersection at a segment's end no longer panics in `CurveOrder::entry_at`."
+    "In `src/lib.rs` and `src/topology.rs`, the `Topology` constructors that take Bézier paths return `Error` instead of `NonClosedPath`, and return `Error::NaN`, `Error::Infinity` or the new `Error::TooLarge` for a coordinate that is not finite or has a magnitude above `MAX_COORDINATE` (`f64::MAX / 16`), so `Topology::from_path` and `binary_op` no longer panic on cubics with coordinates above about `f64::MAX / 3`."
   ],
   "files": [
     { "path": ".cargo_vcs_info.json", "source_sha256": "47fba6a9dbdf445a5c97f783c9be62093035f9d5e5cdc2cf3216ad8259bcd8fc", "source_git_blob": null, "sha256": "47fba6a9dbdf445a5c97f783c9be62093035f9d5e5cdc2cf3216ad8259bcd8fc" },
@@ -84,6 +85,8 @@
     { "path": "src/lib.rs", "source_sha256": "761c153c3b5c449569ff85c571344b9252ea64f7f0b0424fb4819041b03d13c6", "source_git_blob": null, "sha256": "761c153c3b5c449569ff85c571344b9252ea64f7f0b0424fb4819041b03d13c6" },
     { "path": "src/geom.rs", "source_sha256": "9878ffa6d4a13fa2c9149741c137205ca01acb626a5b9f86a3db75cf91b63a08", "source_git_blob": null, "sha256": "9878ffa6d4a13fa2c9149741c137205ca01acb626a5b9f86a3db75cf91b63a08" },
     { "path": "src/lib.rs", "source_sha256": "761c153c3b5c449569ff85c571344b9252ea64f7f0b0424fb4819041b03d13c6", "source_git_blob": null, "sha256": "e690f4ac214403c97b37b8dafce322630c90622837cbe6172e878e1c0b15112c" },
+    { "path": "src/geom.rs", "source_sha256": "9878ffa6d4a13fa2c9149741c137205ca01acb626a5b9f86a3db75cf91b63a08", "source_git_blob": null, "sha256": "9878ffa6d4a13fa2c9149741c137205ca01acb626a5b9f86a3db75cf91b63a08" },
+    { "path": "src/lib.rs", "source_sha256": "761c153c3b5c449569ff85c571344b9252ea64f7f0b0424fb4819041b03d13c6", "source_git_blob": null, "sha256": "83ecdd22cf9f01ffc1bfa3ee70866cbf34963e3de5e5cdd0fbe1877398c14dc9" },
     { "path": "src/num.rs", "source_sha256": "39ff85da50c500ce91cf6dea81aedc0dcca1db5e7d0506696dde2da118e93a2a", "source_git_blob": null, "sha256": "39ff85da50c500ce91cf6dea81aedc0dcca1db5e7d0506696dde2da118e93a2a" },
     { "path": "src/order.rs", "source_sha256": "7e5b04eae8af134abb032e995f1d3c2ac473822923dfee8d463d9ade6ffeb596", "source_git_blob": null, "sha256": "8d2393e43000543c4ac3d47c2615e16733106af78ac67708ebf6941a039b9cdc" },
     { "path": "src/order.rs", "source_sha256": "7e5b04eae8af134abb032e995f1d3c2ac473822923dfee8d463d9ade6ffeb596", "source_git_blob": null, "sha256": "2cce12b9110a5812ce0da81088122d4d64e8852d41bad9139bd29ff9d4363a0f" },
@@ -122,6 +125,8 @@
     { "path": "src/treevec.rs", "source_sha256": "d88b9fbf02fa9f318560e1d483d465555f2b696ae12c00f8e4f5b71ea6779445", "source_git_blob": null, "sha256": "f37cde80ea90fcbfc5799abf855e8516cd00dbbd809ed25d11993e864c4516ad" },
     { "path": "src/sweep/sweep_line.rs", "source_sha256": "822b261f682911ea0c0370eaf17d9201a1e639b315359dcb6a3b877a229816e3", "source_git_blob": null, "sha256": "822b261f682911ea0c0370eaf17d9201a1e639b315359dcb6a3b877a229816e3" },
     { "path": "src/topology.rs", "source_sha256": "9c9b48bc3853884425127e2d64e8ed957ba0d27e1696e2c457e95282e52d6a5b", "source_git_blob": null, "sha256": "315162ea3b7c87abdce9419ee3b56278586f67efceb4440c328663e248d54945" },
+    { "path": "src/sweep/sweep_line.rs", "source_sha256": "822b261f682911ea0c0370eaf17d9201a1e639b315359dcb6a3b877a229816e3", "source_git_blob": null, "sha256": "822b261f682911ea0c0370eaf17d9201a1e639b315359dcb6a3b877a229816e3" },
+    { "path": "src/topology.rs", "source_sha256": "9c9b48bc3853884425127e2d64e8ed957ba0d27e1696e2c457e95282e52d6a5b", "source_git_blob": null, "sha256": "39457a6936a1636c2aaae288adf7de7d3ecc85a666f9163775044a7c6b6745d0" },
     { "path": "src/treevec.rs", "source_sha256": "d88b9fbf02fa9f318560e1d483d465555f2b696ae12c00f8e4f5b71ea6779445", "source_git_blob": null, "sha256": "d88b9fbf02fa9f318560e1d483d465555f2b696ae12c00f8e4f5b71ea6779445" },
     { "path": "src/typed_vec.rs", "source_sha256": "3e9a2675b8a40d8fc4df0575bd9d0d16b5604d18e9b78638dd5a612b28fc4c30", "source_git_blob": null, "sha256": "3e9a2675b8a40d8fc4df0575bd9d0d16b5604d18e9b78638dd5a612b28fc4c30" },
     { "path": "tests/fonts.rs", "source_sha256": "081604ebf560a19ff0427efd9a17eaaa0a3b46ad0bf58323fd6e21b6c0764400", "source_git_blob": null, "sha256": "081604ebf560a19ff0427efd9a17eaaa0a3b46ad0bf58323fd6e21b6c0764400" },

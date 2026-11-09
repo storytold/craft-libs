@@ -77,6 +77,37 @@ pub enum Error {
     /// The sweep gave winding numbers that disagree around a point, so the
     /// contours of the output set could not be walked.
     InconsistentWindingNumbers,
+    /// At least one of the inputs had a coordinate with a magnitude above [`MAX_COORDINATE`].
+    TooLarge,
+}
+
+/// The largest coordinate magnitude that [`Topology`] and [`binary_op`] accept.
+///
+/// The curve arithmetic overflows for coordinates above about `f64::MAX / 3`.
+pub const MAX_COORDINATE: f64 = f64::MAX / 16.0;
+
+/// Checks that every point of `path` is finite and at most [`MAX_COORDINATE`] in magnitude.
+pub(crate) fn check_coordinates(path: &kurbo::BezPath) -> Result<(), Error> {
+    for el in path.iter() {
+        let (p0, p1, p2) = match el {
+            kurbo::PathEl::MoveTo(p) | kurbo::PathEl::LineTo(p) => (p, p, p),
+            kurbo::PathEl::QuadTo(p0, p1) => (p0, p1, p1),
+            kurbo::PathEl::CurveTo(p0, p1, p2) => (p0, p1, p2),
+            kurbo::PathEl::ClosePath => continue,
+        };
+        for v in [p0.x, p0.y, p1.x, p1.y, p2.x, p2.y] {
+            if v.is_nan() {
+                return Err(Error::NaN);
+            }
+            if v.is_infinite() {
+                return Err(Error::Infinity);
+            }
+            if v.abs() > MAX_COORDINATE {
+                return Err(Error::TooLarge);
+            }
+        }
+    }
+    Ok(())
 }
 
 impl From<NonClosedPath> for Error {
@@ -94,6 +125,7 @@ impl std::fmt::Display for Error {
             Error::InconsistentWindingNumbers => {
                 write!(f, "the winding numbers disagree around a point")
             }
+            Error::TooLarge => write!(f, "one of the inputs had a coordinate that was too large"),
         }
     }
 }
@@ -347,5 +379,35 @@ mod tests {
                 .count(),
             4
         );
+    }
+
+    #[test]
+    fn coordinates_above_max_coordinate() {
+        let shape = |y: f64| {
+            let mut path = BezPath::new();
+            path.move_to((0.0, 0.0));
+            path.curve_to((y / 4.0, y), (y / 2.0, y), (y, y));
+            path.line_to((0.0, y));
+            path.close_path();
+            path
+        };
+
+        assert_eq!(check_coordinates(&shape(MAX_COORDINATE)), Ok(()));
+        let above = f64::from_bits(MAX_COORDINATE.to_bits() + 1);
+        assert_eq!(check_coordinates(&shape(above)), Err(Error::TooLarge));
+        assert_eq!(check_coordinates(&shape(-above)), Err(Error::TooLarge));
+        assert_eq!(
+            check_coordinates(&shape(f64::INFINITY)),
+            Err(Error::Infinity)
+        );
+        assert_eq!(check_coordinates(&shape(f64::NAN)), Err(Error::NaN));
+
+        for y in [6e307, 7e307, 1.7e308] {
+            let path = shape(y);
+            let top = Topology::<i32>::from_path(&path, y * f64::EPSILON * 64.0);
+            assert!(matches!(top, Err(Error::TooLarge)));
+            let op = binary_op(&path, &path, FillRule::NonZero, BinaryOp::Union);
+            assert!(matches!(op, Err(Error::TooLarge)));
+        }
     }
 }
