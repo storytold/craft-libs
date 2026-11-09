@@ -372,6 +372,46 @@ fn windows_lists_the_printers_the_system_knows() {
     assert!(printers.iter().filter(|p| p.default).count() <= 1, "{printers:?}");
 }
 
+/// Jobs for the paused test queue, cancelled: one before it was sent, then one held in each
+/// driver call before sending, its capability query and its DEVMODE conversion, as when the driver
+/// doesn't answer (a sleeping printer, storytold/wordcraft#5710). The cancel must win and the job
+/// stop once the driver answers. The first job's result, and whether the held ones behaved.
+#[cfg(windows)]
+fn cancelled_jobs(pdf: &[u8], job: &Job) -> (Result<String, Error>, Result<(), String>) {
+    let cancel = Cancel::new();
+    assert!(cancel.cancel());
+    let cancelled = spool::submit_cancellable(pdf, &Job { title: "cancelled".into(), ..job.clone() }, &mut |_, _| {}, &cancel);
+    let outcome =
+        [crate::windows::HELD_TITLE, crate::windows::HELD_CONVERSION_TITLE].iter().try_for_each(|title| cancelled_while_held(pdf, job, title));
+    (cancelled, outcome)
+}
+
+/// A job titled `title`, held in that driver call by the test hook, cancelled there and released.
+#[cfg(windows)]
+fn cancelled_while_held(pdf: &[u8], job: &Job, title: &str) -> Result<(), String> {
+    let (entered, reached_driver) = std::sync::mpsc::channel();
+    let (release, released) = std::sync::mpsc::channel();
+    *crate::windows::HELD_DRIVER.lock().unwrap() = Some((entered, released));
+    let held_cancel = Cancel::new();
+    let worker_cancel = held_cancel.clone();
+    let (held_pdf, held_job) = (pdf.to_vec(), Job { title: title.into(), ..job.clone() });
+    let held = std::thread::spawn(move || spool::submit_cancellable(&held_pdf, &held_job, &mut |_, _| {}, &worker_cancel));
+    let waited = reached_driver.recv_timeout(std::time::Duration::from_secs(60));
+    let cancelled_while_held = held_cancel.cancel();
+    let _ = release.send(());
+    let held = held.join().unwrap();
+    crate::windows::HELD_DRIVER.lock().unwrap().take();
+    if waited.is_err() {
+        Err(format!("{title}: the job never reached that driver call"))
+    } else if !cancelled_while_held {
+        Err(format!("{title}: a job waiting on its driver couldn't be cancelled"))
+    } else if held != Err(Error::Spool(CANCELLED_MESSAGE.into())) {
+        Err(format!("{title}: the job was not stopped once the driver answered: {held:?}"))
+    } else {
+        Ok(())
+    }
+}
+
 /// Run a PowerShell script for the Windows test's printer setup: its stdout, or everything it
 /// said when it failed (the test prints that as the skip reason). Any error stops the script and
 /// fails it: `-Command` otherwise exits 0 after a failed command, such as a parameter the cmdlet
@@ -417,7 +457,15 @@ fn windows_jobs_reach_the_spooler() {
         eprintln!("skipping the real print: the test printer could not be prepared: {why}");
         return;
     }
+    let queries = || crate::windows::CAPABILITY_QUERIES.with(std::cell::Cell::get);
+    let start = queries();
     let listed = spool::printers().into_iter().find(|p| p.name == name);
+    let probed = queries().saturating_sub(start);
+    // The list a Print dialog shows first: the same queue, named without asking its driver (a
+    // networked printer in power save can hold that query, storytold/wordcraft#5710).
+    let start = queries();
+    let queue = spool::printer_queues().into_iter().find(|p| p.name == name);
+    let unprobed = queries().saturating_sub(start);
     let duplex = spool::two_sided(name);
     let mixed = test_pdf(&[LETTER, LETTER_LANDSCAPE, LETTER], true);
     let job = Job { printer: Some(name.into()), title: "mixed.pdf".into(), ..Job::default() };
@@ -431,7 +479,7 @@ fn windows_jobs_reach_the_spooler() {
         observed.borrow_mut().push((done, total));
     });
     let mut duplex_progress = Vec::new();
-    let duplex_refused = if duplex == Some(false) {
+    let duplex_refused = if listed.as_ref().is_some_and(|p| p.two_sided == Some(false)) {
         Some(spool::submit_with_progress(&mixed, &Job { duplex: Some(Duplex::LongEdge), ..job.clone() }, &mut |done, total| {
             duplex_progress.push((done, total));
         }))
@@ -439,7 +487,7 @@ fn windows_jobs_reach_the_spooler() {
         None
     };
     // The Print dialog's default, an explicit one-sided request, on a queue with no duplex unit.
-    let simplex_only = duplex == Some(false);
+    let simplex_only = listed.as_ref().is_some_and(|p| p.two_sided == Some(false));
     let one_sided = simplex_only.then(|| spool::submit(&mixed, &Job { duplex: Some(Duplex::Off), title: "simplex".into(), ..job.clone() }));
     let tabloid = test_pdf(&[TABLOID, LETTER], false);
     let shrink = Job { printer: Some(name.into()), scaling: Scaling::ShrinkToFit, title: "shrink".into(), ..Job::default() };
@@ -448,6 +496,8 @@ fn windows_jobs_reach_the_spooler() {
     let exact_refused = spool::submit_with_progress(&tabloid, &Job { printer: Some(name.into()), ..Job::default() }, &mut |done, total| {
         refused_progress.push((done, total));
     });
+    // Two cancelled jobs, which the exact list of queued jobs below shows never reached it.
+    let (cancelled, cancelled_while_held) = cancelled_jobs(&mixed, &job);
     let queued = windows_powershell(
         "@(Get-PrintJob -PrinterName $name | Sort-Object Id | ForEach-Object { $_.DocumentName + ' ' + $_.TotalPages }) -join '|'",
         name,
@@ -458,8 +508,10 @@ fn windows_jobs_reach_the_spooler() {
         "Get-PrintJob -PrinterName $name | Remove-PrintJob; foreach ($i in 1..20) { if (-not (Get-PrintJob -PrinterName $name)) { break }; Start-Sleep -Milliseconds 250 }; Remove-Printer -Name $name; if (Get-Printer -Name $name -ErrorAction SilentlyContinue) { throw 'the printer is still there' }; exit 0",
         name,
     );
-    assert!(listed.as_ref().is_some_and(|p| p.two_sided.is_none()), "the new printer is listed without reading its driver: {listed:?}");
-    assert!(duplex.is_some(), "its duplex support is known when asked for: {duplex:?}");
+    check_capability_reads(&listed, duplex);
+    assert!(queue.as_ref().is_some_and(|p| p.two_sided.is_none()), "the new printer is listed, its duplex support unknown: {queue:?}");
+    assert!(probed > 0, "printers() asks each driver, so the count sees driver queries: {probed}");
+    assert_eq!(unprobed, 0, "printer_queues() asks no driver");
     assert_eq!(sent.as_deref(), Ok("spooled 3 sheet(s)"), "{sent:?}");
     if let Some(refused) = duplex_refused {
         assert!(matches!(refused, Err(Error::Spool(ref m)) if m.contains("simplex/duplex") && m.contains("nothing was sent")), "{refused:?}");
@@ -475,7 +527,15 @@ fn windows_jobs_reach_the_spooler() {
     let expected = if simplex_only { "mixed.pdf 3|simplex.pdf 3|shrink.pdf 2" } else { "mixed.pdf 3|shrink.pdf 2" };
     assert_eq!(queued.as_deref().map(str::trim), Ok(expected), "one job each, all sheets, in the paused queue: {queued:?}");
     assert!(cleaned.is_ok(), "the test printer is removed again: {cleaned:?}");
+    assert_eq!(cancelled, Err(Error::Spool(CANCELLED_MESSAGE.into())), "a cancelled job is refused, not queued");
+    assert_eq!(cancelled_while_held, Ok(()), "a job cancelled while its driver doesn't answer is never sent");
     // Asking for a printer that isn't there is an error, never a job on another one.
     let missing = spool::submit(&mixed, &Job { printer: Some(name.into()), ..Job::default() });
     assert!(matches!(missing, Err(Error::Spool(ref m)) if m.contains(name)), "{missing:?}");
+}
+
+#[cfg(windows)]
+fn check_capability_reads(listed: &Option<spool::Printer>, duplex: Option<bool>) {
+    assert!(listed.as_ref().is_some_and(|p| p.two_sided.is_some()), "the new printer is listed, its duplex support known: {listed:?}");
+    assert_eq!(duplex, listed.as_ref().unwrap().two_sided, "the selected read agrees with capability-aware discovery");
 }

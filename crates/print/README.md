@@ -37,7 +37,12 @@ opens Windows printer preferences and submits jobs with copies, collation, duple
 - **Windows:** jobs use in-process native APIs without a script runtime, including where
   App Control for Business or AppLocker enforce script rules. Printers
   come from `EnumPrinters` (local queues and `\\server\queue` connections) and the default from
-  `GetDefaultPrinter`. A job is drawn as vectors by the in-box `Windows.Data.Pdf` with Direct2D
+  `GetDefaultPrinter`. `printers` also reads each driver's PrintCapabilities to report two-sided
+  support, which can wait on the device (a networked printer in power save); `printer_queues`
+  lists the same queues without asking any driver, so a Print dialog's list never waits on a
+  device. A job asks the driver too before it is sent; `submit_cancellable` with a
+  `Cancel` token lets the app stop a job still waiting on it, and a cancelled job is never
+  sent. A job is drawn as vectors by the in-box `Windows.Data.Pdf` with Direct2D
   into the XPS print API (the `winprint` crate), and copies, collation, duplex, colour, paper,
   orientation and "no scaling" travel in a PrintTicket that the driver validates first; a
   driver that would change the paper, orientation or scaling is refused before anything is
@@ -80,7 +85,11 @@ each sheet is successfully added to the native print job. These are source PDF s
 copies and duplex; the events describe sheet processing, and do not confirm physical output.
 The callback runs on the thread calling submission, can capture non-`Send` state, and should
 return promptly. It is never retained. Keep waiting for the final `Result` even at full progress:
-the job can still fail. The API does not provide cancellation. CUPS reports no progress.
+the job can still fail. `submit_cancellable` can cancel a job only until it starts reaching
+the spooler (on Windows after craft-print's driver queries and preflight DEVMODE conversion;
+with CUPS before `lp` starts); a job already being sent completes. On Windows, winprint repeats
+the DEVMODE conversion after that boundary. Cancellation is already unavailable during this
+repeat, so a driver that stalls there can still block submission. CUPS reports no progress.
 UI callers must forward events to their own progress state; adopting the API alone does not
 change an application's UI.
 Receipts are backend messages, not portable job IDs. `Job::duplex = None` preserves the queue's
@@ -138,8 +147,8 @@ It runs formatting, Clippy and this crate's own tests on Windows, Linux and macO
 code changes, and supports manual runs. The Windows job executes the spooler regression above;
 physical printer fidelity still requires hardware verification.
 
-Discovery leaves `Printer::two_sided` unknown, so listing printers never waits on a driver.
-On Windows, `two_sided(printer)` reads one printer's driver duplex support (a two-sided option in
+`printer_queues()` leaves `Printer::two_sided` unknown. On Windows,
+`two_sided(printer)` reads one printer's driver duplex support (a two-sided option in
 its PrintCapabilities); elsewhere it returns `None`. Explicit simplex/duplex choices that the driver
 drops are refused before submission.
 

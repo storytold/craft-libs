@@ -72,7 +72,7 @@ pub fn worker() -> Option<bool> {
     let (sender, receiver) = std::sync::mpsc::channel();
     let spawned = std::thread::Builder::new().name("Windows printer query".into()).spawn(move || {
         let value = if operation.as_deref() == Some("list") {
-            let list: Vec<_> = crate::printers().into_iter().map(|printer| (printer.name, printer.default)).collect();
+            let list: Vec<_> = crate::printer_queues().into_iter().map(|printer| (printer.name, printer.default)).collect();
             serde_json::to_vec(&list)
         } else {
             serde_json::to_vec(&printer.as_deref().and_then(crate::two_sided))

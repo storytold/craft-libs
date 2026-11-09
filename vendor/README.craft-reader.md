@@ -113,6 +113,8 @@ Raw array iteration now ends safely if validation and object parsing disagree;
 standalone sign tokens retain the reader's zero tolerance.
 `Dict::entries` and a dictionary's `Debug` output skip an entry whose value does not parse,
 as in [Hayro #1501](https://github.com/LaurenzV/hayro/pull/1501).
+The `Debug` output of an array ends with its closing bracket, and that of a dictionary
+with entries ends with its closing brace; an empty dictionary prints as `Dict`.
 Byte transfer-function samples use rounded 8-bit values; failed or non-finite evaluations
 leave the sample unchanged. Historical source hashes remain in each `SOURCE.json`,
 alongside local hashes and the compatibility reference.
@@ -233,6 +235,9 @@ precision of the indices; an image without a palette keeps its own. Tests:
 PdfCraft's raster test `a_jp2_palette_keeps_its_colours_whatever_the_index_precision` is not
 ported: the unit tests show the same behavior.
 
+The JPX reader drops an unused `alloc::vec` import; its test macros already use
+`alloc::vec!`. The local source hash records this build-only cleanup.
+
 From [PdfCraft revision 0b670caf4a090e9d83a7f41a84b4cb2144a2d33e](https://github.com/storytold/pdfcraft/tree/0b670caf4a090e9d83a7f41a84b4cb2144a2d33e/vendor),
 unledgered and marked `PdfCraft patch` in the source: hayro-syntax #3438 (issue #3107), with
 its look-ahead bound from 01af6cba3. An inline image without a filter ends at the byte
@@ -301,12 +306,26 @@ and the digest that tells its profile from a document profile is still a hash of
 decoded profile bytes. PdfCraft's two raster tests are adapted in `tests/upstream_raster.rs`
 (`icc_profile_cache`).
 
+From [PdfCraft #3327](https://github.com/storytold/pdfcraft/pull/3327) (merged as
+b84121e978e13168caeaf86a63824111f16cdb99), hayro-interpret (35), marked `PdfCraft patch (35)` in
+the source: `path_as_rect` takes a five-element path as a rectangle only when its four points are
+distinct, each step from one to the next runs along a single axis, and the last returns to the
+first (with ClosePath, or a fourth line back to the exact start). Before, the length test also
+admitted one MoveTo and four LineTo, and the corner test only asked that every corner of the
+bounding box was visited, so a five-point open polyline whose ends reached the corners was drawn
+as that box (VectorCraft #2920: an open zigzag in an `.ai` file opened as a closed rectangle), and
+a clip of that shape was dropped. Tests: `context::path_as_rect_tests` and the `rectangles`
+module of `crates/pdf/tests/interpretation.rs`, which fails without the change.
+
 Local fixes on top of these ports, marked `Craft patch` or in the comments of the ported
 code: an inflated patch-mesh triangle is rebuilt with `Triangle::new`, so its stored dot
 products match its vertices (moving the points alone skewed barycentric coordinates by about
 5 %, in `covers` and in interpolation); a stencil image puts the fill alpha back itself, since
 `restore_state` doesn't when the saved-state bound skipped the save; and a resolved JP2
 palette decodes to 8 bits whatever `/BitsPerComponent` the dictionary gives.
+
+`hayro-syntax` compiles `filter::ccitt_max_rows` and its unit tests only with the
+`images` feature, matching `filter::ccitt`.
 
 This remains the patched 0.7 backend. It retains the existing Bradford Lab conversion,
 floating component precision and codec versions, rather than claiming full 0.8
@@ -328,6 +347,18 @@ The snapshot also preserves PdfCraft #1477 (WinAnsi Unicode fallback for TrueTyp
 fonts without Encoding) and #1499 (byte-aligned packed TIFF predictor rows).
 Synthetic tests cover 1/2/4/8-bit RGB rows and rendering, plus embedded TrueType
 text with absent or partial ToUnicode maps and explicit encoding precedence.
+
+## Cooperative opening cancellation
+
+The syntax reader also supports cooperative cancellation scoped to one open operation through
+`Cancellation` and `Pdf::new_with_password_limits_and_cancel`. Checks cover xref searches and
+recovery, object/byte scans, ordinary ASCIIHex/ASCII85/RunLength/LZW/Flate decoding and predictors,
+and initial page-tree construction. A cancellation request stays latched and prevents repair or
+partial success. The operation releases callback captures when it returns, including unwinding;
+deferred reads on a loaded PDF do not poll the completed operation. Existing loading errors and
+constructors, decode limits, and object sizes are preserved. Cryptographic and image-codec calls
+run to completion between checkpoints. Synthetic API and backend tests cover interruption inside
+the supported stages.
 
 ## Craft patches for the flattener
 

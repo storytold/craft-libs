@@ -111,6 +111,12 @@ impl Client {
         }
     }
 
+    /// A client that also allows plain `http://`, used only for the developer override of the
+    /// Language pack index (`CRAFT_LANGUAGE_PACK_INDEX`), which accepts only loopback hosts.
+    pub(crate) fn allowing_http(t: Timeouts) -> Self {
+        Self::build(t, false)
+    }
+
     /// Plain `http://` to a local test server, with `https://` prefixes mapped onto it.
     #[cfg(test)]
     pub(crate) fn for_tests(t: Timeouts, rewrite: Vec<(String, String)>) -> Self {
