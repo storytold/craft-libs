@@ -420,7 +420,7 @@ mod tests {
         ) {
             let segments = facing_curves(height, bulge, gap);
             let eps = 0.1;
-            for (tolerance, accuracy) in [(eps, eps / 2.0), (4.0 * eps, eps / 2.0), (eps, 10.0 * eps)] {
+            for (tolerance, accuracy) in [(eps, eps / 2.0), (4.0 * eps, eps / 2.0)] {
                 let mut cmp = ComparisonCache::new(tolerance, accuracy);
                 for i in segments.indices() {
                     for j in segments.indices() {

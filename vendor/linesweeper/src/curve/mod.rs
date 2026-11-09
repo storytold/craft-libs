@@ -1934,6 +1934,11 @@ fn order_from_precomputed_approx(
     let orig_y_mid1 = (cubic1.c.p0.y + cubic1.c.p3.y) / 2.0;
     let ep0 = cubic0.approx.shift_y(orig_y_mid0 - y_mid);
     let ep1 = cubic1.approx.shift_y(orig_y_mid1 - y_mid);
+    // An almost-horizontal approximation carries the end x values of its whole
+    // piece, which do not bound a shorter y-range.
+    if ep0.almost_horiz.is_some() || ep1.almost_horiz.is_some() {
+        return None;
+    }
     let tolerance = sure_tolerance.max(ish_tolerance);
     let signs = ep0.compare(&ep1, tolerance, tolerance, y0 - y_mid, y1 - y_mid);
     match signs.entries.as_slice() {
@@ -2830,7 +2835,7 @@ mod test {
     #[test]
     fn y_slop_keeps_metrics() {
         let metrics = Metrics {
-            entries: vec![MetricsEntry { end: 1.0, depth: 3 }],
+            entries: vec![MetricsEntry { end: 1.0, depth: 3 }].into(),
         };
         let order = CurveOrder {
             start: 0.0,
