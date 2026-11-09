@@ -29,6 +29,7 @@ repository = "https://github.com/jneem/linesweeper"
 arbitrary = ["dep:arbitrary"]
 debug-svg = ["dep:svg"]
 generators = []
+metrics = []
 slow-asserts = []
 
 [lib]
@@ -43,6 +44,7 @@ path = "examples/bus.rs"
 [[example]]
 name = "curve_metrics"
 path = "examples/curve_metrics.rs"
+required-features = ["metrics"]
 
 [[example]]
 name = "visualize_op"
