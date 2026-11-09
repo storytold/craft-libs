@@ -81,6 +81,9 @@ names, which is archived; its README says development moved off GitHub.
 `824b0791a750f7b27b8edcbb6c6244d0e629875e`. That commit is not in the GitHub repository the manifest
 names, which is archived; its README says development moved off GitHub.
 
+`824b0791a750f7b27b8edcbb6c6244d0e629875e`. That commit is not in the GitHub repository the manifest
+names, which is archived; its README says development moved off GitHub.
+
 Every file here except this one, `SOURCE.json` and the files under Local changes is byte for byte the
 file in the `.crate` archive. `SOURCE.json` records the hash of the `.crate` download
 (`source_archive_sha256`) and, for every file kept, the hash in the package (`source_sha256`) and the
@@ -108,6 +111,7 @@ Every change here updates this table and `SOURCE.json` in the same commit.
 | The `Ish` entry that `CurveOrder::push` inserts between opposite `Left` and `Right` intervals ends where the earlier interval ends, so it has zero height | `Craft patch (zero-height Ish)` | `src/curve/mod.rs` | `opposite_orders_get_a_zero_height_ish` |
 | `float_in_range` interpolates as `start * (1 - t) + end * t`, so a range such as `-1e308..1e308` gives a value in the range instead of NaN | `Craft patch (wide float range)` | `src/arbitrary.rs` | `float_in_range_handles_a_range_wider_than_f64_max` |
 | `OutputEvent`'s `Ord` breaks ties between events with the same horizontal range by segment and then by the other fields, so two events compare equal only when they are equal; the sweep line still sorts its events by horizontal range alone | `Craft patch (output event order)` | `src/sweep/output_event.rs`, `src/sweep/sweep_line.rs` | `events_on_different_segments_with_the_same_range_are_not_equal`, `events_differing_only_in_flags_are_not_equal` |
+| The `paperjs` test's image comparison counts a difference in alpha | `Craft patch (image distance alpha)` | `tests/paperjs.rs` | `pixmap_distance_counts_coverage` |
 
 Every change here updates this table and `SOURCE.json` in the same commit. To take a new linesweeper
 release, unpack the crates.io package, carry these changes over, regenerate `SOURCE.json`, and run the
@@ -185,12 +189,13 @@ that changes only files here does not start `pdf.yml`. Run the tests from this d
 `pdf.yml`'s path filter does not list this directory, so a pull request that changes only files here
 does not start `pdf.yml`. Run the tests from this directory:
 `curve_metrics` example's test. The `craft-prepress`
+`scripts/test-pdf-backends.sh` runs the package's unit, regression, `paperjs` and doc tests. The `craft-prepress`
 tests with the `flatten` feature run against this copy. `pdf.yml`'s path filter does not list this
 directory, so a pull request that changes only files here does not start `pdf.yml`. Run the tests from
 this directory:
 
 ```sh
-cargo test --locked --lib --test regression
+cargo test --locked --lib --test regression --test paperjs
 cargo test --locked --doc
 cargo test --locked --example visualize_op
 cargo check --locked --all-targets --all-features
@@ -202,5 +207,8 @@ cargo test --locked --example curve_metrics
 `winding-numbers` and `boolean_op` examples and the `linebender_logo` bench need them, or the
 omitted `examples/linebender.svg`, and do not compile here. The package's `Cargo.toml` registers
 these five targets; the copy's `Cargo.toml` does not, and their source files are kept unchanged.
+`winding-numbers` and `boolean_op` examples and the `linebender_logo` bench do not compile here. The
+package does not include the `boolean-test/data/` files that the `paperjs` test reads, and the test
+skips a file it cannot read, so here it runs only `pixmap_distance_counts_coverage`.
 
 Cargo writes to `target/` in this directory, which the root `.gitignore` excludes.
