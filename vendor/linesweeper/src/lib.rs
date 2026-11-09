@@ -357,6 +357,24 @@ mod tests {
         Topology::from_path(&path, 0.001).unwrap();
     }
 
+    // Craft patch (add_bez_path error).
+    #[test]
+    fn add_bez_path_error_leaves_segments_unchanged() {
+        let mut segments = Segments::default();
+        let open = BezPath::from_svg("M0,0 L10,0 L5,10 Z M20,0 L30,5 L25,10").unwrap();
+        assert!(segments.add_bez_path(&open).is_err());
+        assert_eq!(segments.len(), 0);
+        segments.check_invariants();
+
+        let square = BezPath::from_svg("M40,0 L50,0 L50,10 L40,10 Z").unwrap();
+        segments.add_bez_path(&square).unwrap();
+        segments.check_invariants();
+        assert_eq!(segments.len(), 4);
+        let mut entered: Vec<_> = segments.entrances().iter().map(|(_, idx)| *idx).collect();
+        entered.sort();
+        assert_eq!(entered, segments.indices().collect::<Vec<_>>());
+    }
+
     #[test]
     fn empty_paths() {
         let contours = binary_op(
