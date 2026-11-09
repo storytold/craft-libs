@@ -361,13 +361,6 @@ pub fn stacked_stars(count: usize, n: usize, bow: f64) -> BezPath {
 /// jitters the ends by up to a fifth of `d` and puts the crossings along the lines), at angles under 1e-10 where `n d` is
 /// small beside `l`. With `cross` false the right ends are at `+i d`, and no two cross.
 pub fn nearly_parallel_lines(n: usize, l: f64, dfac: f64, spread: bool, cross: bool) -> BezPath {
-    let hash01 = |i: u64, k: u64| {
-        let mut h = i.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ k.wrapping_mul(0xD1B5_4A32_D192_ED03);
-        h ^= h >> 31;
-        h = h.wrapping_mul(0xBF58_476D_1CE4_E5B9);
-        h ^= h >> 29;
-        (h >> 11) as f64 / (1u64 << 53) as f64
-    };
     let eps = (l * f64::EPSILON * 64.0).max(1e-6);
     let d = dfac * eps;
     let dx = l / (4.0 * n as f64);
@@ -634,7 +627,7 @@ pub fn stacked_segments(s: usize, m: usize) -> BezPath {
 /// `m` copies of one arc, one exactly on another, each its own closed subpath (closed by its chord).
 pub fn stacked_arcs(m: usize) -> BezPath {
     let mut bp = BezPath::new();
-    let c = kurbo::CubicBez::new((0.0, 0.0), (100.0, 150.0), (300.0, 150.0), (400.0, 0.0));
+    let c = the_arc();
     for _ in 0..m {
         bp.move_to(c.p0);
         bp.curve_to(c.p1, c.p2, c.p3);
