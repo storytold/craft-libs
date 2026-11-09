@@ -368,13 +368,13 @@ of the other one.
 #figure(
   pseudocode-list([
     + *for* $j = i$ down to $1$
-      + let $w^j$ be the smallest height of any event between $j$ and $i$
+      + let $w^j$ be the smallest height of any event between $j$ and $i+1$
 
-      + *if* $(alpha^j_(-,epsilon), alpha^i)$ cross by $w^j$
-        + choose $z$ before the crossing, such that $alpha^j approx_(z,epsilon) alpha^i$
-        + insert an intersection event for $(alpha^j, alpha^i)$ at $z$
+      + *if* $(alpha^j_(-,epsilon), alpha^(i+1))$ cross by $w^j$
+        + choose $z$ before the crossing, such that $alpha^j approx_(z,epsilon) alpha^(i+1)$
+        + insert an intersection event for $(alpha^j, alpha^(i+1))$ at $z$
 
-      + *if* $alpha^j_+ (z) <= alpha^i (z)$ for all $z in [y, w^j]$
+      + *if* $alpha^j_+ (z) <= alpha^(i+1) (z)$ for all $z in [y, w^j]$
         + *break*
   ]),
   caption: "Intersection scan to the left"

@@ -19,6 +19,10 @@ holds `upstream_revision`. `local_patches` describes each local change.
 | `ComparisonCache` skips the curve comparison for segments whose horizontal bounds are far apart | `Craft patch (far-apart comparison)` | `src/order.rs`, `src/curve/mod.rs` | `far_apart_order`, `far_apart_curves_compare_like_the_full_comparison`, `far_apart_steep_curves_never_reverse`, `far_apart_steep_curves_skip_the_full_comparison` |
 | `Metrics::entries` holds two entries inline, as a `SmallVec` | `Craft patch (inline metrics)` | `src/curve/mod.rs` | `cargo check --example curve_metrics` |
 
+- `docs/sweep.typ`: the intersection scan to the left compares each segment with `alpha^(i+1)`
+  instead of `alpha^i`. With `alpha^i`, its first pass compared `alpha^i` with itself, and the lemma
+  after it is stated for `alpha^(i+1)`.
+
 Every change here updates this table and `SOURCE.json` in the same commit. To take a new linesweeper
 release, unpack the crates.io package, carry these changes over, regenerate `SOURCE.json`, and run the
 tests below.
