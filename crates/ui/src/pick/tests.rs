@@ -1,6 +1,6 @@
 use egui::{Color32, Context};
-use egui_kittest::kittest::{NodeT as _, Queryable as _};
 use egui_kittest::Harness;
+use egui_kittest::kittest::{NodeT as _, Queryable as _};
 
 use super::*;
 
@@ -172,11 +172,13 @@ fn frozen_recent_holds_its_order_after_a_pick_until_the_menu_closes() {
     let frozen = FrozenRecent::new(Id::unique("frozen"));
     let before = names(&["A", "B"]);
     assert_eq!(frozen.order(&ctx, &before), before);
-    frozen.settle(&ctx, true, &before);
+    frozen.settle(&ctx, true, true, &before);
     let after = names(&["B", "A"]);
     assert_eq!(frozen.order(&ctx, &after), before, "a pick keeps the drawn order");
-    frozen.settle(&ctx, false, &before);
-    assert_eq!(frozen.order(&ctx, &after), after, "a frame without a pick thaws it");
+    frozen.settle(&ctx, true, false, &before);
+    assert_eq!(frozen.order(&ctx, &after), before, "idle frames do not thaw an open menu");
+    frozen.settle(&ctx, false, false, &after);
+    assert_eq!(frozen.order(&ctx, &after), after, "closing the menu thaws it for the next open");
 }
 
 #[test]
@@ -196,6 +198,35 @@ fn a_swatch_returns_a_click_and_notes_its_colour() {
     click(&mut h, egui::pos2(14.0, 14.0));
     h.run();
     assert!(h.state().0);
+}
+
+#[test]
+fn a_swatch_has_an_accessible_name_and_can_be_activated() {
+    use egui::accesskit::{Action, ActionRequest, TreeId};
+
+    let mut h = Harness::builder().with_size(egui::vec2(100.0, 60.0)).build_ui_state(
+        |ui, s: &mut (bool, Option<Id>)| {
+            set_current_pick(ui.ctx(), Some("FFC000".into()));
+            let response = swatch_response(ui, Color32::from_rgb(255, 192, 0), SWATCH);
+            s.0 |= response.clicked();
+            s.1 = Some(response.id);
+        },
+        (false, None),
+    );
+    h.run();
+
+    let swatch = h.get_by_label("Color #FFC000");
+    let node = swatch.accesskit_node();
+    assert_eq!(node.role(), egui::accesskit::Role::Button);
+    assert_eq!(node.toggled(), Some(egui::accesskit::Toggled::True));
+    h.event(egui::Event::AccessKitActionRequest(ActionRequest {
+        action: Action::Click,
+        target_tree: TreeId::ROOT,
+        target_node: h.state().1.expect("the swatch was drawn").accesskit_id(),
+        data: None,
+    }));
+    h.run();
+    assert!(h.state().0, "an accessibility click activates the swatch");
 }
 
 fn click(h: &mut Harness<'_, (bool, Option<String>)>, pos: egui::Pos2) {

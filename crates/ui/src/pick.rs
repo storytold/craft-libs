@@ -7,7 +7,7 @@
 
 use std::ops::Range;
 
-use egui::{vec2, Color32, Context, Id, Rect, Response, Sense, Stroke, StrokeKind, Ui};
+use egui::{Color32, Context, Id, Rect, Response, Sense, Stroke, StrokeKind, Ui, vec2};
 
 fn hover_key() -> Id {
     Id::unique("craft_ui_pick_hover")
@@ -64,18 +64,24 @@ pub fn hex(c: Color32) -> String {
 /// A colour swatch. An accent ring marks it when the current pick is its colour.
 /// Returns true when clicked.
 pub fn swatch(ui: &mut Ui, color: Color32, style: SwatchStyle) -> bool {
+    swatch_response(ui, color, style).clicked()
+}
+
+fn swatch_response(ui: &mut Ui, color: Color32, style: SwatchStyle) -> Response {
     let (r, resp) = ui.allocate_exact_size(vec2(SWATCH_SIZE, SWATCH_SIZE), Sense::click());
     let value = hex(color);
+    let selected = current_pick(ui.ctx()).is_some_and(|cur| cur.eq_ignore_ascii_case(&value));
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, ui.is_enabled(), selected, format!("Color #{value}")));
     ui.painter().rect_filled(r, 0.0, color);
     let (width, line) = if resp.hovered() { (1.5, style.accent) } else { (0.5, style.border) };
     ui.painter().rect_stroke(r, 0.0, Stroke::new(width, line), StrokeKind::Inside);
     if resp.hovered() {
         note_hover(ui.ctx(), value.clone());
     }
-    if current_pick(ui.ctx()).is_some_and(|cur| cur.eq_ignore_ascii_case(&value)) {
+    if selected {
         ui.painter().rect_stroke(r.expand(1.0), 0.0, Stroke::new(2.0, style.accent), StrokeKind::Outside);
     }
-    resp.on_hover_text(format!("#{value}")).clicked()
+    resp.on_hover_text(format!("#{value}"))
 }
 
 /// A row of a list: a dim section heading nothing picks, or an entry.
@@ -95,11 +101,7 @@ pub struct Sections<'a> {
 /// Rows of `n` entries under `recent` recent ones: the two headings and the recent
 /// entries come on top when there are any.
 pub fn section_rows(recent: usize, n: usize) -> usize {
-    if recent == 0 {
-        n
-    } else {
-        n.saturating_add(recent).saturating_add(2)
-    }
+    if recent == 0 { n } else { n.saturating_add(recent).saturating_add(2) }
 }
 
 /// Row `k`: the recent heading, the recent entries, the all heading, then `item(0..)`.
@@ -242,12 +244,13 @@ impl FrozenRecent {
         ctx.data(|d| d.get_temp(self.id)).unwrap_or_else(|| recent.to_vec())
     }
 
-    /// Freezes `drawn` after a pick and thaws it otherwise. Call once per frame, after the menu.
-    pub fn settle(self, ctx: &Context, picked: bool, drawn: &[String]) {
+    /// Freezes `drawn` after a pick while the menu stays open, and thaws when it closes.
+    /// Call once per frame, after the menu, passing whether it remains open.
+    pub fn settle(self, ctx: &Context, menu_open: bool, picked: bool, drawn: &[String]) {
         ctx.data_mut(|d| {
-            if picked {
+            if menu_open && picked {
                 d.insert_temp(self.id, drawn.to_vec());
-            } else {
+            } else if !menu_open {
                 d.remove::<Vec<String>>(self.id);
             }
         });
