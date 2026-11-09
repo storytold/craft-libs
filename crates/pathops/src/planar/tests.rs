@@ -435,7 +435,14 @@ fn shape_builder_at_its_cap() {
     let n = SHAPE_BUILDER_MAX_SEGMENTS - 8;
     let mut s = vec![Shape::new(wavy_ring(n, 200.0), FillRule::NonZero, 0)];
     // Closed paths alone are swept for the gaps they enclose.
+    crate::work::reset();
     assert_eq!(shape_builder(&s, false).regions.len(), 1, "the ring encloses no gap");
+    // Reads of the index stay in proportion to the ring: scanning the ring for each edge's source would read about `n` entries per edge
+    // (VectorCraft 4cf4ea3 counts these reads where it timed the call).
+    let most = 384 * n as u64;
+    let reads = || (crate::work::take(crate::work::Work::IndexCandidates) + crate::work::take(crate::work::Work::IndexNodes)) as u64;
+    let work = reads();
+    assert!(work <= most, "{work} reads");
     for k in 0..4 {
         let y = -60.0 + 40.0 * f64::from(k);
         s.push(line((-150.0, y), (150.0, y + 7.0), 1));
@@ -443,6 +450,8 @@ fn shape_builder_at_its_cap() {
     let BuilderArrangement { regions, lines, .. } = shape_builder(&s, false);
     assert!(regions.len() >= 5, "the ring cut in five bands at least (the waves make pockets)");
     assert!(lines.len() >= 12, "{}", lines.len());
+    let work = reads();
+    assert!(work <= most, "{work} reads");
     // Past the cap, only the filled areas count.
     s.push(line((0.0, 0.0), (1.0, 1.0), 2));
     let mut over = s[0].path.clone();
@@ -554,6 +563,21 @@ fn rect_index_reads_a_diagonal_hatch_only_near_the_point() {
 /// The index's memory stays linear in the item count: a segment is filed as the bounds of its
 /// pieces, and coincident segments (each long as the whole column) are filed under their bounds once
 /// the index holds its budget of rectangles, and are still all found, where their bounds hold the point.
+/// A lookup counts each entry it reads, an entry filed under several of the places it spans once for each (VectorCraft 500f74b: the
+/// count was made after the repeats were removed, so a line filed under several cells counted once): ten identical long lines, each
+/// filed in pieces, are ten found and more than ten read.
+#[test]
+fn rect_index_counts_each_entry_it_reads() {
+    let line = PathSeg::Line(kurbo::Line::new((0.0, 0.0), (1000.0, 0.0)));
+    let items: Vec<_> = (0..10).map(|k| (line.bounding_box(), (line, k))).collect();
+    let index = RectIndex::with_footprint(items, |r, (s, _), cell| segment_footprint(r, s, cell));
+    work::reset();
+    assert_eq!(index.at(Point::new(500.0, 0.0), 300.0).count(), 10);
+    let (candidates, nodes) = (work::take(Work::IndexCandidates), work::take(Work::IndexNodes));
+    // Each line is filed under 8 of the places along it (80 entries read in 8 nodes): all of them are counted, not each line once.
+    assert!(nodes >= 1 && candidates > 4 * 10, "{candidates} candidates read in {nodes} nodes");
+}
+
 #[test]
 fn rect_index_holds_a_bounded_number_of_references() {
     // Ten collinear horizontal lines, cut into pieces a tenth of their length.
@@ -1128,8 +1152,12 @@ fn many_lines_make_many_faces() {
             line((50.0 + 80.0 * t.cos(), 50.0 + 80.0 * t.sin()), (50.0 - 80.0 * (t + 1.1).cos(), 50.0 - 80.0 * (t + 1.1).sin()), 0)
         })
         .collect();
+    crate::work::reset();
     let (faces, _) = live_paint(&lines);
     assert!(faces.len() > 500, "{}", faces.len());
+    // Counted, not timed (VectorCraft 4cf4ea3): the reads of the index of the map's outlines.
+    let reads = crate::work::take(crate::work::Work::IndexCandidates) + crate::work::take(crate::work::Work::IndexNodes);
+    assert!(reads <= 256_000, "{reads} reads (226,485 measured)");
 }
 
 #[test]
