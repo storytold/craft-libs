@@ -210,7 +210,7 @@ work of each operation is bounded before it starts, in counts the tests assert o
   run along one line anywhere (arcs close and nearly parallel, or crossing at a shallow angle, whose pieces' cones
   overlap) counts nine, so 58 thousand such pairs overlapping are refused, whatever they do;
 - what is done with the output of a sweep is bounded as well: a Pathfinder Outline finds the junctions on each
-  segment among those inside the bounds of the segment (a grid of 300 and 300 open lines makes 90,000 of them,
+  segment among those inside the bounds of the segment (a grid of 100 and 100 open lines makes 10,000 of them,
   and every arch round it holds them all in its bounds with the curve nowhere near), and an inset checks
   each segment of its subpaths against the boundary of their fill. Each step is charged before it is made, to
   `MAX_SEARCH_WORK` (2^30 steps: a junction looked at is one, a block of 64 of them one, the nearest point of a
@@ -393,9 +393,10 @@ filter (an input they refuse is refused in milliseconds, without sweeping); the 
   entrances and exits, and the number of pieces the dry sweep counts are those of the topology, whose `compute_positions` has an entry for every
   output segment made (the coincident ones that are merged out afterwards too).
 - **The units.** The unit is the nanosecond of sweep that a count is worth on the machine the weights were measured on (one thread, a release build),
-  so that the budget reads as a time. The work of a sweep is the greater of the time it will take and the memory the topology will hold (also counted in
+  so that the budget reads as a time. The work of a sweep is the greater of the time it will take and the memory it will hold (also counted in
   nanoseconds: a piece of the topology is 400 to 700 bytes, and is worth 1.8 microseconds, so that the budget is 2.3 million pieces, 0.9 to 1.6 GB: the star holds
-  1.96 million and 0.9 GB, 50 stars stacked 2.3 million and 1.6 GB). The time is a
+  1.96 million and 0.9 GB, 50 stars stacked 2.3 million and 1.6 GB; and a pair of segments that start or end together, which the sweep's cache of comparisons
+  holds, is worth 1.1 microseconds more, below). The time is a
   sum of five terms, each priced for the kind of input that makes it large (weights fitted to about 180 inputs of 30 kinds):
 
   | Term | Counted as | Weight | What makes it large |
@@ -407,6 +408,19 @@ filter (an input they refuse is refused in milliseconds, without sweeping); the 
   | segments that start at one height | the square of those that start (and of those that end) at one height, wherever they are across | 3 ns | a row of dots on one line: their shapes put their pieces into the sweep line in one step |
 
   The star of 1,291 points counts 3.8e9 (91% of the budget), a hatch of 400 and 400 strokes 3.1e9.
+- **The cache of comparisons.** `linesweeper` keeps the order of each pair of segments it compares in a table that it never clears (two of them, `ComparisonCache` in its
+  `order.rs`), and segments that start or end together are compared with one another: a pie of k slices has 2k - 1 ends at its centre, which make (2k - 1)(k - 1) entries. An entry
+  takes about 650 bytes once the table has grown to hold it, and a table grows by doubling, so that the next one, past 3.7 million pairs, is more than a limit of 3 GB leaves:
+  2,200 pies of 30 slices (264,000 elements, 3.76 million pairs) aborted a process held to 3 GB, in the allocation of it after 8.6 s, and so did 2,250, and 5,200 pies of
+  20 slices (3.85 million; 5,000 took 2.5 GB). The first meter did not count them; it does: before the sweep, the
+  pairs of the starts and ends of the segments that lie within 8 tolerances of one another across and up (by cell where many lie together, and for few by a pass of the
+  points in order across, so that the vertices of a polygon of 262,000 sides are a pair each and no more) are charged 1.1 microseconds each, with the memory of the pieces, and 1.18 microseconds
+  each against the budget alone, so that the budget admits 3.56 million of them whatever else the sweep holds. 2,000 pies of 30 slices (3.4 million pairs), 4,500 of 20, 900 of 45 and 700 of 50 are made; 2,100 and
+  more of 30, 4,800 and more of 20, 1,000 of 45 and 800 of 50 are refused (in 0.03 to 1 s, before the sweep, and the two just over the edge, 2,080 of 30 and 4,800 of 20, by the dry sweep after 3 to 4 s). The most admitted needs, under `ulimit -v` (the meter on, the others lifted), a limit of 2.3 GB for pies
+  of 45 and of 50 slices (0.7 GB under 3 GB), 2.5 GB for pies of 30 (0.5 GB) and 2.8 GB for pies of 20 (0.2 GB: the 2,000 pies of 30 that were always made fix the edge, and 20-slice pies have more pieces
+  for their pairs). Past the edge a sweep that fits does not fit by much: 800 pies of 50 slices, 3.88 million pairs, need 2.9 GB, and 530 of 60 and 190 of 100 need 2.9 GB, which is why the pairs have a
+  limit of their own and not only their weight with the pieces'. The shapes that make entries by their crossings and not by their ends (a mesh, a grid of squares, rings: 4 to 11 for each piece, 1 or so for most shapes) make them in
+  proportion to their pieces and are held by the piece's weight and by the counts of crossings (a mesh of 180 cells, the most the default limits admit, makes 2.1 million, in 1.3 GB).
 - **The budget.** The work is held to `MAX_SWEEP_WORK` as it is counted: after each range of each sweep line the sweep stops, refusing the input
   as `TooComplex`, if the work counted so far is past it, so an input that is refused has cost about the budget of sweep at most. The counts made
   before the sweep refuse stacks of copies, fans and pies in 0.3 to 40 ms; the other holes were refused in 0.14 to 1.5 s, and in 3.8 to 5.1 s
@@ -417,10 +431,10 @@ filter (an input they refuse is refused in milliseconds, without sweeping); the 
   the level ones too: the length of the arena the sweep is made of, which an input cannot keep low whatever its shapes). Under that no input costs more than a few
   tenths of a second in the sweep: the worst of 22 shapes that cost most for their pieces (fans and stacks of copies, pies, pencils and zigzags of lines, stars whose every edge
   crosses every other, curves that run along one another), each at the largest size under the gate, takes 0.2 s or less in the sweep (a fan of 96 straight cubics) and up to 1.0 s in a planar map (a star of 92 bowed cubics), a test times them all. Past it every input
-  pays for the dry sweep, which costs about as much as the sweep it guards: `try_area` with the meter on against off, back to back (a release build, best of two, the star of 1,291 points 4.6 s and 9.1 s; a hatch of 400 strokes each way 3.1 and 5.8 s; 15,000 rings 1.5 and 2.4 s; 40,000 S-strokes 1.2 and 1.6 s; a circle of 100,000 cubics 0.37 and 0.49 s; a polygon of 262,000 sides 0.85 and 1.1 s; a mesh of 170 by 170 cells 2.3 and 4.2 s; 2,000 pies of 30 slices 4.2 and 7.8 s) is 1.3 to 2.0 times the time, in the same memory but for 7% more at the most. The counts before the sweep, for inputs of 250,000 segments, take 0.1 s of it.
+  pays for the dry sweep, which costs about as much as the sweep it guards: `try_area` with the meter on against off, back to back (a release build, best of two, the star of 1,291 points 4.6 s and 9.1 s; a hatch of 400 strokes each way 3.1 and 5.8 s; 15,000 rings 1.5 and 2.4 s; 40,000 S-strokes 1.2 and 1.6 s; a circle of 100,000 cubics 0.37 and 0.49 s; a polygon of 262,000 sides 0.85 and 1.1 s; a mesh of 170 by 170 cells 2.3 and 4.2 s; 2,000 pies of 30 slices 4.2 and 7.8 s) is 1.2 to 2.0 times the time (1.1 to 2.2 in the recheck of the commit before this one, over the rows of the table of costs), in the same memory but for 4% more at the most (2,000 pies of 30 slices 2.35 and 2.45 GB). The counts before the sweep, for inputs of 250,000 segments, take 0.1 s of it.
 - **What it bounds.** The time of the sweep and, with the 1.8 microseconds a piece, the memory of the topology (the star holds 1.96 million pieces and 0.9 GB; 2.3 million
   are the most that are admitted). The dry sweep's own memory is that of the sweep it is, up to 0.7 GB for the star and the zigzags at their refusal, and is freed before the
-  operation sweeps (2,000 pies of 30 slices hold 2.2 GB in it: Known limits). Every input a review found, and the two classes the scan named, are refused by the meter alone, with the other limits lifted (tests in `tests/it/meter.rs`;
+  operation sweeps (2,000 pies of 30 slices hold 2.4 GB in it, which the cache's term bounds). Every input a review found, and the two classes the scan named, are refused by the meter alone, with the other limits lifted (tests in `tests/it/meter.rs`;
   the table of costs gives the times).
 
 What it does not bound is in Known limits: a step of the sweep is not interrupted, the weights are a fit (near the budget the time is 0.4 to 1.4 of the work, and far under
@@ -462,7 +476,7 @@ one of 408 or more is `TooComplex`. Strokes that are curves count more than line
 to nine times, a line and a curve three), so a hatch of curves is refused at fewer. A boolean operation of more
 than a few thousand inputs, most of them empty, is `TooComplex` past `MASK_WORK`.
 
-Nine more bounds refuse input a drawing can hold, none of it common: a polygon of more than 1,291 edges that cross nearly every other (a star of 1,293 points, joined to the one nearly opposite) by `MAX_CROSSED_WORK`, more than a million places where segments cross, as in 53 stars of 201 points stacked (or 20 of bowed cubics) by `MAX_REAL_CROSSINGS`, a grid of 300 and 300 open lines under 200 arches whose bounds hold it (an Outline) by `MAX_SEARCH_WORK`, a pie of more than 256 slices (or any
+Nine more bounds refuse input a drawing can hold, none of it common: a polygon of more than 1,291 edges that cross nearly every other (a star of 1,293 points, joined to the one nearly opposite) by `MAX_CROSSED_WORK`, more than a million places where segments cross, as in 53 stars of 201 points stacked (or 20 of bowed cubics) by `MAX_REAL_CROSSINGS`, a grid of 300 and 300 open lines under 100 arches whose bounds hold it (an Outline: by the counts of crossings, in 18 ms; 200 arches, 41 ms), a pie of more than 256 slices (or any
 more than 512 segment ends at one point; a fan of triangles has two at the point for each, so 257 of them) by `MAX_ENDS_AT_A_POINT`, four pies of 256 slices on a diagonal (the work of the ends summed over the points) by `MAX_ENDS_WORK`, 257 lines
 through one point by `MAX_CROSSING_WORK`, shapes nested 2,896 deep, or 202 deep and crossed by 202 bars, by
 `MAX_COVERAGE_ENTRIES`, Merge, Divide, Trim or Crop of a fan of 209 or more shapes at a point beside 40,000
@@ -470,16 +484,16 @@ other squares by `MAX_PASS_WORK`, and the planar map of thousands of contours ne
 rectangles a thousand times as tall as they are wide) by `MAX_FILL_WORK`. Each is a worst case measured in
 seconds or in half a gigabyte (the pie of 256 takes 0.5 to 0.9 s, 256 lines through a point 1.1 s, 2,895 nested
 squares 0.2 s and 550 MB, 3,300 nested rectangles in one shape 0.75 s, the star of 1,291 4.3 s, 52 stars of 201 points 3.2 s
-and 1.6 GB, 19 of bowed cubics 2.6 s, the Outline of the grid
-under 100 arches 5.2 s), so an app that can wait or has the memory raises it in `Limits`.
+and 1.6 GB, 19 of bowed cubics 2.6 s, the Outline of 100 and 100 lines
+under 100 arches 1.4 s), so an app that can wait or has the memory raises it in `Limits`.
 
 The metered sweep (`MAX_SWEEP_WORK`) is a worst case as well, a fit to the time of the sweep and to the memory of its pieces, and
 refuses some input that would finish in a few seconds: pencils of more than about 240 lines through one point (256, which took 0.7 s),
 arc fans of 200 pieces (2.2 s) and 200 windows of an arc that share a tenth of it (1.8 s), 180 small squares a unit in the last place
-apart (3.0 s; 150 are made in 1.3 s), 51 stacked stars of 201 points (52 took 3.2 s), and pencils and pies whose apexes were moved a
+apart (3.0 s; 150 are made in 1.3 s), 51 stacked stars of 201 points (52 took 3.2 s), 2,100 pies of 30 slices and 4,800 of 20 (their cache of comparisons: 3.6 million pairs that start or end together; they took 4.0 s and 2.4 GB, and 4.0 s and 2.5 GB, with the meter off), and pencils and pies whose apexes were moved a
 few tolerances, past 2.3 million pieces (200 lines moved by 10 tolerances took 0.6 s and 0.8 GB, a pie of 256 slices moved by 10, 1.4 s
 and 1.1 GB). A planar map (`shape_builder`, `live_paint`, Divide with an open path, an Outline) is built for a quarter of the pieces a
-sweep is: not for a star of 751 points (the shape builder of 801 aborted under a limit of 3 GB) or a hatch of 300 strokes each way
+sweep is: not for a star of 711 points (the shape builder of 801 aborted under a limit of 3 GB) or a hatch of 300 strokes each way
 (9 s and 1.3 GB of map before the fill limit refused it). `Limits::sweep_work` is the knob, and `usize::MAX` leaves the meter off.
 
 The element limit refuses a drawing of more than 524,288 elements in one operation (a traced image of half a
@@ -513,23 +527,30 @@ or so, measured once in a release build:
 - The metered sweep cannot stop a step of the sweep. What a step did is counted when it is over: n lines through exactly one point
   cross in one step, and that step took 1.4 s of the 3 to 4 s the sweep of 400 of them took. What starts at one height is counted from
   the segments before the sweep (a stack of copies is a dozen steps and nine seconds), and the counts before the sweep price lines
-  through one point exactly; curves through one point exactly are priced by neither before their step is made.
+  through one point exactly; curves through one point exactly are priced by neither before their step is made. With the counts before the sweep
+  lifted (`real_crossings`, `crossed_work` and the rest), 600 closed loops of two cubics through one point exactly (1,200 cubics, `scurves`) are
+  refused by the meter only after 33 s and 1.0 GB, and 800 (1,600 cubics) after 77 s and 1.9 GB (400 take 7.2 s and 0.5 GB, 300 3.8 s): the step in which they cross is
+  made before it is counted. By default the counts of crossings refuse them, in 1 to 20 ms.
 - The weights of the metered sweep are a fit to about 180 inputs of 30 kinds, on one machine, under a load of 5 to 25: near the
   budget the time of the operation is 0.4 to 1.4 of the work for the kinds measured (0.4 for an arc fan of 150 pieces, 1.4 for six
   stacks of 128 copies, which take 1.1 times the star, the most the meter admits of the kinds measured), the work is far over the
   time where the pieces are many and cheap (a pie of 256 slices whose apexes were moved by 10 tolerances took 1.4 s and 1.1 GB, which
   the 2.3 million pieces hold, not the time) and where the counts are tuned to refuse a stack of copies (pencils of 256 lines near
   one point, 0.7 s, are refused; 200 are made), and under the time for stacked pies of 4 and 5 slices of 256 (5.3 s, 1.2 times the
-  star; the counts before the sweep refuse them) and for pies of 30 slices (2,000: 3.6 s for a work of 0.34e9, 8% of the budget).
-  The false refusals it makes are in "Ordinary input the defaults refuse". The sweep's comparison cache is not counted: 2,000 pies of
-  30 slices hold 2.2 GB in the dry sweep, as in the sweep after it.
+  star; the counts before the sweep refuse them). The work of pies of 30 slices is far over their time: 2,000 took 3.6 s of sweep (a time of 0.34e9)
+  for a work of 4.1e9, 97% of the budget, which is the cache of comparisons they fill (2.4 GB).
+  The false refusals it makes are in "Ordinary input the defaults refuse". The sweep's comparison cache is counted by the pairs of
+  segments that start or end together, and not by the comparisons the sweep makes: a shape whose segments cross many others compares each with those it meets (a mesh of 100 cells
+  made 635,000 entries for 60,000 pieces, a grid of 100 squares 240,000 for 40,000, 15,000 rings 490,000 for 120,000), which the weight of a piece covers and the counts of crossings bound
+  (a mesh of 180 cells, the most the defaults admit, makes 2.1 million entries in 1.3 GB; 190 is refused), but no input is known that reaches the table's 3.7 million past them with fewer than the 3.56 million
+  pairs that start or end together. The table's step is a cliff and the edge is set under it: the pies that aborted had 3.76 million pairs, 3.7 million (5,000 of 20) were made under the limit (RSS 2.5 GB), and the budget admits 3.56 million, 4% fewer than the most that was made.
 - What follows the sweep is not metered but for the planar map. The operations on the arrangement take a multiple of the sweep that
   is linear in its pieces (Divide and Merge of the star of 1,291 points 14.7 and 13.2 s, three times the 4.5 s of its area; the
   contour pass after the sweep takes up to 2.6 times the sweep for stacks of copies: six stacks of 128, 4.9 s for 1.9 s). A planar map
   (`live_paint`, `shape_builder`, Divide with an open path, an Outline's) takes 6 to 16 microseconds and 1 to 4.4 kilobytes for each
   piece, 8 to 15 times the sweep (the shape builder of a star of 501 points took 4.7 s and 1.3 GB, of 801 aborted under a limit of 3 GB,
-  of a hatch of 100, 200 and 300 strokes 1.3, 3.9 and 9.4 s), so a map is built for a quarter of the pieces a sweep is: 583,000, which
-  a star of 701 points takes 11 s and 2.5 GB to map (751 and over are refused). The searches of an Outline and the fills of a map are
+  of a hatch of 100, 200 and 300 strokes 1.3, 3.9 and 9.4 s), so a map is built for a quarter of the pieces a sweep is: 583,000: a star of 705 points
+  takes 10 to 12 s and 2.6 GB to map, 0.4 GB under a limit of 3 GB, and 711 and more are refused. The searches of an Outline and the fills of a map are
   bounded by their own limits as they are made, and not from the counts of the dry sweep: a bound from the pieces and the junctions
   (every curve times every junction) would refuse drawings of thousands of curves that take milliseconds.
 - Curves that pass through one point with no end there are not counted, only lines are (and the event limit
@@ -539,9 +560,20 @@ or so, measured once in a release build:
   square of their number there, not the cube. Lines that pass through that point are counted, as if the curves
   were not there.
 - A Pathfinder Outline refuses after the planar map is built: `MAX_SEARCH_WORK` counts the searches for the junctions
-  on each edge once the map exists, so the refusal comes after the time the map took (about 8 s for 200 arches
-  round a grid of 300 and 300 open lines, which the dry sweep of the map's inputs admits: a work of 1.0e9 against the quarter of
-  its budget, 1.05e9, that a map is held to).
+  on each edge once the map exists, so its refusal comes after the time the map took. The grid of 300 and 300 open lines under arches that was
+  measured for it (the bounds of every arch hold all 90,000 junctions, with the curve nowhere near) does not reach it by default: the counts of
+  crossings (`MAX_CROSSED_WORK` and `MAX_REAL_CROSSINGS`, each alone) refuse it first, with 100 arches in 18 ms and with 200 in 41 ms, and 100 and 100
+  lines under 100 arches are made, in 1.4 s. With those two lifted, the meter makes the Outline of 300 and 300 lines under 100 arches (7.7 s, a work under the
+  quarter of its budget that a map is held to) and refuses 200 arches in 0.12 s, before the map (the meter alone refuses them in 3 ms with every other limit lifted); the search limit alone refuses 200 after 9.6 s. No input that
+  the other limits admit is known to reach `MAX_SEARCH_WORK` by default.
+- In a build with debug assertions `linesweeper` checks the order it gives two curves against their positions where it changes (`curve/mod.rs`, lines 1302 and
+  1305), and the check fails for some curves whose outline is far from them. The outline stroke of an open run of two arcs (each of chord 300 and bow 100), taken
+  1e7 on either side (a width of 2e7), fails it for 1 of 700 such runs laid out on a grid (the one at (3,000, 4,000)), and the same strokes at 3e7, 1e8, 1e9 and 1e10 on
+  either side fail it for 13, 259, 327 and 275 of the 700. The crate catches the panic, so a debug build (`cargo test` too) answers `Degenerate` for them. A release build makes no
+  check and goes on, and made the same outline for every one of the 700 runs at every distance from 1e6 to 1e10: no panic, 11 ms a run at the most, areas within 1e-9 of one
+  another up to 1e8 on either side, 4e-9 at 1e9 and 3e-6 at 1e10 (the rounding of an area that large). So the answer of a release build is the right one where it can be checked, and a
+  debug build refuses what it would have made; a test pins both (`tests/it/far_out.rs`). No cheap check before or after the sweep sees the condition (it is the sweep's own comparison
+  of two curves), so a release build is not guarded.
 - The estimate of the entries of the windings counts one crossing for each pair of curves when an eighth of the
   one lies within the bounds of an eighth of the other, where two cubics may cross up to nine times, so curves
   that cross each other several times can hold more than the limit's half a gigabyte. It was at least the
@@ -601,7 +633,13 @@ round, so there may be others.
 ## Costs
 
 Within the limits an operation can still take seconds and about a gigabyte, so run the heavy ones off a UI
-thread and ask first with the `try_` forms. Measured on one machine, in a release build:
+thread and ask first with the `try_` forms. Measured on one machine, in a release build, **before the metered sweep**: for an input of more
+than 192 monotone pieces the meter now runs a dry sweep first, so that with it on (the default) an operation takes 1.1 to 2.2 times the time
+below (1.2 to 2.0 over 15 of these rows, re-measured with it on and off back to back: a circle of 100,000 cubics 0.45 and 0.58 s, the star of 1,291
+points 5.9 and 10.7 s, 50 stars 3.6 and 6.7 s, a hatch of 400 3.8 and 7.2 s, 2,000 pies of 30 slices 5.3 and 9.8 s, a mesh of 170 cells 3.0 and 5.2 s),
+in the same memory but for 4% more at the most, and an input it refuses is refused in the time of the dry sweep (up to 4 s, for the budget is the
+most of sweep it makes). The star of 1,291 points, the measure of the budget, took 4.3 s in this table; with the meter on and off back to back, under
+a load of 15, it took 10.7 and 5.9 s.
 
 | Operation | Time |
 |---|---|
@@ -626,7 +664,7 @@ thread and ask first with the `try_` forms. Measured on one machine, in a releas
 | `try_area` of 50 stars of 201 points, stacked so that their heights do not overlap (the most the metered sweep admits: 2.3 million pieces; 52, the limit on their crossings, took 3.2 s and 1.6 GB without it) / of 19 stars of bowed cubics (the most the bound admits) | 3.1 s, 1.6 GB (5.6 s with it) / 2.6 s, 0.5 GB |
 | `try_area` of 53 / 206 such stars of lines, of 20 / 100 of bowed cubics | refused in 0.02 / 0.08 s, in 0.02 / 0.09 s |
 | `pathfinder(Outline, ..)` of 100 and 100 open lines across one another (one shape; 10,000 junctions) / of 300 and 300 (90,000) | 0.19 s / 2.8 s, 430 MB |
-| the same 100 / 300 lines with 100 arches round them whose bounds hold every junction | 0.9 s / 5.2 s (a search apiece: 1 and 9 million) |
+| the same 100 lines with 100 arches round them whose bounds hold every junction (a search apiece: 1 million) / 300 with 100 and with 200 arches | 1.4 s / refused in 18 and 41 ms by the counts of crossings (the 90,000 junctions are 9 million searches) |
 | `try_area` of 256 thin triangles whose long edges cross at one point (the limit on lines crossing at one point) | 1.1 s |
 | `try_area` of 400 / 450 lenses whose two cubics each pass through one point (curves through a point are not counted: Known limits) | 3.3 / 4.1 s |
 | `pathfinder(Exclude, ..)` of 200 squares nested and crossed by 200 bars (the estimate of the entries is at the limit) | 0.2 s, 430 MB |

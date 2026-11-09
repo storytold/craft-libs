@@ -172,7 +172,18 @@ fn memory_cases() -> Vec<(&'static str, BezPath)> {
         ("400 windows sharing a tenth", windows_sharing_a_tenth(400)),
         ("220 small squares moved by tenths of a tolerance", polygons_a_few_tolerances_apart(4, 220, 0.15, 1e-4)),
         ("240 small triangles an ulp apart", polygons_an_ulp_apart(3, 240, 1e-4)),
+        // The sweep keeps the order of each pair of segments it compares, and the table of them that doubles past 3.7 million pairs did
+        // not fit: these aborted a process held to 3 GB, in the allocation of it, at 2.34 to 2.37 GB.
+        ("2,200 pies of 30 slices", stacked_pies(2_200, 30)),
+        ("2,250 pies of 30 slices", stacked_pies(2_250, 30)),
+        ("5,000 pies of 20 slices", stacked_pies(5_000, 20)),
+        ("6,000 pies of 20 slices", stacked_pies(6_000, 20)),
     ]
+}
+
+/// The cases a child process makes under the same limit: the most the meter admits of the pies that fill the cache.
+fn admitted_memory_cases() -> Vec<(&'static str, BezPath)> {
+    vec![("2,000 pies of 30 slices", stacked_pies(2_000, 30)), ("4,500 pies of 20 slices", stacked_pies(4_500, 20))]
 }
 
 /// A child of [`a_refusal_holds_memory_under_a_limit_of_three_gigabytes`]: it runs the case named by the environment, and says what it came to.
@@ -180,7 +191,7 @@ fn memory_cases() -> Vec<(&'static str, BezPath)> {
 #[test]
 fn child_case() {
     let Ok(name) = std::env::var("PATHOPS_METER_CASE") else { return };
-    let (_, path) = memory_cases().into_iter().find(|(n, _)| *n == name).expect("a case of the list");
+    let (_, path) = memory_cases().into_iter().chain(admitted_memory_cases()).find(|(n, _)| *n == name).expect("a case of the list");
     let result = with_limits(pricing_off(), || try_area(&path, NZ).map(|_| ()));
     println!("CASE-RESULT {name}: {result:?}");
 }
@@ -191,18 +202,38 @@ fn child_case() {
 #[test]
 fn a_refusal_holds_memory_under_a_limit_of_three_gigabytes() {
     let _turn = ONE_AT_A_TIME.lock().unwrap_or_else(PoisonError::into_inner);
-    let exe = std::env::current_exe().expect("the test binary");
     for (name, _) in memory_cases() {
-        let output = Command::new("sh")
-            .arg("-c")
-            .arg("ulimit -v 3000000 && exec \"$0\" --exact meter::child_case --nocapture --test-threads=1")
-            .arg(&exe)
-            .env("PATHOPS_METER_CASE", name)
-            .output()
-            .expect("a shell");
-        let text = String::from_utf8_lossy(&output.stdout);
-        assert!(output.status.success(), "{name}: {:?}\n{}\n{}", output.status, text, String::from_utf8_lossy(&output.stderr));
+        let text = run_child_under_the_limit(name);
         assert!(text.contains(&format!("CASE-RESULT {name}: Err(TooComplex)")), "{name}: {text}");
+    }
+}
+
+/// A child of [`child_case`] run under `ulimit -v 3000000`: what it printed, and whether it came back cleanly (it did not abort).
+#[cfg(unix)]
+fn run_child_under_the_limit(name: &str) -> String {
+    let exe = std::env::current_exe().expect("the test binary");
+    let output = Command::new("sh")
+        .arg("-c")
+        .arg("ulimit -v 3000000 && exec \"$0\" --exact meter::child_case --nocapture --test-threads=1")
+        .arg(&exe)
+        .env("PATHOPS_METER_CASE", name)
+        .output()
+        .expect("a shell");
+    let text = String::from_utf8_lossy(&output.stdout).into_owned();
+    assert!(output.status.success(), "{name}: {:?}\n{}\n{}", output.status, text, String::from_utf8_lossy(&output.stderr));
+    text
+}
+
+/// The most the meter admits of the pies that fill the cache is made under the same limit: it fits (2,000 pies of 30 slices need a limit
+/// of 2.5 GB, and 4,500 of 20 one of 2.8 GB, of address space), and it comes back with an answer.
+#[cfg(unix)]
+#[cfg_attr(debug_assertions, ignore = "seconds and gigabytes: run with cargo test --release")]
+#[test]
+fn an_admission_holds_memory_under_a_limit_of_three_gigabytes() {
+    let _turn = ONE_AT_A_TIME.lock().unwrap_or_else(PoisonError::into_inner);
+    for (name, _) in admitted_memory_cases() {
+        let text = run_child_under_the_limit(name);
+        assert!(text.contains(&format!("CASE-RESULT {name}: Ok(())")), "{name}: {text}");
     }
 }
 

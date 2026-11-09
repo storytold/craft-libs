@@ -63,6 +63,19 @@ pub(crate) const PIECE_WORK: u64 = 600;
 /// stars stacked 2.3 million, 1.6 GB).
 pub(crate) const PIECE_MEMORY: u64 = 1_800;
 
+/// What a pair of segments that start or end together is worth in memory, in the nanoseconds the budget is counted in, added to the
+/// pieces': the sweep keeps the order of each pair it compares in a cache that it never clears, about 650 bytes for each once the table
+/// has grown to hold them, so that the pairs a budget admits, at 1.1 microseconds each, 3.8 million, are 2.4 GB (and a piece, at 1.8
+/// microseconds, 1.3 kilobytes: the same budget is 3 GB of either).
+pub(crate) const CACHE_MEMORY: u64 = 1_100;
+
+/// What a pair of segments that start or end together is worth against the budget alone, in nanoseconds: the cache's table grows
+/// by doubling, and the next table past 3.7 million pairs does not fit under a limit of 3 GB (2,200 pies of 30 slices, 3.76 million
+/// pairs, aborted at 2.37 GB in the allocation of it; 5,200 pies of 20 slices, 3.85 million, did too; the pies of 60 and of 100 slices
+/// that hold more pairs than that before they abort come within 0.1 GB of the limit from 3.7 million on), so that the budget admits no
+/// more than 3.56 million pairs, whatever else the sweep holds.
+pub(crate) const PAIR_WORK: u64 = 1_180;
+
 /// What a piece of a curve is worth beyond that, in nanoseconds: the pieces of near-identical closed loops of one cubic each cost
 /// four times a line's.
 pub(crate) const CURVED_WORK: u64 = 4_000;
@@ -111,6 +124,8 @@ pub(crate) struct Counts {
     pub(crate) groups: u64,
     /// The sum of the squares of the segments that start at one height, and of those that end at one.
     pub(crate) batch: u64,
+    /// The pairs of segments that start or end together: the entries the sweep makes in its cache of comparisons.
+    pub(crate) pairs: u64,
 }
 
 impl Counts {
@@ -125,14 +140,16 @@ impl Counts {
             .saturating_add(self.batch.saturating_mul(BATCH_WORK))
     }
 
-    /// The memory the topology of the pieces would hold, in the nanoseconds the budget is counted in.
+    /// The memory the sweep would hold, in the nanoseconds the budget is counted in: the topology of the pieces, and the cache of
+    /// comparisons for the pairs of segments that start or end together.
     pub(crate) fn memory(&self) -> u64 {
-        self.pieces.saturating_mul(PIECE_MEMORY)
+        self.pieces.saturating_mul(PIECE_MEMORY).saturating_add(self.pairs.saturating_mul(CACHE_MEMORY))
     }
 
-    /// The work these counts come to: the greater of the time and the memory, each in nanoseconds, so that one budget holds both.
+    /// The work these counts come to: the greatest of the time, the memory, and the pairs against the budget alone, each in nanoseconds, so
+    /// that one budget holds all three.
     pub(crate) fn work(&self) -> u64 {
-        self.time().max(self.memory())
+        self.time().max(self.memory()).max(self.pairs.saturating_mul(PAIR_WORK))
     }
 }
 
@@ -176,49 +193,74 @@ fn tightest(xs: &mut [f64], width: f64) -> usize {
     best
 }
 
-/// The sum of the fourth powers of the points in each cell of a grid of cells `cell` across, the greatest over the four grids that
-/// are the grid and the grid moved half a cell across, up and both: a cluster of points less than half a cell across lies in one cell
-/// of one of them.
+/// The sum of the fourth powers of the points in each cell of a grid of cells `cell` across, the greatest over the four grids that are
+/// the grid and the grid moved half a cell across, up and both: a cluster of points less than half a cell across lies in one cell of one
+/// of them.
 fn grid_fourth_powers(points: &[(f64, f64)], cell: f64) -> u64 {
     // Most points of any cell lie in one window `cell` wide across, so where no window holds more than a handful (most inputs) the
-    // fourth powers are at most the cube of that times the points, and are not made by four passes of a hash map (which are most of
-    // what the meter costs before it sweeps, a quarter of a second for 500,000 segments).
+    // fourth powers are at most the cube of that times the points, and are not made by four passes of a hash map (which are most of what
+    // the meter costs before it sweeps, a quarter of a second for 500,000 segments).
     let mut xs: Vec<f64> = points.iter().map(|p| p.0).collect();
-    xs.sort_by(f64::total_cmp);
-    let (mut most, mut lo) = (0u64, 0usize);
-    for hi in 0..xs.len() {
-        while xs.get(hi).zip(xs.get(lo)).is_some_and(|(h, l)| h - l > cell) {
-            lo += 1;
-        }
-        most = most.max((hi - lo + 1) as u64);
-    }
+    let most = tightest(&mut xs, cell) as u64;
     if most <= FEW_IN_A_CELL {
         return most.saturating_pow(3).saturating_mul(points.len() as u64);
     }
-    let mut best = 0u64;
-    for (dx, dy) in [(0.0, 0.0), (0.5, 0.0), (0.0, 0.5), (0.5, 0.5)] {
+    cells_by_grid(points, cell).map(|cells| cells.values().fold(0u64, |t, &n| t.saturating_add(n.saturating_pow(4)))).max().unwrap_or(0)
+}
+
+/// The pairs of `points` that lie in one cell of a grid of cells `cell` across, the greatest over the four grids (as
+/// [`grid_fourth_powers`] counts), and where no window `cell` across holds more than a handful the pairs that lie within a cell of one
+/// another across and up, which are all of them that any cell holds, counted by a pass of the points in order across.
+fn cluster_pairs(points: &[(f64, f64)], cell: f64) -> u64 {
+    let mut by_x = points.to_vec();
+    by_x.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let mut xs: Vec<f64> = by_x.iter().map(|p| p.0).collect();
+    if tightest(&mut xs, cell) as u64 <= FEW_IN_A_CELL {
+        let (mut pairs, mut lo) = (0u64, 0usize);
+        for (hi, &(x, y)) in by_x.iter().enumerate() {
+            while by_x.get(lo).is_some_and(|l| x - l.0 > cell) {
+                lo += 1;
+            }
+            let near = by_x.get(lo..hi).unwrap_or_default().iter().filter(|q| (y - q.1).abs() <= cell).count();
+            pairs = pairs.saturating_add(near as u64);
+        }
+        return pairs;
+    }
+    cells_by_grid(points, cell)
+        .map(|cells| cells.values().fold(0u64, |t, &n| t.saturating_add(n.saturating_mul(n.saturating_sub(1)) / 2)))
+        .max()
+        .unwrap_or(0)
+}
+
+/// The count of points in each cell of each of the four grids of cells `cell` across that are the grid and the grid moved half a cell across,
+/// up and both.
+fn cells_by_grid(points: &[(f64, f64)], cell: f64) -> impl Iterator<Item = HashMap<(i64, i64), u64>> + '_ {
+    [(0.0, 0.0), (0.5, 0.0), (0.0, 0.5), (0.5, 0.5)].into_iter().map(move |(dx, dy)| {
         let mut cells: HashMap<(i64, i64), u64> = HashMap::new();
         for &(x, y) in points {
             // A float converted with `as` saturates, and a coordinate this far out is no cluster of any size.
             *cells.entry((((x / cell) + dx).floor() as i64, ((y / cell) + dy).floor() as i64)).or_insert(0) += 1;
         }
-        let total = cells.values().fold(0u64, |t, &n| t.saturating_add(n.saturating_pow(4)));
-        best = best.max(total);
-    }
-    best
+        cells
+    })
 }
 
 /// What the segments' starts and ends come to before the sweep: the sum of the fourth powers of the segments that start together
 /// (within `GROUP_WIDTH` tolerances of one another across and up: copies moved a fraction of a tolerance start at heights that differ,
-/// and together are as costly as copies exactly one on another), and of those that end together; and the sum of the squares of the
-/// segments that start at one height (exactly), and of those that end at one, wherever they are across.
-fn static_counts(segments: &Segments, eps: f64) -> (u64, u64) {
+/// and together are as costly as copies exactly one on another), and of those that end together; the sum of the squares of the
+/// segments that start at one height (exactly), and of those that end at one, wherever they are across; and the pairs of segments that
+/// start or end together (ends of both kinds at one place, as the ends of the slices of a pie are): those the sweep compares, each pair
+/// once, into a cache it does not clear.
+fn static_counts(segments: &Segments, eps: f64) -> (u64, u64, u64) {
     // The starts and ends in order of height, by height (exactly): a level segment is not on the sweep line, and a fan of them along
     // one level costs nothing there.
     let starts: Vec<(f64, f64)> =
         segments.entrances().iter().filter(|e| !segments[e.1].is_horizontal()).map(|&(y, idx)| (segments[idx].start().x, y)).collect();
     let ends: Vec<(f64, f64)> = segments.exits().iter().map(|&(y, idx)| (segments[idx].end().x, y)).collect();
-    let groups = [&starts, &ends].iter().fold(0u64, |t, pts| t.saturating_add(grid_fourth_powers(pts, 2.0 * GROUP_WIDTH * eps)));
+    let cell = 2.0 * GROUP_WIDTH * eps;
+    let groups = [&starts, &ends].iter().fold(0u64, |t, pts| t.saturating_add(grid_fourth_powers(pts, cell)));
+    let both: Vec<(f64, f64)> = starts.iter().chain(ends.iter()).copied().collect();
+    let pairs = cluster_pairs(&both, cell);
     let squares = |points: &[(f64, f64)]| {
         // `points` are in order of height already (the arena sorts them).
         let mut total = 0u64;
@@ -234,7 +276,7 @@ fn static_counts(segments: &Segments, eps: f64) -> (u64, u64) {
         }
         total.saturating_add(run.saturating_pow(2))
     };
-    (groups, squares(&starts).saturating_add(squares(&ends)))
+    (groups, squares(&starts).saturating_add(squares(&ends)), pairs)
 }
 
 /// How many segments span the sweep line at each height, as the sweep reaches them: those that have started (a level segment is not on
@@ -270,8 +312,8 @@ impl<'a> Spanning<'a> {
 /// Sweeps `segments` at tolerance `eps` as the topology does, counting its work, and stops with the counts so far as soon as
 /// they come to more than `budget` (`Err`).
 pub(crate) fn dry_sweep(segments: &Segments, eps: f64, budget: u64) -> Result<Counts, Counts> {
-    let (groups, batch) = static_counts(segments, eps);
-    let mut counts = Counts { segments: segments.len() as u64, groups, batch, ..Counts::default() };
+    let (groups, batch, pairs) = static_counts(segments, eps);
+    let mut counts = Counts { segments: segments.len() as u64, groups, batch, pairs, ..Counts::default() };
     work::add(Work::MeterGroups, usize::try_from(counts.groups).unwrap_or(usize::MAX));
     if counts.work() > budget {
         return Err(counts);
@@ -334,8 +376,8 @@ pub(crate) fn within_for_a_map<'a>(paths: impl IntoIterator<Item = &'a BezPath>,
 
 /// What the budget of a planar map is divided by: the map takes 8 to 15 times the sweep it is made of, and 3 to 4 times its memory, for
 /// crossing-heavy input (the shape builder of a star of 501 points took 4.7 s and 1.3 GB, and the sweep of it 0.4 s and 0.4 GB), and
-/// about 4 times the sweep for a grid of lines, so that a quarter is a compromise: a star of 701 points, the most it admits, takes 11 s
-/// and 2.5 GB to map.
+/// about 4 times the sweep for a grid of lines, so that a quarter is a compromise: a star of 705 points, the most it admits (711 is refused),
+/// takes 10 to 12 s and 2.6 GB to map.
 pub(crate) const MAP_FACTOR: u64 = 4;
 
 /// The sweep of `paths` held to `1 / part` of the budget.
@@ -534,8 +576,8 @@ mod tests {
         assert!(refused.work() > at - 1 && refused.work() <= at);
         // What is counted before the sweep is held to the budget as the rest is: a budget that equals it lets the sweep start, and the
         // sweep is refused at its first range.
-        let (groups, batch) = static_counts(&segments, eps);
-        let before = Counts { groups, batch, ..Counts::default() }.work();
+        let (groups, batch, pairs) = static_counts(&segments, eps);
+        let before = Counts { groups, batch, pairs, ..Counts::default() }.work();
         assert!(before > 0);
         assert!(dry_sweep(&segments, eps, before).expect_err("the first range passes it").steps > 0);
         assert_eq!(dry_sweep(&segments, eps, before - 1).expect_err("before the sweep").steps, 0);
@@ -586,16 +628,7 @@ mod tests {
         // Two stacks far apart count each alone.
         assert_eq!(count(&stacked_segments(2, 10)), 4 * 20u64.pow(4));
         // Copies moved sideways by a tenth of a tolerance each are one group, by ten tolerances each are not.
-        let moved = |dx: f64, dy: f64| {
-            let mut bp = BezPath::new();
-            for i in 0..10 {
-                let (x, y) = (f64::from(i) * dx, f64::from(i % 5) * dy);
-                bp.move_to((x, y));
-                bp.line_to((x + 7.0, y + 100.0));
-                bp.close_path();
-            }
-            bp
-        };
+        let moved = copies_moved;
         assert_eq!(count(&moved(0.1 * eps, 0.0)), 2 * 20u64.pow(4));
         assert_eq!(count(&moved(10.0 * eps, 0.0)), 10 * 2 * 2u64.pow(4));
         assert_eq!(count(&moved(1.0, 0.0)), 10 * 2 * 2u64.pow(4));
@@ -618,7 +651,7 @@ mod tests {
     /// The terms of the work are charged by their weights.
     #[test]
     fn the_work_is_the_sum_of_its_terms_at_their_weights() {
-        let c = Counts { pieces: 3, curved: 5, scan: 11_000, tangle: 7_000, groups: 13_000, batch: 17, ..Counts::default() };
+        let c = Counts { pieces: 3, curved: 5, scan: 11_000, tangle: 7_000, groups: 13_000, batch: 17, pairs: 19, ..Counts::default() };
         let time = 3 * PIECE_WORK
             + 5 * CURVED_WORK
             + 11_000 * SCAN_PICOS / 1000
@@ -626,14 +659,194 @@ mod tests {
             + 13_000 * GROUP_PICOS / 1000
             + 17 * BATCH_WORK;
         assert_eq!(c.time(), time);
-        assert_eq!(c.memory(), 3 * PIECE_MEMORY);
-        assert_eq!(c.work(), time.max(3 * PIECE_MEMORY));
+        assert_eq!(c.memory(), 3 * PIECE_MEMORY + 19 * CACHE_MEMORY);
+        assert_eq!(c.work(), time.max(3 * PIECE_MEMORY + 19 * CACHE_MEMORY).max(19 * PAIR_WORK));
         // Pieces that are many and cheap are held by the memory they take, not the time.
         let many = Counts { pieces: 3_000_000, ..Counts::default() };
         assert!(many.memory() > many.time());
         assert_eq!(many.work(), many.memory());
-        assert_eq!(Counts { pieces: u64::MAX, curved: u64::MAX, ..Counts::default() }.work(), u64::MAX);
+        // Pairs that are many are held by the cache they fill, and by more than they take with the pieces: the least of them that fills
+        // the table that does not fit costs the whole budget.
+        let pairs = Counts { pairs: 1_000_000, ..Counts::default() };
+        assert_eq!(pairs.work(), 1_000_000 * PAIR_WORK);
+        assert!(pairs.work() > pairs.memory() && pairs.work() > pairs.time());
+        // And pieces and pairs that are many together add: their memory is held at once.
+        let both = Counts { pieces: 1_000_000, pairs: 3_000_000, ..Counts::default() };
+        assert_eq!(both.work(), both.memory());
+        assert_eq!(both.memory(), 1_000_000 * PIECE_MEMORY + 3_000_000 * CACHE_MEMORY);
+        assert!(both.memory() > 3_000_000 * PAIR_WORK);
+        assert_eq!(Counts { pieces: u64::MAX, curved: u64::MAX, pairs: u64::MAX, ..Counts::default() }.work(), u64::MAX);
     }
+
+    /// The budget admits 3.56 million pairs that start or end together and no more, whatever else the sweep holds, as the cache of
+    /// comparisons is a table that doubles: the next one, at 3.7 million, aborted a process held to 3 GB.
+    #[test]
+    fn the_budget_admits_three_point_five_six_million_pairs() {
+        let budget = crate::budget::MAX_SWEEP_WORK as u64;
+        let pairs = budget / PAIR_WORK;
+        assert!((3_550_000..=3_570_000).contains(&pairs), "{pairs}");
+        assert!(Counts { pairs, ..Counts::default() }.work() <= budget);
+        assert!(Counts { pairs: pairs + 1, ..Counts::default() }.work() > budget);
+        // A pair is worth less in the sum with the pieces than alone, and more than the 650 bytes it holds: the 3 GB is 3.8 million.
+        const { assert!(CACHE_MEMORY < PAIR_WORK) };
+        assert!((3_700_000..=3_900_000).contains(&(budget / CACHE_MEMORY)));
+    }
+
+    /// The pairs of `points` that lie within `cell` of one another across and up, counted one at a time.
+    fn pairs_within(points: &[(f64, f64)], cell: f64) -> u64 {
+        let mut pairs = 0;
+        for (i, a) in points.iter().enumerate() {
+            for b in &points[i + 1..] {
+                pairs += u64::from((a.0 - b.0).abs() <= cell && (a.1 - b.1).abs() <= cell);
+            }
+        }
+        pairs
+    }
+
+    /// Where few points lie in a window (most inputs) the pairs are counted by a pass in order across: those within a cell of one another
+    /// across and up, a cell exactly apart too, and none across a gap.
+    #[test]
+    fn a_few_points_are_paired_when_a_cell_apart_across_and_up() {
+        assert_eq!(cluster_pairs(&[], 1.0), 0);
+        assert_eq!(cluster_pairs(&[(3.0, 4.0)], 1.0), 0);
+        // Three together, one far across: three pairs.
+        assert_eq!(cluster_pairs(&[(0.0, 0.0), (0.5, 0.0), (0.5, 0.4), (10.0, 0.0)], 1.0), 3);
+        // The same three, one of them far up: one pair.
+        assert_eq!(cluster_pairs(&[(0.0, 0.0), (0.5, 0.0), (0.5, 5.0)], 1.0), 1);
+        // Exactly a cell apart across, and up, is a pair; a hair more is not.
+        assert_eq!(cluster_pairs(&[(0.0, 0.0), (1.0, 0.0)], 1.0), 1);
+        assert_eq!(cluster_pairs(&[(0.0, 0.0), (0.0, 1.0)], 1.0), 1);
+        assert_eq!(cluster_pairs(&[(0.0, 0.0), (1.0001, 0.0)], 1.0), 0);
+        assert_eq!(cluster_pairs(&[(0.0, 0.0), (0.0, 1.0001)], 1.0), 0);
+        // In any order of the input, and as many as the window holds (6 at one place are 15 pairs).
+        assert_eq!(cluster_pairs(&[(1.0, 0.0), (0.0, 0.0)], 1.0), 1);
+        assert_eq!(cluster_pairs(&[(0.0, 0.0); 6], 1.0), 15);
+        // Points that are many but each alone in its window, as the vertices of a polygon of many sides are, make no pair.
+        let line: Vec<(f64, f64)> = (0..1_000).map(|i| (f64::from(i) * 3.0, 0.0)).collect();
+        assert_eq!(cluster_pairs(&line, 1.0), 0);
+        // A line of points as close as the window holds is a pair for each of its neighbours within a cell: 0, 0.5, 1.0 and 1.5 are 5.
+        assert_eq!(cluster_pairs(&[(0.0, 0.0), (0.5, 0.0), (1.0, 0.0), (1.5, 0.0)], 1.0), 5);
+    }
+
+    /// Where many points lie in a window the pairs are counted by cell: all of those at one place, and those that lie across the edge of
+    /// a cell, as in one of the four grids.
+    #[test]
+    fn many_points_are_paired_by_the_cell_they_lie_in() {
+        assert_eq!(cluster_pairs(&[(0.0, 0.0); 7], 1.0), 21);
+        assert_eq!(cluster_pairs(&[(0.0, 0.0); 10], 1.0), 45);
+        // Two places far apart count each alone.
+        let two: Vec<(f64, f64)> = [(0.0, 0.0); 10].into_iter().chain([(100.0, 100.0); 10]).collect();
+        assert_eq!(cluster_pairs(&two, 1.0), 90);
+        // Ten points that straddle the edge of a cell of the grid at 1.0 (across, up and both) are all in one cell of another grid.
+        for (ax, ay) in [(1.0, 0.1), (0.1, 1.0), (1.0, 1.0)] {
+            let straddling: Vec<(f64, f64)> = (0..10).map(|i| (ax - 0.045 + 0.01 * f64::from(i), ay - 0.045 + 0.01 * f64::from(i))).collect();
+            assert_eq!(cluster_pairs(&straddling, 1.0), 45, "at {ax},{ay}");
+        }
+        // The fourth powers of the same, by the same grids.
+        assert_eq!(grid_fourth_powers(&[(0.0, 0.0); 10], 1.0), 10_000);
+        assert_eq!(grid_fourth_powers(&[(0.0, 0.0); 7], 1.0), 2_401);
+        // A coordinate out of the range of a count is no cell of any size, and counts as the place it is.
+        assert_eq!(cluster_pairs(&[(f64::INFINITY, 0.0); 8], 1.0), 28);
+    }
+
+    /// The starts (but those of level segments) and the ends of `segments`, as the counts before the sweep take them.
+    fn ends_of(segments: &Segments) -> Vec<(f64, f64)> {
+        segments
+            .entrances()
+            .iter()
+            .filter(|e| !segments[e.1].is_horizontal())
+            .map(|&(y, i)| (segments[i].start().x, y))
+            .chain(segments.exits().iter().map(|&(y, i)| (segments[i].end().x, y)))
+            .collect()
+    }
+
+    /// The pairs the cache is counted by are those of the segments that start or end where the segments of a pie meet, apexes and the
+    /// points of the slices both, as a count of every pair of the ends within a cell gives it.
+    #[test]
+    fn the_pairs_of_pies_are_the_pairs_of_their_ends() {
+        let eps = 1e-6;
+        let cell = 2.0 * GROUP_WIDTH * eps;
+        for (count, slices) in [(1, 30), (3, 30), (2, 7), (4, 3), (3, 100)] {
+            let segments = segments_of([&closed(&stacked_pies(count, slices))]).expect("segments");
+            let pairs = static_counts(&segments, eps).2;
+            assert_eq!(pairs, pairs_within(&ends_of(&segments), cell), "{count} pies of {slices}");
+            // An apex is the 2k - 1 ends (the level segment of a slice does not start there) that meet there, and a pie is no fewer pairs.
+            let apex = 2 * slices as u64 - 1;
+            assert!(pairs >= count as u64 * apex * (apex - 1) / 2, "{count} pies of {slices}: {pairs}");
+        }
+    }
+
+    /// Ten copies of a segment, each out and back, the i-th moved by `i` times `dx` across and by `i % 5` times `dy` up.
+    fn copies_moved(dx: f64, dy: f64) -> BezPath {
+        let mut bp = BezPath::new();
+        for i in 0..10 {
+            let (x, y) = (f64::from(i) * dx, f64::from(i % 5) * dy);
+            bp.move_to((x, y));
+            bp.line_to((x + 7.0, y + 100.0));
+            bp.close_path();
+        }
+        bp
+    }
+
+    /// Ends pair when they lie within 8 tolerances of one another: copies one on another (20 starts, 20 ends: 190 pairs each), copies
+    /// 5 tolerances apart across (each with its neighbours and itself: 46 pairs each of the starts and of the ends, where a cell of 4
+    /// tolerances would pair only the two of a copy), and copies further apart than a cell not at all. Copies in levels 5 tolerances apart,
+    /// all in one window across, are paired by the cell they lie in: the pairs across the levels that lie in one cell of the best of four
+    /// grids, more than those on the levels alone and no more than all within a cell.
+    #[test]
+    fn ends_within_a_cell_of_eight_tolerances_are_paired() {
+        let eps = 1e-6;
+        let cell = 2.0 * GROUP_WIDTH * eps;
+        let counted = |dx: f64, dy: f64| static_counts(&segments_of([&copies_moved(dx, dy)]).expect("segments"), eps).2;
+        let brute = |dx: f64, dy: f64| pairs_within(&ends_of(&segments_of([&copies_moved(dx, dy)]).expect("segments")), cell);
+        for dx in [0.0, 0.1 * eps, 5.0 * eps, 7.9 * eps, 10.0 * eps, 1.0] {
+            assert_eq!(counted(dx, 0.0), brute(dx, 0.0), "copies moved by {dx} across");
+        }
+        assert_eq!(counted(0.0, 0.0), 2 * 190);
+        assert_eq!(counted(0.1 * eps, 0.0), 2 * 190);
+        assert_eq!(counted(5.0 * eps, 0.0), 2 * 46);
+        assert_eq!(counted(10.0 * eps, 0.0), 2 * 10);
+        assert_eq!(counted(1.0, 0.0), 2 * 10);
+        // Five levels 5 tolerances apart of 4 starts each: 6 pairs on a level, 16 between neighbouring levels, in one window across.
+        let levels = counted(0.0, 5.0 * eps);
+        assert!(levels > 2 * 5 * 6 && levels <= brute(0.0, 5.0 * eps), "{levels}");
+    }
+
+    /// The vertices of a polygon of many sides, each of two segments that meet, are a pair each and nothing more, however close in one
+    /// direction they lie (the sides at the left and right of a round polygon of 262,000 lie within a cell across of five others).
+    #[test]
+    fn a_polygon_of_many_sides_has_a_pair_for_each_vertex() {
+        let sides = 262_000u32;
+        let wavy: Vec<(f64, f64)> = (0..sides)
+            .map(|i| {
+                let a = std::f64::consts::TAU * f64::from(i) / f64::from(sides);
+                let r = 1000.0 + 30.0 * (a * 37.0).sin();
+                (r * a.cos(), r * a.sin())
+            })
+            .collect();
+        let segments = segments_of([&closed(&polyline(&wavy, true))]).expect("segments");
+        let pairs = static_counts(&segments, 1e-6).2;
+        // The vertex a path closes on is two, and every other is a start and an end, two starts or two ends: a pair each.
+        assert!((u64::from(sides)..=u64::from(sides) + 2).contains(&pairs), "{pairs}");
+    }
+
+    /// The pies that aborted a process held to 3 GB are refused before the sweep that would hold them, and the 2,000 that did not are not:
+    /// 2,200 pies of 30 slices, and 5,000 of 20.
+    #[test]
+    fn the_pies_that_filled_the_cache_are_refused_before_the_sweep() {
+        let budget = crate::budget::MAX_SWEEP_WORK as u64;
+        let eps = 1e-6;
+        for (count, slices, admitted) in [(2_000, 30, true), (2_200, 30, false), (5_000, 20, false)] {
+            let segments = segments_of([&closed(&stacked_pies(count, slices))]).expect("segments");
+            let (groups, batch, pairs) = static_counts(&segments, eps);
+            let before = Counts { groups, batch, pairs, ..Counts::default() };
+            assert_eq!(before.work() <= budget, admitted, "{count} pies of {slices}: {pairs} pairs");
+            if !admitted {
+                assert_eq!(dry_sweep(&segments, eps, budget).expect_err("refused").steps, 0, "{count} pies of {slices}: before the sweep");
+            }
+        }
+    }
+
     /// The pieces of the sweep of `path`.
     fn pieces_of(path: &BezPath) -> usize {
         segments_of([&closed(path)]).map_or(0, |s| s.len())
@@ -849,6 +1062,6 @@ mod tests {
             fan.line_to((f64::from(k), 0.0));
             fan.close_path();
         }
-        assert_eq!(static_counts(&segments_of([&fan]).expect("segments"), 1e-6), (0, 0));
+        assert_eq!(static_counts(&segments_of([&fan]).expect("segments"), 1e-6), (0, 0, 0));
     }
 }

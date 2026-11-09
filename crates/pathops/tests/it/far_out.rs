@@ -3,7 +3,7 @@
 //! products of coordinates that large (a square half a unit across at 1e8 read 0, and was dropped).
 
 use craft_pathops::*;
-use kurbo::{BezPath, Rect, Shape as _};
+use kurbo::{Arc, BezPath, Point, Rect, Shape as _, SvgArc, Vec2};
 
 const NZ: FillRule = FillRule::NonZero;
 
@@ -128,5 +128,47 @@ fn a_square_with_a_hole_far_out_keeps_its_hole() {
             let at = |b: Rect| [b.x0 - (x + 3.0), b.y0 - (x + 3.0), b.x1 - (x + 7.0), b.y1 - (x + 7.0)].iter().all(|d| d.abs() <= 2.0 * tolerance(x));
             assert!(hole.is_some_and(at), "{op:?} at {x:e}: the hole is at {hole:?}");
         }
+    }
+}
+
+/// An arc from `from` to `to` that bows by `bow` (its sagitta, signed), as cubics.
+fn arc_to(path: &mut BezPath, from: Point, to: Point, bow: f64) {
+    let chord = (to - from).hypot();
+    let radius = (chord * chord / 4.0 + bow * bow) / (2.0 * bow.abs());
+    let arc = SvgArc { from, to, radii: Vec2::new(radius, radius), x_rotation: 0.0, large_arc: false, sweep: bow > 0.0 };
+    Arc::from_svg_arc(&arc).expect("an arc").to_cubic_beziers(1e-6, |a, b, c| path.curve_to(a, b, c));
+}
+
+/// An open run of two arcs, each of chord 0.3 and bowing by 0.1 (one one way, one the other), starting at `(x, y)`, all scaled by 1,000.
+fn s_run(x: f64, y: f64) -> BezPath {
+    let at = |dx: f64| Point::new((x + dx) * 1_000.0, y * 1_000.0);
+    let mut path = BezPath::new();
+    path.move_to(at(0.0));
+    arc_to(&mut path, at(0.0), at(0.3), 100.0);
+    arc_to(&mut path, at(0.3), at(0.6), -100.0);
+    path
+}
+
+/// The sweep checks, in a build with debug assertions, that the order it gives two curves is the one their positions have where it changes
+/// (`linesweeper`'s `curve/mod.rs`, lines 1302 and 1305), and the check fails for curves that run along one another when they are a few
+/// hundred units across and at about 10 million from the path they outline (a stroke of 20 million across a run of two arcs, 600 across,
+/// at (3,000, 4,000): run 163 of a grid of them; 1 of 700 at 1e7 of distance, 13 at 3e7, 259 at 1e8). The crate refuses what the check fails
+/// in such a build, as `Degenerate`; in a release build the check is not made and the sweep goes on, and what it makes is what the same run
+/// beside it, which the check passes, makes: in 700 runs at each distance from 1e6 to 1e10 areas that differ from one another by no more
+/// than 1e-9 up to 1e8 of distance (4e-9 at 1e9 and 3e-6 at 1e10, the rounding of the areas of figures that large), in under 11 ms each.
+#[test]
+fn a_stroke_that_fails_the_sweeps_debug_check_is_refused_in_a_debug_build_and_made_in_a_release_one() {
+    let width = 2.0e7;
+    let outline = |run: &BezPath| try_outline_stroke(run, width, Cap::Butt, Join::Miter, 4.0);
+    let beside = outline(&s_run(2.0, 4.0)).expect("the run beside it is outlined");
+    let tripping = outline(&s_run(3.0, 4.0));
+    if cfg!(debug_assertions) {
+        assert_eq!(tripping.map(|_| ()), Err(PathOpsError::Degenerate));
+    } else {
+        let made = tripping.expect("a release build carries on");
+        let (a, b) = (area(&made, NZ), area(&beside, NZ));
+        assert!(a > 1.0e10 && (a - b).abs() <= 1e-8 * b, "{a} against {b}");
+        let (m, n) = (made.bounding_box(), beside.bounding_box());
+        assert!((m.width() - n.width()).abs() < 1.0 && (m.height() - n.height()).abs() < 1.0, "{m:?} against {n:?}");
     }
 }
