@@ -163,13 +163,13 @@ pub(crate) fn document_duplex_only(xml: &str, duplex: Option<Duplex>) -> bool {
         Some(Duplex::LongEdge) => "TwoSidedLongEdge",
         Some(Duplex::ShortEdge) => "TwoSidedShortEdge",
     };
-    let Ok(document) = roxmltree::Document::parse(xml) else { return false };
+    let Ok(document) = crate::xml::parse(xml) else { return false };
     !duplex_option(&document, "JobDuplexAllDocumentsContiguously", wanted) && duplex_option(&document, "DocumentDuplex", wanted)
 }
 
 /// Whether either duplex scope offers a supported standard binding; unreadable stays unknown.
 pub(crate) fn two_sided(xml: &str) -> Option<bool> {
-    let document = roxmltree::Document::parse(xml).ok()?;
+    let document = crate::xml::parse(xml).ok()?;
     Some(
         ["JobDuplexAllDocumentsContiguously", "DocumentDuplex"]
             .into_iter()
