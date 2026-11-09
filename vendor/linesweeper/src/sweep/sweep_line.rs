@@ -323,6 +323,10 @@ pub struct SweepLineBuffers {
     output_events: Vec<OutputEvent>,
 }
 
+// Craft patch (work limit): a linear search of the sweep line steps over a
+// segment in under a sixteenth of the time of a segment comparison.
+const SEGMENTS_PASSED_PER_UNIT: u64 = 16;
+
 /// Encapsulates the state of the sweep-line algorithm and allows iterating over sweep lines.
 #[derive(Clone, Debug)]
 pub struct Sweeper<'a> {
@@ -355,10 +359,13 @@ pub struct Sweeper<'a> {
     // do, and whether it stopped there. The work is the segment comparisons,
     // which the two caches count, plus `position_checks`: the segment positions
     // checked against horizontal segments and contour endpoints while finding
-    // the changed intervals.
+    // the changed intervals. `segments_passed` counts the segments that linear
+    // searches of the sweep line step over without comparing them; each
+    // `SEGMENTS_PASSED_PER_UNIT` of them counts as one unit of work.
     work_limit: Option<u64>,
     stopped_at_work_limit: bool,
     position_checks: u64,
+    segments_passed: u64,
 }
 
 impl<'segs> Sweeper<'segs> {
@@ -389,6 +396,7 @@ impl<'segs> Sweeper<'segs> {
             work_limit: None,
             stopped_at_work_limit: false,
             position_checks: 0,
+            segments_passed: 0,
         }
     }
 
@@ -402,12 +410,15 @@ impl<'segs> Sweeper<'segs> {
     ///
     /// The work is the number of segment comparisons plus the number of segment
     /// positions checked against horizontal segments and contour endpoints while
-    /// finding a sweep line's changed intervals. Once the sweep has done more than
-    /// `limit`, [`Sweeper::next_line`] returns `None` and
+    /// finding a sweep line's changed intervals, plus one unit for every 16 segments
+    /// that linear searches of the sweep line step over without comparing them.
+    /// Once the sweep has done more than `limit`,
+    /// [`Sweeper::next_line`] returns `None` and
     /// [`Sweeper::work_limit_exceeded`] returns `true`. The sweep checks the limit
     /// between events and between the comparisons and position checks that find a
     /// sweep line's changed intervals, so it can pass the limit by the comparisons
-    /// of one event, which grow with the number of segments in the sweep line. It
+    /// and searches of one event, which grow with the number of segments in the
+    /// sweep line. It
     /// never returns a sweep line once it has passed the limit. It stops partway
     /// through a sweep line, so its output is incomplete, and it stays stopped if
     /// the limit is raised afterwards.
@@ -427,13 +438,22 @@ impl<'segs> Sweeper<'segs> {
         self.stopped_at_work_limit
     }
 
-    /// The work done so far: the segment comparisons, cached or not, and the
-    /// position checks.
+    /// The work done so far: the segment comparisons, cached or not, the
+    /// position checks, and the segments that linear searches passed.
     fn work(&self) -> u64 {
         let calls = self.comparisons.borrow().calls;
         calls
             .saturating_add(self.conservative_comparisons.borrow().calls)
             .saturating_add(self.position_checks)
+            .saturating_add(self.segments_passed / SEGMENTS_PASSED_PER_UNIT)
+    }
+
+    /// Finds `seg_idx` on the sweep line, counting the segments the search passes.
+    fn find_position(&mut self, seg_idx: SegIdx) -> Option<usize> {
+        let pos = self.line.position(seg_idx);
+        let passed = pos.map_or(self.line.segs.len(), |pos| pos + 1);
+        self.segments_passed = self.segments_passed.saturating_add(passed as u64);
+        pos
     }
 
     /// Counts one position check and returns `true`, stopping the sweep, once
@@ -570,6 +590,7 @@ impl<'segs> Sweeper<'segs> {
             let other_idx = self.line.seg(j);
             let other = &self.segments[other_idx];
             if other.end().y == y {
+                self.segments_passed = self.segments_passed.saturating_add(1);
                 continue;
             }
 
@@ -634,6 +655,7 @@ impl<'segs> Sweeper<'segs> {
             let other_idx = self.line.seg(j);
             let other = &self.segments[other_idx];
             if other.end().y == y {
+                self.segments_passed = self.segments_passed.saturating_add(1);
                 continue;
             }
 
@@ -705,11 +727,11 @@ impl<'segs> Sweeper<'segs> {
         if let Some(contour_prev_idx) = contour_prev_idx {
             let contour_prev = &self.segments[contour_prev_idx];
             if contour_prev.start().y < self.y {
-                let pos = self.line.position(contour_prev_idx).unwrap();
+                let pos = self.find_position(contour_prev_idx).unwrap();
                 debug_assert!(contour_prev.end() == new_seg.start());
                 self.handle_contour_continuation(seg_idx, new_seg, pos);
                 return;
-            } else if let Some(contour_prev_pos) = self.line.position(contour_prev_idx) {
+            } else if let Some(contour_prev_pos) = self.find_position(contour_prev_idx) {
                 // Both of us entered on this sweep-line.
                 debug_assert!(contour_prev.start() == new_seg.start());
                 pos = match self
@@ -801,7 +823,7 @@ impl<'segs> Sweeper<'segs> {
     /// Marks a segment as needing to exit, but doesn't actually remove it
     /// from the sweep-line. See `SegmentOrderEntry::exit` for an explanation.
     fn handle_exit(&mut self, seg_idx: SegIdx) {
-        let pos = self.line.position(seg_idx).unwrap();
+        let pos = self.find_position(seg_idx).unwrap();
 
         if self.line.segs[pos].old_seg == Some(seg_idx) {
             return;
@@ -816,8 +838,8 @@ impl<'segs> Sweeper<'segs> {
     }
 
     fn handle_intersection(&mut self, left: SegIdx, right: SegIdx) {
-        let left_idx = self.line.position(left).unwrap();
-        let right_idx = self.line.position(right).unwrap();
+        let left_idx = self.find_position(left).unwrap();
+        let right_idx = self.find_position(right).unwrap();
         if left_idx < right_idx {
             // We're going to put `left_seg` after `right_seg` in the
             // sweep line, and while doing so we need to "push" along
@@ -827,6 +849,7 @@ impl<'segs> Sweeper<'segs> {
             for j in (left_idx + 1)..right_idx {
                 let seg_j_entry = &self.line.segs[j];
                 if seg_j_entry.will_really_exit() {
+                    self.segments_passed = self.segments_passed.saturating_add(1);
                     continue;
                 }
 
@@ -2216,6 +2239,35 @@ mod tests {
         let mut sweep = Sweeper::new(&segs, 1.0);
         let mut bufs = SweepLineBuffers::default();
         assert!(sweep.next_line(&mut bufs).is_none());
+    }
+
+    // Craft patch (work limit). Disjoint rectangles sharing their top and bottom
+    // heights need almost no comparisons, but each exit searches the whole sweep
+    // line. Those linear searches count toward the work limit.
+    #[test]
+    fn work_limit_counts_linear_searches() {
+        use kurbo::{Rect, Shape};
+
+        let mut path = BezPath::new();
+        for i in 0..2000 {
+            let x = f64::from(i) * 3.0;
+            path.extend(Rect::new(x, 0.0, x + 1.0, 10.0).to_path(0.1).iter());
+        }
+        let mut segs = Segments::default();
+        segs.add_bez_path(&path).unwrap();
+
+        let mut bufs = SweepLineBuffers::default();
+        let mut sweep = Sweeper::new(&segs, 1e-6);
+        while sweep.next_line(&mut bufs).is_some() {}
+        assert!(!sweep.work_limit_exceeded());
+        let total = sweep.work();
+        // 4,000 exits passing 2,000 segments on average, at one unit per 16.
+        assert!(total > 200_000, "{total} units of work");
+
+        let mut sweep = Sweeper::new(&segs, 1e-6);
+        sweep.set_work_limit(total / 2);
+        while sweep.next_line(&mut bufs).is_some() {}
+        assert!(sweep.work_limit_exceeded());
     }
 
     // Craft patch (work limit). The circles are stacked, so the first sweep

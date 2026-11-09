@@ -20,7 +20,8 @@ use linesweeper::topology::{ContourIdx, Contours, Topology, WindingNumber};
 /// numerical debris, such as the lens between two nearly coincident curves.
 pub const DEFAULT_SLIVER: f64 = 0.01;
 
-/// The most work the sweep may do, counted as segment comparisons plus segment position checks,
+/// The most work the sweep may do, counted as segment comparisons plus segment position checks
+/// plus one unit for every 16 segments a linear search of the sweep line passes,
 /// before the shapes count as too degenerate to sweep. Stacked copies of a shape can need billions
 /// of comparisons; a release build makes about 17 million a second.
 const MAX_SWEEP_WORK: u64 = 100_000_000;

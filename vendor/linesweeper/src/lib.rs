@@ -74,8 +74,8 @@ pub enum Error {
     NaN,
     /// One of the inputs had a non-closed path.
     NonClosedPath(NonClosedPath),
-    /// The sweep did more work (segment comparisons and position checks) than its work limit
-    /// allows.
+    /// The sweep did more work (segment comparisons, position checks and linear searches of the
+    /// sweep line) than its work limit allows.
     WorkLimitExceeded,
 }
 
