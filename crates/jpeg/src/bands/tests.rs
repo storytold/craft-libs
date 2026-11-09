@@ -561,20 +561,24 @@ fn data_left_before_a_restart_marker_is_damage() {
 }
 
 /// Bytes added after the last MCU leave more than its padding before EOI: damaged, with restart
-/// intervals or without, read in order or by seeking. Fill bytes there are not data.
+/// intervals or without, read in order or by seeking, with the clean stream's samples. Fill
+/// bytes there are not data.
 #[test]
 fn data_left_before_eoi_is_damage() {
     for restart in [0, 4] {
         let s = Stream { restart, ..Stream::new(64, 64, &[(2, 2), (1, 1), (1, 1)], 0, 23) }.encode();
         let eoi = s.len() - 2;
         assert_eq!(s[eoi..], [0xFF, 0xD9]);
-        assert!(!in_order(&Bands::new(&s, &Limits::default(), None).unwrap()).unwrap().1, "restart {restart}");
+        let (clean, hurt) = in_order(&Bands::new(&s, &Limits::default(), None).unwrap()).unwrap();
+        assert!(!hurt, "restart {restart}");
         for (insert, damaged) in [(&[0x12u8, 0x34][..], true), (&[0xFF, 0x00], true), (&[0xFF, 0xFF], false)] {
             let mut t = s.clone();
             t.splice(eoi..eoi, insert.iter().copied());
             let mut b = Bands::new(&t, &Limits::default(), None).unwrap();
             let (seq, hurt) = in_order(&b).unwrap();
             assert_eq!(hurt, damaged, "{insert:?} before EOI, restart {restart}");
+            // The added bytes follow the last MCU's codes: the samples are the clean stream's.
+            assert!(seq == clean, "{insert:?} before EOI, restart {restart}");
             b.find_seek_points();
             let (sought, hurt) = by_seeking(&b).unwrap();
             assert!(hurt == damaged && sought == seq, "{insert:?} before EOI, restart {restart}");
@@ -687,8 +691,12 @@ fn readers_seek_only_to_seek_points() {
 #[test]
 fn four_component_samples_are_ink_amounts() {
     let comps = [(1, 1), (1, 1), (1, 1), (1, 1)];
-    // YCCK with neutral chroma: C, M and Y all equal the luma.
-    for (transform, stored, ink) in [(0, [228, 128, 28, 178], [27, 127, 227, 77]), (2, [100, 128, 128, 178], [100, 100, 100, 77])] {
+    // YCCK with neutral chroma gives C, M and Y equal to the luma. With Cb 150 and Cr 110 (T.871):
+    // C = 100 + 1.402 × −18 = 74.76, M = 100 − 0.344136 × 22 − 0.714136 × −18 = 105.28 and
+    // Y = 100 + 1.772 × 22 = 138.98.
+    for (transform, stored, ink) in
+        [(0, [228, 128, 28, 178], [27, 127, 227, 77]), (2, [100, 128, 128, 178], [100, 100, 100, 77]), (2, [100, 150, 110, 178], [75, 105, 139, 77])]
+    {
         let s = Stream { flat: Some(stored), ..Stream::new(16, 16, &comps, 0, 1) }.encode();
         let b = Bands::new(&s, &Limits::default(), Some(transform)).unwrap();
         let (seq, damaged) = in_order(&b).unwrap();
