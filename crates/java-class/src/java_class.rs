@@ -152,12 +152,15 @@ pub fn field_type(desc: &str) -> String {
     dex::java_name(desc)
 }
 
-/// Split a run of field-type descriptors into individual descriptors (safe, bounded).
-fn split_types(s: &str) -> Vec<String> {
+/// Read parameter descriptors up to the closing parenthesis and return the remaining return descriptor.
+fn split_types(s: &str) -> Option<(Vec<String>, &str)> {
     let b = s.as_bytes();
     let mut out = Vec::new();
     let mut i = 0usize;
     while i < b.len() && out.len() < MAX_ITEMS {
+        if b.get(i) == Some(&b')') {
+            return Some((out, s.get(i + 1..)?));
+        }
         let start = i;
         while b.get(i) == Some(&b'[') {
             i += 1;
@@ -175,14 +178,14 @@ fn split_types(s: &str) -> Vec<String> {
             _ => break,
         }
     }
-    out
+    None
 }
 
 /// Parameter types and return type of a method descriptor (`(Ljava/lang/String;I)V`).
 pub fn method_params(desc: &str) -> (Vec<String>, String) {
     let Some(rest) = desc.strip_prefix('(') else { return (Vec::new(), "?".into()) };
-    let Some((params, ret)) = rest.split_once(')') else { return (Vec::new(), "?".into()) };
-    (split_types(params).iter().map(|t| field_type(t)).collect(), field_type(ret))
+    let Some((params, ret)) = split_types(rest) else { return (Vec::new(), "?".into()) };
+    (params.iter().map(|t| field_type(t)).collect(), field_type(ret))
 }
 
 /// What a set of access flags belongs to.
@@ -844,6 +847,13 @@ mod tests {
         let cf = parse(&bytes).unwrap();
         assert!(cf.warnings.is_empty(), "{:?}", cf.warnings);
         cf
+    }
+
+    #[test]
+    fn parentheses_in_reference_types_are_part_of_the_class_name() {
+        let (params, result) = method_params("(Lpkg/A)B;[Lpkg/C(D;J)Lpkg/R)S;");
+        assert_eq!(params, ["pkg.A)B", "pkg.C(D[]", "long"]);
+        assert_eq!(result, "pkg.R)S");
     }
 
     #[test]
