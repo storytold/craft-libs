@@ -480,4 +480,35 @@ mod tests {
             assert!(matches!(op, Err(Error::TooLarge)));
         }
     }
+
+    #[test]
+    fn union_with_huge_coordinates() {
+        use kurbo::{Affine, Circle, Rect};
+
+        // A circle overlapping a rectangle. The union is one contour whose area is
+        // s^2 * (pi / 9 + 4 / 9 - pi / 36), give or take the circle's flattening.
+        let union_area = |s: f64| {
+            let r = s / 3.0;
+            let circle = Circle::new((r, r), r).to_path(1e-3 * r);
+            let rect = Rect::new(r, r, s, s).to_path(0.0);
+            let contours = binary_op(&circle, &rect, FillRule::NonZero, BinaryOp::Union).unwrap();
+            let paths: Vec<_> = contours.contours().map(|c| c.path.clone()).collect();
+            let area: f64 = paths
+                .iter()
+                .map(|p| (Affine::scale(1.0 / s) * p.clone()).area())
+                .sum();
+            (paths.len(), area.abs())
+        };
+
+        let (count, expected) = union_area(1.0);
+        assert_eq!(count, 1);
+        for s in [1e155, 1e200, 1e300] {
+            let (count, area) = union_area(s);
+            assert_eq!(count, 1, "s = {s}");
+            assert!(
+                (area - expected).abs() < 1e-4,
+                "s = {s}: {area} != {expected}"
+            );
+        }
+    }
 }

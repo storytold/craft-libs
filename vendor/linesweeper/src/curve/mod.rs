@@ -802,6 +802,34 @@ pub(crate) fn quadratic_signs(q: Quadratic) -> (bool, f64, f64) {
     (!initially_negative, r1, r2)
 }
 
+/// Returns true if every coefficient of `q` is finite.
+fn has_finite_coeffs(q: Quadratic) -> bool {
+    q.coeffs().iter().all(|c| c.is_finite())
+}
+
+/// Pushes `Left` to `out` where `q` is negative and `Ish` where it is positive,
+/// restricted to the interval between `y0` and `y1`. If a coefficient of `q`
+/// is not finite, the whole interval is `Ish`.
+fn push_left_or_ish<const CAP: usize>(
+    q: Quadratic,
+    y0: f64,
+    y1: f64,
+    out: &mut ArrayVec<CurveEntry<MaybeOrder>, CAP>,
+) {
+    if has_finite_coeffs(q) {
+        push_quadratic_sign(q, Order::Left, Order::Ish, y0, y1, out);
+    } else if y1 > y0 {
+        let order = Order::Ish.into();
+        if let Some(e) = out.last_mut()
+            && e.order == order
+        {
+            e.end = y1;
+        } else {
+            out.push(CurveEntry { end: y1, order });
+        }
+    }
+}
+
 /// Populates `out` according to the sign of `q`, restricted to
 /// the interval between `y0` and `y1`. `neg` is the value to put
 /// in `out` when `q` is negative, and `pos` is the value to put in
@@ -877,6 +905,13 @@ fn push_two_level_quadratic_signs(
     };
     let lower_q = raise_quadratic(q, -lower);
     let upper_q = raise_quadratic(q, -upper);
+
+    // A coefficient that is NaN or infinite says nothing about the sign, so the
+    // order over the whole interval is unknown.
+    if !has_finite_coeffs(lower_q) || !has_finite_coeffs(upper_q) {
+        push(y1, MaybeOrder::Unknown);
+        return;
+    }
 
     let (lower_initially_positive, r_lower, s_lower) = quadratic_signs(lower_q);
     let (upper_initially_positive, r_upper, s_upper) = quadratic_signs(upper_q);
@@ -980,12 +1015,31 @@ impl QuadraticApprox {
         let x = cubic_from_bez_x(c);
         let [y0, y1, y2, y3] = *y.coeffs();
         let [x0, x1, x2, x3] = *x.coeffs();
+        // A product of two y coefficients overflows once the curve is taller than about
+        // 1e154. `c2` is then small enough that `c2` times the product is finite, so in
+        // that case these multiply by `c2` before the second factor.
+        let c2_times = |a: f64, b: f64| {
+            let prod = a * b;
+            if prod.is_finite() {
+                c2 * prod
+            } else {
+                c2 * a * b
+            }
+        };
+        let c2_times_sum = |k: f64, a: f64, b: f64, c: f64, d: f64| {
+            let sum = a * b + c * d;
+            if sum.is_finite() {
+                c2 * k * sum
+            } else {
+                c2 * k * a * b + c2 * k * c * d
+            }
+        };
         let error = Poly::new([
             c0 + c1 * y0 + c2 * y0 * y0 - x0,
-            c1 * y1 + c2 * (2.0 * y0 * y1) - x1,
-            c1 * y2 + c2 * (2.0 * y0 * y2 + y1 * y1) - x2,
-            c1 * y3 + c2 * 2.0 * (y0 * y3 + y1 * y2) - x3,
-            c2 * (2.0 * y1 * y3 + y2 * y2),
+            c1 * y1 + c2_times(2.0 * y0, y1) - x1,
+            c1 * y2 + c2_times_sum(1.0, 2.0 * y0, y2, y1, y1) - x2,
+            c1 * y3 + c2_times_sum(2.0, y0, y3, y1, y2) - x3,
+            c2_times_sum(1.0, 2.0 * y1, y3, y2, y2),
             c2 * 2.0 * y2 * y3,
             c2 * y3 * y3,
         ]);
@@ -1137,7 +1191,7 @@ impl QuadraticApprox {
             let r = r.unwrap_or_else(|| self.middle_bound(Bound::Right, tolerance, outer_bound));
             let l = l.unwrap_or_else(|| other.middle_bound(Bound::Left, tolerance, outer_bound));
             let end = (y0 + tolerance).min(y1);
-            push_quadratic_sign(r - l, Order::Left, Order::Ish, y0, end, &mut buf.entries);
+            push_left_or_ish(r - l, y0, end, &mut buf.entries);
             y0 = end;
         }
 
@@ -1152,14 +1206,14 @@ impl QuadraticApprox {
         if end > y0 {
             let r = self.middle_bound(Bound::Right, tolerance, outer_bound);
             let l = other.middle_bound(Bound::Left, tolerance, outer_bound);
-            push_quadratic_sign(r - l, Order::Left, Order::Ish, y0, end, &mut buf.entries);
+            push_left_or_ish(r - l, y0, end, &mut buf.entries);
             y0 = end;
         }
 
         if y0 < y1 {
             let r = r.unwrap_or_else(|| self.middle_bound(Bound::Right, tolerance, outer_bound));
             let l = l.unwrap_or_else(|| other.middle_bound(Bound::Left, tolerance, outer_bound));
-            push_quadratic_sign(r - l, Order::Left, Order::Ish, y0, y1, &mut buf.entries);
+            push_left_or_ish(r - l, y0, y1, &mut buf.entries);
         }
 
         buf
@@ -1247,17 +1301,38 @@ fn fit_quadratic(c: CubicBez) -> Quadratic {
         ]);
     }
 
-    let p = interpolate_quadratic(p0.y, p0.x, p1.y, p1.x, p2.y, p2.x);
-    let q = interpolate_quadratic(p0.y, 1.0, p1.y, -1.0, p2.y, 1.0);
+    // The interpolation multiplies two heights together, which overflows once a
+    // height passes about 1.3e154, and the coefficients of `q` below are about
+    // 1 / height^2, which underflows there. When a height is above 2^500, fit in
+    // the heights times the power of two `s` that brings the largest height to
+    // between 2 and 4, and scale the coefficients back at the end. Multiplying
+    // by a power of two is exact for normal numbers, and multiplying by 1
+    // changes nothing.
+    let max_y = [p0.y, p1.y, p2.y, p3.y]
+        .iter()
+        .fold(0.0f64, |m, y| m.max(y.abs()));
+    let s = if max_y > f64::from_bits((1023 + 500) << 52) && max_y.is_finite() {
+        // The biased exponent of max_y is in 1523..=2046, so s is 2^(1 - exponent).
+        let biased_exp = (max_y.to_bits() >> 52) & 0x7ff;
+        f64::from_bits((2047 - biased_exp) << 52)
+    } else {
+        1.0
+    };
+    let p = interpolate_quadratic(p0.y * s, p0.x, p1.y * s, p1.x, p2.y * s, p2.x);
+    let q = interpolate_quadratic(p0.y * s, 1.0, p1.y * s, -1.0, p2.y * s, 1.0);
 
     // Note that the denominator won't be small (assuming that p0.y, p1.y, p2.y,
     // p3.y are ordered), because q(p2.y) is 1, and q has already had two sign
     // changes before p2.y, so it can't change sign again.
-    let e = (p.eval(p3.y) - p3.x) / (q.eval(p3.y) + 1.0);
+    let e = (p.eval(p3.y * s) - p3.x) / (q.eval(p3.y * s) + 1.0);
 
     let p = p.coeffs();
     let q = q.coeffs();
-    Quadratic::new([p[0] - q[0] * e, p[1] - q[1] * e, p[2] - q[2] * e])
+    Quadratic::new([
+        p[0] - q[0] * e,
+        (p[1] - q[1] * e) * s,
+        (p[2] - q[2] * e) * s * s,
+    ])
 }
 
 #[allow(dead_code)]
@@ -1982,6 +2057,107 @@ mod test {
 
         let cmp = intersect_cubics(a, b, sure_tol, ish_tol);
         assert_eq!(cmp.order_at(1.0), Order::Left);
+    }
+
+    #[test]
+    fn far_apart_with_huge_coordinates() {
+        // Two bulging vertical curves a distance s apart, with heights from 0 to s.
+        let curve = |x: f64, s: f64| {
+            CubicBez::new(
+                (x, 0.0),
+                (x + s * 0.01, s / 3.0),
+                (x + s * 0.01, 2.0 * s / 3.0),
+                (x, s),
+            )
+        };
+        for s in [1.0, 1e155, 1e200, 1e300] {
+            let tol = s * 64.0 * f64::EPSILON;
+            let cmp = intersect_cubics(curve(-s / 2.0, s), curve(s / 2.0, s), tol, tol);
+            assert!(
+                cmp.iter().all(|(_, _, order)| order == Order::Left),
+                "s = {s}: {cmp:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn quadratic_approx_error_bounds_on_tall_curves() {
+        // An S-shaped curve from y = -h/2 to y = h/2 and w wide, which no quadratic
+        // in y fits exactly.
+        let approx = |h: f64, w: f64| {
+            let c = CubicBez::new(
+                (0.0, -h / 2.0),
+                (w, -h / 6.0),
+                (-w, h / 6.0),
+                (0.0, h / 2.0),
+            );
+            let a = QuadraticApprox::from_cubic(c, None);
+            assert!(
+                a.q.coeffs().iter().all(|c| c.is_finite()),
+                "h = {h}, w = {w}: {:?}",
+                a.q
+            );
+            (a.dmin / w, a.dmax / w)
+        };
+        let (dmin, dmax) = approx(1.0, 1.0);
+        assert!(dmin < -0.01 && dmax > 0.01, "{dmin} {dmax}");
+        for (h, w) in [
+            (1e154, 1e154),
+            (1e155, 1e155),
+            (1e200, 1e200),
+            (1e300, 1e300),
+            (1e151, 1e300),
+            (1e200, 1.0),
+        ] {
+            let (hmin, hmax) = approx(h, w);
+            assert!(
+                (hmin - dmin).abs() < 1e-9 && (hmax - dmax).abs() < 1e-9,
+                "h = {h}, w = {w}: ({hmin}, {hmax}) != ({dmin}, {dmax})"
+            );
+        }
+    }
+
+    #[test]
+    fn tall_lines_at_any_height() {
+        // A line from (0, 0) to (h, 3h) is left of a line from (10h, h) to (9h, 4h),
+        // with both moved up by `dy`.
+        for h in [1.0f64, 1e154, 1e155, 1e200, 1e300] {
+            for dy in [0.0f64, -2.0 * h, 1e5 * h] {
+                let a = Line::new((0.0, dy), (h, 3.0 * h + dy));
+                let b = Line::new((10.0 * h, h + dy), (9.0 * h, 4.0 * h + dy));
+                let a = PathSeg::Line(a).to_cubic();
+                let b = PathSeg::Line(b).to_cubic();
+                let tol = h.max(dy.abs()) * 64.0 * f64::EPSILON;
+                let cmp = intersect_cubics(a, b, tol, tol);
+                assert!(
+                    !cmp.cmps.is_empty() && cmp.iter().all(|(_, _, order)| order == Order::Left),
+                    "h = {h}, dy = {dy}: {cmp:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn non_finite_quadratics_have_no_definite_order() {
+        for c in [f64::NAN, f64::INFINITY] {
+            let q = Quadratic::new([c, 0.0, 0.0]);
+
+            let mut out = QuadApproxComparison::default();
+            push_two_level_quadratic_signs(q, -1.0, 1.0, 0.0, 1.0, &mut out);
+            assert!(
+                out.entries.iter().all(|e| e.order == MaybeOrder::Unknown),
+                "c = {c}: {:?}",
+                out.entries
+            );
+
+            let mut out = ApproxComparison::<3>::default();
+            push_left_or_ish(q, 0.0, 1.0, &mut out.entries);
+            assert!(
+                out.entries.iter().all(|e| e.order == MaybeOrder::Ish),
+                "c = {c}: {:?}",
+                out.entries
+            );
+        }
     }
 
     #[test]

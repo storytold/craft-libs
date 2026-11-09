@@ -251,6 +251,10 @@ local patches listed below. `.cargo_vcs_info.json` names the commit it was packa
 `824b0791a750f7b27b8edcbb6c6244d0e629875e`. That commit is not in the GitHub repository the manifest
 names, which is archived; its README says development moved off GitHub.
 
+local patches listed below. `.cargo_vcs_info.json` names the commit it was packaged from,
+`824b0791a750f7b27b8edcbb6c6244d0e629875e`. That commit is not in the GitHub repository the manifest
+names, which is archived; its README says development moved off GitHub.
+
 Every file here except this one, `SOURCE.json` and the patched files below is byte for byte the file
 in the `.crate` archive. `SOURCE.json` records the hash of the `.crate` download
 (`source_archive_sha256`) and, for every file kept, the hash in the package (`source_sha256`) and the
@@ -318,6 +322,10 @@ Every change here updates this table and `SOURCE.json` in the same commit.
 | `ComparisonCache` holds the comparisons of one `Segments` arena; given another arena, a clone included, it drops them and compares again | `Craft patch (comparison cache arena)` | `src/order.rs`, `src/segments.rs` | `other_arena_is_compared_again`, `diverged_clone_is_compared_again`, `appending_keeps_cached_comparisons` |
 
 Every change here updates this table and `SOURCE.json` in the same commit.
+| `src/curve/mod.rs` | `fit_quadratic` multiplies the heights by the power of two that brings the largest of them to between 2 and 4 when one of them has a magnitude above 2^500, and scales the quadratic's coefficients back at the end. `QuadraticApprox::from_cubic` multiplies by the quadratic's `y^2` coefficient before the second y coefficient when the product of two y coefficients is not finite. Before, a curve taller than about 1.3e154 gave a product of two heights that overflowed to infinity, and `inf * 0` gave a NaN coefficient, or an error bound that left out the curve's extremes. The curve comparison then reported a definite order that could be wrong, and `binary_op` returned a wrong result without an error. The quadratic sign checks used by curve comparisons now report the order as unknown (or close) over the whole interval when a coefficient is NaN or infinite, instead of a definite order. The `far_apart_with_huge_coordinates` test compares two curves with heights up to 1e155, 1e200 and 1e300, `tall_lines_at_any_height` compares two lines from 1 to 1e300 tall at three heights, `quadratic_approx_error_bounds_on_tall_curves` checks the coefficients and error bounds of an S-shaped curve up to 1e300 tall and 1e300 wide, and `non_finite_quadratics_have_no_definite_order` checks the sign checks. |
+| `src/curve/line.rs` | `intersect_lines` compares the x coordinates and the tolerance times 1/16 when one of them has a magnitude above 2^1019, and works with half of each height for a line or height range more than `f64::MAX` tall. Before, two vertical lines at x = -1e308 and x = 1e308 came back `Right`, because the difference of their x values overflowed, and lines from y = -1e308 to 1e308 gave NaN positions. The `unchanging_with_huge_coordinates` test covers 1e300, 1e308 and `f64::MAX`, and `huge_coordinates_on_one_axis` covers lines near x = 1e308 that are 1e-307 tall, lines from y = -1e308 to 1e308 that stay apart or cross, and a line 1e-308 tall beside one of them. |
+| `src/geom.rs` | For a straight segment more than `f64::MAX` long on an axis, `Segment::at_y` works with half of each coordinate on that axis and `Segment::to_kurbo_cubic` takes weighted sums of the end points on that axis. Before, both returned NaN or infinite coordinates for such a segment. The `line_wider_and_taller_than_f64_max` test covers a segment from (-1e308, -1e308) to (1e308, 1e308), and `line_wider_than_f64_max_and_very_short` covers a segment from (-1e308, 0) to (1e308, 3 times the smallest positive `f64`). |
+| `src/lib.rs` | The `union_with_huge_coordinates` test checks the union of a circle and a rectangle at sizes 1e155, 1e200 and 1e300. |
 
 `omitted_files` lists the 43 files of the package left out here, with their hashes:
 
