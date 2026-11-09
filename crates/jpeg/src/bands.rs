@@ -43,10 +43,11 @@ struct Comp {
 /// marker; without restart intervals the rest of the scan stays at zero, as in
 /// [`decode`](crate::decode), which does not resume at restart markers. Either way
 /// [`Reader::damaged`] is set, and the result does not depend on where the decoding started.
-/// An interval that leaves more than its padding unread before its restart marker is damaged too
-/// (its data was cut, shifted or added to). Damaged data never makes a read fail, also in the
-/// first MCU, where [`decode`](crate::decode) reports that the stream holds no image data: a
-/// caller that must refuse a file with nothing decodable checks the scan's size itself.
+/// An interval, or the scan, that leaves more than its padding unread before the next marker is
+/// damaged too (its data was cut, shifted or added to). Damaged data never makes a read fail,
+/// also in the first MCU, where [`decode`](crate::decode) reports that the stream holds no image
+/// data. [`Reader::damaged`] does not tell that case from later damage, and neither does the
+/// size of the scan: data that fails at its first code can be any length.
 pub struct Bands<'a> {
     /// The file from the scan's entropy-coded data on.
     data: &'a [u8],
@@ -136,6 +137,8 @@ impl<'a> Bands<'a> {
         Err(err(if header.is_some() { "the file ends before any image data" } else { "no frame header" }))
     }
 
+    /// The bands of the frame `hd` and its first scan `sos`, with the tables in effect at the
+    /// scan; checked against `limits` before any buffer is sized from the headers.
     fn open(data: &'a [u8], hd: Header, sos: &[u8], tables: &Tables, limits: &Limits, adobe_transform: Option<u8>) -> Result<Self, Error> {
         let ids: Vec<u8> = hd.comps.iter().map(|c| c.0).collect();
         let scan = parse_scan(sos, &ids, false)?;
@@ -143,7 +146,8 @@ impl<'a> Bands<'a> {
         for &(ci, _, _) in &scan.comps {
             match seen.get_mut(ci) {
                 Some(s) if !*s => *s = true,
-                _ => return Err(unsupported("JPEG whose first scan names a component twice is not decoded in bands")),
+                // T.81 B.2.3: a scan's components follow the frame's order, so none repeats.
+                _ => return Err(err("the scan names a component twice")),
             }
         }
         if scan.comps.len() != hd.comps.len() {
@@ -168,12 +172,10 @@ impl<'a> Bands<'a> {
         let band_rows = if single { 8 } else { 8 * hd.vmax };
         let mut comps = Vec::with_capacity(hd.comps.len());
         for &(_, h, v, tq) in &hd.comps {
-            let (cw, ch) = hd.samples(h, v);
             let (hb, vb) = if single { (1, 1) } else { (h, v) };
             let q = tables.quant.get(tq).copied().flatten().ok_or_else(|| err("scan uses an undefined quantization table"))?;
-            let xs = (h != hd.hmax).then(|| upsample_map(width, cw, h, hd.hmax));
-            let ys = (v != hd.vmax).then(|| upsample_map(height, ch, v, hd.vmax));
-            comps.push(Comp { hb, vb, stride: mcux * hb * 8, q, xs, ys });
+            // The interpolation maps are made once the limit check below has passed.
+            comps.push(Comp { hb, vb, stride: mcux * hb * 8, q, xs: None, ys: None });
         }
         let mut coding = Vec::with_capacity(scan.comps.len());
         for &(ci, td, ta) in &scan.comps {
@@ -181,8 +183,8 @@ impl<'a> Bands<'a> {
             let ac = tables.ac.get(ta).and_then(Option::as_ref).ok_or_else(|| err("scan uses an undefined Huffman table"))?;
             coding.push((ci, dc.clone(), ac.clone()));
         }
-        let lag = usize::from(comps.iter().any(|c| c.ys.is_some()));
-        let bands = Bands {
+        let lag = usize::from(hd.comps.iter().any(|&(_, _, v, _)| v != hd.vmax));
+        let mut bands = Bands {
             data,
             width,
             height,
@@ -196,19 +198,30 @@ impl<'a> Bands<'a> {
             lag,
             seek: vec![(0, 0)],
         };
-        let maps: u64 = bands.comps.iter().map(|c| (c.xs.as_ref().map_or(0, Vec::len) + c.ys.as_ref().map_or(0, Vec::len)) as u64 * 24).sum();
+        // Checked before the maps are made: one entry per output column (or row) of each
+        // component subsampled across (or down).
+        let entry = std::mem::size_of::<(usize, usize, f32)>() as u64;
+        let maps: u64 =
+            hd.comps.iter().map(|&(_, h, v, _)| (u64::from(h != hd.hmax) * width as u64 + u64::from(v != hd.vmax) * height as u64) * entry).sum();
         let total = bands.reader_bytes().saturating_add(maps);
         let cap = limits.max_alloc.min(isize::MAX as u64);
         if total > cap {
             return Err(Error::LimitExceeded(format!("{total} bytes of band buffers exceed the limit of {cap}")));
         }
+        for (&(_, h, v, _), c) in hd.comps.iter().zip(&mut bands.comps) {
+            let (cw, ch) = hd.samples(h, v);
+            c.xs = (h != hd.hmax).then(|| upsample_map(width, cw, h, hd.hmax));
+            c.ys = (v != hd.vmax).then(|| upsample_map(height, ch, v, hd.vmax));
+        }
         Ok(bands)
     }
 
+    /// The image's width in pixels.
     pub fn width(&self) -> u32 {
         self.width as u32
     }
 
+    /// The image's height in pixels: the frame's (a `DNL` height is not supported).
     pub fn height(&self) -> u32 {
         self.height as u32
     }
@@ -231,8 +244,10 @@ impl<'a> Bands<'a> {
 
     /// MCU lines a [`Reader`] decodes on each side of the bands it hands out: 1 when a component
     /// is subsampled down (a band's rows interpolate with the lines above and below), else 0.
-    /// Reading `n` bands from a seek point decodes about `n + 2 × halo` lines, so a caller that
-    /// splits the work reads a few bands from each seek point when this is not 0.
+    /// When it is 1, a [`Reader`] that [seeks](Reader::seek) to seek point `p` starts decoding at
+    /// the seek point `q` before it: reading `n` bands from `p` decodes `p − q + n + 1` lines,
+    /// `n + 2` when restart intervals begin every line of MCUs. A caller that splits the work
+    /// reads a few bands from each seek point then.
     pub fn halo(&self) -> u32 {
         self.lag as u32
     }
@@ -345,7 +360,8 @@ pub struct Reader<'b> {
 
 impl<'b> Reader<'b> {
     /// Moves to `band`, which must be one of [`Bands::seek_points`]: the next band handed out is
-    /// `band`.
+    /// `band`. When [`Bands::halo`] is 1 the decoding starts at the seek point before `band`, for
+    /// the line above it.
     pub fn seek(&mut self, band: usize) -> Result<(), Error> {
         let b = self.bands;
         let at = b.seek.binary_search_by_key(&band, |s| s.0).map_err(|_| unsupported(format!("band {band} is not a seek point")))?;
@@ -424,10 +440,13 @@ impl<'b> Reader<'b> {
                     }
                 }
             }
-            // An interval that ends with more than its padding before the restart marker decoded
-            // from data that was cut, shifted or added to: damaged, though no code was invalid.
+            // An interval, or the scan, that ends with more than its padding before the next
+            // marker decoded from data that was cut, shifted or added to: damaged, though no code
+            // was invalid.
             let end = i + 1;
-            if b.restart > 0 && end.is_multiple_of(b.restart) && end < b.mcux * b.mcuy && i >= self.skip_to && self.dec.bits.data_left() {
+            let total = b.mcux * b.mcuy;
+            let interval_end = b.restart > 0 && end.is_multiple_of(b.restart);
+            if (interval_end || end == total) && i >= self.skip_to && self.dec.bits.data_left() {
                 self.damaged = true;
             }
         }

@@ -131,14 +131,15 @@ fn mutated_streams_never_panic_and_stay_within_limits() {
 }
 
 /// Every band read in order, and (when the restart markers make more than band 0 a seek point)
-/// read again from each seek point; `None` when the bands or a read fail.
+/// read again from each seek point; `None` when `Bands::new` rejects the stream. Once it accepts
+/// one, damage is reported, never an error: a failed read or seek fails the test.
 fn read_bands(bytes: &[u8], limits: &Limits) -> Option<(Vec<u8>, Option<Vec<u8>>)> {
     let mut bands = Bands::new(bytes, limits, None).ok()?;
     assert!(bands.reader_bytes() <= limits.max_alloc);
     assert!(u64::from(bands.width()) * u64::from(bands.height()) <= limits.max_pixels);
     let mut reader = bands.reader();
     let mut in_order = Vec::new();
-    while let Some(band) = reader.next_band().ok()? {
+    while let Some(band) = reader.next_band().expect("a read after Bands::new accepted the stream") {
         in_order.extend_from_slice(band.samples);
     }
     assert_eq!(in_order.len(), bands.width() as usize * bands.height() as usize * usize::from(bands.components()));
@@ -151,11 +152,11 @@ fn read_bands(bytes: &[u8], limits: &Limits) -> Option<(Vec<u8>, Option<Vec<u8>>
     let band_bytes = bands.band_bytes();
     let mut reader = bands.reader();
     for (k, &p) in points.iter().enumerate().rev() {
-        reader.seek(p).ok()?;
+        reader.seek(p).expect("a seek to an advertised seek point");
         for _ in p..points.get(k + 1).copied().unwrap_or(bands.bands()) {
-            let band = reader.next_band().ok()??;
+            let band = reader.next_band().expect("a read after a seek").expect("a band after a seek");
             let at = band.index * band_bytes;
-            sought.get_mut(at..at + band.samples.len())?.copy_from_slice(band.samples);
+            sought[at..at + band.samples.len()].copy_from_slice(band.samples);
         }
     }
     Some((in_order, Some(sought)))

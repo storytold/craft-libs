@@ -415,6 +415,8 @@ impl Header {
     }
 }
 
+/// The frame header (B.2.2) of a SOF segment: its size, precision and components, and the MCU
+/// grid they make. Sizes no image buffer, so callers can check limits first.
 fn parse_header(marker: u8, seg: &[u8]) -> Result<Header, Error> {
     let (arithmetic, progressive) = match marker {
         0xC0 | 0xC1 => (false, false),

@@ -9,10 +9,12 @@ fn adobe(b: &[u8]) -> Option<u8> {
     b.get(at + 4 + 11).copied()
 }
 
+/// The whole-image decode of `b`, with the transform its own APP14 segment states.
 fn whole(b: &[u8]) -> Result<Decoded, Error> {
     decode(b, &Limits::default(), adobe(b))
 }
 
+/// The 8-bit samples of a decode.
 fn eight(d: &Decoded) -> &[u8] {
     match &d.samples {
         Samples::U8(v) => v,
@@ -65,6 +67,7 @@ fn by_seeking(b: &Bands) -> Result<(Vec<u8>, bool), Error> {
 struct Rng(u64);
 
 impl Rng {
+    /// The next value of the xorshift* sequence.
     fn next(&mut self) -> u64 {
         self.0 ^= self.0 >> 12;
         self.0 ^= self.0 << 25;
@@ -72,6 +75,7 @@ impl Rng {
         self.0.wrapping_mul(0x2545_F491_4F6C_DD1D)
     }
 
+    /// A value in `lo..=hi`.
     fn range(&mut self, lo: i32, hi: i32) -> i32 {
         lo + (self.next() % (hi - lo + 1) as u64) as i32
     }
@@ -103,6 +107,8 @@ fn picture(w: usize, h: usize, channels: usize, seed: u64) -> Vec<u8> {
     px
 }
 
+/// A `w`×`h` picture encoded by `jpeg-encoder` at quality 85, with a restart interval of
+/// `restart` MCUs (0 for none).
 fn jpeg_encoder_stream(w: u16, h: u16, color: jpeg_encoder::ColorType, sampling: jpeg_encoder::SamplingFactor, restart: u16) -> Vec<u8> {
     let channels = match color {
         jpeg_encoder::ColorType::Luma => 1,
@@ -141,6 +147,9 @@ struct Stream {
     seed: u64,
     /// Number the restart markers from this instead of 0.
     rst_base: u8,
+    /// Instead of random coefficients, blocks with only a DC term: every sample of component
+    /// `i` reconstructs to `flat[i]`.
+    flat: Option<[u8; 4]>,
 }
 
 /// The AC symbols a baseline scan uses (F.1.2.2): EOB, ZRL and run/size 0..15/1..10.
@@ -161,6 +170,7 @@ struct BitWriter {
 }
 
 impl BitWriter {
+    /// Appends the `len` low bits of `v`, stuffing a 0 byte after every `FF` (F.1.2.3).
     fn put(&mut self, v: u32, len: u32) {
         if len == 0 {
             return;
@@ -187,6 +197,7 @@ impl BitWriter {
     }
 }
 
+/// The size category of a coefficient or DC difference (F.1.2.1): its magnitude's bit length.
 fn category(v: i32) -> u32 {
     32 - v.unsigned_abs().leading_zeros()
 }
@@ -198,15 +209,19 @@ fn magnitude(v: i32, s: u32) -> u32 {
 }
 
 impl Stream {
+    /// A `w`×`h` stream whose components have the given (H, V) sampling factors; the first uses
+    /// quantization table 0, the others table 1.
     fn new(w: usize, h: usize, comps: &[(usize, usize)], restart: usize, seed: u64) -> Self {
         let comps = comps.iter().enumerate().map(|(i, &(h, v))| C { id: i as u8 + 1, h, v, tq: (i > 0) as u8 }).collect();
-        Stream { w, h, comps, restart, seed, rst_base: 0 }
+        Stream { w, h, comps, restart, seed, rst_base: 0, flat: None }
     }
 
+    /// Quantization table `t` (zigzag order): `Q0` is `1 + t`.
     fn quant(t: u8) -> [u8; 64] {
         std::array::from_fn(|k| 1 + (k as u8) / 4 + t)
     }
 
+    /// The JPEG file: SOI, the tables, the frame, one scan and EOI.
     fn encode(&self) -> Vec<u8> {
         let hmax = self.comps.iter().map(|c| c.h).max().unwrap();
         let vmax = self.comps.iter().map(|c| c.v).max().unwrap();
@@ -263,14 +278,19 @@ impl Stream {
             }
             for (ci, &n) in blocks_per_mcu.iter().enumerate() {
                 for _ in 0..n {
-                    let dc = rng.range(-300, 300);
+                    // A DC term d alone reconstructs to d × Q0 / 8 + 128 (A.3.3).
+                    let dc = match self.flat {
+                        Some(f) => (i32::from(f[ci]) - 128) * 8 / i32::from(Self::quant(self.comps[ci].tq)[0]),
+                        None => rng.range(-300, 300),
+                    };
                     let diff = dc - pred[ci];
                     pred[ci] = dc;
                     let t = category(diff);
                     bw.put(t, 4);
                     bw.put(magnitude(diff, t), t);
                     let mut run = 0;
-                    let last = match rng.next() % 4 {
+                    let last = if self.flat.is_some() { 0 } else { rng.next() % 4 };
+                    let last = match last {
                         0 => 0,
                         1 => 5,
                         2 => 20,
@@ -540,6 +560,28 @@ fn data_left_before_a_restart_marker_is_damage() {
     assert!(!in_order(&Bands::new(&t, &Limits::default(), None).unwrap()).unwrap().1);
 }
 
+/// Bytes added after the last MCU leave more than its padding before EOI: damaged, with restart
+/// intervals or without, read in order or by seeking. Fill bytes there are not data.
+#[test]
+fn data_left_before_eoi_is_damage() {
+    for restart in [0, 4] {
+        let s = Stream { restart, ..Stream::new(64, 64, &[(2, 2), (1, 1), (1, 1)], 0, 23) }.encode();
+        let eoi = s.len() - 2;
+        assert_eq!(s[eoi..], [0xFF, 0xD9]);
+        assert!(!in_order(&Bands::new(&s, &Limits::default(), None).unwrap()).unwrap().1, "restart {restart}");
+        for (insert, damaged) in [(&[0x12u8, 0x34][..], true), (&[0xFF, 0x00], true), (&[0xFF, 0xFF], false)] {
+            let mut t = s.clone();
+            t.splice(eoi..eoi, insert.iter().copied());
+            let mut b = Bands::new(&t, &Limits::default(), None).unwrap();
+            let (seq, hurt) = in_order(&b).unwrap();
+            assert_eq!(hurt, damaged, "{insert:?} before EOI, restart {restart}");
+            b.find_seek_points();
+            let (sought, hurt) = by_seeking(&b).unwrap();
+            assert!(hurt == damaged && sought == seq, "{insert:?} before EOI, restart {restart}");
+        }
+    }
+}
+
 /// Restart markers misnumbered, missing (the file cut short), added inside an interval or
 /// removed: seek points follow the markers in the data as a reader in order meets them, so
 /// reading from them gives the samples reading in order does.
@@ -594,6 +636,17 @@ fn other_processes_and_split_scans_are_unsupported() {
     assert!(matches!(Bands::new(&split, &Limits::default(), None), Err(Error::Unsupported(_))));
 }
 
+/// A scan that names a component twice breaks T.81 (B.2.3: its components follow the frame's
+/// order): malformed, not a valid feature left to the whole-image decode.
+#[test]
+fn a_component_named_twice_in_the_scan_is_malformed() {
+    let mut s = Stream::new(16, 16, &[(1, 1), (1, 1), (1, 1)], 0, 3).encode();
+    let sos = s.windows(2).position(|w| w == [0xFF, 0xDA]).unwrap();
+    assert_eq!(s[sos + 4], 3);
+    s[sos + 7] = s[sos + 5];
+    assert!(matches!(Bands::new(&s, &Limits::default(), None), Err(Error::Malformed(_))));
+}
+
 #[test]
 fn limits_are_checked_from_the_headers() {
     let s = Stream::new(40, 30, &[(2, 1), (1, 1), (1, 1)], 0, 2).encode();
@@ -626,4 +679,22 @@ fn readers_seek_only_to_seek_points() {
     r.seek(4).unwrap();
     assert_eq!(r.next_band().unwrap().map(|band| band.index), Some(4));
     assert!(r.next_band().unwrap().is_none());
+}
+
+/// CMYK and YCCK samples of known ink, checked against T.81's reconstruction rather than
+/// against the whole-image decode (both renderers share the colour conversion). Adobe CMYK is
+/// stored inverted (255 = no ink); YCCK's C, M and Y come out of YCbCr as ink, and K inverted.
+#[test]
+fn four_component_samples_are_ink_amounts() {
+    let comps = [(1, 1), (1, 1), (1, 1), (1, 1)];
+    // YCCK with neutral chroma: C, M and Y all equal the luma.
+    for (transform, stored, ink) in [(0, [228, 128, 28, 178], [27, 127, 227, 77]), (2, [100, 128, 128, 178], [100, 100, 100, 77])] {
+        let s = Stream { flat: Some(stored), ..Stream::new(16, 16, &comps, 0, 1) }.encode();
+        let b = Bands::new(&s, &Limits::default(), Some(transform)).unwrap();
+        let (seq, damaged) = in_order(&b).unwrap();
+        assert!(!damaged);
+        assert!(seq.as_chunks::<4>().0.iter().all(|px| *px == ink), "transform {transform}: {:?}", &seq[..4]);
+        let whole = decode(&s, &Limits::default(), Some(transform)).unwrap();
+        assert!(eight(&whole) == seq, "transform {transform}");
+    }
 }

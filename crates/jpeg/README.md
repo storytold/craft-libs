@@ -103,7 +103,8 @@ SOF11 (lossless) falls in that range and returns `Unsupported`.
 
 `Bands` decodes a sequential Huffman-coded (SOF0, SOF1) 8-bit file whose first scan holds every
 component, one line of MCUs at a time: a band is 8 rows times the largest vertical sampling
-factor. Its samples equal `decode`'s for the same rows (the same inverse transform, upsampling
+factor (8 rows for a single-component frame, whatever its sampling factors), and the last band
+may be shorter. Its samples equal `decode`'s for the same rows (the same inverse transform, upsampling
 and colour conversion); only a few MCU lines are held at once. Other files return
 `Error::Unsupported`: decode them whole.
 
@@ -131,11 +132,12 @@ if reader.damaged() { /* warn: part of the image is missing */ }
   Photoshop saved, decode on every core.
 - **Damaged data** leaves the rest of its restart interval at zero coefficients (mid grey) and
   decoding resumes at the next restart marker; without restart intervals the rest of the scan
-  stays at zero, as in `decode`. An interval that leaves more than its padding unread before
-  its restart marker counts as damaged too. `Reader::damaged` is set either way, and the samples
-  don't depend on where reading started. Damage never makes a read fail, also in the first MCU
-  (where `decode` reports that there is no image data): a caller that must refuse a file with
-  nothing decodable checks the size of its scan data.
+  stays at zero, as in `decode`. An interval, or the scan, that leaves more than its padding
+  unread before the next marker counts as damaged too. `Reader::damaged` is set either way, and
+  the samples don't depend on where reading started. Damage never makes a read fail, also in the
+  first MCU (where `decode` reports that there is no image data). `Reader::damaged` does not
+  tell that case from later damage, and neither does the size of the scan: data that fails at
+  its first code can be any length.
 
 ## Boundaries
 
@@ -189,8 +191,9 @@ cargo +nightly fuzz run decode
 cargo +nightly fuzz run bands corpus/bands corpus/decode
 ```
 
-Running it adds the inputs it finds to `fuzz/corpus/decode`; commit only seeds that cover
-something new.
+Each target adds the inputs it finds to the first corpus directory it reads: `decode` to
+`fuzz/corpus/decode`, `bands` to `fuzz/corpus/bands`. Commit only seeds that cover something
+new.
 
 ## Credits
 

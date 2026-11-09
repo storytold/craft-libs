@@ -3,6 +3,7 @@
 use craft_jpeg::{Bands, Limits};
 use libfuzzer_sys::fuzz_target;
 
+/// Limits that keep each input's work small: 1 MP and 64 MiB.
 fn fuzz_limits() -> Limits {
     let mut limits = Limits::default();
     limits.max_pixels = 1 << 20;
@@ -23,7 +24,8 @@ fuzz_target!(|data: &[u8]| {
         match reader.next_band() {
             Ok(Some(band)) => in_order.extend_from_slice(band.samples),
             Ok(None) => break,
-            Err(_) => return,
+            // Damage is reported by `Reader::damaged`, never as an error.
+            Err(e) => panic!("a read after Bands::new accepted the stream: {e}"),
         }
     }
     assert_eq!(in_order.len(), bands.width() as usize * bands.height() as usize * usize::from(bands.components()));
@@ -33,11 +35,9 @@ fuzz_target!(|data: &[u8]| {
     let mut sought = vec![0u8; in_order.len()];
     let mut reader = bands.reader();
     for (k, &p) in points.iter().enumerate().rev() {
-        if reader.seek(p).is_err() {
-            return;
-        }
+        reader.seek(p).expect("a seek to an advertised seek point");
         for _ in p..points.get(k + 1).copied().unwrap_or(bands.bands()) {
-            let Ok(Some(band)) = reader.next_band() else { return };
+            let band = reader.next_band().expect("a read after a seek").expect("a band after a seek");
             let at = band.index * bands.band_bytes();
             sought[at..at + band.samples.len()].copy_from_slice(band.samples);
         }
