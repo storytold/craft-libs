@@ -150,7 +150,7 @@ fn s_run(x: f64, y: f64) -> BezPath {
 }
 
 /// The sweep checks, in a build with debug assertions, that the order it gives two curves is the one their positions have where it changes
-/// (`linesweeper`'s `curve/mod.rs`, lines 1302 and 1305), and the check fails for curves that run along one another when they are a few
+/// (`intersect_cubics_rec` in `linesweeper`'s `curve/mod.rs`, lines 1301 to 1302 and 1305 to 1306 of 0.5.0), and the check fails for curves that run along one another when they are a few
 /// hundred units across and at about 10 million from the path they outline (a stroke of 20 million across a run of two arcs, 600 across,
 /// at (3,000, 4,000): run 163 of a grid of them; 1 of 700 at 1e7 of distance, 13 at 3e7, 259 at 1e8). The crate refuses what the check fails
 /// in such a build, as `Degenerate`; in a release build the check is not made and the sweep goes on, and what it makes is what the same run

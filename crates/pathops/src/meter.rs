@@ -69,11 +69,12 @@ pub(crate) const PIECE_MEMORY: u64 = 1_800;
 /// microseconds, 1.3 kilobytes: the same budget is 3 GB of either).
 pub(crate) const CACHE_MEMORY: u64 = 1_100;
 
-/// What a pair of segments that start or end together is worth against the budget alone, in nanoseconds: the cache's table grows
-/// by doubling, and the next table past 3.7 million pairs does not fit under a limit of 3 GB (2,200 pies of 30 slices, 3.76 million
-/// pairs, aborted at 2.37 GB in the allocation of it; 5,200 pies of 20 slices, 3.85 million, did too; the pies of 60 and of 100 slices
-/// that hold more pairs than that before they abort come within 0.1 GB of the limit from 3.7 million on), so that the budget admits no
-/// more than 3.56 million pairs, whatever else the sweep holds.
+/// What a pair of segments that start or end together is worth against the budget alone, in nanoseconds: the cache's tables grow by
+/// doubling, and what did not fit under a limit of 3 GB was the next table of the second (conservative) cache, 877 MB at about 1.8
+/// million entries, which for a pie holds about 0.49 of the pairs counted. Pies ran with 3.68 million pairs counted (2,150 of 30
+/// slices) and 3.71 million (5,000 of 20) and aborted at 2.37 GB with 3.76 million (2,200 of 30) and 3.85 million (5,200 of 20); the pies
+/// of 60 and of 100 slices, whose second cache holds less, run on to 4.5 million pairs but need 2.9 GB from 3.7 million. The budget
+/// admits no more than 3.56 million pairs, whatever else the sweep holds: 4% under the cliff, for pies.
 pub(crate) const PAIR_WORK: u64 = 1_180;
 
 /// What a piece of a curve is worth beyond that, in nanoseconds: the pieces of near-identical closed loops of one cubic each cost
@@ -679,7 +680,8 @@ mod tests {
     }
 
     /// The budget admits 3.56 million pairs that start or end together and no more, whatever else the sweep holds, as the cache of
-    /// comparisons is a table that doubles: the next one, at 3.7 million, aborted a process held to 3 GB.
+    /// comparisons is a table that doubles: the second cache's next one, at 1.8 million entries (for pies, 3.7 million pairs counted),
+    /// aborted a process held to 3 GB.
     #[test]
     fn the_budget_admits_three_point_five_six_million_pairs() {
         let budget = crate::budget::MAX_SWEEP_WORK as u64;

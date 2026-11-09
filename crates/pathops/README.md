@@ -69,7 +69,7 @@ Each result takes its key as follows:
 | Trim | One shape for each object that is still visible |
 | Merge | Joins touching visible parts that share a key; each connected component becomes one shape |
 | Crop | Keeps the visible parts of the lower objects inside the front-most object |
-| Outline | Returns open edge paths, split at every junction; coincident edges are de-duplicated, and each keeps the front-most key. A closed subpath gives the edges of its outline, an open one the edges of the path itself (no closing edge; one of three anchors or more that ends where it starts is a ring, and counts as closed, and so does one cubic that loops round an area, closed or not), and where an open path crosses another is a junction. The crossings of open paths come from the planar map (below), which is built for up to `SHAPE_BUILDER_MAX_SEGMENTS` segments: past that, or when no map can be built, or when finding the junctions on each edge takes more than `MAX_SEARCH_WORK` steps (Limits, below), there are no shapes, since the filled areas, where an open path's way there and back cancel, do not see where it crosses another. A junction of the map that lies on one path at one place only is no cut (the two passes of an open path part by more than the map's precision where it runs nearly level, and leave vertices along it that nothing meets): a path is cut where it meets another path or itself, and nowhere else |
+| Outline | Returns open edge paths, split at every junction; coincident edges are de-duplicated, and each keeps the front-most key. A closed subpath gives the edges of its outline, an open one the edges of the path itself (no closing edge; one of three anchors or more that ends where it starts is a ring, and counts as closed, and so does one cubic that loops round an area, closed or not), and where an open path crosses another is a junction. The crossings of open paths come from the planar map (below), which is built for up to `SHAPE_BUILDER_MAX_SEGMENTS` segments: past that, or when no map can be built, or when finding the junctions on each edge takes more than `MAX_SEARCH_WORK` steps (Limits, below), there are no shapes, since the filled areas, where an open path's way there and back cancel, do not see where it crosses another. A junction of the map that lies on one path at one place only is no cut (the two passes of an open path part by more than the map's precision where it runs nearly level, and leave vertices along it that nothing meets): the Outline cuts a path where it meets another path or itself, and not in the middle of a path that nothing meets (Known limits: it can lose a cut, never add one; the shape builder's lines and live paint's edges are not so held) |
 
 An operation that cannot sweep its input (see Limits) returns no shapes.
 
@@ -408,19 +408,22 @@ filter (an input they refuse is refused in milliseconds, without sweeping); the 
   | segments that start at one height | the square of those that start (and of those that end) at one height, wherever they are across | 3 ns | a row of dots on one line: their shapes put their pieces into the sweep line in one step |
 
   The star of 1,291 points counts 3.8e9 (91% of the budget), a hatch of 400 and 400 strokes 3.1e9.
-- **The cache of comparisons.** `linesweeper` keeps the order of each pair of segments it compares in a table that it never clears (two of them, `ComparisonCache` in its
-  `order.rs`), and segments that start or end together are compared with one another: a pie of k slices has 2k - 1 ends at its centre, which make (2k - 1)(k - 1) entries. An entry
-  takes about 650 bytes once the table has grown to hold it, and a table grows by doubling, so that the next one, past 3.7 million pairs, is more than a limit of 3 GB leaves:
-  2,200 pies of 30 slices (264,000 elements, 3.76 million pairs) aborted a process held to 3 GB, in the allocation of it after 8.6 s, and so did 2,250, and 5,200 pies of
-  20 slices (3.85 million; 5,000 took 2.5 GB). The first meter did not count them; it does: before the sweep, the
-  pairs of the starts and ends of the segments that lie within 8 tolerances of one another across and up (by cell where many lie together, and for few by a pass of the
-  points in order across, so that the vertices of a polygon of 262,000 sides are a pair each and no more) are charged 1.1 microseconds each, with the memory of the pieces, and 1.18 microseconds
-  each against the budget alone, so that the budget admits 3.56 million of them whatever else the sweep holds. 2,000 pies of 30 slices (3.4 million pairs), 4,500 of 20, 900 of 45 and 700 of 50 are made; 2,100 and
-  more of 30, 4,800 and more of 20, 1,000 of 45 and 800 of 50 are refused (in 0.03 to 1 s, before the sweep, and the two just over the edge, 2,080 of 30 and 4,800 of 20, by the dry sweep after 3 to 4 s). The most admitted needs, under `ulimit -v` (the meter on, the others lifted), a limit of 2.3 GB for pies
-  of 45 and of 50 slices (0.7 GB under 3 GB), 2.5 GB for pies of 30 (0.5 GB) and 2.8 GB for pies of 20 (0.2 GB: the 2,000 pies of 30 that were always made fix the edge, and 20-slice pies have more pieces
-  for their pairs). Past the edge a sweep that fits does not fit by much: 800 pies of 50 slices, 3.88 million pairs, need 2.9 GB, and 530 of 60 and 190 of 100 need 2.9 GB, which is why the pairs have a
-  limit of their own and not only their weight with the pieces'. The shapes that make entries by their crossings and not by their ends (a mesh, a grid of squares, rings: 4 to 11 for each piece, 1 or so for most shapes) make them in
-  proportion to their pieces and are held by the piece's weight and by the counts of crossings (a mesh of 180 cells, the most the default limits admit, makes 2.1 million, in 1.3 GB).
+- **The cache of comparisons.** `linesweeper` keeps the order of each pair of segments it compares in two tables that it never clears (`ComparisonCache` in its
+  `order.rs`: the sweep's own, and a second, conservative one), and segments that start or end together are compared with one another: a pie of k slices has 2k - 1 ends
+  at its centre, which make (2k - 1)(k - 1) entries. An entry takes about 650 bytes once its table has grown to hold it, and a table grows by doubling.
+  2,200 pies of 30 slices (264,000 elements, 3.76 million counted pairs) aborted a process held to 3 GB after 7 to 9 s, in the allocation of the next table of the second cache
+  (877 MB, at about 1.8 million entries, which for a pie is about 0.49 of the pairs counted), and so did 2,250, and 5,200 pies of 20 slices (3.85 million); with the meter off,
+  2,150 pies of 30 (3.68 million) and 5,000 of 20 (3.71 million, RSS 2.5 GB) ran. The first meter did not count them; it does: before the sweep, the pairs of the starts and ends
+  of the segments that lie within 8 tolerances of one another across and up (by cell where many lie together, and for few by a pass of the points in order across, so that the
+  vertices of a polygon of 262,000 sides are a pair each and no more) are charged 1.1 microseconds each, with the memory of the pieces, and 1.18 microseconds each against the
+  budget alone, so that the budget admits 3.56 million of them whatever else the sweep holds: for pies, 4% under the cliff. 2,000 pies of 30 slices (3.4 million pairs), 4,500 of 20,
+  900 of 45 and 700 of 50 are made. 2,100 and more of 30, 1,000 of 45, 800 of 50 and 5,000 and more of 20 are refused in 0.03 to 1 s, before the sweep; 2,080 of 30 and 4,550 and more of 20
+  are refused by the dry sweep, after 4 to 5 s. A child process held by `ulimit -v` ran the most admitted with limits of about 2.4 GB (700 pies of 50 slices), 2.5 GB (900 of 45),
+  2.6 GB (2,000 of 30) and 2.8 GB (4,500 of 20): 0.2 to 0.6 GB under 3 GB (the least for pies of 20, as the 2,000 pies of 30 that were always made fix the edge, and 20-slice pies have
+  more pieces for their pairs). The refusals of the dry sweep near the edge hold up to about 2.7 GB. Past the edge a sweep that fits does not fit by much: 800 pies of 50 slices, 3.88 million
+  pairs, need 2.9 GB, and 530 of 60 and 190 of 100 need 2.9 GB, which is why the pairs have a limit of their own and not only their weight with the pieces'. The shapes that make entries
+  by their crossings and not by their ends (a mesh, a grid of squares, rings: 4 to 11 for each piece, 1 or so for most shapes) make them in proportion to their pieces and are held by the
+  piece's weight and by the counts of crossings (a mesh of 180 cells, the most the default limits admit, makes 2.1 million, in 1.3 GB).
 - **The budget.** The work is held to `MAX_SWEEP_WORK` as it is counted: after each range of each sweep line the sweep stops, refusing the input
   as `TooComplex`, if the work counted so far is past it, so an input that is refused has cost about the budget of sweep at most. The counts made
   before the sweep refuse stacks of copies, fans and pies in 0.3 to 40 ms; the other holes were refused in 0.14 to 1.5 s, and in 3.8 to 5.1 s
@@ -542,8 +545,10 @@ or so, measured once in a release build:
   The false refusals it makes are in "Ordinary input the defaults refuse". The sweep's comparison cache is counted by the pairs of
   segments that start or end together, and not by the comparisons the sweep makes: a shape whose segments cross many others compares each with those it meets (a mesh of 100 cells
   made 635,000 entries for 60,000 pieces, a grid of 100 squares 240,000 for 40,000, 15,000 rings 490,000 for 120,000), which the weight of a piece covers and the counts of crossings bound
-  (a mesh of 180 cells, the most the defaults admit, makes 2.1 million entries in 1.3 GB; 190 is refused), but no input is known that reaches the table's 3.7 million past them with fewer than the 3.56 million
-  pairs that start or end together. The table's step is a cliff and the edge is set under it: the pies that aborted had 3.76 million pairs, 3.7 million (5,000 of 20) were made under the limit (RSS 2.5 GB), and the budget admits 3.56 million, 4% fewer than the most that was made.
+  (a mesh of 180 cells, the most the defaults admit, makes 2.1 million entries in 1.3 GB; 190 is refused), but no input is known that fills the second cache's table, at about 1.8 million entries, with fewer than the 3.56 million
+  pairs that start or end together that the budget admits. The cliff is that table's step, which holds about 0.49 of the pairs of a pie: the pies that aborted had 3.76 million pairs
+  (2,200 of 30 slices) and 3.85 million (5,200 of 20), those that ran with the meter off 3.68 and 3.71 million, and the edge leaves 4% for pies. Pies of 12 to 28 slices at and past their
+  edges, bowed pies, jittered pies, wide shallow lines, slivers and lenses were measured too, and none aborts.
 - What follows the sweep is not metered but for the planar map. The operations on the arrangement take a multiple of the sweep that
   is linear in its pieces (Divide and Merge of the star of 1,291 points 14.7 and 13.2 s, three times the 4.5 s of its area; the
   contour pass after the sweep takes up to 2.6 times the sweep for stacks of copies: six stacks of 128, 4.9 s for 1.9 s). A planar map
@@ -559,24 +564,44 @@ or so, measured once in a release build:
   200, 3.3 s for 400 and 4.1 s for 450; 500 are refused by the event limit. The cost grows with about the
   square of their number there, not the cube. Lines that pass through that point are counted, as if the curves
   were not there.
-- The planar map, and what is made of it (the Outline of open paths, `shape_builder`'s lines and faces, `live_paint`), can lose a crossing, or cut
+- The planar map, and what is made of it (the Outline of open paths, `shape_builder`'s lines and faces, `live_paint`'s edges and faces), can lose a crossing, or cut
   a path where nothing crosses it, where curves cross at a shallow angle or one of them runs nearly level. The map traces an open path out and back,
   so four curves meet at a crossing, and the sweep, which finds the height of a cut to a tolerance and so its place along a level curve to that tolerance
   over the slope, cuts them at points up to a unit apart (0.17 and 0.78 were seen) and joins the cuts with pieces that run level; copies of one path part
   by about 5e-3 at the top of a flat arc. The map reads the input of each piece from the outlines that lie within 16 tolerances of its middle, and drops
   a piece that has none, joins the ends of a stub only if they lie within a sixteenth of the default precision, and merges two edges between the same
-  points only within the precision, all of which those cuts outrun: the crossing is no vertex, or a vertex is where nothing meets. Two open cubics that
+  points only within the precision, all of which those cuts outrun: the crossing is no vertex, or a vertex is where nothing meets. The sweep records which inputs a
+  piece is made of (the difference of the crossings on its two sides, in `linesweeper`'s public interface), which the map does not use. Two open cubics that
   cross twice (`M50.0175,87.4777 C91.0932,74.4057 61.7557,89.6998 73.7868,37.2415` and
   `M40.8294,97.1229 C86.9075,78.6158 58.564,64.895 99.0986,87.5071`) came back from the Outline as 1 piece each and not 3, at a precision of 1e-5 and of 0.01, and
-  closed into shapes `live_paint` gave no face; turned by 30 or 90 degrees they are right. Measured against a count of the crossings made by flattening the
-  paths to polylines and crossing the segments (three runs of 400 stacks): of stacks of two to four open paths of two or three random cubics, the Outline lacks cuts in 349 of 1,200
-  (4,516 cuts) and has 72 more than places (half of them where two crossings lie closer than 5e-3), the shape builder's lines are wrong in 924 (3,061 cuts lost and 2,221 more than places),
-  and its faces in 512; of stacks of smoother paths (three or four anchors), the Outline in 11 (28 cuts lost, 8 more), the lines in 372 (887 more than places) and the faces in 6. The
-  counts are the same when the drawing is made 10 or 100 times as large. Closed shapes that do not cross themselves (1,200 stacks of two to four) are right in Divide, Trim, Merge and the four booleans, and
-  wrong in `live_paint`'s faces in 4 (a face lost in 11 of them) and the Outline's cuts in 3. Closed shapes that cross themselves (random closed cubics of two or three, 1,200 stacks)
-  give a wrong area in 6 to 9% of pairs for the booleans, 7% for Divide, 10% of results for Merge and Trim, by up to 460 square units in drawings 100 across, whatever their size
-  or turn (a count by a grid of points agrees with the flattened paths): the cause is not known. Lines that cross lines, and a line across an arc or a circle, are cut at every crossing
-  (`tests/it/outline_cuts.rs`). The vertices in the middle of a path that the Outline no longer cuts at are still cuts of the shape builder's lines and live paint's edges.
+  closed into shapes `live_paint` gave no face; turned by 30 or 90 degrees they are right. These are measured against the crossings found by flattening the
+  paths to polylines (200 steps a cubic), crossing every pair of segments and cutting the plane into slabs, which uses no sweep (a count of points on a grid agrees with it where it was
+  checked), on three runs of 400 stacks of two to four paths in a drawing 100 across, a stack counting as wrong where a count of cuts or of faces, or an area, differs by more than
+  the flattening and the precision explain. The counts are the same when the drawing is made 10 or 100 times as large (a tenth: the Outline of open smooth paths is wrong in 18 of 300 and
+  of closed shapes in 44 of 400, where at 1 it is 2 of 300 and 1 of 400):
+  - open paths of two or three random cubics each (1,200 stacks, mostly paths that cross themselves): the Outline lacks cuts in 349 (4,516 cuts) and has 72 more than places (half of them
+    where two crossings lie closer than 5e-3, so right); `shape_builder`'s lines and `live_paint`'s edges are wrong in 924 (3,061 cuts lost and 2,221 more than places); their faces in 512
+    (3,232 faces lost and 672 extra, an area off by up to 1,907);
+  - open paths of three or four anchors, as a drawing has them (1,200 stacks): the Outline is wrong in 11 (28 cuts lost, 8 more, all of the 8 where crossings lie closer than 5e-3),
+    the lines and edges in 372 (17 lost, 887 more), the faces in 6 (10 lost);
+  - closed shapes that do not cross themselves (four to six anchors round a centre, 1,200 stacks): Divide, Trim, Merge, the four booleans and `shape_builder`'s faces are right in all;
+    `live_paint`'s faces are wrong in 4 (11 faces lost and 4 extra; in one, two faces of 119 and 3,156 square units came back as one of 3,274), and the Outline of closed shapes in 3 (2 cuts lost, 1 more);
+  - closed shapes that cross themselves (random closed cubics of two or three each, mixed fill rules, 1,200 stacks; 2,400 results of Merge, 3,589 of Trim): a wrong area, by up to 463 square units,
+    in 5.8 to 8.7% of the pairs for the four booleans, in 7.2% of Divide, 10% of Merge and 10.8% of Trim, whatever the size or the turn of the drawing; the cause is not known, and is not this one.
+
+  VectorCraft's `shape_builder` and `live_paint` are this code and give the same results on the same stacks (open: 924 and 372 wrong lines and edges, 512 and 6 faces; closed shapes that do
+  not cross themselves: 4 faces and 3 Outlines), and its closed self-crossing results are worse (128 to 164 of 1,200 booleans, 121 of Divide, 311 of 2,400 Merge, 458 of 3,589 Trim). Its Outline of open
+  paths cuts them at the vertices of the filled areas (their implicit closing lines included) and not at their crossings, so it is not compared. None of this is changed here: the map's reading of the sweep and the Outline's cuts at its
+  vertices, and the self-crossing results, are left for a later change. Lines that cross lines, and a line across an arc or a circle, are cut at every crossing (`tests/it/outline_cuts.rs`).
+  The vertices in the middle of a path that the Outline does not cut at (the next limit) are still cuts of the shape builder's lines and live paint's edges.
+- The Outline of open paths keeps a junction of the planar map only if it lies within `reach` (a ten-millionth of the drawing's size, at least 1e-6) of two paths or of two places on one, and the map's
+  vertex can lie on one pass and 2e-5 to 9e-5 from the other, so a real cut can be lost; it never adds one. Against the crossings found by flattening, 4,000 random single open cubics (492 of them loop):
+  488 of the 492 loops are cut as they cross (4 come back as 1 piece, not 3: one crosses itself at 3 degrees, 2.3e-5 from the double point), the 3,474 without a loop all are (before this rule it made 483
+  spurious cuts, and 71 of the loops were not cut as they cross); in random stacks of open cubics 12 of about 49,000 crossing points are lost, in 6,268 of lines none; no case of 3,000 has more pieces than
+  before the rule; arcs crossing at 0.1 to 30 degrees (60 pairs) and lines (56) were all cut. The Outline of closed shapes does not ask for it (its junction points lie too far from one pass:
+  asking would change 317 of 1,500 random closed rings, a ring cut in 3 coming back in 2), and a test pins a closed ring of three cubics that crosses itself, cut in three.
+- Near the edge of the cache term (above): a refusal by the dry sweep holds up to about 2.7 GB, 0.3 GB under a limit of 3 GB, and bowed pies at the edge run at 1.7 to 1.9 times the 1,291-point star
+  beside them (1,800 pies of 30 slices of two cubic sides took 15.3 s against 8.1 s, of three cubic sides 19.1 s against 11.0 s), in 2.55 to 2.68 GB.
 - A Pathfinder Outline refuses after the planar map is built: `MAX_SEARCH_WORK` counts the searches for the junctions
   on each edge once the map exists, so its refusal comes after the time the map took. The grid of 300 and 300 open lines under arches that was
   measured for it (the bounds of every arch hold all 90,000 junctions, with the curve nowhere near) does not reach it by default: the counts of
@@ -584,8 +609,7 @@ or so, measured once in a release build:
   lines under 100 arches are made, in 1.4 s. With those two lifted, the meter makes the Outline of 300 and 300 lines under 100 arches (7.7 s, a work under the
   quarter of its budget that a map is held to) and refuses 200 arches in 0.12 s, before the map (the meter alone refuses them in 3 ms with every other limit lifted); the search limit alone refuses 200 after 9.6 s. No input that
   the other limits admit is known to reach `MAX_SEARCH_WORK` by default.
-- In a build with debug assertions `linesweeper` checks the order it gives two curves against their positions where it changes (`curve/mod.rs`, lines 1302 and
-  1305), and the check fails for some curves whose outline is far from them. The outline stroke of an open run of two arcs (each of chord 300 and bow 100), taken
+- In a build with debug assertions `linesweeper` checks the order it gives two curves against their positions where it changes (the two pairs of `debug_assert!`s of `intersect_cubics_rec` in `curve/mod.rs`, lines 1301 to 1302 and 1305 to 1306 of linesweeper 0.5.0), and the check fails for some curves whose outline is far from them. The outline stroke of an open run of two arcs (each of chord 300 and bow 100), taken
   1e7 on either side (a width of 2e7), fails it for 1 of 700 such runs laid out on a grid (the one at (3,000, 4,000)), and the same strokes at 3e7, 1e8, 1e9 and 1e10 on
   either side fail it for 13, 259, 327 and 275 of the 700. The crate catches the panic, so a debug build (`cargo test` too) answers `Degenerate` for them. A release build makes no
   check and goes on, and made the same outline for every one of the 700 runs at every distance from 1e6 to 1e10: no panic, 11 ms a run at the most, areas within 1e-9 of one
@@ -822,7 +846,7 @@ bit for bit VectorCraft's), and the results are identical except where noted:
     nothing);
   - Pathfinder Outline gives an open path as its own edges, with no closing edge (but for a ring, which comes back to where it started: that is closed), and cuts at the points
     where an open path crosses another (the filled areas' arrangement, where the way there and back
-    cancel, saw no crossing), and only there: a vertex of the planar map that lies on one path at one place is not a cut
+    cancel, saw no crossing), and not in the middle of a path that nothing meets: a vertex of the planar map that lies on one path at one place is not a cut of the Outline
     (one open arc, 1e5 across, crossed once by a line was 5 to 7 pieces and is 4; a circle of radius 100 with no close, crossed twice by a line,
     6 and is 5). VectorCraft cuts no open path where it crosses another, so it has neither the crossings nor those cuts; Merge makes a shape of each connected component, so an island inside a
     hole of the same key is a shape of its own;

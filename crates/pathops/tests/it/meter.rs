@@ -172,7 +172,7 @@ fn memory_cases() -> Vec<(&'static str, BezPath)> {
         ("400 windows sharing a tenth", windows_sharing_a_tenth(400)),
         ("220 small squares moved by tenths of a tolerance", polygons_a_few_tolerances_apart(4, 220, 0.15, 1e-4)),
         ("240 small triangles an ulp apart", polygons_an_ulp_apart(3, 240, 1e-4)),
-        // The sweep keeps the order of each pair of segments it compares, and the table of them that doubles past 3.7 million pairs did
+        // The sweep keeps the order of each pair of segments it compares, and the second table of them, which doubles at about 1.8 million entries, did
         // not fit: these aborted a process held to 3 GB, in the allocation of it, at 2.34 to 2.37 GB.
         ("2,200 pies of 30 slices", stacked_pies(2_200, 30)),
         ("2,250 pies of 30 slices", stacked_pies(2_250, 30)),
@@ -225,7 +225,7 @@ fn run_child_under_the_limit(name: &str) -> String {
 }
 
 /// The most the meter admits of the pies that fill the cache is made under the same limit: it fits (2,000 pies of 30 slices need a limit
-/// of 2.5 GB, and 4,500 of 20 one of 2.8 GB, of address space), and it comes back with an answer.
+/// of about 2.6 GB, and 4,500 of 20 one of about 2.8 GB, of address space), and it comes back with an answer.
 #[cfg(unix)]
 #[cfg_attr(debug_assertions, ignore = "seconds and gigabytes: run with cargo test --release")]
 #[test]
