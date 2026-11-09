@@ -166,6 +166,10 @@ local patches listed below. `.cargo_vcs_info.json` names the commit it was packa
 `824b0791a750f7b27b8edcbb6c6244d0e629875e`. That commit is not in the GitHub repository the manifest
 names, which is archived; its README says development moved off GitHub.
 
+local patches listed below. `.cargo_vcs_info.json` names the commit it was packaged from,
+`824b0791a750f7b27b8edcbb6c6244d0e629875e`. That commit is not in the GitHub repository the manifest
+names, which is archived; its README says development moved off GitHub.
+
 Every file here except this one, `SOURCE.json` and the patched files below is byte for byte the file
 in the `.crate` archive. `SOURCE.json` records the hash of the `.crate` download
 (`source_archive_sha256`) and, for every file kept, the hash in the package (`source_sha256`) and the
@@ -204,6 +208,7 @@ and, for every file kept, the hash in the package (`source_sha256`) and the hash
 
 Every change here updates this table and `SOURCE.json` in the same commit.
 | `src/topology.rs` | `Topology::merge_coincident` compares a segment with its nearest west neighbor that an earlier merge did not delete. Before, it used the west neighbor recorded when the segment was created, so a run of three or more coincident segments merged only in pairs: four copies of one square, two in each direction, left 4 segments and 2 zero-area contours instead of none. The `merge_coincident_runs_longer_than_two` test covers that input and three copies, which leave the square once. |
+| `src/topology.rs` | `contours_for_positions` sorts the pieces it splits off a contour walk at a repeated point by the way they wind. A piece that winds like the walked contour becomes its sibling, and a piece that winds the other way becomes a child of the piece that contains it. Before, every piece split off became a child of the walk with the opposite `outer` flag, so of two holes touching at a point, the second came out with `outer = true` and the first hole as its parent, although it winds counter-clockwise. The `holes_touching_at_a_point_are_siblings` test covers it. |
 
 `omitted_files` lists the 43 files of the package left out here, with their hashes:
 
