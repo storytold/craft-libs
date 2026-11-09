@@ -14,15 +14,6 @@ Topology(
     A,
     A,
   ],
-  open_segs: [
-    [],
-    [],
-    [],
-    [],
-    [],
-    [],
-    [],
-  ],
   winding: OutputSegVec(
     inner: [
       HalfSegmentWindingNumbers(

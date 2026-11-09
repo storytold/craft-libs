@@ -296,6 +296,10 @@ local patches listed below. `.cargo_vcs_info.json` names the commit it was packa
 `824b0791a750f7b27b8edcbb6c6244d0e629875e`. That commit is not in the GitHub repository the manifest
 names, which is archived; its README says development moved off GitHub.
 
+local patches listed below. `.cargo_vcs_info.json` names the commit it was packaged from,
+`824b0791a750f7b27b8edcbb6c6244d0e629875e`. That commit is not in the GitHub repository the manifest
+names, which is archived; its README says development moved off GitHub.
+
 Every file here except this one, `SOURCE.json` and the patched files below is byte for byte the file
 in the `.crate` archive. `SOURCE.json` records the hash of the `.crate` download
 (`source_archive_sha256`) and, for every file kept, the hash in the package (`source_sha256`) and the
@@ -405,6 +409,7 @@ Every change here updates this table and `SOURCE.json` in the same commit.
 | `src/curve/mod.rs` | `CurveOrder::with_y_slop` keeps the comparison's `metrics` when it changes the entries, instead of returning empty metrics. Code comments label the change `Craft patch (y-slop metrics)`. The `y_slop_keeps_metrics` test applies slop to an order with one metrics entry. |
 | `src/sweep/sweep_line.rs` | The doc comment of `SweepLine::line_segment` says it can return a segment that has exited, which `segment_range` leaves out. Code comments label the change `Craft patch (exited slots)`. |
 | `tests/regression.rs` | The test escapes `CARGO_MANIFEST_DIR` with `glob::Pattern::escape` and fails when it finds no inputs. A checkout path containing `[` used to match no files, so the test ran zero cases and passed. Code comments label the change `Craft patch (regression glob)`. |
+| `src/topology.rs`, `src/snapshots/linesweeper__topology__tests__*.snap` | Building a `Topology` and walking its contours no longer make small allocations per segment. The open output segments of each input segment are kept in an inline queue of three (`OpenSegs`) instead of a `VecDeque`, and that state now lives only for the sweep instead of in the `Topology`, so the nine topology snapshots no longer list `open_segs`. The segment buffers are kept for the whole sweep instead of being allocated for each sweep-line range, the winding number is cloned for horizontals only when a horizontal starts at the point, `can_merge` returns early at a point that is not simple before solving for `t`, and `segs_to_path` reverses first halves into one reused buffer instead of calling `reverse_subpaths` for each one. On a stroked serpentine of 501,993 segments, building allocates 4,324,964 times instead of 6,044,487 and holds 731.2 MB instead of 764.0 MB, and `contours` allocates 632,030 times instead of 834,041; the contours are the same. The `building_a_topology_does_not_allocate_per_segment` and `contours_do_not_allocate_per_reversed_segment` tests count the allocations per extra square or wave, `reverse_path_into_matches_reverse_subpaths` checks the reversal against `reverse_subpaths`, `open_segs_pop_like_a_deque` checks the queue against a `VecDeque`, and `contours_keep_their_elements_and_direction` compares two contours with the elements the unpatched code writes. |
 
 `omitted_files` lists the 43 files of the package left out here, with their hashes:
 

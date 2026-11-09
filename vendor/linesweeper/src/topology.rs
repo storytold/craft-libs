@@ -3,10 +3,10 @@
 //! This consumes the output of the sweep-line algorithm and does things
 //! like winding number computations and boolean operations.
 
-use std::collections::VecDeque;
 use std::sync::Arc;
 
-use kurbo::{Affine, BezPath, ParamCurve, Rect, Shape};
+use kurbo::{Affine, BezPath, ParamCurve, PathEl, Rect, Shape};
+use smallvec::SmallVec;
 
 use crate::{
     Error, FillRule,
@@ -419,14 +419,44 @@ impl std::fmt::Debug for PointNeighbors {
     }
 }
 
-/// Consumes sweep-line output and computes topology.
-#[cfg_attr(test, derive(serde::Serialize))]
-#[derive(Clone, Debug)]
-pub struct Topology<W: WindingNumber> {
-    eps: f64,
-    correctness: Correctness,
-    /// The user-provided tags for each segment.
-    tag: SegVec<W::Tag>,
+/// The open output segments of one input segment, oldest first.
+///
+/// A segment has at most three of them at a time (see `TopologyBuffers::open_segs`),
+/// so they are stored inline and a segment's queue does not allocate unless
+/// it holds more than three.
+#[derive(Default)]
+struct OpenSegs(SmallVec<[OutputSegIdx; 3]>);
+
+impl OpenSegs {
+    fn front(&self) -> Option<&OutputSegIdx> {
+        self.0.first()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    fn push_front(&mut self, idx: OutputSegIdx) {
+        self.0.insert(0, idx);
+    }
+
+    fn push_back(&mut self, idx: OutputSegIdx) {
+        self.0.push(idx);
+    }
+
+    fn pop_front(&mut self) -> Option<OutputSegIdx> {
+        if self.0.is_empty() {
+            None
+        } else {
+            Some(self.0.remove(0))
+        }
+    }
+}
+
+/// The state that `Topology::from_segments` keeps while it sweeps, passed to
+/// `Topology::process_sweep_line_range` so that each sweep-line range does not
+/// allocate its own buffers. It is dropped when the sweep ends.
+struct TopologyBuffers {
     /// For each input segment, this is the list of output segments that we've started
     /// recording but haven't finished with. There can be up to three of them, because
     /// consider a segment that passes through a sweep-line like this:
@@ -444,7 +474,57 @@ pub struct Topology<W: WindingNumber> {
     /// first encounter the output segment pointing down and add an unfinished segment
     /// for that. Then we'll add an output segment for the horizontal line and so
     /// at that point there will be three unfinished output segments.
-    open_segs: SegVec<VecDeque<OutputSegIdx>>,
+    open_segs: SegVec<OpenSegs>,
+    /// A buffer for the half-segments that start at the current point. They are
+    /// collected while their output segments are created, and then added around
+    /// the point.
+    seg_buf: Vec<HalfOutputSegIdx>,
+    connected_segs: SegmentsConnectedAtX,
+}
+
+/// Writes the elements of `path.reverse_subpaths()` to `out`, replacing its
+/// contents.
+///
+/// A path made of one `MoveTo` followed by lines and curves (which is what
+/// output segment paths are) is reversed into `out` directly, so a re-used
+/// `out` does not allocate. Any other path goes through `reverse_subpaths`.
+fn reverse_path_into(path: &BezPath, out: &mut Vec<PathEl>) {
+    out.clear();
+    let els = path.elements();
+    let Some((&PathEl::MoveTo(start), rest)) = els.split_first() else {
+        out.extend(path.reverse_subpaths());
+        return;
+    };
+    if rest
+        .iter()
+        .any(|el| matches!(el, PathEl::MoveTo(_) | PathEl::ClosePath))
+    {
+        out.extend(path.reverse_subpaths());
+        return;
+    }
+    let end = rest.last().and_then(PathEl::end_point).unwrap_or(start);
+    out.push(PathEl::MoveTo(end));
+    for (i, el) in rest.iter().enumerate().rev() {
+        let end = i
+            .checked_sub(1)
+            .and_then(|j| rest[j].end_point())
+            .unwrap_or(start);
+        out.push(match *el {
+            PathEl::QuadTo(c0, _) => PathEl::QuadTo(c0, end),
+            PathEl::CurveTo(c0, c1, _) => PathEl::CurveTo(c1, c0, end),
+            _ => PathEl::LineTo(end),
+        });
+    }
+}
+
+/// Consumes sweep-line output and computes topology.
+#[cfg_attr(test, derive(serde::Serialize))]
+#[derive(Clone, Debug)]
+pub struct Topology<W: WindingNumber> {
+    eps: f64,
+    correctness: Correctness,
+    /// The user-provided tags for each segment.
+    tag: SegVec<W::Tag>,
     /// Winding numbers of each segment.
     ///
     /// This is sort of logically indexed by `HalfOutputSegIdx`, because we can look at the
@@ -647,7 +727,6 @@ impl<W: WindingNumber> Topology<W> {
             eps,
             correctness,
             tag,
-            open_segs: SegVec::with_size(segments.len()),
 
             // We have at least as many output segments as input segments, so preallocate enough for them.
             winding: OutputSegVec::with_capacity(segments.len()),
@@ -671,6 +750,11 @@ impl<W: WindingNumber> Topology<W> {
         }
         let mut range_bufs = SweepLineRangeBuffers::default();
         let mut line_bufs = SweepLineBuffers::default();
+        let mut topo_bufs = TopologyBuffers {
+            open_segs: SegVec::with_size(segments.len()),
+            seg_buf: Vec::new(),
+            connected_segs: SegmentsConnectedAtX::default(),
+        };
         while let Some(mut line) = sweep_state.next_line(&mut line_bufs) {
             while let Some(positions) = line.next_range(&mut range_bufs, &segments) {
                 let range = positions.seg_range();
@@ -678,10 +762,10 @@ impl<W: WindingNumber> Topology<W> {
                     None
                 } else {
                     let prev_seg = positions.line().line_segment(range.segs.start - 1).unwrap();
-                    debug_assert!(!ret.open_segs[prev_seg].is_empty());
-                    ret.open_segs[prev_seg].front().copied()
+                    debug_assert!(!topo_bufs.open_segs[prev_seg].is_empty());
+                    topo_bufs.open_segs[prev_seg].front().copied()
                 };
-                ret.process_sweep_line_range(positions, &segments, scan_west_seg);
+                ret.process_sweep_line_range(positions, &segments, scan_west_seg, &mut topo_bufs);
             }
         }
         if sweep_state.work_limit_exceeded() {
@@ -782,12 +866,12 @@ impl<W: WindingNumber> Topology<W> {
     /// so how do we know which one is ready for its second half? The short
     /// answer is that we use a double-ended queue, and see `new_half_seg`
     /// for how we use it.
-    fn second_half_segs<'a, 'slf: 'a>(
-        &'slf mut self,
+    fn second_half_segs<'a>(
+        open_segs: &'a mut SegVec<OpenSegs>,
         segs: impl Iterator<Item = SegIdx> + 'a,
     ) -> impl Iterator<Item = HalfOutputSegIdx> + 'a {
         segs.map(|s| {
-            self.open_segs[s]
+            open_segs[s]
                 .pop_front()
                 .expect("should be open")
                 .second_half()
@@ -811,6 +895,7 @@ impl<W: WindingNumber> Topology<W> {
     /// closes them at the next point.
     fn new_half_seg(
         &mut self,
+        open_segs: &mut SegVec<OpenSegs>,
         idx: SegIdx,
         p: PointIdx,
         winding: SegmentWindingNumbers<W>,
@@ -819,7 +904,7 @@ impl<W: WindingNumber> Topology<W> {
     ) -> OutputSegIdx {
         let out_idx = OutputSegIdx(self.winding.inner.len());
         if !horizontal {
-            self.open_segs[idx].push_back(out_idx);
+            open_segs[idx].push_back(out_idx);
         }
         self.point_idx.start.push(p);
         self.point_idx
@@ -872,6 +957,7 @@ impl<W: WindingNumber> Topology<W> {
         mut pos: SweepLineRange,
         segments: &Segments,
         mut scan_west: Option<OutputSegIdx>,
+        bufs: &mut TopologyBuffers,
     ) {
         let y = pos.line().y();
         // Craft patch (winding storage): `winding` and `w` below are shared with
@@ -881,11 +967,11 @@ impl<W: WindingNumber> Topology<W> {
             .map(|idx| Arc::clone(&self.winding[idx].counter_clockwise))
             .unwrap_or_default();
 
-        // A re-usable buffer for holding temporary lists of segment indices. We
-        // need to collect the output of second_half_segments because it holds
-        // a &mut self reference.
-        let mut seg_buf = Vec::new();
-        let mut connected_segs = SegmentsConnectedAtX::default();
+        let TopologyBuffers {
+            open_segs,
+            seg_buf,
+            connected_segs,
+        } = bufs;
         // The last segment we saw that points down from this sweep line.
         let mut last_connected_down_seg: Option<OutputSegIdx> = None;
         // Craft patch (coincident horizontals): the horizontal output segments started at
@@ -918,10 +1004,9 @@ impl<W: WindingNumber> Topology<W> {
             }
 
             // Find all the segments that are connected to something above this sweep-line at next_x.
-            pos.update_segments_at_x(&mut connected_segs);
-            seg_buf.clear();
-            seg_buf.extend(self.second_half_segs(connected_segs.connected_up()));
-            self.add_segs_clockwise(&mut first_seg, &mut last_seg, seg_buf.iter().copied(), p);
+            pos.update_segments_at_x(connected_segs);
+            let closed = Self::second_half_segs(open_segs, connected_segs.connected_up());
+            self.add_segs_clockwise(&mut first_seg, &mut last_seg, closed, p);
 
             // Then: gather the output segments from half-segments starting here and moving
             // to later sweep-lines. Allocate new output segments for them.
@@ -937,7 +1022,8 @@ impl<W: WindingNumber> Topology<W> {
                     clockwise: prev_winding,
                     counter_clockwise: Arc::clone(&winding),
                 };
-                let half_seg = self.new_half_seg(new_seg, p, windings, false, orientation);
+                let half_seg =
+                    self.new_half_seg(open_segs, new_seg, p, windings, false, orientation);
                 self.scan_west[half_seg] = scan_west;
                 scan_west = Some(half_seg);
                 seg_buf.push(half_seg.first_half());
@@ -958,7 +1044,12 @@ impl<W: WindingNumber> Topology<W> {
             // Gather the output segments from horizontal segments starting
             // here. Allocate new output segments for them and calculate their
             // winding numbers.
-            let hsegs = pos.active_horizontals_and_orientations();
+            let mut hsegs = pos.active_horizontals_and_orientations().peekable();
+            if hsegs.peek().is_none() {
+                // No horizontal segment starts here, so there is nothing more to
+                // add at this point.
+                continue;
+            }
 
             // We don't want to update our "global" winding number state because that's supposed
             // to keep track of the winding number below the current sweep line.
@@ -1000,7 +1091,7 @@ impl<W: WindingNumber> Topology<W> {
                     counter_clockwise: Arc::clone(&w),
                     clockwise: start,
                 };
-                let half_seg = self.new_half_seg(first, p, windings, true, orientation);
+                let half_seg = self.new_half_seg(open_segs, first, p, windings, true, orientation);
                 self.scan_west[half_seg] = scan_west;
                 seg_buf.push(half_seg.first_half());
                 open_horizontals.push(half_seg);
@@ -1017,7 +1108,7 @@ impl<W: WindingNumber> Topology<W> {
             && let Some(east_nbr) = pos.line().line_entry(pos.seg_range().segs.end)
             && !east_nbr.is_in_changed_interval()
         {
-            self.scan_east[seg] = self.open_segs[east_nbr.seg].front().copied()
+            self.scan_east[seg] = open_segs[east_nbr.seg].front().copied()
         }
 
         // If something was connected up but nothing was connected down, let's remember that
@@ -1029,8 +1120,8 @@ impl<W: WindingNumber> Topology<W> {
                 .checked_sub(1)
                 .and_then(|idx| pos.line().line_segment(idx));
             let east_nbr = pos.line().line_segment(pos.seg_range().segs.end);
-            let west = west_nbr.map(|idx| *self.open_segs[idx].front().unwrap());
-            let east = east_nbr.map(|idx| *self.open_segs[idx].front().unwrap());
+            let west = west_nbr.map(|idx| *open_segs[idx].front().unwrap());
+            let east = east_nbr.map(|idx| *open_segs[idx].front().unwrap());
             if west.is_some() || east.is_some() {
                 self.scan_after.push((y, west, east));
             }
@@ -1288,8 +1379,10 @@ impl<W: WindingNumber> Topology<W> {
         segs: &[HalfOutputSegIdx],
         positions: &OutputSegVec<PositionedOutputSeg>,
     ) -> BezPath {
-        let mut ret = BezPath::default();
+        let mut ret = BezPath::with_capacity(segs.len() + 2);
         let mut unfinished: Option<f64> = None;
+        // A re-usable buffer for the reversed paths of first halves.
+        let mut rev_buf: Vec<PathEl> = Vec::new();
 
         // Find a segment that can't be merged into the previous one. If every segment can be
         // merged, start at the first one.
@@ -1301,17 +1394,15 @@ impl<W: WindingNumber> Topology<W> {
         for seg in segs[start_idx..].iter().chain(&segs[..start_idx]) {
             let path = &positions[seg.idx];
 
-            // TODO: avoid the allocation in reverse_subpaths
-            let rev_path;
-            let oriented_path = if seg.is_first_half() {
-                rev_path = path.path.reverse_subpaths();
-                &rev_path
+            let oriented_path: &[PathEl] = if seg.is_first_half() {
+                reverse_path_into(&path.path, &mut rev_buf);
+                &rev_buf
             } else {
-                &path.path
+                path.path.elements()
             };
             // skip(1) leaves off the initial MoveTo, which is unnecessary
             // because this path starts where the last one ended.
-            let mut elems = oriented_path.iter().skip(1);
+            let mut elems = oriented_path.iter().copied().skip(1);
             if let (Some(our_t), Some(unfinished_t)) =
                 (self.can_merge(seg.other_half(), positions), unfinished)
             {
@@ -1429,6 +1520,11 @@ impl<W: WindingNumber> Topology<W> {
             return None;
         }
 
+        // Only a simple point can merge, so skip solving for `t` anywhere else.
+        if !self.is_simple_point(seg) {
+            return None;
+        }
+
         let extremal_seg_is_copied = if seg.is_first_half() {
             pos.copied_idx == Some(0)
         } else {
@@ -1447,7 +1543,7 @@ impl<W: WindingNumber> Topology<W> {
         let start_y = self.point(seg).y;
         let end_y = self.point(seg.other_half()).y;
         let split_from_pred = self.segments.split_from_predecessor[orig_idx];
-        let can_merge = if has_orig_orientation {
+        if has_orig_orientation {
             let seg_in_input_t = split_from_pred.0;
             if (seg_in_input_t > 0.0)
                     && extremal_seg_is_copied
@@ -2673,6 +2769,268 @@ mod tests {
     }
 
     const EMPTY: [[Point; 0]; 0] = [];
+
+    /// Counts the heap allocations made on each thread, so that a test can
+    /// count its own allocations while other tests run.
+    struct CountingAlloc;
+
+    std::thread_local! {
+        static ALLOCATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    }
+
+    unsafe impl std::alloc::GlobalAlloc for CountingAlloc {
+        unsafe fn alloc(&self, layout: std::alloc::Layout) -> *mut u8 {
+            let _ = ALLOCATIONS.try_with(|n| n.set(n.get() + 1));
+            unsafe { std::alloc::System.alloc(layout) }
+        }
+
+        unsafe fn dealloc(&self, ptr: *mut u8, layout: std::alloc::Layout) {
+            unsafe { std::alloc::System.dealloc(ptr, layout) }
+        }
+
+        unsafe fn realloc(
+            &self,
+            ptr: *mut u8,
+            layout: std::alloc::Layout,
+            new_size: usize,
+        ) -> *mut u8 {
+            let _ = ALLOCATIONS.try_with(|n| n.set(n.get() + 1));
+            unsafe { std::alloc::System.realloc(ptr, layout, new_size) }
+        }
+    }
+
+    #[global_allocator]
+    static ALLOCATOR: CountingAlloc = CountingAlloc;
+
+    fn allocations_in<T>(f: impl FnOnce() -> T) -> (T, usize) {
+        let before = ALLOCATIONS.with(|n| n.get());
+        let ret = f();
+        let after = ALLOCATIONS.with(|n| n.get());
+        (ret, after - before)
+    }
+
+    /// `n` squares in a row, each as its own subpath. Every square starts and
+    /// ends its segments on the same two sweep lines.
+    fn squares_in_a_row(n: usize) -> BezPath {
+        let mut path = BezPath::new();
+        for i in 0..n {
+            let x = 3.0 * i as f64;
+            path.move_to((x, 0.0));
+            path.line_to((x + 1.0, 0.0));
+            path.line_to((x + 1.0, 1.0));
+            path.line_to((x, 1.0));
+            path.close_path();
+        }
+        path
+    }
+
+    /// A wavy band whose outline is one contour made of many first and second
+    /// halves of output segments.
+    fn wavy_band(n: usize) -> BezPath {
+        let mut path = BezPath::new();
+        path.move_to((0.0, 0.0));
+        for i in 0..n {
+            let x = i as f64;
+            path.curve_to((x + 0.3, 1.0), (x + 0.7, -1.0), (x + 1.0, 0.0));
+        }
+        path.line_to((n as f64, 5.0));
+        for i in (0..n).rev() {
+            let x = i as f64;
+            path.curve_to((x + 0.7, 4.0), (x + 0.3, 6.0), (x, 5.0));
+        }
+        path.close_path();
+        path
+    }
+
+    /// `n` unit squares on a diagonal, each as its own subpath, so that every
+    /// square has its own sweep lines and sweep-line ranges.
+    fn squares_on_a_diagonal(n: usize) -> BezPath {
+        let mut path = BezPath::new();
+        for i in 0..n {
+            let x = 3.0 * i as f64;
+            path.move_to((x, x));
+            path.line_to((x + 1.0, x));
+            path.line_to((x + 1.0, x + 1.0));
+            path.line_to((x, x + 1.0));
+            path.close_path();
+        }
+        path
+    }
+
+    /// The allocations that `Topology::from_path` makes itself: everything it
+    /// allocates minus what building the segments and running the sweep alone
+    /// allocate.
+    fn topology_allocations(path: &BezPath) -> usize {
+        use crate::{
+            segments::Segments,
+            sweep::{Correctness, SweepLineBuffers, SweepLineRangeBuffers, Sweeper},
+        };
+
+        let (_, total) = allocations_in(|| Topology::<i32>::from_path(path, 0.01).unwrap());
+        let (_, sweep) = allocations_in(|| {
+            let mut segments = Segments::default();
+            segments
+                .add_path_without_updating_enter_exit(path, true)
+                .unwrap();
+            segments.update_enter_exit(0);
+            segments.check_invariants();
+            let mut sweeper =
+                Sweeper::new_with_correctness(&segments, 0.01, Correctness::GoodEnough);
+            let mut range_bufs = SweepLineRangeBuffers::default();
+            let mut line_bufs = SweepLineBuffers::default();
+            while let Some(mut line) = sweeper.next_line(&mut line_bufs) {
+                while let Some(mut range) = line.next_range(&mut range_bufs, &segments) {
+                    while range.x().is_some() {
+                        range.increase_x();
+                    }
+                }
+            }
+        });
+        total - sweep
+    }
+
+    #[test]
+    fn building_a_topology_does_not_allocate_per_segment() {
+        // Compare two sizes and look at what the extra squares cost, so that
+        // the few allocations made once per topology do not count.
+        for (name, make) in [
+            ("in a row", squares_in_a_row as fn(usize) -> BezPath),
+            ("on a diagonal", squares_on_a_diagonal),
+        ] {
+            let small_allocs = topology_allocations(&make(500));
+            let large_allocs = topology_allocations(&make(1000));
+            let per_square = large_allocs.saturating_sub(small_allocs) as f64 / 500.0;
+            assert!(
+                per_square < 0.5,
+                "squares {name}: {per_square} allocations per extra square \
+                 ({small_allocs} for 500, {large_allocs} for 1000)"
+            );
+        }
+    }
+
+    #[test]
+    fn contours_do_not_allocate_per_reversed_segment() {
+        let small = wavy_band(500);
+        let large = wavy_band(1000);
+        let small_top = Topology::<i32>::from_path(&small, 0.01).unwrap();
+        let large_top = Topology::<i32>::from_path(&large, 0.01).unwrap();
+        // `compute_positions` makes one path per output segment, which is the
+        // output, so count only what walking the contours allocates.
+        let small_pos = small_top.compute_positions();
+        let large_pos = large_top.compute_positions();
+        let (small_contours, small_allocs) =
+            allocations_in(|| small_top.contours_for_positions(|w| *w != 0, small_pos));
+        let (large_contours, large_allocs) =
+            allocations_in(|| large_top.contours_for_positions(|w| *w != 0, large_pos));
+        assert_eq!(small_contours.contours().count(), 1);
+        assert_eq!(large_contours.contours().count(), 1);
+        let per_wave = (large_allocs - small_allocs) as f64 / 500.0;
+        assert!(
+            per_wave < 1.0,
+            "{per_wave} allocations per extra wave ({small_allocs} for 500, {large_allocs} for 1000)"
+        );
+    }
+
+    #[test]
+    fn reverse_path_into_matches_reverse_subpaths() {
+        let mut open = BezPath::new();
+        open.move_to((0.0, 0.0));
+        open.line_to((1.0, 2.0));
+        open.quad_to((2.0, 3.0), (3.0, 1.0));
+        open.curve_to((4.0, 0.0), (5.0, 5.0), (6.0, 2.0));
+        let mut only_move = BezPath::new();
+        only_move.move_to((1.0, 1.0));
+        let mut closed = open.clone();
+        closed.close_path();
+        let mut two = open.clone();
+        two.move_to((10.0, 10.0));
+        two.line_to((11.0, 12.0));
+
+        let mut buf = Vec::new();
+        for path in [open, only_move, closed, two, BezPath::new()] {
+            super::reverse_path_into(&path, &mut buf);
+            assert_eq!(buf, path.reverse_subpaths().elements());
+        }
+    }
+
+    #[test]
+    fn open_segs_pop_like_a_deque() {
+        use super::{OpenSegs, OutputSegIdx};
+
+        let mut segs = OpenSegs::default();
+        let mut deque = std::collections::VecDeque::new();
+        let pushes = [(1, false), (2, false), (3, true), (4, false), (5, true)];
+        for (i, front) in pushes {
+            if front {
+                segs.push_front(OutputSegIdx(i));
+                deque.push_front(OutputSegIdx(i));
+            } else {
+                segs.push_back(OutputSegIdx(i));
+                deque.push_back(OutputSegIdx(i));
+            }
+            assert_eq!(segs.front(), deque.front());
+        }
+        while let Some(idx) = deque.pop_front() {
+            assert!(!segs.is_empty());
+            assert_eq!(segs.pop_front(), Some(idx));
+        }
+        assert!(segs.is_empty());
+        assert_eq!(segs.pop_front(), None);
+    }
+
+    /// The elements of the only contour of `path` under the non-zero rule.
+    fn only_contour_elements(path: &BezPath) -> Vec<kurbo::PathEl> {
+        let top = Topology::<i32>::from_path(path, 0.01).unwrap();
+        let contours = top.contours(|w| *w != 0);
+        let mut contours = contours.contours();
+        let contour = contours.next().unwrap();
+        assert!(contours.next().is_none());
+        contour.path.elements().to_vec()
+    }
+
+    #[test]
+    fn contours_keep_their_elements_and_direction() {
+        use kurbo::PathEl::{ClosePath, CurveTo, LineTo, MoveTo};
+
+        let mut notched = BezPath::new();
+        notched.move_to((0.0, 0.0));
+        notched.line_to((4.0, 0.0));
+        notched.line_to((4.0, 4.0));
+        notched.line_to((3.0, 4.0));
+        notched.line_to((2.0, 2.0));
+        notched.line_to((1.0, 4.0));
+        notched.line_to((0.0, 4.0));
+        notched.close_path();
+        assert_eq!(
+            only_contour_elements(&notched),
+            [
+                MoveTo((0.0, 4.0).into()),
+                LineTo((0.0, 0.0).into()),
+                LineTo((4.0, 0.0).into()),
+                LineTo((4.0, 4.0).into()),
+                LineTo((3.0, 4.0).into()),
+                LineTo((2.0, 2.0).into()),
+                LineTo((1.0, 4.0).into()),
+                LineTo((0.0, 4.0).into()),
+                ClosePath,
+            ]
+        );
+
+        let mut lens = BezPath::new();
+        lens.move_to((0.0, 0.0));
+        lens.curve_to((2.0, 1.0), (2.0, 2.0), (0.0, 3.0));
+        lens.curve_to((-2.0, 2.0), (-2.0, 1.0), (0.0, 0.0));
+        lens.close_path();
+        assert_eq!(
+            only_contour_elements(&lens),
+            [
+                MoveTo((0.0, 3.0).into()),
+                CurveTo((-2.0, 2.0).into(), (-2.0, 1.0).into(), (0.0, 0.0).into()),
+                CurveTo((2.0, 1.0).into(), (2.0, 2.0).into(), (0.0, 3.0).into()),
+                ClosePath,
+            ]
+        );
+    }
 
     #[test]
     fn square() {

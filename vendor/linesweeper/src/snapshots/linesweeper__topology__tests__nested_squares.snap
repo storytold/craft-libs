@@ -15,16 +15,6 @@ expression: "(&top, contours, top.build_scan_line_orders())"
     B,
     B,
   ],
-  open_segs: [
-    [],
-    [],
-    [],
-    [],
-    [],
-    [],
-    [],
-    [],
-  ],
   winding: OutputSegVec(
     inner: [
       HalfSegmentWindingNumbers(
