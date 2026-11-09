@@ -340,6 +340,21 @@ fn package_size_cap_is_32_mib() {
 }
 
 #[test]
+fn an_oversized_package_is_refused_before_it_is_parsed() {
+    // Bytes that would otherwise report Malformed give only PackageTooLarge once over the cap.
+    let mut big = package("accept", &manifest_json());
+    big = with_section(big, "padding", &vec![0u8; MAX_PACKAGE_BYTES]);
+    big.extend_from_slice(&[0xFF; 16]);
+    assert_only(&gate(&big), &[Violation::PackageTooLarge { bytes: big.len() }]);
+    // Within the cap the same trailing garbage is still reported.
+    let mut small = package("accept", &manifest_json());
+    small.extend_from_slice(&[0xFF; 16]);
+    let report = gate(&small);
+    assert!(!report.violations.is_empty(), "{report:#?}");
+    assert!(!report.violations.iter().any(|v| matches!(v, Violation::PackageTooLarge { .. })), "{report:#?}");
+}
+
+#[test]
 fn malformed_bytes_never_panic_and_are_reported() {
     for bytes in [&b""[..], b"\0asm", b"\0asm\x01\0\0\0\xFF", b"not wasm at all", &[0u8; 64]] {
         let report = gate(bytes);
