@@ -9,11 +9,17 @@ pub(crate) fn decode(data: &[u8]) -> Option<Vec<u8>> {
 }
 
 pub(crate) fn decode_into<B: ByteBuf>(data: &[u8]) -> Option<B> {
+    decode_into_controlled(data, None)
+}
+
+pub(crate) fn decode_into_controlled<B: ByteBuf>(data: &[u8], control: Option<&crate::cancel::Control>) -> Option<B> {
+    let mut checks = crate::cancel::Checkpoints::new(control);
     // Find end (at `>` or end of data) and check for whitespace.
     let mut has_whitespace = false;
     let mut end = data.len();
 
     for (idx, byte) in data.iter().enumerate() {
+        checks.at(idx)?;
         has_whitespace |= is_white_space_character(*byte);
 
         if *byte == b'>' {
@@ -29,7 +35,9 @@ pub(crate) fn decode_into<B: ByteBuf>(data: &[u8]) -> Option<B> {
         // Fast path, don't need to worry about white spaces.
         let (chunks, remainder) = data.as_chunks::<2>();
 
-        for &[hi, lo] in chunks {
+        let mut checks = crate::cancel::Checkpoints::new(control);
+        for (i, &[hi, lo]) in chunks.iter().enumerate() {
+            checks.at(i * 2)?;
             decoded.push(decode_hex_digit(hi)? << 4 | decode_hex_digit(lo)?);
         }
 
@@ -38,10 +46,12 @@ pub(crate) fn decode_into<B: ByteBuf>(data: &[u8]) -> Option<B> {
         }
     } else {
         // Slow path, need to strip white spaces.
-        let mut iter = data.iter().copied();
+        let mut iter = data.iter().copied().enumerate();
+        let mut checks = crate::cancel::Checkpoints::new(control);
         let mut read_byte = || -> Option<u8> {
             loop {
-                let b = iter.next()?;
+                let (i, b) = iter.next()?;
+                checks.at(i)?;
                 if !is_white_space_character(b) {
                     return Some(b);
                 }
@@ -63,6 +73,7 @@ pub(crate) fn decode_into<B: ByteBuf>(data: &[u8]) -> Option<B> {
         }
     }
 
+    crate::cancel::check(control)?;
     Some(decoded)
 }
 

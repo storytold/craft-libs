@@ -8,29 +8,33 @@
 //! `wasm32-unknown-unknown`.
 //!
 //! - [`decode`], [`probe`], [`Decoder`] (streaming, seekable), [`tracks`], [`detect_container`]
-//!   (feature `decode`): WAV and AIFF are read natively; PCM in MP4/MOV and Matroska/WebM goes
-//!   through craft-media's demuxers and [`TrackDecoder`]; everything else (AAC, MP1/MP2/MP3,
-//!   FLAC, ALAC, Vorbis, CAF, ADPCM, A-law, µ-law) through `symphonia`, which is to be replaced
-//!   by native decoders. Feature `decode-native` is the same without symphonia.
-//! - [`TrackDecoder`] (feature `decode-native`): one track's packets from any demuxer to planar
+//!   (feature `decode`): WAV and AIFF are read natively; AAC and PCM in MP4/MOV,
+//!   Matroska/WebM or raw ADTS streams go through craft-media's demuxers and
+//!   [`TrackDecoder`]; everything else (MP1/MP2/MP3, FLAC, ALAC, Vorbis, CAF, ADPCM, A-law,
+//!   µ-law) through `symphonia`, which is to be replaced by native decoders. Feature
+//!   `decode-native` is the same without symphonia.
+//! - [`TrackDecoder`] (any decoder feature): one track's packets from any demuxer to planar
 //!   `f32` in WAV channel order.
 //! - [`encode`], [`FileEncoder`]: WAV/BWF/RF64 and AIFF/AIFF-C (feature `pcm-encode`, which also
 //!   gives [`wav_float_header`]) and FLAC (feature `flac-encode`), whole-buffer or incremental into
 //!   any `Write + Seek`. Feature `lossless-encode` turns on both; feature `encode` is
 //!   the same as `lossless-encode`.
 //! - [`peaks`] (feature `peaks`): min/max/RMS pyramid for waveform drawing.
+//! - Codec modules for packet-level use, each with its own features: [`aac`] (`aac-decode`).
 //!
 //! The shared types below build with no features.
 
+#[cfg(feature = "aac-decode")]
+pub mod aac;
 mod buffer;
 mod layout;
-#[cfg(feature = "decode-native")]
+#[cfg(feature = "aac-decode")]
 mod pcm;
 #[cfg(feature = "peaks")]
 pub mod peaks;
 #[cfg(feature = "decode-native")]
 mod read;
-#[cfg(feature = "decode-native")]
+#[cfg(feature = "aac-decode")]
 mod track;
 #[cfg(any(feature = "decode-native", feature = "pcm-encode"))]
 mod wav;
@@ -47,7 +51,7 @@ pub use layout::{ChannelLayout, Speaker};
 pub use read::SharedSource;
 #[cfg(feature = "decode-native")]
 pub use read::{DEFAULT_MAX_SAMPLES, DecodeOptions, Decoder, TrackInfo, decode, decode_with, detect_container, probe, probe_with, tracks, tracks_of};
-#[cfg(feature = "decode-native")]
+#[cfg(feature = "aac-decode")]
 pub use track::{LOOKAHEAD_PACKETS, TrackDecoder};
 #[cfg(feature = "pcm-encode")]
 pub use write::wav_float_header;
@@ -78,6 +82,20 @@ pub enum AudioError {
 
 /// Result alias for this module.
 pub type Result<T> = std::result::Result<T, AudioError>;
+
+// Codec errors convert into `AudioError`, so code mixing the file API with the codec modules can
+// use `?` throughout: a codec's "unsupported" stays `Unsupported`, anything else in the input is
+// `Malformed`, and an encoder's refusal is `Encode`.
+
+#[cfg(feature = "aac-decode")]
+impl From<aac::Error> for AudioError {
+    fn from(e: aac::Error) -> Self {
+        match e {
+            aac::Error::Unsupported(_) => AudioError::Unsupported(e.to_string()),
+            _ => AudioError::Malformed(e.to_string()),
+        }
+    }
+}
 
 /// The file formats [`encode`] writes. Each needs its feature: WAV and AIFF `pcm-encode`, FLAC
 /// `flac-encode`; asking for one that is not built returns [`AudioError::Unsupported`].
