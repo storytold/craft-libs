@@ -426,6 +426,12 @@ pub(crate) fn decode(bytes: &[u8], limits: &Limits) -> Result<Image, CodecError>
 /// Decoded rows a [`JpegBands`] group holds, about: a few lines of MCUs per worker at a time.
 const GROUP_BYTES: usize = 64 << 20;
 
+/// Bands each worker reads in a row, at least, when reading from a seek point also decodes the
+/// MCU lines either side ([`craft_jpeg::Bands::halo`], chroma subsampled down): one band at a
+/// time would decode three lines for each. Groups then hold a run for every worker. Without a
+/// halo stretches stay a band each, which balances the workers best.
+const RUN: usize = 4;
+
 /// A baseline JPEG decoded a group of rows at a time, for a caller that writes them into its own
 /// storage and never needs the whole decoded image (see [`craft_jpeg::Bands`]). The samples,
 /// metadata and warnings are what [`decode`] gives for the file, except that the samples come
@@ -436,8 +442,10 @@ pub struct JpegBands<'a> {
     layout: ChannelLayout,
     /// The structure says the file ends inside the image data.
     truncated: bool,
-    /// About how many bytes of rows a group holds: [`GROUP_BYTES`] (tests make it small).
+    /// About how many bytes of rows a group holds, and the bands a worker reads in a row (0:
+    /// every stretch on its own): [`GROUP_BYTES`] and [`RUN`] or 0 (tests set them).
     group_bytes: usize,
+    run: usize,
     pub icc: Option<Vec<u8>>,
     pub meta: Metadata,
     /// After [`JpegBands::decode`]: [`DecodeWarning::Truncated`] when data was cut short or damaged.
@@ -493,11 +501,13 @@ impl<'a> JpegBands<'a> {
         }
         let dpi = meta.dpi.or_else(|| crate::resolution::from_metadata(meta.exif.as_deref(), meta.xmp.as_deref()));
         let JpegMeta { icc, exif, xmp, photoshop, .. } = meta;
+        let run = if bands.halo() > 0 { RUN } else { 0 };
         Ok(Some(JpegBands {
             bands,
             layout,
             truncated: end == DataEnd::Truncated,
             group_bytes: GROUP_BYTES,
+            run,
             icc,
             meta: Metadata { exif, xmp, dpi, photoshop_resources: photoshop, ..Default::default() },
             warnings: Vec::new(),
@@ -512,9 +522,14 @@ impl<'a> JpegBands<'a> {
         self.layout
     }
 
-    /// Lines of MCUs (bands) decoded at once: about [`GROUP_BYTES`], at least one.
+    /// Lines of MCUs (bands) decoded at once: about [`GROUP_BYTES`], and at least a run for
+    /// every worker (see [`RUN`]).
     fn bands_per_group(&self) -> usize {
-        (self.group_bytes / self.bands.band_bytes().max(1)).max(1)
+        #[cfg(not(target_arch = "wasm32"))]
+        let workers = rayon::current_num_threads();
+        #[cfg(target_arch = "wasm32")]
+        let workers: usize = 1;
+        (self.group_bytes / self.bands.band_bytes().max(1)).max(workers.saturating_mul(self.run)).max(1)
     }
 
     /// What decoding holds beside the caller's storage: two of the largest groups (one being
@@ -552,8 +567,15 @@ impl<'a> JpegBands<'a> {
                 while points.get(j + 1).is_some_and(|&p| p - first <= per_group) {
                     j += 1;
                 }
-                let stretches = points.get(i..=j).unwrap_or_default().windows(2).map(|w| w[0]..w[1]).collect();
-                plan.push(Group::Stretches(stretches));
+                // Consecutive stretches merge into runs of at least `run` bands, each read in order.
+                let mut runs: Vec<std::ops::Range<usize>> = Vec::new();
+                for w in points.get(i..=j).unwrap_or_default().windows(2) {
+                    match runs.last_mut() {
+                        Some(r) if r.len() < self.run => r.end = w[1],
+                        _ => runs.push(w[0]..w[1]),
+                    }
+                }
+                plan.push(Group::Stretches(runs));
                 i = j;
             }
         }
@@ -1004,7 +1026,8 @@ mod tests {
             let craft_jpeg::Samples::U8(want) = whole.samples else { panic!("16-bit") };
             for group in [1, 3 * usize::from(w) * 16 * 3, 1 << 30] {
                 let mut bands = JpegBands::open(&bytes, &Limits::default()).unwrap().expect("bands");
-                bands.group_bytes = group;
+                // No run: groups of exactly `group` bytes, and every stretch on its own.
+                (bands.group_bytes, bands.run) = (group, 0);
                 let mut got = Vec::new();
                 let mut groups = 0;
                 bands
@@ -1030,6 +1053,37 @@ mod tests {
                     "restart {restart} group {group}"
                 );
             }
+        }
+    }
+
+    /// Stretches between seek points merge into runs read in order, across groups of any size,
+    /// and the result is still the whole file's samples.
+    #[test]
+    fn stretches_read_in_runs_are_the_whole_file() {
+        let (w, h) = (97u16, 203u16);
+        let px: Vec<u8> = (0..usize::from(w) * usize::from(h) * 3).map(|i| ((i * 31) % 253) as u8 ^ (i / 97) as u8).collect();
+        let mut bytes = Vec::new();
+        let mut enc = jpeg_encoder::Encoder::new(&mut bytes, 90);
+        enc.set_sampling_factor(jpeg_encoder::SamplingFactor::R_4_2_0);
+        enc.set_restart_interval(7);
+        enc.encode(&px, w, h, jpeg_encoder::ColorType::Rgb).unwrap();
+        let whole = craft_jpeg::decode(&bytes, &craft_jpeg::Limits::default(), None).unwrap();
+        let craft_jpeg::Samples::U8(want) = whole.samples else { panic!("16-bit") };
+        for (run, group) in [(3, 1), (3, 5 * usize::from(w) * 16 * 3), (2, 1 << 30), (100, 1)] {
+            let mut bands = JpegBands::open(&bytes, &Limits::default()).unwrap().expect("bands");
+            (bands.run, bands.group_bytes) = (run, group);
+            assert!(bands.plan().iter().all(|g| match g {
+                Group::Stretches(runs) => runs.iter().rev().skip(1).all(|r| r.len() >= run),
+                Group::InOrder { .. } => false,
+            }));
+            let mut got = Vec::new();
+            bands
+                .decode(|_, img: &Image| -> Result<(), CodecError> {
+                    got.extend_from_slice(img.data());
+                    Ok(())
+                })
+                .unwrap();
+            assert!(got == want, "run {run} group {group}");
         }
     }
 
