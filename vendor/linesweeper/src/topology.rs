@@ -1442,6 +1442,41 @@ impl<W: WindingNumber> Topology<W> {
         ret.clamp(0.0, 1.0)
     }
 
+    /// Returns the nearest segment on `idx`'s scan-west chain (not counting `idx` itself)
+    /// for which `is_bdy` returns true.
+    ///
+    /// `memo[i]` holds the answer for segment `i` once it is known. Every segment passed
+    /// over on the way gets the same answer, so a chain shared by several starting segments
+    /// is walked only once. `stack` is scratch space.
+    fn west_boundary(
+        &self,
+        idx: OutputSegIdx,
+        is_bdy: &mut impl FnMut(OutputSegIdx) -> bool,
+        memo: &mut [Option<Option<OutputSegIdx>>],
+        stack: &mut Vec<OutputSegIdx>,
+    ) -> Option<OutputSegIdx> {
+        stack.clear();
+        let mut cur = idx;
+        let found = loop {
+            if let Some(known) = memo[cur.0] {
+                break known;
+            }
+            match self.scan_west[cur] {
+                None => break None,
+                Some(left) if is_bdy(left) => break Some(left),
+                Some(left) => {
+                    stack.push(cur);
+                    cur = left;
+                }
+            }
+        };
+        memo[cur.0] = Some(found);
+        for seg in stack.drain(..) {
+            memo[seg.0] = Some(found);
+        }
+        found
+    }
+
     /// Returns the contours of some set defined by this topology.
     ///
     /// The callback function `inside` takes a winding number and returns `true`
@@ -1516,6 +1551,16 @@ impl<W: WindingNumber> Topology<W> {
         let bdy = |idx: OutputSegIdx| -> bool {
             inside(&self.winding[idx].clockwise) != inside(&self.winding[idx].counter_clockwise)
         };
+        // Whether a segment is a live boundary segment, tested the first time it is asked
+        // for, and a memo of the nearest one on each segment's scan-west chain, so that each
+        // link of a chain is followed at most once per call instead of once per contour that
+        // starts east of it.
+        let mut bdy_memo: Vec<Option<bool>> = vec![None; self.winding.inner.len()];
+        let mut is_bdy = |idx: OutputSegIdx| -> bool {
+            *bdy_memo[idx.0].get_or_insert_with(|| !self.deleted[idx] && bdy(idx))
+        };
+        let mut west_bdy: Vec<Option<Option<OutputSegIdx>>> = vec![None; self.winding.inner.len()];
+        let mut west_stack = Vec::new();
 
         let mut visited = vec![false; self.winding.inner.len()];
         // Keep track of the points that were visited on this walk, so that if we re-visit a
@@ -1527,7 +1572,7 @@ impl<W: WindingNumber> Topology<W> {
                 continue;
             }
 
-            if !bdy(idx) {
+            if !is_bdy(idx) {
                 continue;
             }
 
@@ -1535,14 +1580,7 @@ impl<W: WindingNumber> Topology<W> {
             // are relative to existing contours.
             let contour_idx = ContourIdx(ret.contours.len());
             let mut contour = Contour::default();
-            let mut west_seg = self.scan_west[idx];
-            while let Some(left) = west_seg {
-                if self.deleted[left] || !bdy(left) {
-                    west_seg = self.scan_west[left];
-                } else {
-                    break;
-                }
-            }
+            let west_seg = self.west_boundary(idx, &mut is_bdy, &mut west_bdy, &mut west_stack);
             if let Some(west) = west_seg {
                 if let Some(west_contour) = seg_contour[west.0] {
                     // Is the thing just to our west inside or outside the output set?
@@ -3360,6 +3398,107 @@ mod tests {
         let paths = |c: &super::Contours| c.contours().map(|c| c.path.clone()).collect::<Vec<_>>();
         assert_eq!(paths(&actual), paths(&expected));
         assert!(!paths(&actual).is_empty());
+    }
+
+    // `n` tall bars (the second set) west of a column of `m` small squares (the first set).
+    fn bars_and_squares(n: usize, m: usize) -> (Vec<[Point; 4]>, Vec<[Point; 4]>) {
+        let rect =
+            |x0: f64, y0: f64, x1: f64, y1: f64| [p(x0, y0), p(x1, y0), p(x1, y1), p(x0, y1)];
+        let height = 3.0 * m as f64 + 3.0;
+        let bars = (0..n)
+            .map(|i| {
+                let x = 3.0 * i as f64;
+                rect(x, 0.0, x + 1.0, height)
+            })
+            .collect();
+        let x = 3.0 * n as f64 + 10.0;
+        let squares = (0..m)
+            .map(|j| {
+                let y = 3.0 * j as f64 + 1.0;
+                rect(x, y, x + 1.0, y + 1.0)
+            })
+            .collect();
+        (squares, bars)
+    }
+
+    #[test]
+    fn contour_starts_follow_each_west_chain_once() {
+        let (squares, bars) = bars_and_squares(200, 200);
+        let top = Topology::from_polylines_binary(squares, bars, 1e-6);
+        let calls = std::cell::Cell::new(0usize);
+        let contours = top.contours(|w| {
+            calls.set(calls.get() + 1);
+            w.shape_a != 0 && w.shape_b == 0
+        });
+        // No bar edge is on the boundary of the squares minus the bars, so the west chain of
+        // every square passes all 400 bar edges. Walking the chain again for each square
+        // called `inside` about 2 * 400 * 200 times.
+        let segs = top.segment_indices().count();
+        assert!(
+            calls.get() < 10 * segs,
+            "{} calls to inside for {segs} segments",
+            calls.get()
+        );
+        assert_eq!(contours.contours().count(), 200);
+        assert!(contours.contours().all(|c| c.outer && c.parent.is_none()));
+    }
+
+    #[test]
+    fn contours_of_one_polygon_test_the_boundary_only_where_needed() {
+        // One convex polygon with `k` edges: the walk from its first edge visits every other
+        // edge, so no edge past the first needs its own boundary test.
+        let k = 1000;
+        let poly: Vec<Point> = (0..k)
+            .map(|i| {
+                let a = std::f64::consts::TAU * i as f64 / k as f64;
+                p(100.0 * a.cos(), 100.0 * a.sin())
+            })
+            .collect();
+        let top = Topology::from_polylines_binary([poly], std::iter::empty::<Vec<Point>>(), 1e-6);
+        let segs = top.segment_indices().count();
+        let calls = std::cell::Cell::new(0usize);
+        let contours = top.contours(|w| {
+            calls.set(calls.get() + 1);
+            w.shape_a != 0
+        });
+        assert_eq!(contours.contours().count(), 1);
+        // The walk calls `inside` once per edge, plus three more per edge for the debug
+        // assertions. Testing every edge for the boundary up front adds two more per edge.
+        let per_seg = if cfg!(debug_assertions) { 4 } else { 1 };
+        assert!(
+            calls.get() <= per_seg * segs + 16,
+            "{} calls to inside for {segs} segments",
+            calls.get()
+        );
+    }
+
+    #[test]
+    fn contour_starts_find_the_boundary_past_non_boundary_segments() {
+        let (mut set_a, bars) = bars_and_squares(20, 20);
+        // A frame around everything: the squares are holes in it, and the bars do not
+        // change the set, so every square's west chain passes the bar edges and ends at the
+        // frame's left edge.
+        set_a.push([
+            p(-5.0, -5.0),
+            p(200.0, -5.0),
+            p(200.0, 200.0),
+            p(-5.0, 200.0),
+        ]);
+        let top = Topology::from_polylines_binary(set_a, bars, 1e-6);
+        let contours = top.contours(|w| w.shape_a % 2 != 0);
+        let count = contours.contours().count();
+        assert_eq!(count, 21);
+        let roots: Vec<ContourIdx> = (0..count)
+            .map(ContourIdx)
+            .filter(|&i| contours[i].parent.is_none())
+            .collect();
+        assert_eq!(roots.len(), 1);
+        let frame = roots[0];
+        assert!(contours[frame].outer);
+        for i in (0..count).map(ContourIdx).filter(|&i| i != frame) {
+            assert_eq!(contours[i].parent, Some(frame));
+            assert!(!contours[i].outer);
+        }
     }
 
     fn run_perturbation(ps: Vec<Perturbation<F64Perturbation>>) {

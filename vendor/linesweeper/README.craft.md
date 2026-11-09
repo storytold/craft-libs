@@ -224,6 +224,10 @@ local patches listed below. `.cargo_vcs_info.json` names the commit it was packa
 `824b0791a750f7b27b8edcbb6c6244d0e629875e`. That commit is not in the GitHub repository the manifest
 names, which is archived; its README says development moved off GitHub.
 
+local patches listed below. `.cargo_vcs_info.json` names the commit it was packaged from,
+`824b0791a750f7b27b8edcbb6c6244d0e629875e`. That commit is not in the GitHub repository the manifest
+names, which is archived; its README says development moved off GitHub.
+
 Every file here except this one, `SOURCE.json` and the patched files below is byte for byte the file
 in the `.crate` archive. `SOURCE.json` records the hash of the `.crate` download
 (`source_archive_sha256`) and, for every file kept, the hash in the package (`source_sha256`) and the
@@ -285,6 +289,7 @@ Every change here updates this table and `SOURCE.json` in the same commit.
 | `Segments::add_bez_path` leaves the arena unchanged when a subpath is not closed, instead of keeping the segments it pushed before the open subpath, the last of them linked to an index past the end of the arena | `Craft patch (add_bez_path error)` | `src/segments.rs`, `src/lib.rs` | `tests::add_bez_path_error_leaves_segments_unchanged` |
 
 Every change here updates this table and `SOURCE.json` in the same commit.
+| `src/topology.rs` | `contours_for_positions` finds the nearest boundary segment west of each new contour through `Topology::west_boundary`, which remembers the answer for every segment it passes, so each link of a scan-west chain is followed once per call. A segment's boundary test runs the first time the walk asks for it, and its result is kept. Before, every contour walked its whole chain again, and `n` bars of one set west of `m` squares of the other with the test "first set and not second" called `inside` about `4nm` times: 1,024,240,000 calls for `n = m = 16,000`. The contours do not change. The `contour_starts_follow_each_west_chain_once` test counts the calls to `inside` for 200 bars and 200 squares, and `contour_starts_find_the_boundary_past_non_boundary_segments` checks the parents of squares whose chains pass non-boundary segments. `contours_of_one_polygon_test_the_boundary_only_where_needed` counts the calls to `inside` for one polygon with 1,000 edges. |
 
 `omitted_files` lists the 43 files of the package left out here, with their hashes:
 
