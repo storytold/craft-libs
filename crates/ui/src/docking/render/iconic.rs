@@ -7,10 +7,10 @@ use std::{fmt::Debug, hash::Hash};
 
 use egui::{Context, Id, Key, Order, Pos2, Rect, Sense, Stroke, StrokeKind, Ui, UiBuilder, pos2, vec2};
 
-use super::{GroupKind, Renderer, dock::Edge};
+use super::{GroupKind, Renderer, dock::Edge, node_limits};
 use crate::docking::{
-    Column, DockStyle, Group, GroupDrag, GroupGesture, begin_drag,
-    chrome::{ChromeStyle, FloatingFrame},
+    Action, Column, DockStyle, Group, GroupDrag, GroupGesture, Node, begin_drag,
+    chrome::{ChromeStyle, FloatingFrame, RESIZE_BAND},
     is_dragging,
     targets::{DockDrop, DockTarget, horizontal_line, usable},
 };
@@ -299,6 +299,9 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
             return;
         }
         let bounds = self.workspace.intersect(self.float_bounds);
+        let movable = request.group.panels.iter().all(|panel| self.permissions(panel).movable);
+        let band = if movable { RESIZE_BAND } else { 0.0 };
+        let chrome = self.style.tab_height + band;
         let width = request.width.max(self.style.min_pane).min(bounds.width());
         let max = self
             .content
@@ -307,23 +310,60 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
             .or(request.group.height)
             .filter(|h| h.is_finite() && *h > 0.0)
             .unwrap_or(FLYOUT_HEIGHT);
-        // A flyout fits the content its panel last drew, up to that height.
-        let height = self
-            .fitted_height(&active, self.style.tab_height, max)
+        // Fit untouched flyouts to content; an explicit group height keeps the user's resize.
+        // Include the resize band, or a height-filling panel shrinks on every frame.
+        let height = request
+            .group
+            .height
+            .or_else(|| self.fitted_height(&active, chrome, max))
             .unwrap_or(max)
-            .max(self.style.tab_height + self.style.min_pane)
+            .max(chrome + self.style.min_pane)
             .min(bounds.height());
         let left = match request.edge {
             Edge::Left => request.column.right(),
             Edge::Right => request.column.left() - width,
         };
-        let top = request.icons.top().min(bounds.bottom() - height).max(bounds.top());
-        let rect = Rect::from_min_size(pos2(left, top), vec2(width, height));
+        let offset_key = id.with(("resize-offset", &request.group.panels));
+        let offset = ctx.data(|data| data.get_temp::<egui::Vec2>(offset_key)).unwrap_or_default();
+        let rect = Rect::from_min_size(pos2(left, request.icons.top()) + offset, vec2(width, height));
         let style = ChromeStyle::from_dock(self.style);
         let group = request.group;
-        let response = FloatingFrame::new(id, rect).bounds(bounds).resizable(false).show(ctx, &style, |ui, rect| {
-            self.group(ui, &group.panels, group.active, false, rect, GroupKind::Dock);
+        let mut limits = node_limits(&Node::Tabs { panels: group.panels.clone(), active: group.active }, self.style, &*self.content);
+        limits.min.y += band;
+        limits.max.y += band;
+        let label = self.style.resize_window_label.clone();
+        let response =
+            FloatingFrame::new(id, rect).bounds(bounds).limits(limits).resizable(movable).resize_label(&label).show(ctx, &style, |ui, rect| {
+                self.group(ui, &group.panels, group.active, false, rect, GroupKind::Dock);
+            });
+        for handle in &response.handles {
+            self.register_interaction(ctx, handle.id);
+        }
+        let down = ctx.input(|input| input.pointer.primary_down());
+        ctx.data_mut(|data| {
+            let key = self.id.with("pointer-resize");
+            if let Some(started) = response.resize_started {
+                data.insert_temp(key, started);
+            } else if !down && data.get_temp::<Id>(key).is_some_and(|id| response.handles.iter().any(|handle| handle.id == id)) {
+                data.remove::<Id>(key);
+            }
         });
+        if let Some(resized) = response.resized {
+            let anchor_x = match request.edge {
+                Edge::Left => request.column.right(),
+                Edge::Right => request.column.left() - resized.width(),
+            };
+            ctx.data_mut(|data| data.insert_temp(offset_key, resized.min - pos2(anchor_x, request.icons.top())));
+            let height_changed = resized.min.y != response.rect.min.y || resized.max.y != response.rect.max.y;
+            // Width-only changes must not overwrite a saved height with the value
+            // temporarily clamped to a smaller viewport.
+            if height_changed {
+                self.output.actions.push(Action::ResizeGroup { panel: active.clone(), height: Some(resized.height()) });
+            }
+            if resized.width() != width {
+                self.output.actions.push(Action::ResizeColumn { panel: active, width: resized.width() });
+            }
+        }
         self.iconic.rect = Some(response.rect);
     }
 
