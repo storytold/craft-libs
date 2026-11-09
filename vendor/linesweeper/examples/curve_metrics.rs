@@ -106,8 +106,8 @@ fn compare_curves(
     g
 }
 
-pub fn main() {
-    let curves = [
+fn curves() -> [(CubicBez, CubicBez); 10] {
+    [
         (diagonal(), flip(diagonal())),
         (diagonal(), shift(diagonal(), 0.01)),
         (c(), vertical()),
@@ -118,13 +118,54 @@ pub fn main() {
         (horiz_at_midpoint(), c()),
         (horiz_at_midpoint(), flip(horiz_at_midpoint())),
         (horiz_at_midpoint(), shift(horiz_at_midpoint(), 0.01)),
-    ];
-    let mut doc =
-        svg::Document::new().set("viewBox", (0.0, 0.0, 5.5, 1.0 + 2.5 * curves.len() as f64));
+    ]
+}
+
+fn row_y(i: usize) -> f64 {
+    i as f64 * 2.5 + 1.5
+}
+
+fn view_box(rows: usize) -> (f64, f64, f64, f64) {
+    (-1.5, 0.0, 5.5, 1.0 + 2.5 * rows as f64)
+}
+
+pub fn main() {
+    let curves = curves();
+    let mut doc = svg::Document::new().set("viewBox", view_box(curves.len()));
     for (i, &(c0, c1)) in curves.iter().enumerate() {
-        let y = i as f64 * 2.5 + 1.5;
+        let y = row_y(i);
         let g = compare_curves(c0, c1, 1e-6, 6).set("transform", format!("translate(0, {y})",));
         doc = doc.add(g);
     }
     svg::save("out.svg", &doc).unwrap();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use kurbo::ParamCurveExtrema as _;
+
+    #[test]
+    fn view_box_holds_every_curve() {
+        let curves = curves();
+        let (x, y, w, h) = view_box(curves.len());
+        for (i, &(c0, c1)) in curves.iter().enumerate() {
+            for c in [c0, c1] {
+                let b = c.bounding_box();
+                assert!(
+                    b.x0 >= x && b.x1 <= x + w,
+                    "row {i}: x {}..{} is outside {x}..{}",
+                    b.x0,
+                    b.x1,
+                    x + w
+                );
+                let (y0, y1) = (b.y0 + row_y(i), b.y1 + row_y(i));
+                assert!(
+                    y0 >= y && y1 <= y + h,
+                    "row {i}: y {y0}..{y1} is outside {y}..{}",
+                    y + h
+                );
+            }
+        }
+    }
 }
