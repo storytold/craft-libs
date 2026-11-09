@@ -227,7 +227,19 @@ impl Encoder {
             RateControl::Bitrate { kbps } => Some(kbps),
             RateControl::ConstantQp(_) => None,
         };
-        let level_idc = cfg.level_idc.unwrap_or_else(|| params::choose_level(coded_width, coded_height, cfg.fps_num, cfg.fps_den, kbps));
+        let level_idc = match cfg.level_idc {
+            Some(l) => l,
+            None => params::choose_level(coded_width, coded_height, cfg.fps_num, cfg.fps_den, kbps).ok_or_else(|| {
+                Error::InvalidConfig(format!(
+                    "{}x{} at {}/{} fps{} exceeds the limits of every HEVC level (6.2 is the highest); set `level_idc` to override",
+                    cfg.width,
+                    cfg.height,
+                    cfg.fps_num,
+                    cfg.fps_den,
+                    kbps.map_or(String::new(), |k| format!(" and {k} kbit/s"))
+                ))
+            })?,
+        };
         let seq = SeqParams {
             coded_width,
             coded_height,
@@ -365,5 +377,29 @@ impl Encoder {
         self.reference = Some(rec);
         self.frames += 1;
         Ok(Packet { data, keyframe: idr })
+    }
+}
+
+#[cfg(test)]
+mod level_tests {
+    use super::*;
+
+    #[test]
+    fn configuration_beyond_every_level_is_rejected() {
+        // Construction only: no frame is allocated or encoded.
+        let r = Encoder::new(EncoderConfig::new(8192, 8192, 30, 1));
+        assert!(matches!(r, Err(Error::InvalidConfig(_))), "falsely labelled level 6.2");
+    }
+
+    #[test]
+    fn explicit_level_overrides_the_check() {
+        let mut cfg = EncoderConfig::new(8192, 8192, 30, 1);
+        cfg.level_idc = Some(186);
+        assert_eq!(Encoder::new(cfg).unwrap().level_idc(), 186);
+    }
+
+    #[test]
+    fn ordinary_configuration_still_picks_its_level() {
+        assert_eq!(Encoder::new(EncoderConfig::new(1920, 1080, 30, 1)).unwrap().level_idc(), 120);
     }
 }
