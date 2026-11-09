@@ -30,6 +30,8 @@ pub(crate) enum Work {
     TidyMerge,
     /// Lines a curve was flattened into to find the way an edge leaves a vertex.
     FlattenLines,
+    /// Face outlines made into paths by a walk of the faces that may stop early (`regions_within`), the empty ones too.
+    FacePaths,
     /// Entries of the windings walked to list the inputs that cover a face for a predicate (the entries of the
     /// winding and one more, for each distinct winding).
     CoverEntries,

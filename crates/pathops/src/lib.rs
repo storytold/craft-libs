@@ -54,7 +54,8 @@ pub use offset::{
     Cap, Join, MAX_OFFSET_SEGMENT_PAIRS, offset_path, outline_stroke, stroke_region, try_offset_path, try_outline_stroke, try_stroke_region,
 };
 pub use pathfinder::{
-    PathfinderOp, Region, Shape, merge_regions, pathfinder, pathfinder_with, region_at, regions, try_pathfinder, try_pathfinder_with,
+    PathfinderOp, Region, Shape, merge_regions, pathfinder, pathfinder_with, region_at, regions, regions_within, try_pathfinder, try_pathfinder_with,
+    try_regions_within,
 };
 pub use planar::{BuilderArrangement, SHAPE_BUILDER_MAX_SEGMENTS, has_open_path, interior_point, live_paint, shape_builder, try_shape_builder};
 

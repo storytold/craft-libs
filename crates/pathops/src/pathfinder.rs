@@ -5,6 +5,7 @@
 //! back-most, last = front-most).
 
 use std::collections::{HashMap, HashSet};
+use std::ops::ControlFlow;
 
 use kurbo::{BezPath, CubicBez, ParamCurve, ParamCurveNearest, Point, Shape as _};
 use linesweeper::topology::{ContourIdx, Contours};
@@ -331,21 +332,42 @@ fn pathfinder_unguarded(op: PathfinderOp, shapes: &[Shape], precision: f64, stri
 /// of the masks ([`crate::Limits::mask_work`]) or on the work of the contour passes
 /// ([`crate::Limits::pass_work`]), where the faces are not all of them.
 fn regions_of(arr: &Arrangement) -> Option<Vec<Region>> {
-    let masks = arr.distinct_masks()?;
+    regions_of_within(arr, usize::MAX).ok().flatten()
+}
+
+/// [`regions_of`] while there are at most `limit` faces: `Ok(None)` as soon as one more is found,
+/// without making a path of any face after it; the error is [`crate::PathOpsError::TooComplex`] where
+/// [`regions_of`] gives none for want of work.
+fn regions_of_within(arr: &Arrangement, limit: usize) -> Result<Option<Vec<Region>>, crate::PathOpsError> {
+    let masks = arr.distinct_masks().ok_or(crate::PathOpsError::TooComplex)?;
     let mut faces: Vec<Vec<BezPath>> = vec![Vec::new(); masks.len()];
-    let whole = each_face(arr, &masks, |m, c, group| {
-        if let Some(f) = faces.get_mut(m) {
-            f.push(contours_to_path(c, group.iter().copied(), &arr.tidy));
+    let mut found = 0usize;
+    let walk = each_face_until(arr, &masks, |m, c, group| {
+        work::add(Work::FacePaths, 1);
+        let path = contours_to_path(c, group.iter().copied(), &arr.tidy);
+        // A face with nothing in it (a sliver the tidy dropped) is no face.
+        if path.elements().is_empty() {
+            return ControlFlow::Continue(());
         }
+        found += 1;
+        if found > limit {
+            return ControlFlow::Break(());
+        }
+        if let Some(f) = faces.get_mut(m) {
+            f.push(path);
+        }
+        ControlFlow::Continue(())
     });
-    if !whole {
-        return None;
+    match walk {
+        FaceWalk::OverWork => return Err(crate::PathOpsError::TooComplex),
+        FaceWalk::Stopped => return Ok(None),
+        FaceWalk::Whole => {}
     }
     let mut out = Vec::new();
     for (sources, paths) in masks.into_iter().zip(faces) {
-        out.extend(paths.into_iter().filter(|p| !p.elements().is_empty()).map(|path| Region { path, sources: sources.clone() }));
+        out.extend(paths.into_iter().map(|path| Region { path, sources: sources.clone() }));
     }
-    Some(out)
+    Ok(Some(out))
 }
 
 /// Calls `f` with each face of `arr` classified by `classify: impl Fn(&Multi) -> Option<usize>`
@@ -369,8 +391,34 @@ fn each_classified_face(
     classify: impl Fn(&Multi) -> Option<usize>,
     mut f: impl FnMut(usize, &Contours, &[ContourIdx]),
 ) -> bool {
+    each_classified_face_until(arr, num_classes, classify, |m, c, group| {
+        f(m, c, group);
+        ControlFlow::Continue(())
+    }) == FaceWalk::Whole
+}
+
+/// How a walk of faces ended ([`each_classified_face_until`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FaceWalk {
+    /// Every face was given.
+    Whole,
+    /// The caller's function broke: no face after that one was walked.
+    Stopped,
+    /// The passes would be past [`crate::Limits::pass_work`] (nothing given, or, in the fallback, some given).
+    OverWork,
+}
+
+/// [`each_classified_face`] until `f` breaks: no face after that one is walked, which saves the faces
+/// that were not wanted past it (their contours are not made into paths); the passes are charged all the same,
+/// before the first.
+fn each_classified_face_until(
+    arr: &Arrangement,
+    num_classes: usize,
+    classify: impl Fn(&Multi) -> Option<usize>,
+    mut f: impl FnMut(usize, &Contours, &[ContourIdx]) -> ControlFlow<()>,
+) -> FaceWalk {
     if num_classes == 0 {
-        return true;
+        return FaceWalk::Whole;
     }
     let top = &arr.top;
     // The classes of the faces around each vertex.
@@ -408,7 +456,7 @@ fn each_classified_face(
     }
     let segments = top.segment_indices().count();
     let planned = batches.saturating_mul(segments);
-    let Some(mut left) = crate::budget::limits().pass_work.checked_sub(planned) else { return false };
+    let Some(mut left) = crate::budget::limits().pass_work.checked_sub(planned) else { return FaceWalk::OverWork };
     crate::work::add(crate::work::Work::PassSegments, planned);
     for b in 0..batches {
         let c = arr.contours_where(|w| classify(w).is_some_and(|m| batch[m] == b));
@@ -426,22 +474,26 @@ fn each_classified_face(
             // pass per class for this batch.
             for m in (0..num_classes).filter(|m| batch[*m] == b) {
                 // A pass for each class, charged as it is made.
-                let Some(rest) = left.checked_sub(segments) else { return false };
+                let Some(rest) = left.checked_sub(segments) else { return FaceWalk::OverWork };
                 left = rest;
                 crate::work::add(crate::work::Work::PassSegments, segments);
                 let c = arr.contours_where(|w| classify(w) == Some(m));
                 let owner = vec![m; c.contours().count()];
                 for (_, group) in face_groups(&c, &owner) {
-                    f(m, &c, &group);
+                    if f(m, &c, &group).is_break() {
+                        return FaceWalk::Stopped;
+                    }
                 }
             }
             continue;
         };
         for (m, group) in face_groups(&c, &owner) {
-            f(m, &c, &group);
+            if f(m, &c, &group).is_break() {
+                return FaceWalk::Stopped;
+            }
         }
     }
-    true
+    FaceWalk::Whole
 }
 
 /// Calls `f` with each face of `arr` whose coverage is one of `masks` (distinct lists of covering inputs): the index of
@@ -454,14 +506,16 @@ fn each_classified_face(
 /// share no vertex (so no edge either): one pass per batch walks each face's contours exactly as
 /// its own mask's pass would, and the mask a contour bounds is the one of its batch at its first
 /// point.
-#[must_use = "false: the faces given are not all of them, and a caller makes no regions"]
-fn each_face(arr: &Arrangement, masks: &[Vec<usize>], f: impl FnMut(usize, &Contours, &[ContourIdx])) -> bool {
+///
+/// [`each_classified_face_until`]'s walk: it ends when `f` breaks, and no face after that one is walked.
+#[must_use = "the faces given are all of them only when the walk is whole"]
+fn each_face_until(arr: &Arrangement, masks: &[Vec<usize>], f: impl FnMut(usize, &Contours, &[ContourIdx]) -> ControlFlow<()>) -> FaceWalk {
     if masks.is_empty() {
-        return true;
+        return FaceWalk::Whole;
     }
     // Each mask is found by the inputs it covers.
     let ids = CoverIds::new(masks.to_vec());
-    each_classified_face(arr, masks.len(), |w| ids.of(arr, w), f)
+    each_classified_face_until(arr, masks.len(), |w| ids.of(arr, w), f)
 }
 
 /// Lists of inputs, each ascending as [`Arrangement::covered`] gives them, found by the inputs
@@ -603,6 +657,22 @@ pub(crate) fn regions_with(shapes: &[Shape], precision: f64) -> Vec<Region> {
 pub(crate) fn try_regions_with(shapes: &[Shape], precision: f64) -> Result<Vec<Region>, crate::PathOpsError> {
     guarded(|| regions_of(&try_arrangement(shapes, precision)?).ok_or(crate::PathOpsError::TooComplex))
         .unwrap_or(Err(crate::PathOpsError::Degenerate))
+}
+
+/// [`regions`] when there are at most `limit` of them, and `None` when there are more: found as soon as
+/// the face past `limit` is made, and the faces after it are not made. Where there are no faces to
+/// find, for an input the sweep refuses or that is over a limit ([`try_regions_within`] says which),
+/// they are none, as for [`regions`].
+pub fn regions_within(shapes: &[Shape], limit: usize) -> Option<Vec<Region>> {
+    try_regions_within(shapes, limit).unwrap_or(Some(Vec::new()))
+}
+
+/// [`regions_within`] that says why there are no faces where there are none: the error of the arrangement
+/// (past the element limit, or of the sweep), [`crate::PathOpsError::TooComplex`] past the limit on the
+/// work of the faces ([`crate::Limits::mask_work`], [`crate::Limits::pass_work`]), and
+/// [`crate::PathOpsError::Degenerate`] where the sweep panics. `Ok(None)` is more than `limit` faces.
+pub fn try_regions_within(shapes: &[Shape], limit: usize) -> Result<Option<Vec<Region>>, crate::PathOpsError> {
+    guarded(|| regions_of_within(&try_arrangement(shapes, DEFAULT_PRECISION)?, limit)).unwrap_or(Err(crate::PathOpsError::Degenerate))
 }
 
 /// The face under `point`, if any.
@@ -1634,6 +1704,65 @@ mod tests {
             }
             last = Some((passes, charged));
         }
+    }
+
+    /// A row of `n` rectangles each overlapping the next makes `2n - 1` faces: within a limit of that or
+    /// more they are [`regions`]'s faces, and over a lower one the build stops at the face past it, and no
+    /// face after it is made into a path (VectorCraft 96252ed's test, at 25, 49 and 98 rectangles).
+    #[test]
+    fn regions_within_a_limit_stop_at_the_face_past_it() {
+        for n in [25u32, 49, 98] {
+            let v: Vec<Shape> = (0..n)
+                .map(|k| {
+                    let x = 10.0 * f64::from(k);
+                    Shape::new(rect(x, 0.0, x + 15.0, 40.0), FillRule::NonZero, 1)
+                })
+                .collect();
+            let all = regions(&v);
+            let faces = 2 * n as usize - 1;
+            assert_eq!(all.len(), faces);
+            for limit in [faces, faces + 1, usize::MAX] {
+                assert_eq!(regions_within(&v, limit).as_ref(), Some(&all), "{n} rectangles, limit {limit}");
+                assert_eq!(try_regions_within(&v, limit).unwrap().as_ref(), Some(&all), "{n} rectangles, limit {limit}");
+            }
+            for limit in [0, 1, 10, faces - 1] {
+                work::reset();
+                assert_eq!(regions_within(&v, limit), None, "{n} rectangles, limit {limit}");
+                assert_eq!(work::take(Work::FacePaths), limit + 1, "{n} rectangles, limit {limit}: faces made");
+                assert_eq!(try_regions_within(&v, limit), Ok(None), "{n} rectangles, limit {limit}");
+            }
+            // With no limit every face is made, once.
+            work::reset();
+            assert!(regions_within(&v, usize::MAX).is_some());
+            assert_eq!(work::take(Work::FacePaths), faces);
+        }
+        assert_eq!(regions_within(&[], 0), Some(vec![]));
+    }
+
+    /// Where there are no faces to find for want of work, `regions_within` says none (as `regions` does)
+    /// and `try_regions_within` says why; a limit on the faces is not that: it is `None` and `Ok(None)`.
+    #[test]
+    fn regions_within_say_none_where_the_work_is_refused() {
+        let v: Vec<Shape> = (0..10u32)
+            .map(|k| {
+                let x = 10.0 * f64::from(k);
+                Shape::new(rect(x, 0.0, x + 15.0, 40.0), FillRule::NonZero, 1)
+            })
+            .collect();
+        let none = crate::Limits { mask_work: 0, ..crate::Limits::default() };
+        assert_eq!(crate::with_limits(none, || try_regions_within(&v, usize::MAX)), Err(crate::PathOpsError::TooComplex));
+        assert_eq!(crate::with_limits(none, || regions_within(&v, usize::MAX)), Some(vec![]));
+        let passes = crate::Limits { pass_work: 0, ..crate::Limits::default() };
+        assert_eq!(crate::with_limits(passes, || try_regions_within(&v, usize::MAX)), Err(crate::PathOpsError::TooComplex));
+        // Past the element limit, or non-finite: the arrangement's error.
+        let few = crate::Limits { elements: 4, ..crate::Limits::default() };
+        assert_eq!(crate::with_limits(few, || try_regions_within(&v, usize::MAX)), Err(crate::PathOpsError::TooComplex));
+        let mut nan = BezPath::new();
+        nan.move_to((f64::NAN, 0.0));
+        nan.line_to((1.0, 1.0));
+        nan.line_to((0.0, 1.0));
+        nan.close_path();
+        assert!(try_regions_within(&[Shape::new(nan, FillRule::NonZero, 0)], usize::MAX).is_err());
     }
 
     /// Merge by batches gives what a contour pass for each key gave: the same shapes, in the same order.

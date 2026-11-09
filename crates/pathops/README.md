@@ -55,6 +55,8 @@ pub fn try_pathfinder_with(op: PathfinderOp, shapes: &[Shape], precision: f64) -
 
 pub struct Region { pub path: BezPath, pub sources: Vec<usize> }
 pub fn regions(shapes: &[Shape]) -> Vec<Region>;          // all faces of the arrangement
+pub fn regions_within(shapes: &[Shape], limit: usize) -> Option<Vec<Region>>; // `regions`, or `None` past `limit` faces
+pub fn try_regions_within(shapes: &[Shape], limit: usize) -> Result<Option<Vec<Region>>, PathOpsError>; // and why there are none
 pub fn region_at(shapes: &[Shape], p: Point) -> Option<Region>;
 pub fn merge_regions(regions: &[&Region]) -> BezPath;     // their union
 ```
