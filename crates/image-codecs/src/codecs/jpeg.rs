@@ -40,8 +40,8 @@ pub(crate) struct JpegMeta {
     pub adobe_transform: Option<u8>,
     /// (width, height, components) from the first SOFn.
     pub frame: Option<(u32, u32, u8)>,
-    /// [`crate::JpegInfo::progressive_coefficients`] of the first SOFn.
-    pub progressive_coefficients: u64,
+    /// [`crate::JpegInfo::held_coefficients`] of the first SOFn and the first scan.
+    pub held_coefficients: u64,
 }
 
 /// The first frame of `b` as [`crate::JpegInfo`], from its markers alone (see [`crate::jpeg_info`]).
@@ -54,16 +54,27 @@ pub(crate) fn info(b: &[u8]) -> Option<crate::JpegInfo> {
         4 => ChannelLayout::Cmyk,
         _ => return None,
     };
-    let progressive_coefficients = m.progressive_coefficients;
-    Some(crate::JpegInfo { width, height, layout, whole_coefficients: uses_craft_jpeg(b), progressive_coefficients })
+    let held_coefficients = m.held_coefficients;
+    Some(crate::JpegInfo { width, height, layout, whole_coefficients: uses_craft_jpeg(b), held_coefficients })
 }
 
-/// Bytes of the coefficients `zune-jpeg` keeps through an 8-bit progressive frame (SOF2), from
-/// its header segment `seg`: per component, a 64-value block of `i16`s for each of its H × V
-/// blocks in every MCU (A.2), the MCUs covering the frame at the largest sampling factors. 0
-/// for any other frame.
-fn progressive_coefficients(marker: u8, seg: &[u8]) -> u64 {
-    let (0xC2, &[8, h0, h1, w0, w1, n, ref comps @ ..]) = (marker, seg) else { return 0 };
+/// Bytes of the coefficients `zune-jpeg` holds beside its output for a frame it can't turn into
+/// rows as it reads (see [`crate::JpegInfo::held_coefficients`]), from the frame's header
+/// segment `seg` and the number of components in its first scan: per component, a 64-value
+/// block of `i16`s for each of its H × V blocks in every MCU (A.2), the MCUs covering the frame
+/// at the largest sampling factors. 0 for any other frame.
+fn held_coefficients(marker: u8, seg: &[u8], scan_components: Option<u8>) -> u64 {
+    let &[8, h0, h1, w0, w1, n, ref comps @ ..] = seg else { return 0 };
+    // Progressive scans refine every block in turn; a sequential first scan without every
+    // component leaves its rows unfinished until the scans that bring the others.
+    let held = match marker {
+        0xC2 => true,
+        0xC0 | 0xC1 => scan_components.is_some_and(|s| s < n),
+        _ => false,
+    };
+    if !held {
+        return 0;
+    }
     let (h, w) = (u64::from(u16::from_be_bytes([h0, h1])), u64::from(u16::from_be_bytes([w0, w1])));
     let factors: Vec<(u64, u64)> =
         comps.as_chunks::<3>().0.iter().take(usize::from(n)).map(|&[_, f, _]| (u64::from(f >> 4), u64::from(f & 15))).collect();
@@ -80,6 +91,9 @@ pub(crate) fn scan_metadata(b: &[u8]) -> JpegMeta {
     // Photoshop splits a large resource block over consecutive APP13 segments.
     let mut photoshop: Vec<u8> = Vec::new();
     let mut jfif_dpi = None;
+    // The first frame header and the number of components in the first scan.
+    let mut sof: Option<(u8, &[u8])> = None;
+    let mut scan_components = None;
     let mut i = 2;
     while i + 4 <= b.len() {
         if b[i] != 0xFF {
@@ -95,6 +109,7 @@ pub(crate) fn scan_metadata(b: &[u8]) -> JpegMeta {
             continue;
         }
         if marker == 0xDA || marker == 0xD9 {
+            scan_components = (marker == 0xDA).then(|| b.get(i + 4).copied()).flatten();
             break;
         }
         let len = u16::from_be_bytes([b[i + 2], b[i + 3]]) as usize;
@@ -131,7 +146,7 @@ pub(crate) fn scan_metadata(b: &[u8]) -> JpegMeta {
                 let h = u16::from_be_bytes([seg[1], seg[2]]) as u32;
                 let w = u16::from_be_bytes([seg[3], seg[4]]) as u32;
                 m.frame = Some((w, h, seg[5]));
-                m.progressive_coefficients = progressive_coefficients(marker, seg);
+                sof = Some((marker, seg));
             }
             0xEE if seg.len() >= 12 && seg.starts_with(b"Adobe") => {
                 m.adobe_transform = Some(seg[11]);
@@ -140,6 +155,7 @@ pub(crate) fn scan_metadata(b: &[u8]) -> JpegMeta {
         }
         i += 2 + len;
     }
+    m.held_coefficients = sof.map_or(0, |(marker, seg)| held_coefficients(marker, seg, scan_components));
     m.dpi = photoshop_resolution(&photoshop)
         .or_else(|| m.xmp.as_deref().and_then(xmp_resolution))
         .or_else(|| m.exif.as_deref().and_then(exif_resolution))
@@ -610,7 +626,7 @@ mod tests {
     fn info_reads_the_frame_and_the_decoder() {
         let img = Image::from_raw(37, 21, ChannelLayout::Rgb, SampleType::U8, vec![128; 37 * 21 * 3]).unwrap();
         let rgb = crate::encode(&img, Format::Jpeg, &EncodeOptions::default()).unwrap();
-        let rgb_info = crate::JpegInfo { width: 37, height: 21, layout: ChannelLayout::Rgb, whole_coefficients: false, progressive_coefficients: 0 };
+        let rgb_info = crate::JpegInfo { width: 37, height: 21, layout: ChannelLayout::Rgb, whole_coefficients: false, held_coefficients: 0 };
         assert_eq!(info(&rgb), Some(rgb_info));
         // A 12-bit extended frame (SOF1) declaring 40,000 × 30,000 gray, markers only.
         let mut twelve = vec![0xFF, 0xD8, 0xFF, 0xC1, 0, 11, 12];
@@ -618,7 +634,7 @@ mod tests {
         twelve.extend_from_slice(&40_000u16.to_be_bytes());
         twelve.extend_from_slice(&[1, 1, 0x11, 0, 0xFF, 0xD9]);
         let twelve_info =
-            crate::JpegInfo { width: 40_000, height: 30_000, layout: ChannelLayout::Gray, whole_coefficients: true, progressive_coefficients: 0 };
+            crate::JpegInfo { width: 40_000, height: 30_000, layout: ChannelLayout::Gray, whole_coefficients: true, held_coefficients: 0 };
         assert_eq!(info(&twelve), Some(twelve_info));
         assert_eq!(info(b"not a jpeg"), None);
         // Markers only, 200 × 100 with `n` components: four are CMYK, two no layout `decode` returns.
@@ -634,12 +650,14 @@ mod tests {
         assert_eq!(info(&sof0(2)), None);
     }
 
-    /// An 8-bit progressive frame (SOF2) reports every coefficient the decoder keeps through its
-    /// scans: a block of 64 `i16`s per component block of every MCU.
+    /// A frame the decoder can't turn into rows as it reads reports every coefficient it holds:
+    /// a block of 64 `i16`s per component block of every MCU. That is an 8-bit progressive frame
+    /// (SOF2), or an 8-bit sequential one whose first scan lacks some of its components.
     #[test]
-    fn info_counts_a_progressive_frames_coefficients() {
-        // Markers only: SOI, a frame of `marker` declaring 48,000 × 34,200 with `factors`, EOI.
-        let frame = |marker: u8, precision: u8, factors: &[u8]| {
+    fn info_counts_the_coefficients_a_decode_holds() {
+        // Markers only: SOI, a frame of `marker` declaring 48,000 × 34,200 with `factors`, a first
+        // scan of the first `scan` components when given, EOI.
+        let frame = |marker: u8, precision: u8, factors: &[u8], scan: Option<u8>| {
             let mut b = vec![0xFF, 0xD8, 0xFF, marker, 0, 8 + 3 * factors.len() as u8, precision];
             b.extend_from_slice(&34_200u16.to_be_bytes());
             b.extend_from_slice(&48_000u16.to_be_bytes());
@@ -647,17 +665,30 @@ mod tests {
             for (i, &f) in factors.iter().enumerate() {
                 b.extend_from_slice(&[i as u8 + 1, f, 0]);
             }
+            if let Some(n) = scan {
+                b.extend_from_slice(&[0xFF, 0xDA, 0, 6 + 2 * n, n]);
+                for c in 1..=n {
+                    b.extend_from_slice(&[c, 0]);
+                }
+                b.extend_from_slice(&[0, 63, 0]);
+            }
             b.extend_from_slice(&[0xFF, 0xD9]);
             b
         };
-        let coefficients = |b: &[u8]| info(b).map(|i| i.progressive_coefficients);
+        let held = |b: &[u8]| info(b).map(|i| i.held_coefficients);
+        let all_444 = 6_000 * 4_275 * 3 * 128;
         // 4:4:4: 6,000 × 4,275 MCUs of one block per component.
-        assert_eq!(coefficients(&frame(0xC2, 8, &[0x11, 0x11, 0x11])), Some(6_000 * 4_275 * 3 * 128));
+        assert_eq!(held(&frame(0xC2, 8, &[0x11, 0x11, 0x11], Some(1))), Some(all_444));
         // 4:2:0: 3,000 × 2,138 MCUs of 4 + 1 + 1 blocks.
-        assert_eq!(coefficients(&frame(0xC2, 8, &[0x22, 0x11, 0x11])), Some(3_000 * 2_138 * 6 * 128));
-        // Baseline and 12-bit progressive frames (the latter decoded by craft-jpeg) hold none.
-        assert_eq!(coefficients(&frame(0xC0, 8, &[0x11, 0x11, 0x11])), Some(0));
-        assert_eq!(coefficients(&frame(0xC2, 12, &[0x11, 0x11, 0x11])), Some(0));
+        assert_eq!(held(&frame(0xC2, 8, &[0x22, 0x11, 0x11], None)), Some(3_000 * 2_138 * 6 * 128));
+        // Sequential frames whose first scan lacks components hold them all too.
+        assert_eq!(held(&frame(0xC0, 8, &[0x11, 0x11, 0x11], Some(1))), Some(all_444));
+        assert_eq!(held(&frame(0xC1, 8, &[0x11, 0x11, 0x11], Some(2))), Some(all_444));
+        // A sequential first scan with every component is read a line of MCUs at a time, and a
+        // 12-bit progressive frame goes to craft-jpeg: they hold none.
+        assert_eq!(held(&frame(0xC0, 8, &[0x11, 0x11, 0x11], Some(3))), Some(0));
+        assert_eq!(held(&frame(0xC0, 8, &[0x11, 0x11, 0x11], None)), Some(0));
+        assert_eq!(held(&frame(0xC2, 12, &[0x11, 0x11, 0x11], None)), Some(0));
     }
 
     /// An APP1 Extended XMP fragment (GUID, total size, offset, data).
