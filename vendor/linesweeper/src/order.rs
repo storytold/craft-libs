@@ -107,26 +107,7 @@ impl ComparisonCache {
         let stored = match self.inner.entry((i, j)) {
             Entry::Occupied(o) => o.into_mut(),
             Entry::Vacant(v) => {
-                let segi = &segments[i];
-                let segj = &segments[j];
-                // Craft patch (horizontal comparison): horizontal segments are
-                // rejected with a message in every build profile.
-                assert!(
-                    !segi.is_horizontal() && !segj.is_horizontal(),
-                    "compare_segments does not take horizontal segments"
-                );
-
-                let forward =
-                    if let (Some(l0), Some(l1)) = (segi.as_kurbo_line(), segj.as_kurbo_line()) {
-                        curve::line::intersect_lines(l0, l1, self.tolerance)
-                    } else {
-                        compare_curves(segments, i, j, self.accuracy, self.tolerance)
-                    };
-                debug_assert_eq!(
-                    forward.iter().last().unwrap().1,
-                    segi.end().y.min(segj.end().y)
-                );
-                v.insert(forward)
+                v.insert(compute(segments, i, j, self.tolerance, self.accuracy))
             }
         };
         if flipped {
@@ -162,6 +143,48 @@ impl ComparisonCache {
     #[cfg(test)]
     pub(crate) fn never_evict(&mut self) {
         self.next_purge = usize::MAX;
+    }
+
+    /// Compares two segments without storing a new result.
+    ///
+    /// `f` receives the order that [`ComparisonCache::compare_segments`] would return: the stored
+    /// one if there is one, otherwise one computed the same way and dropped after `f` returns.
+    pub fn with_order<R>(
+        &self,
+        segments: &Segments,
+        i: SegIdx,
+        j: SegIdx,
+        f: impl FnOnce(&CurveOrder) -> R,
+    ) -> R {
+        let (i, j, flipped) = if i.0 < j.0 {
+            (i, j, false)
+        } else {
+            (j, i, true)
+        };
+
+        // Comparisons cached for another arena do not describe this one.
+        let stored = (self.arena == Some(segments.arena_id()))
+            .then(|| self.inner.get(&(i, j)))
+            .flatten();
+        if let Some(forward) = stored {
+            return if flipped {
+                f(&forward.flip())
+            } else {
+                f(forward)
+            };
+        }
+        let forward = compute(segments, i, j, self.tolerance, self.accuracy);
+        if flipped {
+            f(&forward.flip())
+        } else {
+            f(&forward)
+        }
+    }
+
+    /// Returns the number of stored segment pairs.
+    #[cfg(test)]
+    pub(crate) fn len(&self) -> usize {
+        self.inner.len()
     }
 }
 
@@ -236,6 +259,29 @@ fn order_if_far_apart(segi: &Segment, segj: &Segment, margin: f64) -> Option<Cur
     let start = segi.start().y.max(segj.start().y);
     let end = segi.end().y.min(segj.end().y);
     (start <= end).then(|| CurveOrder::constant(start, end, order))
+}
+
+/// Computes the order of segment `i` relative to segment `j`.
+fn compute(segments: &Segments, i: SegIdx, j: SegIdx, tolerance: f64, accuracy: f64) -> CurveOrder {
+    let segi = &segments[i];
+    let segj = &segments[j];
+    // Craft patch (horizontal comparison): horizontal segments are
+    // rejected with a message in every build profile.
+    assert!(
+        !segi.is_horizontal() && !segj.is_horizontal(),
+        "compare_segments does not take horizontal segments"
+    );
+
+    let forward = if let (Some(l0), Some(l1)) = (segi.as_kurbo_line(), segj.as_kurbo_line()) {
+        curve::line::intersect_lines(l0, l1, tolerance)
+    } else {
+        compare_curves(segments, i, j, accuracy, tolerance)
+    };
+    debug_assert_eq!(
+        forward.iter().last().unwrap().1,
+        segi.end().y.min(segj.end().y)
+    );
+    forward
 }
 
 #[cfg(test)]
@@ -470,6 +516,51 @@ mod tests {
 
         // `a` and `d` have no height in common.
         assert_eq!(intervals(order_if_far_apart(a, d, 0.4)), None);
+    }
+
+    #[test]
+    fn unstored_order_matches_stored_order() {
+        let mut segments = Segments::default();
+        let ends = [
+            (-3.0, 5.0),
+            (-1e-7, 5.0),
+            (0.0, 5.0),
+            (1e-7, 4.0),
+            (2.5e-7, 7.0),
+            (2.0, 1e-3),
+            (3.0, 5.0),
+            (1e6, 1e6),
+        ];
+        for &end in &ends {
+            segments.add_points([(0.0, 0.0), end]);
+        }
+        segments
+            .add_bez_path(&kurbo::BezPath::from_svg("M0 0 Q 1 1 0 2 Z").unwrap())
+            .unwrap();
+
+        for (tolerance, accuracy) in [(1e-6, 5e-7), (4e-6, 5e-7), (0.25, 0.125)] {
+            let mut stored = ComparisonCache::new(tolerance, accuracy);
+            let unstored = ComparisonCache::new(tolerance, accuracy);
+            for i in segments.indices() {
+                for j in segments.indices() {
+                    if i == j {
+                        continue;
+                    }
+                    let computed =
+                        unstored.with_order(&segments, i, j, |c| c.iter().collect::<Vec<_>>());
+                    let expected = stored
+                        .compare_segments(&segments, i, j)
+                        .iter()
+                        .collect::<Vec<_>>();
+                    assert_eq!(computed, expected);
+                    // A stored result is passed on as it is.
+                    let reused =
+                        stored.with_order(&segments, i, j, |c| c.iter().collect::<Vec<_>>());
+                    assert_eq!(reused, expected);
+                }
+            }
+            assert_eq!(unstored.len(), 0);
+        }
     }
 
     #[test]

@@ -278,6 +278,10 @@ local patches listed below. `.cargo_vcs_info.json` names the commit it was packa
 `824b0791a750f7b27b8edcbb6c6244d0e629875e`. That commit is not in the GitHub repository the manifest
 names, which is archived; its README says development moved off GitHub.
 
+local patches listed below. `.cargo_vcs_info.json` names the commit it was packaged from,
+`824b0791a750f7b27b8edcbb6c6244d0e629875e`. That commit is not in the GitHub repository the manifest
+names, which is archived; its README says development moved off GitHub.
+
 Every file here except this one, `SOURCE.json` and the patched files below is byte for byte the file
 in the `.crate` archive. `SOURCE.json` records the hash of the `.crate` download
 (`source_archive_sha256`) and, for every file kept, the hash in the package (`source_sha256`) and the
@@ -360,6 +364,7 @@ Every change here updates this table and `SOURCE.json` in the same commit.
 | `binary_op` returns the new `Error::FeatureBelowTolerance { eps }` when its automatic `eps` is above `MIN_AUTO_EPS` (1e-6) and an input subpath at least `4 * MIN_AUTO_EPS` wide and high is narrower than `FEATURE_EPS_RATIO * eps` (4 * eps) in x or y, measured on the subpath's exact bounding box. Before, one far point raised `eps` for every segment and `binary_op` returned `Ok` without the small subpaths: with a triangle at 3e13 (eps 0.43) a 0.3 x 10 sliver was lost, and at 1e15 (eps 14.2) most of a 10 x 10 square was. The docs of `binary_op` and `binary_op_with_eps` state that `eps` is one absolute tolerance and what the check does not cover | `Craft patch (far-point eps)` | `src/lib.rs` | `tests::far_point_eps` |
 
 Every change here updates this table and `SOURCE.json` in the same commit.
+| `src/order.rs`, `src/sweep/sweep_line.rs` | Segments that start at one point all compare "ish" there, so each intersection scan and insertion search run at that point passes every other segment that starts there. Those comparisons are no longer stored: `ComparisonCache::with_order` uses a stored comparison if there is one and otherwise computes it the same way and drops it. `n` segments that start at one point and do not cross later now store `O(n)` comparisons instead of `O(n^2)` (comparisons made at a later crossing are stored as before); 1,000 triangles that share their apex peak at 8 MiB instead of 2,431 MiB and sweep in 0.56 s instead of 7.7 s. The comparisons are the same, so the output does not change. The `segments_starting_at_one_point_are_not_stored` and `curves_starting_at_one_point_are_not_stored` tests count the stored comparisons, `segments_starting_at_one_point_sweep_as_with_stored_comparisons` checks that every sweep line is the same as with all comparisons stored, and the `order` test `unstored_order_matches_stored_order` checks `with_order` against `compare_segments`. |
 
 `omitted_files` lists the 43 files of the package left out here, with their hashes:
 
