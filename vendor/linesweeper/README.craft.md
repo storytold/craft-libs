@@ -114,6 +114,9 @@ names, which is archived; its README says development moved off GitHub.
 `824b0791a750f7b27b8edcbb6c6244d0e629875e`. That commit is not in the GitHub repository the manifest
 names, which is archived; its README says development moved off GitHub.
 
+`824b0791a750f7b27b8edcbb6c6244d0e629875e`. That commit is not in the GitHub repository the manifest
+names, which is archived; its README says development moved off GitHub.
+
 Every file here except this one, `SOURCE.json` and the files under Local changes is byte for byte the
 file in the `.crate` archive. `SOURCE.json` records the hash of the `.crate` download
 (`source_archive_sha256`) and, for every file kept, the hash in the package (`source_sha256`) and the
@@ -144,6 +147,7 @@ Every change here updates this table and `SOURCE.json` in the same commit.
 | The `paperjs` test's image comparison counts a difference in alpha | `Craft patch (image distance alpha)` | `tests/paperjs.rs` | `pixmap_distance_counts_coverage` |
 | `checkerboard(0)` and `slanted_checkerboard(0)` return empty collections; the inner count was `n - 1`, which overflowed | `Craft patch (empty checkerboard)` | `src/generators.rs`, `scripts/test-pdf-backends.sh` | `checkerboards_of_size_zero_and_one` |
 | `another_monotonic_bezier` returns `arbitrary::Error::IncorrectFormat` when no piece of the generated cubic increases in y; it returned that cubic, which can be horizontal | `Craft patch (flat cubic)` | `src/arbitrary.rs` | `another_monotonic_bezier_increases_in_y_or_fails` |
+| A ulp step past `f64::MAX` in the test-only `F64Perturbation::apply` gives infinity; `Ulp(2)` of `f64::MAX` gave NaN | `Craft patch (ulp overflow)` | `src/perturbation.rs` | `ulp_step_past_f64_max_is_infinite` |
 
 Every change here updates this table and `SOURCE.json` in the same commit. To take a new linesweeper
 release, unpack the crates.io package, carry these changes over, regenerate `SOURCE.json`, and run the
