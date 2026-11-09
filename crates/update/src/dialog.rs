@@ -1120,6 +1120,24 @@ pub(crate) mod tests {
         assert_eq!(response, StartupPromptResponse::UpdateAndRestart);
     }
 
+    /// A ready update with work to save offers Save and Update, not Restart to Update.
+    #[test]
+    fn a_ready_prompt_with_work_to_save_offers_save_and_update() {
+        let ctx = dark_context();
+        let mut prompt = StartupPrompt { is_ready: true, offer_save: true, ..prompt_for(false) };
+        frame(&ctx, &mut prompt, Vec::new());
+        let (_, output) = frame(&ctx, &mut prompt, Vec::new());
+        let painted = painted_text(&output);
+        assert!(painted.contains("SAVE AND UPDATE"), "{painted}");
+        assert!(!painted.contains("RESTART TO UPDATE"), "{painted}");
+        let at = text_pos(&output, "SAVE AND UPDATE").expect("SAVE AND UPDATE is painted");
+        let button = |pressed| Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+        frame(&ctx, &mut prompt, vec![Event::PointerMoved(at)]);
+        frame(&ctx, &mut prompt, vec![button(true)]);
+        let (response, _) = frame(&ctx, &mut prompt, vec![button(false)]);
+        assert_eq!(response, StartupPromptResponse::UpdateAndRestart);
+    }
+
     /// A copy that can't update itself keeps its Download button, whatever the app can save.
     #[test]
     fn a_download_prompt_never_offers_save_and_update() {

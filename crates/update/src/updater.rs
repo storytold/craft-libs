@@ -1359,6 +1359,36 @@ mod tests {
         assert_eq!(prompt_message(&u), crate::translate::fill(READY_TEXT, &[("app", "PhotoCraft")]));
     }
 
+    /// A ready update whose close was canceled offers Save and Update while the app can save.
+    #[test]
+    fn a_ready_update_offers_save_and_update_over_restart_to_update() {
+        let ctx = egui::Context::default();
+        let mut u = installed(&ctx);
+        assert_eq!(frame(&mut u, &ctx, true), Action::Close);
+        frame_saving(&mut u, &ctx, false, true, Vec::new());
+        let (_, output) = frame_saving(&mut u, &ctx, false, true, Vec::new());
+        assert!(crate::dialog::tests::text_pos(&output, "SAVE AND UPDATE").is_some());
+        assert!(crate::dialog::tests::text_pos(&output, "RESTART TO UPDATE").is_none());
+        let (_, output) = frame_saving(&mut u, &ctx, false, false, Vec::new());
+        assert!(crate::dialog::tests::text_pos(&output, "RESTART TO UPDATE").is_some());
+    }
+
+    /// Save and Update after a canceled close asks the app to close once, in the frame the save ends.
+    #[test]
+    fn save_and_update_after_a_canceled_close_closes_once_the_work_is_saved() {
+        let ctx = egui::Context::default();
+        let mut u = installed(&ctx);
+        assert_eq!(frame(&mut u, &ctx, true), Action::Close);
+        assert_eq!(frame(&mut u, &ctx, true), Action::None);
+        click_save(&mut u, &ctx);
+        assert!(u.take_save_request());
+        assert_eq!(frame_saving(&mut u, &ctx, false, true, Vec::new()).0, Action::None);
+        assert_eq!(frame_saving(&mut u, &ctx, true, false, Vec::new()).0, Action::Close);
+        assert!(!saving(&u), "a close the user cancels leaves no spinner");
+        assert_eq!(frame_saving(&mut u, &ctx, true, false, Vec::new()).0, Action::None);
+        assert!(u.install.is_none());
+    }
+
     /// A finished installation that still has to start its helper asks the app to close only
     /// when it may, and starts the helper only at the exit, once.
     #[test]
