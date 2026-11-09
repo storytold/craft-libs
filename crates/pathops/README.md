@@ -559,14 +559,24 @@ or so, measured once in a release build:
   200, 3.3 s for 400 and 4.1 s for 450; 500 are refused by the event limit. The cost grows with about the
   square of their number there, not the cube. Lines that pass through that point are counted, as if the curves
   were not there.
-- A Pathfinder Outline (and the planar map under it) can miss a crossing where one of the curves runs nearly level. The sweep cuts the two
-  curves there at points that can lie up to a unit apart along the level one, joins them with a level piece that lies on neither, and the map drops that piece, and
-  the pieces of the two curves between the cuts, as edges of no input: no vertex is left where they cross, so it is no junction and no cut. Two open cubics that cross
-  twice, from a random stack, came back in 1 piece each and not 3 (`M50.0175,87.4777 C91.0932,74.4057 61.7557,89.6998 73.7868,37.2415` and
-  `M40.8294,97.1229 C86.9075,78.6158 58.564,64.895 99.0986,87.5071`), at a precision of 1e-5 and of 0.01, and cut at both crossings turned by 30 or 90 degrees. Of 400 random stacks of two to four open
-  paths of two or three cubics each, 124 lacked at least one cut that crossing them flattened to a polyline finds (1,483 cuts in all); 15 had one or two cuts more, which the flattening may
-  not see. This is apart from the cuts in the middle of a path that nothing crosses, which are no longer made. Lines that cross lines, and a line across an arc or a circle,
-  are cut at every crossing (`tests/it/outline_cuts.rs`).
+- The planar map, and what is made of it (the Outline of open paths, `shape_builder`'s lines and faces, `live_paint`), can lose a crossing, or cut
+  a path where nothing crosses it, where curves cross at a shallow angle or one of them runs nearly level. The map traces an open path out and back,
+  so four curves meet at a crossing, and the sweep, which finds the height of a cut to a tolerance and so its place along a level curve to that tolerance
+  over the slope, cuts them at points up to a unit apart (0.17 and 0.78 were seen) and joins the cuts with pieces that run level; copies of one path part
+  by about 5e-3 at the top of a flat arc. The map reads the input of each piece from the outlines that lie within 16 tolerances of its middle, and drops
+  a piece that has none, joins the ends of a stub only if they lie within a sixteenth of the default precision, and merges two edges between the same
+  points only within the precision, all of which those cuts outrun: the crossing is no vertex, or a vertex is where nothing meets. Two open cubics that
+  cross twice (`M50.0175,87.4777 C91.0932,74.4057 61.7557,89.6998 73.7868,37.2415` and
+  `M40.8294,97.1229 C86.9075,78.6158 58.564,64.895 99.0986,87.5071`) came back from the Outline as 1 piece each and not 3, at a precision of 1e-5 and of 0.01, and
+  closed into shapes `live_paint` gave no face; turned by 30 or 90 degrees they are right. Measured against a count of the crossings made by flattening the
+  paths to polylines and crossing the segments (three runs of 400 stacks): of stacks of two to four open paths of two or three random cubics, the Outline lacks cuts in 349 of 1,200
+  (4,516 cuts) and has 72 more than places (half of them where two crossings lie closer than 5e-3), the shape builder's lines are wrong in 924 (3,061 cuts lost and 2,221 more than places),
+  and its faces in 512; of stacks of smoother paths (three or four anchors), the Outline in 11 (28 cuts lost, 8 more), the lines in 372 (887 more than places) and the faces in 6. The
+  counts are the same when the drawing is made 10 or 100 times as large. Closed shapes that do not cross themselves (1,200 stacks of two to four) are right in Divide, Trim, Merge and the four booleans, and
+  wrong in `live_paint`'s faces in 4 (a face lost in 11 of them) and the Outline's cuts in 3. Closed shapes that cross themselves (random closed cubics of two or three, 1,200 stacks)
+  give a wrong area in 6 to 9% of pairs for the booleans, 7% for Divide, 10% of results for Merge and Trim, by up to 460 square units in drawings 100 across, whatever their size
+  or turn (a count by a grid of points agrees with the flattened paths): the cause is not known. Lines that cross lines, and a line across an arc or a circle, are cut at every crossing
+  (`tests/it/outline_cuts.rs`). The vertices in the middle of a path that the Outline no longer cuts at are still cuts of the shape builder's lines and live paint's edges.
 - A Pathfinder Outline refuses after the planar map is built: `MAX_SEARCH_WORK` counts the searches for the junctions
   on each edge once the map exists, so its refusal comes after the time the map took. The grid of 300 and 300 open lines under arches that was
   measured for it (the bounds of every arch hold all 90,000 junctions, with the curve nowhere near) does not reach it by default: the counts of
