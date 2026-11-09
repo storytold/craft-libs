@@ -1294,10 +1294,16 @@ fn intersect_cubics_rec(
     let (ep0, ep1) = if use_precomputed_approx {
         let orig_y_mid0 = (cubic0.c.p0.y + cubic0.c.p3.y) / 2.0;
         let orig_y_mid1 = (cubic1.c.p0.y + cubic1.c.p3.y) / 2.0;
-        (
-            cubic0.approx.shift_y(orig_y_mid0 - y_mid),
-            cubic1.approx.shift_y(orig_y_mid1 - y_mid),
-        )
+        let mut ep0 = cubic0.approx.shift_y(orig_y_mid0 - y_mid);
+        let mut ep1 = cubic1.approx.shift_y(orig_y_mid1 - y_mid);
+        // Craft patch (cut end bounds): the precomputed approximations carry the
+        // end x values of the whole pieces, which are not the ends of `c0` and
+        // `c1` when the y-range is shorter than a piece. They are replaced by
+        // the end x values of the cut curves, as `QuadraticApprox::from_cubic`
+        // sets them.
+        ep0.almost_horiz = ep0.almost_horiz.map(|(d, _, _)| (d, c0.p0.x, c0.p3.x));
+        ep1.almost_horiz = ep1.almost_horiz.map(|(d, _, _)| (d, c1.p0.x, c1.p3.x));
+        (ep0, ep1)
     } else {
         (
             QuadraticApprox::from_cubic(c0, cubic0.dir),
@@ -2116,6 +2122,33 @@ mod test {
         };
 
         assert_eq!(order.clone().with_y_slop(0.5).cmps, order.cmps);
+    }
+
+    // c0 is almost horizontal and only its first 0.0158 of height overlaps c1.
+    // The curves stay more than 4.4 apart there, so the whole overlap is Left.
+    #[test]
+    fn almost_horizontal_piece_cut_to_the_overlap() {
+        let c0 = CubicBez::new(
+            (311.848, 248.7972),
+            (313.515, 248.9023),
+            (315.181, 248.9698),
+            (316.848, 248.9988),
+        );
+        let c1 = CubicBez::new(
+            (316.909, 243.813),
+            (316.818, 245.48),
+            (316.698, 247.146),
+            (316.549, 248.813),
+        );
+        let order = intersect_cubics(c0, c1, 5e-7, 1e-6);
+        assert_eq!(order.start, 248.7972);
+        assert_eq!(
+            &order.cmps[..],
+            &[CurveOrderEntry {
+                end: 248.813,
+                order: Order::Left
+            }]
+        );
     }
 
     // Cases where two curves share just a single y coordinate.
