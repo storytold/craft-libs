@@ -12,7 +12,7 @@ use crate::{
     geom::Segment,
     num::CheapOrderedFloat,
     order::ComparisonCache,
-    segments::{SegIdx, Segments},
+    segments::{SegIdx, SegVec, Segments},
     treevec::TreeVec,
 };
 
@@ -142,6 +142,10 @@ pub(crate) struct SegmentOrderEntry {
     ///
     /// If this is `Some`, both `enter` and `exit` will be true.
     old_seg: Option<SegIdx>,
+    // Craft patch (sweep position).
+    /// Keys strictly increase along the sweep line. See [`SegmentOrder::keys`].
+    #[cfg_attr(test, serde(skip))]
+    key: u64,
 }
 
 impl std::fmt::Debug for SegmentOrderEntry {
@@ -168,6 +172,7 @@ impl SegmentOrderEntry {
             in_changed_interval: false,
             old_idx: None,
             old_seg: None,
+            key: 0,
         }
     }
 
@@ -202,6 +207,15 @@ impl SegmentOrderEntry {
 #[derive(Clone, Default)]
 pub(crate) struct SegmentOrder {
     pub(crate) segs: TreeVec<SegmentOrderEntry, 128>,
+    // Craft patch (sweep position).
+    /// For each segment, the key of the entry that last held it, or zero if no
+    /// entry has held it. Entries are sorted by key, so this finds a segment on
+    /// a wide sweep line by binary search.
+    ///
+    /// Removing an entry leaves its keys here, and `position` ignores any key
+    /// whose entry no longer holds the segment.
+    #[cfg_attr(test, serde(skip))]
+    keys: SegVec<u64>,
 }
 
 impl std::fmt::Debug for SegmentOrder {
@@ -211,6 +225,14 @@ impl std::fmt::Debug for SegmentOrder {
 }
 
 impl SegmentOrder {
+    // Craft patch (sweep position).
+    fn new(num_segments: usize) -> Self {
+        Self {
+            segs: TreeVec::new(),
+            keys: SegVec::with_size(num_segments),
+        }
+    }
+
     fn seg(&self, i: usize) -> SegIdx {
         self.segs[i].seg
     }
@@ -367,7 +389,7 @@ impl<'segs> Sweeper<'segs> {
         let events = EventQueue::default();
         Sweeper {
             eps,
-            line: SegmentOrder::default(),
+            line: SegmentOrder::new(segments.len()),
             correctness,
             y: events.next_y(segments).unwrap_or(f64::INFINITY),
             events,
@@ -600,7 +622,7 @@ impl<'segs> Sweeper<'segs> {
     }
 
     fn insert(&mut self, pos: usize, seg: SegmentOrderEntry) {
-        self.line.segs.insert(pos, seg);
+        self.line.insert(pos, seg);
         self.intersection_scan_right(pos, WhichTouch::Mid);
         self.intersection_scan_left(pos, WhichTouch::Mid);
     }
@@ -711,6 +733,8 @@ impl<'segs> Sweeper<'segs> {
         let x1 = seg.max_x();
         self.line.segs[pos].old_seg = Some(self.line.segs[pos].seg);
         self.line.segs[pos].seg = seg_idx;
+        // Craft patch (sweep position).
+        self.line.keys[seg_idx] = self.line.segs[pos].key;
         self.line.segs[pos].enter = true;
         self.line.segs[pos].exit = true;
         self.line.segs[pos].lower_bound = x0.min(x1) - self.eps;
@@ -813,7 +837,7 @@ impl<'segs> Sweeper<'segs> {
 		// larger `y` than our current `y` (if not, it would
 		// violate the cyclic order property).
                 let which = WhichTouch::Late;
-                self.line.segs.insert(insertion_pos, seg);
+                self.line.insert(insertion_pos, seg);
                 self.intersection_scan_right(insertion_pos, which);
                 self.intersection_scan_left(insertion_pos, which);
             }
@@ -1348,10 +1372,112 @@ impl SegmentOrder {
     //
     // Returns an index pointing to a `SegmentOrderEntry` for which
     // `seg_idx` is either the `seg` or the `old_seg`.
+    //
+    // Craft patch (sweep position): a binary search over the keys replaces
+    // the package's linear scan.
     fn position(&self, seg_idx: SegIdx) -> Option<usize> {
-        self.segs
-            .iter()
-            .position(|x| x.seg == seg_idx || x.old_seg == Some(seg_idx))
+        let key = self.keys[seg_idx];
+        let pos = self.segs.partition_point(|entry| entry.key < key);
+        let ret = self
+            .segs
+            .get(pos)
+            .is_some_and(|x| x.seg == seg_idx || x.old_seg == Some(seg_idx))
+            .then_some(pos);
+
+        #[cfg(any(test, feature = "slow-asserts"))]
+        assert_eq!(
+            ret,
+            self.segs
+                .iter()
+                .position(|x| x.seg == seg_idx || x.old_seg == Some(seg_idx))
+        );
+
+        ret
+    }
+
+    // Craft patch (sweep position): inserts an entry at the given index,
+    // assigning it a key that keeps the keys sorted.
+    fn insert(&mut self, pos: usize, mut entry: SegmentOrderEntry) {
+        let (mut before, mut after) = self.neighbor_keys(pos);
+        if after - before < 2 {
+            self.spread_keys(pos);
+            (before, after) = self.neighbor_keys(pos);
+        }
+        entry.key = before + (after - before) / 2;
+        self.keys[entry.seg] = entry.key;
+        if let Some(old_seg) = entry.old_seg {
+            self.keys[old_seg] = entry.key;
+        }
+        self.segs.insert(pos, entry);
+    }
+
+    // Craft patch (sweep position): the keys of the entries on either side of
+    // the given index, or zero and `u64::MAX` at the ends of the sweep line. No entry has either of those
+    // keys, so there is always a key to give an entry inserted at either end.
+    fn neighbor_keys(&self, pos: usize) -> (u64, u64) {
+        let before = pos.checked_sub(1).map_or(0, |i| self.segs[i].key);
+        let after = self.segs.get(pos).map_or(u64::MAX, |entry| entry.key);
+        (before, after)
+    }
+
+    // Craft patch (sweep position): makes space for inserting an entry at the
+    // given index, by evenly spacing the keys around it.
+    //
+    // This follows the tag-range relabeling of Bender et al., "Two Simplified
+    // Algorithms for Maintaining Order in a List" (ESA 2002): take the smallest
+    // aligned power-of-two range of keys around the index that is sparse enough,
+    // and spread out the keys inside it. The amortized number of keys changed by
+    // an insertion is logarithmic in the length of the sweep line.
+    fn spread_keys(&mut self, pos: usize) {
+        // How quickly the allowed density falls as the range grows. Each doubling
+        // of the range allows `2.0 / OVERFLOW` times as many entries, so a range
+        // of `2^bits` keys holds up to `(2.0 / OVERFLOW)^bits` of them.
+        const OVERFLOW: f64 = 1.4;
+
+        let len = self.segs.len();
+        let center = self.segs[pos.min(len - 1)].key;
+        let mut start = pos;
+        let mut end = pos;
+        let mut max_entries = 1.0;
+        for bits in 1..u64::BITS {
+            let range_len = 1u64 << bits;
+            let first = center & !(range_len - 1);
+            let last = first + (range_len - 1);
+            while start > 0 && self.segs[start - 1].key >= first {
+                start -= 1;
+            }
+            while end < len && self.segs[end].key <= last {
+                end += 1;
+            }
+
+            max_entries *= 2.0 / OVERFLOW;
+            let count = (end - start) as u64;
+            let step = range_len / (count + 1);
+            // A step of 3 leaves a gap of at least 2 after the last key, even if
+            // the range ends at `u64::MAX`.
+            if count as f64 <= max_entries && step >= 3 {
+                self.assign_keys(start..end, first, step);
+                return;
+            }
+        }
+
+        // Even the largest range is too dense for its limit, which takes about
+        // 6 * 10^9 entries. The whole key space still has room for all of them.
+        self.assign_keys(0..len, 0, u64::MAX / (len as u64 + 1));
+    }
+
+    // Craft patch (sweep position): gives the entries in a range of indices the
+    // keys `first + step`, `first + 2 * step`, and so on.
+    fn assign_keys(&mut self, range: std::ops::Range<usize>, first: u64, step: u64) {
+        let mut key = first;
+        for entry in self.segs.range_mut(range) {
+            key += step;
+            entry.key = key;
+            self.keys[entry.seg] = key;
+            if let Some(old_seg) = entry.old_seg {
+                self.keys[old_seg] = key;
+            }
+        }
     }
 }
 
@@ -1588,6 +1714,7 @@ impl<'segs> SweepLine<'_, '_, 'segs> {
             in_changed_interval: false,
             old_idx: None,
             old_seg: None,
+            key: 0,
         };
 
         let buffers = &mut self.bufs;
@@ -1831,6 +1958,7 @@ mod tests {
                 segs: (0..xs.len())
                     .map(|i| SegmentOrderEntry::new(SegIdx(i), &segs, eps))
                     .collect(),
+                ..Default::default()
             };
 
             let mut cmp = ComparisonCache::new(eps, eps / 2.0);
@@ -1883,6 +2011,7 @@ mod tests {
                 segs: (0..(xs.len() - 1))
                     .map(|i| SegmentOrderEntry::new(SegIdx(i), &segs, eps))
                     .collect(),
+                ..Default::default()
             };
             let mut comparer = ComparisonCache::new(eps, eps / 2.0);
             let idx = line.insertion_idx(y, &segs, new_idx, &mut comparer);
@@ -1947,6 +2076,167 @@ mod tests {
         crate::sweep::sweep(&segs, eps, |_, ev| {
             dbg!(ev);
         });
+    }
+
+    fn check_positions(line: &SegmentOrder, num_segs: usize) {
+        let keys: Vec<_> = line.segs.iter().map(|entry| entry.key).collect();
+        assert!(keys.is_sorted_by(|a, b| a < b));
+        assert!(keys.iter().all(|key| 0 < *key && *key < u64::MAX));
+
+        // `position` compares its answer with a linear scan.
+        for seg in (0..num_segs).map(SegIdx) {
+            line.position(seg);
+        }
+    }
+
+    #[derive(Clone, Debug)]
+    enum LineEdit {
+        Insert(prop::sample::Index),
+        InsertRepeatedly(prop::sample::Index, usize),
+        Remove(prop::sample::Index),
+        Move(prop::sample::Index, prop::sample::Index),
+        ContinueContour(prop::sample::Index),
+    }
+
+    fn line_edit() -> impl Strategy<Value = LineEdit> {
+        let idx = any::<prop::sample::Index>;
+        prop_oneof![
+            idx().prop_map(LineEdit::Insert),
+            (idx(), 0usize..100).prop_map(|(at, n)| LineEdit::InsertRepeatedly(at, n)),
+            idx().prop_map(LineEdit::Remove),
+            (idx(), idx()).prop_map(|(from, to)| LineEdit::Move(from, to)),
+            idx().prop_map(LineEdit::ContinueContour),
+        ]
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(64))]
+
+        // Applies the same kinds of edits as `Sweeper`, in any order.
+        #[test]
+        fn position_after_edits(edits in prop::collection::vec(line_edit(), 0..20)) {
+            let num_segs = 2000;
+            let segs = mk_segs(&vec![(0.0, 0.0); num_segs]);
+            let eps = 0.01;
+
+            let mut line = SegmentOrder::new(num_segs);
+            let mut next_seg = 0;
+            let mut new_entry = || {
+                next_seg += 1;
+                SegmentOrderEntry::new(SegIdx(next_seg - 1), &segs, eps)
+            };
+            for edit in edits {
+                let len = line.segs.len();
+                match edit {
+                    LineEdit::Insert(at) => line.insert(at.index(len + 1), new_entry()),
+                    LineEdit::InsertRepeatedly(at, n) => {
+                        let at = at.index(len + 1);
+                        for _ in 0..n {
+                            line.insert(at, new_entry());
+                        }
+                    }
+                    LineEdit::Remove(at) if len > 0 => {
+                        line.segs.remove(at.index(len));
+                    }
+                    LineEdit::Move(from, to) if len > 0 => {
+                        let entry = line.segs.remove(from.index(len));
+                        line.insert(to.index(len), entry);
+                    }
+                    LineEdit::ContinueContour(at) if len > 0 => {
+                        let pos = at.index(len);
+                        let new_seg = new_entry().seg;
+                        line.segs[pos].old_seg = Some(line.segs[pos].seg);
+                        line.segs[pos].seg = new_seg;
+                        line.keys[new_seg] = line.segs[pos].key;
+                    }
+                    _ => {}
+                }
+                check_positions(&line, 10);
+            }
+            check_positions(&line, next_seg);
+        }
+    }
+
+    #[test]
+    fn position_after_repeated_insertion() {
+        let num_segs = 2000;
+        let segs = mk_segs(&vec![(0.0, 0.0); num_segs]);
+        let eps = 0.01;
+        let entry = |i| SegmentOrderEntry::new(SegIdx(i), &segs, eps);
+
+        for insertion_pos in [
+            // Always at the start of the line.
+            |_| 0,
+            // Always at the end of the line.
+            |i| i,
+            // Always in the same gap in the middle of the line.
+            |i: usize| i.min(1),
+            // Alternating on both sides of the most recent entry.
+            |i: usize| i.div_ceil(2),
+        ] {
+            let mut line = SegmentOrder::new(num_segs);
+            for i in 0..num_segs {
+                line.insert(insertion_pos(i), entry(i));
+            }
+            check_positions(&line, num_segs);
+        }
+    }
+
+    #[test]
+    fn position_after_insertion_next_to_the_extreme_keys() {
+        let segs = mk_segs(&[(0.0, 0.0); 2]);
+        let eps = 0.01;
+        for (key, pos) in [(u64::MAX - 1, 1), (1, 0)] {
+            let mut line = SegmentOrder::new(2);
+            line.insert(0, SegmentOrderEntry::new(SegIdx(0), &segs, eps));
+            line.segs[0].key = key;
+            line.keys[SegIdx(0)] = key;
+
+            line.insert(pos, SegmentOrderEntry::new(SegIdx(1), &segs, eps));
+            check_positions(&line, 2);
+        }
+    }
+
+    #[test]
+    fn position_after_moving_a_contour_continuation() {
+        let segs = mk_segs(&[(0.0, 0.0); 3]);
+        let eps = 0.01;
+        let mut line = SegmentOrder::new(3);
+        line.insert(0, SegmentOrderEntry::new(SegIdx(0), &segs, eps));
+        line.insert(1, SegmentOrderEntry::new(SegIdx(1), &segs, eps));
+
+        line.segs[0].old_seg = Some(SegIdx(0));
+        line.segs[0].seg = SegIdx(2);
+        line.keys[SegIdx(2)] = line.segs[0].key;
+
+        let entry = line.segs.remove(0);
+        line.insert(1, entry);
+        assert_eq!(line.position(SegIdx(0)), Some(1));
+        assert_eq!(line.position(SegIdx(2)), Some(1));
+    }
+
+    #[test]
+    fn position_on_a_wide_sweep_line() {
+        // Two overlapping sawtooths. About 160 of their segments are on the sweep
+        // line at one height, more than fit in a `TreeVec` node, and each kink,
+        // exit and crossing looks up a position.
+        let mut path = BezPath::new();
+        for offset in [0.0, 0.25] {
+            path.move_to((offset, 0.0));
+            for i in 0..40 {
+                let i_f = i as f64;
+                let height = 10.0 + (i_f * 0.618).fract();
+                path.line_to((offset + i_f + 0.3, 5.0 + (i_f * 0.5).fract()));
+                path.line_to((offset + i_f + 0.5, height));
+                path.line_to((offset + i_f + 0.8, 5.0 + (i_f * 0.25).fract()));
+                path.line_to((offset + i_f + 1.0, (i_f * 0.755).fract()));
+            }
+            path.close_path();
+        }
+
+        let mut segs = Segments::default();
+        segs.add_bez_path(&path).unwrap();
+        crate::sweep::sweep(&segs, 1e-6, |_, _| {});
     }
 
     fn p(x: f64, y: f64) -> Point {
