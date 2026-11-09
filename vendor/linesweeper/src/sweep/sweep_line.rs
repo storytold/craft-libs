@@ -351,6 +351,24 @@ pub struct SweepLineBuffers {
 // segment in under a sixteenth of the time of a segment comparison.
 const SEGMENTS_PASSED_PER_UNIT: u64 = 16;
 
+/// Craft patch (removal scan): a run of positions on the sweep line whose segments
+/// all end at the current height.
+///
+/// The run ends just before `end` and starts just after `live`, the nearest position
+/// to its left whose segment does not end here, or at the start of the line when
+/// there is none.
+#[derive(Clone, Copy, Debug)]
+struct EndedRun {
+    live: Option<usize>,
+    end: usize,
+}
+
+impl EndedRun {
+    fn contains(&self, pos: usize) -> bool {
+        pos < self.end && self.live.is_none_or(|live| pos > live)
+    }
+}
+
 /// Encapsulates the state of the sweep-line algorithm and allows iterating over sweep lines.
 #[derive(Clone, Debug)]
 pub struct Sweeper<'a> {
@@ -400,6 +418,9 @@ pub struct Sweeper<'a> {
     stopped_at_work_limit: bool,
     position_checks: u64,
     segments_passed: u64,
+    // Craft patch (removal scan): how many positions `scan_for_removal` looked at.
+    #[cfg(test)]
+    removal_scan_steps: usize,
 }
 
 impl<'segs> Sweeper<'segs> {
@@ -438,6 +459,8 @@ impl<'segs> Sweeper<'segs> {
             stopped_at_work_limit: false,
             position_checks: 0,
             segments_passed: 0,
+            #[cfg(test)]
+            removal_scan_steps: 0,
         }
     }
 
@@ -554,12 +577,16 @@ impl<'segs> Sweeper<'segs> {
         // Process all the exit events.
         {
             let exits = self.events.exits_at_y(&y, self.segments);
+            // Craft patch (removal scan): the sweep line's positions do not
+            // change while exits are handled, so the run of ended segments
+            // found for one exit also serves the next.
+            let mut ended_run = None;
             for (exit_y, idx) in exits {
                 debug_assert_eq!(exit_y, &y);
                 if self.stop_at_work_limit() {
                     return None;
                 }
-                self.handle_exit(*idx);
+                self.handle_exit(*idx, &mut ended_run);
                 self.check_invariants();
             }
         }
@@ -814,10 +841,42 @@ impl<'segs> Sweeper<'segs> {
         }
     }
 
-    fn scan_for_removal(&mut self, pos: usize) {
-        if pos > 0 {
-            self.intersection_scan_right(pos - 1, WhichTouch::Mid);
-            self.intersection_scan_left(pos - 1, WhichTouch::Mid);
+    fn scan_for_removal(&mut self, pos: usize, ended_run: &mut Option<EndedRun>) {
+        // Craft patch (removal scan): segments that end at this y stay in the
+        // sweep line until `advance`, and a scan from one of them returns at
+        // once. The scans start from the nearest segment left of `pos` that
+        // does not end here, so the live segments on both sides of the gap
+        // are compared. When there is none, nothing on the left can cross.
+        let y = self.y;
+        let mut live = None;
+        let mut i = pos;
+        while i > 0 {
+            i -= 1;
+            #[cfg(test)]
+            {
+                self.removal_scan_steps += 1;
+            }
+            if let Some(run) = *ended_run
+                && run.contains(i)
+            {
+                live = run.live;
+                break;
+            }
+            if self.segments[self.line.seg(i)].end().y != y {
+                live = Some(i);
+                break;
+            }
+        }
+        *ended_run = Some(match *ended_run {
+            Some(run) if run.live == live => EndedRun {
+                live,
+                end: run.end.max(pos),
+            },
+            _ => EndedRun { live, end: pos },
+        });
+        if let Some(start) = live {
+            self.intersection_scan_right(start, WhichTouch::Mid);
+            self.intersection_scan_left(start, WhichTouch::Mid);
         }
     }
 
@@ -946,7 +1005,7 @@ impl<'segs> Sweeper<'segs> {
 
     /// Marks a segment as needing to exit, but doesn't actually remove it
     /// from the sweep-line. See `SegmentOrderEntry::exit` for an explanation.
-    fn handle_exit(&mut self, seg_idx: SegIdx) {
+    fn handle_exit(&mut self, seg_idx: SegIdx, ended_run: &mut Option<EndedRun>) {
         let pos = self.find_position(seg_idx).unwrap();
 
         if self.line.segs[pos].old_seg == Some(seg_idx) {
@@ -957,7 +1016,7 @@ impl<'segs> Sweeper<'segs> {
         // the scan doesn't get confused by the segment that should be marked
         // for exit.
         self.line.segs[pos].exit = true;
-        self.scan_for_removal(pos);
+        self.scan_for_removal(pos, ended_run);
         self.segs_needing_positions.push(pos);
     }
 
@@ -1026,7 +1085,7 @@ impl<'segs> Sweeper<'segs> {
             let mut removed = Vec::with_capacity(to_move.len());
             for &j in to_move.iter().rev() {
                 removed.push(self.line.segs.remove(j));
-                self.scan_for_removal(j);
+                self.scan_for_removal(j, &mut None);
             }
 
             // We want to insert them at what was previously `right_idx + 1`, but the
@@ -3186,6 +3245,72 @@ mod tests {
             let (evicted, _) = sweep_record(&segs, eps, true);
             assert!(kept == evicted);
         }
+    }
+
+    // Craft patch (removal scan): many segments ending at one height share the
+    // walk to the nearest live segment instead of each repeating it.
+    #[test]
+    fn removal_scans_share_the_run_of_ended_segments() {
+        use kurbo::Shape as _;
+
+        let mut path = BezPath::new();
+        for i in 0..2000 {
+            let x = f64::from(i) * 3.0;
+            path.extend(kurbo::Rect::new(x, 0.0, x + 1.0, 10.0).to_path(0.1));
+        }
+        let mut segs = Segments::default();
+        segs.add_bez_path(&path).unwrap();
+
+        let mut sweep = Sweeper::new(&segs, 1e-6);
+        let mut bufs = SweepLineBuffers::default();
+        while sweep.next_line(&mut bufs).is_some() {}
+        // Walking the 4,000 vertical edges for every exit is 8,000,000 steps.
+        assert!(
+            sweep.removal_scan_steps < 16_000,
+            "{} steps",
+            sweep.removal_scan_steps
+        );
+    }
+
+    // At y = 1, removing a segment from a swap left a gap whose left
+    // neighbor ended at y = 1, so the removal scans returned at once and a's
+    // edge (0, 1)-(3, 3) and b's edge (3, 0)-(0, 2) became neighbors with no
+    // event queued for their crossing at (0.75, 1.5).
+    #[test]
+    fn removal_scan_skips_segments_that_end() {
+        use crate::{BinaryOp, FillRule, binary_op_with_eps, topology::Topology};
+        use kurbo::Shape as _;
+
+        fn poly(pts: &[(f64, f64)]) -> BezPath {
+            let mut path = BezPath::new();
+            path.move_to(pts[0]);
+            for &q in &pts[1..] {
+                path.line_to(q);
+            }
+            path.close_path();
+            path
+        }
+
+        let a = poly(&[(3.0, 1.0), (3.0, 3.0), (0.0, 1.0)]);
+        let b = poly(&[(3.0, 0.0), (0.0, 2.0), (3.0, 2.0), (0.0, 0.0), (0.0, 1.0)]);
+        let eps = 1e-6;
+
+        let top = Topology::from_paths_binary(&a, &b, eps).unwrap();
+        let has_crossing = top.segment_indices().any(|s| {
+            let h = s.first_half();
+            [top.point(h), top.point(h.other_half())]
+                .iter()
+                .any(|p| (p.x - 0.75).abs() < 1e-4 && (p.y - 1.5).abs() < 1e-4)
+        });
+        assert!(has_crossing, "no output vertex at (0.75, 1.5)");
+
+        let out =
+            binary_op_with_eps(&a, &b, FillRule::NonZero, BinaryOp::Intersection, eps).unwrap();
+        let area: f64 = out.contours().map(|c| c.path.area()).sum();
+        assert!(
+            (area.abs() - 1.125).abs() < 1e-4,
+            "intersection area {area}"
+        );
     }
 
     proptest! {
