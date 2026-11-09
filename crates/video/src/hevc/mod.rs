@@ -143,6 +143,7 @@ impl std::error::Error for Error {}
 /// and a buffer that spreads over- / undershoot over the following pictures.
 struct RateCtl {
     target: f64,
+    idr_target_factor: f64,
     /// sum(actual) - sum(target), bits.
     buffer: f64,
     /// Complexity X = bits * Qstep for I and P pictures.
@@ -157,17 +158,24 @@ fn qstep(qp: i32) -> f64 {
 
 impl RateCtl {
     fn new(kbps: u32, cfg: &EncoderConfig) -> Self {
-        let fps = cfg.fps_num as f64 / cfg.fps_den.max(1) as f64;
-        let target = kbps as f64 * 1000.0 / fps.max(0.001);
+        let fps = cfg.fps_num as f64 / cfg.fps_den as f64;
+        let target = kbps as f64 * 1000.0 / fps;
         let bpp = target / (cfg.width as f64 * cfg.height as f64);
         let init_qp = (28.0 - 6.0 * (bpp / 0.08).log2()).round().clamp(10.0, 46.0) as i32;
-        RateCtl { target, buffer: 0.0, x: [None, None], last_qp: [init_qp - 3, init_qp], init_qp }
+        RateCtl {
+            target,
+            idr_target_factor: if cfg.keyint == 1 { 1.0 } else { 4.0 },
+            buffer: 0.0,
+            x: [None, None],
+            last_qp: [init_qp - 3, init_qp],
+            init_qp,
+        }
     }
 
     fn qp(&self, idr: bool) -> i32 {
         let t = idr as usize ^ 1; // 0 = I, 1 = P
         let tp = (self.target - self.buffer / 12.0).clamp(0.3 * self.target, 2.0 * self.target);
-        let want = if idr { 4.0 * tp } else { tp };
+        let want = if idr { self.idr_target_factor * tp } else { tp };
         let x = match (self.x[t], self.x[0]) {
             (Some(x), _) => x,
             (None, Some(xi)) => xi / 5.0,
@@ -401,5 +409,26 @@ mod level_tests {
     #[test]
     fn ordinary_configuration_still_picks_its_level() {
         assert_eq!(Encoder::new(EncoderConfig::new(1920, 1080, 30, 1)).unwrap().level_idc(), 120);
+    }
+
+    #[test]
+    fn bitrate_budget_uses_the_configured_sub_millifps_rate() {
+        let cfg = EncoderConfig::new(64, 64, 1, 2000);
+        assert_eq!(RateCtl::new(1000, &cfg).target, 2_000_000_000.0);
+    }
+
+    #[test]
+    fn all_intra_rate_control_uses_the_average_picture_budget_for_idrs() {
+        let mut cfg = EncoderConfig::new(64, 64, 30, 1);
+        cfg.keyint = 1;
+        let mut all_intra = RateCtl::new(1000, &cfg);
+        all_intra.x[0] = Some(all_intra.target * 512.0);
+        all_intra.last_qp[0] = 51;
+
+        cfg.keyint = 60;
+        let mut regular = RateCtl::new(1000, &cfg);
+        regular.x[0] = Some(regular.target * 512.0);
+        regular.last_qp[0] = 51;
+        assert!(all_intra.qp(true) > regular.qp(true));
     }
 }

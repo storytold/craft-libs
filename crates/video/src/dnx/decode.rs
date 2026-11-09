@@ -4,7 +4,7 @@ use crate::dnx::bits::Reader;
 use crate::dnx::dct::idct8x8;
 use crate::dnx::header::{self, FieldCode, FrameHeader, SCAN_INDEX_OFFSET};
 use crate::dnx::tables::{AMP_EOB, AMP_FINDEX, AMP_FRUN, CidInfo, VlcSet, ZIGZAG, cid_info, vlc};
-use crate::dnx::{ChromaFormat, Error, Frame, Interlace, Result};
+use crate::dnx::{ChromaFormat, ColorInterpretation, Error, Frame, Interlace, Result};
 
 const DEFAULT_MAX_DECODED_PLANE_BYTES: usize = 256 * 1024 * 1024;
 
@@ -24,13 +24,20 @@ pub struct DecodeOptions {
     /// Use the standard's integer inverse quantisation (equation 8.1) instead of the
     /// ffmpeg-compatible reconstruction (default false; see the README).
     pub spec_dequant: bool,
+    /// Interpret the 4:4:4 `CLF` flag according to the selected convention.
+    pub color_interpretation: ColorInterpretation,
     /// Maximum decoded plane storage per coding unit (default 256 MiB).
     pub max_decoded_plane_bytes: usize,
 }
 
 impl Default for DecodeOptions {
     fn default() -> Self {
-        DecodeOptions { threads: true, spec_dequant: false, max_decoded_plane_bytes: DEFAULT_MAX_DECODED_PLANE_BYTES }
+        DecodeOptions {
+            threads: true,
+            spec_dequant: false,
+            color_interpretation: ColorInterpretation::FfmpegCompatible,
+            max_decoded_plane_bytes: DEFAULT_MAX_DECODED_PLANE_BYTES,
+        }
     }
 }
 
@@ -51,6 +58,7 @@ pub fn decode_frame_with(data: &[u8], opts: &DecodeOptions) -> Result<Frame> {
     if !field_coded {
         let planes = decode_unit(&h1, data, opts)?;
         let mut f = Frame::new_like(&h1, h1.width, h1.lines);
+        f.rgb = h1.rgb_planes_with(opts.color_interpretation);
         f.interlace = if h1.interlaced { Interlace::TopFieldFirst } else { Interlace::Progressive };
         planes.copy_into(&mut f, 0, 1);
         return Ok(f);
@@ -64,6 +72,7 @@ pub fn decode_frame_with(data: &[u8], opts: &DecodeOptions) -> Result<Frame> {
         || h2.chroma != h1.chroma
         || h2.alpha != h1.alpha
         || h2.bit_depth != h1.bit_depth
+        || h2.rgb != h1.rgb
         || h2.frame_encoding != h1.frame_encoding
         || h2.interlaced != h1.interlaced
         || !matches!((h1.field, h2.field), (FieldCode::Field1, FieldCode::Field2) | (FieldCode::Field2, FieldCode::Field1))
@@ -80,6 +89,7 @@ pub fn decode_frame_with(data: &[u8], opts: &DecodeOptions) -> Result<Frame> {
     // Both field payloads must be valid before committing the full-frame
     // allocation; a damaged header alone must not allocate an output picture.
     let mut f = Frame::new_like(&h1, h1.width, h1.lines * 2);
+    f.rgb = h1.rgb_planes_with(opts.color_interpretation);
     f.interlace = field_interlace(h1.field);
     top.copy_into(&mut f, 0, 2);
     bottom.copy_into(&mut f, 1, 2);
@@ -237,6 +247,7 @@ fn decode_unit(h: &FrameHeader, data: &[u8], opts: &DecodeOptions) -> Result<Cod
     let info = cid_info(h.cid).ok_or(Error::UnknownCid(h.cid))?;
     let nw = h.mb_width() as usize;
     let ns = h.mb_rows as usize;
+    let rgb = h.rgb_planes_with(opts.color_interpretation);
     let (layout, cmb): (&'static [BlockPos], (usize, usize)) = match h.chroma {
         ChromaFormat::Yuv422 => (&LAYOUT_422, (8, 16)),
         ChromaFormat::Yuv420 => (&LAYOUT_420, (8, 8)),
@@ -304,7 +315,7 @@ fn decode_unit(h: &FrameHeader, data: &[u8], opts: &DecodeOptions) -> Result<Cod
         .collect();
     let run = |(i, y, cb, cr, a): (usize, &mut [u16], &mut [u16], &mut [u16], &mut [u16])| -> Result<Vec<bool>> {
         let (st, end) = ranges[i];
-        decode_row(&ctx, &data[st..end], [y, cb, cr, a]).map_err(|e| match e {
+        decode_row(&ctx, &data[st..end], [y, cb, cr, a], rgb).map_err(|e| match e {
             Error::Row(_) => Error::Row(i),
             e => e,
         })
@@ -325,8 +336,8 @@ fn decode_unit(h: &FrameHeader, data: &[u8], opts: &DecodeOptions) -> Result<Cod
     // macroblocks are all Y'CbCr is returned as Y'CbCr 4:4:4; mixed streams are converted to RGB
     // macroblock by macroblock (ConvertMacroblockColor, 8.1.1).
     let n_acf: usize = acf.iter().map(|r| r.iter().filter(|&&a| a).count()).sum();
-    let ycbcr = h.rgb_planes() && n_acf == nw * ns;
-    if h.rgb_planes() && n_acf > 0 && !ycbcr {
+    let ycbcr = rgb && n_acf == nw * ns;
+    if rgb && n_acf > 0 && !ycbcr {
         if h.color_volume == crate::dnx::ColorVolume::OutOfBand {
             return Err(Error::Invalid("mixed-ACF frames with OutOfBand color volume are not supported"));
         }
@@ -344,12 +355,11 @@ fn decode_unit(h: &FrameHeader, data: &[u8], opts: &DecodeOptions) -> Result<Cod
 }
 
 /// Decode one macroblock scan line into the 16-line bands of each plane.
-fn decode_row(ctx: &Ctx, data: &[u8], bands: [&mut [u16]; 4]) -> Result<Vec<bool>> {
+fn decode_row(ctx: &Ctx, data: &[u8], bands: [&mut [u16]; 4], rgb: bool) -> Result<Vec<bool>> {
     let h = ctx.h;
     let mut r = Reader::new(data);
     // DC predictors: Y/Ch1, Cb, Cr, R, G, B, A
     let mut pred = [0i32; 7];
-    let rgb = h.rgb_planes();
     let mff_cid = ctx.info.cid == 1260;
     let mut block = [0f32; 64];
     let mut acfs = Vec::new();

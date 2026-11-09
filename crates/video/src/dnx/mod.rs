@@ -26,6 +26,16 @@ pub use encode::{Encoder, EncoderConfig};
 pub use header::{FieldCode, FrameHeader};
 pub use tables::ri_frame_size;
 
+/// Interpretation of the `CLF` color flag for 4:4:4 streams.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ColorInterpretation {
+    /// Follow the common FFmpeg convention, which treats 4:4:4 `CLF = 0` as RGB.
+    #[default]
+    FfmpegCompatible,
+    /// Follow the standard: `CLF = 1` is RGB and `CLF = 0` is Y′CbCr.
+    Standard,
+}
+
 /// Codec errors.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum Error {

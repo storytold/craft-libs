@@ -38,6 +38,10 @@ use craft_video::dnx::*;
 
 let frame: Frame = decode_frame(&sample)?;               // one or two coding units
 let f = decode_frame_with(&sample, &DecodeOptions { threads: false, ..Default::default() })?;
+let standard = decode_frame_with(&sample, &DecodeOptions {
+    color_interpretation: ColorInterpretation::Standard,
+    ..Default::default()
+})?;
 let hdr: FrameHeader = probe(&sample)?;                  // cid, raster, depth, chroma…
 let name = cid_name(hdr.cid);                            // "DNxHR HQX", "DNxHD 1080i 8-bit (CID 1242)"
 
@@ -82,11 +86,12 @@ its behaviour, and we match it by default:
 2. **CID 1271 (DNxHR HQX) weights.** Table C.2 assigns Table D.1 to CID 1271. ffmpeg's decoder and
    encoder use Table D.4 (the CID 1241 weights) — fitted RMS error 0.65 against D.4, > 2.6
    against every other table. We use D.4.
-3. **4:4:4 signalling.** ffmpeg writes RGB DNxHR 444 with `CLF = 0`, and Y′CbCr 444 with `CLF = 1`
-   plus `ACF = 1` on every macroblock; its channel order is G, B, R (Ch1 = G). The decoder treats
-   every 4:4:4 stream as RGB except macroblocks flagged `ACF = 1` (a stream that is entirely
-   ACF = 1 is returned as Y′CbCr; mixed streams are converted to RGB macroblock by macroblock as
-   §8.1.1 describes), and the encoder writes the same signalling.
+3. **4:4:4 signalling.** By default, `ColorInterpretation::FfmpegCompatible` follows ffmpeg:
+   RGB DNxHR 444 uses `CLF = 0`, and Y′CbCr 444 uses `CLF = 1` plus `ACF = 1` on every
+   macroblock; its channel order is G, B, R (Ch1 = G). Set `ColorInterpretation::Standard` to
+   interpret `CLF` as specified (`1` = RGB, `0` = Y′CbCr). Within RGB-signalled streams, `ACF = 1`
+   marks Y′CbCr macroblocks; all-Y′CbCr streams remain Y′CbCr, and mixed streams are converted
+   macroblock by macroblock as §8.1.1 describes.
 
 Also noted: the RLE alpha pseudo code (Figure 50) tests the header bit the opposite way from
 the prose of §7.3.1.2; we follow the prose (normative text takes precedence).

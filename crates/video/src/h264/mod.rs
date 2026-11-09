@@ -162,7 +162,7 @@ pub struct EncoderConfig {
     pub slices: usize,
     /// Access unit delimiters in Annex-B output.
     pub aud: bool,
-    /// HDR static metadata sent in an SEI with the first access unit: the 24-byte SMPTE ST 2086
+    /// HDR static metadata sent in an SEI with every IDR access unit: the 24-byte SMPTE ST 2086
     /// mastering display payload (payloadType 137) …
     pub mastering_display: Option<[u8; 24]>,
     /// … and (MaxCLL, MaxFALL) content light level (payloadType 144).
@@ -980,9 +980,9 @@ impl Encoder {
             self.sei_sent = true;
             let text = format!("craft-h264enc {} - clean-room H.264 encoder - options: {}", env!("CARGO_PKG_VERSION"), self.options());
             nals.push(nal::nal(0, NAL_SEI, &nal::sei_user_data_rbsp(&text)));
-            if self.cfg.mastering_display.is_some() || self.cfg.content_light.is_some() {
-                nals.push(nal::nal(0, NAL_SEI, &nal::sei_hdr_rbsp(self.cfg.mastering_display.as_ref(), self.cfg.content_light)));
-            }
+        }
+        if idr && (self.cfg.mastering_display.is_some() || self.cfg.content_light.is_some()) {
+            nals.push(nal::nal(0, NAL_SEI, &nal::sei_hdr_rbsp(self.cfg.mastering_display.as_ref(), self.cfg.content_light)));
         }
         for r in results {
             nals.push(r.nal);
@@ -1197,5 +1197,24 @@ mod tests {
         assert_eq!(pkts.len(), 8);
         assert!(pkts.iter().all(|p| p.dts <= p.pts), "dts after pts: {:?}", pkts.iter().map(|p| (p.pts, p.dts)).collect::<Vec<_>>());
         assert!(pkts.windows(2).all(|w| w[0].dts < w[1].dts), "dts must increase in decoding order");
+    }
+
+    #[test]
+    fn hdr_metadata_is_emitted_on_every_idr_but_identification_is_once() {
+        let mut cfg = EncoderConfig::new(16, 16, 30, 1);
+        cfg.keyint = 1;
+        cfg.bframes = 0;
+        cfg.scenecut = false;
+        cfg.mastering_display = Some([0; 24]);
+        let mut enc = Encoder::new(cfg).unwrap();
+        let (y, u, v) = grey(16, 16);
+        let frame = YuvFrame { y: &y, u: &u, v: &v, y_stride: 16, uv_stride: 8 };
+        let first = enc.encode(&frame, 0).unwrap();
+        let second = enc.encode(&frame, 1).unwrap();
+        let count_sei = |packet: &Packet| packet.data.windows(5).filter(|nal| nal[..4] == [0, 0, 0, 1] && nal[4] & 0x1f == NAL_SEI).count();
+        assert_eq!(first.len(), 1);
+        assert_eq!(second.len(), 1);
+        assert_eq!(count_sei(&first[0]), 2);
+        assert_eq!(count_sei(&second[0]), 1);
     }
 }

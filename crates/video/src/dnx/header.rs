@@ -1,7 +1,7 @@
 //! Coding-unit header (SMPTE ST 2019-1 §7.2): parse and write.
 
 use crate::dnx::tables::{Kind, cid_info, ri_frame_size};
-use crate::dnx::{ChromaFormat, ColorVolume, Error, Result};
+use crate::dnx::{ChromaFormat, ColorInterpretation, ColorVolume, Error, Result};
 
 /// Offset of the macroblock scan indices payload.
 pub const SCAN_INDEX_OFFSET: usize = 0x170;
@@ -61,14 +61,14 @@ pub struct FrameHeader {
 }
 
 impl FrameHeader {
-    /// Whether the 4:4:4 planes carry R′G′B′ (macroblocks with ACF = 1 carry Y′CbCr).
-    ///
-    /// The standard ties RGB to `CLF = 1`. ffmpeg's encoder, the most common source of DNxHR 444
-    /// files, writes RGB with `CLF = 0` (and Y′CbCr with `CLF = 1`, `ACF = 1` everywhere), and
-    /// its decoder reads them that way; we follow that interpretation: every 4:4:4 stream is RGB
-    /// except macroblocks flagged ACF = 1.
+    /// Whether the 4:4:4 planes carry R′G′B′ using the FFmpeg-compatible interpretation.
     pub fn rgb_planes(&self) -> bool {
-        self.rgb || self.chroma == ChromaFormat::Yuv444
+        self.rgb_planes_with(ColorInterpretation::FfmpegCompatible)
+    }
+
+    /// Whether the planes carry R′G′B′ under the selected `CLF` interpretation.
+    pub fn rgb_planes_with(&self, interpretation: ColorInterpretation) -> bool {
+        self.rgb || (interpretation == ColorInterpretation::FfmpegCompatible && self.chroma == ChromaFormat::Yuv444)
     }
 
     /// Macroblocks per scan line `NW`.
@@ -262,4 +262,47 @@ pub fn write(h: &FrameHeader) -> Vec<u8> {
     d[0x16C..0x16E].copy_from_slice(&(h.mb_rows as u16).to_be_bytes());
     d[0x16F] = 0x10;
     d
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn header(chroma: ChromaFormat, rgb: bool) -> FrameHeader {
+        FrameHeader {
+            header_size: 0x280,
+            version: 3,
+            cid: 1270,
+            vbr: false,
+            field: FieldCode::Frame,
+            macf: false,
+            crc: false,
+            alpha: false,
+            lossless_alpha: false,
+            premultiplied_alpha: false,
+            width: 16,
+            lines: 16,
+            par: (0, 0),
+            bit_depth: 10,
+            interlaced: false,
+            frame_encoding: true,
+            chroma,
+            rgb,
+            color_volume: ColorVolume::Bt709,
+            timecode: None,
+            mb_rows: 1,
+        }
+    }
+
+    #[test]
+    fn rgb_interpretation_supports_standard_and_ffmpeg_444_signalling() {
+        let clf_clear = header(ChromaFormat::Yuv444, false);
+        assert!(clf_clear.rgb_planes());
+        assert!(clf_clear.rgb_planes_with(ColorInterpretation::FfmpegCompatible));
+        assert!(!clf_clear.rgb_planes_with(ColorInterpretation::Standard));
+
+        let clf_set = header(ChromaFormat::Yuv444, true);
+        assert!(clf_set.rgb_planes_with(ColorInterpretation::Standard));
+        assert!(!header(ChromaFormat::Yuv422, false).rgb_planes_with(ColorInterpretation::Standard));
+    }
 }
