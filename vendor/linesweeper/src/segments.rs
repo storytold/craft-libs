@@ -1,4 +1,5 @@
 use std::iter::Peekable;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use kurbo::BezPath;
 
@@ -30,11 +31,37 @@ pub struct SegVec<T> {
 
 impl_typed_vec!(SegVec, SegIdx, "s");
 
+// Craft patch (comparison cache arena): each arena gets its own number, and
+// a clone gets a new one, so that `ComparisonCache` can tell arenas apart.
+#[derive(Debug, PartialEq, Eq)]
+struct ArenaId(u64);
+
+impl ArenaId {
+    fn fresh() -> Self {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        ArenaId(NEXT.fetch_add(1, Ordering::Relaxed))
+    }
+}
+
+impl Default for ArenaId {
+    fn default() -> Self {
+        ArenaId::fresh()
+    }
+}
+
+impl Clone for ArenaId {
+    fn clone(&self) -> Self {
+        ArenaId::fresh()
+    }
+}
+
 /// An arena of segments, each of which is a cubic Bézier.
 ///
 /// Segments are indexed by [`SegIdx`] and can be retrieved by indexing (i.e. with square brackets).
 #[derive(Clone, Default)]
 pub struct Segments {
+    // Craft patch (comparison cache arena): see `ArenaId`.
+    id: ArenaId,
     segs: SegVec<Segment>,
     horizontal_decomps: SegVec<AlmostHorizontalDecomposition>,
     contour_prev: SegVec<Option<SegIdx>>,
@@ -183,6 +210,12 @@ where
 }
 
 impl Segments {
+    // Craft patch (comparison cache arena): the arena's number, which no
+    // other arena has, a clone included.
+    pub(crate) fn arena_id(&self) -> u64 {
+        self.id.0
+    }
+
     /// The number of segments in this arena.
     #[allow(clippy::len_without_is_empty)]
     pub fn len(&self) -> usize {

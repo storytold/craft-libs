@@ -65,6 +65,7 @@
     "`checkerboard` and `slanted_checkerboard` count the inner squares as `n.saturating_sub(1)` instead of `n - 1`, so `n = 0` gives empty collections instead of an overflow."
     "`another_monotonic_bezier` returns `arbitrary::Error::IncorrectFormat` when no piece of the generated cubic increases in y, instead of returning that cubic, which can be horizontal."
     "`F64Perturbation::apply` clamps a ulp step on a normal value to infinity when the bits reach the infinity encoding, instead of testing the sign bit, so `Ulp(2)` of `f64::MAX` gives infinity instead of NaN."
+    "`ComparisonCache` in `src/order.rs` holds the comparisons of one `Segments` arena. `compare_segments` reads the arena's number, which `src/segments.rs` gives each arena and each clone, and drops the cached comparisons when the number differs from the one they were made with. Before, a cache given a second arena returned the first arena's order for the same pair of indices."
   ],
   "files": [
     { "path": ".cargo_vcs_info.json", "source_sha256": "47fba6a9dbdf445a5c97f783c9be62093035f9d5e5cdc2cf3216ad8259bcd8fc", "source_git_blob": null, "sha256": "47fba6a9dbdf445a5c97f783c9be62093035f9d5e5cdc2cf3216ad8259bcd8fc" },
@@ -137,6 +138,7 @@
     { "path": "src/lib.rs", "source_sha256": "761c153c3b5c449569ff85c571344b9252ea64f7f0b0424fb4819041b03d13c6", "source_git_blob": null, "sha256": "3ebdd3ce34ed114832e5db53f77a2cbd4376a00b6a99db13fb4a6b57ebc9a521" },
     { "path": "src/num.rs", "source_sha256": "39ff85da50c500ce91cf6dea81aedc0dcca1db5e7d0506696dde2da118e93a2a", "source_git_blob": null, "sha256": "39ff85da50c500ce91cf6dea81aedc0dcca1db5e7d0506696dde2da118e93a2a" },
     { "path": "src/order.rs", "source_sha256": "7e5b04eae8af134abb032e995f1d3c2ac473822923dfee8d463d9ade6ffeb596", "source_git_blob": null, "sha256": "f503ca2f7e97368b9c30006aa895c2ef2b95728a4be6c926cace0a7bc4515f8c" },
+    { "path": "src/order.rs", "source_sha256": "7e5b04eae8af134abb032e995f1d3c2ac473822923dfee8d463d9ade6ffeb596", "source_git_blob": null, "sha256": "6b37a2758a971f59de05c1e747784aa5245dfa6d8cb89e48e412da50b9909d55" },
     { "path": "src/perturbation.rs", "source_sha256": "fa274a822bbdf65f8e53e403eef78034dd87964b3f1d3134a064df4ec8cef9c5", "source_git_blob": null, "sha256": "fa274a822bbdf65f8e53e403eef78034dd87964b3f1d3134a064df4ec8cef9c5" },
     { "path": "src/order.rs", "source_sha256": "7e5b04eae8af134abb032e995f1d3c2ac473822923dfee8d463d9ade6ffeb596", "source_git_blob": null, "sha256": "7e5b04eae8af134abb032e995f1d3c2ac473822923dfee8d463d9ade6ffeb596" },
     { "path": "src/perturbation.rs", "source_sha256": "fa274a822bbdf65f8e53e403eef78034dd87964b3f1d3134a064df4ec8cef9c5", "source_git_blob": null, "sha256": "a0108503efbcfa15a05b8a228d7891737e51f13fdd6c7d67dc4b4282847b14fb" },
@@ -148,6 +150,7 @@
     { "path": "src/segments.rs", "source_sha256": "379f9455120492d237cb5a62b3fc06da018a72e2eb75bbfcd61b4cce501d9bbc", "source_git_blob": null, "sha256": "33997b8afe11f5b3d1846b69db4533af7242121176ba7dff3b7525799a4e17e1" },
     { "path": "src/segments.rs", "source_sha256": "379f9455120492d237cb5a62b3fc06da018a72e2eb75bbfcd61b4cce501d9bbc", "source_git_blob": null, "sha256": "74478b647c0243a18bf0e34af28735544754b42445910cd4145aa1c31826d24d" },
     { "path": "src/segments.rs", "source_sha256": "379f9455120492d237cb5a62b3fc06da018a72e2eb75bbfcd61b4cce501d9bbc", "source_git_blob": null, "sha256": "5b3ca2c01ac51b55d950372cad15a5ccb2dfb50a6e568ac94b855f611ae25eea" },
+    { "path": "src/segments.rs", "source_sha256": "379f9455120492d237cb5a62b3fc06da018a72e2eb75bbfcd61b4cce501d9bbc", "source_git_blob": null, "sha256": "e9cd649b07cd285d9abde07e82260c8a23031f1c5f530320f3853734ef0869de" },
     { "path": "src/snapshots/linesweeper__tests__empty_horizontals.snap", "source_sha256": "e319881853e889badf6524f19af4cd6f112e8dd71bdc516826f4463134a82244", "source_git_blob": null, "sha256": "e319881853e889badf6524f19af4cd6f112e8dd71bdc516826f4463134a82244" },
     { "path": "src/snapshots/linesweeper__tests__two_squares.snap", "source_sha256": "01961e0311a5af3b8f13eb52a2a7112560c47cf86771c04e40475dc6f15a0846", "source_git_blob": null, "sha256": "01961e0311a5af3b8f13eb52a2a7112560c47cf86771c04e40475dc6f15a0846" },
     { "path": "src/snapshots/linesweeper__topology__tests__diamond.snap", "source_sha256": "cfaefd620a0a3d1376861bca09cd7c658ef00a32635b88f1b259a9b39cd15502", "source_git_blob": null, "sha256": "cfaefd620a0a3d1376861bca09cd7c658ef00a32635b88f1b259a9b39cd15502" },
