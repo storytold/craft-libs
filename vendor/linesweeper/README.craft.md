@@ -205,6 +205,10 @@ local patches listed below. `.cargo_vcs_info.json` names the commit it was packa
 `824b0791a750f7b27b8edcbb6c6244d0e629875e`. That commit is not in the GitHub repository the manifest
 names, which is archived; its README says development moved off GitHub.
 
+local patches listed below. `.cargo_vcs_info.json` names the commit it was packaged from,
+`824b0791a750f7b27b8edcbb6c6244d0e629875e`. That commit is not in the GitHub repository the manifest
+names, which is archived; its README says development moved off GitHub.
+
 Every file here except this one, `SOURCE.json` and the patched files below is byte for byte the file
 in the `.crate` archive. `SOURCE.json` records the hash of the `.crate` download
 (`source_archive_sha256`) and, for every file kept, the hash in the package (`source_sha256`) and the
@@ -259,6 +263,7 @@ Every change here updates this table and `SOURCE.json` in the same commit.
 | `src/treevec.rs` | The iterators that `iter`, `iter_mut`, `range` and `range_mut` return on a tree with more than one level keep their stack of child iterators in a `Stack`, which holds 8 levels in place and puts any deeper level in a `Vec`. Before, the stack was a `Vec` and each of these calls allocated once. The sweep line calls `range_mut` on a `TreeVec<_, 128>`, which needs at least `2 * 64^9` elements to have more than 8 levels. The iterators visit the same elements in the same order. The `treevec` test `iterators_on_short_and_tall_trees` compares the four iterators with a `Vec` on a tree of at most 8 levels and on one with more. |
 | `src/curve/mod.rs` | `intersect_cubics` compares a curve whose `p3.y` is below its `p0.y` as the same curve reversed, instead of panicking in `clamp`. `intersect_cubics_with_precomputed_decomp` returns close (`Ish`) over the common range when `sure_tolerance` is not positive, is larger than `ish_tolerance`, or `ish_tolerance` is not finite, instead of panicking, overflowing the stack or returning a wrong order; when the curves' vertical ranges do not overlap, it returns an empty order without a debug assertion failure, and `CurveOrder::with_y_slop`, `CurveOrder::order_after` and `CurveOrder::check_invariants` accept that empty order instead of panicking on an `unwrap`. The docs of these functions, `from_monotone_cubic`, `solve_t_for_y` and `y_subsegment` state their input rules. The `curves_decreasing_in_y`, `invalid_tolerances` and `disjoint_vertical_ranges` tests cover the changes. |
 | `src/topology.rs` | `Topology::bounding_box` returns `Rect::ZERO` for a topology with no segments, as kurbo does for an empty path, instead of a rectangle from infinity to negative infinity. The `empty_bounding_box` test covers it. |
+| `src/curve/mod.rs` | `solve_t_for_y` divides every height by 32 before it builds the cubic's coefficients when the largest height or the target has a magnitude above `f64::MAX / 32`. Before, a segment with heights above about `f64::MAX / 3` gave an infinite coefficient, and polycool's critical point search recursed until the process aborted with a stack overflow. `Topology::from_path` reached it on two overlapping rectangles near y = 1e308. The `solve_for_t_near_the_float_limit` test solves straight segments with heights from 5.5e307 up to `f64::MAX`. `intersect_cubics_rec` and `AlmostHorizontalDecomposition::from_monotone_cubic` take the midpoint of two heights with `f64::midpoint` instead of `(a + b) / 2.0`. Before, two heights above about 9e307 summed to infinity, the comparison of two overlapping segments had no entries, and a release build panicked on the empty list. The `compare_near_the_float_limit` test compares two lines that start at heights up to 1.7e308. |
 
 `omitted_files` lists the 43 files of the package left out here, with their hashes:
 
