@@ -88,6 +88,9 @@ pub fn monotonic_bezier(u: &mut Unstructured<'_>) -> Result<CubicBez, arbitrary:
 ///
 /// This generated Bezier has a chance to be "close" to `first`, for example by starting
 /// at the same point or with the same tangent.
+///
+/// Returns [`arbitrary::Error::IncorrectFormat`] when the generated control points
+/// have no piece that increases in y.
 pub fn another_monotonic_bezier(
     u: &mut Unstructured<'_>,
     first: &CubicBez,
@@ -107,11 +110,13 @@ pub fn another_monotonic_bezier(
     let p2 = point_at_most(p3.y, u)?;
 
     let ret = CubicBez::new(p0, p1, p2, p3);
-    Ok(geom::monotonic_cubic_pieces(ret)
+    // Craft patch (flat cubic): when every control point has the same y there is
+    // no increasing piece, and returning `ret` gave a horizontal cubic.
+    geom::monotonic_cubic_pieces(ret)
         .into_iter()
         .find(|x| x.piece.end().y > x.piece.start().y)
         .map(|c| c.piece.to_kurbo_cubic())
-        .unwrap_or(ret))
+        .ok_or(arbitrary::Error::IncorrectFormat)
 }
 
 /// Generate an arbitrary quadratic function, with coefficients of roughly the scale `size`.
@@ -158,5 +163,37 @@ mod tests {
             float_in_range(start, end, &mut Unstructured::new(&[0xff; 4])).unwrap(),
             end
         );
+    }
+}
+
+// Craft patch (flat cubic).
+#[cfg(test)]
+mod flat_cubic_tests {
+    use super::*;
+
+    #[test]
+    fn another_monotonic_bezier_increases_in_y_or_fails() {
+        // `first` starts with a horizontal tangent.
+        let first = CubicBez::new((0.0, 0.0), (1.0, 0.0), (2.0, 1.0), (3.0, 1.0));
+        // The same start and tangent as `first`, `p3.y` at its minimum of 0 and
+        // `p2.y` at its maximum of 0: every control point has y = 0.
+        let flat = [
+            1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, 0xff, 0xff,
+        ];
+        assert_eq!(
+            another_monotonic_bezier(&mut Unstructured::new(&flat), &first),
+            Err(arbitrary::Error::IncorrectFormat)
+        );
+        let bytes: Vec<u8> = (0..=255u8)
+            .cycle()
+            .take(4096)
+            .map(|b| b.wrapping_mul(37))
+            .collect();
+        let mut u = Unstructured::new(&bytes);
+        while !u.is_empty() {
+            if let Ok(c) = another_monotonic_bezier(&mut u, &first) {
+                assert!(c.p3.y > c.p0.y, "{c:?}");
+            }
+        }
     }
 }
