@@ -4,16 +4,19 @@
 //! Every function goes through one path, [`PageApi::call`], with the page's timeout; replies
 //! resolve with the method's `result` or reject with an `Error` carrying `error`.
 
+use std::cell::{Cell, RefCell};
 use std::future::Future;
 use std::pin::Pin;
 use std::rc::Rc;
+use std::task::{Poll, Waker};
 
 use serde_json::{Value, json};
 use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::{Closure, JsValue};
-use wasm_bindgen_futures::{JsFuture, future_to_promise};
+use wasm_bindgen_futures::future_to_promise;
 
 use crate::methods::Methods;
+use crate::reply::screenshot_data;
 
 /// One control request: method and params in, the protocol's reply object out (`{ok, result}` or
 /// `{ok: false, error}`). The app builds this from its control channel — send a `ControlRequest`,
@@ -126,7 +129,7 @@ impl PageApi {
                 Closure::<dyn FnMut(JsValue) -> js_sys::Promise>::new(move |params: JsValue| {
                     let page = page.clone();
                     let params = screenshot_params(from_js(&params));
-                    future_to_promise(async move { request_promise_outcome(&page.call(method, params).await) })
+                    future_to_promise(async move { request_promise_outcome(&screenshot_data(page.call(method, params).await)) })
                 })
                 .into_js_value(),
             )?;
@@ -136,30 +139,35 @@ impl PageApi {
     }
 
     /// One control request: the single path through the app's channel that every function takes,
-    /// with the page's timeout. If the app does not answer within the timeout, the error says so —
-    /// a hidden tab answers when it is shown again.
+    /// with the page's timeout. If the app does not answer within the timeout, the error says so
+    /// (a hidden tab answers when it is shown again) and the app's request future is dropped: an app
+    /// that releases a request when its future goes away never runs, late, a call the page was told
+    /// had failed.
     async fn call(&self, method: &str, params: Value) -> Value {
         let timeout = Timeout::new(self.timeout_ms);
-        let request = self.request.clone();
-        let method = method.to_string();
-        let sent = method.clone();
-        let reply = future_to_promise(async move {
-            let reply = request(sent, params).await;
-            Ok(to_js(&reply))
-        });
-        let raced = js_sys::Promise::race(&js_sys::Array::of2(&reply, &timeout.promise));
-        let outcome = JsFuture::from(raced).await;
+        let mut work = (self.request)(method.to_string(), params);
+        let reply = std::future::poll_fn(|cx| {
+            if let Poll::Ready(reply) = work.as_mut().poll(cx) {
+                return Poll::Ready(Some(reply));
+            }
+            if timeout.fired.get() {
+                return Poll::Ready(None);
+            }
+            *timeout.waker.borrow_mut() = Some(cx.waker().clone());
+            Poll::Pending
+        })
+        .await;
+        drop(work); // an unanswered request is released here, before the error goes back
         drop(timeout); // clear the timer and free its callback once the race is over
-        match outcome {
-            Err(_) => json!({
+        reply.unwrap_or_else(|| {
+            json!({
                 "ok": false,
                 "error": format!(
                     "{} did not answer {} within {} s (a hidden tab answers when it is shown again)",
                     self.app, method, self.timeout_ms / 1000.0
                 ),
-            }),
-            Ok(value) => from_js(&value),
-        }
+            })
+        })
     }
 }
 
@@ -175,41 +183,43 @@ fn screenshot_params(mut params: Value) -> Value {
     }
 }
 
-/// A promise that rejects `ms` milliseconds from now. Dropping it clears the timer (harmless once
-/// fired) and frees the timer's callback, so a call leaves nothing behind. The timer comes from
-/// `setTimeout` on the global object, reached through `Reflect` — no web-sys, so the crate keeps
-/// working in any JS realm.
+/// A timer for one call: `fired` turns true `ms` milliseconds from now and wakes the call. Dropping
+/// it clears the timer (harmless once fired) and frees the timer's callback, so a call leaves
+/// nothing behind. The timer comes from `setTimeout` on the global object, reached through
+/// `Reflect` — no web-sys, so the crate keeps working in any JS realm.
 struct Timeout {
-    promise: js_sys::Promise,
-    id: f64,
-    _fire: Option<Closure<dyn FnMut()>>,
+    fired: Rc<Cell<bool>>,
+    waker: Rc<RefCell<Option<Waker>>>,
+    id: JsValue,
+    _fire: Closure<dyn FnMut()>,
 }
 
 impl Timeout {
     fn new(ms: f64) -> Self {
-        let mut fire = None;
-        let mut id = f64::INFINITY;
-        // `Promise::new` runs its executor before returning, so `fire` and `id` are set here.
-        let promise = js_sys::Promise::new(&mut |_resolve: js_sys::Function, reject: js_sys::Function| {
-            let callback = Closure::<dyn FnMut()>::new(move || {
-                let _ = reject.call1(&JsValue::NULL, &JsValue::NULL);
-            });
-            id = set_timeout(callback.as_ref().clone(), ms);
-            fire = Some(callback);
+        let fired = Rc::new(Cell::new(false));
+        let waker: Rc<RefCell<Option<Waker>>> = Rc::default();
+        let (set, wake) = (fired.clone(), waker.clone());
+        let callback = Closure::<dyn FnMut()>::new(move || {
+            set.set(true);
+            if let Some(waker) = wake.borrow_mut().take() {
+                waker.wake();
+            }
         });
-        Self { promise, id, _fire: fire }
+        let id = set_timeout(callback.as_ref().clone(), ms);
+        Self { fired, waker, id, _fire: callback }
     }
 }
 
 impl Drop for Timeout {
     fn drop(&mut self) {
-        clear_timeout(self.id);
+        clear_timeout(&self.id);
     }
 }
 
 /// The `setTimeout` global, reached through the global object + `Reflect` (no web-sys). Returns the
-/// timer id; a missing `setTimeout` yields an id of infinity, which [`clear_timeout`] ignores.
-fn set_timeout(callback: JsValue, ms: f64) -> f64 {
+/// timer handle as the environment gave it, to hand back to [`clear_timeout`]: a number in a
+/// browser, an object in Node. A missing `setTimeout` yields `undefined`, which `clearTimeout` ignores.
+fn set_timeout(callback: JsValue, ms: f64) -> JsValue {
     let g = global();
     get_prop(&g, "setTimeout")
         .filter(|v| v.is_function())
@@ -217,16 +227,15 @@ fn set_timeout(callback: JsValue, ms: f64) -> f64 {
             let f: js_sys::Function = f.unchecked_into();
             f.call2(&g, &callback, &JsValue::from_f64(ms)).ok()
         })
-        .and_then(|v| v.as_f64())
-        .unwrap_or(f64::INFINITY)
+        .unwrap_or(JsValue::UNDEFINED)
 }
 
-/// Clear a `setTimeout` id, if the environment has `clearTimeout`.
-fn clear_timeout(id: f64) {
+/// Clear a timer by the handle [`set_timeout`] returned, if the environment has `clearTimeout`.
+fn clear_timeout(id: &JsValue) {
     let g = global();
     if let Some(f) = get_prop(&g, "clearTimeout").filter(|v| v.is_function()) {
         let f: js_sys::Function = f.unchecked_into();
-        let _ = f.call1(&g, &JsValue::from_f64(id));
+        let _ = f.call1(&g, id);
     }
 }
 
