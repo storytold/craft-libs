@@ -26,6 +26,7 @@
 
 mod boolean;
 mod budget;
+mod crossings;
 mod edit;
 mod fit;
 mod offset;
@@ -43,7 +44,7 @@ pub use boolean::{
 };
 pub use budget::{
     Limits, MAX_COVERAGE_ENTRIES, MAX_CROSSED_WORK, MAX_CROSSING_WORK, MAX_ELEMENTS, MAX_ENDS_AT_A_POINT, MAX_FILL_WORK, MAX_PASS_WORK,
-    MAX_SEARCH_WORK, MAX_SEGMENT_PAIRS, MAX_SWEEP_EVENT_WORK, MAX_SWEEP_LINE_PAIRS, with_limits,
+    MAX_REAL_CROSSINGS, MAX_SEARCH_WORK, MAX_SEGMENT_PAIRS, MAX_SWEEP_EVENT_WORK, MAX_SWEEP_LINE_PAIRS, with_limits,
 };
 pub use edit::{FIT_WORK, JOIN_WORK, MAX_FIT_POINTS, REDUNDANT_WORK, SimplifyOptions, join, remove_redundant_points, simplify, simplify_with};
 pub use offset::{

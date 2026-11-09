@@ -20,8 +20,9 @@
 
 use std::cell::Cell;
 
-use kurbo::{BezPath, Line, ParamCurve, ParamCurveExtrema, PathSeg, Point, Rect};
+use kurbo::{BezPath, CubicBez, Line, ParamCurve, ParamCurveExtrema, PathSeg, Point, Rect};
 
+use crate::crossings::{Curve, cubics_cross_at_most, line_cubic_cross_at_most};
 use crate::work::{self, Work};
 
 /// Most pairs of segments whose bounds overlap that a planar map is built from (the default of
@@ -51,19 +52,40 @@ pub const MAX_SWEEP_EVENT_WORK: usize = {
     if wanted > usize::MAX as u64 { usize::MAX } else { wanted as usize }
 };
 
-/// Most searches of the sweep line that the crossings of lines make, as counted before the sweep from the
-/// pairs of lines that really cross: 2^30, 1,073,741,824. [`MAX_SWEEP_EVENT_WORK`] counts every pair of
+/// Most searches of the sweep line that the crossings of segments make, as counted before the sweep from the
+/// pairs that really cross: 2^30, 1,073,741,824. [`MAX_SWEEP_EVENT_WORK`] counts every pair of
 /// segments whose bounds overlap as crossing, which is far more than cross where strokes slant across each
 /// other (a hatch of 400 and 400 crosses in a fifth of the pairs counted), and is priced for that; where
 /// every pair of lines whose bounds overlap does cross, one polygon whose edges all cross one another (a star
 /// of n points joined to the ones nearly opposite crosses in about n²/2 places), the same count is about
 /// seven times as much time and a good deal more memory a unit: 2,001 edges, which pass the other limits,
-/// take 19 s and 3.5 GB. The lines that cross, found by testing the pairs whose bounds overlap (no more than
-/// [`MAX_SEGMENT_PAIRS`]), times the most pieces on the sweep line, are held to this: 1,001 edges take 2.4 s and 0.9 GB, and
-/// 1,285 about five seconds. Counted only when the pairs of bounds could make more than the limit.
+/// take 19 s and 3.5 GB. The places where segments cross, found by testing the pairs whose bounds overlap (no more than
+/// [`MAX_SEGMENT_PAIRS`]; [`MAX_REAL_CROSSINGS`] says how), times the most pieces on the sweep line, are held to this: 1,001
+/// edges take 2.4 s and 0.9 GB, and 1,285 about five seconds. Counted only when the pairs of bounds of lines, times the
+/// pieces on the line, could make more than the limit, or the pairs of bounds could make more than [`MAX_REAL_CROSSINGS`].
 /// Past it an operation fails as [`crate::PathOpsError::TooComplex`] before it sweeps. The default of
 /// [`Limits::crossed_work`].
 pub const MAX_CROSSED_WORK: usize = 1 << 30;
+
+/// Most places where the segments of one sweep really cross one another, whatever the pieces on the sweep line:
+/// 2^20, 1,048,576 (the default of [`Limits::real_crossings`]). The sweep's time and memory follow its crossings
+/// themselves, about 3.5 microseconds and 1.6 kilobytes for each, and [`MAX_CROSSED_WORK`] counts them times the
+/// pieces on the line, which is little where shapes that cross a great deal are stacked so that their heights do not
+/// overlap: 206 stars of 201 points, each edge to the vertex nearly opposite, each star above and beside the last, hold
+/// 4.1 million crossings with 201 pieces on the line (8.3e8 searches, under both limits on them, and 4.1 million pairs of
+/// bounds, under the limit on those) and took 14.7 s and 6.5 GB. Curves crossed as much (100 such stars of bowed cubics
+/// took 14.8 s and 3.7 GB), for only the crossings of lines were counted. The places where segments cross are counted by
+/// testing the pairs of bounds that overlap, each pair for at most as many places as it can have, and never fewer than it
+/// has: two lines are tested, and cross once or not; a line and a cubic count the changes of sign of the distances of the
+/// cubic's control points from the line (three at the most); two cubics count one if the directions of their tangents
+/// are apart (as lines, and by pieces of an eighth where the whole curves are not), and nine if they are not (see
+/// `crossings.rs`: two arcs that cross twice both have a tangent along the chord between the crossings), and none where
+/// the pair meets only at an end it shares and the two leave it apart. Each place counts for one where both are lines and
+/// for two where a curve is one of them, and a cubic that may curl into a loop counts two more for itself: the sweep
+/// takes 3 microseconds and 1.6 KB for a place where lines cross, and about twice the time (and half the memory) where
+/// curves do. They are counted whenever the most the count can come to, priced so, could pass the limit. Past it an
+/// operation fails as [`crate::PathOpsError::TooComplex`] before it sweeps.
+pub const MAX_REAL_CROSSINGS: usize = 1 << 20;
 
 /// Most ends of segments at one point (within the sweep's tolerance, a point and its neighbours
 /// counted as one): 512. The sweep takes about the fourth power of the number of segments that
@@ -203,9 +225,12 @@ pub struct Limits {
     /// of segments whose bounds overlap times the most pieces on the line at one height
     /// ([`MAX_SWEEP_EVENT_WORK`]: 2^32, or the most `usize` holds where that is less).
     pub sweep_event_work: usize,
-    /// Most searches of the sweep line the crossings of lines make, counted from the pairs of lines that
+    /// Most searches of the sweep line the crossings of segments make, counted from the pairs that
     /// really cross times the most pieces on the line at one height ([`MAX_CROSSED_WORK`]).
     pub crossed_work: usize,
+    /// Most places where the segments cross one another, counted (as a bound, never below the number there are) by testing
+    /// the pairs of segments whose bounds overlap, whatever the pieces on the sweep line ([`MAX_REAL_CROSSINGS`]).
+    pub real_crossings: usize,
     /// Most segments [`crate::shape_builder`] sweeps into its map ([`crate::SHAPE_BUILDER_MAX_SEGMENTS`]).
     pub shape_builder_segments: usize,
     /// Most samples of one run of segments `simplify` fits ([`crate::MAX_FIT_POINTS`]).
@@ -233,6 +258,7 @@ impl Limits {
         sweep_line_pairs: MAX_SWEEP_LINE_PAIRS,
         sweep_event_work: MAX_SWEEP_EVENT_WORK,
         crossed_work: MAX_CROSSED_WORK,
+        real_crossings: MAX_REAL_CROSSINGS,
         pass_work: MAX_PASS_WORK,
         fill_work: MAX_FILL_WORK,
         ends_at_a_point: MAX_ENDS_AT_A_POINT,
@@ -742,17 +768,43 @@ fn parallel(den: f64, la: f64, lb: f64) -> bool {
     !den.is_finite() || den.abs() <= 1e-10 * la * lb
 }
 
-/// How many pairs of the lines of `seg` cross, away from both their ends: each pair whose bounds overlap is
-/// tested (`cap` of them at most, the limit on pairs). `None` when there are more pairs than that.
-fn real_line_crossings(seg: &Segments, slack: f64, cap: usize) -> Option<u64> {
-    let mut crossed = 0u64;
-    let within = each_overlap(&seg.lines, cap, |i, j| {
+/// How many places the segments of `seg` cross one another, at the most, away from the ends they share: each pair of
+/// segments whose bounds overlap is tested (`cap` of them at most, the limit on pairs) and counts the places it crosses
+/// at, or at the most it can cross at where that is not known, never fewer than there are. Two lines are tested, and
+/// cross once or not at all. A line and a cubic count by [`crate::crossings::line_cubic_cross_at_most`] (three at the
+/// most), two cubics by [`crate::crossings::cubics_cross_at_most`] (nine), and a cubic that may loop one more for itself.
+/// Each place where a curve is one of the two counts for two, for the sweep takes about twice as long over it. `None`
+/// when there are more pairs than `cap`.
+fn real_crossings(seg: &Segments, slack: f64, cap: usize) -> Option<u64> {
+    let curves: Vec<Curve> = seg
+        .curve_segs
+        .iter()
+        .map(|s| {
+            Curve::new(match s {
+                PathSeg::Cubic(c) => *c,
+                PathSeg::Quad(q) => q.raise(),
+                PathSeg::Line(l) => CubicBez::new(l.p0, l.p0.lerp(l.p1, 1.0 / 3.0), l.p0.lerp(l.p1, 2.0 / 3.0), l.p1),
+            })
+        })
+        .collect();
+    let mut crossed: u64 = 2 * curves.iter().filter(|c| c.may_loop()).count() as u64;
+    let within = each_overlap(&seg.boxes, cap, |i, j| {
         work::add(Work::CrossingPairs, 1);
-        if let (Some(a), Some(b)) = (seg.line_segs.get(i), seg.line_segs.get(j))
-            && crossing(a, b, slack).is_some()
-        {
-            crossed += 1;
-        }
+        let (Some(&ka), Some(&kb)) = (seg.kind.get(i), seg.kind.get(j)) else { return };
+        crossed += match (ka, kb) {
+            (Kind::Line(x), Kind::Line(y)) => match (seg.line_segs.get(x), seg.line_segs.get(y)) {
+                (Some(a), Some(b)) => u64::from(crossing(a, b, slack).is_some()),
+                _ => 0,
+            },
+            (Kind::Line(x), Kind::Curve(y)) | (Kind::Curve(y), Kind::Line(x)) => match (seg.line_segs.get(x), curves.get(y)) {
+                (Some(l), Some(c)) => 2 * line_cubic_cross_at_most(l, c, slack),
+                _ => 0,
+            },
+            (Kind::Curve(x), Kind::Curve(y)) => match (curves.get(x), curves.get(y)) {
+                (Some(a), Some(b)) => 2 * cubics_cross_at_most(a, b, slack),
+                _ => 0,
+            },
+        };
     });
     within.then_some(crossed)
 }
@@ -968,13 +1020,21 @@ pub(crate) fn sweep_fits_within<'a>(paths: impl IntoIterator<Item = &'a BezPath>
     if crossings.saturating_mul(peak_depth(&seg.heights) as u64) > limits().sweep_event_work as u64 {
         return false;
     }
-    // The lines that really cross: the count above takes every pair of bounds that overlap for a crossing, and
-    // where all of them cross (a polygon whose edges cross one another) the sweep takes several times as long.
+    // The segments that really cross: the count above takes every pair of bounds that overlap for a crossing, and
+    // where all of them cross (a polygon whose edges cross one another) the sweep takes several times as long. They
+    // are held to their own number ([`MAX_REAL_CROSSINGS`], whatever the pieces on the line) and to their number times the
+    // pieces on the sweep line ([`MAX_CROSSED_WORK`]). They are counted whenever the most the count can come to, as it
+    // prices them (a line pair one, a pair with a curve at most three and two curves at most nine, each such place twice,
+    // and a cubic that loops once, twice), could pass either limit.
     let depth = peak_depth(&seg.heights) as u64;
-    if (line_pairs as u64).saturating_mul(depth) > limits().crossed_work as u64 {
-        let Some(crossed) = real_line_crossings(&seg, crate::boolean::sweep_tolerance(seg.extent), cap) else { return false };
-        work::add(Work::LineCrossings, usize::try_from(crossed).unwrap_or(usize::MAX));
-        if crossed.saturating_mul(depth) > limits().crossed_work as u64 {
+    let most = limits().real_crossings as u64;
+    let crossed_work = limits().crossed_work as u64;
+    let priced =
+        (line_pairs as u64).saturating_add(6 * mixed as u64).saturating_add(18 * curve_pairs as u64).saturating_add(2 * seg.curves.len() as u64);
+    if priced > most || priced.saturating_mul(depth) > crossed_work {
+        let Some(crossed) = real_crossings(&seg, crate::boolean::sweep_tolerance(seg.extent), cap) else { return false };
+        work::add(Work::Crossings, usize::try_from(crossed).unwrap_or(usize::MAX));
+        if crossed > most || crossed.saturating_mul(depth) > crossed_work {
             return false;
         }
     }
@@ -1866,7 +1926,7 @@ mod tests {
             work::reset();
             let start = std::time::Instant::now();
             let fits = sweep_fits([&path]);
-            (fits, work::take(Work::LineCrossings), start.elapsed())
+            (fits, work::take(Work::Crossings), start.elapsed())
         };
         // 1,001 edges fit: 500 thousand pairs of bounds, a thousand pieces on the line, 5.0e8 at most, which
         // is under the limit with no pair tested.
@@ -1898,7 +1958,265 @@ mod tests {
         let hatch = crate::testutil::diagonals(400);
         work::reset();
         assert!(sweep_fits([&hatch]));
-        assert_eq!(work::take(Work::LineCrossings), 640_000);
+        assert_eq!(work::take(Work::Crossings), 640_000);
+    }
+
+    /// The places where segments cross are held to their own number, whatever the pieces on the sweep line
+    /// ([`MAX_REAL_CROSSINGS`]). 206 stars of 201 points (each edge to the vertex nearly opposite, so each star crosses
+    /// itself in `n (k - 1)` = 19,899 places) are stacked on a diagonal so that their heights do not overlap: 41,818
+    /// elements, 4.1 million pairs of bounds (under the 4.2 million of `MAX_SEGMENT_PAIRS`), 201 pieces on the line, and so
+    /// 8.3e8 searches of it, which is under both limits on those (4.3e9 and 1.1e9), and 4.1 million crossings, which took
+    /// 13 s and 6.5 GB.
+    #[test]
+    fn stacked_stars_are_held_to_the_places_they_cross_whatever_the_pieces_on_the_line() {
+        use crate::testutil::stacked_stars;
+        let per_star: u64 = 201 * 99;
+        let check = |stars: usize, bow: f64| {
+            let path = stacked_stars(stars, 201, bow);
+            work::reset();
+            let start = std::time::Instant::now();
+            let fits = sweep_fits([&path]);
+            (fits, work::take(Work::Crossings) as u64, start.elapsed())
+        };
+        let path = stacked_stars(206, 201, 0.0);
+        assert_eq!(path.elements().len(), 206 * 203);
+        let (pairs, mixed, curve_pairs, depth) = event_counts(&path);
+        assert!(pairs <= MAX_SEGMENT_PAIRS && mixed == 0 && curve_pairs == 0, "{pairs} pairs of bounds");
+        assert!((200..=210).contains(&depth), "{depth} pieces on the line");
+        assert!(pairs as u64 * depth as u64 <= MAX_SWEEP_EVENT_WORK as u64, "under the limit on the searches of the line");
+        assert!(206 * per_star * depth as u64 <= MAX_CROSSED_WORK as u64, "and under the one on the crossings times the pieces on it");
+        // Only the number of crossings refuses it, found by testing the 4.1 million pairs (milliseconds in a release build).
+        let lifted = Limits { real_crossings: usize::MAX, ..Limits::default() };
+        assert!(with_limits(lifted, || sweep_fits([&path])), "nothing else refuses it");
+        let (fits, crossed, took) = check(206, 0.0);
+        assert!(!fits && crossed == 206 * per_star, "{crossed} crossings counted");
+        assert!(took < std::time::Duration::from_secs(60), "{took:?}");
+        // The most that fits: 52 stars make 1,034,748 crossings, 53 make 1,054,647, against 1,048,576.
+        assert_eq!(MAX_REAL_CROSSINGS, 1 << 20);
+        // (52 make 1.05 million pairs of bounds, under the limit, so that none is tested.)
+        let (fits, crossed, _) = check(52, 0.0);
+        assert!(fits && crossed == 0, "{crossed} crossings counted");
+        let (fits, crossed, _) = check(53, 0.0);
+        assert!(!fits && crossed == 53 * per_star, "{crossed} crossings counted");
+        // And to the crossing: a stack fits at the limit and not under it by one.
+        let stack = stacked_stars(52, 201, 0.0);
+        for (limit, fits) in [(52 * per_star, true), (52 * per_star - 1, false)] {
+            let at = Limits { real_crossings: limit as usize, ..Limits::default() };
+            assert_eq!(with_limits(at, || sweep_fits([&stack])), fits, "{limit}");
+        }
+        // Short stacks are not counted either.
+        assert_eq!(check(20, 0.0).1, 0);
+    }
+
+    /// Curves cross as much as lines, and were not counted: 100 stars of 201 points whose edges are bowed cubics, 20,300
+    /// elements, took 14.8 s and 3.7 GB. A place where a curve crosses counts for two (the sweep takes twice as long
+    /// over it), and the count of them is a bound that is not below the number there are, which for these is about a
+    /// third over (a pair of edges that cross is counted by the pieces of each that overlap, one for each).
+    #[test]
+    fn stacked_stars_of_bowed_cubics_are_held_to_the_places_they_cross() {
+        use crate::testutil::stacked_stars;
+        let per_star: u64 = 201 * 99;
+        let check = |stars: usize| {
+            let path = stacked_stars(stars, 201, 3.0);
+            work::reset();
+            let fits = sweep_fits([&path]);
+            (fits, work::take(Work::Crossings) as u64)
+        };
+        let path = stacked_stars(100, 201, 3.0);
+        assert_eq!(path.elements().len(), 100 * 203);
+        let (line_pairs, mixed, curve_pairs, depth) = event_counts(&path);
+        assert!(curve_pairs <= MAX_SEGMENT_PAIRS && line_pairs == 0 && mixed == 0, "{curve_pairs} pairs of bounds");
+        assert!(curve_pairs as u64 * 9 * depth as u64 <= MAX_SWEEP_EVENT_WORK as u64, "{curve_pairs} pairs of curves, {depth} pieces on the line");
+        // The crossings times the pieces on the line pass their limit as well, at this number of them, so both are lifted.
+        let lifted = Limits { real_crossings: usize::MAX, crossed_work: usize::MAX, ..Limits::default() };
+        assert!(with_limits(lifted, || sweep_fits([&path])), "nothing else refuses it");
+        // Counted twice, never below the crossings of the lines the edges are bowed from and under twice that.
+        let (fits, crossed) = check(100);
+        assert!(!fits && crossed >= 2 * 100 * per_star * 98 / 100 && crossed <= 4 * 100 * per_star, "{crossed} counted");
+        // 19 stars fit and 20 do not.
+        let (fits, crossed) = check(19);
+        assert!(fits && crossed <= MAX_REAL_CROSSINGS as u64 && crossed >= 2 * 19 * per_star * 98 / 100, "{crossed} counted");
+        let (fits, crossed) = check(20);
+        assert!(!fits && crossed > MAX_REAL_CROSSINGS as u64, "{crossed} counted");
+    }
+
+    /// A star alone is counted by the same test: where its pairs of bounds could make more crossings than the limit, the
+    /// places where its edges cross are counted exactly for lines (`n (k - 1)`), and for bowed cubics as a bound that is at
+    /// least twice that (to the few that the bow changes) and under twice again.
+    #[test]
+    fn single_stars_of_lines_and_of_cubics_are_counted_by_their_crossings() {
+        use crate::testutil::{bowed_star, star};
+        let n = 301;
+        let low = Limits { real_crossings: 1_000, ..Limits::default() };
+        let crossings = |path: &BezPath| {
+            work::reset();
+            let fits = with_limits(low, || sweep_fits([path]));
+            (fits, work::take(Work::Crossings))
+        };
+        let (fits, counted) = crossings(&star(n));
+        assert!(!fits && counted == n * 149, "{counted}");
+        let (fits, counted) = crossings(&bowed_star(n, 3.0, 0.0, 0.0));
+        assert!(!fits && counted >= 2 * n * 149 * 98 / 100 && counted <= 4 * n * 149, "{counted}");
+        // At the default limit a star of lines of 1,291 points (831 thousand crossings) is made and one of 1,293 refused
+        // by the crossings times the pieces on the line, and a star of cubics of 851 is made and one of 891 refused (the
+        // bound on the crossings of a star of cubics is about a third over, counted twice).
+        assert!(sweep_fits([&star(1291)]) && !sweep_fits([&star(1293)]));
+        assert!(sweep_fits([&bowed_star(851, 3.0, 0.0, 0.0)]) && !sweep_fits([&bowed_star(891, 3.0, 0.0, 0.0)]));
+    }
+
+    /// Two arches, one rising to 3 and one from 2 falling to -1, cross twice (where their chords, the levels 0 and 2, never
+    /// do), and the count is not below that, twice for the curves. A cubic whose height is zero at a quarter, a half and
+    /// three quarters of its way crosses a line along that height three times, which is what the control polygon says.
+    #[test]
+    fn curves_and_lines_are_counted_at_the_most_they_can_cross_in() {
+        let count = |paths: &[BezPath]| {
+            let mut seg = Segments::default();
+            for p in paths {
+                seg.add_path(p);
+            }
+            real_crossings(&seg, 1e-6, usize::MAX).unwrap_or(u64::MAX)
+        };
+        let curve = |p: [(f64, f64); 4]| {
+            let mut bp = BezPath::new();
+            bp.move_to(p[0]);
+            bp.curve_to(p[1], p[2], p[3]);
+            bp
+        };
+        let (rising, falling) =
+            (curve([(0.0, 0.0), (3.0, 4.0), (7.0, 4.0), (10.0, 0.0)]), curve([(0.0, 2.0), (3.0, -2.0), (7.0, -2.0), (10.0, 2.0)]));
+        let both = count(&[rising.clone(), falling]);
+        assert!((4..=18).contains(&both), "two places, counted twice, at least: {both}");
+        // The height `64 (t - 1/4)(t - 1/2)(t - 3/4)`, which is a cubic with the control heights below, and a line along zero.
+        let zigzag = curve([(0.0, -6.0), (8.0 / 3.0, 26.0 / 3.0), (16.0 / 3.0, -26.0 / 3.0), (8.0, 6.0)]);
+        let line = {
+            let mut bp = BezPath::new();
+            bp.move_to((-1.0, 0.0));
+            bp.line_to((9.0, 0.0));
+            bp
+        };
+        assert_eq!(count(&[zigzag, line]), 6, "three places, each counted twice");
+        // A cubic that curls into a loop crosses itself, once at the most, and is counted for it (twice); one that does not has none.
+        let looped = curve([(0.0, 0.0), (30.0, 30.0), (-10.0, 30.0), (20.0, 0.0)]);
+        assert_eq!(count(&[looped]), 2);
+        assert_eq!(count(&[curve([(0.0, 0.0), (10.0, 5.0), (20.0, 5.0), (30.0, 0.0)])]), 0);
+    }
+
+    /// A grid of lines across cubics that each cross three times: 440 horizontal lines and 440 S-shaped cubics side by side,
+    /// each line crossing each cubic in three places (580 thousand of them, 1.16 million as counted, which is over the limit).
+    /// The count of every pair of bounds as three crossings is 580 thousand (a pair of a line and a curve counts three),
+    /// which is under it, and no pair of lines or of curves has overlapping bounds: it was not counted at all (nor was its product with the
+    /// pieces on the line, 1,300 of them, over 2^30). The most the count can come to, priced
+    /// as it is, is what says it is to be counted.
+    #[test]
+    fn lines_across_cubics_that_cross_them_three_times_are_counted_as_the_curves_they_cross() {
+        let m = 440;
+        let mut grid = BezPath::new();
+        // The S: from (x, -10) to (x + 8, 10), crossing every height between -3 and 3 three times.
+        for i in 0..m {
+            let x = 20.0 * i as f64;
+            grid.move_to((x, -10.0));
+            grid.curve_to((x + 8.0 / 3.0, 40.0), (x + 16.0 / 3.0, -40.0), (x + 8.0, 10.0));
+        }
+        for i in 0..m {
+            let y = -3.0 + 6.0 * i as f64 / m as f64;
+            grid.move_to((-1.0, y));
+            grid.line_to((20.0 * m as f64, y));
+        }
+        let (line_pairs, mixed, curve_pairs, depth) = event_counts(&grid);
+        assert_eq!((line_pairs, mixed, curve_pairs), (0, m * m, 0), "only the pairs of a line and a curve overlap");
+        let unpriced = 3 * mixed as u64;
+        assert!(unpriced <= MAX_REAL_CROSSINGS as u64, "{unpriced}: the count of three for each pair was under the limit");
+        assert!(unpriced * depth as u64 <= MAX_SWEEP_EVENT_WORK as u64, "and the searches of the line, {depth} of them, too");
+        assert!(unpriced * depth as u64 <= MAX_CROSSED_WORK as u64, "and so was the count times the pieces on the line");
+        work::reset();
+        assert!(!sweep_fits([&grid]));
+        let counted = work::take(Work::Crossings) as u64;
+        assert_eq!(counted, 2 * 3 * (m * m) as u64, "every line crosses every curve three times, each counted twice");
+        // Only the number of crossings refuses it: without that limit the product with the pieces on the line is over its limit,
+        // and without both nothing refuses it.
+        let no_cap = Limits { real_crossings: usize::MAX, ..Limits::default() };
+        assert!(!with_limits(no_cap, || sweep_fits([&grid])));
+        let none = Limits { real_crossings: usize::MAX, crossed_work: usize::MAX, ..Limits::default() };
+        assert!(with_limits(none, || sweep_fits([&grid])));
+    }
+
+    /// The number of crossings times the pieces on the sweep line is counted when the most the count can come to, priced as
+    /// it is, could pass its limit, and not only the pairs of lines: 20 lines across 20 cubics that cross three times is
+    /// 2,400 places as counted. At the limit, the count times the pieces on the line, it fits, and under it by one it does not.
+    #[test]
+    fn the_crossings_of_curves_times_the_pieces_on_the_line_are_held_to_their_limit() {
+        let m = 20;
+        let mut grid = BezPath::new();
+        for i in 0..m {
+            let x = 20.0 * i as f64;
+            grid.move_to((x, -10.0));
+            grid.curve_to((x + 8.0 / 3.0, 40.0), (x + 16.0 / 3.0, -40.0), (x + 8.0, 10.0));
+        }
+        for i in 0..m {
+            let y = -3.0 + 6.0 * i as f64 / m as f64;
+            grid.move_to((-1.0, y));
+            grid.line_to((20.0 * m as f64, y));
+        }
+        let (_, _, _, depth) = event_counts(&grid);
+        let needed = 2 * 3 * (m * m) as u64 * depth as u64;
+        for (limit, fits) in [(needed, true), (needed - 1, false)] {
+            let at = Limits { crossed_work: limit as usize, ..Limits::default() };
+            assert_eq!(with_limits(at, || sweep_fits([&grid])), fits, "{limit}");
+        }
+    }
+
+    /// A cubic that may curl into a loop is counted for crossing itself, twice, and the count is made for them: 600 of them far
+    /// apart, which no pair of bounds overlaps, are 1,200 as counted, and a limit of 1,000 refuses them (and 400 are 800, and fit).
+    #[test]
+    fn cubics_that_may_loop_are_counted_for_crossing_themselves() {
+        let loops = |n: usize| {
+            let mut all = BezPath::new();
+            for i in 0..n {
+                let x = 100.0 * i as f64;
+                all.move_to((x, 0.0));
+                all.curve_to((x + 30.0, 30.0), (x - 10.0, 30.0), (x + 20.0, 0.0));
+            }
+            all
+        };
+        let low = Limits { real_crossings: 1_000, ..Limits::default() };
+        work::reset();
+        assert!(!with_limits(low, || sweep_fits([&loops(600)])));
+        assert_eq!(work::take(Work::Crossings), 1_200);
+        assert!(with_limits(low, || sweep_fits([&loops(400)])));
+    }
+
+    /// Wiggles between the samples must not take a stack past the limit: 20,000 pairs of a cubic along the x axis and one
+    /// whose height is `400 (t - .30)(t - .33)(t - .36)`, which cross three times in the length of a piece of eight (where the
+    /// chords of a piece cross once), each pair on a diagonal of its own. The crossings as counted by the chords
+    /// of eight pieces, twice each, are 40 thousand: under a limit of 100 thousand, with 120 thousand there are as counted
+    /// twice. The bound is nine for each, and it is refused.
+    #[test]
+    fn pairs_of_cubics_that_wiggle_between_the_samples_are_counted_at_the_most_they_can_cross_in() {
+        let k = 400.0;
+        let (a0, a1, a2, a3) = (-0.03564 * k, 0.3258 * k, -0.99 * k, k);
+        let y = [a0, a0 + a1 / 3.0, a0 + 2.0 * a1 / 3.0 + a2 / 3.0, a0 + a1 + a2 + a3];
+        let mut stack = BezPath::new();
+        for i in 0..20_000 {
+            let (dx, dy) = (200.0 * i as f64, 2_000.0 * i as f64);
+            stack.move_to((dx, dy));
+            stack.curve_to((dx + 100.0 / 3.0, dy), (dx + 200.0 / 3.0, dy), (dx + 100.0, dy));
+            stack.move_to((dx, dy + y[0]));
+            stack.curve_to((dx + 100.0 / 3.0, dy + y[1]), (dx + 200.0 / 3.0, dy + y[2]), (dx + 100.0, dy + y[3]));
+        }
+        let (_, mixed, curve_pairs, _) = event_counts(&stack);
+        assert_eq!((mixed, curve_pairs), (0, 20_000), "each pair of cubics overlaps, and none with another");
+        let low = Limits { real_crossings: 100_000, ..Limits::default() };
+        work::reset();
+        assert!(!with_limits(low, || sweep_fits([&stack])), "20,000 pairs of three crossings are 120 thousand as counted");
+        assert_eq!(work::take(Work::Crossings), 2 * 9 * 20_000, "nine for each pair, twice");
+        // The most the count can come to is 18 for each pair and 2 for each curve (40,000 of them, the cubics that may loop): at
+        // nine for each pair and the same for the curves, 260 thousand, a limit there is under the count and not under that, so
+        // that the stack would pass unseen if the pairs were priced at nine.
+        let nine = Limits { real_crossings: 9 * 20_000 + 2 * 40_000, ..Limits::default() };
+        assert!(!with_limits(nine, || sweep_fits([&stack])));
+        // As many as the limit allows, at nine for each (counted twice), are made.
+        let some = Limits { real_crossings: 2 * 9 * 20_000, ..Limits::default() };
+        assert!(with_limits(some, || sweep_fits([&stack])));
     }
 
     /// Boxes that touch at a signed zero still overlap: -0.0 and +0.0 are the same position.

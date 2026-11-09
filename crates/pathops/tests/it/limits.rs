@@ -44,6 +44,7 @@ fn the_defaults_are_the_constants() {
     assert_eq!(l.redundant_work, REDUNDANT_WORK);
     assert_eq!(l.mask_work, MASK_WORK);
     assert_eq!(l.sweep_event_work, MAX_SWEEP_EVENT_WORK);
+    assert_eq!(l.real_crossings, MAX_REAL_CROSSINGS);
     assert_eq!(l.ends_at_a_point, MAX_ENDS_AT_A_POINT);
     assert_eq!(l.crossing_work, MAX_CROSSING_WORK);
     assert_eq!(l.pass_work, MAX_PASS_WORK);

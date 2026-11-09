@@ -653,6 +653,23 @@ fn witnesses_for(sd: f64, tol: f64) -> usize {
     (wanted.ceil() as usize).clamp(MIN_WITNESSES, MAX_WITNESSES)
 }
 
+/// The share of the tolerance that the lens of one interval between two witness points may be (see [`lens_floor`]).
+const LENS_SHARE: f64 = 0.25;
+
+/// The fewest intervals of a run whose control polygons add up to `along`, taken as far apart as rounding lets a run be
+/// shown to be within `tol` of its chord: a stretch as long as its chord to the last place lies in a lens whose half width is
+/// still `sqrt(LENGTH_ROUNDING)` of its length ([`lens_width`]), so the stretches are no longer than a share of the
+/// tolerance over that. A run that is straight needs as many witness points as that and no more than its curvature asks
+/// for, which is the eight of [`MIN_WITNESSES`]: 100,000 straight cubics 1e4 long had a lens of 0.014 in each of eight
+/// stretches of 4.7e5, more than the tolerance of 0.01, and were never merged whole.
+fn lens_floor(along: f64, tol: f64) -> usize {
+    let longest = LENS_SHARE * tol / LENGTH_ROUNDING.sqrt();
+    if !(along.is_finite() && longest.is_finite() && longest > 0.0) {
+        return 0;
+    }
+    (along / longest).ceil() as usize
+}
+
 /// How many points [`witness_points`] takes for `steps` intervals of a run of `count` segments.
 fn points_for(count: usize, steps: usize) -> usize {
     if count >= steps { steps } else { count.saturating_mul(steps.div_ceil(count.max(1))) }
@@ -712,9 +729,11 @@ fn refit_run(originals: &Originals, first: usize, count: usize, tol: f64, seed: 
     }
     let (head, tail) = (originals.seg(first)?, originals.seg(first.checked_add(count - 1)?)?);
     let (t0, t1) = (start_tangent(&head.c), end_tangent(&tail.c));
+    // The least intervals that keep the lens of each within a share of the tolerance, however straight the run is.
+    let floor = lens_floor(originals.polygon_length(first, count)?, tol);
     let mut sd = seed;
     for round in 0..2 {
-        let steps = witnesses_for(sd, tol);
+        let steps = witnesses_for(sd, tol).max(floor.min(MAX_WITNESSES));
         let points = points_for(count, steps);
         let cost = points.saturating_add(1).saturating_mul(WITNESS_COST).saturating_add(count / 4);
         let Some(left) = work.checked_sub(cost) else {
@@ -2006,5 +2025,50 @@ mod tests {
         assert_eq!(originals.polygon_length(0, n), Some(exact));
         assert_eq!(originals.polygon_length(n / 2, n), Some(exact), "round the end of the subpath");
         assert_eq!(originals.polygon_length(5, 100), Some(one * 100.0));
+    }
+
+    /// A run is refitted from as many sample points as its curvature asks for, which is the eight of `MIN_WITNESSES` for
+    /// a run that is straight, and the lens of one of those eight stretches, whose width is 3e-8 of its length however
+    /// straight it is, passed the tolerance for a run of 2.7 million (a quarter of a hundred thousand cubics 1e4 long):
+    /// 100,000 straight cubics came out as 55 elements at a tolerance of 0.01 (1c1f05c gave 2), and a parabola of radius
+    /// 1e16 (a line within 1e-9 for each) as 266, more as the tolerance was less but not less as it was more (89 at 1).
+    /// The samples are no fewer than keep that lens within a share of the tolerance ([`lens_floor`]), up to 1,024.
+    #[test]
+    fn a_long_straight_run_is_taken_whole_where_its_lens_asks_for_more_samples_than_its_curvature() {
+        let straight = |n: usize| {
+            let mut bp = BezPath::new();
+            bp.move_to((0.0, 0.0));
+            for i in 0..n {
+                let x = i as f64 * 1e4;
+                bp.curve_to((x + 1e4 / 3.0, 0.0), (x + 2e4 / 3.0, 0.0), (x + 1e4, 0.0));
+            }
+            bp
+        };
+        let elements = |bp: &BezPath, tol: f64| remove_redundant_points(bp, tol).elements().len();
+        assert!(elements(&straight(100_000), 0.01) <= 6, "{}", elements(&straight(100_000), 0.01));
+        assert_eq!(elements(&straight(20_000), 0.01), 2);
+        let parabola = |r: f64| {
+            let (h, f, df) = (1e4, |x: f64| x * x / (2.0 * r), |x: f64| x / r);
+            let mut bp = BezPath::new();
+            for i in 0..100_000usize {
+                let (x0, x1) = (i as f64 * h, (i + 1) as f64 * h);
+                if i == 0 {
+                    bp.move_to((x0, f(x0)));
+                }
+                bp.curve_to((x0 + h / 3.0, f(x0) + df(x0) * h / 3.0), (x1 - h / 3.0, f(x1) - df(x1) * h / 3.0), (x1, f(x1)));
+            }
+            bp
+        };
+        // The count does not rise with the tolerance, and is a handful at 1e16 and at the radii where it was hundreds.
+        let chain = parabola(1e16);
+        let counts: Vec<usize> = [0.005, 0.01, 0.02, 0.05, 0.1, 1.0].iter().map(|&tol| elements(&chain, tol)).collect();
+        assert!(counts.windows(2).all(|w| w[1] <= w[0]) && counts[1] <= 8 && counts[5] == 2, "{counts:?}");
+        for r in [1e14, 1e15] {
+            assert!(elements(&parabola(r), 0.01) <= 8, "radius {r:e}");
+        }
+        // The floor grows with the run and falls with the tolerance, and is nothing for a run that is not a number.
+        assert!(lens_floor(1e9, 0.01) > lens_floor(1e8, 0.01) && lens_floor(1e8, 0.01) > lens_floor(1e8, 0.1));
+        assert_eq!(lens_floor(f64::NAN, 0.01), 0);
+        assert!(lens_floor(1e4, 0.01) <= 1, "a segment of ordinary length asks for nothing more than the eight");
     }
 }

@@ -692,7 +692,7 @@ fn exact_merge(run: &[Seg], tidy: &Tidy) -> Option<CubicBez> {
     let b = run[run.len() - 1].c.p3;
     let scale = 1.0 + a.x.abs().max(a.y.abs()).max(b.x.abs()).max(b.y.abs());
     let tol = match_tolerance(scale);
-    // How far the middle of a piece may be from the curve it is taken for a part of: the noise the sweep puts a
+    // How far the middle and the end of a piece may be from the curve it is taken for a part of: the noise the sweep puts a
     // piece off its curve by (ten times the match of the ends), but no more than the precision asked for where that
     // is more than the match itself. Two input curves that share their ends and lie nearer than that to each
     // other (a lens between them thinner than ten matches) both pass the first, and the first of them in the
@@ -705,7 +705,10 @@ fn exact_merge(run: &[Seg], tidy: &Tidy) -> Option<CubicBez> {
         if na.distance_sq.sqrt() > tol || nb.distance_sq.sqrt() > tol {
             continue;
         }
-        let on_curve = run.iter().all(|s| c.nearest(s.c.eval(0.5), 1e-12).distance_sq.sqrt() <= middle_limit);
+        // Each piece's middle and its end: the joints between pieces are where two input curves that share their ends lie
+        // furthest apart (a lens is widest in the middle of its curves), so a run of two halves that only the middles of its
+        // halves were tested against took the wrong curve, 0.003 off, at a precision of 0.0024 to 0.0029.
+        let on_curve = run.iter().all(|s| [s.c.eval(0.5), s.c.p3].into_iter().all(|p| c.nearest(p, 1e-12).distance_sq.sqrt() <= middle_limit));
         if !on_curve || (na.t - nb.t).abs() < 1e-12 {
             continue;
         }
@@ -1385,6 +1388,37 @@ mod tests {
         let loose = Tidy::keeping(DEFAULT_PRECISION, [&input(first), &input(second)]);
         let merged = try_merge(&run, &loose).expect("the pieces are one curve");
         assert!(off(&merged.c, &second) < 3.1e-3, "{}", off(&merged.c, &second));
+    }
+
+    /// The middles of the pieces of a run were all that was tested against a curve, and two curves a lens apart are nearest
+    /// to each other at the ends of the pieces, not at their middles (here, at the joint of two halves, the curves are 0.0030
+    /// apart and 0.0023 at the middle of each half): at a precision of 0.0024, 0.0026 or 0.0029, between the two, the first
+    /// curve of the input took the run of the second's two halves, and the boundary was 0.0030 off. The ends of each piece
+    /// are tested as well now, and the run is the second curve's own.
+    #[test]
+    fn a_run_of_two_halves_is_not_taken_for_a_curve_that_the_joint_between_them_is_off() {
+        let first = CubicBez::new((0.0, 0.0), (150.0, 100.0), (350.0, 100.0), (500.0, 0.0));
+        let second = CubicBez::new((0.0, 0.0), (150.0, 100.004), (350.0, 100.004), (500.0, 0.0));
+        let input = |c: CubicBez| BezPath::from_vec(vec![kurbo::PathEl::MoveTo(c.p0), kurbo::PathEl::CurveTo(c.p1, c.p2, c.p3)]);
+        let run: Vec<Seg> = [0.0..0.5, 0.5..1.0].into_iter().map(|r| Seg { c: second.subsegment(r), line: false }).collect();
+        let off = |c: &CubicBez, from: &CubicBez| {
+            (0..=20).map(|k| c.eval(f64::from(k) / 20.0).distance(from.eval(f64::from(k) / 20.0))).fold(0.0, f64::max)
+        };
+        for precision in [0.0024, 0.0026, 0.0029] {
+            let tidy = Tidy::keeping(precision, [&input(first), &input(second)]);
+            let merged = try_merge(&run, &tidy).expect("the pieces are one curve");
+            assert!(
+                !merged.line && off(&merged.c, &second) < 1e-9,
+                "a precision of {precision}: {} from the curve the pieces are cut from",
+                off(&merged.c, &second)
+            );
+        }
+        // A run of one piece, the whole second curve, has its ends on both curves (they share them) and only its middle tells
+        // them apart: 0.0030 from the first at a precision of 0.001.
+        let whole = [Seg { c: second, line: false }];
+        let tidy = Tidy::keeping(0.001, [&input(first), &input(second)]);
+        let merged = try_merge(&whole, &tidy).expect("the piece is one curve");
+        assert!(!merged.line && off(&merged.c, &second) < 1e-9, "{} from the curve the piece is cut from", off(&merged.c, &second));
     }
 
     #[test]

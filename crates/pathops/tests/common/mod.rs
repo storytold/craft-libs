@@ -320,3 +320,38 @@ pub fn arb_smooth_curve() -> impl Strategy<Value = BezPath> {
         bp
     })
 }
+
+/// A star polygon of `n` points (`n` odd) of radius 100 at `(dx, dy)`, each joined to the one nearly opposite, so that it
+/// crosses itself in `n (k - 1)` places (`k = (n - 1) / 2`), with the edges bowed sideways by `bow` (a cubic for each; 0 gives
+/// lines).
+pub fn star_at(n: usize, bow: f64, dx: f64, dy: f64) -> BezPath {
+    let k = (n - 1) / 2;
+    let at = |i: usize| {
+        let a = std::f64::consts::TAU * ((k * i) % n) as f64 / n as f64;
+        Point::new(100.0 * a.cos() + dx, 100.0 * a.sin() + dy)
+    };
+    let mut bp = BezPath::new();
+    bp.move_to(at(0));
+    for i in 0..n {
+        let (a, b) = (at(i), at((i + 1) % n));
+        if bow == 0.0 {
+            bp.line_to(b);
+        } else {
+            let d = b - a;
+            let side = kurbo::Vec2::new(-d.y, d.x) * (bow / d.hypot().max(1e-9));
+            bp.curve_to(a + d / 3.0 + side, a + d * (2.0 / 3.0) + side, b);
+        }
+    }
+    bp.close_path();
+    bp
+}
+
+/// `count` such stars in one path, each 250 above and beside the last, so that their heights do not overlap and the sweep
+/// line holds the pieces of one of them at a time.
+pub fn stacked_stars(count: usize, n: usize, bow: f64) -> BezPath {
+    let mut all = BezPath::new();
+    for j in 0..count {
+        all.extend(star_at(n, bow, j as f64 * 250.0, j as f64 * 250.0).iter());
+    }
+    all
+}

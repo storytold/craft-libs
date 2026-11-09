@@ -82,8 +82,8 @@ pub(crate) enum Work {
     JunctionSteps,
     /// Chains of an Outline that were compared with a chain found beside them, for edges that coincide.
     ChainCompares,
-    /// Pairs of lines found to cross, by testing the pairs whose bounds overlap (the check of a sweep's crossings).
-    LineCrossings,
+    /// Places where segments were found to cross, by testing the pairs whose bounds overlap (the check of a sweep's crossings).
+    Crossings,
     /// Faces of an offset whose point deep inside was looked for among the crossings of the curves themselves, the
     /// flattened path having none.
     ExactSpans,

@@ -155,6 +155,41 @@ pub(crate) fn star(n: usize) -> BezPath {
     bp
 }
 
+/// A star polygon of `n` points (`n` odd) of radius 100 at `(dx, dy)`, each joined to the one nearly opposite, as [`star`]
+/// but with the edges bowed sideways by `bow` (a cubic for each; 0 gives the lines of [`star`]).
+pub(crate) fn bowed_star(n: usize, bow: f64, dx: f64, dy: f64) -> BezPath {
+    let k = (n - 1) / 2;
+    let at = |i: usize| {
+        let a = std::f64::consts::TAU * ((k * i) % n) as f64 / n as f64;
+        Point::new(100.0 * a.cos() + dx, 100.0 * a.sin() + dy)
+    };
+    let mut bp = BezPath::new();
+    bp.move_to(at(0));
+    for i in 0..n {
+        let (a, b) = (at(i), at((i + 1) % n));
+        if bow == 0.0 {
+            bp.line_to(b);
+        } else {
+            let d = b - a;
+            let side = kurbo::Vec2::new(-d.y, d.x) * (bow / d.hypot().max(1e-9));
+            bp.curve_to(a + d / 3.0 + side, a + d * (2.0 / 3.0) + side, b);
+        }
+    }
+    bp.close_path();
+    bp
+}
+
+/// `count` stars of `n` points in one path, each 250 above and beside the last so that their heights do not overlap and their
+/// bounds touch none of the others': each crosses itself in `n (k - 1)` places (`k = (n - 1) / 2`) and the sweep line
+/// holds the pieces of one of them at a time.
+pub(crate) fn stacked_stars(count: usize, n: usize, bow: f64) -> BezPath {
+    let mut all = BezPath::new();
+    for j in 0..count {
+        all.extend(bowed_star(n, bow, j as f64 * 250.0, j as f64 * 250.0).iter());
+    }
+    all
+}
+
 /// A path as the polygon of its flattening, to read the winding number of a point from, as an oracle for the winding of
 /// the curves: the crossings of a ray to the left with straight edges, found by none of the arithmetic of the cubics. It
 /// holds for a point farther from the path than the flattening's tolerance (and than the rounding of the crossing, which

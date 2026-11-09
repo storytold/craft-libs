@@ -170,8 +170,36 @@ work of each operation is bounded before it starts, in counts the tests assert o
   times the most pieces on the line could pass `MAX_CROSSED_WORK` (2^30), they are tested (no more than
   `MAX_SEGMENT_PAIRS` of them), and the pairs of lines that really cross, away from their ends, times those
   pieces are held to it: 1,001 edges take 2.4 s and 0.9 GB, 1,291 (the most) 4.3 s, and 1,293 or more, 2,001
-  among them (in 14 ms) and 3,001 (by the pairs, in 2 ms), are `TooComplex`. Curves count as before, by the
-  event limit alone;
+  among them (in 14 ms) and 3,001 (by the pairs, in 2 ms), are `TooComplex`;
+- the sweep's time and memory follow its crossings themselves (about 3 microseconds and 1.2 to 1.6 KB for each place
+  where lines cross), and the count above times the pieces on the sweep line is small where the shapes that cross a
+  great deal are stacked so that their heights do not overlap: 206 stars of 201 points in one path, each above and
+  beside the last (41,818 elements, 4.1 million pairs of bounds, 201 pieces on the line, 4.1 million crossings),
+  passed every limit above and took 13 s and 6.5 GB (and a `wasm32` build aborts), and 100 such stars whose edges are
+  bowed cubics (20,300 elements; curves were not counted at all) 14.5 s and 3.7 GB. So the places where segments really
+  cross are held to `MAX_REAL_CROSSINGS` (2^20, 1,048,576) whatever the pieces on the line. The count is a bound
+  that is never below the number there are, and is made, whenever the most it can come to (priced as below) could
+  pass the limit or the limit on the crossings times the pieces on the line, by testing the pairs of bounds that
+  overlap (already held to `MAX_SEGMENT_PAIRS`):
+  - two lines are tested, and cross once or not at all;
+  - a line and a cubic count the changes of sign of the distances of the cubic's control points from the line
+    (at most three: a cubic crosses a line no more often than its control polygon does), and none where they meet
+    only at an end they share and the line leaves it outside the cone of the rays to the cubic's control points;
+  - two cubics count one where the directions of their tangents are apart (as lines, not as ways: two arcs that cross
+    twice both have a tangent along the chord between the crossings, so arcs whose tangents never run along one
+    line cross once at most), by pieces of an eighth where those of the whole curves are not, and nine (the most two
+    cubics can cross at) for each pair of pieces that are not apart, and none where they meet only at an end they
+    share and the cones of the rays from it to their control points do not meet (a path's joints, the ends of a fan);
+  - a cubic whose tangents lie in no cone narrower than a half plane may loop and cross itself, once at the most, and
+    counts for it.
+
+  A place where a curve crosses counts for two, for the sweep takes about twice as long over it and half
+  the memory. The bound of a star of cubics is about a third over its crossings. 52 stars of 201 points
+  (1,034,748 crossings, the most; 53 have 1,054,647) take 3.2 s and 1.6 GB, and 19 of bowed cubics (the most) 2.6 s and 0.5
+  GB; 53 and 206 stars (the latter in 0.08 s) and 20 and 100 of bowed cubics (in 0.02 and 0.09 s) are `TooComplex`. A
+  single star of bowed cubics is made up to 871 points (3.2 s), and 881 are refused. A pair of cubics whose tangents
+  run along one line anywhere (arcs close and nearly parallel, or crossing at a shallow angle, whose pieces' cones
+  overlap) counts nine, so 58 thousand such pairs overlapping are refused, whatever they do;
 - what is done with the output of a sweep is bounded as well: a Pathfinder Outline finds the junctions on each
   segment among those inside the bounds of the segment (a grid of 300 and 300 open lines makes 90,000 of them,
   and every arch round it holds them all in its bounds with the curve nowhere near), and an inset checks
@@ -245,9 +273,14 @@ work of each operation is bounded before it starts, in counts the tests assert o
   past what the sweep takes);
 - the winding of a point against a path is made by `src/winding.rs` (see "Differences from VectorCraft"): a segment
   whose box the point is outside is turned away without a step, and a cubic takes at most 12 steps of Newton's method
-  and 64 halvings for each of its (at most three) pieces, so the charge stays one element for each segment wound and
-  a winding takes no more time than kurbo's did (0.07 to 0.6 of it in the cases measured there): the nested
-  rectangles above take 0.14 / 0.36 / 0.75 s where they took 0.20 / 0.58 / 1.34 s;
+  and 64 halvings for each of its (at most three) pieces, so the charge stays one element for each segment wound. A
+  winding is faster than kurbo's where most segments are turned away by their boxes, as in a map of shapes (a circle
+  or a polygon of many segments takes 0.07 to 0.6 of kurbo's time, and the nested rectangles above take 0.14 / 0.36
+  / 0.75 s where they took 0.20 / 0.58 / 1.34 s), and slower for a cubic that crosses the point's height: against one
+  arch or one general cubic with the point inside its box, 1.25 and 0.9 times kurbo's time as one reviewer measured it
+  and 1.5 and 1.3 here on a loaded machine, and, where the height is near a flat end of a piece (a cubic whose height is
+  `t^3`, so that Newton's method gives up and 62 halvings follow, 76 evaluations at the most), about 5 times (480
+  nanoseconds against 97);
 - a stroke's outline is counted as it is made (a subpath of more than 256 segments is stroked in windows of
   256, so that a width that is huge against the tolerance cannot make millions of curves first) and the
   operation is `TooComplex` past `MAX_ELEMENTS` elements of outline. The union of the outlines in
@@ -302,7 +335,7 @@ let outline = with_limits(limits, || try_outline_stroke(&path, 3.0, Cap::Butt, J
 `with_limits` puts the limits in force on the calling thread for the closure and puts the caller's back when
 it returns, also if it unwinds; scopes nest, and another thread keeps its own. `Limits` has a field for each
 bound (`elements`, `segment_pairs`, `offset_segment_pairs`, `sweep_line_pairs`, `shape_builder_segments`,
-`fit_points`, `fit_work`, `join_work`, `redundant_work`, `mask_work`, `sweep_event_work`, `crossed_work`, `pass_work`,
+`fit_points`, `fit_work`, `join_work`, `redundant_work`, `mask_work`, `sweep_event_work`, `crossed_work`, `real_crossings`, `pass_work`,
 `fill_work`, `search_work`, `ends_at_a_point`, `crossing_work`, `coverage_entries`) and is `#[non_exhaustive]`, so start from
 `Limits::default()`. Time and memory grow with a limit raised, and a limit lowered refuses more ordinary art.
 
@@ -324,14 +357,15 @@ one of 408 or more is `TooComplex`. Strokes that are curves count more than line
 to nine times, a line and a curve three), so a hatch of curves is refused at fewer. A boolean operation of more
 than a few thousand inputs, most of them empty, is `TooComplex` past `MASK_WORK`.
 
-Seven more bounds refuse input a drawing can hold, none of it common: a polygon of more than 1,291 edges that cross nearly every other (a star of 1,293 points, joined to the one nearly opposite) by `MAX_CROSSED_WORK`, a grid of 300 and 300 open lines under 200 arches whose bounds hold it (an Outline) by `MAX_SEARCH_WORK`, a pie of more than 256 slices (or any
+Eight more bounds refuse input a drawing can hold, none of it common: a polygon of more than 1,291 edges that cross nearly every other (a star of 1,293 points, joined to the one nearly opposite) by `MAX_CROSSED_WORK`, more than a million places where segments cross, as in 53 stars of 201 points stacked (or 20 of bowed cubics) by `MAX_REAL_CROSSINGS`, a grid of 300 and 300 open lines under 200 arches whose bounds hold it (an Outline) by `MAX_SEARCH_WORK`, a pie of more than 256 slices (or any
 more than 512 segment ends at one point; a fan of triangles has two at the point for each, so 257 of them) by `MAX_ENDS_AT_A_POINT`, 257 lines
 through one point by `MAX_CROSSING_WORK`, shapes nested 2,896 deep, or 202 deep and crossed by 202 bars, by
 `MAX_COVERAGE_ENTRIES`, Merge, Divide, Trim or Crop of a fan of 209 or more shapes at a point beside 40,000
 other squares by `MAX_PASS_WORK`, and the planar map of thousands of contours nested in one shape (3,400
 rectangles a thousand times as tall as they are wide) by `MAX_FILL_WORK`. Each is a worst case measured in
 seconds or in half a gigabyte (the pie of 256 takes 0.5 to 0.9 s, 256 lines through a point 1.1 s, 2,895 nested
-squares 0.2 s and 550 MB, 3,300 nested rectangles in one shape 0.75 s, the star of 1,291 4.3 s, the Outline of the grid
+squares 0.2 s and 550 MB, 3,300 nested rectangles in one shape 0.75 s, the star of 1,291 4.3 s, 52 stars of 201 points 3.2 s
+and 1.6 GB, 19 of bowed cubics 2.6 s, the Outline of the grid
 under 100 arches 5.2 s), so an app that can wait or has the memory raises it in `Limits`.
 
 The element limit refuses a drawing of more than 524,288 elements in one operation (a traced image of half a
@@ -379,22 +413,21 @@ cost more than a second or so, measured once in a release build:
   so a curve that peaks between two samples is within the tolerance too. A refit curve is held by the same
   kind of bound, which is larger than the distances it bounds: a fit that comes close to the tolerance at the
   samples is split further, or the run left as it is, where it may in fact have been within it.
-- `remove_redundant_points` does not take a very long run of cubics whole where the rounding of lengths is wider than the
-  tolerance, however straight the run is. A run is merged when it is shown to be within the tolerance of the cubic that
-  replaces it, and the proof takes the length of each stretch of the run between two of its sample points as long as
-  rounding may have made it (4 units in the last place, `LENGTH_ROUNDING`), so that the lens it lies in is never
-  thinner than 3e-8 of the stretch (a path as long as its chord to the last place may still be off it by that much). A
-  run that is straight is sampled at eight stretches, so at a tolerance of 0.01 the longest run merged is a few million
-  long. 100,000 cubics 1e4 long along a parabola of radius 1e16 (each off its chord by 1e-9, the whole a line within
-  1e-6 over a length of 1e9) come out as 266 elements and not 2, in 0.1 s, and as 399, 109, 42, 30, 19 and 2 at
-  tolerances of 0.005, 0.02, 0.05, 0.1, 0.3 and 1: the work limit is not what stops it (the same 266 with
-  `redundant_work` raised to 2^62), and with the allowance cut to a quarter it is 56 (5 with no limit on the work, in 12
-  s). The count does not follow the radius (21, 8 and 5 elements at 1e11, 1e12 and 1e13; 161 at 1e14, where the work
-  limit ends the pass, 24 in 3.9 s without it; 362 at 1e15), because the lens only decides where the run is long enough
-  for it to exceed the tolerance. 61d528a gave 132 at 1e16 and tolerance 0.01 with an allowance of 8 units for each of the
-  three lengths of a segment and each segment of a stretch (40 for a stretch of one segment, and more for longer
-  ones), where 0bdd962 and this give 266; that was no better, for its counts did not fall as the tolerance rose (160,
-  132, 97, 104, 119, 171 and 89 at 0.005 to 1: a straight line was not found at a tolerance of 1 either).
+- `remove_redundant_points` does not take a run of cubics whole where the rounding of lengths is wider than the
+  tolerance. A run is merged when it is shown to be within the tolerance of the cubic that replaces it, and the proof
+  takes the length of each stretch of the run between two of its sample points as long as rounding may have made it (4
+  units in the last place, `LENGTH_ROUNDING`), so that the lens it lies in is never thinner than 3e-8 of the stretch
+  (a path as long as its chord to the last place may still be off it by that much). The samples are as many as the
+  curvature of the cubic asks for, and not fewer than keep that lens within a quarter of the tolerance (up to 1,024),
+  so the longest run merged is about 1,024 stretches of tolerance / 3e-8 each: 3e8 long at a tolerance of 0.01, in
+  proportion to the tolerance. 100,000 cubics 1e4 long along a parabola of radius 1e16 (each off its chord by 1e-9, the
+  whole a line within 1e-6 over a length of 1e9) come out as 5 elements, in 14 ms, not 2 (266 in 0.1 s before the
+  samples were chosen by the lens as well: eight stretches of 4.7e5 had a lens of 0.014), and as 8, 3, 2, 2, 2 and 2 at
+  tolerances of 0.005, 0.02, 0.05, 0.1, 0.3 and 1; 100,000 straight cubics 1e4 long at 0.01 come out as 4 (1c1f05c gave 2,
+  0bdd962 55); radii of 1e11, 1e12, 1e13, 1e14 and 1e15 give 21, 8, 5, 5 and 5 (161 at 1e14 before, where the work limit
+  ended the pass, and 362 at 1e15). 61d528a gave 132 at 1e16 and tolerance 0.01 with an allowance of 8 units for each of
+  the three lengths of a segment and each segment of a stretch, and counts that did not follow the tolerance (160, 132,
+  97, 104, 119, 171 and 89 at 0.005 to 1).
 - An inset widens a slit along its sides however narrow, but not at its closed end where that end is as short
   as the stroker's tolerance (1e-3): a slit 0.001 wide from 20 to 100 in a square 100 across, inset by 5, is a notch
   75 long (to y = 20, not 15), as a slit 0.002 wide is not (80). Measured, and not looked into further. Beside a shape at 1e11 a slit under the sweep's tolerance there (1.4e-3) is lost by the sweep, before the
@@ -420,6 +453,8 @@ thread and ask first with the `try_` forms. Measured on one machine, in a releas
 | `try_area` of a pie of 256 slices (512 segment ends at its centre, the limit) | 0.5 to 0.9 s |
 | `try_area` of a star of 1,001 / 1,291 points, each joined to the one nearly opposite (0.5 / 0.83 million crossings; 1,291 is the limit on them) | 2.4 s, 0.9 GB / 4.3 s, 0.9 GB |
 | `try_area` of the star of 1,293 / 2,001 / 3,001 points | refused in 6 / 14 / 2 ms |
+| `try_area` of 52 stars of 201 points, stacked so that their heights do not overlap (1.03 million crossings, the limit on them) / of 19 stars of bowed cubics (the most the bound admits) | 3.2 s, 1.6 GB / 2.6 s, 0.5 GB |
+| `try_area` of 53 / 206 such stars of lines, of 20 / 100 of bowed cubics | refused in 0.02 / 0.08 s, in 0.02 / 0.09 s |
 | `pathfinder(Outline, ..)` of 100 and 100 open lines across one another (one shape; 10,000 junctions) / of 300 and 300 (90,000) | 0.19 s / 2.8 s, 430 MB |
 | the same 100 / 300 lines with 100 arches round them whose bounds hold every junction | 0.9 s / 5.2 s (a search apiece: 1 and 9 million) |
 | `try_area` of 256 thin triangles whose long edges cross at one point (the limit on lines crossing at one point) | 1.1 s |
@@ -501,9 +536,12 @@ bit for bit VectorCraft's), and the results are identical except where noted:
     most 12 and 64 evaluations of the height for a piece, never the cubic formula), and the crossings are counted by
     kurbo's rules (a ray to the left, a piece's lower end in and its upper end out, a line tested as kurbo tests it),
     so nothing changes where kurbo was right (the pinned Pathfinder results are still identical) and a point farther
-    from the path than the rounding of its coordinates is told right. A winding takes 0.07 to 0.6 of kurbo's time
-    on a release build (a circle of 8 arcs 0.18, of 1,000 arcs 0.07, a polygon of 1,000 lines 0.09, a blob of 6 to
-    100 random cubics 0.57 to 0.61: the box of a segment turns most of them away, which kurbo does not);
+    from the path than the rounding of its coordinates is told right. On a release build a winding against a path of
+    many segments takes 0.07 to 0.6 of kurbo's time (a circle of 8 arcs 0.18, of 1,000 arcs 0.07, a polygon of 1,000
+    lines 0.09, a blob of 6 to 100 random cubics 0.57 to 0.61: the box of a segment turns most of them away, which
+    kurbo does not), and against one cubic whose box holds the point more: an arch 1.25 to 1.5 times and a general cubic
+    0.9 to 1.3 times kurbo's, and near a flat end of a piece (a cubic whose height is `t^3`) about 5 times, 480 ns
+    against 97;
   - `boolean_n` and `try_boolean_n` check the sweep's windings against the area of each input, as
     `try_boolean` does (for up to eight inputs), and resolve the inputs first when they do not add up;
     VectorCraft did that for two operands only, and the n-ary result gained or lost a region for a
@@ -740,9 +778,11 @@ bit for bit VectorCraft's), and the results are identical except where noted:
     themselves with the lines is used, where the contour was kept: an outset by more than twice the radius of a circle
     cut in 8 cubics (a tolerance of 0.001) left a hole of 8,012 square units and an island of 7,854 in the disk of
     71,158, and one cut in 4 (0.01) four slivers of 0.3 to 0.6 square units;
-  - the tidy takes the pieces of a run for part of an input curve only where their middles are within the precision of
-    it as well as within ten matches (the first of two input curves that share their ends and lie nearer than ten matches
-    took the pieces of the other, up to 0.003 off at coordinates of 500 and a precision of 1e-4);
+  - the tidy takes the pieces of a run for part of an input curve only where their middles and their ends are within the
+    precision of it as well as within ten matches (the first of two input curves that share their ends and lie nearer than
+    ten matches took the pieces of the other, up to 0.003 off at coordinates of 500 and a precision of 1e-4; and where only
+    the middles were tested, a run of two halves of the second curve, whose joint is where the two lie furthest apart, 0.0030
+    off at a precision of 0.0024, 0.0026 or 0.0029, where the middles are 0.0023 off);
   - the Pathfinder Outline looks for the junctions on a curve inside its bounds, not inside the box of its control points
     (the curve is inside its bounds, and a junction within the sweep's noise of it is inside them widened by that
     and the rounding of the coordinates), and looks them up by blocks that have the segment's heights, not one by one
@@ -757,8 +797,13 @@ bit for bit VectorCraft's), and the results are identical except where noted:
   0.12 s here. The results are the same for a predicate that depends on its flags alone; one that counts its
   calls sees fewer of them (it is asked once for each distinct winding, before the pass: twice for a
   rectangle, outside and inside, not once for each of the eight sides of its segments);
-- seven bounds are new and refuse input VectorCraft took, in whatever time it took, with `TooComplex` (or no
+- eight bounds are new and refuse input VectorCraft took, in whatever time it took, with `TooComplex` (or no
   shapes, for the operations that give none):
+  - more than 2^20 places where segments cross, whatever the pieces on the sweep line, counted as a bound that is
+    never below the number there are, by testing the pairs of bounds that overlap (curves by the directions of their
+    tangents, and the control polygon for a line), a place where a curve crosses counting for two
+    (206 stars of 201 points, each above and beside the last, took VectorCraft 12.6 s and 6.5 GB, and 100 of
+    bowed cubics 18.6 s and 3.7 GB);
   - more than 2^30 searches of the sweep line by the lines that really cross (a star polygon of 2,001 points took
     VectorCraft 25.8 s and 3.7 GB, 1,001 points 2.9 s: the time grows with the cube of their number);
   - a Pathfinder Outline whose junction searches pass 2^30 steps (VectorCraft looked at every junction in each
