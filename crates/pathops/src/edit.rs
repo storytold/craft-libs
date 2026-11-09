@@ -436,8 +436,9 @@ fn remove_redundant_within(path: &BezPath, tolerance: f64, work: &mut usize) -> 
         while next < total {
             // A long piece is extended by the originals after it, as many at a time as fit.
             if let Some(&top) = done.last() {
-                let ahead = (total - next).min((total - merged).saturating_sub(min_segs));
-                let smooth = pieces.get(next).is_some_and(|n| end_tangent(&top.seg.c).dot(start_tangent(&n.seg.c)) >= 0.99);
+                // Not past a joint the pair merge refuses, which a refit would round off (within the tolerance).
+                let ahead = (total - next).min((total - merged).saturating_sub(min_segs)).min(originals.corner_from(next + 1).saturating_sub(next));
+                let smooth = pieces.get(next).is_some_and(|n| smooth_joint(&top.seg.c, &n.seg.c));
                 if top.count >= GALLOP_FROM
                     && !top.seg.line
                     && smooth
@@ -526,11 +527,38 @@ const MAX_CHECKED_RUN: usize = 512;
 struct Originals<'a> {
     segs: &'a [Seg],
     polygons: std::cell::OnceCell<Vec<f64>>,
+    corners: std::cell::OnceCell<Vec<usize>>,
 }
 
 impl<'a> Originals<'a> {
     fn new(segs: &'a [Seg]) -> Self {
-        Self { segs, polygons: std::cell::OnceCell::new() }
+        Self { segs, polygons: std::cell::OnceCell::new(), corners: std::cell::OnceCell::new() }
+    }
+
+    /// The first corner at or after the joint `from`, as the index of the joint: the joint `j` is between
+    /// segment `j - 1` and segment `j`, and is a corner when [`smooth_joint`] refuses it. The number of
+    /// segments when there is none.
+    fn corner_from(&self, from: usize) -> usize {
+        let n = self.segs.len();
+        let corners = self.corners.get_or_init(|| {
+            let mut firsts = vec![n; n + 1];
+            let mut first = n;
+            for j in (1..n).rev() {
+                if let (Some(a), Some(b)) = (self.segs.get(j - 1), self.segs.get(j))
+                    && !smooth_joint(&a.c, &b.c)
+                {
+                    first = j;
+                }
+                if let Some(slot) = firsts.get_mut(j) {
+                    *slot = first;
+                }
+            }
+            if let Some(slot) = firsts.get_mut(0) {
+                *slot = first;
+            }
+            firsts
+        });
+        corners.get(from).copied().unwrap_or(n)
     }
 
     /// The segment `i` places on from the first, counting round a closed subpath's start.
@@ -555,7 +583,15 @@ impl<'a> Originals<'a> {
     }
 }
 
-/// Fewest and most points a run is refitted from ([`refit_run`]).
+/// The joint between `a` and the cubic `b` after it is smooth enough to merge across: the tangents agree
+/// to within about 8 degrees. A joint that is not is a corner, and stays one.
+fn smooth_joint(a: &CubicBez, b: &CubicBez) -> bool {
+    end_tangent(a).dot(start_tangent(b)) >= 0.99
+}
+
+/// Fewest and most intervals of a run that it is refitted from ([`refit_run`]): the points taken are one
+/// more than the intervals, and where the run has fewer segments than the intervals every segment is cut
+/// in equal steps, which can bring the points to 2,047 (1,023 segments, each cut in two).
 const MIN_WITNESSES: usize = 8;
 const MAX_WITNESSES: usize = 1 << 10;
 
@@ -572,12 +608,14 @@ const GALLOP_FROM: usize = 8;
 
 /// Half the width of the lens a path no longer than `along` lies in, from one end of a chord of length
 /// `chord` to the other (an ellipse with the ends as its foci): no point of the path is further than this
-/// from the chord. Infinite where a length is not a number.
+/// from the chord. Infinite where a length is not a number, or where the width is too big to be one.
 fn lens_width(along: f64, chord: f64) -> f64 {
     if !along.is_finite() || !chord.is_finite() {
         return f64::INFINITY;
     }
-    0.5 * (along * along - chord * chord).max(0.0).sqrt()
+    // The difference of the squares as a product, which does not overflow where the squares do (past 1e154).
+    let width = 0.5 * ((along - chord).max(0.0) * (along + chord)).sqrt();
+    if width.is_nan() { f64::INFINITY } else { width }
 }
 
 /// How many intervals to take of a run that a cubic with the second difference `sd` is to replace: those
@@ -673,7 +711,9 @@ fn refit_run(originals: &Originals, first: usize, count: usize, tol: f64, seed: 
 /// many as it can take, and how many it took: the number is doubled while the run still fits one
 /// cubic ([`refit_run`]), and then halved between the last that fitted and the first that did not (the
 /// run is taken to fit one cubic for a length up to a point, and not past it). A piece made by merging one
-/// original at a time costs a merge for each; this costs a few for the whole stretch.
+/// original at a time costs a merge for each; this costs a few for the whole stretch. `ahead` stops short
+/// of the first corner after the piece (a joint [`merge_pair`] refuses): a refit sees only that the cubic
+/// is within the tolerance of the run, and would round off a corner that is.
 fn extend_run(top: &Piece, ahead: usize, tol: f64, originals: &Originals, work: &mut usize) -> Option<(Piece, usize)> {
     let sd = second_difference(&top.seg.c);
     let mut try_extra = |extra: usize| -> Option<Piece> {
@@ -790,7 +830,7 @@ fn merge_pair(a: &Seg, b: &Seg, tol: f64) -> Option<(Seg, f64)> {
         return (off <= tol && along >= 0.0 && along <= len).then(|| (Seg::line(a.c.p0, b.c.p3), off));
     }
     // Only merge across (near-)smooth joints.
-    if end_tangent(&a.c).dot(start_tangent(&b.c)) < 0.99 {
+    if !smooth_joint(&a.c, &b.c) {
         return None;
     }
     // Held to the tolerance between the samples too: the cubic's error at them, how far it can be from
@@ -1480,6 +1520,8 @@ mod tests {
             );
             if let Some(most) = most {
                 assert!(bound <= most * tol, "first {first} count {count} tol {tol}: bound {bound}");
+                // What the points taken leave over what is there is a few hundredths of the tolerance.
+                assert!(bound <= from.max(to) + 0.1 * tol, "first {first} count {count} tol {tol}: bound {bound} for {from} and {to}");
             }
         }
     }
@@ -1555,5 +1597,183 @@ mod tests {
             let simpler = remove_redundant_points(&chain, 0.01);
             assert!(!simpler.elements().is_empty());
         }
+    }
+
+    /// The width of the lens is half the minor axis of the ellipse a path of the given length can reach
+    /// from one end of a chord to the other, and is still that where the squares of the lengths overflow
+    /// (past 1e154 they are infinite, and their difference was no number, and so no width at all).
+    #[test]
+    fn the_lens_width_is_the_width_where_the_squares_overflow_too() {
+        assert_eq!(lens_width(1.0, 1.0), 0.0, "a path as long as its chord is on it");
+        assert!((lens_width(5.0, 3.0) - 2.0).abs() < 1e-12, "{}", lens_width(5.0, 3.0));
+        assert_eq!(lens_width(3.0, 5.0), 0.0, "a path shorter than its chord is none: no width");
+        let (along, chord): (f64, f64) = (2e154, 1.9e154);
+        assert!((along * along).is_infinite() && (along * along - chord * chord).is_nan(), "the squares overflow");
+        let width = lens_width(along, chord);
+        let exact = 0.5 * ((along - chord) * (along + chord)).sqrt();
+        assert!(width > 1e152 && (width / exact - 1.0).abs() < 1e-12, "{width} against {exact}");
+        // A length that is not a number, or too big for a width, is an infinite one.
+        for bad in [f64::NAN, f64::INFINITY] {
+            assert_eq!(lens_width(bad, 1.0), f64::INFINITY);
+            assert_eq!(lens_width(1.0, bad), f64::INFINITY);
+        }
+        assert_eq!(lens_width(f64::MAX, 1.0), f64::INFINITY);
+        assert_eq!(lens_width(f64::MAX, f64::MAX), f64::INFINITY);
+    }
+
+    /// Two arcs a quarter circle each, the second turning `turn` degrees away from where the first arrives,
+    /// each of `n` standard arcs of a cubic: the corner is at the joint `n`.
+    fn two_arcs(n: usize, r: f64, turn: f64) -> BezPath {
+        let quarter = std::f64::consts::FRAC_PI_2;
+        let mut path = BezPath::new();
+        let arc = |path: &mut BezPath, centre: Point, from: f64| {
+            for i in 0..n {
+                let (a0, a1) = (from + quarter * i as f64 / n as f64, from + quarter * (i + 1) as f64 / n as f64);
+                let k = 4.0 / 3.0 * ((a1 - a0) / 4.0).tan() * r;
+                let at = |a: f64| centre + Vec2::new(r * a.cos(), r * a.sin());
+                let (p0, p3) = (at(a0), at(a1));
+                if path.elements().is_empty() {
+                    path.move_to(p0);
+                }
+                path.curve_to(p0 + Vec2::new(-a0.sin(), a0.cos()) * k, p3 - Vec2::new(-a1.sin(), a1.cos()) * k, p3);
+            }
+        };
+        arc(&mut path, Point::ZERO, 0.0);
+        let corner = Point::new(0.0, r);
+        let leaves = std::f64::consts::PI + turn.to_radians();
+        let centre = corner + Vec2::new(r * (leaves + quarter).cos(), r * (leaves + quarter).sin());
+        arc(&mut path, centre, (corner.y - centre.y).atan2(corner.x - centre.x));
+        path
+    }
+
+    /// The first corner at or after a joint is found from a table made once: for two arcs with a corner of
+    /// 45 degrees between them, it is the joint between them from any joint before, that joint itself,
+    /// and none (the number of segments) from any after; a smooth chain has none, and joint 0 is no joint.
+    #[test]
+    fn the_first_corner_at_or_after_a_joint_is_found_from_a_table() {
+        let segs = chain_of(&two_arcs(30, 50.0, 45.0));
+        let originals = Originals::new(&segs);
+        assert_eq!(segs.len(), 60);
+        for from in [0, 1, 17, 29, 30] {
+            assert_eq!(originals.corner_from(from), 30, "from {from}");
+        }
+        for from in [31, 45, 59, 60, 61, 1_000] {
+            assert_eq!(originals.corner_from(from), 60, "from {from}");
+        }
+        // 5 degrees is smooth enough to merge across: no corner.
+        let smooth = chain_of(&two_arcs(30, 50.0, 5.0));
+        let originals = Originals::new(&smooth);
+        assert_eq!(originals.corner_from(0), 60);
+        assert_eq!(Originals::new(&[]).corner_from(0), 0);
+    }
+
+    /// The segments `0..count` of `originals` as the piece a run of them is: refitted.
+    fn piece_of(originals: &Originals, count: usize, tol: f64) -> Piece {
+        let mut work = usize::MAX;
+        let (c, dev) = refit_run(originals, 0, count, tol, 0.0, &mut work).unwrap();
+        Piece { seg: Seg { c, line: false }, dev, first: 0, count }
+    }
+
+    /// A piece is extended by as many segments as fit, whatever the number is: not only a number a stride
+    /// of doubling reaches (the strides are halved between the last that fitted and the first that did not),
+    /// and the whole of what is ahead when it all fits though that is not one either (the last stride past
+    /// it is cut to it).
+    #[test]
+    fn a_piece_is_extended_by_as_many_segments_as_fit() {
+        let tol = 1.0;
+        let segs = chain_of(&cut_circle(2000, 1000.0));
+        let originals = Originals::new(&segs[..1500]);
+        let top = piece_of(&originals, 8, tol);
+        // How many more than the 8 make a run one cubic can follow within the tolerance (the run only
+        // gets worse as it grows).
+        let sd = second_difference(&top.seg.c);
+        let fits = |extra: usize| {
+            let mut work = usize::MAX;
+            let ratio = (8 + extra) as f64 / 8.0;
+            refit_run(&originals, 0, 8 + extra, tol, sd * ratio * ratio, &mut work).is_some_and(|(_, dev)| dev <= tol)
+        };
+        let most = (1..=1_000).take_while(|&extra| fits(extra)).count();
+        assert!(!fits(most + 1) && !fits(most + 50), "{most} is the most");
+        assert!(most > 100 && !most.is_power_of_two(), "{most} is no number to double to");
+        let mut work = usize::MAX;
+        let (longer, took) = extend_run(&top, 1_000, tol, &originals, &mut work).unwrap();
+        assert_eq!((took, longer.count, longer.first), (most, 8 + most, 0));
+        assert!(longer.dev <= tol);
+        // Fewer ahead than fit, and no power of two: all of them.
+        let ahead = 37;
+        assert!(ahead < most);
+        let (longer, took) = extend_run(&top, ahead, tol, &originals, &mut work).unwrap();
+        assert_eq!((took, longer.count), (ahead, 8 + ahead));
+        // Not one when not one fits.
+        let bad = chain_of(&two_arcs(30, 50.0, 90.0));
+        let originals = Originals::new(&bad);
+        let top = piece_of(&originals, 8, 1e-6);
+        assert!(extend_run(&top, 50, 1e-6, &originals, &mut work).is_none());
+    }
+
+    /// A refit is charged for each round of it: its points, and the segments of the run to find them in.
+    /// With a guess of the cubic that is far off it is two rounds, with one that is near it is one; and a
+    /// refit with too little work left leaves none (as the checks of a line do), so that a cheaper one after
+    /// it is not made on what a dearer one could not.
+    #[test]
+    fn a_refit_is_charged_for_each_round_and_leaves_no_work_it_could_not_pay() {
+        let segs = chain_of(&cut_circle(8000, 1000.0));
+        let originals = Originals::new(&segs);
+        let count = 3_000;
+        let big = 1usize << 40;
+        let spent = |seed: f64| {
+            work::reset();
+            let mut left = big;
+            let (c, _) = refit_run(&originals, 0, count, 1.0, seed, &mut left).unwrap();
+            (big - left, work::take(Work::Witnesses), c)
+        };
+        let (two, points, c) = spent(0.0);
+        assert_eq!(two, points * WITNESS_COST + 2 * (count / 4), "two rounds, {points} points");
+        let (one, points, _) = spent(second_difference(&c));
+        assert_eq!(one, points * WITNESS_COST + count / 4, "one round, {points} points");
+        assert!(two > one);
+        // Starved: no cheaper refit is made on what a dearer one could not.
+        for left in [0usize, 10, 1_000] {
+            let mut work = left;
+            assert!(refit_run(&originals, 0, count, 1.0, 0.0, &mut work).is_none());
+            assert_eq!(work, 0, "{left} of work");
+        }
+    }
+
+    /// The guess a merge gives its refit is the cubic's own, grown: one round, not a round at the least
+    /// and another at the points the cubic asks for.
+    #[test]
+    fn a_merge_that_is_refitted_is_refitted_in_one_round() {
+        let segs = chain_of(&cut_circle(2000, 1000.0));
+        let originals = Originals::new(&segs);
+        let tol = 0.01;
+        let (a, b) = (piece_of(&originals, 30, tol), {
+            let mut work = usize::MAX;
+            let (c, dev) = refit_run(&originals, 30, 30, tol, 0.0, &mut work).unwrap();
+            Piece { seg: Seg { c, line: false }, dev, first: 30, count: 30 }
+        });
+        work::reset();
+        let mut left = 1usize << 40;
+        let _ = merge_pieces(&a, &b, tol, &originals, &mut left);
+        let (spent, points) = (((1usize << 40) - left), work::take(Work::Witnesses));
+        assert!(points > 0, "the sum of the bounds passes the tolerance: the run is refitted");
+        assert_eq!(spent, points * WITNESS_COST + 60 / 4, "one round, {points} points");
+    }
+
+    /// Two segments are merged on 16 samples of each, as VectorCraft does: the cubic is the fit to
+    /// them, and the step is its error and the rest of its bound.
+    #[test]
+    fn a_pair_is_merged_on_sixteen_intervals_of_each() {
+        let segs = chain_of(&cut_circle(400, 100.0));
+        let (a, b) = (segs[10], segs[11]);
+        let tol = 0.5;
+        let (seg, step) = merge_pair(&a, &b, tol).unwrap();
+        let mut pts = Vec::new();
+        sample(&a.c, 16, &mut pts, true);
+        sample(&b.c, 16, &mut pts, false);
+        let between = sample_error(&a, 16, tol * 0.05).max(sample_error(&b, 16, tol * 0.05));
+        let (c, err, rest) = fit_single_bounded(&pts, start_tangent(&a.c), end_tangent(&b.c), between);
+        assert_eq!(seg.c, c);
+        assert_eq!(step, err + rest);
     }
 }

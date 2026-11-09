@@ -187,30 +187,76 @@ fn a_finely_cut_circle_comes_down_to_as_few_elements_as_a_coarsely_cut_one() {
     }
 }
 
-/// A corner between two long smooth arcs stays, with each arc in a few cubics: a run is held to the
-/// tolerance by what it is made of, so one that takes in the corner is refused however many pieces it has.
-/// Two arcs of radius 500, a quarter circle each, the second turning away from the first by 60 degrees
-/// where it starts.
+/// Two arcs of radius `r`, a quarter circle each, the second turning away from the first by `turn`
+/// degrees where it starts: they are the arcs of the path, and where they meet.
+fn two_arcs_with_a_corner(r: f64, turn: f64) -> ([Arc; 2], Point) {
+    let quarter = std::f64::consts::FRAC_PI_2;
+    let first: Arc = (r, (0.0, 0.0), 0.0, quarter);
+    // The first arrives at (0, r) going along -x. The second leaves it `turn` degrees to the left of that,
+    // and curves left too: its centre is r to the left of where it leaves.
+    let corner = arc_point(&first, 1.0);
+    let leaves = std::f64::consts::PI + turn.to_radians();
+    let centre = (corner.x + r * (leaves + quarter).cos(), corner.y + r * (leaves + quarter).sin());
+    let second: Arc = (r, centre, (corner.y - centre.1).atan2(corner.x - centre.0), quarter);
+    ([first, second], corner)
+}
+
+/// The two arcs as one path, each in `n` cubics.
+fn two_arcs_path(arcs: &[Arc; 2], n: usize) -> BezPath {
+    let mut path = cut_arc(&arcs[0], n);
+    path.extend(cut_arc(&arcs[1], n).iter().skip(1));
+    path
+}
+
+/// A corner between two long smooth arcs stays, with each arc in a few cubics: the refit of a run is
+/// held to the tolerance, and a corner is rounded off by less than that, so a run is not taken past a joint
+/// the merge of two cubics refuses (the tangents there more than 8 degrees apart) however many pieces it has.
+/// Two arcs of radius 500, a quarter circle each, the second turning away from the first by 20, 45, 60 and
+/// 120 degrees where it starts: at 45 degrees the result had no anchor within 0.196 of the corner at a
+/// tolerance of 0.1, and at 20 degrees none within 0.98.
 #[test]
 fn a_corner_between_two_finely_cut_arcs_is_kept() {
-    let quarter = std::f64::consts::FRAC_PI_2;
-    let first: Arc = (500.0, (0.0, 0.0), 0.0, quarter);
-    // The first arrives at (0, 500) going along -x. The second leaves it 60 degrees to the left of that, and
-    // curves left too: its centre is 500 to the left of where it leaves.
-    let corner = arc_point(&first, 1.0);
-    let leaves = std::f64::consts::PI + std::f64::consts::FRAC_PI_3;
-    let centre = (corner.x + 500.0 * (leaves + quarter).cos(), corner.y + 500.0 * (leaves + quarter).sin());
-    let second: Arc = (500.0, centre, (corner.y - centre.1).atan2(corner.x - centre.0), quarter);
-    let mut both = cut_arc(&first, 4_000);
-    both.extend(cut_arc(&second, 4_000).iter().skip(1));
     let tol = 0.1;
-    let simpler = remove_redundant_points(&both, tol);
-    let curves = simpler.segments().count();
-    assert!(curves <= 6, "{curves} curves: {simpler:?}");
-    let ends: Vec<Point> = simpler.segments().map(|s| kurbo::ParamCurve::eval(&s, 1.0)).collect();
-    assert!(ends.iter().any(|p| p.distance(corner) < 1e-9), "no curve ends at the corner: {ends:?}");
-    let (out, back) = arcs_deviation(&simpler, &[first, second]);
-    assert!(out <= tol && back <= tol, "the result is {out} from the arcs and they {back} from it");
+    for turn in [20.0, 45.0, 60.0, 120.0] {
+        let (arcs, corner) = two_arcs_with_a_corner(500.0, turn);
+        let simpler = remove_redundant_points(&two_arcs_path(&arcs, 4_000), tol);
+        let curves = simpler.segments().count();
+        assert!(curves <= 6, "{turn} degrees: {curves} curves: {simpler:?}");
+        let ends: Vec<Point> = simpler.segments().map(|s| kurbo::ParamCurve::eval(&s, 1.0)).collect();
+        assert!(ends.iter().any(|p| p.distance(corner) < 1e-9), "{turn} degrees: no curve ends at the corner: {ends:?}");
+        let (out, back) = arcs_deviation(&simpler, &arcs);
+        assert!(out <= tol && back <= tol, "{turn} degrees: the result is {out} from the arcs and they {back} from it");
+    }
+}
+
+/// The largest distance of 200 points of each segment of `from` to `to`.
+fn outline_deviation(from: &BezPath, to: &BezPath) -> f64 {
+    use kurbo::{ParamCurve, ParamCurveNearest};
+    let mut dev: f64 = 0.0;
+    for seg in from.segments() {
+        for i in 0..=200 {
+            let q = seg.eval(f64::from(i) / 200.0);
+            dev = dev.max(to.segments().map(|s| s.nearest(q, 1e-9).distance_sq).fold(f64::INFINITY, f64::min).sqrt());
+        }
+    }
+    dev
+}
+
+/// The spine a stroke is made of is simplified by `remove_redundant_points` (to 1e-3), and keeps a corner
+/// of two long arcs with it: the miter and round joins of a stroke of width 2 of arcs of radius 5, in 4,000
+/// cubics each, are those of the same arcs in 8 (the outline was 0.076 from it, for a corner of 45 degrees
+/// with a miter join, and 0.017 for one of 20, where the spine had lost the corner).
+#[test]
+fn a_stroke_of_a_finely_cut_spine_has_the_corner_of_a_coarsely_cut_one() {
+    for turn in [20.0, 45.0] {
+        let (arcs, _) = two_arcs_with_a_corner(5.0, turn);
+        let (fine, coarse) = (two_arcs_path(&arcs, 4_000), two_arcs_path(&arcs, 8));
+        for join in [Join::Miter, Join::Round] {
+            let (a, b) = (outline_stroke(&fine, 2.0, Cap::Butt, join, 10.0), outline_stroke(&coarse, 2.0, Cap::Butt, join, 10.0));
+            let dev = outline_deviation(&a, &b).max(outline_deviation(&b, &a));
+            assert!(dev <= 0.003, "{turn} degrees, {join:?}: the strokes are {dev} apart");
+        }
+    }
 }
 
 // ---- interior points
