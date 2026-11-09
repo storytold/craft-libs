@@ -193,6 +193,10 @@ local patches listed below. `.cargo_vcs_info.json` names the commit it was packa
 `824b0791a750f7b27b8edcbb6c6244d0e629875e`. That commit is not in the GitHub repository the manifest
 names, which is archived; its README says development moved off GitHub.
 
+local patches listed below. `.cargo_vcs_info.json` names the commit it was packaged from,
+`824b0791a750f7b27b8edcbb6c6244d0e629875e`. That commit is not in the GitHub repository the manifest
+names, which is archived; its README says development moved off GitHub.
+
 Every file here except this one, `SOURCE.json` and the patched files below is byte for byte the file
 in the `.crate` archive. `SOURCE.json` records the hash of the `.crate` download
 (`source_archive_sha256`) and, for every file kept, the hash in the package (`source_sha256`) and the
@@ -243,6 +247,7 @@ Every change here updates this table and `SOURCE.json` in the same commit.
 | `CurveOrder` records `Metrics` entries only with the new `metrics` feature, which is off by default; without it `metrics.entries` stays empty. The `curve_metrics` example requires the feature | `Craft patch (metrics opt-in)` | `src/curve/mod.rs`, `Cargo.toml` | `curve::test::crossing_cubics_metrics_follow_the_feature`, `curve::test::crossing_cubics_order_does_not_depend_on_metrics`, `curve::test::crossing_cubics_metrics_record_the_recursion_depth`, `curve::test::curve_order_no_overlap` |
 
 Every change here updates this table and `SOURCE.json` in the same commit.
+| `src/topology.rs` | `is_disjoint_tags` no longer calls `dbg!`, which printed two lines to stderr for every output segment on every call, in release builds too. It loops over `segment_indices()` instead of every winding entry, so it skips the segments that merging coincident segments deleted. The `disjoint_skips_merged_segments` test covers the second change. |
 
 `omitted_files` lists the 43 files of the package left out here, with their hashes:
 
