@@ -134,7 +134,13 @@ fn current_at(app: &App, exe: &Path, opted_in: bool) -> Option<Install> {
     if is_development_build(&exe, opted_in) {
         return None;
     }
-    detect(app, &exe).filter(|install| opted_in || can_replace(install))
+    detect(app, &exe).filter(|install| opted_in || can_replace_all(app, install))
+}
+
+/// Whether the update can replace `install` and, for a standalone copy, the `share` files it
+/// replaces along with the program.
+fn can_replace_all(app: &App, install: &Install) -> bool {
+    can_replace(install) && !matches!(install, Install::Standalone(file) if !can_replace_share(app, file))
 }
 
 /// Cargo's cache-directory marker at the root of a target directory.
@@ -228,6 +234,40 @@ fn can_replace_file(file: &Path) -> bool {
     use rustix::fs::Access;
 
     file.parent().is_none_or(|folder| !refused(folder, Access::WRITE_OK | Access::EXEC_OK))
+}
+
+/// The prefix of a program in `bin`, when `bin` is a folder named `bin` with the app's
+/// `share/<id>` folder next to it. The update then also replaces the release's `share` files
+/// under that prefix.
+#[cfg_attr(not(unix), allow(dead_code))]
+fn prefix_with_share<'a>(app: &App, bin: &'a Path) -> Option<&'a Path> {
+    bin.parent().filter(|prefix| bin.file_name().is_some_and(|n| n == "bin") && prefix.join("share").join(app.id).is_dir())
+}
+
+/// Whether the update can replace the `share` files of the standalone copy at `file`, in the
+/// folders a release writes to. A copy with no `share/<id>` folder has no such files.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn can_replace_share(app: &App, file: &Path) -> bool {
+    use rustix::fs::Access;
+
+    let Some(prefix) = file.parent().and_then(|bin| prefix_with_share(app, bin)) else { return true };
+    share_folders(app, &prefix.join("share")).iter().all(|folder| !refused(folder, Access::WRITE_OK | Access::EXEC_OK))
+}
+
+/// The folders under `share` that a release's files go in: the app's own folder, `applications`
+/// and `icons/hicolor`, or the nearest existing parent of one that doesn't exist yet.
+#[cfg_attr(not(any(target_os = "macos", target_os = "linux")), allow(dead_code))]
+fn share_folders(app: &App, share: &Path) -> Vec<PathBuf> {
+    [share.join(app.id), share.join("applications"), share.join("icons/hicolor")]
+        .iter()
+        .filter_map(|folder| folder.ancestors().find(|p| p.is_dir()).map(Path::to_path_buf))
+        .collect()
+}
+
+/// Other platforms make no check here, as in [`can_replace`].
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+fn can_replace_share(_app: &App, _file: &Path) -> bool {
+    true
 }
 
 /// `access(2)`'s `_APPEND_OK`: on a directory, permission to add a subdirectory.
@@ -731,10 +771,7 @@ fn replace_from_tree(app: &App, tree: &Path, exe: &Path) -> Result<(), String> {
             moves.push((entry.path(), bin.join(&name)));
         }
     }
-    let prefix = bin.parent().filter(|_| bin.file_name().is_some_and(|n| n == "bin"));
-    if let Some(prefix) = prefix
-        && prefix.join("share").join(app.id).is_dir()
-    {
+    if let Some(prefix) = prefix_with_share(app, bin) {
         for file in plain_files(&tree.join("share"))? {
             let relative = file.strip_prefix(tree).map_err(|_| "staged file escapes the release".to_string())?;
             moves.push((file.clone(), prefix.join(relative)));
@@ -1455,6 +1492,57 @@ mod tests {
         assert!(current_at(&crate::suite::LAUNCHER, &exe, true).is_some(), "the opt-in still offers it");
         drop(guard);
         assert!(current_at(&crate::suite::LAUNCHER, &exe, false).is_some(), "the answer follows the folder's permissions");
+    }
+
+    /// The update replaces a standalone copy's `share` files too, so that folder has to be
+    /// writable as well. [`DEV_VAR`] still offers the update, to try it.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn a_standalone_copy_whose_share_folder_it_cannot_write_gets_the_download_link() {
+        if running_as_root() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let bin = dir.path().join("bin");
+        let share = dir.path().join("share").join(crate::suite::LAUNCHER.id);
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::create_dir_all(&share).unwrap();
+        let exe = bin.join(crate::suite::LAUNCHER.id);
+        std::fs::write(&exe, b"binary").unwrap();
+        let guard = ModeGuard::set(&share, 0o555);
+        assert_eq!(current_at(&crate::suite::LAUNCHER, &exe, false), None);
+        assert!(current_at(&crate::suite::LAUNCHER, &exe, true).is_some(), "the opt-in still offers it");
+        drop(guard);
+        assert!(current_at(&crate::suite::LAUNCHER, &exe, false).is_some(), "the answer follows the folder's permissions");
+    }
+
+    #[test]
+    fn share_folders_are_the_ones_a_release_writes_to() {
+        let app = &crate::suite::LAUNCHER;
+        let dir = tempfile::tempdir().unwrap();
+        let share = dir.path().join("share");
+        std::fs::create_dir_all(share.join(app.id).join("models")).unwrap();
+        std::fs::create_dir_all(share.join("icons/SomeTheme")).unwrap();
+        let mut found = share_folders(app, &share);
+        found.sort();
+        // `applications` doesn't exist, so `share` stands in for it; `hicolor` doesn't, so `icons` does.
+        let mut expected = vec![share.clone(), share.join("icons"), share.join(app.id)];
+        expected.sort();
+        assert_eq!(found, expected);
+    }
+
+    #[test]
+    fn a_prefix_counts_only_with_a_bin_folder_and_the_apps_share_folder() {
+        let app = &crate::suite::LAUNCHER;
+        let dir = tempfile::tempdir().unwrap();
+        let bin = dir.path().join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        assert_eq!(prefix_with_share(app, &bin), None, "no share folder");
+        std::fs::create_dir_all(dir.path().join("share").join(app.id)).unwrap();
+        assert_eq!(prefix_with_share(app, &bin), Some(dir.path()));
+        let other = dir.path().join("tools");
+        std::fs::create_dir_all(&other).unwrap();
+        assert_eq!(prefix_with_share(app, &other), None, "not a bin folder");
     }
 
     /// Renaming a directory into another folder needs write permission on the directory, so a
