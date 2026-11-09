@@ -722,7 +722,7 @@ $
 Define $t = (beta(y_0) - alpha(y_0)) / (beta(y_0) - alpha(y_0) + alpha(y_1) - beta(y_1))$ and set $y = y_0 + t(y_1 - y_0)$. The
 natural way to compute $y$ produces an approximation $hat(y)$ satisfying
 $
-|alpha(hat(y)) - beta(hat(y))| <= 4(epsilon + 2 epsilon_0 M) (1 + max(1/m_alpha, 1/m_beta)),
+|alpha(hat(y)) - beta(hat(y))| <= 4(epsilon + 2 epsilon_0 M) (1 + max(1/abs(m_alpha), 1/abs(m_beta))),
 $
 where $m_alpha$ and $m_beta$ are the slopes of $alpha$ and $beta$.
 ]<lem-intersection-height-error>
@@ -790,7 +790,7 @@ $
 
 If we assume that $16 (epsilon + 2 epsilon_0 M) / d <= 3$ then $epsilon_t d <= 4 epsilon + 8 epsilon_0 M$. 
 Since $d/(y_1 - y_0)$ is the difference of the inverse-slopes of $alpha$ and $beta$, it's bounded by twice
-the maximum of these inverse-slopes.
+the maximum absolute value of these inverse-slopes.
 ]
 
 Putting all this together (and handling the "chamfers" yet):
@@ -802,7 +802,7 @@ and take $delta = 64 epsilon_0 M$. If $epsilon_0 <= 1/4$ then
 - If $alpha$ $(3 delta)/4$-crosses $beta$, we can compute a crossing height $hat(y)$ such
   that
   $
-  |alpha(hat(y)) - beta(hat(y))| <= (9 delta) /16 (1 + max(1/m_alpha, 1/m_beta)).
+  |alpha(hat(y)) - beta(hat(y))| <= (9 delta) /16 (1 + max(1/abs(m_alpha), 1/abs(m_beta))).
   $
 ]
 
