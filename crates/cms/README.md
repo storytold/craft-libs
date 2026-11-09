@@ -41,6 +41,10 @@ Buffers are checked once per call, before any pixel is written.
 * `Profile::same_colors(&other)`: the same colour space whatever the encoding (every sample of
   a device grid within ΔE 0.5 through both), e.g. Photoshop's sRGB IEC61966-2.1 and the built-in
   sRGB. `content_hash()` compares bytes and suits cache keys only.
+* `Profile::named_colors()`: a named-colour profile's `ncl2` table (spot-colour libraries), with
+  names joined from prefix, root and suffix, and Lab read in the legacy 16-bit encoding it uses in
+  every profile version. `NamedColors::to_device(name, dst)` converts one into a destination
+  profile, relative colorimetric.
 
 ### Evaluation
 
