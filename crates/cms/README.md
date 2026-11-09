@@ -34,7 +34,9 @@ Buffers are checked once per call, before any pixel is written.
 * `transform::cached(src, dst, opts)`: process-wide transform cache.
 * `lutfile::parse(name, bytes)` / `lutfile::write_cube(&lut)`: `.cube`, `.3dl` and `.look` LUT
   files; `lutfile::builtin(id)` returns generated looks (`lutfile::BUILTIN`).
-* `Profile::to_bytes()`: original bytes of parsed profiles (byte-exact), or an ICC v4.3 encoding.
+* `Profile::to_bytes()`: original bytes of parsed profiles (byte-exact), or an ICC v4.3 encoding
+  with its profile ID set.
+* `profile_id(bytes)`: the MD5 profile ID of any profile, to check a stored one.
 * `Builtin::from_profile_name(desc)`: the built-in with that description (exact match);
   `Builtin::stand_in_for(desc)`: the built-in that approximates a profile a document names
   when its ICC bytes are not available (see [Selecting by profile name](#selecting-by-profile-name)).

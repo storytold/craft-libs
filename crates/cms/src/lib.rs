@@ -36,6 +36,7 @@ pub use gamut::GamutCheck;
 pub use lut3d::Lut3d;
 pub use profile::{ColorSpace, Pcs, Profile, ProfileClass};
 pub use transform::{SampleKind, Transform, TransformOptions, black_point, cached};
+pub use write::profile_id;
 
 /// ICC rendering intent.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
