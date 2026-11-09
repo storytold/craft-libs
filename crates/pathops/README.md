@@ -240,7 +240,12 @@ work of each operation is bounded before it starts, in counts the tests assert o
   1e-13 or 1e-16 (lines 2e7 to 1e10 long, ends a tolerance or ten apart), which took 25 to 41 s, are refused in 6 ms.
   Lines that lie on one line and overlap are of that kind: 250 and 500 on a diagonal (subpaths each from `(i, i)` to
   `(i + 1000, i + 1000)`) took 13 s and over a minute and a half, and are refused now, in 2 and 6 ms; level ones (the same height at
-  both ends) are not counted, for pieces of no height are not on the sweep line (250 take 16 ms, 1,000 0.3 s and 0.6 GB);
+  both ends) are not counted, for pieces of no height are not on the sweep line (250 take 16 ms, 1,000 0.3 s and 0.6 GB). An end
+  that two lines share exactly does not make them meet only there if they lie on one line: a fan of 250 segments from one point down
+  a diagonal took 11 s and down a vertical 9 s (all of them share their start and overlap), and is refused now in a few
+  milliseconds, while the same fan along a level takes 11 ms. The same line twice (both ends shared, as the closing segment of a
+  subpath of one line, or stacked copies of a shape) is not counted: its cost is in the ends at its two points (200 squares one on
+  another take 4 s);
 - a boolean operation asks its predicate once for each distinct winding of a side of a segment, and hands it a
   flag for each input. That is the winding of every input, not the set of flags it gives: shapes nested and
   wound the same way are windings 1 and 2 under the non-zero rule, which are the same flags and are asked

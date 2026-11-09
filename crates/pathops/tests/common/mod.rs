@@ -428,3 +428,60 @@ pub fn cubic_circle(n: usize, r: f64, cx: f64, cy: f64) -> BezPath {
     bp.close_path();
     bp
 }
+
+/// `n` segments from the point (0, 0) along one line, the k-th to `(k, k)` (kind 0, the diagonal), `(0, k)` (kind 1, the vertical)
+/// or `(k, 0)` (any other, level), each its own open subpath: lengths 1 to `n`, and every two share their start and overlap.
+pub fn fan_along_a_line(n: usize, kind: usize) -> BezPath {
+    let mut bp = BezPath::new();
+    for k in 1..=n {
+        let k = k as f64;
+        bp.move_to((0.0, 0.0));
+        bp.line_to(match kind {
+            0 => (k, k),
+            1 => (0.0, k),
+            _ => (k, 0.0),
+        });
+    }
+    bp
+}
+
+/// A closed square of side 100 whose sides (level and upright) are each cut into `pieces` collinear segments that touch end to end.
+pub fn square_with_cut_sides(pieces: usize) -> BezPath {
+    let at = |side: usize, i: usize| {
+        let t = 100.0 * i as f64 / pieces as f64;
+        match side {
+            0 => (t, 0.0),
+            1 => (100.0, t),
+            2 => (100.0 - t, 100.0),
+            _ => (0.0, 100.0 - t),
+        }
+    };
+    let mut bp = BezPath::new();
+    bp.move_to((0.0, 0.0));
+    for side in 0..4 {
+        for i in 1..=pieces {
+            bp.line_to(at(side, i));
+        }
+    }
+    bp.close_path();
+    bp
+}
+
+/// A closed diagonal strip, a parallelogram with its two long sides each cut into `pieces` collinear segments that touch end to end.
+pub fn strip_with_cut_sides(pieces: usize) -> BezPath {
+    let along = |from: (f64, f64), to: (f64, f64), i: usize| {
+        let t = i as f64 / pieces as f64;
+        (from.0 + (to.0 - from.0) * t, from.1 + (to.1 - from.1) * t)
+    };
+    let mut bp = BezPath::new();
+    bp.move_to((0.0, 0.0));
+    for i in 1..=pieces {
+        bp.line_to(along((0.0, 0.0), (1000.0, 1000.0), i));
+    }
+    bp.line_to((1000.0, 1010.0));
+    for i in 1..=pieces {
+        bp.line_to(along((1000.0, 1010.0), (0.0, 10.0), i));
+    }
+    bp.close_path();
+    bp
+}

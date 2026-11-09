@@ -596,4 +596,27 @@ mod tests {
             assert_eq!(at, 0, "radius {r} at {c:e}");
         }
     }
+
+    /// Straight cubics from one exact apex along one line, the same way, are not kept apart by the end they share: the cones of
+    /// the rays from the apex are the same cone, so a pair is counted as any pair that overlaps (nine), and so is a line along them.
+    /// Ones that leave the apex opposite ways, or at angles apart, meet only there.
+    #[test]
+    fn straight_cubics_from_one_apex_along_one_line_are_not_kept_apart_by_their_shared_end() {
+        let straight = |from: (f64, f64), to: (f64, f64)| {
+            let (p, q) = (Point::new(from.0, from.1), Point::new(to.0, to.1));
+            Curve::new(CubicBez::new(p, p.lerp(q, 1.0 / 3.0), p.lerp(q, 2.0 / 3.0), q))
+        };
+        let slack = 1e-6;
+        let short = straight((0.0, 0.0), (10.0, 10.0));
+        assert_eq!(cubics_cross_at_most(&short, &straight((0.0, 0.0), (20.0, 20.0)), slack), 9, "from the same point, the same way");
+        assert_eq!(cubics_cross_at_most(&straight((0.0, 0.0), (0.0, 7.0)), &straight((0.0, 0.0), (0.0, 30.0)), slack), 9, "down the vertical");
+        assert_eq!(cubics_cross_at_most(&short, &straight((10.0, 10.0), (4.0, 4.0)), slack), 9, "from the far end, back over it");
+        // Opposite ways, or end to end, or at an angle: they meet at the apex only.
+        assert_eq!(cubics_cross_at_most(&short, &straight((0.0, 0.0), (-5.0, -5.0)), slack), 0);
+        assert_eq!(cubics_cross_at_most(&short, &straight((10.0, 10.0), (20.0, 20.0)), slack), 0);
+        assert_eq!(cubics_cross_at_most(&short, &straight((0.0, 0.0), (10.0, 0.0)), slack), 0);
+        // A line from the apex along the cubic is not separated from it (the control polygon is on the line).
+        assert_eq!(line_cubic_cross_at_most(&Line::new((0.0, 0.0), (20.0, 20.0)), &short), 3);
+        assert_eq!(line_cubic_cross_at_most(&Line::new((0.0, 0.0), (-5.0, -5.0)), &short), 0);
+    }
 }

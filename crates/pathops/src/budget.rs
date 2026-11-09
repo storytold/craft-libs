@@ -795,7 +795,10 @@ enum Cross {
 /// Where the lines `a` and `b` cross, away from both their ends (by more than `slack`: segments that end at a point are counted
 /// as ends, `most_ends_at_a_point`); a pair is never taken for one that does not cross where it may:
 ///
-/// - Two lines that share an end exactly meet there and nowhere else.
+/// - Two lines that are the same line (both ends shared exactly) cross nowhere: what they cost is in their ends.
+/// - Two lines that share one end exactly meet there and nowhere else, unless they lie on one line (the rounding cannot tell them
+///   from lines that do, the last item): a fan of 250 segments from one point along one line, which share their start exactly and
+///   overlap one another, took 11 s in the sweep.
 /// - Two level lines (the heights of each end equal) are parallel, and lie along the height of the sweep line and not across it:
 ///   pieces of no height are not on the line, and what they cost is in the pairs of bounds and the searches ([`MAX_SWEEP_EVENT_WORK`]),
 ///   as it was when 250 overlapping on one line, which the sweep takes 30 ms for, were not counted. (Lines that lie on one line
@@ -808,7 +811,10 @@ enum Cross {
 ///   distance), which is what two lines apart are, or unless the parts of them that lie along one another are no longer than
 ///   the slack, which is what two lines that touch end to end are.
 fn cross_of(a: &Line, b: &Line, slack: f64) -> Cross {
-    if a.p0 == b.p0 || a.p0 == b.p1 || a.p1 == b.p0 || a.p1 == b.p1 {
+    let shared = a.p0 == b.p0 || a.p0 == b.p1 || a.p1 == b.p0 || a.p1 == b.p1;
+    // The same line twice (or the closing segment of a subpath of one line, which comes back over it): its cost is in the ends it
+    // has at its two points ([`MAX_ENDS_WORK`] prices stacked copies: 200 squares one on another took 4 s), and they cross nowhere.
+    if (a.p0 == b.p0 && a.p1 == b.p1) || (a.p0 == b.p1 && a.p1 == b.p0) {
         return Cross::No;
     }
     if a.p0.y == a.p1.y && b.p0.y == b.p1.y {
@@ -833,11 +839,16 @@ fn cross_of(a: &Line, b: &Line, slack: f64) -> Cross {
         if apart(a0, a1) || apart(b0, b1) {
             return Cross::No;
         }
-        // On one line, to the rounding, what they have in common is the part of `b` that lies along `a`: where that is no more than
-        // the slack they meet at an end (as lines that touch end to end do) and nowhere else.
+        // On one line, to the rounding, what they have in common is the part of `b` that lies along `a` (an end they share exactly
+        // is no more than where that part begins): where it is no more than the slack they meet at an end, as lines that touch end
+        // to end do, and nowhere else.
         let (t0, t1) = (w.dot(d) / la, (w + e).dot(d) / la);
         let along = t0.max(t1).min(la) - t0.min(t1).max(0.0);
         return if along + 2.0 * tol <= slack { Cross::No } else { Cross::Somewhere };
+    }
+    // Lines that are not on one line meet in one point, which is the end they share if they share one.
+    if shared {
+        return Cross::No;
     }
     let err = 16.0 * f64::EPSILON * reach * la * lb / den.abs();
     let (t, u) = (w.cross(e) / den, w.cross(d) / den);
@@ -2458,6 +2469,76 @@ mod tests {
             path
         };
         assert!(!sweep_fits([&rising]));
+    }
+
+    /// An end two lines share exactly is where they meet only if they are not on one line: a fan of segments from one point along
+    /// one line shares its start exactly and overlaps itself, and 250 of them took 11 s (a vertical one 9 s) with nothing counting
+    /// them. Lines that are the same line, lines that touch end to end from the same point, and lines that leave a point at an angle
+    /// the arithmetic can tell (1e-13 radians) meet there only.
+    #[test]
+    fn lines_from_one_point_along_one_line_are_counted_as_the_lines_that_overlap_they_are() {
+        let line = |a: (f64, f64), b: (f64, f64)| Line::new(a, b);
+        let slack = 1e-6;
+        let at = |a: &Line, b: &Line| match cross_of(a, b, slack) {
+            Cross::No => "no",
+            Cross::At { .. } => "at",
+            Cross::Somewhere => "somewhere",
+        };
+        let out = line((0.0, 0.0), (10.0, 10.0));
+        // The same direction from the same point, one longer: they overlap. Down the vertical as well.
+        assert_eq!(at(&out, &line((0.0, 0.0), (20.0, 20.0))), "somewhere");
+        assert_eq!(at(&line((0.0, 0.0), (0.0, 7.0)), &line((0.0, 0.0), (0.0, 30.0))), "somewhere");
+        // The ends shared at the far end: the same.
+        assert_eq!(at(&out, &line((10.0, 10.0), (4.0, 4.0))), "somewhere");
+        // The opposite direction from the same point, or end to end: they touch at the end only.
+        assert_eq!(at(&out, &line((0.0, 0.0), (-5.0, -5.0))), "no");
+        assert_eq!(at(&out, &line((10.0, 10.0), (20.0, 20.0))), "no");
+        // The same line, either way round (a subpath's closing segment comes back over its line): no.
+        assert_eq!(at(&out, &line((10.0, 10.0), (0.0, 0.0))), "no");
+        assert_eq!(at(&out, &line((0.0, 0.0), (10.0, 10.0))), "no");
+        // Not on one line: they meet at the end they share, whatever the angle the arithmetic can tell.
+        assert_eq!(at(&out, &line((0.0, 0.0), (10.0, 0.0))), "no");
+        let far = line((0.0, 0.0), (1e10, 1e10));
+        assert_eq!(at(&far, &line((0.0, 0.0), (1e10, 1e10 + 1e-3))), "no", "1e-13 radians");
+        // Level lines are not counted, shared end or not.
+        assert_eq!(at(&line((0.0, 3.0), (10.0, 3.0)), &line((0.0, 3.0), (20.0, 3.0))), "no");
+    }
+
+    /// The fans, as segments of a sweep: from the point (0, 0), the k-th to `(k, k)` (down the diagonal), `(0, k)` (down the vertical)
+    /// or `(k, 0)` (level). 300 of the first two are 300 x 299² of work, over 2^24, and refused; 250 are not; the level ones are
+    /// not counted. Nothing else refuses them: they have 300 ends at the point, under the 512.
+    #[test]
+    fn a_fan_of_segments_along_one_line_is_held_to_its_work() {
+        // `kind` 0 goes down the diagonal, 1 down the vertical, 2 along a level.
+        let fan = |n: usize, kind: usize| {
+            let mut path = BezPath::new();
+            for k in (1..=n).map(|k| k as f64) {
+                path.move_to((0.0, 0.0));
+                path.line_to([(k, k), (0.0, k), (k, 0.0)][kind]);
+            }
+            path
+        };
+        let lifted = Limits { crossing_work: usize::MAX, ..Limits::default() };
+        for (kind, name) in [(0, "diagonal"), (1, "vertical")] {
+            assert!(sweep_fits([&fan(250, kind)]), "250 on the {name}");
+            assert!(!sweep_fits([&fan(300, kind)]), "300 on the {name}");
+            assert!(with_limits(lifted, || sweep_fits([&fan(300, kind)])), "300 on the {name}: nothing else refuses them");
+        }
+        assert!(sweep_fits([&fan(500, 2)]), "500 level");
+    }
+
+    /// Copies of one shape one on another share both ends of every edge, and are priced by the ends at their corners (200 squares
+    /// are 4 corners of 400 ends, 2e9 nanoseconds, and took 4 s), not as lines that overlap: 200 of them are admitted by the count of
+    /// lines, as they were.
+    #[test]
+    fn copies_of_a_shape_one_on_another_are_priced_by_their_ends() {
+        let mut copies = BezPath::new();
+        for _ in 0..200 {
+            copies.extend(crate::testutil::polyline(&[(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)], true).iter());
+        }
+        assert!(sweep_fits([&copies]));
+        let tight = Limits { crossing_work: 1000, ..Limits::default() };
+        assert!(with_limits(tight, || sweep_fits([&copies])), "not one of the pairs is work");
     }
 
     /// The class of lines too near parallel to be placed is the rounding of the product of their directions and no more: 300

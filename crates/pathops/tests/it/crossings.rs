@@ -6,7 +6,9 @@
 use craft_pathops::*;
 use std::time::{Duration, Instant};
 
-use crate::common::{cubic_circle, nearly_parallel_lines, stacked_pies, stacked_stars, star_at};
+use crate::common::{
+    cubic_circle, fan_along_a_line, nearly_parallel_lines, square_with_cut_sides, stacked_pies, stacked_stars, star_at, strip_with_cut_sides,
+};
 
 const NZ: FillRule = FillRule::NonZero;
 
@@ -130,4 +132,35 @@ fn a_circle_of_many_cubics_is_made_wherever_it_is() {
         let area = try_area(&cubic_circle(100_000, 1_000.0, x, y), NZ).unwrap_or_else(|e| panic!("circle at {x}: {e:?}"));
         assert!((area - exact).abs() < 1e-3 * exact, "circle at {x}: {area}");
     }
+}
+
+/// Segments that share an end exactly were taken for segments that meet there only, so a fan of them along one line (every two share
+/// their start and overlap) passed every limit: 250 down the diagonal took 11 s and down the vertical 9 s (500 are over the limit on
+/// the ends at one point, which refuses them at once). Overlapping on one line they are counted as crossing somewhere along.
+#[test]
+fn fans_of_segments_along_one_line_are_refused_before_the_sweep() {
+    refused_at_once(&fan_along_a_line(250, 0), "a fan of 250 segments down the diagonal");
+    refused_at_once(&fan_along_a_line(250, 1), "a fan of 250 segments down the vertical");
+    refused_at_once(&fan_along_a_line(256, 0), "a fan of 256 segments down the diagonal");
+}
+
+/// What is not counted stays admitted: a fan along one level (pieces of no height are not on the sweep line: 250 take 11 ms), the
+/// same square or polygon stacked on itself (coincident edges share both ends, and cost what the ends at their corners cost), and
+/// sides cut into many segments that meet end to end on one line (level, upright and diagonal).
+#[test]
+fn what_meets_at_an_end_on_one_line_without_overlapping_stays_admitted() {
+    let start = Instant::now();
+    let level = try_area(&fan_along_a_line(250, 2), NZ).expect("a fan along one level");
+    assert!(level.abs() < 1e-9, "{level}");
+    assert!(start.elapsed() < Duration::from_secs(20), "{:?}", start.elapsed());
+    let square = try_area(&square_with_cut_sides(2_000), NZ).expect("a square whose sides are cut in 2,000");
+    assert!((square - 1e4).abs() < 1e-6, "{square}");
+    let strip = try_area(&strip_with_cut_sides(2_000), NZ).expect("a strip whose long sides are cut in 2,000");
+    assert!((strip - 1e4).abs() < 1.0, "{strip}");
+    let mut copies = kurbo::BezPath::new();
+    for _ in 0..100 {
+        copies.extend(crate::common::rectangle(kurbo::Rect::new(0.0, 0.0, 10.0, 10.0)).iter());
+    }
+    let area = try_area(&copies, NZ).expect("100 squares one on another");
+    assert!(area.is_finite() && area > 0.0, "{area}");
 }
