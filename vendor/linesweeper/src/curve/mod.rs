@@ -1426,7 +1426,10 @@ fn intersect_cubics_rec(
 /// A decomposition of a cubic Bezier into almost-horizontal and not-almost-horizontal pieces.
 #[derive(Clone, Debug, Default)]
 pub struct AlmostHorizontalDecomposition {
-    pieces: ArrayVec<CubicParams, 6>,
+    // Craft patch (inline pieces): up to two pieces are stored inline and more
+    // go on the heap. `Segments` stores one decomposition per segment, so this
+    // size is paid for every segment of the input.
+    pieces: SmallVec<[CubicParams; 2]>,
 }
 
 impl AlmostHorizontalDecomposition {
@@ -1483,7 +1486,7 @@ impl AlmostHorizontalDecomposition {
         let mut last_y = c.p0.y;
         let mut last_end = 0.0;
         let orig_c = c;
-        let mut ret = ArrayVec::default();
+        let mut ret: SmallVec<[CubicParams; 2]> = SmallVec::new();
         for (_, end, order) in subdivision.iter(0.0) {
             let start = last_end;
             // If there's no actual subdivision, skip the subsegment operation.
@@ -2003,6 +2006,47 @@ mod test {
                 order: Order::Ish
             }]
         );
+    }
+
+    // Craft patch (inline pieces) tests: a decomposition is no larger than two
+    // inline pieces, and one with more pieces than that keeps all of them.
+    #[test]
+    fn horizontal_decomposition_stores_two_pieces_inline() {
+        assert!(
+            std::mem::size_of::<AlmostHorizontalDecomposition>()
+                <= 2 * std::mem::size_of::<CubicParams>() + 2 * std::mem::size_of::<usize>()
+        );
+    }
+
+    #[test]
+    fn horizontal_decomposition_keeps_every_piece() {
+        let cases = [
+            (
+                CubicBez::new((0.0, 0.0), (10.0, 10.0), (20.0, 20.0), (30.0, 30.0)),
+                1,
+            ),
+            (
+                CubicBez::new((0.0, 0.0), (10.0, 10.0), (20.0, 20.0), (500.0, 30.0)),
+                2,
+            ),
+            (
+                CubicBez::new((0.0, 0.0), (2000.0, 10.0), (-1000.0, 20.0), (1000.0, 30.0)),
+                5,
+            ),
+            (
+                CubicBez::new((0.0, 0.0), (2000.0, 0.0), (-1000.0, 30.0), (1000.0, 30.0)),
+                5,
+            ),
+        ];
+        for (c, count) in cases {
+            let decomp = AlmostHorizontalDecomposition::from_monotone_cubic(c);
+            assert_eq!(decomp.pieces.len(), count);
+            assert_eq!(decomp.pieces[0].c.p0, c.p0);
+            assert_eq!(decomp.pieces[count - 1].c.p3, c.p3);
+            for pair in decomp.pieces.windows(2) {
+                assert_eq!(pair[0].c.p3.y, pair[1].c.p0.y);
+            }
+        }
     }
 
     // This test recurses a bit too deeply. The two curves are quite close,
