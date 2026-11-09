@@ -446,8 +446,13 @@ pub fn analyze(code: &[u8]) -> Result<EvmInterface, FormatError> {
         warnings.push("no selector extraction (CALLDATALOAD then SHR/DIV/AND) was seen; matches below are less certain".into());
     }
 
-    // CALLVALUE check before the dispatcher: CALLVALUE DUP1 ISZERO PUSH JUMPI.
-    let callvalue_before = ins.iter().take(disp_start).any(|i| i.op == 0x34);
+    // Only a guard on the straight-line entry path can apply to every selector.
+    let callvalue_before = ins
+        .iter()
+        .take(disp_start)
+        .enumerate()
+        .take_while(|(_, i)| !matches!(i.op, 0x00 | 0x56 | 0x57 | 0xf3 | 0xfd | 0xfe | 0xff))
+        .any(|(k, i)| i.op == 0x34 && rejects_value(body, &ins, k, &index_of));
 
     let mut functions: Vec<EvmFunction> = Vec::new();
     let mut splits = 0usize;
@@ -620,7 +625,7 @@ fn payability(code: &[u8], ins: &[Ins], start: usize, index_of: &dyn Fn(usize) -
     for _ in 0..48 {
         let Some(i) = ins.get(k) else { break };
         match i.op {
-            0x34 => return ("nonpayable", format!("checks CALLVALUE at {:#x}", i.off)),
+            0x34 if rejects_value(code, ins, k, index_of) => return ("nonpayable", format!("rejects nonzero CALLVALUE at {:#x}", i.off)),
             0x56 => {
                 let target = k.checked_sub(1).and_then(|p| ins.get(p)).filter(|p| is_push(p.op)).and_then(|p| imm_u64(code, p));
                 match target.and_then(|t| index_of(usize::try_from(t).ok()?)) {
@@ -633,7 +638,8 @@ fn payability(code: &[u8], ins: &[Ins], start: usize, index_of: &dyn Fn(usize) -
                 }
             }
             0x57 => return ("unknown", "branches before any CALLVALUE check".into()),
-            0x00 | 0xf3 | 0xfd | 0xfe | 0xff | 0x35 | 0x37 | 0x54 | 0x55 | 0xf1 | 0xf4 | 0xfa | 0xa0..=0xa4 => {
+            0xfd | 0xfe => return ("unknown", "halts with an error before any CALLVALUE check".into()),
+            0x00 | 0xf3 | 0xff | 0x35 | 0x37 | 0x54 | 0x55 | 0xf1 | 0xf4 | 0xfa | 0xa0..=0xa4 => {
                 return ("payable", format!("reaches {} at {:#x} without a CALLVALUE check", mnemonic(i.op), i.off));
             }
             _ => {}
@@ -641,6 +647,26 @@ fn payability(code: &[u8], ins: &[Ins], start: usize, index_of: &dyn Fn(usize) -
         k += 1;
     }
     ("unknown", "no CALLVALUE check in the first instructions".into())
+}
+
+/// CALLVALUE only reads the payment. Recognize a direct test that sends the nonzero path
+/// to a rejection, allowing the common DUP1 that preserves the original value for cleanup.
+fn rejects_value(code: &[u8], ins: &[Ins], k: usize, index_of: &dyn Fn(usize) -> Option<usize>) -> bool {
+    let mut next = k + 1;
+    if ins.get(next).is_some_and(|i| i.op == 0x80) {
+        next += 1;
+    }
+    let jumps_when_zero = ins.get(next).is_some_and(|i| i.op == 0x15);
+    next += usize::from(jumps_when_zero);
+    let Some(push) = ins.get(next).filter(|i| is_push(i.op)) else { return false };
+    if ins.get(next + 1).is_none_or(|i| i.op != 0x57) {
+        return false;
+    }
+    let Some(target) = imm_u64(code, push).and_then(|v| usize::try_from(v).ok()).and_then(index_of) else { return false };
+    if ins.get(target).is_none_or(|i| i.op != 0x5b) {
+        return false;
+    }
+    reverts_soon(code, ins, if jumps_when_zero { next + 2 } else { target }, index_of)
 }
 
 fn reverts_soon(code: &[u8], ins: &[Ins], mut k: usize, index_of: &dyn Fn(usize) -> Option<usize>) -> bool {
@@ -740,7 +766,32 @@ mod tests {
         assert_eq!(r.style, "vyper-like");
         assert_eq!(r.functions[0].selector, "0x12345678");
         assert_eq!(r.functions[0].bytecode_offset, body);
-        assert_eq!(r.functions[0].mutability, "nonpayable");
+        assert_eq!(r.functions[0].mutability, "payable", "ISZERO followed by STOP never rejects payment");
+    }
+
+    #[test]
+    fn nonpayable_needs_a_rejecting_nonzero_branch() {
+        fn dispatch(prefix: &[u8]) -> EvmInterface {
+            let mut code = prefix.to_vec();
+            code.extend([0x5f, 0x35, 0x60, 0xe0, 0x1c, 0x63, 1, 2, 3, 4, 0x14, 0x60]);
+            code.extend([(code.len() + 3) as u8, 0x57, 0x00, 0x5b, 0x00]);
+            analyze(&code).unwrap()
+        }
+        let read_only = dispatch(&[0x34, 0x50]); // CALLVALUE POP
+        assert!(!read_only.callvalue_check_before_dispatch);
+        assert_eq!(read_only.functions[0].mutability, "payable");
+        let guard = dispatch(&[0x34, 0x80, 0x15, 0x60, 9, 0x57, 0x5f, 0x80, 0xfd, 0x5b, 0x50]);
+        assert!(guard.callvalue_check_before_dispatch);
+        assert_eq!(guard.functions[0].mutability, "nonpayable");
+        // The other common form jumps to REVERT for a nonzero value and otherwise skips it.
+        let direct = dispatch(&[0x34, 0x60, 7, 0x57, 0x60, 11, 0x56, 0x5b, 0x5f, 0x80, 0xfd, 0x5b]);
+        assert!(direct.callvalue_check_before_dispatch);
+        // Reversing that conditional rejects zero-value calls, not payments.
+        let reversed = dispatch(&[0x34, 0x15, 0x60, 8, 0x57, 0x60, 12, 0x56, 0x5b, 0x5f, 0x80, 0xfd, 0x5b]);
+        assert!(!reversed.callvalue_check_before_dispatch);
+        // An unconditional jump bypasses the otherwise valid guard before the dispatcher.
+        let bypassed = dispatch(&[0x60, 12, 0x56, 0x34, 0x80, 0x15, 0x60, 12, 0x57, 0x5f, 0x80, 0xfd, 0x5b]);
+        assert!(!bypassed.callvalue_check_before_dispatch);
     }
 
     #[test]
