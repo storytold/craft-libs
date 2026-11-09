@@ -63,6 +63,8 @@ pub enum Error {
     InvalidConfig(String),
     #[error("input frame planes too small for the configured size")]
     BadFrame,
+    #[error("presentation times must increase by a constant interval when B-frames are enabled")]
+    BadTimestamp,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -285,6 +287,8 @@ pub struct Encoder {
     dts_offset: Option<i64>,
     /// First two presentation times (to derive the frame interval).
     all_pts: Vec<i64>,
+    last_pts: Option<i64>,
+    pts_step: Option<i64>,
     held: Vec<Packet>,
     frame_pool: Vec<Frame>,
     hpel_pool: Vec<[picture::Plane; 3]>,
@@ -533,6 +537,8 @@ impl Encoder {
             display_pts: VecDeque::new(),
             dts_offset: None,
             all_pts: Vec::new(),
+            last_pts: None,
+            pts_step: None,
             held: Vec::new(),
             frame_pool: Vec::new(),
             hpel_pool: Vec::new(),
@@ -597,13 +603,15 @@ impl Encoder {
 
     /// Encode one picture. Returns zero or more packets in decoding order, or
     /// [`Error::BadFrame`] if the planes are smaller than the configured size (same as
-    /// [`Encoder::try_encode`]).
+    /// [`Encoder::try_encode`]), or [`Error::BadTimestamp`] if B-frames are enabled and `pts` does not
+    /// advance by the same positive interval as the previous pictures.
     pub fn encode(&mut self, frame: &YuvFrame, pts: i64) -> Result<Vec<Packet>, Error> {
         self.try_encode(frame, pts)
     }
 
     pub fn try_encode(&mut self, frame: &YuvFrame, pts: i64) -> Result<Vec<Packet>, Error> {
         let src = self.import(frame)?;
+        self.check_pts(pts)?;
         let use_aq = self.cfg.aq_strength > 0.0 && !matches!(self.cfg.rate, RateControl::Qp(_));
         let (mbw, mbh, strength) = (self.params.mbw, self.params.mbh, self.cfg.aq_strength);
         let prev = self.prev_lowres.take();
@@ -653,6 +661,23 @@ impl Encoder {
         self.release(out, true)
     }
 
+    /// With B-frames the decoding timestamps are the presentation times shifted by one frame interval
+    /// (see [`Self::release`]), which keeps `dts <= pts` only for a constant interval. Reject anything
+    /// else rather than emit a stream no muxer can use. Without B-frames any increasing times are fine.
+    fn check_pts(&mut self, pts: i64) -> Result<(), Error> {
+        if self.cfg.bframes == 0 {
+            return Ok(());
+        }
+        if let Some(last) = self.last_pts {
+            let step = pts.checked_sub(last).filter(|&d| d > 0).ok_or(Error::BadTimestamp)?;
+            if *self.pts_step.get_or_insert(step) != step {
+                return Err(Error::BadTimestamp);
+            }
+        }
+        self.last_pts = Some(pts);
+        Ok(())
+    }
+
     /// Assign decoding timestamps. The k-th coded picture gets the k-th smallest presentation time minus the
     /// reordering delay (one frame interval when B-frames are enabled); packets are held back until that interval is known.
     fn release(&mut self, out: Vec<Packet>, flushing: bool) -> Vec<Packet> {
@@ -691,12 +716,11 @@ impl Encoder {
     fn import(&mut self, f: &YuvFrame) -> Result<Frame, Error> {
         let (w, h) = (self.cfg.width as usize, self.cfg.height as usize);
         let (cw, ch) = (w / 2, h / 2);
-        if f.y_stride < w
-            || f.uv_stride < cw
-            || f.y.len() < f.y_stride * (h - 1) + w
-            || f.u.len() < f.uv_stride * (ch - 1) + cw
-            || f.v.len() < f.uv_stride * (ch - 1) + cw
-        {
+        // `stride * (rows - 1) + width`, without overflow: a hostile stride must be an error, not a wrap.
+        let need = |stride: usize, width: usize, rows: usize| stride.checked_mul(rows - 1)?.checked_add(width);
+        let fits =
+            |plane: &[u8], stride: usize, width: usize, rows: usize| stride >= width && need(stride, width, rows).is_some_and(|n| plane.len() >= n);
+        if !(fits(f.y, f.y_stride, w, h) && fits(f.u, f.uv_stride, cw, ch) && fits(f.v, f.uv_stride, cw, ch)) {
             return Err(Error::BadFrame);
         }
         let mut fr = self.new_frame();
@@ -1053,5 +1077,55 @@ mod tests {
         assert_eq!(parsed.sps.len(), 1);
         assert_eq!(parsed.pps.len(), 1);
         assert_eq!(parsed.to_bytes(), params.extradata);
+    }
+
+    fn grey(w: usize, h: usize) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
+        (vec![128; w * h], vec![128; w * h / 4], vec![128; w * h / 4])
+    }
+
+    #[test]
+    fn overflowing_strides_are_bad_frames_not_panics() {
+        let mut enc = Encoder::new(EncoderConfig::new(4, 4, 30, 1)).unwrap();
+        let (y, u, v) = grey(4, 4);
+        // `y_stride * 3 + 4` wraps to 3 with unchecked arithmetic and would pass the length check.
+        let f = YuvFrame { y: &y, u: &u, v: &v, y_stride: usize::MAX / 3, uv_stride: 2 };
+        assert!(matches!(enc.encode(&f, 0), Err(Error::BadFrame)));
+        let f = YuvFrame { y: &y, u: &u, v: &v, y_stride: 4, uv_stride: usize::MAX };
+        assert!(matches!(enc.encode(&f, 0), Err(Error::BadFrame)));
+    }
+
+    fn b_frame_encoder() -> Encoder {
+        let mut cfg = EncoderConfig::new(16, 16, 30, 1);
+        cfg.bframes = 2;
+        cfg.scenecut = false;
+        Encoder::new(cfg).unwrap()
+    }
+
+    #[test]
+    fn variable_intervals_with_b_frames_are_rejected() {
+        let mut enc = b_frame_encoder();
+        let (y, u, v) = grey(16, 16);
+        let f = YuvFrame { y: &y, u: &u, v: &v, y_stride: 16, uv_stride: 8 };
+        assert!(enc.encode(&f, 0).is_ok());
+        assert!(enc.encode(&f, 1).is_ok());
+        // 1 -> 100 breaks the interval that fixes the DTS offset.
+        assert!(matches!(enc.encode(&f, 100), Err(Error::BadTimestamp)));
+        // A repeated or backwards time is no better.
+        assert!(matches!(enc.encode(&f, 1), Err(Error::BadTimestamp)));
+    }
+
+    #[test]
+    fn constant_intervals_with_b_frames_keep_dts_valid() {
+        let mut enc = b_frame_encoder();
+        let (y, u, v) = grey(16, 16);
+        let f = YuvFrame { y: &y, u: &u, v: &v, y_stride: 16, uv_stride: 8 };
+        let mut pkts = Vec::new();
+        for pts in 0..8 {
+            pkts.extend(enc.encode(&f, pts * 3).unwrap());
+        }
+        pkts.extend(enc.flush());
+        assert_eq!(pkts.len(), 8);
+        assert!(pkts.iter().all(|p| p.dts <= p.pts), "dts after pts: {:?}", pkts.iter().map(|p| (p.pts, p.dts)).collect::<Vec<_>>());
+        assert!(pkts.windows(2).all(|w| w[0].dts < w[1].dts), "dts must increase in decoding order");
     }
 }
