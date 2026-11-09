@@ -9,7 +9,7 @@ use kurbo::{BezPath, CubicBez, ParamCurve, PathSeg, Point, Vec2};
 use crate::budget::fits_elements;
 use crate::fit::{
     chord_distance, end_tangent, fit_cubics, fit_single_bounded, is_straight, measured_arclen, polygon_length, sample, second_difference,
-    start_tangent,
+    start_tangent, unit,
 };
 use crate::path::{Seg, Sub, segs_to_bezpath, subs};
 use crate::work::{self, Work};
@@ -103,7 +103,7 @@ fn turn_deg(a: &Seg, b: &Seg) -> f64 {
 /// so does every run left when the samples taken, smoothed and fitted add up to [`FIT_WORK`].
 pub fn simplify_with(path: &BezPath, opts: &SimplifyOptions) -> BezPath {
     let limits = crate::budget::limits();
-    simplify_within(path, opts, &mut Fit { work: limits.fit_work, max_points: limits.fit_points })
+    simplify_within(path, opts, &mut Fit::new(limits.fit_work, limits.fit_points))
 }
 
 /// [`simplify_with`] within the limits `fit`.
@@ -120,13 +120,32 @@ fn simplify_within(path: &BezPath, opts: &SimplifyOptions, fit: &mut Fit) -> Bez
     out
 }
 
-/// What a simplify may still spend, and the most points it samples from one run of segments.
+/// What a simplify may still spend, the most points it samples from one part of a run of segments, and what it has made so far.
 struct Fit {
     work: usize,
     max_points: usize,
+    /// The segments made by the fits and the lines of the whole call so far (the pieces that stay as they were are not counted),
+    /// charged as they are or may be made, and held to [`crate::Limits::elements`] in all, over every run of every subpath ([`Fit::room`]).
+    made: usize,
 }
 
 impl Fit {
+    /// A fit with `work` to spend, parts of at most `max_points` samples, and nothing made yet.
+    fn new(work: usize, max_points: usize) -> Self {
+        Self { work, max_points, made: 0 }
+    }
+
+    /// How many more segments the call may make: [`crate::Limits::elements`] less what it has made.
+    fn room(&self) -> usize {
+        crate::budget::limits().elements.saturating_sub(self.made)
+    }
+
+    /// The most samples a part may hold: [`Fit::max_points`], and not more than there is room to make segments for (a refit has
+    /// fewer segments than it has samples).
+    fn part_size(&self) -> usize {
+        self.max_points.min(self.room())
+    }
+
     /// Spends `n`, or all that is left (and says so) when that is not enough.
     fn charge(&mut self, n: usize) -> bool {
         match self.work.checked_sub(n) {
@@ -155,7 +174,11 @@ fn simplify_subpath(sub: &Sub, opts: &SimplifyOptions, fit: &mut Fit) -> Option<
         let k = (0..n).find(|&i| turn_deg(&segs[(i + n - 1) % n], &segs[i]) > opts.corner_angle_deg).unwrap_or(0);
         segs.rotate_left(k);
     }
-    let result = simplify_run(&segs, opts, fit);
+    // A smoothed loop with no corner is fitted along one direction across its start, when it is fitted as one piece: with its
+    // first and last curves' own tangents, whose sum it is, the start would keep the kink the smoothing took out of it.
+    let across = if sub.closed && opts.smooth > 0.0 { unit(end_tangent(&segs[n - 1].c) + start_tangent(&segs[0].c)) } else { None };
+    let across = across.filter(|_| (0..n).all(|i| turn_deg(&segs[(i + n - 1) % n], &segs[i]) <= opts.corner_angle_deg));
+    let result = simplify_run(&segs, opts, fit, across);
     let s = segs_to_bezpath(&result, sub.closed)?;
     if opts.straight_lines {
         return Some(s);
@@ -204,8 +227,9 @@ fn sample_error(s: &Seg, m: usize, straight: f64) -> f64 {
 }
 
 /// The refit of the consecutive segments `run`, split at its corners sharper than the threshold:
-/// it starts and ends where `run` does, leaving the same way.
-fn simplify_run(run: &[Seg], opts: &SimplifyOptions, fit: &mut Fit) -> Vec<Seg> {
+/// it starts and ends where `run` does, leaving the same way. `ends`, when the whole run is one piece (no corner in it), is the
+/// direction the refit leaves and arrives along, in place of those of its first and last segments.
+fn simplify_run(run: &[Seg], opts: &SimplifyOptions, fit: &mut Fit, ends: Option<Vec2>) -> Vec<Seg> {
     let tol = opts.tolerance.max(1e-6);
     let mut cuts: Vec<usize> = (1..run.len()).filter(|&i| turn_deg(&run[i - 1], &run[i]) > opts.corner_angle_deg).collect();
     cuts.insert(0, 0);
@@ -216,57 +240,137 @@ fn simplify_run(run: &[Seg], opts: &SimplifyOptions, fit: &mut Fit) -> Vec<Seg> 
         if piece.is_empty() {
             continue;
         }
-        let mut pts = Vec::new();
-        let mut too_many = false;
-        // How far the piece can be from the polyline of its samples, between two of them.
-        let mut between: f64 = 0.0;
-        for (k, s) in piece.iter().enumerate() {
-            // Guarded: kurbo subdivides without end on huge finite coordinates. A segment that cannot
-            // be measured cannot be sampled finely enough for the tolerance either: the run stays.
-            let Some(len) = measured_arclen(&PathSeg::Cubic(s.c), 1e-6) else {
-                too_many = true;
-                break;
-            };
-            let wanted = (len / (tol * 0.5)).ceil() as usize;
-            let mut m = wanted.clamp(4, MAX_INTERVALS);
-            // Lines are drawn between the samples, and the curve is not: the chords can be further from
-            // the curve than the tolerance allows where too few samples are taken (a quarter circle of
-            // radius 500,000 at a tolerance of 1 is 2.4 from its 256 chords). So the samples are as
-            // many as keep the chords within a tenth of it, or the run stays as it is where that is more
-            // than a segment is sampled for. (A segment straight to within a twentieth of the tolerance
-            // is within three twentieths of the polyline of its samples, however few.)
-            if opts.straight_lines && !is_straight(&s.c, tol * 0.05) && sample_error(s, m, tol * 0.05) > tol * 0.1 {
-                match chord_intervals(&s.c, tol * 0.1) {
-                    Some(need) => m = m.max(need),
-                    None => {
-                        too_many = true;
-                        break;
-                    }
-                }
-            }
-            between = between.max(sample_error(s, m, tol * 0.05));
-            // The first segment of a piece has a sample at its start besides one at the end of each interval.
-            let taken = m + usize::from(k == 0);
-            if pts.len().saturating_add(taken) > fit.max_points || !fit.charge(taken) {
-                too_many = true;
-                break;
-            }
-            work::add(Work::FitSamples, taken);
-            sample(&s.c, m, &mut pts, k == 0);
-        }
-        // Too long to fit, or past the work: the run stays as it is.
-        let done = !too_many && fit_piece(piece, pts, (tol, between), opts, fit, &mut result);
-        if !done {
+        // Too long to fit, past the work, or past what the call may make: the piece stays as it is, what was made of it dropped
+        // and given back to what the call may make.
+        let (kept, charged) = (result.len(), fit.made);
+        let ends = ends.filter(|_| piece.len() == run.len());
+        if !simplify_piece(piece, (tol, ends), opts, fit, &mut result) {
+            result.truncate(kept);
+            fit.made = charged;
             result.extend(piece.iter().copied());
         }
     }
     result
 }
 
+/// The samples of the part of a piece that is fitted together, and how far the piece can be from the polyline of them between two.
+#[derive(Default)]
+struct Part {
+    segs: Vec<Seg>,
+    pts: Vec<Point>,
+    between: f64,
+}
+
+/// How a segment is sampled ([`intervals`]).
+enum Sampling {
+    /// In this many intervals of equal parameter.
+    In(usize),
+    /// The chords it needs to stay within the tolerance are more than a segment is sampled in ([`MAX_CHORD_INTERVALS`]).
+    TooFine,
+    /// Its coordinates are past what its length is measured to: it cannot be sampled, as a point either.
+    Unmeasurable,
+}
+
+/// The intervals to sample `s` in: enough for a sample every half tolerance, from 4 to [`MAX_INTERVALS`]; and for Convert to Straight
+/// Lines, as many as keep the chords of a curve within a tenth of the tolerance of it ([`chord_intervals`]), where a segment holds
+/// that many.
+fn intervals(s: &Seg, tol: f64, opts: &SimplifyOptions) -> Sampling {
+    // Guarded: kurbo subdivides without end on huge finite coordinates.
+    let Some(len) = measured_arclen(&PathSeg::Cubic(s.c), 1e-6) else { return Sampling::Unmeasurable };
+    let m = ((len / (tol * 0.5)).ceil() as usize).clamp(4, MAX_INTERVALS);
+    // Lines are drawn between the samples, and the curve is not: the chords can be further from the curve than the tolerance
+    // allows where too few samples are taken (a quarter circle of radius 500,000 at a tolerance of 1 is 2.4 from its 256 chords). So
+    // the samples are as many as keep the chords within a tenth of it, or the segment is too fine to sample. (A segment straight to
+    // within a twentieth of the tolerance is within three twentieths of the polyline of its samples, however few.)
+    if opts.straight_lines && !is_straight(&s.c, tol * 0.05) && sample_error(s, m, tol * 0.05) > tol * 0.1 {
+        return chord_intervals(&s.c, tol * 0.1).map_or(Sampling::TooFine, |need| Sampling::In(m.max(need)));
+    }
+    Sampling::In(m)
+}
+
+/// The refit of one `piece` (between two corners): it is sampled and fitted in parts of at most [`Fit::max_points`] samples each,
+/// with an anchor where two parts meet (a run longer than one fit holds is refitted in parts, not left as it is), and a curve too
+/// fine to sample for Convert to Straight Lines becomes as many equal lines as keep it within the tolerance, if a segment holds
+/// that many ([`MAX_CHORD_INTERVALS`]). False (and what was made may be dropped by the caller) for a segment that cannot be measured
+/// or sampled, and when the work runs out.
+fn simplify_piece(piece: &[Seg], (tol, ends): (f64, Option<Vec2>), opts: &SimplifyOptions, fit: &mut Fit, result: &mut Vec<Seg>) -> bool {
+    let mut part = Part::default();
+    for s in piece {
+        let m = match intervals(s, tol, opts) {
+            Sampling::In(m) => m,
+            // Only Convert to Straight Lines asks for chords, so only it finds a segment too fine to sample ([`intervals`]).
+            Sampling::TooFine => {
+                // Evenly spaced lines keep it within the tolerance, if a segment holds so many: the neighbours are fitted without it.
+                let lines = line_steps(&s.c, tol).max(1);
+                // A segment holds up to [`MAX_CHORD_INTERVALS`] lines, and the call [`Fit::room`] segments in all, charged (after what
+                // the part before made) before the lines are.
+                if lines > MAX_CHORD_INTERVALS || !flush(&mut part, (tol, ends), opts, fit, result) || lines > fit.room() || !fit.charge(lines + 1) {
+                    return false;
+                }
+                fit.made += lines;
+                work::add(Work::FitSamples, lines + 1);
+                let mut pts = Vec::with_capacity(lines + 1);
+                sample(&s.c, lines, &mut pts, true);
+                result.extend(pts.windows(2).map(|p| Seg::line(p[0], p[1])));
+                continue;
+            }
+            Sampling::Unmeasurable => return false,
+        };
+        // The first segment of a part has a sample at its start besides one at the end of each interval.
+        let first = part.segs.is_empty();
+        if !first && part.pts.len().saturating_add(m) > fit.part_size() && !flush(&mut part, (tol, ends), opts, fit, result) {
+            return false;
+        }
+        let taken = m + usize::from(part.segs.is_empty());
+        if taken > fit.part_size() || !fit.charge(taken) {
+            return false;
+        }
+        work::add(Work::FitSamples, taken);
+        part.between = part.between.max(sample_error(s, m, tol * 0.05));
+        sample(&s.c, m, &mut part.pts, part.segs.is_empty());
+        part.segs.push(*s);
+    }
+    flush(&mut part, (tol, ends), opts, fit, result)
+}
+
+/// The refit of the part `part` of a piece, appended to `result`, and the part made empty; false when `fit` runs out of work.
+///
+/// The refit has fewer segments than the part has samples (a part is held to [`Fit::part_size`], which is no more than the room the
+/// call has left), and the call is charged for as many before the refit is made, and given back what it did not make.
+fn flush(part: &mut Part, (tol, ends): (f64, Option<Vec2>), opts: &SimplifyOptions, fit: &mut Fit, result: &mut Vec<Seg>) -> bool {
+    let part = std::mem::take(part);
+    if part.segs.is_empty() {
+        return true;
+    }
+    let (charged, kept) = (part.pts.len(), result.len());
+    if charged > fit.room() {
+        return false;
+    }
+    fit.made += charged;
+    let done = fit_piece(&part.segs, part.pts, (tol, part.between), ends, opts, fit, result);
+    fit.made -= charged - result.len().saturating_sub(kept).min(charged);
+    done
+}
+
+/// How many evenly spaced straight lines keep `c` within `tol` of them: a chord of a step of `1 / m` is no further from the curve than
+/// `0.75 d / m²`, where `d` is the larger second difference of its control points ([`chord_intervals`] for a tolerance of `tol`).
+fn line_steps(c: &CubicBez, tol: f64) -> usize {
+    let need = (0.75 * second_difference(c) / tol).sqrt().ceil();
+    if need.is_finite() && need <= usize::MAX as f64 { need as usize } else { usize::MAX }
+}
+
 /// The refit of one `piece` from its sampled points `pts`, appended to `result`; false (and
 /// nothing appended) when `fit` runs out of work first. `tol` is the tolerance and how far the piece
 /// can be from the polyline of `pts` between two of them ([`sample_error`]).
-fn fit_piece(piece: &[Seg], pts: Vec<Point>, (tol, between): (f64, f64), opts: &SimplifyOptions, fit: &mut Fit, result: &mut Vec<Seg>) -> bool {
+fn fit_piece(
+    piece: &[Seg],
+    pts: Vec<Point>,
+    (tol, between): (f64, f64),
+    ends: Option<Vec2>,
+    opts: &SimplifyOptions,
+    fit: &mut Fit,
+    result: &mut Vec<Seg>,
+) -> bool {
     let pts = if opts.smooth > 0.0 {
         let Some(smoothed) = smooth_points(&pts, opts.smooth, fit) else { return false };
         smoothed
@@ -283,7 +387,7 @@ fn fit_piece(piece: &[Seg], pts: Vec<Point>, (tol, between): (f64, f64), opts: &
         return true;
     }
     let (Some(first), Some(last)) = (piece.first(), piece.last()) else { return true };
-    let (t0, t1) = (start_tangent(&first.c), end_tangent(&last.c));
+    let (t0, t1) = ends.map_or((start_tangent(&first.c), end_tangent(&last.c)), |d| (d, d));
     // Out of work, or no fit within the tolerance: the piece stays as it is (the work is spent only
     // in the first case). The fit is held to the tolerance between the samples too, which the piece
     // can be `between` from (with smoothing, the tolerance is from the smoothed points' polyline).
@@ -300,9 +404,17 @@ fn fit_piece(piece: &[Seg], pts: Vec<Point>, (tol, between): (f64, f64), opts: &
 
 /// `pts` (a run's samples, in order) smoothed along the path: each point becomes the Gaussian-weighted
 /// mean of the points around it, `sigma` points of arc length wide, the window narrowing towards the
-/// ends so that the first and last points stay where they are. Most points looked at per point is
-/// bounded by the samples within three spreads of it, and charged to `fit`: `None` when that runs out.
+/// ends so that the first and last points stay where they are. Consecutive samples within
+/// 1/[`SMOOTH_GROUP`] of a spread of each other along the path are weighed together, as their count at
+/// their mean place, found through a tree of sums over the samples ([`SampleGroups`]), so that the work for a point is bounded by
+/// the groups within three spreads of it however densely the path is sampled (VectorCraft 4a7d732; weighing every sample took
+/// the square of the samples).
+///
+/// The tree is charged to `fit` by its samples before it is made, and each point by the nodes it looks at (counted as they are looked at,
+/// at most a few hundred for a point, bounded by its groups and the depth of the tree, whatever the windows hold); `None` when that runs
+/// out, or when the tree cannot be allocated.
 fn smooth_points(pts: &[Point], sigma: f64, fit: &mut Fit) -> Option<Vec<Point>> {
+    let Some(&origin) = pts.first() else { return Some(Vec::new()) };
     if pts.len() < 3 || !(sigma.is_finite() && sigma > 0.0) {
         return Some(pts.to_vec());
     }
@@ -314,6 +426,10 @@ fn smooth_points(pts: &[Point], sigma: f64, fit: &mut Fit) -> Option<Vec<Point>>
         }
         s.push(total);
     }
+    if !fit.charge(pts.len()) {
+        return None;
+    }
+    let groups = SampleGroups::new(pts, &s, origin)?;
     let (mut lo, mut hi) = (0usize, 0usize);
     let mut smoothed = Vec::with_capacity(pts.len());
     for (&p, &si) in pts.iter().zip(&s) {
@@ -329,18 +445,111 @@ fn smooth_points(pts: &[Point], sigma: f64, fit: &mut Fit) -> Option<Vec<Point>>
         while s.get(hi + 1).is_some_and(|&v| v <= si + reach) {
             hi += 1;
         }
-        if !fit.charge(hi + 1 - lo.min(hi + 1)) {
+        let window = Window { lo, end: hi + 1, at: si, spread, group: spread / SMOOTH_GROUP };
+        let mut acc = Weighed::default();
+        groups.weigh(0, (0, pts.len()), &window, &mut acc);
+        if !fit.charge(acc.work) {
             return None;
         }
-        let (mut sum, mut weight) = (Vec2::ZERO, 0.0);
-        for (q, &sj) in pts.iter().zip(&s).take(hi + 1).skip(lo) {
-            let w = (-(sj - si) * (sj - si) / (2.0 * spread * spread)).exp();
-            sum += q.to_vec2() * w;
-            weight += w;
-        }
-        smoothed.push(if weight > 0.0 { (sum / weight).to_point() } else { p });
+        smoothed.push(if acc.weight > 0.0 { origin + acc.sum / acc.weight } else { p });
     }
     Some(smoothed)
+}
+
+/// How many groups of samples a spread holds at most in [`smooth_points`]. Weighing them in groups
+/// leaves each smoothed point within a thousandth of a spread of the mean of its samples weighed one
+/// by one.
+const SMOOTH_GROUP: f64 = 16.0;
+
+/// The samples [`smooth_points`] weighs for one point: indices `lo..end`, weighed by a Gaussian of
+/// `spread` around arc length `at`, in groups at most `group` long along the path.
+struct Window {
+    lo: usize,
+    end: usize,
+    at: f64,
+    spread: f64,
+    group: f64,
+}
+
+/// The sums of halves, quarters and so on of a run's samples, by index: node 0 holds all of them and
+/// node `k`'s halves are nodes `2k + 1` and `2k + 2`.
+struct SampleGroups<'a> {
+    /// Arc length of each sample.
+    s: &'a [f64],
+    /// Sum of the arc lengths of each node's samples.
+    sum_s: Vec<f64>,
+    /// Sum of each node's samples, measured from the first sample.
+    sum_q: Vec<Vec2>,
+}
+
+impl<'a> SampleGroups<'a> {
+    /// The tree of `pts`, whose arc lengths are `s`; `None` where memory for it (four nodes for each sample) is not to be had.
+    fn new(pts: &[Point], s: &'a [f64], origin: Point) -> Option<Self> {
+        let size = pts.len().checked_mul(4)?;
+        let mut sum_s: Vec<f64> = Vec::new();
+        let mut sum_q: Vec<Vec2> = Vec::new();
+        sum_s.try_reserve_exact(size).ok()?;
+        sum_q.try_reserve_exact(size).ok()?;
+        sum_s.resize(size, 0.0);
+        sum_q.resize(size, Vec2::ZERO);
+        let mut groups = Self { s, sum_s, sum_q };
+        groups.build(0, 0, pts.len(), pts, origin);
+        Some(groups)
+    }
+
+    fn build(&mut self, node: usize, l: usize, r: usize, pts: &[Point], origin: Point) {
+        if r <= l {
+            return;
+        }
+        let (sum_s, sum_q) = if r - l == 1 {
+            (self.s.get(l).copied().unwrap_or(0.0), pts.get(l).map_or(Vec2::ZERO, |&p| p - origin))
+        } else {
+            let m = l + (r - l) / 2;
+            self.build(2 * node + 1, l, m, pts, origin);
+            self.build(2 * node + 2, m, r, pts, origin);
+            let at = |v: &Vec<f64>, k: usize| v.get(k).copied().unwrap_or(0.0);
+            let q = |k: usize| self.sum_q.get(k).copied().unwrap_or(Vec2::ZERO);
+            (at(&self.sum_s, 2 * node + 1) + at(&self.sum_s, 2 * node + 2), q(2 * node + 1) + q(2 * node + 2))
+        };
+        if let Some(a) = self.sum_s.get_mut(node) {
+            *a = sum_s;
+        }
+        if let Some(a) = self.sum_q.get_mut(node) {
+            *a = sum_q;
+        }
+    }
+
+    /// Adds the weighted samples of node `node` (indices `l..r`) that are inside `w` to `acc`: a node
+    /// inside `w` no longer than its groups as its count at its mean arc length, any other node by
+    /// its halves.
+    fn weigh(&self, node: usize, (l, r): (usize, usize), w: &Window, acc: &mut Weighed) {
+        if r <= w.lo || l >= w.end || r <= l {
+            return;
+        }
+        acc.work += 1;
+        let length = self.s.get(r - 1).copied().unwrap_or(0.0) - self.s.get(l).copied().unwrap_or(0.0);
+        // One sample is always a group, even where arc lengths that overflowed leave `length` NaN.
+        if r - l == 1 || (w.lo <= l && r <= w.end && length <= w.group) {
+            let count = (r - l) as f64;
+            let t = self.sum_s.get(node).copied().unwrap_or(0.0) / count - w.at;
+            let g = (-t * t / (2.0 * w.spread * w.spread)).exp();
+            acc.sum += self.sum_q.get(node).copied().unwrap_or(Vec2::ZERO) * g;
+            acc.weight += count * g;
+            return;
+        }
+        let m = l + (r - l) / 2;
+        self.weigh(2 * node + 1, (l, m), w, acc);
+        self.weigh(2 * node + 2, (m, r), w, acc);
+    }
+}
+
+/// What [`SampleGroups::weigh`] has added up: the weighted sum of the samples (from the first sample),
+/// the sum of the weights, and the number of nodes looked at.
+#[derive(Default)]
+struct Weighed {
+    sum: Vec2,
+    weight: f64,
+    work: usize,
 }
 
 /// Ramer–Douglas–Peucker polyline reduction. Each scan for the point farthest from a chord is
@@ -1029,6 +1238,9 @@ fn reverse_chain(segs: &mut [Seg]) {
 }
 
 #[cfg(test)]
+mod vc_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::testutil::{anchor_count, polyline, subpath_count};
@@ -1316,19 +1528,24 @@ mod tests {
     }
 
     #[test]
-    fn a_run_too_long_to_sample_stays_as_it_is() {
+    fn a_run_too_long_for_one_fit_is_fitted_in_parts() {
         let circle = circle_polygon(400, 50.0);
+        let opts = SimplifyOptions { tolerance: 0.01, ..Default::default() };
         work::reset();
-        let mut fit = Fit { work: usize::MAX, max_points: 10_000 };
-        let same = simplify_within(&circle, &SimplifyOptions { tolerance: 0.01, ..Default::default() }, &mut fit);
-        assert_eq!(anchor_count(&same), 400);
+        let mut fit = Fit::new(usize::MAX, 10_000);
+        let parts = simplify_within(&circle, &opts, &mut fit);
+        // The samples of the whole circle are many more than a fit holds, and are fitted in parts of at most that many
+        // (an anchor where two meet): more anchors than the circle fitted whole, far fewer than it had.
         let sampled = work::take(Work::FitSamples);
-        assert!(sampled > 0 && sampled <= 10_000, "{sampled} samples");
-        // With room, the same circle is a handful of curves.
-        let mut fit = Fit { work: usize::MAX, max_points: MAX_FIT_POINTS };
-        let fitted = simplify_within(&circle, &SimplifyOptions { tolerance: 0.01, ..Default::default() }, &mut fit);
-        assert!(anchor_count(&fitted) <= 12, "{}", anchor_count(&fitted));
-        assert!(work::take(Work::FitSamples) > 10_000);
+        assert!(sampled > 50_000, "{sampled} samples");
+        let anchors = anchor_count(&parts);
+        assert!((14..=60).contains(&anchors), "{anchors} anchors");
+        assert!(deviation(&circle, &parts) <= 0.01 + MEASURED && deviation(&parts, &circle) <= 0.01 + MEASURED, "within the tolerance both ways");
+        // With room, the same circle is a handful of curves (12 where the split was always at the worst point, 13 where it is moved inward).
+        let mut fit = Fit::new(usize::MAX, MAX_FIT_POINTS);
+        let fitted = simplify_within(&circle, &opts, &mut fit);
+        assert!(anchor_count(&fitted) <= 14, "{}", anchor_count(&fitted));
+        assert!(anchor_count(&fitted) < anchors, "{} anchors whole, {anchors} in parts", anchor_count(&fitted));
     }
 
     /// Arcs with sharp corners between them: each is a run of its own, so the work is spent run by run.
@@ -1353,11 +1570,11 @@ mod tests {
         let path = scallops(60);
         let opts = SimplifyOptions { tolerance: 0.2, ..Default::default() };
         work::reset();
-        let full = simplify_within(&path, &opts, &mut Fit { work: usize::MAX, max_points: MAX_FIT_POINTS });
+        let full = simplify_within(&path, &opts, &mut Fit::new(usize::MAX, MAX_FIT_POINTS));
         let total = work::take(Work::Fit);
         assert!(total > 10_000, "{total}");
         let half = total / 2;
-        let partly = simplify_within(&path, &opts, &mut Fit { work: half, max_points: MAX_FIT_POINTS });
+        let partly = simplify_within(&path, &opts, &mut Fit::new(half, MAX_FIT_POINTS));
         let spent = work::take(Work::Fit);
         assert!(spent <= half, "{spent} of {half}");
         // The runs the budget reached are refitted and the others are as they were.
@@ -1371,7 +1588,7 @@ mod tests {
         let opts = SimplifyOptions { tolerance: 0.5, smooth: 1e9, ..Default::default() };
         work::reset();
         let spent = |work: usize| {
-            let mut fit = Fit { work, max_points: MAX_FIT_POINTS };
+            let mut fit = Fit::new(work, MAX_FIT_POINTS);
             let out = simplify_within(&circle, &opts, &mut fit);
             (anchor_count(&out), work::take(Work::Fit))
         };
@@ -1388,10 +1605,10 @@ mod tests {
         let circle = circle_polygon(300, 50.0);
         let opts = SimplifyOptions { tolerance: 0.5, straight_lines: true, ..Default::default() };
         work::reset();
-        let all = simplify_within(&circle, &opts, &mut Fit { work: usize::MAX / 2, max_points: MAX_FIT_POINTS });
+        let all = simplify_within(&circle, &opts, &mut Fit::new(usize::MAX / 2, MAX_FIT_POINTS));
         let used = work::take(Work::Fit);
         assert!(anchor_count(&all) < 300 && used > 0);
-        let starved = simplify_within(&circle, &opts, &mut Fit { work: used / 2, max_points: MAX_FIT_POINTS });
+        let starved = simplify_within(&circle, &opts, &mut Fit::new(used / 2, MAX_FIT_POINTS));
         assert_eq!(anchor_count(&starved), 300);
         assert!(work::take(Work::Fit) <= used / 2);
     }
@@ -1405,17 +1622,22 @@ mod tests {
             let pts: Vec<(f64, f64)> = (0..=n).map(|i| (i as f64, 0.0)).collect();
             let line = polyline(&pts, false);
             work::reset();
-            let free = simplify_within(&line, &opts, &mut Fit { work: usize::MAX / 2, max_points: MAX_FIT_POINTS });
+            let free = simplify_within(&line, &opts, &mut Fit::new(usize::MAX / 2, MAX_FIT_POINTS));
             assert_eq!(work::take(Work::FitSamples), 4 * n + 1, "{n} segments");
             assert_eq!(anchor_count(&free), 2, "a straight line of {n} segments is one");
-            // One point fewer than the samples a run needs and the run stays.
-            let capped = simplify_within(&line, &opts, &mut Fit { work: usize::MAX / 2, max_points: 4 * n });
-            assert_eq!(capped, line, "{n} segments, room for {} points", 4 * n);
-            let roomy = simplify_within(&line, &opts, &mut Fit { work: usize::MAX / 2, max_points: 4 * n + 1 });
+            // One point fewer than the samples a run needs: it is fitted in two parts, the last segment alone, with an anchor
+            // between them (a part of one segment takes 4 + 1 samples, so for one segment there is no part: it stays).
+            let capped = simplify_within(&line, &opts, &mut Fit::new(usize::MAX / 2, 4 * n));
+            if n == 1 {
+                assert_eq!(capped, line, "{n} segments, room for {} points", 4 * n);
+            } else {
+                assert_eq!(anchor_count(&capped), 3, "{n} segments, room for {} points: two parts", 4 * n);
+            }
+            let roomy = simplify_within(&line, &opts, &mut Fit::new(usize::MAX / 2, 4 * n + 1));
             assert_eq!(anchor_count(&roomy), 2);
             // The same for the work: the samples alone are 4n + 1 of it.
             work::reset();
-            let starved = simplify_within(&line, &opts, &mut Fit { work: 4 * n, max_points: MAX_FIT_POINTS });
+            let starved = simplify_within(&line, &opts, &mut Fit::new(4 * n, MAX_FIT_POINTS));
             assert_eq!(starved, line, "{n} segments, work for {}", 4 * n);
             assert!(work::take(Work::FitSamples) <= 4 * n, "no sample is taken that the work does not cover");
         }

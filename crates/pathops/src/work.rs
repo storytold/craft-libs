@@ -30,6 +30,8 @@ pub(crate) enum Work {
     TidyMerge,
     /// Lines a curve was flattened into to find the way an edge leaves a vertex.
     FlattenLines,
+    /// Points of a stretch the search for the direction at a split was charged for (all of them, whatever it reads), part of [`Work::Fit`].
+    SplitScans,
     /// Segments the estimate of which way to sweep read (counted, and the sampled ones boxed).
     TurnReads,
     /// Segment boxes the estimate of which way to sweep built (at most the sample).
