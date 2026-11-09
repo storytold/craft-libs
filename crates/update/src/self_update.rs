@@ -591,10 +591,19 @@ pub enum Outcome {
 }
 
 /// What the last self-update came to, once: the records are removed as they are read. A
-/// recorded failure wins over a record of a finished update. A finished update counts only when
-/// the version it installed is `running`, the version this copy counts as.
+/// recorded failure wins over a record of a finished update, unless this program was put in place
+/// after the failure: the copy that failed has been replaced, and the failure is dropped. A
+/// finished update counts only when the version it installed is `running`, the version this copy
+/// counts as.
 pub fn take_outcome(paths: &Paths, running: &str) -> Option<Outcome> {
-    let failure = take_failure(paths);
+    let program = std::env::current_exe().ok();
+    take_outcome_of(paths, running, program.as_deref())
+}
+
+/// [`take_outcome`] for a known program, without reading the ambient executable.
+fn take_outcome_of(paths: &Paths, running: &str, program: Option<&Path>) -> Option<Outcome> {
+    let stale = program.is_some_and(|program| failure_predates(paths, program));
+    let failure = take_failure(paths).filter(|_| !stale);
     let done = read_record(&done_file(paths));
     let _ = std::fs::remove_file(done_file(paths));
     if let Some(reason) = failure {
@@ -604,6 +613,16 @@ pub fn take_outcome(paths: &Paths, running: &str) -> Option<Outcome> {
     }
     let installed = version::parse(done?.trim())?;
     (Some(&installed) == version::parse(running).as_ref()).then_some(Outcome::Installed(installed))
+}
+
+/// Whether the recorded failure is older than `program`, by its modified or created time. A
+/// program installed from a package carries the package's build time, so one built before the
+/// failure is not detected and the failure is reported once as usual. `false` when either time
+/// can't be read.
+fn failure_predates(paths: &Paths, program: &Path) -> bool {
+    let (Ok(record), Ok(program)) = (std::fs::metadata(failure_file(paths)), std::fs::metadata(program)) else { return false };
+    let Ok(recorded) = record.modified() else { return false };
+    [program.modified(), program.created()].into_iter().flatten().any(|at| at > recorded)
 }
 
 /// Removes the record of [`mark_installed`] when the swap couldn't be scheduled, so the update
@@ -1706,6 +1725,29 @@ mod tests {
         std::fs::create_dir_all(done_file(&paths)).unwrap();
         assert_eq!(take_outcome(&paths, "0.2.0"), None);
         assert!(failure_file(&paths).is_dir());
+    }
+
+    /// A failure recorded before this program was put in place is removed without being
+    /// reported; one recorded after it, like a failed helper's, is reported.
+    #[test]
+    fn a_failure_older_than_the_running_program_is_not_reported() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::under(dir.path());
+        let program = dir.path().join("artcraft-launcher");
+        std::fs::write(&program, "program").unwrap();
+        let hour = std::time::Duration::from_secs(3600);
+        let set_program_time = |at| std::fs::OpenOptions::new().write(true).open(&program).unwrap().set_modified(at).unwrap();
+
+        record_failure(&paths, "the Windows Installer stopped with error 1603");
+        let recorded = std::fs::metadata(failure_file(&paths)).unwrap().modified().unwrap();
+        set_program_time(recorded - hour);
+        assert_eq!(take_outcome_of(&paths, "0.2.0", Some(&program)), Some(Outcome::Failed("the Windows Installer stopped with error 1603".into())));
+
+        record_failure(&paths, "this copy isn't signed");
+        let recorded = std::fs::metadata(failure_file(&paths)).unwrap().modified().unwrap();
+        set_program_time(recorded + hour);
+        assert_eq!(take_outcome_of(&paths, "0.2.0", Some(&program)), None);
+        assert!(!failure_file(&paths).exists(), "the old failure is removed");
     }
 
     /// A link where a record goes is not followed: neither record is read through it, and the
