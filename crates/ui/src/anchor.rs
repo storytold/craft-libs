@@ -1,6 +1,6 @@
 //! Where a floating bar sits over a selection. Pure geometry: no window needed to test it.
 
-use egui::{pos2, Rect, Vec2};
+use egui::{Rect, Vec2, pos2};
 
 /// The bar's size and how it keeps clear of the selection.
 #[derive(Clone, Copy, Debug)]

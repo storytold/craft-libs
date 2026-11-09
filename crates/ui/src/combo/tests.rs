@@ -1,4 +1,4 @@
-use egui_kittest::{kittest::Queryable as _, Harness};
+use egui_kittest::{Harness, kittest::Queryable as _};
 
 use super::ComboBox;
 
@@ -67,11 +67,7 @@ fn search_menu() -> Harness<'static, Search> {
             let header = |ui: &mut egui::Ui| {
                 let name = ui.label("Find a language").id;
                 m.field = ui.text_edit_singleline(&mut m.filter).labelled_by(name).rect;
-                if m.filter.is_empty() {
-                    60
-                } else {
-                    0
-                }
+                if m.filter.is_empty() { 60 } else { 0 }
             };
             let rows = |ui: &mut egui::Ui, range: std::ops::Range<usize>, _: usize| {
                 if std::mem::take(&mut m.scroll) {
@@ -462,11 +458,7 @@ fn a_menu_with_a_footer_shrinks_when_its_list_empties_and_grows_back() {
                         if opened {
                             field.request_focus();
                         }
-                        if filter.is_empty() {
-                            30
-                        } else {
-                            0
-                        }
+                        if filter.is_empty() { 30 } else { 0 }
                     },
                     row,
                     |&n| n,

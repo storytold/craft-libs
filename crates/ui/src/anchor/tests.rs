@@ -1,6 +1,6 @@
-use egui::{pos2, Rect, Vec2};
+use egui::{Rect, Vec2, pos2};
 
-use super::{anchor_rect, visible_anchor, BarPlacement};
+use super::{BarPlacement, anchor_rect, visible_anchor};
 
 const BAR: BarPlacement = BarPlacement { size: Vec2::new(300.0, 60.0), gap: 8.0, inset: 4.0, min_visible_h: 1.0 };
 
