@@ -1459,8 +1459,25 @@ impl<W: WindingNumber> Topology<W> {
     /// [`Topology::contours`] does, or [`Error::InconsistentWindingNumbers`]
     /// when the winding numbers disagree around a point.
     pub fn try_contours(&self, inside: impl Fn(&W) -> bool) -> Result<Contours, Error> {
-	let positions = self.compute_positions();
+        let positions = self.contour_positions(&inside);
         self.contours_for_positions(inside, positions)
+    }
+
+    /// Computes paths for the output segments that [`Topology::contours`] reads.
+    ///
+    /// With [`Correctness::GoodEnough`], only the segments on the boundary of
+    /// the set that `inside` defines get a path; the others keep an empty one.
+    /// With [`Correctness::ReallyCorrect`], every segment gets a path, because
+    /// the perturbation of one segment depends on its neighbors.
+    fn contour_positions(&self, inside: &impl Fn(&W) -> bool) -> OutputSegVec<PositionedOutputSeg> {
+        match self.correctness {
+            Correctness::GoodEnough => self.compute_positions_good_enough_where(|idx| {
+                !self.deleted[idx]
+                    && inside(&self.winding[idx].clockwise)
+                        != inside(&self.winding[idx].counter_clockwise)
+            }),
+            Correctness::ReallyCorrect => self.compute_positions_correct(),
+        }
     }
 
     fn contours_for_positions(
@@ -1809,12 +1826,21 @@ impl<W: WindingNumber> Topology<W> {
     }
 
     /// Computes paths for all the output segments.
-    ///
-    /// TODO: We should allow passing in an "inside" callback and then only do
-    /// positioning for the segments that are on the boundary.
     fn compute_positions_good_enough(&self) -> OutputSegVec<PositionedOutputSeg> {
+        self.compute_positions_good_enough_where(|_| true)
+    }
+
+    /// Computes paths for the output segments that `wanted` accepts. The other
+    /// segments keep an empty path.
+    fn compute_positions_good_enough_where(
+        &self,
+        wanted: impl Fn(OutputSegIdx) -> bool,
+    ) -> OutputSegVec<PositionedOutputSeg> {
         let mut output = OutputSegVec::with_size(self.orig_seg.len());
         for idx in self.orig_seg.indices() {
+            if !wanted(idx) {
+                continue;
+            }
             let start = self.points[self.point_idx[idx.first_half()]].to_kurbo();
             let end = self.points[self.point_idx[idx.second_half()]].to_kurbo();
 
@@ -3054,6 +3080,73 @@ mod tests {
             p(0.0, 2.0),
         ]];
         assert!(!Topology::from_polylines_binary(s, EMPTY, 1e-5).has_normal_contours(OneOfTwo::A));
+    }
+
+    fn closed_polyline(points: &[(f64, f64)]) -> BezPath {
+        let mut path = BezPath::default();
+        path.move_to(points[0]);
+        for &pt in &points[1..] {
+            path.line_to(pt);
+        }
+        path.close_path();
+        path
+    }
+
+    // Overlapping rectangles with aligned tops, a square with a hole, and a
+    // curve that splits into monotonic pieces, so that some output segments
+    // are interior, some bound a hole and some can be merged.
+    fn contour_position_shapes() -> Vec<BezPath> {
+        let mut curve = BezPath::default();
+        curve.move_to((-1., 0.));
+        curve.curve_to((-1., -1.), (1., 1.), (1., 0.));
+        curve.line_to((2., 4.));
+        curve.line_to((-2., 4.));
+        curve.close_path();
+        vec![
+            closed_polyline(&[(0., 0.), (4., 0.), (4., 3.), (0., 3.)]),
+            closed_polyline(&[(1., 0.), (5., 0.), (5., 2.), (1., 2.)]),
+            closed_polyline(&[(2., 0.), (3., 0.), (3., 5.), (2., 5.)]),
+            closed_polyline(&[(6., 0.), (10., 0.), (10., 4.), (6., 4.)]),
+            closed_polyline(&[(7., 1.), (7., 3.), (9., 3.), (9., 1.)]),
+            curve,
+        ]
+    }
+
+    #[test]
+    fn contour_positions_cover_only_boundary_segments() {
+        let shapes = contour_position_shapes();
+        let top = Topology::<i32>::from_paths(shapes.iter().map(|s| (s, ())), 1e-6).unwrap();
+        let inside = |w: &i32| *w != 0;
+        let positions = top.contour_positions(&inside);
+        let mut interior = 0;
+        for idx in top.segment_indices() {
+            let on_boundary =
+                inside(&top.winding[idx].clockwise) != inside(&top.winding[idx].counter_clockwise);
+            assert_eq!(
+                positions[idx].path.elements().is_empty(),
+                !on_boundary,
+                "{idx:?}"
+            );
+            if !on_boundary {
+                interior += 1;
+            }
+        }
+        assert!(interior > 0);
+    }
+
+    #[test]
+    fn contours_match_contours_from_all_positions() {
+        let shapes = contour_position_shapes();
+        let top = Topology::<i32>::from_paths(shapes.iter().map(|s| (s, ())), 1e-6).unwrap();
+        let predicates: [fn(&i32) -> bool; 4] =
+            [|w| *w != 0, |w| *w >= 2, |w| *w >= 3, |w| *w % 2 != 0];
+        for inside in predicates {
+            let expected = top
+                .contours_for_positions(inside, top.compute_positions())
+                .unwrap();
+            assert!(!expected.contours.is_empty());
+            assert_eq!(top.contours(inside), expected);
+        }
     }
 
     #[test]
