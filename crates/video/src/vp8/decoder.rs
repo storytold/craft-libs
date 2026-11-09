@@ -24,8 +24,7 @@ use crate::vp8::transform;
 /// Largest frame dimension in macroblocks (14-bit sizes).
 const MAX_MBS: usize = 16384 / 16 + 1;
 /// Maximum padded luma samples retained by one VP8 reference picture (about 8K UHD).
-/// 2^26 luma samples: 8192x8192, above every VP8 frame a camera or encoder writes (8192x4320 is 35M).
-const MAX_LUMA_SAMPLES: usize = 1 << 26;
+const MAX_LUMA_SAMPLES: usize = 36_000_000;
 
 /// A reconstructed frame: planes sized to whole macroblocks.
 #[derive(Clone)]
@@ -294,6 +293,7 @@ impl Decoder {
         let mut bd = BoolDecoder::new(&data[first_start..first_end]);
         let mut saved = None;
         let hdr = read_header(&mut bd, tag.key_frame, &mut self.seg, &mut self.lf, &mut self.ctx, &mut saved);
+        ensure!(!bd.overrun(), "truncated first partition header");
         if !tag.key_frame {
             self.sign_bias[2] = hdr.sign_bias_golden;
             self.sign_bias[3] = hdr.sign_bias_altref;
@@ -332,6 +332,7 @@ impl Decoder {
                 } else {
                     self.read_inter_frame_modes(&mut bd, &hdr, &infos, pos)
                 };
+                ensure!(!bd.overrun(), "truncated first partition macroblock data");
                 let info = modes.info;
                 above_bmodes[mb_x] = [modes.bmodes[12], modes.bmodes[13], modes.bmodes[14], modes.bmodes[15]];
                 left_bmodes = [modes.bmodes[3], modes.bmodes[7], modes.bmodes[11], modes.bmodes[15]];
@@ -345,7 +346,10 @@ impl Decoder {
                     skip_residual(has_y2, &mut above_nz[mb_x], &mut left_nz);
                     MbResidual::default()
                 } else {
-                    read_residual(&mut token_decoders[part], &self.ctx.coeff, &dequant[segment], has_y2, &mut above_nz[mb_x], &mut left_nz)
+                    let residual =
+                        read_residual(&mut token_decoders[part], &self.ctx.coeff, &dequant[segment], has_y2, &mut above_nz[mb_x], &mut left_nz);
+                    ensure!(!token_decoders[part].overrun(), "truncated token partition");
+                    residual
                 };
 
                 // ---- loop filter level (15.1, 9.3, 9.4)
@@ -1012,5 +1016,30 @@ mod segment_map_tests {
         d.seg_map.iter_mut().for_each(|s| *s = 2);
         d.begin_key_frame(&key_tag(48, 16)).unwrap();
         assert_eq!(d.seg_map, vec![0; 3]);
+    }
+
+    #[test]
+    fn oversized_key_frame_is_rejected_before_reference_allocation() {
+        let mut d = Decoder::new();
+        assert!(d.begin_key_frame(&key_tag(8192, 8192)).is_err());
+        assert_eq!((d.width, d.height), (0, 0));
+    }
+
+    #[test]
+    fn eight_k_uhd_key_frame_remains_within_the_limit() {
+        let mut d = Decoder::new();
+        assert!(d.begin_key_frame(&key_tag(8192, 4320)).is_ok());
+        assert_eq!((d.width, d.height), (8192, 4320));
+    }
+
+    #[test]
+    fn tiny_inter_partition_is_rejected_as_truncated() {
+        let mut d = Decoder::new();
+        d.width = 16;
+        d.height = 16;
+        d.mb_w = 1;
+        d.mb_h = 1;
+        d.refs[0] = Some(Arc::new(Frame::new(16, 16)));
+        assert!(d.decode(&[0x21, 0, 0, 0], 0).is_err());
     }
 }

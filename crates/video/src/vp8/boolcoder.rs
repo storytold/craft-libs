@@ -13,16 +13,17 @@ pub struct BoolDecoder<'a> {
     value: u64,
     count: i32,
     range: u32,
+    overrun: bool,
 }
 
 impl<'a> BoolDecoder<'a> {
     pub fn new(data: &'a [u8]) -> Self {
-        let mut d = BoolDecoder { data, pos: 0, value: 0, count: -8, range: 255 };
-        d.fill();
+        let mut d = BoolDecoder { data, pos: 0, value: 0, count: -8, range: 255, overrun: false };
+        d.fill(false);
         d
     }
 
-    fn fill(&mut self) {
+    fn fill(&mut self, mark_overrun: bool) {
         let mut shift = 48 - self.count;
         while shift >= 0 {
             match self.data.get(self.pos) {
@@ -34,7 +35,10 @@ impl<'a> BoolDecoder<'a> {
                 }
                 None => {
                     // past the end: zero bits for as long as anyone reads
-                    self.count += 0x4000;
+                    if mark_overrun && self.count < 0 {
+                        self.overrun = true;
+                        self.count += 0x4000;
+                    }
                     return;
                 }
             }
@@ -46,7 +50,7 @@ impl<'a> BoolDecoder<'a> {
     pub fn read_bool(&mut self, p: u8) -> bool {
         let split = 1 + (((self.range - 1) * u32::from(p)) >> 8);
         if self.count < 0 {
-            self.fill();
+            self.fill(true);
         }
         let big_split = u64::from(split) << 56;
         let bit = if self.value >= big_split {
@@ -63,6 +67,10 @@ impl<'a> BoolDecoder<'a> {
         self.value <<= shift;
         self.count -= shift as i32;
         bit
+    }
+
+    pub fn overrun(&self) -> bool {
+        self.overrun
     }
 
     /// `read_literal` (7.3): an `n`-bit unsigned value, most significant bit first, each bit at
@@ -211,8 +219,16 @@ mod tests {
     #[test]
     fn reads_zeros_past_the_end() {
         let mut d = BoolDecoder::new(&[]);
+        assert!(!d.overrun());
         for _ in 0..1000 {
             assert!(!d.read_bool(128));
         }
+        assert!(d.overrun());
+    }
+
+    #[test]
+    fn overrun_is_not_set_by_initial_lookahead_padding() {
+        let d = BoolDecoder::new(&[0xAA]);
+        assert!(!d.overrun());
     }
 }

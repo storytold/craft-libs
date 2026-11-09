@@ -11,7 +11,7 @@ both paths are serial.
 
 The constant tables (Annex D quantisation weights, Annex E VLC tables) were extracted from the
 standard's text by [`dnx_extract_tables.py`](../../tools/dnx_extract_tables.py) into
-`src/dnx/spec_tables.rs`; the script checks every table's size and that every VLC table is a
+[`spec_tables.rs`](./spec_tables.rs); the script checks every table's size and that every VLC table is a
 complete prefix code. No code was taken from FFmpeg or any other implementation; ffmpeg is used
 only as an external fixture generator and test oracle.
 
@@ -22,7 +22,7 @@ only as an external fixture generator and test oracle.
 | Header (§7.2): all fields, HVN 1–4, RI header growth above 1088 lines, time code | done |
 | DNxHD (HD profile) CIDs 1235, 1237, 1238, 1241–1244, 1250–1253, 1258, 1259 | done, oracle-tested |
 | CID 1256 (HD RGB 4:4:4) and 1260 (macroblock-adaptive field/frame, 1440×1080i) | done, not oracle-tested (ffmpeg can't encode them) |
-| DNxHR (RI profile) 1270–1274: LB, SQ, HQ, HQX, 444; raster limits depend on profile, chroma, alpha, and macroblock padding | done, oracle-tested |
+| DNxHR (RI profile) 1270–1274: LB, SQ, HQ, HQX, 444; raster limits depend on profile, chroma, alpha, and macroblock padding; decoded-plane budget is per coding unit | done, oracle-tested |
 | 8-, 10-, 12-bit; 4:2:2, 4:4:4; Y′CbCr and RGB (per-macroblock ACF) | done (12-bit: our encoder's streams, compared with ffmpeg's decode) |
 | 4:2:0 (RI only) | done, not oracle-tested (ffmpeg can't encode it) |
 | Interlaced: field-coded (two coding units) and frame-coded MACF | done |
@@ -46,7 +46,8 @@ let sample: Vec<u8> = enc.encode(&frame)?;               // exactly enc.frame_si
 ```
 
 `DecodeOptions::max_decoded_plane_bytes` limits decoded plane storage per coding unit (default
-256 MiB). Frames exceeding the configured budget are rejected before plane allocation.
+256 MiB; configurable, including 512 MiB for larger coding units). Frames exceeding the configured
+budget are rejected before plane allocation.
 
 `Frame { width, height, chroma, rgb, bit_depth, y, cb, cr: Vec<u16>, alpha, interlace,
 color_volume, cid, par }` holds planar samples without row padding. Interlaced frames are woven
@@ -65,12 +66,12 @@ first frame header to label the stream.
   12-bit coefficient domain is ¼ of the orthonormal DCT, as Table 14's 13-bit IDCT input range
   for 12-bit samples implies) and 1 otherwise.
 - Robustness: every offset and size is validated, run lengths past coefficient 63 are rejected,
-  and corrupted or truncated streams return `Err` without panicking (`tests/dnx/roundtrip.rs`).
+  and corrupted or truncated streams return `Err` without panicking ([`roundtrip.rs`](../../tests/dnx/roundtrip.rs)).
 
 ### Where we follow ffmpeg rather than the letter of the standard
 
 ffmpeg's decoder is the reference everyone interoperates with (and the oracle of our tests). In
-three places it differs from the text of ST 2019-1:2016; black-box probes (`src/dnx/ffmpeg_probe.rs`:
+three places it differs from the text of ST 2019-1:2016; black-box probes ([`ffmpeg_probe.rs`](./ffmpeg_probe.rs):
 streams with a single coefficient, decoded by ffmpeg, measured with a forward DCT) pinned down
 its behaviour, and we match it by default:
 
@@ -105,7 +106,7 @@ the prose of §7.3.1.2; we follow the prose (normative text takes precedence).
 
 ## Accuracy (vs ffmpeg as an external oracle)
 
-`tests/dnx/oracle_decode.rs` decodes 22 fixtures made by ffmpeg's VC-3 encoder: CIDs 1235, 1237,
+[`oracle_decode.rs`](../../tests/dnx/oracle_decode.rs) decodes 22 fixtures made by ffmpeg's VC-3 encoder: CIDs 1235, 1237,
 1238, 1241, 1242, 1243, 1244, 1250, 1251, 1252, 1253, 1258, 1259 and DNxHR LB/SQ/HQ/HQX/444
 (Y′CbCr and RGB), with testsrc2, mandelbrot and heavy noise, at 1920×1080, 1280×720, 960×720,
 1440×1080 (thin raster, interlaced), 1000×562, 640×360, 256×120 and 3840×2160. Compared with
@@ -116,7 +117,7 @@ decoder evaluates the exact IDCT of equation 8.3, so decode is **not bit-exact, 
 precision** of ffmpeg. (ffmpeg wraps rather than clips 10-bit reconstructions that overflow
 1023, so the noise fixtures keep their samples inside 24…231 before encoding.)
 
-`tests/dnx/oracle_encode.rs` encodes 1920×1080 frames with every profile and writes them into a
+[`oracle_encode.rs`](../../tests/dnx/oracle_encode.rs) encodes 1920×1080 frames with every profile and writes them into a
 minimal test-only MOV. ffmpeg decodes them with `-xerror`, without errors, and agrees with our
 decoder within ±2 (90–99% identical). Luma PSNR against the source: HQ 58.8 dB (mandelbrot) and
 66.3 dB (testsrc2), SQ 57.5 dB, LB 56.1 dB, HQX 10-bit 67.5 dB, HQX 12-bit 80.2 dB, 444 10-bit
