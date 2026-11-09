@@ -235,6 +235,8 @@ pub fn jpeg_info(bytes: &[u8]) -> Option<JpegInfo> {
     jpeg::info(bytes)
 }
 
+pub use crate::codecs::jpeg::JpegBands;
+
 /// The colour table of a GIF's first frame (its Local Color Table, else the Global one) and the
 /// entry its Graphic Control Extension makes transparent, read without decoding pixels.
 pub fn gif_palette(bytes: &[u8]) -> Option<(Vec<[u8; 3]>, Option<u8>)> {
