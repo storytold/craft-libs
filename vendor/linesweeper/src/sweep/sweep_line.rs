@@ -1893,7 +1893,7 @@ fn choose_cross_height(
     // We could just emit y0. That would be safe, but give less pretty results
     // in practice.
     let (mid, end) = match interaction {
-        CurveInteraction::Cross(y0, y1) | CurveInteraction::Touch(y0, y1) => ((y0 + y1) / 2.0, y1),
+        CurveInteraction::Cross(y0, y1) | CurveInteraction::Touch(y0, y1) => (y0.midpoint(y1), y1),
     };
     debug_assert!(end >= cur_y);
     match (interaction, which, mid <= cur_y) {
@@ -2382,6 +2382,19 @@ mod tests {
         let mut sweep = Sweeper::new(&segs, 1.0);
         let mut bufs = SweepLineBuffers::default();
         assert!(sweep.next_line(&mut bufs).is_none());
+    }
+
+    #[test]
+    fn cross_height_near_f64_max() {
+        let (y0, y1) = (1e308, 1.5e308);
+        assert_eq!(
+            choose_cross_height(CurveInteraction::Cross(y0, y1), 0.0, WhichTouch::Mid),
+            Some(1.25e308)
+        );
+        assert_eq!(
+            choose_cross_height(CurveInteraction::Touch(y0, y1), 0.0, WhichTouch::Late),
+            Some(1.25e308)
+        );
     }
 
     proptest! {
