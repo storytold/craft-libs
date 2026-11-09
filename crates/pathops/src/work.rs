@@ -30,8 +30,9 @@ pub(crate) enum Work {
     TidyMerge,
     /// Lines a curve was flattened into to find the way an edge leaves a vertex.
     FlattenLines,
-    /// Flags set to give a predicate the coverage of a face (one per input, each time).
-    MaskFlags,
+    /// Entries of the windings walked to list the inputs that cover a face for a predicate (the entries of the
+    /// winding and one more, for each distinct winding).
+    CoverEntries,
     /// Fills a point was tested against to find the inputs that cover a face.
     FillTests,
     /// Points a polyline reduction read.
@@ -104,7 +105,7 @@ pub(crate) enum Work {
 
 #[cfg(test)]
 thread_local! {
-    static COUNTS: std::cell::RefCell<[usize; 48]> = const { std::cell::RefCell::new([0; 48]) };
+    static COUNTS: std::cell::RefCell<[usize; 64]> = const { std::cell::RefCell::new([0; 64]) };
 }
 
 /// Counts `n` more of `what` on this thread (tests only).
@@ -129,5 +130,5 @@ pub(crate) fn take(what: Work) -> usize {
 /// Resets every count on this thread.
 #[cfg(test)]
 pub(crate) fn reset() {
-    COUNTS.with(|c| *c.borrow_mut() = [0; 48]);
+    COUNTS.with(|c| *c.borrow_mut() = [0; 64]);
 }

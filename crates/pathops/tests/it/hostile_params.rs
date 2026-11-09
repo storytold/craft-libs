@@ -160,8 +160,8 @@ fn booleans_refuse_paths_past_the_segment_cap() {
         assert_eq!(try_boolean(&ok, rule, &huge, rule, op, DEFAULT_PRECISION), Err(TOO_COMPLEX));
         assert!(boolean(&huge, rule, &ok, rule, op).elements().is_empty());
     }
-    assert_eq!(try_boolean_n(&[(&ok, rule), (&huge, rule)], |m| m[0]), Err(TOO_COMPLEX));
-    assert!(boolean_n(&[(&huge, rule)], |m| m[0]).elements().is_empty());
+    assert_eq!(try_boolean_n(&[(&ok, rule), (&huge, rule)], |c| c.contains(&0)), Err(TOO_COMPLEX));
+    assert!(boolean_n(&[(&huge, rule)], |c| c.contains(&0)).elements().is_empty());
     assert_eq!(try_unite_all(&[(&ok, rule), (&huge, rule)]), Err(TOO_COMPLEX));
     assert!(unite_all(&[(&huge, rule)]).elements().is_empty());
     assert_eq!(try_area(&huge, rule), Err(TOO_COMPLEX));

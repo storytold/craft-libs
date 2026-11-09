@@ -1009,9 +1009,53 @@ mod tests {
         out
     }
 
+    /// The distinct non-empty coverages next to some edge as a flag per input, sorted.
+    fn flag_masks(arr: &Arrangement) -> Vec<Vec<bool>> {
+        let mut set = std::collections::BTreeSet::new();
+        for s in arr.top.segment_indices() {
+            let h = s.first_half();
+            for w in [arr.top.winding_clockwise(h), arr.top.winding_counter_clockwise(h)] {
+                let m = arr.mask(w);
+                if m.iter().any(|&b| b) {
+                    set.insert(m);
+                }
+            }
+        }
+        set.into_iter().collect()
+    }
+
+    /// [`Arrangement::distinct_masks`] lists the inputs of each of [`flag_masks`] in its order, and
+    /// [`regions_of`] finds the faces one contour pass per flag mask finds, in the same order.
     fn same_as_one_mask_at_a_time(shapes: &[Shape]) {
         let arr = arrangement(shapes, DEFAULT_PRECISION).expect("arrangement");
+        let listed: Vec<Vec<usize>> = flag_masks(&arr).iter().map(|m| m.iter().enumerate().filter(|(_, b)| **b).map(|(i, _)| i).collect()).collect();
+        assert_eq!(arr.distinct_masks(), Some(listed));
         assert_eq!(regions_of(&arr), Some(regions_one_mask_at_a_time(&arr)));
+    }
+
+    /// The coverages come in the order of their flag masks, with the same regions, for shapes that
+    /// overlap, nest, touch or lie apart, and for more than 64 shapes stacked out of their order
+    /// across the page (VectorCraft 3fcd157's test, on the same sets).
+    #[test]
+    fn coverages_keep_the_order_of_their_flag_masks() {
+        let r = |x0: f64, y0: f64, x1: f64, y1: f64| Shape::new(rect(x0, y0, x1, y1), FillRule::NonZero, 1);
+        let overlapping = vec![r(0.0, 0.0, 100.0, 100.0), r(50.0, 50.0, 150.0, 150.0), r(25.0, 75.0, 125.0, 175.0)];
+        let nested = vec![r(0.0, 0.0, 300.0, 300.0), r(50.0, 50.0, 250.0, 250.0), r(100.0, 100.0, 200.0, 200.0), r(140.0, 140.0, 160.0, 160.0)];
+        let touching = vec![r(0.0, 0.0, 100.0, 100.0), r(100.0, 0.0, 200.0, 100.0), r(0.0, 100.0, 100.0, 200.0), r(100.0, 100.0, 200.0, 200.0)];
+        let apart = vec![r(0.0, 0.0, 10.0, 10.0), r(50.0, 0.0, 60.0, 10.0), r(0.0, 50.0, 10.0, 60.0)];
+        // 70 strips, each overlapping its neighbors, stacked in an order other than across the page, and two bars across them.
+        let mut many: Vec<Shape> = (0..70)
+            .map(|i| {
+                let x = 10.0 * f64::from((i * 37) % 70);
+                r(x, 0.0, x + 15.0, 300.0)
+            })
+            .collect();
+        many.insert(20, r(-10.0, 100.0, 730.0, 110.0));
+        many.push(r(-10.0, 200.0, 730.0, 205.0));
+        for (what, shapes) in [("overlapping", overlapping), ("nested", nested), ("touching", touching), ("apart", apart), ("many", many)] {
+            assert!(!regions(&shapes).is_empty(), "{what}");
+            same_as_one_mask_at_a_time(&shapes);
+        }
     }
 
     /// The refit precision: pieces thinner than the precision are dropped, so a 0.5 unit strip that
@@ -1353,10 +1397,10 @@ mod tests {
             let regions = crate::regions(&shapes);
             assert_eq!(regions.len(), n as usize);
             assert!(regions.iter().rev().enumerate().all(|(i, r)| r.sources == [i]));
-            (work::take(Work::MaskEntries), work::take(Work::MaskFlags))
+            (work::take(Work::MaskEntries), work::take(Work::CoverEntries))
         };
-        let ((small, small_flags), (large, large_flags)) = (walked(100), walked(400));
-        assert_eq!((small_flags, large_flags), (0, 0), "no flag is set for every input");
+        let ((small, small_lists), (large, large_lists)) = (walked(100), walked(400));
+        assert_eq!((small_lists, large_lists), (0, 0), "no list of the inputs covering a winding is made for a predicate");
         // Four times the shapes, four times the entries (not sixteen).
         assert!(small > 0 && large == 4 * small, "{small} entries for 100 shapes, {large} for 400");
     }
@@ -1513,26 +1557,89 @@ mod tests {
         assert_eq!(passes, 1, "{passes} passes for 300 keys");
     }
 
+    /// Merge with one contour pass for each distinct key, each face of a key its own result (what Merge
+    /// was before it went by batches; VectorCraft's `old_merge` of be0e934's test).
+    fn merge_a_pass_for_each_key(shapes: &[Shape], precision: f64) -> Vec<Shape> {
+        let Some(arr) = arrangement(shapes, precision) else { return Vec::new() };
+        let mut keys: Vec<u64> = Vec::new();
+        for s in shapes {
+            if !keys.contains(&s.key) {
+                keys.push(s.key);
+            }
+        }
+        let mut out = Vec::new();
+        for k in keys {
+            let c = arr.contours_where(|w| arr.covered(w).next_back().is_some_and(|t| shapes[t].key == k));
+            for g in c.grouped() {
+                out.extend(one(contours_to_path(&c, g, &arr.tidy), k));
+            }
+        }
+        out
+    }
+
+    /// Overlapping squares on a grid with repeated fills, and touching squares with two fills: Merge
+    /// gives the same results, in the same order, as a contour pass for each fill (VectorCraft be0e934's
+    /// test; its other two inputs, a fill's island inside a hole of the same fill, are the one place Merge
+    /// differs, the island being a shape of its own here: the test after this one).
+    #[test]
+    fn merge_matches_a_contour_pass_per_fill() {
+        let mut grid = Vec::new();
+        for row in 0..5u32 {
+            for col in 0..5u32 {
+                let (x, y) = (10.0 * f64::from(col), 10.0 * f64::from(row));
+                grid.push(Shape::new(rect(x, y, x + 15.0, y + 15.0), FillRule::NonZero, u64::from((row * 5 + col) * 7 % 4)));
+            }
+        }
+        let touching: Vec<Shape> = (0..16u32)
+            .map(|k| {
+                let (x, y) = (10.0 * f64::from(k % 4), 10.0 * f64::from(k / 4));
+                Shape::new(rect(x, y, x + 10.0, y + 10.0), FillRule::NonZero, u64::from((k % 4 + k / 4) % 2))
+            })
+            .collect();
+        for (label, shapes) in [("grid", grid), ("touching", touching)] {
+            let actual = pathfinder_with(PathfinderOp::Merge, &shapes, DEFAULT_PRECISION);
+            let expected = merge_a_pass_for_each_key(&shapes, DEFAULT_PRECISION);
+            assert!(!expected.is_empty(), "{label}");
+            assert_eq!(actual, expected, "{label}");
+        }
+    }
+
+    /// 40 squares in a row, each overlapping the next and each with a fill of its own: Merge walks the
+    /// arrangement a few times, not once for each fill, at chained sizes: the passes stay the same as the
+    /// squares double (VectorCraft be0e934's test, at 40, 80 and 160), and the segments the passes are
+    /// charged are the batches times the segments, which two classes that meet need two of.
+    #[test]
+    fn merge_with_many_fills_walks_the_arrangement_a_few_times() {
+        let mut last = None;
+        for count in [40u32, 80, 160] {
+            let v: Vec<Shape> = (0..count)
+                .map(|k| {
+                    let x = 10.0 * f64::from(k);
+                    Shape::new(rect(x, 0.0, x + 15.0, 40.0), FillRule::NonZero, u64::from(k))
+                })
+                .collect();
+            CONTOUR_PASSES.with(|n| n.set(0));
+            work::reset();
+            let merged = pathfinder_with(PathfinderOp::Merge, &v, DEFAULT_PRECISION);
+            let (passes, charged) = (CONTOUR_PASSES.with(std::cell::Cell::get), work::take(Work::PassSegments));
+            assert!(passes <= 8, "{count} squares: {passes} contour passes");
+            assert_eq!(merged.len(), count as usize);
+            assert!(merged.iter().enumerate().all(|(k, s)| s.key == k as u64));
+            // Each pass is charged its segments before it is made: the charge is the passes' (batches') times the segments.
+            let segments = arrangement(&v, DEFAULT_PRECISION).map(|a| a.top.segment_indices().count()).unwrap_or(0);
+            assert_eq!(charged, passes * segments, "{count} squares: {charged} charged for {passes} passes of {segments} segments");
+            if let Some((last_passes, last_charged)) = last {
+                assert_eq!(passes, last_passes, "the passes do not grow with the squares");
+                assert!(charged < 3 * last_charged, "{last_charged} charged for half the squares, {charged}: in proportion to them");
+            }
+            last = Some((passes, charged));
+        }
+    }
+
     /// Merge by batches gives what a contour pass for each key gave: the same shapes, in the same order.
     #[test]
     fn merge_is_what_a_pass_for_each_key_gives() {
-        let reference = |shapes: &[Shape]| -> Vec<Shape> {
-            let arr = arrangement(shapes, DEFAULT_PRECISION).expect("arrangement");
-            let mut keys: Vec<u64> = Vec::new();
-            for s in shapes {
-                if !keys.contains(&s.key) {
-                    keys.push(s.key);
-                }
-            }
-            let mut out = Vec::new();
-            for k in keys {
-                let c = arr.contours_where(|w| arr.covered(w).next_back().is_some_and(|t| shapes[t].key == k));
-                for g in c.grouped() {
-                    out.extend(one(contours_to_path(&c, g, &arr.tidy), k));
-                }
-            }
-            out
-        };
+        let reference = |shapes: &[Shape]| merge_a_pass_for_each_key(shapes, DEFAULT_PRECISION);
         let mut stacks: Vec<Vec<Shape>> = Vec::new();
         // Overlapping rectangles and circles with repeated keys, and some apart.
         for seed in 0..40u32 {

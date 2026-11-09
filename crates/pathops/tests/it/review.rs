@@ -42,10 +42,10 @@ fn claim_02_the_n_ary_booleans_resolve_operands_whose_windings_do_not_add_up() {
     let (a, b) = fixture();
     for rule in [NZ, FillRule::EvenOdd] {
         for (name, want, pred) in [
-            ("union", 4.375, (|m: &[bool]| m[0] || m[1]) as fn(&[bool]) -> bool),
-            ("intersection", 1.125, |m| m[0] && m[1]),
-            ("difference", 1.875, |m| m[0] && !m[1]),
-            ("xor", 3.25, |m| m[0] != m[1]),
+            ("union", 4.375, (|c: &[usize]| !c.is_empty()) as fn(&[usize]) -> bool),
+            ("intersection", 1.125, |c| c.len() == 2),
+            ("difference", 1.875, |c| c == [0]),
+            ("xor", 3.25, |c| c.len() == 1),
         ] {
             let got = area(&boolean_n(&[(&a, rule), (&b, rule)], pred), NZ);
             assert!(close(got, want, 1e-6), "boolean_n {name} {rule:?}: {got}, want {want}");

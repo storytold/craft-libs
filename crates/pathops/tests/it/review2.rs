@@ -297,9 +297,9 @@ fn a_panic_of_the_predicate_in_the_recovery_is_an_error_not_a_retry() {
     let (a, b) = (closed(&[(3.0, 1.0), (3.0, 3.0), (0.0, 1.0)]), closed(&[(3.0, 0.0), (0.0, 2.0), (3.0, 2.0), (0.0, 0.0), (0.0, 1.0)]));
     let asked = std::cell::Cell::new(false);
     // The first time it is asked it panics, the second time it answers.
-    let union = |m: &[bool]| {
+    let union = |c: &[usize]| {
         assert!(asked.replace(true), "first call");
-        m[0] || m[1]
+        c.contains(&0) || c.contains(&1)
     };
     let got = try_boolean_n(&[(&a, NZ), (&b, NZ)], union).map(|p| area(&p, NZ));
     assert_eq!(got, Err(PathOpsError::Degenerate), "a panic is an error");
@@ -311,9 +311,9 @@ fn empty_inputs_do_not_switch_off_the_check_of_the_others() {
     let empty = BezPath::new();
     let mut inputs: Vec<(&BezPath, FillRule)> = vec![(&a, NZ), (&b, NZ)];
     inputs.extend(std::iter::repeat_n((&empty, NZ), 7));
-    let got = try_boolean_n(&inputs, |m| m[0] || m[1]).expect("the union");
+    let got = try_boolean_n(&inputs, |c| c.contains(&0) || c.contains(&1)).expect("the union");
     assert!(close(area(&got, NZ), 4.375, 1e-6), "the union is {}, right is 4.375", area(&got, NZ));
-    assert!(close(area(&boolean_n(&inputs, |m| m[0] || m[1]), NZ), 4.375, 1e-6));
+    assert!(close(area(&boolean_n(&inputs, |c| c.contains(&0) || c.contains(&1)), NZ), 4.375, 1e-6));
 }
 
 #[test]

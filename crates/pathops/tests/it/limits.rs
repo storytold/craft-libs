@@ -243,7 +243,7 @@ fn a_lower_mask_limit_refuses_an_operation_with_many_inputs() {
     let squares: Vec<BezPath> = (0..10).map(|i| rectangle(Rect::new(f64::from(i) * 20.0, 0.0, f64::from(i) * 20.0 + 10.0, 10.0))).collect();
     let mut inputs: Vec<(&BezPath, FillRule)> = squares.iter().map(|s| (s, FillRule::NonZero)).collect();
     inputs.extend(std::iter::repeat_n((&empty, FillRule::NonZero), 300));
-    let union = |m: &[bool]| m.iter().any(|&b| b);
+    let union = |c: &[usize]| !c.is_empty();
     assert!(close_area(&try_boolean_n(&inputs, union).unwrap(), 1000.0));
     let none = with(|l| l.mask_work = 0);
     assert_eq!(with_limits(none, || try_boolean_n(&inputs, union)), Err(PathOpsError::TooComplex));
@@ -348,7 +348,7 @@ fn a_lower_limit_on_the_work_of_ends_refuses_stacked_pies_the_default_takes() {
 fn a_lower_coverage_limit_refuses_nested_shapes_the_default_takes() {
     let nested: Vec<BezPath> = (1..=10).map(|k| rectangle(Rect::new(-f64::from(k), -f64::from(k), f64::from(k), f64::from(k)))).collect();
     let inputs: Vec<(&BezPath, FillRule)> = nested.iter().map(|p| (p, FillRule::NonZero)).collect();
-    let union = |m: &[bool]| m.iter().any(|&b| b);
+    let union = |c: &[usize]| !c.is_empty();
     assert!(try_boolean_n(&inputs, union).is_ok());
     // Ten nested squares hold 4 x 10 x 11 entries.
     let at = with(|l| l.coverage_entries = 440);
@@ -487,5 +487,5 @@ fn nested_squares_crossed_by_thin_bars_are_limited_by_the_pieces_they_are_cut_in
     assert!(pathfinder(PathfinderOp::Exclude, &big).is_empty());
     assert!(pathfinder(PathfinderOp::Divide, &big).is_empty());
     let paths: Vec<(&BezPath, FillRule)> = big.iter().map(|s| (&s.path, s.rule)).collect();
-    assert_eq!(try_boolean_n(&paths, |m| m[0]), Err(PathOpsError::TooComplex));
+    assert_eq!(try_boolean_n(&paths, |c| c.contains(&0)), Err(PathOpsError::TooComplex));
 }

@@ -547,7 +547,7 @@ fn offset_with_check<W>(
         vec![(fill, FillRule::NonZero), (ring, FillRule::NonZero), (open_bp, FillRule::NonZero)],
         crate::budget::limits().offset_segment_pairs,
     )?;
-    let c = if delta >= 0.0 { arr.try_contours(|m| m[0] || m[1] || m[2])? } else { arr.try_contours(|m| m[0] && !m[1])? };
+    let c = if delta >= 0.0 { arr.try_contours(|c| !c.is_empty())? } else { arr.try_contours(|c| c.contains(&0) && !c.contains(&1))? };
     // When `d` exceeds a curvature radius the stroker's inner offset inverts and its loops cancel
     // winding, leaving faces uncovered that are really within `d` of the path. Every face of the
     // true offset is bounded by arrangement edges, so a contour is spurious iff a point deep inside
@@ -563,7 +563,7 @@ fn offset_with_check<W>(
     if let Some(raw) = open_outline {
         let near_open = std::cell::LazyCell::new(|| index(&open));
         let alone = Arrangement::new_budgeted(vec![(raw, FillRule::NonZero)], crate::budget::limits().offset_segment_pairs)?;
-        let outline = without_spurious(&alone.try_contours(|m| m[0])?, false, d, |p, r| near(&near_open, p, r));
+        let outline = without_spurious(&alone.try_contours(|c| c.contains(&0))?, false, d, |p, r| near(&near_open, p, r));
         if !outline.elements().is_empty() {
             return try_unite_all_with(&[(&result, FillRule::NonZero), (&outline, FillRule::NonZero)], DEFAULT_PRECISION);
         }

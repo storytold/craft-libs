@@ -1958,7 +1958,7 @@ mod tests {
         work::reset();
         assert!(with_limits(under, || crate::pathfinder(PathfinderOp::Exclude, &shapes)).is_empty());
         let paths: Vec<(&BezPath, FillRule)> = shapes.iter().map(|s| (&s.path, FillRule::NonZero)).collect();
-        assert_eq!(with_limits(under, || crate::try_boolean_n(&paths, |m| m[0])), Err(PathOpsError::TooComplex));
+        assert_eq!(with_limits(under, || crate::try_boolean_n(&paths, |c| c.contains(&0))), Err(PathOpsError::TooComplex));
         assert_eq!(work::take(Work::Sweeps), 0, "refused before the sweep was built");
         // By default 2,000 nested squares (4 x 2,000 x 2,001 = 16 million) are within it, and 3,000 (36 million) are not.
         let (some, many) = (nested(2_000), nested(3_000));

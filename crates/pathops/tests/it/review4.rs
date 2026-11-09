@@ -194,7 +194,7 @@ fn a_loop_of_one_cubic_whose_handles_are_not_numbers_is_an_error_not_nothing() {
     assert_eq!(try_normalize(&nan, NZ), Err(PathOpsError::NonFinite));
     let square = rectangle(Rect::new(0.0, 0.0, 10.0, 10.0));
     assert_eq!(try_boolean(&square, NZ, &nan, NZ, BoolOp::Union, DEFAULT_PRECISION), Err(PathOpsError::NonFinite));
-    assert_eq!(try_boolean_n(&[(&square, NZ), (&nan, NZ)], |m| m[0] || m[1]), Err(PathOpsError::NonFinite));
+    assert_eq!(try_boolean_n(&[(&square, NZ), (&nan, NZ)], |c| c.contains(&0) || c.contains(&1)), Err(PathOpsError::NonFinite));
     assert_eq!(try_unite_all(&[(&square, NZ), (&nan, NZ)]), Err(PathOpsError::NonFinite));
     // Handles so large that their products overflow: past the coordinates the sweep takes.
     let huge = cubic([(0.0, 0.0), (1e200, 0.0), (0.0, 1e200), (0.0, 0.0)], true);

@@ -146,12 +146,13 @@ fn boolean_n_and_unite_all_agree_with_the_binary_operations() {
     // a and c make an 18 × 10 bar (180), and b adds the 10 × 5 above it (50).
     assert!(close(ar(&all), 230.0, 1e-9), "{}", ar(&all));
     // Covered by exactly two of the three.
-    let two = boolean_n(&inputs, |m| m.iter().filter(|&&x| x).count() == 2);
-    let three = boolean_n(&inputs, |m| m.iter().all(|&x| x));
-    let one = boolean_n(&inputs, |m| m.iter().filter(|&&x| x).count() == 1);
+    let n = inputs.len();
+    let two = boolean_n(&inputs, |c| c.len() == 2);
+    let three = boolean_n(&inputs, |c| c.len() == n);
+    let one = boolean_n(&inputs, |c| c.len() == 1);
     assert!(close(ar(&one) + ar(&two) + ar(&three), ar(&all), 1e-6));
     assert!(close(try_unite_all(&inputs).map(|p| ar(&p)).unwrap(), ar(&all), 1e-9));
-    assert!(close(try_boolean_n(&inputs, |m| m[0]).map(|p| ar(&p)).unwrap(), 100.0, 1e-9));
+    assert!(close(try_boolean_n(&inputs, |c| c.contains(&0)).map(|p| ar(&p)).unwrap(), 100.0, 1e-9));
     assert!(try_unite_all(&[(&poly(&[(f64::NAN, 0.0), (1.0, 0.0), (0.0, 1.0)], true), NZ)]).is_err());
 }
 

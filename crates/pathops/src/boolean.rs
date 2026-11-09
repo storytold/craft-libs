@@ -257,13 +257,16 @@ pub(crate) struct Arrangement {
     pub(crate) tidy: Tidy,
 }
 
-/// Most flags a boolean operation sets to tell its predicate what covers the faces: 268,435,456
-/// (the default of [`crate::Limits::mask_work`]). The predicate is given one for every input each time
-/// it is asked, about four times for each segment of the sweep, so many inputs (most of them
-/// empty, say) make the work the product of their number and the sweep's, which the other limits
-/// do not count. About a quarter of a second in a release build. Listing the inputs that cover each
-/// side of each edge, for the faces [`crate::pathfinder`] Divide and [`crate::regions`] give, is held
-/// to as many entries (one for each covering input and one for each side).
+/// Most entries a boolean operation lists to tell its predicate what covers the faces: 268,435,456
+/// (the default of [`crate::Limits::mask_work`]). The predicate is given the list of the inputs that
+/// cover a winding, and listing them costs the entries of the winding (one for each input with a
+/// non-zero winding there, and one more), for each distinct winding, which is two for each segment of
+/// the sweep at the most: counted before the pass as that. Shapes nested n deep make a list of n for
+/// each of their sides, which [`crate::MAX_COVERAGE_ENTRIES`] bounds before the sweep; many inputs, most of them empty,
+/// make none, a flag for every input did (the work was the product of their number and the sweep's).
+/// About a quarter of a second in a release build. Listing the inputs that cover each side of each
+/// edge, for the faces [`crate::pathfinder`] Divide and [`crate::regions`] give, is held to as many
+/// entries (one for each covering input and one for each side).
 pub const MASK_WORK: usize = 1 << 28;
 
 /// The order of two lists of covering inputs (ascending) that the flags of every input would give:
@@ -410,10 +413,11 @@ impl Arrangement {
         Ok(Self { top, rules: paths.iter().map(|p| p.1).collect(), tidy })
     }
 
-    /// For each input, whether the winding `w` is inside it under its rule.
+    /// For each input, whether the winding `w` is inside it under its rule: the form the tests compare
+    /// [`Self::covered`] with.
+    #[cfg(test)]
     pub(crate) fn mask(&self, w: &Multi) -> Vec<bool> {
         // A zero winding is outside under both rules, so only the non-zero ones can set a flag.
-        work::add(Work::MaskFlags, self.rules.len());
         let mut m = vec![false; self.rules.len()];
         for (i, k) in w.iter() {
             if let (Some(&r), Some(b)) = (self.rules.get(i), m.get_mut(i)) {
@@ -441,34 +445,52 @@ impl Arrangement {
         self.top.contours(|w| answers.of(w, &pred))
     }
 
-    /// The contour pass with the answer of `pred`, which is given a flag for every input, remembered
-    /// for each distinct winding: `pred` is called, and given its flags, at most twice for each
-    /// segment of the sweep in all (and not again for a winding it has seen).
+    /// The contours of the faces where `pred` holds for the flags of [`Self::mask`]: the form the tests
+    /// compare [`Self::contours_covering`] with.
+    #[cfg(test)]
     pub(crate) fn contours(&self, pred: impl Fn(&[bool]) -> bool) -> Contours {
+        self.contours_where(|w| pred(&self.mask(w)))
+    }
+
+    /// The contour pass with the answer of `pred`, which is given the inputs that cover the winding
+    /// ([`Self::covered`], ascending), remembered for each distinct winding: `pred` is called, and given
+    /// its list, at most twice for each segment of the sweep in all (and not again for a winding it has
+    /// seen). One list is refilled for each winding the pass tests, so a test costs the entries of the
+    /// winding, not the number of inputs.
+    pub(crate) fn contours_covering(&self, pred: impl Fn(&[usize]) -> bool) -> Contours {
         let answers: std::cell::RefCell<std::collections::HashMap<Multi, bool>> = std::cell::RefCell::new(std::collections::HashMap::new());
+        let cover: std::cell::RefCell<Vec<usize>> = std::cell::RefCell::new(Vec::new());
         self.contours_where(|w| {
             work::add(Work::WindingKeys, w.len().max(1));
             if let Some(&known) = answers.borrow().get(w) {
                 return known;
             }
-            let answer = pred(&self.mask(w));
+            let mut list = cover.borrow_mut();
+            list.clear();
+            list.extend(self.covered(w));
+            work::add(Work::CoverEntries, w.len().saturating_add(1));
+            let answer = pred(&list);
             answers.borrow_mut().insert(w.clone(), answer);
             answer
         })
     }
 
-    /// [`Self::contours`] with a panic in the sweep's contour pass turned into an error, as `new` does for the
+    /// [`Self::contours_covering`] with a panic in the sweep's contour pass turned into an error, as `new` does for the
     /// sweep itself (native builds only: on the web a panic aborts, whatever is caught here). Used by the calls that can
     /// return an error; the others catch a panic as a whole ([`guarded`]).
-    pub(crate) fn try_contours(&self, pred: impl Fn(&[bool]) -> bool) -> Result<Contours, PathOpsError> {
-        // The predicate is given a flag for every input each time it is asked about a winding, which
-        // is once of each distinct one ([`Self::contours`]): two for every segment of the sweep at
-        // most, counted here as four.
-        let segments = self.top.segment_indices().count();
-        if segments.saturating_mul(4).saturating_mul(self.rules.len()) > crate::budget::limits().mask_work {
-            return Err(PathOpsError::TooComplex);
+    ///
+    /// The lists the predicate is given cost the entries of the windings they are made of, for each
+    /// distinct winding, which is two for each segment of the sweep at the most: counted here, before the
+    /// pass, and past [`crate::Limits::mask_work`] of them the call is [`PathOpsError::TooComplex`].
+    pub(crate) fn try_contours(&self, pred: impl Fn(&[usize]) -> bool) -> Result<Contours, PathOpsError> {
+        let mut left = crate::budget::limits().mask_work;
+        for s in self.top.segment_indices() {
+            let h = s.first_half();
+            for w in [self.top.winding_clockwise(h), self.top.winding_counter_clockwise(h)] {
+                left = left.checked_sub(w.len().saturating_add(1)).ok_or(PathOpsError::TooComplex)?;
+            }
         }
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.contours(pred))).map_err(|_| PathOpsError::Degenerate)
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.contours_covering(pred))).map_err(|_| PathOpsError::Degenerate)
     }
 
     /// All distinct non-empty sets of inputs that cover a face next to some edge, each as the list of
@@ -909,11 +931,11 @@ pub fn try_boolean(a: &BezPath, a_rule: FillRule, b: &BezPath, b_rule: FillRule,
     ensure_size([a, b])?;
     // The coordinates as given, before the fill leaves out a contour that draws nothing ([`eps_for`]).
     eps_for([a, b])?;
-    checked_boolean(&[(fill_bezpath(a), a_rule), (fill_bezpath(b), b_rule)], &|m| op.apply(m[0], m[1]), sane_precision(precision))
+    checked_boolean(&[(fill_bezpath(a), a_rule), (fill_bezpath(b), b_rule)], &|c| op.apply(c.contains(&0), c.contains(&1)), sane_precision(precision))
 }
 
 /// The operation `pred` over `inputs` (filled paths), its result checked ([`try_boolean`]).
-fn checked_boolean(inputs: &[(BezPath, FillRule)], pred: &dyn Fn(&[bool]) -> bool, precision: f64) -> Result<BezPath, PathOpsError> {
+fn checked_boolean(inputs: &[(BezPath, FillRule)], pred: &dyn Fn(&[usize]) -> bool, precision: f64) -> Result<BezPath, PathOpsError> {
     let arr = Arrangement::new(inputs.to_vec())?;
     let paths: Vec<&BezPath> = inputs.iter().map(|(p, _)| p).collect();
     // A check that cannot be made (a contour pass of it panics) does not find this result wrong.
@@ -1136,7 +1158,7 @@ fn resolved(input: &BezPath, rule: FillRule) -> Result<Option<BezPath>, PathOpsE
 /// together add up or not: not the first result, which was found wrong), `Ok(None)` when an operand
 /// is not, and an error when it is over a limit or when a sweep or contour pass of it panics (of a
 /// windings check too).
-fn resolved_boolean(inputs: &[(BezPath, FillRule)], pred: &dyn Fn(&[bool]) -> bool, precision: f64) -> Result<Option<BezPath>, PathOpsError> {
+fn resolved_boolean(inputs: &[(BezPath, FillRule)], pred: &dyn Fn(&[usize]) -> bool, precision: f64) -> Result<Option<BezPath>, PathOpsError> {
     let mut flat: Vec<(BezPath, FillRule)> = Vec::with_capacity(inputs.len());
     for (p, rule) in inputs {
         let Some(r) = resolved(p, *rule)? else { return Ok(None) };
@@ -1171,7 +1193,7 @@ fn resolved_boolean(inputs: &[(BezPath, FillRule)], pred: &dyn Fn(&[bool]) -> bo
 /// the sweep against the area of each input (of up to eight that draw something: an empty path, or one
 /// of points only, is not counted), and resolves the inputs first when they do not add up, as there. `pred` is asked
 /// as [`boolean_n`] says.
-pub fn try_boolean_n(paths: &[(&BezPath, FillRule)], pred: impl Fn(&[bool]) -> bool) -> Result<BezPath, PathOpsError> {
+pub fn try_boolean_n(paths: &[(&BezPath, FillRule)], pred: impl Fn(&[usize]) -> bool) -> Result<BezPath, PathOpsError> {
     ensure_size(paths.iter().map(|(p, _)| *p))?;
     // The coordinates as given, before the fill leaves out a contour that draws nothing ([`eps_for`]).
     eps_for(paths.iter().map(|(p, _)| *p))?;
@@ -1179,16 +1201,17 @@ pub fn try_boolean_n(paths: &[(&BezPath, FillRule)], pred: impl Fn(&[bool]) -> b
     checked_boolean(&bps, &pred, DEFAULT_PRECISION)
 }
 
-/// N-ary boolean: the area where `pred(inside_flags)` holds, `inside_flags[i]` telling whether a
-/// point is inside `paths[i]` under its fill rule. A refused input gives an empty path; callers that
-/// can report an error use [`try_boolean_n`].
+/// N-ary boolean: the area where `pred(inside)` holds, `inside` listing the indices `i`, ascending, of
+/// the `paths[i]` a point is inside under their fill rules. A refused input gives an empty path;
+/// callers that can report an error use [`try_boolean_n`].
 ///
-/// `pred` must answer by its flags alone. It is asked once for each distinct winding of the sweep's
-/// faces, not once for each distinct set of flags: two windings of one input that differ only in
-/// how many times it covers a face (shapes nested and wound the same way are windings 1 and 2 under
-/// the non-zero rule) give the same flags and are asked about separately, so a `pred` that counts
-/// its calls can see more than one for a set of flags.
-pub fn boolean_n(paths: &[(&BezPath, FillRule)], pred: impl Fn(&[bool]) -> bool) -> BezPath {
+/// `pred` must answer by its list alone. It is asked once for each distinct winding of the sweep's
+/// faces, not once for each distinct list: two windings of one input that differ only in how many
+/// times it covers a face (shapes nested and wound the same way are windings 1 and 2 under the
+/// non-zero rule) give the same list and are asked about separately, so a `pred` that counts its
+/// calls can see more than one for a list. A list costs the inputs that cover the winding, not
+/// every input ([`MASK_WORK`]).
+pub fn boolean_n(paths: &[(&BezPath, FillRule)], pred: impl Fn(&[usize]) -> bool) -> BezPath {
     try_boolean_n(paths, pred).unwrap_or_default()
 }
 
@@ -1752,11 +1775,13 @@ mod tests {
         assert!(limits_tried > 400, "{limits_tried}");
     }
 
-    /// The flags a predicate is given are counted before the pass that sets them, and a pass past
-    /// the limit is not made: many inputs with nothing in them (an empty path is an input) made the
-    /// work the product of their number and the sweep's, which no other limit counted.
+    /// The entries listed for a predicate are counted before the pass that lists them, and a pass past
+    /// the limit is not made. Many inputs with nothing in them (an empty path is an input) made the
+    /// work the product of their number and the sweep's when the predicate was given a flag for each
+    /// input; it is given the inputs that cover a face now, and they cost nothing. Nested shapes make
+    /// a longer list for each side, as many entries as the windings the sweep holds.
     #[test]
-    fn the_flags_of_a_predicate_are_bounded_before_the_pass() {
+    fn the_entries_listed_for_a_predicate_are_bounded_before_the_pass() {
         let empty = BezPath::new();
         let squares: Vec<BezPath> = (0..20).map(|i| square(f64::from(i) * 20.0, 0.0, 10.0)).collect();
         let inputs_with = |empties: usize| -> Vec<(&BezPath, FillRule)> {
@@ -1764,29 +1789,87 @@ mod tests {
             inputs.extend(std::iter::repeat_n((&empty, FillRule::NonZero), empties));
             inputs
         };
-        let flags = |empties: usize| {
+        let listed = |inputs: &[(&BezPath, FillRule)]| {
             work::reset();
-            let got = try_boolean_n(&inputs_with(empties), |m| m[0]).unwrap();
+            let got = try_boolean_n(inputs, |c| c.contains(&0)).unwrap();
             assert!((area(&got, FillRule::NonZero) - 100.0).abs() < 1e-9);
-            work::take(Work::MaskFlags)
+            work::take(Work::CoverEntries)
         };
-        // The flags grow with the product of the inputs and the segments, as the claim says.
-        let (few, many) = (flags(0), flags(1000));
-        assert!(many > 40 * few, "{few} flags for 20 inputs, {many} for 1,020");
-        // The limit is on that product (four for each segment of the sweep and input): at it the
-        // operation is made, one under it is refused before any flag is set.
+        // An input that covers nothing adds no entry: the empties of 1,000 cost what none cost.
+        let (few, many) = (listed(&inputs_with(0)), listed(&inputs_with(1000)));
+        assert!(few > 0 && many == few, "{few} entries for 20 inputs, {many} for 1,020");
+        // The limit is on the entries of the windings of each side of each segment (and one more for each),
+        // which is at least what is listed (a winding the pass asks about twice is listed once): at it the
+        // operation is made, one under it is refused before any entry is listed.
         let inputs = inputs_with(1000);
         let arr = Arrangement::new(inputs.iter().map(|(p, r)| (fill_bezpath(p), *r)).collect()).unwrap();
-        let wanted = 4 * arr.top.segment_indices().count() * inputs.len();
-        let mut limits = crate::Limits { mask_work: wanted, ..crate::Limits::default() };
-        assert!(crate::with_limits(limits, || try_boolean_n(&inputs, |m| m[0])).is_ok());
-        limits.mask_work = wanted - 1;
+        let charged: usize = arr
+            .top
+            .segment_indices()
+            .map(|s| {
+                [arr.top.winding_clockwise(s.first_half()), arr.top.winding_counter_clockwise(s.first_half())]
+                    .iter()
+                    .map(|w| w.len() + 1)
+                    .sum::<usize>()
+            })
+            .sum();
+        assert!(many <= charged && charged <= 2 * many + 2 * arr.top.segment_indices().count(), "{many} listed, {charged} charged");
+        let mut limits = crate::Limits { mask_work: charged, ..crate::Limits::default() };
+        assert!(crate::with_limits(limits, || try_boolean_n(&inputs, |c| c.contains(&0))).is_ok());
+        limits.mask_work = charged - 1;
         work::reset();
-        assert_eq!(crate::with_limits(limits, || try_boolean_n(&inputs, |m| m[0])), Err(PathOpsError::TooComplex));
-        assert!(crate::with_limits(limits, || boolean_n(&inputs, |m| m[0])).elements().is_empty());
-        assert_eq!(work::take(Work::MaskFlags), 0, "no flag was set");
+        assert_eq!(crate::with_limits(limits, || try_boolean_n(&inputs, |c| c.contains(&0))), Err(PathOpsError::TooComplex));
+        assert!(crate::with_limits(limits, || boolean_n(&inputs, |c| c.contains(&0))).elements().is_empty());
+        assert_eq!(work::take(Work::CoverEntries), 0, "no entry was listed");
         // Two inputs are far under it.
         assert!(try_boolean(&squares[0], FillRule::NonZero, &squares[1], FillRule::NonZero, BoolOp::Union, DEFAULT_PRECISION).is_ok());
+    }
+
+    /// Squares nested n deep, each an input, whose windings are as long as the nesting: the entries
+    /// listed for the predicate are what the windings hold (a list for each distinct winding, at the
+    /// most one for each side of each segment), grow with the square of the depth as the windings do,
+    /// and are at most what the limit charges, at chained sizes. The charge is the same sum before the
+    /// pass, so a limit one under it refuses before any is listed.
+    #[test]
+    fn the_entries_listed_for_nested_inputs_are_counted_at_chained_sizes() {
+        let nested = |n: usize| -> Vec<BezPath> { (1..=n).map(|k| crate::testutil::rect(-(k as f64), -(k as f64), k as f64, k as f64)).collect() };
+        let mut previous = None;
+        for n in [25usize, 50, 100, 200] {
+            let inputs = nested(n);
+            let refs: Vec<(&BezPath, FillRule)> = inputs.iter().map(|p| (p, FillRule::NonZero)).collect();
+            let arr = Arrangement::new(inputs.iter().map(|p| (p.clone(), FillRule::NonZero)).collect()).unwrap();
+            let charged: usize = arr
+                .top
+                .segment_indices()
+                .map(|s| {
+                    [arr.top.winding_clockwise(s.first_half()), arr.top.winding_counter_clockwise(s.first_half())]
+                        .iter()
+                        .map(|w| w.len() + 1)
+                        .sum::<usize>()
+                })
+                .sum();
+            work::reset();
+            let got = try_boolean_n(&refs, |c| c.len() == n).unwrap();
+            let listed = work::take(Work::CoverEntries);
+            // Covered by all n: the innermost square.
+            assert!((area(&got, FillRule::NonZero) - 4.0).abs() < 1e-9, "{n}: {}", area(&got, FillRule::NonZero));
+            // One list for each distinct winding (0 to n deep), each its entries and one more.
+            assert_eq!(listed, (0..=n).map(|d| d + 1).sum::<usize>(), "{n} nested");
+            assert!(listed <= charged, "{n}: {listed} listed, {charged} charged");
+            // The charge is held to the limit before the pass: at it the call is made, one under it is refused with none listed.
+            let at = crate::Limits { mask_work: charged, ..crate::Limits::default() };
+            assert!(crate::with_limits(at, || try_boolean_n(&refs, |c| c.len() == n)).is_ok(), "{n} at the limit");
+            let under = crate::Limits { mask_work: charged - 1, ..crate::Limits::default() };
+            work::reset();
+            assert_eq!(crate::with_limits(under, || try_boolean_n(&refs, |c| c.len() == n)), Err(PathOpsError::TooComplex), "{n} under it");
+            assert_eq!(work::take(Work::CoverEntries), 0, "{n}: nothing listed before the refusal");
+            // Doubling the depth makes the entries four times (the windings' own growth), not eight.
+            if let Some((last_n, last)) = previous {
+                assert_eq!(n, 2 * last_n);
+                assert!(listed < 5 * last && listed > 3 * last, "{last} entries for {last_n} nested, {listed} for {n}");
+            }
+            previous = Some((n, listed));
+        }
     }
 
     /// One crossing-heavy input of a union is counted before its contours are made, against what is
@@ -1831,29 +1914,29 @@ mod tests {
     }
 
     /// The predicate is asked once for each distinct winding of a side of a segment, and not once for
-    /// each distinct set of flags: two nested squares wound the same way are windings 1 and 2 under
-    /// the non-zero rule, the same flag for the input, and are asked about separately. So a caller
-    /// that counts its calls sees one for each winding, and more than one for a set of flags.
+    /// each distinct list of covering inputs: two nested squares wound the same way are windings 1 and 2
+    /// under the non-zero rule, the same list for the input, and are asked about separately. So a caller
+    /// that counts its calls sees one for each winding, and more than one for a list.
     #[test]
-    fn the_predicate_is_asked_once_for_each_winding_and_not_for_each_set_of_flags() {
+    fn the_predicate_is_asked_once_for_each_winding_and_not_for_each_list() {
         let mut nested = crate::testutil::rect(0.0, 0.0, 10.0, 10.0);
         nested.extend(crate::testutil::rect(2.0, 2.0, 8.0, 8.0).iter());
         let arr = Arrangement::new(vec![(nested, FillRule::NonZero)]).unwrap();
-        let asked = std::cell::RefCell::new(Vec::<Vec<bool>>::new());
-        let c = arr.contours(|m| {
-            asked.borrow_mut().push(m.to_vec());
-            m[0]
+        let asked = std::cell::RefCell::new(Vec::<Vec<usize>>::new());
+        let c = arr.contours_covering(|c| {
+            asked.borrow_mut().push(c.to_vec());
+            c.contains(&0)
         });
         assert_eq!(c.contours().count(), 1, "the boundary of the area filled is the outer square");
         let asked = asked.into_inner();
         // Outside (winding 0), the ring between the squares (1) and the inner square (2).
         assert_eq!(asked.len(), 3, "{asked:?}");
-        let flags: std::collections::HashSet<&Vec<bool>> = asked.iter().collect();
-        assert_eq!(flags.len(), 2, "two sets of flags, [false] and [true], the second asked twice: {asked:?}");
-        assert_eq!(asked.iter().filter(|m| m[0]).count(), 2);
+        let lists: std::collections::HashSet<&Vec<usize>> = asked.iter().collect();
+        assert_eq!(lists.len(), 2, "two lists, [] and [0], the second asked twice: {asked:?}");
+        assert_eq!(asked.iter().filter(|c| c.contains(&0)).count(), 2);
     }
 
-    /// The reviewer's input for the flags: `west` tall thin rectangles in one input, to the west of
+    /// The reviewer's input for the predicate: `west` tall thin rectangles in one input, to the west of
     /// `squares` squares in a column, each its own input. The contour pass starts a contour in the
     /// column and scans west through every rectangle's segments, asking the predicate about both
     /// sides of each, every time: asked of each it was `west` x `squares` x the inputs.
@@ -1869,31 +1952,32 @@ mod tests {
         inputs
     }
 
-    fn west_flags(west: usize, squares: usize) -> usize {
+    fn west_entries(west: usize, squares: usize) -> usize {
         let inputs = west_scan(west, squares);
         let refs: Vec<(&BezPath, FillRule)> = inputs.iter().map(|p| (p, FillRule::NonZero)).collect();
         work::reset();
-        let r = try_boolean_n(&refs, |m| m.iter().skip(1).any(|&b| b)).unwrap();
+        let r = try_boolean_n(&refs, |c| c.iter().any(|&i| i >= 1)).unwrap();
         assert!((area(&r, FillRule::NonZero) - squares as f64).abs() < 1e-6, "{}", area(&r, FillRule::NonZero));
-        work::take(Work::MaskFlags)
+        work::take(Work::CoverEntries)
     }
 
-    /// The predicate is asked once of each distinct winding, so the flags it is given do not grow with
-    /// the scans west: with the squares and the rectangles both doubled, they grow four times (the
-    /// inputs times the distinct windings, each square's own), where they grew eight times.
+    /// The predicate is asked once of each distinct winding, so the entries listed for it do not grow with
+    /// the scans west: with the squares and the rectangles both doubled, they double (one list for the
+    /// windings of each square, and the windings of the rectangles), where the flags for every input
+    /// grew four times, and the scans before that eight.
     #[test]
-    fn the_flags_do_not_grow_with_the_scans_through_segments_that_are_no_boundary() {
-        let (small, large) = (west_flags(100, 100), west_flags(200, 200));
-        assert!(small > 0 && large <= 4 * small + small / 4, "{small} flags for 100 squares, {large} for 200 (eight times would be {})", 8 * small);
-        // The scans alone (more rectangles to the west, the same squares) add no flag at all.
-        assert_eq!(west_flags(100, 40), west_flags(400, 40));
-        // And the flags are at most two for each segment of the sweep and input, which the limit counts as four.
+    fn the_entries_do_not_grow_with_the_scans_through_segments_that_are_no_boundary() {
+        let (small, large) = (west_entries(100, 100), west_entries(200, 200));
+        assert!(small > 0 && large <= 2 * small + 4, "{small} entries for 100 squares, {large} for 200 (eight times would be {})", 8 * small);
+        // The scans alone (more rectangles to the west, the same squares) add no entry at all.
+        assert_eq!(west_entries(100, 40), west_entries(400, 40));
+        // And the entries are at most those of two windings for each segment of the sweep.
         let inputs = west_scan(100, 100);
         let arr = Arrangement::new(inputs.iter().map(|p| (p.clone(), FillRule::NonZero)).collect()).unwrap();
-        assert!(small <= 2 * arr.top.segment_indices().count() * inputs.len(), "{small} flags");
+        assert!(small <= 2 * 2 * arr.top.segment_indices().count(), "{small} entries");
         // The pass makes the same contours: the answers are remembered, not changed.
         let direct = arr.contours_where(|w| arr.mask(w).iter().skip(1).any(|&b| b));
-        let cached = arr.contours(|m| m.iter().skip(1).any(|&b| b));
+        let cached = arr.contours_covering(|c| c.iter().any(|&i| i >= 1));
         assert_eq!(direct.contours().count(), cached.contours().count());
         assert_eq!(
             direct.contours().map(|c| c.path.elements().len()).sum::<usize>(),
@@ -1924,7 +2008,7 @@ mod tests {
             let inputs = nested_around_a_column(n, m);
             let arr = Arrangement::new(inputs.iter().map(|p| (p.clone(), FillRule::NonZero)).collect()).unwrap();
             work::reset();
-            let made = arr.contours(|f| f.iter().skip(n).any(|&b| b));
+            let made = arr.contours_covering(|c| c.iter().any(|&i| i >= n));
             assert_eq!(made.contours().count(), m, "{n} nested, {m} in the column");
             (work::take(Work::WindingKeys), work::take(Work::AnswerMisses))
         };
@@ -1982,7 +2066,9 @@ mod tests {
             let limits = crate::Limits { segment_pairs: pairs, ..crate::Limits::default() };
             let all = [
                 crate::with_limits(limits, || try_boolean(&a, FillRule::NonZero, &b, FillRule::NonZero, BoolOp::Union, DEFAULT_PRECISION)),
-                crate::with_limits(limits, || try_boolean_n(&[(&a, FillRule::NonZero), (&b, FillRule::NonZero)], |m| m[0] || m[1])),
+                crate::with_limits(limits, || {
+                    try_boolean_n(&[(&a, FillRule::NonZero), (&b, FillRule::NonZero)], |c| c.contains(&0) || c.contains(&1))
+                }),
             ];
             // The first arrangement alone fits: the operand pair is swept (Arrangement::new succeeds).
             let swept = Arrangement::new_budgeted(vec![(fill_bezpath(&a), FillRule::NonZero), (fill_bezpath(&b), FillRule::NonZero)], pairs).is_ok();
@@ -2171,7 +2257,7 @@ mod tests {
     #[cfg(panic = "unwind")]
     fn a_panic_in_the_contour_pass_becomes_an_error() {
         let arr = Arrangement::new(vec![(fill_bezpath(&square(0.0, 0.0, 10.0)), FillRule::NonZero)]).unwrap();
-        assert!(arr.try_contours(|m| m[0]).is_ok());
+        assert!(arr.try_contours(|c| c.contains(&0)).is_ok());
         assert_eq!(arr.try_contours(|_| panic!("simulated panic in the sweep")).err(), Some(PathOpsError::Degenerate));
     }
 
@@ -2191,7 +2277,7 @@ mod tests {
         let a = poly(&[(3.0, 1.0), (3.0, 3.0), (0.0, 1.0)]);
         let b = poly(&[(3.0, 0.0), (0.0, 2.0), (3.0, 2.0), (0.0, 0.0), (0.0, 1.0)]);
         let union = || try_boolean(&a, FillRule::NonZero, &b, FillRule::NonZero, BoolOp::Union, DEFAULT_PRECISION);
-        let n_ary = || try_boolean_n(&[(&a, FillRule::NonZero), (&b, FillRule::NonZero)], |m| m[0] || m[1]);
+        let n_ary = || try_boolean_n(&[(&a, FillRule::NonZero), (&b, FillRule::NonZero)], |c| c.contains(&0) || c.contains(&1));
         assert!(union().is_ok_and(|p| (p.area().abs() - 4.375).abs() < 1e-6), "resolved, the union is right");
         assert!(n_ary().is_ok_and(|p| (p.area().abs() - 4.375).abs() < 1e-6));
         // The sweep of an operand on its own, a contour pass of its windings check, its contour pass,
@@ -2255,7 +2341,7 @@ mod tests {
         let a = poly(&[(3.0, 1.0), (3.0, 3.0), (0.0, 1.0)]);
         let b = poly(&[(3.0, 0.0), (0.0, 2.0), (3.0, 2.0), (0.0, 0.0), (0.0, 1.0)]);
         let union = || try_boolean(&a, FillRule::NonZero, &b, FillRule::NonZero, BoolOp::Union, DEFAULT_PRECISION);
-        let n_ary = || try_boolean_n(&[(&a, FillRule::NonZero), (&b, FillRule::NonZero)], |m| m[0] || m[1]);
+        let n_ary = || try_boolean_n(&[(&a, FillRule::NonZero), (&b, FillRule::NonZero)], |c| c.contains(&0) || c.contains(&1));
         let answering = |answers: Vec<Answer>| {
             RECHECK_ANSWERS.with(|r| *r.borrow_mut() = answers);
             let got = (union(), n_ary());
@@ -2275,5 +2361,93 @@ mod tests {
             let areas = (got.map(|p| p.area().abs()), n.map(|p| p.area().abs()));
             assert!(areas.0.is_ok_and(|a| (a - 4.375).abs() < 1e-6) && areas.1.is_ok_and(|a| (a - 4.375).abs() < 1e-6), "{answers:?}: {areas:?}");
         }
+    }
+
+    /// Squares that overlap, nest, touch or lie apart, and 72 that overlap in rows, stacked in an
+    /// order other than across the page.
+    fn square_sets() -> Vec<(&'static str, Vec<BezPath>)> {
+        let mut many: Vec<BezPath> = (0..70)
+            .map(|i| {
+                let x = 10.0 * f64::from((i * 37) % 70);
+                square(x, 7.0 * f64::from(i % 5), 15.0)
+            })
+            .collect();
+        many.insert(20, square(100.0, -5.0, 60.0));
+        many.push(square(400.0, 10.0, 30.0));
+        vec![
+            ("overlapping", vec![square(0.0, 0.0, 100.0), square(50.0, 50.0, 100.0), square(25.0, 75.0, 100.0)]),
+            ("nested", vec![square(0.0, 0.0, 300.0), square(50.0, 50.0, 200.0), square(100.0, 100.0, 100.0), square(140.0, 140.0, 20.0)]),
+            ("touching", vec![square(0.0, 0.0, 100.0), square(100.0, 0.0, 100.0), square(0.0, 100.0, 100.0), square(100.0, 100.0, 100.0)]),
+            ("apart", vec![square(0.0, 0.0, 10.0), square(50.0, 0.0, 10.0), square(0.0, 50.0, 10.0)]),
+            ("many", many),
+        ]
+    }
+
+    /// The contours of a pass, in order, each with its path and whether it is an outer contour.
+    fn contour_list(c: &Contours) -> Vec<(BezPath, bool)> {
+        c.contours().map(|ct| (ct.path.clone(), ct.outer)).collect()
+    }
+
+    type FlagTest = Box<dyn Fn(&[bool]) -> bool>;
+    type CoverTest = Box<dyn Fn(&[usize]) -> bool>;
+
+    /// Each test of the boolean operations, Offset Path, the Pathfinder operations, compound shapes
+    /// and Intertwine finds the same contours in the same order from the inputs covering each face
+    /// as from a flag per input (VectorCraft 72c46b8's test, on the same sets).
+    #[test]
+    fn contour_passes_on_the_covering_inputs_match_the_flag_tests() {
+        for (what, set) in square_sets() {
+            let n = set.len();
+            let arr = Arrangement::new(set.iter().map(|p| (p.clone(), FillRule::NonZero)).collect()).unwrap();
+            let mut tests: Vec<(String, FlagTest, CoverTest)> = vec![];
+            for op in [BoolOp::Union, BoolOp::Intersect, BoolOp::Difference, BoolOp::Xor] {
+                tests.push((
+                    format!("{op:?}"),
+                    Box::new(move |m: &[bool]| op.apply(m[0], m[1])),
+                    Box::new(move |c: &[usize]| op.apply(c.contains(&0), c.contains(&1))),
+                ));
+            }
+            // Offset Path sweeps three inputs, so there any cover is one of them.
+            tests.push((
+                "offset outward".into(),
+                Box::new(|m: &[bool]| m[0] || m[1] || m[2]),
+                Box::new(|c: &[usize]| c.first().is_some_and(|&i| i < 3)),
+            ));
+            tests.push(("offset inward".into(), Box::new(|m: &[bool]| m[0] && !m[1]), Box::new(|c: &[usize]| c.contains(&0) && !c.contains(&1))));
+            tests.push(("unite".into(), Box::new(|m: &[bool]| m.contains(&true)), Box::new(|c: &[usize]| !c.is_empty())));
+            tests.push(("intersect".into(), Box::new(|m: &[bool]| m.iter().all(|&b| b)), Box::new(move |c: &[usize]| c.len() == n)));
+            tests.push(("minus front".into(), Box::new(|m: &[bool]| m[0] && !m[1..].contains(&true)), Box::new(|c: &[usize]| c == [0])));
+            tests.push((
+                "minus back".into(),
+                Box::new(move |m: &[bool]| m[n - 1] && !m[..n - 1].contains(&true)),
+                Box::new(move |c: &[usize]| c == [n - 1]),
+            ));
+            tests.push((
+                "exclude".into(),
+                Box::new(|m: &[bool]| m.iter().filter(|&&b| b).count() % 2 == 1),
+                Box::new(|c: &[usize]| c.len() % 2 == 1),
+            ));
+            tests.push(("intertwine".into(), Box::new(|m: &[bool]| m[0] && m[1] && !m[2..].contains(&true)), Box::new(|c: &[usize]| c == [0, 1])));
+            for (op, flags, cover) in &tests {
+                let old = contour_list(&arr.contours(flags));
+                assert_eq!(contour_list(&arr.contours_covering(cover)), old, "{what}: {op}");
+                assert_eq!(contour_list(&arr.try_contours(cover).unwrap()), old, "{what}: {op}");
+            }
+        }
+    }
+
+    /// A contour pass hands its test the inputs covering each face, not a flag for every input:
+    /// with 100 squares apart, no test sees more than one (VectorCraft 72c46b8's test).
+    #[test]
+    fn a_contour_pass_tests_only_the_inputs_covering_each_face() {
+        let set: Vec<(BezPath, FillRule)> = (0..100).map(|i| (square(20.0 * f64::from(i), 0.0, 10.0), FillRule::NonZero)).collect();
+        let arr = Arrangement::new(set).unwrap();
+        let widest = std::cell::Cell::new(0);
+        let c = arr.contours_covering(|c| {
+            widest.set(widest.get().max(c.len()));
+            !c.is_empty()
+        });
+        assert_eq!(widest.get(), 1);
+        assert_eq!(c.contours().count(), 100);
     }
 }

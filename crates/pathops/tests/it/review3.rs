@@ -64,24 +64,25 @@ fn operands_that_are_only_points_do_not_switch_off_the_check_of_the_others() {
         .collect();
     let mut inputs: Vec<(&BezPath, FillRule)> = vec![(&a, NZ), (&b, NZ)];
     inputs.extend(dots.iter().map(|d| (d, NZ)));
-    let flags = std::cell::Cell::new(0usize);
-    let union = |m: &[bool]| {
-        flags.set(m.len());
-        m[0] || m[1]
+    let longest = std::cell::Cell::new(0usize);
+    let union = |c: &[usize]| {
+        longest.set(longest.get().max(c.len()));
+        assert!(c.windows(2).all(|w| w[0] < w[1]), "the covering inputs ascend: {c:?}");
+        c.contains(&0) || c.contains(&1)
     };
     let got = try_boolean_n(&inputs, union).expect("the union");
     assert!(close(area(&got, NZ), 4.375, 1e-6), "the union is {}, right is 4.375", area(&got, NZ));
-    assert_eq!(flags.get(), 9, "the predicate still has a flag for every input, in their order");
-    assert!(close(area(&boolean_n(&inputs, |m| m[0] || m[1]), NZ), 4.375, 1e-6));
+    assert_eq!(longest.get(), 2, "the predicate is given the inputs that cover a face, not a flag for each of the nine");
+    assert!(close(area(&boolean_n(&inputs, |c| c.contains(&0) || c.contains(&1)), NZ), 4.375, 1e-6));
 }
 
 #[test]
 fn the_predicate_of_a_rectangle_is_asked_once_for_each_of_its_two_windings() {
     let square = rectangle(Rect::new(0.0, 0.0, 10.0, 10.0));
     let calls = std::cell::Cell::new(0usize);
-    let got = try_boolean_n(&[(&square, NZ)], |m| {
+    let got = try_boolean_n(&[(&square, NZ)], |c| {
         calls.set(calls.get() + 1);
-        m[0]
+        c.contains(&0)
     })
     .expect("the square");
     assert!(close(area(&got, NZ), 100.0, 1e-9));

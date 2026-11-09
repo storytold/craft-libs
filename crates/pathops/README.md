@@ -21,7 +21,7 @@ pub enum FillRule { NonZero, EvenOdd }
 pub enum BoolOp { Union, Intersect, Difference, Xor }
 pub fn boolean(a: &BezPath, a_rule: FillRule, b: &BezPath, b_rule: FillRule, op: BoolOp) -> BezPath;
 pub fn try_boolean(.., op: BoolOp, precision: f64) -> Result<BezPath, PathOpsError>; // errors on NaN, huge, too many segments
-pub fn boolean_n(paths: &[(&BezPath, FillRule)], pred: impl Fn(&[bool]) -> bool) -> BezPath;
+pub fn boolean_n(paths: &[(&BezPath, FillRule)], pred: impl Fn(&[usize]) -> bool) -> BezPath; // pred gets the inputs covering a point, ascending
 pub fn unite_all(paths: &[(&BezPath, FillRule)]) -> BezPath;  // fast many-shape union
 pub fn normalize(path: &BezPath, rule: FillRule) -> BezPath;  // resolve self-overlaps
 pub fn area(path: &BezPath, rule: FillRule) -> f64;           // exact filled area
@@ -274,14 +274,16 @@ work of each operation is bounded before it starts, in counts the tests assert o
   (to the rounding) they count 1.7 times, for the memory: 256 lines moved 2 tolerances took 2.7 GB, 215 took 1.6 GB (the
   metered sweep refuses both, at 7.9 and 4.6 million pieces), 256 exactly through a point 0.8 s and 58 MB (refused by it too, as a work
   of 5.2e9; 200 are made);
-- a boolean operation asks its predicate once for each distinct winding of a side of a segment, and hands it a
-  flag for each input. That is the winding of every input, not the set of flags it gives: shapes nested and
-  wound the same way are windings 1 and 2 under the non-zero rule, which are the same flags and are asked
-  about separately, so a predicate that counts its calls sees more than one for a set of flags (and it must
-  answer by its flags alone). There are at most two windings for each segment, so the flags are at
-  most twice the segments times the inputs, which is more than the sweep's own work when most of many
-  inputs are empty: past `MASK_WORK` (268,435,456) of them, counted as four for each segment and input
-  before the sweep, it is `TooComplex`. The contour pass asks about the same side again and again (it
+- a boolean operation asks its predicate once for each distinct winding of a side of a segment, and hands it the
+  inputs that cover that winding (their indices, ascending). That is the winding of every input, not the list it gives: shapes
+  nested and wound the same way are windings 1 and 2 under the non-zero rule, which are the same list and are asked
+  about separately, so a predicate that counts its calls sees more than one for a list (and it must answer by its
+  list alone). There are at most two windings for each segment. Listing the inputs covering a winding costs the
+  entries of the winding, not a flag for every input (which was more than the sweep's own work when most of many
+  inputs are empty): the entries of each side of each segment (one for each input with a winding there, and one more), which
+  is what the lists are made of at the most, are counted before the pass and past `MASK_WORK` (268,435,456) of them it is
+  `TooComplex`. Shapes nested n deep make n of them for each side, which `MAX_COVERAGE_ENTRIES` bounds before the sweep; inputs
+  that cover nothing make none. The contour pass asks about the same side again and again (it
   scans west through the segments that are no boundary for every contour it starts), so the answers are
   found where the windings are stored, by their address, and no winding is hashed again: the work of the
   pass does not grow with the scans, however long the windings of nested shapes are. Divide and `regions`
@@ -477,7 +479,8 @@ sweep-line limit at its default and raised to 2^30:
 400 thin strokes slanting each way across 400 others (3,200 elements, none of them level) takes 3.1 s, and
 one of 408 or more is `TooComplex`. Strokes that are curves count more than lines (a pair of curves crosses up
 to nine times, a line and a curve three), so a hatch of curves is refused at fewer. A boolean operation of more
-than a few thousand inputs, most of them empty, is `TooComplex` past `MASK_WORK`.
+than a few thousand inputs, most of them empty, is made: its predicate is given the inputs that cover a face, and an
+empty one is in none of them.
 
 Nine more bounds refuse input a drawing can hold, none of it common: a polygon of more than 1,291 edges that cross nearly every other (a star of 1,293 points, joined to the one nearly opposite) by `MAX_CROSSED_WORK`, more than a million places where segments cross, as in 53 stars of 201 points stacked (or 20 of bowed cubics) by `MAX_REAL_CROSSINGS`, a grid of 300 and 300 open lines under 100 arches whose bounds hold it (an Outline: by the counts of crossings, in 18 ms; 200 arches, 41 ms), a pie of more than 256 slices (or any
 more than 512 segment ends at one point; a fan of triangles has two at the point for each, so 257 of them) by `MAX_ENDS_AT_A_POINT`, four pies of 256 slices on a diagonal (the work of the ends summed over the points) by `MAX_ENDS_WORK`, 257 lines
