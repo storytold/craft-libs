@@ -93,3 +93,24 @@ fn the_places_where_paths_meet_are_still_cuts() {
     }
     assert_eq!(pieces(vec![figure]), vec![3], "a path that crosses itself");
 }
+
+/// A closed ring of three cubics that crosses itself in three places (the vertex it starts and ends at is no crossing), drawn with a close and
+/// ending at its start without one, under either fill rule, is cut in three. The junctions of a closed ring come from the filled arrangement,
+/// whose vertex lies on one pass and some way from the other where they cross at a shallow angle, so that a junction that must lie
+/// within a speck of two passes would lose cuts there: the Outline of closed shapes does not ask it.
+#[test]
+fn a_closed_ring_that_crosses_itself_is_cut_in_three() {
+    let ring = BezPath::from_svg(
+        "M74.08577579805998,94.31360955107671 C86.50527917917402,56.906376832455074 22.136881370300387,88.36333649463849 17.599967398709005,33.92108182865257 \
+         C16.026426041445895,43.802944557252545 72.81950755913373,58.101341635452805 13.146913194856225,26.299319067095873 \
+         C84.976603265593,52.59443395200283 29.02610113529708,21.188406353996893 74.08577579805998,94.31360955107671 Z",
+    )
+    .expect("a path");
+    for rule in [FillRule::EvenOdd, FillRule::NonZero] {
+        for path in [ring.clone(), unclosed(&ring)] {
+            let shapes = [Shape::new(path, rule, 0)];
+            let out = try_pathfinder_with(PathfinderOp::Outline, &shapes, PRECISION).expect("within the limits");
+            assert_eq!(out.len(), 3, "{rule:?}");
+        }
+    }
+}
