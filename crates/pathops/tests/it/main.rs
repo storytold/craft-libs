@@ -15,6 +15,7 @@ mod limits;
 mod meter;
 mod offset_faces;
 mod ops;
+mod outline_cuts;
 mod pathfinder_pinned;
 mod prop_pathops;
 mod props;

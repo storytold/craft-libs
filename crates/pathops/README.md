@@ -69,7 +69,7 @@ Each result takes its key as follows:
 | Trim | One shape for each object that is still visible |
 | Merge | Joins touching visible parts that share a key; each connected component becomes one shape |
 | Crop | Keeps the visible parts of the lower objects inside the front-most object |
-| Outline | Returns open edge paths, split at every junction; coincident edges are de-duplicated, and each keeps the front-most key. A closed subpath gives the edges of its outline, an open one the edges of the path itself (no closing edge; one of three anchors or more that ends where it starts is a ring, and counts as closed, and so does one cubic that loops round an area, closed or not), and where an open path crosses another is a junction. The crossings of open paths come from the planar map (below), which is built for up to `SHAPE_BUILDER_MAX_SEGMENTS` segments: past that, or when no map can be built, or when finding the junctions on each edge takes more than `MAX_SEARCH_WORK` steps (Limits, below), there are no shapes, since the filled areas, where an open path's way there and back cancel, do not see where it crosses another |
+| Outline | Returns open edge paths, split at every junction; coincident edges are de-duplicated, and each keeps the front-most key. A closed subpath gives the edges of its outline, an open one the edges of the path itself (no closing edge; one of three anchors or more that ends where it starts is a ring, and counts as closed, and so does one cubic that loops round an area, closed or not), and where an open path crosses another is a junction. The crossings of open paths come from the planar map (below), which is built for up to `SHAPE_BUILDER_MAX_SEGMENTS` segments: past that, or when no map can be built, or when finding the junctions on each edge takes more than `MAX_SEARCH_WORK` steps (Limits, below), there are no shapes, since the filled areas, where an open path's way there and back cancel, do not see where it crosses another. A junction of the map that lies on one path at one place only is no cut (the two passes of an open path part by more than the map's precision where it runs nearly level, and leave vertices along it that nothing meets): a path is cut where it meets another path or itself, and nowhere else |
 
 An operation that cannot sweep its input (see Limits) returns no shapes.
 
@@ -559,6 +559,14 @@ or so, measured once in a release build:
   200, 3.3 s for 400 and 4.1 s for 450; 500 are refused by the event limit. The cost grows with about the
   square of their number there, not the cube. Lines that pass through that point are counted, as if the curves
   were not there.
+- A Pathfinder Outline (and the planar map under it) can miss a crossing where one of the curves runs nearly level. The sweep cuts the two
+  curves there at points that can lie up to a unit apart along the level one, joins them with a level piece that lies on neither, and the map drops that piece, and
+  the pieces of the two curves between the cuts, as edges of no input: no vertex is left where they cross, so it is no junction and no cut. Two open cubics that cross
+  twice, from a random stack, came back in 1 piece each and not 3 (`M50.0175,87.4777 C91.0932,74.4057 61.7557,89.6998 73.7868,37.2415` and
+  `M40.8294,97.1229 C86.9075,78.6158 58.564,64.895 99.0986,87.5071`), at a precision of 1e-5 and of 0.01, and cut at both crossings turned by 30 or 90 degrees. Of 400 random stacks of two to four open
+  paths of two or three cubics each, 124 lacked at least one cut that crossing them flattened to a polyline finds (1,483 cuts in all); 15 had one or two cuts more, which the flattening may
+  not see. This is apart from the cuts in the middle of a path that nothing crosses, which are no longer made. Lines that cross lines, and a line across an arc or a circle,
+  are cut at every crossing (`tests/it/outline_cuts.rs`).
 - A Pathfinder Outline refuses after the planar map is built: `MAX_SEARCH_WORK` counts the searches for the junctions
   on each edge once the map exists, so its refusal comes after the time the map took. The grid of 300 and 300 open lines under arches that was
   measured for it (the bounds of every arch hold all 90,000 junctions, with the curve nowhere near) does not reach it by default: the counts of
@@ -804,7 +812,9 @@ bit for bit VectorCraft's), and the results are identical except where noted:
     nothing);
   - Pathfinder Outline gives an open path as its own edges, with no closing edge (but for a ring, which comes back to where it started: that is closed), and cuts at the points
     where an open path crosses another (the filled areas' arrangement, where the way there and back
-    cancel, saw no crossing); Merge makes a shape of each connected component, so an island inside a
+    cancel, saw no crossing), and only there: a vertex of the planar map that lies on one path at one place is not a cut
+    (one open arc, 1e5 across, crossed once by a line was 5 to 7 pieces and is 4; a circle of radius 100 with no close, crossed twice by a line,
+    6 and is 5). VectorCraft cuts no open path where it crosses another, so it has neither the crossings nor those cuts; Merge makes a shape of each connected component, so an island inside a
     hole of the same key is a shape of its own;
   - an open path that slopes -1/32 (level in the sweep's frame, where its two passes cancelled) is swept in
     a frame sheared by another power of two, and keeps its loose end;

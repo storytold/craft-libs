@@ -4,7 +4,7 @@
 //! The Pathfinder operations and planar regions, over an ordered stack of shapes (index 0 =
 //! back-most, last = front-most).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use kurbo::{BezPath, CubicBez, ParamCurve, ParamCurveNearest, Point, Shape as _};
 use linesweeper::topology::{ContourIdx, Contours};
@@ -212,7 +212,7 @@ fn pathfinder_unguarded(op: PathfinderOp, shapes: &[Shape], precision: f64, stri
     // shapes: the arrangement's junctions would leave every open path uncut where it meets another.
     if op == PathfinderOp::Outline && has_open_edges(shapes) {
         return match crate::planar::try_map_junctions(shapes, precision) {
-            Ok(Some(junctions)) => match outline_edges(junctions, shapes) {
+            Ok(Some(junctions)) => match outline_edges(junctions, shapes, true) {
                 Some(edges) => Ok(edges),
                 // The searches that cut the edges ran out of their budget ([`crate::Limits::search_work`]).
                 None => none(PathOpsError::TooComplex),
@@ -319,7 +319,7 @@ fn pathfinder_unguarded(op: PathfinderOp, shapes: &[Shape], precision: f64, stri
             paths.into_iter().zip(shapes).flat_map(|(sp, s)| one(sp, s.key)).collect()
         }
         // Closed shapes only: the junctions are the vertices of the filled areas' arrangement.
-        PathfinderOp::Outline => match outline_edges(arr.junctions(), shapes) {
+        PathfinderOp::Outline => match outline_edges(arr.junctions(), shapes, false) {
             Some(edges) => edges,
             None => return none(PathOpsError::TooComplex),
         },
@@ -639,10 +639,10 @@ impl Junctions {
         Self { points, blocks }
     }
 
-    /// Calls `visit` for each junction inside the box `b`, edges included, in order, and says whether it
+    /// Calls `visit` with each junction inside the box `b`, edges included, in order, and its place in the index, and says whether it
     /// came to the end: `visit` can stop it (by answering false), and so does `budget`. A block looked at costs
     /// a step and so does a junction in a block that has the box's heights, each charged before it is looked at.
-    fn in_box(&self, b: kurbo::Rect, budget: &SearchBudget, mut visit: impl FnMut(Point) -> bool) -> bool {
+    fn in_box(&self, b: kurbo::Rect, budget: &SearchBudget, mut visit: impl FnMut(usize, Point) -> bool) -> bool {
         let lo = self.points.partition_point(|j| j.x < b.x0);
         let hi = self.points.partition_point(|j| j.x <= b.x1);
         let mut at = lo;
@@ -655,12 +655,12 @@ impl Junctions {
             work::add(Work::JunctionSteps, 1);
             let (low, high) = self.blocks.get(block).copied().unwrap_or((f64::INFINITY, f64::NEG_INFINITY));
             if high >= b.y0 && low <= b.y1 {
-                for &j in self.points.get(at..end).unwrap_or_default() {
+                for (place, &j) in self.points.get(at..end).unwrap_or_default().iter().enumerate() {
                     if !budget.charge(1) {
                         return false;
                     }
                     work::add(Work::JunctionSteps, 1);
-                    if j.y >= b.y0 && j.y <= b.y1 && !visit(j) {
+                    if j.y >= b.y0 && j.y <= b.y1 && !visit(at + place, j) {
                         return false;
                     }
                 }
@@ -671,19 +671,187 @@ impl Junctions {
     }
 }
 
+/// One subpath as the Outline takes it, with the junctions that lie on it.
+struct Walk {
+    key: u64,
+    open: bool,
+    segs: Vec<Seg>,
+    /// For each segment, the junctions within reach of it: the parameter of the point nearest to each, and the junction's place in the index.
+    hits: Vec<Vec<(f64, usize)>>,
+}
+
+/// The length of the control polygon of `c`: what the curve is no longer than.
+fn polygon_len(c: &CubicBez) -> f64 {
+    c.p0.distance(c.p1) + c.p1.distance(c.p2) + c.p2.distance(c.p3)
+}
+
+/// The junctions within `reach` of the segment `seg`, as the parameter of the point of it nearest to each and the junction's place in
+/// the index; both of the places a cubic that crosses itself passes a junction at there. `None` when the searches are past their budget.
+fn junctions_on(seg: &Seg, junctions: &Junctions, budget: &SearchBudget, reach: f64) -> Option<Vec<(f64, usize)>> {
+    let (c, line) = (seg.c, seg.line);
+    // A point within `reach` of the curve is within `reach` of its bounds, with a few units in
+    // the last place of its coordinates for the rounding of both, so the other junctions can't
+    // match: the box of its control points, where they lie off the curve, held junctions the
+    // curve is nowhere near.
+    let extent = [c.p0, c.p1, c.p2, c.p3].iter().fold(0.0f64, |m, p| m.max(p.x.abs()).max(p.y.abs()));
+    let slack = reach + 16.0 * f64::EPSILON * extent;
+    let b = kurbo::Shape::bounding_box(&c).inflate(slack, slack);
+    let at = |t: f64| kurbo::ParamCurve::eval(&c, t);
+    // A cubic that crosses itself passes through the junction there twice, and `nearest`
+    // gives one of the two: both are cuts.
+    let twice = if line { None } else { double_point(&c).filter(|&(s, t)| at(s).distance(at(t)) <= reach) };
+    let mut hits: Vec<(f64, usize)> = Vec::new();
+    let done = junctions.in_box(b, budget, |place, j| {
+        if !budget.charge(NEAREST_STEPS) {
+            return false;
+        }
+        work::add(Work::Nearest, 1);
+        let nr = c.nearest(j, 1e-9);
+        if nr.distance_sq.sqrt() <= reach {
+            hits.push((nr.t, place));
+        }
+        if let Some((s, t)) = twice.filter(|&(s, _)| at(s).distance(j) <= reach) {
+            hits.extend([(s, place), (t, place)]);
+        }
+        true
+    });
+    done.then_some(hits)
+}
+
+/// The junctions of `walks` that are places where paths meet: those that lie on two subpaths, and those that lie on one at two places that are
+/// further apart along it than a speck (it crosses itself, or ends on itself). The others lie on one subpath at one place, and cut it
+/// nowhere (a junction the planar map made of a path's way out and its way back, which part a hair).
+fn real_junctions(walks: &[Walk], reach: f64) -> HashSet<usize> {
+    // How far along each walk each segment starts, as the lengths of the control polygons of those before it come to.
+    let along: Vec<Vec<f64>> = walks
+        .iter()
+        .map(|w| {
+            let mut total = 0.0;
+            let mut starts = vec![0.0];
+            for seg in &w.segs {
+                total += polygon_len(&seg.c);
+                starts.push(total);
+            }
+            starts
+        })
+        .collect();
+    // Where along which walk each junction lies.
+    let mut places: HashMap<usize, Vec<(usize, f64)>> = HashMap::new();
+    for (w, (walk, starts)) in walks.iter().zip(&along).enumerate() {
+        for (k, (seg, hits)) in walk.segs.iter().zip(&walk.hits).enumerate() {
+            let start = starts.get(k).copied().unwrap_or(0.0);
+            for &(t, place) in hits {
+                places.entry(place).or_default().push((w, start + polygon_len(&seg.c.subsegment(0.0..t))));
+            }
+        }
+    }
+    places.into_iter().filter(|(_, at)| walks_meet(at, walks, &along, 2.0 * reach)).map(|(place, _)| place).collect()
+}
+
+/// Whether a junction that lies on the walks `at` (each with how far along it) is where paths meet: on two walks, or at two places of one
+/// that are more than `apart` from one another, which a closed walk measures round as well as along.
+fn walks_meet(at: &[(usize, f64)], walks: &[Walk], along: &[Vec<f64>], apart: f64) -> bool {
+    let Some(&(first, _)) = at.first() else { return false };
+    if at.iter().any(|&(w, _)| w != first) {
+        return true;
+    }
+    let mut spots: Vec<f64> = at.iter().map(|&(_, x)| x).collect();
+    spots.sort_by(f64::total_cmp);
+    let gaps = spots.windows(2).filter(|p| matches!(p, [a, b] if b - a > apart)).count();
+    let closed = walks.get(first).is_some_and(|w| !w.open);
+    if !closed {
+        return gaps > 0;
+    }
+    let total = along.get(first).and_then(|a| a.last()).copied().unwrap_or(0.0);
+    let round = total - (spots.last().copied().unwrap_or(0.0) - spots.first().copied().unwrap_or(0.0));
+    gaps + usize::from(round > apart) >= 2
+}
+
+/// The chains of `walk` cut at its junctions (those in `real`, or all of them), each with the key of its shape.
+fn cut_walk(walk: &Walk, real: Option<&HashSet<usize>>, reach: f64) -> Vec<(Vec<Seg>, u64)> {
+    let mut chains: Vec<(Vec<Seg>, u64)> = Vec::new();
+    // Split each segment at junctions; record which piece starts are breaks.
+    let mut pieces: Vec<(Seg, bool)> = Vec::new();
+    for (seg, hits) in walk.segs.iter().zip(&walk.hits) {
+        let (c, line) = (seg.c, seg.line);
+        let at = |t: f64| kurbo::ParamCurve::eval(&c, t);
+        let mut ts: Vec<f64> = hits.iter().filter(|(_, place)| real.is_none_or(|r| r.contains(place))).map(|&(t, _)| t).collect();
+        ts.sort_by(f64::total_cmp);
+        // Junctions are compared where they are, not by parameter alone: a shape's own anchor and
+        // a crossing computed a hair from it are one junction, and one within `reach` of an end of
+        // the segment is that end. Else a sliver piece is left between them (VectorCraft issue
+        // 3870). But two cuts at one point with the curve's loop between them are two.
+        let speck = |a: f64, z: f64| polygon_len(&c.subsegment(a..z)) <= 2.0 * reach;
+        let start_is_junction = ts.first().is_some_and(|&t| at(t).distance(c.p0) <= reach);
+        let mut cuts: Vec<f64> = vec![0.0];
+        for t in ts {
+            let p = at(t);
+            let last = cuts.last().copied().unwrap_or(0.0);
+            let at_last = p.distance(at(last)) <= reach && speck(last, t);
+            let at_end = p.distance(c.p3) <= reach && speck(t, 1.0);
+            if !at_last && !at_end {
+                cuts.push(t);
+            }
+        }
+        cuts.push(1.0);
+        for (k, w) in cuts.windows(2).enumerate() {
+            let sub = c.subsegment(w[0]..w[1]);
+            let seg = if line { Seg::line(sub.p0, sub.p3) } else { Seg { c: sub, line: false } };
+            pieces.push((seg, if k == 0 { start_is_junction } else { true }));
+        }
+    }
+    // An open path is chained from its start to its end, cut at the junctions.
+    if walk.open {
+        let mut cur: Vec<Seg> = Vec::new();
+        for (seg, brk) in pieces {
+            if brk && !cur.is_empty() {
+                chains.push((std::mem::take(&mut cur), walk.key));
+            }
+            cur.push(seg);
+        }
+        if !cur.is_empty() {
+            chains.push((cur, walk.key));
+        }
+        return chains;
+    }
+    // Chain pieces between breaks.
+    let first_break = pieces.iter().position(|(_, b)| *b);
+    match first_break {
+        None => {
+            let segs: Vec<Seg> = pieces.into_iter().map(|(s, _)| s).collect();
+            chains.push((segs, walk.key));
+        }
+        Some(k) => {
+            pieces.rotate_left(k);
+            let mut cur: Vec<Seg> = Vec::new();
+            for (seg, brk) in pieces {
+                if brk && !cur.is_empty() {
+                    chains.push((std::mem::take(&mut cur), walk.key));
+                }
+                cur.push(seg);
+            }
+            if !cur.is_empty() {
+                chains.push((cur, walk.key));
+            }
+        }
+    }
+    chains
+}
+
 /// Pathfinder Outline: split every shape's boundary at `junctions`, the points where three or more
 /// edges meet (sorted by x, then y, so that a segment needs only the junctions inside its bounds). A
 /// closed subpath comes back as the edges of its outline, an open one as the edges of the path itself,
 /// with no closing edge. `None` when the searches that find the junctions on each segment, and the
-/// edges that coincide, are past their budget ([`crate::Limits::search_work`], charged before each step).
-fn outline_edges(junctions: Vec<Point>, shapes: &[Shape]) -> Option<Vec<Shape>> {
+/// edges that coincide, are past their budget ([`crate::Limits::search_work`], charged before each step). With `validate`, a junction cuts only
+/// where paths meet (see [`real_junctions`]): the junctions of a planar map of open paths are not all of them places where paths meet.
+fn outline_edges(junctions: Vec<Point>, shapes: &[Shape], validate: bool) -> Option<Vec<Shape>> {
     let budget = SearchBudget::new();
     let junctions = Junctions::new(junctions);
     let scale = shapes.iter().filter_map(|s| control_bounds(&s.path)).map(|r| r.width().max(r.height())).fold(1.0, f64::max);
     let tol = scale * 1e-7;
     let reach = tol.max(1e-6);
-    // (chain, key, source index)
-    let mut chains: Vec<(Vec<Seg>, u64)> = Vec::new();
+    // Each subpath of the shapes, with the junctions that lie on its segments.
+    let mut walks: Vec<Walk> = Vec::new();
     for s in shapes {
         for sp in subs(&s.path).into_iter().map(crate::path::Sub::closed_if_ends_meet) {
             let open = !sp.closed;
@@ -693,101 +861,19 @@ fn outline_edges(junctions: Vec<Point>, shapes: &[Shape]) -> Option<Vec<Shape>> 
             if outline.is_empty() || (outline.len() == 1 && !open && !sp.draws_something()) {
                 continue;
             }
-            // Split each segment at junctions; record which piece starts are breaks.
-            let mut pieces: Vec<(Seg, bool)> = Vec::new();
-            for Seg { c, line } in outline {
-                // A point within `reach` of the curve is within `reach` of its bounds, with a few units in
-                // the last place of its coordinates for the rounding of both, so the other junctions can't
-                // match: the box of its control points, where they lie off the curve, held junctions the
-                // curve is nowhere near.
-                let extent = [c.p0, c.p1, c.p2, c.p3].iter().fold(0.0f64, |m, p| m.max(p.x.abs()).max(p.y.abs()));
-                let slack = reach + 16.0 * f64::EPSILON * extent;
-                let b = kurbo::Shape::bounding_box(&c).inflate(slack, slack);
-                let at = |t: f64| kurbo::ParamCurve::eval(&c, t);
-                // A cubic that crosses itself passes through the junction there twice, and `nearest`
-                // gives one of the two: both are cuts.
-                let twice = if line { None } else { double_point(&c).filter(|&(s, t)| at(s).distance(at(t)) <= reach) };
-                let mut ts: Vec<f64> = Vec::new();
-                let done = junctions.in_box(b, &budget, |j| {
-                    if !budget.charge(NEAREST_STEPS) {
-                        return false;
-                    }
-                    work::add(Work::Nearest, 1);
-                    let nr = c.nearest(j, 1e-9);
-                    if nr.distance_sq.sqrt() <= reach {
-                        ts.push(nr.t);
-                    }
-                    if let Some((s, t)) = twice.filter(|&(s, _)| at(s).distance(j) <= reach) {
-                        ts.extend([s, t]);
-                    }
-                    true
-                });
-                if !done {
-                    return None;
-                }
-                ts.sort_by(f64::total_cmp);
-                // Junctions are compared where they are, not by parameter alone: a shape's own anchor and
-                // a crossing computed a hair from it are one junction, and one within `reach` of an end of
-                // the segment is that end. Else a sliver piece is left between them (VectorCraft issue
-                // 3870). But two cuts at one point with the curve's loop between them are two.
-                let speck = |a: f64, z: f64| {
-                    let s = c.subsegment(a..z);
-                    s.p0.distance(s.p1) + s.p1.distance(s.p2) + s.p2.distance(s.p3) <= 2.0 * reach
-                };
-                let start_is_junction = ts.first().is_some_and(|&t| at(t).distance(c.p0) <= reach);
-                let mut cuts: Vec<f64> = vec![0.0];
-                for t in ts {
-                    let p = at(t);
-                    let last = cuts.last().copied().unwrap_or(0.0);
-                    let at_last = p.distance(at(last)) <= reach && speck(last, t);
-                    let at_end = p.distance(c.p3) <= reach && speck(t, 1.0);
-                    if !at_last && !at_end {
-                        cuts.push(t);
-                    }
-                }
-                cuts.push(1.0);
-                for (k, w) in cuts.windows(2).enumerate() {
-                    let sub = c.subsegment(w[0]..w[1]);
-                    let seg = if line { Seg::line(sub.p0, sub.p3) } else { Seg { c: sub, line: false } };
-                    pieces.push((seg, if k == 0 { start_is_junction } else { true }));
-                }
+            let mut hits = Vec::with_capacity(outline.len());
+            for seg in &outline {
+                hits.push(junctions_on(seg, &junctions, &budget, reach)?);
             }
-            // An open path is chained from its start to its end, cut at the junctions.
-            if open {
-                let mut cur: Vec<Seg> = Vec::new();
-                for (seg, brk) in pieces {
-                    if brk && !cur.is_empty() {
-                        chains.push((std::mem::take(&mut cur), s.key));
-                    }
-                    cur.push(seg);
-                }
-                if !cur.is_empty() {
-                    chains.push((cur, s.key));
-                }
-                continue;
-            }
-            // Chain pieces between breaks.
-            let first_break = pieces.iter().position(|(_, b)| *b);
-            match first_break {
-                None => {
-                    let segs: Vec<Seg> = pieces.into_iter().map(|(s, _)| s).collect();
-                    chains.push((segs, s.key));
-                }
-                Some(k) => {
-                    pieces.rotate_left(k);
-                    let mut cur: Vec<Seg> = Vec::new();
-                    for (seg, brk) in pieces {
-                        if brk && !cur.is_empty() {
-                            chains.push((std::mem::take(&mut cur), s.key));
-                        }
-                        cur.push(seg);
-                    }
-                    if !cur.is_empty() {
-                        chains.push((cur, s.key));
-                    }
-                }
-            }
+            walks.push(Walk { key: s.key, open, segs: outline, hits });
         }
+    }
+    // The planar map of open paths, which trace their way out and back, finds vertices where the two ways part a hair, along a curve that
+    // runs level for a stretch: a path makes a junction only where it meets another, or itself.
+    let real = validate.then(|| real_junctions(&walks, reach));
+    let mut chains: Vec<(Vec<Seg>, u64)> = Vec::new();
+    for walk in &walks {
+        chains.extend(cut_walk(walk, real.as_ref(), reach));
     }
     // De-duplicate coincident chains, keeping the front-most key (later shapes overwrite). A
     // match has its midpoint within `near` of this one's, so only the chains in the grid cells
@@ -1688,5 +1774,49 @@ mod tests {
         // The six lines each search for the three junctions on them: 18. The arch's control box holds all
         // nine and its bounds none.
         assert_eq!(work::take(Work::Nearest), 18);
+    }
+
+    /// The straight segment from `p` to `q`, a cubic whose handles are a third of the way: its parameter is the fraction of its length.
+    fn straight(p: Point, q: Point) -> Seg {
+        Seg { c: CubicBez::new(p, p.lerp(q, 1.0 / 3.0), p.lerp(q, 2.0 / 3.0), q), line: true }
+    }
+
+    /// A walk of the given segments, with junction 0 on the given segments at the given parameters.
+    fn walk_with(open: bool, segs: Vec<Seg>, hits: Vec<(usize, f64)>) -> Walk {
+        let mut by_seg: Vec<Vec<(f64, usize)>> = vec![Vec::new(); segs.len()];
+        for (k, t) in hits {
+            by_seg[k].push((t, 0));
+        }
+        Walk { key: 0, open, segs, hits: by_seg }
+    }
+
+    /// A junction is where paths meet: on two walks, or on one at two places that are further apart along it than 2 reaches (two lie
+    /// on a path that crosses itself); a path's two ways at one place, a hair apart, are not two, however many segments they lie on.
+    #[test]
+    fn a_junction_on_one_walk_is_real_only_at_two_places_more_than_two_reaches_apart() {
+        let reach = 0.01;
+        let line10 = || vec![straight(Point::new(0.0, 0.0), Point::new(10.0, 0.0))];
+        let real = |walks: &[Walk]| real_junctions(walks, reach).contains(&0);
+        // A path's hits 0.019 apart (under 2 reaches, 0.02) are one place, and 0.021 apart two.
+        assert!(!real(&[walk_with(true, line10(), vec![(0, 0.1), (0, 0.1019)])]));
+        assert!(real(&[walk_with(true, line10(), vec![(0, 0.1), (0, 0.1021)])]));
+        // A single hit is no meeting, and the two ends of an open path are two places.
+        assert!(!real(&[walk_with(true, line10(), vec![(0, 0.5)])]));
+        assert!(real(&[walk_with(true, line10(), vec![(0, 0.0), (0, 1.0)])]));
+        // The hits of two walks make a junction whatever their places, a hit of each.
+        let a = walk_with(true, line10(), vec![(0, 0.5)]);
+        let b = walk_with(true, line10(), vec![(0, 0.5)]);
+        assert!(real(&[a, b]));
+        // A ring (a square of side 10: 40 round) comes back to where it started: its start and its end are one place, and so are hits at
+        // either side of them; two places on it far apart both ways are two.
+        let square = || {
+            let p = [Point::new(0.0, 0.0), Point::new(10.0, 0.0), Point::new(10.0, 10.0), Point::new(0.0, 10.0), Point::new(0.0, 0.0)];
+            p.windows(2).map(|w| straight(w[0], w[1])).collect::<Vec<_>>()
+        };
+        assert!(!real(&[walk_with(false, square(), vec![(0, 0.0), (3, 1.0)])]));
+        assert!(!real(&[walk_with(false, square(), vec![(0, 0.0), (0, 0.0004), (3, 0.9996)])]));
+        assert!(real(&[walk_with(false, square(), vec![(0, 0.5), (2, 0.5)])]));
+        // The same hits on an open path of those segments are two places: its ends.
+        assert!(real(&[walk_with(true, square(), vec![(0, 0.0), (3, 1.0)])]));
     }
 }
