@@ -1136,7 +1136,7 @@ fn windows_check_download(app: &App, install: &Install, download: &Path) -> Resu
 /// first update finds it before the download does.
 #[cfg(windows)]
 fn same_cache_as_helper(app: &App, paths: &Paths, exe: &Path) -> Result<(), String> {
-    let _ = std::fs::create_dir_all(&paths.cache);
+    std::fs::create_dir_all(&paths.cache).map_err(|e| format!("couldn't create {} ({e})", paths.cache.display()))?;
     let canonical = |p: &Path| p.canonicalize().ok();
     let theirs = Paths::for_exe(app, exe).ok().and_then(|helper| canonical(&helper.cache));
     if theirs.is_some() && theirs == canonical(&paths.cache) {
@@ -1874,6 +1874,23 @@ mod tests {
         let paths = Paths::for_exe(&crate::suite::LAUNCHER, &exe).unwrap();
         assert!(!paths.cache.exists());
         assert_eq!(same_cache_as_helper(&crate::suite::LAUNCHER, &paths, &exe), Ok(()));
+    }
+
+    /// A cache folder that can't be created is reported with its path and error, not as a cache
+    /// in the wrong place.
+    #[cfg(windows)]
+    #[test]
+    fn a_cache_that_cannot_be_created_is_named_with_its_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let exe = dir.path().join("artcraft-launcher.exe");
+        std::fs::write(&exe, "MZ").unwrap();
+        std::fs::write(dir.path().join("portable.txt"), "").unwrap();
+        let file = dir.path().join("a-file");
+        std::fs::write(&file, "").unwrap();
+        let mut paths = Paths::for_exe(&crate::suite::LAUNCHER, &exe).unwrap();
+        paths.cache = file.join("cache");
+        let error = same_cache_as_helper(&crate::suite::LAUNCHER, &paths, &exe).unwrap_err();
+        assert!(error.contains("couldn't create") && error.contains(&paths.cache.display().to_string()), "{error}");
     }
 
     /// An MSI that isn't signed by the launcher's publisher is never handed to the Windows Installer.
