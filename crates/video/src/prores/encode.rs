@@ -50,8 +50,6 @@ impl EncoderConfig {
 #[derive(Debug, Clone)]
 pub struct Encoder {
     cfg: EncoderConfig,
-    /// The previous frame's uniform quantiser: where the next frame's search starts.
-    last_q: u8,
 }
 
 /// Quantiser search range (RDD 36 allows 1..=224).
@@ -64,7 +62,7 @@ impl Encoder {
     }
 
     pub fn with_config(cfg: EncoderConfig) -> Encoder {
-        Encoder { cfg, last_q: Q_MIN }
+        Encoder { cfg }
     }
 
     pub fn config(&self) -> &EncoderConfig {
@@ -149,8 +147,7 @@ impl Encoder {
         };
         let threads = cfg.threads;
         let prepared: Vec<SliceData> = par_map(threads, &jobs, |&(x, row, sw)| prepare_slice(&src, x, row, sw));
-        let (qs, qg) = choose_quantisers(&prepared, &src, mb_width * mb_height, threads, self.last_q);
-        self.last_q = qg;
+        let qs = choose_quantisers(&prepared, &src, mb_width * mb_height, threads);
         let items: Vec<(&SliceData, u8)> = prepared.iter().zip(qs).collect();
         let slices: Vec<Vec<u8>> = par_map(threads, &items, |&(sd, q)| write_slice(sd, q));
 
@@ -389,63 +386,27 @@ impl Probes<'_> {
     }
 }
 
-/// The smallest quantiser in `Q_MIN..=Q_MAX` whose frame fits `budget` (`Q_MAX` when none does),
-/// assuming bits fall as the quantiser grows. The search starts at `hint` (the previous frame's
-/// quantiser) and widens its steps away from it until the answer is bracketed, then bisects: the
-/// frames of a shot need the same quantiser or a neighbour, which takes two measurements instead of
-/// the eight of a bisection over the whole range.
-fn smallest_fitting(total: &mut impl FnMut(u8) -> u64, hint: u8, budget: u64) -> u8 {
-    let h = hint.clamp(Q_MIN, Q_MAX);
-    // `lo` does not fit, `hi` does: the answer is in `lo + 1..=hi`.
-    let (mut lo, mut hi) = if total(h) <= budget {
-        let (mut hi, mut step) = (h, 1u8);
-        loop {
-            if hi == Q_MIN {
-                return Q_MIN;
-            }
-            let q = hi.saturating_sub(step).max(Q_MIN);
-            if total(q) > budget {
-                break (q, hi);
-            }
-            hi = q;
-            step = step.saturating_mul(2);
-        }
-    } else {
-        let (mut lo, mut step) = (h, 1u8);
-        loop {
-            if lo == Q_MAX {
-                return Q_MAX;
-            }
-            let q = lo.saturating_add(step).min(Q_MAX);
-            if total(q) <= budget {
-                break (lo, q);
-            }
-            lo = q;
-            step = step.saturating_mul(2);
-        }
-    };
-    while hi - lo > 1 {
-        let mid = lo + (hi - lo) / 2;
-        if total(mid) <= budget {
-            hi = mid;
-        } else {
-            lo = mid;
+/// The smallest quantiser in `Q_MIN..=Q_MAX` whose frame fits `budget` (`Q_MAX` when none does).
+/// Check candidates in order because entropy-coded slice sizes are not monotonic in the quantiser.
+fn smallest_fitting(total: &mut impl FnMut(u8) -> u64, budget: u64) -> u8 {
+    for q in Q_MIN..=Q_MAX {
+        if total(q) <= budget {
+            return q;
         }
     }
-    hi
+    Q_MAX
 }
 
 /// Frame-level rate control: the smallest uniform quantiser whose frame fits the budget, then
 /// one step finer on as many slices as the remaining budget allows. Uniform quantisation
-/// approximately minimises frame MSE for a given size. Returns the slices' quantisers and the
-/// uniform one (the next frame's `hint`).
-fn choose_quantisers(slices: &[SliceData], src: &Source, total_mbs: usize, threads: bool, hint: u8) -> (Vec<u8>, u8) {
+/// approximately minimises frame MSE for a given size. Returns the slices' quantisers.
+fn choose_quantisers(slices: &[SliceData], src: &Source, total_mbs: usize, threads: bool) -> Vec<u8> {
     let n = slices.len();
     let hsize = slices.first().map_or(6, SliceData::header_size);
     let fixed = 8 * (8 + 20 + 8 + n * (2 + hsize)) as u64;
     let budget = (src.bits_per_mb as u64 * total_mbs as u64).saturating_sub(fixed);
     let mut probes = Probes { slices, threads, tried: Vec::new() };
-    let qg = smallest_fitting(&mut |q| probes.total(q), hint, budget);
+    let qg = smallest_fitting(&mut |q| probes.total(q), budget);
     let mut qs = vec![qg; n];
     let mut cur = probes.take(qg);
     let total = cur.iter().sum::<u64>();
@@ -469,7 +430,7 @@ fn choose_quantisers(slices: &[SliceData], src: &Source, total_mbs: usize, threa
             *c = slice_bits(sd, *q);
         }
     }
-    (qs, qg)
+    qs
 }
 
 fn write_slice(sd: &SliceData, q: u8) -> Vec<u8> {
@@ -593,45 +554,36 @@ mod rate_tests {
     }
 
     #[test]
-    fn hinted_search_finds_the_smallest_fitting_quantiser() {
+    fn search_finds_the_smallest_fitting_quantiser() {
         for budget in (0..1_200_000).step_by(997).chain([0, 1_000, 2_000, bits(Q_MIN), bits(Q_MAX), u64::MAX]) {
-            // the reference: a scan from the finest quantiser
             let want = (Q_MIN..=Q_MAX).find(|&q| bits(q) <= budget).unwrap_or(Q_MAX);
-            for hint in [0, Q_MIN, 2, 7, 64, 128, 223, Q_MAX, 255] {
-                let mut calls = 0;
-                let got = smallest_fitting(
-                    &mut |q| {
-                        assert!((Q_MIN..=Q_MAX).contains(&q), "measured an invalid quantiser {q}");
-                        calls += 1;
-                        bits(q)
-                    },
-                    hint,
-                    budget,
-                );
-                assert_eq!(got, want, "budget {budget}, hint {hint}");
-                assert!(calls <= 16, "budget {budget}, hint {hint}: {calls} measurements");
-            }
+            let mut calls = 0;
+            let got = smallest_fitting(
+                &mut |q| {
+                    assert!((Q_MIN..=Q_MAX).contains(&q), "measured an invalid quantiser {q}");
+                    calls += 1;
+                    bits(q)
+                },
+                budget,
+            );
+            assert_eq!(got, want, "budget {budget}");
+            assert_eq!(calls, usize::from(want - Q_MIN + 1), "budget {budget}");
         }
     }
 
-    /// The common case (the previous frame's quantiser, or a neighbour) takes two measurements.
     #[test]
-    fn a_good_hint_takes_two_measurements() {
-        for want in [Q_MIN + 1, 9, 40, 150, Q_MAX] {
-            let budget = bits(want);
-            for hint in [want - 1, want] {
-                let mut calls = 0;
-                let got = smallest_fitting(
-                    &mut |q| {
-                        calls += 1;
-                        bits(q)
-                    },
-                    hint,
-                    budget,
-                );
-                assert_eq!((got, calls), (want, 2), "hint {hint}");
-            }
-        }
+    fn search_does_not_assume_quantiser_sizes_are_monotonic() {
+        let got = smallest_fitting(
+            &mut |q| match q {
+                1 => 70,
+                2 => 40,
+                3 => 60,
+                4 => 30,
+                _ => 10,
+            },
+            50,
+        );
+        assert_eq!(got, 2);
     }
 
     /// Two frames, the second encoded after very different content: the encoder's memory of the
@@ -640,7 +592,7 @@ mod rate_tests {
     fn previous_frames_do_not_change_the_stream() {
         let (w, h) = (256, 64);
         let frame = |seed: u32, detail: u32| {
-            let mut f = Frame::new(w, h, ChromaFormat::Yuv422, 10, false);
+            let mut f = Frame::new(w, h, ChromaFormat::Yuv422, 10, false).unwrap();
             let mut s = seed;
             let cw = f.chroma_width() as usize;
             for y in 0..h as usize {
@@ -748,7 +700,7 @@ mod alpha_conformance_tests {
         for profile in [Profile::P4444, Profile::P4444Xq] {
             for log2_slice_mbs in 0..=3 {
                 let (width, height) = (128, 32);
-                let mut frame = Frame::new(width, height, ChromaFormat::Yuv444, 16, true);
+                let mut frame = Frame::new(width, height, ChromaFormat::Yuv444, 16, true).unwrap();
                 frame.y.fill(32768);
                 frame.cb.fill(32768);
                 frame.cr.fill(32768);

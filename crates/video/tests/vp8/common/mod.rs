@@ -69,12 +69,7 @@ pub fn fixture(name: &str) -> &'static Fixture {
 }
 
 pub fn ffmpeg() -> Option<PathBuf> {
-    for p in ["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg", "/usr/bin/ffmpeg"] {
-        if Path::new(p).exists() {
-            return Some(PathBuf::from(p));
-        }
-    }
-    None
+    craft_media_testkit::ffmpeg_or_skip("VP8 conformance tests")
 }
 
 pub fn fixtures_dir() -> PathBuf {
@@ -108,10 +103,7 @@ pub fn run(cmd: &mut Command) -> bool {
 /// Generate (if needed) the fixture stream and its reference decode by libvpx through ffmpeg.
 /// `None` (the test skips) without ffmpeg or its libvpx encoder.
 pub fn ensure(f: &Fixture) -> Option<(PathBuf, PathBuf)> {
-    let Some(ff) = ffmpeg() else {
-        eprintln!("SKIP {}: ffmpeg not found", f.name);
-        return None;
-    };
+    let ff = ffmpeg()?;
     let dir = fixtures_dir();
     // one generation at a time, across test processes too: tests share fixtures, and realtime
     // libvpx encodes differ from run to run, so a stream and its reference decode must come from
@@ -122,6 +114,9 @@ pub fn ensure(f: &Fixture) -> Option<(PathBuf, PathBuf)> {
     let ivf = dir.join(format!("{}.ivf", f.name));
     let yuv = dir.join(format!("{}.yuv", f.name));
     if !ivf.exists() {
+        if !craft_media_testkit::ffmpeg_has_encoder(&ff, "libvpx") {
+            return craft_media_testkit::skip(&format!("VP8 fixture {} requires ffmpeg's libvpx encoder", f.name));
+        }
         let tmp = dir.join(format!("{}.tmp.{}.ivf", f.name, unique()));
         // the source at an even size, scaled to the fixture's (possibly odd) size
         let src = format!(
@@ -151,15 +146,13 @@ pub fn ensure(f: &Fixture) -> Option<(PathBuf, PathBuf)> {
             c
         };
         if two_pass && !run(&mut enc(Some(1))) {
-            eprintln!("SKIP {}: encode failed (ffmpeg without libvpx?)", f.name);
-            return None;
+            return craft_media_testkit::skip(&format!("VP8 fixture {} first-pass encode failed", f.name));
         }
         if !run(&mut enc(two_pass.then_some(2))) {
-            eprintln!("SKIP {}: encode failed (ffmpeg without libvpx?)", f.name);
-            return None;
+            return craft_media_testkit::skip(&format!("VP8 fixture {} encode failed", f.name));
         }
         if std::fs::rename(&tmp, &ivf).is_err() && !ivf.exists() {
-            return None;
+            return craft_media_testkit::skip(&format!("could not publish VP8 fixture {}", f.name));
         }
     }
     if !yuv.exists() {
@@ -168,11 +161,10 @@ pub fn ensure(f: &Fixture) -> Option<(PathBuf, PathBuf)> {
         c.args(["-hide_banner", "-loglevel", "error", "-y", "-c:v", "libvpx", "-i"]).arg(&ivf);
         c.args(["-fps_mode", "passthrough", "-f", "rawvideo", "-pix_fmt", "yuv420p"]).arg(&tmp);
         if !run(&mut c) {
-            eprintln!("SKIP {}: reference decode failed", f.name);
-            return None;
+            return craft_media_testkit::skip(&format!("VP8 fixture {} reference decode failed", f.name));
         }
         if std::fs::rename(&tmp, &yuv).is_err() && !yuv.exists() {
-            return None;
+            return craft_media_testkit::skip(&format!("could not publish VP8 reference {}", f.name));
         }
     }
     Some((ivf, yuv))

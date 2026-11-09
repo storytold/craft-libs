@@ -182,14 +182,20 @@ pub struct Frame {
 }
 
 impl Frame {
-    /// A black (video-range) frame with the given geometry.
-    pub fn new(width: u32, height: u32, chroma: ChromaFormat, bit_depth: u8, with_alpha: bool) -> Frame {
-        let n = width as usize * height as usize;
-        let cn = chroma.chroma_width(width) as usize * height as usize;
+    /// A black (video-range) frame with the given geometry and supported 8..=16-bit depth.
+    pub fn new(width: u32, height: u32, chroma: ChromaFormat, bit_depth: u8, with_alpha: bool) -> Result<Frame> {
+        if !(8..=16).contains(&bit_depth) {
+            return Err(Error::Input("bit depth must be 8..=16".into()));
+        }
+        let chroma_width = usize::try_from(chroma.chroma_width(width)).map_err(|_| Error::Input("frame dimensions overflow".into()))?;
+        let width = usize::try_from(width).map_err(|_| Error::Input("frame dimensions overflow".into()))?;
+        let height = usize::try_from(height).map_err(|_| Error::Input("frame dimensions overflow".into()))?;
+        let n = width.checked_mul(height).ok_or_else(|| Error::Input("frame dimensions overflow".into()))?;
+        let cn = chroma_width.checked_mul(height).ok_or_else(|| Error::Input("frame dimensions overflow".into()))?;
         let s = bit_depth.saturating_sub(8) as u32;
-        Frame {
-            width,
-            height,
+        Ok(Frame {
+            width: width as u32,
+            height: height as u32,
             chroma,
             bit_depth,
             y: vec![(16u32 << s) as u16; n],
@@ -200,7 +206,7 @@ impl Frame {
             color: ColorInfo::default(),
             aspect_ratio: 0,
             frame_rate_code: 0,
-        }
+        })
     }
 
     pub fn chroma_width(&self) -> u32 {
@@ -209,5 +215,19 @@ impl Frame {
 
     pub fn is_interlaced(&self) -> bool {
         self.interlace != Interlace::Progressive
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn frame_constructor_rejects_unsupported_bit_depths() {
+        assert!(Frame::new(1, 1, ChromaFormat::Yuv422, 7, false).is_err());
+        assert!(Frame::new(1, 1, ChromaFormat::Yuv444, 17, true).is_err());
+        let frame = Frame::new(1, 1, ChromaFormat::Yuv444, 16, true).unwrap();
+        assert_eq!(frame.y, [4096]);
+        assert_eq!(frame.alpha, Some(vec![u16::MAX]));
     }
 }

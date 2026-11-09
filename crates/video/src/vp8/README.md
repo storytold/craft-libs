@@ -54,11 +54,12 @@ let key: bool = craft_video::vp8::is_keyframe(frame);
 let info: Option<craft_video::vp8::KeyframeInfo> = craft_video::vp8::keyframe_info(frame);
 ```
 
-`craft-video` wires the decoder into Matroska / WebM (`V_VP8`, including the alpha layer of
-transparent WebM in `BlockAdditional`) and MP4 (`vp08`). VP8 has no colour signalling: pictures are
-BT.601, studio swing (RFC 6386 9.2), unless the container's `Colour` says otherwise. VP8 has no
-superframes either: a hidden altref frame is a block of its own, and the WebM reader takes a
-request for its time as a request for the shown frame that follows it.
+`craft-video` decodes compressed VP8 frames; it does not connect this decoder to Matroska / WebM
+(`V_VP8`) or MP4 (`vp08`) readers. The `craft-media` WebM reader exposes a VP8 sample and its alpha
+layer in `BlockAdditional` separately. VP8 has no colour signalling: pictures are BT.601,
+studio swing (RFC 6386 9.2), unless the container's `Colour` says otherwise. VP8 has no
+superframes either: a hidden altref frame is a block of its own; container seeking positions at a
+key frame and does not remap that timestamp to the shown frame that follows it.
 
 ## Tests and tools
 

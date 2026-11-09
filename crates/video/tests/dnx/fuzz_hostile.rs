@@ -52,14 +52,14 @@ fn run(d: &[u8], label: &str) {
     craft_media_testkit::set_progress(label);
     let res = catch_unwind(AssertUnwindSafe(|| {
         let _ = probe(d);
-        for opts in [DecodeOptions::default(), DecodeOptions { threads: true, spec_dequant: true }] {
+        for opts in [DecodeOptions::default(), DecodeOptions { threads: true, spec_dequant: true, ..Default::default() }] {
             let _ = decode_frame_with(d, &opts);
         }
     }));
     assert!(res.is_ok(), "panic: {label}");
 }
 
-/// Seconds the whole sweep may take before it counts as a hang (override: FILMCRAFT_HOSTILE_TIMEOUT_SECS).
+/// Seconds the whole sweep may take before it counts as a hang (override: CRAFT_TEST_TIMEOUT_SECS).
 const DEADLINE_SECS: u64 = 600;
 
 /// CI runs a rotating share of every part of the sweep; `FILMCRAFT_FUZZ_ITERS=1500` runs all of it (see [`Depth`]).

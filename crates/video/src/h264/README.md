@@ -2,13 +2,13 @@
 
 A clean-room, pure-Rust H.264/AVC encoder for export pipelines, written from the public
 ITU-T H.264 specification (04/2013 edition) and general encoder literature. Layer L0: it depends only on
-`craft-media` (with `bitstream` feature), `thiserror` and (optionally, feature `threads`, on by default) `rayon`. No `unsafe`,
+`craft-media` (with `isobmff` feature), `thiserror` and (optionally, feature `threads`) `rayon`. No `unsafe`,
 builds for `wasm32-unknown-unknown` with or without `threads`.
 
 ## Usage
 
 ```rust
-use craft_h264enc::{Encoder, EncoderConfig, PacketFormat, Preset, Profile, RateControl, YuvFrame};
+use craft_video::h264::{Encoder, EncoderConfig, PacketFormat, Preset, Profile, RateControl, YuvFrame};
 
 let mut cfg = EncoderConfig::new(1920, 1080, 30000, 1001);
 cfg.profile = Profile::High;
@@ -56,8 +56,9 @@ for p in enc.flush() { /* ... */ }
 
 ## Verification
 
-`cargo test --release -p craft-h264enc` (ffmpeg/ffprobe used only as external oracles; tests skip when
-absent). Every stream is decoded with `ffmpeg -v warning -err_detect +crccheck+bitstream+buffer+explode -f rawvideo`
+`cargo test --release -p craft-video --features h264,threads` (ffmpeg/ffprobe used only as external oracles; tests skip when
+absent). Enable `threads` separately for slice-parallel encoding; without it, encoding is serial.
+Every stream is decoded with `ffmpeg -v warning -err_detect +crccheck+bitstream+buffer+explode -f rawvideo`
 and must print nothing (not even a `corrupt decoded frame` warning), produce exactly the number of frames encoded,
 and be **bit-identical to the encoder's reconstruction** — this covers Baseline/Main/High, all presets, 0–3
 B-frames, 1–4 slices and automatic slicing at 1080p, odd sizes, `testsrc2` and `mandelbrot` sources, and
