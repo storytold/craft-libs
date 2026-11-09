@@ -476,9 +476,9 @@ impl Segments {
     ///
     /// Returns `eps` when it is at least `64 * f64::EPSILON` times the largest
     /// coordinate magnitude (the scale [`crate::binary_op`] uses), and that
-    /// floor otherwise. The floor replaces an `eps` that is NaN, negative,
-    /// zero, or too small to tell coordinates of this size apart. It is never
-    /// below 64 times the spacing of subnormal floats.
+    /// floor otherwise. The floor replaces an `eps` that is NaN, infinite,
+    /// negative, zero, or too small to tell coordinates of this size apart. It
+    /// is never below 64 times the spacing of subnormal floats.
     pub(crate) fn usable_eps(&self, eps: f64) -> f64 {
         let max_coord = self
             .segs
@@ -492,7 +492,11 @@ impl Segments {
             })
             .fold(0.0, f64::max);
         let floor = crate::curve::resolution_floor(max_coord);
-        if eps >= floor { eps } else { floor }
+        if eps.is_finite() && eps >= floor {
+            eps
+        } else {
+            floor
+        }
     }
 }
 

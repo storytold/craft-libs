@@ -396,6 +396,7 @@ mod tests {
             (1.5e8, 1e-10),
             (1.5e8, 0.0),
             (0.0, f64::NEG_INFINITY),
+            (0.0, f64::INFINITY),
         ] {
             let (a, b) = crossing_circles(offset);
             for correctness in [

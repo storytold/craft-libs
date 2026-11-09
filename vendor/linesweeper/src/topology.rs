@@ -513,8 +513,8 @@ impl<W: WindingNumber> Topology<W> {
     ///
     /// See [`WindingNumber`] about the tags are for.
     ///
-    /// An `eps` that is NaN, not positive, or below `64 * f64::EPSILON` times
-    /// the paths' largest coordinate magnitude is raised to that value. The
+    /// An `eps` that is NaN, infinite, not positive, or below `64 * f64::EPSILON`
+    /// times the paths' largest coordinate magnitude is replaced by that value. The
     /// other constructors pass `eps` through here, or follow the same rule.
     pub fn from_paths_with_correctness<'a, Iter>(paths: Iter, eps: f64, correctness: Correctness) -> Result<Self, NonClosedPath>
     where

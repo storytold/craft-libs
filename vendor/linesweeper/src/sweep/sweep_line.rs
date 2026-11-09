@@ -360,8 +360,8 @@ impl<'segs> Sweeper<'segs> {
     /// output orders, but it does emit extra events whenever lines
     /// touch without crossing.
     ///
-    /// An `eps` that is NaN, not positive, or below `64 * f64::EPSILON` times
-    /// the segments' largest coordinate magnitude is raised to that value.
+    /// An `eps` that is NaN, infinite, not positive, or below `64 * f64::EPSILON`
+    /// times the segments' largest coordinate magnitude is replaced by that value.
     pub fn new_with_correctness(
         segments: &'segs Segments,
         eps: f64,
